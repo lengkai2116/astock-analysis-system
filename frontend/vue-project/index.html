@@ -42,7 +42,11 @@
         to { transform: rotate(360deg); }
       }
     </style>
-  </head>
+    <script>
+    // 运行时 API 基地址（Docker 部署时由 Nginx 注入，开发时默认为空使用相对路径）
+    window.__API_BASE__ = window.__API_BASE__ || '';
+  </script>
+</head>
   <body>
     <noscript>
       <strong>本系统需要启用 JavaScript 才能正常运行。</strong>

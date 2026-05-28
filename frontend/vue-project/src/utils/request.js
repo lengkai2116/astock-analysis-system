@@ -2,7 +2,7 @@ import axios from 'axios'
 import { message } from 'ant-design-vue'
 
 const service = axios.create({
-  baseURL: process.env.VUE_APP_API_BASE_URL || 'http://localhost:5001',
+  baseURL: (window.__API_BASE__ || process.env.VUE_APP_API_BASE_URL || ''),
   timeout: 60000
 })
 

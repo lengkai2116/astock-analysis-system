@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => {
       extensions: ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json', '.vue']
     },
     define: {
-      'process.env.VUE_APP_API_BASE_URL': JSON.stringify(env.VITE_API_BASE_URL || 'http://localhost:5001'),
+      'process.env.VUE_APP_API_BASE_URL': JSON.stringify(env.VITE_API_BASE_URL || ''),
       'process.env.VUE_APP_PREVIEW': JSON.stringify(env.VITE_PREVIEW || '')
     },
     css: {

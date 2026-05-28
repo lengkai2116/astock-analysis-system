@@ -50,6 +50,17 @@ services:
       redis:
         condition: service_healthy
 
+  frontend:
+    build:
+      context: ./frontend/vue-project
+      dockerfile: Dockerfile
+    ports:
+      - "9000:80"
+    depends_on:
+      - backend
+    environment:
+      - TZ=Asia/Shanghai
+
 volumes:
   postgres_data:
   redis_data:
