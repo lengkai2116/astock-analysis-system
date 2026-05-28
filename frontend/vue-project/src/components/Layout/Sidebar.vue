@@ -69,9 +69,13 @@ export default {
   name: 'Sidebar',
   data() {
     return {
-      collapsed: false,
       selectedKeys: [],
       openKeys: []
+    }
+  },
+  computed: {
+    collapsed() {
+      return this.$store.state.sidebarCollapsed
     }
   },
   mounted() {
@@ -89,7 +93,7 @@ export default {
       this.$router.push(path)
     },
     toggleCollapse() {
-      this.collapsed = !this.collapsed
+      this.$store.commit('toggleSidebar')
     }
   }
 }

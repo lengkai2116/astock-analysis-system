@@ -15,19 +15,6 @@ Vue.config.productionTip = false
 Vue.use(Antd)
 Vue.use(VueAxios)
 
-if (typeof window !== 'undefined') {
-  const ignoreResizeObserverError = (e) => {
-    const msg = (e && (e.reason && e.reason.message || e.message)) || ''
-    if (msg.includes('ResizeObserver loop') || msg.includes('ResizeObserver loop limit exceeded')) {
-      e.preventDefault && e.preventDefault()
-      e.stopImmediatePropagation && e.stopImmediatePropagation()
-      return false
-    }
-  }
-  window.addEventListener('error', ignoreResizeObserverError)
-  window.addEventListener('unhandledrejection', ignoreResizeObserverError)
-}
-
 new Vue({
   router,
   store,

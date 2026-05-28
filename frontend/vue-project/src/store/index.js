@@ -6,6 +6,7 @@ Vue.use(Vuex)
 
 export default new Vuex.Store({
   state: {
+    sidebarCollapsed: false,
     userId: null,
     symbol: '000001.SZ',
     market: 'SZ',
@@ -44,6 +45,12 @@ export default new Vuex.Store({
     }
   },
   mutations: {
+    toggleSidebar(state) {
+      state.sidebarCollapsed = !state.sidebarCollapsed
+    },
+    setSidebarCollapsed(state, collapsed) {
+      state.sidebarCollapsed = collapsed
+    },
     setSymbol(state, { symbol, market }) {
       state.symbol = symbol
       state.market = market || ''

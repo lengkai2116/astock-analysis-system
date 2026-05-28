@@ -15,14 +15,13 @@ export default {
   components: {
     Sidebar
   },
-  data() {
-    return {
-      isDarkTheme: true,
-      sidebarCollapsed: false
+  computed: {
+    isDarkTheme() {
+      return true
+    },
+    sidebarCollapsed() {
+      return this.$store.state.sidebarCollapsed
     }
-  },
-  mounted() {
-    this.isDarkTheme = true
   }
 }
 </script>
