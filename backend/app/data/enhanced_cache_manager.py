@@ -1,6 +1,11 @@
 import os
 import duckdb
 import pandas as pd
+import logging
+import time
+import shutil
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta
 from .redis_cache_manager import RedisCacheManager
 
@@ -46,18 +51,25 @@ class EnhancedCacheManager:
             except Exception:
                 pass
         except Exception as e:
-            print(f"⚠️ 首次连接失败，尝试只读模式: {e}")
+            logger.warning(f"DuckDB 主库连接失败: {e}")
+            # 降级策略：先尝试备份库，再创建新库，最后用内存模式
+            backup_path = self.db_path + '.backup'
             try:
-                self.conn = duckdb.connect(self.db_path, read_only=True)
+                self.conn = duckdb.connect(backup_path, config=duckdb_config, read_only=False)
+                logger.info(f"成功连接到备份库: {backup_path}")
             except Exception as e2:
-                print(f"⚠️ 只读模式也失败，尝试创建新数据库: {e2}")
+                logger.warning(f"备份库连接也失败: {e2}")
                 try:
-                    backup_path = self.db_path + '.backup'
+                    # 保留损坏的数据库文件（不覆盖），创建新的空库
                     if os.path.exists(self.db_path):
-                        os.rename(self.db_path, backup_path)
+                        import shutil
+                        rotated_path = self.db_path + f'.corrupted.{int(time.time())}'
+                        shutil.copy2(self.db_path, rotated_path)
+                        logger.info(f"已将损坏的数据库备份到: {rotated_path}")
                     self.conn = duckdb.connect(self.db_path, config=duckdb_config)
+                    logger.info("已创建新的 DuckDB 空数据库")
                 except Exception as e3:
-                    print(f"⚠️ 所有连接方式失败，使用内存数据库: {e3}")
+                    logger.error(f"创建新数据库也失败，使用内存模式: {e3}")
                     self.conn = duckdb.connect(':memory:')
                     self.db_path = ':memory:'
         

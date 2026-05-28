@@ -43,6 +43,16 @@
           <a-icon type="database" />
           <span>因子管理</span>
         </a-menu-item>
+
+        <a-menu-item key="/strategy-templates" @click="navigate('/strategy-templates')">
+          <a-icon type="file-text" />
+          <span>策略模板</span>
+        </a-menu-item>
+
+        <a-menu-item key="/reports-center" @click="navigate('/reports-center')">
+          <a-icon type="folder" />
+          <span>报告中心</span>
+        </a-menu-item>
       </a-menu>
     </div>
 
