@@ -1,0 +1,168 @@
+:root {
+  /* A股标准色彩 */
+  --color-up: #EF4444;
+  --color-down: #22C55E;
+  --color-primary: #3B82F6;
+  --color-accent: #F59E0B;
+  
+  /* 背景色 */
+  --bg-primary: #0A1628;
+  --bg-secondary: #141414;
+  --bg-surface: #1E293B;
+  
+  /* 文字色 */
+  --text-primary: #F1F5F9;
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
+  
+  /* K线专用 */
+  --kline-up: #EF4444;
+  --kline-down: #22C55E;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #404040;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #505050;
+}
+
+.theme-dark {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+/* A股涨跌颜色工具类 */
+.text-up {
+  color: var(--color-up);
+}
+
+.text-down {
+  color: var(--color-down);
+}
+
+.bg-up {
+  background: var(--color-up);
+}
+
+.bg-down {
+  background: var(--color-down);
+}
+
+.ant-btn-primary {
+  background: #1890ff !important;
+  border-color: #1890ff !important;
+}
+
+.ant-btn-primary:hover {
+  background: #40a9ff !important;
+  border-color: #40a9ff !important;
+}
+
+.ant-select-dropdown {
+  background: #1e1e1e !important;
+}
+
+.ant-select-item {
+  color: #d1d4dc !important;
+}
+
+.ant-select-item-option-active {
+  background: #262626 !important;
+}
+
+.ant-select-item-option-selected {
+  background: #1890ff !important;
+}
+
+.ant-tabs-tab {
+  color: #787b86 !important;
+}
+
+.ant-tabs-tab-active {
+  color: #1890ff !important;
+}
+
+.ant-tabs-ink-bar {
+  background: #1890ff !important;
+}
+
+.ant-input,
+.ant-select-selector {
+  background: #1e1e1e !important;
+  border-color: #2a2a2a !important;
+  color: #d1d4dc !important;
+}
+
+.ant-input:focus,
+.ant-select-focused .ant-select-selector {
+  border-color: #1890ff !important;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2) !important;
+}
+
+.ant-radio-button-wrapper {
+  background: #1e1e1e !important;
+  border-color: #2a2a2a !important;
+  color: #787b86 !important;
+}
+
+.ant-radio-button-wrapper-checked {
+  background: #1890ff !important;
+  border-color: #1890ff !important;
+  color: #fff !important;
+}
+
+.ant-modal-content {
+  background: #1e1e1e !important;
+}
+
+.ant-modal-header {
+  background: #1e1e1e !important;
+  border-bottom-color: #2a2a2a !important;
+}
+
+.ant-modal-title {
+  color: #d1d4dc !important;
+}
+
+.ant-modal-close-x {
+  color: #787b86 !important;
+}
+
+.ant-modal-footer {
+  border-top-color: #2a2a2a !important;
+}
+
+.ant-message-notice-content {
+  background: #1e1e1e !important;
+  color: #d1d4dc !important;
+}
+
+.ant-tooltip-inner {
+  background: #1e1e1e !important;
+  color: #d1d4dc !important;
+}

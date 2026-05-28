@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+*.egg
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+frontend/vue-project/node_modules/
+frontend/vue-project/dist/
+
+# Data & Cache
+data/duckdb/*.db
+data/duckdb/*.db.wal
+data/duckdb/temp/
+*.parquet
+
+# Logs
+*.log
+sync_log.txt
+
+# Docker
+backend/__pycache__/
+
+# Documents
+*.docx
+
+# Backup files
+*backup*
+.*.backup
