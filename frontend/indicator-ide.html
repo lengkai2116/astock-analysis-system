@@ -1,0 +1,1104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>指标IDE - QuantDinger</title>
+  <script src="https://cdn.jsdelivr.net/npm/klinecharts@9/dist/klinecharts.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --qd-primary: #1890ff;
+      --qd-success: #52c41a;
+      --qd-warning: #faad14;
+      --qd-error: #f5222d;
+      --qd-dark-bg: #141414;
+      --qd-dark-surface: #1e1e1e;
+      --qd-dark-border: #2a2a2a;
+      --qd-dark-text: #d1d4dc;
+      --qd-dark-text-secondary: #787b86;
+      --qd-dark-grid: #252525;
+      --qd-green: #3FB950;
+      --qd-red: #F85149;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: var(--qd-dark-bg);
+      color: var(--qd-dark-text);
+      overflow: hidden;
+      height: 100vh;
+    }
+    #app { height: 100vh; display: flex; }
+    
+    /* Left Drawer */
+    .ide-left {
+      width: 400px;
+      background: var(--qd-dark-surface);
+      border-right: 1px solid var(--qd-dark-border);
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.3s ease;
+      position: relative;
+    }
+    .ide-left.collapsed { transform: translateX(-100%); }
+    .ide-left .panel-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      background: var(--qd-dark-bg);
+      border-bottom: 1px solid var(--qd-dark-border);
+      cursor: pointer;
+    }
+    .panel-title__leading { display: flex; align-items: center; gap: 8px; }
+    .panel-title__trailing { display: flex; align-items: center; gap: 4px; }
+    .panel-title-actions { display: flex; gap: 4px; }
+    .panel-title-actions button {
+      padding: 4px 8px;
+      border: 1px solid var(--qd-dark-border);
+      background: transparent;
+      color: var(--qd-dark-text-secondary);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .panel-title-actions button:hover {
+      background: rgba(255,255,255,0.05);
+      color: var(--qd-dark-text);
+    }
+    .panel-title-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .panel-title-chevron { font-size: 10px; color: var(--qd-dark-text-secondary); }
+    .code-panel-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .ide-guide-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: rgba(24, 144, 255, 0.08);
+      border-bottom: 1px solid var(--qd-dark-border);
+      font-size: 12px;
+      color: var(--qd-dark-text-secondary);
+    }
+    .ide-guide-link {
+      margin-left: auto;
+      color: var(--qd-primary);
+      text-decoration: none;
+      font-size: 11px;
+    }
+    .code-editor-wrapper { flex: 1; position: relative; }
+    .code-editor-area {
+      width: 100%;
+      height: 100%;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      padding: 12px;
+      background: var(--qd-dark-bg);
+      border: none;
+      color: var(--qd-dark-text);
+      resize: none;
+      outline: none;
+      overflow-y: auto;
+    }
+    .code-editor-area::placeholder { color: var(--qd-dark-text-secondary); }
+    
+    /* AI Panel */
+    .ai-gen-panel {
+      border-top: 1px solid var(--qd-dark-border);
+      background: var(--qd-dark-bg);
+    }
+    .ai-gen-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      color: var(--qd-dark-text-secondary);
+      font-size: 12px;
+    }
+    .ai-gen-body {
+      padding: 12px;
+      border-top: 1px solid var(--qd-dark-border);
+    }
+    .ai-helper-tip {
+      font-size: 11px;
+      color: var(--qd-dark-text-secondary);
+      margin-bottom: 8px;
+    }
+    .ai-prompt-input {
+      width: 100%;
+      height: 80px;
+      padding: 8px;
+      background: var(--qd-dark-bg);
+      border: 1px solid var(--qd-dark-border);
+      border-radius: 4px;
+      color: var(--qd-dark-text);
+      font-family: inherit;
+      font-size: 12px;
+      resize: vertical;
+      outline: none;
+    }
+    .ai-prompt-input:focus { border-color: var(--qd-primary); }
+    .ai-prompt-input:disabled { opacity: 0.5; }
+    .ai-gen-body button {
+      width: 100%;
+      padding: 8px;
+      background: var(--qd-primary);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      margin-top: 8px;
+    }
+    .ai-gen-body button:hover { background: #40a9ff; }
+    .ai-gen-body button:disabled { opacity: 0.5; }
+    
+    /* Code Rail */
+    .ide-code-rail {
+      width: 40px;
+      background: var(--qd-dark-surface);
+      border-right: 1px solid var(--qd-dark-border);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      cursor: pointer;
+      writing-mode: vertical-rl;
+      padding: 16px 0;
+    }
+    .ide-code-rail:hover { background: rgba(255,255,255,0.05); }
+    .ide-code-rail__icon { font-size: 16px; color: var(--qd-dark-text-secondary); }
+    .ide-code-rail__label {
+      font-size: 10px;
+      color: var(--qd-dark-text-secondary);
+      letter-spacing: 2px;
+    }
+    
+    /* Main Right Panel */
+    .ide-right {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--qd-dark-bg);
+    }
+    
+    /* Workspace Tabs */
+    .ide-workspace-tabs {
+      background: var(--qd-dark-surface);
+      border-bottom: 1px solid var(--qd-dark-border);
+    }
+    .ide-workspace-tabs .ant-tabs-tab {
+      color: var(--qd-dark-text-secondary);
+      font-size: 12px;
+      padding: 10px 20px;
+    }
+    .ide-workspace-tabs .ant-tabs-tab-active {
+      color: var(--qd-primary);
+      background: var(--qd-dark-bg);
+    }
+    .ide-workspace-tabs .ant-tabs-ink-bar { background: var(--qd-primary); }
+    
+    /* Chart Panel */
+    .chart-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .chart-panel-toolbar {
+      padding: 8px 12px;
+      background: var(--qd-dark-surface);
+      border-bottom: 1px solid var(--qd-dark-border);
+    }
+    .chart-panel-toolbar-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .chart-panel-toolbar-title {
+      font-size: 12px;
+      color: var(--qd-dark-text-secondary);
+    }
+    .chart-panel-toolbar-top-actions { display: flex; gap: 6px; }
+    .chart-panel-icon-btn, .chart-panel-fs-btn {
+      padding: 4px 8px;
+      border: 1px solid var(--qd-dark-border);
+      background: transparent;
+      color: var(--qd-dark-text-secondary);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .chart-panel-icon-btn:hover, .chart-panel-fs-btn:hover {
+      background: rgba(255,255,255,0.05);
+      color: var(--qd-dark-text);
+    }
+    .chart-panel-icon-btn.primary, .chart-panel-qt-btn.primary {
+      background: var(--qd-primary);
+      border-color: var(--qd-primary);
+      color: white;
+    }
+    .chart-panel-qt-btn {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border: 1px solid var(--qd-dark-border);
+      background: transparent;
+      color: var(--qd-dark-text-secondary);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .chart-panel-qt-btn:hover {
+      background: rgba(255,255,255,0.05);
+      color: var(--qd-dark-text);
+    }
+    .chart-panel-qt-label { font-size: 11px; }
+    
+    /* Toolbar Controls */
+    .chart-panel-toolbar-controls {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .ide-toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .ide-toolbar-label {
+      font-size: 11px;
+      color: var(--qd-dark-text-secondary);
+      white-space: nowrap;
+    }
+    
+    /* Watchlist Select */
+    .chart-panel-watchlist-select {
+      width: 180px;
+      background: var(--qd-dark-bg);
+      border: 1px solid var(--qd-dark-border);
+      border-radius: 4px;
+      color: var(--qd-dark-text);
+      font-size: 12px;
+      padding: 4px 8px;
+    }
+    .chart-panel-watchlist-select:focus {
+      outline: none;
+      border-color: var(--qd-primary);
+    }
+    
+    /* Timeframe Group */
+    .tf-group { display: flex; background: var(--qd-dark-bg); border-radius: 4px; }
+    .tf-group button {
+      padding: 4px 10px;
+      border: 1px solid var(--qd-dark-border);
+      border-right: none;
+      background: transparent;
+      color: var(--qd-dark-text-secondary);
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .tf-group button:last-child { border-right: 1px solid var(--qd-dark-border); border-radius: 0 4px 4px 0; }
+    .tf-group button:first-child { border-radius: 4px 0 0 4px; }
+    .tf-group button.active {
+      background: var(--qd-primary);
+      border-color: var(--qd-primary);
+      color: white;
+    }
+    .tf-group button:hover:not(.active) {
+      background: rgba(255,255,255,0.05);
+      color: var(--qd-dark-text);
+    }
+    
+    /* Indicator Selector */
+    .ide-indicator-multiselect-trigger {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      background: var(--qd-dark-bg);
+      border: 1px solid var(--qd-dark-border);
+      border-radius: 4px;
+      color: var(--qd-dark-text-secondary);
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .ide-indicator-multiselect-trigger:hover {
+      background: rgba(255,255,255,0.05);
+      color: var(--qd-dark-text);
+    }
+    
+    /* Chart Inner */
+    .chart-panel-inner {
+      flex: 1;
+      position: relative;
+      min-height: 0;
+    }
+    #kline-chart-container {
+      width: 100%;
+      height: 100%;
+    }
+    
+    /* Drawing Toolbar */
+    .drawing-toolbar {
+      position: absolute;
+      left: 8px;
+      top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      background: rgba(20, 20, 20, 0.9);
+      padding: 4px;
+      border-radius: 4px;
+      border: 1px solid var(--qd-dark-border);
+    }
+    .drawing-tool-btn {
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: var(--qd-dark-text-secondary);
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .drawing-tool-btn:hover {
+      background: rgba(255,255,255,0.1);
+      color: var(--qd-dark-text);
+    }
+    .drawing-tool-btn.active {
+      background: var(--qd-primary);
+      color: white;
+    }
+    
+    /* Indicator Toolbar */
+    .indicator-toolbar {
+      position: absolute;
+      right: 8px;
+      top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      max-width: 180px;
+    }
+    .indicator-btn {
+      padding: 3px 8px;
+      background: rgba(20, 20, 20, 0.9);
+      border: 1px solid var(--qd-dark-border);
+      border-radius: 4px;
+      color: var(--qd-dark-text-secondary);
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .indicator-btn:hover {
+      border-color: var(--qd-primary);
+      color: var(--qd-primary);
+    }
+    .indicator-btn.active {
+      background: var(--qd-primary);
+      border-color: var(--qd-primary);
+      color: white;
+    }
+    
+    /* Active Indicators Bar */
+    .indicator-active-bar {
+      position: absolute;
+      left: 44px;
+      top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      background: rgba(20, 20, 20, 0.9);
+      padding: 4px;
+      border-radius: 4px;
+      border: 1px solid var(--qd-dark-border);
+    }
+    .indicator-active-chip {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 4px;
+      font-size: 11px;
+    }
+    .indicator-active-chip__label {
+      color: var(--qd-dark-text);
+      cursor: pointer;
+    }
+    .indicator-active-chip__action {
+      color: var(--qd-dark-text-secondary);
+      cursor: pointer;
+      font-size: 10px;
+    }
+    .indicator-active-chip__action:hover { color: var(--qd-dark-text); }
+    .indicator-active-chip--hidden .indicator-active-chip__label {
+      text-decoration: line-through;
+      color: var(--qd-dark-text-secondary);
+    }
+    
+    /* Chart Overlay */
+    .chart-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(20, 20, 20, 0.9);
+    }
+    .hint-box {
+      text-align: center;
+      padding: 24px;
+    }
+    .hint-box .hint-icon {
+      font-size: 48px;
+      color: var(--qd-primary);
+      margin-bottom: 16px;
+    }
+    .hint-title {
+      font-size: 16px;
+      color: var(--qd-dark-text);
+      margin-bottom: 8px;
+    }
+    .hint-desc {
+      font-size: 12px;
+      color: var(--qd-dark-text-secondary);
+    }
+    
+    /* Loading Spinner */
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 2px solid var(--qd-dark-border);
+      border-top-color: var(--qd-primary);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    
+    /* Status Bar */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 12px;
+      background: var(--qd-dark-surface);
+      border-top: 1px solid var(--qd-dark-border);
+      font-size: 11px;
+      color: var(--qd-dark-text-secondary);
+    }
+    .status-left { display: flex; align-items: center; gap: 12px; }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--qd-green);
+      display: inline-block;
+      margin-right: 4px;
+    }
+    
+    /* Webfont icons */
+    @font-face {
+      font-family: 'anticon';
+      src: url('data:font/woff2;base64,d09GMgABAAAAAAiYAA0AAAAAAAwAAAEOAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGhY2lkAAABWAAAAMAAAADYAAAWCAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoZGVEAAADXAAAANgAAADgAAYuSAAEAAAAAAAAAEaGRlNAAB0gAAAJAAAABmAAGN1AAEAAAAAAAAAFZlERQAAAbgAAAAgAAAALAAGVbwAAEAAAAAAAAAFoZWFkAAAImAAAADYAAAA2AAhSAgABAAAAAAAAAGhlYWQAAAWAAAAAeAAAAHoBLgECAAAAAAAAAAZjaGFkAAABsAAAANgAAADaAAkBCwABAAAAAAAAACBnYWNoAAACCAAAAHoAAADQAAMBNgABAAAAAAAAAApoZWNoAAACKAAAAGQAAACgAAwBQgABAAAAAAAAAAxtYXhwAAACVAAAAHAAAADYAAMBOAAEAAAAAAAAAW5yb2NoAAAClAAAABgAAAA4AAwAUAAEAAAAAAAAAW5yZXNzAAAC5AAAADAAAAAyAAwAcAAEAAAAAAAAAA2Zvcm1hdGUAAAAOgAAAAMAAAAGAAwAOgABAAAAAABhY3Jvd20gQXJyYXkgSWNvbnNvbGUgU3BlY3MgZm9yIEFtZXJpY2EgUGhvbmUuIE5vdGU6IENvbnNvbGUgU3BlY3MgZm9yIEFjY2Vzc29yIE5hbWU6IGFudGljb24td29vZCBpY29ucyAtIEZvcm1hdGU6IFdPR0Y=') format('woff2');
+    }
+    .anticon {
+      font-family: 'anticon' !important;
+      font-style: normal;
+      font-weight: normal;
+      font-variant: normal;
+      text-transform: none;
+      line-height: 1;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    .anticon-code:before { content: '\e612'; }
+    .anticon-plus:before { content: '\e610'; }
+    .anticon-save:before { content: '\e60e'; }
+    .anticon-delete:before { content: '\e60d'; }
+    .anticon-cloud-upload:before { content: '\e60c'; }
+    .anticon-deployment-unit:before { content: '\e60b'; }
+    .anticon-copy:before { content: '\e60a'; }
+    .anticon-fullscreen:before { content: '\e609'; }
+    .anticon-fullscreen-exit:before { content: '\e608'; }
+    .anticon-play-circle:before { content: '\e607'; }
+    .anticon-pause-circle:before { content: '\e606'; }
+    .anticon-up:before { content: '\e605'; }
+    .anticon-down:before { content: '\e604'; }
+    .anticon-double-left:before { content: '\e603'; }
+    .anticon-book:before { content: '\e602'; }
+    .anticon-thunderbolt:before { content: '\e601'; }
+    .anticon-line-chart:before { content: '\e600'; }
+    .anticon-minus:before { content: '\e613'; }
+    .anticon-column-width:before { content: '\e614'; }
+    .anticon-arrow-right:before { content: '\e615'; }
+    .anticon-menu:before { content: '\e616'; }
+    .anticon-dollar:before { content: '\e617'; }
+    .anticon-border:before { content: '\e618'; }
+    .anticon-rise:before { content: '\e619'; }
+    .anticon-eye:before { content: '\e61a'; }
+    .anticon-eye-invisible:before { content: '\e61b'; }
+    .anticon-setting:before { content: '\e61c'; }
+    .anticon-close:before { content: '\e61d'; }
+    .anticon-check-circle:before { content: '\e61e'; }
+    .anticon-warning:before { content: '\e61f'; }
+    .anticon-info-circle:before { content: '\e620'; }
+    .anticon-search:before { content: '\e621'; }
+    .anticon-clock-circle:before { content: '\e622'; }
+    .anticon-user:before { content: '\e623'; }
+    .anticon-lock:before { content: '\e624'; }
+    .anticon-edit:before { content: '\e625'; }
+    .anticon-experiment:before { content: '\e626'; }
+    .anticon-robot:before { content: '\e627'; }
+    .anticon-loading:before { content: '\e628'; animation: spin 1s linear infinite; }
+    .anticon-swap:before { content: '\e629'; }
+    .anticon-arrow-up:before { content: '\e62a'; }
+    .anticon-arrow-down:before { content: '\e62b'; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <!-- Left code rail (collapsed view) -->
+    <div class="ide-code-rail" id="codeRail" style="display: none;">
+      <span class="anticon ide-code-rail__icon" icon="code"></span>
+      <span class="ide-code-rail__label">代码</span>
+    </div>
+    
+    <!-- Left panel -->
+    <div class="ide-left" id="leftPanel">
+      <div class="code-panel">
+        <div class="panel-title">
+          <div class="panel-title__leading">
+            <span class="anticon" icon="code"></span>
+            <span style="font-size: 12px; color: var(--qd-dark-text);">Indicator Editor</span>
+          </div>
+          <div class="panel-title__trailing">
+            <div class="panel-title-actions">
+              <button title="Create"><span class="anticon" icon="plus"></span></button>
+              <button title="Save" disabled><span class="anticon" icon="save"></span></button>
+              <button title="Delete" disabled><span class="anticon" icon="delete"></span></button>
+              <button title="Publish" disabled><span class="anticon" icon="cloud-upload"></span></button>
+              <button title="Create Strategy" disabled><span class="anticon" icon="deployment-unit"></span></button>
+              <button title="Save As"><span class="anticon" icon="copy"></span></button>
+              <button title="Fullscreen"><span class="anticon" icon="fullscreen"></span></button>
+              <button title="Run" id="runIndicatorBtn"><span class="anticon" icon="play-circle"></span></button>
+            </div>
+            <span class="anticon panel-title-chevron" icon="down"></span>
+          </div>
+        </div>
+        <div class="code-panel-body">
+          <div class="ide-guide-bar">
+            <span class="anticon" icon="book"></span>
+            <span>查看策略/指标代码编写教程</span>
+            <a href="#" class="ide-guide-link">开发教程 <span class="anticon" icon="arrow-right"></span></a>
+          </div>
+          <div class="code-editor-wrapper">
+            <textarea class="code-editor-area" id="codeEditor" placeholder="在这里编写您的指标代码...">
+# [Sample] SuperTrend Trend-Following -- classic ATR channel flip
+# Idea: build an adaptive band pair (HL2 +/- mult * ATR). The bands
+# can only tighten in the prevailing trend direction; price crossing
+# the bands in the prevailing trend fires a buy / sell signal.
+
+# Design notes:
+# Design notes uses Wilder smoothing (ewm alpha=1/N) so values match
+# TradingView, MT5 and most pro charting tools.
+# Final upper / lower bands are path-dependent: they cannot drift in
+# the unfavourable direction, so we recurse bar by bar in a Python 
+# loop instead of pure vectorization.
+# Signals fire on the bar where direction flips -- naturally edge-triggered,
+# no repeat entries while the trend persists.
+# Direction is compared against the PREVIOUS final band only (c[l] vs final_[i-1]) 
+# -> strictly no look-ahead bias.
+
+@indicator
+def SuperTrend(data):
+    length = 10
+    mult = 3.0
+    
+    high = data.high
+    low = data.low
+    close = data.close
+    
+    # Calculate typical price and ATR
+    tp = (high + low + close) / 3
+    atr = ta.atr(length=length)
+    
+    # Initialize bands
+    final_upper = [0.0] * len(close)
+    final_lower = [0.0] * len(close)
+    direction = [1] * len(close)
+    
+    for i in range(length, len(close)):
+        # Basic bands
+        basic_upper = tp[i] + mult * atr[i]
+        basic_lower = tp[i] - mult * atr[i]
+        
+        # Final bands (cannot expand against trend)
+        if close[i] > final_upper[i-1]:
+            final_upper[i] = max(basic_upper, final_upper[i-1])
+        else:
+            final_upper[i] = basic_upper
+            
+        if close[i] < final_lower[i-1]:
+            final_lower[i] = min(basic_lower, final_lower[i-1])
+        else:
+            final_lower[i] = basic_lower
+            
+        # Determine direction
+        if close[i] > final_upper[i-1]:
+            direction[i] = 1
+        elif close[i] < final_lower[i-1]:
+            direction[i] = -1
+        else:
+            direction[i] = direction[i-1]
+    
+    # Plot bands and signals
+    plot('SuperTrend Up', final_upper, color='#FFD700')
+    plot('SuperTrend Down', final_lower, color='#FF4444')
+    
+    # Generate signals
+    long_signal = (direction == 1) & (direction.shift(1) == -1)
+    short_signal = (direction == -1) & (direction.shift(1) == 1)
+    
+    signal(long=long_signal, short=short_signal)
+</textarea>
+          </div>
+          <div class="code-quality-panel" style="padding: 8px; border-top: 1px solid var(--qd-dark-border);">
+            <div class="code-quality-head">
+              <span class="code-quality-title" style="font-size: 11px; color: var(--qd-dark-text-secondary);">代码质量检查</span>
+              <button class="code-quality-recheck" style="font-size: 11px; color: var(--qd-primary); background: none; border: none; cursor: pointer;">重新检查</button>
+            </div>
+          </div>
+          <div class="ai-gen-panel">
+            <div class="ai-gen-header">
+              <span class="anticon" icon="robot"></span>
+              <span>AI 生成</span>
+              <span class="anticon" icon="down" style="margin-left: auto;"></span>
+            </div>
+            <div class="ai-gen-body">
+              <div class="ai-helper-tip">用自然语言描述您的指标想法，生成后可直接保存、回测、回测并发布到指标市场</div>
+              <textarea class="ai-prompt-input" placeholder="描述您想生成的指标逻辑..."></textarea>
+              <button>
+                <span class="anticon" icon="robot"></span>
+                生成代码
+              </button>
+              <div class="ai-helper-links" style="margin-top: 8px; text-align: center;">
+                <a href="#" style="font-size: 11px; color: var(--qd-primary);">前往指标市场</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ide-code-drawer-handle" style="padding: 8px; text-align: center; background: var(--qd-dark-bg); border-top: 1px solid var(--qd-dark-border); cursor: pointer;" id="drawerHandle">
+        <span class="anticon" icon="double-left"></span>
+        <span style="font-size: 11px; color: var(--qd-dark-text-secondary);">隐藏代码</span>
+      </div>
+    </div>
+    
+    <!-- Right panel -->
+    <div class="ide-right">
+      <!-- Workspace tabs -->
+      <div class="ide-workspace-tabs">
+        <div class="ant-tabs-tab active">图表与交易</div>
+        <div class="ant-tabs-tab">回测与结果</div>
+      </div>
+      
+      <!-- Chart workspace -->
+      <div class="chart-panel">
+        <div class="chart-panel-toolbar">
+          <div class="chart-panel-toolbar-top">
+            <span class="chart-panel-toolbar-title">图表窗口</span>
+            <div class="chart-panel-toolbar-top-actions">
+              <button class="chart-panel-icon-btn primary" id="showCodeBtn"><span class="anticon" icon="code"></span></button>
+              <button class="chart-panel-qt-btn" id="quickTradeBtn">
+                <span class="anticon" icon="thunderbolt"></span>
+                <span class="chart-panel-qt-label">闪电交易</span>
+              </button>
+              <button class="chart-panel-fs-btn" id="fullscreenBtn"><span class="anticon" icon="fullscreen"></span></button>
+            </div>
+          </div>
+          <div class="chart-panel-toolbar-controls">
+            <div class="ide-toolbar-group ide-toolbar-group--watchlist">
+              <span class="ide-toolbar-label">自选标的</span>
+              <select class="chart-panel-watchlist-select" id="symbolSelect">
+                <option value="AAPL">AAPL Apple Inc.</option>
+                <option value="GOOGL">GOOGL Alphabet Inc.</option>
+                <option value="MSFT">MSFT Microsoft Corp.</option>
+                <option value="000001.SZ">000001.SZ 平安银行</option>
+                <option value="000002.SZ">000002.SZ 万科A</option>
+                <option value="600000.SH">600000.SH 浦发银行</option>
+              </select>
+            </div>
+            <div class="ide-toolbar-group ide-toolbar-group--tf">
+              <span class="ide-toolbar-label">K线周期</span>
+              <div class="tf-group" id="timeframeGroup">
+                <button data-tf="1m">1m</button>
+                <button data-tf="5m">5m</button>
+                <button data-tf="15m">15m</button>
+                <button data-tf="30m">30m</button>
+                <button data-tf="1H">1H</button>
+                <button data-tf="4H">4H</button>
+                <button data-tf="1D" class="active">1D</button>
+                <button data-tf="1W">1W</button>
+              </div>
+            </div>
+            <div class="ide-toolbar-group ide-toolbar-group--indicator">
+              <span class="ide-toolbar-label">指标</span>
+              <div class="ide-indicator-multiselect-trigger" id="indicatorSelector">
+                <span class="ide-indicator-trigger-text" id="indicatorSummary">[Sample] SuperTrend</span>
+                <span class="anticon" icon="down"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="chart-panel-inner">
+          <!-- Drawing toolbar -->
+          <div class="drawing-toolbar" id="drawingToolbar">
+            <div class="drawing-tool-btn" title="Line"><span class="anticon" icon="minus"></span></div>
+            <div class="drawing-tool-btn" title="Horizontal Line"><span class="anticon" icon="minus"></span></div>
+            <div class="drawing-tool-btn" title="Vertical Line"><span class="anticon" icon="column-width"></span></div>
+            <div class="drawing-tool-btn" title="Ray"><span class="anticon" icon="arrow-right"></span></div>
+            <div class="drawing-tool-btn" title="Straight Line"><span class="anticon" icon="menu"></span></div>
+            <div class="drawing-tool-btn" title="Parallel Line"><span class="anticon" icon="menu"></span></div>
+            <div class="drawing-tool-btn" title="Price Line"><span class="anticon" icon="dollar"></span></div>
+            <div class="drawing-tool-btn" title="Price Channel"><span class="anticon" icon="border"></span></div>
+            <div class="drawing-tool-btn" title="Fibonacci"><span class="anticon" icon="rise"></span></div>
+            <div style="border-top: 1px solid var(--qd-dark-border); margin: 4px 2px;"></div>
+            <div class="drawing-tool-btn" title="Clear All"><span class="anticon" icon="delete"></span></div>
+          </div>
+          
+          <!-- Indicator toolbar -->
+          <div class="indicator-toolbar" id="indicatorToolbar">
+            <div class="indicator-btn" data-indicator="sma">SMA</div>
+            <div class="indicator-btn" data-indicator="ema">EMA</div>
+            <div class="indicator-btn" data-indicator="rsi">RSI</div>
+            <div class="indicator-btn" data-indicator="macd">MACD</div>
+            <div class="indicator-btn" data-indicator="bb">BB</div>
+            <div class="indicator-btn" data-indicator="atr">ATR</div>
+            <div class="indicator-btn" data-indicator="cci">CCI</div>
+            <div class="indicator-btn" data-indicator="williams">W%R</div>
+            <div class="indicator-btn" data-indicator="mfi">MFI</div>
+            <div class="indicator-btn" data-indicator="adx">ADX</div>
+            <div class="indicator-btn" data-indicator="obv">OBV</div>
+            <div class="indicator-btn" data-indicator="kdj">KDJ</div>
+          </div>
+          
+          <!-- Active indicators bar -->
+          <div class="indicator-active-bar" id="activeIndicatorBar">
+            <div class="indicator-active-chip">
+              <span class="indicator-active-chip__label">SMA(20)</span>
+              <span class="anticon indicator-active-chip__action" icon="eye"></span>
+              <span class="anticon indicator-active-chip__action" icon="setting"></span>
+              <span class="anticon indicator-active-chip__action" icon="close"></span>
+            </div>
+          </div>
+          
+          <!-- Chart container -->
+          <div id="kline-chart-container"></div>
+          
+          <!-- Canvas for watermark -->
+          <canvas class="qd-wm-layer" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none;"></canvas>
+          
+          <!-- Loading overlay -->
+          <div class="chart-overlay" id="loadingOverlay" style="display: flex;">
+            <div class="spinner"></div>
+            <span style="margin-left: 12px; color: var(--qd-dark-text);">加载中...</span>
+          </div>
+          
+          <!-- Empty hint overlay -->
+          <div class="chart-overlay initial-hint" id="emptyHint" style="display: none;">
+            <div class="hint-box">
+              <span class="anticon hint-icon" icon="line-chart"></span>
+              <div class="hint-title">选择交易标的</div>
+              <div class="hint-desc">从上方下拉菜单中选择一个交易对开始分析</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Status bar -->
+      <div class="status-bar">
+        <div class="status-left">
+          <span><span class="status-dot"></span>就绪</span>
+          <span id="dataRange">2024-01-01 ~ 2024-12-31</span>
+          <span id="dataCount">252条</span>
+        </div>
+        <div class="status-right" id="statusRight">AAPL | 1D</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      'use strict';
+      
+      const API_BASE = 'http://localhost:8080/api/v3/chart';
+      let chart = null;
+      let symbol = 'AAPL';
+      let timeframe = '1D';
+      let klineData = [];
+      
+      const $ = id => document.getElementById(id);
+      
+      // Initialize chart
+      function initChart() {
+        const container = $('kline-chart-container');
+        if (!container) return;
+        
+        chart = klinecharts.init('kline-chart-container');
+        if (!chart) return;
+        
+        // Dark theme styles
+        chart.setStyles({
+          candle: {
+            type: 'candle_solid',
+            upColor: '#3FB950',
+            downColor: '#F85149',
+            borderUpColor: '#3FB950',
+            borderDownColor: '#F85149',
+            wickUpColor: '#3FB950',
+            wickDownColor: '#F85149'
+          },
+          grid: {
+            horizontal: { color: 'rgba(255,255,255,0.04)' },
+            vertical: { color: 'rgba(255,255,255,0.04)' }
+          },
+          xAxis: {
+            axisLine: { color: 'rgba(255,255,255,0.08)' },
+            tickLine: { color: 'rgba(255,255,255,0.08)' },
+            tickText: { color: '#787b86', size: 10 }
+          },
+          yAxis: {
+            axisLine: { color: 'rgba(255,255,255,0.08)' },
+            tickLine: { color: 'rgba(255,255,255,0.08)' },
+            tickText: { color: '#787b86', size: 10 }
+          },
+          separator: { color: '#2a2a2a' },
+          crosshair: {
+            horizontal: { color: 'rgba(255,255,255,0.12)', text: { color: '#d1d4dc' } },
+            vertical: { color: 'rgba(255,255,255,0.12)', text: { color: '#d1d4dc' } }
+          }
+        });
+        
+        // Resize observer
+        if (window.ResizeObserver) {
+          new ResizeObserver(() => {
+            try { chart.resize(); } catch(e) {}
+          }).observe(container);
+        }
+      }
+      
+      // Load chart data
+      async function loadChart() {
+        const overlay = $('loadingOverlay');
+        const hint = $('emptyHint');
+        
+        if (overlay) overlay.style.display = 'flex';
+        if (hint) hint.style.display = 'none';
+        
+        try {
+          const periodMap = { '1m': '1', '5m': '5', '15m': '15', '30m': '30', '1H': '60', '4H': '240', '1D': 'D', '1W': 'W' };
+          const period = periodMap[timeframe] || 'D';
+          
+          const response = await fetch(`${API_BASE}/kline/${symbol}?limit=200&period=${period}`);
+          const result = await response.json();
+          
+          if (!result.success || !result.data?.kline?.length) {
+            // Generate mock data if no real data
+            klineData = generateMockData();
+          } else {
+            klineData = result.data.kline.map(d => ({
+              timestamp: d.time,
+              open: d.open,
+              high: d.high,
+              low: d.low,
+              close: d.close,
+              volume: d.volume || 0
+            }));
+          }
+          
+          if (!chart) initChart();
+          
+          chart.clearData();
+          chart.applyNewData(klineData);
+          
+          // Add default indicators
+          chart.createIndicator('VOL', false, { id: 'vol', height: 80 });
+          chart.createIndicator('MA', true, { id: 'ma', params: [20] });
+          
+          // Update status
+          if (klineData.length > 0) {
+            const first = new Date(klineData[0].timestamp * 1000).toLocaleDateString();
+            const last = new Date(klineData[klineData.length - 1].timestamp * 1000).toLocaleDateString();
+            $('dataRange').textContent = `${first} ~ ${last}`;
+            $('dataCount').textContent = `${klineData.length}条`;
+          }
+          $('statusRight').textContent = `${symbol} | ${timeframe}`;
+          
+        } catch (error) {
+          console.error('Failed to load chart data:', error);
+          klineData = generateMockData();
+          if (!chart) initChart();
+          chart.clearData();
+          chart.applyNewData(klineData);
+          chart.createIndicator('VOL', false, { id: 'vol', height: 80 });
+          chart.createIndicator('MA', true, { id: 'ma', params: [20] });
+        } finally {
+          if (overlay) overlay.style.display = 'none';
+        }
+      }
+      
+      // Generate mock data
+      function generateMockData() {
+        const data = [];
+        let basePrice = 150;
+        const now = Date.now();
+        
+        for (let i = 300; i >= 0; i--) {
+          const volatility = (Math.random() - 0.5) * 4;
+          const open = basePrice;
+          const close = basePrice + volatility;
+          const high = Math.max(open, close) + Math.random() * 2;
+          const low = Math.min(open, close) - Math.random() * 2;
+          
+          data.push({
+            timestamp: Math.floor((now - i * 86400000) / 1000),
+            open: parseFloat(open.toFixed(2)),
+            high: parseFloat(high.toFixed(2)),
+            low: parseFloat(low.toFixed(2)),
+            close: parseFloat(close.toFixed(2)),
+            volume: Math.floor(Math.random() * 10000000) + 1000000
+          });
+          
+          basePrice = close;
+        }
+        
+        return data;
+      }
+      
+      // Toggle indicator
+      function toggleIndicator(indicatorId) {
+        if (!chart) return;
+        
+        const btn = document.querySelector(`[data-indicator="${indicatorId}"]`);
+        if (!btn) return;
+        
+        const isActive = btn.classList.contains('active');
+        
+        if (isActive) {
+          btn.classList.remove('active');
+          // Remove indicator
+          try {
+            chart.removeIndicator(indicatorId);
+          } catch(e) {}
+        } else {
+          btn.classList.add('active');
+          // Add indicator
+          try {
+            const params = {
+              sma: [20],
+              ema: [20],
+              rsi: [14],
+              macd: [],
+              bb: [],
+              atr: [14],
+              cci: [20],
+              williams: [14],
+              mfi: [14],
+              adx: [14],
+              obv: [],
+              kdj: []
+            };
+            
+            const isStack = ['sma', 'ema', 'bb'].includes(indicatorId);
+            chart.createIndicator(indicatorId.toUpperCase(), isStack, {
+              id: indicatorId,
+              params: params[indicatorId] || []
+            });
+          } catch(e) {
+            console.error('Failed to add indicator:', e);
+          }
+        }
+      }
+      
+      // Event listeners
+      $('timeframeGroup').addEventListener('click', (e) => {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        
+        document.querySelectorAll('.tf-group button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        timeframe = btn.dataset.tf;
+        loadChart();
+      });
+      
+      $('symbolSelect').addEventListener('change', (e) => {
+        symbol = e.target.value;
+        loadChart();
+      });
+      
+      $('indicatorToolbar').addEventListener('click', (e) => {
+        const btn = e.target.closest('.indicator-btn');
+        if (!btn) return;
+        toggleIndicator(btn.dataset.indicator);
+      });
+      
+      $('drawerHandle').addEventListener('click', () => {
+        const leftPanel = $('leftPanel');
+        const codeRail = $('codeRail');
+        
+        leftPanel.style.display = 'none';
+        codeRail.style.display = 'flex';
+      });
+      
+      $('codeRail').addEventListener('click', () => {
+        const leftPanel = $('leftPanel');
+        const codeRail = $('codeRail');
+        
+        leftPanel.style.display = 'flex';
+        codeRail.style.display = 'none';
+      });
+      
+      $('showCodeBtn').addEventListener('click', () => {
+        const leftPanel = $('leftPanel');
+        const codeRail = $('codeRail');
+        
+        if (leftPanel.style.display === 'none') {
+          leftPanel.style.display = 'flex';
+          codeRail.style.display = 'none';
+        } else {
+          leftPanel.style.display = 'none';
+          codeRail.style.display = 'flex';
+        }
+      });
+      
+      $('fullscreenBtn').addEventListener('click', () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen();
+        } else {
+          document.exitFullscreen();
+        }
+      });
+      
+      // Initialize
+      initChart();
+      loadChart();
+    })();
+  </script>
+</body>
+</html>

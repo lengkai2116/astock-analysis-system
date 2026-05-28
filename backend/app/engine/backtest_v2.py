@@ -143,7 +143,7 @@ class AShareBacktestEngine:
         self.cash = self.config.initial_capital
         self.positions: Dict[str, Position] = {}
         self.pending_sell: Dict[str, int] = {}
-        self.trades: List[Trade] = {}
+        self.trades: List[Trade] = []
         self.daily_equity: List[DailyEquity] = []
         self.trade_counter = 0
         
@@ -252,7 +252,7 @@ class AShareBacktestEngine:
             slippage=slippage,
             total_cost=total_cost
         )
-        self.trades[trade.trade_id] = trade
+        self.trades.append(trade)
         
         if ts_code in self.positions:
             pos = self.positions[ts_code]
@@ -330,7 +330,7 @@ class AShareBacktestEngine:
             slippage=slippage,
             total_cost=total_proceeds
         )
-        self.trades[trade.trade_id] = trade
+        self.trades.append(trade)
         
         if ts_code in self.pending_sell:
             self.pending_sell[ts_code] -= sell_quantity
@@ -475,12 +475,13 @@ class AShareBacktestEngine:
                 self.update_pending_sell(ts_code, self.positions[ts_code].quantity)
             
             self.update_positions(price_data, str(date))
-            prev_total_value = self.calculate_total_value()[0] + self.calculate_total_value()[1]
+            # 修复日收益率计算基准：先记录（用前一日总值），再更新供下一天使用
             self.record_daily_equity(str(date), prev_total_value)
+            prev_total_value = self.calculate_total_value()[0] + self.calculate_total_value()[1]
         
         result = BacktestResultV2(
             config=self.config,
-            trades=list(self.trades.values()),
+            trades=self.trades,
             daily_equity=self.daily_equity,
             positions=self.positions.copy(),
             metrics=self._calculate_metrics(),
@@ -571,8 +572,8 @@ class AShareBacktestEngine:
             'max_consecutive_wins': int(max_consecutive_wins),
             'max_consecutive_losses': int(max_consecutive_losses),
             'total_trades': len(self.trades),
-            'buy_trades': sum(1 for t in self.trades.values() if t.side == OrderSide.BUY),
-            'sell_trades': sum(1 for t in self.trades.values() if t.side == OrderSide.SELL),
+            'buy_trades': sum(1 for t in self.trades if t.side == OrderSide.BUY),
+            'sell_trades': sum(1 for t in self.trades if t.side == OrderSide.SELL),
             'total_commission': self.total_commission,
             'total_stamp_duty': self.total_stamp_duty,
             'total_slippage': self.total_slippage,
