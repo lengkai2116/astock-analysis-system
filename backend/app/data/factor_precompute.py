@@ -14,6 +14,9 @@ from app.factors import FactorCalculator, get_factor_registry
 from app.data.enhanced_cache_manager import EnhancedCacheManager
 
 
+
+import logging
+logger = logging.getLogger(__name__)
 class FactorPrecomputeManager:
     """
     因子预计算管理器

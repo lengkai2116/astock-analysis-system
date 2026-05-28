@@ -8,6 +8,9 @@ from typing import Dict, Type, List, Optional
 from .base import BaseFactor
 
 
+
+import logging
+logger = logging.getLogger(__name__)
 class FactorRegistry:
     """
     因子注册表
@@ -24,7 +27,7 @@ class FactorRegistry:
         """
         name = factor_class.name
         if name in self._factors:
-            print(f"⚠️ 因子 {name} 已存在，将被覆盖")
+            logger.warning(r"因子 {name} 已存在，将被覆盖")
         
         self._factors[name] = factor_class
         
@@ -163,4 +166,4 @@ def _load_builtin_factors(registry: FactorRegistry):
                         attr != BaseFactor):
                         registry.register(attr)
             except Exception as e:
-                print(f"⚠️ 加载因子模块 {module_name} 失败: {e}")
+                logger.warning(r"加载因子模块 {module_name} 失败: {e}")

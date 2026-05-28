@@ -9,6 +9,9 @@ import numpy as np
 import itertools
 
 
+
+import logging
+logger = logging.getLogger(__name__)
 class ParameterOptimizer:
     """
     参数优化器基类
@@ -82,10 +85,10 @@ class GridSearchOptimizer(ParameterOptimizer):
                     self.best_params = params
                 
                 if (i + 1) % 10 == 0:
-                    print(f"已完成 {i+1}/{min(max_iter, len(self.param_combinations))}, 当前最佳: {self.best_score:.4f}")
+                    logger.info(f"已完成 {i+1}/{min(max_iter, len(self.param_combinations))}, 当前最佳: {self.best_score:.4f}")
             
             except Exception as e:
-                print(f"参数组合 {i} 执行失败: {e}")
+                logger.info(f"参数组合 {i} 执行失败: {e}")
                 continue
         
         return {
@@ -135,10 +138,10 @@ class RandomSearchOptimizer(ParameterOptimizer):
                     self.best_params = params
                 
                 if (i + 1) % 10 == 0:
-                    print(f"已完成 {i+1}/{max_iterations}, 当前最佳: {self.best_score:.4f}")
+                    logger.info(f"已完成 {i+1}/{max_iterations}, 当前最佳: {self.best_score:.4f}")
             
             except Exception as e:
-                print(f"迭代 {i} 执行失败: {e}")
+                logger.info(f"迭代 {i} 执行失败: {e}")
                 continue
         
         return {
@@ -238,7 +241,7 @@ def create_objective_function(backtest_func, data) -> Callable:
             result = backtest_func(params, data)
             return result.get('sharpe_ratio', 0.0)
         except Exception as e:
-            print(f"回测失败: {e}")
+            logger.info(f"回测失败: {e}")
             return -np.inf
     
     return objective

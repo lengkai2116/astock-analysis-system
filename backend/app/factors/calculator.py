@@ -9,6 +9,9 @@ from .base import BaseFactor
 from .registry import get_factor_registry
 
 
+
+import logging
+logger = logging.getLogger(__name__)
 class FactorCalculator:
     """
     因子计算器

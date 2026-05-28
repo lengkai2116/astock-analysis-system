@@ -4,6 +4,9 @@ import pandas as pd
 from datetime import datetime
 import tushare as ts
 
+
+import logging
+logger = logging.getLogger(__name__)
 class TushareProvider:
     def __init__(self):
         self.token = self._load_token()
@@ -147,7 +150,7 @@ class TushareProvider:
                 return data.to_dict('records')
             return []
         except Exception as e:
-            print(f"⚠️ 获取分钟线数据失败 ({ts_code}, {freq}): {e}")
+            logger.warning(r"获取分钟线数据失败 ({ts_code}, {freq}): {e}")
             return []
     
     def get_daily_by_date(self, trade_date):
@@ -239,7 +242,7 @@ class TushareProvider:
             
             return data.to_dict('records') if not data.empty else []
         except Exception as e:
-            print(f"⚠️ 获取每日基础数据失败: {e}")
+            logger.warning(r"获取每日基础数据失败: {e}")
             return []
     
     def get_adj_factor(self, ts_code, start_date=None, end_date=None):
@@ -271,7 +274,7 @@ class TushareProvider:
             
             return data.to_dict('records') if not data.empty else []
         except Exception as e:
-            print(f"⚠️ 获取复权因子失败 ({ts_code}): {e}")
+            logger.warning(r"获取复权因子失败 ({ts_code}): {e}")
             return []
     
     def test_connection(self):

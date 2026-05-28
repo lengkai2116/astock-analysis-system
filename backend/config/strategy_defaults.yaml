@@ -1,0 +1,63 @@
+# 筹码分布策略默认参数
+# 加载路径: backend/config/strategy_defaults.yaml
+# 可通过 YAML 热重载，无需重启服务
+
+chip_distribution:
+  lookback_period: 120  # 筹码分布回溯天数
+  num_bins: 150         # 价格网格数量
+  decay_rate: 0.005     # 每日旧筹码衰减率
+
+  # 主力阶段评分阈值
+  phase_scoring:
+    building:
+      max_profit_ratio: 0.4   # 建仓期最大获利率
+      min_asr: 0.7            # 建仓期最低筹码集中度
+      concentration_status: "高度集中"  # 集中度状态要求
+    washing:
+      rsi_range: [30, 55]     # 洗盘期 RSI 范围
+      asr_range: [0.3, 0.6]   # 洗盘期筹码集中度范围
+      vol_status: ["缩量", "地量"]  # 成交量状态
+    raising:
+      price_above_ssrp: 1.05  # 拉升期价格/SSRP 阈值
+      min_profit_ratio: 0.6   # 拉升期最低获利率
+      vol_status: ["放量", "显著放量", "天量"]
+    shipping:
+      min_profit_ratio: 0.7   # 出货期最低获利率
+      price_drop_days: 5
+      max_rsi: 70             # 出货期 RSI 上限
+    support:
+      min_profit_ratio: 0.35  # 支撑期最低获利率
+      max_rsi: 30             # 支撑期 RSI 上限
+      price_below_ssrp: 0.9   # 支撑期价格/SSRP 阈值
+
+  # 信号生成参数
+  signals:
+    s_buy:
+      max_price_diff: 0.02    # 拉升期价格距60日高点差距
+      min_vol_ratio: 1.5      # 最低成交量倍率
+      min_cyqkl: 0.2          # 最低 CYQKL 值
+      position: 0.7           # 买入信号建议仓位
+    s_wash_end:
+      position: 0.5           # 洗盘结束建议仓位
+    s_bounce:
+      position: 0.3           # 超跌反弹建议仓位
+    s_sell:
+      price_drop_pct: 0.95    # 高位回落检测阈值
+      rsi_overbought: 80      # RSI 超买阈值
+    s_wash_stop:
+      ssrp_break_pct: 0.9     # 跌破主力成本比例
+
+  # 信号事件权重（用于多信号融合）
+  signal_priority:
+    s_wash_stop: 1
+    s_sell: 2
+    s_buy: 3
+    s_wash_end: 4
+    s_bounce: 5
+
+darwin_selection:
+  population_size: 50
+  generations: 100
+
+chanlun:
+  min_kline: 5

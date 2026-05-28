@@ -3,6 +3,7 @@ from sqlalchemy import text
 
 health_bp = Blueprint('health', __name__)
 
+@health_bp.route('/api/v3/health', methods=['GET'])
 @health_bp.route('/api/v1/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -11,6 +12,7 @@ def health_check():
         'message': 'A股股票分析系统运行正常'
     })
 
+@health_bp.route('/api/v3/health/database', methods=['GET'])
 @health_bp.route('/api/v1/health/database', methods=['GET'])
 def database_check():
     from app import db

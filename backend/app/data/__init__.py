@@ -6,6 +6,9 @@ from datetime import datetime
 import pandas as pd
 from sqlalchemy import or_
 
+
+import logging
+logger = logging.getLogger(__name__)
 class DataManager:
     def __init__(self):
         self.tushare = TushareProvider()
@@ -48,7 +51,7 @@ class DataManager:
         if use_cache:
             cached_df = self.cache.get_cached_daily(ts_code, start_date, end_date)
             if not cached_df.empty:
-                print(f"📦 使用缓存数据: {ts_code}")
+                logger.info(r"使用缓存数据: {ts_code}")
                 self._sync_cached_to_postgres(ts_code, cached_df)
                 return len(cached_df)
         
@@ -164,7 +167,7 @@ class DataManager:
     
     def preload_cache(self):
         """预加载缓存"""
-        print("🔥 开始缓存预热")
+        logger.info(r"开始缓存预热")
         from app.models import DailyData
         
         # 获取有数据的股票列表
@@ -179,9 +182,9 @@ class DataManager:
             self.get_cached_daily_data(ts_code)
             count += 1
             if count % 50 == 0:
-                print(f"🔥 已预热 {count} 只股票")
+                logger.info(r"已预热 {count} 只股票")
         
-        print(f"✅ 缓存预热完成: {count} 只股票")
+        logger.info(r"缓存预热完成: {count} 只股票")
     
     def get_cache_stats(self):
         """获取缓存统计信息"""

@@ -8,6 +8,9 @@ from datetime import datetime
 from .enhanced_cache_manager import EnhancedCacheManager
 
 
+
+import logging
+logger = logging.getLogger(__name__)
 class ChipDistributionEstimator:
     """
     基于OHLCV的筹码估算器
@@ -270,7 +273,7 @@ class ChipDistributionService:
             self.cache_manager.cache_chip_distribution(ts_code, trade_date, chip_bins)
             return True
         except Exception as e:
-            print(f"⚠️ 缓存筹码分布失败: {e}")
+            logger.warning(r"缓存筹码分布失败: {e}")
             return False
     
     def get_cached_chip_distribution(self, ts_code: str, trade_date: Optional[str] = None) -> pd.DataFrame:

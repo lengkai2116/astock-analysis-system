@@ -58,3 +58,6 @@ def create_app():
     return app
 
 from app import models
+
+import logging
+logger = logging.getLogger(__name__)

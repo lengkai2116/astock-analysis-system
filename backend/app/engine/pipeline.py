@@ -84,9 +84,15 @@ class ChipDistributionStrategy(BaseStrategy):
     集成完整的主力阶段识别和信号生成体系
     """
 
-    def __init__(self, lookback_period: int = 120, data_manager=None):
+    def __init__(self, lookback_period: int = 120, data_manager=None, config: dict = None):
         self.lookback_period = lookback_period
         self.data_manager = data_manager
+        # 加载外部配置（覆盖默认值）
+        from ...config import get_strategy_config
+        self.strategy_config = config or get_strategy_config().get('chip_distribution', {})
+        if config is None:
+            self.lookback_period = self.strategy_config.get('lookback_period', lookback_period)
+        
         from ..data.chip_distribution_service import ChipDistributionService
         from ..data.chip_indicators import ChipIndicators
         self.chip_service = ChipDistributionService()

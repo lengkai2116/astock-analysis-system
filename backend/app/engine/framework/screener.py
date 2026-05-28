@@ -11,6 +11,9 @@ from . import UniverseSelectionModel, Algorithm
 from .chip_strategy import ChipUniverseSelectionModel, ChipScorer
 
 
+
+import logging
+logger = logging.getLogger(__name__)
 class DarwinRiskFilter:
     """
     达尔文风险过滤 - 第一层筛选
@@ -99,11 +102,11 @@ class MultiLayerStockScreener:
         Returns:
             筛选结果列表，按评分排序
         """
-        print("开始第一层筛选: 风险过滤...")
+        logger.info(f"开始第一层筛选: 风险过滤...")
         layer1_results = self.layer1.filter(all_stocks, stock_data)
         print(f"第一层通过: {len(layer1_results)} 只股票")
         
-        print("开始第二层筛选: 主力资金识别...")
+        logger.info(f"开始第二层筛选: 主力资金识别...")
         layer2_results = []
         for symbol in layer1_results:
             try:
@@ -126,7 +129,7 @@ class MultiLayerStockScreener:
         layer2_results = layer2_results[:100]  # 取前100只
         print(f"第二层通过: {len(layer2_results)} 只股票")
         
-        print("开始第三层筛选: 多策略验证...")
+        logger.info(f"开始第三层筛选: 多策略验证...")
         layer3_results = self._apply_strategy_validation(layer2_results, stock_data)
         print(f"第三层通过: {len(layer3_results)} 只股票")
         

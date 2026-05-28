@@ -12,6 +12,9 @@ from typing import Optional
 from app.indicators import TechnicalIndicatorEngine
 
 
+
+import logging
+logger = logging.getLogger(__name__)
 class PrecomputeIndicatorManager:
     """
     预计算指标管理器核心类
@@ -51,7 +54,7 @@ class PrecomputeIndicatorManager:
             
             return True
         except Exception as e:
-            print(f"⚠️ 预计算指标失败 [{ts_code}]: {e}")
+            logger.warning(r"预计算指标失败 [{ts_code}]: {e}")
             return False
     
     def _batch_cache_indicators(self, df: pd.DataFrame, ts_code: str):

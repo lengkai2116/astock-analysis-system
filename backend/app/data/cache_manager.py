@@ -3,6 +3,9 @@ import duckdb
 import pandas as pd
 from datetime import datetime, timedelta
 
+
+import logging
+logger = logging.getLogger(__name__)
 class CacheManager:
     def __init__(self, read_only=False):
         data_dir = os.getenv('DATA_DIR', '/data')
@@ -16,7 +19,7 @@ class CacheManager:
                 self.conn = duckdb.connect(self.db_path, config={'threads': 1})
         except Exception as e:
             # 如果有锁，尝试使用内存模式
-            print(f"⚠️ 无法连接到数据库文件，使用内存模式: {e}")
+            logger.warning(r"无法连接到数据库文件，使用内存模式: {e}")
             self.conn = duckdb.connect(':memory:')
         self._init_tables()
         self._init_extensions()

@@ -1118,6 +1118,9 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass
 
+
+import logging
+logger = logging.getLogger(__name__)
 # 导入框架基类
 try:
     from . import AlphaModel, Insight, UniverseSelectionModel
