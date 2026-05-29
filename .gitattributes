@@ -40,3 +40,8 @@ Makefile text eol=lf
 
 # Git
 .gitattributes text eol=lf
+
+# Startup scripts
+start.bat text eol=crlf
+start.command text eol=lf
+stop.bat text eol=crlf
