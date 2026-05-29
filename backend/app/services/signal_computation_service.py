@@ -9,8 +9,10 @@ from datetime import datetime, date
 import pandas as pd
 import numpy as np
 
+from app import db
 from app.data import DataManager
 from app.engine.framework.chip_strategy import ChipScorer
+from app.models import Signal as SignalModel
 from app.models.strategy import StrategySignal
 
 logger = logging.getLogger(__name__)
@@ -73,7 +75,12 @@ class SignalComputationService:
         except Exception as e:
             logger.debug(f"{ts_code} 因子信号计算失败: {e}")
 
+
+        # 持久化到数据库
+        self._persist_signals(ts_code, signals)
+
         return signals[:limit]
+
 
     def _compute_chip_signal(self, ts_code: str, df: pd.DataFrame) -> Optional[Dict]:
         """计算筹码主力分析信号 (L2)"""
@@ -303,3 +310,43 @@ class SignalComputationService:
             evidence.append('基础技术分析信号')
 
         return evidence
+
+    def _persist_signals(self, ts_code: str, signals: List[Dict]):
+        """将实时计算的信号持久化到数据库"""
+        if not signals:
+            return
+        try:
+            for sig in signals:
+                entry = sig.get('entry_zone', [None, None])
+                target = sig.get('target_zone', [None, None])
+                reason_parts = []
+                if sig.get('evidence'):
+                    reason_parts.extend(sig['evidence'])
+                if sig.get('risk_notes'):
+                    reason_parts.append('风险: ' + '; '.join(sig['risk_notes']))
+                record = SignalModel(
+                    ts_code=ts_code,
+                    signal_date=datetime.now(),
+                    signal_type=sig.get('signal', 'NEUTRAL'),
+                    confidence=sig.get('confidence', 0.5),
+                    entry_price=entry[0],
+                    stop_loss=sig.get('risk_line'),
+                    take_profit=target[-1] if target else None,
+                    indicators={
+                        'strategy_name': sig.get('strategy_name'),
+                        'signal_label': sig.get('signal_label'),
+                        'position_suggestion': sig.get('position_suggestion'),
+                        'holding_period': sig.get('holding_period'),
+                    },
+                    reason='; '.join(reason_parts) if reason_parts else None,
+                    status='active' if sig.get('signal') in ('BULLISH', 'WATCH') else 'pending',
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
+                )
+                db.session.add(record)
+            db.session.commit()
+            logger.info(f"{ts_code}: 已持久化 {len(signals)} 条信号")
+        except Exception as e:
+            db.session.rollback()
+            logger.warning(f"{ts_code}: 信号持久化失败: {e}")
+
