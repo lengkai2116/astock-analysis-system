@@ -138,6 +138,8 @@
 
 <script>
 import { FileTextOutlined } from '@ant-design/icons-vue'
+import { startAnalysis, getProgress, getFinalReport } from '@/services/aiAnalysisService'
+
 export default {
   name: 'AIAnalysisPage',
   data() {
@@ -148,29 +150,35 @@ export default {
         { symbol: '000001.SZ', name: '平安银行' },
         { symbol: '600000.SH', name: '浦发银行' },
         { symbol: '601318.SH', name: '中国平安' },
-        { symbol: '000333.SZ', name: '美的集团' }
+        { symbol: '000333.SZ', name: '美的集团' },
+        { symbol: '002415.SZ', name: '海康威视' },
+        { symbol: '300750.SZ', name: '宁德时代' }
       ],
       analyzing: false,
-      sessionId: null,
+      analysisId: null,
       progress: 0,
       progressText: '准备中...',
       analysisLog: [],
+      pollTimer: null,
       roles: [
-        { id: 'tech', name: '技术分析师', icon: '📈', status: 'waiting', report: null },
+        { id: 'technical', name: '技术分析师', icon: '📈', status: 'waiting', report: null },
         { id: 'fundamental', name: '基本面分析师', icon: '📊', status: 'waiting', report: null },
         { id: 'macro', name: '宏观策略师', icon: '🌐', status: 'waiting', report: null },
         { id: 'risk', name: '风险控制官', icon: '⚠️', status: 'waiting', report: null },
-        { id: 'manager', name: '资深基金经理', icon: '👨‍💼', status: 'waiting', report: null }
+        { id: 'fund_manager', name: '资深基金经理', icon: '👨‍💼', status: 'waiting', report: null }
       ],
       finalReport: null
     }
+  },
+  beforeUnmount() {
+    this.stopPolling()
   },
   methods: {
     async startAnalysis() {
       if (!this.selectedSymbol) return
 
       this.analyzing = true
-      this.sessionId = Date.now()
+      this.analysisId = null
       this.progress = 0
       this.progressText = '准备中...'
       this.analysisLog = []
@@ -182,127 +190,106 @@ export default {
 
       this.addLog('', '🚀', `开始分析 ${this.selectedSymbol}...`)
 
-      // 模拟分析过程
-      await this.simulateAnalysis()
-    },
-
-    async simulateAnalysis() {
-      // 阶段1: 数据收集
-      await this.delay(800)
-      this.progress = 10
-      this.progressText = '收集市场数据...'
-      this.addLog('', '📊', '正在收集股票历史数据...')
-
-      await this.delay(600)
-      this.progress = 20
-      this.addLog('', '📰', '正在获取相关新闻资讯...')
-
-      // 阶段2: 技术分析
-      await this.delay(500)
-      this.progress = 30
-      this.progressText = '技术分析中...'
-      this.roles[0].status = 'analyzing'
-      this.addLog('tech', '📈', '技术分析师: 正在分析K线形态和技术指标...')
-
-      await this.delay(1200)
-      this.roles[0].status = 'done'
-      this.roles[0].report = { bullishScore: 65, bearishScore: 35 }
-      this.progress = 45
-      this.addLog('tech', '📈', '技术分析师: 发现MACD金叉，RSI处于合理区间')
-
-      // 阶段3: 基本面分析
-      await this.delay(300)
-      this.progress = 50
-      this.progressText = '基本面分析中...'
-      this.roles[1].status = 'analyzing'
-      this.addLog('fundamental', '📊', '基本面分析师: 正在加载财报和估值数据...')
-
-      await this.delay(1000)
-      this.roles[1].status = 'done'
-      this.roles[1].report = { bullishScore: 55, bearishScore: 45 }
-      this.progress = 60
-      this.addLog('fundamental', '📊', '基本面分析师: 业绩稳定增长，但估值略高')
-
-      // 阶段4: 宏观分析
-      await this.delay(300)
-      this.progress = 65
-      this.progressText = '宏观分析中...'
-      this.roles[2].status = 'analyzing'
-      this.addLog('macro', '🌐', '宏观策略师: 分析行业政策和市场情绪...')
-
-      await this.delay(800)
-      this.roles[2].status = 'done'
-      this.roles[2].report = { bullishScore: 60, bearishScore: 40 }
-      this.progress = 75
-      this.addLog('macro', '🌐', '宏观策略师: 行业政策利好，市场情绪偏乐观')
-
-      // 阶段5: 风险分析
-      await this.delay(300)
-      this.progress = 80
-      this.progressText = '风险评估中...'
-      this.roles[3].status = 'analyzing'
-      this.addLog('risk', '⚠️', '风险控制官: 评估潜在风险点...')
-
-      await this.delay(700)
-      this.roles[3].status = 'done'
-      this.roles[3].report = { bullishScore: 45, bearishScore: 55 }
-      this.progress = 90
-      this.addLog('risk', '⚠️', '风险控制官: 注意市场波动风险，建议控制仓位')
-
-      // 阶段6: 圆桌辩论
-      await this.delay(300)
-      this.progress = 92
-      this.addLog('', '💬', '圆桌辩论开始 - 各角色交换观点...')
-      await this.delay(500)
-      this.addLog('', '💬', '技术面看多，基本面审慎，宏观面乐观...')
-
-      // 阶段7: 整合报告
-      await this.delay(300)
-      this.progress = 95
-      this.progressText = '生成最终报告...'
-      this.roles[4].status = 'analyzing'
-      this.addLog('manager', '👨‍💼', '资深基金经理: 正在整合分析报告...')
-
-      await this.delay(800)
-      this.roles[4].status = 'done'
-      this.roles[4].report = { bullishScore: 60, bearishScore: 40 }
-      this.progress = 100
-      this.progressText = '分析完成！'
-      this.addLog('', '✅', '分析完成！')
-
-      // 生成最终报告
-      this.generateFinalReport()
-
-      this.analyzing = false
-    },
-
-    generateFinalReport() {
-      const currentPrice = this.selectedSymbol === '600519.SH' ? 1850 : 45
-      this.finalReport = {
-        overallRating: 'BUY',
-        targetPriceRange: { min: currentPrice * 1.05, max: currentPrice * 1.15 },
-        stopLoss: currentPrice * 0.92,
-        suggestedPosition: 0.2,
-        summary: '综合来看，该股票当前具有一定投资价值。技术面显示向好信号，基本面稳健，宏观环境有利。建议轻仓配置，注意控制风险。',
-        sections: [
-          {
-            title: '📈 技术面分析摘要',
-            content: 'MACD金叉确认，成交量温和放大，趋势线支撑有效。短期技术形态向好。'
-          },
-          {
-            title: '📊 基本面分析摘要',
-            content: '业绩稳定增长，行业地位领先，估值处于合理区间。长期投资价值凸显。'
-          },
-          {
-            title: '💬 辩论记录摘要',
-            content: '技术面看多，但基本面提示估值略高。综合权衡后倾向于审慎看多，建议分批建仓。'
-          }
-        ]
+      try {
+        const res = await startAnalysis(this.selectedSymbol)
+        if (res.success && res.data) {
+          this.analysisId = res.data.analysis_id
+          this.addLog('', '📡', '分析请求已提交，等待结果...')
+          this.startPolling()
+        } else {
+          this.addLog('error', '❌', '启动分析失败')
+          this.analyzing = false
+        }
+      } catch (e) {
+        this.addLog('error', '❌', `启动分析失败: ${e.message}`)
+        this.analyzing = false
       }
     },
 
-    delay(ms) {
-      return new Promise(resolve => setTimeout(resolve, ms))
+    startPolling() {
+      this.stopPolling()
+      this.pollTimer = setInterval(() => this.pollProgress(), 1500)
+    },
+
+    stopPolling() {
+      if (this.pollTimer) {
+        clearInterval(this.pollTimer)
+        this.pollTimer = null
+      }
+    },
+
+    async pollProgress() {
+      if (!this.analysisId) return
+
+      try {
+        const res = await getProgress(this.analysisId)
+        if (!res.success || !res.data) return
+
+        const data = res.data
+        this.progress = data.progress || 0
+        this.progressText = data.progress_text || ''
+
+        // 更新角色状态
+        if (data.analysts) {
+          for (const role of this.roles) {
+            const analystData = data.analysts[role.id]
+            if (analystData) {
+              const isCurrent = data.current_role === role.id
+              role.status = data.status === 'completed' ? 'done' : (isCurrent ? 'analyzing' : 'done')
+              if (analystData.bullishScore !== undefined) {
+                role.report = {
+                  bullishScore: analystData.bullishScore,
+                  bearishScore: analystData.bearishScore
+                }
+              }
+            }
+          }
+        }
+
+        // 更新日志
+        if (data.logs && data.logs.length > this.analysisLog.length) {
+          for (let i = this.analysisLog.length; i < data.logs.length; i++) {
+            const log = data.logs[i]
+            this.analysisLog.push({
+              role: log.role || '',
+              icon: log.icon || '•',
+              content: log.content || '',
+              timestamp: new Date(log.timestamp).getTime(),
+              type: 'normal'
+            })
+          }
+        }
+
+        // 检查是否完成
+        if (data.status === 'completed') {
+          this.stopPolling()
+          this.progress = 100
+          this.progressText = '分析完成！'
+          this.addLog('', '✅', '分析完成！')
+          await this.loadFinalReport()
+          this.analyzing = false
+        } else if (data.status === 'failed') {
+          this.stopPolling()
+          this.addLog('error', '❌', '分析失败')
+          this.analyzing = false
+        }
+      } catch (e) {
+        console.error('轮询进度失败:', e)
+      }
+    },
+
+    async loadFinalReport() {
+      if (!this.analysisId) return
+
+      try {
+        const res = await getFinalReport(this.analysisId)
+        if (res.success && res.data && res.data.report) {
+          this.finalReport = res.data.report
+          this.addLog('', '📋', '最终报告已生成')
+        }
+      } catch (e) {
+        console.error('获取最终报告失败:', e)
+      }
     },
 
     addLog(role, icon, content) {
