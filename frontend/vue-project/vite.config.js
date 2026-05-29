@@ -13,7 +13,6 @@ export default defineConfig(({ mode }) => {
       alias: [
         { find: /^~(.+)/, replacement: '$1' },
         { find: /^moment$/, replacement: fileURLToPath(new URL('./src/shims/moment.js', import.meta.url)) },
-        { find: /^store$/, replacement: 'store/dist/store.modern.js' },
         { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) }
       ],
       extensions: ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json', '.vue']

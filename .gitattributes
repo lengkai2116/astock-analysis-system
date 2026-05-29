@@ -45,3 +45,4 @@ Makefile text eol=lf
 start.bat text eol=crlf
 start.command text eol=lf
 stop.bat text eol=crlf
+eslint.config.js text eol=lf
