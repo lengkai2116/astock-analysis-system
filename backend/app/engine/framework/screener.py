@@ -73,7 +73,7 @@ class DarwinRiskFilter:
         
         avg_vol = data['vol'].tail(20).mean()
         # 日均成交量需要大于5000万（简化）
-        return avg_vol > 1000000
+        return avg_vol > 10000
     
     def _filter_high_valuation(self, symbol: str, data: pd.DataFrame) -> bool:
         """过滤高估值股票"""

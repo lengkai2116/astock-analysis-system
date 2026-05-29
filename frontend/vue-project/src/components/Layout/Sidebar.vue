@@ -19,14 +19,19 @@
           <span>仪表盘</span>
         </a-menu-item>
 
+        <a-menu-item key="/indicator-ide" @click="navigate('/indicator-ide')">
+          <a-icon type="code" />
+          <span>个股策略分析</span>
+        </a-menu-item>
+
+        <a-menu-item key="/screener" @click="navigate('/screener')">
+          <a-icon type="filter" />
+          <span>选股系统</span>
+        </a-menu-item>
+
         <a-menu-item key="/watchlist" @click="navigate('/watchlist')">
           <a-icon type="star" />
           <span>自选监控</span>
-        </a-menu-item>
-
-        <a-menu-item key="/indicator-ide" @click="navigate('/indicator-ide')">
-          <a-icon type="code" />
-          <span>指标IDE</span>
         </a-menu-item>
 
         <a-menu-item key="/ai-analysis" @click="navigate('/ai-analysis')">

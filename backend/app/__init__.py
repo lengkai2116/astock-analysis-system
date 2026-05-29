@@ -41,6 +41,7 @@ def create_app():
     from app.routes.backtest import backtest_bp
     from app.routes.indicator_ide import indicator_ide_bp
     from app.routes.reports import reports_bp
+    from app.routes.screener import screener_bp
     
     app.register_blueprint(market_bp)
     app.register_blueprint(health_bp)
@@ -54,6 +55,7 @@ def create_app():
     app.register_blueprint(backtest_bp)
     app.register_blueprint(indicator_ide_bp)
     app.register_blueprint(reports_bp)
+    app.register_blueprint(screener_bp)
     
     return app
 

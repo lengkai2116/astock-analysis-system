@@ -13,6 +13,23 @@
 | 图表 | klinecharts + echarts |
 | AI 推理 | DeepSeek / LM Studio（可选） |
 
+## 部署架构
+
+生产环境前端通过 **Nginx + Docker 镜像** 提供服务，不需要 Node.js 运行时：
+
+```
+User --> Browser --> Nginx (:9000)
+                        |
+                        +--> /api/*             --> Flask Backend (:5001)
+                        +--> /socket.io/*       --> Socket.IO (WebSocket)
+                        +--> /assets/*          --> 静态文件（长期缓存）
+                        +--> /*                 --> SPA (index.html)
+```
+
+- **Nginx** 负责静态文件服务、SPA 路由回退、API 反向代理、WebSocket 代理
+- **API 基地址** 默认使用相对路径（由 Nginx 代理），也可通过 `API_BASE_URL` 环境变量单独指定后端地址
+- 构建产物通过多阶段 Dockerfile 压缩到约 50MB
+
 ## 快速开始
 
 ### 开发环境
@@ -45,7 +62,61 @@ cp .env.example .env
 make docker-build
 make docker-up
 
-# 3. 浏览器打开 http://localhost:9000
+# 3. 查看启动状态
+make status
+
+# 4. 浏览器打开 http://localhost:9000
+
+# 5. 查看日志
+make docker-logs            # 全部服务
+make docker-logs-backend    # 仅后端
+make docker-logs-frontend   # 仅前端
+```
+
+### Docker 部署详解
+
+#### 架构说明
+
+`docker-compose.yml` 编排了 4 个服务：
+
+| 服务 | 镜像 | 端口 | 依赖 |
+|------|------|------|------|
+| `postgres` | postgres:16 | 5432 | - |
+| `redis` | redis:7-alpine | 6379 | - |
+| `backend` | 本地构建 | 5001 | postgres, redis |
+| `frontend` | 本地构建 | 9000:80 | backend |
+
+#### Nginx 配置关键点
+
+前端容器内的 Nginx（[frontend/vue-project/nginx.conf](./frontend/vue-project/nginx.conf)）：
+
+- **SPA 回退**：所有非静态文件路由都回退到 `index.html`
+- **API 代理**：`/api/` 路径转发到后端容器 `http://backend:5001`
+- **WebSocket**：`/socket.io/` 路径启用 `Upgrade` 头，支持实时行情推送
+- **静态缓存**：`/assets/` 设置 `Cache-Control: public, immutable`，有效期 1 年
+- **健康检查**：`/health` 端点用于 Docker 容器健康检测
+- **Gzip**：对 JS、CSS、JSON 等启用压缩
+
+#### 运行时环境变量
+
+前端容器启动时，`docker-entrypoint.sh` 会检查 `API_BASE_URL` 环境变量：
+
+- **不设置**（默认）：使用相对路径，通过 Nginx 反向代理访问后端
+- **设置**：如 `API_BASE_URL=http://api.example.com`，会注入到前端 `window.__API_BASE__`
+- 同一份 Docker 镜像可通过不同环境变量部署到不同后端地址
+
+#### 独立部署前端（后端不在同一 Docker 网络时）
+
+```bash
+# 先构建镜像
+make docker-build
+
+# 单独启动前端，指定后端地址
+docker run -d \
+  --name astock-frontend \
+  -p 9000:80 \
+  -e API_BASE_URL=http://your-backend-host:5001 \
+  astock-frontend
 ```
 
 ## 项目结构
@@ -66,13 +137,17 @@ make docker-up
 │   └── vue-project/           # Vue 前端
 │       ├── src/
 │       │   ├── views/         # 8 个视图页面
-│       │   ├── components/    # 组件（含 KLineChart）
+│       │   ├── components/    # 组件
 │       │   ├── services/      # API 服务
 │       │   └── store/         # Vuex 状态
-│       ├── Dockerfile         # 前端 Docker 构建
-│       └── nginx.conf         # Nginx 配置（生产）
+│       ├── Dockerfile         # 多阶段构建（Node → Nginx）
+│       ├── nginx.conf         # 生产 Nginx 配置
+│       ├── docker-entrypoint.sh  # 容器入口脚本（运行时注入环境变量）
+│       └── .dockerignore      # Docker 构建上下文过滤
 ├── docker-compose.yml         # 全量部署编排
 ├── Makefile                   # 快捷命令
+├── 001-沟通记录/              # 项目沟通记录
+├── 002-方案存档/              # 方案/报告存档
 └── data/                      # 数据缓存目录
 ```
 
@@ -83,7 +158,10 @@ make docker-up
 - **策略回测**：T+1/涨跌停/手续费等 A 股规则
 - **AI 分析**：多角色分析师（需配置 LLM）
 - **因子系统**：200+ 内置因子
+- **三层策略筛选**：达尔文（风险过滤）→ 筹码（主力识别）→ 策略验证（缠论+因子）
 - **筹码分布**：主力阶段识别（建仓/洗盘/拉升/出货）
+- **缠论分析**：分型/笔/线段/中枢/背驰/买卖点
+- **信号融合**：多策略加权信号输出
 
 ## API 版本
 

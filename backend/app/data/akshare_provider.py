@@ -2,7 +2,13 @@
 AkShare实时数据提供者
 提供免费的实时行情数据（新浪数据源）
 """
-import akshare as ak
+_ak = None
+def _get_ak():
+    global _ak
+    if _ak is None:
+        import akshare as ak
+        _ak = ak
+    return _ak
 import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Optional
@@ -31,7 +37,7 @@ class AkShareRealtimeProvider:
             prefix = 'sh' if ts_code.endswith('.SH') else 'sz'
             full_symbol = prefix + symbol
             
-            df = ak.stock_bid_ask_em(symbol=symbol)
+            df = _get_ak().stock_bid_ask_em(symbol=symbol)
             if df is None or len(df) == 0:
                 return None
             
@@ -91,7 +97,7 @@ class AkShareRealtimeProvider:
             prefix = 'sh' if ts_code.endswith('.SH') else 'sz'
             full_symbol = prefix + symbol
             
-            df = ak.stock_bid_ask_em(symbol=full_symbol)
+            df = _get_ak().stock_bid_ask_em(symbol=full_symbol)
             if df is None or len(df) == 0:
                 return None
             

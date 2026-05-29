@@ -708,7 +708,16 @@ export default {
     }
   },
 
+
+  watch: {
+    watchlist: {
+      handler() { this.syncWatchlistToStorage() },
+      deep: true
+    }
+  },
+
   mounted() {
+    this.loadWatchlistFromStorage()
     this.initSocket()
   },
 
@@ -919,6 +928,25 @@ export default {
 
     goToBacktest() {
       this.$router.push({ name: 'Backtest' })
+    },
+
+
+
+    loadWatchlistFromStorage() {
+      try {
+        const raw = localStorage.getItem('user_watchlist')
+        if (raw && this.watchlist.length === 0) {
+          const list = JSON.parse(raw)
+          this.watchlist = list.map(s => ({ ...s, symbol: s.symbol }))
+        }
+      } catch (e) { /* ignore */ }
+    },
+
+    syncWatchlistToStorage() {
+      try {
+        const list = this.watchlist.map(s => ({ symbol: s.symbol, name: s.name }))
+        localStorage.setItem('user_watchlist', JSON.stringify(list))
+      } catch (e) { /* ignore */ }
     },
 
     goToChart(record) {
