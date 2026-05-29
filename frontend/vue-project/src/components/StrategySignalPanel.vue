@@ -1,7 +1,7 @@
 <template>
   <div class="strategy-signal-panel">
     <a-card size="small" :bordered="false">
-      <template slot="title">
+      <template #title>
         <div class="panel-header">
           <span class="signal-badge" :class="signalClass">
             {{ signalText }}
@@ -80,7 +80,7 @@
             :data-source="signalData.evidence"
             class="evidence-list"
           >
-            <template slot="renderItem" slot-scope="item">
+            <template #renderItem="{ item }">
               <a-list-item>
                 <CheckCircleFilled class="evidence-icon" />
                 <span>{{ item }}</span>
@@ -94,13 +94,13 @@
             type="warning"
             show-icon
           >
-            <template slot="message">
+            <template #message>
               <div class="risk-title">
                 <i class="anticon anticon-warning"></i>
                 风险提示
               </div>
             </template>
-            <template slot="description">
+            <template #description>
               <ul class="risk-list">
                 <li v-for="(risk, index) in signalData.risk_notes" :key="index">
                   {{ risk }}

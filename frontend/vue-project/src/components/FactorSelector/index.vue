@@ -209,7 +209,7 @@ export default {
         this.removeFactor(factor.id)
       } else {
         this.selectedFactors.push(factor.id)
-        this.$set(this.factorWeights, factor.id, 1)
+        this.factorWeights[factor.id] = 1
       }
     },
     
@@ -217,12 +217,12 @@ export default {
       const index = this.selectedFactors.indexOf(factorId)
       if (index > -1) {
         this.selectedFactors.splice(index, 1)
-        this.$delete(this.factorWeights, factorId)
+        delete this.factorWeights[factorId]
       }
     },
     
     updateWeight(factorId, weight) {
-      this.$set(this.factorWeights, factorId, weight)
+      this.factorWeights[factorId] = weight
     },
     
     clearSelected() {

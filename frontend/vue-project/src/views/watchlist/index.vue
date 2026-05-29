@@ -7,7 +7,8 @@
           <a-button>
             📈 策略中心 <DownOutlined />
           </a-button>
-          <a-menu slot="overlay">
+          <template #overlay>
+            <a-menu>
             <a-menu-item @click="openFactorManager">
               因子组合管理
             </a-menu-item>
@@ -19,6 +20,7 @@
               回测系统
             </a-menu-item>
           </a-menu>
+          </template>
         </a-dropdown>
         
         <a-badge :count="socketConnected ? 0 : 1" :number-style="{ backgroundColor: '#f5222d' }">
@@ -50,277 +52,214 @@
         :loading="loading"
         row-key="symbol"
       >
-        <template slot="name" slot-scope="text, record">
+<template #bodyCell="{ column, text, record, index }">
+  <template v-if="column.dataIndex === 'name' || column.key === 'name'">
           <div class="stock-name-cell">
             <span class="stock-symbol">{{ record.symbol }}</span>
             <span class="stock-name">{{ record.name }}</span>
           </div>
-        </template>
-
-        <template slot="price" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'price' || column.key === 'price'">
           <span :class="getPriceClass(record)">
             ¥{{ record.price?.toFixed(2) || '--' }}
           </span>
-        </template>
-
-        <template slot="change" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'change' || column.key === 'change'">
           <span :class="getPriceClass(record)">
             {{ record.change >= 0 ? '+' : '' }}{{ record.change?.toFixed(2) || '--' }}
           </span>
-        </template>
-
-        <template slot="changePercent" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'changePercent' || column.key === 'changePercent'">
           <span :class="getPriceClass(record)">
             {{ record.changePercent >= 0 ? '+' : '' }}{{ record.changePercent?.toFixed(2) || '--' }}%
           </span>
-        </template>
-
-        <template slot="volume" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'volume' || column.key === 'volume'">
           <span>{{ formatVolume(record.volume) }}</span>
-        </template>
-
-        <template slot="amount" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'amount' || column.key === 'amount'">
           <span>{{ formatAmount(record.amount) }}</span>
-        </template>
-
-        <template slot="high" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'high' || column.key === 'high'">
           <span>{{ record.high?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="low" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'low' || column.key === 'low'">
           <span>{{ record.low?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="open" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'open' || column.key === 'open'">
           <span>{{ record.open?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <!-- 行情相关 -->
-        <template slot="preClose" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'preClose' || column.key === 'preClose'">
           <span>{{ record.preClose?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="limitUp" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'limitUp' || column.key === 'limitUp'">
           <span class="text-up">{{ record.limitUp?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="limitDown" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'limitDown' || column.key === 'limitDown'">
           <span class="text-down">{{ record.limitDown?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="avgPrice" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'avgPrice' || column.key === 'avgPrice'">
           <span>{{ record.avgPrice?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <!-- 涨跌分析 -->
-        <template slot="amplitude" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'amplitude' || column.key === 'amplitude'">
           <span>{{ record.amplitude?.toFixed(2) || '--' }}%</span>
-        </template>
-
-        <template slot="volumeRatio" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'volumeRatio' || column.key === 'volumeRatio'">
           <span>{{ record.volumeRatio?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="turnoverRate" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'turnoverRate' || column.key === 'turnoverRate'">
           <span>{{ record.turnoverRate?.toFixed(2) || '--' }}%</span>
-        </template>
-
-        <template slot="change5d" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'change5d' || column.key === 'change5d'">
           <span :class="getChangeClass(record.change5d)">
             {{ record.change5d >= 0 ? '+' : '' }}{{ record.change5d?.toFixed(2) || '--' }}%
           </span>
-        </template>
-
-        <template slot="change10d" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'change10d' || column.key === 'change10d'">
           <span :class="getChangeClass(record.change10d)">
             {{ record.change10d >= 0 ? '+' : '' }}{{ record.change10d?.toFixed(2) || '--' }}%
           </span>
-        </template>
-
-        <template slot="change20d" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'change20d' || column.key === 'change20d'">
           <span :class="getChangeClass(record.change20d)">
             {{ record.change20d >= 0 ? '+' : '' }}{{ record.change20d?.toFixed(2) || '--' }}%
           </span>
-        </template>
-
-        <!-- 技术指标 -->
-        <template slot="ma5" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'ma5' || column.key === 'ma5'">
           <span>{{ record.ma5?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="ma10" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'ma10' || column.key === 'ma10'">
           <span>{{ record.ma10?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="ma20" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'ma20' || column.key === 'ma20'">
           <span>{{ record.ma20?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="ma60" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'ma60' || column.key === 'ma60'">
           <span>{{ record.ma60?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="macd" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'macd' || column.key === 'macd'">
           <span :class="getChangeClass(record.macd)">{{ record.macd?.toFixed(3) || '--' }}</span>
-        </template>
-
-        <template slot="kdj" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'kdj' || column.key === 'kdj'">
           <span>{{ record.kdj ? `K${record.kdj.k?.toFixed(1)} D${record.kdj.d?.toFixed(1)} J${record.kdj.j?.toFixed(1)}` : '--' }}</span>
-        </template>
-
-        <template slot="rsi" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'rsi' || column.key === 'rsi'">
           <span>{{ record.rsi?.toFixed(1) || '--' }}</span>
-        </template>
-
-        <!-- 基本面 -->
-        <template slot="pe" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'pe' || column.key === 'pe'">
           <span>{{ record.pe?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="peTTM" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'peTTM' || column.key === 'peTTM'">
           <span>{{ record.peTTM?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="pb" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'pb' || column.key === 'pb'">
           <span>{{ record.pb?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="ps" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'ps' || column.key === 'ps'">
           <span>{{ record.ps?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <template slot="roe" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'roe' || column.key === 'roe'">
           <span>{{ record.roe?.toFixed(2) || '--' }}%</span>
-        </template>
-
-        <template slot="eps" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'eps' || column.key === 'eps'">
           <span>{{ record.eps?.toFixed(3) || '--' }}</span>
-        </template>
-
-        <template slot="navps" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'navps' || column.key === 'navps'">
           <span>{{ record.navps?.toFixed(2) || '--' }}</span>
-        </template>
-
-        <!-- 市值股本 -->
-        <template slot="totalMarketCap" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'totalMarketCap' || column.key === 'totalMarketCap'">
           <span>{{ formatAmount(record.totalMarketCap) }}</span>
-        </template>
-
-        <template slot="floatMarketCap" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'floatMarketCap' || column.key === 'floatMarketCap'">
           <span>{{ formatAmount(record.floatMarketCap) }}</span>
-        </template>
-
-        <template slot="totalShare" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'totalShare' || column.key === 'totalShare'">
           <span>{{ formatVolume(record.totalShare) }}</span>
-        </template>
-
-        <template slot="floatShare" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'floatShare' || column.key === 'floatShare'">
           <span>{{ formatVolume(record.floatShare) }}</span>
-        </template>
-
-        <!-- 资金流向 -->
-        <template slot="mainNetInflow" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'mainNetInflow' || column.key === 'mainNetInflow'">
           <span :class="getChangeClass(record.mainNetInflow)">
             {{ record.mainNetInflow >= 0 ? '+' : '' }}{{ formatAmount(record.mainNetInflow) }}
           </span>
-        </template>
-
-        <template slot="superLargeInflow" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'superLargeInflow' || column.key === 'superLargeInflow'">
           <span :class="getChangeClass(record.superLargeInflow)">
             {{ record.superLargeInflow >= 0 ? '+' : '' }}{{ formatAmount(record.superLargeInflow) }}
           </span>
-        </template>
-
-        <template slot="largeInflow" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'largeInflow' || column.key === 'largeInflow'">
           <span :class="getChangeClass(record.largeInflow)">
             {{ record.largeInflow >= 0 ? '+' : '' }}{{ formatAmount(record.largeInflow) }}
           </span>
-        </template>
-
-        <template slot="mediumInflow" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'mediumInflow' || column.key === 'mediumInflow'">
           <span :class="getChangeClass(record.mediumInflow)">
             {{ record.mediumInflow >= 0 ? '+' : '' }}{{ formatAmount(record.mediumInflow) }}
           </span>
-        </template>
-
-        <template slot="smallInflow" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'smallInflow' || column.key === 'smallInflow'">
           <span :class="getChangeClass(record.smallInflow)">
             {{ record.smallInflow >= 0 ? '+' : '' }}{{ formatAmount(record.smallInflow) }}
           </span>
-        </template>
-
-        <template slot="mainNetRatio" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'mainNetRatio' || column.key === 'mainNetRatio'">
           <span :class="getChangeClass(record.mainNetRatio)">
             {{ record.mainNetRatio >= 0 ? '+' : '' }}{{ record.mainNetRatio?.toFixed(2) || '--' }}%
           </span>
-        </template>
-
-        <!-- 融资融券 -->
-        <template slot="marginBalance" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'marginBalance' || column.key === 'marginBalance'">
           <span>{{ formatAmount(record.marginBalance) }}</span>
-        </template>
-
-        <template slot="shortBalance" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'shortBalance' || column.key === 'shortBalance'">
           <span>{{ formatAmount(record.shortBalance) }}</span>
-        </template>
-
-        <template slot="marginBuy" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'marginBuy' || column.key === 'marginBuy'">
           <span>{{ formatAmount(record.marginBuy) }}</span>
-        </template>
-
-        <template slot="shortSell" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'shortSell' || column.key === 'shortSell'">
           <span>{{ formatAmount(record.shortSell) }}</span>
-        </template>
-
-        <!-- 北向资金 -->
-        <template slot="northboundHolding" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'northboundHolding' || column.key === 'northboundHolding'">
           <span>{{ formatAmount(record.northboundHolding) }}</span>
-        </template>
-
-        <template slot="northboundHoldingRatio" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'northboundHoldingRatio' || column.key === 'northboundHoldingRatio'">
           <span>{{ record.northboundHoldingRatio?.toFixed(2) || '--' }}%</span>
-        </template>
-
-        <template slot="northboundChange" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'northboundChange' || column.key === 'northboundChange'">
           <span :class="getChangeClass(record.northboundChange)">
             {{ record.northboundChange >= 0 ? '+' : '' }}{{ record.northboundChange?.toFixed(2) || '--' }}%
           </span>
-        </template>
-
-        <!-- 龙虎榜 -->
-        <template slot="dragonTigerList" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'dragonTigerList' || column.key === 'dragonTigerList'">
           <span v-if="record.isOnDragonTigerList" style="color: #f59e0b; font-weight: 600;">🏆 上榜</span>
           <span v-else>--</span>
-        </template>
-
-        <template slot="limitCount" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'limitCount' || column.key === 'limitCount'">
           <span v-if="record.limitCount" style="color: #ef4444; font-weight: 600;">{{ record.limitCount }}板</span>
           <span v-else>--</span>
-        </template>
-
-        <template slot="firstLimitTime" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'firstLimitTime' || column.key === 'firstLimitTime'">
           <span>{{ record.firstLimitTime || '--' }}</span>
-        </template>
-
-        <template slot="lastLimitTime" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'lastLimitTime' || column.key === 'lastLimitTime'">
           <span>{{ record.lastLimitTime || '--' }}</span>
-        </template>
-
-        <template slot="limitOpenCount" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'limitOpenCount' || column.key === 'limitOpenCount'">
           <span>{{ record.limitOpenCount || '--' }}</span>
-        </template>
-
-        <template slot="updateTime" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'updateTime' || column.key === 'updateTime'">
           <span class="update-time">{{ record.updateTime || '--' }}</span>
-        </template>
-
-        <template slot="actions" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'actions' || column.key === 'actions'">
           <a @click="goToChart(record)">📈 分析</a>
           <a-divider type="vertical" />
           <a-popconfirm title="确定移除该股票吗？" @confirm="removeFromWatchlist(record)">
             <a>✕ 移除</a>
           </a-popconfirm>
-        </template>
+  </template>
+</template>
       </a-table>
     </div>
 
@@ -852,10 +791,10 @@ export default {
         }
 
         if (idx !== -1) {
-          this.$set(this.watchlist, idx, {
+          this.watchlist[idx] = {
             ...this.watchlist[idx],
             ...updateData
-          })
+          }
         } else {
           this.watchlist.push({
             symbol: symbol,

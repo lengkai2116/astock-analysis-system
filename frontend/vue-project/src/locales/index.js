@@ -93,7 +93,7 @@ const i18n = createI18n({
   locale: 'zh-CN',
   fallbackLocale: 'zh-CN',
   messages,
-  legacy: false
+  legacy: true
 })
 
 export default i18n

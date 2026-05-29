@@ -37,7 +37,8 @@
           <a-button size="small" style="margin-right: 4px">
             <StarOutlined /> 自选 <DownOutlined />
           </a-button>
-          <a-menu slot="overlay" @click="onWatchlistMenuClick">
+          <template #overlay>
+            <a-menu @click="onWatchlistMenuClick">
             <a-menu-item v-if="watchlistStocks.length === 0" disabled>
               暂无自选股，请先在自选监控中添加
             </a-menu-item>
@@ -57,6 +58,7 @@
               <FolderOpenOutlined /> 管理自选股
             </a-menu-item>
           </a-menu>
+          </template>
         </a-dropdown>
 
         <!-- 返回选股系统 -->

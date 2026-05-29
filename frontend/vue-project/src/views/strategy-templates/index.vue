@@ -4,7 +4,7 @@
       <h1 class="page-title">策略模板</h1>
       <div class="header-actions">
         <a-button type="primary" @click="showCreateModal">
-          <i slot="icon" class="anticon anticon-plus"></i>
+          <template #icon><PlusOutlined /></template>
           创建模板
         </a-button>
       </div>
@@ -132,7 +132,7 @@
             <a-table-column title="类型" dataIndex="type" key="type" />
             <a-table-column title="默认值" dataIndex="default_value" key="default_value" />
             <a-table-column title="范围" key="range">
-              <template slot="render" slot-scope="text, record">
+              <template #default="{ text, record }">
                 {{ record.min_value }} ~ {{ record.max_value }}
               </template>
             </a-table-column>

@@ -223,14 +223,16 @@
                 :pagination="{ pageSize: 10 }"
                 size="small"
               >
-                <template slot="type" slot-scope="text">
+<template #bodyCell="{ column, text, record, index }">
+  <template v-if="column.dataIndex === 'type' || column.key === 'type'">
                   <a-tag :color="text === 'buy' ? 'red' : 'green'">
                     {{ text === 'buy' ? '买入' : '卖出' }}
                   </a-tag>
-                </template>
-                <template slot="amount" slot-scope="text">
+  </template>
+  <template v-else-if="column.dataIndex === 'amount' || column.key === 'amount'">
                   ¥{{ formatNumber(text) }}
-                </template>
+  </template>
+</template>
               </a-table>
             </div>
           </a-tab-pane>

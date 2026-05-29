@@ -58,12 +58,14 @@
               <a-button size="small" @click="viewReport(report)">查看</a-button>
               <a-dropdown>
                 <a-button size="small">导出 <DownOutlined /></a-button>
-                <a-menu slot="overlay">
+                <template #overlay>
+                  <a-menu>
                   <a-menu-item key="md" @click="exportReport(report, 'md')">Markdown</a-menu-item>
                   <a-menu-item key="html" @click="exportReport(report, 'html')">HTML</a-menu-item>
                   <a-menu-item key="json" @click="exportReport(report, 'json')">JSON</a-menu-item>
                   <a-menu-item key="txt" @click="exportReport(report, 'txt')">纯文本</a-menu-item>
                 </a-menu>
+                </template>
               </a-dropdown>
               <a-popconfirm title="确定删除？" @confirm="deleteReport(report.id)">
                 <a-button type="danger" size="small" ghost>删除</a-button>

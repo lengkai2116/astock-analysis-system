@@ -27,32 +27,29 @@
           :customRow="customRow"
           :rowClassName="rowClassName"
         >
-          <template slot="rank" slot-scope="text, record, index">
+<template #bodyCell="{ column, text, record, index }">
+  <template v-if="column.dataIndex === 'rank' || column.key === 'rank'">
             <span class="rank-badge" :class="getRankClass(index)">{{ index + 1 }}</span>
-          </template>
-
-          <template slot="name" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'name' || column.key === 'name'">
             <div class="stock-cell">
               <span class="stock-code">{{ record.symbol }}</span>
               <span class="stock-name">{{ record.name || record.symbol }}</span>
             </div>
-          </template>
-
-          <template slot="score" slot-scope="text">
+  </template>
+  <template v-else-if="column.dataIndex === 'score' || column.key === 'score'">
             <span class="score-value" :class="getScoreClass(text)">{{ text?.toFixed(1) || '-' }}</span>
-          </template>
-
-          <template slot="phase" slot-scope="text">
+  </template>
+  <template v-else-if="column.dataIndex === 'phase' || column.key === 'phase'">
             <a-tag :color="getPhaseColor(text)" size="small">{{ text || '-' }}</a-tag>
-          </template>
-
-          <template slot="asr" slot-scope="text">
+  </template>
+  <template v-else-if="column.dataIndex === 'asr' || column.key === 'asr'">
             <span>{{ text?.toFixed(3) || '-' }}</span>
-          </template>
-
-          <template slot="concentration" slot-scope="text">
+  </template>
+  <template v-else-if="column.dataIndex === 'concentration' || column.key === 'concentration'">
             <span>{{ text?.toFixed(3) || '-' }}</span>
-          </template>
+  </template>
+</template>
         </a-table>
       </a-spin>
     </div>

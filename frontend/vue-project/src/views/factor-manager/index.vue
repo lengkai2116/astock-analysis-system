@@ -127,22 +127,24 @@
                 :pagination="{ pageSize: 10 }"
                 row-key="symbol"
               >
-                <template slot="rank" slot-scope="text, record, index">
+<template #bodyCell="{ column, text, record, index }">
+  <template v-if="column.dataIndex === 'rank' || column.key === 'rank'">
                   {{ index + 1 }}
-                </template>
-                <template slot="symbol" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'symbol' || column.key === 'symbol'">
                   <span class="stock-symbol">{{ record.symbol }}</span>
                   <span class="stock-name">{{ record.name }}</span>
-                </template>
-                <template slot="score" slot-scope="text">
+  </template>
+  <template v-else-if="column.dataIndex === 'score' || column.key === 'score'">
                   <a-progress :percent="text * 100" :showInfo="false" :strokeColor="getScoreColor(text)" />
                   <span>{{ (text * 100).toFixed(1) }}分</span>
-                </template>
-                <template slot="action" slot-scope="text, record">
+  </template>
+  <template v-else-if="column.dataIndex === 'action' || column.key === 'action'">
                   <a-button type="link" size="small" @click="goToChart(record)">
                     分析
                   </a-button>
-                </template>
+  </template>
+</template>
               </a-table>
             </div>
           </div>

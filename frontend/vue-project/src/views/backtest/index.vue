@@ -152,16 +152,18 @@
               :pagination="{ pageSize: 5 }"
               size="small"
             >
-              <template slot="type" slot-scope="text">
+<template #bodyCell="{ column, text, record, index }">
+  <template v-if="column.dataIndex === 'type' || column.key === 'type'">
                 <a-tag :color="text === 'BUY' ? 'red' : 'green'">
                   {{ text === 'BUY' ? '买入' : '卖出' }}
                 </a-tag>
-              </template>
-              <template slot="return" slot-scope="text">
+  </template>
+  <template v-else-if="column.dataIndex === 'return' || column.key === 'return'">
                 <span :class="text >= 0 ? 'up' : 'down'">
                   {{ formatPercent(text) }}
                 </span>
-              </template>
+  </template>
+</template>
             </a-table>
           </div>
         </div>
