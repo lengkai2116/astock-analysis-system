@@ -82,7 +82,7 @@
           >
             <template slot="renderItem" slot-scope="item">
               <a-list-item>
-                <a-icon type="check-circle" theme="filled" class="evidence-icon" />
+                <CheckCircleFilled class="evidence-icon" />
                 <span>{{ item }}</span>
               </a-list-item>
             </template>
@@ -124,6 +124,7 @@
 </template>
 
 <script>
+import { CheckCircleFilled } from '@ant-design/icons-vue'
 export default {
   name: 'StrategySignalPanel',
   props: {

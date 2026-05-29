@@ -78,7 +78,7 @@
                   :step="0.1"
                   style="width: 80px; margin-right: 8px;"
                 />
-                <a-icon type="close" @click.stop="removeFactor(factor.id)" />
+                <CloseOutlined @click.stop="removeFactor(factor.id)" />
               </div>
             </div>
             <div v-if="selectedFactors.length === 0" class="empty-state">
@@ -92,7 +92,9 @@
 </template>
 
 <script>
-import { mapGetters, mapState } from 'vuex'
+import { CloseOutlined } from '@ant-design/icons-vue'
+import { mapState, mapGetters } from 'pinia'
+import { useAppStore } from '@/stores'
 
 export default {
   name: 'FactorSelector',
@@ -168,7 +170,7 @@ export default {
       if (newVal) {
         this.selectedFactors = [...this.value]
         this.factorWeights = { ...this.weights }
-        this.$store.dispatch('loadFactors')
+        useAppStore().loadFactors()
       }
     },
     value: {

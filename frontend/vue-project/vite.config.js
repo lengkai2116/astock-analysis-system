@@ -1,6 +1,6 @@
 import { defineConfig, loadEnv } from 'vite'
-import vue2 from '@vitejs/plugin-vue2'
-import vue2Jsx from '@vitejs/plugin-vue2-jsx'
+import vue from '@vitejs/plugin-vue'
+import vueJsx from '@vitejs/plugin-vue-jsx'
 import svgLoader from 'vite-svg-loader'
 import { fileURLToPath, URL } from 'node:url'
 
@@ -14,28 +14,20 @@ export default defineConfig(({ mode }) => {
         { find: /^~(.+)/, replacement: '$1' },
         { find: /^moment$/, replacement: fileURLToPath(new URL('./src/shims/moment.js', import.meta.url)) },
         { find: /^store$/, replacement: 'store/dist/store.modern.js' },
-        { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) },
-        { find: '@$', replacement: fileURLToPath(new URL('./src', import.meta.url)) }
+        { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) }
       ],
       extensions: ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json', '.vue']
-    },
-    define: {
-      'process.env.VUE_APP_API_BASE_URL': JSON.stringify(env.VITE_API_BASE_URL || ''),
-      'process.env.VUE_APP_PREVIEW': JSON.stringify(env.VITE_PREVIEW || '')
     },
     css: {
       preprocessorOptions: {
         less: {
-          javascriptEnabled: true,
-          modifyVars: {
-            'border-radius-base': '4px'
-          }
+          javascriptEnabled: true
         }
       }
     },
     plugins: [
-      vue2(),
-      vue2Jsx(),
+      vue(),
+      vueJsx(),
       svgLoader({ defaultImport: 'url' })
     ],
     server: {

@@ -280,8 +280,8 @@ export default {
 
   computed: {
     factorCombinations() {
-      if (this.$store.state.factorCombinations.all && this.$store.state.factorCombinations.all.length > 0) {
-        return this.$store.state.factorCombinations.all
+      if (useAppStore().factorCombinations.all && useAppStore().factorCombinations.all.length > 0) {
+        return useAppStore().factorCombinations.all
       }
       return [
         { id: 1, name: '动量策略组合', factor_count: 3 },
@@ -311,7 +311,7 @@ export default {
   methods: {
     async loadCombinations() {
       try {
-        await this.$store.dispatch('loadFactorCombinations')
+        await useAppStore().loadFactorCombinations()
       } catch (error) {
         console.error('加载因子组合失败:', error)
       }

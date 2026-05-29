@@ -25,17 +25,17 @@
           </a-select>
           
           <a-button @click="handleExport" :loading="exporting">
-            <a-icon type="download" />
+            <DownloadOutlined />
             导出报告
           </a-button>
           
           <a-button @click="handlePrint">
-            <a-icon type="printer" />
+            <PrinterOutlined />
             打印
           </a-button>
           
           <a-button @click="handleRefresh" :loading="loading">
-            <a-icon type="reload" />
+            <ReloadOutlined />
             刷新
           </a-button>
         </a-space>
@@ -263,6 +263,7 @@
 </template>
 
 <script>
+import { DownloadOutlined, PrinterOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import marked from 'marked'
 import hljs from 'highlight.js'
 
@@ -771,31 +772,31 @@ export default {
   color: var(--text-secondary, #94a3b8);
 }
 
-.content-renderer >>> h1 {
+.content-renderer :deep(h1) {
   color: var(--text-primary, #f1f5f9);
   border-bottom: 2px solid var(--color-primary, #3b82f6);
   padding-bottom: 8px;
   margin-top: 24px;
 }
 
-.content-renderer >>> h2 {
+.content-renderer :deep(h2) {
   color: var(--text-primary, #f1f5f9);
   margin-top: 20px;
 }
 
-.content-renderer >>> h3 {
+.content-renderer :deep(h3) {
   color: var(--text-primary, #f1f5f9);
   margin-top: 16px;
 }
 
-.content-renderer >>> code {
+.content-renderer :deep(code) {
   background: rgba(59, 130, 246, 0.1);
   padding: 2px 6px;
   border-radius: 4px;
   color: #60a5fa;
 }
 
-.content-renderer >>> pre {
+.content-renderer :deep(pre) {
   background: #0f172a;
   padding: 16px;
   border-radius: 8px;

@@ -185,7 +185,7 @@
                   size="small"
                 />
               </div>
-              <a-icon type="close" @click="removeSelectedFactor(factorId)" />
+              <CloseOutlined @click="removeSelectedFactor(factorId)" />
             </div>
           </div>
         </a-form-item>
@@ -208,7 +208,9 @@
 </template>
 
 <script>
-import { mapState } from 'vuex'
+import { CloseOutlined } from '@ant-design/icons-vue'
+import { mapState } from 'pinia'
+import { useAppStore } from '@/stores'
 import FactorSelector from '@/components/FactorSelector'
 
 export default {
@@ -287,11 +289,11 @@ export default {
   },
   
   computed: {
-    ...mapState(['factors']),
+    ...mapState(useAppStore, ['factors']),
     
     combinations() {
-      if (this.$store.state.factorCombinations.all && this.$store.state.factorCombinations.all.length > 0) {
-        return this.$store.state.factorCombinations.all
+      if (useAppStore().factorCombinations.all && useAppStore().factorCombinations.all.length > 0) {
+        return useAppStore().factorCombinations.all
       }
       return this.mockCombinations
     }
@@ -308,7 +310,7 @@ export default {
     async loadCombinations() {
       this.loading = true
       try {
-        await this.$store.dispatch('loadFactorCombinations')
+        await useAppStore().loadFactorCombinations()
       } catch (error) {
         console.error('加载组合失败:', error)
       } finally {
@@ -375,13 +377,13 @@ export default {
         }
         
         if (this.editingCombo) {
-          await this.$store.dispatch('updateCombination', {
+          await useAppStore().updateCombination({
             id: this.editingCombo.id,
             data
           })
           this.$message.success('组合更新成功')
         } else {
-          await this.$store.dispatch('createCombination', data)
+          await useAppStore().createCombination(data)
           this.$message.success('组合创建成功')
         }
         
@@ -394,7 +396,7 @@ export default {
     
     async deleteCombination(id) {
       try {
-        await this.$store.dispatch('deleteCombination', id)
+        await useAppStore().deleteCombination(id)
         this.$message.success('删除成功')
         if (this.selectedCombo && this.selectedCombo.id === id) {
           this.selectedCombo = null
@@ -443,7 +445,7 @@ export default {
       
       this.screenLoading = true
       try {
-        const response = await this.$store.dispatch('runBacktest', {
+        const response = await useAppStore().runBacktest({
           combination_id: this.screenComboId,
           pool: this.screenPool,
           top_n: this.screenTopN

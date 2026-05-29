@@ -15,47 +15,47 @@
         theme="dark"
       >
         <a-menu-item key="/" @click="navigate('/')">
-          <a-icon type="dashboard" />
+          <DashboardOutlined />
           <span>仪表盘</span>
         </a-menu-item>
 
         <a-menu-item key="/indicator-ide" @click="navigate('/indicator-ide')">
-          <a-icon type="code" />
+          <CodeOutlined />
           <span>个股策略分析</span>
         </a-menu-item>
 
         <a-menu-item key="/screener" @click="navigate('/screener')">
-          <a-icon type="filter" />
+          <FilterOutlined />
           <span>选股系统</span>
         </a-menu-item>
 
         <a-menu-item key="/watchlist" @click="navigate('/watchlist')">
-          <a-icon type="star" />
+          <StarOutlined />
           <span>自选监控</span>
         </a-menu-item>
 
         <a-menu-item key="/ai-analysis" @click="navigate('/ai-analysis')">
-          <a-icon type="robot" />
+          <RobotOutlined />
           <span>AI分析</span>
         </a-menu-item>
 
         <a-menu-item key="/backtest" @click="navigate('/backtest')">
-          <a-icon type="bar-chart" />
+          <BarChartOutlined />
           <span>回测系统</span>
         </a-menu-item>
 
         <a-menu-item key="/factor-manager" @click="navigate('/factor-manager')">
-          <a-icon type="database" />
+          <DatabaseOutlined />
           <span>因子管理</span>
         </a-menu-item>
 
         <a-menu-item key="/strategy-templates" @click="navigate('/strategy-templates')">
-          <a-icon type="file-text" />
+          <FileTextOutlined />
           <span>策略模板</span>
         </a-menu-item>
 
         <a-menu-item key="/reports-center" @click="navigate('/reports-center')">
-          <a-icon type="folder" />
+          <FolderOutlined />
           <span>报告中心</span>
         </a-menu-item>
       </a-menu>
@@ -63,13 +63,17 @@
 
     <div class="sidebar-footer">
       <div class="collapse-btn" @click="toggleCollapse">
-        <a-icon :type="collapsed ? 'right' : 'left'" />
+        <RightOutlined v-if="collapsed" /><LeftOutlined v-else />
       </div>
     </div>
   </div>
 </template>
 
 <script>
+import { BarChartOutlined, CodeOutlined, DashboardOutlined, DatabaseOutlined, FileTextOutlined, FilterOutlined, FolderOutlined, RightOutlined, RobotOutlined, StarOutlined } from '@ant-design/icons-vue'
+import { mapState, mapActions } from 'pinia'
+import { useAppStore } from '@/stores'
+
 export default {
   name: 'Sidebar',
   data() {
@@ -79,9 +83,7 @@ export default {
     }
   },
   computed: {
-    collapsed() {
-      return this.$store.state.sidebarCollapsed
-    }
+    ...mapState(useAppStore, { collapsed: 'sidebarCollapsed' })
   },
   mounted() {
     this.updateSelectedKey()
@@ -90,15 +92,13 @@ export default {
     })
   },
   methods: {
+    ...mapActions(useAppStore, ['toggleSidebar']),
     updateSelectedKey() {
       const path = this.$route.path
       this.selectedKeys = [path === '/' ? '/' : path]
     },
     navigate(path) {
       this.$router.push(path)
-    },
-    toggleCollapse() {
-      this.$store.commit('toggleSidebar')
     }
   }
 }

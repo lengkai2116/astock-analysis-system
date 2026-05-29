@@ -1,7 +1,4 @@
-import Vue from 'vue'
-import VueRouter from 'vue-router'
-
-Vue.use(VueRouter)
+import { createRouter, createWebHashHistory } from 'vue-router'
 
 const routes = [
   {
@@ -20,7 +17,13 @@ const routes = [
     path: '/indicator-ide',
     name: 'IndicatorIDE',
     component: () => import('@/views/indicator-ide'),
-    meta: { title: '指标IDE' }
+    meta: { title: '个股策略分析' }
+  },
+  {
+    path: '/screener',
+    name: 'StockScreener',
+    component: () => import('@/views/screener'),
+    meta: { title: '选股系统' }
   },
   {
     path: '/watchlist',
@@ -60,16 +63,15 @@ const routes = [
   }
 ]
 
-const router = new VueRouter({
-  mode: 'hash',
+const router = createRouter({
+  history: createWebHashHistory(),
   routes
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to) => {
   if (to.meta.title) {
     document.title = to.meta.title + ' - A股分析系统'
   }
-  next()
 })
 
 export default router

@@ -35,7 +35,7 @@
         <!-- 自选股快捷选择 -->
         <a-dropdown v-model="watchlistDropdownVisible" trigger="click">
           <a-button size="small" style="margin-right: 4px">
-            <a-icon type="star" /> 自选 <a-icon type="down" />
+            <StarOutlined /> 自选 <DownOutlined />
           </a-button>
           <a-menu slot="overlay" @click="onWatchlistMenuClick">
             <a-menu-item v-if="watchlistStocks.length === 0" disabled>
@@ -54,7 +54,7 @@
             </a-menu-item>
             <a-menu-divider v-if="watchlistStocks.length > 0" />
             <a-menu-item key="__go_watchlist__">
-              <a-icon type="folder-open" /> 管理自选股
+              <FolderOpenOutlined /> 管理自选股
             </a-menu-item>
           </a-menu>
         </a-dropdown>
@@ -62,7 +62,7 @@
         <!-- 返回选股系统 -->
         <a-tooltip title="选股系统">
           <a-button size="small" @click="$router.push('/screener')">
-            <a-icon type="filter" /> 选股
+            <FilterOutlined /> 选股
           </a-button>
         </a-tooltip>
 
@@ -299,6 +299,7 @@
 </template>
 
 <script>
+import { DownOutlined, FilterOutlined, FolderOpenOutlined, StarOutlined } from '@ant-design/icons-vue'
 import KLineChart from '@/components/KLineChart'
 import CodeEditor from '@/components/CodeEditor'
 import chartService from '@/services/chartService'

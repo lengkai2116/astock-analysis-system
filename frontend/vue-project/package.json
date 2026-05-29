@@ -1,39 +1,39 @@
 {
-  "name": "astock-indicator-ide",
-  "version": "1.0.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "serve": "vite",
-    "build": "vite build",
-    "build:preview": "vite build --mode preview",
-    "preview": "vite preview --port 9000",
-    "lint": "eslint \"src/**/*.{js,vue}\" --fix"
-  },
-  "dependencies": {
-    "@ant-design-vue/pro-layout": "^1.0.12",
-    "ant-design-vue": "^1.7.8",
-    "axios": "^1.6.0",
-    "codemirror": "^5.65.16",
-    "echarts": "^5.4.3",
-    "klinecharts": "^9.8.0",
-    "lodash-es": "^4.18.1",
-    "moment": "^2.29.4",
-    "socket.io-client": "^4.7.4",
-    "store": "^2.0.12",
-    "vue": "^2.7.16",
-    "vue-i18n": "^8.27.2",
-    "vue-router": "^3.5.4",
-    "vuex": "^3.6.2"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-vue2": "^2.3.4",
-    "@vitejs/plugin-vue2-jsx": "^1.1.1",
-    "eslint": "^7.32.0",
-    "eslint-plugin-vue": "^7.20.0",
-    "less": "^3.13.1",
-    "vite": "^5.4.21",
-    "vite-svg-loader": "^4.0.0"
-  }
+    "name": "astock-indicator-ide",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "serve": "vite",
+        "build": "vite build",
+        "build:preview": "vite build --mode preview",
+        "preview": "vite preview --port 9000",
+        "lint": "eslint \"src/**/*.{js,vue}\" --fix"
+    },
+    "dependencies": {
+        "@ant-design/icons-vue": "^7.0.1",
+        "ant-design-vue": "^4.2.6",
+        "axios": "^1.6.0",
+        "codemirror": "^5.65.16",
+        "echarts": "^5.4.3",
+        "klinecharts": "^9.8.0",
+        "lodash-es": "^4.18.1",
+        "moment": "^2.29.4",
+        "pinia": "^2.3.0",
+        "socket.io-client": "^4.7.4",
+        "store": "^2.0.12",
+        "vue": "^3.5.13",
+        "vue-i18n": "^9.14.1",
+        "vue-router": "^4.5.0"
+    },
+    "devDependencies": {
+        "@vitejs/plugin-vue": "^5.2.3",
+        "@vitejs/plugin-vue-jsx": "^4.1.2",
+        "eslint": "^9.20.0",
+        "eslint-plugin-vue": "^9.32.0",
+        "less": "^3.13.1",
+        "vite": "^5.4.21",
+        "vite-svg-loader": "^4.0.0"
+    }
 }

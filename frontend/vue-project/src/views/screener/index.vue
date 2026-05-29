@@ -8,7 +8,7 @@
       </div>
       <div class="header-right">
         <a-button type="primary" size="small" :loading="screenerRunning" @click="startScreening">
-          <a-icon type="play-circle" /> 执行筛选
+          <PlayCircleOutlined /> 执行筛选
         </a-button>
       </div>
     </div>
@@ -54,6 +54,7 @@
 </template>
 
 <script>
+import { PlayCircleOutlined } from '@ant-design/icons-vue'
 import PipelineFlow from '@/components/StockScreener/PipelineFlow'
 import ScreeningResults from '@/components/StockScreener/ScreeningResults'
 import SignalFusionConfig from '@/components/StockScreener/SignalFusionConfig'

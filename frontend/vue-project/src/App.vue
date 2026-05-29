@@ -8,6 +8,8 @@
 </template>
 
 <script>
+import { mapState } from 'pinia'
+import { useAppStore } from '@/stores'
 import Sidebar from '@/components/Layout/Sidebar'
 
 export default {

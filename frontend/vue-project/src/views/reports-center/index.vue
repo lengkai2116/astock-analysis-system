@@ -57,7 +57,7 @@
             <div class="report-actions" @click.stop>
               <a-button size="small" @click="viewReport(report)">查看</a-button>
               <a-dropdown>
-                <a-button size="small">导出 <a-icon type="down" /></a-button>
+                <a-button size="small">导出 <DownOutlined /></a-button>
                 <a-menu slot="overlay">
                   <a-menu-item key="md" @click="exportReport(report, 'md')">Markdown</a-menu-item>
                   <a-menu-item key="html" @click="exportReport(report, 'html')">HTML</a-menu-item>
@@ -154,6 +154,7 @@
 </template>
 
 <script>
+import { DownOutlined } from '@ant-design/icons-vue'
 import axios from '@/utils/request'
 
 export default {

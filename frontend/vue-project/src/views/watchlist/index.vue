@@ -5,7 +5,7 @@
       <div class="header-actions">
         <a-dropdown>
           <a-button>
-            📈 策略中心 <a-icon type="down" />
+            📈 策略中心 <DownOutlined />
           </a-button>
           <a-menu slot="overlay">
             <a-menu-item @click="openFactorManager">
@@ -384,6 +384,7 @@
 </template>
 
 <script>
+import { DownOutlined } from '@ant-design/icons-vue'
 import socketService from '../../services/socketService'
 
 export default {
@@ -1025,7 +1026,7 @@ export default {
   overflow: hidden;
 }
 
-.watchlist-table-container >>> .ant-table {
+.watchlist-table-container :deep(.ant-table) {
   background: var(--bg-surface, #1e293b);
 }
 

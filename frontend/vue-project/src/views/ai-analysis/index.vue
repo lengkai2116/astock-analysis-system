@@ -127,7 +127,7 @@
             </a-button>
           </div>
           <div v-else class="report-placeholder">
-            <a-icon type="file-text" style="font-size: 48px; color: var(--text-muted)" />
+            <FileTextOutlined style="font-size: 48px; color: var(--text-muted)" />
             <div>等待分析完成...</div>
           </div>
         </div>
@@ -137,6 +137,7 @@
 </template>
 
 <script>
+import { FileTextOutlined } from '@ant-design/icons-vue'
 export default {
   name: 'AIAnalysisPage',
   data() {
