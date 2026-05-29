@@ -1,0 +1,42 @@
+# ==========================================
+# Git 行尾配置 — 防止跨平台 CRLF 问题
+# ==========================================
+
+# Shell 脚本必须保持 LF（否则 Docker Alpine 报错）
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf
+
+# Python
+*.py text diff=python
+
+# JavaScript / Vue
+*.js text eol=lf
+*.vue text eol=lf
+*.json text eol=lf
+
+# Web
+*.html text eol=lf
+*.css text eol=lf
+*.less text eol=lf
+
+# Config
+*.yml text eol=lf
+*.yaml text eol=lf
+*.conf text eol=lf
+Dockerfile text eol=lf
+Makefile text eol=lf
+.gitignore text eol=lf
+.env.example text eol=lf
+
+# Markdown / Docs
+*.md text eol=lf
+
+# Binary / Autodetected
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+# Git
+.gitattributes text eol=lf
