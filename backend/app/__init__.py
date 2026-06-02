@@ -42,6 +42,8 @@ def create_app():
     from app.routes.indicator_ide import indicator_ide_bp
     from app.routes.reports import reports_bp
     from app.routes.screener import screener_bp
+    from app.routes.strategy_templates import strategy_templates_bp
+    from app.routes.qmt import qmt_bp
     
     app.register_blueprint(market_bp)
     app.register_blueprint(health_bp)
@@ -56,6 +58,8 @@ def create_app():
     app.register_blueprint(indicator_ide_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(screener_bp)
+    app.register_blueprint(strategy_templates_bp)
+    app.register_blueprint(qmt_bp)
     
     return app
 

@@ -1,3 +1,4 @@
+from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, request, jsonify
 from app.services.indicator_contract import IndicatorContractParser
 from app.services.indicator_quality import IndicatorQualityChecker
@@ -10,8 +11,7 @@ indicator_ide_bp = Blueprint('indicator_ide', __name__, url_prefix='/api/v2/indi
 parser = IndicatorContractParser()
 checker = IndicatorQualityChecker()
 sandbox = IndicatorSandbox()
-
-
+@handle_exceptions
 @indicator_ide_bp.route('/parse', methods=['POST'])
 def parse_indicator():
     code = request.json.get('code')
@@ -38,8 +38,7 @@ def parse_indicator():
             'success': False,
             'message': f'解析失败: {str(e)}'
         }), 500
-
-
+@handle_exceptions
 @indicator_ide_bp.route('/check', methods=['POST'])
 def check_indicator():
     code = request.json.get('code')
@@ -62,8 +61,7 @@ def check_indicator():
             'success': False,
             'message': f'检查失败: {str(e)}'
         }), 500
-
-
+@handle_exceptions
 @indicator_ide_bp.route('/execute', methods=['POST'])
 def execute_indicator():
     code = request.json.get('code')
@@ -102,8 +100,7 @@ def execute_indicator():
             'success': False,
             'message': f'执行失败: {str(e)}'
         }), 500
-
-
+@handle_exceptions
 @indicator_ide_bp.route('/validate', methods=['POST'])
 def validate_indicator():
     code = request.json.get('code')

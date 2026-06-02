@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.env
+.git
+.gitignore
+README.md
+chanlun_correct.png
+chanlun_demo.png
+chanlun_demo_simple.py
+chanlun_real_data.py
+*.db
+.DS_Store
+

@@ -12,8 +12,10 @@ import numpy as np
 from app import db
 from app.data import DataManager
 from app.engine.framework.chip_strategy import ChipScorer
+from app.data.chip_indicators import ChipIndicators
 from app.models import Signal as SignalModel
 from app.models.strategy import StrategySignal
+from app.services.strategy_output_service import StrategyOutputService
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +95,23 @@ class SignalComputationService:
         latest_close = float(closes[-1])
         latest_date = df.index[-1] if isinstance(df.index, pd.DatetimeIndex) else df.iloc[-1].get('trade_date', date.today())
 
+        # 获取换手率数据
+        turnover_rate = None
+        turnover_status = None
+        try:
+            basic_df = self.data_manager.get_cached_daily_basic(
+                ts_code,
+                start_date=(datetime.now() - pd.Timedelta(days=30)).strftime('%Y-%m-%d')
+            )
+            if not basic_df.empty and 'turnover_rate' in basic_df.columns:
+                tr_series = basic_df['turnover_rate'].dropna()
+                if not tr_series.empty:
+                    turnover_rate = float(tr_series.iloc[-1])
+                    # 从 chip_indicators 获取换手率状态描述
+                    turnover_status = ChipIndicators().get_turnover_status(turnover_rate)
+        except Exception:
+            pass
+
         # 确定信号方向
         if score >= 6:
             signal = StrategySignal.BULLISH.value
@@ -114,8 +133,8 @@ class SignalComputationService:
         # 目标区间
         target_high = round(latest_close * 1.12, 2)
 
-        # 证据
-        evidence = self._build_chip_evidence(df, score)
+        # 证据（含换手率信息）
+        evidence = self._build_chip_evidence(df, score, turnover_rate, turnover_status)
 
         return {
             'strategy_name': '筹码主力分析',
@@ -130,6 +149,8 @@ class SignalComputationService:
             'evidence': evidence,
             'risk_notes': ['大盘系统性风险', '行业政策变化'],
             'signal_date': latest_date if isinstance(latest_date, str) else latest_date.strftime('%Y-%m-%d'),
+            'backtest_win_rates': self._get_signal_win_rates(signal),
+
         }
 
     def _compute_chanlun_signal(self, ts_code: str, df: pd.DataFrame) -> Optional[Dict]:
@@ -201,6 +222,8 @@ class SignalComputationService:
             'evidence': evidence,
             'risk_notes': ['缠论信号滞后性', '需成交量配合确认'],
             'signal_date': latest_date if isinstance(latest_date, str) else latest_date.strftime('%Y-%m-%d'),
+            'backtest_win_rates': self._get_signal_win_rates(signal),
+
         }
 
     def _compute_factor_signal(self, ts_code: str, df: pd.DataFrame) -> Optional[Dict]:
@@ -274,13 +297,23 @@ class SignalComputationService:
             ],
             'risk_notes': ['因子模型假设偏差', '市场风格切换风险'],
             'signal_date': latest_date if isinstance(latest_date, str) else latest_date.strftime('%Y-%m-%d'),
+            'backtest_win_rates': self._get_signal_win_rates(signal),
+
         }
 
-    def _build_chip_evidence(self, df: pd.DataFrame, score: float) -> List[str]:
+    def _build_chip_evidence(self, df: pd.DataFrame, score: float,
+                              turnover_rate: Optional[float] = None,
+                              turnover_status: Optional[str] = None) -> List[str]:
         """构建筹码分析依据"""
         closes = df['close'].values
         volumes = df['vol'].values if 'vol' in df.columns else df['amount'].values
         evidence = []
+
+        # 换手率证据
+        if turnover_rate is not None and turnover_status is not None:
+            evidence.append(f"换手率{turnover_rate:.2f}%，{turnover_status}")
+        elif turnover_rate is not None:
+            evidence.append(f"换手率{turnover_rate:.2f}%")
 
         # 价格位置
         if len(closes) >= 60:
@@ -311,6 +344,27 @@ class SignalComputationService:
 
         return evidence
 
+
+
+    def _get_signal_win_rates(self, signal_type: str) -> dict:
+        """从缓存获取信号类型的回测赢率数据"""
+        try:
+            wr = self.data_manager.cache.get_cached_win_rate(signal_type)
+            if wr:
+                return {
+                    'signal_type': wr.get('signal_type', signal_type),
+                    'samples': wr.get('samples', 0),
+                    'win_rate_5d': float(wr.get('win_rate_5d', 0)),
+                    'win_rate_10d': float(wr.get('win_rate_10d', 0)),
+                    'win_rate_20d': float(wr.get('win_rate_20d', 0)),
+                    'avg_return_5d': float(wr.get('avg_return_5d', 0)),
+                    'avg_return_20d': float(wr.get('avg_return_20d', 0)),
+                    'sharpe_5d': float(wr.get('sharpe_5d', 0)),
+                    'sharpe_20d': float(wr.get('sharpe_20d', 0)),
+                }
+        except Exception:
+            pass
+        return {}
     def _persist_signals(self, ts_code: str, signals: List[Dict]):
         """将实时计算的信号持久化到数据库"""
         if not signals:
@@ -345,8 +399,48 @@ class SignalComputationService:
                 )
                 db.session.add(record)
             db.session.commit()
+            # 同步写入 StrategyOutput 表
+            self._sync_to_strategy_output(ts_code, signals)
             logger.info(f"{ts_code}: 已持久化 {len(signals)} 条信号")
         except Exception as e:
             db.session.rollback()
             logger.warning(f"{ts_code}: 信号持久化失败: {e}")
 
+
+
+    def _sync_to_strategy_output(self, ts_code: str, signals: list):
+        """同步信号到 StrategyOutput 表（账户管理系统读取用）"""
+        if not signals:
+            return
+        try:
+            # signal_date already imported at module level
+            for sig in signals:
+                entry_zone = sig.get('entry_zone', [None, None])
+                target_zone = sig.get('target_zone', [None, None])
+                sig_date = sig.get('signal_date', '')
+                if isinstance(sig_date, str):
+                    try:
+                        sig_date = datetime.strptime(sig_date[:10], '%Y-%m-%d').date()
+                    except ValueError:
+                        sig_date = datetime.now().date()
+                else:
+                    sig_date = datetime.now().date()
+
+                signal_val = sig.get('signal', 'NEUTRAL')
+
+                StrategyOutputService.create_strategy_output(
+                    ts_code=ts_code,
+                    strategy_name=sig.get('strategy_name', '筹码策略'),
+                    signal=signal_val,
+                    signal_date=sig_date,
+                    confidence=sig.get('confidence', 0.5),
+                    entry_zone=entry_zone,
+                    risk_line=sig.get('risk_line'),
+                    target_zone=target_zone,
+                    position_suggestion=sig.get('position_suggestion'),
+                    holding_period=sig.get('holding_period'),
+                    evidence=sig.get('evidence', []),
+                    risk_notes=sig.get('risk_notes', []),
+                )
+        except Exception as e:
+            logger.warning(f"{ts_code}: 同步到StrategyOutput失败: {e}")

@@ -28,18 +28,18 @@ class FactorCalculator:
         """
         factor = self.registry.get_factor(factor_name, **kwargs)
         if factor is None:
-            print(f"❌ 未找到因子: {factor_name}")
+            logger.error(f"未找到因子: {factor_name}")
             return None
         
         if not factor.check_data(data):
-            print(f"❌ 数据不满足因子 {factor_name} 的要求")
+            logger.error(f"数据不满足因子 {factor_name} 的要求")
             return None
         
         try:
             result = factor.calculate(data)
             return result
         except Exception as e:
-            print(f"❌ 计算因子 {factor_name} 失败: {e}")
+            logger.error(f"计算因子 {factor_name} 失败: {e}")
             return None
     
     def calculate_multiple_factors(self, data: pd.DataFrame,

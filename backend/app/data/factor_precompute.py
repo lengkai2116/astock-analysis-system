@@ -63,7 +63,7 @@ class FactorPrecomputeManager:
             
             return True
         except Exception as e:
-            print(f"预计算因子失败 {factor_name} [{ts_code}]: {e}")
+            logger.error(f"预计算因子失败 {factor_name} [{ts_code}]: {e}")
             return False
     
     def _batch_cache_factor_series(self, factor_series: pd.Series, 
@@ -121,7 +121,7 @@ class FactorPrecomputeManager:
                         record['cached_at']
                     ))
                 except Exception as e:
-                    print(f"插入因子失败: {e}")
+                    logger.error(f"插入因子失败: {e}")
             
             conn.commit()
         finally:
@@ -184,7 +184,7 @@ class FactorPrecomputeManager:
                 success = self.precompute_factor(ts_code, data, name)
                 results[name] = success
             except Exception as e:
-                print(f"预计算因子失败 {name}: {e}")
+                logger.error(f"预计算因子失败 {name}: {e}")
                 results[name] = False
         
         return results

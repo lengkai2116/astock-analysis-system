@@ -4,6 +4,7 @@
 """
 import time
 import logging
+from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, jsonify, request
 from datetime import datetime, timedelta
 import pandas as pd
@@ -206,8 +207,7 @@ def compute_screening(stock_list):
 
 
 # ============ API 路由 ============
-
-
+@handle_exceptions
 @screener_bp.route('/api/v3/screener/run', methods=['POST'])
 def run_screener():
     """执行完整的三层筛选流程"""
@@ -265,8 +265,7 @@ def run_screener():
         'data': result,
         'from_cache': False
     })
-
-
+@handle_exceptions
 @screener_bp.route('/api/v3/screener/layer1', methods=['POST'])
 def run_layer1():
     """第一层：风险剔除"""
@@ -296,8 +295,7 @@ def run_layer1():
             'passed_symbols': passed[:20]
         }
     })
-
-
+@handle_exceptions
 @screener_bp.route('/api/v3/screener/layer2', methods=['POST'])
 def run_layer2():
     """第二层：主力识别"""
@@ -334,8 +332,7 @@ def run_layer2():
             'scored': scored[:50]
         }
     })
-
-
+@handle_exceptions
 @screener_bp.route('/api/v3/screener/layer3', methods=['POST'])
 def run_layer3():
     """第三层：策略验证"""
@@ -388,8 +385,7 @@ def run_layer3():
         'success': True,
         'data': {'validated': validated}
     })
-
-
+@handle_exceptions
 @screener_bp.route('/api/v3/screener/fusion-config', methods=['GET', 'POST'])
 def fusion_config():
     """获取/更新信号融合权重配置"""
@@ -410,8 +406,7 @@ def fusion_config():
             'phase_bonus': {'building': 2, 'washing': 1, 'lifting': 1, 'distributing': -1}
         }
     })
-
-
+@handle_exceptions
 @screener_bp.route('/api/v3/screener/params', methods=['GET'])
 def screener_params():
     """获取可用筛选器参数范围"""
@@ -446,8 +441,7 @@ def screener_params():
             }
         }
     })
-
-
+@handle_exceptions
 @screener_bp.route('/api/v3/screener/stats', methods=['GET'])
 def screener_stats():
     """获取缓存状态和数据统计"""

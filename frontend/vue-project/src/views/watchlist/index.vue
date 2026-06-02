@@ -661,7 +661,7 @@ export default {
     this.initSocket()
   },
 
-  beforeDestroy() {
+  beforeUnmount() {
     this.destroySocket()
   },
 

@@ -1,4 +1,5 @@
 import os
+from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, jsonify, request
 from app import db
 from app.data import DataManager
@@ -6,7 +7,7 @@ from app.models import Stock, DailyData
 from datetime import datetime
 
 cache_bp = Blueprint('cache', __name__, url_prefix='/api/cache')
-
+@handle_exceptions
 @cache_bp.route('/sync', methods=['POST'])
 def sync_data():
     """同步数据"""
@@ -50,7 +51,7 @@ def sync_data():
             'success': False,
             'message': str(e)
         }), 500
-
+@handle_exceptions
 @cache_bp.route('/data/<ts_code>', methods=['GET'])
 def get_cached_data(ts_code):
     """获取缓存数据"""
@@ -74,7 +75,7 @@ def get_cached_data(ts_code):
             'success': False,
             'message': str(e)
         }), 500
-
+@handle_exceptions
 @cache_bp.route('/stats', methods=['GET'])
 def get_cache_stats():
     """获取缓存统计"""
@@ -113,7 +114,7 @@ def get_cache_stats():
             'success': False,
             'message': str(e)
         }), 500
-
+@handle_exceptions
 @cache_bp.route('/strategy', methods=['GET'])
 def get_cache_strategy():
     """获取缓存策略配置"""
@@ -133,7 +134,7 @@ def get_cache_strategy():
             'invalidation': '支持时间过期和手动清除'
         }
     })
-
+@handle_exceptions
 @cache_bp.route('/warmup', methods=['POST'])
 def warmup_cache():
     """缓存预热"""
@@ -150,7 +151,7 @@ def warmup_cache():
             'success': False,
             'message': str(e)
         }), 500
-
+@handle_exceptions
 @cache_bp.route('/invalidate', methods=['POST'])
 def invalidate_cache():
     """清除缓存"""
@@ -174,7 +175,7 @@ def invalidate_cache():
             'success': False,
             'message': str(e)
         }), 500
-
+@handle_exceptions
 @cache_bp.route('/batch', methods=['POST'])
 def batch_sync():
     """批量同步"""

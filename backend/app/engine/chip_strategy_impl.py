@@ -2,19 +2,13 @@
 完整筹码分布策略实现
 基于《筹码分布量化策略技术说明书》
 """
-import sys
-import os
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
-# 添加父目录到路径，确保可以导入
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'app', 'data'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'data'))
-
-from data.chip_indicators import ChipIndicators
-from data.chip_distribution_service import ChipDistributionService
+from app.data.chip_indicators import ChipIndicators
+from app.data.chip_distribution_service import ChipDistributionService
 
 
 class TradingPhaseDetector:
@@ -26,7 +20,8 @@ class TradingPhaseDetector:
     def __init__(self, chip_indicators: ChipIndicators):
         self.chip_indicators = chip_indicators
 
-    def detect_phase(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict) -> Dict:
+    def detect_phase(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict,
+                    chip_bins_history: Optional[List[List[Dict]]] = None) -> Dict:
         """
         检测当前操盘阶段
 
@@ -34,6 +29,7 @@ class TradingPhaseDetector:
             kline_data: K线数据
             chip_bins: 筹码分布数据
             indicators: 筹码指标
+            chip_bins_history: 历史筹码分布（用于筹码转移方向检测）
 
         Returns:
             阶段信息字典
@@ -41,13 +37,21 @@ class TradingPhaseDetector:
         if len(kline_data) < 60:
             return {'phase': 'UNKNOWN', 'confidence': 0.0, 'reason': '数据不足'}
 
+        # 计算筹码转移信息（如提供历史数据）
+        transfer_info = None
+        if chip_bins_history is not None:
+            try:
+                transfer_info = self.chip_indicators.detect_chip_transfer(chip_bins_history, lookback=20)
+            except Exception:
+                pass
+
         # 计算各阶段得分
         scores = {
-            'BUILDING': self._score_building(kline_data, chip_bins, indicators),
-            'WASHING': self._score_washing(kline_data, chip_bins, indicators),
-            'RAISING': self._score_raising(kline_data, chip_bins, indicators),
-            'SHIPPING': self._score_shipping(kline_data, chip_bins, indicators),
-            'SUPPORT': self._score_support(kline_data, chip_bins, indicators)
+            'BUILDING': self._score_building(kline_data, chip_bins, indicators, transfer_info),
+            'WASHING': self._score_washing(kline_data, chip_bins, indicators, transfer_info),
+            'RAISING': self._score_raising(kline_data, chip_bins, indicators, transfer_info),
+            'SHIPPING': self._score_shipping(kline_data, chip_bins, indicators, transfer_info),
+            'SUPPORT': self._score_support(kline_data, chip_bins, indicators, transfer_info)
         }
 
         # 找出得分最高的阶段
@@ -100,7 +104,8 @@ class TradingPhaseDetector:
 
         return score
 
-    def _score_washing(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict) -> float:
+    def _score_washing(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict,
+                      transfer_info: Optional[Dict] = None) -> float:
         """
         洗盘期评分
         条件：
@@ -108,6 +113,7 @@ class TradingPhaseDetector:
         2. 量能萎缩
         3. RSI回调
         4. 价格未破主力成本
+        5. 低位筹码稳定或增加（方向3增强）
         """
         score = 0.0
 
@@ -133,17 +139,32 @@ class TradingPhaseDetector:
             if current_price < ssrp * 1.05 and current_price > ssrp * 0.9:
                 score += 1.5
 
+        # 条件5：筹码稳定或向下转移（方向3）
+        if transfer_info is not None:
+            tr_type = transfer_info.get('transfer_type', '')
+            low_chg = transfer_info.get('low_chips_change', 0)
+            if tr_type == '稳定':
+                # 低位筹码量稳定 = 洗盘中的筹码锁定
+                if low_chg >= -0.02:
+                    score += 2.0
+            elif tr_type == '向下转移':
+                # 低位筹码增加 = 洗盘吸筹
+                if low_chg > 0:
+                    score += 2.0
+
         return score
 
-    def _score_raising(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict) -> float:
+    def _score_raising(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict,
+                     transfer_info: Optional[Dict] = None) -> float:
         """
         拉升期评分
         条件：
-        1. 低位筹码持续减少
+        1. 低位筹码持续减少（筹码向上转移）
         2. 高位筹码持续增加
         3. 成交量放大
         4. 价格突破
         5. ASR快速回落
+        6. 筹码向上转移（方向3增强）
         """
         score = 0.0
 
@@ -166,6 +187,17 @@ class TradingPhaseDetector:
         # 条件4：CYQKL强
         if indicators.get('cyqkl_status', '') in ['强', '很强', '极强']:
             score += 1.5
+
+        # 条件5：筹码向上转移（方向3）
+        if transfer_info is not None:
+            tr_type = transfer_info.get('transfer_type', '')
+            speed = transfer_info.get('transfer_speed', 0)
+            if tr_type == '向上转移':
+                score += 2.0
+            elif tr_type == '稳定':
+                # 盈利盘增加中的稳定 = 拉升趋势确认
+                if indicators.get('profit_ratio', 0) >= 0.5:
+                    score += 1.0
 
         return score
 
@@ -240,6 +272,7 @@ class ChipDistributionSignalGenerator:
 
     def __init__(self, phase_detector: TradingPhaseDetector):
         self.phase_detector = phase_detector
+        self.chip_indicators = ChipIndicators()
 
     def generate_signals(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict) -> Dict:
         """
@@ -258,15 +291,33 @@ class ChipDistributionSignalGenerator:
         phase_info = self.phase_detector.detect_phase(kline_data, chip_bins, indicators)
         result['phase_info'] = phase_info
 
+        # K线形态验证（Phase 2 模块3）
+        try:
+            from app.engine.framework.kline_pattern import KLinePatternVerifier
+            pattern_verifier = KLinePatternVerifier()
+            patterns = pattern_verifier.verify(kline_data)
+            result['patterns'] = [p.to_dict() for p in patterns]
+        except Exception:
+            result['patterns'] = []
+
         # 检测各个信号
         result['S_BUY'] = self._check_s_buy(kline_data, chip_bins, indicators, phase_info)
         result['S_WASH_END'] = self._check_s_wash_end(kline_data, chip_bins, indicators, phase_info)
         result['S_BOUNCE'] = self._check_s_bounce(kline_data, chip_bins, indicators, phase_info)
         result['S_SELL'] = self._check_s_sell(kline_data, chip_bins, indicators, phase_info)
         result['S_WASH_STOP'] = self._check_s_wash_stop(kline_data, chip_bins, indicators, phase_info)
+        result['S_DIVERG_SELL'] = self._check_s_diverg_sell(kline_data, chip_bins, indicators, phase_info)
 
-        # 确定最终操作建议
-        result['recommendation'] = self._combine_signals(result)
+        # 确定最终操作建议（含K线形态置信度调整）
+        recommendation = self._combine_signals(result)
+        # 如果有多头形态且信号为买入，提升置信度描述
+        bullish_patterns = [p for p in result.get('patterns', []) if p.get('direction') == 'bullish']
+        bearish_patterns = [p for p in result.get('patterns', []) if p.get('direction') == 'bearish']
+        if bullish_patterns and recommendation.get('action') == 'BUY':
+            recommendation['pattern_boost'] = [p['name'] for p in bullish_patterns]
+        if bearish_patterns and recommendation.get('action') == 'SELL':
+            recommendation['pattern_boost'] = [p['name'] for p in bearish_patterns]
+        result['recommendation'] = recommendation
 
         return result
 
@@ -283,6 +334,11 @@ class ChipDistributionSignalGenerator:
         """
         conditions = []
         all_met = True
+
+        # === 假突破前置过滤：突破状态时验证量能+时间+深度 ===
+        false_break = self._check_false_breakout(kline_data, indicators)
+        if false_break['is_breakout'] and not false_break['passed']:
+            return {'triggered': False, 'position': 0.0, 'conditions': ['假突破过滤: ' + false_break['reason']]}
 
         # 条件1：拉升期
         if phase_info.get('phase') == 'RAISING':
@@ -318,7 +374,16 @@ class ChipDistributionSignalGenerator:
             conditions.append('✗ CYQKL不足')
             all_met = False
 
-        # 条件5：获利率
+        # 条件5：SSRP穿越确认 — 收盘价 > SSRP（拉升启动信号，书本第2章§2.6）
+        ssrp = indicators.get('ssrp', 0)
+        current_price = float(kline_data['close'].iloc[-1]) if len(kline_data) > 0 and ssrp > 0 else 0
+        if current_price > 0 and ssrp > 0 and current_price > ssrp:
+            conditions.append(f'✓ SSRP穿越确认: 收盘价{current_price:.2f} > SSRP {ssrp:.2f}')
+        else:
+            conditions.append('✗ SSRP未突破')
+            all_met = False
+
+        # 条件6：获利率
         profit_ratio = indicators.get('profit_ratio', 0)
         if profit_ratio >= 0.6:
             conditions.append('✓ 获利率达标')
@@ -437,6 +502,11 @@ class ChipDistributionSignalGenerator:
         conditions = []
         triggered = False
 
+        # === 假突破前置过滤：突破状态时验证量能+时间+深度 ===
+        false_break = self._check_false_breakout(kline_data, indicators)
+        if false_break['is_breakout'] and not false_break['passed']:
+            return {'triggered': False, 'position': 0.0, 'conditions': ['假突破过滤: ' + false_break['reason']]}
+
         # 条件A：出货期
         if phase_info.get('phase') == 'SHIPPING':
             conditions.append('✓ 出货期确认')
@@ -456,6 +526,15 @@ class ChipDistributionSignalGenerator:
         if rsi >= 80:
             conditions.append('✓ RSI超买')
             triggered = True
+
+
+        # 条件D：SSRP穿越卖出 — 连续2日收盘价 < SSRP（书本第2章§2.6）
+        ssrp = indicators.get('ssrp', 0)
+        if ssrp > 0 and len(kline_data) >= 3:
+            closes = kline_data['close'].values
+            if len(closes) >= 2 and closes[-1] < ssrp and closes[-2] < ssrp:
+                conditions.append(f'✓ 连续2日低于SSRP({ssrp:.2f})')
+                triggered = True
 
         return {
             'triggered': triggered,
@@ -488,6 +567,126 @@ class ChipDistributionSignalGenerator:
             'conditions': conditions
         }
 
+    def _check_s_diverg_sell(self, kline_data: pd.DataFrame, chip_bins: List[Dict],
+                              indicators: Dict, phase_info: Dict) -> Dict:
+        """
+        高位背离减仓信号 S_DIVERG_SELL
+        书本依据: 第7章§7.2.3 + 第8章 + 背离形态知识库
+        使用 chip_indicators.detect_rsi_divergence() 替代简化版峰值对比
+
+        触发条件：
+          初次顶背离(价格新高,RSI不新高) → 减仓至70%
+          二次顶背离(价格连创新高,RSI持续下降) → 减仓至30%
+          三重顶背离 → 减仓至10%
+        """
+        conditions = []
+        triggered = False
+        position_adjustment = 1.0
+
+        if len(kline_data) < 40:
+            return {'triggered': False, 'position_adjustment': 1.0, 'conditions': ['数据不足']}
+
+        try:
+            divergence = self.chip_indicators.detect_rsi_divergence(kline_data, period=14, lookback=20)
+        except Exception:
+            return {'triggered': False, 'position_adjustment': 1.0, 'conditions': ['背离检测异常']}
+
+        top_div = divergence.get('top_divergence', {})
+
+        # === 顶背离 → 减仓信号 ===
+        if top_div.get('detected', False):
+            count = top_div.get('count', 1)
+
+            if count >= 3:
+                triggered = True
+                position_adjustment = 0.1
+                conditions.append(
+                    f'✓ 三重顶背离确认 → 减仓至10% '
+                    f'(最新:价格{top_div["latest_high_price"]:.2f}/RSI{top_div["latest_high_rsi"]:.1f}, '
+                    f'前次:价格{top_div["prev_high_price"]:.2f}/RSI{top_div["prev_high_rsi"]:.1f})'
+                )
+            elif count == 2:
+                triggered = True
+                position_adjustment = 0.3
+                conditions.append(
+                    f'✓ 二次顶背离确认 → 减仓至30% '
+                    f'(最新RSI{top_div["latest_high_rsi"]:.1f} < 前次RSI{top_div["prev_high_rsi"]:.1f})'
+                )
+            else:
+                triggered = True
+                position_adjustment = 0.7
+                conditions.append(
+                    f'▶ 初次顶背离 → 减仓至70% '
+                    f'(价格{top_div["latest_high_price"]:.2f}新高, '
+                    f'RSI{top_div["latest_high_rsi"]:.1f}低于前次{top_div["prev_high_rsi"]:.1f})'
+                )
+
+        return {
+            'triggered': triggered,
+            'position_adjustment': position_adjustment,
+            'top_divergence_count': top_div.get('count', 0),
+            'conditions': conditions
+        }
+    def _check_false_breakout(self, kline_data: pd.DataFrame, indicators: Dict) -> Dict:
+        """
+        假突破前置检测 — 三维确认（书本第9章§9.3 + 假突破交易策略）
+        仅在突破/跌破状态时激活，非突破状态直接返回通过
+        """
+        if kline_data.empty or len(kline_data) < 5:
+            return {'passed': True, 'reason': '数据不足，默认通过', 'is_breakout': False}
+
+        closes = kline_data['close'].values
+        latest = float(closes[-1])
+
+        if len(closes) >= 20:
+            max_20 = float(np.max(closes[-20:]))
+            min_20 = float(np.min(closes[-20:]))
+            price_range = max_20 - min_20
+            if price_range <= 0:
+                return {'passed': True, 'reason': '价格无波动', 'is_breakout': False}
+
+            is_breakout_high = latest >= max_20 * 0.98
+            is_breakout_low = latest <= min_20 * 1.02
+
+            if not is_breakout_high and not is_breakout_low:
+                return {'passed': True, 'reason': '非突破状态', 'is_breakout': False}
+        else:
+            return {'passed': True, 'reason': '数据不足', 'is_breakout': False}
+
+        if is_breakout_high:
+            breakout_level = max_20 * 0.98
+        else:
+            breakout_level = min_20 * 1.02
+
+        breakout_days = 0
+        for i in range(len(closes) - 1, -1, -1):
+            if (is_breakout_high and closes[i] >= breakout_level) or (is_breakout_low and closes[i] <= breakout_level):
+                breakout_days += 1
+            else:
+                break
+
+        vol_ratio = indicators.get('vol_ratio', 0)
+        if vol_ratio < 1.5 and is_breakout_high:
+            return {
+                'passed': False, 'is_breakout': True,
+                'reason': f'量能不足(vol_ratio={vol_ratio:.2f}<1.5,突破{breakout_days}日)'
+            }
+
+        if breakout_days < 3 and is_breakout_high:
+            return {
+                'passed': False, 'is_breakout': True,
+                'reason': f'突破时间不足({breakout_days}<3日)'
+            }
+
+        cyqkl = indicators.get('cyqkl', 0)
+        if cyqkl < 0.2 and is_breakout_high:
+            return {
+                'passed': False, 'is_breakout': True,
+                'reason': f'穿透深度不足(cyqkl={cyqkl:.2f}<0.2)'
+            }
+
+        return {'passed': True, 'reason': '三维确认通过', 'is_breakout': True}
+
     def _combine_signals(self, signals: Dict) -> Dict:
         """
         综合各信号给出最终操作建议
@@ -509,12 +708,23 @@ class ChipDistributionSignalGenerator:
                 'priority': 2
             }
 
+        if signals.get('S_DIVERG_SELL', {}).get('triggered', False):
+            sd = signals['S_DIVERG_SELL']
+            adj = sd.get('position_adjustment', 1.0)
+            return {
+                'action': 'REDUCE',
+                'reason': '高位背离减仓',
+                'target_position': adj,
+                'position_adjustment': adj,
+                'priority': 3
+            }
+
         if signals.get('S_BUY', {}).get('triggered', False):
             return {
                 'action': 'BUY',
                 'reason': '主买入信号',
                 'target_position': 0.7,
-                'priority': 3
+                'priority': 4
             }
 
         if signals.get('S_WASH_END', {}).get('triggered', False):
@@ -522,7 +732,7 @@ class ChipDistributionSignalGenerator:
                 'action': 'BUY',
                 'reason': '洗盘结束',
                 'target_position': 0.5,
-                'priority': 4
+                'priority': 5
             }
 
         if signals.get('S_BOUNCE', {}).get('triggered', False):
@@ -530,7 +740,7 @@ class ChipDistributionSignalGenerator:
                 'action': 'BUY',
                 'reason': '超跌反弹',
                 'target_position': 0.3,
-                'priority': 5
+                'priority': 6
             }
 
         return {

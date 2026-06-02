@@ -334,6 +334,127 @@ class ChipIndicators:
         else:
             return '超买'
 
+
+    def detect_rsi_divergence(self, kline_data: pd.DataFrame, period: int = 14, lookback: int = 20) -> Dict:
+        """
+        检测RSI顶背离和底背离
+
+        顶背离: 价格创新高 + RSI未创新高 → bearish divergence (卖出信号)
+        底背离: 价格创新低 + RSI未创新低 → bullish divergence (买入信号)
+        距离上一次背离 >= 5个交易日 → 算作新的一次
+
+        Args:
+            kline_data: K线数据
+            period: RSI计算周期
+            lookback: 回看天数
+
+        Returns:
+            {'top_divergence': Dict, 'bottom_divergence': Dict}
+        """
+        result = {
+            'top_divergence': {'detected': False, 'count': 0, 'last_distance': 0},
+            'bottom_divergence': {'detected': False, 'count': 0, 'last_distance': 0}
+        }
+
+        if len(kline_data) < lookback + period + 1:
+            return result
+
+        closes = kline_data['close'].values
+        rsi_values = []
+        for i in range(len(closes)):
+            sub_df = kline_data.iloc[:i+1]
+            if len(sub_df) >= period + 1:
+                rsi_values.append(self.calculate_rsi(sub_df, period))
+            else:
+                rsi_values.append(50)
+
+        rsi_arr = np.array(rsi_values)
+
+        # ----- 顶背离检测 -----
+        # 1. 找最近lookback天的价格高点
+        lookback_closes = closes[-lookback:]
+        lookback_rsi = rsi_arr[-lookback:]
+
+        # 价格局部高点索引
+        price_peaks = []
+        for i in range(1, len(lookback_closes) - 1):
+            if lookback_closes[i] > lookback_closes[i-1] and lookback_closes[i] > lookback_closes[i+1]:
+                price_peaks.append({
+                    'idx': len(closes) - lookback + i,
+                    'price': lookback_closes[i],
+                    'rsi': lookback_rsi[i]
+                })
+
+        if len(price_peaks) >= 2:
+            # 最近两个价格高点
+            p2 = price_peaks[-1]  # 最近
+            p1 = price_peaks[-2]  # 前一个
+
+            # 顶背离: 价格上升 + RSI下降
+            if p2['price'] > p1['price'] and p2['rsi'] < p1['rsi']:
+                # 计算距离上次背离
+                last_dist = len(closes) - p1['idx']
+
+                # 统计历史背离次数（简化: 仅在当前检测到就认为1次）
+                count = 1
+                result['top_divergence'] = {
+                    'detected': True,
+                    'count': count,
+                    'last_distance': last_dist,
+                    'latest_high_price': p2['price'],
+                    'latest_high_rsi': p2['rsi'],
+                    'prev_high_price': p1['price'],
+                    'prev_high_rsi': p1['rsi']
+                }
+
+        # ----- 底背离检测 -----
+        price_bottoms = []
+        for i in range(1, len(lookback_closes) - 1):
+            if lookback_closes[i] < lookback_closes[i-1] and lookback_closes[i] < lookback_closes[i+1]:
+                price_bottoms.append({
+                    'idx': len(closes) - lookback + i,
+                    'price': lookback_closes[i],
+                    'rsi': lookback_rsi[i]
+                })
+
+        if len(price_bottoms) >= 2:
+            b2 = price_bottoms[-1]
+            b1 = price_bottoms[-2]
+
+            # 底背离: 价格下降 + RSI上升
+            if b2['price'] < b1['price'] and b2['rsi'] > b1['rsi']:
+                last_dist = len(closes) - b1['idx']
+                count = 1
+                result['bottom_divergence'] = {
+                    'detected': True,
+                    'count': count,
+                    'last_distance': last_dist,
+                    'latest_low_price': b2['price'],
+                    'latest_low_rsi': b2['rsi'],
+                    'prev_low_price': b1['price'],
+                    'prev_low_rsi': b1['rsi']
+                }
+
+        # 二次背离检测（连续两次背离）
+        if len(price_peaks) >= 3:
+            p3 = price_peaks[-1]
+            p2 = price_peaks[-2]
+            p1 = price_peaks[-3]
+            # 连续两次顶背离
+            if (p3['price'] > p2['price'] > p1['price'] and
+                p3['rsi'] < p2['rsi'] < p1['rsi']):
+                result['top_divergence']['count'] = 2
+
+        if len(price_bottoms) >= 3:
+            b3 = price_bottoms[-1]
+            b2 = price_bottoms[-2]
+            b1 = price_bottoms[-3]
+            if (b3['price'] < b2['price'] < b1['price'] and
+                b3['rsi'] > b2['rsi'] > b1['rsi']):
+                result['bottom_divergence']['count'] = 2
+
+        return result
+
     def calculate_volume_indicators(self, kline_data: pd.DataFrame) -> Dict:
         """
         计算成交量指标

@@ -366,7 +366,7 @@ export default {
     this.loadReport()
   },
   
-  beforeDestroy() {
+  beforeUnmount() {
     if (this.equityChart) {
       this.equityChart.dispose()
     }

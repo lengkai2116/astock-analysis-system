@@ -1,3 +1,4 @@
+import logging
 import os
 import json
 import time
@@ -10,6 +11,8 @@ from ..data.tushare_provider import TushareProvider
 from ..data.akshare_provider import AkShareRealtimeProvider
 from ..data.enhanced_cache_manager import EnhancedCacheManager
 from ..data.redis_cache_manager import RedisCacheManager
+
+logger = logging.getLogger(__name__)
 
 realtime_bp = Blueprint('realtime', __name__)
 
@@ -40,14 +43,14 @@ class RealtimeDataService:
             self.running = True
             self.thread = threading.Thread(target=self._data_publisher_loop, daemon=True)
             self.thread.start()
-            print("✅ 实时数据服务已启动")
+            logger.info("实时数据服务已启动")
     
     def stop(self):
         """停止实时数据服务"""
         self.running = False
         if self.thread:
             self.thread.join()
-        print("✅ 实时数据服务已停止")
+        logger.info("实时数据服务已停止")
     
     def _data_publisher_loop(self):
         """定时发布实时数据"""
@@ -56,9 +59,9 @@ class RealtimeDataService:
                 data = self._fetch_current_market_data()
                 if data:
                     self.publisher.publish('market_realtime', json.dumps(data))
-                    print(f"📡 已推送实时数据 - {datetime.now().strftime('%H:%M:%S')}")
+                    logger.info(f"已推送实时数据 - {datetime.now().strftime('%H:%M:%S')}")
             except Exception as e:
-                print(f"❌ 获取实时数据失败: {e}")
+                logger.error(f"获取实时数据失败: {e}")
             
             time.sleep(3)
     
@@ -73,10 +76,10 @@ class RealtimeDataService:
                     if data:
                         market_data.append(data)
                 except Exception as e:
-                    print(f"⚠️ 获取 {ts_code} 数据失败: {e}")
+                    logger.warning(f"获取 {ts_code} 数据失败: {e}")
                     continue
         except Exception as e:
-            print(f"❌ 批量获取失败: {e}")
+            logger.error(f"批量获取失败: {e}")
         
         return {
             'type': 'market_realtime',
@@ -118,7 +121,7 @@ class RealtimeDataService:
                 'timestamp': datetime.now().isoformat()
             }
         except Exception as e:
-            print(f"⚠️ 处理 {ts_code} 数据失败: {e}")
+            logger.warning(f"处理 {ts_code} 数据失败: {e}")
             return None
     
     def _get_stock_name(self, ts_code):
@@ -137,20 +140,20 @@ realtime_service = RealtimeDataService()
 @socketio.on('connect')
 def handle_connect():
     """处理客户端连接"""
-    print(f"🔌 客户端已连接 - 会话ID: {request.sid}")
+    logger.info(f"客户端已连接 - 会话ID: {request.sid}")
     emit('connected', {'status': 'connected', 'message': '已连接到实时数据服务'})
 
 @socketio.on('disconnect')
 def handle_disconnect():
     """处理客户端断开连接"""
-    print(f"❌ 客户端已断开 - 会话ID: {request.sid}")
+    logger.info(f"客户端已断开 - 会话ID: {request.sid}")
 
 @socketio.on('subscribe_watchlist')
 def handle_subscribe_watchlist(data):
     """订阅自选股更新"""
     watchlist = data.get('watchlist', [])
     join_room('watchlist')
-    print(f"📋 客户端订阅自选股: {watchlist}")
+    logger.info(f"客户端订阅自选股: {watchlist}")
     
     initial_data = realtime_service._fetch_current_market_data()
     emit('watchlist_update', initial_data, room='watchlist')
@@ -164,7 +167,7 @@ def handle_subscribe_kline(data):
     if ts_code:
         room = f'kline_{ts_code}'
         join_room(room)
-        print(f"📊 客户端订阅K线: {ts_code} ({freq})")
+        logger.info(f"客户端订阅K线: {ts_code} ({freq})")
         
         try:
             kline_data = tushare.get_minute_data(ts_code, freq)
@@ -175,7 +178,7 @@ def handle_subscribe_kline(data):
                     'data': kline_data
                 }, room=room)
         except Exception as e:
-            print(f"⚠️ 获取初始K线失败: {e}")
+            logger.warning(f"获取初始K线失败: {e}")
 
 @socketio.on('join_room')
 def handle_join_room(data):
@@ -183,7 +186,7 @@ def handle_join_room(data):
     room = data.get('room')
     if room:
         join_room(room)
-        print(f"🏠 客户端加入房间: {room}")
+        logger.info(f"客户端加入房间: {room}")
 
 @realtime_bp.route('/api/v3/market/realtime', methods=['GET'])
 def get_realtime_market():
@@ -242,7 +245,7 @@ def get_indexes_realtime():
                     'amount': 0
                 })
         except Exception as e:
-            print(f'⚠️ 获取指数 {idx["name"]} 数据失败: {e}')
+            logger.warning(f'获取指数 {idx["name"]} 数据失败: {e}')
             result.append({
                 'ts_code': idx['ts_code'],
                 'name': idx['name'],
@@ -306,7 +309,7 @@ def get_realtime_indicator():
 @socketio.on('trigger_publish')
 def handle_trigger_publish():
     """手动触发一次数据发布（用于测试）"""
-    print("⚡ 手动触发数据发布")
+    logger.info("手动触发数据发布")
     data = realtime_service._fetch_current_market_data()
     socketio.emit('watchlist_update', data, room='watchlist')
     return {'status': 'published', 'data': data}
@@ -320,9 +323,9 @@ def _redis_subscriber_thread():
                     data = json.loads(message['data'])
                     socketio.emit('watchlist_update', data, room='watchlist')
                 except Exception as e:
-                    print(f"⚠️ 转发消息失败: {e}")
+                    logger.warning(f"转发消息失败: {e}")
     except Exception as e:
-        print(f"❌ Redis订阅线程错误: {e}")
+        logger.error(f"Redis订阅线程错误: {e}")
 
 def initialize_realtime_service():
     """初始化并启动实时数据服务"""
@@ -332,8 +335,8 @@ def initialize_realtime_service():
         redis_thread = threading.Thread(target=_redis_subscriber_thread, daemon=True)
         redis_thread.start()
         
-        print("🚀 实时数据服务系统初始化完成")
+        logger.info("实时数据服务系统初始化完成")
     except Exception as e:
-        print(f"❌ 初始化实时服务失败: {e}")
+        logger.error(f"初始化实时服务失败: {e}")
 
 initialize_realtime_service()

@@ -27,3 +27,17 @@ export function getFinalReport(analysisId) {
 export function getAIHealth() {
   return request.get('/api/v3/ai/health')
 }
+
+/**
+ * 获取信号 AI 解读
+ * @param {string} tsCode - 股票代码
+ * @param {string} stockName - 股票名称
+ * @param {Array} signals - 信号列表（包含 strategy_name, confidence, evidence 等）
+ */
+export function explainSignal(tsCode, stockName, signals) {
+  return request.post('/api/v3/ai/signal-explain', {
+    ts_code: tsCode,
+    stock_name: stockName,
+    signals
+  })
+}

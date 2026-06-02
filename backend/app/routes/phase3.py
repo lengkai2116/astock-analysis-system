@@ -6,6 +6,7 @@
 - 投资组合接口
 - 模拟交易接口
 """
+from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, request, jsonify
 from app import db
 from app.models import (
@@ -36,7 +37,7 @@ def get_data_manager():
 # ====================
 # 技术指标接口
 # ====================
-
+@handle_exceptions
 @phase3_bp.route('/indicators/<ts_code>', methods=['GET'])
 def get_indicators(ts_code):
     """获取技术指标数据"""
@@ -50,8 +51,7 @@ def get_indicators(ts_code):
         'success': True,
         'data': [i.to_dict() for i in indicators]
     })
-
-
+@handle_exceptions
 @phase3_bp.route('/indicators/<ts_code>/calculate', methods=['POST'])
 def calculate_indicators(ts_code):
     """计算技术指标"""
@@ -114,7 +114,7 @@ def calculate_indicators(ts_code):
 # ====================
 # 信号接口
 # ====================
-
+@handle_exceptions
 @phase3_bp.route('/signals', methods=['GET'])
 def get_signals():
     """获取信号列表"""
@@ -131,8 +131,7 @@ def get_signals():
         'success': True,
         'data': [s.to_dict() for s in signals]
     })
-
-
+@handle_exceptions
 @phase3_bp.route('/signals/generate', methods=['POST'])
 def generate_signals():
     """生成信号"""
@@ -164,7 +163,7 @@ def generate_signals():
 # ====================
 # 自选股接口
 # ====================
-
+@handle_exceptions
 @phase3_bp.route('/watchlist', methods=['GET'])
 def get_watchlist():
     """获取自选股列表"""
@@ -173,8 +172,7 @@ def get_watchlist():
         'success': True,
         'data': [w.to_dict() for w in watchlist]
     })
-
-
+@handle_exceptions
 @phase3_bp.route('/watchlist', methods=['POST'])
 def add_to_watchlist():
     """添加到自选股"""
@@ -197,8 +195,7 @@ def add_to_watchlist():
         'success': True,
         'data': watchlist.to_dict()
     })
-
-
+@handle_exceptions
 @phase3_bp.route('/watchlist/<int:id>', methods=['DELETE'])
 def remove_from_watchlist(id):
     """从自选股移除"""
@@ -221,7 +218,7 @@ def remove_from_watchlist(id):
 # ====================
 # 投资组合接口
 # ====================
-
+@handle_exceptions
 @phase3_bp.route('/portfolio', methods=['GET'])
 def get_portfolio():
     """获取投资组合"""
@@ -230,8 +227,7 @@ def get_portfolio():
         'success': True,
         'data': [p.to_dict() for p in portfolios]
     })
-
-
+@handle_exceptions
 @phase3_bp.route('/portfolio', methods=['POST'])
 def create_portfolio():
     """创建投资组合"""
@@ -246,8 +242,7 @@ def create_portfolio():
         'success': True,
         'data': portfolio.to_dict()
     })
-
-
+@handle_exceptions
 @phase3_bp.route('/portfolio/<int:id>', methods=['GET'])
 def get_portfolio_detail(id):
     """获取投资组合详情"""
@@ -267,8 +262,7 @@ def get_portfolio_detail(id):
             'holdings': [h.to_dict() for h in holdings]
         }
     })
-
-
+@handle_exceptions
 @phase3_bp.route('/portfolio/<int:id>/trade', methods=['POST'])
 def paper_trade(id):
     """模拟交易"""

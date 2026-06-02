@@ -440,3 +440,140 @@ def get_health() -> Dict:
         'model': config.get('model', 'mock'),
         'active_analyses': len(_analysis_store)
     }
+
+
+def explain_signal(ts_code: str, stock_name: str, signals: List[Dict]) -> Dict:
+    """
+    根据信号维度数据生成 AI 解读文本
+    接收前端传来的信号列表，返回每个策略的 AI 解读 + 综合建议
+    """
+    from app.config import Config
+
+    config = Config.get_llm_config()
+    provider = config.get('type', 'mock')
+    has_api = provider in ('deepseek', 'lm_studio') and config.get('api_key', '')
+
+    # 构建策略维度摘要
+    strategy_lines = []
+    for sig in signals:
+        name = sig.get('strategy_name', '未知策略')
+        conf_pct = round((sig.get('confidence', 0) or 0) * 100)
+        direction = sig.get('signal_label', sig.get('signal', '中性'))
+        lines = [f"策略: {name}", f"评分: {conf_pct}%", f"方向: {direction}"]
+
+        # 提取证据
+        evidence = sig.get('evidence', [])
+        if evidence:
+            lines.append("依据: " + '; '.join(evidence[:3]))
+
+        # 提取价格信息
+        entry = sig.get('entry_zone')
+        if entry and isinstance(entry, (list, tuple)) and len(entry) == 2:
+            lines.append(f"入场: {entry[0]} - {entry[1]}")
+        risk = sig.get('risk_line')
+        if risk:
+            lines.append(f"止损: {risk}")
+        target = sig.get('target_zone')
+        if target and isinstance(target, (list, tuple)) and len(target) == 2:
+            lines.append(f"目标: {target[0]} - {target[1]}")
+
+        # 风险提示
+        risks = sig.get('risk_notes', [])
+        if risks:
+            lines.append("风险: " + '; '.join(risks))
+
+        strategy_lines.append('\n'.join(lines))
+
+    strategy_text = '\n---\n'.join(strategy_lines)
+
+    if has_api:
+        prompt = (
+            f"以下是股票 {stock_name}({ts_code}) 的多维策略信号数据。"
+            f"请为每个策略生成一段通俗易懂的中文AI解读（约100-150字），"
+            f"解释信号背后的逻辑和操作建议，并最后给出综合投资建议。\n\n"
+            f"{strategy_text}\n\n"
+            f"请严格按照以下 JSON 格式返回（不要包含其他内容）：\n"
+            f'{{"explanations": [{{"strategy": "策略名称", "ai_summary": "解读文本", "ai_advice": "操作建议", "risk_tip": "风险提示"}}], "composite_advice": "综合投资建议"}}'
+        )
+        system_prompt = (
+            "你是一名专业的 A 股投资分析师，擅长将量化信号转化为通俗易懂的解读。"
+            "请基于信号数据给出客观分析，不夸大风险也不遗漏机会。"
+            "输出严格按要求的 JSON 格式，确保每个策略的解读清晰且可执行。"
+        )
+        result_text = _call_deepseek(prompt, system_prompt, config)
+        if result_text:
+            try:
+                import re
+                # 尝试提取 JSON
+                json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+                if json_match:
+                    return json.loads(json_match.group())
+            except (json.JSONDecodeError, Exception) as e:
+                logger.warning(f"信号解读 JSON 解析失败: {e}")
+
+    # Mock 降级
+    return _mock_signal_explain(ts_code, stock_name, signals)
+
+
+def _mock_signal_explain(ts_code: str, stock_name: str, signals: List[Dict]) -> Dict:
+    """当 DeepSeek 不可用时，基于规则生成解读文本"""
+    explanations = []
+    total_conf = 0
+
+    for sig in signals:
+        name = sig.get('strategy_name', '未知策略')
+        conf = sig.get('confidence', 0) or 0
+        conf_pct = round(conf * 100)
+        direction = sig.get('signal_label', sig.get('signal', '中性'))
+        evidence = sig.get('evidence', [])
+
+        total_conf += conf
+
+        if name == '筹码主力分析':
+            summary = (
+                f"筹码集中度评估为 {conf_pct}%。"
+                f"{'主力资金控盘迹象明显，' if conf_pct >= 60 else '主力资金介入程度一般，'}"
+                f"{'近期成交量温和放大，建仓阶段特征明显。' if any('放量' in (e or '') for e in evidence) else '成交量变化不大，需持续观察。'}"
+            )
+            advice = "建议关注筹码集中度变化，配合成交量确认后介入。"
+            risk_tip = "筹码分析滞后于实际交易，需结合量价关系综合判断。"
+        elif name == '缠论策略验证':
+            summary = (
+                f"缠论信号强度为 {conf_pct}%。"
+                f"{'日线级别形成标准底分型结构，' if '底分型' in str(evidence) else '顶分型结构出现，'}"
+                f"{'MACD底背离确认，属于一类买点信号。' if 'MACD' in str(evidence) else 'MACD指标需进一步确认。'}"
+            )
+            advice = f"按{conf_pct}%仓位介入，严格设置止损位。"
+            risk_tip = "缠论信号存在滞后性，需成交量配合确认有效性。"
+        elif name == '因子评分系统':
+            summary = (
+                f"多因子综合评分为 {conf_pct}%。"
+                f"动量因子表现{'突出' if conf_pct >= 60 else '一般'}，"
+                f"量价配合情况{'良好' if conf_pct >= 50 else '有待改善。'}"
+            )
+            advice = f"建议以{conf_pct}%仓位配置，持有周期2-4周。"
+            risk_tip = "因子模型存在假设偏差，市场风格切换可能导致信号失效。"
+        else:
+            summary = f"策略信号评分为 {conf_pct}%，方向为 {direction}。"
+            advice = "建议结合其他策略综合判断。"
+            risk_tip = "独立策略信号存在局限性。"
+
+        explanations.append({
+            'strategy': name,
+            'ai_summary': summary,
+            'ai_advice': advice,
+            'risk_tip': risk_tip
+        })
+
+    avg_conf = round(total_conf / max(len(signals), 1) * 100)
+    if avg_conf >= 65:
+        composite = "三维信号共振，整体偏多。建议按方案轻仓介入，严格止损。"
+    elif avg_conf >= 45:
+        composite = "信号存在分歧，需进一步确认。建议观望或轻仓试探。"
+    else:
+        composite = "整体信号偏弱，建议暂时观望，等待更明确的入场时机。"
+
+    return {
+        'explanations': explanations,
+        'composite_advice': composite
+    }

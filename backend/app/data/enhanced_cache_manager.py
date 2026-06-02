@@ -169,6 +169,50 @@ class EnhancedCacheManager:
                 PRIMARY KEY (ts_code, trade_date, price_bin)
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS moneyflow_cache (
+                ts_code VARCHAR,
+                trade_date DATE,
+                buy_lg_vol DECIMAL,       -- 大单买入量(手)
+                buy_lg_amount DECIMAL,    -- 大单买入额(万)
+                sell_lg_vol DECIMAL,      -- 大单卖出量(手)
+                sell_lg_amount DECIMAL,   -- 大单卖出额(万)
+                net_lg_amount DECIMAL,    -- 大单净额(万)
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, trade_date)
+            )
+        """)
+
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS win_rate_cache (
+                signal_type VARCHAR PRIMARY KEY,
+                samples INTEGER,
+                win_rate_5d DECIMAL,
+                win_rate_10d DECIMAL,
+                win_rate_20d DECIMAL,
+                avg_return_5d DECIMAL,
+                avg_return_20d DECIMAL,
+                sharpe_5d DECIMAL,
+                sharpe_20d DECIMAL,
+                evaluated_at TIMESTAMP
+            )
+        """)
+
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS conditional_win_rate_cache (
+                signal_type VARCHAR PRIMARY KEY,
+                total_samples INTEGER,
+                with_div_samples INTEGER,
+                with_div_win_rate DECIMAL,
+                without_div_samples INTEGER,
+                without_div_win_rate DECIMAL,
+                market_good_samples INTEGER,
+                market_good_win_rate DECIMAL,
+                market_poor_samples INTEGER,
+                market_poor_win_rate DECIMAL,
+                evaluated_at TIMESTAMP
+            )
+        """)
         
         # 为查询优化
         try:
@@ -178,6 +222,8 @@ class EnhancedCacheManager:
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_basic_date ON daily_basic_cache(trade_date)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_chip_ts_code ON chip_distribution_cache(ts_code)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_chip_date ON chip_distribution_cache(trade_date)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_moneyflow_ts_code ON moneyflow_cache(ts_code)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_moneyflow_date ON moneyflow_cache(trade_date)")
         except Exception:
             pass
     
@@ -217,7 +263,7 @@ class EnhancedCacheManager:
                 self.redis_cache.set_daily_data(ts_code, df, start_date, end_date)
                 return df
         except Exception as e:
-            print(f"⚠️ DuckDB查询失败: {e}")
+            logger.warning(f"DuckDB查询失败: {e}")
         
         self.cache_stats['misses'] += 1
         return pd.DataFrame()
@@ -269,7 +315,7 @@ class EnhancedCacheManager:
                 self.redis_cache.set_indicator_data(ts_code, indicator_name, df)
                 return df
         except Exception as e:
-            print(f"⚠️ 查询指标失败: {e}")
+            logger.warning(f"查询指标失败: {e}")
         
         self.cache_stats['misses'] += 1
         return pd.DataFrame()
@@ -286,7 +332,7 @@ class EnhancedCacheManager:
             """, [ts_code, trade_date, indicator_name, value])
             self.conn.commit()
         except Exception as e:
-            print(f"⚠️ 缓存指标失败: {e}")
+            logger.warning(f"缓存指标失败: {e}")
     
     def batch_cache_indicators(self, records):
         """
@@ -308,7 +354,7 @@ class EnhancedCacheManager:
             """)
             self.conn.commit()
         except Exception as e:
-            print(f"⚠️ 批量缓存指标失败: {e}")
+            logger.warning(f"批量缓存指标失败: {e}")
     
     def get_cache_stats(self):
         """
@@ -367,7 +413,7 @@ class EnhancedCacheManager:
             self.redis_cache.clear_all()
             return True
         except Exception as e:
-            print(f"⚠️ 清除旧缓存失败: {e}")
+            logger.warning(f"清除旧缓存失败: {e}")
             return False
     
     def clear_old_cache(self, days=30):
@@ -404,7 +450,7 @@ class EnhancedCacheManager:
             self.conn.commit()
             self._update_metadata('last_daily_basic_cache_time', datetime.now().isoformat())
         except Exception as e:
-            print(f"⚠️ 缓存daily_basic数据失败: {e}")
+            logger.warning(f"缓存daily_basic数据失败: {e}")
     
     def get_cached_daily_basic(self, ts_code, start_date=None, end_date=None):
         """
@@ -426,7 +472,7 @@ class EnhancedCacheManager:
             df = self.conn.execute(query, params).fetchdf()
             return df
         except Exception as e:
-            print(f"⚠️ 查询daily_basic数据失败: {e}")
+            logger.warning(f"查询daily_basic数据失败: {e}")
             return pd.DataFrame()
     
     # ==================== 筹码分布缓存方法 ====================
@@ -467,7 +513,7 @@ class EnhancedCacheManager:
             """)
             self.conn.commit()
         except Exception as e:
-            print(f"⚠️ 缓存筹码分布失败: {e}")
+            logger.warning(f"缓存筹码分布失败: {e}")
     
     def batch_cache_chips(self, records):
         """
@@ -488,7 +534,7 @@ class EnhancedCacheManager:
             """)
             self.conn.commit()
         except Exception as e:
-            print(f"⚠️ 批量缓存筹码分布失败: {e}")
+            logger.warning(f"批量缓存筹码分布失败: {e}")
     
     def get_chip_distribution(self, ts_code, start_date=None, end_date=None):
         """
@@ -510,7 +556,7 @@ class EnhancedCacheManager:
             df = self.conn.execute(query, params).fetchdf()
             return df
         except Exception as e:
-            print(f"⚠️ 查询筹码分布数据失败: {e}")
+            logger.warning(f"查询筹码分布数据失败: {e}")
             return pd.DataFrame()
     
     def get_latest_chip_distribution(self, ts_code):
@@ -530,8 +576,140 @@ class EnhancedCacheManager:
             df = self.conn.execute(query, [ts_code, ts_code]).fetchdf()
             return df
         except Exception as e:
-            print(f"⚠️ 查询最新筹码分布数据失败: {e}")
+            logger.warning(f"查询最新筹码分布数据失败: {e}")
             return pd.DataFrame()
     
+
+    # ==================== 资金流向缓存方法 ====================
+
+    def cache_moneyflow_data(self, df):
+        """
+        缓存资金流向数据到DuckDB
+        """
+        if df.empty:
+            return
+
+        try:
+            self.conn.register('temp_mf', df)
+            self.conn.execute("""
+                INSERT OR REPLACE INTO moneyflow_cache
+                (ts_code, trade_date, buy_lg_vol, buy_lg_amount, sell_lg_vol, sell_lg_amount, net_lg_amount, cached_at)
+                SELECT ts_code, trade_date, buy_lg_vol, buy_lg_amount, sell_lg_vol, sell_lg_amount, net_lg_amount, CURRENT_TIMESTAMP
+                FROM temp_mf
+            """)
+            self.conn.commit()
+            self._update_metadata('last_moneyflow_cache_time', datetime.now().isoformat())
+        except Exception as e:
+            logger.warning(f"缓存资金流向数据失败: {e}")
+
+    def get_cached_moneyflow(self, ts_code=None, trade_date=None, start_date=None, end_date=None):
+        """
+        获取缓存的资金流向数据
+
+        Args:
+            ts_code: 股票代码（可选）
+            trade_date: 指定日期（可选）
+            start_date: 开始日期（可选）
+            end_date: 结束日期（可选）
+
+        Returns:
+            DataFrame
+        """
+        query = "SELECT * FROM moneyflow_cache WHERE 1=1"
+        params = []
+
+        if ts_code:
+            query += " AND ts_code = ?"
+            params.append(ts_code)
+        if trade_date:
+            query += " AND trade_date = ?"
+            params.append(trade_date)
+        if start_date:
+            query += " AND trade_date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND trade_date <= ?"
+            params.append(end_date)
+
+        query += " ORDER BY trade_date, ts_code"
+
+        try:
+            df = self.conn.execute(query, params).fetchdf()
+            return df
+        except Exception as e:
+            logger.warning(f"查询资金流向数据失败: {e}")
+            return pd.DataFrame()
+
+    # ==================== 赢率缓存方法（Phase 4） ====================
+
+    def cache_win_rates(self, df):
+        """缓存赢率数据到 DuckDB"""
+        if df.empty:
+            return
+        try:
+            self.conn.register('temp_wr', df)
+            self.conn.execute("""
+                INSERT OR REPLACE INTO win_rate_cache
+                (signal_type, samples, win_rate_5d, win_rate_10d, win_rate_20d,
+                 avg_return_5d, avg_return_20d, sharpe_5d, sharpe_20d, evaluated_at)
+                SELECT signal_type, samples, win_rate_5d, win_rate_10d, win_rate_20d,
+                       avg_return_5d, avg_return_20d, sharpe_5d, sharpe_20d, evaluated_at
+                FROM temp_wr
+            """)
+            self.conn.commit()
+        except Exception as e:
+            logger.warning(f"缓存赢率数据失败: {e}")
+
+    def get_cached_win_rates(self) -> list:
+        """获取所有缓存的赢率数据"""
+        try:
+            df = self.conn.execute("SELECT * FROM win_rate_cache ORDER BY signal_type").fetchdf()
+            return df.to_dict('records') if not df.empty else []
+        except Exception as e:
+            logger.warning(f"查询赢率数据失败: {e}")
+            return []
+
+    def get_cached_win_rate(self, signal_type: str) -> dict:
+        """获取指定信号类型的赢率数据"""
+        try:
+            df = self.conn.execute('SELECT * FROM win_rate_cache WHERE signal_type = ?', [signal_type]
+            ).fetchdf()
+            return df.to_dict('records')[0] if not df.empty else {}
+        except Exception as e:
+            logger.warning(f"查询赢率数据失败: {e}")
+            return {}
+
+    def cache_conditional_win_rates(self, df):
+        """缓存条件概率数据到 DuckDB"""
+        if df.empty:
+            return
+        try:
+            self.conn.register('temp_cwr', df)
+            self.conn.execute("""
+                INSERT OR REPLACE INTO conditional_win_rate_cache
+                (signal_type, total_samples, with_div_samples, with_div_win_rate,
+                 without_div_samples, without_div_win_rate,
+                 market_good_samples, market_good_win_rate,
+                 market_poor_samples, market_poor_win_rate, evaluated_at)
+                SELECT signal_type, total_samples, with_div_samples, with_div_win_rate,
+                       without_div_samples, without_div_win_rate,
+                       market_good_samples, market_good_win_rate,
+                       market_poor_samples, market_poor_win_rate, CURRENT_TIMESTAMP
+                FROM temp_cwr
+            """)
+            self.conn.commit()
+        except Exception as e:
+            logger.warning(f"缓存条件概率数据失败: {e}")
+
+    def get_cached_conditional_win_rates(self) -> list:
+        """获取所有缓存的条件下概率数据"""
+        try:
+            df = self.conn.execute('SELECT * FROM conditional_win_rate_cache ORDER BY signal_type'
+            ).fetchdf()
+            return df.to_dict('records') if not df.empty else []
+        except Exception as e:
+            logger.warning(f"查询条件下概率数据失败: {e}")
+            return []
+
     def __del__(self):
         self.close()

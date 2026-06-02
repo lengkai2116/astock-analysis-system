@@ -104,7 +104,7 @@ class MultiLayerStockScreener:
         """
         logger.info(f"开始第一层筛选: 风险过滤...")
         layer1_results = self.layer1.filter(all_stocks, stock_data)
-        print(f"第一层通过: {len(layer1_results)} 只股票")
+        logger.info(f"第一层通过: {len(layer1_results)} 只股票")
         
         logger.info(f"开始第二层筛选: 主力资金识别...")
         layer2_results = []
@@ -122,16 +122,16 @@ class MultiLayerStockScreener:
                     })
             
             except Exception as e:
-                print(f"处理股票 {symbol} 时出错: {e}")
+                logger.error(f"处理股票 {symbol} 时出错: {e}")
         
         # 按评分排序
         layer2_results.sort(key=lambda x: x['score'], reverse=True)
         layer2_results = layer2_results[:100]  # 取前100只
-        print(f"第二层通过: {len(layer2_results)} 只股票")
+        logger.info(f"第二层通过: {len(layer2_results)} 只股票")
         
         logger.info(f"开始第三层筛选: 多策略验证...")
         layer3_results = self._apply_strategy_validation(layer2_results, stock_data)
-        print(f"第三层通过: {len(layer3_results)} 只股票")
+        logger.info(f"第三层通过: {len(layer3_results)} 只股票")
         
         return layer3_results
     

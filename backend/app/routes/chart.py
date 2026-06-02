@@ -3,6 +3,7 @@
 为前端 K线图表提供统一格式的数据
 """
 import logging
+from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, request, jsonify
 from app import db
 from app.indicators import TechnicalIndicatorEngine
@@ -84,8 +85,7 @@ def _get_kline_data(data_manager, ts_code, limit=200, period='D'):
                 pass
     
     return kline_data, None
-
-
+@handle_exceptions
 @chart_bp.route('/kline/<ts_code>', methods=['GET'])
 def get_kline_chart_data(ts_code):
     """
@@ -333,8 +333,7 @@ def get_kline_chart_data(ts_code):
             'success': False,
             'message': str(e)
         }), 500
-
-
+@handle_exceptions
 @chart_bp.route('/signals/<ts_code>', methods=['GET'])
 def get_chart_signals(ts_code):
     """
@@ -399,8 +398,7 @@ def get_chart_signals(ts_code):
             'success': False,
             'message': str(e)
         }), 500
-
-
+@handle_exceptions
 @chart_bp.route('/indicators', methods=['GET'])
 def get_indicator_list():
     """
@@ -426,8 +424,7 @@ def get_indicator_list():
         'success': True,
         'data': result
     })
-
-
+@handle_exceptions
 @chart_bp.route('/stock-list', methods=['GET'])
 def get_stock_list():
     """

@@ -135,13 +135,13 @@ class DataManager:
                 try:
                     start = datetime.strptime(start_date, '%Y-%m-%d').date()
                     query = query.filter(DailyData.trade_date >= start)
-                except:
+                except (ValueError, TypeError):
                     pass
             if end_date:
                 try:
                     end = datetime.strptime(end_date, '%Y-%m-%d').date()
                     query = query.filter(DailyData.trade_date <= end)
-                except:
+                except (ValueError, TypeError):
                     pass
             
             daily_data = query.order_by(DailyData.trade_date).all()
@@ -433,3 +433,40 @@ class DataManager:
             trade_date = datetime.now().strftime('%Y%m%d')
         
         return self.sync_daily_basic_data(trade_date=trade_date)
+
+
+    def sync_moneyflow_data(self, trade_date=None):
+        """同步资金流向数据"""
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y%m%d')
+        data = self.tushare.get_moneyflow(trade_date=trade_date)
+        if not data:
+            return 0
+        df_data = []
+        for item in data:
+            trade_date_str = item.get('trade_date')
+            if not trade_date_str:
+                continue
+            buy_lg = item.get('buy_lg_amount', 0) or 0
+            sell_lg = item.get('sell_lg_amount', 0) or 0
+            df_data.append({
+                'ts_code': item['ts_code'],
+                'trade_date': datetime.strptime(trade_date_str, '%Y%m%d').date(),
+                'buy_lg_vol': item.get('buy_lg_vol'),
+                'buy_lg_amount': buy_lg,
+                'sell_lg_vol': item.get('sell_lg_vol'),
+                'sell_lg_amount': sell_lg,
+                'net_lg_amount': round(float(buy_lg) - float(sell_lg), 2)
+            })
+        if df_data:
+            df = pd.DataFrame(df_data)
+            self.cache.cache_moneyflow_data(df)
+            return len(df)
+        return 0
+
+    def get_cached_moneyflow(self, ts_code=None, trade_date=None, start_date=None, end_date=None):
+        """从缓存获取资金流向数据"""
+        return self.cache.get_cached_moneyflow(
+            ts_code=ts_code, trade_date=trade_date,
+            start_date=start_date, end_date=end_date
+        )

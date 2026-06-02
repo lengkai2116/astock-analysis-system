@@ -493,7 +493,7 @@ def output_schema():
 
 
 def init_system_templates():
-    print("开始初始化系统预设策略模板...")
+    logger.info("开始初始化系统预设策略模板...")
     
     created_count = 0
     skipped_count = 0
@@ -505,7 +505,7 @@ def init_system_templates():
         ).first()
         
         if existing:
-            print(f"跳过已存在的模板: {template_data['name']}")
+            logger.info(f"跳过已存在的模板: {template_data['name']}")
             skipped_count += 1
             continue
         
@@ -523,14 +523,14 @@ def init_system_templates():
                 template.parameters = template_data['parameters']
                 db.session.commit()
             
-            print(f"成功创建模板: {template_data['name']}")
+            logger.info(f"成功创建模板: {template_data['name']}")
             created_count += 1
             
         except Exception as e:
-            print(f"创建模板失败 {template_data['name']}: {str(e)}")
+            logger.error(f"创建模板失败 {template_data['name']}: {str(e)}")
             db.session.rollback()
     
-    print(f"\\n初始化完成: 成功创建 {created_count} 个模板, 跳过 {skipped_count} 个已存在的模板")
+    logger.info(f"初始化完成: 成功创建 {created_count} 个模板, 跳过 {skipped_count} 个已存在的模板")
     return created_count, skipped_count
 
 
@@ -540,4 +540,4 @@ if __name__ == '__main__':
     
     with app.app_context():
         created, skipped = init_system_templates()
-        print(f"\\n总计: 创建 {created}, 跳过 {skipped}")
+        logger.info(f"总计: 创建 {created}, 跳过 {skipped}")

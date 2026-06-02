@@ -130,6 +130,193 @@ def get_latest_signal():
     })
 
 
+
+
+@strategy_bp.route('/match-check', methods=['POST'])
+@handle_exceptions
+def signal_match_check():
+    """
+    信号匹配度检查 — 账户管理系统复盘专用
+
+    输入：用户交易记录列表
+    POST body:
+    {
+        "trades": [
+            {"ts_code": "600519.SH", "trade_date": "2026-05-20", "action": "BUY"},
+            {"ts_code": "000001.SZ", "trade_date": "2026-05-22", "action": "SELL"}
+        ]
+    }
+
+    输出：每笔交易的信号匹配度
+    {
+        "summary": {"total_trades": 2, "matched": 1, "match_rate": 0.5},
+        "details": [
+            {"ts_code": "600519.SH", "trade_date": "2026-05-20", "action": "BUY",
+             "strategy_signal": "BULLISH", "confidence": 0.72, "matched": true,
+             "reason": "买入操作与策略信号一致"},
+            ...
+        ]
+    }
+    """
+    data = request.get_json()
+    if not data or 'trades' not in data:
+        return jsonify({'success': False, 'message': '缺少trades参数'}), 400
+
+    trades = data['trades']
+    if not isinstance(trades, list) or len(trades) == 0:
+        return jsonify({'success': False, 'message': 'trades必须为非空列表'}), 400
+
+    details = []
+    matched_count = 0
+
+    for trade in trades:
+        ts_code = trade.get('ts_code', '')
+        trade_date_str = trade.get('trade_date', '')
+        action = trade.get('action', '').upper()
+
+        if not ts_code or not trade_date_str or action not in ('BUY', 'SELL'):
+            details.append({
+                'ts_code': ts_code,
+                'trade_date': trade_date_str,
+                'action': action,
+                'strategy_signal': None,
+                'matched': False,
+                'reason': '参数不完整或无效'
+            })
+            continue
+
+        try:
+            trade_date = datetime.strptime(trade_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            details.append({
+                'ts_code': ts_code,
+                'trade_date': trade_date_str,
+                'action': action,
+                'strategy_signal': None,
+                'matched': False,
+                'reason': '日期格式错误(需YYYY-MM-DD)'
+            })
+            continue
+
+        # 查询当日策略信号（精确匹配 trade_date）
+        # 先查数据库
+        outputs = StrategyOutputService.get_strategy_outputs(
+            ts_code=ts_code,
+            start_date=trade_date,
+            end_date=trade_date,
+            limit=5
+        )
+
+        # 如果数据库无缓存，尝试实时计算
+        if not outputs:
+            computer = get_signal_computer()
+            computed = computer.compute_for_stock(ts_code, limit=3)
+            if computed:
+                # 实时计算结果按日期匹配
+                signals_for_date = []
+                for s in computed:
+                    sd = s.get('signal_date', '')
+                    if sd == trade_date_str:
+                        signals_for_date.append(s)
+
+                # 判断信号是否匹配
+                match_result = _process_trade_with_signals(
+                    ts_code, trade_date_str, action,
+                    signals_for_date, details
+                )
+                if match_result:
+                    matched_count += 1
+                continue
+            else:
+                details.append({
+                    'ts_code': ts_code,
+                    'trade_date': trade_date_str,
+                    'action': action,
+                    'strategy_signal': None,
+                    'matched': False,
+                    'reason': '无可用策略信号（数据库与实时计算均为空）'
+                })
+                continue
+
+        # 数据库有结果
+        signals_for_date = [o.to_dict() for o in outputs]
+        match_result = _process_trade_with_signals(
+            ts_code, trade_date_str, action,
+            signals_for_date, details
+        )
+        if match_result:
+            matched_count += 1
+
+    total = len(trades)
+    return jsonify({
+        'success': True,
+        'data': {
+            'summary': {
+                'total_trades': total,
+                'matched': matched_count,
+                'match_rate': round(matched_count / total, 4) if total > 0 else 0,
+            },
+            'details': details
+        }
+    })
+
+
+def _process_trade_with_signals(ts_code, trade_date_str, action,
+                                  signals, details) -> bool:
+    """处理单笔交易的信号匹配判断，返回是否匹配"""
+    if not signals:
+        details.append({
+            'ts_code': ts_code,
+            'trade_date': trade_date_str,
+            'action': action,
+            'strategy_signal': None,
+            'matched': False,
+            'reason': '当日无策略信号'
+        })
+        return False
+
+    # 取最高置信度的信号
+    best_signal = max(signals, key=lambda x: x.get('confidence', 0) or 0)
+    sig_val = best_signal.get('signal', 'NEUTRAL')
+    confidence = best_signal.get('confidence', 0)
+    sig_name = best_signal.get('strategy_name', '未知策略')
+
+    # 匹配规则：
+    # 买入(BUY) 应与 BULLISH/WATCH 匹配
+    # 卖出(SELL) 应与 BEARISH 匹配
+    buy_signals = ('BULLISH', 'WATCH')
+    sell_signals = ('BEARISH',)
+
+    # 取最高置信度的信号
+    best_signal = max(signals, key=lambda x: x.get('confidence', 0) or 0)
+    sig_val = best_signal.get('signal', 'NEUTRAL')
+    confidence = best_signal.get('confidence', 0)
+    sig_name = best_signal.get('strategy_name', '未知策略')
+
+    buy_signals = ('BULLISH', 'WATCH')
+    sell_signals = ('BEARISH',)
+
+    if action == 'BUY' and sig_val in buy_signals:
+        matched = True
+        reason = f"买入操作与{sig_name}信号一致({sig_val}, conf={confidence})"
+    elif action == 'SELL' and sig_val in sell_signals:
+        matched = True
+        reason = f"卖出操作与{sig_name}信号一致({sig_val}, conf={confidence})"
+    else:
+        matched = False
+        reason = f"操作{action}与策略信号{sig_val}不一致({sig_name})"
+
+    details.append({
+        'ts_code': ts_code,
+        'trade_date': trade_date_str,
+        'action': action,
+        'strategy_signal': sig_val,
+        'confidence': confidence,
+        'strategy_name': sig_name,
+        'matched': matched,
+        'reason': reason,
+    })
+    return matched
 # ── 策略模板 API（保持不变）──
 
 @strategy_bp.route('/templates', methods=['GET'])

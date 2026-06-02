@@ -1,3 +1,6 @@
+import logging
+
+logger = logging.getLogger(__name__)
 """
 QMT行情API路由
 提供实时行情数据接口
@@ -107,4 +110,4 @@ def subscribe():
 
 def _default_callback(datas):
     """默认回调函数"""
-    print(f"收到行情数据: {len(datas)} 只股票")
+    logger.info(f"收到行情数据: {len(datas)} 只股票")

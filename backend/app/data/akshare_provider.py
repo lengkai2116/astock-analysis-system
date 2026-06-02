@@ -11,7 +11,10 @@ def _get_ak():
     return _ak
 import pandas as pd
 from datetime import datetime
+import logging
 from typing import List, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class AkShareRealtimeProvider:
@@ -64,7 +67,7 @@ class AkShareRealtimeProvider:
                 'timestamp': datetime.now().isoformat()
             }
         except Exception as e:
-            print(f"❌ 获取 {ts_code} 实时数据失败: {e}")
+            logger.error(f"获取 {ts_code} 实时数据失败: {e}")
             return None
     
     def get_realtime_quotes(self, ts_codes: List[str]) -> List[Dict]:
@@ -118,7 +121,7 @@ class AkShareRealtimeProvider:
                 'timestamp': datetime.now().isoformat()
             }
         except Exception as e:
-            print(f"❌ 获取指数 {ts_code} 实时数据失败: {e}")
+            logger.error(f"获取指数 {ts_code} 实时数据失败: {e}")
             return None
     
     def _get_stock_name(self, ts_code: str) -> str:
@@ -153,32 +156,32 @@ class AkShareRealtimeProvider:
 if __name__ == '__main__':
     provider = AkShareRealtimeProvider()
     
-    print('=== 测试AkShare实时数据 ===\\n')
+    logger.info('=== 测试AkShare实时数据 ===')
     
     # 测试单只股票
-    print('1. 测试贵州茅台:')
+    logger.info('1. 测试贵州茅台:')
     data = provider.get_realtime_quote('600519.SH')
     if data:
-        print(f'   ✅ 成功')
-        print(f'   最新价: {data["price"]}')
-        print(f'   涨跌幅: {data["change_pct"]}%')
-        print(f'   成交额: {data["amount"]/1e6:.2f}百万')
+        logger.info(f'   成功')
+        logger.info(f'   最新价: {data["price"]}')
+        logger.info(f'   涨跌幅: {data["change_pct"]}%')
+        logger.info(f'   成交额: {data["amount"]/1e6:.2f}百万')
     else:
-        print('   ❌ 失败')
+        logger.error('   失败')
     
     # 测试多只股票
-    print('\\n2. 测试多只股票:')
+    logger.info('2. 测试多只股票:')
     stocks = ['600519.SH', '000001.SZ', '000002.SZ', '601318.SH']
     results = provider.get_realtime_quotes(stocks)
     for r in results:
-        print(f'   {r["name"]}({r["ts_code"]}): {r["price"]} ({r["change_pct"]:+.2f}%)')
+        logger.info(f'   {r["name"]}({r["ts_code"]}): {r["price"]} ({r["change_pct"]:+.2f}%)')
     
     # 测试指数
-    print('\\n3. 测试指数:')
+    logger.info('3. 测试指数:')
     indices = ['000001.SH', '399001.SZ', '399006.SZ']
     for idx in indices:
         data = provider.get_index_realtime(idx)
         if data:
-            print(f'   {data["name"]}: {data["value"]} ({data["change_pct"]:+.2f}%)')
+            logger.info(f'   {data["name"]}: {data["value"]} ({data["change_pct"]:+.2f}%)')
     
-    print('\\n=== 测试完成 ===')
+    logger.info('=== 测试完成 ===')

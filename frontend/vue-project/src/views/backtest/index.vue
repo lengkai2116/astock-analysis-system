@@ -301,7 +301,7 @@ export default {
     }
   },
 
-  beforeDestroy() {
+  beforeUnmount() {
     if (this.chart) {
       this.chart.dispose()
     }

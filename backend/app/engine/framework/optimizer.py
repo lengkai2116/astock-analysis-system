@@ -66,7 +66,7 @@ class GridSearchOptimizer(ParameterOptimizer):
     
     def optimize(self, objective_func: Callable, max_iterations: Optional[int] = None) -> Dict:
         """执行网格搜索"""
-        print(f"网格搜索: {len(self.param_combinations)} 组参数组合")
+        logger.info(f"网格搜索: {len(self.param_combinations)} 组参数组合")
         
         max_iter = max_iterations or len(self.param_combinations)
         
@@ -119,7 +119,7 @@ class RandomSearchOptimizer(ParameterOptimizer):
     
     def optimize(self, objective_func: Callable, max_iterations: int = 100) -> Dict:
         """执行随机搜索"""
-        print(f"随机搜索: {max_iterations} 次迭代")
+        logger.info(f"随机搜索: {max_iterations} 次迭代")
         
         for i in range(max_iterations):
             params = self._random_sample()
@@ -168,7 +168,7 @@ class ParameterSensitivityAnalysis:
             敏感性分析结果
         """
         if not self.optimizer.all_results:
-            print("请先运行优化")
+            logger.warning("请先运行优化")
             return {}
         
         results = self.optimizer.all_results

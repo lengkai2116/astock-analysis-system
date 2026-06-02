@@ -1,3 +1,4 @@
+import logging
 """
 筹码分布策略 - 模块化实现
 参考 Algorithm Framework 的设计
@@ -6,6 +7,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import pandas as pd
 import numpy as np
+import logging
 
 from . import (
     UniverseSelectionModel,
@@ -59,7 +61,7 @@ class ChipUniverseSelectionModel(UniverseSelectionModel):
                     results.append((symbol, score))
             
             except Exception as e:
-                print(f"筛选股票 {symbol} 时出错: {e}")
+                logger.error(f"筛选股票 {symbol} 时出错: {e}")
         
         # 按分数排序，返回前N只
         results.sort(key=lambda x: x[1], reverse=True)
@@ -139,7 +141,7 @@ class ChipAlphaModel(AlphaModel):
                         )
                     )
             except Exception as e:
-                print(f"处理 {symbol} 时失败: {e}")
+                logger.error(f"处理 {symbol} 时失败: {e}")
         
         return insights
 
@@ -249,7 +251,7 @@ class ChipScorer:
             return score
         
         except Exception as e:
-            print(f"计算评分失败: {e}")
+            logger.error(f"计算评分失败: {e}")
             return 0.0
     
     def _calculate_simple_score(self, data: pd.DataFrame) -> float:

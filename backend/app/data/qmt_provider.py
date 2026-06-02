@@ -6,11 +6,14 @@ import threading
 from typing import List, Dict, Optional, Callable
 from datetime import datetime
 
+import logging
+
 try:
     from xtquant import xtdata
     QMT_AVAILABLE = True
 except ImportError:
     QMT_AVAILABLE = False
+    xtdata = None
 
 
 class QmtDataProvider:
@@ -26,16 +29,16 @@ class QmtDataProvider:
     def connect(self) -> bool:
         """连接到miniQMT"""
         if not QMT_AVAILABLE:
-            print("❌ xtquant库未安装")
+            logger.error("xtquant库未安装")
             return False
             
         try:
             xtdata.connect()
             self._qmt_connected = True
-            print("✅ 成功连接到miniQMT")
+            logger.info("成功连接到miniQMT")
             return True
         except Exception as e:
-            print(f"❌ 连接miniQMT失败: {e}")
+            logger.error(f"连接miniQMT失败: {e}")
             return False
     
     def disconnect(self):
@@ -48,12 +51,12 @@ class QmtDataProvider:
             self.unsubscribe(seq)
         
         self._qmt_connected = False
-        print("✅ 已断开miniQMT连接")
+        logger.info("已断开miniQMT连接")
     
     def subscribe_tick(self, stock_codes: List[str], callback: Callable) -> int:
         """订阅Tick数据"""
         if not self._qmt_connected:
-            print("❌ 请先连接miniQMT")
+            logger.error("请先连接miniQMT")
             return -1
         
         try:
@@ -63,17 +66,17 @@ class QmtDataProvider:
             )
             if seq > 0:
                 self._seq_map[seq] = {'type': 'tick', 'codes': stock_codes, 'callback': callback}
-                print(f"✅ 成功订阅Tick数据，订阅号: {seq}")
+                logger.info(f"成功订阅Tick数据，订阅号: {seq}")
             return seq
         except Exception as e:
-            print(f"❌ 订阅失败: {e}")
+            logger.error(f"订阅失败: {e}")
             return -1
     
     def subscribe_kline(self, stock_codes: List[str], period: str = '1m', 
                        callback: Optional[Callable] = None) -> Dict[str, int]:
         """订阅K线数据"""
         if not self._qmt_connected:
-            print("❌ 请先连接miniQMT")
+            logger.error("请先连接miniQMT")
             return {}
         
         results = {}
@@ -88,9 +91,9 @@ class QmtDataProvider:
                 if seq > 0:
                     results[code] = seq
                     self._seq_map[seq] = {'type': 'kline', 'code': code, 'period': period}
-                    print(f"✅ 成功订阅 {code} {period} K线，订阅号: {seq}")
+                    logger.info(f"成功订阅 {code} {period} K线，订阅号: {seq}")
             except Exception as e:
-                print(f"❌ 订阅 {code} 失败: {e}")
+                logger.error(f"订阅 {code} 失败: {e}")
                 results[code] = -1
         
         return results
@@ -101,9 +104,9 @@ class QmtDataProvider:
             xtdata.unsubscribe_quote(seq)
             if seq in self._seq_map:
                 del self._seq_map[seq]
-            print(f"✅ 已取消订阅，订阅号: {seq}")
+            logger.info(f"已取消订阅，订阅号: {seq}")
         except Exception as e:
-            print(f"❌ 取消订阅失败: {e}")
+            logger.error(f"取消订阅失败: {e}")
     
     def get_tick(self, stock_codes: List[str]) -> Dict:
         """获取最新Tick数据"""
@@ -114,7 +117,7 @@ class QmtDataProvider:
             data = xtdata.get_full_tick(stock_codes)
             return data
         except Exception as e:
-            print(f"❌ 获取Tick数据失败: {e}")
+            logger.error(f"获取Tick数据失败: {e}")
             return {}
     
     def get_kline(self, stock_code: str, period: str = '1d', 
@@ -133,7 +136,7 @@ class QmtDataProvider:
             )
             return data
         except Exception as e:
-            print(f"❌ 获取K线数据失败: {e}")
+            logger.error(f"获取K线数据失败: {e}")
             return None
     
     def get_market_snapshot(self, stock_codes: List[str]) -> List[Dict]:
@@ -164,13 +167,13 @@ class QmtDataProvider:
             
             return results
         except Exception as e:
-            print(f"❌ 获取市场快照失败: {e}")
+            logger.error(f"获取市场快照失败: {e}")
             return []
     
     def run(self, background: bool = True):
         """启动行情接收循环"""
         if not self._qmt_connected:
-            print("❌ 请先连接miniQMT")
+            logger.error("请先连接miniQMT")
             return
         
         self._running = True
@@ -178,7 +181,7 @@ class QmtDataProvider:
         if background:
             self._thread = threading.Thread(target=self._run_loop, daemon=True)
             self._thread.start()
-            print("✅ 行情接收线程已启动")
+            logger.info("行情接收线程已启动")
         else:
             self._run_loop()
     
@@ -187,7 +190,7 @@ class QmtDataProvider:
         try:
             xtdata.run()
         except Exception as e:
-            print(f"❌ 行情循环异常: {e}")
+            logger.error(f"行情循环异常: {e}")
         finally:
             self._running = False
 
@@ -198,11 +201,11 @@ if __name__ == '__main__':
     if provider.connect():
         snapshot = provider.get_market_snapshot(['600519.SH', '000001.SZ'])
         for stock in snapshot:
-            print(f"{stock['ts_code']}: {stock['price']}")
+            logger.debug(f"{stock['ts_code']}: {stock['price']}")
         
         def on_tick(datas):
             for code, data in datas.items():
-                print(f"[{datetime.now()}] {code}: {data.get('lastPrice')}")
+                logger.debug(f"[{datetime.now()}] {code}: {data.get('lastPrice')}")
         
         seq = provider.subscribe_tick(['600519.SH', '000001.SZ'], on_tick)
         

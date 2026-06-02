@@ -73,7 +73,7 @@ export default {
       this._resizeObserver.observe(this.$refs.chartRef.parentElement)
     }
   },
-  beforeDestroy() {
+  beforeUnmount() {
     if (this._resizeObserver) this._resizeObserver.disconnect()
     if (this.chart) { dispose(this.chart); this.chart = null }
   },

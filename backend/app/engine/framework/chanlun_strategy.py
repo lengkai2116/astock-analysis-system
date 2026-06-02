@@ -1298,7 +1298,7 @@ class ChanlunAlphaModel(AlphaModel):
                 ))
                 
             except Exception as e:
-                print(f"缠论分析{symbol}失败: {e}")
+                logger.error(f"缠论分析{symbol}失败: {e}")
         
         return insights
 
@@ -1429,7 +1429,7 @@ class StrategyValidationLayer:
                 signals = model.generate_insights(relevant_data)
                 all_signals[model_name] = signals
             except Exception as e:
-                print(f"策略{model_name}执行失败: {e}")
+                logger.error(f"策略{model_name}执行失败: {e}")
         
         fusion_result = self.signal_fusion.fuse(all_signals)
         

@@ -14,8 +14,8 @@
       <div class="signal-content">
         <div class="confidence-section">
           <div class="section-label">
-            <i class="anticon anticon-safety-certificate"></i>
-            置信度
+            <SafetyCertificateFilled />
+            赢率
           </div>
           <div class="confidence-bar">
             <a-progress
@@ -23,9 +23,21 @@
               :status="confidenceStatus"
               :strokeColor="confidenceColor"
               :show-info="false"
+              :style="{ cursor: 'pointer' }"
+              @click="handleShowDetail"
             />
-            <span class="confidence-value">{{ confidenceText }}</span>
+            <span
+              class="confidence-value clickable"
+              @click="handleShowDetail"
+              title="点击查看详情"
+            >
+              {{ confidenceText }}
+            </span>
           </div>
+        </div>
+
+        <div class="detail-link-row">
+          <a class="detail-link" @click="handleShowDetail">查看详情 →</a>
         </div>
 
         <div class="price-section">
@@ -112,7 +124,10 @@
 
         <div class="action-section">
           <a-button type="primary" size="small" @click="handleViewDetail">
-            查看详情
+            完整报告
+          </a-button>
+          <a-button size="small" @click="handleShowDetail">
+            赢率详情
           </a-button>
           <a-button size="small" @click="handleBacktest">
             策略回测
@@ -124,15 +139,20 @@
 </template>
 
 <script>
-import { CheckCircleFilled } from '@ant-design/icons-vue'
+import { CheckCircleFilled, SafetyCertificateFilled } from '@ant-design/icons-vue'
 export default {
   name: 'StrategySignalPanel',
+  components: {
+    CheckCircleFilled,
+    SafetyCertificateFilled
+  },
   props: {
     signalData: {
       type: Object,
       required: true,
       default: () => ({
         ts_code: '',
+        stock_name: '',
         strategy_name: '',
         signal: 'neutral',
         signal_date: '',
@@ -145,13 +165,17 @@ export default {
         evidence: [],
         risk_notes: []
       })
+    },
+    stockName: {
+      type: String,
+      default: ''
     }
   },
   computed: {
     strategyName() {
       return this.signalData.strategy_name || '策略信号'
     },
-    
+
     signalText() {
       const signalMap = {
         bullish: '买入信号',
@@ -161,31 +185,31 @@ export default {
       }
       return signalMap[this.signalData.signal] || '未知'
     },
-    
+
     signalClass() {
       return `signal-${this.signalData.signal}`
     },
-    
+
     confidencePercent() {
       return Math.round((this.signalData.confidence || 0) * 100)
     },
-    
+
     confidenceText() {
       return `${this.confidencePercent}%`
     },
-    
+
     confidenceStatus() {
       if (this.confidencePercent >= 70) return 'success'
       if (this.confidencePercent >= 40) return 'normal'
       return 'exception'
     },
-    
+
     confidenceColor() {
       if (this.confidencePercent >= 70) return '#52c41a'
       if (this.confidencePercent >= 40) return '#1890ff'
       return '#ff4d4f'
     },
-    
+
     positionColor() {
       const pos = this.signalData.position_suggestion
       if (!pos) return 'default'
@@ -198,23 +222,40 @@ export default {
   methods: {
     formatDate(date) {
       if (!date) return ''
-      return date
+      if (typeof date === 'string') return date
+      try {
+        return date instanceof Date ? date.toLocaleDateString('zh-CN') : String(date)
+      } catch {
+        return String(date)
+      }
     },
-    
+
     formatPrice(price) {
-      if (!price) return '未提供'
+      if (price === null || price === undefined) return '未提供'
       if (Array.isArray(price)) {
-        return `${price[0]} ~ ${price[1]}`
+        const valid = price.filter(p => p != null)
+        if (valid.length >= 2) return `${valid[0]} ~ ${valid[1]}`
+        if (valid.length === 1) return String(valid[0])
+        return '未提供'
       }
       return String(price)
     },
-    
+
     handleViewDetail() {
       this.$emit('view-detail', this.signalData)
     },
-    
+
     handleBacktest() {
       this.$emit('backtest', this.signalData)
+    },
+
+    handleShowDetail() {
+      const name = this.stockName || this.signalData.stock_name || ''
+      this.$emit('show-detail', {
+        ts_code: this.signalData.ts_code,
+        stock_name: name,
+        signals: [this.signalData]
+      })
     }
   }
 }
@@ -287,7 +328,7 @@ export default {
 }
 
 .confidence-section {
-  margin-bottom: 20px;
+  margin-bottom: 8px;
 }
 
 .confidence-bar {
@@ -306,6 +347,34 @@ export default {
   color: var(--text-primary, #f1f5f9);
   min-width: 50px;
   text-align: right;
+}
+
+.confidence-value.clickable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.confidence-value.clickable:hover {
+  color: #1890ff;
+}
+
+.detail-link-row {
+  text-align: right;
+  margin-bottom: 16px;
+}
+
+.detail-link {
+  font-size: 13px;
+  color: #1890ff;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.detail-link:hover {
+  color: #40a9ff;
+  text-decoration: underline;
 }
 
 .price-section {

@@ -95,7 +95,8 @@
         <StrategySignalPanel
           v-for="signal in latestSignals"
           :key="signal.id"
-          :strategyOutput="signal"
+          :signalData="signal"
+          @show-detail="handleSignalDetail"
         />
       </div>
     </div>
@@ -258,6 +259,13 @@
         </div>
       </div>
     </div>
+    <SignalDetailModal
+      :visible="signalDetailVisible"
+      :ts-code="signalDetailData.ts_code"
+      :stock-name="signalDetailData.stock_name"
+      :signals="signalDetailData.signals"
+      @update:visible="signalDetailVisible = $event"
+    />
   </div>
 </template>
 
@@ -269,6 +277,7 @@ import StrategySignalPanel from '@/components/StrategySignalPanel.vue'
 export default {
   name: 'DashboardPage',
   components: {
+    SignalDetailModal,
     StrategySignalPanel
   },
   data() {
@@ -302,6 +311,12 @@ export default {
         { id: 5, time: 'Yesterday', type: 'signal', description: '布林带策略发出卖出信号 - 美的集团' }
       ],
       latestSignals: [],
+      signalDetailVisible: false,
+      signalDetailData: {
+        ts_code: '',
+        stock_name: '',
+        signals: []
+      },
       flowChart: null
     }
   },
@@ -329,7 +344,7 @@ export default {
     this.loadLatestSignals()
   },
 
-  beforeDestroy() {
+  beforeUnmount() {
     if (this.flowChart) {
       this.flowChart.dispose()
     }
@@ -502,6 +517,15 @@ export default {
       if (index === 1) return 'silver'
       if (index === 2) return 'bronze'
       return ''
+    },
+
+    handleSignalDetail(data) {
+      this.signalDetailData = {
+        ts_code: data.ts_code || '',
+        stock_name: data.stock_name || '',
+        signals: data.signals || []
+      }
+      this.signalDetailVisible = true
     },
 
     getActivityColor(type) {

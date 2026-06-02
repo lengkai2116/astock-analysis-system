@@ -24,7 +24,7 @@ from app.services.benchmark_service import (
 from app.data.tushare_provider import TushareProvider
 from app.utils.error_handlers import handle_exceptions
 
-backtest_bp = Blueprint('backtest', __name__, url_prefix='/api/backtest')
+backtest_bp = Blueprint('backtest', __name__, url_prefix='/api/v3/backtest')
 
 logger = logging.getLogger(__name__)
 
