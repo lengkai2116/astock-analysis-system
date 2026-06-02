@@ -1453,23 +1453,16 @@ class StrategyValidationLayer:
         
         return validated
 
-class DarwinRiskFilter(UniverseSelectionModel):
-    """第一层：风险过滤"""
+from .screener import DarwinRiskFilter as _RealDarwinRiskFilter
+
+class DarwinRiskFilter(_RealDarwinRiskFilter):
+    """
+    达尔文风险过滤 - 委托给 screener.DarwinRiskFilter（方案G）
     
-    def select(self, date_time: datetime, data: Dict) -> List[str]:
-        """筛选股票，过滤风险股"""
-        all_stocks = data.get('all_stocks', [])
-        filtered = []
-        
-        for stock in all_stocks:
-            if self._is_valid(stock):
-                filtered.append(stock)
-        
-        return filtered
-    
-    def _is_valid(self, stock) -> bool:
-        """检查股票是否符合条件（简化实现）"""
-        return True
+    保持 UniverseSelectionModel 接口兼容，实际逻辑由父类实现。
+    """
+    pass
+
 
 class MultiLayerStockScreener:
     """完整的三层筛选器"""
@@ -1529,8 +1522,9 @@ def analyze_single_stock(symbol: str, data: pd.DataFrame) -> Dict:
     analysis_result = {'symbol': symbol}
     
     risk_filter = DarwinRiskFilter()
-    risk_passed = risk_filter._is_valid(symbol)
-    analysis_result['risk_check'] = {'passed': risk_passed, 'reasons': []}
+    risk_check = risk_filter._apply_filters(symbol, data)
+    analysis_result['risk_check'] = {'passed': risk_check, 'reasons': []}
+
     
     try:
         analyzer = ChanlunAnalyzer()
