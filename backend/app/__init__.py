@@ -1,5 +1,5 @@
 import os
-from flask import Flask
+from flask import Flask, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_socketio import SocketIO
@@ -64,6 +64,7 @@ def create_app():
     
     @app.before_request
     def check_auth():
+        from flask import request
         if request.method == 'OPTIONS':
             return
         if not _AUTH_TOKEN:

@@ -13,7 +13,6 @@ import pandas as pd
 from typing import List, Optional, Dict
 from datetime import datetime, timedelta
 from app.data.tushare_provider import TushareProvider
-from app.data.akshare_provider import AkshareProvider
 from app.data.cache_manager import CacheManager
 
 logger = logging.getLogger(__name__)
@@ -26,7 +25,6 @@ class MinuteDataManager:
 
     def __init__(self):
         self.tushare = TushareProvider()
-        self.akshare = AkshareProvider()
         self.cache = CacheManager()
         self._has_tushare_high = self._check_tushare_permission()
 
@@ -79,12 +77,7 @@ class MinuteDataManager:
                 logger.warning(f"Tushare 分钟数据失败 ({ts_code}): {e}")
 
         if not data:
-            try:
-                raw = self.akshare.get_minute_data(ts_code, freq=freq)
-                if raw and len(raw) > 0:
-                    data = self._normalize_akshare(raw)
-            except Exception as e:
-                logger.warning(f"AKShare 分钟数据失败 ({ts_code}): {e}")
+                        logger.debug(f"分钟数据无可用降级源 ({ts_code})")
 
         if data:
             self.cache.set(cache_key, data, ttl=300)  # 5分钟缓存
@@ -105,20 +98,6 @@ class MinuteDataManager:
             })
         return result
 
-    def _normalize_akshare(self, raw: List[Dict]) -> List[Dict]:
-        """统一 AKShare 分钟数据格式"""
-        result = []
-        for r in raw:
-            result.append({
-                'trade_time': str(r.get('日期', r.get('trade_time', ''))),
-                'open': float(r.get('开盘', r.get('open', 0))),
-                'high': float(r.get('最高', r.get('high', 0))),
-                'low': float(r.get('最低', r.get('low', 0))),
-                'close': float(r.get('收盘', r.get('close', 0))),
-                'vol': float(r.get('成交量', r.get('vol', 0))),
-                'amount': float(r.get('成交额', r.get('amount', 0))),
-            })
-        return result
 
     def batch_get(self, ts_codes: List[str], freq: str = '15min',
                   days_back: int = 5) -> Dict[str, List[Dict]]:
