@@ -154,7 +154,7 @@ class WeeklyReportService:
                 import requests
                 api_key = cfg.get('api_key', '')
                 endpoint = cfg.get('endpoint', 'https://api.deepseek.com/v1')
-                model = cfg.get('model', 'deepseek-chat')
+                model = cfg.get('model', 'deepseek-chat-v4')
                 resp = requests.post(
                     f"{endpoint.rstrip('/')}/chat/completions",
                     headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},

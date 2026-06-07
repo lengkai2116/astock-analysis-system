@@ -81,7 +81,7 @@ def _call_deepseek(prompt: str, system_prompt: str, config: Dict) -> Optional[st
 
     api_key = config.get('api_key', '')
     endpoint = config.get('endpoint', 'https://api.deepseek.com/v1')
-    model = config.get('model', 'deepseek-chat')
+    model = config.get('model', 'deepseek-chat-v4')
     provider = config.get('type', 'mock')
 
     if provider == 'mock' or not api_key:

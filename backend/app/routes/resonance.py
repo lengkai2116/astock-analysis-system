@@ -2,6 +2,7 @@
 共振评分 & ComboCard API 路由 — 152-Phase 3
 """
 import logging
+from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, request, jsonify
 from app.services.resonance_service import ResonanceService
 from app.services.combo_engine import ComboEngine
@@ -14,6 +15,7 @@ _resonance = ResonanceService()
 _combo_engine = ComboEngine()
 
 @resonance_bp.route('/api/resonance/score', methods=['POST'])
+@handle_exceptions
 def resonance_score():
     """计算指定股票的共振评分和组合卡片"""
     body = request.get_json(silent=True) or {}
@@ -58,6 +60,7 @@ def resonance_score():
         return jsonify({'code': -1, 'msg': str(e)})
 
 @resonance_bp.route('/api/resonance/combo-cards', methods=['POST'])
+@handle_exceptions
 def combo_cards():
     """仅返回组合卡片"""
     body = request.get_json(silent=True) or {}
@@ -89,6 +92,7 @@ def combo_cards():
         return jsonify({'code': -1, 'msg': str(e)})
 
 @resonance_bp.route('/api/resonance/registry', methods=['GET'])
+@handle_exceptions
 def pattern_registry():
     """返回所有注册的模式元数据"""
     try:

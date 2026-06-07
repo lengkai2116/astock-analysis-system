@@ -2,6 +2,7 @@
 K线重采样 API 路由 — 151-P3-3
 """
 import logging
+from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, request, jsonify
 from app.data.kline_resampler import KlineResampler
 
@@ -10,6 +11,7 @@ kline_resampler_bp = Blueprint('kline_resampler', __name__)
 _resampler = KlineResampler()
 
 @kline_resampler_bp.route('/api/kline/resample', methods=['POST'])
+@handle_exceptions
 def resample_kline():
     body = request.get_json(silent=True) or {}
     data = body.get('data', [])
@@ -22,6 +24,7 @@ def resample_kline():
         return jsonify({'code': -1, 'msg': str(e)})
 
 @kline_resampler_bp.route('/api/kline/resample-config', methods=['GET'])
+@handle_exceptions
 def resample_config():
     return jsonify({
         'code': 0,

@@ -2,6 +2,7 @@
 预测校准 API 路由 — 153-P1-2
 """
 import logging
+from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, request, jsonify
 from datetime import date, datetime
 from app.services.prediction_calibration_service import (
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 prediction_bp = Blueprint('prediction', __name__)
 
 @prediction_bp.route('/api/prediction/register', methods=['POST'])
+@handle_exceptions
 def register_prediction():
     body = request.get_json(silent=True) or {}
     try:
@@ -37,6 +39,7 @@ def register_prediction():
         return jsonify({'code': -1, 'msg': str(e)})
 
 @prediction_bp.route('/api/prediction/verify', methods=['POST'])
+@handle_exceptions
 def verify_prediction():
     body = request.get_json(silent=True) or {}
     pid = body.get('prediction_id', '')
@@ -48,12 +51,14 @@ def verify_prediction():
     return jsonify({'code': -1, 'msg': '预测记录不存在'})
 
 @prediction_bp.route('/api/prediction/stats', methods=['GET'])
+@handle_exceptions
 def calibration_stats():
     source = request.args.get('source')
     svc = get_calibration_service()
     return jsonify({'code': 0, 'data': svc.get_calibration_stats(source)})
 
 @prediction_bp.route('/api/prediction/calibrate', methods=['POST'])
+@handle_exceptions
 def calibrate():
     body = request.get_json(silent=True) or {}
     raw = float(body.get('raw_confidence', 50))
@@ -64,6 +69,7 @@ def calibrate():
     return jsonify({'code': 0, 'data': {'raw': raw, 'calibrated': calibrated}})
 
 @prediction_bp.route('/api/prediction/batch-verify', methods=['POST'])
+@handle_exceptions
 def batch_verify():
     svc = get_calibration_service()
     results = svc.batch_verify_due(date.today())

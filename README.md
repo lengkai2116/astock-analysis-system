@@ -242,7 +242,7 @@ make dev-frontend
 | `LLM_PROVIDER` | AI 提供者（mock/deepseek/lm_studio） | mock |
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | - |
 | `DEEPSEEK_BASE_URL` | DeepSeek API 地址 | https://api.deepseek.com/v1 |
-| `DEEPSEEK_MODEL` | DeepSeek 模型 | deepseek-chat |
+| `DEEPSEEK_MODEL` | DeepSeek 模型 | deepseek-chat-v4 |
 | `TUSHARE_TOKEN` | Tushare Pro Token | - |
 | `DATABASE_URL` | PostgreSQL 连接串 | - |
 | `SECRET_KEY` | Flask 密钥 | dev |
@@ -351,10 +351,10 @@ make docker-down
 | 151-P3-3 | K 线重采样管道 | ✅ 已实现 | KlineResampler(分钟到日到周到月) + API 路由 |
 | 154 批 2-6 | 形态规则扩展 | ✅ 已实现 | EnhancedPatternDetector 新增 8 条均线辅助规则(20条总计) |
 
-> 注意：DeepSeek `deepseek-chat` 模型将于 2026/07/24 废弃，需在截止前迁移至 v4-flash 或 v4-pro。
+> 注意：DeepSeek `deepseek-chat-v4` 模型将于 2026/07/24 废弃，需在截止前迁移至 v4-flash 或 v4-pro。
 > 
 > ✅ 已完成：153-P2-1（5 角色结构化融合引擎）—— 5 个角色并行分析 + fund_manager 综合合成的全流程已在 `deepseek_analysis_service.py`（608 行）中实现。
 
 ---
 
-*最后更新: 2026-06-07*
+*最后更新: 2026-06-07 (v3)*

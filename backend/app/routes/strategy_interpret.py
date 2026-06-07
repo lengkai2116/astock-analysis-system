@@ -2,6 +2,7 @@
 策略输出 AI 解读 API 路由 — 153-P3-1
 """
 import logging
+from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, request, jsonify
 from app.services.strategy_ai_interpretation_service import (
     StrategyAIInterpretationService
@@ -13,6 +14,7 @@ strategy_interpret_bp = Blueprint('strategy_interpret', __name__)
 _interpreter = StrategyAIInterpretationService()
 
 @strategy_interpret_bp.route('/api/strategy-interpret/interpret', methods=['POST'])
+@handle_exceptions
 def interpret_signal():
     body = request.get_json(silent=True) or {}
     strategy = body.get('strategy', '')
@@ -26,6 +28,7 @@ def interpret_signal():
         return jsonify({'code': -1, 'msg': str(e)})
 
 @strategy_interpret_bp.route('/api/strategy-interpret/batch', methods=['POST'])
+@handle_exceptions
 def batch_interpret():
     body = request.get_json(silent=True) or {}
     signals = body.get('signals', [])
@@ -38,6 +41,7 @@ def batch_interpret():
         return jsonify({'code': -1, 'msg': str(e)})
 
 @strategy_interpret_bp.route('/api/strategy-interpret/resonance', methods=['POST'])
+@handle_exceptions
 def interpret_resonance():
     body = request.get_json(silent=True) or {}
     resonance_data = body.get('resonance', {})

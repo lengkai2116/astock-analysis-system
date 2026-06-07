@@ -2,6 +2,7 @@
 回放复盘 API 路由 — 151-P3-1
 """
 import logging
+from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, request, jsonify
 from app.services.playback_service import PlaybackService, PlaybackSnapshot
 
@@ -11,6 +12,7 @@ playback_bp = Blueprint('playback', __name__)
 _service = PlaybackService()
 
 @playback_bp.route('/api/playback/load', methods=['POST'])
+@handle_exceptions
 def load_playback():
     body = request.get_json(silent=True) or {}
     ts_code = body.get('ts_code', '')
@@ -23,6 +25,7 @@ def load_playback():
     return jsonify({'code': 0, 'data': {'total_dates': total, 'ts_code': ts_code}})
 
 @playback_bp.route('/api/playback/next', methods=['GET'])
+@handle_exceptions
 def next_snapshot():
     try:
         for snap in _service.play():
@@ -32,6 +35,7 @@ def next_snapshot():
         return jsonify({'code': -1, 'msg': str(e)})
 
 @playback_bp.route('/api/playback/seek', methods=['POST'])
+@handle_exceptions
 def seek_playback():
     body = request.get_json(silent=True) or {}
     index = body.get('index')
@@ -48,6 +52,7 @@ def seek_playback():
         return jsonify({'code': -1, 'msg': str(e)})
 
 @playback_bp.route('/api/playback/speed', methods=['POST'])
+@handle_exceptions
 def set_speed():
     body = request.get_json(silent=True) or {}
     speed = float(body.get('speed', 1.0))
@@ -55,9 +60,11 @@ def set_speed():
     return jsonify({'code': 0, 'data': {'speed': _service.speed}})
 
 @playback_bp.route('/api/playback/timeline', methods=['GET'])
+@handle_exceptions
 def get_timeline():
     return jsonify({'code': 0, 'data': _service.get_timeline()})
 
 @playback_bp.route('/api/playback/summary', methods=['GET'])
+@handle_exceptions
 def get_summary():
     return jsonify({'code': 0, 'data': _service.get_summary()})

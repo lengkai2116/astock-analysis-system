@@ -43,7 +43,25 @@ service.interceptors.response.use(
   },
   error => {
     console.error('Response error:', error)
-    message.error(error.message || '网络错误')
+    if (error.response) {
+      const status = error.response.status
+      const data = error.response.data || {}
+      if (status === 401) {
+        message.warning('请先登录')
+        localStorage.removeItem('token')
+        window.location.hash = '#/login'
+      } else if (status === 403) {
+        message.error('令牌无效，请重新登录')
+        localStorage.removeItem('token')
+        window.location.hash = '#/login'
+      } else {
+        message.error(data.error || data.msg || data.message || `请求失败(${status})`)
+      }
+    } else if (error.code === 'ECONNABORTED') {
+      message.error('请求超时，请检查网络')
+    } else {
+      message.error(error.message || '网络错误')
+    }
     return Promise.reject(error)
   }
 )

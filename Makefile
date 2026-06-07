@@ -113,3 +113,29 @@ help:
 	@echo "  make clean   — 清理构建产物"
 
 .DEFAULT_GOAL := help
+
+
+# ============ 代码质量 & CI ============
+
+## Python 代码检查
+lint:
+	cd backend && ruff check app/ tests/
+
+## Python 类型检查
+typecheck:
+	cd backend && mypy app/
+
+## 运行后端测试
+test:
+	cd backend && python -m pytest tests/ -v
+
+## 运行所有质量检查
+check: lint typecheck test
+
+## 前端构建检查
+frontend-check:
+	cd frontend/vue-project && npx vite build --logLevel error
+
+## 完整的 CI 流水线
+ci: lint typecheck frontend-check
+	@echo "✅ CI 全部通过"

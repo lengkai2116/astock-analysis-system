@@ -9,8 +9,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "5432:5432"
+    # ports: 5432 不暴露到宿主机（仅内部网络）
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U stock_user -d stock_analysis"]
       interval: 5s
@@ -22,8 +21,7 @@ services:
     image: redis:7-alpine
     volumes:
       - redis_data:/data
-    ports:
-      - "6379:6379"
+    # ports: 6379 不暴露到宿主机（仅内部网络）
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -35,14 +33,14 @@ services:
     build: ./backend
     environment:
       - FLASK_APP=run.py
-      - FLASK_ENV=development
+      - FLASK_ENV=production
       - DATABASE_URL=postgresql://stock_user:stock_password@postgres:5432/stock_analysis
       - REDIS_URL=redis://redis:6379/0
       - TUSHARE_TOKEN=${TUSHARE_TOKEN}
       - DATA_DIR=/data
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
-      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat-v4}
       - LM_STUDIO_ENDPOINT=${LM_STUDIO_ENDPOINT:-http://localhost:1234/v1}
       - LM_STUDIO_MODEL=${LM_STUDIO_MODEL:-local-model}
       - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}

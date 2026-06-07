@@ -57,3 +57,5 @@ frontend/design-system/node_modules/
 ## SQLite test databases
 backend/test.db
 backend/strategy_templates.db
+## DuckDB
+data/duckdb/*.corrupted*
