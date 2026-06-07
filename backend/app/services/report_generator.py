@@ -818,6 +818,92 @@ class ReportGenerator:
         
         return html
     
+
+    def generate_review_report(self, review_result: Dict,
+                                format: str = 'markdown') -> str:
+        """生成七维复盘报告（P3.4）"""
+        total = review_result.get('total_score', 0)
+        dims = review_result.get('dimensions', {})
+        attribution = review_result.get('attribution', {})
+        improvements = review_result.get('improvements', [])
+        period = review_result.get('period', {})
+
+        lines = [
+            "# 交易复盘报告",
+            "",
+            f"> 复盘周期: {period.get('start', '?')} ~ {period.get('end', '?')}",
+            f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            "---",
+            "",
+            f"## 综合评分: {total}/100",
+            "",
+            "| 维度 | 评分 |",
+            "|------|------|",
+        ]
+        labels = {
+            'market': '① 大盘环境', 'sector': '② 板块题材',
+            'trade': '③ 个股操作', 'strategy': '④ 策略执行',
+            'capital': '⑤ 资金管理', 'psychology': '⑥ 心态纪律',
+        }
+        for key, label in labels.items():
+            d = dims.get(key, {})
+            score = d.get('score', 0)
+            bar = '█' * int(score // 10) + '░' * (10 - int(score // 10))
+            lines.append(f"| {label} | {bar} {score:.0f}/100 |")
+
+        lines.append("")
+
+        # 各维度详情
+        for key, label in labels.items():
+            d = dims.get(key, {})
+            score = d.get('score', 0)
+            details = d.get('details', [])
+            lines.append(f"### {label} ({score:.0f}/100)")
+            lines.append("")
+            for det in details:
+                lines.append(f"- {det}")
+            lines.append("")
+
+        # 归因分析
+        lines += [
+            "---",
+            "",
+            "## 盈亏归因分析",
+            "",
+        ]
+        for w in attribution.get('winners', []):
+            lines.append(f"- ✅ {w['name']}({w['ts_code']}): +{w['pnl']:.0f}")
+        for l in attribution.get('losers', []):
+            lines.append(f"- ❌ {l['name']}({l['ts_code']}): {l['pnl']:.0f}")
+        lines.append("")
+        lines.append(f"**{attribution.get('summary', '')}**")
+        lines.append("")
+
+        # 改进建议
+        lines += [
+            "---",
+            "",
+            "## 改进建议",
+            "",
+        ]
+        for imp in improvements:
+            priority = {'HIGH': '🔴', 'MEDIUM': '🟡', 'LOW': '🟢', 'INFO': 'ℹ'}.get(imp.get('priority', 'INFO'), '•')
+            lines.append(f"{priority} **[{imp.get('category', '')}]** {imp.get('suggestion', '')}")
+            lines.append("")
+
+        lines.append("")
+        lines.append("---")
+        lines.append("*报告由 A股分析系统 自动生成*")
+
+        content_str = "\n".join(lines)
+
+        if format == 'json':
+            import json
+            return json.dumps(review_result, ensure_ascii=False, indent=2, default=str)
+        return content_str
+
+
     def save_report(self, content: str, filename: str, 
                    output_dir: Optional[str] = None) -> str:
         """

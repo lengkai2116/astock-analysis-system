@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+            color: #333;
+        }
+        .report-container {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .header {
+            border-bottom: 3px solid #3b82f6;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        h1 { color: #1e293b; margin: 0 0 10px 0; }
+        .meta { color: #64748b; font-size: 14px; }
+        .summary-box {
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            color: white;
+            padding: 24px;
+            border-radius: 8px;
+            margin-bottom: 24px;
+        }
+        .score-badge {
+            display: inline-block;
+            background: rgba(255,255,255,0.2);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+            margin: 24px 0;
+        }
+        .metric-card {
+            background: #f8fafc;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #3b82f6;
+        }
+        .metric-title { color: #64748b; font-size: 14px; margin-bottom: 8px; }
+        .metric-value { color: #1e293b; font-size: 24px; font-weight: bold; }
+        .section {
+            margin: 32px 0;
+        }
+        .section-title {
+            color: #1e293b;
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        .strength-item, .weakness-item {
+            padding: 12px 16px;
+            margin: 8px 0;
+            border-radius: 6px;
+        }
+        .strength-item { background: #ecfdf5; color: #065f46; }
+        .weakness-item { background: #fef2f2; color: #991b1b; }
+        .advice-box {
+            background: #fffbeb;
+            border-left: 4px solid #f59e0b;
+            padding: 20px;
+            border-radius: 6px;
+            margin: 16px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        th { background: #f8fafc; font-weight: 600; color: #475569; }
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #e2e8f0;
+            text-align: center;
+            color: #94a3b8;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="report-container">
+        <div class="header">
+            <h1>{{ title }}</h1>
+            <div class="meta">
+                生成时间: {{ generated_at }} | 
+                股票代码: {{ ts_code }} | 
+                周期: {{ start_date }} - {{ end_date }}
+            </div>
+        </div>
+        
+        <div class="summary-box">
+            <div>{{ summary }}</div>
+            <div style="margin-top: 16px;">
+                <span class="score-badge">评分: {{ overall_score }}/100</span>
+                <span style="margin-left: 20px;">风险等级: {{ risk_level }}</span>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2 class="section-title">策略概述</h2>
+            <p><strong>策略类型:</strong> {{ strategy_type }}</p>
+            <p><strong>指标公式:</strong> <code>{{ formula }}</code></p>
+            <div class="advice-box">
+                <strong>信号逻辑:</strong><br>
+                {{ signal_logic }}
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2 class="section-title">回测结果</h2>
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-title">总收益率</div>
+                    <div class="metric-value">{{ total_return }}%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">年化收益率</div>
+                    <div class="metric-value">{{ annual_return }}%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">夏普比率</div>
+                    <div class="metric-value">{{ sharpe_ratio }}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">最大回撤</div>
+                    <div class="metric-value">{{ max_drawdown }}%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">胜率</div>
+                    <div class="metric-value">{{ win_rate }}%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">总交易次数</div>
+                    <div class="metric-value">{{ total_trades }}</div>
+                </div>
+            </div>
+        </div>
+        
+        {% if strengths %}
+        <div class="section">
+            <h2 class="section-title">优势分析</h2>
+            {% for strength in strengths %}
+            <div class="strength-item">✓ {{ strength }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        
+        {% if weaknesses %}
+        <div class="section">
+            <h2 class="section-title">劣势分析</h2>
+            {% for weakness in weaknesses %}
+            <div class="weakness-item">✗ {{ weakness }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        
+        {% if suggestions %}
+        <div class="section">
+            <h2 class="section-title">改进建议</h2>
+            <ol>
+            {% for suggestion in suggestions %}
+                <li>{{ suggestion }}</li>
+            {% endfor %}
+            </ol>
+        </div>
+        {% endif %}
+        
+        <div class="section">
+            <h2 class="section-title">交易建议</h2>
+            <div class="advice-box">
+                <p><strong>适用对象:</strong> {{ suitable_for }}</p>
+                <p><strong>仓位管理:</strong> {{ position_management }}</p>
+                <p><strong>风险控制:</strong> {{ risk_control }}</p>
+                <p><strong>下一步:</strong> {{ next_steps }}</p>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>本报告由A股分析系统自动生成，仅供参考，不构成投资建议。</p>
+            <p>生成时间: {{ generated_at }}</p>
+        </div>
+    </div>
+</body>
+</html>

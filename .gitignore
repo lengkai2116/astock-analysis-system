@@ -47,3 +47,13 @@ backend/__pycache__/
 # Backup files
 *backup*
 .*.backup
+
+# Design system node modules
+frontend/design-system/node_modules/
+
+# Tool metadata
+.codegraph/
+.cursor/
+## SQLite test databases
+backend/test.db
+backend/strategy_templates.db

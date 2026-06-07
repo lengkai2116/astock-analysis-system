@@ -298,3 +298,64 @@ class PaperTrade(db.Model):
             'reason': self.reason,
             'trade_date': self.trade_date.strftime('%Y-%m-%d %H:%M:%S')
         }
+
+
+# P3: 账户交易模型
+from app.models.trade import Trade, AccountSnapshot
+
+
+# ============================================================
+# 观潮对标新增模型（151-系统能力提升方案 §3.1 / §5.2）
+# ============================================================
+
+class Alert(db.Model):
+    """条件告警"""
+    __tablename__ = 'alerts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    ts_code = db.Column(db.String(10), nullable=False, index=True)
+    alert_type = db.Column(db.String(20), default='price')  # price / volume / signal
+    condition = db.Column(db.String(10), default='>')       # > / < / == / cross_above / cross_below
+    threshold = db.Column(db.Float, default=0.0)
+    message = db.Column(db.Text)
+    is_active = db.Column(db.Boolean, default=True)
+    last_triggered = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'ts_code': self.ts_code,
+            'alert_type': self.alert_type,
+            'condition': self.condition,
+            'threshold': self.threshold,
+            'message': self.message,
+            'is_active': self.is_active,
+            'last_triggered': self.last_triggered.isoformat() if self.last_triggered else None,
+            'created_at': self.created_at.isoformat(),
+        }
+
+
+class Drawing(db.Model):
+    """画图数据持久化"""
+    __tablename__ = 'drawings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    ts_code = db.Column(db.String(10), nullable=False, index=True)
+    drawing_type = db.Column(db.String(30))  # trend_line / fibonacci / rect / text / arrow
+    drawing_data = db.Column(db.Text)         # JSON string
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'ts_code': self.ts_code,
+            'drawing_type': self.drawing_type,
+            'drawing_data': self.drawing_data,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+

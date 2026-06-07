@@ -1,168 +1,529 @@
-:root {
-  /* A股标准色彩 */
+/* ============================================================
+   观潮对标 — 前端UI设计优化
+   半透明叠加色体系 + 双主题 + 组件级 Token + 148规范修订
+   基于 150-观潮对标-前端UI设计优化借鉴方案.md
+   ============================================================ */
+
+/* ============ 0. 字体 ============ */
+@import url('https://fonts.googleapis.com/css2?family=Inter:opsz@14..32&display=swap');
+
+/* ============ 1. 设计 Token ============ */
+
+/* -- 深色主题 (默认) -- */
+[data-theme="dark"], :root {
+  /* --- 1a. 8pt 空间 --- */
+  --space-2: 2px;
+  --space-4: 4px;
+  --space-6: 6px;
+  --space-8: 8px;
+  --space-10: 10px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;  /* 新增 --space-5: 20px (150§2.3) */
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-40: 40px;
+  --space-48: 48px;
+  --space-64: 64px;
+
+  /* --- 1b. 半透明叠加色体系 (150§2.1) --- */
+  --overlay-white: rgba(255, 255, 255, 0.04);    /* 最浅 (hover/次级) */
+  --overlay-light: rgba(255, 255, 255, 0.06);    /* 面板底色 */
+  --overlay-medium: rgba(255, 255, 255, 0.09);   /* 强调面板 */
+  --overlay-strong: rgba(255, 255, 255, 0.12);   /* 激活/选中 */
+  --overlay-intense: rgba(255, 255, 255, 0.15);  /* 强调激活 */
+
+  /* --- 1c. 语义背景色 (基于叠加层) --- */
+  --bg-canvas: #0A0A0A;             /* 保留更亮的画布底色 */
+  --bg-surface: var(--overlay-light);    /* 替代 #121214 */
+  --bg-subtle: var(--overlay-white);     /* 替代 #1A1A1A */
+  --bg-muted: var(--overlay-medium);     /* 替代 #262626 */
+  --bg-active: rgba(59, 130, 246, 0.12); /* 品牌色选中态 */
+  --bg-selected: rgba(59, 130, 246, 0.08); /* 品牌色选中态 */
+
+  /* --- 1d. 品牌色 (保留蓝色, 更适合金融) --- */
+  --color-brand-50: #EFF6FF;
+  --color-brand-100: #DBEAFE;
+  --color-brand-200: #BFDBFE;
+  --color-brand-500: #3B82F6;
+  --color-brand-600: #2563EB;
+  --color-brand-700: #1D4ED8;
+
+  /* --- 1e. A股涨跌色 --- */
   --color-up: #EF4444;
+  --color-up-bg: rgba(239, 68, 68, 0.12);
   --color-down: #22C55E;
-  --color-primary: #3B82F6;
-  --color-accent: #F59E0B;
-  
-  /* 背景色 */
-  --bg-primary: #0A1628;
-  --bg-secondary: #141414;
-  --bg-surface: #1E293B;
-  
-  /* 文字色 */
+  --color-down-bg: rgba(34, 197, 94, 0.12);
+  --color-flat: #888888;
+
+  /* --- 1f. 信号语义色 --- */
+  --signal-bullish: #EF4444;
+  --signal-bearish: #22C55E;
+  --signal-watch: #F59E0B;
+  --signal-neutral: #A3A3A3;
+  --signal-invalid: #7F1D1D;
+
+  /* --- 1g. 文字色 --- */
   --text-primary: #F1F5F9;
   --text-secondary: #94A3B8;
   --text-muted: #64748B;
-  
-  /* K线专用 */
+  --text-disabled: #404040;
+  --text-inverse: #171717;
+
+  /* --- 1h. 边框色 (半透明，双主题自适应, 150§2.3) --- */
+  --border-default: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-focus: var(--color-brand-500);
+
+  /* --- 1i. 圆角 (150§2.3: 折中8px) --- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;              /* 原10px → 8px */
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* --- 1j. 阴影 --- */
+  --shadow-default: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow-hover: 0 4px 6px -1px rgb(0 0 0 / 0.4);
+  --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.4);
+
+  /* --- 1k. 排版 --- */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont,
+               'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+  /* --- 1l. 尺寸 --- */
+  --btn-height: 40px;
+  --input-height: 40px;
+  --icon-sm: 16px;
+  --icon-md: 20px;
+  --sidebar-width: 200px;
+  --sidebar-collapsed-width: 64px;
+
+  /* --- 1m. K线图表专用 (150§3.x) --- */
   --kline-up: #EF4444;
   --kline-down: #22C55E;
+  --kline-grid: rgba(255, 255, 255, 0.06);
+  --kline-crosshair: rgba(255, 255, 255, 0.3);
+  --kline-volume-height: 80px;
+
+  /* --- 1n. 组件级 Token命名空间 (150§2.2) --- */
+  --pro-table-header-bg: var(--bg-subtle);
+  --pro-table-row-hover-bg: var(--bg-active);
+  --pro-table-row-height: 40px;
+  --pro-table-cell-padding: var(--space-8) var(--space-12);
+
+  --kline-chart-grid-color: var(--kline-grid);
+  --kline-chart-crosshair-color: var(--kline-crosshair);
+  --kline-chart-volume-height: var(--kline-volume-height);
+
+  --data-source-bar-bg: rgba(0, 0, 0, 0.6);
+  --data-source-bar-blur: 4px;
+
+  --sidebar-bg: #0f172a;
+  --sidebar-border: var(--border-default);
+  --sidebar-collapse-bg: var(--bg-subtle);
+  --sidebar-collapse-hover-bg: var(--bg-muted);
+  --sidebar-menu-hover-bg: var(--bg-subtle);
+  --sidebar-menu-selected-bg: rgba(59, 130, 246, 0.2);
 }
 
-* {
+/* ============ 2. 浅色主题 (150§2.1) ============ */
+[data-theme="light"] {
+  /* 叠加色反转 (黑色叠加) */
+  --overlay-white: rgba(0, 0, 0, 0.03);
+  --overlay-light: rgba(0, 0, 0, 0.05);
+  --overlay-medium: rgba(0, 0, 0, 0.08);
+  --overlay-strong: rgba(0, 0, 0, 0.12);
+  --overlay-intense: rgba(0, 0, 0, 0.15);
+
+  /* 背景色 */
+  --bg-canvas: #FAFAFA;
+  --bg-surface: #FFFFFF;
+  --bg-subtle: #F0F0F0;
+  --bg-muted: #E5E5E5;
+  --bg-active: rgba(59, 130, 246, 0.10);
+  --bg-selected: rgba(59, 130, 246, 0.06);
+
+  /* 文字色反转 */
+  --text-primary: #171717;
+  --text-secondary: #525252;
+  --text-muted: #A3A3A3;
+  --text-disabled: #D4D4D4;
+  --text-inverse: #F1F5F9;
+
+  /* A股涨跌色 (浅色加深) */
+  --color-up: #DC2626;
+  --color-up-bg: #FEF2F2;
+  --color-down: #16A34A;
+  --color-down-bg: #F0FDF4;
+
+  /* 信号色 (浅色) */
+  --signal-bullish: #DC2626;
+  --signal-bearish: #16A34A;
+  --signal-watch: #D97706;
+  --signal-neutral: #737373;
+  --signal-invalid: #991B1B;
+
+  /* 边框色 (浅色) */
+  --border-default: #E5E5E5;
+  --border-strong: #D4D4D4;
+
+  /* 阴影 (浅色) */
+  --shadow-default: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-hover: 0 4px 6px -1px rgb(0 0 0 / 0.08);
+  --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+  /* K线图 (浅色) */
+  --kline-up: #DC2626;
+  --kline-down: #16A34A;
+  --kline-grid: rgba(0, 0, 0, 0.06);
+  --kline-crosshair: rgba(0, 0, 0, 0.2);
+
+  /* 侧栏 */
+  --sidebar-bg: #1e293b;
+  --sidebar-border: #E5E5E5;
+}
+
+/* ============ 3. 全局基础样式 ============ */
+*,
+*::before,
+*::after {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+html {
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: var(--bg-secondary);
 }
 
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+a {
+  color: var(--color-brand-500);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--color-brand-600);
+}
+
+/* ============ 4. 滚动条 ============ */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-surface);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #404040;
-  border-radius: 3px;
+  background: var(--border-default);
+  border-radius: var(--radius-xs);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #505050;
+  background: var(--border-strong);
 }
 
-.theme-dark {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
+/* ============ 5. 布局工具类 ============ */
+
+/* 主题转换动画辅助 */
+.theme-transition,
+.theme-transition * {
+  transition: background-color 0.3s ease,
+              color 0.3s ease,
+              border-color 0.3s ease,
+              box-shadow 0.3s ease !important;
 }
 
-/* A股涨跌颜色工具类 */
-.text-up {
+/* 涨跌色工具类 */
+.text-up { color: var(--color-up); }
+.text-down { color: var(--color-down); }
+.text-flat { color: var(--text-muted); }
+.text-primary { color: var(--text-primary); }
+.text-secondary { color: var(--text-secondary); }
+.text-muted { color: var(--text-muted); }
+.bg-up { background: var(--color-up); }
+.bg-down { background: var(--color-down); }
+
+/* 信号灯 */
+.signal-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.signal-dot-up { background: var(--color-up); }
+.signal-dot-down { background: var(--color-down); }
+.signal-dot-watch { background: var(--signal-watch); }
+.signal-dot-neutral { background: var(--signal-neutral); }
+
+/* 信号标签 */
+.signal-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  border: 1px solid transparent;
+}
+.signal-tag-bullish {
+  color: var(--signal-bullish);
+  border-color: var(--signal-bullish);
+}
+.signal-tag-bearish {
+  color: var(--signal-bearish);
+  border-color: var(--signal-bearish);
+}
+.signal-tag-watch {
+  color: var(--signal-watch);
+  border-color: var(--signal-watch);
+}
+.signal-tag-neutral {
+  color: var(--signal-neutral);
+  border-color: var(--signal-neutral);
+}
+
+/* Badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+}
+.badge-up {
+  background: var(--color-up-bg);
   color: var(--color-up);
 }
-
-.text-down {
+.badge-down {
+  background: var(--color-down-bg);
   color: var(--color-down);
 }
 
-.bg-up {
-  background: var(--color-up);
-}
+/* ============ 6. Ant Design 主题覆盖 ============ */
 
-.bg-down {
-  background: var(--color-down);
-}
-
+/* 主按钮 */
 .ant-btn-primary {
-  background: #1890ff !important;
-  border-color: #1890ff !important;
+  background: var(--color-brand-500) !important;
+  border-color: var(--color-brand-500) !important;
+  color: #fff !important;
 }
-
 .ant-btn-primary:hover {
-  background: #40a9ff !important;
-  border-color: #40a9ff !important;
+  background: var(--color-brand-600) !important;
+  border-color: var(--color-brand-600) !important;
 }
 
+/* 下拉菜单 */
 .ant-select-dropdown {
-  background: #1e1e1e !important;
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-dropdown) !important;
 }
-
 .ant-select-item {
-  color: #d1d4dc !important;
+  color: var(--text-secondary) !important;
 }
-
 .ant-select-item-option-active {
-  background: #262626 !important;
+  background: var(--bg-subtle) !important;
 }
-
 .ant-select-item-option-selected {
-  background: #1890ff !important;
+  background: var(--bg-active) !important;
+  color: var(--color-brand-500) !important;
 }
 
+/* Tabs */
 .ant-tabs-tab {
-  color: #787b86 !important;
+  color: var(--text-muted) !important;
 }
-
 .ant-tabs-tab-active {
-  color: #1890ff !important;
+  color: var(--color-brand-500) !important;
 }
-
 .ant-tabs-ink-bar {
-  background: #1890ff !important;
+  background: var(--color-brand-500) !important;
 }
 
+/* 输入框 */
 .ant-input,
-.ant-select-selector {
-  background: #1e1e1e !important;
-  border-color: #2a2a2a !important;
-  color: #d1d4dc !important;
+.ant-select-selector,
+.ant-picker {
+  background: var(--bg-surface) !important;
+  border-color: var(--border-default) !important;
+  color: var(--text-primary) !important;
+  border-radius: var(--radius-sm) !important;
 }
-
 .ant-input:focus,
-.ant-select-focused .ant-select-selector {
-  border-color: #1890ff !important;
-  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2) !important;
+.ant-select-focused .ant-select-selector,
+.ant-picker-focused {
+  border-color: var(--border-focus) !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
 }
 
+/* 单选框按钮组 */
 .ant-radio-button-wrapper {
-  background: #1e1e1e !important;
-  border-color: #2a2a2a !important;
-  color: #787b86 !important;
+  background: var(--bg-surface) !important;
+  border-color: var(--border-default) !important;
+  color: var(--text-muted) !important;
 }
-
 .ant-radio-button-wrapper-checked {
-  background: #1890ff !important;
-  border-color: #1890ff !important;
+  background: var(--color-brand-500) !important;
+  border-color: var(--color-brand-500) !important;
   color: #fff !important;
 }
 
-.ant-modal-content {
-  background: #1e1e1e !important;
-}
-
+/* Modal */
+.ant-modal-content,
 .ant-modal-header {
-  background: #1e1e1e !important;
-  border-bottom-color: #2a2a2a !important;
+  background: var(--bg-surface) !important;
+  border-radius: var(--radius-lg) !important;
 }
-
+.ant-modal-header {
+  border-bottom-color: var(--border-default) !important;
+}
 .ant-modal-title {
-  color: #d1d4dc !important;
+  color: var(--text-primary) !important;
 }
-
 .ant-modal-close-x {
-  color: #787b86 !important;
+  color: var(--text-muted) !important;
 }
-
 .ant-modal-footer {
-  border-top-color: #2a2a2a !important;
+  border-top-color: var(--border-default) !important;
 }
 
+/* Message */
 .ant-message-notice-content {
-  background: #1e1e1e !important;
-  color: #d1d4dc !important;
+  background: var(--bg-muted) !important;
+  color: var(--text-primary) !important;
+  border-radius: var(--radius-md) !important;
 }
 
+/* Tooltip */
 .ant-tooltip-inner {
-  background: #1e1e1e !important;
-  color: #d1d4dc !important;
+  background: var(--bg-muted) !important;
+  color: var(--text-primary) !important;
+  border-radius: var(--radius-sm) !important;
+  font-size: 13px !important;
+}
+
+/* Table */
+.ant-table {
+  background: transparent !important;
+  color: var(--text-primary) !important;
+}
+.ant-table-thead > tr > th {
+  background: var(--bg-subtle) !important;
+  color: var(--text-secondary) !important;
+  border-bottom-color: var(--border-default) !important;
+}
+.ant-table-tbody > tr > td {
+  border-bottom-color: var(--border-default) !important;
+}
+.ant-table-tbody > tr:hover > td {
+  background: var(--pro-table-row-hover-bg) !important;
+}
+
+/* Card */
+.ant-card {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-md) !important;
+}
+
+/* Spin */
+.ant-spin-dot-item {
+  background-color: var(--color-brand-500) !important;
+}
+
+/* Popover */
+.ant-popover-inner {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-dropdown) !important;
+}
+.ant-popover-title {
+  color: var(--text-primary) !important;
+  border-bottom-color: var(--border-default) !important;
+}
+.ant-popover-inner-content {
+  color: var(--text-secondary) !important;
+}
+
+/* ============ 7. 快捷帮助浮层 (快捷键) ============ */
+.shortcuts-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.shortcuts-panel {
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-dropdown);
+  padding: var(--space-24);
+  max-width: 560px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.shortcuts-panel h3 {
+  font-size: 18px;
+  color: var(--text-primary);
+  margin-bottom: var(--space-16);
+}
+.shortcuts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-8);
+}
+.shortcut-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-6) var(--space-8);
+  border-radius: var(--radius-sm);
+}
+.shortcut-row:hover {
+  background: var(--bg-subtle);
+}
+.shortcut-desc {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.shortcut-keys {
+  display: flex;
+  gap: 4px;
+}
+.shortcut-key {
+  padding: 2px 6px;
+  background: var(--bg-muted);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
 }

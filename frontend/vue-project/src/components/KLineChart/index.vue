@@ -1,5 +1,5 @@
 <template>
-  <div class="kline-chart-container" :style="containerStyle">
+  <div class="kline-chart-container" :class="`kline-chart--${chartType}`" :style="containerStyle">
     <div ref="chartRef" class="kline-chart-canvas"></div>
     <div v-if="loading" class="kline-loading">
       <a-spin size="large" />
@@ -15,16 +15,10 @@
 import { init, dispose } from 'klinecharts'
 import chartService from '@/services/chartService'
 
-const INDICATOR_MAP = {
-  ma5: 'MA', ma10: 'MA', ma20: 'MA',
-  boll_upper: 'BOLL', boll_middle: 'BOLL', boll_lower: 'BOLL',
-  macd: 'MACD', rsi: 'RSI', kdj: 'KDJ', vol: 'VOL'
-}
-
 const PANE_MAP = {
-  ma5: 'candle_pane', ma10: 'candle_pane', ma20: 'candle_pane',
+  ma5: 'candle_pane', ma10: 'candle_pane', ma20: 'candle_pane', ma60: 'candle_pane',
   boll_upper: 'candle_pane', boll_middle: 'candle_pane', boll_lower: 'candle_pane',
-  vol: 'vol_pane', macd: 'macd_pane', rsi: 'rsi_pane', kdj: 'rsi_pane'
+  vol: 'vol_pane', macd: 'macd_pane', rsi: 'rsi_pane', kdj: 'rsi_pane',
 }
 
 export default {
@@ -34,35 +28,41 @@ export default {
     indicators: { type: Array, default: () => ['ma5', 'ma20', 'macd', 'rsi', 'vol'] },
     period: { type: String, default: 'D' },
     height: { type: [Number, String], default: '100%' },
-    dark: { type: Boolean, default: true }
+    dark: { type: Boolean, default: true },
+    chartType: { type: String, default: 'candle' }, // candle, area, line, heikin_ashi
+    chartId: { type: String, default: '' },          // 多图标识 (150§3.1)
+    syncCrosshair: { type: Boolean, default: false }, // 十字光标同步
   },
   data() {
     return {
       chart: null,
       loading: false,
       klineData: [],
-      signals: []
+      signals: [],
     }
   },
   computed: {
     containerStyle() {
       return {
         height: typeof this.height === 'number' ? this.height + 'px' : this.height,
-        position: 'relative'
+        position: 'relative',
       }
-    }
+    },
   },
   watch: {
     tsCode: {
       handler(n) { if (n) this.loadStock(n, this.period, this.indicators) },
-      immediate: true
+      immediate: true,
     },
     period(n) {
       if (this.tsCode) this.loadStock(this.tsCode, n, this.indicators)
     },
+    chartType() {
+      if (this.chart) this.updateChartType()
+    },
     indicators(n) {
       if (this.chart && this.klineData.length > 0) this.syncIndicators(n)
-    }
+    },
   },
   mounted() {
     this.$nextTick(() => this.initChart())
@@ -72,44 +72,101 @@ export default {
     if (this.$refs.chartRef) {
       this._resizeObserver.observe(this.$refs.chartRef.parentElement)
     }
+
+    // 十字光标同步监听 (150§3.1)
+    if (this.syncCrosshair) {
+      window.addEventListener('chart:crosshair', this._onCrosshairSync)
+    }
   },
   beforeUnmount() {
     if (this._resizeObserver) this._resizeObserver.disconnect()
+    if (this.syncCrosshair) {
+      window.removeEventListener('chart:crosshair', this._onCrosshairSync)
+    }
     if (this.chart) { dispose(this.chart); this.chart = null }
   },
   methods: {
+    _onCrosshairSync(e) {
+      if (!this.chart || !this.chartId) return
+      if (e.detail?.sourceId === this.chartId) return  // 忽略自身
+      const data = e.detail
+      // 如果同步了十字光标位置，KLineCharts 的 crosshair API
+      if (data.timestamp && this.chart) {
+        try { this.chart.setCrosshair(data) } catch {}
+      }
+    },
+
     initChart() {
       if (!this.$refs.chartRef) return
+
       const darkStyles = {
-        grid: { horizontal: { color: '#1e293b' }, vertical: { color: '#1e293b' } },
+        grid: { horizontal: { color: 'var(--kline-grid, rgba(255,255,255,0.06))' }, vertical: { color: 'var(--kline-grid, rgba(255,255,255,0.06))' } },
         candle: {
           type: 'candle_up_down',
-          bar: { upColor: '#ef4444', downColor: '#22c55e', noChangeColor: '#888888' },
-          priceMark: { high: { color: '#94a3b8' }, low: { color: '#94a3b8' }, last: { color: '#f1f5f9' } },
-          tooltip: { labels: ['时间', '开', '高', '低', '收', '涨幅'] }
+          bar: { upColor: 'var(--kline-up, #ef4444)', downColor: 'var(--kline-down, #22c55e)', noChangeColor: '#888888' },
+          priceMark: { high: { color: 'var(--text-secondary, #94a3b8)' }, low: { color: 'var(--text-secondary, #94a3b8)' }, last: { color: 'var(--text-primary, #f1f5f9)' } },
+          tooltip: { labels: ['时间', '开', '高', '低', '收', '涨幅'] },
         },
-        xAxis: { axisLine: { color: '#2a2a2a' }, tickLine: { color: '#2a2a2a' }, tickText: { color: '#94a3b8' } },
-        yAxis: { axisLine: { color: '#2a2a2a' }, tickLine: { color: '#2a2a2a' }, tickText: { color: '#94a3b8' } },
-        crosshair: { horizontal: { color: '#64748b' }, vertical: { color: '#64748b' } },
-        separator: { color: '#2a2a2a' }
+        xAxis: {
+          axisLine: { color: 'var(--border-default, #2a2a2a)' },
+          tickLine: { color: 'var(--border-default, #2a2a2a)' },
+          tickText: { color: 'var(--text-secondary, #94a3b8)' },
+        },
+        yAxis: {
+          axisLine: { color: 'var(--border-default, #2a2a2a)' },
+          tickLine: { color: 'var(--border-default, #2a2a2a)' },
+          tickText: { color: 'var(--text-secondary, #94a3b8)' },
+        },
+        crosshair: {
+          horizontal: { color: 'var(--kline-crosshair, #64748b)' },
+          vertical: { color: 'var(--kline-crosshair, #64748b)' },
+        },
+        separator: { color: 'var(--border-default, #2a2a2a)' },
       }
 
       this.chart = init(this.$refs.chartRef, {
         locale: 'zh-CN',
         styles: darkStyles,
         layout: [
-          { type: 'candle', options: { id: 'candle_pane', height: 400 } },
+          { type: this.chartType === 'candle' ? 'candle' : 'candle', options: { id: 'candle_pane', height: 400 } },
           { type: 'indicator', options: { id: 'vol_pane', height: 80 } },
           { type: 'indicator', options: { id: 'macd_pane', height: 100 } },
           { type: 'indicator', options: { id: 'rsi_pane', height: 80 } },
-          { type: 'xAxis' }
-        ]
+          { type: 'xAxis' },
+        ],
       })
 
       if (this.chart) {
-        this.$emit('ready', this.chart)
+        this.$emit('ready', { chart: this.chart, chartId: this.chartId })
         if (this.tsCode) this.loadStock(this.tsCode, this.period, this.indicators)
+
+        // 十字光标同步 (150§3.1)
+        if (this.syncCrosshair && this.chartId) {
+          this.chart.subscribe('crosshairChange', (data) => {
+            window.dispatchEvent(new CustomEvent('chart:crosshair', {
+              detail: { sourceId: this.chartId, timestamp: data?.timestamp, ...data },
+            }))
+          })
+        }
+
+        // 设置图表类型
+        this.updateChartType()
       }
+    },
+
+    updateChartType() {
+      if (!this.chart) return
+      const typeMap = {
+        candle: 'candle_solid',
+        area: 'area',
+        line: 'line',
+        heikin_ashi: 'candle_solid',  // KLineCharts 通过数据转换实现
+      }
+      try {
+        this.chart.setStyleOptions({
+          candle: { type: typeMap[this.chartType] || 'candle_solid' },
+        })
+      } catch {}
     },
 
     async loadStock(tsCode, period, indicatorKeys) {
@@ -121,10 +178,17 @@ export default {
 
       try {
         const data = await chartService.fetchKlineData(tsCode, indParam, period, 300)
-        this.klineData = data.kline || []
+        let kline = data.kline || []
+
+        // Heikin Ashi 转换 (150§3.2)
+        if (this.chartType === 'heikin_ashi' && kline.length > 0) {
+          kline = this._transformHeikinAshi(kline)
+        }
+
+        this.klineData = kline
         this.signals = data.signals || []
 
-        this.$emit('data-loaded', data)
+        this.$emit('data-loaded', { data, chartId: this.chartId })
 
         if (this.klineData.length > 0) {
           this.chart.applyNewData(this.klineData)
@@ -138,23 +202,47 @@ export default {
       }
     },
 
+    _transformHeikinAshi(data) {
+      // Heikin Ashi 数据转换 (150§3.2)
+      const ha = []
+      let prevHa = null
+      for (const d of data) {
+        const ohlc = {
+          timestamp: d.timestamp,
+          open: 0, high: 0, low: 0, close: 0,
+          volume: d.volume || 0,
+        }
+        if (!prevHa) {
+          // 第一条: HA = 实际数据
+          ohlc.open = d.open
+          ohlc.close = d.close
+        } else {
+          ohlc.open = (prevHa.open + prevHa.close) / 2
+          ohlc.close = (d.open + d.high + d.low + d.close) / 4
+        }
+        ohlc.high = Math.max(d.high, ohlc.open, ohlc.close)
+        ohlc.low = Math.min(d.low, ohlc.open, ohlc.close)
+        ha.push(ohlc)
+        prevHa = ohlc
+      }
+      return ha
+    },
+
     syncIndicators(keys) {
       if (!this.chart) return
       const ks = Array.isArray(keys) ? keys : [keys]
 
       // 清除旧指标
       try {
-        const panes = ['candle_pane', 'vol_pane', 'macd_pane', 'rsi_pane']
-        panes.forEach(pid => {
+        ['candle_pane', 'vol_pane', 'macd_pane', 'rsi_pane'].forEach(pid => {
           const inds = this.chart.getIndicatorByPaneId(pid)
           if (inds && inds.length > 0) {
-            const toRemove = [...inds]
-            toRemove.forEach(ind => {
-              try { this.chart.removeIndicator(ind) } catch(e) {}
+            ;[...inds].forEach(ind => {
+              try { this.chart.removeIndicator(ind) } catch {}
             })
           }
         })
-      } catch(e) {}
+      } catch {}
 
       // 主图：MA
       const maIds = ks.filter(k => k.startsWith('ma'))
@@ -180,7 +268,6 @@ export default {
     renderSignalMarkers() {
       if (!this.chart || !this.signals || this.signals.length === 0) return
 
-      // 在 K 线主图上叠加 B/S 标记
       this.signals.forEach(s => {
         try {
           const isBuy = s.type === 'buy' || s.type === 'B'
@@ -188,7 +275,6 @@ export default {
             name: 'simpleAnnotation',
             points: [{ timestamp: s.timestamp, value: s.price }],
             styles: {
-              position: { left: '0%', top: '0%', width: '100%', height: '100%' },
               annotation: {
                 position: s.timestamp,
                 type: 'circle',
@@ -198,36 +284,43 @@ export default {
                   color: '#ffffff',
                   size: 10,
                   offset: [0, isBuy ? -12 : 12],
-                  position: isBuy ? 'top' : 'bottom'
-                }
-              }
-            }
+                  position: isBuy ? 'top' : 'bottom',
+                },
+              },
+            },
           }, { id: 'candle_pane' })
-        } catch(e) {
-          console.warn('创建信号标记失败:', e)
-        }
+        } catch {}
       })
     },
 
     refresh() {
       if (this.tsCode) this.loadStock(this.tsCode, this.period, this.indicators)
-    }
-  }
+    },
+
+    // 外部调用：获取 chart 实例
+    getChartInstance() {
+      return this.chart
+    },
+  },
 }
 </script>
 
 <style scoped>
 .kline-chart-container {
   width: 100%;
-  background: #0f172a;
-  border-radius: 8px;
+  background: var(--bg-canvas);
+  border-radius: var(--radius-md);
   overflow: hidden;
+  border: 1px solid var(--border-default);
+  transition: border-color 0.3s ease;
 }
+
 .kline-chart-canvas {
   width: 100%;
   height: 100%;
   min-height: 400px;
 }
+
 .kline-loading,
 .kline-empty {
   position: absolute;
@@ -238,7 +331,13 @@ export default {
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  color: #94a3b8;
+  color: var(--text-muted);
   z-index: 10;
+}
+
+/* 面积图 / 线图特殊处理 */
+.kline-chart--area .kline-chart-canvas,
+.kline-chart--line .kline-chart-canvas {
+  min-height: 300px;
 }
 </style>

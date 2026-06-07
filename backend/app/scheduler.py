@@ -15,6 +15,10 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+# 观潮对标 §5.4: 定时任务健康监控集成
+from app.monitors.task_health_monitor import task_health_monitor, TaskHealthMonitor
+
+
 
 def run_monthly_backtest():
     """
@@ -199,6 +203,117 @@ def _cache_conditional_rates(cond_rates: Dict[str, object]):
 
 
 # ==================== 命令行入口 ====================
+
+
+# ==================== T+N 回调检查定时任务 (P2.4) ====================
+
+def run_t5_checkpoint():
+    """T+5 回调检查"""
+    _run_checkpoint(5)
+
+def run_t10_checkpoint():
+    """T+10 回调检查"""
+    _run_checkpoint(10)
+
+def run_t20_checkpoint():
+    """T+20 回调检查"""
+    _run_checkpoint(20)
+
+def _run_checkpoint(days_offset: int):
+    """执行指定偏移的回调检查"""
+    try:
+        from app.services.backtest_evidence_service import BacktestEvidenceService
+        service = BacktestEvidenceService()
+        service.run_checkpoint_update(days_offset)
+        logger.info(f"T+{days_offset} 回调检查完成")
+    except Exception as e:
+        logger.error(f"T+{days_offset} 回调检查失败: {e}")
+
+
+def run_weekly_batch_eval():
+    """周度批量赢率评估"""
+    try:
+        from app.services.backtest_evidence_service import BacktestEvidenceService
+        service = BacktestEvidenceService()
+        service.run_batch_evaluation(months_back=6)
+        logger.info("周度批量赢率评估完成")
+    except Exception as e:
+        logger.error(f"周度批量赢率评估失败: {e}")
+
+
+def run_strategy_health_check():
+    """策略健康度检查（周度）"""
+    try:
+        from app.monitors.strategy_health_monitor import StrategyHealthMonitor
+        monitor = StrategyHealthMonitor()
+        report = monitor.check()
+        if report.get('alerts'):
+            logger.warning(f"策略健康度预警: {len(report['alerts'])} 条")
+        logger.info("策略健康度检查完成")
+    except Exception as e:
+        logger.error(f"策略健康度检查失败: {e}")
+
+
+def run_weekly_report():
+    """生成周度策略验证报告"""
+    try:
+        from app.services.weekly_report_service import WeeklyReportService
+        service = WeeklyReportService()
+        report_path = service.generate_weekly_report()
+        if report_path:
+            logger.info(f"周度报告已生成: {report_path}")
+        else:
+            logger.info("周度报告生成跳过（数据不足）")
+    except Exception as e:
+        logger.error(f"周度报告生成失败: {e}")
+
+
+# ==================== APScheduler 注册（生产环境使用） ====================
+
+def register_scheduler_jobs(scheduler):
+    """注册所有定时任务到 APScheduler（含健康监控）"""
+    import time
+
+    # 原任务函数保留，使用监控包装器
+    original_tasks = {
+        't5_checkpoint': (run_t5_checkpoint, {'cron': True, 'hour': 18, 'minute': 0}),
+        't10_checkpoint': (run_t10_checkpoint, {'cron': True, 'hour': 18, 'minute': 5}),
+        't20_checkpoint': (run_t20_checkpoint, {'cron': True, 'hour': 18, 'minute': 10}),
+        'weekly_batch_eval': (run_weekly_batch_eval, {'cron': True, 'day_of_week': 'mon', 'hour': 6, 'minute': 0}),
+        'strategy_health': (run_strategy_health_check, {'cron': True, 'day_of_week': 'mon', 'hour': 6, 'minute': 30}),
+        'weekly_report': (run_weekly_report, {'cron': True, 'day_of_week': 'sun', 'hour': 20, 'minute': 0}),
+    }
+
+    # 每个任务用监控包装器注册
+    for task_name, (fn, cron_kwargs) in original_tasks.items():
+        task_health_monitor.register_task(task_name)
+
+        def make_wrapper(name, func):
+            def wrapper(*a, **kw):
+                t0 = time.time()
+                try:
+                    func(*a, **kw)
+                    task_health_monitor.record_execution(name, True, (time.time() - t0) * 1000)
+                except Exception as e:
+                    task_health_monitor.record_execution(name, False, (time.time() - t0) * 1000, str(e))
+                    raise
+            return wrapper
+
+        scheduler.add_job(
+            make_wrapper(task_name, fn),
+            'cron',
+            id=task_name,
+            name=task_name,
+            replace_existing=True,
+            **{k: v for k, v in cron_kwargs.items() if k != 'cron'}
+        )
+
+    logger.info(f"已注册 {len(original_tasks)} 个定时任务（含健康监控）")
+    return
+    """注册所有定时任务到 APScheduler"""
+
+
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)

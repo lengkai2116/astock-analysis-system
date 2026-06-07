@@ -10,9 +10,58 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import pandas as pd
 import numpy as np
+import requests
+from functools import lru_cache
+import os
+from dotenv import load_dotenv
 
 from . import UniverseSelectionModel, Algorithm
 from .chip_strategy import ChipUniverseSelectionModel, ChipScorer
+
+
+# ── Tushare Pro API 辅助函数 ──
+@lru_cache(maxsize=1)
+def _get_tushare_token() -> Optional[str]:
+    load_dotenv()
+    load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '..', '.env.local'))
+    return os.getenv('TUSHARE_TOKEN')
+
+
+def _tushare_pro(api_name: str, params: dict, fields: str) -> Optional[dict]:
+    token = _get_tushare_token()
+    if not token:
+        return None
+    try:
+        resp = requests.post('http://api.tushare.pro', json={
+            'api_name': api_name, 'token': token,
+            'params': params, 'fields': fields
+        }, timeout=10)
+        data = resp.json()
+        if data.get('code') == 0 and data.get('data', {}).get('items'):
+            return data['data']
+    except Exception:
+        pass
+    return None
+
+
+@lru_cache(maxsize=2048)
+def _fetch_stock_name(symbol: str) -> Optional[str]:
+    result = _tushare_pro('stock_basic',
+        {'ts_code': symbol, 'list_status': ''},
+        'ts_code,name')
+    if result and result['items']:
+        for item in result['items']:
+            if item[0] == symbol:
+                return str(item[1])
+    return None
+
+
+@lru_cache(maxsize=2048)
+def _is_st_stock(symbol: str) -> Optional[bool]:
+    name = _fetch_stock_name(symbol)
+    if name:
+        return '*ST' in name or 'ST' in name or '退市' in name or 'SST' in name
+    return None
 
 import logging
 logger = logging.getLogger(__name__)
@@ -99,7 +148,17 @@ class DarwinRiskFilter:
         if name:
             if '*ST' in name or 'ST' in name or '退市' in name or 'SST' in name:
                 return False
+            return True  # 缓存查到名称且非ST
 
+        # 3. Tushare API 直接查询
+        try:
+            is_st = _is_st_stock(symbol)
+            if is_st is not None:
+                return not is_st  # ST→False(剔除), 非ST→True(通过)
+        except Exception:
+            pass
+
+        # 4. 以上均不可用：默认通过
         return True
 
     # ── 规则2: 低流动性 → 换手率<1% 或 成交额<1000万 ──
@@ -119,6 +178,7 @@ class DarwinRiskFilter:
                 return False
 
         # 换手率检查（方案G: 阈值 1%）
+        turnover_checked = False
         try:
             basic_df = self.data_manager.get_cached_daily_basic(
                 symbol,
@@ -130,8 +190,29 @@ class DarwinRiskFilter:
                     avg_tr = float(tr_series.mean())
                     if avg_tr < 1.0:  # 20日均换手率<1% 排除
                         return False
+                    turnover_checked = True
         except Exception:
-            pass  # 换手率数据不可用时以成交额判断为准
+            pass
+        
+        # Tushare API 回退（缓存为空时）
+        if not turnover_checked:
+            try:
+                today = datetime.now().strftime('%Y%m%d')
+                start = (datetime.now() - pd.Timedelta(days=60)).strftime('%Y%m%d')
+                result = _tushare_pro('daily_basic',
+                    {'ts_code': symbol, 'start_date': start, 'end_date': today},
+                    'trade_date,turnover_rate')
+                if result and result['items']:
+                    fields = result['fields']
+                    tr_idx = fields.index('turnover_rate')
+                    tr_values = [float(item[tr_idx]) for item in result['items']
+                                 if item[tr_idx] is not None]
+                    if len(tr_values) >= 5:
+                        avg_tr = sum(tr_values[-20:]) / min(len(tr_values[-20:]), 20)
+                        if avg_tr < 1.0:
+                            return False
+            except Exception:
+                pass
 
         return True
 
@@ -219,6 +300,15 @@ class DarwinRiskFilter:
                     if name:
                         self._stock_info_cache[symbol] = name
                         return name
+        except Exception:
+            pass
+
+        # 3. Tushare API 回退
+        try:
+            name = _fetch_stock_name(symbol)
+            if name:
+                self._stock_info_cache[symbol] = name
+                return name
         except Exception:
             pass
 
@@ -342,9 +432,10 @@ class SignalFusion:
             strategy_weights: 策略权重配置
         """
         self.weights = strategy_weights or {
-            'chip': 0.4,
-            'chanlun': 0.3,
-            'factor': 0.3
+            'chip': 0.30,
+            'chanlun': 0.25,
+            'factor': 0.20,
+            'volume_price': 0.25,
         }
 
     def fuse(self, signals_dict: Dict[str, float]) -> Dict:

@@ -16,7 +16,7 @@ from app.engine.framework.chip_strategy import ChipScorer
 
 logger = logging.getLogger(__name__)
 
-screener_bp = Blueprint('screener', __name__)
+screener_bp = Blueprint('screener', __name__, url_prefix='/api/v3/screener')
 
 # ── 全局缓存 ──
 _data_manager = None
@@ -208,7 +208,7 @@ def compute_screening(stock_list):
 
 # ============ API 路由 ============
 @handle_exceptions
-@screener_bp.route('/api/v3/screener/run', methods=['POST'])
+@screener_bp.route('/run', methods=['POST'])
 def run_screener():
     """执行完整的三层筛选流程"""
     data = request.get_json(silent=True) or {}
@@ -266,7 +266,7 @@ def run_screener():
         'from_cache': False
     })
 @handle_exceptions
-@screener_bp.route('/api/v3/screener/layer1', methods=['POST'])
+@screener_bp.route('/layer1', methods=['POST'])
 def run_layer1():
     """第一层：风险剔除"""
     data = request.get_json(silent=True) or {}
@@ -296,7 +296,7 @@ def run_layer1():
         }
     })
 @handle_exceptions
-@screener_bp.route('/api/v3/screener/layer2', methods=['POST'])
+@screener_bp.route('/layer2', methods=['POST'])
 def run_layer2():
     """第二层：主力识别"""
     data = request.get_json(silent=True) or {}
@@ -333,7 +333,7 @@ def run_layer2():
         }
     })
 @handle_exceptions
-@screener_bp.route('/api/v3/screener/layer3', methods=['POST'])
+@screener_bp.route('/layer3', methods=['POST'])
 def run_layer3():
     """第三层：策略验证"""
     data = request.get_json(silent=True) or {}
@@ -386,7 +386,7 @@ def run_layer3():
         'data': {'validated': validated}
     })
 @handle_exceptions
-@screener_bp.route('/api/v3/screener/fusion-config', methods=['GET', 'POST'])
+@screener_bp.route('/fusion-config', methods=['GET', 'POST'])
 def fusion_config():
     """获取/更新信号融合权重配置"""
     if request.method == 'POST':
@@ -407,7 +407,7 @@ def fusion_config():
         }
     })
 @handle_exceptions
-@screener_bp.route('/api/v3/screener/params', methods=['GET'])
+@screener_bp.route('/params', methods=['GET'])
 def screener_params():
     """获取可用筛选器参数范围"""
     return jsonify({
@@ -442,7 +442,7 @@ def screener_params():
         }
     })
 @handle_exceptions
-@screener_bp.route('/api/v3/screener/stats', methods=['GET'])
+@screener_bp.route('/stats', methods=['GET'])
 def screener_stats():
     """获取缓存状态和数据统计"""
     dm = get_data_manager()

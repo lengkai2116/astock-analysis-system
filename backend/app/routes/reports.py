@@ -583,3 +583,58 @@ def health_check():
             'research_pipeline': 'available'
         }
     }), 200
+
+@reports_bp.route('/weekly', methods=['GET'])
+@handle_exceptions
+def get_weekly_report():
+    """
+    获取最新周度策略验证报告
+
+    查询参数:
+    - format: 'markdown' (默认) 返回原始 Markdown, 'json' 返回结构化数据
+    """
+    from app.services.weekly_report_service import WeeklyReportService
+
+    service = WeeklyReportService()
+    reports = service.list_recent_reports(limit=1)
+
+    fmt = request.args.get('format', 'markdown')
+
+    if not reports:
+        return jsonify({
+            'success': True,
+            'data': None,
+            'message': '暂无周度报告，系统将在周末首次生成'
+        }), 200
+
+    latest = reports[0]
+    content = service.read_report(latest)
+    if content is None:
+        return jsonify({
+            'success': False,
+            'error': '报告文件读取失败'
+        }), 500
+
+    if fmt == 'json':
+        import re
+        match = re.search(r'报告周期: (.+?) ~ (.+)', content)
+        period = {'start': match.group(1), 'end': match.group(2)} if match else {}
+        return jsonify({
+            'success': True,
+            'data': {
+                'filepath': latest,
+                'filename': os.path.basename(latest),
+                'content': content,
+                'period': period,
+            }
+        }), 200
+
+    # 默认返回 Markdown 纯文本
+    from flask import Response
+    return Response(
+        content,
+        mimetype='text/markdown; charset=utf-8',
+        headers={
+            'Content-Disposition': f'attachment; filename="{os.path.basename(latest)}"'
+        }
+    )

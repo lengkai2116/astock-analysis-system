@@ -58,10 +58,21 @@
           <FolderOutlined />
           <span>报告中心</span>
         </a-menu-item>
+
+        <a-menu-item key="/account" @click="navigate('/account')">
+          <WalletOutlined />
+          <span>账户管理</span>
+        </a-menu-item>
       </a-menu>
     </div>
 
     <div class="sidebar-footer">
+      <!-- 主题切换按钮 (150§2.1) -->
+      <div class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色主题' : '切换到深色主题'">
+        <span class="theme-toggle-icon">{{ isDark ? '☀️' : '🌙' }}</span>
+        <span v-if="!collapsed" class="theme-toggle-text">{{ isDark ? '浅色主题' : '深色主题' }}</span>
+      </div>
+
       <div class="collapse-btn" @click="toggleCollapse">
         <RightOutlined v-if="collapsed" /><LeftOutlined v-else />
       </div>
@@ -70,20 +81,36 @@
 </template>
 
 <script>
-import { BarChartOutlined, CodeOutlined, DashboardOutlined, DatabaseOutlined, FileTextOutlined, FilterOutlined, FolderOutlined, RightOutlined, RobotOutlined, StarOutlined } from '@ant-design/icons-vue'
+import {
+  BarChartOutlined, CodeOutlined, DashboardOutlined, DatabaseOutlined,
+  FileTextOutlined, FilterOutlined, FolderOutlined, LeftOutlined,
+  RightOutlined, RobotOutlined, StarOutlined, WalletOutlined,
+} from '@ant-design/icons-vue'
 import { mapState, mapActions } from 'pinia'
 import { useAppStore } from '@/stores'
+import { useThemeStore } from '@/stores/theme'
 
 export default {
   name: 'Sidebar',
+  components: {
+    BarChartOutlined, CodeOutlined, DashboardOutlined, DatabaseOutlined,
+    FileTextOutlined, FilterOutlined, FolderOutlined, LeftOutlined,
+    RightOutlined, RobotOutlined, StarOutlined, WalletOutlined,
+  },
   data() {
     return {
       selectedKeys: [],
-      openKeys: []
+      openKeys: [],
     }
   },
   computed: {
-    ...mapState(useAppStore, { collapsed: 'sidebarCollapsed' })
+    ...mapState(useAppStore, { collapsed: 'sidebarCollapsed' }),
+    isDark() {
+      return this.$themeStore?.isDark
+    },
+  },
+  created() {
+    this.$themeStore = useThemeStore()
   },
   mounted() {
     this.updateSelectedKey()
@@ -93,23 +120,29 @@ export default {
   },
   methods: {
     ...mapActions(useAppStore, ['toggleSidebar']),
+    toggleCollapse() {
+      this.toggleSidebar()
+    },
+    toggleTheme() {
+      this.$themeStore.toggle()
+    },
     updateSelectedKey() {
       const path = this.$route.path
       this.selectedKeys = [path === '/' ? '/' : path]
     },
     navigate(path) {
       this.$router.push(path)
-    }
-  }
+    },
+  },
 }
 </script>
 
 <style scoped>
 .sidebar {
-  width: 200px;
+  width: var(--sidebar-width);
   height: 100vh;
-  background: #0f172a;
-  border-right: 1px solid #2a2a2a;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
   display: flex;
   flex-direction: column;
   position: fixed;
@@ -120,12 +153,12 @@ export default {
 }
 
 .sidebar.collapsed {
-  width: 64px;
+  width: var(--sidebar-collapsed-width);
 }
 
 .sidebar-header {
-  padding: 16px;
-  border-bottom: 1px solid #2a2a2a;
+  padding: var(--space-16);
+  border-bottom: 1px solid var(--sidebar-border);
 }
 
 .logo {
@@ -142,7 +175,7 @@ export default {
 .logo-text {
   font-size: 16px;
   font-weight: 600;
-  color: #f1f5f9;
+  color: var(--text-primary);
 }
 
 .sidebar-menu {
@@ -158,20 +191,48 @@ export default {
 
 .sidebar-menu :deep(.ant-menu-item) {
   margin: 4px 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .sidebar-menu :deep(.ant-menu-item-selected) {
-  background: rgba(59, 130, 246, 0.2);
+  background: var(--sidebar-menu-selected-bg);
 }
 
 .sidebar-menu :deep(.ant-menu-item-selected::after) {
-  border-right: 3px solid #3b82f6;
+  border-right: 3px solid var(--color-brand-500);
 }
 
 .sidebar-footer {
   padding: 12px;
-  border-top: 1px solid #2a2a2a;
+  border-top: 1px solid var(--sidebar-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: var(--sidebar-collapse-bg);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.2s;
+}
+
+.theme-toggle:hover {
+  background: var(--sidebar-collapse-hover-bg);
+  color: var(--text-primary);
+}
+
+.theme-toggle-icon {
+  font-size: 16px;
+}
+
+.theme-toggle-text {
+  font-size: 13px;
 }
 
 .collapse-btn {
@@ -179,15 +240,15 @@ export default {
   justify-content: center;
   align-items: center;
   padding: 8px;
-  background: #1e293b;
-  border-radius: 8px;
+  background: var(--sidebar-collapse-bg);
+  border-radius: var(--radius-md);
   cursor: pointer;
-  color: #94a3b8;
+  color: var(--text-secondary);
   transition: all 0.2s;
 }
 
 .collapse-btn:hover {
-  background: #334155;
-  color: #f1f5f9;
+  background: var(--sidebar-collapse-hover-bg);
+  color: var(--text-primary);
 }
 </style>

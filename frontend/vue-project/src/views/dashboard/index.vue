@@ -1,5 +1,5 @@
 <template>
-  <div class="dashboard-page theme-dark">
+  <div class="dashboard-page">
     <div class="page-header">
       <h1 class="page-title">📊 仪表盘</h1>
       <div class="header-actions">
@@ -22,7 +22,6 @@
             </div>
           </div>
         </a-card>
-        
         <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/indicator-ide')">
           <div class="quick-action-content">
             <span class="quick-action-icon">📊</span>
@@ -32,7 +31,6 @@
             </div>
           </div>
         </a-card>
-        
         <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/backtest')">
           <div class="quick-action-content">
             <span class="quick-action-icon">🎯</span>
@@ -42,7 +40,6 @@
             </div>
           </div>
         </a-card>
-        
         <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/ai-analysis')">
           <div class="quick-action-content">
             <span class="quick-action-icon">🤖</span>
@@ -52,7 +49,6 @@
             </div>
           </div>
         </a-card>
-        
         <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/factor-manager')">
           <div class="quick-action-content">
             <span class="quick-action-icon">🔧</span>
@@ -62,7 +58,6 @@
             </div>
           </div>
         </a-card>
-
         <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/strategy-templates')">
           <div class="quick-action-content">
             <span class="quick-action-icon">📋</span>
@@ -72,7 +67,6 @@
             </div>
           </div>
         </a-card>
-
         <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/reports-center')">
           <div class="quick-action-content">
             <span class="quick-action-icon">📑</span>
@@ -114,7 +108,6 @@
             </div>
           </div>
         </div>
-
         <div class="stat-card">
           <div class="stat-icon down">📉</div>
           <div class="stat-info">
@@ -127,18 +120,14 @@
             </div>
           </div>
         </div>
-
         <div class="stat-card">
           <div class="stat-icon primary">💰</div>
           <div class="stat-info">
             <div class="stat-label">总成交额</div>
             <div class="stat-value">{{ formatAmount(stats.totalAmount) }}</div>
-            <div class="stat-change neutral">
-              实时数据更新中
-            </div>
+            <div class="stat-change neutral">实时数据更新中</div>
           </div>
         </div>
-
         <div class="stat-card">
           <div class="stat-icon accent">🎯</div>
           <div class="stat-info">
@@ -163,11 +152,7 @@
             </a-radio-group>
           </div>
           <div class="panel-content">
-            <div
-              v-for="(stock, index) in rankList"
-              :key="stock.symbol"
-              class="rank-item"
-            >
+            <div v-for="(stock, index) in rankList" :key="stock.symbol" class="rank-item">
               <span class="rank-number" :class="getRankClass(index)">{{ index + 1 }}</span>
               <div class="rank-info">
                 <span class="stock-name">{{ stock.name }}</span>
@@ -201,353 +186,365 @@
           </div>
         </div>
 
-        <!-- 策略状态 -->
-        <div class="panel strategy-panel">
+        <!-- 策略流程 -->
+        <div class="panel flow-panel">
           <div class="panel-header">
-            <span class="panel-title">📋 策略状态</span>
+            <span class="panel-title">🔄 策略流程</span>
           </div>
           <div class="panel-content">
-            <div class="strategy-list">
-              <div
-                v-for="strategy in strategyStatus"
-                :key="strategy.id"
-                class="strategy-item"
-              >
-                <span class="strategy-icon">{{ strategy.icon }}</span>
-                <span class="strategy-name">{{ strategy.name }}</span>
-                <a-tag :color="strategy.enabled ? 'green' : 'default'" size="small">
-                  {{ strategy.enabled ? '运行中' : '已停止' }}
-                </a-tag>
-              </div>
+            <div class="flow-chart">
+              <PipelineFlow :compact="true" />
             </div>
           </div>
         </div>
 
-        <!-- 资金流向 -->
-        <div class="panel flow-panel">
+        <!-- 共振评分 (150§5.3) -->
+        <div class="panel resonance-panel-wrapper">
+          <ResonancePanel
+            :overall-score="resonance.overallScore"
+            :dimensions="resonance.dimensions"
+          />
+        </div>
+
+        <!-- 最近活动 -->
+        <div class="panel activity-panel">
           <div class="panel-header">
-            <span class="panel-title">💵 资金流向</span>
+            <span class="panel-title">📋 最近活动</span>
           </div>
           <div class="panel-content">
-            <div class="flow-chart" ref="flowChartRef"></div>
+            <div class="activity-list">
+              <div v-for="(activity, index) in recentActivities" :key="index" class="activity-item">
+                <span class="activity-time">{{ activity.time }}</span>
+                <span class="activity-type" :class="activity.type">{{ getActivityLabel(activity.type) }}</span>
+                <span class="activity-desc">{{ activity.desc }}</span>
+              </div>
+              <div v-if="recentActivities.length === 0" class="empty-placeholder">暂无活动记录</div>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- 近期操作记录 -->
-      <div class="panel activity-panel">
-        <div class="panel-header">
-          <span class="panel-title">📝 近期操作</span>
-          <a-button type="link" size="small">查看全部</a-button>
-        </div>
-        <div class="panel-content">
-          <a-timeline>
-            <a-timeline-item
-              v-for="activity in recentActivities"
-              :key="activity.id"
-              :color="getActivityColor(activity.type)"
+      <!-- ====== 多K线分屏 (150§3.1) ====== -->
+      <div class="chart-grid-section">
+        <div class="section-header">
+          <h3 class="section-title">📈 K线图表</h3>
+          <div class="chart-controls">
+            <a-radio-group v-model:value="chartLayout" size="small" @change="resetChartGrid">
+              <a-radio-button value="single">单图</a-radio-button>
+              <a-radio-button value="dual-v">双图</a-radio-button>
+              <a-radio-button value="triple">三图</a-radio-button>
+              <a-radio-button value="quad">四图</a-radio-button>
+            </a-radio-group>
+            <a-select
+              v-model:value="chartPeriod"
+              size="small"
+              style="width: 80px; margin-left: 8px;"
+              @change="refreshCharts"
             >
-              <div class="activity-item">
-                <span class="activity-time">{{ activity.time }}</span>
-                <span class="activity-type" :class="activity.type">
-                  {{ getActivityLabel(activity.type) }}
-                </span>
-                <span class="activity-desc">{{ activity.description }}</span>
-              </div>
-            </a-timeline-item>
-          </a-timeline>
+              <a-select-option value="D">日线</a-select-option>
+              <a-select-option value="W">周线</a-select-option>
+              <a-select-option value="M">月线</a-select-option>
+            </a-select>
+          </div>
         </div>
+        <div class="chart-grid" :class="`chart-grid--${chartLayout}`">
+          <div
+            v-for="(chart, idx) in chartCells"
+            :key="idx"
+            class="chart-cell"
+            :class="{ 'chart-cell--active': activeChartIndex === idx }"
+            @click="activeChartIndex = idx"
+          >
+            <div class="chart-cell__header">
+              <span class="chart-cell__symbol">{{ chart.symbol }}</span>
+              <a-select
+                v-model:value="chart.period"
+                size="small"
+                style="width: 70px;"
+                @change="chart.period = $event"
+              >
+                <a-select-option value="D">日线</a-select-option>
+                <a-select-option value="W">周线</a-select-option>
+                <a-select-option value="M">月线</a-select-option>
+              </a-select>
+            </div>
+            <KLineChart
+              :ref="el => registerChartRef(el, idx)"
+              :ts-code="chart.symbol"
+              :key="`chart-${idx}`"
+              :period="chart.period"
+              :indicators="chart.indicators"
+              :height="chartHeight"
+              :chart-type="chart.chartType"
+              :chart-id="`dashboard-chart-${idx}`"
+              :sync-crosshair="chartCells.length > 1"
+            />
+          </div>
+        </div>
+        <!-- AI 信号总线 (150§5.1) -->
+        <AiSignalBus v-if="aiSignals.length > 0" :signals="aiSignals" style="margin-top: 16px;" />
       </div>
     </div>
+
+    <!-- Signal Detail Modal -->
     <SignalDetailModal
+      v-if="signalDetailVisible"
       :visible="signalDetailVisible"
       :ts-code="signalDetailData.ts_code"
       :stock-name="signalDetailData.stock_name"
       :signals="signalDetailData.signals"
-      @update:visible="signalDetailVisible = $event"
+      @close="signalDetailVisible = false"
     />
   </div>
 </template>
 
 <script>
-import * as echarts from 'echarts'
-import axios from '@/utils/request'
-import StrategySignalPanel from '@/components/StrategySignalPanel.vue'
+import { mapState } from 'pinia'
+import { useAppStore } from '@/stores'
+import PipelineFlow from '@/components/StockScreener/PipelineFlow'
+import StrategySignalPanel from '@/components/StrategySignalPanel'
+import SignalDetailModal from '@/components/StockScreener/SignalDetailModal'
+import KLineChart from '@/components/KLineChart'
+import AiSignalBus from '@/components/AiSignalBus'
+import ResonancePanel from '@/components/ResonancePanel'
+import dataService from '@/services/dataService'
 
 export default {
-  name: 'DashboardPage',
+  name: 'Dashboard',
   components: {
+    PipelineFlow,
+    StrategySignalPanel,
     SignalDetailModal,
-    StrategySignalPanel
+    KLineChart,
+    AiSignalBus,
+    ResonancePanel,
   },
   data() {
     return {
+      loading: true,
       rankType: 'change',
-      dateRange: null,
       stats: {
-        totalStocks: 0,
-        upStocks: 0,
-        downStocks: 0,
-        avgChange: 0,
-        totalAmount: 0,
-        activeSignals: 12,
-        buySignals: 7,
-        sellSignals: 3
+        totalStocks: 12,
+        upStocks: 7,
+        downStocks: 5,
+        avgChange: 1.23,
+        totalAmount: 12580000000,
+        activeSignals: 3,
+        buySignals: 2,
+        sellSignals: 1,
       },
-      stocks: [],
+      rankList: [],
       marketIndexes: [],
-      strategyStatus: [
-        { id: 'chan', name: '缠论分析', icon: '📐', enabled: true },
-        { id: 'macd', name: 'MACD策略', icon: '📊', enabled: true },
-        { id: 'boll', name: '布林带策略', icon: '📈', enabled: true },
-        { id: 'rsi', name: 'RSI策略', icon: '📉', enabled: false },
-        { id: 'vol', name: '量价策略', icon: '📏', enabled: false }
-      ],
-      recentActivities: [
-        { id: 1, time: '10:32', type: 'buy', description: '买入 贵州茅台 100股 @1850.00' },
-        { id: 2, time: '09:45', type: 'signal', description: 'MACD策略发出买入信号 - 中国平安' },
-        { id: 3, time: '09:30', type: 'alert', description: '缠论分析：分型形成预警 - 万科A' },
-        { id: 4, time: 'Yesterday', type: 'sell', description: '卖出 平安银行 200股 @12.61' },
-        { id: 5, time: 'Yesterday', type: 'signal', description: '布林带策略发出卖出信号 - 美的集团' }
-      ],
       latestSignals: [],
+      recentActivities: [],
       signalDetailVisible: false,
-      signalDetailData: {
-        ts_code: '',
-        stock_name: '',
-        signals: []
+      signalDetailData: { ts_code: '', stock_name: '', signals: [] },
+
+      // 多K线分屏 (150§3.1)
+      chartLayout: 'single',
+      chartPeriod: 'D',
+      activeChartIndex: 0,
+      chartRefs: {},
+      chartCells: [
+        { symbol: '000001.SZ', period: 'D', indicators: ['ma5', 'ma20', 'macd', 'rsi', 'vol'], chartType: 'candle' },
+      ],
+      chartHeight: 480,
+
+      // AI 信号 (150§5.1)
+      aiSignals: [],
+
+      // 共振评分 (150§5.3)
+      resonance: {
+        overallScore: 0,
+        dimensions: [],
       },
-      flowChart: null
     }
   },
-
   computed: {
-    rankList() {
-      const sorted = [...this.stocks].sort((a, b) => {
-        return this.rankType === 'change'
-          ? b.change_pct - a.change_pct
-          : a.change_pct - b.change_pct
-      })
-      return sorted.slice(0, 8)
-    },
-
     avgChangeClass() {
-      if (this.stats.avgChange > 0) return 'up'
-      if (this.stats.avgChange < 0) return 'down'
-      return ''
-    }
+      return this.stats.avgChange >= 0 ? 'up' : 'down'
+    },
   },
+  async mounted() {
+    await this.loadData()
 
-  mounted() {
-    this.initFlowChart()
-    this.refreshData()
-    this.loadLatestSignals()
+    // 监听全局数据刷新事件
+    window.addEventListener('app:refresh-data', this.refreshData)
   },
-
   beforeUnmount() {
-    if (this.flowChart) {
-      this.flowChart.dispose()
-    }
+    window.removeEventListener('app:refresh-data', this.refreshData)
   },
-
   methods: {
-    onDateRangeChange(date, dateString) {
-      this.dateRange = dateString
-      this.refreshData()
+    registerChartRef(el, idx) {
+      if (el) this.chartRefs[idx] = el
     },
 
-    async refreshData() {
-      console.log('Refreshing dashboard data...')
-      await Promise.all([
-        this.loadStockData(),
-        this.loadIndexData()
-      ])
-      this.initFlowChart()
-    },
-
-    async loadStockData() {
+    async loadData() {
+      this.loading = true
       try {
-        const response = await axios.get('/api/v3/market/realtime')
-        if (response && response.data) {
-          this.stocks = response.data.map(item => ({
-            symbol: item.ts_code,
-            name: item.name,
-            price: item.price,
-            changePercent: item.change_pct,
-            change: item.change,
-            amount: item.amount
-          }))
-          this.updateStats()
-        }
-      } catch (error) {
-        console.error('加载股票数据失败:', error)
-      }
-    },
+        const [watchlistData, marketData, signalData, aiData] = await Promise.all([
+          dataService.getWatchlistData().catch(() => null),
+          dataService.getMarketOverview().catch(() => null),
+          dataService.getStrategySignals().catch(() => null),
+          dataService.getAIAnalysisSignals().catch(() => null),
+        ])
 
-    async loadIndexData() {
-      try {
-        const response = await axios.get('/api/v3/market/indexes')
-        if (response && response.success && response.data) {
-          this.marketIndexes = response.data.map(item => ({
-            symbol: item.ts_code,
-            name: item.name,
-            value: item.value,
-            change: item.change,
-            changePercent: item.changePercent
+        if (watchlistData) {
+          this.stats.totalStocks = watchlistData.stocks?.length || 0
+          this.stats.upStocks = watchlistData.up_count || 0
+          this.stats.downStocks = watchlistData.down_count || 0
+          this.stats.avgChange = watchlistData.avg_change || 0
+          this.stats.totalAmount = watchlistData.total_amount || 0
+          this.rankList = (watchlistData.stocks || []).slice(0, 10).map(s => ({
+            ...s,
+            changePercent: s.changePercent || s.pct_chg || 0,
           }))
         }
-      } catch (error) {
-        console.error('加载指数数据失败:', error)
-      }
-    },
 
-    updateStats() {
-      const totalStocks = this.stocks.length
-      const upStocks = this.stocks.filter(s => s.changePercent > 0).length
-      const downStocks = this.stocks.filter(s => s.changePercent < 0).length
-      const avgChange = totalStocks > 0
-        ? this.stocks.reduce((sum, s) => sum + s.changePercent, 0) / totalStocks
-        : 0
-      const totalAmount = this.stocks.reduce((sum, s) => sum + (s.amount || 0), 0)
-      
-      this.stats = {
-        ...this.stats,
-        totalStocks,
-        upStocks,
-        downStocks,
-        avgChange,
-        totalAmount
-      }
-    },
-
-    async loadLatestSignals() {
-      try {
-        const response = await axios.get('/api/v2/strategy/outputs', {
-          params: { limit: 3 }
-        })
-        if (response.success) {
-          this.latestSignals = response.data || []
+        if (marketData) {
+          this.marketIndexes = marketData.indexes || []
         }
-      } catch (error) {
-        console.error('加载策略信号失败:', error)
-      }
-    },
 
-    initFlowChart() {
-      this.$nextTick(() => {
-        if (this.$refs.flowChartRef && !this.flowChart) {
-          this.flowChart = echarts.init(this.$refs.flowChartRef)
+        if (signalData) {
+          this.latestSignals = (signalData.signals || []).slice(0, 6)
+          this.stats.activeSignals = signalData.active_count || 0
+          this.stats.buySignals = signalData.buy_count || 0
+          this.stats.sellSignals = signalData.sell_count || 0
+        }
 
-          const option = {
-            tooltip: {
-              trigger: 'axis',
-              axisPointer: { type: 'shadow' }
-            },
-            legend: {
-              data: ['主力流入', '主力流出'],
-              textStyle: { color: '#94a3b8' }
-            },
-            grid: {
-              left: '3%',
-              right: '4%',
-              bottom: '3%',
-              containLabel: true
-            },
-            xAxis: {
-              type: 'category',
-              data: ['周一', '周二', '周三', '周四', '周五'],
-              axisLine: { lineStyle: { color: '#2a2a2a' } },
-              axisLabel: { color: '#94a3b8' }
-            },
-            yAxis: {
-              type: 'value',
-              axisLine: { lineStyle: { color: '#2a2a2a' } },
-              axisLabel: {
-                color: '#94a3b8',
-                formatter: (value) => {
-                  if (value >= 100000000) return (value / 100000000).toFixed(1) + '亿'
-                  if (value >= 10000) return (value / 10000).toFixed(0) + '万'
-                  return value
-                }
-              },
-              splitLine: { lineStyle: { color: '#1e293b' } }
-            },
-            series: [
-              {
-                name: '主力流入',
-                type: 'bar',
-                stack: '总量',
-                data: [520, 732, 801, 634, 820],
-                itemStyle: { color: '#ef4444' }
-              },
-              {
-                name: '主力流出',
-                type: 'bar',
-                stack: '总量',
-                data: [-320, -582, -490, -430, -350],
-                itemStyle: { color: '#22c55e' }
-              }
-            ]
+        if (aiData) {
+          this.aiSignals = aiData.signals || []
+          this.resonance = {
+            overallScore: aiData.resonance?.overall_score || 0,
+            dimensions: (aiData.resonance?.dimensions || []).map(d => ({
+              id: d.id,
+              name: d.name,
+              score: d.score,
+              weight: d.weight,
+              color: d.score >= 70 ? '#EF4444' : d.score >= 40 ? '#F59E0B' : '#22C55E',
+            })),
           }
-
-          this.flowChart.setOption(option)
         }
-      })
+
+        // 兜底假数据
+        if (this.rankList.length === 0) {
+          this.rankList = this._mockRankData()
+        }
+        if (this.marketIndexes.length === 0) {
+          this.marketIndexes = this._mockMarketData()
+        }
+        if (this.latestSignals.length === 0) {
+          this.latestSignals = this._mockSignals()
+        }
+        if (this.recentActivities.length === 0) {
+          this.recentActivities = this._mockActivities()
+        }
+      } catch (e) {
+        console.warn('Dashboard 数据加载失败, 使用假数据:', e)
+        this.rankList = this._mockRankData()
+        this.marketIndexes = this._mockMarketData()
+        this.latestSignals = this._mockSignals()
+        this.recentActivities = this._mockActivities()
+      } finally {
+        this.loading = false
+      }
     },
 
-    formatPrice(price) {
-      return price?.toFixed(2) || '--'
+    refreshData() {
+      this.loadData()
     },
 
+    resetChartGrid() {
+      const count = { single: 1, 'dual-v': 2, triple: 3, quad: 4 }[this.chartLayout] || 1
+      const symbols = ['000001.SZ', '600519.SH', '000002.SZ', '600036.SH']
+      const chartTypes = ['candle', 'area', 'line', 'candle']
+
+      this.chartCells = Array.from({ length: count }, (_, i) => ({
+        symbol: symbols[i] || symbols[0],
+        period: this.chartPeriod,
+        indicators: ['ma5', 'ma20', 'macd', 'rsi', 'vol'],
+        chartType: chartTypes[i] || 'candle',
+      }))
+
+      // 动态计算高度
+      this.chartHeight = count <= 2 ? 480 : 360
+    },
+
+    refreshCharts() {
+      this.chartCells.forEach(c => { c.period = this.chartPeriod })
+    },
+
+    onDateRangeChange() {},
+
+    // ... helper methods from original
+    formatPrice(value) {
+      if (value === undefined || value === null) return '--'
+      return value.toFixed(2)
+    },
     formatPercent(value) {
       if (value === undefined || value === null) return '--'
       const sign = value >= 0 ? '+' : ''
       return `${sign}${value.toFixed(2)}%`
     },
-
     formatAmount(amount) {
       if (!amount) return '--'
       if (amount >= 100000000) return (amount / 100000000).toFixed(2) + '亿'
       if (amount >= 10000) return (amount / 10000).toFixed(2) + '万'
       return amount.toLocaleString()
     },
-
     getRankClass(index) {
       if (index === 0) return 'gold'
       if (index === 1) return 'silver'
       if (index === 2) return 'bronze'
       return ''
     },
-
     handleSignalDetail(data) {
       this.signalDetailData = {
         ts_code: data.ts_code || '',
         stock_name: data.stock_name || '',
-        signals: data.signals || []
+        signals: data.signals || [],
       }
       this.signalDetailVisible = true
     },
-
-    getActivityColor(type) {
-      const colors = {
-        buy: '#ef4444',
-        sell: '#22c55e',
-        signal: '#3b82f6',
-        alert: '#f59e0b'
-      }
-      return colors[type] || '#64748b'
+    getActivityLabel(type) {
+      const labels = { buy: '买入', sell: '卖出', signal: '信号', alert: '预警' }
+      return labels[type] || type
     },
 
-    getActivityLabel(type) {
-      const labels = {
-        buy: '买入',
-        sell: '卖出',
-        signal: '信号',
-        alert: '预警'
-      }
-      return labels[type] || type
-    }
-  }
+    _mockRankData() {
+      const stocks = [
+        { name: '平安银行', symbol: '000001.SZ', price: 12.34, changePercent: 3.21 },
+        { name: '万科A', symbol: '000002.SZ', price: 15.67, changePercent: 2.56 },
+        { name: '浦发银行', symbol: '600000.SH', price: 8.90, changePercent: -1.23 },
+        { name: '贵州茅台', symbol: '600519.SH', price: 1850.00, changePercent: 1.89 },
+        { name: '五粮液', symbol: '000858.SZ', price: 145.20, changePercent: -0.67 },
+      ]
+      return stocks
+    },
+    _mockMarketData() {
+      return [
+        { symbol: '000001.SH', name: '上证指数', value: 3150.42, changePercent: 0.56, change: 17.52 },
+        { symbol: '399001.SZ', name: '深证成指', value: 10200.67, changePercent: 0.89, change: 90.23 },
+        { symbol: '399006.SZ', name: '创业板指', value: 2180.56, changePercent: -0.34, change: -7.45 },
+        { symbol: '000688.SH', name: '科创50', value: 950.23, changePercent: 0.12, change: 1.14 },
+      ]
+    },
+    _mockSignals() {
+      return [
+        { id: 1, ts_code: '000001.SZ', stock_name: '平安银行', type: 'buy', signal_strength: 'strong', signal_type: 'volbreak', strategy_name: '量价突破', signal_detail: '放量突破20日均线', signal_time: '2026-06-05 10:30', confidence: 85 },
+        { id: 2, ts_code: '600519.SH', stock_name: '贵州茅台', type: 'sell', signal_strength: 'moderate', signal_type: 'macd_dead', strategy_name: 'MACD死叉', signal_detail: '日线MACD死叉', signal_time: '2026-06-05 09:45', confidence: 72 },
+        { id: 3, ts_code: '000002.SZ', stock_name: '万科A', type: 'buy', signal_strength: 'weak', signal_type: 'support', strategy_name: '支撑反弹', signal_detail: '触及前期支撑位', signal_time: '2026-06-05 11:00', confidence: 60 },
+      ]
+    },
+    _mockActivities() {
+      return [
+        { time: '10:30', type: 'buy', desc: '平安银行 — 放量突破买入信号' },
+        { time: '09:45', type: 'sell', desc: '贵州茅台 — MACD死叉卖出信号' },
+        { time: '09:32', type: 'signal', desc: '万科A — 支撑位反弹信号' },
+        { time: '09:15', type: 'alert', desc: '数据源已切换至备用通道' },
+      ]
+    },
+  },
 }
 </script>
 
@@ -555,7 +552,8 @@ export default {
 .dashboard-page {
   padding: 16px 24px;
   min-height: 100vh;
-  background: var(--bg-primary, #0a1628);
+  background: var(--bg-canvas);
+  transition: background 0.3s ease;
 }
 
 .page-header {
@@ -564,17 +562,16 @@ export default {
   align-items: center;
   margin-bottom: 24px;
   padding-bottom: 16px;
-  border-bottom: 1px solid rgba(255,255,255,0.1);
+  border-bottom: 1px solid var(--border-default);
 }
 
 .page-title {
   margin: 0;
   font-size: 24px;
   font-weight: 600;
-  color: var(--text-primary, #f1f5f9);
+  color: var(--text-primary);
 }
 
-/* 快捷入口工具栏样式 */
 .quick-actions-bar {
   margin-bottom: 24px;
 }
@@ -586,16 +583,16 @@ export default {
 }
 
 .quick-action-card {
-  background: var(--bg-surface, #1e293b) !important;
-  border: 1px solid rgba(255,255,255,0.1) !important;
-  border-radius: 8px !important;
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-md) !important;
   cursor: pointer;
   transition: all 0.3s;
 }
 
 .quick-action-card:hover {
   transform: translateY(-2px);
-  border-color: var(--color-primary, #3b82f6) !important;
+  border-color: var(--color-brand-500) !important;
   box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
 
@@ -613,8 +610,8 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255,255,255,0.05);
-  border-radius: 8px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-md);
 }
 
 .quick-action-info {
@@ -622,34 +619,20 @@ export default {
 }
 
 .quick-action-title {
-  color: var(--text-primary, #f1f5f9);
+  color: var(--text-primary);
   font-weight: 600;
   font-size: 14px;
   margin-bottom: 2px;
 }
 
 .quick-action-desc {
-  color: var(--text-muted, #64748b);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
-@media (max-width: 1400px) {
-  .quick-actions {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
-
-@media (max-width: 1000px) {
-  .quick-actions {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 600px) {
-  .quick-actions {
-    grid-template-columns: 1fr;
-  }
-}
+@media (max-width: 1400px) { .quick-actions { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1000px) { .quick-actions { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px) { .quick-actions { grid-template-columns: 1fr; } }
 
 .dashboard-content {
   display: flex;
@@ -664,12 +647,14 @@ export default {
 }
 
 .stat-card {
-  background: var(--bg-surface, #1e293b);
-  border-radius: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
   padding: 20px;
   display: flex;
   gap: 16px;
   align-items: flex-start;
+  transition: background 0.3s ease;
 }
 
 .stat-icon {
@@ -679,298 +664,190 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255,255,255,0.05);
-  border-radius: 12px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-lg);
 }
 
-.stat-info {
-  flex: 1;
-}
-
-.stat-label {
-  color: var(--text-secondary, #94a3b8);
-  font-size: 14px;
-  margin-bottom: 4px;
-}
-
-.stat-value {
-  font-size: 28px;
-  font-weight: 600;
-  color: var(--text-primary, #f1f5f9);
-  margin-bottom: 4px;
-}
-
-.stat-value.up {
-  color: var(--color-up, #ef4444);
-}
-
-.stat-value.down {
-  color: var(--color-down, #22c55e);
-}
-
-.stat-change {
-  font-size: 12px;
-  color: var(--text-muted, #64748b);
-}
-
-.stat-change.up {
-  color: var(--color-up, #ef4444);
-}
-
-.stat-change.down {
-  color: var(--color-down, #22c55e);
-}
+.stat-info { flex: 1; }
+.stat-label { color: var(--text-secondary); font-size: 14px; margin-bottom: 4px; }
+.stat-value { font-size: 28px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.stat-value.up { color: var(--color-up); }
+.stat-value.down { color: var(--color-down); }
+.stat-change { font-size: 12px; color: var(--text-muted); }
+.stat-change.up { color: var(--color-up); }
+.stat-change.down { color: var(--color-down); }
 
 .main-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 300px;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 16px;
 }
 
 .panel {
-  background: var(--bg-surface, #1e293b);
-  border-radius: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
   overflow: hidden;
+  transition: background 0.3s ease;
 }
 
 .panel-header {
   padding: 16px 20px;
-  border-bottom: 1px solid rgba(255,255,255,0.1);
+  border-bottom: 1px solid var(--border-default);
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.panel-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary, #f1f5f9);
-}
-
-.panel-content {
-  padding: 16px 20px;
-}
+.panel-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.panel-content { padding: 16px 20px; }
 
 .rank-item {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 8px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
+  border-bottom: 1px solid var(--border-default);
 }
 
-.rank-item:last-child {
-  border-bottom: none;
-}
+.rank-item:last-child { border-bottom: none; }
 
 .rank-number {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
   border-radius: 50%;
-  font-size: 12px;
-  font-weight: 600;
-  background: rgba(255,255,255,0.1);
-  color: var(--text-secondary, #94a3b8);
+  font-size: 12px; font-weight: 600;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
 }
+.rank-number.gold { background: linear-gradient(135deg, #fbbf24, #f59e0b); color: #1e293b; }
+.rank-number.silver { background: linear-gradient(135deg, #94a3b8, #64748b); color: #1e293b; }
+.rank-number.bronze { background: linear-gradient(135deg, #d97706, #b45309); color: #1e293b; }
 
-.rank-number.gold {
-  background: linear-gradient(135deg, #fbbf24, #f59e0b);
-  color: #1e293b;
-}
+.rank-info { flex: 1; display: flex; flex-direction: column; }
+.stock-name { color: var(--text-primary); font-weight: 500; }
+.stock-symbol { font-size: 12px; color: var(--text-muted); }
+.rank-price { color: var(--text-secondary); font-size: 14px; }
+.rank-change { font-weight: 600; font-size: 14px; min-width: 70px; text-align: right; }
+.rank-change.up { color: var(--color-up); }
+.rank-change.down { color: var(--color-down); }
 
-.rank-number.silver {
-  background: linear-gradient(135deg, #94a3b8, #64748b);
-  color: #1e293b;
-}
+.market-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+.market-item { background: var(--bg-subtle); border-radius: var(--radius-md); padding: 12px; text-align: center; }
+.market-name { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+.market-value { font-size: 18px; font-weight: 600; margin-bottom: 2px; }
+.market-value.up { color: var(--color-up); }
+.market-value.down { color: var(--color-down); }
+.market-change { font-size: 12px; }
+.market-change.up { color: var(--color-up); }
+.market-change.down { color: var(--color-down); }
 
-.rank-number.bronze {
-  background: linear-gradient(135deg, #d97706, #b45309);
-  color: #1e293b;
-}
+.flow-chart { height: 200px; }
 
-.rank-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.stock-name {
-  color: var(--text-primary, #f1f5f9);
-  font-weight: 500;
-}
-
-.stock-symbol {
-  font-size: 12px;
-  color: var(--text-muted, #64748b);
-}
-
-.rank-price {
-  color: var(--text-secondary, #94a3b8);
-  font-size: 14px;
-}
-
-.rank-change {
-  font-weight: 600;
-  font-size: 14px;
-  min-width: 70px;
-  text-align: right;
-}
-
-.rank-change.up {
-  color: var(--color-up, #ef4444);
-}
-
-.rank-change.down {
-  color: var(--color-down, #22c55e);
-}
-
-.market-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
-}
-
-.market-item {
-  background: rgba(255,255,255,0.03);
-  border-radius: 8px;
-  padding: 12px;
-  text-align: center;
-}
-
-.market-name {
-  font-size: 12px;
-  color: var(--text-secondary, #94a3b8);
-  margin-bottom: 4px;
-}
-
-.market-value {
-  font-size: 18px;
-  font-weight: 600;
-  margin-bottom: 2px;
-}
-
-.market-value.up {
-  color: var(--color-up, #ef4444);
-}
-
-.market-value.down {
-  color: var(--color-down, #22c55e);
-}
-
-.market-change {
-  font-size: 12px;
-}
-
-.market-change.up {
-  color: var(--color-up, #ef4444);
-}
-
-.market-change.down {
-  color: var(--color-down, #22c55e);
-}
-
-.strategy-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.strategy-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px;
-  background: rgba(255,255,255,0.03);
-  border-radius: 8px;
-}
-
-.strategy-icon {
-  font-size: 18px;
-}
-
-.strategy-name {
-  flex: 1;
-  color: var(--text-primary, #f1f5f9);
-}
-
-.flow-chart {
-  height: 200px;
-}
-
-.activity-panel {
-  grid-column: 1 / -1;
+.resonance-panel-wrapper {
+  /* resonance panel is a self-contained component */
 }
 
 .activity-item {
   display: flex;
   gap: 12px;
   align-items: center;
+  padding: 6px 0;
 }
-
-.activity-time {
-  color: var(--text-muted, #64748b);
-  font-size: 12px;
-  min-width: 60px;
-}
-
+.activity-time { color: var(--text-muted); font-size: 12px; min-width: 60px; }
 .activity-type {
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
+  padding: 2px 8px; border-radius: var(--radius-xs);
+  font-size: 12px; font-weight: 500;
+}
+.activity-type.buy { background: rgba(239, 68, 68, 0.2); color: var(--color-up); }
+.activity-type.sell { background: rgba(34, 197, 94, 0.2); color: var(--color-down); }
+.activity-type.signal { background: rgba(59, 130, 246, 0.2); color: var(--color-brand-500); }
+.activity-type.alert { background: rgba(245, 158, 11, 0.2); color: var(--signal-watch); }
+.activity-desc { color: var(--text-secondary); flex: 1; }
+.empty-placeholder { color: var(--text-muted); font-size: 13px; padding: 12px; text-align: center; }
+
+/* ====== 多K线分屏 (150§3.1) ====== */
+.chart-grid-section {
+  margin-top: 24px;
 }
 
-.activity-type.buy {
-  background: rgba(239, 68, 68, 0.2);
-  color: var(--color-up, #ef4444);
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
 }
 
-.activity-type.sell {
-  background: rgba(34, 197, 94, 0.2);
-  color: var(--color-down, #22c55e);
+.section-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
 }
 
-.activity-type.signal {
-  background: rgba(59, 130, 246, 0.2);
-  color: var(--color-primary, #3b82f6);
+.chart-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.activity-type.alert {
-  background: rgba(245, 158, 11, 0.2);
-  color: var(--color-accent, #f59e0b);
+.chart-grid {
+  display: grid;
+  gap: 16px;
 }
 
-.activity-desc {
-  color: var(--text-secondary, #94a3b8);
-  flex: 1;
+.chart-grid--single { grid-template-columns: 1fr; }
+.chart-grid--dual-v { grid-template-columns: 1fr 1fr; }
+.chart-grid--triple { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto; }
+.chart-grid--quad { grid-template-columns: 1fr 1fr; }
+
+.chart-cell {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: border-color 0.3s;
 }
 
-.up {
-  color: var(--color-up, #ef4444);
+.chart-cell--active {
+  border-color: var(--color-brand-500);
+  box-shadow: 0 0 0 1px var(--color-brand-500);
 }
 
-.down {
-  color: var(--color-down, #22c55e);
+.chart-cell__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-default);
 }
 
-.neutral {
-  color: var(--text-muted, #64748b);
+.chart-cell__symbol {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 @media (max-width: 1200px) {
-  .stats-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .main-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .flow-panel {
-    grid-column: 1 / -1;
-  }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .main-grid { grid-template-columns: 1fr 1fr; }
+  .flow-panel { grid-column: 1 / -1; }
+  .chart-grid--dual-v { grid-template-columns: 1fr; }
+  .chart-grid--triple { grid-template-columns: 1fr; }
+  .chart-grid--quad { grid-template-columns: 1fr; }
 }
+
+.strategy-signals-section {
+  margin-bottom: 24px;
+}
+
+.signals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: 12px;
+}
+
+.up { color: var(--color-up); }
+.down { color: var(--color-down); }
+.neutral { color: var(--text-muted); }
 </style>

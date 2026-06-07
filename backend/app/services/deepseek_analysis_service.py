@@ -12,6 +12,9 @@ from typing import Dict, Optional, List
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+# [153] AI上下文注入 + 结构化解析
+from app.services.ai_context_builder import ai_context_builder, ai_structured_parser, ai_signal_bus
+
 
 # 内存存储：analysis_id -> 分析状态
 _analysis_store: Dict[str, Dict] = {}
@@ -118,11 +121,29 @@ def _call_deepseek(prompt: str, system_prompt: str, config: Dict) -> Optional[st
 
 def _parse_analyst_report(text: str, role_id: str) -> Dict:
     """解析分析师返回的文本为结构化数据"""
+    # [153-P0-2] 优先尝试JSON结构化解析
+    parsed = ai_structured_parser.parse_json(text)
+    if parsed and ai_structured_parser.validate_schema(parsed, role_id):
+        direction = parsed.get('direction', 'neutral')
+        confidence = parsed.get('confidence', 50)
+        bullish = confidence if direction == 'bullish' else (100 - confidence if direction == 'bearish' else 50)
+        bearish = 100 - bullish
+        return {
+            'role_id': role_id,
+            'structured': parsed,
+            'raw': text[:2000],
+            'bullishScore': bullish,
+            'bearishScore': bearish,
+            'evidence': parsed.get('evidence', []),
+            'risk_notes': parsed.get('risk_notes', []),
+            'conclusion': parsed.get('conclusion', ''),
+        }
+
+    # 回退到正则解析
     bullish = 50
     bearish = 50
 
     import re
-    # Extract bullish percentage
     m = re.search(r'(?:看多|Bullish|bullish)\s*[:：]?\s*(\d+)%?', text, re.IGNORECASE)
     if m:
         bullish = min(100, max(0, int(m.group(1))))
@@ -261,7 +282,11 @@ def _run_analysis_job(analysis_id: str, ts_code: str, stock_name: str, config: D
                     f'当前时间：{datetime.now().strftime("%Y-%m-%d")}\n\n'
                     f'请从{role["name"]}的角度进行分析，给出看多/看空百分比。'
                 )
-                report_text = _call_deepseek(prompt, role['role_prompt'], config)
+                # [153-P0-1] 多层上下文注入
+            context = ai_context_builder.build_context(ts_code)
+            context_section = ai_context_builder.to_prompt_section(context)
+            enriched_prompt = prompt + '\n\n' + context_section
+            report_text = _call_deepseek(enriched_prompt, role['role_prompt'], config)
 
             if report_text:
                 report = _parse_analyst_report(report_text, role_id)
@@ -299,10 +324,14 @@ def _run_analysis_job(analysis_id: str, ts_code: str, stock_name: str, config: D
                 r = analyst_results.get(rid, {})
                 summaries.append(f'{rid}: 看多{r.get("bullishScore", 50)}%/看空{r.get("bearishScore", 50)}%')
 
+            # [153-P0-1] 基金经理也接收上下文
+            context = ai_context_builder.build_context(ts_code)
+            context_section = ai_context_builder.to_prompt_section(context)
             prompt = (
                 f'请对{stock_name}({ts_code})给出最终投资建议。\n\n'
                 f'各分析师评分：\n' + '\n'.join(summaries) + '\n\n'
-                '请给出：总体评级、目标价位区间、建议仓位、止损价位、详细理由。'
+                '请给出：总体评级、目标价位区间、建议仓位、止损价位、详细理由。\n\n'
+                + context_section
             )
             final_report_text = _call_deepseek(prompt, fund_manager_role['role_prompt'], config)
 

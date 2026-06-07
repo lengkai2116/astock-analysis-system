@@ -51,9 +51,24 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks: {
-            'ant-design-vue': ['ant-design-vue'],
-            'klinecharts': ['klinecharts'],
-            'codemirror': ['codemirror']
+            'vendor-vue': ['vue', 'vue-router', 'pinia'],
+            'vendor-antd': ['ant-design-vue', '@ant-design/icons-vue'],
+            'vendor-echarts': ['echarts'],
+            'vendor-kline': ['klinecharts'],
+            'vendor-codemirror': ['codemirror'],
+            'data-services': [
+              './src/services/chartService.js',
+              './src/services/screenerService.js',
+              './src/services/aiAnalysisService.js',
+              './src/services/dataService.js',
+              './src/services/factorService.js',
+            ],
+            'analysis-views': [
+              './src/views/screener/index.vue',
+              './src/views/backtest/index.vue',
+              './src/views/ai-analysis/index.vue',
+              './src/views/indicator-ide/index.vue',
+            ],
           }
         }
       }

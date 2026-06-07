@@ -13,6 +13,7 @@
     },
     "dependencies": {
         "@ant-design/icons-vue": "^7.0.1",
+        "@rollup/rollup-darwin-x64": "^4.61.1",
         "ant-design-vue": "^4.2.6",
         "axios": "^1.6.0",
         "codemirror": "^5.65.16",

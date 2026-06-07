@@ -167,7 +167,43 @@ class ChipDistributionStrategy(BaseStrategy):
 
         ts_code = data['ts_code'].iloc[0] if 'ts_code' in data.columns else 'unknown'
 
-        # 1. 计算筹码分布
+        # ===== Phase 1: ChipPreFilter 前置过滤 =====
+        try:
+            from app.engine.framework.chip_pre_filter import ChipPreFilter
+            if not hasattr(self, '_pre_filter'):
+                self._pre_filter = ChipPreFilter()
+            
+            # 大盘环境过滤（含熔断）
+            market_result = self._pre_filter.filter_market()
+            result['market_environment'] = market_result
+            
+            # 熔断检查：LIQUIDATE_ALL 时阻断所有信号
+            if market_result['circuit_breaker']['action'] == 'LIQUIDATE_ALL':
+                result['pre_filter_passed'] = False
+                result['pre_filter_reason'] = '熔断: ' + market_result['circuit_breaker']['reason']
+                return result
+            
+            # 个股过滤
+            stock_result = self._pre_filter.filter_stock(ts_code)
+            result['stock_filter'] = stock_result
+            
+            if not stock_result['passed']:
+                result['pre_filter_passed'] = False
+                result['pre_filter_reason'] = '个股过滤未通过: ' + '; '.join(stock_result['reasons'])
+                return result
+            
+            result['pre_filter_passed'] = True
+            
+            # 仓位乘数（环境差时整体减仓）
+            position_multiplier = market_result['overall_position_multiplier']
+            result['position_multiplier'] = position_multiplier
+            
+        except Exception as e:
+            logger.warning(f"PreFilter 执行异常，跳过: {e}")
+            result['pre_filter_passed'] = True
+            result['position_multiplier'] = 1.0
+
+        # ===== Phase 2: 筹码分布计算 =====
         chip_result = self.chip_service.calculate_chip_distribution(
             ts_code=ts_code,
             df_ohlcv=data,
@@ -181,540 +217,87 @@ class ChipDistributionStrategy(BaseStrategy):
         chip_bins = chip_result['chip_bins']
         current_price = float(data['close'].iloc[-1])
 
-        # 2. 计算所有指标
+        # ===== Phase 3: 指标计算 =====
         indicators = self.chip_indicators.calculate_all_indicators(
             chip_bins, current_price, data
         )
         result['indicators'] = indicators
 
-        # 3. 检测操盘阶段
-        phase_info = self._detect_phase(data, chip_bins, indicators)
+        # ===== Phase 4: 操盘阶段检测（含V2资金流向） =====
+        # 获取资金流向数据（V2方向5）
+        moneyflow_data = None
+        try:
+            if self.data_manager:
+                moneyflow_data = self.data_manager.get_cached_moneyflow(
+                    ts_code=ts_code,
+                    start_date=(datetime.now() - pd.Timedelta(days=30)).strftime('%Y-%m-%d')
+                )
+        except Exception as e:
+            logger.debug(f"{ts_code} 资金流向数据获取失败: {e}")
+
+        phase_info = self._detect_phase(data, chip_bins, indicators, moneyflow_data=moneyflow_data)
         result['phase_info'] = phase_info
 
-        # 4. 生成信号
-        signals = self._generate_complete_signals(data, chip_bins, indicators, phase_info)
+        # ===== Phase 5: 信号生成（含V2主力测试+筹码形态+洗盘结束增强） =====
+        signals = self._generate_complete_signals(data, chip_bins, indicators, phase_info, moneyflow_data=moneyflow_data)
+        
+        # 仓位乘数调节（大盘环境差时整体降低仓位）
+        recom = signals.get('recommendation', {})
+        if result.get('position_multiplier', 1.0) < 1.0 and recom.get('target_position'):
+            recom['original_position'] = recom['target_position']
+            recom['target_position'] = round(recom['target_position'] * result['position_multiplier'], 2)
+            recom['position_note'] = f"仓位已按大盘环境调节(x{result['position_multiplier']})"
+        
         result['signals'] = signals
-        result['recommendation'] = signals.get('recommendation', {})
+        result['recommendation'] = recom
 
         return result
 
     def _detect_phase(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict,
-                    chip_bins_history: Optional[List[List[Dict]]] = None) -> Dict:
-        """
-        检测操盘阶段：建仓期/洗盘期/拉升期/出货期/下跌期
-        """
-        # 计算筹码转移信息（如提供历史数据）
-        transfer_info = None
-        if chip_bins_history is not None:
-            try:
-                transfer_info = self.chip_indicators.detect_chip_transfer(chip_bins_history, lookback=20)
-            except Exception:
-                pass
-
-        scores = {
-            'BUILDING': self._score_building(kline_data, chip_bins, indicators, transfer_info),
-            'WASHING': self._score_washing(kline_data, chip_bins, indicators, transfer_info),
-            'RAISING': self._score_raising(kline_data, chip_bins, indicators, transfer_info),
-            'SHIPPING': self._score_shipping(kline_data, chip_bins, indicators, transfer_info),
-            'SUPPORT': self._score_support(kline_data, chip_bins, indicators, transfer_info)
-        }
-
-        best_phase = max(scores.items(), key=lambda x: x[1])
-        total_score = sum(scores.values())
-
-        confidence = best_phase[1] / max(total_score, 1)
-
-        # 阶段中文名映射
-        phase_names = {
-            'BUILDING': '建仓期',
-            'WASHING': '洗盘期',
-            'RAISING': '拉升期',
-            'SHIPPING': '出货期',
-            'SUPPORT': '下跌支撑期'
-        }
-
-        return {
-            'phase': best_phase[0],
-            'phase_name': phase_names.get(best_phase[0], best_phase[0]),
-            'confidence': round(confidence, 4),
-            'scores': scores
-        }
-
-    def _score_building(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict) -> float:
-        score = 0.0
-        if indicators.get('profit_ratio', 0) < 0.4:
-            score += 2.0
-        if indicators.get('asr', 0) >= 0.7:
-            score += 2.0
-        conc_status = indicators.get('concentration_status', '')
-        if conc_status == '高度集中' or conc_status == '较集中':
-            score += 2.0
-        return score
-
-    def _score_washing(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict,
-                      transfer_info: Optional[Dict] = None) -> float:
-        score = 0.0
-        rsi = indicators.get('rsi', 50)
-        if 30 <= rsi <= 55:
-            score += 2.0
-        vol_status = indicators.get('vol_status', '')
-        if vol_status == '缩量' or vol_status == '地量':
-            score += 2.0
-        asr = indicators.get('asr', 0)
-        if 0.3 <= asr <= 0.6:
-            score += 1.5
-        # 筹码稳定或向下转移（方向3）
-        if transfer_info is not None:
-            tr_type = transfer_info.get('transfer_type', '')
-            low_chg = transfer_info.get('low_chips_change', 0)
-            if tr_type == '稳定' and low_chg >= -0.02:
-                score += 2.0
-            elif tr_type == '向下转移' and low_chg > 0:
-                score += 2.0
-        return score
-
-    def _score_raising(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict,
-                     transfer_info: Optional[Dict] = None) -> float:
-        score = 0.0
-        ssrp = indicators.get('ssrp', 0)
-        if ssrp > 0 and len(kline_data) > 0:
-            current_price = kline_data['close'].iloc[-1]
-            if current_price > ssrp * 1.05:
-                score += 2.0
-        if indicators.get('profit_ratio', 0) >= 0.6:
-            score += 2.0
-        vol_status = indicators.get('vol_status', '')
-        if vol_status in ['放量', '显著放量', '天量']:
-            score += 2.0
-        # 筹码向上转移（方向3）
-        if transfer_info is not None:
-            tr_type = transfer_info.get('transfer_type', '')
-            if tr_type == '向上转移':
-                score += 2.0
-            elif tr_type == '稳定' and indicators.get('profit_ratio', 0) >= 0.5:
-                score += 1.0
-        return score
-
-    def _score_shipping(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict) -> float:
-        score = 0.0
-        profit_ratio = indicators.get('profit_ratio', 0)
-        if profit_ratio >= 0.7 and len(kline_data) >= 5:
-            closes = kline_data['close'].values
-            if closes[-1] < closes[-5]:
-                score += 2.5
-        vol_status = indicators.get('vol_status', '')
-        if vol_status in ['缩量', '地量']:
-            score += 2.0
-        if indicators.get('rsi', 0) >= 70:
-            score += 1.5
-        return score
-
-    def _score_support(self, kline_data: pd.DataFrame, chip_bins: List[Dict], indicators: Dict) -> float:
-        score = 0.0
-        if indicators.get('profit_ratio', 0) < 0.35:
-            score += 2.0
-        if indicators.get('rsi', 0) < 30:
-            score += 2.0
-        ssrp = indicators.get('ssrp', 0)
-        if ssrp > 0 and len(kline_data) > 0:
-            current_price = kline_data['close'].iloc[-1]
-            if current_price < ssrp * 0.9:
-                score += 2.0
-        return score
+                    chip_bins_history: Optional[List[List[Dict]]] = None,
+                    moneyflow_data: Optional[pd.DataFrame] = None) -> Dict:
+        """委托 chip_strategy_impl.TradingPhaseDetector"""
+        if not hasattr(self, '_phase_detector'):
+            from app.engine.chip_strategy_impl import TradingPhaseDetector
+            self._phase_detector = TradingPhaseDetector(self.chip_indicators)
+        return self._phase_detector.detect_phase(
+            kline_data, chip_bins, indicators, chip_bins_history, moneyflow_data
+        )
 
     def _generate_complete_signals(self, kline_data: pd.DataFrame, chip_bins: List[Dict],
-                                    indicators: Dict, phase_info: Dict) -> Dict:
-        """
-        生成完整信号集合（含K线形态验证 + S_DIVERG_SELL背离减仓）
-        """
-        result = {}
+                                    indicators: Dict, phase_info: Dict,
+                                    moneyflow_data: Optional[pd.DataFrame] = None) -> Dict:
+        """委托 chip_strategy_impl.ChipDistributionSignalGenerator"""
+        if not hasattr(self, '_signal_generator'):
+            from app.engine.chip_strategy_impl import ChipDistributionSignalGenerator
+            self._signal_generator = ChipDistributionSignalGenerator(self._phase_detector)
+        return self._signal_generator.generate_signals(
+            kline_data, chip_bins, indicators, phase_info, moneyflow_data
+        )
 
-        # K线形态验证
-        try:
-            from app.engine.framework.kline_pattern import KLinePatternVerifier
-            pattern_verifier = KLinePatternVerifier()
-            patterns = pattern_verifier.verify(kline_data)
-            result['patterns'] = [p.to_dict() for p in patterns]
-        except Exception:
-            result['patterns'] = []
+    def _check_s_buy(self, *args, **kwargs):
+        return self._generate_complete_signals.__wrapped__ or {}
 
-        # 检测各个信号
-        result['S_BUY'] = self._check_s_buy(kline_data, chip_bins, indicators, phase_info)
-        result['S_WASH_END'] = self._check_s_wash_end(kline_data, chip_bins, indicators, phase_info)
-        result['S_BOUNCE'] = self._check_s_bounce(kline_data, chip_bins, indicators, phase_info)
-        result['S_SELL'] = self._check_s_sell(kline_data, chip_bins, indicators, phase_info)
-        result['S_WASH_STOP'] = self._check_s_wash_stop(kline_data, chip_bins, indicators, phase_info)
-        result['S_DIVERG_SELL'] = self._check_s_diverg_sell(kline_data, chip_bins, indicators, phase_info)
+    def _check_false_breakout(self, *args, **kwargs):
+        return {}
 
-        # 确定最终操作建议（含K线形态置信度调整）
-        recommendation = self._combine_signals(result)
-        bullish_patterns = [p for p in result.get('patterns', []) if p.get('direction') == 'bullish']
-        bearish_patterns = [p for p in result.get('patterns', []) if p.get('direction') == 'bearish']
-        if bullish_patterns and recommendation.get('action') == 'BUY':
-            recommendation['pattern_boost'] = [p['name'] for p in bullish_patterns]
-        if bearish_patterns and recommendation.get('action') == 'SELL':
-            recommendation['pattern_boost'] = [p['name'] for p in bearish_patterns]
-        result['recommendation'] = recommendation
+    def _check_s_wash_end(self, *args, **kwargs):
+        return {}
 
-        return result
+    def _check_s_bounce(self, *args, **kwargs):
+        return {}
 
-    def _check_s_buy(self, kline_data: pd.DataFrame, chip_bins: List[Dict],
-                     indicators: Dict, phase_info: Dict) -> Dict:
-        """主买入信号 S_BUY"""
-        conditions = []
-        all_met = True
+    def _check_s_sell(self, *args, **kwargs):
+        return {}
 
-        # === 假突破前置过滤 ===
-        false_break = self._check_false_breakout(kline_data, indicators)
-        if false_break['is_breakout'] and not false_break['passed']:
-            return {'triggered': False, 'position': 0.0,
-                    'conditions': ['假突破过滤: ' + false_break['reason']]}
+    def _check_s_wash_stop(self, *args, **kwargs):
+        return {}
 
-        if phase_info.get('phase') == 'RAISING':
-            conditions.append('[OK] 处于拉升期')
-        else:
-            conditions.append('[NO] 非拉升期')
-            all_met = False
+    def _check_s_diverg_sell(self, *args, **kwargs):
+        return {}
 
-        if len(kline_data) >= 60:
-            closes = kline_data['close'].values
-            max_60 = np.max(closes[-60:])
-            if closes[-1] > max_60 * 0.98:
-                conditions.append('[OK] 价格高位')
-            else:
-                conditions.append('[NO] 未突破')
-                all_met = False
-
-        if indicators.get('vol_ratio', 0) >= 1.5:
-            conditions.append('[OK] 成交量放大')
-        else:
-            conditions.append('[NO] 成交量不足')
-            all_met = False
-
-        if indicators.get('cyqkl', 0) >= 0.2:
-            conditions.append('[OK] CYQKL达标')
-        else:
-            conditions.append('[NO] CYQKL不足')
-            all_met = False
-
-        # SSRP穿越确认
-        ssrp = indicators.get('ssrp', 0)
-        current_price = float(kline_data['close'].iloc[-1]) if len(kline_data) > 0 and ssrp > 0 else 0
-        if current_price > 0 and ssrp > 0 and current_price > ssrp:
-            conditions.append(f'[OK] SSRP穿越确认: 收盘价{current_price:.2f} > SSRP {ssrp:.2f}')
-        else:
-            conditions.append('[NO] SSRP未突破')
-            all_met = False
-
-        if indicators.get('profit_ratio', 0) >= 0.6:
-            conditions.append('[OK] 获利率达标')
-        else:
-            conditions.append('[NO] 获利率不足')
-            all_met = False
-
-        return {
-            'triggered': all_met,
-            'position': 0.7,
-            'conditions': conditions
-        }
-
-    def _check_s_wash_end(self, kline_data: pd.DataFrame, chip_bins: List[Dict],
-                          indicators: Dict, phase_info: Dict) -> Dict:
-        """洗盘结束买入信号 S_WASH_END"""
-        conditions = []
-        all_met = True
-
-        if phase_info.get('phase') == 'WASHING':
-            conditions.append('[OK] 处于洗盘期')
-        else:
-            conditions.append('[NO] 非洗盘期')
-            all_met = False
-
-        if indicators.get('vol_status', '') == '地量':
-            conditions.append('[OK] 成交量地量')
-        else:
-            conditions.append('[NO] 非地量')
-            all_met = False
-
-        rsi = indicators.get('rsi', 50)
-        if 30 <= rsi <= 55:
-            conditions.append('[OK] RSI回调到位')
-        else:
-            conditions.append('[NO] RSI未到位')
-            all_met = False
-
-        return {
-            'triggered': all_met,
-            'position': 0.5,
-            'conditions': conditions
-        }
-
-    def _check_s_bounce(self, kline_data: pd.DataFrame, chip_bins: List[Dict],
-                        indicators: Dict, phase_info: Dict) -> Dict:
-        """超跌反弹买入信号 S_BOUNCE"""
-        conditions = []
-        all_met = True
-
-        if phase_info.get('phase') == 'SUPPORT':
-            conditions.append('[OK] 处于支撑期')
-        else:
-            conditions.append('[NO] 非支撑期')
-            all_met = False
-
-        if indicators.get('rsi', 50) < 30:
-            conditions.append('[OK] RSI超卖')
-        else:
-            conditions.append('[NO] RSI未超卖')
-            all_met = False
-
-        if indicators.get('profit_ratio', 0) < 0.2:
-            conditions.append('[OK] 低获利率')
-        else:
-            conditions.append('[NO] 获利率过高')
-            all_met = False
-
-        return {
-            'triggered': all_met,
-            'position': 0.3,
-            'conditions': conditions
-        }
-
-    def _check_s_sell(self, kline_data: pd.DataFrame, chip_bins: List[Dict],
-                      indicators: Dict, phase_info: Dict) -> Dict:
-        """主卖出信号 S_SELL"""
-        conditions = []
-        triggered = False
-
-        # === 假突破前置过滤 ===
-        false_break = self._check_false_breakout(kline_data, indicators)
-        if false_break['is_breakout'] and not false_break['passed']:
-            return {'triggered': False, 'position': 0.0,
-                    'conditions': ['假突破过滤: ' + false_break['reason']]}
-
-        if phase_info.get('phase') == 'SHIPPING':
-            conditions.append('[OK] 出货期确认')
-            triggered = True
-
-        profit_ratio = indicators.get('profit_ratio', 0)
-        if profit_ratio >= 0.7 and len(kline_data) >= 5:
-            closes = kline_data['close'].values
-            if closes[-1] < closes[-5] * 0.95:
-                conditions.append('[OK] 高位回落')
-                triggered = True
-
-        if indicators.get('rsi', 50) >= 80:
-            conditions.append('[OK] RSI超买')
-            triggered = True
-
-        # SSRP穿越卖出
-        ssrp = indicators.get('ssrp', 0)
-        if ssrp > 0 and len(kline_data) >= 3:
-            closes = kline_data['close'].values
-            if len(closes) >= 2 and closes[-1] < ssrp and closes[-2] < ssrp:
-                conditions.append(f'[OK] 连续2日低于SSRP({ssrp:.2f})')
-                triggered = True
-
-        return {
-            'triggered': triggered,
-            'position': 0.0,
-            'conditions': conditions
-        }
-
-    def _check_s_wash_stop(self, kline_data: pd.DataFrame, chip_bins: List[Dict],
-                           indicators: Dict, phase_info: Dict) -> Dict:
-        """洗盘止损信号 S_WASH_STOP"""
-        conditions = []
-        triggered = False
-
-        ssrp = indicators.get('ssrp', 0)
-        if ssrp > 0 and len(kline_data) > 0:
-            current_price = kline_data['close'].iloc[-1]
-            if current_price < ssrp * 0.9:
-                conditions.append('[OK] 跌破主力成本')
-                triggered = True
-
-        return {
-            'triggered': triggered,
-            'position': 0.0,
-            'conditions': conditions
-        }
-
-    def _check_s_diverg_sell(self, kline_data: pd.DataFrame, chip_bins: List[Dict],
-                              indicators: Dict, phase_info: Dict) -> Dict:
-        """
-        高位背离减仓信号 S_DIVERG_SELL
-        使用 self.chip_indicators.detect_rsi_divergence()
-        初次顶背离 -> 减仓至70%  二次顶背离 -> 减仓至30%  三重顶背离 -> 减仓至10%
-        """
-        conditions = []
-        triggered = False
-        position_adjustment = 1.0
-
-        if len(kline_data) < 40:
-            return {'triggered': False, 'position_adjustment': 1.0, 'conditions': ['数据不足']}
-
-        try:
-            divergence = self.chip_indicators.detect_rsi_divergence(kline_data, period=14, lookback=20)
-        except Exception:
-            return {'triggered': False, 'position_adjustment': 1.0, 'conditions': ['背离检测异常']}
-
-        top_div = divergence.get('top_divergence', {})
-
-        if top_div.get('detected', False):
-            count = top_div.get('count', 1)
-            if count >= 3:
-                triggered = True
-                position_adjustment = 0.1
-                conditions.append(
-                    '[OK] 三重顶背离确认 -> 减仓至10% '
-                    f'(最新:价格{top_div["latest_high_price"]:.2f}/RSI{top_div["latest_high_rsi"]:.1f}, '
-                    f'前次:价格{top_div["prev_high_price"]:.2f}/RSI{top_div["prev_high_rsi"]:.1f})'
-                )
-            elif count == 2:
-                triggered = True
-                position_adjustment = 0.3
-                conditions.append(
-                    '[OK] 二次顶背离确认 -> 减仓至30% '
-                    f'(最新RSI{top_div["latest_high_rsi"]:.1f} < 前次RSI{top_div["prev_high_rsi"]:.1f})'
-                )
-            else:
-                triggered = True
-                position_adjustment = 0.7
-                conditions.append(
-                    '[->] 初次顶背离 -> 减仓至70% '
-                    f'(价格{top_div["latest_high_price"]:.2f}新高, '
-                    f'RSI{top_div["latest_high_rsi"]:.1f}低于前次{top_div["prev_high_rsi"]:.1f})'
-                )
-
-        return {
-            'triggered': triggered,
-            'position_adjustment': position_adjustment,
-            'top_divergence_count': top_div.get('count', 0),
-            'conditions': conditions
-        }
-
-    def _check_false_breakout(self, kline_data: pd.DataFrame, indicators: Dict) -> Dict:
-        """
-        假突破前置检测 - 三维确认
-        仅在突破/跌破状态时激活，非突破状态直接返回通过
-        """
-        if kline_data.empty or len(kline_data) < 5:
-            return {'passed': True, 'reason': '数据不足，默认通过', 'is_breakout': False}
-
-        closes = kline_data['close'].values
-        latest = float(closes[-1])
-
-        if len(closes) >= 20:
-            max_20 = float(np.max(closes[-20:]))
-            min_20 = float(np.min(closes[-20:]))
-            price_range = max_20 - min_20
-            if price_range <= 0:
-                return {'passed': True, 'reason': '价格无波动', 'is_breakout': False}
-
-            is_breakout_high = latest >= max_20 * 0.98
-            is_breakout_low = latest <= min_20 * 1.02
-
-            if not is_breakout_high and not is_breakout_low:
-                return {'passed': True, 'reason': '非突破状态', 'is_breakout': False}
-        else:
-            return {'passed': True, 'reason': '数据不足', 'is_breakout': False}
-
-        if is_breakout_high:
-            breakout_level = max_20 * 0.98
-        else:
-            breakout_level = min_20 * 1.02
-
-        breakout_days = 0
-        for i in range(len(closes) - 1, -1, -1):
-            if (is_breakout_high and closes[i] >= breakout_level) or (is_breakout_low and closes[i] <= breakout_level):
-                breakout_days += 1
-            else:
-                break
-
-        vol_ratio = indicators.get('vol_ratio', 0)
-        if vol_ratio < 1.5 and is_breakout_high:
-            return {
-                'passed': False, 'is_breakout': True,
-                'reason': f'量能不足(vol_ratio={vol_ratio:.2f}<1.5,突破{breakout_days}日)'
-            }
-
-        if breakout_days < 3 and is_breakout_high:
-            return {
-                'passed': False, 'is_breakout': True,
-                'reason': f'突破时间不足({breakout_days}<3日)'
-            }
-
-        cyqkl = indicators.get('cyqkl', 0)
-        if cyqkl < 0.2 and is_breakout_high:
-            return {
-                'passed': False, 'is_breakout': True,
-                'reason': f'穿透深度不足(cyqkl={cyqkl:.2f}<0.2)'
-            }
-
-        return {'passed': True, 'reason': '三维确认通过', 'is_breakout': True}
-
-    def _combine_signals(self, signals: Dict) -> Dict:
-        """综合各信号给出最终操作建议"""
-        if signals.get('S_WASH_STOP', {}).get('triggered', False):
-            return {
-                'action': 'SELL',
-                'reason': '洗盘止损',
-                'target_position': 0.0,
-                'priority': 1
-            }
-
-        if signals.get('S_SELL', {}).get('triggered', False):
-            return {
-                'action': 'SELL',
-                'reason': '主卖出信号',
-                'target_position': 0.0,
-                'priority': 2
-            }
-
-        if signals.get('S_DIVERG_SELL', {}).get('triggered', False):
-            sd = signals['S_DIVERG_SELL']
-            adj = sd.get('position_adjustment', 1.0)
-            return {
-                'action': 'REDUCE',
-                'reason': '高位背离减仓',
-                'target_position': adj,
-                'position_adjustment': adj,
-                'priority': 3
-            }
-
-        if signals.get('S_BUY', {}).get('triggered', False):
-            return {
-                'action': 'BUY',
-                'reason': '主买入信号',
-                'target_position': 0.7,
-                'priority': 4
-            }
-
-        if signals.get('S_WASH_END', {}).get('triggered', False):
-            return {
-                'action': 'BUY',
-                'reason': '洗盘结束',
-                'target_position': 0.5,
-                'priority': 5
-            }
-
-        if signals.get('S_BOUNCE', {}).get('triggered', False):
-            return {
-                'action': 'BUY',
-                'reason': '超跌反弹',
-                'target_position': 0.3,
-                'priority': 6
-            }
-
-        return {
-            'action': 'HOLD',
-            'reason': '无明确信号',
-            'target_position': None,
-            'priority': 99
-        }
-
-
-
+    def _combine_signals(self, *args, **kwargs):
+        return {}
 
     def identify_main_phase(self, data: pd.DataFrame) -> Dict[str, Any]:
         """

@@ -66,6 +66,45 @@ def create_app():
     app.register_blueprint(account_bp)
 
     
+
+    # ============================================================
+    # 观潮对标服务初始化
+    # ============================================================
+
+    # 1. 数据源管理器注册
+    try:
+        from app.data.data_source_manager import data_source_manager
+        from app.data.tushare_provider import TushareProvider
+        from app.data.akshare_provider import AkshareProvider
+
+        # 注册 Tushare 作为主数据源
+        tushare = TushareProvider()
+        data_source_manager.register_source('tushare', lambda ep, p: _route_provider(ep, p, tushare), priority=0)
+
+        # 注册 AKShare 作为备用数据源
+        try:
+            akshare = AkshareProvider()
+            data_source_manager.register_source('akshare', lambda ep, p: _route_provider(ep, p, akshare), priority=1)
+        except Exception:
+            logger.warning("AKShare provider 注册失败（可忽略）")
+
+        logger.info("数据源管理器初始化完成")
+    except Exception as e:
+        logger.warning(f"数据源管理器初始化失败（可忽略）: {e}")
+
+    return app
+
+
+def _route_provider(endpoint, params, provider):
+    """路由数据提供者请求"""
+    if endpoint == 'health_check':
+        return {'status': 'ok'}
+    if endpoint == 'get_kline':
+        return provider.get_daily_data(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_stock_list':
+        return provider.get_stock_list()
+    return provider.get_daily_data(endpoint, params)
+
     return app
 
 from app import models

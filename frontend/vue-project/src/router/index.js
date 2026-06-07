@@ -60,6 +60,12 @@ const routes = [
     name: 'ReportsCenter',
     component: () => import('@/views/reports-center'),
     meta: { title: '报告中心' }
+  },
+  {
+    path: '/account',
+    name: 'AccountManage',
+    component: () => import('@/views/account'),
+    meta: { title: '账户管理' }
   }
 ]
 

@@ -250,7 +250,7 @@ def test_chanlun_scorer():
         'zhongshu': [Zhongshu(0, 10, "20240101", "20240111", 110, 100)]
     }
     
-    score_result = ChanlunScorer.score(analysis_result)
+    score_result = ChanlunScorer.score(analysis_result, latest_close=120.0)
     
     print(f"✓ 评分: {score_result['score']:.2f}")
     print(f"✓ 建议: {score_result['recommendation']}")

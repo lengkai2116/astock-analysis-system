@@ -17,6 +17,36 @@
           </span>
         </div>
 
+        <!-- 赢率详情区块 (P2) -->
+        <div v-if="hasWinRates" class="win-rate-section">
+          <div class="win-rate-header">
+            <span class="win-rate-title">📊 回测赢率证据</span>
+          </div>
+          <div class="win-rate-grid">
+            <div v-for="(wr, idx) in winRateRows" :key="idx" class="win-rate-card">
+              <div class="wr-strategy">{{ wr.strategy }}</div>
+              <div class="wr-stats">
+                <div class="wr-stat">
+                  <span class="wr-label">T+5</span>
+                  <span class="wr-value" :class="wr.t5 >= 0.5 ? 'wr-win' : 'wr-lose'">{{ (wr.t5 * 100).toFixed(0) }}%</span>
+                </div>
+                <div class="wr-stat">
+                  <span class="wr-label">T+10</span>
+                  <span class="wr-value" :class="wr.t10 >= 0.5 ? 'wr-win' : 'wr-lose'">{{ (wr.t10 * 100).toFixed(0) }}%</span>
+                </div>
+                <div class="wr-stat">
+                  <span class="wr-label">T+20</span>
+                  <span class="wr-value" :class="wr.t20 >= 0.5 ? 'wr-win' : 'wr-lose'">{{ (wr.t20 * 100).toFixed(0) }}%</span>
+                </div>
+                <div class="wr-stat">
+                  <span class="wr-label">样本</span>
+                  <span class="wr-value" style="color:#94a3b8">{{ wr.samples }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="strategy-cards">
           <div
             v-for="(exp, idx) in explanations"
@@ -109,6 +139,20 @@ export default {
     }
   },
   computed: {
+    hasWinRates() {
+      return this.signals.some(s => s.backtest_win_rates && s.backtest_win_rates.samples > 0)
+    },
+    winRateRows() {
+      return this.signals
+        .filter(s => s.backtest_win_rates && s.backtest_win_rates.samples > 0)
+        .map(s => ({
+          strategy: s.strategy_name,
+          t5: s.backtest_win_rates.win_rate_5d || 0,
+          t10: s.backtest_win_rates.win_rate_10d || 0,
+          t20: s.backtest_win_rates.win_rate_20d || 0,
+          samples: s.backtest_win_rates.samples || 0,
+        }))
+    },
     modalTitle() {
       if (this.tsCode && this.stockName) {
         return `📊 信号详情分析 — ${this.stockName} (${this.tsCode})`
@@ -353,4 +397,56 @@ export default {
   color: #94a3b8;
   font-size: 12px;
 }
+
+.win-rate-section {
+  margin-bottom: 20px;
+  padding: 16px;
+  background: rgba(6, 182, 212, 0.06);
+  border: 1px solid rgba(6, 182, 212, 0.2);
+  border-radius: 8px;
+}
+.win-rate-header {
+  margin-bottom: 12px;
+}
+.win-rate-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: #f1f5f9;
+}
+.win-rate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+.win-rate-card {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 12px;
+}
+.wr-strategy {
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-bottom: 8px;
+}
+.wr-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.wr-stat {
+  text-align: center;
+}
+.wr-label {
+  display: block;
+  font-size: 10px;
+  color: #64748b;
+}
+.wr-value {
+  font-size: 16px;
+  font-weight: 700;
+}
+.wr-win { color: #52c41a; }
+.wr-lose { color: #ff4d4f; }
 </style>
