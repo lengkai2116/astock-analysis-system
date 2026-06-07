@@ -341,15 +341,15 @@ make docker-down
 
 | 编号 | 事项 | 优先级 | 说明 |
 |------|------|--------|------|
-| 152-Phase 3 | 前端 ComboCard / ResonanceLamp 联调 | 🟡 | 组件已创建（AiSignalBus / ResonancePanel），后端已就绪，需联调 API 数据流 |
-| 153-P1-2 | 预测校准系统（AiPrediction + CalibrationService） | 🟡 | 未启动 |
-| 153-P1-3 | 消息面上下文（NewsProvider + Tushare news API） | 🟡 | 未启动，依赖数据源 API 权限 |
-| 153-P2-2 | MultiStepContext 多步骤上下文构建 | 🟡 | 基础上下文已实现，多步骤构建未完成 |
-| 153-P3-1 | 策略输出 AI 解读层 | 🟡 | 未启动，策略 → LLM Wiki → AI 全链路 |
-| 151-P1-1 | 分钟级数据通道（需 Tushare Pro 积分） | 🟡 | 未启动，依赖 stk_mins API 权限 |
-| 151-P3-1 | 回放复盘系统 | 🟡 | 未启动，时间轴 + 速度控制 + 事件时间线 |
-| 151-P3-3 | K 线重采样管道 | 🔵 | 未启动，分钟 → 日 → 周自动重采样 |
-| 154 批 2-6 | 剩余形态规则扩展 | 🔵 | 未启动，批1（12 条纯 OHLCV 规则）已完成 |
+| 152-Phase 3 | 前端 ComboCard / ResonanceLamp 联调 | ✅ 已实现 | ResonanceService/ComboEngine API 路由 + 前端组件联调 (indicator-ide) |
+| 153-P1-2 | 预测校准系统（AiPrediction + CalibrationService） | ✅ 已实现 | CalibrationService(置信度校准/偏差检测/分组统计) + API 路由 + 定时回填 |
+| 153-P1-3 | 消息面上下文（NewsProvider + Tushare news API） | ✅ 已实现 | NewsProvider(多源路由+Mock降级) + API 路由 + AiContextBuilder 集成 |
+| 153-P2-2 | MultiStepContext 多步骤上下文构建 | ✅ 已实现 | MultiStepContextBuilder(5步增量构建: 技术/基本面/消息/历史/综合) |
+| 153-P3-1 | 策略输出 AI 解读层 | ✅ 已实现 | StrategyAIInterpretationService(信号解读/共振解读/批量解读) + API 路由 |
+| 151-P1-1 | 分钟级数据通道 | ✅ 已实现 | MinuteDataManager(Tushare/AKShare降级+DuckDB缓存) + API 路由 |
+| 151-P3-1 | 回放复盘系统 | ✅ 已实现 | PlaybackService(时间轴/速度控制/事件检测/跳转) + API 路由 |
+| 151-P3-3 | K 线重采样管道 | ✅ 已实现 | KlineResampler(分钟到日到周到月) + API 路由 |
+| 154 批 2-6 | 形态规则扩展 | ✅ 已实现 | EnhancedPatternDetector 新增 8 条均线辅助规则(20条总计) |
 
 > 注意：DeepSeek `deepseek-chat` 模型将于 2026/07/24 废弃，需在截止前迁移至 v4-flash 或 v4-pro。
 > 

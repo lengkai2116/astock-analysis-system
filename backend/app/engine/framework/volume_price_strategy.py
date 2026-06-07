@@ -345,6 +345,7 @@ class EnhancedPatternDetector:
             return []
         matched = []
         checks = [
+            # [154-批1] 12条纯OHLCV规则
             ('放量冲高回落(预跌)', '_is_fangliang_chonggao_huiluo'),
             ('天量天价(预跌)', '_is_tianliang_tianjia'),
             ('放量滞涨(预跌)', '_is_fangliang_zhizhang'),
@@ -357,6 +358,15 @@ class EnhancedPatternDetector:
             ('地量后的倍量启动(预涨)', '_is_diliang_beiliang_yuzhang'),
             ('平台放量突破(预涨)', '_is_pingtai_fangliang_tupo'),
             ('放量站上60日线(预涨)', '_is_fangliang_zhan60'),
+            # [154-批2] 8条均线辅助规则
+            ('MA5金叉MA10(预涨)', '_is_ma5_jinchai_ma10'),
+            ('MA5死叉MA10(预跌)', '_is_ma5_sicha_ma10'),
+            ('均线多头排列(预涨)', '_is_ma_tuo_pailie'),
+            ('均线空头排列(预跌)', '_is_ma_ya_pailie'),
+            ('连续站上60日线(预涨)', '_is_closes_above_ma60'),
+            ('MA5上穿MA20(预涨)', '_is_ma5_tol_ma20_up'),
+            ('回踩MA60获支撑(预涨)', '_is_ma60_zhichi'),
+            ('MA5上穿MA60(预涨)', '_is_ma5_jiaotou_ma60'),
         ]
         for name, method_name in checks:
             method = getattr(self, method_name, None)
@@ -589,6 +599,86 @@ class EnhancedPatternDetector:
                 if volumes[-1] > avg_vol * 1.5:
                     return True
         return False
+
+    # ── [154-批2] 均线辅助规则（8条） ──
+
+    def _is_ma5_jinchai_ma10(self, closes, opens, highs, lows, volumes) -> bool:
+        """MA5金叉MA10（趋势转折信号）"""
+        if len(closes) < 11:
+            return False
+        ma5_p = float(np.mean(closes[-6:-1]))
+        ma10_p = float(np.mean(closes[-11:-1]))
+        ma5 = float(np.mean(closes[-5:]))
+        ma10 = float(np.mean(closes[-10:]))
+        return ma5 > ma10 and ma5_p <= ma10_p
+
+    def _is_ma5_sicha_ma10(self, closes, opens, highs, lows, volumes) -> bool:
+        """MA5死叉MA10（趋势转折预警）"""
+        if len(closes) < 11:
+            return False
+        ma5_p = float(np.mean(closes[-6:-1]))
+        ma10_p = float(np.mean(closes[-11:-1]))
+        ma5 = float(np.mean(closes[-5:]))
+        ma10 = float(np.mean(closes[-10:]))
+        return ma5 < ma10 and ma5_p >= ma10_p
+
+    def _is_ma_tuo_pailie(self, closes, opens, highs, lows, volumes) -> bool:
+        """均线多头排列 MA5>MA10>MA20>MA60（中期多头确认）"""
+        if len(closes) < 61:
+            return False
+        ma5 = float(np.mean(closes[-5:]))
+        ma10 = float(np.mean(closes[-10:]))
+        ma20 = float(np.mean(closes[-20:]))
+        ma60 = float(np.mean(closes[-60:]))
+        return ma5 > ma10 > ma20 > ma60
+
+    def _is_ma_ya_pailie(self, closes, opens, highs, lows, volumes) -> bool:
+        """均线空头排列 MA5<MA10<MA20<MA60（中期空头确认）"""
+        if len(closes) < 61:
+            return False
+        ma5 = float(np.mean(closes[-5:]))
+        ma10 = float(np.mean(closes[-10:]))
+        ma20 = float(np.mean(closes[-20:]))
+        ma60 = float(np.mean(closes[-60:]))
+        return ma5 < ma10 < ma20 < ma60
+
+    def _is_closes_above_ma60(self, closes, opens, highs, lows, volumes) -> bool:
+        """连续3日收盘价站上MA60（中期走强确认）"""
+        if len(closes) < 63:
+            return False
+        ma60 = float(np.mean(closes[-60:]))
+        for i in range(-3, 0):
+            if closes[i] <= ma60:
+                return False
+        return closes[-3] <= float(np.mean(closes[-62:-2])) * 1.005  # 刚刚站上
+
+    def _is_ma5_tol_ma20_up(self, closes, opens, highs, lows, volumes) -> bool:
+        """MA5从下方上穿MA20（短线强化信号）"""
+        if len(closes) < 21:
+            return False
+        ma5 = float(np.mean(closes[-5:]))
+        ma20 = float(np.mean(closes[-20:]))
+        ma5_prev = float(np.mean(closes[-6:-1]))
+        ma20_prev = float(np.mean(closes[-21:-1]))
+        return ma5 > ma20 and ma5_prev <= ma20_prev
+
+    def _is_ma60_zhichi(self, closes, opens, highs, lows, volumes) -> bool:
+        """股价回踩MA60不破并获得支撑（回调低吸信号）"""
+        if len(closes) < 63:
+            return False
+        ma60 = float(np.mean(closes[-60:]))
+        lowest_5 = np.min(lows[-5:])
+        return lowest_5 >= ma60 * 0.99 and closes[-1] > ma60 and                closes[-1] > np.mean(closes[-6:-1])  # 开始回升
+
+    def _is_ma5_jiaotou_ma60(self, closes, opens, highs, lows, volumes) -> bool:
+        """MA5上穿MA60（中期趋势转折关键信号）"""
+        if len(closes) < 61:
+            return False
+        ma5 = float(np.mean(closes[-5:]))
+        ma60 = float(np.mean(closes[-60:]))
+        ma5_prev = float(np.mean(closes[-6:-1]))
+        return ma5 > ma60 and ma5_prev <= ma60
+
 
 
 # ══════════════════════════════════════════════

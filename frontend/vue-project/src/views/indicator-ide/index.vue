@@ -292,6 +292,17 @@
               </div>
 
               <a-empty v-if="signals.length === 0 && customSignals.length === 0" description="暂无信号" />
+
+              <!-- 152-Phase3: 共振评分 -->
+              <div class="signal-section" v-if="resonanceData">
+                <ResonancePanel
+                  :overallScore="resonanceData.overall_score"
+                  :dimensions="resonanceData.dimension_signals"
+                />
+              </div>
+
+              <!-- 152-Phase3: AI 信号总线 -->
+              <AiSignalBus :signals="aiSignals" />
             </a-spin>
           </div>
         </div>
@@ -304,6 +315,8 @@
 import { DownOutlined, FilterOutlined, FolderOpenOutlined, StarOutlined } from '@ant-design/icons-vue'
 import KLineChart from '@/components/KLineChart'
 import CodeEditor from '@/components/CodeEditor'
+import ResonancePanel from '@/components/ResonancePanel'
+import AiSignalBus from '@/components/AiSignalBus'
 import chartService from '@/services/chartService'
 import axios from '@/utils/request'
 
@@ -337,6 +350,9 @@ export default {
 
       signals: [],
       signalsLoading: false,
+      resonanceData: null,
+      aiSignals: [],
+      resonanceLoading: false,
 
       customSignals: [],
 
@@ -572,6 +588,7 @@ export default {
     },
 
     refreshSignals() {
+      this.fetchResonanceScore()
       this.loadSignals()
     },
 

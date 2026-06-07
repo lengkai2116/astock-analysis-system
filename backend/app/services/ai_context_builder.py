@@ -13,6 +13,8 @@ import logging
 from typing import Dict, Optional, List, Any
 from datetime import datetime
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 # ── 结构化输出 JSON Schema ──
@@ -284,3 +286,237 @@ class AiSignalBusService:
 ai_context_builder = AiContextBuilder()
 ai_signal_bus = AiSignalBusService()
 ai_structured_parser = AiStructuredParser()
+
+
+# ── MultiStepContext ──
+
+class MultiStepContextBuilder:
+    """
+    多步骤上下文构建器
+    =====================
+    实现 153-P2-2: 分步构建分析上下文
+
+    流程:
+    Step 1: 技术面上下文 — K线数据 + 技术指标 + 形态识别
+    Step 2: 基本面上下文 — 财务指标 + 估值水平
+    Step 3: 消息面上下文 — 新闻 + 公告 + 舆情
+    Step 4: 历史信号上下文 — 前次AI结论 + 偏差
+    Step 5: 综合上下文 — 上述全部 + 策略信号 + 市场环境
+
+    每步可独立调用，支持增量式上下文构建。
+    """
+
+    STEPS = ['technical', 'fundamental', 'news', 'history', 'synthesis']
+    STEP_LABELS = {
+        'technical': '技术面分析',
+        'fundamental': '基本面分析',
+        'news': '消息面分析',
+        'history': '历史信号回溯',
+        'synthesis': '综合研判',
+    }
+
+    def __init__(self, data_manager=None):
+        if data_manager is None:
+            try:
+                from app.data import DataManager
+                data_manager = DataManager()
+            except Exception:
+                data_manager = None
+        self.data_manager = data_manager
+        self._partial_contexts: Dict[str, Dict] = {}
+
+    def build_step(self, step: str, ts_code: str, **kwargs) -> Dict:
+        """
+        构建指定步骤的上下文
+
+        Args:
+            step: 步骤名 ('technical', 'fundamental', 'news', 'history', 'synthesis')
+            ts_code: 股票代码
+            kwargs: 额外参数（如 market_env, signals 等）
+
+        Returns:
+            该步骤的上下文 Dict
+        """
+        if step not in self.STEPS:
+            raise ValueError(f"未知步骤: {step}，可用: {self.STEPS}")
+
+        ctx = getattr(self, f'_build_{step}_context')(ts_code, **kwargs)
+        self._partial_contexts[step] = ctx
+        return ctx
+
+    def get_partial_context(self, step: str) -> Dict:
+        """获取已构建的某步骤上下文"""
+        return self._partial_contexts.get(step, {})
+
+    def get_all_contexts(self) -> Dict[str, Dict]:
+        """获取所有已构建的上下文"""
+        return dict(self._partial_contexts)
+
+    def build_all(self, ts_code: str, **kwargs) -> Dict:
+        """
+        一次性构建所有步骤
+
+        Args:
+            ts_code: 股票代码
+            kwargs: 可传入 market_env, signals, news_list 等
+        """
+        for step in self.STEPS:
+            self.build_step(step, ts_code, **kwargs)
+        return self._partial_contexts
+
+    def to_prompt_section(self, steps: List[str] = None) -> str:
+        """
+        将指定步骤渲染为 AI 提示文本
+
+        Args:
+            steps: 步骤列表，默认全部
+
+        Returns:
+            str
+        """
+        if steps is None:
+            steps = [s for s in self.STEPS if s in self._partial_contexts]
+
+        lines = ['【多步骤分析上下文】']
+        for step in steps:
+            ctx = self._partial_contexts.get(step, {})
+            label = self.STEP_LABELS.get(step, step)
+            lines.append(f'\n--- {label} ---')
+            lines.append(self._format_context(ctx))
+
+        return '\n'.join(lines)
+
+    def _build_technical_context(self, ts_code: str, **kwargs) -> Dict:
+        """Step 1: 技术面上下文"""
+        from datetime import datetime, timedelta
+        ctx = {
+            'ts_code': ts_code,
+            'last_price': 0,
+            'ma5': 0, 'ma10': 0, 'ma20': 0, 'ma60': 0,
+            'volume_ratio': 1.0,
+            'amplitude': 0,
+            'patterns_detected': [],
+        }
+        try:
+            from app.data.tushare_provider import TushareProvider
+            provider = TushareProvider()
+            end = datetime.now().strftime('%Y%m%d')
+            start = (datetime.now() - timedelta(days=120)).strftime('%Y%m%d')
+            data = provider.get_daily_data(ts_code, start, end)
+            if data and len(data) >= 60:
+                closes = [float(d['close']) for d in data]
+                volumes = [float(d['vol']) for d in data]
+                ctx['last_price'] = closes[-1]
+                ctx['ma5'] = float(np.mean(closes[-5:])) if len(closes) >= 5 else 0
+                ctx['ma10'] = float(np.mean(closes[-10:])) if len(closes) >= 10 else 0
+                ctx['ma20'] = float(np.mean(closes[-20:])) if len(closes) >= 20 else 0
+                ctx['ma60'] = float(np.mean(closes[-60:])) if len(closes) >= 60 else 0
+                avg_vol = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else 0
+                ctx['volume_ratio'] = round(volumes[-1] / max(avg_vol, 1), 2) if avg_vol > 0 else 1.0
+                if len(closes) >= 2:
+                    ctx['amplitude'] = round(abs(closes[-1] - closes[-2]) / closes[-2] * 100, 2)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f'技术面上下文构建失败: {e}')
+        return ctx
+
+    def _build_fundamental_context(self, ts_code: str, **kwargs) -> Dict:
+        """Step 2: 基本面上下文"""
+        ctx = {
+            'ts_code': ts_code,
+            'name': '',
+            'industry': '',
+            'pe': None,
+            'pb': None,
+            'market_cap': None,
+            'profit_yoy': None,
+        }
+        try:
+            from app.models import Stock
+            stock = Stock.query.get(ts_code)
+            if stock:
+                ctx['name'] = getattr(stock, 'name', '') or ''
+                ctx['industry'] = getattr(stock, 'industry', '') or ''
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f'基本面上下文构建失败: {e}')
+        return ctx
+
+    def _build_news_context(self, ts_code: str, **kwargs) -> Dict:
+        """Step 3: 消息面上下文"""
+        ctx = {'recent_news': [], 'sentiment': 'neutral', 'hot_topics': []}
+        try:
+            from app.data.news_provider import NewsProvider as NP
+            provider = kwargs.get('news_provider', NP())
+            news_list = kwargs.get('news_list', None) or provider.get_news(ts_code, days_back=3, max_count=5)
+            ctx['recent_news'] = [n.to_dict() for n in news_list]
+            if news_list:
+                avg_sent = sum(n.sentiment for n in news_list) / len(news_list)
+                ctx['sentiment'] = 'positive' if avg_sent > 0.1 else ('negative' if avg_sent < -0.1 else 'neutral')
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f'消息面上下文构建失败: {e}')
+        return ctx
+
+    def _build_history_context(self, ts_code: str, **kwargs) -> Dict:
+        """Step 4: 历史信号上下文"""
+        ctx = {
+            'ts_code': ts_code,
+            'previous_signals': [],
+            'signal_count': 0,
+            'last_analysis': None,
+        }
+        signals = kwargs.get('signals', [])
+        if signals:
+            ctx['previous_signals'] = signals[:5]
+            ctx['signal_count'] = len(signals)
+        return ctx
+
+    def _build_synthesis_context(self, ts_code: str, **kwargs) -> Dict:
+        """Step 5: 综合上下文 — 汇总前面的所有步骤"""
+        summary = {
+            'ts_code': ts_code,
+            'steps_completed': list(self._partial_contexts.keys()),
+            'overall_assessment': '',
+        }
+        tech = self._partial_contexts.get('technical', {})
+        price = tech.get('last_price', 0)
+        ma5 = tech.get('ma5', 0)
+        ma60 = tech.get('ma60', 0)
+        pe = self._partial_contexts.get('fundamental', {}).get('pe')
+        news_sent = self._partial_contexts.get('news', {}).get('sentiment', 'neutral')
+
+        assessments = []
+        if price > 0 and ma5 > 0:
+            assessments.append(f"当前价{price:.2f}" + ("站上MA5" if price > ma5 else "跌破MA5"))
+        if price > 0 and ma60 > 0:
+            assessments.append(f"{'站上' if price > ma60 else '处于'}MA60下方")
+        if pe:
+            assessments.append(f"PE={pe}" + ("(偏低)" if pe < 20 else "(合理)" if pe < 50 else "(偏高)"))
+        assessments.append(f"消息面{news_sent}")
+        summary['overall_assessment'] = ' | '.join(assessments)
+        return summary
+
+    def _format_context(self, ctx: Dict) -> str:
+        """将 Dict 格式化为文本"""
+        lines = []
+        for k, v in ctx.items():
+            if isinstance(v, list):
+                if len(v) > 0:
+                    lines.append(f"  {k}: {len(v)} 条")
+            elif isinstance(v, dict):
+                lines.append(f"  {k}: {json.dumps(v, ensure_ascii=False)[:100]}")
+            else:
+                lines.append(f"  {k}: {v}")
+        return '\n'.join(lines)
+
+
+# 快捷函数
+def build_multistep_context(ts_code: str, steps: List[str] = None) -> Dict:
+    builder = MultiStepContextBuilder()
+    if steps:
+        for step in steps:
+            builder.build_step(step, ts_code)
+    else:
+        builder.build_all(ts_code)
+    return builder.get_all_contexts()

@@ -46,6 +46,13 @@ def create_app():
     from app.routes.qmt import qmt_bp
     from app.routes.virtual_verify import verify_bp
     from app.routes.account import account_bp
+    from app.routes.minute_data import minute_data_bp
+    from app.routes.playback import playback_bp
+    from app.routes.resonance import resonance_bp
+    from app.routes.prediction import prediction_bp
+    from app.routes.strategy_interpret import strategy_interpret_bp
+    from app.routes.kline_resampler_api import kline_resampler_bp
+    from app.routes.news_route import news_bp
     
     app.register_blueprint(market_bp)
     app.register_blueprint(health_bp)
@@ -64,6 +71,13 @@ def create_app():
     app.register_blueprint(verify_bp)
     app.register_blueprint(qmt_bp)
     app.register_blueprint(account_bp)
+    app.register_blueprint(minute_data_bp)
+    app.register_blueprint(playback_bp)
+    app.register_blueprint(resonance_bp)
+    app.register_blueprint(prediction_bp)
+    app.register_blueprint(strategy_interpret_bp)
+    app.register_blueprint(kline_resampler_bp)
+    app.register_blueprint(news_bp)
 
     
 
