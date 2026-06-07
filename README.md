@@ -337,19 +337,23 @@ make docker-down
 
 ## 待推进事项
 
-详见 `001-沟通记录/待解决事项.md`，当前主要待办：
+详见 `001-沟通记录/待解决事项.md`，当前各方案剩余工作：
 
-1. **152-Phase 3**：前端 ComboCard / ResonanceLamp 联调
-2. **153-P1-2**：预测校准系统（AiPrediction + CalibrationService）
-3. **153-P1-3**：消息面上下文（NewsProvider + Tushare news API）
-4. **153-P2-1**：5 角色结构化融合引擎
-5. **153-P3-1**：策略输出 AI 解读层
-6. **151-P1-1**：分钟级数据通道（需 Tushare Pro 积分）
-7. **151-P3-1**：回放复盘系统
-8. **151-P3-3**：K 线重采样管道
-9. **154 批 2-6**：剩余 38 条形态规则扩展
+| 编号 | 事项 | 优先级 | 说明 |
+|------|------|--------|------|
+| 152-Phase 3 | 前端 ComboCard / ResonanceLamp 联调 | 🟡 | 组件已创建（AiSignalBus / ResonancePanel），后端已就绪，需联调 API 数据流 |
+| 153-P1-2 | 预测校准系统（AiPrediction + CalibrationService） | 🟡 | 未启动 |
+| 153-P1-3 | 消息面上下文（NewsProvider + Tushare news API） | 🟡 | 未启动，依赖数据源 API 权限 |
+| 153-P2-2 | MultiStepContext 多步骤上下文构建 | 🟡 | 基础上下文已实现，多步骤构建未完成 |
+| 153-P3-1 | 策略输出 AI 解读层 | 🟡 | 未启动，策略 → LLM Wiki → AI 全链路 |
+| 151-P1-1 | 分钟级数据通道（需 Tushare Pro 积分） | 🟡 | 未启动，依赖 stk_mins API 权限 |
+| 151-P3-1 | 回放复盘系统 | 🟡 | 未启动，时间轴 + 速度控制 + 事件时间线 |
+| 151-P3-3 | K 线重采样管道 | 🔵 | 未启动，分钟 → 日 → 周自动重采样 |
+| 154 批 2-6 | 剩余形态规则扩展 | 🔵 | 未启动，批1（12 条纯 OHLCV 规则）已完成 |
 
 > 注意：DeepSeek `deepseek-chat` 模型将于 2026/07/24 废弃，需在截止前迁移至 v4-flash 或 v4-pro。
+> 
+> ✅ 已完成：153-P2-1（5 角色结构化融合引擎）—— 5 个角色并行分析 + fund_manager 综合合成的全流程已在 `deepseek_analysis_service.py`（608 行）中实现。
 
 ---
 
