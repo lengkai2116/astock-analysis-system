@@ -148,6 +148,29 @@ class DataService {
     return this._get('/api/v3/drawings/load', { symbol })
   }
 
+  // ==================== Dashboard 专用 ====================
+
+  /** 仪表盘 - 自选股概览数据 */
+  async getWatchlistData() {
+    return this._get('/api/v3/watchlist/dashboard')
+  }
+
+  /** 仪表盘 - 市场概况 */
+  async getMarketOverview() {
+    return this._get('/api/v3/market/overview')
+  }
+
+  /** 仪表盘 - 策略信号摘要 */
+  async getStrategySignals() {
+    return this._get('/api/v3/signals/summary')
+  }
+
+  /** 仪表盘 - AI 分析信号摘要 */
+  async getAIAnalysisSignals() {
+    return this._get('/api/v3/ai-analysis/signals')
+  }
+
+
   // ==================== 内部方法 ====================
 
   async _get(endpoint, params = {}, options = {}) {

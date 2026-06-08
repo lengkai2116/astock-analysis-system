@@ -239,7 +239,7 @@
               {{ stats.activeSignals }}
             </div>
             <div class="stat-change neutral">
-              {{ stats.buySignals }} 买入 / {{ stats.sellSignals }} 卖出
+              {{ stats.buySignals }} 关注信号 / {{ stats.sellSignals }} 风险退出信号
             </div>
           </div>
         </div>
@@ -475,9 +475,11 @@
       @close="signalDetailVisible = false"
     />
   </div>
+          <DisclaimerFooter />
 </template>
 
 <script>
+import { ReloadOutlined } from '@ant-design/icons-vue'
 import { mapState } from 'pinia'
 import { useAppStore } from '@/stores'
 import PipelineFlow from '@/components/StockScreener/PipelineFlow'
@@ -487,17 +489,17 @@ import KLineChart from '@/components/KLineChart'
 import AiSignalBus from '@/components/AiSignalBus'
 import ResonancePanel from '@/components/ResonancePanel'
 import dataService from '@/services/dataService'
+import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
   name: 'Dashboard',
-  components: {
+  components: { ReloadOutlined,
     PipelineFlow,
     StrategySignalPanel,
     SignalDetailModal,
     KLineChart,
     AiSignalBus,
-    ResonancePanel,
-  },
+    ResonancePanel, DisclaimerFooter},
   data() {
     return {
       loading: true,
@@ -600,7 +602,7 @@ export default {
               name: d.name,
               score: d.score,
               weight: d.weight,
-              color: d.score >= 70 ? '#EF4444' : d.score >= 40 ? '#F59E0B' : '#22C55E',
+              color: d.score >= 70 ? 'var(--signal-bullish, #EF4444)' : d.score >= 40 ? 'var(--signal-watch, #F59E0B)' : 'var(--signal-bearish, #22C55E)',
             })),
           }
         }
@@ -686,7 +688,7 @@ export default {
       this.signalDetailVisible = true
     },
     getActivityLabel(type) {
-      const labels = { buy: '买入', sell: '卖出', signal: '信号', alert: '预警' }
+      const labels = { buy: '关注信号', sell: '风险退出信号', signal: '信号', alert: '预警' }
       return labels[type] || type
     },
 
@@ -717,8 +719,8 @@ export default {
     },
     _mockActivities() {
       return [
-        { time: '10:30', type: 'buy', desc: '平安银行 — 放量突破买入信号' },
-        { time: '09:45', type: 'sell', desc: '贵州茅台 — MACD死叉卖出信号' },
+        { time: '10:30', type: 'buy', desc: '平安银行 — 放量突破关注信号' },
+        { time: '09:45', type: 'sell', desc: '贵州茅台 — MACD死叉风险退出信号' },
         { time: '09:32', type: 'signal', desc: '万科A — 支撑位反弹信号' },
         { time: '09:15', type: 'alert', desc: '数据源已切换至备用通道' },
       ]
@@ -899,9 +901,9 @@ export default {
   background: var(--bg-muted);
   color: var(--text-secondary);
 }
-.rank-number.gold { background: linear-gradient(135deg, #fbbf24, #f59e0b); color: #1e293b; }
-.rank-number.silver { background: linear-gradient(135deg, #94a3b8, #64748b); color: #1e293b; }
-.rank-number.bronze { background: linear-gradient(135deg, #d97706, #b45309); color: #1e293b; }
+.rank-number.gold { background: linear-gradient(135deg, #fbbf24, #f59e0b); color: var(--text-inverse, #1e293b); }
+.rank-number.silver { background: linear-gradient(135deg, #94a3b8, #64748b); color: var(--text-inverse, #1e293b); }
+.rank-number.bronze { background: linear-gradient(135deg, #d97706, #b45309); color: var(--text-inverse, #1e293b); }
 
 .rank-info { flex: 1; display: flex; flex-direction: column; }
 .stock-name { color: var(--text-primary); font-weight: 500; }

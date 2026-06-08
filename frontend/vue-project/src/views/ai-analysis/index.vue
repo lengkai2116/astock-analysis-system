@@ -200,14 +200,16 @@
       </div>
     </div>
   </div>
+          <DisclaimerFooter />
 </template>
 
 <script>
 import { FileTextOutlined } from '@ant-design/icons-vue'
 import { startAnalysis, getProgress, getFinalReport } from '@/services/aiAnalysisService'
+import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
-  name: 'AIAnalysisPage',
+  components: { DisclaimerFooter, FileTextOutlined },  name: 'AIAnalysisPage',
   data() {
     return {
       selectedSymbol: '',

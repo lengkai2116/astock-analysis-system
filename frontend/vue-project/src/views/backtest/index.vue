@@ -239,7 +239,7 @@
               <template #bodyCell="{ column, text, record, index }">
                 <template v-if="column.dataIndex === 'type' || column.key === 'type'">
                   <a-tag :color="text === 'BUY' ? 'red' : 'green'">
-                    {{ text === 'BUY' ? '买入' : '卖出' }}
+                    {{ text === 'BUY' ? '关注信号' : '风险退出信号' }}
                   </a-tag>
                 </template>
                 <template v-else-if="column.dataIndex === 'return' || column.key === 'return'">
@@ -335,14 +335,17 @@
       </a-form>
     </a-modal>
   </div>
+          <DisclaimerFooter />
 </template>
 
 <script>
+import { RocketOutlined } from '@ant-design/icons-vue'
 import * as echarts from 'echarts'
 import { useAppStore } from '@/stores'
+import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
-  name: 'BacktestPage',
+  components: { DisclaimerFooter, RocketOutlined },  name: 'BacktestPage',
   data() {
     return {
       showConfigModal: false,
@@ -539,17 +542,17 @@ export default {
         xAxis: {
           type: 'category',
           data: drawdownData.map(d => d.date),
-          axisLine: { lineStyle: { color: '#2a2a2a' } },
-          axisLabel: { color: '#94a3b8', fontSize: 10 }
+          axisLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } },
+          axisLabel: { color: 'var(--text-secondary, #94a3b8)', fontSize: 10 }
         },
         yAxis: {
           type: 'value',
-          axisLine: { lineStyle: { color: '#2a2a2a' } },
+          axisLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } },
           axisLabel: {
             color: '#94a3b8',
             formatter: (value) => value.toFixed(1) + '%'
           },
-          splitLine: { lineStyle: { color: '#1e293b' } }
+          splitLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } }
         },
         series: [
           {
@@ -597,12 +600,12 @@ export default {
         xAxis: {
           type: 'category',
           data: this.results.equityCurve.map(d => d.date),
-          axisLine: { lineStyle: { color: '#2a2a2a' } },
-          axisLabel: { color: '#94a3b8', fontSize: 10 }
+          axisLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } },
+          axisLabel: { color: 'var(--text-secondary, #94a3b8)', fontSize: 10 }
         },
         yAxis: {
           type: 'value',
-          axisLine: { lineStyle: { color: '#2a2a2a' } },
+          axisLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } },
           axisLabel: {
             color: '#94a3b8',
             formatter: (value) => {
@@ -610,7 +613,7 @@ export default {
               return value
             }
           },
-          splitLine: { lineStyle: { color: '#1e293b' } }
+          splitLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } }
         },
         series: [
           {
