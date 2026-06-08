@@ -18,6 +18,7 @@ import numpy as np
 from app import db
 from app.models.trade import Trade, AccountSnapshot
 from app.models.verification import VirtualPosition
+from app.models import DailyData
 
 logger = logging.getLogger(__name__)
 
@@ -172,12 +173,23 @@ class AccountService:
                 continue
             avg_cost = h['buy_amount'] / h['buy_qty'] if h['buy_qty'] > 0 else 0
             realized_pnl = h['sell_amount'] - (avg_cost * h['sell_qty'])
+            # 查询最新收盘价
+            latest = DailyData.query.filter(
+                DailyData.ts_code == code
+            ).order_by(DailyData.trade_date.desc()).first()
+            current_price = float(latest.close) if latest else None
+            market_value = round(current_price * hold_qty, 2) if current_price else round(avg_cost * hold_qty, 2)
+            unrealized_pnl = round((current_price - avg_cost) * hold_qty, 2) if current_price else 0.0
+
             positions.append({
                 'ts_code': code,
                 'stock_name': h['stock_name'],
                 'hold_qty': hold_qty,
                 'avg_cost': round(avg_cost, 2),
+                'current_price': current_price,
                 'total_cost': round(avg_cost * hold_qty, 2),
+                'market_value': market_value,
+                'unrealized_pnl': unrealized_pnl,
                 'realized_pnl': round(realized_pnl, 2),
             })
 
@@ -201,7 +213,7 @@ class AccountService:
         position_cost = sum(p['total_cost'] for p in positions)
         # 现金余额 = 总卖出 - (总买入 - 持仓成本 - 手续费)
         cash_balance = total_sell - (total_buy - position_cost - total_commission)
-        position_value = position_cost  # 暂用成本价，集成实时行情后可改为市价
+        position_value = sum(p.get('market_value', p['total_cost']) for p in positions)
         total_asset = cash_balance + position_value
         initial_capital = total_buy  # 近似
         total_profit = total_sell - total_buy - total_commission
