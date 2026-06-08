@@ -43,11 +43,12 @@ async function bootstrap() {
   }
 }
 
-bootstrap()
-
 const app = createApp(App)
 app.use(Antd)
 app.use(createPinia())
+
+// 应用初始化：主题 / Schema 迁移 / 缓存清理
+bootstrap()
 app.use(router)
 app.use(i18n)
 app.use(VueAxios)

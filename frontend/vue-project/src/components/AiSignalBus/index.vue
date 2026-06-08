@@ -1,9 +1,18 @@
 <template>
-  <div class="ai-signal-bus" v-if="activeSignals.length > 0">
+  <div
+    v-if="activeSignals.length > 0"
+    class="ai-signal-bus"
+  >
     <div class="ai-signal-bus__header">
-      <h3 class="ai-signal-bus__title">🤖 AI 信号总线</h3>
+      <h3 class="ai-signal-bus__title">
+        🤖 AI 信号总线
+      </h3>
       <span class="ai-signal-bus__count">
-        <a-badge :count="activeSignals.length" :overflow-count="99" size="small" />
+        <a-badge
+          :count="activeSignals.length"
+          :overflow-count="99"
+          size="small"
+        />
       </span>
     </div>
     <div class="ai-signal-bus__list">
@@ -19,10 +28,18 @@
           <span class="signal-item__desc">{{ signal.description }}</span>
         </div>
         <div class="signal-item__meta">
-          <span class="signal-item__confidence" :class="confidenceClass(signal.confidence)">
+          <span
+            class="signal-item__confidence"
+            :class="confidenceClass(signal.confidence)"
+          >
             {{ signal.confidence }}%
           </span>
-          <a-button size="small" type="link" @click="navigateTo(signal)" v-if="signal.target">
+          <a-button
+            v-if="signal.target"
+            size="small"
+            type="link"
+            @click="navigateTo(signal)"
+          >
             查看
           </a-button>
         </div>

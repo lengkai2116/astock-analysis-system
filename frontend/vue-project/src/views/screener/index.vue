@@ -3,11 +3,18 @@
     <!-- 页面头部 -->
     <div class="screener-header">
       <div class="header-left">
-        <h2 class="page-title">🎯 选股系统</h2>
+        <h2 class="page-title">
+          🎯 选股系统
+        </h2>
         <span class="page-desc">三层流水线筛选 → 精选股票排行榜</span>
       </div>
       <div class="header-right">
-        <a-button type="primary" size="small" :loading="screenerRunning" @click="startScreening">
+        <a-button
+          type="primary"
+          size="small"
+          :loading="screenerRunning"
+          @click="startScreening"
+        >
           <PlayCircleOutlined /> 执行筛选
         </a-button>
       </div>
@@ -19,12 +26,12 @@
       <div class="screener-pipeline">
         <PipelineFlow
           :running="screenerRunning"
-          :totalStocks="screenerLayers.total"
-          :layer1Count="screenerLayers.layer1"
-          :layer2Count="screenerLayers.layer2"
-          :layer3Count="screenerLayers.layer3"
-          :finalCount="screenerLayers.final"
-          :currentLayer="currentLayer"
+          :total-stocks="screenerLayers.total"
+          :layer1-count="screenerLayers.layer1"
+          :layer2-count="screenerLayers.layer2"
+          :layer3-count="screenerLayers.layer3"
+          :final-count="screenerLayers.final"
+          :current-layer="currentLayer"
           @configure="showScreenerConfig"
         />
       </div>
@@ -44,7 +51,7 @@
       <div class="screener-fusion">
         <SignalFusionConfig
           :value="screeningConfig"
-          :selectedStock="selectedScreenerStock"
+          :selected-stock="selectedScreenerStock"
           @save="saveFusionConfig"
           @reset="resetFusionConfig"
         />

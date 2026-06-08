@@ -2,9 +2,13 @@
   <div class="report-viewer-container">
     <div class="viewer-header">
       <div class="header-left">
-        <h2 class="viewer-title">{{ reportTitle }}</h2>
+        <h2 class="viewer-title">
+          {{ reportTitle }}
+        </h2>
         <div class="report-meta">
-          <a-tag :color="getReportTypeColor(reportType)">{{ getReportTypeLabel(reportType) }}</a-tag>
+          <a-tag :color="getReportTypeColor(reportType)">
+            {{ getReportTypeLabel(reportType) }}
+          </a-tag>
           <span class="meta-separator">|</span>
           <span class="meta-item">{{ tsCode }}</span>
           <span class="meta-separator">|</span>
@@ -19,12 +23,21 @@
             style="width: 120px"
             @change="handleFormatChange"
           >
-            <a-select-option value="markdown">Markdown</a-select-option>
-            <a-select-option value="html">HTML</a-select-option>
-            <a-select-option value="json">JSON</a-select-option>
+            <a-select-option value="markdown">
+              Markdown
+            </a-select-option>
+            <a-select-option value="html">
+              HTML
+            </a-select-option>
+            <a-select-option value="json">
+              JSON
+            </a-select-option>
           </a-select>
           
-          <a-button @click="handleExport" :loading="exporting">
+          <a-button
+            :loading="exporting"
+            @click="handleExport"
+          >
             <DownloadOutlined />
             导出报告
           </a-button>
@@ -34,7 +47,10 @@
             打印
           </a-button>
           
-          <a-button @click="handleRefresh" :loading="loading">
+          <a-button
+            :loading="loading"
+            @click="handleRefresh"
+          >
             <ReloadOutlined />
             刷新
           </a-button>
@@ -42,26 +58,44 @@
       </div>
     </div>
 
-    <div v-if="loading" class="loading-container">
-      <a-spin size="large" tip="加载报告中..." />
+    <div
+      v-if="loading"
+      class="loading-container"
+    >
+      <a-spin
+        size="large"
+        tip="加载报告中..."
+      />
     </div>
 
-    <div v-else-if="error" class="error-container">
+    <div
+      v-else-if="error"
+      class="error-container"
+    >
       <a-alert
         message="加载失败"
         :description="error"
         type="error"
         show-icon
       />
-      <a-button type="primary" @click="handleRefresh" style="margin-top: 16px">
+      <a-button
+        type="primary"
+        style="margin-top: 16px"
+        @click="handleRefresh"
+      >
         重试
       </a-button>
     </div>
 
-    <div v-else class="viewer-content">
+    <div
+      v-else
+      class="viewer-content"
+    >
       <div class="content-sidebar">
         <div class="sidebar-section">
-          <div class="section-title">📊 关键指标</div>
+          <div class="section-title">
+            📊 关键指标
+          </div>
           <div class="metrics-list">
             <div class="metric-item">
               <span class="metric-label">总体评分</span>
@@ -69,23 +103,40 @@
             </div>
             <div class="metric-item">
               <span class="metric-label">风险等级</span>
-              <a-tag :color="getRiskLevelColor(riskLevel)">{{ riskLevel }}</a-tag>
+              <a-tag :color="getRiskLevelColor(riskLevel)">
+                {{ riskLevel }}
+              </a-tag>
             </div>
-            <div class="metric-item" v-if="totalReturn !== undefined">
+            <div
+              v-if="totalReturn !== undefined"
+              class="metric-item"
+            >
               <span class="metric-label">总收益率</span>
-              <span class="metric-value" :class="totalReturn >= 0 ? 'up' : 'down'">
+              <span
+                class="metric-value"
+                :class="totalReturn >= 0 ? 'up' : 'down'"
+              >
                 {{ formatPercent(totalReturn) }}
               </span>
             </div>
-            <div class="metric-item" v-if="sharpeRatio !== undefined">
+            <div
+              v-if="sharpeRatio !== undefined"
+              class="metric-item"
+            >
               <span class="metric-label">夏普比率</span>
               <span class="metric-value">{{ sharpeRatio }}</span>
             </div>
-            <div class="metric-item" v-if="maxDrawdown !== undefined">
+            <div
+              v-if="maxDrawdown !== undefined"
+              class="metric-item"
+            >
               <span class="metric-label">最大回撤</span>
               <span class="metric-value down">{{ formatPercent(maxDrawdown) }}</span>
             </div>
-            <div class="metric-item" v-if="winRate !== undefined">
+            <div
+              v-if="winRate !== undefined"
+              class="metric-item"
+            >
               <span class="metric-label">胜率</span>
               <span class="metric-value">{{ formatPercent(winRate) }}</span>
             </div>
@@ -94,35 +145,67 @@
 
         <a-divider />
 
-        <div class="sidebar-section" v-if="interpretation">
-          <div class="section-title">💡 AI分析</div>
+        <div
+          v-if="interpretation"
+          class="sidebar-section"
+        >
+          <div class="section-title">
+            💡 AI分析
+          </div>
           
-          <div class="interpretation-summary" v-if="interpretation.summary">
+          <div
+            v-if="interpretation.summary"
+            class="interpretation-summary"
+          >
             {{ interpretation.summary }}
           </div>
 
-          <div class="strengths-section" v-if="interpretation.strengths && interpretation.strengths.length">
-            <div class="sub-section-title">✓ 优势</div>
+          <div
+            v-if="interpretation.strengths && interpretation.strengths.length"
+            class="strengths-section"
+          >
+            <div class="sub-section-title">
+              ✓ 优势
+            </div>
             <ul class="strengths-list">
-              <li v-for="(strength, idx) in interpretation.strengths" :key="idx">
+              <li
+                v-for="(strength, idx) in interpretation.strengths"
+                :key="idx"
+              >
                 {{ strength }}
               </li>
             </ul>
           </div>
 
-          <div class="weaknesses-section" v-if="interpretation.weaknesses && interpretation.weaknesses.length">
-            <div class="sub-section-title">✗ 劣势</div>
+          <div
+            v-if="interpretation.weaknesses && interpretation.weaknesses.length"
+            class="weaknesses-section"
+          >
+            <div class="sub-section-title">
+              ✗ 劣势
+            </div>
             <ul class="weaknesses-list">
-              <li v-for="(weakness, idx) in interpretation.weaknesses" :key="idx">
+              <li
+                v-for="(weakness, idx) in interpretation.weaknesses"
+                :key="idx"
+              >
                 {{ weakness }}
               </li>
             </ul>
           </div>
 
-          <div class="suggestions-section" v-if="interpretation.suggestions && interpretation.suggestions.length">
-            <div class="sub-section-title">📝 建议</div>
+          <div
+            v-if="interpretation.suggestions && interpretation.suggestions.length"
+            class="suggestions-section"
+          >
+            <div class="sub-section-title">
+              📝 建议
+            </div>
             <ol class="suggestions-list">
-              <li v-for="(suggestion, idx) in interpretation.suggestions" :key="idx">
+              <li
+                v-for="(suggestion, idx) in interpretation.suggestions"
+                :key="idx"
+              >
                 {{ suggestion }}
               </li>
             </ol>
@@ -131,59 +214,111 @@
 
         <a-divider />
 
-        <div class="sidebar-section" v-if="tradingAdvice">
-          <div class="section-title">💼 交易建议</div>
-          
-          <div class="advice-item" v-if="tradingAdvice.suitable_for">
-            <div class="advice-label">适用对象</div>
-            <div class="advice-content">{{ tradingAdvice.suitable_for }}</div>
+        <div
+          v-if="tradingAdvice"
+          class="sidebar-section"
+        >
+          <div class="section-title">
+            💼 交易建议
           </div>
           
-          <div class="advice-item" v-if="tradingAdvice.position_management">
-            <div class="advice-label">仓位管理</div>
-            <div class="advice-content">{{ tradingAdvice.position_management }}</div>
+          <div
+            v-if="tradingAdvice.suitable_for"
+            class="advice-item"
+          >
+            <div class="advice-label">
+              适用对象
+            </div>
+            <div class="advice-content">
+              {{ tradingAdvice.suitable_for }}
+            </div>
           </div>
           
-          <div class="advice-item" v-if="tradingAdvice.risk_control">
-            <div class="advice-label">风险控制</div>
-            <div class="advice-content">{{ tradingAdvice.risk_control }}</div>
+          <div
+            v-if="tradingAdvice.position_management"
+            class="advice-item"
+          >
+            <div class="advice-label">
+              仓位管理
+            </div>
+            <div class="advice-content">
+              {{ tradingAdvice.position_management }}
+            </div>
           </div>
           
-          <div class="advice-item" v-if="tradingAdvice.next_steps">
-            <div class="advice-label">下一步</div>
-            <div class="advice-content">{{ tradingAdvice.next_steps }}</div>
+          <div
+            v-if="tradingAdvice.risk_control"
+            class="advice-item"
+          >
+            <div class="advice-label">
+              风险控制
+            </div>
+            <div class="advice-content">
+              {{ tradingAdvice.risk_control }}
+            </div>
+          </div>
+          
+          <div
+            v-if="tradingAdvice.next_steps"
+            class="advice-item"
+          >
+            <div class="advice-label">
+              下一步
+            </div>
+            <div class="advice-content">
+              {{ tradingAdvice.next_steps }}
+            </div>
           </div>
         </div>
       </div>
 
       <div class="content-main">
         <a-tabs v-model="activeTab">
-          <a-tab-pane key="content" tab="报告内容">
+          <a-tab-pane
+            key="content"
+            tab="报告内容"
+          >
             <div class="report-content-wrapper">
               <div
                 v-if="selectedFormat === 'markdown' || selectedFormat === 'html'"
                 class="content-renderer"
                 v-html="renderedContent"
-              ></div>
-              <div v-else-if="selectedFormat === 'json'" class="json-content">
+              />
+              <div
+                v-else-if="selectedFormat === 'json'"
+                class="json-content"
+              >
                 <pre>{{ formattedJson }}</pre>
               </div>
             </div>
           </a-tab-pane>
 
-          <a-tab-pane key="strategy" tab="策略详情" v-if="strategy">
+          <a-tab-pane
+            v-if="strategy"
+            key="strategy"
+            tab="策略详情"
+          >
             <div class="strategy-details">
-              <a-descriptions bordered :column="2">
+              <a-descriptions
+                bordered
+                :column="2"
+              >
                 <a-descriptions-item label="策略类型">
                   {{ strategy.indicator_type }}
                 </a-descriptions-item>
                 <a-descriptions-item label="指标公式">
                   <code>{{ strategy.formula }}</code>
                 </a-descriptions-item>
-                <a-descriptions-item label="策略描述" :span="2">
+                <a-descriptions-item
+                  label="策略描述"
+                  :span="2"
+                >
                   {{ strategy.description }}
                 </a-descriptions-item>
-                <a-descriptions-item label="信号逻辑" :span="2">
+                <a-descriptions-item
+                  label="信号逻辑"
+                  :span="2"
+                >
                   {{ strategy.signal }}
                 </a-descriptions-item>
               </a-descriptions>
@@ -196,9 +331,16 @@
             </div>
           </a-tab-pane>
 
-          <a-tab-pane key="backtest" tab="回测数据" v-if="backtest">
+          <a-tab-pane
+            v-if="backtest"
+            key="backtest"
+            tab="回测数据"
+          >
             <div class="backtest-details">
-              <a-descriptions bordered :column="2">
+              <a-descriptions
+                bordered
+                :column="2"
+              >
                 <a-descriptions-item label="初始资金">
                   ¥{{ formatNumber(backtest.config.initial_capital) }}
                 </a-descriptions-item>
@@ -214,7 +356,10 @@
               </a-descriptions>
 
               <a-divider>收益曲线</a-divider>
-              <div class="equity-chart" ref="equityChartRef"></div>
+              <div
+                ref="equityChartRef"
+                class="equity-chart"
+              />
 
               <a-divider>交易记录</a-divider>
               <a-table
@@ -223,16 +368,16 @@
                 :pagination="{ pageSize: 10 }"
                 size="small"
               >
-<template #bodyCell="{ column, text, record, index }">
-  <template v-if="column.dataIndex === 'type' || column.key === 'type'">
-                  <a-tag :color="text === 'buy' ? 'red' : 'green'">
-                    {{ text === 'buy' ? '买入' : '卖出' }}
-                  </a-tag>
-  </template>
-  <template v-else-if="column.dataIndex === 'amount' || column.key === 'amount'">
-                  ¥{{ formatNumber(text) }}
-  </template>
-</template>
+                <template #bodyCell="{ column, text, record, index }">
+                  <template v-if="column.dataIndex === 'type' || column.key === 'type'">
+                    <a-tag :color="text === 'buy' ? 'red' : 'green'">
+                      {{ text === 'buy' ? '买入' : '卖出' }}
+                    </a-tag>
+                  </template>
+                  <template v-else-if="column.dataIndex === 'amount' || column.key === 'amount'">
+                    ¥{{ formatNumber(text) }}
+                  </template>
+                </template>
               </a-table>
             </div>
           </a-tab-pane>
@@ -246,18 +391,32 @@
       @ok="confirmExport"
       @cancel="exportModalVisible = false"
     >
-      <a-form :form="exportForm" layout="vertical">
+      <a-form
+        :form="exportForm"
+        layout="vertical"
+      >
         <a-form-item label="文件格式">
           <a-radio-group v-model="exportFormat">
-            <a-radio value="md">Markdown (.md)</a-radio>
-            <a-radio value="html">HTML (.html)</a-radio>
-            <a-radio value="json">JSON (.json)</a-radio>
-            <a-radio value="pdf">PDF (.pdf)</a-radio>
+            <a-radio value="md">
+              Markdown (.md)
+            </a-radio>
+            <a-radio value="html">
+              HTML (.html)
+            </a-radio>
+            <a-radio value="json">
+              JSON (.json)
+            </a-radio>
+            <a-radio value="pdf">
+              PDF (.pdf)
+            </a-radio>
           </a-radio-group>
         </a-form-item>
         
         <a-form-item label="文件名">
-          <a-input v-model="exportFilename" placeholder="请输入文件名" />
+          <a-input
+            v-model="exportFilename"
+            placeholder="请输入文件名"
+          />
         </a-form-item>
       </a-form>
     </a-modal>

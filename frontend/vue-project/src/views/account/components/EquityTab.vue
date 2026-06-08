@@ -1,17 +1,34 @@
 <template>
   <div class="equity-tab">
     <div class="metrics-grid">
-      <div class="metric-card" v-for="m in metrics" :key="m.key">
-        <div class="metric-label">{{ m.label }}</div>
-        <div class="metric-value" :class="m.class">{{ m.value }}</div>
+      <div
+        v-for="m in metrics"
+        :key="m.key"
+        class="metric-card"
+      >
+        <div class="metric-label">
+          {{ m.label }}
+        </div>
+        <div
+          class="metric-value"
+          :class="m.class"
+        >
+          {{ m.value }}
+        </div>
       </div>
     </div>
 
     <div class="chart-container">
-      <div ref="chartRef" style="width:100%;height:350px"></div>
+      <div
+        ref="chartRef"
+        style="width:100%;height:350px"
+      />
     </div>
 
-    <div v-if="curve.length === 0 && !loading" class="empty-hint">
+    <div
+      v-if="curve.length === 0 && !loading"
+      class="empty-hint"
+    >
       暂无资金曲线数据，录入交易后自动生成
     </div>
   </div>

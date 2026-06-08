@@ -5,12 +5,18 @@
       <div class="toolbar-left">
         <!-- 代码编辑器切换 -->
         <a-tooltip title="代码编辑器">
-          <a-button size="small" @click="showEditor = !showEditor">
+          <a-button
+            size="small"
+            @click="showEditor = !showEditor"
+          >
             {{ showEditor ? 'x 关闭编辑器' : '&lt;/&gt; 策略代码' }}
           </a-button>
         </a-tooltip>
 
-        <a-divider type="vertical" style="border-color:#334155" />
+        <a-divider
+          type="vertical"
+          style="border-color:#334155"
+        />
 
         <!-- 股票搜索 + 切换 -->
         <a-select
@@ -33,51 +39,82 @@
         </a-select>
 
         <!-- 自选股快捷选择 -->
-        <a-dropdown v-model="watchlistDropdownVisible" trigger="click">
-          <a-button size="small" style="margin-right: 4px">
+        <a-dropdown
+          v-model="watchlistDropdownVisible"
+          trigger="click"
+        >
+          <a-button
+            size="small"
+            style="margin-right: 4px"
+          >
             <StarOutlined /> 自选 <DownOutlined />
           </a-button>
           <template #overlay>
             <a-menu @click="onWatchlistMenuClick">
-            <a-menu-item v-if="watchlistStocks.length === 0" disabled>
-              暂无自选股，请先在自选监控中添加
-            </a-menu-item>
-            <a-menu-item
-              v-for="s in watchlistStocks"
-              :key="s.symbol"
-            >
-              <span v-if="s.symbol === currentTsCode" style="color: #3b82f6; font-weight: 600">
-                {{ s.name || s.symbol }} ({{ s.symbol }})
-              </span>
-              <span v-else>
-                {{ s.name || s.symbol }} ({{ s.symbol }})
-              </span>
-            </a-menu-item>
-            <a-menu-divider v-if="watchlistStocks.length > 0" />
-            <a-menu-item key="__go_watchlist__">
-              <FolderOpenOutlined /> 管理自选股
-            </a-menu-item>
-          </a-menu>
+              <a-menu-item
+                v-if="watchlistStocks.length === 0"
+                disabled
+              >
+                暂无自选股，请先在自选监控中添加
+              </a-menu-item>
+              <a-menu-item
+                v-for="s in watchlistStocks"
+                :key="s.symbol"
+              >
+                <span
+                  v-if="s.symbol === currentTsCode"
+                  style="color: #3b82f6; font-weight: 600"
+                >
+                  {{ s.name || s.symbol }} ({{ s.symbol }})
+                </span>
+                <span v-else>
+                  {{ s.name || s.symbol }} ({{ s.symbol }})
+                </span>
+              </a-menu-item>
+              <a-menu-divider v-if="watchlistStocks.length > 0" />
+              <a-menu-item key="__go_watchlist__">
+                <FolderOpenOutlined /> 管理自选股
+              </a-menu-item>
+            </a-menu>
           </template>
         </a-dropdown>
 
         <!-- 返回选股系统 -->
         <a-tooltip title="选股系统">
-          <a-button size="small" @click="$router.push('/screener')">
+          <a-button
+            size="small"
+            @click="$router.push('/screener')"
+          >
             <FilterOutlined /> 选股
           </a-button>
         </a-tooltip>
 
         <!-- 周期切换 -->
-        <a-radio-group v-model="currentPeriod" button-style="solid" size="small" @change="handlePeriodChange">
-          <a-radio-button value="D">日线</a-radio-button>
-          <a-radio-button value="W">周线</a-radio-button>
-          <a-radio-button value="M">月线</a-radio-button>
+        <a-radio-group
+          v-model="currentPeriod"
+          button-style="solid"
+          size="small"
+          @change="handlePeriodChange"
+        >
+          <a-radio-button value="D">
+            日线
+          </a-radio-button>
+          <a-radio-button value="W">
+            周线
+          </a-radio-button>
+          <a-radio-button value="M">
+            月线
+          </a-radio-button>
         </a-radio-group>
       </div>
 
       <div class="toolbar-right">
-        <a-button size="small" @click="refreshChart">刷新</a-button>
+        <a-button
+          size="small"
+          @click="refreshChart"
+        >
+          刷新
+        </a-button>
       </div>
     </div>
 
@@ -96,7 +133,7 @@
         {{ ind.name }}
       </a-tag>
 
-      <span class="chips-separator"></span>
+      <span class="chips-separator" />
 
       <span class="chips-label">副图：</span>
       <a-tag
@@ -111,10 +148,15 @@
         {{ ind.name }}
       </a-tag>
 
-      <span class="chips-spacer"></span>
+      <span class="chips-spacer" />
 
       <!-- 自定义策略信号清空 -->
-      <a-tag v-if="customSignals.length > 0" color="orange" closable @close="customSignals = []">
+      <a-tag
+        v-if="customSignals.length > 0"
+        color="orange"
+        closable
+        @close="customSignals = []"
+      >
         自定义: {{ customSignals.length }} 个信号
       </a-tag>
     </div>
@@ -122,10 +164,13 @@
     <!-- 主内容区 -->
     <div class="ide-body">
       <!-- 左侧：代码编辑器（可折叠） -->
-      <div v-show="showEditor" class="ide-editor-panel">
+      <div
+        v-show="showEditor"
+        class="ide-editor-panel"
+      >
         <CodeEditor
           ref="codeEditor"
-          :stockCode="currentTsCode"
+          :stock-code="currentTsCode"
           @strategy-result="onCustomStrategyResult"
         />
       </div>
@@ -135,7 +180,7 @@
         <div class="chart-area">
           <KLineChart
             ref="klineChart"
-            :tsCode="currentTsCode"
+            :ts-code="currentTsCode"
             :period="currentPeriod"
             :indicators="activeAllIndicators"
             @ready="onChartReady"
@@ -144,55 +189,122 @@
         </div>
 
         <!-- 右侧多维度策略信号面板 -->
-        <div class="signal-sidebar" v-if="currentTsCode">
+        <div
+          v-if="currentTsCode"
+          class="signal-sidebar"
+        >
           <div class="signal-header">
             <span class="signal-title">策略信号</span>
-            <a-button size="small" type="link" @click="refreshSignals">刷新</a-button>
+            <a-button
+              size="small"
+              type="link"
+              @click="refreshSignals"
+            >
+              刷新
+            </a-button>
           </div>
 
           <div class="signal-content">
-            <a-spin :spinning="signalsLoading" size="small">
-              <div class="stock-info" v-if="stockInfo">
-                <div class="stock-name">{{ stockInfo.name || currentTsCode }}</div>
-                <div class="stock-code">{{ currentTsCode }}</div>
+            <a-spin
+              :spinning="signalsLoading"
+              size="small"
+            >
+              <div
+                v-if="stockInfo"
+                class="stock-info"
+              >
+                <div class="stock-name">
+                  {{ stockInfo.name || currentTsCode }}
+                </div>
+                <div class="stock-code">
+                  {{ currentTsCode }}
+                </div>
               </div>
 
               <!-- L2 主力分析 -->
               <div class="signal-section">
-                <div class="section-label section-label-l2">L2 主力分析</div>
-                <div v-if="signalsL2.length === 0 && customSignals.length === 0" class="section-empty">等待数据中...</div>
-                <div v-for="sig in signalsL2" :key="sig.id" class="signal-card">
+                <div class="section-label section-label-l2">
+                  L2 主力分析
+                </div>
+                <div
+                  v-if="signalsL2.length === 0 && customSignals.length === 0"
+                  class="section-empty"
+                >
+                  等待数据中...
+                </div>
+                <div
+                  v-for="sig in signalsL2"
+                  :key="sig.id"
+                  class="signal-card"
+                >
                   <div class="signal-card-header">
-                    <a-tag :color="getSignalColor(sig)" size="small">
+                    <a-tag
+                      :color="getSignalColor(sig)"
+                      size="small"
+                    >
                       {{ sig.signal_label || sig.signal }}
                     </a-tag>
-                    <span class="signal-confidence" v-if="sig.confidence">
+                    <span
+                      v-if="sig.confidence"
+                      class="signal-confidence"
+                    >
                       {{ (sig.confidence * 100).toFixed(0) }}%
                     </span>
-                    <span class="signal-stars" v-if="sig.confidence">
+                    <span
+                      v-if="sig.confidence"
+                      class="signal-stars"
+                    >
                       {{ renderStars(sig.confidence) }}
                     </span>
                   </div>
                   <div class="signal-card-body">
-                    <div class="signal-strategy">{{ sig.strategy_name }}</div>
-                    <ul class="signal-evidence" v-if="sig.evidence && sig.evidence.length > 0">
-                      <li v-for="(ev, ei) in sig.evidence" :key="ei">{{ ev }}</li>
+                    <div class="signal-strategy">
+                      {{ sig.strategy_name }}
+                    </div>
+                    <ul
+                      v-if="sig.evidence && sig.evidence.length > 0"
+                      class="signal-evidence"
+                    >
+                      <li
+                        v-for="(ev, ei) in sig.evidence"
+                        :key="ei"
+                      >
+                        {{ ev }}
+                      </li>
                     </ul>
-                    <div class="signal-detail" v-if="sig.entry_zone">
+                    <div
+                      v-if="sig.entry_zone"
+                      class="signal-detail"
+                    >
                       <span class="detail-item">区间: {{ sig.entry_zone[0] }} - {{ sig.entry_zone[1] }}</span>
                     </div>
-                    <div class="signal-detail" v-if="sig.risk_line">
+                    <div
+                      v-if="sig.risk_line"
+                      class="signal-detail"
+                    >
                       <span class="detail-item detail-risk">止损: {{ sig.risk_line }}</span>
                     </div>
-                    <div class="signal-detail" v-if="sig.target_zone">
+                    <div
+                      v-if="sig.target_zone"
+                      class="signal-detail"
+                    >
                       <span class="detail-item detail-target">目标: {{ sig.target_zone[0] }} - {{ sig.target_zone[1] }}</span>
                     </div>
-                    <div class="signal-detail" v-if="sig.position_suggestion">
+                    <div
+                      v-if="sig.position_suggestion"
+                      class="signal-detail"
+                    >
                       <span class="detail-item">仓位: {{ sig.position_suggestion }}</span>
                     </div>
-                    <div class="signal-risk" v-if="sig.risk_notes && sig.risk_notes.length > 0">
+                    <div
+                      v-if="sig.risk_notes && sig.risk_notes.length > 0"
+                      class="signal-risk"
+                    >
                       <span class="risk-icon">⚠</span>
-                      <span v-for="(rn, ri) in sig.risk_notes" :key="ri">{{ rn }}<span v-if="ri < sig.risk_notes.length-1">; </span></span>
+                      <span
+                        v-for="(rn, ri) in sig.risk_notes"
+                        :key="ri"
+                      >{{ rn }}<span v-if="ri < sig.risk_notes.length-1">; </span></span>
                     </div>
                   </div>
                 </div>
@@ -200,40 +312,88 @@
 
               <!-- L3 策略验证 -->
               <div class="signal-section">
-                <div class="section-label section-label-l3">L3 策略验证</div>
-                <div v-if="signalsL3.length === 0 && customSignals.length === 0" class="section-empty">等待数据中...</div>
-                <div v-for="sig in signalsL3" :key="sig.id" class="signal-card">
+                <div class="section-label section-label-l3">
+                  L3 策略验证
+                </div>
+                <div
+                  v-if="signalsL3.length === 0 && customSignals.length === 0"
+                  class="section-empty"
+                >
+                  等待数据中...
+                </div>
+                <div
+                  v-for="sig in signalsL3"
+                  :key="sig.id"
+                  class="signal-card"
+                >
                   <div class="signal-card-header">
-                    <a-tag :color="getSignalColor(sig)" size="small">
+                    <a-tag
+                      :color="getSignalColor(sig)"
+                      size="small"
+                    >
                       {{ sig.signal_label || sig.signal }}
                     </a-tag>
-                    <span class="signal-confidence" v-if="sig.confidence">
+                    <span
+                      v-if="sig.confidence"
+                      class="signal-confidence"
+                    >
                       {{ (sig.confidence * 100).toFixed(0) }}%
                     </span>
-                    <span class="signal-stars" v-if="sig.confidence">
+                    <span
+                      v-if="sig.confidence"
+                      class="signal-stars"
+                    >
                       {{ renderStars(sig.confidence) }}
                     </span>
                   </div>
                   <div class="signal-card-body">
-                    <div class="signal-strategy">{{ sig.strategy_name }}</div>
-                    <ul class="signal-evidence" v-if="sig.evidence && sig.evidence.length > 0">
-                      <li v-for="(ev, ei) in sig.evidence" :key="ei">{{ ev }}</li>
+                    <div class="signal-strategy">
+                      {{ sig.strategy_name }}
+                    </div>
+                    <ul
+                      v-if="sig.evidence && sig.evidence.length > 0"
+                      class="signal-evidence"
+                    >
+                      <li
+                        v-for="(ev, ei) in sig.evidence"
+                        :key="ei"
+                      >
+                        {{ ev }}
+                      </li>
                     </ul>
-                    <div class="signal-detail" v-if="sig.entry_zone">
+                    <div
+                      v-if="sig.entry_zone"
+                      class="signal-detail"
+                    >
                       <span class="detail-item">区间: {{ sig.entry_zone[0] }} - {{ sig.entry_zone[1] }}</span>
                     </div>
-                    <div class="signal-detail" v-if="sig.risk_line">
+                    <div
+                      v-if="sig.risk_line"
+                      class="signal-detail"
+                    >
                       <span class="detail-item detail-risk">止损: {{ sig.risk_line }}</span>
                     </div>
-                    <div class="signal-detail" v-if="sig.target_zone">
+                    <div
+                      v-if="sig.target_zone"
+                      class="signal-detail"
+                    >
                       <span class="detail-item detail-target">目标: {{ sig.target_zone[0] }} - {{ sig.target_zone[1] }}</span>
                     </div>
-                    <div class="signal-detail" v-if="sig.position_suggestion">
+                    <div
+                      v-if="sig.position_suggestion"
+                      class="signal-detail"
+                    >
                       <span class="detail-item">仓位: {{ sig.position_suggestion }}</span>
                     </div>
-                    <div class="signal-risk" v-if="sig.risk_notes && sig.risk_notes.length > 0">
+                    <div
+                      v-if="sig.risk_notes && sig.risk_notes.length > 0"
+                      class="signal-risk"
+                    >
                       <span class="risk-icon">⚠</span>
-                      <span v-for="(rn, ri) in sig.risk_notes" :key="ri">{{ rn }}<span v-if="ri < sig.risk_notes.length-1">; </span></span>
+                      <span
+                        v-for="(rn, ri) in sig.risk_notes"
+                        :key="ri"
+                      >{{ rn }}<span v-if="ri < sig.risk_notes.length-1">; </span></span>
                     </div>
                   </div>
                 </div>
@@ -241,62 +401,110 @@
 
               <!-- 自定义策略 -->
               <div class="signal-section">
-                <div class="section-label section-label-custom">自定义策略</div>
-                <div v-if="customSignals.length === 0" class="section-empty">在左侧编辑器中运行策略产生信号</div>
-                <div v-for="(sig, i) in customSignals" :key="'c'+i" class="signal-card custom">
+                <div class="section-label section-label-custom">
+                  自定义策略
+                </div>
+                <div
+                  v-if="customSignals.length === 0"
+                  class="section-empty"
+                >
+                  在左侧编辑器中运行策略产生信号
+                </div>
+                <div
+                  v-for="(sig, i) in customSignals"
+                  :key="'c'+i"
+                  class="signal-card custom"
+                >
                   <div class="signal-card-header">
-                    <a-tag :color="sig.type === 'buy' ? 'red' : 'green'" size="small">
+                    <a-tag
+                      :color="sig.type === 'buy' ? 'red' : 'green'"
+                      size="small"
+                    >
                       {{ sig.type === 'buy' ? '买入' : '卖出' }}
                     </a-tag>
-                    <span class="signal-confidence" v-if="sig.price">¥{{ sig.price }}</span>
+                    <span
+                      v-if="sig.price"
+                      class="signal-confidence"
+                    >¥{{ sig.price }}</span>
                   </div>
                   <div class="signal-card-body">
-                    <div class="signal-strategy">{{ sig.text || '自定义信号' }}</div>
+                    <div class="signal-strategy">
+                      {{ sig.text || '自定义信号' }}
+                    </div>
                   </div>
                 </div>
               </div>
 
               <!-- 综合操作建议 -->
-              <div class="composite-section" v-if="signals.length > 0 || customSignals.length > 0">
-                <div class="section-label section-label-composite">综合操作建议</div>
+              <div
+                v-if="signals.length > 0 || customSignals.length > 0"
+                class="composite-section"
+              >
+                <div class="section-label section-label-composite">
+                  综合操作建议
+                </div>
                 <div class="composite-card">
                   <div class="composite-row">
                     <span class="composite-key">策略</span>
                     <span class="composite-val">{{ compositeAdvice.action }}</span>
                   </div>
-                  <div class="composite-row" v-if="compositeAdvice.entry">
+                  <div
+                    v-if="compositeAdvice.entry"
+                    class="composite-row"
+                  >
                     <span class="composite-key">区间</span>
                     <span class="composite-val">{{ compositeAdvice.entry }}</span>
                   </div>
-                  <div class="composite-row" v-if="compositeAdvice.stopLoss">
+                  <div
+                    v-if="compositeAdvice.stopLoss"
+                    class="composite-row"
+                  >
                     <span class="composite-key">止损</span>
                     <span class="composite-val composite-risk">{{ compositeAdvice.stopLoss }}</span>
                   </div>
-                  <div class="composite-row" v-if="compositeAdvice.target">
+                  <div
+                    v-if="compositeAdvice.target"
+                    class="composite-row"
+                  >
                     <span class="composite-key">目标</span>
                     <span class="composite-val composite-target">{{ compositeAdvice.target }}</span>
                   </div>
-                  <div class="composite-row" v-if="compositeAdvice.position">
+                  <div
+                    v-if="compositeAdvice.position"
+                    class="composite-row"
+                  >
                     <span class="composite-key">仓位</span>
                     <span class="composite-val">{{ compositeAdvice.position }}</span>
                   </div>
-                  <div class="composite-row" v-if="compositeAdvice.period">
+                  <div
+                    v-if="compositeAdvice.period"
+                    class="composite-row"
+                  >
                     <span class="composite-key">期限</span>
                     <span class="composite-val">{{ compositeAdvice.period }}</span>
                   </div>
-                  <div class="composite-row" v-if="compositeAdvice.compositeConfidence">
+                  <div
+                    v-if="compositeAdvice.compositeConfidence"
+                    class="composite-row"
+                  >
                     <span class="composite-key">综合赢率</span>
                     <span class="composite-val composite-confidence">{{ compositeAdvice.compositeConfidence }}</span>
                   </div>
                 </div>
               </div>
 
-              <a-empty v-if="signals.length === 0 && customSignals.length === 0" description="暂无信号" />
+              <a-empty
+                v-if="signals.length === 0 && customSignals.length === 0"
+                description="暂无信号"
+              />
 
               <!-- 152-Phase3: 共振评分 -->
-              <div class="signal-section" v-if="resonanceData">
+              <div
+                v-if="resonanceData"
+                class="signal-section"
+              >
                 <ResonancePanel
-                  :overallScore="resonanceData.overall_score"
+                  :overall-score="resonanceData.overall_score"
                   :dimensions="resonanceData.dimension_signals"
                 />
               </div>

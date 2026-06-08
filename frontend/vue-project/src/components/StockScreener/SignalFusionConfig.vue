@@ -7,9 +7,15 @@
     <div class="config-body">
       <!-- 策略权重 -->
       <div class="config-section">
-        <div class="section-title">策略权重</div>
+        <div class="section-title">
+          策略权重
+        </div>
         <div class="weight-sliders">
-          <div class="weight-item" v-for="item in strategies" :key="item.key">
+          <div
+            v-for="item in strategies"
+            :key="item.key"
+            class="weight-item"
+          >
             <div class="weight-label">
               <span>{{ item.label }}</span>
               <span class="weight-value">{{ (weights[item.key] * 100).toFixed(0) }}%</span>
@@ -30,10 +36,15 @@
 
       <!-- 阶段加分 -->
       <div class="config-section">
-        <div class="section-title">阶段额外加分</div>
+        <div class="section-title">
+          阶段额外加分
+        </div>
         <div class="bonus-list">
           <div class="bonus-item">
-            <a-checkbox :checked="phaseBonus.building > 0" @change="e => togglePhaseBonus('building', e.target.checked, 2)">
+            <a-checkbox
+              :checked="phaseBonus.building > 0"
+              @change="e => togglePhaseBonus('building', e.target.checked, 2)"
+            >
               建仓期
             </a-checkbox>
             <a-input-number
@@ -47,7 +58,10 @@
             />
           </div>
           <div class="bonus-item">
-            <a-checkbox :checked="phaseBonus.washing > 0" @change="e => togglePhaseBonus('washing', e.target.checked, 1)">
+            <a-checkbox
+              :checked="phaseBonus.washing > 0"
+              @change="e => togglePhaseBonus('washing', e.target.checked, 1)"
+            >
               洗盘末期
             </a-checkbox>
             <a-input-number
@@ -64,15 +78,29 @@
       </div>
 
       <!-- 当前选中股票评分预览 -->
-      <div class="config-section" v-if="selectedStock">
-        <div class="section-title">评分预览</div>
+      <div
+        v-if="selectedStock"
+        class="config-section"
+      >
+        <div class="section-title">
+          评分预览
+        </div>
         <div class="score-preview">
-          <div class="score-stock">{{ selectedStock.name || selectedStock.symbol }}</div>
+          <div class="score-stock">
+            {{ selectedStock.name || selectedStock.symbol }}
+          </div>
           <div class="score-breakdown">
-            <div class="score-row" v-for="(val, key) in scoreBreakdown" :key="key">
+            <div
+              v-for="(val, key) in scoreBreakdown"
+              :key="key"
+              class="score-row"
+            >
               <span class="score-label">{{ key }}</span>
               <span class="score-bar-bg">
-                <span class="score-bar-fill" :style="{ width: (val * 100) + '%' }"></span>
+                <span
+                  class="score-bar-fill"
+                  :style="{ width: (val * 100) + '%' }"
+                />
               </span>
               <span class="score-val">{{ (val * 100).toFixed(0) }}</span>
             </div>
@@ -82,8 +110,21 @@
     </div>
 
     <div class="config-footer">
-      <a-button type="primary" size="small" @click="saveConfig" :loading="saving">保存配置</a-button>
-      <a-button size="small" @click="resetConfig" style="margin-left: 8px">重置</a-button>
+      <a-button
+        type="primary"
+        size="small"
+        :loading="saving"
+        @click="saveConfig"
+      >
+        保存配置
+      </a-button>
+      <a-button
+        size="small"
+        style="margin-left: 8px"
+        @click="resetConfig"
+      >
+        重置
+      </a-button>
     </div>
   </div>
 </template>

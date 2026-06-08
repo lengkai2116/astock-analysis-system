@@ -1,3 +1,7 @@
+"""
+"实时行情 API 路由
+提供实时数据推送和查询功能"
+"""
 import logging
 import os
 import json

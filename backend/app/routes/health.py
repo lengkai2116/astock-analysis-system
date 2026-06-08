@@ -1,3 +1,7 @@
+"""
+"系统健康检查 API 路由
+提供服务状态、数据库连接等健康检查端点"
+"""
 from flask import Blueprint, jsonify
 from sqlalchemy import text
 

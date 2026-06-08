@@ -14,7 +14,8 @@ socketio = SocketIO(cors_allowed_origins="*")
 
 import logging
 from logging.handlers import TimedRotatingFileHandler
-import os
+
+logger = logging.getLogger(__name__)
 
 def _setup_logging(app):
     """配置日志轮转"""
@@ -78,8 +79,20 @@ def create_app():
             return {'success': False, 'error': '缺少认证令牌', 'error_type': 'AuthRequired'}, 401
         token = auth[7:]
         if not _constant_time_compare(token, _AUTH_TOKEN):
+
             return {'success': False, 'error': '认证令牌无效', 'error_type': 'AuthInvalid'}, 403
     
+
+    @app.errorhandler(404)
+    def not_found(error):
+        """404 统一 JSON 响应"""
+        return {"success": False, "error": "请求的资源不存在", "error_type": "NotFound"}, 404
+
+    @app.errorhandler(500)
+    def internal_error(error):
+        """500 统一 JSON 响应"""
+        return {"success": False, "error": "服务器内部错误", "error_type": "InternalError"}, 500
+
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev')
@@ -170,8 +183,10 @@ def create_app():
     except Exception as e:
         logger.warning(f"数据源管理器初始化失败（可忽略）: {e}")
 
-    return app
 
+
+    from app import models
+    return app
 
 def _route_provider(endpoint, params, provider):
     """路由数据提供者请求"""
@@ -183,9 +198,5 @@ def _route_provider(endpoint, params, provider):
         return provider.get_stock_list()
     return provider.get_daily_data(endpoint, params)
 
-    return app
 
-from app import models
 
-import logging
-logger = logging.getLogger(__name__)

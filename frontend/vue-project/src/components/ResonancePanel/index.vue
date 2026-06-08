@@ -1,8 +1,16 @@
 <template>
-  <div class="resonance-panel" v-if="hasData">
+  <div
+    v-if="hasData"
+    class="resonance-panel"
+  >
     <div class="resonance-panel__header">
-      <h3 class="resonance-panel__title">🎯 共振评分 (150§5.3)</h3>
-      <span class="resonance-panel__overall" :class="overallColor">
+      <h3 class="resonance-panel__title">
+        🎯 共振评分 (150§5.3)
+      </h3>
+      <span
+        class="resonance-panel__overall"
+        :class="overallColor"
+      >
         {{ overallScore }}
       </span>
     </div>
@@ -10,10 +18,17 @@
       <p>{{ overallDesc }}</p>
     </div>
     <div class="resonance-panel__dimensions">
-      <div v-for="dim in dimensions" :key="dim.id" class="dimension-item">
+      <div
+        v-for="dim in dimensions"
+        :key="dim.id"
+        class="dimension-item"
+      >
         <div class="dimension-item__header">
           <span class="dimension-item__name">{{ dim.name }}</span>
-          <span class="dimension-item__score" :class="scoreColor(dim.score)">
+          <span
+            class="dimension-item__score"
+            :class="scoreColor(dim.score)"
+          >
             {{ dim.score }}
           </span>
         </div>

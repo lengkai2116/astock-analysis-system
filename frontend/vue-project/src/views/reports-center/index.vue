@@ -132,10 +132,10 @@
       @ok="handleGenerate"
       :confirmLoading="generating"
     >
-      <a-form :form="generateForm" layout="vertical">
-        <a-form-item label="报告类型" required>
+      <a-form ref="generateFormRef" :model="formState" layout="vertical">
+        <a-form-item label="报告类型" name="reportType" :rules="[{ required: true, message: '请选择报告类型' }]">
           <a-select
-            v-decorator="['reportType', { rules: [{ required: true, message: '请选择报告类型' }] }]"
+            v-model:value="formState.reportType"
           >
             <a-select-option value="single_stock">单股票策略报告</a-select-option>
             <a-select-option value="backtest">回测报告</a-select-option>
@@ -143,12 +143,12 @@
           </a-select>
         </a-form-item>
 
-        <a-form-item label="股票代码">
-          <a-input v-decorator="['tsCode']" placeholder="如: 000001.SZ" />
+        <a-form-item label="股票代码" name="tsCode">
+          <a-input v-model:value="formState.tsCode" placeholder="如: 000001.SZ" />
         </a-form-item>
 
-        <a-form-item label="报告标题">
-          <a-input v-decorator="['title']" placeholder="输入报告标题" />
+        <a-form-item label="报告标题" name="title">
+          <a-input v-model:value="formState.title" placeholder="输入报告标题" />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -178,7 +178,11 @@ export default {
 
       generateModalVisible: false,
       generating: false,
-      generateForm: this.$form.createForm(this)
+      formState: {
+        reportType: undefined,
+        tsCode: '',
+        title: ''
+      }
     }
   },
 
@@ -230,16 +234,15 @@ export default {
 
     showGenerateModal() {
       this.generateModalVisible = true
-      this.$nextTick(() => this.generateForm.resetFields())
+      this.$nextTick(() => {
+        this.formState = { reportType: undefined, tsCode: '', title: '' }
+      })
     },
 
     async handleGenerate() {
       try {
-        const values = await new Promise((resolve, reject) => {
-          this.generateForm.validateFields((err, vals) => {
-            if (err) reject(err); else resolve(vals)
-          })
-        })
+        await this.$refs.generateFormRef.validate()
+        const values = this.formState
 
         this.generating = true
         const res = await axios.post('/api/v2/reports/generate', {

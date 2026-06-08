@@ -59,3 +59,11 @@ backend/test.db
 backend/strategy_templates.db
 ## DuckDB
 data/duckdb/*.corrupted*
+
+# Screenshots
+screenshot_*.png
+frontend/vue-project/test-results/
+
+# Logs
+backend/logs/
+test-results/

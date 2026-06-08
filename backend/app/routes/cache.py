@@ -1,3 +1,7 @@
+"""
+"数据缓存管理 API 路由
+提供缓存状态检查、手动刷新、同步控制等功能"
+"""
 import os
 from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, jsonify, request

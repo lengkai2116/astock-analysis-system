@@ -1,5 +1,8 @@
 <template>
-  <div class="code-editor" :class="{ 'theme-dark': dark }">
+  <div
+    class="code-editor"
+    :class="{ 'theme-dark': dark }"
+  >
     <!-- 工具栏 -->
     <div class="editor-toolbar">
       <div class="toolbar-left">
@@ -10,45 +13,91 @@
           placeholder="选择模板"
           @change="loadTemplate"
         >
-          <a-select-option value="">— 自定义 —</a-select-option>
+          <a-select-option value="">
+            — 自定义 —
+          </a-select-option>
           <a-select-option-group label="均线策略">
-            <a-select-option value="ma_cross">均线交叉</a-select-option>
-            <a-select-option value="ma_trend">均线趋势</a-select-option>
+            <a-select-option value="ma_cross">
+              均线交叉
+            </a-select-option>
+            <a-select-option value="ma_trend">
+              均线趋势
+            </a-select-option>
           </a-select-option-group>
           <a-select-option-group label="震荡指标">
-            <a-select-option value="rsi_divergence">RSI 背离</a-select-option>
-            <a-select-option value="macd_cross">MACD 金叉死叉</a-select-option>
-            <a-select-option value="kdj_overbought">KDJ 超买超卖</a-select-option>
+            <a-select-option value="rsi_divergence">
+              RSI 背离
+            </a-select-option>
+            <a-select-option value="macd_cross">
+              MACD 金叉死叉
+            </a-select-option>
+            <a-select-option value="kdj_overbought">
+              KDJ 超买超卖
+            </a-select-option>
           </a-select-option-group>
           <a-select-option-group label="组合策略">
-            <a-select-option value="ma_macd_combined">MA+MACD 组合</a-select-option>
-            <a-select-option value="boll_rsi_combined">BOLL+RSI 组合</a-select-option>
+            <a-select-option value="ma_macd_combined">
+              MA+MACD 组合
+            </a-select-option>
+            <a-select-option value="boll_rsi_combined">
+              BOLL+RSI 组合
+            </a-select-option>
           </a-select-option-group>
           <a-select-option-group label="选股">
-            <a-select-option value="volume_breakout">放量突破</a-select-option>
-            <a-select-option value="golden_valley">黄金谷</a-select-option>
+            <a-select-option value="volume_breakout">
+              放量突破
+            </a-select-option>
+            <a-select-option value="golden_valley">
+              黄金谷
+            </a-select-option>
           </a-select-option-group>
         </a-select>
       </div>
       <div class="toolbar-right">
         <a-tooltip title="格式化代码">
-          <a-button size="small" @click="formatCode" :disabled="!editor">美化</a-button>
+          <a-button
+            size="small"
+            :disabled="!editor"
+            @click="formatCode"
+          >
+            美化
+          </a-button>
         </a-tooltip>
         <a-tooltip title="运行策略">
-          <a-button type="primary" size="small" @click="runStrategy" :loading="running"
-            icon="caret-right">运行</a-button>
+          <a-button
+            type="primary"
+            size="small"
+            :loading="running"
+            icon="caret-right"
+            @click="runStrategy"
+          >
+            运行
+          </a-button>
         </a-tooltip>
       </div>
     </div>
 
     <!-- 编辑器主体 -->
-    <div ref="editorRef" class="editor-body"></div>
+    <div
+      ref="editorRef"
+      class="editor-body"
+    />
 
     <!-- 执行结果 -->
-    <div v-if="runResult" class="editor-result" :class="runResultClass">
+    <div
+      v-if="runResult"
+      class="editor-result"
+      :class="runResultClass"
+    >
       <div class="result-header">
         <span>执行结果</span>
-        <a-button type="link" size="small" @click="runResult = null">x</a-button>
+        <a-button
+          type="link"
+          size="small"
+          @click="runResult = null"
+        >
+          x
+        </a-button>
       </div>
       <div class="result-body">
         <pre><code>{{ runResult }}</code></pre>

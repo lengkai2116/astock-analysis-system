@@ -1,9 +1,14 @@
 <template>
   <div class="factor-manager-page theme-dark">
     <div class="page-header">
-      <h1 class="page-title">📈 因子组合管理</h1>
+      <h1 class="page-title">
+        📈 因子组合管理
+      </h1>
       <div class="header-actions">
-        <a-button type="primary" @click="showCreateModal = true">
+        <a-button
+          type="primary"
+          @click="showCreateModal = true"
+        >
           + 新建组合
         </a-button>
       </div>
@@ -11,32 +16,56 @@
 
     <div class="content-container">
       <a-tabs v-model="activeTab">
-        <a-tab-pane key="combinations" tab="我的组合">
+        <a-tab-pane
+          key="combinations"
+          tab="我的组合"
+        >
           <div class="combinations-section">
             <div class="section-header">
               <span>因子组合列表</span>
-              <a-button size="small" @click="loadCombinations">
+              <a-button
+                size="small"
+                @click="loadCombinations"
+              >
                 🔄 刷新
               </a-button>
             </div>
             
             <a-spin :spinning="loading">
               <div class="combinations-grid">
-                <div v-for="combo in combinations" :key="combo.id" 
+                <div
+                  v-for="combo in combinations"
+                  :key="combo.id" 
                   class="combination-card"
                   :class="{ active: selectedCombo && selectedCombo.id === combo.id }"
                   @click="selectCombination(combo)"
                 >
                   <div class="card-header">
                     <span class="combo-name">{{ combo.name }}</span>
-                    <a-tag v-if="combo.is_default" color="blue">默认</a-tag>
-                    <a-tag v-if="combo.is_favorite" color="gold">收藏</a-tag>
+                    <a-tag
+                      v-if="combo.is_default"
+                      color="blue"
+                    >
+                      默认
+                    </a-tag>
+                    <a-tag
+                      v-if="combo.is_favorite"
+                      color="gold"
+                    >
+                      收藏
+                    </a-tag>
                   </div>
-                  <div class="card-description">{{ combo.description || '暂无描述' }}</div>
+                  <div class="card-description">
+                    {{ combo.description || '暂无描述' }}
+                  </div>
                   <div class="card-factors">
                     <span class="factor-count">{{ combo.factor_count || 0 }} 个因子</span>
                     <div class="factor-tags">
-                      <a-tag v-for="(factor, idx) in (combo.factors || []).slice(0, 3)" :key="idx" size="small">
+                      <a-tag
+                        v-for="(factor, idx) in (combo.factors || []).slice(0, 3)"
+                        :key="idx"
+                        size="small"
+                      >
                         {{ factor }}
                       </a-tag>
                       <span v-if="(combo.factors || []).length > 3">
@@ -48,27 +77,49 @@
                     <span>创建于: {{ formatDate(combo.created_at) }}</span>
                   </div>
                   <div class="card-actions">
-                    <a-button type="link" size="small" @click.stop="editCombination(combo)">
+                    <a-button
+                      type="link"
+                      size="small"
+                      @click.stop="editCombination(combo)"
+                    >
                       编辑
                     </a-button>
-                    <a-button type="link" size="small" @click.stop="runBacktest(combo)">
+                    <a-button
+                      type="link"
+                      size="small"
+                      @click.stop="runBacktest(combo)"
+                    >
                       回测
                     </a-button>
                     <a-popconfirm
                       title="确定删除该组合？"
                       @confirm="deleteCombination(combo.id)"
                     >
-                      <a-button type="link" size="small" danger>
+                      <a-button
+                        type="link"
+                        size="small"
+                        danger
+                      >
                         删除
                       </a-button>
                     </a-popconfirm>
                   </div>
                 </div>
 
-                <div v-if="combinations.length === 0 && !loading" class="empty-state">
-                  <div class="empty-icon">📊</div>
-                  <div class="empty-text">暂无因子组合</div>
-                  <a-button type="primary" @click="showCreateModal = true">
+                <div
+                  v-if="combinations.length === 0 && !loading"
+                  class="empty-state"
+                >
+                  <div class="empty-icon">
+                    📊
+                  </div>
+                  <div class="empty-text">
+                    暂无因子组合
+                  </div>
+                  <a-button
+                    type="primary"
+                    @click="showCreateModal = true"
+                  >
                     创建第一个组合
                   </a-button>
                 </div>
@@ -77,18 +128,31 @@
           </div>
         </a-tab-pane>
 
-        <a-tab-pane key="screen" tab="策略筛选">
+        <a-tab-pane
+          key="screen"
+          tab="策略筛选"
+        >
           <div class="screen-section">
             <div class="screen-header">
               <h3>策略筛选</h3>
-              <p class="screen-desc">基于选定的因子组合进行股票筛选</p>
+              <p class="screen-desc">
+                基于选定的因子组合进行股票筛选
+              </p>
             </div>
 
             <div class="screen-controls">
               <div class="control-group">
                 <label>选择组合:</label>
-                <a-select v-model="screenComboId" placeholder="请选择因子组合" style="width: 300px">
-                  <a-select-option v-for="combo in combinations" :key="combo.id" :value="combo.id">
+                <a-select
+                  v-model="screenComboId"
+                  placeholder="请选择因子组合"
+                  style="width: 300px"
+                >
+                  <a-select-option
+                    v-for="combo in combinations"
+                    :key="combo.id"
+                    :value="combo.id"
+                  >
                     {{ combo.name }} ({{ combo.factor_count || 0 }}个因子)
                   </a-select-option>
                 </a-select>
@@ -96,28 +160,53 @@
 
               <div class="control-group">
                 <label>股票池:</label>
-                <a-select v-model="screenPool" style="width: 200px">
-                  <a-select-option value="all">全部A股</a-select-option>
-                  <a-select-option value="hs300">沪深300</a-select-option>
-                  <a-select-option value="zz500">中证500</a-select-option>
-                  <a-select-option value="watchlist">自选股</a-select-option>
+                <a-select
+                  v-model="screenPool"
+                  style="width: 200px"
+                >
+                  <a-select-option value="all">
+                    全部A股
+                  </a-select-option>
+                  <a-select-option value="hs300">
+                    沪深300
+                  </a-select-option>
+                  <a-select-option value="zz500">
+                    中证500
+                  </a-select-option>
+                  <a-select-option value="watchlist">
+                    自选股
+                  </a-select-option>
                 </a-select>
               </div>
 
               <div class="control-group">
                 <label>筛选数量:</label>
-                <a-input-number v-model="screenTopN" :min="1" :max="100" />
+                <a-input-number
+                  v-model="screenTopN"
+                  :min="1"
+                  :max="100"
+                />
               </div>
 
-              <a-button type="primary" @click="runScreen" :loading="screenLoading">
+              <a-button
+                type="primary"
+                :loading="screenLoading"
+                @click="runScreen"
+              >
                 开始筛选
               </a-button>
             </div>
 
-            <div v-if="screenResults.length > 0" class="screen-results">
+            <div
+              v-if="screenResults.length > 0"
+              class="screen-results"
+            >
               <div class="results-header">
                 <span>筛选结果 ({{ screenResults.length }} 只)</span>
-                <a-button size="small" @click="exportResults">
+                <a-button
+                  size="small"
+                  @click="exportResults"
+                >
                   导出
                 </a-button>
               </div>
@@ -127,24 +216,32 @@
                 :pagination="{ pageSize: 10 }"
                 row-key="symbol"
               >
-<template #bodyCell="{ column, text, record, index }">
-  <template v-if="column.dataIndex === 'rank' || column.key === 'rank'">
-                  {{ index + 1 }}
-  </template>
-  <template v-else-if="column.dataIndex === 'symbol' || column.key === 'symbol'">
-                  <span class="stock-symbol">{{ record.symbol }}</span>
-                  <span class="stock-name">{{ record.name }}</span>
-  </template>
-  <template v-else-if="column.dataIndex === 'score' || column.key === 'score'">
-                  <a-progress :percent="text * 100" :showInfo="false" :strokeColor="getScoreColor(text)" />
-                  <span>{{ (text * 100).toFixed(1) }}分</span>
-  </template>
-  <template v-else-if="column.dataIndex === 'action' || column.key === 'action'">
-                  <a-button type="link" size="small" @click="goToChart(record)">
-                    分析
-                  </a-button>
-  </template>
-</template>
+                <template #bodyCell="{ column, text, record, index }">
+                  <template v-if="column.dataIndex === 'rank' || column.key === 'rank'">
+                    {{ index + 1 }}
+                  </template>
+                  <template v-else-if="column.dataIndex === 'symbol' || column.key === 'symbol'">
+                    <span class="stock-symbol">{{ record.symbol }}</span>
+                    <span class="stock-name">{{ record.name }}</span>
+                  </template>
+                  <template v-else-if="column.dataIndex === 'score' || column.key === 'score'">
+                    <a-progress
+                      :percent="text * 100"
+                      :show-info="false"
+                      :stroke-color="getScoreColor(text)"
+                    />
+                    <span>{{ (text * 100).toFixed(1) }}分</span>
+                  </template>
+                  <template v-else-if="column.dataIndex === 'action' || column.key === 'action'">
+                    <a-button
+                      type="link"
+                      size="small"
+                      @click="goToChart(record)"
+                    >
+                      分析
+                    </a-button>
+                  </template>
+                </template>
               </a-table>
             </div>
           </div>
@@ -155,27 +252,50 @@
     <a-modal
       v-model="showCreateModal"
       :title="editingCombo ? '编辑组合' : '新建组合'"
+      width="600px"
       @ok="handleSaveCombination"
       @cancel="closeCreateModal"
-      width="600px"
     >
-      <a-form :form="form" layout="vertical">
-        <a-form-item label="组合名称" required>
-          <a-input v-model="formData.name" placeholder="请输入组合名称" />
+      <a-form
+        :form="form"
+        layout="vertical"
+      >
+        <a-form-item
+          label="组合名称"
+          required
+        >
+          <a-input
+            v-model="formData.name"
+            placeholder="请输入组合名称"
+          />
         </a-form-item>
 
         <a-form-item label="组合描述">
-          <a-textarea v-model="formData.description" placeholder="请输入组合描述" :rows="2" />
+          <a-textarea
+            v-model="formData.description"
+            placeholder="请输入组合描述"
+            :rows="2"
+          />
         </a-form-item>
 
-        <a-form-item label="选择因子" required>
+        <a-form-item
+          label="选择因子"
+          required
+        >
           <div class="factor-selector-btn">
             <a-button @click="showFactorSelector = true">
               + 选择因子 ({{ selectedFactors.length }})
             </a-button>
           </div>
-          <div class="selected-factors-list" v-if="selectedFactors.length > 0">
-            <div v-for="factorId in selectedFactors" :key="factorId" class="selected-factor-item">
+          <div
+            v-if="selectedFactors.length > 0"
+            class="selected-factors-list"
+          >
+            <div
+              v-for="factorId in selectedFactors"
+              :key="factorId"
+              class="selected-factor-item"
+            >
               <span>{{ getFactorName(factorId) }}</span>
               <div class="factor-weight">
                 <label>权重:</label>
@@ -193,8 +313,12 @@
         </a-form-item>
 
         <a-form-item>
-          <a-checkbox v-model="formData.is_default">设为默认组合</a-checkbox>
-          <a-checkbox v-model="formData.is_favorite">收藏</a-checkbox>
+          <a-checkbox v-model="formData.is_default">
+            设为默认组合
+          </a-checkbox>
+          <a-checkbox v-model="formData.is_favorite">
+            收藏
+          </a-checkbox>
         </a-form-item>
       </a-form>
     </a-modal>

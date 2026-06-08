@@ -1,29 +1,74 @@
 <template>
   <div class="trade-tab">
     <div class="toolbar">
-      <a-input-search v-model:value="searchCode" placeholder="股票代码" style="width:160px" @search="loadTrades" />
-      <a-range-picker v-model:value="dateRange" @change="loadTrades" />
-      <a-select v-model:value="dirFilter" style="width:100px" placeholder="方向" allowClear @change="loadTrades">
-        <a-select-option value="买入">买入</a-select-option>
-        <a-select-option value="卖出">卖出</a-select-option>
+      <a-input-search
+        v-model:value="searchCode"
+        placeholder="股票代码"
+        style="width:160px"
+        @search="loadTrades"
+      />
+      <a-range-picker
+        v-model:value="dateRange"
+        @change="loadTrades"
+      />
+      <a-select
+        v-model:value="dirFilter"
+        style="width:100px"
+        placeholder="方向"
+        allow-clear
+        @change="loadTrades"
+      >
+        <a-select-option value="买入">
+          买入
+        </a-select-option>
+        <a-select-option value="卖出">
+          卖出
+        </a-select-option>
       </a-select>
-      <a-button type="primary" @click="showAddModal = true">+ 新建交易</a-button>
-      <a-button @click="showImportModal = true">批量导入</a-button>
-      <a-button @click="handleMatch">匹配信号</a-button>
+      <a-button
+        type="primary"
+        @click="showAddModal = true"
+      >
+        + 新建交易
+      </a-button>
+      <a-button @click="showImportModal = true">
+        批量导入
+      </a-button>
+      <a-button @click="handleMatch">
+        匹配信号
+      </a-button>
     </div>
-    <a-table :columns="columns" :dataSource="trades" :pagination="{ pageSize: 20 }" size="small" rowKey="id" :loading="loading">
+    <a-table
+      :columns="columns"
+      :data-source="trades"
+      :pagination="{ pageSize: 20 }"
+      size="small"
+      row-key="id"
+      :loading="loading"
+    >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'direction'">
-          <a-tag :color="record.direction === '买入' ? 'green' : 'red'">{{ record.direction }}</a-tag>
+          <a-tag :color="record.direction === '买入' ? 'green' : 'red'">
+            {{ record.direction }}
+          </a-tag>
         </template>
         <template v-if="column.key === 'signal_match'">
-          <span v-if="record.signal_match" :style="{ color: '#52c41a' }">✅ {{ record.signal_match.signal_type }}</span>
-          <span v-else style="color:#64748b">—</span>
+          <span
+            v-if="record.signal_match"
+            :style="{ color: '#52c41a' }"
+          >✅ {{ record.signal_match.signal_type }}</span>
+          <span
+            v-else
+            style="color:#64748b"
+          >—</span>
         </template>
         <template v-if="column.key === 'actions'">
           <a-space>
             <a @click="handleEdit(record)">编辑</a>
-            <a-popconfirm title="确认删除?" @confirm="handleDelete(record.id)">
+            <a-popconfirm
+              title="确认删除?"
+              @confirm="handleDelete(record.id)"
+            >
               <a style="color:#ff4d4f">删除</a>
             </a-popconfirm>
           </a-space>
@@ -32,21 +77,82 @@
     </a-table>
 
     <!-- 新建交易弹窗 -->
-    <a-modal v-model:visible="showAddModal" title="新建交易" :footer="null" width="500" @ok="handleCreate">
-      <a-form :model="form" layout="vertical">
-        <a-form-item label="股票代码" required><a-input v-model:value="form.ts_code" /></a-form-item>
-        <a-form-item label="股票名称"><a-input v-model:value="form.stock_name" /></a-form-item>
-        <a-form-item label="方向" required>
+    <a-modal
+      v-model:visible="showAddModal"
+      title="新建交易"
+      :footer="null"
+      width="500"
+      @ok="handleCreate"
+    >
+      <a-form
+        :model="form"
+        layout="vertical"
+      >
+        <a-form-item
+          label="股票代码"
+          required
+        >
+          <a-input v-model:value="form.ts_code" />
+        </a-form-item>
+        <a-form-item label="股票名称">
+          <a-input v-model:value="form.stock_name" />
+        </a-form-item>
+        <a-form-item
+          label="方向"
+          required
+        >
           <a-radio-group v-model:value="form.direction">
-            <a-radio value="买入">买入</a-radio>
-            <a-radio value="卖出">卖出</a-radio>
+            <a-radio value="买入">
+              买入
+            </a-radio>
+            <a-radio value="卖出">
+              卖出
+            </a-radio>
           </a-radio-group>
         </a-form-item>
-        <a-form-item label="日期" required><a-date-picker v-model:value="form.trade_date" style="width:100%" /></a-form-item>
-        <a-form-item label="价格" required><a-input-number v-model:value="form.price" :min="0" :precision="2" style="width:100%" /></a-form-item>
-        <a-form-item label="数量" required><a-input-number v-model:value="form.quantity" :min="1" style="width:100%" /></a-form-item>
-        <a-form-item label="备注"><a-textarea v-model:value="form.notes" rows="2" /></a-form-item>
-        <a-button type="primary" block @click="handleCreate">提交</a-button>
+        <a-form-item
+          label="日期"
+          required
+        >
+          <a-date-picker
+            v-model:value="form.trade_date"
+            style="width:100%"
+          />
+        </a-form-item>
+        <a-form-item
+          label="价格"
+          required
+        >
+          <a-input-number
+            v-model:value="form.price"
+            :min="0"
+            :precision="2"
+            style="width:100%"
+          />
+        </a-form-item>
+        <a-form-item
+          label="数量"
+          required
+        >
+          <a-input-number
+            v-model:value="form.quantity"
+            :min="1"
+            style="width:100%"
+          />
+        </a-form-item>
+        <a-form-item label="备注">
+          <a-textarea
+            v-model:value="form.notes"
+            rows="2"
+          />
+        </a-form-item>
+        <a-button
+          type="primary"
+          block
+          @click="handleCreate"
+        >
+          提交
+        </a-button>
       </a-form>
     </a-modal>
   </div>

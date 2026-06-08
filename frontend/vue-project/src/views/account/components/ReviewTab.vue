@@ -1,20 +1,48 @@
 <template>
   <div class="review-tab">
     <div class="review-toolbar">
-      <a-range-picker v-model:value="reviewDateRange" style="width:260px" />
-      <a-button type="primary" :loading="reviewLoading" @click="handleRunReview">▶ 开始复盘</a-button>
-      <a-button v-if="reviewResult" @click="handleExport">导出报告</a-button>
+      <a-range-picker
+        v-model:value="reviewDateRange"
+        style="width:260px"
+      />
+      <a-button
+        type="primary"
+        :loading="reviewLoading"
+        @click="handleRunReview"
+      >
+        ▶ 开始复盘
+      </a-button>
+      <a-button
+        v-if="reviewResult"
+        @click="handleExport"
+      >
+        导出报告
+      </a-button>
     </div>
 
-    <div v-if="reviewLoading" style="text-align:center;padding:60px">
-      <a-spin size="large" tip="正在生成复盘报告..." />
+    <div
+      v-if="reviewLoading"
+      style="text-align:center;padding:60px"
+    >
+      <a-spin
+        size="large"
+        tip="正在生成复盘报告..."
+      />
     </div>
 
-    <div v-else-if="reviewResult" class="review-content">
+    <div
+      v-else-if="reviewResult"
+      class="review-content"
+    >
       <ReviewReport :result="reviewResult" />
     </div>
 
-    <div v-else class="empty-hint">选择复盘周期，点击「开始复盘」</div>
+    <div
+      v-else
+      class="empty-hint"
+    >
+      选择复盘周期，点击「开始复盘」
+    </div>
   </div>
 </template>
 

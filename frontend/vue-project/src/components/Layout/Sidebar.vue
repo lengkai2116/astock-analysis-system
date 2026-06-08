@@ -1,65 +1,104 @@
 <template>
-  <div class="sidebar" :class="{ collapsed: collapsed }">
+  <div
+    class="sidebar"
+    :class="{ collapsed: collapsed }"
+  >
     <div class="sidebar-header">
-      <div class="logo" @click="toggleCollapse">
+      <div
+        class="logo"
+        @click="toggleCollapse"
+      >
         <span class="logo-icon">📊</span>
-        <span v-if="!collapsed" class="logo-text">A股分析</span>
+        <span
+          v-if="!collapsed"
+          class="logo-text"
+        >A股分析</span>
       </div>
     </div>
 
     <div class="sidebar-menu">
       <a-menu
         :mode="collapsed ? 'vertical' : 'inline'"
-        :selectedKeys="selectedKeys"
-        :defaultOpenKeys="openKeys"
+        :selected-keys="selectedKeys"
+        :default-open-keys="openKeys"
         theme="dark"
       >
-        <a-menu-item key="/" @click="navigate('/')">
+        <a-menu-item
+          key="/"
+          @click="navigate('/')"
+        >
           <DashboardOutlined />
           <span>仪表盘</span>
         </a-menu-item>
 
-        <a-menu-item key="/indicator-ide" @click="navigate('/indicator-ide')">
+        <a-menu-item
+          key="/indicator-ide"
+          @click="navigate('/indicator-ide')"
+        >
           <CodeOutlined />
           <span>个股策略分析</span>
         </a-menu-item>
 
-        <a-menu-item key="/screener" @click="navigate('/screener')">
+        <a-menu-item
+          key="/screener"
+          @click="navigate('/screener')"
+        >
           <FilterOutlined />
           <span>选股系统</span>
         </a-menu-item>
 
-        <a-menu-item key="/watchlist" @click="navigate('/watchlist')">
+        <a-menu-item
+          key="/watchlist"
+          @click="navigate('/watchlist')"
+        >
           <StarOutlined />
           <span>自选监控</span>
         </a-menu-item>
 
-        <a-menu-item key="/ai-analysis" @click="navigate('/ai-analysis')">
+        <a-menu-item
+          key="/ai-analysis"
+          @click="navigate('/ai-analysis')"
+        >
           <RobotOutlined />
           <span>AI分析</span>
         </a-menu-item>
 
-        <a-menu-item key="/backtest" @click="navigate('/backtest')">
+        <a-menu-item
+          key="/backtest"
+          @click="navigate('/backtest')"
+        >
           <BarChartOutlined />
           <span>回测系统</span>
         </a-menu-item>
 
-        <a-menu-item key="/factor-manager" @click="navigate('/factor-manager')">
+        <a-menu-item
+          key="/factor-manager"
+          @click="navigate('/factor-manager')"
+        >
           <DatabaseOutlined />
           <span>因子管理</span>
         </a-menu-item>
 
-        <a-menu-item key="/strategy-templates" @click="navigate('/strategy-templates')">
+        <a-menu-item
+          key="/strategy-templates"
+          @click="navigate('/strategy-templates')"
+        >
           <FileTextOutlined />
           <span>策略模板</span>
         </a-menu-item>
 
-        <a-menu-item key="/reports-center" @click="navigate('/reports-center')">
+        <a-menu-item
+          key="/reports-center"
+          @click="navigate('/reports-center')"
+        >
           <FolderOutlined />
           <span>报告中心</span>
         </a-menu-item>
 
-        <a-menu-item key="/account" @click="navigate('/account')">
+        <a-menu-item
+          key="/account"
+          @click="navigate('/account')"
+        >
           <WalletOutlined />
           <span>账户管理</span>
         </a-menu-item>
@@ -68,12 +107,22 @@
 
     <div class="sidebar-footer">
       <!-- 主题切换按钮 (150§2.1) -->
-      <div class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色主题' : '切换到深色主题'">
+      <div
+        class="theme-toggle"
+        :title="isDark ? '切换到浅色主题' : '切换到深色主题'"
+        @click="toggleTheme"
+      >
         <span class="theme-toggle-icon">{{ isDark ? '☀️' : '🌙' }}</span>
-        <span v-if="!collapsed" class="theme-toggle-text">{{ isDark ? '浅色主题' : '深色主题' }}</span>
+        <span
+          v-if="!collapsed"
+          class="theme-toggle-text"
+        >{{ isDark ? '浅色主题' : '深色主题' }}</span>
       </div>
 
-      <div class="collapse-btn" @click="toggleCollapse">
+      <div
+        class="collapse-btn"
+        @click="toggleCollapse"
+      >
         <RightOutlined v-if="collapsed" /><LeftOutlined v-else />
       </div>
     </div>

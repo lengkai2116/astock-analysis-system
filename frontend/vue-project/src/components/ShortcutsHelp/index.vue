@@ -1,15 +1,31 @@
 <template>
-  <div class="shortcuts-overlay" @click.self="$emit('close')">
+  <div
+    class="shortcuts-overlay"
+    @click.self="$emit('close')"
+  >
     <div class="shortcuts-panel">
       <div class="shortcuts-header">
         <h3>⌨️ 快捷键</h3>
-        <button class="shortcuts-close" @click="$emit('close')">✕</button>
+        <button
+          class="shortcuts-close"
+          @click="$emit('close')"
+        >
+          ✕
+        </button>
       </div>
       <div class="shortcuts-grid">
-        <div v-for="s in shortcuts" :key="s.id" class="shortcut-row">
+        <div
+          v-for="s in shortcuts"
+          :key="s.id"
+          class="shortcut-row"
+        >
           <span class="shortcut-desc">{{ s.label }}</span>
           <span class="shortcut-keys">
-            <span v-for="(key, i) in getBinding(s.id)" :key="i" class="shortcut-key">
+            <span
+              v-for="(key, i) in getBinding(s.id)"
+              :key="i"
+              class="shortcut-key"
+            >
               {{ key === 'Escape' ? 'Esc' : key === '/' ? '/' : key.length === 1 ? key.toUpperCase() : key }}
             </span>
           </span>

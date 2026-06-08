@@ -1,11 +1,24 @@
 <template>
-  <div class="kline-chart-container" :class="`kline-chart--${chartType}`" :style="containerStyle">
-    <div ref="chartRef" class="kline-chart-canvas"></div>
-    <div v-if="loading" class="kline-loading">
+  <div
+    class="kline-chart-container"
+    :class="`kline-chart--${chartType}`"
+    :style="containerStyle"
+  >
+    <div
+      ref="chartRef"
+      class="kline-chart-canvas"
+    />
+    <div
+      v-if="loading"
+      class="kline-loading"
+    >
       <a-spin size="large" />
       <span>加载数据中...</span>
     </div>
-    <div v-if="!loading && klineData.length === 0" class="kline-empty">
+    <div
+      v-if="!loading && klineData.length === 0"
+      class="kline-empty"
+    >
       <a-empty description="暂无数据" />
     </div>
   </div>

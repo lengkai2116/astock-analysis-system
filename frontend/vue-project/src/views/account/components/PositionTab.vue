@@ -1,6 +1,13 @@
 <template>
   <div class="position-tab">
-    <a-table :columns="columns" :dataSource="positions" size="small" rowKey="ts_code" :loading="loading" :pagination="false">
+    <a-table
+      :columns="columns"
+      :data-source="positions"
+      size="small"
+      row-key="ts_code"
+      :loading="loading"
+      :pagination="false"
+    >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'pnl'">
           <span :style="{ color: record.realized_pnl >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 600 }">
@@ -9,7 +16,12 @@
         </template>
       </template>
     </a-table>
-    <div v-if="positions.length === 0 && !loading" class="empty-hint">暂无持仓，录入交易记录后自动计算</div>
+    <div
+      v-if="positions.length === 0 && !loading"
+      class="empty-hint"
+    >
+      暂无持仓，录入交易记录后自动计算
+    </div>
   </div>
 </template>
 

@@ -1,8 +1,16 @@
 <template>
-  <div id="app" @keydown="onKeyDown" @keyup="onKeyUp" tabindex="0">
+  <div
+    id="app"
+    tabindex="0"
+    @keydown="onKeyDown"
+    @keyup="onKeyUp"
+  >
     <ErrorBoundary component-name="AppRoot">
       <Sidebar />
-      <div class="main-content" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+      <div
+        class="main-content"
+        :class="{ 'sidebar-collapsed': sidebarCollapsed }"
+      >
         <router-view />
       </div>
 
@@ -10,7 +18,10 @@
       <DataSourceStatusBar :status="dataSourceStatus" />
 
       <!-- 快捷键帮助浮层 (150§4.2) -->
-      <ShortcutsHelp v-if="showShortcutHelp" @close="closeShortcutHelp" />
+      <ShortcutsHelp
+        v-if="showShortcutHelp"
+        @close="closeShortcutHelp"
+      />
     </ErrorBoundary>
   </div>
 </template>
@@ -36,7 +47,7 @@ export default {
   data() {
     return {
       dataSourceStatus: null,
-      _statusTimer: null,
+      statusTimer: null,
     }
   },
   computed: {
@@ -67,8 +78,8 @@ export default {
     this._pollDataSourceStatus()
   },
   beforeUnmount() {
-    if (this._statusTimer) {
-      clearInterval(this._statusTimer)
+    if (this.statusTimer) {
+      clearInterval(this.statusTimer)
     }
   },
   methods: {
@@ -137,7 +148,7 @@ export default {
         // 静默
       }
 
-      this._statusTimer = setInterval(() => {
+      this.statusTimer = setInterval(() => {
         this._pollDataSourceStatus()
       }, 30000)
     },

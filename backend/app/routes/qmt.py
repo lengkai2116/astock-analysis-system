@@ -1,10 +1,12 @@
+"""
+QMT 行情 API 路由
+提供招商证券 QMT 实时行情接入
+"""
+
 import logging
 
 logger = logging.getLogger(__name__)
-"""
-QMT行情API路由
-提供实时行情数据接口
-"""
+
 from flask import Blueprint, jsonify, request
 from app.data.qmt_provider import QmtDataProvider
 import threading

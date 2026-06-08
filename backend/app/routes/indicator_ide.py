@@ -1,3 +1,7 @@
+"""
+"指标 IDE API 路由
+提供指标合约解析、质量检查、沙箱运行等功能"
+"""
 from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, request, jsonify
 from app.services.indicator_contract import IndicatorContractParser

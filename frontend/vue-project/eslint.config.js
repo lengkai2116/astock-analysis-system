@@ -8,8 +8,14 @@ export default [
   {
     rules: {
       'vue/multi-word-component-names': 'off',
-      'vue/no-unused-vars': 'warn',
-      'no-unused-vars': 'warn',
+      'vue/no-unused-vars': ['warn', { ignorePattern: '^_' }],
+      'no-unused-vars': ['warn', { 
+        varsIgnorePattern: '^_',
+        argsIgnorePattern: '^_',
+        caughtErrors: 'none'
+      }],
+      'vue/require-explicit-emits': 'off',
+      'vue/no-v-html': 'warn',
     },
   },
 ]

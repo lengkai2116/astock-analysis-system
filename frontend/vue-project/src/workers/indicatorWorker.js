@@ -115,7 +115,7 @@ function kdj(high, low, close, n = 9, k = 3, d = 3) {
 }
 
 /** 简单移动汇总 */
-function sum(data, period) {
+function _sum(data, period) {
   const result = new Array(data.length).fill(null)
   for (let i = period - 1; i < data.length; i++) {
     let s = 0
@@ -126,7 +126,7 @@ function sum(data, period) {
 }
 
 /** 标准差 */
-function stdev(data, period) {
+function _stdev(data, period) {
   const result = new Array(data.length).fill(null)
   const means = sma(data, period)
   for (let i = period - 1; i < data.length; i++) {
@@ -183,7 +183,7 @@ const INDICATOR_FUNCTIONS = {
     }
     return result
   },
-  obv: (data, _params) => {
+  obv: (data, __params) => {
     const result = new Array(data.close.length).fill(null)
     result[0] = 0
     for (let i = 1; i < data.close.length; i++) {

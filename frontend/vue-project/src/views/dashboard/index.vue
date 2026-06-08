@@ -1,9 +1,14 @@
 <template>
   <div class="dashboard-page">
     <div class="page-header">
-      <h1 class="page-title">📊 仪表盘</h1>
+      <h1 class="page-title">
+        📊 仪表盘
+      </h1>
       <div class="header-actions">
-        <a-range-picker @change="onDateRangeChange" style="margin-right: 12px" />
+        <a-range-picker
+          style="margin-right: 12px"
+          @change="onDateRangeChange"
+        />
         <a-button @click="refreshData">
           🔄 刷新数据
         </a-button>
@@ -13,66 +18,129 @@
     <!-- 快捷入口工具栏 -->
     <div class="quick-actions-bar">
       <div class="quick-actions">
-        <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/watchlist')">
+        <a-card
+          size="small"
+          class="quick-action-card"
+          hoverable
+          @click="$router.push('/watchlist')"
+        >
           <div class="quick-action-content">
             <span class="quick-action-icon">📈</span>
             <div class="quick-action-info">
-              <div class="quick-action-title">自选监控</div>
-              <div class="quick-action-desc">实时监控股票行情</div>
+              <div class="quick-action-title">
+                自选监控
+              </div>
+              <div class="quick-action-desc">
+                实时监控股票行情
+              </div>
             </div>
           </div>
         </a-card>
-        <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/indicator-ide')">
+        <a-card
+          size="small"
+          class="quick-action-card"
+          hoverable
+          @click="$router.push('/indicator-ide')"
+        >
           <div class="quick-action-content">
             <span class="quick-action-icon">📊</span>
             <div class="quick-action-info">
-              <div class="quick-action-title">指标IDE</div>
-              <div class="quick-action-desc">策略编辑与技术分析</div>
+              <div class="quick-action-title">
+                指标IDE
+              </div>
+              <div class="quick-action-desc">
+                策略编辑与技术分析
+              </div>
             </div>
           </div>
         </a-card>
-        <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/backtest')">
+        <a-card
+          size="small"
+          class="quick-action-card"
+          hoverable
+          @click="$router.push('/backtest')"
+        >
           <div class="quick-action-content">
             <span class="quick-action-icon">🎯</span>
             <div class="quick-action-info">
-              <div class="quick-action-title">回测系统</div>
-              <div class="quick-action-desc">策略回测与验证</div>
+              <div class="quick-action-title">
+                回测系统
+              </div>
+              <div class="quick-action-desc">
+                策略回测与验证
+              </div>
             </div>
           </div>
         </a-card>
-        <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/ai-analysis')">
+        <a-card
+          size="small"
+          class="quick-action-card"
+          hoverable
+          @click="$router.push('/ai-analysis')"
+        >
           <div class="quick-action-content">
             <span class="quick-action-icon">🤖</span>
             <div class="quick-action-info">
-              <div class="quick-action-title">AI分析</div>
-              <div class="quick-action-desc">智能投研与报告</div>
+              <div class="quick-action-title">
+                AI分析
+              </div>
+              <div class="quick-action-desc">
+                智能投研与报告
+              </div>
             </div>
           </div>
         </a-card>
-        <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/factor-manager')">
+        <a-card
+          size="small"
+          class="quick-action-card"
+          hoverable
+          @click="$router.push('/factor-manager')"
+        >
           <div class="quick-action-content">
             <span class="quick-action-icon">🔧</span>
             <div class="quick-action-info">
-              <div class="quick-action-title">因子管理</div>
-              <div class="quick-action-desc">因子组合与优化</div>
+              <div class="quick-action-title">
+                因子管理
+              </div>
+              <div class="quick-action-desc">
+                因子组合与优化
+              </div>
             </div>
           </div>
         </a-card>
-        <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/strategy-templates')">
+        <a-card
+          size="small"
+          class="quick-action-card"
+          hoverable
+          @click="$router.push('/strategy-templates')"
+        >
           <div class="quick-action-content">
             <span class="quick-action-icon">📋</span>
             <div class="quick-action-info">
-              <div class="quick-action-title">策略模板</div>
-              <div class="quick-action-desc">策略模板与管理</div>
+              <div class="quick-action-title">
+                策略模板
+              </div>
+              <div class="quick-action-desc">
+                策略模板与管理
+              </div>
             </div>
           </div>
         </a-card>
-        <a-card size="small" class="quick-action-card" hoverable @click="$router.push('/reports-center')">
+        <a-card
+          size="small"
+          class="quick-action-card"
+          hoverable
+          @click="$router.push('/reports-center')"
+        >
           <div class="quick-action-content">
             <span class="quick-action-icon">📑</span>
             <div class="quick-action-info">
-              <div class="quick-action-title">报告中心</div>
-              <div class="quick-action-desc">策略报告与导出</div>
+              <div class="quick-action-title">
+                报告中心
+              </div>
+              <div class="quick-action-desc">
+                策略报告与导出
+              </div>
             </div>
           </div>
         </a-card>
@@ -80,16 +148,26 @@
     </div>
 
     <!-- 策略信号展示区域 -->
-    <div v-if="latestSignals.length > 0" class="strategy-signals-section">
+    <div
+      v-if="latestSignals.length > 0"
+      class="strategy-signals-section"
+    >
       <div class="section-header">
-        <h3 class="section-title">📡 最新策略信号</h3>
-        <a-button type="link" @click="$router.push('/strategy-templates')">查看更多</a-button>
+        <h3 class="section-title">
+          📡 最新策略信号
+        </h3>
+        <a-button
+          type="link"
+          @click="$router.push('/strategy-templates')"
+        >
+          查看更多
+        </a-button>
       </div>
       <div class="signals-grid">
         <StrategySignalPanel
           v-for="signal in latestSignals"
           :key="signal.id"
-          :signalData="signal"
+          :signal-data="signal"
           @show-detail="handleSignalDetail"
         />
       </div>
@@ -99,20 +177,33 @@
       <!-- 概览统计卡片 -->
       <div class="stats-grid">
         <div class="stat-card">
-          <div class="stat-icon up">📈</div>
+          <div class="stat-icon up">
+            📈
+          </div>
           <div class="stat-info">
-            <div class="stat-label">自选股总数</div>
-            <div class="stat-value">{{ stats.totalStocks }}</div>
+            <div class="stat-label">
+              自选股总数
+            </div>
+            <div class="stat-value">
+              {{ stats.totalStocks }}
+            </div>
             <div class="stat-change up">
               <span>上涨</span> {{ stats.upStocks }} 只
             </div>
           </div>
         </div>
         <div class="stat-card">
-          <div class="stat-icon down">📉</div>
+          <div class="stat-icon down">
+            📉
+          </div>
           <div class="stat-info">
-            <div class="stat-label">平均涨跌幅</div>
-            <div class="stat-value" :class="avgChangeClass">
+            <div class="stat-label">
+              平均涨跌幅
+            </div>
+            <div
+              class="stat-value"
+              :class="avgChangeClass"
+            >
               {{ formatPercent(stats.avgChange) }}
             </div>
             <div class="stat-change neutral">
@@ -121,18 +212,32 @@
           </div>
         </div>
         <div class="stat-card">
-          <div class="stat-icon primary">💰</div>
+          <div class="stat-icon primary">
+            💰
+          </div>
           <div class="stat-info">
-            <div class="stat-label">总成交额</div>
-            <div class="stat-value">{{ formatAmount(stats.totalAmount) }}</div>
-            <div class="stat-change neutral">实时数据更新中</div>
+            <div class="stat-label">
+              总成交额
+            </div>
+            <div class="stat-value">
+              {{ formatAmount(stats.totalAmount) }}
+            </div>
+            <div class="stat-change neutral">
+              实时数据更新中
+            </div>
           </div>
         </div>
         <div class="stat-card">
-          <div class="stat-icon accent">🎯</div>
+          <div class="stat-icon accent">
+            🎯
+          </div>
           <div class="stat-info">
-            <div class="stat-label">策略信号</div>
-            <div class="stat-value">{{ stats.activeSignals }}</div>
+            <div class="stat-label">
+              策略信号
+            </div>
+            <div class="stat-value">
+              {{ stats.activeSignals }}
+            </div>
             <div class="stat-change neutral">
               {{ stats.buySignals }} 买入 / {{ stats.sellSignals }} 卖出
             </div>
@@ -146,20 +251,37 @@
         <div class="panel rank-panel">
           <div class="panel-header">
             <span class="panel-title">📊 涨跌幅排行</span>
-            <a-radio-group v-model="rankType" size="small">
-              <a-radio-button value="change">涨幅榜</a-radio-button>
-              <a-radio-button value="changePercent">跌幅榜</a-radio-button>
+            <a-radio-group
+              v-model="rankType"
+              size="small"
+            >
+              <a-radio-button value="change">
+                涨幅榜
+              </a-radio-button>
+              <a-radio-button value="changePercent">
+                跌幅榜
+              </a-radio-button>
             </a-radio-group>
           </div>
           <div class="panel-content">
-            <div v-for="(stock, index) in rankList" :key="stock.symbol" class="rank-item">
-              <span class="rank-number" :class="getRankClass(index)">{{ index + 1 }}</span>
+            <div
+              v-for="(stock, index) in rankList"
+              :key="stock.symbol"
+              class="rank-item"
+            >
+              <span
+                class="rank-number"
+                :class="getRankClass(index)"
+              >{{ index + 1 }}</span>
               <div class="rank-info">
                 <span class="stock-name">{{ stock.name }}</span>
                 <span class="stock-symbol">{{ stock.symbol }}</span>
               </div>
               <span class="rank-price">{{ formatPrice(stock.price) }}</span>
-              <span class="rank-change" :class="stock.changePercent >= 0 ? 'up' : 'down'">
+              <span
+                class="rank-change"
+                :class="stock.changePercent >= 0 ? 'up' : 'down'"
+              >
                 {{ formatPercent(stock.changePercent) }}
               </span>
             </div>
@@ -173,12 +295,24 @@
           </div>
           <div class="panel-content">
             <div class="market-grid">
-              <div class="market-item" v-for="index in marketIndexes" :key="index.symbol">
-                <div class="market-name">{{ index.name }}</div>
-                <div class="market-value" :class="index.change >= 0 ? 'up' : 'down'">
+              <div
+                v-for="index in marketIndexes"
+                :key="index.symbol"
+                class="market-item"
+              >
+                <div class="market-name">
+                  {{ index.name }}
+                </div>
+                <div
+                  class="market-value"
+                  :class="index.change >= 0 ? 'up' : 'down'"
+                >
                   {{ formatPrice(index.value) }}
                 </div>
-                <div class="market-change" :class="index.change >= 0 ? 'up' : 'down'">
+                <div
+                  class="market-change"
+                  :class="index.change >= 0 ? 'up' : 'down'"
+                >
                   {{ formatPercent(index.changePercent) }}
                 </div>
               </div>
@@ -213,12 +347,24 @@
           </div>
           <div class="panel-content">
             <div class="activity-list">
-              <div v-for="(activity, index) in recentActivities" :key="index" class="activity-item">
+              <div
+                v-for="(activity, index) in recentActivities"
+                :key="index"
+                class="activity-item"
+              >
                 <span class="activity-time">{{ activity.time }}</span>
-                <span class="activity-type" :class="activity.type">{{ getActivityLabel(activity.type) }}</span>
+                <span
+                  class="activity-type"
+                  :class="activity.type"
+                >{{ getActivityLabel(activity.type) }}</span>
                 <span class="activity-desc">{{ activity.desc }}</span>
               </div>
-              <div v-if="recentActivities.length === 0" class="empty-placeholder">暂无活动记录</div>
+              <div
+                v-if="recentActivities.length === 0"
+                class="empty-placeholder"
+              >
+                暂无活动记录
+              </div>
             </div>
           </div>
         </div>
@@ -227,13 +373,27 @@
       <!-- ====== 多K线分屏 (150§3.1) ====== -->
       <div class="chart-grid-section">
         <div class="section-header">
-          <h3 class="section-title">📈 K线图表</h3>
+          <h3 class="section-title">
+            📈 K线图表
+          </h3>
           <div class="chart-controls">
-            <a-radio-group v-model:value="chartLayout" size="small" @change="resetChartGrid">
-              <a-radio-button value="single">单图</a-radio-button>
-              <a-radio-button value="dual-v">双图</a-radio-button>
-              <a-radio-button value="triple">三图</a-radio-button>
-              <a-radio-button value="quad">四图</a-radio-button>
+            <a-radio-group
+              v-model:value="chartLayout"
+              size="small"
+              @change="resetChartGrid"
+            >
+              <a-radio-button value="single">
+                单图
+              </a-radio-button>
+              <a-radio-button value="dual-v">
+                双图
+              </a-radio-button>
+              <a-radio-button value="triple">
+                三图
+              </a-radio-button>
+              <a-radio-button value="quad">
+                四图
+              </a-radio-button>
             </a-radio-group>
             <a-select
               v-model:value="chartPeriod"
@@ -241,13 +401,22 @@
               style="width: 80px; margin-left: 8px;"
               @change="refreshCharts"
             >
-              <a-select-option value="D">日线</a-select-option>
-              <a-select-option value="W">周线</a-select-option>
-              <a-select-option value="M">月线</a-select-option>
+              <a-select-option value="D">
+                日线
+              </a-select-option>
+              <a-select-option value="W">
+                周线
+              </a-select-option>
+              <a-select-option value="M">
+                月线
+              </a-select-option>
             </a-select>
           </div>
         </div>
-        <div class="chart-grid" :class="`chart-grid--${chartLayout}`">
+        <div
+          class="chart-grid"
+          :class="`chart-grid--${chartLayout}`"
+        >
           <div
             v-for="(chart, idx) in chartCells"
             :key="idx"
@@ -263,15 +432,21 @@
                 style="width: 70px;"
                 @change="chart.period = $event"
               >
-                <a-select-option value="D">日线</a-select-option>
-                <a-select-option value="W">周线</a-select-option>
-                <a-select-option value="M">月线</a-select-option>
+                <a-select-option value="D">
+                  日线
+                </a-select-option>
+                <a-select-option value="W">
+                  周线
+                </a-select-option>
+                <a-select-option value="M">
+                  月线
+                </a-select-option>
               </a-select>
             </div>
             <KLineChart
               :ref="el => registerChartRef(el, idx)"
-              :ts-code="chart.symbol"
               :key="`chart-${idx}`"
+              :ts-code="chart.symbol"
               :period="chart.period"
               :indicators="chart.indicators"
               :height="chartHeight"
@@ -282,7 +457,11 @@
           </div>
         </div>
         <!-- AI 信号总线 (150§5.1) -->
-        <AiSignalBus v-if="aiSignals.length > 0" :signals="aiSignals" style="margin-top: 16px;" />
+        <AiSignalBus
+          v-if="aiSignals.length > 0"
+          :signals="aiSignals"
+          style="margin-top: 16px;"
+        />
       </div>
     </div>
 

@@ -3,14 +3,25 @@
     <!-- 总评分 -->
     <div class="score-section">
       <div class="score-ring">
-        <div class="score-value">{{ result.total_score }}</div>
-        <div class="score-label">综合评分</div>
+        <div class="score-value">
+          {{ result.total_score }}
+        </div>
+        <div class="score-label">
+          综合评分
+        </div>
       </div>
       <div class="dimension-bars">
-        <div class="dim-row" v-for="d in dimensionList" :key="d.key">
+        <div
+          v-for="d in dimensionList"
+          :key="d.key"
+          class="dim-row"
+        >
           <span class="dim-label">{{ d.label }}</span>
           <div class="dim-bar-bg">
-            <div class="dim-bar-fill" :style="{ width: d.score + '%', background: d.color }"></div>
+            <div
+              class="dim-bar-fill"
+              :style="{ width: d.score + '%', background: d.color }"
+            />
           </div>
           <span class="dim-score">{{ d.score }}</span>
         </div>
@@ -19,46 +30,101 @@
 
     <!-- 各维度详情 -->
     <div class="detail-sections">
-      <div class="detail-card" v-for="d in dimensionList" :key="d.key">
-        <div class="detail-header" @click="d.expanded = !d.expanded">
+      <div
+        v-for="d in dimensionList"
+        :key="d.key"
+        class="detail-card"
+      >
+        <div
+          class="detail-header"
+          @click="d.expanded = !d.expanded"
+        >
           <span class="detail-title">{{ d.label }}</span>
-          <span class="detail-score" :style="{ color: d.color }">{{ d.score }}/100</span>
+          <span
+            class="detail-score"
+            :style="{ color: d.color }"
+          >{{ d.score }}/100</span>
           <span class="expand-icon">{{ d.expanded ? '▼' : '▶' }}</span>
         </div>
-        <div v-if="d.expanded" class="detail-body">
-          <div class="detail-item" v-for="(detail, i) in d.details" :key="i">{{ detail }}</div>
-          <div v-if="!d.details?.length" class="no-detail">暂无详情</div>
+        <div
+          v-if="d.expanded"
+          class="detail-body"
+        >
+          <div
+            v-for="(detail, i) in d.details"
+            :key="i"
+            class="detail-item"
+          >
+            {{ detail }}
+          </div>
+          <div
+            v-if="!d.details?.length"
+            class="no-detail"
+          >
+            暂无详情
+          </div>
         </div>
       </div>
     </div>
 
     <!-- 归因分析 -->
-    <div class="attribution-section" v-if="result.attribution">
-      <div class="section-title">盈亏归因分析</div>
+    <div
+      v-if="result.attribution"
+      class="attribution-section"
+    >
+      <div class="section-title">
+        盈亏归因分析
+      </div>
       <div class="attribution-grid">
         <div class="attr-col">
-          <div class="attr-header winner">✅ 盈利股票</div>
-          <div v-for="w in result.attribution.winners" :key="w.ts_code" class="attr-item winner-item">
+          <div class="attr-header winner">
+            ✅ 盈利股票
+          </div>
+          <div
+            v-for="w in result.attribution.winners"
+            :key="w.ts_code"
+            class="attr-item winner-item"
+          >
             <span>{{ w.name || w.ts_code }}</span>
             <span class="attr-pnl">+{{ formatMoney(w.pnl) }}</span>
           </div>
         </div>
         <div class="attr-col">
-          <div class="attr-header loser">❌ 亏损股票</div>
-          <div v-for="l in result.attribution.losers" :key="l.ts_code" class="attr-item loser-item">
+          <div class="attr-header loser">
+            ❌ 亏损股票
+          </div>
+          <div
+            v-for="l in result.attribution.losers"
+            :key="l.ts_code"
+            class="attr-item loser-item"
+          >
             <span>{{ l.name || l.ts_code }}</span>
             <span class="attr-pnl">{{ formatMoney(l.pnl) }}</span>
           </div>
         </div>
       </div>
-      <div class="attr-summary">{{ result.attribution.summary }}</div>
+      <div class="attr-summary">
+        {{ result.attribution.summary }}
+      </div>
     </div>
 
     <!-- 改进建议 -->
-    <div class="improvements-section" v-if="result.improvements?.length">
-      <div class="section-title">改进建议</div>
-      <div class="imp-item" v-for="(imp, i) in result.improvements" :key="i">
-        <span class="imp-priority" :class="imp.priority">
+    <div
+      v-if="result.improvements?.length"
+      class="improvements-section"
+    >
+      <div class="section-title">
+        改进建议
+      </div>
+      <div
+        v-for="(imp, i) in result.improvements"
+        :key="i"
+        class="imp-item"
+      >
+        <span
+          class="imp-priority"
+          :class="imp.priority"
+        >
           {{ { HIGH: '🔴', MEDIUM: '🟡', LOW: '🟢', INFO: 'ℹ' }[imp.priority] || '•' }}
         </span>
         <span class="imp-category">[{{ imp.category }}]</span>

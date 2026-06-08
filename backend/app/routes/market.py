@@ -1,3 +1,7 @@
+"""
+"市场数据 API 路由
+提供行情数据、市场概况、板块涨跌等信息"
+"""
 from flask import Blueprint, request, jsonify
 import logging
 from app.services.market_service import MarketService

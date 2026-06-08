@@ -43,8 +43,10 @@ services:
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat-v4}
       - LM_STUDIO_ENDPOINT=${LM_STUDIO_ENDPOINT:-http://localhost:1234/v1}
       - LM_STUDIO_MODEL=${LM_STUDIO_MODEL:-local-model}
-      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
-      - SECRET_KEY=${SECRET_KEY:-stock_analysis_secret_key_2026}
+      - AUTH_TOKEN=${AUTH_TOKEN}
+      - CORS_ORIGIN=${CORS_ORIGIN}
+      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
+      - SECRET_KEY=${SECRET_KEY}
     volumes:
       - ./backend:/app
       - ./data:/data

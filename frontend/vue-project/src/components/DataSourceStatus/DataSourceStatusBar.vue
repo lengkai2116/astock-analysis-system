@@ -1,10 +1,17 @@
 <template>
-  <div v-if="status" class="data-source-bar" :class="`data-source-bar--${status.active_status}`">
-    <span class="data-source-bar__dot"></span>
+  <div
+    v-if="status"
+    class="data-source-bar"
+    :class="`data-source-bar--${status.active_status}`"
+  >
+    <span class="data-source-bar__dot" />
     <span class="data-source-bar__label">
       {{ status.active_source }}
     </span>
-    <span v-if="status.status !== 'normal'" class="data-source-bar__warn">
+    <span
+      v-if="status.status !== 'normal'"
+      class="data-source-bar__warn"
+    >
       {{ statusText }}
     </span>
   </div>

@@ -3,9 +3,9 @@
     :visible="visible"
     title="选择因子"
     width="900px"
+    :confirm-loading="loading"
     @ok="handleOk"
     @cancel="handleCancel"
-    :confirmLoading="loading"
   >
     <div class="factor-selector">
       <div class="search-bar">
@@ -19,13 +19,16 @@
 
       <div class="selector-container">
         <div class="categories-panel">
-          <div class="category-item"
+          <div
+            class="category-item"
             :class="{ active: activeCategory === 'all' }"
             @click="activeCategory = 'all'"
           >
             全部 ({{ allFactors.length }})
           </div>
-          <div v-for="(factors, category) in factorByCategory" :key="category"
+          <div
+            v-for="(factors, category) in factorByCategory"
+            :key="category"
             class="category-item"
             :class="{ active: activeCategory === category }"
             @click="activeCategory = category"
@@ -37,18 +40,26 @@
         <div class="factors-panel">
           <a-spin :spinning="loading">
             <div class="factors-list">
-              <div v-for="factor in filteredFactors" :key="factor.id"
+              <div
+                v-for="factor in filteredFactors"
+                :key="factor.id"
                 class="factor-card"
                 :class="{ selected: selectedFactors.includes(factor.id) }"
                 @click="toggleFactor(factor)"
               >
                 <div class="factor-header">
                   <span class="factor-name">{{ factor.name }}</span>
-                  <a-tag v-if="factor.category" :color="getCategoryColor(factor.category)" size="small">
+                  <a-tag
+                    v-if="factor.category"
+                    :color="getCategoryColor(factor.category)"
+                    size="small"
+                  >
                     {{ factor.category }}
                   </a-tag>
                 </div>
-                <div class="factor-description">{{ factor.description }}</div>
+                <div class="factor-description">
+                  {{ factor.description }}
+                </div>
                 <div class="factor-meta">
                   <span v-if="factor.version">v{{ factor.version }}</span>
                   <span v-if="factor.author">· {{ factor.author }}</span>
@@ -61,27 +72,38 @@
         <div class="selected-panel">
           <div class="selected-header">
             <span>已选因子 ({{ selectedFactors.length }})</span>
-            <a-button type="link" size="small" @click="clearSelected">
+            <a-button
+              type="link"
+              size="small"
+              @click="clearSelected"
+            >
               清空
             </a-button>
           </div>
           <div class="selected-list">
-            <div v-for="factor in selectedFactorsDetail" :key="factor.id" class="selected-item">
+            <div
+              v-for="factor in selectedFactorsDetail"
+              :key="factor.id"
+              class="selected-item"
+            >
               <span class="item-name">{{ factor.name }}</span>
               <div class="item-actions">
                 <a-input-number
                   :value="factorWeights[factor.id] || 1"
-                  @change="(val) => updateWeight(factor.id, val)"
                   size="small"
                   :min="0.1"
                   :max="10"
                   :step="0.1"
                   style="width: 80px; margin-right: 8px;"
+                  @change="(val) => updateWeight(factor.id, val)"
                 />
                 <CloseOutlined @click.stop="removeFactor(factor.id)" />
               </div>
             </div>
-            <div v-if="selectedFactors.length === 0" class="empty-state">
+            <div
+              v-if="selectedFactors.length === 0"
+              class="empty-state"
+            >
               请从左侧选择因子
             </div>
           </div>

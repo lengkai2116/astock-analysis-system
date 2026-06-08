@@ -1,7 +1,9 @@
 <template>
   <div class="ai-analysis-page theme-dark">
     <div class="page-header">
-      <h1 class="page-title">🤖 AI分析助手</h1>
+      <h1 class="page-title">
+        🤖 AI分析助手
+      </h1>
       <div class="header-actions">
         <a-select
           v-model="selectedSymbol"
@@ -20,23 +22,35 @@
           type="primary"
           style="margin-left: 12px"
           :loading="analyzing"
-          @click="startAnalysis"
           :disabled="!selectedSymbol"
+          @click="startAnalysis"
         >
           开始分析
         </a-button>
       </div>
     </div>
 
-    <div v-if="!sessionId" class="welcome-section">
+    <div
+      v-if="!sessionId"
+      class="welcome-section"
+    >
       <a-empty description="选择股票开始AI投研分析" />
     </div>
 
-    <div v-else class="analysis-container">
+    <div
+      v-else
+      class="analysis-container"
+    >
       <!-- 进度条 -->
-      <div v-if="analyzing || progress < 100" class="progress-section">
+      <div
+        v-if="analyzing || progress < 100"
+        class="progress-section"
+      >
         <div class="progress-bar">
-          <div class="progress-fill" :style="{ width: progress + '%' }"></div>
+          <div
+            class="progress-fill"
+            :style="{ width: progress + '%' }"
+          />
         </div>
         <span class="progress-text">{{ progressText }}</span>
       </div>
@@ -44,7 +58,9 @@
       <div class="main-content">
         <!-- 左侧：分析日志 -->
         <div class="log-panel">
-          <div class="panel-title">⏱️ 分析日志</div>
+          <div class="panel-title">
+            ⏱️ 分析日志
+          </div>
           <div class="log-content">
             <div
               v-for="(log, idx) in analysisLog"
@@ -61,7 +77,9 @@
 
         <!-- 中间：角色卡片 -->
         <div class="roles-panel">
-          <div class="panel-title">👨‍👩‍👧‍👦 角色团队</div>
+          <div class="panel-title">
+            👨‍👩‍👧‍👦 角色团队
+          </div>
           <div class="roles-grid">
             <div
               v-for="role in roles"
@@ -69,14 +87,32 @@
               class="role-card"
               :class="role.status"
             >
-              <div class="role-icon">{{ role.icon }}</div>
-              <div class="role-name">{{ role.name }}</div>
-              <div class="role-status">
-                <a-tag v-if="role.status === 'done'" color="green">完成</a-tag>
-                <a-spin v-else-if="role.status === 'analyzing'" size="small" />
-                <span v-else class="waiting">等待中...</span>
+              <div class="role-icon">
+                {{ role.icon }}
               </div>
-              <div v-if="role.report" class="role-score">
+              <div class="role-name">
+                {{ role.name }}
+              </div>
+              <div class="role-status">
+                <a-tag
+                  v-if="role.status === 'done'"
+                  color="green"
+                >
+                  完成
+                </a-tag>
+                <a-spin
+                  v-else-if="role.status === 'analyzing'"
+                  size="small"
+                />
+                <span
+                  v-else
+                  class="waiting"
+                >等待中...</span>
+              </div>
+              <div
+                v-if="role.report"
+                class="role-score"
+              >
                 <span class="bullish">看多 {{ role.report.bullishScore }}%</span>
                 <span class="bearish">看空 {{ role.report.bearishScore }}%</span>
               </div>
@@ -86,14 +122,21 @@
 
         <!-- 右侧：最终报告 -->
         <div class="report-panel">
-          <div class="panel-title">📋 最终投研报告</div>
-          <div v-if="finalReport" class="report-content">
+          <div class="panel-title">
+            📋 最终投研报告
+          </div>
+          <div
+            v-if="finalReport"
+            class="report-content"
+          >
             <div class="rating-badge">
               {{ getRatingLabel(finalReport.overallRating) }}
             </div>
 
             <div class="report-section">
-              <div class="section-title">🎯 目标价位</div>
+              <div class="section-title">
+                🎯 目标价位
+              </div>
               <div class="price-range">
                 <span class="price-min">¥{{ finalReport.targetPriceRange.min.toFixed(2) }}</span>
                 <span class="price-divider">-</span>
@@ -102,13 +145,21 @@
             </div>
 
             <div class="report-section">
-              <div class="section-title">⚠️ 止损位置</div>
-              <div class="stop-loss">¥{{ finalReport.stopLoss.toFixed(2) }}</div>
+              <div class="section-title">
+                ⚠️ 止损位置
+              </div>
+              <div class="stop-loss">
+                ¥{{ finalReport.stopLoss.toFixed(2) }}
+              </div>
             </div>
 
             <div class="report-section">
-              <div class="section-title">💰 建议仓位</div>
-              <div class="position">{{ (finalReport.suggestedPosition * 100).toFixed(0) }}%</div>
+              <div class="section-title">
+                💰 建议仓位
+              </div>
+              <div class="position">
+                {{ (finalReport.suggestedPosition * 100).toFixed(0) }}%
+              </div>
             </div>
 
             <a-divider />
@@ -117,16 +168,31 @@
               {{ finalReport.summary }}
             </div>
 
-            <div v-for="section in finalReport.sections" :key="section.title" class="report-section">
-              <div class="section-title">{{ section.title }}</div>
-              <div class="section-content">{{ section.content }}</div>
+            <div
+              v-for="section in finalReport.sections"
+              :key="section.title"
+              class="report-section"
+            >
+              <div class="section-title">
+                {{ section.title }}
+              </div>
+              <div class="section-content">
+                {{ section.content }}
+              </div>
             </div>
 
-            <a-button type="primary" block style="margin-top: 16px">
+            <a-button
+              type="primary"
+              block
+              style="margin-top: 16px"
+            >
               📄 导出完整报告
             </a-button>
           </div>
-          <div v-else class="report-placeholder">
+          <div
+            v-else
+            class="report-placeholder"
+          >
             <FileTextOutlined style="font-size: 48px; color: var(--text-muted)" />
             <div>等待分析完成...</div>
           </div>

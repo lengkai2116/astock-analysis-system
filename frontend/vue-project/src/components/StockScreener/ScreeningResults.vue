@@ -3,53 +3,77 @@
     <div class="results-header">
       <span class="results-title">选股结果</span>
       <div class="results-toolbar">
-        <span class="results-count" v-if="results.length > 0">共 {{ results.length }} 只</span>
-        <a-button size="small" :disabled="results.length === 0" @click="$emit('export')">
+        <span
+          v-if="results.length > 0"
+          class="results-count"
+        >共 {{ results.length }} 只</span>
+        <a-button
+          size="small"
+          :disabled="results.length === 0"
+          @click="$emit('export')"
+        >
           导出 CSV
         </a-button>
       </div>
     </div>
 
     <div class="results-body">
-      <a-spin :spinning="loading" size="large">
-        <div v-if="results.length === 0 && !loading" class="empty-state">
+      <a-spin
+        :spinning="loading"
+        size="large"
+      >
+        <div
+          v-if="results.length === 0 && !loading"
+          class="empty-state"
+        >
           <a-empty description="点击左侧「执行筛选」开始选股" />
         </div>
 
         <a-table
           v-if="results.length > 0"
           :columns="columns"
-          :dataSource="results"
+          :data-source="results"
           :pagination="{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'] }"
           :scroll="{ y: 'calc(100vh - 280px)' }"
           size="small"
-          rowKey="symbol"
-          :customRow="customRow"
-          :rowClassName="rowClassName"
+          row-key="symbol"
+          :custom-row="customRow"
+          :row-class-name="rowClassName"
         >
-<template #bodyCell="{ column, text, record, index }">
-  <template v-if="column.dataIndex === 'rank' || column.key === 'rank'">
-            <span class="rank-badge" :class="getRankClass(index)">{{ index + 1 }}</span>
-  </template>
-  <template v-else-if="column.dataIndex === 'name' || column.key === 'name'">
-            <div class="stock-cell">
-              <span class="stock-code">{{ record.symbol }}</span>
-              <span class="stock-name">{{ record.name || record.symbol }}</span>
-            </div>
-  </template>
-  <template v-else-if="column.dataIndex === 'score' || column.key === 'score'">
-            <span class="score-value" :class="getScoreClass(text)">{{ text?.toFixed(1) || '-' }}</span>
-  </template>
-  <template v-else-if="column.dataIndex === 'phase' || column.key === 'phase'">
-            <a-tag :color="getPhaseColor(text)" size="small">{{ text || '-' }}</a-tag>
-  </template>
-  <template v-else-if="column.dataIndex === 'asr' || column.key === 'asr'">
-            <span>{{ text?.toFixed(3) || '-' }}</span>
-  </template>
-  <template v-else-if="column.dataIndex === 'concentration' || column.key === 'concentration'">
-            <span>{{ text?.toFixed(3) || '-' }}</span>
-  </template>
-</template>
+          <template #bodyCell="{ column, text, record, index }">
+            <template v-if="column.dataIndex === 'rank' || column.key === 'rank'">
+              <span
+                class="rank-badge"
+                :class="getRankClass(index)"
+              >{{ index + 1 }}</span>
+            </template>
+            <template v-else-if="column.dataIndex === 'name' || column.key === 'name'">
+              <div class="stock-cell">
+                <span class="stock-code">{{ record.symbol }}</span>
+                <span class="stock-name">{{ record.name || record.symbol }}</span>
+              </div>
+            </template>
+            <template v-else-if="column.dataIndex === 'score' || column.key === 'score'">
+              <span
+                class="score-value"
+                :class="getScoreClass(text)"
+              >{{ text?.toFixed(1) || '-' }}</span>
+            </template>
+            <template v-else-if="column.dataIndex === 'phase' || column.key === 'phase'">
+              <a-tag
+                :color="getPhaseColor(text)"
+                size="small"
+              >
+                {{ text || '-' }}
+              </a-tag>
+            </template>
+            <template v-else-if="column.dataIndex === 'asr' || column.key === 'asr'">
+              <span>{{ text?.toFixed(3) || '-' }}</span>
+            </template>
+            <template v-else-if="column.dataIndex === 'concentration' || column.key === 'concentration'">
+              <span>{{ text?.toFixed(3) || '-' }}</span>
+            </template>
+          </template>
         </a-table>
       </a-spin>
     </div>

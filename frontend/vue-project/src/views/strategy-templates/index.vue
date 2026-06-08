@@ -1,10 +1,17 @@
 <template>
   <div class="strategy-templates-page theme-dark">
     <div class="page-header">
-      <h1 class="page-title">策略模板</h1>
+      <h1 class="page-title">
+        策略模板
+      </h1>
       <div class="header-actions">
-        <a-button type="primary" @click="showCreateModal">
-          <template #icon><PlusOutlined /></template>
+        <a-button
+          type="primary"
+          @click="showCreateModal"
+        >
+          <template #icon>
+            <PlusOutlined />
+          </template>
           创建模板
         </a-button>
       </div>
@@ -26,7 +33,9 @@
           style="width: 200px"
           @change="loadTemplates"
         >
-          <a-select-option value="">全部</a-select-option>
+          <a-select-option value="">
+            全部
+          </a-select-option>
           <a-select-option
             v-for="cat in categories"
             :key="cat.id"
@@ -65,11 +74,11 @@
           </p>
           <div class="template-meta">
             <span class="meta-item">
-              <i class="anticon anticon-star"></i>
+              <i class="anticon anticon-star" />
               {{ template.rating.toFixed(1) }}
             </span>
             <span class="meta-item">
-              <i class="anticon anticon-team"></i>
+              <i class="anticon anticon-team" />
               {{ template.usage_count }}
             </span>
             <span class="category-tag">
@@ -77,10 +86,16 @@
             </span>
           </div>
           <div class="template-actions">
-            <a-button size="small" @click.stop="useTemplate(template)">
+            <a-button
+              size="small"
+              @click.stop="useTemplate(template)"
+            >
               使用
             </a-button>
-            <a-button size="small" @click.stop="viewTemplate(template)">
+            <a-button
+              size="small"
+              @click.stop="viewTemplate(template)"
+            >
               查看
             </a-button>
             <a-button
@@ -100,7 +115,7 @@
       <a-pagination
         :current="currentPage"
         :total="total"
-        :pageSize="pageSize"
+        :page-size="pageSize"
         @change="handlePageChange"
       />
     </div>
@@ -111,7 +126,10 @@
       width="800px"
       :footer="null"
     >
-      <div v-if="currentTemplate" class="template-detail">
+      <div
+        v-if="currentTemplate"
+        class="template-detail"
+      >
         <div class="detail-section">
           <h4>基本信息</h4>
           <p><strong>分类:</strong> {{ getCategoryName(currentTemplate.category) }}</p>
@@ -120,23 +138,45 @@
           <p><strong>使用次数:</strong> {{ currentTemplate.usage_count }}</p>
         </div>
 
-        <div v-if="currentTemplate.parameters?.length" class="detail-section">
+        <div
+          v-if="currentTemplate.parameters?.length"
+          class="detail-section"
+        >
           <h4>参数配置</h4>
           <a-table
-            :dataSource="currentTemplate.parameters"
+            :data-source="currentTemplate.parameters"
             :pagination="false"
             size="small"
-            rowKey="name"
+            row-key="name"
           >
-            <a-table-column title="参数名" dataIndex="name" key="name" />
-            <a-table-column title="类型" dataIndex="type" key="type" />
-            <a-table-column title="默认值" dataIndex="default_value" key="default_value" />
-            <a-table-column title="范围" key="range">
+            <a-table-column
+              key="name"
+              title="参数名"
+              data-index="name"
+            />
+            <a-table-column
+              key="type"
+              title="类型"
+              data-index="type"
+            />
+            <a-table-column
+              key="default_value"
+              title="默认值"
+              data-index="default_value"
+            />
+            <a-table-column
+              key="range"
+              title="范围"
+            >
               <template #default="{ text, record }">
                 {{ record.min_value }} ~ {{ record.max_value }}
               </template>
             </a-table-column>
-            <a-table-column title="描述" dataIndex="description" key="description" />
+            <a-table-column
+              key="description"
+              title="描述"
+              data-index="description"
+            />
           </a-table>
         </div>
 
@@ -148,7 +188,10 @@
         </div>
 
         <div class="detail-actions">
-          <a-button type="primary" @click="useTemplate(currentTemplate)">
+          <a-button
+            type="primary"
+            @click="useTemplate(currentTemplate)"
+          >
             使用此模板
           </a-button>
         </div>
@@ -159,15 +202,21 @@
       v-model="createModalVisible"
       title="创建策略模板"
       width="800px"
-      :confirmLoading="saving"
+      :confirm-loading="saving"
       @ok="saveTemplate"
     >
       <a-form layout="vertical">
         <a-form-item label="模板名称">
-          <a-input v-model="newTemplate.name" placeholder="输入模板名称" />
+          <a-input
+            v-model="newTemplate.name"
+            placeholder="输入模板名称"
+          />
         </a-form-item>
         <a-form-item label="模板分类">
-          <a-select v-model="newTemplate.category" placeholder="选择分类">
+          <a-select
+            v-model="newTemplate.category"
+            placeholder="选择分类"
+          >
             <a-select-option
               v-for="cat in categories"
               :key="cat.id"

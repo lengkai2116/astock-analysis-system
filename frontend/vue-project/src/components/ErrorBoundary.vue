@@ -1,17 +1,37 @@
 <template>
-  <div v-if="hasError" class="error-boundary">
+  <div
+    v-if="hasError"
+    class="error-boundary"
+  >
     <div class="error-boundary__content">
       <div class="error-boundary__icon">
         <WarningOutlined />
       </div>
       <h3>页面渲染异常</h3>
-      <p class="error-boundary__message">{{ errorMessage }}</p>
+      <p class="error-boundary__message">
+        {{ errorMessage }}
+      </p>
       <div class="error-boundary__actions">
-        <a-button type="primary" @click="reload">重新加载</a-button>
-        <a-button @click="reset">重置组件</a-button>
-        <a-button type="link" @click="copyError">复制错误信息</a-button>
+        <a-button
+          type="primary"
+          @click="reload"
+        >
+          重新加载
+        </a-button>
+        <a-button @click="reset">
+          重置组件
+        </a-button>
+        <a-button
+          type="link"
+          @click="copyError"
+        >
+          复制错误信息
+        </a-button>
       </div>
-      <details v-if="errorStack" class="error-boundary__stack">
+      <details
+        v-if="errorStack"
+        class="error-boundary__stack"
+      >
         <summary>错误详情</summary>
         <pre>{{ errorStack }}</pre>
       </details>
@@ -29,6 +49,8 @@
  */
 import { ref, onErrorCaptured } from 'vue'
 import { WarningOutlined } from '@ant-design/icons-vue'
+import { useRoute } from 'vue-router'
+import { watch } from 'vue'
 import { message } from 'ant-design-vue'
 
 const props = defineProps({
@@ -41,8 +63,22 @@ const emit = defineEmits(['error', 'recover'])
 const hasError = ref(false)
 const errorMessage = ref('')
 const errorStack = ref('')
+const route = useRoute()
+
+// 路由切换时自动重置错误状态，防止错误跨页面滞留
+watch(() => route.path, () => {
+  hasError.value = false
+  errorMessage.value = ''
+  errorStack.value = ''
+})
 
 onErrorCaptured((err, instance, info) => {
+  // API 请求错误（AxiosError）属于非渲染异常，不触发降级 UI
+  if (err && err.isAxiosError) {
+    console.warn(`[ErrorBoundary/${props.componentName}] 忽略 API 错误:`, err.message)
+    return false
+  }
+
   hasError.value = true
   errorMessage.value = err.message || '未知错误'
   errorStack.value = err.stack || ''
@@ -50,7 +86,6 @@ onErrorCaptured((err, instance, info) => {
   console.error(`[ErrorBoundary/${props.componentName}]`, err, info)
   emit('error', { error: err, info, component: props.componentName })
 
-  // 阻止向上传播，由当前边界处理
   return false
 })
 

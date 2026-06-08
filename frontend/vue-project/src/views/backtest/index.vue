@@ -1,9 +1,14 @@
 <template>
   <div class="backtest-page theme-dark">
     <div class="page-header">
-      <h1 class="page-title">📈 回测系统</h1>
+      <h1 class="page-title">
+        📈 回测系统
+      </h1>
       <div class="header-actions">
-        <a-button type="primary" @click="showConfigModal = true">
+        <a-button
+          type="primary"
+          @click="showConfigModal = true"
+        >
           ⚙️ 回测配置
         </a-button>
       </div>
@@ -13,21 +18,33 @@
       <!-- 配置面板 -->
       <div class="config-panel">
         <div class="panel-section">
-          <div class="section-title">📋 回测标的</div>
+          <div class="section-title">
+            📋 回测标的
+          </div>
           <a-select
             v-model="config.symbol"
             style="width: 100%"
             placeholder="选择股票"
           >
-            <a-select-option value="600519.SH">贵州茅台 (600519.SH)</a-select-option>
-            <a-select-option value="000001.SZ">平安银行 (000001.SZ)</a-select-option>
-            <a-select-option value="000002.SZ">万科A (000002.SZ)</a-select-option>
-            <a-select-option value="600036.SH">招商银行 (600036.SH)</a-select-option>
+            <a-select-option value="600519.SH">
+              贵州茅台 (600519.SH)
+            </a-select-option>
+            <a-select-option value="000001.SZ">
+              平安银行 (000001.SZ)
+            </a-select-option>
+            <a-select-option value="000002.SZ">
+              万科A (000002.SZ)
+            </a-select-option>
+            <a-select-option value="600036.SH">
+              招商银行 (600036.SH)
+            </a-select-option>
           </a-select>
         </div>
 
         <div class="panel-section">
-          <div class="section-title">📅 时间范围</div>
+          <div class="section-title">
+            📅 时间范围
+          </div>
           <a-range-picker
             v-model="config.dateRange"
             style="width: 100%"
@@ -35,41 +52,64 @@
         </div>
 
         <div class="panel-section">
-          <div class="section-title">💰 初始资金</div>
+          <div class="section-title">
+            💰 初始资金
+          </div>
           <a-input-number
             v-model="config.initialCapital"
             :min="10000"
             :step="10000"
             style="width: 100%"
-            formatter="¥ 10000"
+            :formatter="() => '¥ 10000'"
           />
         </div>
 
         <div class="panel-section">
-          <div class="section-title">📊 策略选择</div>
+          <div class="section-title">
+            📊 策略选择
+          </div>
           <a-checkbox-group v-model="config.strategies">
-            <a-checkbox value="macd">MACD策略</a-checkbox>
-            <a-checkbox value="boll">布林带策略</a-checkbox>
-            <a-checkbox value="rsi">RSI策略</a-checkbox>
-            <a-checkbox value="chan">缠论策略</a-checkbox>
+            <a-checkbox value="macd">
+              MACD策略
+            </a-checkbox>
+            <a-checkbox value="boll">
+              布林带策略
+            </a-checkbox>
+            <a-checkbox value="rsi">
+              RSI策略
+            </a-checkbox>
+            <a-checkbox value="chan">
+              缠论策略
+            </a-checkbox>
           </a-checkbox-group>
         </div>
 
         <div class="panel-section">
-          <div class="section-title">🎯 因子组合（可选）</div>
+          <div class="section-title">
+            🎯 因子组合（可选）
+          </div>
           <a-select
             v-model="config.factorCombination"
             style="width: 100%"
             placeholder="选择因子组合（可选）"
-            allowClear
+            allow-clear
           >
-            <a-select-option v-for="combo in factorCombinations" :key="combo.id" :value="combo.id">
+            <a-select-option
+              v-for="combo in factorCombinations"
+              :key="combo.id"
+              :value="combo.id"
+            >
               {{ combo.name }} ({{ combo.factor_count || 0 }}个因子)
             </a-select-option>
           </a-select>
         </div>
 
-        <a-button type="primary" block @click="runBacktest" :loading="running">
+        <a-button
+          type="primary"
+          block
+          :loading="running"
+          @click="runBacktest"
+        >
           🚀 开始回测
         </a-button>
       </div>
@@ -77,21 +117,37 @@
       <!-- 结果展示区 -->
       <div class="results-area">
         <!-- 回测状态 -->
-        <div v-if="running" class="running-status">
+        <div
+          v-if="running"
+          class="running-status"
+        >
           <a-spin size="large" />
           <div class="status-text">
             <div>回测运行中...</div>
-            <div class="progress-info">已完成 {{ backtestProgress }}%</div>
+            <div class="progress-info">
+              已完成 {{ backtestProgress }}%
+            </div>
           </div>
-          <a-progress :percent="backtestProgress" status="active" />
+          <a-progress
+            :percent="backtestProgress"
+            status="active"
+          />
         </div>
 
         <!-- 回测结果 -->
-        <div v-else-if="results" class="results-grid">
+        <div
+          v-else-if="results"
+          class="results-grid"
+        >
           <!-- 主要指标卡片 -->
           <div class="result-card main">
-            <div class="card-title">📈 收益率</div>
-            <div class="card-value" :class="results.totalReturn >= 0 ? 'up' : 'down'">
+            <div class="card-title">
+              📈 收益率
+            </div>
+            <div
+              class="card-value"
+              :class="results.totalReturn >= 0 ? 'up' : 'down'"
+            >
               {{ formatPercent(results.totalReturn) }}
             </div>
             <div class="card-subtitle">
@@ -100,24 +156,36 @@
           </div>
 
           <div class="result-card">
-            <div class="card-title">🎯 最大回撤</div>
-            <div class="card-value down">{{ formatPercent(results.maxDrawdown) }}</div>
+            <div class="card-title">
+              🎯 最大回撤
+            </div>
+            <div class="card-value down">
+              {{ formatPercent(results.maxDrawdown) }}
+            </div>
             <div class="card-subtitle">
               夏普比 {{ results.sharpeRatio }}
             </div>
           </div>
 
           <div class="result-card">
-            <div class="card-title">📊 胜率</div>
-            <div class="card-value">{{ formatPercent(results.winRate) }}</div>
+            <div class="card-title">
+              📊 胜率
+            </div>
+            <div class="card-value">
+              {{ formatPercent(results.winRate) }}
+            </div>
             <div class="card-subtitle">
               盈利 {{ results.profitCount }} / 亏损 {{ results.lossCount }}
             </div>
           </div>
 
           <div class="result-card">
-            <div class="card-title">💵 总交易次数</div>
-            <div class="card-value">{{ results.totalTrades }}</div>
+            <div class="card-title">
+              💵 总交易次数
+            </div>
+            <div class="card-value">
+              {{ results.totalTrades }}
+            </div>
             <div class="card-subtitle">
               平均持仓 {{ results.avgHoldingDays }} 天
             </div>
@@ -127,9 +195,17 @@
           <div class="result-chart">
             <div class="chart-header">
               <span class="chart-title">📉 收益曲线</span>
-              <a-tag v-if="results.factorCombo" color="blue">{{ results.factorCombo }}</a-tag>
+              <a-tag
+                v-if="results.factorCombo"
+                color="blue"
+              >
+                {{ results.factorCombo }}
+              </a-tag>
             </div>
-            <div class="chart-content" ref="chartRef"></div>
+            <div
+              ref="chartRef"
+              class="chart-content"
+            />
           </div>
 
           <!-- 回撤曲线图 -->
@@ -137,14 +213,22 @@
             <div class="chart-header">
               <span class="chart-title">📊 回撤分析</span>
             </div>
-            <div class="chart-content" ref="drawdownChartRef"></div>
+            <div
+              ref="drawdownChartRef"
+              class="chart-content"
+            />
           </div>
 
           <!-- 交易记录 -->
           <div class="result-table">
             <div class="table-header">
               <span class="table-title">📋 交易记录</span>
-              <a-button type="link" size="small">导出记录</a-button>
+              <a-button
+                type="link"
+                size="small"
+              >
+                导出记录
+              </a-button>
             </div>
             <a-table
               :columns="columns"
@@ -152,26 +236,33 @@
               :pagination="{ pageSize: 5 }"
               size="small"
             >
-<template #bodyCell="{ column, text, record, index }">
-  <template v-if="column.dataIndex === 'type' || column.key === 'type'">
-                <a-tag :color="text === 'BUY' ? 'red' : 'green'">
-                  {{ text === 'BUY' ? '买入' : '卖出' }}
-                </a-tag>
-  </template>
-  <template v-else-if="column.dataIndex === 'return' || column.key === 'return'">
-                <span :class="text >= 0 ? 'up' : 'down'">
-                  {{ formatPercent(text) }}
-                </span>
-  </template>
-</template>
+              <template #bodyCell="{ column, text, record, index }">
+                <template v-if="column.dataIndex === 'type' || column.key === 'type'">
+                  <a-tag :color="text === 'BUY' ? 'red' : 'green'">
+                    {{ text === 'BUY' ? '买入' : '卖出' }}
+                  </a-tag>
+                </template>
+                <template v-else-if="column.dataIndex === 'return' || column.key === 'return'">
+                  <span :class="text >= 0 ? 'up' : 'down'">
+                    {{ formatPercent(text) }}
+                  </span>
+                </template>
+              </template>
             </a-table>
           </div>
         </div>
 
         <!-- 初始状态 -->
-        <div v-else class="empty-state">
-          <div class="empty-icon">📊</div>
-          <div class="empty-text">配置回测参数开始回测</div>
+        <div
+          v-else
+          class="empty-state"
+        >
+          <div class="empty-icon">
+            📊
+          </div>
+          <div class="empty-text">
+            配置回测参数开始回测
+          </div>
           <div class="empty-hint">
             回测将根据历史数据验证策略的有效性
           </div>
@@ -186,7 +277,10 @@
       width="600px"
       @ok="showConfigModal = false"
     >
-      <a-form :label-col="{ span: 8 }" :wrapper-col="{ span: 14 }">
+      <a-form
+        :label-col="{ span: 8 }"
+        :wrapper-col="{ span: 14 }"
+      >
         <a-form-item label="手续费率">
           <a-input-number
             v-model="config.commission"
@@ -245,6 +339,7 @@
 
 <script>
 import * as echarts from 'echarts'
+import { useAppStore } from '@/stores'
 
 export default {
   name: 'BacktestPage',

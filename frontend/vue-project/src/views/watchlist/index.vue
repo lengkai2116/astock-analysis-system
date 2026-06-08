@@ -1,7 +1,9 @@
 <template>
   <div class="watchlist-page">
     <div class="page-header">
-      <h1 class="page-title">📊 自选监控</h1>
+      <h1 class="page-title">
+        📊 自选监控
+      </h1>
       <div class="header-actions">
         <a-dropdown>
           <a-button>
@@ -9,15 +11,27 @@
           </a-button>
           <template #overlay>
             <a-menu>
-              <a-menu-item @click="openFactorManager">因子组合管理</a-menu-item>
-              <a-menu-item @click="runStrategyScreen">策略筛选</a-menu-item>
+              <a-menu-item @click="openFactorManager">
+                因子组合管理
+              </a-menu-item>
+              <a-menu-item @click="runStrategyScreen">
+                策略筛选
+              </a-menu-item>
               <a-menu-divider />
-              <a-menu-item @click="goToBacktest">回测系统</a-menu-item>
+              <a-menu-item @click="goToBacktest">
+                回测系统
+              </a-menu-item>
             </a-menu>
           </template>
         </a-dropdown>
-        <a-badge :count="socketConnected ? 0 : 1" :number-style="{ backgroundColor: '#f5222d' }">
-          <a-button :type="socketConnected ? 'primary' : 'danger'" @click="toggleSocketConnection">
+        <a-badge
+          :count="socketConnected ? 0 : 1"
+          :number-style="{ backgroundColor: '#f5222d' }"
+        >
+          <a-button
+            :type="socketConnected ? 'primary' : 'danger'"
+            @click="toggleSocketConnection"
+          >
             {{ socketConnected ? '🔌 已连接' : '❌ 未连接' }}
           </a-button>
         </a-badge>
@@ -27,10 +41,16 @@
           style="width: 200px; margin-left: 12px"
           @search="onSearch"
         />
-        <a-button style="margin-left: 12px" @click="showColumnConfig = true">
+        <a-button
+          style="margin-left: 12px"
+          @click="showColumnConfig = true"
+        >
           ⚙️ 配置列
         </a-button>
-        <a-button style="margin-left: 8px" @click="refreshData">
+        <a-button
+          style="margin-left: 8px"
+          @click="refreshData"
+        >
           🔄 刷新
         </a-button>
       </div>
@@ -39,26 +59,59 @@
     <!-- 自选分组管理 (150§4.3) -->
     <div class="watchlist-groups">
       <div class="groups-tabs">
-        <a-tabs v-model:activeKey="activeGroup" size="small" @change="onGroupChange">
-          <a-tab-pane v-for="group in groups" :key="group.id" :tab="group.name" />
+        <a-tabs
+          v-model:active-key="activeGroup"
+          size="small"
+          @change="onGroupChange"
+        >
+          <a-tab-pane
+            v-for="group in groups"
+            :key="group.id"
+            :tab="group.name"
+          />
         </a-tabs>
       </div>
       <div class="groups-actions">
-        <a-popover title="新建分组" trigger="click">
+        <a-popover
+          title="新建分组"
+          trigger="click"
+        >
           <template #content>
             <div class="group-form">
-              <a-input v-model:value="newGroupName" placeholder="分组名称" size="small" />
-              <a-button type="primary" size="small" style="margin-top: 8px" @click="addGroup">创建</a-button>
+              <a-input
+                v-model:value="newGroupName"
+                placeholder="分组名称"
+                size="small"
+              />
+              <a-button
+                type="primary"
+                size="small"
+                style="margin-top: 8px"
+                @click="addGroup"
+              >
+                创建
+              </a-button>
             </div>
           </template>
-          <a-button size="small" type="dashed">
+          <a-button
+            size="small"
+            type="dashed"
+          >
             ＋ 新建分组
           </a-button>
         </a-popover>
-        <a-popover title="管理分组" trigger="click" v-if="groups.length > 1">
+        <a-popover
+          v-if="groups.length > 1"
+          title="管理分组"
+          trigger="click"
+        >
           <template #content>
             <div class="group-manage-list">
-              <div v-for="g in groups" :key="g.id" class="group-manage-item">
+              <div
+                v-for="g in groups"
+                :key="g.id"
+                class="group-manage-item"
+              >
                 <span>{{ g.name }}</span>
                 <a-button
                   v-if="!g.builtin"
@@ -72,7 +125,10 @@
               </div>
             </div>
           </template>
-          <a-button size="small" style="margin-left: 8px">
+          <a-button
+            size="small"
+            style="margin-left: 8px"
+          >
             管理分组
           </a-button>
         </a-popover>
@@ -160,8 +216,21 @@
           </template>
           <template v-else-if="column.dataIndex === 'actions' || column.key === 'actions'">
             <a-space>
-              <a-button size="small" type="link" @click="goToChart(record)">图表</a-button>
-              <a-button size="small" type="link" danger @click="removeFromWatchlist(record)">删除</a-button>
+              <a-button
+                size="small"
+                type="link"
+                @click="goToChart(record)"
+              >
+                图表
+              </a-button>
+              <a-button
+                size="small"
+                type="link"
+                danger
+                @click="removeFromWatchlist(record)"
+              >
+                删除
+              </a-button>
             </a-space>
           </template>
         </template>
@@ -173,10 +242,16 @@
         <span>共 <strong class="highlight">{{ filteredData.length }}</strong> 只股票</span>
         <span>上涨 <strong class="up">{{ upCount }}</strong> 只</span>
         <span>下跌 <strong class="down">{{ downCount }}</strong> 只</span>
-        <span class="connection-status" :class="{ connected: socketConnected }">
+        <span
+          class="connection-status"
+          :class="{ connected: socketConnected }"
+        >
           ● {{ socketConnected ? '实时连接' : '已断开' }}
         </span>
-        <span v-if="lastUpdateTime" class="update-time">
+        <span
+          v-if="lastUpdateTime"
+          class="update-time"
+        >
           最后更新: {{ lastUpdateTime }}
         </span>
       </div>
@@ -186,21 +261,38 @@
     <a-modal
       v-model:visible="showColumnConfig"
       title="配置显示列"
-      @ok="saveColumnConfig"
-      @cancel="cancelColumnConfig"
       wrap-class-name="column-config-modal"
       width="600px"
+      @ok="saveColumnConfig"
+      @cancel="cancelColumnConfig"
     >
       <div class="column-config">
-        <div v-for="cat in columnCategories" :key="cat.key" class="config-section">
-          <div class="section-title">{{ cat.label }}</div>
+        <div
+          v-for="cat in columnCategories"
+          :key="cat.key"
+          class="config-section"
+        >
+          <div class="section-title">
+            {{ cat.label }}
+          </div>
           <div class="column-pills">
-            <div v-for="col in cat.columns" :key="col.id" class="custom-tag"
-                 :class="col.visible ? 'custom-tag-visible' : 'custom-tag-hidden'"
-                 @click="toggleColumn(col, !col.visible)">
+            <div
+              v-for="col in cat.columns"
+              :key="col.id"
+              class="custom-tag"
+              :class="col.visible ? 'custom-tag-visible' : 'custom-tag-hidden'"
+              @click="toggleColumn(col, !col.visible)"
+            >
               <span class="tag-text">{{ col.title }}</span>
-              <span v-if="col.visible" class="tag-close" @click.stop="toggleColumn(col, false)">✕</span>
-              <span v-else class="tag-plus">＋</span>
+              <span
+                v-if="col.visible"
+                class="tag-close"
+                @click.stop="toggleColumn(col, false)"
+              >✕</span>
+              <span
+                v-else
+                class="tag-plus"
+              >＋</span>
             </div>
           </div>
         </div>

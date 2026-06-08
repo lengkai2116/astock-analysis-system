@@ -1,9 +1,15 @@
 <template>
   <div class="strategy-signal-panel">
-    <a-card size="small" :bordered="false">
+    <a-card
+      size="small"
+      :bordered="false"
+    >
       <template #title>
         <div class="panel-header">
-          <span class="signal-badge" :class="signalClass">
+          <span
+            class="signal-badge"
+            :class="signalClass"
+          >
             {{ signalText }}
           </span>
           <span class="strategy-name">{{ strategyName }}</span>
@@ -21,15 +27,15 @@
             <a-progress
               :percent="confidencePercent"
               :status="confidenceStatus"
-              :strokeColor="confidenceColor"
+              :stroke-color="confidenceColor"
               :show-info="false"
               :style="{ cursor: 'pointer' }"
               @click="handleShowDetail"
             />
             <span
               class="confidence-value clickable"
-              @click="handleShowDetail"
               title="点击查看详情"
+              @click="handleShowDetail"
             >
               {{ confidenceText }}
             </span>
@@ -37,12 +43,15 @@
         </div>
 
         <div class="detail-link-row">
-          <a class="detail-link" @click="handleShowDetail">查看详情 →</a>
+          <a
+            class="detail-link"
+            @click="handleShowDetail"
+          >查看详情 →</a>
         </div>
 
         <div class="price-section">
           <div class="section-label">
-            <i class="anticon anticon-money-collect"></i>
+            <i class="anticon anticon-money-collect" />
             价格区间
           </div>
           <div class="price-grid">
@@ -69,7 +78,7 @@
 
         <div class="position-section">
           <div class="section-label">
-            <i class="anticon anticon-swap"></i>
+            <i class="anticon anticon-swap" />
             仓位建议
           </div>
           <div class="position-content">
@@ -82,9 +91,12 @@
           </div>
         </div>
 
-        <div v-if="signalData.evidence && signalData.evidence.length > 0" class="evidence-section">
+        <div
+          v-if="signalData.evidence && signalData.evidence.length > 0"
+          class="evidence-section"
+        >
           <div class="section-label">
-            <i class="anticon anticon-branches"></i>
+            <i class="anticon anticon-branches" />
             证据链
           </div>
           <a-list
@@ -101,20 +113,26 @@
           </a-list>
         </div>
 
-        <div v-if="signalData.risk_notes && signalData.risk_notes.length > 0" class="risk-section">
+        <div
+          v-if="signalData.risk_notes && signalData.risk_notes.length > 0"
+          class="risk-section"
+        >
           <a-alert
             type="warning"
             show-icon
           >
             <template #message>
               <div class="risk-title">
-                <i class="anticon anticon-warning"></i>
+                <i class="anticon anticon-warning" />
                 风险提示
               </div>
             </template>
             <template #description>
               <ul class="risk-list">
-                <li v-for="(risk, index) in signalData.risk_notes" :key="index">
+                <li
+                  v-for="(risk, index) in signalData.risk_notes"
+                  :key="index"
+                >
                   {{ risk }}
                 </li>
               </ul>
@@ -123,13 +141,23 @@
         </div>
 
         <div class="action-section">
-          <a-button type="primary" size="small" @click="handleViewDetail">
+          <a-button
+            type="primary"
+            size="small"
+            @click="handleViewDetail"
+          >
             完整报告
           </a-button>
-          <a-button size="small" @click="handleShowDetail">
+          <a-button
+            size="small"
+            @click="handleShowDetail"
+          >
             赢率详情
           </a-button>
-          <a-button size="small" @click="handleBacktest">
+          <a-button
+            size="small"
+            @click="handleBacktest"
+          >
             策略回测
           </a-button>
         </div>

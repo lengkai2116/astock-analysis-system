@@ -1,3 +1,7 @@
+"""
+"策略系统 API 路由
+提供策略输出、模板管理、信号计算等功能"
+"""
 from flask import Blueprint, request, jsonify
 from app import db
 from app.services.strategy_output_service import StrategyOutputService

@@ -4,43 +4,67 @@
     :title="modalTitle"
     :footer="null"
     :width="680"
-    :destroyOnClose="true"
-    @cancel="handleClose"
+    :destroy-on-close="true"
     class="signal-detail-modal"
+    @cancel="handleClose"
   >
     <a-spin :spinning="loading">
       <template v-if="!loading && explanations.length > 0">
         <div class="confidence-header">
           <span class="confidence-label">综合赢率</span>
-          <span class="confidence-value" :class="compositeClass">
+          <span
+            class="confidence-value"
+            :class="compositeClass"
+          >
             {{ compositePercent }}%
           </span>
         </div>
 
         <!-- 赢率详情区块 (P2) -->
-        <div v-if="hasWinRates" class="win-rate-section">
+        <div
+          v-if="hasWinRates"
+          class="win-rate-section"
+        >
           <div class="win-rate-header">
             <span class="win-rate-title">📊 回测赢率证据</span>
           </div>
           <div class="win-rate-grid">
-            <div v-for="(wr, idx) in winRateRows" :key="idx" class="win-rate-card">
-              <div class="wr-strategy">{{ wr.strategy }}</div>
+            <div
+              v-for="(wr, idx) in winRateRows"
+              :key="idx"
+              class="win-rate-card"
+            >
+              <div class="wr-strategy">
+                {{ wr.strategy }}
+              </div>
               <div class="wr-stats">
                 <div class="wr-stat">
                   <span class="wr-label">T+5</span>
-                  <span class="wr-value" :class="wr.t5 >= 0.5 ? 'wr-win' : 'wr-lose'">{{ (wr.t5 * 100).toFixed(0) }}%</span>
+                  <span
+                    class="wr-value"
+                    :class="wr.t5 >= 0.5 ? 'wr-win' : 'wr-lose'"
+                  >{{ (wr.t5 * 100).toFixed(0) }}%</span>
                 </div>
                 <div class="wr-stat">
                   <span class="wr-label">T+10</span>
-                  <span class="wr-value" :class="wr.t10 >= 0.5 ? 'wr-win' : 'wr-lose'">{{ (wr.t10 * 100).toFixed(0) }}%</span>
+                  <span
+                    class="wr-value"
+                    :class="wr.t10 >= 0.5 ? 'wr-win' : 'wr-lose'"
+                  >{{ (wr.t10 * 100).toFixed(0) }}%</span>
                 </div>
                 <div class="wr-stat">
                   <span class="wr-label">T+20</span>
-                  <span class="wr-value" :class="wr.t20 >= 0.5 ? 'wr-win' : 'wr-lose'">{{ (wr.t20 * 100).toFixed(0) }}%</span>
+                  <span
+                    class="wr-value"
+                    :class="wr.t20 >= 0.5 ? 'wr-win' : 'wr-lose'"
+                  >{{ (wr.t20 * 100).toFixed(0) }}%</span>
                 </div>
                 <div class="wr-stat">
                   <span class="wr-label">样本</span>
-                  <span class="wr-value" style="color:#94a3b8">{{ wr.samples }}</span>
+                  <span
+                    class="wr-value"
+                    style="color:#94a3b8"
+                  >{{ wr.samples }}</span>
                 </div>
               </div>
             </div>
@@ -63,18 +87,33 @@
 
             <div class="strategy-detail">
               <div class="detail-section">
-                <div class="detail-label">AI 解读</div>
-                <div class="detail-text">{{ exp.ai_summary }}</div>
+                <div class="detail-label">
+                  AI 解读
+                </div>
+                <div class="detail-text">
+                  {{ exp.ai_summary }}
+                </div>
               </div>
 
               <div class="detail-section">
-                <div class="detail-label">操作建议</div>
-                <div class="detail-text advice-text">{{ exp.ai_advice }}</div>
+                <div class="detail-label">
+                  操作建议
+                </div>
+                <div class="detail-text advice-text">
+                  {{ exp.ai_advice }}
+                </div>
               </div>
 
-              <div class="detail-section" v-if="exp.risk_tip">
-                <div class="detail-label risk-label">风险提示</div>
-                <div class="detail-text risk-text">{{ exp.risk_tip }}</div>
+              <div
+                v-if="exp.risk_tip"
+                class="detail-section"
+              >
+                <div class="detail-label risk-label">
+                  风险提示
+                </div>
+                <div class="detail-text risk-text">
+                  {{ exp.risk_tip }}
+                </div>
               </div>
             </div>
           </div>
@@ -96,15 +135,30 @@
       </template>
 
       <template v-if="error">
-        <a-alert type="warning" show-icon :message="error" />
+        <a-alert
+          type="warning"
+          show-icon
+          :message="error"
+        />
         <div class="fallback-section">
           <div class="fallback-hint">
             AI 解读暂时不可用，以下为基于规则的简要分析：
           </div>
-          <div v-for="(sig, idx) in signals" :key="idx" class="fallback-item">
-            <div class="fallback-strategy">{{ sig.strategy_name }}</div>
-            <div class="fallback-score">评分: {{ formatConfidence(sig.confidence) }}</div>
-            <div class="fallback-evidence" v-if="sig.evidence?.length">
+          <div
+            v-for="(sig, idx) in signals"
+            :key="idx"
+            class="fallback-item"
+          >
+            <div class="fallback-strategy">
+              {{ sig.strategy_name }}
+            </div>
+            <div class="fallback-score">
+              评分: {{ formatConfidence(sig.confidence) }}
+            </div>
+            <div
+              v-if="sig.evidence?.length"
+              class="fallback-evidence"
+            >
               {{ sig.evidence.slice(0, 3).join('; ') }}
             </div>
           </div>

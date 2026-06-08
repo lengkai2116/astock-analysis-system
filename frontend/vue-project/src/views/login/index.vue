@@ -1,18 +1,33 @@
 <template>
   <div class="login-page">
     <div class="login-card">
-      <h1 class="login-title">A股分析系统</h1>
-      <p class="login-desc">请输入访问令牌</p>
+      <h1 class="login-title">
+        A股分析系统
+      </h1>
+      <p class="login-desc">
+        请输入访问令牌
+      </p>
       <a-input-password
         v-model:value="token"
         placeholder="请输入 Token"
         size="large"
         @keyup.enter="handleLogin"
       />
-      <a-button type="primary" size="large" block :loading="loading" @click="handleLogin">
+      <a-button
+        type="primary"
+        size="large"
+        block
+        :loading="loading"
+        @click="handleLogin"
+      >
         登录
       </a-button>
-      <p v-if="error" class="login-error">{{ error }}</p>
+      <p
+        v-if="error"
+        class="login-error"
+      >
+        {{ error }}
+      </p>
     </div>
   </div>
 </template>

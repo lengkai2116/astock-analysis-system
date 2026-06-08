@@ -55,7 +55,6 @@ export default defineConfig(({ mode }) => {
             'vendor-antd': ['ant-design-vue', '@ant-design/icons-vue'],
             'vendor-echarts': ['echarts'],
             'vendor-kline': ['klinecharts'],
-            'vendor-codemirror': ['codemirror'],
             'data-services': [
               './src/services/chartService.js',
               './src/services/screenerService.js',

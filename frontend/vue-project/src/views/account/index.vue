@@ -3,42 +3,85 @@
     <!-- 总览指标卡 -->
     <div class="summary-cards">
       <div class="summary-card">
-        <div class="card-label">总资产</div>
-        <div class="card-value">¥{{ formatMoney(summary.total_asset) }}</div>
-        <div class="card-sub">初始本金 ¥{{ formatMoney(summary.initial_capital) }}</div>
+        <div class="card-label">
+          总资产
+        </div>
+        <div class="card-value">
+          ¥{{ formatMoney(summary.total_asset) }}
+        </div>
+        <div class="card-sub">
+          初始本金 ¥{{ formatMoney(summary.initial_capital) }}
+        </div>
       </div>
       <div class="summary-card">
-        <div class="card-label">总盈亏</div>
-        <div class="card-value" :class="summary.total_profit >= 0 ? 'profit' : 'loss'">
+        <div class="card-label">
+          总盈亏
+        </div>
+        <div
+          class="card-value"
+          :class="summary.total_profit >= 0 ? 'profit' : 'loss'"
+        >
           {{ summary.total_profit >= 0 ? '+' : '' }}¥{{ formatMoney(summary.total_profit) }}
         </div>
-        <div class="card-sub">{{ (summary.total_return_pct * 100).toFixed(2) }}%</div>
+        <div class="card-sub">
+          {{ (summary.total_return_pct * 100).toFixed(2) }}%
+        </div>
       </div>
       <div class="summary-card">
-        <div class="card-label">总交易次数</div>
-        <div class="card-value">{{ summary.total_trades }}</div>
-        <div class="card-sub">买入 {{ summary.buy_count }} / 卖出 {{ summary.sell_count }}</div>
+        <div class="card-label">
+          总交易次数
+        </div>
+        <div class="card-value">
+          {{ summary.total_trades }}
+        </div>
+        <div class="card-sub">
+          买入 {{ summary.buy_count }} / 卖出 {{ summary.sell_count }}
+        </div>
       </div>
       <div class="summary-card">
-        <div class="card-label">胜率</div>
-        <div class="card-value">{{ (summary.win_rate * 100).toFixed(1) }}%</div>
-        <div class="card-sub">当前持仓 {{ summary.positions_count }} 只</div>
+        <div class="card-label">
+          胜率
+        </div>
+        <div class="card-value">
+          {{ (summary.win_rate * 100).toFixed(1) }}%
+        </div>
+        <div class="card-sub">
+          当前持仓 {{ summary.positions_count }} 只
+        </div>
       </div>
     </div>
 
     <!-- 主 Tab 区域 -->
-    <a-card class="main-card" :bordered="false">
-      <a-tabs v-model:activeKey="activeTab" :tabBarStyle="{ marginBottom: '16px' }">
-        <a-tab-pane key="trades" tab="交易记录">
+    <a-card
+      class="main-card"
+      :bordered="false"
+    >
+      <a-tabs
+        v-model:active-key="activeTab"
+        :tab-bar-style="{ marginBottom: '16px' }"
+      >
+        <a-tab-pane
+          key="trades"
+          tab="交易记录"
+        >
           <TradeTab />
         </a-tab-pane>
-        <a-tab-pane key="positions" tab="持仓概览">
+        <a-tab-pane
+          key="positions"
+          tab="持仓概览"
+        >
           <PositionTab />
         </a-tab-pane>
-        <a-tab-pane key="equity" tab="资金曲线">
+        <a-tab-pane
+          key="equity"
+          tab="资金曲线"
+        >
           <EquityTab />
         </a-tab-pane>
-        <a-tab-pane key="review" tab="智能复盘">
+        <a-tab-pane
+          key="review"
+          tab="智能复盘"
+        >
           <ReviewTab />
         </a-tab-pane>
       </a-tabs>
@@ -74,6 +117,8 @@ export default {
         }
       } catch (e) {
         console.warn('加载账户概览失败:', e)
+        // 防止未捕获的 Promise rejection 传播到 ErrorBoundary
+        if (e && typeof e.then === 'function') await e.catch(() => {})
       }
     }
 
@@ -82,7 +127,10 @@ export default {
       return Number(val).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     }
 
-    onMounted(loadSummary)
+    onMounted(() => {
+      // 静默加载，防止 error propagation
+      loadSummary()
+    })
 
     return { activeTab, summary, formatMoney }
   }
