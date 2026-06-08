@@ -185,7 +185,6 @@ def create_app():
 
 
 
-    from app import models
     return app
 
 def _route_provider(endpoint, params, provider):
