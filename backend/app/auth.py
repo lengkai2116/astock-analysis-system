@@ -122,5 +122,6 @@ def auth_status():
         'data': {
             'enabled': is_auth_enabled(),
             'has_token': bool(_AUTH_TOKEN),
+            'token_preview': _AUTH_TOKEN[:8] + '...' if _AUTH_TOKEN else '',
         }
     })

@@ -362,14 +362,23 @@ a:hover {
 
 /* 输入框 */
 .ant-input,
+.ant-input-affix-wrapper,
 .ant-select-selector,
 .ant-picker {
-  background: var(--bg-surface) !important;
+  background: #1e293b !important;
   border-color: var(--border-default) !important;
   color: var(--text-primary) !important;
   border-radius: var(--radius-sm) !important;
 }
+.ant-input-affix-wrapper input.ant-input {
+  background: transparent !important;
+  color: #f1f5f9 !important;
+}
+.ant-input-affix-wrapper input.ant-input::placeholder {
+  color: #64748b !important;
+}
 .ant-input:focus,
+.ant-input-affix-wrapper-focused,
 .ant-select-focused .ant-select-selector,
 .ant-picker-focused {
   border-color: var(--border-focus) !important;
