@@ -2,7 +2,7 @@
   <div class="factor-manager-page theme-dark">
     <div class="page-header">
       <h1 class="page-title">
-        📈 因子组合管理
+        因子组合管理
       </h1>
       <div class="header-actions">
         <a-button
@@ -27,7 +27,7 @@
                 size="small"
                 @click="loadCombinations"
               >
-                🔄 刷新
+                刷新
               </a-button>
             </div>
             
@@ -378,41 +378,7 @@ export default {
         { title: '操作', key: 'action', scopedSlots: { customRender: 'action' }, width: 100 }
       ],
       
-      mockCombinations: [
-        {
-          id: 1,
-          name: '动量策略组合',
-          description: '基于动量因子的选股策略',
-          factor_count: 3,
-          factors: ['qlib_alpha1', 'momentum_roc', 'gtja_1'],
-          is_default: true,
-          is_favorite: true,
-          created_at: '2026-05-20'
-        },
-        {
-          id: 2,
-          name: '波动率策略',
-          description: '低波动率因子组合',
-          factor_count: 2,
-          factors: ['volatility_atr', 'qlib_alpha3'],
-          is_default: false,
-          is_favorite: false,
-          created_at: '2026-05-21'
-        }
-      ],
       
-      mockFactors: [
-        { id: 'qlib_alpha1', name: 'Alpha#001', category: 'Qlib' },
-        { id: 'qlib_alpha2', name: 'Alpha#002', category: 'Qlib' },
-        { id: 'qlib_alpha3', name: 'Alpha#003', category: 'Qlib' },
-        { id: 'gtja_1', name: 'GTJA#001', category: '国泰君安' },
-        { id: 'gtja_2', name: 'GTJA#002', category: '国泰君安' },
-        { id: 'academic_beta', name: 'Beta', category: '学术' },
-        { id: 'momentum_roc', name: 'ROC', category: '动量' },
-        { id: 'volatility_atr', name: 'ATR', category: '波动率' },
-        { id: 'volume_obv', name: 'OBV', category: '成交量' },
-        { id: 'astock_1', name: 'A股动量', category: 'A股核心' }
-      ]
     }
   },
   
@@ -423,12 +389,12 @@ export default {
       if (useAppStore().factorCombinations.all && useAppStore().factorCombinations.all.length > 0) {
         return useAppStore().factorCombinations.all
       }
-      return this.mockCombinations
+      return useAppStore().factorCombinations.all || []
     }
   },
   
   mounted() {
-    this.loadCombinations()
+    this.loadCombinations(); useAppStore().loadFactors()
     if (this.$route.query.tab === 'screen') {
       this.activeTab = 'screen'
     }
@@ -556,7 +522,7 @@ export default {
     },
     
     getFactorName(factorId) {
-      const factor = this.mockFactors.find(f => f.id === factorId)
+      const factor = (this.factors.all || []).find(f => f.id === factorId)
       return factor ? factor.name : factorId
     },
     
@@ -579,7 +545,7 @@ export default {
           top_n: this.screenTopN
         })
         
-        this.screenResults = this.mockScreenResults()
+        this.screenResults = []
         this.$message.success('筛选完成')
       } catch (error) {
         this.$message.error('筛选失败')
@@ -588,23 +554,6 @@ export default {
       }
     },
     
-    mockScreenResults() {
-      const stocks = [
-        { symbol: '600519.SH', name: '贵州茅台' },
-        { symbol: '000001.SZ', name: '平安银行' },
-        { symbol: '000002.SZ', name: '万科A' },
-        { symbol: '601318.SH', name: '中国平安' },
-        { symbol: '000858.SZ', name: '五粮液' },
-        { symbol: '600036.SH', name: '招商银行' },
-        { symbol: '000333.SZ', name: '美的集团' },
-        { symbol: '600000.SH', name: '浦发银行' }
-      ]
-      
-      return stocks.slice(0, this.screenTopN).map((stock, index) => ({
-        ...stock,
-        score: 1 - (index * 0.1) + (Math.random() * 0.1)
-      }))
-    },
     
     getScoreColor(score) {
       if (score >= 0.8) return '#52c41a'

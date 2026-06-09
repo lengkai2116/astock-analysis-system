@@ -123,7 +123,7 @@
         <!-- 右侧：最终报告 -->
         <div class="report-panel">
           <div class="panel-title">
-            📋 最终投研报告
+            最终投研报告
           </div>
           <div
             v-if="finalReport"
@@ -206,6 +206,8 @@
 <script>
 import { FileTextOutlined } from '@ant-design/icons-vue'
 import { startAnalysis, getProgress, getFinalReport } from '@/services/aiAnalysisService'
+import dataService from '@/services/dataService'
+import axios from '@/utils/request'
 import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
@@ -213,35 +215,61 @@ export default {
   data() {
     return {
       selectedSymbol: '',
-      watchlist: [
-        { symbol: '600519.SH', name: '贵州茅台' },
-        { symbol: '000001.SZ', name: '平安银行' },
-        { symbol: '600000.SH', name: '浦发银行' },
-        { symbol: '601318.SH', name: '中国平安' },
-        { symbol: '000333.SZ', name: '美的集团' },
-        { symbol: '002415.SZ', name: '海康威视' },
-        { symbol: '300750.SZ', name: '宁德时代' }
-      ],
+      watchlist: [],
       analyzing: false,
       analysisId: null,
       progress: 0,
       progressText: '准备中...',
       analysisLog: [],
       pollTimer: null,
-      roles: [
-        { id: 'technical', name: '技术分析师', icon: '📈', status: 'waiting', report: null },
-        { id: 'fundamental', name: '基本面分析师', icon: '📊', status: 'waiting', report: null },
-        { id: 'macro', name: '宏观策略师', icon: '🌐', status: 'waiting', report: null },
-        { id: 'risk', name: '风险控制官', icon: '⚠️', status: 'waiting', report: null },
-        { id: 'fund_manager', name: '资深基金经理', icon: '👨‍💼', status: 'waiting', report: null }
-      ],
+      roles: [],
       finalReport: null
     }
+  },
+  created() {
+    this.loadWatchlist()
+    this.loadRoles()
   },
   beforeUnmount() {
     this.stopPolling()
   },
   methods: {
+    async loadWatchlist() {
+      try {
+        const res = await dataService.getWatchlist()
+        if (res && Array.isArray(res)) {
+          this.watchlist = res.map(item => ({
+            symbol: item.ts_code,
+            name: item.name || item.ts_code,
+          }))
+        } else if (res && res.data && Array.isArray(res.data)) {
+          this.watchlist = res.data.map(item => ({
+            symbol: item.ts_code,
+            name: item.name || item.ts_code,
+          }))
+        }
+      } catch (e) {
+        console.warn('加载自选股失败', e)
+      }
+    },
+
+    async loadRoles() {
+      try {
+        const res = await axios.get('/api/v3/ai/analysts')
+        if (res.success && res.data) {
+          this.roles = Object.entries(res.data).map(([id, info]) => ({
+            id,
+            name: info.name,
+            icon: info.icon,
+            status: 'waiting',
+            report: null,
+          }))
+        }
+      } catch (e) {
+        console.warn('加载分析师角色失败', e)
+      }
+    },
+
     async startAnalysis() {
       if (!this.selectedSymbol) return
 

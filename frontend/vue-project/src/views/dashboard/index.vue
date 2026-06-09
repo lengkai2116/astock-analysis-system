@@ -2,7 +2,7 @@
   <div class="dashboard-page">
     <div class="page-header">
       <h1 class="page-title">
-        📊 仪表盘
+        仪表盘
       </h1>
       <div class="header-actions">
         <a-range-picker
@@ -10,142 +10,11 @@
           @change="onDateRangeChange"
         />
         <a-button @click="refreshData">
-          🔄 刷新数据
+          刷新数据
         </a-button>
       </div>
     </div>
 
-    <!-- 快捷入口工具栏 -->
-    <div class="quick-actions-bar">
-      <div class="quick-actions">
-        <a-card
-          size="small"
-          class="quick-action-card"
-          hoverable
-          @click="$router.push('/watchlist')"
-        >
-          <div class="quick-action-content">
-            <span class="quick-action-icon">📈</span>
-            <div class="quick-action-info">
-              <div class="quick-action-title">
-                自选监控
-              </div>
-              <div class="quick-action-desc">
-                实时监控股票行情
-              </div>
-            </div>
-          </div>
-        </a-card>
-        <a-card
-          size="small"
-          class="quick-action-card"
-          hoverable
-          @click="$router.push('/indicator-ide')"
-        >
-          <div class="quick-action-content">
-            <span class="quick-action-icon">📊</span>
-            <div class="quick-action-info">
-              <div class="quick-action-title">
-                指标IDE
-              </div>
-              <div class="quick-action-desc">
-                策略编辑与技术分析
-              </div>
-            </div>
-          </div>
-        </a-card>
-        <a-card
-          size="small"
-          class="quick-action-card"
-          hoverable
-          @click="$router.push('/backtest')"
-        >
-          <div class="quick-action-content">
-            <span class="quick-action-icon">🎯</span>
-            <div class="quick-action-info">
-              <div class="quick-action-title">
-                回测系统
-              </div>
-              <div class="quick-action-desc">
-                策略回测与验证
-              </div>
-            </div>
-          </div>
-        </a-card>
-        <a-card
-          size="small"
-          class="quick-action-card"
-          hoverable
-          @click="$router.push('/ai-analysis')"
-        >
-          <div class="quick-action-content">
-            <span class="quick-action-icon">🤖</span>
-            <div class="quick-action-info">
-              <div class="quick-action-title">
-                AI分析
-              </div>
-              <div class="quick-action-desc">
-                智能投研与报告
-              </div>
-            </div>
-          </div>
-        </a-card>
-        <a-card
-          size="small"
-          class="quick-action-card"
-          hoverable
-          @click="$router.push('/factor-manager')"
-        >
-          <div class="quick-action-content">
-            <span class="quick-action-icon">🔧</span>
-            <div class="quick-action-info">
-              <div class="quick-action-title">
-                因子管理
-              </div>
-              <div class="quick-action-desc">
-                因子组合与优化
-              </div>
-            </div>
-          </div>
-        </a-card>
-        <a-card
-          size="small"
-          class="quick-action-card"
-          hoverable
-          @click="$router.push('/strategy-templates')"
-        >
-          <div class="quick-action-content">
-            <span class="quick-action-icon">📋</span>
-            <div class="quick-action-info">
-              <div class="quick-action-title">
-                策略模板
-              </div>
-              <div class="quick-action-desc">
-                策略模板与管理
-              </div>
-            </div>
-          </div>
-        </a-card>
-        <a-card
-          size="small"
-          class="quick-action-card"
-          hoverable
-          @click="$router.push('/reports-center')"
-        >
-          <div class="quick-action-content">
-            <span class="quick-action-icon">📑</span>
-            <div class="quick-action-info">
-              <div class="quick-action-title">
-                报告中心
-              </div>
-              <div class="quick-action-desc">
-                策略报告与导出
-              </div>
-            </div>
-          </div>
-        </a-card>
-      </div>
-    </div>
 
     <!-- 策略信号展示区域 -->
     <div
@@ -169,13 +38,16 @@
           :key="signal.id"
           :signal-data="signal"
           @show-detail="handleSignalDetail"
+          @view-detail="handleViewFullReport"
+          @backtest="handleSignalBacktest"
         />
       </div>
     </div>
 
     <div class="dashboard-content">
       <!-- 概览统计卡片 -->
-      <div class="stats-grid">
+      <a-skeleton v-show="loadingAreas.stats" active :paragraph="{ rows: 3 }" class="section-skeleton" />
+      <div v-show="!loadingAreas.stats" class="stats-grid">
         <div class="stat-card">
           <div class="stat-icon up">
             📈
@@ -248,9 +120,11 @@
       <!-- 主要内容区 -->
       <div class="main-grid">
         <!-- 涨跌幅排行 -->
+
+        <!-- 涨跌幅排行 -->
         <div class="panel rank-panel">
           <div class="panel-header">
-            <span class="panel-title">📊 涨跌幅排行</span>
+            <span class="panel-title">涨跌幅排行</span>
             <a-radio-group
               v-model="rankType"
               size="small"
@@ -291,7 +165,7 @@
         <!-- 市场概况 -->
         <div class="panel market-panel">
           <div class="panel-header">
-            <span class="panel-title">🌐 市场概况</span>
+            <span class="panel-title">市场概况</span>
           </div>
           <div class="panel-content">
             <div class="market-grid">
@@ -323,7 +197,7 @@
         <!-- 策略流程 -->
         <div class="panel flow-panel">
           <div class="panel-header">
-            <span class="panel-title">🔄 策略流程</span>
+            <span class="panel-title">策略流程</span>
           </div>
           <div class="panel-content">
             <div class="flow-chart">
@@ -343,7 +217,7 @@
         <!-- 最近活动 -->
         <div class="panel activity-panel">
           <div class="panel-header">
-            <span class="panel-title">📋 最近活动</span>
+            <span class="panel-title">最近活动</span>
           </div>
           <div class="panel-content">
             <div class="activity-list">
@@ -377,6 +251,17 @@
             📈 K线图表
           </h3>
           <div class="chart-controls">
+            <a-select
+              v-model:value="stockSearch"
+              :show-search="true"
+              :filter-option="false"
+              placeholder="搜索并切换股票..."
+              style="width: 180px; margin-right: 8px;"
+              :options="stockSearchResults"
+              @search="onStockSearch"
+              @change="onStockSelect"
+              allow-clear
+            />
             <a-radio-group
               v-model:value="chartLayout"
               size="small"
@@ -472,10 +357,9 @@
       :ts-code="signalDetailData.ts_code"
       :stock-name="signalDetailData.stock_name"
       :signals="signalDetailData.signals"
-      @close="signalDetailVisible = false"
+      @update:visible="signalDetailVisible = $event"
     />
   </div>
-          <DisclaimerFooter />
 </template>
 
 <script>
@@ -489,7 +373,6 @@ import KLineChart from '@/components/KLineChart'
 import AiSignalBus from '@/components/AiSignalBus'
 import ResonancePanel from '@/components/ResonancePanel'
 import dataService from '@/services/dataService'
-import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
   name: 'Dashboard',
@@ -499,7 +382,7 @@ export default {
     SignalDetailModal,
     KLineChart,
     AiSignalBus,
-    ResonancePanel, DisclaimerFooter},
+    ResonancePanel},
   data() {
     return {
       loading: true,
@@ -529,6 +412,8 @@ export default {
       chartCells: [
         { symbol: '000001.SZ', period: 'D', indicators: ['ma5', 'ma20', 'macd', 'rsi', 'vol'], chartType: 'candle' },
       ],
+      stockSearch: undefined,
+      stockSearchResults: [],
       chartHeight: 480,
 
       // AI 信号 (150§5.1)
@@ -587,7 +472,31 @@ export default {
         }
 
         if (signalData) {
-          this.latestSignals = (signalData.signals || []).slice(0, 6)
+          // 转换后端信号格式 -> StrategySignalPanel 期望的格式
+          const rawSignals = signalData.signals || []
+          this.latestSignals = rawSignals.slice(0, 6).map(s => {
+            const sigType = (s.signal_type || '').toLowerCase()
+            const indicators = s.indicators || {}
+            // 使用 stock_name 展示个股名称，策略名称回退到 strategy_type 或 indicators
+            const stockLabel = s.stock_name || s.ts_code || ''
+            const strategyLabel = indicators.strategy_name || s.strategy_type || '策略信号'
+            return {
+              id: s.id,
+              ts_code: s.ts_code || '',
+              stock_name: stockLabel,
+              strategy_name: `${stockLabel} · ${strategyLabel}`,
+              signal: sigType === 'bullish' ? 'bullish' : sigType === 'watch' ? 'watch' : sigType === 'bearish' ? 'bearish' : 'neutral',
+              signal_date: s.signal_date || '',
+              confidence: s.confidence || 0,
+              entry_zone: s.entry_price ? [s.entry_price] : null,
+              risk_line: s.stop_loss || null,
+              target_zone: s.take_profit ? [s.take_profit] : null,
+              position_suggestion: indicators.position_suggestion || '',
+              holding_period: indicators.holding_period || '',
+              evidence: s.reason ? [s.reason] : [],
+              risk_notes: [],
+            }
+          })
           this.stats.activeSignals = signalData.active_count || 0
           this.stats.buySignals = signalData.buy_count || 0
           this.stats.sellSignals = signalData.sell_count || 0
@@ -607,27 +516,18 @@ export default {
           }
         }
 
-        // 兜底假数据
-        if (this.rankList.length === 0) {
-          this.rankList = this._mockRankData()
-        }
-        if (this.marketIndexes.length === 0) {
-          this.marketIndexes = this._mockMarketData()
-        }
-        if (this.latestSignals.length === 0) {
-          this.latestSignals = this._mockSignals()
-        }
-        if (this.recentActivities.length === 0) {
-          this.recentActivities = this._mockActivities()
-        }
+        // 数据暂不可用时显示空状态
       } catch (e) {
-        console.warn('Dashboard 数据加载失败, 使用假数据:', e)
-        this.rankList = this._mockRankData()
-        this.marketIndexes = this._mockMarketData()
-        this.latestSignals = this._mockSignals()
-        this.recentActivities = this._mockActivities()
+        console.warn('Dashboard 数据加载失败', e)
       } finally {
         this.loading = false
+        this.loadingAreas = {
+          stats: false,
+          rank: false,
+          market: false,
+          signals: false,
+          activities: false
+        }
       }
     },
 
@@ -655,7 +555,12 @@ export default {
       this.chartCells.forEach(c => { c.period = this.chartPeriod })
     },
 
-    onDateRangeChange() {},
+    onDateRangeChange(dates) {
+      if (dates && dates.length === 2) {
+        this.$message?.info(`日期范围已更新: ${dates[0].format('YYYY-MM-DD')} ~ ${dates[1].format('YYYY-MM-DD')}`);
+        this.refreshData();
+      }
+    },
 
     // ... helper methods from original
     formatPrice(value) {
@@ -687,50 +592,51 @@ export default {
       }
       this.signalDetailVisible = true
     },
+
+    handleViewFullReport(data) {
+      // 跳转到个股策略分析页查看完整 K 线和信号
+      this.$router.push('/indicator-ide')
+    },
+
+    handleSignalBacktest(data) {
+      // 跳转到回测系统
+      this.$router.push('/backtest')
+    },
+    async onStockSearch(value) {
+      if (!value || value.length < 1) { this.stockSearchResults = []; return }
+      try {
+        const { searchStocks } = await import('@/services/chartService')
+        const results = await searchStocks(value, 10)
+        this.stockSearchResults = results.map(r => ({
+          value: r.ts_code,
+          label: `${r.ts_code} ${r.name}`,
+        }))
+      } catch { this.stockSearchResults = [] }
+    },
+
+    onStockSelect(value) {
+      if (value) {
+        this.chartCells[this.activeChartIndex] = {
+          ...this.chartCells[this.activeChartIndex],
+          symbol: value,
+        }
+        this.stockSearch = undefined
+        this.stockSearchResults = []
+      }
+    },
+
     getActivityLabel(type) {
       const labels = { buy: '关注信号', sell: '风险退出信号', signal: '信号', alert: '预警' }
       return labels[type] || type
     },
 
-    _mockRankData() {
-      const stocks = [
-        { name: '平安银行', symbol: '000001.SZ', price: 12.34, changePercent: 3.21 },
-        { name: '万科A', symbol: '000002.SZ', price: 15.67, changePercent: 2.56 },
-        { name: '浦发银行', symbol: '600000.SH', price: 8.90, changePercent: -1.23 },
-        { name: '贵州茅台', symbol: '600519.SH', price: 1850.00, changePercent: 1.89 },
-        { name: '五粮液', symbol: '000858.SZ', price: 145.20, changePercent: -0.67 },
-      ]
-      return stocks
-    },
-    _mockMarketData() {
-      return [
-        { symbol: '000001.SH', name: '上证指数', value: 3150.42, changePercent: 0.56, change: 17.52 },
-        { symbol: '399001.SZ', name: '深证成指', value: 10200.67, changePercent: 0.89, change: 90.23 },
-        { symbol: '399006.SZ', name: '创业板指', value: 2180.56, changePercent: -0.34, change: -7.45 },
-        { symbol: '000688.SH', name: '科创50', value: 950.23, changePercent: 0.12, change: 1.14 },
-      ]
-    },
-    _mockSignals() {
-      return [
-        { id: 1, ts_code: '000001.SZ', stock_name: '平安银行', type: 'buy', signal_strength: 'strong', signal_type: 'volbreak', strategy_name: '量价突破', signal_detail: '放量突破20日均线', signal_time: '2026-06-05 10:30', confidence: 85 },
-        { id: 2, ts_code: '600519.SH', stock_name: '贵州茅台', type: 'sell', signal_strength: 'moderate', signal_type: 'macd_dead', strategy_name: 'MACD死叉', signal_detail: '日线MACD死叉', signal_time: '2026-06-05 09:45', confidence: 72 },
-        { id: 3, ts_code: '000002.SZ', stock_name: '万科A', type: 'buy', signal_strength: 'weak', signal_type: 'support', strategy_name: '支撑反弹', signal_detail: '触及前期支撑位', signal_time: '2026-06-05 11:00', confidence: 60 },
-      ]
-    },
-    _mockActivities() {
-      return [
-        { time: '10:30', type: 'buy', desc: '平安银行 — 放量突破关注信号' },
-        { time: '09:45', type: 'sell', desc: '贵州茅台 — MACD死叉风险退出信号' },
-        { time: '09:32', type: 'signal', desc: '万科A — 支撑位反弹信号' },
-        { time: '09:15', type: 'alert', desc: '数据源已切换至备用通道' },
-      ]
-    },
   },
 }
 </script>
 
 <style scoped>
 .dashboard-page {
+  width: 100%;
   padding: 16px 24px;
   min-height: 100vh;
   background: var(--bg-canvas);
@@ -751,69 +657,9 @@ export default {
   font-size: 24px;
   font-weight: 600;
   color: var(--text-primary);
+  max-width: 100%;
 }
 
-.quick-actions-bar {
-  margin-bottom: 24px;
-}
-
-.quick-actions {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 12px;
-}
-
-.quick-action-card {
-  background: var(--bg-surface) !important;
-  border: 1px solid var(--border-default) !important;
-  border-radius: var(--radius-md) !important;
-  cursor: pointer;
-  transition: all 0.3s;
-}
-
-.quick-action-card:hover {
-  transform: translateY(-2px);
-  border-color: var(--color-brand-500) !important;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-}
-
-.quick-action-content {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px;
-}
-
-.quick-action-icon {
-  font-size: 28px;
-  width: 48px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-subtle);
-  border-radius: var(--radius-md);
-}
-
-.quick-action-info {
-  flex: 1;
-}
-
-.quick-action-title {
-  color: var(--text-primary);
-  font-weight: 600;
-  font-size: 14px;
-  margin-bottom: 2px;
-}
-
-.quick-action-desc {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-@media (max-width: 1400px) { .quick-actions { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 1000px) { .quick-actions { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 600px) { .quick-actions { grid-template-columns: 1fr; } }
 
 .dashboard-content {
   display: flex;
@@ -1031,4 +877,22 @@ export default {
 .up { color: var(--color-up); }
 .down { color: var(--color-down); }
 .neutral { color: var(--text-muted); }
+
+/* Ant Design DatePicker dark theme fixes via :deep() */
+:deep(.ant-picker) {
+  background: transparent !important;
+  border-color: var(--border-default) !important;
+}
+:deep(.ant-picker-input > input) {
+  color: var(--text-primary) !important;
+}
+:deep(.ant-picker-suffix) {
+  color: var(--text-secondary) !important;
+}
+:deep(.ant-picker-clear) {
+  background: var(--bg-surface) !important;
+  color: var(--text-muted) !important;
+}
+
+.section-skeleton { padding: 16px; margin-bottom: 16px; }
 </style>

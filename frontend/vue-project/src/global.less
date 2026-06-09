@@ -89,9 +89,8 @@
   --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.4);
 
   /* --- 1k. 排版 --- */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont,
-               'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  --font-sans: 'Inter', 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'PingFang SC', monospace;
 
   /* --- 1l. 尺寸 --- */
   --btn-height: 40px;
@@ -347,6 +346,55 @@ a:hover {
 .ant-select-item-option-selected {
   background: var(--bg-active) !important;
   color: var(--color-brand-500) !important;
+}
+
+
+
+/* 日期选择器下拉 */
+.ant-picker-dropdown {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-md) !important;
+}
+.ant-picker-header-view {
+  color: var(--text-primary) !important;
+}
+.ant-picker-header button {
+  color: var(--text-muted) !important;
+}
+.ant-picker-cell-inner {
+  color: var(--text-secondary) !important;
+}
+.ant-picker-cell:hover .ant-picker-cell-inner {
+  background: var(--bg-subtle) !important;
+}
+.ant-picker-cell-selected .ant-picker-cell-inner {
+  background: var(--color-brand-500) !important;
+  color: #fff !important;
+}
+.ant-picker-today-btn {
+  color: var(--color-brand-500) !important;
+}
+.ant-picker-footer {
+  border-top-color: var(--border-default) !important;
+}
+.ant-picker-time-panel-column > li.ant-picker-time-panel-cell-selected {
+  background: var(--bg-active) !important;
+}
+.ant-picker-now-btn {
+  color: var(--color-brand-500) !important;
+}
+.ant-picker-content th {
+  color: var(--text-muted) !important;
+}
+.ant-picker-cell-disabled .ant-picker-cell-inner {
+  color: var(--text-disabled) !important;
+}
+.ant-picker-input > input::placeholder {
+  color: #64748b !important;
+}
+.ant-picker-separator {
+  color: var(--text-muted) !important;
 }
 
 /* Tabs */
