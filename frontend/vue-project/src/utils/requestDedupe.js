@@ -4,7 +4,7 @@
  * 对照 151-观潮对标-系统能力提升与稳定性优化方案.md §5.3
  * 解决 K 线缩放时重复请求的问题
  */
-import axios from 'axios'
+import request from './request'
 
 // 全局去重表：url|params → Promise
 const pendingRequests = new Map()
@@ -47,7 +47,7 @@ export async function dedupedRequest(url, params = {}, options = {}) {
     return pendingRequests.get(key)
   }
 
-  const promise = axios.get(url, { params, timeout }).then((r) => {
+  const promise = request.get(url, { params, timeout }).then((r) => {
     const data = r.data
     if (cache) {
       responseCache.set(key, { data, ts: Date.now() })

@@ -58,6 +58,7 @@
       </div>
     </div>
   </div>
+          <DisclaimerFooter />
 </template>
 
 <script>
@@ -66,10 +67,11 @@ import PipelineFlow from '@/components/StockScreener/PipelineFlow'
 import ScreeningResults from '@/components/StockScreener/ScreeningResults'
 import SignalFusionConfig from '@/components/StockScreener/SignalFusionConfig'
 import screenerService from '@/services/screenerService'
+import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
   name: 'StockScreener',
-  components: { PipelineFlow, ScreeningResults, SignalFusionConfig },
+  components: { PipelineFlow, ScreeningResults, SignalFusionConfig, DisclaimerFooter},
   data() {
     return {
       screenerRunning: false,

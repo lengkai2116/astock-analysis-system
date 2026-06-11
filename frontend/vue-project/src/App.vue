@@ -167,6 +167,7 @@ export default {
 
 .main-content {
   flex: 1;
+  width: 100%;
   margin-left: var(--sidebar-width);
   min-height: 100vh;
   transition: margin-left 0.3s;

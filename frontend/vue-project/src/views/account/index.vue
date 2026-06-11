@@ -35,7 +35,7 @@
           {{ summary.total_trades }}
         </div>
         <div class="card-sub">
-          买入 {{ summary.buy_count }} / 卖出 {{ summary.sell_count }}
+          关注 {{ summary.buy_count }} / 风险退出 {{ summary.sell_count }}
         </div>
       </div>
       <div class="summary-card">
@@ -87,6 +87,7 @@
       </a-tabs>
     </a-card>
   </div>
+          <DisclaimerFooter />
 </template>
 
 <script>
@@ -96,10 +97,11 @@ import TradeTab from './components/TradeTab.vue'
 import PositionTab from './components/PositionTab.vue'
 import EquityTab from './components/EquityTab.vue'
 import ReviewTab from './components/ReviewTab.vue'
+import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
   name: 'AccountManage',
-  components: { TradeTab, PositionTab, EquityTab, ReviewTab },
+  components: { TradeTab, PositionTab, EquityTab, ReviewTab, DisclaimerFooter},
   setup() {
     const activeTab = ref('trades')
     const summary = reactive({

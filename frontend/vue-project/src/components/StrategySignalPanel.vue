@@ -206,8 +206,8 @@ export default {
 
     signalText() {
       const signalMap = {
-        bullish: '买入信号',
-        bearish: '卖出信号',
+        bullish: '关注信号',
+        bearish: '风险退出信号',
         neutral: '中性',
         watch: '观望'
       }

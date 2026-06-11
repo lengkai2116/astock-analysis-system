@@ -1,21 +1,30 @@
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# Final stage
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# 安装系统依赖
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# Install runtime system deps only
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
 
-# 安装 Python 依赖
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy pre-installed packages from builder
+COPY --from=builder /install /usr/local
 
-# 复制应用代码
-COPY . .
+# Copy minimal app code (exclude dev/test artifacts)
+COPY app/ /app/app/
+COPY run.py config.py /app/
+COPY sql/ /app/sql/
+COPY migrations/ /app/migrations/
 
-# 清理开发/测试产物
+# Clean up dev artifacts
 RUN find /app -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true; \
-    find /app -type f -name "*.pyc" -delete; \
-    rm -rf /app/tests/ /app/templates/ /app/sql/ /app/instance/ /app/logs/
+    find /app -type f -name "*.pyc" -delete
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:5001/api/v3/health || exit 1

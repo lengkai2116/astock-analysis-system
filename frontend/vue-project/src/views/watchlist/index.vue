@@ -2,12 +2,12 @@
   <div class="watchlist-page">
     <div class="page-header">
       <h1 class="page-title">
-        📊 自选监控
+        自选监控
       </h1>
       <div class="header-actions">
         <a-dropdown>
           <a-button>
-            📈 策略中心 <DownOutlined />
+            策略中心 <DownOutlined />
           </a-button>
           <template #overlay>
             <a-menu>
@@ -45,13 +45,13 @@
           style="margin-left: 12px"
           @click="showColumnConfig = true"
         >
-          ⚙️ 配置列
+          配置列
         </a-button>
         <a-button
           style="margin-left: 8px"
           @click="refreshData"
         >
-          🔄 刷新
+          刷新
         </a-button>
       </div>
     </div>
@@ -299,16 +299,18 @@
       </div>
     </a-modal>
   </div>
+          <DisclaimerFooter />
 </template>
 
 <script>
 import { DownOutlined } from '@ant-design/icons-vue'
+import { SettingOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import socketService from '@/services/socketService'
+import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
   name: 'WatchlistPage',
-  components: { DownOutlined },
-  data() {
+  components: { DownOutlined, DisclaimerFooter, SettingOutlined, ReloadOutlined },  data() {
     return {
       searchQuery: '',
       loading: false,

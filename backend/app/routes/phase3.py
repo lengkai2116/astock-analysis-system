@@ -836,3 +836,105 @@ def load_drawings():
         })
 
     return jsonify({'code': 1, 'data': result})
+
+
+# ====================
+# 仪表盘专用接口
+# ====================
+@handle_exceptions
+@phase3_bp.route('/watchlist/dashboard', methods=['GET'])
+def get_watchlist_dashboard():
+    """仪表盘 - 自选股概览数据"""
+    watchlist_items = Watchlist.query.order_by(Watchlist.created_at.desc()).all()
+
+    stocks = []
+    up_count = 0
+    down_count = 0
+    total_change = 0.0
+    valid_count = 0
+
+    for item in watchlist_items:
+        latest = DailyData.query.filter_by(
+            ts_code=item.ts_code
+        ).order_by(DailyData.trade_date.desc()).first()
+
+        if latest:
+            pct = float(latest.pct_chg) if latest.pct_chg else 0
+            if pct > 0:
+                up_count += 1
+            elif pct < 0:
+                down_count += 1
+            total_change += pct
+            valid_count += 1
+
+            stock_entry = {
+                'name': item.ts_code,
+                'symbol': item.ts_code,
+                'price': float(latest.close) if latest.close else 0,
+                'changePercent': round(pct, 2),
+                'pct_chg': round(pct, 2),
+            }
+
+            stock_info = Stock.query.filter_by(ts_code=item.ts_code).first()
+            if stock_info:
+                stock_entry['name'] = stock_info.name
+            stocks.append(stock_entry)
+        else:
+            stocks.append({
+                'name': item.ts_code,
+                'symbol': item.ts_code,
+                'price': 0,
+                'changePercent': 0,
+                'pct_chg': 0,
+            })
+
+    avg_change = round(total_change / valid_count, 2) if valid_count > 0 else 0
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'stocks': stocks[:10],
+            'stocks_count': len(stocks),
+            'up_count': up_count,
+            'down_count': down_count,
+            'avg_change': avg_change,
+            'total_amount': 0,
+        }
+    })
+
+
+@handle_exceptions
+@phase3_bp.route('/signals/summary', methods=['GET'])
+def get_signals_summary():
+    """仪表盘 - 策略信号摘要"""
+    from datetime import datetime, timedelta
+
+    seven_days_ago = datetime.now() - timedelta(days=7)
+    recent_signals = Signal.query.filter(
+        Signal.created_at >= seven_days_ago
+    ).order_by(Signal.created_at.desc()).limit(20).all()
+
+    buy_count = Signal.query.filter(
+        Signal.signal_type.in_(['buy', '买入']),
+        Signal.created_at >= seven_days_ago
+    ).count()
+    sell_count = Signal.query.filter(
+        Signal.signal_type.in_(['sell', '卖出']),
+        Signal.created_at >= seven_days_ago
+    ).count()
+
+    signals = []
+    for s in recent_signals:
+        sig = s.to_dict()
+        sig['stock_name'] = s.ts_code
+        signals.append(sig)
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'signals': signals,
+            'active_count': len(recent_signals),
+            'buy_count': buy_count,
+            'sell_count': sell_count,
+        }
+    })

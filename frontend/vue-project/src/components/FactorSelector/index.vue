@@ -141,19 +141,6 @@ export default {
       selectedFactors: [],
       factorWeights: {},
       loading: false,
-      mockFactors: [
-        { id: 'qlib_alpha1', name: 'Alpha#001', category: 'Qlib', description: '换手率因子，基于过去N天的成交量变化', version: '1.0', author: 'Qlib' },
-        { id: 'qlib_alpha2', name: 'Alpha#002', category: 'Qlib', description: '价格动量因子，结合成交量过滤', version: '1.0', author: 'Qlib' },
-        { id: 'qlib_alpha3', name: 'Alpha#003', category: 'Qlib', description: '波动率因子，基于股价标准差', version: '1.0', author: 'Qlib' },
-        { id: 'gtja_1', name: 'GTJA#001', category: '国泰君安', description: '动量反转因子', version: '1.0', author: 'GTJA' },
-        { id: 'gtja_2', name: 'GTJA#002', category: '国泰君安', description: '量价配合因子', version: '1.0', author: 'GTJA' },
-        { id: 'academic_beta', name: 'Beta', category: '学术', description: '市场风险暴露因子', version: '1.0', author: 'Academic' },
-        { id: 'momentum_roc', name: 'ROC', category: '动量', description: '变动率指标', version: '1.0', author: 'Technical' },
-        { id: 'volatility_atr', name: 'ATR', category: '波动率', description: '真实波幅均值', version: '1.0', author: 'Technical' },
-        { id: 'volume_obv', name: 'OBV', category: '成交量', description: '能量潮指标', version: '1.0', author: 'Technical' },
-        { id: 'astock_1', name: 'A股动量', category: 'A股核心', description: 'A股市场特有的动量因子', version: '1.0', author: 'System' },
-        { id: 'astock_2', name: 'A股反转', category: 'A股核心', description: 'A股市场特有的反转因子', version: '1.0', author: 'System' }
-      ]
     }
   },
   computed: {
@@ -164,7 +151,7 @@ export default {
       if (this.factors.all && this.factors.all.length > 0) {
         return this.factors.all
       }
-      return this.mockFactors
+      return this.factors.all || []
     },
     
     filteredFactors() {

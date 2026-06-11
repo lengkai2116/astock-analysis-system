@@ -3,7 +3,7 @@ import { message } from 'ant-design-vue'
 
 const service = axios.create({
   baseURL: (window.__API_BASE__ || import.meta.env.VITE_API_BASE_URL || ''),
-  timeout: 60000
+  timeout: 30000
 })
 
 service.interceptors.request.use(
@@ -54,6 +54,14 @@ service.interceptors.response.use(
         message.error('令牌无效，请重新登录')
         localStorage.removeItem('token')
         window.location.hash = '#/login'
+      } else if (status >= 500 && status < 600) {
+        // 500 系列错误：幂等请求自动重试一次
+        if (error.config && ['get', 'head', 'options'].includes(error.config.method) && !error.config._retry) {
+          error.config._retry = true
+          return new Promise(resolve => setTimeout(resolve, 1000))
+            .then(() => service(error.config))
+        }
+        message.error('服务暂时不可用，请稍后重试')
       } else {
         message.error(data.error || data.msg || data.message || `请求失败(${status})`)
       }

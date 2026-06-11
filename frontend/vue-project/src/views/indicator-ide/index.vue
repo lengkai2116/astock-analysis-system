@@ -420,7 +420,7 @@
                       :color="sig.type === 'buy' ? 'red' : 'green'"
                       size="small"
                     >
-                      {{ sig.type === 'buy' ? '买入' : '卖出' }}
+                      {{ sig.type === 'buy' ? '关注信号' : '风险退出信号' }}
                     </a-tag>
                     <span
                       v-if="sig.price"
@@ -517,6 +517,7 @@
       </div>
     </div>
   </div>
+          <DisclaimerFooter />
 </template>
 
 <script>
@@ -527,10 +528,11 @@ import ResonancePanel from '@/components/ResonancePanel'
 import AiSignalBus from '@/components/AiSignalBus'
 import chartService from '@/services/chartService'
 import axios from '@/utils/request'
+import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
   name: 'IndicatorIde',
-  components: { KLineChart, CodeEditor },
+  components: { KLineChart, CodeEditor, DisclaimerFooter},
   data() {
     return {
       showEditor: false,
@@ -540,18 +542,8 @@ export default {
       searching: false,
       stockInfo: null,
 
-      overlayIndicators: [
-        { id: 'ma5', name: 'MA5' },
-        { id: 'ma10', name: 'MA10' },
-        { id: 'ma20', name: 'MA20' },
-        { id: 'boll', name: 'BOLL' }
-      ],
-      subIndicators: [
-        { id: 'vol', name: '成交量' },
-        { id: 'macd', name: 'MACD' },
-        { id: 'rsi', name: 'RSI' },
-        { id: 'kdj', name: 'KDJ' }
-      ],
+      overlayIndicators: [],
+      subIndicators: [],
 
       activeOverlays: ['ma5', 'ma20'],
       activeSubcharts: ['vol', 'macd', 'rsi'],
@@ -603,10 +595,10 @@ export default {
       if (all.length === 0) return {}
 
       const bullish = all.filter(s =>
-        ['BULLISH', 'BUY', '买入'].includes(s.signal || s.signal_label || '')
+        ['BULLISH', 'BUY', '买入', '关注信号'].includes(s.signal || s.signal_label || '')
       ).length
       const bearish = all.filter(s =>
-        ['BEARISH', 'SELL', '卖出'].includes(s.signal || s.signal_label || '')
+        ['BEARISH', 'SELL', '卖出', '风险退出信号'].includes(s.signal || s.signal_label || '')
       ).length
 
       const confidences = all.map(s => s.confidence || 0).filter(c => c > 0)
@@ -651,9 +643,24 @@ export default {
     this.loadWatchlistFromStorage()
     this.loadStockInfo()
     this.loadSignals()
+    this.loadIndicators()
   },
 
   methods: {
+    async loadIndicators() {
+      try {
+        const res = await chartService.fetchIndicatorList()
+        if (res && res.overlays) {
+          this.overlayIndicators = res.overlays.map(ind => ({ id: ind.id, name: ind.name }))
+        }
+        if (res && res.subcharts) {
+          this.subIndicators = res.subcharts.map(ind => ({ id: ind.id, name: ind.name }))
+        }
+      } catch (e) {
+        console.warn('加载指标列表失败', e)
+      }
+    },
+
     renderStars(confidence) {
       const score = confidence * 100
       if (score >= 85) return '⭐⭐⭐⭐⭐'
@@ -665,8 +672,8 @@ export default {
 
     getSignalColor(sig) {
       const s = (sig.signal || sig.signal_label || '').toUpperCase()
-      if (s === 'BUY' || s === 'BULLISH' || s.indexOf('买入') >= 0 || s.indexOf('多') >= 0) return 'red'
-      if (s === 'SELL' || s === 'BEARISH' || s.indexOf('卖出') >= 0 || s.indexOf('空') >= 0) return 'green'
+      if (s === 'BUY' || s === 'BULLISH' || s.indexOf('买入') >= 0 || s.indexOf('关注信号') >= 0 || s.indexOf('多') >= 0) return 'red'
+      if (s === 'SELL' || s === 'BEARISH' || s.indexOf('卖出') >= 0 || s.indexOf('风险退出信号') >= 0 || s.indexOf('空') >= 0) return 'green'
       if (s === 'WATCH' || s.indexOf('观察') >= 0) return 'orange'
       return 'default'
     },
