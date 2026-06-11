@@ -71,7 +71,7 @@ def create_app():
         if not _AUTH_TOKEN:
             return
         path = request.path
-        whitelist = ['/api/v1/health', '/api/v3/health', '/api/auth/login']
+        whitelist = ['/api/v1/health', '/api/v3/health', '/api/auth/login', '/api/auth/status']
         if any(path.startswith(w) for w in whitelist):
             return
         auth = request.headers.get('Authorization', '')
@@ -92,6 +92,41 @@ def create_app():
     def internal_error(error):
         """500 统一 JSON 响应"""
         return {"success": False, "error": "服务器内部错误", "error_type": "InternalError"}, 500
+
+    @app.errorhandler(400)
+    def bad_request(error):
+        """400 统一 JSON 响应"""
+        return {"success": False, "error": "请求参数错误", "error_type": "BadRequest"}, 400
+
+    @app.errorhandler(401)
+    def unauthorized(error):
+        """401 统一 JSON 响应"""
+        return {"success": False, "error": "未授权，请提供有效的认证令牌", "error_type": "Unauthorized"}, 401
+
+    @app.errorhandler(403)
+    def forbidden(error):
+        """403 统一 JSON 响应"""
+        return {"success": False, "error": "权限不足", "error_type": "Forbidden"}, 403
+
+    @app.errorhandler(405)
+    def method_not_allowed(error):
+        """405 统一 JSON 响应"""
+        return {"success": False, "error": "请求方法不允许", "error_type": "MethodNotAllowed"}, 405
+
+    @app.errorhandler(429)
+    def rate_limit_exceeded(error):
+        """429 统一 JSON 响应"""
+        return {"success": False, "error": "请求过于频繁，请稍后再试", "error_type": "RateLimited"}, 429
+
+    @app.errorhandler(502)
+    def bad_gateway(error):
+        """502 统一 JSON 响应"""
+        return {"success": False, "error": "上游服务异常", "error_type": "BadGateway"}, 502
+
+    @app.errorhandler(503)
+    def service_unavailable(error):
+        """503 统一 JSON 响应"""
+        return {"success": False, "error": "服务暂时不可用", "error_type": "ServiceUnavailable"}, 503
 
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -185,7 +220,6 @@ def create_app():
 
 
 
-    from app import models
     return app
 
 def _route_provider(endpoint, params, provider):

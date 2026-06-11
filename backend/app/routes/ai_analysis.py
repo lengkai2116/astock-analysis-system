@@ -16,6 +16,8 @@ from app.services.deepseek_analysis_service import (
     get_final_report,
     get_health,
     ANALYST_ROLES,
+    _lock,
+    _analysis_store,
     explain_signal,
 )
 
@@ -130,3 +132,67 @@ def signal_explain():
                 'composite_advice': ''
             }
         }), 500
+
+
+@handle_exceptions
+@ai_analysis_bp.route('/api/v3/ai-analysis/signals', methods=['GET'])
+def get_ai_analysis_signals():
+    """仪表盘 - AI 分析信号摘要 + 共振评分"""
+
+    signals = []
+    resonance_scores = []
+
+    # 从内存分析存储中提取最近的信号
+    with _lock:
+        for analysis_id, state in list(_analysis_store.items()):
+            if state.get('status') == 'completed':
+                ts_code = state.get('ts_code', '')
+                stock_name = state.get('stock_name', '')
+                progress = state.get('progress', {})
+                analysts_data = progress.get('analysts', {})
+
+                # 计算平均看多/看空评分
+                total_bullish = 0
+                total_bearish = 0
+                analyst_count = 0
+                for role_id, role_data in analysts_data.items():
+                    bs = role_data.get('bullishScore', 0)
+                    bears = role_data.get('bearishScore', 0)
+                    if bs or bears:
+                        total_bullish += bs
+                        total_bearish += bears
+                        analyst_count += 1
+
+                overall = round((total_bullish / analyst_count) if analyst_count > 0 else 50, 1)
+                signals.append({
+                    'ts_code': ts_code,
+                    'stock_name': stock_name,
+                    'type': 'bullish' if overall > 50 else 'bearish',
+                    'overall_score': overall,
+                    'analysis_id': analysis_id,
+                })
+
+                resonance_scores.append({
+                    'id': analysis_id[:8],
+                    'name': stock_name or ts_code,
+                    'score': overall,
+                    'weight': 1.0,
+                })
+
+    # 没有信号时返回空数据
+    overall_score = 0
+    dims = []
+    if resonance_scores:
+        overall_score = round(sum(s['score'] for s in resonance_scores) / len(resonance_scores), 1)
+        dims = resonance_scores[:5]
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'signals': signals[:10],
+            'resonance': {
+                'overall_score': overall_score,
+                'dimensions': dims,
+            }
+        }
+    })

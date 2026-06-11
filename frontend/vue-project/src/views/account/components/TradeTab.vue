@@ -13,23 +13,23 @@
       />
       <a-select
         v-model:value="dirFilter"
-        style="width:100px"
-        placeholder="方向"
+        style="width:130px"
+        placeholder="信号类型"
         allow-clear
         @change="loadTrades"
       >
         <a-select-option value="买入">
-          买入
+          关注信号
         </a-select-option>
         <a-select-option value="卖出">
-          卖出
+          风险退出信号
         </a-select-option>
       </a-select>
       <a-button
         type="primary"
         @click="showAddModal = true"
       >
-        + 新建交易
+        + 新建记录
       </a-button>
       <a-button @click="showImportModal = true">
         批量导入
@@ -48,8 +48,8 @@
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'direction'">
-          <a-tag :color="record.direction === '买入' ? 'green' : 'red'">
-            {{ record.direction }}
+          <a-tag :color="record.direction === '买入' ? '#EF4444' : '#22C55E'">
+            {{ record.direction === '买入' ? '关注信号' : '风险退出信号' }}
           </a-tag>
         </template>
         <template v-if="column.key === 'signal_match'">
@@ -76,10 +76,10 @@
       </template>
     </a-table>
 
-    <!-- 新建交易弹窗 -->
+    <!-- 新建记录弹窗 -->
     <a-modal
       v-model:visible="showAddModal"
-      title="新建交易"
+      title="新建记录"
       :footer="null"
       width="500"
       @ok="handleCreate"
@@ -98,15 +98,15 @@
           <a-input v-model:value="form.stock_name" />
         </a-form-item>
         <a-form-item
-          label="方向"
+          label="信号类型"
           required
         >
           <a-radio-group v-model:value="form.direction">
             <a-radio value="买入">
-              买入
+              关注信号
             </a-radio>
             <a-radio value="卖出">
-              卖出
+              风险退出信号
             </a-radio>
           </a-radio-group>
         </a-form-item>
@@ -161,7 +161,6 @@
 <script>
 import { ref, reactive, onMounted } from 'vue'
 import { getTrades, createTrade, deleteTrade, matchTrades } from '@/services/accountService'
-// dayjs替代: 使用原生Date格式化
 function fmtDate(d) { if (!d) return ''; const dt = d instanceof Date ? d : new Date(d); return dt.toISOString().slice(0, 10); }
 
 export default {
@@ -178,7 +177,7 @@ export default {
     const columns = [
       { title: '日期', dataIndex: 'trade_date', key: 'date', width: 100 },
       { title: '股票', key: 'stock', width: 140, render: (_, r) => `${r.stock_name || ''} ${r.ts_code}` },
-      { title: '方向', key: 'direction', width: 60 },
+      { title: '信号类型', key: 'direction', width: 80 },
       { title: '价格', dataIndex: 'price', key: 'price', width: 80 },
       { title: '数量', dataIndex: 'quantity', key: 'qty', width: 60 },
       { title: '金额', dataIndex: 'amount', key: 'amount', width: 100 },

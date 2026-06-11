@@ -1,0 +1,6 @@
+# A股分析系统 — 定时备份 cron 配置
+# 添加到 crontab: crontab scripts/crontab.txt
+# 每日凌晨 3:00 备份
+0 3 * * * cd /path/to/project && ./scripts/backup.sh >> backups/cron.log 2>&1
+# 每周日凌晨 4:00 周备份
+0 4 * * 0 cd /path/to/project && ./scripts/backup.sh backups/weekly >> backups/cron.log 2>&1

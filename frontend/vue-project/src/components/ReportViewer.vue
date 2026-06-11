@@ -371,7 +371,7 @@
                 <template #bodyCell="{ column, text, record, index }">
                   <template v-if="column.dataIndex === 'type' || column.key === 'type'">
                     <a-tag :color="text === 'buy' ? 'red' : 'green'">
-                      {{ text === 'buy' ? '买入' : '卖出' }}
+                      {{ text === 'buy' ? '关注信号' : '风险退出信号' }}
                     </a-tag>
                   </template>
                   <template v-else-if="column.dataIndex === 'amount' || column.key === 'amount'">

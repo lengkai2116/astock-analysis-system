@@ -243,12 +243,15 @@
       </a-form>
     </a-modal>
   </div>
+          <DisclaimerFooter />
 </template>
 
 <script>
 import strategyTemplateService from '@/services/strategyTemplateService'
+import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
+  components: { DisclaimerFooter },
   name: 'StrategyTemplatesPage',
   data() {
     return {

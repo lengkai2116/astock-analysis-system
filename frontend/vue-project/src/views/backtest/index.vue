@@ -2,14 +2,14 @@
   <div class="backtest-page theme-dark">
     <div class="page-header">
       <h1 class="page-title">
-        📈 回测系统
+        回测系统
       </h1>
       <div class="header-actions">
         <a-button
           type="primary"
           @click="showConfigModal = true"
         >
-          ⚙️ 回测配置
+          回测配置
         </a-button>
       </div>
     </div>
@@ -19,7 +19,7 @@
       <div class="config-panel">
         <div class="panel-section">
           <div class="section-title">
-            📋 回测标的
+            回测标的
           </div>
           <a-select
             v-model="config.symbol"
@@ -43,7 +43,7 @@
 
         <div class="panel-section">
           <div class="section-title">
-            📅 时间范围
+            时间范围
           </div>
           <a-range-picker
             v-model="config.dateRange"
@@ -53,7 +53,7 @@
 
         <div class="panel-section">
           <div class="section-title">
-            💰 初始资金
+            初始资金
           </div>
           <a-input-number
             v-model="config.initialCapital"
@@ -66,7 +66,7 @@
 
         <div class="panel-section">
           <div class="section-title">
-            📊 策略选择
+            策略选择
           </div>
           <a-checkbox-group v-model="config.strategies">
             <a-checkbox value="macd">
@@ -86,7 +86,7 @@
 
         <div class="panel-section">
           <div class="section-title">
-            🎯 因子组合（可选）
+            因子组合（可选）
           </div>
           <a-select
             v-model="config.factorCombination"
@@ -110,7 +110,7 @@
           :loading="running"
           @click="runBacktest"
         >
-          🚀 开始回测
+          开始回测
         </a-button>
       </div>
 
@@ -142,7 +142,7 @@
           <!-- 主要指标卡片 -->
           <div class="result-card main">
             <div class="card-title">
-              📈 收益率
+收益率
             </div>
             <div
               class="card-value"
@@ -157,7 +157,7 @@
 
           <div class="result-card">
             <div class="card-title">
-              🎯 最大回撤
+最大回撤
             </div>
             <div class="card-value down">
               {{ formatPercent(results.maxDrawdown) }}
@@ -169,7 +169,7 @@
 
           <div class="result-card">
             <div class="card-title">
-              📊 胜率
+胜率
             </div>
             <div class="card-value">
               {{ formatPercent(results.winRate) }}
@@ -194,7 +194,7 @@
           <!-- 收益曲线图 -->
           <div class="result-chart">
             <div class="chart-header">
-              <span class="chart-title">📉 收益曲线</span>
+              <span class="chart-title">收益曲线</span>
               <a-tag
                 v-if="results.factorCombo"
                 color="blue"
@@ -211,7 +211,7 @@
           <!-- 回撤曲线图 -->
           <div class="result-chart">
             <div class="chart-header">
-              <span class="chart-title">📊 回撤分析</span>
+              <span class="chart-title">回撤分析</span>
             </div>
             <div
               ref="drawdownChartRef"
@@ -222,7 +222,7 @@
           <!-- 交易记录 -->
           <div class="result-table">
             <div class="table-header">
-              <span class="table-title">📋 交易记录</span>
+              <span class="table-title">交易记录</span>
               <a-button
                 type="link"
                 size="small"
@@ -239,7 +239,7 @@
               <template #bodyCell="{ column, text, record, index }">
                 <template v-if="column.dataIndex === 'type' || column.key === 'type'">
                   <a-tag :color="text === 'BUY' ? 'red' : 'green'">
-                    {{ text === 'BUY' ? '买入' : '卖出' }}
+                    {{ text === 'BUY' ? '关注信号' : '风险退出信号' }}
                   </a-tag>
                 </template>
                 <template v-else-if="column.dataIndex === 'return' || column.key === 'return'">
@@ -273,7 +273,7 @@
     <!-- 配置弹窗 -->
     <a-modal
       v-model="showConfigModal"
-      title="⚙️ 高级配置"
+      title="高级配置"
       width="600px"
       @ok="showConfigModal = false"
     >
@@ -335,14 +335,17 @@
       </a-form>
     </a-modal>
   </div>
+          <DisclaimerFooter />
 </template>
 
 <script>
+import { RocketOutlined } from '@ant-design/icons-vue'
 import * as echarts from 'echarts'
 import { useAppStore } from '@/stores'
+import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
-  name: 'BacktestPage',
+  components: { DisclaimerFooter, RocketOutlined },  name: 'BacktestPage',
   data() {
     return {
       showConfigModal: false,
@@ -422,6 +425,11 @@ export default {
 
       if (this.config.strategies.length === 0) {
         this.$message.warning('请至少选择一个策略')
+        return
+      }
+
+      if (!this.config.dateRange || !this.config.dateRange[0] || !this.config.dateRange[1]) {
+        this.$message.warning('请选择回测时间范围')
         return
       }
 
@@ -539,17 +547,17 @@ export default {
         xAxis: {
           type: 'category',
           data: drawdownData.map(d => d.date),
-          axisLine: { lineStyle: { color: '#2a2a2a' } },
-          axisLabel: { color: '#94a3b8', fontSize: 10 }
+          axisLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } },
+          axisLabel: { color: 'var(--text-secondary, #94a3b8)', fontSize: 10 }
         },
         yAxis: {
           type: 'value',
-          axisLine: { lineStyle: { color: '#2a2a2a' } },
+          axisLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } },
           axisLabel: {
             color: '#94a3b8',
             formatter: (value) => value.toFixed(1) + '%'
           },
-          splitLine: { lineStyle: { color: '#1e293b' } }
+          splitLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } }
         },
         series: [
           {
@@ -597,12 +605,12 @@ export default {
         xAxis: {
           type: 'category',
           data: this.results.equityCurve.map(d => d.date),
-          axisLine: { lineStyle: { color: '#2a2a2a' } },
-          axisLabel: { color: '#94a3b8', fontSize: 10 }
+          axisLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } },
+          axisLabel: { color: 'var(--text-secondary, #94a3b8)', fontSize: 10 }
         },
         yAxis: {
           type: 'value',
-          axisLine: { lineStyle: { color: '#2a2a2a' } },
+          axisLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } },
           axisLabel: {
             color: '#94a3b8',
             formatter: (value) => {
@@ -610,7 +618,7 @@ export default {
               return value
             }
           },
-          splitLine: { lineStyle: { color: '#1e293b' } }
+          splitLine: { lineStyle: { color: 'var(--border-default, rgba(255,255,255,0.08))' } }
         },
         series: [
           {

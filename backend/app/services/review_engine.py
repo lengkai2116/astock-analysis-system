@@ -16,6 +16,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from app import db
+from app.models import Stock, DailyData
 from app.models.trade import Trade
 from app.models.strategy import StrategyOutput
 from app.models.verification import SignalRecord
@@ -91,56 +92,101 @@ class ReviewEngine:
     def eval_market(self, start_date: date, end_date: date) -> Dict:
         """
         评估复盘周期内的大盘环境
-        TODO: 对接 market_service 获取真实指数数据
+        基于三大指数（上证/深证/创业板）的实际涨跌幅数据
         """
-        score = 75.0  # 默认中位数
-        signals = []
+        indices = [
+            ('000001.SH', '上证指数'),
+            ('399001.SZ', '深圳成指'),
+            ('399006.SZ', '创业板指'),
+        ]
+        details = []
+        total_return = 0.0
+        index_data = []
 
-        # 从 SignalRecord 中提取大盘相关信号（如果存在市场状态标记）
+        for ts_code, name in indices:
+            start_row = DailyData.query.filter(
+                DailyData.ts_code == ts_code,
+                DailyData.trade_date >= start_date,
+            ).order_by(DailyData.trade_date.asc()).first()
+
+            end_row = DailyData.query.filter(
+                DailyData.ts_code == ts_code,
+                DailyData.trade_date <= end_date,
+            ).order_by(DailyData.trade_date.desc()).first()
+
+            if start_row and end_row and start_row.close:
+                ret = (float(end_row.close) - float(start_row.close)) / float(start_row.close)
+                total_return += ret
+                direction = '上涨' if ret > 0 else '下跌'
+                details.append(f'{name} {direction} {abs(ret)*100:.2f}%')
+                index_data.append({'name': name, 'return_pct': round(ret * 100, 2)})
+            else:
+                details.append(f'{name}: 数据不足')
+                index_data.append({'name': name, 'return_pct': None})
+
+        avg_return = total_return / len(indices) if index_data else 0
+        # 评分：正收益→高分，负收益→低分
+        score = 50.0 + avg_return * 200
+        score = max(20, min(95, score))
+
+        # 信号方向统计（保留原逻辑作为辅助）
         recent_records = SignalRecord.query.filter(
             SignalRecord.signal_date >= start_date,
             SignalRecord.signal_date <= end_date,
         ).limit(50).all()
-
         buy_signals = sum(1 for r in recent_records if r.signal_type in ('BULLISH', 'WATCH'))
         bear_signals = sum(1 for r in recent_records if r.signal_type == 'BEARISH')
 
-        if buy_signals > bear_signals * 2:
-            score = 85.0
-            signals.append('本周期策略信号以看多为主')
-        elif bear_signals > buy_signals * 2:
-            score = 55.0
-            signals.append('本周期策略信号以看空为主，环境偏弱')
+        if avg_return > 0.03:
+            assessment = '偏多'
+        elif avg_return < -0.03:
+            assessment = '偏空'
         else:
-            signals.append('本周期信号方向均衡，震荡格局')
+            assessment = '震荡'
 
         return {
             'score': round(score, 1),
-            'details': signals,
+            'details': details,
+            'index_data': index_data,
+            'avg_market_return': round(avg_return * 100, 2),
             'buy_signals_count': buy_signals,
             'bear_signals_count': bear_signals,
-            'assessment': '震荡偏多' if score >= 75 else '震荡偏空' if score < 60 else '震荡',
+            'assessment': f'震荡{assessment}' if assessment == '震荡' else assessment,
         }
 
     # ── 维度 2: 板块与题材分析 ──
 
     def eval_sector(self, trades: List[Trade],
                     start_date: date, end_date: date) -> Dict:
-        """评估板块匹配度（从交易股票代码推导）"""
+        """评估板块匹配度（基于股票行业分类）"""
         if not trades:
             return {'score': 50.0, 'details': ['无交易数据'], 'stock_count': 0}
 
         codes = set(t.ts_code for t in trades)
-        # TODO: 对接行业分类数据做真实板块分析
+        # 查询股票行业分类
+        stocks = Stock.query.filter(Stock.ts_code.in_(codes)).all()
+        stock_map = {s.ts_code: s.industry for s in stocks}
+        industries = {}
+        for code in codes:
+            ind = stock_map.get(code, '未知')
+            industries[ind] = industries.get(ind, 0) + 1
+
         stock_count = len(codes)
-        diversity_score = min(stock_count * 10, 70)
+        industry_count = len(industries)
+        # 行业分散度：覆盖越多行业分数越高
+        diversity_score = min(industry_count * 15, 60)
         trade_freq = len(trades)
         freq_score = min(trade_freq * 2, 30)
+        # 行业集中度奖励：集中在1-2个行业说明有板块聚焦
+        focus_bonus = 10 if industry_count <= 2 else 0
 
-        score = diversity_score + freq_score
+        score = diversity_score + freq_score + focus_bonus
 
+        industry_detail = ', '.join(f'{k}({v}只)' for k, v in
+                                    sorted(industries.items(), key=lambda x: -x[1])[:5])
         details = [
-            f'涉及 {stock_count} 只股票, {len(trades)} 笔交易',
+            f'涉及 {stock_count} 只股票, {industry_count} 个行业',
+            f'行业分布: {industry_detail}',
         ]
         if stock_count >= 3:
             details.append('✅ 持仓分散度合理')

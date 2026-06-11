@@ -153,13 +153,16 @@
       </a-form>
     </a-modal>
   </div>
+          <DisclaimerFooter />
 </template>
 
 <script>
 import { DownOutlined } from '@ant-design/icons-vue'
 import axios from '@/utils/request'
+import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
+  components: { DisclaimerFooter },
   name: 'ReportsCenterPage',
   data() {
     return {

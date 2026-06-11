@@ -4,6 +4,7 @@
 """
 from flask import Blueprint, request, jsonify
 import logging
+from datetime import datetime
 from app.services.market_service import MarketService
 from app.utils.error_handlers import handle_exceptions
 
@@ -76,3 +77,49 @@ def get_industries():
 def get_markets():
     markets = market_service.get_markets()
     return jsonify({'success': True, 'data': markets})
+
+
+@market_bp.route('/api/v3/market/overview', methods=['GET'])
+@handle_exceptions
+def get_market_overview():
+    """仪表盘市场概况：返回指数实时数据"""
+    indices = market_service.get_index_data()
+    indexes_data = []
+
+    from app.data.tushare_provider import TushareProvider
+    _tushare = TushareProvider()
+
+    for idx in indices:
+        try:
+            idx_data = _tushare.get_index_daily(idx['ts_code'])
+            if idx_data and len(idx_data) > 0:
+                latest = idx_data[0]
+                prev_data = idx_data[1] if len(idx_data) > 1 else None
+                prev_close = prev_data['close'] if prev_data else latest.get('pre_close', latest['close'])
+                change = latest['close'] - prev_close
+                change_pct = (change / prev_close * 100) if prev_close > 0 else 0
+
+                indexes_data.append({
+                    'symbol': idx['ts_code'],
+                    'name': idx['name'],
+                    'value': float(latest['close']),
+                    'change': round(float(change), 2),
+                    'changePercent': round(float(change_pct), 2),
+                })
+            else:
+                logger.warning(f"指数 {idx['name']} 数据为空")
+        except Exception as e:
+            logger.warning(f"指数 {idx['name']} 数据失败: {e}")
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'indexes': indexes_data,
+            'timestamp': datetime.now().isoformat(),
+        }
+    })
+
+
+@market_bp.route('/api/v1/market/overview', methods=['GET'])
+def get_market_overview_v1():
+    return get_market_overview()
