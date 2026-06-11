@@ -46,8 +46,16 @@
 
     <div class="dashboard-content">
       <!-- 概览统计卡片 -->
-      <a-skeleton v-show="loadingAreas.stats" active :paragraph="{ rows: 3 }" class="section-skeleton" />
-      <div v-show="!loadingAreas.stats" class="stats-grid">
+      <a-skeleton
+        v-show="loadingAreas.stats"
+        active
+        :paragraph="{ rows: 3 }"
+        class="section-skeleton"
+      />
+      <div
+        v-show="!loadingAreas.stats"
+        class="stats-grid"
+      >
         <div class="stat-card">
           <div class="stat-icon up">
             📈
@@ -258,9 +266,9 @@
               placeholder="搜索并切换股票..."
               style="width: 180px; margin-right: 8px;"
               :options="stockSearchResults"
+              allow-clear
               @search="onStockSearch"
               @change="onStockSelect"
-              allow-clear
             />
             <a-radio-group
               v-model:value="chartLayout"
@@ -363,7 +371,6 @@
 </template>
 
 <script>
-import { ReloadOutlined } from '@ant-design/icons-vue'
 import { mapState } from 'pinia'
 import { useAppStore } from '@/stores'
 import PipelineFlow from '@/components/StockScreener/PipelineFlow'
@@ -376,7 +383,7 @@ import dataService from '@/services/dataService'
 
 export default {
   name: 'Dashboard',
-  components: { ReloadOutlined,
+  components: {
     PipelineFlow,
     StrategySignalPanel,
     SignalDetailModal,
@@ -386,6 +393,13 @@ export default {
   data() {
     return {
       loading: true,
+      loadingAreas: {
+        stats: true,
+        rank: true,
+        market: true,
+        signals: true,
+        activities: true
+      },
       rankType: 'change',
       stats: {
         totalStocks: 12,

@@ -93,6 +93,8 @@
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'PingFang SC', monospace;
 
   /* --- 1l. 尺寸 --- */
+  --input-bg: #161e2a;
+
   --btn-height: 40px;
   --input-height: 40px;
   --icon-sm: 16px;
@@ -181,6 +183,7 @@
   --kline-crosshair: rgba(0, 0, 0, 0.2);
 
   /* 侧栏 */
+  --input-bg: #f8fafc;
   --sidebar-bg: #1e293b;
   --sidebar-border: #E5E5E5;
 }
@@ -413,7 +416,7 @@ a:hover {
 .ant-input-affix-wrapper,
 .ant-select-selector,
 .ant-picker {
-  background: #1e293b !important;
+  background: var(--input-bg) !important;
   border-color: var(--border-default) !important;
   color: var(--text-primary) !important;
   border-radius: var(--radius-sm) !important;

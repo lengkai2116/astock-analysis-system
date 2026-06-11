@@ -1,8 +1,5 @@
 #!/bin/bash
-set -e
-cd "$(dirname "$0")"
-
-echo "Stopping A-stock Analysis System..."
-docker compose down --timeout 30
-echo "System stopped. Data volumes preserved."
-echo "Wipe data: docker compose down -v (careful!)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+echo "正在停止 A股分析系统后端..."
+pkill -f "python run.py --port 5001" 2>/dev/null
+echo "已停止"

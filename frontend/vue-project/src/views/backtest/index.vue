@@ -142,7 +142,7 @@
           <!-- 主要指标卡片 -->
           <div class="result-card main">
             <div class="card-title">
-收益率
+              收益率
             </div>
             <div
               class="card-value"
@@ -157,7 +157,7 @@
 
           <div class="result-card">
             <div class="card-title">
-最大回撤
+              最大回撤
             </div>
             <div class="card-value down">
               {{ formatPercent(results.maxDrawdown) }}
@@ -169,7 +169,7 @@
 
           <div class="result-card">
             <div class="card-title">
-胜率
+              胜率
             </div>
             <div class="card-value">
               {{ formatPercent(results.winRate) }}
@@ -335,17 +335,16 @@
       </a-form>
     </a-modal>
   </div>
-          <DisclaimerFooter />
+  <DisclaimerFooter />
 </template>
 
 <script>
-import { RocketOutlined } from '@ant-design/icons-vue'
 import * as echarts from 'echarts'
 import { useAppStore } from '@/stores'
 import DisclaimerFooter from '@/components/DisclaimerFooter'
 
-export default {
-  components: { DisclaimerFooter, RocketOutlined },  name: 'BacktestPage',
+export default {  name: 'BacktestPage',
+  components: { DisclaimerFooter },
   data() {
     return {
       showConfigModal: false,

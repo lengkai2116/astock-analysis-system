@@ -200,7 +200,7 @@
       </div>
     </div>
   </div>
-          <DisclaimerFooter />
+  <DisclaimerFooter />
 </template>
 
 <script>
@@ -210,8 +210,8 @@ import dataService from '@/services/dataService'
 import axios from '@/utils/request'
 import DisclaimerFooter from '@/components/DisclaimerFooter'
 
-export default {
-  components: { DisclaimerFooter, FileTextOutlined },  name: 'AIAnalysisPage',
+export default {  name: 'AIAnalysisPage',
+  components: { DisclaimerFooter, FileTextOutlined },
   data() {
     return {
       selectedSymbol: '',

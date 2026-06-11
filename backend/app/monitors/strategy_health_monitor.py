@@ -15,6 +15,9 @@ from app import db
 from app.models.verification import SignalRecord
 
 logger = logging.getLogger(__name__)
+from app.services.alert_notifier import AlertNotifier
+
+_notifier = AlertNotifier()
 
 
 class StrategyHealthMonitor:

@@ -517,7 +517,7 @@
       </div>
     </div>
   </div>
-          <DisclaimerFooter />
+  <DisclaimerFooter />
 </template>
 
 <script>

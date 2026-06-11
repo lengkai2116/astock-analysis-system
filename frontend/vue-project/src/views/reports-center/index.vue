@@ -1,9 +1,15 @@
 <template>
   <div class="reports-center-page theme-dark">
     <div class="page-header">
-      <h1 class="page-title">策略报告中心</h1>
+      <h1 class="page-title">
+        策略报告中心
+      </h1>
       <div class="header-actions">
-        <a-button type="primary" icon="plus" @click="showGenerateModal">
+        <a-button
+          type="primary"
+          icon="plus"
+          @click="showGenerateModal"
+        >
           生成报告
         </a-button>
       </div>
@@ -22,17 +28,33 @@
         style="width: 200px"
         @change="loadReports"
       >
-        <a-select-option value="">全部</a-select-option>
-        <a-select-option value="single_stock">单股票策略</a-select-option>
-        <a-select-option value="backtest">回测报告</a-select-option>
-        <a-select-option value="research">研究报告</a-select-option>
+        <a-select-option value="">
+          全部
+        </a-select-option>
+        <a-select-option value="single_stock">
+          单股票策略
+        </a-select-option>
+        <a-select-option value="backtest">
+          回测报告
+        </a-select-option>
+        <a-select-option value="research">
+          研究报告
+        </a-select-option>
       </a-select>
     </div>
 
     <a-spin :spinning="loading">
-      <div v-if="reports.length === 0" class="empty-state">
+      <div
+        v-if="reports.length === 0"
+        class="empty-state"
+      >
         <a-empty description="暂无报告">
-          <a-button type="primary" @click="showGenerateModal">生成报告</a-button>
+          <a-button
+            type="primary"
+            @click="showGenerateModal"
+          >
+            生成报告
+          </a-button>
         </a-empty>
       </div>
 
@@ -46,44 +68,90 @@
             hoverable
             @click="viewReport(report)"
           >
-            <div class="report-icon">{{ getReportIcon(report.report_type) }}</div>
-            <div class="report-title">{{ report.title }}</div>
+            <div class="report-icon">
+              {{ getReportIcon(report.report_type) }}
+            </div>
+            <div class="report-title">
+              {{ report.title }}
+            </div>
             <div class="report-meta">
               <a-tag :color="getTypeColor(report.report_type)">
                 {{ getTypeName(report.report_type) }}
               </a-tag>
               <span class="report-date">{{ formatDate(report.created_at) }}</span>
             </div>
-            <div class="report-actions" @click.stop>
-              <a-button size="small" @click="viewReport(report)">查看</a-button>
+            <div
+              class="report-actions"
+              @click.stop
+            >
+              <a-button
+                size="small"
+                @click="viewReport(report)"
+              >
+                查看
+              </a-button>
               <a-dropdown>
-                <a-button size="small">导出 <DownOutlined /></a-button>
+                <a-button size="small">
+                  导出 <DownOutlined />
+                </a-button>
                 <template #overlay>
                   <a-menu>
-                  <a-menu-item key="md" @click="exportReport(report, 'md')">Markdown</a-menu-item>
-                  <a-menu-item key="html" @click="exportReport(report, 'html')">HTML</a-menu-item>
-                  <a-menu-item key="json" @click="exportReport(report, 'json')">JSON</a-menu-item>
-                  <a-menu-item key="txt" @click="exportReport(report, 'txt')">纯文本</a-menu-item>
-                </a-menu>
+                    <a-menu-item
+                      key="md"
+                      @click="exportReport(report, 'md')"
+                    >
+                      Markdown
+                    </a-menu-item>
+                    <a-menu-item
+                      key="html"
+                      @click="exportReport(report, 'html')"
+                    >
+                      HTML
+                    </a-menu-item>
+                    <a-menu-item
+                      key="json"
+                      @click="exportReport(report, 'json')"
+                    >
+                      JSON
+                    </a-menu-item>
+                    <a-menu-item
+                      key="txt"
+                      @click="exportReport(report, 'txt')"
+                    >
+                      纯文本
+                    </a-menu-item>
+                  </a-menu>
                 </template>
               </a-dropdown>
-              <a-popconfirm title="确定删除？" @confirm="deleteReport(report.id)">
-                <a-button type="danger" size="small" ghost>删除</a-button>
+              <a-popconfirm
+                title="确定删除？"
+                @confirm="deleteReport(report.id)"
+              >
+                <a-button
+                  type="danger"
+                  size="small"
+                  ghost
+                >
+                  删除
+                </a-button>
               </a-popconfirm>
             </div>
           </a-card>
         </div>
 
-        <div class="pagination-bar" v-if="total > pageSize">
+        <div
+          v-if="total > pageSize"
+          class="pagination-bar"
+        >
           <a-pagination
             v-model="currentPage"
             :total="total"
-            :pageSize="pageSize"
-            showSizeChanger
-            :pageSizeOptions="['12', '24', '48']"
-            showTotal="共 {total} 条"
+            :page-size="pageSize"
+            show-size-changer
+            :page-size-options="['12', '24', '48']"
+            show-total="共 {total} 条"
             @change="loadReports"
-            @showSizeChange="onPageSizeChange"
+            @show-size-change="onPageSizeChange"
           />
         </div>
       </div>
@@ -93,10 +161,13 @@
       :visible="drawerVisible"
       :width="800"
       title="报告详情"
-      @close="drawerVisible = false"
       placement="right"
+      @close="drawerVisible = false"
     >
-      <div v-if="currentReport" class="report-viewer">
+      <div
+        v-if="currentReport"
+        class="report-viewer"
+      >
         <div class="report-viewer-header">
           <h2>{{ currentReport.title }}</h2>
           <div class="report-viewer-meta">
@@ -108,16 +179,37 @@
             </span>
           </div>
           <div class="report-viewer-actions">
-            <a-button size="small" icon="file-text" @click="exportReport(currentReport, 'md')">MD</a-button>
-            <a-button size="small" icon="file" @click="exportReport(currentReport, 'html')">HTML</a-button>
-            <a-button size="small" icon="download" @click="exportReport(currentReport, 'json')">JSON</a-button>
+            <a-button
+              size="small"
+              icon="file-text"
+              @click="exportReport(currentReport, 'md')"
+            >
+              MD
+            </a-button>
+            <a-button
+              size="small"
+              icon="file"
+              @click="exportReport(currentReport, 'html')"
+            >
+              HTML
+            </a-button>
+            <a-button
+              size="small"
+              icon="download"
+              @click="exportReport(currentReport, 'json')"
+            >
+              JSON
+            </a-button>
           </div>
         </div>
 
         <a-divider />
 
         <a-spin :spinning="reportContentLoading">
-          <div class="report-content" v-html="renderedContent"></div>
+          <div
+            class="report-content"
+            v-html="renderedContent"
+          />
         </a-spin>
 
         <div class="report-viewer-footer">
@@ -129,31 +221,57 @@
     <a-modal
       v-model="generateModalVisible"
       title="生成报告"
+      :confirm-loading="generating"
       @ok="handleGenerate"
-      :confirmLoading="generating"
     >
-      <a-form ref="generateFormRef" :model="formState" layout="vertical">
-        <a-form-item label="报告类型" name="reportType" :rules="[{ required: true, message: '请选择报告类型' }]">
+      <a-form
+        ref="generateFormRef"
+        :model="formState"
+        layout="vertical"
+      >
+        <a-form-item
+          label="报告类型"
+          name="reportType"
+          :rules="[{ required: true, message: '请选择报告类型' }]"
+        >
           <a-select
             v-model:value="formState.reportType"
           >
-            <a-select-option value="single_stock">单股票策略报告</a-select-option>
-            <a-select-option value="backtest">回测报告</a-select-option>
-            <a-select-option value="research">综合研究报告</a-select-option>
+            <a-select-option value="single_stock">
+              单股票策略报告
+            </a-select-option>
+            <a-select-option value="backtest">
+              回测报告
+            </a-select-option>
+            <a-select-option value="research">
+              综合研究报告
+            </a-select-option>
           </a-select>
         </a-form-item>
 
-        <a-form-item label="股票代码" name="tsCode">
-          <a-input v-model:value="formState.tsCode" placeholder="如: 000001.SZ" />
+        <a-form-item
+          label="股票代码"
+          name="tsCode"
+        >
+          <a-input
+            v-model:value="formState.tsCode"
+            placeholder="如: 000001.SZ"
+          />
         </a-form-item>
 
-        <a-form-item label="报告标题" name="title">
-          <a-input v-model:value="formState.title" placeholder="输入报告标题" />
+        <a-form-item
+          label="报告标题"
+          name="title"
+        >
+          <a-input
+            v-model:value="formState.title"
+            placeholder="输入报告标题"
+          />
         </a-form-item>
       </a-form>
     </a-modal>
   </div>
-          <DisclaimerFooter />
+  <DisclaimerFooter />
 </template>
 
 <script>
@@ -162,8 +280,8 @@ import axios from '@/utils/request'
 import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
-  components: { DisclaimerFooter },
   name: 'ReportsCenterPage',
+  components: { DisclaimerFooter },
   data() {
     return {
       reports: [],

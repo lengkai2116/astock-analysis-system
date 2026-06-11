@@ -61,7 +61,7 @@ class RealtimeDataService:
         while self.running:
             try:
                 data = self._fetch_current_market_data()
-                if data:
+                if data and self.publisher:
                     self.publisher.publish('market_realtime', json.dumps(data))
                     logger.info(f"已推送实时数据 - {datetime.now().strftime('%H:%M:%S')}")
             except Exception as e:
@@ -320,6 +320,8 @@ def handle_trigger_publish():
 
 def _redis_subscriber_thread():
     """Redis订阅线程 - 转发消息到WebSocket"""
+    if not realtime_service.subscriber:
+        return
     try:
         for message in realtime_service.subscriber.listen():
             if message['type'] == 'message':
@@ -336,10 +338,12 @@ def initialize_realtime_service():
     try:
         realtime_service.start()
         
-        redis_thread = threading.Thread(target=_redis_subscriber_thread, daemon=True)
-        redis_thread.start()
-        
-        logger.info("实时数据服务系统初始化完成")
+        if realtime_service.subscriber:
+            redis_thread = threading.Thread(target=_redis_subscriber_thread, daemon=True)
+            redis_thread.start()
+            logger.info("实时数据服务系统初始化完成（含 Redis 订阅）")
+        else:
+            logger.info("实时数据服务系统初始化完成（Redis 不可用，跳过订阅）")
     except Exception as e:
         logger.error(f"初始化实时服务失败: {e}")
 

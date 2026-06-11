@@ -299,18 +299,17 @@
       </div>
     </a-modal>
   </div>
-          <DisclaimerFooter />
+  <DisclaimerFooter />
 </template>
 
 <script>
 import { DownOutlined } from '@ant-design/icons-vue'
-import { SettingOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import socketService from '@/services/socketService'
 import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
   name: 'WatchlistPage',
-  components: { DownOutlined, DisclaimerFooter, SettingOutlined, ReloadOutlined },  data() {
+  components: { DownOutlined, DisclaimerFooter },  data() {
     return {
       searchQuery: '',
       loading: false,

@@ -35,7 +35,7 @@ class RedisCacheManager:
             self.client.ping()
             logger.info(r"Redis连接成功")
         except Exception as e:
-            logger.warning(r"Redis连接失败: {e}，将使用内存缓存")
+            logger.warning(f"Redis连接失败: {e}，将使用内存缓存")
             self.client = None
             self._memory_cache = {}
     
@@ -83,7 +83,7 @@ class RedisCacheManager:
                     self.stats['hits'] += 1
                     return self._memory_cache[key]
         except Exception as e:
-            logger.warning(r"Redis读取失败: {e}")
+            logger.warning(f"Redis读取失败: {e}")
         
         self.stats['misses'] += 1
         return None
@@ -129,7 +129,7 @@ class RedisCacheManager:
                 self._memory_cache[key] = df
             return True
         except Exception as e:
-            logger.warning(r"Redis写入失败: {e}")
+            logger.warning(f"Redis写入失败: {e}")
             return False
     
     def get_indicator_data(self, ts_code: str, indicator_name: str) -> Optional[pd.DataFrame]:
@@ -151,7 +151,7 @@ class RedisCacheManager:
                     self.stats['hits'] += 1
                     return self._memory_cache[key]
         except Exception as e:
-            logger.warning(r"Redis读取失败: {e}")
+            logger.warning(f"Redis读取失败: {e}")
         
         self.stats['misses'] += 1
         return None
@@ -170,7 +170,7 @@ class RedisCacheManager:
                 self._memory_cache[key] = df
             return True
         except Exception as e:
-            logger.warning(r"Redis写入失败: {e}")
+            logger.warning(f"Redis写入失败: {e}")
             return False
     
     def invalidate_daily(self, ts_code: Optional[str] = None):
@@ -199,7 +199,7 @@ class RedisCacheManager:
                     del self._memory_cache[k]
             return True
         except Exception as e:
-            logger.warning(r"缓存失效失败: {e}")
+            logger.warning(f"缓存失效失败: {e}")
             return False
     
     def clear_all(self):
@@ -214,7 +214,7 @@ class RedisCacheManager:
             logger.info(r"Redis缓存已清空")
             return True
         except Exception as e:
-            logger.warning(r"清空缓存失败: {e}")
+            logger.warning(f"清空缓存失败: {e}")
             return False
     
     def get_hit_rate(self) -> Dict[str, float]:

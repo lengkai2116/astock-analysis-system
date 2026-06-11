@@ -331,12 +331,11 @@
       @cancel="showFactorSelector = false"
     />
   </div>
-          <DisclaimerFooter />
+  <DisclaimerFooter />
 </template>
 
 <script>
 import { CloseOutlined } from '@ant-design/icons-vue'
-import { ReloadOutlined } from '@ant-design/icons-vue'
 import { mapState } from 'pinia'
 import { useAppStore } from '@/stores'
 import FactorSelector from '@/components/FactorSelector'
@@ -344,7 +343,7 @@ import DisclaimerFooter from '@/components/DisclaimerFooter'
 
 export default {
   name: 'FactorManagerPage',
-  components: { ReloadOutlined,
+  components: {
     FactorSelector, DisclaimerFooter},
   data() {
     return {

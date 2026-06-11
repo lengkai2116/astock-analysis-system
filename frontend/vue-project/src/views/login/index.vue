@@ -72,9 +72,13 @@
         v-if="tokenPreview"
         class="login-hint token-preview"
       >
-        <p class="token-label">当前令牌：</p>
+        <p class="token-label">
+          当前令牌：
+        </p>
         <code class="token-value">{{ tokenPreview }}</code>
-        <p class="token-note">复制到输入框即可登录。令牌在项目 .env 文件中 AUTH_TOKEN 变量配置。</p>
+        <p class="token-note">
+          复制到输入框即可登录。令牌在项目 .env 文件中 AUTH_TOKEN 变量配置。
+        </p>
       </div>
 
       <div
@@ -122,7 +126,7 @@ export default {
         // 免鉴权模式，尝试直接登录
         const r = await axios.post('/api/auth/login', { token: '' })
         if (r.success) {
-          localStorage.setItem('token', r.data?.token || '')
+          localStorage.setItem('token', r.data?.token || 'local-dev')
           this.$router.push('/')
         }
       } else {
