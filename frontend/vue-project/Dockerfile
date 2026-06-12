@@ -12,6 +12,10 @@ COPY . .
 RUN npm run build
 
 # ---- Runtime Stage ----
+# ═══════════════════════════════════════════════════
+# Frontend Nginx Dockerfile（可选 — 仅 Docker 部署时使用）
+# 裸跑部署时由 Flask 直接托管前端
+# ═══════════════════════════════════════════════════
 FROM nginx:alpine
 
 # 安装 wget（用于 HEALTHCHECK）
