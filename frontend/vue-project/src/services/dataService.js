@@ -4,6 +4,7 @@
  * 对照 151-观潮对标-系统能力提升与稳定性优化方案.md §2.3
  * 封装所有后端 API 请求，提供缓存、去重、批量请求能力
  */
+import request from '../utils/request'
 import { dedupedRequest, batchRequests, clearCache } from '../utils/requestDedupe'
 import { message } from 'ant-design-vue'
 
@@ -189,11 +190,11 @@ class DataService {
 
   async _post(endpoint, data = {}) {
     try {
-      const { default: axios } = await import('axios')
-      const res = await axios.post(`${this._baseURL}${endpoint}`, data, {
+      // using configured request instance
+      const res = await request.post(`${this._baseURL}${endpoint}`, data, {
         timeout: 30000,
       })
-      return this._unwrap(res.data)
+      return this._unwrap(res)
     } catch (err) {
       message.error(`请求失败: ${endpoint}`)
       throw err
@@ -202,11 +203,11 @@ class DataService {
 
   async _put(endpoint, data = {}) {
     try {
-      const { default: axios } = await import('axios')
-      const res = await axios.put(`${this._baseURL}${endpoint}`, data, {
+      // using configured request instance
+      const res = await request.put(`${this._baseURL}${endpoint}`, data, {
         timeout: 30000,
       })
-      return this._unwrap(res.data)
+      return this._unwrap(res)
     } catch (err) {
       throw err
     }
@@ -214,11 +215,11 @@ class DataService {
 
   async _delete(endpoint) {
     try {
-      const { default: axios } = await import('axios')
-      const res = await axios.delete(`${this._baseURL}${endpoint}`, {
+      // using configured request instance
+      const res = await request.delete(`${this._baseURL}${endpoint}`, {
         timeout: 10000,
       })
-      return this._unwrap(res.data)
+      return this._unwrap(res)
     } catch (err) {
       throw err
     }

@@ -71,15 +71,14 @@ def create_app():
         if not _AUTH_TOKEN:
             return
         path = request.path
-        whitelist = ['/api/v1/health', '/api/v3/health', '/api/auth/login']
-        if any(path.startswith(w) for w in whitelist):
+        # 仅对 API 路由做鉴权，前端 SPA 静态文件自由访问
+        if not path.startswith('/api/'):
             return
         auth = request.headers.get('Authorization', '')
         if not auth.startswith('Bearer '):
             return {'success': False, 'error': '缺少认证令牌', 'error_type': 'AuthRequired'}, 401
         token = auth[7:]
         if not _constant_time_compare(token, _AUTH_TOKEN):
-
             return {'success': False, 'error': '认证令牌无效', 'error_type': 'AuthInvalid'}, 403
     
 
@@ -92,6 +91,41 @@ def create_app():
     def internal_error(error):
         """500 统一 JSON 响应"""
         return {"success": False, "error": "服务器内部错误", "error_type": "InternalError"}, 500
+
+    @app.errorhandler(400)
+    def bad_request(error):
+        """400 统一 JSON 响应"""
+        return {"success": False, "error": "请求参数错误", "error_type": "BadRequest"}, 400
+
+    @app.errorhandler(401)
+    def unauthorized(error):
+        """401 统一 JSON 响应"""
+        return {"success": False, "error": "未授权，请提供有效的认证令牌", "error_type": "Unauthorized"}, 401
+
+    @app.errorhandler(403)
+    def forbidden(error):
+        """403 统一 JSON 响应"""
+        return {"success": False, "error": "权限不足", "error_type": "Forbidden"}, 403
+
+    @app.errorhandler(405)
+    def method_not_allowed(error):
+        """405 统一 JSON 响应"""
+        return {"success": False, "error": "请求方法不允许", "error_type": "MethodNotAllowed"}, 405
+
+    @app.errorhandler(429)
+    def rate_limit_exceeded(error):
+        """429 统一 JSON 响应"""
+        return {"success": False, "error": "请求过于频繁，请稍后再试", "error_type": "RateLimited"}, 429
+
+    @app.errorhandler(502)
+    def bad_gateway(error):
+        """502 统一 JSON 响应"""
+        return {"success": False, "error": "上游服务异常", "error_type": "BadGateway"}, 502
+
+    @app.errorhandler(503)
+    def service_unavailable(error):
+        """503 统一 JSON 响应"""
+        return {"success": False, "error": "服务暂时不可用", "error_type": "ServiceUnavailable"}, 503
 
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -155,6 +189,11 @@ def create_app():
     app.register_blueprint(kline_resampler_bp)
     app.register_blueprint(news_bp)
     app.register_blueprint(alert_bp)
+    
+    # 自动创建缺失的数据表（兼容 SQLite 无迁移模式）
+    with app.app_context():
+        db.create_all()
+    
 
     
 
@@ -166,7 +205,7 @@ def create_app():
     try:
         from app.data.data_source_manager import data_source_manager
         from app.data.tushare_provider import TushareProvider
-        from app.data.akshare_provider import AkshareProvider
+        from app.data.akshare_provider import AkShareRealtimeProvider
 
         # 注册 Tushare 作为主数据源
         tushare = TushareProvider()
@@ -174,7 +213,7 @@ def create_app():
 
         # 注册 AKShare 作为备用数据源
         try:
-            akshare = AkshareProvider()
+            akshare = AkShareRealtimeProvider()
             data_source_manager.register_source('akshare', lambda ep, p: _route_provider(ep, p, akshare), priority=1)
         except Exception:
             logger.warning("AKShare provider 注册失败（可忽略）")
@@ -184,6 +223,38 @@ def create_app():
         logger.warning(f"数据源管理器初始化失败（可忽略）: {e}")
 
 
+
+    # ============================================================
+    # 前端静态文件服务（无 Docker/无 Nginx 时使用）
+    # ============================================================
+    # 当 FRONTEND_DIST 环境变量设置，或 frontend/vue-project/dist 目录存在时，
+    # Flask 会自动托管前端 SPA 静态文件，无需 Nginx 或 Vite dev server。
+    # 这对 Windows 免 Docker 部署模式至关重要。
+    # 如果已有 Nginx 或 Vite dev server 在运行，此功能自动跳过。
+    _frontend_dist = os.environ.get(
+        'FRONTEND_DIST',
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'frontend', 'vue-project', 'dist')
+    )
+    if os.path.isdir(_frontend_dist):
+        from flask import send_from_directory
+        # 静态资源文件（带 hash，长期缓存）
+        @app.route('/assets/<path:filename>')
+        def serve_assets(filename):
+            return send_from_directory(os.path.join(_frontend_dist, 'assets'), filename,
+                                       max_age=31536000)
+        
+        # SPA 回退：所有非 API 路由返回 index.html
+        @app.route('/', defaults={'path': ''})
+        @app.route('/<path:path>')
+        def serve_frontend(path):
+            if path.startswith('api/') or path.startswith('socket.io/'):
+                from flask import jsonify
+                return jsonify({"success": False, "error": "API 路由不匹配"}), 404
+            return send_from_directory(_frontend_dist, 'index.html')
+        
+        logger.info(f"前端静态文件服务已启用: {_frontend_dist}")
+    else:
+        logger.info("前端静态文件未找到，仅 API 模式运行")
 
     return app
 

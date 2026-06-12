@@ -25,7 +25,7 @@ _AUTH_TOKEN = os.environ.get('AUTH_TOKEN', '').strip()
 WHITELIST_PATHS = [
     '/api/v1/health',
     '/api/v3/health',
-    '/api/auth/login',
+    '/api/auth/login', '/api/auth/status',
 ]
 
 

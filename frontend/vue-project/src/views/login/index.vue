@@ -21,27 +21,38 @@
         <span>服务端未开启令牌验证，可直接进入</span>
       </div>
 
-      <p class="login-desc">
-        请输入访问令牌
-      </p>
-
-      <a-input-password
-        v-model:value="token"
-        placeholder="请输入 Token"
-        size="large"
-        class="login-input"
-        @keyup.enter="handleLogin"
-      />
-
-      <a-button
-        type="primary"
-        size="large"
-        block
-        :loading="loading"
-        @click="handleLogin"
+      <a-form
+        ref="loginFormRef"
+        :model="{ token: token }"
+        layout="vertical"
+        class="login-form"
       >
-        登录
-      </a-button>
+        <a-form-item
+          name="token"
+          :rules="[
+            { required: true, message: '请输入访问令牌', trigger: 'blur' },
+            { min: 4, message: '令牌长度不能少于 4 个字符', trigger: 'blur' }
+          ]"
+        >
+          <a-input-password
+            v-model:value="token"
+            placeholder="请输入 Token"
+            size="large"
+            class="login-input"
+            @keyup.enter="handleLogin"
+          />
+        </a-form-item>
+
+        <a-button
+          type="primary"
+          size="large"
+          block
+          :loading="loading"
+          @click="handleLogin"
+        >
+          登录
+        </a-button>
+      </a-form>
 
       <!-- 令牌提示 -->
       <div
@@ -61,9 +72,13 @@
         v-if="tokenPreview"
         class="login-hint token-preview"
       >
-        <p class="token-label">当前令牌：</p>
+        <p class="token-label">
+          当前令牌：
+        </p>
         <code class="token-value">{{ tokenPreview }}</code>
-        <p class="token-note">复制到输入框即可登录。令牌在项目 .env 文件中 AUTH_TOKEN 变量配置。</p>
+        <p class="token-note">
+          复制到输入框即可登录。令牌在项目 .env 文件中 AUTH_TOKEN 变量配置。
+        </p>
       </div>
 
       <div
@@ -111,7 +126,7 @@ export default {
         // 免鉴权模式，尝试直接登录
         const r = await axios.post('/api/auth/login', { token: '' })
         if (r.success) {
-          localStorage.setItem('token', r.data?.token || '')
+          localStorage.setItem('token', r.data?.token || 'local-dev')
           this.$router.push('/')
         }
       } else {
@@ -135,9 +150,17 @@ export default {
       this.tokenPreview = this.authInfo.tokenPreview || '（无令牌信息）'
     },
     async handleLogin() {
-      this.loading = true
       this.error = ''
       this.hint = ''
+      // 表单校验：仅认证模式下才需要检查
+      if (this.authInfo.enabled && this.$refs.loginFormRef) {
+        try {
+          await this.$refs.loginFormRef.validate()
+        } catch {
+          return
+        }
+      }
+      this.loading = true
       try {
         const resp = await axios.post('/api/auth/login', { token: this.token })
         if (resp.success) {

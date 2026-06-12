@@ -517,7 +517,7 @@
       </div>
     </div>
   </div>
-          <DisclaimerFooter />
+  <DisclaimerFooter />
 </template>
 
 <script>
@@ -542,18 +542,8 @@ export default {
       searching: false,
       stockInfo: null,
 
-      overlayIndicators: [
-        { id: 'ma5', name: 'MA5' },
-        { id: 'ma10', name: 'MA10' },
-        { id: 'ma20', name: 'MA20' },
-        { id: 'boll', name: 'BOLL' }
-      ],
-      subIndicators: [
-        { id: 'vol', name: '成交量' },
-        { id: 'macd', name: 'MACD' },
-        { id: 'rsi', name: 'RSI' },
-        { id: 'kdj', name: 'KDJ' }
-      ],
+      overlayIndicators: [],
+      subIndicators: [],
 
       activeOverlays: ['ma5', 'ma20'],
       activeSubcharts: ['vol', 'macd', 'rsi'],
@@ -653,9 +643,24 @@ export default {
     this.loadWatchlistFromStorage()
     this.loadStockInfo()
     this.loadSignals()
+    this.loadIndicators()
   },
 
   methods: {
+    async loadIndicators() {
+      try {
+        const res = await chartService.fetchIndicatorList()
+        if (res && res.overlays) {
+          this.overlayIndicators = res.overlays.map(ind => ({ id: ind.id, name: ind.name }))
+        }
+        if (res && res.subcharts) {
+          this.subIndicators = res.subcharts.map(ind => ({ id: ind.id, name: ind.name }))
+        }
+      } catch (e) {
+        console.warn('加载指标列表失败', e)
+      }
+    },
+
     renderStars(confidence) {
       const score = confidence * 100
       if (score >= 85) return '⭐⭐⭐⭐⭐'

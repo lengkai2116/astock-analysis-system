@@ -94,8 +94,9 @@ router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('token')
   if (!token) {
     // 尝试检查后端是否需要认证
-    // 如果没有 token 但后端没有启用认证，仍然放行
-    return next()
+    // 无 token 时跳转登录页；登录页会自动检测后端是否启用认证
+    return next('/login')
+    // 若后端未启用认证，登录页会自动登录并跳回首页
   }
   next()
 })

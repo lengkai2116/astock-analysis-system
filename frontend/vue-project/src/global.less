@@ -89,11 +89,12 @@
   --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.4);
 
   /* --- 1k. 排版 --- */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont,
-               'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  --font-sans: 'Inter', 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'PingFang SC', monospace;
 
   /* --- 1l. 尺寸 --- */
+  --input-bg: #161e2a;
+
   --btn-height: 40px;
   --input-height: 40px;
   --icon-sm: 16px;
@@ -182,6 +183,7 @@
   --kline-crosshair: rgba(0, 0, 0, 0.2);
 
   /* 侧栏 */
+  --input-bg: #f8fafc;
   --sidebar-bg: #1e293b;
   --sidebar-border: #E5E5E5;
 }
@@ -349,6 +351,55 @@ a:hover {
   color: var(--color-brand-500) !important;
 }
 
+
+
+/* 日期选择器下拉 */
+.ant-picker-dropdown {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-md) !important;
+}
+.ant-picker-header-view {
+  color: var(--text-primary) !important;
+}
+.ant-picker-header button {
+  color: var(--text-muted) !important;
+}
+.ant-picker-cell-inner {
+  color: var(--text-secondary) !important;
+}
+.ant-picker-cell:hover .ant-picker-cell-inner {
+  background: var(--bg-subtle) !important;
+}
+.ant-picker-cell-selected .ant-picker-cell-inner {
+  background: var(--color-brand-500) !important;
+  color: #fff !important;
+}
+.ant-picker-today-btn {
+  color: var(--color-brand-500) !important;
+}
+.ant-picker-footer {
+  border-top-color: var(--border-default) !important;
+}
+.ant-picker-time-panel-column > li.ant-picker-time-panel-cell-selected {
+  background: var(--bg-active) !important;
+}
+.ant-picker-now-btn {
+  color: var(--color-brand-500) !important;
+}
+.ant-picker-content th {
+  color: var(--text-muted) !important;
+}
+.ant-picker-cell-disabled .ant-picker-cell-inner {
+  color: var(--text-disabled) !important;
+}
+.ant-picker-input > input::placeholder {
+  color: #64748b !important;
+}
+.ant-picker-separator {
+  color: var(--text-muted) !important;
+}
+
 /* Tabs */
 .ant-tabs-tab {
   color: var(--text-muted) !important;
@@ -365,7 +416,7 @@ a:hover {
 .ant-input-affix-wrapper,
 .ant-select-selector,
 .ant-picker {
-  background: #1e293b !important;
+  background: var(--input-bg) !important;
   border-color: var(--border-default) !important;
   color: var(--text-primary) !important;
   border-radius: var(--radius-sm) !important;

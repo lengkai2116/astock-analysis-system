@@ -297,10 +297,10 @@ export default {
     this.initEditor()
   },
   beforeUnmount() {
-    if (this.editor) {
+    if (this.editor && typeof this.editor.toTextArea === 'function') {
       this.editor.toTextArea()
-      this.editor = null
     }
+    this.editor = null
   },
   methods: {
     initEditor() {

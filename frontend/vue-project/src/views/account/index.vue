@@ -87,7 +87,7 @@
       </a-tabs>
     </a-card>
   </div>
-          <DisclaimerFooter />
+  <DisclaimerFooter />
 </template>
 
 <script>
