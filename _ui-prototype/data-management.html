@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据管理 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.data-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-16); }
+.data-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.data-card h4 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-12); }
+.source-item { display: flex; align-items: center; justify-content: space-between; padding: var(--space-8) 0; border-bottom: 1px solid var(--border-default); }
+.source-item:last-child { border-bottom: none; }
+.source-item .info { display: flex; align-items: center; gap: var(--space-8); font-size: 13px; }
+.source-item .status { font-size: 12px; }
+.sync-actions { display: flex; gap: var(--space-8); margin: var(--space-12) 0; }
+.log-item { padding: var(--space-6) 0; border-bottom: 1px solid var(--border-default); font-size: 12px; color: var(--text-secondary); display: flex; gap: var(--space-8); }
+.log-item:last-child { border-bottom: none; }
+.log-item .time { color: var(--text-muted); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"><div class="sidebar-logo"><span>📊</span> A股分析系统</div>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item"><span class="icon">📊</span>仪表盘</a></div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="indicator-ide.html" class="sidebar-item"><span class="icon">📈</span>个股策略分析</a>
+      <a href="screener.html" class="sidebar-item"><span class="icon">🔍</span>选股系统</a>
+      <a href="watchlist.html" class="sidebar-item"><span class="icon">⭐</span>自选监控</a>
+      <a href="ai-analysis.html" class="sidebar-item"><span class="icon">🤖</span>AI 分析</a>
+      <a href="chip-analysis.html" class="sidebar-item"><span class="icon">🧩</span>筹码分析 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item"><span class="icon">📉</span>回测系统</a>
+      <a href="factor-manager.html" class="sidebar-item"><span class="icon">📊</span>因子管理</a>
+      <a href="strategy-templates.html" class="sidebar-item"><span class="icon">📋</span>策略模板</a>
+      <a href="playback.html" class="sidebar-item"><span class="icon">⏪</span>复盘中心 <span class="badge-new">NEW</span></a>
+      <a href="virtual-verify.html" class="sidebar-item"><span class="icon">🏗️</span>虚拟验证 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item"><span class="icon">📑</span>报告中心</a>
+      <a href="alert.html" class="sidebar-item"><span class="icon">🔔</span>预警管理 <span class="badge-new">NEW</span></a>
+      <a href="data-management.html" class="sidebar-item active"><span class="icon">🔄</span>数据管理 <span class="badge-new">NEW</span></a>
+      <a href="system-health.html" class="sidebar-item"><span class="icon">❤️</span>系统诊断 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item"><span class="icon">👤</span>账户管理</a></div>
+  </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>🔄 数据管理</h1>
+      <div class="page-header-actions">
+        <span style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:var(--space-4);"><span class="status-dot green"></span>系统运行正常</span>
+      </div>
+    </div>
+
+    <div class="data-grid">
+      <!-- 数据源状态 -->
+      <div class="data-card">
+        <h4>📡 数据源状态</h4>
+        <div class="source-item"><div class="info"><span class="status-dot green"></span>Tushare Pro</div><span class="status" style="color:var(--text-muted);">已连接 · 上次同步: 15:30</span></div>
+        <div class="source-item"><div class="info"><span class="status-dot green"></span>AKShare (备用)</div><span class="status" style="color:var(--text-secondary);">备用就绪</span></div>
+        <div class="source-item"><div class="info"><span class="status-dot yellow"></span>QMT 行情</div><span class="status" style="color:var(--text-muted);">未连接（可选）</span></div>
+        <div class="source-item"><div class="info"><span class="status-dot green"></span>DuckDB 缓存</div><span class="status" style="color:var(--text-muted);">6,372 条记录</span></div>
+      </div>
+
+      <!-- 同步管理 -->
+      <div class="data-card">
+        <h4>⚡ 同步管理</h4>
+        <div class="sync-actions">
+          <button class="btn" style="height:36px;font-size:12px;flex:1;justify-content:center;" onclick="simSync(this)">⏳ 全量同步</button>
+          <button class="btn" style="height:36px;font-size:12px;flex:1;justify-content:center;" onclick="simSync(this)">⟳ 增量同步</button>
+        </div>
+        <div class="progress-bar" style="margin-bottom:var(--space-8);"><div class="progress-bar-fill" style="width:0%;"></div></div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-8);">上次全量同步: 2026-06-10 03:00</div>
+        <div style="font-size:12px;color:var(--text-muted);">定时调度: </div>
+        <select class="select" style="width:100%;margin-top:var(--space-4);"><option>每日 03:00 全量同步</option><option>每 6 小时增量同步</option><option>手动模式</option></select>
+      </div>
+
+      <!-- 缓存管理 -->
+      <div class="data-card">
+        <h4>💾 缓存管理</h4>
+        <div class="source-item"><div class="info">DuckDB 缓存文件</div><span>128 MB</span></div>
+        <div class="source-item"><div class="info">Redis 缓存 (命中率)</div><span>87%</span></div>
+        <div class="source-item"><div class="info">日线数据</div><span>4,852 条</span></div>
+        <div class="source-item"><div class="info">分钟线数据</div><span>1,520,000 条</span></div>
+        <div style="display:flex;gap:var(--space-4);margin-top:var(--space-12);">
+          <button class="btn" style="height:32px;font-size:12px;flex:1;justify-content:center;" onclick="alert('🔥 缓存预热已启动')">🔥 预热</button>
+          <button class="btn" style="height:32px;font-size:12px;flex:1;justify-content:center;" onclick="alert('🗑️ 缓存已失效')">🗑️ 失效</button>
+        </div>
+      </div>
+
+      <!-- 同步日志 -->
+      <div class="data-card">
+        <h4>📋 同步日志 (最近10条)</h4>
+        <div class="log-item"><span class="time">15:30</span><span>✅ 增量同步完成 · 新增 1,247 条</span></div>
+        <div class="log-item"><span class="time">09:00</span><span>✅ 增量同步完成 · 新增 892 条</span></div>
+        <div class="log-item"><span class="time">03:00</span><span>✅ 全量同步完成 · 共 6,372 条</span></div>
+        <div class="log-item"><span class="time">2026-06-10 15:30</span><span>✅ 增量同步完成 · 新增 2,130 条</span></div>
+        <div class="log-item"><span class="time">2026-06-10 09:00</span><span>⚠️ 增量同步 5 条失败 (网络超时)</span></div>
+        <div class="log-item"><span class="time">2026-06-10 03:00</span><span>✅ 全量同步完成 · 共 6,128 条</span></div>
+      </div>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。</div>
+  </main>
+</div>
+
+<script>
+function simSync(btn){
+  var orig = btn.textContent;
+  btn.innerHTML = '⏳ 同步中...';
+  btn.disabled = true;
+  var bar = btn.closest('.data-card').querySelector('.progress-bar-fill');
+  var p = 0;
+  var t = setInterval(function(){
+    p+=10; bar.style.width = p+'%';
+    if(p>=100){ clearInterval(t); btn.innerHTML = '✅ 同步完成'; setTimeout(function(){btn.innerHTML=orig;btn.disabled=false;bar.style.width='0%';},1500); }
+  }, 200);
+}
+</script>
+</body>
+</html>

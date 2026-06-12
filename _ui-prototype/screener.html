@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>选股系统 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.screener-layout { display: grid; grid-template-columns: 240px 1fr 300px; gap: var(--space-16); min-height: 60vh; }
+
+/* 左栏: PipelineFlow */
+.pipeline { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.pipeline h4 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-12); }
+.pipeline-step { padding: var(--space-10) var(--space-12); border-radius: var(--radius-sm); margin-bottom: var(--space-6); cursor: pointer; transition: all .15s; border: 1px solid transparent; }
+.pipeline-step:hover { background: var(--bg-active); }
+.pipeline-step.active { background: var(--bg-active); border-color: var(--color-brand-500); }
+.pipeline-step .step-num { font-size: 11px; color: var(--text-muted); }
+.pipeline-step .step-name { font-size: 13px; font-weight: 500; margin:var(--space-2) 0; }
+.pipeline-step .step-desc { font-size: 11px; color: var(--text-muted); }
+.pipeline-step .step-count { font-size: 11px; color: var(--color-brand-500); margin-top: var(--space-2); }
+
+/* 中栏: Results */
+.results { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-12); }
+.results-header h4 { font-size: 13px; font-weight: 600; }
+.results .clickable { cursor: pointer; }
+.results .clickable:hover td { background: var(--bg-active); }
+
+/* 右栏: Config */
+.config-panel { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.config-panel h4 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-12); }
+.config-item { margin-bottom: var(--space-12); }
+.config-item label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom: var(--space-4); }
+
+.modal-content { max-height: 400px; overflow-y: auto; }
+.modal-body { font-size: 13px; color: var(--text-secondary); line-height: 1.7; padding: var(--space-8) 0; }
+.modal-footer { display: flex; justify-content: flex-end; gap: var(--space-8); margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--border-default); }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"> <div class="sidebar-logo"><span>📊</span> A股分析系统</div>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item"><span class="icon">📊</span>仪表盘</a></div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="indicator-ide.html" class="sidebar-item"><span class="icon">📈</span>个股策略分析</a>
+      <a href="screener.html" class="sidebar-item active"><span class="icon">🔍</span>选股系统</a>
+      <a href="watchlist.html" class="sidebar-item"><span class="icon">⭐</span>自选监控</a>
+      <a href="ai-analysis.html" class="sidebar-item"><span class="icon">🤖</span>AI 分析</a>
+      <a href="chip-analysis.html" class="sidebar-item"><span class="icon">🧩</span>筹码分析 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item"><span class="icon">📉</span>回测系统</a>
+      <a href="factor-manager.html" class="sidebar-item"><span class="icon">📊</span>因子管理</a>
+      <a href="strategy-templates.html" class="sidebar-item"><span class="icon">📋</span>策略模板</a>
+      <a href="playback.html" class="sidebar-item"><span class="icon">⏪</span>复盘中心 <span class="badge-new">NEW</span></a>
+      <a href="virtual-verify.html" class="sidebar-item"><span class="icon">🏗️</span>虚拟验证 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item"><span class="icon">📑</span>报告中心</a>
+      <a href="alert.html" class="sidebar-item"><span class="icon">🔔</span>预警管理 <span class="badge-new">NEW</span></a>
+      <a href="data-management.html" class="sidebar-item"><span class="icon">🔄</span>数据管理 <span class="badge-new">NEW</span></a>
+      <a href="system-health.html" class="sidebar-item"><span class="icon">❤️</span>系统诊断 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item"><span class="icon">👤</span>账户管理</a></div>
+  </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>🔍 选股系统</h1>
+      <div class="page-header-actions">
+        <button class="btn" onclick="this.innerHTML='⏳ 筛选中...';setTimeout(()=>{document.getElementById('empty-state').style.display='none';document.getElementById('results-table').style.display='';this.innerHTML='⚡ 执行筛选';},1500)">⚡ 执行筛选</button>
+      </div>
+    </div>
+
+    <div class="screener-layout">
+      <!-- 左栏: PipelineFlow -->
+      <div class="pipeline">
+        <h4>📋 筛选流程</h4>
+        <div class="pipeline-step active">
+          <div class="step-num">STEP 1</div>
+          <div class="step-name">🌌 Universe 股票池</div>
+          <div class="step-desc">沪深 A股全量</div>
+          <div class="step-count">5,182 只</div>
+        </div>
+        <div class="pipeline-step">
+          <div class="step-num">STEP 2</div>
+          <div class="step-name">⚡ Alpha 因子筛选</div>
+          <div class="step-desc">量价因子 Top 20%</div>
+          <div class="step-count">1,036 只</div>
+        </div>
+        <div class="pipeline-step">
+          <div class="step-num">STEP 3</div>
+          <div class="step-name">🎯 Portfolio 组合优化</div>
+          <div class="step-desc">多策略共振评分</div>
+          <div class="step-count">85 只</div>
+        </div>
+        <div class="pipeline-step">
+          <div class="step-num">STEP 4</div>
+          <div class="step-name">🛡️ Risk 风控过滤</div>
+          <div class="step-desc">ST/退市/流动性</div>
+          <div class="step-count" style="color:var(--signal-watch);">23 只</div>
+        </div>
+      </div>
+
+      <!-- 中栏: ScreeningResults -->
+      <div class="results">
+        <div class="results-header">
+          <h4>📊 筛选结果</h4>
+          <span style="font-size:12px;color:var(--text-muted);">共 23 只股票</span>
+        </div>
+
+        <!-- 空状态 -->
+        <div id="empty-state" class="empty-state">
+          <div class="icon-box">🔍</div>
+          <h4>暂无筛选结果</h4>
+          <p>点击「执行筛选」开始 Pipeline 选股流程</p>
+          <div style="margin-top:var(--space-16);"><button class="btn btn-primary" onclick="document.getElementById('empty-state').style.display='none';document.getElementById('results-table').style.display='';">⚡ 执行筛选</button></div>
+        </div>
+
+        <!-- 结果表格（初始隐藏） -->
+        <div id="results-table" style="display:none;">
+          <table class="table">
+            <tr><th>代码</th><th>名称</th><th>最新价</th><th>评分</th><th>信号</th><th></th></tr>
+            <tr class="clickable" onclick="showDetail('000762.SZ')"><td>000762.SZ</td><td>西藏矿业</td><td>¥12.34</td><td><span class="tag tag-bullish">92</span></td><td><span class="tag tag-bullish">看多</span></td><td style="font-size:11px;color:var(--text-muted);">查看 →</td></tr>
+            <tr class="clickable" onclick="showDetail('000001.SZ')"><td>000001.SZ</td><td>平安银行</td><td>¥11.28</td><td><span class="tag tag-bullish">88</span></td><td><span class="tag tag-bullish">看多</span></td><td style="font-size:11px;color:var(--text-muted);">查看 →</td></tr>
+            <tr class="clickable" onclick="showDetail('002415.SZ')"><td>002415.SZ</td><td>海康威视</td><td>¥32.68</td><td><span class="tag tag-watch">75</span></td><td><span class="tag tag-watch">关注</span></td><td style="font-size:11px;color:var(--text-muted);">查看 →</td></tr>
+            <tr class="clickable" onclick="showDetail('600519.SH')"><td>600519.SH</td><td>贵州茅台</td><td>¥1,685.00</td><td><span class="tag tag-bullish">85</span></td><td><span class="tag tag-bullish">看多</span></td><td style="font-size:11px;color:var(--text-muted);">查看 →</td></tr>
+            <tr class="clickable" onclick="showDetail('300750.SZ')"><td>300750.SZ</td><td>宁德时代</td><td>¥218.50</td><td><span class="tag tag-watch">72</span></td><td><span class="tag tag-watch">关注</span></td><td style="font-size:11px;color:var(--text-muted);">查看 →</td></tr>
+            <tr class="clickable" onclick="showDetail('002594.SZ')"><td>002594.SZ</td><td>比亚迪</td><td>¥265.80</td><td><span class="tag tag-bullish">90</span></td><td><span class="tag tag-bullish">看多</span></td><td style="font-size:11px;color:var(--text-muted);">查看 →</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <!-- 右栏: SignalFusionConfig -->
+      <div class="config-panel">
+        <h4>⚙️ 融合配置</h4>
+        <div class="config-item">
+          <label>量价形态权重</label>
+          <div style="display:flex;align-items:center;gap:var(--space-8);">
+            <input type="range" min="0" max="100" value="35" style="flex:1;accent-color:#3B82F6;">
+            <span style="font-size:13px;color:var(--text-primary);">35%</span>
+          </div>
+        </div>
+        <div class="config-item">
+          <label>缠论评分权重</label>
+          <div style="display:flex;align-items:center;gap:var(--space-8);">
+            <input type="range" min="0" max="100" value="30" style="flex:1;accent-color:#3B82F6;">
+            <span style="font-size:13px;color:var(--text-primary);">30%</span>
+          </div>
+        </div>
+        <div class="config-item">
+          <label>筹码信号权重</label>
+          <div style="display:flex;align-items:center;gap:var(--space-8);">
+            <input type="range" min="0" max="100" value="20" style="flex:1;accent-color:#3B82F6;">
+            <span style="font-size:13px;color:var(--text-primary);">20%</span>
+          </div>
+        </div>
+        <div class="config-item">
+          <label>AI 研判权重</label>
+          <div style="display:flex;align-items:center;gap:var(--space-8);">
+            <input type="range" min="0" max="100" value="15" style="flex:1;accent-color:#3B82F6;">
+            <span style="font-size:13px;color:var(--text-primary);">15%</span>
+          </div>
+        </div>
+        <div style="margin-top:var(--space-16);padding:var(--space-12);background:var(--bg-subtle);border-radius:var(--radius-sm);">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-4);">最低通过阈值</div>
+          <select class="select" style="width:100%;"><option>≥ 70 分（推荐）</option><option>≥ 60 分</option><option>≥ 80 分</option></select>
+        </div>
+        <div style="margin-top:var(--space-12);"><button class="btn btn-primary" style="width:100%;justify-content:center;">💾 保存配置</button></div>
+      </div>
+    </div>
+
+    <!-- 信号详情弹窗（隐藏） -->
+    <div id="detail-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeDetail()">
+      <div class="modal">
+        <div class="modal-header"><h3>📋 信号详情 — <span id="modal-stock">000762.SZ</span></h3><button class="modal-close" onclick="closeDetail()">✕</button></div>
+        <div class="modal-content">
+          <div class="modal-body" id="modal-body"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="closeDetail()">关闭</button>
+          <button class="btn btn-primary" onclick="closeDetail();alert('已跳转到个股分析页')">📈 查看完整分析</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。</div>
+  </main>
+</div>
+
+<script>
+var stockData = {
+  '000762.SZ': {name:'西藏矿业',score:92,signal:'看多',price:'¥12.34',strategies:{liangjia:'B2 放量突破',chanlun:'三类卖点 (score:0.82)',chip:'主力吸筹',ai:'静待观察'},reasons:['量价形态 B2 放量突破确认','主力资金连续3日净流入','MACD 金叉信号','共振评分 85/100']},
+  '000001.SZ': {name:'平安银行',score:88,signal:'看多',price:'¥11.28',strategies:{liangjia:'B1 底部放量',chanlun:'二类买点 (score:0.78)',chip:'密集成交区支撑',ai:'推荐关注'},reasons:['底部放量长阳','RSI 从超卖区反弹','筹码密集区支撑有效','市净率处于历史低位']},
+  '002415.SZ': {name:'海康威视',score:75,signal:'关注',price:'¥32.68',strategies:{liangjia:'B3 均线多头',chanlun:'中枢下沿支撑',chip:'筹码密集',ai:'中性'},reasons:['均线多头排列','中枢下沿支撑有效','量能萎缩待放量']},
+  '600519.SH': {name:'贵州茅台',score:85,signal:'看多',price:'¥1,685.00',strategies:{liangjia:'B1 趋势突破',chanlun:'二类买点',chip:'主力持仓集中',ai:'看多'},reasons:['趋势线突破确认','大单资金净流入','北向资金加仓']},
+  '300750.SZ': {name:'宁德时代',score:72,signal:'关注',price:'¥218.50',strategies:{liangjia:'观望',chanlun:'中枢震荡',chip:'获利盘消化',ai:'中性'},reasons:['高位中枢震荡','成交量萎缩','等待方向选择']},
+  '002594.SZ': {name:'比亚迪',score:90,signal:'看多',price:'¥265.80',strategies:{liangjia:'B2 放量突破',chanlun:'三类买点 (score:0.85)',chip:'主力吸筹加速',ai:'强烈看多'},reasons:['放量突破前高','新能源政策利好','机构上调目标价','技术面多头共振']}
+};
+
+function showDetail(code){
+  var d = stockData[code];
+  if(!d) return;
+  document.getElementById('modal-stock').textContent = code + ' ' + d.name;
+  var html = '<div style="margin-bottom:var(--space-12);"><table class="table"><tr><th>策略</th><th>信号</th></tr>';
+  for(var k in d.strategies){
+    var label = {liangjia:'📊 量价形态',chanlun:'🧩 缠论',chip:'📦 筹码',ai:'🤖 AI研判'}[k]||k;
+    var cls = 'tag tag-' + (d.strategies[k].includes('看多')||d.strategies[k].includes('买')?'bullish':d.strategies[k].includes('卖')?'bearish':'watch');
+    html += '<tr><td>'+label+'</td><td><span class="'+cls+'">'+d.strategies[k]+'</span></td></tr>';
+  }
+  html += '</table></div>';
+  html += '<h4 style="font-size:13px;margin-bottom:var(--space-8);">📝 选股理由</h4><ul style="padding-left:var(--space-16);">';
+  d.reasons.forEach(function(r){ html += '<li style="margin-bottom:var(--space-4);">'+r+'</li>'; });
+  html += '</ul>';
+  html += '<div style="margin-top:var(--space-12);display:flex;gap:var(--space-8);">';
+  html += '<button class="btn" style="flex:1;font-size:12px;justify-content:center;" onclick="closeDetail();location.href=\'indicator-ide.html\'">📈 个股分析</button>';
+  html += '<button class="btn btn-primary" style="flex:1;font-size:12px;justify-content:center;" onclick="closeDetail();alert(\'已添加到自选监控\')">⭐ 加入自选</button>';
+  html += '</div>';
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('detail-modal').style.display = 'flex';
+}
+function closeDetail(){ document.getElementById('detail-modal').style.display = 'none'; }
+</script>
+</body>
+</html>

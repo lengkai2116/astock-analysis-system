@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>个股策略分析 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css">
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/python/python.min.js"></script>
+<style>
+.top-bar { display: flex; align-items: center; gap: var(--space-12); margin-bottom: var(--space-16); flex-wrap: wrap; }
+.stock-selector { display: flex; align-items: center; gap: var(--space-8); }
+.stock-selector .input { width: 220px; }
+.period-tabs { display: flex; gap: var(--space-4); }
+.period-tab { padding: var(--space-6) var(--space-14); border-radius: var(--radius-sm); background: var(--bg-surface); border: 1px solid var(--border-default); cursor: pointer; font-size: 13px; color: var(--text-secondary); transition: all .15s; }
+.period-tab:hover { background: var(--bg-muted); }
+.period-tab.active { background: var(--color-brand-500); color: white; border-color: var(--color-brand-500); }
+
+.main-area { display: grid; grid-template-columns: 1fr 320px; gap: var(--space-16); margin-bottom: var(--space-16); }
+.chart-section { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.chart-section .chart-title { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-bottom: var(--space-8); display:flex;justify-content:space-between; }
+#kline-chart { height: 420px; }
+.side-panel { display: flex; flex-direction: column; gap: var(--space-12); }
+
+.signal-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.signal-card h4 { font-size: 13px; font-weight: 600; margin-bottom: var(--space-8); color: var(--text-secondary); }
+.signal-item { display: flex; justify-content: space-between; padding: var(--space-6) 0; border-bottom: 1px solid var(--border-default); font-size: 13px; }
+.signal-item:last-child { border-bottom: none; }
+
+.code-section { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow: hidden; }
+.code-header { display: flex; justify-content: space-between; align-items: center; padding: var(--space-12) var(--space-16); border-bottom: 1px solid var(--border-default); }
+.code-header h4 { font-size: 13px; font-weight: 600; }
+.CodeMirror { height: 140px; font-family: var(--font-mono) !important; font-size: 12px; }
+
+.chanlun-legend { display: flex; gap: var(--space-12); padding: var(--space-8) 0; flex-wrap: wrap; }
+.chanlun-legend span { display: flex; align-items: center; gap: var(--space-4); font-size: 11px; color: var(--text-muted); }
+.chanlun-legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.fractal-top { background: #EF4444; width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid #EF4444; display:inline-block; }
+.fractal-bot { background: #22C55E; width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid #22C55E; display:inline-block; }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"> <div class="sidebar-logo"><span>📊</span> A股分析系统</div>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item"><span class="icon">📊</span>仪表盘</a></div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="indicator-ide.html" class="sidebar-item active"><span class="icon">📈</span>个股策略分析</a>
+      <a href="screener.html" class="sidebar-item"><span class="icon">🔍</span>选股系统</a>
+      <a href="watchlist.html" class="sidebar-item"><span class="icon">⭐</span>自选监控</a>
+      <a href="ai-analysis.html" class="sidebar-item"><span class="icon">🤖</span>AI 分析</a>
+      <a href="chip-analysis.html" class="sidebar-item"><span class="icon">🧩</span>筹码分析 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item"><span class="icon">📉</span>回测系统</a>
+      <a href="factor-manager.html" class="sidebar-item"><span class="icon">📊</span>因子管理</a>
+      <a href="strategy-templates.html" class="sidebar-item"><span class="icon">📋</span>策略模板</a>
+      <a href="playback.html" class="sidebar-item"><span class="icon">⏪</span>复盘中心 <span class="badge-new">NEW</span></a>
+      <a href="virtual-verify.html" class="sidebar-item"><span class="icon">🏗️</span>虚拟验证 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item"><span class="icon">📑</span>报告中心</a>
+      <a href="alert.html" class="sidebar-item"><span class="icon">🔔</span>预警管理 <span class="badge-new">NEW</span></a>
+      <a href="data-management.html" class="sidebar-item"><span class="icon">🔄</span>数据管理 <span class="badge-new">NEW</span></a>
+      <a href="system-health.html" class="sidebar-item"><span class="icon">❤️</span>系统诊断 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item"><span class="icon">👤</span>账户管理</a></div>
+  </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>📈 个股策略分析</h1>
+      <div class="page-header-actions">
+        <button class="btn" onclick="alert('🔗 已发送到AI分析页面')">🤖 AI 分析</button>
+        <button class="btn btn-primary" onclick="alert('⚡ 已发送到回测系统')">⚡ 回测验证</button>
+      </div>
+    </div>
+
+    <!-- 顶部工具栏 -->
+    <div class="top-bar">
+      <div class="stock-selector">
+        <input class="input" value="000762.SZ" placeholder="输入股票代码/名称" style="width:160px;">
+        <select class="select" style="width:120px;"><option>西藏矿业</option><option>平安银行</option><option>贵州茅台</option><option>宁德时代</option></select>
+      </div>
+      <div class="period-tabs">
+        <span class="period-tab">日线</span>
+        <span class="period-tab active">周线</span>
+        <span class="period-tab">月线</span>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:var(--space-4);">
+        <span class="status-dot green"></span><span style="font-size:12px;color:var(--text-muted);">数据源: Tushare</span>
+      </div>
+    </div>
+
+    <!-- 缠论图例 -->
+    <div class="chanlun-legend">
+      <span><span class="fractal-top"></span> 顶分型</span>
+      <span><span class="fractal-bot"></span> 底分型</span>
+      <span><span style="display:inline-block;width:20px;height:2px;background:#F59E0B;"></span> 笔</span>
+      <span><span style="display:inline-block;width:16px;height:16px;background:rgba(139,92,246,0.3);border:1px solid #8B5CF6;border-radius:2px;"></span> 中枢</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#EF4444;"></span> 一类买点</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#F59E0B;"></span> 二类买点</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22C55E;"></span> 三类买点</span>
+    </div>
+
+    <!-- 主区域: K线+缠论 左 / 信号面板 右 -->
+    <div class="main-area">
+      <div class="chart-section">
+        <div class="chart-title"><span>000762.SZ 西藏矿业 · K线 + 缠论</span><span style="font-size:12px;color:var(--text-muted);">收盘价: ¥12.34  <span class="down">↓ -2.1%</span></span></div>
+        <div id="kline-chart"></div>
+      </div>
+      <div class="side-panel">
+        <!-- 策略信号 -->
+        <div class="signal-card">
+          <h4>📊 策略信号</h4>
+          <div class="signal-item"><span>量价形态</span><span class="tag tag-bullish">看多 (B2)</span></div>
+          <div class="signal-item"><span>缠论评分</span><span class="tag tag-watch">观察 (5/100)</span></div>
+          <div class="signal-item"><span>筹码信号</span><span class="tag tag-bullish">主力吸筹</span></div>
+          <div class="signal-item"><span>AI 综合研判</span><span class="tag tag-watch">静待观察</span></div>
+          <div style="margin-top:var(--space-8);text-align:center;padding:var(--space-8);background:var(--bg-subtle);border-radius:var(--radius-sm);">
+            <span style="font-size:11px;color:var(--text-muted);">共振评分</span>
+            <div style="font-size:18px;font-weight:700;color:var(--signal-watch);">62/100</div>
+          </div>
+        </div>
+        <!-- 缠论分析 -->
+        <div class="signal-card">
+          <h4>🧩 缠论分析</h4>
+          <div class="signal-item"><span>当前笔</span><span>下降笔 (第7笔)</span></div>
+          <div class="signal-item"><span>中枢区间</span><span>¥12.10 - ¥13.50</span></div>
+          <div class="signal-item"><span>买卖点</span><span class="tag tag-watch">三类卖点待确认</span></div>
+          <div class="signal-item"><span>阶段判定</span><span style="color:var(--color-down);">下降趋势</span></div>
+        </div>
+        <!-- 策略解读 -->
+        <div class="signal-card">
+          <h4>💡 策略解读</h4>
+          <div style="font-size:12px;color:var(--text-secondary);line-height:1.7;">
+            <p>• 当前处于下降笔中，中枢下沿 ¥12.10 为关键支撑</p>
+            <p>• 三类卖点 score 0.82，跌破买点价需静待</p>
+            <p>• 量价形态 B2 看多信号与缠论趋势矛盾，<span class="tag tag-watch" style="font-size:10px;">关注共振</span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 指标 IDE 代码编辑器 -->
+    <div class="code-section">
+      <div class="code-header">
+        <h4>📝 指标编辑器</h4>
+        <div style="display:flex;gap:var(--space-4);">
+          <button class="btn" style="height:32px;font-size:12px;padding:0 var(--space-12);">📋 添加指标</button>
+          <button class="btn btn-primary" style="height:32px;font-size:12px;padding:0 var(--space-12);">▶ 运行</button>
+        </div>
+      </div>
+      <textarea id="code-editor"># 自定义指标: MACD + KDJ
+def calculate(data):
+    # MACD
+    ema12 = data['close'].ewm(span=12).mean()
+    ema26 = data['close'].ewm(span=26).mean()
+    macd = ema12 - ema26
+    signal = macd.ewm(span=9).mean()
+    hist = macd - signal
+
+    # KDJ
+    low9 = data['low'].rolling(9).min()
+    high9 = data['high'].rolling(9).max()
+    rsv = (data['close'] - low9) / (high9 - low9) * 100
+    k = rsv.ewm(com=2).mean()
+    d = k.ewm(com=2).mean()
+    j = 3 * k - 2 * d
+
+    return {'macd': macd, 'signal': signal, 'hist': hist, 'k': k, 'd': d, 'j': j}</textarea>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。</div>
+  </main>
+</div>
+
+<script>
+// K线数据生成 (60根日K)
+function genKData(n){
+  var d=[], price=12.50;
+  for(var i=n;i>0;i--){
+    var dt=new Date();dt.setDate(dt.getDate()-i);
+    var open=price+(Math.random()-0.5)*0.8;
+    var close=open+(Math.random()-0.5)*1.2;
+    var high=Math.max(open,close)+Math.random()*0.5;
+    var low=Math.min(open,close)-Math.random()*0.5;
+    price=close;
+    d.push([dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0'),open,close,low,high,Math.floor(Math.random()*500000+100000)]);
+  }
+  return d;
+}
+var data=genKData(60);
+var dates=data.map(function(v){return v[0];});
+
+// 缠论标记数据 (模拟)
+var chanlunMarks = {
+  // 顶分型位置
+  topFractals: [5, 15, 28, 42, 52],
+  // 底分型位置
+  bottomFractals: [10, 22, 35, 48, 58],
+  // 中枢区域 [start_idx, end_idx]
+  zhongshu: [[18, 32]],
+  // 买卖点 [index, type]
+  maidian: [{idx:10,type:'buy1'},{idx:22,type:'buy2'},{idx:35,type:'buy3'},{idx:52,type:'sell1'}]
+};
+
+// 绘制缠论标记的 graphic 元素
+function getChanlunGraphics(dataLen, prices){
+  var g=[];
+  var h=420, w = document.getElementById('kline-chart').offsetWidth - 60;
+  function xPos(i){ return 30 + (i/(dataLen-1))*(w-40); }
+  function yPos(p){ var mn=Math.min.apply(null,prices),mx=Math.max.apply(null,prices); return 30 + (mx-p)/(mx-mn)*(h-60); }
+
+  // 顶分型 (红色三角▼)
+  chanlunMarks.topFractals.forEach(function(i){
+    var px=xPos(i), py=yPos(prices[i]);
+    g.push({type:'group',left:px-5,top:py-8,children:[
+      {type:'polygon',shape:{points:[{x:0,y:0},{x:10,y:0},{x:5,y:8}]},style:{fill:'#EF4444',opacity:0.9}},
+      {type:'text',left:0,top:10,style:{text:'顶',fontSize:9,fill:'#EF4444',fontFamily:'Inter'}}
+    ]});
+  });
+  // 底分型 (绿色三角▲)
+  chanlunMarks.bottomFractals.forEach(function(i){
+    var px=xPos(i), py=yPos(prices[i]);
+    g.push({type:'group',left:px-5,top:py,children:[
+      {type:'polygon',shape:{points:[{x:0,y:8},{x:10,y:8},{x:5,y:0}]},style:{fill:'#22C55E',opacity:0.9}},
+      {type:'text',left:0,top:-12,style:{text:'底',fontSize:9,fill:'#22C55E',fontFamily:'Inter'}}
+    ]});
+  });
+  // 中枢区域 (半透明矩形)
+  chanlunMarks.zhongshu.forEach(function(z){
+    var x1=xPos(z[0]), x2=xPos(z[1]);
+    g.push({type:'rect',left:x1,top:40,width:x2-x1,height:h-80,
+      style:{fill:'rgba(139,92,246,0.12)',stroke:'#8B5CF6',lineWidth:1,lineDash:[4,4]}});
+  });
+  // 买卖点标记
+  chanlunMarks.maidian.forEach(function(m){
+    var px=xPos(m.idx), py=yPos(prices[m.idx]);
+    var color={buy1:'#EF4444',buy2:'#F59E0B',buy3:'#22C55E',sell1:'#EF4444'}[m.type]||'#3B82F6';
+    var label={buy1:'一买',buy2:'二买',buy3:'三买',sell1:'一卖'}[m.type]||'?';
+    g.push({type:'circle',left:px-6,top:py-6,shape:{cx:6,cy:6,r:6},style:{fill:color,opacity:0.85}});
+    g.push({type:'text',left:-12,top:-14,style:{text:label,fontSize:10,fill:color,fontWeight:'bold',fontFamily:'Inter'}});
+  });
+  return g;
+}
+
+// K线图
+(function(){
+  var dom = document.getElementById('kline-chart');
+  var c = echarts.init(dom);
+  var prices = data.map(function(v){return v[2];});
+  var vols = data.map(function(v){return v[5];});
+  var maxVol = Math.max.apply(null, vols);
+
+  var option = {
+    backgroundColor:'transparent',
+    tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
+    grid:[
+      {left:50,right:20,top:10,height:300},
+      {left:50,right:20,top:330,height:70}
+    ],
+    xAxis:[
+      {type:'category',data:dates,axisTick:{show:false},axisLabel:{show:false},axisLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},gridIndex:0},
+      {type:'category',data:dates,axisLabel:{color:'#64748B',fontSize:9,rotate:30},axisLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},gridIndex:1}
+    ],
+    yAxis:[
+      {type:'value',scale:true,splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},axisLabel:{color:'#64748B',fontSize:10},gridIndex:0},
+      {type:'value',scale:true,splitLine:{show:false},axisLabel:{color:'#64748B',fontSize:9},gridIndex:1}
+    ],
+    series:[
+      {name:'K线',type:'candlestick',data:data.map(function(v){return [v[1],v[3],v[4],v[2]];}),itemStyle:{color:'#EF4444',color0:'#22C55E',borderColor:'#EF4444',borderColor0:'#22C55E'}},
+      {name:'成交量',type:'bar',data:vols.map(function(v,i){return {value:v,itemStyle:{color:data[i][1]>=data[i][3]?'rgba(239,68,68,0.5)':'rgba(34,197,94,0.5)'}};}),xAxisIndex:1,yAxisIndex:1}
+    ],
+    graphic: getChanlunGraphics(data.length, prices)
+  };
+  c.setOption(option);
+  window.addEventListener('resize',function(){c.resize();});
+})();
+
+// CodeMirror 编辑器
+(function(){
+  var ta = document.getElementById('code-editor');
+  CodeMirror.fromTextArea(ta, {
+    mode:'python', theme:'material', lineNumbers:true,
+    indentUnit:4, tabSize:4, lineWrapping:true,
+    extraKeys: {'Ctrl-Space': 'autocomplete'}
+  });
+})();
+</script>
+</body>
+</html>

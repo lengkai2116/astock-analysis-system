@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+.login-container { width: 420px; }
+.login-card {
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg); padding: var(--space-40);
+}
+.login-logo { text-align: center; margin-bottom: var(--space-24); }
+.login-logo .icon { font-size: 48px; display: block; margin-bottom: var(--space-12); }
+.login-logo h1 { font-size: 22px; font-weight: 700; }
+.login-logo p { color: var(--text-secondary); font-size: 13px; margin-top: var(--space-4); }
+
+/* 认证状态指示 */
+.auth-status { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 12px; font-size: 12px; color: var(--text-muted); }
+.auth-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.auth-dot.on { background: #22C55E; }
+.auth-dot.off { background: #64748B; }
+
+.form-group { margin-bottom: var(--space-16); }
+.form-group label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: var(--space-6); font-weight: 500; }
+.form-group .input { width: 100%; }
+.login-btn-group { display: flex; gap: var(--space-8); }
+.login-btn { flex: 1; justify-content: center; height: 44px; font-size: 15px; }
+.modify-btn { height: 44px; padding: 0 var(--space-16); font-size: 13px; white-space: nowrap; }
+
+/* 提示信息 */
+.info-box {
+  margin-top: var(--space-16); padding: var(--space-12);
+  border-radius: var(--radius-sm); font-size: 12px; color: var(--text-secondary); line-height: 1.6;
+}
+.info-box.normal { background: rgba(255,255,255,0.04); border: 1px solid var(--border-default); }
+.info-box.blue { background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.2); }
+
+.token-preview-label { font-size: 12px; color: #94a3b8; }
+.token-preview-value { display: block; padding: 6px 8px; background: #0A0A0A; border-radius: 4px; font-size: 12px; color: #f1f5f9; word-break: break-all; margin: 4px 0 8px; font-family: 'SF Mono','Fira Code',monospace; }
+.token-preview-note { font-size: 11px; color: #64748b; }
+
+/* 修改令牌弹窗 */
+.modal-body { max-height: 400px; overflow-y: auto; }
+.step-indicator { display: flex; gap: var(--space-8); margin-bottom: var(--space-20); justify-content: center; }
+.step-dot { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; background: var(--bg-muted); color: var(--text-muted); }
+.step-dot.active { background: var(--color-brand-500); color: white; }
+.step-dot.done { background: #22C55E; color: white; }
+.step-line { width: 40px; height: 2px; background: var(--bg-muted); align-self: center; }
+.step-line.done { background: #22C55E; }
+.modal-footer { display: flex; justify-content: flex-end; gap: var(--space-8); margin-top: var(--space-16); padding-top: var(--space-12); border-top: 1px solid var(--border-default); }
+
+/* 成功弹窗 */
+.success-icon { font-size: 56px; text-align: center; padding: var(--space-16) 0; }
+.success-icon .check { display: inline-flex; width: 64px; height: 64px; border-radius: 50%; background: rgba(34,197,94,0.12); align-items: center; justify-content: center; font-size: 28px; }
+.success-text { text-align: center; }
+.success-text h3 { font-size: 18px; font-weight: 600; margin-bottom: var(--space-8); }
+.success-text p { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="login-container">
+  <div class="login-card">
+    <div class="login-logo">
+      <span class="icon">📊</span>
+      <h1>A股分析系统</h1>
+      <p>全栈量化分析 · 策略研究平台</p>
+    </div>
+
+    <!-- 认证状态指示器 -->
+    <div class="auth-status" id="auth-status">
+      <span class="auth-dot on" id="auth-dot"></span>
+      <span id="auth-text">服务端已开启令牌验证</span>
+    </div>
+
+    <!-- 登录表单 -->
+    <form onsubmit="handleLogin(event)">
+      <div class="form-group">
+        <label>访问令牌</label>
+        <input id="token-input" class="input" type="password" placeholder="请输入您的访问令牌（默认 123456）" value="123456" />
+      </div>
+      <div class="login-btn-group">
+        <button type="submit" class="btn btn-primary login-btn" id="login-btn">🔑 进入系统</button>
+        <button type="button" class="btn modify-btn" onclick="openChangeModal()">🔑 修改令牌</button>
+      </div>
+    </form>
+
+    <!-- 令牌提示（有令牌预览时显示） -->
+    <div class="info-box blue" id="token-preview-box" style="display:none;">
+      <p class="token-preview-label">当前令牌前 8 位：</p>
+      <code class="token-preview-value" id="token-preview-text">123456...</code>
+      <p class="token-preview-note">令牌在项目 .env 文件的 AUTH_TOKEN 变量配置，可通过「修改令牌」功能自定义。</p>
+    </div>
+
+    <!-- 系统信息 -->
+    <div class="info-box normal">
+      💡 默认令牌为 <strong>123456</strong> · 可通过「修改令牌」功能自定义。<br>
+      如需完全免鉴权，在 .env 中不设置 AUTH_TOKEN 即可。<br>
+      v2.0.0 · 仅供研究参考
+    </div>
+  </div>
+</div>
+
+<!-- 修改令牌弹窗 -->
+<div id="change-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeChangeModal()">
+  <div class="modal" style="min-width:420px;">
+    <div class="modal-header">
+      <h3>🔑 修改访问令牌</h3>
+      <button class="modal-close" onclick="closeChangeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- 步骤指示器 -->
+      <div class="step-indicator">
+        <span class="step-dot active" id="s1">1</span>
+        <span class="step-line" id="sl1"></span>
+        <span class="step-dot" id="s2">2</span>
+        <span class="step-line" id="sl2"></span>
+        <span class="step-dot" id="s3">3</span>
+      </div>
+
+      <!-- Step 1: 旧令牌 -->
+      <div id="step1-content">
+        <div class="form-group">
+          <label>请输入当前令牌</label>
+          <input id="old-token" class="input" type="password" placeholder="输入当前使用的令牌" />
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);">提示：若为默认令牌请输入 123456</div>
+      </div>
+
+      <!-- Step 2: 新令牌 -->
+      <div id="step2-content" style="display:none;">
+        <div class="form-group">
+          <label>请输入新令牌</label>
+          <input id="new-token-1" class="input" type="password" placeholder="6 位以上，字母/数字/符号均可" />
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);">建议使用 8 位以上的复杂字符串</div>
+      </div>
+
+      <!-- Step 3: 确认新令牌 -->
+      <div id="step3-content" style="display:none;">
+        <div class="form-group">
+          <label>请再次输入新令牌</label>
+          <input id="new-token-2" class="input" type="password" placeholder="与上一步输入一致" />
+        </div>
+      </div>
+
+      <!-- 错误提示 -->
+      <div id="change-error" style="font-size:12px;color:#EF4444;margin-top:var(--space-8);display:none;"></div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn" onclick="closeChangeModal()" id="change-cancel">取消</button>
+      <button class="btn btn-primary" id="change-next" onclick="nextStep()">下一步</button>
+    </div>
+  </div>
+</div>
+
+<!-- 成功弹窗 -->
+<div id="success-modal" class="modal-overlay" style="display:none;">
+  <div class="modal" style="min-width:380px;">
+    <div class="success-icon"><span class="check">✅</span></div>
+    <div class="success-text">
+      <h3>令牌修改成功</h3>
+      <p>新的访问令牌已生效。<br>请使用新令牌重新登录系统。</p>
+    </div>
+    <div style="text-align:center;margin-top:var(--space-16);">
+      <button class="btn btn-primary" style="justify-content:center;padding:0 var(--space-32);" onclick="closeSuccessModal()">我知道了</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentStep = 1;
+let newToken = '';
+
+// 模拟认证状态查询
+(function(){
+  // 模拟从后端获取 auth 状态
+  setTimeout(function(){
+    var dot = document.getElementById('auth-dot');
+    var text = document.getElementById('auth-text');
+    // 默认鉴权开启，令牌为 123456
+    dot.className = 'auth-dot on';
+    text.textContent = '服务端已开启令牌验证 · 默认令牌 123456';
+    document.getElementById('token-preview-box').style.display = '';
+    document.getElementById('token-preview-text').textContent = '123456...';
+  }, 300);
+})();
+
+// 登录
+function handleLogin(e){
+  e.preventDefault();
+  var token = document.getElementById('token-input').value;
+  var btn = document.getElementById('login-btn');
+  if(!token.trim()){
+    alert('请输入访问令牌');
+    return;
+  }
+  btn.innerHTML = '⏳ 验证中...';
+  btn.disabled = true;
+  setTimeout(function(){
+    // 模拟验证成功
+    if(token.length >= 4){
+      window.location.href = 'dashboard.html';
+    } else {
+      btn.innerHTML = '🔑 进入系统';
+      btn.disabled = false;
+      alert('令牌无效，请重试');
+    }
+  }, 800);
+}
+
+// 打开修改令牌弹窗
+function openChangeModal(){
+  currentStep = 1;
+  newToken = '';
+  resetStepUI();
+  document.getElementById('step1-content').style.display = '';
+  document.getElementById('step2-content').style.display = 'none';
+  document.getElementById('step3-content').style.display = 'none';
+  document.getElementById('change-error').style.display = 'none';
+  document.getElementById('old-token').value = '';
+  document.getElementById('new-token-1').value = '';
+  document.getElementById('new-token-2').value = '';
+  document.getElementById('change-next').textContent = '下一步';
+  document.getElementById('change-modal').style.display = 'flex';
+}
+
+function closeChangeModal(){
+  document.getElementById('change-modal').style.display = 'none';
+}
+
+function resetStepUI(){
+  for(var i=1;i<=3;i++){
+    document.getElementById('s'+i).className = 'step-dot' + (i===1?' active':'');
+    if(i<3) document.getElementById('sl'+i).className = 'step-line';
+  }
+}
+
+function nextStep(){
+  var err = document.getElementById('change-error');
+  err.style.display = 'none';
+
+  if(currentStep === 1){
+    var old = document.getElementById('old-token').value.trim();
+    // 模拟验证旧令牌
+    if(!old || old === ''){
+      err.textContent = '请输入当前令牌';
+      err.style.display = '';
+      return;
+    }
+    // 模拟旧令牌验证通过
+    currentStep = 2;
+    document.getElementById('s1').className = 'step-dot done';
+    document.getElementById('sl1').className = 'step-line done';
+    document.getElementById('s2').className = 'step-dot active';
+    document.getElementById('step1-content').style.display = 'none';
+    document.getElementById('step2-content').style.display = '';
+    document.getElementById('change-next').textContent = '下一步';
+
+  } else if(currentStep === 2){
+    var t1 = document.getElementById('new-token-1').value.trim();
+    if(!t1 || t1.length < 6){
+      err.textContent = '新令牌至少 6 位字符';
+      err.style.display = '';
+      return;
+    }
+    newToken = t1;
+    currentStep = 3;
+    document.getElementById('s2').className = 'step-dot done';
+    document.getElementById('sl2').className = 'step-line done';
+    document.getElementById('s3').className = 'step-dot active';
+    document.getElementById('step2-content').style.display = 'none';
+    document.getElementById('step3-content').style.display = '';
+    document.getElementById('change-next').textContent = '确认修改';
+
+  } else if(currentStep === 3){
+    var t2 = document.getElementById('new-token-2').value.trim();
+    if(t2 !== newToken){
+      err.textContent = '两次输入的新令牌不一致，请重新输入';
+      err.style.display = '';
+      document.getElementById('new-token-2').value = '';
+      return;
+    }
+    // 模拟提交修改
+    document.getElementById('change-next').textContent = '⏳ 修改中...';
+    document.getElementById('change-next').disabled = true;
+    setTimeout(function(){
+      closeChangeModal();
+      document.getElementById('change-next').textContent = '下一步';
+      document.getElementById('change-next').disabled = false;
+      openSuccessModal();
+    }, 1000);
+  }
+}
+
+function openSuccessModal(){
+  document.getElementById('success-modal').style.display = 'flex';
+}
+
+function closeSuccessModal(){
+  document.getElementById('success-modal').style.display = 'none';
+  // 用新令牌预填登录框
+  document.getElementById('token-input').value = newToken;
+}
+</script>
+</body>
+</html>

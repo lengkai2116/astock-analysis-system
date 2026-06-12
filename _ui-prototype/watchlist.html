@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>自选监控 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.watchlist-toolbar { display: flex; align-items: center; gap: var(--space-12); margin-bottom: var(--space-16); flex-wrap: wrap; }
+.watchlist-toolbar .input { width: 200px; }
+.socket-status { display: flex; align-items: center; gap: var(--space-6); font-size: 12px; padding: var(--space-6) var(--space-12); border-radius: var(--radius-sm); background: var(--bg-surface); border: 1px solid var(--border-default); }
+.stock-table-wrap { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.column-config-btn { cursor: pointer; padding: var(--space-6) var(--space-10); border-radius: var(--radius-sm); border: 1px solid var(--border-default); background: var(--bg-subtle); color: var(--text-secondary); font-size: 12px; }
+.column-config-btn:hover { background: var(--bg-muted); }
+.watchlist-click { cursor: pointer; }
+.watchlist-click:hover td { background: var(--bg-active); }
+.config-checkbox { display: flex; gap: var(--space-8); flex-wrap: wrap; margin: var(--space-8) 0; }
+.config-checkbox label { display: flex; align-items: center; gap: var(--space-4); font-size: 13px; color: var(--text-secondary); cursor: pointer; padding: var(--space-4) var(--space-8); border-radius: var(--radius-xs); background: var(--bg-subtle); }
+.config-checkbox input { accent-color: #3B82F6; }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"> <div class="sidebar-logo"><span>📊</span> A股分析系统</div>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item"><span class="icon">📊</span>仪表盘</a></div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="indicator-ide.html" class="sidebar-item"><span class="icon">📈</span>个股策略分析</a>
+      <a href="screener.html" class="sidebar-item"><span class="icon">🔍</span>选股系统</a>
+      <a href="watchlist.html" class="sidebar-item active"><span class="icon">⭐</span>自选监控</a>
+      <a href="ai-analysis.html" class="sidebar-item"><span class="icon">🤖</span>AI 分析</a>
+      <a href="chip-analysis.html" class="sidebar-item"><span class="icon">🧩</span>筹码分析 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item"><span class="icon">📉</span>回测系统</a>
+      <a href="factor-manager.html" class="sidebar-item"><span class="icon">📊</span>因子管理</a>
+      <a href="strategy-templates.html" class="sidebar-item"><span class="icon">📋</span>策略模板</a>
+      <a href="playback.html" class="sidebar-item"><span class="icon">⏪</span>复盘中心 <span class="badge-new">NEW</span></a>
+      <a href="virtual-verify.html" class="sidebar-item"><span class="icon">🏗️</span>虚拟验证 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item"><span class="icon">📑</span>报告中心</a>
+      <a href="alert.html" class="sidebar-item"><span class="icon">🔔</span>预警管理 <span class="badge-new">NEW</span></a>
+      <a href="data-management.html" class="sidebar-item"><span class="icon">🔄</span>数据管理 <span class="badge-new">NEW</span></a>
+      <a href="system-health.html" class="sidebar-item"><span class="icon">❤️</span>系统诊断 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item"><span class="icon">👤</span>账户管理</a></div>
+  </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>⭐ 自选监控</h1>
+      <div class="page-header-actions">
+        <div class="socket-status">
+          <span class="status-dot green"></span>WebSocket 已连接
+        </div>
+      </div>
+    </div>
+
+    <!-- 工具栏 -->
+    <div class="watchlist-toolbar">
+      <input class="input" placeholder="🔍 搜索股票代码/名称..." oninput="filterTable(this.value)">
+      <select class="select" style="width:140px;"><option>全部自选股</option><option>量价策略看多</option><option>缠论信号</option><option>筹码信号</option></select>
+      <button class="btn" onclick="alert('📊 策略中心面板已打开')">📊 策略中心</button>
+      <button class="column-config-btn" onclick="toggleColConfig()">⚙️ 列配置</button>
+      <span style="margin-left:auto;font-size:12px;color:var(--text-muted);">最近更新: 刚刚</span>
+    </div>
+
+    <!-- 列配置弹窗 -->
+    <div id="col-config" class="modal-overlay" style="display:none;" onclick="if(event.target===this)toggleColConfig()">
+      <div class="modal" style="min-width:360px;">
+        <div class="modal-header"><h3>⚙️ 列配置</h3><button class="modal-close" onclick="toggleColConfig()">✕</button></div>
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:var(--space-12);">选择要在表格中显示的列</p>
+        <div class="config-checkbox">
+          <label><input type="checkbox" checked> 代码</label>
+          <label><input type="checkbox" checked> 名称</label>
+          <label><input type="checkbox" checked> 最新价</label>
+          <label><input type="checkbox" checked> 涨跌幅</label>
+          <label><input type="checkbox" checked> 成交量</label>
+          <label><input type="checkbox" checked> 策略评分</label>
+          <label><input type="checkbox"> 信号标签</label>
+          <label><input type="checkbox"> 量价评分</label>
+          <label><input type="checkbox"> 缠论评分</label>
+          <label><input type="checkbox"> 筹码评分</label>
+          <label><input type="checkbox"> AI评分</label>
+          <label><input type="checkbox"> 市盈率</label>
+          <label><input type="checkbox"> 市净率</label>
+        </div>
+        <div class="modal-footer"><button class="btn" onclick="toggleColConfig()">取消</button><button class="btn btn-primary" onclick="toggleColConfig();alert('✅ 列配置已保存')">保存</button></div>
+      </div>
+    </div>
+
+    <!-- 数据表格 -->
+    <div class="stock-table-wrap">
+      <table class="table" id="watchlist-table">
+        <tr>
+          <th style="width:30px;"><input type="checkbox" style="accent-color:#3B82F6;"></th>
+          <th>代码</th>
+          <th>名称</th>
+          <th>最新价</th>
+          <th>涨跌幅</th>
+          <th>成交量(手)</th>
+          <th>策略评分</th>
+          <th>信号</th>
+          <th></th>
+        </tr>
+        <tr class="watchlist-click" onclick="location.href='indicator-ide.html'" data-search="西藏矿业 000762.SZ">
+          <td><input type="checkbox" style="accent-color:#3B82F6;"></td>
+          <td>000762.SZ</td>
+          <td>西藏矿业</td>
+          <td>¥12.34</td>
+          <td class="down">-2.10%</td>
+          <td>85,230</td>
+          <td><span class="tag tag-watch">72</span></td>
+          <td><span class="tag tag-watch">关注</span></td>
+          <td style="font-size:11px;color:var(--text-muted);">详情 →</td>
+        </tr>
+        <tr class="watchlist-click" onclick="location.href='indicator-ide.html'" data-search="平安银行 000001.SZ">
+          <td><input type="checkbox" style="accent-color:#3B82F6;"></td>
+          <td>000001.SZ</td>
+          <td>平安银行</td>
+          <td>¥11.28</td>
+          <td class="up">+3.45%</td>
+          <td>1,245,600</td>
+          <td><span class="tag tag-bullish">88</span></td>
+          <td><span class="tag tag-bullish">看多</span></td>
+          <td style="font-size:11px;color:var(--text-muted);">详情 →</td>
+        </tr>
+        <tr class="watchlist-click" onclick="location.href='indicator-ide.html'" data-search="海康威视 002415.SZ">
+          <td><input type="checkbox" style="accent-color:#3B82F6;"></td>
+          <td>002415.SZ</td>
+          <td>海康威视</td>
+          <td>¥32.68</td>
+          <td class="up">+1.28%</td>
+          <td>456,800</td>
+          <td><span class="tag tag-watch">75</span></td>
+          <td><span class="tag tag-watch">关注</span></td>
+          <td style="font-size:11px;color:var(--text-muted);">详情 →</td>
+        </tr>
+        <tr class="watchlist-click" onclick="location.href='indicator-ide.html'" data-search="贵州茅台 600519.SH">
+          <td><input type="checkbox" style="accent-color:#3B82F6;"></td>
+          <td>600519.SH</td>
+          <td>贵州茅台</td>
+          <td>¥1,685.00</td>
+          <td class="up">+0.85%</td>
+          <td>32,150</td>
+          <td><span class="tag tag-bullish">85</span></td>
+          <td><span class="tag tag-bullish">看多</span></td>
+          <td style="font-size:11px;color:var(--text-muted);">详情 →</td>
+        </tr>
+        <tr class="watchlist-click" onclick="location.href='indicator-ide.html'" data-search="宁德时代 300750.SZ">
+          <td><input type="checkbox" style="accent-color:#3B82F6;"></td>
+          <td>300750.SZ</td>
+          <td>宁德时代</td>
+          <td>¥218.50</td>
+          <td class="up">+2.30%</td>
+          <td>785,400</td>
+          <td><span class="tag tag-watch">72</span></td>
+          <td><span class="tag tag-watch">关注</span></td>
+          <td style="font-size:11px;color:var(--text-muted);">详情 →</td>
+        </tr>
+        <tr class="watchlist-click" onclick="location.href='indicator-ide.html'" data-search="比亚迪 002594.SZ">
+          <td><input type="checkbox" style="accent-color:#3B82F6;"></td>
+          <td>002594.SZ</td>
+          <td>比亚迪</td>
+          <td>¥265.80</td>
+          <td class="down">-0.52%</td>
+          <td>324,500</td>
+          <td><span class="tag tag-bullish">90</span></td>
+          <td><span class="tag tag-bullish">看多</span></td>
+          <td style="font-size:11px;color:var(--text-muted);">详情 →</td>
+        </tr>
+        <tr class="watchlist-click" onclick="location.href='indicator-ide.html'" data-search="美的集团 000333.SZ">
+          <td><input type="checkbox" style="accent-color:#3B82F6;"></td>
+          <td>000333.SZ</td>
+          <td>美的集团</td>
+          <td>¥62.30</td>
+          <td class="up">+1.15%</td>
+          <td>234,100</td>
+          <td><span class="tag tag-neutral">65</span></td>
+          <td><span class="tag tag-neutral">中性</span></td>
+          <td style="font-size:11px;color:var(--text-muted);">详情 →</td>
+        </tr>
+        <tr class="watchlist-click" onclick="location.href='indicator-ide.html'" data-search="五粮液 000858.SZ">
+          <td><input type="checkbox" style="accent-color:#3B82F6;"></td>
+          <td>000858.SZ</td>
+          <td>五粮液</td>
+          <td>¥145.20</td>
+          <td class="down">-1.80%</td>
+          <td>198,700</td>
+          <td><span class="tag tag-bullish">82</span></td>
+          <td><span class="tag tag-bullish">看多</span></td>
+          <td style="font-size:11px;color:var(--text-muted);">详情 →</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。</div>
+  </main>
+</div>
+
+<script>
+function filterTable(val){
+  var v = val.toLowerCase();
+  document.querySelectorAll('#watchlist-table tbody tr, #watchlist-table tr.watchlist-click').forEach(function(r){
+    r.style.display = r.getAttribute('data-search').toLowerCase().includes(v) ? '' : 'none';
+  });
+}
+function toggleColConfig(){
+  var m = document.getElementById('col-config');
+  m.style.display = m.style.display === 'none' ? 'flex' : 'none';
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>预警管理 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.rule-list { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); min-height: 200px; }
+.rule-item { display: flex; align-items: center; justify-content: space-between; padding: var(--space-10) 0; border-bottom: 1px solid var(--border-default); }
+.rule-item:last-child { border-bottom: none; }
+.rule-item .rule-info { display: flex; flex-direction: column; gap: var(--space-2); }
+.rule-item .rule-name { font-size: 13px; font-weight: 500; }
+.rule-item .rule-detail { font-size: 11px; color: var(--text-muted); }
+.rule-item .rule-actions { display: flex; gap: var(--space-4); align-items: center; }
+.rule-item .rule-actions span { font-size: 12px; color: var(--text-secondary); cursor: pointer; padding: var(--space-4) var(--space-6); border-radius: var(--radius-xs); }
+.rule-item .rule-actions span:hover { background: var(--bg-active); }
+.toggle { width: 36px; height: 20px; border-radius: 10px; background: var(--bg-muted); cursor: pointer; position: relative; }
+.toggle.on { background: var(--color-brand-500); }
+.toggle::after { content:''; position:absolute; width:16px; height:16px; border-radius:50%; background:white; top:2px; left:2px; transition: all .15s; }
+.toggle.on::after { left:18px; }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"><div class="sidebar-logo"><span>📊</span> A股分析系统</div>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item"><span class="icon">📊</span>仪表盘</a></div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="indicator-ide.html" class="sidebar-item"><span class="icon">📈</span>个股策略分析</a>
+      <a href="screener.html" class="sidebar-item"><span class="icon">🔍</span>选股系统</a>
+      <a href="watchlist.html" class="sidebar-item"><span class="icon">⭐</span>自选监控</a>
+      <a href="ai-analysis.html" class="sidebar-item"><span class="icon">🤖</span>AI 分析</a>
+      <a href="chip-analysis.html" class="sidebar-item"><span class="icon">🧩</span>筹码分析 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item"><span class="icon">📉</span>回测系统</a>
+      <a href="factor-manager.html" class="sidebar-item"><span class="icon">📊</span>因子管理</a>
+      <a href="strategy-templates.html" class="sidebar-item"><span class="icon">📋</span>策略模板</a>
+      <a href="playback.html" class="sidebar-item"><span class="icon">⏪</span>复盘中心 <span class="badge-new">NEW</span></a>
+      <a href="virtual-verify.html" class="sidebar-item"><span class="icon">🏗️</span>虚拟验证 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item"><span class="icon">📑</span>报告中心</a>
+      <a href="alert.html" class="sidebar-item active"><span class="icon">🔔</span>预警管理 <span class="badge-new">NEW</span></a>
+      <a href="data-management.html" class="sidebar-item"><span class="icon">🔄</span>数据管理 <span class="badge-new">NEW</span></a>
+      <a href="system-health.html" class="sidebar-item"><span class="icon">❤️</span>系统诊断 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item"><span class="icon">👤</span>账户管理</a></div>
+  </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>🔔 预警管理</h1>
+      <div class="page-header-actions">
+        <button class="btn btn-primary" onclick="alert('📝 新建预警规则弹窗已打开')">📝 新建规则</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <span class="tab-item active" onclick="switchAlertTab(this,'tab-rules')">📋 预警规则</span>
+      <span class="tab-item" onclick="switchAlertTab(this,'tab-history')">📜 通知记录</span>
+      <span class="tab-item" onclick="switchAlertTab(this,'tab-settings')">⚙️ 预警设置</span>
+    </div>
+
+    <!-- 预警规则 -->
+    <div id="tab-rules">
+      <div class="rule-list">
+        <div class="rule-item">
+          <div class="rule-info"><span class="rule-name">📈 量价形态看多信号</span><span class="rule-detail">西藏矿业 · B2 放量突破 · 触发 8 次 · 最后: 今日 14:30</span></div>
+          <div class="rule-actions"><span class="toggle on" onclick="this.classList.toggle('on')"></span><span>✏️</span><span>🗑️</span></div>
+        </div>
+        <div class="rule-item">
+          <div class="rule-info"><span class="rule-name">🧩 缠论买卖点信号</span><span class="rule-detail">所有自选股 · 三类买卖点 · 触发 15 次 · 最后: 昨日 10:15</span></div>
+          <div class="rule-actions"><span class="toggle on" onclick="this.classList.toggle('on')"></span><span>✏️</span><span>🗑️</span></div>
+        </div>
+        <div class="rule-item">
+          <div class="rule-info"><span class="rule-name">📦 筹码主力异动</span><span class="rule-detail">主力单日净流入 > 500 万 · 触发 3 次 · 最后: 3日前</span></div>
+          <div class="rule-actions"><span class="toggle on" onclick="this.classList.toggle('on')"></span><span>✏️</span><span>🗑️</span></div>
+        </div>
+        <div class="rule-item">
+          <div class="rule-info"><span class="rule-name">📊 大盘日内跌幅 > 3%</span><span class="rule-detail">上证/深证指数 · 触发 1 次 · 最后: 2026-05-12</span></div>
+          <div class="rule-actions"><span class="toggle" onclick="this.classList.toggle('on')"></span><span>✏️</span><span>🗑️</span></div>
+        </div>
+        <div class="rule-item">
+          <div class="rule-info"><span class="rule-name">🤖 AI 综合评分 > 85</span><span class="rule-detail">DeepSeek AI 研判 · 触发 5 次 · 最后: 2日前</span></div>
+          <div class="rule-actions"><span class="toggle on" onclick="this.classList.toggle('on')"></span><span>✏️</span><span>🗑️</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 通知记录 -->
+    <div id="tab-history" style="display:none;">
+      <div class="rule-list">
+        <div class="rule-item"><div class="rule-info"><span class="rule-name">📈 量价形态看多信号</span><span class="rule-detail">西藏矿业 · B2 放量突破 · 当前评分 92</span></div><span style="font-size:12px;color:var(--text-muted);">14:30 今日</span></div>
+        <div class="rule-item"><div class="rule-info"><span class="rule-name">🧩 缠论三类卖点</span><span class="rule-detail">西藏矿业 · 一类卖点 score 0.82</span></div><span style="font-size:12px;color:var(--text-muted);">13:45 今日</span></div>
+        <div class="rule-item"><div class="rule-info"><span class="rule-name">🤖 AI 综合评分 > 85</span><span class="rule-detail">比亚迪 · AI 综合评分 90</span></div><span style="font-size:12px;color:var(--text-muted);">10:20 今日</span></div>
+        <div class="rule-item"><div class="rule-info"><span class="rule-name">📦 筹码主力异动</span><span class="rule-detail">西藏矿业 · 主力净流入 +2,350 万</span></div><span style="font-size:12px;color:var(--text-muted);">09:30 今日</span></div>
+        <div class="rule-item" style="border-bottom:none;">
+          <div style="text-align:center;width:100%;font-size:12px;color:var(--text-muted);padding:var(--space-8) 0;">共 24 条通知 · <span style="color:var(--color-brand-500);cursor:pointer;" onclick="alert('✅ 已标记全部已读')">标记全部已读</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 预警设置 -->
+    <div id="tab-settings" style="display:none;">
+      <div class="rule-list">
+        <div class="rule-item"><div class="rule-info"><span class="rule-name">🔔 通知推送方式</span></div>
+          <select class="select" style="width:160px;"><option>系统内通知</option><option>邮件通知</option><option>全部推送</option></select></div>
+        <div class="rule-item"><div class="rule-info"><span class="rule-name">🔕 免打扰时段</span></div>
+          <div style="display:flex;gap:var(--space-4);align-items:center;"><input class="input" value="22:00" style="width:80px;"> — <input class="input" value="08:00" style="width:80px;"></div></div>
+        <div class="rule-item" style="border-bottom:none;"><div style="width:100%;text-align:right;">
+          <button class="btn btn-primary" style="font-size:12px;height:32px;" onclick="alert('✅ 设置已保存')">💾 保存设置</button>
+        </div></div>
+      </div>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统预警功能仅供研究参考，不构成投资建议或交易指令。</div>
+  </main>
+</div>
+
+<script>
+function switchAlertTab(el, id){
+  document.querySelectorAll('.tab-item').forEach(function(t){t.classList.remove('active');});
+  el.classList.add('active');
+  document.querySelectorAll('#tab-rules,#tab-history,#tab-settings').forEach(function(p){p.style.display='none';});
+  document.getElementById(id).style.display = '';
+}
+</script>
+</body>
+</html>

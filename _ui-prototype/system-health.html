@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>系统诊断 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.health-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-16); }
+.health-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.health-card h4 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-12); }
+.svc-item { display: flex; justify-content: space-between; align-items: center; padding: var(--space-6) 0; border-bottom: 1px solid var(--border-default); font-size: 13px; }
+.svc-item:last-child { border-bottom: none; }
+.svc-item .svc-info { display: flex; align-items: center; gap: var(--space-8); }
+.svc-item .svc-info .name { font-weight: 500; }
+.svc-item .svc-meta { font-size: 11px; color: var(--text-muted); }
+.log-section { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); grid-column: 1 / -1; }
+.log-section h4 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-8); }
+.log-entry { font-family: var(--font-mono); font-size: 11px; padding: var(--space-4) 0; border-bottom: 1px solid var(--border-default); color: var(--text-secondary); }
+.log-entry:last-child { border-bottom: none; }
+.log-entry .ts { color: var(--text-muted); }
+.log-entry.err { color: var(--color-up); }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"><div class="sidebar-logo"><span>📊</span> A股分析系统</div>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item"><span class="icon">📊</span>仪表盘</a></div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="indicator-ide.html" class="sidebar-item"><span class="icon">📈</span>个股策略分析</a>
+      <a href="screener.html" class="sidebar-item"><span class="icon">🔍</span>选股系统</a>
+      <a href="watchlist.html" class="sidebar-item"><span class="icon">⭐</span>自选监控</a>
+      <a href="ai-analysis.html" class="sidebar-item"><span class="icon">🤖</span>AI 分析</a>
+      <a href="chip-analysis.html" class="sidebar-item"><span class="icon">🧩</span>筹码分析 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item"><span class="icon">📉</span>回测系统</a>
+      <a href="factor-manager.html" class="sidebar-item"><span class="icon">📊</span>因子管理</a>
+      <a href="strategy-templates.html" class="sidebar-item"><span class="icon">📋</span>策略模板</a>
+      <a href="playback.html" class="sidebar-item"><span class="icon">⏪</span>复盘中心 <span class="badge-new">NEW</span></a>
+      <a href="virtual-verify.html" class="sidebar-item"><span class="icon">🏗️</span>虚拟验证 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item"><span class="icon">📑</span>报告中心</a>
+      <a href="alert.html" class="sidebar-item"><span class="icon">🔔</span>预警管理 <span class="badge-new">NEW</span></a>
+      <a href="data-management.html" class="sidebar-item"><span class="icon">🔄</span>数据管理 <span class="badge-new">NEW</span></a>
+      <a href="system-health.html" class="sidebar-item active"><span class="icon">❤️</span>系统诊断 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item"><span class="icon">👤</span>账户管理</a></div>
+  </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>❤️ 系统诊断</h1>
+      <div class="page-header-actions">
+        <button class="btn" onclick="this.innerHTML='⟳ 刷新中...';setTimeout(()=>this.innerHTML='⟳ 刷新状态',800)">⟳ 刷新状态</button>
+      </div>
+    </div>
+
+    <div class="health-grid">
+      <!-- 服务状态 -->
+      <div class="health-card">
+        <h4>🖥️ 服务状态</h4>
+        <div class="svc-item"><div class="svc-info"><span class="status-dot green"></span><span class="name">PostgreSQL</span></div><span class="svc-meta">✅ healthy · 延迟 2ms · 连接数 8</span></div>
+        <div class="svc-item"><div class="svc-info"><span class="status-dot green"></span><span class="name">Redis</span></div><span class="svc-meta">✅ healthy · 命中率 87% · 内存 128MB</span></div>
+        <div class="svc-item"><div class="svc-info"><span class="status-dot green"></span><span class="name">DuckDB</span></div><span class="svc-meta">✅ 6,372 条记录 · 缓存文件 128MB</span></div>
+        <div class="svc-item"><div class="svc-info"><span class="status-dot green"></span><span class="name">Backend</span></div><span class="svc-meta">✅ 运行中 (PID 1234) · 内存 245MB</span></div>
+        <div class="svc-item" style="border-bottom:none;"><div class="svc-info"><span class="status-dot green"></span><span class="name">Nginx</span></div><span class="svc-meta">✅ 运行中 · 端口 :9000</span></div>
+      </div>
+
+      <!-- 缓存状态 -->
+      <div class="health-card">
+        <h4>💾 缓存状态</h4>
+        <div class="svc-item"><span>DuckDB 缓存文件</span><span>128 MB</span></div>
+        <div class="svc-item"><span>Redis 使用量</span><span>128 MB / 512 MB (25%)</span></div>
+        <div class="svc-item"><span>日线数据缓存</span><span>4,852 条</span></div>
+        <div class="svc-item"><span>分钟线数据缓存</span><span>1,520,000 条</span></div>
+        <div class="svc-item"><span>因子预计算缓存</span><span>已就绪</span></div>
+        <div class="svc-item" style="border-bottom:none;"><span>缓存最后一次刷新</span><span>今日 03:00</span></div>
+      </div>
+
+      <!-- 数据源 -->
+      <div class="health-card">
+        <h4>📡 数据源</h4>
+        <div class="svc-item"><div class="svc-info"><span class="status-dot green"></span><span>Tushare Pro</span></div><span class="svc-meta">已连接 · API 配额: 128/200</span></div>
+        <div class="svc-item"><div class="svc-info"><span class="status-dot green"></span><span>AKShare</span></div><span class="svc-meta">备用就绪</span></div>
+        <div class="svc-item" style="border-bottom:none;"><div class="svc-info"><span class="status-dot yellow"></span><span>QMT</span></div><span class="svc-meta">未连接（可选）</span></div>
+      </div>
+
+      <!-- 系统信息 -->
+      <div class="health-card">
+        <h4>ℹ️ 系统信息</h4>
+        <div class="svc-item"><span>运行时间</span><span>12 天 7 小时</span></div>
+        <div class="svc-item"><span>Python 版本</span><span>3.11.9 (Docker)</span></div>
+        <div class="svc-item"><span>框架版本</span><span>v2.0.0</span></div>
+        <div class="svc-item"><span>前端版本</span><span>Vue 3.5 + AntDV 4.2</span></div>
+        <div class="svc-item" style="border-bottom:none;"><span>数据最近更新</span><span>15:30 今日</span></div>
+      </div>
+
+      <!-- 日志 -->
+      <div class="log-section">
+        <h4>📋 最近系统日志</h4>
+        <div class="log-entry"><span class="ts">[15:30:12]</span> <span>✅ 增量同步完成 · 新增 1,247 条</span></div>
+        <div class="log-entry"><span class="ts">[14:35:08]</span> <span>📊 策略引擎 · 完成 47 个信号计算 (230ms)</span></div>
+        <div class="log-entry"><span class="ts">[13:45:22]</span> <span>🧩 缠论分析 · 西藏矿业 笔方向检测完成</span></div>
+        <div class="log-entry"><span class="ts">[09:15:44]</span> <span>🤖 AI 分析 · DeepSeek API 调用完成 (2.8s)</span></div>
+        <div class="log-entry"><span class="ts">[03:00:00]</span> <span>✅ 全量同步完成 · 共 6,372 条</span></div>
+        <div class="log-entry err"><span class="ts">[2026-06-10 09:03:15]</span> <span>⚠️ AKShare API 超时，自动切换 Tushare 重试</span></div>
+      </div>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。</div>
+  </main>
+</div>
+</body>
+</html>
