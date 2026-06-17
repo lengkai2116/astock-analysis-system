@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>因子管理 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.factor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-16); }
+.factor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-16); }
+.factor-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); transition: all .15s; }
+.factor-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-hover); }
+.factor-card .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-8); }
+.factor-card h4 { font-size: 14px; font-weight: 600; }
+.factor-card .factor-tags { display: flex; gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-8); }
+.factor-card .factor-tags span { font-size: 11px; padding: 2px var(--space-6); border-radius: var(--radius-xs); background: var(--bg-subtle); color: var(--text-secondary); }
+.factor-card .factor-meta { font-size: 12px; color: var(--text-muted); }
+.factor-card .card-actions { display: flex; gap: var(--space-4); margin-top: var(--space-8); padding-top: var(--space-8); border-top: 1px solid var(--border-default); }
+.factor-card .card-actions span { font-size: 12px; color: var(--text-secondary); cursor: pointer; padding: var(--space-4) var(--space-8); border-radius: var(--radius-xs); }
+.factor-card .card-actions span:hover { background: var(--bg-active); color: var(--color-brand-500); }
+.fav-star { cursor: pointer; color: var(--signal-watch); font-size: 16px; }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+        <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+        <a href="chip-analysis.html" class="sidebar-item" data-name="筹码分析"><span class="icon">🧩</span><span>筹码分析</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+        <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+        <a href="factor-manager.html" class="sidebar-item active" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+        <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+        <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+        <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
+        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
+        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+    </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>📊 因子管理</h1>
+      <div class="page-header-actions">
+        <button class="btn" onclick="alert('📊 已切换到因子库视图')">📚 因子库</button>
+        <button class="btn btn-primary" onclick="alert('📦 新建组合弹窗已打开')">📦 新建组合</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <span class="tab-item active">⭐ 我的组合</span>
+      <span class="tab-item" onclick="alert('📚 切换到因子库视图')">📚 因子库</span>
+    </div>
+
+    <div class="factor-grid">
+      <div class="factor-card">
+        <div class="card-top">
+          <h4>📈 动量精选</h4>
+          <span class="fav-star">★</span>
+        </div>
+        <div class="factor-tags"><span>动量因子</span><span>趋势跟踪</span><span>短期</span></div>
+        <div class="factor-meta">5 因子 · 近 1 月收益 +4.2% · 创建于 2026-03-15</div>
+        <div class="card-actions"><span>✏️ 编辑</span><span>📋 回测</span><span>🗑️ 删除</span></div>
+      </div>
+      <div class="factor-card">
+        <div class="card-top">
+          <h4>💎 价值龙头</h4>
+          <span class="fav-star" style="color:var(--text-muted);">☆</span>
+        </div>
+        <div class="factor-tags"><span>价值因子</span><span>低估值</span><span>大盘</span></div>
+        <div class="factor-meta">4 因子 · 近 1 月收益 +2.8% · 创建于 2026-04-20</div>
+        <div class="card-actions"><span>✏️ 编辑</span><span>📋 回测</span><span>🗑️ 删除</span></div>
+      </div>
+      <div class="factor-card">
+        <div class="card-top">
+          <h4>⚡ 量价突破</h4>
+          <span class="fav-star" style="color:var(--text-muted);">☆</span>
+        </div>
+        <div class="factor-tags"><span>量价因子</span><span>放量突破</span><span>短期</span></div>
+        <div class="factor-meta">3 因子 · 近 1 月收益 +6.5% · 创建于 2026-05-01</div>
+        <div class="card-actions"><span>✏️ 编辑</span><span>📋 回测</span><span>🗑️ 删除</span></div>
+      </div>
+      <div class="factor-card">
+        <div class="card-top">
+          <h4>🛡️ 低波防御</h4>
+          <span class="fav-star" style="color:var(--text-muted);">☆</span>
+        </div>
+        <div class="factor-tags"><span>低波动</span><span>防御</span><span>中长线</span></div>
+        <div class="factor-meta">3 因子 · 近 1 月收益 +1.2% · 创建于 2026-05-10</div>
+        <div class="card-actions"><span>✏️ 编辑</span><span>📋 回测</span><span>🗑️ 删除</span></div>
+      </div>
+      <div class="factor-card">
+        <div class="card-top">
+          <h4>🎯 多因子精选</h4>
+          <span class="fav-star" style="color:var(--text-muted);">☆</span>
+        </div>
+        <div class="factor-tags"><span>综合筛选</span><span>动量+价值+质量</span></div>
+        <div class="factor-meta">8 因子 · 近 1 月收益 +5.1% · 创建于 2026-05-25</div>
+        <div class="card-actions"><span>✏️ 编辑</span><span>📋 回测</span><span>🗑️ 删除</span></div>
+      </div>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。</div>
+  </main>
+</div>
+<script>
+var sidebarCollapsed = true;
+function toggleSidebar(){
+  sidebarCollapsed = !sidebarCollapsed;
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(!s||!m)return;
+  s.classList.toggle('collapsed');m.classList.toggle('collapsed');
+  m.style.marginLeft=(sidebarCollapsed?64:200)+'px';
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent=sidebarCollapsed?'▶':'◀';
+}
+(function(){
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(s)s.classList.add('collapsed');
+  if(m){m.classList.add('collapsed');m.style.marginLeft='64px';}
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent='▶';
+})();
+</script>
+</body>
+</html>

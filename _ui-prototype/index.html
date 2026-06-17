@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股股票分析系统 — UI 原型</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.hero { text-align: center; padding: var(--space-48) 0 var(--space-32); }
+.hero h1 { font-size: 28px; font-weight: 700; margin-bottom: var(--space-8); }
+.hero p { color: var(--text-secondary); font-size: 15px; max-width: 500px; margin: 0 auto; }
+.page-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: var(--space-16); margin-top: var(--space-24); }
+.page-card {
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: var(--radius-md); padding: var(--space-20);
+  cursor: pointer; transition: all 0.15s ease; display: block; color: inherit;
+}
+.page-card:hover { background: var(--bg-muted); border-color: var(--border-strong); transform: translateY(-2px); box-shadow: var(--shadow-hover); }
+.page-card .pg-icon { font-size: 28px; margin-bottom: var(--space-12); display: block; }
+.page-card h3 { font-size: 15px; font-weight: 600; margin-bottom: var(--space-4); }
+.page-card p { font-size: 12px; color: var(--text-muted); }
+.page-card .tag-new { font-size: 9px; background: var(--color-brand-500); color: white; padding: 1px 6px; border-radius: var(--radius-xs); margin-left: var(--space-8); }
+.status-bar {
+  padding: var(--space-12) var(--space-24); background: rgba(0,0,0,0.2);
+  border-top: 1px solid var(--border-default); font-size: 12px; color: var(--text-muted);
+  display: flex; justify-content: space-between; align-items: center; margin-top: var(--space-32);
+}
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar">
+    <div class="sidebar-logo"><span>📊</span> A股分析系统</div>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div>
+      <a href="dashboard.html" class="sidebar-item active"><span class="icon">📊</span>仪表盘</a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="screener.html" class="sidebar-item"><span class="icon">🔍</span>选股系统</a>
+      <a href="watchlist.html" class="sidebar-item"><span class="icon">⭐</span>自选监控</a>
+      <a href="indicator-ide.html" class="sidebar-item"><span class="icon">📈</span>个股策略分析</a>
+      <a href="ai-analysis.html" class="sidebar-item"><span class="icon">🤖</span>AI 分析</a>
+      <a href="chip-analysis.html" class="sidebar-item"><span class="icon">🧩</span>筹码分析 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item"><span class="icon">📉</span>回测系统</a>
+      <a href="factor-manager.html" class="sidebar-item"><span class="icon">📊</span>因子管理</a>
+      <a href="strategy-templates.html" class="sidebar-item"><span class="icon">📋</span>策略模板</a>
+      <a href="playback.html" class="sidebar-item"><span class="icon">⏪</span>复盘中心 <span class="badge-new">NEW</span></a>
+      <a href="virtual-verify.html" class="sidebar-item"><span class="icon">🏗️</span>虚拟验证 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item"><span class="icon">📑</span>报告中心</a>
+      <a href="alert.html" class="sidebar-item"><span class="icon">🔔</span>预警管理 <span class="badge-new">NEW</span></a>
+      <a href="data-management.html" class="sidebar-item"><span class="icon">🔄</span>数据管理 <span class="badge-new">NEW</span></a>
+      <a href="system-health.html" class="sidebar-item"><span class="icon">❤️</span>系统诊断 <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div>
+      <a href="account.html" class="sidebar-item"><span class="icon">👤</span>账户管理</a>
+    </div>
+  </nav>
+  <main class="main-content">
+    <div class="hero">
+      <h1>📊 A股股票分析系统 — UI 原型</h1>
+      <p>全栈量化分析平台 · 共 17 个页面 · 基于 165 号方案设计</p>
+      <p style="margin-top:8px;font-size:12px;color:var(--text-muted)">暗色主题 · Token 体系 · 2026-06-11</p>
+    </div>
+    <div class="page-grid">
+      <a href="login.html" class="page-card"><span class="pg-icon">🔐</span><h3>登录页</h3><p>Token 管理 + 系统入口</p></a>
+      <a href="dashboard.html" class="page-card"><span class="pg-icon">📊</span><h3>仪表盘</h3><p>市场总览 + 信号汇总 + 快捷入口</p></a>
+      <a href="indicator-ide.html" class="page-card"><span class="pg-icon">📈</span><h3>个股策略分析</h3><p>K线图 + 策略指标 + 缠论叠加</p></a>
+      <a href="screener.html" class="page-card"><span class="pg-icon">🔍</span><h3>选股系统</h3><p>Pipeline 三层递进筛选</p></a>
+      <a href="watchlist.html" class="page-card"><span class="pg-icon">⭐</span><h3>自选监控</h3><p>实时行情 + 可配置表格</p></a>
+      <a href="ai-analysis.html" class="page-card"><span class="pg-icon">🤖</span><h3>AI 分析</h3><p>DeepSeek 多角色投研</p></a>
+      <a href="backtest.html" class="page-card"><span class="pg-icon">📉</span><h3>回测系统</h3><p>配置 + 权益曲线 + 回撤 + 绩效</p></a>
+      <a href="factor-manager.html" class="page-card"><span class="pg-icon">📊</span><h3>因子管理</h3><p>因子组合 + 评估</p></a>
+      <a href="strategy-templates.html" class="page-card"><span class="pg-icon">📋</span><h3>策略模板</h3><p>预设策略浏览与选用</p></a>
+      <a href="chip-analysis.html" class="page-card"><span class="pg-icon">🧩</span><h3>筹码分析 <span class="tag-new">NEW</span></h3><p>筹码峰 + 资金流向 + 主力追踪</p></a>
+      <a href="data-management.html" class="page-card"><span class="pg-icon">🔄</span><h3>数据管理 <span class="tag-new">NEW</span></h3><p>数据源状态 + 同步 + 缓存</p></a>
+      <a href="playback.html" class="page-card"><span class="pg-icon">⏪</span><h3>复盘中心 <span class="tag-new">NEW</span></h3><p>时间轴回放 + 事件分析</p></a>
+      <a href="alert.html" class="page-card"><span class="pg-icon">🔔</span><h3>预警管理 <span class="tag-new">NEW</span></h3><p>预警规则 + 通知列表</p></a>
+      <a href="virtual-verify.html" class="page-card"><span class="pg-icon">🏗️</span><h3>虚拟验证 <span class="tag-new">NEW</span></h3><p>策略模拟验证</p></a>
+      <a href="system-health.html" class="page-card"><span class="pg-icon">❤️</span><h3>系统诊断 <span class="tag-new">NEW</span></h3><p>健康检查 + 缓存状态</p></a>
+      <a href="reports-center.html" class="page-card"><span class="pg-icon">📑</span><h3>报告中心</h3><p>报告生成与历史</p></a>
+      <a href="account.html" class="page-card"><span class="pg-icon">👤</span><h3>账户管理</h3><p>个人信息 + 操作记录</p></a>
+    </div>
+    <div class="status-bar">
+      <span><span class="status-dot green"></span>17 页面全部就绪 · 基于 165 号方案</span>
+      <span>API 覆盖率目标 88% · UI 原型 v1.0</span>
+    </div>
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。</div>
+  </main>
+</div>
+</body>
+</html>
