@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>筹码分析 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+.chip-layout { display: grid; grid-template-columns: 240px 1fr 280px; gap: var(--space-16); }
+
+/* 左栏: 资金流向 */
+.fund-panel { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.fund-panel h4 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-12); }
+.fund-item { display: flex; justify-content: space-between; padding: var(--space-8) 0; border-bottom: 1px solid var(--border-default); font-size: 13px; }
+.fund-item:last-child { border-bottom: none; }
+.fund-item .val { font-weight: 600; }
+
+/* 中栏: 筹码K线 */
+.chip-chart-panel { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.chip-chart-panel .chart-title { font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: var(--space-8); display:flex;justify-content:space-between; }
+#chip-kline { height: 340px; }
+
+/* 右栏: 信号面板 */
+.signal-panel { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.signal-panel h4 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-12); }
+.chip-signal-item { padding: var(--space-8) 0; border-bottom: 1px solid var(--border-default); }
+.chip-signal-item:last-child { border-bottom: none; }
+.chip-signal-item .s-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-4); }
+.chip-signal-item .s-head .name { font-size: 13px; font-weight: 500; }
+.chip-signal-item .s-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.chip-score { text-align: center; padding: var(--space-16) 0; }
+.chip-score .big { font-size: 32px; font-weight: 700; }
+.chip-score .lbl { font-size: 11px; color: var(--text-muted); margin-top: var(--space-4); }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+        <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+        <a href="chip-analysis.html" class="sidebar-item active" data-name="筹码分析"><span class="icon">🧩</span><span>筹码分析</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+        <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+        <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+        <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+        <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+        <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
+        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
+        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+    </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>🧩 筹码分析</h1>
+      <div class="page-header-actions">
+        <select class="select" style="width:140px;"><option>000762.SZ 西藏矿业</option><option>000001.SZ 平安银行</option></select>
+        <div class="period-tabs" style="display:flex;gap:var(--space-4);">
+          <span class="period-tab" style="padding:var(--space-4)var(--space-10);font-size:12px;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-sm);cursor:pointer;">日线</span>
+          <span class="period-tab active" style="padding:var(--space-4)var(--space-10);font-size:12px;background:var(--color-brand-500);color:white;border:1px solid var(--color-brand-500);border-radius:var(--radius-sm);cursor:pointer;">周线</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="chip-layout">
+      <!-- 左栏: 资金流向 -->
+      <div class="fund-panel">
+        <h4>💰 资金流向</h4>
+        <div class="fund-item"><span>主力净流入</span><span class="up">+¥2,350万</span></div>
+        <div class="fund-item"><span>超大单</span><span class="up">+¥1,280万</span></div>
+        <div class="fund-item"><span>大单</span><span class="up">+¥1,070万</span></div>
+        <div class="fund-item"><span>中单</span><span class="down">-¥580万</span></div>
+        <div class="fund-item"><span>小单</span><span class="down">-¥1,770万</span></div>
+        <div class="fund-item" style="border-bottom:none;"><span>主力动向</span><span class="tag tag-bullish">连续3日净流入</span></div>
+
+        <div style="margin-top:var(--space-12);">
+          <h4 style="margin-bottom:var(--space-8);">📊 资金趋势</h4>
+          <div id="fund-trend" style="height:120px;"></div>
+        </div>
+      </div>
+
+      <!-- 中栏: 筹码峰 K线 -->
+      <div class="chip-chart-panel">
+        <div class="chart-title"><span>📈 K 线 + 筹码峰</span><span style="font-size:12px;color:var(--text-muted);">主力成本: ¥11.80</span></div>
+        <div id="chip-kline"></div>
+      </div>
+
+      <!-- 右栏: 信号面板 -->
+      <div class="signal-panel">
+        <h4>🎯 筹码信号</h4>
+        <div class="chip-signal-item">
+          <div class="s-head"><span class="name">筹码形态</span><span class="tag tag-watch">密集</span></div>
+          <div class="s-desc">当前筹码呈单峰密集形态，密集区 ¥11.50-¥12.50</div>
+        </div>
+        <div class="chip-signal-item">
+          <div class="s-head"><span class="name">主力信号</span><span class="tag tag-bullish">吸筹中</span></div>
+          <div class="s-desc">主力资金连续 3 日净流入，超大单持续加仓</div>
+        </div>
+        <div class="chip-signal-item">
+          <div class="s-head"><span class="name">筹码偏离度</span><span class="tag tag-watch">+4.5%</span></div>
+          <div class="s-desc">现价 ¥12.34 偏离主力成本 ¥11.80 约 4.5%，偏离适中</div>
+        </div>
+        <div class="chip-signal-item">
+          <div class="s-head"><span class="name">密集支撑位</span><span class="tag tag-bullish">¥11.50</span></div>
+          <div class="s-desc">下方密集成交区上沿支撑，下跌空间有限</div>
+        </div>
+        <div class="chip-signal-item" style="border-bottom:none;">
+          <div class="s-head"><span class="name">压力位</span><span class="tag tag-bearish">¥13.50</span></div>
+          <div class="s-desc">上方前高 + 筹码分布上沿压力</div>
+        </div>
+
+        <div class="chip-score" style="border-top:1px solid var(--border-default);margin-top:var(--space-8);">
+          <div class="lbl">综合研判</div>
+          <div class="big" style="color:var(--signal-watch);">72/100</div>
+          <div class="lbl">主力吸筹中，偏离适中，关注密集区支撑</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。</div>
+  </main>
+</div>
+
+<script>
+// 资金趋势 mini图
+(function(){
+  var c = echarts.init(document.getElementById('fund-trend'));
+  c.setOption({
+    backgroundColor:'transparent', grid:{left:30,right:5,top:5,bottom:5},
+    xAxis:{type:'category',data:['5日前','4日','3日','2日','昨日','今日'],axisLabel:{show:false},axisLine:{show:false}},
+    yAxis:{type:'value',show:false,splitLine:{show:false}},
+    series:[{type:'bar',data:[
+      {value:-500,itemStyle:{color:'rgba(34,197,94,0.5)'}},
+      {value:800,itemStyle:{color:'rgba(239,68,68,0.7)'}},
+      {value:1200,itemStyle:{color:'rgba(239,68,68,0.7)'}},
+      {value:-300,itemStyle:{color:'rgba(34,197,94,0.5)'}},
+      {value:2000,itemStyle:{color:'rgba(239,68,68,0.7)'}},
+      {value:2350,itemStyle:{color:'rgba(239,68,68,0.8)'}},
+    ],barWidth:10}]
+  });
+})();
+
+// 筹码K线图 (简化版K线+筹码峰水平条)
+(function(){
+  var c = echarts.init(document.getElementById('chip-kline'));
+  var data = [], price=12.00;
+  for(var i=40;i>0;i--){
+    var dt=new Date();dt.setDate(dt.getDate()-i);
+    var open=price+(Math.random()-0.5)*0.6;
+    var close=open+(Math.random()-0.5)*0.8;
+    var high=Math.max(open,close)+Math.random()*0.3;
+    var low=Math.min(open,close)-Math.random()*0.3;
+    price=close;
+    data.push([dt.getFullYear()+'/'+(dt.getMonth()+1)+'/'+dt.getDate(),open,close,low,high]);
+  }
+  var dates=data.map(function(v){return v[0];});
+
+  // 筹码峰数据 (模拟: 每个价位的人群数量)
+  var chipPrices = [];
+  for(var p=10.5;p<=13.5;p+=0.2) chipPrices.push({price:p,volume:Math.floor(Math.random()*80+10)});
+  var chipMax = Math.max.apply(null, chipPrices.map(function(v){return v.volume;}));
+
+  c.setOption({
+    backgroundColor:'transparent',
+    tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
+    grid:[
+      {left:40,right:120,bottom:30,top:10,height:250},
+    ],
+    xAxis:{type:'category',data:dates,axisLabel:{color:'#64748B',fontSize:9,rotate:30},axisLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
+    yAxis:{type:'value',scale:true,splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},axisLabel:{color:'#64748B',fontSize:9}},
+    series:[
+      // K线
+      {name:'K线',type:'candlestick',data:data.map(function(v){return [v[1],v[3],v[4],v[2]];}),
+        itemStyle:{color:'#EF4444',color0:'#22C55E',borderColor:'#EF4444',borderColor0:'#22C55E'}},
+      // 筹码峰 (右侧水平bar)
+      {name:'筹码分布',type:'bar',barWidth:8,
+        data:chipPrices.map(function(v){
+          return {value: v.volume, itemStyle:{color:'rgba(59,130,246,0.4+0.6*v.volume/chipMax)',opacity:0.3+v.volume/chipMax*0.5}};
+        }),
+        xAxisIndex:0,
+        coordinateSystem:'cartesian2d',
+        // 使用右侧y轴
+      }
+    ]
+  });
+
+  // 用graphic绘制右侧筹码峰
+  var chartWidth = document.getElementById('chip-kline').offsetWidth;
+  var rightEdge = chartWidth - 20;
+  chipPrices.forEach(function(v){
+    var barH = v.volume/chipMax * 110;
+    var y = c.convertToPixel({seriesIndex:0}, [0, v.price]);
+    if(y === null || y === undefined) return;
+    // 在右侧绘制筹码峰水平条
+    // (简化: 直接用ECharts markArea模拟)
+  });
+
+  window.addEventListener('resize',function(){c.resize();});
+})();
+</script>
+<script>
+var sidebarCollapsed = true;
+function toggleSidebar(){
+  sidebarCollapsed = !sidebarCollapsed;
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(!s||!m)return;
+  s.classList.toggle('collapsed');m.classList.toggle('collapsed');
+  m.style.marginLeft=(sidebarCollapsed?64:200)+'px';
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent=sidebarCollapsed?'▶':'◀';
+}
+(function(){
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(s)s.classList.add('collapsed');
+  if(m){m.classList.add('collapsed');m.style.marginLeft='64px';}
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent='▶';
+})();
+</script>
+</body>
+</html>

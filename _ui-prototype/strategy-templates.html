@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>策略模板 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.template-toolbar { display: flex; align-items: center; gap: var(--space-12); margin-bottom: var(--space-16); flex-wrap: wrap; }
+.template-toolbar .input { width: 220px; }
+.cat-tabs { display: flex; gap: var(--space-4); flex-wrap: wrap; }
+.cat-tab { padding: var(--space-6) var(--space-12); border-radius: var(--radius-sm); background: var(--bg-surface); border: 1px solid var(--border-default); cursor: pointer; font-size: 12px; color: var(--text-secondary); transition: all .15s; }
+.cat-tab:hover { background: var(--bg-muted); }
+.cat-tab.active { background: var(--color-brand-500); color: white; border-color: var(--color-brand-500); }
+
+.template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-16); }
+.tpl-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); transition: all .15s; cursor: pointer; }
+.tpl-card:hover { border-color: var(--border-strong); transform: translateY(-2px); box-shadow: var(--shadow-hover); }
+.tpl-card .tpl-icon { font-size: 28px; margin-bottom: var(--space-8); }
+.tpl-card h4 { font-size: 14px; font-weight: 600; margin-bottom: var(--space-4); }
+.tpl-card .tpl-desc { font-size: 12px; color: var(--text-muted); line-height: 1.6; margin-bottom: var(--space-8); }
+.tpl-card .tpl-tags { display: flex; gap: var(--space-4); flex-wrap: wrap; }
+.tpl-card .tpl-tags span { font-size: 10px; padding: 2px var(--space-6); border-radius: var(--radius-xs); background: var(--bg-subtle); color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+        <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+        <a href="chip-analysis.html" class="sidebar-item" data-name="筹码分析"><span class="icon">🧩</span><span>筹码分析</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+        <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+        <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+        <a href="strategy-templates.html" class="sidebar-item active" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+        <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+        <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
+        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
+        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+    </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>📋 策略模板</h1>
+      <div class="page-header-actions">
+        <button class="btn btn-primary" onclick="alert('📝 创建模板弹窗已打开')">📝 创建模板</button>
+      </div>
+    </div>
+
+    <!-- 搜索和分类 -->
+    <div class="template-toolbar">
+      <input class="input" placeholder="🔍 搜索策略模板..." oninput="filterTpl(this.value)">
+      <div class="cat-tabs">
+        <span class="cat-tab active" onclick="switchCat(this)">全部</span>
+        <span class="cat-tab" onclick="switchCat(this)">量价策略</span>
+        <span class="cat-tab" onclick="switchCat(this)">缠论策略</span>
+        <span class="cat-tab" onclick="switchCat(this)">筹码策略</span>
+        <span class="cat-tab" onclick="switchCat(this)">组合策略</span>
+        <span class="cat-tab" onclick="switchCat(this)">AI 策略</span>
+      </div>
+    </div>
+
+    <!-- 模板卡片网格 -->
+    <div class="template-grid">
+      <div class="tpl-card" data-cat="量价策略">
+        <div class="tpl-icon">📈</div>
+        <h4>放量突破策略</h4>
+        <div class="tpl-desc">基于成交量放大 + 价格突破前高/均线，识别主力资金介入信号。包含 5 种放量形态规则。</div>
+        <div class="tpl-tags"><span>量价</span><span>突破</span><span>放量</span><span>短期</span></div>
+      </div>
+      <div class="tpl-card" data-cat="量价策略">
+        <div class="tpl-icon">📊</div>
+        <h4>均线多头排列</h4>
+        <div class="tpl-desc">短/中/长期均线呈多头排列时买入，跌破短期均线卖出。适合趋势跟踪。</div>
+        <div class="tpl-tags"><span>均线</span><span>趋势</span><span>中期</span></div>
+      </div>
+      <div class="tpl-card" data-cat="缠论策略">
+        <div class="tpl-icon">🧩</div>
+        <h4>缠论三类买卖点</h4>
+        <div class="tpl-desc">基于笔-段-中枢体系，识别一买/二买/三买和一卖/二卖/三卖，配合决策树评分。</div>
+        <div class="tpl-tags"><span>缠论</span><span>买卖点</span><span>中枢</span><span>全周期</span></div>
+      </div>
+      <div class="tpl-card" data-cat="缠论策略">
+        <div class="tpl-icon">🔍</div>
+        <h4>中枢突破策略</h4>
+        <div class="tpl-desc">价格突破中枢上沿/下沿时产生买卖信号，结合成交量确认突破有效性。</div>
+        <div class="tpl-tags"><span>缠论</span><span>中枢</span><span>突破</span><span>中期</span></div>
+      </div>
+      <div class="tpl-card" data-cat="筹码策略">
+        <div class="tpl-icon">📦</div>
+        <h4>主力追踪策略</h4>
+        <div class="tpl-desc">基于筹码分布分析主力成本区间，识别吸筹/洗盘/拉升/出货各阶段信号。</div>
+        <div class="tpl-tags"><span>筹码</span><span>主力</span><span>资金流</span></div>
+      </div>
+      <div class="tpl-card" data-cat="筹码策略">
+        <div class="tpl-icon">🎯</div>
+        <h4>筹码密集支撑策略</h4>
+        <div class="tpl-desc">识别筹码密集成交区作为支撑/压力位，价格回踩密集区上沿时买入。</div>
+        <div class="tpl-tags"><span>筹码</span><span>支撑</span><span>短线</span></div>
+      </div>
+      <div class="tpl-card" data-cat="组合策略">
+        <div class="tpl-icon">🔄</div>
+        <h4>多策略共振精选</h4>
+        <div class="tpl-desc">量价+缠论+筹码三策略共振评分，3 个策略同时发出看多信号时买入。</div>
+        <div class="tpl-tags"><span>组合</span><span>共振</span><span>高置信度</span></div>
+      </div>
+      <div class="tpl-card" data-cat="组合策略">
+        <div class="tpl-icon">⚡</div>
+        <h4>多因子 Alpha 精选</h4>
+        <div class="tpl-desc">基于动量、价值、质量、低波等多因子综合评分，Top 20% 股票池。</div>
+        <div class="tpl-tags"><span>因子</span><span>Alpha</span><span>量化</span></div>
+      </div>
+      <div class="tpl-card" data-cat="AI 策略">
+        <div class="tpl-icon">🤖</div>
+        <h4>DeepSeek AI 研判</h4>
+        <div class="tpl-desc">DeepSeek 多角色并行分析（技术+基本面+情绪），综合评分输出信号。</div>
+        <div class="tpl-tags"><span>AI</span><span>多角色</span><span>综合</span></div>
+      </div>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。</div>
+  </main>
+</div>
+
+<script>
+function filterTpl(val){
+  var v = val.toLowerCase();
+  document.querySelectorAll('.tpl-card').forEach(function(c){
+    c.style.display = c.textContent.toLowerCase().includes(v) ? '' : 'none';
+  });
+}
+
+function switchCat(el){
+  document.querySelectorAll('.cat-tab').forEach(function(t){t.classList.remove('active');});
+  el.classList.add('active');
+  var cat = el.textContent;
+  document.querySelectorAll('.tpl-card').forEach(function(c){
+    c.style.display = (cat === '全部' || c.getAttribute('data-cat') === cat) ? '' : 'none';
+  });
+}
+</script>
+<script>
+var sidebarCollapsed = true;
+function toggleSidebar(){
+  sidebarCollapsed = !sidebarCollapsed;
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(!s||!m)return;
+  s.classList.toggle('collapsed');m.classList.toggle('collapsed');
+  m.style.marginLeft=(sidebarCollapsed?64:200)+'px';
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent=sidebarCollapsed?'▶':'◀';
+}
+(function(){
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(s)s.classList.add('collapsed');
+  if(m){m.classList.add('collapsed');m.style.marginLeft='64px';}
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent='▶';
+})();
+</script>
+</body>
+</html>

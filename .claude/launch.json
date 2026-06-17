@@ -1,0 +1,33 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vite-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "/Users/kalence/Desktop/01-A股股票分析系统/frontend/vue-project",
+      "port": 9000
+    },
+    {
+      "name": "flask-backend",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["run.py", "--port", "5001"],
+      "cwd": "/Users/kalence/Desktop/01-A股股票分析系统/backend",
+      "port": 5001
+    },
+    {
+      "name": "docker-stack",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "up", "-d", "--build"],
+      "cwd": "/Users/kalence/Desktop/01-A股股票分析系统",
+      "port": 9000
+    },
+    {
+      "name": "ui-prototype",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", ".", "-l", "8081"],
+      "cwd": "/Users/kalence/Desktop/01-A股股票分析系统/_ui-prototype",
+      "port": 8081
+    }
+  ]
+}

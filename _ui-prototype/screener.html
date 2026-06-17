@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>选股系统 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.screener-layout { display: flex; flex-direction: column; gap: var(--space-16); }
+
+/* 第一层: Pipeline 横条 */
+.pipeline-bar { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-12) var(--space-20); display: flex; align-items: center; justify-content: space-between; }
+.pipeline-step { display: flex; align-items: center; gap: var(--space-8); flex: 1; }
+.pipeline-arrow { color: var(--text-muted); font-size: 18px; margin: 0 var(--space-4); }
+.ps-label { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.ps-count { font-size: 11px; color: var(--text-muted); }
+.ps-badge { display: inline-block; font-size: 10px; padding: 1px var(--space-5); border-radius: var(--radius-xs); font-weight: 500; }
+.ps-badge.l1 { background: rgba(59,130,246,0.15); color: #3B82F6; }
+.ps-badge.l2 { background: rgba(245,158,11,0.15); color: #F59E0B; }
+.ps-badge.l3 { background: rgba(239,68,68,0.15); color: #EF4444; }
+
+/* 第二层: L3融合配置 左中右三栏 */
+.l3-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--space-16); }
+.l3-panel { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-14); }
+.l3-panel h4 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-10); display: flex; align-items: center; gap: var(--space-4); }
+.l3-check { display: flex; align-items: center; gap: var(--space-6); padding: var(--space-4) 0; cursor: pointer; }
+.l3-check input[type=checkbox] { accent-color: #3B82F6; width: 16px; height: 16px; }
+.l3-check label { font-size: 13px; cursor: pointer; }
+
+/* 权重配置 */
+.weight-row { display: flex; align-items: center; gap: var(--space-6); padding: var(--space-3) 0; font-size: 12px; }
+.weight-row .w-label { width: 44px; flex-shrink: 0; font-weight: 500; }
+.weight-row .w-bar-wrap { flex: 1; height: 16px; background: var(--bg-muted); border-radius: 4px; overflow: hidden; position: relative; }
+.weight-row .w-bar-fill { height: 100%; border-radius: 4px; transition: width .2s; }
+.weight-row .w-value { width: 32px; text-align: right; font-weight: 600; }
+.weight-row .w-adj { display: flex; gap: var(--space-2); }
+.weight-row .w-adj button { width: 20px; height: 20px; border: 1px solid var(--border-default); border-radius: var(--radius-xs); background: var(--bg-subtle); color: var(--text-secondary); font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.weight-total { font-size: 11px; color: var(--text-muted); text-align: right; padding-top: var(--space-4); border-top: 1px solid var(--border-default); margin-top: var(--space-4); }
+
+/* Vibe Coding */
+.vibe-empty { text-align: center; padding: var(--space-20) 0; color: var(--text-muted); }
+.vibe-empty .icon { font-size: 32px; margin-bottom: var(--space-8); }
+.vibe-empty p { font-size: 12px; margin-bottom: var(--space-12); }
+.vibe-strategy { background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: var(--space-8); margin-bottom: var(--space-6); }
+.vibe-strategy .vs-name { font-size: 12px; font-weight: 500; }
+.vibe-strategy .vs-desc { font-size: 10px; color: var(--text-muted); margin: var(--space-2) 0; }
+
+/* 组合选择 */
+.combo-select { font-size: 12px; padding: var(--space-2); border-radius: var(--radius-xs); border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-primary); width: 100%; margin-top: var(--space-4); }
+.combo-tag { display: inline-block; font-size: 10px; padding: 1px var(--space-4); border-radius: var(--radius-xs); margin: 1px; background: var(--bg-subtle); color: var(--text-secondary); }
+
+/* 第三层: 结果 */
+.results-panel { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-14); }
+.results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-10); }
+.results-header h4 { font-size: 14px; font-weight: 600; }
+.table { width: 100%; border-collapse: collapse; }
+.table th { text-align: left; padding: var(--space-6) var(--space-8); font-size: 12px; color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border-default); background: var(--bg-subtle); }
+.table td { padding: var(--space-6) var(--space-8); border-bottom: 1px solid var(--border-default); font-size: 13px; }
+.table tr:hover td { background: var(--bg-active); }
+.tag { font-size: 11px; padding: 1px var(--space-5); border-radius: var(--radius-xs); }
+.tag-bullish { background: rgba(239,68,68,0.15); color: #EF4444; }
+.tag-watch { background: rgba(245,158,11,0.15); color: #F59E0B; }
+.tag-neutral { background: rgba(100,116,139,0.15); color: #94A3B8; }
+.up { color: #EF4444; }
+.down { color: #22C55E; }
+
+/* 弹窗 */
+.modal-overlay { position: fixed; top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000; }
+.modal { background:var(--bg-canvas);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:var(--space-20);min-width:500px;max-width:700px;max-height:80vh;overflow-y:auto; }
+.modal-header { display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-12); }
+.modal-close { background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer; }
+.modal-body { font-size:13px;color:var(--text-secondary);line-height:1.7; }
+.modal-footer { display:flex;justify-content:flex-end;gap:var(--space-8);margin-top:var(--space-16);padding-top:var(--space-12);border-top:1px solid var(--border-default); }
+
+@media (max-width: 1200px) {
+  .l3-grid { grid-template-columns: 1fr 1fr; }
+  .pipeline-bar { flex-wrap: wrap; gap: var(--space-8); }
+}
+@media (max-width: 768px) {
+  .l3-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+        <a href="screener.html" class="sidebar-item active" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+        <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+        <a href="chip-analysis.html" class="sidebar-item" data-name="筹码分析"><span class="icon">🧩</span><span>筹码分析</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+        <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+        <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+        <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+        <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+        <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
+        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
+        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+    </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>🔍 选股系统</h1>
+      <div class="page-header-actions">
+        <button class="btn" onclick="runScreening()">⚡ 执行筛选</button>
+      </div>
+    </div>
+
+    <div class="screener-layout">
+
+      <!-- 第一层: Pipeline 横条 -->
+      <div class="pipeline-bar">
+        <div class="pipeline-step">
+          <span class="ps-badge l1">L1</span>
+          <span class="ps-label">风险剔除</span>
+          <span class="ps-count">ST/退市/流动性/PE → 4,650 只</span>
+        </div>
+        <span class="pipeline-arrow">→</span>
+        <div class="pipeline-step">
+          <span class="ps-badge l2">L2</span>
+          <span class="ps-label">主力识别</span>
+          <span class="ps-count">筹码/ASR/资金流 → 1,240 只</span>
+        </div>
+        <span class="pipeline-arrow">→</span>
+        <div class="pipeline-step">
+          <span class="ps-badge l3">L3</span>
+          <span class="ps-label">策略验证</span>
+          <span class="ps-count">缠论/量价/因子 → 23 只</span>
+        </div>
+      </div>
+
+      <!-- 第二层: L3 融合配置 — 左中右三栏 -->
+      <div class="l3-grid">
+
+        <!-- 左栏: 策略多选 -->
+        <div class="l3-panel">
+          <h4>🎯 策略多选</h4>
+          <div class="l3-check"><input type="checkbox" checked id="ch-chanlun"><label for="ch-chanlun">缠论策略</label></div>
+          <div class="l3-check"><input type="checkbox" checked id="ch-vp"><label for="ch-vp">量价策略</label></div>
+          <div class="l3-check"><input type="checkbox" checked id="ch-factor"><label for="ch-factor">多因子评分</label></div>
+          <div id="factor-combos" style="margin:var(--space-4) 0 var(--space-4) 22px;">
+            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked><label style="font-size:12px;">📊 经典动量组合</label></div>
+            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked><label style="font-size:12px;">📊 量价突破组合</label></div>
+            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox"><label style="font-size:12px;">📊 低波防御组合</label></div>
+            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox"><label style="font-size:12px;">📊 全因子综合</label></div>
+            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked><label style="font-size:12px;">⭐ 我的短线策略</label></div>
+            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox"><label style="font-size:12px;">⭐ 中长线选股A</label></div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:var(--space-2);">已选 3 个组合</div>
+          </div>
+          <div style="margin-top:var(--space-6);padding:var(--space-6);background:var(--bg-subtle);border-radius:var(--radius-sm);">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-2);">最低通过阈值 (min_score)</div>
+            <select class="select" style="width:100%;font-size:12px;"><option>≥ 30 分（后端默认）</option><option>≥ 50 分</option><option>≥ 70 分</option></select>
+          </div>
+        </div>
+
+        <!-- 中栏: 权重配置 -->
+        <div class="l3-panel">
+          <h4>⚖️ 信号权重配置</h4>
+          <div id="weight-config">
+            <div class="weight-row" data-key="chanlun">
+              <span class="w-label" style="color:#EF4444;">缠论</span>
+              <div class="w-bar-wrap"><div class="w-bar-fill" style="width:35%;background:#EF4444;"></div></div>
+              <span class="w-value">35%</span>
+              <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
+            </div>
+            <div class="weight-row" data-key="vp">
+              <span class="w-label" style="color:#3B82F6;">量价</span>
+              <div class="w-bar-wrap"><div class="w-bar-fill" style="width:30%;background:#3B82F6;"></div></div>
+              <span class="w-value">30%</span>
+              <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
+            </div>
+            <div class="weight-row" data-key="factor">
+              <span class="w-label" style="color:#F59E0B;">因子</span>
+              <div class="w-bar-wrap"><div class="w-bar-fill" style="width:25%;background:#F59E0B;"></div></div>
+              <span class="w-value">25%</span>
+              <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
+            </div>
+            <div class="weight-row" data-key="vibe">
+              <span class="w-label" style="color:#8B5CF6;">Vibe</span>
+              <div class="w-bar-wrap"><div class="w-bar-fill" style="width:10%;background:#8B5CF6;"></div></div>
+              <span class="w-value">10%</span>
+              <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
+            </div>
+          </div>
+          <div class="weight-total">合计: <span id="weight-sum">100%</span> ✅</div>
+        </div>
+
+        <!-- 右栏: Vibe Coding -->
+        <div class="l3-panel">
+          <h4>🤖 Vibe Coding</h4>
+          <div id="vibe-content">
+            <div class="vibe-strategy">
+              <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked><label style="font-size:12px;font-weight:500;">📊 业绩超预期+MACD金叉</label></div>
+              <div style="font-size:10px;color:var(--text-muted);margin-left:22px;">"选出业绩预告超预期且MACD金叉的股票"</div>
+            </div>
+            <div class="vibe-strategy">
+              <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox"><label style="font-size:12px;font-weight:500;">📊 涨停突破回调确认</label></div>
+              <div style="font-size:10px;color:var(--text-muted);margin-left:22px;">"涨停后缩量回调不破涨停底，次日放量上攻"</div>
+            </div>
+            <div class="vibe-strategy" style="border-color:var(--color-brand-500);">
+              <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked><label style="font-size:12px;font-weight:500;color:var(--color-brand-500);">⭐ 我的短线策略</label></div>
+              <div style="font-size:10px;color:var(--text-muted);margin-left:22px;">用户自建 · 2026-06-12</div>
+            </div>
+            <div style="margin-top:var(--space-8);">
+              <button class="btn" style="width:100%;font-size:12px;justify-content:center;" onclick="showVibeModal()">+ 创建新策略（描述→AI生成）</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 第三层: 筛选结果 -->
+      <div class="results-panel">
+        <div class="results-header">
+          <h4>📊 筛选结果 <span style="font-size:12px;color:var(--text-muted);font-weight:400;">共 23 只股票</span></h4>
+          <div style="display:flex;gap:var(--space-4);"><button class="btn" style="font-size:12px;" onclick="document.getElementById('results-table').style.display=''">🔄 刷新结果</button></div>
+        </div>
+        <div id="empty-state" class="empty-state">
+          <div class="icon-box">🔍</div>
+          <h4>暂无筛选结果</h4>
+          <p>点击「执行筛选」开始 Pipeline 选股流程</p>
+          <div style="margin-top:var(--space-16);"><button class="btn btn-primary" onclick="runScreening()">⚡ 执行筛选</button></div>
+        </div>
+        <div id="results-table" style="display:none;">
+          <table class="table">
+            <tr><th>代码</th><th>名称</th><th>最新价</th><th>综合评分</th><th>评级</th><th>触发信号</th><th>自选</th><th></th></tr>
+            <tr class="clickable" onclick="showDetail('000762.SZ')"><td>000762.SZ</td><td>西藏矿业</td><td>¥12.34</td><td><span class="tag tag-bullish">92</span></td><td>🔥 强烈推荐</td><td><span class="tag tag-bullish">三买+VP-1</span></td><td><span style="color:#F59E0B;">⭐</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
+            <tr class="clickable" onclick="showDetail('000001.SZ')"><td>000001.SZ</td><td>平安银行</td><td>¥11.28</td><td><span class="tag tag-bullish">88</span></td><td>✅ 推荐</td><td><span class="tag tag-bullish">二买+底背离</span></td><td><span style="color:var(--text-muted);">☆</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
+            <tr class="clickable" onclick="showDetail('002594.SZ')"><td>002594.SZ</td><td>比亚迪</td><td>¥265.80</td><td><span class="tag tag-bullish">90</span></td><td>🔥 强烈推荐</td><td><span class="tag tag-bullish">量突破+三买</span></td><td><span style="color:var(--text-muted);">☆</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
+            <tr class="clickable" onclick="showDetail('300750.SZ')"><td>300750.SZ</td><td>宁德时代</td><td>¥218.50</td><td><span class="tag tag-watch">72</span></td><td>👀 关注</td><td><span class="tag tag-watch">中枢震荡</span></td><td><span style="color:var(--text-muted);">☆</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
+            <tr class="clickable" onclick="showDetail('002415.SZ')"><td>002415.SZ</td><td>海康威视</td><td>¥32.68</td><td><span class="tag tag-watch">75</span></td><td>👀 关注</td><td><span class="tag tag-watch">均线多头</span></td><td><span style="color:#F59E0B;">⭐</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
+            <tr class="clickable" onclick="showDetail('600519.SH')"><td>600519.SH</td><td>贵州茅台</td><td>¥1,685.00</td><td><span class="tag tag-bullish">85</span></td><td>✅ 推荐</td><td><span class="tag tag-bullish">趋势+资金</span></td><td><span style="color:var(--text-muted);">☆</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 信号详情弹窗 -->
+    <div id="detail-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeDetail()">
+      <div class="modal">
+        <div class="modal-header"><h3>📋 信号详情 — <span id="modal-stock">000762.SZ</span></h3><button class="modal-close" onclick="closeDetail()">✕</button></div>
+        <div class="modal-body" id="modal-body"></div>
+        <div class="modal-footer" id="modal-footer">
+          <button class="btn" style="flex:1;font-size:12px;justify-content:center;" onclick="closeDetail();location.href='indicator-ide.html'">📈 个股分析</button>
+          <button class="btn btn-primary" style="flex:1;font-size:12px;justify-content:center;" onclick="closeDetail();alert('已添加到自选监控')">⭐ 加入自选</button>
+          <button class="btn" style="flex:1;font-size:12px;justify-content:center;" onclick="closeDetail();location.href='ai-analysis.html'">🤖 AI 分析</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Vibe Coding 创建弹窗 -->
+    <div id="vibe-modal" class="modal-overlay" style="display:none;z-index:1001;" onclick="if(event.target===this)closeVibeModal()">
+      <div class="modal" style="min-width:600px;">
+        <div class="modal-header">
+          <h3>🤖 Vibe Coding — 自然语言生成策略</h3>
+          <button class="modal-close" onclick="closeVibeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="margin-bottom:var(--space-12);">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:var(--space-4);">用自然语言描述你的策略需求</label>
+            <textarea id="vibe-input" rows="3" style="width:100%;padding:var(--space-8);border:1px solid var(--border-default);border-radius:var(--radius-sm);background:var(--bg-subtle);color:var(--text-primary);font-size:13px;resize:vertical;" placeholder="例如：选出业绩预告超预期且MACD刚刚金叉的股票..."></textarea>
+            <button class="btn btn-primary" style="margin-top:var(--space-4);font-size:12px;" onclick="generateVibeStrategy()">🤖 AI 生成</button>
+          </div>
+          <div style="margin-bottom:var(--space-12);">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:var(--space-4);">AI 生成的策略代码</label>
+            <div id="vibe-code-area" style="width:100%;min-height:120px;border:1px solid var(--border-default);border-radius:var(--radius-sm);background:#0d1117;color:#c9d1d9;font-family:monospace;font-size:12px;padding:var(--space-8);white-space:pre-wrap;overflow:auto;">
+              点击「AI 生成」后，策略代码将出现在这里...
+            </div>
+          </div>
+          <div style="display:flex;gap:var(--space-8);align-items:flex-end;">
+            <div style="flex:1;">
+              <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:var(--space-4);">策略名称</label>
+              <input id="vibe-name" type="text" style="width:100%;padding:var(--space-6) var(--space-8);border:1px solid var(--border-default);border-radius:var(--radius-sm);background:var(--bg-surface);color:var(--text-primary);font-size:13px;" placeholder="给我的策略起个名字...">
+            </div>
+            <button class="btn btn-primary" style="font-size:12px;" onclick="addVibeStrategy()">+ 添加策略</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。</div>
+  </main>
+</div>
+
+<script>
+// 权重调整
+function adjWeight(btn, delta) {
+  var row = btn.closest('.weight-row');
+  var valEl = row.querySelector('.w-value');
+  var fillEl = row.querySelector('.w-bar-fill');
+  var cur = parseInt(valEl.textContent);
+  var newVal = Math.max(5, Math.min(80, cur + delta));
+  valEl.textContent = newVal + '%';
+  fillEl.style.width = newVal + '%';
+
+  // 重新计算合计
+  var total = 0;
+  document.querySelectorAll('#weight-config .weight-row').forEach(function(r){
+    total += parseInt(r.querySelector('.w-value').textContent);
+  });
+  document.getElementById('weight-sum').textContent = total + '%';
+}
+
+// 执行筛选
+function runScreening() {
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('results-table').style.display = '';
+  document.querySelector('.btn').innerHTML = '⏳ 筛选中...';
+  setTimeout(function(){
+    document.querySelector('.btn').innerHTML = '⚡ 执行筛选';
+  }, 1500);
+}
+
+// 弹窗
+var stockData = {
+  '000762.SZ': {name:'西藏矿业',score:92,signal:'强烈推荐',price:'¥12.34',strategies:{chanlun:'三买确认 (score:0.85)',vp:'VP-1 价涨量增',factor:'经典动量 88 / 量价突破 76'},reasons:['缠论第三类买点确认','量价配合 VP-1 价涨量增','多因子组合均分 82分']},
+  '000001.SZ': {name:'平安银行',score:88,signal:'推荐',price:'¥11.28',strategies:{chanlun:'二买确认 (score:0.78)',vp:'底背离',factor:'经典动量 85 / 量价突破 72'},reasons:['二类买点确认','量价底背离信号','多因子动量因子突出']},
+  '002594.SZ': {name:'比亚迪',score:90,signal:'强烈推荐',price:'¥265.80',strategies:{chanlun:'三买+趋势突破',vp:'量突破',factor:'经典动量 92 / 量价突破 78'},reasons:['放量突破前高','趋势线突破确认','新能源政策利好']},
+  '300750.SZ': {name:'宁德时代',score:72,signal:'关注',price:'¥218.50',strategies:{chanlun:'中枢震荡',vp:'量缩观望',factor:'经典动量 68'},reasons:['高位中枢震荡','成交量萎缩等待方向','多因子偏弱']},
+  '002415.SZ': {name:'海康威视',score:75,signal:'关注',price:'¥32.68',strategies:{chanlun:'中枢下沿支撑',vp:'均线多头',factor:'经典动量 72'},reasons:['均线多头排列','中枢下沿支撑有效','量能萎缩待放量']},
+  '600519.SH': {name:'贵州茅台',score:85,signal:'推荐',price:'¥1,685.00',strategies:{chanlun:'二买',vp:'趋势延续',factor:'经典动量 88 / 量价突破 75'},reasons:['趋势线突破确认','北向资金加仓','大单资金净流入']}
+};
+function showDetail(code){
+  var d = stockData[code];
+  if(!d) return;
+  document.getElementById('modal-stock').textContent = code + ' ' + d.name;
+  var html = '<div style="margin-bottom:var(--space-12);"><table class="table"><tr><th>策略</th><th>输出</th></tr>';
+  var labels = {chanlun:'🧩 缠论',vp:'📊 量价',factor:'📦 多因子'};
+  for(var k in d.strategies){
+    html += '<tr><td>'+(labels[k]||k)+'</td><td>'+d.strategies[k]+'</td></tr>';
+  }
+  html += '</table></div>';
+  html += '<h4 style="font-size:13px;margin-bottom:var(--space-8);">📝 选股理由</h4><ul style="padding-left:var(--space-16);">';
+  d.reasons.forEach(function(r){ html += '<li style="margin-bottom:var(--space-4);">'+r+'</li>'; });
+  html += '</ul>';
+  html += '<div style="margin-top:var(--space-12);padding:var(--space-8);background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:11px;color:var(--text-muted);">提示：点击下方按钮查看更多操作</div>';
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('detail-modal').style.display = 'flex';
+}
+function closeDetail(){ document.getElementById('detail-modal').style.display = 'none'; }
+
+// Vibe Coding
+function showVibeModal(){
+  document.getElementById('vibe-modal').style.display = 'flex';
+}
+function closeVibeModal(){
+  document.getElementById('vibe-modal').style.display = 'none';
+}
+function generateVibeStrategy(){
+  var desc = document.getElementById('vibe-input').value.trim();
+  if(!desc){ alert('请先输入策略描述'); return; }
+  document.getElementById('vibe-code-area').textContent =
+    'def custom_strategy(data):\n'
+    + '    """\n'
+    + '    ' + desc + '\n'
+    + '    """\n'
+    + '    # 基于深度学习的选股逻辑\n'
+    + '    score = 0\n'
+    + '    # MACD金叉检测\n'
+    + '    if data["macd_diff"].iloc[-1] > data["macd_dea"].iloc[-1]:\n'
+    + '        score += 40\n'
+    + '    # 业绩预增检测\n'
+    + '    if data["yoy_profit"].iloc[-1] > 50:\n'
+    + '        score += 30\n'
+    + '    return score';
+  document.querySelector('#vibe-code-area + .btn').disabled = false;
+}
+function addVibeStrategy(){
+  var name = document.getElementById('vibe-name').value.trim();
+  var code = document.getElementById('vibe-code-area').textContent;
+  if(!name){ alert('请输入策略名称'); return; }
+  if(code.indexOf('def custom_strategy') === -1){ alert('请先生成策略代码'); return; }
+
+  // 添加到Vibe Coding列表
+  var html = '<div class="vibe-strategy" style="border-color:var(--color-brand-500);">'
+    + '<div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked>'
+    + '<label style="font-size:12px;font-weight:500;color:var(--color-brand-500);">⭐ ' + name + '</label></div>'
+    + '<div style="font-size:10px;color:var(--text-muted);margin-left:22px;">用户自建 · ' + new Date().toISOString().slice(0,10) + '</div>'
+    + '</div>';
+  document.getElementById('vibe-content').insertAdjacentHTML('afterbegin', html);
+
+  closeVibeModal();
+  alert('✅ 策略「' + name + '」已添加\n\n• 已加入L3 Vibe Coding 策略列表\n• 已保存到策略模板 → 用户自建策略');
+}
+</script>
+<script>
+var sidebarCollapsed = true;
+function toggleSidebar(){
+  sidebarCollapsed = !sidebarCollapsed;
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(!s||!m)return;
+  s.classList.toggle('collapsed');m.classList.toggle('collapsed');
+  m.style.marginLeft=(sidebarCollapsed?64:200)+'px';
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent=sidebarCollapsed?'▶':'◀';
+}
+(function(){
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(s)s.classList.add('collapsed');
+  if(m){m.classList.add('collapsed');m.style.marginLeft='64px';}
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent='▶';
+})();
+</script>
+</body>
+</html>

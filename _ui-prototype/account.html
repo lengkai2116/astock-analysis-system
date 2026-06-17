@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>账户管理 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.overview-cards-acc { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-16); margin-bottom: var(--space-24); }
+.tab-content { min-height: 300px; }
+.trade-table-wrap { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+        <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+        <a href="chip-analysis.html" class="sidebar-item" data-name="筹码分析"><span class="icon">🧩</span><span>筹码分析</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+        <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+        <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+        <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+        <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+        <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
+        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
+        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item active" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+    </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>👤 账户管理</h1>
+      <div class="page-header-actions"></div>
+    </div>
+
+    <!-- 概览卡片 -->
+    <div class="overview-cards-acc">
+      <div class="overview-card"><div class="label">模拟总资产</div><div class="value up">¥1,352,000</div><div class="change up">↑ +35.2%</div></div>
+      <div class="overview-card"><div class="label">总盈亏</div><div class="value up">+¥352,000</div><div class="change up">↑ 年化 +5.8%</div></div>
+      <div class="overview-card"><div class="label">交易次数</div><div class="value" style="font-size:28px;">47</div><div class="change flat">月均 0.7 次</div></div>
+      <div class="overview-card"><div class="label">胜率</div><div class="value" style="color:var(--signal-watch);">58.3%</div><div class="change up">↑ +2.1% vs 上月</div></div>
+    </div>
+
+    <div class="tabs">
+      <span class="tab-item active" onclick="switchAccTab(this,'tab-trades')">📋 交易记录</span>
+      <span class="tab-item" onclick="switchAccTab(this,'tab-positions')">📦 持仓概览</span>
+      <span class="tab-item" onclick="switchAccTab(this,'tab-equity')">📈 资金曲线</span>
+      <span class="tab-item" onclick="switchAccTab(this,'tab-review')">🧠 智能复盘</span>
+    </div>
+
+    <div class="tab-content">
+      <!-- 交易记录 -->
+      <div id="tab-trades">
+        <div class="trade-table-wrap">
+          <table class="table">
+            <tr><th>日期</th><th>股票</th><th>方向</th><th>数量</th><th>价格</th><th>盈亏</th><th>信号来源</th></tr>
+            <tr><td>2026-06-01</td><td>西藏矿业</td><td><span class="tag tag-bullish">关注信号</span></td><td>1,000</td><td>¥12.34</td><td class="up">+8.5%</td><td>量价B2</td></tr>
+            <tr><td>2026-05-15</td><td>平安银行</td><td><span class="tag tag-bullish">关注信号</span></td><td>2,000</td><td>¥11.28</td><td class="up">+3.2%</td><td>缠论B1</td></tr>
+            <tr><td>2026-04-20</td><td>海康威视</td><td><span class="tag tag-bearish">风险退出</span></td><td>1,500</td><td>¥32.68</td><td class="down">-2.1%</td><td>缠论S2</td></tr>
+            <tr><td>2026-03-10</td><td>宁德时代</td><td><span class="tag tag-bullish">关注信号</span></td><td>500</td><td>¥218.50</td><td class="up">+5.6%</td><td>筹码B1</td></tr>
+          </table>
+          <div style="text-align:center;margin-top:var(--space-12);font-size:12px;color:var(--text-muted);">仅展示近 3 个月记录，共 47 条</div>
+        </div>
+      </div>
+
+      <!-- 持仓概览 -->
+      <div id="tab-positions" style="display:none;">
+        <div class="trade-table-wrap">
+          <table class="table">
+            <tr><th>股票</th><th>持仓</th><th>成本价</th><th>现价</th><th>盈亏</th><th>占比</th></tr>
+            <tr><td>西藏矿业</td><td>1,000</td><td>¥11.38</td><td>¥12.34</td><td class="up">+8.4%</td><td>18.2%</td></tr>
+            <tr><td>平安银行</td><td>2,000</td><td>¥10.92</td><td>¥11.28</td><td class="up">+3.3%</td><td>33.4%</td></tr>
+            <tr><td>宁德时代</td><td>500</td><td>¥207.00</td><td>¥218.50</td><td class="up">+5.6%</td><td>16.2%</td></tr>
+            <tr><td>五粮液</td><td>300</td><td>¥148.00</td><td>¥145.20</td><td class="down">-1.9%</td><td>6.4%</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <!-- 资金曲线 (placeholder) -->
+      <div id="tab-equity" style="display:none;">
+        <div class="trade-table-wrap" style="min-height:200px;display:flex;align-items:center;justify-content:center;">
+          <div class="empty-state">
+            <div class="icon-box">📈</div>
+            <h4>资金曲线</h4>
+            <p>模拟账户净值变化趋势图（ECharts 面积图）</p>
+            <div style="margin-top:var(--space-12);font-size:12px;color:var(--text-muted);">总资产 ¥1,352,000 · 累计收益 ¥352,000</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 智能复盘 -->
+      <div id="tab-review" style="display:none;">
+        <div class="trade-table-wrap" style="min-height:200px;display:flex;align-items:center;justify-content:center;">
+          <div class="empty-state">
+            <div class="icon-box">🧠</div>
+            <h4>智能复盘</h4>
+            <p>基于历史操作数据的 AI 复盘分析报告</p>
+            <div style="margin-top:var(--space-12);font-size:12px;color:var(--text-muted);">近 3 月信号正确率: 59.6% · 最大亏损: -2.1%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。模拟账户数据不构成真实交易依据。</div>
+  </main>
+</div>
+
+<script>
+function switchAccTab(el, id){
+  document.querySelectorAll('.tab-item').forEach(function(t){t.classList.remove('active');});
+  el.classList.add('active');
+  document.querySelectorAll('.tab-content > div').forEach(function(p){p.style.display='none';});
+  document.getElementById(id).style.display = '';
+}
+</script>
+<script>
+var sidebarCollapsed = true;
+function toggleSidebar(){
+  sidebarCollapsed = !sidebarCollapsed;
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(!s||!m)return;
+  s.classList.toggle('collapsed');m.classList.toggle('collapsed');
+  m.style.marginLeft=(sidebarCollapsed?64:200)+'px';
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent=sidebarCollapsed?'▶':'◀';
+}
+(function(){
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(s)s.classList.add('collapsed');
+  if(m){m.classList.add('collapsed');m.style.marginLeft='64px';}
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent='▶';
+})();
+</script>
+</body>
+</html>

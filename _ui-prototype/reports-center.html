@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>报告中心 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.report-toolbar { display: flex; align-items: center; gap: var(--space-12); margin-bottom: var(--space-16); flex-wrap: wrap; }
+.report-toolbar .input { width: 220px; }
+.report-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); margin-bottom: var(--space-12); cursor: pointer; transition: all .15s; }
+.report-card:hover { border-color: var(--border-strong); }
+.report-card .rp-top { display: flex; justify-content: space-between; align-items: flex-start; }
+.report-card h4 { font-size: 14px; font-weight: 600; }
+.report-card .rp-meta { font-size: 12px; color: var(--text-muted); margin-top: var(--space-4); }
+.report-card .rp-desc { font-size: 13px; color: var(--text-secondary); margin-top: var(--space-6); line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+        <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+        <a href="chip-analysis.html" class="sidebar-item" data-name="筹码分析"><span class="icon">🧩</span><span>筹码分析</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+        <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+        <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+        <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+        <a href="reports-center.html" class="sidebar-item active" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+        <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
+        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
+        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+    </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>📑 报告中心</h1>
+      <div class="page-header-actions">
+        <button class="btn btn-primary" onclick="alert('📝 生成报告弹窗已打开')">📝 生成报告</button>
+      </div>
+    </div>
+
+    <div class="report-toolbar">
+      <input class="input" placeholder="🔍 搜索报告..." oninput="filterReports(this.value)">
+      <select class="select" style="width:140px;"><option>全部类型</option><option>单股票策略</option><option>回测报告</option><option>研究报告</option><option>AI 分析</option></select>
+      <span style="margin-left:auto;font-size:12px;color:var(--text-muted);">共 12 份报告</span>
+    </div>
+
+    <div class="report-card" onclick="alert('📄 报告详情查看器已打开')">
+      <div class="rp-top"><h4>西藏矿业 — 多策略综合分析报告</h4><span class="tag tag-bullish">单股票策略</span></div>
+      <div class="rp-meta">2026-06-10 · 基于量价+缠论+筹码三策略共振评分 · 评分: 72/100</div>
+      <div class="rp-desc">对西藏矿业进行全方位策略分析，涵盖量价形态 8 种规则检测、缠论笔-段-中枢分析、筹码分布主力追踪。</div>
+    </div>
+    <div class="report-card" onclick="alert('📄 报告详情查看器已打开')">
+      <div class="rp-top"><h4>量价策略回测报告（2020-2026）</h4><span class="tag tag-watch">回测报告</span></div>
+      <div class="rp-meta">2026-06-08 · 回测区间: 2020-01-01 ~ 2026-06-01 · 标的: 沪深300</div>
+      <div class="rp-desc">量价形态 17 规则全量回测，总收益 +35.2%，年化 +5.8%，夏普比率 0.85，最大回撤 -12.3%。</div>
+    </div>
+    <div class="report-card" onclick="alert('📄 报告详情查看器已打开')">
+      <div class="rp-top"><h4>缠论策略深度研究报告</h4><span class="tag tag-bullish">研究报告</span></div>
+      <div class="rp-meta">2026-06-05 · 基于 141 号方案 · 含决策树评分体系</div>
+      <div class="rp-desc">缠论策略全中文输出重构、决策树修复、买卖点分档仓位管理，含西藏矿业/平安银行实盘验证结果。</div>
+    </div>
+    <div class="report-card" onclick="alert('📄 报告详情查看器已打开')">
+      <div class="rp-top"><h4>DeepSeek AI 趋势分析 — 新能源板块</h4><span class="tag tag-bullish">AI 分析</span></div>
+      <div class="rp-meta">2026-06-07 · 多角色并行分析（技术+基本面+情绪）</div>
+      <div class="rp-desc">新能源板块 5 只核心标的 AI 综合研判，技术面中性偏多，基本面估值合理，消息面政策利好。</div>
+    </div>
+
+    <div class="empty-state" style="display:none;" id="report-empty">
+      <div class="icon-box">📑</div>
+      <h4>暂无匹配的报告</h4>
+      <p>尝试调整搜索关键词或筛选条件</p>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。</div>
+  </main>
+</div>
+
+<script>
+function filterReports(val){
+  var v = val.toLowerCase();
+  var count = 0;
+  document.querySelectorAll('.report-card').forEach(function(r){
+    var show = r.textContent.toLowerCase().includes(v);
+    r.style.display = show ? '' : 'none';
+    if(show) count++;
+  });
+  document.getElementById('report-empty').style.display = count > 0 ? 'none' : '';
+}
+</script>
+<script>
+var sidebarCollapsed = true;
+function toggleSidebar(){
+  sidebarCollapsed = !sidebarCollapsed;
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(!s||!m)return;
+  s.classList.toggle('collapsed');m.classList.toggle('collapsed');
+  m.style.marginLeft=(sidebarCollapsed?64:200)+'px';
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent=sidebarCollapsed?'▶':'◀';
+}
+(function(){
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(s)s.classList.add('collapsed');
+  if(m){m.classList.add('collapsed');m.style.marginLeft='64px';}
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent='▶';
+})();
+</script>
+</body>
+</html>

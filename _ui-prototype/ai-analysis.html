@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 分析 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.analysis-top { display: flex; align-items: center; gap: var(--space-12); margin-bottom: var(--space-16); flex-wrap: wrap; }
+.analysis-top .input { width: 200px; }
+.progress-panel { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); margin-bottom: var(--space-16); }
+.progress-item { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-6) 0; font-size: 13px; color: var(--text-secondary); }
+.progress-item .icon { width: 20px; text-align: center; }
+.result-panel { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+.result-header { display: flex; gap: var(--space-12); margin-bottom: var(--space-16); flex-wrap: wrap; }
+.result-card { flex:1; min-width:120px; padding:var(--space-12); background:var(--bg-subtle); border-radius:var(--radius-sm); text-align:center; }
+.result-card .val { font-size: 22px; font-weight: 700; margin: var(--space-4) 0; }
+.result-card .lbl { font-size: 11px; color: var(--text-muted); }
+
+.analysis-tab-content { min-height: 200px; }
+.analysis-section { margin-bottom: var(--space-12); }
+.analysis-section h5 { font-size: 13px; font-weight: 600; margin-bottom: var(--space-6); color: var(--text-secondary); }
+.score-row { display: flex; align-items: center; gap: var(--space-8); margin-bottom: var(--space-6); }
+.score-row .s-label { width: 80px; font-size: 12px; color: var(--text-secondary); }
+.score-row .s-bar { flex: 1; height: 6px; background: var(--bg-muted); border-radius: 3px; overflow: hidden; }
+.score-row .s-fill { height: 100%; border-radius: 3px; }
+.score-row .s-val { width: 40px; text-align: right; font-size: 12px; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+        <a href="ai-analysis.html" class="sidebar-item active" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+        <a href="chip-analysis.html" class="sidebar-item" data-name="筹码分析"><span class="icon">🧩</span><span>筹码分析</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+        <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+        <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+        <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+        <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+        <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
+        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
+        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+    </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>🤖 AI 分析 · DeepSeek 投研</h1>
+      <div class="page-header-actions"></div>
+    </div>
+
+    <!-- 股票选择 -->
+    <div class="analysis-top">
+      <input class="input" value="000762.SZ" placeholder="输入股票代码/名称" style="width:160px;">
+      <select class="select" style="width:130px;"><option>西藏矿业</option><option>平安银行</option><option>贵州茅台</option></select>
+      <button class="btn btn-primary" onclick="startAnalysis()">🤖 开始分析</button>
+      <span style="margin-left:auto;font-size:12px;color:var(--text-muted);">模型: DeepSeek v4-flash</span>
+    </div>
+
+    <!-- 进度（初始显示） -->
+    <div id="progress-area" class="progress-panel">
+      <h4 style="font-size:13px;font-weight:600;margin-bottom:var(--space-8);">⏳ 分析进度</h4>
+      <div id="progress-items">
+        <div class="progress-item" id="p0"><span class="icon">📝</span>正在调用技术分析角色...</div>
+        <div class="progress-item" id="p1"><span class="icon">📝</span>正在调用基本面分析角色...</div>
+        <div class="progress-item" id="p2"><span class="icon">📝</span>正在调用情绪分析角色...</div>
+        <div class="progress-item" id="p3"><span class="icon">📝</span>正在生成综合研判...</div>
+      </div>
+      <div class="progress-bar" style="margin-top:var(--space-8);"><div id="progress-fill" class="progress-bar-fill" style="width:0%;"></div></div>
+    </div>
+
+    <!-- 结果（初始隐藏） -->
+    <div id="result-area" class="result-panel" style="display:none;">
+      <div class="result-header">
+        <div class="result-card"><div class="lbl">总评</div><div class="val" style="color:var(--signal-watch);">6.8/10</div><div class="lbl">中性偏多</div></div>
+        <div class="result-card"><div class="lbl">趋势</div><div class="val up">上升↗</div><div class="lbl">中期偏多</div></div>
+        <div class="result-card"><div class="lbl">信号</div><div class="val" style="color:var(--signal-watch);">关注</div><div class="lbl">暂不建议操作</div></div>
+        <div class="result-card"><div class="lbl">置信度</div><div class="val" style="color:var(--color-brand-500);">72%</div><div class="lbl">中等置信</div></div>
+      </div>
+
+      <div class="tabs" id="analysis-tabs">
+        <span class="tab-item active" onclick="switchTab(this,'tab-comprehensive')">📊 综合</span>
+        <span class="tab-item" onclick="switchTab(this,'tab-technical')">📈 技术</span>
+        <span class="tab-item" onclick="switchTab(this,'tab-fundamental')">📋 基本面</span>
+        <span class="tab-item" onclick="switchTab(this,'tab-news')">📰 消息面</span>
+      </div>
+
+      <div class="analysis-tab-content">
+        <!-- 综合 Tab -->
+        <div id="tab-comprehensive" class="tab-panel">
+          <div class="analysis-section">
+            <h5>🧩 多角色分析评分</h5>
+            <div class="score-row"><span class="s-label">技术面</span><div class="s-bar"><div class="s-fill" style="width:68%;background:var(--color-up);"></div></div><span class="s-val up">6.8</span></div>
+            <div class="score-row"><span class="s-label">基本面</span><div class="s-bar"><div class="s-fill" style="width:75%;background:var(--color-brand-500);"></div></div><span class="s-val" style="color:var(--color-brand-500);">7.5</span></div>
+            <div class="score-row"><span class="s-label">消息面</span><div class="s-bar"><div class="s-fill" style="width:42%;background:var(--signal-watch);"></div></div><span class="s-val" style="color:var(--signal-watch);">4.2</span></div>
+            <div class="score-row"><span class="s-label">情绪面</span><div class="s-bar"><div class="s-fill" style="width:55%;background:var(--signal-watch);"></div></div><span class="s-val" style="color:var(--signal-watch);">5.5</span></div>
+            <div class="score-row"><span class="s-label">综合</span><div class="s-bar"><div class="s-fill" style="width:68%;background:var(--color-up);"></div></div><span class="s-val up">6.8</span></div>
+          </div>
+          <div class="analysis-section">
+            <h5>🎯 综合研判</h5>
+            <p style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+              西藏矿业当前呈现 <span class="tag tag-watch">中性偏多</span> 格局。技术面处于中枢下沿位置，RSI 从超卖区反弹；
+              基本面估值处于历史低位区间，PB 低于 1.5 倍；消息面短期无重大催化。建议 <strong style="color:var(--signal-watch);">静待观察</strong>，
+              若放量突破中枢上沿 ¥13.50 可考虑关注。
+            </p>
+          </div>
+          <div class="analysis-section" style="display:flex;gap:var(--space-8);margin-top:var(--space-16);">
+            <button class="btn" onclick="location.href='indicator-ide.html'">📈 策略分析</button>
+            <button class="btn btn-primary" onclick="alert('📋 报告已生成')">📋 生成报告</button>
+          </div>
+        </div>
+
+        <div id="tab-technical" class="tab-panel" style="display:none;">
+          <div class="analysis-section"><h5>📈 技术分析详情</h5><p style="font-size:13px;color:var(--text-secondary);line-height:1.8;">MACD 零轴下方金叉，DIFF 上穿 DEA，动能柱转红。<br>RSI(14): 42.3，从超卖区（<30）反弹。<br>KDJ: K=38.5, D=32.1, J=51.3，短期偏多。<br>布林带: 价格触及下轨后反弹，中轨 ¥12.80 为压力位。<br>成交量: 近 3 日放量 35%，有资金介入迹象。</p></div>
+        </div>
+        <div id="tab-fundamental" class="tab-panel" style="display:none;">
+          <div class="analysis-section"><h5>📋 基本面分析详情</h5><p style="font-size:13px;color:var(--text-secondary);line-height:1.8;">PE(TTM): 28.5x，低于行业均值 35.2x。<br>PB(MRQ): 1.42x，处于近 5 年 15% 分位。<br>ROE: 8.5%，高于行业平均。<br>营收增长率: 12.3% YoY。<br>净利润增长率: 8.7% YoY。</p></div>
+        </div>
+        <div id="tab-news" class="tab-panel" style="display:none;">
+          <div class="analysis-section"><h5>📰 消息面分析</h5><p style="font-size:13px;color:var(--text-secondary);line-height:1.8;">近期无重大利空/利好消息。<br>行业政策: 新能源矿产政策保持稳定。<br>机构评级: 3 家机构给予"增持"评级。<br>舆情情绪: 中性偏积极。</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。数据分析基于 DeepSeek API，结果可能存在偏差。</div>
+  </main>
+</div>
+
+<script>
+function startAnalysis(){
+  document.getElementById('result-area').style.display = 'none';
+  document.getElementById('progress-area').style.display = '';
+
+  var steps = ['p0','p1','p2','p3'];
+  var labels = ['正在调用技术分析角色... ✅','正在调用基本面分析角色... ✅','正在调用情绪分析角色... ✅','正在生成综合研判... ✅'];
+  var icons = ['📝','📝','📝','📝'];
+  var p = 0;
+
+  var timer = setInterval(function(){
+    if(p > 0) document.getElementById(steps[p-1]).innerHTML = '<span class="icon">✅</span>' + labels[p-1].replace('... ✅','');
+    if(p < steps.length){
+      document.getElementById(steps[p]).innerHTML = '<span class="icon">⏳</span>' + labels[p].replace(' ✅','... ');
+    }
+    document.getElementById('progress-fill').style.width = ((p+1)/steps.length*100)+'%';
+    p++;
+    if(p > steps.length){
+      clearInterval(timer);
+      document.getElementById('progress-area').style.display = 'none';
+      document.getElementById('result-area').style.display = '';
+    }
+  }, 800);
+}
+
+function switchTab(el, tabId){
+  document.querySelectorAll('.tab-item').forEach(function(t){t.classList.remove('active');});
+  el.classList.add('active');
+  document.querySelectorAll('.tab-panel').forEach(function(p){p.style.display='none';});
+  document.getElementById(tabId).style.display = '';
+}
+</script>
+<script>
+var sidebarCollapsed = true;
+function toggleSidebar(){
+  sidebarCollapsed = !sidebarCollapsed;
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(!s||!m)return;
+  s.classList.toggle('collapsed');m.classList.toggle('collapsed');
+  m.style.marginLeft=(sidebarCollapsed?64:200)+'px';
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent=sidebarCollapsed?'▶':'◀';
+}
+(function(){
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(s)s.classList.add('collapsed');
+  if(m){m.classList.add('collapsed');m.style.marginLeft='64px';}
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent='▶';
+})();
+</script>
+</body>
+</html>

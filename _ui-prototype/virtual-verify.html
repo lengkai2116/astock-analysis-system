@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>虚拟验证 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+.verify-layout { display: grid; grid-template-columns: 320px 1fr; gap: var(--space-16); }
+.config-section { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); height: fit-content; }
+.config-row { display: flex; gap: var(--space-8); margin-bottom: var(--space-10); flex-wrap: wrap; }
+.config-row label { width: 70px; font-size: 12px; color: var(--text-muted); flex-shrink: 0; display:flex;align-items:center; }
+.config-row .input, .config-row .select { flex: 1; }
+
+.result-section { flex: 1; }
+.result-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); margin-bottom: var(--space-12); }
+.result-card h4 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-8); }
+.comp-row { display: flex; justify-content: space-between; padding: var(--space-6) 0; border-bottom: 1px solid var(--border-default); font-size: 13px; }
+.comp-row:last-child { border-bottom: none; }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+        <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+        <a href="chip-analysis.html" class="sidebar-item" data-name="筹码分析"><span class="icon">🧩</span><span>筹码分析</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+        <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+        <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+        <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+        <a href="virtual-verify.html" class="sidebar-item active" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+        <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+        <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
+        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
+        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
+      </div>
+      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+    </nav>
+  <main class="main-content">
+    <div class="page-header">
+      <h1>🏗️ 虚拟验证</h1>
+      <div class="page-header-actions"></div>
+    </div>
+
+    <div class="verify-layout">
+      <div class="config-section">
+        <h4>⚙️ 验证配置</h4>
+        <div class="config-row"><label>策略</label><select class="select"><option>量价形态 + 缠论 + 筹码</option><option>量价形态</option><option>缠论策略</option><option>筹码策略</option></select></div>
+        <div class="config-row"><label>标的</label><select class="select"><option>沪深 300 成分股</option><option>自选股池</option><option>中证 500</option></select></div>
+        <div class="config-row"><label>开始</label><input class="input" value="2024-01-01"></div>
+        <div class="config-row"><label>结束</label><input class="input" value="2026-06-01"></div>
+        <div class="config-row"><label>资金</label><input class="input" value="1,000,000"></div>
+        <div class="config-row"><label>周期</label><select class="select"><option>日线</option><option>周线</option><option>月线</option></select></div>
+        <div style="display:flex;gap:var(--space-8);margin-top:var(--space-12);">
+          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="runVrf(this)">⚡ 启动验证</button>
+        </div>
+      </div>
+
+      <div class="result-section">
+        <div class="result-card">
+          <h4>📊 验证进度</h4>
+          <div class="progress-bar" style="margin-bottom:var(--space-8);"><div id="vrf-progress" class="progress-bar-fill" style="width:0%;"></div></div>
+          <div id="vrf-status" style="font-size:12px;color:var(--text-muted);text-align:center;">点击「启动验证」开始策略模拟验证</div>
+        </div>
+
+        <div id="vrf-results" style="display:none;">
+          <div class="result-card">
+            <h4>📋 验证结果</h4>
+            <div class="comp-row"><span>总收益</span><span class="up">+28.5%</span></div>
+            <div class="comp-row"><span>年化收益</span><span class="up">+12.8%</span></div>
+            <div class="comp-row"><span>最大回撤</span><span class="down">-8.5%</span></div>
+            <div class="comp-row"><span>夏普比率</span><span style="color:var(--color-brand-500);">1.12</span></div>
+            <div class="comp-row"><span>胜率</span><span style="color:var(--signal-watch);">62.5%</span></div>
+            <div class="comp-row"><span>交易次数</span><span>32</span></div>
+            <div class="comp-row" style="border-bottom:none;"><span>信号总准确率</span><span style="color:var(--color-brand-500);">68.8%</span></div>
+          </div>
+
+          <div class="result-card">
+            <h4>📈 信号分布</h4>
+            <div class="comp-row"><span>量价形态看多</span><span>12 次 (正确 8 / 错误 4)</span></div>
+            <div class="comp-row"><span>缠论买卖点</span><span>10 次 (正确 6 / 错误 4)</span></div>
+            <div class="comp-row" style="border-bottom:none;"><span>筹码信号</span><span>10 次 (正确 8 / 错误 2)</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。股市有风险，投资需谨慎。</div>
+  </main>
+</div>
+
+<script>
+function runVrf(btn){
+  btn.innerHTML = '⏳ 验证进行中...';
+  btn.disabled = true;
+  document.getElementById('vrf-status').textContent = '⏳ 正在回测中（模拟 30 个月数据）...';
+  var bar = document.getElementById('vrf-progress');
+  var p = 0;
+  var t = setInterval(function(){
+    p += 8;
+    bar.style.width = p + '%';
+    if(p >= 100){
+      clearInterval(t);
+      btn.innerHTML = '⚡ 启动验证';
+      btn.disabled = false;
+      document.getElementById('vrf-status').textContent = '✅ 验证完成';
+      document.getElementById('vrf-results').style.display = '';
+    }
+  }, 200);
+}
+</script>
+<script>
+var sidebarCollapsed = true;
+function toggleSidebar(){
+  sidebarCollapsed = !sidebarCollapsed;
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(!s||!m)return;
+  s.classList.toggle('collapsed');m.classList.toggle('collapsed');
+  m.style.marginLeft=(sidebarCollapsed?64:200)+'px';
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent=sidebarCollapsed?'▶':'◀';
+}
+(function(){
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(s)s.classList.add('collapsed');
+  if(m){m.classList.add('collapsed');m.style.marginLeft='64px';}
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent='▶';
+})();
+</script>
+</body>
+</html>
