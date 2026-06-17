@@ -1077,20 +1077,8 @@ function renderChipChart(idx, closePrice, crosshairY){
     html += '<div style="position:absolute;right:2px;top:'+labelTop+'px;width:38px;height:10px;font-size:8px;color:#94A3B8;text-align:right;line-height:10px;overflow:hidden;">'+fmt+'</div>';
   }
 
-  // ② 筹码分布水平线（红色=获利、蓝色=套牢）
-  // 从 priceAxisLeft 位置开始向右延伸，到达右侧标签区域之前
-  var maxBarPct = (barAreaW / 140) * 0.85; // 最大线宽占chip-chart百分比
-  for(var i = bins - 1; i >= 0; i--){
-    var price = lo + ((i + 0.5) / bins) * range;
-    var lineY = (1 - (price - lo) / range) * containerH;
-    var lineW = (counts[i] / maxCount) * maxBarPct * 100;
-    var isProfitable = price <= closePrice;
-    // 红色(EF4444)=获利盘，蓝色(3B82F6)=套牢盘（符合行业标准）
-    var color = isProfitable ? '#EF4444' : '#3B82F6';
-    html += '<div style="position:absolute;left:'+priceAxisLeft+'px;top:'+lineY+'px;height:'+barHeight+'px;width:'+lineW+'%;min-width:1px;background:'+color+';"></div>';
-  }
-
-  // ③ 白色当前价线（与十字光标横线同水平 = 收盘价位置）
+  // ③ 白色当前价线位置 — 在筹码线循环前计算，用于红蓝颜色判定
+  var ownWhiteY = (1 - (closePrice - lo) / range) * containerH;
   var whiteY;
   if(crosshairY != null){
     // 有十字光标 → DOM坐标对齐，确保白线与横线同水平
@@ -1099,9 +1087,26 @@ function renderChipChart(idx, closePrice, crosshairY){
     whiteY = crosshairY - (chipRect.top - ecRect.top);
     whiteY = Math.max(0, Math.min(containerH, whiteY));
   } else {
-    // 无十字光标（如toggleChipPanel展开）→ 使用自身坐标
-    whiteY = (1 - (closePrice - lo) / range) * containerH;
+    whiteY = ownWhiteY;
   }
+
+  // ② 筹码分布水平线（红色=获利、蓝色=套牢）
+  // 从 priceAxisLeft 位置开始向右延伸，到达右侧标签区域之前
+  var maxBarPct = (barAreaW / 140) * 0.85; // 最大线宽占chip-chart百分比
+  for(var i = bins - 1; i >= 0; i--){
+    var price = lo + ((i + 0.5) / bins) * range;
+    var lineY = (1 - (price - lo) / range) * containerH;
+    var lineW = (counts[i] / maxCount) * maxBarPct * 100;
+    // 红蓝颜色判定与白色线同一水平基准
+    // 线在白色线下方（Y更大）或重合 → 获利（红色）
+    // 线在白色线上方（Y更小）→ 亏损（蓝色）
+    var isProfitable = lineY >= whiteY;
+    // 红色(EF4444)=获利盘，蓝色(3B82F6)=套牢盘（符合行业标准）
+    var color = isProfitable ? '#EF4444' : '#3B82F6';
+    html += '<div style="position:absolute;left:'+priceAxisLeft+'px;top:'+lineY+'px;height:'+barHeight+'px;width:'+lineW+'%;min-width:1px;background:'+color+';"></div>';
+  }
+
+  // ④ 白色当前价线（使用已计算的whiteY，z-index最上层）
   html += '<div style="position:absolute;left:'+priceAxisLeft+'px;top:'+whiteY+'px;height:1px;width:'+(containerW-48)+'px;background:#FFFFFF;z-index:2;"></div>';
 
   container.innerHTML = html;
