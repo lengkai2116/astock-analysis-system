@@ -758,6 +758,12 @@ function updateCrosshair(idx){
     ]});
     if(cplEl) cplEl.style.display = 'none';
     if(cdlEl) cdlEl.style.display = 'none';
+    // 鼠标离开 → 筹码面板恢复到最后一个交易日
+    if(chipOpen){
+      var lastIdx = dates.length - 1;
+      if(typeof renderChipData === 'function') renderChipData(lastIdx);
+      if(typeof renderChipChart === 'function') renderChipChart(lastIdx, closes[lastIdx]);
+    }
     return;
   }
 
@@ -829,7 +835,7 @@ function updateCrosshair(idx){
 
   chart.setOption({graphic: {elements: graphics}});
   if(chipOpen && typeof renderChipData === 'function') renderChipData(idx);
-  if(chipOpen && typeof renderChipChart === 'function') renderChipChart(idx, closePrice);
+  if(chipOpen && typeof renderChipChart === 'function') renderChipChart(idx, closePrice, y);
   updateSubHeaders(idx);
 }
 
@@ -891,8 +897,8 @@ chart.getZr().on('mousemove', function(param){
   updateCrosshair(idx);
 });
 
-// ── 鼠标移出chart-wrap → 十字光标消失 ──
-document.querySelector('.chart-wrap').addEventListener('mouseleave', function(){
+// ── 鼠标移出chart-section（整张卡片）→ 十字光标消失 ──
+document.querySelector('.chart-section').addEventListener('mouseleave', function(){
   updateCrosshair(-1);
 });
 
@@ -1014,7 +1020,7 @@ function toggleOverlay(el, name){
 
 // ── 筹码面板 ──
 var chipOpen = false;
-function renderChipChart(idx, closePrice){
+function renderChipChart(idx, closePrice, crosshairY){
   var container = document.getElementById('chip-chart');
   if(!container) return;
   if(!ohlc[idx]) return;
@@ -1030,15 +1036,21 @@ function renderChipChart(idx, closePrice){
   var pad = (hi - lo) * 0.05;
   lo -= pad; hi += pad;
   var range = hi - lo || 1;
-  var bins = 30;              // 分成30个价位区间
+  // ② 以0.01元为档位，紧密排列
+  var bins = Math.max(20, Math.round(range / 0.01));
   var containerH = 325;       // chip-chart 高度
   var containerW = container.offsetWidth || 130; // 实际可用宽度（含padding上下文）
-  var priceAxisLeft = 42;     // 价格标签从左边界占宽
-  var barAreaW = containerW - priceAxisLeft - 4; // 筹码线绘制区域剩余宽度
+  // ① 价格标签移到右侧，筹码线从左侧2px开始
+  var priceAxisLeft = 2;      // 筹码线从左边界2px开始
+  var barAreaW = containerW - priceAxisLeft - 44; // 右边留44px给价格标签
+
+  // 线高动态计算：紧密填充，无明显间隙
+  var barHeight = Math.max(1, Math.min(Math.round(containerH / bins) - 1, 4));
 
   // ---- 生成模拟筹码分布（每区间筹码数量） ----
   // 用正弦+随机模拟：中间密集、两端稀疏，接近真实筹码形态
   var counts = new Array(bins).fill(0);
+  var chipMultiplier = Math.max(10, Math.round(bins * 0.3));
   for(var i = 0; i < bins; i++){
     var p = (i + 0.5) / bins;
     // 用sin曲线 + 偏移使分布略微偏上（模拟获利盘略多）
@@ -1048,25 +1060,25 @@ function renderChipChart(idx, closePrice){
     if(distFactor < 0) distFactor = 0;
     weight = weight * (0.3 + 0.7 * distFactor);
     weight = weight * (0.6 + 0.4 * Math.random());
-    counts[i] = Math.max(1, Math.round(weight * 30));
+    counts[i] = Math.max(1, Math.round(weight * chipMultiplier));
   }
   var maxCount = Math.max.apply(null, counts);
 
   // ---- 开始构建DOM ----
   var html = '';
 
-  // ① 价格标签（左侧）— 显示5个关键价位
+  // ① 价格标签（右侧）— 显示5个关键价位
   var priceLabels = [hi, hi-(hi-lo)*0.75, (hi+lo)/2, lo+(hi-lo)*0.25, lo];
   for(var pi = 0; pi < priceLabels.length; pi++){
     var py = (1 - (priceLabels[pi] - lo) / range) * containerH;
     // 夹紧：顶部不下撑出边界，底部不上溢出边界
     var labelTop = Math.max(0, Math.min(containerH - 10, py - 5));
     var fmt = priceLabels[pi].toFixed(2);
-    html += '<div style="position:absolute;left:1px;top:'+labelTop+'px;width:38px;height:10px;font-size:8px;color:#94A3B8;text-align:right;line-height:10px;overflow:hidden;">'+fmt+'</div>';
+    html += '<div style="position:absolute;right:2px;top:'+labelTop+'px;width:38px;height:10px;font-size:8px;color:#94A3B8;text-align:right;line-height:10px;overflow:hidden;">'+fmt+'</div>';
   }
 
   // ② 筹码分布水平线（红色=获利、蓝色=套牢）
-  // 从 priceAxisLeft 位置开始向右延伸
+  // 从 priceAxisLeft 位置开始向右延伸，到达右侧标签区域之前
   var maxBarPct = (barAreaW / 140) * 0.85; // 最大线宽占chip-chart百分比
   for(var i = bins - 1; i >= 0; i--){
     var price = lo + ((i + 0.5) / bins) * range;
@@ -1075,12 +1087,22 @@ function renderChipChart(idx, closePrice){
     var isProfitable = price <= closePrice;
     // 红色(EF4444)=获利盘，蓝色(3B82F6)=套牢盘（符合行业标准）
     var color = isProfitable ? '#EF4444' : '#3B82F6';
-    html += '<div style="position:absolute;left:'+priceAxisLeft+'px;top:'+lineY+'px;height:2px;width:'+lineW+'%;min-width:1px;background:'+color+';"></div>';
+    html += '<div style="position:absolute;left:'+priceAxisLeft+'px;top:'+lineY+'px;height:'+barHeight+'px;width:'+lineW+'%;min-width:1px;background:'+color+';"></div>';
   }
 
   // ③ 白色当前价线（与十字光标横线同水平 = 收盘价位置）
-  var whiteY = (1 - (closePrice - lo) / range) * containerH;
-  html += '<div style="position:absolute;left:'+priceAxisLeft+'px;top:'+whiteY+'px;height:1px;width:'+(containerW-priceAxisLeft)+'px;background:#FFFFFF;z-index:2;"></div>';
+  var whiteY;
+  if(crosshairY != null){
+    // 有十字光标 → DOM坐标对齐，确保白线与横线同水平
+    var chipRect = container.getBoundingClientRect();
+    var ecRect = chart.getDom().getBoundingClientRect();
+    whiteY = crosshairY - (chipRect.top - ecRect.top);
+    whiteY = Math.max(0, Math.min(containerH, whiteY));
+  } else {
+    // 无十字光标（如toggleChipPanel展开）→ 使用自身坐标
+    whiteY = (1 - (closePrice - lo) / range) * containerH;
+  }
+  html += '<div style="position:absolute;left:'+priceAxisLeft+'px;top:'+whiteY+'px;height:1px;width:'+(containerW-48)+'px;background:#FFFFFF;z-index:2;"></div>';
 
   container.innerHTML = html;
 }
@@ -1119,7 +1141,7 @@ function toggleChipPanel(){
     var idx = (_cursorIdx != null && _cursorIdx >= 0) ? _cursorIdx : dates.length - 1;
     var cp = ohlc[idx] ? ohlc[idx][1] : null;
     if(typeof renderChipData === 'function') renderChipData(idx);
-    if(typeof renderChipChart === 'function') renderChipChart(idx, cp);
+    if(typeof renderChipChart === 'function') renderChipChart(idx, cp); // 无crosshairY参数，不传
   }
 }
 
