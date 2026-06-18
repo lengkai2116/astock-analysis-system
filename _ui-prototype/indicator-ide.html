@@ -8,10 +8,11 @@
 <style>
 .top-bar { display:flex; align-items:center; gap:var(--space-12); margin-bottom:var(--space-8); flex-wrap:wrap; }
 .stock-select { display:flex; align-items:center; gap:var(--space-4); }
-.period-tabs { display:flex; gap:var(--space-2); }
-.period-tab { padding:var(--space-4) var(--space-10); border-radius:var(--radius-sm); background:var(--bg-surface); border:1px solid var(--border-default); cursor:pointer; font-size:12px; color:var(--text-secondary); }
+.period-tabs { display:flex; gap:6px; }
+.period-tab { padding:5px 14px; border-radius:var(--radius-sm); background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.12); cursor:pointer; font-size:13px; color:var(--text-secondary); transition:all .15s; }
+.period-tab:hover { background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2); color:var(--text-primary); }
 .period-tab.active { background:var(--color-brand-500); color:white; border-color:var(--color-brand-500); }
-.main-area { display:grid; grid-template-columns:1fr 340px; gap:var(--space-12); margin-bottom:var(--space-12); }
+.main-area { display:grid; grid-template-columns:1fr minmax(260px,340px); gap:var(--space-12); margin-bottom:var(--space-12); min-width:0; align-items:start; }
 .chart-section { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); }
 .chart-header { display:flex; align-items:center; gap:var(--space-8); margin-bottom:var(--space-4); flex-wrap:wrap; }
 .chart-title { font-size:13px; font-weight:500; }
@@ -20,8 +21,8 @@
 #kline-chart { width:100%; }
 .legend-bar { display:flex; gap:var(--space-8); padding:var(--space-4) 0; font-size:10px; color:var(--text-muted); }
 .legend-dot { width:8px;height:8px;border-radius:50%;display:inline-block; }
-.chart-wrap { position:relative; }
-#sub-chart-area { position:absolute; left:0; top:0; width:100%; pointer-events:none; }
+.chart-wrap { position:relative; overflow:hidden; }
+#sub-chart-area { position:absolute; left:0; top:0; width:100%; pointer-events:none; overflow:hidden; }
 .sub-chart-header { font-size:10px; color:var(--text-muted); display:flex; align-items:center; gap:var(--space-4); padding:0 var(--space-4); height:20px; position:absolute; left:0; pointer-events:auto; }
 #cpl-dom { position:absolute; pointer-events:none; z-index:10000; font-family:monospace; font-weight:bold; font-size:12px; color:#FFFFFF; background:#1e3a5f; padding:2px 6px; border-radius:3px; }
 #cdl-dom { position:absolute; pointer-events:none; z-index:10000; font-weight:bold; font-size:10px; color:#FFFFFF; background:#1e3a5f; padding:2px 5px; border-radius:3px; white-space:nowrap; }
@@ -40,40 +41,56 @@
 .add-sel-btn { padding:var(--space-2) var(--space-3); border-radius:var(--radius-xs); font-size:9px; background:var(--bg-muted); color:var(--text-primary); cursor:pointer; border:1px solid var(--border-default); white-space:nowrap; display:flex; align-items:center; gap:2px; }
 .add-sel-btn:hover { background:var(--color-brand-500); color:white; border-color:var(--color-brand-500); }
 
-/* 侧栏折叠 */
-.sidebar-toggle { width:28px; height:28px; border-radius:var(--radius-full); border:1px solid var(--border-default); background:var(--bg-muted); color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:12px; margin:var(--space-4) auto; flex-shrink:0; transition:transform .3s; }
-.sidebar-toggle:hover { background:var(--color-brand-500); color:white; border-color:var(--color-brand-500); }
-.sidebar.collapsed { width:var(--sidebar-collapsed-width); }
-.sidebar.collapsed .sidebar-item span:not(.icon),
-.sidebar.collapsed .sidebar-group-title,
-.sidebar.collapsed .sidebar-logo span:last-child,
-.sidebar.collapsed .badge-new { display:none; }
-.sidebar.collapsed .sidebar-group { gap:0; }
-.sidebar.collapsed .sidebar-item { justify-content:center; padding:var(--space-3) 0; }
-.sidebar.collapsed .sidebar-item:hover { position:relative; z-index:9999; }
-.sidebar.collapsed .sidebar-item:hover::after {
-  content:attr(data-name);
-  position:fixed; left:68px; z-index:9999;
-  background:rgba(10,10,10,0.92); color:white; font-size:11px;
-  padding:var(--space-2) var(--space-5); border-radius:var(--radius-sm);
-  border:1px solid var(--color-brand-500); white-space:nowrap; pointer-events:none;
-}
 
-/* 右侧面板 */
-.side-panel { display:flex; flex-direction:column; gap:var(--space-8); }
-.side-scroll { overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:var(--space-4); padding-right:var(--space-2); font-size:16px; }
-.stock-header-bar { padding:var(--space-2) 0; }
-.stock-name-code { font-size:16px; color:var(--text-primary); font-weight:500; }
-.stock-price-change { display:flex; align-items:baseline; gap:var(--space-4); margin-top:var(--space-2); }
+/* 右侧面板 — 统一容器（与 chart-section 一致） */
+.side-panel { display:flex; flex-direction:column; gap:0; }
+.side-scroll { overflow-y:auto; flex:1; }
+.right-panel-card { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); }
+.stock-header-bar { margin-bottom:var(--space-4); }
+.stock-name-code { font-size:13px; color:var(--text-primary); font-weight:500; display:flex; align-items:center; gap:var(--space-3); }
+.bid-tag { display:inline-block; background:rgba(239,68,68,0.15); color:#EF4444; font-size:11px; padding:1px 6px; border-radius:3px; font-weight:400; }
+.stock-price-change { display:flex; align-items:baseline; gap:var(--space-4); margin-top:var(--space-1); }
 .stock-price { font-size:20px; font-weight:700; }
-.zszq-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--border-default); border:1px solid var(--border-default); border-radius:var(--radius-sm); overflow:hidden; }
-.zszq-item { background:var(--bg-subtle); padding:var(--space-2) var(--space-3); display:flex; justify-content:space-between; font-size:16px; }
-.zszq-l { color:var(--text-muted); }
-.zszq-r { color:var(--text-primary); font-weight:500; }
-.order-sell { color:#22C55E; text-align:left; font-size:11px; }
-.order-buy { color:#EF4444; text-align:left; font-size:11px; }
-.order-qty { color:var(--text-muted); text-align:right; font-size:11px; }
-.order-time { color:var(--text-muted); text-align:right; font-size:10px; }
+.stock-sub-price { font-size:12px; }
+/* 行情数据网格 — 3列（参考招商证券紧凑排布） */
+.zszq-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:1px; background:var(--border-default); border:1px solid var(--border-default); border-radius:var(--radius-sm); overflow:hidden; margin-bottom:var(--space-4); }
+.zszq-item { background:var(--bg-subtle); padding:2px var(--space-3); display:flex; justify-content:space-between; font-size:12px; align-items:center; }
+.zszq-l { color:var(--text-muted); white-space:nowrap; font-size:12px; }
+.zszq-r { color:var(--text-primary); font-weight:500; text-align:right; font-size:13px; }
+/* 盘口 — 4列 */
+.order-grid { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:2px; padding:var(--space-2) 0; }
+.order-grid .hdr { font-size:12px; color:var(--text-muted); padding-bottom:2px; }
+.order-sell { color:#22C55E; font-size:13px; }
+.order-buy { color:#EF4444; font-size:13px; }
+.order-qty { color:var(--text-muted); font-size:13px; text-align:right; }
+.order-time { color:var(--text-muted); font-size:13px; text-align:right; }
+.order-sep { grid-column:1/-1; height:1px; background:rgba(239,68,68,0.25); margin:1px 0; }
+.order-footer { display:flex; flex-wrap:wrap; column-gap:28px; row-gap:4px; font-size:12px; color:var(--text-muted); padding-top:var(--space-2); border-top:1px solid var(--border-default); margin-top:var(--space-1); }
+.order-footer span { white-space:nowrap; }
+.order-footer .ft-label { color:var(--text-muted); }
+.order-footer .ft-val { color:var(--text-primary); }
+/* 分割线 */
+.section-divider { height:1px; background:var(--border-default); margin:var(--space-3) 0; }
+/* Tab导航 */
+.tab-nav { display:flex; gap:0; border-bottom:1px solid var(--border-default); margin-bottom:var(--space-3); }
+.tab-nav .tab-item { padding:var(--space-1) var(--space-6); font-size:13px; color:var(--text-muted); cursor:pointer; border-bottom:2px solid transparent; }
+.tab-nav .tab-item.active { color:var(--color-brand-500); border-bottom-color:var(--color-brand-500); }
+/* 资金流向 */
+.flow-donut-wrap { display:flex; align-items:center; }
+.flow-side { display:flex; flex-direction:column; gap:2px; }
+.flow-side .flow-item { display:flex; align-items:center; gap:4px; font-size:12px; white-space:nowrap; color:var(--text-secondary); }
+.flow-dot { width:7px;height:7px;border-radius:2px;flex-shrink:0; }
+.flow-sub-orders { display:grid; grid-template-columns:1fr 1fr; gap:1px 3px; margin-top:var(--space-3); }
+.flow-sub-item { display:flex; justify-content:space-between; font-size:13px; }
+.flow-sub-item .fs-l { color:var(--text-muted); font-size:12px; }
+.flow-sub-item .fs-r { font-weight:500; }
+.flow-5day { margin-top:var(--space-3); }
+.flow-5day .d5-title { font-size:13px; color:var(--text-muted); margin-bottom:var(--space-1); }
+.flow-5day .d5-bar-row { display:flex; align-items:center; gap:var(--space-2); margin-bottom:2px; }
+.flow-5day .d5-bar-label { width:28px; font-size:12px; color:var(--text-muted); flex-shrink:0; }
+.flow-5day .d5-bar-track { flex:1; height:8px; background:var(--bg-subtle); border-radius:2px; overflow:hidden; }
+.flow-5day .d5-bar-fill { height:100%; border-radius:2px; }
+.flow-5day .d5-bar-amt { font-size:12px; color:var(--text-primary); text-align:right; width:55px; flex-shrink:0; }
 
 /* 策略/缠论/解读全宽区块 */
 .sub-below { margin:var(--space-8) 0; display:flex; flex-direction:column; gap:var(--space-6); padding:var(--space-12); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); }
@@ -82,19 +99,16 @@
 .panel-card { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-10); }
 .panel-card h4 { font-size:11px; font-weight:600; color:var(--text-muted); letter-spacing:0.3px; margin-bottom:var(--space-6); display:flex; justify-content:space-between; align-items:center; }
 
-/* 大盘状态栏 */
-.index-bar { display:flex; gap:var(--space-14); padding:var(--space-5) var(--space-12); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-sm); margin-bottom:var(--space-12); font-size:11px; overflow-x:auto; }
-.index-item { display:flex; gap:var(--space-3); white-space:nowrap; }
-.index-name { color:var(--text-muted); }
-.index-val { font-weight:600; }
 .main-content { min-width:0; overflow-x:hidden; }
-.main-area { min-width:0; }
+/* 缩放自适应 */
 .chart-section { min-width:0; }
+.side-panel { min-width:260px; }
 
 /* 叠加指标行 */
-.overlay-tabs { display:flex; gap:var(--space-4); padding:var(--space-4) 0; overflow-x:auto; }
-.ov-tab { padding:var(--space-2) var(--space-6); border-radius:var(--radius-xs); font-size:10px; background:var(--bg-muted); color:var(--text-primary); cursor:pointer; white-space:nowrap; }
-.ov-tab.active { background:var(--color-brand-500); color:white; }
+.overlay-tabs { display:flex; gap:6px; padding:var(--space-4) 0; overflow-x:auto; }
+.ov-tab { padding:4px 14px; border-radius:4px; font-size:12px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); color:var(--text-secondary); cursor:pointer; white-space:nowrap; transition:all .15s; }
+.ov-tab:hover { background:rgba(255,255,255,0.09); border-color:rgba(255,255,255,0.16); color:var(--text-primary); }
+.ov-tab.active { background:var(--color-brand-500); color:white; border-color:var(--color-brand-500); }
 
 /* ECharts tooltip */
 .custom-tooltip { background:var(--bg-surface)!important; border:1px solid var(--color-brand-500)!important; border-radius:var(--radius-sm)!important; padding:var(--space-6) var(--space-8)!important; font-size:12px!important; line-height:1.7!important; box-shadow:0 4px 12px rgba(0,0,0,0.3)!important; }
@@ -130,7 +144,7 @@
 <body>
 <div class="app-layout">
   <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
-      <button class="sidebar-toggle" onclick="toggleSidebar()">▶</button>
+      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
       <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
       <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
         <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
@@ -156,13 +170,6 @@
     </nav>
   <main class="main-content">
 
-    <!-- ── 页面Tab ── -->
-    <div class="page-tabs">
-      <span class="page-tab active">行情分析</span>
-      <span class="page-tab">个股资料</span>
-      <span class="page-tab">相关资讯</span>
-      <span class="page-tab">图文F10</span>
-    </div>
 
     <!-- ── 顶部栏 ── -->
     <div class="top-bar">
@@ -178,17 +185,11 @@
         <span class="period-tab active">日线</span>
         <span class="period-tab">周线</span>
         <span class="period-tab">月线</span>
-        <span class="period-tab" style="font-size:10px;">60分</span>
-        <span class="period-tab" style="font-size:10px;">30分</span>
+        <span class="period-tab">60分</span>
+        <span class="period-tab">30分</span>
+        <span class="period-tab">15分</span>
       </div>
-      <span class="adj-btn active">前复权</span>
-      <span class="adj-btn">不复权</span>
-      <div class="toolbar-right">
-        <button class="btn-sm">F10</button>
-        <button class="btn-sm" onclick="alert('AI判读')">🤖 AI判读</button>
-        <button class="btn-sm" style="background:var(--color-brand-500);color:white;border-color:var(--color-brand-500);">📉 回测验证</button>
-      </div>
-    </div>
+	</div>
 
     <!-- ── 主图叠加指标行 ── -->
     <div class="overlay-tabs">
@@ -198,17 +199,8 @@
       <span class="ov-tab" onclick="toggleOverlay(this,'ene')">ENE</span>
       <span class="ov-tab" onclick="toggleOverlay(this,'sar')">SAR</span>
       <span class="ov-tab" onclick="toggleOverlay(this,'nine')">九转序列</span>
-      <span class="ov-label">点击切换叠加 · 蓝底=已叠加</span>
     </div>
 
-    <!-- ── 大盘指数 ── -->
-    <div class="index-bar">
-      <div class="index-item"><span class="index-name">上证指数</span><span class="index-val" style="color:#EF4444;">4,090.14</span><span style="color:#EF4444;">+1.45%</span></div>
-      <div class="index-item"><span class="index-name">深证成指</span><span class="index-val" style="color:#EF4444;">15,281.09</span><span style="color:#EF4444;">+2.12%</span></div>
-      <div class="index-item"><span class="index-name">创业板指</span><span class="index-val" style="color:#EF4444;">3,923.72</span><span style="color:#EF4444;">+2.44%</span></div>
-      <div class="index-item"><span class="index-name">北证50</span><span class="index-val" style="color:#EF4444;">1,258.89</span><span style="color:#EF4444;">+1.31%</span></div>
-      <div class="index-item"><span class="index-name">科创50</span><span class="index-val" style="color:#EF4444;">1,722.86</span><span style="color:#EF4444;">+3.59%</span></div>
-    </div>
 
     <!-- ── 主体 ── -->
     <div class="main-area">
@@ -218,19 +210,12 @@
         <div class="chart-header">
           <span class="chart-title">000762.SZ 西藏矿业 · K线 + 缠论</span>
           <div class="ma-values">
-            <span><span class="ma-dot" style="background:white;"></span>MA5 10.21</span>
-            <span><span class="ma-dot" style="background:#F59E0B;"></span>MA10 10.00</span>
-            <span><span class="ma-dot" style="background:#3B82F6;"></span>MA20 9.88</span>
-            <span><span class="ma-dot" style="background:#22C55E;"></span>MA60 9.72</span>
+            <span><span class="ma-dot" style="background:white;"></span>MA5 <b id="ma5-val">10.21</b></span>
+            <span><span class="ma-dot" style="background:#F59E0B;"></span>MA10 <b id="ma10-val">10.00</b></span>
+            <span><span class="ma-dot" style="background:#3B82F6;"></span>MA20 <b id="ma20-val">9.88</b></span>
+            <span><span class="ma-dot" style="background:#22C55E;"></span>MA60 <b id="ma60-val">9.72</b></span>
           </div>
-          <span style="font-size:10px;color:var(--text-muted);">数据:Tushare</span>
-        </div>
-        <div class="legend-bar">
-          <span><i class="legend-dot" style="background:#EF4444;"></i>一类买</span>
-          <span><i class="legend-dot" style="background:#F59E0B;"></i>二类买</span>
-          <span><i class="legend-dot" style="background:#22C55E;"></i>三类买</span>
-          <span style="color:#8B5CF6;">■ 中枢</span>
-        </div>
+          <span style="font-size:10px;color:var(--text-muted);">数据:Tushare</span></div>
         <div class="chart-wrap">
           <div id="kline-chart"></div>
           <div id="cpl-dom"></div>
@@ -260,31 +245,31 @@
           <span class="indicator-tab adv" onclick="toggleSub(this,'资金仓位')">资金仓位</span>
           <span class="indicator-tab adv" style="margin-left:auto;" onclick="toggleChipPanel()">筹码</span>
         </div>
-
       </div>
-      <div id="chip-panel" class="chip-panel">
-        <div class="chip-inner">
-            <div class="chip-title">📊 筹码分布</div>
-            <div class="chip-chart" id="chip-chart"></div>
-            <div class="chip-data" id="chip-data">
-            <div class="row"><span class="label">时间</span><span class="val" id="cd-time">—</span></div>
-            <div class="row"><span class="label">收盘获利</span><span class="val" id="cd-profit">—</span></div>
-            <div class="row"><span class="label">光标获利</span><span class="val" id="cd-cursor-profit">—</span></div>
-            <div class="row"><span class="label">平均成本</span><span class="val" id="cd-cost">—</span></div>
-            <div class="row"><span class="label">90%成本</span><span class="val" id="cd-90">—</span></div>
-            <div class="row"><span class="label">集中度90</span><span class="val" id="cd-con90">—</span></div>
-            <div class="row"><span class="label">70%成本</span><span class="val" id="cd-70">—</span></div>
-            <div class="row"><span class="label">集中度70</span><span class="val" id="cd-con70">—</span></div>
+
+        <div id="chip-panel" class="chip-panel">
+          <div class="chip-inner">
+              <div class="chip-title">📊 筹码分布</div>
+              <div class="chip-chart" id="chip-chart"></div>
+              <div class="chip-data" id="chip-data">
+              <div class="row"><span class="label">时间</span><span class="val" id="cd-time">—</span></div>
+              <div class="row"><span class="label">收盘获利</span><span class="val" id="cd-profit">—</span></div>
+              <div class="row"><span class="label">光标获利</span><span class="val" id="cd-cursor-profit">—</span></div>
+              <div class="row"><span class="label">平均成本</span><span class="val" id="cd-cost">—</span></div>
+              <div class="row"><span class="label">90%成本</span><span class="val" id="cd-90">—</span></div>
+              <div class="row"><span class="label">集中度90</span><span class="val" id="cd-con90">—</span></div>
+              <div class="row"><span class="label">70%成本</span><span class="val" id="cd-70">—</span></div>
+              <div class="row"><span class="label">集中度70</span><span class="val" id="cd-con70">—</span></div>
+            </div>
           </div>
         </div>
-      </div>
       </div>
 
       <!-- 右：面板（招证样式） -->
       <div class="side-panel"><div class="side-scroll">
 
         <div class="stock-header-bar">
-          <div class="stock-name-code">西藏矿业 <span style="color:var(--text-muted);font-size:16px;">000762.SZ</span></div>
+          <div class="stock-name-code">西藏矿业 <span style="color:var(--text-muted);font-size:16px;">000762.SZ</span><span class="bid-tag">竞价</span></div>
           <div class="stock-price-change">
             <span class="stock-price" style="color:#EF4444;">18.87</span>
             <span style="color:#EF4444;font-size:16px;">+0.37 +2.00%</span>
@@ -292,76 +277,101 @@
         </div>
 
         <div class="zszq-grid">
+          <!-- 第1列：基础行情 -->
           <div class="zszq-item"><span class="zszq-l">今开</span><span class="zszq-r">12.50</span></div>
-          <div class="zszq-item"><span class="zszq-l">成交量</span><span class="zszq-r">103.6万</span></div>
-          <div class="zszq-item"><span class="zszq-l">收益</span><span class="zszq-r">0.360</span></div>
           <div class="zszq-item"><span class="zszq-l">最高</span><span class="zszq-r" style="color:#EF4444;">12.68</span></div>
-          <div class="zszq-item"><span class="zszq-l">成交额</span><span class="zszq-r">19.46亿</span></div>
-          <div class="zszq-item"><span class="zszq-l">净资</span><span class="zszq-r">14.30</span></div>
           <div class="zszq-item"><span class="zszq-l">最低</span><span class="zszq-r" style="color:#22C55E;">12.20</span></div>
-          <div class="zszq-item"><span class="zszq-l">流通值</span><span class="zszq-r">1401亿</span></div>
-          <div class="zszq-item"><span class="zszq-l">流通股</span><span class="zszq-r">74.2亿</span></div>
           <div class="zszq-item"><span class="zszq-l">均价</span><span class="zszq-r">12.40</span></div>
-          <div class="zszq-item"><span class="zszq-l">总市值</span><span class="zszq-r">1641亿</span></div>
-          <div class="zszq-item"><span class="zszq-l">总股本</span><span class="zszq-r">87.0亿</span></div>
           <div class="zszq-item"><span class="zszq-l">涨停</span><span class="zszq-r">20.35</span></div>
-          <div class="zszq-item"><span class="zszq-l">内盘</span><span class="zszq-r">477961</span></div>
-          <div class="zszq-item"><span class="zszq-l">盘后量</span><span class="zszq-r">0.00</span></div>
           <div class="zszq-item"><span class="zszq-l">跌停</span><span class="zszq-r">16.65</span></div>
-          <div class="zszq-item"><span class="zszq-l">外盘</span><span class="zszq-r">558509</span></div>
-          <div class="zszq-item"><span class="zszq-l">盘后额</span><span class="zszq-r">—</span></div>
           <div class="zszq-item"><span class="zszq-l">量比</span><span class="zszq-r">1.30</span></div>
           <div class="zszq-item"><span class="zszq-l">涨速</span><span class="zszq-r" style="color:#22C55E;">-0.05%</span></div>
-          <div class="zszq-item"><span class="zszq-l">市净率</span><span class="zszq-r">1.32</span></div>
           <div class="zszq-item"><span class="zszq-l">委比</span><span class="zszq-r" style="color:#22C55E;">-26.00%</span></div>
+          <!-- 第2列：成交/市值 -->
+          <div class="zszq-item"><span class="zszq-l">成交量</span><span class="zszq-r">103.6万</span></div>
+          <div class="zszq-item"><span class="zszq-l">成交额</span><span class="zszq-r">19.46亿</span></div>
+          <div class="zszq-item"><span class="zszq-l">流通值</span><span class="zszq-r">1401亿</span></div>
+          <div class="zszq-item"><span class="zszq-l">总市值</span><span class="zszq-r">1641亿</span></div>
+          <div class="zszq-item"><span class="zszq-l">内盘</span><span class="zszq-r">477961</span></div>
+          <div class="zszq-item"><span class="zszq-l">外盘</span><span class="zszq-r">558509</span></div>
           <div class="zszq-item"><span class="zszq-l">现量</span><span class="zszq-r">16</span></div>
+          <div class="zszq-item"><span class="zszq-l">盘后量</span><span class="zszq-r">0.00</span></div>
+          <div class="zszq-item"><span class="zszq-l">盘后额</span><span class="zszq-r">—</span></div>
+          <!-- 第3列：估值/股本 -->
+          <div class="zszq-item"><span class="zszq-l">收益</span><span class="zszq-r">0.360</span></div>
+          <div class="zszq-item"><span class="zszq-l">净资</span><span class="zszq-r">14.30</span></div>
+          <div class="zszq-item"><span class="zszq-l">流通股本</span><span class="zszq-r">74.2亿</span></div>
+          <div class="zszq-item"><span class="zszq-l">总股本</span><span class="zszq-r">87.0亿</span></div>
+          <div class="zszq-item"><span class="zszq-l">市净率</span><span class="zszq-r">1.32</span></div>
           <div class="zszq-item"><span class="zszq-l">PE(静)</span><span class="zszq-r">13.29</span></div>
-          <div class="zszq-item"><span class="zszq-l">涨跌幅</span><span class="zszq-r" style="color:#22C55E;">-2.10%</span></div>
-          <div class="zszq-item"><span class="zszq-l">振幅</span><span class="zszq-r">3.20%</span></div>
-          <div class="zszq-item"><span class="zszq-l">换手率</span><span class="zszq-r">1.40%</span></div>
+          <div class="zszq-item"><span class="zszq-l">PE(动)</span><span class="zszq-r">10.15</span></div>
+          <div class="zszq-item"><span class="zszq-l">PE(TTM)</span><span class="zszq-r">11.72</span></div>
+          <div class="zszq-item"><span class="zszq-l">换手</span><span class="zszq-r">1.40%</span></div>
+          <div class="zszq-item"><span class="zszq-l">化工</span><span class="zszq-r" style="color:#22C55E;">-1.87%</span></div>
         </div>
 
-        <div class="panel-card" style="padding:var(--space-6);">
-          <div style="font-size:16px;color:var(--text-muted);margin-bottom:var(--space-3);">盘口信息</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;font-size:16px;">
-            <div class="order-sell">卖五 18.92</div><div class="order-qty">536</div><div class="order-time">14:28</div>
-            <div class="order-sell">卖四 18.91</div><div class="order-qty">630</div><div class="order-time">14:28</div>
-            <div class="order-sell">卖三 18.90</div><div class="order-qty">437</div><div class="order-time">14:29</div>
-            <div class="order-sell">卖二 18.89</div><div class="order-qty">270</div><div class="order-time">14:29</div>
-            <div class="order-sell" style="font-weight:600;">卖一 18.88</div><div class="order-qty" style="font-weight:600;">514</div><div class="order-time">14:29</div>
-            <div class="order-buy" style="font-weight:600;">买一 18.87</div><div class="order-qty" style="font-weight:600;">807</div><div class="order-time">14:29</div>
-            <div class="order-buy">买二 18.86</div><div class="order-qty">350</div><div class="order-time">14:28</div>
-            <div class="order-buy">买三 18.85</div><div class="order-qty">293</div><div class="order-time">14:29</div>
-            <div class="order-buy">买四 18.84</div><div class="order-qty">420</div><div class="order-time">14:28</div>
-            <div class="order-buy">买五 18.83</div><div class="order-qty">188</div><div class="order-time">14:28</div>
+        <!-- 盘口 — 4列 grid + 表头行 + 底部 footer -->
+        <div class="right-panel-card" style="padding:var(--space-6);margin-bottom:var(--space-3);">
+          <div class="order-grid">
+            <span class="hdr">价格</span><span class="hdr" style="text-align:right;">数量</span><span class="hdr" style="text-align:right;">时间</span><span class="hdr" style="text-align:right;">时间</span>
+            <span class="order-sell">卖五 18.92</span><span class="order-qty">634</span><span class="order-time">14:28</span><span class="order-time">14:29</span>
+            <span class="order-sell">卖四 18.91</span><span class="order-qty">630</span><span class="order-time">14:28</span><span class="order-time">14:29</span>
+            <span class="order-sell">卖三 18.90</span><span class="order-qty">437</span><span class="order-time">14:29</span><span class="order-time">14:30</span>
+            <span class="order-sell">卖二 18.89</span><span class="order-qty">270</span><span class="order-time">14:29</span><span class="order-time">14:30</span>
+            <span class="order-sell" style="font-weight:600;">卖一 18.88</span><span class="order-qty" style="font-weight:600;">514</span><span class="order-time" style="font-weight:600;">14:29</span><span class="order-time" style="font-weight:600;">14:30</span>
+            <span class="order-sep"></span>
+            <span class="order-buy" style="font-weight:600;">买一 18.87</span><span class="order-qty" style="font-weight:600;">807</span><span class="order-time" style="font-weight:600;">14:29</span><span class="order-time" style="font-weight:600;">14:30</span>
+            <span class="order-buy">买二 18.86</span><span class="order-qty">350</span><span class="order-time">14:28</span><span class="order-time">14:29</span>
+            <span class="order-buy">买三 18.85</span><span class="order-qty">293</span><span class="order-time">14:29</span><span class="order-time">14:30</span>
+            <span class="order-buy">买四 18.84</span><span class="order-qty">420</span><span class="order-time">14:28</span><span class="order-time">14:29</span>
+            <span class="order-buy">买五 18.83</span><span class="order-qty">188</span><span class="order-time">14:28</span><span class="order-time">14:29</span>
           </div>
+          <div class="order-footer">
+            <span><span class="ft-label">笼子：</span><span class="ft-val">±2% 18.59~19.15</span><span class="ft-label" style="margin-left:8px;">基准：</span><span class="ft-val">18.87</span></span>
+            <span><span class="ft-label">连续竞价：</span><span class="ft-val" style="color:#EF4444;">买入≤102.51万</span><span class="ft-val" style="color:#22C55E;"> 卖出≤102.51万</span></span>
+          </div>
+        </div>
+
+        <!-- Tab导航 -->
+        <div class="tab-nav">
+          <span class="tab-item active">资金流向</span>
+          <span class="tab-item">关联板块</span>
+          <span class="tab-item">成份股</span>
         </div>
 
         <div class="panel-card" style="padding:var(--space-6);">
           <div style="font-size:16px;color:var(--text-muted);margin-bottom:var(--space-3);">资金流向</div>
-          <div style="display:flex;align-items:center;gap:var(--space-6);">
-            <div style="width:60px;height:60px;border-radius:50%;position:relative;flex-shrink:0;">
-              <div style="width:100%;height:100%;border-radius:50%;background:conic-gradient(#EF4444 0deg 66deg,#DC2626 66deg 128deg,#22C55E 128deg 207deg,#16A34A 207deg 360deg);border:1px solid var(--border-default);"></div>
-              <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg-surface);border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;">
-                <span style="color:#EF4444;font-size:10px;">18.4%</span>
+          <div class="flow-donut-wrap">
+            <div class="flow-side" style="text-align:right;align-items:flex-end;">
+              <div class="flow-item"><span class="flow-dot" style="background:#22C55E;"></span><span>主力流出 17.8%</span></div>
+              <div class="flow-item"><span class="flow-dot" style="background:#16A34A;"></span><span>散户流出 32.2%</span></div>
+            </div>
+            <div class="flow-chart" style="position:relative;width:100px;height:100px;border-radius:50%;background:conic-gradient(#EF4444 0deg 90deg,#DC2626 90deg 180deg,#22C55E 180deg 244deg,#16A34A 244deg 360deg);border:1px solid var(--border-default);flex-shrink:0;margin:0 8px;">
+              <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg-surface);border-radius:50%;width:56px;height:56px;display:flex;align-items:center;justify-content:center;flex-direction:column;">
+                <span style="color:#EF4444;font-size:11px;font-weight:600;">24.9%</span>
+                <span style="color:var(--text-muted);font-size:8px;">主力流入</span>
               </div>
             </div>
-            <div style="font-size:16px;color:var(--text-secondary);line-height:1.7;flex:1;">
-              <div><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#EF4444;margin-right:4px;"></span>主力流入 18.4%</div>
-              <div><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#DC2626;margin-right:4px;"></span>散户流入 31.6%</div>
-              <div><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#22C55E;margin-right:4px;"></span>主力流出 21.9%</div>
-              <div><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#16A34A;margin-right:4px;"></span>散户流出 28.1%</div>
+            <div class="flow-side">
+              <div class="flow-item"><span class="flow-dot" style="background:#EF4444;"></span><span>主力流入 24.9%</span></div>
+              <div class="flow-item"><span class="flow-dot" style="background:#DC2626;"></span><span>散户流入 25.1%</span></div>
             </div>
           </div>
-          <div style="margin-top:var(--space-4);font-size:16px;color:var(--text-muted);">
-            <span>5日流向：</span>
-            <div style="display:flex;align-items:center;gap:var(--space-2);margin-top:2px;">
-              <span style="font-size:16px;color:#EF4444;">主力买 54%</span>
-              <div style="flex:1;height:6px;background:var(--bg-subtle);border-radius:3px;overflow:hidden;">
-                <div style="width:54%;height:100%;background:var(--color-brand-500);border-radius:3px;"></div>
-              </div>
-              <span style="font-size:16px;color:#22C55E;">主力卖 46%</span>
-            </div>
+          <!-- 子订单：超大单/大单/中单/小单 -->
+          <div class="flow-sub-orders">
+            <div class="flow-sub-item"><span class="fs-l">超大单净额</span><span class="fs-r" style="color:#EF4444;">+1964.1</span></div>
+            <div class="flow-sub-item"><span class="fs-l">大单净额</span><span class="fs-r" style="color:#22C55E;">-6631.5</span></div>
+            <div class="flow-sub-item"><span class="fs-l">中单净额</span><span class="fs-r" style="color:#22C55E;">-10775.6</span></div>
+            <div class="flow-sub-item"><span class="fs-l">小单净额</span><span class="fs-r" style="color:#22C55E;">-10775.6</span></div>
+          </div>
+          <!-- 5日资金流向 -->
+          <div class="flow-5day">
+            <div class="d5-title">5日资金流向(万元)</div>
+            <div class="d5-bar-row"><span class="d5-bar-label">D-4</span><div class="d5-bar-track"><div class="d5-bar-fill" style="width:72%;background:#EF4444;"></div></div><span class="d5-bar-amt">4,329</span></div>
+            <div class="d5-bar-row"><span class="d5-bar-label">D-3</span><div class="d5-bar-track"><div class="d5-bar-fill" style="width:45%;background:#EF4444;"></div></div><span class="d5-bar-amt">2,712</span></div>
+            <div class="d5-bar-row"><span class="d5-bar-label">D-2</span><div class="d5-bar-track"><div class="d5-bar-fill" style="width:18%;background:#22C55E;"></div></div><span class="d5-bar-amt">-1,083</span></div>
+            <div class="d5-bar-row"><span class="d5-bar-label">D-1</span><div class="d5-bar-track"><div class="d5-bar-fill" style="width:55%;background:#EF4444;"></div></div><span class="d5-bar-amt">3,318</span></div>
+            <div class="d5-bar-row"><span class="d5-bar-label">今日</span><div class="d5-bar-track"><div class="d5-bar-fill" style="width:38%;background:#EF4444;"></div></div><span class="d5-bar-amt">2,281</span></div>
           </div>
         </div>
 
@@ -406,7 +416,6 @@
 
     </div>
 
-    <div class="disclaimer-footer">⚠️ 本系统所有分析结果仅供研究参考，不构成任何投资建议。</div>
   </main>
 </div>
 
@@ -684,6 +693,9 @@ function rebuildChart(){
   var chartEl = document.getElementById('kline-chart');
   chartEl.style.height = totalH + 'px';
   chart.resize();  // 容器高度变化后强制重绘canvas
+
+  // 同步侧栏高度 = chart-section高度
+  setTimeout(function(){ if(typeof syncPanelHeight === 'function') syncPanelHeight(); }, 100);
   
   // 构建grid配置
   var grids = [{left:55, right:20, top:10, height:325}];
@@ -745,6 +757,15 @@ function rebuildChart(){
 // ════════════════════════════════════════════════════════════
 // 5. 唯一十字光标渲染
 // ════════════════════════════════════════════════════════════
+function updateMAValues(idx){
+  var i = (idx == null || idx < 0 || idx >= dates.length) ? dates.length - 1 : idx;
+  var el = function(id){return document.getElementById(id);};
+  if(el('ma5-val')) el('ma5-val').textContent = m5[i] != null ? m5[i].toFixed(2) : '—';
+  if(el('ma10-val')) el('ma10-val').textContent = m10[i] != null ? m10[i].toFixed(2) : '—';
+  if(el('ma20-val')) el('ma20-val').textContent = m20[i] != null ? m20[i].toFixed(2) : '—';
+  if(el('ma60-val')) el('ma60-val').textContent = m60[i] != null ? m60[i].toFixed(2) : '—';
+}
+
 function updateCrosshair(idx){
   // DOM labels for price and date (more reliable than ECharts graphic text)
   var cplEl = document.getElementById('cpl-dom');
@@ -758,6 +779,8 @@ function updateCrosshair(idx){
     ]});
     if(cplEl) cplEl.style.display = 'none';
     if(cdlEl) cdlEl.style.display = 'none';
+    // 鼠标离开 → MA恢复到最后交易日
+    updateMAValues(null);
     // 鼠标离开 → 筹码面板恢复到最后一个交易日
     if(chipOpen){
       var lastIdx = dates.length - 1;
@@ -770,6 +793,8 @@ function updateCrosshair(idx){
   _cursorIdx = idx;
   var closePrice = closes[idx];
   var dateText = dates[idx];
+  // 十字光标移动 → 更新MA值为当前日期
+  updateMAValues(idx);
 
   // 竖线X: 通过主图xAxis
   var x = chart.convertToPixel({xAxisIndex:0}, idx);
@@ -872,6 +897,8 @@ function updateSubHeaders(idx){
 // 主图
 var chart = echarts.init(document.getElementById('kline-chart'));
 renderSubs();
+// 初始MA值显示最后交易日
+updateMAValues(null);
 
 // ── Ctrl+滚轮缩放 ──
 chart.getZr().on('mousewheel', function(e){
@@ -927,7 +954,7 @@ chart.getZr().on('mousemove', function(e){
 document.addEventListener('mouseup', function(){ _isDragging = false; });
 document.querySelector('.chart-wrap').addEventListener('contextmenu', function(e){ e.preventDefault(); });
 
-// ── 键盘左右键 ──
+// ── 键盘左右键 + F8周期循环 ──
 document.addEventListener('keydown', function(e){
   if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
     e.preventDefault();
@@ -945,6 +972,14 @@ document.addEventListener('keydown', function(e){
       idx = e.key==='ArrowLeft' ? dates.length-1 : 0;
     }
     updateCrosshair(idx);
+  } else if(e.key==='F8'){
+    e.preventDefault();
+    var tabs = document.querySelectorAll('.period-tab');
+    var activeIdx = -1;
+    tabs.forEach(function(t,i){ if(t.classList.contains('active')) activeIdx = i; });
+    var nextIdx = (activeIdx + 1) % tabs.length;
+    tabs.forEach(function(t){ t.classList.remove('active'); });
+    tabs[nextIdx].classList.add('active');
   }
 });
 
@@ -1150,6 +1185,15 @@ function toggleChipPanel(){
   }
 }
 
+// ── 同步侧栏高度与chart-section对齐 ──
+function syncPanelHeight(){
+  var chartSec = document.querySelector('.chart-section');
+  var sideScroll = document.querySelector('.side-scroll');
+  if(!chartSec || !sideScroll) return;
+  var chartH = chartSec.getBoundingClientRect().height;
+  sideScroll.style.maxHeight = chartH + 'px';
+}
+
 // ════════════════════════════════════════════════════════════
 // 7. 侧栏折叠（不变）
 // ════════════════════════════════════════════════════════════
@@ -1167,6 +1211,7 @@ function toggleSidebar(){
   if(btn) btn.textContent = sidebarCollapsed ? '▶' : '◀';
   setTimeout(function(){
     if(typeof chart !== 'undefined' && chart.resize) chart.resize();
+    if(typeof syncPanelHeight === 'function') syncPanelHeight();
   }, 50);
 }
 (function(){
@@ -1177,7 +1222,22 @@ function toggleSidebar(){
   if(btn) btn.textContent = '▶';
   setTimeout(function(){
     if(typeof chart !== 'undefined' && chart.resize) chart.resize();
+    if(typeof syncPanelHeight === 'function') syncPanelHeight();
   }, 50);
+})();
+
+// ── 浏览器缩放/窗口大小变化 → 重新调整图表尺寸 ──
+(function(){
+  var resizeTimer;
+  window.addEventListener('resize', function(){
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function(){
+      if(typeof chart !== 'undefined' && chart.resize){
+        chart.resize();
+      }
+      if(typeof syncPanelHeight === 'function') syncPanelHeight();
+    }, 150);
+  });
 })();
 
 </script>
