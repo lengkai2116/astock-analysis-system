@@ -177,7 +177,8 @@ def get_kline_chart_data(ts_code):
                 'high': float(row.get('high', 0)),
                 'low': float(row.get('low', 0)),
                 'close': float(row.get('close', 0)),
-                'volume': float(row.get('vol', 0)) if pd.notna(row.get('vol')) else 0
+                'volume': float(row.get('vol', 0)) if pd.notna(row.get('vol')) else 0,
+                'pct_chg': float(row.get('pct_chg', 0)) if pd.notna(row.get('pct_chg')) else 0
             })
         
         # ---- 叠加指标 ----
@@ -315,14 +316,21 @@ def get_kline_chart_data(ts_code):
         
         # ---- 股票信息 ----
         stock_info = data_manager.get_stock_info(ts_code)
-        
+
+        # ---- 最新行情（头部栏用） ----
+        last_k = kline_data[-1] if kline_data else {}
+
         return jsonify({
             'success': True,
             'data': {
                 'kline': kline_data,
                 'overlays': overlays,
                 'subcharts': subcharts,
-                'stock': stock_info if stock_info else {}
+                'stock': stock_info if stock_info else {},
+                'latest': {
+                    'close': last_k.get('close', 0),
+                    'pct_chg': last_k.get('pct_chg', 0)
+                }
             }
         })
     
