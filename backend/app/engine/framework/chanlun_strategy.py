@@ -3,11 +3,24 @@
 实现完整的缠论分析功能，包括线段识别、中枢识别、背驰判断和买卖点识别
 参考 CZSC 项目和缠论量化策略指南设计
 """
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
+
+
+def calc_macd(closes: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """计算MACD: 返回 (dif, dea, macd_hist)"""
+    if len(closes) < 26:
+        return np.zeros(len(closes)), np.zeros(len(closes)), np.zeros(len(closes))
+    s = pd.Series(closes)
+    ema12 = s.ewm(span=12).mean().values
+    ema26 = s.ewm(span=26).mean().values
+    dif = ema12 - ema26
+    dea = pd.Series(dif).ewm(span=9).mean().values
+    macd_hist = 2 * (dif - dea)
+    return dif, dea, macd_hist
 
 
 @dataclass
@@ -324,6 +337,66 @@ class FractalDetector:
         
         return filtered
 
+    def get_last_unconfirmed_fractal(self, klines: List[KLine], last_confirmed_idx: int) -> Dict:
+        """
+        检测未确认的潜在分型（已形成3K结构但尚未满足确认条件）
+
+        Args:
+            klines: 无包含K线列表
+            last_confirmed_idx: 最后一个已确认分型的 idx（从该位置 +1 开始扫描）
+
+        Returns:
+            {
+                'has_unconfirmed': bool,   # 是否存在未确认分型
+                'direction': str,          # 'PENDING_UP' / 'PENDING_DOWN' / 'NONE'
+                'potential_type': str,     # 'top' / 'bottom' / 'none'
+                'start_idx': int,          # 潜在分型的中间K线 idx
+                'price': float             # 顶分型取 high，底分型取 low
+            }
+        """
+        result: Dict = {
+            'has_unconfirmed': False,
+            'direction': 'NONE',
+            'potential_type': 'none',
+            'start_idx': -1,
+            'price': 0.0
+        }
+
+        if len(klines) < 3:
+            return result
+
+        start = max(last_confirmed_idx + 1, 1)
+        for i in range(start, len(klines) - 1):
+            prev = klines[i - 1]
+            curr = klines[i]
+            next_k = klines[i + 1]
+
+            # 顶分型判定：中间 high > 左右 high，中间 low > 左右 low
+            if (curr.high > prev.high and curr.high > next_k.high and
+                curr.low > prev.low and curr.low > next_k.low):
+                result = {
+                    'has_unconfirmed': True,
+                    'direction': 'PENDING_DOWN',  # 顶分型预示向下
+                    'potential_type': 'top',
+                    'start_idx': curr.idx,
+                    'price': curr.high
+                }
+                break
+
+            # 底分型判定：中间 low < 左右 low，中间 high < 左右 high
+            if (curr.low < prev.low and curr.low < next_k.low and
+                curr.high < prev.high and curr.high < next_k.high):
+                result = {
+                    'has_unconfirmed': True,
+                    'direction': 'PENDING_UP',  # 底分型预示向上
+                    'potential_type': 'bottom',
+                    'start_idx': curr.idx,
+                    'price': curr.low
+                }
+                break
+
+        return result
+
 
 class StrokeBuilder:
     """笔构建器"""
@@ -449,7 +522,64 @@ class SegmentAnalyzer:
     
     def __init__(self, min_stroke_count: int = 3):
         self.min_stroke_count = min_stroke_count
-    
+
+    def _has_feature_sequence_gap(self, next_stroke: Stroke, ref_stroke: Stroke, seg_direction: str) -> bool:
+        """
+        检查特征序列元素之间是否存在跳空缺口
+
+        上升段的反向笔（下跌笔）为特征序列：
+          - 若 next_stroke.end_price > ref_stroke.start_price → 向上跳空缺口
+          - 特征元素未实际触及参考点，不视为终结
+
+        下降段的反向笔（上涨笔）为特征序列：
+          - 若 next_stroke.end_price < ref_stroke.start_price → 向下跳空缺口
+          - 特征元素未实际触及参考点，不视为终结
+        """
+        if seg_direction == 'up':
+            # 上升段：下跌笔作为特征序列元素
+            # 若当前下跌笔的 end_price 高于前一笔的 start_price → 向上跳空缺口
+            return next_stroke.direction == 'down' and next_stroke.end_price > ref_stroke.start_price
+        else:
+            # 下降段：上涨笔作为特征序列元素
+            # 若当前上涨笔的 end_price 低于前一笔的 start_price → 向下跳空缺口
+            return next_stroke.direction == 'up' and next_stroke.end_price < ref_stroke.start_price
+
+    def _is_feature_sequence_break_down(self, feature_strokes: List[Stroke], threshold: int = 3) -> bool:
+        """
+        检查上升段的特征序列（下跌笔）是否形成顶分型破坏
+
+        若连续 threshold 笔下跌笔的 end_price 依次降低（每笔低于前笔），
+        则特征序列被破坏 = 线段终结
+        """
+        down_strokes = [s for s in feature_strokes if s.direction == 'down']
+        if len(down_strokes) < threshold:
+            return False
+
+        # 检查最近 threshold 笔是否 end_price 依次降低
+        recent = down_strokes[-threshold:]
+        for k in range(1, len(recent)):
+            if not (recent[k].end_price < recent[k-1].end_price):
+                return False
+        return True
+
+    def _is_feature_sequence_break_up(self, feature_strokes: List[Stroke], threshold: int = 3) -> bool:
+        """
+        检查下降段的特征序列（上涨笔）是否形成底分型破坏
+
+        若连续 threshold 笔上涨笔的 end_price 依次升高（每笔高于前笔），
+        则特征序列被破坏 = 线段终结
+        """
+        up_strokes = [s for s in feature_strokes if s.direction == 'up']
+        if len(up_strokes) < threshold:
+            return False
+
+        # 检查最近 threshold 笔是否 end_price 依次升高
+        recent = up_strokes[-threshold:]
+        for k in range(1, len(recent)):
+            if not (recent[k].end_price > recent[k-1].end_price):
+                return False
+        return True
+
     def build(self, strokes: List[Stroke]) -> List[Segment]:
         """
         从笔构建线段
@@ -492,6 +622,11 @@ class SegmentAnalyzer:
                         ref_low = last_bull.low if last_bull.low is not None else last_bull.start_price
                         if next_stroke.end_price < ref_low:
                             break
+                        # [P1-#8] 特征序列缺口处理：检查是否有跳空缺口
+                        if self._has_feature_sequence_gap(next_stroke, current_strokes[-1], seg_direction):
+                            current_strokes.append(next_stroke)
+                            j += 1
+                            continue
                 else:
                     # 下降段：上涨笔（反向笔）突破前一笔高点 → 终结
                     if next_stroke.direction == 'up' and len(current_strokes) >= 2:
@@ -499,6 +634,11 @@ class SegmentAnalyzer:
                         ref_high = last_bear.high if last_bear.high is not None else last_bear.start_price
                         if next_stroke.end_price > ref_high:
                             break
+                        # [P1-#8] 特征序列缺口处理：检查是否有跳空缺口
+                        if self._has_feature_sequence_gap(next_stroke, current_strokes[-1], seg_direction):
+                            current_strokes.append(next_stroke)
+                            j += 1
+                            continue
                 
                 current_strokes.append(next_stroke)
                 j += 1
@@ -674,41 +814,53 @@ class ZhongshuAnalyzer:
 class DivergenceDetector:
     """背驰检测器"""
     
-    def __init__(self, lookback_period: int = 60):
+    def __init__(self, lookback_period: int = 120):
         """
         Args:
             lookback_period: 回看周期
         """
         self.lookback_period = lookback_period
-    
-    def detect(self, strokes: List[Stroke], 
+        self._closes = None  # 外部传入的 close 数组（用于 MACD 计算）
+
+    def detect(self, strokes: List[Stroke],
               zhongshu_list: List[Zhongshu] = None,
-              volume: pd.Series = None) -> Optional[Divergence]:
+              volume: pd.Series = None,
+              closes: np.ndarray = None) -> Optional[Divergence]:
         """
-        检测背驰
-        
-        背驰类型：
-        1. 趋势背驰：创新高/低后，力度明显减弱
-        2. 盘整背驰：回调力度大于离开力度
-        3. 中枢破坏：离开中枢的力度小于返回力度
-        
+        检测背驰（支持 MACD 面积背驰确认）
+
         Args:
             strokes: 笔列表
             zhongshu_list: 中枢列表
             volume: 成交量数据
-        
+            closes: 收盘价数组，用于 MACD 面积计算
+
         Returns:
             背驰信息或None
         """
         if len(strokes) < 4:
             return None
-        
+
         zhongshu_list = zhongshu_list or []
+        self._closes = closes
         
         # 检测趋势背驰
         trend_div = self._detect_trend_divergence(strokes)
+
+        # [P1-#19] 标准a+A+b+B+c趋势背驰检测
+        trend_bt = self._detect_trend_backtesting(strokes, zhongshu_list, self._closes)
         if trend_div:
+            if trend_bt:
+                trend_div.details['trend_backtesting'] = trend_bt
             return trend_div
+
+        if trend_bt:
+            return Divergence(
+                type='trend',
+                direction=trend_bt['direction'],
+                confidence=trend_bt['confidence'],
+                details={'trend_backtesting': trend_bt}
+            )
         
         # 检测盘整背驰
         consolid_div = self._detect_consolidation_divergence(strokes)
@@ -723,70 +875,222 @@ class DivergenceDetector:
         
         return None
     
+    def _calc_stroke_macd_area(self, stroke) -> float:
+        """计算单根笔范围内的 MACD 柱面积（红绿柱代数累加）"""
+        if self._closes is None or stroke.start_idx >= len(self._closes) or stroke.end_idx >= len(self._closes):
+            return 0.0
+        _, _, macd_hist = calc_macd(self._closes)
+        # 笔区间内的 MACD 柱面积（代数累加，红柱正绿柱负）
+        seg = macd_hist[stroke.start_idx:stroke.end_idx + 1]
+        return float(np.sum(seg))
+
     def _detect_trend_divergence(self, strokes: List[Stroke]) -> Optional[Divergence]:
         """
-        检测趋势背驰
-        
-        原理：创新高/低后，力度明显减弱
+        检测趋势背驰（MACD 面积确认版）
+
+        原理：创新高/低后，力度明显减弱。
+        双重确认：①笔幅度减弱（<80%）②MACD柱面积比减弱（<85%）
         """
         if len(strokes) < 4:
             return None
-        
+
         # 获取最近的笔（方向交替）
         recent_up = [s for s in strokes if s.direction == 'up']
         recent_down = [s for s in strokes if s.direction == 'down']
-        
+
         if len(recent_up) < 2 or len(recent_down) < 2:
             return None
-        
-        # 检查上涨趋势背驰
+
+        # ── 上涨趋势背驰 ──
         last_up = recent_up[-1]
         prev_up = recent_up[-2]
-        
+
         if last_up.end_price > prev_up.end_price:
-            # 价格创新高
             current_amp = last_up.amplitude
             prev_amp = prev_up.amplitude
-            
-            # 力度明显减弱
+
             if current_amp < prev_amp * 0.8:
+                # 幅度确认 → 进一步检查 MACD 面积
+                area_last = self._calc_stroke_macd_area(last_up)
+                area_prev = self._calc_stroke_macd_area(prev_up)
+
+                if area_prev == 0:
+                    # 无 MACD 数据，纯幅度背驰
+                    macd_confirmed = False
+                    area_ratio = 0.0
+                else:
+                    area_ratio = abs(area_last / area_prev) if area_prev != 0 else 0.0
+                    macd_confirmed = area_ratio < 0.85
+
+                # 动态置信度
+                if macd_confirmed:
+                    # MACD 面积也确认 → 高置信度背驰
+                    if area_ratio < 0.4:
+                        adj_conf = 0.95  # 极强
+                    elif area_ratio < 0.6:
+                        adj_conf = 0.90  # 强
+                    else:
+                        adj_conf = 0.85  # 中等
+                else:
+                    adj_conf = 0.8  # 仅幅度，无 MACD 确认
+
                 return Divergence(
                     type='trend',
                     direction='up',
-                    confidence=0.8,
+                    confidence=adj_conf,
                     position={'idx': last_up.end_idx, 'price': last_up.end_price},
                     details={
                         'current_amplitude': current_amp,
                         'prev_amplitude': prev_amp,
-                        'strength_ratio': current_amp / prev_amp
+                        'strength_ratio': current_amp / prev_amp,
+                        'macd_area_ratio': round(area_ratio, 4),
+                        'macd_confirmed': macd_confirmed,
                     }
                 )
-        
-        # 检查下跌趋势背驰
+
+        # ── 下跌趋势背驰 ──
         last_down = recent_down[-1]
         prev_down = recent_down[-2]
-        
+
         if last_down.end_price < prev_down.end_price:
-            # 价格创新低
             current_amp = last_down.amplitude
             prev_amp = prev_down.amplitude
-            
-            # 力度明显减弱
+
             if current_amp < prev_amp * 0.8:
+                # 幅度确认 → 进一步检查 MACD 面积
+                area_last = self._calc_stroke_macd_area(last_down)
+                area_prev = self._calc_stroke_macd_area(prev_down)
+
+                if area_prev == 0:
+                    macd_confirmed = False
+                    area_ratio = 0.0
+                else:
+                    area_ratio = abs(area_last / area_prev) if area_prev != 0 else 0.0
+                    macd_confirmed = area_ratio < 0.85
+
+                if macd_confirmed:
+                    if area_ratio < 0.4:
+                        adj_conf = 0.95
+                    elif area_ratio < 0.6:
+                        adj_conf = 0.90
+                    else:
+                        adj_conf = 0.85
+                else:
+                    adj_conf = 0.8
+
                 return Divergence(
                     type='trend',
                     direction='down',
-                    confidence=0.8,
+                    confidence=adj_conf,
                     position={'idx': last_down.end_idx, 'price': last_down.end_price},
                     details={
                         'current_amplitude': current_amp,
                         'prev_amplitude': prev_amp,
-                        'strength_ratio': current_amp / prev_amp
+                        'strength_ratio': current_amp / prev_amp,
+                        'macd_area_ratio': round(area_ratio, 4),
+                        'macd_confirmed': macd_confirmed,
                     }
                 )
-        
+
         return None
-    
+
+    def _detect_trend_backtesting(self, strokes: List, zhongshu_list: List, closes: np.ndarray) -> Optional[Dict]:
+        """
+        [P1-#19] 标准a+A+b+B+c趋势背驰检测
+
+        识别两中枢+两段趋势的标准趋势背驰模型：
+        比较c段与a段的MACD面积。
+
+        Returns: None or {
+            'type': 'trend_backtesting',
+            'direction': 'up'|'down',
+            'confidence': float,
+            'a_stroke': Dict,
+            'zs_a': Dict,
+            'b_stroke': Dict,
+            'zs_b': Dict,
+            'c_stroke': Dict,
+            'macd_area_ratio': float,
+            'reason': str,
+        }
+        """
+        if not zhongshu_list or len(zhongshu_list) < 2:
+            return None
+        if closes is None or len(closes) < 60:
+            return None
+
+        # 取最后两个中枢
+        zs_a = zhongshu_list[-2]
+        zs_b = zhongshu_list[-1]
+
+        # a段：进入中枢A的笔（end_idx <= zs_a.start_idx）
+        # b段：连接中枢A和中枢B的笔（start_idx >= zs_a.end_idx, end_idx <= zs_b.start_idx）
+        # c段：离开中枢B的笔（start_idx >= zs_b.end_idx）
+        a_stroke = None
+        b_stroke = None
+        c_stroke = None
+
+        for s in strokes:
+            if s.end_idx <= zs_a.start_idx:
+                a_stroke = s
+            elif s.start_idx >= zs_a.end_idx and s.end_idx <= zs_b.start_idx:
+                b_stroke = s
+            elif s.start_idx >= zs_b.end_idx:
+                c_stroke = s
+
+        if not all([a_stroke, b_stroke, c_stroke]):
+            return None
+
+        # 检查方向一致性
+        direction = zs_a.direction
+        if not direction:
+            return None
+
+        # MACD面积计算
+        _, _, macd_hist = calc_macd(closes)
+
+        def _stroke_macd_area(stroke, macd_hist):
+            start = max(0, stroke.start_idx)
+            end = min(len(macd_hist), stroke.end_idx + 1)
+            return float(np.sum(macd_hist[start:end])) if end > start else 0
+
+        area_a = _stroke_macd_area(a_stroke, macd_hist)
+        area_c = _stroke_macd_area(c_stroke, macd_hist)
+
+        if abs(area_a) < 0.001:
+            return None
+
+        area_ratio = abs(area_c / area_a) if area_a != 0 else 1.0
+
+        # 置信度判定
+        if area_ratio < 0.4:
+            confidence = 0.95
+            reason = f"c段/a段面积比={area_ratio:.2f}, 极强趋势背驰"
+        elif area_ratio < 0.6:
+            confidence = 0.85
+            reason = f"c段/a段面积比={area_ratio:.2f}, 强烈趋势背驰"
+        elif area_ratio < 0.85:
+            confidence = 0.75
+            reason = f"c段/a段面积比={area_ratio:.2f}, 标准趋势背驰"
+        else:
+            return None
+
+        return {
+            'type': 'trend_backtesting',
+            'direction': direction,
+            'confidence': confidence,
+            'a_stroke': {'start_idx': a_stroke.start_idx, 'end_idx': a_stroke.end_idx,
+                         'start_price': float(a_stroke.start_price), 'end_price': float(a_stroke.end_price)},
+            'zs_a': {'low': float(zs_a.low), 'high': float(zs_a.high), 'center': float(zs_a.center)},
+            'b_stroke': {'start_idx': b_stroke.start_idx, 'end_idx': b_stroke.end_idx,
+                         'start_price': float(b_stroke.start_price), 'end_price': float(b_stroke.end_price)},
+            'zs_b': {'low': float(zs_b.low), 'high': float(zs_b.high), 'center': float(zs_b.center)},
+            'c_stroke': {'start_idx': c_stroke.start_idx, 'end_idx': c_stroke.end_idx,
+                         'start_price': float(c_stroke.start_price), 'end_price': float(c_stroke.end_price)},
+            'macd_area_ratio': round(area_ratio, 4),
+            'reason': reason,
+        }
+
     def _detect_consolidation_divergence(self, strokes: List[Stroke]) -> Optional[Divergence]:
         """
         检测盘整背驰
@@ -887,6 +1191,7 @@ class BuySellPointDetector:
             min_confidence: 最小置信度
         """
         self.min_confidence = min_confidence
+        self.sell_plan = []
     
     def find(self, strokes: List[Stroke],
              zhongshu_list: List[Zhongshu],
@@ -936,82 +1241,104 @@ class BuySellPointDetector:
         # 过滤低置信度
         buy_points = [p for p in buy_points if p.confidence >= self.min_confidence]
         sell_points = [p for p in sell_points if p.confidence >= self.min_confidence]
-        
+
+        # [P1-#20] 第一类买点精确入场位
+        if buy_points and buy_points[0].type == 'first_buy' and divergence:
+            buy_points[0] = self._calculate_first_buy_exact_entry(buy_points[0], divergence)
+
+        # [P1-#21] 三个卖出条件
+        recent_close = None
+        if strokes:
+            recent_close = float(strokes[-1].end_price)
+        self.sell_plan = self._generate_sell_plan(divergence, zhongshu_list, strokes, recent_close or 0)
+
         return buy_points, sell_points
     
     def _find_second_points(self, strokes: List[Stroke],
                            existing_buy: List[BuySellPoint],
                            existing_sell: List[BuySellPoint]) -> Dict[str, List]:
         """
-        识别第二类买卖点（仅找第一个符合条件的回调/反弹）
-        
-        第二类买点：第一类买点后上涨，回调不创新低
-        第二类卖点：第一类卖点后下跌，反弹不创新高
+        [P1-#20] 识别第二类买卖点（增强版）
 
-        只识别一次：第一类买卖点之后的第一个有效回调/反弹配对。
-        避免历史循环中多次生成第二类买卖点。
+        第二类买点：第一类买点后上涨，回调不创新低。
+        增强逻辑：
+        - second_buy 必须形成在第一类买点之后
+        - 回调不创新低：next_stroke.end_price > first_buy_price
+        - 确认条件：回调结束后，有新的一笔上涨启动（确认信号）
+        - 置信度 = 0.8 * first_buy.confidence（上限 0.75）
         """
         second_buy = []
         second_sell = []
-        
+
         if existing_buy:
             first_buy = existing_buy[0]
             first_buy_idx = first_buy.position.get('idx', 0)
             first_buy_price = first_buy.position.get('price', 0)
-            
+            base_confidence = min(0.8 * first_buy.confidence, 0.75)
+
             # 只找第一类买点后的第一个有效配对
             for i, stroke in enumerate(strokes):
                 if stroke.start_idx <= first_buy_idx:
                     continue
-                if stroke.direction == 'up' and i < len(strokes) - 1:
+                if stroke.direction == 'up' and i < len(strokes) - 2:
                     next_stroke = strokes[i + 1]
                     if next_stroke.direction == 'down' and next_stroke.end_price > first_buy_price:
+                        # 确认信号：回调结束后有一笔上涨启动
+                        confirm_stroke = strokes[i + 2] if i + 2 < len(strokes) else None
+                        confirmed = confirm_stroke is not None and confirm_stroke.direction == 'up'
+                        confidence = base_confidence + (0.1 if confirmed else 0.0)
                         second_buy.append(BuySellPoint(
                             type='second_buy',
-                            confidence=0.7,
+                            confidence=min(confidence, 0.75),
                             position={
                                 'idx': next_stroke.end_idx,
                                 'price': next_stroke.end_price,
                                 'date': next_stroke.end_date
                             },
-                            reason='回调不创新低'
+                            reason='回调不创新低' + ('，上涨确认' if confirmed else '')
                         ))
                         break  # 只识别一次
-        
+
         if existing_sell:
             first_sell = existing_sell[0]
             first_sell_idx = first_sell.position.get('idx', 0)
             first_sell_price = first_sell.position.get('price', 0)
-            
+            base_confidence = min(0.8 * first_sell.confidence, 0.75)
+
             # 只找第一类卖点后的第一个有效配对
             for i, stroke in enumerate(strokes):
                 if stroke.start_idx <= first_sell_idx:
                     continue
-                if stroke.direction == 'down' and i < len(strokes) - 1:
+                if stroke.direction == 'down' and i < len(strokes) - 2:
                     next_stroke = strokes[i + 1]
                     if next_stroke.direction == 'up' and next_stroke.end_price < first_sell_price:
+                        confirm_stroke = strokes[i + 2] if i + 2 < len(strokes) else None
+                        confirmed = confirm_stroke is not None and confirm_stroke.direction == 'down'
+                        confidence = base_confidence + (0.1 if confirmed else 0.0)
                         second_sell.append(BuySellPoint(
                             type='second_sell',
-                            confidence=0.7,
+                            confidence=min(confidence, 0.75),
                             position={
                                 'idx': next_stroke.end_idx,
                                 'price': next_stroke.end_price,
                                 'date': next_stroke.end_date
                             },
-                            reason='反弹不创新高'
+                            reason='反弹不创新高' + ('，下跌确认' if confirmed else '')
                         ))
                         break  # 只识别一次
-        
+
         return {'buy': second_buy, 'sell': second_sell}
     
     def _find_third_points(self, strokes: List[Stroke],
                           zhongshu_list: List[Zhongshu]) -> Dict[str, List]:
         """
-        识别第三类买卖点（聚焦最新中枢形成之后）
-        
-        第三类买点：上涨回调不进入中枢
-        第三类卖点：下跌反弹不进入中枢
-        
+        [P1-#20] 识别第三类买卖点（增强版）
+
+        第三类买点：上涨后回调不进入中枢（回调低点 > 中枢.high）
+        第三类卖点：下跌后反弹不进入中枢（反弹高点 < 中枢.low）
+
+        - "不进入" 的含义：回调/反弹不重新进入中枢区间
+        - 置信度根据回调深度计算：<50%中枢宽度 -> 0.7, 否则 -> 0.6
         只搜索最新中枢 end_idx 之后的笔，避免全局历史堆积。
         """
         third_buy = []
@@ -1021,6 +1348,7 @@ class BuySellPointDetector:
             return {'buy': third_buy, 'sell': third_sell}
         
         latest_zhongshu = zhongshu_list[-1]
+        zhongshu_width = latest_zhongshu.high - latest_zhongshu.low
         # 只搜索最新中枢形成之后的笔
         min_idx = latest_zhongshu.end_idx
         
@@ -1034,16 +1362,24 @@ class BuySellPointDetector:
                 next_stroke = strokes[i + 1]
                 if next_stroke.direction == 'down':
                     # 回调低点在中枢上方 = 第三类买点
-                    if latest_zhongshu.is_above(next_stroke.end_price):
+                    # "不进入中枢"意味着回调低点 > 中枢.high
+                    if next_stroke.end_price > latest_zhongshu.high:
+                        pullback_depth = abs(next_stroke.end_price - latest_zhongshu.high)
+                        if zhongshu_width > 0 and pullback_depth < 0.5 * zhongshu_width:
+                            confidence = 0.7
+                            depth_note = '回调深度小于中枢宽50%'
+                        else:
+                            confidence = 0.6
+                            depth_note = '回调深度大于中枢宽50%'
                         third_buy.append(BuySellPoint(
                             type='third_buy',
-                            confidence=0.6,
+                            confidence=confidence,
                             position={
                                 'idx': next_stroke.end_idx,
                                 'price': next_stroke.end_price,
                                 'date': next_stroke.end_date
                             },
-                            reason=f'回调不进入中枢(中枢区间:[{latest_zhongshu.low:.2f}, {latest_zhongshu.high:.2f}])',
+                            reason=f'回调不进入中枢,[{latest_zhongshu.low:.2f},{latest_zhongshu.high:.2f}],{depth_note}',
                             zhongshu=latest_zhongshu
                         ))
             
@@ -1052,27 +1388,120 @@ class BuySellPointDetector:
                 next_stroke = strokes[i + 1]
                 if next_stroke.direction == 'up':
                     # 反弹高点在中枢下方 = 第三类卖点
-                    if latest_zhongshu.is_below(next_stroke.end_price):
+                    if next_stroke.end_price < latest_zhongshu.low:
+                        pullback_depth = abs(latest_zhongshu.low - next_stroke.end_price)
+                        if zhongshu_width > 0 and pullback_depth < 0.5 * zhongshu_width:
+                            confidence = 0.7
+                            depth_note = '反弹深度小于中枢宽50%'
+                        else:
+                            confidence = 0.6
+                            depth_note = '反弹深度大于中枢宽50%'
                         third_sell.append(BuySellPoint(
                             type='third_sell',
-                            confidence=0.6,
+                            confidence=confidence,
                             position={
                                 'idx': next_stroke.end_idx,
                                 'price': next_stroke.end_price,
                                 'date': next_stroke.end_date
                             },
-                            reason=f'反弹不进入中枢(中枢区间:[{latest_zhongshu.low:.2f}, {latest_zhongshu.high:.2f}])',
+                            reason=f'反弹不进入中枢,[{latest_zhongshu.low:.2f},{latest_zhongshu.high:.2f}],{depth_note}',
                             zhongshu=latest_zhongshu
                         ))
         
         return {'buy': third_buy, 'sell': third_sell}
 
+    def _calculate_first_buy_exact_entry(self, first_buy: BuySellPoint, divergence: Divergence) -> BuySellPoint:
+        """
+        [P1-#20] 第一类买点精确入场位计算
+
+        如果背驰已被MACD确认:
+        - 入场价格 = 背驰位置的价格（背驰点）
+        - 在 reason 中补充MACD面积比详情
+        """
+        if divergence is None:
+            return first_buy
+
+        # 直接使用背驰位置的价格作为入场参考
+        entry_price = first_buy.position.get('price', 0)
+
+        details = divergence.details or {}
+        if divergence.type == 'trend_backtesting':
+            macd_ratio = details.get('macd_area_ratio', 'unknown')
+            entry_reason = first_buy.reason + f" | MACD面积比={macd_ratio}, 入场={entry_price:.2f}"
+        elif divergence.type == 'consolidation':
+            down_amp = details.get('down_amplitude', 0)
+            up_amp = details.get('prev_up_amplitude', 0)
+            ratio = f"{down_amp / up_amp:.2f}" if up_amp else 'unknown'
+            entry_reason = first_buy.reason + f" | 回调/离开幅度比={ratio}, 入场={entry_price:.2f}"
+        elif divergence.type == 'zhongshu':
+            entry_reason = first_buy.reason + f" | 中枢破坏背驰, 入场={entry_price:.2f}"
+        else:
+            entry_reason = first_buy.reason
+
+        return BuySellPoint(
+            type=first_buy.type,
+            confidence=first_buy.confidence,
+            position=first_buy.position,
+            reason=entry_reason
+        )
+
+    def _generate_sell_plan(self, divergence: Divergence, zhongshu_list: List, strokes: List, current_price: float) -> List[Dict]:
+        """
+        [P1-#21] 三个卖出条件（缠论版）
+
+        本级别背驰卖1/3 + 次级别反弹不破中枢卖1/3 + 跌破中枢卖剩余
+
+        Returns: List of sell step dicts
+        """
+        steps = []
+        latest_zs = zhongshu_list[-1] if zhongshu_list else None
+
+        if divergence and divergence.direction == 'down':
+            # Step 1: 背驰卖1/3
+            steps.append({
+                'step': 1,
+                'action': '卖出1/3',
+                'condition': '趋势背驰出现',
+                'price': float(divergence.position.get('price', current_price)),
+                'confidence': 0.80,
+                'reason': f"本级别{divergence.type}背驰出现, 背驰力度={divergence.confidence:.2f}",
+            })
+
+            # Step 2: 反弹不破中枢卖1/3 (need at least one stroke after the divergence)
+            if latest_zs:
+                steps.append({
+                    'step': 2,
+                    'action': '卖出1/3',
+                    'condition': '次级别反弹不破中枢上沿',
+                    'target': f"反弹至{latest_zs.high:.2f}附近不过上沿则卖出",
+                    'confidence': 0.70,
+                    'reason': f"次级别反弹确认, 中枢上沿={latest_zs.high:.2f}构成压制",
+                })
+
+            # Step 3: 跌破中枢卖剩余
+            if latest_zs:
+                steps.append({
+                    'step': 3,
+                    'action': '清仓',
+                    'condition': '跌破中枢下沿',
+                    'price': float(latest_zs.low),
+                    'confidence': 0.90,
+                    'reason': f"跌破中枢下沿{latest_zs.low:.2f}, 趋势完全转空",
+                })
+
+        return steps
+
 
 class ChanlunAnalyzer:
     """
     完整缠论分析器
-    
+
     整合所有缠论组件，提供完整的分析流程
+
+    WINDOW_CONFIG (P1-#29):
+        'lookback_period': 120  — 回看周期从 60→120，提高背驰/买卖点判断的数据窗口长度
+        'min_klines': 4, 'min_stroke_count': 3, 'min_segment_count': 3  — 结构识别参数不变
+        数据最短校验: analyze() 入口≥30K线(结构检测), generate_insights() 入口≥120K线(全量分析)
     """
     
     def __init__(self, config: Dict = None):
@@ -1095,7 +1524,7 @@ class ChanlunAnalyzer:
             min_segment_count=self.config.get('min_segment_count', 3)
         )
         self.divergence_detector = DivergenceDetector(
-            lookback_period=self.config.get('lookback_period', 60)
+            lookback_period=self.config.get('lookback_period', 120)
         )
         self.buy_sell_detector = BuySellPointDetector(
             min_confidence=self.config.get('min_confidence', 0.6)
@@ -1118,7 +1547,7 @@ class ChanlunAnalyzer:
             'min_klines': 4,  # 笔包含的最少K线数
             'min_stroke_count': 3,  # 构成线段的最少笔数
             'min_segment_count': 3,  # 构成中枢的最少线段数
-            'lookback_period': 60,  # 回看周期
+            'lookback_period': 120,  # 回看周期 (P1-#29: ⬆60→120)
             'min_confidence': 0.6  # 最小置信度
         }
     
@@ -1160,10 +1589,11 @@ class ChanlunAnalyzer:
         if len(self.segments) >= 3:
             self.zhongshu_list = self.zhongshu_analyzer.find(self.segments)
         
-        # 7. 背驰判断
+        # 7. 背驰判断（支持 MACD 面积确认）
         self.divergence = self.divergence_detector.detect(
-            self.strokes, 
-            self.zhongshu_list
+            self.strokes,
+            self.zhongshu_list,
+            closes=df['close'].values if 'close' in df.columns else None
         )
         
         # 8. 买卖点识别
@@ -1172,7 +1602,34 @@ class ChanlunAnalyzer:
             self.zhongshu_list,
             self.divergence
         )
-        
+
+        # 9. 缠论定理体系校验
+        self.theorem_check = ChanlunTheoremValidator().validate(
+            self.segments, self.zhongshu_list, self.strokes,
+            df['close'].values if 'close' in df.columns else None
+        )
+
+        # 10. 中枢内因子动态切换
+        self.factor_switch = ZhongshuFactorSwitch()
+        zs = self.zhongshu_list[-1] if self.zhongshu_list else None
+        if zs and self.klines:
+            latest_close = self.klines[-1].close
+            self.factor_position = self.factor_switch.get_position(latest_close, zs)
+            self.factor_weight_adj = self.factor_switch.adjust_weight(self.factor_position)
+            self.selected_factors = self.factor_switch.select_factors(self.factor_position)
+        else:
+            self.factor_position = 'none'
+            self.factor_weight_adj = 1.0
+            self.selected_factors = {'factors': [], 'strategy': '无中枢'}
+
+        # 11. 未确认分型检测（K线尾部潜在转向信号）
+        last_confirmed_idx = -1
+        if self.fractals:
+            last_confirmed_idx = self.fractals[-1].idx
+        self.pending_judgment = self.fractal_detector.get_last_unconfirmed_fractal(
+            klines_no_contain, last_confirmed_idx
+        )
+
         return self._generate_result()
     
     def _preprocess(self, df: pd.DataFrame):
@@ -1214,7 +1671,14 @@ class ChanlunAnalyzer:
             'buy_points': self.buy_points,
             'sell_points': self.sell_points,
             'trend': self._determine_trend(),
-            'summary': self._generate_summary()
+            'summary': self._generate_summary(),
+            'theorem_check': self.theorem_check,
+            'factor_switch': {
+                'position': self.factor_position,
+                'weight_adjustment': self.factor_weight_adj,
+                'selected_factors': self.selected_factors
+            },
+            'pending_judgment': self.pending_judgment
         }
     
     def _determine_trend(self) -> str:
@@ -1302,7 +1766,8 @@ class ChanlunScorer:
     """缠论评分系统"""
     
     @staticmethod
-    def score(analysis_result: Dict, latest_close: float = None) -> Dict:
+    def score(analysis_result: Dict, latest_close: float = None,
+              market_context: Optional[Dict] = None) -> Dict:
         """
         根据缠论分析结果评分
         
@@ -1431,7 +1896,38 @@ class ChanlunScorer:
                 score -= 5
                 details.append(f"中枢扩张(-5): 顶底区间扩大，趋势不稳定")
 
-        
+        # ── 市场上下文评分调整 ──
+        if market_context:
+            # 换手率调整: 高换手时信号置信度更高
+            turnover = market_context.get('turnover_rate')
+            if turnover is not None:
+                if turnover > 10:
+                    score += 5
+                    details.append(f"换手率{turnover:.1f}% > 10%, 信号活跃(+5)")
+                elif turnover > 5:
+                    score += 3
+                    details.append(f"换手率{turnover:.1f}% > 5%, 资金活跃(+3)")
+
+            # 资金流向调整: 大单净流入增强信号
+            net_lg = market_context.get('net_lg_amount')
+            if net_lg is not None:
+                if net_lg > 0:
+                    score += 3
+                    details.append(f"近5日大单净流入{net_lg:.0f}, 主力看多(+3)")
+                elif net_lg < 0:
+                    score -= 3
+                    details.append(f"近5日大单净流出{abs(net_lg):.0f}, 主力看空(-3)")
+
+            # 指数环境调整
+            idx_condition = market_context.get('index_condition')
+            if idx_condition:
+                if idx_condition == 'POOR':
+                    score -= 5
+                    details.append(f"大盘环境偏弱, 信号减仓(-5)")
+                elif idx_condition == 'GOOD':
+                    score += 3
+                    details.append(f"大盘环境偏强, 信号增强(+3)")
+
         score = max(0, min(100, score + 50))
         
         return {
@@ -1480,7 +1976,7 @@ class ChanlunAlphaModel(AlphaModel):
         
         for symbol, df in data.items():
             try:
-                if len(df) < 60:
+                if len(df) < 120:
                     continue
                 
                 analysis_result = self.analyzer.analyze(df)
@@ -1762,5 +2258,385 @@ def analyze_single_stock(symbol: str, data: pd.DataFrame) -> Dict:
             }
     except Exception as e:
         analysis_result['chanlun'] = {'error': str(e)}
-    
+
     return analysis_result
+
+
+class ChanlunTheoremValidator:
+    """
+    缠论11个定理体系校验
+
+    对已识别的线段、中枢、笔结构进行定理一致性与健康度检查。
+    每个定理包含：passed（是否通过）、score（0~1 健康分）、issues（问题列表）、description（定理描述）。
+    """
+
+    def __init__(self):
+        self._results = {}
+
+    def validate(self, segments, zhongshu_list, strokes, closes) -> Dict:
+        """
+        运行全部11个定理校验
+
+        Args:
+            segments: Segment 列表
+            zhongshu_list: Zhongshu 列表
+            strokes: Stroke 列表
+            closes: np.ndarray 收盘价数组（可选）
+
+        Returns:
+            {
+                'summary': {'passed': int, 'total': int, 'overall_score': float},
+                'details': {t1: {...}, t2: {...}, ...}
+            }
+        """
+        self._results = {}
+        self._results['t1'] = self._check_t1(segments)
+        self._results['t2'] = self._check_t2(strokes)
+        self._results['t3'] = self._check_t3(segments, zhongshu_list)
+        self._results['t4'] = self._check_t4(segments, zhongshu_list, closes)
+        self._results['t5'] = self._check_t5(zhongshu_list)
+        self._results['t6'] = self._check_t6(segments)
+        self._results['t7'] = self._check_t7(segments, zhongshu_list)
+        self._results['t8'] = self._check_t8(segments, zhongshu_list, closes)
+        self._results['t9'] = self._check_t9(strokes, segments)
+        self._results['t10'] = self._check_t10(strokes)
+        self._results['t11'] = self._check_t11(zhongshu_list)
+
+        total = len(self._results)
+        passed = sum(1 for v in self._results.values() if v.get('passed'))
+        overall_score = sum(v.get('score', 0) for v in self._results.values()) / total
+
+        return {
+            'summary': {
+                'passed': passed,
+                'total': total,
+                'overall_score': round(overall_score, 4),
+            },
+            'details': self._results,
+        }
+
+    def _check_t1(self, segments) -> Dict:
+        """
+        T1: 走势必完美（走势必完整）
+        每个线段至少包含3笔，否则走势不完整。
+        """
+        desc = 'T1 走势必完美：每个线段至少包含3笔'
+        if not segments:
+            return {'passed': False, 'score': 0.0, 'issues': ['无线段数据'], 'description': desc}
+        issues = []
+        bad_count = 0
+        for i, seg in enumerate(segments):
+            n = len(seg.strokes) if seg.strokes else 0
+            if n < 3:
+                bad_count += 1
+                issues.append(f"第{i}段(seg[{seg.start_idx},{seg.end_idx}])笔数={n}<3")
+        passed = bad_count == 0
+        score = max(0.0, 1.0 - bad_count / len(segments))
+        return {'passed': passed, 'score': round(score, 2), 'issues': issues, 'description': desc}
+
+    def _check_t2(self, strokes) -> Dict:
+        """
+        T2: 级别递归一致性
+        笔的幅度应该一致，不应出现某一笔幅度远大于平均（>2x）或远小于（<0.3x）。
+        """
+        desc = 'T2 级别递归：笔幅度应一致(均值0.3x~2x区间内)'
+        if not strokes:
+            return {'passed': False, 'score': 0.0, 'issues': ['无笔数据'], 'description': desc}
+        amps = [s.amplitude for s in strokes if s.amplitude > 0]
+        if not amps:
+            return {'passed': False, 'score': 0.0, 'issues': ['所有笔幅度为0'], 'description': desc}
+        mean_amp = np.mean(amps)
+        if mean_amp == 0:
+            return {'passed': False, 'score': 0.0, 'issues': ['笔幅度均值为0'], 'description': desc}
+        issues = []
+        bad_count = 0
+        for s in strokes:
+            if s.amplitude == 0:
+                continue
+            ratio = s.amplitude / mean_amp
+            if ratio < 0.3 or ratio > 2.0:
+                bad_count += 1
+                issues.append(f"笔[{s.start_idx},{s.end_idx}]幅度比={ratio:.3f}, 超[0.3,2.0]")
+        passed = bad_count == 0
+        # 允许少量异常 -> 扣分
+        score = max(0.0, 1.0 - bad_count / len(amps))
+        return {'passed': passed, 'score': round(score, 2), 'issues': issues, 'description': desc}
+
+    def _check_t3(self, segments, zhongshu_list) -> Dict:
+        """
+        T3: 中枢破坏
+        第三段离开中枢且不再回到中枢区间。
+        """
+        desc = 'T3 中枢破坏：第3段突破中枢并停留在外'
+        if not zhongshu_list:
+            return {'passed': True, 'score': 1.0, 'issues': [], 'description': desc + '（无中枢，自动通过）'}
+        if len(segments) < 3:
+            return {'passed': False, 'score': 0.0, 'issues': ['线段不足3段'], 'description': desc}
+        issues = []
+        bad_count = 0
+        for zs in zhongshu_list:
+            by_idx = sorted([s for s in segments if hasattr(s, 'start_idx')], key=lambda x: x.start_idx)
+            for s in by_idx:
+                if s.start_idx >= zs.start_idx and s.end_idx <= zs.end_idx:
+                    continue
+                if s.start_idx > zs.end_idx:
+                    # 检查离开段的 end_price 是否不在中枢内
+                    if zs.contains_price(s.end_price):
+                        bad_count += 1
+                        issues.append(f"中枢[{zs.start_idx},{zs.end_idx}]之后段[{s.start_idx},{s.end_idx}]回到中枢")
+        passed = bad_count == 0
+        score = max(0.0, 1.0 - bad_count * 0.15)
+        return {'passed': passed, 'score': round(score, 2), 'issues': issues, 'description': desc}
+
+    def _check_t4(self, segments, zhongshu_list, closes) -> Dict:
+        """
+        T4: 背驰与转折
+        背驰发生后，价格应返回最近中枢。
+        """
+        desc = 'T4 背驰与转折：背驰后价格返回最近中枢'
+        if not zhongshu_list or segments is None or len(segments) < 2:
+            return {'passed': True, 'score': 1.0, 'issues': [], 'description': desc + '（数据不足，跳过）'}
+        issues = []
+        latest_zs = zhongshu_list[-1]
+        # 找到中枢之后的最后一个段
+        after_zs = [s for s in segments if s.start_idx > latest_zs.end_idx]
+        if not after_zs:
+            return {'passed': True, 'score': 1.0, 'issues': [], 'description': desc + '（无中枢后数据）'}
+        last_seg = after_zs[-1]
+        # 检查最后一个段是否回到了中枢范围
+        back = (last_seg.end_price >= latest_zs.low and last_seg.end_price <= latest_zs.high)
+        if not back:
+            issues.append(f"末段[{last_seg.start_idx},{last_seg.end_idx}]价格{last_seg.end_price:.2f}未回中枢[{latest_zs.low:.2f},{latest_zs.high:.2f}]")
+        score = 1.0 if back else 0.5
+        return {'passed': back, 'score': score, 'issues': issues, 'description': desc}
+
+    def _check_t5(self, zhongshu_list) -> Dict:
+        """
+        T5: 买卖点级别对应
+        买卖点必须对应中枢级别。
+        """
+        desc = 'T5 买卖点级别对应：买卖点应与中枢级别对应'
+        if not zhongshu_list:
+            return {'passed': True, 'score': 1.0, 'issues': [], 'description': desc + '（无中枢）'}
+        # 检查是否有正常的中枢区间，视为级别已确认
+        issues = []
+        for i, zs in enumerate(zhongshu_list):
+            if zs.range_width is None or zs.range_width < 0.01:
+                issues.append(f"中枢{i}区间宽度过小={zs.range_width}")
+        passed = len(issues) == 0
+        score = 1.0 if passed else 0.5
+        return {'passed': passed, 'score': score, 'issues': issues, 'description': desc}
+
+    def _check_t6(self, segments) -> Dict:
+        """
+        T6: 同级别分解
+        同级别走势的线段笔数应相近（CV < 0.5）。
+        """
+        desc = 'T6 同级别分解：各线段笔数应相近(CV<0.5)'
+        if not segments:
+            return {'passed': False, 'score': 0.0, 'issues': ['无线段'], 'description': desc}
+        stroke_counts = np.array([len(s.strokes) if s.strokes else 0 for s in segments])
+        if len(stroke_counts) < 2:
+            return {'passed': True, 'score': 1.0, 'issues': [], 'description': desc + '（仅一段）'}
+        mean = np.mean(stroke_counts)
+        if mean == 0:
+            return {'passed': False, 'score': 0.0, 'issues': ['所有线段笔数为0'], 'description': desc}
+        cv = np.std(stroke_counts) / mean
+        issues = []
+        if cv >= 0.5:
+            issues.append(f"线段笔数CV={cv:.3f}>=0.5，笔数分布差异大: {stroke_counts.tolist()}")
+        score = max(0.0, 1.0 - cv)
+        return {'passed': cv < 0.5, 'score': round(score, 2), 'issues': issues, 'description': desc}
+
+    def _check_t7(self, segments, zhongshu_list) -> Dict:
+        """
+        T7: 趋势延伸与结束
+        最后一个中枢被破坏 + 反向线段确认。
+        """
+        desc = 'T7 趋势延伸与结束：末中枢被破坏+反向段确认'
+        if not zhongshu_list or len(segments) < 2:
+            return {'passed': True, 'score': 1.0, 'issues': [], 'description': desc + '（数据不足）'}
+        issues = []
+        latest_zs = zhongshu_list[-1]
+        after_zs = [s for s in segments if s.start_idx > latest_zs.end_idx]
+        if not after_zs:
+            issues.append('最后一个中枢后无线段，趋势是否结束待确认')
+            score = 0.5
+        else:
+            first_after = after_zs[0]
+            outside = not latest_zs.contains_price(first_after.end_price)
+            if not outside:
+                issues.append(f"中枢后首段[{first_after.start_idx},{first_after.end_idx}]未突破中枢")
+                score = 0.4
+            else:
+                score = 1.0
+        passed = len(issues) == 0
+        return {'passed': passed, 'score': round(score, 2), 'issues': issues, 'description': desc}
+
+    def _check_t8(self, segments, zhongshu_list, closes) -> Dict:
+        """
+        T8: 多级别联立（占位）
+        需要多级别数据支持。当前返回占位通过。
+        """
+        desc = 'T8 多级别联立：占位实现，需要多级别数据'
+        return {'passed': True, 'score': 1.0, 'issues': ['需多级别数据(日/周/月联立)'], 'description': desc}
+
+    def _check_t9(self, strokes, segments) -> Dict:
+        """
+        T9: 特征序列（占位）
+        关联 P1-#8 特征序列缺口处理逻辑。当前简化检查：特征序列中的反向笔是否有跳空缺口。
+        """
+        desc = 'T9 特征序列：关联P1-#8特征序列缺口处理（占位实现）'
+        if not segments:
+            return {'passed': True, 'score': 1.0, 'issues': ['无线段'], 'description': desc}
+        issues = []
+        gap_count = 0
+        for seg in segments:
+            seg_strokes = seg.strokes or []
+            for j in range(1, len(seg_strokes)):
+                prev_s = seg_strokes[j - 1]
+                curr_s = seg_strokes[j]
+                if prev_s.direction != curr_s.direction:
+                    if seg.direction == 'up' and curr_s.direction == 'down':
+                        if curr_s.end_price > prev_s.start_price:
+                            gap_count += 1
+                    elif seg.direction == 'down' and curr_s.direction == 'up':
+                        if curr_s.end_price < prev_s.start_price:
+                            gap_count += 1
+        if gap_count > 0:
+            issues.append(f"特征序列跳空缺口数={gap_count}")
+        score = max(0.0, 1.0 - gap_count * 0.1)
+        return {'passed': True, 'score': round(score, 2), 'issues': issues, 'description': desc}
+
+    def _check_t10(self, strokes) -> Dict:
+        """
+        T10: 动力结构
+        比较相邻同方向笔的力度，检查是否出现力度递减（背驰前兆）。
+        """
+        desc = 'T10 动力结构：相邻同向笔力度比较'
+        if not strokes or len(strokes) < 4:
+            return {'passed': True, 'score': 1.0, 'issues': ['笔不足'], 'description': desc}
+        up_strokes = [s for s in strokes if s.direction == 'up']
+        down_strokes = [s for s in strokes if s.direction == 'down']
+        issues = []
+        weakening = 0
+        for group in [up_strokes, down_strokes]:
+            for i in range(1, len(group)):
+                amp_prev = group[i - 1].amplitude
+                amp_curr = group[i].amplitude
+                if amp_prev > 0 and amp_curr < amp_prev * 0.6:
+                    weakening += 1
+                    issues.append(f"同向笔力度减弱: {group[i-1]} -> {group[i]}")
+        score = max(0.0, 1.0 - weakening * 0.15)
+        passed = weakening == 0
+        return {'passed': passed, 'score': round(score, 2), 'issues': issues, 'description': desc}
+
+    def _check_t11(self, zhongshu_list) -> Dict:
+        """
+        T11: 走势类型转换
+        用中枢数量判断走势类型：1个中枢=盘整，>=2个中枢=趋势。
+        """
+        desc = 'T11 走势类型转换：中枢数判走势类型'
+        if not zhongshu_list:
+            return {'passed': True, 'score': 1.0, 'issues': ['无中枢=无走势类型'], 'description': desc}
+        n = len(zhongshu_list)
+        if n == 1:
+            trend_type = 'pan_zheng'  # 盘整
+        else:
+            trend_type = 'trend'  # 趋势
+        issues = []
+        # 检查中枢的方向是否一致（趋势时）
+        if n >= 2:
+            directions = set()
+            for zs in zhongshu_list:
+                if hasattr(zs, 'direction') and zs.direction:
+                    directions.add(zs.direction)
+            if len(directions) > 1:
+                issues.append(f"多中枢方向不一致({directions})，走势类型判断需谨慎")
+        score = 0.8 if issues else 1.0
+        return {'passed': len(issues) == 0, 'score': score, 'issues': issues, 'description': desc + f'（{trend_type}）'}
+
+
+class ZhongshuFactorSwitch:
+    """
+    中枢内因子动态切换
+
+    根据价格相对中枢的位置动态选择适合的因子类别：
+    - inside:   价格在中枢内部 → 反转因子、RSI均值回归、BOLL收口突破
+    - above:    价格在中枢上方 → 动量因子、MACD趋势跟踪、均线多头排列
+    - below:    价格在中枢下方 → 超卖因子、RSI超卖反弹、支撑位反弹
+    - none:     无中枢 → 常规因子
+    """
+
+    FACTOR_GROUPS = {
+        'inside': ['反转因子', 'RSI均值回归', 'BOLL收口突破'],
+        'above': ['动量因子', 'MACD趋势跟踪', '均线多头排列'],
+        'below': ['超卖因子', 'RSI超卖反弹', '支撑位反弹'],
+    }
+
+    def get_position(self, price: float, zhongshu) -> str:
+        """
+        判断价格相对中枢的位置
+
+        Args:
+            price: 当前价格
+            zhongshu: Zhongshu 对象
+
+        Returns:
+            'inside' | 'above' | 'below' | 'none'
+        """
+        if zhongshu is None:
+            return 'none'
+        if hasattr(zhongshu, 'contains_price') and zhongshu.contains_price(price):
+            return 'inside'
+        if hasattr(zhongshu, 'is_above') and zhongshu.is_above(price):
+            return 'above'
+        if hasattr(zhongshu, 'is_below') and zhongshu.is_below(price):
+            return 'below'
+        return 'none'
+
+    def select_factors(self, position: str, base_factors: List[str] = None) -> Dict:
+        """
+        根据位置选取因子类别
+
+        Args:
+            position: 'inside' / 'above' / 'below' / 'none'
+            base_factors: 基础因子列表（可选）
+
+        Returns:
+            {'factors': [...], 'strategy': '...'}
+        """
+        base = base_factors or []
+        factors = self.FACTOR_GROUPS.get(position, [])
+        strategy_map = {
+            'inside': '中枢内震荡，偏均值回归',
+            'above': '中枢上方运行，偏趋势跟踪',
+            'below': '中枢下方运行，偏超卖反弹',
+            'none': '无中枢，使用常规因子',
+        }
+        return {
+            'factors': factors + base,
+            'strategy': strategy_map.get(position, '未知位置'),
+        }
+
+    def adjust_weight(self, position: str) -> float:
+        """
+        根据位置调整权重
+
+        inside=0.85（中枢内震荡，降低仓位）
+        above=1.10（突破确认，适当加仓）
+        below=1.05（中枢下方，适度加仓博反弹）
+        none=1.00（无中枢，保持中性）
+        """
+        weights = {'inside': 0.85, 'above': 1.10, 'below': 1.05, 'none': 1.0}
+        return weights.get(position, 1.0)
+
+    def get_adjustment_hint(self, position: str) -> str:
+        """返回中文提示文本"""
+        hints = {
+            'inside': '价格在中枢内部震荡，建议降低仓位等待突破确认',
+            'above': '价格在中枢上方运行，突破确认后可适当加仓',
+            'below': '价格在中枢下方运行，关注超卖反弹机会',
+            'none': '无中枢结构，使用常规分析框架',
+        }
+        return hints.get(position, '未知位置')

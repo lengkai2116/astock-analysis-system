@@ -520,3 +520,42 @@ def build_multistep_context(ts_code: str, steps: List[str] = None) -> Dict:
     else:
         builder.build_all(ts_code)
     return builder.get_all_contexts()
+
+
+class WikiConceptMatcher:
+    """Map current stock status to LLM Wiki knowledge base concepts."""
+
+    CONCEPT_MAP = {
+        "MOMENTUM": {"concept": "Main upswing acceleration", "reference": "Three-line bloom / MA bullish alignment", "typical_action": "Trend following, momentum factor weight raised to 0.6"},
+        "MEAN_REV": {"concept": "RSI extreme value reversion", "reference": "Mean reversion strategy / RSI reversal", "typical_action": "Contrarian trading, reversal factor weight raised to 0.65"},
+        "WOLF": {"concept": "Panic sell-off", "reference": "Emotion freezing point / panic bottom", "typical_action": "Defense mode, reduce position cap to 30%"},
+        "EAGLE": {"concept": "Healthy low-vol bull market", "reference": "Slow bull characteristics / trend continuation", "typical_action": "Best environment for trend following strategies"},
+        "BOX": {"concept": "Extremely narrow range oscillation", "reference": "Zhongshu oscillation / consolidation characteristics", "typical_action": "Buy low sell high, watch for zhongshu boundary breakout"},
+        "MACRO": {"concept": "Macro event driven", "reference": "Event-driven strategy / gap jump", "typical_action": "Reduce quant weight, increase manual judgment"},
+        "TRENDING_BULL": {"concept": "Uptrend", "reference": "Dow theory uptrend", "typical_action": "Go with trend, trend following as main approach"},
+        "TRENDING_BEAR": {"concept": "Downtrend", "reference": "Dow theory downtrend", "typical_action": "Defense or short, reduce positions on rebounds"},
+        "HIGH_VOL": {"concept": "High volatility environment", "reference": "Volatility clustering / market uncertainty", "typical_action": "Shorten analysis window to 15 days, sentiment factor priority"},
+        "RANGING": {"concept": "Range oscillation", "reference": "Consolidation market / zhongshu oscillation", "typical_action": "Balanced allocation, watch for breakout direction"},
+    }
+
+    @classmethod
+    def match(cls, market_state, status_recognition=None):
+        concepts = []
+        if market_state and market_state in cls.CONCEPT_MAP:
+            info = cls.CONCEPT_MAP[market_state]
+            concepts.append({"concept": info["concept"], "relevance": 0.85,
+                "reference": info["reference"], "typical_action": info["typical_action"],
+                "matched_by": "market_state"})
+        if status_recognition:
+            trend_dir = status_recognition.get("trend", {}).get("direction", "")
+            if trend_dir == "up":
+                concepts.append({"concept": "Uptrend continuation", "relevance": 0.70,
+                    "reference": "Chanlun structure / trend divergence",
+                    "typical_action": "Hold long until divergence signal appears",
+                    "matched_by": "trend_direction"})
+            elif trend_dir == "down":
+                concepts.append({"concept": "Downtrend continuation", "relevance": 0.70,
+                    "reference": "Chanlun downtrend / divergence buy point",
+                    "typical_action": "Wait and watch, wait for bottom divergence confirmation",
+                    "matched_by": "trend_direction"})
+        return concepts[:3]

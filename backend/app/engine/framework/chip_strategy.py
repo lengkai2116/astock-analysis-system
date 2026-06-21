@@ -98,7 +98,7 @@ class ChipAlphaModel(AlphaModel):
         for symbol, df in data_dict.items():
             try:
                 if isinstance(df, pd.DataFrame):
-                    if df.empty or len(df) < 60:
+                    if df.empty or len(df) < 120:
                         continue
                     
                     # 使用评分器分析
@@ -232,6 +232,14 @@ class ChipScorer:
     用于评估单只股票的主力资金吸引力
     """
     
+    def get_available_windows(self) -> list:
+        """[#46] 返回筹码分析支持的回看周期
+
+        Returns:
+            [60, 120]  — 60日轻量分析和120日完整分析
+        """
+        return [60, 120]
+
     def score(self, data: pd.DataFrame) -> float:
         """
         计算综合评分
@@ -242,7 +250,7 @@ class ChipScorer:
         Returns:
             评分值 (0-10)，越高越有吸引力
         """
-        if data.empty or len(data) < 60:
+        if data.empty or len(data) < 120:
             return 0.0
         
         try:

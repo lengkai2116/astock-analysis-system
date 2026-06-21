@@ -19,7 +19,8 @@ class StrategyOutputService:
         position_suggestion: Optional[str] = None,
         holding_period: Optional[str] = None,
         evidence: Optional[List[str]] = None,
-        risk_notes: Optional[List[str]] = None
+        risk_notes: Optional[List[str]] = None,
+        status_recognition: Optional[Dict] = None
     ) -> StrategyOutput:
         output = StrategyOutput(
             ts_code=ts_code,
@@ -32,17 +33,20 @@ class StrategyOutputService:
             evidence=evidence or [],
             risk_notes=risk_notes or []
         )
-        
+
         if entry_zone and len(entry_zone) >= 2:
             output.entry_zone_low = entry_zone[0]
             output.entry_zone_high = entry_zone[1]
-        
+
         output.risk_line = risk_line
-        
+
         if target_zone and len(target_zone) >= 2:
             output.target_zone_low = target_zone[0]
             output.target_zone_high = target_zone[1]
-        
+
+        if status_recognition:
+            output.status_recognition = status_recognition
+
         db.session.add(output)
         db.session.commit()
         return output

@@ -276,3 +276,32 @@ def simple_backtest_example(params: Dict, data: pd.DataFrame) -> Dict:
         'max_drawdown': -0.1 * base_score,
         'params': params
     }
+
+
+PRESET_GRIDS = {
+    'chanlun': {'name': '缠论策略', 'params': {'lookback_period': [60, 80, 100, 120, 140, 160, 180]}, 'default': 120, 'description': '缠论窗口参数平原验证'},
+    'volume_price': {'name': '量价策略', 'params': {'lookback_period': [60, 80, 100, 120, 140, 160, 180]}, 'default': 120, 'description': '量价窗口参数平原验证'},
+    'chip': {'name': '筹码策略', 'params': {'lookback_period': [40, 60, 80, 100, 120]}, 'default': 120, 'description': '筹码窗口参数平原验证'},
+    'factor': {'name': '因子策略', 'params': {'lookback_period': [14, 20, 30, 40]}, 'default': 20, 'description': '因子窗口参数平原验证'},
+}
+
+def get_preset_grid(name: str) -> Optional[Dict]:
+    return PRESET_GRIDS.get(name)
+
+def list_preset_grids() -> List[str]:
+    return list(PRESET_GRIDS.keys())
+
+def run_preset_grid_search(name: str, objective_function: callable, optimizer_type: str = 'grid') -> Dict:
+    preset = get_preset_grid(name)
+    if not preset:
+        raise ValueError(f"Unknown preset: {name}, available: {list_preset_grids()}")
+    if optimizer_type == 'grid':
+        from app.engine.framework.optimizer import GridSearchOptimizer
+        optimizer = GridSearchOptimizer(preset['params'], objective_function)
+    else:
+        from app.engine.framework.optimizer import RandomSearchOptimizer
+        optimizer = RandomSearchOptimizer(preset['params'], objective_function, n_iter=20)
+    result = optimizer.optimize()
+    result['preset_name'] = name
+    result['preset_description'] = preset['description']
+    return result

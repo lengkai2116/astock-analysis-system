@@ -470,3 +470,51 @@ class DataManager:
             ts_code=ts_code, trade_date=trade_date,
             start_date=start_date, end_date=end_date
         )
+
+    # ══════════════════════════════════════════════
+    # 以下为 5000积分 级别补齐 API（DataManager层）
+    # ══════════════════════════════════════════════
+
+    def get_fina_indicator(self, ts_code, start_date=None, end_date=None):
+        """获取财务指标数据（需5000积分）"""
+        return self.tushare.get_fina_indicator(ts_code, start_date, end_date)
+
+    def get_income(self, ts_code, start_date=None, end_date=None):
+        """获取利润表数据（需5000积分）"""
+        return self.tushare.get_income(ts_code, start_date, end_date)
+
+    def get_balancesheet(self, ts_code, start_date=None, end_date=None):
+        """获取资产负债表数据（需5000积分）"""
+        return self.tushare.get_balancesheet(ts_code, start_date, end_date)
+
+    def get_cashflow(self, ts_code, start_date=None, end_date=None):
+        """获取现金流量表数据（需5000积分）"""
+        return self.tushare.get_cashflow(ts_code, start_date, end_date)
+
+    def get_top10_holders(self, ts_code, end_date=None):
+        """获取前十大股东数据（需5000积分）"""
+        return self.tushare.get_top10_holders(ts_code, end_date)
+
+    def get_stk_holdernumber(self, ts_code, start_date=None, end_date=None):
+        """获取股东人数数据（需5000积分）"""
+        return self.tushare.get_stk_holdernumber(ts_code, start_date, end_date)
+
+    def get_margin(self, ts_code, start_date=None, end_date=None):
+        """获取融资融券数据（需5000积分）"""
+        return self.tushare.get_margin(ts_code, start_date, end_date)
+
+    def get_forecast(self, ts_code, start_date=None, end_date=None):
+        """获取业绩预告数据（需5000积分）"""
+        return self.tushare.get_forecast(ts_code, start_date, end_date)
+
+    def get_industry(self, ts_code=None):
+        """获取行业分类数据（需5000积分）"""
+        return self.tushare.get_industry(ts_code)
+
+    def get_concept(self, ts_code=None):
+        """获取概念分类数据（需5000积分）"""
+        return self.tushare.get_concept(ts_code)
+
+    def get_index_member(self, index_code):
+        """获取指数成分股（需5000积分）"""
+        return self.tushare.get_index_member(index_code)
