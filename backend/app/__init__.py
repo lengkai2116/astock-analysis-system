@@ -223,13 +223,61 @@ def create_app():
     return app
 
 def _route_provider(endpoint, params, provider):
-    """路由数据提供者请求"""
+    """路由数据提供者请求（涵盖所有已注册的数据端点）
+
+    新增端点对应于 TushareProvider 中为 5000分 级别补齐的方法。
+    """
     if endpoint == 'health_check':
         return {'status': 'ok'}
     if endpoint == 'get_kline':
         return provider.get_daily_data(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
     if endpoint == 'get_stock_list':
         return provider.get_stock_list()
+
+    # ══════════════════════════════════════════════
+    # 新增 5000分 级别端点路由
+    # ══════════════════════════════════════════════
+    if endpoint == 'get_daily_basic':
+        return provider.get_daily_basic(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_moneyflow':
+        return provider.get_moneyflow(params.get('trade_date'), params.get('ts_code'))
+    if endpoint == 'get_fina_indicator':
+        return provider.get_fina_indicator(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_income':
+        return provider.get_income(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_balancesheet':
+        return provider.get_balancesheet(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_cashflow':
+        return provider.get_cashflow(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_top10_holders':
+        return provider.get_top10_holders(params.get('ts_code'), params.get('end_date'))
+    if endpoint == 'get_stk_holdernumber':
+        return provider.get_stk_holdernumber(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_margin':
+        return provider.get_margin(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_forecast':
+        return provider.get_forecast(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_industry':
+        return provider.get_industry(params.get('ts_code'))
+    if endpoint == 'get_concept':
+        return provider.get_concept(params.get('ts_code'))
+    if endpoint == 'get_index_member':
+        return provider.get_index_member(params.get('index_code'))
+    if endpoint == 'get_minute':
+        return provider.get_minute_data(params.get('ts_code'), params.get('freq'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_weekly':
+        return provider.get_weekly_data(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_monthly':
+        return provider.get_monthly_data(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_adj_factor':
+        return provider.get_adj_factor(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_top_list':
+        return provider.get_top_list(params.get('trade_date'), params.get('ts_code'))
+    if endpoint == 'get_stk_limit':
+        return provider.get_stk_limit(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
+    if endpoint == 'get_news':
+        return provider.get_news(params.get('start_date'), params.get('end_date'))
+
     return provider.get_daily_data(endpoint, params)
 
 

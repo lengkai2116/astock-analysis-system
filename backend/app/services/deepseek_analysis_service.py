@@ -471,6 +471,141 @@ def get_health() -> Dict:
     }
 
 
+def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> Dict:
+    """
+    根据 StatusOutputService 聚合的现状数据生成 AI 解读建议
+
+    Args:
+        ts_code: 股票代码
+        stock_name: 股票名称
+        aggregated_status: StatusOutputService.aggregate() 的输出，包含:
+            state_consensus, risk_aggregation, momentum_consensus, key_levels,
+            strategy_count, strategies_detail
+
+    Returns:
+        {
+            "operation_plan": "...",
+            "entry_zone": "...",
+            "stop_loss": "...",
+            "target": "...",
+            "risk_notes": [...],
+            "status_summary": "..."
+        }
+    """
+    from app.config import Config
+
+    config = Config.get_llm_config()
+    provider = config.get('type', 'mock')
+    has_api = provider in ('deepseek', 'lm_studio') and config.get('api_key', '')
+
+    # 从 aggregated_status 中提取关键信息
+    state_consensus = aggregated_status.get('state_consensus', {})
+    risk_aggregation = aggregated_status.get('risk_aggregation', {})
+    momentum_consensus = aggregated_status.get('momentum_consensus', {})
+    key_levels = aggregated_status.get('key_levels', {})
+    strategies_detail = aggregated_status.get('strategies_detail', [])
+
+    state_label = state_consensus.get('state', 'UNKNOWN')
+    state_pct = state_consensus.get('consensus_pct', 0.0)
+    risk_level = risk_aggregation.get('risk_level', 'MEDIUM')
+    momentum_label = momentum_consensus.get('momentum', 'NEUTRAL')
+
+    # 尝试从 strategies_detail 或其他字段获取最新收盘价
+    latest_close = None
+    for sd in strategies_detail:
+        signals = sd.get('signals', sd.get('signal', []))
+        if isinstance(signals, list):
+            for sig in signals:
+                if isinstance(sig, dict) and sig.get('close'):
+                    latest_close = float(sig['close'])
+                    break
+        if latest_close:
+            break
+
+    # 尝试从 key_levels 提取价格信息
+    if latest_close is None and key_levels:
+        support = key_levels.get('support_levels', [])
+        if support and isinstance(support, list) and len(support) > 0:
+            if isinstance(support[0], dict) and 'level' in support[0]:
+                latest_close = float(support[0]['level'])
+            else:
+                latest_close = float(support[0])
+        resistance = key_levels.get('resistance_levels', [])
+        if latest_close is None and resistance and isinstance(resistance, list) and len(resistance) > 0:
+            if isinstance(resistance[0], dict) and 'level' in resistance[0]:
+                latest_close = float(resistance[0]['level'])
+            else:
+                latest_close = float(resistance[0])
+
+    # Mock 降级时使用默认的价格假设
+    if latest_close is None:
+        latest_close = 100.0  # 兜底值
+
+    if has_api:
+        # 构建状态描述文本
+        state_desc = (
+            f"股票: {stock_name}({ts_code})\n"
+            f"状态共识: {state_label} (共识度: {state_pct*100:.1f}%)\n"
+            f"风险等级: {risk_level}\n"
+            f"动量共识: {momentum_label}\n"
+        )
+
+        if key_levels:
+            supports = key_levels.get('support_levels', [])
+            resistances = key_levels.get('resistance_levels', [])
+            if supports:
+                state_desc += f"支撑位: {supports}\n"
+            if resistances:
+                state_desc += f"压力位: {resistances}\n"
+
+        # 策略详细信息摘要
+        detail_lines = []
+        for sd in strategies_detail[:5]:
+            name = sd.get('strategy_name', sd.get('name', '未知策略'))
+            status = sd.get('status_recognition', {})
+            s = status.get('state', 'N/A') if isinstance(status, dict) else 'N/A'
+            detail_lines.append(f"  - {name}: {s}")
+        if detail_lines:
+            state_desc += "各策略状态:\n" + '\n'.join(detail_lines)
+
+        prompt = (
+            f"以下是股票 {stock_name}({ts_code}) 的多维现状聚合数据。\n"
+            f"请根据这些数据，生成一份通俗易懂的中文操作建议。\n\n"
+            f"{state_desc}\n\n"
+            f"请严格按照以下 JSON 格式返回（不要包含其他内容）：\n"
+            f'{{"operation_plan": "操作计划（一段话描述当前应该做什么）", '
+            f'"entry_zone": "建议入场区间（如 98.50-102.00）", '
+            f'"stop_loss": "建议止损价位", '
+            f'"target": "建议目标价位", '
+            f'"risk_notes": ["风险提示1", "风险提示2"], '
+            f'"status_summary": "一句话总结当前股票状态"}}'
+        )
+        system_prompt = (
+            "你是一名专业的A股投资分析师，擅长将多维量化信号转化为清晰可执行的操作建议。"
+            "请基于提供的现状数据给出客观分析，不夸大风险也不遗漏机会。"
+            "输出严格按要求的 JSON 格式。"
+        )
+        result_text = _call_deepseek(prompt, system_prompt, config)
+        if result_text:
+            try:
+                import re
+                json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+                if json_match:
+                    return json.loads(json_match.group())
+            except (json.JSONDecodeError, Exception) as e:
+                logger.warning(f"状态解读 JSON 解析失败: {e}")
+
+    # Mock 降级响应
+    return {
+        "operation_plan": "建议观望，等待趋势明朗",
+        "entry_zone": f"{latest_close*0.97:.2f}-{latest_close*1.03:.2f}",
+        "stop_loss": f"{latest_close*0.92:.2f}",
+        "target": f"{latest_close*1.12:.2f}",
+        "risk_notes": ["市场存在不确定性"],
+        "status_summary": f"{stock_name}({ts_code})当前{state_label}"
+    }
+
+
 def explain_signal(ts_code: str, stock_name: str, signals: List[Dict]) -> Dict:
     """
     根据信号维度数据生成 AI 解读文本

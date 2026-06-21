@@ -290,6 +290,166 @@ class TushareProvider:
         except Exception as e:
             return False, str(e)
 
+    # ══════════════════════════════════════════════
+    # 以下为 5000积分 级别补齐 API（Provider层）
+    # 前置条件：Tushare Pro Token 具备 5000分 权限（已确认就绪）
+    # ══════════════════════════════════════════════
+
+    def get_fina_indicator(self, ts_code, start_date=None, end_date=None):
+        """获取财务指标数据（需5000积分）"""
+        if not self.pro:
+            return []
+        try:
+            if start_date is None:
+                start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
+            if end_date is None:
+                end_date = datetime.now().strftime('%Y%m%d')
+            data = self.pro.fina_indicator(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取财务指标失败 ({ts_code}): {e}")
+            return []
+
+    def get_income(self, ts_code, start_date=None, end_date=None):
+        """获取利润表数据（需5000积分）"""
+        if not self.pro:
+            return []
+        try:
+            if start_date is None:
+                start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
+            if end_date is None:
+                end_date = datetime.now().strftime('%Y%m%d')
+            data = self.pro.income(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取利润表失败 ({ts_code}): {e}")
+            return []
+
+    def get_balancesheet(self, ts_code, start_date=None, end_date=None):
+        """获取资产负债表数据（需5000积分）"""
+        if not self.pro:
+            return []
+        try:
+            if start_date is None:
+                start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
+            if end_date is None:
+                end_date = datetime.now().strftime('%Y%m%d')
+            data = self.pro.balancesheet(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取资产负债表失败 ({ts_code}): {e}")
+            return []
+
+    def get_cashflow(self, ts_code, start_date=None, end_date=None):
+        """获取现金流量表数据（需5000积分）"""
+        if not self.pro:
+            return []
+        try:
+            if start_date is None:
+                start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
+            if end_date is None:
+                end_date = datetime.now().strftime('%Y%m%d')
+            data = self.pro.cashflow(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取现金流量表失败 ({ts_code}): {e}")
+            return []
+
+    def get_top10_holders(self, ts_code, end_date=None):
+        """获取前十大股东数据（需5000积分）"""
+        if not self.pro:
+            return []
+        try:
+            data = self.pro.top10_holders(ts_code=ts_code)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取前十大股东失败 ({ts_code}): {e}")
+            return []
+
+    def get_stk_holdernumber(self, ts_code, start_date=None, end_date=None):
+        """获取股东人数数据（需5000积分）"""
+        if not self.pro:
+            return []
+        try:
+            if start_date is None:
+                start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
+            if end_date is None:
+                end_date = datetime.now().strftime('%Y%m%d')
+            data = self.pro.stk_holdernumber(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取股东人数失败 ({ts_code}): {e}")
+            return []
+
+    def get_margin(self, ts_code, start_date=None, end_date=None):
+        """获取融资融券数据（需5000积分）"""
+        if not self.pro:
+            return []
+        try:
+            if start_date is None:
+                start_date = (datetime.now() - pd.Timedelta(days=1*365)).strftime('%Y%m%d')
+            if end_date is None:
+                end_date = datetime.now().strftime('%Y%m%d')
+            data = self.pro.margin(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取融资融券失败 ({ts_code}): {e}")
+            return []
+
+    def get_forecast(self, ts_code, start_date=None, end_date=None):
+        """获取业绩预告数据（需5000积分）"""
+        if not self.pro:
+            return []
+        try:
+            if start_date is None:
+                start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
+            if end_date is None:
+                end_date = datetime.now().strftime('%Y%m%d')
+            data = self.pro.forecast(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取业绩预告失败 ({ts_code}): {e}")
+            return []
+
+    def get_industry(self, ts_code=None):
+        """获取行业分类数据（需5000积分）"""
+        if not self.pro:
+            return []
+        try:
+            if ts_code:
+                data = self.pro.industry(ts_code=ts_code)
+            else:
+                data = self.pro.industry()
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取行业分类失败: {e}")
+            return []
+
+    def get_concept(self, ts_code=None):
+        """获取概念分类数据（需5000积分）"""
+        if not self.pro:
+            return []
+        try:
+            if ts_code:
+                data = self.pro.concept(ts_code=ts_code)
+            else:
+                data = self.pro.concept()
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取概念分类失败: {e}")
+            return []
+
+    def get_index_member(self, index_code):
+        """获取指数成分股（需5000积分）"""
+        if not self.pro:
+            return []
+        try:
+            data = self.pro.index_member(index_code=index_code)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取指数成分股失败 ({index_code}): {e}")
+            return []
+
 if __name__ == '__main__':
     provider = TushareProvider()
     success, msg = provider.test_connection()

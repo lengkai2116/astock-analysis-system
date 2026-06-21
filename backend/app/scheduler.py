@@ -8,7 +8,9 @@
   2. 应用启动时自动注册（如已配置scheduler）
   3. 外部cron调用: curl /api/v3/backtest/schedule-run
 """
+import json
 import logging
+import os
 import traceback
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
@@ -17,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 # 观潮对标 §5.4: 定时任务健康监控集成
 from app.monitors.task_health_monitor import task_health_monitor, TaskHealthMonitor
+
+# 月度参数平原校验依赖
+from app.engine.framework.optimizer import run_preset_grid_search, list_preset_grids, create_objective_function
 
 
 
@@ -268,6 +273,77 @@ def run_weekly_report():
         logger.error(f"周度报告生成失败: {e}")
 
 
+# ==================== 月度参数平原校验 ====================
+
+def run_monthly_parameter_plateau_check() -> Dict:
+    """
+    月度参数平原校验任务
+
+    遍历所有预设参数网格，对每组配置执行 grid search 评分，
+    识别参数平原（plateau）变化特征，评估参数稳定性。
+    结果保存至 logs/parameter_plateau_check.json。
+    """
+    # 确保 logs 目录存在
+    logs_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), '..', '..', 'logs'
+    )
+    os.makedirs(logs_dir, exist_ok=True)
+
+    logger.info("===== 开始月度参数平原校验 =====")
+
+    summary = {
+        'run_time': datetime.now().isoformat(),
+        'presets': {},
+        'total_presets': 0,
+        'success_count': 0,
+        'fail_count': 0,
+    }
+
+    # dummy objective function — 模拟回测评分
+    dummy_objective = create_objective_function(
+        lambda params, data: {
+            'sharpe_ratio': 0.5 + (0.1 if params.get('lookback_period', 120) > 100 else 0),
+        },
+        None
+    )
+
+    preset_names = list_preset_grids()
+    summary['total_presets'] = len(preset_names)
+
+    for name in preset_names:
+        try:
+            logger.info(f"  校验预设: {name}")
+            result = run_preset_grid_search(name, dummy_objective, optimizer_type='grid')
+            summary['presets'][name] = {
+                'status': 'success',
+                'best_score': result.get('best_score'),
+                'best_params': result.get('best_params'),
+                'all_scores': result.get('all_scores'),
+                'preset_description': result.get('preset_description', ''),
+            }
+            summary['success_count'] += 1
+            logger.info(f"    {name} 完成, 最佳评分: {result.get('best_score')}")
+        except Exception as e:
+            logger.error(f"  预设 {name} 校验失败: {e}")
+            summary['presets'][name] = {
+                'status': 'failed',
+                'error': str(e),
+            }
+            summary['fail_count'] += 1
+
+    # 保存结果到日志文件
+    report_path = os.path.join(logs_dir, 'parameter_plateau_check.json')
+    try:
+        with open(report_path, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
+        logger.info(f"参数平原校验报告已保存: {report_path}")
+    except Exception as e:
+        logger.error(f"保存参数平原校验报告失败: {e}")
+
+    logger.info(f"===== 参数平原校验完成: 成功 {summary['success_count']}/{summary['total_presets']} =====")
+    return summary
+
+
 # ==================== APScheduler 注册（生产环境使用） ====================
 
 def register_scheduler_jobs(scheduler):
@@ -282,6 +358,7 @@ def register_scheduler_jobs(scheduler):
         'weekly_batch_eval': (run_weekly_batch_eval, {'cron': True, 'day_of_week': 'mon', 'hour': 6, 'minute': 0}),
         'strategy_health': (run_strategy_health_check, {'cron': True, 'day_of_week': 'mon', 'hour': 6, 'minute': 30}),
         'weekly_report': (run_weekly_report, {'cron': True, 'day_of_week': 'sun', 'hour': 20, 'minute': 0}),
+        'monthly_param_plateau': (run_monthly_parameter_plateau_check, {'cron': True, 'day': 1, 'hour': 5, 'minute': 0}),
     }
 
     # 每个任务用监控包装器注册

@@ -33,6 +33,7 @@ class StrategyOutput(db.Model):
     risk_notes = db.Column(JSON)
     signal_date = db.Column(db.Date, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.now)
+    status_recognition = db.Column(JSON, nullable=True)
     
     def to_dict(self):
         return {
@@ -55,7 +56,8 @@ class StrategyOutput(db.Model):
             'evidence': self.evidence,
             'risk_notes': self.risk_notes,
             'signal_date': self.signal_date.strftime('%Y-%m-%d') if self.signal_date else None,
-            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S')
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'status_recognition': self.status_recognition if self.status_recognition else None
         }
 
 class StrategyTemplateV2(db.Model):

@@ -17,6 +17,8 @@ from app.models import Signal as SignalModel
 from app.models.strategy import StrategySignal
 from app.services.strategy_output_service import StrategyOutputService
 from app.services.backtest_evidence_service import BacktestEvidenceService
+from app.services.benchmark_service import BenchmarkService, BenchmarkIndex
+from app.factors.calculator import FactorCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,7 @@ class SignalComputationService:
     def __init__(self):
         self._data_manager = None
         self._chip_strategy = None
+        self._benchmark_service = None
 
     @property
     def data_manager(self):
@@ -40,6 +43,22 @@ class SignalComputationService:
             from app.engine.pipeline import ChipDistributionStrategy
             self._chip_strategy = ChipDistributionStrategy(data_manager=self.data_manager)
         return self._chip_strategy
+
+    @property
+    def benchmark_service(self):
+        if self._benchmark_service is None:
+            self._benchmark_service = BenchmarkService()
+        return self._benchmark_service
+
+    # [P1-#27] 各策略独立取数窗口配置
+    STRATEGY_WINDOWS = {
+        'chanlun': 130,      # 缠论需要足量数据构建笔段中枢
+        'volume_price': 130, # 量价策略需要120根完整MA计算
+        'chip': 70,          # 筹码分析70根已足够
+        'factor': 30,        # 因子大多14-20周期
+        'bociasi': 30,       # BOCIASI快线30根
+        'long_term': 260,    # 长线锚点需250日线
+    }
 
     def compute_for_stock(self, ts_code: str, limit: int = 5) -> List[Dict]:
         """
@@ -59,11 +78,100 @@ class SignalComputationService:
         if 'vol' not in df.columns and 'amount' in df.columns:
             df['vol'] = df['amount']
 
+        # ── 加载扩展数据：基本面 + 资金流向 + 大盘环境 ──
+        market_context = {}  # 传递到各策略的通用上下文
+
+        # 1) daily_basic: 换手率、市值、PE/PB
+        try:
+            df_basic = self.data_manager.get_cached_daily_basic(ts_code)
+            if df_basic is not None and not df_basic.empty:
+                latest_basic = df_basic.iloc[-1].to_dict()
+                market_context['turnover_rate'] = latest_basic.get('turnover_rate', None)
+                market_context['turnover_rate_f'] = latest_basic.get('turnover_rate_f', None)
+                market_context['total_mv'] = latest_basic.get('total_mv', None)
+                market_context['circ_mv'] = latest_basic.get('circ_mv', None)
+                market_context['pe'] = latest_basic.get('pe', None)
+                market_context['pe_ttm'] = latest_basic.get('pe_ttm', None)
+                market_context['pb'] = latest_basic.get('pb', None)
+                market_context['volume_ratio'] = latest_basic.get('volume_ratio', None)
+                logger.debug(f"{ts_code} 已加载 daily_basic: 换手率={market_context.get('turnover_rate')}, "
+                             f"市值={market_context.get('circ_mv')}")
+        except Exception as e:
+            logger.debug(f"{ts_code} daily_basic 加载跳过: {e}")
+
+        # 2) 资金流向
+        try:
+            df_mf = self.data_manager.get_cached_moneyflow(ts_code)
+            if df_mf is not None and not df_mf.empty:
+                # 取最近5日汇总
+                recent_mf = df_mf.tail(5)
+                market_context['net_lg_amount'] = float(recent_mf['net_lg_amount'].sum())
+                market_context['net_mf_amount'] = float(recent_mf['net_mf_amount'].sum()) if 'net_mf_amount' in recent_mf.columns else 0
+                market_context['buy_lg_amount'] = float(recent_mf['buy_lg_amount'].sum())
+                market_context['sell_lg_amount'] = float(recent_mf['sell_lg_amount'].sum())
+                logger.debug(f"{ts_code} 已加载资金流向: 近5日大单净额={market_context.get('net_lg_amount')}")
+        except Exception as e:
+            logger.debug(f"{ts_code} 资金流向加载跳过: {e}")
+
+        # 3) 大盘环境: 通过沪深300最近N日收益率判断
+        try:
+            idx_df = self.benchmark_service.get_index_daily(BenchmarkIndex.HS300)
+            if idx_df is not None and not idx_df.empty:
+                idx_close_series = idx_df['close'].astype(float)
+                idx_5d_ret = (idx_close_series.iloc[-1] / idx_close_series.iloc[-5] - 1) if len(idx_close_series) >= 5 else 0
+                idx_20d_ret = (idx_close_series.iloc[-1] / idx_close_series.iloc[-20] - 1) if len(idx_close_series) >= 20 else 0
+                if idx_5d_ret > 0.03 or idx_20d_ret > 0.05:
+                    market_context['index_condition'] = 'GOOD'
+                elif idx_5d_ret < -0.03 or idx_20d_ret < -0.05:
+                    market_context['index_condition'] = 'POOR'
+                else:
+                    market_context['index_condition'] = 'NEUTRAL'
+                market_context['idx_5d_ret'] = round(float(idx_5d_ret * 100), 2)
+                market_context['idx_20d_ret'] = round(float(idx_20d_ret * 100), 2)
+                logger.debug(f"{ts_code} 大盘环境: {market_context.get('index_condition')}, "
+                             f"5日={market_context.get('idx_5d_ret')}%, 20日={market_context.get('idx_20d_ret')}%")
+        except Exception as e:
+            logger.debug(f"{ts_code} 大盘环境加载跳过: {e}")
+
+        # 4) 基础市场状态识别 [P1-#25]
+        try:
+            from app.engine.framework.volume_price_strategy import StageDetector
+            sd = StageDetector()
+            market_state = sd.recognize_market_condition(df)
+            market_context['market_state'] = market_state.get('market_state', 'UNKNOWN')
+            market_context['ma_trend'] = market_state.get('ma_trend', 'neutral')
+            market_context['market_volatility'] = market_state.get('bb_width', 0)
+            logger.debug(f"{ts_code} 市场状态: {market_context.get('market_state')}")
+        except Exception as e:
+            logger.debug(f"{ts_code} 市场状态识别跳过: {e}")
+            market_context['market_state'] = 'UNKNOWN'
+
+        # [P2-#57] 状态依赖动态周期权重
+        _state = market_context.get('market_state', 'UNKNOWN')
+        if _state == 'TRENDING_BULL':
+            cycle_weights = {'primary': 0.8, 'secondary': 0.2, 'execution': 0.0}
+        elif _state == 'TRENDING_BEAR':
+            cycle_weights = {'primary': 0.4, 'secondary': 0.6, 'execution': 0.0}
+        elif _state == 'HIGH_VOL':
+            cycle_weights = {'primary': 0.3, 'secondary': 0.3, 'execution': 0.4}
+        elif _state == 'RANGING':
+            cycle_weights = {'primary': 0.6, 'secondary': 0.4, 'execution': 0.0}
+        else:
+            cycle_weights = {'primary': 0.6, 'secondary': 0.3, 'execution': 0.1}
+        market_context['cycle_weights'] = cycle_weights
+
+        # 构建 market_env 字典（供量价/缠论策略使用）
+        market_env = {}
+        if market_context.get('index_condition'):
+            market_env['condition'] = market_context['index_condition']
+        if market_context.get('idx_5d_ret') is not None:
+            market_env['index_return_5d'] = market_context['idx_5d_ret']
+
         signals = []
 
         # ── L2: 筹码主力分析信号 ──
         try:
-            chip_signal = self._compute_chip_signal(ts_code, df)
+            chip_signal = self._compute_chip_signal(ts_code, df, market_context)
             if chip_signal:
                 signals.append(chip_signal)
         except Exception as e:
@@ -71,7 +179,7 @@ class SignalComputationService:
 
         # ── L3: 缠论信号 ──
         try:
-            chanlun_signal = self._compute_chanlun_signal(ts_code, df)
+            chanlun_signal = self._compute_chanlun_signal(ts_code, df, market_context)
             if chanlun_signal:
                 signals.append(chanlun_signal)
         except Exception as e:
@@ -79,7 +187,7 @@ class SignalComputationService:
 
         # ── L3: 因子评分信号 ──
         try:
-            factor_signal = self._compute_factor_signal(ts_code, df)
+            factor_signal = self._compute_factor_signal(ts_code, df, market_context)
             if factor_signal:
                 signals.append(factor_signal)
         except Exception as e:
@@ -87,12 +195,62 @@ class SignalComputationService:
 
         # ── L3: 量价分析信号 ──
         try:
-            volume_price_signal = self._compute_volume_price_signal(ts_code, df)
+            volume_price_signal = self._compute_volume_price_signal(ts_code, df, market_context, market_env)
             if volume_price_signal:
                 signals.append(volume_price_signal)
         except Exception as e:
             logger.debug(f"{ts_code} 量价信号计算失败: {e}")
 
+        # ── BOCIASI 快线（情绪层）──
+        try:
+            bociasi_signal = self._compute_bociasi_signal(ts_code, df)
+            if bociasi_signal:
+                signals.append(bociasi_signal)
+        except Exception as e:
+            logger.debug(f"{ts_code} BOCIASI 信号计算失败: {e}")
+
+        # ── BOCIASI 慢线（情绪层跨市场）[P1-#22] ──
+        try:
+            from app.engine.framework.bociasi_slowline import BociasiSlowLine
+            bsl = BociasiSlowLine()
+            # 获取指数数据
+            try:
+                index_data = self.benchmark_service.get_index_daily() if self.benchmark_service else None
+            except Exception:
+                index_data = None
+            bociasi_slow = bsl.evaluate(df, index_df=index_data)
+            if bociasi_slow:
+                signals.append({
+                    'strategy_name': 'BOCIASI慢线(情绪-跨市场)',
+                    'signal': bociasi_slow.get('signal', 'NEUTRAL').lower(),
+                    'signal_label': '做多' if bociasi_slow.get('signal') == 'BULLISH' else ('做空' if bociasi_slow.get('signal') == 'BEARISH' else '中性'),
+                    'confidence': bociasi_slow.get('confidence', 0.3),
+                    'evidence': [f"ERP={bociasi_slow['details'].get('erp','N/A')}", f"相对强度={bociasi_slow['details'].get('sb_details',{}).get('relative_strength','N/A')}%"],
+                    'risk_notes': ['模型依赖PE数据和国债收益率近似值'],
+                    'status_recognition': {
+                        'state': 'ACCUMULATING' if bociasi_slow.get('signal') == 'BULLISH' else ('DISTRIBUTING' if bociasi_slow.get('signal') == 'BEARISH' else 'RANGING'),
+                        'state_label': bociasi_slow.get('signal', 'NEUTRAL'),
+                        'trend': {'direction': bociasi_slow.get('signal', ''), 'strength': '', 'stage': ''},
+                        'momentum': {'level': bociasi_slow.get('signal', ''), 'score': bociasi_slow.get('confidence', 0.0)},
+                        'volume': {'state': '', 'structure': ''},
+                        'support_resistance': {'support': 0.0, 'resistance': 0.0},
+                        'risk_level': 'MEDIUM',
+                    },
+                })
+        except Exception as e:
+            logger.debug(f"{ts_code} BOCIASI慢线跳过: {e}")
+
+        # [P1-#26] 主决策周期方向约束: 周线(120日)看空时日线买入信号降权
+        if market_context.get('market_state') == 'TRENDING_BEAR' or market_context.get('ma_trend') == 'bearish':
+            for sig in signals:
+                if sig.get('signal') == 'bullish':
+                    sig['signal'] = 'watch'
+                    sig['signal_label'] = '暂缓买入(周线偏空)'
+                    sig['confidence'] = sig.get('confidence', 0.5) * 0.7
+                    if 'evidence' in sig:
+                        sig['evidence'].append('⚠️ 周线偏空，买入信号降权')
+                elif sig.get('signal') == 'neutral':
+                    sig['signal'] = 'watch'
 
         # 持久化到数据库
         self._persist_signals(ts_code, signals)
@@ -100,7 +258,7 @@ class SignalComputationService:
         return signals[:limit]
 
 
-    def _compute_chip_signal(self, ts_code: str, df: pd.DataFrame) -> Optional[Dict]:
+    def _compute_chip_signal(self, ts_code: str, df: pd.DataFrame, market_context: Optional[Dict] = None) -> Optional[Dict]:
         """计算筹码主力分析信号 (L2) — 使用完整 ChipDistributionStrategy"""
         # 确保 K 线数据包含 ts_code
         if 'ts_code' not in df.columns:
@@ -192,6 +350,21 @@ class SignalComputationService:
         env = market_env.get('environment', {})
         if env.get('condition'):
             evidence.append(f"大盘: {env['condition']}({env.get('reason', '')[:30]})")
+
+        # 市场扩展数据（换手率/资金流向）
+        if market_context:
+            tr = market_context.get('turnover_rate')
+            if tr is not None:
+                evidence.append(f"换手率: {tr:.2f}%")
+            net_lg = market_context.get('net_lg_amount')
+            if net_lg is not None and abs(net_lg) > 0:
+                evidence.append(f"近5日大单净额: {net_lg:+.0f}")
+            idx_cond = market_context.get('index_condition')
+            if idx_cond:
+                evidence.append(f"大盘环境: {idx_cond}")
+            mv = market_context.get('circ_mv')
+            if mv is not None:
+                evidence.append(f"流通市值: {mv/1e8:.1f}亿")
         
         # 市值适配
         cap = stock_filter.get('cap_level', '')
@@ -209,7 +382,18 @@ class SignalComputationService:
         confidence = recommendation.get('confidence', 0.5)
         if confidence is None:
             confidence = 0.5
-        
+
+        # 筹码策略现状识别
+        chip_status = {
+            'state': 'ACCUMULATING' if action == 'BUY' else ('DISTRIBUTING' if action == 'SELL' else 'RANGING'),
+            'state_label': signal_label,
+            'trend': {'direction': '', 'strength': '', 'stage': phase},
+            'momentum': {'level': action, 'score': round(float(confidence), 2)},
+            'volume': {'state': '', 'structure': ''},
+            'support_resistance': {'support': 0.0, 'resistance': 0.0},
+            'risk_level': 'HIGH' if cap else 'MEDIUM',
+        }
+
         return {
             'strategy_name': '筹码主力分析',
             'signal': signal,
@@ -237,9 +421,10 @@ class SignalComputationService:
                 'cap_level': cap,
                 'pre_filter_pass': True,
             },
+            'status_recognition': chip_status,
         }
 
-    def _compute_chanlun_signal(self, ts_code: str, df: pd.DataFrame) -> Optional[Dict]:
+    def _compute_chanlun_signal(self, ts_code: str, df: pd.DataFrame, market_context: Optional[Dict] = None) -> Optional[Dict]:
         """计算缠论策略建议 — 基于缠论决策树的全中文分析报告"""
         from app.engine.framework.chanlun_strategy import ChanlunAnalyzer, ChanlunScorer, BuySellPoint
 
@@ -271,7 +456,7 @@ class SignalComputationService:
 
         # L3 评分：缠论评分系统量化置信度
         try:
-            score_result = ChanlunScorer.score(result, latest_close=latest_close)
+            score_result = ChanlunScorer.score(result, latest_close=latest_close, market_context=market_context)
             chanlun_score = score_result.get("score", 50)
             score_details = score_result.get("details", [])
             score_recommendation = score_result.get("recommendation", "HOLD")
@@ -833,9 +1018,30 @@ class SignalComputationService:
             
             # 全中文分析报告（主要用户输出）
             '分析报告': analysis_report,
+
+            # 缠论现状识别
+            'status_recognition': {
+                'state': 'ACCUMULATING' if trend_str == '上升' else ('BEARISH' if trend_str == '下降' else 'RANGING'),
+                'state_label': trend_str or '方向待定',
+                'trend': {
+                    'direction': 'up' if trend_str == '上升' else ('down' if trend_str == '下降' else ''),
+                    'strength': 'strong' if '延续' in (last_bi_status or '') else 'weakening',
+                    'stage': last_bi_status or '',
+                },
+                'momentum': {
+                    'level': str(divergence.direction) if divergence else '',
+                    'score': round(divergence.confidence, 4) if divergence else 0.0,
+                },
+                'volume': {'state': '', 'structure': ''},
+                'support_resistance': {
+                    'support': round(float(zs_low), 2) if zs_low else 0.0,
+                    'resistance': round(float(zs_high), 2) if zs_high else 0.0,
+                },
+                'risk_level': 'HIGH' if trend_str == '下降' and confidence < 0.5 else 'MEDIUM',
+            },
         }
-    def _compute_factor_signal(self, ts_code: str, df: pd.DataFrame) -> Optional[Dict]:
-        """计算因子评分信号 (L3)"""
+    def _compute_factor_signal(self, ts_code: str, df: pd.DataFrame, market_context: Optional[Dict] = None) -> Optional[Dict]:
+        """计算因子评分信号 (L3) — 优先使用 FactorRegistry"""
         closes = df['close'].values
         volumes = df['vol'].values if 'vol' in df.columns else df['amount'].values
         latest_close = float(closes[-1])
@@ -844,7 +1050,116 @@ class SignalComputationService:
         if len(closes) < 20:
             return None
 
-        # 多因子评分
+        # 尝试 FactorRegistry 计算
+        registry_scores, registry_ok = self._compute_via_registry(df)
+        if registry_ok:
+            scores = registry_scores
+            weights = {'ROC': 0.25, 'VOL_RATIO': 0.20, 'ATR': 0.15, 'RSI': 0.25, 'LINEARREG_SLOPE': 0.15}
+            composite = sum(scores.get(k, 0.5) * weights[k] for k in weights)
+            evidence_keys = list(scores.keys())
+
+            # [P2-#55] 状态依赖动态权重矩阵
+            try:
+                from app.engine.framework.state_dependent_factor_weight import StateDependentFactorWeight
+                market_state = (market_context or {}).get('market_state', 'UNKNOWN') if market_context else 'UNKNOWN'
+                # 映射因子分数到4个语义类别
+                mapped_scores = {
+                    'momentum': (scores.get('ROC', 0.5) + scores.get('LINEARREG_SLOPE', 0.5)) / 2,
+                    'reversal': 1 - abs(scores.get('RSI', 0.5) - 0.5) * 2,  # RSI偏离0.5越远=反转信号越强
+                    'sentiment': scores.get('VOL_RATIO', 0.5),
+                    'chip': scores.get('ATR', 0.5),
+                }
+                dyn = StateDependentFactorWeight().compute_weighted_score(mapped_scores, market_state)
+                if abs(dyn['score'] - composite) > 0.2:
+                    scores['dynamic_weight_adjusted'] = True
+                scores['dynamic_weight_detail'] = dyn['weight_detail']
+                scores['dynamic_weighted_score'] = dyn['score']
+                scores['dynamic_market_state'] = market_state
+            except Exception:
+                pass
+        else:
+            # 降级到内联计算
+            scores, composite = self._compute_factor_signal_inline(closes, volumes)
+            evidence_keys = list(scores.keys())
+
+        # 信号判定
+        if composite >= 0.6:
+            signal = StrategySignal.BULLISH.value
+            signal_label = '买入'
+        elif composite >= 0.4:
+            signal = StrategySignal.WATCH.value
+            signal_label = '关注'
+        else:
+            signal = StrategySignal.NEUTRAL.value
+            signal_label = '观望'
+
+        return {
+            'strategy_name': '因子评分系统',
+            'signal': signal,
+            'signal_label': signal_label,
+            'confidence': round(composite, 2),
+            'entry_zone': [round(latest_close * 0.97, 2), round(latest_close * 1.02, 2)],
+            'risk_line': round(latest_close * 0.90, 2),
+            'target_zone': [round(latest_close * 1.05, 2), round(latest_close * 1.18, 2)],
+            'position_suggestion': '10%',
+            'holding_period': '2-4周',
+            'evidence': [f"{k}: {scores[k]:.2f}" for k in evidence_keys],
+            'risk_notes': ['因子模型假设偏差', '市场风格切换风险'],
+            'signal_date': latest_date if isinstance(latest_date, str) else latest_date.strftime('%Y-%m-%d'),
+            'backtest_win_rates': self._get_signal_win_rates(signal),
+
+            # 因子现状识别
+            'status_recognition': {
+                'state': 'ACCUMULATING' if composite >= 0.6 else ('BEARISH' if composite < 0.4 else 'RANGING'),
+                'state_label': signal_label,
+                'trend': {'direction': '', 'strength': '', 'stage': ''},
+                'momentum': {
+                    'level': signal,
+                    'score': round(max(scores.values()), 4) if scores else round(composite, 4),
+                },
+                'volume': {'state': '', 'structure': ''},
+                'support_resistance': {'support': 0.0, 'resistance': 0.0},
+                'risk_level': 'HIGH' if composite < 0.4 else 'LOW',
+            },
+        }
+
+    def _compute_via_registry(self, df: pd.DataFrame) -> tuple:
+        """通过 FactorRegistry 计算因子评分"""
+        try:
+            calculator = FactorCalculator()
+            factor_configs = [
+                {'name': 'ROC', 'params': {'period': 20}},
+                {'name': 'VOL_RATIO', 'params': {'period': 5}},
+                {'name': 'ATR', 'params': {'period': 14}},
+                {'name': 'RSI', 'params': {'period': 14}},
+                {'name': 'LINEARREG_SLOPE', 'params': {'period': 20}},
+            ]
+            scores = {}
+            for cfg in factor_configs:
+                series = calculator.calculate_single_factor(df, cfg['name'], **cfg['params'])
+                if series is not None and not series.empty:
+                    val = float(series.iloc[-1])
+                    # 归一化到 [0,1]
+                    name = cfg['name']
+                    if name == 'ROC':
+                        scores[name] = min(max(val * 5 + 0.5, 0), 1)
+                    elif name == 'VOL_RATIO':
+                        scores[name] = min(val * 0.4, 1)
+                    elif name == 'ATR':
+                        # ATR 归一化：相对价格位置
+                        scores[name] = min(val / (float(df['close'].iloc[-1]) * 0.1 + 1e-9), 1)
+                    elif name == 'RSI':
+                        scores[name] = 1 - abs(val - 50) / 50
+                    elif name == 'LINEARREG_SLOPE':
+                        scores[name] = min(max(val * 10 + 0.5, 0), 1)
+            if len(scores) >= 3:
+                return scores, True
+        except Exception as e:
+            logger.debug(f"FactorRegistry 计算降级: {e}")
+        return {}, False
+
+    def _compute_factor_signal_inline(self, closes: np.ndarray, volumes: np.ndarray) -> tuple:
+        """内联因子计算（降级后备）"""
         scores = {}
 
         # 动量因子
@@ -872,47 +1187,9 @@ class SignalComputationService:
         else:
             scores['rsi'] = 0.5
 
-        # 加权综合
         weights = {'momentum': 0.3, 'volume': 0.25, 'volatility': 0.2, 'rsi': 0.25}
         composite = sum(scores[k] * weights[k] for k in weights)
-
-        # 信号判定
-        if composite >= 0.6:
-            signal = StrategySignal.BULLISH.value
-            signal_label = '买入'
-        elif composite >= 0.4:
-            signal = StrategySignal.WATCH.value
-            signal_label = '关注'
-        else:
-            signal = StrategySignal.NEUTRAL.value
-            signal_label = '观望'
-
-        return {
-            'strategy_name': '因子评分系统',
-            'signal': signal,
-            'signal_label': signal_label,
-            'confidence': round(composite, 2),
-            'entry_zone': [round(latest_close * 0.97, 2), round(latest_close * 1.02, 2)],
-            'risk_line': round(latest_close * 0.90, 2),
-            'target_zone': [round(latest_close * 1.05, 2), round(latest_close * 1.18, 2)],
-            'position_suggestion': '10%',
-            'holding_period': '2-4周',
-            'evidence': [
-                f"动量因子: {scores['momentum']:.2f}",
-                f"量价因子: {scores['volume']:.2f}",
-                f"波动因子: {scores['volatility']:.2f}",
-                f"RSI因子: {scores['rsi']:.2f}",
-            ],
-            'risk_notes': ['因子模型假设偏差', '市场风格切换风险'],
-            'signal_date': latest_date if isinstance(latest_date, str) else latest_date.strftime('%Y-%m-%d'),
-            'backtest_win_rates': self._get_signal_win_rates(signal),
-            # L3 缠论评分
-            'chanlun_score': chanlun_score,
-            'chanlun_recommendation': score_recommendation,
-            'score_details': score_details,
-
-
-        }
+        return scores, composite
 
     def _build_chip_evidence(self, df: pd.DataFrame, score: float,
                               turnover_rate: Optional[float] = None,
@@ -957,11 +1234,193 @@ class SignalComputationService:
 
         return evidence
 
-    def _compute_volume_price_signal(self, ts_code: str, df: pd.DataFrame) -> Optional[Dict]:
+    def _build_chip_status(self, chip_signal: Dict) -> Dict:
+        """构建筹码策略的现状识别"""
+        phase = chip_signal.get('signal_source_detail', {}).get('phase', '')
+        signal = chip_signal.get('signal', 'NEUTRAL')
+
+        # 状态判定
+        if '吸筹' in phase or '吸筹' in str(chip_signal.get('evidence', [])):
+            state, label = 'ACCUMULATING', '主力吸筹'
+        elif '出货' in phase or '派发' in phase:
+            state, label = 'DISTRIBUTING', '主力出货'
+        elif signal in ('BULLISH',):
+            state, label = 'ACCUMULATING', '偏向看多'
+        elif signal in ('BEARISH',):
+            state, label = 'DISTRIBUTING', '偏向看空'
+        else:
+            state, label = 'RANGING', '方向不明'
+
+        cap_level = chip_signal.get('signal_source_detail', {}).get('cap_level', '')
+        risk_level = 'HIGH' if cap_level in ('MEGA',) else 'MEDIUM'
+
+        return {
+            'state': state,
+            'state_label': label,
+            'trend': {'direction': '', 'strength': '', 'stage': phase},
+            'momentum': {'level': signal, 'score': chip_signal.get('confidence', 0.5)},
+            'volume': {'state': '', 'structure': ''},
+            'support_resistance': {'support': 0.0, 'resistance': 0.0},
+            'risk_level': risk_level,
+        }
+
+    def _build_chanlun_status(self, chanlun_signal: Dict) -> Dict:
+        """构建缠论策略的现状识别"""
+        detail = chanlun_signal.get('chanlun_analysis_detail', {})
+        structure = detail.get('走势结构', {})
+        zhongshu = detail.get('中枢分析', {})
+        ops = detail.get('操作建议', {})
+
+        trend_str = structure.get('趋势方向', '')
+        if trend_str == '上升':
+            state, label = 'ACCUMULATING', '上升趋势'
+        elif trend_str == '下降':
+            state, label = 'BEARISH', '下降趋势'
+        else:
+            state, label = 'RANGING', '方向待定'
+
+        bi_status = structure.get('当前笔阶段', '')
+        trend = {
+            'direction': 'up' if trend_str == '上升' else ('down' if trend_str == '下降' else ''),
+            'strength': 'strong' if '延续' in bi_status else 'weakening',
+            'stage': bi_status,
+        }
+
+        zs_interval = zhongshu.get('最新中枢区间', [])
+        support_resistance = {
+            'support': round(float(zs_interval[0]), 2) if len(zs_interval) > 0 else 0.0,
+            'resistance': round(float(zs_interval[1]), 2) if len(zs_interval) > 1 else 0.0,
+        }
+
+        div = detail.get('买卖点信号', {}).get('背驰信号')
+        momentum = {
+            'level': str(div.get('方向', '')) if div else '',
+            'score': float(div.get('置信度', 0)) if div else 0.0,
+        }
+
+        score = chanlun_signal.get('chanlun_score', 50)
+        risk_level = 'HIGH' if (score < 30 or state == 'BEARISH') else 'MEDIUM'
+
+        return {
+            'state': state,
+            'state_label': label,
+            'trend': trend,
+            'momentum': momentum,
+            'volume': {'state': '', 'structure': ''},
+            'support_resistance': support_resistance,
+            'risk_level': risk_level,
+        }
+
+    def _build_factor_status(self, factor_signal: Dict) -> Dict:
+        """构建因子策略的现状识别"""
+        signal = factor_signal.get('signal', 'NEUTRAL')
+        confidence = factor_signal.get('confidence', 0.5)
+
+        if confidence >= 0.6 and signal in ('BULLISH',):
+            state, label = 'ACCUMULATING', '因子看多'
+        elif confidence < 0.4 or signal in ('BEARISH',):
+            state, label = 'BEARISH', '因子看空'
+        else:
+            state, label = 'RANGING', '因子中性'
+
+        # 从 evidence 提取因子得分
+        ev = factor_signal.get('evidence', [])
+        scores = {}
+        for e in ev:
+            parts = e.split(':')
+            if len(parts) == 2:
+                try:
+                    scores[parts[0].strip()] = float(parts[1].strip())
+                except ValueError:
+                    pass
+
+        max_score = max(scores.values()) if scores else 0.0
+        momentum = {'level': signal, 'score': round(max_score, 4)}
+
+        risk_level = 'HIGH' if state == 'BEARISH' else 'LOW'
+
+        return {
+            'state': state,
+            'state_label': label,
+            'trend': {'direction': '', 'strength': '', 'stage': ''},
+            'momentum': momentum,
+            'volume': {'state': '', 'structure': ''},
+            'support_resistance': {'support': 0.0, 'resistance': 0.0},
+            'risk_level': risk_level,
+        }
+
+    def _compute_bociasi_signal(self, ts_code: str, df: pd.DataFrame) -> Optional[Dict]:
+        """计算 BOCIASI 快线情绪信号"""
+        from app.engine.framework.bociasi_quickline import BociasiQuickLine
+        try:
+            bql = BociasiQuickLine()
+            result = bql.evaluate(df)
+            if result['pass_count'] == 0:
+                return None
+
+            signal_map = {'BUY': 'BULLISH', 'WATCH': 'WATCH', 'NEUTRAL': 'NEUTRAL'}
+            label_map = {'BUY': '情绪积极', 'WATCH': '情绪中性', 'NEUTRAL': '情绪低迷'}
+            ind = result['indicators']
+
+            evidence = []
+            if ind.get('fast_vol'):
+                evidence.append(f"放量确认: 量比{result['details']['vol_ratio']:.1f}x")
+            if ind.get('fast_price'):
+                evidence.append(f"价格强势: 收于5日均价之上(+{result['details']['price_offset_pct']:.1f}%)")
+            if ind.get('fast_mom'):
+                evidence.append(f"短期动量: 5日涨幅{result['details']['mom_5d_pct']:.1f}%")
+            if ind.get('fast_breadth'):
+                evidence.append(f"波动活跃: 日内振幅{result['details']['amplitude_pct']:.1f}%")
+
+            return {
+                'strategy_name': 'BOCIASI快线',
+                'signal': signal_map.get(result['signal'], 'NEUTRAL'),
+                'signal_label': label_map.get(result['signal'], '情绪中性'),
+                'confidence': result['confidence'],
+                'entry_zone': [0, 0],
+                'risk_line': 0,
+                'target_zone': [0, 0],
+                'position_suggestion': '0%',
+                'holding_period': '短期（3-5日）',
+                'evidence': evidence,
+                'risk_notes': ['情绪指标偏短期，需结合其他策略使用'],
+                'signal_date': '',
+                'status_recognition': {
+                    'state': 'ACCUMULATING' if result['signal'] == 'BUY' else ('DISTRIBUTING' if result['signal'] == 'NEUTRAL' else 'RANGING'),
+                    'state_label': label_map.get(result['signal'], ''),
+                    'trend': {'direction': '', 'strength': '', 'stage': ''},
+                    'momentum': {'level': result['signal'], 'score': result['confidence']},
+                    'volume': {'state': '放量' if ind.get('fast_vol') else '平量', 'structure': ''},
+                    'support_resistance': {'support': 0.0, 'resistance': 0.0},
+                    'risk_level': 'LOW' if result['signal'] == 'BUY' else 'MEDIUM',
+                },
+            }
+        except Exception as e:
+            logger.debug(f"{ts_code} BOCIASI 信号异常: {e}")
+            return None
+
+    def _compute_volume_price_signal(self, ts_code: str, df: pd.DataFrame,
+                                      market_context: Optional[Dict] = None,
+                                      market_env: Optional[Dict] = None) -> Optional[Dict]:
         """计算量价分析信号 (L3) — 完整四阶段分析链"""
         from app.engine.framework.volume_price_strategy import compute_volume_price_signal
         try:
-            return compute_volume_price_signal(ts_code, df)
+            # [P2-#57] 注入动态周期权重
+            env = dict(market_env or {})
+            if market_context and 'cycle_weights' in market_context:
+                env['cycle_weights'] = market_context['cycle_weights']
+
+            result = compute_volume_price_signal(ts_code, df, market_env=env)
+            if result and market_context and 'cycle_weights' in market_context:
+                cw = market_context['cycle_weights']
+                result['cycle_weights'] = cw
+                # 根据周期权重微调信号置信度
+                if cw.get('execution', 0) >= 0.3:
+                    result['confidence'] = round(result.get('confidence', 0.5) * 0.85, 2)
+                    result.setdefault('evidence', []).append(
+                        f"[周期权重] 执行层{cw['execution']:.0%}，保守处理"
+                    )
+            return result
         except Exception as e:
             logger.debug(f"{ts_code} 量价信号异常: {e}")
             return None
@@ -1069,6 +1528,7 @@ class SignalComputationService:
                     holding_period=sig.get('holding_period'),
                     evidence=full_evidence,
                     risk_notes=sig.get('risk_notes', []),
+                    status_recognition=sig.get('status_recognition'),
                 )
 
                 # 同步记录到 SignalRecord（轨A·后台自动）
