@@ -178,6 +178,199 @@
 .chip-data .row { display:flex; justify-content:space-between; padding:var(--space-2) 0; font-size:10px; border-bottom:1px solid var(--border-default); }
 .chip-data .label { color:var(--text-muted); }
 .chip-data .val { color:var(--text-primary); font-weight:500; }
+
+/* ── 方案B：策略板块精细化设计 ── */
+
+/* — 策略组合栏 — */
+.strategy-bar {
+  display:flex; align-items:center; gap:var(--space-8);
+  padding:var(--space-8) var(--space-12);
+  background:var(--bg-subtle); border:1px solid var(--border-default); border-radius:var(--radius-md);
+  cursor:pointer; transition:border-color .15s;
+  flex-wrap:wrap;
+}
+.strategy-bar:hover { border-color:var(--border-strong); }
+.strategy-bar-label { font-size:11px; font-weight:600; color:var(--text-muted); white-space:nowrap; }
+.strategy-bar-tags { display:flex; gap:var(--space-4); flex:1; flex-wrap:wrap; }
+.strategy-bar .tag { font-size:10px; }
+.strategy-bar-cta { font-size:11px; color:var(--color-brand-500); font-weight:500; white-space:nowrap; }
+
+/* — 策略配置面板 — */
+.strategy-config {
+  display:none;
+  padding:var(--space-12);
+  background:var(--bg-subtle); border:1px solid var(--border-default); border-radius:var(--radius-md);
+  flex-direction:column; gap:var(--space-8);
+}
+.strategy-config.open { display:flex; }
+.strategy-options { display:flex; flex-wrap:wrap; gap:var(--space-6); }
+.strategy-opt {
+  display:flex; align-items:center; gap:var(--space-4);
+  font-size:12px; color:var(--text-primary); cursor:pointer;
+}
+.strategy-opt input[type=checkbox] {
+  appearance:none; width:14px; height:14px; border:1px solid var(--border-strong); border-radius:3px;
+  background:transparent; cursor:pointer; flex-shrink:0;
+  position:relative; transition:all .15s;
+}
+.strategy-opt input[type=checkbox]:checked {
+  background:var(--color-brand-500); border-color:var(--color-brand-500);
+}
+.strategy-opt input[type=checkbox]:checked::after {
+  content:'✓'; position:absolute; top:-1px; left:2px;
+  font-size:11px; color:white; font-weight:bold;
+}
+.strategy-opt.disabled { color:var(--text-disabled); cursor:not-allowed; }
+.strategy-opt.disabled input[type=checkbox]:checked { background:var(--text-disabled); border-color:var(--text-disabled); }
+.strategy-actions { display:flex; gap:var(--space-6); align-items:center; flex-wrap:wrap; }
+.strategy-actions .btn-sm { font-size:11px; }
+
+/* — 未配置引导 — */
+.strategy-empty {
+  display:none;
+  padding:var(--space-20); text-align:center;
+  background:var(--bg-subtle); border:2px dashed var(--border-default); border-radius:var(--radius-lg);
+  flex-direction:column; align-items:center; gap:var(--space-8);
+}
+.strategy-empty.show { display:flex; }
+.strategy-empty .icon { font-size:32px; }
+.strategy-empty .title { font-size:14px; font-weight:500; color:var(--text-secondary); }
+.strategy-empty .desc { font-size:12px; color:var(--text-muted); max-width:400px; line-height:1.6; }
+
+/* — 分析中状态 — */
+.strategy-loading { display:none; }
+.strategy-loading.show { display:block; }
+.loading-header { display:flex; align-items:center; gap:var(--space-8); margin-bottom:var(--space-8); }
+.loading-header .icon { animation:spin 1.2s linear infinite; font-size:18px; }
+@keyframes spin { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
+.loading-header .text { font-size:13px; color:var(--text-primary); font-weight:500; }
+.loading-progress { height:3px; background:var(--bg-muted); border-radius:2px; margin-bottom:var(--space-8); overflow:hidden; }
+.loading-progress-bar { height:100%; background:var(--color-brand-500); border-radius:2px; transition:width .4s ease; width:0%; }
+.loading-steps { display:flex; flex-direction:column; gap:var(--space-4); }
+.loading-step {
+  display:flex; align-items:center; gap:var(--space-6);
+  font-size:12px; color:var(--text-secondary); padding:var(--space-4) var(--space-8);
+  background:var(--bg-subtle); border-radius:var(--radius-sm);
+}
+.loading-step .status-icon { font-size:14px; width:18px; text-align:center; }
+.loading-step .status-icon.pulse { animation:pulse 1s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.loading-step .step-name { font-weight:500; color:var(--text-primary); }
+.loading-step .step-detail { font-size:11px; color:var(--text-muted); }
+.loading-step.done { background:rgba(34,197,94,0.06); border-left:2px solid var(--color-down); }
+.loading-step.active { background:rgba(59,130,246,0.08); border-left:2px solid var(--color-brand-500); }
+.loading-step.pending { opacity:0.5; }
+.loading-cancel { margin-top:var(--space-4); font-size:11px; }
+
+/* — 现状叙述区 — */
+.strategy-results { display:none; flex-direction:column; gap:var(--space-6); }
+.strategy-results.show { display:flex; }
+.dim-card { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); overflow:hidden; }
+.dim-card-header {
+  display:flex; align-items:center; gap:var(--space-6);
+  padding:var(--space-8) var(--space-12);
+  background:var(--bg-subtle); border-bottom:1px solid var(--border-default);
+  font-size:12px; font-weight:600; color:var(--text-primary);
+}
+.dim-card-body { display:grid; grid-template-columns:1fr 1.5fr; gap:0; }
+@media (max-width:1100px){
+  .dim-card-body { grid-template-columns:1fr; }
+}
+.dim-metrics { padding:var(--space-8) var(--space-12); border-right:1px solid var(--border-default); }
+.dim-metric {
+  display:flex; align-items:center; gap:var(--space-4);
+  padding:var(--space-3) 0; font-size:11px;
+  border-bottom:1px solid var(--border-default); line-height:1.5;
+}
+.dim-metric:last-child { border-bottom:none; }
+.dim-metric .icon { font-size:12px; flex-shrink:0; }
+.dim-metric .label { color:var(--text-muted); flex-shrink:0; }
+.dim-metric .val { color:var(--text-primary); font-weight:500; margin-left:auto; text-align:right; }
+.dim-metric .val.up { color:var(--color-up); }
+.dim-metric .val.dn { color:var(--color-down); }
+.dim-narrative { padding:var(--space-8) var(--space-12); font-size:12px; color:var(--text-secondary); line-height:1.8; }
+.dim-footer {
+  display:flex; align-items:center; gap:var(--space-4);
+  padding:var(--space-6) var(--space-12);
+  background:var(--bg-subtle); border-top:1px solid var(--border-default);
+  font-size:11px; color:var(--text-secondary);
+}
+.dim-footer .tag { font-size:10px; }
+
+/* — 交叉验证条 — */
+.cross-verify { display:none; }
+.cross-verify.show { display:block; }
+.cross-verify-bar {
+  display:grid; grid-template-columns:repeat(4,1fr); gap:var(--space-4);
+  padding:var(--space-8);
+  background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md);
+}
+@media (max-width:900px){ .cross-verify-bar { grid-template-columns:repeat(2,1fr); } }
+.verify-item {
+  padding:var(--space-4) var(--space-6);
+  border-radius:var(--radius-sm); font-size:11px;
+  background:var(--bg-subtle); cursor:pointer;
+  transition:background .15s;
+  position:relative;
+}
+.verify-item:hover { background:var(--bg-muted); }
+.verify-item .head { display:flex; align-items:center; gap:var(--space-4); margin-bottom:var(--space-2); }
+.verify-item .status-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.verify-item .status-dot.pass { background:var(--color-down); }
+.verify-item .status-dot.warn { background:var(--signal-watch); }
+.verify-item .status-dot.fail { background:var(--color-up); }
+.verify-item .name { font-weight:500; color:var(--text-primary); }
+.verify-item .brief { font-size:10px; color:var(--text-muted); line-height:1.4; }
+.verify-item .verdict { font-size:10px; font-weight:500; margin-top:var(--space-1); }
+.verify-item .verdict.pass { color:var(--color-down); }
+.verify-item .verdict.warn { color:var(--signal-watch); }
+.verify-item .verdict.fail { color:var(--color-up); }
+.verify-evidence {
+  display:none; margin-top:var(--space-4); padding-top:var(--space-4);
+  border-top:1px solid var(--border-default);
+  font-size:10px; color:var(--text-muted); line-height:1.6;
+}
+.verify-evidence.open { display:block; }
+.cross-verify-summary {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:var(--space-6) var(--space-8);
+  background:var(--bg-subtle); border:1px solid var(--border-default); border-radius:var(--radius-md);
+  margin-top:var(--space-4); font-size:12px;
+}
+.verify-rate { display:flex; align-items:center; gap:var(--space-4); }
+.verify-rate-bar { width:60px; height:4px; background:var(--bg-muted); border-radius:2px; overflow:hidden; }
+.verify-rate-fill { height:100%; border-radius:2px; }
+.verify-ai-btn { display:none; }
+
+/* — 综合决策卡 — */
+.decision-card { display:none; }
+.decision-card.show { display:block; }
+.decision-card { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); overflow:hidden; }
+.decision-header {
+  display:flex; align-items:center; gap:var(--space-4);
+  padding:var(--space-8) var(--space-12);
+  cursor:pointer; user-select:none;
+  transition:background .15s;
+}
+.decision-header:hover { background:var(--bg-subtle); }
+.decision-header .toggle-icon { font-size:10px; color:var(--text-muted); transition:transform .2s; }
+.decision-header .toggle-icon.open { transform:rotate(90deg); }
+.decision-header .title { font-size:12px; font-weight:600; color:var(--text-primary); flex:1; }
+.decision-header .summary { font-size:11px; color:var(--text-secondary); flex:2; }
+.decision-header .badge { font-size:10px; padding:2px 8px; border-radius:var(--radius-full); background:var(--bg-muted); color:var(--text-muted); }
+.decision-body { display:none; padding:var(--space-12); border-top:1px solid var(--border-default); flex-direction:column; gap:var(--space-8); }
+.decision-body.open { display:flex; }
+.decision-opinion { font-size:12px; color:var(--text-secondary); line-height:1.7; margin-bottom:var(--space-4); }
+.decision-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--space-6); }
+@media (max-width:900px){ .decision-grid { grid-template-columns:1fr; } }
+.decision-cell { background:var(--bg-subtle); border-radius:var(--radius-sm); padding:var(--space-6) var(--space-8); }
+.decision-cell .cell-label { font-size:10px; color:var(--text-muted); margin-bottom:var(--space-2); }
+.decision-cell .cell-val { font-size:14px; font-weight:600; color:var(--text-primary); }
+.decision-cell .cell-note { font-size:10px; color:var(--text-muted); margin-top:var(--space-1); }
+.decision-row { font-size:12px; color:var(--text-secondary); display:flex; gap:var(--space-8); flex-wrap:wrap; }
+.decision-row .row-label { color:var(--text-muted); flex-shrink:0; }
+.decision-tools { display:flex; gap:var(--space-4); flex-wrap:wrap; padding-top:var(--space-4); border-top:1px solid var(--border-default); }
+
 </style>
 </head>
 <body>
@@ -423,41 +616,266 @@
 
       </div></div>
 
-      <!-- 策略全宽区块 -->
+      <!-- ── 方案B：策略板块 ── -->
       <div class="sub-below" style="grid-column:1/-1;">
-        <div class="below-card">
-          <div class="below-header">🎯 策略信号</div>
-          <div style="display:flex;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-4);">
-            <span class="tag tag-red">量价形态 看多(B2)</span>
-            <span class="tag tag-orange">缠论评分 5/100 观察</span>
-            <span class="tag tag-red">筹码信号 主力吸筹</span>
+
+        <!-- 策略组合栏 -->
+        <div class="strategy-bar" id="strategyBar" onclick="toggleStrategyConfig()">
+          <span class="strategy-bar-label">📋 策略组合</span>
+          <div class="strategy-bar-tags" id="strategyBarTags">
+            <span class="tag tag-red">缠论策略</span>
+            <span class="tag tag-orange">量价策略</span>
+            <span class="tag tag-orange">多因子评分</span>
           </div>
-          <div style="display:flex;align-items:baseline;gap:var(--space-3);margin-bottom:var(--space-4);">
-            <span class="score">62<span style="font-size:12px;color:var(--text-muted);">/100</span></span>
-            <span style="font-size:10px;color:var(--text-secondary);">综合评分</span>
+          <span class="strategy-bar-cta" id="strategyBarCta" style="display:none;">+ 选择分析策略</span>
+        </div>
+
+        <!-- 策略配置面板 -->
+        <div class="strategy-config" id="strategyConfig">
+          <div class="strategy-options" id="strategyOptions">
+            <label class="strategy-opt"><input type="checkbox" checked> 缠论走势分析</label>
+            <label class="strategy-opt"><input type="checkbox" checked> 量价形态分析</label>
+            <label class="strategy-opt"><input type="checkbox" checked> 筹码与资金</label>
+            <label class="strategy-opt"><input type="checkbox"> 情绪环境</label>
+            <label class="strategy-opt"><input type="checkbox" checked> 多因子评分</label>
+            <label class="strategy-opt disabled"><input type="checkbox" checked disabled> 主力密码</label>
           </div>
-          <div class="score-bar-bg"><div class="score-bar" style="width:62%;"></div></div>
-          <div style="display:flex;gap:var(--space-8);font-size:10px;color:var(--text-muted);margin-top:var(--space-2);">
-            <span>缠论 40%</span><span>量价 30%</span><span>因子 30%</span>
+          <div class="strategy-actions">
+            <button class="btn-sm" onclick="syncFromScreener()">📡 从选股系统同步</button>
+            <button class="btn-sm" onclick="saveDefaultConfig()">💾 保存为默认</button>
+            <button class="btn-sm" style="background:var(--color-brand-500);color:white;border-color:var(--color-brand-500);" onclick="startAnalysis()">▶ 运行分析</button>
           </div>
         </div>
-        <div class="below-card" style="display:flex;flex-wrap:wrap;gap:var(--space-6);">
-          <div><span class="label" style="font-size:10px;">当前笔</span><br><span style="font-size:11px;">下降笔(第7笔)</span></div>
-          <div><span class="label" style="font-size:10px;">中枢区间</span><br><span style="font-size:11px;">12.10 - 13.50</span></div>
-          <div><span class="label" style="font-size:10px;">买卖点</span><br><span class="tag tag-orange" style="font-size:10px;">三类卖点待确认</span></div>
-          <div><span class="label" style="font-size:10px;">阶段判定</span><br><span style="font-size:11px;color:#22C55E;">下降趋势</span></div>
-          <div style="width:100%;margin-top:var(--space-4);">
-            <ul style="padding-left:var(--space-12);margin:0;font-size:11px;color:var(--text-secondary);line-height:1.8;">
-              <li>当前处于下降笔，中枢下沿¥12.10是关键支撑</li>
-              <li>三类卖点评分0.82，等待方向确认</li>
-              <li>量价形态B2看多信号与缠论趋势矛盾，关注共振</li>
-            </ul>
-            <div style="margin-top:var(--space-4);display:flex;gap:var(--space-4);">
-              <button class="btn-sm" style="flex:1;text-align:center;">关注共振</button>
-              <button class="btn-sm" style="flex:1;text-align:center;background:var(--color-brand-500);color:white;border-color:var(--color-brand-500);">查看详情</button>
+
+        <!-- 未配置引导 -->
+        <div class="strategy-empty show" id="strategyEmpty">
+          <div class="icon">🔍</div>
+          <div class="title">策略分析未配置</div>
+          <div class="desc">请在下方选择需要分析的策略维度，系统将自动运行并输出现状分析</div>
+          <div class="strategy-options" style="justify-content:center;">
+            <label class="strategy-opt"><input type="checkbox" checked> 缠论走势分析</label>
+            <label class="strategy-opt"><input type="checkbox" checked> 量价形态分析</label>
+            <label class="strategy-opt"><input type="checkbox"> 筹码与资金</label>
+            <label class="strategy-opt"><input type="checkbox"> 情绪环境</label>
+            <label class="strategy-opt"><input type="checkbox" checked> 多因子评分</label>
+          </div>
+          <div class="strategy-actions" style="justify-content:center;">
+            <button class="btn-sm" onclick="syncFromScreener()">📡 同步选股系统配置</button>
+            <button class="btn-sm" style="background:var(--color-brand-500);color:white;border-color:var(--color-brand-500);" onclick="startAnalysis()">▶ 开始分析</button>
+          </div>
+        </div>
+
+        <!-- 分析中状态 -->
+        <div class="strategy-loading" id="strategyLoading">
+          <div class="loading-header">
+            <span class="icon">🔄</span>
+            <span class="text">正在分析 000762.SZ ...</span>
+          </div>
+          <div class="loading-progress"><div class="loading-progress-bar" id="loadingProgressBar"></div></div>
+          <div class="loading-steps" id="loadingSteps"></div>
+          <div class="loading-cancel"><button class="btn-sm" onclick="cancelAnalysis()">取消</button></div>
+        </div>
+
+        <!-- 现状叙述区 — 各维度 -->
+        <div class="strategy-results" id="strategyResults">
+
+          <!-- 一、走势结构 -->
+          <div class="dim-card" data-dim="chanlun">
+            <div class="dim-card-header">📉 一、走势结构</div>
+            <div class="dim-card-body">
+              <div class="dim-metrics">
+                <div class="dim-metric"><span class="icon">📉</span><span class="label">趋势方向</span><span class="val dn">下降笔 #7</span></div>
+                <div class="dim-metric"><span class="icon">🏠</span><span class="label">中枢区间</span><span class="val">12.10 — 13.50</span></div>
+                <div class="dim-metric"><span class="icon">📍</span><span class="label">价格位置</span><span class="val">中枢下沿</span></div>
+                <div class="dim-metric"><span class="icon">🔴</span><span class="label">买卖点</span><span class="val" style="color:var(--signal-watch);">三类卖点待确认</span></div>
+                <div class="dim-metric"><span class="icon">📊</span><span class="label">均线排列</span><span class="val dn">空头</span></div>
+                <div class="dim-metric"><span style="font-size:10px;color:var(--text-muted);">MA5 12.30 &lt; MA10 12.45 &lt; MA20 12.60</span></div>
+              </div>
+              <div class="dim-narrative">
+                当前处于下降笔第7笔，中枢区间12.10-13.50，价格位于中枢下沿附近。<br>
+                MA5&lt;MA10&lt;MA20空头排列。三类卖点待确认，但距中枢下沿仅+0.20元，需等待方向确认。
+              </div>
+            </div>
+            <div class="dim-footer">
+              <span class="tag tag-warn">⚠️ 冲突</span>
+              <span>量价B2看多信号与缠论空头趋势存在矛盾，关注是否转向共振</span>
+            </div>
+          </div>
+
+          <!-- 二、量价形态 -->
+          <div class="dim-card" data-dim="volume-price">
+            <div class="dim-card-header">🌡 二、量价形态</div>
+            <div class="dim-card-body">
+              <div class="dim-metrics">
+                <div class="dim-metric"><span class="icon">🌡</span><span class="label">FMZ状态</span><span class="val" style="color:var(--signal-watch);">RANGING</span></div>
+                <div class="dim-metric"><span class="icon">📋</span><span class="label">活跃形态</span><span class="val up">B2看多</span></div>
+                <div class="dim-metric"><span class="icon">📊</span><span class="label">量价关系</span><span class="val up">价涨量增</span></div>
+                <div class="dim-metric"><span class="icon">🔥</span><span class="label">共振评分</span><span class="val">65/100</span></div>
+                <div class="dim-metric"><span class="icon">📈</span><span class="label">成交量</span><span class="val">1.3×均量（温和放量）</span></div>
+              </div>
+              <div class="dim-narrative">
+                市场处于侧向震荡(RANGING)，当前检测到B2看多形态（价涨量增，共振评分65）。<br>
+                成交量温和放量至均量的1.3倍，无异常放/缩量。主力行为推测为吸筹阶段，价格抬升伴随量能温和放大。
+              </div>
+            </div>
+            <div class="dim-footer">
+              <span class="tag tag-warn">⚠️ 矛盾标记</span>
+              <span>B2看多 vs 空头趋势 → 进入交叉验证</span>
+            </div>
+          </div>
+
+          <!-- 三、筹码与资金 -->
+          <div class="dim-card" data-dim="chip">
+            <div class="dim-card-header">🧩 三、筹码与资金</div>
+            <div class="dim-card-body">
+              <div class="dim-metrics">
+                <div class="dim-metric"><span class="icon">💎</span><span class="label">获利比例</span><span class="val">42%</span></div>
+                <div class="dim-metric"><span class="icon">📦</span><span class="label">平均成本</span><span class="val">12.60</span></div>
+                <div class="dim-metric"><span class="icon">🎯</span><span class="label">集中度90</span><span class="val">13.5%</span></div>
+                <div class="dim-metric"><span class="icon">💰</span><span class="label">主力净流向</span><span class="val dn">-2.3亿</span></div>
+                <div class="dim-metric"><span class="icon">📊</span><span class="label">大单净量</span><span class="val dn">持续为负</span></div>
+              </div>
+              <div class="dim-narrative">
+                筹码分布显示90%成本集中在11.50-13.80区间，当前价12.34处于成本区间中下部。<br>
+                套牢盘比例约58%，主力资金近5日净流出2.3亿，大单净量持续为负，资金面偏空。<br>
+                筹码流动方向呈现上移趋势，高位套牢筹码尚未充分释放。
+              </div>
+            </div>
+            <div class="dim-footer">
+              <span class="tag tag-red">✅ 通过</span>
+              <span>筹码吸筹迹象，但资金面偏空，需关注后续资金回流</span>
+            </div>
+          </div>
+
+          <!-- 四、情绪环境 -->
+          <div class="dim-card" data-dim="emotion" style="display:none;">
+            <div class="dim-card-header">🌊 四、情绪环境</div>
+            <div class="dim-card-body">
+              <div class="dim-metrics">
+                <div class="dim-metric"><span class="icon">🌡</span><span class="label">情绪周期</span><span class="val" style="color:var(--color-down);">冰点区域</span></div>
+                <div class="dim-metric"><span class="icon">📊</span><span class="label">行业指数</span><span class="val dn">-1.87%</span></div>
+                <div class="dim-metric"><span class="icon">📈</span><span class="label">市场温度</span><span class="val">23°</span></div>
+              </div>
+              <div class="dim-narrative">
+                市场情绪处于冰点区域，行业指数当日-1.87%表现弱于大盘。<br>
+                化工板块整体资金净流出，板块内无强势龙头带动，短期情绪修复需时间。
+              </div>
+            </div>
+            <div class="dim-footer">
+              <span class="tag tag-red">✅ 通过</span>
+              <span>情绪企稳迹象，PE(TTM) 11.72处于合理区间</span>
+            </div>
+          </div>
+
+          <!-- 五、多因子概况 -->
+          <div class="dim-card" data-dim="factor">
+            <div class="dim-card-header">📊 五、多因子概况</div>
+            <div class="dim-card-body">
+              <div class="dim-metrics">
+                <div class="dim-metric"><span class="icon">📈</span><span class="label">动量因子</span><span class="val" style="color:var(--signal-watch);">35/100</span></div>
+                <div class="dim-metric"><span class="icon">🔄</span><span class="label">反转因子</span><span class="val" style="color:var(--signal-watch);">45/100</span></div>
+                <div class="dim-metric"><span class="icon">💭</span><span class="label">情绪因子</span><span class="val dn">30/100</span></div>
+                <div class="dim-metric"><span class="icon">🧩</span><span class="label">筹码因子</span><span class="val up">70/100</span></div>
+                <div class="dim-metric"><span class="icon">📊</span><span class="label">综合因子</span><span class="val">55/100</span></div>
+              </div>
+              <div class="dim-narrative">
+                各因子标准化评分：动量偏弱(35)反应短期动能不足，反转中等(45)说明趋势不极端。<br>
+                情绪因子低(30)反映市场恐慌情绪较高，筹码因子强(70)显示主力吸筹迹象。<br>
+                综合因子值55/100，方向一致性偏弱，多因子间存在分歧。
+              </div>
+            </div>
+            <div class="dim-footer">
+              <span class="tag tag-warn">⚡ 分歧</span>
+              <span>技术面看涨但多因子综合偏中性，等待信号收敛</span>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- 交叉验证条 -->
+        <div class="cross-verify" id="crossVerify">
+          <div class="cross-verify-bar">
+            <div class="verify-item" data-chain="0" onclick="toggleVerifyDetail(this)">
+              <div class="head"><span class="status-dot pass"></span><span class="name">主力行为验证</span></div>
+              <div class="brief">筹码吸筹+量价放量</div>
+              <div class="verdict pass">→ 通过</div>
+              <div class="verify-evidence">筹码集中度上升+量价温和放量，一致指向主力吸筹阶段</div>
+            </div>
+            <div class="verify-item" data-chain="1" onclick="toggleVerifyDetail(this)">
+              <div class="head"><span class="status-dot warn"></span><span class="name">结构位置验证</span></div>
+              <div class="brief">动量弱+中枢支撑</div>
+              <div class="verdict warn">→ 轻微冲突</div>
+              <div class="verify-evidence">动量因子35/100偏弱，但价格在中枢下沿获得支撑，结构位置支持反弹</div>
+            </div>
+            <div class="verify-item" data-chain="2" onclick="toggleVerifyDetail(this)">
+              <div class="head"><span class="status-dot pass"></span><span class="name">外部环境验证</span></div>
+              <div class="brief">情绪企稳+PE合理</div>
+              <div class="verdict pass">→ 通过</div>
+              <div class="verify-evidence">情绪处于冰点区域但出现企稳迹象，PE(TTM)11.72处于历史合理区间</div>
+            </div>
+            <div class="verify-item" data-chain="3" onclick="toggleVerifyDetail(this)">
+              <div class="head"><span class="status-dot warn"></span><span class="name">共振验证</span></div>
+              <div class="brief">技术看涨但多因子偏中性</div>
+              <div class="verdict warn">→ 部分通过</div>
+              <div class="verify-evidence">量价B2看多信号与技术面一致，但多因子综合偏中性，热力图未全面转暖</div>
+            </div>
+          </div>
+
+          <div class="cross-verify-summary">
+            <div class="verify-rate">
+              <span>验证链通过率</span>
+              <div class="verify-rate-bar"><div class="verify-rate-fill" id="verifyRateFill" style="width:62.5%;background:var(--signal-watch);"></div></div>
+              <span id="verifyRateText">2.5/4 (62.5%)</span>
+            </div>
+            <button class="btn-sm" id="verifyAiBtn" style="background:var(--color-brand-500);color:white;border-color:var(--color-brand-500);" onclick="triggerAiArbitrate()">⚡ 待AI仲裁</button>
+          </div>
+        </div>
+
+        <!-- 综合决策卡 -->
+        <div class="decision-card" id="decisionCard">
+          <div class="decision-header" onclick="toggleDecisionBody()">
+            <span class="toggle-icon" id="decisionToggleIcon">▶</span>
+            <span class="title">🤖 综合判读</span>
+            <span class="summary" id="decisionSummary">下降趋势中的阶段性博弈，量价B2看多与结构矛盾未解除</span>
+            <span class="badge" id="decisionBadge">AI仲裁</span>
+          </div>
+          <div class="decision-body" id="decisionBody">
+            <div class="decision-opinion">
+              操作建议：<span style="color:var(--signal-watch);font-weight:500;">⚪ 持有观察</span> — 矛盾未解除，不宜激进
+            </div>
+            <div class="decision-grid">
+              <div class="decision-cell">
+                <div class="cell-label">📌 入场区间</div>
+                <div class="cell-val">10.50 - 11.20</div>
+                <div class="cell-note">中枢下沿+拐点确认</div>
+              </div>
+              <div class="decision-cell">
+                <div class="cell-label">⛔ 止损位</div>
+                <div class="cell-val" style="color:var(--color-up);">9.80</div>
+                <div class="cell-note">跌破前低</div>
+              </div>
+              <div class="decision-cell">
+                <div class="cell-label">🎯 目标位</div>
+                <div class="cell-val" style="color:var(--color-down);">13.50</div>
+                <div class="cell-note">中枢上沿</div>
+              </div>
+            </div>
+            <div class="decision-row">
+              <span class="row-label">💰 仓位建议：</span>
+              <span>2成（矛盾状态偏低仓位）</span>
+            </div>
+            <div class="decision-row">
+              <span class="row-label">⚠️ 风险提示：</span>
+              <span>量价B2信号与缠论趋势矛盾，若量价信号被证伪则动能衰减</span>
+            </div>
+            <div class="decision-tools">
+              <button class="btn-sm">📊 多角色对比</button>
+              <button class="btn-sm" onclick="triggerAiArbitrate()">🤖 重新判读</button>
+              <button class="btn-sm">💾 保存分析</button>
             </div>
           </div>
         </div>
+
       </div>
 
     </div>
@@ -1585,6 +2003,292 @@ function toggleChipPanel(){
     if(typeof renderChipChart === 'function') renderChipChart(idx, cp); // 无crosshairY参数，不传
   }
 }
+
+// ── 方案B：策略面板交互 ──
+var _analysisRunning = false;
+var _analysisTimer = null;
+
+function toggleStrategyConfig(){
+  var cfg = document.getElementById('strategyConfig');
+  if(!cfg) return;
+  cfg.classList.toggle('open');
+}
+
+function syncFromScreener(){
+  showToast('已从选股系统同步策略配置');
+}
+
+function saveDefaultConfig(){
+  var checks = document.querySelectorAll('#strategyOptions input[type=checkbox]');
+  var config = {};
+  checks.forEach(function(c){ config[c.nextSibling.textContent.trim()] = c.checked; });
+  try { localStorage.setItem('strategyDefaultConfig', JSON.stringify(config)); } catch(e){}
+  showToast('已保存为默认配置');
+}
+
+function loadDefaultConfig(){
+  try {
+    var raw = localStorage.getItem('strategyDefaultConfig');
+    if(!raw) return;
+    var config = JSON.parse(raw);
+    var checks = document.querySelectorAll('#strategyOptions input[type=checkbox]');
+    checks.forEach(function(c){
+      var name = c.nextSibling.textContent.trim();
+      if(config[name] !== undefined) c.checked = config[name];
+    });
+  } catch(e){}
+}
+
+function startAnalysis(){
+  if(_analysisRunning) return;
+  _analysisRunning = true;
+
+  // 隐藏引导/配置，显示加载
+  var empty = document.getElementById('strategyEmpty');
+  var cfg = document.getElementById('strategyConfig');
+  var loading = document.getElementById('strategyLoading');
+  if(empty) empty.classList.remove('show');
+  if(cfg) cfg.classList.remove('open');
+  if(loading) loading.classList.add('show');
+
+  // 构建步骤
+  var steps = [
+    {name:'数据准备', detail:'日线OHLCV 750根', done:false, active:false},
+    {name:'缠论结构分析', detail:'线段构建→中枢识别→买卖点检测', done:false, active:false},
+    {name:'量价形态分析', detail:'FMZ状态检测→形态匹配→量价关系', done:false, active:false},
+    {name:'筹码与资金分析', detail:'筹码分布→资金流向→集中度', done:false, active:false},
+    {name:'情绪环境分析', detail:'板块对比→市场温度→估值水位', done:false, active:false},
+    {name:'多因子评分', detail:'5因子标准化→综合打分→方向判定', done:false, active:false},
+    {name:'交叉验证与综合判读', detail:'4链验证→AI仲裁→决策输出', done:false, active:false},
+  ];
+
+  // 只保留勾选的策略对应步骤
+  var checkedNames = [];
+  document.querySelectorAll('#strategyOptions input[type=checkbox]:checked').forEach(function(c){
+    checkedNames.push(c.nextSibling.textContent.trim());
+  });
+
+  var stepNames = {
+    '缠论走势分析':'缠论结构分析',
+    '量价形态分析':'量价形态分析',
+    '筹码与资金':'筹码与资金分析',
+    '情绪环境':'情绪环境分析',
+    '多因子评分':'多因子评分'
+  };
+
+  var filtered = steps.filter(function(s){
+    if(s.name === '数据准备') return true;
+    if(s.name === '交叉验证与综合判读') return true;
+    var match = false;
+    checkedNames.forEach(function(n){
+      if(stepNames[n] === s.name) match = true;
+    });
+    return match;
+  });
+
+  // 渲染步骤列表
+  var container = document.getElementById('loadingSteps');
+  if(!container) return;
+  container.innerHTML = '';
+  filtered.forEach(function(s, i){
+    var div = document.createElement('div');
+    div.className = 'loading-step' + (i === 0 ? ' active' : ' pending');
+    div.innerHTML = '<span class="status-icon' + (i === 0 ? ' pulse' : '') + '" id="lsIcon_'+i+'">' + (i === 0 ? '🔄' : '⏳') + '</span>' +
+      '<span class="step-name">' + s.name + '</span>' +
+      '<span class="step-detail">' + s.detail + '</span>';
+    container.appendChild(div);
+  });
+
+  // 逐步推进
+  var idx = 0;
+  var total = filtered.length;
+  var bar = document.getElementById('loadingProgressBar');
+
+  function advanceStep(){
+    if(idx >= total || !_analysisRunning){
+      finishAnalysis();
+      return;
+    }
+    var icons = document.querySelectorAll('[id^="lsIcon_"]');
+    var stepsAll = container.querySelectorAll('.loading-step');
+
+    // 当前步骤标为完成
+    if(idx > 0){
+      var prevIcon = document.getElementById('lsIcon_' + (idx-1));
+      if(prevIcon){
+        prevIcon.textContent = '✅';
+        prevIcon.classList.remove('pulse');
+      }
+      var prevStep = stepsAll[idx-1];
+      if(prevStep){
+        prevStep.classList.remove('active');
+        prevStep.classList.add('done');
+      }
+    }
+
+    // 当前步骤标为进行中
+    if(idx < total){
+      var curIcon = document.getElementById('lsIcon_' + idx);
+      if(curIcon){
+        curIcon.textContent = '🔄';
+        curIcon.classList.add('pulse');
+      }
+      var curStep = stepsAll[idx];
+      if(curStep){
+        curStep.classList.remove('pending');
+        curStep.classList.add('active');
+      }
+    }
+
+    // 更新进度条
+    var pct = Math.round((idx / total) * 100);
+    if(bar) bar.style.width = Math.min(pct, 98) + '%';
+
+    idx++;
+    var delay = 400 + Math.random() * 200; // 每步 0.4-0.6s
+    _analysisTimer = setTimeout(advanceStep, delay);
+  }
+
+  advanceStep();
+}
+
+function finishAnalysis(){
+  _analysisRunning = false;
+  var loading = document.getElementById('strategyLoading');
+  var results = document.getElementById('strategyResults');
+  var crossVerify = document.getElementById('crossVerify');
+  var decisionCard = document.getElementById('decisionCard');
+  var bar = document.getElementById('loadingProgressBar');
+
+  if(loading) loading.classList.remove('show');
+  if(bar) bar.style.width = '100%';
+
+  // 显示各维度（根据勾选策略）
+  if(results){
+    results.classList.add('show');
+    var checkedNames = [];
+    document.querySelectorAll('#strategyOptions input[type=checkbox]:checked').forEach(function(c){
+      checkedNames.push(c.nextSibling.textContent.trim());
+    });
+    var dimMap = {
+      '缠论走势分析':'chanlun',
+      '量价形态分析':'volume-price',
+      '筹码与资金':'chip',
+      '情绪环境':'emotion',
+      '多因子评分':'factor'
+    };
+    var dimCards = results.querySelectorAll('.dim-card');
+    dimCards.forEach(function(card){
+      var dim = card.getAttribute('data-dim');
+      var show = false;
+      checkedNames.forEach(function(n){
+        if(dimMap[n] === dim) show = true;
+      });
+      card.style.display = show ? '' : 'none';
+    });
+  }
+
+  if(crossVerify) crossVerify.classList.add('show');
+  if(decisionCard) decisionCard.classList.add('show');
+
+  // 更新策略栏标签
+  updateStrategyBarTags();
+  showToast('✅ 策略分析完成');
+}
+
+function cancelAnalysis(){
+  _analysisRunning = false;
+  if(_analysisTimer){ clearTimeout(_analysisTimer); _analysisTimer = null; }
+  var loading = document.getElementById('strategyLoading');
+  if(loading) loading.classList.remove('show');
+  // 显示配置面板
+  var cfg = document.getElementById('strategyConfig');
+  if(cfg) cfg.classList.add('open');
+  showToast('已取消分析');
+}
+
+function updateStrategyBarTags(){
+  var tags = document.getElementById('strategyBarTags');
+  var cta = document.getElementById('strategyBarCta');
+  if(!tags) return;
+  var checked = document.querySelectorAll('#strategyOptions input[type=checkbox]:checked');
+  tags.innerHTML = '';
+  var labelMap = {
+    '缠论走势分析':'缠论策略',
+    '量价形态分析':'量价策略',
+    '筹码与资金':'筹码策略',
+    '情绪环境':'情绪策略',
+    '多因子评分':'多因子评分',
+    '主力密码':'主力密码'
+  };
+  checked.forEach(function(c){
+    var name = c.nextSibling.textContent.trim();
+    var label = labelMap[name] || name;
+    var tag = document.createElement('span');
+    tag.className = 'tag tag-red';
+    tag.textContent = label;
+    tags.appendChild(tag);
+  });
+  if(checked.length === 0){
+    tags.style.display = 'none';
+    if(cta) cta.style.display = 'inline';
+  } else {
+    tags.style.display = '';
+    if(cta) cta.style.display = 'none';
+  }
+}
+
+function toggleVerifyDetail(el){
+  var ev = el.querySelector('.verify-evidence');
+  if(ev) ev.classList.toggle('open');
+}
+
+function toggleDecisionBody(){
+  var body = document.getElementById('decisionBody');
+  var icon = document.getElementById('decisionToggleIcon');
+  if(!body || !icon) return;
+  body.classList.toggle('open');
+  icon.classList.toggle('open');
+}
+
+function triggerAiArbitrate(){
+  showToast('⚡ AI仲裁已触发...');
+  // 模拟AI仲裁
+  setTimeout(function(){
+    var badge = document.getElementById('decisionBadge');
+    if(badge) badge.textContent = 'AI已仲裁';
+    showToast('✅ AI仲裁完成，综合判读已更新');
+  }, 1500);
+}
+
+function showToast(msg){
+  var existing = document.querySelector('.toast-msg');
+  if(existing) existing.remove();
+  var el = document.createElement('div');
+  el.className = 'toast-msg';
+  el.textContent = msg;
+  el.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg-surface);border:1px solid var(--color-brand-500);color:var(--text-primary);padding:8px 20px;border-radius:6px;font-size:12px;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
+  document.body.appendChild(el);
+  setTimeout(function(){ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(function(){ el.remove(); }, 400); }, 2000);
+}
+
+// 页面加载时恢复默认配置+检查是否显示引导
+(function(){
+  loadDefaultConfig();
+  var hasDefault = false;
+  try {
+    var raw = localStorage.getItem('strategyDefaultConfig');
+    if(raw) hasDefault = true;
+  } catch(e){}
+  if(hasDefault){
+    var empty = document.getElementById('strategyEmpty');
+    if(empty) empty.classList.remove('show');
+    // 自动运行
+    setTimeout(startAnalysis, 500);
+  }
+  // 同步策略栏标签
+  updateStrategyBarTags();
+})();
 
 // ── 同步侧栏高度与chart-section对齐 ──
 function syncPanelHeight(){
