@@ -342,32 +342,107 @@
 .verify-rate-fill { height:100%; border-radius:2px; }
 .verify-ai-btn { display:none; }
 
-/* — 综合决策卡 — */
-.decision-card { display:none; }
-.decision-card.show { display:block; }
-.decision-card { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); overflow:hidden; }
-.decision-header {
+/* — AI仲裁与建议输出（DeepSeek V4 Layer 2） — */
+.ai-arbitration { display:none; }
+.ai-arbitration.show { display:block; }
+.ai-arbitration { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); overflow:hidden; }
+.ai-arb-header {
   display:flex; align-items:center; gap:var(--space-4);
   padding:var(--space-8) var(--space-12);
   cursor:pointer; user-select:none;
   transition:background .15s;
 }
-.decision-header:hover { background:var(--bg-subtle); }
-.decision-header .toggle-icon { font-size:10px; color:var(--text-muted); transition:transform .2s; }
-.decision-header .toggle-icon.open { transform:rotate(90deg); }
-.decision-header .title { font-size:12px; font-weight:600; color:var(--text-primary); flex:1; }
-.decision-header .summary { font-size:11px; color:var(--text-secondary); flex:2; }
-.decision-header .badge { font-size:10px; padding:2px 8px; border-radius:var(--radius-full); background:var(--bg-muted); color:var(--text-muted); }
-.decision-body { display:none; padding:var(--space-12); border-top:1px solid var(--border-default); flex-direction:column; gap:var(--space-8); }
-.decision-body.open { display:flex; }
-.decision-opinion { font-size:12px; color:var(--text-secondary); line-height:1.7; margin-bottom:var(--space-4); }
-.decision-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--space-6); }
-@media (max-width:900px){ .decision-grid { grid-template-columns:1fr; } }
-.decision-cell { background:var(--bg-subtle); border-radius:var(--radius-sm); padding:var(--space-6) var(--space-8); }
-.decision-cell .cell-label { font-size:10px; color:var(--text-muted); margin-bottom:var(--space-2); }
-.decision-cell .cell-val { font-size:14px; font-weight:600; color:var(--text-primary); }
-.decision-cell .cell-note { font-size:10px; color:var(--text-muted); margin-top:var(--space-1); }
-.decision-row { font-size:12px; color:var(--text-secondary); display:flex; gap:var(--space-8); flex-wrap:wrap; }
+.ai-arb-header:hover { background:var(--bg-subtle); }
+.ai-arb-header .toggle-icon { font-size:10px; color:var(--text-muted); transition:transform .2s; flex-shrink:0; }
+.ai-arb-header .toggle-icon.open { transform:rotate(90deg); }
+.ai-arb-header .title { font-size:12px; font-weight:600; color:var(--text-primary); flex:0 0 auto; }
+.ai-arb-header .summary { font-size:11px; color:var(--text-secondary); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ai-arb-header .badge { font-size:10px; padding:2px 8px; border-radius:var(--radius-full); background:var(--bg-muted); color:var(--text-muted); flex-shrink:0; }
+.ai-arb-body { display:none; padding:var(--space-12); border-top:1px solid var(--border-default); flex-direction:column; gap:var(--space-8); }
+.ai-arb-body.open { display:flex; }
+
+/* 仲裁摘要 */
+.arb-summary { background:var(--bg-subtle); border-radius:var(--radius-sm); padding:var(--space-8); }
+.arb-meta { display:flex; gap:var(--space-8); font-size:11px; color:var(--text-secondary); flex-wrap:wrap; margin-bottom:var(--space-6); }
+.arb-meta span { display:flex; align-items:center; gap:var(--space-2); }
+.arb-dim-bar { display:flex; gap:var(--space-4); font-size:11px; flex-wrap:wrap; }
+.arb-dim-item { display:flex; align-items:center; gap:var(--space-2); padding:2px 8px; border-radius:var(--radius-full); background:var(--bg-surface); }
+.arb-dim-item .arrow { font-weight:600; }
+.arb-dim-item .arrow.up { color:var(--color-down); }
+.arb-dim-item .arrow.dn { color:var(--color-up); }
+.arb-dim-item .arrow.neutral { color:var(--signal-watch); }
+.arb-main-conflict { font-size:11px; color:var(--text-muted); margin-top:var(--space-4); padding:var(--space-4); border-left:2px solid var(--signal-watch); background:var(--bg-surface); border-radius:0 var(--radius-sm) var(--radius-sm) 0; }
+
+/* 情景化推演 */
+.scenario-section { }
+.scenario-section .section-title { font-size:11px; font-weight:600; color:var(--text-primary); margin-bottom:var(--space-6); }
+.scenario-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--space-6); }
+@media (max-width:1100px){ .scenario-grid { grid-template-columns:1fr; } }
+.scenario-card { background:var(--bg-subtle); border-radius:var(--radius-sm); padding:var(--space-6); border-left:3px solid; }
+.scenario-card.scenario-a { border-left-color:var(--color-down); }
+.scenario-card.scenario-b { border-left-color:var(--signal-watch); }
+.scenario-card.scenario-c { border-left-color:var(--color-up); }
+.scenario-card .s-title { font-size:12px; font-weight:600; color:var(--text-primary); margin-bottom:var(--space-2); }
+.scenario-card .s-prob { font-size:10px; color:var(--text-muted); margin-bottom:var(--space-3); }
+.scenario-card .s-conditions { font-size:10px; color:var(--text-secondary); line-height:1.6; }
+.scenario-card .s-conditions .cond { display:block; padding-left:var(--space-4); position:relative; }
+.scenario-card .s-conditions .cond::before { content:'·'; position:absolute; left:0; }
+
+/* 行动建议 */
+.arb-advice { background:var(--bg-subtle); border-radius:var(--radius-sm); padding:var(--space-8); border:1px dashed var(--signal-watch); }
+.arb-advice .advice-title { font-size:11px; font-weight:600; color:var(--text-primary); margin-bottom:var(--space-4); display:flex; align-items:center; gap:var(--space-2); }
+.arb-advice .advice-body { font-size:11px; color:var(--text-secondary); line-height:1.7; }
+.arb-advice .advice-note { font-size:10px; color:var(--text-muted); margin-top:var(--space-4); padding-top:var(--space-4); border-top:1px solid var(--border-default); }
+
+/* 数据来源追溯 */
+.arb-sources { margin-top:var(--space-4); }
+.arb-sources-header { font-size:10px; color:var(--text-muted); cursor:pointer; user-select:none; padding:var(--space-2) 0; }
+.arb-sources-header:hover { color:var(--text-secondary); }
+.arb-sources-body { display:none; font-size:10px; color:var(--text-muted); line-height:1.8; padding:var(--space-4); background:var(--bg-surface); border-radius:var(--radius-sm); margin-top:var(--space-2); }
+.arb-sources-body.open { display:block; }
+.arb-sources-body .src { display:block; padding:1px 0; }
+
+/* — 底部工具条 — */
+.arb-tools { display:flex; gap:var(--space-4); flex-wrap:wrap; padding-top:var(--space-4); border-top:1px solid var(--border-default); }
+.arb-tools .btn-sm { font-size:11px; }
+
+/* — 卡5 冲突与不确定性 — */
+.dim-card[data-dim="conflict"] .dim-card-body { display:flex; flex-direction:column; gap:var(--space-6); }
+.dim-card[data-dim="conflict"] .conflict-section { }
+.conflict-section .sec-title { font-size:11px; font-weight:600; color:var(--text-primary); margin-bottom:var(--space-4); padding-bottom:var(--space-2); border-bottom:1px solid var(--border-default); }
+.conflict-pair {
+  display:flex; align-items:flex-start; gap:var(--space-4);
+  padding:var(--space-4) var(--space-6);
+  margin-bottom:var(--space-3);
+  background:var(--bg-subtle); border-radius:var(--radius-sm);
+  cursor:pointer; transition:background .15s;
+}
+.conflict-pair:hover { background:var(--bg-muted); }
+.conflict-pair .cp-status { width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; flex-shrink:0; }
+.conflict-pair .cp-status.align { background:rgba(34,197,94,0.15); color:var(--color-down); }
+.conflict-pair .cp-status.conflict { background:rgba(239,68,68,0.15); color:var(--color-up); }
+.conflict-pair .cp-status.offset { background:rgba(245,158,11,0.15); color:var(--signal-watch); }
+.conflict-pair .cp-info { flex:1; min-width:0; }
+.conflict-pair .cp-label { font-size:11px; font-weight:500; color:var(--text-primary); margin-bottom:var(--space-1); }
+.conflict-pair .cp-desc { font-size:10px; color:var(--text-secondary); line-height:1.5; }
+.conflict-pair .cp-evidence { display:none; font-size:10px; color:var(--text-muted); margin-top:var(--space-2); padding-top:var(--space-2); border-top:1px solid var(--border-default); line-height:1.6; }
+.conflict-pair .cp-evidence.open { display:block; }
+
+/* 不确定性清单 */
+.uncertainty-list { }
+.uncertainty-item {
+  display:flex; align-items:flex-start; gap:var(--space-4);
+  padding:var(--space-3) var(--space-6);
+  margin-bottom:var(--space-2);
+  background:var(--bg-subtle); border-radius:var(--radius-sm);
+  border-left:3px solid var(--signal-watch);
+}
+.uncertainty-item .ui-icon { font-size:12px; flex-shrink:0; }
+.uncertainty-item .ui-info { flex:1; }
+.uncertainty-item .ui-label { font-size:11px; color:var(--text-primary); }
+.uncertainty-item .ui-detail { font-size:10px; color:var(--text-muted); margin-top:var(--space-1); }
+.data-completeness { display:flex; gap:var(--space-4); flex-wrap:wrap; margin-top:var(--space-4); padding:var(--space-4) var(--space-6); background:var(--bg-subtle); border-radius:var(--radius-sm); font-size:10px; color:var(--text-muted); }
+.data-completeness .dc-item { display:flex; align-items:center; gap:var(--space-2); }
 .decision-row .row-label { color:var(--text-muted); flex-shrink:0; }
 .decision-tools { display:flex; gap:var(--space-4); flex-wrap:wrap; padding-top:var(--space-4); border-top:1px solid var(--border-default); }
 
@@ -625,7 +700,7 @@
           <div class="strategy-bar-tags" id="strategyBarTags">
             <span class="tag tag-red">缠论策略</span>
             <span class="tag tag-orange">量价策略</span>
-            <span class="tag tag-orange">多因子评分</span>
+            <span class="tag tag-orange">筹码策略</span>
           </div>
           <span class="strategy-bar-cta" id="strategyBarCta" style="display:none;">+ 选择分析策略</span>
         </div>
@@ -637,7 +712,7 @@
             <label class="strategy-opt"><input type="checkbox" checked> 量价形态分析</label>
             <label class="strategy-opt"><input type="checkbox" checked> 筹码与资金</label>
             <label class="strategy-opt"><input type="checkbox"> 情绪环境</label>
-            <label class="strategy-opt"><input type="checkbox" checked> 多因子评分</label>
+            <label class="strategy-opt"><input type="checkbox" checked> 多因子分析</label>
             <label class="strategy-opt disabled"><input type="checkbox" checked disabled> 主力密码</label>
           </div>
           <div class="strategy-actions">
@@ -657,7 +732,7 @@
             <label class="strategy-opt"><input type="checkbox" checked> 量价形态分析</label>
             <label class="strategy-opt"><input type="checkbox"> 筹码与资金</label>
             <label class="strategy-opt"><input type="checkbox"> 情绪环境</label>
-            <label class="strategy-opt"><input type="checkbox" checked> 多因子评分</label>
+            <label class="strategy-opt"><input type="checkbox" checked> 多因子分析</label>
           </div>
           <div class="strategy-actions" style="justify-content:center;">
             <button class="btn-sm" onclick="syncFromScreener()">📡 同步选股系统配置</button>
@@ -710,11 +785,11 @@
                 <div class="dim-metric"><span class="icon">🌡</span><span class="label">FMZ状态</span><span class="val" style="color:var(--signal-watch);">RANGING</span></div>
                 <div class="dim-metric"><span class="icon">📋</span><span class="label">活跃形态</span><span class="val up">B2看多</span></div>
                 <div class="dim-metric"><span class="icon">📊</span><span class="label">量价关系</span><span class="val up">价涨量增</span></div>
-                <div class="dim-metric"><span class="icon">🔥</span><span class="label">共振评分</span><span class="val">65/100</span></div>
+                <div class="dim-metric"><span class="icon">🔥</span><span class="label">共振状态</span><span class="val up">偏多</span></div>
                 <div class="dim-metric"><span class="icon">📈</span><span class="label">成交量</span><span class="val">1.3×均量（温和放量）</span></div>
               </div>
               <div class="dim-narrative">
-                市场处于侧向震荡(RANGING)，当前检测到B2看多形态（价涨量增，共振评分65）。<br>
+                市场处于侧向震荡(RANGING)，当前检测到B2看多形态（价涨量增，共振偏多）。<br>
                 成交量温和放量至均量的1.3倍，无异常放/缩量。主力行为推测为吸筹阶段，价格抬升伴随量能温和放大。
               </div>
             </div>
@@ -767,26 +842,70 @@
             </div>
           </div>
 
-          <!-- 五、多因子概况 -->
-          <div class="dim-card" data-dim="factor">
-            <div class="dim-card-header">📊 五、多因子概况</div>
+          <!-- 五、冲突与不确定性（卡5） -->
+          <div class="dim-card" data-dim="conflict">
+            <div class="dim-card-header">⚠️ 五、冲突与不确定性</div>
             <div class="dim-card-body">
-              <div class="dim-metrics">
-                <div class="dim-metric"><span class="icon">📈</span><span class="label">动量因子</span><span class="val" style="color:var(--signal-watch);">35/100</span></div>
-                <div class="dim-metric"><span class="icon">🔄</span><span class="label">反转因子</span><span class="val" style="color:var(--signal-watch);">45/100</span></div>
-                <div class="dim-metric"><span class="icon">💭</span><span class="label">情绪因子</span><span class="val dn">30/100</span></div>
-                <div class="dim-metric"><span class="icon">🧩</span><span class="label">筹码因子</span><span class="val up">70/100</span></div>
-                <div class="dim-metric"><span class="icon">📊</span><span class="label">综合因子</span><span class="val">55/100</span></div>
+              <!-- B区：维度间关系 -->
+              <div class="conflict-section">
+                <div class="sec-title">B区：维度间关系</div>
+                <div class="conflict-pair" onclick="this.querySelector('.cp-evidence').classList.toggle('open')">
+                  <div class="cp-status align">✅</div>
+                  <div class="cp-info">
+                    <div class="cp-label">卡1·走势结构 ↔ 卡2·量价形态：一致</div>
+                    <div class="cp-desc">缠论下降笔#7震荡偏弱 + B2看多形态 → 结构量价分歧中待选择</div>
+                    <div class="cp-evidence">走势结构在中枢下沿获得支撑(12.10)，量价B2信号看多，二者方向尚未完全一致</div>
+                  </div>
+                </div>
+                <div class="conflict-pair" onclick="this.querySelector('.cp-evidence').classList.toggle('open')">
+                  <div class="cp-status conflict">🔴</div>
+                  <div class="cp-info">
+                    <div class="cp-label">卡1·走势结构 ↔ 卡3·筹码资金：矛盾</div>
+                    <div class="cp-desc">结构看反弹但主力资金持续流出 → 主力态度背离</div>
+                    <div class="cp-evidence">价格中枢下沿获得支撑，但主力近5日净流出2.3亿，大单持续为负</div>
+                  </div>
+                </div>
+                <div class="conflict-pair" onclick="this.querySelector('.cp-evidence').classList.toggle('open')">
+                  <div class="cp-status offset">⏳</div>
+                  <div class="cp-info">
+                    <div class="cp-label">卡2·量价形态 ↔ 卡3·筹码资金：时序错位</div>
+                    <div class="cp-desc">量价B2看多信号已持续3天，但筹码资金信号刚刚开始变化</div>
+                    <div class="cp-evidence">量价指标领先约3个交易日，需确认筹码跟随后才能形成共振</div>
+                  </div>
+                </div>
+                <div class="conflict-pair" onclick="this.querySelector('.cp-evidence').classList.toggle('open')">
+                  <div class="cp-status conflict">🔴</div>
+                  <div class="cp-info">
+                    <div class="cp-label">卡4·情绪环境 ↔ 整体信号：偏离</div>
+                    <div class="cp-desc">情绪冰点区域，与结构量价看多方向背离</div>
+                    <div class="cp-evidence">情绪周期处于冰点(23°)，行业指数-1.87%，对看多信号形成压制</div>
+                  </div>
+                </div>
               </div>
-              <div class="dim-narrative">
-                各因子标准化评分：动量偏弱(35)反应短期动能不足，反转中等(45)说明趋势不极端。<br>
-                情绪因子低(30)反映市场恐慌情绪较高，筹码因子强(70)显示主力吸筹迹象。<br>
-                综合因子值55/100，方向一致性偏弱，多因子间存在分歧。
+              <!-- C区：不确定因素清单 -->
+              <div class="conflict-section">
+                <div class="sec-title">C区：不确定因素</div>
+                <div class="uncertainty-item">
+                  <span class="ui-icon">⚠️</span>
+                  <div class="ui-info">
+                    <div class="ui-label">卡2·量价形态：FMZ状态=RANGING → 不确定性偏高</div>
+                    <div class="ui-detail">影响范围：走势结构判断受箱体震荡干扰，趋势信号不明确</div>
+                  </div>
+                </div>
+                <div class="uncertainty-item">
+                  <span class="ui-icon">⚠️</span>
+                  <div class="ui-info">
+                    <div class="ui-label">卡4·情绪环境：数据完整度 60% → 判断受限</div>
+                    <div class="ui-detail">缺失字段：行业指数涨跌幅（板块数据暂不可用）</div>
+                  </div>
+                </div>
+                <div class="data-completeness">
+                  <span class="dc-item">卡1·走势结构：100%</span>
+                  <span class="dc-item">卡2·量价形态：100%</span>
+                  <span class="dc-item">卡3·筹码资金：80%</span>
+                  <span class="dc-item">卡4·情绪环境：60%</span>
+                </div>
               </div>
-            </div>
-            <div class="dim-footer">
-              <span class="tag tag-warn">⚡ 分歧</span>
-              <span>技术面看涨但多因子综合偏中性，等待信号收敛</span>
             </div>
           </div>
 
@@ -805,7 +924,7 @@
               <div class="head"><span class="status-dot warn"></span><span class="name">结构位置验证</span></div>
               <div class="brief">动量弱+中枢支撑</div>
               <div class="verdict warn">→ 轻微冲突</div>
-              <div class="verify-evidence">动量因子35/100偏弱，但价格在中枢下沿获得支撑，结构位置支持反弹</div>
+              <div class="verify-evidence">动量偏弱，但价格在中枢下沿获得支撑，结构位置支持反弹</div>
             </div>
             <div class="verify-item" data-chain="2" onclick="toggleVerifyDetail(this)">
               <div class="head"><span class="status-dot pass"></span><span class="name">外部环境验证</span></div>
@@ -815,9 +934,9 @@
             </div>
             <div class="verify-item" data-chain="3" onclick="toggleVerifyDetail(this)">
               <div class="head"><span class="status-dot warn"></span><span class="name">共振验证</span></div>
-              <div class="brief">技术看涨但多因子偏中性</div>
+              <div class="brief">量价偏多且情绪企稳</div>
               <div class="verdict warn">→ 部分通过</div>
-              <div class="verify-evidence">量价B2看多信号与技术面一致，但多因子综合偏中性，热力图未全面转暖</div>
+              <div class="verify-evidence">量价形态偏多但情绪偏空，热力图未全面转暖</div>
             </div>
           </div>
 
@@ -827,51 +946,106 @@
               <div class="verify-rate-bar"><div class="verify-rate-fill" id="verifyRateFill" style="width:62.5%;background:var(--signal-watch);"></div></div>
               <span id="verifyRateText">2.5/4 (62.5%)</span>
             </div>
-            <button class="btn-sm" id="verifyAiBtn" style="background:var(--color-brand-500);color:white;border-color:var(--color-brand-500);" onclick="triggerAiArbitrate()">⚡ 待AI仲裁</button>
+            <button class="btn-sm" id="verifyAiBtn" style="background:var(--color-brand-500);color:white;border-color:var(--color-brand-500);" onclick="triggerArbitrate()">⚡ 待DeepSeek仲裁</button>
           </div>
         </div>
 
-        <!-- 综合决策卡 -->
-        <div class="decision-card" id="decisionCard">
-          <div class="decision-header" onclick="toggleDecisionBody()">
-            <span class="toggle-icon" id="decisionToggleIcon">▶</span>
-            <span class="title">🤖 综合判读</span>
-            <span class="summary" id="decisionSummary">下降趋势中的阶段性博弈，量价B2看多与结构矛盾未解除</span>
-            <span class="badge" id="decisionBadge">AI仲裁</span>
+        <!-- AI仲裁与建议输出（DeepSeek V4 Layer 2） -->
+        <div class="ai-arbitration" id="aiArbitration">
+          <div class="ai-arb-header" onclick="toggleArbitrationBody()">
+            <span class="toggle-icon" id="arbToggleIcon">▶</span>
+            <span class="title">🤖 策略仲裁</span>
+            <span class="summary" id="arbSummary">跨维度判断：震荡偏多，卡1~卡4一致性75%... 点击展开详情</span>
+            <span class="badge" id="arbBadge">DeepSeek V4</span>
           </div>
-          <div class="decision-body" id="decisionBody">
-            <div class="decision-opinion">
-              操作建议：<span style="color:var(--signal-watch);font-weight:500;">⚪ 持有观察</span> — 矛盾未解除，不宜激进
-            </div>
-            <div class="decision-grid">
-              <div class="decision-cell">
-                <div class="cell-label">📌 入场区间</div>
-                <div class="cell-val">10.50 - 11.20</div>
-                <div class="cell-note">中枢下沿+拐点确认</div>
+          <div class="ai-arb-body" id="arbBody">
+            <!-- 仲裁摘要 -->
+            <div class="arb-summary">
+              <div class="arb-meta">
+                <span>📊 整体方向：<strong style="color:var(--signal-watch);">震荡偏多</strong></span>
+                <span>🔗 维度一致性：<strong>3/4 (75%)</strong></span>
+                <span>📈 数据完整度：<strong>85%</strong></span>
               </div>
-              <div class="decision-cell">
-                <div class="cell-label">⛔ 止损位</div>
-                <div class="cell-val" style="color:var(--color-up);">9.80</div>
-                <div class="cell-note">跌破前低</div>
+              <div class="arb-dim-bar">
+                <span class="arb-dim-item">走势结构 <span class="arrow up">↑</span></span>
+                <span class="arb-dim-item">量价形态 <span class="arrow up">↑</span></span>
+                <span class="arb-dim-item">筹码资金 <span class="arrow neutral">→</span></span>
+                <span class="arb-dim-item">情绪环境 <span class="arrow dn">↓</span></span>
               </div>
-              <div class="decision-cell">
-                <div class="cell-label">🎯 目标位</div>
-                <div class="cell-val" style="color:var(--color-down);">13.50</div>
-                <div class="cell-note">中枢上沿</div>
+              <div class="arb-main-conflict">
+                主要矛盾：走势与量价偏多，但情绪极度悲观(冰点)，筹码资金中性。
+                主要不确定因素：RANGING状态下方向选择未完成、情绪数据完整度仅60%
               </div>
             </div>
-            <div class="decision-row">
-              <span class="row-label">💰 仓位建议：</span>
-              <span>2成（矛盾状态偏低仓位）</span>
+
+            <!-- 情景化推演 -->
+            <div class="scenario-section">
+              <div class="section-title">📊 情景化推演</div>
+              <div class="scenario-grid">
+                <div class="scenario-card scenario-a">
+                  <div class="s-title">情景A — 放量突破</div>
+                  <div class="s-prob">概率估计：~40%</div>
+                  <div class="s-conditions">
+                    <span class="cond">近3日量能 ≥ 均量1.5倍</span>
+                    <span class="cond">站稳中枢上沿(13.50)不破</span>
+                    <span class="cond">主力资金转为流入</span>
+                    <span class="cond">→ 目标：打开上行空间，中枢上移</span>
+                  </div>
+                </div>
+                <div class="scenario-card scenario-b">
+                  <div class="s-title">情景B — 缩量回踩</div>
+                  <div class="s-prob">概率估计：~35%</div>
+                  <div class="s-conditions">
+                    <span class="cond">量能萎缩至均量50%以下</span>
+                    <span class="cond">回踩中枢下沿(12.10)不破</span>
+                    <span class="cond">情绪冰点修复</span>
+                    <span class="cond">→ 预期：中枢维持，蓄力待突破</span>
+                  </div>
+                </div>
+                <div class="scenario-card scenario-c">
+                  <div class="s-title">情景C — 破位下行</div>
+                  <div class="s-prob">概率估计：~25%</div>
+                  <div class="s-conditions">
+                    <span class="cond">放量跌破中枢下沿(12.10)</span>
+                    <span class="cond">情绪继续恶化</span>
+                    <span class="cond">主力资金持续大幅流出</span>
+                    <span class="cond">→ 预期：中枢下移，需重新评估走势</span>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="decision-row">
-              <span class="row-label">⚠️ 风险提示：</span>
-              <span>量价B2信号与缠论趋势矛盾，若量价信号被证伪则动能衰减</span>
+
+            <!-- 行动建议 -->
+            <div class="arb-advice">
+              <div class="advice-title">💡 行动建议（仅供参考，不构成投资建议）</div>
+              <div class="advice-body">
+                当前处于多空博弈关键位置，建议关注情景A条件是否触发：<br>
+                · 若放量突破 → 可谨慎关注，关注中枢上沿(13.50)站稳情况<br>
+                · 若缩量回踩 → 暂观察，等待方向确认，中枢下沿(12.10)为重要支撑<br>
+                · 若破位下行 → 规避风险，中枢下移可能引发新一轮下跌
+              </div>
+              <div class="advice-note">
+                ⚠️ 以上推演基于当前策略输出（卡1-5结构化数据），建议通过虚拟实盘验证后评估策略有效性
+              </div>
             </div>
-            <div class="decision-tools">
-              <button class="btn-sm">📊 多角色对比</button>
-              <button class="btn-sm" onclick="triggerAiArbitrate()">🤖 重新判读</button>
-              <button class="btn-sm">💾 保存分析</button>
+
+            <!-- 数据来源追溯 -->
+            <div class="arb-sources">
+              <div class="arb-sources-header" onclick="toggleSources()">📎 数据来源 [点击展开]</div>
+              <div class="arb-sources-body" id="arbSourcesBody">
+                <span class="src">· 走势结构 → chanlun_strategy.py (2026-06-21)</span>
+                <span class="src">· 量价形态 → volume_price_strategy.py (2026-06-21)</span>
+                <span class="src">· [知识:震荡市中箱体突破的验证方法]</span>
+                <span class="src">· [知识:情绪极度悲观时的均值回归统计规律]</span>
+                <span class="src">· [数据:FMZ状态=RANGING] [数据:主力净流向=-2.3亿]</span>
+              </div>
+            </div>
+
+            <!-- 底部工具条 -->
+            <div class="arb-tools">
+              <button class="btn-sm" onclick="triggerArbitrate()">🔄 重新仲裁</button>
+              <button class="btn-sm" disabled style="opacity:0.5;cursor:not-allowed;">📊 多角色对比 — 展位</button>
+              <button class="btn-sm" disabled style="opacity:0.5;cursor:not-allowed;">💾 保存分析 — 展位</button>
             </div>
           </div>
         </div>
@@ -2058,8 +2232,8 @@ function startAnalysis(){
     {name:'量价形态分析', detail:'FMZ状态检测→形态匹配→量价关系', done:false, active:false},
     {name:'筹码与资金分析', detail:'筹码分布→资金流向→集中度', done:false, active:false},
     {name:'情绪环境分析', detail:'板块对比→市场温度→估值水位', done:false, active:false},
-    {name:'多因子评分', detail:'5因子标准化→综合打分→方向判定', done:false, active:false},
-    {name:'交叉验证与综合判读', detail:'4链验证→AI仲裁→决策输出', done:false, active:false},
+    {name:'多因子分析', detail:'5因子现状描述→方向判定', done:false, active:false},
+    {name:'交叉验证与仲裁输出', detail:'4链验证→DeepSeek V4仲裁→情景推演', done:false, active:false},
   ];
 
   // 只保留勾选的策略对应步骤
@@ -2073,12 +2247,12 @@ function startAnalysis(){
     '量价形态分析':'量价形态分析',
     '筹码与资金':'筹码与资金分析',
     '情绪环境':'情绪环境分析',
-    '多因子评分':'多因子评分'
+    '多因子分析':'多因子分析'
   };
 
   var filtered = steps.filter(function(s){
     if(s.name === '数据准备') return true;
-    if(s.name === '交叉验证与综合判读') return true;
+    if(s.name === '交叉验证与仲裁输出') return true;
     var match = false;
     checkedNames.forEach(function(n){
       if(stepNames[n] === s.name) match = true;
@@ -2157,7 +2331,7 @@ function finishAnalysis(){
   var loading = document.getElementById('strategyLoading');
   var results = document.getElementById('strategyResults');
   var crossVerify = document.getElementById('crossVerify');
-  var decisionCard = document.getElementById('decisionCard');
+  var aiArbitration = document.getElementById('aiArbitration');
   var bar = document.getElementById('loadingProgressBar');
 
   if(loading) loading.classList.remove('show');
@@ -2175,7 +2349,7 @@ function finishAnalysis(){
       '量价形态分析':'volume-price',
       '筹码与资金':'chip',
       '情绪环境':'emotion',
-      '多因子评分':'factor'
+      '多因子分析':'conflict'
     };
     var dimCards = results.querySelectorAll('.dim-card');
     dimCards.forEach(function(card){
@@ -2189,7 +2363,7 @@ function finishAnalysis(){
   }
 
   if(crossVerify) crossVerify.classList.add('show');
-  if(decisionCard) decisionCard.classList.add('show');
+  if(aiArbitration) aiArbitration.classList.add('show');
 
   // 更新策略栏标签
   updateStrategyBarTags();
@@ -2218,7 +2392,7 @@ function updateStrategyBarTags(){
     '量价形态分析':'量价策略',
     '筹码与资金':'筹码策略',
     '情绪环境':'情绪策略',
-    '多因子评分':'多因子评分',
+    '多因子分析':'多因子分析',
     '主力密码':'主力密码'
   };
   checked.forEach(function(c){
@@ -2243,22 +2417,26 @@ function toggleVerifyDetail(el){
   if(ev) ev.classList.toggle('open');
 }
 
-function toggleDecisionBody(){
-  var body = document.getElementById('decisionBody');
-  var icon = document.getElementById('decisionToggleIcon');
+function toggleArbitrationBody(){
+  var body = document.getElementById('arbBody');
+  var icon = document.getElementById('arbToggleIcon');
   if(!body || !icon) return;
   body.classList.toggle('open');
   icon.classList.toggle('open');
 }
 
-function triggerAiArbitrate(){
-  showToast('⚡ AI仲裁已触发...');
-  // 模拟AI仲裁
+function triggerArbitrate(){
+  showToast('⚡ DeepSeek V4 仲裁已触发...');
   setTimeout(function(){
-    var badge = document.getElementById('decisionBadge');
-    if(badge) badge.textContent = 'AI已仲裁';
-    showToast('✅ AI仲裁完成，综合判读已更新');
+    var badge = document.getElementById('arbBadge');
+    if(badge) badge.textContent = '仲裁已更新';
+    showToast('✅ 仲裁完成，情景推演已更新');
   }, 1500);
+}
+
+function toggleSources(){
+  var body = document.getElementById('arbSourcesBody');
+  if(body) body.classList.toggle('open');
 }
 
 function showToast(msg){

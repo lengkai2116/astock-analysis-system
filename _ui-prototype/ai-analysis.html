@@ -2,133 +2,176 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI 分析 — A股分析系统</title>
+<title>AI 多角色投研 — A股分析系统</title>
 <link rel="stylesheet" href="assets/base.css">
 <style>
-.analysis-top { display: flex; align-items: center; gap: var(--space-12); margin-bottom: var(--space-16); flex-wrap: wrap; }
-.analysis-top .input { width: 200px; }
-.progress-panel { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); margin-bottom: var(--space-16); }
-.progress-item { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-6) 0; font-size: 13px; color: var(--text-secondary); }
-.progress-item .icon { width: 20px; text-align: center; }
-.result-panel { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
-.result-header { display: flex; gap: var(--space-12); margin-bottom: var(--space-16); flex-wrap: wrap; }
-.result-card { flex:1; min-width:120px; padding:var(--space-12); background:var(--bg-subtle); border-radius:var(--radius-sm); text-align:center; }
-.result-card .val { font-size: 22px; font-weight: 700; margin: var(--space-4) 0; }
-.result-card .lbl { font-size: 11px; color: var(--text-muted); }
+/* ===== AI分析页专用样式 ===== */
 
-.analysis-tab-content { min-height: 200px; }
-.analysis-section { margin-bottom: var(--space-12); }
-.analysis-section h5 { font-size: 13px; font-weight: 600; margin-bottom: var(--space-6); color: var(--text-secondary); }
-.score-row { display: flex; align-items: center; gap: var(--space-8); margin-bottom: var(--space-6); }
-.score-row .s-label { width: 80px; font-size: 12px; color: var(--text-secondary); }
-.score-row .s-bar { flex: 1; height: 6px; background: var(--bg-muted); border-radius: 3px; overflow: hidden; }
-.score-row .s-fill { height: 100%; border-radius: 3px; }
-.score-row .s-val { width: 40px; text-align: right; font-size: 12px; font-weight: 600; }
+/* ── 顶部工具栏 ── */
+.ai-topbar { display:flex; align-items:center; gap:var(--space-12); margin-bottom:var(--space-16); flex-wrap:wrap; }
+.ai-topbar .stock-input { width:160px; }
+.ai-topbar .model-badge { margin-left:auto; font-size:11px; color:var(--text-muted); background:var(--bg-subtle); padding:var(--space-4) var(--space-12); border-radius:var(--radius-full); border:1px solid var(--border-default); }
+
+/* ── 进度面板 ── */
+.progress-panel { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-lg); padding:var(--space-16); margin-bottom:var(--space-16); }
+.progress-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-12); }
+.progress-header h4 { font-size:13px; font-weight:600; }
+.progress-pct { font-size:13px; font-weight:600; color:var(--color-brand-500); }
+.role-strip { display:flex; gap:var(--space-8); flex-wrap:wrap; }
+.role-chip { display:inline-flex; align-items:center; gap:var(--space-6); padding:var(--space-4) var(--space-10); border-radius:var(--radius-full); font-size:12px; border:1px solid var(--border-default); background:var(--bg-subtle); transition:all .3s; }
+.role-chip .chip-icon { font-size:14px; }
+.role-chip.chip-waiting { color:var(--text-disabled); }
+.role-chip.chip-analyzing { border-color:var(--color-brand-500); background:rgba(59,130,246,0.12); color:var(--color-brand-500); animation:pulse-border 1.2s ease-in-out infinite; }
+.role-chip.chip-done { border-color:var(--color-up); background:var(--color-up-bg); color:var(--color-up); }
+@keyframes pulse-border { 0%,100%{border-color:var(--color-brand-500);} 50%{border-color:var(--color-brand-700);} }
+
+/* ── 等待引导 ── */
+.welcome-section { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:var(--space-64) var(--space-24); text-align:center; min-height:320px; }
+.welcome-section .icon-big { font-size:48px; margin-bottom:var(--space-16); }
+.welcome-section h3 { font-size:16px; font-weight:600; color:var(--text-primary); margin-bottom:var(--space-8); }
+.welcome-section p { font-size:13px; color:var(--text-muted); max-width:360px; line-height:1.8; }
+
+/* ── 主区域 ── */
+.role-tabs { display:flex; border-bottom:1px solid var(--border-default); margin-bottom:var(--space-16); overflow-x:auto; gap:0; }
+.role-tab { display:flex; align-items:center; gap:var(--space-6); padding:var(--space-8) var(--space-14); color:var(--text-secondary); cursor:pointer; border-bottom:2px solid transparent; transition:all .15s; font-size:13px; white-space:nowrap; flex-shrink:0; }
+.role-tab:hover { color:var(--text-primary); background:var(--bg-subtle); }
+.role-tab.active { color:var(--color-brand-500); border-bottom-color:var(--color-brand-500); }
+.role-tab .tab-status { width:8px; height:8px; border-radius:50%; }
+.tab-status.s-done { background:var(--color-up); }
+.tab-status.s-analyzing { background:var(--color-brand-500); animation:pulse-dot 1s infinite; }
+.tab-status.s-waiting { background:var(--text-disabled); }
+.tab-status.s-error { background:var(--color-down); }
+@keyframes pulse-dot { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+
+/* ── 内容双栏 ── */
+.role-content { display:grid; grid-template-columns:280px 1fr; gap:var(--space-16); min-height:360px; }
+@media(max-width:1100px){ .role-content { grid-template-columns:1fr; } }
+
+/* 左栏：数据卡片 */
+.data-cards { display:flex; flex-direction:column; gap:var(--space-8); }
+.data-card { background:var(--bg-subtle); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); }
+.data-card .dc-label { font-size:11px; color:var(--text-muted); margin-bottom:var(--space-2); }
+.data-card .dc-value { font-size:15px; font-weight:600; color:var(--text-primary); }
+.data-card .dc-sub { font-size:11px; color:var(--text-secondary); margin-top:var(--space-2); }
+.data-sources { margin-top:var(--space-12); }
+.data-sources summary { font-size:11px; color:var(--text-muted); cursor:pointer; padding:var(--space-4) 0; }
+.data-sources .src-item { font-size:11px; color:var(--text-secondary); padding:var(--space-2) var(--space-4); }
+
+/* 右栏：研判报告 */
+.report-area { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-lg); padding:var(--space-16); display:flex; flex-direction:column; }
+.report-header { display:flex; align-items:center; gap:var(--space-8); margin-bottom:var(--space-12); padding-bottom:var(--space-8); border-bottom:1px solid var(--border-default); }
+.report-header h3 { font-size:14px; font-weight:600; }
+.report-header .report-tag { font-size:11px; padding:2px var(--space-8); border-radius:var(--radius-xs); }
+.report-tag.bullish { background:var(--color-up-bg); color:var(--color-up); }
+.report-tag.bearish { background:var(--color-down-bg); color:var(--color-down); }
+.report-tag.neutral { background:rgba(245,158,11,0.12); color:var(--signal-watch); }
+.report-body { flex:1; overflow-y:auto; }
+.report-section { margin-bottom:var(--space-12); }
+.report-section .rs-title { font-size:12px; font-weight:600; color:var(--color-brand-500); margin-bottom:var(--space-4); background:var(--bg-active); display:inline-block; padding:1px var(--space-8); border-radius:var(--radius-xs); }
+.report-section .rs-text { font-size:13px; color:var(--text-secondary); line-height:1.8; white-space:pre-wrap; }
+.report-section .rs-list { font-size:13px; color:var(--text-secondary); line-height:1.8; padding-left:var(--space-16); }
+.judgment-line { display:flex; align-items:center; gap:var(--space-6); padding:var(--space-6) 0; border-top:1px solid var(--border-default); margin-top:var(--space-8); padding-top:var(--space-8); font-size:13px; font-weight:500; }
+
+/* ── 综合决策Tab ── */
+.synthesis-grid { display:grid; grid-template-columns:1fr 1fr; gap:var(--space-12); margin-bottom:var(--space-16); }
+@media(max-width:1100px){ .synthesis-grid { grid-template-columns:1fr; } }
+.syn-card { background:var(--bg-subtle); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); }
+.syn-card .syn-title { font-size:11px; color:var(--text-muted); margin-bottom:var(--space-4); }
+.syn-card .syn-value { font-size:13px; color:var(--text-primary); line-height:1.6; }
+.consensus-list { display:flex; flex-direction:column; gap:var(--space-6); }
+.consensus-item { display:flex; align-items:center; gap:var(--space-8); padding:var(--space-6) var(--space-10); background:var(--bg-subtle); border-radius:var(--radius-sm); font-size:13px; }
+.consensus-item .ci-icon { width:20px; text-align:center; }
+.conflict-card { background:var(--bg-subtle); border:1px solid var(--signal-watch); border-radius:var(--radius-md); padding:var(--space-12); margin-bottom:var(--space-8); }
+.conflict-card .cc-title { font-size:12px; font-weight:600; color:var(--signal-watch); margin-bottom:var(--space-4); }
+.conflict-card .cc-detail { font-size:12px; color:var(--text-secondary); line-height:1.6; }
+
+/* ── 底部工具条 ── */
+.bottom-actions { display:flex; gap:var(--space-8); margin-top:var(--space-16); padding-top:var(--space-12); border-top:1px solid var(--border-default); flex-wrap:wrap; }
+.bottom-actions .btn { font-size:13px; }
+
+/* ── 综合分析中状态 ── */
+.report-loading { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:160px; color:var(--text-muted); font-size:13px; gap:var(--space-8); }
+.spinner { width:24px; height:24px; border:2px solid var(--border-default); border-top-color:var(--color-brand-500); border-radius:50%; animation:spin .8s linear infinite; }
+@keyframes spin { to{transform:rotate(360deg);} }
 </style>
 </head>
 <body>
 <div class="app-layout">
-  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
-      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
-      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
-      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
-        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
-        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
-        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
-        <a href="ai-analysis.html" class="sidebar-item active" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
-        <a href="chip-analysis.html" class="sidebar-item" data-name="筹码分析"><span class="icon">🧩</span><span>筹码分析</span> <span class="badge-new">NEW</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
-        <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
-        <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
-        <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
-        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
-        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
-        <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
-        <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
-        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
-        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
-    </nav>
+  <nav class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+    <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+      <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+      <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+      <a href="ai-analysis.html" class="sidebar-item active" data-name="AI多角色投研"><span class="icon">🤖</span><span>AI 多角色投研</span></a>
+      <a href="chip-analysis.html" class="sidebar-item" data-name="筹码分析"><span class="icon">🧩</span><span>筹码分析</span> <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+      <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+      <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+      <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+      <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+      <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
+      <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
+      <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+  </nav>
   <main class="main-content">
     <div class="page-header">
-      <h1>🤖 AI 分析 · DeepSeek 投研</h1>
+      <h1>🤖 AI 多角色投研 · 6位独立专业分析师并行研判</h1>
       <div class="page-header-actions"></div>
     </div>
 
-    <!-- 股票选择 -->
-    <div class="analysis-top">
-      <input class="input" value="000762.SZ" placeholder="输入股票代码/名称" style="width:160px;">
-      <select class="select" style="width:130px;"><option>西藏矿业</option><option>平安银行</option><option>贵州茅台</option></select>
-      <button class="btn btn-primary" onclick="startAnalysis()">🤖 开始分析</button>
-      <span style="margin-left:auto;font-size:12px;color:var(--text-muted);">模型: DeepSeek v4-flash</span>
+    <!-- 顶部工具栏 -->
+    <div class="ai-topbar">
+      <input class="input stock-input" id="stockCode" value="000762.SZ" placeholder="输入股票代码/名称">
+      <select class="select" id="stockSelect" style="width:130px;">
+        <option>西藏矿业</option><option>平安银行</option><option>贵州茅台</option><option>宁德时代</option>
+      </select>
+      <button class="btn btn-primary" id="btnAnalyze" onclick="startAnalysis()">🤖 开始分析</button>
+      <span class="model-badge">模型: DeepSeek v4-flash</span>
     </div>
 
-    <!-- 进度（初始显示） -->
-    <div id="progress-area" class="progress-panel">
-      <h4 style="font-size:13px;font-weight:600;margin-bottom:var(--space-8);">⏳ 分析进度</h4>
-      <div id="progress-items">
-        <div class="progress-item" id="p0"><span class="icon">📝</span>正在调用技术分析角色...</div>
-        <div class="progress-item" id="p1"><span class="icon">📝</span>正在调用基本面分析角色...</div>
-        <div class="progress-item" id="p2"><span class="icon">📝</span>正在调用情绪分析角色...</div>
-        <div class="progress-item" id="p3"><span class="icon">📝</span>正在生成综合研判...</div>
-      </div>
-      <div class="progress-bar" style="margin-top:var(--space-8);"><div id="progress-fill" class="progress-bar-fill" style="width:0%;"></div></div>
+    <!-- 等待引导 -->
+    <div id="welcomeArea" class="welcome-section">
+      <div class="icon-big">🤖</div>
+      <h3>6位专业分析师为您并行研判</h3>
+      <p>📈 技术分析师（缠论） · 📊 基本面分析师（估值） · 🧩 筹码资金分析师（主力行为）<br>💬 情绪分析师（周期） · 📰 消息面分析师（事件驱动） · 🛡️ 风控分析师（风险矩阵）</p>
+      <p style="margin-top:var(--space-16);color:var(--text-secondary);">选择股票，点击「开始分析」启动多角色AI投研</p>
     </div>
 
-    <!-- 结果（初始隐藏） -->
-    <div id="result-area" class="result-panel" style="display:none;">
-      <div class="result-header">
-        <div class="result-card"><div class="lbl">总评</div><div class="val" style="color:var(--signal-watch);">6.8/10</div><div class="lbl">中性偏多</div></div>
-        <div class="result-card"><div class="lbl">趋势</div><div class="val up">上升↗</div><div class="lbl">中期偏多</div></div>
-        <div class="result-card"><div class="lbl">信号</div><div class="val" style="color:var(--signal-watch);">关注</div><div class="lbl">暂不建议操作</div></div>
-        <div class="result-card"><div class="lbl">置信度</div><div class="val" style="color:var(--color-brand-500);">72%</div><div class="lbl">中等置信</div></div>
+    <!-- 分析区（初始隐藏） -->
+    <div id="analysisArea" style="display:none;">
+
+      <!-- 进度面板 -->
+      <div id="progressPanel" class="progress-panel">
+        <div class="progress-header">
+          <h4>⏳ 并行分析进度</h4>
+          <span class="progress-pct" id="progressPct">0%</span>
+        </div>
+        <div class="progress-bar" style="margin-bottom:var(--space-12);"><div class="progress-bar-fill" id="progressFill" style="width:0%;"></div></div>
+        <div class="role-strip" id="roleStrip"></div>
       </div>
 
-      <div class="tabs" id="analysis-tabs">
-        <span class="tab-item active" onclick="switchTab(this,'tab-comprehensive')">📊 综合</span>
-        <span class="tab-item" onclick="switchTab(this,'tab-technical')">📈 技术</span>
-        <span class="tab-item" onclick="switchTab(this,'tab-fundamental')">📋 基本面</span>
-        <span class="tab-item" onclick="switchTab(this,'tab-news')">📰 消息面</span>
-      </div>
+      <!-- 角色Tab栏 -->
+      <div class="role-tabs" id="roleTabs"></div>
 
-      <div class="analysis-tab-content">
-        <!-- 综合 Tab -->
-        <div id="tab-comprehensive" class="tab-panel">
-          <div class="analysis-section">
-            <h5>🧩 多角色分析评分</h5>
-            <div class="score-row"><span class="s-label">技术面</span><div class="s-bar"><div class="s-fill" style="width:68%;background:var(--color-up);"></div></div><span class="s-val up">6.8</span></div>
-            <div class="score-row"><span class="s-label">基本面</span><div class="s-bar"><div class="s-fill" style="width:75%;background:var(--color-brand-500);"></div></div><span class="s-val" style="color:var(--color-brand-500);">7.5</span></div>
-            <div class="score-row"><span class="s-label">消息面</span><div class="s-bar"><div class="s-fill" style="width:42%;background:var(--signal-watch);"></div></div><span class="s-val" style="color:var(--signal-watch);">4.2</span></div>
-            <div class="score-row"><span class="s-label">情绪面</span><div class="s-bar"><div class="s-fill" style="width:55%;background:var(--signal-watch);"></div></div><span class="s-val" style="color:var(--signal-watch);">5.5</span></div>
-            <div class="score-row"><span class="s-label">综合</span><div class="s-bar"><div class="s-fill" style="width:68%;background:var(--color-up);"></div></div><span class="s-val up">6.8</span></div>
-          </div>
-          <div class="analysis-section">
-            <h5>🎯 综合研判</h5>
-            <p style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
-              西藏矿业当前呈现 <span class="tag tag-watch">中性偏多</span> 格局。技术面处于中枢下沿位置，RSI 从超卖区反弹；
-              基本面估值处于历史低位区间，PB 低于 1.5 倍；消息面短期无重大催化。建议 <strong style="color:var(--signal-watch);">静待观察</strong>，
-              若放量突破中枢上沿 ¥13.50 可考虑关注。
-            </p>
-          </div>
-          <div class="analysis-section" style="display:flex;gap:var(--space-8);margin-top:var(--space-16);">
-            <button class="btn" onclick="location.href='indicator-ide.html'">📈 策略分析</button>
-            <button class="btn btn-primary" onclick="alert('📋 报告已生成')">📋 生成报告</button>
-          </div>
-        </div>
+      <!-- 当前Tab内容区 -->
+      <div id="tabContent"></div>
 
-        <div id="tab-technical" class="tab-panel" style="display:none;">
-          <div class="analysis-section"><h5>📈 技术分析详情</h5><p style="font-size:13px;color:var(--text-secondary);line-height:1.8;">MACD 零轴下方金叉，DIFF 上穿 DEA，动能柱转红。<br>RSI(14): 42.3，从超卖区（<30）反弹。<br>KDJ: K=38.5, D=32.1, J=51.3，短期偏多。<br>布林带: 价格触及下轨后反弹，中轨 ¥12.80 为压力位。<br>成交量: 近 3 日放量 35%，有资金介入迹象。</p></div>
-        </div>
-        <div id="tab-fundamental" class="tab-panel" style="display:none;">
-          <div class="analysis-section"><h5>📋 基本面分析详情</h5><p style="font-size:13px;color:var(--text-secondary);line-height:1.8;">PE(TTM): 28.5x，低于行业均值 35.2x。<br>PB(MRQ): 1.42x，处于近 5 年 15% 分位。<br>ROE: 8.5%，高于行业平均。<br>营收增长率: 12.3% YoY。<br>净利润增长率: 8.7% YoY。</p></div>
-        </div>
-        <div id="tab-news" class="tab-panel" style="display:none;">
-          <div class="analysis-section"><h5>📰 消息面分析</h5><p style="font-size:13px;color:var(--text-secondary);line-height:1.8;">近期无重大利空/利好消息。<br>行业政策: 新能源矿产政策保持稳定。<br>机构评级: 3 家机构给予"增持"评级。<br>舆情情绪: 中性偏积极。</p></div>
-        </div>
+      <!-- 底部工具条 -->
+      <div class="bottom-actions">
+        <button class="btn" onclick="alert('🗣️ 辩论模式将在Phase 2实现。当前为Phase 0原型阶段。');"><span>🗣️</span> 发起辩论</button>
+        <button class="btn" onclick="alert('📋 报告导出将在后续版本实现。');"><span>📋</span> 导出报告</button>
+        <button class="btn" onclick="location.href='indicator-ide.html?symbol='+encodeURIComponent(document.getElementById('stockCode').value);"><span>📈</span> 查看策略分析</button>
+        <button class="btn" onclick="startAnalysis();"><span>🔄</span> 重新分析</button>
       </div>
     </div>
 
@@ -136,38 +179,344 @@
 </div>
 
 <script>
-function startAnalysis(){
-  document.getElementById('result-area').style.display = 'none';
-  document.getElementById('progress-area').style.display = '';
+/* ===== 角色定义 ===== */
+var ROLES = [
+  { id:'technical',   icon:'📈', name:'技术研判',   tabLabel:'📈 技术研判',   direction:'bullish',  tag:'偏多' },
+  { id:'fundamental', icon:'📊', name:'基本面研判',  tabLabel:'📊 基本面研判',  direction:'neutral',  tag:'中性' },
+  { id:'chip',        icon:'🧩', name:'筹码资金研判', tabLabel:'🧩 筹码资金研判', direction:'bullish',  tag:'偏多' },
+  { id:'sentiment',   icon:'💬', name:'情绪研判',    tabLabel:'💬 情绪研判',    direction:'neutral',  tag:'中性' },
+  { id:'news',        icon:'📰', name:'消息面研判',  tabLabel:'📰 消息面研判',  direction:'bearish',  tag:'偏空' },
+  { id:'risk',        icon:'🛡️', name:'风控研判',    tabLabel:'🛡️ 风控研判',    direction:'watch',    tag:'可参与' },
+];
 
-  var steps = ['p0','p1','p2','p3'];
-  var labels = ['正在调用技术分析角色... ✅','正在调用基本面分析角色... ✅','正在调用情绪分析角色... ✅','正在生成综合研判... ✅'];
-  var icons = ['📝','📝','📝','📝'];
-  var p = 0;
+/* ===== Mock数据（模拟DeepSeek LLM输出风格） ===== */
 
-  var timer = setInterval(function(){
-    if(p > 0) document.getElementById(steps[p-1]).innerHTML = '<span class="icon">✅</span>' + labels[p-1].replace('... ✅','');
-    if(p < steps.length){
-      document.getElementById(steps[p]).innerHTML = '<span class="icon">⏳</span>' + labels[p].replace(' ✅','... ');
-    }
-    document.getElementById('progress-fill').style.width = ((p+1)/steps.length*100)+'%';
-    p++;
-    if(p > steps.length){
-      clearInterval(timer);
-      document.getElementById('progress-area').style.display = 'none';
-      document.getElementById('result-area').style.display = '';
-    }
-  }, 800);
+var MOCK_REPORTS = {
+  technical: {
+    structured: [
+      { label:'走势判定',   value:'↑ 上升笔延续' },
+      { label:'中枢区间',   value:'[2950, 3100]', sub:'当前位于上沿附近，偏强位置' },
+      { label:'买卖点',     value:'二买', sub:'确认信号已触发' },
+      { label:'均线排列',   value:'MA5>MA10>MA20>MA60', sub:'多头排列，趋势向上' },
+      { label:'FMZ状态',   value:'EAGLE', sub:'突破形态识别' },
+      { label:'支撑/压力',  value:'2950 / 3100' },
+    ],
+    report: '【走势结构判定】\n日线级别上升线段延续，截至目前已形成标准底分型确认。中枢区间[2950,3100]，当前位于中枢上沿附近，属于偏强位置。\n均线排列：多头，MA5=28.50 MA10=28.20 MA20=27.80 MA60=26.50\n\n【买卖点分析】\n当前买卖点：二买，已确认。MACD零轴上方金叉，DIFF上穿DEA，动能柱转红。\n背驰状态：盘整背驰不明显，MACD面积比1.2倍前段。区间套验证：无多级别联立共振。\n\n【量价形态】\nFMZ市场状态：EAGLE（突破形态）。活跃形态识别：头肩底突破形态已完成确认。\n量价关系：放量上涨突破形态颈线，但近3日量能未持续放大，需警惕量价背离。\n\n【核心判断】\n支撑位：2950  压力位：3100\n走势预期：中枢上沿震荡后有望向上突破\n总体研判：偏多，关注量能确认',
+    sources:['chanlun_strategy.py → 上升笔+中枢+买卖点','volume_price_strategy.py → FMZ=EAGLE, 形态=头肩底突破','volume_price_strategy.py → MA5>MA10>MA20>MA60']
+  },
+  fundamental: {
+    structured: [
+      { label:'PE(TTM)',  value:'28.5x', sub:'行业均值35.2x' },
+      { label:'PB(MRQ)',  value:'1.42x', sub:'近5年15%分位' },
+      { label:'ROE',      value:'8.5%', sub:'高于行业平均' },
+      { label:'营收增长率', value:'12.3%', sub:'YoY同比' },
+      { label:'净利润增长率',value:'8.7%', sub:'YoY同比' },
+      { label:'现金流状况', value:'健康', sub:'经营活动现金流为正' },
+    ],
+    report: '【核心财务指标】\nPE(TTM)=28.5x 行业均值=35.2x 分位=15%（低估区域）\nPB(MRQ)=1.42x 近5年处于最低15%分位\nROE=8.5% 高于行业平均6.3%，ROE趋势：稳定\n营收增长率=12.3% YoY 净利润增长率=8.7% YoY 利润增速略低于营收\n\n【估值评估】\n当前估值：低估。相对行业折价19.0%。历史分位：近5年处于15%分位，具备安全边际。\n\n【成长性与质量】\n成长动力：新能源矿产需求驱动，产能释放期。毛利率趋势：稳中有升。现金流状况：经营活动现金流为正，覆盖投资支出。\n\n【核心判断】\n估值结论：估值处于历史低位，具备安全边际\n主要风险点：利润增速低于营收增速，存在成本压力\n总体研判：中性偏低，估值具备吸引力但需观察盈利改善趋势',
+    sources:['Tushare fina_indicator → PE/PB/ROE','Tushare income → 营收/净利润增长率','Tushare cashflow → 现金流状况']
+  },
+  chip: {
+    structured: [
+      { label:'集中度',   value:'集中', sub:'筹码趋于集中' },
+      { label:'获利比例', value:'62.5%', sub:'半数以上获利' },
+      { label:'平均成本', value:'¥28.80', sub:'当前价¥28.50 略低于成本' },
+      { label:'主力净额', value:'+¥3,250万', sub:'近5日持续流入' },
+      { label:'北向资金', value:'增持', sub:'近5日变动+0.8%' },
+      { label:'大单动向', value:'特大单净流入', sub:'中大单主导' },
+    ],
+    report: '【筹码分布】\n集中度：集中。获利比例：62.5%。平均成本：¥28.80。\n近期筹码变化方向：收集。底部区域有资金持续建仓痕迹。\n\n【资金流向】\n主力资金方向：净流入。近5日主力净额：¥3,250万。趋势：持续流入。\n大单动向：特大单净流入为主，大单跟随，中小单净流出（散户卖出）。\n北向资金：增持，近5日变动+0.8%。\n\n【主力行为研判】\n主力意图：建仓期，底部区域密集吸筹。集中度与资金流一致性：一致（集中度上升+主力净流入+北向增持）。异常信号：无明显异常。\n\n【核心判断】\n资金面结论：资金面积极，主力底部吸筹迹象明显\n总体研判：偏多，主力建仓期可跟随关注',
+    sources:['chip_strategy.py → 集中度+获利比例','MoneyFlow → 主力净额+大单分布','NorthBound → 北向方向+变动']
+  },
+  sentiment: {
+    structured: [
+      { label:'情绪阶段', value:'恢复期', sub:'从悲观区域回升' },
+      { label:'情绪趋势', value:'升温', sub:'市场信心改善' },
+      { label:'拥挤度',   value:'中度', sub:'未过热' },
+      { label:'板块轮动', value:'LEADING', sub:'领先板块' },
+      { label:'板块强度', value:'偏强', sub:'相对大盘超额收益' },
+      { label:'市场温度', value:'温和', sub:'风险偏好适中' },
+    ],
+    report: '【情绪周期分析】\n当前情绪阶段：恢复期。从极度悲观区域回升，但尚未进入乐观区间。情绪趋势：升温。\n拥挤度等级：中度（高拥挤/中度/低拥挤/极低）。\n\n【板块轮动】\n所属板块轮动位置：LEADING（领先板块）。板块相对强度：偏强，近20日跑赢大盘。板块资金关注度：中等。\n\n【市场氛围】\n全市场情绪温度：温和。市场广度：中等（上涨/下跌家数比平衡）。风险偏好：适中，资金从避险资产逐步回流权益。\n\n【核心判断】\n情绪面结论：情绪从底部回升，尚未过热\n需关注的风险信号：若快速升温至乐观区间需警惕短期回调\n总体研判：中性，情绪面支撑但不构成强烈做多信号',
+    sources:['crowding_factor.py → 拥挤度判定','sector_rotation_model.py → 板块轮动位置','BOCIASI快线 → 情绪温度']
+  },
+  news: {
+    structured: [
+      { label:'利好事项', value:'3项', sub:'政策支持+业绩预增+新项目' },
+      { label:'利空事项', value:'1项', sub:'小非减持公告' },
+      { label:'机构评级', value:'3增持/1中性/0减持', sub:'目标价¥32-¥35' },
+      { label:'近期催化', value:'行业政策利好', sub:'新能源矿产规划出台' },
+      { label:'待验证事件', value:'Q2财报', sub:'预计8月下旬披露' },
+    ],
+    report: '【近期事件梳理】\n利好事项：\n1. 新能源矿产行业政策支持（已出台）\n2. 业绩预增公告（H1净利润预计增长15-20%）\n3. 新矿产资源项目获批\n利空事项：\n1. 小非减持公告（占总股本0.8%，影响有限）\n\n【机构观点】\n评级分布：3家增持 / 1家中性 / 0家减持\n目标价区间：¥32 - ¥35（较当前价有12-23%上行空间）\n观点变化趋势：维持（近3月无大幅调整）\n\n【政策与行业动态】\n相关政策：新能源矿产行业支持政策持续出台，对上下游产业链形成利好。行业趋势：供需格局改善，价格企稳回升。\n\n【核心判断】\n消息面综合：中性偏多\n主要催化因素：行业政策+业绩预增\n主要拖累因素：小非减持情绪扰动\n总体研判：中性偏多，关注Q2财报验证',
+    sources:['News API → 新闻事件列表','Reports API → 机构评级+观点','Tushare forecast → 业绩预告']
+  },
+  risk: {
+    structured: [
+      { label:'市场风险', value:'3/5', sub:'中等' },
+      { label:'流动性风险', value:'2/5', sub:'较低' },
+      { label:'个股风险', value:'3/5', sub:'关注减持进度' },
+      { label:'波动率风险', value:'2/5', sub:'正常波动范围' },
+      { label:'验证链通过', value:'3/4', sub:'75%一致' },
+      { label:'仓位建议', value:'≤30%', sub:'基于当前风险等级' },
+    ],
+    report: '【多维度风险评估】\n┌────────────┬──────┬────────────────────────┐\n│ 风险维度   │ 等级  │ 具体描述                │\n├────────────┼──────┼────────────────────────┤\n│ 市场风险   │ 3/5  │ 市场整体震荡偏弱        │\n│ 流动性风险 │ 2/5  │ 日均成交额正常          │\n│ 个股风险   │ 3/5  │ 减持公告+质押比例适中    │\n│ 波动率风险 │ 2/5  │ 20日波动率正常范围内     │\n│ 情绪风险   │ 2/5  │ 情绪恢复中，无极端信号   │\n└────────────┴──────┴────────────────────────┘\n\n【验证链分析】\nchain_passed_ratio: 3/4 (75%)\n主要冲突项：\n- 技术面看多 vs 基本面中性（短期走势vs长期估值的不一致）\n\n【下行情景】\n最差情景：大盘系统性下跌叠加个股减持抛压\n回撤预估：12-15%\n\n【风险管控建议】\n仓位建议：≤30%（中等风险等级）\n止损位：¥25.50（跌破前期平台）\n核心风控要点：关注减持进度和大盘系统性风险\n\n【核心判断】\n综合风险等级：中等\n总体研判：可参与，仓位控制在30%以内',
+    sources:['VerificationChains → 验证链4条','conflict_arbiter.py → 冲突检测','Strategy Scheduler → 波动率+流动性']
+  },
+};
+
+var SYNTHESIS = {
+  consensus: [
+    { icon:'✅', text:'4/6角色一致认为中期处于上行通道' },
+    { icon:'✅', text:'2950一线具有较强支撑，多角色均认可' },
+    { icon:'✅', text:'当前估值合理偏低，具备安全边际（基本面+筹码确认）' },
+  ],
+  conflicts: [
+    { title:'⚡ 短期方向分歧', detail:'📈 技术面（看多）：放量突破形态颈线，有望继续上行\n📰 消息面（偏空）：小非减持带来短期情绪扰动\n🧩 筹码面（看多）：主力底部吸筹迹象明显\n🛡️ 风控（可参与）：中等风险，仓位控制在30%以内\n\n核心分歧：技术/筹码看多vs消息面偏空，差异在于时间维度——短期减持扰动vs中期上行趋势。' },
+    { title:'⚡ 估值支撑持续性', detail:'📊 基本面（中性偏低）：估值低但利润增速放缓\n💬 情绪面（中性）：情绪从底部回升中但未形成强烈信号\n\n核心分歧：低估值是否构成买入理由——基本面认为需要盈利改善确认，情绪面认为缺乏情绪共振。' },
+  ],
+  overall: { direction:'中性偏多', consistency:'4/6', completeness:'78%', stoploss:'25.50', position:'30%' }
+};
+
+/* ===== 状态管理 ===== */
+var analyzing = false;
+var tabContentEl = document.getElementById('tabContent');
+var progressPanel = document.getElementById('progressPanel');
+var progressFill = document.getElementById('progressFill');
+var progressPct = document.getElementById('progressPct');
+var roleStrip = document.getElementById('roleStrip');
+var roleTabs = document.getElementById('roleTabs');
+
+/* ===== 主流程 ===== */
+function startAnalysis() {
+  if(analyzing) return;
+  analyzing = true;
+  document.getElementById('btnAnalyze').disabled = true;
+
+  // 显示分析区
+  document.getElementById('welcomeArea').style.display = 'none';
+  document.getElementById('analysisArea').style.display = '';
+
+  // 初始化角色状态
+  var roleStates = {};
+  ROLES.forEach(function(r){ roleStates[r.id] = 'waiting'; });
+
+  // 渲染角色条
+  renderRoleStrip(roleStates);
+
+  // 渲染Tab
+  renderTabs(null);
+
+  // 初始Tab内容
+  tabContentEl.innerHTML = '<div class="report-loading"><div class="spinner"></div><span>正在启动6位专业分析师...</span></div>';
+
+  // 模拟分析进度
+  simulateProgress(roleStates);
 }
 
-function switchTab(el, tabId){
-  document.querySelectorAll('.tab-item').forEach(function(t){t.classList.remove('active');});
-  el.classList.add('active');
-  document.querySelectorAll('.tab-panel').forEach(function(p){p.style.display='none';});
-  document.getElementById(tabId).style.display = '';
+function simulateProgress(states) {
+  var order = ['technical','fundamental','chip','sentiment','news','risk'];
+  var idx = 0;
+  var total = order.length;
+
+  function nextStep() {
+    if(idx >= total) {
+      // 所有角色完成
+      states[order[total-1]] = 'done';
+      renderRoleStrip(states);
+      progressFill.style.width = '100%';
+      progressPct.textContent = '100%';
+      analyzing = false;
+      document.getElementById('btnAnalyze').disabled = false;
+      // 跳转到综合决策
+      renderTabs(null);
+      switchTab('synthesis');
+      tabContentEl.scrollIntoView({behavior:'smooth', block:'nearest'});
+      return;
+    }
+
+    var current = order[idx];
+
+    // 标记当前为分析中
+    if(idx > 0) { states[order[idx-1]] = 'done'; }
+    states[current] = 'analyzing';
+
+    // 更新UI
+    progressFill.style.width = ((idx+0.5)/total*100) + '%';
+    progressPct.textContent = Math.round((idx+0.5)/total*100) + '%';
+    renderRoleStrip(states);
+    renderRoleTabStatus(states);
+
+    // 显示当前角色的内容（如果已经在该Tab）
+    var activeTab = document.querySelector('.role-tab.active');
+    if(activeTab && activeTab.dataset.roleId === current) {
+      showRoleContent(current);
+    }
+
+    // 模拟分析时间
+    var delay = 300 + Math.random() * 400;
+
+    setTimeout(function(){
+      // 完成当前角色
+      states[current] = 'done';
+      progressFill.style.width = ((idx+1)/total*100) + '%';
+      progressPct.textContent = Math.round((idx+1)/total*100) + '%';
+      renderRoleStrip(states);
+      renderRoleTabStatus(states);
+
+      idx++;
+      setTimeout(nextStep, 100);
+    }, delay);
+  }
+
+  setTimeout(nextStep, 300);
 }
-</script>
-<script>
+
+/* ===== 渲染函数 ===== */
+
+function renderRoleStrip(states) {
+  var html = '';
+  ROLES.forEach(function(r){
+    var s = states[r.id] || 'waiting';
+    var cls = 'role-chip chip-'+s;
+    var label = s==='done' ? '✅' : (s==='analyzing' ? '⏳' : '⏸️');
+    html += '<div class="'+cls+'"><span class="chip-icon">'+r.icon+'</span>'+r.name+' '+label+'</div>';
+  });
+  roleStrip.innerHTML = html;
+}
+
+function renderTabs(states) {
+  var html = '';
+  ROLES.forEach(function(r){
+    var s = (states && states[r.id]) || 'waiting';
+    var statusClass = s==='done' ? 's-done' : (s==='analyzing' ? 's-analyzing' : 's-waiting');
+    html += '<div class="role-tab" data-role-id="'+r.id+'" onclick="switchTab(\''+r.id+'\')"><span class="tab-status '+statusClass+'"></span>'+r.tabLabel+'</div>';
+  });
+  html += '<div class="role-tab" data-role-id="synthesis" onclick="switchTab(\'synthesis\')"><span class="tab-status s-done"></span>🎯 综合决策</div>';
+  roleTabs.innerHTML = html;
+
+  // 默认选中第一个
+  var first = roleTabs.querySelector('.role-tab');
+  if(first) first.classList.add('active');
+}
+
+function renderRoleTabStatus(states) {
+  roleTabs.querySelectorAll('.role-tab').forEach(function(tab){
+    var rid = tab.dataset.roleId;
+    if(!rid || rid === 'synthesis') return;
+    var s = states[rid] || 'waiting';
+    var dot = tab.querySelector('.tab-status');
+    if(dot) {
+      dot.className = 'tab-status s-'+s;
+    }
+  });
+}
+
+function switchTab(roleId) {
+  // 更新Tab激活状态
+  roleTabs.querySelectorAll('.role-tab').forEach(function(t){ t.classList.remove('active'); });
+  var activeTab = roleTabs.querySelector('.role-tab[data-role-id="'+roleId+'"]');
+  if(activeTab) activeTab.classList.add('active');
+
+  if(roleId === 'synthesis') {
+    showSynthesis();
+  } else {
+    showRoleContent(roleId);
+  }
+}
+
+function showRoleContent(roleId) {
+  var mock = MOCK_REPORTS[roleId];
+  var role = ROLES.find(function(r){ return r.id === roleId; });
+  if(!mock || !role) return;
+
+  var tagClass = role.direction==='bullish'?'bullish':(role.direction==='bearish'?'bearish':'neutral');
+  var tagText = role.tag;
+
+  // 数据卡片
+  var cardsHtml = '';
+  mock.structured.forEach(function(d){
+    cardsHtml += '<div class="data-card"><div class="dc-label">'+d.label+'</div><div class="dc-value">'+d.value+'</div>'+(d.sub?'<div class="dc-sub">'+d.sub+'</div>':'')+'</div>';
+  });
+
+  // 数据来源
+  var sourcesHtml = '';
+  mock.sources.forEach(function(s){
+    sourcesHtml += '<div class="src-item">· '+s+'</div>';
+  });
+
+  // 研判报告（换行处理）
+  var reportHtml = '';
+  var sections = mock.report.split('\n\n');
+  sections.forEach(function(sec){
+    sec = sec.trim();
+    if(!sec) return;
+    var lines = sec.split('\n');
+    var title = lines[0].replace(/【|】/g,'').trim();
+    var body = lines.slice(1).join('\n').trim();
+    reportHtml += '<div class="report-section"><div class="rs-title">'+title+'</div><div class="rs-text">'+body+'</div></div>';
+  });
+
+  tabContentEl.innerHTML =
+    '<div class="role-content">'+
+      '<div class="data-cards">'+
+        cardsHtml+
+        '<details class="data-sources"><summary>📎 数据来源 ‎(点击展开)</summary>'+sourcesHtml+'</details>'+
+      '</div>'+
+      '<div class="report-area">'+
+        '<div class="report-header"><h3>'+role.icon+' '+role.name+'</h3><span class="report-tag '+tagClass+'">'+tagText+'</span></div>'+
+        '<div class="report-body">'+reportHtml+'</div>'+
+        '<div class="judgment-line">⚖️ 总体研判：<span style="color:var(--signal-'+(role.direction==='neutral'?'watch':(role.direction==='bullish'?'bullish':'bearish'))+')">'+tagText+'</span></div>'+
+      '</div>'+
+    '</div>';
+}
+
+function showSynthesis() {
+  var cHtml = '';
+  SYNTHESIS.consensus.forEach(function(c){
+    cHtml += '<div class="consensus-item"><span class="ci-icon">'+c.icon+'</span>'+c.text+'</div>';
+  });
+
+  var cfHtml = '';
+  SYNTHESIS.conflicts.forEach(function(c){
+    cfHtml += '<div class="conflict-card"><div class="cc-title">'+c.title+'</div><div class="cc-detail">'+c.detail.replace(/\n/g,'<br>')+'</div></div>';
+  });
+
+  var o = SYNTHESIS.overall;
+
+  tabContentEl.innerHTML =
+    '<div class="report-area" style="grid-column:1/-1;">'+
+      '<div class="report-header"><h3>🎯 综合决策 · 6角色研判汇总</h3><span class="report-tag '+(o.direction==='中性偏多'?'neutral':'neutral')+'">'+o.direction+'</span></div>'+
+      '<div class="report-body">'+
+
+        '<div class="synthesis-grid">'+
+          '<div class="syn-card"><div class="syn-title">综合方向</div><div class="syn-value" style="color:var(--signal-watch);font-weight:600;">'+o.direction+'</div></div>'+
+          '<div class="syn-card"><div class="syn-title">方向一致性</div><div class="syn-value">'+o.consistency+' (多/空/中性分布)</div></div>'+
+          '<div class="syn-card"><div class="syn-title">数据完整度</div><div class="syn-value">'+o.completeness+' (74/95项数据到位)</div></div>'+
+          '<div class="syn-card"><div class="syn-title">风控建议</div><div class="syn-value">止损 '+o.stoploss+' · 仓位 ≤'+o.position+'</div></div>'+
+        '</div>'+
+
+        '<div style="margin-bottom:var(--space-12);"><div class="rs-title">一致观点</div></div>'+
+        '<div class="consensus-list">'+cHtml+'</div>'+
+
+        '<div style="margin:var(--space-16) 0 var(--space-8);"><div class="rs-title">观点碰撞 · 分歧分析<span style="color:var(--text-muted);font-weight:400;font-size:12px;margin-left:var(--space-8);">（各角色实际研判内容的动态分析）</span></div></div>'+
+        cfHtml+
+
+        '<div style="margin:var(--space-16) 0 var(--space-8);"><div class="rs-title">情景推演</div></div>'+
+        '<div class="syn-card" style="margin-bottom:var(--space-8);"><div class="syn-title">情景A：放量突破（概率~35%）</div><div class="syn-value">技术面看多+筹码面资金流入形成共振，突破3100后打开上行空间。触发条件：日成交量>3倍20日均量+北向持续增持。</div></div>'+
+        '<div class="syn-card" style="margin-bottom:var(--space-8);"><div class="syn-title">情景B：中枢震荡（概率~45%）</div><div class="syn-value">多空力量平衡，股价在2950-3100区间震荡整理。基本面+情绪面均不支持突破或破位，等待催化剂出现。</div></div>'+
+        '<div class="syn-card"><div class="syn-title">情景C：回调下探（概率~20%）</div><div class="syn-value">消息面减持压力+情绪面回落共同施压，跌破2950中枢下沿。触发条件：大盘走弱+大宗减持执行+量能持续萎缩。</div></div>'+
+
+        '<div style="margin:var(--space-16) 0 var(--space-4);">'+
+          '<div class="judgment-line" style="border-top:none;padding-top:0;">🎯 综合建议：<span style="color:var(--signal-watch);font-weight:600;">'+o.direction+'，可参与，仓位≤'+o.position+'，止损 '+o.stoploss+'</span></div>'+
+          '<div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-4);">以上建议由DeepSeek V4基于6位分析师的专业研判生成，仅供参考，不构成投资建议</div>'+
+        '</div>'+
+
+      '</div>'+
+    '</div>';
+}
+
+/* ===== 侧栏 ===== */
 var sidebarCollapsed = true;
 function toggleSidebar(){
   sidebarCollapsed = !sidebarCollapsed;
@@ -184,6 +533,16 @@ function toggleSidebar(){
   if(m){m.classList.add('collapsed');m.style.marginLeft='64px';}
   var btn=document.querySelector('.sidebar-toggle');
   if(btn)btn.textContent='▶';
+})();
+
+/* ===== URL参数检测（支持从indicator-ide跳转） ===== */
+(function(){
+  var params = new URLSearchParams(window.location.search);
+  var symbol = params.get('symbol');
+  if(symbol) {
+    document.getElementById('stockCode').value = symbol;
+    // 不自动启动，用户手动点击
+  }
 })();
 </script>
 </body>
