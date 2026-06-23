@@ -1,60 +1,187 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>回测系统 — A股分析系统</title>
 <link rel="stylesheet" href="assets/base.css">
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <style>
-.backtest-layout { display: grid; grid-template-columns: 320px 1fr; gap: var(--space-16); }
-.config-section { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); height: fit-content; }
-.config-section h4 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-12); }
-.config-row { display: flex; align-items: center; gap: var(--space-8); margin-bottom: var(--space-10); }
-.config-row label { width: 60px; font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
-.config-row .input, .config-row .select { flex: 1; }
-.chk-group { display: flex; gap: var(--space-6); flex-wrap: wrap; }
-.chk-group label { display: flex; align-items: center; gap: var(--space-4); font-size: 12px; color: var(--text-secondary); cursor: pointer; padding: var(--space-4) var(--space-8); border-radius: var(--radius-xs); background: var(--bg-subtle); }
-.chk-group input { accent-color: #3B82F6; }
+/* ── 回测布局 ── */
+.backtest-layout { display:grid; grid-template-columns:320px 1fr; gap:var(--space-16); }
+@media(max-width:1100px){ .backtest-layout{grid-template-columns:1fr;} }
 
-.results-section { flex: 1; }
-.metrics-row { display: grid; grid-template-columns: repeat(5,1fr); gap: var(--space-12); margin-bottom: var(--space-16); }
-.metric-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-12); text-align: center; }
-.metric-card .val { font-size: 18px; font-weight: 700; margin: var(--space-2) 0; }
-.metric-card .lbl { font-size: 11px; color: var(--text-muted); }
+/* ── 左侧配置面板 ── */
+.config-section { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); height:fit-content; }
+.config-section h4 { font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:var(--space-8); display:flex; align-items:center; gap:var(--space-4); }
+.config-row { display:flex; align-items:center; gap:var(--space-6); margin-bottom:var(--space-8); flex-wrap:wrap; }
+.config-row label.label { width:56px; font-size:11px; color:var(--text-muted); flex-shrink:0; }
+.config-row .input,.config-row .select { flex:1; font-size:12px; }
+.import-info { font-size:10px; color:var(--color-brand-500); padding:var(--space-2) 0; }
+/* ── 股票搜索下拉 ── */
+.bt-stock-wrap { position:relative; flex:1; }
+.bt-stock-wrap input.input { width:100%; font-size:12px; }
+#btSearchDropdown { position:absolute; top:100%; left:0; z-index:9999; background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-sm); max-height:260px; overflow-y:auto; display:none; box-shadow:0 4px 12px rgba(0,0,0,0.3); width:100%; }
+.bt-search-item { display:flex; justify-content:space-between; align-items:center; padding:5px 8px; cursor:pointer; font-size:11px; color:var(--text-primary); border-bottom:1px solid var(--border-default); }
+.bt-search-item:last-child { border-bottom:none; }
+.bt-search-item:hover { background:rgba(255,255,255,0.08); }
+.bt-search-item .si-code { color:var(--text-muted); font-family:monospace; font-size:10px; }
+.bt-search-item .si-name { color:var(--text-primary); }
+.bt-search-loading,.bt-search-empty { padding:8px; text-align:center; font-size:11px; color:var(--text-muted); }
+.bt-current-stock { font-size:10px; color:var(--color-brand-500); padding:var(--space-1) 0 0; display:none; }
+.preset-group { display:flex; flex-direction:column; gap:var(--space-3); margin-bottom:var(--space-8); }
+.preset-opt { display:flex; align-items:center; gap:var(--space-4); padding:var(--space-3) var(--space-6); border:1px solid var(--border-default); border-radius:var(--radius-sm); cursor:pointer; font-size:11px; color:var(--text-secondary); transition:all .15s; }
+.preset-opt:hover { border-color:var(--color-brand-500); }
+.preset-opt.active { border-color:var(--color-brand-500); background:rgba(59,130,246,0.06); color:var(--text-primary); }
+.preset-opt .dot { width:8px;height:8px;border-radius:50%;flex-shrink:0; }
+.preset-opt .p-name { font-weight:500; color:var(--text-primary); }
+.preset-opt .p-desc { font-size:10px; color:var(--text-muted); }
+.preset-opt input[type=radio] { accent-color:#3B82F6; }
+.bench-group { display:flex; flex-wrap:wrap; gap:var(--space-3); margin-bottom:var(--space-8); }
+.bench-opt { display:flex; align-items:center; gap:var(--space-3); font-size:11px; color:var(--text-secondary); cursor:pointer; padding:var(--space-1) var(--space-4); border-radius:var(--radius-xs); background:var(--bg-subtle); }
+.bench-opt input { accent-color:#3B82F6; }
+.practical-preview { font-size:10px; color:var(--text-muted); padding:var(--space-4); background:var(--bg-subtle); border-radius:var(--radius-xs); margin-bottom:var(--space-8); line-height:1.7; }
+.practical-preview .pp-title { font-size:10px; font-weight:600; color:var(--text-secondary); margin-bottom:var(--space-2); }
+.practical-empty { font-size:11px; color:var(--text-muted); text-align:center; padding:var(--space-6); border:1px dashed var(--border-default); border-radius:var(--radius-xs); margin-bottom:var(--space-8); }
+.adv-toggle { font-size:10px; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; gap:var(--space-2); user-select:none; }
+.adv-toggle:hover { color:var(--text-secondary); }
+.adv-body { display:none; padding:var(--space-4) 0; }
+.adv-body.open { display:block; }
+.config-actions { display:flex; gap:var(--space-6); margin-top:var(--space-4); }
+.config-actions button { flex:1; justify-content:center; font-size:12px; }
 
-.chart-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); margin-bottom: var(--space-16); }
-.chart-card .title { font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: var(--space-8); }
-.chart-box { height: 220px; }
+/* ── 右侧结果面板 ── */
+.results-section { flex:1; }
 
-.trade-table { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
+/* 指标卡片 */
+.metrics-row { display:grid; grid-template-columns:repeat(5,1fr); gap:var(--space-10); margin-bottom:var(--space-12); }
+@media(max-width:900px){ .metrics-row{grid-template-columns:repeat(3,1fr);} }
+.metric-card { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-8) var(--space-10); text-align:center; position:relative; }
+.metric-card .val { font-size:20px; font-weight:700; margin:var(--space-1) 0 var(--space-1); }
+.metric-card .lbl { font-size:10px; color:var(--text-muted); margin-bottom:var(--space-1); }
+.metric-card .tag { font-size:9px; padding:1px 5px; border-radius:2px; display:inline-block; }
+.metric-card .tag.benchmark { background:rgba(59,130,246,0.1); color:#60A5FA; }
+.metric-card .tag.good { background:rgba(34,197,94,0.1); color:#4ADE80; }
+.metric-card .tag.medium { background:rgba(245,158,11,0.1); color:#FBBF24; }
+.metric-card .tag.poor { background:rgba(239,68,68,0.1); color:#F87171; }
+.more-metrics { display:none; grid-template-columns:repeat(5,1fr); gap:var(--space-10); margin-bottom:var(--space-12); }
+.more-metrics.open { display:grid; }
+.more-btn { font-size:10px; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; gap:var(--space-2); padding:var(--space-2) var(--space-4); user-select:none; }
+.more-btn:hover { color:var(--text-secondary); }
+
+/* 图表并排 */
+.chart-row { display:grid; grid-template-columns:1fr 1fr; gap:var(--space-12); margin-bottom:var(--space-12); }
+@media(max-width:1100px){ .chart-row{grid-template-columns:1fr;} }
+.chart-card { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); }
+.chart-card .title { font-size:12px; font-weight:500; color:var(--text-secondary); margin-bottom:var(--space-6); }
+.chart-box { height:200px; }
+
+/* 策略健康度 */
+.health-panel { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); margin-bottom:var(--space-12); }
+.health-panel .hp-header { font-size:12px; font-weight:600; color:var(--text-primary); margin-bottom:var(--space-6); display:flex; justify-content:space-between; align-items:center; }
+.health-table { width:100%; border-collapse:collapse; font-size:11px; }
+.health-table th { text-align:left; padding:var(--space-2) var(--space-4); color:var(--text-muted); font-weight:500; border-bottom:1px solid var(--border-default); }
+.health-table td { padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--border-default); color:var(--text-secondary); }
+.health-status { display:flex; align-items:center; gap:var(--space-3); }
+.health-dot { width:8px;height:8px;border-radius:50%;flex-shrink:0; }
+.health-dot.green { background:#22C55E; }
+.health-dot.yellow { background:#F59E0B; }
+.health-dot.red { background:#EF4444; }
+.health-diagnosis { margin-top:var(--space-6); padding:var(--space-4) var(--space-6); background:var(--bg-subtle); border-radius:var(--radius-sm); font-size:11px; color:var(--text-secondary); line-height:1.7; border-left:3px solid var(--signal-watch); }
+
+/* 回测解读 */
+.interpret-card { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); margin-bottom:var(--space-12); }
+.interpret-card .title { font-size:12px; font-weight:600; color:var(--text-primary); margin-bottom:var(--space-4); }
+.interpret-body { font-size:11px; color:var(--text-secondary); line-height:1.8; }
+.interpret-body .line { padding:var(--space-1) 0; }
+.interpret-grade { display:inline-block; font-size:10px; padding:1px 6px; border-radius:3px; font-weight:600; }
+.interpret-grade.good { background:rgba(34,197,94,0.12); color:#22C55E; }
+.interpret-grade.medium { background:rgba(245,158,11,0.12); color:#F59E0B; }
+.interpret-grade.poor { background:rgba(239,68,68,0.12); color:#EF4444; }
+
+/* 可信度评估 */
+.confidence-bar { display:flex; gap:var(--space-6); flex-wrap:wrap; margin-top:var(--space-4); }
+.conf-item { display:flex; align-items:center; gap:var(--space-3); font-size:10px; color:var(--text-secondary); padding:var(--space-2) var(--space-4); background:var(--bg-subtle); border-radius:var(--radius-xs); }
+.conf-item .ck { color:#22C55E; }
+.conf-item .cx { color:#EF4444; }
+
+/* 交易明细 */
+.trade-table-wrap { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); margin-bottom:var(--space-12); }
+.trade-table-wrap .tt-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--space-8); }
+.tt-actions { display:flex; gap:var(--space-4); }
+.tt-actions button { height:30px; font-size:11px; padding:0 var(--space-8); }
+
+/* 冲突成本 */
+.cost-panel { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); margin-bottom:var(--space-12); }
+.cost-header { display:flex; justify-content:space-between; align-items:center; cursor:pointer; user-select:none; }
+.cost-header .title { font-size:12px; font-weight:600; color:var(--text-primary); }
+.cost-body { display:none; margin-top:var(--space-6); }
+.cost-body.open { display:block; }
+.cost-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:var(--space-8); margin-bottom:var(--space-6); }
+.cost-item { text-align:center; padding:var(--space-4); background:var(--bg-subtle); border-radius:var(--radius-sm); }
+.cost-item .cv { font-size:18px; font-weight:700; }
+.cost-item .cl { font-size:10px; color:var(--text-muted); margin-top:var(--space-1); }
+.cost-pair { font-size:10px; color:var(--text-muted); line-height:1.8; }
+
+/* ── 参数优化与应用 ── */
+.optimize-panel { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); margin-bottom:var(--space-12); }
+.optimize-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--space-6); }
+.optimize-header .title { font-size:12px; font-weight:600; color:var(--text-primary); }
+.optimize-actions { display:flex; gap:var(--space-4); }
+.optimize-actions button { height:30px; font-size:11px; padding:0 var(--space-8); }
+.optimize-body { }
+.optimize-body .state-default { }
+.optimize-body .state-default .info { font-size:11px; color:var(--text-muted); line-height:1.8; padding:var(--space-4) 0; }
+.optimize-body .state-default .info li { margin-bottom:var(--space-2); }
+.optimize-body .state-results { display:none; }
+.optimize-body .state-applied { display:none; }
+.param-diff-table { width:100%; border-collapse:collapse; font-size:11px; margin-bottom:var(--space-6); }
+.param-diff-table th { text-align:left; padding:var(--space-2) var(--space-4); color:var(--text-muted); font-weight:500; border-bottom:1px solid var(--border-default); font-size:10px; }
+.param-diff-table td { padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--border-default); color:var(--text-secondary); }
+.param-diff-table td .arrow { color:var(--color-brand-500); margin:0 var(--space-2); }
+.param-diff-table .impact-high { background:rgba(239,68,68,0.06); }
+.param-diff-table .impact-medium { background:rgba(245,158,11,0.06); }
+.param-diff-table .impact-low { background:transparent; }
+.projected-improve { font-size:11px; color:var(--text-secondary); background:var(--bg-subtle); border-radius:var(--radius-sm); padding:var(--space-4) var(--space-6); margin-bottom:var(--space-6); line-height:1.9; }
+.confidence-row { display:flex; align-items:center; gap:var(--space-4); font-size:11px; padding:var(--space-3) 0; border-top:1px solid var(--border-default); margin-bottom:var(--space-4); }
+.applied-banner { background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:var(--radius-sm); padding:var(--space-4) var(--space-6); margin-bottom:var(--space-6); }
+.applied-banner .ab-title { font-size:12px; font-weight:600; color:#22C55E; }
+.applied-banner .ab-detail { font-size:10px; color:var(--text-muted); margin-top:var(--space-1); }
+.snapshot-list { font-size:11px; color:var(--text-secondary); }
+.snapshot-list .sl-item { display:flex; justify-content:space-between; align-items:center; padding:var(--space-2) var(--space-4); border-bottom:1px solid var(--border-default); }
+.snapshot-list .sl-item:last-child { border-bottom:none; }
+.snapshot-list .sl-item.current { background:rgba(59,130,246,0.04); }
+.snapshot-list .sl-tag { font-size:9px; padding:1px 5px; border-radius:2px; background:rgba(59,130,246,0.1); color:#60A5FA; }
+.snapshot-list .sl-rollback-btn { font-size:10px; color:var(--color-brand-500); cursor:pointer; padding:var(--space-1) var(--space-4); border-radius:var(--radius-xs); background:transparent; border:1px solid var(--color-brand-500); }
 </style>
 </head>
 <body>
 <div class="app-layout">
-  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
-      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
-      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
-      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
-        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
-        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
-        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
-        <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
-        <a href="backtest.html" class="sidebar-item active" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
-        <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
-        <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
-        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
-        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
-        <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
-        <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
-        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
-        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
-    </nav>
+  <nav class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+    <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+      <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+      <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+      <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item active" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+      <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+      <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+      <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+      <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+      <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
+      <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
+      <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+  </nav>
+
   <main class="main-content">
     <div class="page-header">
       <h1>📉 回测系统</h1>
@@ -64,46 +191,134 @@
     </div>
 
     <div class="backtest-layout">
-      <!-- 配置面板 -->
+      <!-- ═══ 左侧配置面板 ═══ -->
       <div class="config-section">
         <h4>⚙️ 回测配置</h4>
-        <div class="config-row"><label>标的</label><select class="select"><option>000762.SZ 西藏矿业</option><option>000001.SZ 平安银行</option><option>600519.SH 贵州茅台</option></select></div>
-        <div class="config-row"><label>开始</label><input class="input" value="2020-01-01"></div>
-        <div class="config-row"><label>结束</label><input class="input" value="2026-06-01"></div>
-        <div class="config-row"><label>资金</label><input class="input" value="1,000,000" style="width:100px;"></div>
-        <div class="config-row" style="align-items:flex-start;"><label>策略</label>
-          <div class="chk-group"><label><input type="checkbox" checked> 量价形态</label><label><input type="checkbox" checked> 缠论</label><label><input type="checkbox"> 筹码</label></div>
+
+        <div class="config-row"><label class="label">标的</label>
+          <div class="bt-stock-wrap">
+            <input class="input" id="btStockInput" placeholder="输入代码/名称搜索" autocomplete="off" value="000762.SZ 西藏矿业">
+            <div id="btSearchDropdown"></div>
+          </div>
         </div>
-        <div class="config-row"><label>因子</label><select class="select"><option>精选组合-5因子</option><option>动量因子组合</option><option>价值因子组合</option></select></div>
-        <div style="display:flex;gap:var(--space-8);margin-top:var(--space-12);">
-          <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="runBacktest()">⚡ 开始回测</button>
-          <button class="btn" style="flex:1;justify-content:center;" onclick="alert('💾 配置已保存')">💾 保存配置</button>
+        <div id="btCurrentStock" class="bt-current-stock">📌 当前：000762.SZ 西藏矿业</div>
+        <button class="btn" style="width:100%;font-size:11px;justify-content:center;margin-bottom:var(--space-6);" onclick="importFromAnalysis()">📥 从策略分析导入</button>
+        <div id="importInfo" class="import-info" style="display:none;">📎 已导入：000001.SZ 实操参考规则</div>
+
+        <h4>📁 策略预设</h4>
+        <div class="preset-group">
+          <label class="preset-opt active" onclick="selectPreset(this,'balanced')">
+            <input type="radio" name="preset" checked><span class="dot" style="background:var(--signal-watch)"></span>
+            <div><div class="p-name">🟡 均衡模式 <span style="font-size:10px;color:var(--text-muted);font-weight:400;">（默认推荐）</span></div><div class="p-desc">缠论120根 · 量价自适应 · UPF四层权重</div></div>
+          </label>
+          <label class="preset-opt" onclick="selectPreset(this,'conservative')">
+            <input type="radio" name="preset"><span class="dot" style="background:#22C55E"></span>
+            <div><div class="p-name">🟢 保守模式</div><div class="p-desc">更低风险，更少交易 · 缠论180根 · 结构权重40%</div></div>
+          </label>
+          <label class="preset-opt" onclick="selectPreset(this,'aggressive')">
+            <input type="radio" name="preset"><span class="dot" style="background:#EF4444"></span>
+            <div><div class="p-name">🔴 进取模式</div><div class="p-desc">更高收益，更高回撤 · 缠论60根 · 形态权重35%</div></div>
+          </label>
+        </div>
+
+        <h4>📊 基准指数</h4>
+        <div class="bench-group">
+          <label class="bench-opt"><input type="checkbox" checked> 沪深300</label>
+          <label class="bench-opt"><input type="checkbox"> 中证500</label>
+          <label class="bench-opt"><input type="checkbox"> 中证1000</label>
+          <label class="bench-opt"><input type="checkbox"> 上证指数</label>
+          <label class="bench-opt"><input type="checkbox"> 深证成指</label>
+          <label class="bench-opt"><input type="checkbox"> 创业板指</label>
+          <label class="bench-opt"><input type="checkbox"> 科创50</label>
+        </div>
+
+        <h4>📋 实操参考</h4>
+        <div id="practicalPreview" class="practical-empty">
+          ⏳ 暂无导入数据<br>请先在"个股策略分析"设置操作规则
+        </div>
+
+        <div class="config-row"><label class="label">开始</label><input class="input" value="2020-01-01"></div>
+        <div class="config-row"><label class="label">结束</label><input class="input" value="2026-06-01"></div>
+        <div class="config-row"><label class="label">资金</label><input class="input" value="1,000,000" style="width:120px;"></div>
+
+        <div class="adv-toggle" onclick="toggleAdv()"><span id="advIcon">▶</span> 高级选项</div>
+        <div class="adv-body" id="advBody">
+          <div class="config-row"><label class="label">佣金率</label><input class="input" value="0.03%"></div>
+          <div class="config-row"><label class="label">滑点</label><input class="input" value="0.01%"></div>
+          <div class="config-row"><label class="label">最低佣金</label><input class="input" value="¥5.00"></div>
+          <div class="config-row"><label class="label">最大持仓</label><input class="input" value="10"></div>
+        </div>
+
+        <div class="config-actions">
+          <button class="btn btn-primary" onclick="runBacktest()">▶ 开始回测</button>
+          <button class="btn" onclick="alert('💾 配置已保存')">💾 保存</button>
         </div>
       </div>
 
-      <!-- 结果区域 -->
-      <div class="results-section">
-        <div class="metrics-row">
-          <div class="metric-card"><div class="lbl">总收益</div><div class="val up">+35.2%</div></div>
-          <div class="metric-card"><div class="lbl">年化收益</div><div class="val up">+5.8%</div></div>
-          <div class="metric-card"><div class="lbl">最大回撤</div><div class="val down">-12.3%</div></div>
-          <div class="metric-card"><div class="lbl">夏普比率</div><div class="val" style="color:var(--color-brand-500);">0.85</div></div>
-          <div class="metric-card"><div class="lbl">胜率</div><div class="val" style="color:var(--signal-watch);">58.3%</div></div>
+      <!-- ═══ 右侧结果面板 ═══ -->
+      <div class="results-section" id="resultsArea" style="display:none;">
+        <div class="metrics-row" id="metricsRow">
+          <div class="metric-card"><div class="lbl">总收益</div><div class="val up">+35.2%</div><span class="tag benchmark">跑赢沪深300</span></div>
+          <div class="metric-card"><div class="lbl">年化收益</div><div class="val up">+5.8%</div><span class="tag benchmark">跑赢沪深300</span></div>
+          <div class="metric-card"><div class="lbl">最大回撤</div><div class="val down">-12.3%</div><span class="tag good">优于基准</span></div>
+          <div class="metric-card"><div class="lbl">夏普比率</div><div class="val" style="color:var(--color-brand-500)">0.85</div><span class="tag medium">中等偏上</span></div>
+          <div class="metric-card"><div class="lbl">胜率</div><div class="val" style="color:var(--signal-watch)">58.3%</div><span class="tag good">良好</span></div>
+        </div>
+        <div class="more-btn" onclick="toggleMoreMetrics()"><span id="moreIcon">▶</span> 展开更多指标（索提诺·卡玛·盈亏比·波动率·信息比率）</div>
+        <div class="more-metrics" id="moreMetrics">
+          <div class="metric-card"><div class="lbl">索提诺比率</div><div class="val" style="color:var(--color-brand-500)">1.12</div></div>
+          <div class="metric-card"><div class="lbl">卡玛比率</div><div class="val" style="color:var(--color-brand-500)">0.47</div></div>
+          <div class="metric-card"><div class="lbl">盈亏比</div><div class="val" style="color:var(--color-brand-500)">1.85</div></div>
+          <div class="metric-card"><div class="lbl">波动率</div><div class="val">18.5%</div></div>
+          <div class="metric-card"><div class="lbl">信息比率</div><div class="val" style="color:var(--color-brand-500)">0.62</div></div>
         </div>
 
-        <!-- 权益曲线 + 回撤曲线 -->
-        <div class="grid-2" style="margin-bottom:var(--space-16);">
-          <div class="chart-card"><div class="title">📈 权益曲线</div><div id="equity-chart" class="chart-box"></div></div>
-          <div class="chart-card"><div class="title">📉 回撤曲线</div><div id="drawdown-chart" class="chart-box"></div></div>
+        <div class="chart-row">
+          <div class="chart-card"><div class="title">📈 权益曲线</div><div id="equityChart" class="chart-box"></div></div>
+          <div class="chart-card"><div class="title">📉 回撤曲线</div><div id="drawdownChart" class="chart-box"></div></div>
         </div>
 
-        <!-- 交易明细 -->
-        <div class="trade-table">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-12);">
-            <span style="font-weight:600;font-size:14px;">📋 交易明细</span>
-            <div style="display:flex;gap:var(--space-4);">
-              <button class="btn" style="height:32px;font-size:12px;padding:0 var(--space-12);" onclick="alert('💾 回测已保存')">💾 保存回测</button>
-              <button class="btn btn-primary" style="height:32px;font-size:12px;padding:0 var(--space-12);" onclick="alert('📋 报告已生成')">📋 生成报告</button>
+        <div class="health-panel">
+          <div class="hp-header">📊 策略健康度诊断 <span style="font-size:10px;color:var(--text-muted);font-weight:400;">基于回测期间信号记录</span></div>
+          <table class="health-table">
+            <tr><th>策略</th><th>状态</th><th>边际贡献</th><th>信号一致率</th><th>冲突次数</th><th>综合</th></tr>
+            <tr><td>量价形态</td><td><div class="health-status"><span class="health-dot green"></span>正常</div></td><td>+2.8%</td><td>85%</td><td>5</td><td>🟢</td></tr>
+            <tr><td>缠论</td><td><div class="health-status"><span class="health-dot yellow"></span>偏弱</div></td><td>+1.1%</td><td>72%</td><td>8</td><td>🟡</td></tr>
+            <tr><td>筹码</td><td><div class="health-status"><span class="health-dot red"></span>异常</div></td><td>-0.6%</td><td>38%</td><td>15</td><td>🔴</td></tr>
+            <tr><td>多因子</td><td><div class="health-status"><span class="health-dot green"></span>正常</div></td><td>+1.5%</td><td>80%</td><td>3</td><td>🟢</td></tr>
+            <tr><td>BOCIASI</td><td><div class="health-status"><span class="health-dot green"></span>正常</div></td><td>+0.9%</td><td>78%</td><td>6</td><td>🟢</td></tr>
+          </table>
+          <div class="health-diagnosis">
+            🔍 诊断结论：筹码策略在过去6个月中多次与多数信号方向相反（冲突15次），其中主要方向错误率较高。建议暂缓筹码策略权重，或切换至保守模式以减少交易频率。
+          </div>
+        </div>
+
+        <div class="interpret-card">
+          <div class="title">💡 回测解读 <span class="interpret-grade good">🟢 良好</span></div>
+          <div class="interpret-body">
+            <div class="line">📈 策略表现：如果按系统信号操作，过去3年总收益 <strong class="up">+35.2%</strong>，同期沪深300为 -2%，显著跑赢市场。</div>
+            <div class="line">⚠️ 最糟糕的一次回撤为 -12.3%，发生在2024年1月市场整体大跌阶段，与大盘走势一致。</div>
+            <div class="line">⚠️ 需要关注：2025年10月后信号质量有所下降（市场进入震荡格局，缠论策略表现偏弱），但总体仍在可控范围。</div>
+            <div class="line">✅ 结论：策略总体可靠，暂无调整必要。若希望减少震荡期回撤，可考虑切换至保守模式。</div>
+          </div>
+        </div>
+
+        <div class="interpret-card">
+          <div class="title">🔬 可信度评估</div>
+          <div class="confidence-bar">
+            <span class="conf-item"><span class="ck">✅</span> 过拟合概率(PBO): 12% 低于20%，可信度高</span>
+            <span class="conf-item"><span class="ck">✅</span> 参数平原: 宽度&gt;30%，绩效波动8%，稳健</span>
+            <span class="conf-item"><span class="ck">✅</span> 跨周期验证: 5/5 个市场环境下表现一致</span>
+          </div>
+          <div style="margin-top:var(--space-4);font-size:11px;color:var(--text-secondary);">→ 回测结果可信，策略在多种市场条件下表现稳定。</div>
+        </div>
+
+        <div class="trade-table-wrap">
+          <div class="tt-header">
+            <span style="font-weight:600;font-size:13px;">📋 交易明细</span>
+            <div class="tt-actions">
+              <button class="btn" onclick="alert('💾 回测已保存')">💾 保存回测</button>
+              <button class="btn btn-primary" onclick="alert('📋 报告已生成')">📋 生成报告</button>
             </div>
           </div>
           <table class="table">
@@ -114,8 +329,101 @@
             <tr><td>2021-01-05</td><td><span class="tag tag-bearish">卖出</span></td><td>200</td><td>¥12.60</td><td class="flat">—</td><td class="down">-¥2,420</td><td>缠论S2</td></tr>
             <tr><td>2021-04-12</td><td><span class="tag tag-bullish">买入</span></td><td>150</td><td>¥15.20</td><td class="up">+23.7%</td><td class="up">+¥3,555</td><td>筹码B1</td></tr>
             <tr><td>2021-08-30</td><td><span class="tag tag-bearish">卖出</span></td><td>150</td><td>¥18.80</td><td class="flat">—</td><td class="up">+¥3,555</td><td>筹码S1</td></tr>
+            <tr><td>2022-03-10</td><td><span class="tag tag-bullish">买入</span></td><td>200</td><td>¥11.20</td><td class="up">+11.5%</td><td class="up">+¥4,280</td><td>实操B1</td></tr>
+            <tr><td>2022-11-05</td><td><span class="tag tag-bearish">卖出</span></td><td>200</td><td>¥12.48</td><td class="flat">—</td><td class="up">+¥4,280</td><td>实操S1</td></tr>
           </table>
         </div>
+
+        <div class="cost-panel">
+          <div class="cost-header" onclick="toggleCost()">
+            <span class="title">📊 信号冲突成本分析</span>
+            <span id="costIcon" style="font-size:10px;color:var(--text-muted);">▶ 点击展开</span>
+          </div>
+          <div class="cost-body" id="costBody">
+            <div class="cost-grid">
+              <div class="cost-item"><div class="cv" style="color:var(--signal-watch)">27%</div><div class="cl">冲突天数占比</div></div>
+              <div class="cost-item"><div class="cv" style="color:#22C55E">63%</div><div class="cl">仲裁正确率</div></div>
+              <div class="cost-item"><div class="cv" style="color:#EF4444">22%</div><div class="cl">仲裁错误率</div></div>
+              <div class="cost-item"><div class="cv" style="color:#F59E0B">-4.2%</div><div class="cl">收益损失</div></div>
+            </div>
+            <div class="cost-pair">
+              <strong>高频冲突对：</strong><br>
+              缠论 vs 筹码：23次（缠论正确率68% > 筹码41%）<br>
+              量价 vs BOCIASI：18次（量价正确率61% > BOCIASI 47%）
+            </div>
+            <div style="margin-top:var(--space-4);font-size:10px;color:var(--text-muted);">
+              💡 建议：缠论 vs 筹码冲突出现时，宜优先采信缠论（历史数据印证）。
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ 参数优化与应用 ═══ -->
+        <div class="optimize-panel">
+          <div class="optimize-header">
+            <span class="title">🛠 策略参数优化与应用</span>
+            <div class="optimize-actions">
+              <button class="btn btn-primary" id="optimizeBtn" onclick="runOptimize()" style="font-size:11px;">⏳ 一键优化</button>
+              <button class="btn" onclick="resetOptimize()" style="font-size:11px;display:none;" id="resetOptimizeBtn">↩ 恢复默认</button>
+            </div>
+          </div>
+          <div class="optimize-body" id="optimizeBody">
+            <!-- 默认未优化状态 -->
+            <div class="state-default" id="optStateDefault">
+              <div class="info">
+                未优化 — 点击「一键优化」自动扫描最优参数组合<br>
+                <ul style="margin:var(--space-2) 0 0 var(--space-12);">
+                  <li>基于回测数据（<span id="optDateRange">2020-01-01 ~ 2026-06-01</span>）</li>
+                  <li>优化目标：夏普比率（默认）</li>
+                  <li>覆盖 4 个策略 × 7 档参数 = ~240 组合</li>
+                  <li>预计耗时：约 30 秒（逐策略独立优化）</li>
+                </ul>
+              </div>
+            </div>
+            <!-- 优化结果状态 -->
+            <div class="state-results" id="optStateResults">
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-4);">
+                🎯 目标函数：夏普比率 · 测试组合：240 · 耗时：<span id="optDuration">28.5</span>s
+              </div>
+              <table class="param-diff-table" id="optDiffTable">
+                <tr><th>策略</th><th>参数</th><th>当前值 ▸ 推荐值</th><th>敏感度</th><th>平原</th><th>置信度</th></tr>
+                <tr id="optRow_chanlun"><td>🟡 缠论</td><td>lookback</td><td><span style="color:var(--text-muted)">120</span><span class="arrow">→</span><strong style="color:var(--color-brand-500)">100</strong></td><td>Medium</td><td>Wide</td><td><span style="color:#22C55E">HIGH</span></td></tr>
+                <tr id="optRow_volume_price"><td>🟢 量价</td><td>lookback</td><td><span style="color:var(--text-muted)">120</span><span class="arrow">→</span><strong style="color:var(--color-brand-500)">140</strong></td><td>Low</td><td>Wide</td><td><span style="color:#22C55E">HIGH</span></td></tr>
+                <tr id="optRow_chip"><td>🔴 筹码</td><td>lookback</td><td><span style="color:var(--text-muted)">120</span><span class="arrow">→</span><strong style="color:var(--color-brand-500)">80</strong></td><td>High</td><td>Medium</td><td><span style="color:#F59E0B">MEDIUM</span></td></tr>
+                <tr id="optRow_factor"><td>🟢 因子</td><td>lookback</td><td><span style="color:var(--text-muted)">20</span><span class="arrow">→</span><strong style="color:var(--color-brand-500)">30</strong></td><td>Low</td><td>Wide</td><td><span style="color:#22C55E">HIGH</span></td></tr>
+              </table>
+              <div class="projected-improve">
+                📊 对比预演（推荐参数 vs 当前参数）：<br>
+                · 夏普比率：<span id="optOldSharpe">0.85</span> → <strong style="color:#22C55E">1.02</strong>（<span style="color:#22C55E">+20%</span>）<br>
+                · 年化收益：<span id="optOldReturn">5.8%</span> → <strong style="color:#22C55E">7.2%</strong>（<span style="color:#22C55E">+24%</span>）<br>
+                · 最大回撤：<span id="optOldDD">-12.3%</span> → <strong style="color:#22C55E">-11.8%</strong>（<span style="color:#22C55E">改善</span>）
+              </div>
+              <div class="confidence-row">
+                <span>推荐置信度：<strong style="color:#22C55E">🟢 HIGH</strong> — 参数平原宽，调整方向明确</span>
+              </div>
+              <div style="display:flex;gap:var(--space-4);">
+                <button class="btn btn-primary" onclick="applyOptimizedParams()" style="font-size:11px;">✅ 应用优化参数</button>
+                <button class="btn" onclick="dismissOptimize()" style="font-size:11px;">忽略</button>
+              </div>
+            </div>
+            <!-- 已应用状态 -->
+            <div class="state-applied" id="optStateApplied">
+              <div class="applied-banner">
+                <div class="ab-title">✅ 参数已更新</div>
+                <div class="ab-detail">已创建快照：param_snapshot_v3 · 下次回测时将自动使用新参数</div>
+              </div>
+              <div style="display:flex;gap:var(--space-4);margin-bottom:var(--space-4);">
+                <button class="btn btn-primary" onclick="alert('⏪ 已回退到此前的参数')" style="font-size:11px;">⏪ 回退到此前的参数</button>
+                <button class="btn" onclick="alert('📋 已导出配置')" style="font-size:11px;">📋 导出配置</button>
+              </div>
+              <div class="snapshot-list">
+                <div class="sl-item current"><span>当前（刚刚）— 优化后参数</span><span class="sl-tag">当前</span></div>
+                <div class="sl-item"><div><span>2026-06-23 v2</span><span style="font-size:10px;color:var(--text-muted);margin-left:var(--space-4);">优化后参数</span></div><span class="sl-rollback-btn" onclick="alert('⏪ 已回退到 v2')">⏪ 回退</span></div>
+                <div class="sl-item"><div><span>2026-06-01 v1（默认）</span><span style="font-size:10px;color:var(--text-muted);margin-left:var(--space-4);">默认参数</span></div><span class="sl-rollback-btn" onclick="alert('⏪ 已回退到 v1')">⏪ 回退</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -123,38 +431,332 @@
 </div>
 
 <script>
-// 权益曲线
+// ── 侧栏折叠 ──
+var sidebarCollapsed = true;
+function toggleSidebar(){
+  sidebarCollapsed = !sidebarCollapsed;
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(!s||!m) return;
+  s.classList.toggle('collapsed'); m.classList.toggle('collapsed');
+  m.style.marginLeft = sidebarCollapsed ? '64px' : '200px';
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn) btn.textContent = sidebarCollapsed ? '▶' : '◀';
+}
 (function(){
-  var c = echarts.init(document.getElementById('equity-chart'));
-  var months = []; for(var i=72;i>=0;i--){var d=new Date(2020,5-i);months.push(d.getFullYear()+'/'+(d.getMonth()+1));}
-  var eq = months.map(function(_,i){return 1000000 + (function(){var v=0;for(var j=0;j<i;j++)v+=(Math.random()-0.45)*60000;return Math.round(v*100)/100;})();});
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(s) s.classList.add('collapsed');
+  if(m){ m.classList.add('collapsed'); m.style.marginLeft='64px'; }
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn) btn.textContent = '▶';
+})();
 
-  c.setOption({
+// ── 预设切换 ──
+function selectPreset(el,mode){
+  document.querySelectorAll('.preset-opt').forEach(function(o){ o.classList.remove('active'); });
+  el.classList.add('active');
+  el.querySelector('input[type=radio]').checked = true;
+}
+
+var _btTsCode = '000762.SZ';
+var _btTsName = '西藏矿业';
+var _btSearchTimer = null;
+
+// ── 本地Mock股票数据库（后端不可用时回退） ──
+var _btMockStocks = [
+  {ts_code:'000001.SZ', name:'平安银行'},{ts_code:'000002.SZ', name:'万科A'},{ts_code:'000333.SZ', name:'美的集团'},
+  {ts_code:'000568.SZ', name:'泸州老窖'},{ts_code:'000651.SZ', name:'格力电器'},{ts_code:'000725.SZ', name:'京东方A'},
+  {ts_code:'000762.SZ', name:'西藏矿业'},{ts_code:'000858.SZ', name:'五粮液'},{ts_code:'002007.SZ', name:'华兰生物'},
+  {ts_code:'002049.SZ', name:'紫光国微'},{ts_code:'002230.SZ', name:'科大讯飞'},{ts_code:'002371.SZ', name:'北方华创'},
+  {ts_code:'002415.SZ', name:'海康威视'},{ts_code:'002459.SZ', name:'晶澳科技'},{ts_code:'002475.SZ', name:'立讯精密'},
+  {ts_code:'002594.SZ', name:'比亚迪'},{ts_code:'002714.SZ', name:'牧原股份'},{ts_code:'002920.SZ', name:'德赛西威'},
+  {ts_code:'300015.SZ', name:'爱尔眼科'},{ts_code:'300059.SZ', name:'东方财富'},{ts_code:'300124.SZ', name:'汇川技术'},
+  {ts_code:'300274.SZ', name:'阳光电源'},{ts_code:'300308.SZ', name:'中际旭创'},{ts_code:'300750.SZ', name:'宁德时代'},
+  {ts_code:'301269.SZ', name:'华大九天'},{ts_code:'600036.SH', name:'招商银行'},{ts_code:'600519.SH', name:'贵州茅台'},
+  {ts_code:'600585.SH', name:'海螺水泥'},{ts_code:'600690.SH', name:'海尔智家'},{ts_code:'600809.SH', name:'山西汾酒'},
+  {ts_code:'600887.SH', name:'伊利股份'},{ts_code:'600900.SH', name:'长江电力'},{ts_code:'600941.SH', name:'中国移动'},
+  {ts_code:'601012.SH', name:'隆基绿能'},{ts_code:'601088.SH', name:'中国神华'},{ts_code:'601127.SH', name:'赛力斯'},
+  {ts_code:'601166.SH', name:'兴业银行'},{ts_code:'601288.SH', name:'农业银行'},{ts_code:'601318.SH', name:'中国平安'},
+  {ts_code:'601398.SH', name:'工商银行'},{ts_code:'601628.SH', name:'中国人寿'},{ts_code:'601728.SH', name:'中国电信'},
+  {ts_code:'601857.SH', name:'中国石油'},{ts_code:'601899.SH', name:'紫金矿业'},{ts_code:'603259.SH', name:'药明康德'},
+  {ts_code:'603501.SH', name:'韦尔股份'},{ts_code:'603986.SH', name:'兆易创新'},{ts_code:'688041.SH', name:'海光信息'},
+  {ts_code:'688111.SH', name:'金山办公'},{ts_code:'688256.SH', name:'寒武纪'},{ts_code:'688981.SH', name:'中芯国际'},
+];
+
+function btLocalSearch(query){
+  if(!query || query.length < 1) return [];
+  var q = query.toLowerCase();
+  return _btMockStocks.filter(function(s){
+    return s.ts_code.toLowerCase().indexOf(q) >= 0 || s.name.indexOf(q) >= 0;
+  }).slice(0, 12);
+}
+
+// ── 股票搜索 ──
+function btSearchStocks(query){
+  var dd = document.getElementById('btSearchDropdown');
+  if(!dd) return;
+  dd.innerHTML = '';
+  var trimmed = (query || '').trim();
+  if(trimmed.length < 1){ dd.style.display = 'none'; return; }
+  dd.innerHTML = '<div class="bt-search-loading">搜索中...</div>';
+  dd.style.display = 'block';
+  fetch('/api/v3/chart/stock-list?keyword=' + encodeURIComponent(trimmed) + '&limit=12')
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      dd.innerHTML = '';
+      if(!res || !res.success || !res.data || !res.data.length){
+        // API无结果 → 回退到本地搜索
+        btShowLocalResults(trimmed, dd);
+        return;
+      }
+      res.data.forEach(function(it){
+        btAppendSearchItem(dd, it.ts_code, it.name);
+      });
+    })
+    .catch(function(){
+      // API不可用 → 回退到本地搜索
+      dd.innerHTML = '';
+      btShowLocalResults(trimmed, dd);
+    });
+}
+
+function btShowLocalResults(query, dd){
+  var hits = btLocalSearch(query);
+  if(hits.length === 0){
+    dd.innerHTML = '<div class="bt-search-empty">无匹配结果</div>';
+    return;
+  }
+  hits.forEach(function(it){
+    btAppendSearchItem(dd, it.ts_code, it.name);
+  });
+}
+
+function btAppendSearchItem(dd, code, name){
+  var row = document.createElement('div');
+  row.className = 'bt-search-item';
+  row.innerHTML = '<span class="si-code">'+(code||'')+'</span><span class="si-name">'+(name||'')+'</span>';
+  row.onclick = function(){ btSelectStock(code, name); dd.style.display = 'none'; };
+  dd.appendChild(row);
+}
+
+function btParseStockCode(text){
+  // 从输入文本中提取股票代码
+  // 支持格式: "600519.SH", "600519", "600519.SH 贵州茅台", "贵州茅台600519"
+  if(!text || typeof text !== 'string') return null;
+  text = text.trim();
+  // 匹配 ts_code 格式: 6位数字.SH/SZ/BJ 或 6位数字
+  var m = text.match(/(\d{6})(?:\.(SH|SZ|BJ))?/i);
+  if(m){
+    var code = m[1];
+    var suffix = m[2] ? m[2].toUpperCase() : '';
+    if(!suffix){
+      // 自动判断: 60xxxx=SH, 00xxxx/30xxxx=SZ, 8xxxxx=BJ
+      if(code.charAt(0) === '6') suffix = 'SH';
+      else if(code.charAt(0) === '8' || code.charAt(0) === '4') suffix = 'BJ';
+      else suffix = 'SZ';
+    }
+    return code + '.' + suffix;
+  }
+  // 也匹配 "平安银行 000001" 这种格式
+  var m2 = text.match(/(\d{6})/);
+  if(m2) return btParseStockCode(m2[1]);
+  return null;
+}
+
+function btLookupStock(text){
+  // 在本地股票数据库中按代码或名称搜索，返回 {ts_code, name}
+  if(!text) return null;
+  var t = text.trim().toLowerCase();
+  // 优先精确匹配
+  for(var i=0;i<_btMockStocks.length;i++){
+    var s = _btMockStocks[i];
+    if(s.ts_code.toLowerCase() === t || s.name === t || s.ts_code.toLowerCase().indexOf(t) >= 0 || s.name.toLowerCase().indexOf(t) >= 0){
+      return s;
+    }
+  }
+  return null;
+}
+
+function btSelectStock(tsCode, tsName){
+  _btTsCode = tsCode; _btTsName = tsName || tsCode;
+  var inp = document.getElementById('btStockInput');
+  if(inp){
+    // 显示：如果 name 只是代码重复，或输入文本已包含完整格式，仅显示代码
+    var rawCode = tsCode.replace(/\.(SH|SZ|BJ)$/i, '');
+    var alreadyHas = inp.value.indexOf(rawCode) >= 0 && inp.value !== rawCode && inp.value.indexOf(tsCode) < 0;
+    if(tsName && tsName !== tsCode && tsName !== rawCode){
+      inp.value = tsCode + ' ' + tsName;
+    } else {
+      inp.value = tsCode;
+    }
+  }
+  var dd = document.getElementById('btSearchDropdown');
+  if(dd) dd.style.display = 'none';
+  var cs = document.getElementById('btCurrentStock');
+  if(cs){ cs.textContent = '📌 当前：' + tsCode + ' (' + (_btTsName === tsCode ? '代码搜索' : _btTsName) + ')'; cs.style.display = 'block'; }
+  // 若来自手动输入，清除URL参数标记
+  if(inp) inp.style.borderColor = '';
+}
+
+function btCloseSearch(e){
+  var wrap = document.querySelector('.bt-stock-wrap');
+  var dd = document.getElementById('btSearchDropdown');
+  if(!wrap||!dd) return;
+  if(!wrap.contains(e.target)) dd.style.display = 'none';
+}
+
+// ── 从策略分析导入 ──
+function importFromAnalysis(){
+  // 如果有URL参数带来的ts_code，同步到搜索框
+  var params = new URLSearchParams(window.location.search);
+  var code = params.get('ts_code');
+  if(code){
+    btSelectStock(code, code);  // name unknown, show code only
+  }
+  document.getElementById('importInfo').style.display = 'block';
+  document.getElementById('practicalPreview').innerHTML =
+    '<div class="practical-preview"><div class="pp-title">📋 已导入实操参考规则</div>' +
+    '▲ 开仓条件(AND)：①量能≥均量1.5倍 AND 收盘站上MA5 AND MA5方向向上<br>' +
+    '②回踩中枢下沿不破 AND 缩量至均量50%以下<br>' +
+    '▼ 平仓条件(OR)：①MACD死叉 AND 量能萎缩  ②跌破中枢下沿-3%止损<br>' +
+    '仓位：初始30%，突破确认后加至60%</div>';
+}
+
+// ── 高级选项 ──
+function toggleAdv(){
+  var b=document.getElementById('advBody'),i=document.getElementById('advIcon');
+  b.classList.toggle('open');
+  i.textContent = b.classList.contains('open') ? '▼' : '▶';
+}
+
+// ── 更多指标 ──
+function toggleMoreMetrics(){
+  var m=document.getElementById('moreMetrics'),i=document.getElementById('moreIcon');
+  m.classList.toggle('open');
+  i.textContent = m.classList.contains('open') ? '▼' : '▶';
+}
+
+// ── 参数优化与应用 ──
+var _optimized = false, _applied = false;
+
+function runOptimize(){
+  var btn = document.getElementById('optimizeBtn');
+  if(!btn) return;
+  btn.innerHTML = '⏳ 优化中...';
+  btn.disabled = true;
+  var opts = ['/','-','\\','|'];
+  var i=0;
+  var spinner = setInterval(function(){
+    btn.innerHTML = '⏳ '+opts[i++%4]+' 优化中';
+  },200);
+  // 优化结束后自动停止；若用户手动关闭优化，30秒保底
+  var stop = setTimeout(function(){
+    clearInterval(spinner);
+    btn.innerHTML = '✅ 重新优化';
+    btn.disabled = false;
+    showOptimizeResults();
+  }, 1500);
+}
+
+function showOptimizeResults(){
+  document.getElementById('optStateDefault').style.display = 'none';
+  document.getElementById('optStateResults').style.display = 'block';
+  document.getElementById('optStateApplied').style.display = 'none';
+  document.getElementById('resetOptimizeBtn').style.display = 'inline-flex';
+  _optimized = true;
+}
+
+function resetOptimize(){
+  document.getElementById('optStateDefault').style.display = 'block';
+  document.getElementById('optStateResults').style.display = 'none';
+  document.getElementById('optStateApplied').style.display = 'none';
+  document.getElementById('resetOptimizeBtn').style.display = 'none';
+  _optimized = false; _applied = false;
+}
+
+function applyOptimizedParams(){
+  showToast('✅ 参数已更新，快照已保存');
+  document.getElementById('optStateDefault').style.display = 'none';
+  document.getElementById('optStateResults').style.display = 'none';
+  document.getElementById('optStateApplied').style.display = 'block';
+  _applied = true;
+}
+
+function dismissOptimize(){
+  showOptimizeResults();  // 保持结果可见，只是收起应用按钮——用户可重新操作
+}
+function toggleCost(){
+  var b=document.getElementById('costBody'),i=document.getElementById('costIcon');
+  b.classList.toggle('open');
+  i.textContent = b.classList.contains('open') ? '▼ 点击收起' : '▶ 点击展开';
+}
+
+// ── Toast ──
+function showToast(msg){
+  var t = document.createElement('div');
+  t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1E293B;color:#F1F5F9;padding:8px 20px;border-radius:6px;font-size:12px;z-index:9999;transition:opacity 0.3s;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(function(){ t.style.opacity='0'; setTimeout(function(){ t.remove(); },300); }, 2000);
+}
+
+// ── 开始回测 ──
+function runBacktest(btn){
+  if(!btn) btn = document.querySelector('.config-actions .btn-primary');
+  if(!btn) return;
+  btn.innerHTML = '⏳ 回测进行中...';
+  btn.disabled = true;
+  setTimeout(function(){
+    btn.innerHTML = '▶ 开始回测';
+    btn.disabled = false;
+    document.getElementById('resultsArea').style.display = 'block';
+    initCharts();
+    document.getElementById('resultsArea').scrollIntoView({behavior:'smooth',block:'start'});
+  }, 2200);
+}
+
+// ── ECharts ──
+function initCharts(){
+  var ec = document.getElementById('equityChart'), dc = document.getElementById('drawdownChart');
+  if(!ec || !dc) return;
+
+  var equityChart = echarts.init(ec);
+  var months = [];
+  for(var i=72;i>=0;i--){var d=new Date(2020,5-i);months.push(d.getFullYear()+'/'+(d.getMonth()+1));}
+  var eq = months.map(function(_,i){
+    var v=1000000; for(var j=0;j<i;j++) v+=(Math.random()-0.45)*60000;
+    return Math.round(v*100)/100;
+  });
+  var bench = months.map(function(_,i){
+    var v=1000000; for(var j=0;j<i;j++) v+=(Math.random()-0.5)*40000;
+    return Math.round(v*100)/100;
+  });
+
+  equityChart.setOption({
     backgroundColor:'transparent', tooltip:{trigger:'axis'},
-    grid:{left:40,right:15,bottom:15,top:10},
-    xAxis:{type:'category',data:months,axisLabel:{color:'#64748B',fontSize:9,show:false},axisLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
+    legend:{data:['策略权益','沪深300'],textStyle:{color:'#64748B',fontSize:10},bottom:0},
+    grid:{left:40,right:15,bottom:30,top:10},
+    xAxis:{type:'category',data:months,axisLabel:{color:'#64748B',fontSize:9,show:false}},
     yAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:9},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
     series:[{
-      type:'line',data:eq,smooth:true,symbol:'none',
+      name:'策略权益',type:'line',data:eq,smooth:true,symbol:'none',
       lineStyle:{color:'#3B82F6',width:1.5},
       areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(59,130,246,0.25)'},{offset:1,color:'rgba(59,130,246,0.02)'}])},
       markLine:{silent:true,data:[{yAxis:1000000,label:{show:true,formatter:'基准 1M',fontSize:9,color:'#64748B'},lineStyle:{color:'rgba(255,255,255,0.15)',type:'dashed'}}]}
+    },{
+      name:'沪深300',type:'line',data:bench,smooth:true,symbol:'none',
+      lineStyle:{color:'rgba(255,255,255,0.3)',width:1,type:'dashed'}
     }]
   });
-  window.addEventListener('resize',function(){c.resize();});
-})();
+  window.addEventListener('resize',function(){if(equityChart)equityChart.resize();});
 
-// 回撤曲线
-(function(){
-  var c = echarts.init(document.getElementById('drawdown-chart'));
-  var months = []; for(var i=72;i>=0;i--){var d=new Date(2020,5-i);months.push(d.getFullYear()+'/'+(d.getMonth()+1));}
-  var dd = months.map(function(){return -(Math.random()*15);});
+  var drawdownChart = echarts.init(dc);
+  var dd = months.map(function(){ return -(Math.random()*15); });
   dd[0] = 0; dd[dd.length-1] = 0;
 
-  c.setOption({
+  drawdownChart.setOption({
     backgroundColor:'transparent', tooltip:{trigger:'axis'},
     grid:{left:40,right:15,bottom:15,top:10},
-    xAxis:{type:'category',data:months,axisLabel:{color:'#64748B',fontSize:9,show:false},axisLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
+    xAxis:{type:'category',data:months,axisLabel:{color:'#64748B',fontSize:9,show:false}},
     yAxis:{type:'value',max:0,axisLabel:{color:'#64748B',fontSize:9,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
     series:[{
       type:'line',data:dd,smooth:true,symbol:'none',
@@ -163,37 +765,56 @@
       markLine:{silent:true,data:[{yAxis:-12.3,label:{show:true,formatter:'最大回撤 -12.3%',fontSize:9,color:'#EF4444'},lineStyle:{color:'#EF4444',type:'dashed'}}]}
     }]
   });
-  window.addEventListener('resize',function(){c.resize();});
-})();
+  window.addEventListener('resize',function(){if(drawdownChart)drawdownChart.resize();});
+}
 
-function runBacktest(){
-  var btn = event.target;
-  btn.innerHTML = '⏳ 回测进行中...';
-  btn.disabled = true;
-  setTimeout(function(){
-    btn.innerHTML = '⚡ 开始回测';
-    btn.disabled = false;
-    alert('✅ 回测完成！共执行 72 个月数据，6 笔交易');
-  }, 2000);
-}
-</script>
-<script>
-var sidebarCollapsed = true;
-function toggleSidebar(){
-  sidebarCollapsed = !sidebarCollapsed;
-  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
-  if(!s||!m)return;
-  s.classList.toggle('collapsed');m.classList.toggle('collapsed');
-  m.style.marginLeft=(sidebarCollapsed?64:200)+'px';
-  var btn=document.querySelector('.sidebar-toggle');
-  if(btn)btn.textContent=sidebarCollapsed?'▶':'◀';
-}
+// ── 股票输入事件 ──
 (function(){
-  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
-  if(s)s.classList.add('collapsed');
-  if(m){m.classList.add('collapsed');m.style.marginLeft='64px';}
-  var btn=document.querySelector('.sidebar-toggle');
-  if(btn)btn.textContent='▶';
+  var inp = document.getElementById('btStockInput');
+  if(inp){
+    inp.addEventListener('input', function(){
+      var val = this.value;
+      if(_btSearchTimer) clearTimeout(_btSearchTimer);
+      _btSearchTimer = setTimeout(function(){ btSearchStocks(val); }, 250);
+    });
+    inp.addEventListener('keydown', function(e){
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        var code = btParseStockCode(this.value);
+        var lookup = btLookupStock(this.value);
+        if(lookup){
+          btSelectStock(lookup.ts_code, lookup.name);
+        } else if(code){
+          btSelectStock(code, code);
+        }
+        document.getElementById('btSearchDropdown').style.display = 'none';
+      } else if(e.key === 'Escape'){
+        document.getElementById('btSearchDropdown').style.display = 'none';
+      }
+    });
+    inp.addEventListener('blur', function(){
+      // 失焦时自动解析输入内容，保证 _btTsCode 与输入框一致
+      setTimeout(function(){
+        var lookup = btLookupStock(inp.value);
+        var code = btParseStockCode(inp.value);
+        if(lookup && lookup.ts_code !== _btTsCode){
+          btSelectStock(lookup.ts_code, lookup.name);
+        } else if(code && code !== _btTsCode){
+          btSelectStock(code, code);
+        }
+      }, 200);
+    });
+  }
+  document.addEventListener('click', btCloseSearch);
+
+  // ── 监听从 indicator-ide 跳转 ──
+  var params = new URLSearchParams(window.location.search);
+  if(params.get('from') === 'indicator-ide' && params.get('ts_code')){
+    var code = params.get('ts_code');
+    btSelectStock(code, code);
+    importFromAnalysis();
+    document.getElementById('btStockInput').style.borderColor = 'var(--color-brand-500)';
+  }
 })();
 </script>
 </body>
