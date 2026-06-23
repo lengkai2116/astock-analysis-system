@@ -406,6 +406,19 @@
 .arb-tools { display:flex; gap:var(--space-4); flex-wrap:wrap; padding-top:var(--space-4); border-top:1px solid var(--border-default); }
 .arb-tools .btn-sm { font-size:11px; }
 
+/* ── 实操参考板块 ── */
+.practical-ref { margin-top:var(--space-6); border:1px solid var(--color-brand-500); border-radius:var(--radius-md); background:rgba(59,130,246,0.04); padding:var(--space-10); }
+.practical-ref .pr-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--space-6); }
+.practical-ref .pr-header .pr-title { font-weight:600; font-size:13px; }
+.practical-ref .pr-header .pr-badge { font-size:10px; color:var(--text-muted); }
+.practical-ref .pr-section { margin-bottom:var(--space-4); }
+.practical-ref .pr-section:last-of-type { margin-bottom:var(--space-6); }
+.practical-ref .pr-section-title { font-size:11px; font-weight:600; margin-bottom:var(--space-2); }
+.practical-ref .pr-section-title.buy { color:var(--color-up); }
+.practical-ref .pr-section-title.sell { color:var(--color-down); }
+.practical-ref .pr-conditions { font-size:11px; color:var(--text-secondary); line-height:1.8; padding:var(--space-4); background:rgba(255,255,255,0.03); border-radius:var(--radius-sm); }
+.practical-ref .pr-actions { display:flex; gap:var(--space-4); }
+
 /* — 卡5 冲突与不确定性 — */
 .dim-card[data-dim="conflict"] .dim-card-body { display:flex; flex-direction:column; gap:var(--space-6); }
 .dim-card[data-dim="conflict"] .conflict-section { }
@@ -1025,6 +1038,38 @@
               </div>
               <div class="advice-note">
                 ⚠️ 以上推演基于当前策略输出（卡1-5结构化数据），建议通过虚拟实盘验证后评估策略有效性
+              </div>
+            </div>
+
+            <!-- 实操参考（新增板块） -->
+            <div class="practical-ref" id="practicalRef">
+              <div class="pr-header">
+                <span class="pr-title">📋 实操参考</span>
+                <span class="pr-badge">仅供回测验证</span>
+              </div>
+
+              <div class="pr-section">
+                <div class="pr-section-title buy">▲ 开仓条件（任一触发即模拟买入）</div>
+                <div class="pr-conditions" id="entryConditions">
+                  ① 量能 ≥ 20日均量 × 1.5 AND 收盘站上MA5 AND MA5方向向上<br>
+                  ② 回踩中枢下沿不破 AND 缩量至均量50%以下<br>
+                  ③ IF 情景A(放量突破) OR 情景B(缩量回踩) → BUY<br>
+                  仓位：初始30%，突破确认后加至60%
+                </div>
+              </div>
+
+              <div class="pr-section">
+                <div class="pr-section-title sell">▼ 平仓条件（任一触发即模拟卖出）</div>
+                <div class="pr-conditions" id="exitConditions">
+                  ① MACD日线死叉 AND 量能萎缩<br>
+                  ② 跌破中枢下沿 -3% 止损<br>
+                  ③ IF 情景C(破位下行) → SELL
+                </div>
+              </div>
+
+              <div class="pr-actions">
+                <button class="btn btn-primary" style="font-size:12px;padding:var(--space-2) var(--space-6);" onclick="sendToBacktest()">📊 发送到回测</button>
+                <button class="btn" style="font-size:12px;padding:var(--space-2) var(--space-6);" onclick="editPracticalRef()">✏️ 编辑条件</button>
               </div>
             </div>
 
@@ -2436,6 +2481,51 @@ function triggerArbitrate(){
 function toggleSources(){
   var body = document.getElementById('arbSourcesBody');
   if(body) body.classList.toggle('open');
+}
+
+// ── 实操参考：发送到回测 ──
+function sendToBacktest(){
+  var entry = document.getElementById('entryConditions');
+  var exit = document.getElementById('exitConditions');
+  if(!entry || !exit){ showToast('❌ 实操参考数据不可用'); return; }
+  var rules = {
+    entry: entry.innerText.trim(),
+    exit: exit.innerText.trim(),
+    ts_code: _currentTsCode || '000762.SZ',
+    timestamp: new Date().toISOString()
+  };
+  try { localStorage.setItem('backtest_rules', JSON.stringify(rules)); } catch(e){}
+  showToast('📊 规则已发送，跳转到回测系统...');
+  setTimeout(function(){
+    window.location.href = 'backtest.html?from=indicator-ide&ts_code=' + (_currentTsCode || '000762.SZ');
+  }, 600);
+}
+
+// ── 实操参考：编辑条件 ──
+function editPracticalRef(){
+  var entry = document.getElementById('entryConditions');
+  var exit = document.getElementById('exitConditions');
+  if(!entry || !exit) return;
+  var currentEntry = entry.isContentEditable;
+  if(currentEntry){
+    entry.contentEditable = 'false';
+    entry.style.background = 'rgba(255,255,255,0.03)';
+    entry.style.border = 'none';
+    exit.contentEditable = 'false';
+    exit.style.background = 'rgba(255,255,255,0.03)';
+    exit.style.border = 'none';
+    document.querySelector('.pr-actions .btn:last-child').textContent = '✏️ 编辑条件';
+    showToast('✅ 条件已更新');
+  } else {
+    entry.contentEditable = 'true';
+    entry.style.background = 'rgba(255,255,255,0.08)';
+    entry.style.border = '1px dashed var(--color-brand-500)';
+    exit.contentEditable = 'true';
+    exit.style.background = 'rgba(255,255,255,0.08)';
+    exit.style.border = '1px dashed var(--color-brand-500)';
+    document.querySelector('.pr-actions .btn:last-child').textContent = '💾 保存条件';
+    showToast('✏️ 开仓/平仓条件已进入编辑模式');
+  }
 }
 
 function showToast(msg){
