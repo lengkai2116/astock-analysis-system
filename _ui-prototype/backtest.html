@@ -80,6 +80,51 @@
 .config-actions { display:flex; gap:var(--space-6); margin-top:var(--space-4); }
 .config-actions button { flex:1; justify-content:center; font-size:12px; }
 
+/* -- 回测模式3-tier -- */
+.mode-tier-group { display:flex; flex-direction:column; gap:var(--space-3); margin-bottom:var(--space-8); }
+.mode-tier { display:flex; align-items:center; gap:var(--space-4); padding:var(--space-3) var(--space-4); border:1px solid var(--border-default); border-radius:var(--radius-sm); cursor:pointer; font-size:11px; color:var(--text-secondary); transition:all 0.15s; }
+.mode-tier:hover { border-color:var(--color-brand-500); background:rgba(59,130,246,0.03); }
+.mode-tier.active { border-color:var(--color-brand-500); background:rgba(59,130,246,0.06); color:var(--text-primary); }
+.mode-tier .tier-icon { font-size:16px; flex:0 0 28px; text-align:center; }
+.mode-tier .tier-name { font-weight:500; font-size:11px; }
+.mode-tier .tier-detail { font-size:9px; color:var(--text-muted); margin-top:1px; }
+.criteria-group { display:flex; flex-wrap:wrap; gap:var(--space-3); margin-bottom:var(--space-4); }
+.criteria-opt { display:flex; align-items:center; gap:var(--space-3); font-size:11px; color:var(--text-secondary); cursor:pointer; padding:var(--space-1) var(--space-4); border-radius:var(--radius-xs); background:var(--bg-subtle); }
+.criteria-opt input { accent-color:#3B82F6; }
+.criteria-hint { font-size:9px; color:var(--text-muted); margin-bottom:var(--space-6); }
+.async-progress { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-10) var(--space-12); margin-bottom:var(--space-12); }
+.ap-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--space-6); }
+.ap-title { font-size:12px; font-weight:600; color:var(--text-primary); }
+.ap-task-id { font-size:9px; color:var(--text-muted); font-family:monospace; }
+.ap-status { font-size:11px; color:var(--text-secondary); margin:var(--space-4) 0 var(--space-2); text-align:center; }
+.ap-eta { font-size:10px; color:var(--text-muted); text-align:center; margin-bottom:var(--space-4); }
+.bench-switch-row { display:flex; align-items:center; gap:var(--space-3); margin-bottom:var(--space-4); }
+.bench-switch-row label { font-size:10px; color:var(--text-muted); }
+.bench-switch-row select { width:auto; font-size:11px; padding:2px var(--space-4); height:26px; border:1px solid var(--border-default); border-radius:var(--radius-xs); background:var(--bg-surface); color:var(--text-secondary); }
+
+
+/* ── 回测模式3-tier ── */
+.mode-tier-group { display:flex; flex-direction:column; gap:var(--space-3); margin-bottom:var(--space-8); }
+.mode-tier { display:flex; align-items:center; gap:var(--space-4); padding:var(--space-3) var(--space-4); border:1px solid var(--border-default); border-radius:var(--radius-sm); cursor:pointer; font-size:11px; color:var(--text-secondary); transition:all 0.15s; }
+.mode-tier:hover { border-color:var(--color-brand-500); background:rgba(59,130,246,0.03); }
+.mode-tier.active { border-color:var(--color-brand-500); background:rgba(59,130,246,0.06); color:var(--text-primary); }
+.mode-tier .tier-icon { font-size:16px; flex:0 0 28px; text-align:center; }
+.mode-tier .tier-name { font-weight:500; font-size:11px; }
+.mode-tier .tier-detail { font-size:9px; color:var(--text-muted); margin-top:1px; }
+.criteria-group { display:flex; flex-wrap:wrap; gap:var(--space-3); margin-bottom:var(--space-4); }
+.criteria-opt { display:flex; align-items:center; gap:var(--space-3); font-size:11px; color:var(--text-secondary); cursor:pointer; padding:var(--space-1) var(--space-4); border-radius:var(--radius-xs); background:var(--bg-subtle); }
+.criteria-opt input { accent-color:#3B82F6; }
+.criteria-hint { font-size:9px; color:var(--text-muted); margin-bottom:var(--space-6); }
+.async-progress { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-10) var(--space-12); margin-bottom:var(--space-12); }
+.ap-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--space-6); }
+.ap-title { font-size:12px; font-weight:600; color:var(--text-primary); }
+.ap-task-id { font-size:9px; color:var(--text-muted); font-family:monospace; }
+.ap-status { font-size:11px; color:var(--text-secondary); margin:var(--space-4) 0 var(--space-2); text-align:center; }
+.ap-eta { font-size:10px; color:var(--text-muted); text-align:center; margin-bottom:var(--space-4); }
+.bench-switch-row { display:flex; align-items:center; gap:var(--space-3); margin-bottom:var(--space-4); }
+.bench-switch-row label { font-size:10px; color:var(--text-muted); }
+.bench-switch-row select { width:auto; font-size:11px; padding:2px var(--space-4); height:26px; border:1px solid var(--border-default); border-radius:var(--radius-xs); background:var(--bg-surface); color:var(--text-secondary); }
+
 /* ── 选股弹窗 ── */
 .modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:10000; align-items:center; justify-content:center; }
 .modal-overlay.open { display:flex; }
@@ -180,10 +225,12 @@
 /* 区域⑨：修订建议 */
 .revision-section { }
 .revision-item { padding:var(--space-4) var(--space-6); border-radius:var(--radius-sm); margin-bottom:var(--space-4); font-size:11px; line-height:1.8; }
-.revision-item.high { background:rgba(239,68,68,0.06); border-left:3px solid #EF4444; }
-.revision-item.medium { background:rgba(245,158,11,0.06); border-left:3px solid #FBBF24; }
-.revision-item.low { background:rgba(34,197,94,0.06); border-left:3px solid #22C55E; }
+.revision-item.criterion-fail { background:rgba(239,68,68,0.06); border-left:3px solid #EF4444; }
+.revision-item.strategy-fail { background:rgba(245,158,11,0.06); border-left:3px solid #FBBF24; }
+.revision-item.stock-anomaly { background:rgba(34,197,94,0.06); border-left:3px solid #22C55E; }
 .revision-item .rv-header { font-weight:600; color:var(--text-primary); margin-bottom:var(--space-1); }
+.revision-item.cross-locate { background:rgba(139,92,246,0.06); border-left:3px solid #8B5CF6; }
+
 .revision-item .rv-body { color:var(--text-secondary); }
 
 /* ── 参数优化与应用（保留） ── */
@@ -300,12 +347,24 @@
 
         <!-- ③ 回测模式 -->
         <h4>🎯 回测模式</h4>
-        <div class="mode-group">
-          <label class="mode-opt active" onclick="selectMode(this,'basic')"><input type="radio" name="btmode" checked><div><div>基础回测（一次性）</div><div class="mode-desc">快速试算，逐个日期运行组合策略引擎</div></div></label>
-          <label class="mode-opt" onclick="selectMode(this,'walkforward')"><input type="radio" name="btmode"><div><div>走步前推（训练60日+验证20日，向前滚动）</div><div class="mode-desc">验证策略跨时间窗口稳定性</div></div></label>
-          <label class="mode-opt" onclick="selectMode(this,'cscv')"><input type="radio" name="btmode"><div><div>CSCV / PBO 评估</div><div class="mode-desc">组合对称交叉验证，计算过拟合概率</div></div></label>
-          <label class="mode-opt" onclick="selectMode(this,'plateau')"><input type="radio" name="btmode"><div><div>参数平原分析</div><div class="mode-desc">网格搜索，评估参数敏感度和平原宽度</div></div></label>
+        <div class="mode-tier-group">
+          <label class="mode-tier active" onclick="selectTier(this,'quick')"><input type="radio" name="btTier" value="quick" checked hidden><span class="tier-icon">🚀</span><div><div class="tier-name">快速（单股票）</div><div class="tier-detail">~5s · 1只股票+基础回测 · 不可单独作为决策依据</div></div></label>
+          <label class="mode-tier" onclick="selectTier(this,'standard')"><input type="radio" name="btTier" value="standard" hidden><span class="tier-icon">⚡</span><div><div class="tier-name">标准（推荐）</div><div class="tier-detail">~15-25min · 20~30只股票+全4判据 · 异步执行</div></div></label>
+          <label class="mode-tier" onclick="selectTier(this,'deep')"><input type="radio" name="btTier" value="deep" hidden><span class="tier-icon">🔬</span><div><div class="tier-name">深度</div><div class="tier-detail">~40-50min · 30只+全4判据+参数平原全量 · 异步执行</div></div></label>
         </div>
+
+        <!-- 回测判据（多选） -->
+        <h4 style="font-size:10px;">🔬 回测判据</h4>
+        <div class="criteria-group">
+          <label class="criteria-opt"><input type="checkbox" class="btCriterion" value="basic" checked disabled> ☑ 基础回测</label>
+          <label class="criteria-opt"><input type="checkbox" class="btCriterion" value="walkforward" checked> 走步前推</label>
+          <label class="criteria-opt"><input type="checkbox" class="btCriterion" value="cscv" checked> CSCV/PBO</label>
+          <label class="criteria-opt"><input type="checkbox" class="btCriterion" value="plateau" checked> 参数平原</label>
+          <label class="criteria-opt"><input type="checkbox" class="btCriterion" value="montecarlo" checked> 蒙特卡洛</label>
+        </div>
+        <div class="criteria-hint" id="criteriaHint">标准模式：全判据勾选 · 切换模式自动联动勾选</div>
+        <!-- ④ -->
+
 
         <!-- ④ 标的范围 -->
         <h4>🎯 标的范围</h4>
@@ -356,8 +415,19 @@
       <div class="results-section" id="resultsArea" style="display:none;">
 
         <!-- 进度条 -->
-        <div class="progress-bar" id="progressBar"><div class="pb-fill" id="progressFill"></div></div>
-        <div class="progress-text" id="progressText"></div>
+        <div class="async-progress" id="asyncProgressPanel" style="display:none;">
+          <div class="ap-header">
+            <span class="ap-title">🕐 回测任务进行中</span>
+            <span class="ap-task-id" id="apTaskId">任务ID: BT-MOCK-001</span>
+          </div>
+          <div class="progress-bar"><div class="pb-fill" id="progressFill"></div></div>
+          <div class="ap-status" id="apStatus">⚙️ 逐日期运行组合策略引擎 — 贵州茅台(600519) 6/30</div>
+          <div class="ap-eta" id="apEta">预计剩余：~12 分钟</div>
+          <div style="display:flex;gap:var(--space-4);justify-content:center;">
+            <button class="btn btn-sm" onclick="showToast('🔔 完成后将通知您')">🔔 完成后通知我</button>
+            <button class="btn btn-sm" onclick="dismissProgress()">关闭面板，后台继续</button>
+          </div>
+        </div>
 
         <!-- 区域①：绩效概览 -->
         <div class="section-card">
@@ -384,6 +454,15 @@
         <!-- 区域②：权益曲线+回撤 -->
         <div class="chart-card">
           <div class="section-title">📈 区域② 权益曲线 + 基准对比 <span style="font-size:10px;color:var(--text-muted);font-weight:400;">横截面中位数 ±1σ 置信带</span></div>
+          <div class="bench-switch-row">
+            <label for="benchSwitch">基准对比：</label>
+            <select id="benchSwitch" onchange="switchBenchmark()">
+              <option value="hs300">沪深300</option>
+              <option value="zz500">中证500</option>
+              <option value="zz1000">中证1000</option>
+              <option value="sz">上证指数</option>
+            </select>
+          </div>
           <div id="equityChart" class="chart-box"></div>
           <div style="font-size:9px;color:var(--text-muted);margin-top:var(--space-4);text-align:center;">中位数曲线（蓝色）· ±1σ置信区间阴影带（浅蓝）· 沪深300基准（灰色虚线）· 底部：平均回撤曲线</div>
         </div>
@@ -577,17 +656,36 @@ function toggleAdv(){
 }
 
 // ── 模式切换 ──
-function selectMode(el,mode){
-  document.querySelectorAll('.mode-opt').forEach(function(o){ o.classList.remove('active'); });
+function selectTier(el,tier){
+  document.querySelectorAll('.mode-tier').forEach(function(o){ o.classList.remove('active'); });
   el.classList.add('active');
   el.querySelector('input[type=radio]').checked = true;
+  // 判据联动
+  var criteria = {
+    quick: {walkforward:false, cscv:false, plateau:false, montecarlo:false},
+    standard: {walkforward:true, cscv:true, plateau:true, montecarlo:true},
+    deep: {walkforward:true, cscv:true, plateau:true, montecarlo:true}
+  };
+  var p = criteria[tier];
+  document.querySelectorAll('.btCriterion').forEach(function(cb){
+    var val = cb.value;
+    if(val === 'basic') return;
+    if(p[val] !== undefined) cb.checked = p[val];
+  });
+  document.getElementById('criteriaHint').textContent = ({
+    quick:'快速模式：仅基础回测，无判据验证（不可单独作为决策依据）',
+    standard:'标准模式：全判据勾选 · 切换模式自动联动勾选 · 可手动微调',
+    deep:'深度模式：全判据+参数平原全量 · 可手动微调'
+  })[tier];
+  // 标的范围联动
+  var scopeSec = document.getElementById('scopeOptions');
+  if(scopeSec) scopeSec.style.display = tier === 'quick' ? 'none' : '';
   // 按钮文案联动
   var btn = document.getElementById('startBacktestBtn');
-  var labels = {basic:'▶ 开始回测',walkforward:'▶ 走步前推',cscv:'▶ CSCV/PBO 评估',plateau:'▶ 参数平原分析'};
-  btn.textContent = labels[mode] || '▶ 开始回测';
+  var labels = {quick:'▶ 开始回测',standard:'▶ 标准回测',deep:'▶ 深度回测'};
+  btn.textContent = labels[tier] || '▶ 开始回测';
 }
 
-// ── 策略组合：同步 ──
 function syncIndicatorConfig(){
   document.getElementById('syncStatus').className = 'sync-status synced';
   document.getElementById('syncStatus').textContent = '✅ 已同步';
@@ -741,67 +839,69 @@ function showToast(msg){
 // ── 开始回测 ──
 function runBacktest(){
   var btn = document.getElementById('startBacktestBtn');
-  btn.innerHTML = '⏳ 回测进行中...';
+  btn.innerHTML = '⏳ 提交中...';
   btn.disabled = true;
-
-  // 显示进度条
-  var pb = document.getElementById('progressBar');
+  var panel = document.getElementById('asyncProgressPanel');
   var pf = document.getElementById('progressFill');
-  var pt = document.getElementById('progressText');
-  pb.style.display = 'block';
-  pt.style.display = 'block';
-
-  var steps = [
-    {pct:10, text:'🧩 加载策略配置...'},
-    {pct:25, text:'📊 读取自选池数据（18只股票）...'},
-    {pct:45, text:'⚙️ 逐日期运行组合策略引擎...'},
-    {pct:65, text:'🔄 横截面聚合计算中...'},
-    {pct:80, text:'🔬 多维验证走廊计算中（4判据）...'},
-    {pct:95, text:'📋 生成验证矩阵与修订建议...'},
-    {pct:100, text:'✅ 回测完成'}
+  var apStatus = document.getElementById('apStatus');
+  var apEta = document.getElementById('apEta');
+  var apTaskId = document.getElementById('apTaskId');
+  panel.style.display = 'block';
+  panel.scrollIntoView({behavior:'smooth',block:'center'});
+  var now = new Date();
+  var taskId = 'BT-' + String(now.getFullYear()) + String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0') + '-001';
+  apTaskId.textContent = '任务ID: ' + taskId;
+  var tier = 'standard';
+  document.querySelectorAll('.mode-tier').forEach(function(el){ if(el.classList.contains('active')) tier = el.querySelector('input').value || 'standard'; });
+  var stockCount = {quick:1, standard:20, deep:30}[tier] || 20;
+  var stepDuration = {quick:1000, standard:2000, deep:2600}[tier] || 2000;
+  var stockNames = ['贵州茅台','宁德时代','招商银行','五粮液','比亚迪','中国平安','美的集团','恒瑞医药','海康威视','长江电力','东方财富','药明康德','紫金矿业','山西汾酒','金山办公','迈瑞医疗','海光信息','赛力斯','兴业银行','泸州老窖'];
+  var progressSteps = [
+    {pct:5, stage:'🧩 加载策略配置', stock:0},
+    {pct:15, stage:'📊 读取股票数据', stock:0},
+    {pct:35, stage:'⚙️ 逐日期运行组合策略引擎', stock:Math.floor(stockCount*0.3)},
+    {pct:55, stage:'🔄 横截面聚合计算中', stock:stockCount},
+    {pct:75, stage:'🔬 多维验证走廊计算中', stock:stockCount},
+    {pct:100, stage:'✅ 回测完成', stock:stockCount}
   ];
-  var stepIdx = 0;
-
+  var stepIdx = 0, startTime = Date.now();
   function advanceProgress(){
-    if(stepIdx >= steps.length){ finalize(); return; }
-    var s = steps[stepIdx];
+    if(stepIdx >= progressSteps.length){ finalize(); return; }
+    var s = progressSteps[stepIdx];
     pf.style.width = s.pct + '%';
-    pt.textContent = s.text;
+    var curStockIdx = Math.min(s.stock, stockNames.length-1);
+    var stockLabel = s.stock > 0 ? ' — ' + stockNames[curStockIdx] + ' ' + curStockIdx + '/' + stockCount : '';
+    apStatus.textContent = s.stage + stockLabel;
+    var elapsed = (Date.now() - startTime) / 1000;
+    var pctDone = s.pct / 100;
+    var totalEst = pctDone > 0.01 ? elapsed / pctDone : stepDuration * 6 / 1000;
+    var remaining = Math.max(0, totalEst - elapsed);
+    apEta.textContent = '预计剩余：~' + (remaining > 60 ? Math.round(remaining/60) + ' 分钟' : Math.round(remaining) + ' 秒');
     stepIdx++;
-    setTimeout(advanceProgress, stepIdx === 1 ? 600 : stepIdx === 3 ? 800 : stepIdx === 5 ? 600 : 500);
+    setTimeout(advanceProgress, stepDuration / 6 * 0.7);
   }
-  advanceProgress();
-
+  setTimeout(advanceProgress, 300);
   function finalize(){
     btn.innerHTML = '▶ 开始回测';
     btn.disabled = false;
     document.getElementById('resultsArea').style.display = 'block';
-
-    // 生成Mock数据并填充所有区域
     generateAllResults();
     initChart();
-
-    // 隐藏进度
-    setTimeout(function(){ pb.style.display = 'none'; pt.style.display = 'none'; }, 1500);
+    setTimeout(function(){ panel.style.display = 'none'; }, 2000);
     document.getElementById('resultsArea').scrollIntoView({behavior:'smooth',block:'start'});
   }
 }
+function dismissProgress(){
+  var panel = document.getElementById('asyncProgressPanel');
+  panel.style.display = 'none';
+  showToast('🔄 后台继续执行，完成后顶部通知');
+}
 
-// ── Mock数据生成 ──
-var _stockPool = [
-  {name:'贵州茅台',code:'600519.SH',quality:0.85},{name:'宁德时代',code:'300750.SZ',quality:0.70},
-  {name:'招商银行',code:'600036.SH',quality:0.75},{name:'五粮液',code:'000858.SZ',quality:0.65},
-  {name:'比亚迪',code:'002594.SZ',quality:0.72},{name:'中国平安',code:'601318.SH',quality:0.60},
-  {name:'美的集团',code:'000333.SZ',quality:0.68},{name:'恒瑞医药',code:'600276.SH',quality:0.55},
-  {name:'海康威视',code:'002415.SZ',quality:0.62},{name:'长江电力',code:'600900.SH',quality:0.78},
-  {name:'东方财富',code:'300059.SZ',quality:0.58},{name:'药明康德',code:'603259.SH',quality:0.52},
-  {name:'紫金矿业',code:'601899.SH',quality:0.64},{name:'山西汾酒',code:'600809.SH',quality:0.66},
-  {name:'金山办公',code:'688111.SH',quality:0.48},{name:'迈瑞医疗',code:'300760.SZ',quality:0.63},
-  {name:'海光信息',code:'688041.SH',quality:0.54},{name:'赛力斯',code:'601127.SH',quality:0.56}
-];
+var _stockPool = _btMockStocks;
 
-function randf(min,max){ return Math.random()*(max-min)+min; }
-function randi(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+// ── 随机数辅助 ──
+function randf(min, max){ return Math.random() * (max - min) + min; }
+function randi(min, max){ return Math.floor(Math.random() * (max - min + 1)) + min; }
 
 function generateAllResults(){
   // 挑选前12只作为展示
@@ -875,7 +975,7 @@ function renderMatrix(stocks){
   var passCounts = [0,0,0,0];
   var html = '';
   var stockRows = stocks.map(function(s){
-    var row = [s.name + '(' + s.code.slice(0,6) + ')'];
+    var row = [s.name + '(' + s.ts_code.slice(0,6) + ')'];
     for(var c=0;c<4;c++){
       var r = Math.random();
       var st = r > 0.6 ? 'pass' : (r > 0.25 ? 'warn' : 'fail');
@@ -1004,7 +1104,7 @@ function renderTrades(stocks){
   var filterEl = document.getElementById('filterStock');
   var html = '<option value="all">全部</option>';
   stocks.slice(0,4).forEach(function(s){
-    html += '<option value="'+s.code+'">'+s.name+'</option>';
+    html += '<option value="'+s.ts_code+'">'+s.name+'</option>';
   });
   filterEl.innerHTML = html;
   filterEl.onchange = filterTrades;
@@ -1031,7 +1131,7 @@ function renderTrades(stocks){
     window._mockTrades.push({
       date: dateStr,
       stock_name: s.name,
-      stock_code: s.code,
+      stock_code: s.ts_code,
       direction: directions[di],
       price: price,
       qty: qty,
@@ -1076,31 +1176,41 @@ function renderTradeRows(trades){
 
 // ── ⑨ 修订建议 ──
 function renderRevisions(){
-  var content = document.getElementById('revisionContent');
+  var cont = document.getElementById('revisionContent');
+  var passRates = window._lastPassRates || {walkforward:78, cscv:67, plateau:45, montecarlo:30};
+  var suggestions = [];
+
+  // 判据级失败（全横截面、通过率<50%）
+  if(passRates.plateau < 50){
+    suggestions.push({level:'criterion-fail',icon:'🔴',tag:'判据级失败（全横截面）',body:'[参数平原] 通过率仅50%' + passRates.plateau + '%——3/4策略参数平原宽度不足30%：<br>→ 缠论窗口60-180：宽度22%（不足）<br>→ 筹码窗口40-120：宽度18%（不足）<br>→ 建议：扩大参数搜索范围后重新校验'});
+  }
+  if(passRates.montecarlo < 50){
+    suggestions.push({level:'criterion-fail',icon:'🔴',tag:'判据级失败（全横截面）',body:'[蒙特卡洛] 通过率仅50%' + passRates.montecarlo + '%——统计显著性不足，建议：<br>→ 增加回测数据长度（至少3年）<br>→ 或检查择时逻辑是否过于复杂（信号频次过高）'});
+  }
+
+  // 策略级失败
+  suggestions.push({level:'strategy-fail',icon:'🟡',tag:'策略级失败（全横截面）',body:'[筹码策略] 横截面平均边际贡献为-1.2%，信号一致率仅58%——建议：<br>→ 评估筹码策略在组合中的权重是否过高<br>→ 或考虑在特定市场状态下禁用该策略'});
+
+  // 股票级异常
+  suggestions.push({level:'stock-anomaly',icon:'🔵',tag:'股票级异常（单只偏离）',body:'[招商银行] 参数平原上Z-score=2.8，表现与横截面显著偏离：<br>→ CSCV/PBO=42%（vs 横截面均值24%）<br>→ 建议单独查看该股票回测详情'});
+
+  // 交叉定位异常
+  suggestions.push({level:'cross-locate',icon:'🟣',tag:'判据×股票交叉定位',body:'[五粮液] CSCV/PBO异常（42%）+ 参数平原异常（宽度15%）：<br>→ 双重异常指向该股票与当前策略组合不匹配<br>→ 建议：将该股票加入"策略不适用"名单或降低参考权重'});
+
+  // 按影响面排序
+  var rank = {criterion:0, strategy:1, stock:2, cross:3};
+  suggestions.sort(function(a,b){ return rank[a.level.split('-')[0]] - rank[b.level.split('-')[0]]; });
+
   var html = '';
-
-  html += '<div class="revision-item high">';
-  html += '<div class="rv-header">🔴 高优（跨股票普遍失败）</div>';
-  html += '<div class="rv-body">[参数平原] 通过率仅45%（8/18）——3/4策略参数平原宽度不足30%：<br>';
-  html += '→ 缠论窗口60-180：宽度22%（不足）<br>';
-  html += '→ 筹码窗口40-120：宽度18%（不足）<br>';
-  html += '→ 建议：扩大参数搜索范围后重新校验</div></div>';
-
-  html += '<div class="revision-item medium">';
-  html += '<div class="rv-header">🟡 中优（跨股票部分失败）</div>';
-  html += '<div class="rv-body">[蒙特卡洛] 通过率仅30%（5/18）——统计显著性不足，建议：<br>';
-  html += '→ 增加回测数据长度（至少3年）<br>';
-  html += '→ 或检查择时逻辑是否过于复杂（信号频次过高）</div></div>';
-
-  html += '<div class="revision-item low">';
-  html += '<div class="rv-header">🟢 低优（仅在个别股票失败）</div>';
-  html += '<div class="rv-body">[CSCV] 招商银行PBO=42%, 五粮液PBO=38%——这两只指标可关注但不影响策略整体表现</div></div>';
-
-  html += '<div style="padding:var(--space-3) var(--space-6);margin-top:var(--space-2);font-size:11px;color:var(--text-secondary);background:var(--bg-subtle);border-radius:var(--radius-sm);">综合判定：🟡 需谨慎 ➔ 策略仍需优化后重新验证</div>';
-  content.innerHTML = html;
+  suggestions.forEach(function(s){
+    html += '<div class="revision-item ' + s.level + '">';
+    html += '<div class="rv-header">' + s.icon + ' ' + s.tag + '</div>';
+    html += '<div class="rv-body">' + s.body + '</div></div>';
+  });
+  html += '<div style="padding:var(--space-3) var(--space-6);margin-top:var(--space-2);font-size:11px;color:var(--text-secondary);background:var(--bg-subtle);border-radius:var(--radius-sm);">综合判定 🟡 需谨慎 ➞ 策略仍需优化后重新验证（2项判据级失败、1项策略级负贡献）</div>';
+  cont.innerHTML = html;
 }
 
-// ── 区域②：ECharts ──
 function initChart(){
   var ec = document.getElementById('equityChart');
   if(!ec) return;
