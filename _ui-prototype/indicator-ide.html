@@ -476,7 +476,7 @@
         <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
         <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
         <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
-        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new" id="sidebarReviewBadge" style="display:none;"></span></a>
         <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
       </div>
       <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
@@ -1070,6 +1070,7 @@
               <div class="pr-actions">
                 <button class="btn btn-primary" style="font-size:12px;padding:var(--space-2) var(--space-6);" onclick="sendToBacktest()">📊 发送到回测</button>
                 <button class="btn" style="font-size:12px;padding:var(--space-2) var(--space-6);" onclick="editPracticalRef()">✏️ 编辑条件</button>
+                <button class="btn" style="font-size:12px;padding:var(--space-2) var(--space-6);border-color:var(--signal-watch);color:var(--signal-watch);" onclick="addToReviewPool()">📋 加入复盘池</button>
               </div>
             </div>
 
@@ -2501,6 +2502,45 @@ function sendToBacktest(){
   }, 600);
 }
 
+// ── 实操参考：加入复盘池 ──
+function addToReviewPool(){
+  var entry = {
+    ts_code: _currentTsCode || '000762.SZ',
+    name: _currentTsName || '西藏矿业',
+    date: (function(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })(),
+    strategy_label: '综合策略',
+    signals: {
+      direction: 'bullish',
+      confidence: 0.78,
+      entry_zone: '12.10 - 12.50',
+      risk_line: '11.80',
+      target: '14.50'
+    },
+    timestamp: Date.now()
+  };
+  var existing = [];
+  try{ var raw=localStorage.getItem('review_pool_entries'); if(raw) existing=JSON.parse(raw); }catch(e){}
+  existing.push(entry);
+  try{ localStorage.setItem('review_pool_entries', JSON.stringify(existing)); }catch(e){}
+  var badgeCount = 1;
+  try{ badgeCount = parseInt(localStorage.getItem('review_badge_count')||'0') + 1; }catch(e){}
+  try{ localStorage.setItem('review_badge_count', String(badgeCount)); }catch(e){}
+  showToast('✅ 已加入复盘池（当前共 ' + existing.length + ' 条策略）');
+  // Update sidebar badge immediately
+  updateSidebarReviewBadge();
+}
+
+function updateSidebarReviewBadge(){
+  try{
+    var count = parseInt(localStorage.getItem('review_badge_count')||'0');
+    var badgeEl = document.getElementById('sidebarReviewBadge');
+    if(badgeEl){
+      if(count > 0){ badgeEl.textContent = count > 99 ? '99+' : String(count); badgeEl.style.display = 'inline'; }
+      else badgeEl.style.display = 'none';
+    }
+  }catch(e){}
+}
+
 // ── 实操参考：编辑条件 ──
 function editPracticalRef(){
   var entry = document.getElementById('entryConditions');
@@ -2597,6 +2637,7 @@ function toggleSidebar(){
     if(typeof syncPanelHeight === 'function') syncPanelHeight();
   }, 50);
 })();
+updateSidebarReviewBadge();
 
 // ── 浏览器缩放/窗口大小变化 → 重新调整图表尺寸 ──
 (function(){
