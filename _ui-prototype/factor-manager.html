@@ -5,115 +5,1040 @@
 <title>因子管理 — A股分析系统</title>
 <link rel="stylesheet" href="assets/base.css">
 <style>
-.factor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-16); }
-.factor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-16); }
-.factor-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); transition: all .15s; }
-.factor-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-hover); }
-.factor-card .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-8); }
-.factor-card h4 { font-size: 14px; font-weight: 600; }
-.factor-card .factor-tags { display: flex; gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-8); }
-.factor-card .factor-tags span { font-size: 11px; padding: 2px var(--space-6); border-radius: var(--radius-xs); background: var(--bg-subtle); color: var(--text-secondary); }
-.factor-card .factor-meta { font-size: 12px; color: var(--text-muted); }
-.factor-card .card-actions { display: flex; gap: var(--space-4); margin-top: var(--space-8); padding-top: var(--space-8); border-top: 1px solid var(--border-default); }
-.factor-card .card-actions span { font-size: 12px; color: var(--text-secondary); cursor: pointer; padding: var(--space-4) var(--space-8); border-radius: var(--radius-xs); }
-.factor-card .card-actions span:hover { background: var(--bg-active); color: var(--color-brand-500); }
-.fav-star { cursor: pointer; color: var(--signal-watch); font-size: 16px; }
+/* ===== 页面头 ===== */
+.fm-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--space-16); }
+.fm-header h1 { font-size:20px; }
+
+/* ===== Tab 栏 ===== */
+.fm-tabs { display:flex; gap:0; margin-bottom:var(--space-16); border-bottom:1px solid var(--border-default); }
+.fm-tab { padding:var(--space-10) var(--space-20); cursor:pointer; color:var(--text-secondary); font-size:14px; border-bottom:2px solid transparent; transition:all .15s; }
+.fm-tab:hover { color:var(--text-primary); background:var(--bg-subtle); }
+.fm-tab.active { color:var(--color-brand-500); border-bottom-color:var(--color-brand-500); }
+.fm-panel { display:none; }
+.fm-panel.active { display:block; }
+
+/* ===== 因子库 — 筛选条 ===== */
+.flt-bar { display:flex; flex-wrap:wrap; gap:var(--space-6); margin-bottom:var(--space-12); align-items:center; }
+.flt-search { flex:1; min-width:200px; height:var(--input-height); padding:0 var(--space-12); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-primary); font-size:13px; outline:none; }
+.flt-search:focus { border-color:var(--border-focus); }
+.flt-search::placeholder { color:var(--text-muted); }
+.flt-tag { display:inline-flex; align-items:center; gap:var(--space-4); padding:var(--space-4) var(--space-10); border-radius:var(--radius-full); font-size:12px; cursor:pointer; background:var(--bg-surface); color:var(--text-secondary); border:1px solid transparent; white-space:nowrap; transition:all .12s; }
+.flt-tag:hover { background:var(--bg-muted); color:var(--text-primary); }
+.flt-tag.active { background:var(--color-brand-500); color:#fff; border-color:var(--color-brand-500); }
+.flt-tag .cnt { font-size:10px; opacity:0.7; }
+.flt-tag-more { position:relative; }
+.flt-tag-more .flt-drop { display:none; position:absolute; top:100%; left:0; margin-top:4px; background:var(--bg-canvas); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-8); z-index:50; min-width:200px; box-shadow:var(--shadow-hover); }
+.flt-tag-more.open .flt-drop { display:flex; flex-wrap:wrap; gap:var(--space-4); }
+
+/* ===== 因子库 — 表格 ===== */
+.factor-table { width:100%; border-collapse:collapse; font-size:13px; }
+.factor-table th { text-align:left; padding:var(--space-8) var(--space-10); color:var(--text-muted); font-weight:500; border-bottom:1px solid var(--border-default); background:var(--bg-subtle); font-size:11px; letter-spacing:.3px; cursor:pointer; user-select:none; white-space:nowrap; }
+.factor-table th:hover { color:var(--text-primary); }
+.factor-table th .sort { margin-left:4px; opacity:0.3; }
+.factor-table th.sorted .sort { opacity:1; color:var(--color-brand-500); }
+.factor-table td { padding:var(--space-8) var(--space-10); border-bottom:1px solid var(--border-default); color:var(--text-secondary); }
+.factor-table tr { cursor:pointer; transition:background .1s; }
+.factor-table tr:hover td { background:var(--bg-active); }
+.factor-table .f-name { color:var(--text-primary); font-weight:500; }
+.factor-table .f-name small { color:var(--text-muted); font-weight:400; font-size:11px; margin-left:6px; }
+.factor-table .f-desc { max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); }
+.factor-table .f-tags { display:flex; gap:var(--space-3); flex-wrap:wrap; }
+.factor-table .f-tag { font-size:10px; padding:1px var(--space-5); border-radius:var(--radius-xs); background:var(--bg-subtle); color:var(--text-muted); }
+.factor-table .f-cat { font-size:11px; color:var(--text-secondary); }
+.factor-table .f-src { font-size:11px; color:var(--text-muted); }
+.factor-table .empty td { text-align:center; padding:var(--space-32); color:var(--text-muted); font-size:13px; }
+
+/* ===== 因子库 — 侧滑详情面板 ===== */
+.detail-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.4); z-index:200; }
+.detail-overlay.open { display:block; }
+.detail-panel { position:fixed; top:0; right:-480px; width:480px; height:100%; background:var(--bg-canvas); border-left:1px solid var(--border-default); z-index:210; transition:right .25s ease; overflow-y:auto; display:flex; flex-direction:column; }
+.detail-panel.open { right:0; }
+.dp-head { padding:var(--space-16) var(--space-20); border-bottom:1px solid var(--border-default); display:flex; justify-content:space-between; align-items:flex-start; }
+.dp-head h3 { font-size:16px; color:var(--text-primary); }
+.dp-head h3 small { font-size:12px; color:var(--text-muted); font-weight:400; margin-left:8px; }
+.dp-close { background:none; border:none; color:var(--text-muted); font-size:22px; cursor:pointer; padding:4px; line-height:1; }
+.dp-close:hover { color:var(--text-primary); }
+.dp-body { padding:var(--space-16) var(--space-20); flex:1; }
+.dp-sec { margin-bottom:var(--space-16); }
+.dp-sec-label { font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:var(--space-6); font-weight:500; }
+.dp-sec p { font-size:13px; color:var(--text-secondary); line-height:1.7; }
+.dp-tags { display:flex; gap:var(--space-4); flex-wrap:wrap; }
+.dp-tag { font-size:11px; padding:2px var(--space-8); border-radius:var(--radius-xs); background:var(--bg-muted); color:var(--text-secondary); }
+.dp-tag.time { background:rgba(59,130,246,0.15); color:#60A5FA; }
+.dp-tag.strategy { background:rgba(245,158,11,0.15); color:#FBBF24; }
+.dp-tag.market { background:rgba(34,197,94,0.15); color:#34D399; }
+.dp-params { display:flex; flex-direction:column; gap:var(--space-8); }
+.dp-param { display:flex; align-items:center; gap:var(--space-8); font-size:13px; }
+.dp-param label { color:var(--text-secondary); min-width:90px; }
+.dp-param input { width:80px; height:32px; padding:0 var(--space-8); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-primary); font-size:13px; text-align:center; }
+.dp-param .hint { font-size:11px; color:var(--text-muted); margin-left:4px; }
+.dp-examples { display:flex; flex-direction:column; gap:var(--space-6); }
+.dp-example { padding:var(--space-8) var(--space-10); background:var(--bg-subtle); border-radius:var(--radius-sm); font-size:12px; color:var(--text-secondary); border-left:3px solid var(--color-brand-500); }
+.dp-related { display:flex; gap:var(--space-4); flex-wrap:wrap; }
+.dp-related span { font-size:12px; padding:2px var(--space-8); border-radius:var(--radius-xs); background:var(--bg-subtle); color:var(--text-secondary); cursor:pointer; }
+.dp-related span:hover { background:var(--bg-muted); color:var(--text-primary); }
+.dp-foot { padding:var(--space-12) var(--space-20); border-top:1px solid var(--border-default); display:flex; gap:var(--space-8); }
+.dp-foot button { flex:1; }
+
+/* ===== 组合方案 — 筛选条 ===== */
+.combo-bar { display:flex; flex-wrap:wrap; gap:var(--space-8); margin-bottom:var(--space-16); align-items:center; }
+.combo-bar .c-flt { display:flex; gap:var(--space-2); }
+.combo-bar .c-flt span { padding:var(--space-4) var(--space-12); border-radius:var(--radius-full); font-size:12px; cursor:pointer; background:var(--bg-surface); color:var(--text-secondary); transition:all .12s; }
+.combo-bar .c-flt span:hover { background:var(--bg-muted); color:var(--text-primary); }
+.combo-bar .c-flt span.active { background:var(--color-brand-500); color:#fff; }
+.combo-bar .c-search { flex:1; min-width:160px; height:36px; padding:0 var(--space-10); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-primary); font-size:13px; outline:none; }
+.combo-bar .c-search:focus { border-color:var(--border-focus); }
+.combo-bar .c-search::placeholder { color:var(--text-muted); }
+
+/* ===== 组合方案 — 卡片列表 ===== */
+.combo-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(310px,1fr)); gap:var(--space-12); }
+.combo-card { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-14) var(--space-16); transition:all .12s; }
+.combo-card:hover { border-color:var(--border-strong); box-shadow:var(--shadow-hover); }
+.cc-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:var(--space-8); }
+.cc-badge { font-size:10px; padding:1px var(--space-6); border-radius:var(--radius-xs); background:var(--bg-muted); color:var(--text-muted); }
+.cc-badge.sys { background:rgba(59,130,246,0.15); color:#60A5FA; }
+.cc-badge.user { background:rgba(245,158,11,0.15); color:#FBBF24; }
+.cc-name { font-size:14px; font-weight:600; color:var(--text-primary); margin-bottom:var(--space-4); }
+.cc-summary { font-size:12px; color:var(--text-muted); margin-bottom:var(--space-6); line-height:1.5; }
+.cc-meta { font-size:11px; color:var(--text-muted); margin-bottom:var(--space-8); }
+.cc-actions { display:flex; gap:var(--space-4); padding-top:var(--space-8); border-top:1px solid var(--border-default); flex-wrap:wrap; }
+.cc-actions span { font-size:12px; color:var(--text-secondary); cursor:pointer; padding:var(--space-3) var(--space-8); border-radius:var(--radius-xs); }
+.cc-actions span:hover { background:var(--bg-active); color:var(--color-brand-500); }
+.cc-actions .del:hover { color:var(--color-up); background:var(--color-up-bg); }
+.combo-grid .empty { grid-column:1/-1; text-align:center; padding:var(--space-32); color:var(--text-muted); font-size:13px; }
+
+/* ===== 通用按钮 ===== */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:var(--space-4); height:36px; padding:0 var(--space-14); border-radius:var(--radius-sm); border:1px solid var(--border-default); background:var(--bg-surface); color:var(--text-secondary); font-size:13px; cursor:pointer; transition:all .12s; }
+.btn:hover { background:var(--bg-muted); color:var(--text-primary); }
+.btn-primary { background:var(--color-brand-500); border-color:var(--color-brand-500); color:#fff; }
+.btn-primary:hover { background:var(--color-brand-600); }
+.btn-sm { height:30px; padding:0 var(--space-10); font-size:12px; }
+
+/* ===== 弹窗通用 ===== */
+.modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.55); z-index:300; align-items:center; justify-content:center; }
+.modal-overlay.open { display:flex; }
+.modal { background:var(--bg-canvas); border:1px solid var(--border-default); border-radius:var(--radius-lg); padding:var(--space-24); min-width:560px; max-width:680px; max-height:85vh; overflow-y:auto; }
+.modal-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--space-16); }
+.modal-header h3 { font-size:16px; }
+.m-close { background:none; border:none; color:var(--text-muted); font-size:22px; cursor:pointer; line-height:1; padding:4px; }
+.m-close:hover { color:var(--text-primary); }
+.modal-foot { display:flex; justify-content:flex-end; gap:var(--space-8); margin-top:var(--space-20); padding-top:var(--space-14); border-top:1px solid var(--border-default); }
+
+/* ===== 新建组合 5步流程 ===== */
+.wizard-step { display:none; }
+.wizard-step.active { display:block; }
+.wizard-progress { display:flex; gap:var(--space-4); margin-bottom:var(--space-20); }
+.wp-dot { flex:1; height:4px; border-radius:2px; background:var(--border-default); }
+.wp-dot.done { background:var(--color-brand-500); }
+.wp-dot.curr { background:var(--color-brand-500); opacity:0.6; }
+
+/* Step 1: 目标描述 */
+.wz-goal textarea { width:100%; height:70px; padding:var(--space-10); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-primary); font-size:13px; resize:none; outline:none; font-family:var(--font-sans); }
+.wz-goal textarea:focus { border-color:var(--border-focus); }
+.wz-goal textarea::placeholder { color:var(--text-muted); }
+.wz-goal-hint { font-size:11px; color:var(--text-muted); margin-top:var(--space-4); }
+
+/* Step 2: 选择因子 */
+.wz-select .ws-search { width:100%; height:36px; padding:0 var(--space-10); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-primary); font-size:13px; outline:none; margin-bottom:var(--space-8); }
+.wz-select .ws-search:focus { border-color:var(--border-focus); }
+.wz-select .ws-count { font-size:11px; color:var(--text-muted); margin-bottom:var(--space-8); }
+.wz-select .ws-list { max-height:360px; overflow-y:auto; border:1px solid var(--border-default); border-radius:var(--radius-sm); }
+.wz-select .ws-item { display:flex; align-items:flex-start; gap:var(--space-8); padding:var(--space-8) var(--space-10); border-bottom:1px solid var(--border-default); cursor:pointer; transition:background .1s; }
+.wz-select .ws-item:last-child { border-bottom:none; }
+.wz-select .ws-item:hover { background:var(--bg-subtle); }
+.wz-select .ws-item input[type=checkbox] { margin-top:3px; accent-color:var(--color-brand-500); }
+.wz-select .ws-item .wsi-info { flex:1; }
+.wz-select .ws-item .wsi-name { font-size:13px; color:var(--text-primary); font-weight:500; }
+.wz-select .ws-item .wsi-name small { color:var(--text-muted); font-weight:400; }
+.wz-select .ws-item .wsi-desc { font-size:11px; color:var(--text-muted); }
+.wz-select .ws-item .wsi-tags { display:flex; gap:var(--space-3); margin-top:var(--space-3); flex-wrap:wrap; }
+.wz-select .ws-item .wsi-tags span { font-size:10px; padding:0 var(--space-4); border-radius:var(--radius-xs); background:var(--bg-subtle); color:var(--text-muted); }
+
+/* Step 3: 权重配置 */
+.wz-weight .ww-row { display:flex; align-items:center; gap:var(--space-10); margin-bottom:var(--space-10); }
+.wz-weight .ww-name { min-width:120px; font-size:13px; color:var(--text-primary); }
+.wz-weight .ww-slider { flex:1; }
+.wz-weight .ww-slider input[type=range] { width:100%; height:4px; -webkit-appearance:none; background:var(--border-default); border-radius:2px; outline:none; }
+.wz-weight .ww-slider input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:var(--color-brand-500); cursor:pointer; }
+.wz-weight .ww-pct { min-width:50px; text-align:right; font-size:14px; font-weight:600; color:var(--color-brand-500); }
+.wz-weight .ww-total { display:flex; justify-content:space-between; align-items:center; padding:var(--space-8) 0; font-size:13px; color:var(--text-secondary); }
+.wz-weight .ww-total .bar { flex:1; height:6px; border-radius:3px; background:var(--border-default); margin:0 var(--space-12); overflow:hidden; }
+.wz-weight .ww-total .bar-fill { height:100%; border-radius:3px; background:var(--color-brand-500); transition:width .2s; }
+.wz-weight .ww-total.ok .bar-fill { background:var(--color-brand-500); }
+.wz-weight .ww-total.fail .bar-fill { background:var(--color-up); }
+.wz-weight .ww-total .pct { font-weight:600; min-width:40px; text-align:right; }
+
+/* Step 4: 参数调整 */
+.wz-params .wp-row { display:flex; align-items:center; gap:var(--space-10); margin-bottom:var(--space-10); padding:var(--space-8) var(--space-10); background:var(--bg-subtle); border-radius:var(--radius-sm); }
+.wz-params .wp-name { min-width:110px; font-size:13px; color:var(--text-primary); }
+.wz-params .wp-name small { display:block; font-size:10px; color:var(--text-muted); font-weight:400; }
+.wz-params .wp-inputs { display:flex; gap:var(--space-6); flex-wrap:wrap; }
+.wz-params .wp-inputs label { font-size:11px; color:var(--text-muted); }
+.wz-params .wp-inputs input { width:70px; height:30px; padding:0 var(--space-6); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-primary); font-size:12px; text-align:center; }
+.wz-params .wp-hint { font-size:10px; color:var(--text-muted); }
+
+/* Step 5: 命名保存 */
+.wz-save .ws-name { width:100%; height:40px; padding:0 var(--space-12); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-primary); font-size:14px; outline:none; margin-bottom:var(--space-10); }
+.wz-save .ws-name:focus { border-color:var(--border-focus); }
+.wz-save .ws-desc { width:100%; height:60px; padding:var(--space-10); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-primary); font-size:13px; resize:none; outline:none; font-family:var(--font-sans); margin-bottom:var(--space-14); }
+.wz-save .ws-preview { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-14) var(--space-16); }
+.wz-save .ws-preview h4 { font-size:14px; color:var(--text-primary); margin-bottom:var(--space-4); }
+.wz-save .ws-preview .ps-meta { font-size:12px; color:var(--text-muted); line-height:1.6; }
+.wz-save .ws-preview .ps-tags { display:flex; gap:var(--space-3); margin-top:var(--space-6); flex-wrap:wrap; }
+.wz-save .ws-preview .ps-tags span { font-size:10px; padding:1px var(--space-5); border-radius:var(--radius-xs); background:var(--bg-subtle); color:var(--text-muted); }
+
+/* ===== Toast ===== */
+.toast { position:fixed; bottom:32px; left:50%; transform:translateX(-50%); background:var(--bg-canvas); border:1px solid var(--border-strong); border-radius:var(--radius-md); padding:var(--space-12) var(--space-20); font-size:13px; color:var(--text-primary); z-index:999; box-shadow:var(--shadow-hover); display:none; align-items:center; gap:var(--space-8); }
+.toast.show { display:flex; animation:toastIn .3s ease; }
+@keyframes toastIn { from{opacity:0;transform:translateX(-50%) translateY(20px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
+
+/* ===== 组合详情弹窗 ===== */
+.cd-table { width:100%; border-collapse:collapse; font-size:13px; }
+.cd-table th { text-align:left; padding:var(--space-6) var(--space-8); color:var(--text-muted); font-weight:500; border-bottom:1px solid var(--border-default); font-size:11px; }
+.cd-table td { padding:var(--space-6) var(--space-8); border-bottom:1px solid var(--border-default); color:var(--text-secondary); }
+.cd-table .cd-name { color:var(--text-primary); }
+.cd-table .cd-w { color:var(--color-brand-500); font-weight:600; }
+
+/* ===== 确认弹窗 ===== */
+.confirm-box { text-align:center; padding:var(--space-16) 0; }
+.confirm-box p { font-size:14px; color:var(--text-secondary); margin-bottom:var(--space-16); white-space:pre-line; }
+.confirm-box .btns { display:flex; justify-content:center; gap:var(--space-10); }
+
+/* ===== 响应式 ===== */
+@media(max-width:768px){
+  .detail-panel { width:100%; right:-100%; }
+  .modal { min-width:auto; width:92vw; padding:var(--space-16); }
+  .combo-grid { grid-template-columns:1fr; }
+  .factor-table { font-size:12px; }
+  .factor-table .f-desc { max-width:120px; }
+}
 </style>
 </head>
 <body>
 <div class="app-layout">
-  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
-      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
-      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
-      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
-        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
-        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
-        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
-        <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
-        <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
-        <a href="factor-manager.html" class="sidebar-item active" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
-        <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
-        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
-        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
-        <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
-        <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
-        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
-        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
-    </nav>
+  <nav class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+    <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+      <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+      <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+      <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+      <a href="factor-manager.html" class="sidebar-item active" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+      <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+      <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+      <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+      <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span></a>
+      <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span></a>
+      <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+  </nav>
   <main class="main-content">
-    <div class="page-header">
+    <div class="fm-header">
       <h1>📊 因子管理</h1>
-      <div class="page-header-actions">
-        <button class="btn" onclick="alert('📊 已切换到因子库视图')">📚 因子库</button>
-        <button class="btn btn-primary" onclick="alert('📦 新建组合弹窗已打开')">📦 新建组合</button>
+      <div style="display:flex;gap:var(--space-6);">
+        <button class="btn btn-sm" onclick="showHelp()">❓ 使用帮助</button>
       </div>
     </div>
 
-    <div class="tabs">
-      <span class="tab-item active">⭐ 我的组合</span>
-      <span class="tab-item" onclick="alert('📚 切换到因子库视图')">📚 因子库</span>
+    <!-- Tab 栏 -->
+    <div class="fm-tabs">
+      <span class="fm-tab active" data-tab="library" onclick="switchTab('library')">📚 因子库</span>
+      <span class="fm-tab" data-tab="combos" onclick="switchTab('combos')">📋 组合方案</span>
     </div>
 
-    <div class="factor-grid">
-      <div class="factor-card">
-        <div class="card-top">
-          <h4>📈 动量精选</h4>
-          <span class="fav-star">★</span>
+    <!-- ============================= -->
+    <!-- 面板1: 因子库 -->
+    <!-- ============================= -->
+    <div class="fm-panel active" id="panel-library">
+      <div class="flt-bar">
+        <input class="flt-search" id="f-search" placeholder="🔍 搜索因子功能描述、名称或场景（模糊搜索）…" oninput="filterFactors()">
+        <span class="flt-tag active" data-cat="all" onclick="filterByCat(this,'all')">全部 <span class="cnt" id="cat-all"></span></span>
+        <span class="flt-tag" data-cat="momentum" onclick="filterByCat(this,'momentum')">📈 价格动量 <span class="cnt" id="cat-momentum"></span></span>
+        <span class="flt-tag" data-cat="reversal" onclick="filterByCat(this,'reversal')">🔄 超买超卖 <span class="cnt" id="cat-reversal"></span></span>
+        <span class="flt-tag" data-cat="volume" onclick="filterByCat(this,'volume')">💧 成交量资金 <span class="cnt" id="cat-volume"></span></span>
+        <span class="flt-tag" data-cat="trend" onclick="filterByCat(this,'trend')">📊 趋势追踪 <span class="cnt" id="cat-trend"></span></span>
+        <span class="flt-tag" data-cat="volatility" onclick="filterByCat(this,'volatility')">🌊 波动率 <span class="cnt" id="cat-volatility"></span></span>
+        <span class="flt-tag" data-cat="position" onclick="filterByCat(this,'position')">📍 价格位置 <span class="cnt" id="cat-position"></span></span>
+        <div class="flt-tag-more" id="more-cats">
+          <span class="flt-tag" onclick="this.parentElement.classList.toggle('open')">更多 ▼</span>
+          <div class="flt-drop">
+            <span class="flt-tag" data-cat="academic" onclick="filterByCat(this,'academic')">📐 统计指标 <span class="cnt" id="cat-academic"></span></span>
+            <span class="flt-tag" data-cat="fundamental" onclick="filterByCat(this,'fundamental')">🏢 基本面 <span class="cnt" id="cat-fundamental"></span></span>
+            <span class="flt-tag" data-cat="sentiment" onclick="filterByCat(this,'sentiment')">😊 情绪感知 <span class="cnt" id="cat-sentiment"></span></span>
+            <span class="flt-tag" data-cat="size" onclick="filterByCat(this,'size')">🏋️ 规模 <span class="cnt" id="cat-size"></span></span>
+            <span class="flt-tag" data-cat="value" onclick="filterByCat(this,'value')">💎 价值 <span class="cnt" id="cat-value"></span></span>
+            <span class="flt-tag" data-cat="growth" onclick="filterByCat(this,'growth')">🌱 成长 <span class="cnt" id="cat-growth"></span></span>
+            <span class="flt-tag" data-cat="quality" onclick="filterByCat(this,'quality')">✅ 质量 <span class="cnt" id="cat-quality"></span></span>
+          </div>
         </div>
-        <div class="factor-tags"><span>动量因子</span><span>趋势跟踪</span><span>短期</span></div>
-        <div class="factor-meta">5 因子 · 近 1 月收益 +4.2% · 创建于 2026-03-15</div>
-        <div class="card-actions"><span>✏️ 编辑</span><span>📋 回测</span><span>🗑️ 删除</span></div>
       </div>
-      <div class="factor-card">
-        <div class="card-top">
-          <h4>💎 价值龙头</h4>
-          <span class="fav-star" style="color:var(--text-muted);">☆</span>
-        </div>
-        <div class="factor-tags"><span>价值因子</span><span>低估值</span><span>大盘</span></div>
-        <div class="factor-meta">4 因子 · 近 1 月收益 +2.8% · 创建于 2026-04-20</div>
-        <div class="card-actions"><span>✏️ 编辑</span><span>📋 回测</span><span>🗑️ 删除</span></div>
-      </div>
-      <div class="factor-card">
-        <div class="card-top">
-          <h4>⚡ 量价突破</h4>
-          <span class="fav-star" style="color:var(--text-muted);">☆</span>
-        </div>
-        <div class="factor-tags"><span>量价因子</span><span>放量突破</span><span>短期</span></div>
-        <div class="factor-meta">3 因子 · 近 1 月收益 +6.5% · 创建于 2026-05-01</div>
-        <div class="card-actions"><span>✏️ 编辑</span><span>📋 回测</span><span>🗑️ 删除</span></div>
-      </div>
-      <div class="factor-card">
-        <div class="card-top">
-          <h4>🛡️ 低波防御</h4>
-          <span class="fav-star" style="color:var(--text-muted);">☆</span>
-        </div>
-        <div class="factor-tags"><span>低波动</span><span>防御</span><span>中长线</span></div>
-        <div class="factor-meta">3 因子 · 近 1 月收益 +1.2% · 创建于 2026-05-10</div>
-        <div class="card-actions"><span>✏️ 编辑</span><span>📋 回测</span><span>🗑️ 删除</span></div>
-      </div>
-      <div class="factor-card">
-        <div class="card-top">
-          <h4>🎯 多因子精选</h4>
-          <span class="fav-star" style="color:var(--text-muted);">☆</span>
-        </div>
-        <div class="factor-tags"><span>综合筛选</span><span>动量+价值+质量</span></div>
-        <div class="factor-meta">8 因子 · 近 1 月收益 +5.1% · 创建于 2026-05-25</div>
-        <div class="card-actions"><span>✏️ 编辑</span><span>📋 回测</span><span>🗑️ 删除</span></div>
-      </div>
+
+      <table class="factor-table" id="factor-table">
+        <thead>
+          <tr>
+            <th style="width:40px">#</th>
+            <th onclick="sortTable('name')" id="th-name">因子名称 <span class="sort">↕</span></th>
+            <th onclick="sortTable('desc')">功能说明 <span class="sort">↕</span></th>
+            <th onclick="sortTable('cat')">分类 <span class="sort">↕</span></th>
+            <th>场景标签</th>
+            <th style="width:60px">来源</th>
+          </tr>
+        </thead>
+        <tbody id="ft-body"></tbody>
+      </table>
     </div>
 
+    <!-- ============================= -->
+    <!-- 面板2: 组合方案 -->
+    <!-- ============================= -->
+    <div class="fm-panel" id="panel-combos">
+      <div class="combo-bar">
+        <div class="c-flt">
+          <span class="active" data-cf="all" onclick="filterCombos('all',this)">全部</span>
+          <span data-cf="sys" onclick="filterCombos('sys',this)">🏷️ 系统预设</span>
+          <span data-cf="user" onclick="filterCombos('user',this)">⭐ 用户自建</span>
+        </div>
+        <input class="c-search" id="c-search" placeholder="🔍 搜索组合名称…" oninput="filterCombos(null,this)">
+        <button class="btn btn-primary btn-sm" onclick="openWizard(null)">📦 + 新建组合</button>
+      </div>
+      <div class="combo-grid" id="combo-grid"></div>
+    </div>
   </main>
 </div>
+
+<!-- ===== 侧滑详情面板 ===== -->
+<div class="detail-overlay" id="dp-overlay" onclick="closeDetail()"></div>
+<div class="detail-panel" id="detail-panel">
+  <div class="dp-head">
+    <div><h3 id="dp-title">因子名称 <small id="dp-enname">EN_NAME</small></h3></div>
+    <button class="dp-close" onclick="closeDetail()">✕</button>
+  </div>
+  <div class="dp-body">
+    <div class="dp-sec">
+      <div class="dp-sec-label">📝 功能说明</div>
+      <p id="dp-desc">—</p>
+    </div>
+    <div class="dp-sec">
+      <div class="dp-sec-label">🏷️ 场景标签</div>
+      <div class="dp-tags" id="dp-tags"></div>
+    </div>
+    <div class="dp-sec">
+      <div class="dp-sec-label">⚙️ 参数（可调）</div>
+      <div class="dp-params" id="dp-params"></div>
+    </div>
+    <div class="dp-sec">
+      <div class="dp-sec-label">📊 典型场景</div>
+      <div class="dp-examples" id="dp-examples"></div>
+    </div>
+    <div class="dp-sec">
+      <div class="dp-sec-label">📎 关联因子</div>
+      <div class="dp-related" id="dp-related"></div>
+    </div>
+  </div>
+  <div class="dp-foot">
+    <button class="btn btn-primary btn-sm" onclick="addCurrentToCombo()">➕ 加入组合方案</button>
+    <button class="btn btn-sm" onclick="closeDetail()">关闭</button>
+  </div>
+</div>
+
+<!-- ===== 新建组合 5步弹窗 ===== -->
+<div class="modal-overlay" id="wizard-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>📦 新建组合</h3>
+      <button class="m-close" onclick="closeWizard()">✕</button>
+    </div>
+    <div class="wizard-progress" id="w-progress">
+      <div class="wp-dot curr"></div><div class="wp-dot"></div><div class="wp-dot"></div><div class="wp-dot"></div><div class="wp-dot"></div>
+    </div>
+
+    <!-- Step 1: 描述目标 -->
+    <div class="wizard-step active" data-step="1">
+      <h4 style="margin-bottom:var(--space-6)">💡 描述选股目标（选填）</h4>
+      <div class="wz-goal">
+        <textarea id="wz-goal-input" placeholder="例如：今日买入明天卖出 / 长期持有优质公司 / 捕捉强势股回调 / 防御型低风险…"></textarea>
+        <div class="wz-goal-hint">不填也可直接选择因子</div>
+        <div style="margin-top:var(--space-8);display:flex;gap:var(--space-8);flex-wrap:wrap;" id="goal-suggestions">
+          <span class="flt-tag" onclick="fillGoal('短线快进快出')">⚡ 短线快进快出</span>
+          <span class="flt-tag" onclick="fillGoal('长期持有优质公司')">🏢 长期持有</span>
+          <span class="flt-tag" onclick="fillGoal('捕捉强势股回调')">🎯 捕捉回调</span>
+          <span class="flt-tag" onclick="fillGoal('防御型低风险')">🛡️ 防御型</span>
+          <span class="flt-tag" onclick="fillGoal('趋势跟踪顺势而为')">📈 趋势跟踪</span>
+          <span class="flt-tag" onclick="fillGoal('基本面筛选好公司')">📋 基本面</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: 选择因子 -->
+    <div class="wizard-step" data-step="2">
+      <h4 style="margin-bottom:var(--space-6)">选择因子 <small style="font-weight:400;color:var(--text-muted);font-size:13px;">勾选适用的因子</small></h4>
+      <div class="wz-select">
+        <input class="ws-search" id="ws-search" placeholder="🔍 筛选因子…" oninput="renderWSList()">
+        <div class="ws-count">已选 <strong id="ws-selected">0</strong> 个因子</div>
+        <div class="ws-list" id="ws-list"></div>
+      </div>
+    </div>
+
+    <!-- Step 3: 权重 -->
+    <div class="wizard-step" data-step="3">
+      <h4 style="margin-bottom:var(--space-6)">配置权重</h4>
+      <div style="margin-bottom:var(--space-8);display:flex;gap:var(--space-6);align-items:center;">
+        <button class="btn btn-sm" type="button" onclick="equalWeight()">⚖️ 等权分配</button>
+        <span style="font-size:12px;color:var(--text-muted)">拖动滑块或输入百分比</span>
+      </div>
+      <div class="wz-weight" id="wz-weight"></div>
+      <div class="ww-total" id="ww-total">
+        <span>权重合计</span>
+        <div class="bar"><div class="bar-fill" id="ww-bar" style="width:0%"></div></div>
+        <span class="pct" id="ww-pct">0%</span>
+      </div>
+    </div>
+
+    <!-- Step 4: 参数 -->
+    <div class="wizard-step" data-step="4">
+      <h4 style="margin-bottom:var(--space-6)">调整参数（可选）</h4>
+      <div class="wz-params" id="wz-params"></div>
+      <div style="margin-top:var(--space-10);font-size:12px;color:var(--text-muted);">不调整则使用默认参数，可直接保存。</div>
+    </div>
+
+    <!-- Step 5: 命名保存 -->
+    <div class="wizard-step" data-step="5">
+      <h4 style="margin-bottom:var(--space-6)">命名保存</h4>
+      <div class="wz-save">
+        <input class="ws-name" id="ws-name" placeholder="组合名称（必填），如：短线动量组合">
+        <textarea class="ws-desc" id="ws-desc" placeholder="功能说明（选填），如：适合短线操作的动量因子组合"></textarea>
+        <div class="ws-preview" id="ws-preview">
+          <h4>⭐ <span id="ps-name">新组合</span></h4>
+          <div class="ps-meta" id="ps-meta">—</div>
+          <div class="ps-tags" id="ps-tags"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <button class="btn btn-sm" id="wz-prev" onclick="wizardPrev()" style="display:none">← 上一步</button>
+      <button class="btn btn-sm" onclick="closeWizard()">取消</button>
+      <button class="btn btn-primary btn-sm" id="wz-next" onclick="wizardNext()">下一步 →</button>
+      <button class="btn btn-primary btn-sm" id="wz-save-btn" onclick="saveCombo()" style="display:none">✅ 保存组合</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 组合详情弹窗 ===== -->
+<div class="modal-overlay" id="combo-detail-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="cd-title">组合详情</h3>
+      <button class="m-close" onclick="closeComboDetail()">✕</button>
+    </div>
+    <div style="margin-bottom:var(--space-12);font-size:13px;color:var(--text-secondary);" id="cd-summary"></div>
+    <table class="cd-table" id="cd-table">
+      <thead><tr><th>#</th><th>因子</th><th>权重</th><th>参数</th><th>功能说明</th></tr></thead>
+      <tbody id="cd-body"></tbody>
+    </table>
+    <div class="modal-foot"><button class="btn btn-sm" onclick="closeComboDetail()">关闭</button></div>
+  </div>
+</div>
+
+<!-- ===== 确认弹窗 ===== -->
+<div class="modal-overlay" id="confirm-overlay">
+  <div class="modal" style="min-width:360px;max-width:400px;">
+    <div class="confirm-box">
+      <p id="confirm-msg">确认执行此操作？</p>
+      <div class="btns">
+        <button class="btn btn-sm" onclick="closeConfirm()">取消</button>
+        <button class="btn btn-primary btn-sm" id="confirm-yes" onclick="closeConfirm()">确认</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Toast ===== -->
+<div class="toast" id="toast">✅ 操作成功</div>
+
 <script>
-var sidebarCollapsed = true;
+/* ===== 因子数据（57个代表性因子，覆盖13分类） ===== */
+var FACTORS = [
+  {id:1,name:'MOM_5',cn:'5日动量',cat:'momentum',catCN:'📈 价格动量',src:'A-Stock',desc:'测量过去5个交易日价格的变化幅度，用于识别短期价格运动方向',tags:{time:['短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:5,min:3,max:30}],examples:['MOM_5 > 0 表示短期价格上涨，适合短线追强势股','MOM_5 连续3日上升表明短期动能持续增强'],relate:['MOM_10','ROC(6)','RET_5']},
+  {id:2,name:'MOM_20',cn:'20日动量',cat:'momentum',catCN:'📈 价格动量',src:'A-Stock',desc:'过去20个交易日价格变化幅度，识别中期价格趋势方向',tags:{time:['中短线'],strategy:['追强势','趋势跟踪'],market:['牛市','震荡市']},params:[{k:'周期',v:20,min:5,max:60}],examples:['MOM_20 从负转正是中期趋势反转信号','MOM_20 持续上升配合放量是趋势延续确认'],relate:['MOM_60','ROC(20)','MA_20']},
+  {id:3,name:'ROC(20)',cn:'20日变动率',cat:'momentum',catCN:'📈 价格动量',src:'A-Stock',desc:'当前价格相对于20日前的百分比变化，衡量价格变化速度',tags:{time:['中短线'],strategy:['追强势'],market:['牛市','震荡市']},params:[{k:'周期',v:20,min:5,max:60}],examples:['ROC > 5% 表示短期价格向上加速','ROC 由正转负可能预示趋势反转'],relate:['ROC(6)','MOM_20','RET_20']},
+  {id:4,name:'ROC(6)',cn:'6日变动率',cat:'momentum',catCN:'📈 价格动量',src:'A-Stock',desc:'对短期价格变化敏感的变动率指标',tags:{time:['短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:6,min:3,max:30}],examples:['ROC(6) 急速拉升后回落可能预示短线见顶'],relate:['ROC(20)','MOM_5','RET_5']},
+  {id:5,name:'RSI(14)',cn:'14日RSI',cat:'reversal',catCN:'🔄 超买超卖',src:'A-Stock',desc:'最常见振荡指标，判断超买(>70)或超卖(<30)状态',tags:{time:['短线'],strategy:['抄底反弹','追强势'],market:['全市场']},params:[{k:'周期',v:14,min:5,max:30}],examples:['RSI > 70 提示超买，短期可能回调','RSI < 30 提示超卖，短期可能反弹'],relate:['RSI(6)','KDJ_K','WILLR_14']},
+  {id:6,name:'RSI(6)',cn:'6日RSI',cat:'reversal',catCN:'🔄 超买超卖',src:'A-Stock',desc:'对价格变化更敏感的RSI，适合快进快出的超短线判断',tags:{time:['超短线','短线'],strategy:['抄底反弹'],market:['全市场']},params:[{k:'周期',v:6,min:3,max:20}],examples:['RSI(6) > 85 表示短期极度超买'],relate:['RSI(14)','KDJ_K']},
+  {id:7,name:'VOL_RATIO',cn:'5日量比',cat:'volume',catCN:'💧 成交量资金',src:'A-Stock',desc:'当前成交量与过去5日均量的比值，判断放量或缩量状态',tags:{time:['短线','中短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:5,min:3,max:20}],examples:['量比 > 1.5 表示放量，配合价格上涨是启动信号','量比 < 0.5 表示缩量，需警惕无量空涨'],relate:['VOL_MA5','VR_14','OBV']},
+  {id:8,name:'VR_14',cn:'14日量比',cat:'volume',catCN:'💧 成交量资金',src:'A-Stock',desc:'对比上涨日和下跌日的成交量来判断市场人气热度',tags:{time:['短线','中短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:14,min:5,max:30}],examples:['VR > 200 表示人气旺盛但可能过热','VR < 70 表示人气低迷但可能见底'],relate:['VR_26','VOL_RATIO','OBV']},
+  {id:9,name:'OBV',cn:'能量潮',cat:'volume',catCN:'💧 成交量资金',src:'A-Stock',desc:'通过累积成交量追踪资金流向，最经典的量价配合指标',tags:{time:['中短线','中线'],strategy:['追强势','趋势跟踪'],market:['全市场']},params:[{k:'周期',v:20,min:10,max:60}],examples:['OBV 创新高而价格未创新高是量价背离','OBV 与价格同步上升确认趋势健康'],relate:['VOL_RATIO','AMOUNT_20']},
+  {id:10,name:'ATR(14)',cn:'14日ATR',cat:'volatility',catCN:'🌊 波动率',src:'A-Stock',desc:'平均真实波幅，衡量价格波动幅度，值越高波动越大',tags:{time:['全周期'],strategy:['低波防御'],market:['全市场']},params:[{k:'周期',v:14,min:5,max:30}],examples:['ATR 持续下降说明波动收窄，变盘临近','ATR 突然放大说明市场剧烈，建议设置宽止损'],relate:['ATR_20','STD_20','BOLL_WIDTH']},
+  {id:11,name:'MACD_DIF',cn:'MACD差离值',cat:'momentum',catCN:'📈 价格动量',src:'A-Stock',desc:'MACD快慢线差值，反映短期与长期均线的背离程度',tags:{time:['中短线','中线'],strategy:['趋势跟踪'],market:['全市场']},params:[{k:'快线',v:12,min:5,max:30},{k:'慢线',v:26,min:10,max:60},{k:'信号',v:9,min:3,max:20}],examples:['DIF 上穿 DEA 形成金叉是买入信号','价格新高但 DIF 未新高形成顶背离'],relate:['MACD_DEA','MACD_HIST','EMA_12']},
+  {id:12,name:'KDJ_K',cn:'KDJ-K值',cat:'reversal',catCN:'🔄 超买超卖',src:'A-Stock',desc:'随机指标结合了价格位置和动量，短线超买超卖判断利器',tags:{time:['短线'],strategy:['抄底反弹'],market:['全市场']},params:[{k:'周期',v:9,min:3,max:30}],examples:['K < 20 为超卖区，可能反弹','K > 80 为超买区，可能回调'],relate:['KDJ_D','KDJ_J','RSI(14)']},
+  {id:13,name:'BIAS(5)',cn:'5日乖离率',cat:'reversal',catCN:'🔄 超买超卖',src:'A-Stock',desc:'价格偏离5日均线的百分比，偏离过大时价格有回归需求',tags:{time:['短线','中短线'],strategy:['抄底反弹'],market:['全市场']},params:[{k:'周期',v:5,min:3,max:30}],examples:['BIAS > 8% 短期超买，有回调需求','BIAS < -8% 短期超卖，可能反弹'],relate:['BIAS_10','BIAS_20','MA_5']},
+  {id:14,name:'MA_20',cn:'20日均线',cat:'trend',catCN:'📊 趋势追踪',src:'A-Stock',desc:'20日简单移动平均线，最常用的中期趋势参考线',tags:{time:['中短线','中线'],strategy:['趋势跟踪'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:120}],examples:['价格在 MA_20 上方运行说明中期趋势向上','MA_20 走平后拐头向上是趋势转强信号'],relate:['MA_5','MA_10','MA_60','EMA_20']},
+  {id:15,name:'MA_60',cn:'60日均线',cat:'trend',catCN:'📊 趋势追踪',src:'A-Stock',desc:'中期趋势生命线，常被机构用作中期趋势的参考基准',tags:{time:['中线','长线'],strategy:['趋势跟踪','价值回归'],market:['全市场']},params:[{k:'周期',v:60,min:20,max:250}],examples:['价格在 MA_60 上方运行说明中期趋势健康','MA_60 方向向上是牛市的必要条件之一'],relate:['MA_20','MA_120','EMA_60']},
+  {id:16,name:'BOLL_UPPER',cn:'布林带上轨',cat:'trend',catCN:'📊 趋势追踪',src:'A-Stock',desc:'布林带上轨（20日均线+2倍标准差），价格的压力位参考',tags:{time:['中短线','中线'],strategy:['趋势跟踪','抄底反弹'],market:['全市场']},params:[{k:'周期',v:20,min:10,max:60},{k:'标准差',v:2,min:1,max:3}],examples:['价格触及上轨且开口放大说明强势延续','价格多次触碰上轨不破说明压力有效'],relate:['BOLL_MID','BOLL_LOWER','BOLL_PCT']},
+  {id:17,name:'BOLL_PCT',cn:'布林带位置%',cat:'position',catCN:'📍 价格位置',src:'A-Stock',desc:'价格在布林带中的相对位置(0~1)，0为下轨1为上轨',tags:{time:['全周期'],strategy:['抄底反弹','趋势跟踪'],market:['全市场']},params:[{k:'周期',v:20,min:10,max:60}],examples:['BOLL_PCT < 0.2 说明价格接近下轨，可能存在超卖','BOLL_PCT > 0.8 说明价格接近上轨，可能存在超买'],relate:['BOLL_UPPER','BOLL_LOWER','CLOSE_HIGH_RATIO']},
+  {id:18,name:'ADX',cn:'平均趋向指数',cat:'trend',catCN:'📊 趋势追踪',src:'QLib',desc:'衡量趋势强弱的指标（不指示方向），只回答"趋势有多强"',tags:{time:['中短线','中线'],strategy:['趋势跟踪'],market:['全市场']},params:[{k:'周期',v:14,min:5,max:30}],examples:['ADX > 25 表示趋势较强，适合趋势跟踪策略','ADX < 20 表示市场处于盘整，不适合趋势策略'],relate:['MA_20','MACD_DIF']},
+  {id:19,name:'VOL_20',cn:'20日波动率',cat:'volatility',catCN:'🌊 波动率',src:'Academic',desc:'20日年化波动率，衡量价格风险水平，常用于风险管理和仓位计算',tags:{time:['中短线','中线'],strategy:['低波防御'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['波动率快速上升时风险加大，应降低仓位','波动率处于历史低位时变盘概率增大'],relate:['ATR(14)','STD_20','HV']},
+  {id:20,name:'RET_20',cn:'20日收益率',cat:'momentum',catCN:'📈 价格动量',src:'A-Stock',desc:'过去20个交易日的累计收益率，衡量中期投资回报',tags:{time:['中短线','中线'],strategy:['追强势','趋势跟踪'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['RET_20 > 10% 表示中期表现强势'],relate:['RET_5','RET_60','ROC(20)']},
+  {id:21,name:'WILLR_14',cn:'14日威廉指标',cat:'reversal',catCN:'🔄 超买超卖',src:'A-Stock',desc:'衡量收盘价在过去14天高低点区间内的位置，超买超卖判断',tags:{time:['短线'],strategy:['抄底反弹'],market:['全市场']},params:[{k:'周期',v:14,min:5,max:30}],examples:['WILLR < -80 表示超卖','WILLR > -20 表示超买'],relate:['RSI(14)','KDJ_K']},
+  {id:22,name:'EMA_20',cn:'20日指数均线',cat:'trend',catCN:'📊 趋势追踪',src:'A-Stock',desc:'指数移动平均线，比SMA对近期价格变化更敏感',tags:{time:['中短线'],strategy:['趋势跟踪'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:120}],examples:['EMA_20 上穿 MA_20 是短线转强信号'],relate:['EMA_5','MA_20','MACD_DIF']},
+  {id:23,name:'AMOUNT_20',cn:'20日成交额',cat:'volume',catCN:'💧 成交量资金',src:'A-Stock',desc:'过去20日平均成交金额，衡量资金参与度',tags:{time:['中短线','中线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['成交额持续放大说明资金持续流入'],relate:['AMOUNT_5','VOL_MA20']},
+  {id:24,name:'STD_20',cn:'20日标准差',cat:'volatility',catCN:'🌊 波动率',src:'A-Stock',desc:'过去20日收盘价的标准差，衡量价格的离散程度',tags:{time:['中短线'],strategy:['低波防御'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['STD 上升说明价格波动加大','STD 下降说明价格趋于稳定'],relate:['ATR(14)','VOL_20','BOLL_UPPER']},
+  {id:25,name:'BETA',cn:'Beta值',cat:'academic',catCN:'📐 统计指标',src:'Academic',desc:'衡量股票相对大盘的波动敏感度，Beta>1比大盘波动更大',tags:{time:['中线','长线'],strategy:['低波防御','价值回归'],market:['全市场']},params:[{k:'周期',v:60,min:20,max:250}],examples:['BETA > 1.5 表示高弹性，牛市表现好但熊市跌幅更大','BETA < 0.8 防御性强，适合低风险偏好'],relate:['VOL_20','ALPHA']},
+  {id:26,name:'SKEWNESS',cn:'收益率偏度',cat:'academic',catCN:'📐 统计指标',src:'Academic',desc:'收益率分布的偏斜程度，正值表示偶有大涨、负值表示偶有大跌',tags:{time:['中线','长线'],strategy:['价值回归'],market:['全市场']},params:[{k:'周期',v:60,min:20,max:250}],examples:['正偏度说明有偶发大涨机会','负偏度说明偶发大跌风险较大'],relate:['KURTOSIS','CVAR']},
+  {id:27,name:'LINREG_SLOPE(20)',cn:'线性回归斜率',cat:'trend',catCN:'📊 趋势追踪',src:'Alpha101',desc:'20日最小二乘法线性回归斜率，量化计算趋势的角度和方向',tags:{time:['中短线'],strategy:['趋势跟踪'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['斜率持续为正值说明上升趋势稳定','斜率从正转负是趋势转变预警'],relate:['MA_20','ROC(20)']},
+  {id:28,name:'CCI',cn:'顺势指标',cat:'reversal',catCN:'🔄 超买超卖',src:'Alpha101',desc:'测量价格与其统计均值的偏离程度，识别超买超卖和趋势强度',tags:{time:['短线','中短线'],strategy:['抄底反弹','趋势跟踪'],market:['全市场']},params:[{k:'周期',v:14,min:5,max:30}],examples:['CCI > +100 进入超买区','CCI < -100 进入超卖区'],relate:['RSI(14)','KDJ_K']},
+  {id:29,name:'ALPHA',cn:'Alpha值',cat:'academic',catCN:'📐 统计指标',src:'Academic',desc:'超额收益指标，衡量选股能力的核心，正Alpha表示跑赢大盘',tags:{time:['中线','长线'],strategy:['价值回归'],market:['全市场']},params:[{k:'周期',v:60,min:20,max:250}],examples:['Alpha > 0 说明相对大盘有超额收益'],relate:['BETA','INFO_RATIO']},
+  {id:30,name:'HL_20',cn:'20日高低振幅',cat:'volatility',catCN:'🌊 波动率',src:'A-Stock',desc:'20日最高价与最低价的百分比振幅，反映价格区间大小变化',tags:{time:['中短线'],strategy:['低波防御'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['振幅收窄说明变盘临近','振幅放大说明多空分歧加大'],relate:['ATR(14)','HL_10']},
+  {id:31,name:'CLOSE_HIGH_RATIO',cn:'收盘高位比',cat:'position',catCN:'📍 价格位置',src:'A-Stock',desc:'收盘价在近期高点区间的位置，越接近1越靠近近期高点',tags:{time:['全周期'],strategy:['抄底反弹','趋势跟踪'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['比值 > 0.9 说明价格处于近期高位','比值 < 0.1 说明价格处于近期低位'],relate:['CLOSE_LOW_RATIO','BOLL_PCT']},
+  {id:32,name:'GK_VOL',cn:'GK波动率',cat:'volatility',catCN:'🌊 波动率',src:'Academic',desc:'用OHLC四价计算的波动率估计，比简单标准差更高效可靠',tags:{time:['中短线','中线'],strategy:['低波防御'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['GK波动率可用于更精确的波动率预测'],relate:['VOL_20','PARKINSON']},
+  {id:33,name:'HURST',cn:'Hurst指数',cat:'academic',catCN:'📐 统计指标',src:'Academic',desc:'判断市场是否有趋势(H>0.5)还是均值回归(H<0.5)',tags:{time:['中线','长线'],strategy:['趋势跟踪','价值回归'],market:['全市场']},params:[{k:'周期',v:60,min:20,max:250}],examples:['H > 0.5 说明市场呈现趋势性','H < 0.5 说明市场呈现均值回归特征'],relate:['ADX','VOL_20']},
+  {id:34,name:'GTJA_AMT20',cn:'GTJA成交额',cat:'volume',catCN:'💧 成交量资金',src:'GTJA',desc:'国泰君安191因子体系中的成交额因子',tags:{time:['中短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['GTJA系因子可与其他来源因子交叉验证'],relate:['AMOUNT_20','VOL_MA20']},
+  {id:35,name:'QLIB_RSI(14)',cn:'QLib RSI',cat:'reversal',catCN:'🔄 超买超卖',src:'QLib',desc:'QLib标准实现的14日RSI，算法与A-Stock版本略有不同',tags:{time:['短线'],strategy:['抄底反弹'],market:['全市场']},params:[{k:'周期',v:14,min:5,max:30}],examples:['QLib RSI 同样适用于超买超卖判断'],relate:['RSI(14)']},
+  {id:36,name:'QLIB_VOL_RATIO',cn:'QLib量比',cat:'volume',catCN:'💧 成交量资金',src:'QLib',desc:'QLib标准实现的量比指标',tags:{time:['短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:5,min:3,max:20}],examples:['量比放大配合价格突破是有效启动信号'],relate:['VOL_RATIO']},
+  {id:37,name:'QLIB_MACD_DIF',cn:'QLib MACD',cat:'momentum',catCN:'📈 价格动量',src:'QLib',desc:'QLib实现的MACD差离值，底层算法细节与A-Stock有差异',tags:{time:['中短线','中线'],strategy:['趋势跟踪'],market:['全市场']},params:[{k:'快线',v:12,min:5,max:30},{k:'慢线',v:26,min:10,max:60}],examples:['多来源版本的同一指标可交叉验证信号'],relate:['MACD_DIF']},
+  {id:38,name:'SORTINO',cn:'Sortino比率',cat:'academic',catCN:'📐 统计指标',src:'Academic',desc:'只惩罚下行风险的夏普比率改进版，值越高风险调整收益越好',tags:{time:['中线','长线'],strategy:['价值回归'],market:['全市场']},params:[{k:'周期',v:60,min:20,max:250}],examples:['Sortino > 1 说明下行风险控制较好'],relate:['SHARPE','CALMAR','BETA']},
+  {id:39,name:'QLIB_REVERSAL(5)',cn:'5日反转因子',cat:'reversal',catCN:'🔄 超买超卖',src:'QLib',desc:'过去5日涨幅越大值越大，预期短期会回调（动量效应对面）',tags:{time:['短线'],strategy:['抄底反弹'],market:['全市场']},params:[{k:'周期',v:5,min:3,max:20}],examples:['反转因子值较大时注意短期回调风险'],relate:['BIAS(5)','REV_5']},
+  {id:40,name:'BOLL_WIDTH',cn:'布林带宽',cat:'volatility',catCN:'🌊 波动率',src:'QLib',desc:'布林带上下轨之间的宽度变化，衡量波动率扩张/收缩状态',tags:{time:['中短线'],strategy:['低波防御'],market:['全市场']},params:[{k:'周期',v:20,min:10,max:60}],examples:['带宽急剧收缩后扩张往往是变盘信号'],relate:['BOLL_UPPER','BOLL_LOWER','ATR(14)']},
+  {id:41,name:'ALPHA001',cn:'Alpha001量价',cat:'momentum',catCN:'📈 价格动量',src:'Alpha101',desc:'WorldQuant Alpha101的第1号公式，基于量价数据的复杂运算',tags:{time:['中短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:5,min:3,max:20}],examples:['Alpha系列因子经ML合成后可提升预测精度'],relate:['ALPHA002','ALPHA005']},
+  {id:42,name:'QLIB_AMOUNT',cn:'QLib成交额',cat:'volume',catCN:'💧 成交量资金',src:'QLib',desc:'QLib实现的当日成交金额',tags:{time:['短线','中短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:1,min:1,max:1}],examples:['成交额排名靠前的股票通常是市场焦点'],relate:['AMOUNT_20','VOL_MA5']},
+  {id:43,name:'KAMA',cn:'KAMA均线',cat:'trend',catCN:'📊 趋势追踪',src:'QLib',desc:'适应性移动平均线，根据波动率自动调整平滑参数',tags:{time:['中短线','中线'],strategy:['趋势跟踪'],market:['全市场']},params:[{k:'周期',v:10,min:5,max:30}],examples:['KAMA 在趋势市中比MA更快捕捉变化'],relate:['MA_20','EMA_20']},
+  {id:44,name:'GTJA_MOM',cn:'GTJA动量',cat:'momentum',catCN:'📈 价格动量',src:'GTJA',desc:'国泰君安191因子体系中的第1号动量因子',tags:{time:['短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:5,min:3,max:30}],examples:['GTJA系列因子适合作为动量维度的补充'],relate:['MOM_5','ROC(6)']},
+  {id:45,name:'QLIB_CLOSE_HIGH',cn:'QLib高位比',cat:'position',catCN:'📍 价格位置',src:'QLib',desc:'QLib标准实现的收盘价在近期高点中的比例',tags:{time:['全周期'],strategy:['抄底反弹','趋势跟踪'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['比例 < 0.2 说明价格处于相对低位'],relate:['CLOSE_HIGH_RATIO','BOLL_PCT']},
+  {id:46,name:'QLIB_VOL(30)',cn:'QLib 30日波动',cat:'volatility',catCN:'🌊 波动率',src:'QLib',desc:'QLib实现的30日年化波动率，适合作为中期仓位参考',tags:{time:['中线'],strategy:['低波防御'],market:['全市场']},params:[{k:'周期',v:30,min:10,max:60}],examples:['30日波动率适合作为中期仓位控制参考'],relate:['VOL_20','ATR(14)']},
+  {id:47,name:'QLIB_OBV',cn:'QLib能量潮',cat:'volume',catCN:'💧 成交量资金',src:'QLib',desc:'QLib标准实现的OBV能量潮指标',tags:{time:['中短线','中线'],strategy:['追强势','趋势跟踪'],market:['全市场']},params:[{k:'周期',v:20,min:10,max:60}],examples:['OBV趋势方向比绝对数值更重要'],relate:['OBV','VOL_RATIO']},
+  {id:48,name:'PRICE_VOL_CORR',cn:'量价相关性',cat:'volume',catCN:'💧 成交量资金',src:'QLib',desc:'过去20日价格与成交量的相关系数，正相关表示量价配合好',tags:{time:['中短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:20,min:10,max:60}],examples:['正相关性越高说明量价配合越好','负相关性说明量价背离，趋势不健康'],relate:['OBV','ROC(20)','VOL_RATIO']},
+  {id:49,name:'RANK_20',cn:'20日排名因子',cat:'academic',catCN:'📐 统计指标',src:'QLib',desc:'过去20日收益率在全市场的排名百分比(0~1)，越高表现越好',tags:{time:['中短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['排名靠前的股票通常是近期市场热点','排名快速上升可能是启动信号'],relate:['RET_20','MOM_20']},
+  {id:50,name:'QLIB_SMA(20)',cn:'QLib SMA',cat:'trend',catCN:'📊 趋势追踪',src:'QLib',desc:'QLib标准实现的20日简单移动平均',tags:{time:['中短线','中线'],strategy:['趋势跟踪'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:120}],examples:['与MA_20基本一致，可作为趋势参考'],relate:['MA_20','EMA_20']},
+  {id:51,name:'GTJA_CORR_VOL',cn:'GTJA量价相关',cat:'volume',catCN:'💧 成交量资金',src:'GTJA',desc:'国泰君安191因子体系的量价相关性因子',tags:{time:['短线','中短线'],strategy:['追强势'],market:['全市场']},params:[{k:'周期',v:10,min:5,max:30}],examples:['量价正相关是健康趋势的标志'],relate:['PRICE_VOL_CORR']},
+  {id:52,name:'MAX_DRAWDOWN',cn:'最大回撤',cat:'academic',catCN:'📐 统计指标',src:'Academic',desc:'从最高点到最低点的最大亏损比例，衡量历史最大风险水平',tags:{time:['长线'],strategy:['低波防御','价值回归'],market:['全市场']},params:[{k:'周期',v:120,min:60,max:500}],examples:['最大回撤>30%说明历史波动风险较大','回撤小的股票更适合稳健型投资者'],relate:['CALMAR','BETA','CVAR']},
+  {id:53,name:'CALMAR',cn:'Calmar比率',cat:'academic',catCN:'📐 统计指标',src:'Academic',desc:'年化收益率与最大回撤的比值，值越高说明回撤控制越好',tags:{time:['长线'],strategy:['价值回归'],market:['全市场']},params:[{k:'周期',v:120,min:60,max:500}],examples:['Calmar > 1 说明收益能力大于回撤风险'],relate:['MAX_DRAWDOWN','SORTINO']},
+  {id:54,name:'CVAR',cn:'条件VaR',cat:'academic',catCN:'📐 统计指标',src:'Academic',desc:'极端情况下的平均损失，比VaR更关注尾部风险',tags:{time:['中线','长线'],strategy:['低波防御'],market:['全市场']},params:[{k:'周期',v:60,min:20,max:250},{k:'置信度',v:0.95,min:0.9,max:0.99}],examples:['CVAR值越大说明极端下跌风险越高'],relate:['MAX_DRAWDOWN','BETA','VOL_20']},
+  {id:55,name:'PARKINSON',cn:'Parkinson波动',cat:'volatility',catCN:'🌊 波动率',src:'Academic',desc:'利用每日最高最低价估计的波动率，比收盘价标准差更高效',tags:{time:['中短线','中线'],strategy:['低波防御'],market:['全市场']},params:[{k:'周期',v:20,min:5,max:60}],examples:['Parkinson波动率常用于更精确的波动率估计'],relate:['GK_VOL','VOL_20','ATR(14)']},
+  {id:56,name:'QLIB_REV(10)',cn:'10日反转因子',cat:'reversal',catCN:'🔄 超买超卖',src:'QLib',desc:'10日反转因子，捕捉价格过度反应后的短期回调机会',tags:{time:['短线','中短线'],strategy:['抄底反弹'],market:['全市场']},params:[{k:'周期',v:10,min:5,max:30}],examples:['反转因子与动量因子组合使用效果更佳'],relate:['QLIB_REVERSAL(5)','BIAS(10)']},
+  {id:57,name:'QLIB_LINREG(10)',cn:'10日回归斜率',cat:'trend',catCN:'📊 趋势追踪',src:'QLib',desc:'QLib实现的10日线性回归斜率，对短期趋势变化更敏感',tags:{time:['短线','中短线'],strategy:['趋势跟踪'],market:['全市场']},params:[{k:'周期',v:10,min:5,max:30}],examples:['短线斜率变化比中线更快捕捉趋势拐点'],relate:['LINREG_SLOPE(20)','MA_10']},
+];
+
+/* ===== 系统预设组合（12个） ===== */
+var PRESET_COMBOS = [
+  {id:'p1',name:'Fama-French 三因子',type:'sys',desc:'最经典的多因子模型，市场+规模+价值三大维度解释股票收益差异',src:'Fama & French 1993',factors:[{n:'市场因子',w:40},{n:'规模因子(SMB)',w:35},{n:'价值因子(HML)',w:25}],detail:'全球最广泛引用的因子模型'},
+  {id:'p2',name:'Fama-French 五因子',type:'sys',desc:'在三因子基础上增加盈利质量和投资效率维度，解释力更强',src:'Fama & French 2015',factors:[{n:'市场因子',w:30},{n:'规模因子',w:25},{n:'价值因子',w:20},{n:'盈利因子(RMW)',w:15},{n:'投资因子(CMA)',w:10}],detail:'覆盖市场、规模、价值、盈利、投资五大维度'},
+  {id:'p3',name:'A股核心五因子',type:'sys',desc:'基于A股2008-2020年实证的五大有效因子',src:'市值加权LASSO',factors:[{n:'市场因子',w:20},{n:'税收因子',w:20},{n:'市盈率因子',w:20},{n:'规模因子',w:20},{n:'速动因子',w:20}],detail:'83个月数据验证，五大因子有效次数均超38次'},
+  {id:'p4',name:'M8精选八因子',type:'sys',desc:'从97个候选中经高维Alpha检验筛选的稀疏基准模型（夏普2.73）',src:'Feng et al. 2026',factors:[{n:'市场因子',w:12.5},{n:'预期增长(REG)',w:12.5},{n:'PEAD',w:12.5},{n:'精细化价值(HMLM)',w:12.5},{n:'短期反转(STR)',w:12.5},{n:'行业领先滞后(ILR)',w:12.5},{n:'规模(SMB)',w:12.5},{n:'盈利可预测(EPRD)',w:12.5}],detail:'年化夏普比率2.73，样本外表现优异'},
+  {id:'p5',name:'短线动量',type:'sys',desc:'适合短线追强势的动量因子组合，捕捉短期价格动能+量能配合',src:'QuantsPlaybook 参考',factors:[{n:'ROC(20)',w:30},{n:'RSI(14)',w:25},{n:'VOL_RATIO',w:25},{n:'QLIB_REVERSAL(5)',w:20}],detail:'短线专用，量价配合追强势'},
+  {id:'p6',name:'价值防御',type:'sys',desc:'适合低风险偏好的稳健配置，在熊市和震荡市中表现稳定',src:'综合设计',factors:[{n:'市盈率因子',w:30},{n:'ATR(14)',w:20},{n:'STD_20(反向)',w:20},{n:'规模因子',w:15},{n:'BIAS(20)',w:15}],detail:'低风险偏好首选，熊市震荡市表现稳定'},
+  {id:'p7',name:'聪明钱因子组合',type:'sys',desc:'捕捉主力资金行为，识别"聪明钱"动向，源于行为金融学',src:'开源证券研报复现',factors:[{n:'聪明钱因子',w:30},{n:'筹码分布因子',w:30},{n:'换手率因子',w:25},{n:'RSI(14)',w:15}],detail:'追踪大资金动向，适合短线参考'},
+  {id:'p8',name:'量价核心',type:'sys',desc:'基于系统已实现的5个核心因子，无需额外开发即可立即运行',src:'系统现有能力',factors:[{n:'ROC(20)',w:25},{n:'VOL_RATIO',w:20},{n:'RSI(14)',w:25},{n:'ATR(14)',w:15},{n:'LINREG_SLOPE(20)',w:15}],detail:'零开发成本，选股系统L3当前使用的默认组合'},
+  {id:'p9',name:'情绪感知',type:'sys',desc:'通过多维指标感知市场过热/过冷/震荡状态，辅助择时判断',src:'状态依赖因子合成',factors:[{n:'RSI(14)',w:25},{n:'VR_14',w:25},{n:'换手率因子',w:20},{n:'BOLL_PCT',w:15},{n:'市场状态因子',w:15}],detail:'市场状态感知，辅助择时决策'},
+  {id:'p10',name:'基本面精选',type:'sys',desc:'从估值、盈利、偿债三个基本面维度筛选优质标的',src:'quantitative_analysis',factors:[{n:'市盈率(PE)',w:25},{n:'市净率(PB)',w:25},{n:'ROE',w:25},{n:'资产负债率(反向)',w:15},{n:'流动比率',w:10}],detail:'基于财务基本面筛选，适合中长线'},
+  {id:'p11',name:'ML Alpha 合成',type:'sys',desc:'从15个Alpha101因子经LightGBM非线性合成，适合进阶用户',src:'WorldQuant+ML',factors:[{n:'15个Alpha101精选',w:'—'},{n:'LightGBM非线性合成',w:'—'}],detail:'机器学习自动学习因子间非线性关系'},
+  {id:'p12',name:'三因子+动量增强',type:'sys',desc:'经典三因子加上Carhart动量扩展，兼顾价值与趋势',src:'Carhart四因子扩展',factors:[{n:'市场因子',w:30},{n:'规模因子',w:25},{n:'价值因子',w:20},{n:'MOM_20',w:25}],detail:'价值投资+动量增强'},
+];
+var userCombos = [];
+
+/* ===== Tab ===== */
+function switchTab(tab){
+  var tabs = document.querySelectorAll('.fm-tab');
+  for(var i=0;i<tabs.length;i++) tabs[i].classList.toggle('active',tabs[i].dataset.tab===tab);
+  var panels = document.querySelectorAll('.fm-panel');
+  for(var i=0;i<panels.length;i++) panels[i].classList.toggle('active',panels[i].id==='panel-'+tab);
+}
+
+/* ===== 工具 ===== */
+function tagsHTML(tags){
+  var s='';
+  if(tags.time) for(var i=0;i<tags.time.length;i++) s+='<span class="f-tag">'+tags.time[i]+'</span>';
+  if(tags.strategy) for(var i=0;i<tags.strategy.length;i++) s+='<span class="f-tag">'+tags.strategy[i]+'</span>';
+  if(tags.market) for(var i=0;i<tags.market.length;i++) s+='<span class="f-tag">'+tags.market[i]+'</span>';
+  return s||'—';
+}
+function dpTagsHTML(tags){
+  var s='';
+  if(tags.time) for(var i=0;i<tags.time.length;i++) s+='<span class="dp-tag time">⏱ '+tags.time[i]+'</span>';
+  if(tags.strategy) for(var i=0;i<tags.strategy.length;i++) s+='<span class="dp-tag strategy">🎯 '+tags.strategy[i]+'</span>';
+  if(tags.market) for(var i=0;i<tags.market.length;i++) s+='<span class="dp-tag market">🌐 '+tags.market[i]+'</span>';
+  return s||'<span style="color:var(--text-muted);font-size:12px;">暂无标签</span>';
+}
+
+/* ===== 因子库 ===== */
+var currentCat='all', currentSort={key:null,asc:true}, searchQuery='';
+
+function renderFactors(){
+  var tbody=document.getElementById('ft-body');
+  var filtered=[];
+  for(var i=0;i<FACTORS.length;i++){
+    var f=FACTORS[i];
+    if(currentCat!=='all' && f.cat!==currentCat) continue;
+    if(searchQuery){
+      var q=searchQuery.toLowerCase();
+      var s=f.cn+' '+f.name+' '+f.desc+' '+f.catCN+' '+f.subcat+' '+f.src+' ';
+      if(f.tags.time) s+=f.tags.time.join(' ');
+      if(f.tags.strategy) s+=f.tags.strategy.join(' ');
+      if(f.tags.market) s+=f.tags.market.join(' ');
+      if(s.toLowerCase().indexOf(q)===-1) continue;
+    }
+    filtered.push(f);
+  }
+  if(currentSort.key){
+    filtered.sort(function(a,b){
+      var va,vb;
+      if(currentSort.key==='name'){va=a.cn;vb=b.cn;}
+      else if(currentSort.key==='desc'){va=a.desc;vb=b.desc;}
+      else if(currentSort.key==='cat'){va=a.catCN;vb=b.catCN;}
+      return currentSort.asc?va.localeCompare(vb):vb.localeCompare(va);
+    });
+  }
+  if(filtered.length===0){
+    tbody.innerHTML='<tr class="empty"><td colspan="6">🔍 未找到匹配因子，试试其他关键词：短线、超买、放量、趋势</td></tr>';
+    return;
+  }
+  var html='';
+  for(var i=0;i<filtered.length;i++){
+    var f=filtered[i];
+    html+='<tr onclick="showDetail('+f.id+')"><td>'+(i+1)+'</td><td><div class="f-name">'+f.cn+'<small>'+f.name+'</small></div></td><td><div class="f-desc" title="'+f.desc.replace(/"/g,'&quot;')+'">'+f.desc+'</div></td><td><span class="f-cat">'+f.catCN+'</span></td><td><div class="f-tags">'+tagsHTML(f.tags)+'</div></td><td><span class="f-src">'+f.src+'</span></td></tr>';
+  }
+  tbody.innerHTML=html;
+}
+
+function filterByCat(el,cat){
+  var tags=document.querySelectorAll('.flt-tag[data-cat]');
+  for(var i=0;i<tags.length;i++) tags[i].classList.remove('active');
+  var moreTags=document.querySelector('#more-cats').querySelectorAll('.flt-tag[data-cat]');
+  for(var i=0;i<moreTags.length;i++) moreTags[i].classList.remove('active');
+  el.classList.add('active');
+  currentCat=cat;
+  renderFactors();
+}
+
+function filterFactors(){
+  searchQuery=document.getElementById('f-search').value;
+  renderFactors();
+}
+
+function sortTable(key){
+  if(currentSort.key===key) currentSort.asc=!currentSort.asc;
+  else{currentSort.key=key;currentSort.asc=true;}
+  var sorts=document.querySelectorAll('.factor-table th .sort');
+  for(var i=0;i<sorts.length;i++) sorts[i].textContent='↕';
+  if(key==='name') document.querySelector('#th-name .sort').textContent=currentSort.asc?'↑':'↓';
+  else sorts[['name','desc','cat'].indexOf(key)+1]&&(sorts[['name','desc','cat'].indexOf(key)+1].textContent=currentSort.asc?'↑':'↓');
+  renderFactors();
+}
+
+function updateCatCounts(){
+  var cats={};
+  for(var i=0;i<FACTORS.length;i++){var c=FACTORS[i].cat;cats[c]=(cats[c]||0)+1;}
+  for(var k in cats){
+    var el=document.querySelector('.flt-tag[data-cat="'+k+'"] .cnt');
+    if(el) el.textContent=cats[k];
+  }
+  document.querySelector('#cat-all').textContent=FACTORS.length;
+}
+
+/* ===== 因子详情（侧滑面板） ===== */
+var currentFactor=null;
+
+function showDetail(id){
+  for(var i=0;i<FACTORS.length;i++) if(FACTORS[i].id===id){currentFactor=FACTORS[i];break;}
+  if(!currentFactor) return;
+  var f=currentFactor;
+  document.getElementById('dp-title').innerHTML=f.cn+' <small id="dp-enname">'+f.name+'</small>';
+  document.getElementById('dp-desc').textContent=f.desc;
+  document.getElementById('dp-tags').innerHTML=dpTagsHTML(f.tags);
+  var ph='';
+  for(var i=0;i<f.params.length;i++){
+    var p=f.params[i];
+    ph+='<div class="dp-param"><label>'+p.k+'：</label><input type="number" value="'+p.v+'" min="'+p.min+'" max="'+p.max+'"><span class="hint">范围 '+p.min+'-'+p.max+'</span></div>';
+  }
+  document.getElementById('dp-params').innerHTML=ph||'<span style="color:var(--text-muted);font-size:12px;">无参数配置</span>';
+  var eh='';
+  for(var i=0;i<f.examples.length;i++) eh+='<div class="dp-example">💡 '+f.examples[i]+'</div>';
+  document.getElementById('dp-examples').innerHTML=eh;
+  var rh='';
+  for(var i=0;i<f.relate.length;i++) rh+='<span onclick="quickSearch(\''+f.relate[i]+'\')">'+f.relate[i]+'</span>';
+  document.getElementById('dp-related').innerHTML=rh||'<span style="color:var(--text-muted);font-size:12px;">暂无</span>';
+  document.getElementById('dp-overlay').classList.add('open');
+  document.getElementById('detail-panel').classList.add('open');
+}
+
+function closeDetail(){
+  document.getElementById('dp-overlay').classList.remove('open');
+  document.getElementById('detail-panel').classList.remove('open');
+}
+
+function quickSearch(name){
+  closeDetail();
+  switchTab('library');
+  document.getElementById('f-search').value=name;
+  searchQuery=name;
+  renderFactors();
+}
+
+function addCurrentToCombo(){
+  closeDetail();
+  switchTab('combos');
+  openWizard(currentFactor);
+}
+
+/* ===== 组合方案 ===== */
+function renderCombos(){
+  var grid=document.getElementById('combo-grid');
+  var all=[];
+  for(var i=0;i<PRESET_COMBOS.length;i++) all.push({c:PRESET_COMBOS[i],isUser:false});
+  for(var i=0;i<userCombos.length;i++) all.push({c:userCombos[i],isUser:true});
+  var flt=window._comboFilter||'all';
+  var q=(window._comboSearch||'').toLowerCase();
+  if(flt==='sys') all=all.filter(function(x){return !x.isUser;});
+  else if(flt==='user') all=all.filter(function(x){return x.isUser;});
+  if(q) all=all.filter(function(x){return x.c.name.indexOf(q)!==-1||x.c.desc.indexOf(q)!==-1;});
+  if(all.length===0){
+    grid.innerHTML='<div class="empty">'+(flt==='user'?'⭐ 暂无自建组合，点击右上角「+ 新建组合」创建':'🔍 未找到匹配组合')+'</div>';
+    return;
+  }
+  var html='';
+  for(var i=0;i<all.length;i++){
+    var c=all[i].c,isUser=all[i].isUser;
+    var badge=isUser?'<span class="cc-badge user">⭐ 自建</span>':'<span class="cc-badge sys">🏷️ 系统</span>';
+    var factorSum=c.factors.slice(0,3).map(function(f){return f.n;}).join('、')+(c.factors.length>3?' 等'+c.factors.length+'个':c.factors.length+'个');
+    var actions;
+    if(isUser){
+      actions='<span onclick="editCombo(\''+c.id+'\')">✏️ 编辑</span><span onclick="delCombo(\''+c.id+'\')" class="del">🗑️ 删除</span><span onclick="copyCombo(\''+c.id+'\')">📋 复制</span>';
+    } else {
+      actions='<span onclick="viewCombo(\''+c.id+'\')">📄 查看详情</span><span onclick="editSysCombo(\''+c.id+'\')">✏️ 调参</span><span onclick="copyCombo(\''+c.id+'\')">📋 复制为自建</span>';
+    }
+    var srcLine=c.src?'<br>来源：'+c.src:'';
+    html+='<div class="combo-card"><div class="cc-top">'+badge+'</div><div class="cc-name">'+c.name+'</div><div class="cc-summary">'+c.desc+srcLine+'</div><div class="cc-meta">'+factorSum+(isUser?' · 创建于 '+c.created:'')+'</div><div class="cc-actions">'+actions+'</div></div>';
+  }
+  grid.innerHTML=html;
+}
+
+function filterCombos(flt,el){
+  if(flt){
+    window._comboFilter=flt;
+    var spans=document.querySelectorAll('.c-flt span');
+    for(var i=0;i<spans.length;i++) spans[i].classList.toggle('active',spans[i].dataset.cf===flt);
+  }
+  window._comboSearch=document.getElementById('c-search').value;
+  renderCombos();
+}
+
+/* ===== 组合操作 ===== */
+function viewCombo(id){
+  var c=null;
+  for(var i=0;i<PRESET_COMBOS.length;i++) if(PRESET_COMBOS[i].id===id){c=PRESET_COMBOS[i];break;}
+  if(!c) for(var i=0;i<userCombos.length;i++) if(userCombos[i].id===id){c=userCombos[i];break;}
+  if(!c) return;
+  document.getElementById('cd-title').textContent=c.name+' · 因子构成';
+  document.getElementById('cd-summary').innerHTML=c.desc+(c.src?'<br>来源：'+c.src:'');
+  var tbody=document.getElementById('cd-body');
+  var html='';
+  for(var i=0;i<c.factors.length;i++){
+    var f=c.factors[i];
+    html+='<tr><td>'+(i+1)+'</td><td class="cd-name">'+f.n+'</td><td class="cd-w">'+(typeof f.w==='number'?f.w+'%':'—')+'</td><td>默认</td><td>—</td></tr>';
+  }
+  tbody.innerHTML=html;
+  document.getElementById('combo-detail-overlay').classList.add('open');
+}
+
+function closeComboDetail(){
+  document.getElementById('combo-detail-overlay').classList.remove('open');
+}
+
+function showConfirm(msg,onYes){
+  document.getElementById('confirm-msg').textContent=msg;
+  document.getElementById('confirm-overlay').classList.add('open');
+  document.getElementById('confirm-yes').onclick=function(){closeConfirm();if(onYes) onYes();};
+}
+
+function closeConfirm(){
+  document.getElementById('confirm-overlay').classList.remove('open');
+}
+
+function delCombo(id){
+  var name='';
+  for(var i=0;i<userCombos.length;i++) if(userCombos[i].id===id){name=userCombos[i].name;break;}
+  showConfirm('确认删除组合「'+name+'」？删除后不可恢复。',function(){
+    var tmp=[];
+    for(var i=0;i<userCombos.length;i++) if(userCombos[i].id!==id) tmp.push(userCombos[i]);
+    userCombos=tmp;
+    renderCombos();
+    showToast('🗑️ 已删除组合');
+  });
+}
+
+function copyCombo(id){
+  var orig=null;
+  for(var i=0;i<PRESET_COMBOS.length;i++) if(PRESET_COMBOS[i].id===id){orig=PRESET_COMBOS[i];break;}
+  if(!orig) for(var i=0;i<userCombos.length;i++) if(userCombos[i].id===id){orig=userCombos[i];break;}
+  if(!orig) return;
+  var d=new Date();
+  var ds=d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
+  userCombos.unshift({id:'u'+Date.now(),name:orig.name+'(副本)',type:'user',desc:orig.desc,factors:JSON.parse(JSON.stringify(orig.factors)),created:ds,src:'用户自建'});
+  renderCombos();
+  showToast('📋 已复制为自建组合');
+}
+
+function showToast(msg){
+  var t=document.getElementById('toast');
+  t.textContent=msg;
+  t.classList.add('show');
+  setTimeout(function(){t.classList.remove('show');},2500);
+}
+
+function editCombo(id){
+  showToast('✏️ 编辑功能将在后续版本实现');
+}
+
+function editSysCombo(id){
+  showToast('✏️ 调参功能将在后续版本实现');
+}
+
+/* ===== 新建组合 5步 ===== */
+var wizardStep=1, wizardSelected=[];
+
+function openWizard(preSelected){
+  wizardStep=1;wizardSelected=[];
+  if(preSelected){
+    wizardSelected=[preSelected.id];
+    document.getElementById('wz-goal-input').value='基于因子「'+preSelected.cn+'」构建组合';
+  } else {
+    document.getElementById('wz-goal-input').value='';
+  }
+  document.getElementById('ws-name').value='';
+  document.getElementById('ws-desc').value='';
+  renderWizard();
+  document.getElementById('wizard-overlay').classList.add('open');
+}
+
+function closeWizard(){
+  document.getElementById('wizard-overlay').classList.remove('open');
+}
+
+function fillGoal(txt){
+  document.getElementById('wz-goal-input').value=txt;
+}
+
+function renderWizard(){
+  var steps=document.querySelectorAll('.wizard-step');
+  for(var i=0;i<steps.length;i++) steps[i].classList.toggle('active',parseInt(steps[i].dataset.step)===wizardStep);
+  document.getElementById('wz-prev').style.display=wizardStep>1?'inline-flex':'none';
+  document.getElementById('wz-next').style.display=wizardStep<5?'inline-flex':'none';
+  document.getElementById('wz-save-btn').style.display=wizardStep===5?'inline-flex':'none';
+  var dots=document.querySelectorAll('.wp-dot');
+  for(var i=0;i<dots.length;i++){
+    dots[i].className='wp-dot';
+    if(i+1<wizardStep) dots[i].classList.add('done');
+    else if(i+1===wizardStep) dots[i].classList.add('curr');
+  }
+  switch(wizardStep){
+    case 2: renderWSList();break;
+    case 3: renderWW();break;
+    case 4: renderWP();break;
+    case 5: renderSave();break;
+  }
+}
+
+function wizardNext(){
+  if(wizardStep===2 && wizardSelected.length===0){
+    showToast('⚠️ 请至少选择 1 个因子');
+    return;
+  }
+  if(wizardStep===3){
+    var total=getWeightTotal();
+    if(Math.abs(total-100)>0.5){showToast('⚠️ 权重合计需等于 100%（当前 '+total+'%）');return;}
+  }
+  if(wizardStep<5){wizardStep++;renderWizard();}
+}
+
+function wizardPrev(){if(wizardStep>1){wizardStep--;renderWizard();}}
+
+/* Step 2 */
+function renderWSList(){
+  var list=document.getElementById('ws-list');
+  var q=(document.getElementById('ws-search').value||'').toLowerCase();
+  var filtered=[];
+  for(var i=0;i<FACTORS.length;i++){
+    var f=FACTORS[i];
+    if(!q){filtered.push(f);continue;}
+    var s=f.cn+' '+f.name+' '+f.desc+' '+f.catCN+' ';
+    if(s.toLowerCase().indexOf(q)!==-1) filtered.push(f);
+  }
+  var html='';
+  for(var i=0;i<filtered.length;i++){
+    var f=filtered[i];
+    var checked=(wizardSelected.indexOf(f.id)!==-1)?'checked':'';
+    var tagStr='';
+    if(f.tags.time) for(var j=0;j<f.tags.time.length;j++) tagStr+='<span>'+f.tags.time[j]+'</span>';
+    if(f.tags.strategy) for(var j=0;j<f.tags.strategy.length;j++) tagStr+='<span>'+f.tags.strategy[j]+'</span>';
+    html+='<div class="ws-item" onclick="toggleWS('+f.id+')"><input type="checkbox" '+checked+' onclick="event.stopPropagation();toggleWS('+f.id+')"><div class="wsi-info"><div class="wsi-name">'+f.cn+' <small style="color:var(--text-muted)">'+f.name+'</small></div><div class="wsi-desc">'+f.desc+'</div><div class="wsi-tags">'+tagStr+'</div></div></div>';
+  }
+  list.innerHTML=html;
+  document.getElementById('ws-selected').textContent=wizardSelected.length;
+}
+
+function toggleWS(id){
+  var idx=wizardSelected.indexOf(id);
+  if(idx>=0) wizardSelected.splice(idx,1);
+  else wizardSelected.push(id);
+  renderWSList();
+}
+
+/* Step 3 */
+function renderWW(){
+  var factors=[];
+  for(var i=0;i<wizardSelected.length;i++){
+    for(var j=0;j<FACTORS.length;j++) if(FACTORS[j].id===wizardSelected[i]){factors.push(FACTORS[j]);break;}
+  }
+  var equal=Math.floor(100/factors.length);
+  var remain=100;
+  var container=document.getElementById('wz-weight');
+  var html='';
+  for(var i=0;i<factors.length;i++){
+    var f=factors[i];
+    var w=i<factors.length-1?equal:remain-(factors.length-1)*equal;
+    if(i<factors.length-1) remain-=w;
+    html+='<div class="ww-row" data-fid="'+f.id+'"><div class="ww-name">'+f.cn+'</div><div class="ww-slider"><input type="range" min="5" max="60" value="'+w+'" oninput="wwChange('+f.id+',this.value)"></div><div class="ww-pct" id="ww-pct-'+f.id+'">'+w+'%</div></div>';
+  }
+  container.innerHTML=html;
+  updateWWTotal();
+}
+
+function wwChange(id,val){
+  document.getElementById('ww-pct-'+id).textContent=val+'%';
+  updateWWTotal();
+}
+
+function getWeightTotal(){
+  var rows=document.querySelectorAll('#wz-weight .ww-row');
+  var total=0;
+  for(var i=0;i<rows.length;i++){
+    var inp=rows[i].querySelector('input[type=range]');
+    if(inp) total+=parseInt(inp.value);
+  }
+  return total;
+}
+
+function updateWWTotal(){
+  var total=getWeightTotal();
+  document.getElementById('ww-bar').style.width=Math.min(total,100)+'%';
+  document.getElementById('ww-pct').textContent=total+'%';
+  var wt=document.getElementById('ww-total');
+  wt.classList.toggle('ok',Math.abs(total-100)<0.5);
+  wt.classList.toggle('fail',Math.abs(total-100)>=0.5);
+}
+
+function equalWeight(){
+  var factors=[];
+  for(var i=0;i<wizardSelected.length;i++){
+    for(var j=0;j<FACTORS.length;j++) if(FACTORS[j].id===wizardSelected[i]){factors.push(FACTORS[j]);break;}
+  }
+  var equal=Math.floor(100/factors.length);
+  var remain=100;
+  var rows=document.querySelectorAll('#wz-weight .ww-row');
+  for(var i=0;i<rows.length;i++){
+    var inp=rows[i].querySelector('input[type=range]');
+    var w=i<factors.length-1?equal:remain-(factors.length-1)*equal;
+    if(i<factors.length-1) remain-=w;
+    if(inp){
+      inp.value=w;
+      var fid=parseInt(rows[i].dataset.fid);
+      document.getElementById('ww-pct-'+fid).textContent=w+'%';
+    }
+  }
+  updateWWTotal();
+}
+
+/* Step 4 */
+function renderWP(){
+  var factors=[];
+  for(var i=0;i<wizardSelected.length;i++){
+    for(var j=0;j<FACTORS.length;j++) if(FACTORS[j].id===wizardSelected[i]){factors.push(FACTORS[j]);break;}
+  }
+  var container=document.getElementById('wz-params');
+  var html='';
+  for(var i=0;i<factors.length;i++){
+    var f=factors[i];
+    var params='';
+    for(var j=0;j<f.params.length;j++){
+      var p=f.params[j];
+      params+='<label>'+p.k+'</label><input type="number" value="'+p.v+'" min="'+p.min+'" max="'+p.max+'">';
+    }
+    var hint=f.params.length?'缺省: '+f.params.map(function(p){return p.k+'='+p.v;}).join(', '):'无参数';
+    html+='<div class="wp-row"><div class="wp-name">'+f.cn+'<small>'+f.name+'</small></div><div class="wp-inputs">'+(params||'<span style="color:var(--text-muted);font-size:12px;">无参数</span>')+'</div><div class="wp-hint">'+hint+'</div></div>';
+  }
+  container.innerHTML=html;
+}
+
+/* Step 5 */
+function renderSave(){
+  var factors=[];
+  for(var i=0;i<wizardSelected.length;i++){
+    for(var j=0;j<FACTORS.length;j++) if(FACTORS[j].id===wizardSelected[i]){factors.push(FACTORS[j]);break;}
+  }
+  var name=document.getElementById('ws-name').value||'新组合';
+  document.getElementById('ps-name').textContent=name;
+  var meta='';
+  var tags=[];
+  if(factors.length){
+    meta=factors.length+' 个因子 · '+factors.map(function(f){return f.cn;}).join(' + ');
+    var allTags={};
+    for(var i=0;i<factors.length;i++){
+      var f=factors[i];
+      if(f.tags.time) for(var j=0;j<f.tags.time.length;j++) allTags[f.tags.time[j]]=true;
+      if(f.tags.strategy) for(var j=0;j<f.tags.strategy.length;j++) allTags[f.tags.strategy[j]]=true;
+      if(f.tags.market) for(var j=0;j<f.tags.market.length;j++) allTags[f.tags.market[j]]=true;
+    }
+    var tagKeys=Object.keys(allTags);
+    var tagHtml='';
+    for(var i=0;i<Math.min(tagKeys.length,5);i++) tagHtml+='<span>'+tagKeys[i]+'</span>';
+    document.getElementById('ps-tags').innerHTML=tagHtml;
+  }
+  document.getElementById('ps-meta').textContent=meta||'暂无因子';
+}
+
+document.getElementById('ws-name').oninput=renderSave;
+
+function saveCombo(){
+  var name=document.getElementById('ws-name').value.trim();
+  if(!name){showToast('⚠️ 请输入组合名称');return;}
+  var factors=[];
+  for(var i=0;i<wizardSelected.length;i++){
+    for(var j=0;j<FACTORS.length;j++) if(FACTORS[j].id===wizardSelected[i]){factors.push(FACTORS[j]);break;}
+  }
+  var factorList=[];
+  for(var i=0;i<factors.length;i++){
+    var f=factors[i];
+    var inp=document.querySelector('#wz-weight .ww-row[data-fid="'+f.id+'"] input');
+    var w=inp?parseInt(inp.value):Math.floor(100/factors.length);
+    factorList.push({n:f.cn,w:w});
+  }
+  var desc=document.getElementById('ws-desc').value.trim()||'由 '+factors.length+' 个因子构成的组合';
+  var d=new Date();
+  var ds=d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
+  var newId='u'+Date.now();
+  userCombos.unshift({id:newId,name:name,type:'user',desc:desc,factors:factorList,created:ds,src:'用户自建'});
+  closeWizard();
+  renderCombos();
+  showToast('✅ 已保存组合「'+name+'」');
+}
+
+/* ===== 帮助 ===== */
+function showHelp(){
+  showConfirm('因子管理\n\n• 因子库：查看和管理系统全部因子，搜索/分类/查看详情\n• 组合方案：管理和浏览因子组合，系统预设+用户自建\n• 新建组合：通过5步流程创建自定义因子组合\n• 组合自动同步到选股系统L3的多因子评分区域',function(){});
+}
+
+/* ===== 侧栏折叠 ===== */
+var sidebarCollapsed=true;
 function toggleSidebar(){
-  sidebarCollapsed = !sidebarCollapsed;
+  sidebarCollapsed=!sidebarCollapsed;
   var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
   if(!s||!m)return;
   s.classList.toggle('collapsed');m.classList.toggle('collapsed');
@@ -128,6 +1053,11 @@ function toggleSidebar(){
   var btn=document.querySelector('.sidebar-toggle');
   if(btn)btn.textContent='▶';
 })();
+
+/* ===== 初始化 ===== */
+updateCatCounts();
+renderFactors();
+renderCombos();
 </script>
 </body>
 </html>
