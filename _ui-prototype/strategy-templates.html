@@ -5,21 +5,160 @@
 <title>策略模板 — A股分析系统</title>
 <link rel="stylesheet" href="assets/base.css">
 <style>
-.template-toolbar { display: flex; align-items: center; gap: var(--space-12); margin-bottom: var(--space-16); flex-wrap: wrap; }
-.template-toolbar .input { width: 220px; }
-.cat-tabs { display: flex; gap: var(--space-4); flex-wrap: wrap; }
-.cat-tab { padding: var(--space-6) var(--space-12); border-radius: var(--radius-sm); background: var(--bg-surface); border: 1px solid var(--border-default); cursor: pointer; font-size: 12px; color: var(--text-secondary); transition: all .15s; }
-.cat-tab:hover { background: var(--bg-muted); }
-.cat-tab.active { background: var(--color-brand-500); color: white; border-color: var(--color-brand-500); }
+/* ===== Plan C 布局 ===== */
+/* 主区域 */
+/* 策略模板布局 */
+.st-layout { display: flex; flex: 1; overflow: hidden; }
+.main-content { display: flex; flex-direction: column; }
+.st-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.st-toolbar { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-8) var(--space-16); border-bottom: 1px solid var(--border-default); flex-wrap: wrap; }
+.st-toolbar .input { width: 200px; height: 28px; font-size: 12px; }
+.st-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.st-tab { padding: 2px 10px; border-radius: var(--radius-sm); background: var(--bg-surface); border: 1px solid var(--border-default); cursor: pointer; font-size: 11px; color: var(--text-secondary); transition: all .15s; height: 24px; line-height: 20px; }
+.st-tab:hover { background: var(--bg-muted); }
+.st-tab.active { background: var(--color-brand-500); color: white; border-color: var(--color-brand-500); }
+.st-toolbar-actions { display: flex; align-items: center; gap: var(--space-6); margin-left: auto; }
+.st-view-btn { width: 26px; height: 24px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: var(--bg-surface); cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; color: var(--text-muted); }
+.st-view-btn:hover { background: var(--bg-muted); }
+.st-view-btn.active { background: var(--color-brand-500); color: white; border-color: var(--color-brand-500); }
+.st-sort-select { font-size: 11px; height: 24px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 0 6px; background: var(--bg-surface); color: var(--text-secondary); }
 
-.template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-16); }
-.tpl-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); transition: all .15s; cursor: pointer; }
-.tpl-card:hover { border-color: var(--border-strong); transform: translateY(-2px); box-shadow: var(--shadow-hover); }
-.tpl-card .tpl-icon { font-size: 28px; margin-bottom: var(--space-8); }
-.tpl-card h4 { font-size: 14px; font-weight: 600; margin-bottom: var(--space-4); }
-.tpl-card .tpl-desc { font-size: 12px; color: var(--text-muted); line-height: 1.6; margin-bottom: var(--space-8); }
-.tpl-card .tpl-tags { display: flex; gap: var(--space-4); flex-wrap: wrap; }
-.tpl-card .tpl-tags span { font-size: 10px; padding: 2px var(--space-6); border-radius: var(--radius-xs); background: var(--bg-subtle); color: var(--text-secondary); }
+/* 卡片内容区 */
+.st-content { flex: 1; overflow-y: auto; padding: var(--space-12) var(--space-16); }
+.st-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-10); }
+
+/* 策略卡片 */
+.st-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-12); transition: all .15s; cursor: pointer; position: relative; }
+.st-card:hover { border-color: var(--border-strong); transform: translateY(-2px); box-shadow: var(--shadow-hover); }
+.st-card.selected { border-color: var(--color-brand-500); box-shadow: 0 0 0 1px var(--color-brand-500); }
+.st-card.locked { opacity: .85; }
+.st-card.locked:hover { transform: none; box-shadow: none; }
+.st-card .card-icon { font-size: 24px; margin-bottom: var(--space-6); }
+.st-card h4 { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+.st-card .card-desc { font-size: 11px; color: var(--text-muted); line-height: 1.5; margin-bottom: var(--space-6); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.st-card .card-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: var(--space-4); }
+.st-card .card-tags span { font-size: 10px; padding: 1px 6px; border-radius: var(--radius-xs); background: var(--bg-subtle); color: var(--text-secondary); }
+.st-card .card-status { display: flex; align-items: center; gap: 6px; margin-top: var(--space-4); }
+.st-card .card-status .badge { font-size: 10px; padding: 1px 6px; border-radius: var(--radius-xs); }
+.badge-system { background: #e8f5e9; color: #2e7d32; }
+.badge-vibe { background: #e3f2fd; color: #1565c0; }
+.badge-dev { font-size: 10px; padding: 1px 6px; border-radius: var(--radius-xs); }
+.badge-p0 { background: #fce4ec; color: #c62828; }
+.badge-p1 { background: #fff3e0; color: #e65100; }
+.badge-p2 { background: #fff8e1; color: #f9a825; }
+.badge-p3 { background: #f3e5f5; color: #6a1b9a; }
+.badge-ready { background: #e8f5e9; color: #2e7d32; }
+
+/* 右侧详情面板 */
+.st-detail { width: 0; overflow: hidden; border-left: 1px solid var(--border-default); background: var(--bg-surface); transition: width .2s; display: flex; flex-direction: column; }
+.st-detail.open { width: 320px; min-width: 320px; }
+.st-detail.open.collapsed { width: 0; min-width: 0; overflow: hidden; border-left: none; }
+.st-detail-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-8) var(--space-12); border-bottom: 1px solid var(--border-default); }
+.st-detail-header h3 { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.st-detail-header-actions { display: flex; gap: 4px; align-items: center; }
+.st-detail-close, .st-detail-toggle { width: 24px; height: 24px; border: none; background: transparent; cursor: pointer; font-size: 12px; color: var(--text-muted); border-radius: var(--radius-sm); }
+.st-detail-close:hover, .st-detail-toggle:hover { background: var(--bg-muted); color: var(--text-primary); }
+.st-detail-body { flex: 1; overflow-y: auto; padding: var(--space-8) var(--space-12); }
+.st-detail-section { margin-bottom: var(--space-8); border: 1px solid var(--border-default); border-radius: var(--radius-sm); overflow: hidden; }
+.st-detail-section-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-6) var(--space-10); background: var(--bg-subtle); cursor: pointer; font-size: 12px; font-weight: 500; }
+.st-detail-section-header:hover { background: var(--bg-muted); }
+.st-detail-section-header .sec-arrow { font-size: 10px; color: var(--text-muted); transition: transform .15s; }
+.st-detail-section-header .sec-arrow.collapsed { transform: rotate(-90deg); }
+.st-detail-section-body { padding: var(--space-8) var(--space-10); font-size: 11px; color: var(--text-secondary); line-height: 1.6; }
+.st-detail-section-body.collapsed { display: none; }
+.st-detail-section-body .param-row { display: flex; align-items: center; gap: var(--space-6); margin-bottom: var(--space-4); }
+.st-detail-section-body .param-row label { min-width: 80px; font-size: 11px; color: var(--text-secondary); }
+.st-detail-section-body .param-row input[type="range"] { flex: 1; }
+.st-detail-section-body .param-row .param-val { min-width: 30px; text-align: right; font-size: 11px; color: var(--text-muted); }
+.st-detail-section-body .param-row .param-input { width: 50px; font-size: 11px; height: 22px; border: 1px solid var(--border-default); border-radius: var(--radius-xs); padding: 0 4px; background: var(--bg-surface); }
+.st-detail-section-body .param-row .param-input:disabled { background: var(--bg-subtle); color: var(--text-muted); }
+.st-detail-section-body code { display: block; background: #1e1e1e; color: #d4d4d4; padding: var(--space-6) var(--space-8); border-radius: var(--radius-xs); font-size: 10px; line-height: 1.5; overflow-x: auto; white-space: pre; max-height: 200px; }
+/* 语法高亮 */
+.hl-json .hl-k { color: #569cd6; }  /* key */
+.hl-json .hl-s { color: #ce9178; }  /* string */
+.hl-json .hl-n { color: #b5cea8; }  /* number */
+.hl-json .hl-b { color: #569cd6; }  /* boolean/null */
+.hl-py .hl-c { color: #6a9955; }    /* comment */
+.hl-py .hl-kw { color: #569cd6; }   /* keyword */
+.hl-py .hl-f { color: #dcdcaa; }    /* function */
+.hl-py .hl-cl { color: #4ec9b0; }   /* class */
+.hl-py .hl-s { color: #ce9178; }    /* string */
+.hl-py .hl-n { color: #b5cea8; }    /* number */
+.st-detail-section-body .empty-hint { color: var(--text-muted); font-style: italic; font-size: 11px; }
+.st-detail-footer { padding: var(--space-8) var(--space-12); border-top: 1px solid var(--border-default); display: flex; gap: var(--space-6); flex-wrap: wrap; }
+
+/* 全屏创建弹窗 */
+.st-modal-overlay { display: none; position: fixed; inset: 0; background: #1a1a2e; z-index: 1000; }
+.st-modal-overlay.open { display: flex; }
+.st-modal { background: var(--bg-surface); width: 100%; height: 100%; display: flex; flex-direction: column; box-shadow: none; border-radius: 0; }
+.st-modal-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-12) var(--space-16); border-bottom: 1px solid var(--border-default); }
+.st-modal-header h2 { font-size: 16px; font-weight: 600; }
+.st-modal-close { width: 28px; height: 28px; border: none; background: transparent; cursor: pointer; font-size: 16px; color: var(--text-muted); border-radius: var(--radius-sm); }
+.st-modal-close:hover { background: var(--bg-muted); }
+.st-modal-body { flex: 1; overflow-y: auto; padding: var(--space-16); }
+.st-modal-footer { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-8); padding: var(--space-12) var(--space-16); border-top: 1px solid var(--border-default); }
+
+/* 向导步骤 */
+.st-wizard-step { display: none; }
+.st-wizard-step.active { display: block; }
+.st-wizard-step h3 { font-size: 14px; font-weight: 600; margin-bottom: var(--space-8); color: var(--color-brand-500); }
+.st-wizard-step textarea { width: 100%; height: 120px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: var(--space-8); font-size: 12px; resize: vertical; background: var(--bg-surface); color: var(--text-primary); }
+.st-wizard-step textarea:focus { outline: none; border-color: var(--color-brand-500); }
+.st-wizard-step .example-prompts { display: flex; gap: var(--space-4); flex-wrap: wrap; margin: var(--space-6) 0; }
+.st-wizard-step .example-prompts span { font-size: 11px; padding: 2px 8px; border-radius: var(--radius-xs); background: var(--bg-subtle); color: var(--text-muted); cursor: pointer; border: 1px solid var(--border-default); }
+.st-wizard-step .example-prompts span:hover { background: var(--bg-muted); color: var(--text-primary); }
+.st-wizard-step .param-preview { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-6); margin: var(--space-8) 0; }
+.st-wizard-step .param-preview .pp-item { display: flex; align-items: center; gap: var(--space-4); font-size: 12px; }
+.st-wizard-step .param-preview .pp-item label { min-width: 70px; color: var(--text-secondary); }
+.st-wizard-step .param-preview .pp-item input { flex: 1; height: 24px; border: 1px solid var(--border-default); border-radius: var(--radius-xs); padding: 0 6px; font-size: 11px; max-width: 60px; }
+.st-wizard-step .param-preview .pp-item input:disabled { background: var(--bg-subtle); }
+.st-wizard-step .name-row { display: flex; flex-direction: column; gap: var(--space-6); }
+.st-wizard-step .name-row .nr-item { display: flex; flex-direction: column; gap: 4px; }
+.st-wizard-step .name-row .nr-item label { font-size: 11px; color: var(--text-secondary); }
+.st-wizard-step .name-row .nr-item input { height: 28px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 0 8px; font-size: 12px; }
+.st-wizard-step .name-row .nr-item input:focus { outline: none; border-color: var(--color-brand-500); }
+
+/* 生成状态 */
+.st-gen-loading { display: none; align-items: center; gap: var(--space-6); padding: var(--space-8); background: var(--bg-subtle); border-radius: var(--radius-sm); margin: var(--space-6) 0; font-size: 12px; color: var(--text-muted); }
+.st-gen-loading.show { display: flex; }
+.st-gen-error { display: none; padding: var(--space-6) var(--space-8); background: #fce4ec; border-radius: var(--radius-sm); margin: var(--space-6) 0; font-size: 11px; color: #c62828; }
+
+/* 空状态 */
+.st-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--space-24); color: var(--text-muted); }
+.st-empty .empty-icon { font-size: 40px; margin-bottom: var(--space-8); }
+.st-empty p { font-size: 13px; }
+.st-empty .btn { margin-top: var(--space-8); }
+
+/* 确认对话框 */
+.st-confirm-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 1100; align-items: center; justify-content: center; }
+.st-confirm-overlay.open { display: flex; }
+.st-confirm-box { background: var(--bg-surface); border-radius: var(--radius-md); padding: var(--space-16); min-width: 320px; max-width: 400px; box-shadow: var(--shadow-lg); }
+.st-confirm-box h4 { font-size: 14px; margin-bottom: var(--space-8); }
+.st-confirm-box p { font-size: 12px; color: var(--text-secondary); line-height: 1.6; margin-bottom: var(--space-6); }
+.st-confirm-box .confirm-actions { display: flex; justify-content: flex-end; gap: var(--space-6); margin-top: var(--space-10); }
+.st-confirm-box .confirm-actions .btn { height: 28px; font-size: 12px; }
+
+/* Toast */
+.st-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #323232; color: white; padding: var(--space-6) var(--space-12); border-radius: var(--radius-sm); font-size: 12px; z-index: 2000; opacity: 0; transition: opacity .3s; pointer-events: none; }
+.st-toast.show { opacity: 1; }
+
+/* 表格视图 */
+.st-table-wrap { overflow-x: auto; }
+.st-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.st-table th, .st-table td { padding: var(--space-6) var(--space-10); border-bottom: 1px solid var(--border-default); text-align: left; }
+.st-table th { font-weight: 500; color: var(--text-secondary); background: var(--bg-subtle); cursor: pointer; user-select: none; white-space: nowrap; }
+.st-table th:hover { background: var(--bg-muted); }
+.st-table tr:hover td { background: var(--bg-subtle); }
+.st-table .tbl-actions { display: flex; gap: 4px; }
+.st-table .tbl-actions button { font-size: 11px; padding: 1px 6px; border: 1px solid var(--border-default); border-radius: var(--radius-xs); background: transparent; cursor: pointer; }
+.st-table .tbl-actions button:hover { background: var(--bg-muted); }
+
+/* 折叠标签 */
+.st-vibe-section { margin-top: var(--space-6); }
+.st-vibe-section h5 { font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: var(--space-4); padding: 4px 0; border-bottom: 1px solid var(--border-default); }
+
+/* 已复制指示 */
+.copy-indicator { position: absolute; top: 8px; right: 8px; font-size: 10px; color: var(--color-brand-500); display: none; }
 </style>
 </head>
 <body>
@@ -52,102 +191,890 @@
     <div class="page-header">
       <h1>📋 策略模板</h1>
       <div class="page-header-actions">
-        <button class="btn btn-primary" onclick="alert('📝 创建模板弹窗已打开')">📝 创建模板</button>
+        <button class="btn btn-primary" onclick="openCreateModal()">➕ 创建策略</button>
       </div>
     </div>
 
-    <!-- 搜索和分类 -->
-    <div class="template-toolbar">
-      <input class="input" placeholder="🔍 搜索策略模板..." oninput="filterTpl(this.value)">
-      <div class="cat-tabs">
-        <span class="cat-tab active" onclick="switchCat(this)">全部</span>
-        <span class="cat-tab" onclick="switchCat(this)">量价策略</span>
-        <span class="cat-tab" onclick="switchCat(this)">缠论策略</span>
-        <span class="cat-tab" onclick="switchCat(this)">筹码策略</span>
-        <span class="cat-tab" onclick="switchCat(this)">组合策略</span>
-        <span class="cat-tab" onclick="switchCat(this)">AI 策略</span>
+
+      <div class="st-layout">
+      <!-- 主区域 -->
+      <div class="st-main">
+        <!-- 工具栏 -->
+        <div class="st-toolbar">
+          <input class="input" id="stSearch" placeholder="🔍 搜索策略名称/描述..." oninput="filterCards()">
+          <div class="st-tabs" id="stTabs">
+            <span class="st-tab active" data-tab="all" onclick="switchTab('all')">全部</span>
+            <span class="st-tab" data-tab="system" onclick="switchTab('system')">系统策略</span>
+            <span class="st-tab" data-tab="vibe" onclick="switchTab('vibe')">Vibe自建</span>
+          </div>
+          <div class="st-toolbar-actions">
+            <button class="st-view-btn active" id="viewGrid" onclick="switchView('grid')" title="卡片视图">▦</button>
+            <button class="st-view-btn" id="viewTable" onclick="switchView('table')" title="表格视图">☰</button>
+            <select class="st-sort-select" id="stSort" onchange="applySort()">
+              <option value="name">按名称</option>
+              <option value="updated">按更新时间</option>
+              <option value="type">按类型</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 卡片/表格内容 -->
+        <div class="st-content" id="stContent">
+          <div class="st-grid" id="stGrid"></div>
+          <div class="st-table-wrap" id="stTableWrap" style="display:none;"></div>
+          <div class="st-empty" id="stEmpty" style="display:none;">
+            <div class="empty-icon">🔍</div>
+            <p id="stEmptyText">暂无匹配的策略</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧详情面板 -->
+      <div class="st-detail" id="stDetail">
+        <div class="st-detail-header">
+          <h3 id="detailTitle">策略详情</h3>
+          <div class="st-detail-header-actions">
+            <button class="st-detail-toggle" onclick="toggleDetailCollapse()" id="detailToggleBtn" title="折叠/展开">▶</button>
+            <button class="st-detail-close" onclick="closeDetail()">✕</button>
+          </div>
+        </div>
+        <div class="st-detail-body" id="detailBody"></div>
+        <div class="st-detail-footer" id="detailFooter"></div>
+    </div>
+    </div><!-- /st-layout -->
+
+    <!-- 全屏创建弹窗 -->
+    <div class="st-modal-overlay" id="stModal">
+      <div class="st-modal">
+        <div class="st-modal-header">
+          <h2 id="modalTitle">✨ Vibe Coding 创建策略</h2>
+          <button class="st-modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div class="st-modal-body">
+          <!-- Step 1: 自然语言描述 -->
+          <div class="st-wizard-step active" id="wizStep1">
+            <h3>Step 1 · 描述你的策略</h3>
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-6);">用自然语言描述你想要的策略，AI 将自动生成代码和参数配置。</p>
+            <textarea id="vibeInput" placeholder='示例："我想要一个基于RSI超卖+均线金叉的反弹策略，持股周期3-5天"' onfocus="this.placeholder=''"></textarea>
+            <div class="example-prompts">
+              <span onclick="fillExample(this)">RSI超卖+均线金叉反弹，持股3-5天</span>
+              <span onclick="fillExample(this)">MACD底背离+放量突破，中线趋势跟踪</span>
+              <span onclick="fillExample(this)">布林带收窄突破+成交量确认，短线交易</span>
+              <span onclick="fillExample(this)">KDJ超卖区金叉+筹码密集支撑，低吸策略</span>
+            </div>
+            <div class="st-gen-loading" id="genLoading"><span class="spinner"></span> AI 思考中，正在生成策略...</div>
+            <div class="st-gen-error" id="genError">生成失败，请调整描述后重试。</div>
+          </div>
+          <!-- Step 2: 预览AI生成结果 -->
+          <div class="st-wizard-step" id="wizStep2">
+            <h3>Step 2 · 预览策略参数与代码</h3>
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-6);">AI 自动提取的参数和生成的策略代码，可手动调整。</p>
+            <div class="param-preview" id="paramPreview"></div>
+            <div style="margin-top:var(--space-6);">
+              <label style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:4px;">策略代码（可编辑）</label>
+              <textarea id="codePreview" style="width:100%;height:200px;border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:var(--space-6);font-family:monospace;font-size:11px;background:#1e1e1e;color:#d4d4d4;resize:vertical;" readonly></textarea>
+            </div>
+          </div>
+          <!-- Step 3: 命名保存 -->
+          <div class="st-wizard-step" id="wizStep3">
+            <h3>Step 3 · 命名保存</h3>
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-6);">为你的新策略命名，它将出现在自建策略列表中。</p>
+            <div class="name-row">
+              <div class="nr-item">
+                <label>策略名称</label>
+                <input id="saveNameCN" placeholder="RSI超卖金叉反弹策略">
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="st-modal-footer">
+          <button class="btn btn-secondary" id="wizBack" onclick="wizPrev()" style="display:none;">← 上一步</button>
+          <button class="btn btn-primary" id="wizNext" onclick="wizNext()">下一步 →</button>
+          <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+        </div>
       </div>
     </div>
 
-    <!-- 模板卡片网格 -->
-    <div class="template-grid">
-      <div class="tpl-card" data-cat="量价策略">
-        <div class="tpl-icon">📈</div>
-        <h4>放量突破策略</h4>
-        <div class="tpl-desc">基于成交量放大 + 价格突破前高/均线，识别主力资金介入信号。包含 5 种放量形态规则。</div>
-        <div class="tpl-tags"><span>量价</span><span>突破</span><span>放量</span><span>短期</span></div>
-      </div>
-      <div class="tpl-card" data-cat="量价策略">
-        <div class="tpl-icon">📊</div>
-        <h4>均线多头排列</h4>
-        <div class="tpl-desc">短/中/长期均线呈多头排列时买入，跌破短期均线卖出。适合趋势跟踪。</div>
-        <div class="tpl-tags"><span>均线</span><span>趋势</span><span>中期</span></div>
-      </div>
-      <div class="tpl-card" data-cat="缠论策略">
-        <div class="tpl-icon">🧩</div>
-        <h4>缠论三类买卖点</h4>
-        <div class="tpl-desc">基于笔-段-中枢体系，识别一买/二买/三买和一卖/二卖/三卖，配合决策树评分。</div>
-        <div class="tpl-tags"><span>缠论</span><span>买卖点</span><span>中枢</span><span>全周期</span></div>
-      </div>
-      <div class="tpl-card" data-cat="缠论策略">
-        <div class="tpl-icon">🔍</div>
-        <h4>中枢突破策略</h4>
-        <div class="tpl-desc">价格突破中枢上沿/下沿时产生买卖信号，结合成交量确认突破有效性。</div>
-        <div class="tpl-tags"><span>缠论</span><span>中枢</span><span>突破</span><span>中期</span></div>
-      </div>
-      <div class="tpl-card" data-cat="筹码策略">
-        <div class="tpl-icon">📦</div>
-        <h4>主力追踪策略</h4>
-        <div class="tpl-desc">基于筹码分布分析主力成本区间，识别吸筹/洗盘/拉升/出货各阶段信号。</div>
-        <div class="tpl-tags"><span>筹码</span><span>主力</span><span>资金流</span></div>
-      </div>
-      <div class="tpl-card" data-cat="筹码策略">
-        <div class="tpl-icon">🎯</div>
-        <h4>筹码密集支撑策略</h4>
-        <div class="tpl-desc">识别筹码密集成交区作为支撑/压力位，价格回踩密集区上沿时买入。</div>
-        <div class="tpl-tags"><span>筹码</span><span>支撑</span><span>短线</span></div>
-      </div>
-      <div class="tpl-card" data-cat="组合策略">
-        <div class="tpl-icon">🔄</div>
-        <h4>多策略共振精选</h4>
-        <div class="tpl-desc">量价+缠论+筹码三策略共振评分，3 个策略同时发出看多信号时买入。</div>
-        <div class="tpl-tags"><span>组合</span><span>共振</span><span>高置信度</span></div>
-      </div>
-      <div class="tpl-card" data-cat="组合策略">
-        <div class="tpl-icon">⚡</div>
-        <h4>多因子 Alpha 精选</h4>
-        <div class="tpl-desc">基于动量、价值、质量、低波等多因子综合评分，Top 20% 股票池。</div>
-        <div class="tpl-tags"><span>因子</span><span>Alpha</span><span>量化</span></div>
-      </div>
-      <div class="tpl-card" data-cat="AI 策略">
-        <div class="tpl-icon">🤖</div>
-        <h4>DeepSeek AI 研判</h4>
-        <div class="tpl-desc">DeepSeek 多角色并行分析（技术+基本面+情绪），综合评分输出信号。</div>
-        <div class="tpl-tags"><span>AI</span><span>多角色</span><span>综合</span></div>
+    <!-- 确认对话框 -->
+    <div class="st-confirm-overlay" id="stConfirm">
+      <div class="st-confirm-box">
+        <h4 id="confirmTitle">🗑️ 确认删除</h4>
+        <p id="confirmMsg">将永久删除此策略，此操作不可恢复。</p>
+        <div class="confirm-actions">
+          <button class="btn btn-secondary" onclick="closeConfirm()">取消</button>
+          <button class="btn" id="confirmOkBtn" style="background:#e53935;color:white;border:none;" onclick="confirmAction()">确认删除</button>
+        </div>
       </div>
     </div>
 
+    <!-- Toast -->
+    <div class="st-toast" id="stToast"></div>
   </main>
 </div>
 
 <script>
-function filterTpl(val){
-  var v = val.toLowerCase();
-  document.querySelectorAll('.tpl-card').forEach(function(c){
-    c.style.display = c.textContent.toLowerCase().includes(v) ? '' : 'none';
-  });
+// ===== Mock 数据：11个系统策略 =====
+var SYSTEM_STRATEGIES = [
+  {
+    id: 'vp', cat: 'vp', catLabel: '量价策略',
+    icon: '📈', name: '量价策略', nameCN: '量价策略',
+    desc: '基于成交量与价格的50+形态检测规则，识别主力资金介入、趋势突破、背离等信号。单一独立策略，使用时作为一个整体。',
+    tags: ['量价', '形态', '突破', '背离'],
+    ready: true, vibe: false, devLabel: null,
+    params: [
+      {key: 'volume_ratio', label: '放量倍数', val: 1.5, min: 1, max: 5, step: 0.1},
+      {key: 'breakout_period', label: '突破周期', val: 20, min: 5, max: 60, step: 1},
+      {key: 'trend_strength', label: '趋势强度阈值', val: 25, min: 10, max: 50, step: 1}
+    ],
+    inputs: ['日线K线数据 (open/high/low/close/volume)', '复权因子 (adj_factor)', '板块分类数据'],
+    output: {
+      signal: {type: 'enum', values: ['买入', '卖出', '持有', '观望']},
+      score: {type: 'number', range: '0-100'},
+      patterns: {type: 'array', desc: '检测到的形态列表'}
+    },
+    wiki: ['量价关系理论', '成交量分析方法'],
+    code: 'class VolumePriceStrategy:\n    def __init__(self, ctx):\n        self.volume_ratio = ctx.params.volume_ratio\n        self.breakout_period = ctx.params.breakout_period\n    \n    def analyze(self, data):\n        # 检测50+量价形态\n        patterns = self._detect_patterns(data)\n        score = self._score_patterns(patterns)\n        return {"score": score, "patterns": patterns}',
+    updated: '2026-06-20', iconLarge: '📈'
+  },
+  {
+    id: 'chanlun', cat: 'chanlun', catLabel: '缠论策略',
+    icon: '🧩', name: '缠论策略', nameCN: '缠论策略',
+    desc: '基于笔-段-中枢体系，识别三类买卖点和8种形态，配合决策树评分。单一独立策略，使用时作为一个整体。',
+    tags: ['缠论', '买卖点', '中枢', '全周期'],
+    ready: true, vibe: false, devLabel: null,
+    params: [
+      {key: 'di_k_type', label: '底分型K线数', val: 3, min: 2, max: 5, step: 1},
+      {key: 'ding_k_type', label: '顶分型K线数', val: 3, min: 2, max: 5, step: 1},
+      {key: 'bi_min_bars', label: '最小笔K线数', val: 5, min: 3, max: 10, step: 1}
+    ],
+    inputs: ['日线K线数据 (open/high/low/close)', '分笔数据 (笔的起止点)', '中枢区间数据'],
+    output: {
+      signal: {type: 'enum', values: ['一买', '二买', '三买', '一卖', '二卖', '三卖', '中枢震荡', '无信号']},
+      score: {type: 'number', range: '0-100'},
+      confidence: {type: 'string', values: ['高', '中', '低']}
+    },
+    wiki: ['缠论原著', '笔-段-中枢定义', '三类买卖点分类'],
+    code: 'class ChanlunStrategy:\n    def __init__(self, ctx):\n        self.bi_min_bars = ctx.params.bi_min_bars\n    \n    def analyze(self, data):\n        bi = self._find_bi(data)\n        zhongshu = self._find_zhongshu(bi)\n        signal = self._check_buy_sell(zhongshu, bi[-1])\n        return {"signal": signal, "confidence": self._calc_confidence(signal)}',
+    updated: '2026-06-20', iconLarge: '🧩'
+  },
+  {
+    id: 'chip', cat: 'chip', catLabel: '筹码策略',
+    icon: '📦', name: '筹码策略', nameCN: '筹码策略',
+    desc: '基于筹码分布分析主力成本区间，识别吸筹/洗盘/拉升/出货各阶段信号。单一独立策略，使用作为一个整体。',
+    tags: ['筹码', '主力', '资金流', '支撑'],
+    ready: true, vibe: false, devLabel: null,
+    params: [
+      {key: 'chip_window', label: '筹码计算周期', val: 60, min: 20, max: 120, step: 5},
+      {key: 'dense_threshold', label: '密集区阈值%', val: 70, min: 50, max: 95, step: 5},
+      {key: 'asr_period', label: 'ASR计算周期', val: 20, min: 5, max: 60, step: 5}
+    ],
+    inputs: ['日线K线数据', '逐笔成交数据 (tick)', '大单资金流数据 (moneyflow)'],
+    output: {
+      signal: {type: 'enum', values: ['吸筹', '洗盘', '拉升', '出货', '无信号']},
+      chip_cost: {type: 'number', desc: '主力成本区间'},
+      concentration: {type: 'number', desc: '筹码集中度 0-1'}
+    },
+    wiki: ['筹码分布理论', 'ASR指标计算方法'],
+    code: 'class ChipStrategy:\n    def __init__(self, ctx):\n        self.chip_window = ctx.params.chip_window\n    \n    def analyze(self, data):\n        dist = self._calc_chip_distribution(data)\n        phase = self._identify_phase(dist)\n        return {"phase": phase, "chip_cost": dist.cost, "concentration": dist.concentration}',
+    updated: '2026-06-20', iconLarge: '📦'
+  },
+  {
+    id: 'darwin', cat: 'darwin', catLabel: '达尔文风险策略',
+    icon: '🧬', name: '达尔文风险策略', nameCN: '达尔文风险策略',
+    desc: '系统级L1层过滤器，基于多维度风险指标剔除高风险股票。作为选股系统第一道防线。',
+    tags: ['风险', '筛选', '系统级'],
+    ready: true, vibe: false, devLabel: null,
+    params: [
+      {key: 'pe_max', label: '最大PE', val: 200, min: 50, max: 500, step: 10},
+      {key: 'st_min_days', label: 'ST观察天数', val: 5, min: 1, max: 20, step: 1},
+      {key: 'liquidity_min', label: '最小日成交额(亿)', val: 0.5, min: 0.1, max: 5, step: 0.1}
+    ],
+    inputs: ['日线K线数据', 'ST/退市风险标签', '财务数据（PE/PB/营收）', '日成交额'],
+    output: {
+      pass: {type: 'boolean', desc: '是否通过风险过滤'},
+      risk_factors: {type: 'array', desc: '触发的风险因素列表'},
+      risk_score: {type: 'number', range: '0-100'}
+    },
+    wiki: ['风险管理理论', 'A股风险警示规则'],
+    code: 'class DarwinRiskStrategy:\n    def __init__(self, ctx):\n        self.pe_max = ctx.params.pe_max\n    \n    def filter(self, universe):\n        passed = []\n        for stock in universe:\n            if self._check_risk(stock):\n                passed.append(stock)\n        return passed',
+    updated: '2026-06-20', iconLarge: '🧬'
+  },
+  {
+    id: 's1', cat: 's1', catLabel: '情绪周期策略',
+    icon: '🔄', name: '市场情绪周期策略', nameCN: '市场情绪周期策略',
+    desc: '基于市场广度数据（涨跌比/涨停数/跌停数/连板高度）识别情绪周期阶段，判断市场热度与拐点。',
+    tags: ['情绪', '周期', '市场广度'],
+    ready: false, vibe: false, devLabel: 'P0 开发中',
+    params: [
+      {key: 'updown_ratio_period', label: '涨跌比周期', val: 5, min: 3, max: 20, step: 1},
+      {key: 'limitup_surge_threshold', label: '涨停潮阈值', val: 50, min: 20, max: 100, step: 5},
+      {key: 'sentiment_smooth', label: '情绪平滑因子', val: 3, min: 1, max: 10, step: 1}
+    ],
+    inputs: ['全市场涨跌家数', '涨停/跌停列表', '连板高度数据', '成交量能'],
+    output: {
+      phase: {type: 'enum', values: ['冰点', '回暖', '高潮', '退潮']},
+      sentiment_score: {type: 'number', range: '0-100'},
+      signal: {type: 'enum', values: ['积极', '谨慎', '观望', '回避']}
+    },
+    wiki: ['市场情绪周期理论', 'A股情绪指标研究'],
+    code: '# S1 市场情绪周期策略\n# 状态: P0 开发中 — 规格预览\nclass MarketSentimentCycleStrategy:\n    def __init__(self, ctx):\n        self.updown_period = ctx.params.updown_ratio_period\n    \n    def analyze(self, data):\n        ratio = self._calc_updown_ratio(data)\n        phase = self._identify_phase(ratio)\n        return {"phase": phase, "sentiment_score": self._calc_score(phase)}',
+    updated: '2026-06-24', iconLarge: '🔄'
+  },
+  {
+    id: 's2', cat: 's2', catLabel: '主力行为策略',
+    icon: '🔍', name: '主力行为追踪策略', nameCN: '主力行为追踪策略',
+    desc: '追踪主力资金动向，识别大单净流入/流出、主力持仓变化、对倒行为等异常交易信号。',
+    tags: ['主力', '资金', '大单', '持仓'],
+    ready: false, vibe: false, devLabel: 'P1 待开发',
+    params: [
+      {key: 'big_order_threshold', label: '大单阈值(万元)', val: 100, min: 50, max: 500, step: 10},
+      {key: 'net_flow_period', label: '净流计算周期', val: 5, min: 1, max: 20, step: 1},
+      {key: 'position_change_threshold', label: '持仓变动阈值%', val: 1, min: 0.1, max: 5, step: 0.1}
+    ],
+    inputs: ['逐笔成交数据', '大单资金流', '机构持仓数据', '龙虎榜数据'],
+    output: {
+      mainforce_signal: {type: 'enum', values: ['主力吸筹', '主力出货', '对倒', '无明显信号']},
+      net_flow: {type: 'number', desc: '净流入金额(万元)'},
+      position_change: {type: 'number', desc: '主力持仓变动%'}
+    },
+    wiki: ['主力行为学', '大单资金流向分析'],
+    code: '# S2 主力行为追踪策略\n# 状态: P1 待开发 — 规格预览\nclass MainForceTrackingStrategy:\n    def __init__(self, ctx):\n        self.big_order_threshold = ctx.params.big_order_threshold\n    \n    def analyze(self, data):\n        big_orders = self._filter_big_orders(data)\n        signal = self._detect_mainforce(big_orders)\n        return {"mainforce_signal": signal, "net_flow": big_orders.net_sum}',
+    updated: '2026-06-24', iconLarge: '🔍'
+  },
+  {
+    id: 's3', cat: 's3', catLabel: '趋势通道策略',
+    icon: '📐', name: '趋势通道识别策略', nameCN: '趋势通道识别策略',
+    desc: '自动识别上升/下降/横盘趋势通道，检测通道突破、趋势加速/减速等信号。',
+    tags: ['趋势', '通道', '突破'],
+    ready: false, vibe: false, devLabel: 'P1 待开发',
+    params: [
+      {key: 'channel_period', label: '通道计算周期', val: 20, min: 10, max: 60, step: 5},
+      {key: 'breakout_confirm_bars', label: '突破确认K线数', val: 3, min: 1, max: 10, step: 1},
+      {key: 'trend_slope_min', label: '最小趋势斜率', val: 0.5, min: 0.1, max: 2, step: 0.1}
+    ],
+    inputs: ['日线K线数据', '均线数据(MA5/MA10/MA20/MA60)'],
+    output: {
+      channel_type: {type: 'enum', values: ['上升通道', '下降通道', '横盘通道']},
+      channel_bound: {type: 'object', desc: '通道上下轨'},
+      signal: {type: 'enum', values: ['通道突破', '趋势加速', '趋势减速', '无信号']}
+    },
+    wiki: ['趋势通道理论', '唐奇安通道'],
+    code: '# S3 趋势通道识别策略\n# 状态: P1 待开发 — 规格预览\nclass TrendChannelStrategy:\n    def __init__(self, ctx):\n        self.channel_period = ctx.params.channel_period\n    \n    def analyze(self, data):\n        channel = self._calc_channel(data)\n        signal = self._detect_breakout(data, channel)\n        return {"channel_type": channel.type, "signal": signal}',
+    updated: '2026-06-24', iconLarge: '📐'
+  },
+  {
+    id: 's4', cat: 's4', catLabel: '涨停板策略',
+    icon: '⚡', name: '涨停板短线策略', nameCN: '涨停板短线策略',
+    desc: '分析涨停板质量（封板时间/封单量/换手率/板块带动效应），识别连板潜力和短线机会。',
+    tags: ['涨停', '短线', '封板', '连板'],
+    ready: false, vibe: false, devLabel: 'P2 待开发',
+    params: [
+      {key: 'seal_ratio_min', label: '最低封成比', val: 1.5, min: 0.5, max: 5, step: 0.1},
+      {key: 'limitup_time_before', label: '封板时间早于', val: 1030, min: 930, max: 1500, step: 30},
+      {key: 'consecutive_limit_max', label: '最大连板数', val: 5, min: 1, max: 10, step: 1}
+    ],
+    inputs: ['涨停板实时数据', '封单量/封成比数据', '板块联动数据', '换手率数据'],
+    output: {
+      quality: {type: 'enum', values: ['强板', '中板', '弱板']},
+      consecutive_potential: {type: 'number', desc: '连板潜力评分 0-100'},
+      signal: {type: 'enum', values: ['打板', '排板', '观望']}
+    },
+    wiki: ['涨停板交易策略', 'A股涨停板制度'],
+    code: '# S4 涨停板短线策略\n# 状态: P2 待开发 — 规格预览\nclass LimitUpShortTermStrategy:\n    def __init__(self, ctx):\n        self.seal_ratio_min = ctx.params.seal_ratio_min\n    \n    def analyze(self, data):\n        quality = self._assess_quality(data)\n        potential = self._calc_potential(data)\n        return {"quality": quality, "consecutive_potential": potential}',
+    updated: '2026-06-24', iconLarge: '⚡'
+  },
+  {
+    id: 's5', cat: 's5', catLabel: '风控策略',
+    icon: '🛡️', name: '多层次风险控制策略', nameCN: '多层次风险控制策略',
+    desc: '系统级叠加层，从账户/组合/个股三个层次控制风险敞口，设置动态止损止盈阈值。',
+    tags: ['风控', '止损', '敞口', '系统级'],
+    ready: false, vibe: false, devLabel: 'P2 待开发',
+    params: [
+      {key: 'max_drawdown', label: '最大回撤阈值%', val: 15, min: 5, max: 30, step: 1},
+      {key: 'single_stock_limit', label: '个股仓位上限%', val: 20, min: 5, max: 50, step: 5},
+      {key: 'stop_loss_a', label: '止损比例A', val: -5, min: -20, max: -1, step: 1}
+    ],
+    inputs: ['账户资产数据', '持仓市值数据', '市场波动率数据', '个股实时行情'],
+    output: {
+      risk_level: {type: 'enum', values: ['正常', '预警', '警戒', '强制平仓']},
+      actions: {type: 'array', desc: '建议操作列表'},
+      max_exposure: {type: 'number', desc: '建议最大敞口%'}
+    },
+    wiki: ['风险管理框架', '动态止损策略'],
+    code: '# S5 多层次风险控制策略\n# 状态: P2 待开发 — 规格预览\nclass MultiLevelRiskControlStrategy:\n    def __init__(self, ctx):\n        self.max_drawdown = ctx.params.max_drawdown\n    \n    def analyze(self, portfolio):\n        level = self._assess_risk_level(portfolio)\n        return {"risk_level": level, "actions": self._gen_actions(level)}',
+    updated: '2026-06-24', iconLarge: '🛡️'
+  },
+  {
+    id: 's6', cat: 's6', catLabel: '波浪理论策略',
+    icon: '🌊', name: '波浪理论阶段识别策略', nameCN: '波浪理论阶段识别策略',
+    desc: '基于艾略特波浪理论，识别价格走势中的驱动浪和调整浪，判断当前所处波浪阶段。',
+    tags: ['波浪理论', '驱动浪', '调整浪'],
+    ready: false, vibe: false, devLabel: 'P3 待开发',
+    params: [
+      {key: 'wave_min_bars', label: '波浪最小K线数', val: 5, min: 3, max: 20, step: 1},
+      {key: 'fib_retrace_threshold', label: '回调比例阈值', val: 0.618, min: 0.382, max: 0.886, step: 0.001},
+      {key: 'impulse_confirm', label: '驱动浪确认幅度%', val: 1, min: 0.5, max: 5, step: 0.1}
+    ],
+    inputs: ['日线/周线K线数据', '波段高低点数据'],
+    output: {
+      wave_phase: {type: 'enum', values: ['浪1', '浪2', '浪3', '浪4', '浪5', '浪A', '浪B', '浪C']},
+      trend: {type: 'enum', values: ['上升驱动', '下降调整', '上升调整', '下降驱动']},
+      completion_pct: {type: 'number', desc: '当前浪完成度%'}
+    },
+    wiki: ['艾略特波浪理论', '斐波那契与波浪'],
+    code: '# S6 波浪理论阶段识别策略\n# 状态: P3 待开发 — 规格预览\nclass WaveTheoryStrategy:\n    def __init__(self, ctx):\n        self.wave_min_bars = ctx.params.wave_min_bars\n        self.fib_retrace_threshold = ctx.params.fib_retrace_threshold\n    \n    def analyze(self, data):\n        waves = self._identify_waves(data)\n        return {"wave_phase": waves.current, "trend": waves.trend, "completion_pct": waves.completion}',
+    updated: '2026-06-24', iconLarge: '🌊'
+  },
+  {
+    id: 's7', cat: 's7', catLabel: '斐波那契策略',
+    icon: '🔢', name: '斐波那契时间周期策略', nameCN: '斐波那契时间周期策略',
+    desc: '基于斐波那契数列的时间周期和回调比例，预测关键支撑/阻力位和时间转折点。',
+    tags: ['斐波那契', '时间周期', '回调', '预测'],
+    ready: false, vibe: false, devLabel: 'P3 待开发',
+    params: [
+      {key: 'fib_levels', label: '回调线层级', val: 4, min: 1, max: 5, step: 1, opts: ['0.236/0.382', '+0.5', '+0.618', '+0.786', '+0.886']},
+      {key: 'time_period', label: '时间周期基数', val: 21, min: 8, max: 89, step: 1},
+      {key: 'extend_ratio', label: '扩展比例', val: 1.618, min: 1.0, max: 2.618, step: 0.001}
+    ],
+    inputs: ['日线/周线K线数据', '波段起止点数据'],
+    output: {
+      support_levels: {type: 'array', desc: '关键支撑位列表'},
+      resistance_levels: {type: 'array', desc: '关键阻力位列表'},
+      turn_points: {type: 'array', desc: '时间转折点列表'},
+      signal: {type: 'enum', values: ['回调到位', '反弹遇阻', '趋势延续', '无信号']}
+    },
+    wiki: ['斐波那契分析', '时间周期理论'],
+    code: '# S7 斐波那契时间周期策略\n# 状态: P3 待开发 — 规格预览\nclass FibonacciTimeCycleStrategy:\n    def __init__(self, ctx):\n        self.fib_levels = ctx.params.fib_levels\n        self.time_period = ctx.params.time_period\n    \n    def analyze(self, data):\n        levels = self._calc_fib_levels(data)\n        turns = self._calc_time_turns(data)\n        return {"support_levels": levels.support, "resistance_levels": levels.resistance, "turn_points": turns}',
+    updated: '2026-06-24', iconLarge: '🔢'
+  }
+];
+
+// ===== 状态 =====
+var currentTab = 'all';
+var currentView = 'grid';
+var selectedId = null;
+var vibeStrategies = [];
+var wizStep = 1;
+var confirmCallback = null;
+
+// ===== 初始化 =====
+function init() {
+  loadVibeStrategies();
+  renderCards();
 }
 
-function switchCat(el){
-  document.querySelectorAll('.cat-tab').forEach(function(t){t.classList.remove('active');});
-  el.classList.add('active');
-  var cat = el.textContent;
-  document.querySelectorAll('.tpl-card').forEach(function(c){
-    c.style.display = (cat === '全部' || c.getAttribute('data-cat') === cat) ? '' : 'none';
-  });
+// ===== localStorage 跨页同步 =====
+function loadVibeStrategies() {
+  try { var d = localStorage.getItem('vibe_strategies'); vibeStrategies = d ? JSON.parse(d) : []; } catch(e) { vibeStrategies = []; }
 }
-</script>
-<script>
+function saveVibeStrategies() {
+  localStorage.setItem('vibe_strategies', JSON.stringify(vibeStrategies));
+}
+
+// ===== 渲染 =====
+function getDisplayStrategies() {
+  var all = [];
+  // 系统策略
+  SYSTEM_STRATEGIES.forEach(function(s) { all.push({data: s, isSys: true}); });
+  // Vibe 自建策略
+  vibeStrategies.forEach(function(s) {
+    all.push({data: {
+      id: s.id, cat: 'vibe', catLabel: 'Vibe自建',
+      icon: '✨', name: s.name_cn || s.name, nameCN: s.name_cn || s.name,
+      desc: s.desc || 'Vibe Coding 自建策略',
+      tags: ['Vibe', '自建'],
+      ready: true, vibe: true, devLabel: null,
+      params: s.params ? Object.keys(s.params).map(function(k) {
+        var v = s.params[k];
+        return {key: k, label: k, val: typeof v === 'number' ? v : 0, min: 0, max: 100, step: 1};
+      }) : [],
+      inputs: ['用户自定义输入'],
+      output: {signal: {type: 'string'}},
+      wiki: [],
+      code: s.code || '# 用户自建策略',
+      updated: s.updated_at || s.created_at || '2026-06-24',
+      iconLarge: '✨'
+    }, isSys: false, vibeData: s});
+  });
+  // 筛选
+  var q = (document.getElementById('stSearch').value || '').toLowerCase();
+  var r = all.filter(function(item) {
+    var s = item.data;
+    if (currentTab === 'system' && !item.isSys) return false;
+    if (currentTab !== 'all' && currentTab !== 'system' && s.cat !== currentTab) return false;
+    // 搜索框筛选
+    if (q && (s.name || s.desc || s.nameCN || '').toLowerCase().indexOf(q) < 0) return false;
+    return true;
+  });
+  // 排序
+  var sort = document.getElementById('stSort').value;
+  r.sort(function(a, b) {
+    if (sort === 'name') return a.data.name.localeCompare(b.data.name);
+    if (sort === 'updated') return b.data.updated.localeCompare(a.data.updated);
+    return (a.isSys ? 0 : 1) - (b.isSys ? 0 : 1);
+  });
+  return r;
+}
+
+function renderCards() {
+  var list = getDisplayStrategies();
+  var grid = document.getElementById('stGrid');
+  var table = document.getElementById('stTableWrap');
+  var empty = document.getElementById('stEmpty');
+
+  if (list.length === 0) {
+    grid.innerHTML = ''; grid.style.display = 'none';
+    table.innerHTML = ''; table.style.display = 'none';
+    empty.style.display = 'flex';
+    document.getElementById('stEmptyText').textContent = currentTab === 'vibe' ? '暂无自建策略，点击上方「创建策略」使用 Vibe Coding 生成' : currentTab === 'system' ? '暂无系统策略' : '当前分类暂无策略，请调整筛选条件';
+    return;
+  }
+  empty.style.display = 'none';
+
+  if (currentView === 'grid') {
+    grid.style.display = '';
+    table.style.display = 'none';
+    var html = '';
+    list.forEach(function(item) {
+      var s = item.data;
+      var lockCls = s.ready ? '' : 'locked';
+      var selCls = selectedId === s.id ? 'selected' : '';
+      var badge = s.vibe ? '<span class="badge badge-vibe">Vibe自建</span>' : '<span class="badge badge-system">系统策略</span>';
+      var devBadge = s.devLabel ? '<span class="badge badge-' + (s.devLabel.indexOf('P0') >= 0 ? 'p0' : s.devLabel.indexOf('P1') >= 0 ? 'p1' : s.devLabel.indexOf('P2') >= 0 ? 'p2' : 'p3') + '">' + s.devLabel + '</span>' : '';
+      html += '<div class="st-card ' + lockCls + ' ' + selCls + '" data-id="' + s.id + '" onclick="selectCard(\'' + s.id + '\')">' +
+        '<div class="card-icon">' + s.icon + '</div>' +
+        '<h4>' + s.name + '</h4>' +
+        '<div class="card-desc">' + s.desc + '</div>' +
+        '<div class="card-tags">' + s.tags.map(function(t){return '<span>' + t + '</span>';}).join('') + '</div>' +
+        '<div class="card-status">' + badge + devBadge + '</div>' +
+        '</div>';
+    });
+    grid.innerHTML = html;
+  } else {
+    grid.style.display = 'none';
+    table.style.display = '';
+    var html2 = '<table class="st-table"><thead><tr><th onclick="sortBy(\'name\')">策略名称</th><th onclick="sortBy(\'type\')">类型</th><th onclick="sortBy(\'cat\')">分类</th><th>参数数量</th><th onclick="sortBy(\'updated\')">更新时间</th><th>操作</th></tr></thead><tbody>';
+    list.forEach(function(item) {
+      var s = item.data;
+      var typeLabel = s.vibe ? 'Vibe自建' : '系统策略';
+      html2 += '<tr><td>' + s.icon + ' ' + s.name + '</td><td>' + typeLabel + '</td><td>' + s.catLabel + '</td><td>' + (s.params ? s.params.length : 0) + '</td><td>' + s.updated + '</td>' +
+        '<td class="tbl-actions">' +
+        '<button onclick="event.stopPropagation();selectCard(\'' + s.id + '\')">查看</button>' +
+        (s.vibe ? '<button onclick="event.stopPropagation();editVibe(\'' + s.id + '\')">编辑</button><button onclick="event.stopPropagation();deleteStrategy(\'' + s.id + '\')">删除</button>' : '<button onclick="event.stopPropagation();copyToVibe(\'' + s.id + '\')">复制</button>') +
+        '</td></tr>';
+    });
+    html2 += '</tbody></table>';
+    table.innerHTML = html2;
+  }
+}
+
+// ===== 筛选切换 =====
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.st-tab').forEach(function(t){t.classList.toggle('active', t.dataset.tab === tab);});
+  closeDetail();
+  renderCards();
+}
+
+function filterCards() { renderCards(); }
+function applySort() { renderCards(); }
+
+function switchView(v) {
+  currentView = v;
+  document.getElementById('viewGrid').classList.toggle('active', v === 'grid');
+  document.getElementById('viewTable').classList.toggle('active', v === 'table');
+  renderCards();
+}
+
+// ===== 卡片选择 & 详情面板 =====
+function selectCard(id) {
+  // 找数据
+  var found = null;
+  var isSys = false;
+  var vibeRef = null;
+  for (var i = 0; i < SYSTEM_STRATEGIES.length; i++) {
+    if (SYSTEM_STRATEGIES[i].id === id) { found = SYSTEM_STRATEGIES[i]; isSys = true; break; }
+  }
+  if (!found) {
+    for (var j = 0; j < vibeStrategies.length; j++) {
+      if (vibeStrategies[j].id === id) { found = vibeStrategies[j]; vibeRef = vibeStrategies[j]; break; }
+    }
+    if (found) { found = {id: found.id, cat: 'vibe', catLabel: 'Vibe自建', icon: '✨', name: found.name_cn || found.name, nameCN: found.name_cn || found.name, desc: found.desc || '', tags: ['Vibe','自建'], ready: true, vibe: true, devLabel: null, params: [], inputs: [], output: {}, wiki: [], code: found.code || '', updated: found.updated_at || found.created_at || '2026-06-24', iconLarge: '✨' }; }
+  }
+  if (!found) return;
+
+  selectedId = id;
+  document.querySelectorAll('.st-card').forEach(function(c){c.classList.toggle('selected', c.dataset.id === id);});
+
+  var detail = document.getElementById('stDetail');
+  detail.classList.add('open');
+
+  // Header
+  document.getElementById('detailTitle').innerHTML = '<span style="font-size:18px;">' + (found.iconLarge || found.icon) + '</span> ' + (found.nameCN || found.name);
+
+  // Body — 6 sections
+  var sHtml = '';
+
+  // ① 概览
+  sHtml += '<div class="st-detail-section"><div class="st-detail-section-header" onclick="toggleSection(this)"><span>' + (found.icon || '📋') + ' ' + (found.nameCN || found.name) + '</span><span class="sec-arrow">▼</span></div>' +
+    '<div class="st-detail-section-body"><div style="margin-bottom:var(--space-4);"><span style="font-size:11px;color:var(--text-muted);">分类：</span>' + found.catLabel +
+    (found.devLabel ? ' <span class="badge badge-p0">' + found.devLabel + '</span>' : '') +
+    (found.vibe ? ' <span class="badge badge-vibe">Vibe自建</span>' : ' <span class="badge badge-system">系统策略</span>') +
+    '</div><p style="font-size:12px;line-height:1.6;">' + found.desc + '</p></div></div>';
+
+  // ② 参数面板
+  sHtml += '<div class="st-detail-section"><div class="st-detail-section-header" onclick="toggleSection(this)"><span>⚙️ 参数设置</span><span class="sec-arrow">▼</span></div>' +
+    '<div class="st-detail-section-body">';
+  if (found.params && found.params.length) {
+    found.params.forEach(function(p) {
+      var disabled = !found.vibe ? 'disabled' : '';
+      sHtml += '<div class="param-row"><label>' + p.label + '</label>' +
+        '<input type="range" min="' + p.min + '" max="' + p.max + '" step="' + p.step + '" value="' + p.val + '" ' + disabled + ' oninput="this.nextElementSibling.textContent=this.value">' +
+        '<span class="param-val">' + p.val + '</span></div>';
+    });
+  } else {
+    sHtml += '<span class="empty-hint">暂无可调参数</span>';
+  }
+  sHtml += '</div></div>';
+
+  // ③ 输入说明
+  sHtml += '<div class="st-detail-section"><div class="st-detail-section-header" onclick="toggleSection(this)"><span>📥 数据输入</span><span class="sec-arrow">▼</span></div>' +
+    '<div class="st-detail-section-body">';
+  if (found.inputs && found.inputs.length) {
+    found.inputs.forEach(function(inp) { sHtml += '<div style="margin-bottom:4px;">• ' + inp + '</div>'; });
+  } else {
+    sHtml += '<span class="empty-hint">暂无输入说明</span>';
+  }
+  sHtml += '</div></div>';
+
+  // ④ 输出预览
+  sHtml += '<div class="st-detail-section"><div class="st-detail-section-header" onclick="toggleSection(this)"><span>📤 输出预览</span><span class="sec-arrow">▼</span></div>' +
+    '<div class="st-detail-section-body"><code class="hl-json">' + syntaxHighlight(escapeHtml(JSON.stringify(found.output, null, 2)), 'json') + '</code></div></div>';
+
+  // ⑤ 关联概念
+  sHtml += '<div class="st-detail-section"><div class="st-detail-section-header" onclick="toggleSection(this)"><span>📚 关联概念</span><span class="sec-arrow">▼</span></div>' +
+    '<div class="st-detail-section-body">';
+  if (found.wiki && found.wiki.length) {
+    found.wiki.forEach(function(w) { sHtml += '<div style="margin-bottom:4px;">📄 ' + w + '</div>'; });
+  } else {
+    sHtml += '<span class="empty-hint">暂无关联概念</span>';
+  }
+  sHtml += '</div></div>';
+
+  // ⑥ 代码预览
+  sHtml += '<div class="st-detail-section"><div class="st-detail-section-header" onclick="toggleSection(this)"><span>💻 策略代码</span><span class="sec-arrow">▼</span></div>' +
+    '<div class="st-detail-section-body"><code class="hl-py">' + syntaxHighlight(escapeHtml(found.code || '# 暂无代码'), 'py') + '</code></div></div>';
+
+  document.getElementById('detailBody').innerHTML = sHtml;
+
+  // Footer buttons
+  var fHtml = '';
+  if (!found.ready && !found.vibe) {
+    fHtml += '<button class="btn btn-secondary" disabled style="opacity:.4;" title="该策略尚在开发中">🔒 使用此策略</button>';
+    fHtml += '<button class="btn btn-secondary" onclick="copyToVibe(\'' + found.id + '\')">📋 复制到自建</button>';
+  } else if (found.vibe) {
+    fHtml += '<button class="btn btn-primary" onclick="showToast(\'✅ 策略 ' + (found.nameCN || found.name) + ' 已加入选股列表\')">✅ 使用此策略</button>';
+    fHtml += '<button class="btn btn-secondary" onclick="editVibe(\'' + found.id + '\')">✏️ 编辑</button>';
+    fHtml += '<button class="btn btn-secondary" onclick="deleteStrategy(\'' + found.id + '\')">🗑️ 删除</button>';
+  } else {
+    fHtml += '<button class="btn btn-primary" onclick="showToast(\'✅ 策略 ' + (found.nameCN || found.name) + ' 已加入选股列表\')">✅ 使用此策略</button>';
+    fHtml += '<button class="btn btn-secondary" onclick="copyToVibe(\'' + found.id + '\')">📋 复制到自建</button>';
+  }
+  document.getElementById('detailFooter').innerHTML = fHtml;
+}
+
+function closeDetail() {
+  document.getElementById('stDetail').classList.remove('open', 'collapsed');
+  document.querySelectorAll('.st-card').forEach(function(c){c.classList.remove('selected');});
+  selectedId = null;
+  var btn = document.getElementById('detailToggleBtn');
+  if (btn) btn.textContent = '▶';
+}
+
+function toggleDetailCollapse() {
+  var detail = document.getElementById('stDetail');
+  if (!detail.classList.contains('open')) return;
+  detail.classList.toggle('collapsed');
+  var btn = document.getElementById('detailToggleBtn');
+  if (btn) btn.textContent = detail.classList.contains('collapsed') ? '◀' : '▶';
+}
+
+function toggleSection(el) {
+  var body = el.nextElementSibling;
+  body.classList.toggle('collapsed');
+  el.querySelector('.sec-arrow').classList.toggle('collapsed');
+}
+
+// ===== 创建弹窗 (Vibe Coding 3步向导) =====
+var genResult = null;
+
+function openCreateModal() {
+  wizStep = 1;
+  genResult = null;
+  document.getElementById('vibeInput').value = '';
+  document.getElementById('codePreview').value = '';
+  document.getElementById('saveNameCN').value = '';
+  document.getElementById('genLoading').classList.remove('show');
+  document.getElementById('genError').style.display = 'none';
+  document.getElementById('wizBack').style.display = 'none';
+  document.getElementById('wizNext').textContent = '下一步 →';
+  document.getElementById('modalTitle').textContent = '✨ Vibe Coding 创建策略';
+  showWizStep(1);
+  document.getElementById('stModal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('stModal').classList.remove('open');
+}
+
+function showWizStep(n) {
+  document.querySelectorAll('.st-wizard-step').forEach(function(s){s.classList.remove('active');});
+  document.getElementById('wizStep' + n).classList.add('active');
+  wizStep = n;
+  document.getElementById('wizBack').style.display = n > 1 ? '' : 'none';
+  document.getElementById('wizNext').textContent = n === 3 ? '💾 保存' : '下一步 →';
+}
+
+function wizNext() {
+  if (wizStep === 1) {
+    var input = document.getElementById('vibeInput').value.trim();
+    if (!input) { showToast('请先输入策略描述'); return; }
+    // 模拟AI生成
+    document.getElementById('genLoading').classList.add('show');
+    document.getElementById('genError').style.display = 'none';
+    var btn = document.getElementById('wizNext');
+    btn.disabled = true;
+    btn.textContent = '生成中...';
+    setTimeout(function() {
+      document.getElementById('genLoading').classList.remove('show');
+      btn.disabled = false;
+      // 生成参数预览
+      genResult = generateMockStrategy(input);
+      renderParamPreview(genResult);
+      document.getElementById('codePreview').value = genResult.code;
+      document.getElementById('codePreview').readOnly = false;
+      document.getElementById('saveNameCN').value = genResult.name_cn;
+      showWizStep(2);
+    }, 2000);
+  } else if (wizStep === 2) {
+    if (!document.getElementById('codePreview').value.trim()) { showToast('策略代码不能为空'); return; }
+    genResult.code = document.getElementById('codePreview').value;
+    showWizStep(3);
+  } else if (wizStep === 3) {
+    saveStrategy();
+  }
+}
+
+function wizPrev() {
+  if (wizStep === 2) showWizStep(1);
+  else if (wizStep === 3) showWizStep(2);
+}
+
+function fillExample(el) {
+  document.getElementById('vibeInput').value = el.textContent;
+}
+
+function generateMockStrategy(desc) {
+  var id = 'vibe_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+  var shortName = desc.substring(0, 8).replace(/[^a-zA-Z0-9一-龥]/g, '') || 'my_strategy';
+  var enName = shortName.toLowerCase().replace(/\s/g, '_') + '_strategy';
+  return {
+    id: id,
+    name: enName,
+    name_cn: shortName + '策略',
+    desc: desc,
+    params: {period: 14, threshold: 30, holding_days: 5},
+    code: '# ' + shortName + '策略\n# 由 Vibe Coding 自动生成\n\ninitialize:\n  - 计算指标：根据描述自动提取周期参数\n  - 设置买入条件：满足触发条件时执行\n  - 设置卖出条件：止盈止损或持仓到期\n\nhandle_bar:\n  # 买入逻辑\n  if 买入条件满足:\n    enter_position(size=计算仓位)\n    \n  # 卖出逻辑  \n  if 卖出条件满足 or 达到持仓天数:\n    exit_position()\n\n# 参数说明\n# - period: ' + desc.substring(0, 10) + '相关周期\n# - threshold: 触发阈值\n# - holding_days: 最大持仓天数',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+}
+
+function renderParamPreview(result) {
+  var html = '';
+  var keys = Object.keys(result.params || {});
+  keys.forEach(function(k) {
+    html += '<div class="pp-item"><label>' + labelForKey(k) + '</label><input type="number" value="' + result.params[k] + '" disabled></div>';
+  });
+  if (!html) html = '<div style="font-size:12px;color:var(--text-muted);">AI 未提取到可调参数</div>';
+  document.getElementById('paramPreview').innerHTML = html;
+}
+
+function labelForKey(k) {
+  var labels = {period: '周期', threshold: '阈值', holding_days: '持仓天数', rsi_period: 'RSI周期', ma_fast: '快线', ma_slow: '慢线', oversold: '超卖值'};
+  return labels[k] || k;
+}
+
+function saveStrategy() {
+  var nameCN = document.getElementById('saveNameCN').value.trim();
+  if (!nameCN) { showToast('请输入策略名称'); return; }
+  // 系统自动生成英文标识（中文字符→拼音首字母缩写 + 时间戳）
+  var name = autoGenEngName(nameCN);
+
+  // 检查重名
+  for (var i = 0; i < vibeStrategies.length; i++) {
+    if (vibeStrategies[i].name === name || vibeStrategies[i].name_cn === nameCN) {
+      if (!confirm('名称已存在，是否自动追加数字后缀？')) return;
+      name = name + '_' + (vibeStrategies.length + 1);
+      nameCN = nameCN + (vibeStrategies.length + 1);
+      break;
+    }
+  }
+
+  var strategy = {
+    id: 'vibe_' + Date.now(),
+    name: name,
+    name_cn: nameCN,
+    desc: document.getElementById('vibeInput').value.trim(),
+    params: genResult ? genResult.params : {},
+    code: document.getElementById('codePreview').value || '',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+
+  vibeStrategies.push(strategy);
+  saveVibeStrategies();
+  closeModal();
+  renderCards();
+  showToast('✅ 策略「' + nameCN + '」已保存到自建策略');
+}
+
+function autoGenEngName(cn) {
+  // 中文→拼音首字母缩写 + 时间戳（原型简易方案，上线后使用完整拼音库）
+  var pinyinMap = {
+    '策': 'ce', '略': 'lve', '模': 'mo', '板': 'ban', '策': 'ce',
+    '量': 'liang', '价': 'jia', '缠': 'chan', '论': 'lun', '筹': 'chou', '码': 'ma',
+    'RSI': 'rsi', '超': 'chao', '卖': 'mai', '金': 'jin', '叉': 'cha',
+    '反': 'fan', '弹': 'tan', '短': 'duan', '线': 'xian', '趋': 'qu', '势': 'shi',
+    'MACD': 'macd', '底': 'di', '背': 'bei', '离': 'li', '中': 'zhong',
+    '布': 'bu', '林': 'lin', '带': 'dai', 'KDJ': 'kdj', '低': 'di', '吸': 'xi',
+    '波': 'bo', '动': 'dong', '回': 'hui', '调': 'tiao', '突': 'tu', '破': 'po',
+    '均': 'jun', '值': 'zhi', '回': 'gui'
+  };
+  var slug = '';
+  for (var i = 0; i < cn.length; i++) {
+    var ch = cn[i];
+    if (ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9') {
+      slug += ch.toLowerCase();
+    } else if (pinyinMap[ch]) {
+      slug += pinyinMap[ch];
+    } else if (ch.match(/[一-鿿]/)) {
+      slug += 'x';  // 未收录的中文用x占位
+    }
+  }
+  slug = slug.replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+  return slug.substring(0, 30) || 'strategy_' + Date.now();
+}
+
+// ===== 编辑/删除/复制 =====
+function editVibe(id) {
+  // 编辑功能：重新打开创建弹窗（简化模拟）
+  for (var i = 0; i < vibeStrategies.length; i++) {
+    if (vibeStrategies[i].id === id) {
+      var vs = vibeStrategies[i];
+      document.getElementById('modalTitle').textContent = '✏️ 编辑策略';
+      document.getElementById('vibeInput').value = vs.desc || '';
+      document.getElementById('codePreview').value = vs.code || '';
+      document.getElementById('codePreview').readOnly = false;
+      document.getElementById('saveNameCN').value = vs.name_cn || vs.name;
+      document.getElementById('stModal').classList.add('open');
+      showWizStep(2);
+      return;
+    }
+  }
+}
+
+function deleteStrategy(id) {
+  // 检查是否为Vibe策略
+  var found = null;
+  for (var i = 0; i < vibeStrategies.length; i++) {
+    if (vibeStrategies[i].id === id) { found = vibeStrategies[i]; break; }
+  }
+  if (!found) { showToast('系统策略不可删除'); return; }
+
+  document.getElementById('confirmTitle').textContent = '🗑️ 确认删除策略';
+  document.getElementById('confirmMsg').innerHTML = '将永久删除策略「' + (found.name_cn || found.name) + '」<br>此操作不可恢复。' +
+    '<br><br><span style="color:#e53935;font-size:11px;">⚠️ 该策略可能在选股系统 L3 中被使用，删除后引用将自动移除。</span>';
+  document.getElementById('confirmOkBtn').textContent = '确认删除';
+  confirmCallback = function() {
+    vibeStrategies = vibeStrategies.filter(function(s){return s.id !== id;});
+    saveVibeStrategies();
+    closeDetail();
+    renderCards();
+    showToast('🗑️ 策略已删除');
+  };
+  document.getElementById('stConfirm').classList.add('open');
+}
+
+function closeConfirm() { document.getElementById('stConfirm').classList.remove('open'); confirmCallback = null; }
+function confirmAction() { if (confirmCallback) { confirmCallback(); confirmCallback = null; } closeConfirm(); }
+
+function copyToVibe(id) {
+  // 从系统策略复制到自建
+  var found = null;
+  for (var i = 0; i < SYSTEM_STRATEGIES.length; i++) {
+    if (SYSTEM_STRATEGIES[i].id === id) { found = SYSTEM_STRATEGIES[i]; break; }
+  }
+  if (!found) { showToast('未找到策略'); return; }
+
+  var baseName = found.name.replace(/策略$/, '').trim();
+  var copyName = baseName + '_copy_' + (vibeStrategies.length + 1);
+  var copyNameCN = baseName + '策略 - 副本' + (vibeStrategies.length + 1);
+
+  vibeStrategies.push({
+    id: 'vibe_' + Date.now(),
+    name: copyName,
+    name_cn: copyNameCN,
+    desc: found.desc + '（从系统模板复制）',
+    params: {},
+    code: found.code || '# 从系统模板复制',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  });
+  saveVibeStrategies();
+  renderCards();
+  showToast('📋 已复制到自建策略：' + copyNameCN);
+}
+
+// ===== 辅助 =====
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function syntaxHighlight(s, lang) {
+  if (lang === 'json') {
+    s = s.replace(/("(?:[^"\\]|\\.)*")\s*:/g, '<span class="hl-k">$1</span>:');
+    s = s.replace(/:(\s*)("(?:[^"\\]|\\.)*")/g, ': $1<span class="hl-s">$2</span>');
+    s = s.replace(/:\s*(\d+\.?\d*)/g, ': <span class="hl-n">$1</span>');
+    s = s.replace(/:\s*(true|false|null)/g, ': <span class="hl-b">$1</span>');
+  } else if (lang === 'py') {
+    s = s.replace(/(#[^\n]*)/g, '<span class="hl-c">$1</span>');
+    s = s.replace(/(\bdef\s+)(\w+)/g, '$1<span class="hl-f">$2</span>');
+    s = s.replace(/(\bclass\s+)(\w+)/g, '$1<span class="hl-cl">$2</span>');
+    s = s.replace(/('(?:[^'\\]|\\.)*')/g, '<span class="hl-s">$1</span>');
+    s = s.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="hl-s">$1</span>');
+    s = s.replace(/\b(if|elif|else|for|while|return|import|from|def|class|try|except|finally|with|as|pass|break|continue|in|not|and|or|True|False|None)\b/g, '<span class="hl-kw">$1</span>');
+    s = s.replace(/\b(\d+\.?\d*)\b/g, '<span class="hl-n">$1</span>');
+  }
+  return s;
+}
+
+function showToast(msg) {
+  var t = document.getElementById('stToast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(function(){t.classList.remove('show');}, 3000);
+}
+
+// ===== 表格排序 =====
+function sortBy(key) {
+  var sort = document.getElementById('stSort');
+  var optMap = {name: 'name', type: 'type', cat: 'name', updated: 'updated'};
+  if (optMap[key]) sort.value = optMap[key];
+  renderCards();
+}
+
+// ===== sidebar =====
 var sidebarCollapsed = true;
 function toggleSidebar(){
   sidebarCollapsed = !sidebarCollapsed;
@@ -165,6 +1092,9 @@ function toggleSidebar(){
   var btn=document.querySelector('.sidebar-toggle');
   if(btn)btn.textContent='▶';
 })();
+
+// ===== 启动 =====
+init();
 </script>
 </body>
 </html>
