@@ -61,7 +61,7 @@ export function exportReview(startDate, endDate) {
   return request.post(`${BASE}/review/export`, { start_date: startDate, end_date: endDate })
 }
 
-// ── 虚拟验证复盘 ──
+// ── 策略沙箱（原虚拟验证）— 待废弃，复盘中心已替代 ──
 
 export function getVirtualReviews() {
   return request.get(`${BASE}/virtual-reviews`)

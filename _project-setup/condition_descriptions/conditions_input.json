@@ -1,0 +1,3423 @@
+[
+  {
+    "condition_id": "price_above",
+    "name": "价格大于N元",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "价格阈值"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 10.0,
+        "min": 0.1,
+        "max": 1000.0,
+        "unit": "元"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "price_below",
+    "name": "价格小于N元",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "价格阈值"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 5.0,
+        "min": 0.1,
+        "max": 1000.0,
+        "unit": "元"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "price_between",
+    "name": "价格在N-M元之间",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "价格区间"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "lower": {
+        "default": 5.0,
+        "min": 0.1,
+        "max": 1000.0,
+        "unit": "元"
+      },
+      "upper": {
+        "default": 20.0,
+        "min": 0.1,
+        "max": 1000.0,
+        "unit": "元"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "price_increase_pct",
+    "name": "涨幅大于N%",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "涨跌幅"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 3.0,
+        "min": 0.5,
+        "max": 20.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "price_decrease_pct",
+    "name": "跌幅大于N%",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "涨跌幅"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 3.0,
+        "min": 0.5,
+        "max": 20.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "consecutive_increase",
+    "name": "连续N日上涨",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "连续走势"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "days": {
+        "default": 3,
+        "min": 2,
+        "max": 10,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "consecutive_decrease",
+    "name": "连续N日下跌",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "连续走势"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "days": {
+        "default": 3,
+        "min": 2,
+        "max": 10,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "new_high_ndays",
+    "name": "创N日新高",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "创新高"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 60,
+        "min": 10,
+        "max": 250,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "new_low_ndays",
+    "name": "创N日新低",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "创新低"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 60,
+        "min": 10,
+        "max": 250,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "amplitude_above",
+    "name": "振幅大于N%",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "波动幅度"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 5.0,
+        "min": 1.0,
+        "max": 20.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "limit_up",
+    "name": "涨停",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "涨跌停"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/涨停板不同阶段.md",
+      "concepts/涨停量价关系.md"
+    ]
+  },
+  {
+    "condition_id": "limit_down",
+    "name": "跌停",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "涨跌停"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "price_above_ma",
+    "name": "收盘价站上N日均线",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "均线关系"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "ma_period": {
+        "default": 60,
+        "min": 5,
+        "max": 250,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md",
+      "concepts/均线相交面积法.md"
+    ]
+  },
+  {
+    "condition_id": "price_below_ma",
+    "name": "收盘价跌破N日均线",
+    "category": "价格与行情类",
+    "category_path": [
+      "价格与行情类",
+      "均线关系"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "ma_period": {
+        "default": 60,
+        "min": 5,
+        "max": 250,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md"
+    ]
+  },
+  {
+    "condition_id": "volume_spike",
+    "name": "成交量放大超N倍",
+    "category": "成交量与资金流向类",
+    "category_path": [
+      "成交量与资金流向类",
+      "成交量异动"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "ma_period": {
+        "default": 20,
+        "min": 5,
+        "max": 60,
+        "unit": "日"
+      },
+      "multiplier": {
+        "default": 1.5,
+        "min": 0.5,
+        "max": 5.0,
+        "unit": "倍"
+      }
+    },
+    "wiki_sources": [
+      "concepts/放量止跌与放量止涨.md",
+      "concepts/量价分析确认与异常.md",
+      "concepts/量价分析三大定律.md"
+    ]
+  },
+  {
+    "condition_id": "volume_shrink",
+    "name": "成交量萎缩至N倍以下",
+    "category": "成交量与资金流向类",
+    "category_path": [
+      "成交量与资金流向类",
+      "成交量异动"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "ma_period": {
+        "default": 20,
+        "min": 5,
+        "max": 60,
+        "unit": "日"
+      },
+      "multiplier": {
+        "default": 0.5,
+        "min": 0.1,
+        "max": 1.0,
+        "unit": "倍"
+      }
+    },
+    "wiki_sources": [
+      "concepts/地量地价.md",
+      "concepts/缩量下跌与缩量上涨.md"
+    ]
+  },
+  {
+    "condition_id": "volume_price_up",
+    "name": "量价齐升（放量上涨）",
+    "category": "成交量与资金流向类",
+    "category_path": [
+      "成交量与资金流向类",
+      "量价配合"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "volume_multiplier": {
+        "default": 1.2,
+        "min": 1.0,
+        "max": 5.0,
+        "unit": "倍"
+      },
+      "price_increase": {
+        "default": 1.0,
+        "min": 0.5,
+        "max": 10.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": [
+      "concepts/量价分析确认与异常.md",
+      "concepts/量价分析三大定律.md"
+    ]
+  },
+  {
+    "condition_id": "volume_price_down",
+    "name": "放量下跌",
+    "category": "成交量与资金流向类",
+    "category_path": [
+      "成交量与资金流向类",
+      "量价配合"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "volume_multiplier": {
+        "default": 1.2,
+        "min": 1.0,
+        "max": 5.0,
+        "unit": "倍"
+      },
+      "price_decrease": {
+        "default": 1.0,
+        "min": 0.5,
+        "max": 10.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": [
+      "concepts/量价分析确认与异常.md",
+      "concepts/恐慌出逃.md"
+    ]
+  },
+  {
+    "condition_id": "volume_price_divergence",
+    "name": "量价背离",
+    "category": "成交量与资金流向类",
+    "category_path": [
+      "成交量与资金流向类",
+      "量价配合"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 5,
+        "min": 3,
+        "max": 20,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/量价背离.md",
+      "concepts/背离的级别与共振.md"
+    ]
+  },
+  {
+    "condition_id": "volume_dry",
+    "name": "地量（缩至地量水平）",
+    "category": "成交量与资金流向类",
+    "category_path": [
+      "成交量与资金流向类",
+      "成交量异动"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "ma_period": {
+        "default": 20,
+        "min": 5,
+        "max": 60,
+        "unit": "日"
+      },
+      "threshold": {
+        "default": 0.3,
+        "min": 0.1,
+        "max": 0.6,
+        "unit": "倍"
+      }
+    },
+    "wiki_sources": [
+      "concepts/地量地价.md",
+      "concepts/地量倍量.md"
+    ]
+  },
+  {
+    "condition_id": "money_flow_in",
+    "name": "主力资金净流入大于N元",
+    "category": "成交量与资金流向类",
+    "category_path": [
+      "成交量与资金流向类",
+      "资金流向"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "moneyflow",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 10000000.0,
+        "min": 1000000.0,
+        "max": 1000000000.0,
+        "unit": "元"
+      }
+    },
+    "wiki_sources": [
+      "concepts/主力资金流向分析.md",
+      "concepts/资金流向与价格关系.md"
+    ]
+  },
+  {
+    "condition_id": "money_flow_out",
+    "name": "主力资金净流出大于N元",
+    "category": "成交量与资金流向类",
+    "category_path": [
+      "成交量与资金流向类",
+      "资金流向"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "moneyflow",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 10000000.0,
+        "min": 1000000.0,
+        "max": 1000000000.0,
+        "unit": "元"
+      }
+    },
+    "wiki_sources": [
+      "concepts/主力资金流向分析.md"
+    ]
+  },
+  {
+    "condition_id": "large_order_ratio",
+    "name": "大单成交占比大于N%",
+    "category": "成交量与资金流向类",
+    "category_path": [
+      "成交量与资金流向类",
+      "大单分析"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "moneyflow",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 30.0,
+        "min": 10.0,
+        "max": 80.0,
+        "unit": "%"
+      },
+      "lookback": {
+        "default": 5,
+        "min": 1,
+        "max": 20,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/大单资金流向.md"
+    ]
+  },
+  {
+    "condition_id": "turnover_rate_above",
+    "name": "换手率大于N%",
+    "category": "成交量与资金流向类",
+    "category_path": [
+      "成交量与资金流向类",
+      "换手率"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily_basic",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 5.0,
+        "min": 1.0,
+        "max": 50.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "turnover_rate_below",
+    "name": "换手率小于N%",
+    "category": "成交量与资金流向类",
+    "category_path": [
+      "成交量与资金流向类",
+      "换手率"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily_basic",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 1.0,
+        "min": 0.1,
+        "max": 10.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "macd_jincha",
+    "name": "MACD金叉",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "MACD类"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/liangjia-xingtai-MACD.md",
+      "concepts/MACD多周期结合回调买入法.md",
+      "concepts/缠中说禅MACD定律.md"
+    ]
+  },
+  {
+    "condition_id": "macd_sicha",
+    "name": "MACD死叉",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "MACD类"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/liangjia-xingtai-MACD.md",
+      "concepts/MACD多周期结合回调买入法.md",
+      "concepts/缠中说禅MACD定律.md"
+    ]
+  },
+  {
+    "condition_id": "macd_top_divergence",
+    "name": "MACD顶背离",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "MACD类"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 20,
+        "min": 10,
+        "max": 60,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/缠中说禅MACD定律.md",
+      "concepts/背离的级别与共振.md",
+      "concepts/背驰.md"
+    ]
+  },
+  {
+    "condition_id": "macd_bottom_divergence",
+    "name": "MACD底背离",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "MACD类"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 20,
+        "min": 10,
+        "max": 60,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/缠中说禅MACD定律.md",
+      "concepts/背驰.md",
+      "concepts/背离的级别与共振.md"
+    ]
+  },
+  {
+    "condition_id": "macd_zero_cross",
+    "name": "MACD上穿零轴",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "MACD类"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/liangjia-xingtai-MACD.md"
+    ]
+  },
+  {
+    "condition_id": "kdj_jincha",
+    "name": "KDJ低位金叉",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "KDJ类"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {
+      "k_threshold": {
+        "default": 30,
+        "min": 10,
+        "max": 50,
+        "unit": ""
+      }
+    },
+    "wiki_sources": [
+      "concepts/liangjia-xingtai-KDJ.md"
+    ]
+  },
+  {
+    "condition_id": "kdj_oversold",
+    "name": "KDJ超卖（J值<20）",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "KDJ类"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {
+      "j_threshold": {
+        "default": 20,
+        "min": 5,
+        "max": 30,
+        "unit": ""
+      }
+    },
+    "wiki_sources": [
+      "concepts/liangjia-xingtai-KDJ.md"
+    ]
+  },
+  {
+    "condition_id": "kdj_overbought",
+    "name": "KDJ超买（J值>80）",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "KDJ类"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {
+      "j_threshold": {
+        "default": 80,
+        "min": 70,
+        "max": 95,
+        "unit": ""
+      }
+    },
+    "wiki_sources": [
+      "concepts/liangjia-xingtai-KDJ.md"
+    ]
+  },
+  {
+    "condition_id": "rsi_above",
+    "name": "RSI大于N（进入强势区）",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "RSI类"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 50,
+        "min": 30,
+        "max": 80,
+        "unit": ""
+      },
+      "period": {
+        "default": 14,
+        "min": 6,
+        "max": 30,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/RSI指标详解.md"
+    ]
+  },
+  {
+    "condition_id": "rsi_below",
+    "name": "RSI小于N（进入弱势区）",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "RSI类"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 30,
+        "min": 20,
+        "max": 50,
+        "unit": ""
+      },
+      "period": {
+        "default": 14,
+        "min": 6,
+        "max": 30,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/RSI指标详解.md"
+    ]
+  },
+  {
+    "condition_id": "rsi_overbought",
+    "name": "RSI超买（>70）",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "RSI类"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 70,
+        "min": 65,
+        "max": 90,
+        "unit": ""
+      },
+      "period": {
+        "default": 14,
+        "min": 6,
+        "max": 30,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/RSI指标详解.md"
+    ]
+  },
+  {
+    "condition_id": "boll_mid_break",
+    "name": "股价突破BOLL中轨",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "布林带"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {
+      "period": {
+        "default": 20,
+        "min": 10,
+        "max": 60,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/布林带指标详解.md"
+    ]
+  },
+  {
+    "condition_id": "boll_upper_break",
+    "name": "股价突破BOLL上轨",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "布林带"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {
+      "period": {
+        "default": 20,
+        "min": 10,
+        "max": 60,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/布林带指标详解.md"
+    ]
+  },
+  {
+    "condition_id": "boll_lower_break",
+    "name": "股价跌破BOLL下轨",
+    "category": "技术指标条件",
+    "category_path": [
+      "技术指标条件",
+      "布林带"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "technical_indicators",
+    "data_readiness": "ready",
+    "default_params": {
+      "period": {
+        "default": 20,
+        "min": 10,
+        "max": 60,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/布林带指标详解.md"
+    ]
+  },
+  {
+    "condition_id": "granville_buy1",
+    "name": "格兰维尔买点1（上穿买入）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "格兰维尔八大法则"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "short_period": {
+        "default": 5,
+        "min": 2,
+        "max": 30,
+        "unit": "日"
+      },
+      "long_period": {
+        "default": 20,
+        "min": 5,
+        "max": 120,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md",
+      "concepts/均线收敛与发散的时间判断.md",
+      "concepts/均线相交面积法.md"
+    ]
+  },
+  {
+    "condition_id": "granville_buy2",
+    "name": "格兰维尔买点2（回抽不破买入）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "格兰维尔八大法则"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "ma_period": {
+        "default": 20,
+        "min": 5,
+        "max": 120,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md",
+      "concepts/均线相交面积法.md"
+    ]
+  },
+  {
+    "condition_id": "granville_sell1",
+    "name": "格兰维尔卖点1（跌破卖出）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "格兰维尔八大法则"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "short_period": {
+        "default": 5,
+        "min": 2,
+        "max": 30,
+        "unit": "日"
+      },
+      "long_period": {
+        "default": 20,
+        "min": 5,
+        "max": 120,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md"
+    ]
+  },
+  {
+    "condition_id": "granville_duotou",
+    "name": "均线多头排列",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "均线形态"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "short_period": {
+        "default": 5,
+        "min": 2,
+        "max": 30,
+        "unit": "日"
+      },
+      "mid_period": {
+        "default": 10,
+        "min": 5,
+        "max": 60,
+        "unit": "日"
+      },
+      "long_period": {
+        "default": 20,
+        "min": 10,
+        "max": 120,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md",
+      "concepts/多头排列与空头排列.md"
+    ]
+  },
+  {
+    "condition_id": "granville_kongtou",
+    "name": "均线空头排列",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "均线形态"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "short_period": {
+        "default": 5,
+        "min": 2,
+        "max": 30,
+        "unit": "日"
+      },
+      "mid_period": {
+        "default": 10,
+        "min": 5,
+        "max": 60,
+        "unit": "日"
+      },
+      "long_period": {
+        "default": 20,
+        "min": 10,
+        "max": 120,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md",
+      "concepts/多头排列与空头排列.md"
+    ]
+  },
+  {
+    "condition_id": "ma_consolidation_breakout",
+    "name": "均线粘合后向上发散",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "均线形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 20,
+        "min": 10,
+        "max": 60,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线收敛与发散的时间判断.md",
+      "concepts/均线粘合突破.md"
+    ]
+  },
+  {
+    "condition_id": "bullish_engulfing",
+    "name": "看涨吞噬K线形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/吞噬形态.md"
+    ]
+  },
+  {
+    "condition_id": "bearish_engulfing",
+    "name": "看跌吞噬K线形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看跌反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/吞噬形态.md"
+    ]
+  },
+  {
+    "condition_id": "morning_star",
+    "name": "晨星（启明星）形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/启明星与黄昏星.md"
+    ]
+  },
+  {
+    "condition_id": "evening_star",
+    "name": "黄昏星形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看跌反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/启明星与黄昏星.md"
+    ]
+  },
+  {
+    "condition_id": "hammer",
+    "name": "锤子线形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/锤子线与上吊线.md"
+    ]
+  },
+  {
+    "condition_id": "hanging_man",
+    "name": "上吊线形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看跌反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/锤子线与上吊线.md"
+    ]
+  },
+  {
+    "condition_id": "three_white_soldiers",
+    "name": "三白兵（三连阳）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/三白兵与三只乌鸦.md"
+    ]
+  },
+  {
+    "condition_id": "three_black_crows",
+    "name": "三只乌鸦（三连阴）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看跌反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/三白兵与三只乌鸦.md"
+    ]
+  },
+  {
+    "condition_id": "piercing_line",
+    "name": "刺透形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "dark_cloud_cover",
+    "name": "乌云盖顶形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看跌反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/乌云盖顶.md"
+    ]
+  },
+  {
+    "condition_id": "shooting_star",
+    "name": "射击之星形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看跌反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/射击之星.md"
+    ]
+  },
+  {
+    "condition_id": "doji",
+    "name": "十字星形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "多空平衡"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/十字星形态.md"
+    ]
+  },
+  {
+    "condition_id": "gap_up",
+    "name": "向上跳空缺口",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "缺口形态"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "gap_pct": {
+        "default": 0.5,
+        "min": 0.1,
+        "max": 5.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": [
+      "concepts/跳空缺口.md",
+      "concepts/缺口理论与应用.md"
+    ]
+  },
+  {
+    "condition_id": "gap_down",
+    "name": "向下跳空缺口",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "缺口形态"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "gap_pct": {
+        "default": 0.5,
+        "min": 0.1,
+        "max": 5.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": [
+      "concepts/跳空缺口.md",
+      "concepts/缺口理论与应用.md"
+    ]
+  },
+  {
+    "condition_id": "gap_fill",
+    "name": "缺口回补",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "缺口形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 30,
+        "min": 5,
+        "max": 120,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/跳空缺口.md",
+      "concepts/缺口理论与应用.md"
+    ]
+  },
+  {
+    "condition_id": "vp_breakout",
+    "name": "量价突破（放量突破平台）",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 20,
+        "min": 10,
+        "max": 60,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/量价分析确认与异常.md",
+      "concepts/平台突破.md",
+      "concepts/放量突破.md"
+    ]
+  },
+  {
+    "condition_id": "vp_squeeze",
+    "name": "量价挤压（振幅收敛待突破）",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 15,
+        "min": 5,
+        "max": 30,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/振幅收敛.md"
+    ]
+  },
+  {
+    "condition_id": "vp_reversal",
+    "name": "量价反转信号",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 10,
+        "min": 5,
+        "max": 30,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/量价反转.md",
+      "concepts/底部反转形态.md"
+    ]
+  },
+  {
+    "condition_id": "vp_topping",
+    "name": "量价触顶（放量滞涨）",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/放量滞涨.md",
+      "concepts/天量天价.md"
+    ]
+  },
+  {
+    "condition_id": "vp_bottoming",
+    "name": "量价探底（缩量止跌）",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/缩量止跌.md",
+      "concepts/底部放量长阳.md"
+    ]
+  },
+  {
+    "condition_id": "vp_panic",
+    "name": "恐慌出逃信号",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/恐慌出逃.md"
+    ]
+  },
+  {
+    "condition_id": "chanlun_diyi_maidian",
+    "name": "缠论一类买点",
+    "category": "缠论量化条件",
+    "category_path": [
+      "缠论量化条件",
+      "三类买卖点"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "chanlun_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/三类买卖点.md",
+      "concepts/缠中说禅背驰-买卖点定理.md",
+      "concepts/背驰.md",
+      "concepts/缠论.md",
+      "concepts/缠论中枢量化.md"
+    ]
+  },
+  {
+    "condition_id": "chanlun_erlei_maidian",
+    "name": "缠论二类买点",
+    "category": "缠论量化条件",
+    "category_path": [
+      "缠论量化条件",
+      "三类买卖点"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "chanlun_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/三类买卖点.md",
+      "concepts/缠中说禅背驰-买卖点定理.md",
+      "concepts/缠论.md",
+      "concepts/缠论中枢量化.md"
+    ]
+  },
+  {
+    "condition_id": "chanlun_sanlei_maidian",
+    "name": "缠论三类买点",
+    "category": "缠论量化条件",
+    "category_path": [
+      "缠论量化条件",
+      "三类买卖点"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "chanlun_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/三类买卖点.md",
+      "concepts/缠中说禅背驰-买卖点定理.md",
+      "concepts/缠论.md",
+      "concepts/缠论中枢量化.md"
+    ]
+  },
+  {
+    "condition_id": "chanlun_diyi_maidian_sell",
+    "name": "缠论一类卖点",
+    "category": "缠论量化条件",
+    "category_path": [
+      "缠论量化条件",
+      "三类买卖点"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "chanlun_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/三类买卖点.md",
+      "concepts/缠中说禅背驰-买卖点定理.md",
+      "concepts/背驰.md",
+      "concepts/缠论.md"
+    ]
+  },
+  {
+    "condition_id": "chanlun_zhongshu_breakout",
+    "name": "缠论中枢突破",
+    "category": "缠论量化条件",
+    "category_path": [
+      "缠论量化条件",
+      "中枢分析"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "chanlun_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/缠论中枢量化.md",
+      "concepts/中枢突破.md",
+      "concepts/中枢筹码密集区.md"
+    ]
+  },
+  {
+    "condition_id": "chanlun_zhongshu_bottom",
+    "name": "缠论中枢下沿反弹",
+    "category": "缠论量化条件",
+    "category_path": [
+      "缠论量化条件",
+      "中枢分析"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "chanlun_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/缠论中枢量化.md",
+      "concepts/中枢筹码密集区.md"
+    ]
+  },
+  {
+    "condition_id": "chanlun_beichi",
+    "name": "缠论背驰信号",
+    "category": "缠论量化条件",
+    "category_path": [
+      "缠论量化条件",
+      "背驰分析"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "chanlun_strategy",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 20,
+        "min": 10,
+        "max": 60,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/背驰.md",
+      "concepts/缠中说禅背驰-买卖点定理.md",
+      "concepts/背离的级别与共振.md"
+    ]
+  },
+  {
+    "condition_id": "chip_stage_change",
+    "name": "筹码阶段变化（四阶段）",
+    "category": "筹码分析类",
+    "category_path": [
+      "筹码分析类",
+      "筹码阶段"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "chip_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/筹码分布分析-主力视角.md",
+      "concepts/筹码集中度因子.md",
+      "concepts/筹码主峰.md",
+      "concepts/筹码转移.md",
+      "concepts/中枢筹码密集区.md"
+    ]
+  },
+  {
+    "condition_id": "chip_concentration_up",
+    "name": "筹码集中度上升",
+    "category": "筹码分析类",
+    "category_path": [
+      "筹码分析类",
+      "筹码集中度"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "chip_strategy",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 10,
+        "min": 5,
+        "max": 30,
+        "unit": "日"
+      },
+      "threshold": {
+        "default": 5.0,
+        "min": 1.0,
+        "max": 20.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": [
+      "concepts/筹码集中度因子.md",
+      "concepts/筹码主峰.md"
+    ]
+  },
+  {
+    "condition_id": "chip_mainforce_price",
+    "name": "股价突破主力集中价",
+    "category": "筹码分析类",
+    "category_path": [
+      "筹码分析类",
+      "主力成本"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "chip_strategy",
+    "data_readiness": "ready",
+    "default_params": {
+      "buffer_pct": {
+        "default": 3.0,
+        "min": 1.0,
+        "max": 10.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": [
+      "concepts/筹码分布分析-主力视角.md",
+      "concepts/主力集中价.md"
+    ]
+  },
+  {
+    "condition_id": "chip_asr_bottom",
+    "name": "ASR指标触底（浮筹比例极低）",
+    "category": "筹码分析类",
+    "category_path": [
+      "筹码分析类",
+      "浮筹分析"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "chip_strategy",
+    "data_readiness": "ready",
+    "default_params": {
+      "asr_threshold": {
+        "default": 10.0,
+        "min": 5.0,
+        "max": 30.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": [
+      "concepts/筹码集中度因子.md",
+      "concepts/筹码主峰.md"
+    ]
+  },
+  {
+    "condition_id": "bociasi_resonance",
+    "name": "BOCIASI共振信号",
+    "category": "情绪周期与市场状态",
+    "category_path": [
+      "情绪周期与市场状态",
+      "BOCIASI系统"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "bociasi_quickline",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/情绪周期四阶段模型.md",
+      "concepts/情绪-收益共振.md",
+      "concepts/情绪拥挤度因子.md",
+      "concepts/情绪状态感知因子.md",
+      "concepts/财信证券三维情绪模型.md",
+      "concepts/情绪画框.md",
+      "concepts/BOCIASI-kuaimanxian.md"
+    ]
+  },
+  {
+    "condition_id": "bociasi_ice_point",
+    "name": "BOCIASI冰点信号（情绪极低）",
+    "category": "情绪周期与市场状态",
+    "category_path": [
+      "情绪周期与市场状态",
+      "BOCIASI系统"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "bociasi_quickline",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 20,
+        "min": 10,
+        "max": 30,
+        "unit": "百分位"
+      }
+    },
+    "wiki_sources": [
+      "concepts/情绪周期四阶段模型.md",
+      "concepts/BOCIASI-kuaimanxian.md",
+      "concepts/情绪-收益共振.md"
+    ]
+  },
+  {
+    "condition_id": "bociasi_boiling_point",
+    "name": "BOCIASI沸点信号（情绪极高）",
+    "category": "情绪周期与市场状态",
+    "category_path": [
+      "情绪周期与市场状态",
+      "BOCIASI系统"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "bociasi_quickline",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 80,
+        "min": 70,
+        "max": 90,
+        "unit": "百分位"
+      }
+    },
+    "wiki_sources": [
+      "concepts/情绪周期四阶段模型.md",
+      "concepts/BOCIASI-kuaimanxian.md",
+      "concepts/情绪拥挤度因子.md"
+    ]
+  },
+  {
+    "condition_id": "emotion_fast_vol",
+    "name": "情绪快线-成交量维度异动",
+    "category": "情绪周期与市场状态",
+    "category_path": [
+      "情绪周期与市场状态",
+      "情绪维度"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "bociasi_quickline",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 2.0,
+        "min": 1.5,
+        "max": 5.0,
+        "unit": "标准差"
+      }
+    },
+    "wiki_sources": [
+      "concepts/BOCIASI-kuaimanxian.md",
+      "concepts/情绪状态感知因子.md"
+    ]
+  },
+  {
+    "condition_id": "emotion_fast_price",
+    "name": "情绪快线-价格维度异动",
+    "category": "情绪周期与市场状态",
+    "category_path": [
+      "情绪周期与市场状态",
+      "情绪维度"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "bociasi_quickline",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 2.0,
+        "min": 1.5,
+        "max": 5.0,
+        "unit": "标准差"
+      }
+    },
+    "wiki_sources": [
+      "concepts/BOCIASI-kuaimanxian.md"
+    ]
+  },
+  {
+    "condition_id": "emotion_crowding",
+    "name": "情绪拥挤度预警",
+    "category": "情绪周期与市场状态",
+    "category_path": [
+      "情绪周期与市场状态",
+      "情绪风险"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "crowding_factor",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 80,
+        "min": 60,
+        "max": 95,
+        "unit": "百分位"
+      }
+    },
+    "wiki_sources": [
+      "concepts/情绪拥挤度因子.md",
+      "concepts/财信证券三维情绪模型.md"
+    ]
+  },
+  {
+    "condition_id": "eagle_sword_resonance",
+    "name": "鹰眼大宝剑共振信号",
+    "category": "多条件组合类",
+    "category_path": [
+      "多条件组合类",
+      "多信号融合"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "eagle_sword_resonance",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/多形态共振.md",
+      "concepts/鹰眼大宝剑.md",
+      "concepts/三维验证框架.md"
+    ]
+  },
+  {
+    "condition_id": "three_dim_bullish",
+    "name": "三维验证偏多信号",
+    "category": "多条件组合类",
+    "category_path": [
+      "多条件组合类",
+      "多信号融合"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "unified_investment_decision_framework",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/三维验证框架.md",
+      "concepts/多指标共识机制.md"
+    ]
+  },
+  {
+    "condition_id": "three_dim_bearish",
+    "name": "三维验证偏空信号",
+    "category": "多条件组合类",
+    "category_path": [
+      "多条件组合类",
+      "多信号融合"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "unified_investment_decision_framework",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/三维验证框架.md",
+      "concepts/多指标共识机制.md"
+    ]
+  },
+  {
+    "condition_id": "uidf_fusion_buy",
+    "name": "UIDF综合买入信号",
+    "category": "多条件组合类",
+    "category_path": [
+      "多条件组合类",
+      "UIDF决策"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "unified_investment_decision_framework",
+    "data_readiness": "ready",
+    "default_params": {
+      "confidence_threshold": {
+        "default": 60,
+        "min": 30,
+        "max": 90,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": [
+      "concepts/多形态共振.md",
+      "concepts/多指标共识机制.md"
+    ]
+  },
+  {
+    "condition_id": "risk_st_filter",
+    "name": "ST/*ST风险股票",
+    "category": "风控与硬性否决类",
+    "category_path": [
+      "风控与硬性否决类",
+      "基础过滤"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily_basic",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/风险股票剔除逻辑体系.md",
+      "concepts/硬性否决规则.md"
+    ]
+  },
+  {
+    "condition_id": "risk_low_liquidity",
+    "name": "流动性不足（换手率过低）",
+    "category": "风控与硬性否决类",
+    "category_path": [
+      "风控与硬性否决类",
+      "流动性风险"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily_basic",
+    "data_readiness": "ready",
+    "default_params": {
+      "turnover_threshold": {
+        "default": 0.5,
+        "min": 0.1,
+        "max": 2.0,
+        "unit": "%"
+      },
+      "ma_period": {
+        "default": 20,
+        "min": 5,
+        "max": 60,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/风险股票剔除逻辑体系.md"
+    ]
+  },
+  {
+    "condition_id": "risk_high_pe",
+    "name": "市盈率过高（PE>N）",
+    "category": "风控与硬性否决类",
+    "category_path": [
+      "风控与硬性否决类",
+      "估值风险"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily_basic",
+    "data_readiness": "ready",
+    "default_params": {
+      "pe_threshold": {
+        "default": 200,
+        "min": 30,
+        "max": 1000,
+        "unit": ""
+      }
+    },
+    "wiki_sources": [
+      "concepts/风险股票剔除逻辑体系.md",
+      "concepts/硬性否决规则.md"
+    ]
+  },
+  {
+    "condition_id": "risk_consecutive_loss",
+    "name": "连续亏损N年",
+    "category": "风控与硬性否决类",
+    "category_path": [
+      "风控与硬性否决类",
+      "财务风险"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "financial",
+    "data_readiness": "ready",
+    "default_params": {
+      "years": {
+        "default": 2,
+        "min": 1,
+        "max": 5,
+        "unit": "年"
+      }
+    },
+    "wiki_sources": [
+      "concepts/风险股票剔除逻辑体系.md",
+      "concepts/六大禁区.md"
+    ]
+  },
+  {
+    "condition_id": "risk_micro_cap",
+    "name": "市值过小（微盘股）",
+    "category": "风控与硬性否决类",
+    "category_path": [
+      "风控与硬性否决类",
+      "市值风险"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily_basic",
+    "data_readiness": "ready",
+    "default_params": {
+      "market_cap_threshold": {
+        "default": 500000000.0,
+        "min": 100000000.0,
+        "max": 5000000000.0,
+        "unit": "元"
+      }
+    },
+    "wiki_sources": [
+      "concepts/风险股票剔除逻辑体系.md",
+      "concepts/六大禁区.md"
+    ]
+  },
+  {
+    "condition_id": "risk_high_pb",
+    "name": "市净率过高（PB>N）",
+    "category": "风控与硬性否决类",
+    "category_path": [
+      "风控与硬性否决类",
+      "估值风险"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily_basic",
+    "data_readiness": "ready",
+    "default_params": {
+      "pb_threshold": {
+        "default": 20,
+        "min": 5,
+        "max": 100,
+        "unit": ""
+      }
+    },
+    "wiki_sources": [
+      "concepts/风险股票剔除逻辑体系.md"
+    ]
+  },
+  {
+    "condition_id": "risk_suspension",
+    "name": "停牌风险（长期停牌）",
+    "category": "风控与硬性否决类",
+    "category_path": [
+      "风控与硬性否决类",
+      "交易状态"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "trade_cal",
+    "data_readiness": "ready",
+    "default_params": {
+      "suspension_days": {
+        "default": 10,
+        "min": 5,
+        "max": 60,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/风险股票剔除逻辑体系.md"
+    ]
+  },
+  {
+    "condition_id": "risk_negative_net_profit",
+    "name": "净利润为负（亏损股）",
+    "category": "风控与硬性否决类",
+    "category_path": [
+      "风控与硬性否决类",
+      "财务风险"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "financial",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/风险股票剔除逻辑体系.md",
+      "concepts/六大禁区.md"
+    ]
+  },
+  {
+    "condition_id": "risk_behavioral",
+    "name": "行为金融异常检查",
+    "category": "风控与硬性否决类",
+    "category_path": [
+      "风控与硬性否决类",
+      "行为检查"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "screener",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/风险股票剔除逻辑体系.md",
+      "concepts/行为金融检查.md"
+    ]
+  },
+  {
+    "condition_id": "alert_limitup_approach",
+    "name": "涨停逼近监控",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "涨停异动"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "approach_pct": {
+        "default": 5.0,
+        "min": 2.0,
+        "max": 9.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": [
+      "concepts/涨停板不同阶段.md",
+      "concepts/涨停量价关系.md"
+    ]
+  },
+  {
+    "condition_id": "alert_limitup_open",
+    "name": "涨停开盘",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "涨停异动"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "qmt_needed",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/涨停板不同阶段.md"
+    ]
+  },
+  {
+    "condition_id": "alert_high_open",
+    "name": "巨量高开",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "开盘异动"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "qmt_needed",
+    "default_params": {
+      "open_pct": {
+        "default": 3.0,
+        "min": 1.0,
+        "max": 10.0,
+        "unit": "%"
+      },
+      "volume_multiplier": {
+        "default": 2.0,
+        "min": 1.5,
+        "max": 5.0,
+        "unit": "倍"
+      }
+    },
+    "wiki_sources": [
+      "concepts/巨量高开.md"
+    ]
+  },
+  {
+    "condition_id": "alert_dragon_tiger",
+    "name": "龙虎榜资金追踪",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "龙虎榜"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "net_buy_threshold": {
+        "default": 50000000.0,
+        "min": 5000000.0,
+        "max": 500000000.0,
+        "unit": "元"
+      }
+    },
+    "wiki_sources": [
+      "concepts/龙虎榜分析.md"
+    ]
+  },
+  {
+    "condition_id": "alert_bottom_rebound",
+    "name": "底部反弹跟踪",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "底部捕捉"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "near_low_pct": {
+        "default": 10.0,
+        "min": 5.0,
+        "max": 20.0,
+        "unit": "%"
+      },
+      "lookback": {
+        "default": 60,
+        "min": 20,
+        "max": 250,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/底部放量长阳.md",
+      "concepts/底部反转形态.md",
+      "concepts/低位小阳.md"
+    ]
+  },
+  {
+    "condition_id": "alert_mainforce_shipping",
+    "name": "主力出货预警",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "主力行为"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "moneyflow",
+    "data_readiness": "ready",
+    "default_params": {
+      "net_outflow_days": {
+        "default": 3,
+        "min": 2,
+        "max": 10,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/主力资金流向分析.md",
+      "concepts/放量滞涨.md"
+    ]
+  },
+  {
+    "condition_id": "alert_mainforce_building",
+    "name": "主力建仓跟踪",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "主力行为"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "chip_strategy",
+    "data_readiness": "ready",
+    "default_params": {
+      "net_inflow_days": {
+        "default": 5,
+        "min": 3,
+        "max": 20,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/筹码分布分析-主力视角.md",
+      "concepts/主力资金流向分析.md"
+    ]
+  },
+  {
+    "condition_id": "alert_volume_divergence_hourly",
+    "name": "分时量价背离",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "盘中异动"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "intraday",
+    "data_readiness": "qmt_needed",
+    "default_params": {
+      "lookback_minutes": {
+        "default": 30,
+        "min": 5,
+        "max": 120,
+        "unit": "分钟"
+      }
+    },
+    "wiki_sources": [
+      "concepts/分时缩量背离.md"
+    ]
+  },
+  {
+    "condition_id": "alert_consecutive_limitup",
+    "name": "连板监控",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "涨停异动"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "consecutive_days": {
+        "default": 2,
+        "min": 2,
+        "max": 10,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/涨停板不同阶段.md"
+    ]
+  },
+  {
+    "condition_id": "pe_range",
+    "name": "市盈率在N-M之间",
+    "category": "基本面与财务类",
+    "category_path": [
+      "基本面与财务类",
+      "估值"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily_basic",
+    "data_readiness": "ready",
+    "default_params": {
+      "pe_lower": {
+        "default": 10,
+        "min": 0,
+        "max": 100,
+        "unit": ""
+      },
+      "pe_upper": {
+        "default": 50,
+        "min": 10,
+        "max": 500,
+        "unit": ""
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "market_cap_range",
+    "name": "市值在N-M亿之间",
+    "category": "基本面与财务类",
+    "category_path": [
+      "基本面与财务类",
+      "规模"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily_basic",
+    "data_readiness": "ready",
+    "default_params": {
+      "cap_lower": {
+        "default": 1000000000.0,
+        "min": 100000000.0,
+        "max": 10000000000.0,
+        "unit": "元"
+      },
+      "cap_upper": {
+        "default": 100000000000.0,
+        "min": 1000000000.0,
+        "max": 1000000000000.0,
+        "unit": "元"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "dividend_yield_above",
+    "name": "股息率大于N%",
+    "category": "基本面与财务类",
+    "category_path": [
+      "基本面与财务类",
+      "分红"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily_basic",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 3.0,
+        "min": 1.0,
+        "max": 10.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "revenue_growth_above",
+    "name": "营收增长率大于N%",
+    "category": "基本面与财务类",
+    "category_path": [
+      "基本面与财务类",
+      "成长性"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "financial",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 20.0,
+        "min": 5.0,
+        "max": 100.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "profit_growth_above",
+    "name": "净利润增长率大于N%",
+    "category": "基本面与财务类",
+    "category_path": [
+      "基本面与财务类",
+      "成长性"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "financial",
+    "data_readiness": "ready",
+    "default_params": {
+      "threshold": {
+        "default": 30.0,
+        "min": 5.0,
+        "max": 200.0,
+        "unit": "%"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "bullish_harami",
+    "name": "看涨孕线形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "inverted_hammer",
+    "name": "倒锤子线形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/锤子线与上吊线.md"
+    ]
+  },
+  {
+    "condition_id": "bullish_belt_hold",
+    "name": "看涨腰带线（光脚阳线）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "bullish_kick",
+    "name": "看涨踢出形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "tweezers_bottom",
+    "name": "镊子底（双针探底）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "doji_morning_star",
+    "name": "十字晨星形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/十字星形态.md"
+    ]
+  },
+  {
+    "condition_id": "bearish_harami",
+    "name": "看跌孕线形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看跌反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "bearish_belt_hold",
+    "name": "看跌腰带线（光脚阴线）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看跌反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "bearish_kick",
+    "name": "看跌踢出形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看跌反转"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "rising_three_methods",
+    "name": "上升三法（看涨持续形态）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看涨持续"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "falling_three_methods",
+    "name": "下降三法（看跌持续形态）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "看跌持续"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "harami_cross",
+    "name": "十字孕线形态",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "多空平衡"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/十字星形态.md"
+    ]
+  },
+  {
+    "condition_id": "spinning_top",
+    "name": "纺锤线形态（多空僵持）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "多空平衡"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "marubozu",
+    "name": "光头光脚K线",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "K线形态",
+      "单K线"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "granville_buy3",
+    "name": "格兰维尔买点3（回抽确认买入）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "格兰维尔八大法则"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "ma_period": {
+        "default": 20,
+        "min": 5,
+        "max": 120,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md"
+    ]
+  },
+  {
+    "condition_id": "granville_buy4",
+    "name": "格兰维尔买点4（长期均线横盘买入）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "格兰维尔八大法则"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "ma_period": {
+        "default": 60,
+        "min": 20,
+        "max": 250,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md",
+      "concepts/均线收敛与发散的时间判断.md"
+    ]
+  },
+  {
+    "condition_id": "granville_sell2",
+    "name": "格兰维尔卖点2（反弹不过卖出）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "格兰维尔八大法则"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "ma_period": {
+        "default": 20,
+        "min": 5,
+        "max": 120,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md"
+    ]
+  },
+  {
+    "condition_id": "granville_sell3",
+    "name": "格兰维尔卖点3（破位反抽卖出）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "格兰维尔八大法则"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "ma_period": {
+        "default": 20,
+        "min": 5,
+        "max": 120,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md"
+    ]
+  },
+  {
+    "condition_id": "granville_sell4",
+    "name": "格兰维尔卖点4（均线压制卖出）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "格兰维尔八大法则"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "ma_period": {
+        "default": 60,
+        "min": 20,
+        "max": 250,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/均线吻系统.md"
+    ]
+  },
+  {
+    "condition_id": "ma5_jinchai_ma10",
+    "name": "MA5金叉MA10",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "均线形态"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/均线吻系统.md",
+      "concepts/均线相交面积法.md"
+    ]
+  },
+  {
+    "condition_id": "ma5_sicha_ma10",
+    "name": "MA5死叉MA10",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "均线形态"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/均线吻系统.md"
+    ]
+  },
+  {
+    "condition_id": "ma60_support",
+    "name": "MA60支撑确认",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "均线形态"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/均线吻系统.md"
+    ]
+  },
+  {
+    "condition_id": "ma30_above_ma60",
+    "name": "中期强趋势（MA30在MA60上方）",
+    "category": "买卖信号类",
+    "category_path": [
+      "买卖信号类",
+      "均线形态"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/均线吻系统.md"
+    ]
+  },
+  {
+    "condition_id": "vp_diliang_beiliang",
+    "name": "地量倍量（缩量后放量启动）",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/地量倍量.md",
+      "concepts/地量地价.md"
+    ]
+  },
+  {
+    "condition_id": "vp_three_yang_kaitai",
+    "name": "三阳开泰",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md"
+    ]
+  },
+  {
+    "condition_id": "vp_double_needle_bottom",
+    "name": "双针探底",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/底部反转形态.md"
+    ]
+  },
+  {
+    "condition_id": "vp_dense_bottom_volume",
+    "name": "密集底部放量",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/底部放量长阳.md",
+      "concepts/底部反转形态.md"
+    ]
+  },
+  {
+    "condition_id": "vp_yang_swallow_yin",
+    "name": "阳吞阴形态",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/吞噬形态.md"
+    ]
+  },
+  {
+    "condition_id": "vp_shake_up",
+    "name": "洗盘识别",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/缩量止跌.md"
+    ]
+  },
+  {
+    "condition_id": "vp_three_yin_shrink",
+    "name": "三阴缩量（缩量回调）",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/缩量下跌与缩量上涨.md"
+    ]
+  },
+  {
+    "condition_id": "vp_zhuoyang",
+    "name": "捉阳形态（阳包阴）",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/K线组合形态详解.md",
+      "concepts/吞噬形态.md"
+    ]
+  },
+  {
+    "condition_id": "vp_double_yang_gap",
+    "name": "双阳跳空",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/跳空缺口.md"
+    ]
+  },
+  {
+    "condition_id": "vp_low_level_rise",
+    "name": "低位起涨信号",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/低位小阳.md",
+      "concepts/底部反转形态.md"
+    ]
+  },
+  {
+    "condition_id": "vp_low_level_break",
+    "name": "低位破位下行",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "量价形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/恐慌出逃.md"
+    ]
+  },
+  {
+    "condition_id": "vp_w_double_bottom",
+    "name": "W双底形态",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "技术形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/底部反转形态.md"
+    ]
+  },
+  {
+    "condition_id": "vp_m_top",
+    "name": "M头形态",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "技术形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/顶部反转形态.md"
+    ]
+  },
+  {
+    "condition_id": "vp_head_and_shoulders",
+    "name": "头肩形态（顶/底）",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "技术形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/底部反转形态.md"
+    ]
+  },
+  {
+    "condition_id": "vp_rising_wedge",
+    "name": "上升楔形",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "技术形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "vp_falling_wedge",
+    "name": "下降楔形",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "技术形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "vp_sym_triangle",
+    "name": "对称三角形整理",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "技术形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "vp_exp_triangle",
+    "name": "扩张三角形（喇叭形）",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "技术形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "vp_gap_exhaustion",
+    "name": "跳空衰竭信号",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "技术形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/跳空缺口.md",
+      "concepts/缺口理论与应用.md"
+    ]
+  },
+  {
+    "condition_id": "vp_continuous_low_repeat",
+    "name": "连续低位重复",
+    "category": "策略信号类",
+    "category_path": [
+      "策略信号类",
+      "技术形态"
+    ],
+    "difficulty_level": "高级",
+    "data_source": "volume_price_strategy",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/底部反转形态.md"
+    ]
+  },
+  {
+    "condition_id": "emotion_slow_line_trend",
+    "name": "情绪慢线趋势信号",
+    "category": "情绪周期与市场状态",
+    "category_path": [
+      "情绪周期与市场状态",
+      "情绪维度"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "bociasi_slowline",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 60,
+        "min": 20,
+        "max": 250,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/BOCIASI-kuaimanxian.md",
+      "concepts/情绪周期四阶段模型.md"
+    ]
+  },
+  {
+    "condition_id": "emotion_price_divergence",
+    "name": "情绪-价格背离",
+    "category": "情绪周期与市场状态",
+    "category_path": [
+      "情绪周期与市场状态",
+      "情绪风险"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "bociasi_slowline",
+    "data_readiness": "ready",
+    "default_params": {
+      "lookback": {
+        "default": 20,
+        "min": 10,
+        "max": 60,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/情绪-收益共振.md",
+      "concepts/背离的级别与共振.md"
+    ]
+  },
+  {
+    "condition_id": "alert_call_auction",
+    "name": "集合竞价异动",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "开盘异动"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "intraday",
+    "data_readiness": "qmt_needed",
+    "default_params": {
+      "volume_multiplier": {
+        "default": 3.0,
+        "min": 1.5,
+        "max": 10.0,
+        "unit": "倍"
+      }
+    },
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "alert_block_trade",
+    "name": "大宗交易跟踪",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "资金动向"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "volume_threshold": {
+        "default": 10000000.0,
+        "min": 1000000.0,
+        "max": 100000000.0,
+        "unit": "元"
+      }
+    },
+    "wiki_sources": [
+      "concepts/主力资金流向分析.md"
+    ]
+  },
+  {
+    "condition_id": "alert_continuous_shrink",
+    "name": "连续缩量阴跌",
+    "category": "实战战法类",
+    "category_path": [
+      "实战战法类",
+      "趋势追踪"
+    ],
+    "difficulty_level": "进阶",
+    "data_source": "daily",
+    "data_readiness": "ready",
+    "default_params": {
+      "days": {
+        "default": 5,
+        "min": 3,
+        "max": 20,
+        "unit": "日"
+      }
+    },
+    "wiki_sources": [
+      "concepts/缩量下跌与缩量上涨.md"
+    ]
+  },
+  {
+    "condition_id": "risk_special_warning",
+    "name": "特殊风险警示（业绩预告/立案等）",
+    "category": "风控与硬性否决类",
+    "category_path": [
+      "风控与硬性否决类",
+      "基础过滤"
+    ],
+    "difficulty_level": "入门",
+    "data_source": "daily_basic",
+    "data_readiness": "ready",
+    "default_params": {},
+    "wiki_sources": [
+      "concepts/风险股票剔除逻辑体系.md",
+      "concepts/六大禁区.md"
+    ]
+  },
+  {
+    "condition_id": "rule_trigger_match",
+    "name": "条件触发知识图谱匹配",
+    "category": "知识图谱规则类",
+    "category_path": [
+      "知识图谱规则类",
+      "规则触发"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "kg_engine",
+    "data_readiness": "design",
+    "default_params": {},
+    "wiki_sources": [
+      "queries/条件触发类查询.md"
+    ]
+  },
+  {
+    "condition_id": "semantic_link_alert",
+    "name": "语义关联变动提醒",
+    "category": "知识图谱规则类",
+    "category_path": [
+      "知识图谱规则类",
+      "语义推理"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "kg_engine",
+    "data_readiness": "design",
+    "default_params": {},
+    "wiki_sources": []
+  },
+  {
+    "condition_id": "pattern_kb_match",
+    "name": "K线模式知识库匹配",
+    "category": "知识图谱规则类",
+    "category_path": [
+      "知识图谱规则类",
+      "模式匹配"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "kg_engine",
+    "data_readiness": "design",
+    "default_params": {},
+    "wiki_sources": [
+      "queries/模式识别类查询.md"
+    ]
+  },
+  {
+    "condition_id": "entity_relation_alert",
+    "name": "实体关系变动提醒",
+    "category": "知识图谱规则类",
+    "category_path": [
+      "知识图谱规则类",
+      "关系推理"
+    ],
+    "difficulty_level": "专业",
+    "data_source": "kg_engine",
+    "data_readiness": "design",
+    "default_params": {},
+    "wiki_sources": []
+  }
+]

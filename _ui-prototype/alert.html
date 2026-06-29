@@ -2,137 +2,1372 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>预警管理 — A股分析系统</title>
+<title>监控通知 — A股分析系统</title>
 <link rel="stylesheet" href="assets/base.css">
 <style>
-.rule-list { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); min-height: 200px; }
-.rule-item { display: flex; align-items: center; justify-content: space-between; padding: var(--space-10) 0; border-bottom: 1px solid var(--border-default); }
-.rule-item:last-child { border-bottom: none; }
-.rule-item .rule-info { display: flex; flex-direction: column; gap: var(--space-2); }
-.rule-item .rule-name { font-size: 13px; font-weight: 500; }
-.rule-item .rule-detail { font-size: 11px; color: var(--text-muted); }
-.rule-item .rule-actions { display: flex; gap: var(--space-4); align-items: center; }
-.rule-item .rule-actions span { font-size: 12px; color: var(--text-secondary); cursor: pointer; padding: var(--space-4) var(--space-6); border-radius: var(--radius-xs); }
-.rule-item .rule-actions span:hover { background: var(--bg-active); }
-.toggle { width: 36px; height: 20px; border-radius: 10px; background: var(--bg-muted); cursor: pointer; position: relative; }
-.toggle.on { background: var(--color-brand-500); }
-.toggle::after { content:''; position:absolute; width:16px; height:16px; border-radius:50%; background:white; top:2px; left:2px; transition: all .15s; }
-.toggle.on::after { left:18px; }
+/* ═══════════════════════════════════════════════════════════════
+   监控通知页面 — 方案C v2 + 209号方案全面修订
+   布局核心: CSS Grid 规则卡片 + 顶部通知滚动区 + 右侧编辑面板 + 弹窗
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 页面容器 ── */
+.monitor-page { display: flex; flex-direction: column; height: calc(100vh - 130px); min-height: 500px; }
+.scroll-pane { flex: 1; overflow-y: auto; padding-right: var(--space-4); }
+
+/* ── 汇总统计条 ── */
+.summary-bar { display: flex; align-items: center; gap: var(--space-16); padding: var(--space-10) var(--space-14); background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); margin-bottom: var(--space-8); flex-shrink: 0; flex-wrap: wrap; }
+.summary-stat { display: flex; align-items: center; gap: var(--space-4); font-size: 13px; }
+.summary-stat .num { font-weight: 600; font-size: 17px; }
+.summary-stat .num.active { color: var(--color-brand-500); }
+.summary-stat .num.triggered { color: var(--signal-watch); }
+.summary-stat .label { color: var(--text-muted); }
+.summary-divider { width: 1px; height: 26px; background: var(--border-default); }
+.summary-action { margin-left: auto; display: flex; gap: var(--space-8); align-items: center; }
+
+/* ── 批量操作栏 ── */
+.batch-bar { display: none; align-items: center; gap: var(--space-10); padding: var(--space-8) var(--space-14); background: rgba(59,130,246,0.06); border: 1px solid rgba(59,130,246,0.2); border-radius: var(--radius-sm); margin-bottom: var(--space-8); flex-shrink: 0; font-size: 13px; animation: slideDown 0.2s ease; }
+.batch-bar.visible { display: flex; }
+.batch-bar .count-label { color: var(--text-secondary); }
+.batch-bar .count-label strong { color: var(--color-brand-500); }
+.batch-btn { font-size: 12px; height: 30px; padding: 0 var(--space-10); border-radius: var(--radius-xs); border: 1px solid var(--border-default); background: transparent; color: var(--text-secondary); cursor: pointer; transition: all 0.12s; display: flex; align-items: center; gap: var(--space-3); }
+.batch-btn:hover { background: var(--bg-muted); color: var(--text-primary); border-color: var(--border-strong); }
+.batch-btn.danger { color: #EF4444; }
+.batch-btn.danger:hover { background: rgba(239,68,68,0.1); border-color: #EF4444; }
+.batch-btn.success { color: #22C55E; }
+.batch-btn.success:hover { background: rgba(34,197,94,0.1); border-color: #22C55E; }
+.batch-dismiss { font-size: 12px; color: var(--text-muted); cursor: pointer; margin-left: auto; background: none; border: none; }
+.batch-dismiss:hover { color: var(--text-primary); }
+@keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── 休眠区 ── */
+.dormant-section { margin-bottom: var(--space-8); flex-shrink: 0; }
+.dormant-trigger { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-6) var(--space-12); background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.2); border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; color: var(--signal-watch); transition: background 0.12s; }
+.dormant-trigger:hover { background: rgba(245,158,11,0.12); }
+.dormant-trigger .count { font-weight: 600; }
+.dormant-trigger .actions { margin-left: auto; display: flex; gap: var(--space-6); }
+.dormant-trigger .actions button { font-size: 12px; padding: 2px var(--space-8); border-radius: var(--radius-xs); border: 1px solid transparent; background: transparent; color: var(--text-muted); cursor: pointer; }
+.dormant-trigger .actions button:hover { color: var(--text-primary); border-color: var(--border-default); }
+.dormant-body { display: none; padding: var(--space-8) var(--space-12); background: rgba(0,0,0,0.15); border: 1px solid var(--border-default); border-top: none; border-radius: 0 0 var(--radius-sm) var(--radius-sm); }
+.dormant-body.open { display: block; }
+.dormant-item { display: flex; align-items: center; gap: var(--space-10); padding: var(--space-6) 0; font-size: 13px; border-bottom: 1px solid var(--border-default); }
+.dormant-item:last-child { border-bottom: none; }
+.dormant-item .info { flex: 1; }
+.dormant-item .info .name { color: var(--text-primary); font-weight: 500; }
+.dormant-item .info .meta { color: var(--text-muted); font-size: 12px; }
+.dormant-item .act { font-size: 12px; padding: 2px var(--space-8); border-radius: var(--radius-xs); border: 1px solid var(--border-default); background: transparent; color: var(--text-secondary); cursor: pointer; }
+.dormant-item .act:hover { background: var(--bg-muted); color: var(--text-primary); }
+.dormant-item .act.danger { color: #EF4444; }
+.dormant-item .act.danger:hover { background: rgba(239,68,68,0.1); }
+
+/* ── 筛选栏 ── */
+.filter-bar { display: flex; align-items: center; gap: var(--space-8); margin-bottom: var(--space-10); flex-shrink: 0; flex-wrap: wrap; }
+.filter-bar .search-wrap { position: relative; flex: 1; min-width: 140px; }
+.filter-bar .search-wrap input { width: 100%; height: 36px; padding-left: var(--space-28); font-size: 13px; background: rgba(0,0,0,0.25); border: 1px solid var(--border-default); border-radius: var(--radius-sm); color: var(--text-primary); outline: none; }
+.filter-bar .search-wrap input:focus { border-color: var(--border-focus); }
+.filter-bar .search-wrap .search-icon { position: absolute; left: var(--space-8); top: 50%; transform: translateY(-50%); font-size: 14px; color: var(--text-muted); pointer-events: none; }
+.filter-select { height: 36px; font-size: 13px; padding: 0 var(--space-10); border-radius: var(--radius-sm); border: 1px solid var(--border-default); background: rgba(0,0,0,0.25); color: var(--text-secondary); outline: none; cursor: pointer; }
+.filter-select:focus { border-color: var(--border-focus); }
+
+/* ═══════════════════════════════════════════════════════════════
+   顶部通知滚动区（新增 — 209号方案 §6.4）
+   ═══════════════════════════════════════════════════════════════ */
+.notif-scroll-section { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-8) var(--space-14); margin-bottom: var(--space-10); flex-shrink: 0; overflow: hidden; }
+.notif-scroll-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6); font-size: 13px; color: var(--text-secondary); }
+.notif-scroll-header .badge-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #EF4444; margin-right: var(--space-3); animation: pulse-dot 1.5s ease infinite; }
+@keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.notif-scroll-track { display: flex; gap: var(--space-8); width: max-content; animation: scrollNotif 30s linear infinite; }
+.notif-scroll-section:hover .notif-scroll-track { animation-play-state: paused; }
+@keyframes scrollNotif { 0%{transform:translateX(0)} 100%{transform:translateX(-50%)} }
+.notif-scroll-card { display: flex; align-items: center; gap: var(--space-6); padding: var(--space-6) var(--space-10); background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: var(--radius-sm); cursor: pointer; transition: all .15s; white-space: nowrap; flex-shrink: 0; font-size: 13px; }
+.notif-scroll-card:hover { background: var(--bg-active); border-color: var(--color-brand-500); transform: translateY(-1px); }
+.notif-scroll-card .type-icon { font-size: 15px; }
+.notif-scroll-card .stock { font-weight: 500; }
+.notif-scroll-card .change { font-size: 12px; font-weight: 600; }
+.notif-scroll-card .change.up { color: var(--color-up); }
+.notif-scroll-card .change.down { color: var(--color-down); }
+.notif-scroll-card .tag-new { font-size: 10px; padding: 0 4px; border-radius: 2px; background: rgba(239,68,68,0.15); color: #EF4444; }
+.notif-scroll-link { font-size: 12px; color: var(--color-brand-500); cursor: pointer; flex-shrink: 0; }
+.notif-scroll-link:hover { text-decoration: underline; }
+
+/* ═══════════════════════════════════════════════════════════════
+   规则卡片 — CSS Grid 布局（209号方案 §6.1）
+   ═══════════════════════════════════════════════════════════════ */
+.rule-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: var(--space-10);
+  padding: 0;
+}
+
+.rule-card { position: relative; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16) var(--space-20); padding-left: var(--space-24); transition: all 0.15s ease; cursor: pointer; }
+.rule-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-hover); }
+.rule-card-body { cursor: pointer; }
+.rule-card-checkbox { position: absolute; left: var(--space-6); top: var(--space-16); width: 18px; height: 18px; cursor: pointer; accent-color: var(--color-brand-500); }
+.rule-card.selected { border-color: var(--color-brand-500); background: rgba(59,130,246,0.04); }
+.rule-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-8); }
+.rule-card-name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: var(--space-6); }
+.rule-card-name .type-badge { font-size: 16px; }
+.rule-card-status { font-size: 12px; display: flex; align-items: center; gap: var(--space-4); }
+.status-tag { display: inline-flex; align-items: center; gap: var(--space-3); font-size: 12px; padding: 2px var(--space-8); border-radius: var(--radius-xs); }
+.status-tag.running { background: rgba(34,197,94,0.12); color: #22C55E; }
+.status-tag.paused { background: rgba(163,163,163,0.12); color: #A3A3A3; }
+.status-tag.dormant { background: rgba(245,158,11,0.12); color: #F59E0B; }
+.status-tag.expired { background: rgba(239,68,68,0.1); color: #EF4444; }
+
+.rule-card-meta { display: flex; align-items: center; gap: var(--space-12); font-size: 12px; color: var(--text-muted); margin-bottom: var(--space-8); line-height: 1.6; }
+.rule-card-meta span { display: flex; align-items: center; gap: var(--space-3); }
+
+.rule-card-triggers { display: flex; align-items: center; gap: var(--space-10); font-size: 12px; padding: var(--space-6) var(--space-10); background: rgba(0,0,0,0.15); border-radius: var(--radius-xs); margin-bottom: var(--space-8); line-height: 1.5; }
+.rule-card-triggers .count { color: var(--signal-watch); font-weight: 600; }
+.rule-card-triggers .latest { color: var(--text-secondary); }
+.rule-card-triggers .today { color: var(--color-brand-500); }
+.trigger-badge { font-size: 11px; background: rgba(59,130,246,0.15); color: var(--color-brand-500); padding: 1px var(--space-5); border-radius: var(--radius-xs); margin-left: var(--space-2); }
+
+.recent-triggers { display:flex; align-items:center; gap:var(--space-6); font-size:11px; color:var(--text-muted); margin-bottom:var(--space-8); }
+.recent-triggers .dot { display:inline-block; width:6px;height:6px;border-radius:50%;margin-right:2px; }
+.recent-triggers .dot.ok { background:#22C55E; }
+
+.rule-card-actions { display: flex; gap: var(--space-6); }
+.act-btn { font-size: 12px; height: 32px; padding: 0 var(--space-10); border-radius: var(--radius-xs); border: 1px solid var(--border-default); background: transparent; color: var(--text-secondary); cursor: pointer; transition: all 0.12s; display: flex; align-items: center; gap: var(--space-3); }
+.act-btn:hover { background: var(--bg-muted); color: var(--text-primary); border-color: var(--border-strong); }
+.act-btn.primary { border-color: var(--color-brand-500); color: var(--color-brand-500); }
+.act-btn.primary:hover { background: var(--color-brand-500); color: white; }
+
+/* ── 规则类型颜色 (左色条4px) ── */
+.rule-card.type-opportunity { border-left: 4px solid #3B82F6; }
+.rule-card.type-risk { border-left: 4px solid #EF4444; }
+.rule-card.type-anomaly { border-left: 4px solid #F59E0B; }
+.rule-card.type-status { border-left: 4px solid #22C55E; }
+.rule-card.type-discipline { border-left: 4px solid #8B5CF6; }
+
+/* ── 热度评分 ── */
+.hot-badge { font-size: 11px; padding: 1px var(--space-5); border-radius: var(--radius-xs); margin-left: var(--space-3); }
+.hot-badge.hot { background: rgba(239,68,68,0.12); color: #EF4444; }
+.hot-badge.cold { background: rgba(163,163,163,0.12); color: #A3A3A3; }
+
+/* ── 空状态 & 骨架屏 ── */
+.empty-state-card { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--space-40) var(--space-24); text-align: center; }
+.empty-state-card .icon-bg { width: 56px; height: 56px; border-radius: 50%; background: var(--bg-muted); display: flex; align-items: center; justify-content: center; font-size: 24px; margin-bottom: var(--space-12); }
+.empty-state-card h4 { font-size: 15px; color: var(--text-secondary); font-weight: 600; margin-bottom: var(--space-6); }
+.empty-state-card p { font-size: 13px; color: var(--text-muted); margin-bottom: var(--space-16); }
+.empty-state-card .quick-start { display: flex; gap: var(--space-8); }
+.skeleton-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16) var(--space-20); }
+.skeleton-card .line { height: 14px; background: var(--bg-muted); border-radius: var(--radius-xs); margin-bottom: var(--space-8); }
+.skeleton-card .line.w60 { width: 60%; } .skeleton-card .line.w80 { width: 80%; } .skeleton-card .line.w40 { width: 40%; }
+.skeleton-card .line-sm { height: 10px; background: var(--bg-muted); border-radius: var(--radius-xs); margin-bottom: var(--space-6); width: 45%; }
+
+/* ── 折叠表格 ── */
+.range-table-wrap { display: none; margin-bottom: var(--space-10); background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow: hidden; flex-shrink: 0; }
+.range-table-wrap.open { display: block; }
+
+/* ── 加载更多 ── */
+.load-more { text-align: center; padding: var(--space-12); font-size: 13px; color: var(--text-muted); cursor: pointer; }
+.load-more:hover { color: var(--color-brand-500); }
+
+/* ═══════════════════════════════════════════════════════════════
+   弹窗系统 (共用)
+   ═══════════════════════════════════════════════════════════════ */
+.modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.55); z-index: 2000; align-items: center; justify-content: center; animation: fadeIn 0.15s ease; }
+.modal-overlay.open { display: flex; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+.modal { background: #1a1a1a; border: 1px solid var(--border-strong); border-radius: var(--radius-md); box-shadow: 0 8px 32px rgba(0,0,0,0.45); max-width: 80vw; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column; animation: scaleIn 0.2s ease; }
+.modal-detail { width: 620px; }
+.modal-history { width: 720px; }
+.modal-wizard { width: 640px; }
+.modal-template { width: 620px; }
+.modal-sm { width: 440px; }
+.modal-cond-explain { width: 500px; }
+.modal-notif-detail { width: 640px; }
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-16) var(--space-20); border-bottom: 1px solid var(--border-default); flex-shrink: 0; }
+.modal-header h3 { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: var(--space-6); }
+.modal-close { width: 30px; height: 30px; border-radius: var(--radius-full); border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; }
+.modal-close:hover { background: var(--bg-muted); color: var(--text-primary); }
+.modal-body { padding: var(--space-16) var(--space-20); overflow-y: auto; flex: 1; }
+.modal-footer { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-12) var(--space-20); border-top: 1px solid var(--border-default); flex-shrink: 0; }
+.modal-footer .spacer { flex: 1; }
+
+/* ── 详情弹窗 ── */
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-8) var(--space-16); font-size: 13px; margin-bottom: var(--space-14); }
+.detail-grid .item { display: flex; flex-direction: column; gap: var(--space-2); }
+.detail-grid .item .label { color: var(--text-muted); font-size: 12px; }
+.detail-grid .item .value { color: var(--text-primary); font-weight: 500; }
+.detail-grid .item.full { grid-column: 1 / -1; }
+
+/* ── 触发历史表格 ── */
+.history-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.history-table th { text-align: left; padding: var(--space-6) var(--space-8); color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border-default); background: var(--bg-subtle); }
+.history-table td { padding: var(--space-6) var(--space-8); border-bottom: 1px solid var(--border-default); }
+.history-table tr:hover td { background: rgba(59,130,246,0.04); }
+
+/* ═══════════════════════════════════════════════════════════════
+   条件说明弹窗（新增 — 209号方案 §6.2.3）
+   ═══════════════════════════════════════════════════════════════ */
+.cond-explain-icon { font-size: 28px; margin-bottom: var(--space-8); display: block; }
+.cond-explain-name { font-size: 16px; font-weight: 600; margin-bottom: var(--space-12); }
+.cond-explain-section { margin-bottom: var(--space-10); }
+.cond-explain-section .sec-title { font-size: 12px; font-weight: 600; color: var(--color-brand-500); margin-bottom: var(--space-4); }
+.cond-explain-section .sec-body { font-size: 13px; color: var(--text-secondary); line-height: 1.6; padding: var(--space-6) var(--space-8); background: rgba(0,0,0,0.12); border-radius: var(--radius-xs); }
+.cond-explain-related { display: flex; gap: var(--space-4); flex-wrap: wrap; margin-top: var(--space-6); }
+.cond-explain-related .rel-chip { font-size: 12px; padding: 2px var(--space-8); background: rgba(59,130,246,0.08); color: var(--color-brand-500); border-radius: var(--radius-xs); }
+
+/* ═══════════════════════════════════════════════════════════════
+   通知详情弹窗（新增 — 209号方案 §6.5.3）
+   ═══════════════════════════════════════════════════════════════ */
+.notif-detail-type { font-size: 13px; color: var(--text-muted); margin-bottom: var(--space-4); }
+.notif-detail-rule-summary { background: rgba(0,0,0,0.12); border-radius: var(--radius-sm); padding: var(--space-10) var(--space-12); margin-bottom: var(--space-10); font-size: 13px; line-height: 1.7; }
+.notif-detail-rule-summary .label { color: var(--text-muted); }
+.notif-detail-rule-summary .val { color: var(--text-primary); }
+.trigger-detail-item { padding: var(--space-6) var(--space-8); margin-bottom: var(--space-4); background: rgba(0,0,0,0.08); border-radius: var(--radius-xs); border-left: 3px solid #22C55E; }
+.trigger-detail-item .td-name { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.trigger-detail-item .td-detail { font-size: 12px; color: var(--text-secondary); margin-top: var(--space-2); line-height: 1.5; }
+.trigger-detail-item .td-status { font-size: 11px; color: #22C55E; margin-top: var(--space-1); }
+.stock-info-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--space-4); margin-top: var(--space-4); }
+.stock-info-grid .si-item { text-align: center; padding: var(--space-4); background: rgba(0,0,0,0.08); border-radius: var(--radius-xs); }
+.stock-info-grid .si-item .si-label { font-size: 10px; color: var(--text-muted); }
+.stock-info-grid .si-item .si-val { font-size: 13px; font-weight: 500; color: var(--text-primary); margin-top: var(--space-1); }
+
+/* ═══════════════════════════════════════════════════════════════
+   右侧编辑抽屉
+   ═══════════════════════════════════════════════════════════════ */
+.drawer-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.3); z-index: 2000; }
+.drawer-overlay.open { display: block; }
+.edit-drawer { position: fixed; top: 0; right: -540px; width: 540px; max-width: 90vw; height: 100vh; background: #161616; border-left: 1px solid var(--border-strong); z-index: 2001; display: flex; flex-direction: column; transition: right 0.25s ease; box-shadow: -4px 0 16px rgba(0,0,0,0.4); }
+.edit-drawer.open { right: 0; }
+.drawer-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-16) var(--space-20); border-bottom: 1px solid var(--border-default); flex-shrink: 0; }
+.drawer-header h3 { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: var(--space-6); }
+.drawer-body { flex: 1; overflow-y: auto; padding: var(--space-16) var(--space-20); }
+.drawer-footer { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-12) var(--space-20); border-top: 1px solid var(--border-default); flex-shrink: 0; }
+.edit-section { margin-bottom: var(--space-16); }
+.edit-section-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-8); padding-bottom: var(--space-4); border-bottom: 1px solid var(--border-default); display: flex; align-items: center; gap: var(--space-4); }
+.edit-field { display: flex; align-items: center; gap: var(--space-8); margin-bottom: var(--space-8); font-size: 13px; flex-wrap: wrap; }
+.edit-field label { color: var(--text-muted); min-width: 80px; flex-shrink: 0; font-size: 13px; }
+.edit-field .input-sm { height: 34px; padding: 0 var(--space-8); border-radius: var(--radius-xs); border: 1px solid var(--border-default); background: rgba(0,0,0,0.25); color: var(--text-primary); font-size: 13px; outline: none; flex: 1; min-width: 100px; }
+.edit-field .input-sm:focus { border-color: var(--border-focus); }
+.edit-field select { height: 34px; font-size: 13px; padding: 0 var(--space-8); border-radius: var(--radius-xs); border: 1px solid var(--border-default); background: rgba(0,0,0,0.25); color: var(--text-primary); outline: none; }
+.edit-field select:focus { border-color: var(--border-focus); }
+.edit-checkbox { display: flex; align-items: center; gap: var(--space-6); font-size: 13px; color: var(--text-secondary); cursor: pointer; }
+.edit-checkbox input { accent-color: var(--color-brand-500); width: 16px; height: 16px; }
+
+/* ── 条件组合 ── */
+.cond-group { background: rgba(59,130,246,0.04); border: 1px solid rgba(59,130,246,0.12); border-radius: var(--radius-sm); padding: var(--space-10); margin-bottom: var(--space-6); }
+.cond-group-header { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--text-muted); margin-bottom: var(--space-6); }
+.cond-group-header .g-type { font-weight: 600; color: var(--color-brand-500); }
+.cond-row { display: flex; align-items: center; gap: var(--space-6); padding: var(--space-4) var(--space-6); margin-bottom: var(--space-4); background: rgba(0,0,0,0.15); border-radius: var(--radius-xs); font-size: 13px; }
+.cond-row .c-name { flex: 1; color: var(--text-primary); }
+.cond-row .c-params { color: var(--text-muted); font-size: 12px; }
+.cond-row .c-remove { width: 22px; height: 22px; border-radius: var(--radius-xs); border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+.cond-row .c-remove:hover { background: rgba(239,68,68,0.1); color: #EF4444; }
+.add-cond-btn { display: inline-flex; align-items: center; gap: var(--space-3); font-size: 12px; height: 30px; padding: 0 var(--space-8); border-radius: var(--radius-xs); border: 1px dashed var(--border-default); background: transparent; color: var(--text-muted); cursor: pointer; margin-top: var(--space-4); }
+.add-cond-btn:hover { border-color: var(--color-brand-500); color: var(--color-brand-500); }
+
+/* ── 信号确认引导 ── */
+.confirm-guide { display: none; background: rgba(34,197,94,0.04); border: 1px solid rgba(34,197,94,0.15); border-radius: var(--radius-sm); padding: var(--space-10) var(--space-12); margin-bottom: var(--space-14); }
+.confirm-guide.visible { display: block; }
+.confirm-guide .tip { font-size: 12px; color: #22C55E; margin-bottom: var(--space-6); display: flex; align-items: center; gap: var(--space-4); }
+.confirm-guide .tip-desc { font-size: 12px; color: var(--text-muted); padding: var(--space-4) var(--space-8); background: rgba(0,0,0,0.15); border-radius: var(--radius-xs); line-height: 1.5; }
+.status-indicator { font-size: 12px; padding: var(--space-4) var(--space-8); border-radius: var(--radius-xs); display: inline-flex; align-items: center; gap: var(--space-3); }
+.status-indicator.running { background: rgba(34,197,94,0.08); color: #22C55E; }
+.status-indicator.paused { background: rgba(163,163,163,0.08); color: #A3A3A3; }
+.status-indicator.expired { background: rgba(239,68,68,0.06); color: #EF4444; }
+
+/* ═══════════════════════════════════════════════════════════════
+   右下通知浮窗（改造 — 209号方案 §6.5）
+   ═══════════════════════════════════════════════════════════════ */
+.notif-float { position: fixed; bottom: var(--space-24); right: var(--space-24); z-index: 500; }
+
+/* ── 折叠条 — 更大更显眼 ── */
+.notif-collapsed { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-12) var(--space-18); width: 360px; background: #1a1a1a; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: 0 4px 20px rgba(0,0,0,0.4); cursor: pointer; font-size: 14px; transition: all 0.2s; white-space: nowrap; }
+.notif-collapsed:hover { border-color: var(--color-brand-500); box-shadow: 0 4px 24px rgba(59,130,246,0.15); }
+.notif-collapsed .badge-pulse { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: linear-gradient(135deg,#EF4444,#DC2626); color: white; font-size: 14px; font-weight: 700; border-radius: 50%; animation: badgePulse 2s ease infinite; flex-shrink: 0; }
+@keyframes badgePulse { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0.4)} 50%{box-shadow:0 0 0 8px rgba(239,68,68,0)} }
+.notif-collapsed .summary-text { flex: 1; overflow: hidden; }
+.notif-collapsed .summary-text .line1 { font-weight: 600; }
+.notif-collapsed .summary-text .line2 { font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.notif-collapsed .expand-arrow { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
+.notif-collapsed .quick-btn { font-size: 12px; height: 28px; padding: 0 var(--space-8); border-radius: var(--radius-xs); border: 1px solid var(--border-default); background: transparent; color: var(--color-brand-500); cursor: pointer; flex-shrink: 0; }
+.notif-collapsed .quick-btn:hover { background: rgba(59,130,246,0.1); }
+
+/* ── 展开弹窗 — 更大更详细 ── */
+.notif-expanded { display: none; width: 520px; max-height: 640px; background: #1a1a1a; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: 0 8px 32px rgba(0,0,0,0.45); overflow: hidden; flex-direction: column; }
+.notif-expanded.open { display: flex; }
+.notif-exp-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-14) var(--space-18); border-bottom: 1px solid var(--border-default); flex-shrink: 0; }
+.notif-exp-header h4 { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: var(--space-4); }
+.notif-exp-header .actions { display: flex; gap: var(--space-4); }
+.notif-exp-header .actions button { font-size: 12px; padding: 2px var(--space-6); border-radius: var(--radius-xs); border: 1px solid var(--border-default); background: transparent; color: var(--text-muted); cursor: pointer; }
+.notif-exp-header .actions button:hover { background: var(--bg-muted); color: var(--text-primary); }
+.notif-exp-body { flex: 1; overflow-y: auto; padding: var(--space-4) 0; }
+
+/* ── 通知浮窗内卡片 — 全量设计 ── */
+.notif-float-item { padding: var(--space-12) var(--space-16); border-bottom: 1px solid var(--border-default); cursor: pointer; transition: background 0.1s; }
+.notif-float-item:last-child { border-bottom: none; }
+.notif-float-item:hover { background: rgba(59,130,246,0.04); }
+.notif-float-item.unread { border-left: 4px solid var(--color-brand-500); background: rgba(59,130,246,0.03); }
+
+.notif-float-top { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-6); }
+.notif-float-rule { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: var(--space-3); }
+.notif-float-rule .type-icon { font-size: 16px; }
+.notif-float-time { font-size: 12px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+.notif-float-stock { font-size: 13px; color: var(--text-secondary); margin: var(--space-3) 0; }
+
+/* ── 条件详情区块 ── */
+.notif-float-conditions { background: rgba(0,0,0,0.12); border-radius: var(--radius-xs); padding: var(--space-6) var(--space-8); margin: var(--space-4) 0; font-size: 12px; line-height: 1.6; }
+.cond-pass-row { display: flex; align-items: center; gap: var(--space-4); margin-bottom: var(--space-2); color: var(--text-secondary); }
+.cond-pass-row:last-child { margin-bottom: 0; }
+.cond-pass-row .ck { color: #22C55E; font-weight: 600; flex-shrink: 0; }
+.cond-pass-row .cname { font-weight: 500; color: var(--text-primary); }
+.cond-pass-row .cval { color: var(--text-muted); font-size: 11px; }
+.cond-scan-meta { font-size: 11px; color: var(--text-muted); margin-top: var(--space-3); }
+
+/* ── 股票概况区块 ── */
+.notif-float-stock-info { background: rgba(0,0,0,0.08); border-radius: var(--radius-xs); padding: var(--space-6) var(--space-8); margin: var(--space-4) 0; display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-12); font-size: 12px; }
+.notif-float-stock-info .si-item { display: flex; align-items: center; gap: var(--space-3); }
+.notif-float-stock-info .si-item .si-lbl { color: var(--text-muted); }
+.notif-float-stock-info .si-item .si-val { font-weight: 500; }
+
+/* ── 操作按钮双行 ── */
+.notif-float-actions { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-5); }
+.notif-float-actions .na-btn { font-size: 12px; height: 28px; padding: 0 var(--space-8); border-radius: var(--radius-xs); border: 1px solid var(--border-default); background: transparent; color: var(--text-secondary); cursor: pointer; transition: all 0.3s ease; display: inline-flex; align-items: center; gap: var(--space-2); white-space: nowrap; }
+.notif-float-actions .na-btn:active { transform: scale(0.95); }
+.notif-float-actions .na-btn:hover { background: var(--bg-muted); color: var(--text-primary); border-color: var(--border-strong); }
+.notif-float-actions .na-btn.primary { border-color: var(--color-brand-500); color: var(--color-brand-500); }
+.notif-float-actions .na-btn.primary:hover { background: rgba(59,130,246,0.12); }
+.notif-float-actions .na-btn.danger { border-color: #EF4444; color: #EF4444; }
+.notif-float-actions .na-btn.danger:hover { background: rgba(239,68,68,0.1); }
+.notif-float-actions .na-btn.success { border-color: #22C55E; color: #22C55E; }
+.notif-float-actions .na-btn.success:hover { background: rgba(34,197,94,0.12); }
+.notif-float-actions .na-btn.warning { border-color: #F59E0B; color: #F59E0B; }
+.notif-float-actions .na-btn.warning:hover { background: rgba(245,158,11,0.12); }
+.notif-float-actions .na-btn.purple { border-color: #8B5CF6; color: #8B5CF6; }
+.notif-float-actions .na-btn.purple:hover { background: rgba(139,92,246,0.12); }
+.notif-float-actions .na-btn.confirmed { opacity: 0.6 !important; border-color: var(--color-brand-500) !important; transition: all 0.3s ease; }
+.notif-float-actions .na-btn.secondary-row { font-size: 11px; height: 24px; padding: 0 var(--space-6); color: var(--text-muted); border-color: transparent; }
+.notif-float-actions .na-btn.secondary-row:hover { border-color: var(--border-default); }
+
+/* ── 规避风险倒计时 ── */
+.countdown-bar { font-size: 12px; color: #EF4444; margin: var(--space-3) 0; display: flex; align-items: center; gap: var(--space-3); background: rgba(239,68,68,0.06); padding: 3px var(--space-8); border-radius: var(--radius-xs); width: fit-content; }
+.countdown-bar .push-indicator { font-size: 11px; color: var(--text-muted); margin-left: var(--space-4); }
+
+/* ── 纪律执行内联编辑 ── */
+.inline-edit-panel { display: none; margin-top: var(--space-6); padding: var(--space-10); background: rgba(139,92,246,0.06); border: 1px solid rgba(139,92,246,0.2); border-radius: var(--radius-sm); }
+.inline-edit-panel.open { display: block; }
+.inline-edit-row { display: flex; align-items: center; gap: var(--space-8); margin-bottom: var(--space-6); flex-wrap: wrap; }
+.inline-edit-row label { font-size: 12px; color: var(--text-secondary); min-width: 60px; }
+.inline-edit-row input { width: 80px; height: 30px; font-size: 13px; padding: 0 var(--space-6); border: 1px solid var(--border-default); border-radius: var(--radius-xs); background: rgba(0,0,0,0.2); color: var(--text-primary); outline: none; }
+.inline-edit-row input:focus { border-color: #8B5CF6; }
+.inline-edit-row .edit-arrow { color: var(--text-muted); font-size: 13px; }
+.inline-edit-actions { display: flex; gap: var(--space-6); margin-top: var(--space-4); }
+.inline-edit-actions button { font-size: 12px; height: 28px; padding: 0 var(--space-12); border-radius: var(--radius-xs); cursor: pointer; border: 1px solid var(--border-default); }
+.inline-edit-actions .confirm-btn { background: #8B5CF6; color: white; border-color: #8B5CF6; }
+.inline-edit-actions .confirm-btn:hover { background: #7C3AED; }
+.inline-edit-actions .cancel-btn { background: transparent; color: var(--text-secondary); }
+.inline-edit-actions .cancel-btn:hover { background: var(--bg-muted); }
+
+/* ── 复盘联动 ── */
+.review-link { display: inline-flex; align-items: center; gap: var(--space-2); font-size: 11px; color: var(--color-brand-500); cursor: pointer; padding: 2px var(--space-6); border-radius: var(--radius-xs); background: rgba(59,130,246,0.06); }
+.review-link:hover { background: rgba(59,130,246,0.12); }
+
+/* ── 规则-通知联动蓝色闪烁 ── */
+.rule-card.highlight { border-color: var(--color-brand-500) !important; box-shadow: 0 0 0 2px rgba(59,130,246,0.25); }
+
+/* ═══════════════════════════════════════════════════════════════
+   新建规则向导（209号方案 §6.2 — 4步向导）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 创建方式三选一 ── */
+.create-methods { display: flex; gap: var(--space-10); padding: var(--space-8) 0; }
+.create-method { flex: 1; padding: var(--space-16) var(--space-12); background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); cursor: pointer; text-align: center; transition: all 0.15s; }
+.create-method:hover { border-color: var(--color-brand-500); background: rgba(59,130,246,0.04); transform: translateY(-2px); }
+.create-method .icon { font-size: 30px; margin-bottom: var(--space-8); display: block; }
+.create-method h4 { font-size: 14px; font-weight: 600; margin-bottom: var(--space-4); }
+.create-method p { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+.create-method .example { font-size: 11px; color: var(--text-muted); margin-top: var(--space-6); padding: var(--space-4) var(--space-6); background: rgba(0,0,0,0.15); border-radius: var(--radius-xs); font-style: italic; }
+
+/* ── 4步向导步骤指示器 ── */
+.step-indicator { display: flex; align-items: center; justify-content: center; gap: 0; margin-bottom: var(--space-16); }
+.step-dot { display: flex; align-items: center; gap: var(--space-4); }
+.step-dot .circle { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; border: 2px solid var(--border-default); color: var(--text-muted); background: transparent; }
+.step-dot.active .circle { border-color: var(--color-brand-500); color: white; background: var(--color-brand-500); }
+.step-dot.done .circle { border-color: #22C55E; color: white; background: #22C55E; }
+.step-dot .slabel { font-size: 11px; color: var(--text-muted); margin-top: var(--space-2); display: block; }
+.step-line { width: 40px; height: 2px; background: var(--border-default); margin: 0 var(--space-4); }
+.step-line.done { background: #22C55E; }
+
+/* ── 类型选择面板（§23.1.2） ── */
+.type-select-panel { display: flex; flex-direction: column; gap: var(--space-6); }
+.type-select-card { display: flex; align-items: stretch; gap: var(--space-12); padding: var(--space-10) var(--space-14); background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); cursor: pointer; transition: all 0.15s; }
+.type-select-card:hover { border-color: var(--color-brand-500); background: rgba(59,130,246,0.04); transform: translateY(-1px); }
+.type-select-card.selected { border-color: var(--color-brand-500); background: rgba(59,130,246,0.08); }
+.type-select-card .ts-icon { font-size: 28px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.15); border-radius: var(--radius-sm); flex-shrink: 0; }
+.type-select-card .ts-body { flex: 1; }
+.type-select-card .ts-body .ts-title { font-size: 14px; font-weight: 600; margin-bottom: var(--space-2); }
+.type-select-card .ts-body .ts-desc { font-size: 12px; color: var(--text-muted); margin-bottom: var(--space-3); line-height: 1.5; }
+.type-select-card .ts-body .ts-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: var(--space-6); flex-wrap: wrap; }
+.type-select-card .ts-body .ts-meta span { display: flex; align-items: center; gap: var(--space-2); }
+.type-select-card .ts-radio { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border-default); display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: var(--space-2); transition: all 0.15s; }
+.type-select-card.selected .ts-radio { border-color: var(--color-brand-500); }
+.type-select-card.selected .ts-radio::after { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--color-brand-500); }
+
+/* ── 智能创建输入区 ── */
+.smart-input-area { padding: var(--space-8) 0; }
+.smart-input-area textarea { width: 100%; height: 80px; padding: var(--space-8) var(--space-10); border-radius: var(--radius-sm); border: 1px solid var(--border-default); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 14px; outline: none; resize: none; font-family: inherit; }
+.smart-input-area textarea:focus { border-color: var(--border-focus); }
+.smart-input-area .smart-hint { font-size: 12px; color: var(--text-muted); margin-top: var(--space-4); }
+.smart-results { margin-top: var(--space-10); padding: var(--space-10); background: rgba(59,130,246,0.04); border: 1px solid rgba(59,130,246,0.12); border-radius: var(--radius-sm); }
+.smart-results .sr-title { font-size: 12px; font-weight: 600; color: var(--color-brand-500); margin-bottom: var(--space-6); }
+.smart-results .sr-row { display: flex; align-items: center; gap: var(--space-6); padding: var(--space-3) 0; font-size: 13px; }
+.smart-results .sr-row input { accent-color: var(--color-brand-500); width: 16px; height: 16px; }
+
+/* ── 条件选择面板 ── */
+.cond-search { margin-bottom: var(--space-10); }
+.cond-search input { width: 100%; height: 36px; padding: 0 var(--space-10); font-size: 13px; border-radius: var(--radius-sm); border: 1px solid var(--border-default); background: rgba(0,0,0,0.25); color: var(--text-primary); outline: none; }
+.cond-search input:focus { border-color: var(--border-focus); }
+.cond-category { margin-bottom: var(--space-8); }
+.cond-category-title { display: flex; align-items: center; justify-content: space-between; padding: var(--space-6) var(--space-8); background: var(--bg-subtle); border-radius: var(--radius-xs); font-size: 13px; cursor: pointer; color: var(--text-secondary); }
+.cond-category-title .selected-count { font-size: 12px; color: var(--color-brand-500); }
+.cond-category-body { padding: var(--space-4) 0 var(--space-4) var(--space-6); }
+.cond-option { display: flex; align-items: center; gap: var(--space-6); padding: var(--space-4) var(--space-6); font-size: 13px; border-radius: var(--radius-xs); cursor: pointer; }
+.cond-option:hover { background: var(--bg-subtle); }
+.cond-option input { accent-color: var(--color-brand-500); width: 16px; height: 16px; }
+.cond-option .c-label { flex: 1; color: var(--text-primary); }
+.cond-option .c-params { color: var(--text-muted); font-size: 12px; }
+.cond-option .c-info { width: 20px; height: 20px; border-radius: var(--radius-full); border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+.cond-option .c-info:hover { background: var(--bg-muted); color: var(--text-primary); }
+
+/* ── 重复规则检测 ── */
+.dup-warning { display: none; padding: var(--space-8) var(--space-10); background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.2); border-radius: var(--radius-sm); margin-bottom: var(--space-10); font-size: 13px; }
+.dup-warning.visible { display: flex; align-items: center; gap: var(--space-8); }
+.dup-warning .icon { font-size: 18px; }
+.dup-warning .info { flex: 1; }
+.dup-warning .info strong { color: var(--signal-watch); }
+.dup-warning .info .meta { color: var(--text-muted); font-size: 12px; }
+
+/* ── 模板卡片 ── */
+.template-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-8); }
+.template-card { padding: var(--space-12); background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; }
+.template-card:hover { border-color: var(--color-brand-500); background: rgba(59,130,246,0.04); }
+.template-card .t-icon { font-size: 26px; margin-bottom: var(--space-4); display: block; }
+.template-card h5 { font-size: 13px; font-weight: 600; margin-bottom: var(--space-2); }
+.template-card p { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+
+/* ── 健康检查横幅 ── */
+.health-banner { display: none; align-items: center; gap: var(--space-8); padding: var(--space-8) var(--space-14); background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.2); border-radius: var(--radius-sm); margin-bottom: var(--space-8); font-size: 13px; color: var(--signal-watch); flex-shrink: 0; }
+.health-banner.visible { display: flex; }
+.health-banner .actions { margin-left: auto; display: flex; gap: var(--space-6); }
+.health-banner .actions button { font-size: 12px; padding: 2px var(--space-8); border-radius: var(--radius-xs); border: 1px solid var(--border-default); background: transparent; color: var(--text-muted); cursor: pointer; }
+.health-banner .actions button:hover { color: var(--text-primary); background: var(--bg-muted); }
+.health-banner .dismiss-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px; }
+
+/* ── 空状态（通知浮窗内） ── */
+.empty-pane { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--space-40) var(--space-24); text-align: center; color: var(--text-muted); }
+.empty-pane .icon-bg { width: 48px; height: 48px; border-radius: var(--radius-full); background: var(--bg-muted); display: flex; align-items: center; justify-content: center; font-size: 20px; margin-bottom: var(--space-12); }
+.empty-pane h4 { font-size: 14px; color: var(--text-secondary); margin-bottom: var(--space-4); }
+.empty-pane p { font-size: 13px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   响应式
+   ═══════════════════════════════════════════════════════════════ */
+@media (max-width: 1400px) { .rule-card-grid { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); } }
+@media (max-width: 1100px) {
+  .notif-expanded { width: 480px; }
+  .modal-detail { width: 540px; }
+  .edit-drawer { width: 100%; right: -100%; }
+  .rule-card-grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+  .notif-collapsed { width: 320px; }
+}
+@media (max-width: 768px) {
+  .notif-float { bottom: var(--space-12); right: var(--space-12); left: var(--space-12); }
+  .notif-collapsed { width: 100%; justify-content: center; border-radius: var(--radius-md); }
+  .notif-expanded { width: 100%; max-height: 60vh; }
+  .modal { max-width: 96vw; }
+  .modal-detail, .modal-history, .modal-wizard, .modal-notif-detail { width: 96vw; }
+  .edit-drawer { width: 100%; right: -100%; }
+  .detail-grid { grid-template-columns: 1fr; }
+  .template-grid { grid-template-columns: 1fr; }
+  .create-methods { flex-direction: column; }
+  .rule-card-grid { grid-template-columns: 1fr; }
+  .type-select-card { flex-direction: column; gap: var(--space-6); }
+  .stock-info-grid { grid-template-columns: repeat(3, 1fr); }
+  .notif-collapsed { width: calc(100% - 24px); }
+}
+@media (max-width: 480px) {
+  .filter-bar .search-wrap { min-width: 100%; }
+  .filter-bar .filter-select { flex: 1; min-width: 0; }
+  .stock-info-grid { grid-template-columns: repeat(2, 1fr); }
+}
 </style>
 </head>
 <body>
 <div class="app-layout">
-  <nav class="sidebar"> <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
-      <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
-      <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
-      <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
-        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
-        <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
-        <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
-        <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
-        <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
-        <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
-        <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
-        <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
-        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
-        <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
-        <a href="alert.html" class="sidebar-item active" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
-        <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
-        <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
-      </div>
-      <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
-    </nav>
+  <nav class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+    <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+      <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+      <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+      <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+      <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+      <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+      <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span></a>
+      <a href="strategy-sandbox.html" class="sidebar-item" data-name="策略沙箱"><span class="icon">🧪</span><span>策略沙箱</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+      <a href="alert.html" class="sidebar-item active" data-name="监控通知"><span class="icon">🔔</span><span>监控通知</span></a>
+      <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span></a>
+      <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+  </nav>
+
   <main class="main-content">
-    <div class="page-header">
-      <h1>🔔 预警管理</h1>
+    <!-- 页面头部 -->
+    <div class="page-header" style="margin-bottom:var(--space-12);padding-bottom:var(--space-12);">
+      <h1>🔔 监控通知</h1>
       <div class="page-header-actions">
-        <button class="btn btn-primary" onclick="alert('📝 新建预警规则弹窗已打开')">📝 新建规则</button>
+        <button class="btn" style="height:36px;font-size:13px;" onclick="openConditionLib()">📊 条件库</button>
+        <button class="btn btn-primary" style="height:36px;font-size:13px;" onclick="openCreateWizard()">➕ 新建规则</button>
       </div>
     </div>
 
-    <div class="tabs">
-      <span class="tab-item active" onclick="switchAlertTab(this,'tab-rules')">📋 预警规则</span>
-      <span class="tab-item" onclick="switchAlertTab(this,'tab-history')">📜 通知记录</span>
-      <span class="tab-item" onclick="switchAlertTab(this,'tab-settings')">⚙️ 预警设置</span>
-    </div>
+    <!-- 主内容区 -->
+    <div class="monitor-page">
 
-    <!-- 预警规则 -->
-    <div id="tab-rules">
-      <div class="rule-list">
-        <div class="rule-item">
-          <div class="rule-info"><span class="rule-name">📈 量价形态看多信号</span><span class="rule-detail">西藏矿业 · B2 放量突破 · 触发 8 次 · 最后: 今日 14:30</span></div>
-          <div class="rule-actions"><span class="toggle on" onclick="this.classList.toggle('on')"></span><span>✏️</span><span>🗑️</span></div>
+      <!-- 汇总统计条 -->
+      <div class="summary-bar">
+        <div class="summary-stat"><span class="num active">18</span><span class="label">总规则</span></div>
+        <div class="summary-divider"></div>
+        <div class="summary-stat"><span class="num triggered">5</span><span class="label">今日触发</span></div>
+        <div class="summary-divider"></div>
+        <div class="summary-stat"><span class="num" style="color:#22C55E;">15</span><span class="label">活跃</span></div>
+        <div class="summary-stat"><span class="num" style="color:#A3A3A3;">3</span><span class="label">暂停·休眠</span></div>
+        <div class="summary-divider"></div>
+        <div class="summary-stat" style="font-size:12px;color:var(--text-muted);display:flex;gap:var(--space-4);flex-wrap:wrap;">
+          <span>📈5</span><span>🛡️2</span><span>⚡3</span><span>📋6</span><span>🎯2</span>
         </div>
-        <div class="rule-item">
-          <div class="rule-info"><span class="rule-name">🧩 缠论买卖点信号</span><span class="rule-detail">所有自选股 · 三类买卖点 · 触发 15 次 · 最后: 昨日 10:15</span></div>
-          <div class="rule-actions"><span class="toggle on" onclick="this.classList.toggle('on')"></span><span>✏️</span><span>🗑️</span></div>
-        </div>
-        <div class="rule-item">
-          <div class="rule-info"><span class="rule-name">📦 筹码主力异动</span><span class="rule-detail">主力单日净流入 > 500 万 · 触发 3 次 · 最后: 3日前</span></div>
-          <div class="rule-actions"><span class="toggle on" onclick="this.classList.toggle('on')"></span><span>✏️</span><span>🗑️</span></div>
-        </div>
-        <div class="rule-item">
-          <div class="rule-info"><span class="rule-name">📊 大盘日内跌幅 > 3%</span><span class="rule-detail">上证/深证指数 · 触发 1 次 · 最后: 2026-05-12</span></div>
-          <div class="rule-actions"><span class="toggle" onclick="this.classList.toggle('on')"></span><span>✏️</span><span>🗑️</span></div>
-        </div>
-        <div class="rule-item">
-          <div class="rule-info"><span class="rule-name">🤖 AI 综合评分 > 85</span><span class="rule-detail">DeepSeek AI 研判 · 触发 5 次 · 最后: 2日前</span></div>
-          <div class="rule-actions"><span class="toggle on" onclick="this.classList.toggle('on')"></span><span>✏️</span><span>🗑️</span></div>
+        <div class="summary-action">
+          <button class="btn" style="height:32px;font-size:12px;padding:0 var(--space-10);" onclick="toggleRangeTable()">▶ 按范围查看</button>
         </div>
       </div>
-    </div>
 
-    <!-- 通知记录 -->
-    <div id="tab-history" style="display:none;">
-      <div class="rule-list">
-        <div class="rule-item"><div class="rule-info"><span class="rule-name">📈 量价形态看多信号</span><span class="rule-detail">西藏矿业 · B2 放量突破 · 当前评分 92</span></div><span style="font-size:12px;color:var(--text-muted);">14:30 今日</span></div>
-        <div class="rule-item"><div class="rule-info"><span class="rule-name">🧩 缠论三类卖点</span><span class="rule-detail">西藏矿业 · 一类卖点 score 0.82</span></div><span style="font-size:12px;color:var(--text-muted);">13:45 今日</span></div>
-        <div class="rule-item"><div class="rule-info"><span class="rule-name">🤖 AI 综合评分 > 85</span><span class="rule-detail">比亚迪 · AI 综合评分 90</span></div><span style="font-size:12px;color:var(--text-muted);">10:20 今日</span></div>
-        <div class="rule-item"><div class="rule-info"><span class="rule-name">📦 筹码主力异动</span><span class="rule-detail">西藏矿业 · 主力净流入 +2,350 万</span></div><span style="font-size:12px;color:var(--text-muted);">09:30 今日</span></div>
-        <div class="rule-item" style="border-bottom:none;">
-          <div style="text-align:center;width:100%;font-size:12px;color:var(--text-muted);padding:var(--space-8) 0;">共 24 条通知 · <span style="color:var(--color-brand-500);cursor:pointer;" onclick="alert('✅ 已标记全部已读')">标记全部已读</span></div>
+      <!-- 批量操作栏 -->
+      <div class="batch-bar" id="batchBar">
+        <span class="count-label">✔ 已选 <strong id="batchCount">0</strong> 条</span>
+        <button class="batch-btn" onclick="batchAction('pause')">⏸ 批量暂停</button>
+        <button class="batch-btn success" onclick="batchAction('resume')">▶ 批量启用</button>
+        <button class="batch-btn danger" onclick="batchAction('delete')">🗑 批量删除</button>
+        <button class="batch-dismiss" onclick="dismissBatch()">取消选择</button>
+      </div>
+
+      <!-- 健康检查横幅 (L3) -->
+      <div class="health-banner" id="healthBanner">
+        <span>📋 规则健康检查：3 条规则已暂停 30+ 天未触发</span>
+        <div class="actions">
+          <button onclick="alert('查看健康报告')">📋 查看报告</button>
+          <button onclick="closeHealthBanner()">×</button>
         </div>
       </div>
-    </div>
 
-    <!-- 预警设置 -->
-    <div id="tab-settings" style="display:none;">
-      <div class="rule-list">
-        <div class="rule-item"><div class="rule-info"><span class="rule-name">🔔 通知推送方式</span></div>
-          <select class="select" style="width:160px;"><option>系统内通知</option><option>邮件通知</option><option>全部推送</option></select></div>
-        <div class="rule-item"><div class="rule-info"><span class="rule-name">🔕 免打扰时段</span></div>
-          <div style="display:flex;gap:var(--space-4);align-items:center;"><input class="input" value="22:00" style="width:80px;"> — <input class="input" value="08:00" style="width:80px;"></div></div>
-        <div class="rule-item" style="border-bottom:none;"><div style="width:100%;text-align:right;">
-          <button class="btn btn-primary" style="font-size:12px;height:32px;" onclick="alert('✅ 设置已保存')">💾 保存设置</button>
-        </div></div>
+      <!-- 休眠区 -->
+      <div class="dormant-section" id="dormantSection">
+        <div class="dormant-trigger" onclick="toggleDormant()">
+          <span>📋 休眠区（<span class="count" id="dormantCount">2</span> 条未恢复）</span>
+          <div class="actions">
+            <button onclick="event.stopPropagation();batchDormant('restore')">全部恢复</button>
+            <button onclick="event.stopPropagation();batchDormant('clear')">全部清除</button>
+          </div>
+        </div>
+        <div class="dormant-body" id="dormantBody">
+          <div class="dormant-item">
+            <div class="info"><span class="name">🟡 一类买点·芯片板块</span><span class="meta">最后触发: 2026-04-28 · 已休眠 57 天 · 缠论一类买点</span></div>
+            <button class="act" onclick="restoreDormant(this)">▶ 恢复启用</button>
+            <button class="act danger" onclick="deleteDormant(this)">🗑 彻底删除</button>
+          </div>
+          <div class="dormant-item">
+            <div class="info"><span class="name">🟡 龙虎榜跟庄·全市场</span><span class="meta">最后触发: 2026-05-10 · 已休眠 46 天 · 龙虎榜数据</span></div>
+            <button class="act" onclick="restoreDormant(this)">▶ 恢复启用</button>
+            <button class="act danger" onclick="deleteDormant(this)">🗑 彻底删除</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 筛选栏 -->
+      <div class="filter-bar">
+        <div class="search-wrap"><span class="search-icon">🔍</span><input type="text" placeholder="搜索规则名/股票代码..." oninput="filterCards()"></div>
+        <select class="filter-select" onchange="filterCards()"><option value="">全部状态</option><option value="running">运行中</option><option value="paused">暂停</option><option value="dormant">已休眠</option><option value="expired">已过期</option></select>
+        <select class="filter-select" onchange="filterCards()"><option value="">全部类型</option><option value="opportunity">📈 发现机会</option><option value="risk">🛡️ 规避风险</option><option value="anomaly">⚡ 异动追踪</option><option value="status">📋 状态监控</option><option value="discipline">🎯 纪律执行</option></select>
+        <select class="filter-select" onchange="filterCards()"><option value="">全部范围</option><option value="single">📍 单股级</option><option value="multi">📋 多股级</option><option value="market">🔭 全市场级</option></select>
+        <select class="filter-select" onchange="filterCards()"><option value="recent">最近触发 ▼</option><option value="created">最近创建</option><option value="most">触发最多</option><option value="hot">热度最高</option><option value="name">名称 A-Z</option></select>
+      </div>
+
+      <!-- ═══ 顶部通知滚动区（新增） ═══ -->
+      <div class="notif-scroll-section" id="notifScrollSection">
+        <div class="notif-scroll-header">
+          <span><span class="badge-dot"></span><span id="scrollHeaderText">📡 今日未处理 <strong style="color:#EF4444;">3</strong> 条通知</span></span>
+          <span class="notif-scroll-link" onclick="toggleNotifFloat()">查看所有通知 →</span>
+        </div>
+        <div class="notif-scroll-track" id="notifScrollTrack">
+          <!-- 有未处理通知 -->
+          <div class="notif-scroll-card" onclick="openNotifDetail('opportunity')"><span class="type-icon">📈</span><span class="stock">贵州茅台</span><span class="change up">+2.30%</span><span class="tag-new">今日第2次</span></div>
+          <div class="notif-scroll-card" onclick="openNotifDetail('risk')"><span class="type-icon">🛡️</span><span class="stock">贵州茅台</span><span class="change down">-1.80%</span><span class="tag-new">⚠️风险</span></div>
+          <div class="notif-scroll-card" onclick="openNotifDetail('anomaly')"><span class="type-icon">⚡</span><span class="stock">五粮液</span><span class="tag-new" style="background:rgba(245,158,11,0.15);color:#F59E0B;">异动</span></div>
+          <div class="notif-scroll-card" onclick="openNotifDetail('opportunity')"><span class="type-icon">📈</span><span class="stock">宁德时代</span><span class="change up">+1.20%</span></div>
+          <!-- 重复用于滚动循环 -->
+          <div class="notif-scroll-card" onclick="openNotifDetail('opportunity')"><span class="type-icon">📈</span><span class="stock">贵州茅台</span><span class="change up">+2.30%</span><span class="tag-new">今日第2次</span></div>
+          <div class="notif-scroll-card" onclick="openNotifDetail('risk')"><span class="type-icon">🛡️</span><span class="stock">贵州茅台</span><span class="change down">-1.80%</span><span class="tag-new">⚠️风险</span></div>
+        </div>
+      </div>
+
+      <!-- 折叠表格 -->
+      <div class="range-table-wrap" id="rangeTable">
+        <div style="padding:var(--space-10) var(--space-14);border-bottom:1px solid var(--border-default);font-size:12px;color:var(--text-muted);">按监控范围分组 · 纯浏览总览</div>
+        <div style="padding:var(--space-8) var(--space-14);">
+          <div style="font-size:13px;font-weight:500;margin-bottom:var(--space-4);color:var(--text-secondary);">📍 单股级 — 6 条（4 活跃 / 2 暂停）</div>
+          <table class="table" style="font-size:12px;"><tr><th>状态</th><th>规则名</th><th>条件</th><th>时段</th><th>今日</th></tr>
+            <tr><td><span class="status-dot green"></span></td><td>西藏矿业</td><td>一类买点</td><td>全天</td><td>0</td></tr>
+            <tr><td><span class="status-dot green"></span></td><td>贵州茅台</td><td>MACD金叉</td><td>09:30~</td><td>1</td></tr>
+            <tr><td><span class="status-dot" style="background:#A3A3A3;"></span></td><td>宁德时代</td><td>放量突破</td><td>全天</td><td>-</td></tr>
+          </table>
+        </div>
+        <div style="padding:var(--space-8) var(--space-14);border-top:1px solid var(--border-default);">
+          <div style="font-size:13px;font-weight:500;margin-bottom:var(--space-4);color:var(--text-secondary);">📋 多股级 — 8 条（6 活跃 / 2 暂停）</div>
+          <table class="table" style="font-size:12px;"><tr><th>状态</th><th>规则名</th><th>条件</th><th>时段</th><th>今日</th></tr>
+            <tr><td><span class="status-dot green"></span></td><td>放量追击</td><td>量价齐升</td><td>09:30~</td><td>3</td></tr>
+            <tr><td><span class="status-dot green"></span></td><td>底部反弹</td><td>格兰维尔</td><td>全天</td><td>0</td></tr>
+            <tr><td><span class="status-dot yellow"></span></td><td>龙虎榜跟庄</td><td>龙虎榜</td><td>全天</td><td>-</td></tr>
+          </table>
+        </div>
+        <div style="padding:var(--space-8) var(--space-14);border-top:1px solid var(--border-default);">
+          <div style="font-size:13px;font-weight:500;margin-bottom:var(--space-4);color:var(--text-secondary);">🔭 全市场级 — 4 条（4 活跃）</div>
+          <table class="table" style="font-size:12px;"><tr><th>状态</th><th>规则名</th><th>条件</th><th>时段</th><th>今日</th></tr>
+            <tr><td><span class="status-dot green"></span></td><td>全市场暴涨</td><td>涨幅>5%</td><td>09:30~</td><td>12</td></tr>
+            <tr><td><span class="status-dot green"></span></td><td>异动扫描</td><td>成交量放大</td><td>全天</td><td>5</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <!-- ═══ 规则卡片网格 (CSS Grid) ═══ -->
+      <div class="scroll-pane">
+        <div class="rule-card-grid" id="ruleCardGrid">
+          <!-- 卡片1: 📈发现机会 运行中 -->
+          <div class="rule-card type-opportunity" data-name="放量追击" data-type="opportunity" data-status="running" data-range="multi">
+            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
+            <div class="rule-card-body" onclick="openDetail('放量追击','opportunity','running')">
+              <div class="rule-card-header">
+                <div class="rule-card-name"><span class="status-dot green"></span><span class="type-badge">📈</span>放量追击 <span class="hot-badge hot">🔥热门</span></div>
+                <div class="rule-card-status"><span class="status-tag running">● 运行中</span></div>
+              </div>
+              <div class="rule-card-meta"><span>📊 成交量放大≥1.5倍+价格涨</span><span>📋 自选股·5只</span><span>⏰ 09:30~15:00 · 15分扫描</span></div>
+              <div class="rule-card-triggers"><span>触发 <span class="count">23</span> 次</span><span class="latest">最近: 今日 10:30</span><span class="today">今日连续触发 3 次</span><span class="trigger-badge">高频</span></div>
+              <div class="recent-triggers"><span>最近3次:</span><span><span class="dot ok"></span>贵州茅台 10:30</span><span><span class="dot ok"></span>宁德时代 09:45</span><span><span class="dot ok"></span>隆基绿能 09:12</span></div>
+            </div>
+            <div class="rule-card-actions">
+              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)">⏸ 暂停</button>
+              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('放量追击')">✏️ 编辑</button>
+              <button class="act-btn" onclick="event.stopPropagation();openHistory('放量追击')">📜 记录</button>
+              <button class="act-btn primary" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
+              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
+            </div>
+          </div>
+
+          <!-- 卡片2: 📈发现机会 运行中 -->
+          <div class="rule-card type-opportunity" data-name="MA60突破+量能确认" data-type="opportunity" data-status="running" data-range="single">
+            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
+            <div class="rule-card-body" onclick="openDetail('MA60突破+量能确认','opportunity','running')">
+              <div class="rule-card-header">
+                <div class="rule-card-name"><span class="status-dot green"></span><span class="type-badge">📈</span>MA60突破+量能确认 <span class="hot-badge hot">🔥热门</span></div>
+                <div class="rule-card-status"><span class="status-tag running">● 运行中</span></div>
+              </div>
+              <div class="rule-card-meta"><span>📈 价格>12.5元 · 确认期3周期</span><span>📍 贵州茅台</span><span>⏰ 全天 · 30分扫描</span></div>
+              <div class="rule-card-triggers"><span>触发 <span class="count">8</span> 次</span><span class="latest">最近: 今日 14:35</span></div>
+              <div class="recent-triggers"><span>最近3次:</span><span><span class="dot ok"></span>贵州茅台 14:35</span><span><span class="dot ok"></span>贵州茅台 13:20</span><span><span class="dot" style="background:#A3A3A3;"></span>—</span></div>
+            </div>
+            <div class="rule-card-actions">
+              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)">⏸ 暂停</button>
+              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('MA60突破+量能确认')">✏️ 编辑</button>
+              <button class="act-btn" onclick="event.stopPropagation();openHistory('MA60突破+量能确认')">📜 记录</button>
+              <button class="act-btn" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
+              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
+            </div>
+          </div>
+
+          <!-- 卡片3: 🛡️规避风险 暂停 -->
+          <div class="rule-card type-risk" data-name="MACD金叉买入" data-type="risk" data-status="paused" data-range="market">
+            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
+            <div class="rule-card-body" onclick="openDetail('MACD金叉买入','risk','paused')">
+              <div class="rule-card-header">
+                <div class="rule-card-name"><span class="status-dot" style="background:#A3A3A3;"></span><span class="type-badge">🛡️</span>MACD金叉买入</div>
+                <div class="rule-card-status"><span class="status-tag paused">○ 已暂停（距开启 14h）</span></div>
+              </div>
+              <div class="rule-card-meta"><span>📊 DIF>DEA (12/26/9)</span><span>🔭 全市场</span><span>⏰ 全天</span></div>
+              <div class="rule-card-triggers"><span>触发 <span class="count">12</span> 次</span><span class="latest">最近: 昨日 09:45</span></div>
+            </div>
+            <div class="rule-card-actions">
+              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)" style="border-color:#22C55E;color:#22C55E;">▶ 启用</button>
+              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('MACD金叉买入')">✏️ 编辑</button>
+              <button class="act-btn" onclick="event.stopPropagation();openHistory('MACD金叉买入')">📜 记录</button>
+              <button class="act-btn" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
+              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
+            </div>
+          </div>
+
+          <!-- 卡片4: 📋状态监控 运行中 -->
+          <div class="rule-card type-status" data-name="均线多头排列" data-type="status" data-status="running" data-range="single">
+            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
+            <div class="rule-card-body" onclick="openDetail('均线多头排列','status','running')">
+              <div class="rule-card-header">
+                <div class="rule-card-name"><span class="status-dot green"></span><span class="type-badge">📋</span>均线多头排列</div>
+                <div class="rule-card-status"><span class="status-tag running">● 运行中</span></div>
+              </div>
+              <div class="rule-card-meta"><span>📈 MA5>MA10>MA20>MA60</span><span>📍 贵州茅台</span><span>⏰ 全天</span></div>
+              <div class="rule-card-triggers"><span>触发 <span class="count">45</span> 次</span><span class="latest">最近: 今日 10:05</span><span class="trigger-badge">稳定</span></div>
+            </div>
+            <div class="rule-card-actions">
+              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)">⏸ 暂停</button>
+              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('均线多头排列')">✏️ 编辑</button>
+              <button class="act-btn" onclick="event.stopPropagation();openHistory('均线多头排列')">📜 记录</button>
+              <button class="act-btn" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
+              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
+            </div>
+          </div>
+
+          <!-- 卡片5: 🎯纪律执行 运行中 -->
+          <div class="rule-card type-discipline" data-name="底部反弹跟踪" data-type="discipline" data-status="running" data-range="multi">
+            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
+            <div class="rule-card-body" onclick="openDetail('底部反弹跟踪','discipline','running')">
+              <div class="rule-card-header">
+                <div class="rule-card-name"><span class="status-dot green"></span><span class="type-badge">🎯</span>底部反弹跟踪 <span class="hot-badge hot">🔥热门</span></div>
+                <div class="rule-card-status"><span class="status-tag running">● 运行中</span></div>
+              </div>
+              <div class="rule-card-meta"><span>📈 价格低位+放量+MACD金叉（3条件AND）</span><span>📋 自选股</span><span>⏰ 09:30~15:00</span></div>
+              <div class="rule-card-triggers"><span>触发 <span class="count">5</span> 次</span><span class="latest">最近: 2日前</span></div>
+              <div class="recent-triggers"><span>最近3次:</span><span><span class="dot ok"></span>宁德时代 06-25</span><span><span class="dot ok"></span>隆基绿能 06-24</span><span><span class="dot ok"></span>阳光电源 06-23</span></div>
+            </div>
+            <div class="rule-card-actions">
+              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)">⏸ 暂停</button>
+              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('底部反弹跟踪')">✏️ 编辑</button>
+              <button class="act-btn" onclick="event.stopPropagation();openHistory('底部反弹跟踪')">📜 记录</button>
+              <button class="act-btn" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
+              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
+            </div>
+          </div>
+
+          <!-- 卡片6: ⚡异动追踪 已休眠 -->
+          <div class="rule-card type-anomaly" data-name="一类买点·芯片板块" data-type="anomaly" data-status="dormant" data-range="multi">
+            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
+            <div class="rule-card-body" onclick="openDetail('一类买点·芯片板块','anomaly','dormant')">
+              <div class="rule-card-header">
+                <div class="rule-card-name"><span class="status-dot" style="background:#F59E0B;"></span><span class="type-badge">⚡</span>一类买点·芯片板块</div>
+                <div class="rule-card-status"><span class="status-tag dormant">🟡 已休眠（57天未触发）</span></div>
+              </div>
+              <div class="rule-card-meta"><span>🧩 缠论一类买点</span><span>📋 芯片板块</span><span>🗓️ ~2026-09-30</span></div>
+              <div class="rule-card-triggers"><span>触发 <span class="count">1</span> 次</span><span class="latest">最近: 2026-04-28</span></div>
+            </div>
+            <div class="rule-card-actions">
+              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)" style="border-color:#22C55E;color:#22C55E;">▶ 恢复</button>
+              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('一类买点·芯片板块')">✏️ 编辑</button>
+              <button class="act-btn" onclick="event.stopPropagation();openHistory('一类买点·芯片板块')">📜 记录</button>
+              <button class="act-btn" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
+              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="load-more" onclick="alert('加载更多规则')">加载更多规则 ▶</div>
       </div>
     </div>
-
   </main>
 </div>
 
+<!-- ═══════════════════════════════════════════════════════════════
+     详情弹窗
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="detailModal" onclick="closeModal(event,'detailModal')">
+  <div class="modal modal-detail" id="detailModalBody" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3 id="detailTitle">📋 放量追击 <span class="hot-badge hot" id="detailHot">🔥热门</span></h3>
+      <button class="modal-close" onclick="closeModal(event,'detailModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-12);"><span id="detailType">🏷️ 发现机会</span> · 创建于 2026-06-01</div>
+      <div class="detail-grid">
+        <div class="item"><span class="label">类型</span><span class="value" id="dType">📈 发现机会</span></div>
+        <div class="item"><span class="label">状态</span><span class="value"><span class="status-tag running" id="dStatus">● 运行中</span></span></div>
+        <div class="item full"><span class="label">条件</span><span class="value" id="dCondition">成交量放大N倍 + 价格涨</span></div>
+        <div class="item full"><span class="label">参数</span><span class="value" id="dParams">均量周期 20日 / 倍数 ≥1.5</span></div>
+        <div class="item full"><span class="label">范围</span><span class="value" id="dRange">📋 自选股(5只) — 动态跟随</span></div>
+        <div class="item"><span class="label">时段</span><span class="value" id="dTime">09:30~15:00 (距关闭 4h 30min)</span></div>
+        <div class="item"><span class="label">有效期</span><span class="value" id="dValid">2026-07-01 ~ 2026-09-30 (余95天)</span></div>
+        <div class="item"><span class="label">冷却期</span><span class="value" id="dCooldown">30 分钟</span></div>
+        <div class="item"><span class="label">推送</span><span class="value" id="dPush">☑桌面 ☑微信</span></div>
+        <div class="item"><span class="label">确认周期</span><span class="value" id="dConfirm">3周期 · 以收盘均价为准</span></div>
+      </div>
+
+      <div style="font-size:13px;font-weight:600;margin-bottom:var(--space-8);color:var(--text-secondary);">触发历史</div>
+      <div style="max-height:240px;overflow-y:auto;">
+        <table class="history-table">
+          <tr><th>时间</th><th>股票</th><th>触发值</th><th>渠道</th><th>状态</th></tr>
+          <tr><td>06-26 14:35</td><td>贵州茅台</td><td>2.3倍均量</td><td>桌面✓微信✓</td><td style="color:#22C55E;">● 已处理</td></tr>
+          <tr><td>06-26 09:45</td><td>宁德时代</td><td>1.8倍均量</td><td>桌面✓</td><td style="color:var(--text-muted);">○ 已收悉</td></tr>
+          <tr><td>06-25 14:12</td><td>隆基绿能</td><td>1.6倍均量</td><td>桌面✓微信✓</td><td style="color:#22C55E;">● 已处理</td></tr>
+          <tr><td>06-25 10:30</td><td>阳光电源</td><td>2.1倍均量</td><td>桌面✓</td><td style="color:var(--text-muted);">○ 已收悉</td></tr>
+        </table>
+      </div>
+      <div style="text-align:right;padding:var(--space-6) 0 0;font-size:12px;color:var(--color-brand-500);cursor:pointer;" onclick="openHistory('放量追击')">查看更多 →</div>
+    </div>
+    <div class="modal-footer">
+      <button class="act-btn" onclick="event.stopPropagation();event.target.textContent=event.target.textContent.includes('⏸')?'▶ 启用':'⏸ 暂停';">⏸ 暂停</button>
+      <button class="act-btn primary" onclick="closeModal(event,'detailModal');setTimeout(function(){openEditDrawer('放量追击')},200)">✏️ 编辑</button>
+      <button class="act-btn" onclick="alert('规则已克隆')">📋 克隆</button>
+      <div class="spacer"></div>
+      <button class="act-btn" onclick="alert('导出记录')">💾 导出记录</button>
+      <button class="act-btn" onclick="confirmDelete(this)" style="color:#EF4444;">🗑 删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     触发历史弹窗
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="historyModal" onclick="closeModal(event,'historyModal')">
+  <div class="modal modal-history" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3 id="historyTitle">📜 触发历史: 放量追击</h3>
+      <button class="modal-close" onclick="closeModal(event,'historyModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;gap:var(--space-8);margin-bottom:var(--space-10);flex-wrap:wrap;align-items:center;">
+        <select class="filter-select" style="height:32px;font-size:12px;"><option>全部股票</option><option>贵州茅台</option><option>宁德时代</option></select>
+        <select class="filter-select" style="height:32px;font-size:12px;"><option>2026-06</option><option>2026-05</option></select>
+        <div class="search-wrap" style="flex:1;min-width:120px;">
+          <span class="search-icon" style="left:var(--space-6);">🔍</span>
+          <input type="text" placeholder="搜索条件明细..." style="width:100%;height:32px;padding-left:var(--space-24);font-size:12px;border-radius:var(--radius-xs);border:1px solid var(--border-default);background:rgba(0,0,0,0.25);color:var(--text-primary);outline:none;">
+        </div>
+        <button class="act-btn" onclick="alert('导出CSV')">📥 导出CSV</button>
+      </div>
+      <div style="max-height:400px;overflow-y:auto;">
+        <table class="history-table">
+          <tr><th>时间</th><th>股票</th><th>触发值</th><th>条件明细</th><th>渠道</th><th>确认</th></tr>
+          <tr><td>14:35</td><td>贵州茅台</td><td>2.3倍均量</td><td style="font-size:11px;">✅量✅KDJ✅</td><td>桌面✓微信✓</td><td style="color:#22C55E;">✅已处理</td></tr>
+          <tr><td>09:45</td><td>宁德时代</td><td>1.8倍均量</td><td style="font-size:11px;">✅量✅KDJ</td><td>桌面✓</td><td style="color:var(--text-muted);">○已收悉</td></tr>
+          <tr><td>09:12</td><td>隆基绿能</td><td>1.6倍均量</td><td style="font-size:11px;">✅量✅价</td><td>桌面✓微信✓</td><td style="color:#22C55E;">✅已处理</td></tr>
+          <tr><td>06-25 14:12</td><td>隆基绿能</td><td>1.6倍均量</td><td style="font-size:11px;">✅量✅价</td><td>桌面✓微信✓</td><td style="color:#22C55E;">✅已处理</td></tr>
+        </table>
+      </div>
+      <div style="display:flex;justify-content:center;align-items:center;gap:var(--space-8);padding:var(--space-8) 0 0;font-size:12px;color:var(--text-muted);">
+        <span>共 23 条记录 (1-10)</span>
+        <button class="act-btn" disabled style="opacity:0.4;">❮ 上一页</button>
+        <span style="color:var(--text-secondary);">1 2 3</span>
+        <button class="act-btn">下一页 ❯</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     通知详情弹窗（新增 — 209号方案 §6.5.3）
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="notifDetailModal" onclick="closeModal(event,'notifDetailModal')">
+  <div class="modal modal-notif-detail" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3 id="ndTitle">📈 通知详情</h3>
+      <button class="modal-close" onclick="closeModal(event,'notifDetailModal')">✕</button>
+    </div>
+    <div class="modal-body" id="ndBody">
+      <div class="notif-detail-type" id="ndType">🏷️ 发现机会 · 贵州茅台(600519) · 14:35</div>
+
+      <div style="font-size:13px;font-weight:600;margin-bottom:var(--space-6);color:var(--text-secondary);">规则摘要</div>
+      <div class="notif-detail-rule-summary" id="ndRuleSummary">
+        <div><span class="label">规则：</span><span class="val">MA60突破+量能确认（运行中 · 今日触发2次）</span></div>
+        <div><span class="label">条件：</span><span class="val">MA60突破 + 成交量放大 + KDJ金叉 (AND)</span></div>
+        <div><span class="label">范围：</span><span class="val">📍 贵州茅台 · 扫描：15分钟周期</span></div>
+      </div>
+
+      <div style="font-size:13px;font-weight:600;margin-bottom:var(--space-6);color:var(--text-secondary);">本次触发详情</div>
+      <div id="ndTriggerDetails">
+        <div class="trigger-detail-item">
+          <div class="td-name">✅ MA60突破</div>
+          <div class="td-detail">MA60: 145.20 → 当前: 148.50 (+2.27%)<br>阈值：148.50 > 145.20 ✅</div>
+          <div class="td-status">通过</div>
+        </div>
+        <div class="trigger-detail-item">
+          <div class="td-name">✅ 成交量放大</div>
+          <div class="td-detail">5日均量: 372万手 → 当前: 856万手 (+130%)<br>倍数阈值：≥1.5倍 ✅</div>
+          <div class="td-status">通过</div>
+        </div>
+        <div class="trigger-detail-item">
+          <div class="td-name">✅ KDJ金叉</div>
+          <div class="td-detail">K值: 32.0 D值: 28.0 J值: 40.0<br>K上穿D ✅</div>
+          <div class="td-status">通过</div>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:var(--space-4);padding:var(--space-4) var(--space-8);background:rgba(34,197,94,0.04);border-radius:var(--radius-xs);">确认期：3周期 × 收盘均价为准 · 已通过</div>
+      </div>
+
+      <div style="font-size:13px;font-weight:600;margin-bottom:var(--space-6);margin-top:var(--space-10);color:var(--text-secondary);">股票当前概况</div>
+      <div style="background:rgba(0,0,0,0.08);border-radius:var(--radius-sm);padding:var(--space-8) var(--space-10);">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-4);">贵州茅台(600519) · 截至 2026-06-28 14:35</div>
+        <div class="stock-info-grid" id="ndStockInfo">
+          <div class="si-item"><div class="si-label">今开</div><div class="si-val">147.30</div></div>
+          <div class="si-item"><div class="si-label">最高</div><div class="si-val" style="color:#EF4444;">149.20</div></div>
+          <div class="si-item"><div class="si-label">最低</div><div class="si-val" style="color:#22C55E;">145.80</div></div>
+          <div class="si-item"><div class="si-label">均价</div><div class="si-val">148.00</div></div>
+          <div class="si-item"><div class="si-label">量比</div><div class="si-val">1.30</div></div>
+          <div class="si-item"><div class="si-label">涨幅</div><div class="si-val" style="color:#EF4444;">+2.30%</div></div>
+          <div class="si-item"><div class="si-label">成交额</div><div class="si-val">19.46亿</div></div>
+          <div class="si-item"><div class="si-label">换手率</div><div class="si-val">1.40%</div></div>
+          <div class="si-item"><div class="si-label">流通值</div><div class="si-val">1401亿</div></div>
+          <div class="si-item"><div class="si-label">涨速</div><div class="si-val" style="color:#22C55E;">-0.05%</div></div>
+        </div>
+      </div>
+
+      <div style="margin-top:var(--space-12);" id="ndActions">
+        <div class="notif-float-actions">
+          <button class="na-btn primary" onclick="implicitConfirmNotifDetail(this,'看行情')">📈 看行情</button>
+          <button class="na-btn" onclick="implicitConfirmNotifDetail(this,'策略分析')">🧠 策略分析</button>
+          <button class="na-btn" onclick="implicitConfirmNotifDetail(this,'多角色')">🤖 多角色投研</button>
+          <button class="na-btn" onclick="implicitConfirmNotifDetail(this,'加自选')">⭐ 加自选</button>
+          <button class="na-btn warning" onclick="implicitConfirmNotifDetail(this,'误报')">❌ 误报</button>
+          <button class="na-btn secondary-row" onclick="alert('查看复盘')">📋 复盘</button>
+          <button class="na-btn secondary-row" onclick="closeModal(event,'notifDetailModal');setTimeout(function(){openEditDrawer('MA60突破+量能确认')},200)">✏️ 编辑规则</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-4);">通道状态：桌面✓ 微信未推（用户未配置）</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     右侧编辑抽屉
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
+<div class="edit-drawer" id="editDrawer">
+  <div class="drawer-header"><h3>✏️ 编辑规则</h3><button class="modal-close" onclick="closeDrawer()">✕</button></div>
+  <div class="drawer-body">
+    <div class="edit-section">
+      <div class="edit-section-title">📋 基本信息</div>
+      <div class="edit-field"><label>规则名称</label><input class="input-sm" type="text" value="放量追击"></div>
+      <div class="edit-field"><label>规则类型</label><select><option>📈 发现机会</option><option>🛡️ 规避风险</option><option>⚡ 异动追踪</option><option>📋 状态监控</option><option>🎯 纪律执行</option></select></div>
+      <div class="edit-field"><label>监控范围</label><select><option>📍 单股级</option><option selected>📋 多股级</option><option>🔭 全市场级</option></select><input class="input-sm" type="text" value="贵州茅台(600519)" style="flex:2;"></div>
+      <div class="edit-field" style="gap:var(--space-12);"><label class="edit-checkbox"><input type="checkbox" checked> 动态跟随(自选股列表)</label><label class="edit-checkbox"><input type="checkbox"> 静态锁定</label></div>
+    </div>
+    <div class="edit-section">
+      <div class="edit-section-title">🔗 条件组合</div>
+      <div class="cond-group">
+        <div class="cond-group-header"><span class="g-type">AND 组合</span><span style="font-size:11px;cursor:pointer;color:var(--text-muted);">≡ 拖拽排序</span></div>
+        <div class="cond-row"><span class="c-name">📈 格兰维尔金叉买入</span><span class="c-params">短期:5日 长期:20日</span><button class="c-remove">✕</button></div>
+        <div class="cond-row"><span class="c-name">📊 成交量>1.5倍均量</span><span class="c-params">均量周期:20日 倍数:1.5</span><button class="c-remove">✕</button></div>
+      </div>
+      <button class="add-cond-btn" onclick="openCondPicker()">+ 添加条件</button>
+      <button class="add-cond-btn" style="margin-left:var(--space-4);">+ 添加OR分组</button>
+      <div class="edit-field" style="margin-top:var(--space-8);"><label class="edit-checkbox"><input type="checkbox"> 长期监控（不自动暂停）</label><span style="font-size:11px;color:var(--text-muted);">适合低频的重要信号</span></div>
+    </div>
+    <div class="confirm-guide visible" id="confirmGuide">
+      <div class="tip">💡 开启确认期让结果更可靠</div>
+      <div class="edit-field"><label class="edit-checkbox"><input type="checkbox"> 开启确认期</label><input class="input-sm" type="text" value="3" style="width:50px;flex:none;"> 次连续检测<label class="edit-checkbox" style="margin-left:var(--space-4);"><input type="checkbox" checked> 以收盘价/成交均价为准</label></div>
+      <div class="tip-desc">股票价格可能在短时间内冲高又跌回。开启确认期后，系统会等价格连续满足多个检测周期后才通知你，有效减少误报。</div>
+    </div>
+    <div class="edit-section">
+      <div class="edit-section-title">⏰ 评估与调度</div>
+      <div class="edit-field"><label>评估频率</label><select><option>5分钟</option><option selected>15分钟</option><option>30分钟</option><option>60分钟</option><option>日终评估</option></select><label class="edit-checkbox" style="margin-left:var(--space-4);"><input type="checkbox" checked> 仅交易时段执行</label></div>
+      <div class="edit-field"><label>每日时段</label><input class="input-sm" type="text" value="09:30" style="width:80px;flex:none;"><span style="color:var(--text-muted);">~</span><input class="input-sm" type="text" value="15:00" style="width:80px;flex:none;"><span style="font-size:11px;color:var(--text-muted);">（留空=全天）</span></div>
+      <div class="edit-field"><label>有效期</label><input class="input-sm" type="text" value="2026-07-01" style="width:120px;flex:none;"><span style="color:var(--text-muted);">~</span><input class="input-sm" type="text" value="2026-09-30" style="width:120px;flex:none;"><span style="font-size:11px;color:var(--text-muted);">（留空=永久）</span></div>
+      <div class="edit-field"><label>状态</label><span class="status-indicator running">● 运行中（距关闭 4h 30min）</span></div>
+      <div class="edit-field"><label>冷却期</label><input class="input-sm" type="text" value="30" style="width:60px;flex:none;"> 分钟<span style="font-size:11px;color:var(--text-muted);">（0=每次触发都通知）</span></div>
+    </div>
+    <div class="edit-section">
+      <div class="edit-section-title">📤 推送配置</div>
+      <div class="edit-field" style="gap:var(--space-12);"><label>通知渠道</label><label class="edit-checkbox"><input type="checkbox" checked> 桌面</label><label class="edit-checkbox"><input type="checkbox"> 微信</label><label class="edit-checkbox"><input type="checkbox"> 桌面弹窗</label></div>
+      <div class="edit-field"><label>通知时机</label><select><option>触发时立即发送</option><option>收盘后汇总推送</option><option>达到N次后合并</option></select></div>
+      <div class="edit-field"><label class="edit-checkbox"><input type="checkbox"> 需要我确认收到</label><span style="font-size:11px;color:var(--text-muted);">未确认每10分钟重推1次</span></div>
+    </div>
+  </div>
+  <div class="drawer-footer">
+    <button class="btn btn-primary" style="height:36px;font-size:13px;" onclick="alert('规则已保存')">💾 保存</button>
+    <button class="btn" style="height:36px;font-size:13px;" onclick="closeDrawer()">✕ 取消</button>
+    <div style="flex:1;"></div>
+    <button class="btn" style="height:36px;font-size:13px;color:#EF4444;" onclick="confirmDelete(this)">🗑 删除规则</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     新建规则向导 — 创建方式选择
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="createMethodModal" onclick="closeModal(event,'createMethodModal')">
+  <div class="modal modal-sm" onclick="event.stopPropagation()">
+    <div class="modal-header"><h3>➕ 新建监控规则</h3><button class="modal-close" onclick="closeModal(event,'createMethodModal')">✕</button></div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:var(--space-12);">选一种方式创建规则：</p>
+      <div class="create-methods">
+        <div class="create-method" onclick="closeModal(event,'createMethodModal');openSmartCreate()">
+          <span class="icon">🧠</span><h4>智能创建</h4><p>一句话描述你的监控需求</p><div class="example">例："监控低位震荡的优质股票向上突破"</div>
+        </div>
+        <div class="create-method" onclick="closeModal(event,'createMethodModal');openTemplateModal()">
+          <span class="icon">📋</span><h4>从模板创建</h4><p>8个预设模板快速开始</p>
+        </div>
+        <div class="create-method" onclick="closeModal(event,'createMethodModal');openTypeSelect()">
+          <span class="icon">⚙️</span><h4>手动创建</h4><p>逐条选择条件组合</p>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="justify-content:center;"><button class="btn" style="height:34px;font-size:13px;" onclick="closeModal(event,'createMethodModal')">取消</button></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     新建规则向导 — 类型选择（Step 1，§23.1.2）
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="typeSelectModal" onclick="closeModal(event,'typeSelectModal')">
+  <div class="modal modal-wizard" onclick="event.stopPropagation()">
+    <div class="modal-header"><h3>➕ 新建监控规则</h3><button class="modal-close" onclick="closeModal(event,'typeSelectModal')">✕</button></div>
+    <div class="modal-body">
+      <div class="step-indicator">
+        <div class="step-dot active"><span class="circle">1</span><span class="slabel">选类型</span></div><div class="step-line"></div>
+        <div class="step-dot"><span class="circle">2</span><span class="slabel">设条件</span></div><div class="step-line"></div>
+        <div class="step-dot"><span class="circle">3</span><span class="slabel">定范围</span></div><div class="step-line"></div>
+        <div class="step-dot"><span class="circle">4</span><span class="slabel">配通知</span></div>
+      </div>
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:var(--space-10);">第1步：这条规则想帮你做什么？<br><span style="font-size:12px;color:var(--text-muted);">不同类型的规则，推送策略和按钮选项不同。</span></p>
+      <div class="type-select-panel">
+        <div class="type-select-card" data-type="opportunity" onclick="selectRuleType(this,'opportunity')">
+          <div class="ts-icon">📈</div>
+          <div class="ts-body">
+            <div class="ts-title">发现机会 — "我想抓住上涨"</div>
+            <div class="ts-desc">适合：突破信号、买点确认、趋势启动等</div>
+            <div class="ts-meta"><span>📌 推荐：MA60突破、格兰维尔买点、KDJ金叉</span><span>📤 推送：收件箱+微信可选 · 冷静期30分钟</span></div>
+          </div>
+          <div class="ts-radio"></div>
+        </div>
+        <div class="type-select-card" data-type="risk" onclick="selectRuleType(this,'risk')">
+          <div class="ts-icon">🛡️</div>
+          <div class="ts-body">
+            <div class="ts-title">规避风险 — "帮我盯着别出事"</div>
+            <div class="ts-desc">适合：持仓保护、风险预警、止损信号等</div>
+            <div class="ts-meta"><span>📌 推荐：MACD死叉、跌幅>5%、连续缩量</span><span>📤 推送：全部渠道强推·突破勿扰 · 冷静期5分钟</span></div>
+          </div>
+          <div class="ts-radio"></div>
+        </div>
+        <div class="type-select-card" data-type="anomaly" onclick="selectRuleType(this,'anomaly')">
+          <div class="ts-icon">⚡</div>
+          <div class="ts-body">
+            <div class="ts-title">异动追踪 — "这只股票不对劲"</div>
+            <div class="ts-desc">适合：成交量异动、价格突破、异常信号等</div>
+            <div class="ts-meta"><span>📌 推荐：放量>3倍、价格创新高、集合竞价异动</span><span>📤 推送：收件箱+微信 · 冷静期60分钟</span></div>
+          </div>
+          <div class="ts-radio"></div>
+        </div>
+        <div class="type-select-card" data-type="status" onclick="selectRuleType(this,'status')">
+          <div class="ts-icon">📋</div>
+          <div class="ts-body">
+            <div class="ts-title">状态监控 — "我的股票现在什么情况"</div>
+            <div class="ts-desc">适合：趋势延续、持仓状态、日常感知等</div>
+            <div class="ts-meta"><span>📌 推荐：均线多头排列、价格区间震荡、温和放量</span><span>📤 推送：仅收件箱 · 不限冷静期（日1次）</span></div>
+          </div>
+          <div class="ts-radio"></div>
+        </div>
+        <div class="type-select-card" data-type="discipline" onclick="selectRuleType(this,'discipline')">
+          <div class="ts-icon">🎯</div>
+          <div class="ts-body">
+            <div class="ts-title">纪律执行 — "帮我管住手"</div>
+            <div class="ts-desc">适合：止盈止损提醒、仓位控制、交易纪律等</div>
+            <div class="ts-meta"><span>📌 推荐：浮盈>N%、连涨回调、仓位超限</span><span>📤 推送：收件箱+微信 · 冷静期按用户设定</span></div>
+          </div>
+          <div class="ts-radio"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" style="height:34px;font-size:13px;" onclick="closeModal(event,'typeSelectModal');openCreateWizard()">← 返回</button>
+      <div class="spacer"></div>
+      <span id="selectedTypeLabel" style="font-size:12px;color:var(--text-muted);">请选择规则类型</span>
+      <button class="btn btn-primary" style="height:34px;font-size:13px;" id="typeNextBtn" onclick="proceedToStep2()" disabled>下一步</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     智能创建输入（Step 1 可选）
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="smartCreateModal" onclick="closeModal(event,'smartCreateModal')">
+  <div class="modal modal-wizard" onclick="event.stopPropagation()">
+    <div class="modal-header"><h3>🧠 智能创建</h3><button class="modal-close" onclick="closeModal(event,'smartCreateModal')">✕</button></div>
+    <div class="modal-body">
+      <div class="smart-input-area">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:var(--space-8);">用一句话描述你的监控需求：</p>
+        <textarea placeholder="例：监控茅台突破MA60的时候提醒我，同时看一下成交量有没有放大"></textarea>
+        <div class="smart-hint">系统将自动分析你的需求，推荐最匹配的条件组合。</div>
+      </div>
+      <div style="text-align:center;margin:var(--space-8) 0;"><button class="btn btn-primary" style="height:36px;font-size:13px;" onclick="showSmartResults()">🧠 开始分析条件</button></div>
+      <div class="smart-results" id="smartResults" style="display:none;">
+        <div class="sr-title">🎯 系统推荐结果</div>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-6);">意图识别：「📈 发现机会」</div>
+        <div class="sr-row"><input type="checkbox" checked><span>价格突破MA60</span></div>
+        <div class="sr-row"><input type="checkbox" checked><span>成交量放大确认</span></div>
+        <div class="sr-row"><input type="checkbox"><span>KDJ金叉</span></div>
+        <div style="display:flex;gap:var(--space-6);margin-top:var(--space-8);">
+          <button class="btn btn-primary" style="height:34px;font-size:13px;" onclick="closeModal(event,'smartCreateModal');openCondPicker()">✅ 确认使用</button>
+          <button class="btn" style="height:34px;font-size:13px;" onclick="document.getElementById('smartResults').style.display='none'">重新描述</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="justify-content:center;"><button class="btn" style="height:34px;font-size:13px;" onclick="closeModal(event,'smartCreateModal')">取消</button></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     条件选择弹窗
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="condPickerModal" onclick="closeModal(event,'condPickerModal')">
+  <div class="modal modal-wizard" onclick="event.stopPropagation()">
+    <div class="modal-header"><h3>🔍 选择条件</h3><button class="modal-close" onclick="closeModal(event,'condPickerModal')">✕</button></div>
+    <div class="modal-body">
+      <div class="cond-search"><input type="text" placeholder="搜索条件名称/说明..." oninput="filterCondOptions(this.value)"></div>
+      <div class="dup-warning" id="dupWarning">
+        <span class="icon">⚠️</span>
+        <div class="info"><strong>检测到重复规则</strong><br><span class="meta">「MACD金叉买入」（运行中，今日触发3次）</span></div>
+        <button class="act-btn" onclick="closeModal(event,'condPickerModal')">📋 查看现有</button>
+        <button class="act-btn" onclick="document.getElementById('dupWarning').classList.remove('visible')">🔄 仍然新建</button>
+      </div>
+      <div class="cond-category">
+        <div class="cond-category-title" onclick="this.nextElementSibling.classList.toggle('open');this.querySelector('.arrow').textContent=this.nextElementSibling.classList.contains('open')?'▼':'▶'"><span>📈 买入卖出时机 <span class="arrow">▼</span></span><span class="selected-count">已选 1 条</span></div>
+        <div class="cond-category-body" id="cat1">
+          <div class="cond-option"><input type="checkbox" checked onchange="updateCondCount(this,'cat1')"><span class="c-label">格兰维尔金叉买入</span><span class="c-params">短期5日/长期20日</span><span class="c-info" onclick="event.stopPropagation();openCondExplain('格兰维尔金叉买入')">❓</span></div>
+          <div class="cond-option"><input type="checkbox" onchange="updateCondCount(this,'cat1')"><span class="c-label">放量突破</span><span class="c-params">倍数1.5</span><span class="c-info" onclick="event.stopPropagation();openCondExplain('放量突破')">❓</span></div>
+          <div class="cond-option"><input type="checkbox" onchange="updateCondCount(this,'cat1')"><span class="c-label">均线多头排列</span><span class="c-params">5>10>20>60</span><span class="c-info" onclick="event.stopPropagation();openCondExplain('均线多头排列')">❓</span></div>
+          <div class="cond-option"><input type="checkbox" onchange="updateCondCount(this,'cat1')"><span class="c-label">MACD金叉</span><span class="c-params">12/26/9</span><span class="c-info" onclick="event.stopPropagation();openCondExplain('MACD金叉')">❓</span></div>
+        </div>
+      </div>
+      <div class="cond-category">
+        <div class="cond-category-title" onclick="this.nextElementSibling.classList.toggle('open');this.querySelector('.arrow').textContent=this.nextElementSibling.classList.contains('open')?'▼':'▶'"><span>🔄 多信号确认 <span class="arrow">▼</span></span><span class="selected-count">已选 1 条</span></div>
+        <div class="cond-category-body" id="cat2">
+          <div class="cond-option"><input type="checkbox" checked onchange="updateCondCount(this,'cat2')"><span class="c-label">量价齐升</span><span class="c-params">AND组合</span><span class="c-info" onclick="event.stopPropagation();openCondExplain('量价齐升')">❓</span></div>
+          <div class="cond-option"><input type="checkbox" onchange="updateCondCount(this,'cat2')"><span class="c-label">MACD+KDJ双金叉</span><span class="c-params">12/26/9 + 9/3/3</span><span class="c-info" onclick="event.stopPropagation();openCondExplain('MACD+KDJ双金叉')">❓</span></div>
+        </div>
+      </div>
+      <div class="cond-category">
+        <div class="cond-category-title" onclick="this.nextElementSibling.classList.toggle('open');this.querySelector('.arrow').textContent=this.nextElementSibling.classList.contains('open')?'▼':'▶'"><span>📊 成交量 <span class="arrow">▼</span></span><span class="selected-count" style="color:var(--text-muted);font-size:12px;">已选 0 条</span></div>
+        <div class="cond-category-body" id="cat3" style="display:none;">
+          <div class="cond-option"><input type="checkbox" onchange="updateCondCount(this,'cat3')"><span class="c-label">成交量放大N倍</span><span class="c-params">均量周期20日</span><span class="c-info" onclick="event.stopPropagation();openCondExplain('成交量放大N倍')">❓</span></div>
+          <div class="cond-option"><input type="checkbox" onchange="updateCondCount(this,'cat3')"><span class="c-label">持续缩量</span><span class="c-params">连续3日</span><span class="c-info" onclick="event.stopPropagation();openCondExplain('持续缩量')">❓</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" style="height:34px;font-size:13px;" onclick="document.getElementById('dupWarning').classList.add('visible');">✅ 确认选择（2条）</button>
+      <button class="btn" style="height:34px;font-size:13px;" onclick="closeModal(event,'condPickerModal')">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     条件说明弹窗（新增 — 209号方案 §6.2.3）
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="condExplainModal" onclick="closeModal(event,'condExplainModal')">
+  <div class="modal modal-cond-explain" onclick="event.stopPropagation()">
+    <div class="modal-header"><h3>📖 条件说明</h3><button class="modal-close" onclick="closeModal(event,'condExplainModal')">✕</button></div>
+    <div class="modal-body" id="condExplainBody">
+      <div class="cond-explain-icon">📈</div>
+      <div class="cond-explain-name" id="ceName">格兰维尔金叉买入</div>
+      <div class="cond-explain-section">
+        <div class="sec-title">这是什么意思？</div>
+        <div class="sec-body" id="ceWhat">短期均线上穿长期均线，是上涨趋势开始的信号。</div>
+      </div>
+      <div class="cond-explain-section">
+        <div class="sec-title">什么时候用？</div>
+        <div class="sec-body" id="ceWhen">股价在低位震荡，均线逐渐走平后出现金叉，说明短期买盘开始增多，上涨动力在增强。</div>
+      </div>
+      <div class="cond-explain-section">
+        <div class="sec-title">什么时候不用？</div>
+        <div class="sec-body" id="ceWhenNot">股价已大幅上涨后的金叉可能是假突破，此时追高容易被套。最好配合成交量确认。</div>
+      </div>
+      <div class="cond-explain-section">
+        <div class="sec-title">实际案例</div>
+        <div class="sec-body" id="ceExample">2026年5月，贵州茅台MA5上穿MA20后，累计上涨12%。同期成交量放大1.5倍，确认了突破的有效性。</div>
+      </div>
+      <div class="cond-explain-section">
+        <div class="sec-title">相关条件推荐搭配</div>
+        <div class="cond-explain-related" id="ceRelated">
+          <span class="rel-chip">📊 成交量放大</span>
+          <span class="rel-chip">📈 MACD金叉</span>
+          <span class="rel-chip">📈 KDJ金叉</span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="justify-content:center;">
+      <button class="btn btn-primary" style="height:34px;font-size:13px;" onclick="closeModal(event,'condExplainModal')">我知道了这个条件</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     模板列表弹窗
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="templateModal" onclick="closeModal(event,'templateModal')">
+  <div class="modal modal-template" onclick="event.stopPropagation()">
+    <div class="modal-header"><h3>📋 选择模板</h3><button class="modal-close" onclick="closeModal(event,'templateModal')">✕</button></div>
+    <div class="modal-body">
+      <div class="template-grid">
+        <div class="template-card" onclick="alert('模板: 涨停异动')"><span class="t-icon">📈</span><h5>涨停异动</h5><p>捕捉涨停板的封板力度与次日溢价</p></div>
+        <div class="template-card" onclick="alert('模板: 底部反弹')"><span class="t-icon">📊</span><h5>底部反弹</h5><p>股价低位放量反弹，抄底信号</p></div>
+        <div class="template-card" onclick="alert('模板: 主力出货')"><span class="t-icon">🛡️</span><h5>主力出货</h5><p>高位放量滞涨，主力资金撤退</p></div>
+        <div class="template-card" onclick="alert('模板: 趋势反转')"><span class="t-icon">🔄</span><h5>趋势反转</h5><p>趋势由盛转衰的拐点识别</p></div>
+        <div class="template-card" onclick="alert('模板: 缠论买卖点')"><span class="t-icon">🧩</span><h5>缠论买卖点</h5><p>缠论一/二/三类买卖点监控</p></div>
+        <div class="template-card" onclick="alert('模板: 筹码异动')"><span class="t-icon">📊</span><h5>筹码异动</h5><p>筹码集中度突然变化</p></div>
+        <div class="template-card" onclick="alert('模板: 大盘风险')"><span class="t-icon">🔭</span><h5>大盘风险</h5><p>全市场级别的系统性风险</p></div>
+        <div class="template-card" onclick="alert('模板: 龙虎榜跟庄')"><span class="t-icon">🐯</span><h5>龙虎榜跟庄</h5><p>龙虎榜大资金动向追踪</p></div>
+      </div>
+    </div>
+    <div class="modal-footer" style="justify-content:center;"><button class="btn" style="height:34px;font-size:13px;" onclick="closeModal(event,'templateModal')">取消</button></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     右下通知浮窗（改造 — 209号方案 §6.5）
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="notif-float" id="notifFloat">
+  <div class="notif-collapsed" id="notifCollapsed" onclick="toggleNotifFloat()">
+    <span class="badge-pulse" id="notifBadgePulse">3</span>
+    <div class="summary-text">
+      <div class="line1">🔔 <strong id="notifSummaryCount">3</strong> 条未处理通知</div>
+      <div class="line2" id="notifSummaryLatest">最新：MA60突破 贵州茅台 14:35</div>
+    </div>
+    <button class="quick-btn" onclick="event.stopPropagation();alert('看行情')">📈</button>
+    <span class="expand-arrow">▴ 展开</span>
+  </div>
+
+  <div class="notif-expanded" id="notifExpanded">
+    <div class="notif-exp-header">
+      <h4>📜 通知记录 <span style="font-size:12px;background:var(--bg-muted);padding:1px var(--space-6);border-radius:var(--radius-xs);color:var(--text-secondary);font-weight:400;" id="notifExpBadge">3条未读</span></h4>
+      <div class="actions">
+        <button onclick="markAllRead()">✅ 全部已处理</button>
+        <button onclick="toggleNotifFloat()">— 收起</button>
+      </div>
+    </div>
+    <div class="notif-exp-body" id="notifFloatList">
+
+      <!-- ① 📈 发现机会 — 全量卡片 -->
+      <div class="notif-float-item unread" data-rule="MA60突破+量能确认" onclick="focusRule(this);openNotifDetail('opportunity')">
+        <div class="notif-float-top">
+          <div class="notif-float-rule"><span class="type-icon">📈</span>MA60突破+量能确认</div>
+          <div class="notif-float-time">14:35</div>
+        </div>
+        <div class="notif-float-stock">贵州茅台 (600519) <span style="font-size:11px;color:var(--text-muted);">· 今日第2次触发</span></div>
+        <div class="notif-float-conditions">
+          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">MA60突破</span><span class="cval">当前148.50 > 阈值145.20 (+1.5%)</span></div>
+          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">成交量放大</span><span class="cval">2.3倍均量 (856万手 > 372万手)</span></div>
+          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">KDJ金叉</span><span class="cval">K=32 > D=28</span></div>
+          <div class="cond-scan-meta">扫描：15分钟周期 · 盘中评估 · 确认期已通过</div>
+        </div>
+        <div class="notif-float-stock-info">
+          <span class="si-item"><span class="si-lbl">当前价</span><span class="si-val" style="color:#EF4444;">148.50</span></span>
+          <span class="si-item"><span class="si-lbl">涨幅</span><span class="si-val" style="color:#EF4444;">+2.30%</span></span>
+          <span class="si-item"><span class="si-lbl">量比</span><span class="si-val">1.30</span></span>
+          <span class="si-item"><span class="si-lbl">成交额</span><span class="si-val">19.46亿</span></span>
+          <span class="si-item"><span class="si-lbl">换手</span><span class="si-val">1.40%</span></span>
+        </div>
+        <div class="notif-float-actions">
+          <button class="na-btn primary" onclick="event.stopPropagation();implicitConfirmNotif(this,'看行情')">📈 看行情</button>
+          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'策略分析')">🧠 策略分析</button>
+          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'多角色')">🤖 多角色投研</button>
+          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'加自选')">⭐ 加自选</button>
+          <button class="na-btn warning" onclick="event.stopPropagation();implicitConfirmNotif(this,'误报')">❌ 误报</button>
+          <button class="na-btn secondary-row" onclick="event.stopPropagation();alert('📋 查看复盘')">📋 复盘</button>
+        </div>
+      </div>
+
+      <!-- ② 🛡️ 规避风险 — 含倒计时+重推 -->
+      <div class="notif-float-item unread" data-rule="MACD死叉" onclick="focusRule(this);openNotifDetail('risk')">
+        <div class="notif-float-top">
+          <div class="notif-float-rule"><span class="type-icon">🛡️</span>MACD死叉 <span style="color:#EF4444;font-size:11px;">⚠️风险信号</span></div>
+          <div class="notif-float-time">14:32</div>
+        </div>
+        <div class="notif-float-stock">贵州茅台 (600519) <span style="font-size:11px;color:var(--text-muted);">· 未处理</span></div>
+        <div class="notif-float-conditions">
+          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">DIF下穿DEA</span></div>
+          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">连续2日缩量</span></div>
+          <div class="cond-scan-meta">扫描：盘中扫描</div>
+        </div>
+        <div class="notif-float-stock-info">
+          <span class="si-item"><span class="si-lbl">当前价</span><span class="si-val" style="color:#22C55E;">145.60</span></span>
+          <span class="si-item"><span class="si-lbl">涨幅</span><span class="si-val" style="color:#22C55E;">-1.80%</span></span>
+          <span class="si-item"><span class="si-lbl">量比</span><span class="si-val">0.80</span></span>
+          <span class="si-item"><span class="si-lbl">成交额</span><span class="si-val">28.3亿</span></span>
+          <span class="si-item"><span class="si-lbl">委比</span><span class="si-val" style="color:#22C55E;">-26.0%</span></span>
+        </div>
+        <div class="countdown-bar">⏱ 你还有 7 分钟确认，否则将再次微信推送 <span class="push-indicator">微信已推送 1/2 次</span></div>
+        <div class="notif-float-actions">
+          <button class="na-btn primary" onclick="event.stopPropagation();implicitConfirmNotif(this,'看行情')">📈 看行情</button>
+          <button class="na-btn success" onclick="event.stopPropagation();implicitConfirmNotif(this,'已处理')">✅ 已处理</button>
+          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'加自选')">⭐ 加自选</button>
+          <button class="na-btn secondary-row" onclick="event.stopPropagation();alert('📋 查看复盘')">📋 复盘</button>
+        </div>
+      </div>
+
+      <!-- ③ ⚡ 异动追踪 — 含❓tooltip -->
+      <div class="notif-float-item unread" data-rule="成交量放大超3倍" onclick="focusRule(this);openNotifDetail('anomaly')">
+        <div class="notif-float-top">
+          <div class="notif-float-rule"><span class="type-icon">⚡</span>成交量放大超3倍 <span class="tooltip-trigger" style="font-size:12px;cursor:help;color:var(--text-muted);" data-tooltip="成交量突然放大到平时3倍以上，说明有大资金在交易">❓</span></div>
+          <div class="notif-float-time">14:40</div>
+        </div>
+        <div class="notif-float-stock">五粮液 (000858) <span style="font-size:11px;color:var(--text-muted);">· 今日异动第2次</span></div>
+        <div class="notif-float-conditions">
+          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">成交量>3倍均量</span><span class="cval">856万手 > 3×285万手</span></div>
+          <div class="cond-scan-meta">关注度：⭐⭐ 中等</div>
+        </div>
+        <div class="notif-float-stock-info">
+          <span class="si-item"><span class="si-lbl">当前价</span><span class="si-val" style="color:#EF4444;">128.50</span></span>
+          <span class="si-item"><span class="si-lbl">成交量</span><span class="si-val">856万手</span></span>
+          <span class="si-item"><span class="si-lbl">5日均量</span><span class="si-val">285万手</span></span>
+          <span class="si-item"><span class="si-lbl">量比</span><span class="si-val" style="color:#EF4444;">3.0</span></span>
+          <span class="si-item"><span class="si-lbl">涨速</span><span class="si-val">+0.30%</span></span>
+        </div>
+        <div class="notif-float-actions">
+          <button class="na-btn primary" onclick="event.stopPropagation();implicitConfirmNotif(this,'看行情')">📈 看行情</button>
+          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'策略分析')">🧠 策略分析</button>
+          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'多角色')">🤖 多角色投研</button>
+          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'加自选')">⭐ 加自选</button>
+          <button class="na-btn secondary-row" onclick="event.stopPropagation();alert('📋 查看复盘')">📋 复盘</button>
+        </div>
+      </div>
+
+      <!-- ④ 📋 状态监控 — 极简 -->
+      <div class="notif-float-item unread" data-rule="均线多头排列" onclick="focusRule(this);openNotifDetail('status')">
+        <div class="notif-float-top">
+          <div class="notif-float-rule"><span class="type-icon">📋</span>均线多头排列 <span style="color:#22C55E;font-size:11px;">状态正常</span></div>
+          <div class="notif-float-time">10:05</div>
+        </div>
+        <div class="notif-float-stock">贵州茅台 (600519)</div>
+        <div class="notif-float-conditions">
+          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">MA5>MA10>MA20>MA60</span><span class="cval">趋势延续中</span></div>
+          <div class="cond-scan-meta">扫描：日终评估 · 今日仅此1次</div>
+        </div>
+        <div class="notif-float-actions">
+          <button class="na-btn primary" onclick="event.stopPropagation();implicitConfirmNotif(this,'看行情')">📈 看行情</button>
+          <button class="na-btn success" onclick="event.stopPropagation();implicitConfirmNotif(this,'已处理')">✅ 已处理</button>
+          <button class="na-btn secondary-row" onclick="event.stopPropagation();alert('📋 查看复盘')">📋 复盘</button>
+        </div>
+      </div>
+
+      <div class="load-more" onclick="alert('查看更多通知')" style="padding:var(--space-8);font-size:12px;">查看更多通知 ▶</div>
+    </div>
+  </div>
+</div>
+
 <script>
-function switchAlertTab(el, id){
-  document.querySelectorAll('.tab-item').forEach(function(t){t.classList.remove('active');});
-  el.classList.add('active');
-  document.querySelectorAll('#tab-rules,#tab-history,#tab-settings').forEach(function(p){p.style.display='none';});
-  document.getElementById(id).style.display = '';
-}
-</script>
-<script>
-var sidebarCollapsed = true;
+/* ═══════════════════════════════════════════════════════════════════
+   侧栏
+   ═══════════════════════════════════════════════════════════════════ */
 function toggleSidebar(){
-  sidebarCollapsed = !sidebarCollapsed;
-  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content'),btn=document.querySelector('.sidebar-toggle');
   if(!s||!m)return;
   s.classList.toggle('collapsed');m.classList.toggle('collapsed');
-  m.style.marginLeft=(sidebarCollapsed?64:200)+'px';
-  var btn=document.querySelector('.sidebar-toggle');
-  if(btn)btn.textContent=sidebarCollapsed?'▶':'◀';
+  var collapsed=s.classList.contains('collapsed');
+  m.style.marginLeft=collapsed?'64px':'200px';
+  if(btn)btn.textContent=collapsed?'▶':'◀';
 }
 (function(){
   var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
@@ -141,6 +1376,299 @@ function toggleSidebar(){
   var btn=document.querySelector('.sidebar-toggle');
   if(btn)btn.textContent='▶';
 })();
+
+/* ═══════════════════════════════════════════════════════════════════
+   折叠表格
+   ═══════════════════════════════════════════════════════════════════ */
+function toggleRangeTable(){ document.getElementById('rangeTable').classList.toggle('open'); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   规则卡片筛选
+   ═══════════════════════════════════════════════════════════════════ */
+function filterCards(){
+  var q=(document.querySelector('.search-wrap input')||{}).value?.toLowerCase()||'';
+  var sels=document.querySelectorAll('.filter-select');
+  var status=sels[0]?.value||'', type=sels[1]?.value||'', range=sels[2]?.value||'';
+  var cards=document.querySelectorAll('#ruleCardGrid .rule-card');
+  cards.forEach(function(c){
+    var name=c.getAttribute('data-name')?.toLowerCase()||'', ct=c.getAttribute('data-type')||'', cs=c.getAttribute('data-status')||'', cr=c.getAttribute('data-range')||'';
+    var match=true;
+    if(q&&!name.includes(q))match=false;
+    if(status&&cs!==status)match=false;
+    if(type&&ct!==type)match=false;
+    if(range&&cr!==range)match=false;
+    c.style.display=match?'':'none';
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   批量操作
+   ═══════════════════════════════════════════════════════════════════ */
+function toggleBatch(cb){
+  var card=cb.closest('.rule-card');
+  card.classList.toggle('selected',cb.checked);
+  var checked=document.querySelectorAll('.rule-card-checkbox:checked').length;
+  document.getElementById('batchBar').classList.toggle('visible',checked>0);
+  document.getElementById('batchCount').textContent=checked;
+}
+function dismissBatch(){
+  document.querySelectorAll('.rule-card-checkbox:checked').forEach(function(cb){cb.checked=false;cb.closest('.rule-card').classList.remove('selected');});
+  document.getElementById('batchBar').classList.remove('visible');
+}
+function batchAction(action){
+  var names=[];
+  document.querySelectorAll('.rule-card-checkbox:checked').forEach(function(cb){names.push(cb.closest('.rule-card').getAttribute('data-name')||'');});
+  var labels={'pause':'⏸ 批量暂停','resume':'▶ 批量启用','delete':'🗑 批量删除'};
+  if(names.length)alert(labels[action]+'：'+names.join('、'));
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   休眠区
+   ═══════════════════════════════════════════════════════════════════ */
+function toggleDormant(){ document.getElementById('dormantBody').classList.toggle('open'); }
+function restoreDormant(btn){
+  var item=btn.closest('.dormant-item');
+  item.style.opacity='0.5';
+  item.querySelector('.act').textContent='已恢复';
+  item.querySelector('.act').style.borderColor='#22C55E';
+  item.querySelector('.act').style.color='#22C55E';
+  item.querySelector('.act').disabled=true;
+  var count=document.getElementById('dormantCount');
+  count.textContent=Math.max(0,parseInt(count.textContent)-1);
+}
+function deleteDormant(btn){
+  if(!confirm('确定彻底删除这条休眠规则？'))return;
+  var item=btn.closest('.dormant-item');
+  item.style.display='none';
+  var count=document.getElementById('dormantCount');
+  count.textContent=Math.max(0,parseInt(count.textContent)-1);
+}
+function batchDormant(action){ alert(action==='restore'?'已全部恢复休眠规则':'已清除全部休眠规则'); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   健康检查横幅
+   ═══════════════════════════════════════════════════════════════════ */
+function closeHealthBanner(){ document.getElementById('healthBanner').classList.remove('visible'); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   弹窗系统
+   ═══════════════════════════════════════════════════════════════════ */
+function openModal(id){ document.getElementById(id).classList.add('open'); }
+function closeModal(ev,id){
+  if(ev&&ev.target!==ev.currentTarget)return;
+  document.getElementById(id).classList.remove('open');
+}
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'){
+    document.querySelectorAll('.modal-overlay.open').forEach(function(m){m.classList.remove('open');});
+    closeDrawer();
+  }
+});
+
+/* ── 详情弹窗 ── */
+function openDetail(name,type,status){
+  var labels={opportunity:'📈 发现机会',risk:'🛡️ 规避风险',anomaly:'⚡ 异动追踪',status:'📋 状态监控',discipline:'🎯 纪律执行'};
+  var statusHtml={running:'<span class="status-tag running">● 运行中</span>',paused:'<span class="status-tag paused">○ 已暂停</span>',dormant:'<span class="status-tag dormant">🟡 已休眠</span>',expired:'<span class="status-tag expired">● 已过期</span>'};
+  document.getElementById('detailTitle').innerHTML='📋 '+name+' <span class="hot-badge hot">🔥热门</span>';
+  document.getElementById('detailType').textContent='🏷️ '+(labels[type]||'');
+  document.getElementById('dType').textContent=labels[type]||'';
+  document.getElementById('dStatus').innerHTML=statusHtml[status]||'';
+  openModal('detailModal');
+}
+
+/* ── 触发历史弹窗 ── */
+function openHistory(name){
+  document.getElementById('historyTitle').textContent='📜 触发历史: '+name;
+  openModal('historyModal');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   编辑抽屉
+   ═══════════════════════════════════════════════════════════════════ */
+function openEditDrawer(name){
+  document.getElementById('editDrawer').classList.add('open');
+  document.getElementById('drawerOverlay').classList.add('open');
+}
+function closeDrawer(){
+  document.getElementById('editDrawer').classList.remove('open');
+  document.getElementById('drawerOverlay').classList.remove('open');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   通知浮窗
+   ═══════════════════════════════════════════════════════════════════ */
+function toggleNotifFloat(){
+  var collapsed=document.getElementById('notifCollapsed');
+  var expanded=document.getElementById('notifExpanded');
+  if(expanded.classList.contains('open')){
+    expanded.classList.remove('open');
+    collapsed.style.display='flex';
+  }else{
+    expanded.classList.add('open');
+    collapsed.style.display='none';
+  }
+}
+
+/* ── 通知→规则联动 ── */
+function focusRule(el){
+  var ruleName=el.getAttribute('data-rule');
+  if(!ruleName)return;
+  var card=document.querySelector('.rule-card[data-name="'+ruleName+'"]');
+  if(card){
+    card.scrollIntoView({behavior:'smooth',block:'center'});
+    card.classList.add('highlight');
+    setTimeout(function(){card.classList.remove('highlight');},800);
+  }
+}
+
+/* ── 通知隐式确认 (浮窗版 — 209号 0.3s过渡动画) ── */
+function implicitConfirmNotif(btn,action){
+  var item=btn.closest('.notif-float-item');
+  if(item&&item.classList.contains('unread')){
+    item.classList.remove('unread');
+    updateNotifBadge();
+  }
+  btn.classList.add('confirmed');
+  var labels={'看行情':'📈 ✓','策略分析':'🧠 ✓','多角色':'🤖 ✓','加自选':'⭐ ✓','已处理':'✅ ✓','误报':'❌ ✓'};
+  btn.textContent=labels[action]||action+'✓';
+  btn.style.transition='all 0.3s ease';
+}
+
+/* ── 通知详情弹窗隐式确认 ── */
+function implicitConfirmNotifDetail(btn,action){
+  btn.classList.add('confirmed');
+  var labels={'看行情':'📈 ✓','策略分析':'🧠 ✓','多角色':'🤖 ✓','加自选':'⭐ ✓','已处理':'✅ ✓','误报':'❌ ✓'};
+  btn.textContent=labels[action]||action+'✓';
+  btn.style.transition='all 0.3s ease';
+  updateNotifBadge();
+}
+
+function updateNotifBadge(){
+  var unread=document.querySelectorAll('.notif-float-item.unread').length;
+  document.getElementById('notifBadgePulse').textContent=unread;
+  document.getElementById('notifExpBadge').textContent=unread+'条未读';
+  document.getElementById('notifSummaryCount').textContent=unread;
+  if(unread===0){
+    document.getElementById('notifBadgePulse').textContent='0';
+    document.getElementById('scrollHeaderText').innerHTML='📡 今日所有通知已处理';
+    document.getElementById('notifScrollTrack').innerHTML=
+      '<div class="notif-scroll-card"><span class="type-icon">📈</span><span class="stock">放量追击</span><span style="font-size:11px;color:var(--text-muted);">2h触发3次</span></div>'.repeat(6);
+  }
+}
+
+/* ── 全部已处理 ── */
+function markAllRead(){
+  document.querySelectorAll('.notif-float-item.unread').forEach(function(n){n.classList.remove('unread');});
+  updateNotifBadge();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   新建规则向导
+   ═══════════════════════════════════════════════════════════════════ */
+function openCreateWizard(){ openModal('createMethodModal'); }
+
+/* ── 手动创建 → 类型选择(Step 1) ── */
+function openTypeSelect(){
+  document.querySelectorAll('.type-select-card').forEach(function(c){c.classList.remove('selected');});
+  document.getElementById('selectedTypeLabel').textContent='请选择规则类型';
+  document.getElementById('typeNextBtn').disabled=true;
+  openModal('typeSelectModal');
+}
+
+var selectedType=null;
+function selectRuleType(el,type){
+  document.querySelectorAll('.type-select-card').forEach(function(c){c.classList.remove('selected');});
+  el.classList.add('selected');
+  selectedType=type;
+  var labels={opportunity:'📈 发现机会',risk:'🛡️ 规避风险',anomaly:'⚡ 异动追踪',status:'📋 状态监控',discipline:'🎯 纪律执行'};
+  document.getElementById('selectedTypeLabel').textContent='已选：'+labels[type];
+  document.getElementById('typeNextBtn').disabled=false;
+}
+
+function proceedToStep2(){
+  closeModal(event,'typeSelectModal');
+  openCondPicker();
+}
+
+/* ── 智能创建 ── */
+function openSmartCreate(){ openModal('smartCreateModal'); }
+function showSmartResults(){
+  document.getElementById('smartResults').style.display='block';
+}
+
+/* ── 模板 ── */
+function openTemplateModal(){ openModal('templateModal'); }
+
+/* ── 条件选择 ── */
+function openCondPicker(){ openModal('condPickerModal'); }
+
+function filterCondOptions(val){
+  document.querySelectorAll('.cond-option').forEach(function(o){
+    o.style.display=o.textContent.toLowerCase().includes(val.toLowerCase())||!val?'':'none';
+  });
+}
+
+function updateCondCount(cb,catId){
+  var cat=cb.closest('.cond-category');
+  var selected=cat.querySelectorAll('.cond-option input:checked').length;
+  cat.querySelector('.selected-count').textContent='已选 '+selected+' 条';
+}
+
+/* ── 条件说明弹窗 ── */
+function openCondExplain(name){
+  var data={
+    '格兰维尔金叉买入':{icon:'📈',what:'短期均线上穿长期均线，是上涨趋势开始的信号。',when:'股价在低位震荡，均线逐渐走平后出现金叉，说明短期买盘开始增多，上涨动力在增强。',whenNot:'股价已大幅上涨后的金叉可能是假突破，此时追高容易被套。最好配合成交量确认。',example:'2026年5月，贵州茅台MA5上穿MA20后，累计上涨12%。同期成交量放大1.5倍，确认了突破的有效性。',related:['📊 成交量放大','📈 MACD金叉','📈 KDJ金叉']},
+    '放量突破':{icon:'📊',what:'成交量显著放大，同时价格突破关键价位（如压力位、前高）。',when:'股价横盘整理一段时间后，突然放量突破横盘区间上沿，说明多头力量充足。',whenNot:'价格在突破后未能站稳（假突破），或成交量持续性不足，后续缩量回落。',example:'2026年4月，宁德时代放量突破400元压力位，成交量放大2倍以上，随后一周上涨8%。',related:['📈 格兰维尔金叉买入','📈 均线多头排列']},
+    '均线多头排列':{icon:'📈',what:'短期均线（5日）>中期均线（10日）>长期均线（20日、60日），趋势健康向上。',when:'确认股票处于上升趋势中，适合顺势操作。',whenNot:'股价已大幅上涨进入加速阶段，均线间距过大，回调风险增加。',example:'贵州茅台2026年1-3月MA5=182>MA10=178>MA20=172>MA60=165，多头排列持续2个月。',related:['📈 格兰维尔金叉买入','📈 MACD金叉']},
+    'MACD金叉':{icon:'📈',what:'MACD指标DIF线上穿DEA线，是技术面多头信号。',when:'股价从低位回升，DIF上穿DEA，配合成交量放大使用效果更佳。',whenNot:'DIF和DEA在0轴下方且股价仍在下跌趋势中，金叉可能是下跌中的反弹。',example:'2026年3月，隆基绿能MACD金叉（DIF=-0.15上穿DEA=-0.23），此后2周上涨15%。',related:['📈 格兰维尔金叉买入','📊 成交量放大','📈 KDJ金叉']},
+    '量价齐升':{icon:'📊',what:'成交量放大同时价格上涨，是健康的上涨确认信号。',when:'股价上涨时成交量同步放大，说明上涨有资金支持，趋势可靠。',whenNot:'价格上涨但成交量萎缩（量价背离），说明上涨动力不足，可能回调。',example:'2026年5月，阳光电源连续3日量价齐升（日涨幅>2%且量比>1.5），确认上升趋势。',related:['📈 格兰维尔金叉买入','📈 均线多头排列']},
+    'MACD+KDJ双金叉':{icon:'🔄',what:'MACD和KDJ两个指标同时出现金叉，多维度共振，信号更强。',when:'两个指标同时金叉说明短中期趋势一致向好，买入信号更可靠。',whenNot:'两个指标周期不同（MACD偏中期，KDJ偏短期），需确认方向一致。',example:'2026年2月，西藏矿业MACD金叉+KDJ金叉双共振，随后涨幅达22%。',related:['📈 格兰维尔金叉买入','📊 量价齐升']},
+    '成交量放大N倍':{icon:'📊',what:'当日成交量相对均量放大N倍以上，说明有大资金活跃。',when:'关注成交量突然放大，可能有主力资金进场或离场，需要关注价格变化方向。',whenNot:'只关注成交量而忽略价格方向，放量下跌和放量上涨含义完全不同。',example:'2026年6月，五粮液成交量放大3倍但价格微跌，提示有大资金出逃。',related:['📊 量价齐升','⚡ 异动追踪']},
+    '持续缩量':{icon:'📊',what:'连续多个交易日成交量持续萎缩，市场交投冷清。',when:'股价下跌后持续缩量→跌无可跌的信号，可能接近底部。股价上涨后缩量→上涨动力不足。',whenNot:'地量未必是地价，缩量也可能继续下跌。需要结合价格位判断。',example:'2026年4月，某股缩量15日后放量反弹，缩量期间累计跌幅仅2%。',related:['📊 成交量放大N倍']}
+  };
+  var d=data[name]||data['格兰维尔金叉买入'];
+  document.getElementById('condExplainBody').innerHTML=
+    '<div class="cond-explain-icon">'+d.icon+'</div>'+
+    '<div class="cond-explain-name">'+name+'</div>'+
+    '<div class="cond-explain-section"><div class="sec-title">这是什么意思？</div><div class="sec-body">'+d.what+'</div></div>'+
+    '<div class="cond-explain-section"><div class="sec-title">什么时候用？</div><div class="sec-body">'+d.when+'</div></div>'+
+    '<div class="cond-explain-section"><div class="sec-title">什么时候不用？</div><div class="sec-body">'+d.whenNot+'</div></div>'+
+    '<div class="cond-explain-section"><div class="sec-title">实际案例</div><div class="sec-body">'+d.example+'</div></div>'+
+    '<div class="cond-explain-section"><div class="sec-title">相关条件推荐搭配</div><div class="cond-explain-related">'+
+    d.related.map(function(r){return '<span class="rel-chip">'+r+'</span>';}).join('')+'</div></div>';
+  openModal('condExplainModal');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   通知详情弹窗
+   ═══════════════════════════════════════════════════════════════════ */
+function openNotifDetail(type){
+  var titleLabels={opportunity:'📈 MA60突破+量能确认',risk:'🛡️ MACD死叉 ⚠️ 风险信号',anomaly:'⚡ 成交量放大超3倍 异动',status:'📋 均线多头排列 状态正常',discipline:'🎯 止盈提醒！浮盈>15%'};
+  var typeLabels={opportunity:'📈 发现机会',risk:'🛡️ 规避风险',anomaly:'⚡ 异动追踪',status:'📋 状态监控',discipline:'🎯 纪律执行'};
+  document.getElementById('ndTitle').textContent=titleLabels[type]||titleLabels.opportunity;
+  document.getElementById('ndType').textContent='🏷️ '+(typeLabels[type]||'')+' · 贵州茅台(600519) · 14:35';
+  openModal('notifDetailModal');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   规则卡片操作
+   ═══════════════════════════════════════════════════════════════════ */
+function toggleRuleStatus(btn){
+  var text=btn.textContent;
+  if(text.includes('⏸')){btn.textContent='▶ 启用';btn.style.borderColor='#22C55E';btn.style.color='#22C55E';}
+  else if(text.includes('▶')){btn.textContent='⏸ 暂停';btn.style.borderColor='';btn.style.color='';}
+  else if(text.includes('恢复')){btn.textContent='⏸ 暂停';btn.style.borderColor='';btn.style.color='';}
+}
+
+function confirmDelete(el){ if(confirm('确定删除这条规则？此操作不可撤销。'))alert('规则已删除'); }
+
+/* ── 条件库 ── */
+function openConditionLib(){ alert('📊 条件库概览（共 163 条条件，13 个分类）'); }
+
+/* ── 初始化 ── */
+document.addEventListener('DOMContentLoaded',function(){
+  document.getElementById('healthBanner').classList.add('visible');
+});
 </script>
 </body>
 </html>

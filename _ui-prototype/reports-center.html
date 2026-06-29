@@ -5,14 +5,58 @@
 <title>报告中心 — A股分析系统</title>
 <link rel="stylesheet" href="assets/base.css">
 <style>
-.report-toolbar { display: flex; align-items: center; gap: var(--space-12); margin-bottom: var(--space-16); flex-wrap: wrap; }
-.report-toolbar .input { width: 220px; }
-.report-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); margin-bottom: var(--space-12); cursor: pointer; transition: all .15s; }
-.report-card:hover { border-color: var(--border-strong); }
-.report-card .rp-top { display: flex; justify-content: space-between; align-items: flex-start; }
-.report-card h4 { font-size: 14px; font-weight: 600; }
-.report-card .rp-meta { font-size: 12px; color: var(--text-muted); margin-top: var(--space-4); }
-.report-card .rp-desc { font-size: 13px; color: var(--text-secondary); margin-top: var(--space-6); line-height: 1.5; }
+/* ── Toolbar ── */
+.report-toolbar{display:flex;align-items:center;gap:var(--space-12);margin-bottom:var(--space-16);flex-wrap:wrap;}
+.report-toolbar .input{width:180px;}
+.date-input{width:140px;}
+
+/* ── Report Card ── */
+.report-card{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:var(--space-16);margin-bottom:var(--space-12);transition:all .15s;}
+.report-card:hover{border-color:var(--border-strong);}
+.rp-top{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--space-8);}
+.rp-top h4{font-size:14px;font-weight:600;margin:0;}
+.rp-badges{display:flex;gap:4px;flex-shrink:0;}
+.rp-meta{font-size:12px;color:var(--text-muted);margin-top:var(--space-4);}
+.rp-desc{font-size:13px;color:var(--text-secondary);margin-top:var(--space-6);line-height:1.5;}
+.rp-actions{display:flex;gap:var(--space-6);margin-top:var(--space-8);}
+.rp-actions .btn{font-size:12px;padding:2px 10px;}
+
+/* ── Type Tags ── */
+.tag-strategy{background:#6366F1;color:#fff;font-size:11px;padding:0 6px;border-radius:3px;line-height:18px;}
+.tag-analysis{background:#F59E0B;color:#fff;font-size:11px;padding:0 6px;border-radius:3px;line-height:18px;}
+.tag-backtest{background:#10B981;color:#fff;font-size:11px;padding:0 6px;border-radius:3px;line-height:18px;}
+.tag-diagnosis{background:#3B82F6;color:#fff;font-size:11px;padding:0 6px;border-radius:3px;line-height:18px;}
+.tag-sandbox{background:#8B5CF6;color:#fff;font-size:11px;padding:0 6px;border-radius:3px;line-height:18px;}
+.tag-downloaded{background:#10B981;color:#fff;font-size:10px;padding:0 5px;border-radius:3px;line-height:16px;}
+.tag-undownloaded{background:#6B7280;color:#fff;font-size:10px;padding:0 5px;border-radius:3px;line-height:16px;}
+
+/* ── Count Badge ── */
+.report-count{font-size:12px;color:var(--text-muted);margin-left:auto;}
+
+/* ── Detail Modal ── */
+.modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;display:none;align-items:center;justify-content:center;z-index:1000;background:transparent;}
+.report-modal{width:750px;max-width:92vw;max-height:85vh;display:flex;flex-direction:column;background:#0A0A0A;border:2px solid #666;border-radius:var(--radius-md);box-shadow:0 4px 24px rgba(0,0,0,.4);}
+.rm-header{display:flex;justify-content:space-between;align-items:flex-start;padding:var(--space-16) var(--space-20);border-bottom:1px solid var(--border-default);flex-shrink:0;}
+.rm-header h3{font-size:16px;font-weight:600;margin:0;}
+.rm-meta{font-size:12px;color:var(--text-muted);margin-top:4px;display:flex;gap:12px;flex-wrap:wrap;}
+.rm-body{flex:1;overflow-y:auto;padding:var(--space-16) var(--space-20);font-size:13px;line-height:1.7;color:var(--text-secondary);}
+.rm-body::-webkit-scrollbar{width:6px;}
+.rm-body::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:3px;}
+.rm-body h5{margin:var(--space-12) 0 var(--space-6);color:var(--text-primary);font-size:14px;}
+.rm-body pre{background:var(--bg-canvas);padding:var(--space-8);border-radius:var(--radius-sm);overflow-x:auto;font-size:12px;}
+.rm-body table{width:100%;border-collapse:collapse;font-size:12px;margin:var(--space-8) 0;}
+.rm-body th{text-align:left;padding:4px 6px;border-bottom:2px solid var(--border-default);font-weight:600;color:var(--text-secondary);}
+.rm-body td{padding:4px 6px;border-bottom:1px solid var(--border-default);}
+.rm-footer{display:flex;gap:var(--space-8);padding:var(--space-12) var(--space-20);border-top:1px solid var(--border-default);flex-shrink:0;justify-content:flex-end;}
+.rm-footer .btn{font-size:12px;}
+
+/* ── Batch download (default collapsed) ── */
+.batch-toggle{display:block;width:100%;text-align:left;padding:var(--space-8) var(--space-12);background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-md);cursor:pointer;font-size:13px;color:var(--text-secondary);margin-bottom:4px;}
+.batch-toggle:hover{border-color:var(--border-strong);}
+.batch-panel{display:none;align-items:center;gap:var(--space-8);padding:var(--space-8) var(--space-12);background:var(--bg-surface);border:1px solid var(--border-default);border-top:none;border-radius:0 0 var(--radius-md) var(--radius-md);margin-bottom:var(--space-12);flex-wrap:wrap;}
+.batch-panel.open{display:flex;}
+.batch-panel label{font-size:12px;color:var(--text-secondary);}
+.batch-panel .btn{font-size:12px;}
 </style>
 </head>
 <body>
@@ -31,7 +75,7 @@
         <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
         <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
         <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
-        <a href="virtual-verify.html" class="sidebar-item" data-name="虚拟验证"><span class="icon">🏗️</span><span>虚拟验证</span> <span class="badge-new">NEW</span></a>
+        <a href="strategy-sandbox.html" class="sidebar-item" data-name="策略沙箱"><span class="icon">🧪</span><span>策略沙箱</span></a>
       </div>
       <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
         <a href="reports-center.html" class="sidebar-item active" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
@@ -44,39 +88,35 @@
   <main class="main-content">
     <div class="page-header">
       <h1>📑 报告中心</h1>
-      <div class="page-header-actions">
-        <button class="btn btn-primary" onclick="alert('📝 生成报告弹窗已打开')">📝 生成报告</button>
-      </div>
+    </div>
+
+    <!-- Batch download (collapsed by default) -->
+    <button class="batch-toggle" id="batchToggle" onclick="toggleBatchPanel()">▶ 复盘诊断报告批量下载</button>
+    <div class="batch-panel" id="batchPanel">
+      <label style="font-size:12px;">从</label>
+      <input class="input date-input" id="batchStartDate" type="date" value="2026-06-01">
+      <label style="font-size:12px;">至</label>
+      <input class="input date-input" id="batchEndDate" type="date" value="2026-06-25">
+      <button class="btn btn-xs" onclick="batchDownloadDiagnosis()">⬇ 批量下载</button>
+      <span id="batchStatus" style="font-size:12px;color:var(--text-muted);margin-left:4px;"></span>
     </div>
 
     <div class="report-toolbar">
-      <input class="input" placeholder="🔍 搜索报告..." oninput="filterReports(this.value)">
-      <select class="select" style="width:140px;"><option>全部类型</option><option>单股票策略</option><option>回测报告</option><option>研究报告</option><option>AI 分析</option></select>
-      <span style="margin-left:auto;font-size:12px;color:var(--text-muted);">共 12 份报告</span>
+      <input class="input" id="searchInput" placeholder="🔍 搜索报告..." oninput="filterReports(this.value)">
+      <select class="select" style="width:140px;" id="typeFilter" onchange="filterReports(document.getElementById('searchInput').value)">
+        <option value="">全部类型</option>
+        <option value="strategy">策略存档</option>
+        <option value="analysis">分析报告</option>
+        <option value="backtest">回测报告</option>
+        <option value="diagnosis">诊断报告</option>
+        <option value="sandbox">测试报告</option>
+      </select>
+      <span class="report-count" id="reportCount">共 0 份报告</span>
     </div>
 
-    <div class="report-card" onclick="alert('📄 报告详情查看器已打开')">
-      <div class="rp-top"><h4>西藏矿业 — 多策略综合分析报告</h4><span class="tag tag-bullish">单股票策略</span></div>
-      <div class="rp-meta">2026-06-10 · 基于量价+缠论+筹码三策略共振评分 · 评分: 72/100</div>
-      <div class="rp-desc">对西藏矿业进行全方位策略分析，涵盖量价形态 8 种规则检测、缠论笔-段-中枢分析、筹码分布主力追踪。</div>
-    </div>
-    <div class="report-card" onclick="alert('📄 报告详情查看器已打开')">
-      <div class="rp-top"><h4>量价策略回测报告（2020-2026）</h4><span class="tag tag-watch">回测报告</span></div>
-      <div class="rp-meta">2026-06-08 · 回测区间: 2020-01-01 ~ 2026-06-01 · 标的: 沪深300</div>
-      <div class="rp-desc">量价形态 17 规则全量回测，总收益 +35.2%，年化 +5.8%，夏普比率 0.85，最大回撤 -12.3%。</div>
-    </div>
-    <div class="report-card" onclick="alert('📄 报告详情查看器已打开')">
-      <div class="rp-top"><h4>缠论策略深度研究报告</h4><span class="tag tag-bullish">研究报告</span></div>
-      <div class="rp-meta">2026-06-05 · 基于 141 号方案 · 含决策树评分体系</div>
-      <div class="rp-desc">缠论策略全中文输出重构、决策树修复、买卖点分档仓位管理，含西藏矿业/平安银行实盘验证结果。</div>
-    </div>
-    <div class="report-card" onclick="alert('📄 报告详情查看器已打开')">
-      <div class="rp-top"><h4>DeepSeek AI 趋势分析 — 新能源板块</h4><span class="tag tag-bullish">AI 分析</span></div>
-      <div class="rp-meta">2026-06-07 · 多角色并行分析（技术+基本面+情绪）</div>
-      <div class="rp-desc">新能源板块 5 只核心标的 AI 综合研判，技术面中性偏多，基本面估值合理，消息面政策利好。</div>
-    </div>
+    <div id="reportList"></div>
 
-    <div class="empty-state" style="display:none;" id="report-empty">
+    <div class="empty-state" style="display:none;" id="reportEmpty">
       <div class="icon-box">📑</div>
       <h4>暂无匹配的报告</h4>
       <p>尝试调整搜索关键词或筛选条件</p>
@@ -85,19 +125,364 @@
   </main>
 </div>
 
+<!-- ██ DETAIL MODAL ██ -->
+<div class="modal-overlay" id="detailModal" style="display:none;" onclick="if(event.target===this)closeReportDetail()">
+  <div class="report-modal">
+    <div class="rm-header">
+      <div>
+        <h3 id="rmTitle">—</h3>
+        <div class="rm-meta" id="rmMeta"></div>
+      </div>
+      <button class="modal-close" onclick="closeReportDetail()">×</button>
+    </div>
+    <div class="rm-body" id="rmBody">
+      <p style="color:var(--text-muted);">加载中...</p>
+    </div>
+    <div class="rm-footer" id="rmFooter">
+      <button class="btn btn-secondary" onclick="closeReportDetail()">✕ 关闭</button>
+    </div>
+  </div>
+</div>
+
 <script>
-function filterReports(val){
-  var v = val.toLowerCase();
-  var count = 0;
-  document.querySelectorAll('.report-card').forEach(function(r){
-    var show = r.textContent.toLowerCase().includes(v);
-    r.style.display = show ? '' : 'none';
-    if(show) count++;
-  });
-  document.getElementById('report-empty').style.display = count > 0 ? 'none' : '';
+// ═══════════════════════════════════════════════════════════════
+// §1 MOCK DATA — 5 report types
+// ═══════════════════════════════════════════════════════════════
+var MOCK_REPORTS = [
+  {
+    id:'RP-20260610-001', type:'strategy', source:'indicator-ide',
+    ts_code:'000762.SZ', name:'西藏矿业 — 多策略分析',
+    date:'2026-06-10', generated_at:'2026-06-10T14:30:00Z',
+    strategy_label:'量价+缠论+筹码', total_score:72, pnl_pct:5.2,
+    summary:'对西藏矿业进行全方位策略分析，涵盖量价形态 8 种规则检测、缠论笔-段-中枢分析、筹码分布主力追踪。',
+    downloaded:true,
+    content:'# 西藏矿业多策略分析报告\n\n## 概述\n本次分析基于量价形态、缠论结构和筹码分布三策略框架，对西藏矿业（000762.SZ）进行全面诊断。\n\n## 量价分析\n- 均线多头排列：MA5>MA10>MA20，趋势向上\n- 成交量温和放大，较20日均量+25%\n- 8项规则触发：突破MA250(✅)、MACD金叉(✅)、量价背离(❌)',
+    strategy:{indicator_type:'混合',dimensions:['量价','缠论','筹码'],signal:'看多',confidence:72}
+  },{
+    id:'RP-20260608-001', type:'backtest', source:'backtest',
+    ts_code:'000300.SH', name:'量价策略回测报告（2020-2026）',
+    date:'2026-06-08', generated_at:'2026-06-08T09:15:00Z',
+    strategy_label:'量价形态17规则', total_score:78, pnl_pct:35.2,
+    summary:'量价形态 17 规则全量回测，总收益 +35.2%，年化 +5.8%，夏普比率 0.85，最大回撤 -12.3%。',
+    downloaded:false,
+    content:'# 量价策略回测报告\n\n## 回测参数\n- 标的：沪深300\n- 区间：2020-01-01 ~ 2026-06-01\n- 初始资金：¥1,000,000\n\n## 绩效概览\n| 指标 | 值 |\n|------|----|\n| 总收益 | +35.2% |\n| 年化 | +5.8% |\n| 夏普 | 0.85 |\n| 最大回撤 | -12.3% |',
+    backtest:{initial_capital:1000000,final_value:1352000,total_trades:47,win_rate:0.62}
+  },{
+    id:'RP-20260607-001', type:'analysis', source:'ai-analysis',
+    ts_code:'NEW-ENERGY', name:'DeepSeek AI 趋势分析 — 新能源板块',
+    date:'2026-06-07', generated_at:'2026-06-07T16:45:00Z',
+    strategy_label:'多角色并行分析', total_score:81, pnl_pct:0,
+    summary:'新能源板块5只核心标的AI综合研判，技术面中性偏多，基本面估值合理，消息面政策利好。',
+    downloaded:false,
+    content:'# 新能源板块 AI 趋势分析\n\n## 多角色研判\n### 📈 技术分析\n板块指数处于上升通道中轨，MACD即将金叉，成交量温和放大。\n\n### 📊 基本面分析\n板块平均PE 28.5，处于历史中位数水平，营收增速15-25%。\n\n### 📰 消息面分析\n本周国家能源局发布《新型电力系统建设方案》，对板块形成政策利好。',
+    analysis_roles:{tech:'中性偏多',fundamental:'估值合理',sentiment:'政策利好'}
+  },{
+    id:'RP-20260605-001', type:'diagnosis', source:'playback',
+    ts_code:'000762.SZ', name:'西藏矿业 — 诊断复盘报告',
+    date:'2026-06-05', generated_at:'2026-06-05T10:20:00Z',
+    strategy_label:'量价+缠论', total_score:65, pnl_pct:-4.8,
+    summary:'策略组合已完结，实际盈亏 -4.8%。维度信号层评分偏低，根因定位在Layer2交叉验证层。',
+    downloaded:false,
+    content:'# 诊断复盘报告\n\n## 五层诊断结果\n| Layer | 层名 | 评分 | 置信度 |\n|-------|------|-----|--------|\n| L1 | 维度信号 | 68 | 0.75 |\n| L2 | 交叉验证 | 52 | 0.60 | ★根因\n| L3 | AI仲裁 | 71 | 0.70 |\n| L4 | 执行条件 | 74 | 0.65 |\n| L5 | 资金风控 | 70 | 0.72 |',
+    diagnosis:{root_layer:'Layer2',verdict:'待观察',dims:[{name:'方向判断',score:68},{name:'冲突',score:72},{name:'验证',score:52}]}
+  },{
+    id:'RP-20260603-001', type:'sandbox', source:'strategy-sandbox',
+    ts_code:'002415.SZ', name:'海康威视 — 策略沙箱测试',
+    date:'2026-06-03', generated_at:'2026-06-03T11:00:00Z',
+    strategy_label:'均线突破策略', total_score:70, pnl_pct:8.6,
+    summary:'均线突破策略在2026-01~06区间测试，收益风险比2.1，预测正确率64%，上涨段表现突出。',
+    downloaded:false,
+    content:'# 策略沙箱测试报告\n\n## 测试结论\n该策略在测试区间内表现良好，建议纳入完整回测。\n\n## 关键指标\n| 指标 | 值 |\n|------|-----|\n| 总收益 | +8.6% |\n| 收益风险比 | 2.1 |\n| 预测正确率 | 64% |\n| 最大回撤 | -5.2% |',
+    sandbox:{total_return:8.6,risk_return:2.1,accuracy:64,max_drawdown:-5.2}
+  },{
+    id:'RP-20260601-001', type:'backtest', source:'backtest',
+    ts_code:'000300.SH', name:'缠论三买策略回测（2023-2026）',
+    date:'2026-06-01', generated_at:'2026-06-01T08:30:00Z',
+    strategy_label:'缠论三买+量价确认', total_score:73, pnl_pct:28.1,
+    summary:'缠论三买策略在沪深300上的3年区间回测，年化+8.2%，胜率58%，平均持有周期35交易日。',
+    downloaded:true,
+    content:'# 缠论三买策略回测报告\n\n## 回测参数\n- 标的：沪深300\n- 区间：2023-01-01 ~ 2026-06-01\n- 策略入口：缠论第三类买点确认\n\n## 绩效概览\n| 指标 | 值 |\n|------|----|\n| 总收益 | +28.1% |\n| 年化 | +8.2% |\n| 胜率 | 58% |\n| 平均持有 | 35天 |',
+    backtest:{initial_capital:1000000,final_value:1281000,total_trades:31,win_rate:0.58}
+  },{
+    id:'RP-20260528-001', type:'strategy', source:'indicator-ide',
+    ts_code:'600519.SH', name:'贵州茅台 — 价值策略存档',
+    date:'2026-05-28', generated_at:'2026-05-28T15:20:00Z',
+    strategy_label:'基本面+多因子', total_score:68, pnl_pct:0,
+    summary:'基于PE分位数+ROE稳定性+现金流质量多因子评分组合，当前评分68/100，建议持续关注。',
+    downloaded:false,
+    content:'# 贵州茅台价值策略存档\n\n## 多因子评分\n| 因子 | 权重 | 分数 |\n|------|------|-----|\n| PE分位数 | 30% | 72 |\n| ROE稳定性 | 35% | 65 |\n| 现金流质量 | 35% | 68 |\n\n## 综合评分：68/100',
+    strategy:{indicator_type:'多因子',dimensions:['基本面','估值'],signal:'观望',confidence:68}
+  },{
+    id:'RP-20260525-001', type:'diagnosis', source:'playback',
+    ts_code:'002415.SZ', name:'海康威视 — 诊断复盘报告',
+    date:'2026-05-25', generated_at:'2026-05-25T09:10:00Z',
+    strategy_label:'均线突破+量价', total_score:58, pnl_pct:-12.3,
+    summary:'已完结亏损-12.3%。主要问题为Layer5资金风控层执行偏差——止损距离过宽导致亏损超预期。',
+    downloaded:true,
+    content:'# 海康威视诊断复盘报告\n\n## 诊断结论\n| 项目 | 说明 |\n|------|------|\n| 实际盈亏 | -12.3% |\n| 根因层 | Layer5 资金风控 |\n| 止损距离 | 15% (预设)-12.3%(实际) |\n\n## 建议\n收紧止损距离至8%。',
+    diagnosis:{root_layer:'Layer5',verdict:'需修订',dims:[{name:'资金管理',score:45},{name:'止损止盈',score:52},{name:'仓位管理',score:55}]}
+  }
+];
+
+var _reports = [];
+
+// ═══════════════════════════════════════════════════════════════
+// §2 INIT
+// ═══════════════════════════════════════════════════════════════
+function initReports(){
+  // Try reading from localStorage (跨页通信 — produced by playback)
+  try{
+    var lsData = localStorage.getItem('review_reports');
+    if(lsData){
+      var parsed = JSON.parse(lsData);
+      if(parsed && parsed.length){
+        // Merge downloaded status — mark previously downloaded items
+        var localDownloaded = {};
+        _reports.forEach(function(r){ if(r.downloaded) localDownloaded[r.id]=true; });
+        parsed.forEach(function(r){
+          if(localDownloaded[r.id]) r.downloaded = true;
+          else r.downloaded = r.downloaded || false;
+          if(!r.type) r.type = 'diagnosis'; // playback reports default to diagnosis
+        });
+        _reports = parsed;
+        return;
+      }
+    }
+  }catch(e){}
+  // Fallback to mock data
+  _reports = MOCK_REPORTS.slice();
 }
-</script>
-<script>
+
+function getTypeLabel(type){
+  var labels = {strategy:'策略存档',analysis:'分析报告',backtest:'回测报告',diagnosis:'诊断报告',sandbox:'测试报告'};
+  return labels[type] || type;
+}
+
+function getTypeClass(type){
+  return 'tag-'+type;
+}
+
+function getSourceLabel(source){
+  var map = {'indicator-ide':'个股策略分析','ai-analysis':'AI分析','backtest':'回测系统','playback':'复盘中心','strategy-sandbox':'策略沙箱'};
+  return map[source] || source;
+}
+
+function renderReports(list){
+  var el = document.getElementById('reportList');
+  document.getElementById('reportCount').textContent = '共 '+list.length+' 份报告';
+  if(!list.length){
+    el.innerHTML = '';
+    document.getElementById('reportEmpty').style.display = '';
+    return;
+  }
+  document.getElementById('reportEmpty').style.display = 'none';
+  el.innerHTML = list.map(function(r){
+    var typeLabel = getTypeLabel(r.type);
+    var typeCls = getTypeClass(r.type);
+    var srcLabel = getSourceLabel(r.source);
+    var pnlStr = r.pnl_pct ? (r.pnl_pct>=0?'+':'')+r.pnl_pct+'%' : '';
+    var canDownload = r.type === 'diagnosis' || r.type === 'sandbox';
+    var badges = '<span class="'+typeCls+'">'+typeLabel+'</span>';
+    if(canDownload){
+      var dlCls = r.downloaded ? 'tag-downloaded' : 'tag-undownloaded';
+      var dlLabel = r.downloaded ? '已下载' : '未下载';
+      badges += '<span class="'+dlCls+'">'+dlLabel+'</span>';
+    }
+    var actions = '<button class="btn btn-xs" onclick="viewReport(\''+r.id+'\')">👁 查看</button>';
+    if(canDownload) actions += '<button class="btn btn-xs" onclick="downloadReport(\''+r.id+'\')">📥 下载</button>';
+    return '<div class="report-card" data-id="'+r.id+'">'+
+      '<div class="rp-top">'+
+        '<h4>'+r.name+'</h4>'+
+        '<div class="rp-badges">'+badges+'</div>'+
+      '</div>'+
+      '<div class="rp-meta">🔖 '+srcLabel+' · 📅 '+r.date+(r.total_score!==undefined?' · ⭐ 评分: '+r.total_score:'')+(pnlStr?' · 💰 '+pnlStr:'')+'</div>'+
+      '<div class="rp-desc">'+(r.summary||'')+'</div>'+
+      '<div class="rp-actions">'+actions+'</div>'+
+    '</div>';
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §3 FILTER
+// ═══════════════════════════════════════════════════════════════
+var _searchVal = '';
+var _typeVal = '';
+
+function filterReports(val){
+  _searchVal = val || '';
+  _typeVal = document.getElementById('typeFilter').value;
+  applyFilters();
+}
+
+function applyFilters(){
+  var filtered = _reports.filter(function(r){
+    if(_typeVal && r.type !== _typeVal) return false;
+    if(_searchVal){
+      var s = _searchVal.toLowerCase();
+      var searchFields = [r.name, r.ts_code, r.summary, getTypeLabel(r.type), getSourceLabel(r.source)];
+      if(!searchFields.some(function(f){ return (f||'').toLowerCase().includes(s); })) return false;
+    }
+    return true;
+  });
+  renderReports(filtered);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §4 VIEW (detail modal)
+// ═══════════════════════════════════════════════════════════════
+var _currentReportId = null;
+
+function viewReport(reportId){
+  _currentReportId = reportId;
+  var r = _reports.find(function(x){ return x.id === reportId; });
+  if(!r){ showToast('❌ 报告数据未找到'); return; }
+
+  // Build detail from full report data — try localStorage first, then mock inline content
+  var fullData = null;
+  try{
+    var raw = localStorage.getItem('review_report_data_'+reportId);
+    if(raw) fullData = JSON.parse(raw);
+  }catch(e){}
+
+  var title = r.name;
+  var metaHtml = '🔖 '+getSourceLabel(r.source)+' · 📅 '+(r.date||'')+ (r.ts_code?' · 📎 '+r.ts_code:'')+(r.total_score!==undefined?' · ⭐ 评分: '+r.total_score:'');
+  var bodyHtml = '';
+
+  if(fullData && fullData.analysis){
+    // Real playback diagnosis data
+    var a = fullData.analysis;
+    bodyHtml = '<h5>📊 分层诊断得分</h5><table><tr><th>维度</th><th>得分</th><th>Layer</th></tr>'+
+      (a.dimension_scores||[]).map(function(d){ return '<tr><td>'+d.name+'</td><td>'+d.score+'</td><td>'+d.layer+'</td></tr>'; }).join('')+'</table>'+
+      '<h5>📋 诊断摘要</h5><pre>'+JSON.stringify(a.diagnostic_summary||{},null,2)+'</pre>'+
+      (a.summary?'<p>'+a.summary+'</p>':'');
+  } else if(r.content){
+    // Mock — render markdown-like content
+    bodyHtml = r.content.replace(/\n/g,'<br>').replace(/#{3,6} (.*?)(?:<br>|$)/g,'<h5>$1</h5>').replace(/## (.*?)(?:<br>|$)/g,'<h4>$1</h4>').replace(/# (.*?)(?:<br>|$)/g,'<h3>$1</h3>').replace(/\|(.+?)\|/g,function(m){ var cells=m.split('|').filter(Boolean).map(function(c){return '<td>'+c.trim()+'</td>';}).join(''); return '<tr>'+cells+'</tr>';}).replace(/(<tr>.*?<\/tr>){2,}/g,function(m){ return '<table>'+m+'</table>'; })+
+      (r.interpretation?'<hr><h5>💡 AI分析</h5><p>'+(r.interpretation.summary||'')+'</p><ul>'+(r.interpretation.suggestions||[]).map(function(s){return '<li>'+s+'</li>';}).join('')+'</ul>':'');
+  } else {
+    bodyHtml = '<p style="color:var(--text-muted);">暂无详细报告内容</p>';
+  }
+
+  document.getElementById('rmTitle').textContent = title;
+  document.getElementById('rmMeta').innerHTML = metaHtml;
+  document.getElementById('rmBody').innerHTML = bodyHtml;
+  // Conditionally show download button in modal footer
+  var canDownload = r.type === 'diagnosis' || r.type === 'sandbox';
+  var footer = document.getElementById('rmFooter');
+  if(canDownload){
+    footer.innerHTML = '<button class="btn" onclick="downloadFromModal()">📥 下载 JSON</button><button class="btn btn-secondary" onclick="closeReportDetail()">✕ 关闭</button>';
+  } else {
+    footer.innerHTML = '<button class="btn btn-secondary" onclick="closeReportDetail()">✕ 关闭</button>';
+  }
+  document.getElementById('detailModal').style.display = 'flex';
+}
+
+function closeReportDetail(){
+  document.getElementById('detailModal').style.display = 'none';
+  _currentReportId = null;
+}
+
+function downloadFromModal(){
+  if(_currentReportId) downloadReport(_currentReportId);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §5 DOWNLOAD
+// ═══════════════════════════════════════════════════════════════
+function downloadReport(reportId){
+  var r = _reports.find(function(x){ return x.id === reportId; });
+  if(!r){ showToast('❌ 报告数据未找到'); return; }
+
+  // Try full data from localStorage first
+  var dataStr = null;
+  try{
+    dataStr = localStorage.getItem('review_report_data_'+reportId);
+  }catch(e){}
+
+  if(!dataStr){
+    // Fallback — build from mock
+    dataStr = JSON.stringify(r, null, 2);
+  }
+
+  var blob = new Blob([dataStr], {type:'application/json'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = reportId + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  // Mark as downloaded
+  r.downloaded = true;
+  applyFilters();
+  showToast('📥 报告已下载');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §6 BATCH DOWNLOAD (diagnosis reports by date range, collapsed by default)
+// ═══════════════════════════════════════════════════════════════
+function toggleBatchPanel(){
+  var panel = document.getElementById('batchPanel');
+  var btn = document.getElementById('batchToggle');
+  var isOpen = panel.classList.toggle('open');
+  btn.textContent = isOpen ? '▼ 复盘诊断报告批量下载' : '▶ 复盘诊断报告批量下载';
+}
+function batchDownloadDiagnosis(){
+  var startDate = document.getElementById('batchStartDate').value;
+  var endDate = document.getElementById('batchEndDate').value;
+  var statusEl = document.getElementById('batchStatus');
+
+  if(!startDate || !endDate){
+    showToast('❌ 请选择起止日期');
+    return;
+  }
+
+  var targets = _reports.filter(function(r){
+    if(r.type !== 'diagnosis') return false;
+    return r.date >= startDate && r.date <= endDate;
+  });
+
+  if(!targets.length){
+    statusEl.textContent = '⛔ 该时间段内无复盘诊断报告';
+    showToast('⛔ 该时间段内无复盘诊断报告');
+    return;
+  }
+
+  statusEl.textContent = '⏳ 正在下载 ' + targets.length + ' 份报告...';
+  var idx = 0;
+
+  function nextDownload(){
+    if(idx >= targets.length){
+      statusEl.textContent = '✅ 已下载 ' + targets.length + ' 份报告';
+      showToast('✅ 批量下载完成，共 ' + targets.length + ' 份');
+      return;
+    }
+    var r = targets[idx];
+    downloadReport(r.id);
+    idx++;
+    statusEl.textContent = '⏳ 正在下载 ' + idx + '/' + targets.length + '...';
+    setTimeout(nextDownload, 300);
+  }
+
+  nextDownload();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §7 TOAST
+// ═══════════════════════════════════════════════════════════════
+function showToast(msg){
+  var t = document.createElement('div');
+  t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1F2937;color:#fff;padding:8px 20px;border-radius:6px;font-size:13px;z-index:9999;transition:opacity .3s;box-shadow:0 2px 8px rgba(0,0,0,.15);';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(function(){ t.style.opacity='0'; setTimeout(function(){ document.body.removeChild(t); },300); },2000);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §8 SIDEBAR
+// ═══════════════════════════════════════════════════════════════
 var sidebarCollapsed = true;
 function toggleSidebar(){
   sidebarCollapsed = !sidebarCollapsed;
@@ -115,6 +500,12 @@ function toggleSidebar(){
   var btn=document.querySelector('.sidebar-toggle');
   if(btn)btn.textContent='▶';
 })();
+
+// ═══════════════════════════════════════════════════════════════
+// §9 BOOT
+// ═══════════════════════════════════════════════════════════════
+initReports();
+applyFilters();
 </script>
 </body>
 </html>

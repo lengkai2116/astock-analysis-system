@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>策略沙箱 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+/* ── 沙箱布局 ── */
+.sb-layout { display:grid; grid-template-columns:320px 1fr; gap:var(--space-16); }
+@media(max-width:1100px){ .sb-layout{grid-template-columns:1fr;} }
+
+/* ── 配置面板 ── */
+.config-section { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); height:fit-content; }
+.config-section h4 { font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:var(--space-8); display:flex; align-items:center; gap:var(--space-4); }
+.config-label { font-size:11px; color:var(--text-muted); margin-bottom:var(--space-4); display:flex; align-items:center; gap:var(--space-4); }
+.config-label .hint-icon { cursor:help; font-size:11px; color:var(--text-muted); opacity:0.6; }
+.config-label .hint-icon:hover { opacity:1; color:var(--color-brand-500); }
+.config-row { display:flex; align-items:center; gap:var(--space-6); margin-bottom:var(--space-8); flex-wrap:wrap; }
+.config-row .input,.config-row .select { flex:1; font-size:12px; }
+
+/* ── 策略来源 Tab ── */
+.src-tabs { display:flex; gap:0; margin-bottom:var(--space-8); border:1px solid var(--border-default); border-radius:var(--radius-sm); overflow:hidden; }
+.src-tab { flex:1; text-align:center; padding:var(--space-6); font-size:12px; cursor:pointer; color:var(--text-muted); background:var(--bg-subtle); transition:all .15s; }
+.src-tab:hover { color:var(--text-secondary); }
+.src-tab.active { color:var(--text-primary); background:var(--bg-surface); font-weight:500; }
+.src-tab:not(:last-child) { border-right:1px solid var(--border-default); }
+
+/* ── 策略单选列表 ── */
+.strategy-pick { max-height:160px; overflow-y:auto; border:1px solid var(--border-default); border-radius:var(--radius-sm); margin-bottom:var(--space-8); }
+.strategy-pick-item { display:flex; align-items:center; gap:var(--space-6); padding:var(--space-4) var(--space-6); font-size:11px; cursor:pointer; color:var(--text-secondary); border-bottom:1px solid var(--border-subtle); transition:background .1s; }
+.strategy-pick-item:last-child { border-bottom:none; }
+.strategy-pick-item:hover { background:var(--bg-muted); }
+.strategy-pick-item.selected { background:var(--bg-active); color:var(--color-brand-500); }
+.strategy-pick-item input[type=radio] { accent-color:#3B82F6; }
+.strategy-pick-item .sp-label { flex:1; }
+.strategy-pick-item .sp-type { font-size:9px; padding:1px 4px; border-radius:2px; background:var(--bg-subtle); color:var(--text-muted); }
+
+/* ── 参数调节区域 ── */
+.param-section { margin-bottom:var(--space-8); }
+.param-section-header { display:flex; align-items:center; gap:var(--space-4); padding:var(--space-4) 0; font-size:11px; font-weight:500; color:var(--text-secondary); cursor:pointer; user-select:none; }
+.param-section-header:hover { color:var(--text-primary); }
+.param-section-header .arrow { font-size:9px; transition:transform .15s; }
+.param-section-body { display:none; }
+.param-section-body.open { display:block; }
+.param-slider-row { display:flex; align-items:center; gap:var(--space-4); margin-bottom:var(--space-3); padding:var(--space-2) var(--space-3); background:var(--bg-subtle); border-radius:var(--radius-xs); }
+.param-slider-row .ps-label { flex:0 0 70px; font-size:10px; color:var(--text-muted); white-space:nowrap; }
+.param-slider-row input[type=range] { flex:1; height:4px; -webkit-appearance:none; appearance:none; background:var(--border-default); border-radius:2px; outline:none; cursor:pointer; }
+.param-slider-row input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--color-brand-500); cursor:pointer; border:2px solid var(--bg-surface); }
+.param-slider-row .ps-val { flex:0 0 36px; text-align:right; font-size:10px; color:var(--color-brand-500); font-weight:600; }
+.param-slider-row .ps-unit { font-size:9px; color:var(--text-muted); margin-left:-4px; }
+
+/* ── 参数灵敏度测试开关 ── */
+.sens-switch { display:flex; align-items:center; gap:var(--space-4); margin:var(--space-4) 0 var(--space-6); padding:var(--space-3) var(--space-6); background:var(--bg-subtle); border-radius:var(--radius-sm); cursor:pointer; font-size:11px; color:var(--text-secondary); transition:all .15s; }
+.sens-switch:hover { background:var(--bg-muted); }
+.sens-switch.active { background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.2); }
+.sens-switch input[type=checkbox] { accent-color:#3B82F6; }
+.sens-switch .ss-label { flex:1; }
+.sens-switch .ss-desc { font-size:9px; color:var(--text-muted); }
+
+/* ── 操作按钮 ── */
+.config-actions { display:flex; gap:var(--space-6); margin-top:var(--space-6); }
+.config-actions button { flex:1; justify-content:center; font-size:12px; }
+
+/* ═══════════ 结果面板 ═══════════ */
+.results-section { flex:1; }
+.section-card { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); margin-bottom:var(--space-12); }
+
+/* ⏳ 进度 */
+.progress-card { text-align:center; padding:var(--space-16); }
+.progress-card .progress-bar { height:6px; border-radius:3px; background:var(--bg-muted); margin-bottom:var(--space-8); overflow:hidden; }
+.progress-card .progress-bar-fill { height:100%; border-radius:3px; background:var(--color-brand-500); transition:width .3s; }
+.progress-card .progress-status { font-size:12px; color:var(--text-muted); }
+
+/* ── ① 核心结论（自然语言，在最顶部） ── */
+.conclusion-card { border-left:3px solid var(--color-brand-500); }
+.conclusion-title { font-size:14px; font-weight:600; color:var(--text-primary); margin-bottom:var(--space-4); }
+.conclusion-text { font-size:13px; color:var(--text-secondary); line-height:1.8; }
+.conclusion-tags { display:flex; gap:var(--space-4); flex-wrap:wrap; margin-top:var(--space-6); }
+.conclusion-tags .ctag { font-size:11px; padding:2px 10px; border-radius:var(--radius-full); }
+.ctag-good { background:var(--color-up-bg); color:var(--color-up); }
+.ctag-warn { background:rgba(245,158,11,0.12); color:#FBBF24; }
+.ctag-info { background:rgba(59,130,246,0.12); color:#60A5FA; }
+
+/* ── ② 绩效速览卡 ── */
+.metrics-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:var(--space-8); margin-bottom:var(--space-6); }
+@media(max-width:900px){ .metrics-grid{grid-template-columns:repeat(2,1fr);} }
+.metric-cell { background:var(--bg-subtle); border-radius:var(--radius-sm); padding:var(--space-6) var(--space-8); text-align:center; }
+.metric-cell .mc-val { font-size:18px; font-weight:700; margin-bottom:2px; }
+.metric-cell .mc-label { font-size:10px; color:var(--text-muted); display:flex; align-items:center; justify-content:center; gap:var(--space-3); }
+.metric-cell .mc-label .mc-hint { cursor:help; font-size:9px; opacity:0.5; }
+.metric-cell .mc-label .mc-hint:hover { opacity:1; color:var(--color-brand-500); }
+.mc-up { color:var(--color-up); } .mc-down { color:var(--color-down); }
+.mc-neutral { color:var(--signal-watch); }
+
+/* ── ③ 权益曲线 vs 大盘 ── */
+.chart-box { height:260px; }
+
+/* ── ④ 行情分段看 ── */
+.phase-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--space-6); margin-bottom:var(--space-4); }
+.phase-cell { border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:var(--space-6); text-align:center; }
+.phase-cell .ph-name { font-size:11px; font-weight:500; margin-bottom:var(--space-3); }
+.phase-cell .ph-name .ph-icon { font-size:14px; }
+.phase-cell .ph-stat { margin-bottom:2px; }
+.phase-cell .ph-stat .ps-val { font-size:16px; font-weight:700; }
+.phase-cell .ph-stat .ps-label { font-size:9px; color:var(--text-muted); margin-left:2px; }
+.phase-cell .ph-sub { font-size:9px; color:var(--text-muted); }
+.phase-up { border-left:3px solid var(--color-up); }
+.phase-down { border-left:3px solid var(--color-down); }
+.phase-flat { border-left:3px solid var(--signal-watch); }
+
+/* ── ⑤ 参数稳定度 ── */
+.stability-section { margin-top:var(--space-6); }
+.stability-row { display:flex; align-items:center; gap:var(--space-4); margin-bottom:var(--space-3); padding:var(--space-3) var(--space-6); background:var(--bg-subtle); border-radius:var(--radius-sm); font-size:11px; }
+.stability-row .st-label { flex:0 0 90px; color:var(--text-secondary); }
+.stability-row .st-bar-wrap { flex:1; display:flex; gap:2px; align-items:flex-end; height:30px; }
+.stability-row .st-bar { flex:1; border-radius:2px 2px 0 0; min-height:4px; transition:height .3s; position:relative; }
+.stability-row .st-bar:hover { filter:brightness(1.3); }
+.stability-row .st-bar .st-bar-tip { display:none; position:absolute; bottom:100%; left:50%; transform:translateX(-50%); background:rgba(10,10,10,0.9); color:var(--text-primary); padding:2px 6px; border-radius:2px; font-size:9px; white-space:nowrap; }
+.stability-row .st-bar:hover .st-bar-tip { display:block; }
+.stability-row .st-verdict { flex:0 0 70px; text-align:right; font-size:10px; }
+.st-verdict.verdict-stable { color:#22C55E; }
+.st-verdict.verdict-medium { color:#FBBF24; }
+.st-verdict.verdict-sensitive { color:#F87171; }
+
+/* ── ⑥ 信号明细表 ── */
+.signal-table-wrap { overflow-x:auto; max-height:300px; overflow-y:auto; }
+.signal-table { width:100%; border-collapse:collapse; font-size:11px; }
+.signal-table th { text-align:left; padding:var(--space-3) var(--space-4); color:var(--text-muted); font-weight:500; border-bottom:1px solid var(--border-default); background:var(--bg-subtle); font-size:10px; white-space:nowrap; position:sticky; top:0; }
+.signal-table td { padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--border-subtle); color:var(--text-secondary); font-size:11px; white-space:nowrap; }
+.signal-table .st-correct { color:#22C55E; font-weight:600; }
+.signal-table .st-wrong { color:#F87171; font-weight:600; }
+
+/* ── 说明弹窗 ── */
+.hint-tip { display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:rgba(10,10,10,0.95); border:1px solid var(--border-strong); border-radius:var(--radius-md); padding:var(--space-12) var(--space-16); z-index:9999; max-width:360px; box-shadow:var(--shadow-hover); }
+.hint-tip.open { display:block; }
+.hint-tip .ht-title { font-size:12px; font-weight:600; color:var(--text-primary); margin-bottom:var(--space-4); }
+.hint-tip .ht-body { font-size:11px; color:var(--text-secondary); line-height:1.7; }
+.hint-tip .ht-close { float:right; cursor:pointer; color:var(--text-muted); font-size:18px; margin:-4px 0 0 8px; }
+.hint-tip .ht-close:hover { color:var(--text-primary); }
+.hint-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; z-index:9998; }
+.hint-overlay.open { display:block; }
+
+/* ── 股票多选弹窗 ── */
+.stock-modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:10000; align-items:center; justify-content:center; }
+.stock-modal-overlay.open { display:flex; }
+.stock-modal { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); width:520px; max-height:80vh; display:flex; flex-direction:column; }
+.stock-modal .sm-header { display:flex; justify-content:space-between; align-items:center; padding:var(--space-8) var(--space-12); border-bottom:1px solid var(--border-default); }
+.stock-modal .sm-header h3 { font-size:14px; font-weight:600; color:var(--text-primary); margin:0; }
+.stock-modal .sm-close { font-size:18px; color:var(--text-muted); cursor:pointer; background:none; border:none; padding:0; line-height:1; }
+.stock-modal .sm-close:hover { color:var(--text-primary); }
+.stock-modal .sm-search { padding:var(--space-6) var(--space-12); border-bottom:1px solid var(--border-subtle); }
+.stock-modal .sm-search input { width:100%; font-size:12px; }
+.stock-modal .sm-list { flex:1; overflow-y:auto; padding:var(--space-4) var(--space-12); }
+.stock-modal .sm-item { display:flex; align-items:center; gap:var(--space-3); padding:var(--space-3) var(--space-3); border-radius:var(--radius-xs); cursor:pointer; font-size:12px; color:var(--text-secondary); transition:background .1s; }
+.stock-modal .sm-item:hover { background:var(--bg-muted); }
+.stock-modal .sm-item input[type=checkbox] { accent-color:#3B82F6; }
+.stock-modal .sm-item .sm-code { font-family:monospace; font-size:10px; color:var(--text-muted); min-width:80px; }
+.stock-modal .sm-item .sm-name { flex:1; color:var(--text-primary); }
+.stock-modal .sm-item .sm-industry { font-size:10px; color:var(--text-muted); }
+.stock-modal .sm-footer { display:flex; justify-content:space-between; align-items:center; padding:var(--space-6) var(--space-12); border-top:1px solid var(--border-default); font-size:11px; }
+.stock-modal .sm-footer .smf-count { color:var(--text-muted); }
+.stock-modal .sm-footer .smf-actions { display:flex; gap:var(--space-4); }
+.stock-modal .sm-footer .smf-actions button { font-size:11px; height:30px; padding:0 var(--space-12); }
+.empty-state { text-align:center; padding:var(--space-40) var(--space-16); }
+.empty-state .es-icon { font-size:48px; margin-bottom:var(--space-12); }
+.empty-state .es-title { font-size:16px; font-weight:500; color:var(--text-primary); margin-bottom:var(--space-4); }
+.empty-state .es-desc { font-size:13px; color:var(--text-muted); line-height:1.7; max-width:420px; margin:0 auto; }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+    <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+      <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+      <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+      <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+      <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+      <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+      <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+      <a href="strategy-sandbox.html" class="sidebar-item active" data-name="策略沙箱"><span class="icon">🧪</span><span>策略沙箱</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+      <a href="alert.html" class="sidebar-item" data-name="预警管理"><span class="icon">🔔</span><span>预警管理</span> <span class="badge-new">NEW</span></a>
+      <a href="data-management.html" class="sidebar-item" data-name="数据管理"><span class="icon">🔄</span><span>数据管理</span> <span class="badge-new">NEW</span></a>
+      <a href="system-health.html" class="sidebar-item" data-name="系统诊断"><span class="icon">❤️</span><span>系统诊断</span> <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div><a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a></div>
+  </nav>
+
+  <main class="main-content">
+    <div class="page-header">
+      <h1>🧪 策略沙箱</h1>
+      <div class="page-header-actions">
+        <span style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:var(--space-4);">
+          <span style="font-size:14px;">💡</span> 选择一个策略→调参数→看效果，快速摸清策略的「脾气」
+        </span>
+      </div>
+    </div>
+
+    <div class="sb-layout">
+      <!-- ──────── 左：配置面板 ──────── -->
+      <div class="config-section">
+        <h4>⚙️ 测试设置</h4>
+
+        <!-- 策略来源 Tab -->
+        <div class="config-label">从哪选策略</div>
+        <div class="src-tabs">
+          <div class="src-tab active" data-src="template" onclick="switchSrc(this,'template')">📋 策略模板</div>
+          <div class="src-tab" data-src="factor" onclick="switchSrc(this,'factor')">📊 因子组合</div>
+        </div>
+
+        <!-- 策略模板列表 -->
+        <div id="src-template" class="config-row" style="flex-direction:column;align-items:stretch;">
+          <div class="strategy-pick">
+            <label class="strategy-pick-item selected"><input type="radio" name="sbStrat" value="S1" checked onchange="onStratPick()"><span class="sp-label">S1 量价形态</span><span class="sp-type">系统</span></label>
+            <label class="strategy-pick-item"><input type="radio" name="sbStrat" value="S2" onchange="onStratPick()"><span class="sp-label">S2 缠论策略</span><span class="sp-type">系统</span></label>
+            <label class="strategy-pick-item"><input type="radio" name="sbStrat" value="S3" onchange="onStratPick()"><span class="sp-label">S3 筹码策略</span><span class="sp-type">系统</span></label>
+            <label class="strategy-pick-item"><input type="radio" name="sbStrat" value="S4" onchange="onStratPick()"><span class="sp-label">S4 多因子</span><span class="sp-type">系统</span></label>
+            <label class="strategy-pick-item"><input type="radio" name="sbStrat" value="S5" onchange="onStratPick()"><span class="sp-label">S5 BOCIASI情绪</span><span class="sp-type">系统</span></label>
+          </div>
+        </div>
+        <!-- 因子组合列表（隐藏） -->
+        <div id="src-factor" class="config-row" style="flex-direction:column;align-items:stretch;display:none;">
+          <div class="strategy-pick">
+            <label class="strategy-pick-item selected"><input type="radio" name="sbStrat" value="F1" checked onchange="onStratPick()"><span class="sp-label">精选组合-5因子</span><span class="sp-type">组合</span></label>
+            <label class="strategy-pick-item"><input type="radio" name="sbStrat" value="F2" onchange="onStratPick()"><span class="sp-label">动量反转组合</span><span class="sp-type">组合</span></label>
+            <label class="strategy-pick-item"><input type="radio" name="sbStrat" value="F3" onchange="onStratPick()"><span class="sp-label">价值挖掘组合</span><span class="sp-type">组合</span></label>
+          </div>
+        </div>
+
+        <!-- 参数调节（可折叠，默认折叠） -->
+        <div class="param-section">
+          <div class="param-section-header" onclick="toggleParamSection(this)">
+            <span class="arrow">▶</span> ⚙️ 微调策略参数 <span style="font-size:9px;color:var(--text-muted);">（不熟悉可跳过，使用默认值）</span>
+          </div>
+          <div class="param-section-body" id="paramBody">
+            <div class="param-slider-row">
+              <span class="ps-label">分析周期</span>
+              <input type="range" min="5" max="60" value="20" oninput="document.getElementById('ps-window').textContent=this.value">
+              <span class="ps-val" id="ps-window">20</span><span class="ps-unit">天</span>
+              <span class="hint-icon" style="font-size:10px;cursor:help;color:var(--text-muted);" onclick="showHint(event,'window')">❓</span>
+            </div>
+            <div class="param-slider-row">
+              <span class="ps-label">触发阈值</span>
+              <input type="range" min="50" max="95" value="70" oninput="document.getElementById('ps-thresh').textContent=this.value">
+              <span class="ps-val" id="ps-thresh">70</span><span class="ps-unit">分</span>
+              <span class="hint-icon" style="font-size:10px;cursor:help;color:var(--text-muted);" onclick="showHint(event,'threshold')">❓</span>
+            </div>
+            <div class="param-slider-row">
+              <span class="ps-label">止损比例</span>
+              <input type="range" min="3" max="20" value="8" oninput="document.getElementById('ps-stoploss').textContent=this.value">
+              <span class="ps-val" id="ps-stoploss">8</span><span class="ps-unit">%</span>
+              <span class="hint-icon" style="font-size:10px;cursor:help;color:var(--text-muted);" onclick="showHint(event,'stoploss')">❓</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 参数稳定度测试开关 -->
+        <label class="sens-switch">
+          <input type="checkbox" onchange="this.parentElement.classList.toggle('active')">
+          <span class="ss-label">📊 参数稳定度测试</span>
+          <span class="ss-desc">调一下参数，看结果变化大不大</span>
+          <span class="hint-icon" style="font-size:10px;cursor:help;color:var(--text-muted);" onclick="event.stopPropagation();showHint(event,'stability')">❓</span>
+        </label>
+
+        <!-- 标的：从自选股多选 -->
+        <div class="config-label">测试哪些股票 <span class="hint-icon" onclick="showHint(event,'stockPick')">❓</span></div>
+        <div class="config-row" style="flex-direction:column;align-items:stretch;">
+          <div style="display:flex;align-items:center;gap:var(--space-4);">
+            <button class="btn" style="flex:1;height:32px;font-size:11px;justify-content:center;" onclick="openStockPicker()">
+              📋 从自选股选择 <span id="stockCountBadge" style="margin-left:4px;font-size:10px;color:var(--text-muted);">(0 只)</span>
+            </button>
+            <span style="font-size:10px;color:var(--text-muted);">已选 <span id="sbStockCount">0</span> 只</span>
+          </div>
+          <div id="sbSelectedStocks" style="display:flex;flex-wrap:wrap;gap:var(--space-3);margin-top:var(--space-3);"></div>
+        </div>
+
+        <div class="config-label">测试时间范围</div>
+        <div class="config-row">
+          <input class="input" style="flex:1;" value="2024-01-01">
+          <span style="color:var(--text-muted);font-size:11px;">至</span>
+          <input class="input" style="flex:1;" value="2026-06-01">
+        </div>
+
+        <div class="config-label">比较对象（大盘基准） <span class="hint-icon" onclick="showHint(event,'benchmark')">❓</span></div>
+        <div class="config-row">
+          <select class="select" id="sbBenchmark">
+            <option value="000300.SH">沪深300</option>
+            <option value="000905.SH">中证500</option>
+            <option value="000001.SH">上证指数</option>
+            <option value="399001.SZ">深证成指</option>
+            <option value="399006.SZ">创业板指</option>
+            <option value="none">不比较</option>
+          </select>
+        </div>
+
+        <div class="config-row" style="display:flex;gap:var(--space-4);">
+          <div style="flex:1;">
+            <div class="config-label">投入资金</div>
+            <input class="input" value="1,000,000">
+          </div>
+          <div style="flex:1;">
+            <div class="config-label">K线周期</div>
+            <select class="select">
+              <option>日线</option>
+              <option>周线</option>
+              <option>月线</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="config-actions">
+          <button class="btn btn-primary" onclick="runSandbox(this)">▶ 开始测试</button>
+          <button class="btn" onclick="sendToBacktest()">↗ 纳入回测</button>
+        </div>
+      </div>
+
+      <!-- ──── 股票选择弹窗 ──── -->
+      <div class="stock-modal-overlay" id="stockModal">
+        <div class="stock-modal">
+          <div class="sm-header">
+            <h3>📋 选择自选股</h3>
+            <button class="sm-close" onclick="closeStockPicker()">✕</button>
+          </div>
+          <div class="sm-search">
+            <input class="input" id="smSearch" placeholder="搜索股票名称或代码..." oninput="filterStockList()">
+          </div>
+          <div class="sm-list" id="smList"></div>
+          <div class="sm-footer">
+            <span class="smf-count" id="smfCount">已选 0 / 8 只</span>
+            <div class="smf-actions">
+              <button class="btn" style="font-size:11px;height:30px;" onclick="selectAllStocks()">全选</button>
+              <button class="btn" style="font-size:11px;height:30px;" onclick="deselectAllStocks()">清空</button>
+              <button class="btn btn-primary" style="font-size:11px;height:30px;" onclick="confirmStockPick()">确定</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──────── 右：结果面板 ──────── -->
+      <div class="results-section">
+        <!-- 空态（默认显示） -->
+        <div class="empty-state" id="sbEmpty">
+          <div class="es-icon">🧪</div>
+          <div class="es-title">准备好测试了吗？</div>
+          <div class="es-desc">
+            左侧选择要测试的策略，调整参数，点击「开始测试」<br>
+            就能看到这个策略在历史数据上的表现啦
+          </div>
+        </div>
+
+        <!-- 进度条 -->
+        <div class="section-card progress-card" id="sbProgress" style="display:none;">
+          <div class="progress-bar"><div id="sbProgressFill" class="progress-bar-fill" style="width:0%;"></div></div>
+          <div class="progress-status" id="sbProgressText">⏳ 正在回放历史数据...</div>
+        </div>
+
+        <!-- 结果内容 -->
+        <div id="sbResults" style="display:none;">
+          <!-- ① 核心结论（自然语言） -->
+          <div class="section-card conclusion-card">
+            <div class="conclusion-title">📋 测试结论</div>
+            <div class="conclusion-text" id="sbConclusion">
+              在 2024-01-01 至 2026-06-01 期间，该策略在 <strong>西藏矿业</strong> 上整体表现<span style="color:#22C55E;font-weight:600;">不错</span>。
+              发出的信号中 <span style="color:#22C55E;font-weight:600;">65% 判断正确</span>。
+              尤其是在<span style="color:#FBBF24;font-weight:600;">上涨行情</span>中表现突出，
+              但在<span style="color:#F87171;">震荡行情</span>中容易产生假信号。
+            </div>
+            <div class="conclusion-tags">
+              <span class="ctag ctag-good">✅ 上涨行情适用</span>
+              <span class="ctag ctag-warn">⚠️ 震荡行情谨慎</span>
+              <span class="ctag ctag-info">📌 推荐回测系统进一步验证</span>
+            </div>
+          </div>
+
+          <!-- ② 绩效速览 -->
+          <div class="section-card">
+            <h4 style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:var(--space-8);">📊 关键指标一览</h4>
+            <div class="metrics-grid">
+              <div class="metric-cell">
+                <div class="mc-val mc-up" id="m-totalRet">+24.3%</div>
+                <div class="mc-label">总收益<span class="mc-hint" onclick="showHint(event,'totalReturn')">❓</span></div>
+              </div>
+              <div class="metric-cell">
+                <div class="mc-val mc-up" id="m-annualRet">+11.2%</div>
+                <div class="mc-label">年化收益<span class="mc-hint" onclick="showHint(event,'annualReturn')">❓</span></div>
+              </div>
+              <div class="metric-cell">
+                <div class="mc-val mc-down" id="m-maxDD">-8.5%</div>
+                <div class="mc-label">最大浮亏<span class="mc-hint" onclick="showHint(event,'maxDrawdown')">❓</span></div>
+              </div>
+              <div class="metric-cell">
+                <div class="mc-val mc-neutral" id="m-accRate">65.2%</div>
+                <div class="mc-label">预测正确率<span class="mc-hint" onclick="showHint(event,'winRate')">❓</span></div>
+              </div>
+              <div class="metric-cell">
+                <div class="mc-val" id="m-profitLossRatio" style="color:#60A5FA;">2.3</div>
+                <div class="mc-label">赚/亏金额比<span class="mc-hint" onclick="showHint(event,'profitLossRatio')">❓</span></div>
+              </div>
+              <div class="metric-cell">
+                <div class="mc-val" style="color:#60A5FA;" id="m-sharpe">1.42</div>
+                <div class="mc-label">收益风险比<span class="mc-hint" onclick="showHint(event,'sharpe')">❓</span></div>
+              </div>
+              <div class="metric-cell">
+                <div class="mc-val" style="color:var(--text-primary);" id="m-trades">28</div>
+                <div class="mc-label">交易次数</div>
+              </div>
+              <div class="metric-cell">
+                <div class="mc-val mc-up" id="m-excessRet">+6.8%</div>
+                <div class="mc-label">跑赢大盘<span class="mc-hint" onclick="showHint(event,'excess')">❓</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ③ 权益曲线 + 大盘对比 -->
+          <div class="section-card">
+            <h4 style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:var(--space-8);">📈 该策略 vs 大盘（沪深300）走势对比</h4>
+            <div class="chart-box" id="equityChart"></div>
+          </div>
+
+          <!-- ④ 行情分段看 -->
+          <div class="section-card">
+            <h4 style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:var(--space-8);">📌 不同行情下的表现 <span class="hint-icon" onclick="showHint(event,'phase')">❓</span></h4>
+            <div class="phase-grid">
+              <div class="phase-cell phase-up">
+                <div class="ph-name"><span class="ph-icon">📈</span> 上涨行情</div>
+                <div class="ph-stat"><span class="ps-val mc-up">+18.5%</span><span class="ps-label">收益</span></div>
+                <div class="ph-sub">正确率 78% · 信号 12 次</div>
+              </div>
+              <div class="phase-cell phase-down">
+                <div class="ph-name"><span class="ph-icon">📉</span> 下跌行情</div>
+                <div class="ph-stat"><span class="ps-val mc-down">-5.2%</span><span class="ps-label">收益</span></div>
+                <div class="ph-sub">正确率 56% · 信号 7 次</div>
+              </div>
+              <div class="phase-cell phase-flat">
+                <div class="ph-name"><span class="ph-icon">➡️</span> 震荡行情</div>
+                <div class="ph-stat"><span class="ps-val" style="color:var(--signal-watch);">+2.1%</span><span class="ps-label">收益</span></div>
+                <div class="ph-sub">正确率 42% · 信号 9 次</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ⑤ 参数稳定度（默认隐藏，测试后根据开关决定是否显示） -->
+          <div class="section-card" id="sbStability" style="display:none;">
+            <h4 style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:var(--space-8);">📊 参数稳定度测试 <span class="hint-icon" onclick="showHint(event,'stability')">❓</span></h4>
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-6);">
+              把「分析周期」从 5 天调到 60 天，看策略表现的变化有多大。
+              变化越小，说明策略越稳定、越可靠。
+            </div>
+            <div class="stability-section" id="stabilityBars"></div>
+            <div id="stabilityVerdict" style="margin-top:var(--space-4);padding:var(--space-3) var(--space-6);border-radius:var(--radius-sm);font-size:11px;line-height:1.7;"></div>
+          </div>
+
+          <!-- ⑥ 信号明细 -->
+          <div class="section-card">
+            <h4 style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:var(--space-8);">📋 每次信号记录 <span class="hint-icon" onclick="showHint(event,'signalDetail')">❓</span></h4>
+            <div class="signal-table-wrap">
+              <table class="signal-table" id="signalTable">
+                <thead>
+                  <tr>
+                    <th>日期</th>
+                    <th>方向</th>
+                    <th>入场价</th>
+                    <th>出场价</th>
+                    <th>盈亏</th>
+                    <th>判断正确?</th>
+                    <th>当时行情</th>
+                  </tr>
+                </thead>
+                <tbody id="signalTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 说明弹窗 -->
+<div class="hint-overlay" id="hintOverlay" onclick="closeHint()"></div>
+<div class="hint-tip" id="hintTip">
+  <div class="ht-close" onclick="closeHint()">✕</div>
+  <div class="ht-title" id="hintTitle"></div>
+  <div class="ht-body" id="hintBody"></div>
+</div>
+
+<script>
+/* ===== 提示字典（全自然语言） ===== */
+var HINTS = {
+  window: {
+    title: "分析周期是什么？",
+    body: "策略看多少天的数据来做判断。比如设 20 天，策略就看最近 20 天的走势来给信号。<br><br>📌 <b>短周期（5-10天）</b>：反应快，适合短线操作，但假信号也多<br>📌 <b>中周期（20-30天）</b>：比较均衡<br>📌 <b>长周期（40-60天）</b>：只抓大机会，信号少但更稳定"
+  },
+  threshold: {
+    title: "触发阈值是什么？",
+    body: "策略对信号的要求严格程度。阈值越高，发出的信号越少但越可靠。<br><br>📌 <b>70分</b>：中等严格——大多数信号都要满足一定条件才触发<br>📌 <b>50分</b>：宽松——信号多，但准确性可能下降<br>📌 <b>90分</b>：严格——信号极少，但出现时通常比较准"
+  },
+  stoploss: {
+    title: "止损比例是什么？",
+    body: "当股票价格从买入价跌了这么多时，自动卖出止损。<br><br>📌 <b>3-5%</b>：严格止损，控制单次亏损小，但容易被震荡出局<br>📌 <b>8-12%</b>：比较合理，给股票一定波动空间<br>📌 <b>15-20%</b>：宽松止损，让股票充分走，但单次亏损风险大"
+  },
+  stability: {
+    title: "参数稳定度测试是什么？",
+    body: "把策略的关键参数（如分析周期）从最小值调到最大值，看策略的表现波动大不大。<br><br>📌 <b>稳定</b>：不管参数怎么调，表现都差不多 → 说明策略抓住了市场本质规律，可靠<br>📌 <b>敏感</b>：参数稍微动一下，结果就大不一样 → 说明策略可能过度优化了特定参数值，实盘中可能表现不好<br><br>🟢 绿柱高=稳定，🟡 黄柱/🔴 红柱多=敏感需谨慎。"
+  },
+  benchmark: {
+    title: "为什么要比较大盘？",
+    body: "只看策略自己的收益数字，你不知道它到底好不好。<br><br>比如策略赚了+15%，但同期大盘也涨了+20%——那实际上策略是跑输的。<br><br>📌 选一个基准（比如沪深300），系统会自动对比展示：<br>「策略净值 vs 大盘净值」双线对比图<br>「跑赢大盘」指标——正值说明策略真本事，负值说明还不如直接买指数基金。"
+  },
+  totalReturn: {
+    title: "总收益是什么？",
+    body: "整个测试期间，用这个策略操作下来一共赚（或亏）了多少。<br><br>📌 <b>正值（绿色）</b>：总体赚钱<br>📌 <b>负值（红色）</b>：总体亏钱<br><br>但只看总收益不够，还要看其他指标综合判断。"
+  },
+  annualReturn: {
+    title: "年化收益是什么？",
+    body: "把总收益换算成「每年平均赚多少」，方便不同时间长度的测试做比较。<br><br>比如测试 2 年总收益 +23%，年化就是约 +11%。<br>这样就能和 1 年、3 年、5 年的测试结果直接比较了。"
+  },
+  maxDrawdown: {
+    title: "最大浮亏是什么？",
+    body: "整个测试期间，账户从最高点到最低点最多亏了多少。<br><br>📌 比如最大浮亏 -8.5%，意思就是：<br>在最糟糕的那段时间，你的虚拟账户从最高值回落了 8.5%。<br><br>🌟 <b>这个指标很重要</b>——它告诉你如果用了这个策略，最惨的时候要承受多大的心理压力。"
+  },
+  winRate: {
+    title: "预测正确率是什么？",
+    body: "策略发出的所有信号中，判断对了的比例。<br><br>📌 比如发了 30 次信号，20 次对了，正确率就是 67%。<br><br>⚠️ 但正确率高不一定就赚钱：<br>如果每次赚 1% 但亏一次亏 10%，正确率 90% 也可能是亏钱的。所以还要结合「赚/亏金额比」一起看。"
+  },
+  profitLossRatio: {
+    title: "赚/亏金额比是什么？",
+    body: "平均每次赚的钱，是平均每次亏的钱的多少倍。<br><br>📌 <b>赚/亏比 = 2.3</b> 的意思是：<br>平均赚一次 2300 元，平均亏一次 1000 元。<br><br>🌟 <b>理想组合：正确率 > 50% + 赚/亏比 > 1.5</b><br>两者都满足时，策略通常比较靠谱。"
+  },
+  sharpe: {
+    title: "收益风险比是什么？",
+    body: "每承担 1 份风险，能换来多少收益。<br><br>📌 <b>> 1.0</b>：不错，收益对得起风险<br>📌 <b>> 2.0</b>：很好，风险控制得当<br>📌 <b>< 0.5</b>：收益和风险不成比例<br><br>⚠️ 注意：这个指标假设涨跌风险一样看待，但实际上我们更害怕下跌。所以它只是参考之一。"
+  },
+  excess: {
+    title: "跑赢大盘是什么意思？",
+    body: "策略的收益减去大盘的收益，就是「超额收益」。<br><br>📌 <b>+6.8%</b> 的意思是：<br>策略赚了 +24.3%，同时大盘涨了 +17.5%，<br>策略比大盘多赚了 6.8%。<br><br>🌟 这个指标衡量的是「策略的真本事」——不是因为大盘涨了所以跟着赚钱。"
+  },
+  phase: {
+    title: "不同行情分段看是什么？",
+    body: "同一个策略在不同市场环境下表现可能天差地别。<br><br>系统自动把测试期分成三段：<br>📌 <b>📈 上涨行情</b>：大盘持续上涨的时段<br>📌 <b>📉 下跌行情</b>：大盘持续下跌的时段<br>📌 <b>➡️ 震荡行情</b>：大盘涨跌不大，反复波动的时段<br><br>🌟 通过分段看，你能知道这个策略<b>在什么行情下好用、什么行情下不好用</b>——这是判断策略是否适合自己的关键。"
+  },
+  signalDetail: {
+    title: "每次信号记录是什么？",
+    body: "策略每次发出买卖信号的详细记录，包括：<br><br>📌 <b>方向</b>：策略认为会涨（📈）还是会跌（📉）<br>📌 <b>入场价/出场价</b>：买卖时的价格<br>📌 <b>盈亏</b>：这次操作赚或亏了多少<br>📌 <b>判断正确?</b>：✅ 对了 / ❌ 错了<br>📌 <b>当时行情</b>：信号发出时市场处于什么状态<br><br>通过逐条查看，你能最直观地了解这个策略的「出牌规律」。"
+  }
+};
+
+/* ===== 核心逻辑 ===== */
+var sideCollapsed = true;
+function toggleSidebar(){
+  sideCollapsed = !sideCollapsed;
+  var s=document.querySelector('.sidebar'), m=document.querySelector('.main-content');
+  if(!s||!m)return;
+  s.classList.toggle('collapsed'); m.classList.toggle('collapsed');
+  m.style.marginLeft = sideCollapsed ? '64px' : '200px';
+  document.querySelector('.sidebar-toggle').textContent = sideCollapsed ? '▶' : '◀';
+}
+(function(){
+  var s=document.querySelector('.sidebar'), m=document.querySelector('.main-content');
+  if(s)s.classList.add('collapsed');
+  if(m){ m.classList.add('collapsed'); m.style.marginLeft='64px'; }
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent = '▶';
+})();
+
+function switchSrc(el, src){
+  document.querySelectorAll('.src-tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('src-template').style.display = src==='template' ? '' : 'none';
+  document.getElementById('src-factor').style.display = src==='factor' ? '' : 'none';
+}
+
+function toggleParamSection(header){
+  var body = document.getElementById('paramBody');
+  body.classList.toggle('open');
+  header.querySelector('.arrow').textContent = body.classList.contains('open') ? '▼' : '▶';
+}
+
+/* ===== 自选股数据（与 watchlist.html 同步）===== */
+var WATCHLIST_STOCKS = [
+  {code:'000762.SZ',name:'西藏矿业', industry:'有色金属'},
+  {code:'000001.SZ',name:'平安银行', industry:'银行'},
+  {code:'002415.SZ',name:'海康威视', industry:'计算机'},
+  {code:'600519.SH',name:'贵州茅台', industry:'食品饮料'},
+  {code:'600036.SH',name:'招商银行', industry:'银行'},
+  {code:'300750.SZ',name:'宁德时代', industry:'电力设备'},
+  {code:'000858.SZ',name:'五粮液',   industry:'食品饮料'},
+  {code:'601318.SH',name:'中国平安', industry:'保险'}
+];
+
+/* ===== 已选股票管理 ===== */
+var selectedStocks = [];  // 存选中的 code
+
+/* ===== 股票选择弹窗 ===== */
+function openStockPicker(){
+  renderStockList();
+  document.getElementById('stockModal').classList.add('open');
+}
+function closeStockPicker(){
+  document.getElementById('stockModal').classList.remove('open');
+}
+
+function renderStockList(filterText){
+  var list = document.getElementById('smList');
+  var txt = (filterText || document.getElementById('smSearch').value || '').toLowerCase();
+  var html = '';
+  var cnt = 0;
+  WATCHLIST_STOCKS.forEach(function(s){
+    if(txt && s.code.indexOf(txt) < 0 && s.name.indexOf(txt) < 0) return;
+    cnt++;
+    var checked = selectedStocks.indexOf(s.code) >= 0;
+    html += '<label class="sm-item">'+
+      '<input type="checkbox" '+(checked?'checked':'')+' onchange="toggleStock(\''+s.code+'\',this.checked)">'+
+      '<span class="sm-code">'+s.code+'</span>'+
+      '<span class="sm-name">'+s.name+'</span>'+
+      '<span class="sm-industry">'+s.industry+'</span>'+
+    '</label>';
+  });
+  if(!cnt) html = '<div style="text-align:center;padding:var(--space-20);color:var(--text-muted);font-size:12px;">未找到匹配的股票</div>';
+  list.innerHTML = html;
+  updateModalCount();
+}
+
+function filterStockList(){ renderStockList(); }
+
+function toggleStock(code, checked){
+  if(checked){
+    if(selectedStocks.indexOf(code) < 0) selectedStocks.push(code);
+  } else {
+    selectedStocks = selectedStocks.filter(function(c){ return c !== code; });
+  }
+  updateModalCount();
+}
+
+function selectAllStocks(){
+  selectedStocks = WATCHLIST_STOCKS.map(function(s){ return s.code; });
+  renderStockList();
+}
+function deselectAllStocks(){
+  selectedStocks = [];
+  renderStockList();
+}
+function confirmStockPick(){
+  updateStockBadge();
+  closeStockPicker();
+}
+function updateModalCount(){
+  document.getElementById('smfCount').textContent = '已选 ' + selectedStocks.length + ' / ' + WATCHLIST_STOCKS.length + ' 只';
+}
+function updateStockBadge(){
+  document.getElementById('sbStockCount').textContent = selectedStocks.length;
+  document.getElementById('stockCountBadge').textContent = '(' + selectedStocks.length + ' 只)';
+  var container = document.getElementById('sbSelectedStocks');
+  if(selectedStocks.length === 0){
+    container.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">请选择至少一只股票</span>';
+    return;
+  }
+  var html = '';
+  selectedStocks.forEach(function(code){
+    var s = WATCHLIST_STOCKS.find(function(x){ return x.code === code; });
+    if(!s) return;
+    html += '<span class="tag tag-neutral" style="font-size:10px;padding:1px 8px 1px 6px;display:flex;align-items:center;gap:4px;">'+
+      '<span style="cursor:pointer;color:var(--text-muted);" onclick="removeStock(\''+code+'\')">✕</span>'+
+      s.code+' '+s.name+
+    '</span>';
+  });
+  container.innerHTML = html;
+}
+function removeStock(code){
+  selectedStocks = selectedStocks.filter(function(c){ return c !== code; });
+  updateStockBadge();
+}
+
+// 初始加载：预选第一只
+(function(){ selectedStocks = ['000762.SZ']; updateStockBadge(); })();
+
+function showHint(e, key){
+  var h = HINTS[key];
+  if(!h) return;
+  e.stopPropagation();
+  document.getElementById('hintTitle').innerHTML = h.title;
+  document.getElementById('hintBody').innerHTML = h.body;
+  document.getElementById('hintTip').classList.add('open');
+  document.getElementById('hintOverlay').classList.add('open');
+}
+function closeHint(){
+  document.getElementById('hintTip').classList.remove('open');
+  document.getElementById('hintOverlay').classList.remove('open');
+}
+
+/* ===== 模拟运行（支持多股票） ===== */
+function runSandbox(btn){
+  if(selectedStocks.length === 0){
+    alert('请先选择至少一只股票进行测试');
+    return;
+  }
+
+  btn.innerHTML = '⏳ 测试中...'; btn.disabled = true;
+  document.getElementById('sbEmpty').style.display = 'none';
+  document.getElementById('sbProgress').style.display = '';
+  document.getElementById('sbResults').style.display = 'none';
+
+  var p = 0, bar = document.getElementById('sbProgressFill'), status = document.getElementById('sbProgressText');
+  // 多股票时延长进度
+  var totalSteps = 100 / Math.max(1, selectedStocks.length);
+  var currentStock = -1;
+  var t = setInterval(function(){
+    p += 4;
+    var stockIdx = Math.min(Math.floor(p / totalSteps), selectedStocks.length - 1);
+    if(stockIdx !== currentStock){
+      currentStock = stockIdx;
+      var s = WATCHLIST_STOCKS.find(function(x){ return x.code === selectedStocks[stockIdx]; });
+      status.innerHTML = '⏳ 正在测试 <b>' + (s?s.name:selectedStocks[stockIdx]) + '</b> (' + (stockIdx+1) + '/' + selectedStocks.length + ')';
+    }
+    bar.style.width = p+'%';
+
+    if(p >= 100){
+      clearInterval(t);
+      document.getElementById('sbProgress').style.display = 'none';
+      document.getElementById('sbResults').style.display = '';
+      btn.innerHTML = '▶ 重新测试'; btn.disabled = false;
+
+      // 更新结论：显示多股票汇总
+      if(selectedStocks.length > 1){
+        document.getElementById('sbConclusion').innerHTML =
+          '在 2024-01-01 至 2026-06-01 期间，对 <b>' + selectedStocks.length + ' 只自选股</b> 进行了策略测试。<br>'+
+          '其中 <span style="color:#22C55E;font-weight:600;">' + (Math.floor(Math.random()*3)+3) + ' 只</span> 表现不错（收益率为正），'+
+          '<span style="color:#F87171;">' + (Math.floor(Math.random()*2)+1) + ' 只</span> 表现欠佳。<br>'+
+          '🟢 该策略在上涨行情中有效性较高，🟡 震荡行情中请谨慎参考。';
+      } else {
+        var s = WATCHLIST_STOCKS.find(function(x){ return x.code === selectedStocks[0]; });
+        document.getElementById('sbConclusion').innerHTML =
+          '在 2024-01-01 至 2026-06-01 期间，该策略在 <strong>' + (s?s.name:selectedStocks[0]) + '</strong> 上整体表现<span style="color:#22C55E;font-weight:600;">不错</span>。'+
+          '发出的信号中 <span style="color:#22C55E;font-weight:600;">65% 判断正确</span>。'+
+          '尤其是在<span style="color:#FBBF24;font-weight:600;">上涨行情</span>中表现突出，'+
+          '但在<span style="color:#F87171;">震荡行情</span>中容易产生假信号。';
+      }
+
+      // 检查参数稳定度开关
+      var sensCheck = document.querySelector('.sens-switch input[type=checkbox]');
+      if(sensCheck && sensCheck.checked){
+        document.getElementById('sbStability').style.display = '';
+        buildStabilityChart();
+      } else {
+        document.getElementById('sbStability').style.display = 'none';
+      }
+
+      renderSignals();
+      renderEquityChart();
+    }
+  }, 180);
+}
+
+/* ===== ECharts 权益曲线 ===== */
+var equityChart = null;
+function renderEquityChart(){
+  if(equityChart) equityChart.dispose();
+  equityChart = echarts.init(document.getElementById('equityChart'));
+
+  var dates = [];
+  var now = new Date('2024-01-01');
+  var end = new Date('2026-06-01');
+  while(now <= end){
+    dates.push(now.toISOString().slice(0,7).replace('-','/'));
+    now.setMonth(now.getMonth()+1);
+  }
+
+  var stratCurve = [], benchCurve = [], base = 100;
+  for(var i=0; i<dates.length; i++){
+    if(i===0){ stratCurve.push(100); benchCurve.push(100); continue; }
+    stratCurve.push(stratCurve[i-1] * (1 + (Math.random()-0.45)*0.06));
+    benchCurve.push(benchCurve[i-1] * (1 + (Math.random()-0.48)*0.04));
+  }
+
+  equityChart.setOption({
+    tooltip:{trigger:'axis',formatter:function(p){return p.map(function(v){return v.seriesName+'：'+v.value.toFixed(1)}).join('<br>')}},
+    legend:{data:['该策略','沪深300'],textStyle:{color:'#94A3B8',fontSize:10},bottom:0,left:'center'},
+    grid:{left:50,right:20,top:10,bottom:40},
+    xAxis:{type:'category',data:dates,axisLabel:{color:'#64748B',fontSize:9,interval:Math.ceil(dates.length/12)},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
+    yAxis:{type:'value',name:'净值(起始=100)',nameTextStyle:{color:'#64748B',fontSize:9},axisLabel:{color:'#64748B',fontSize:9},splitLine:{lineStyle:{color:'rgba(255,255,255,0.04)'}}},
+    series:[{
+      name:'该策略',type:'line',data:stratCurve.map(v=>+v.toFixed(2)),
+      smooth:true,lineStyle:{width:2,color:'#3B82F6'},
+      areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:'rgba(59,130,246,0.2)'},{offset:1,color:'rgba(59,130,246,0)'}]}},
+      symbol:'none'
+    },{
+      name:'沪深300',type:'line',data:benchCurve.map(v=>+v.toFixed(2)),
+      smooth:true,lineStyle:{width:1.5,color:'rgba(148,163,184,0.6)',type:'dashed'},
+      symbol:'none'
+    }]
+  });
+}
+
+/* ===== 构建参数稳定度柱状图 ===== */
+function buildStabilityChart(){
+  var container = document.getElementById('stabilityBars');
+  var params = [5,10,15,20,30,40,50,60];
+  var values = params.map(function(p){
+    return +(8 + Math.random()*20 - (Math.abs(p-30)/30)*10).toFixed(1);
+  });
+  var maxV = Math.max.apply(null, values);
+  var minV = Math.min.apply(null, values);
+  var range = maxV - minV;
+  var stable = range < 5;
+
+  var html = '<div class="stability-row"><span class="st-label">年化收益(%)</span><div class="st-bar-wrap">';
+  params.forEach(function(p, i){
+    var h = Math.max(4, (values[i]/maxV)*100);
+    var color = values[i] >= maxV*0.85 ? 'rgba(52,211,153,0.6)' :
+                values[i] >= maxV*0.7 ? 'rgba(251,191,36,0.6)' : 'rgba(248,113,113,0.6)';
+    html += '<div class="st-bar" style="height:'+h+'%;background:'+color+';"><div class="st-bar-tip">'+p+'天 → '+values[i]+'%</div></div>';
+  });
+  html += '</div>';
+  html += '<span class="st-verdict '+(stable?'verdict-stable':'verdict-medium')+'">'+(stable?'🟢 稳定':'🟡 较敏感')+'</span></div>';
+  container.innerHTML = html;
+
+  // 结论文字
+  document.getElementById('stabilityVerdict').innerHTML = stable ?
+    '🟢 <b>结果解读：</b>把分析周期从 5 天调到 60 天，年化收益波动范围 <b>'+(maxV-minV).toFixed(1)+'%</b>（< 5%）。说明这个策略对周期的选择不敏感，比较靠谱，不需要纠结"到底用几天"。' :
+    '🟡 <b>结果解读：</b>把分析周期从 5 天调到 60 天，年化收益波动范围 <b>'+(maxV-minV).toFixed(1)+'%</b>（≥ 5%）。说明这个策略对周期选择比较敏感，建议找到收益最高的周期值固定下来。<br>📌 可以在回测系统中做更精细的优化。';
+  document.getElementById('stabilityVerdict').style.background = stable ? 'rgba(34,197,94,0.06)' : 'rgba(245,158,11,0.06)';
+  document.getElementById('stabilityVerdict').style.borderLeft = '3px solid '+(stable?'#22C55E':'#FBBF24');
+}
+
+/* ===== 信号明细表（模拟） ===== */
+function renderSignals(){
+  var dirs = ['📈 看涨','📈 看涨','📉 看跌','📈 看涨','📉 看跌','📈 看涨','📉 看跌','📈 看涨','📉 看跌','📈 看涨'];
+  var prices = [8.52,9.15,9.88,10.20,9.55,11.30,10.80,12.10,11.50,13.20];
+  var exitPrices = [9.10,9.80,9.50,11.00,9.10,12.20,10.10,13.00,10.80,13.80];
+  var correct = [true,true,true,true,false,true,false,true,false,true];
+  var phases = ['📈 上涨','📈 上涨','📉 下跌','📈 上涨','➡️ 震荡','📈 上涨','➡️ 震荡','📈 上涨','➡️ 震荡','📈 上涨'];
+  var months = ['2024-02','2024-04','2024-06','2024-08','2024-10','2025-01','2025-03','2025-06','2025-09','2025-12'];
+
+  var tbody = document.getElementById('signalTableBody');
+  var html = '';
+  for(var i=0; i<10; i++){
+    var pl = exitPrices[i] - prices[i];
+    var plStr = (pl>=0?'+':'')+pl.toFixed(2);
+    html += '<tr>'+
+      '<td>'+months[i]+'</td>'+
+      '<td>'+dirs[i]+'</td>'+
+      '<td>'+prices[i].toFixed(2)+'</td>'+
+      '<td>'+exitPrices[i].toFixed(2)+'</td>'+
+      '<td class="'+(pl>=0?'mc-up':'mc-down')+'">'+plStr+'</td>'+
+      '<td class="'+(correct[i]?'st-correct':'st-wrong')+'">'+(correct[i]?'✅ 对':'❌ 错')+'</td>'+
+      '<td style="font-size:10px;">'+phases[i]+'</td>'+
+    '</tr>';
+  }
+  tbody.innerHTML = html;
+}
+
+/* ===== 发送到回测 ===== */
+function sendToBacktest(){
+  alert('✅ 已将该策略（含参数设置）发送到回测系统，请在「回测系统」页面继续分析。\n\n（后端对接后实现真实数据传递）');
+}
+</script>
+</body>
+</html>
