@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>系统管理 — A股分析系统</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+/* ══════════════════════════════════════════════════════════
+   Tab 系统
+   ══════════════════════════════════════════════════════════ */
+.sm-tabs {
+  display: flex; gap: var(--space-4);
+  border-bottom: 1px solid var(--border-default);
+  margin-bottom: var(--space-16); padding-bottom: 0;
+}
+.sm-tab {
+  padding: var(--space-10) var(--space-16);
+  font-size: 13px; font-weight: 500; color: var(--text-muted);
+  cursor: pointer; border-bottom: 2px solid transparent;
+  transition: color .2s, border-color .2s;
+  user-select: none;
+}
+.sm-tab:hover { color: var(--text-secondary); }
+.sm-tab.active { color: var(--color-brand-500); border-bottom-color: var(--color-brand-500); }
+.sm-panel { display: none; }
+.sm-panel.active { display: block; }
+
+/* ══════════════════════════════════════════════════════════
+   Grid / Card 公用
+   ══════════════════════════════════════════════════════════ */
+.sm-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-16); }
+.sm-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--space-16); }
+.sm-card {
+  background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16);
+}
+.sm-card h5 {
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  margin-bottom: var(--space-12); letter-spacing: 0.3px;
+}
+.sm-full { grid-column: 1 / -1; }
+
+/* 行 */
+.sm-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: var(--space-6) 0; border-bottom: 1px solid var(--border-default);
+  font-size: 13px;
+}
+.sm-row:last-child { border-bottom: none; }
+.sm-row .label { color: var(--text-secondary); display: flex; align-items: center; gap: var(--space-6); }
+.sm-row .val { color: var(--text-primary); }
+
+/* 日志 */
+.sm-log {
+  font-family: var(--font-mono); font-size: 11px;
+  padding: var(--space-4) 0; border-bottom: 1px solid var(--border-default);
+  color: var(--text-secondary); display: flex; gap: var(--space-8);
+}
+.sm-log:last-child { border-bottom: none; }
+.sm-log .ts { color: var(--text-muted); white-space: nowrap; }
+.sm-log.err { color: var(--color-up); }
+
+/* ══════════════════════════════════════════════════════════
+   数据同步
+   ══════════════════════════════════════════════════════════ */
+.sync-actions { display: flex; gap: var(--space-8); margin-bottom: var(--space-12); }
+.sync-actions .btn { height: 36px; font-size: 12px; flex: 1; justify-content: center; }
+.progress-bar { height: 4px; background: var(--border-default); border-radius: var(--radius-full); margin-bottom: var(--space-8); overflow: hidden; }
+.progress-bar-fill { height: 100%; background: var(--color-brand-500); border-radius: var(--radius-full); transition: width .3s; width: 0%; }
+.cache-actions { display: flex; gap: var(--space-4); margin-top: var(--space-12); }
+.cache-actions .btn { height: 32px; font-size: 12px; flex: 1; justify-content: center; }
+
+/* ══════════════════════════════════════════════════════════
+   服务配置 - 表单
+   ══════════════════════════════════════════════════════════ */
+.config-section {
+  background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  padding: var(--space-16); margin-bottom: var(--space-16);
+}
+.config-section h5 {
+  font-size: 13px; font-weight: 600; color: var(--text-secondary);
+  margin-bottom: var(--space-12); padding-bottom: var(--space-8);
+  border-bottom: 1px solid var(--border-default);
+}
+.config-row {
+  display: flex; align-items: center; gap: var(--space-12);
+  padding: var(--space-8) 0; border-bottom: 1px solid var(--border-default);
+}
+.config-row:last-child { border-bottom: none; }
+.config-row .config-label {
+  min-width: 140px; font-size: 13px; color: var(--text-secondary); white-space: nowrap;
+}
+.config-row .config-input { flex: 1; }
+.config-row .config-input input, .config-row .config-input select {
+  width: 100%; height: 34px;
+  background: var(--bg-canvas); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  padding: 0 var(--space-10); color: var(--text-primary); font-size: 13px;
+}
+.config-row .config-input input:focus, .config-row .config-input select:focus {
+  outline: none; border-color: var(--border-focus);
+}
+.config-row .config-input input.code {
+  font-family: var(--font-mono); font-size: 12px;
+}
+.config-row .btn-sm {
+  height: 30px; padding: 0 var(--space-10); font-size: 12px; white-space: nowrap;
+}
+
+/* ══════════════════════════════════════════════════════════
+   QMT 配置
+   ══════════════════════════════════════════════════════════ */
+.qmt-status-card {
+  background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  padding: var(--space-20); text-align: center; margin-bottom: var(--space-16);
+}
+.qmt-status-card .qmt-status-icon { font-size: 36px; margin-bottom: var(--space-8); }
+.qmt-status-card .qmt-status-text { font-size: 15px; font-weight: 600; margin-bottom: var(--space-4); }
+.qmt-status-card .qmt-status-sub { font-size: 12px; color: var(--text-muted); }
+.qmt-status-card .qmt-env-check { font-size: 12px; color: var(--text-muted); margin-top: var(--space-8); }
+.qmt-actions { display: flex; gap: var(--space-8); justify-content: center; margin-top: var(--space-12); }
+.qmt-actions .btn { height: 36px; font-size: 12px; padding: 0 var(--space-20); }
+
+/* ══════════════════════════════════════════════════════════
+   条件库
+   ══════════════════════════════════════════════════════════ */
+.cond-stats { display: flex; gap: var(--space-12); margin-bottom: var(--space-12); }
+.cond-stat { flex: 1; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-12); text-align: center; }
+.cond-stat .num { font-size: 22px; font-weight: 700; }
+.cond-stat .lbl { font-size: 11px; color: var(--text-muted); margin-top: var(--space-2); }
+.cond-stat.total .num { color: var(--text-primary); }
+.cond-stat.ready .num { color: var(--color-down); }
+.cond-stat.qmt .num { color: #F59E0B; }
+.cond-stat.insuf .num { color: var(--color-up); }
+
+.cond-flt {
+  display: flex; gap: var(--space-8); margin-bottom: var(--space-12); flex-wrap: wrap; align-items: center;
+}
+.cond-flt input {
+  height: 32px; background: var(--bg-canvas); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  padding: 0 var(--space-10); color: var(--text-primary); font-size: 12px; flex: 1; min-width: 200px;
+}
+.cond-flt input:focus { outline: none; border-color: var(--border-focus); }
+.cond-flt select {
+  height: 32px; background: var(--bg-canvas); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  padding: 0 var(--space-8); color: var(--text-primary); font-size: 12px;
+}
+.cond-flt .btn { height: 32px; font-size: 12px; padding: 0 var(--space-12); }
+
+.cond-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cond-table th {
+  text-align: left; padding: var(--space-6) var(--space-8);
+  border-bottom: 1px solid var(--border-default); color: var(--text-muted); font-weight: 500;
+}
+.cond-table td {
+  padding: var(--space-6) var(--space-8); border-bottom: 1px solid var(--border-default);
+  color: var(--text-secondary);
+}
+.cond-table tr:hover td { background: var(--bg-subtle); }
+
+/* 状态标签 */
+.status-tag {
+  display: inline-block; padding: 1px 8px; border-radius: var(--radius-full);
+  font-size: 11px; font-weight: 500;
+}
+.status-tag.ready { background: var(--color-down-bg); color: var(--color-down); }
+.status-tag.qmt_needed { background: rgba(245,158,11,0.12); color: #F59E0B; }
+.status-tag.insufficient { background: var(--color-up-bg); color: var(--color-up); }
+
+/* 条件操作按钮组 */
+.cond-actions { display: flex; gap: var(--space-4); }
+.cond-actions button {
+  background: none; border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  color: var(--text-muted); font-size: 11px; padding: 2px 8px; cursor: pointer;
+}
+.cond-actions button:hover { border-color: var(--border-strong); color: var(--text-secondary); }
+
+/* 分页 */
+.pagination {
+  display: flex; justify-content: center; align-items: center; gap: var(--space-4);
+  margin-top: var(--space-12); font-size: 12px;
+}
+.pagination button {
+  background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  color: var(--text-secondary); padding: 4px 10px; cursor: pointer; font-size: 12px;
+}
+.pagination button.active { background: var(--bg-active); color: var(--color-brand-500); border-color: var(--border-focus); }
+.pagination button:hover { border-color: var(--border-strong); }
+.pagination .page-info { color: var(--text-muted); padding: 0 var(--space-4); }
+
+/* ══════════════════════════════════════════════════════════
+   弹窗
+   ══════════════════════════════════════════════════════════ */
+.sm-modal-overlay {
+  display: none; position: fixed; z-index: 1000; inset: 0;
+  background: rgba(0,0,0,0.5); align-items: center; justify-content: center;
+}
+.sm-modal-overlay.open { display: flex; }
+.sm-modal {
+  background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+  padding: var(--space-24); max-width: 560px; width: 90%; max-height: 80vh; overflow-y: auto;
+}
+.sm-modal h4 { font-size: 15px; font-weight: 600; margin-bottom: var(--space-16); }
+.sm-modal .close-btn {
+  float: right; background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer;
+}
+.sm-modal .close-btn:hover { color: var(--text-primary); }
+.sm-modal .modal-body { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+.sm-modal .modal-body p { margin-bottom: var(--space-8); }
+.sm-modal .modal-actions { display: flex; gap: var(--space-8); justify-content: flex-end; margin-top: var(--space-16); }
+
+/* 条件详情列 */
+.cond-detail {
+  background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  padding: var(--space-16);
+}
+.cond-detail h5 { font-size: 13px; font-weight: 600; margin-bottom: var(--space-8); }
+.cond-detail .field { font-size: 12px; color: var(--text-secondary); margin-bottom: var(--space-4); }
+.cond-detail .field strong { color: var(--text-primary); }
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <nav class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">📊</span><span>A股分析系统</span></div>
+    <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
+    <div class="sidebar-group"><div class="sidebar-group-title">概览</div>
+      <a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
+      <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+      <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
+      <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
+      <a href="ai-analysis.html" class="sidebar-item" data-name="AI分析"><span class="icon">🤖</span><span>AI 分析</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">验证</div>
+      <a href="backtest.html" class="sidebar-item" data-name="回测系统"><span class="icon">📉</span><span>回测系统</span></a>
+      <a href="factor-manager.html" class="sidebar-item" data-name="因子管理"><span class="icon">📊</span><span>因子管理</span></a>
+      <a href="strategy-templates.html" class="sidebar-item" data-name="策略模板"><span class="icon">📋</span><span>策略模板</span></a>
+      <a href="playback.html" class="sidebar-item" data-name="复盘中心"><span class="icon">⏪</span><span>复盘中心</span> <span class="badge-new">NEW</span></a>
+      <a href="strategy-sandbox.html" class="sidebar-item" data-name="策略沙箱"><span class="icon">🧪</span><span>策略沙箱</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">管理</div>
+      <a href="reports-center.html" class="sidebar-item" data-name="报告中心"><span class="icon">📑</span><span>报告中心</span></a>
+      <a href="alert.html" class="sidebar-item" data-name="监控通知"><span class="icon">🔔</span><span>监控通知</span> <span class="badge-new">NEW</span></a>
+      <a href="system-management.html" class="sidebar-item active" data-name="系统管理"><span class="icon">⚙️</span><span>系统管理</span> <span class="badge-new">NEW</span></a>
+    </div>
+    <div class="sidebar-group"><div class="sidebar-group-title">系统</div>
+      <a href="account.html" class="sidebar-item" data-name="账户管理"><span class="icon">👤</span><span>账户管理</span></a>
+    </div>
+  </nav>
+
+  <main class="main-content">
+    <div class="page-header">
+      <h1>⚙️ 系统管理</h1>
+      <div class="page-header-actions">
+        <span style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:var(--space-4);">
+          <span class="status-dot green"></span>系统运行正常
+        </span>
+      </div>
+    </div>
+
+    <!-- ═══ Tab 栏 ═══ -->
+    <div class="sm-tabs">
+      <span class="sm-tab active" data-tab="overview" onclick="switchTab('overview')">📊 运行概览</span>
+      <span class="sm-tab" data-tab="sync" onclick="switchTab('sync')">🔄 数据同步</span>
+      <span class="sm-tab" data-tab="config" onclick="switchTab('config')">🔧 服务配置</span>
+      <span class="sm-tab" data-tab="qmt" onclick="switchTab('qmt')">📡 QMT配置</span>
+      <span class="sm-tab" data-tab="conditions" onclick="switchTab('conditions')">📋 条件库</span>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- Tab ① 运行概览 -->
+    <!-- ================================================================ -->
+    <div class="sm-panel active" id="panel-overview">
+      <div class="sm-grid-3">
+        <!-- 服务状态 -->
+        <div class="sm-card" style="grid-column:1/3;">
+          <h5>🖥️ 服务状态</h5>
+          <div class="sm-row"><div class="label"><span class="status-dot green"></span>PostgreSQL</div><span class="val">✅ healthy · 延迟 2ms · 连接数 8</span></div>
+          <div class="sm-row"><div class="label"><span class="status-dot green"></span>Redis</div><span class="val">✅ healthy · 命中率 87% · 内存 128MB/512MB</span></div>
+          <div class="sm-row"><div class="label"><span class="status-dot green"></span>DuckDB</div><span class="val">✅ 6,372 条记录 · 缓存文件 128MB</span></div>
+          <div class="sm-row"><div class="label"><span class="status-dot green"></span>Backend (Flask)</div><span class="val">✅ 运行中 (PID 1234) · 内存 245MB</span></div>
+          <div class="sm-row"><div class="label"><span class="status-dot green"></span>Nginx</div><span class="val">✅ 运行中 · 端口 :9000</span></div>
+          <div class="sm-row" style="border-bottom:none;"><div class="label"><span class="status-dot green"></span>WebSocket</div><span class="val">✅ 已连接 · 心跳 30s</span></div>
+        </div>
+
+        <!-- 系统信息 -->
+        <div class="sm-card">
+          <h5>ℹ️ 系统信息</h5>
+          <div class="sm-row"><span class="label">运行时间</span><span class="val">12 天 7 小时</span></div>
+          <div class="sm-row"><span class="label">Python 版本</span><span class="val">3.11.9 (Docker)</span></div>
+          <div class="sm-row"><span class="label">框架版本</span><span class="val">v2.0.0</span></div>
+          <div class="sm-row"><span class="label">前端版本</span><span class="val">Vue 3.5 + AntDV 4.2</span></div>
+          <div class="sm-row" style="border-bottom:none;"><span class="label">数据最近更新</span><span class="val">今日 15:30</span></div>
+        </div>
+      </div>
+
+      <div class="sm-grid-2" style="margin-top:var(--space-16);">
+        <!-- 数据源状态 -->
+        <div class="sm-card">
+          <h5>📡 数据源状态</h5>
+          <div class="sm-row"><div class="label"><span class="status-dot green"></span>Tushare Pro</div><span class="val">已连接 · API 配额: 128/200 · 上次同步 15:30</span></div>
+          <div class="sm-row"><div class="label"><span class="status-dot green"></span>AKShare</div><span class="val">备用就绪</span></div>
+          <div class="sm-row" style="border-bottom:none;"><div class="label"><span class="status-dot yellow"></span>QMT 行情</div><span class="val">未连接（可选）</span></div>
+        </div>
+
+        <!-- 缓存状态 -->
+        <div class="sm-card">
+          <h5>💾 缓存状态</h5>
+          <div class="sm-row"><span class="label">DuckDB 缓存文件</span><span class="val">128 MB</span></div>
+          <div class="sm-row"><span class="label">Redis 使用量</span><span class="val">128 MB / 512 MB (25%)</span></div>
+          <div class="sm-row"><span class="label">日线数据缓存</span><span class="val">4,852 条</span></div>
+          <div class="sm-row"><span class="label">分钟线数据缓存</span><span class="val">1,520,000 条</span></div>
+          <div class="sm-row"><span class="label">因子预计算缓存</span><span class="val">已就绪</span></div>
+          <div class="sm-row" style="border-bottom:none;"><span class="label">缓存最后一次刷新</span><span class="val">今日 03:00</span></div>
+        </div>
+      </div>
+
+      <!-- 运行日志 -->
+      <div style="background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:var(--space-16);margin-top:var(--space-16);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-8);">
+          <h5 style="font-size:13px;font-weight:600;color:var(--text-secondary);">📋 最近系统日志</h5>
+          <select style="height:28px;background:var(--bg-canvas);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:0 var(--space-6);color:var(--text-secondary);font-size:11px;">
+            <option>全部级别</option><option>⚠️ 仅警告/错误</option><option>❌ 仅错误</option>
+          </select>
+        </div>
+        <div class="sm-log"><span class="ts">[15:30:12]</span><span>✅ 增量同步完成 · 新增 1,247 条</span></div>
+        <div class="sm-log"><span class="ts">[14:35:08]</span><span>📊 策略引擎 · 完成 47 个信号计算 (230ms)</span></div>
+        <div class="sm-log"><span class="ts">[13:45:22]</span><span>🧩 缠论分析 · 西藏矿业 笔方向检测完成</span></div>
+        <div class="sm-log"><span class="ts">[09:15:44]</span><span>🤖 AI 分析 · DeepSeek API 调用完成 (2.8s)</span></div>
+        <div class="sm-log"><span class="ts">[03:00:00]</span><span>✅ 全量同步完成 · 共 6,372 条</span></div>
+        <div class="sm-log err"><span class="ts">[2026-06-10 09:03:15]</span><span>⚠️ AKShare API 超时，自动切换 Tushare 重试</span></div>
+      </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- Tab ② 数据同步（继承自 data-management） -->
+    <!-- ================================================================ -->
+    <div class="sm-panel" id="panel-sync">
+      <div class="sm-grid-2">
+        <!-- 同步管理 -->
+        <div class="sm-card">
+          <h5>⚡ 同步管理</h5>
+          <div class="sync-actions">
+            <button class="btn" onclick="simSync(this,'full')">⏳ 全量同步</button>
+            <button class="btn" onclick="simSync(this,'incr')">⟳ 增量同步</button>
+          </div>
+          <div class="progress-bar"><div class="progress-bar-fill" id="syncProgress" style="width:0%;"></div></div>
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-4);">数据同步中: <span id="syncStatus">空闲</span></div>
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-8);">上次全量同步: 2026-06-29 03:00</div>
+          <div style="font-size:12px;color:var(--text-muted);">定时调度:</div>
+          <div style="display:flex;gap:var(--space-4);margin-top:var(--space-4);">
+            <select class="select" style="flex:1;" id="scheduleSelect">
+              <option>每日 03:00 全量同步</option>
+              <option>每 6 小时增量同步</option>
+              <option>手动模式</option>
+            </select>
+            <button class="btn" style="height:34px;font-size:12px;padding:0 var(--space-12);" onclick="alert('✅ 调度设置已保存')">保存</button>
+          </div>
+        </div>
+
+        <!-- 缓存管理 -->
+        <div class="sm-card">
+          <h5>💾 缓存管理</h5>
+          <div class="sm-row"><span class="label">DuckDB 缓存文件</span><span class="val">128 MB</span></div>
+          <div class="sm-row"><span class="label">Redis 缓存 (命中率)</span><span class="val">87%</span></div>
+          <div class="sm-row"><span class="label">日线数据</span><span class="val">4,852 条</span></div>
+          <div class="sm-row"><span class="label">分钟线数据</span><span class="val">1,520,000 条</span></div>
+          <div class="sm-row" style="border-bottom:none;"><span class="label">因子预计算</span><span class="val">已就绪</span></div>
+          <div class="cache-actions">
+            <button class="btn" onclick="alert('🔥 缓存预热已启动')">🔥 预热</button>
+            <button class="btn" onclick="alert('🗑️ 缓存已失效')">🗑️ 失效</button>
+            <button class="btn" onclick="alert('📊 缓存健康检查完成')">📊 健康检查</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 同步日志 -->
+      <div style="background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:var(--space-16);margin-top:var(--space-16);">
+        <h5 style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:var(--space-8);">📋 同步日志 (最近10条)</h5>
+        <div class="sm-log"><span class="ts">15:30</span><span>✅ 增量同步完成 · 新增 1,247 条 · 耗时 8.2s</span></div>
+        <div class="sm-log"><span class="ts">09:00</span><span>✅ 增量同步完成 · 新增 892 条 · 耗时 5.1s</span></div>
+        <div class="sm-log"><span class="ts">03:00</span><span>✅ 全量同步完成 · 共 6,372 条 · 耗时 42s</span></div>
+        <div class="sm-log"><span class="ts">06-28 15:30</span><span>✅ 增量同步完成 · 新增 2,130 条</span></div>
+        <div class="sm-log err"><span class="ts">06-28 09:00</span><span>⚠️ 增量同步 5 条失败 (网络超时) · 已自动重试 3 次</span></div>
+        <div class="sm-log"><span class="ts">06-28 03:00</span><span>✅ 全量同步完成 · 共 6,128 条</span></div>
+        <div class="sm-log"><span class="ts">06-27 15:30</span><span>✅ 增量同步完成 · 新增 1,856 条</span></div>
+        <div class="sm-log err"><span class="ts">06-27 09:05</span><span>⚠️ Tushare API 限流 · 等待 60s 后重试成功</span></div>
+        <div class="sm-log"><span class="ts">06-27 03:00</span><span>✅ 全量同步完成 · 共 5,980 条</span></div>
+        <div class="sm-log"><span class="ts">06-26 15:30</span><span>✅ 增量同步完成 · 新增 1,023 条</span></div>
+      </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- Tab ③ 服务配置 (NEW) -->
+    <!-- ================================================================ -->
+    <div class="sm-panel" id="panel-config">
+      <!-- AI 服务 -->
+      <div class="config-section">
+        <h5>🤖 AI 服务</h5>
+        <div class="config-row">
+          <span class="config-label">LLM 提供商</span>
+          <div class="config-input">
+            <select id="llmProvider">
+              <option value="deepseek" selected>DeepSeek（远程 API）</option>
+              <option value="lm_studio">LM Studio（本地部署）</option>
+              <option value="mock">Mock（调试模式，无 AI 生成）</option>
+            </select>
+          </div>
+        </div>
+        <div class="config-row">
+          <span class="config-label">DeepSeek API Key</span>
+          <div class="config-input" style="display:flex;gap:var(--space-8);">
+            <input type="password" class="code" value="sk-56efa3f9***********" style="flex:1;">
+            <button class="btn-sm" onclick="alert('🔍 测试连接中…\n\n✅ DeepSeek API 连接成功 (延迟 280ms)')">测试连接</button>
+          </div>
+        </div>
+        <div class="config-row">
+          <span class="config-label">Base URL</span>
+          <div class="config-input"><input type="text" value="https://api.deepseek.com/v1"></div>
+        </div>
+        <div class="config-row">
+          <span class="config-label">模型名称</span>
+          <div class="config-input"><input type="text" value="deepseek-chat-v4"></div>
+        </div>
+        <div class="config-row" id="lmStudioConfig" style="display:none;">
+          <span class="config-label">LM Studio 端点</span>
+          <div class="config-input" style="display:flex;gap:var(--space-8);">
+            <input type="text" value="http://localhost:1234/v1" style="flex:1;">
+            <button class="btn-sm" onclick="alert('🔍 测试连接中…\n\n✅ LM Studio 连接成功 (本地延迟 12ms)')">测试连接</button>
+          </div>
+        </div>
+        <div class="config-row" id="lmStudioModel" style="display:none;">
+          <span class="config-label">LM Studio 模型</span>
+          <div class="config-input"><input type="text" value="local-model"></div>
+        </div>
+      </div>
+
+      <!-- 数据源 -->
+      <div class="config-section">
+        <h5>📡 数据源</h5>
+        <div class="config-row">
+          <span class="config-label">Tushare Token</span>
+          <div class="config-input" style="display:flex;gap:var(--space-8);">
+            <input type="password" class="code" value="0ef90eacb9*********************" style="flex:1;">
+            <button class="btn-sm" onclick="alert('🔍 验证 Token…\n\n✅ Tushare Token 有效 · 积分: 5000')">验证</button>
+          </div>
+        </div>
+        <div class="config-row" style="border-bottom:none;">
+          <span class="config-label">AKShare</span>
+          <div class="config-input" style="display:flex;align-items:center;gap:var(--space-8);">
+            <span style="font-size:12px;color:var(--text-muted);">无 Token 要求，自动就绪</span>
+            <span class="status-dot green"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 通知渠道 -->
+      <div class="config-section">
+        <h5>📬 通知渠道</h5>
+        <div class="config-row" style="cursor:pointer;" onclick="toggleEmailConfig()">
+          <span class="config-label" style="display:flex;align-items:center;gap:var(--space-4);">
+            📧 SMTP 邮件<span id="emailArrow" style="font-size:10px;color:var(--text-muted);"> ▶</span>
+          </span>
+          <div class="config-input" style="font-size:12px;color:var(--text-muted);text-align:right;">
+            点击展开配置
+          </div>
+        </div>
+        <div id="emailConfigBody" style="display:none;">
+          <div class="config-row">
+            <span class="config-label" style="padding-left:var(--space-16);">SMTP 主机</span>
+            <div class="config-input"><input type="text" placeholder="smtp.example.com"></div>
+          </div>
+          <div class="config-row">
+            <span class="config-label" style="padding-left:var(--space-16);">端口</span>
+            <div class="config-input"><input type="text" placeholder="587"></div>
+          </div>
+          <div class="config-row">
+            <span class="config-label" style="padding-left:var(--space-16);">用户名</span>
+            <div class="config-input"><input type="text" placeholder="user@example.com"></div>
+          </div>
+          <div class="config-row">
+            <span class="config-label" style="padding-left:var(--space-16);">密码</span>
+            <div class="config-input"><input type="password" placeholder="********"></div>
+          </div>
+          <div class="config-row" style="border-bottom:none;">
+            <span class="config-label" style="padding-left:var(--space-16);">收件地址</span>
+            <div class="config-input" style="display:flex;gap:var(--space-8);">
+              <input type="text" placeholder="notify@example.com" style="flex:1;">
+              <button class="btn-sm" onclick="alert('✅ 配置已保存\n\n发送测试邮件中… ✅ 测试邮件发送成功')">保存并测试</button>
+            </div>
+          </div>
+        </div>
+        <div class="config-row" style="border-bottom:none;">
+          <span class="config-label">🔗 Webhook URL</span>
+          <div class="config-input" style="display:flex;gap:var(--space-8);">
+            <input type="text" value="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx" style="flex:1;" class="code">
+            <button class="btn-sm" onclick="alert('✅ Webhook URL 已保存\n\n发送测试消息中… ✅ 测试成功')">测试</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 全局保存 -->
+      <div style="display:flex;gap:var(--space-8);justify-content:flex-end;margin-top:var(--space-16);">
+        <button class="btn" onclick="alert('✅ 所有配置已保存\n\n部分配置需要重启服务后生效')" style="height:36px;font-size:13px;padding:0 var(--space-20);">💾 保存全部配置</button>
+      </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- Tab ④ QMT配置 (NEW) -->
+    <!-- ================================================================ -->
+    <div class="sm-panel" id="panel-qmt">
+      <div class="sm-grid-2">
+        <!-- 状态卡片 -->
+        <div class="qmt-status-card" id="qmtStatusCard">
+          <div class="qmt-status-icon" id="qmtIcon">🔴</div>
+          <div class="qmt-status-text" id="qmtStatusText">未连接</div>
+          <div class="qmt-status-sub" id="qmtStatusSub">点击「连接」按钮启动 QMT 行情连接</div>
+          <div class="qmt-env-check" id="qmtEnvCheck">
+            <span style="color:var(--color-down);">✅ xtquant 库已安装</span>
+          </div>
+          <div class="qmt-actions">
+            <button class="btn" id="qmtConnectBtn" onclick="qmtConnect()">🔌 连接</button>
+            <button class="btn" id="qmtDisconnectBtn" onclick="qmtDisconnect()" style="display:none;">🔌 断开</button>
+            <button class="btn" id="qmtTestBtn" onclick="qmtTest()">🔍 测试连接</button>
+          </div>
+        </div>
+
+        <!-- 说明区域 -->
+        <div class="sm-card">
+          <h5>📖 使用说明</h5>
+          <div style="font-size:12px;color:var(--text-secondary);line-height:1.7;">
+            <p style="margin-bottom:var(--space-8);">QMT（迅投智投）是招商证券提供的专业量化交易终端。</p>
+            <p style="margin-bottom:var(--space-8);"><strong>前置条件：</strong></p>
+            <ul style="padding-left:var(--space-16);margin-bottom:var(--space-8);">
+              <li>✅ 开通招商证券账户</li>
+              <li>✅ 安装 QMT 客户端并登录</li>
+              <li>✅ 确保 QMT 客户端运行时状态</li>
+              <li>✅ 安装 xtquant 库（Python 包）</li>
+            </ul>
+            <p style="color:var(--text-muted);font-size:11px;">连接后系统将使用 QMT 实时行情替代 Tushare，支持毫秒级 Tick 数据。</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 订阅管理 -->
+      <div style="background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:var(--space-16);margin-top:var(--space-16);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-8);">
+          <h5 style="font-size:13px;font-weight:600;color:var(--text-secondary);">📋 订阅管理</h5>
+          <span style="font-size:12px;color:var(--text-muted);">已订阅: <span id="subCount">0</span> 只股票</span>
+        </div>
+        <div style="display:flex;gap:var(--space-8);margin-bottom:var(--space-12);">
+          <input type="text" placeholder="输入股票代码，如 600519.SH (逗号分隔)" id="subCodes"
+                 style="flex:1;height:32px;background:var(--bg-canvas);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:0 var(--space-10);color:var(--text-primary);font-size:12px;">
+          <button class="btn" style="height:32px;font-size:12px;padding:0 var(--space-12);" onclick="qmtSubscribe()">订阅</button>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);" id="subList">
+          暂无订阅 · 连接 QMT 后添加股票代码订阅实时行情
+        </div>
+      </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- Tab ⑤ 条件库管理 (206号方案§5.4.2) -->
+    <!-- ================================================================ -->
+    <div class="sm-panel" id="panel-conditions">
+      <!-- 统计数据 -->
+      <div class="cond-stats">
+        <div class="cond-stat total"><div class="num">163</div><div class="lbl">📦 条件总数</div></div>
+        <div class="cond-stat ready"><div class="num">155</div><div class="lbl">✅ 生产就绪</div></div>
+        <div class="cond-stat qmt"><div class="num">4</div><div class="lbl">⚠️ 需 QMT</div></div>
+        <div class="cond-stat insuf"><div class="num">4</div><div class="lbl">🔧 设计中</div></div>
+      </div>
+
+      <!-- 筛选与操作栏 -->
+      <div class="cond-flt">
+        <input type="text" placeholder="🔍 搜索条件名称、说明…" id="condSearch" oninput="filterConditions()">
+        <select id="condFilterCat" onchange="filterConditions()">
+          <option value="">全部分类</option>
+          <option>买卖信号</option><option>策略信号</option><option>价格</option><option>成交量</option>
+          <option>技术指标</option><option>情绪周期</option><option>实战战法</option><option>风控</option>
+          <option>缠论</option><option>筹码</option><option>多条件组合</option><option>基本面</option><option>知识图谱</option>
+        </select>
+        <select id="condFilterStatus" onchange="filterConditions()">
+          <option value="">全部状态</option>
+          <option value="ready">生产就绪</option>
+          <option value="qmt_needed">需 QMT</option>
+          <option value="insufficient">设计中</option>
+        </select>
+        <select id="condFilterDifficulty" onchange="filterConditions()">
+          <option value="">全部难度</option>
+          <option>入门</option><option>进阶</option><option>高级</option><option>专业</option>
+        </select>
+        <button class="btn" onclick="alert('📥 批量导入功能\n\n支持从 conditions_input.json 导入新条件')">📥 批量导入</button>
+        <button class="btn" onclick="alert('➕ 新增条件\n\n打开新增条件表单（完整字段）')">➕ 新增</button>
+      </div>
+
+      <!-- 表格 -->
+      <div style="background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-md);overflow:hidden;">
+        <table class="cond-table">
+          <thead><tr>
+            <th style="width:40px;">#</th>
+            <th style="width:100px;">条件 ID</th>
+            <th>名称</th>
+            <th style="width:80px;">分类</th>
+            <th style="width:60px;">难度</th>
+            <th style="width:80px;">状态</th>
+            <th style="width:60px;">引用</th>
+            <th style="width:100px;">最近使用</th>
+            <th style="width:120px;">操作</th>
+          </tr></thead>
+          <tbody id="condTableBody">
+            <!-- 由 JS 动态生成 -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 分页 -->
+      <div class="pagination">
+        <button onclick="condPage('prev')">◀ 上一页</button>
+        <button class="active">1</button>
+        <button onclick="condPage('goto',2)">2</button>
+        <button onclick="condPage('goto',3)">3</button>
+        <span class="page-info">共 14 页 (163 条)</span>
+        <button onclick="condPage('next')">下一页 ▶</button>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   侧边栏
+   ═══════════════════════════════════════════════════════════════════ */
+var sidebarCollapsed = true;
+function toggleSidebar(){
+  sidebarCollapsed = !sidebarCollapsed;
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(!s||!m)return;
+  s.classList.toggle('collapsed');m.classList.toggle('collapsed');
+  m.style.marginLeft=(sidebarCollapsed?64:200)+'px';
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent=sidebarCollapsed?'▶':'◀';
+}
+(function(){
+  var s=document.querySelector('.sidebar'),m=document.querySelector('.main-content');
+  if(s)s.classList.add('collapsed');
+  if(m){m.classList.add('collapsed');m.style.marginLeft='64px';}
+  var btn=document.querySelector('.sidebar-toggle');
+  if(btn)btn.textContent='▶';
+})();
+
+/* ═══════════════════════════════════════════════════════════════════
+   Tab 切换
+   ═══════════════════════════════════════════════════════════════════ */
+function switchTab(tab){
+  var tabs = document.querySelectorAll('.sm-tab');
+  for(var i=0;i<tabs.length;i++) tabs[i].classList.toggle('active',tabs[i].dataset.tab===tab);
+  var panels = document.querySelectorAll('.sm-panel');
+  for(var i=0;i<panels.length;i++) panels[i].classList.toggle('active',panels[i].id==='panel-'+tab);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   服务配置 — LLM Provider 联动
+   ═══════════════════════════════════════════════════════════════════ */
+document.getElementById('llmProvider').addEventListener('change', function(){
+  var val = this.value;
+  document.getElementById('lmStudioConfig').style.display = (val === 'lm_studio') ? '' : 'none';
+  document.getElementById('lmStudioModel').style.display = (val === 'lm_studio') ? '' : 'none';
+});
+
+function toggleEmailConfig(){
+  var body = document.getElementById('emailConfigBody');
+  var arrow = document.getElementById('emailArrow');
+  body.style.display = body.style.display === 'none' ? '' : 'none';
+  arrow.textContent = body.style.display === 'none' ? ' ▶' : ' ▼';
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   数据同步 — 模拟进度
+   ═══════════════════════════════════════════════════════════════════ */
+function simSync(btn, mode){
+  var orig = btn.textContent;
+  btn.innerHTML = '⏳ 同步中...';
+  btn.disabled = true;
+  document.getElementById('syncStatus').textContent = (mode === 'full' ? '全量同步' : '增量同步') + '进行中...';
+  var bar = document.getElementById('syncProgress');
+  var p = 0;
+  var t = setInterval(function(){
+    p += mode === 'full' ? 5 : 10;
+    if(p > 100) p = 100;
+    bar.style.width = p + '%';
+    if(p >= 100){
+      clearInterval(t);
+      btn.innerHTML = '✅ 同步完成';
+      document.getElementById('syncStatus').textContent = '空闲 (上次同步完成)';
+      setTimeout(function(){
+        btn.innerHTML = orig;
+        btn.disabled = false;
+        bar.style.width = '0%';
+        document.getElementById('syncStatus').textContent = '空闲';
+      }, 1500);
+    }
+  }, mode === 'full' ? 200 : 100);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   QMT 连接
+   ═══════════════════════════════════════════════════════════════════ */
+var qmtConnected = false;
+
+function qmtConnect(){
+  var btn = document.getElementById('qmtConnectBtn');
+  btn.innerHTML = '⏳ 连接中...';
+  btn.disabled = true;
+  setTimeout(function(){
+    qmtConnected = true;
+    document.getElementById('qmtIcon').textContent = '🟢';
+    document.getElementById('qmtStatusText').textContent = '🟢 已连接 (miniQMT)';
+    document.getElementById('qmtStatusSub').textContent = '实时行情推送中 · 连接时间: ' + new Date().toLocaleTimeString();
+    document.getElementById('qmtConnectBtn').style.display = 'none';
+    document.getElementById('qmtDisconnectBtn').style.display = '';
+    document.getElementById('subCount').textContent = '2';
+    document.getElementById('subList').innerHTML = '<span style="color:var(--text-secondary);">600519.SH · 000001.SZ</span>';
+    btn.innerHTML = '🔌 连接';
+    btn.disabled = false;
+  }, 1500);
+}
+
+function qmtDisconnect(){
+  qmtConnected = false;
+  document.getElementById('qmtIcon').textContent = '🔴';
+  document.getElementById('qmtStatusText').textContent = '未连接';
+  document.getElementById('qmtStatusSub').textContent = '点击「连接」按钮启动 QMT 行情连接';
+  document.getElementById('qmtConnectBtn').style.display = '';
+  document.getElementById('qmtDisconnectBtn').style.display = 'none';
+  document.getElementById('subCount').textContent = '0';
+  document.getElementById('subList').textContent = '暂无订阅 · 连接 QMT 后添加股票代码订阅实时行情';
+}
+
+function qmtTest(){
+  if(qmtConnected){
+    alert('🔍 测试结果\n\n✅ QMT 连接正常\n• 延迟: 3ms\n• 订阅数: 2\n• xtquant 版本: 1.2.3');
+  } else {
+    alert('🔍 测试结果\n\n⚠️ QMT 当前未连接\n• xtquant 库: ✅ 已安装\n• 请先点击「连接」按钮启动连接');
+  }
+}
+
+function qmtSubscribe(){
+  if(!qmtConnected){
+    alert('⚠️ 请先连接 QMT 后再订阅');
+    return;
+  }
+  var input = document.getElementById('subCodes');
+  var codes = input.value.trim();
+  if(!codes){ alert('请输入股票代码'); return; }
+  var list = codes.split(',').map(function(c){ return c.trim(); }).filter(function(c){ return c; });
+  var count = parseInt(document.getElementById('subCount').textContent);
+  document.getElementById('subCount').textContent = count + list.length;
+  document.getElementById('subList').innerHTML = list.map(function(c){ return '<span style="color:var(--text-secondary);margin-right:var(--space-4);">' + c + '</span>'; }).join('') + document.getElementById('subList').innerHTML;
+  input.value = '';
+  alert('✅ 已订阅 ' + list.length + ' 只股票');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   条件库 — Mock 数据 + 分页
+   ═══════════════════════════════════════════════════════════════════ */
+
+// 163 条条件样本（前 30 条，其余用 JS 生成）
+var mockConditions = [
+  {id:1,cond_id:'gelanwei_jincha',name:'格兰维尔金叉买入',cat:'买卖信号',diff:'入门',status:'ready',usage:8,last_used:'2026-06-29'},
+  {id:2,cond_id:'macd_jincha',name:'MACD 金叉',cat:'买卖信号',diff:'进阶',status:'ready',usage:5,last_used:'2026-06-28'},
+  {id:3,cond_id:'fangliang_tupo',name:'放量突破',cat:'买卖信号',diff:'进阶',status:'ready',usage:12,last_used:'2026-06-29'},
+  {id:4,cond_id:'rsi_chaomai',name:'RSI 超买超卖',cat:'技术指标',diff:'入门',status:'ready',usage:3,last_used:'2026-06-27'},
+  {id:5,cond_id:'kdj_jincha',name:'KDJ 金叉',cat:'技术指标',diff:'入门',status:'ready',usage:6,last_used:'2026-06-28'},
+  {id:6,cond_id:'ma_tougu',name:'移动平均线多头排列',cat:'价格',diff:'进阶',status:'ready',usage:2,last_used:'2026-06-25'},
+  {id:7,cond_id:'zhuli_jingliuru',name:'主力净流入 > N 元',cat:'成交量',diff:'高级',status:'qmt_needed',usage:0,last_used:'-'},
+  {id:8,cond_id:'longhubang_genzhuang',name:'龙虎榜跟庄',cat:'实战战法',diff:'高级',status:'ready',usage:1,last_used:'2026-06-20'},
+  {id:9,cond_id:'chanlun_yilei_mai',name:'缠论一类买点',cat:'缠论',diff:'专业',status:'ready',usage:4,last_used:'2026-06-29'},
+  {id:10,cond_id:'chip_jizhong',name:'筹码密集度 > 70%',cat:'筹码',diff:'高级',status:'ready',usage:7,last_used:'2026-06-28'},
+  {id:11,cond_id:'zhisun_cedian',name:'止损测点（ATR 波动率止损）',cat:'风控',diff:'进阶',status:'ready',usage:0,last_used:'-'},
+  {id:12,cond_id:'boll_daikou',name:'布林带开口扩张',cat:'技术指标',diff:'进阶',status:'ready',usage:3,last_used:'2026-06-26'},
+  {id:13,cond_id:'qingxu_bingdian',name:'情绪冰点（恐慌指数）',cat:'情绪周期',diff:'高级',status:'design',usage:0,last_used:'-'},
+  {id:14,cond_id:'jinrong_caifu_shuangxiu',name:'金融+消费双修组合',cat:'多条件组合',diff:'专业',status:'ready',usage:1,last_used:'2026-06-22'},
+  {id:15,cond_id:'peizhi_50',name:'沪深300 PE < 50% 分位',cat:'基本面',diff:'入门',status:'ready',usage:0,last_used:'-'},
+  {id:16,cond_id:'jiaoliang_fangliang',name:'成交量放大 > 2 倍均值',cat:'成交量',diff:'入门',status:'ready',usage:9,last_used:'2026-06-29'},
+  {id:17,cond_id:'maodong_bangdan_top10',name:'主力增持 TOP10',cat:'策略信号',diff:'进阶',status:'ready',usage:2,last_used:'2026-06-24'},
+  {id:18,cond_id:'zhangting_bangdan',name:'涨停板追踪',cat:'实战战法',diff:'进阶',status:'ready',usage:5,last_used:'2026-06-28'},
+  {id:19,cond_id:'macd_dingbeili',name:'MACD 顶背离',cat:'买卖信号',diff:'高级',status:'ready',usage:3,last_used:'2026-06-27'},
+  {id:20,cond_id:'chanlun_sanlei_mai',name:'缠论三类买点',cat:'缠论',diff:'专业',status:'ready',usage:2,last_used:'2026-06-26'},
+  {id:21,cond_id:'resonance_duowei',name:'多维度共振买入',cat:'多条件组合',diff:'专业',status:'ready',usage:6,last_used:'2026-06-29'},
+  {id:22,cond_id:'dayangxian_tupo',name:'大阳线突破均线',cat:'价格',diff:'入门',status:'ready',usage:4,last_used:'2026-06-28'},
+  {id:23,cond_id:'zhuli_chuhuo',name:'主力出货信号',cat:'筹码',diff:'高级',status:'qmt_needed',usage:0,last_used:'-'},
+  {id:24,cond_id:'shouyi_yichang',name:'日内收益异常（蛇眼）',cat:'策略信号',diff:'专业',status:'design',usage:0,last_used:'-'},
+  {id:25,cond_id:'sector_lunli',name:'板块轮动买入信号',cat:'策略信号',diff:'高级',status:'ready',usage:2,last_used:'2026-06-23'},
+  {id:26,cond_id:'zhuli_xichou',name:'主力吸筹信号',cat:'筹码',diff:'高级',status:'ready',usage:8,last_used:'2026-06-29'},
+  {id:27,cond_id:'gap_up',name:'跳空高开',cat:'价格',diff:'入门',status:'ready',usage:1,last_used:'2026-06-21'},
+  {id:28,cond_id:'trading_range_bottom',name:'箱体下沿支撑买入',cat:'价格',diff:'进阶',status:'ready',usage:3,last_used:'2026-06-26'},
+  {id:29,cond_id:'qushi_xian_buy',name:'趋势线买入（上升通道下轨）',cat:'实战战法',diff:'进阶',status:'ready',usage:0,last_used:'-'},
+  {id:30,cond_id:'guanlian_zhangting',name:'关联个股涨停异动',cat:'知识图谱',diff:'高级',status:'design',usage:0,last_used:'-'}
+];
+
+// 生成剩余 133 条样本
+(function(){
+  var cats = ['买卖信号','策略信号','价格','成交量','技术指标','情绪周期','实战战法','风控','缠论','筹码','多条件组合','基本面','知识图谱'];
+  var diffs = ['入门','进阶','高级','专业'];
+  var statuses = ['ready','ready','ready','ready','ready','qmt_needed','insufficient'];
+  var catIdx = 0;
+  for(var i=31; i<=163; i++){
+    var c = mockConditions[i%30];
+    mockConditions.push({
+      id: i,
+      cond_id: c.cond_id + '_' + Math.floor(i/10),
+      name: c.name + '·变种' + (i%10),
+      cat: cats[catIdx % cats.length],
+      diff: diffs[i % diffs.length],
+      status: statuses[i % statuses.length],
+      usage: Math.floor(Math.random()*15),
+      last_used: (i%3===0)?'-':'2026-06-' + String(20+(i%9)).padStart(2,'0')
+    });
+    catIdx++;
+  }
+})();
+
+var condPageSize = 12;
+var condCurrentPage = 1;
+
+function renderConditions(){
+  var search = (document.getElementById('condSearch').value||'').toLowerCase();
+  var cat = document.getElementById('condFilterCat').value;
+  var status = document.getElementById('condFilterStatus').value;
+  var diff = document.getElementById('condFilterDifficulty').value;
+
+  var filtered = mockConditions.filter(function(c){
+    if(search && !c.name.toLowerCase().includes(search) && !c.cond_id.toLowerCase().includes(search)) return false;
+    if(cat && c.cat !== cat) return false;
+    if(status && c.status !== status) return false;
+    if(diff && c.diff !== diff) return false;
+    return true;
+  });
+
+  var totalPages = Math.ceil(filtered.length / condPageSize) || 1;
+  if(condCurrentPage > totalPages) condCurrentPage = totalPages;
+  var start = (condCurrentPage - 1) * condPageSize;
+  var pageData = filtered.slice(start, start + condPageSize);
+
+  var tbody = document.getElementById('condTableBody');
+  var html = '';
+  for(var i=0;i<pageData.length;i++){
+    var c = pageData[i];
+    var stLabel = {ready:'✅ 生产就绪',qmt_needed:'⚠️ 需 QMT',insufficient:'🔧 设计中'}[c.status]||c.status;
+    html += '<tr onclick="showCondDetail('+c.id+')" style="cursor:pointer;">'+
+      '<td>'+c.id+'</td>'+
+      '<td style="font-family:var(--font-mono);font-size:11px;">'+c.cond_id+'</td>'+
+      '<td style="color:var(--text-primary);">'+c.name+'</td>'+
+      '<td>'+c.cat+'</td>'+
+      '<td>'+c.diff+'</td>'+
+      '<td><span class="status-tag '+c.status+'">'+stLabel+'</span></td>'+
+      '<td>'+c.usage+'</td>'+
+      '<td style="font-size:11px;">'+c.last_used+'</td>'+
+      '<td><div class="cond-actions">'+
+        '<button onclick="event.stopPropagation();alert(\'✏️ 编辑: '+c.name+'\')">✏️</button>'+
+        '<button onclick="event.stopPropagation();alert(\'🔄 状态切换: '+c.name+'\n\从 '+stLabel+' 切换为下一状态\')">🔄</button>'+
+        '<button onclick="event.stopPropagation();if(confirm(\'确定删除 '+c.name+'？\'))alert(\'✅ 已删除\')">🗑️</button>'+
+        '<button onclick="event.stopPropagation();alert(\'📖 7字段说明弹窗\n\n**条件名称:** '+c.name+'\n**条件 ID:** '+c.cond_id+'\n**所属分类:** '+c.cat+'\n**难度级别:** '+c.diff+'\n**数据状态:** '+c.status+'\n**使用建议:** 适用于 '+c.cat+' 类策略\n**注意事项:** 需结合市场环境综合判断\')">📖</button>'+
+      '</div></td>'+
+    '</tr>';
+  }
+  tbody.innerHTML = html || '<tr><td colspan="9" style="text-align:center;padding:var(--space-20);color:var(--text-muted);">没有匹配的条件</td></tr>';
+
+  var pagination = document.querySelector('.pagination');
+  pagination.innerHTML = (
+    '<button onclick="condPage(\'prev\')">◀ 上一页</button>'+
+    '<button'+(condCurrentPage===1?' class="active"':'')+' onclick="condPage(\'goto\',1)">1</button>'+
+    (totalPages>1?'<button'+(condCurrentPage===2?' class="active"':'')+' onclick="condPage(\'goto\',2)">2</button>':'')+
+    (totalPages>2?'<button'+(condCurrentPage===3?' class="active"':'')+' onclick="condPage(\'goto\',3)">3</button>':'')+
+    (totalPages>3?'<span class="page-info">…</span>':'')+
+    '<span class="page-info">共 '+totalPages+' 页 ('+filtered.length+' 条)</span>'+
+    '<button onclick="condPage(\'next\')">下一页 ▶</button>'
+  );
+}
+
+function condPage(action, page){
+  if(action === 'prev') condCurrentPage = Math.max(1, condCurrentPage - 1);
+  else if(action === 'next') condCurrentPage++;
+  else if(action === 'goto') condCurrentPage = page;
+  renderConditions();
+}
+
+function filterConditions(){ condCurrentPage=1; renderConditions(); }
+function showCondDetail(id){
+  var c = mockConditions.find(function(x){return x.id===id;});
+  if(!c) return;
+  var stLabel = {ready:'✅ 生产就绪',qmt_needed:'⚠️ 需 QMT',insufficient:'🔧 设计中'}[c.status]||c.status;
+  var detailHTML = '<div class="cond-detail">'+
+    '<h5>📋 条件详情</h5>'+
+    '<div class="field"><strong>条件 ID:</strong> '+c.cond_id+'</div>'+
+    '<div class="field"><strong>名称:</strong> '+c.name+'</div>'+
+    '<div class="field"><strong>分类:</strong> '+c.cat+'</div>'+
+    '<div class="field"><strong>难度:</strong> '+c.diff+'</div>'+
+    '<div class="field"><strong>状态:</strong> '+stLabel+'</div>'+
+    '<div class="field"><strong>被引用次数:</strong> '+c.usage+'</div>'+
+    '<div class="field"><strong>最近使用:</strong> '+c.last_used+'</div>'+
+    '<div class="field" style="border-top:1px solid var(--border-default);padding-top:var(--space-8);margin-top:var(--space-8);"><strong>7字段说明体系:</strong></div>'+
+    '<div class="field"><strong>定义:</strong> 基于 '+c.cat+' 类数据生成的交易信号条件</div>'+
+    '<div class="field"><strong>适用场景:</strong> 适用于股票筛选、信号触发、策略组合</div>'+
+    '<div class="field"><strong>参数配置:</strong> 默认参数为经验值，可根据标的特性调整</div>'+
+    '<div class="field"><strong>数据源:</strong> '+(c.status==='qmt_needed'?'QMT 行情':'Tushare Pro')+'</div>'+
+    '<div class="field"><strong>注意事项:</strong> 任何条件都不应作为单一决策依据</div>'+
+    '</div>';
+  alert(detailHTML.replace(/<br\s*\/?>/g,'\n').replace(/<[^>]*>/g,'').replace(/\n{3,}/g,'\n\n'));
+}
+</script>
+</body>
+</html>
