@@ -152,7 +152,7 @@ def create_app():
     from app.routes.screener import screener_bp
     from app.routes.strategy_templates import strategy_templates_bp
     from app.routes.qmt import qmt_bp
-    from app.routes.virtual_verify import verify_bp
+    from app.routes.sandbox import sandbox_bp
     from app.routes.account import account_bp
     from app.auth import auth_bp
     from app.routes.minute_data import minute_data_bp
@@ -163,7 +163,8 @@ def create_app():
     from app.routes.kline_resampler_api import kline_resampler_bp
     from app.routes.news_route import news_bp
     from app.routes.alert_route import alert_bp
-    
+    from app.routes.conditions import conditions_bp
+
     app.register_blueprint(market_bp)
     app.register_blueprint(health_bp)
     app.register_blueprint(phase3_bp)
@@ -178,7 +179,7 @@ def create_app():
     app.register_blueprint(reports_bp)
     app.register_blueprint(screener_bp)
     app.register_blueprint(strategy_templates_bp)
-    app.register_blueprint(verify_bp)
+    app.register_blueprint(sandbox_bp)
     app.register_blueprint(qmt_bp)
     app.register_blueprint(account_bp)
     app.register_blueprint(auth_bp)
@@ -190,8 +191,9 @@ def create_app():
     app.register_blueprint(kline_resampler_bp)
     app.register_blueprint(news_bp)
     app.register_blueprint(alert_bp)
+    app.register_blueprint(conditions_bp)
 
-    
+
 
     # ============================================================
     # 观潮对标服务初始化
