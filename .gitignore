@@ -54,8 +54,16 @@ frontend/design-system/node_modules/
 # Tool metadata
 .codegraph/
 .cursor/
-## SQLite test databases
+.claude/projects/
+$TMPDIR/
+
+# SQLite test databases
+instance/
 backend/test.db
+backend/strategy_templates.db
+
+## DuckDB
+data/duckdb/*.corrupted*
 backend/strategy_templates.db
 ## DuckDB
 data/duckdb/*.corrupted*
