@@ -27,7 +27,7 @@ class FactorRegistry:
         """
         name = factor_class.name
         if name in self._factors:
-            logger.warning(r"因子 {name} 已存在，将被覆盖")
+            logger.warning(f"因子 {name} 已存在，将被覆盖")
         
         self._factors[name] = factor_class
         
@@ -161,9 +161,10 @@ def _load_builtin_factors(registry: FactorRegistry):
                 # 查找所有继承自BaseFactor的类
                 for attr_name in dir(module):
                     attr = getattr(module, attr_name)
-                    if (isinstance(attr, type) and 
-                        issubclass(attr, BaseFactor) and 
-                        attr != BaseFactor):
+                    if (isinstance(attr, type) and
+                        issubclass(attr, BaseFactor) and
+                        attr != BaseFactor and
+                        not getattr(attr, '_is_abstract', False)):
                         registry.register(attr)
             except Exception as e:
-                logger.warning(r"加载因子模块 {module_name} 失败: {e}")
+                logger.warning(f"加载因子模块 {module_name} 失败: {e}")

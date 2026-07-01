@@ -9,7 +9,7 @@ from ..base import BaseFactor, FactorParam
 
 class GTJA_Base(BaseFactor):
     """
-    GTJA因子基类
+    GTJA因子基类（抽象基类，不注册到注册表）
     """
     name = ""
     name_cn = ""
@@ -19,9 +19,12 @@ class GTJA_Base(BaseFactor):
     formula = ""
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
+    # 标记为抽象基类，注册表自动加载时跳过
+    _is_abstract = True
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return pd.Series([], index=data.index)
 

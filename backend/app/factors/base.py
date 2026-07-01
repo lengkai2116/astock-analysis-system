@@ -37,7 +37,7 @@ class BaseFactor(ABC):
     """
     因子基类
     """
-    
+
     # 因子元数据
     name: str = ""
     name_cn: str = ""
@@ -48,10 +48,16 @@ class BaseFactor(ABC):
     source: str = ""
     source_detail: str = ""
     examples: str = ""
-    
+
+    # 语义标签（与 219 规格书 §2.2 对齐，可选）
+    tags: Dict[str, List[str]] = {}
+
+    # 关联因子列表（同类别或逻辑相关的因子名）
+    related_factors: List[str] = []
+
     # 参数定义
     params: List[FactorParam] = []
-    
+
     # 依赖的数据列
     required_columns: List[str] = ["open", "high", "low", "close", "vol"]
     
@@ -113,6 +119,8 @@ class BaseFactor(ABC):
             "source": self.source,
             "source_detail": self.source_detail,
             "examples": self.examples,
+            "tags": self.tags,
+            "relate": self.related_factors,
             "params": [p.to_dict() for p in self.params],
             "required_columns": self.required_columns
         }
