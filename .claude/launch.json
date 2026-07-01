@@ -23,6 +23,20 @@
       "port": 9000
     },
     {
+      "name": "225-test-server",
+      "runtimeExecutable": "/Users/kalence/Desktop/01-A股股票分析系统/backend/.venv/bin/python",
+      "runtimeArgs": ["test_225_server.py"],
+      "cwd": "/Users/kalence/Desktop/01-A股股票分析系统/backend",
+      "port": 15001
+    },
+    {
+      "name": "213-test-server",
+      "runtimeExecutable": "/Users/kalence/Desktop/01-A股股票分析系统/backend/.venv/bin/python",
+      "runtimeArgs": ["test_213_server.py"],
+      "cwd": "/Users/kalence/Desktop/01-A股股票分析系统/backend",
+      "port": 15002
+    },
+    {
       "name": "ui-prototype",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["serve", ".", "-l", "8081"],

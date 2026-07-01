@@ -3,6 +3,20 @@ title: Windows 软件化迁移完整方案
 type: 方案设计
 date: 2026-06-10
 version: 2.0
+status: 已作废
+superseded_by: 227
+---
+
+> ⚠️ **本方案已作废**，相关内容已被 [227-系统生产环境部署与运行规范](./227-系统生产环境部署与运行规范.md) 替代。
+>
+> **废止原因**：170号以 Windows 单平台 Docker 分发为目标受众。2026-06-30 重新确认系统定位为"macOS + Windows 双平台单机自用，自有团队数人使用，不做大规模分发"，227号基于新定位重构了生产环境设计。
+>
+> **关键差异**：
+> - ❌ Docker 依赖部署 → ✅ 裸跑
+> - ❌ PostgreSQL + Redis → ✅ SQLite + DuckDB + 内存缓存
+> - ❌ Nginx 反向代理 → ✅ Flask 直接托管 SPA
+> - ❌ 仅 Windows → ✅ macOS + Windows 双平台
+> - 部分保留：Inno Setup 打包方案、嵌入式 Python 技术路线
 tags: [Windows迁移, 安装程序, 无Docker, CI/CD]
 supersedes: ~（129 已删除）
 ---
