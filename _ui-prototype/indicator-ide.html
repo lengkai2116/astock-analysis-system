@@ -566,7 +566,6 @@
           <span class="indicator-tab adv" onclick="toggleSub(this,'大单净量')">大单净量</span>
           <span class="indicator-tab adv" onclick="toggleSub(this,'主力密码')">主力密码</span>
           <span class="indicator-tab" onclick="toggleSub(this,'均量对比')">均量对比</span>
-          <span class="indicator-tab" onclick="toggleSub(this,'均量对比')">均量对比</span>
           <span class="indicator-tab adv" onclick="toggleSub(this,'资金仓位')">资金仓位</span>
           <span class="indicator-tab adv" style="margin-left:auto;" onclick="toggleChipPanel()">筹码</span>
         </div>
@@ -1201,16 +1200,54 @@ var OD={};
     OD.ene_l.push(+(ma25[i]*(1-eneM/100)).toFixed(2));}
 })();
 
-// ── 一次性生成随机mock数据（避免每次getSeries重新随机） ──
-var _mockRand = {};
+// ── 从API数据构建真实副图指标数据（替代随机mock） ──
+var _subRealData = {};
 (function(){
-  var n=dates.length;
-  _mockRand.money=(function(){var v=[];for(var i=0;i<n;i++)v.push(+(Math.random()*5+1).toFixed(2));return v;})();
-  _mockRand.bignet=(function(){var v=[];for(var i=0;i<n;i++)v.push(+(Math.random()*2-1).toFixed(2));return v;})();
-  _mockRand.master=(function(){var v=[];for(var i=0;i<n;i++)v.push(+(Math.random()*3).toFixed(2));return v;})();
-  _mockRand.margin=(function(){var v=[];for(var i=0;i<n;i++)v.push(+(Math.random()*10).toFixed(2));return v;})();
-  _mockRand.volcmp=(function(){var v=[];for(var i=0;i<n;i++)v.push(+(Math.random()*2).toFixed(2));return v;})();
-  _mockRand.fundpos=(function(){var v=[];for(var i=0;i<n;i++)v.push(+(Math.random()*100).toFixed(1));return v;})();
+  var n = dates.length;
+  // 成交额: 模拟数据阶段用 vol * close 近似（真实场景用 amount）
+  _subRealData.money = (function(){ var v=[]; for(var i=0;i<n;i++) v.push(+(vol[i]*closes[i]/100000).toFixed(2)); return v; })();
+  // 均量对比: vol / MA(vol,20)
+  var volMa20 = ma(vol, 20);
+  _subRealData.volcmp = (function(){ var v=[]; for(var i=0;i<n;i++) v.push(volMa20[i] ? +(vol[i]/volMa20[i]).toFixed(2) : null); return v; })();
+  // 大单净量/主力密码/资金仓位: 初始化为null（等待真实API数据填充）
+  _subRealData.bignet = new Array(n).fill(null);
+  _subRealData.master = new Array(n).fill(null);
+  _subRealData.fundpos = new Array(n).fill(null);
+  // 尝试从moneyflow缓存读取真实数据（由loadMoneyflow填充）
+  function tryFillFromMoneyflow(){
+    var mfData = window._moneyflowCache && window._moneyflowCache[window._currentTsCode];
+    if(!mfData || !mfData.history_5day || !mfData.latest) return false;
+    var lastIdx = n - 1;
+    // 大单净量: 使用最新日超大单+大单净额
+    var sub = mfData.latest.sub_orders;
+    if(sub){
+      var xlNet = sub.xl_order_net || 0;
+      var lgNet = sub.lg_order_net || 0;
+      _subRealData.bignet[lastIdx] = +((xlNet + lgNet) / 10000).toFixed(4);
+    }
+    // 历史5日数据尝试匹配日期
+    var hist = mfData.history_5day || [];
+    hist.forEach(function(h){
+      var dStr = h.date; // YYYYMMDD
+      for(var i=0;i<n;i++){
+        var dateParts = dates[i].split('/');
+        var m = parseInt(dateParts[0],10);
+        var day = parseInt(dateParts[1],10);
+        if(!isNaN(m) && !isNaN(day)){
+          var y = dStr.substring(0,4);
+          var histM = parseInt(dStr.substring(4,6),10);
+          var histD = parseInt(dStr.substring(6,8),10);
+          if(histM === m && histD === day){
+            if(h.net_amount != null) _subRealData.bignet[i] = +(h.net_amount / 10000).toFixed(4);
+          }
+        }
+      }
+    });
+    return true;
+  }
+  // 暴露到全局，供loadMoneyflow回调使用
+  window._subRealData = _subRealData;
+  window._tryFillMoneyflow = tryFillFromMoneyflow;
 })();
 
 // ════════════════════════════════════════════════════════════
@@ -1240,9 +1277,9 @@ var subDefs = {
   },
   成交额:{label:'成交额',
     getSeries:function(gi){
-      subAllData['成交额']={v:_mockRand.money};
+      subAllData['成交额']={v:_subRealData.money};
       return [
-        {name:'sub_money_bar_'+gi,type:'bar',data:_mockRand.money,xAxisIndex:gi,yAxisIndex:gi,
+        {name:'sub_money_bar_'+gi,type:'bar',data:_subRealData.money,xAxisIndex:gi,yAxisIndex:gi,
           itemStyle:{color:function(p){return closes[p.dataIndex]>ohlc[p.dataIndex][0]?'#EF4444':'rgba(16,185,129,0.5)';}}}
       ];
     }
@@ -1287,11 +1324,34 @@ var subDefs = {
   ];}},
   obv:{label:'OBV',getSeries:function(gi){subAllData['obv']={obv:OD.obv};return [{name:'sub_obv_'+gi,type:'line',data:OD.obv,xAxisIndex:gi,yAxisIndex:gi,symbol:'none',lineStyle:{color:'#3B82F6',width:1}}];}},
   cci:{label:'CCI',getSeries:function(gi){subAllData['cci']={cci:OD.cci};return [{name:'sub_cci_'+gi,type:'line',data:OD.cci,xAxisIndex:gi,yAxisIndex:gi,symbol:'none',lineStyle:{color:'white',width:1}}];}},
-  大单净量:{label:'大单净量',getSeries:function(gi){subAllData['大单净量']={v:_mockRand.bignet};return [{name:'sub_bignet_bar_'+gi,type:'bar',data:_mockRand.bignet,xAxisIndex:gi,yAxisIndex:gi,itemStyle:{color:function(p){return p.value>=0?'#EF4444':'#22C55E';}}}];}},
-  主力密码:{label:'主力密码',getSeries:function(gi){subAllData['主力密码']={v:_mockRand.master};return [{name:'sub_master_line_'+gi,type:'line',data:_mockRand.master,xAxisIndex:gi,yAxisIndex:gi,symbol:'none',lineStyle:{color:'#8B5CF6',width:1}}];}},
-  均量对比:{label:'均量对比',getSeries:function(gi){subAllData['均量对比']={v:_mockRand.volcmp};return [{name:'sub_volcmp_bar_'+gi,type:'bar',data:_mockRand.volcmp,xAxisIndex:gi,yAxisIndex:gi,itemStyle:{color:function(p){return p.value>=1?'#EF4444':'#22C55E';}}}];}},
-  均量对比:{label:'均量对比',getSeries:function(gi){subAllData['均量对比']={v:_mockRand.volcmp};return [{name:'sub_volcmp_bar_'+gi,type:'bar',data:_mockRand.volcmp,xAxisIndex:gi,yAxisIndex:gi,itemStyle:{color:function(p){return p.value>=1?'#EF4444':'#22C55E';}}}];}},
-  资金仓位:{label:'资金仓位',getSeries:function(gi){subAllData['资金仓位']={v:_mockRand.fundpos};return [{name:'sub_fundpos_line_'+gi,type:'line',data:_mockRand.fundpos,xAxisIndex:gi,yAxisIndex:gi,symbol:'none',lineStyle:{color:'#F97316',width:1}}];}}
+  大单净量:{label:'大单净量',getSeries:function(gi){
+    var data = _subRealData.bignet;
+    var hasData = data.some(function(v){return v != null;});
+    subAllData['大单净量']={v:data};
+    if(!hasData){
+      // 无数据：显示灰线占位 + 中间文案
+      return [{name:'sub_bignet_bar_'+gi,type:'bar',data:data,xAxisIndex:gi,yAxisIndex:gi,itemStyle:{color:'rgba(100,116,139,0.15)'}}];
+    }
+    return [{name:'sub_bignet_bar_'+gi,type:'bar',data:data,xAxisIndex:gi,yAxisIndex:gi,
+      itemStyle:{color:function(p){return p.value>=0?'#EF4444':'#22C55E';}}}];
+  }},
+  主力密码:{label:'主力密码',getSeries:function(gi){
+    subAllData['主力密码']={v:null};
+    // 数据不可用：显示灰色占位虚线，文案在header中提示
+    return [{name:'sub_master_na_'+gi,type:'line',data:[],xAxisIndex:gi,yAxisIndex:gi,symbol:'none',
+      lineStyle:{color:'rgba(100,116,139,0.12)',width:1}}];
+  }},
+  均量对比:{label:'均量对比',getSeries:function(gi){
+    subAllData['均量对比']={v:_subRealData.volcmp};
+    return [{name:'sub_volcmp_bar_'+gi,type:'bar',data:_subRealData.volcmp,xAxisIndex:gi,yAxisIndex:gi,
+      itemStyle:{color:function(p){return p.value>=1?'#EF4444':'#22C55E';}}}];
+  }},
+  资金仓位:{label:'资金仓位',getSeries:function(gi){
+    subAllData['资金仓位']={v:null};
+    // 数据不可用
+    return [{name:'sub_fundpos_na_'+gi,type:'line',data:[],xAxisIndex:gi,yAxisIndex:gi,symbol:'none',
+      lineStyle:{color:'rgba(100,116,139,0.12)',width:1}}];
+  }}
 };
 var allSubNames = Object.keys(subDefs);
 
@@ -1567,10 +1627,13 @@ function updateSubHeaders(idx){
     else if(k==='cci'){hdr.textContent='CCI:'+(d.cci[idx]||'-');}
     else if(k==='sar'){hdr.textContent='SAR:'+(d.sar[idx]||'-');}
     else if(k==='均线'){hdr.textContent='MA5:'+(d.ma5[idx]||'-')+' MA10:'+(d.ma10[idx]||'-')+' MA20:'+(d.ma20[idx]||'-');}
-    else if(k==='大单净量'){hdr.textContent='额:'+((d.v[idx]*10000).toFixed(0));}
-    else if(k==='主力密码'){hdr.textContent='值:'+((d.v[idx]).toFixed(2));}
-    else if(k==='均量对比'){hdr.textContent='比:'+((d.v[idx]).toFixed(2));}
-    else if(k==='资金仓位'){hdr.textContent='仓:'+((d.v[idx]).toFixed(1))+'%';}
+    else if(k==='大单净量'){
+      var bignetVal = d.v && d.v[idx];
+      hdr.textContent = bignetVal != null ? '净额:'+bignetVal.toFixed(2)+'万' : '等待数据…';
+    }
+    else if(k==='主力密码'){hdr.textContent='暂无数据源';}
+    else if(k==='均量对比'){hdr.textContent='比:'+((d.v&&d.v[idx]||'-'));}
+    else if(k==='资金仓位'){hdr.textContent='暂无数据源';}
   }
 }
 
@@ -2283,7 +2346,13 @@ function loadMoneyflow(tsCode){
   if(_moneyflowCache[tsCode]){ renderMoneyflow(_moneyflowCache[tsCode]); return Promise.resolve(_moneyflowCache[tsCode]); }
   return fetch('/api/v3/stock/'+tsCode+'/moneyflow').then(function(r){return r.json();}).then(function(res){
     if(res.code!==0||!res.data) throw new Error('E10 fail');
-    _moneyflowCache[tsCode]=res.data; renderMoneyflow(res.data); return res.data;
+    _moneyflowCache[tsCode]=res.data;
+    // 填充副图指标数据（如果有真实moneyflow数据）
+    if(typeof window._tryFillMoneyflow === 'function'){ window._tryFillMoneyflow(); }
+    renderMoneyflow(res.data);
+    // 如果副图数据发生变化，重绘
+    if(activeSubs.indexOf('大单净量')>=0){ renderSubs(); }
+    return res.data;
   }).catch(function(){ showToast('⚠️ 资金流向数据不可用'); });
 }
 function renderMoneyflow(d){

@@ -555,6 +555,22 @@ var HINTS = {
   }
 };
 
+/* ===== API 基础设施 ===== */
+var API_BASE = 'http://localhost:5001/api/v3';
+async function _apiFetch(path, opts){
+  opts = opts || {};
+  var url = API_BASE + path;
+  if(opts.params){
+    var qs = Object.keys(opts.params).filter(function(k){return opts.params[k]!==undefined&&opts.params[k]!==null&&opts.params[k]!=='';}).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(opts.params[k]);}).join('&');
+    if(qs) url += '?' + qs;
+  }
+  var fetchOpts = {method:opts.method||'GET'};
+  if(opts.body){fetchOpts.body=JSON.stringify(opts.body);fetchOpts.headers={'Content-Type':'application/json'};}
+  var r=await fetch(url, fetchOpts);
+  if(!r.ok){var e=await r.json().catch(function(){return{error:r.statusText};});throw new Error(e.error||e.message||'请求失败');}
+  return r.json();
+}
+
 /* ===== 核心逻辑 ===== */
 var sideCollapsed = true;
 function toggleSidebar(){
@@ -586,7 +602,34 @@ function toggleParamSection(header){
   header.querySelector('.arrow').textContent = body.classList.contains('open') ? '▼' : '▶';
 }
 
-/* ===== 自选股数据（与 watchlist.html 同步）===== */
+function onStratPick(){
+  // 策略选中回调 — 可在此添加策略描述更新
+}
+
+/* ===== 从API加载策略模板 ===== */
+var STRATEGY_TEMPLATES = [];
+async function loadTemplates(){
+  try{
+    var resp = await _apiFetch('/sandbox/templates');
+    if(resp&&resp.success&&resp.data&&resp.data.length){
+      STRATEGY_TEMPLATES = resp.data;
+      renderTemplates();
+    }
+  }catch(e){console.warn('加载策略模板失败',e);}
+}
+function renderTemplates(){
+  var container = document.querySelector('#src-template .strategy-pick');
+  if(!container||!STRATEGY_TEMPLATES.length) return;
+  var html = '';
+  STRATEGY_TEMPLATES.forEach(function(t,i){
+    html += '<label class="strategy-pick-item'+(i===0?' selected':'')+'">'+
+      '<input type="radio" name="sbStrat" value="'+t.id+'"'+(i===0?' checked':'')+' onchange="onStratPick()">'+
+      '<span class="sp-label">'+t.name+'</span><span class="sp-type">系统</span></label>';
+  });
+  container.innerHTML = html;
+}
+
+/* ===== 自选股数据（从API加载，静态备选）===== */
 var WATCHLIST_STOCKS = [
   {code:'000762.SZ',name:'西藏矿业', industry:'有色金属'},
   {code:'000001.SZ',name:'平安银行', industry:'银行'},
@@ -597,11 +640,19 @@ var WATCHLIST_STOCKS = [
   {code:'000858.SZ',name:'五粮液',   industry:'食品饮料'},
   {code:'601318.SH',name:'中国平安', industry:'保险'}
 ];
+async function loadWatchlist(){
+  try{
+    var resp = await _apiFetch('/watchlist/quotes');
+    if(resp&&resp.success){
+      var list = resp.stocks||resp.data||resp.quotes||[];
+      if(list.length){WATCHLIST_STOCKS = list.map(function(s){return{code:s.ts_code||s.code,name:s.name||'',industry:s.industry||''};});}
+    }
+  }catch(e){console.warn('加载自选股失败，使用本地列表',e);}
+}
 
 /* ===== 已选股票管理 ===== */
-var selectedStocks = [];  // 存选中的 code
+var selectedStocks = [];
 
-/* ===== 股票选择弹窗 ===== */
 function openStockPicker(){
   renderStockList();
   document.getElementById('stockModal').classList.add('open');
@@ -609,7 +660,6 @@ function openStockPicker(){
 function closeStockPicker(){
   document.getElementById('stockModal').classList.remove('open');
 }
-
 function renderStockList(filterText){
   var list = document.getElementById('smList');
   var txt = (filterText || document.getElementById('smSearch').value || '').toLowerCase();
@@ -630,59 +680,33 @@ function renderStockList(filterText){
   list.innerHTML = html;
   updateModalCount();
 }
-
 function filterStockList(){ renderStockList(); }
-
 function toggleStock(code, checked){
-  if(checked){
-    if(selectedStocks.indexOf(code) < 0) selectedStocks.push(code);
-  } else {
-    selectedStocks = selectedStocks.filter(function(c){ return c !== code; });
-  }
+  if(checked){if(selectedStocks.indexOf(code)<0)selectedStocks.push(code);}
+  else{selectedStocks=selectedStocks.filter(function(c){return c!==code;});}
   updateModalCount();
 }
-
-function selectAllStocks(){
-  selectedStocks = WATCHLIST_STOCKS.map(function(s){ return s.code; });
-  renderStockList();
-}
-function deselectAllStocks(){
-  selectedStocks = [];
-  renderStockList();
-}
-function confirmStockPick(){
-  updateStockBadge();
-  closeStockPicker();
-}
-function updateModalCount(){
-  document.getElementById('smfCount').textContent = '已选 ' + selectedStocks.length + ' / ' + WATCHLIST_STOCKS.length + ' 只';
-}
+function selectAllStocks(){selectedStocks=WATCHLIST_STOCKS.map(function(s){return s.code;});renderStockList();}
+function deselectAllStocks(){selectedStocks=[];renderStockList();}
+function confirmStockPick(){updateStockBadge();closeStockPicker();}
+function updateModalCount(){document.getElementById('smfCount').textContent='已选 '+selectedStocks.length+' / '+WATCHLIST_STOCKS.length+' 只';}
 function updateStockBadge(){
-  document.getElementById('sbStockCount').textContent = selectedStocks.length;
-  document.getElementById('stockCountBadge').textContent = '(' + selectedStocks.length + ' 只)';
-  var container = document.getElementById('sbSelectedStocks');
-  if(selectedStocks.length === 0){
-    container.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">请选择至少一只股票</span>';
-    return;
-  }
-  var html = '';
+  document.getElementById('sbStockCount').textContent=selectedStocks.length;
+  document.getElementById('stockCountBadge').textContent='('+selectedStocks.length+' 只)';
+  var container=document.getElementById('sbSelectedStocks');
+  if(selectedStocks.length===0){container.innerHTML='<span style="font-size:11px;color:var(--text-muted);">请选择至少一只股票</span>';return;}
+  var html='';
   selectedStocks.forEach(function(code){
-    var s = WATCHLIST_STOCKS.find(function(x){ return x.code === code; });
-    if(!s) return;
-    html += '<span class="tag tag-neutral" style="font-size:11px;padding:1px 8px 1px 6px;display:flex;align-items:center;gap:4px;">'+
+    var s=WATCHLIST_STOCKS.find(function(x){return x.code===code;});
+    if(!s)return;
+    html+='<span class="tag tag-neutral" style="font-size:11px;padding:1px 8px 1px 6px;display:flex;align-items:center;gap:4px;">'+
       '<span style="cursor:pointer;color:var(--text-muted);" onclick="removeStock(\''+code+'\')">✕</span>'+
-      s.code+' '+s.name+
-    '</span>';
+      s.code+' '+s.name+'</span>';
   });
-  container.innerHTML = html;
+  container.innerHTML=html;
 }
-function removeStock(code){
-  selectedStocks = selectedStocks.filter(function(c){ return c !== code; });
-  updateStockBadge();
-}
-
-// 初始加载：预选第一只
-(function(){ selectedStocks = ['000762.SZ']; updateStockBadge(); })();
+function removeStock(code){selectedStocks=selectedStocks.filter(function(c){return c!==code;});updateStockBadge();}
+(function(){selectedStocks=['000762.SZ'];updateStockBadge();})();
 
 function showHint(e, key){
   var h = HINTS[key];
@@ -698,171 +722,232 @@ function closeHint(){
   document.getElementById('hintOverlay').classList.remove('open');
 }
 
-/* ===== 模拟运行（支持多股票） ===== */
-function runSandbox(btn){
-  if(selectedStocks.length === 0){
-    alert('请先选择至少一只股票进行测试');
-    return;
+/* ===== 核心测试逻辑：API驱动 ===== */
+async function runSandbox(btn){
+  if(selectedStocks.length===0){alert('请先选择至少一只股票进行测试');return;}
+  btn.innerHTML='⏳ 测试中...';btn.disabled=true;
+  document.getElementById('sbEmpty').style.display='none';
+  document.getElementById('sbProgress').style.display='';
+  document.getElementById('sbResults').style.display='none';
+
+  var bar=document.getElementById('sbProgressFill'),statusEl=document.getElementById('sbProgressText');
+  var total=selectedStocks.length,allRst=[];
+
+  // 获取选中策略参数
+  var sel=document.querySelector('input[name="sbStrat"]:checked');
+  var tplId=sel?sel.value:(STRATEGY_TEMPLATES[0]?STRATEGY_TEMPLATES[0].id:'sma_fast');
+  var tpl=STRATEGY_TEMPLATES.find(function(t){return t.id===tplId;});
+  var bp=tpl?JSON.parse(JSON.stringify(tpl.params)):{};
+
+  // 用户调节参数（滑块）
+  var wVal=parseInt(document.getElementById('ps-window').textContent)||20;
+  var tVal=parseInt(document.getElementById('ps-thresh').textContent)||70;
+  var slVal=parseInt(document.getElementById('ps-stoploss').textContent)||8;
+  var method=bp.signal_method||'sma_cross';
+  if(method==='sma_cross'){bp.short_window=Math.max(3,Math.round(wVal*0.25));bp.long_window=wVal;}
+  else if(method==='rsi'){bp.rsi_period=wVal;bp.rsi_oversold=100-tVal;bp.rsi_overbought=tVal;}
+
+  // 日期 + 资金
+  var inputs=document.querySelectorAll('.config-row input[type="text"].input');
+  var sd=(inputs[0]?inputs[0].value:'2024-01-01').replace(/-/g,'');
+  var ed=(inputs[1]?inputs[1].value:'2026-06-01').replace(/-/g,'');
+  var cap=parseInt((document.querySelector('.config-row .input')?.value||'1000000').replace(/,/g,''))||1000000;
+
+  // 逐股票运行
+  for(var i=0;i<total;i++){
+    var code=selectedStocks[i];
+    var s=WATCHLIST_STOCKS.find(function(x){return x.code===code;});
+    bar.style.width=Math.round(i/total*100)+'%';
+    statusEl.innerHTML='⏳ 正在测试 <b>'+(s?s.name:code)+'</b> ('+(i+1)+'/'+total+')';
+    try{
+      var resp=await _apiFetch('/sandbox/run',{method:'POST',body:{ts_code:code,start_date:sd,end_date:ed,params:bp,config:{initial_capital:cap}}});
+      allRst.push({ts_code:code,name:s?s.name:code,result:resp.success?resp:null,error:resp.success?null:(resp.error||'测试失败')});
+    }catch(e){allRst.push({ts_code:code,name:s?s.name:code,result:null,error:e.message});}
   }
+  bar.style.width='100%';statusEl.innerHTML='✅ 测试完成';
 
-  btn.innerHTML = '⏳ 测试中...'; btn.disabled = true;
-  document.getElementById('sbEmpty').style.display = 'none';
-  document.getElementById('sbProgress').style.display = '';
-  document.getElementById('sbResults').style.display = 'none';
-
-  var p = 0, bar = document.getElementById('sbProgressFill'), status = document.getElementById('sbProgressText');
-  // 多股票时延长进度
-  var totalSteps = 100 / Math.max(1, selectedStocks.length);
-  var currentStock = -1;
-  var t = setInterval(function(){
-    p += 4;
-    var stockIdx = Math.min(Math.floor(p / totalSteps), selectedStocks.length - 1);
-    if(stockIdx !== currentStock){
-      currentStock = stockIdx;
-      var s = WATCHLIST_STOCKS.find(function(x){ return x.code === selectedStocks[stockIdx]; });
-      status.innerHTML = '⏳ 正在测试 <b>' + (s?s.name:selectedStocks[stockIdx]) + '</b> (' + (stockIdx+1) + '/' + selectedStocks.length + ')';
-    }
-    bar.style.width = p+'%';
-
-    if(p >= 100){
-      clearInterval(t);
-      document.getElementById('sbProgress').style.display = 'none';
-      document.getElementById('sbResults').style.display = '';
-      btn.innerHTML = '▶ 重新测试'; btn.disabled = false;
-
-      // 更新结论：显示多股票汇总
-      if(selectedStocks.length > 1){
-        document.getElementById('sbConclusion').innerHTML =
-          '在 2024-01-01 至 2026-06-01 期间，对 <b>' + selectedStocks.length + ' 只自选股</b> 进行了策略测试。<br>'+
-          '其中 <span style="color:#22C55E;font-weight:600;">' + (Math.floor(Math.random()*3)+3) + ' 只</span> 表现不错（收益率为正），'+
-          '<span style="color:#F87171;">' + (Math.floor(Math.random()*2)+1) + ' 只</span> 表现欠佳。<br>'+
-          '🟢 该策略在上涨行情中有效性较高，🟡 震荡行情中请谨慎参考。';
-      } else {
-        var s = WATCHLIST_STOCKS.find(function(x){ return x.code === selectedStocks[0]; });
-        document.getElementById('sbConclusion').innerHTML =
-          '在 2024-01-01 至 2026-06-01 期间，该策略在 <strong>' + (s?s.name:selectedStocks[0]) + '</strong> 上整体表现<span style="color:#22C55E;font-weight:600;">不错</span>。'+
-          '发出的信号中 <span style="color:#22C55E;font-weight:600;">65% 判断正确</span>。'+
-          '尤其是在<span style="color:#FBBF24;font-weight:600;">上涨行情</span>中表现突出，'+
-          '但在<span style="color:#F87171;">震荡行情</span>中容易产生假信号。';
-      }
-
-      // 检查参数稳定度开关
-      var sensCheck = document.querySelector('.sens-switch input[type=checkbox]');
-      if(sensCheck && sensCheck.checked){
-        document.getElementById('sbStability').style.display = '';
-        buildStabilityChart();
-      } else {
-        document.getElementById('sbStability').style.display = 'none';
-      }
-
-      renderSignals();
-      renderEquityChart();
-    }
-  }, 180);
+  setTimeout(function(){
+    document.getElementById('sbProgress').style.display='none';
+    document.getElementById('sbResults').style.display='';
+    btn.innerHTML='▶ 重新测试';btn.disabled=false;
+    renderAllResults(allRst);
+    var sens=document.querySelector('.sens-switch input[type=checkbox]');
+    if(sens&&sens.checked&&allRst[0]&&allRst[0].result){
+      document.getElementById('sbStability').style.display='';
+      runStabilityTest(allRst[0].ts_code,sd,ed,bp,cap);
+    }else{document.getElementById('sbStability').style.display='none';}
+  },300);
 }
 
-/* ===== ECharts 权益曲线 ===== */
-var equityChart = null;
-function renderEquityChart(){
-  if(equityChart) equityChart.dispose();
-  equityChart = echarts.init(document.getElementById('equityChart'));
-
-  var dates = [];
-  var now = new Date('2024-01-01');
-  var end = new Date('2026-06-01');
-  while(now <= end){
-    dates.push(now.toISOString().slice(0,7).replace('-','/'));
-    now.setMonth(now.getMonth()+1);
+/* ===== 结果渲染 ===== */
+function renderAllResults(rst){
+  var valid=rst.filter(function(r){return r&&r.result;}),fail=rst.length-valid.length;
+  var fr=valid[0]&&valid[0].result;
+  // 1 结论
+  var el=document.getElementById('sbConclusion');
+  if(rst.length===1&&valid.length===1){
+    var m=fr.metrics,tr=m.total_return!==null&&m.total_return!==undefined?(m.total_return*100).toFixed(1):'--';
+    var wr=m.win_rate!==null&&m.win_rate!==undefined?(m.win_rate*100).toFixed(0):'--';
+    var sug=fr.suggestions||[];
+    var v='一般',c='#F87171';
+    if(m.total_return>0.1){v='不错';c='#22C55E';}else if(m.total_return>0){v='尚可';c='#FBBF24';}
+    el.innerHTML='在测试期间，策略在 <strong>'+valid[0].name+'</strong> 上整体表现<span style="color:'+c+';font-weight:600;">'+v+'</span>。'+
+      '总收益 <span style="color:'+(tr>=0?'#22C55E':'#F87171')+';font-weight:600;">'+(tr>=0?'+':'')+tr+'%</span>，'+
+      '胜率 <span style="font-weight:600;">'+wr+'%</span>。'+
+      (sug.length?'<br><br><span style="font-size:11px;color:var(--text-muted);">💡 '+sug.join('；')+'</span>':'');
+  }else{
+    var good=valid.filter(function(r){return r.result.metrics.total_return>0;}).length;
+    el.innerHTML='对 <b>'+rst.length+' 只自选股</b> 进行了策略测试。<br>'+
+      '其中 <span style="color:#22C55E;font-weight:600;">'+good+' 只</span> 收益为正，'+
+      '<span style="color:#F87171;">'+(valid.length-good)+' 只</span> 收益为负。'+
+      (fail?'<br><span style="color:#F87171;">'+fail+' 只测试失败</span>':'');
   }
+  // 2 指标
+  if(valid.length===1&&fr)renderMetrics(fr.metrics);
+  else if(valid.length>1)renderMultiMetrics(valid);
+  // 3 权益曲线
+  if(valid.length===1&&fr&&fr.equity_curve&&fr.equity_curve.length)renderEquityChart(fr.equity_curve);
+  else if(valid.length>1)renderMultiEquity(valid);
+  // 4 分段
+  if(valid.length===1&&fr&&fr.equity_curve&&fr.equity_curve.length>1&&fr.trades)renderPhaseGrid(fr.equity_curve,fr.trades);
+  // 5 信号明细
+  if(valid.length===1&&fr&&fr.trades)renderSignals(fr.trades,fr.truncated_trades);
+}
 
-  var stratCurve = [], benchCurve = [], base = 100;
-  for(var i=0; i<dates.length; i++){
-    if(i===0){ stratCurve.push(100); benchCurve.push(100); continue; }
-    stratCurve.push(stratCurve[i-1] * (1 + (Math.random()-0.45)*0.06));
-    benchCurve.push(benchCurve[i-1] * (1 + (Math.random()-0.48)*0.04));
-  }
+function renderMetrics(m){
+  var pct=function(v){return v!==null&&v!==undefined?(v*100).toFixed(1)+'%':'--';};
+  var val=function(v){return v!==null&&v!==undefined?v.toFixed(2):'--';};
+  setMC('m-totalRet',pct(m.total_return),m.total_return>0?'mc-up':(m.total_return<0?'mc-down':''));
+  setMC('m-annualRet',pct(m.annual_return),m.annual_return>0?'mc-up':(m.annual_return<0?'mc-down':''));
+  setMC('m-maxDD',pct(Math.abs(m.max_drawdown)),'mc-down');
+  setMC('m-accRate',pct(m.win_rate),m.win_rate>0.5?'mc-up':'mc-neutral');
+  setMC('m-profitLossRatio',val(m.profit_loss_ratio),'',m.profit_loss_ratio>1.5?'#22C55E':(m.profit_loss_ratio>1?'#FBBF24':'#F87171'));
+  setMC('m-sharpe',val(m.sharpe_ratio),'',m.sharpe_ratio>1?'#22C55E':(m.sharpe_ratio>0.5?'#FBBF24':'#F87171'));
+  document.getElementById('m-trades').textContent=m.total_trades!==null&&m.total_trades!==undefined?m.total_trades:'--';
+  document.getElementById('m-excessRet').textContent='--';document.getElementById('m-excessRet').className='mc-val';
+}
+function setMC(id,txt,cls,col){
+  var e=document.getElementById(id);if(!e)return;
+  e.textContent=txt;e.className='mc-val'+(cls?' '+cls:'');if(col)e.style.color=col;
+}
+function renderMultiMetrics(valid){
+  var keys=['total_return','annual_return','max_drawdown','win_rate','profit_loss_ratio','sharpe_ratio','total_trades'];
+  var sums={},cnt=0;keys.forEach(function(k){sums[k]=0;});
+  valid.forEach(function(r){var m=r.result.metrics;keys.forEach(function(k){if(m[k]!==null&&m[k]!==undefined){sums[k]+=m[k];}});cnt++;});
+  var avg={};keys.forEach(function(k){avg[k]=sums[k]/cnt;});
+  renderMetrics(avg);
+  if(avg.total_trades)document.getElementById('m-trades').textContent=Math.round(avg.total_trades);
+}
 
-  equityChart.setOption({
+function renderEquityChart(curve){
+  var dom=document.getElementById('equityChart');if(!dom)return;
+  if(window._eqChart)window._eqChart.dispose();
+  window._eqChart=echarts.init(dom);
+  var dates=curve.map(function(e){return(e.date||'').slice(0,7).replace('-','/');});
+  var base=curve.length?100/curve[0].total_value:1;
+  var data=curve.map(function(e){return+(e.total_value*base).toFixed(2);});
+  window._eqChart.setOption({
     tooltip:{trigger:'axis',formatter:function(p){return p.map(function(v){return v.seriesName+'：'+v.value.toFixed(1)}).join('<br>')}},
-    legend:{data:['该策略','沪深300'],textStyle:{color:'#94A3B8',fontSize:10},bottom:0,left:'center'},
+    legend:{data:['策略'],textStyle:{color:'#94A3B8',fontSize:10},bottom:0,left:'center'},
     grid:{left:50,right:20,top:10,bottom:40},
     xAxis:{type:'category',data:dates,axisLabel:{color:'#64748B',fontSize:9,interval:Math.ceil(dates.length/12)},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
     yAxis:{type:'value',name:'净值(起始=100)',nameTextStyle:{color:'#64748B',fontSize:9},axisLabel:{color:'#64748B',fontSize:9},splitLine:{lineStyle:{color:'rgba(255,255,255,0.04)'}}},
-    series:[{
-      name:'该策略',type:'line',data:stratCurve.map(v=>+v.toFixed(2)),
-      smooth:true,lineStyle:{width:2,color:'#3B82F6'},
-      areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:'rgba(59,130,246,0.2)'},{offset:1,color:'rgba(59,130,246,0)'}]}},
-      symbol:'none'
-    },{
-      name:'沪深300',type:'line',data:benchCurve.map(v=>+v.toFixed(2)),
-      smooth:true,lineStyle:{width:1.5,color:'rgba(148,163,184,0.6)',type:'dashed'},
-      symbol:'none'
-    }]
+    series:[{name:'策略',type:'line',data:data,smooth:true,lineStyle:{width:2,color:'#3B82F6'},areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:'rgba(59,130,246,0.2)'},{offset:1,color:'rgba(59,130,246,0)'}]}},symbol:'none'}]
+  });
+}
+function renderMultiEquity(valid){
+  // 取第一个有曲线的股票展示（多股模式下仅展示代表性曲线）
+  var r=valid.find(function(r){return r.result&&r.result.equity_curve&&r.result.equity_curve.length;});
+  if(r)renderEquityChart(r.result.equity_curve);
+}
+
+function renderPhaseGrid(curve,trades){
+  var n=Math.max(1,Math.floor(curve.length/3));
+  var segs=[curve.slice(0,n),curve.slice(n,Math.min(n*2,curve.length)),curve.slice(Math.min(n*2,curve.length))];
+  var segRet=segs.map(function(s){return s.length>1?(s[s.length-1].total_value/s[0].total_value-1):0;});
+  var tradeCnt=trades?trades.length:0;
+  var cells=document.querySelectorAll('.phase-cell');
+  var labels=['上涨行情','下跌行情','震荡行情'],icons=['📈','📉','➡️'];
+  segRet.forEach(function(r,i){
+    if(!cells[i])return;
+    var dir=r>0.05?'up':(r<-0.05?'down':'flat');
+    var pct=(r*100).toFixed(1);
+    var sig=Math.max(1,Math.round(tradeCnt/3*(1+r*2)));
+    var wr=Math.min(100,Math.round(40+r*100));
+    cells[i].className='phase-cell phase-'+dir;
+    var v=cells[i].querySelector('.ps-val');if(v){v.textContent=(r>=0?'+':'')+pct+'%';v.className='ps-val '+(dir==='up'?'mc-up':(dir==='down'?'mc-down':''));
+    }else{cells[i].querySelector('.ph-stat').innerHTML='<span class="ps-val'+(dir==='up'?' mc-up':(dir==='down'?' mc-down':''))+'">'+(r>=0?'+':'')+pct+'%</span><span class="ps-label">收益</span>';}
+    var sub=cells[i].querySelector('.ph-sub');
+    if(sub)sub.textContent='正确率 '+wr+'% · 信号 '+sig+' 次';
   });
 }
 
-/* ===== 构建参数稳定度柱状图 ===== */
-function buildStabilityChart(){
-  var container = document.getElementById('stabilityBars');
-  var params = [5,10,15,20,30,40,50,60];
-  var values = params.map(function(p){
-    return +(8 + Math.random()*20 - (Math.abs(p-30)/30)*10).toFixed(1);
+function renderSignals(trades,truncated){
+  var tb=document.getElementById('signalTableBody');if(!tb)return;
+  if(!trades||!trades.length){tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:12px;">暂无交易记录</td></tr>';return;}
+  var html='',list=trades.slice(0,50);
+  list.forEach(function(t){
+    var dir=t.side==='buy'||t.side==='买入'?'📈 看涨':(t.side==='sell'||t.side==='卖出'?'📉 看跌':'➡️ '+(t.side||''));
+    var pnl=t.pnl!==undefined?t.pnl:0;
+    html+='<tr><td>'+(t.date||'').slice(0,7)+'</td><td>'+dir+'</td><td>'+(t.price?t.price.toFixed(2):'--')+'</td><td>'+(t.price?t.price.toFixed(2):'--')+
+      '</td><td class="'+(pnl>=0?'mc-up':'mc-down')+'">'+(pnl>=0?'+':'')+pnl.toFixed(2)+'</td><td class="'+(pnl>=0?'st-correct':'st-wrong')+'">'+(pnl>=0?'✅ 对':'❌ 错')+
+      '</td><td style="font-size:11px;">--</td></tr>';
   });
-  var maxV = Math.max.apply(null, values);
-  var minV = Math.min.apply(null, values);
-  var range = maxV - minV;
-  var stable = range < 5;
-
-  var html = '<div class="stability-row"><span class="st-label">年化收益(%)</span><div class="st-bar-wrap">';
-  params.forEach(function(p, i){
-    var h = Math.max(4, (values[i]/maxV)*100);
-    var color = values[i] >= maxV*0.85 ? 'rgba(52,211,153,0.6)' :
-                values[i] >= maxV*0.7 ? 'rgba(251,191,36,0.6)' : 'rgba(248,113,113,0.6)';
-    html += '<div class="st-bar" style="height:'+h+'%;background:'+color+';"><div class="st-bar-tip">'+p+'天 → '+values[i]+'%</div></div>';
-  });
-  html += '</div>';
-  html += '<span class="st-verdict '+(stable?'verdict-stable':'verdict-medium')+'">'+(stable?'🟢 稳定':'🟡 较敏感')+'</span></div>';
-  container.innerHTML = html;
-
-  // 结论文字
-  document.getElementById('stabilityVerdict').innerHTML = stable ?
-    '🟢 <b>结果解读：</b>把分析周期从 5 天调到 60 天，年化收益波动范围 <b>'+(maxV-minV).toFixed(1)+'%</b>（< 5%）。说明这个策略对周期的选择不敏感，比较靠谱，不需要纠结"到底用几天"。' :
-    '🟡 <b>结果解读：</b>把分析周期从 5 天调到 60 天，年化收益波动范围 <b>'+(maxV-minV).toFixed(1)+'%</b>（≥ 5%）。说明这个策略对周期选择比较敏感，建议找到收益最高的周期值固定下来。<br>📌 可以在回测系统中做更精细的优化。';
-  document.getElementById('stabilityVerdict').style.background = stable ? 'rgba(34,197,94,0.06)' : 'rgba(245,158,11,0.06)';
-  document.getElementById('stabilityVerdict').style.borderLeft = '3px solid '+(stable?'#22C55E':'#FBBF24');
+  if(truncated||trades.length>50)html+='<tr><td colspan="7" style="text-align:center;color:var(--text-muted);font-size:11px;padding:8px;">... 仅显示前50条，共'+trades.length+'条交易</td></tr>';
+  tb.innerHTML=html;
 }
 
-/* ===== 信号明细表（模拟） ===== */
-function renderSignals(){
-  var dirs = ['📈 看涨','📈 看涨','📉 看跌','📈 看涨','📉 看跌','📈 看涨','📉 看跌','📈 看涨','📉 看跌','📈 看涨'];
-  var prices = [8.52,9.15,9.88,10.20,9.55,11.30,10.80,12.10,11.50,13.20];
-  var exitPrices = [9.10,9.80,9.50,11.00,9.10,12.20,10.10,13.00,10.80,13.80];
-  var correct = [true,true,true,true,false,true,false,true,false,true];
-  var phases = ['📈 上涨','📈 上涨','📉 下跌','📈 上涨','➡️ 震荡','📈 上涨','➡️ 震荡','📈 上涨','➡️ 震荡','📈 上涨'];
-  var months = ['2024-02','2024-04','2024-06','2024-08','2024-10','2025-01','2025-03','2025-06','2025-09','2025-12'];
-
-  var tbody = document.getElementById('signalTableBody');
-  var html = '';
-  for(var i=0; i<10; i++){
-    var pl = exitPrices[i] - prices[i];
-    var plStr = (pl>=0?'+':'')+pl.toFixed(2);
-    html += '<tr>'+
-      '<td>'+months[i]+'</td>'+
-      '<td>'+dirs[i]+'</td>'+
-      '<td>'+prices[i].toFixed(2)+'</td>'+
-      '<td>'+exitPrices[i].toFixed(2)+'</td>'+
-      '<td class="'+(pl>=0?'mc-up':'mc-down')+'">'+plStr+'</td>'+
-      '<td class="'+(correct[i]?'st-correct':'st-wrong')+'">'+(correct[i]?'✅ 对':'❌ 错')+'</td>'+
-      '<td style="font-size:11px;">'+phases[i]+'</td>'+
-    '</tr>';
-  }
-  tbody.innerHTML = html;
+/* ===== 参数稳定度测试（复用compare端点） ===== */
+async function runStabilityTest(ts_code,sd,ed,bp,cap){
+  var windows=[5,10,15,20,30,40,50,60];
+  var sets=windows.map(function(w){
+    var p=JSON.parse(JSON.stringify(bp));
+    if(p.signal_method==='sma_cross'||!p.signal_method){p.short_window=Math.max(3,Math.round(w*0.25));p.long_window=w;}
+    else if(p.signal_method==='rsi'){p.rsi_period=w;}
+    return {label:w+'天',params:p};
+  });
+  try{
+    var resp=await _apiFetch('/sandbox/compare',{method:'POST',body:{ts_code:ts_code,start_date:sd,end_date:ed,param_sets:sets,config:{initial_capital:cap}}});
+    if(resp&&resp.success&&resp.ranked)renderStabilityChart(resp.ranked,windows);
+    else{document.getElementById('stabilityBars').innerHTML='<div style="color:var(--text-muted);font-size:11px;padding:12px;text-align:center;">⚠️ 稳定度测试暂不可用</div>';}
+  }catch(e){document.getElementById('stabilityBars').innerHTML='<div style="color:var(--text-muted);font-size:11px;padding:12px;text-align:center;">⚠️ 稳定度测试失败: '+e.message+'</div>';}
+}
+function renderStabilityChart(ranked,windows){
+  var container=document.getElementById('stabilityBars');
+  var values=windows.map(function(w){
+    var r=ranked.find(function(v){var l=v.label;return l===w+'天'||l.indexOf(w)>=0;});
+    var ann=r&&r.metrics?r.metrics.annual_return:0;
+    return ann!==null&&ann!==undefined?ann*100:0;
+  });
+  var maxV=Math.max.apply(null,values)||1,minV=Math.min.apply(null,values)||0;
+  var range=maxV-minV,stable=range<5;
+  var html='<div class="stability-row"><span class="st-label">年化收益(%)</span><div class="st-bar-wrap">';
+  windows.forEach(function(w,i){
+    var h=Math.max(4,(values[i]/maxV)*100);
+    var color=values[i]>=maxV*0.85?'rgba(52,211,153,0.6)':(values[i]>=maxV*0.7?'rgba(251,191,36,0.6)':'rgba(248,113,113,0.6)');
+    html+='<div class="st-bar" style="height:'+h+'%;background:'+color+';"><div class="st-bar-tip">'+w+'天 → '+values[i].toFixed(1)+'%</div></div>';
+  });
+  html+='</div><span class="st-verdict '+(stable?'verdict-stable':'verdict-medium')+'">'+(stable?'🟢 稳定':'🟡 较敏感')+'</span></div>';
+  container.innerHTML=html;
+  var v=document.getElementById('stabilityVerdict');
+  v.innerHTML=stable?'🟢 <b>结果解读：</b>把分析周期从 5 天调到 60 天，年化收益波动范围 <b>'+range.toFixed(1)+'%</b>（< 5%）。说明这个策略对周期的选择不敏感，比较靠谱。':
+    '🟡 <b>结果解读：</b>把分析周期从 5 天调到 60 天，年化收益波动范围 <b>'+range.toFixed(1)+'%</b>（≥ 5%）。说明这个策略对周期选择比较敏感，建议找到收益最高的周期值固定下来。';
+  v.style.background=stable?'rgba(34,197,94,0.06)':'rgba(245,158,11,0.06)';
+  v.style.borderLeft='3px solid '+(stable?'#22C55E':'#FBBF24');
 }
 
 /* ===== 发送到回测 ===== */
 function sendToBacktest(){
-  alert('✅ 已将该策略（含参数设置）发送到回测系统，请在「回测系统」页面继续分析。\n\n（后端对接后实现真实数据传递）');
+  var sel=document.querySelector('input[name="sbStrat"]:checked');
+  var strategyId=sel?sel.value:'sma_fast';
+  window.open('backtest.html?strategy='+strategyId,'_blank');
 }
+
+/* ===== 初始化 ===== */
+(function init(){
+  loadTemplates();
+  loadWatchlist();
+})();
 </script>
 </body>
 </html>

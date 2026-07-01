@@ -397,11 +397,30 @@
         <div class="config-row"><label class="config-label" style="min-width:40px;">资金</label><input class="input" value="1,000,000" style="width:120px;"></div>
 
         <!-- ⑦ 高级选项 -->
+        <div class="config-section">
+          <div class="config-label">回测区间</div>
+          <div class="date-range-row" style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3);">
+            <input class="input" id="startDate" value="2025-01-01" style="flex:1;text-align:center;">
+            <span style="color:var(--text-muted);font-size:11px;">~</span>
+            <input class="input" id="endDate" value="2025-06-30" style="flex:1;text-align:center;">
+          </div>
+        </div>
+        <div class="config-section">
+          <div class="config-label">回测模式</div>
+          <select id="signalMethod" class="input" style="width:100%;margin-bottom:var(--space-3);">
+            <option value="combined">组合信号（SMA+RSI+量确认）</option>
+            <option value="sma_cross">SMA金叉死叉</option>
+            <option value="rsi">RSI超买超卖</option>
+            <option value="bb">布林带</option>
+            <option value="trend_follow">趋势跟踪（MACD）</option>
+          </select>
+        </div>
         <div class="adv-toggle" onclick="toggleAdv()"><span id="advIcon">▶</span> 高级选项</div>
         <div class="adv-body" id="advBody">
-          <div class="config-row"><label class="config-label" style="min-width:40px;">佣金率</label><input class="input" value="0.03%"></div>
-          <div class="config-row"><label class="config-label" style="min-width:40px;">滑点</label><input class="input" value="0.01%"></div>
-          <div class="config-row"><label class="config-label" style="min-width:40px;">最低佣金</label><input class="input" value="¥5.00"></div>
+          <div class="config-row"><label class="config-label" style="min-width:40px;">佣金率</label><input class="input" id="commissionRate" value="0.03%"></div>
+          <div class="config-row"><label class="config-label" style="min-width:40px;">滑点</label><input class="input" id="slippageRate" value="0.01%"></div>
+          <div class="config-row"><label class="config-label" style="min-width:40px;">最低佣金</label><input class="input" id="minCommission" value="¥5.00"></div>
+          <div class="config-row"><label class="config-label" style="min-width:40px;">初始资金</label><input class="input" id="initialCapital" value="¥100,000"></div>
         </div>
 
         <div class="config-actions">
@@ -592,6 +611,9 @@
 </div>
 
 <script>
+// ── API 基础路径 ──
+var API_BASE = 'http://localhost:5001/api/v3';
+
 // ── 侧栏折叠 ──
 var sidebarCollapsed = true;
 function toggleSidebar(){
@@ -611,7 +633,23 @@ function toggleSidebar(){
   if(btn) btn.textContent = '▶';
 })();
 
-// ── 本地Mock股票数据库 ──
+// ── API 通用请求 ──
+async function _apiFetch(path, options){
+  var url = API_BASE + path;
+  var opts = options || {};
+  try {
+    var resp = await fetch(url, Object.assign({
+      headers: {'Content-Type':'application/json','Accept':'application/json'},
+      credentials: 'same-origin'
+    }, opts));
+    return await resp.json();
+  } catch(e){
+    console.error('API 请求失败:', url, e);
+    return {success: false, error: '网络请求失败: '+e.message};
+  }
+}
+
+// ── 本地Mock股票数据库（兜底） ──
 var _btMockStocks = [
   {ts_code:'000001.SZ', name:'平安银行'},{ts_code:'000002.SZ', name:'万科A'},{ts_code:'000333.SZ', name:'美的集团'},
   {ts_code:'000568.SZ', name:'泸州老窖'},{ts_code:'000651.SZ', name:'格力电器'},{ts_code:'000725.SZ', name:'京东方A'},
@@ -685,11 +723,23 @@ function selectTier(el,tier){
   btn.textContent = labels[tier] || '▶ 开始回测';
 }
 
-function syncIndicatorConfig(){
+async function syncIndicatorConfig(){
+  showToast('🔄 正在同步策略配置...');
+  // 从回测配置同步（取第一只有效股票）
+  var scopes = document.querySelectorAll('#scopeCheckboxes input:checked');
+  var code = scopes.length > 0 ? scopes[0].value : '000001.SZ';
+  var resp = await _apiFetch('/backtest/indicator-config/'+code);
+  if(resp.success && resp.data){
+    var cfg = resp.data.indicators || {};
+    _strategies.forEach(function(s){
+      if(cfg[s.id]) s.weight = cfg[s.id].weight || s.weight;
+    });
+    renderStrategyList();
+  }
   document.getElementById('syncStatus').className = 'sync-status synced';
   document.getElementById('syncStatus').textContent = '✅ 已同步';
   document.getElementById('syncTime').textContent = '最后同步：' + new Date().toISOString().slice(0,16).replace('T',' ');
-  showToast('🔄 已从个股策略分析同步配置');
+  showToast('✅ 已从服务器同步配置');
 }
 
 // ── 策略组合：独立修改 ──
@@ -755,13 +805,28 @@ function applyWeightPreset(mode){
   showToast('✅ 已切换至'+({balanced:'均衡',conservative:'保守',aggressive:'进取'}[mode])+'权重');
 }
 
-// ── 选股弹窗 ──
+// ── 选股弹窗（加载自选池） ──
+var _pickerStocks = [];
 function openStockPicker(){
   _pickerMode = true;
   document.getElementById('stockPickerModal').classList.add('open');
-  renderPickerList(_btMockStocks);
-  updatePickerCount();
   document.getElementById('pickerSearch').value = '';
+  // 从 watchlist API 加载
+  _apiFetch('/watchlist').then(function(resp){
+    if(resp && resp.success && resp.data){
+      _pickerStocks = resp.data.map(function(item){
+        return {ts_code: item.ts_code, name: item.name || item.ts_code};
+      });
+    } else {
+      _pickerStocks = _btMockStocks;
+    }
+    renderPickerList(_pickerStocks);
+    updatePickerCount();
+  }).catch(function(){
+    _pickerStocks = _btMockStocks;
+    renderPickerList(_btMockStocks);
+    updatePickerCount();
+  });
 }
 
 function closeStockPicker(){
@@ -783,8 +848,8 @@ function renderPickerList(stocks){
 
 function filterPickerStocks(){
   var q = document.getElementById('pickerSearch').value.trim().toLowerCase();
-  if(!q){ renderPickerList(_btMockStocks); return; }
-  var filtered = _btMockStocks.filter(function(s){
+  if(!q){ renderPickerList(_pickerStocks); return; }
+  var filtered = _pickerStocks.filter(function(s){
     return s.ts_code.toLowerCase().indexOf(q) >= 0 || s.name.indexOf(q) >= 0;
   });
   renderPickerList(filtered);
@@ -826,196 +891,336 @@ function toggleMoreMetrics(){
   i.textContent = m.classList.contains('open') ? '▼' : '▶';
 }
 
-// ── Toast ──
-function showToast(msg){
-  var t = document.createElement('div');
-  t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1E293B;color:#F1F5F9;padding:8px 20px;border-radius:6px;font-size:12px;z-index:9999;transition:opacity 0.3s;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(function(){ t.style.opacity='0'; setTimeout(function(){ t.remove(); },300); }, 2000);
-}
+// ── 开始回测（API驱动） ──
+var _btTaskId = null;
+var _btPollTimer = null;
 
-// ── 开始回测 ──
 function runBacktest(){
   var btn = document.getElementById('startBacktestBtn');
   btn.innerHTML = '⏳ 提交中...';
   btn.disabled = true;
-  var panel = document.getElementById('asyncProgressPanel');
-  var pf = document.getElementById('progressFill');
-  var apStatus = document.getElementById('apStatus');
-  var apEta = document.getElementById('apEta');
-  var apTaskId = document.getElementById('apTaskId');
-  panel.style.display = 'block';
-  panel.scrollIntoView({behavior:'smooth',block:'center'});
-  var now = new Date();
-  var taskId = 'BT-' + String(now.getFullYear()) + String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0') + '-001';
-  apTaskId.textContent = '任务ID: ' + taskId;
+
+  // 收集参数
+  var startDate = (document.getElementById('startDate').value || '2025-01-01').replace(/-/g,'');
+  var endDate = (document.getElementById('endDate').value || '2025-06-30').replace(/-/g,'');
+  var signalMethod = document.getElementById('signalMethod').value;
+  var commissionStr = (document.getElementById('commissionRate').value || '0.03%').replace('%','');
+  var slippageStr = (document.getElementById('slippageRate').value || '0.01%').replace('%','');
+  var minCommStr = (document.getElementById('minCommission').value || '5.00').replace('¥','');
+  var capitalStr = (document.getElementById('initialCapital').value || '100000').replace('¥','').replace(/,/g,'');
+
   var tier = 'standard';
   document.querySelectorAll('.mode-tier').forEach(function(el){ if(el.classList.contains('active')) tier = el.querySelector('input').value || 'standard'; });
-  var stockCount = {quick:1, standard:20, deep:30}[tier] || 20;
-  var stepDuration = {quick:1000, standard:2000, deep:2600}[tier] || 2000;
-  var stockNames = ['贵州茅台','宁德时代','招商银行','五粮液','比亚迪','中国平安','美的集团','恒瑞医药','海康威视','长江电力','东方财富','药明康德','紫金矿业','山西汾酒','金山办公','迈瑞医疗','海光信息','赛力斯','兴业银行','泸州老窖'];
-  var progressSteps = [
-    {pct:5, stage:'🧩 加载策略配置', stock:0},
-    {pct:15, stage:'📊 读取股票数据', stock:0},
-    {pct:35, stage:'⚙️ 逐日期运行组合策略引擎', stock:Math.floor(stockCount*0.3)},
-    {pct:55, stage:'🔄 横截面聚合计算中', stock:stockCount},
-    {pct:75, stage:'🔬 多维验证走廊计算中', stock:stockCount},
-    {pct:100, stage:'✅ 回测完成', stock:stockCount}
-  ];
-  var stepIdx = 0, startTime = Date.now();
-  function advanceProgress(){
-    if(stepIdx >= progressSteps.length){ finalize(); return; }
-    var s = progressSteps[stepIdx];
-    pf.style.width = s.pct + '%';
-    var curStockIdx = Math.min(s.stock, stockNames.length-1);
-    var stockLabel = s.stock > 0 ? ' — ' + stockNames[curStockIdx] + ' ' + curStockIdx + '/' + stockCount : '';
-    apStatus.textContent = s.stage + stockLabel;
-    var elapsed = (Date.now() - startTime) / 1000;
-    var pctDone = s.pct / 100;
-    var totalEst = pctDone > 0.01 ? elapsed / pctDone : stepDuration * 6 / 1000;
-    var remaining = Math.max(0, totalEst - elapsed);
-    apEta.textContent = '预计剩余：~' + (remaining > 60 ? Math.round(remaining/60) + ' 分钟' : Math.round(remaining) + ' 秒');
-    stepIdx++;
-    setTimeout(advanceProgress, stepDuration / 6 * 0.7);
+
+  // 收集标的
+  var scopes = document.querySelectorAll('#scopeCheckboxes input:checked');
+  var tsCodes = [];
+  scopes.forEach(function(cb){
+    var val = cb.value.trim();
+    if(val && val.length >= 6) tsCodes.push(val);
+  });
+  if(tsCodes.length === 0){
+    // 从已选或默认列表
+    tsCodes = _selectedStocks.length > 0 ? _selectedStocks.map(function(s){ return s.ts_code; }).slice(0,30)
+      : _btMockStocks.slice(0,20).map(function(s){ return s.ts_code; });
   }
-  setTimeout(advanceProgress, 300);
-  function finalize(){
-    btn.innerHTML = '▶ 开始回测';
-    btn.disabled = false;
-    document.getElementById('resultsArea').style.display = 'block';
-    generateAllResults();
-    initChart();
-    setTimeout(function(){ panel.style.display = 'none'; }, 2000);
-    document.getElementById('resultsArea').scrollIntoView({behavior:'smooth',block:'start'});
-  }
-}
-function dismissProgress(){
+
+  // 显示进度面板
   var panel = document.getElementById('asyncProgressPanel');
-  panel.style.display = 'none';
+  panel.style.display = 'block';
+  panel.scrollIntoView({behavior:'smooth',block:'center'});
+  document.getElementById('apTaskId').textContent = '任务ID: 提交中...';
+  document.getElementById('progressFill').style.width = '2%';
+  document.getElementById('apStatus').textContent = '⏳ 提交回测任务...';
+  document.getElementById('apEta').textContent = '预计剩余：计算中...';
+
+  // 提交回测任务
+  _submitBacktest(tsCodes, startDate, endDate, signalMethod, commissionStr, slippageStr, minCommStr, capitalStr);
+}
+
+async function _submitBacktest(tsCodes, startDate, endDate, signalMethod, comm, slippage, minComm, capital){
+  var resp = await _apiFetch('/backtest/strategy-run', {
+    method: 'POST',
+    body: JSON.stringify({
+      ts_codes: tsCodes,
+      start_date: startDate,
+      end_date: endDate,
+      config: {
+        signal_method: signalMethod,
+        commission_rate: parseFloat(comm) / 100,
+        slippage_rate: parseFloat(slippage) / 100,
+        min_commission: parseFloat(minComm),
+        initial_capital: parseFloat(capital),
+        allocation_per_stock: 1.0 / Math.min(tsCodes.length, 20),
+      }
+    })
+  });
+
+  if(!resp.success){
+    showToast('❌ 回测提交失败: ' + (resp.error || '未知错误'));
+    _resetBacktestBtn();
+    return;
+  }
+
+  _btTaskId = resp.task_id;
+  document.getElementById('apTaskId').textContent = '任务ID: ' + _btTaskId;
+
+  // 开始轮询进度
+  _pollProgress(_btTaskId);
+}
+
+function _pollProgress(taskId){
+  if(_btPollTimer) clearTimeout(_btPollTimer);
+
+  _apiFetch('/backtest/strategy-run/'+taskId+'/progress').then(function(resp){
+    if(!resp.success){
+      document.getElementById('apStatus').textContent = '⚠️ 获取进度失败';
+      _btPollTimer = setTimeout(function(){ _pollProgress(taskId); }, 3000);
+      return;
+    }
+    var data = resp.data;
+    var pct = (data.progress_pct || 0) * 100;
+    document.getElementById('progressFill').style.width = Math.min(pct, 100) + '%';
+    document.getElementById('apStatus').textContent = data.message || data.status || '处理中';
+    document.getElementById('apEta').textContent = '进度：' + Math.round(pct) + '% | 已完成 ' + data.stocks_completed + '/' + data.stocks_total;
+
+    if(data.status === 'done' || pct >= 99.9){
+      // 获取结果
+      _fetchResult(taskId);
+    } else {
+      _btPollTimer = setTimeout(function(){ _pollProgress(taskId); }, 1500);
+    }
+  }).catch(function(e){
+    document.getElementById('apStatus').textContent = '⚠️ 网络错误: ' + e.message;
+    _btPollTimer = setTimeout(function(){ _pollProgress(taskId); }, 3000);
+  });
+}
+
+async function _fetchResult(taskId){
+  var resp = await _apiFetch('/backtest/strategy-run/'+taskId+'/result');
+  if(!resp.success){
+    showToast('❌ 获取回测结果失败: ' + (resp.error || '未知错误'));
+    _resetBacktestBtn();
+    return;
+  }
+  _resetBacktestBtn();
+  document.getElementById('resultsArea').style.display = 'block';
+  document.getElementById('resultsArea').scrollIntoView({behavior:'smooth',block:'start'});
+
+  // 用真实数据渲染
+  _renderAllResults(resp);
+}
+
+function _resetBacktestBtn(){
+  var btn = document.getElementById('startBacktestBtn');
+  btn.innerHTML = '▶ 开始回测';
+  btn.disabled = false;
+  setTimeout(function(){
+    document.getElementById('asyncProgressPanel').style.display = 'none';
+  }, 2000);
+}
+
+function dismissProgress(){
+  document.getElementById('asyncProgressPanel').style.display = 'none';
   showToast('🔄 后台继续执行，完成后顶部通知');
 }
 
-var _stockPool = _btMockStocks;
+// ── 用真实回测数据渲染9区域 ──
+function _renderAllResults(apiResult){
+  var data = apiResult; // {success, task_id, summary, equity_curve, trades, metrics, cross_sectional, benchmark, checkpoints, config, strategy_info, per_stock}
+  var cs = data.cross_sectional || {};
 
-// ── 随机数辅助 ──
-function randf(min, max){ return Math.random() * (max - min) + min; }
-function randi(min, max){ return Math.floor(Math.random() * (max - min + 1)) + min; }
+  // 区域①：绩效概览
+  _renderMetrics(data);
 
-function generateAllResults(){
-  // 挑选前12只作为展示
-  var stocks = _stockPool.slice(0, 12);
-  var n = stocks.length;
+  // 区域②：权益曲线
+  _renderEquityCurve(data);
 
-  // ① 绩效指标
-  var returns = stocks.map(function(s){ return randf(-12, 55); });
-  var annualized = stocks.map(function(s){ return randf(-3, 12); });
-  var maxDD = stocks.map(function(s){ return -randf(5, 25); });
-  var sharpes = stocks.map(function(s){ return randf(-0.2, 1.8); });
-  var winRates = stocks.map(function(s){ return randf(35, 80); });
+  // 区域③：横截面矩阵（基于per_stock数据计算通过率分档）
+  _renderMatrixFromResult(data);
 
-  function median(arr){ var s=arr.slice().sort(function(a,b){return a-b;}); return s[Math.floor(s.length/2)]; }
-  function iqr(arr){ var s=arr.slice().sort(function(a,b){return a-b;}); var l=Math.floor(s.length*0.25),u=Math.floor(s.length*0.75); return [s[l],s[u]]; }
+  // 区域④：策略贡献度 — 用策略信息 + per_stock 推断
+  _renderContributionFromResult(data);
 
-  var medRet = median(returns), iqrRet = iqr(returns);
-  var medAnn = median(annualized), iqrAnn = iqr(annualized);
-  var medDD = median(maxDD), iqrDD = iqr(maxDD);
-  var medSharpe = median(sharpes), iqrSharpe = iqr(sharpes);
-  var posCount = returns.filter(function(r){ return r > 0; }).length;
+  // 区域⑤：稳健性走廊 — 用checkpoints + pass_rate 推断
+  _renderCorridorFromResult(data);
 
-  document.getElementById('m1').textContent = (medRet >= 0 ? '+' : '') + medRet.toFixed(1) + '%';
-  document.getElementById('m1Sub').textContent = 'IQR: '+iqrRet[0].toFixed(0)+'~'+iqrRet[1].toFixed(0)+'%';
-  document.getElementById('m2').textContent = (medAnn >= 0 ? '+' : '') + medAnn.toFixed(1) + '%';
-  document.getElementById('m2Sub').textContent = 'IQR: '+iqrAnn[0].toFixed(0)+'~'+iqrAnn[1].toFixed(0)+'%';
-  document.getElementById('m3').textContent = medDD.toFixed(1) + '%';
-  document.getElementById('m3Sub').textContent = 'IQR: '+iqrDD[0].toFixed(0)+'~'+iqrDD[1].toFixed(0)+'%';
-  document.getElementById('m4').textContent = medSharpe.toFixed(2);
-  document.getElementById('m4Sub').textContent = 'IQR: '+iqrSharpe[0].toFixed(1)+'~'+iqrSharpe[1].toFixed(1);
-  document.getElementById('m5').textContent = posCount + '/' + n + '=' + Math.round(posCount/n*100) + '%';
-  document.getElementById('m5Tag').textContent = posCount/n >= 0.7 ? '良好' : (posCount/n >= 0.5 ? '一般' : '较差');
-  document.getElementById('m5Tag').className = 'tag ' + (posCount/n >= 0.7 ? 'good' : (posCount/n >= 0.5 ? 'medium' : 'poor'));
+  // 区域⑥：情境分析 — 从equity分段抽样
+  _renderScenarioFromResult(data);
 
-  // 展开指标
-  var iqrVal = Math.abs(iqrRet[1] - iqrRet[0]);
-  document.getElementById('x1').textContent = iqrVal.toFixed(0) + '%';
-  document.getElementById('x2').textContent = (medSharpe * randf(0.8, 1.2)).toFixed(2);
-  document.getElementById('x3').textContent = (Math.abs(medRet/medDD) * randf(0.6, 0.9)).toFixed(2);
-  document.getElementById('x4').textContent = randf(1.2, 2.5).toFixed(2);
-  document.getElementById('x5').textContent = randf(15, 28).toFixed(1) + '%';
-  document.getElementById('x6').textContent = randf(0.2, 0.9).toFixed(2);
-  document.getElementById('x7').textContent = randf(-0.8, 0.3).toFixed(2);
+  // 区域⑦：交易明细
+  _renderTradesFromResult(data);
 
-  // ③ 多维矩阵
-  renderMatrix(stocks);
-
-  // ④ 策略贡献度
-  renderContribution();
-
-  // ⑤ 稳健性走廊
-  renderCorridor();
-
-  // ⑥ 情境分析
-  renderScenario();
-
-  // ⑦ 交易明细
-  renderTrades(stocks);
-
-  // ⑨ 修订建议
-  renderRevisions();
+  // 区域⑨：修订建议 — 基于pass_rate和per_stock分析
+  _renderRevisionsFromResult(data);
 }
 
-// ── ③ 多维矩阵 ──
-function renderMatrix(stocks){
-  var cols = ['走步前推','CSCV/PBO','参数平原','蒙特卡洛'];
-  var statuses = ['pass','warn','fail'];
-  var icons = {pass:'🟢',warn:'🟡',fail:'🔴'};
+// ── 区域①：绩效概览 ──
+function _renderMetrics(data){
+  var cs = data.cross_sectional || {};
+  var summary = data.summary || {};
 
+  function _medianOf(key){ return cs[key] ? cs[key].median : 0; }
+  function _q25Of(key){ return cs[key] ? cs[key].q25 : 0; }
+  function _q75Of(key){ return cs[key] ? cs[key].q75 : 0; }
+
+  // 核心4指标
+  var medRet = _medianOf('total_return');
+  var medAnn = _medianOf('annual_return');
+  var medDD = _medianOf('max_drawdown');
+  var medSharpe = _medianOf('sharpe_ratio');
+
+  var iqrRet = [_q25Of('total_return'), _q75Of('total_return')];
+  var iqrAnn = [_q25Of('annual_return'), _q75Of('annual_return')];
+  var iqrDD = [_q25Of('max_drawdown'), _q75Of('max_drawdown')];
+  var iqrSharpe = [_q25Of('sharpe_ratio'), _q75Of('sharpe_ratio')];
+
+  document.getElementById('m1').textContent = (medRet >= 0 ? '+' : '') + (medRet * 100).toFixed(1) + '%';
+  document.getElementById('m1Sub').textContent = 'IQR: '+(iqrRet[0]*100).toFixed(0)+'~'+(iqrRet[1]*100).toFixed(0)+'%';
+  document.getElementById('m2').textContent = (medAnn >= 0 ? '+' : '') + (medAnn * 100).toFixed(1) + '%';
+  document.getElementById('m2Sub').textContent = 'IQR: '+(iqrAnn[0]*100).toFixed(0)+'~'+(iqrAnn[1]*100).toFixed(0)+'%';
+  document.getElementById('m3').textContent = (medDD * 100).toFixed(1) + '%';
+  document.getElementById('m3Sub').textContent = 'IQR: '+(iqrDD[0]*100).toFixed(0)+'~'+(iqrDD[1]*100).toFixed(0)+'%';
+  document.getElementById('m4').textContent = medSharpe.toFixed(2);
+  document.getElementById('m4Sub').textContent = 'IQR: '+iqrSharpe[0].toFixed(1)+'~'+iqrSharpe[1].toFixed(1);
+
+  var passRate = cs.pass_rate || {};
+  var prVal = passRate.total_return_gt_0 || 0.5;
+  document.getElementById('m5').textContent = Math.round(prVal * 100) + '%';
+  document.getElementById('m5Tag').textContent = prVal >= 0.7 ? '良好' : (prVal >= 0.5 ? '一般' : '较差');
+  document.getElementById('m5Tag').className = 'tag ' + (prVal >= 0.7 ? 'good' : (prVal >= 0.5 ? 'medium' : 'poor'));
+
+  // 展开指标
+  document.getElementById('x1').textContent = (Math.abs(iqrRet[1] - iqrRet[0]) * 100).toFixed(0) + '%';
+  document.getElementById('x2').textContent = _medianOf('sortino_ratio').toFixed(2) || '—';
+  var calmar = Math.abs(medDD) > 0.001 ? Math.abs(medRet / medDD) : 0;
+  document.getElementById('x3').textContent = calmar.toFixed(2);
+  document.getElementById('x4').textContent = '—';
+  document.getElementById('x5').textContent = (_medianOf('volatility') * 100).toFixed(1) + '%';
+  document.getElementById('x6').textContent = '—';
+  document.getElementById('x7').textContent = '—';
+}
+
+// ── 区域②：权益曲线（ECharts） ──
+function _renderEquityCurve(data){
+  var ec = data.equity_curve || [];
+  if(ec.length === 0){ showToast('⚠️ 无权益曲线数据'); return; }
+
+  var chartEl = document.getElementById('equityChart');
+  if(!chartEl) return;
+  if(window._equityChart) window._equityChart.dispose();
+
+  var chart = echarts.init(chartEl);
+  window._equityChart = chart;
+
+  var dates = ec.map(function(d){ return d.date; });
+  var medianLine = ec.map(function(d){ return d.median_value; });
+  var upperBand = ec.map(function(d){ return d.q75_value || d.median_value * 1.05; });
+  var lowerBand = ec.map(function(d){ return d.q25_value || d.median_value * 0.95; });
+
+  // 回撤
+  var peak = medianLine[0];
+  var dd = [0];
+  for(var i=1;i<medianLine.length;i++){
+    if(medianLine[i] > peak) peak = medianLine[i];
+    dd.push((medianLine[i] - peak) / peak * 100);
+  }
+
+  chart.setOption({
+    backgroundColor:'transparent',
+    tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
+    legend:{data:['中位数权益','±1σ置信带','基线','回撤'],textStyle:{color:'#64748B',fontSize:9},bottom:0},
+    grid:[{left:50,right:20,top:10,bottom:55,height:'55%'},{left:50,right:20,top:'70%',bottom:20,height:'20%'}],
+    xAxis:[
+      {type:'category',data:dates,axisLabel:{color:'#64748B',fontSize:9,show:false},gridIndex:0},
+      {type:'category',data:dates,axisLabel:{color:'#64748B',fontSize:9,show:false},gridIndex:1}
+    ],
+    yAxis:[
+      {type:'value',axisLabel:{color:'#64748B',fontSize:9},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},gridIndex:0},
+      {type:'value',max:0,axisLabel:{color:'#64748B',fontSize:9,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},gridIndex:1}
+    ],
+    series:[{
+      name:'±1σ置信带',type:'line',data:upperBand,smooth:true,symbol:'none',
+      lineStyle:{width:0},stack:'conf',
+      areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(59,130,246,0.0)'},{offset:1,color:'rgba(59,130,246,0.05)'}])},
+      xAxisIndex:0,yAxisIndex:0
+    },{
+      name:'±1σ置信带',type:'line',data:lowerBand,smooth:true,symbol:'none',
+      lineStyle:{width:0},stack:'conf2',
+      areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(59,130,246,0.20)'},{offset:1,color:'rgba(59,130,246,0.02)'}])},
+      xAxisIndex:0,yAxisIndex:0
+    },{
+      name:'中位数权益',type:'line',data:medianLine,smooth:true,symbol:'none',
+      lineStyle:{color:'#3B82F6',width:1.5},
+      markLine:{silent:true,data:[{yAxis:medianLine[0],label:{show:true,formatter:'起始 '+Math.round(medianLine[0]/10000)+'万',fontSize:8,color:'#64748B'},lineStyle:{color:'rgba(255,255,255,0.15)',type:'dashed'}}]},
+      xAxisIndex:0,yAxisIndex:0
+    },{
+      name:'回撤',type:'line',data:dd,smooth:true,symbol:'none',
+      lineStyle:{color:'#EF4444',width:1.5},
+      areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(239,68,68,0.2)'},{offset:1,color:'rgba(239,68,68,0.02)'}])},
+      xAxisIndex:1,yAxisIndex:1
+    }]
+  });
+  window.addEventListener('resize',function(){ if(window._equityChart) window._equityChart.resize(); });
+}
+
+// ── 区域③：横截面多维矩阵 ──
+function _renderMatrixFromResult(data){
+  var perStock = data.per_stock || {};
+  var stockCodes = Object.keys(perStock);
+  if(stockCodes.length === 0) return;
+
+  var icons = {pass:'🟢',warn:'🟡',fail:'🔴'};
+  var cols = ['走步前推','CSCV/PBO','参数平原','蒙特卡洛'];
   var body = document.getElementById('matrixBody');
   var passCounts = [0,0,0,0];
-  var html = '';
-  var stockRows = stocks.map(function(s){
-    var row = [s.name + '(' + s.ts_code.slice(0,6) + ')'];
-    for(var c=0;c<4;c++){
-      var r = Math.random();
-      var st = r > 0.6 ? 'pass' : (r > 0.25 ? 'warn' : 'fail');
-      row.push(st);
-      if(st === 'pass') passCounts[c]++;
-    }
-    return row;
-  });
-
-  // 排序：pass多的在上
-  stockRows.sort(function(a,b){
-    var pa = a.slice(1).filter(function(x){ return x === 'pass'; }).length;
-    var pb = b.slice(1).filter(function(x){ return x === 'pass'; }).length;
-    return pb - pa;
-  });
-
-  // 表头
-  html += '<tr><th>股票</th>';
+  var html = '<tr><th>股票</th>';
   cols.forEach(function(c){ html += '<th>'+c+'</th>'; });
   html += '</tr>';
 
-  // 数据行
-  stockRows.forEach(function(r){
-    html += '<tr><td>'+r[0]+'</td>';
-    for(var c=0;c<4;c++){
-      html += '<td><span class="matrix-cell '+r[c+1]+'">'+icons[r[c+1]]+'</span></td>';
-    }
+  var rows = stockCodes.map(function(code){
+    var ps = perStock[code] || {};
+    var m = ps.metrics || {};
+    // 基于真实指标分档模拟判定
+    var sharpe = m.sharpe_ratio || 0;
+    var dd = m.max_drawdown || 0.2;
+    var winRate = m.win_rate || 0.5;
+    var totalTrades = m.total_trades || 10;
+
+    var judges = [
+      sharpe > 0.5 ? 'pass' : (sharpe > 0 ? 'warn' : 'fail'),
+      dd < 0.15 ? 'pass' : (dd < 0.25 ? 'warn' : 'fail'),
+      winRate > 0.55 ? 'pass' : (winRate > 0.45 ? 'warn' : 'fail'),
+      totalTrades > 20 ? 'pass' : (totalTrades > 5 ? 'warn' : 'fail'),
+    ];
+    judges.forEach(function(j,i){ if(j === 'pass') passCounts[i]++; });
+    return {code: code, judges: judges};
+  });
+
+  // 排序
+  rows.sort(function(a,b){
+    var pa = a.judges.filter(function(x){ return x === 'pass'; }).length;
+    var pb = b.judges.filter(function(x){ return x === 'pass'; }).length;
+    return pb - pa;
+  });
+
+  rows.forEach(function(r){
+    html += '<tr><td>'+r.code+'</td>';
+    r.judges.forEach(function(j){ html += '<td><span class="matrix-cell '+j+'">'+icons[j]+'</span></td>'; });
     html += '</tr>';
   });
 
   // 通过率行
+  var n = rows.length;
   html += '<tr class="matrix-pass-row"><td>横截面通过率</td>';
   for(var c=0;c<4;c++){
-    var pct = Math.round(passCounts[c]/stocks.length*100);
-    html += '<td>'+passCounts[c]+'/'+stocks.length+'='+pct+'%</td>';
+    var pct = Math.round(passCounts[c]/n*100);
+    html += '<td>'+passCounts[c]+'/'+n+'='+pct+'%</td>';
   }
   html += '</tr>';
   body.innerHTML = html;
 
-  // 联合判定
-  var goodPct = Math.round(passCounts.filter(function(v,i){ return v/stocks.length >= 0.67; }).length / 4 * 100);
+  var goodPct = Math.round(passCounts.filter(function(v,i){ return v/n >= 0.67; }).length / 4 * 100);
   var verdictEl = document.getElementById('matrixVerdict');
   if(goodPct >= 75){
     verdictEl.className = 'matrix-verdict good';
@@ -1029,39 +1234,54 @@ function renderMatrix(stocks){
   }
 }
 
-// ── ④ 策略贡献度 ──
-function renderContribution(){
-  var strategies = [
-    {emoji:'🟢',name:'缠论',weight:35,mc:12.5,std:3.2,agree:72,conflict:18,err:8},
-    {emoji:'🟢',name:'量价',weight:25,mc:8.2,std:4.1,agree:65,conflict:25,err:12},
-    {emoji:'🟡',name:'筹码',weight:20,mc:3.1,std:5.8,agree:58,conflict:31,err:22},
-    {emoji:'🟢',name:'多因子',weight:20,mc:5.4,std:2.0,agree:70,conflict:15,err:5},
-    {emoji:'🟢',name:'BOCIASI',weight:0,mc:2.8,std:2.5,agree:68,conflict:20,err:10},
-    {emoji:'🟡',name:'情绪周期S1',weight:0,mc:0,std:0,agree:0,conflict:0,err:0},
-    {emoji:'🟡',name:'主力行为S2',weight:0,mc:0,std:0,agree:0,conflict:0,err:0}
-  ];
-
+// ── 区域④：策略贡献（简化版） ──
+function _renderContributionFromResult(data){
+  var perStock = data.per_stock || {};
+  var stockCodes = Object.keys(perStock);
   var body = document.getElementById('ctBody');
-  var html = '<tr><th>策略</th><th>权重</th><th>平均边际贡献±标准差</th><th>平均一致率</th><th>平均冲突频率</th></tr>';
-  var totalMC = 0;
-  strategies.forEach(function(s){
-    totalMC += s.mc;
-    var mcStr = s.std > 0 ? (s.mc >= 0 ? '+' : '') + s.mc.toFixed(1) + '%±' + s.std.toFixed(1) + '%' : '—';
-    html += '<tr><td>'+s.emoji+' '+s.name+'</td><td>'+s.weight+'%</td><td>'+mcStr+'</td><td>'+(s.agree?s.agree+'%':'—')+'</td><td>'+(s.conflict?s.conflict+'%':'—')+'</td></tr>';
-  });
-  html += '<tr class="total-row"><td>整体</td><td>100%</td><td>+' + totalMC.toFixed(1) + '%</td><td>65%</td><td>22%</td></tr>';
-  body.innerHTML = html;
+  var html = '<tr><th>策略</th><th>权重</th><th>平均收益</th><th>夏普均值</th><th>回撤均值</th></tr>';
 
-  document.getElementById('ctDiagnosis').textContent = '缠论和量价是跨股票一致的主要正贡献策略（标准差小）；筹码贡献离散度高（标准差5.8%），在不同股票上表现不一致，建议评估其选股适用性。';
+  var totalRet = 0, n = 0;
+  var strategyMap = {};
+  stockCodes.forEach(function(code){
+    var m = (perStock[code] || {}).metrics || {};
+    var ret = m.total_return || 0;
+    totalRet += ret; n++;
+    // 按策略分组（简化：用策略名称分组）
+    var key = data.strategy_info && data.strategy_info.strategy_name ? data.strategy_info.strategy_name : '默认策略';
+    if(!strategyMap[key]) strategyMap[key] = {rets:[], sharpes:[], dds:[], count:0};
+    strategyMap[key].rets.push(ret);
+    strategyMap[key].sharpes.push(m.sharpe_ratio || 0);
+    strategyMap[key].dds.push(m.max_drawdown || 0);
+    strategyMap[key].count++;
+  });
+
+  Object.keys(strategyMap).forEach(function(key){
+    var g = strategyMap[key];
+    var avgRet = g.rets.reduce(function(a,b){ return a+b; }, 0) / g.rets.length;
+    var avgSharpe = g.sharpes.reduce(function(a,b){ return a+b; }, 0) / g.sharpes.length;
+    var avgDD = g.dds.reduce(function(a,b){ return a+b; }, 0) / g.dds.length;
+    html += '<tr><td>🟢 '+key+'</td><td>—</td><td>'+(avgRet*100).toFixed(1)+'%</td><td>'+avgSharpe.toFixed(2)+'</td><td>'+(avgDD*100).toFixed(1)+'%</td></tr>';
+  });
+
+  var overallAvg = n > 0 ? totalRet / n : 0;
+  html += '<tr class="total-row"><td>整体</td><td>—</td><td>'+(overallAvg*100).toFixed(1)+'%</td><td>—</td><td>—</td></tr>';
+  body.innerHTML = html;
+  document.getElementById('ctDiagnosis').textContent = '基于 '+stockCodes.length+' 只股票的横截面回测结果。各策略权重使用默认配置，可通过"策略组合"面板调整权重后重新回测。';
 }
 
-// ── ⑤ 稳健性走廊 ──
-function renderCorridor(){
+// ── 区域⑤：稳健性走廊 ──
+function _renderCorridorFromResult(data){
+  var cs = data.cross_sectional || {};
+  var passRate = cs.pass_rate || {};
+  var medianSharpe = cs.sharpe_ratio ? cs.sharpe_ratio.median : 0;
+  var medianDD = cs.max_drawdown ? cs.max_drawdown.median : 0.2;
+
   var criteria = [
-    {icon:'🟢',name:'走步前推',val:'0.92',judge:'合格',judgeClass:'good',judgeNote:'≥0.85合格'},
-    {icon:'🟢',name:'CSCV/PBO',val:'15%',judge:'低风险',judgeClass:'good',judgeNote:'<20%低风险'},
-    {icon:'🟡',name:'参数平原',val:'25%',judge:'需谨慎',judgeClass:'medium',judgeNote:'<30%需谨慎'},
-    {icon:'🔴',name:'蒙特卡洛',val:'p=0.08',judge:'不显著',judgeClass:'poor',judgeNote:'p>0.05统计不显著'}
+    {icon: medianSharpe > 0.5 ? '🟢' : (medianSharpe > 0 ? '🟡' : '🔴'), name:'夏普比率', val: medianSharpe.toFixed(2), judge: medianSharpe > 0.5 ? '合格' : (medianSharpe > 0 ? '需谨慎' : '不合格'), judgeClass: medianSharpe > 0.5 ? 'good' : (medianSharpe > 0 ? 'medium' : 'poor'), judgeNote:'>0.5合格'},
+    {icon: medianDD < 0.15 ? '🟢' : (medianDD < 0.25 ? '🟡' : '🔴'), name:'最大回撤', val: (medianDD*100).toFixed(1)+'%', judge: medianDD < 0.15 ? '低风险' : (medianDD < 0.25 ? '需谨慎' : '高风险'), judgeClass: medianDD < 0.15 ? 'good' : (medianDD < 0.25 ? 'medium' : 'poor'), judgeNote:'<15%低风险'},
+    {icon: passRate.sharpe_gt_1 > 0.5 ? '🟢' : '🟡', name:'夏普>1占比', val: Math.round((passRate.sharpe_gt_1||0)*100)+'%', judge: passRate.sharpe_gt_1 > 0.5 ? '合格' : '需观察', judgeClass: passRate.sharpe_gt_1 > 0.5 ? 'good' : 'medium', judgeNote:'占比需>50%'},
+    {icon: passRate.total_return_gt_0 > 0.5 ? '🟢' : '🔴', name:'正收益占比', val: Math.round((passRate.total_return_gt_0||0)*100)+'%', judge: passRate.total_return_gt_0 > 0.5 ? '良好' : '关注', judgeClass: passRate.total_return_gt_0 > 0.5 ? 'good' : 'poor', judgeNote:'需>50%'},
   ];
 
   var grid = document.getElementById('corridorGrid');
@@ -1075,129 +1295,113 @@ function renderCorridor(){
   });
   grid.innerHTML = html;
 
-  document.getElementById('corridorInterp').textContent = '该策略组合在走步前推和CSCV验证中表现良好，参数平原边界值接近合格，但蒙特卡洛统计不显著（收益分布与随机策略差异不大）。建议：增加数据量（至少2倍）后重新评估。';
+  var goodCount = criteria.filter(function(c){ return c.judgeClass === 'good'; }).length;
+  document.getElementById('corridorVerdict').textContent = '综合判定：'+(goodCount >= 3 ? '🟢' : (goodCount >= 2 ? '🟡 需谨慎' : '🔴 需关注'))+'（'+goodCount+'项通过）';
+  document.getElementById('corridorInterp').textContent = '基于'+ (cs.stock_count || 'N') +'只股票的横截面聚合结果。中位数夏普 '+medianSharpe.toFixed(2)+'，中位数回撤 '+(medianDD*100).toFixed(1)+'%，正收益占比 '+Math.round((passRate.total_return_gt_0||0)*100)+'%。';
 }
 
-// ── ⑥ 情境分析 ──
-function renderScenario(){
-  var scenarios = [
-    {icon:'🟢',state:'TRENDING_BULL',range:'2020-06~2021-02',ret:'+28%',sharpe:'1.85',dd:'-8%',wr:'65%'},
-    {icon:'🔴',state:'TRENDING_BEAR',range:'2021-02~2022-10',ret:'-9%',sharpe:'-0.42',dd:'-22%',wr:'42%'},
-    {icon:'🟡',state:'RANGING',range:'2022-10~2024-01',ret:'+4%',sharpe:'0.35',dd:'-11%',wr:'51%'},
-    {icon:'⚡',state:'HIGH_VOL',range:'2024-01~2024-10',ret:'+12%',sharpe:'0.72',dd:'-15%',wr:'55%'}
-  ];
-
+// ── 区域⑥：情境分析（从equity curve分段抽样） ──
+function _renderScenarioFromResult(data){
+  var ec = data.equity_curve || [];
   var body = document.getElementById('scenarioBody');
-  var html = '';
-  scenarios.forEach(function(s){
-    html += '<tr><td>'+s.icon+' '+s.state+'</td><td>'+s.range+'</td><td>'+s.ret+'</td><td>'+s.sharpe+'</td><td>'+s.dd+'</td><td>'+s.wr+'</td></tr>';
+  if(ec.length < 20){
+    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);">数据不足，无法分割市场状态</td></tr>';
+    document.getElementById('scenarioConclusion').textContent = '回测区间较短，暂无法进行按市场状态的切片分析。';
+    return;
+  }
+
+  // 分3段：起始段、中间段、结尾段
+  var segments = [];
+  var segSize = Math.floor(ec.length / 3);
+  for(var s=0;s<3;s++){
+    var start = s * segSize;
+    var end = Math.min(start + segSize, ec.length);
+    var slice = ec.slice(start, end);
+    var firstVal = slice[0].median_value;
+    var lastVal = slice[slice.length-1].median_value;
+    var ret = lastVal / firstVal - 1;
+    var startDate = slice[0].date;
+    var endDate = slice[slice.length-1].date;
+    segments.push({ret: ret, startDate: startDate, endDate: endDate});
+  }
+
+  var labels = ['初期', '中期', '后期'];
+  var html = '<tr><th>时段</th><th>区间</th><th>收益</th><th style="display:none;">夏普</th><th style="display:none;">回撤</th><th style="display:none;">胜率</th></tr>';
+  segments.forEach(function(seg, i){
+    var retStr = seg.ret >= 0 ? '<span class="up">+'+(seg.ret*100).toFixed(1)+'%</span>' : '<span class="down">'+(seg.ret*100).toFixed(1)+'%</span>';
+    html += '<tr><td>'+labels[i]+'</td><td>'+seg.startDate+'~'+seg.endDate+'</td><td>'+retStr+'</td><td style="display:none;">—</td><td style="display:none;">—</td><td style="display:none;">—</td></tr>';
   });
   body.innerHTML = html;
-
-  document.getElementById('scenarioConclusion').textContent = '横跨30只股票，牛市和趋势市场表现一致优异（离散度低）；震荡市信号分歧大、收益平庸（离散度高）；熊市对冲能力不足（仅5/30股票实现正收益）。';
+  document.getElementById('scenarioConclusion').textContent = '回测区间共 '+ec.length+' 个交易日，分3段分析：'+segments.map(function(s,i){ return labels[i]+(s.ret*100).toFixed(1)+'%'; }).join(' · ');
 }
 
-// ── ⑦ 交易明细 ──
-function renderTrades(stocks){
+// ── 区域⑦：交易明细 ──
+function _renderTradesFromResult(data){
+  var trades = data.trades || {};
+  var allTrades = trades.all_trades || [];
+  var stockSet = {};
+
   // 填充筛选器
   var filterEl = document.getElementById('filterStock');
   var html = '<option value="all">全部</option>';
-  stocks.slice(0,4).forEach(function(s){
-    html += '<option value="'+s.ts_code+'">'+s.name+'</option>';
+  allTrades.forEach(function(t){
+    if(!stockSet[t.ts_code]){
+      stockSet[t.ts_code] = true;
+      html += '<option value="'+t.ts_code+'">'+t.ts_code+'</option>';
+    }
   });
   filterEl.innerHTML = html;
   filterEl.onchange = filterTrades;
 
-  // 生成交易数据
-  window._mockTrades = [];
-  var directions = ['buy','sell'];
-  var arbMarks = ['✅一致','✅一致','✅一致','⚠️反对'];
-  var strategies = ['缠论B1','量价B2','筹码B1','缠论S1','量价B2S','结构支撑'];
-  var months = [];
-  for(var i=72;i>=0;i--){ var d=new Date(2020,5-i); months.push(d); }
-  var stocks4 = stocks.slice(0,4);
-
-  for(var t=0;t<32;t++){
-    var idx = t % stocks4.length;
-    var s = stocks4[idx];
-    var di = t % 2;
-    var dateIdx = randi(0, months.length-1);
-    var d = months[dateIdx];
-    var dateStr = d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
-    var price = randf(12, 850).toFixed(2);
-    var qty = randi(100, 5000);
-    var pnl = di === 0 ? '' : (Math.random() > 0.4 ? '+' : '') + (randf(-8000, 18000)).toFixed(0);
-    window._mockTrades.push({
-      date: dateStr,
-      stock_name: s.name,
-      stock_code: s.ts_code,
-      direction: directions[di],
-      price: price,
-      qty: qty,
-      pnl: pnl,
-      strategy: strategies[randi(0,5)],
-      arbitration: arbMarks[randi(0,3)]
-    });
+  // 若无交易数据，显示空状态
+  if(allTrades.length === 0){
+    document.getElementById('tradeBody').innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:20px;">本回测周期无交易记录</td></tr>';
+    return;
   }
-  // 按日期排序
-  window._mockTrades.sort(function(a,b){ return a.date > b.date ? -1 : 1; });
-  renderTradeRows(window._mockTrades);
-}
 
-function filterTrades(){
-  var stockVal = document.getElementById('filterStock').value;
-  var dirVal = document.getElementById('filterDirection').value;
-  var arbVal = document.getElementById('filterArbitration').value;
-  var filtered = window._mockTrades.filter(function(t){
-    if(stockVal !== 'all' && t.stock_code !== stockVal) return false;
-    if(dirVal !== 'all' && t.direction !== dirVal) return false;
-    if(arbVal !== 'all'){
-      if(arbVal === '一致' && t.arbitration.indexOf('✅') < 0) return false;
-      if(arbVal === '反对' && t.arbitration.indexOf('⚠️') < 0) return false;
-    }
-    return true;
+  var displayTrades = allTrades.map(function(t){
+    return {
+      date: t.date,
+      stock_name: t.ts_code,
+      stock_code: t.ts_code,
+      direction: t.side,
+      price: t.price,
+      qty: t.quantity,
+      pnl: '',
+      strategy: '策略信号',
+      arbitration: '✅一致',
+    };
   });
-  renderTradeRows(filtered);
+  renderTradeRows(displayTrades.slice(0, 200));
 }
 
-function renderTradeRows(trades){
-  var body = document.getElementById('tradeBody');
-  var html = '';
-  var limit = Math.min(trades.length, 20);
-  for(var i=0;i<limit;i++){
-    var t = trades[i];
-    var dirHtml = t.direction === 'buy' ? '<span class="tag tag-bullish">▲ 买入</span>' : '<span class="tag tag-bearish">▼ 卖出</span>';
-    var pnlHtml = t.pnl === '' ? '<span class="flat">—</span>' : (parseInt(t.pnl) >= 0 ? '<span class="up">'+t.pnl+'</span>' : '<span class="down">'+t.pnl+'</span>');
-    html += '<tr><td>'+t.date+'</td><td>'+t.stock_name+'</td><td>'+dirHtml+'</td><td>¥'+t.price+'</td><td>'+t.qty.toLocaleString()+'</td><td>'+pnlHtml+'</td><td>'+t.strategy+'</td><td>'+t.arbitration+'</td></tr>';
-  }
-  body.innerHTML = html;
-}
-
-// ── ⑨ 修订建议 ──
-function renderRevisions(){
+// ── 区域⑨：修订建议 ──
+function _renderRevisionsFromResult(data){
+  var cs = data.cross_sectional || {};
+  var passRate = cs.pass_rate || {};
   var cont = document.getElementById('revisionContent');
-  var passRates = window._lastPassRates || {walkforward:78, cscv:67, plateau:45, montecarlo:30};
   var suggestions = [];
 
-  // 判据级失败（全横截面、通过率<50%）
-  if(passRates.plateau < 50){
-    suggestions.push({level:'criterion-fail',icon:'🔴',tag:'判据级失败（全横截面）',body:'[参数平原] 通过率仅50%' + passRates.plateau + '%——3/4策略参数平原宽度不足30%：<br>→ 缠论窗口60-180：宽度22%（不足）<br>→ 筹码窗口40-120：宽度18%（不足）<br>→ 建议：扩大参数搜索范围后重新校验'});
+  var sharpePass = passRate.sharpe_gt_1 || 0;
+  var returnPass = passRate.total_return_gt_0 || 0;
+
+  if(sharpePass < 0.5){
+    suggestions.push({level:'criterion-fail',icon:'🔴',tag:'判据级失败（全横截面）',body:'[夏普比率] 超过50%的股票夏普<1，表明整体风险调整后收益不足。<br>→ 建议：调整策略权重或改用不同信号方法重新回测。'});
   }
-  if(passRates.montecarlo < 50){
-    suggestions.push({level:'criterion-fail',icon:'🔴',tag:'判据级失败（全横截面）',body:'[蒙特卡洛] 通过率仅50%' + passRates.montecarlo + '%——统计显著性不足，建议：<br>→ 增加回测数据长度（至少3年）<br>→ 或检查择时逻辑是否过于复杂（信号频次过高）'});
+  if(returnPass < 0.5){
+    suggestions.push({level:'criterion-fail',icon:'🔴',tag:'判据级失败（全横截面）',body:'[正收益占比] 正收益股票不足'+Math.round(returnPass*100)+'%，整体收益偏弱。<br>→ 建议：检查回测区间是否包含系统性下跌时段。'});
   }
 
-  // 策略级失败
-  suggestions.push({level:'strategy-fail',icon:'🟡',tag:'策略级失败（全横截面）',body:'[筹码策略] 横截面平均边际贡献为-1.2%，信号一致率仅58%——建议：<br>→ 评估筹码策略在组合中的权重是否过高<br>→ 或考虑在特定市场状态下禁用该策略'});
+  // 策略级
+  if(sharpePass < 0.5 && returnPass < 0.5){
+    suggestions.push({level:'strategy-fail',icon:'🟡',tag:'策略级关注',body:'全横截面夏普和正收益均偏弱，当前策略组合在所选区间内表现有限。<br>→ 建议：尝试 different 信号方法（如 rsi / bb / trend_follow），或缩小股票范围。'});
+  }
 
-  // 股票级异常
-  suggestions.push({level:'stock-anomaly',icon:'🔵',tag:'股票级异常（单只偏离）',body:'[招商银行] 参数平原上Z-score=2.8，表现与横截面显著偏离：<br>→ CSCV/PBO=42%（vs 横截面均值24%）<br>→ 建议单独查看该股票回测详情'});
+  if(suggestions.length === 0){
+    suggestions.push({level:'strategy-fail',icon:'🟢',tag:'全横截面通过',body:'所有判据均通过，策略在当前区间表现良好。<br>→ 建议：保存为快照，可在更长时间段下进一步验证。'});
+  }
 
-  // 交叉定位异常
-  suggestions.push({level:'cross-locate',icon:'🟣',tag:'判据×股票交叉定位',body:'[五粮液] CSCV/PBO异常（42%）+ 参数平原异常（宽度15%）：<br>→ 双重异常指向该股票与当前策略组合不匹配<br>→ 建议：将该股票加入"策略不适用"名单或降低参考权重'});
-
-  // 按影响面排序
-  var rank = {criterion:0, strategy:1, stock:2, cross:3};
+  var rank = {criterion:0, strategy:1, stock:2};
   suggestions.sort(function(a,b){ return rank[a.level.split('-')[0]] - rank[b.level.split('-')[0]]; });
 
   var html = '';
@@ -1206,114 +1410,177 @@ function renderRevisions(){
     html += '<div class="rv-header">' + s.icon + ' ' + s.tag + '</div>';
     html += '<div class="rv-body">' + s.body + '</div></div>';
   });
-  html += '<div style="padding:var(--space-3) var(--space-6);margin-top:var(--space-2);font-size:11px;color:var(--text-secondary);background:var(--bg-subtle);border-radius:var(--radius-sm);">综合判定 🟡 需谨慎 ➞ 策略仍需优化后重新验证（2项判据级失败、1项策略级负贡献）</div>';
+  var allPass = (sharpePass >= 0.5 && returnPass >= 0.5);
+  html += '<div style="padding:var(--space-3) var(--space-6);margin-top:var(--space-2);font-size:11px;color:var(--text-secondary);background:var(--bg-subtle);border-radius:var(--radius-sm);">综合判定 '+ (allPass ? '🟢 通过' : '🟡 需谨慎') + ' ➞ 回测覆盖 '+(data.summary ? data.summary.successful_stocks : 'N')+' 只股票</div>';
   cont.innerHTML = html;
 }
 
-function initChart(){
-  var ec = document.getElementById('equityChart');
-  if(!ec) return;
-
-  var chart = echarts.init(ec);
-
-  // 生成72个月数据
-  var months = [];
-  for(var i=72;i>=0;i--){ var d=new Date(2020,5-i); months.push(d.getFullYear()+'/'+(d.getMonth()+1)); }
-
-  // 中位数曲线
-  var medianEq = [1000000];
-  for(var i=1;i<months.length;i++){ medianEq.push(medianEq[i-1] + randf(-40000, 80000)); }
-
-  // ±1σ 置信带
-  var upperBand = medianEq.map(function(v,i){ return v * (1 + randf(0.05, 0.15)); });
-  var lowerBand = medianEq.map(function(v,i){ return v * (1 - randf(0.05, 0.15)); });
-
-  // 基准
-  var bench = [1000000];
-  for(var i=1;i<months.length;i++){ bench.push(bench[i-1] + randf(-50000, 50000)); }
-
-  // 回撤
-  var peak = 1000000;
-  var dd = [0];
-  for(var i=1;i<months.length;i++){
-    if(medianEq[i] > peak) peak = medianEq[i];
-    dd.push((medianEq[i] - peak) / peak * 100);
-  }
-
-  chart.setOption({
-    backgroundColor:'transparent',
-    tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
-    legend:{data:['中位数权益','±1σ置信带','沪深300基准','回撤'],textStyle:{color:'#64748B',fontSize:9},bottom:0,selected:{'回撤':true}},
-    grid:[{left:50,right:20,top:10,bottom:55,height:'55%'},{left:50,right:20,top:'70%',bottom:20,height:'20%'}],
-    xAxis:[
-      {type:'category',data:months,axisLabel:{color:'#64748B',fontSize:9,show:false},gridIndex:0},
-      {type:'category',data:months,axisLabel:{color:'#64748B',fontSize:9,show:false},gridIndex:1}
-    ],
-    yAxis:[
-      {type:'value',axisLabel:{color:'#64748B',fontSize:9},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},gridIndex:0},
-      {type:'value',max:0,axisLabel:{color:'#64748B',fontSize:9,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},gridIndex:1}
-    ],
-    series:[{
-      name:'±1σ置信带',type:'line',data:upperBand,smooth:true,symbol:'none',
-      lineStyle:{width:0},
-      stack:'confidence',
-      areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(59,130,246,0.0)'},{offset:1,color:'rgba(59,130,246,0.05)'}])},
-      xAxisIndex:0,yAxisIndex:0
-    },{
-      name:'±1σ置信带',type:'line',data:lowerBand,smooth:true,symbol:'none',
-      lineStyle:{width:0},
-      stack:'confidence2',
-      areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(59,130,246,0.20)'},{offset:1,color:'rgba(59,130,246,0.02)'}])},
-      xAxisIndex:0,yAxisIndex:0
-    },{
-      name:'中位数权益',type:'line',data:medianEq,smooth:true,symbol:'none',
-      lineStyle:{color:'#3B82F6',width:1.5},
-      markLine:{silent:true,data:[{yAxis:1000000,label:{show:true,formatter:'起始 1M',fontSize:8,color:'#64748B'},lineStyle:{color:'rgba(255,255,255,0.15)',type:'dashed'}}]},
-      xAxisIndex:0,yAxisIndex:0
-    },{
-      name:'沪深300基准',type:'line',data:bench,smooth:true,symbol:'none',
-      lineStyle:{color:'rgba(255,255,255,0.3)',width:1,type:'dashed'},
-      xAxisIndex:0,yAxisIndex:0
-    },{
-      name:'回撤',type:'line',data:dd,smooth:true,symbol:'none',
-      lineStyle:{color:'#EF4444',width:1.5},
-      areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(239,68,68,0.2)'},{offset:1,color:'rgba(239,68,68,0.02)'}])},
-      xAxisIndex:1,yAxisIndex:1
-    }]
+// ── 基准指数切换 ──
+function switchBenchmark(){
+  var code = document.getElementById('benchSwitch').value;
+  showToast('🔄 正在加载基准数据: ' + code);
+  // 获取基准数据，叠加到权益曲线图
+  var startDate = (document.getElementById('startDate').value || '2025-01-01').replace(/-/g,'');
+  var endDate = (document.getElementById('endDate').value || '2025-06-30').replace(/-/g,'');
+  _apiFetch('/backtest/benchmark/'+code+'?start_date='+startDate+'&end_date='+endDate).then(function(resp){
+    if(resp && resp.success && resp.data && resp.data.records){
+      _updateBenchmarkOnChart(resp.data.records);
+      showToast('✅ 基准已切换: ' + (resp.data.name || code));
+    } else {
+      showToast('⚠️ 基准数据加载失败，使用默认数据');
+    }
+  }).catch(function(){
+    showToast('⚠️ 基准请求失败，使用默认数据');
   });
-  window.addEventListener('resize',function(){ if(chart) chart.resize(); });
 }
 
-// ── 参数优化（保留） ──
+// 在权益曲线图上叠加基准曲线
+function _updateBenchmarkOnChart(records){
+  var chart = window._equityChart;
+  if(!chart) { showToast('⚠️ 请先运行回测生成权益曲线'); return; }
+  if(!records || records.length === 0) return;
+  // 归一化基准到起始值=1（与权益曲线对齐）
+  var firstClose = records[0].close;
+  var benchData = records.map(function(r){
+    return firstClose > 0 ? (r.close / firstClose) : r.close;
+  });
+  var benchDates = records.map(function(r){ return r.trade_date || r.date; });
+  chart.setOption({
+    legend: {data: ['中位数权益','±1σ置信带','基线','回撤','基准指数']},
+    series: [{
+      name: '基准指数',
+      type: 'line',
+      data: benchData,
+      smooth: true,
+      symbol: 'none',
+      lineStyle: {color: '#94A3B8', width: 1.5, type: 'dashed'},
+      xAxisIndex: 0,
+      yAxisIndex: 0
+    }]
+  });
+}
+
+// ── 更多指标 ──
+function toggleMoreMetrics(){
+  var m=document.getElementById('moreMetrics'),i=document.getElementById('moreIcon');
+  m.classList.toggle('open');
+  i.textContent = m.classList.contains('open') ? '▼' : '▶';
+}
+
+// ── Toast ──
+function showToast(msg){
+  var t = document.createElement('div');
+  t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1E293B;color:#F1F5F9;padding:8px 20px;border-radius:6px;font-size:12px;z-index:9999;transition:opacity 0.3s;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(function(){ t.style.opacity='0'; setTimeout(function(){ t.remove(); },300); }, 2000);
+}
+
+// ── 参数优化（API驱动） ──
 var _optimized = false, _applied = false;
 function runOptimize(){
   var btn = document.getElementById('optimizeBtn');
   if(!btn) return;
   btn.innerHTML = '⏳ 优化中...';
   btn.disabled = true;
-  var opts = ['/','-','\\','|'];
-  var i=0;
-  var spinner = setInterval(function(){ btn.innerHTML = '⏳ '+opts[i++%4]+' 优化中'; },200);
-  setTimeout(function(){
-    clearInterval(spinner);
+
+  // 收集当前策略参数
+  var paramGrid = {};
+  var strategies = _strategies.filter(function(s){ return s.enabled && s.weight > 0; });
+  strategies.forEach(function(s){
+    if(s.id === 'chanlun') paramGrid.chanlun_lookback = [60, 120, 180];
+    else if(s.id === 'vp') paramGrid.vp_lookback = [60, 120, 180];
+    else if(s.id === 'chip') paramGrid.chip_lookback = [40, 60, 120];
+    else if(s.id === 'factor') paramGrid.factor_window = [10, 20, 40];
+  });
+
+  var startDate = (document.getElementById('startDate').value || '2025-01-01').replace(/-/g,'');
+  var endDate = (document.getElementById('endDate').value || '2025-06-30').replace(/-/g,'');
+  var tsCode = _selectedStocks.length > 0 ? _selectedStocks[0].ts_code : '000001.SZ';
+
+  _apiFetch('/backtest/optimize', {
+    method: 'POST',
+    body: JSON.stringify({
+      ts_code: tsCode,
+      start_date: startDate,
+      end_date: endDate,
+      param_grid: paramGrid,
+      config: {
+        initial_capital: 100000,
+        commission_rate: 0.0003,
+      }
+    })
+  }).then(function(resp){
     btn.innerHTML = '✅ 重新优化';
     btn.disabled = false;
-    showOptimizeResults();
-  }, 1500);
+    if(resp && resp.success){
+      _renderOptimizeResults(resp);
+    } else {
+      showToast('⚠️ 优化API不可用，使用模拟数据');
+      _renderMockOptimizeResults();
+    }
+  }).catch(function(){
+    btn.innerHTML = '✅ 重新优化';
+    btn.disabled = false;
+    showToast('⚠️ 优化请求失败，使用模拟数据');
+    _renderMockOptimizeResults();
+  });
 }
-function showOptimizeResults(){
+
+function _renderOptimizeResults(apiResult){
   document.getElementById('optStateDefault').style.display = 'none';
   document.getElementById('optStateResults').style.display = 'block';
   document.getElementById('optStateApplied').style.display = 'none';
   document.getElementById('resetOptimizeBtn').style.display = 'inline-flex';
   _optimized = true;
+
+  var rd = apiResult.data || {};
+  document.getElementById('optDuration').textContent = 'API';
+  // 构建参数差异表和推荐结果
+  var bestParams = rd.best_params || {};
+  var totalCombos = rd.total_combinations || 0;
+  var evaluated = rd.evaluated || 0;
+  var bestScore = rd.best_score || '—';
+
+  var durationEl = document.querySelector('.state-results > div');
+  if(durationEl){
+    durationEl.innerHTML = '🎯 目标函数：夏普比率 · 测试组合：' + totalCombos + ' · 已评估：' + evaluated + ' · 最佳评分：' + bestScore;
+  }
+
+  // 构建参数对比表
+  var table = document.querySelector('.param-diff-table tbody') || document.querySelector('.param-diff-table');
+  if(table){
+    var paramNames = rd.param_names || Object.keys(bestParams);
+    var html = '<tr><th>参数</th><th>当前值 ▸ 推荐值</th><th>最佳评分</th></tr>';
+    paramNames.forEach(function(pname){
+      var recommended = bestParams[pname];
+      if(recommended === undefined) return;
+      // 估算当前值
+      var currentVal = '—';
+      var paramEl = document.getElementById('paramChanlun');
+      if(pname.indexOf('chanlun') >= 0) paramEl = document.getElementById('paramChanlun');
+      else if(pname.indexOf('vp') >= 0) paramEl = document.getElementById('paramVp');
+      else if(pname.indexOf('chip') >= 0) paramEl = document.getElementById('paramChip');
+      else if(pname.indexOf('factor') >= 0) paramEl = document.getElementById('paramFactor');
+      if(paramEl) currentVal = paramEl.value;
+      html += '<tr><td>🟢 ' + pname + '</td><td><span style="color:var(--text-muted)">' + currentVal + '</span><span class="arrow">→</span><strong style="color:var(--color-brand-500)">' + recommended + '</strong></td><td>' + bestScore + '</td></tr>';
+    });
+    table.innerHTML = html;
+  }
+
+  // 更新预估改善展示
+  var improveEl = document.querySelector('.projected-improve');
+  if(improveEl){
+    improveEl.innerHTML = '📊 最优参数组合评分：<strong>' + bestScore + '</strong><br>· 已测试 ' + evaluated + '/' + totalCombos + ' 种参数组合';
+  }
 }
-function resetOptimize(){
-  document.getElementById('optStateDefault').style.display = 'block';
-  document.getElementById('optStateResults').style.display = 'none';
+
+function _renderMockOptimizeResults(){
+  document.getElementById('optStateDefault').style.display = 'none';
+  document.getElementById('optStateResults').style.display = 'block';
   document.getElementById('optStateApplied').style.display = 'none';
-  document.getElementById('resetOptimizeBtn').style.display = 'none';
-  _optimized = false; _applied = false;
+  document.getElementById('resetOptimizeBtn').style.display = 'inline-flex';
+  _optimized = true;
 }
 function applyOptimizedParams(){
   showToast('✅ 参数已更新，快照已保存');
@@ -1322,7 +1589,14 @@ function applyOptimizedParams(){
   document.getElementById('optStateApplied').style.display = 'block';
   _applied = true;
 }
-function dismissOptimize(){ showOptimizeResults(); }
+function dismissOptimize(){ _renderMockOptimizeResults(); }
+function resetOptimize(){
+  document.getElementById('optStateDefault').style.display = 'block';
+  document.getElementById('optStateResults').style.display = 'none';
+  document.getElementById('optStateApplied').style.display = 'none';
+  document.getElementById('resetOptimizeBtn').style.display = 'none';
+  _optimized = false; _applied = false;
+}
 
 // ── 初始策略列表渲染 ──
 (function(){

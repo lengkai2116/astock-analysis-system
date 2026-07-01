@@ -539,14 +539,14 @@
 
       <!-- 汇总统计条 -->
       <div class="summary-bar">
-        <div class="summary-stat"><span class="num active">18</span><span class="label">总规则</span></div>
+        <div class="summary-stat"><span class="num active" id="summaryTotalNum">18</span><span class="label">总规则</span></div>
         <div class="summary-divider"></div>
-        <div class="summary-stat"><span class="num triggered">5</span><span class="label">今日触发</span></div>
+        <div class="summary-stat"><span class="num triggered" id="summaryTodayNum">5</span><span class="label">今日触发</span></div>
         <div class="summary-divider"></div>
-        <div class="summary-stat"><span class="num" style="color:#22C55E;">15</span><span class="label">活跃</span></div>
-        <div class="summary-stat"><span class="num" style="color:#A3A3A3;">3</span><span class="label">暂停·休眠</span></div>
+        <div class="summary-stat"><span class="num" id="summaryActiveNum" style="color:#22C55E;">15</span><span class="label">活跃</span></div>
+        <div class="summary-stat"><span class="num" id="summaryPausedNum" style="color:#A3A3A3;">3</span><span class="label">暂停·休眠</span></div>
         <div class="summary-divider"></div>
-        <div class="summary-stat" style="font-size:12px;color:var(--text-muted);display:flex;gap:var(--space-4);flex-wrap:wrap;">
+        <div class="summary-stat" id="summaryByType" style="font-size:12px;color:var(--text-muted);display:flex;gap:var(--space-4);flex-wrap:wrap;">
           <span>📈5</span><span>🛡️2</span><span>⚡3</span><span>📋6</span><span>🎯2</span>
         </div>
         <div class="summary-action">
@@ -582,26 +582,17 @@
           </div>
         </div>
         <div class="dormant-body" id="dormantBody">
-          <div class="dormant-item">
-            <div class="info"><span class="name">🟡 一类买点·芯片板块</span><span class="meta">最后触发: 2026-04-28 · 已休眠 57 天 · 缠论一类买点</span></div>
-            <button class="act" onclick="restoreDormant(this)">▶ 恢复启用</button>
-            <button class="act danger" onclick="deleteDormant(this)">🗑 彻底删除</button>
-          </div>
-          <div class="dormant-item">
-            <div class="info"><span class="name">🟡 龙虎榜跟庄·全市场</span><span class="meta">最后触发: 2026-05-10 · 已休眠 46 天 · 龙虎榜数据</span></div>
-            <button class="act" onclick="restoreDormant(this)">▶ 恢复启用</button>
-            <button class="act danger" onclick="deleteDormant(this)">🗑 彻底删除</button>
-          </div>
+          <!-- 动态渲染 -->
         </div>
       </div>
 
       <!-- 筛选栏 -->
       <div class="filter-bar">
-        <div class="search-wrap"><span class="search-icon">🔍</span><input type="text" placeholder="搜索规则名/股票代码..." oninput="filterCards()"></div>
-        <select class="filter-select" onchange="filterCards()"><option value="">全部状态</option><option value="running">运行中</option><option value="paused">暂停</option><option value="dormant">已休眠</option><option value="expired">已过期</option></select>
-        <select class="filter-select" onchange="filterCards()"><option value="">全部类型</option><option value="opportunity">📈 发现机会</option><option value="risk">🛡️ 规避风险</option><option value="anomaly">⚡ 异动追踪</option><option value="status">📋 状态监控</option><option value="discipline">🎯 纪律执行</option></select>
-        <select class="filter-select" onchange="filterCards()"><option value="">全部范围</option><option value="single">📍 单股级</option><option value="multi">📋 多股级</option><option value="market">🔭 全市场级</option></select>
-        <select class="filter-select" onchange="filterCards()"><option value="recent">最近触发 ▼</option><option value="created">最近创建</option><option value="most">触发最多</option><option value="hot">热度最高</option><option value="name">名称 A-Z</option></select>
+        <div class="search-wrap"><span class="search-icon">🔍</span><input type="text" id="filterSearch" placeholder="搜索规则名/股票代码..." oninput="filterCards()"></div>
+        <select class="filter-select" id="filterStatus" onchange="filterCards()"><option value="">全部状态</option><option value="running">运行中</option><option value="paused">暂停</option><option value="dormant">已休眠</option><option value="expired">已过期</option></select>
+        <select class="filter-select" id="filterType" onchange="filterCards()"><option value="">全部类型</option><option value="opportunity">📈 发现机会</option><option value="risk">🛡️ 规避风险</option><option value="anomaly">⚡ 异动追踪</option><option value="status">📋 状态监控</option><option value="discipline">🎯 纪律执行</option></select>
+        <select class="filter-select" id="filterRange" onchange="filterCards()"><option value="">全部范围</option><option value="single">📍 单股级</option><option value="multi">📋 多股级</option><option value="market">🔭 全市场级</option></select>
+        <select class="filter-select" id="filterSort" onchange="filterCards()"><option value="recent">最近触发 ▼</option><option value="created">最近创建</option><option value="most">触发最多</option><option value="hot">热度最高</option><option value="name">名称 A-Z</option></select>
       </div>
 
       <!-- ═══ 顶部通知滚动区（新增） ═══ -->
@@ -611,14 +602,7 @@
           <span class="notif-scroll-link" onclick="toggleNotifFloat()">查看所有通知 →</span>
         </div>
         <div class="notif-scroll-track" id="notifScrollTrack">
-          <!-- 有未处理通知 -->
-          <div class="notif-scroll-card" onclick="openNotifDetail('opportunity')"><span class="type-icon">📈</span><span class="stock">贵州茅台</span><span class="change up">+2.30%</span><span class="tag-new">今日第2次</span></div>
-          <div class="notif-scroll-card" onclick="openNotifDetail('risk')"><span class="type-icon">🛡️</span><span class="stock">贵州茅台</span><span class="change down">-1.80%</span><span class="tag-new">⚠️风险</span></div>
-          <div class="notif-scroll-card" onclick="openNotifDetail('anomaly')"><span class="type-icon">⚡</span><span class="stock">五粮液</span><span class="tag-new" style="background:rgba(245,158,11,0.15);color:#F59E0B;">异动</span></div>
-          <div class="notif-scroll-card" onclick="openNotifDetail('opportunity')"><span class="type-icon">📈</span><span class="stock">宁德时代</span><span class="change up">+1.20%</span></div>
-          <!-- 重复用于滚动循环 -->
-          <div class="notif-scroll-card" onclick="openNotifDetail('opportunity')"><span class="type-icon">📈</span><span class="stock">贵州茅台</span><span class="change up">+2.30%</span><span class="tag-new">今日第2次</span></div>
-          <div class="notif-scroll-card" onclick="openNotifDetail('risk')"><span class="type-icon">🛡️</span><span class="stock">贵州茅台</span><span class="change down">-1.80%</span><span class="tag-new">⚠️风险</span></div>
+          <!-- 动态渲染 -->
         </div>
       </div>
 
@@ -653,131 +637,15 @@
       <!-- ═══ 规则卡片网格 (CSS Grid) ═══ -->
       <div class="scroll-pane">
         <div class="rule-card-grid" id="ruleCardGrid">
-          <!-- 卡片1: 📈发现机会 运行中 -->
-          <div class="rule-card type-opportunity" data-name="放量追击" data-type="opportunity" data-status="running" data-range="multi">
-            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
-            <div class="rule-card-body" onclick="openDetail('放量追击','opportunity','running')">
-              <div class="rule-card-header">
-                <div class="rule-card-name"><span class="status-dot green"></span><span class="type-badge">📈</span>放量追击 <span class="hot-badge hot">🔥热门</span></div>
-                <div class="rule-card-status"><span class="status-tag running">● 运行中</span></div>
-              </div>
-              <div class="rule-card-meta"><span>📊 成交量放大≥1.5倍+价格涨</span><span>📋 自选股·5只</span><span>⏰ 09:30~15:00 · 15分扫描</span></div>
-              <div class="rule-card-triggers"><span>触发 <span class="count">23</span> 次</span><span class="latest">最近: 今日 10:30</span><span class="today">今日连续触发 3 次</span><span class="trigger-badge">高频</span></div>
-              <div class="recent-triggers"><span>最近3次:</span><span><span class="dot ok"></span>贵州茅台 10:30</span><span><span class="dot ok"></span>宁德时代 09:45</span><span><span class="dot ok"></span>隆基绿能 09:12</span></div>
-            </div>
-            <div class="rule-card-actions">
-              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)">⏸ 暂停</button>
-              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('放量追击')">✏️ 编辑</button>
-              <button class="act-btn" onclick="event.stopPropagation();openHistory('放量追击')">📜 记录</button>
-              <button class="act-btn primary" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
-              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
-            </div>
-          </div>
-
-          <!-- 卡片2: 📈发现机会 运行中 -->
-          <div class="rule-card type-opportunity" data-name="MA60突破+量能确认" data-type="opportunity" data-status="running" data-range="single">
-            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
-            <div class="rule-card-body" onclick="openDetail('MA60突破+量能确认','opportunity','running')">
-              <div class="rule-card-header">
-                <div class="rule-card-name"><span class="status-dot green"></span><span class="type-badge">📈</span>MA60突破+量能确认 <span class="hot-badge hot">🔥热门</span></div>
-                <div class="rule-card-status"><span class="status-tag running">● 运行中</span></div>
-              </div>
-              <div class="rule-card-meta"><span>📈 价格>12.5元 · 确认期3周期</span><span>📍 贵州茅台</span><span>⏰ 全天 · 30分扫描</span></div>
-              <div class="rule-card-triggers"><span>触发 <span class="count">8</span> 次</span><span class="latest">最近: 今日 14:35</span></div>
-              <div class="recent-triggers"><span>最近3次:</span><span><span class="dot ok"></span>贵州茅台 14:35</span><span><span class="dot ok"></span>贵州茅台 13:20</span><span><span class="dot" style="background:#A3A3A3;"></span>—</span></div>
-            </div>
-            <div class="rule-card-actions">
-              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)">⏸ 暂停</button>
-              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('MA60突破+量能确认')">✏️ 编辑</button>
-              <button class="act-btn" onclick="event.stopPropagation();openHistory('MA60突破+量能确认')">📜 记录</button>
-              <button class="act-btn" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
-              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
-            </div>
-          </div>
-
-          <!-- 卡片3: 🛡️规避风险 暂停 -->
-          <div class="rule-card type-risk" data-name="MACD金叉买入" data-type="risk" data-status="paused" data-range="market">
-            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
-            <div class="rule-card-body" onclick="openDetail('MACD金叉买入','risk','paused')">
-              <div class="rule-card-header">
-                <div class="rule-card-name"><span class="status-dot" style="background:#A3A3A3;"></span><span class="type-badge">🛡️</span>MACD金叉买入</div>
-                <div class="rule-card-status"><span class="status-tag paused">○ 已暂停（距开启 14h）</span></div>
-              </div>
-              <div class="rule-card-meta"><span>📊 DIF>DEA (12/26/9)</span><span>🔭 全市场</span><span>⏰ 全天</span></div>
-              <div class="rule-card-triggers"><span>触发 <span class="count">12</span> 次</span><span class="latest">最近: 昨日 09:45</span></div>
-            </div>
-            <div class="rule-card-actions">
-              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)" style="border-color:#22C55E;color:#22C55E;">▶ 启用</button>
-              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('MACD金叉买入')">✏️ 编辑</button>
-              <button class="act-btn" onclick="event.stopPropagation();openHistory('MACD金叉买入')">📜 记录</button>
-              <button class="act-btn" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
-              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
-            </div>
-          </div>
-
-          <!-- 卡片4: 📋状态监控 运行中 -->
-          <div class="rule-card type-status" data-name="均线多头排列" data-type="status" data-status="running" data-range="single">
-            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
-            <div class="rule-card-body" onclick="openDetail('均线多头排列','status','running')">
-              <div class="rule-card-header">
-                <div class="rule-card-name"><span class="status-dot green"></span><span class="type-badge">📋</span>均线多头排列</div>
-                <div class="rule-card-status"><span class="status-tag running">● 运行中</span></div>
-              </div>
-              <div class="rule-card-meta"><span>📈 MA5>MA10>MA20>MA60</span><span>📍 贵州茅台</span><span>⏰ 全天</span></div>
-              <div class="rule-card-triggers"><span>触发 <span class="count">45</span> 次</span><span class="latest">最近: 今日 10:05</span><span class="trigger-badge">稳定</span></div>
-            </div>
-            <div class="rule-card-actions">
-              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)">⏸ 暂停</button>
-              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('均线多头排列')">✏️ 编辑</button>
-              <button class="act-btn" onclick="event.stopPropagation();openHistory('均线多头排列')">📜 记录</button>
-              <button class="act-btn" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
-              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
-            </div>
-          </div>
-
-          <!-- 卡片5: 🎯纪律执行 运行中 -->
-          <div class="rule-card type-discipline" data-name="底部反弹跟踪" data-type="discipline" data-status="running" data-range="multi">
-            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
-            <div class="rule-card-body" onclick="openDetail('底部反弹跟踪','discipline','running')">
-              <div class="rule-card-header">
-                <div class="rule-card-name"><span class="status-dot green"></span><span class="type-badge">🎯</span>底部反弹跟踪 <span class="hot-badge hot">🔥热门</span></div>
-                <div class="rule-card-status"><span class="status-tag running">● 运行中</span></div>
-              </div>
-              <div class="rule-card-meta"><span>📈 价格低位+放量+MACD金叉（3条件AND）</span><span>📋 自选股</span><span>⏰ 09:30~15:00</span></div>
-              <div class="rule-card-triggers"><span>触发 <span class="count">5</span> 次</span><span class="latest">最近: 2日前</span></div>
-              <div class="recent-triggers"><span>最近3次:</span><span><span class="dot ok"></span>宁德时代 06-25</span><span><span class="dot ok"></span>隆基绿能 06-24</span><span><span class="dot ok"></span>阳光电源 06-23</span></div>
-            </div>
-            <div class="rule-card-actions">
-              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)">⏸ 暂停</button>
-              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('底部反弹跟踪')">✏️ 编辑</button>
-              <button class="act-btn" onclick="event.stopPropagation();openHistory('底部反弹跟踪')">📜 记录</button>
-              <button class="act-btn" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
-              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
-            </div>
-          </div>
-
-          <!-- 卡片6: ⚡异动追踪 已休眠 -->
-          <div class="rule-card type-anomaly" data-name="一类买点·芯片板块" data-type="anomaly" data-status="dormant" data-range="multi">
-            <input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">
-            <div class="rule-card-body" onclick="openDetail('一类买点·芯片板块','anomaly','dormant')">
-              <div class="rule-card-header">
-                <div class="rule-card-name"><span class="status-dot" style="background:#F59E0B;"></span><span class="type-badge">⚡</span>一类买点·芯片板块</div>
-                <div class="rule-card-status"><span class="status-tag dormant">🟡 已休眠（57天未触发）</span></div>
-              </div>
-              <div class="rule-card-meta"><span>🧩 缠论一类买点</span><span>📋 芯片板块</span><span>🗓️ ~2026-09-30</span></div>
-              <div class="rule-card-triggers"><span>触发 <span class="count">1</span> 次</span><span class="latest">最近: 2026-04-28</span></div>
-            </div>
-            <div class="rule-card-actions">
-              <button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(this)" style="border-color:#22C55E;color:#22C55E;">▶ 恢复</button>
-              <button class="act-btn" onclick="event.stopPropagation();openEditDrawer('一类买点·芯片板块')">✏️ 编辑</button>
-              <button class="act-btn" onclick="event.stopPropagation();openHistory('一类买点·芯片板块')">📜 记录</button>
-              <button class="act-btn" onclick="event.stopPropagation();alert('规则已克隆')">📋 克隆</button>
-              <button class="act-btn" onclick="event.stopPropagation();confirmDelete(this)" style="color:#EF4444;">🗑️</button>
-            </div>
+          <!-- 动态渲染 -->
+          <div class="empty-state-card" id="ruleEmptyState" style="display:none;">
+            <div style="font-size:28px;margin-bottom:var(--space-6);">🔔</div>
+            <div style="font-size:15px;font-weight:500;color:var(--text-secondary);margin-bottom:var(--space-2);">暂无规则</div>
+            <div style="font-size:12px;color:var(--text-muted);">点击"新建规则"创建您的第一条监控规则</div>
           </div>
         </div>
 
-        <div class="load-more" onclick="alert('加载更多规则')">加载更多规则 ▶</div>
+        <div class="load-more" id="loadMoreRules" style="display:none;" onclick="showMoreRules()">加载更多规则 ▶</div>
       </div>
     </div>
   </main>
@@ -1247,116 +1115,85 @@
       </div>
     </div>
     <div class="notif-exp-body" id="notifFloatList">
-
-      <!-- ① 📈 发现机会 — 全量卡片 -->
-      <div class="notif-float-item unread" data-rule="MA60突破+量能确认" onclick="focusRule(this);openNotifDetail('opportunity')">
-        <div class="notif-float-top">
-          <div class="notif-float-rule"><span class="type-icon">📈</span>MA60突破+量能确认</div>
-          <div class="notif-float-time">14:35</div>
-        </div>
-        <div class="notif-float-stock">贵州茅台 (600519) <span style="font-size:11px;color:var(--text-muted);">· 今日第2次触发</span></div>
-        <div class="notif-float-conditions">
-          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">MA60突破</span><span class="cval">当前148.50 > 阈值145.20 (+1.5%)</span></div>
-          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">成交量放大</span><span class="cval">2.3倍均量 (856万手 > 372万手)</span></div>
-          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">KDJ金叉</span><span class="cval">K=32 > D=28</span></div>
-          <div class="cond-scan-meta">扫描：15分钟周期 · 盘中评估 · 确认期已通过</div>
-        </div>
-        <div class="notif-float-stock-info">
-          <span class="si-item"><span class="si-lbl">当前价</span><span class="si-val" style="color:#EF4444;">148.50</span></span>
-          <span class="si-item"><span class="si-lbl">涨幅</span><span class="si-val" style="color:#EF4444;">+2.30%</span></span>
-          <span class="si-item"><span class="si-lbl">量比</span><span class="si-val">1.30</span></span>
-          <span class="si-item"><span class="si-lbl">成交额</span><span class="si-val">19.46亿</span></span>
-          <span class="si-item"><span class="si-lbl">换手</span><span class="si-val">1.40%</span></span>
-        </div>
-        <div class="notif-float-actions">
-          <button class="na-btn primary" onclick="event.stopPropagation();implicitConfirmNotif(this,'看行情')">📈 看行情</button>
-          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'策略分析')">🧠 策略分析</button>
-          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'多角色')">🤖 多角色投研</button>
-          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'加自选')">⭐ 加自选</button>
-          <button class="na-btn warning" onclick="event.stopPropagation();implicitConfirmNotif(this,'误报')">❌ 误报</button>
-          <button class="na-btn secondary-row" onclick="event.stopPropagation();alert('📋 查看复盘')">📋 复盘</button>
-        </div>
-      </div>
-
-      <!-- ② 🛡️ 规避风险 — 含倒计时+重推 -->
-      <div class="notif-float-item unread" data-rule="MACD死叉" onclick="focusRule(this);openNotifDetail('risk')">
-        <div class="notif-float-top">
-          <div class="notif-float-rule"><span class="type-icon">🛡️</span>MACD死叉 <span style="color:#EF4444;font-size:11px;">⚠️风险信号</span></div>
-          <div class="notif-float-time">14:32</div>
-        </div>
-        <div class="notif-float-stock">贵州茅台 (600519) <span style="font-size:11px;color:var(--text-muted);">· 未处理</span></div>
-        <div class="notif-float-conditions">
-          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">DIF下穿DEA</span></div>
-          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">连续2日缩量</span></div>
-          <div class="cond-scan-meta">扫描：盘中扫描</div>
-        </div>
-        <div class="notif-float-stock-info">
-          <span class="si-item"><span class="si-lbl">当前价</span><span class="si-val" style="color:#22C55E;">145.60</span></span>
-          <span class="si-item"><span class="si-lbl">涨幅</span><span class="si-val" style="color:#22C55E;">-1.80%</span></span>
-          <span class="si-item"><span class="si-lbl">量比</span><span class="si-val">0.80</span></span>
-          <span class="si-item"><span class="si-lbl">成交额</span><span class="si-val">28.3亿</span></span>
-          <span class="si-item"><span class="si-lbl">委比</span><span class="si-val" style="color:#22C55E;">-26.0%</span></span>
-        </div>
-        <div class="countdown-bar">⏱ 你还有 7 分钟确认，否则将再次微信推送 <span class="push-indicator">微信已推送 1/2 次</span></div>
-        <div class="notif-float-actions">
-          <button class="na-btn primary" onclick="event.stopPropagation();implicitConfirmNotif(this,'看行情')">📈 看行情</button>
-          <button class="na-btn success" onclick="event.stopPropagation();implicitConfirmNotif(this,'已处理')">✅ 已处理</button>
-          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'加自选')">⭐ 加自选</button>
-          <button class="na-btn secondary-row" onclick="event.stopPropagation();alert('📋 查看复盘')">📋 复盘</button>
-        </div>
-      </div>
-
-      <!-- ③ ⚡ 异动追踪 — 含❓tooltip -->
-      <div class="notif-float-item unread" data-rule="成交量放大超3倍" onclick="focusRule(this);openNotifDetail('anomaly')">
-        <div class="notif-float-top">
-          <div class="notif-float-rule"><span class="type-icon">⚡</span>成交量放大超3倍 <span class="tooltip-trigger" style="font-size:12px;cursor:help;color:var(--text-muted);" data-tooltip="成交量突然放大到平时3倍以上，说明有大资金在交易">❓</span></div>
-          <div class="notif-float-time">14:40</div>
-        </div>
-        <div class="notif-float-stock">五粮液 (000858) <span style="font-size:11px;color:var(--text-muted);">· 今日异动第2次</span></div>
-        <div class="notif-float-conditions">
-          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">成交量>3倍均量</span><span class="cval">856万手 > 3×285万手</span></div>
-          <div class="cond-scan-meta">关注度：⭐⭐ 中等</div>
-        </div>
-        <div class="notif-float-stock-info">
-          <span class="si-item"><span class="si-lbl">当前价</span><span class="si-val" style="color:#EF4444;">128.50</span></span>
-          <span class="si-item"><span class="si-lbl">成交量</span><span class="si-val">856万手</span></span>
-          <span class="si-item"><span class="si-lbl">5日均量</span><span class="si-val">285万手</span></span>
-          <span class="si-item"><span class="si-lbl">量比</span><span class="si-val" style="color:#EF4444;">3.0</span></span>
-          <span class="si-item"><span class="si-lbl">涨速</span><span class="si-val">+0.30%</span></span>
-        </div>
-        <div class="notif-float-actions">
-          <button class="na-btn primary" onclick="event.stopPropagation();implicitConfirmNotif(this,'看行情')">📈 看行情</button>
-          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'策略分析')">🧠 策略分析</button>
-          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'多角色')">🤖 多角色投研</button>
-          <button class="na-btn" onclick="event.stopPropagation();implicitConfirmNotif(this,'加自选')">⭐ 加自选</button>
-          <button class="na-btn secondary-row" onclick="event.stopPropagation();alert('📋 查看复盘')">📋 复盘</button>
-        </div>
-      </div>
-
-      <!-- ④ 📋 状态监控 — 极简 -->
-      <div class="notif-float-item unread" data-rule="均线多头排列" onclick="focusRule(this);openNotifDetail('status')">
-        <div class="notif-float-top">
-          <div class="notif-float-rule"><span class="type-icon">📋</span>均线多头排列 <span style="color:#22C55E;font-size:11px;">状态正常</span></div>
-          <div class="notif-float-time">10:05</div>
-        </div>
-        <div class="notif-float-stock">贵州茅台 (600519)</div>
-        <div class="notif-float-conditions">
-          <div class="cond-pass-row"><span class="ck">✅</span><span class="cname">MA5>MA10>MA20>MA60</span><span class="cval">趋势延续中</span></div>
-          <div class="cond-scan-meta">扫描：日终评估 · 今日仅此1次</div>
-        </div>
-        <div class="notif-float-actions">
-          <button class="na-btn primary" onclick="event.stopPropagation();implicitConfirmNotif(this,'看行情')">📈 看行情</button>
-          <button class="na-btn success" onclick="event.stopPropagation();implicitConfirmNotif(this,'已处理')">✅ 已处理</button>
-          <button class="na-btn secondary-row" onclick="event.stopPropagation();alert('📋 查看复盘')">📋 复盘</button>
-        </div>
-      </div>
-
-      <div class="load-more" onclick="alert('查看更多通知')" style="padding:var(--space-8);font-size:12px;">查看更多通知 ▶</div>
+      <!-- 动态渲染 -->
+      <div class="load-more" id="notifLoadMore" style="display:none;" onclick="loadMoreNotifs()" style="padding:var(--space-8);font-size:12px;">查看更多通知 ▶</div>
     </div>
   </div>
 </div>
 
 <script>
+/* ═══════════════════════════════════════════════════════════════════
+   API 封装层 — 复用 account.html 模式
+   ═══════════════════════════════════════════════════════════════════ */
+/* 后端 API 地址。开发模式通过端口号哈希或查询参数指定。
+ *   ?api_port=5001  或  #api_port=5001
+ * 生产模式通过反向代理同源提供。
+ * 也可在浏览器控制台设置 window.__API_PORT 覆盖。 */
+var _apiPort = window.location.port;
+var _qsMatch = (window.location.search||'').match(/[?&]api_port=(\d+)/);
+var _hashMatch = (window.location.hash||'').match(/api_port=(\d+)/);
+var _override = _hashMatch || _qsMatch;
+if(_override) _apiPort = _override[1];
+if(window.__API_PORT) _apiPort = window.__API_PORT;
+var _apiOrigin = window.location.protocol + '//' + window.location.hostname + ':' + _apiPort;
+
+const API_BASE = _apiOrigin + '/api/v3/notifications';
+const CONDITIONS_API = _apiOrigin + '/api/v3/conditions';
+
+// ── 缓存 ──
+var _rules = [], _ruleMap = {};
+var _summary = {}, _todayUnread = {};
+var _recentNotifs = [], _unreadCount = 0;
+var _dormant = [], _health = {};
+var _notifPage = 0, _notifTotal = 0;
+
+// ── 通用API封装 ──
+async function api(url, opts){
+  try{
+    var headers = {'Content-Type':'application/json'};
+    if(opts && opts.method && ['GET','HEAD'].includes(opts.method.toUpperCase())){
+      // GET/HEAD 请求不强制 Content-Type，避免触发不必要的 CORS 预检
+      headers = {};
+    }
+    var res = await fetch(API_BASE + url, {
+      headers: headers,
+      ...opts
+    });
+    var json = await res.json();
+    if(!json.success){ console.warn(url, json.error); return null; }
+    return json.data;
+  }catch(e){ console.warn('api error', url, e); return null; }
+}
+function apiGet(url){ return api(url); }
+function apiPost(url, body){ return api(url, {method:'POST', body:JSON.stringify(body||{})}); }
+function apiPut(url, body){ return api(url, {method:'PUT', body:JSON.stringify(body||{})}); }
+function apiDel(url){ return api(url, {method:'DELETE'}); }
+
+// ── 工具 ──
+function today(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function fmtTime(iso){if(!iso)return'—';try{var d=new Date(iso);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}catch(e){return iso;}}
+function fmtDate(iso){if(!iso)return'—';try{var d=new Date(iso);return d.getMonth()+1+'/'+d.getDate();}catch(e){return iso.slice(5,10);}}
+function fmtPct(v){
+  if(v==null||v==='')return'—';
+  var n=parseFloat(v);
+  return isNaN(n)?'—':(n>=0?'+':'')+n.toFixed(1)+'%';
+}
+function showToast(msg){
+  var el=document.getElementById('toast');
+  if(!el){el=document.createElement('div');el.id='toast';
+    el.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a2e;color:#fff;padding:8px 20px;border-radius:6px;font-size:13px;z-index:9999;transition:opacity 0.3s;';
+    document.body.appendChild(el);}
+  el.textContent=msg;el.style.opacity='1';
+  setTimeout(function(){el.style.opacity='0';},2500);
+}
+
+// ── 类型标签映射 ──
+var TYPE_LABELS={opportunity:'📈 发现机会',risk:'🛡️ 规避风险',anomaly:'⚡ 异动追踪',status:'📋 状态监控',discipline:'🎯 纪律执行'};
+var TYPE_ICONS={opportunity:'📈',risk:'🛡️',anomaly:'⚡',status:'📋',discipline:'🎯'};
+var STATUS_HTML={running:'<span class="status-tag running">● 运行中</span>',paused:'<span class="status-tag paused">○ 已暂停</span>',dormant:'<span class="status-tag dormant">🟡 已休眠</span>',expired:'<span class="status-tag expired">● 已过期</span>',deleted:'<span class="status-tag expired">● 已删除</span>'};
+var TYPE_COLORS={opportunity:'type-opportunity',risk:'type-risk',anomaly:'type-anomaly',status:'type-status',discipline:'type-discipline'};
+var RANGE_LABELS={single:'📍 单股级',multi:'📋 多股级',market:'🔭 全市场级'};
+
 /* ═══════════════════════════════════════════════════════════════════
    侧栏
    ═══════════════════════════════════════════════════════════════════ */
@@ -1376,28 +1213,310 @@ function toggleSidebar(){
   if(btn)btn.textContent='▶';
 })();
 
-/* ═══════════════════════════════════════════════════════════════════
-   折叠表格
-   ═══════════════════════════════════════════════════════════════════ */
 function toggleRangeTable(){ document.getElementById('rangeTable').classList.toggle('open'); }
 
 /* ═══════════════════════════════════════════════════════════════════
-   规则卡片筛选
+   数据加载 — 并行初始化
    ═══════════════════════════════════════════════════════════════════ */
-function filterCards(){
-  var q=(document.querySelector('.search-wrap input')||{}).value?.toLowerCase()||'';
-  var sels=document.querySelectorAll('.filter-select');
-  var status=sels[0]?.value||'', type=sels[1]?.value||'', range=sels[2]?.value||'';
-  var cards=document.querySelectorAll('#ruleCardGrid .rule-card');
-  cards.forEach(function(c){
-    var name=c.getAttribute('data-name')?.toLowerCase()||'', ct=c.getAttribute('data-type')||'', cs=c.getAttribute('data-status')||'', cr=c.getAttribute('data-range')||'';
-    var match=true;
-    if(q&&!name.includes(q))match=false;
-    if(status&&cs!==status)match=false;
-    if(type&&ct!==type)match=false;
-    if(range&&cr!==range)match=false;
-    c.style.display=match?'':'none';
+async function loadAll(){
+  await Promise.all([
+    loadRules(),
+    loadSummary(),
+    loadTodayUnread(),
+    loadRecent(),
+    loadDormant(),
+    loadHealth(),
+    loadNotifHistory(1, 5),
+  ]);
+  renderAll();
+}
+
+async function loadRules(filters){
+  var q='?limit=200';
+  if(filters){
+    if(filters.search) q+='&search='+encodeURIComponent(filters.search);
+    if(filters.status) q+='&status='+filters.status;
+    if(filters.type) q+='&type='+filters.type;
+    if(filters.range) q+='&range='+filters.range;
+    if(filters.sort) q+='&sort='+filters.sort;
+  }
+  var r = await apiGet('/rules'+q);
+  if(r){
+    _rules = r.rules || [];
+    _ruleMap = {};
+    _rules.forEach(function(rule){ _ruleMap[rule.id] = rule; });
+  } else { _rules = []; _ruleMap = {}; }
+}
+
+async function loadSummary(){
+  var r = await apiGet('/summary');
+  if(r) _summary = r;
+  else _summary = {};
+}
+
+async function loadTodayUnread(){
+  var r = await apiGet('/today-unread');
+  if(r) _todayUnread = r;
+  else _todayUnread = {};
+}
+
+async function loadRecent(){
+  var r = await apiGet('/recent?limit=20&unread_only=true');
+  if(r){ _recentNotifs = r.notifications || []; _unreadCount = r.unread_count || 0; }
+  else { _recentNotifs = []; _unreadCount = 0; }
+}
+
+async function loadDormant(){
+  var r = await apiGet('/dormant');
+  if(r) _dormant = r.items || [];
+  else _dormant = [];
+}
+
+async function loadHealth(){
+  var r = await apiGet('/health-check');
+  if(r) _health = r;
+  else _health = {};
+}
+
+async function loadNotifHistory(page, per_page){
+  _notifPage = page;
+  var r = await apiGet('/recent?limit='+(per_page||5)+'&unread_only=false&page='+page);
+  if(r){
+    if(page===1) _recentNotifs = r.notifications || [];
+    else _recentNotifs = (_recentNotifs||[]).concat(r.notifications||[]);
+    _unreadCount = r.unread_count || 0;
+    _notifTotal = r.total || _recentNotifs.length;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   渲染 — 全部区域
+   ═══════════════════════════════════════════════════════════════════ */
+function renderAll(){
+  renderSummary();
+  renderScrollCards();
+  renderHealthBanner();
+  renderDormant();
+  renderRuleCards(_rules);
+  renderNotificationFloat();
+  renderRangeTable();
+}
+
+function renderSummary(){
+  var s = _summary;
+  document.getElementById('summaryTotalNum').textContent = s.total || 0;
+  document.getElementById('summaryTodayNum').textContent = s.today_triggered || 0;
+  document.getElementById('summaryActiveNum').textContent = s.active || 0;
+  document.getElementById('summaryPausedNum').textContent = s.paused || 0;
+  // 类型分布
+  var byType = s.by_type || {};
+  var typeEmoji = {opportunity:'📈',risk:'🛡️',anomaly:'⚡',status:'📋',discipline:'🎯'};
+  var html = '';
+  Object.keys(typeEmoji).forEach(function(k){
+    var cnt = byType[k] || 0;
+    if(cnt>0) html += '<span>'+typeEmoji[k]+cnt+'</span>';
   });
+  document.getElementById('summaryByType').innerHTML = html || '<span style="color:var(--text-muted);font-size:11px;">暂无规则</span>';
+}
+
+function renderScrollCards(){
+  var cards = _todayUnread.cards || [];
+  var track = document.getElementById('notifScrollTrack');
+  var header = document.getElementById('scrollHeaderText');
+  if(cards.length===0){
+    header.innerHTML = '📡 今日所有通知已处理';
+    track.innerHTML = '<div class="notif-scroll-card"><span class="type-icon">📈</span><span class="stock" style="color:var(--text-muted);">暂无未处理通知</span></div>';
+    return;
+  }
+  header.innerHTML = '📡 今日未处理 <strong style="color:#EF4444;">'+cards.length+'</strong> 条通知';
+  // 生成滚动卡片，复制一份用于无缝循环
+  var html = '';
+  for(var i=0;i<cards.length;i++){
+    var c = cards[i];
+    var chgClass = (c.change||'').startsWith('+')?'up':(c.change||'').startsWith('-')?'down':'';
+    html += '<div class="notif-scroll-card"><span class="type-icon">'+TYPE_ICONS[c.type||'status']+'</span>'+
+      '<span class="stock">'+(c.stock||'')+'</span>'+
+      (c.change?'<span class="change '+chgClass+'">'+c.change+'</span>':'')+
+      (c.tag?'<span class="tag-new">'+c.tag+'</span>':'')+'</div>';
+  }
+  // 循环复制
+  track.innerHTML = html + html;
+}
+
+function renderHealthBanner(){
+  var banner = document.getElementById('healthBanner');
+  if(_health.count && _health.count>0){
+    var names = (_health.rules||[]).map(function(r){return r.name;}).join('、');
+    banner.querySelector('span').innerHTML = '📋 规则健康检查：<strong>'+_health.count+'</strong> 条规则已暂停 30+ 天未触发'+
+      (names?'（'+names+'）':'');
+    banner.classList.add('visible');
+  } else {
+    banner.classList.remove('visible');
+  }
+}
+
+function renderDormant(){
+  var body = document.getElementById('dormantBody');
+  document.getElementById('dormantCount').textContent = _dormant.length;
+  if(_dormant.length===0){
+    body.innerHTML = '<div style="padding:var(--space-8);font-size:12px;color:var(--text-muted);text-align:center;">暂无休眠规则</div>';
+    return;
+  }
+  var html = '';
+  _dormant.forEach(function(d){
+    html += '<div class="dormant-item" data-rule-id="'+(d.rule_id||'')+'">'+
+      '<div class="info"><span class="name">🟡 '+(d.name||'')+'</span>'+
+      '<span class="meta">最后触发: '+(d.last_trigger?fmtDate(d.last_trigger):'无')+
+      ' · 已休眠 '+(d.dormant_days||0)+' 天 · '+(d.condition||'')+'</span></div>'+
+      '<button class="act" onclick="restoreDormant(this)">▶ 恢复启用</button>'+
+      '<button class="act danger" onclick="deleteDormant(this)">🗑 彻底删除</button></div>';
+  });
+  body.innerHTML = html;
+}
+
+function renderRuleCards(rules){
+  var grid = document.getElementById('ruleCardGrid');
+  var empty = document.getElementById('ruleEmptyState');
+  document.getElementById('loadMoreRules').style.display = 'none';
+  if(!rules||rules.length===0){
+    grid.innerHTML = '<div class="empty-state-card" id="ruleEmptyState" style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-24) 0;">'+
+      '<div style="font-size:28px;margin-bottom:var(--space-6);">🔔</div>'+
+      '<div style="font-size:15px;font-weight:500;color:var(--text-secondary);margin-bottom:var(--space-2);">暂无规则</div>'+
+      '<div style="font-size:12px;color:var(--text-muted);">点击"新建规则"创建您的第一条监控规则</div></div>';
+    return;
+  }
+  var html = '';
+  rules.forEach(function(r){
+    var rangeLabel = RANGE_LABELS[r.range]||r.range||'';
+    var metaParts = [];
+    if(r.conditions&&r.conditions.length) metaParts.push(r.conditions.map(function(cond){return cond.condition_id||'';}).join('+').slice(0,20));
+    if(r.scope_detail){
+      var stocksC = (r.scope_detail.stocks||[]).length||(r.scope_detail.watchlist?'自选':'');
+      metaParts.push(stocksC);
+    }
+    if(r.schedule) metaParts.push((r.schedule.start||'全天')+(r.schedule.end?'~'+r.schedule.end:'')+' · '+(r.scan_interval||'15')+'分');
+    var isHot = (r.hot_score||0) > 50;
+    var todayCount = r.trigger_today||0;
+    var recentTriggers = ''; // 通知列表可以从 _recentNotifs 中按 rule_id 过滤
+    var relatedNotifs = _recentNotifs.filter(function(n){return n.rule_id===r.id;}).slice(0,3);
+    html += '<div class="rule-card '+(TYPE_COLORS[r.type]||'')+'" data-name="'+(r.name||'')+'" data-type="'+(r.type||'')+'" data-status="'+(r.status||'')+'" data-range="'+(r.range||'')+'">'+
+      '<input type="checkbox" class="rule-card-checkbox" onchange="toggleBatch(this)">'+
+      '<div class="rule-card-body" onclick="openDetail(\''+(r.id||'')+'\')">'+
+        '<div class="rule-card-header">'+
+          '<div class="rule-card-name"><span class="status-dot '+(r.status==='running'?'green':'')+'"></span><span class="type-badge">'+(TYPE_ICONS[r.type]||'')+'</span>'+(r.name||'')+
+          (isHot?' <span class="hot-badge hot">🔥热门</span>':'')+'</div>'+
+          '<div class="rule-card-status">'+(STATUS_HTML[r.status]||'')+'</div></div>'+
+        '<div class="rule-card-meta"><span>'+metaParts.join('</span><span>')+'</span></div>'+
+        '<div class="rule-card-triggers"><span>触发 <span class="count">'+(r.trigger_total||0)+'</span> 次</span>'+
+          (r.trigger_latest?'<span class="latest">最近: '+(fmtDate(r.trigger_latest)||'')+'</span>':'')+
+          (todayCount>0?'<span class="today">今日连续触发 '+todayCount+' 次</span>':'')+
+          (todayCount>3?'<span class="trigger-badge">高频</span>':'')+'</div>'+
+        (relatedNotifs.length?'<div class="recent-triggers"><span>最近'+(r.trigger_latest?'3':relatedNotifs.length)+'次:</span>'+
+          relatedNotifs.map(function(n){
+            var stock = n.stock||{};
+            return '<span><span class="dot ok"></span>'+(stock.name||stock.ts_code||'')+' '+(n.trigger_time?fmtDate(n.trigger_time):'')+'</span>';
+          }).join('')+'</div>':'')+
+      '</div>'+
+      '<div class="rule-card-actions">'+
+        '<button class="act-btn" onclick="event.stopPropagation();toggleRuleStatus(\''+(r.id||'')+'\',this)">'+(r.status==='running'?'⏸ 暂停':'▶ 启用')+'</button>'+
+        '<button class="act-btn" onclick="event.stopPropagation();openEditDrawer(\''+(r.id||'')+'\')">✏️ 编辑</button>'+
+        '<button class="act-btn" onclick="event.stopPropagation();openHistory(\''+(r.id||'')+'\',\''+(r.name||'')+'\')">📜 记录</button>'+
+        '<button class="act-btn primary" onclick="event.stopPropagation();cloneRule(\''+(r.id||'')+'\')">📋 克隆</button>'+
+        '<button class="act-btn" onclick="event.stopPropagation();confirmDelete(\''+(r.id||'')+'\',this)" style="color:#EF4444;">🗑️</button>'+
+      '</div></div>';
+  });
+  grid.innerHTML = html;
+  if(rules.length >= 200){
+    document.getElementById('loadMoreRules').style.display = 'block';
+  }
+}
+
+function renderNotificationFloat(){
+  // 折叠栏
+  document.getElementById('notifBadgePulse').textContent = _unreadCount;
+  document.getElementById('notifSummaryCount').textContent = _unreadCount;
+  document.getElementById('notifExpBadge').textContent = _unreadCount+'条未读';
+  if(_recentNotifs.length){
+    var latest = _recentNotifs[0];
+    var stock = latest.stock||{};
+    document.getElementById('notifSummaryLatest').textContent = '最新：'+(latest.rule_name||'')+' '+(stock.name||'');
+  }
+  // 展开面板
+  var list = document.getElementById('notifFloatList');
+  if(!_recentNotifs||_recentNotifs.length===0){
+    list.innerHTML = '<div style="padding:var(--space-12);text-align:center;font-size:12px;color:var(--text-muted);">暂无通知记录</div>'+
+      '<div class="load-more" style="padding:var(--space-8);font-size:12px;display:none;" id="notifLoadMore">查看更多通知 ▶</div>';
+    return;
+  }
+  var html = '';
+  _recentNotifs.forEach(function(n,idx){
+    var stock = n.stock||{};
+    var cr = n.conditions_result||[];
+    var showLoadMore = (idx===_recentNotifs.length-1 && _recentNotifs.length < _notifTotal);
+    html += '<div class="notif-float-item '+(n.is_unread?'unread':'')+'" data-notif-id="'+(n.id||'')+'" onclick="focusRule(this);openNotifDetail(\''+(n.id||'')+'\')">'+
+      '<div class="notif-float-top"><div class="notif-float-rule"><span class="type-icon">'+(TYPE_ICONS[n.type]||'')+'</span>'+(n.rule_name||'')+'</div>'+
+      '<div class="notif-float-time">'+(n.trigger_time?fmtTime(n.trigger_time):'')+'</div></div>'+
+      '<div class="notif-float-stock">'+(stock.name||stock.ts_code||'')+(stock.ts_code?' ('+stock.ts_code+')':'')+'</div>'+
+      '<div class="notif-float-conditions">'+
+        cr.slice(0,3).map(function(c){
+          return '<div class="cond-pass-row"><span class="ck">'+(c.passed?'✅':'❌')+'</span><span class="cname">'+(c.condition_id||'')+'</span>'+
+            (c.current_value?'<span class="cval">'+(c.current_value||'')+'</span>':'')+'</div>';
+        }).join('')+
+        (cr.length>3?'<div class="cond-scan-meta">等'+(cr.length-3)+'项条件</div>':'')+
+      '</div>'+
+      '<div class="notif-float-actions">'+
+        '<button class="na-btn primary" onclick="event.stopPropagation();implicitConfirmNotif(this,\''+(n.id||'')+'\',\'看行情\')">📈 看行情</button>'+
+        '<button class="na-btn success" onclick="event.stopPropagation();implicitConfirmNotif(this,\''+(n.id||'')+'\',\'已处理\')">✅ 已处理</button>'+
+        '<button class="na-btn secondary-row" onclick="event.stopPropagation();showToast(\'跳转到复盘\')">📋 复盘</button>'+
+      '</div></div>';
+  });
+  html += '<div class="load-more" id="notifLoadMore" style="padding:var(--space-8);font-size:12px;'+
+    (_recentNotifs.length<_notifTotal?'':'display:none;')+'" onclick="loadMoreNotifs()">查看更多通知 ▶</div>';
+  list.innerHTML = html;
+}
+
+function renderRangeTable(){
+  var table = document.getElementById('rangeTable');
+  // 按 range 分组
+  var groups = {'single':[],'multi':[],'market':[]};
+  _rules.forEach(function(r){
+    var g = groups[r.range]||groups['multi'];
+    g.push(r);
+  });
+  var html = '<div style="padding:var(--space-10) var(--space-14);border-bottom:1px solid var(--border-default);font-size:12px;color:var(--text-muted);">按监控范围分组 · 纯浏览总览</div>';
+  var rangeMeta = {single:{icon:'📍',label:'单股级'},multi:{icon:'📋',label:'多股级'},market:{icon:'🔭',label:'全市场级'}};
+  Object.keys(groups).forEach(function(k){
+    var list = groups[k];
+    var m = rangeMeta[k]||{icon:'📋',label:k};
+    var active = list.filter(function(r){return r.status==='running';}).length;
+    var paused = list.length-active;
+    html += '<div style="padding:var(--space-8) var(--space-14);'+(k!=='single'?'border-top:1px solid var(--border-default);':'')+'">'+
+      '<div style="font-size:13px;font-weight:500;margin-bottom:var(--space-4);color:var(--text-secondary);">'+m.icon+' '+m.label+' — '+list.length+' 条（'+active+' 活跃'+ (paused?' / '+paused+' 暂停':'')+'）</div>';
+    if(list.length){
+      html += '<table class="table" style="font-size:12px;"><tr><th>状态</th><th>规则名</th><th>条件</th><th>时段</th><th>今日</th></tr>';
+      list.slice(0,8).forEach(function(r){
+        var condNames = (r.conditions||[]).map(function(c){return c.condition_id||'';}).filter(Boolean).join('+').slice(0,12);
+        html += '<tr><td><span class="status-dot '+(r.status==='running'?'green':'')+'" style="background:'+(r.status==='running'?'#22C55E':'#A3A3A3')+';"></span></td>'+
+          '<td>'+(r.name||'')+'</td><td>'+(condNames||'—')+'</td><td>'+(r.schedule&&r.schedule.start?r.schedule.start:'全天')+'</td><td>'+(r.trigger_today||'-')+'</td></tr>';
+      });
+      html += '</table>';
+    }
+    html += '</div>';
+  });
+  table.innerHTML = html;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   规则卡片筛选 — 重新从API获取
+   ═══════════════════════════════════════════════════════════════════ */
+async function filterCards(){
+  var q = document.getElementById('filterSearch').value||'';
+  var status = document.getElementById('filterStatus').value||'';
+  var type = document.getElementById('filterType').value||'';
+  var range = document.getElementById('filterRange').value||'';
+  var sort = document.getElementById('filterSort').value||'';
+  await loadRules({search:q, status:status, type:type, range:range, sort:sort});
+  renderRuleCards(_rules);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1414,35 +1533,60 @@ function dismissBatch(){
   document.querySelectorAll('.rule-card-checkbox:checked').forEach(function(cb){cb.checked=false;cb.closest('.rule-card').classList.remove('selected');});
   document.getElementById('batchBar').classList.remove('visible');
 }
-function batchAction(action){
-  var names=[];
-  document.querySelectorAll('.rule-card-checkbox:checked').forEach(function(cb){names.push(cb.closest('.rule-card').getAttribute('data-name')||'');});
-  var labels={'pause':'⏸ 批量暂停','resume':'▶ 批量启用','delete':'🗑 批量删除'};
-  if(names.length)alert(labels[action]+'：'+names.join('、'));
+async function batchAction(action){
+  var ids=[];
+  document.querySelectorAll('.rule-card-checkbox:checked').forEach(function(cb){
+    var card=cb.closest('.rule-card');
+    if(card) ids.push(card.getAttribute('data-name'));
+  });
+  if(!ids.length)return;
+  var r = await apiPost('/rules/batch', {rule_ids:ids, action:action});
+  if(r) showToast('批量'+(action==='delete'?'删除':(action==='pause'?'暂停':'启用'))+'完成');
+  dismissBatch();
+  await loadAll();
 }
 
 /* ═══════════════════════════════════════════════════════════════════
    休眠区
    ═══════════════════════════════════════════════════════════════════ */
 function toggleDormant(){ document.getElementById('dormantBody').classList.toggle('open'); }
-function restoreDormant(btn){
+async function restoreDormant(btn){
   var item=btn.closest('.dormant-item');
-  item.style.opacity='0.5';
-  item.querySelector('.act').textContent='已恢复';
-  item.querySelector('.act').style.borderColor='#22C55E';
-  item.querySelector('.act').style.color='#22C55E';
-  item.querySelector('.act').disabled=true;
-  var count=document.getElementById('dormantCount');
-  count.textContent=Math.max(0,parseInt(count.textContent)-1);
+  var ruleId=item.getAttribute('data-rule-id');
+  if(!ruleId)return;
+  var r = await apiPut('/rules/'+encodeURIComponent(ruleId), {status:'running'});
+  if(r){
+    item.style.opacity='0.5';
+    item.querySelector('.act').textContent='✅ 已恢复';
+    item.querySelector('.act').style.borderColor='#22C55E';
+    item.querySelector('.act').style.color='#22C55E';
+    item.querySelector('.act').disabled=true;
+    var count=document.getElementById('dormantCount');
+    count.textContent=Math.max(0,parseInt(count.textContent)-1);
+    showToast('规则已恢复启用');
+  }
 }
-function deleteDormant(btn){
+async function deleteDormant(btn){
   if(!confirm('确定彻底删除这条休眠规则？'))return;
   var item=btn.closest('.dormant-item');
+  var ruleId=item.getAttribute('data-rule-id');
+  if(ruleId) await apiDel('/rules/'+encodeURIComponent(ruleId));
   item.style.display='none';
   var count=document.getElementById('dormantCount');
   count.textContent=Math.max(0,parseInt(count.textContent)-1);
 }
-function batchDormant(action){ alert(action==='restore'?'已全部恢复休眠规则':'已清除全部休眠规则'); }
+async function batchDormant(action){
+  if(!_dormant.length)return;
+  var ids = _dormant.map(function(d){return d.rule_id||'';}).filter(Boolean);
+  if(action==='restore'){
+    await apiPost('/rules/batch', {rule_ids:ids, action:'resume'});
+    showToast('已全部恢复休眠规则');
+  } else {
+    await apiPost('/rules/batch', {rule_ids:ids, action:'delete'});
+    showToast('已清除全部休眠规则');
+  }
+  await loadAll();
+}
 
 /* ═══════════════════════════════════════════════════════════════════
    健康检查横幅
@@ -1464,33 +1608,135 @@ document.addEventListener('keydown',function(e){
   }
 });
 
-/* ── 详情弹窗 ── */
-function openDetail(name,type,status){
-  var labels={opportunity:'📈 发现机会',risk:'🛡️ 规避风险',anomaly:'⚡ 异动追踪',status:'📋 状态监控',discipline:'🎯 纪律执行'};
-  var statusHtml={running:'<span class="status-tag running">● 运行中</span>',paused:'<span class="status-tag paused">○ 已暂停</span>',dormant:'<span class="status-tag dormant">🟡 已休眠</span>',expired:'<span class="status-tag expired">● 已过期</span>'};
-  document.getElementById('detailTitle').innerHTML='📋 '+name+' <span class="hot-badge hot">🔥热门</span>';
-  document.getElementById('detailType').textContent='🏷️ '+(labels[type]||'');
-  document.getElementById('dType').textContent=labels[type]||'';
-  document.getElementById('dStatus').innerHTML=statusHtml[status]||'';
+/* ── 详情弹窗（从API获取）── */
+async function openDetail(ruleId){
+  if(!ruleId)return;
+  var rule = _ruleMap[ruleId];
+  if(!rule){
+    var r = await apiGet('/rules/'+encodeURIComponent(ruleId));
+    if(r) rule = r.rule;
+  }
+  if(!rule){
+    showToast('无法加载规则详情');
+    return;
+  }
+  var labels = TYPE_LABELS;
+  var name = rule.name||'';
+  var type = rule.type||'';
+  document.getElementById('detailTitle').innerHTML = '📋 '+name+(rule.hot_score>50?' <span class="hot-badge hot">🔥热门</span>':'');
+  document.getElementById('detailType').textContent = '🏷️ '+(labels[type]||type)+' · 创建于 '+(rule.created_at?rule.created_at.slice(0,10):'');
+  document.getElementById('dType').textContent = labels[type]||type;
+  document.getElementById('dStatus').innerHTML = STATUS_HTML[rule.status]||rule.status||'';
+  document.getElementById('dCondition').textContent = (rule.conditions||[]).map(function(c){return c.condition_id||'';}).join(' + ')||'无';
+  document.getElementById('dParams').textContent = (rule.conditions||[]).map(function(c){
+    var ps=c.params||{};return Object.keys(ps).map(function(k){return k+': '+ps[k];}).join(' ');
+  }).join('; ')||'—';
+  var scopeText = RANGE_LABELS[rule.range]||rule.range||'';
+  if(rule.scope_detail){
+    var sd=rule.scope_detail;
+    if(sd.stocks&&sd.stocks.length) scopeText += ' ('+sd.stocks.length+'只)'+(sd.dynamic?' 动态跟随':'');
+    if(sd.watchlist) scopeText += ' 自选股'+(sd.dynamic?' (动态)':'');
+  }
+  document.getElementById('dRange').textContent = scopeText;
+  document.getElementById('dTime').textContent = (rule.schedule?(rule.schedule.start||'全天')+(rule.schedule.end?'~'+rule.schedule.end:''):'全天');
+  document.getElementById('dValid').textContent = (rule.valid_from?rule.valid_from:'—')+' ~ '+(rule.valid_until||'无限期');
+  document.getElementById('dCooldown').textContent = (rule.cooldown||'—')+' 分钟';
+  document.getElementById('dPush').textContent = '☑'+(rule.channels&&rule.channels.desktop?'桌面':'')+' ☑'+(rule.channels&&rule.channels.wechat?'微信':'');
+  document.getElementById('dConfirm').textContent = (rule.confirm_period||'0')+'周期';
+  // 加载触发历史
+  var hist = await apiGet('/history?rule_id='+encodeURIComponent(ruleId)+'&per_page=5');
+  var histBody = document.getElementById('detailModal').querySelector('.modal-body .history-table');
+  if(histBody) histBody.outerHTML = renderHistoryTable(hist);
   openModal('detailModal');
+}
+function renderHistoryTable(hist){
+  var items = (hist&&hist.items)||[];
+  var html = '<div style="max-height:240px;overflow-y:auto;"><table class="history-table"><tr><th>时间</th><th>股票</th><th>触发值</th><th>渠道</th><th>状态</th></tr>';
+  items.forEach(function(n){
+    var stock = n.stock||{};
+    var channels = (n.channels_sent||[]).join('✓')+(n.channels_sent&&n.channels_sent.length?'✓':'');
+    html += '<tr><td>'+(n.trigger_time?fmtDate(n.trigger_time)+' '+fmtTime(n.trigger_time):'')+'</td>'+
+      '<td>'+(stock.name||stock.ts_code||'')+'</td>'+
+      '<td>'+(n.trigger_value||'')+'</td>'+
+      '<td>'+(channels||'—')+'</td>'+
+      '<td style="color:'+(n.is_unread?'var(--text-muted)':'#22C55E')+';">'+(n.is_unread?'○ 未读':'● 已处理')+'</td></tr>';
+  });
+  html += '</table></div>'+
+    '<div style="text-align:right;padding:var(--space-6) 0 0;font-size:12px;color:var(--color-brand-500);cursor:pointer;" onclick="openHistory(\''+(hist.rule_id||'')+'\')">查看更多 →</div>';
+  return html;
 }
 
 /* ── 触发历史弹窗 ── */
-function openHistory(name){
-  document.getElementById('historyTitle').textContent='📜 触发历史: '+name;
+var _historyRuleId = '';
+async function openHistory(ruleId,ruleName){
+  _historyRuleId = ruleId||'';
+  document.getElementById('historyTitle').textContent = '📜 触发历史: '+(ruleName||ruleId||'');
+  await loadHistoryTable(1);
   openModal('historyModal');
+}
+async function loadHistoryTable(page){
+  var perPage = 10;
+  var hist = await apiGet('/history/enhanced?rule_id='+encodeURIComponent(_historyRuleId)+'&page='+page+'&per_page='+perPage);
+  var items = (hist&&hist.items)||[];
+  var total = (hist&&hist.total)||0;
+  var pages = Math.ceil(total/perPage)||1;
+  var html = '<div style="max-height:400px;overflow-y:auto;"><table class="history-table">'+
+    '<tr><th>时间</th><th>股票</th><th>触发值</th><th>条件明细</th><th>渠道</th><th>确认</th></tr>';
+  items.forEach(function(n){
+    var stock = n.stock||{};
+    var condDetail = (n.conditions_result||[]).map(function(c){return (c.passed?'✅':'❌')+(c.condition_id||'').slice(0,4);}).join('')||'—';
+    var channels = (n.channels_sent||[]).join('✓')+(n.channels_sent&&n.channels_sent.length?'✓':'');
+    html += '<tr><td>'+(n.trigger_time?fmtTime(n.trigger_time):'')+'</td>'+
+      '<td>'+(stock.name||stock.ts_code||'')+'</td>'+
+      '<td>'+(n.trigger_value||'')+'</td>'+
+      '<td style="font-size:11px;">'+condDetail+'</td>'+
+      '<td>'+(channels||'—')+'</td>'+
+      '<td style="color:'+(n.is_unread?'var(--text-muted)':'#22C55E')+';">'+(n.is_unread?'○已收悉':'✅已处理')+'</td></tr>';
+  });
+  html += '</table></div>';
+  html += '<div style="display:flex;justify-content:center;align-items:center;gap:var(--space-8);padding:var(--space-8) 0 0;font-size:12px;color:var(--text-muted);">'+
+    '<span>共 '+total+' 条记录</span>';
+  if(page>1) html += '<button class="act-btn" onclick="loadHistoryTable('+(page-1)+')">❮ 上一页</button>';
+  html += '<span style="color:var(--text-secondary);">第 '+page+'/'+pages+' 页</span>';
+  if(page<pages) html += '<button class="act-btn" onclick="loadHistoryTable('+(page+1)+')">下一页 ❯</button>';
+  html += '</div>';
+
+  var body = document.querySelector('#historyModal .modal-body');
+  if(body){
+    // 保留筛选栏，替换表格和分页
+    var filterBar = body.querySelector('.history-filter-bar');
+    var existingTable = body.querySelector('div[style*="max-height:400px"]');
+    var existingPager = body.querySelector('div[style*="justify-content:center"]');
+    if(existingTable) body.removeChild(existingTable);
+    if(existingPager) body.removeChild(existingPager);
+    body.insertAdjacentHTML('beforeend', html);
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
    编辑抽屉
    ═══════════════════════════════════════════════════════════════════ */
-function openEditDrawer(name){
+var _editingRuleId = '';
+function openEditDrawer(ruleId){
+  _editingRuleId = ruleId||'';
+  var rule = _ruleMap[ruleId];
+  if(rule){
+    document.querySelector('#editDrawer .input-sm[type="text"]').value = rule.name||'';
+  }
   document.getElementById('editDrawer').classList.add('open');
   document.getElementById('drawerOverlay').classList.add('open');
 }
 function closeDrawer(){
   document.getElementById('editDrawer').classList.remove('open');
   document.getElementById('drawerOverlay').classList.remove('open');
+}
+async function saveEdit(){
+  var name = document.querySelector('#editDrawer .input-sm[type="text"]').value;
+  if(!name||!_editingRuleId){showToast('规则名称不能为空');return;}
+  var r = await apiPut('/rules/'+encodeURIComponent(_editingRuleId), {name:name});
+  if(r) showToast('规则已保存');
+  closeDrawer();
+  await loadAll();
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1520,11 +1766,14 @@ function focusRule(el){
   }
 }
 
-/* ── 通知隐式确认 (浮窗版 — 209号 0.3s过渡动画) ── */
-function implicitConfirmNotif(btn,action){
+/* ── 通知隐式确认 (浮窗版) ── */
+async function implicitConfirmNotif(btn,notifId,action){
+  if(!notifId||!action)return;
   var item=btn.closest('.notif-float-item');
   if(item&&item.classList.contains('unread')){
     item.classList.remove('unread');
+    await apiPost('/rules/'+encodeURIComponent(notifId)+'/ack', {action:action});
+    _unreadCount = Math.max(0, _unreadCount-1);
     updateNotifBadge();
   }
   btn.classList.add('confirmed');
@@ -1534,31 +1783,49 @@ function implicitConfirmNotif(btn,action){
 }
 
 /* ── 通知详情弹窗隐式确认 ── */
-function implicitConfirmNotifDetail(btn,action){
+async function implicitConfirmNotifDetail(btn,action){
   btn.classList.add('confirmed');
   var labels={'看行情':'📈 ✓','策略分析':'🧠 ✓','多角色':'🤖 ✓','加自选':'⭐ ✓','已处理':'✅ ✓','误报':'❌ ✓'};
   btn.textContent=labels[action]||action+'✓';
   btn.style.transition='all 0.3s ease';
+  if(_unreadCount>0){
+    // 从详情弹窗确认，需要找到对应的通知ID
+    // 简化：从最近未读中取第一条确认
+    if(_recentNotifs.length){
+      var firstUnread = _recentNotifs.find(function(n){return n.is_unread;});
+      if(firstUnread) await apiPost('/rules/'+encodeURIComponent(firstUnread.id)+'/ack', {action:action});
+    }
+    _unreadCount = Math.max(0, _unreadCount-1);
+  }
   updateNotifBadge();
 }
 
 function updateNotifBadge(){
-  var unread=document.querySelectorAll('.notif-float-item.unread').length;
-  document.getElementById('notifBadgePulse').textContent=unread;
-  document.getElementById('notifExpBadge').textContent=unread+'条未读';
-  document.getElementById('notifSummaryCount').textContent=unread;
-  if(unread===0){
-    document.getElementById('notifBadgePulse').textContent='0';
-    document.getElementById('scrollHeaderText').innerHTML='📡 今日所有通知已处理';
-    document.getElementById('notifScrollTrack').innerHTML=
-      '<div class="notif-scroll-card"><span class="type-icon">📈</span><span class="stock">放量追击</span><span style="font-size:11px;color:var(--text-muted);">2h触发3次</span></div>'.repeat(6);
+  document.getElementById('notifBadgePulse').textContent = _unreadCount;
+  document.getElementById('notifExpBadge').textContent = _unreadCount+'条未读';
+  document.getElementById('notifSummaryCount').textContent = _unreadCount;
+  if(_unreadCount===0){
+    document.getElementById('notifBadgePulse').textContent = '0';
+    document.getElementById('scrollHeaderText').innerHTML = '📡 今日所有通知已处理';
   }
 }
 
 /* ── 全部已处理 ── */
-function markAllRead(){
-  document.querySelectorAll('.notif-float-item.unread').forEach(function(n){n.classList.remove('unread');});
+async function markAllRead(){
+  var unread = _recentNotifs.filter(function(n){return n.is_unread;});
+  for(var i=0;i<unread.length;i++){
+    await apiPost('/rules/'+encodeURIComponent(unread[i].id)+'/ack', {action:'已处理'});
+  }
+  _unreadCount = 0;
   updateNotifBadge();
+  renderNotificationFloat();
+  showToast('全部通知已处理');
+}
+
+/* ── 加载更多通知 ── */
+async function loadMoreNotifs(){
+  await loadNotifHistory(_notifPage+1, 5);
+  renderNotificationFloat();
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1579,8 +1846,7 @@ function selectRuleType(el,type){
   document.querySelectorAll('.type-select-card').forEach(function(c){c.classList.remove('selected');});
   el.classList.add('selected');
   selectedType=type;
-  var labels={opportunity:'📈 发现机会',risk:'🛡️ 规避风险',anomaly:'⚡ 异动追踪',status:'📋 状态监控',discipline:'🎯 纪律执行'};
-  document.getElementById('selectedTypeLabel').textContent='已选：'+labels[type];
+  document.getElementById('selectedTypeLabel').textContent='已选：'+(TYPE_LABELS[type]||type);
   document.getElementById('typeNextBtn').disabled=false;
 }
 
@@ -1639,34 +1905,136 @@ function openCondExplain(name){
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   通知详情弹窗
+   通知详情弹窗（从缓存数据读取）
    ═══════════════════════════════════════════════════════════════════ */
-function openNotifDetail(type){
-  var titleLabels={opportunity:'📈 MA60突破+量能确认',risk:'🛡️ MACD死叉 ⚠️ 风险信号',anomaly:'⚡ 成交量放大超3倍 异动',status:'📋 均线多头排列 状态正常',discipline:'🎯 止盈提醒！浮盈>15%'};
-  var typeLabels={opportunity:'📈 发现机会',risk:'🛡️ 规避风险',anomaly:'⚡ 异动追踪',status:'📋 状态监控',discipline:'🎯 纪律执行'};
-  document.getElementById('ndTitle').textContent=titleLabels[type]||titleLabels.opportunity;
-  document.getElementById('ndType').textContent='🏷️ '+(typeLabels[type]||'')+' · 贵州茅台(600519) · 14:35';
+function openNotifDetail(notifId){
+  var n = _recentNotifs.find(function(x){return x.id===notifId;});
+  if(!n){showToast('通知未找到');return;}
+  var stock = n.stock||{};
+  var cr = n.conditions_result||[];
+  document.getElementById('ndTitle').textContent = (TYPE_ICONS[n.type]||'')+' '+(n.rule_name||'通知详情');
+  document.getElementById('ndType').textContent = '🏷️ '+(TYPE_LABELS[n.type]||n.type||'')+' · '+(stock.name||stock.ts_code||'')+' · '+(n.trigger_time?fmtTime(n.trigger_time):'');
+  // 规则摘要
+  document.getElementById('ndRuleSummary').innerHTML =
+    '<div><span class="label">规则：</span><span class="val">'+(n.rule_name||'')+'（今日触发'+(n.today_count||1)+'次）</span></div>'+
+    '<div><span class="label">条件：</span><span class="val">'+(cr.map(function(c){return c.condition_id||'';}).join(' + ')||'')+'</span></div>'+
+    '<div><span class="label">范围：</span><span class="val">'+(stock.name||stock.ts_code||'')+'</span></div>';
+  // 触发详情
+  document.getElementById('ndTriggerDetails').innerHTML =
+    cr.map(function(c){
+      return '<div class="trigger-detail-item"><div class="td-name">'+(c.passed?'✅':'❌')+' '+(c.condition_id||'')+'</div>'+
+        '<div class="td-detail">'+(c.details||'阈值: '+(c.threshold||'')+', 当前: '+(c.current_value||''))+'</div>'+
+        '<div class="td-status">'+(c.passed?'通过':'未通过')+'</div></div>';
+    }).join('') +
+    '<div style="font-size:12px;color:var(--text-muted);margin-top:var(--space-4);padding:var(--space-4) var(--space-8);background:rgba(34,197,94,0.04);border-radius:var(--radius-xs);">'+
+    '通道状态：桌面'+(n.channels_sent&&n.channels_sent.includes('desktop')?'✓':'未推')+' 微信'+(n.channels_sent&&n.channels_sent.includes('wechat')?'✓':'未配置')+'</div>';
   openModal('notifDetailModal');
 }
 
 /* ═══════════════════════════════════════════════════════════════════
    规则卡片操作
    ═══════════════════════════════════════════════════════════════════ */
-function toggleRuleStatus(btn){
+async function toggleRuleStatus(ruleId,btn){
+  if(!ruleId)return;
   var text=btn.textContent;
-  if(text.includes('⏸')){btn.textContent='▶ 启用';btn.style.borderColor='#22C55E';btn.style.color='#22C55E';}
-  else if(text.includes('▶')){btn.textContent='⏸ 暂停';btn.style.borderColor='';btn.style.color='';}
-  else if(text.includes('恢复')){btn.textContent='⏸ 暂停';btn.style.borderColor='';btn.style.color='';}
+  var newStatus = (text.includes('⏸')||text.includes('暂停'))?'paused':'running';
+  var r = await apiPut('/rules/'+encodeURIComponent(ruleId), {status:newStatus});
+  if(r){
+    if(newStatus==='paused'){
+      btn.textContent='▶ 启用';btn.style.borderColor='#22C55E';btn.style.color='#22C55E';
+    } else {
+      btn.textContent='⏸ 暂停';btn.style.borderColor='';btn.style.color='';
+    }
+    showToast('规则已'+(newStatus==='paused'?'暂停':'启用'));
+    // 更新缓存
+    await loadAll();
+  }
 }
 
-function confirmDelete(el){ if(confirm('确定删除这条规则？此操作不可撤销。'))alert('规则已删除'); }
+async function cloneRule(ruleId){
+  if(!ruleId)return;
+  var r = await apiPost('/rules/'+encodeURIComponent(ruleId)+'/clone');
+  if(r){
+    showToast('规则已克隆');
+    await loadAll();
+  }
+}
 
-/* ── 条件库 ── */
-function openConditionLib(){ alert('📊 条件库概览（共 163 条条件，13 个分类）'); }
+async function confirmDelete(ruleId,el){
+  if(!ruleId)return;
+  if(!confirm('确定删除这条规则？此操作不可撤销。'))return;
+  var r = await apiDel('/rules/'+encodeURIComponent(ruleId));
+  if(r){
+    showToast('规则已删除');
+    await loadAll();
+  }
+}
 
-/* ── 初始化 ── */
+/* ── 条件库（从API获取统计）── */
+async function openConditionLib(){
+  try{
+    var res = await fetch(CONDITIONS_API+'/overview');
+    var json = await res.json();
+    if(json.success){
+      var d = json.data;
+      showToast('📊 条件库共 '+(d.total||0)+' 条条件');
+      // 可选弹窗展示详情
+      var cats = d.by_category||{};
+      var catStr = Object.keys(cats).slice(0,8).map(function(k){return k+':'+cats[k];}).join(' ');
+      alert('📊 条件库概览\n\n总计：'+(d.total||0)+' 条条件\n难度分布：'+(d.by_difficulty?JSON.stringify(d.by_difficulty):'')+'\n分类：'+catStr);
+    } else {
+      alert('📊 条件库（API暂不可用）');
+    }
+  }catch(e){
+    alert('📊 条件库（API暂不可用）');
+  }
+}
+
+/* ── 导出 CSV ── */
+async function exportHistoryCSV(){
+  try{
+    var r = await fetch(API_BASE+'/history/export?format=csv');
+    var blob = await r.blob();
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = 'notification_history_'+today()+'.csv';
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('CSV 已下载');
+  }catch(e){
+    showToast('导出失败');
+  }
+}
+
+/* ── 搜索历史弹窗中的条件 ── */
+function filterHistoryTable(val){
+  document.querySelectorAll('#historyModal .history-table tr').forEach(function(r,i){
+    if(i===0)return; // 跳过表头
+    r.style.display=r.textContent.toLowerCase().includes(val.toLowerCase())||!val?'':'none';
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   定时轮询
+   ═══════════════════════════════════════════════════════════════════ */
+function startPolling(){
+  // 每30秒刷新一次未读通知和摘要
+  setInterval(async function(){
+    await Promise.all([
+      loadRecent().then(function(){renderNotificationFloat();}),
+      loadSummary().then(function(){renderSummary();}),
+      loadTodayUnread().then(function(){renderScrollCards();}),
+    ]);
+  }, 30000);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   初始化
+   ═══════════════════════════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded',function(){
-  document.getElementById('healthBanner').classList.add('visible');
+  loadAll();
+  startPolling();
 });
 </script>
 </body>

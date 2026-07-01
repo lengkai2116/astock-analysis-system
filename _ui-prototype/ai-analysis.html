@@ -177,6 +177,38 @@
 </div>
 
 <script>
+/* ===== API工具 ===== */
+var API_BASE = 'http://localhost:5001';
+var _analysisResults = null;   // 存储当前分析返回的各角色数据 { roleId: {structured, report, sources} }
+var _synthesisData = null;     // 存储综合决策数据
+var _currentTaskId = null;     // 当前分析任务ID
+
+async function apiPost(path, data) {
+  try {
+    var resp = await fetch(API_BASE + path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    if (!resp.ok) return null;
+    var json = await resp.json();
+    return json.success ? json : null;
+  } catch(e) {
+    return null;
+  }
+}
+
+async function apiGet(path) {
+  try {
+    var resp = await fetch(API_BASE + path);
+    if (!resp.ok) return null;
+    var json = await resp.json();
+    return json.success ? json : null;
+  } catch(e) {
+    return null;
+  }
+}
+
 /* ===== 角色定义 ===== */
 var ROLES = [
   { id:'technical',   icon:'📈', name:'技术研判',   tabLabel:'📈 技术研判',   direction:'bullish',  tag:'偏多' },
@@ -308,10 +340,119 @@ function startAnalysis() {
   // 初始Tab内容
   tabContentEl.innerHTML = '<div class="report-loading"><div class="spinner"></div><span>正在启动6位专业分析师...</span></div>';
 
-  // 模拟分析进度
-  simulateProgress(roleStates);
+  // 尝试调用真实API
+  var tsCode = document.getElementById('stockCode').value.trim() || '000762.SZ';
+  var stockName = document.getElementById('stockSelect').value;
+
+  apiPost('/api/v3/ai/analyze', { ts_code: tsCode, stock_name: stockName }).then(function(resp){
+    if(resp && resp.task_id) {
+      _currentTaskId = resp.task_id;
+      // 用实时进度轮询取代模拟进度
+      pollProgress(roleStates, resp.roles || ROLES);
+    } else {
+      // API失败，回退到模拟进度
+      simulateProgress(roleStates);
+    }
+  }).catch(function(){
+    simulateProgress(roleStates);
+  });
 }
 
+/* ===== API进度轮询 ===== */
+function pollProgress(states, roles) {
+  var polling = true;
+  var pollMs = 800;
+
+  function doPoll() {
+    if(!polling) return;
+    apiGet('/api/v3/ai/analyst-progress').then(function(resp){
+      if(!resp || !resp.data) {
+        // 退化到模拟
+        polling = false;
+        simulateProgress(states);
+        return;
+      }
+
+      var allDone = true;
+      ROLES.forEach(function(r){
+        var prog = resp.data[r.id];
+        if(prog === 'done') { states[r.id] = 'done'; }
+        else if(prog === 'analyzing' || prog === 'running') { states[r.id] = 'analyzing'; allDone = false; }
+        else if(prog === 'error') { states[r.id] = 'error'; allDone = false; }
+        else { states[r.id] = 'waiting'; allDone = false; }
+      });
+
+      // 计算百分比并更新进度条
+      var doneCount = ROLES.filter(function(r){ return states[r.id] === 'done'; }).length;
+      var analyzingCount = ROLES.filter(function(r){ return states[r.id] === 'analyzing'; }).length;
+      var pct = Math.min(100, Math.round((doneCount + analyzingCount * 0.5) / ROLES.length * 100));
+
+      progressFill.style.width = pct + '%';
+      progressPct.textContent = pct + '%';
+      renderRoleStrip(states);
+      renderRoleTabStatus(states);
+
+      // 如果当前已切换到的角色已完成，刷新内容
+      var activeTab = document.querySelector('.role-tab.active');
+      if(activeTab && activeTab.dataset.roleId !== 'synthesis') {
+        var rid = activeTab.dataset.roleId;
+        if(states[rid] === 'done') {
+          showRoleContent(rid);
+        }
+      }
+
+      if(allDone) {
+        // 所有角色完成 — 加载最终数据
+        polling = false;
+        progressFill.style.width = '100%';
+        progressPct.textContent = '100%';
+        analyzing = false;
+        document.getElementById('btnAnalyze').disabled = false;
+
+        // 加载各角色真实数据和综合决策
+        loadAllRoleData();
+        // 跳转到综合决策
+        renderTabs(null);
+        switchTab('synthesis');
+        tabContentEl.scrollIntoView({behavior:'smooth', block:'nearest'});
+      } else {
+        setTimeout(doPoll, pollMs);
+      }
+    }).catch(function(){
+      polling = false;
+      simulateProgress(states);
+    });
+  }
+
+  setTimeout(doPoll, 500);
+}
+
+/* ===== 从API加载各角色数据 ===== */
+function loadAllRoleData() {
+  var tsCode = document.getElementById('stockCode').value.trim() || '000762.SZ';
+
+  // 1. 尝试获取最终报告（含individual_reports和综合决策）
+  apiGet('/api/v3/ai/final-report').then(function(resp){
+    if(resp && resp.data) {
+      _synthesisData = resp.data;
+      if(resp.data.individual_reports) {
+        _analysisResults = resp.data.individual_reports;
+      }
+    }
+  }).catch(function(){});
+
+  // 2. 尝试获取信号解释的结构化数据
+  apiPost('/api/v3/ai/signal-explain', { ts_code: tsCode, signals: {} }).then(function(resp){
+    if(resp && resp.data && resp.data.analysts) {
+      if(!_analysisResults) _analysisResults = {};
+      Object.keys(resp.data.analysts).forEach(function(k){
+        _analysisResults[k] = resp.data.analysts[k];
+      });
+    }
+  }).catch(function(){});
+}
+
+/* ===== 模拟分析进度（API降级回退） ===== */
 function simulateProgress(states) {
   var order = ['technical','fundamental','chip','sentiment','news','risk'];
   var idx = 0;
@@ -377,7 +518,7 @@ function renderRoleStrip(states) {
   ROLES.forEach(function(r){
     var s = states[r.id] || 'waiting';
     var cls = 'role-chip chip-'+s;
-    var label = s==='done' ? '✅' : (s==='analyzing' ? '⏳' : '⏸️');
+    var label = s==='done' ? '✅' : (s==='analyzing' ? '⏳' : (s==='error' ? '❌' : '⏸️'));
     html += '<div class="'+cls+'"><span class="chip-icon">'+r.icon+'</span>'+r.name+' '+label+'</div>';
   });
   roleStrip.innerHTML = html;
@@ -387,7 +528,7 @@ function renderTabs(states) {
   var html = '';
   ROLES.forEach(function(r){
     var s = (states && states[r.id]) || 'waiting';
-    var statusClass = s==='done' ? 's-done' : (s==='analyzing' ? 's-analyzing' : 's-waiting');
+    var statusClass = s==='done' ? 's-done' : (s==='analyzing' ? 's-analyzing' : (s==='error' ? 's-error' : 's-waiting'));
     html += '<div class="role-tab" data-role-id="'+r.id+'" onclick="switchTab(\''+r.id+'\')"><span class="tab-status '+statusClass+'"></span>'+r.tabLabel+'</div>';
   });
   html += '<div class="role-tab" data-role-id="synthesis" onclick="switchTab(\'synthesis\')"><span class="tab-status s-done"></span>🎯 综合决策</div>';
@@ -424,36 +565,43 @@ function switchTab(roleId) {
 }
 
 function showRoleContent(roleId) {
-  var mock = MOCK_REPORTS[roleId];
+  // 优先从API结果读取，降级到Mock
   var role = ROLES.find(function(r){ return r.id === roleId; });
-  if(!mock || !role) return;
+  if(!role) return;
+
+  var apiData = (_analysisResults && _analysisResults[roleId]);
+  var mock = MOCK_REPORTS[roleId];
+  var dataSource = apiData || mock;
+  if(!dataSource) return;
 
   var tagClass = role.direction==='bullish'?'bullish':(role.direction==='bearish'?'bearish':'neutral');
   var tagText = role.tag;
 
   // 数据卡片
   var cardsHtml = '';
-  mock.structured.forEach(function(d){
+  (dataSource.structured || []).forEach(function(d){
     cardsHtml += '<div class="data-card"><div class="dc-label">'+d.label+'</div><div class="dc-value">'+d.value+'</div>'+(d.sub?'<div class="dc-sub">'+d.sub+'</div>':'')+'</div>';
   });
 
   // 数据来源
   var sourcesHtml = '';
-  mock.sources.forEach(function(s){
+  (dataSource.sources || []).forEach(function(s){
     sourcesHtml += '<div class="src-item">· '+s+'</div>';
   });
 
   // 研判报告（换行处理）
   var reportHtml = '';
-  var sections = mock.report.split('\n\n');
-  sections.forEach(function(sec){
-    sec = sec.trim();
-    if(!sec) return;
-    var lines = sec.split('\n');
-    var title = lines[0].replace(/【|】/g,'').trim();
-    var body = lines.slice(1).join('\n').trim();
-    reportHtml += '<div class="report-section"><div class="rs-title">'+title+'</div><div class="rs-text">'+body+'</div></div>';
-  });
+  if(dataSource.report) {
+    var sections = dataSource.report.split('\n\n');
+    sections.forEach(function(sec){
+      sec = sec.trim();
+      if(!sec) return;
+      var lines = sec.split('\n');
+      var title = lines[0].replace(/【|】/g,'').trim();
+      var body = lines.slice(1).join('\n').trim();
+      reportHtml += '<div class="report-section"><div class="rs-title">'+title+'</div><div class="rs-text">'+body+'</div></div>';
+    });
+  }
 
   tabContentEl.innerHTML =
     '<div class="role-content">'+
@@ -470,28 +618,36 @@ function showRoleContent(roleId) {
 }
 
 function showSynthesis() {
+  // 优先从API结果读取，降级到Mock
+  var data = _synthesisData || SYNTHESIS;
+
   var cHtml = '';
-  SYNTHESIS.consensus.forEach(function(c){
-    cHtml += '<div class="consensus-item"><span class="ci-icon">'+c.icon+'</span>'+c.text+'</div>';
+  (data.consensus || []).forEach(function(c){
+    cHtml += '<div class="consensus-item"><span class="ci-icon">'+(c.icon||'✅')+'</span>'+(c.text||c)+'</div>';
   });
 
   var cfHtml = '';
-  SYNTHESIS.conflicts.forEach(function(c){
-    cfHtml += '<div class="conflict-card"><div class="cc-title">'+c.title+'</div><div class="cc-detail">'+c.detail.replace(/\n/g,'<br>')+'</div></div>';
+  (data.conflicts || []).forEach(function(c){
+    cfHtml += '<div class="conflict-card"><div class="cc-title">'+(c.title||'分歧')+'</div><div class="cc-detail">'+((c.detail||'').replace(/\n/g,'<br>'))+'</div></div>';
   });
 
-  var o = SYNTHESIS.overall;
+  var o = data.overall || data.decision || SYNTHESIS.overall;
+  var direction = o.direction || o.direction_text || '中性';
+  var consistency = o.consistency || o.consensus_ratio || '--';
+  var completeness = o.completeness || '--';
+  var stoploss = o.stoploss || '--';
+  var position = o.position || o.max_position || '--';
 
   tabContentEl.innerHTML =
     '<div class="report-area" style="grid-column:1/-1;">'+
-      '<div class="report-header"><h3>🎯 综合决策 · 6角色研判汇总</h3><span class="report-tag '+(o.direction==='中性偏多'?'neutral':'neutral')+'">'+o.direction+'</span></div>'+
+      '<div class="report-header"><h3>🎯 综合决策 · 6角色研判汇总</h3><span class="report-tag neutral">'+direction+'</span></div>'+
       '<div class="report-body">'+
 
         '<div class="synthesis-grid">'+
-          '<div class="syn-card"><div class="syn-title">综合方向</div><div class="syn-value" style="color:var(--signal-watch);font-weight:600;">'+o.direction+'</div></div>'+
-          '<div class="syn-card"><div class="syn-title">方向一致性</div><div class="syn-value">'+o.consistency+' (多/空/中性分布)</div></div>'+
-          '<div class="syn-card"><div class="syn-title">数据完整度</div><div class="syn-value">'+o.completeness+' (74/95项数据到位)</div></div>'+
-          '<div class="syn-card"><div class="syn-title">风控建议</div><div class="syn-value">止损 '+o.stoploss+' · 仓位 ≤'+o.position+'</div></div>'+
+          '<div class="syn-card"><div class="syn-title">综合方向</div><div class="syn-value" style="color:var(--signal-watch);font-weight:600;">'+direction+'</div></div>'+
+          '<div class="syn-card"><div class="syn-title">方向一致性</div><div class="syn-value">'+consistency+' (多/空/中性分布)</div></div>'+
+          '<div class="syn-card"><div class="syn-title">数据完整度</div><div class="syn-value">'+completeness+' </div></div>'+
+          '<div class="syn-card"><div class="syn-title">风控建议</div><div class="syn-value">止损 '+stoploss+' · 仓位 ≤'+position+'</div></div>'+
         '</div>'+
 
         '<div style="margin-bottom:var(--space-12);"><div class="rs-title">一致观点</div></div>'+
@@ -506,7 +662,7 @@ function showSynthesis() {
         '<div class="syn-card"><div class="syn-title">情景C：回调下探（概率~20%）</div><div class="syn-value">消息面减持压力+情绪面回落共同施压，跌破2950中枢下沿。触发条件：大盘走弱+大宗减持执行+量能持续萎缩。</div></div>'+
 
         '<div style="margin:var(--space-16) 0 var(--space-4);">'+
-          '<div class="judgment-line" style="border-top:none;padding-top:0;">🎯 综合建议：<span style="color:var(--signal-watch);font-weight:600;">'+o.direction+'，可参与，仓位≤'+o.position+'，止损 '+o.stoploss+'</span></div>'+
+          '<div class="judgment-line" style="border-top:none;padding-top:0;">🎯 综合建议：<span style="color:var(--signal-watch);font-weight:600;">'+direction+'，可参与，仓位≤'+position+'，止损 '+stoploss+'</span></div>'+
           '<div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-4);">以上建议由DeepSeek V4基于6位分析师的专业研判生成，仅供参考，不构成投资建议</div>'+
         '</div>'+
 

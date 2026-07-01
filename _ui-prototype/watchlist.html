@@ -140,6 +140,24 @@
 
 <script>
 // ════════════════════════════════════════════
+// API基础设施
+// ════════════════════════════════════════════
+var API_BASE = 'http://localhost:5001/api/v3';
+async function _apiFetch(path, opts){
+  opts = opts || {};
+  var url = API_BASE + path;
+  if(opts.params){
+    var qs = Object.keys(opts.params).filter(function(k){return opts.params[k]!==undefined&&opts.params[k]!==null&&opts.params[k]!=='';}).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(opts.params[k]);}).join('&');
+    if(qs) url += '?' + qs;
+  }
+  var fetchOpts = {method:opts.method||'GET'};
+  if(opts.body){fetchOpts.body=JSON.stringify(opts.body);fetchOpts.headers={'Content-Type':'application/json'};}
+  var r=await fetch(url, fetchOpts);
+  if(!r.ok){var e=await r.json().catch(function(){return{error:r.statusText};});throw new Error(e.error||e.message||'请求失败');}
+  return r.json();
+}
+
+// ════════════════════════════════════════════
 // 列定义（完整参考同花顺）
 // ════════════════════════════════════════════
 var ALL_COLUMNS = [
@@ -220,15 +238,10 @@ var ALL_COLUMNS = [
 ];
 
 // ════════════════════════════════════════════
-// 数据
+// 数据 — 从API加载
 // ════════════════════════════════════════════
-var stockData = [
-  {code:'000762.SZ',name:'西藏矿业', price:'12.34',change:'-2.10%',chg_speed:'-0.08',volume:'85,230',amount:'1,052万',turnover:'1.25%',vol_ratio:'0.85',amplitude:'3.20%',high:'12.68',low:'12.20',open:'12.50',pre_close:'12.60',avg_price:'12.40',buy1:'12.33',sell1:'12.35',cur_vol:'1,200',in_disk:'48,500',out_disk:'36,730',commission:'-12.5%',chg_5d:'+1.80%',chg_10d:'+3.20%',industry:'有色金属',composite:72,chanlun:78,vp:65,factor:55,signal_tag:'👀 关注',buy_signal:'—',sell_signal:'—',tech_pattern:'中枢震荡',fund_net:'↓ 234万',fund_vol:'-12.5万',fund_inflow:'1,200万',fund_outflow:'1,434万',big_net:'-89万',big_in:'320万',big_out:'409万',mid_net:'-45万',sml_net:'-12万',big_5d:'-56万',big_10d:'-120万',fund_add_td:'-0.12%',fund_add_2d:'-0.18%',fund_add_5d:'-0.35%',pe_ttm:'28.5',pe_static:'26.2',pb:'3.2',roe_ttm:'11.5%',np_growth:'15.2%',gross_margin:'38.5%',debt_ratio:'45.2%',eps:'0.85',bps:'6.20',mkt_cap_circ:'38.6亿',mkt_cap_total:'45.2亿',shares_total:'3.66亿',shares_circ:'3.13亿',shareholder_n:'52,368',major_holder:'32.5%',list_date:'1999-06-15',industry_full:'有色金属-工业金属',peg:'1.85',main_force_pwd:'—',main_force_intent:'—',ai_strategy:'—',eval:true},
-  {code:'000001.SZ',name:'平安银行', price:'11.28',change:'+3.45%',chg_speed:'+0.15',volume:'1,245,600',amount:'1.41亿',turnover:'0.68%',vol_ratio:'2.35',amplitude:'4.10%',high:'11.45',low:'10.95',open:'11.00',pre_close:'10.90',avg_price:'11.30',buy1:'11.27',sell1:'11.28',cur_vol:'8,500',in_disk:'580,000',out_disk:'665,600',commission:'+8.5%',chg_5d:'+5.20%',chg_10d:'+8.50%',industry:'银行',composite:88,chanlun:85,vp:82,factor:90,signal_tag:'🔥 强烈推荐',buy_signal:'二买确认',sell_signal:'—',tech_pattern:'上升趋势',fund_net:'↑ 1,256万',fund_vol:'+68.2万',fund_inflow:'5,890万',fund_outflow:'4,634万',big_net:'+456万',big_in:'1,890万',big_out:'1,434万',mid_net:'+234万',sml_net:'+89万',big_5d:'+234万',big_10d:'+456万',fund_add_td:'+0.35%',fund_add_2d:'+0.52%',fund_add_5d:'+0.88%',pe_ttm:'6.8',pe_static:'6.2',pb:'0.7',roe_ttm:'10.2%',np_growth:'5.8%',gross_margin:'—',debt_ratio:'91.5%',eps:'1.65',bps:'15.80',mkt_cap_circ:'2,190亿',mkt_cap_total:'2,190亿',shares_total:'194亿',shares_circ:'194亿',shareholder_n:'352,168',major_holder:'21.5%',list_date:'1991-04-03',industry_full:'银行-股份制银行',peg:'1.28',main_force_pwd:'吸筹中',main_force_intent:'震荡吸筹',ai_strategy:'—',eval:true},
-  {code:'002415.SZ',name:'海康威视',price:'32.68',change:'+1.28%',chg_speed:'+0.05',volume:'456,800',amount:'1,493万',turnover:'0.52%',vol_ratio:'1.12',amplitude:'2.35%',high:'33.10',low:'32.30',open:'32.50',pre_close:'32.28',avg_price:'32.70',buy1:'32.67',sell1:'32.68',cur_vol:'3,200',in_disk:'210,000',out_disk:'246,800',commission:'-3.2%',chg_5d:'+2.50%',chg_10d:'+4.80%',industry:'计算机',composite:75,chanlun:70,vp:55,factor:80,signal_tag:'👀 关注',buy_signal:'—',sell_signal:'—',tech_pattern:'箱体震荡',fund_net:'↑ 568万',fund_vol:'+18.3万',fund_inflow:'2,340万',fund_outflow:'1,772万',big_net:'+210万',big_in:'890万',big_out:'680万',mid_net:'+85万',sml_net:'+45万',big_5d:'+89万',big_10d:'+156万',fund_add_td:'+0.08%',fund_add_2d:'+0.15%',fund_add_5d:'+0.28%',pe_ttm:'22.3',pe_static:'20.5',pb:'4.1',roe_ttm:'18.5%',np_growth:'8.2%',gross_margin:'45.2%',debt_ratio:'38.5%',eps:'1.48',bps:'8.20',mkt_cap_circ:'2,980亿',mkt_cap_total:'3,050亿',shares_total:'93.3亿',shares_circ:'91.2亿',shareholder_n:'185,600',major_holder:'42.8%',list_date:'2010-05-28',industry_full:'计算机-安防',peg:'2.45',main_force_pwd:'—',main_force_intent:'—',ai_strategy:'—',eval:true},
-  {code:'600519.SH',name:'贵州茅台',price:'1,685.00',change:'+0.85%',chg_speed:'+0.02',volume:'32,150',amount:'5.42亿',turnover:'0.26%',vol_ratio:'0.95',amplitude:'1.50%',high:'1,698.00',low:'1,672.00',open:'1,680.00',pre_close:'1,670.80',avg_price:'1,685.50',buy1:'1,684.00',sell1:'1,685.00',cur_vol:'220',in_disk:'14,500',out_disk:'17,650',commission:'+2.5%',chg_5d:'+1.20%',chg_10d:'+3.50%',industry:'食品饮料',composite:85,chanlun:72,vp:88,factor:82,signal_tag:'✅ 推荐',buy_signal:'趋势延续',sell_signal:'—',tech_pattern:'上升通道',fund_net:'↑ 3,450万',fund_vol:'+22.5万',fund_inflow:'8,200万',fund_outflow:'4,750万',big_net:'+1,280万',big_in:'3,800万',big_out:'2,520万',mid_net:'+680万',sml_net:'+320万',big_5d:'+856万',big_10d:'+1,680万',fund_add_td:'+0.05%',fund_add_2d:'+0.08%',fund_add_5d:'+0.12%',pe_ttm:'28.5',pe_static:'26.8',pb:'8.2',roe_ttm:'28.8%',np_growth:'15.3%',gross_margin:'91.5%',debt_ratio:'18.2%',eps:'59.15',bps:'208.50',mkt_cap_circ:'21,160亿',mkt_cap_total:'21,160亿',shares_total:'12.56亿',shares_circ:'12.56亿',shareholder_n:'165,800',major_holder:'54.2%',list_date:'2001-08-27',industry_full:'食品饮料-白酒',peg:'2.15',main_force_pwd:'锁仓中',main_force_intent:'控盘',ai_strategy:'龙头股持有',eval:true},
-  {code:'600036.SH',name:'招商银行',price:'42.15',change:'+0.65%',chg_speed:'+0.02',volume:'452,100',amount:'1,905万',turnover:'0.22%',vol_ratio:'1.05',amplitude:'1.10%',high:'42.50',low:'42.00',open:'42.20',pre_close:'41.88',avg_price:'42.10',buy1:'42.14',sell1:'42.15',cur_vol:'3,500',in_disk:'215,000',out_disk:'237,100',commission:'-1.5%',chg_5d:'+1.50%',chg_10d:'+2.80%',industry:'银行',composite:null,chanlun:null,vp:null,factor:null,signal_tag:'⏳ 待评估',buy_signal:'—',sell_signal:'—',tech_pattern:'—',fund_net:'↑ 320万',fund_vol:'+12.8万',fund_inflow:'1,890万',fund_outflow:'1,570万',big_net:'+156万',big_in:'520万',big_out:'364万',mid_net:'+68万',sml_net:'+28万',big_5d:'+89万',big_10d:'+185万',fund_add_td:'+0.04%',fund_add_2d:'+0.08%',fund_add_5d:'+0.15%',pe_ttm:'7.5',pe_static:'7.2',pb:'0.9',roe_ttm:'12.5%',np_growth:'4.5%',gross_margin:'—',debt_ratio:'89.8%',eps:'5.62',bps:'48.50',mkt_cap_circ:'8,590亿',mkt_cap_total:'10,640亿',shares_total:'252亿',shares_circ:'204亿',shareholder_n:'285,600',major_holder:'18.5%',list_date:'2002-04-09',industry_full:'银行-股份制银行',peg:'1.65',main_force_pwd:'—',main_force_intent:'—',ai_strategy:'—',eval:false},
-];
+var stockData = [];
+var _evaluatedState = {};  // ts_code → {evaluated, scores}
 
 // ════════════════════════════════════════════
 // 状态
@@ -236,6 +249,131 @@ var stockData = [
 var activeColumns = ['check','code','name','price','change_pct','volume','composite','chanlun','vp','factor','fund_net','signal_tag'];
 var dragCol = null;
 var dragIdx = -1;
+
+// ════════════════════════════════════════════
+// API初始化 — 批量行情加载
+// ════════════════════════════════════════════
+async function loadWatchlistData(){
+  try{
+    var resp = await _apiFetch('/watchlist/quotes');
+    if(resp && resp.code === 0 && resp.data && resp.data.stocks){
+      var stocks = resp.data.stocks;
+      var evaluated = resp.data.evaluated || {};
+      stockData = Object.keys(stocks).map(function(code){
+        var s = stocks[code];
+        _evaluatedState[code] = {evaluated: evaluated[code]||false};
+        return mapApiStock(s);
+      });
+    }
+  }catch(e){
+    console.warn('加载自选行情失败', e);
+    stockData = [];
+  }
+  renderTable();
+}
+
+function mapApiStock(s){
+  // Map API fields to display-ready format
+  return {
+    code: s.ts_code||'',
+    name: s.name||'',
+    price: s.price!==null?s.price.toFixed(2):'—',
+    change: s.change_pct!==null?(s.change_pct>=0?'+'+s.change_pct.toFixed(2)+'%':s.change_pct.toFixed(2)+'%'):'—',
+    chg_speed: '—',vol_ratio:'—',avg_price:'—',buy1:'—',sell1:'—',cur_vol:'—',
+    in_disk:'—',out_disk:'—',commission:'—',
+    volume: s.volume!==null?fmtNum(s.volume):'—',
+    amount: s.amount!==null?fmtMoney(s.amount):'—',
+    turnover: s.turnover!==null?s.turnover.toFixed(2)+'%':'—',
+    amplitude: s.amplitude!==null?s.amplitude.toFixed(2)+'%':'—',
+    high: s.high!==null?s.high.toFixed(2):'—',
+    low: s.low!==null?s.low.toFixed(2):'—',
+    open: s.open!==null?s.open.toFixed(2):'—',
+    pre_close: s.pre_close!==null?s.pre_close.toFixed(2):'—',
+    chg_5d: '—',chg_10d:'—',
+    industry: s.industry||'—',
+    composite: s.composite_score,      // keep numeric for rendering
+    chanlun: s.chanlun_score,
+    vp: s.volume_price_score,
+    factor: s.factor_score,
+    signal_tag: fmtSignalTags(s.signal_tags),
+    buy_signal: s.buy_signal||'—',
+    sell_signal: s.sell_signal||'—',
+    tech_pattern: s.tech_pattern||'—',
+    fund_net: fmtFundNet(s.fund_net),
+    fund_vol: fmtNum(s.fund_vol),
+    fund_inflow: fmtNum(s.fund_inflow),
+    fund_outflow: fmtNum(s.fund_outflow),
+    big_net: fmtNum(s.big_net),
+    big_in: fmtNum(s.big_in),
+    big_out: fmtNum(s.big_out),
+    mid_net: fmtNum(s.mid_net),
+    sml_net: fmtNum(s.sml_net),
+    big_5d: fmtNum(s.big_5d),
+    big_10d: fmtNum(s.big_10d),
+    fund_add_td: s.fund_add_td!==null?s.fund_add_td.toFixed(2)+'%':'—',
+    fund_add_2d: s.fund_add_2d!==null?s.fund_add_2d.toFixed(2)+'%':'—',
+    fund_add_5d: s.fund_add_5d!==null?s.fund_add_5d.toFixed(2)+'%':'—',
+    pe_ttm: s.pe_ttm!==null?s.pe_ttm.toFixed(1):'—',
+    pe_static: s.pe_static!==null?s.pe_static.toFixed(1):'—',
+    pb: s.pb!==null?s.pb.toFixed(1):'—',
+    roe_ttm: s.roe_ttm!==null?s.roe_ttm.toFixed(1)+'%':'—',
+    np_growth: s.np_growth!==null?s.np_growth.toFixed(1)+'%':'—',
+    gross_margin: s.gross_margin!==null?s.gross_margin.toFixed(1)+'%':'—',
+    debt_ratio: s.debt_ratio!==null?s.debt_ratio.toFixed(1)+'%':'—',
+    eps: s.eps!==null?s.eps.toFixed(2):'—',
+    bps: s.bps!==null?s.bps.toFixed(2):'—',
+    mkt_cap_circ: s.mkt_cap_circ!==null?fmtBigMoney(s.mkt_cap_circ):'—',
+    mkt_cap_total: s.mkt_cap_total!==null?fmtBigMoney(s.mkt_cap_total):'—',
+    shares_total: s.shares_total!==null?fmtShares(s.shares_total):'—',
+    shares_circ: s.shares_circ!==null?fmtShares(s.shares_circ):'—',
+    shareholder_n: s.shareholder_n!==null?fmtNum(s.shareholder_n):'—',
+    major_holder: s.major_holder!==null?s.major_holder.toFixed(1)+'%':'—',
+    list_date: s.list_date||'—',
+    industry_full: s.industry_full||'—',
+    peg: '—',main_force_pwd:'—',main_force_intent:'—',ai_strategy:'—',
+    eval: _evaluatedState[s.ts_code]?.evaluated || false
+  };
+}
+
+// ── 格式化辅助 ──
+function fmtNum(v){
+  if(v===null||v===undefined) return '—';
+  if(v>=100000000) return (v/100000000).toFixed(2)+'亿';
+  if(v>=10000) return (v/10000).toFixed(0)+'万';
+  return v.toString();
+}
+function fmtMoney(v){
+  if(v===null||v===undefined) return '—';
+  if(v>=100000000) return (v/100000000).toFixed(2)+'亿';
+  if(v>=10000) return (v/10000).toFixed(0)+'万';
+  return '¥'+v;
+}
+function fmtBigMoney(v){
+  if(v===null||v===undefined) return '—';
+  if(v>=100000000) return (v/100000000).toFixed(1)+'亿';
+  if(v>=10000) return (v/10000).toFixed(0)+'万';
+  return v.toString();
+}
+function fmtShares(v){
+  if(v===null||v===undefined) return '—';
+  if(v>=100000000) return (v/100000000).toFixed(2)+'亿';
+  if(v>=10000) return (v/10000).toFixed(0)+'万';
+  return v.toString();
+}
+function fmtFundNet(v){
+  if(v===null||v===undefined) return '—';
+  var dir = v>=0?'↑':'↓';
+  return dir+' '+fmtNum(Math.abs(v));
+}
+function fmtSignalTags(tags){
+  if(!tags||!tags.length) return '⏳ 待评估';
+  var tag = tags[0];
+  if(tag==='strong_buy') return '🔥 强烈推荐';
+  if(tag==='buy') return '✅ 推荐';
+  if(tag==='watch') return '👀 关注';
+  if(tag==='neutral') return '⚪ 中性';
+  return tag;
+}
 
 // ════════════════════════════════════════════
 // 核心渲染
@@ -276,23 +414,23 @@ function renderTable(){
 }
 
 function renderCell(col, s){
-  var k = col.key;
+var k = col.key;
   if(k === 'check') return '<td onclick="event.stopPropagation()"><input type="checkbox" style="accent-color:#3B82F6;"></td>';
   if(k === 'code') return '<td>'+s.code+'</td>';
   if(k === 'name') return '<td>'+s.name+'</td>';
-  if(k === 'price') return '<td style="font-weight:600;">¥'+s.price+'</td>';
-  if(k === 'change_pct') return '<td class="'+(s.change.indexOf('+')>=0?'up':'down')+'">'+s.change+'</td>';
+  if(k === 'price') return '<td style="font-weight:600;">'+(s.price!=='—'?'¥'+s.price:'—')+'</td>';
+  if(k === 'change_pct') return '<td class="'+(s.change.indexOf('+')>=0?'up':(s.change.indexOf('-')>=0?'down':''))+'">'+s.change+'</td>';
 
   // 数值行情通用
   var numFields = {chg_speed:1,volume:1,amount:1,turnover:1,vol_ratio:1,amplitude:1,high:1,low:1,open:1,pre_close:1,avg_price:1,buy1:1,sell1:1,cur_vol:1,in_disk:1,out_disk:1,commission:1,chg_5d:1,chg_10d:1,industry:1};
-  if(numFields[k]) return '<td>'+s[k]+'</td>';
+  if(numFields[k]) return '<td style="font-size:11px;">'+(s[k]||'—')+'</td>';
 
   // 策略评分 — 未评估显示按钮
   var scoreFields = {composite:'综合评分',chanlun:'缠论评分',vp:'量价评分',factor:'因子评分'};
   if(scoreFields[k]){
     var v = s[k];
     if(v === null || v === undefined){
-      if(k === 'composite') return '<td><button class="eval-btn" onclick="event.stopPropagation();evaluateStock(\''+s.code+'\')">⚡ 策略评估</button></td>';
+      if(k === 'composite') return '<td><button class="eval-btn" onclick="event.stopPropagation();evaluateStock(\''+s.code+'\',this)">⚡ 策略评估</button></td>';
       return '<td style="color:var(--text-muted);font-size:11px;">—</td>';
     }
     var tc = v>=80?'tag-bullish':(v>=60?'tag-watch':'tag-neutral');
@@ -303,22 +441,22 @@ function renderCell(col, s){
   if(k === 'signal_tag'){
     var smap = {'🔥':'tag-bullish','✅':'tag-bullish','👀':'tag-watch','⚪':'tag-neutral','⏳':'tag-watch'};
     var sc = 'tag-neutral';
-    for(var sp in smap){ if(s.signal_tag.indexOf(sp)>=0){ sc = smap[sp]; break; } }
-    return '<td><span class="tag '+sc+'" style="font-size:11px;">'+s.signal_tag+'</span></td>';
+    for(var sp in smap){ if((s.signal_tag||'').indexOf(sp)>=0){ sc = smap[sp]; break; } }
+    return '<td><span class="tag '+sc+'" style="font-size:11px;">'+(s.signal_tag||'⏳ 待评估')+'</span></td>';
   }
-  if(k === 'buy_signal') return '<td style="color:#EF4444;font-size:11px;">'+s.buy_signal+'</td>';
-  if(k === 'sell_signal') return '<td style="color:#22C55E;font-size:11px;">'+s.sell_signal+'</td>';
-  if(k === 'tech_pattern') return '<td style="font-size:11px;color:var(--text-secondary);">'+s.tech_pattern+'</td>';
-  if(k === 'ai_strategy') return '<td style="font-size:11px;color:var(--text-secondary);">'+s.ai_strategy+'</td>';
+  if(k === 'buy_signal') return '<td style="color:#EF4444;font-size:11px;">'+(s.buy_signal||'—')+'</td>';
+  if(k === 'sell_signal') return '<td style="color:#22C55E;font-size:11px;">'+(s.sell_signal||'—')+'</td>';
+  if(k === 'tech_pattern') return '<td style="font-size:11px;color:var(--text-secondary);">'+(s.tech_pattern||'—')+'</td>';
+  if(k === 'ai_strategy') return '<td style="font-size:11px;color:var(--text-secondary);">'+(s.ai_strategy||'—')+'</td>';
 
   // 资金流向
-  if(k === 'fund_net') return '<td class="'+(s.fund_net.indexOf('↑')>=0?'money-in':'money-out')+'">'+s.fund_net+'</td>';
+  if(k === 'fund_net') return '<td class="'+(s.fund_net.indexOf('↑')>=0?'money-in':'money-out')+'">'+(s.fund_net||'—')+'</td>';
   var fundFields = {fund_vol:1,fund_inflow:1,fund_outflow:1,big_net:1,big_in:1,big_out:1,mid_net:1,sml_net:1,big_5d:1,big_10d:1,fund_add_td:1,fund_add_2d:1,fund_add_5d:1};
-  if(fundFields[k]) return '<td>'+s[k]+'</td>';
+  if(fundFields[k]) return '<td style="font-size:11px;">'+(s[k]||'—')+'</td>';
 
   // 基础面
   var basicFields = {pe_ttm:1,pe_static:1,pb:1,roe_ttm:1,np_growth:1,gross_margin:1,debt_ratio:1,eps:1,bps:1,mkt_cap_circ:1,mkt_cap_total:1,shares_total:1,shares_circ:1,shareholder_n:1,major_holder:1,list_date:1,industry_full:1,peg:1,main_force_pwd:1,main_force_intent:1};
-  if(basicFields[k]) return '<td style="font-size:11px;">'+s[k]+'</td>';
+  if(basicFields[k]) return '<td style="font-size:11px;">'+(s[k]||'—')+'</td>';
 
   return '<td></td>';
 }
@@ -337,9 +475,7 @@ function onDragStart(e, key){
 function onDragOver(e, key){
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
-  // 清除旧的 drag-over
   document.querySelectorAll('#header-row th').forEach(function(th){ th.classList.remove('drag-over'); });
-  // 目标列不允许是固定列
   var tgt = ALL_COLUMNS.find(function(c){ return c.key === key; });
   if(tgt && tgt.fixed) return;
   if(key === dragCol) return;
@@ -352,17 +488,13 @@ function onDrop(e, targetKey){
   e.preventDefault();
   document.querySelectorAll('#header-row th').forEach(function(th){ th.classList.remove('drag-over'); th.style.opacity = ''; });
   if(!dragCol || dragCol === targetKey) return;
-
   var srcIdx = activeColumns.indexOf(dragCol);
   var tgtIdx = activeColumns.indexOf(targetKey);
   if(srcIdx < 0 || tgtIdx < 0) return;
-
-  // 不能与固定列交换
   var srcCol = ALL_COLUMNS.find(function(c){ return c.key === dragCol; });
   var tgtCol = ALL_COLUMNS.find(function(c){ return c.key === targetKey; });
   if(srcCol && srcCol.fixed) return;
   if(tgtCol && tgtCol.fixed) return;
-
   activeColumns.splice(srcIdx, 1);
   var newTgt = activeColumns.indexOf(targetKey);
   activeColumns.splice(newTgt, 0, dragCol);
@@ -380,7 +512,6 @@ function toggleColConfig(){
     m.style.display = 'flex';
   } else { m.style.display = 'none'; }
 }
-
 function renderColConfig(){
   var cont = document.getElementById('column-config-list');
   var groups = {};
@@ -389,7 +520,6 @@ function renderColConfig(){
     if(!groups[c.group]) groups[c.group] = [];
     groups[c.group].push(c);
   });
-
   var gOrder = ['基础行情','策略评分','资金流向','基本面'];
   var html = '';
   gOrder.forEach(function(g){
@@ -397,32 +527,29 @@ function renderColConfig(){
     html += '<div class="col-config-title">'+g+'</div>';
     var cols = groups[g];
     cols.sort(function(a,b){
-      var ia = activeColumns.indexOf(a.key), ib = activeColumns.indexOf(b.key);
-      if(ia<0)ia=999; if(ib<0)ib=999;
+      var ia=activeColumns.indexOf(a.key),ib=activeColumns.indexOf(b.key);
+      if(ia<0)ia=999;if(ib<0)ib=999;
       return ia-ib;
     });
     cols.forEach(function(c){
-      var chk = activeColumns.indexOf(c.key)>=0 ? 'checked' : '';
-      var srcLabel = {'avail':'✅ 可选','qmt':'⏳ 需QMT','dev':'🔧 需开发'}[c.source]||'';
-      var srcCls = c.source;
+      var chk=activeColumns.indexOf(c.key)>=0?'checked':'';
+      var srcLabel={'avail':'✅ 可选','qmt':'⏳ 需QMT','dev':'🔧 需开发'}[c.source]||'';
       html += '<div class="col-config-item">'
         + '<input type="checkbox" class="cc-check" '+chk+' onchange="toggleCol(\''+c.key+'\',this.checked)">'
         + '<span class="cc-label">'+c.label+'</span>'
-        + '<span class="cc-source '+srcCls+'">'+srcLabel+'</span>'
-        + '</div>';
+        + '<span class="cc-source '+c.source+'">'+srcLabel+'</span></div>';
     });
   });
   cont.innerHTML = html;
 }
-
 function toggleCol(key, show){
-  if(show){ if(activeColumns.indexOf(key)<0) activeColumns.push(key); }
-  else { activeColumns = activeColumns.filter(function(k){ return k!==key; }); }
+  if(show){if(activeColumns.indexOf(key)<0)activeColumns.push(key);}
+  else{activeColumns=activeColumns.filter(function(k){return k!==key;});}
   renderTable();
 }
 
 // ════════════════════════════════════════════
-// 添加 & 评估
+// 添加 — 调用API
 // ════════════════════════════════════════════
 function toggleAddPanel(){
   document.getElementById('add-panel').classList.toggle('show');
@@ -433,9 +560,18 @@ function closeAddPanel(){
 function searchStock(val){
   document.getElementById('stock-search-results').style.display = val.trim() ? 'block' : 'none';
 }
-function addStock(code, name){
-  if(stockData.some(function(s){ return s.code===code; })){ alert('已在自选股中'); closeAddPanel(); return; }
-  stockData.push({
+async function addStock(code, name){
+  if(stockData.some(function(s){return s.code===code;})){alert('已在自选股中');closeAddPanel();return;}
+  try{
+    await _apiFetch('/watchlist',{method:'POST',body:{ts_code:code,notes:''}});
+  }catch(e){console.warn('添加到后端自选失败',e);}
+  stockData.push(buildNewStock(code,name));
+  renderTable();
+  closeAddPanel();
+  alert('✅ 已添加 '+name+'（'+code+'）\n\n点击「⚡ 策略评估」按钮运行评分。');
+}
+function buildNewStock(code,name){
+  return {
     code:code,name:name,price:'—',change:'—',chg_speed:'—',volume:'—',amount:'—',turnover:'—',vol_ratio:'—',
     amplitude:'—',high:'—',low:'—',open:'—',pre_close:'—',avg_price:'—',buy1:'—',sell1:'—',cur_vol:'—',
     in_disk:'—',out_disk:'—',commission:'—',chg_5d:'—',chg_10d:'—',industry:'—',
@@ -445,25 +581,86 @@ function addStock(code, name){
     mid_net:'—',sml_net:'—',big_5d:'—',big_10d:'—',fund_add_td:'—',fund_add_2d:'—',fund_add_5d:'—',
     pe_ttm:'—',pe_static:'—',pb:'—',roe_ttm:'—',np_growth:'—',gross_margin:'—',debt_ratio:'—',eps:'—',bps:'—',
     mkt_cap_circ:'—',mkt_cap_total:'—',shares_total:'—',shares_circ:'—',shareholder_n:'—',major_holder:'—',
-    list_date:'—',industry_full:'—',peg:'—',main_force_pwd:'—',main_force_intent:'—',ai_strategy:'—',eval:false
-  });
-  renderTable();
-  closeAddPanel();
-  alert('✅ 已添加 '+name+'（'+code+'）\n\n点击「⚡ 策略评估」按钮运行评分。');
+    list_date:'—',industry_full:'—',peg:'—',main_force_pwd:'—',main_force_intent:'—',ai_strategy:'—',
+    eval:false
+  };
 }
 
-function evaluateStock(code){
-  var s = stockData.find(function(x){ return x.code === code; });
-  if(!s) return;
-  s.eval = true;
-  s.composite = Math.floor(Math.random()*30)+60;
-  s.chanlun = Math.floor(Math.random()*30)+55;
-  s.vp = Math.floor(Math.random()*30)+55;
-  s.factor = Math.floor(Math.random()*30)+55;
-  var c = s.composite;
-  s.signal_tag = c>=85?'🔥 强烈推荐':(c>=75?'✅ 推荐':(c>=60?'👀 关注':'⚪ 中性'));
+// ════════════════════════════════════════════
+// 策略评估 — 调用策略分析API
+// ════════════════════════════════════════════
+async function evaluateStock(code, btn){
+  var s = stockData.find(function(x){return x.code===code;});
+  if(!s)return;
+  if(btn)btn.textContent='⏳ 评估中...';
+  try{
+    var resp=await _apiFetch('/strategy/analyze',{method:'POST',body:{ts_code:code}});
+    if(resp&&resp.success&&resp.data){
+      var dims=resp.data.dimensions||[];
+      var findScore=function(name){var d=dims.find(function(x){return x.name===name;});return d?d.score:null;};
+      s.composite=resp.data.composite_score||'—';
+      s.chanlun=findScore('缠论')||'—';
+      s.vp=findScore('量价')||'—';
+      s.factor=findScore('因子')||'—';
+      s.signal_tag=signalTagLabel(s.composite);
+      s.buy_signal=resp.data.signals&&resp.data.signals.buy?resp.data.signals.buy:'—';
+      s.sell_signal=resp.data.signals&&resp.data.signals.sell?resp.data.signals.sell:'—';
+      s.tech_pattern=resp.data.pattern||resp.data.tech_pattern||'—';
+    }else{fallbackEvaluate(s);}
+  }catch(e){console.warn('策略分析API调用失败，使用本地评估',e);fallbackEvaluate(s);}
+  s.eval=true;
   renderTable();
+  if(btn)btn.textContent='⚡ 策略评估';
   alert('✅ 策略评估完成\n\n'+s.name+' 综合评分: '+s.composite);
+}
+function fallbackEvaluate(s){
+  s.composite='—'; s.chanlun='—'; s.vp='—'; s.factor='—';
+  s.signal_tag='⚪ 中性';
+}
+function signalTagLabel(c){return c>=85?'🔥 强烈推荐':(c>=75?'✅ 推荐':(c>=60?'👀 关注':(c==='—'?'⚪ 待评估':'⚪ 中性')));}
+
+// ════════════════════════════════════════════
+// 全量策略刷新 — 批量评估
+// ════════════════════════════════════════════
+async function refreshAllStrategies(){
+  var pendingCount = stockData.filter(function(s){return !s.eval;}).length;
+  var msg=pendingCount>0?'包含 '+pendingCount+' 只待评估股票\n将重新计算全部 '+stockData.length+' 只自选股策略评分':'将重新计算全部 '+stockData.length+' 只自选股策略评分';
+  if(!confirm('🔄 策略刷新\n\n'+msg+'\n\n继续？'))return;
+
+  var btn=document.querySelector('.btn-primary');
+  if(btn){btn.textContent='⏳ 批量评估中...';btn.disabled=true;}
+
+  var codes=stockData.map(function(s){return s.code;});
+  var successCount=0;
+  for(var i=0;i<codes.length;i++){
+    try{
+      var resp=await _apiFetch('/strategy/analyze',{method:'POST',body:{ts_code:codes[i]}});
+      if(resp&&resp.success&&resp.data){
+        var dims=resp.data.dimensions||[];
+        var findScore=function(name){var d=dims.find(function(x){return x.name===name;});return d?d.score:null;};
+        stockData[i].composite=resp.data.composite_score||'—';
+        stockData[i].chanlun=findScore('缠论')||'—';
+        stockData[i].vp=findScore('量价')||'—';
+        stockData[i].factor=findScore('因子')||'—';
+        stockData[i].signal_tag=signalTagLabel(stockData[i].composite);
+        stockData[i].eval=true;
+        successCount++;
+      }
+    }catch(e){console.warn('批量评估失败('+codes[i]+'):',e);}
+  }
+  renderTable();
+  if(btn){btn.textContent='🔄 策略刷新';btn.disabled=false;}
+  showToast('策略刷新完成 — '+successCount+'/'+stockData.length+' 只成功',3);
+}
+// ════════════════════════════════════════════
+// Toast 提示
+// ════════════════════════════════════════════
+function showToast(msg, sec){
+  var t=document.createElement('div');
+  t.style.cssText='position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 24px;border-radius:6px;z-index:99999;font-size:14px;white-space:nowrap;';
+  t.textContent=msg;
+  document.body.appendChild(t);
+  setTimeout(function(){t.remove();},(sec||2)*1000);
 }
 
 // ════════════════════════════════════════════
@@ -484,31 +681,10 @@ function updateCount(){
   document.getElementById('stock-count').textContent = '共 ' + stockData.length + ' 只';
 }
 
-// ── 全量策略刷新 ──
-function refreshAllStrategies(){
-  var pendingCount = stockData.filter(function(s){ return !s.eval; }).length;
-  var msg = pendingCount > 0
-    ? '包含 ' + pendingCount + ' 只待评估股票\n将重新计算全部 ' + stockData.length + ' 只自选股策略评分'
-    : '将重新计算全部 ' + stockData.length + ' 只自选股策略评分';
-  if(!confirm('🔄 策略刷新\n\n' + msg + '\n\n继续？')) return;
-
-  stockData.forEach(function(s){
-    s.eval = true;
-    s.composite = Math.floor(Math.random()*30)+60;
-    s.chanlun = Math.floor(Math.random()*30)+55;
-    s.vp = Math.floor(Math.random()*30)+55;
-    s.factor = Math.floor(Math.random()*30)+55;
-    var c = s.composite;
-    s.signal_tag = c>=85?'🔥 强烈推荐':(c>=75?'✅ 推荐':(c>=60?'👀 关注':'⚪ 中性'));
-  });
-  renderTable();
-  alert('✅ 策略刷新完成\n\n全部 ' + stockData.length + ' 只自选股已重新计算评分');
-}
-
 // ════════════════════════════════════════════
-// 初始化
+// 初始化 — API优先
 // ════════════════════════════════════════════
-renderTable();
+loadWatchlistData();
 </script>
 <script>
 var sidebarCollapsed = true;

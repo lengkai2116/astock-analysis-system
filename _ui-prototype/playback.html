@@ -442,6 +442,47 @@
 // ═══════════════════════════════════════════════════════════════
 // §1 CONSTANTS & HELPERS
 // ═══════════════════════════════════════════════════════════════
+var API_BASE = 'http://localhost:5001/api/v3';
+
+async function apiGet(path) {
+  try {
+    var r = await fetch(API_BASE + path);
+    var d = await r.json();
+    return d.success ? d.data : null;
+  } catch(e) { return null; }
+}
+
+async function apiPost(path, data) {
+  try {
+    var r = await fetch(API_BASE + path, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(data)
+    });
+    var d = await r.json();
+    return d.success ? d.data : null;
+  } catch(e) { return null; }
+}
+
+async function apiPut(path, data) {
+  try {
+    var r = await fetch(API_BASE + path, {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(data)
+    });
+    var d = await r.json();
+    return d.success ? d.data : null;
+  } catch(e) { return null; }
+}
+
+async function apiDel(path) {
+  try {
+    var r = await fetch(API_BASE + path, { method: 'DELETE' });
+    var d = await r.json();
+    return d.success ? d.data : null;
+  } catch(e) { return null; }
+}
 var MOCK_STOCKS = [
   { ts_code:'000762.SZ', name:'西藏矿业', sector:'有色金属', base_price:28.50 },
   { ts_code:'002050.SZ', name:'三花智控', sector:'汽车', base_price:26.80 },
@@ -535,15 +576,57 @@ function getDimTagHtml(dims){return dims.filter(function(d){return d.checked}).m
 function calcPnl(entryP,exitP,shares,buyFee,sellFee){var buy=entryP*shares*(1+buyFee),sell=exitP*shares*(1-sellFee);return{sell:sell,buy:buy,pnlAmt:sell-buy,pnlPct:+((sell/buy-1)*100).toFixed(2)}}
 
 // ═══════════════════════════════════════════════════════════════
-// §2 ReviewUnit v2 MOCK GENERATOR
+// §2 ReviewUnit v2 — API-first loading with localStorage fallback
 // ═══════════════════════════════════════════════════════════════
 var _reviewPool = [], _filteredUnits = [], _selectedUnit = null;
 var _currentTab = 'all', _showAnalysis = false, _nextRvId = 1;
 var _simDate = fmtDate(new Date());
 var _accountState = null;
+var _poolStageCounts = {};
 
-// Returns 18 units with v2 full structure
-function generateMockPool(){
+// ── API-first pool loading ──
+async function loadPoolFromApi(page, size, search, strategy){
+  page=page||1; size=size||200;
+  var qs='?stage=all&page='+page+'&size='+size;
+  if(search) qs+='&search='+encodeURIComponent(search);
+  if(strategy) qs+='&strategy='+encodeURIComponent(strategy);
+  var data = await apiGet('/playback/pool'+qs);
+  if(data && data.items && data.items.length){
+    _reviewPool = data.items;
+    _nextRvId = _reviewPool.length + 1;
+    _poolStageCounts = data.stages || {};
+    return data;
+  }
+  // Fallback: localStorage → mock
+  return loadPoolFromLocalStorage();
+}
+
+function loadPoolFromLocalStorage(){
+  try{
+    var raw = localStorage.getItem('review_pool_data_v2');
+    if(raw){
+      var d=JSON.parse(raw);
+      if(d&&d.units&&d.units.length&&d.account&&d._version==='v2.1'){
+        _reviewPool=d.units;_accountState=d.account;_nextRvId=d.nextId||_reviewPool.length+1;_simDate=d.simDate||fmtDate(new Date());initMarketData(_reviewPool);return {items:_reviewPool,total:_reviewPool.length,stages:{}};
+      }
+      if(d&&d.units&&d.units.length&&d.account){
+        _reviewPool=d.units;_accountState=d.account;initMarketData(_reviewPool);
+        return {items:_reviewPool,total:_reviewPool.length,stages:{}};
+      }
+    }
+  }catch(e){}
+  try{
+    var raw1=localStorage.getItem('review_pool_data');
+    if(raw1){var d1=JSON.parse(raw1);if(d1&&d1.units&&d1.units.length){_reviewPool=normalizeV1ToV2(d1.units);localStorage.removeItem('review_pool_data');}}
+  }catch(e){}
+  _reviewPool = generateMockPoolFallback();
+  _accountState = createDefaultAccount();
+  initMarketData(_reviewPool);
+  return {items:_reviewPool,total:_reviewPool.length,stages:{}};
+}
+
+// Fallback mock generator (unchanged logic)
+function generateMockPoolFallback(){
   var units = [];
   var today = fmtDate(new Date());
   // 5 pending, 8 holding, 5 completed
@@ -672,8 +755,18 @@ function generateMockPool(){
 }
 
 // ═══════════════════════════════════════════════════════════════
-// §3 ACCOUNT STATE
+// §3 ACCOUNT STATE – API-first loading
 // ═══════════════════════════════════════════════════════════════
+async function loadAccountFromApi(){
+  var data = await apiGet('/playback/account');
+  if(data){
+    _accountState = data;
+    return data;
+  }
+  // Fallback to localStorage or default
+  return createDefaultAccount();
+}
+
 function createDefaultAccount(initialCapital){
   initialCapital=initialCapital||1000000;
   return {
@@ -863,24 +956,8 @@ function autoAdvance(){
 // §5 localStorage v2
 // ═══════════════════════════════════════════════════════════════
 function loadPoolData(){
-  try{
-    var raw = localStorage.getItem('review_pool_data_v2');
-    if(raw){
-      var d=JSON.parse(raw);
-      if(d&&d.units&&d.units.length&&d.account&&d._version==='v2.1'){_reviewPool=d.units;_accountState=d.account;_nextRvId=d.nextId||_reviewPool.length+1;_simDate=d.simDate||fmtDate(new Date());initMarketData(_reviewPool);return;}
-      // Stale v2 data with missing fields → regenerate
-      if(d&&d.units&&d.units.length&&d.account){_reviewPool=generateMockPool();_accountState=createDefaultAccount();initMarketData(_reviewPool);saveAllState();return;}}
-  }catch(e){}
-  // v1 fallback
-  try{
-    var raw1=localStorage.getItem('review_pool_data');
-    if(raw1){var d1=JSON.parse(raw1);if(d1&&d1.units&&d1.units.length){_reviewPool=normalizeV1ToV2(d1.units);localStorage.removeItem('review_pool_data');}}
-  }catch(e){}
-  // Generate fresh mock
-  _reviewPool = generateMockPool();
-  _accountState = createDefaultAccount();
-  initMarketData(_reviewPool);
-  saveAllState();
+  // Deprecated — replaced by async loadPoolFromApi. Calling loadPoolFromLocalStorage fallback.
+  return loadPoolFromLocalStorage();
 }
 
 function normalizeV1ToV2(v1units){
@@ -903,6 +980,11 @@ function normalizeV1ToV2(v1units){
 }
 
 function saveAllState(){
+  // API: update entries (PUT each holding/completed unit)
+  _reviewPool.forEach(function(u){
+    apiPut('/playback/entries/'+encodeURIComponent(u.id), u);
+  });
+  // localStorage fallback (keep for backward compat)
   try{
     localStorage.setItem('review_pool_data_v2', JSON.stringify({
       units:_reviewPool, account:_accountState, nextId:_nextRvId, simDate:_simDate, _version:'v2.1', last_updated:Date.now()
@@ -923,6 +1005,14 @@ function readNewEntries(){
 function mergeNewEntries(entries){
   if(!entries||!entries.length) return;
   entries.forEach(function(e){
+    // POST new entry to API (fire-and-forget)
+    apiPost('/playback/entries', {
+      meta:{ts_code:e.meta?.ts_code||e.ts_code,name:e.meta?.name||e.name,sector:e.meta?.sector||'',snapshot_date:e.meta?.snapshot_date||e.date||fmtDate(new Date()),base_price:e.meta?.base_price||e.base_price||0,added_at:new Date().toISOString()},
+      strategy_config:e.strategy_config||{dimensions:[{id:'custom',label:'自定义',enabled:true,checked:true}],active_count:1},
+      dimension_outputs:e.dimension_outputs||[{dim:'custom',direction:'bullish',confidence:0.7,signals:{},narrative:''}],
+      stage:'pending'
+    });
+    // Also keep local cache (for immediate rendering)
     var unit = {
       id: 'RV-'+String(_nextRvId++).padStart(3,'0'),
       meta:{ts_code:e.meta?.ts_code||e.ts_code,name:e.meta?.name||e.name,sector:e.meta?.sector||'',snapshot_date:e.meta?.snapshot_date||e.date||fmtDate(new Date()),base_price:e.meta?.base_price||e.base_price||0},
@@ -1427,37 +1517,51 @@ function renderAnalysis(){
     return'<tr><td>'+m+'</td><td>'+s.count+'</td><td class="'+(s.totalPnl>=0?'pnl-up':'pnl-down')+'">'+(s.totalPnl>=0?'+':'')+Math.round(s.totalPnl*100)/100+'%</td><td>'+wr+'%</td></tr>';
   }).join('');
 
-  // 6. Diagnosis aggregation
-  var ds=getDiagnosisSummary();
+  // 6. Diagnosis aggregation (load from API)
+  if(_diagnosisSummaryCache){
+    renderDiagnosisSummary(_diagnosisSummaryCache);
+  } else {
+    apiGet('/playback/diagnosis-summary').then(function(ds){
+      if(ds && ds.total){
+        _diagnosisSummaryCache = ds;
+        renderDiagnosisSummary(ds);
+      } else {
+        renderDiagnosisSummary(null);
+      }
+    });
+  }
+}
+
+var _diagnosisSummaryCache = null;
+
+function renderDiagnosisSummary(ds){
   var daEl=document.getElementById('diagnosisAggregation');
   if(!ds||!ds.total){
     daEl.innerHTML='<div style="text-align:center;padding:var(--space-12);color:var(--text-muted);font-size:13px;">暂无诊断汇总数据（请先生成报告）</div>';
-  }else{
-    // Layer distribution
-    var layers=['Layer1','Layer2','Layer3','Layer4','Layer5'];
-    var layerLabels={'Layer1':'策略维度信号','Layer2':'交叉验证','Layer3':'AI仲裁','Layer4':'执行条件','Layer5':'资金风控'};
-    var maxLayerCount=Math.max.apply(null,layers.map(function(l){return ds.layer_distribution[l]||0}))||1;
-    var layerBars=layers.map(function(l){
-      var c=ds.layer_distribution[l]||0;
-      var h=c/maxLayerCount*60;
-      return '<div class="dim-bar-wrap" style="margin-bottom:6px;"><span class="dim-label" style="font-size:11px;">'+(layerLabels[l]||l)+'</span><div style="flex:1;position:relative;"><div class="dim-bar-fill" style="width:'+(c/maxLayerCount*100)+'%;background:var(--color-brand-500);"></div></div><span style="font-size:11px;font-weight:600;width:24px;text-align:right;">'+c+'</span></div>';
-    }).join('');
-
-    // Cross table: exit_reason x root_layer
-    var exitKeys=Object.keys(ds.exit_layer_cross).sort();
-    var crossTable='<table class="analysis-table" style="margin-top:var(--space-8);"><thead><tr><th>退出原因</th><th>根因层</th><th>次数</th></tr></thead><tbody>';
-    exitKeys.forEach(function(k){
-      var parts=k.split('|');
-      crossTable+='<tr><td>'+(parts[0]||'未知')+'</td><td>'+(parts[1]||'未知')+'</td><td>'+ds.exit_layer_cross[k]+'</td></tr>';
-    });
-    crossTable+='</tbody></table>';
-
-    daEl.innerHTML='<div class="pnl-chart-wrap" style="padding:var(--space-8);">'+
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-8);">'+
-      '<span style="font-size:12px;font-weight:600;">根因层分布（共'+ds.total+'份报告）</span>'+
-      '<button class="btn btn-xs" onclick="downloadAllDiagnoses()">📥 导出全量诊断报告集</button></div>'+
-      layerBars+crossTable+'</div>';
+    return;
   }
+  var layers=['Layer1','Layer2','Layer3','Layer4','Layer5'];
+  var layerLabels={'Layer1':'策略维度信号','Layer2':'交叉验证','Layer3':'AI仲裁','Layer4':'执行条件','Layer5':'资金风控'};
+  var maxLayerCount=Math.max.apply(null,layers.map(function(l){return ds.layer_distribution[l]||0}))||1;
+  var layerBars=layers.map(function(l){
+    var c=ds.layer_distribution[l]||0;
+    var h=c/maxLayerCount*60;
+    return '<div class="dim-bar-wrap" style="margin-bottom:6px;"><span class="dim-label" style="font-size:11px;">'+(layerLabels[l]||l)+'</span><div style="flex:1;position:relative;"><div class="dim-bar-fill" style="width:'+(c/maxLayerCount*100)+'%;background:var(--color-brand-500);"></div></div><span style="font-size:11px;font-weight:600;width:24px;text-align:right;">'+c+'</span></div>';
+  }).join('');
+
+  var exitKeys=Object.keys(ds.exit_layer_cross).sort();
+  var crossTable='<table class="analysis-table" style="margin-top:var(--space-8);"><thead><tr><th>退出原因</th><th>根因层</th><th>次数</th></tr></thead><tbody>';
+  exitKeys.forEach(function(k){
+    var parts=k.split('|');
+    crossTable+='<tr><td>'+(parts[0]||'未知')+'</td><td>'+(parts[1]||'未知')+'</td><td>'+ds.exit_layer_cross[k]+'</td></tr>';
+  });
+  crossTable+='</tbody></table>';
+
+  daEl.innerHTML='<div class="pnl-chart-wrap" style="padding:var(--space-8);">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-8);">'+
+    '<span style="font-size:12px;font-weight:600;">根因层分布（共'+ds.total+'份报告）</span>'+
+    '<button class="btn btn-xs" onclick="downloadAllDiagnoses()">📥 导出全量诊断报告集</button></div>'+
+    layerBars+crossTable+'</div>';
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1580,6 +1684,8 @@ function generateSingleReport(unitId){
   var analysis=generateRealAnalysis(u);
   u.review_analysis=analysis;
   u.report_id='RR-'+u.meta.snapshot_date.replace(/-/g,'')+'-'+String(u.id.slice(-3));
+  // POST to API for report generation
+  apiPost('/playback/report/generate', { unit_id: unitId, include_raw_data: true });
   saveReportToLS(u,analysis);
   saveAllState();
   renderCards(_currentTab);
@@ -1606,6 +1712,8 @@ function generateAllReports(){
     var analysis=generateRealAnalysis(u);
     u.review_analysis=analysis;
     u.report_id='RR-'+u.meta.snapshot_date.replace(/-/g,'')+'-'+String(idx+1).padStart(3,'0');
+    // POST to API for each report
+    apiPost('/playback/report/generate', { unit_id: u.id, include_raw_data: true });
     saveReportToLS(u,analysis);
     showNotification('报告正在生成中','已完成 '+(idx+1)+'/'+candidates.length+' 份报告...',false);
     idx++;
@@ -1649,34 +1757,62 @@ function aggregateReportDiagnosis(){
 }
 
 function downloadReport(reportId){
-  try{
-    var data=localStorage.getItem('review_report_data_'+reportId);
-    if(!data){showToast('❌ 报告数据未找到');return;}
-    var blob=new Blob([data],{type:'application/json'});
-    var url=URL.createObjectURL(blob);
-    var a=document.createElement('a');
-    a.href=url;a.download=reportId+'.json';
-    document.body.appendChild(a);a.click();
-    document.body.removeChild(a);URL.revokeObjectURL(url);
-    showToast('📥 报告已下载');
-  }catch(e){showToast('❌ 下载失败');}
+  // Try API first, fallback to localStorage
+  var url = API_BASE + '/playback/report/download/' + encodeURIComponent(reportId);
+  fetch(url).then(function(r){
+    if(r.ok) return r.json().then(function(d){
+      var blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);a.download=reportId+'.json';
+      document.body.appendChild(a);a.click();
+      document.body.removeChild(a);URL.revokeObjectURL(url);
+      showToast('📥 报告已下载');
+    });
+    throw new Error('API failed');
+  }).catch(function(){
+    // Fallback to localStorage
+    try{
+      var data=localStorage.getItem('review_report_data_'+reportId);
+      if(!data){showToast('❌ 报告数据未找到');return;}
+      var blob=new Blob([data],{type:'application/json'});
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);a.download=reportId+'.json';
+      document.body.appendChild(a);a.click();
+      document.body.removeChild(a);URL.revokeObjectURL(url);
+      showToast('📥 报告已下载');
+    }catch(e){showToast('❌ 下载失败');}
+  });
 }
 
 function downloadAllDiagnoses(){
-  try{
-    var collection=localStorage.getItem('report_diagnosis_collection');
-    if(!collection){showToast('❌ 无诊断汇总数据');return;}
-    var blob=new Blob([collection],{type:'application/json'});
-    var url=URL.createObjectURL(blob);
-    var a=document.createElement('a');
-    a.href=url;a.download='report_diagnosis_collection.json';
-    document.body.appendChild(a);a.click();
-    document.body.removeChild(a);URL.revokeObjectURL(url);
-    showToast('📥 诊断汇总已下载');
-  }catch(e){showToast('❌ 下载失败');}
+  var url = API_BASE + '/playback/report/download-all';
+  fetch(url).then(function(r){
+    if(r.ok) return r.json().then(function(d){
+      var blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);a.download='all_reports.json';
+      document.body.appendChild(a);a.click();
+      document.body.removeChild(a);URL.revokeObjectURL(url);
+      showToast('📥 全量报告已下载');
+    });
+    throw new Error('API failed');
+  }).catch(function(){
+    // Fallback to localStorage
+    try{
+      var collection=localStorage.getItem('report_diagnosis_collection');
+      if(!collection){showToast('❌ 无诊断汇总数据');return;}
+      var blob=new Blob([collection],{type:'application/json'});
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);a.download='report_diagnosis_collection.json';
+      document.body.appendChild(a);a.click();
+      document.body.removeChild(a);URL.revokeObjectURL(url);
+      showToast('📥 诊断汇总已下载');
+    }catch(e){showToast('❌ 下载失败');}
+  });
 }
 
 function getDiagnosisSummary(){
+  // Kept as localStorage-based for backward compatibility
   try{
     var collection=JSON.parse(localStorage.getItem('report_diagnosis_collection')||'[]');
     if(!collection.length)return null;
@@ -1710,21 +1846,20 @@ function notifAction(){closeNotification();showToast('📄 请前往报告中心
 function openResetModal(){document.getElementById('resetModal').style.display='flex';document.getElementById('resetConfirm').checked=false;document.getElementById('resetSubmitBtn').disabled=true;}
 function closeResetModal(){document.getElementById('resetModal').style.display='none';}
 function executeReset(){
+  var capInput=document.getElementById('resetCapitalInput');
+  var userCapital=capInput?parseInt(capInput.value)||1000000:1000000;
+  // Call API to reset account
+  apiPost('/playback/account/reset', { initial_capital: userCapital });
   try{
-    // Get user-specified initial capital
-    var capInput=document.getElementById('resetCapitalInput');
-    var userCapital=capInput?parseInt(capInput.value)||1000000:1000000;
     localStorage.removeItem('review_pool_entries_v2');
-    localStorage.removeItem('review_pool_data_v2');
     localStorage.removeItem('review_pool_data_v2');
     localStorage.removeItem('review_account_state');
     localStorage.removeItem('review_market_cache');
     localStorage.removeItem('review_badge_count');
     localStorage.removeItem('review_pool_entries');
     localStorage.removeItem('review_pool_data');
-    // Keep review_reports
   }catch(e){}
-  _reviewPool=generateMockPool();
+  _reviewPool=generateMockPoolFallback();
   _accountState=createDefaultAccount(userCapital);
   initMarketData(_reviewPool);
   _nextRvId=_reviewPool.length+1;
@@ -1747,11 +1882,25 @@ function renderAll(){
   updateTabCounts();
 }
 
-function initPlaybackPage(){
-  loadPoolData();
+async function initPlaybackPage(){
+  // Step 1: Load pool entries from API
+  var poolResult = await loadPoolFromApi();
+  // Step 2: Load account from API
+  var acctData = await loadAccountFromApi();
+  if(\!acctData){
+    _accountState = createDefaultAccount();
+  }
+  if(\!poolResult || \!poolResult.items || \!poolResult.items.length){
+    initMarketData(_reviewPool);
+  } else if(_reviewPool.length > 0){
+    initMarketData(_reviewPool);
+  }
+  // Step 3: Auto-advance simulation
   autoAdvance();
+  // Step 4: Merge any new entries from localStorage cross-page protocol
   var entries=readNewEntries();
   mergeNewEntries(entries);
+  // Step 5: Render everything
   renderAll();
   // Restore report collapse state
   try{
@@ -1774,7 +1923,7 @@ function initPlaybackPage(){
       var raw=localStorage.getItem('review_notification');
       if(raw){
         var d=JSON.parse(raw);
-        if(d.type==='report_complete'&&!d.acked){
+        if(d.type==='report_complete'&&\!d.acked){
           showNotification('📄 报告生成完成',d.count+' 份报告已生成并存档','complete');
           d.acked=true;localStorage.setItem('review_notification',JSON.stringify(d));
           renderReportsTable();
@@ -1782,9 +1931,7 @@ function initPlaybackPage(){
       }
     }catch(e){}
   },3000);
-}
-
-function updateSidebarBadge(){
+}function updateSidebarBadge(){
   try{
     var c=parseInt(localStorage.getItem('review_badge_count')||'0');
     var el=document.getElementById('sidebarReviewBadge');
