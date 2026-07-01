@@ -1053,10 +1053,99 @@ function toggleSidebar(){
   if(btn)btn.textContent='▶';
 })();
 
+/* ===== API 基地址 ===== */
+var API = '/api/v3';
+
+/* ===== API 数据加载 ===== */
+function loadFactorsFromAPI(){
+  fetch(API+'/factors').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success||!d.data||!d.data.length) return;
+    // Replace FACTORS with API data, preserving rendering compatibility
+    var apiFactors = d.data.map(function(f,idx){return {
+      id: f.id||idx+1, name: f.name||'FACTOR_'+(idx+1), cn: f.cn||f.name||'因子'+(idx+1),
+      cat: f.category||f.cat||'momentum', catCN: f.catCN||'📈 价格动量',
+      src: f.source||f.src||'A-Stock', desc: f.description||f.desc||'',
+      tags: f.tags||{time:['短线'],strategy:['通用'],market:['全市场']},
+      params: f.params||[{k:'周期',v:20,min:5,max:60}],
+      examples: f.examples||['例：结合其他因子综合判断'],
+      relate: f.related_factors||f.relate||[]
+    };});
+    if(apiFactors.length) { FACTORS.length=0; FACTORS.push.apply(FACTORS,apiFactors); }
+    updateCatCounts(); renderFactors();
+  }).catch(function(e){console.warn('loadFactorsFromAPI error:',e);});
+}
+
+function loadCombosFromAPI(){
+  fetch(API+'/factors/combinations?type=all').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success||!d.data) return;
+    var apiSys = d.data.filter(function(c){return c.type==='sys'||c.type==='system';});
+    var apiUser = d.data.filter(function(c){return c.type==='user';});
+    if(apiSys.length) { PRESET_COMBOS.length=0; PRESET_COMBOS.push.apply(PRESET_COMBOS,apiSys.map(function(c,idx){return {
+      id: c.id||'p'+(idx+1), name: c.name||'系统组合'+(idx+1), type: 'sys',
+      desc: c.description||c.desc||'', src: c.source||c.src||'',
+      factors: c.factors||[{n:'因子',w:100}], detail: c.detail||''
+    };})); }
+    if(apiUser !== undefined) { userCombos.length=0; userCombos.push.apply(userCombos,apiUser.map(function(c){return {
+      id: c.id||'u'+Date.now(), name: c.name||'', type: 'user',
+      desc: c.description||c.desc||'', src: c.source||'用户自建',
+      factors: c.factors||[], created: c.created_at||c.created||''
+    };})); }
+    renderCombos();
+  }).catch(function(e){console.warn('loadCombosFromAPI error:',e);});
+}
+
+/* ===== 覆盖组合 CRUD（同步 API） ===== */
+var _origSaveCombo = saveCombo;
+saveCombo = function(){
+  var name=document.getElementById('ws-name').value.trim();
+  if(!name){showToast('⚠️ 请输入组合名称');return;}
+  var factors=[];
+  for(var i=0;i<wizardSelected.length;i++){
+    for(var j=0;j<FACTORS.length;j++) if(FACTORS[j].id===wizardSelected[i]){factors.push(FACTORS[j]);break;}
+  }
+  var factorList=[];
+  for(var i=0;i<factors.length;i++){
+    var f=factors[i];
+    var inp=document.querySelector('#wz-weight .ww-row[data-fid="'+f.id+'"] input');
+    var w=inp?parseInt(inp.value):Math.floor(100/factors.length);
+    factorList.push({factor_id:f.id,name:f.cn,weight:w});
+  }
+  var desc=document.getElementById('ws-desc').value.trim()||'由 '+factors.length+' 个因子构成的组合';
+  var goal=document.getElementById('wz-goal-input').value.trim();
+
+  var payload = {name:name,description:desc,factors:factorList,tags:[],goal:goal};
+  fetch(API+'/factors/combinations',{
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.success){
+      _origSaveCombo.apply(this,arguments);  // also save locally
+      showToast('✅ 已保存组合「'+name+'」 (云端)');
+    } else {
+      _origSaveCombo.apply(this,arguments);
+      showToast('⚠️ 云端保存失败，已保存到本地');
+    }
+  }).catch(function(){
+    _origSaveCombo.apply(this,arguments);
+    showToast('⚠️ 云端保存失败，已保存到本地');
+  });
+};
+
+var _origDelCombo = delCombo;
+delCombo = function(id){
+  var name='';
+  for(var i=0;i<userCombos.length;i++) if(userCombos[i].id===id){name=userCombos[i].name;break;}
+  showConfirm('确认删除组合「'+name+'」？删除后不可恢复。',function(){
+    fetch(API+'/factors/combinations/'+id,{method:'DELETE'}).catch(function(){});
+    _origDelCombo(id);
+  });
+};
+
 /* ===== 初始化 ===== */
 updateCatCounts();
 renderFactors();
 renderCombos();
+loadFactorsFromAPI();
+loadCombosFromAPI();
 </script>
 </body>
 </html>

@@ -101,18 +101,18 @@ body { overflow-x:hidden; }
       <h1>📊 仪表盘</h1>
       <div class="page-header-actions">
         <div style="display:flex;align-items:center;gap:var(--space-4);font-size:12px;color:var(--text-muted);">
-          <span class="status-dot green"></span>2026-06-11 15:30
-          <span style="margin-left:var(--space-8);">成交额: <strong>¥8,742亿</strong> <span class="up">↑ +12.5%</span></span>
+          <span class="status-dot" id="market-status-dot"></span><span id="market-update-time">加载中...</span>
+          <span style="margin-left:var(--space-8);">成交额: <strong id="total-volume-text">--</strong> <span id="total-volume-change"></span></span>
         </div>
       </div>
     </div>
 
     <!-- 四大指数卡片 -->
     <div class="index-grid" id="index-grid">
-      <div class="index-card"><div class="top"><span class="name">上证指数</span><span style="font-size:11px;color:var(--text-muted);">000001.SH</span></div><div class="value up">3,287.45</div><div class="change up">↑ +0.87%</div><div id="mini-sh" class="index-mini-chart"></div></div>
-      <div class="index-card"><div class="top"><span class="name">深证成指</span><span style="font-size:11px;color:var(--text-muted);">399001.SZ</span></div><div class="value down">10,834.26</div><div class="change down">↓ -0.32%</div><div id="mini-sz" class="index-mini-chart"></div></div>
-      <div class="index-card"><div class="top"><span class="name">北证50</span><span style="font-size:11px;color:var(--text-muted);">899050.BJ</span></div><div class="value up">1,285.60</div><div class="change up">↑ +1.23%</div><div id="mini-bj" class="index-mini-chart"></div></div>
-      <div class="index-card"><div class="top"><span class="name">创业板指</span><span style="font-size:11px;color:var(--text-muted);">399006.SZ</span></div><div class="value down">2,180.56</div><div class="change down">↓ -0.34%</div><div id="mini-cy" class="index-mini-chart"></div></div>
+      <div class="index-card" data-index="000001.SH"><div class="top"><span class="name">上证指数</span><span style="font-size:11px;color:var(--text-muted);">000001.SH</span></div><div class="value" id="idx-val-0">--</div><div class="change" id="idx-chg-0"></div><div id="mini-0" class="index-mini-chart"></div></div>
+      <div class="index-card" data-index="399001.SZ"><div class="top"><span class="name">深证成指</span><span style="font-size:11px;color:var(--text-muted);">399001.SZ</span></div><div class="value" id="idx-val-1">--</div><div class="change" id="idx-chg-1"></div><div id="mini-1" class="index-mini-chart"></div></div>
+      <div class="index-card" data-index="899050.BJ"><div class="top"><span class="name">北证50</span><span style="font-size:11px;color:var(--text-muted);">899050.BJ</span></div><div class="value" id="idx-val-2">--</div><div class="change" id="idx-chg-2"></div><div id="mini-2" class="index-mini-chart"></div></div>
+      <div class="index-card" data-index="399006.SZ"><div class="top"><span class="name">创业板指</span><span style="font-size:11px;color:var(--text-muted);">399006.SZ</span></div><div class="value" id="idx-val-3">--</div><div class="change" id="idx-chg-3"></div><div id="mini-3" class="index-mini-chart"></div></div>
     </div>
 
     <!-- 四大交易所合计·每日成交额（近20日）→ 新增 -->
@@ -225,170 +225,219 @@ function toggleSidebar(){
 </script>
 
 <script>
-// ===== 迷你K线数据生成 =====
-function genMiniKData(basePrice, n){
-  var data=[], price=basePrice, dt=new Date(); dt.setDate(dt.getDate()-n);
-  for(var i=0;i<n;i++){
-    dt.setDate(dt.getDate()+1);
-    if(dt.getDay()===0||dt.getDay()===6){i--;continue;}
-    var open=price+(Math.random()-0.5)*basePrice*0.04;
-    var close=open+(Math.random()-0.5)*basePrice*0.03;
-    var high=Math.max(open,close)+Math.random()*basePrice*0.015;
-    var low=Math.min(open,close)-Math.random()*basePrice*0.015;
-    price=close;
-    data.push({date:(dt.getMonth()+1)+'/'+dt.getDate(),open:+open.toFixed(2),close:+close.toFixed(2),low:+low.toFixed(2),high:+high.toFixed(2)});
-  }
-  return data;
-}
+var API = '/api/v3';
+var charts=[];
 function drawMiniK(domId,data){
+  if(!data||!data.length)return;
   var c=echarts.init(document.getElementById(domId));
-  var dates=data.map(function(v){return v.date;}), prices=data.map(function(v){return v.close;});
-  var minP=Math.min.apply(null,prices), maxP=Math.max.apply(null,prices), pad=(maxP-minP)*0.08;
+  var dates=data.map(function(v){return v.date||v.trade_date;});
+  var kd=data.map(function(v){return [+v.open,+v.close,+v.low,+v.high];});
+  var minP=Math.min.apply(null,kd.map(function(v){return v[2];})), maxP=Math.max.apply(null,kd.map(function(v){return v[1];})), pad=(maxP-minP)*0.08||0.5;
   c.setOption({backgroundColor:'transparent',grid:{left:3,right:3,top:3,bottom:16},
     xAxis:{type:'category',data:dates,axisLabel:{color:'#64748B',fontSize:7,interval:4},axisLine:{show:false},axisTick:{show:false}},
     yAxis:{type:'value',min:minP-pad,max:maxP+pad,show:false,splitLine:{show:false}},
-    series:[{type:'candlestick',data:data.map(function(v){return [v.open,v.close,v.low,v.high];}),itemStyle:{color:'#EF4444',color0:'#22C55E',borderColor:'#EF4444',borderColor0:'#22C55E'},barWidth:'70%'}],
-    tooltip:{show:false}});
+    series:[{type:'candlestick',data:kd,itemStyle:{color:'#EF4444',color0:'#22C55E',borderColor:'#EF4444',borderColor0:'#22C55E'},barWidth:'70%'}],tooltip:{show:false}});
   return c;
 }
-var charts=[];
-charts.push(drawMiniK('mini-sh',genMiniKData(3287,20)));
-charts.push(drawMiniK('mini-sz',genMiniKData(10834,20)));
-charts.push(drawMiniK('mini-bj',genMiniKData(1285,20)));
-charts.push(drawMiniK('mini-cy',genMiniKData(2180,20)));
 
-// ===== 四大交易所合计·每日成交额柱状图 =====
-(function(){
-  var c=echarts.init(document.getElementById('volume-chart'));
-  var days=[];
-  var dt=new Date();dt.setDate(dt.getDate()-20);
-  for(var i=0;i<20;i++){dt.setDate(dt.getDate()+1);if(dt.getDay()===0||dt.getDay()===6){i--;continue;}days.push((dt.getMonth()+1)+'/'+dt.getDate());}
-  var vals=[];for(i=0;i<days.length;i++)vals.push(+(Math.random()*3000+5000).toFixed(0));
-  c.setOption({
-    backgroundColor:'transparent',grid:{left:50,right:20,bottom:20,top:10},
-    xAxis:{type:'category',data:days,axisLabel:{color:'#64748B',fontSize:10}},
-    yAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
-    tooltip:{trigger:'axis',formatter:function(p){return p[0].axisValue+'<br/>成交额: ¥'+(p[0].value/10000).toFixed(2)+'万亿';}},
-    series:[{type:'bar',data:vals,itemStyle:{color:function(p){return p.value>=vals.reduce(function(a,b){return a+b;})/vals.length?'#EF4444':'#22C55E';}},barWidth:12}]
-  });
-  charts.push(c);
-})();
+// ===== 1. 加载市场总览 =====
+function loadMarketOverview(){
+  fetch(API+'/market/overview')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.success||!d.data)return;
+      var ov=d.data;
+      // 更新顶栏
+      if(ov.market_status){
+        var dot=document.getElementById('market-status-dot');
+        dot.className='status-dot '+(ov.market_status.trading?'green':'gray');
+        dot.title=ov.market_status.status||'';
+      }
+      if(ov.update_time) document.getElementById('market-update-time').textContent=ov.update_time;
+      if(ov.total_volume_text) document.getElementById('total-volume-text').textContent=ov.total_volume_text;
+      if(ov.total_volume_change_pct!==undefined){
+        var chgEl=document.getElementById('total-volume-change');
+        var pct=ov.total_volume_change_pct;
+        chgEl.className=pct>=0?'up':'down';
+        chgEl.innerHTML=(pct>=0?'↑ +':'↓ ')+pct.toFixed(1)+'%';
+      }
+      // 四大指数
+      if(ov.indexes&&ov.indexes.length){
+        ov.indexes.forEach(function(idx,i){
+          if(i>3)return;
+          var vEl=document.getElementById('idx-val-'+i),cEl=document.getElementById('idx-chg-'+i);
+          if(vEl){
+            vEl.textContent=idx.price!==undefined?(+idx.price).toLocaleString("zh-CN",{minimumFractionDigits:2}):'--';
+            vEl.className='value '+(idx.pct_chg>=0?'up':'down');
+          }
+          if(cEl){
+            cEl.className='change '+(idx.pct_chg>=0?'up':'down');
+            cEl.innerHTML=idx.pct_chg!==undefined?(idx.pct_chg>=0?'↑ +':'↓ ')+Math.abs(idx.pct_chg).toFixed(2)+'%':'--';
+          }
+          // 迷你K线
+          if(idx.mini_kline&&idx.mini_kline.length){
+            var mini=drawMiniK('mini-'+i,idx.mini_kline);
+            if(mini) charts.push(mini);
+          }
+        });
+      }
+    })
+    .catch(function(e){console.warn('market/overview 加载失败',e);});
+}
 
-// ===== AI 交易机会雷达 =====
-var radarStocks = [
-  {code:'000762.SZ',name:'西藏矿业',score:92,dir:'bullish',price:'12.34',change:'+2.3%'},
-  {code:'000001.SZ',name:'平安银行',score:88,dir:'bullish',price:'11.28',change:'+1.8%'},
-  {code:'002594.SZ',name:'比亚迪',score:90,dir:'bullish',price:'265.80',change:'+3.2%'},
-  {code:'300750.SZ',name:'宁德时代',score:85,dir:'watch',price:'218.50',change:'-0.5%'},
-  {code:'000858.SZ',name:'五粮液',score:82,dir:'bullish',price:'145.20',change:'+2.1%'},
-  {code:'002415.SZ',name:'海康威视',score:78,dir:'watch',price:'32.68',change:'+1.2%'},
-  {code:'600519.SH',name:'贵州茅台',score:80,dir:'bullish',price:'1685.00',change:'+0.9%'},
-  {code:'600036.SH',name:'招商银行',score:75,dir:'watch',price:'35.42',change:'+0.5%'},
-];
-var colorMap = {bullish:'#EF4444',bearish:'#22C55E',watch:'#F59E0B'};
-var dirLabelMap = {bullish:'看多',bearish:'看空',watch:'关注'};
-var track = document.getElementById('radar-track');
-// 重复一次实现无缝循环
-var allCards = radarStocks.concat(radarStocks);
-allCards.forEach(function(s){
-  var card = document.createElement('div');
-  card.className = 'radar-card';
-  card.onclick = function(){ location.href='indicator-ide.html'; };
-  card.innerHTML = '<div class="color-bar" style="background:'+colorMap[s.dir]+'"></div>'
-    + '<div class="info"><span class="stock-name">'+s.name+'</span><span class="stock-code">'+s.code+'</span></div>'
-    + '<div class="score" style="color:'+colorMap[s.dir]+'">★'+s.score+'</div>'
-    + '<span class="dir-tag" style="background:'+colorMap[s.dir]+'22;color:'+colorMap[s.dir]+'">'+dirLabelMap[s.dir]+'</span>';
-  track.appendChild(card);
-});
+// ===== 2. 加载成交额柱状图 =====
+function loadVolumeChart(){
+  fetch(API+'/market/index-daily')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.success||!d.data||!d.data.length)return;
+      var c=echarts.init(document.getElementById('volume-chart'));
+      var data=d.data.reverse(); // 旧→新
+      var days=data.map(function(v){return v.trade_date&&v.trade_date.slice(5)||v.date;});
+      var vals=data.map(function(v){return +(v.amount/1e8).toFixed(0);});
+      c.setOption({
+        backgroundColor:'transparent',grid:{left:50,right:20,bottom:20,top:10},
+        xAxis:{type:'category',data:days,axisLabel:{color:'#64748B',fontSize:10}},
+        yAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
+        tooltip:{trigger:'axis',formatter:function(p){return p[0].axisValue+'<br/>成交额: ¥'+(p[0].value/10000).toFixed(2)+'万亿';}},
+        series:[{type:'bar',data:vals,itemStyle:{color:function(p){return p.value>=vals.reduce(function(a,b){return a+b;})/vals.length?'#EF4444':'#22C55E';}},barWidth:12}]
+      });
+      charts.push(c);
+    })
+    .catch(function(e){console.warn('index-daily 加载失败',e);});
+}
 
-// ===== 资金流向图 =====
-(function(){
-  var c=echarts.init(document.getElementById('chart-fund-flow'));
-  var days=[];for(var i=20;i>0;i--){var d=new Date();d.setDate(d.getDate()-i);days.push((d.getMonth()+1)+'/'+d.getDate());}
-  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流出'],textStyle:{color:'#94A3B8'},top:0},grid:{left:50,right:20,bottom:20,top:40},
-    xAxis:{type:'category',data:days,axisLabel:{color:'#64748B',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
-    yAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
-    series:[{name:'主力净流入',type:'bar',data:[2.8,3.5,1.2,-0.8,2.1,4.5,-1.2,0.5,3.8,-2.3,1.5,2.9,-0.5,3.2,-1.8,2.7,4.1,-0.3,1.8,3.6],itemStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#3B82F6'},{offset:1,color:'rgba(59,130,246,0.2)'}])}},
-    {name:'散户净流出',type:'line',data:[-1.2,-2.1,-0.5,-1.8,-1.0,-2.8,-0.3,-1.5,-1.8,-0.8,-2.2,-1.4,-1.7,-1.1,-0.6,-2.5,-1.9,-0.8,-1.3,-2.0],smooth:true,lineStyle:{color:'#EF4444',width:1.5},symbol:'none',areaStyle:{color:'rgba(239,68,68,0.08)'}}]});
-  charts.push(c);
-})();
+// ===== 3. 加载AI雷达 =====
+var colorMap={bullish:'#EF4444',bearish:'#22C55E',watch:'#F59E0B'};
+var dirLabelMap={bullish:'看多',bearish:'看空',watch:'关注'};
+function loadRadar(){
+  fetch(API+'/dashboard/summary')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.success||!d.data||!d.data.stocks||!d.data.stocks.length)return;
+      var stocks=d.data.stocks;
+      var track=document.getElementById('radar-track');
+      var allCards=stocks.concat(stocks);
+      allCards.forEach(function(s){
+        var card=document.createElement('div');
+        card.className='radar-card';
+        card.onclick=function(){location.href='indicator-ide.html?code='+s.code;};
+        var dir=s.direction||'watch';
+        card.innerHTML='<div class="color-bar" style="background:'+colorMap[dir]+'"></div>'
+          +'<div class="info"><span class="stock-name">'+(s.name||'')+'</span><span class="stock-code">'+(s.code||'')+'</span></div>'
+          +'<div class="score" style="color:'+colorMap[dir]+'">★'+(s.score||'--')+'</div>'
+          +'<span class="dir-tag" style="background:'+colorMap[dir]+'22;color:'+colorMap[dir]+'">'+dirLabelMap[dir]+'</span>';
+        track.appendChild(card);
+      });
+      // 更新"更新于"标注
+      var ut=document.querySelector('.update-tag');
+      if(ut&&d.data.update_time) ut.textContent='来自 Screener L3 · '+d.data.update_time;
+    })
+    .catch(function(e){console.warn('dashboard/summary 加载失败',e);});
+}
 
-// ===== 行业板块图 =====
-(function(){
-  var c=echarts.init(document.getElementById('chart-sector'));
-  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:50,right:20,bottom:10,top:10},
-    xAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
-    yAxis:{type:'category',data:['半导体','新能源','白酒','医药','银行','地产','军工','AI'],axisLabel:{color:'#94A3B8',fontSize:11},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
-    series:[{type:'bar',data:[{value:4.8,itemStyle:{color:'#EF4444'}},{value:-2.3,itemStyle:{color:'#22C55E'}},{value:3.2,itemStyle:{color:'#EF4444'}},{value:1.5,itemStyle:{color:'#EF4444'}},{value:-1.8,itemStyle:{color:'#22C55E'}},{value:2.5,itemStyle:{color:'#EF4444'}},{value:-0.5,itemStyle:{color:'#22C55E'}},{value:5.2,itemStyle:{color:'#EF4444'}}],barWidth:12,
-      label:{show:true,position:'right',formatter:'{c}%',fontSize:11,color:'#94A3B8'}}]});
-  charts.push(c);
-})();
+// ===== 4. 加载资金流向图 =====
+function loadMoneyflow(){
+  fetch(API+'/market/moneyflow-summary')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.success||!d.data||!d.data.daily_flow||!d.data.daily_flow.length)return;
+      var c=echarts.init(document.getElementById('chart-fund-flow'));
+      var flow=d.data.daily_flow.reverse();
+      var days=flow.map(function(v){return v.date&&v.date.slice(5)||'';});
+      var main=flow.map(function(v){return +(v.net_main||0).toFixed(1);});
+      var retail=flow.map(function(v){return +(v.net_retail||-(v.net_main||0)*0.4).toFixed(1);});
+      c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流出'],textStyle:{color:'#94A3B8'},top:0},grid:{left:50,right:20,bottom:20,top:40},
+        xAxis:{type:'category',data:days,axisLabel:{color:'#64748B',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
+        yAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
+        series:[{name:'主力净流入',type:'bar',data:main,itemStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#3B82F6'},{offset:1,color:'rgba(59,130,246,0.2)'}])}},
+          {name:'散户净流出',type:'line',data:retail,smooth:true,lineStyle:{color:'#EF4444',width:1.5},symbol:'none',areaStyle:{color:'rgba(239,68,68,0.08)'}}]});
+      charts.push(c);
+    })
+    .catch(function(e){console.warn('moneyflow-summary 加载失败',e);});
+}
 
-// ===== 行业板块净流入排行 =====
-(function(){
-  var c=echarts.init(document.getElementById('sector-inflow-chart'));
-  var sectors=['AI','军工','地产','银行','医药','白酒','新能源','半导体'];
-  var inflow=[5.2,-0.5,2.5,-1.8,1.5,3.2,-2.3,4.8];
-  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:40,right:50,bottom:10,top:5},
-    xAxis:{show:false},yAxis:{type:'category',data:sectors,axisLabel:{color:'#94A3B8',fontSize:11}},
-    series:[{type:'bar',data:inflow.map(function(v,i){return {value:v,itemStyle:{color:v>=0?'#EF4444':'#22C55E'}};}),barWidth:10,
-      label:{show:true,position:'right',formatter:'{c}亿',fontSize:10,color:'#94A3B8'}}]});
-  charts.push(c);
-})();
+// ===== 5. 加载行业板块涨跌幅图 =====
+function loadSectorChanges(){
+  fetch(API+'/market/sector-sector')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.success||!d.data||!d.data.length)return;
+      var c=echarts.init(document.getElementById('chart-sector'));
+      var sectors=d.data.slice(0,8);
+      c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:50,right:20,bottom:10,top:10},
+        xAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
+        yAxis:{type:'category',data:sectors.map(function(v){return v.name;}),axisLabel:{color:'#94A3B8',fontSize:11},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
+        series:[{type:'bar',data:sectors.map(function(v){return {value:+v.pct_chg.toFixed(1),itemStyle:{color:v.pct_chg>=0?'#EF4444':'#22C55E'}};}),barWidth:12,
+          label:{show:true,position:'right',formatter:'{c}%',fontSize:11,color:'#94A3B8'}}]});
+      charts.push(c);
+    })
+    .catch(function(e){console.warn('sector-sector 加载失败',e);});
+}
 
-// ===== Top5 板块·个股主力净流入（卡片） =====
-(function(){
-  var topSectors = [
-    {name:'半导体',stocks:[{name:'北方华创',inflow:'+0.85'},{name:'韦尔股份',inflow:'+0.72'},{name:'中芯国际',inflow:'+0.58'}]},
-    {name:'AI',stocks:[{name:'科大讯飞',inflow:'+0.92'},{name:'中科曙光',inflow:'+0.65'},{name:'寒武纪',inflow:'+0.41'}]},
-    {name:'白酒',stocks:[{name:'贵州茅台',inflow:'+1.25'},{name:'五粮液',inflow:'+0.88'},{name:'泸州老窖',inflow:'+0.53'}]},
-    {name:'新能源',stocks:[{name:'宁德时代',inflow:'+1.02'},{name:'隆基绿能',inflow:'+0.78'},{name:'阳光电源',inflow:'+0.45'}]},
-    {name:'银行',stocks:[{name:'招商银行',inflow:'+0.68'},{name:'工商银行',inflow:'+0.51'},{name:'建设银行',inflow:'+0.39'}]}
-  ];
-  var container = document.getElementById('top-stock-cards');
-  topSectors.forEach(function(s){
-    var wrap = document.createElement('div');
-    wrap.style.cssText = 'background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:var(--space-4);flex:1;min-width:0;';
-    var h = document.createElement('div');
-    h.style.cssText = 'font-size:11px;font-weight:500;color:var(--text-primary);margin-bottom:var(--space-3);';
-    h.textContent = s.name;
-    wrap.appendChild(h);
-    s.stocks.forEach(function(st){
-      var row = document.createElement('div');
-      row.style.cssText = 'display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
-      row.innerHTML = '<span>'+st.name+'</span><span class="up">'+st.inflow+'</span>';
-      wrap.appendChild(row);
-    });
-    container.appendChild(wrap);
-  });
-})();
+// ===== 6. 加载板块资金流向 + Top个股 =====
+function loadSectorMoneyflow(){
+  fetch(API+'/market/sector-moneyflow')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.success||!d.data)return;
+      // 板块净流入排行图
+      if(d.data.sectors&&d.data.sectors.length){
+        var c=echarts.init(document.getElementById('sector-inflow-chart'));
+        var items=d.data.sectors.slice(0,8);
+        c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:40,right:50,bottom:10,top:5},
+          xAxis:{show:false},yAxis:{type:'category',data:items.map(function(v){return v.name;}),axisLabel:{color:'#94A3B8',fontSize:11}},
+          series:[{type:'bar',data:items.map(function(v){var nf=+(v.net_flow||0).toFixed(1);return {value:nf,itemStyle:{color:nf>=0?'#EF4444':'#22C55E'}};}),barWidth:10,
+            label:{show:true,position:'right',formatter:'{c}亿',fontSize:10,color:'#94A3B8'}}]});
+        charts.push(c);
+      }
+      // Top5流入卡片
+      if(d.data.top_inflow&&d.data.top_inflow.length){
+        var inCont=document.getElementById('top-stock-cards');inCont.innerHTML='';
+        d.data.top_inflow.slice(0,5).forEach(function(s){
+          var wrap=document.createElement('div');
+          wrap.style.cssText='background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:var(--space-4);flex:1;min-width:0;';
+          var h=document.createElement('div');
+          h.style.cssText='font-size:11px;font-weight:500;color:var(--text-primary);margin-bottom:var(--space-3);';
+          h.textContent=s.name;wrap.appendChild(h);
+          (s.stocks||[]).forEach(function(st){
+            var row=document.createElement('div');
+            row.style.cssText='display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
+            row.innerHTML='<span>'+(st.name||'')+'</span><span class="up">'+(st.net_flow>0?'+':'')+st.net_flow.toFixed(2)+'</span>';
+            wrap.appendChild(row);
+          });
+          inCont.appendChild(wrap);
+        });
+      }
+      // Top5流出卡片
+      if(d.data.top_outflow&&d.data.top_outflow.length){
+        var outCont=document.getElementById('outflow-cards');outCont.innerHTML='';
+        d.data.top_outflow.slice(0,5).forEach(function(s){
+          var wrap=document.createElement('div');
+          wrap.style.cssText='background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:var(--space-4);flex:1;min-width:0;';
+          var h=document.createElement('div');
+          h.style.cssText='font-size:11px;font-weight:500;color:var(--text-primary);margin-bottom:var(--space-3);';
+          h.textContent=s.name;wrap.appendChild(h);
+          (s.stocks||[]).forEach(function(st){
+            var row=document.createElement('div');
+            row.style.cssText='display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
+            row.innerHTML='<span>'+(st.name||'')+'</span><span class="down">'+(st.net_flow>0?'+':'')+st.net_flow.toFixed(2)+'</span>';
+            wrap.appendChild(row);
+          });
+          outCont.appendChild(wrap);
+        });
+      }
+    })
+    .catch(function(e){console.warn('sector-moneyflow 加载失败',e);});
+}
 
-// ===== Top5 板块·个股主力净流出（卡片） =====
-(function(){
-  var outSectors = [
-    {name:'地产',stocks:[{name:'万科A',outflow:'-1.32'},{name:'保利发展',outflow:'-0.95'},{name:'招商蛇口',outflow:'-0.61'}]},
-    {name:'军工',stocks:[{name:'航发动力',outflow:'-0.78'},{name:'中航沈飞',outflow:'-0.54'},{name:'中国卫星',outflow:'-0.38'}]},
-    {name:'医药',stocks:[{name:'恒瑞医药',outflow:'-0.88'},{name:'药明康德',outflow:'-0.62'},{name:'迈瑞医疗',outflow:'-0.42'}]},
-    {name:'新能源',stocks:[{name:'宁德时代',outflow:'-0.71'},{name:'隆基绿能',outflow:'-0.55'},{name:'通威股份',outflow:'-0.35'}]},
-    {name:'银行',stocks:[{name:'招商银行',outflow:'-0.63'},{name:'兴业银行',outflow:'-0.48'},{name:'工商银行',outflow:'-0.32'}]}
-  ];
-  var container = document.getElementById('outflow-cards');
-  outSectors.forEach(function(s){
-    var wrap = document.createElement('div');
-    wrap.style.cssText = 'background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:var(--space-4);flex:1;min-width:0;';
-    var h = document.createElement('div');
-    h.style.cssText = 'font-size:11px;font-weight:500;color:var(--text-primary);margin-bottom:var(--space-3);';
-    h.textContent = s.name;
-    wrap.appendChild(h);
-    s.stocks.forEach(function(st){
-      var row = document.createElement('div');
-      row.style.cssText = 'display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
-      row.innerHTML = '<span>'+st.name+'</span><span class="down">'+st.outflow+'</span>';
-      wrap.appendChild(row);
-    });
-    container.appendChild(wrap);
-  });
-})();
+// ===== 启动 =====
+loadMarketOverview();
+loadVolumeChart();
+loadRadar();
+loadMoneyflow();
+loadSectorChanges();
+loadSectorMoneyflow();
 
 window.addEventListener('resize',function(){charts.forEach(function(c){if(c&&c.resize)c.resize();});});
 </script>

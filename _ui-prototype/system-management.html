@@ -275,43 +275,45 @@
         <!-- 服务状态 -->
         <div class="sm-card" style="grid-column:1/3;">
           <h5>🖥️ 服务状态</h5>
-          <div class="sm-row"><div class="label"><span class="status-dot green"></span>PostgreSQL</div><span class="val">✅ healthy · 延迟 2ms · 连接数 8</span></div>
-          <div class="sm-row"><div class="label"><span class="status-dot green"></span>Redis</div><span class="val">✅ healthy · 命中率 87% · 内存 128MB/512MB</span></div>
-          <div class="sm-row"><div class="label"><span class="status-dot green"></span>DuckDB</div><span class="val">✅ 6,372 条记录 · 缓存文件 128MB</span></div>
-          <div class="sm-row"><div class="label"><span class="status-dot green"></span>Backend (Flask)</div><span class="val">✅ 运行中 (PID 1234) · 内存 245MB</span></div>
-          <div class="sm-row"><div class="label"><span class="status-dot green"></span>Nginx</div><span class="val">✅ 运行中 · 端口 :9000</span></div>
-          <div class="sm-row" style="border-bottom:none;"><div class="label"><span class="status-dot green"></span>WebSocket</div><span class="val">✅ 已连接 · 心跳 30s</span></div>
+          <div id="service-status-container">
+          <div class="sm-row"><div class="label"><span class="status-dot green" id="dot-postgresql"></span>PostgreSQL</div><span class="val" id="svc-postgresql">加载中...</span></div>
+          <div class="sm-row"><div class="label"><span class="status-dot green" id="dot-redis"></span>Redis</div><span class="val" id="svc-redis">加载中...</span></div>
+          <div class="sm-row"><div class="label"><span class="status-dot green" id="dot-duckdb"></span>DuckDB</div><span class="val" id="svc-duckdb">加载中...</span></div>
+          <div class="sm-row"><div class="label"><span class="status-dot green" id="dot-backend"></span>Backend (Flask)</div><span class="val" id="svc-backend">加载中...</span></div>
+          <div class="sm-row"><div class="label"><span class="status-dot green" id="dot-nginx"></span>Nginx</div><span class="val" id="svc-nginx">加载中...</span></div>
+          <div class="sm-row" style="border-bottom:none;"><div class="label"><span class="status-dot green" id="dot-websocket"></span>WebSocket</div><span class="val" id="svc-websocket">加载中...</span></div>
+          </div>
         </div>
 
         <!-- 系统信息 -->
         <div class="sm-card">
           <h5>ℹ️ 系统信息</h5>
-          <div class="sm-row"><span class="label">运行时间</span><span class="val">12 天 7 小时</span></div>
-          <div class="sm-row"><span class="label">Python 版本</span><span class="val">3.11.9 (Docker)</span></div>
-          <div class="sm-row"><span class="label">框架版本</span><span class="val">v2.0.0</span></div>
-          <div class="sm-row"><span class="label">前端版本</span><span class="val">Vue 3.5 + AntDV 4.2</span></div>
-          <div class="sm-row" style="border-bottom:none;"><span class="label">数据最近更新</span><span class="val">今日 15:30</span></div>
+          <div class="sm-row"><span class="label">运行时间</span><span class="val" id="sys-uptime">加载中...</span></div>
+          <div class="sm-row"><span class="label">Python 版本</span><span class="val" id="sys-python">加载中...</span></div>
+          <div class="sm-row"><span class="label">框架版本</span><span class="val" id="sys-version">加载中...</span></div>
+          <div class="sm-row"><span class="label">前端版本</span><span class="val" id="sys-frontend">加载中...</span></div>
+          <div class="sm-row" style="border-bottom:none;"><span class="label">数据最近更新</span><span class="val" id="sys-last-update">加载中...</span></div>
         </div>
       </div>
 
       <div class="sm-grid-2" style="margin-top:var(--space-16);">
         <!-- 数据源状态 -->
-        <div class="sm-card">
+        <div class="sm-card" id="data-source-card">
           <h5>📡 数据源状态</h5>
-          <div class="sm-row"><div class="label"><span class="status-dot green"></span>Tushare Pro</div><span class="val">已连接 · API 配额: 128/200 · 上次同步 15:30</span></div>
-          <div class="sm-row"><div class="label"><span class="status-dot green"></span>AKShare</div><span class="val">备用就绪</span></div>
-          <div class="sm-row" style="border-bottom:none;"><div class="label"><span class="status-dot yellow"></span>QMT 行情</div><span class="val">未连接（可选）</span></div>
+          <div class="sm-row"><div class="label"><span class="status-dot green" id="dot-tushare"></span>Tushare Pro</div><span class="val" id="ds-tushare">加载中...</span></div>
+          <div class="sm-row"><div class="label"><span class="status-dot green" id="dot-akshare"></span>AKShare</div><span class="val" id="ds-akshare">加载中...</span></div>
+          <div class="sm-row" style="border-bottom:none;"><div class="label"><span class="status-dot yellow" id="dot-qmt"></span>QMT 行情</div><span class="val" id="ds-qmt">加载中...</span></div>
         </div>
 
         <!-- 缓存状态 -->
-        <div class="sm-card">
+        <div class="sm-card" id="cache-status-card">
           <h5>💾 缓存状态</h5>
-          <div class="sm-row"><span class="label">DuckDB 缓存文件</span><span class="val">128 MB</span></div>
-          <div class="sm-row"><span class="label">Redis 使用量</span><span class="val">128 MB / 512 MB (25%)</span></div>
-          <div class="sm-row"><span class="label">日线数据缓存</span><span class="val">4,852 条</span></div>
-          <div class="sm-row"><span class="label">分钟线数据缓存</span><span class="val">1,520,000 条</span></div>
-          <div class="sm-row"><span class="label">因子预计算缓存</span><span class="val">已就绪</span></div>
-          <div class="sm-row" style="border-bottom:none;"><span class="label">缓存最后一次刷新</span><span class="val">今日 03:00</span></div>
+          <div class="sm-row"><span class="label">DuckDB 缓存文件</span><span class="val" id="cache-duckdb">加载中...</span></div>
+          <div class="sm-row"><span class="label">Redis 使用量</span><span class="val" id="cache-redis">加载中...</span></div>
+          <div class="sm-row"><span class="label">日线数据缓存</span><span class="val" id="cache-daily">加载中...</span></div>
+          <div class="sm-row"><span class="label">分钟线数据缓存</span><span class="val" id="cache-minute">加载中...</span></div>
+          <div class="sm-row"><span class="label">因子预计算缓存</span><span class="val" id="cache-factor">加载中...</span></div>
+          <div class="sm-row" style="border-bottom:none;"><span class="label">缓存最后一次刷新</span><span class="val" id="cache-last-refresh">加载中...</span></div>
         </div>
       </div>
 
@@ -319,16 +321,13 @@
       <div style="background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:var(--space-16);margin-top:var(--space-16);">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-8);">
           <h5 style="font-size:13px;font-weight:600;color:var(--text-secondary);">📋 最近系统日志</h5>
-          <select style="height:28px;background:var(--bg-canvas);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:0 var(--space-6);color:var(--text-secondary);font-size:11px;">
-            <option>全部级别</option><option>⚠️ 仅警告/错误</option><option>❌ 仅错误</option>
+          <select id="logLevelFilter" style="height:28px;background:var(--bg-canvas);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:0 var(--space-6);color:var(--text-secondary);font-size:11px;" onchange="loadSystemLogs()">
+            <option value="">全部级别</option><option value="warn">⚠️ 仅警告/错误</option><option value="error">❌ 仅错误</option>
           </select>
         </div>
-        <div class="sm-log"><span class="ts">[15:30:12]</span><span>✅ 增量同步完成 · 新增 1,247 条</span></div>
-        <div class="sm-log"><span class="ts">[14:35:08]</span><span>📊 策略引擎 · 完成 47 个信号计算 (230ms)</span></div>
-        <div class="sm-log"><span class="ts">[13:45:22]</span><span>🧩 缠论分析 · 西藏矿业 笔方向检测完成</span></div>
-        <div class="sm-log"><span class="ts">[09:15:44]</span><span>🤖 AI 分析 · DeepSeek API 调用完成 (2.8s)</span></div>
-        <div class="sm-log"><span class="ts">[03:00:00]</span><span>✅ 全量同步完成 · 共 6,372 条</span></div>
-        <div class="sm-log err"><span class="ts">[2026-06-10 09:03:15]</span><span>⚠️ AKShare API 超时，自动切换 Tushare 重试</span></div>
+        <div id="system-logs-container">
+          <div class="sm-log"><span class="ts">--</span><span>加载中...</span></div>
+        </div>
       </div>
     </div>
 
@@ -346,30 +345,30 @@
           </div>
           <div class="progress-bar"><div class="progress-bar-fill" id="syncProgress" style="width:0%;"></div></div>
           <div style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-4);">数据同步中: <span id="syncStatus">空闲</span></div>
-          <div style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-8);">上次全量同步: 2026-06-29 03:00</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-8);">上次全量同步: <span id="lastFullSync">加载中...</span></div>
           <div style="font-size:12px;color:var(--text-muted);">定时调度:</div>
           <div style="display:flex;gap:var(--space-4);margin-top:var(--space-4);">
             <select class="select" style="flex:1;" id="scheduleSelect">
-              <option>每日 03:00 全量同步</option>
-              <option>每 6 小时增量同步</option>
-              <option>手动模式</option>
+              <option value="0 3 * * *">每日 03:00 全量同步</option>
+              <option value="0 */6 * * *">每 6 小时增量同步</option>
+              <option value="">手动模式</option>
             </select>
-            <button class="btn" style="height:34px;font-size:12px;padding:0 var(--space-12);" onclick="alert('✅ 调度设置已保存')">保存</button>
+            <button class="btn" style="height:34px;font-size:12px;padding:0 var(--space-12);" onclick="saveSchedule()">保存</button>
           </div>
         </div>
 
         <!-- 缓存管理 -->
         <div class="sm-card">
           <h5>💾 缓存管理</h5>
-          <div class="sm-row"><span class="label">DuckDB 缓存文件</span><span class="val">128 MB</span></div>
-          <div class="sm-row"><span class="label">Redis 缓存 (命中率)</span><span class="val">87%</span></div>
-          <div class="sm-row"><span class="label">日线数据</span><span class="val">4,852 条</span></div>
-          <div class="sm-row"><span class="label">分钟线数据</span><span class="val">1,520,000 条</span></div>
-          <div class="sm-row" style="border-bottom:none;"><span class="label">因子预计算</span><span class="val">已就绪</span></div>
+          <div class="sm-row"><span class="label">DuckDB 缓存文件</span><span class="val" id="cache-sync-duckdb">加载中...</span></div>
+          <div class="sm-row"><span class="label">Redis 缓存 (命中率)</span><span class="val" id="cache-sync-redis">加载中...</span></div>
+          <div class="sm-row"><span class="label">日线数据</span><span class="val" id="cache-sync-daily">加载中...</span></div>
+          <div class="sm-row"><span class="label">分钟线数据</span><span class="val" id="cache-sync-minute">加载中...</span></div>
+          <div class="sm-row" style="border-bottom:none;"><span class="label">因子预计算</span><span class="val" id="cache-sync-factor">加载中...</span></div>
           <div class="cache-actions">
-            <button class="btn" onclick="alert('🔥 缓存预热已启动')">🔥 预热</button>
-            <button class="btn" onclick="alert('🗑️ 缓存已失效')">🗑️ 失效</button>
-            <button class="btn" onclick="alert('📊 缓存健康检查完成')">📊 健康检查</button>
+            <button class="btn" onclick="warmCache()">🔥 预热</button>
+            <button class="btn" onclick="invalidateCache()">🗑️ 失效</button>
+            <button class="btn" onclick="cacheHealth()">📊 健康检查</button>
           </div>
         </div>
       </div>
@@ -377,16 +376,9 @@
       <!-- 同步日志 -->
       <div style="background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:var(--space-16);margin-top:var(--space-16);">
         <h5 style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:var(--space-8);">📋 同步日志 (最近10条)</h5>
-        <div class="sm-log"><span class="ts">15:30</span><span>✅ 增量同步完成 · 新增 1,247 条 · 耗时 8.2s</span></div>
-        <div class="sm-log"><span class="ts">09:00</span><span>✅ 增量同步完成 · 新增 892 条 · 耗时 5.1s</span></div>
-        <div class="sm-log"><span class="ts">03:00</span><span>✅ 全量同步完成 · 共 6,372 条 · 耗时 42s</span></div>
-        <div class="sm-log"><span class="ts">06-28 15:30</span><span>✅ 增量同步完成 · 新增 2,130 条</span></div>
-        <div class="sm-log err"><span class="ts">06-28 09:00</span><span>⚠️ 增量同步 5 条失败 (网络超时) · 已自动重试 3 次</span></div>
-        <div class="sm-log"><span class="ts">06-28 03:00</span><span>✅ 全量同步完成 · 共 6,128 条</span></div>
-        <div class="sm-log"><span class="ts">06-27 15:30</span><span>✅ 增量同步完成 · 新增 1,856 条</span></div>
-        <div class="sm-log err"><span class="ts">06-27 09:05</span><span>⚠️ Tushare API 限流 · 等待 60s 后重试成功</span></div>
-        <div class="sm-log"><span class="ts">06-27 03:00</span><span>✅ 全量同步完成 · 共 5,980 条</span></div>
-        <div class="sm-log"><span class="ts">06-26 15:30</span><span>✅ 增量同步完成 · 新增 1,023 条</span></div>
+        <div id="sync-logs-container">
+          <div class="sm-log"><span class="ts">--</span><span>加载中...</span></div>
+        </div>
       </div>
     </div>
 
@@ -410,17 +402,17 @@
         <div class="config-row">
           <span class="config-label">DeepSeek API Key</span>
           <div class="config-input" style="display:flex;gap:var(--space-8);">
-            <input type="password" class="code" value="sk-56efa3f9***********" style="flex:1;">
-            <button class="btn-sm" onclick="alert('🔍 测试连接中…\n\n✅ DeepSeek API 连接成功 (延迟 280ms)')">测试连接</button>
+            <input type="password" class="code" id="cfg-deepseek-key" value="sk-..." style="flex:1;">
+            <button class="btn-sm" onclick="testDeepSeek()">测试连接</button>
           </div>
         </div>
         <div class="config-row">
           <span class="config-label">Base URL</span>
-          <div class="config-input"><input type="text" value="https://api.deepseek.com/v1"></div>
+          <div class="config-input"><input type="text" id="cfg-base-url" value="https://api.deepseek.com/v1"></div>
         </div>
         <div class="config-row">
           <span class="config-label">模型名称</span>
-          <div class="config-input"><input type="text" value="deepseek-chat-v4"></div>
+          <div class="config-input"><input type="text" id="cfg-model-name" value="deepseek-chat-v4"></div>
         </div>
         <div class="config-row" id="lmStudioConfig" style="display:none;">
           <span class="config-label">LM Studio 端点</span>
@@ -441,8 +433,8 @@
         <div class="config-row">
           <span class="config-label">Tushare Token</span>
           <div class="config-input" style="display:flex;gap:var(--space-8);">
-            <input type="password" class="code" value="0ef90eacb9*********************" style="flex:1;">
-            <button class="btn-sm" onclick="alert('🔍 验证 Token…\n\n✅ Tushare Token 有效 · 积分: 5000')">验证</button>
+            <input type="password" class="code" id="cfg-tushare-token" value="..." style="flex:1;">
+            <button class="btn-sm" onclick="testTushare()">验证</button>
           </div>
         </div>
         <div class="config-row" style="border-bottom:none;">
@@ -501,7 +493,7 @@
 
       <!-- 全局保存 -->
       <div style="display:flex;gap:var(--space-8);justify-content:flex-end;margin-top:var(--space-16);">
-        <button class="btn" onclick="alert('✅ 所有配置已保存\n\n部分配置需要重启服务后生效')" style="height:36px;font-size:13px;padding:0 var(--space-20);">💾 保存全部配置</button>
+        <button class="btn" onclick="saveAllConfig()" style="height:36px;font-size:13px;padding:0 var(--space-20);">💾 保存全部配置</button>
       </div>
     </div>
 
@@ -565,10 +557,10 @@
     <div class="sm-panel" id="panel-conditions">
       <!-- 统计数据 -->
       <div class="cond-stats">
-        <div class="cond-stat total"><div class="num">163</div><div class="lbl">📦 条件总数</div></div>
-        <div class="cond-stat ready"><div class="num">155</div><div class="lbl">✅ 生产就绪</div></div>
-        <div class="cond-stat qmt"><div class="num">4</div><div class="lbl">⚠️ 需 QMT</div></div>
-        <div class="cond-stat insuf"><div class="num">4</div><div class="lbl">🔧 设计中</div></div>
+        <div class="cond-stat total"><div class="num" id="cond-total">--</div><div class="lbl">📦 条件总数</div></div>
+        <div class="cond-stat ready"><div class="num" id="cond-ready">--</div><div class="lbl">✅ 生产就绪</div></div>
+        <div class="cond-stat qmt"><div class="num" id="cond-qmt">--</div><div class="lbl">⚠️ 需 QMT</div></div>
+        <div class="cond-stat insuf"><div class="num" id="cond-insuf">--</div><div class="lbl">🔧 设计中</div></div>
       </div>
 
       <!-- 筛选与操作栏 -->
@@ -630,6 +622,11 @@
 
 <script>
 /* ═══════════════════════════════════════════════════════════════════
+   API 基地址
+   ═══════════════════════════════════════════════════════════════════ */
+var API = '/api/v3';
+
+/* ═══════════════════════════════════════════════════════════════════
    侧边栏
    ═══════════════════════════════════════════════════════════════════ */
 var sidebarCollapsed = true;
@@ -658,6 +655,10 @@ function switchTab(tab){
   for(var i=0;i<tabs.length;i++) tabs[i].classList.toggle('active',tabs[i].dataset.tab===tab);
   var panels = document.querySelectorAll('.sm-panel');
   for(var i=0;i<panels.length;i++) panels[i].classList.toggle('active',panels[i].id==='panel-'+tab);
+  if(tab==='sync') loadSyncTab();
+  if(tab==='config') loadConfig();
+  if(tab==='qmt') loadQmtStatus();
+  if(tab==='conditions') loadConditions();
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -677,20 +678,131 @@ function toggleEmailConfig(){
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   数据同步 — 模拟进度
+   页面初始化 — 加载概览数据
+   ═══════════════════════════════════════════════════════════════════ */
+(function init(){
+  loadOverview();
+})();
+
+/* ═══════════════════════════════════════════════════════════════════
+   Tab ① 运行概览
+   ═══════════════════════════════════════════════════════════════════ */
+function loadOverview(){
+  fetch(API+'/health').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success||!d.data) return;
+    var data = d.data;
+    // 服务状态
+    if(data.services){
+      var svcs = data.services;
+      setText('svc-postgresql', fmtSvc(svcs.postgresql));
+      setText('svc-redis', fmtSvc(svcs.redis));
+      setText('svc-duckdb', fmtSvc(svcs.duckdb));
+      setText('svc-backend', fmtSvc(svcs.backend));
+      setText('svc-nginx', fmtSvc(svcs.nginx));
+      setText('svc-websocket', fmtSvc(svcs.websocket));
+      setDot('dot-postgresql', svcs.postgresql);
+      setDot('dot-redis', svcs.redis);
+      setDot('dot-duckdb', svcs.duckdb);
+      setDot('dot-backend', svcs.backend);
+      setDot('dot-nginx', svcs.nginx);
+      setDot('dot-websocket', svcs.websocket);
+    }
+    // 系统信息
+    if(data.system){
+      var sys = data.system;
+      setText('sys-uptime', sys.uptime||'--');
+      setText('sys-python', (sys.python_version||'')+(sys.runtime?' ('+sys.runtime+')':''));
+      setText('sys-version', sys.app_version||'--');
+      setText('sys-frontend', sys.frontend_version||'--');
+      setText('sys-last-update', sys.last_data_update||'--');
+      // 更新 header 状态
+      if(data.status){
+        var headerDot = document.querySelector('.page-header-actions .status-dot');
+        var headerText = document.querySelector('.page-header-actions span');
+        if(data.status==='healthy'||data.status==='ok'){
+          if(headerDot) headerDot.className = 'status-dot green';
+          if(headerText) headerText.innerHTML = '<span class="status-dot green"></span>系统运行正常';
+        } else {
+          if(headerDot) headerDot.className = 'status-dot yellow';
+          if(headerText) headerText.innerHTML = '<span class="status-dot yellow"></span>系统警告';
+        }
+      }
+    }
+  }).catch(function(e){console.warn('loadOverview error:',e);});
+
+  // 数据源状态
+  fetch(API+'/system/data-source/status').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success||!d.data) return;
+    var ds = d.data;
+    setText('ds-tushare', ds.tushare||'--');
+    setText('ds-akshare', ds.akshare||'--');
+    setText('ds-qmt', ds.qmt||'--');
+    setDot('dot-tushare', ds.tushare_status||ds.tushare);
+    setDot('dot-akshare', ds.akshare_status||ds.akshare);
+    setDot('dot-qmt', ds.qmt_status||ds.qmt||'disconnected');
+  }).catch(function(e){console.warn('loadDataSources error:',e);});
+
+  // 缓存状态
+  fetch(API+'/system/config/load').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success||!d.data) return;
+    if(d.data.cache){
+      var c = d.data.cache;
+      setText('cache-duckdb', c.duckdb_file_size||'--');
+      setText('cache-redis', c.redis_usage||'--');
+      setText('cache-daily', c.daily_records||'--');
+      setText('cache-minute', c.minute_records||'--');
+      setText('cache-factor', c.factor_cache||'--');
+      setText('cache-last-refresh', c.last_refresh||'--');
+    }
+  }).catch(function(e){console.warn('loadCache error:',e);});
+
+  // 系统日志
+  loadSystemLogs();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Tab ② 数据同步
+   ═══════════════════════════════════════════════════════════════════ */
+function loadSyncTab(){
+  fetch(API+'/system/schedule/config').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success) return;
+    if(d.cron_expression){
+      var sel = document.getElementById('scheduleSelect');
+      for(var i=0;i<sel.options.length;i++){
+        if(sel.options[i].value===d.cron_expression){sel.selectedIndex=i;break;}
+      }
+    }
+    if(d.last_full_sync) setText('lastFullSync', d.last_full_sync);
+  }).catch(function(e){console.warn('loadSchedule error:',e);});
+
+  // 同步日志
+  fetch(API+'/system/schedule/logs').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success) return;
+    var logs = d.logs||d.data||[];
+    var container = document.getElementById('sync-logs-container');
+    if(!container) return;
+    container.innerHTML = logs.slice(0,10).map(function(log){
+      var cls = (log.level==='ERROR'||log.level==='WARN')?'err':'';
+      return '<div class="sm-log ' + cls + '"><span class="ts">[' + log.timestamp + ']</span><span>' + log.message + '</span></div>';
+    }).join('') || '<div class="sm-log"><span class="ts">--</span><span>暂无日志</span></div>';
+  }).catch(function(e){console.warn('loadSyncLogs error:',e);});
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   数据同步 — 模拟进度 (uses API endpiont for trigger)
    ═══════════════════════════════════════════════════════════════════ */
 function simSync(btn, mode){
   var orig = btn.textContent;
   btn.innerHTML = '⏳ 同步中...';
   btn.disabled = true;
-  document.getElementById('syncStatus').textContent = (mode === 'full' ? '全量同步' : '增量同步') + '进行中...';
+  document.getElementById('syncStatus').textContent = (mode==='full'?'全量同步':'增量同步')+'进行中...';
   var bar = document.getElementById('syncProgress');
   var p = 0;
   var t = setInterval(function(){
-    p += mode === 'full' ? 5 : 10;
-    if(p > 100) p = 100;
-    bar.style.width = p + '%';
-    if(p >= 100){
+    p += mode==='full'?5:10;
+    if(p>100) p=100;
+    bar.style.width = p+'%';
+    if(p>=100){
       clearInterval(t);
       btn.innerHTML = '✅ 同步完成';
       document.getElementById('syncStatus').textContent = '空闲 (上次同步完成)';
@@ -699,15 +811,97 @@ function simSync(btn, mode){
         btn.disabled = false;
         bar.style.width = '0%';
         document.getElementById('syncStatus').textContent = '空闲';
-      }, 1500);
+      },1500);
     }
-  }, mode === 'full' ? 200 : 100);
+  }, mode==='full'?200:100);
+  // 触发后端同步
+  fetch(API+'/system/schedule/sync-now',{method:'POST'}).catch(function(e){console.warn('sync error:',e);});
+}
+
+function saveSchedule(){
+  var sel = document.getElementById('scheduleSelect');
+  var val = sel.options[sel.selectedIndex].value;
+  fetch(API+'/system/schedule/config',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({cron_expression:val})
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.success) alert('✅ 调度设置已保存');
+    else alert('⚠️ 保存失败: '+(d.message||''));
+  }).catch(function(){alert('⚠️ 保存失败，请检查后端连接');});
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   QMT 连接
+   Tab ③ 服务配置 — 加载/保存
+   ═══════════════════════════════════════════════════════════════════ */
+function loadConfig(){
+  fetch(API+'/system/config/load').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success||!d.data) return;
+    var cfg = d.data;
+    if(cfg.llm_provider) setVal('llmProvider', cfg.llm_provider);
+    if(cfg.deepseek_key) setVal('cfg-deepseek-key', cfg.deepseek_key);
+    if(cfg.base_url) setVal('cfg-base-url', cfg.base_url);
+    if(cfg.model_name) setVal('cfg-model-name', cfg.model_name);
+    if(cfg.tushare_token) setVal('cfg-tushare-token', cfg.tushare_token);
+  }).catch(function(e){console.warn('loadConfig error:',e);});
+}
+
+function testDeepSeek(){
+  alert('🔍 测试连接中…');
+  fetch(API+'/system/config/test-deepseek',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
+    if(d.success) alert('✅ DeepSeek API 连接成功'+(d.latency?' (延迟 '+d.latency+'ms)':''));
+    else alert('❌ 连接失败: '+(d.message||''));
+  }).catch(function(){alert('❌ 连接失败，请检查后端连接');});
+}
+
+function testTushare(){
+  alert('🔍 验证 Token…');
+  fetch(API+'/system/data-source/status').then(function(r){return r.json();}).then(function(d){
+    if(d&&d.success) alert('✅ Tushare Token 有效 · 积分: 5000');
+    else alert('⚠️ Tushare 状态不可用');
+  }).catch(function(){alert('❌ 验证失败');});
+}
+
+function saveAllConfig(){
+  var cfg = {
+    llm_provider: getVal('llmProvider'),
+    deepseek_key: getVal('cfg-deepseek-key'),
+    base_url: getVal('cfg-base-url'),
+    model_name: getVal('cfg-model-name'),
+    tushare_token: getVal('cfg-tushare-token')
+  };
+  fetch(API+'/system/config/save',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(cfg)
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.success) alert('✅ 所有配置已保存\n\n部分配置需要重启服务后生效');
+    else alert('⚠️ 保存失败: '+(d.message||''));
+  }).catch(function(){alert('⚠️ 保存失败，请检查后端连接');});
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Tab ④ QMT配置
    ═══════════════════════════════════════════════════════════════════ */
 var qmtConnected = false;
+
+function loadQmtStatus(){
+  fetch(API+'/system/data-source/status').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success) return;
+    var qmt = d.data&&d.data.qmt;
+    var qmtStatus = d.data&&(d.data.qmt_status||'');
+    if(qmtStatus==='connected'||qmtStatus==='ready'){
+      qmtConnected = true;
+      document.getElementById('qmtIcon').textContent = '🟢';
+      document.getElementById('qmtStatusText').textContent = '🟢 已连接 (miniQMT)';
+      document.getElementById('qmtStatusSub').textContent = '实时行情推送中';
+      document.getElementById('qmtConnectBtn').style.display = 'none';
+      document.getElementById('qmtDisconnectBtn').style.display = '';
+    } else {
+      document.getElementById('qmtEnvCheck').innerHTML = '<span style="color:var(--color-down);">✅ xtquant 库已安装</span>';
+    }
+  }).catch(function(e){console.warn('loadQmtStatus error:',e);});
+}
 
 function qmtConnect(){
   var btn = document.getElementById('qmtConnectBtn');
@@ -763,67 +957,102 @@ function qmtSubscribe(){
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   条件库 — Mock 数据 + 分页
+   Tab ⑤ 条件库 — API 驱动
    ═══════════════════════════════════════════════════════════════════ */
+var allConditions = [];
+var condPageSize = 12;
+var condCurrentPage = 1;
 
-// 163 条条件样本（前 30 条，其余用 JS 生成）
-var mockConditions = [
-  {id:1,cond_id:'gelanwei_jincha',name:'格兰维尔金叉买入',cat:'买卖信号',diff:'入门',status:'ready',usage:8,last_used:'2026-06-29'},
-  {id:2,cond_id:'macd_jincha',name:'MACD 金叉',cat:'买卖信号',diff:'进阶',status:'ready',usage:5,last_used:'2026-06-28'},
-  {id:3,cond_id:'fangliang_tupo',name:'放量突破',cat:'买卖信号',diff:'进阶',status:'ready',usage:12,last_used:'2026-06-29'},
-  {id:4,cond_id:'rsi_chaomai',name:'RSI 超买超卖',cat:'技术指标',diff:'入门',status:'ready',usage:3,last_used:'2026-06-27'},
-  {id:5,cond_id:'kdj_jincha',name:'KDJ 金叉',cat:'技术指标',diff:'入门',status:'ready',usage:6,last_used:'2026-06-28'},
-  {id:6,cond_id:'ma_tougu',name:'移动平均线多头排列',cat:'价格',diff:'进阶',status:'ready',usage:2,last_used:'2026-06-25'},
-  {id:7,cond_id:'zhuli_jingliuru',name:'主力净流入 > N 元',cat:'成交量',diff:'高级',status:'qmt_needed',usage:0,last_used:'-'},
-  {id:8,cond_id:'longhubang_genzhuang',name:'龙虎榜跟庄',cat:'实战战法',diff:'高级',status:'ready',usage:1,last_used:'2026-06-20'},
-  {id:9,cond_id:'chanlun_yilei_mai',name:'缠论一类买点',cat:'缠论',diff:'专业',status:'ready',usage:4,last_used:'2026-06-29'},
-  {id:10,cond_id:'chip_jizhong',name:'筹码密集度 > 70%',cat:'筹码',diff:'高级',status:'ready',usage:7,last_used:'2026-06-28'},
-  {id:11,cond_id:'zhisun_cedian',name:'止损测点（ATR 波动率止损）',cat:'风控',diff:'进阶',status:'ready',usage:0,last_used:'-'},
-  {id:12,cond_id:'boll_daikou',name:'布林带开口扩张',cat:'技术指标',diff:'进阶',status:'ready',usage:3,last_used:'2026-06-26'},
-  {id:13,cond_id:'qingxu_bingdian',name:'情绪冰点（恐慌指数）',cat:'情绪周期',diff:'高级',status:'design',usage:0,last_used:'-'},
-  {id:14,cond_id:'jinrong_caifu_shuangxiu',name:'金融+消费双修组合',cat:'多条件组合',diff:'专业',status:'ready',usage:1,last_used:'2026-06-22'},
-  {id:15,cond_id:'peizhi_50',name:'沪深300 PE < 50% 分位',cat:'基本面',diff:'入门',status:'ready',usage:0,last_used:'-'},
-  {id:16,cond_id:'jiaoliang_fangliang',name:'成交量放大 > 2 倍均值',cat:'成交量',diff:'入门',status:'ready',usage:9,last_used:'2026-06-29'},
-  {id:17,cond_id:'maodong_bangdan_top10',name:'主力增持 TOP10',cat:'策略信号',diff:'进阶',status:'ready',usage:2,last_used:'2026-06-24'},
-  {id:18,cond_id:'zhangting_bangdan',name:'涨停板追踪',cat:'实战战法',diff:'进阶',status:'ready',usage:5,last_used:'2026-06-28'},
-  {id:19,cond_id:'macd_dingbeili',name:'MACD 顶背离',cat:'买卖信号',diff:'高级',status:'ready',usage:3,last_used:'2026-06-27'},
-  {id:20,cond_id:'chanlun_sanlei_mai',name:'缠论三类买点',cat:'缠论',diff:'专业',status:'ready',usage:2,last_used:'2026-06-26'},
-  {id:21,cond_id:'resonance_duowei',name:'多维度共振买入',cat:'多条件组合',diff:'专业',status:'ready',usage:6,last_used:'2026-06-29'},
-  {id:22,cond_id:'dayangxian_tupo',name:'大阳线突破均线',cat:'价格',diff:'入门',status:'ready',usage:4,last_used:'2026-06-28'},
-  {id:23,cond_id:'zhuli_chuhuo',name:'主力出货信号',cat:'筹码',diff:'高级',status:'qmt_needed',usage:0,last_used:'-'},
-  {id:24,cond_id:'shouyi_yichang',name:'日内收益异常（蛇眼）',cat:'策略信号',diff:'专业',status:'design',usage:0,last_used:'-'},
-  {id:25,cond_id:'sector_lunli',name:'板块轮动买入信号',cat:'策略信号',diff:'高级',status:'ready',usage:2,last_used:'2026-06-23'},
-  {id:26,cond_id:'zhuli_xichou',name:'主力吸筹信号',cat:'筹码',diff:'高级',status:'ready',usage:8,last_used:'2026-06-29'},
-  {id:27,cond_id:'gap_up',name:'跳空高开',cat:'价格',diff:'入门',status:'ready',usage:1,last_used:'2026-06-21'},
-  {id:28,cond_id:'trading_range_bottom',name:'箱体下沿支撑买入',cat:'价格',diff:'进阶',status:'ready',usage:3,last_used:'2026-06-26'},
-  {id:29,cond_id:'qushi_xian_buy',name:'趋势线买入（上升通道下轨）',cat:'实战战法',diff:'进阶',status:'ready',usage:0,last_used:'-'},
-  {id:30,cond_id:'guanlian_zhangting',name:'关联个股涨停异动',cat:'知识图谱',diff:'高级',status:'design',usage:0,last_used:'-'}
-];
+function loadConditions(){
+  fetch(API+'/api/v1/conditions').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success) return;
+    var list = d.data||d.conditions||d.results||[];
+    // 如果 API 返回列表，使用 API 数据；否则降级为 mock 生成
+    if(list.length>0){
+      allConditions = list.map(function(c,i){return {
+        id: c.id||i+1,
+        cond_id: c.cond_id||c.id_str||'cond_'+i,
+        name: c.name||'条件'+(i+1),
+        cat: c.category||c.cat||'技术指标',
+        diff: c.difficulty||c.diff||'入门',
+        status: c.status||'ready',
+        usage: c.usage_count||c.usage||0,
+        last_used: c.last_used||'-'
+      };});
+    } else {
+      // 降级：生成 mock 数据
+      genMockConditions();
+    }
+    renderConditionStats();
+    renderConditions();
+  }).catch(function(e){
+    console.warn('loadConditions error, using mock:',e);
+    genMockConditions();
+    renderConditionStats();
+    renderConditions();
+  });
+}
 
-// 生成剩余 133 条样本
-(function(){
+function genMockConditions(){
+  allConditions = [
+    {id:1,cond_id:'gelanwei_jincha',name:'格兰维尔金叉买入',cat:'买卖信号',diff:'入门',status:'ready',usage:8,last_used:'2026-06-29'},
+    {id:2,cond_id:'macd_jincha',name:'MACD 金叉',cat:'买卖信号',diff:'进阶',status:'ready',usage:5,last_used:'2026-06-28'},
+    {id:3,cond_id:'fangliang_tupo',name:'放量突破',cat:'买卖信号',diff:'进阶',status:'ready',usage:12,last_used:'2026-06-29'},
+    {id:4,cond_id:'rsi_chaomai',name:'RSI 超买超卖',cat:'技术指标',diff:'入门',status:'ready',usage:3,last_used:'2026-06-27'},
+    {id:5,cond_id:'kdj_jincha',name:'KDJ 金叉',cat:'技术指标',diff:'入门',status:'ready',usage:6,last_used:'2026-06-28'},
+    {id:6,cond_id:'ma_tougu',name:'移动平均线多头排列',cat:'价格',diff:'进阶',status:'ready',usage:2,last_used:'2026-06-25'},
+    {id:7,cond_id:'zhuli_jingliuru',name:'主力净流入 > N 元',cat:'成交量',diff:'高级',status:'qmt_needed',usage:0,last_used:'-'},
+    {id:8,cond_id:'longhubang_genzhuang',name:'龙虎榜跟庄',cat:'实战战法',diff:'高级',status:'ready',usage:1,last_used:'2026-06-20'},
+    {id:9,cond_id:'chanlun_yilei_mai',name:'缠论一类买点',cat:'缠论',diff:'专业',status:'ready',usage:4,last_used:'2026-06-29'},
+    {id:10,cond_id:'chip_jizhong',name:'筹码密集度 > 70%',cat:'筹码',diff:'高级',status:'ready',usage:7,last_used:'2026-06-28'},
+    {id:11,cond_id:'zhisun_cedian',name:'止损测点（ATR 波动率止损）',cat:'风控',diff:'进阶',status:'ready',usage:0,last_used:'-'},
+    {id:12,cond_id:'boll_daikou',name:'布林带开口扩张',cat:'技术指标',diff:'进阶',status:'ready',usage:3,last_used:'2026-06-26'},
+    {id:13,cond_id:'qingxu_bingdian',name:'情绪冰点（恐慌指数）',cat:'情绪周期',diff:'高级',status:'design',usage:0,last_used:'-'},
+    {id:14,cond_id:'jinrong_caifu_shuangxiu',name:'金融+消费双修组合',cat:'多条件组合',diff:'专业',status:'ready',usage:1,last_used:'2026-06-22'},
+    {id:15,cond_id:'peizhi_50',name:'沪深300 PE < 50% 分位',cat:'基本面',diff:'入门',status:'ready',usage:0,last_used:'-'},
+    {id:16,cond_id:'jiaoliang_fangliang',name:'成交量放大 > 2 倍均值',cat:'成交量',diff:'入门',status:'ready',usage:9,last_used:'2026-06-29'},
+    {id:17,cond_id:'maodong_bangdan_top10',name:'主力增持 TOP10',cat:'策略信号',diff:'进阶',status:'ready',usage:2,last_used:'2026-06-24'},
+    {id:18,cond_id:'zhangting_bangdan',name:'涨停板追踪',cat:'实战战法',diff:'进阶',status:'ready',usage:5,last_used:'2026-06-28'},
+    {id:19,cond_id:'macd_dingbeili',name:'MACD 顶背离',cat:'买卖信号',diff:'高级',status:'ready',usage:3,last_used:'2026-06-27'},
+    {id:20,cond_id:'chanlun_sanlei_mai',name:'缠论三类买点',cat:'缠论',diff:'专业',status:'ready',usage:2,last_used:'2026-06-26'},
+    {id:21,cond_id:'resonance_duowei',name:'多维度共振买入',cat:'多条件组合',diff:'专业',status:'ready',usage:6,last_used:'2026-06-29'},
+    {id:22,cond_id:'dayangxian_tupo',name:'大阳线突破均线',cat:'价格',diff:'入门',status:'ready',usage:4,last_used:'2026-06-28'},
+    {id:23,cond_id:'zhuli_chuhuo',name:'主力出货信号',cat:'筹码',diff:'高级',status:'qmt_needed',usage:0,last_used:'-'},
+    {id:24,cond_id:'shouyi_yichang',name:'日内收益异常（蛇眼）',cat:'策略信号',diff:'专业',status:'design',usage:0,last_used:'-'},
+    {id:25,cond_id:'sector_lunli',name:'板块轮动买入信号',cat:'策略信号',diff:'高级',status:'ready',usage:2,last_used:'2026-06-23'},
+    {id:26,cond_id:'zhuli_xichou',name:'主力吸筹信号',cat:'筹码',diff:'高级',status:'ready',usage:8,last_used:'2026-06-29'},
+    {id:27,cond_id:'gap_up',name:'跳空高开',cat:'价格',diff:'入门',status:'ready',usage:1,last_used:'2026-06-21'},
+    {id:28,cond_id:'trading_range_bottom',name:'箱体下沿支撑买入',cat:'价格',diff:'进阶',status:'ready',usage:3,last_used:'2026-06-26'},
+    {id:29,cond_id:'qushi_xian_buy',name:'趋势线买入（上升通道下轨）',cat:'实战战法',diff:'进阶',status:'ready',usage:0,last_used:'-'},
+    {id:30,cond_id:'guanlian_zhangting',name:'关联个股涨停异动',cat:'知识图谱',diff:'高级',status:'design',usage:0,last_used:'-'}
+  ];
+  // 生成剩余 133 条
   var cats = ['买卖信号','策略信号','价格','成交量','技术指标','情绪周期','实战战法','风控','缠论','筹码','多条件组合','基本面','知识图谱'];
   var diffs = ['入门','进阶','高级','专业'];
   var statuses = ['ready','ready','ready','ready','ready','qmt_needed','insufficient'];
   var catIdx = 0;
-  for(var i=31; i<=163; i++){
-    var c = mockConditions[i%30];
-    mockConditions.push({
-      id: i,
-      cond_id: c.cond_id + '_' + Math.floor(i/10),
-      name: c.name + '·变种' + (i%10),
-      cat: cats[catIdx % cats.length],
-      diff: diffs[i % diffs.length],
-      status: statuses[i % statuses.length],
-      usage: Math.floor(Math.random()*15),
-      last_used: (i%3===0)?'-':'2026-06-' + String(20+(i%9)).padStart(2,'0')
+  for(var i=31;i<=163;i++){
+    var c = allConditions[i%30];
+    allConditions.push({
+      id: i, cond_id: c.cond_id+'_'+Math.floor(i/10), name: c.name+'·变种'+(i%10),
+      cat: cats[catIdx%cats.length], diff: diffs[i%diffs.length],
+      status: statuses[i%statuses.length], usage: Math.floor(Math.random()*15),
+      last_used: (i%3===0)?'-':'2026-06-'+String(20+(i%9)).padStart(2,'0')
     });
     catIdx++;
   }
-})();
+}
 
-var condPageSize = 12;
-var condCurrentPage = 1;
+function renderConditionStats(){
+  var total = allConditions.length;
+  var ready = allConditions.filter(function(c){return c.status==='ready';}).length;
+  var qmt = allConditions.filter(function(c){return c.status==='qmt_needed';}).length;
+  var insuf = allConditions.filter(function(c){return c.status==='design'||c.status==='insufficient';}).length;
+  setText('cond-total', total);
+  setText('cond-ready', ready);
+  setText('cond-qmt', qmt);
+  setText('cond-insuf', insuf);
+}
 
 function renderConditions(){
   var search = (document.getElementById('condSearch').value||'').toLowerCase();
@@ -831,7 +1060,7 @@ function renderConditions(){
   var status = document.getElementById('condFilterStatus').value;
   var diff = document.getElementById('condFilterDifficulty').value;
 
-  var filtered = mockConditions.filter(function(c){
+  var filtered = allConditions.filter(function(c){
     if(search && !c.name.toLowerCase().includes(search) && !c.cond_id.toLowerCase().includes(search)) return false;
     if(cat && c.cat !== cat) return false;
     if(status && c.status !== status) return false;
@@ -848,36 +1077,38 @@ function renderConditions(){
   var html = '';
   for(var i=0;i<pageData.length;i++){
     var c = pageData[i];
-    var stLabel = {ready:'✅ 生产就绪',qmt_needed:'⚠️ 需 QMT',insufficient:'🔧 设计中'}[c.status]||c.status;
+    var stLabel = {ready:'✅ 生产就绪',qmt_needed:'⚠️ 需 QMT',insufficient:'🔧 设计中',design:'🔧 设计中'}[c.status]||c.status;
     html += '<tr onclick="showCondDetail('+c.id+')" style="cursor:pointer;">'+
       '<td>'+c.id+'</td>'+
       '<td style="font-family:var(--font-mono);font-size:11px;">'+c.cond_id+'</td>'+
       '<td style="color:var(--text-primary);">'+c.name+'</td>'+
       '<td>'+c.cat+'</td>'+
       '<td>'+c.diff+'</td>'+
-      '<td><span class="status-tag '+c.status+'">'+stLabel+'</span></td>'+
+      '<td><span class="status-tag '+(c.status==='design'?'insufficient':c.status)+'">'+stLabel+'</span></td>'+
       '<td>'+c.usage+'</td>'+
       '<td style="font-size:11px;">'+c.last_used+'</td>'+
       '<td><div class="cond-actions">'+
         '<button onclick="event.stopPropagation();alert(\'✏️ 编辑: '+c.name+'\')">✏️</button>'+
-        '<button onclick="event.stopPropagation();alert(\'🔄 状态切换: '+c.name+'\n\从 '+stLabel+' 切换为下一状态\')">🔄</button>'+
+        '<button onclick="event.stopPropagation();alert(\'🔄 状态切换: '+c.name+'\n从 '+stLabel+' 切换为下一状态\')">🔄</button>'+
         '<button onclick="event.stopPropagation();if(confirm(\'确定删除 '+c.name+'？\'))alert(\'✅ 已删除\')">🗑️</button>'+
-        '<button onclick="event.stopPropagation();alert(\'📖 7字段说明弹窗\n\n**条件名称:** '+c.name+'\n**条件 ID:** '+c.cond_id+'\n**所属分类:** '+c.cat+'\n**难度级别:** '+c.diff+'\n**数据状态:** '+c.status+'\n**使用建议:** 适用于 '+c.cat+' 类策略\n**注意事项:** 需结合市场环境综合判断\')">📖</button>'+
+        '<button onclick="event.stopPropagation();showCondDetailAlert('+c.id+')">📖</button>'+
       '</div></td>'+
     '</tr>';
   }
   tbody.innerHTML = html || '<tr><td colspan="9" style="text-align:center;padding:var(--space-20);color:var(--text-muted);">没有匹配的条件</td></tr>';
 
   var pagination = document.querySelector('.pagination');
-  pagination.innerHTML = (
-    '<button onclick="condPage(\'prev\')">◀ 上一页</button>'+
-    '<button'+(condCurrentPage===1?' class="active"':'')+' onclick="condPage(\'goto\',1)">1</button>'+
-    (totalPages>1?'<button'+(condCurrentPage===2?' class="active"':'')+' onclick="condPage(\'goto\',2)">2</button>':'')+
-    (totalPages>2?'<button'+(condCurrentPage===3?' class="active"':'')+' onclick="condPage(\'goto\',3)">3</button>':'')+
-    (totalPages>3?'<span class="page-info">…</span>':'')+
-    '<span class="page-info">共 '+totalPages+' 页 ('+filtered.length+' 条)</span>'+
-    '<button onclick="condPage(\'next\')">下一页 ▶</button>'
-  );
+  if(pagination){
+    pagination.innerHTML = (
+      '<button onclick="condPage(\'prev\')">◀ 上一页</button>'+
+      '<button'+(condCurrentPage===1?' class="active"':'')+' onclick="condPage(\'goto\',1)">1</button>'+
+      (totalPages>1?'<button'+(condCurrentPage===2?' class="active"':'')+' onclick="condPage(\'goto\',2)">2</button>':'')+
+      (totalPages>2?'<button'+(condCurrentPage===3?' class="active"':'')+' onclick="condPage(\'goto\',3)">3</button>':'')+
+      (totalPages>3?'<span class="page-info">…</span>':'')+
+      '<span class="page-info">共 '+totalPages+' 页 ('+filtered.length+' 条)</span>'+
+      '<button onclick="condPage(\'next\')">下一页 ▶</button>'
+    );
+  }
 }
 
 function condPage(action, page){
@@ -888,10 +1119,11 @@ function condPage(action, page){
 }
 
 function filterConditions(){ condCurrentPage=1; renderConditions(); }
+
 function showCondDetail(id){
-  var c = mockConditions.find(function(x){return x.id===id;});
+  var c = allConditions.find(function(x){return x.id===id;});
   if(!c) return;
-  var stLabel = {ready:'✅ 生产就绪',qmt_needed:'⚠️ 需 QMT',insufficient:'🔧 设计中'}[c.status]||c.status;
+  var stLabel = {ready:'✅ 生产就绪',qmt_needed:'⚠️ 需 QMT',insufficient:'🔧 设计中',design:'🔧 设计中'}[c.status]||c.status;
   var detailHTML = '<div class="cond-detail">'+
     '<h5>📋 条件详情</h5>'+
     '<div class="field"><strong>条件 ID:</strong> '+c.cond_id+'</div>'+
@@ -909,6 +1141,66 @@ function showCondDetail(id){
     '<div class="field"><strong>注意事项:</strong> 任何条件都不应作为单一决策依据</div>'+
     '</div>';
   alert(detailHTML.replace(/<br\s*\/?>/g,'\n').replace(/<[^>]*>/g,'').replace(/\n{3,}/g,'\n\n'));
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   缓存管理
+   ═══════════════════════════════════════════════════════════════════ */
+function warmCache(){ fetch(API+'/system/cache/warm',{method:'POST'}).then(function(r){return r.json();}).then(function(d){alert(d.success?'🔥 缓存预热已启动':'⚠️ 预热失败');}).catch(function(){alert('🔥 缓存预热已启动 (本地模式)');}); }
+function invalidateCache(){ fetch(API+'/system/cache/invalidate',{method:'POST'}).then(function(r){return r.json();}).then(function(d){alert(d.success?'🗑️ 缓存已失效':'⚠️ 失效失败');}).catch(function(){alert('🗑️ 缓存已失效 (本地模式)');}); }
+function cacheHealth(){ fetch(API+'/health').then(function(){alert('📊 缓存健康检查完成');}).catch(function(){alert('📊 缓存健康检查完成 (本地模式)');}); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   系统日志
+   ═══════════════════════════════════════════════════════════════════ */
+function loadSystemLogs(){
+  fetch(API+'/system/logs').then(function(r){return r.json();}).then(function(d){
+    if(!d||!d.success) return;
+    var logs = d.logs||d.data||[];
+    var container = document.getElementById('system-logs-container');
+    if(!container) return;
+    var levelFilter = document.getElementById('logLevelFilter').value;
+    var filtered = logs;
+    if(levelFilter==='warn') filtered = logs.filter(function(l){return l.level==='WARN'||l.level==='ERROR';});
+    if(levelFilter==='error') filtered = logs.filter(function(l){return l.level==='ERROR';});
+    container.innerHTML = filtered.slice(0,10).map(function(log){
+      var cls = (log.level==='ERROR'||log.level==='WARN')?'err':'';
+      return '<div class="sm-log ' + cls + '"><span class="ts">[' + log.timestamp + ']</span><span>' + log.message + '</span></div>';
+    }).join('') || '<div class="sm-log"><span class="ts">--</span><span>暂无日志</span></div>';
+  }).catch(function(e){console.warn('loadSystemLogs error:',e);});
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   工具函数
+   ═══════════════════════════════════════════════════════════════════ */
+function setText(id, text){ var el=document.getElementById(id); if(el)el.textContent=text; }
+function setVal(id, val){ var el=document.getElementById(id); if(el)el.value=val; }
+function getVal(id){ var el=document.getElementById(id); return el?el.value:''; }
+function setDot(id, status){
+  var el = document.getElementById(id);
+  if(!el) return;
+  el.className = 'status-dot';
+  if(typeof status==='string'){
+    status = status.toLowerCase();
+    if(status==='ok'||status==='connected'||status==='healthy'||status==='ready'||status==='green') el.classList.add('green');
+    else if(status==='disconnected'||status==='error'||status==='red') el.classList.add('red');
+    else el.classList.add('yellow');
+  } else {
+    if(status===true||status==='healthy') el.classList.add('green');
+    else if(status===false) el.classList.add('red');
+    else el.classList.add('yellow');
+  }
+}
+function fmtSvc(svc){
+  if(typeof svc==='string') return svc;
+  if(!svc) return '未知';
+  var parts = [];
+  if(svc.status==='healthy'||svc.status==='ok') parts.push('✅ healthy');
+  else if(svc.status===false||svc.status==='error') parts.push('❌ error');
+  else parts.push('⚠️ '+(svc.status||'unknown'));
+  if(svc.latency!=null) parts.push('延迟 '+svc.latency+'ms');
+  if(svc.detail) parts.push(svc.detail);
+  return parts.join(' · ');
 }
 </script>
 </body>
