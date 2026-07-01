@@ -11,18 +11,24 @@ import logging
 from typing import Dict, List, Optional
 
 from app.engine.backtest_v2 import (
-    AShareBacktestEngine, 
-    BacktestConfig, 
+    AShareBacktestEngine,
+    BacktestConfig,
     BacktestResultV2,
     create_default_engine
 )
 from app.services.benchmark_service import (
-    BenchmarkService, 
+    BenchmarkService,
     BenchmarkIndex,
     create_benchmark_service
 )
 from app.data.tushare_provider import TushareProvider
 from app.utils.error_handlers import handle_exceptions
+from app.services.backtest_service import (
+    CrossSectionalBacktestService,
+    ParameterOptimizer,
+    _init_task, get_progress, get_result,
+    save_snapshot, list_snapshots,
+)
 
 backtest_bp = Blueprint('backtest', __name__, url_prefix='/api/v3/backtest')
 
@@ -608,3 +614,346 @@ def get_status():
             'success': False,
             'error': str(e)
         }), 500
+
+
+# ══════════════════════════════════════════════════════════════
+# B2: POST /strategy-run — 横截面回测提交（218号 Phase 1）
+# ══════════════════════════════════════════════════════════════
+
+@backtest_bp.route('/strategy-run', methods=['POST'])
+@handle_exceptions
+def run_strategy_backtest():
+    """
+    提交横截面回测任务（B2）
+    对多只股票并行执行统一策略回测 → 横截面聚合 → 9区域输出
+
+    请求体:
+    {
+        "ts_codes": ["000001.SZ", "000762.SZ", ...],
+        "start_date": "20250101",
+        "end_date": "20250630",
+        "config": {
+            "initial_capital": 100000,
+            "commission_rate": 0.0003,
+            "signal_method": "combined",
+            "allocation_per_stock": 0.2
+        }
+    }
+    """
+    data = request.get_json() or {}
+    ts_codes = data.get('ts_codes', [])
+    start_date = data.get('start_date')
+    end_date = data.get('end_date')
+    config = data.get('config', {})
+
+    if not ts_codes:
+        return jsonify({'success': False, 'error': 'ts_codes 不能为空'}), 400
+    if not start_date or not end_date:
+        return jsonify({'success': False, 'error': 'start_date 和 end_date 不能为空'}), 400
+
+    # 创建任务
+    task_id = _init_task(ts_codes, start_date, end_date)
+
+    # 异步执行回测（在请求内同步执行，大池会阻塞 — 当前为同步，前端需loading）
+    service = CrossSectionalBacktestService()
+    result = service.run_strategy_backtest(
+        ts_codes=ts_codes,
+        start_date=start_date,
+        end_date=end_date,
+        config=config,
+        task_id=task_id,
+    )
+
+    return jsonify(result)
+
+
+# ══════════════════════════════════════════════════════════════
+# B3: GET /strategy-run/<task_id>/progress — 进度轮询
+# ══════════════════════════════════════════════════════════════
+
+@backtest_bp.route('/strategy-run/<task_id>/progress', methods=['GET'])
+@handle_exceptions
+def get_strategy_run_progress(task_id):
+    """
+    获取回测任务进度（B3）
+
+    进度阶段映射:
+    pending → data_fetch → signal_gen → backtest → metrics → aggregation → done
+    """
+    progress = get_progress(task_id)
+    if not progress:
+        return jsonify({'success': False, 'error': f'任务 {task_id} 不存在'}), 404
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'task_id': progress.task_id,
+            'status': progress.status,
+            'progress_pct': progress.progress_pct,
+            'message': progress.message,
+            'current_stock': progress.current_stock,
+            'stocks_completed': progress.stocks_completed,
+            'stocks_total': progress.stocks_total,
+            'error': progress.error,
+            'created_at': progress.created_at,
+            'completed_at': progress.completed_at,
+        }
+    })
+
+
+# ══════════════════════════════════════════════════════════════
+# B4: GET /strategy-run/<task_id>/result — 完整结果（9区域）
+# ══════════════════════════════════════════════════════════════
+
+@backtest_bp.route('/strategy-run/<task_id>/result', methods=['GET'])
+@handle_exceptions
+def get_strategy_run_result(task_id):
+    """
+    获取回测完整结果（B4）
+    返回9大区域：summary / equity_curve / trades / metrics / cross_sectional / benchmark / checkpoints / config / strategy_info
+    """
+    result = get_result(task_id)
+    if not result:
+        progress = get_progress(task_id)
+        if progress:
+            return jsonify({
+                'success': False,
+                'error': '任务尚未完成',
+                'data': {'status': progress.status, 'progress_pct': progress.progress_pct}
+            }), 409
+        return jsonify({'success': False, 'error': f'任务 {task_id} 不存在'}), 404
+
+    return jsonify(result)
+
+
+# ══════════════════════════════════════════════════════════════
+# 基准切换: GET /benchmark/<code> — 获取基准指数行情数据
+# ══════════════════════════════════════════════════════════════
+
+@backtest_bp.route('/benchmark/<code>', methods=['GET'])
+@handle_exceptions
+def get_benchmark_data(code):
+    """
+    获取基准指数行情数据（供前端对比展示）
+
+    URL参数:
+    - start_date: 开始日期
+    - end_date: 结束日期
+    """
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
+    service = create_benchmark_service()
+    df = service.get_index_daily(code, start_date, end_date)
+
+    if df.empty:
+        return jsonify({'success': False, 'error': f'基准 {code} 数据为空'}), 404
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'ts_code': code,
+            'name': BenchmarkIndex.NAMES.get(code, code),
+            'records': df.to_dict(orient='records'),
+            'metrics': service.calculate_benchmark_metrics(code, start_date, end_date),
+        }
+    })
+
+
+# ══════════════════════════════════════════════════════════════
+# 指标配置同步: GET /indicator-config/<ts_code>
+# ══════════════════════════════════════════════════════════════
+
+@backtest_bp.route('/indicator-config/<ts_code>', methods=['GET'])
+@handle_exceptions
+def get_indicator_config(ts_code):
+    """
+    获取个股在 indicator-ide 中的指标配置（供回测引擎参考哪些指标应启用）
+
+    从 indicator-ide 服务查询该股票保存的指标合约配置。
+    若无配置，返回默认配置。
+    """
+    try:
+        from app.services.indicator_contract import IndicatorContractParser
+        parser = IndicatorContractParser()
+        config = parser.load_stock_config(ts_code)
+    except (ImportError, AttributeError):
+        config = None
+
+    # 尝试从数据库读取保存的配置
+    if not config:
+        try:
+            from app.models import IndicatorConfig
+            db_config = IndicatorConfig.query.filter_by(ts_code=ts_code).first()
+            if db_config and db_config.config:
+                config = db_config.config
+        except Exception:
+            pass
+
+    # 返回默认配置兜底
+    if not config:
+        config = {
+            'ts_code': ts_code,
+            'indicators': {
+                'chanlun': {'enabled': True},
+                'volume_price': {'enabled': True},
+                'chip': {'enabled': False},
+                'factor': {'enabled': False},
+                'bociasi': {'enabled': True},
+                'long_term': {'enabled': False},
+            },
+            'params': {
+                'chanlun_period': '30min',
+                'ma_short': 5,
+                'ma_long': 20,
+            }
+        }
+
+    return jsonify({'success': True, 'data': config})
+
+
+# ══════════════════════════════════════════════════════════════
+# 参数优化: POST /optimize — 网格搜索参数
+# ══════════════════════════════════════════════════════════════
+
+@backtest_bp.route('/optimize', methods=['POST'])
+@handle_exceptions
+def optimize_parameters():
+    """
+    参数优化（网格搜索）
+
+    请求体:
+    {
+        "ts_code": "000001.SZ",
+        "start_date": "20250101",
+        "end_date": "20250630",
+        "param_grid": {
+            "short_window": [3, 5, 10],
+            "long_window": [15, 20, 30],
+            "rsi_period": [7, 14, 21]
+        },
+        "config": { ... }
+    }
+    """
+    data = request.get_json() or {}
+    ts_code = data.get('ts_code')
+    start_date = data.get('start_date')
+    end_date = data.get('end_date')
+    param_grid = data.get('param_grid', {})
+    config = data.get('config', {})
+
+    if not ts_code:
+        return jsonify({'success': False, 'error': 'ts_code 不能为空'}), 400
+    if not param_grid:
+        return jsonify({'success': False, 'error': 'param_grid 不能为空'}), 400
+
+    result = ParameterOptimizer.grid_search(
+        ts_code=ts_code,
+        param_grid=param_grid,
+        start_date=start_date or '20250101',
+        end_date=end_date or '20250630',
+        base_config=config,
+    )
+
+    return jsonify(result)
+
+
+# ══════════════════════════════════════════════════════════════
+# 参数优化: POST /optimize/apply — 应用优化后的参数
+# ══════════════════════════════════════════════════════════════
+
+@backtest_bp.route('/optimize/apply', methods=['POST'])
+@handle_exceptions
+def apply_optimized_params():
+    """
+    应用优化后的参数（保存快照 + 标记已应用）
+
+    请求体:
+    {
+        "params": {"short_window": 5, "long_window": 20},
+        "metrics": {"sharpe_ratio": 1.5, "total_return": 0.25},
+        "note": "基于2025H1优化的均线参数"
+    }
+    """
+    data = request.get_json() or {}
+    params = data.get('params', {})
+    metrics = data.get('metrics', {})
+    note = data.get('note', '')
+
+    if not params:
+        return jsonify({'success': False, 'error': 'params 不能为空'}), 400
+
+    snapshot = save_snapshot(params, metrics, note)
+
+    return jsonify({
+        'success': True,
+        'data': snapshot,
+        'message': f'参数快照已保存: {snapshot["id"]}'
+    }), 201
+
+
+# ══════════════════════════════════════════════════════════════
+# 参数优化: POST /optimize/diff — 当前参数 vs 优化参数差异
+# ══════════════════════════════════════════════════════════════
+
+@backtest_bp.route('/optimize/diff', methods=['POST'])
+@handle_exceptions
+def compare_optimized_params():
+    """
+    对比当前参数与优化参数
+
+    请求体:
+    {
+        "current_params": {"short_window": 5, "long_window": 20},
+        "optimized_params": {"short_window": 10, "long_window": 30}
+    }
+    """
+    data = request.get_json() or {}
+    current = data.get('current_params', {})
+    optimized = data.get('optimized_params', {})
+
+    if not current and not optimized:
+        return jsonify({'success': False, 'error': '请提供待对比的参数'}), 400
+
+    all_keys = set(list(current.keys()) + list(optimized.keys()))
+    diffs = {}
+    for key in sorted(all_keys):
+        old_val = current.get(key)
+        new_val = optimized.get(key)
+        if old_val != new_val:
+            diffs[key] = {
+                'current': old_val,
+                'optimized': new_val,
+                'change': new_val - old_val if isinstance(new_val, (int, float))
+                          and isinstance(old_val, (int, float)) else None,
+            }
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'diff_count': len(diffs),
+            'diffs': diffs,
+            'current_params': current,
+            'optimized_params': optimized,
+        }
+    })
+
+
+# ══════════════════════════════════════════════════════════════
+# 参数优化: GET /optimize/snapshots — 快照列表
+# ══════════════════════════════════════════════════════════════
+
+@backtest_bp.route('/optimize/snapshots', methods=['GET'])
+@handle_exceptions
+def get_optimize_snapshots():
+    """
+    获取参数快照历史列表
+    """
+    limit = request.args.get('limit', 20, type=int)
+    snapshots = list_snapshots(limit)
+
+    return jsonify({
+        'success': True,
+        'data': snapshots,
+        'total': len(snapshots),
+    })

@@ -141,6 +141,8 @@ def create_app():
     with app.app_context():
         # 显式导入所有模型以确保 db.create_all() 能创建对应表
         from app.models.strategy import StrategyTemplateV2  # noqa: F401
+        from app.models.playback import ReviewUnit, PlaybackAccount, PlaybackReport  # noqa: F401
+        from app.models.notification import NotificationRule, Notification, NotificationRuleStats, ReportArchive  # noqa: F401
 
         try:
             db.create_all()
@@ -171,11 +173,12 @@ def create_app():
     from app.routes.screener import screener_bp
     from app.routes.strategy_templates import strategy_templates_bp
     from app.routes.qmt import qmt_bp
-    from app.routes.sandbox import sandbox_bp
+    from app.routes.sandbox import sandbox_bp, sandbox_v3_bp
     from app.routes.account import account_bp
     from app.auth import auth_bp
     from app.routes.minute_data import minute_data_bp
     from app.routes.playback import playback_bp
+    from app.routes.playback_v3 import playback_v3_bp
     from app.routes.resonance import resonance_bp
     from app.routes.prediction import prediction_bp
     from app.routes.strategy_interpret import strategy_interpret_bp
@@ -185,6 +188,8 @@ def create_app():
     from app.routes.conditions import conditions_bp
     from app.routes.system_config import system_bp
     from app.routes.strategy_analyze import strategy_analyze_bp
+    from app.routes.watchlist import watchlist_bp
+    from app.routes.notifications import notifications_bp
 
     app.register_blueprint(market_bp)
     app.register_blueprint(health_bp)
@@ -201,11 +206,13 @@ def create_app():
     app.register_blueprint(screener_bp)
     app.register_blueprint(strategy_templates_bp)
     app.register_blueprint(sandbox_bp)
+    app.register_blueprint(sandbox_v3_bp)
     app.register_blueprint(qmt_bp)
     app.register_blueprint(account_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(minute_data_bp)
     app.register_blueprint(playback_bp)
+    app.register_blueprint(playback_v3_bp)
     app.register_blueprint(resonance_bp)
     app.register_blueprint(prediction_bp)
     app.register_blueprint(strategy_interpret_bp)
@@ -215,6 +222,8 @@ def create_app():
     app.register_blueprint(conditions_bp)
     app.register_blueprint(system_bp)
     app.register_blueprint(strategy_analyze_bp)
+    app.register_blueprint(watchlist_bp)
+    app.register_blueprint(notifications_bp)
 
     # ============================================================
     # RuntimeConfigManager 初始化 + 种子数据
@@ -239,6 +248,14 @@ def create_app():
             from app.scheduler_manager import scheduler_manager
             scheduler_manager.init_app(app)
             logger.info("APScheduler 已初始化")
+
+            # 注册通知模块调度任务
+            try:
+                from app.services.rule_scheduler import RuleScheduler
+                RuleScheduler.register_all(scheduler_manager)
+                logger.info("通知模块调度任务已注册")
+            except Exception as e:
+                logger.warning(f"通知模块调度任务注册失败: {e}")
     except Exception as e:
         logger.warning(f"APScheduler 初始化失败: {e}")
 

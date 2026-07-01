@@ -1,16 +1,17 @@
 """
 账户管理 API 路由 — P3.1 / 226号方案升级
 
-10后端已就绪 + 4新端点:
+10后端已就绪 + 4新端点 + D7/D8/D10扩充:
   Phase 0: trades CRUD/import/match | positions | summary | equity-curve | performance
   Phase 1: review(6D) | periodic-review | review-link | match-review
+  D7: POST /trades/{id}/save-report | D8: GET/POST /config | D10: GET/POST /funds
 """
 import logging
 from datetime import date, datetime, timedelta
 from flask import Blueprint, request, jsonify
 
 from app import db
-from app.models.trade import Trade
+from app.models.trade import Trade, AccountCashFlow
 from app.services.account_service import AccountService
 from app.services.signal_match_service import SignalMatchService
 from app.services.review_engine import ReviewEngine6D, ReviewEngine
@@ -405,3 +406,104 @@ def get_virtual_reviews():
     """虚拟验证复盘分区（轨B·已完成验证）"""
     vp_data = _account_svc.get_virtual_review_data()
     return jsonify({'success': True, 'data': vp_data})
+
+
+# ═══════════════════════════════════════════════
+# D10: 资金变动记录
+# ═══════════════════════════════════════════════
+
+@account_bp.route('/funds', methods=['GET'])
+@handle_exceptions
+def list_fund_changes():
+    """资金变动历史（追加/取款记录）"""
+    limit = int(request.args.get('limit', 50))
+    records = _account_svc.get_fund_history(limit)
+    balance = _account_svc.get_current_balance()
+    return jsonify({
+        'success': True,
+        'data': {
+            'records': records,  # already Dicts from service
+            'current_balance': balance,
+        }
+    })
+
+
+@account_bp.route('/funds', methods=['POST'])
+@handle_exceptions
+def add_fund_change():
+    """新增资金变动（追加/取款）"""
+    data = request.json or {}
+    change_type = data.get('change_type')
+    amount = data.get('amount')
+    note = data.get('note', '')
+
+    if change_type not in ('deposit', 'withdraw'):
+        return jsonify({'success': False, 'error': 'change_type 须为 deposit 或 withdraw'}), 400
+    if not amount or float(amount) <= 0:
+        return jsonify({'success': False, 'error': 'amount 须为正数'}), 400
+
+    record = _account_svc.add_fund_change(
+        change_date=datetime.strptime(
+            data.get('change_date', date.today().isoformat())[:10], '%Y-%m-%d'
+        ).date(),
+        change_type=change_type,
+        amount=float(amount),
+        note=note,
+    )
+    return jsonify({'success': True, 'data': record.to_dict()}), 201
+
+
+# ═══════════════════════════════════════════════
+# D8: 账户配置持久化
+# ═══════════════════════════════════════════════
+
+@account_bp.route('/config', methods=['GET'])
+@handle_exceptions
+def load_config():
+    """读取账户配置"""
+    config = _account_svc.load_config()
+    return jsonify({'success': True, 'data': config or {}})
+
+
+@account_bp.route('/config', methods=['POST'])
+@handle_exceptions
+def save_config():
+    """保存账户配置"""
+    data = request.json or {}
+    ok = _account_svc.save_config(data)
+    if ok:
+        return jsonify({'success': True, 'message': '配置已保存'})
+    return jsonify({'success': False, 'error': '保存失败'}), 500
+
+
+# ═══════════════════════════════════════════════
+# D7: 将周期回顾归档到报告中心
+# ═══════════════════════════════════════════════
+
+@account_bp.route('/archive-report', methods=['POST'])
+@handle_exceptions
+def archive_periodic_report():
+    """将周期回顾报告归档到报告中心"""
+    data = request.json or {}
+    content = data.get('content', '')
+    report_type = data.get('report_type', '复盘回顾')
+    title = data.get('title', f'周期回顾-{date.today().isoformat()}')
+
+    try:
+        from app.services.report_center_service import ReportCenterService
+        svc = ReportCenterService()
+        if hasattr(svc, 'save_report'):
+            report_id = svc.save_report(
+                title=title,
+                report_type=report_type,
+                content=content,
+            )
+            return jsonify({'success': True, 'data': {'report_id': report_id}})
+    except Exception:
+        pass
+
+    # fallback: 按旧路径保存
+    from app.services.report_generator import ReportGenerator
+    rgen = ReportGenerator()
+    fpath = rgen.save_report(content, f'{title}.md')
+    return jsonify({'success': True, 'data': {'filepath': fpath}})

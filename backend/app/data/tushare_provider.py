@@ -450,6 +450,41 @@ class TushareProvider:
             logger.warning(f"获取指数成分股失败 ({index_code}): {e}")
             return []
 
+    def get_moneyflow_data(self, ts_code):
+        """获取单只股票资金流向（按ts_code查询）
+
+        与 get_moneyflow(trade_date) 不同，本方法按股票代码查询。
+        """
+        if not self.pro:
+            return []
+        try:
+            data = self.pro.moneyflow(ts_code=ts_code)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取资金流向失败 ({ts_code}): {e}")
+            return []
+
+    def get_stock_info(self, ts_code):
+        """获取单只股票基本信息（行业/上市日期/股本等）"""
+        if not self.pro:
+            return None
+        try:
+            data = self.pro.stock_basic(ts_code=ts_code)
+            if data is not None and not data.empty:
+                row = data.iloc[0].to_dict()
+                return {
+                    'name': row.get('name', ''),
+                    'industry': row.get('industry', ''),
+                    'industry_full': row.get('industry', ''),
+                    'list_date': row.get('list_date', ''),
+                    'total_share': row.get('total_share'),
+                    'float_share': row.get('float_share', row.get('circ_share')),
+                }
+            return None
+        except Exception as e:
+            logger.warning(f"获取股票基本信息失败 ({ts_code}): {e}")
+            return None
+
 if __name__ == '__main__':
     provider = TushareProvider()
     success, msg = provider.test_connection()

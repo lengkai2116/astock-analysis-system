@@ -161,58 +161,8 @@ def generate_signals():
 
 
 # ====================
-# 自选股接口
+# 自选股接口 — 已全部迁移至 routes/watchlist.py
 # ====================
-@handle_exceptions
-@phase3_bp.route('/watchlist', methods=['GET'])
-def get_watchlist():
-    """获取自选股列表"""
-    watchlist = Watchlist.query.order_by(Watchlist.added_at.desc()).all()
-    return jsonify({
-        'success': True,
-        'data': [w.to_dict() for w in watchlist]
-    })
-@handle_exceptions
-@phase3_bp.route('/watchlist', methods=['POST'])
-def add_to_watchlist():
-    """添加到自选股"""
-    ts_code = request.json.get('ts_code')
-    notes = request.json.get('notes', '')
-    
-    existing = Watchlist.query.filter_by(ts_code=ts_code).first()
-    
-    if existing:
-        return jsonify({
-            'success': False,
-            'message': 'Already in watchlist'
-        }), 409
-    
-    watchlist = Watchlist(ts_code=ts_code, notes=notes)
-    db.session.add(watchlist)
-    db.session.commit()
-    
-    return jsonify({
-        'success': True,
-        'data': watchlist.to_dict()
-    })
-@handle_exceptions
-@phase3_bp.route('/watchlist/<int:id>', methods=['DELETE'])
-def remove_from_watchlist(id):
-    """从自选股移除"""
-    watchlist = Watchlist.query.get(id)
-    
-    if not watchlist:
-        return jsonify({
-            'success': False,
-            'message': 'Not found'
-        }), 404
-    
-    db.session.delete(watchlist)
-    db.session.commit()
-    
-    return jsonify({
-        'success': True
-    })
 
 
 # ====================
@@ -418,17 +368,6 @@ def batch_klines():
             results[ts_code] = None
 
     return jsonify({'code': 1, 'data': results})
-
-
-# ---- 自选股扩展 ----
-@handle_exceptions
-@phase3_bp.route('/watchlist/reorder', methods=['PUT'])
-def reorder_watchlist():
-    """自选股排序"""
-    data = request.get_json() or {}
-    ts_codes = data.get('ts_codes', [])
-    # 本地存储的应用端处理，后端仅记录
-    return jsonify({'code': 1, 'data': {'ordered': ts_codes}})
 
 
 # ---- 品种分类 ----
@@ -836,72 +775,6 @@ def load_drawings():
         })
 
     return jsonify({'code': 1, 'data': result})
-
-
-# ====================
-# 仪表盘专用接口
-# ====================
-@handle_exceptions
-@phase3_bp.route('/watchlist/dashboard', methods=['GET'])
-def get_watchlist_dashboard():
-    """仪表盘 - 自选股概览数据"""
-    watchlist_items = Watchlist.query.order_by(Watchlist.created_at.desc()).all()
-
-    stocks = []
-    up_count = 0
-    down_count = 0
-    total_change = 0.0
-    valid_count = 0
-
-    for item in watchlist_items:
-        latest = DailyData.query.filter_by(
-            ts_code=item.ts_code
-        ).order_by(DailyData.trade_date.desc()).first()
-
-        if latest:
-            pct = float(latest.pct_chg) if latest.pct_chg else 0
-            if pct > 0:
-                up_count += 1
-            elif pct < 0:
-                down_count += 1
-            total_change += pct
-            valid_count += 1
-
-            stock_entry = {
-                'name': item.ts_code,
-                'symbol': item.ts_code,
-                'price': float(latest.close) if latest.close else 0,
-                'changePercent': round(pct, 2),
-                'pct_chg': round(pct, 2),
-            }
-
-            stock_info = Stock.query.filter_by(ts_code=item.ts_code).first()
-            if stock_info:
-                stock_entry['name'] = stock_info.name
-            stocks.append(stock_entry)
-        else:
-            stocks.append({
-                'name': item.ts_code,
-                'symbol': item.ts_code,
-                'price': 0,
-                'changePercent': 0,
-                'pct_chg': 0,
-            })
-
-    avg_change = round(total_change / valid_count, 2) if valid_count > 0 else 0
-
-    return jsonify({
-        'success': True,
-        'data': {
-            'stocks': stocks[:10],
-            'stocks_count': len(stocks),
-            'up_count': up_count,
-            'down_count': down_count,
-            'avg_change': avg_change,
-            'total_amount': 0,
-        }
-    })
-
 
 @handle_exceptions
 @phase3_bp.route('/signals/summary', methods=['GET'])

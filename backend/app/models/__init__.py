@@ -178,6 +178,7 @@ class Watchlist(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     ts_code = db.Column(db.String(10), nullable=False)
+    sort_order = db.Column(db.Integer, default=0)
     user_id = db.Column(db.Integer, default=1)
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.now)
@@ -301,7 +302,7 @@ class PaperTrade(db.Model):
 
 
 # P3: 账户交易模型
-from app.models.trade import Trade, AccountSnapshot
+from app.models.trade import Trade, AccountSnapshot, AccountCashFlow
 
 
 # ============================================================
@@ -369,3 +370,13 @@ from app.models.condition import ConditionRegistry
 # ============================================================
 
 from app.models.system_config import SystemConfig, SyncLog
+
+# ============================================================
+# 阶段四：复盘中心 — ReviewUnit / PlaybackAccount / PlaybackReport
+# ============================================================
+from app.models.playback import ReviewUnit, PlaybackAccount, PlaybackReport, ReviewConfig
+
+# ============================================================
+# 阶段五：监控通知 — NotificationRule / Notification / NotificationRuleStats / ReportArchive
+# ============================================================
+from app.models.notification import NotificationRule, Notification, NotificationRuleStats, ReportArchive

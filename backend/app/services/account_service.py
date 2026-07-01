@@ -16,7 +16,7 @@ from decimal import Decimal
 import numpy as np
 
 from app import db
-from app.models.trade import Trade, AccountSnapshot
+from app.models.trade import Trade, AccountSnapshot, AccountCashFlow
 from app.models.verification import VirtualPosition
 from app.models import DailyData
 
@@ -34,9 +34,18 @@ class AccountService:
                      buy_reason: str = None, sell_reason: str = None,
                      review_unit_id: str = None, is_partial: bool = False,
                      stamp_tax: float = 0.0, transfer_fee: float = 0.0,
-                     realized_pnl: float = None) -> Optional[Trade]:
-        """新增交易记录（226号方案扩展字段）"""
+                     realized_pnl: float = None,
+                     auto_calc_fee: bool = True) -> Optional[Trade]:
+        """新增交易记录（226号方案扩展字段 + D9自动核算手续费）
+
+        当 auto_calc_fee=True 且 各项费用都为0时，自动核算
+        """
         try:
+            if auto_calc_fee and commission == 0 and stamp_tax == 0 and transfer_fee == 0:
+                fee = self.calc_trade_fee(price, quantity, direction)
+                commission = fee['commission']
+                stamp_tax = fee['stamp_tax']
+                transfer_fee = fee['transfer_fee']
             trade = Trade(
                 ts_code=ts_code,
                 stock_name=stock_name or "",
@@ -477,3 +486,91 @@ class AccountService:
         except Exception as e:
             logger.warning(f"获取复盘策略候选失败: {e}")
             return []
+
+    # ── 手续费自动核算 ──
+
+    @staticmethod
+    def calc_trade_fee(price: float, quantity: int, direction: str,
+                       commission_rate: float = 2.5) -> Dict:
+        """计算交易手续费（D9: 后端统一核算）
+
+        Args:
+            commission_rate: 万分数（默认 2.5 = 万分之2.5）
+        Returns:
+            {commission, stamp_tax, transfer_fee, total}
+        """
+        amount = price * quantity
+        commission = max(amount * commission_rate / 10000, 5.0)  # 最低5元
+        stamp_tax = amount * 0.0005 if direction == '卖出' else 0  # 卖出收万分之5
+        transfer_fee = amount * 0.00001  # 过户费万分之一
+        total = commission + stamp_tax + transfer_fee
+        return {
+            'commission': round(commission, 2),
+            'stamp_tax': round(stamp_tax, 2),
+            'transfer_fee': round(transfer_fee, 2),
+            'total': round(total, 2),
+        }
+
+    # ── 资金变动记录 ──
+
+    def add_fund_change(self, change_date: date, change_type: str,
+                        amount: float, note: str = '') -> Optional[AccountCashFlow]:
+        """新增资金变动"""
+        try:
+            # 计算变动后的余额
+            last_flow = AccountCashFlow.query.order_by(AccountCashFlow.id.desc()).first()
+            prev_balance = float(last_flow.balance_after) if last_flow else 0
+            balance_after = prev_balance + (amount if change_type == 'deposit' else -amount)
+            if balance_after < 0:
+                logger.warning(f"资金不足: 当前余额 {prev_balance}, 取出 {amount}")
+                return None
+
+            flow = AccountCashFlow(
+                change_date=change_date, change_type=change_type,
+                amount=round(amount, 2), balance_after=round(balance_after, 2),
+                note=note,
+            )
+            db.session.add(flow)
+            db.session.commit()
+            return flow
+        except Exception as e:
+            db.session.rollback()
+            logger.warning(f"新增资金变动失败: {e}")
+            return None
+
+    def get_fund_history(self, limit: int = 100) -> List[Dict]:
+        """获取资金变动历史"""
+        flows = AccountCashFlow.query.order_by(
+            AccountCashFlow.change_date.desc(), AccountCashFlow.id.desc()
+        ).limit(limit).all()
+        return [f.to_dict() for f in flows]
+
+    def get_current_balance(self) -> float:
+        """获取当前资金余额"""
+        last = AccountCashFlow.query.order_by(AccountCashFlow.id.desc()).first()
+        return float(last.balance_after) if last else 0.0
+
+    # ── 账户配置持久化 ──
+
+    def save_config(self, config: Dict) -> bool:
+        """保存账户配置到 RuntimeConfigManager（D8）"""
+        try:
+            from app.services.runtime_config import runtime_config_manager
+            current = runtime_config_manager.get_all() or {}
+            current.setdefault('account', {})
+            current['account']['config'] = config
+            runtime_config_manager.save(current)
+            return True
+        except Exception as e:
+            logger.warning(f"保存账户配置失败: {e}")
+            return False
+
+    def load_config(self) -> Dict:
+        """加载账户配置（D8）"""
+        try:
+            from app.services.runtime_config import runtime_config_manager
+            config = runtime_config_manager.get_all() or {}
+            return config.get('account', {}).get('config', {})
+        except Exception as e:
+            logger.warning(f"加载账户配置失败: {e}")
+            return {}

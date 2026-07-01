@@ -415,6 +415,91 @@ class SchedulerManager:
             self._initialized = False
             logger.info("APScheduler 已关闭")
 
+    # ──────────────────────────────────────────
+    # 辅助方法（供下游模块注册任务）
+    # ──────────────────────────────────────────
+
+    def add_interval_job(self, job_id: str, func, minutes: int,
+                         max_instances: int = 1, coalesce: bool = True) -> bool:
+        """注册间隔任务"""
+        if not self._scheduler:
+            return False
+        try:
+            from apscheduler.triggers.interval import IntervalTrigger
+            self._scheduler.add_job(
+                func,
+                IntervalTrigger(minutes=minutes),
+                id=job_id,
+                name=job_id,
+                replace_existing=True,
+                max_instances=max_instances,
+                coalesce=coalesce,
+                misfire_grace_time=300,
+            )
+            logger.debug(f"间隔任务已注册: {job_id} ({minutes}min)")
+            return True
+        except Exception as e:
+            logger.warning(f"注册间隔任务失败 {job_id}: {e}")
+            return False
+
+    def add_cron_job(self, job_id: str, func, **cron_kwargs) -> bool:
+        """注册 cron 任务
+
+        cron_kwargs 支持: hour, minute, day_of_week, day, month 等标准 APScheduler 参数
+        """
+        if not self._scheduler:
+            return False
+        try:
+            self._scheduler.add_job(
+                func,
+                CronTrigger(**cron_kwargs),
+                id=job_id,
+                name=job_id,
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=300,
+            )
+            logger.debug(f"Cron任务已注册: {job_id} ({cron_kwargs})")
+            return True
+        except Exception as e:
+            logger.warning(f"注册 cron 任务失败 {job_id}: {e}")
+            return False
+
+    def on_daily_sync_complete(self, callback) -> None:
+        """注册日终同步完成回调
+
+        在 run_daily_sync() 完成后被调用。
+        因 blinker 可能不可用，使用回调列表存储。
+        """
+        global _sync_listeners
+        if HAS_BLINKER:
+            daily_sync_completed.connect(callback)
+        else:
+            _sync_listeners.append(callback)
+        logger.debug(f"日终同步回调已注册")
+        # 更新 send 方法以包含所有注册的回调
+        if not HAS_BLINKER:
+
+            def _send_with_listeners(**kw):
+                for fn in _sync_listeners:
+                    try:
+                        fn(**kw)
+                    except Exception as e:
+                        logger.error(f"日终同步回调执行失败: {e}")
+            daily_sync_completed.send = _send_with_listeners
+
+    def remove_job(self, job_id: str) -> bool:
+        """移除指定任务"""
+        if not self._scheduler:
+            return False
+        try:
+            self._scheduler.remove_job(job_id)
+            logger.debug(f"任务已移除: {job_id}")
+            return True
+        except Exception:
+            return False
+
 
 # ──────────────────────────────────────────
 # 模块单例

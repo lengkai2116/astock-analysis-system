@@ -110,3 +110,27 @@ class AccountSnapshot(db.Model):
             'max_drawdown': float(self.max_drawdown) if self.max_drawdown else None,
             'win_rate': float(self.win_rate) if self.win_rate else None,
         }
+
+
+class AccountCashFlow(db.Model):
+    """账户资金变动记录（D10: 取款/追加历史）"""
+    __tablename__ = 'account_cash_flow'
+
+    id = db.Column(db.Integer, primary_key=True)
+    change_date = db.Column(db.Date, nullable=False, index=True)
+    change_type = db.Column(db.String(16), nullable=False)   # deposit / withdraw
+    amount = db.Column(DECIMAL(14, 2), nullable=False)
+    balance_after = db.Column(DECIMAL(14, 2), nullable=False)
+    note = db.Column(Text, default='')
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'change_date': self.change_date.isoformat() if self.change_date else None,
+            'change_type': self.change_type,
+            'amount': float(self.amount) if self.amount else None,
+            'balance_after': float(self.balance_after) if self.balance_after else None,
+            'note': self.note or '',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
