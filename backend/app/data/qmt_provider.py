@@ -25,6 +25,11 @@ class QmtDataProvider:
         self._running = False
         self._thread = None
         self._qmt_connected = False
+        self._cache = None  # EnhancedCacheManager 引用
+
+    def set_cache_manager(self, cache_manager):
+        """注入缓存管理器引用"""
+        self._cache = cache_manager
         
     def connect(self) -> bool:
         """连接到miniQMT"""
@@ -169,7 +174,27 @@ class QmtDataProvider:
         except Exception as e:
             logger.error(f"获取市场快照失败: {e}")
             return []
-    
+
+    def get_kline_with_cache(self, stock_code: str, period: str = '1d',
+                             start_time: str = '', end_time: str = '',
+                             count: int = -1) -> Optional[Dict]:
+        """获取 K 线并写入缓存"""
+        data = self.get_kline(stock_code, period, start_time, end_time, count)
+        if data and self._cache:
+            cache_key = f"qmt:kline:{stock_code}:{period}"
+            self._cache.set_to_memory(cache_key, data, level='intraday')
+        return data
+
+    def get_realtime_with_cache(self, ts_codes: List[str]) -> List[Dict]:
+        """获取实时行情并写入缓存"""
+        data = self.get_market_snapshot(ts_codes)
+        if data and self._cache:
+            for item in data:
+                ts_code = item.get('ts_code')
+                if ts_code:
+                    self._cache.set_to_memory(f"qmt:realtime:{ts_code}", item, level='realtime')
+        return data
+
     def run(self, background: bool = True):
         """启动行情接收循环"""
         if not self._qmt_connected:

@@ -8,6 +8,7 @@ from flask import Blueprint, request, jsonify
 from app import db
 from app.indicators import TechnicalIndicatorEngine
 from app.data import DataManager
+from app.services.dashboard_service import DashboardService
 import pandas as pd
 from datetime import datetime, timedelta
 
@@ -17,6 +18,7 @@ chart_bp = Blueprint('chart', __name__, url_prefix='/api/v3/chart')
 
 indicator_engine = TechnicalIndicatorEngine()
 _data_manager = None
+_dashboard_service = DashboardService()
 
 def get_data_manager():
     global _data_manager
@@ -109,8 +111,23 @@ def get_kline_chart_data(ts_code):
     }
     """
     limit = request.args.get('limit', 200, type=int)
+    mini = request.args.get('mini', 'false').lower() == 'true'
     indicators_param = request.args.get('indicators', '')
     period = request.args.get('period', 'D')
+
+    # 迷你K线模式：跳过指标计算，仅返回最近N条日线数据
+    if mini:
+        mini_limit = request.args.get('limit', 20, type=int)
+        if ts_code.startswith('0') or ts_code.startswith('3') or ts_code.startswith('6'):
+            pass  # 股票代码，使用 dashboard_service
+        data = _dashboard_service.get_mini_kline(ts_code, limit=mini_limit)
+        if data is None:
+            return jsonify({
+                'success': False,
+                'message': f'迷你K线数据不可用: {ts_code}，请检查网络或稍后重试。',
+                'error_type': 'DataUnavailable',
+            }), 503
+        return jsonify({'success': True, 'data': data})
     
     # 规范化周期参数：数字转换为带m的格式，其他保持原样
     if period in ['1', '5', '15', '30', '60']:

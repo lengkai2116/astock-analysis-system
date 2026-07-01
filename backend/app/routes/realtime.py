@@ -12,9 +12,11 @@ from flask import Blueprint, request
 from flask_socketio import emit, join_room
 from .. import socketio
 from ..data.tushare_provider import TushareProvider
-from ..data.akshare_provider import AkShareRealtimeProvider
+from ..data.akshare_provider import AkShareRealtimeProvider, AkshareProvider
 from ..data.enhanced_cache_manager import EnhancedCacheManager
 from ..data.redis_cache_manager import RedisCacheManager
+from ..data.minute_data_manager import MinuteDataManager
+from ..utils.trading_hours import is_trading_time
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +26,11 @@ tushare = TushareProvider()
 akshare = AkShareRealtimeProvider()
 cache_manager = EnhancedCacheManager()
 redis_manager = RedisCacheManager()
+minute_data_mgr = MinuteDataManager()
 
 class RealtimeDataService:
     """实时数据服务 - 定时拉取并推送"""
-    
+
     def __init__(self):
         self.running = False
         self.thread = None
@@ -40,7 +43,7 @@ class RealtimeDataService:
         self.tushare = tushare
         self.akshare = akshare
         self.default_watchlist = ['600519.SH', '000001.SZ', '000002.SZ']
-        
+
     def start(self):
         """启动实时数据服务"""
         if not self.running:
@@ -48,14 +51,14 @@ class RealtimeDataService:
             self.thread = threading.Thread(target=self._data_publisher_loop, daemon=True)
             self.thread.start()
             logger.info("实时数据服务已启动")
-    
+
     def stop(self):
         """停止实时数据服务"""
         self.running = False
         if self.thread:
             self.thread.join()
         logger.info("实时数据服务已停止")
-    
+
     def _data_publisher_loop(self):
         """定时发布实时数据"""
         while self.running:
@@ -66,13 +69,13 @@ class RealtimeDataService:
                     logger.info(f"已推送实时数据 - {datetime.now().strftime('%H:%M:%S')}")
             except Exception as e:
                 logger.error(f"获取实时数据失败: {e}")
-            
+
             time.sleep(3)
-    
+
     def _fetch_current_market_data(self):
         """获取当前市场数据"""
         market_data = []
-        
+
         try:
             for ts_code in self.default_watchlist:
                 try:
@@ -84,50 +87,51 @@ class RealtimeDataService:
                     continue
         except Exception as e:
             logger.error(f"批量获取失败: {e}")
-        
+
         return {
             'type': 'market_realtime',
             'data': market_data,
             'timestamp': datetime.now().isoformat()
         }
-    
+
     def _get_stock_realtime_data(self, ts_code):
-        """获取单只股票的实时数据"""
-        # 首先尝试使用Tushare日线数据（更稳定）
+        """获取单只股票的实时数据 — 时间感知双源路由"""
+        # 盘中 → AKShare 实时行情
+        if is_trading_time():
+            try:
+                spot = self.akshare.get_realtime_spot(ts_code)
+                if spot:
+                    spot['source'] = 'akshare'
+                    return spot
+            except Exception as e:
+                logger.warning(f"AKShare 盘中实时数据失败 ({ts_code}): {e}")
+
+        # 盘后 → Tushare 日线
         try:
             daily_data = self.tushare.get_daily_data(ts_code)
-            
             if not daily_data or len(daily_data) == 0:
                 return None
-            
             latest = daily_data[0]
-            prev_close = float(latest.get('pre_close', latest.get('close', 0)))
-            current_price = float(latest.get('close', 0))
-            
-            change = current_price - prev_close
-            change_pct = (change / prev_close * 100) if prev_close > 0 else 0
-            
             return {
                 'ts_code': ts_code,
                 'name': self._get_stock_name(ts_code),
-                'price': current_price,
-                'change': round(change, 2),
-                'change_pct': round(change_pct, 2),
+                'price': float(latest.get('close', 0)),
+                'change': round(float(latest.get('change', 0)), 2),
+                'change_pct': round(float(latest.get('pct_chg', 0)), 2),
                 'volume': latest.get('vol', 0),
                 'amount': latest.get('amount', 0),
                 'high': latest.get('high', 0),
                 'low': latest.get('low', 0),
                 'open': latest.get('open', 0),
                 'close': latest.get('close', 0),
-                'turnover_rate': 0,
-                'pe': 0,
-                'pb': 0,
-                'timestamp': datetime.now().isoformat()
+                'turnover_rate': float(latest.get('turnover_rate', 0)),
+                'timestamp': datetime.now().isoformat(),
+                'source': 'tushare',
             }
         except Exception as e:
             logger.warning(f"处理 {ts_code} 数据失败: {e}")
             return None
-    
+
     def _get_stock_name(self, ts_code):
         """获取股票名称"""
         name_map = {
@@ -158,7 +162,7 @@ def handle_subscribe_watchlist(data):
     watchlist = data.get('watchlist', [])
     join_room('watchlist')
     logger.info(f"客户端订阅自选股: {watchlist}")
-    
+
     initial_data = realtime_service._fetch_current_market_data()
     emit('watchlist_update', initial_data, room='watchlist')
 
@@ -167,14 +171,14 @@ def handle_subscribe_kline(data):
     """订阅K线更新"""
     ts_code = data.get('ts_code')
     freq = data.get('freq', '15min')
-    
+
     if ts_code:
         room = f'kline_{ts_code}'
         join_room(room)
         logger.info(f"客户端订阅K线: {ts_code} ({freq})")
-        
+
         try:
-            kline_data = tushare.get_minute_data(ts_code, freq)
+            kline_data = minute_data_mgr.get_minute_data(ts_code, freq)
             if kline_data:
                 emit('kline_init', {
                     'ts_code': ts_code,
@@ -183,6 +187,51 @@ def handle_subscribe_kline(data):
                 }, room=room)
         except Exception as e:
             logger.warning(f"获取初始K线失败: {e}")
+
+@socketio.on('subscribe_qmt_tick')
+def handle_subscribe_qmt_tick(data):
+    """订阅 QMT Tick 数据（L2 行情）
+
+    客户端消息: { 'ts_codes': ['600519.SH', ...] }
+    盘中若无 QMT → 降级为 3s AKShare 轮询
+    """
+    ts_codes = data.get('ts_codes', [])
+    if not ts_codes:
+        return
+
+    room = 'qmt_tick'
+    join_room(room)
+    logger.info(f"客户端订阅 QMT Tick: {len(ts_codes)} 只")
+
+    # 初始推送
+    try:
+        from app.data.qmt_provider import QmtDataProvider
+        qmt = QmtDataProvider()
+        if qmt.connect():
+            snapshot = qmt.get_market_snapshot(ts_codes)
+            if snapshot:
+                emit('qmt_tick_init', {
+                    'data': snapshot,
+                    'ts_codes': ts_codes,
+                    'source': 'qmt'
+                }, room=room)
+                return
+    except Exception as e:
+        logger.warning(f"QMT 连接失败，降级为 3s AKShare 轮询: {e}")
+
+    # 降级：AKShare 批量行情
+    try:
+        from app.data.akshare_provider import AkshareProvider
+        ak = AkshareProvider()
+        quotes = ak.get_batch_quotes(ts_codes)
+        if quotes:
+            emit('qmt_tick_init', {
+                'data': quotes,
+                'ts_codes': ts_codes,
+                'source': 'akshare_polling'
+            }, room=room)
+    except Exception as e:
+        logger.error(f"AKShare 降级数据失败: {e}")
 
 @socketio.on('join_room')
 def handle_join_room(data):
@@ -206,19 +255,39 @@ def get_indexes_realtime():
         {'ts_code': '399001.SZ', 'name': '深证成指'},
         {'ts_code': '399006.SZ', 'name': '创业板指'}
     ]
-    
+
     result = []
     for idx in indices:
-        # 直接使用Tushare日线数据（更稳定）
         try:
+            # 盘中 → AKShare 实时指数
+            if is_trading_time():
+                ak_idx = akshare.get_index_daily(idx['ts_code'])
+                if ak_idx:
+                    result.append({
+                        'ts_code': idx['ts_code'],
+                        'name': idx['name'],
+                        'value': ak_idx.get('value', 0),
+                        'change': round(ak_idx.get('change', 0), 2),
+                        'changePercent': round(ak_idx.get('change_pct', 0), 2),
+                        'open': ak_idx.get('open', 0),
+                        'high': ak_idx.get('high', 0),
+                        'low': ak_idx.get('low', 0),
+                        'close': ak_idx.get('value', 0),
+                        'pre_close': ak_idx.get('prev_close', 0),
+                        'volume': ak_idx.get('volume', 0),
+                        'amount': ak_idx.get('amount', 0),
+                    })
+                    continue
+
+            # 盘后 → Tushare
             idx_data = tushare.get_index_daily(idx['ts_code'])
             if idx_data and len(idx_data) > 0:
                 latest = idx_data[0]
                 prev_data = idx_data[1] if len(idx_data) > 1 else None
-                prev_close = prev_data['close'] if prev_data else latest['pre_close']
+                prev_close = prev_data['close'] if prev_data else latest.get('pre_close', latest['close'])
                 change = latest['close'] - prev_close
                 change_pct = (change / prev_close * 100) if prev_close > 0 else 0
-                
+
                 result.append({
                     'ts_code': idx['ts_code'],
                     'name': idx['name'],
@@ -237,34 +306,20 @@ def get_indexes_realtime():
                 result.append({
                     'ts_code': idx['ts_code'],
                     'name': idx['name'],
-                    'value': 0,
-                    'change': 0,
-                    'changePercent': 0,
-                    'open': 0,
-                    'high': 0,
-                    'low': 0,
-                    'close': 0,
-                    'pre_close': 0,
-                    'volume': 0,
-                    'amount': 0
+                    'value': 0, 'change': 0, 'changePercent': 0,
+                    'open': 0, 'high': 0, 'low': 0, 'close': 0,
+                    'pre_close': 0, 'volume': 0, 'amount': 0
                 })
         except Exception as e:
             logger.warning(f'获取指数 {idx["name"]} 数据失败: {e}')
             result.append({
                 'ts_code': idx['ts_code'],
                 'name': idx['name'],
-                'value': 0,
-                'change': 0,
-                'changePercent': 0,
-                'open': 0,
-                'high': 0,
-                'low': 0,
-                'close': 0,
-                'pre_close': 0,
-                'volume': 0,
-                'amount': 0
+                'value': 0, 'change': 0, 'changePercent': 0,
+                'open': 0, 'high': 0, 'low': 0, 'close': 0,
+                'pre_close': 0, 'volume': 0, 'amount': 0
             })
-    
+
     return {'success': True, 'data': result}, 200
 
 @realtime_bp.route('/api/v3/market/realtime/start', methods=['POST'])
@@ -298,14 +353,14 @@ def get_realtime_indicator():
         req_data = request.get_json()
         ts_code = req_data.get('ts_code')
         indicators = req_data.get('indicators', [])
-        
+
         from app.indicators import TechnicalIndicatorEngine
         calculator = TechnicalIndicatorEngine()
-        
+
         daily_data = tushare.get_daily_data(ts_code)
         result_df = calculator.calculate_all_indicators(daily_data)
         result = calculator.get_latest_indicators(result_df)
-        
+
         return {'data': result, 'timestamp': datetime.now().isoformat()}, 200
     except Exception as e:
         return {'error': str(e)}, 500
@@ -335,10 +390,10 @@ def initialize_realtime_service():
     """初始化并启动实时数据服务"""
     try:
         realtime_service.start()
-        
+
         redis_thread = threading.Thread(target=_redis_subscriber_thread, daemon=True)
         redis_thread.start()
-        
+
         logger.info("实时数据服务系统初始化完成")
     except Exception as e:
         logger.error(f"初始化实时服务失败: {e}")

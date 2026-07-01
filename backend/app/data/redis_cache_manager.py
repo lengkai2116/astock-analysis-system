@@ -1,3 +1,18 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+可选模块 — Redis 二级缓存管理器
+
+【状态】⚠️ 可选，仅 QMT 场景使用
+【说明】当前生产环境已使用 cachetools.TTLCache 替代 Redis 作为内存缓存。
+        本文件保留以供以下场景复用：
+        1. QMT 开通后，需缓存 L2 实时行情数据
+        2. 未来如需在团队内共享缓存数据
+        3. 其他需要持久化缓存的特殊场景
+
+【替代方案】EnhancedCacheManager 中的 MemoryCache (cachetools.TTLCache)
+"""
+
 import os
 import json
 import redis
@@ -16,6 +31,7 @@ class RedisCacheManager:
     """
     
     def __init__(self):
+        logger.warning("RedisCacheManager 已废弃，请使用 TieredMemoryCache (cachetools.TTLCache)")
         self.redis_url = os.getenv('REDIS_URL', 'redis://redis:6379/0')
         self.ttl = int(os.getenv('REDIS_CACHE_TTL', 3600))  # 默认1小时
         self.prefix = 'stock:'

@@ -1,9 +1,25 @@
 from app.models import Stock, DailyData
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class MarketService:
     def __init__(self):
         self._data_manager = None
+        self._akshare = None
+
+    @property
+    def akshare(self):
+        """懒加载 AkshareProvider"""
+        if self._akshare is None:
+            try:
+                from app.data.akshare_provider import AkshareProvider
+                self._akshare = AkshareProvider()
+            except ImportError:
+                self._akshare = None
+        return self._akshare
     
     @property
     def data_manager(self):
@@ -92,6 +108,29 @@ class MarketService:
             {'ts_code': '399001.SZ', 'name': '深圳成指'},
             {'ts_code': '399006.SZ', 'name': '创业板指'}
         ]
+
+        # 盘中 → AKShare 实时指数
+        try:
+            from app.utils.trading_hours import is_trading_time
+            if is_trading_time() and self.akshare:
+                results = []
+                for idx in indices:
+                    try:
+                        data = self.akshare.get_index_daily(idx['ts_code'])
+                        if data:
+                            data['name'] = idx['name']
+                            data['source'] = 'akshare'
+                            results.append(data)
+                        else:
+                            results.append({**idx, 'value': 0, 'timestamp': datetime.now().isoformat(), 'source': 'akshare'})
+                    except Exception as e:
+                        logger.warning(f"AKShare 指数失败 ({idx['ts_code']}): {e}")
+                        results.append({**idx, 'value': 0, 'timestamp': datetime.now().isoformat(), 'source': 'akshare'})
+                return results
+        except ImportError:
+            pass
+
+        # 盘后 / AKShare 不可用 → 返回元数据
         return indices
     
     def get_industries(self):

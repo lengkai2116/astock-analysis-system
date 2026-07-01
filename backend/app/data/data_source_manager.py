@@ -16,6 +16,22 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# 惰性导入 trading_hours，避免循环导入
+_trading_hours = None
+
+
+def _get_trading_hours():
+    global _trading_hours
+    if _trading_hours is None:
+        try:
+            from app.utils.trading_hours import is_trading_time, get_current_session
+            _trading_hours = (is_trading_time, get_current_session)
+        except ImportError:
+            _trading_hours = (None, None)
+    return _trading_hours
+
+logger = logging.getLogger(__name__)
+
 
 class DataSourceStatus(Enum):
     """数据源三态"""
@@ -282,6 +298,59 @@ class DataSourceManager:
                     return self.get_data(endpoint, params)
 
             raise
+
+    # ==================== 时间感知路由 ====================
+
+    def get_data_time_aware(self, endpoint: str, params: Dict = None) -> Any:
+        """时间感知的数据获取 — 根据交易时段自动选择最优数据源
+
+        路由策略：
+          - 交易时段 (9:30-11:30 / 13:00-15:00) → 优先 AKShare (priority=-1)
+            盘中实时查询，3-15s 延迟可接受
+          - 收盘处理期 (15:00-15:30) → 保留当前活跃源
+          - 盘后/节假日 → 优先 Tushare (priority=0)
+            盘后权威数据，无需实时
+          - 若指定 endpoint 在当前源不可用时自动降级
+
+        Args:
+            endpoint: API 端点标识
+            params: 请求参数
+
+        Returns:
+            数据结果
+        """
+        is_trading, get_session = _get_trading_hours()
+
+        # 交易时段判断：盘中时强制偏好 AKShare
+        prefer_intraday = False
+        if is_trading is not None:
+            prefer_intraday = is_trading()
+        elif get_session is not None:
+            session = get_session()
+            prefer_intraday = session in ('morning', 'afternoon')
+
+        if prefer_intraday:
+            # 盘中 → 查找 AKShare (priority=-1)
+            akshare_sources = [
+                name for name in self.sources
+                if self.sources[name].status != DataSourceStatus.UNAVAILABLE
+                and self.sources[name].priority <= -1
+            ]
+            akshare_sources.sort(key=lambda n: self.sources[n].priority)
+
+            for name in akshare_sources:
+                provider = self.providers.get(name)
+                if provider is None:
+                    continue
+                try:
+                    result = provider(endpoint, params or {})
+                    if result is not None and not (isinstance(result, (list, dict)) and len(result) == 0):
+                        return result
+                except Exception:
+                    continue
+
+        # 盘后/降级 → 走默认路由（Tushare priority=0）
+        return self.get_data(endpoint, params)
 
     # ==================== 状态查询 ====================
 

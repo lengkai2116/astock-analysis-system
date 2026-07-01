@@ -8,6 +8,7 @@ import shutil
 logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta
 from .redis_cache_manager import RedisCacheManager
+from .memory_cache import TieredMemoryCache
 
 class EnhancedCacheManager:
     """
@@ -21,6 +22,7 @@ class EnhancedCacheManager:
     
     def __init__(self):
         self.redis_cache = RedisCacheManager()
+        self.memory_cache = TieredMemoryCache()
         
         # DuckDB配置 - 性能优化版
         data_dir = os.getenv('DATA_DIR', '/data')
@@ -356,6 +358,30 @@ class EnhancedCacheManager:
         except Exception as e:
             logger.warning(f"批量缓存指标失败: {e}")
     
+    # ==================== TieredMemoryCache 集成 ====================
+
+    def get_from_memory(self, key: str, level: str = 'realtime'):
+        """从内存缓存读取（实时/盘中/分析三级）
+
+        Args:
+            key: 缓存键
+            level: 缓存级别 (realtime/intraday/analysis)
+
+        Returns:
+            缓存值或 None
+        """
+        return self.memory_cache.get(key, level)
+
+    def set_to_memory(self, key: str, value, level: str = 'realtime'):
+        """写入内存缓存
+
+        Args:
+            key: 缓存键
+            value: 缓存值
+            level: 缓存级别
+        """
+        self.memory_cache.set(key, value, level)
+
     def get_cache_stats(self):
         """
         获取综合缓存统计

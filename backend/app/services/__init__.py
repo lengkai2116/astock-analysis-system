@@ -5,6 +5,7 @@
 from .market_service import MarketService
 from .benchmark_service import BenchmarkService, BenchmarkIndex, create_benchmark_service
 from .status_output_service import StatusOutputService
+from .dashboard_service import DashboardService
 
 __all__ = [
     'MarketService',
@@ -12,4 +13,5 @@ __all__ = [
     'BenchmarkIndex',
     'create_benchmark_service',
     'StatusOutputService',
+    'DashboardService',
 ]

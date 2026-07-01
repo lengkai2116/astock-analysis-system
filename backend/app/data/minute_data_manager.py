@@ -77,7 +77,15 @@ class MinuteDataManager:
                 logger.warning(f"Tushare 分钟数据失败 ({ts_code}): {e}")
 
         if not data:
-                        logger.debug(f"分钟数据无可用降级源 ({ts_code})")
+            try:
+                from app.data.akshare_provider import AkshareProvider
+                ak = AkshareProvider()
+                ak_data = ak.get_minute_data(ts_code, freq=freq, start_date=start, end_date=end)
+                if ak_data:
+                    data = ak_data  # AKShare 返回格式与 _normalize_tushare 兼容
+                    logger.info(f"AKShare 分钟数据降级成功 ({ts_code})")
+            except Exception as e:
+                logger.debug(f"AKShare 分钟数据降级也失败 ({ts_code}): {e}")
 
         if data:
             self.cache.set(cache_key, data, ttl=300)  # 5分钟缓存

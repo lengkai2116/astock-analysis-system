@@ -6,10 +6,12 @@ from flask import Blueprint, request, jsonify
 import logging
 from datetime import datetime
 from app.services.market_service import MarketService
+from app.services.dashboard_service import DashboardService
 from app.utils.error_handlers import handle_exceptions
 
 market_bp = Blueprint('market', __name__)
 market_service = MarketService()
+dashboard_service = DashboardService()
 logger = logging.getLogger(__name__)
 
 @market_bp.route('/api/v3/stocks', methods=['GET'])
@@ -82,42 +84,15 @@ def get_markets():
 @market_bp.route('/api/v3/market/overview', methods=['GET'])
 @handle_exceptions
 def get_market_overview():
-    """仪表盘市场概况：返回指数实时数据"""
-    indices = market_service.get_index_data()
-    indexes_data = []
-
-    from app.data.tushare_provider import TushareProvider
-    _tushare = TushareProvider()
-
-    for idx in indices:
-        try:
-            idx_data = _tushare.get_index_daily(idx['ts_code'])
-            if idx_data and len(idx_data) > 0:
-                latest = idx_data[0]
-                prev_data = idx_data[1] if len(idx_data) > 1 else None
-                prev_close = prev_data['close'] if prev_data else latest.get('pre_close', latest['close'])
-                change = latest['close'] - prev_close
-                change_pct = (change / prev_close * 100) if prev_close > 0 else 0
-
-                indexes_data.append({
-                    'symbol': idx['ts_code'],
-                    'name': idx['name'],
-                    'value': float(latest['close']),
-                    'change': round(float(change), 2),
-                    'changePercent': round(float(change_pct), 2),
-                })
-            else:
-                logger.warning(f"指数 {idx['name']} 数据为空")
-        except Exception as e:
-            logger.warning(f"指数 {idx['name']} 数据失败: {e}")
-
-    return jsonify({
-        'success': True,
-        'data': {
-            'indexes': indexes_data,
-            'timestamp': datetime.now().isoformat(),
-        }
-    })
+    """仪表盘市场概况：指数行情+总成交额+迷你K线+市场状态"""
+    data = dashboard_service.get_index_summary()
+    if data is None:
+        return jsonify({
+            'success': False,
+            'message': '市场行情数据不可用，请检查网络连接或稍后重试。',
+            'error_type': 'DataUnavailable',
+        }), 503
+    return jsonify({'success': True, 'data': data})
 
 
 @market_bp.route('/api/v1/market/overview', methods=['GET'])

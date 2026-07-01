@@ -1,4 +1,5 @@
 import os
+import json
 import duckdb
 import pandas as pd
 import threading
@@ -119,6 +120,40 @@ class CacheManager:
                 "SELECT trade_date, value FROM indicator_cache WHERE ts_code = ? AND indicator_name = ? ORDER BY trade_date",
                 (ts_code, indicator_name)
             ).fetchdf()
+
+    # ==================== 通用 KV 缓存（供 MinuteDataManager 等使用） ====================
+
+    def get(self, key: str):
+        """通用 KV 缓存读取
+
+        使用 cache_metadata 表（实际使用 cache_stats 表中的 stat_key/stat_value 存取）
+        """
+        with self._lock:
+            try:
+                result = self.conn.execute(
+                    "SELECT stat_value FROM cache_stats WHERE stat_key = ?", (key,)
+                ).fetchone()
+                if result:
+                    return json.loads(result[0])
+                return None
+            except Exception:
+                return None
+
+    def set(self, key: str, value, ttl: int = 300):
+        """通用 KV 缓存写入
+
+        将值序列化为 JSON 存储在 cache_stats 表（stat_key → JSON(stat_value)）。
+        ttl 参数保留供未来过期检查使用，当前表结构暂不支持 TTL。
+        """
+        with self._lock:
+            try:
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO cache_stats (stat_key, stat_value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                    (key, json.dumps(value))
+                )
+                self.conn.commit()
+            except Exception:
+                pass
 
     def _update_stats(self):
         try:
