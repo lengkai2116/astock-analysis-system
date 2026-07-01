@@ -44,9 +44,45 @@ class FusedResult:
 
 
 class UPFEngine:
+    """UPF统一实战框架 (Unified Practical Framework)
+
+    四层框架：
+    1. 走势结构层(StructureLayer) — 缠论分析
+    2. 形态验证层(PatternLayer) — 量价形态
+    3. 情绪环境层(SentimentLayer) — BOCIASI
+    4. 因子决策层(FactorLayer) — 多因子评分
+
+    动态权重（融合点1）：
+    - 默认使用 LAYER_WEIGHTS 静态权重
+    - 当 context 中包含 kronos_result 时，根据波动率状态动态调整
+    """
+
     LAYER_WEIGHTS = {'structure': 0.30, 'pattern': 0.25, 'sentiment': 0.20, 'factor': 0.25}
 
+    # Kronos 波动率驱动的动态权重表（融合点1）
+    VOLATILITY_WEIGHTS = {
+        'high':  {'structure': 0.15, 'pattern': 0.15, 'sentiment': 0.35, 'factor': 0.35,
+                  'description': '高波动：降结构/形态权重，增情绪/因子权重'},
+        'normal': {'structure': 0.30, 'pattern': 0.25, 'sentiment': 0.20, 'factor': 0.25,
+                   'description': '正常波动：使用默认权重'},
+        'low':   {'structure': 0.40, 'pattern': 0.30, 'sentiment': 0.10, 'factor': 0.20,
+                  'description': '低波动：增结构/形态权重，降情绪权重'},
+    }
+
+    def _select_weights(self, context: Dict) -> Dict:
+        """根据Kronos波动率选择权重（若无Kronos输入则返回默认）"""
+        kronos = context.get('kronos_result')
+        if kronos and isinstance(kronos, dict):
+            vol = kronos.get('volatility_regime', 'normal')
+            if vol in self.VOLATILITY_WEIGHTS:
+                weights = dict(self.VOLATILITY_WEIGHTS[vol])
+                weights.pop('description', None)
+                logger.debug(f"UPF动态权重: volatility={vol}, weights={weights}")
+                return weights
+        return dict(self.LAYER_WEIGHTS)
+
     def evaluate_all(self, context: Dict) -> FusedResult:
+        current_weights = self._select_weights(context)
         layers = [
             ('structure', self._evaluate_structure, context),
             ('pattern', self._evaluate_pattern, context),
@@ -60,11 +96,11 @@ class UPFEngine:
             except Exception as e:
                 logger.warning(f"UPF {name}异常: {e}")
                 results.append(LayerResult(layer_name=name, signal='NEUTRAL', confidence=0.0, details={'error': str(e)}))
-        fused_sig, fused_conf = self._weighted_fuse(results)
+        fused_sig, fused_conf = self._weighted_fuse(results, current_weights)
         return FusedResult(
             signal=fused_sig, confidence=round(fused_conf, 2),
             layer_results=results,
-            fused_detail={'layer_weights': self.LAYER_WEIGHTS, 'weighted_score': round(fused_conf, 2)},
+            fused_detail={'layer_weights': current_weights, 'weighted_score': round(fused_conf, 2)},
         )
 
     def _evaluate_structure(self, ctx: Dict) -> LayerResult:
@@ -95,11 +131,12 @@ class UPFEngine:
             sig, conf = 'NEUTRAL', 0.3
         return LayerResult(layer_name='factor', signal=sig, confidence=conf, details={'source': 'factor'})
 
-    def _weighted_fuse(self, results: List[LayerResult]) -> tuple:
+    def _weighted_fuse(self, results: List[LayerResult], weights: Optional[Dict] = None) -> tuple:
         val_map = {'BULLISH': 1, 'BEARISH': -1, 'NEUTRAL': 0}
         total_w, weighted_v = 0.0, 0.0
+        layer_weights = weights or self.LAYER_WEIGHTS
         for r in results:
-            w = self.LAYER_WEIGHTS.get(r.layer_name, 0.2)
+            w = layer_weights.get(r.layer_name, 0.2)
             weighted_v += val_map.get(r.signal, 0) * r.confidence * w
             total_w += w
         if total_w <= 0:

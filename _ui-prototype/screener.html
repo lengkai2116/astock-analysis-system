@@ -120,19 +120,19 @@
         <div class="pipeline-step">
           <span class="ps-badge l1">L1</span>
           <span class="ps-label">风险剔除</span>
-          <span class="ps-count">ST/退市/流动性/PE → 4,650 只</span>
+          <span class="ps-count">ST/退市/流动性/PE → <span id="l1-count">—</span> 只</span>
         </div>
         <span class="pipeline-arrow">→</span>
         <div class="pipeline-step">
           <span class="ps-badge l2">L2</span>
           <span class="ps-label">主力识别</span>
-          <span class="ps-count">筹码/ASR/资金流 → 1,240 只</span>
+          <span class="ps-count">筹码/ASR/资金流 → <span id="l2-count">—</span> 只</span>
         </div>
         <span class="pipeline-arrow">→</span>
         <div class="pipeline-step">
           <span class="ps-badge l3">L3</span>
           <span class="ps-label">策略验证</span>
-          <span class="ps-count">缠论/量价/因子 → 23 只</span>
+          <span class="ps-count">缠论/量价/因子 → <span id="l3-count">—</span> 只</span>
         </div>
       </div>
 
@@ -146,14 +146,9 @@
           <div class="l3-check"><input type="checkbox" checked id="ch-vp"><label for="ch-vp">量价策略</label></div>
           <div class="l3-check"><input type="checkbox" checked id="ch-factor"><label for="ch-factor">多因子评分</label></div>
           <div id="factor-combos" style="margin:var(--space-4) 0 var(--space-4) 22px;">
-            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked><label style="font-size:12px;">📊 经典动量组合</label></div>
-            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked><label style="font-size:12px;">📊 量价突破组合</label></div>
-            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox"><label style="font-size:12px;">📊 低波防御组合</label></div>
-            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox"><label style="font-size:12px;">📊 全因子综合</label></div>
-            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked><label style="font-size:12px;">⭐ 我的短线策略</label></div>
-            <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox"><label style="font-size:12px;">⭐ 中长线选股A</label></div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-2);">已选 3 个组合</div>
+            <div id="combos-loading" style="font-size:11px;color:var(--text-muted);padding:var(--space-2) 0;">⏳ 加载因子组合...</div>
           </div>
+          <div id="combo-count" style="font-size:11px;color:var(--text-muted);margin-left:22px;">已选 0 个组合</div>
           <div style="margin-top:var(--space-6);padding:var(--space-6);background:var(--bg-subtle);border-radius:var(--radius-sm);">
             <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-2);">最低通过阈值 (min_score)</div>
             <select class="select" style="width:100%;font-size:12px;"><option>≥ 30 分（后端默认）</option><option>≥ 50 分</option><option>≥ 70 分</option></select>
@@ -196,21 +191,7 @@
         <div class="l3-panel">
           <h4>🤖 Vibe Coding</h4>
           <div id="vibe-content">
-            <div class="vibe-strategy">
-              <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked><label style="font-size:12px;font-weight:500;">📊 业绩超预期+MACD金叉</label></div>
-              <div style="font-size:11px;color:var(--text-muted);margin-left:22px;">"选出业绩预告超预期且MACD金叉的股票"</div>
-            </div>
-            <div class="vibe-strategy">
-              <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox"><label style="font-size:12px;font-weight:500;">📊 涨停突破回调确认</label></div>
-              <div style="font-size:11px;color:var(--text-muted);margin-left:22px;">"涨停后缩量回调不破涨停底，次日放量上攻"</div>
-            </div>
-            <div class="vibe-strategy" style="border-color:var(--color-brand-500);">
-              <div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked><label style="font-size:12px;font-weight:500;color:var(--color-brand-500);">⭐ 我的短线策略</label></div>
-              <div style="font-size:11px;color:var(--text-muted);margin-left:22px;">用户自建 · 2026-06-12</div>
-            </div>
-            <div style="margin-top:var(--space-8);">
-              <button class="btn" style="width:100%;font-size:12px;justify-content:center;" onclick="showVibeModal()">+ 创建新策略（描述→AI生成）</button>
-            </div>
+            <div id="vibe-loading" style="font-size:11px;color:var(--text-muted);padding:var(--space-8);text-align:center;">⏳ 加载Vibe策略...</div>
           </div>
         </div>
       </div>
@@ -218,8 +199,8 @@
       <!-- 第三层: 筛选结果 -->
       <div class="results-panel">
         <div class="results-header">
-          <h4>📊 筛选结果 <span style="font-size:12px;color:var(--text-muted);font-weight:400;">共 23 只股票</span></h4>
-          <div style="display:flex;gap:var(--space-4);"><button class="btn" style="font-size:12px;" onclick="document.getElementById('results-table').style.display=''">🔄 刷新结果</button></div>
+          <h4>📊 筛选结果 <span style="font-size:12px;color:var(--text-muted);font-weight:400;">共 <span id="result-count">0</span> 只股票</span></h4>
+          <div style="display:flex;gap:var(--space-4);"><button class="btn" style="font-size:12px;" onclick="runScreening()">🔄 刷新结果</button></div>
         </div>
         <div id="empty-state" class="empty-state">
           <div class="icon-box">🔍</div>
@@ -227,15 +208,11 @@
           <p>点击「执行筛选」开始 Pipeline 选股流程</p>
           <div style="margin-top:var(--space-16);"><button class="btn btn-primary" onclick="runScreening()">⚡ 执行筛选</button></div>
         </div>
+        <div id="screen-loading" style="display:none;text-align:center;padding:var(--space-12);color:var(--text-muted);font-size:13px;">⏳ 正在筛选中，请稍候...</div>
         <div id="results-table" style="display:none;">
           <table class="table">
             <tr><th>代码</th><th>名称</th><th>最新价</th><th>综合评分</th><th>评级</th><th>触发信号</th><th>自选</th><th></th></tr>
-            <tr class="clickable" onclick="showDetail('000762.SZ')"><td>000762.SZ</td><td>西藏矿业</td><td>¥12.34</td><td><span class="tag tag-bullish">92</span></td><td>🔥 强烈推荐</td><td><span class="tag tag-bullish">三买+VP-1</span></td><td><span style="color:#F59E0B;">⭐</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
-            <tr class="clickable" onclick="showDetail('000001.SZ')"><td>000001.SZ</td><td>平安银行</td><td>¥11.28</td><td><span class="tag tag-bullish">88</span></td><td>✅ 推荐</td><td><span class="tag tag-bullish">二买+底背离</span></td><td><span style="color:var(--text-muted);">☆</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
-            <tr class="clickable" onclick="showDetail('002594.SZ')"><td>002594.SZ</td><td>比亚迪</td><td>¥265.80</td><td><span class="tag tag-bullish">90</span></td><td>🔥 强烈推荐</td><td><span class="tag tag-bullish">量突破+三买</span></td><td><span style="color:var(--text-muted);">☆</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
-            <tr class="clickable" onclick="showDetail('300750.SZ')"><td>300750.SZ</td><td>宁德时代</td><td>¥218.50</td><td><span class="tag tag-watch">72</span></td><td>👀 关注</td><td><span class="tag tag-watch">中枢震荡</span></td><td><span style="color:var(--text-muted);">☆</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
-            <tr class="clickable" onclick="showDetail('002415.SZ')"><td>002415.SZ</td><td>海康威视</td><td>¥32.68</td><td><span class="tag tag-watch">75</span></td><td>👀 关注</td><td><span class="tag tag-watch">均线多头</span></td><td><span style="color:#F59E0B;">⭐</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
-            <tr class="clickable" onclick="showDetail('600519.SH')"><td>600519.SH</td><td>贵州茅台</td><td>¥1,685.00</td><td><span class="tag tag-bullish">85</span></td><td>✅ 推荐</td><td><span class="tag tag-bullish">趋势+资金</span></td><td><span style="color:var(--text-muted);">☆</span></td><td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>
+            <tbody id="results-body"></tbody>
           </table>
         </div>
       </div>
@@ -289,7 +266,10 @@
 </div>
 
 <script>
-// 权重调整
+// ── API 基地址 ──
+var API_BASE = 'http://localhost:15003';
+
+// ── 权重调整 ──
 function adjWeight(btn, delta) {
   var row = btn.closest('.weight-row');
   var valEl = row.querySelector('.w-value');
@@ -299,7 +279,6 @@ function adjWeight(btn, delta) {
   valEl.textContent = newVal + '%';
   fillEl.style.width = newVal + '%';
 
-  // 重新计算合计
   var total = 0;
   document.querySelectorAll('#weight-config .weight-row').forEach(function(r){
     total += parseInt(r.querySelector('.w-value').textContent);
@@ -307,60 +286,245 @@ function adjWeight(btn, delta) {
   document.getElementById('weight-sum').textContent = total + '%';
 }
 
-// 执行筛选
-function runScreening() {
-  document.getElementById('empty-state').style.display = 'none';
-  document.getElementById('results-table').style.display = '';
-  document.querySelector('.btn').innerHTML = '⏳ 筛选中...';
-  setTimeout(function(){
-    document.querySelector('.btn').innerHTML = '⚡ 执行筛选';
-  }, 1500);
+// ── 全局状态 ──
+var _screenResults = null;
+var _selectedCombos = {};   // {id: {name, id}} 已勾选因子组合
+var _selectedVibes = {};    // {id: {name, id}} 已勾选Vibe策略
+
+// ── 页面加载：因子组合 ──
+function loadFactorCombos() {
+  var container = document.getElementById('factor-combos');
+  var loading = document.getElementById('combos-loading');
+  if (!container) return;
+  fetch(API_BASE + '/api/factors/combinations')
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+      if (!res.success || !res.data || !res.data.length) {
+        if (loading) loading.textContent = '因子配置暂不可用';
+        return;
+      }
+      var html = '';
+      res.data.forEach(function(c) {
+        var prefix = c.type === 'user' ? '⭐' : '📊';
+        var checked = c.default_checked ? 'checked' : '';
+        var id = 'fc-' + c.id;
+        html += '<div class="l3-check" style="padding:var(--space-2) 0;">'
+          + '<input type="checkbox" ' + checked + ' id="' + id + '" onchange="toggleCombo(\'' + c.id + '\',\'' + c.name + '\',this.checked)">'
+          + '<label style="font-size:12px;" for="' + id + '">' + prefix + ' ' + c.name + '</label></div>';
+        if (c.default_checked) {
+          _selectedCombos[c.id] = {id: c.id, name: c.name};
+        }
+      });
+      if (loading) loading.style.display = 'none';
+      container.insertAdjacentHTML('beforeend', html);
+      updateComboCount();
+    })
+    .catch(function() {
+      if (loading) loading.textContent = '因子配置暂不可用';
+    });
 }
 
-// 弹窗
-var stockData = {
-  '000762.SZ': {name:'西藏矿业',score:92,signal:'强烈推荐',price:'¥12.34',strategies:{chanlun:'三买确认 (score:0.85)',vp:'VP-1 价涨量增',factor:'经典动量 88 / 量价突破 76'},reasons:['缠论第三类买点确认','量价配合 VP-1 价涨量增','多因子组合均分 82分']},
-  '000001.SZ': {name:'平安银行',score:88,signal:'推荐',price:'¥11.28',strategies:{chanlun:'二买确认 (score:0.78)',vp:'底背离',factor:'经典动量 85 / 量价突破 72'},reasons:['二类买点确认','量价底背离信号','多因子动量因子突出']},
-  '002594.SZ': {name:'比亚迪',score:90,signal:'强烈推荐',price:'¥265.80',strategies:{chanlun:'三买+趋势突破',vp:'量突破',factor:'经典动量 92 / 量价突破 78'},reasons:['放量突破前高','趋势线突破确认','新能源政策利好']},
-  '300750.SZ': {name:'宁德时代',score:72,signal:'关注',price:'¥218.50',strategies:{chanlun:'中枢震荡',vp:'量缩观望',factor:'经典动量 68'},reasons:['高位中枢震荡','成交量萎缩等待方向','多因子偏弱']},
-  '002415.SZ': {name:'海康威视',score:75,signal:'关注',price:'¥32.68',strategies:{chanlun:'中枢下沿支撑',vp:'均线多头',factor:'经典动量 72'},reasons:['均线多头排列','中枢下沿支撑有效','量能萎缩待放量']},
-  '600519.SH': {name:'贵州茅台',score:85,signal:'推荐',price:'¥1,685.00',strategies:{chanlun:'二买',vp:'趋势延续',factor:'经典动量 88 / 量价突破 75'},reasons:['趋势线突破确认','北向资金加仓','大单资金净流入']}
-};
-function showDetail(code){
-  var d = stockData[code];
-  if(!d) return;
-  document.getElementById('modal-stock').textContent = code + ' ' + d.name;
-  var html = '<div style="margin-bottom:var(--space-12);"><table class="table"><tr><th>策略</th><th>输出</th></tr>';
-  var labels = {chanlun:'🧩 缠论',vp:'📊 量价',factor:'📦 多因子'};
-  for(var k in d.strategies){
-    html += '<tr><td>'+(labels[k]||k)+'</td><td>'+d.strategies[k]+'</td></tr>';
+function toggleCombo(id, name, checked) {
+  if (checked) {
+    _selectedCombos[id] = {id: id, name: name};
+  } else {
+    delete _selectedCombos[id];
   }
+  updateComboCount();
+}
+
+function updateComboCount() {
+  var count = Object.keys(_selectedCombos).length;
+  var el = document.getElementById('combo-count');
+  if (el) el.textContent = '已选 ' + count + ' 个组合';
+}
+
+// ── 页面加载：Vibe策略 ──
+function loadVibeStrategies() {
+  var container = document.getElementById('vibe-content');
+  if (!container) return;
+  var loading = document.getElementById('vibe-loading');
+  fetch(API_BASE + '/api/v3/screener/strategies/vibe')
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+      if (!res.success || !res.data || !res.data.strategies) {
+        if (loading) loading.textContent = 'Vibe策略暂不可用';
+        return;
+      }
+      var html = '';
+      res.data.strategies.forEach(function(s) {
+        var checked = s.default_checked ? 'checked' : '';
+        var prefix = s.type === 'user' ? '⭐' : '📊';
+        html += '<div class="vibe-strategy" data-id="' + s.id + '">'
+          + '<div class="l3-check" style="padding:var(--space-2) 0;">'
+          + '<input type="checkbox" ' + checked + ' onchange="toggleVibe(\'' + s.id + '\',\'' + s.name + '\',this.checked)">'
+          + '<label style="font-size:12px;font-weight:500;">' + prefix + ' ' + s.name + '</label></div>'
+          + '<div style="font-size:11px;color:var(--text-muted);margin-left:22px;">"' + (s.description || '') + '"</div></div>';
+        if (s.default_checked) {
+          _selectedVibes[s.id] = {id: s.id, name: s.name};
+        }
+      });
+      html += '<div style="margin-top:var(--space-8);">'
+        + '<button class="btn" style="width:100%;font-size:12px;justify-content:center;" onclick="showVibeModal()">+ 创建新策略（描述→AI生成）</button></div>';
+      if (loading) loading.style.display = 'none';
+      container.innerHTML = html;
+    })
+    .catch(function() {
+      if (loading) loading.textContent = 'Vibe策略暂不可用';
+    });
+}
+
+function toggleVibe(id, name, checked) {
+  if (checked) {
+    _selectedVibes[id] = {id: id, name: name};
+  } else {
+    delete _selectedVibes[id];
+  }
+}
+
+// ── 执行筛选 ──
+function runScreening() {
+  var btn = document.querySelector('.page-header-actions .btn');
+  var empty = document.getElementById('empty-state');
+  var table = document.getElementById('results-table');
+  var loading = document.getElementById('screen-loading');
+
+  // 显示loading
+  if (btn) btn.innerHTML = '⏳ 筛选中...';
+  empty.style.display = 'none';
+  table.style.display = '';
+  if (loading) loading.style.display = '';
+
+  var timeout = setTimeout(function() { showError('筛选超时，请重试'); if(btn)btn.innerHTML='⚡ 执行筛选'; }, 30000);
+
+  fetch(API_BASE + '/api/v3/screener/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{"useCache":true}'})
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+      clearTimeout(timeout);
+      if (btn) btn.innerHTML = '⚡ 执行筛选';
+      if (loading) loading.style.display = 'none';
+
+      if (res.success && res.data) {
+        renderResults(res.data);
+      } else {
+        showError(res.message || '筛选失败，请重试');
+      }
+    })
+    .catch(function() {
+      clearTimeout(timeout);
+      if (btn) btn.innerHTML = '⚡ 执行筛选';
+      if (loading) loading.style.display = 'none';
+      showError('网络错误，请检查后端服务');
+    });
+}
+
+// ── 渲染结果 ──
+function renderResults(data) {
+  _screenResults = data.results || [];
+
+  // 更新Pipeline横条
+  if (data.layers && data.layers.length >= 3) {
+    document.getElementById('l1-count').textContent = data.layers[0].output.toLocaleString();
+    document.getElementById('l2-count').textContent = data.layers[1].output.toLocaleString();
+    document.getElementById('l3-count').textContent = data.layers[2].output.toLocaleString();
+  }
+
+  // 更新结果计数
+  document.getElementById('result-count').textContent = _screenResults.length;
+
+  // 渲染结果表
+  var body = document.getElementById('results-body');
+  if (_screenResults.length === 0) {
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:var(--space-12);color:var(--text-muted);">当前无满足条件的股票，请调整筛选参数</td></tr>';
+    return;
+  }
+
+  var html = '';
+  _screenResults.forEach(function(r) {
+    var code = r.symbol || r.ts_code || '';
+    var name = r.name || '';
+    var price = r.close != null ? '¥' + r.close.toFixed(2) : '—';
+    var score = r.score || 0;
+    var gradeLabel = r.grade_label || '';
+    var triggers = r.phase || '';
+    var tagClass = score >= 75 ? 'tag-bullish' : (score >= 50 ? 'tag-watch' : 'tag-neutral');
+    html += '<tr class="clickable" onclick="showDetail(\'' + code + '\')">'
+      + '<td>' + code + '</td>'
+      + '<td>' + name + '</td>'
+      + '<td>' + price + '</td>'
+      + '<td><span class="tag ' + tagClass + '">' + score + '</span></td>'
+      + '<td>' + gradeLabel + '</td>'
+      + '<td><span class="tag ' + tagClass + '">' + triggers + '</span></td>'
+      + '<td><span style="color:var(--text-muted);">☆</span></td>'
+      + '<td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>';
+  });
+  body.innerHTML = html;
+}
+
+// ── 详情弹窗 ──
+function showDetail(code) {
+  var items = _screenResults;
+  var d = null;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].symbol === code || items[i].ts_code === code) {
+      d = items[i];
+      break;
+    }
+  }
+  if (!d) return;
+  document.getElementById('modal-stock').textContent = code + ' ' + (d.name || '');
+
+  var html = '<div style="margin-bottom:var(--space-12);"><table class="table"><tr><th>策略</th><th>输出</th></tr>';
+  var score = d.score || 0;
+  html += '<tr><td>🧩 综合评分</td><td>' + score + ' 分 · ' + (d.grade_label || '') + '</td></tr>';
+  html += '<tr><td>📊 主力阶段</td><td>' + (d.phase || '') + '</td></tr>';
+  if (d.asr != null) html += '<tr><td>📈 ASR</td><td>' + d.asr + '</td></tr>';
+  if (d.concentration != null) html += '<tr><td>🎯 集中度</td><td>' + d.concentration + '</td></tr>';
+  if (d.volume_ratio != null) html += '<tr><td>📊 量比</td><td>' + d.volume_ratio + '</td></tr>';
+  if (d.rsi != null) html += '<tr><td>📉 RSI</td><td>' + d.rsi + '</td></tr>';
   html += '</table></div>';
-  html += '<h4 style="font-size:13px;margin-bottom:var(--space-8);">📝 选股理由</h4><ul style="padding-left:var(--space-16);">';
-  d.reasons.forEach(function(r){ html += '<li style="margin-bottom:var(--space-4);">'+r+'</li>'; });
-  html += '</ul>';
+  html += '<h4 style="font-size:13px;margin-bottom:var(--space-8);">📝 选股理由</h4>'
+    + '<ul style="padding-left:var(--space-16);">'
+    + '<li>L1 风险剔除通过 · L2 主力识别通过 · L3 策略验证通过</li>'
+    + '<li>评分: ' + score + ' / 100</li>'
+    + '<li>主力阶段: ' + (d.phase || '—') + '</li>'
+    + '</ul>';
   html += '<div style="margin-top:var(--space-12);padding:var(--space-8);background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:11px;color:var(--text-muted);">提示：点击下方按钮查看更多操作</div>';
+
   document.getElementById('modal-body').innerHTML = html;
   document.getElementById('detail-modal').style.display = 'flex';
 }
-function closeDetail(){ document.getElementById('detail-modal').style.display = 'none'; }
 
-// Vibe Coding
-function showVibeModal(){
+function closeDetail() {
+  document.getElementById('detail-modal').style.display = 'none';
+}
+
+// ── 错误显示 ──
+function showError(msg) {
+  var loading = document.getElementById('screen-loading');
+  if (loading) loading.style.display = 'none';
+  var body = document.getElementById('results-body');
+  if (body) {
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:var(--space-12);color:#EF4444;">⚠️ ' + (msg || '筛选失败') + '</td></tr>';
+  }
+}
+
+// ── Vibe Coding ──
+function showVibeModal() {
   document.getElementById('vibe-modal').style.display = 'flex';
 }
-function closeVibeModal(){
+function closeVibeModal() {
   document.getElementById('vibe-modal').style.display = 'none';
 }
-function generateVibeStrategy(){
+function generateVibeStrategy() {
   var desc = document.getElementById('vibe-input').value.trim();
-  if(!desc){ alert('请先输入策略描述'); return; }
+  if (!desc) { alert('请先输入策略描述'); return; }
   document.getElementById('vibe-code-area').textContent =
     'def custom_strategy(data):\n'
     + '    """\n'
     + '    ' + desc + '\n'
     + '    """\n'
-    + '    # 基于深度学习的选股逻辑\n'
+    + '    # 选股逻辑\n'
     + '    score = 0\n'
     + '    # MACD金叉检测\n'
     + '    if data["macd_diff"].iloc[-1] > data["macd_dea"].iloc[-1]:\n'
@@ -369,25 +533,28 @@ function generateVibeStrategy(){
     + '    if data["yoy_profit"].iloc[-1] > 50:\n'
     + '        score += 30\n'
     + '    return score';
-  document.querySelector('#vibe-code-area + .btn').disabled = false;
 }
-function addVibeStrategy(){
+function addVibeStrategy() {
   var name = document.getElementById('vibe-name').value.trim();
   var code = document.getElementById('vibe-code-area').textContent;
-  if(!name){ alert('请输入策略名称'); return; }
-  if(code.indexOf('def custom_strategy') === -1){ alert('请先生成策略代码'); return; }
+  if (!name) { alert('请输入策略名称'); return; }
+  if (code.indexOf('def custom_strategy') === -1) { alert('请先生成策略代码'); return; }
 
-  // 添加到Vibe Coding列表
   var html = '<div class="vibe-strategy" style="border-color:var(--color-brand-500);">'
     + '<div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked>'
     + '<label style="font-size:12px;font-weight:500;color:var(--color-brand-500);">⭐ ' + name + '</label></div>'
     + '<div style="font-size:11px;color:var(--text-muted);margin-left:22px;">用户自建 · ' + new Date().toISOString().slice(0,10) + '</div>'
     + '</div>';
   document.getElementById('vibe-content').insertAdjacentHTML('afterbegin', html);
-
   closeVibeModal();
-  alert('✅ 策略「' + name + '」已添加\n\n• 已加入L3 Vibe Coding 策略列表\n• 已保存到策略模板 → 用户自建策略');
+  alert('✅ 策略「' + name + '」已添加\n\n• 已加入L3 Vibe Coding 策略列表');
 }
+
+// ── 页面加载 ──
+(function() {
+  loadFactorCombos();
+  loadVibeStrategies();
+})();
 </script>
 <script>
 var sidebarCollapsed = true;

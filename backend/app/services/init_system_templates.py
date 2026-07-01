@@ -1,543 +1,568 @@
+"""
+系统预设策略模板种子数据
+精确匹配原型 _ui-prototype/strategy-templates.html 中 11 个 A 股领域策略
+在应用启动时自动执行（经由 __init__.py），支持 schema 迁移和更新覆盖
+"""
+
+import logging
+from datetime import datetime
+from sqlalchemy import text
+
 from app import db
 from app.models.strategy import StrategyTemplateV2, StrategyTemplateType
-from app.services.strategy_template_service import StrategyTemplateService
 
+logger = logging.getLogger(__name__)
+
+# ── 新增列定义（用于 ALTER TABLE 迁移） ──
+NEW_COLUMNS = {
+    'cat': 'VARCHAR(50)',
+    'catLabel': 'VARCHAR(50)',
+    'catCN': 'VARCHAR(50)',
+    'icon': 'VARCHAR(10)',
+    'nameCN': 'VARCHAR(100)',
+    'tags': 'JSON',
+    'ready': 'BOOLEAN DEFAULT 1',
+    'vibe': 'BOOLEAN DEFAULT 0',
+    'devLabel': 'VARCHAR(50)',
+    'devPriority': 'VARCHAR(10)',
+    'inputs': 'JSON',
+    'wiki': 'JSON',
+    'updated': 'VARCHAR(20)',
+    'iconLarge': 'VARCHAR(10)',
+}
+
+# ── 11 个 A 股领域策略 ──
 SYSTEM_TEMPLATES = [
+    # ── vp: 量价策略 ──
     {
-        'name': '均线交叉策略',
-        'description': '基于短期和长期均线的交叉产生交易信号，适用于趋势跟踪',
+        'cat': 'vp',
+        'catLabel': '量价策略',
+        'catCN': '量价策略',
+        'name': 'VolumePriceStrategy',
+        'nameCN': '量价策略',
+        'icon': '📈',
+        'iconLarge': '📈',
+        'description': '基于成交量与价格的50+形态检测规则，识别主力资金介入、趋势突破、背离等信号。单一独立策略，使用时作为一个整体。',
         'template_type': 'indicator',
-        'code_template': '''my_strategy_name = "均线交叉策略"
-my_strategy_description = "基于短期和长期均线的交叉产生交易信号，适用于趋势跟踪"
-
-# @param short_period int 5 短期均线周期
-# @param long_period int 20 长期均线周期
-# @param position_pct float 0.3 仓位比例
-
-import numpy as np
-
-def initialize(context):
-    context.short_period = short_period
-    context.long_period = long_period
-    context.position_pct = position_pct
-
-def handle_data(context, data):
-    stock = context.security
-    
-    short_ma = data[stock].mavg(short_period, field='close')
-    long_ma = data[stock].mavg(long_period, field='close')
-    
-    if short_ma > long_ma and context.portfolio.positions[stock].amount == 0:
-        order_target_percent(stock, context.position_pct)
-    elif short_ma < long_ma and context.portfolio.positions[stock].amount > 0:
-        order_target_percent(stock, 0)
-
-def output_schema():
-    return {
-        "signal": "bullish/bearish",
-        "confidence": 0.0-1.0,
-        "entry_zone": [entry_low, entry_high],
-        "risk_line": stop_loss,
-        "target_zone": [target_low, target_high],
-        "evidence": ["短期均线上穿长期均线", "量能放大"]
-    }
-''',
+        'tags': ['量价', '形态', '突破', '背离'],
+        'ready': True,
+        'vibe': False,
+        'devLabel': None,
+        'devPriority': None,
         'parameters': [
-            {'name': 'short_period', 'type': 'int', 'default': '5', 'description': '短期均线周期'},
-            {'name': 'long_period', 'type': 'int', 'default': '20', 'description': '长期均线周期'},
-            {'name': 'position_pct', 'type': 'float', 'default': '0.3', 'description': '仓位比例'}
+            {'key': 'volume_ratio', 'label': '放量倍数', 'val': 1.5, 'min': 1, 'max': 5, 'step': 0.1},
+            {'key': 'breakout_period', 'label': '突破周期', 'val': 20, 'min': 5, 'max': 60, 'step': 1},
+            {'key': 'trend_strength', 'label': '趋势强度阈值', 'val': 25, 'min': 10, 'max': 50, 'step': 1}
         ],
+        'inputs': ['日线K线数据 (open/high/low/close/volume)', '复权因子 (adj_factor)', '板块分类数据'],
+        'output_schema': {
+            'signal': {'type': 'enum', 'values': ['买入', '卖出', '持有', '观望']},
+            'score': {'type': 'number', 'range': '0-100'},
+            'patterns': {'type': 'array', 'desc': '检测到的形态列表'}
+        },
+        'wiki': ['量价关系理论', '成交量分析方法'],
+        'code_template': '''class VolumePriceStrategy:
+    def __init__(self, ctx):
+        self.volume_ratio = ctx.params.volume_ratio
+        self.breakout_period = ctx.params.breakout_period
+
+    def analyze(self, data):
+        # 检测50+量价形态
+        patterns = self._detect_patterns(data)
+        score = self._score_patterns(patterns)
+        return {"score": score, "patterns": patterns}''',
+        'is_system': True,
         'author': 'System',
-        'is_system': True
+        'updated': '2026-06-20',
     },
+
+    # ── chanlun: 缠论策略 ──
     {
-        'name': 'MACD策略',
-        'description': '使用MACD指标的背离和交叉信号进行交易判断',
+        'cat': 'chanlun',
+        'catLabel': '缠论策略',
+        'catCN': '缠论策略',
+        'name': 'ChanlunStrategy',
+        'nameCN': '缠论策略',
+        'icon': '🧩',
+        'iconLarge': '🧩',
+        'description': '基于笔-段-中枢体系，识别三类买卖点和8种形态，配合决策树评分。单一独立策略，使用时作为一个整体。',
         'template_type': 'indicator',
-        'code_template': '''my_strategy_name = "MACD策略"
-my_strategy_description = "使用MACD指标的背离和交叉信号进行交易判断"
-
-# @param fast_period int 12 快线周期
-# @param slow_period int 26 慢线周期
-# @param signal_period int 9 信号线周期
-# @param position_pct float 0.25 仓位比例
-
-def initialize(context):
-    context.fast_period = fast_period
-    context.slow_period = slow_period
-    context.signal_period = signal_period
-    context.position_pct = position_pct
-
-def handle_data(context, data):
-    stock = context.security
-    
-    macd, signal, hist = data[stock].macd(
-        fast_period, slow_period, signal_period, field='close'
-    )
-    
-    if hist > 0 and context.portfolio.positions[stock].amount == 0:
-        order_target_percent(stock, context.position_pct)
-    elif hist < 0 and context.portfolio.positions[stock].amount > 0:
-        order_target_percent(stock, 0)
-
-def output_schema():
-    return {
-        "signal": "bullish/bearish",
-        "confidence": 0.0-1.0,
-        "entry_zone": [entry_low, entry_high],
-        "risk_line": stop_loss,
-        "target_zone": [target_low, target_high],
-        "evidence": ["MACD金叉/死叉", "柱状图放大/缩小"]
-    }
-''',
+        'tags': ['缠论', '买卖点', '中枢', '全周期'],
+        'ready': True,
+        'vibe': False,
+        'devLabel': None,
+        'devPriority': None,
         'parameters': [
-            {'name': 'fast_period', 'type': 'int', 'default': '12', 'description': '快线周期'},
-            {'name': 'slow_period', 'type': 'int', 'default': '26', 'description': '慢线周期'},
-            {'name': 'signal_period', 'type': 'int', 'default': '9', 'description': '信号线周期'},
-            {'name': 'position_pct', 'type': 'float', 'default': '0.25', 'description': '仓位比例'}
+            {'key': 'di_k_type', 'label': '底分型K线数', 'val': 3, 'min': 2, 'max': 5, 'step': 1},
+            {'key': 'ding_k_type', 'label': '顶分型K线数', 'val': 3, 'min': 2, 'max': 5, 'step': 1},
+            {'key': 'bi_min_bars', 'label': '最小笔K线数', 'val': 5, 'min': 3, 'max': 10, 'step': 1}
         ],
+        'inputs': ['日线K线数据 (open/high/low/close)', '分笔数据 (笔的起止点)', '中枢区间数据'],
+        'output_schema': {
+            'signal': {'type': 'enum', 'values': ['一买', '二买', '三买', '一卖', '二卖', '三卖', '中枢震荡', '无信号']},
+            'score': {'type': 'number', 'range': '0-100'},
+            'confidence': {'type': 'string', 'values': ['高', '中', '低']}
+        },
+        'wiki': ['缠论原著', '笔-段-中枢定义', '三类买卖点分类'],
+        'code_template': '''class ChanlunStrategy:
+    def __init__(self, ctx):
+        self.bi_min_bars = ctx.params.bi_min_bars
+
+    def analyze(self, data):
+        bi = self._find_bi(data)
+        zhongshu = self._find_zhongshu(bi)
+        signal = self._check_buy_sell(zhongshu, bi[-1])
+        return {"signal": signal, "confidence": self._calc_confidence(signal)}''',
+        'is_system': True,
         'author': 'System',
-        'is_system': True
+        'updated': '2026-06-20',
     },
+
+    # ── chip: 筹码策略 ──
     {
-        'name': 'RSI超买超卖策略',
-        'description': '基于RSI指标判断市场超买超卖状态，把握反转机会',
+        'cat': 'chip',
+        'catLabel': '筹码策略',
+        'catCN': '筹码策略',
+        'name': 'ChipStrategy',
+        'nameCN': '筹码策略',
+        'icon': '📦',
+        'iconLarge': '📦',
+        'description': '基于筹码分布分析主力成本区间，识别吸筹/洗盘/拉升/出货各阶段信号。单一独立策略，使用作为一个整体。',
         'template_type': 'indicator',
-        'code_template': '''my_strategy_name = "RSI超买超卖策略"
-my_strategy_description = "基于RSI指标判断市场超买超卖状态，把握反转机会"
-
-# @param rsi_period int 14 RSI计算周期
-# @param oversold_level float 30 超卖阈值
-# @param overbought_level float 70 超买阈值
-# @param position_pct float 0.2 仓位比例
-
-def initialize(context):
-    context.rsi_period = rsi_period
-    context.oversold_level = oversold_level
-    context.overbought_level = overbought_level
-    context.position_pct = position_pct
-
-def handle_data(context, data):
-    stock = context.security
-    
-    rsi = data[stock].rsi(rsi_period, field='close')
-    
-    if rsi < context.oversold_level and context.portfolio.positions[stock].amount == 0:
-        order_target_percent(stock, context.position_pct)
-    elif rsi > context.overbought_level and context.portfolio.positions[stock].amount > 0:
-        order_target_percent(stock, 0)
-
-def output_schema():
-    return {
-        "signal": "bullish/bearish",
-        "confidence": 0.0-1.0,
-        "entry_zone": [entry_low, entry_high],
-        "risk_line": stop_loss,
-        "target_zone": [target_low, target_high],
-        "evidence": ["RSI进入超卖/超买区域", "价格背离"]
-    }
-''',
+        'tags': ['筹码', '主力', '资金流', '支撑'],
+        'ready': True,
+        'vibe': False,
+        'devLabel': None,
+        'devPriority': None,
         'parameters': [
-            {'name': 'rsi_period', 'type': 'int', 'default': '14', 'description': 'RSI计算周期'},
-            {'name': 'oversold_level', 'type': 'float', 'default': '30', 'description': '超卖阈值'},
-            {'name': 'overbought_level', 'type': 'float', 'default': '70', 'description': '超买阈值'},
-            {'name': 'position_pct', 'type': 'float', 'default': '0.2', 'description': '仓位比例'}
+            {'key': 'chip_window', 'label': '筹码计算周期', 'val': 60, 'min': 20, 'max': 120, 'step': 5},
+            {'key': 'dense_threshold', 'label': '密集区阈值%', 'val': 70, 'min': 50, 'max': 95, 'step': 5},
+            {'key': 'asr_period', 'label': 'ASR计算周期', 'val': 20, 'min': 5, 'max': 60, 'step': 5}
         ],
+        'inputs': ['日线K线数据', '逐笔成交数据 (tick)', '大单资金流数据 (moneyflow)'],
+        'output_schema': {
+            'signal': {'type': 'enum', 'values': ['吸筹', '洗盘', '拉升', '出货', '无信号']},
+            'chip_cost': {'type': 'number', 'desc': '主力成本区间'},
+            'concentration': {'type': 'number', 'desc': '筹码集中度 0-1'}
+        },
+        'wiki': ['筹码分布理论', 'ASR指标计算方法'],
+        'code_template': '''class ChipStrategy:
+    def __init__(self, ctx):
+        self.chip_window = ctx.params.chip_window
+
+    def analyze(self, data):
+        dist = self._calc_chip_distribution(data)
+        phase = self._identify_phase(dist)
+        return {"phase": phase, "chip_cost": dist.cost, "concentration": dist.concentration}''',
+        'is_system': True,
         'author': 'System',
-        'is_system': True
+        'updated': '2026-06-20',
     },
+
+    # ── darwin: 达尔文风险策略 ──
     {
-        'name': 'KDJ随机指标策略',
-        'description': '使用KDJ指标的交叉和超买超卖信号进行交易',
-        'template_type': 'indicator',
-        'code_template': '''my_strategy_name = "KDJ随机指标策略"
-my_strategy_description = "使用KDJ指标的交叉和超买超卖信号进行交易"
-
-# @param n int 9 RSV周期
-# @param k_period int 3 K线周期
-# @param d_period int 3 D线周期
-# @param position_pct float 0.25 仓位比例
-
-def initialize(context):
-    context.n = n
-    context.k_period = k_period
-    context.d_period = d_period
-    context.position_pct = position_pct
-
-def handle_data(context, data):
-    stock = context.security
-    
-    k, d, j = data[stock].kdj(n, k_period, d_period, field='close')
-    
-    if k < 20 and context.portfolio.positions[stock].amount == 0:
-        order_target_percent(stock, context.position_pct)
-    elif k > 80 and context.portfolio.positions[stock].amount > 0:
-        order_target_percent(stock, 0)
-
-def output_schema():
-    return {
-        "signal": "bullish/bearish",
-        "confidence": 0.0-1.0,
-        "entry_zone": [entry_low, entry_high],
-        "risk_line": stop_loss,
-        "target_zone": [target_low, target_high],
-        "evidence": ["KDJ低位/高位金叉/死叉", "J值超买/超卖"]
-    }
-''',
-        'parameters': [
-            {'name': 'n', 'type': 'int', 'default': '9', 'description': 'RSV周期'},
-            {'name': 'k_period', 'type': 'int', 'default': '3', 'description': 'K线周期'},
-            {'name': 'd_period', 'type': 'int', 'default': '3', 'description': 'D线周期'},
-            {'name': 'position_pct', 'type': 'float', 'default': '0.25', 'description': '仓位比例'}
-        ],
-        'author': 'System',
-        'is_system': True
-    },
-    {
-        'name': '布林带策略',
-        'description': '基于布林带通道的价格突破和回归策略',
-        'template_type': 'indicator',
-        'code_template': '''my_strategy_name = "布林带策略"
-my_strategy_description = "基于布林带通道的价格突破和回归策略"
-
-# @param period int 20 布林带周期
-# @param std_dev float 2.0 标准差倍数
-# @param position_pct float 0.3 仓位比例
-
-def initialize(context):
-    context.period = period
-    context.std_dev = std_dev
-    context.position_pct = position_pct
-
-def handle_data(context, data):
-    stock = context.security
-    
-    upper, middle, lower = data[stock].boll(
-        period, std_dev, field='close'
-    )
-    price = data[stock].close
-    
-    if price < lower and context.portfolio.positions[stock].amount == 0:
-        order_target_percent(stock, context.position_pct)
-    elif price > upper and context.portfolio.positions[stock].amount > 0:
-        order_target_percent(stock, 0)
-
-def output_schema():
-    return {
-        "signal": "bullish/bearish",
-        "confidence": 0.0-1.0,
-        "entry_zone": [entry_low, entry_high],
-        "risk_line": stop_loss,
-        "target_zone": [target_low, target_high],
-        "evidence": ["价格触及布林带下轨/上轨", "波动率变化"]
-    }
-''',
-        'parameters': [
-            {'name': 'period', 'type': 'int', 'default': '20', 'description': '布林带周期'},
-            {'name': 'std_dev', 'type': 'float', 'default': '2.0', 'description': '标准差倍数'},
-            {'name': 'position_pct', 'type': 'float', 'default': '0.3', 'description': '仓位比例'}
-        ],
-        'author': 'System',
-        'is_system': True
-    },
-    {
-        'name': '成交量异常策略',
-        'description': '基于成交量异常放大配合价格变化的选股策略',
+        'cat': 'darwin',
+        'catLabel': '达尔文风险策略',
+        'catCN': '达尔文风险策略',
+        'name': 'DarwinRiskStrategy',
+        'nameCN': '达尔文风险策略',
+        'icon': '🧬',
+        'iconLarge': '🧬',
+        'description': '系统级L1层过滤器，基于多维度风险指标剔除高风险股票。作为选股系统第一道防线。',
         'template_type': 'selection',
-        'code_template': '''my_strategy_name = "成交量异常策略"
-my_strategy_description = "基于成交量异常放大配合价格变化的选股策略"
-
-# @param vol_period int 20 成交量均线周期
-# @param vol_multiplier float 2.0 成交量倍数
-# @param price_change_min float 2.0 最小涨幅百分比
-# @param position_pct float 0.3 仓位比例
-
-def initialize(context):
-    context.vol_period = vol_period
-    context.vol_multiplier = vol_multiplier
-    context.price_change_min = price_change_min
-    context.position_pct = position_pct
-
-def handle_data(context, data):
-    stock = context.security
-    
-    vol_ma = data[stock].mavg(context.vol_period, field='volume')
-    current_vol = data[stock].volume
-    price_change = data[stock].pct_change(1)
-    
-    if current_vol > vol_ma * context.vol_multiplier and \
-       price_change > context.price_change_min / 100 and \
-       context.portfolio.positions[stock].amount == 0:
-        order_target_percent(stock, context.position_pct)
-
-def output_schema():
-    return {
-        "signal": "bullish/bearish",
-        "confidence": 0.0-1.0,
-        "entry_zone": [entry_low, entry_high],
-        "risk_line": stop_loss,
-        "target_zone": [target_low, target_high],
-        "evidence": ["成交量异常放大", "价格同步上涨"]
-    }
-''',
+        'tags': ['风险', '筛选', '系统级'],
+        'ready': True,
+        'vibe': False,
+        'devLabel': None,
+        'devPriority': None,
         'parameters': [
-            {'name': 'vol_period', 'type': 'int', 'default': '20', 'description': '成交量均线周期'},
-            {'name': 'vol_multiplier', 'type': 'float', 'default': '2.0', 'description': '成交量倍数'},
-            {'name': 'price_change_min', 'type': 'float', 'default': '2.0', 'description': '最小涨幅百分比'},
-            {'name': 'position_pct', 'type': 'float', 'default': '0.3', 'description': '仓位比例'}
+            {'key': 'pe_max', 'label': '最大PE', 'val': 200, 'min': 50, 'max': 500, 'step': 10},
+            {'key': 'st_min_days', 'label': 'ST观察天数', 'val': 5, 'min': 1, 'max': 20, 'step': 1},
+            {'key': 'liquidity_min', 'label': '最小日成交额(亿)', 'val': 0.5, 'min': 0.1, 'max': 5, 'step': 0.1}
         ],
+        'inputs': ['日线K线数据', 'ST/退市风险标签', '财务数据（PE/PB/营收）', '日成交额'],
+        'output_schema': {
+            'pass': {'type': 'boolean', 'desc': '是否通过风险过滤'},
+            'risk_factors': {'type': 'array', 'desc': '触发的风险因素列表'},
+            'risk_score': {'type': 'number', 'range': '0-100'}
+        },
+        'wiki': ['风险管理理论', 'A股风险警示规则'],
+        'code_template': '''class DarwinRiskStrategy:
+    def __init__(self, ctx):
+        self.pe_max = ctx.params.pe_max
+
+    def filter(self, universe):
+        passed = []
+        for stock in universe:
+            if self._check_risk(stock):
+                passed.append(stock)
+        return passed''',
+        'is_system': True,
         'author': 'System',
-        'is_system': True
+        'updated': '2026-06-20',
     },
+
+    # ── s1: 市场情绪周期策略 ──
     {
-        'name': '动量策略',
-        'description': '基于价格动量效应的趋势跟踪策略',
-        'template_type': 'momentum',
-        'code_template': '''my_strategy_name = "动量策略"
-my_strategy_description = "基于价格动量效应的趋势跟踪策略"
-
-# @param lookback_period int 20 回溯期
-# @param holding_period int 5 持有期
-# @param position_pct float 0.4 仓位比例
-
-def initialize(context):
-    context.lookback_period = lookback_period
-    context.holding_period = holding_period
-    context.position_pct = position_pct
-    context.holding_days = 0
-
-def handle_data(context, data):
-    stock = context.security
-    
-    momentum = data[stock].pct_change(context.lookback_period)
-    
-    if momentum > 0.05 and context.portfolio.positions[stock].amount == 0:
-        order_target_percent(stock, context.position_pct)
-        context.holding_days = 0
-    
-    if context.portfolio.positions[stock].amount > 0:
-        context.holding_days += 1
-        if context.holding_days >= context.holding_period:
-            order_target_percent(stock, 0)
-
-def output_schema():
-    return {
-        "signal": "bullish/bearish",
-        "confidence": 0.0-1.0,
-        "entry_zone": [entry_low, entry_high],
-        "risk_line": stop_loss,
-        "target_zone": [target_low, target_high],
-        "evidence": ["动量指标为正", "价格持续上涨"]
-    }
-''',
-        'parameters': [
-            {'name': 'lookback_period', 'type': 'int', 'default': '20', 'description': '回溯期'},
-            {'name': 'holding_period', 'type': 'int', 'default': '5', 'description': '持有期'},
-            {'name': 'position_pct', 'type': 'float', 'default': '0.4', 'description': '仓位比例'}
-        ],
-        'author': 'System',
-        'is_system': True
-    },
-    {
-        'name': '均值回归策略',
-        'description': '基于价格偏离均值的回归交易策略',
-        'template_type': 'mean_reversion',
-        'code_template': '''my_strategy_name = "均值回归策略"
-my_strategy_description = "基于价格偏离均值的回归交易策略"
-
-# @param ma_period int 20 均线周期
-# @param std_threshold float 2.0 标准差阈值
-# @param position_pct float 0.3 仓位比例
-
-def initialize(context):
-    context.ma_period = ma_period
-    context.std_threshold = std_threshold
-    context.position_pct = position_pct
-
-def handle_data(context, data):
-    stock = context.security
-    
-    ma = data[stock].mavg(context.ma_period, field='close')
-    std = data[stock].mstd(context.ma_period, field='close')
-    price = data[stock].close
-    
-    z_score = (price - ma) / std
-    
-    if z_score < -context.std_threshold and context.portfolio.positions[stock].amount == 0:
-        order_target_percent(stock, context.position_pct)
-    elif z_score > context.std_threshold and context.portfolio.positions[stock].amount > 0:
-        order_target_percent(stock, 0)
-
-def output_schema():
-    return {
-        "signal": "bullish/bearish",
-        "confidence": 0.0-1.0,
-        "entry_zone": [entry_low, entry_high],
-        "risk_line": stop_loss,
-        "target_zone": [target_low, target_high],
-        "evidence": ["价格偏离均值超过阈值", "Z分数极端"]
-    }
-''',
-        'parameters': [
-            {'name': 'ma_period', 'type': 'int', 'default': '20', 'description': '均线周期'},
-            {'name': 'std_threshold', 'type': 'float', 'default': '2.0', 'description': '标准差阈值'},
-            {'name': 'position_pct', 'type': 'float', 'default': '0.3', 'description': '仓位比例'}
-        ],
-        'author': 'System',
-        'is_system': True
-    },
-    {
-        'name': '突破策略',
-        'description': '基于价格突破关键阻力位/支撑位的交易策略',
-        'template_type': 'breakout',
-        'code_template': '''my_strategy_name = "突破策略"
-my_strategy_description = "基于价格突破关键阻力位/支撑位的交易策略"
-
-# @param lookback_period int 20 盘整周期
-# @param breakout_threshold float 0.01 突破幅度阈值
-# @param position_pct float 0.35 仓位比例
-
-def initialize(context):
-    context.lookback_period = lookback_period
-    context.breakout_threshold = breakout_threshold
-    context.position_pct = position_pct
-
-def handle_data(context, data):
-    stock = context.security
-    
-    high = data[stock].hhv(context.lookback_period, field='high')
-    low = data[stock].llv(context.lookback_period, field='low')
-    price = data[stock].close
-    
-    resistance = high
-    support = low
-    
-    if price > resistance * (1 + context.breakout_threshold) and \
-       context.portfolio.positions[stock].amount == 0:
-        order_target_percent(stock, context.position_pct)
-    elif price < support * (1 - context.breakout_threshold) and \
-         context.portfolio.positions[stock].amount > 0:
-        order_target_percent(stock, 0)
-
-def output_schema():
-    return {
-        "signal": "bullish/bearish",
-        "confidence": 0.0-1.0,
-        "entry_zone": [entry_low, entry_high],
-        "risk_line": stop_loss,
-        "target_zone": [target_low, target_high],
-        "evidence": ["价格突破前期高点/低点", "量能配合"]
-    }
-''',
-        'parameters': [
-            {'name': 'lookback_period', 'type': 'int', 'default': '20', 'description': '盘整周期'},
-            {'name': 'breakout_threshold', 'type': 'float', 'default': '0.01', 'description': '突破幅度阈值'},
-            {'name': 'position_pct', 'type': 'float', 'default': '0.35', 'description': '仓位比例'}
-        ],
-        'author': 'System',
-        'is_system': True
-    },
-    {
-        'name': '双均线金叉死叉策略',
-        'description': '使用EMA快速线和慢速线的交叉信号进行交易',
+        'cat': 's1',
+        'catLabel': '情绪周期策略',
+        'catCN': '市场情绪周期策略',
+        'name': 'MarketSentimentCycleStrategy',
+        'nameCN': '市场情绪周期策略',
+        'icon': '🔄',
+        'iconLarge': '🔄',
+        'description': '基于市场广度数据（涨跌比/涨停数/跌停数/连板高度）识别情绪周期阶段，判断市场热度与拐点。',
         'template_type': 'indicator',
-        'code_template': '''my_strategy_name = "双均线金叉死叉策略"
-my_strategy_description = "使用EMA快速线和慢速线的交叉信号进行交易"
-
-# @param fast_ma_period int 10 快速均线周期
-# @param slow_ma_period int 30 慢速均线周期
-# @param ma_type str "EMA" 均线类型
-# @param position_pct float 0.3 仓位比例
-
-def initialize(context):
-    context.fast_ma_period = fast_ma_period
-    context.slow_ma_period = slow_ma_period
-    context.ma_type = ma_type
-    context.position_pct = position_pct
-
-def handle_data(context, data):
-    stock = context.security
-    
-    if context.ma_type == "EMA":
-        fast_ma = data[stock].ewm(span=context.fast_ma_period).mean()
-        slow_ma = data[stock].ewm(span=context.slow_ma_period).mean()
-    else:
-        fast_ma = data[stock].mavg(context.fast_ma_period, field='close')
-        slow_ma = data[stock].mavg(context.slow_ma_period, field='close')
-    
-    if fast_ma > slow_ma and context.portfolio.positions[stock].amount == 0:
-        order_target_percent(stock, context.position_pct)
-    elif fast_ma < slow_ma and context.portfolio.positions[stock].amount > 0:
-        order_target_percent(stock, 0)
-
-def output_schema():
-    return {
-        "signal": "bullish/bearish",
-        "confidence": 0.0-1.0,
-        "entry_zone": [entry_low, entry_high],
-        "risk_line": stop_loss,
-        "target_zone": [target_low, target_high],
-        "evidence": ["均线形成金叉/死叉", "趋势确认"]
-    }
-''',
+        'tags': ['情绪', '周期', '市场广度'],
+        'ready': False,
+        'vibe': False,
+        'devLabel': 'P0 开发中',
+        'devPriority': 'P0',
         'parameters': [
-            {'name': 'fast_ma_period', 'type': 'int', 'default': '10', 'description': '快速均线周期'},
-            {'name': 'slow_ma_period', 'type': 'int', 'default': '30', 'description': '慢速均线周期'},
-            {'name': 'ma_type', 'type': 'str', 'default': '"EMA"', 'description': '均线类型'},
-            {'name': 'position_pct', 'type': 'float', 'default': '0.3', 'description': '仓位比例'}
+            {'key': 'updown_ratio_period', 'label': '涨跌比周期', 'val': 5, 'min': 3, 'max': 20, 'step': 1},
+            {'key': 'limitup_surge_threshold', 'label': '涨停潮阈值', 'val': 50, 'min': 20, 'max': 100, 'step': 5},
+            {'key': 'sentiment_smooth', 'label': '情绪平滑因子', 'val': 3, 'min': 1, 'max': 10, 'step': 1}
         ],
+        'inputs': ['全市场涨跌家数', '涨停/跌停列表', '连板高度数据', '成交量能'],
+        'output_schema': {
+            'phase': {'type': 'enum', 'values': ['冰点', '回暖', '高潮', '退潮']},
+            'sentiment_score': {'type': 'number', 'range': '0-100'},
+            'signal': {'type': 'enum', 'values': ['积极', '谨慎', '观望', '回避']}
+        },
+        'wiki': ['市场情绪周期理论', 'A股情绪指标研究'],
+        'code_template': '''# S1 市场情绪周期策略
+# 状态: P0 开发中 — 规格预览
+class MarketSentimentCycleStrategy:
+    def __init__(self, ctx):
+        self.updown_period = ctx.params.updown_ratio_period
+
+    def analyze(self, data):
+        ratio = self._calc_updown_ratio(data)
+        phase = self._identify_phase(ratio)
+        return {"phase": phase, "sentiment_score": self._calc_score(phase)}''',
+        'is_system': True,
         'author': 'System',
-        'is_system': True
-    }
+        'updated': '2026-06-24',
+    },
+
+    # ── s2: 主力行为追踪策略 ──
+    {
+        'cat': 's2',
+        'catLabel': '主力行为策略',
+        'catCN': '主力行为追踪策略',
+        'name': 'MainForceTrackingStrategy',
+        'nameCN': '主力行为追踪策略',
+        'icon': '🔍',
+        'iconLarge': '🔍',
+        'description': '追踪主力资金动向，识别大单净流入/流出、主力持仓变化、对倒行为等异常交易信号。',
+        'template_type': 'indicator',
+        'tags': ['主力', '资金', '大单', '持仓'],
+        'ready': False,
+        'vibe': False,
+        'devLabel': 'P1 待开发',
+        'devPriority': 'P1',
+        'parameters': [
+            {'key': 'big_order_threshold', 'label': '大单阈值(万元)', 'val': 100, 'min': 50, 'max': 500, 'step': 10},
+            {'key': 'net_flow_period', 'label': '净流计算周期', 'val': 5, 'min': 1, 'max': 20, 'step': 1},
+            {'key': 'position_change_threshold', 'label': '持仓变动阈值%', 'val': 1, 'min': 0.1, 'max': 5, 'step': 0.1}
+        ],
+        'inputs': ['逐笔成交数据', '大单资金流', '机构持仓数据', '龙虎榜数据'],
+        'output_schema': {
+            'mainforce_signal': {'type': 'enum', 'values': ['主力吸筹', '主力出货', '对倒', '无明显信号']},
+            'net_flow': {'type': 'number', 'desc': '净流入金额(万元)'},
+            'position_change': {'type': 'number', 'desc': '主力持仓变动%'}
+        },
+        'wiki': ['主力行为学', '大单资金流向分析'],
+        'code_template': '''# S2 主力行为追踪策略
+# 状态: P1 待开发 — 规格预览
+class MainForceTrackingStrategy:
+    def __init__(self, ctx):
+        self.big_order_threshold = ctx.params.big_order_threshold
+
+    def analyze(self, data):
+        big_orders = self._filter_big_orders(data)
+        signal = self._detect_mainforce(big_orders)
+        return {"mainforce_signal": signal, "net_flow": big_orders.net_sum}''',
+        'is_system': True,
+        'author': 'System',
+        'updated': '2026-06-24',
+    },
+
+    # ── s3: 趋势通道识别策略 ──
+    {
+        'cat': 's3',
+        'catLabel': '趋势通道策略',
+        'catCN': '趋势通道识别策略',
+        'name': 'TrendChannelStrategy',
+        'nameCN': '趋势通道识别策略',
+        'icon': '📐',
+        'iconLarge': '📐',
+        'description': '自动识别上升/下降/横盘趋势通道，检测通道突破、趋势加速/减速等信号。',
+        'template_type': 'indicator',
+        'tags': ['趋势', '通道', '突破'],
+        'ready': False,
+        'vibe': False,
+        'devLabel': 'P1 待开发',
+        'devPriority': 'P1',
+        'parameters': [
+            {'key': 'channel_period', 'label': '通道计算周期', 'val': 20, 'min': 10, 'max': 60, 'step': 5},
+            {'key': 'breakout_confirm_bars', 'label': '突破确认K线数', 'val': 3, 'min': 1, 'max': 10, 'step': 1},
+            {'key': 'trend_slope_min', 'label': '最小趋势斜率', 'val': 0.5, 'min': 0.1, 'max': 2, 'step': 0.1}
+        ],
+        'inputs': ['日线K线数据', '均线数据(MA5/MA10/MA20/MA60)'],
+        'output_schema': {
+            'channel_type': {'type': 'enum', 'values': ['上升通道', '下降通道', '横盘通道']},
+            'channel_bound': {'type': 'object', 'desc': '通道上下轨'},
+            'signal': {'type': 'enum', 'values': ['通道突破', '趋势加速', '趋势减速', '无信号']}
+        },
+        'wiki': ['趋势通道理论', '唐奇安通道'],
+        'code_template': '''# S3 趋势通道识别策略
+# 状态: P1 待开发 — 规格预览
+class TrendChannelStrategy:
+    def __init__(self, ctx):
+        self.channel_period = ctx.params.channel_period
+
+    def analyze(self, data):
+        channel = self._calc_channel(data)
+        signal = self._detect_breakout(data, channel)
+        return {"channel_type": channel.type, "signal": signal}''',
+        'is_system': True,
+        'author': 'System',
+        'updated': '2026-06-24',
+    },
+
+    # ── s4: 涨停板短线策略 ──
+    {
+        'cat': 's4',
+        'catLabel': '涨停板策略',
+        'catCN': '涨停板短线策略',
+        'name': 'LimitUpShortTermStrategy',
+        'nameCN': '涨停板短线策略',
+        'icon': '⚡',
+        'iconLarge': '⚡',
+        'description': '分析涨停板质量（封板时间/封单量/换手率/板块带动效应），识别连板潜力和短线机会。',
+        'template_type': 'indicator',
+        'tags': ['涨停', '短线', '封板', '连板'],
+        'ready': False,
+        'vibe': False,
+        'devLabel': 'P2 待开发',
+        'devPriority': 'P2',
+        'parameters': [
+            {'key': 'seal_ratio_min', 'label': '最低封成比', 'val': 1.5, 'min': 0.5, 'max': 5, 'step': 0.1},
+            {'key': 'limitup_time_before', 'label': '封板时间早于', 'val': 1030, 'min': 930, 'max': 1500, 'step': 30},
+            {'key': 'consecutive_limit_max', 'label': '最大连板数', 'val': 5, 'min': 1, 'max': 10, 'step': 1}
+        ],
+        'inputs': ['涨停板实时数据', '封单量/封成比数据', '板块联动数据', '换手率数据'],
+        'output_schema': {
+            'quality': {'type': 'enum', 'values': ['强板', '中板', '弱板']},
+            'consecutive_potential': {'type': 'number', 'desc': '连板潜力评分 0-100'},
+            'signal': {'type': 'enum', 'values': ['打板', '排板', '观望']}
+        },
+        'wiki': ['涨停板交易策略', 'A股涨停板制度'],
+        'code_template': '''# S4 涨停板短线策略
+# 状态: P2 待开发 — 规格预览
+class LimitUpShortTermStrategy:
+    def __init__(self, ctx):
+        self.seal_ratio_min = ctx.params.seal_ratio_min
+
+    def analyze(self, data):
+        quality = self._assess_quality(data)
+        potential = self._calc_potential(data)
+        return {"quality": quality, "consecutive_potential": potential}''',
+        'is_system': True,
+        'author': 'System',
+        'updated': '2026-06-24',
+    },
+
+    # ── s5: 多层次风险控制策略 ──
+    {
+        'cat': 's5',
+        'catLabel': '风控策略',
+        'catCN': '多层次风险控制策略',
+        'name': 'MultiLevelRiskControlStrategy',
+        'nameCN': '多层次风险控制策略',
+        'icon': '🛡️',
+        'iconLarge': '🛡️',
+        'description': '系统级叠加层，从账户/组合/个股三个层次控制风险敞口，设置动态止损止盈阈值。',
+        'template_type': 'portfolio',
+        'tags': ['风控', '止损', '敞口', '系统级'],
+        'ready': False,
+        'vibe': False,
+        'devLabel': 'P2 待开发',
+        'devPriority': 'P2',
+        'parameters': [
+            {'key': 'max_drawdown', 'label': '最大回撤阈值%', 'val': 15, 'min': 5, 'max': 30, 'step': 1},
+            {'key': 'single_stock_limit', 'label': '个股仓位上限%', 'val': 20, 'min': 5, 'max': 50, 'step': 5},
+            {'key': 'stop_loss_a', 'label': '止损比例A', 'val': -5, 'min': -20, 'max': -1, 'step': 1}
+        ],
+        'inputs': ['账户资产数据', '持仓市值数据', '市场波动率数据', '个股实时行情'],
+        'output_schema': {
+            'risk_level': {'type': 'enum', 'values': ['正常', '预警', '警戒', '强制平仓']},
+            'actions': {'type': 'array', 'desc': '建议操作列表'},
+            'max_exposure': {'type': 'number', 'desc': '建议最大敞口%'}
+        },
+        'wiki': ['风险管理框架', '动态止损策略'],
+        'code_template': '''# S5 多层次风险控制策略
+# 状态: P2 待开发 — 规格预览
+class MultiLevelRiskControlStrategy:
+    def __init__(self, ctx):
+        self.max_drawdown = ctx.params.max_drawdown
+
+    def analyze(self, portfolio):
+        level = self._assess_risk_level(portfolio)
+        return {"risk_level": level, "actions": self._gen_actions(level)}''',
+        'is_system': True,
+        'author': 'System',
+        'updated': '2026-06-24',
+    },
+
+    # ── s6: 波浪理论阶段识别策略 ──
+    {
+        'cat': 's6',
+        'catLabel': '波浪理论策略',
+        'catCN': '波浪理论阶段识别策略',
+        'name': 'WaveTheoryStrategy',
+        'nameCN': '波浪理论阶段识别策略',
+        'icon': '🌊',
+        'iconLarge': '🌊',
+        'description': '基于艾略特波浪理论，识别价格走势中的驱动浪和调整浪，判断当前所处波浪阶段。',
+        'template_type': 'indicator',
+        'tags': ['波浪理论', '驱动浪', '调整浪'],
+        'ready': False,
+        'vibe': False,
+        'devLabel': 'P3 待开发',
+        'devPriority': 'P3',
+        'parameters': [
+            {'key': 'wave_min_bars', 'label': '波浪最小K线数', 'val': 5, 'min': 3, 'max': 20, 'step': 1},
+            {'key': 'fib_retrace_threshold', 'label': '回调比例阈值', 'val': 0.618, 'min': 0.382, 'max': 0.886, 'step': 0.001},
+            {'key': 'impulse_confirm', 'label': '驱动浪确认幅度%', 'val': 1, 'min': 0.5, 'max': 5, 'step': 0.1}
+        ],
+        'inputs': ['日线/周线K线数据', '波段高低点数据'],
+        'output_schema': {
+            'wave_phase': {'type': 'enum', 'values': ['浪1', '浪2', '浪3', '浪4', '浪5', '浪A', '浪B', '浪C']},
+            'trend': {'type': 'enum', 'values': ['上升驱动', '下降调整', '上升调整', '下降驱动']},
+            'completion_pct': {'type': 'number', 'desc': '当前浪完成度%'}
+        },
+        'wiki': ['艾略特波浪理论', '斐波那契与波浪'],
+        'code_template': '''# S6 波浪理论阶段识别策略
+# 状态: P3 待开发 — 规格预览
+class WaveTheoryStrategy:
+    def __init__(self, ctx):
+        self.wave_min_bars = ctx.params.wave_min_bars
+        self.fib_retrace_threshold = ctx.params.fib_retrace_threshold
+
+    def analyze(self, data):
+        waves = self._identify_waves(data)
+        return {"wave_phase": waves.current, "trend": waves.trend, "completion_pct": waves.completion}''',
+        'is_system': True,
+        'author': 'System',
+        'updated': '2026-06-24',
+    },
+
+    # ── s7: 斐波那契时间周期策略 ──
+    {
+        'cat': 's7',
+        'catLabel': '斐波那契策略',
+        'catCN': '斐波那契时间周期策略',
+        'name': 'FibonacciTimeCycleStrategy',
+        'nameCN': '斐波那契时间周期策略',
+        'icon': '🔢',
+        'iconLarge': '🔢',
+        'description': '基于斐波那契数列的时间周期和回调比例，预测关键支撑/阻力位和时间转折点。',
+        'template_type': 'indicator',
+        'tags': ['斐波那契', '时间周期', '回调', '预测'],
+        'ready': False,
+        'vibe': False,
+        'devLabel': 'P3 待开发',
+        'devPriority': 'P3',
+        'parameters': [
+            {'key': 'fib_levels', 'label': '回调线层级', 'val': 4, 'min': 1, 'max': 5, 'step': 1, 'opts': ['0.236/0.382', '+0.5', '+0.618', '+0.786', '+0.886']},
+            {'key': 'time_period', 'label': '时间周期基数', 'val': 21, 'min': 8, 'max': 89, 'step': 1},
+            {'key': 'extend_ratio', 'label': '扩展比例', 'val': 1.618, 'min': 1.0, 'max': 2.618, 'step': 0.001}
+        ],
+        'inputs': ['日线/周线K线数据', '波段起止点数据'],
+        'output_schema': {
+            'support_levels': {'type': 'array', 'desc': '关键支撑位列表'},
+            'resistance_levels': {'type': 'array', 'desc': '关键阻力位列表'},
+            'turn_points': {'type': 'array', 'desc': '时间转折点列表'},
+            'signal': {'type': 'enum', 'values': ['回调到位', '反弹遇阻', '趋势延续', '无信号']}
+        },
+        'wiki': ['斐波那契分析', '时间周期理论'],
+        'code_template': '''# S7 斐波那契时间周期策略
+# 状态: P3 待开发 — 规格预览
+class FibonacciTimeCycleStrategy:
+    def __init__(self, ctx):
+        self.fib_levels = ctx.params.fib_levels
+        self.time_period = ctx.params.time_period
+
+    def analyze(self, data):
+        levels = self._calc_fib_levels(data)
+        turns = self._calc_time_turns(data)
+        return {"support_levels": levels.support, "resistance_levels": levels.resistance, "turn_points": turns}''',
+        'is_system': True,
+        'author': 'System',
+        'updated': '2026-06-24',
+    },
 ]
 
 
+def _ensure_schema():
+    """
+    ALTER TABLE 添加新列（幂等操作）
+    适用于 SQLite：新列检测不存在时添加，catch 已存在异常
+    """
+    for col, col_type in NEW_COLUMNS.items():
+        try:
+            db.session.execute(text(f"ALTER TABLE strategy_templates_v2 ADD COLUMN {col} {col_type}"))
+            db.session.commit()
+            logger.info(f"新增列: strategy_templates_v2.{col}")
+        except Exception:
+            db.session.rollback()  # 列已存在
+
+
 def init_system_templates():
+    """
+    初始化系统预设策略模板种子数据
+
+    幂等设计：
+    - 先执行 schema 迁移（新增列）
+    - 对同名模板执行更新覆盖
+    - 新模板直接插入
+    """
     logger.info("开始初始化系统预设策略模板...")
-    
+
+    _ensure_schema()
+
     created_count = 0
-    skipped_count = 0
-    
+    updated_count = 0
+
     for template_data in SYSTEM_TEMPLATES:
         existing = StrategyTemplateV2.query.filter_by(
             name=template_data['name'],
             is_system=True
         ).first()
-        
+
         if existing:
-            logger.info(f"跳过已存在的模板: {template_data['name']}")
-            skipped_count += 1
-            continue
-        
-        try:
-            template = StrategyTemplateService.create_template(
-                name=template_data['name'],
-                description=template_data['description'],
-                template_type=template_data['template_type'],
-                code_template=template_data['code_template'],
-                author=template_data['author'],
-                is_system=template_data['is_system']
+            # 更新已有模板（覆盖全部字段）
+            for k, v in template_data.items():
+                if k == 'template_type':
+                    existing.template_type = StrategyTemplateType(v)
+                else:
+                    setattr(existing, k, v)
+            existing.updated_at = datetime.now()
+            updated_count += 1
+        else:
+            # 创建新模板
+            template_data['updated_at'] = datetime.now()
+            template_data['created_at'] = datetime.now()
+            template_type_val = template_data.pop('template_type', 'indicator')
+            template = StrategyTemplateV2(
+                **template_data,
+                template_type=StrategyTemplateType(template_type_val)
             )
-            
-            if 'parameters' in template_data:
-                template.parameters = template_data['parameters']
-                db.session.commit()
-            
-            logger.info(f"成功创建模板: {template_data['name']}")
+            db.session.add(template)
             created_count += 1
-            
-        except Exception as e:
-            logger.error(f"创建模板失败 {template_data['name']}: {str(e)}")
-            db.session.rollback()
-    
-    logger.info(f"初始化完成: 成功创建 {created_count} 个模板, 跳过 {skipped_count} 个已存在的模板")
-    return created_count, skipped_count
 
-
-if __name__ == '__main__':
-    from app import create_app
-    app = create_app()
-    
-    with app.app_context():
-        created, skipped = init_system_templates()
-        logger.info(f"总计: 创建 {created}, 跳过 {skipped}")
+    db.session.commit()
+    logger.info(f"初始化完成: 新增 {created_count} 个模板, 更新 {updated_count} 个已存在的模板")
+    return created_count, updated_count

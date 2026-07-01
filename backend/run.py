@@ -9,4 +9,4 @@ if __name__ == '__main__':
     parser.add_argument('--port', type=int, default=5001, help='Port to run the server on')
     args = parser.parse_args()
     debug_mode = os.getenv("FLASK_ENV", "production") == "development"
-    socketio.run(app, host="0.0.0.0", port=args.port, debug=debug_mode, allow_unsafe_werkzeug=False)
+    socketio.run(app, host="0.0.0.0", port=args.port, debug=debug_mode, allow_unsafe_werkzeug=True)

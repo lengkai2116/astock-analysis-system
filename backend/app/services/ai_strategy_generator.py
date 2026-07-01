@@ -303,26 +303,42 @@ class AIStrategyGenerator:
             threshold = parameters.get('threshold', 0)
             return f"当指标值从下突破{threshold}时买入，从上跌破{threshold}时卖出"
     
+    @staticmethod
+    def _threshold_logic(parameters: Dict) -> str:
+        """生成阈值信号判断的代码片段"""
+        period = parameters.get('period', 20)
+        threshold = parameters.get('threshold', 30)
+        return (
+            '# 信号判断\n'
+            'if indicator < ' + str(threshold) + ':\n'
+            '    signal = 1  # 买入/超卖\n'
+            'elif indicator > ' + str(100 - threshold) + ':\n'
+            '    signal = -1  # 卖出/超买\n'
+            'else:\n'
+            '    signal = 0  # 持有\n'
+        )
+
     def _generate_code_template(self, indicator_type: str, parameters: Dict,
                                signal: str, context: Optional[Dict]) -> str:
         """生成可执行的代码模板"""
-        template = f'''
-# {self._generate_description(indicator_type, parameters)}
-my_strategy_name = "AI生成的{indicator_type}策略"
-my_strategy_description = "{signal}"
-
-# @param period int {parameters.get('period', 20)}
-period = {parameters.get('period', 20)}
-
-# 计算指标
-indicator = {self._build_formula(indicator_type, parameters)}
-
-# 生成信号
-signal = 0
-{threshold_logic(parameters)}
-
-return signal
-'''
+        template = (
+            '\n'
+            '# ' + self._generate_description(indicator_type, parameters) + '\n'
+            'my_strategy_name = "AI生成的' + indicator_type + '策略"\n'
+            'my_strategy_description = "' + signal + '"\n'
+            '\n'
+            '# @param period int ' + str(parameters.get('period', 20)) + '\n'
+            'period = ' + str(parameters.get('period', 20)) + '\n'
+            '\n'
+            '# 计算指标\n'
+            'indicator = ' + self._build_formula(indicator_type, parameters) + '\n'
+            '\n'
+            '# 生成信号\n'
+            'signal = 0\n'
+            + self._threshold_logic(parameters) +
+            '\n'
+            'return signal'
+        )
         return template.strip()
     
     def _generate_description(self, indicator_type: str, parameters: Dict) -> str:

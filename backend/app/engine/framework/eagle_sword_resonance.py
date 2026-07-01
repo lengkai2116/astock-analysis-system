@@ -215,6 +215,7 @@ class EagleSwordResonance:
         bociasi_slow: Dict,
         crowding: Dict,
         market_state: str = "UNKNOWN",
+        kronos_result: Optional[Dict] = None,
     ) -> Dict:
         """
         双系统共振判定
@@ -226,6 +227,7 @@ class EagleSwordResonance:
             bociasi_slow:        BOCIASI 慢线结果 dict
             crowding:            拥挤度结果 dict
             market_state:        大盘状态 ('BULL', 'BEAR', 'RANGING', 'UNKNOWN')
+            kronos_result:       Kronos预测结果 dict（可选，增强鹰眼前瞻）
 
         Returns:
             {
@@ -242,6 +244,19 @@ class EagleSwordResonance:
         eagle_direction = self._eagle_trend_direction(chanlun_result)
         eagle_strength = self._eagle_trend_strength(volume_price_signal)
         granville_signals = self._eagle_granville_signals(volume_price_signal)
+
+        # --- Kronos前瞻鹰眼（融合点3）---
+        kronos_forward_conf = None
+        if kronos_result:
+            kronos_dir = kronos_result.get('direction', 'neutral')
+            kronos_strength = kronos_result.get('trend_strength', 0.0)
+            if kronos_strength > 0.4:
+                if kronos_dir == eagle_direction.lower():
+                    kronos_forward_conf = 'confirm'
+                    eagle_strength = min(1.0, eagle_strength + 0.10)
+                else:
+                    kronos_forward_conf = 'conflict'
+                    eagle_strength = max(0.0, eagle_strength - 0.15)
 
         # --- 大宝剑系统 ---
         sword_sentiment = self._sword_sentiment(bociasi_quick, bociasi_slow)
@@ -274,6 +289,12 @@ class EagleSwordResonance:
         if crowding_warning:
             confidence -= 0.10
             risk_notes.append("拥挤度过高，警惕反转风险")
+
+        # Kronos前瞻预警
+        if kronos_forward_conf == 'conflict':
+            risk_notes.append("Kronos前瞻与鹰眼方向冲突，注意可能拐点")
+        elif kronos_forward_conf == 'confirm':
+            risk_notes.append("Kronos前瞻确认鹰眼方向")
 
         # 大盘状态修正
         if market_state == "BEAR" and action in ("BUY", "WATCH_BUY", "CAUTIOUS_BUY"):

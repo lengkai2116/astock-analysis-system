@@ -565,7 +565,7 @@
           <span class="indicator-tab" onclick="toggleSub(this,'obv')">OBV</span>
           <span class="indicator-tab adv" onclick="toggleSub(this,'大单净量')">大单净量</span>
           <span class="indicator-tab adv" onclick="toggleSub(this,'主力密码')">主力密码</span>
-          <span class="indicator-tab" onclick="toggleSub(this,'融资融券')">融资融券</span>
+          <span class="indicator-tab" onclick="toggleSub(this,'均量对比')">均量对比</span>
           <span class="indicator-tab" onclick="toggleSub(this,'均量对比')">均量对比</span>
           <span class="indicator-tab adv" onclick="toggleSub(this,'资金仓位')">资金仓位</span>
           <span class="indicator-tab adv" style="margin-left:auto;" onclick="toggleChipPanel()">筹码</span>
@@ -594,45 +594,45 @@
       <div class="side-panel"><div class="side-scroll">
 
         <div class="stock-header-bar">
-          <div class="stock-name-code">西藏矿业 <span style="color:var(--text-muted);font-size:16px;">000762.SZ</span><span class="bid-tag">竞价</span></div>
+          <div class="stock-name-code" id="sh-stock-name"><span id="sh-name-text">--</span> <span style="color:var(--text-muted);font-size:16px;" id="sh-tscode">--</span><span class="bid-tag">竞价</span></div>
           <div class="stock-price-change">
-            <span class="stock-price" style="color:#EF4444;">18.87</span>
-            <span style="color:#EF4444;font-size:16px;">+0.37 +2.00%</span>
+            <span class="stock-price" id="sh-price" style="color:var(--text-muted);">--</span>
+            <span id="sh-pct" style="color:var(--text-muted);font-size:16px;">--</span>
           </div>
         </div>
 
         <div class="zszq-grid">
           <!-- 第1列：基础行情 -->
-          <div class="zszq-item"><span class="zszq-l">今开</span><span class="zszq-r">12.50</span></div>
-          <div class="zszq-item"><span class="zszq-l">最高</span><span class="zszq-r" style="color:#EF4444;">12.68</span></div>
-          <div class="zszq-item"><span class="zszq-l">最低</span><span class="zszq-r" style="color:#22C55E;">12.20</span></div>
-          <div class="zszq-item"><span class="zszq-l">均价</span><span class="zszq-r">12.40</span></div>
-          <div class="zszq-item"><span class="zszq-l">涨停</span><span class="zszq-r">20.35</span></div>
-          <div class="zszq-item"><span class="zszq-l">跌停</span><span class="zszq-r">16.65</span></div>
-          <div class="zszq-item"><span class="zszq-l">量比</span><span class="zszq-r">1.30</span></div>
-          <div class="zszq-item"><span class="zszq-l">涨速</span><span class="zszq-r" style="color:#22C55E;">-0.05%</span></div>
-          <div class="zszq-item"><span class="zszq-l">委比</span><span class="zszq-r" style="color:#22C55E;">-26.00%</span></div>
+          <div class="zszq-item"><span class="zszq-l">今开</span><span class="zszq-r" id="zq-open">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">最高</span><span class="zszq-r" id="zq-high" style="color:#EF4444;">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">最低</span><span class="zszq-r" id="zq-low" style="color:#22C55E;">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">均价</span><span class="zszq-r" id="zq-avg_price">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">涨停</span><span class="zszq-r" id="zq-high_limit">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">跌停</span><span class="zszq-r" id="zq-low_limit">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">量比</span><span class="zszq-r" id="zq-volume_ratio">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">涨速</span><span class="zszq-r" id="zq-speed" style="color:#22C55E;">-0.05%</span></div>
+          <div class="zszq-item"><span class="zszq-l">委比</span><span class="zszq-r" id="zq-commission" style="color:#22C55E;">-26.00%</span></div>
           <!-- 第2列：成交/市值 -->
-          <div class="zszq-item"><span class="zszq-l">成交量</span><span class="zszq-r">103.6万</span></div>
-          <div class="zszq-item"><span class="zszq-l">成交额</span><span class="zszq-r">19.46亿</span></div>
-          <div class="zszq-item"><span class="zszq-l">流通值</span><span class="zszq-r">1401亿</span></div>
-          <div class="zszq-item"><span class="zszq-l">总市值</span><span class="zszq-r">1641亿</span></div>
-          <div class="zszq-item"><span class="zszq-l">内盘</span><span class="zszq-r">477961</span></div>
-          <div class="zszq-item"><span class="zszq-l">外盘</span><span class="zszq-r">558509</span></div>
-          <div class="zszq-item"><span class="zszq-l">现量</span><span class="zszq-r">16</span></div>
-          <div class="zszq-item"><span class="zszq-l">盘后量</span><span class="zszq-r">0.00</span></div>
-          <div class="zszq-item"><span class="zszq-l">盘后额</span><span class="zszq-r">—</span></div>
+          <div class="zszq-item"><span class="zszq-l">成交量</span><span class="zszq-r" id="zq-volume">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">成交额</span><span class="zszq-r" id="zq-amount">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">流通值</span><span class="zszq-r" id="zq-circ_mv">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">总市值</span><span class="zszq-r" id="zq-total_mv">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">内盘</span><span class="zszq-r" id="zq-inside">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">外盘</span><span class="zszq-r" id="zq-outside">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">现量</span><span class="zszq-r" id="zq-present">16</span></div>
+          <div class="zszq-item"><span class="zszq-l">盘后量</span><span class="zszq-r" id="zq-after_vol">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">盘后额</span><span class="zszq-r" id="zq-after_amt">--</span></div>
           <!-- 第3列：估值/股本 -->
-          <div class="zszq-item"><span class="zszq-l">收益</span><span class="zszq-r">0.360</span></div>
-          <div class="zszq-item"><span class="zszq-l">净资</span><span class="zszq-r">14.30</span></div>
-          <div class="zszq-item"><span class="zszq-l">流通股本</span><span class="zszq-r">74.2亿</span></div>
-          <div class="zszq-item"><span class="zszq-l">总股本</span><span class="zszq-r">87.0亿</span></div>
-          <div class="zszq-item"><span class="zszq-l">市净率</span><span class="zszq-r">1.32</span></div>
-          <div class="zszq-item"><span class="zszq-l">PE(静)</span><span class="zszq-r">13.29</span></div>
-          <div class="zszq-item"><span class="zszq-l">PE(动)</span><span class="zszq-r">10.15</span></div>
-          <div class="zszq-item"><span class="zszq-l">PE(TTM)</span><span class="zszq-r">11.72</span></div>
-          <div class="zszq-item"><span class="zszq-l">换手</span><span class="zszq-r">1.40%</span></div>
-          <div class="zszq-item"><span class="zszq-l">化工</span><span class="zszq-r" style="color:#22C55E;">-1.87%</span></div>
+          <div class="zszq-item"><span class="zszq-l">收益</span><span class="zszq-r" id="zq-eps">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">净资</span><span class="zszq-r" id="zq-bvps">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">流通股本</span><span class="zszq-r" id="zq-circ_share">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">总股本</span><span class="zszq-r" id="zq-total_share">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">市净率</span><span class="zszq-r" id="zq-pb">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">PE(静)</span><span class="zszq-r" id="zq-pe_static">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">PE(动)</span><span class="zszq-r" id="zq-pe_dynamic">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">PE(TTM)</span><span class="zszq-r" id="zq-pe_ttm">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">换手</span><span class="zszq-r" id="zq-turnover">--</span></div>
+          <div class="zszq-item"><span class="zszq-l">化工</span><span class="zszq-r" id="zq-sector" style="color:#22C55E;">--</span></div>
         </div>
 
         <!-- 盘口 — 4列 grid + 表头行 + 底部 footer -->
@@ -668,35 +668,30 @@
           <div style="font-size:16px;color:var(--text-muted);margin-bottom:var(--space-3);">资金流向</div>
           <div class="flow-donut-wrap">
             <div class="flow-side" style="text-align:right;align-items:flex-end;">
-              <div class="flow-item"><span class="flow-dot" style="background:#22C55E;"></span><span>主力流出 17.8%</span></div>
-              <div class="flow-item"><span class="flow-dot" style="background:#16A34A;"></span><span>散户流出 32.2%</span></div>
+              <div class="flow-item"><span class="flow-dot" style="background:#22C55E;"></span><span id="mf-mainforce-out">主力流出 --</span></div>
+              <div class="flow-item"><span class="flow-dot" style="background:#16A34A;"></span><span id="mf-retail-out">散户流出 --</span></div>
             </div>
-            <div class="flow-chart" style="position:relative;width:100px;height:100px;border-radius:50%;background:conic-gradient(#EF4444 0deg 90deg,#DC2626 90deg 180deg,#22C55E 180deg 244deg,#16A34A 244deg 360deg);border:1px solid var(--border-default);flex-shrink:0;margin:0 8px;">
+            <div class="flow-chart" id="mf-donut" style="position:relative;width:100px;height:100px;border-radius:50%;background:conic-gradient(#EF4444 0deg 90deg,#DC2626 90deg 180deg,#22C55E 180deg 244deg,#16A34A 244deg 360deg);border:1px solid var(--border-default);flex-shrink:0;margin:0 8px;">
               <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg-surface);border-radius:50%;width:56px;height:56px;display:flex;align-items:center;justify-content:center;flex-direction:column;">
-                <span style="color:#EF4444;font-size:11px;font-weight:600;">24.9%</span>
+                <span id="mf-mainforce-inner-pct" style="color:#EF4444;font-size:11px;font-weight:600;">--</span>
                 <span style="color:var(--text-muted);font-size:11px;">主力流入</span>
               </div>
             </div>
             <div class="flow-side">
-              <div class="flow-item"><span class="flow-dot" style="background:#EF4444;"></span><span>主力流入 24.9%</span></div>
-              <div class="flow-item"><span class="flow-dot" style="background:#DC2626;"></span><span>散户流入 25.1%</span></div>
+              <div class="flow-item"><span class="flow-dot" style="background:#EF4444;"></span><span id="mf-mainforce-in">主力流入 --</span></div>
+              <div class="flow-item"><span class="flow-dot" style="background:#DC2626;"></span><span id="mf-retail-in">散户流入 --</span></div>
             </div>
           </div>
           <!-- 子订单：超大单/大单/中单/小单 -->
           <div class="flow-sub-orders">
-            <div class="flow-sub-item"><span class="fs-l">超大单净额</span><span class="fs-r" style="color:#EF4444;">+1964.1</span></div>
-            <div class="flow-sub-item"><span class="fs-l">大单净额</span><span class="fs-r" style="color:#22C55E;">-6631.5</span></div>
-            <div class="flow-sub-item"><span class="fs-l">中单净额</span><span class="fs-r" style="color:#22C55E;">-10775.6</span></div>
-            <div class="flow-sub-item"><span class="fs-l">小单净额</span><span class="fs-r" style="color:#22C55E;">-10775.6</span></div>
+            <div class="flow-sub-item"><span class="fs-l">超大单净额</span><span class="fs-r" id="mf-xl-net">--</span></div>
+            <div class="flow-sub-item"><span class="fs-l">大单净额</span><span class="fs-r" id="mf-lg-net">--</span></div>
+            <div class="flow-sub-item"><span class="fs-l">中单净额</span><span class="fs-r" id="mf-md-net">--</span></div>
+            <div class="flow-sub-item"><span class="fs-l">小单净额</span><span class="fs-r" id="mf-sm-net">--</span></div>
           </div>
           <!-- 5日资金流向 -->
-          <div class="flow-5day">
+          <div class="flow-5day" id="mf-5day">
             <div class="d5-title">5日资金流向(万元)</div>
-            <div class="d5-bar-row"><span class="d5-bar-label">D-4</span><div class="d5-bar-track"><div class="d5-bar-fill" style="width:72%;background:#EF4444;"></div></div><span class="d5-bar-amt">4,329</span></div>
-            <div class="d5-bar-row"><span class="d5-bar-label">D-3</span><div class="d5-bar-track"><div class="d5-bar-fill" style="width:45%;background:#EF4444;"></div></div><span class="d5-bar-amt">2,712</span></div>
-            <div class="d5-bar-row"><span class="d5-bar-label">D-2</span><div class="d5-bar-track"><div class="d5-bar-fill" style="width:18%;background:#22C55E;"></div></div><span class="d5-bar-amt">-1,083</span></div>
-            <div class="d5-bar-row"><span class="d5-bar-label">D-1</span><div class="d5-bar-track"><div class="d5-bar-fill" style="width:55%;background:#EF4444;"></div></div><span class="d5-bar-amt">3,318</span></div>
-            <div class="d5-bar-row"><span class="d5-bar-label">今日</span><div class="d5-bar-track"><div class="d5-bar-fill" style="width:38%;background:#EF4444;"></div></div><span class="d5-bar-amt">2,281</span></div>
           </div>
         </div>
 
@@ -726,10 +721,17 @@
             <label class="strategy-opt"><input type="checkbox" checked> 多因子分析</label>
             <label class="strategy-opt disabled"><input type="checkbox" checked disabled> 主力密码</label>
           </div>
-          <div class="strategy-actions">
+          <div class="strategy-actions" style="flex-wrap:wrap;">
             <button class="btn-sm" onclick="syncFromScreener()">📡 从选股系统同步</button>
             <button class="btn-sm" onclick="saveDefaultConfig()">💾 保存为默认</button>
             <button class="btn-sm" style="background:var(--color-brand-500);color:white;border-color:var(--color-brand-500);" onclick="startAnalysis()">▶ 运行分析</button>
+          </div>
+          <!-- C1: Kronos开关 -->
+          <div class="strategy-enhance" style="padding:var(--space-4) var(--space-6);border-top:1px solid var(--border-default);display:flex;align-items:center;gap:var(--space-3);font-size:12px;color:var(--text-muted);">
+            <label class="kronos-toggle" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="checkbox" id="kronosToggle"> Kronos AI 信号增强
+            </label>
+            <span style="font-size:11px;opacity:0.6;">使用K线基础模型增强信号精度，开启后每次分析增加约0.3-0.5秒</span>
           </div>
         </div>
 
@@ -770,21 +772,18 @@
             <div class="dim-card-header">📉 一、走势结构</div>
             <div class="dim-card-body">
               <div class="dim-metrics">
-                <div class="dim-metric"><span class="icon">📉</span><span class="label">趋势方向</span><span class="val dn">下降笔 #7</span></div>
-                <div class="dim-metric"><span class="icon">🏠</span><span class="label">中枢区间</span><span class="val">12.10 — 13.50</span></div>
-                <div class="dim-metric"><span class="icon">📍</span><span class="label">价格位置</span><span class="val">中枢下沿</span></div>
-                <div class="dim-metric"><span class="icon">🔴</span><span class="label">买卖点</span><span class="val" style="color:var(--signal-watch);">三类卖点待确认</span></div>
-                <div class="dim-metric"><span class="icon">📊</span><span class="label">均线排列</span><span class="val dn">空头</span></div>
-                <div class="dim-metric"><span style="font-size:11px;color:var(--text-muted);">MA5 12.30 &lt; MA10 12.45 &lt; MA20 12.60</span></div>
+                <div class="dim-metric"><span class="icon">📉</span><span class="label">趋势方向</span><span class="val dn" id="cm-chanlun-direction">--</span></div>
+                <div class="dim-metric"><span class="icon">🏠</span><span class="label">中枢区间</span><span class="val" id="cm-chanlun-zhongshu">--</span></div>
+                <div class="dim-metric"><span class="icon">📍</span><span class="label">价格位置</span><span class="val" id="cm-chanlun-position">--</span></div>
+                <div class="dim-metric"><span class="icon">🔴</span><span class="label">买卖点</span><span class="val" id="cm-chanlun-buy_point" style="color:var(--signal-watch);">--</span></div>
+                <div class="dim-metric"><span class="icon">📊</span><span class="label">均线排列</span><span class="val" id="cm-chanlun-ma_alignment">--</span></div>
+                <div class="dim-metric"><span style="font-size:11px;color:var(--text-muted);" id="cm-chanlun-ma_detail">--</span></div>
               </div>
-              <div class="dim-narrative">
-                当前处于下降笔第7笔，中枢区间12.10-13.50，价格位于中枢下沿附近。<br>
-                MA5&lt;MA10&lt;MA20空头排列。三类卖点待确认，但距中枢下沿仅+0.20元，需等待方向确认。
-              </div>
+              <div class="dim-narrative" id="cm-chanlun-narrative">加载中...</div>
             </div>
-            <div class="dim-footer">
-              <span class="tag tag-warn">⚠️ 冲突</span>
-              <span>量价B2看多信号与缠论空头趋势存在矛盾，关注是否转向共振</span>
+            <div class="dim-footer" id="cm-chanlun-footer">
+              <span class="tag" id="cm-chanlun-tag">--</span>
+              <span id="cm-chanlun-footer-text">--</span>
             </div>
           </div>
 
@@ -793,20 +792,17 @@
             <div class="dim-card-header">🌡 二、量价形态</div>
             <div class="dim-card-body">
               <div class="dim-metrics">
-                <div class="dim-metric"><span class="icon">🌡</span><span class="label">FMZ状态</span><span class="val" style="color:var(--signal-watch);">RANGING</span></div>
-                <div class="dim-metric"><span class="icon">📋</span><span class="label">活跃形态</span><span class="val up">B2看多</span></div>
-                <div class="dim-metric"><span class="icon">📊</span><span class="label">量价关系</span><span class="val up">价涨量增</span></div>
-                <div class="dim-metric"><span class="icon">🔥</span><span class="label">共振状态</span><span class="val up">偏多</span></div>
-                <div class="dim-metric"><span class="icon">📈</span><span class="label">成交量</span><span class="val">1.3×均量（温和放量）</span></div>
+                <div class="dim-metric"><span class="icon">🌡</span><span class="label">FMZ状态</span><span class="val" id="cm-vp-phase" style="color:var(--signal-watch);">--</span></div>
+                <div class="dim-metric"><span class="icon">📋</span><span class="label">活跃形态</span><span class="val" id="cm-vp-pattern">--</span></div>
+                <div class="dim-metric"><span class="icon">📊</span><span class="label">量价关系</span><span class="val" id="cm-vp-vp_relation">--</span></div>
+                <div class="dim-metric"><span class="icon">🔥</span><span class="label">共振状态</span><span class="val" id="cm-vp-resonance">--</span></div>
+                <div class="dim-metric"><span class="icon">📈</span><span class="label">成交量</span><span class="val" id="cm-vp-volume_detail">--</span></div>
               </div>
-              <div class="dim-narrative">
-                市场处于侧向震荡(RANGING)，当前检测到B2看多形态（价涨量增，共振偏多）。<br>
-                成交量温和放量至均量的1.3倍，无异常放/缩量。主力行为推测为吸筹阶段，价格抬升伴随量能温和放大。
-              </div>
+              <div class="dim-narrative" id="cm-vp-narrative">加载中...</div>
             </div>
-            <div class="dim-footer">
-              <span class="tag tag-warn">⚠️ 矛盾标记</span>
-              <span>B2看多 vs 空头趋势 → 进入交叉验证</span>
+            <div class="dim-footer" id="cm-vp-footer">
+              <span class="tag" id="cm-vp-tag">--</span>
+              <span id="cm-vp-footer-text">--</span>
             </div>
           </div>
 
@@ -815,21 +811,17 @@
             <div class="dim-card-header">🧩 三、筹码与资金</div>
             <div class="dim-card-body">
               <div class="dim-metrics">
-                <div class="dim-metric"><span class="icon">💎</span><span class="label">获利比例</span><span class="val">42%</span></div>
-                <div class="dim-metric"><span class="icon">📦</span><span class="label">平均成本</span><span class="val">12.60</span></div>
-                <div class="dim-metric"><span class="icon">🎯</span><span class="label">集中度90</span><span class="val">13.5%</span></div>
-                <div class="dim-metric"><span class="icon">💰</span><span class="label">主力净流向</span><span class="val dn">-2.3亿</span></div>
-                <div class="dim-metric"><span class="icon">📊</span><span class="label">大单净量</span><span class="val dn">持续为负</span></div>
+                <div class="dim-metric"><span class="icon">💎</span><span class="label">获利比例</span><span class="val" id="cm-chip-profit_ratio">--</span></div>
+                <div class="dim-metric"><span class="icon">📦</span><span class="label">平均成本</span><span class="val" id="cm-chip-avg_cost">--</span></div>
+                <div class="dim-metric"><span class="icon">🎯</span><span class="label">集中度90</span><span class="val" id="cm-chip-concentration">--</span></div>
+                <div class="dim-metric"><span class="icon">💰</span><span class="label">主力净流向</span><span class="val" id="cm-chip-main_force">--</span></div>
+                <div class="dim-metric"><span class="icon">📊</span><span class="label">大单净量</span><span class="val" id="cm-chip-large_order">--</span></div>
               </div>
-              <div class="dim-narrative">
-                筹码分布显示90%成本集中在11.50-13.80区间，当前价12.34处于成本区间中下部。<br>
-                套牢盘比例约58%，主力资金近5日净流出2.3亿，大单净量持续为负，资金面偏空。<br>
-                筹码流动方向呈现上移趋势，高位套牢筹码尚未充分释放。
-              </div>
+              <div class="dim-narrative" id="cm-chip-narrative">加载中...</div>
             </div>
-            <div class="dim-footer">
-              <span class="tag tag-red">✅ 通过</span>
-              <span>筹码吸筹迹象，但资金面偏空，需关注后续资金回流</span>
+            <div class="dim-footer" id="cm-chip-footer">
+              <span class="tag" id="cm-chip-tag">--</span>
+              <span id="cm-chip-footer-text">--</span>
             </div>
           </div>
 
@@ -838,18 +830,15 @@
             <div class="dim-card-header">🌊 四、情绪环境</div>
             <div class="dim-card-body">
               <div class="dim-metrics">
-                <div class="dim-metric"><span class="icon">🌡</span><span class="label">情绪周期</span><span class="val" style="color:var(--color-down);">冰点区域</span></div>
-                <div class="dim-metric"><span class="icon">📊</span><span class="label">行业指数</span><span class="val dn">-1.87%</span></div>
-                <div class="dim-metric"><span class="icon">📈</span><span class="label">市场温度</span><span class="val">23°</span></div>
+                <div class="dim-metric"><span class="icon">🌡</span><span class="label">情绪周期</span><span class="val" id="cm-emotion-cycle">--</span></div>
+                <div class="dim-metric"><span class="icon">📊</span><span class="label">行业指数</span><span class="val" id="cm-emotion-sector_pct">--</span></div>
+                <div class="dim-metric"><span class="icon">📈</span><span class="label">市场温度</span><span class="val" id="cm-emotion-market_temp">--</span></div>
               </div>
-              <div class="dim-narrative">
-                市场情绪处于冰点区域，行业指数当日-1.87%表现弱于大盘。<br>
-                化工板块整体资金净流出，板块内无强势龙头带动，短期情绪修复需时间。
-              </div>
+              <div class="dim-narrative" id="cm-emotion-narrative">加载中...</div>
             </div>
-            <div class="dim-footer">
-              <span class="tag tag-red">✅ 通过</span>
-              <span>情绪企稳迹象，PE(TTM) 11.72处于合理区间</span>
+            <div class="dim-footer" id="cm-emotion-footer">
+              <span class="tag" id="cm-emotion-tag">--</span>
+              <span id="cm-emotion-footer-text">--</span>
             </div>
           </div>
 
@@ -1300,7 +1289,7 @@ var subDefs = {
   cci:{label:'CCI',getSeries:function(gi){subAllData['cci']={cci:OD.cci};return [{name:'sub_cci_'+gi,type:'line',data:OD.cci,xAxisIndex:gi,yAxisIndex:gi,symbol:'none',lineStyle:{color:'white',width:1}}];}},
   大单净量:{label:'大单净量',getSeries:function(gi){subAllData['大单净量']={v:_mockRand.bignet};return [{name:'sub_bignet_bar_'+gi,type:'bar',data:_mockRand.bignet,xAxisIndex:gi,yAxisIndex:gi,itemStyle:{color:function(p){return p.value>=0?'#EF4444':'#22C55E';}}}];}},
   主力密码:{label:'主力密码',getSeries:function(gi){subAllData['主力密码']={v:_mockRand.master};return [{name:'sub_master_line_'+gi,type:'line',data:_mockRand.master,xAxisIndex:gi,yAxisIndex:gi,symbol:'none',lineStyle:{color:'#8B5CF6',width:1}}];}},
-  融资融券:{label:'融资融券',getSeries:function(gi){subAllData['融资融券']={v:_mockRand.margin};return [{name:'sub_margin_bar_'+gi,type:'bar',data:_mockRand.margin,xAxisIndex:gi,yAxisIndex:gi,itemStyle:{color:'rgba(59,130,246,0.4)'}}];}},
+  均量对比:{label:'均量对比',getSeries:function(gi){subAllData['均量对比']={v:_mockRand.volcmp};return [{name:'sub_volcmp_bar_'+gi,type:'bar',data:_mockRand.volcmp,xAxisIndex:gi,yAxisIndex:gi,itemStyle:{color:function(p){return p.value>=1?'#EF4444':'#22C55E';}}}];}},
   均量对比:{label:'均量对比',getSeries:function(gi){subAllData['均量对比']={v:_mockRand.volcmp};return [{name:'sub_volcmp_bar_'+gi,type:'bar',data:_mockRand.volcmp,xAxisIndex:gi,yAxisIndex:gi,itemStyle:{color:function(p){return p.value>=1?'#EF4444':'#22C55E';}}}];}},
   资金仓位:{label:'资金仓位',getSeries:function(gi){subAllData['资金仓位']={v:_mockRand.fundpos};return [{name:'sub_fundpos_line_'+gi,type:'line',data:_mockRand.fundpos,xAxisIndex:gi,yAxisIndex:gi,symbol:'none',lineStyle:{color:'#F97316',width:1}}];}}
 };
@@ -1580,7 +1569,6 @@ function updateSubHeaders(idx){
     else if(k==='均线'){hdr.textContent='MA5:'+(d.ma5[idx]||'-')+' MA10:'+(d.ma10[idx]||'-')+' MA20:'+(d.ma20[idx]||'-');}
     else if(k==='大单净量'){hdr.textContent='额:'+((d.v[idx]*10000).toFixed(0));}
     else if(k==='主力密码'){hdr.textContent='值:'+((d.v[idx]).toFixed(2));}
-    else if(k==='融资融券'){hdr.textContent='额:'+(d.v[idx]?d.v[idx].toFixed(2):'-');}
     else if(k==='均量对比'){hdr.textContent='比:'+((d.v[idx]).toFixed(2));}
     else if(k==='资金仓位'){hdr.textContent='仓:'+((d.v[idx]).toFixed(1))+'%';}
   }
@@ -1800,7 +1788,7 @@ function confirmAddWatchlist(){
 // ── 切换股票 ──
 
 function switchStock(tsCode){
-  fetch('/api/v3/chart/kline/' + tsCode + '?limit=200')
+  var p1 = fetch('/api/v3/chart/kline/' + tsCode + '?limit=200')
     .then(function(r){ return r.json(); })
     .then(function(res){
       if(!res || !res.success || !res.data) return;
@@ -1813,17 +1801,43 @@ function switchStock(tsCode){
         + ' · K线';
 
       updateTopBarPrice(latest.close, latest.pct_chg);
+
+      // 右侧股票名
+      var stockNameEl = document.querySelector('.stock-name-code');
+      if(stockNameEl){
+        var codeSpan = stockNameEl.querySelector('span');
+        if(codeSpan) codeSpan.textContent = ' ' + tsCode;
+      }
     })
     .catch(function(){
       var titleEl = document.getElementById('chart-title');
       if(titleEl) titleEl.textContent = tsCode + ' · K线';
     });
 
-  var stockNameEl = document.querySelector('.stock-name-code');
-  if(stockNameEl){
-    var codeSpan = stockNameEl.querySelector('span');
-    if(codeSpan) codeSpan.textContent = ' ' + tsCode;
-  }
+  // 并行加载E07/E10/E12/E13，各区独立缓存
+  var kronosEnabled = document.getElementById('kronosToggle') && document.getElementById('kronosToggle').checked;
+  var p2 = loadQuote(tsCode);
+  var p3 = loadAnalysis(tsCode, kronosEnabled);
+  var p4 = loadVerification(tsCode);
+  var p5 = loadMoneyflow(tsCode);
+  var p6 = loadNarrative(tsCode);
+
+  Promise.all([p3, p4, p6]).then(function(results){
+    var analysis=results[0], verification=results[1], narrative=results[2];
+    if(analysis && analysis.dimensions){
+      renderDimensionCards(analysis.dimensions, analysis.kronos);
+    }
+    if(verification){
+      renderVerificationChains(verification);
+    }
+    if(kronosEnabled && analysis && analysis.kronos){
+      renderKronosTag(analysis.kronos);
+    }
+    if(narrative){
+      renderNarrative(narrative);
+    }
+  }).catch(function(){});
+
   console.log('股票已切换至: ' + tsCode);
 }
 
@@ -2222,6 +2236,246 @@ function toggleChipPanel(){
   }
 }
 
+
+// ════════════════════════════════════════════════════════════
+// 8. API 数据加载与缓存（E07/E10/E12/E13/E14）
+// ════════════════════════════════════════════════════════════
+
+var _quoteCache = {}, _analysisCache = {}, _verificationCache = {}, _moneyflowCache = {}, _narrativeCache = {};
+
+function _fmt(v, d){ if(v==null||v==='--') return '--'; var n=parseFloat(v); return isNaN(n)?v:n.toFixed(d!=null?d:2); }
+function _colorVal(v, upColor, dnColor){ if(v==null||v==='--')return ''; return parseFloat(v)>=0?upColor:dnColor; }
+
+// ── B1: E07 行情 ──
+function loadQuote(tsCode){
+  if(_quoteCache[tsCode]){ renderZszqGrid(_quoteCache[tsCode]); return Promise.resolve(_quoteCache[tsCode]); }
+  return fetch('/api/v3/stock/'+tsCode+'/quote').then(function(r){return r.json();}).then(function(res){
+    if(res.code!==0||!res.data) throw new Error('E07 fail');
+    _quoteCache[tsCode]=res.data; renderZszqGrid(res.data); return res.data;
+  }).catch(function(){ showToast('⚠️ 行情数据不可用'); });
+}
+function renderZszqGrid(d){
+  function s(id,v,c){ var el=document.getElementById('zq-'+id); if(el){ if(v==null||v==='--'||v===''){el.textContent='--';return;} var txt=typeof v==='number'?v.toFixed(2):v; el.textContent=txt; if(c){el.style.color=c(el,txt)?'#EF4444':'#22C55E';} }}
+  function sv(id,val){ var el=document.getElementById('zq-'+id); if(el) el.textContent=val!=null?(typeof val==='number'?val.toFixed(2):val):'--'; }
+  sv('open',d.open); sv('high',d.high); sv('low',d.low); sv('avg_price',d.avg_price);
+  sv('high_limit',d.high_limit); sv('low_limit',d.low_limit); sv('volume_ratio',d.volume_ratio);
+  sv('speed','--'); sv('commission','--');
+  if(d.volume!=null){ var v=d.volume; sv('volume',v>=10000?(v/10000).toFixed(2)+'万':v); }else sv('volume','--');
+  if(d.amount!=null){ var a=d.amount; sv('amount',a>=100000000?(a/100000000).toFixed(2)+'亿':a>=10000?(a/10000).toFixed(2)+'万':a); }else sv('amount','--');
+  sv('circ_mv',d.circ_mv!=null?d.circ_mv>=10000?(d.circ_mv/10000).toFixed(2)+'亿':d.circ_mv:'--');
+  sv('total_mv',d.total_mv!=null?d.total_mv>=10000?(d.total_mv/10000).toFixed(2)+'亿':d.total_mv:'--');
+  sv('inside','--'); sv('outside','--'); sv('present','--'); sv('after_vol','--'); sv('after_amt','--');
+  sv('eps',d.eps); sv('bvps',d.bvps); sv('circ_share','--'); sv('total_share','--');
+  sv('pb',d.pb); sv('pe_ttm',d.pe_ttm);
+  // PE(静)和PE(动)借用pe_ttm（Tushare无多口径）
+  sv('pe_static',d.pe_ttm); sv('pe_dynamic',d.pe_ttm);
+  sv('turnover',d.turnover_rate!=null?d.turnover_rate.toFixed(2)+'%':'--');
+  sv('sector','--');
+  if(d.close!=null) updateTopBarPrice(d.close,d.pct_chg);
+  var sn=document.getElementById('sh-name-text'); if(sn) sn.textContent=_currentTsName||d.ts_code||'--';
+  var sc=document.getElementById('sh-tscode'); if(sc) sc.textContent=d.ts_code||'';
+  var sp=document.getElementById('sh-price'); if(sp&&d.close!=null){sp.textContent=d.close.toFixed(2);sp.style.color=parseFloat(d.pct_chg||0)>=0?'#EF4444':'#22C55E';}
+  var spct=document.getElementById('sh-pct'); if(spct&&d.pct_chg!=null){var pc=parseFloat(d.pct_chg);spct.textContent=(pc>=0?'+':'')+pc.toFixed(2)+'%';spct.style.color=pc>=0?'#EF4444':'#22C55E';}
+}
+
+// ── B4: E10 资金流向 ──
+function loadMoneyflow(tsCode){
+  if(_moneyflowCache[tsCode]){ renderMoneyflow(_moneyflowCache[tsCode]); return Promise.resolve(_moneyflowCache[tsCode]); }
+  return fetch('/api/v3/stock/'+tsCode+'/moneyflow').then(function(r){return r.json();}).then(function(res){
+    if(res.code!==0||!res.data) throw new Error('E10 fail');
+    _moneyflowCache[tsCode]=res.data; renderMoneyflow(res.data); return res.data;
+  }).catch(function(){ showToast('⚠️ 资金流向数据不可用'); });
+}
+function renderMoneyflow(d){
+  var lat=d.latest, sub=lat.sub_orders;
+  // 计算饼图角度: 主力净额方向决定流入/流出角度
+  var xl=sub.xl_order_net||0, lg=sub.lg_order_net||0, md=sub.md_order_net||0, sm=sub.sm_order_net||0;
+  var mainForce=xl+lg, retail=md+sm;
+  var total=Math.abs(xl)+Math.abs(lg)+Math.abs(md)+Math.abs(sm)||1;
+  // 四象限: 超大单流入/流出, 大单流入/流出 各角度按绝对值比例分配
+  var xlIn=Math.max(0,xl), xlOut=Math.abs(Math.min(0,xl));
+  var lgIn=Math.max(0,lg), lgOut=Math.abs(Math.min(0,lg));
+  var mdIn=Math.max(0,md), mdOut=Math.abs(Math.min(0,md));
+  var smIn=Math.max(0,sm), smOut=Math.abs(Math.min(0,sm));
+  var sumIn=xlIn+lgIn+mdIn+smIn, sumOut=xlOut+lgOut+mdOut+smOut;
+  var totalAbs=sumIn+sumOut||1;
+  function deg(v){ return Math.round(v/totalAbs*360); }
+  var dXlIn=deg(xlIn), dLgIn=deg(lgIn), dMdIn=deg(mdIn), dSmIn=deg(smIn);
+  var dXlOut=deg(xlOut), dLgOut=deg(lgOut), dMdOut=deg(mdOut), dSmOut=deg(smOut);
+  // 按角度顺序构建conic-gradient: 超大流入→大单流入→中单流出→小单流出→超大流出→大单流出→中单流入→小单流入
+  // 简化: 主力流入(红), 散户流入(深红), 主力流出(绿), 散户流出(深绿)
+  var mainInDeg=deg(xlIn+lgIn), mainOutDeg=deg(xlOut+lgOut);
+  var retailInDeg=deg(smIn+mdIn), retailOutDeg=deg(smOut+mdOut);
+  var cg='conic-gradient(';
+  var angles=[];
+  if(mainInDeg>0) angles.push('#EF4444 0deg '+mainInDeg+'deg');
+  if(retailInDeg>0) angles.push('#DC2626 '+mainInDeg+'deg '+(mainInDeg+retailInDeg)+'deg');
+  if(mainOutDeg>0) angles.push('#22C55E '+(mainInDeg+retailInDeg)+'deg '+(mainInDeg+retailInDeg+mainOutDeg)+'deg');
+  if(retailOutDeg>0) angles.push('#16A34A '+(mainInDeg+retailInDeg+mainOutDeg)+'deg 360deg');
+  cg+=angles.join(',')+');';
+  var donut=document.getElementById('mf-donut'); if(donut) donut.style.background=cg;
+  // 中心数字: 主力净流入占比
+  var mainInPct=totalAbs>0?Math.round((xlIn+lgIn)/totalAbs*100):50;
+  var mfPct=document.getElementById('mf-mainforce-inner-pct'); if(mfPct) mfPct.textContent=mainInPct+'%';
+  // 4侧标签
+  var mfInPct=totalAbs>0?Math.round((xlIn+lgIn)/totalAbs*100):0;
+  var mfOutPct=totalAbs>0?Math.round((xlOut+lgOut)/totalAbs*100):0;
+  var rtInPct=totalAbs>0?Math.round((smIn+mdIn)/totalAbs*100):0;
+  var rtOutPct=totalAbs>0?Math.round((smOut+mdOut)/totalAbs*100):0;
+  setText('mf-mainforce-in','主力流入 '+mfInPct+'%');
+  setText('mf-mainforce-out','主力流出 '+mfOutPct+'%');
+  setText('mf-retail-in','散户流入 '+rtInPct+'%');
+  setText('mf-retail-out','散户流出 '+rtOutPct+'%');
+  // 子订单
+  function netStr(v){ return v>0?'+'+v.toFixed(1):v.toFixed(1); }
+  var xlEl=document.getElementById('mf-xl-net'); if(xlEl){xlEl.textContent=netStr(xl);xlEl.style.color=_colorVal(xl,'#EF4444','#22C55E');}
+  var lgEl=document.getElementById('mf-lg-net'); if(lgEl){lgEl.textContent=netStr(lg);lgEl.style.color=_colorVal(lg,'#EF4444','#22C55E');}
+  var mdEl=document.getElementById('mf-md-net'); if(mdEl){mdEl.textContent=netStr(md);mdEl.style.color=_colorVal(md,'#EF4444','#22C55E');}
+  var smEl=document.getElementById('mf-sm-net'); if(smEl){smEl.textContent=netStr(sm);smEl.style.color=_colorVal(sm,'#EF4444','#22C55E');}
+  // 5日柱
+  var container=document.getElementById('mf-5day');
+  if(!container) return;
+  container.innerHTML='<div class="d5-title">5日资金流向(万元)</div>';
+  var hist=d.history_5day||[];
+  var maxAbs=1;
+  hist.forEach(function(h){ var na=Math.abs(h.net_amount||0); if(na>maxAbs) maxAbs=na; });
+  // 今日 = 最新净额
+  hist.push({date:'今日', net_amount:lat.net_amount});
+  hist.forEach(function(h){
+    var row=document.createElement('div'); row.className='d5-bar-row';
+    var na=h.net_amount||0; var pct=Math.abs(na)/maxAbs*100;
+    var isPos=na>=0;
+    row.innerHTML='<span class="d5-bar-label">'+h.date.slice(-5)+'</span><div class="d5-bar-track"><div class="d5-bar-fill" style="width:'+pct+'%;background:'+(isPos?'#EF4444':'#22C55E')+';"></div></div><span class="d5-bar-amt">'+(isPos?'+':'')+na.toFixed(1)+'</span>';
+    container.appendChild(row);
+  });
+}
+function setText(id,txt){ var el=document.getElementById(id); if(el) el.textContent=txt!=null?txt:'--'; }
+
+// ── B2: E12 策略分析 ──
+function loadAnalysis(tsCode, kronosEnabled){
+  if(_analysisCache[tsCode]) return Promise.resolve(_analysisCache[tsCode]);
+  return fetch('/api/v3/strategy/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts_code:tsCode,kronos_enabled:kronosEnabled||false})})
+    .then(function(r){return r.json();}).then(function(res){
+      if(res.code!==0||!res.data) throw new Error('E12 fail');
+      _analysisCache[tsCode]=res.data;
+      return res.data;
+    });
+}
+
+// ── B2: E13 交叉验证 ──
+function loadVerification(tsCode){
+  if(_verificationCache[tsCode]) return Promise.resolve(_verificationCache[tsCode]);
+  return fetch('/api/v3/strategy/status-aggregate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts_code:tsCode})})
+    .then(function(r){return r.json();}).then(function(res){
+      if(res.code!==0||!res.data) throw new Error('E13 fail');
+      _verificationCache[tsCode]=res.data;
+      return res.data;
+    });
+}
+
+// ── C2: E14 AI叙事 ──
+function loadNarrative(tsCode){
+  if(_narrativeCache[tsCode]) return Promise.resolve(_narrativeCache[tsCode]);
+  return fetch('/api/v3/ai/status-interpret',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts_code:tsCode})})
+    .then(function(r){return r.json();}).then(function(res){
+      if(!res.success||!res.data) throw new Error('E14 fail');
+      _narrativeCache[tsCode]=res.data;
+      return res.data;
+    }).catch(function(){ return null; });
+}
+
+// ── 策略卡渲染（从E12 data填充5维卡） ──
+function renderDimensionCards(dimensions, kronos){
+  if(!dimensions) return;
+  function setId(id,val){var el=document.getElementById(id);if(el)el.textContent=val!=null?val:'--';}
+  // 走势结构
+  var cl=dimensions.chanlun||{}; setId('cm-chanlun-direction',cl.direction||'--'); setId('cm-chanlun-zhongshu',cl.zhongshu_range?cl.zhongshu_range.join(' — '):'--');
+  setId('cm-chanlun-position',cl.zhongshu_position||'--'); setId('cm-chanlun-buy_point',cl.buy_point||'--');
+  setId('cm-chanlun-ma_alignment',cl.ma_alignment||'--'); setId('cm-chanlun-ma_detail',cl.critical_levels?'支撑'+_fmt(cl.critical_levels.support)+' 阻力'+_fmt(cl.critical_levels.resistance):'--');
+  setId('cm-chanlun-narrative',cl.status_text||'--');
+  var ft=dimensions.factor||{}; var ftText=ft.driving_factor?'驱动力:'+(ft.driving_factor||'--')+', 冲突:'+(ft.conflict_type||'--'):'--';
+  setId('cm-chanlun-footer-text',ftText);
+  var ct=dimensions.chanlun?cl.direction==='bullish'?'✅ 通过':'⚠️ 待确认':'--'; setId('cm-chanlun-tag',ct);
+  // 量价形态
+  var vp=dimensions.volume_price||{}; setId('cm-vp-phase',vp.phase||'--'); setId('cm-vp-pattern',vp.phase_label||'--');
+  setId('cm-vp-vp_relation',vp.volume_price_relation||'--'); setId('cm-vp-resonance',vp.trend_strength>0.5?'偏多':'偏空');
+  setId('cm-vp-volume_detail',vp.support?'支撑'+_fmt(vp.support)+' 阻力'+_fmt(vp.resistance):'--');
+  setId('cm-vp-narrative',vp.status_text||'--');
+  var vt=vp.direction==='bullish'?'✅ 通过':'⚠️ 待确认'; setId('cm-vp-tag',vt);
+  // 筹码
+  var cp=dimensions.chip||{}; setId('cm-chip-profit_ratio',cp.profit_ratio!=null?cp.profit_ratio+'%':'--');
+  setId('cm-chip-avg_cost',_fmt(cp.avg_cost)); setId('cm-chip-concentration',cp.concentration||'--');
+  setId('cm-chip-main_force',cp.main_force_direction||'--'); setId('cm-chip-large_order',cp.large_order_net?String(cp.large_order_net):'--');
+  setId('cm-chip-narrative',cp.status_text||'--');
+  var cpt=cp.direction==='bullish'?'✅ 通过':'⚠️ 待确认'; setId('cm-chip-tag',cpt);
+  // 情绪
+  var em=dimensions.emotion||{}; setId('cm-emotion-cycle',em.market_temp||'--');
+  setId('cm-emotion-sector_pct',em.sector_pct!=null?em.sector_pct+'%':'--'); setId('cm-emotion-market_temp',em.valuation||'--');
+  setId('cm-emotion-narrative',em.status_text||'--');
+  var emt=em.direction==='bullish'?'✅ 通过':'⚠️ 待确认'; setId('cm-emotion-tag',emt);
+}
+
+// ── 交叉验证条渲染（从E13 data填充） ──
+function renderVerificationChains(data){
+  if(!data||!data.verification_chains) return;
+  var chains=data.verification_chains;
+  var bar=document.querySelector('.cross-verify-bar'); if(!bar) return;
+  bar.innerHTML='';
+  chains.forEach(function(c,i){
+    var item=document.createElement('div'); item.className='verify-item'; item.setAttribute('data-chain',i);
+    item.onclick=function(){toggleVerifyDetail(this);};
+    var pass=c.passed===true||c.status==='pass';
+    var cls=pass?'pass':'warn';
+    item.innerHTML='<div class="head"><span class="status-dot '+cls+'"></span><span class="name">'+(c.name||c.id||'验证'+(i+1))+'</span></div>'+
+      '<div class="brief">'+(c.evidence||c.brief||'')+'</div>'+
+      '<div class="verdict '+cls+'">→ '+(pass?'通过':'冲突')+'</div>'+
+      '<div class="verify-evidence">'+(c.conflict_detail||c.evidence||'')+'</div>';
+    bar.appendChild(item);
+  });
+  // 通过率
+  var passCount=chains.filter(function(c){return c.passed===true||c.status==='pass';}).length;
+  var rateEl=document.getElementById('verifyRateFill'); if(rateEl) rateEl.style.width=(passCount/chains.length*100)+'%';
+  var rateText=document.getElementById('verifyRateText'); if(rateText) rateText.textContent=passCount+'/'+chains.length+' ('+Math.round(passCount/chains.length*100)+'%)';
+}
+
+// ── AI/情景推演渲染（从E14 data填充） ──
+function renderNarrative(data){
+  if(!data||!data.ai_interpretation) return;
+  var ai=data.ai_interpretation;
+  var summaryEl=document.getElementById('arbSummary');
+  if(summaryEl) summaryEl.textContent=ai.analysis_summary||'策略AI解读';
+  // 情景推演 – 从analysis_summary提取
+  var body=document.querySelector('.ai-arb-body');
+  if(!body) return;
+  // 如果有结构化推演字段
+  var scenarios=ai.scenarios||ai.scenario||null;
+  var grid=body.querySelector('.scenario-grid');
+  if(grid&&scenarios&&scenarios.length){
+    grid.innerHTML='';
+    scenarios.forEach(function(s,i){
+      var card=document.createElement('div'); card.className='scenario-card scenario-'+(i===0?'a':i===1?'b':'c');
+      card.innerHTML='<div class="s-title">情景'+(i===0?'A':i===1?'B':'C')+' — '+(s.name||'')+'</div>'+
+        '<div class="s-prob">概率估计：~'+(s.probability||s.prob||'')+'%</div>'+
+        '<div class="s-conditions">'+(s.conditions||s.detail||'')+'</div>';
+      grid.appendChild(card);
+    });
+  }
+  // 行动建议
+  var advice=body.querySelector('.arb-advice'); if(advice&&ai.advice) advice.querySelector('.advice-body').innerHTML=ai.advice;
+}
+
+// ── Kronos标签渲染 ──
+function renderKronosTag(kronos){
+  if(!kronos) return;
+  var bar=document.querySelector('.cross-verify-bar');
+  if(!bar) return;
+  var tag=document.createElement('div'); tag.style.cssText='padding:4px 8px;font-size:11px;margin-top:4px;display:flex;gap:8px;';
+  var dir=kronos.direction||'--'; var vol=kronos.volatility_regime||'--';
+  var strength=kronos.confidence||kronos.trend_strength||'--';
+  tag.innerHTML='<span style="color:var(--text-muted);">🤖 Kronos:</span><span>'+(dir==='up'?'↑ 看涨':dir==='down'?'↓ 看跌':'→ 震荡')+'</span><span style="color:'+(vol==='high'?'#F59E0B':'#94A3B8')+';" title="波动率">波动:'+vol+'</span><span>强度:'+_fmt(strength)+'</span>';
+  bar.appendChild(tag);
+}
+
 // ── 方案B：策略面板交互 ──
 var _analysisRunning = false;
 var _analysisTimer = null;
@@ -2269,108 +2523,34 @@ function startAnalysis(){
   if(cfg) cfg.classList.remove('open');
   if(loading) loading.classList.add('show');
 
-  // 构建步骤
-  var steps = [
-    {name:'数据准备', detail:'日线OHLCV 750根', done:false, active:false},
-    {name:'缠论结构分析', detail:'线段构建→中枢识别→买卖点检测', done:false, active:false},
-    {name:'量价形态分析', detail:'FMZ状态检测→形态匹配→量价关系', done:false, active:false},
-    {name:'筹码与资金分析', detail:'筹码分布→资金流向→集中度', done:false, active:false},
-    {name:'情绪环境分析', detail:'板块对比→市场温度→估值水位', done:false, active:false},
-    {name:'多因子分析', detail:'5因子现状描述→方向判定', done:false, active:false},
-    {name:'交叉验证与仲裁输出', detail:'4链验证→DeepSeek V4仲裁→情景推演', done:false, active:false},
-  ];
+  // 加载中标题显示股票代码
+  var header = loading.querySelector('.loading-header .text');
+  if(header) header.textContent = '正在分析 ' + _currentTsCode + ' ...';
 
-  // 只保留勾选的策略对应步骤
-  var checkedNames = [];
-  document.querySelectorAll('#strategyOptions input[type=checkbox]:checked').forEach(function(c){
-    checkedNames.push(c.nextSibling.textContent.trim());
+  // Kronos开关
+  var kronosEnabled = document.getElementById('kronosToggle') && document.getElementById('kronosToggle').checked;
+
+  // 并行调用 E12 + E13 + E14
+  var ts = _currentTsCode;
+
+  Promise.all([
+    loadAnalysis(ts, kronosEnabled),
+    loadVerification(ts),
+    loadNarrative(ts),
+    new Promise(function(resolve){ setTimeout(resolve, 1200); }) // 至少1.2s动画
+  ]).then(function(results){
+    var analysis=results[0], verification=results[1], narrative=results[2];
+    // 检查是否被取消
+    if(!_analysisRunning) return;
+    finishAnalysisReal(analysis, verification, narrative, kronosEnabled);
+  }).catch(function(e){
+    if(!_analysisRunning) return;
+    showToast('❌ 分析失败: '+e.message);
+    cancelAnalysis();
   });
-
-  var stepNames = {
-    '缠论走势分析':'缠论结构分析',
-    '量价形态分析':'量价形态分析',
-    '筹码与资金':'筹码与资金分析',
-    '情绪环境':'情绪环境分析',
-    '多因子分析':'多因子分析'
-  };
-
-  var filtered = steps.filter(function(s){
-    if(s.name === '数据准备') return true;
-    if(s.name === '交叉验证与仲裁输出') return true;
-    var match = false;
-    checkedNames.forEach(function(n){
-      if(stepNames[n] === s.name) match = true;
-    });
-    return match;
-  });
-
-  // 渲染步骤列表
-  var container = document.getElementById('loadingSteps');
-  if(!container) return;
-  container.innerHTML = '';
-  filtered.forEach(function(s, i){
-    var div = document.createElement('div');
-    div.className = 'loading-step' + (i === 0 ? ' active' : ' pending');
-    div.innerHTML = '<span class="status-icon' + (i === 0 ? ' pulse' : '') + '" id="lsIcon_'+i+'">' + (i === 0 ? '🔄' : '⏳') + '</span>' +
-      '<span class="step-name">' + s.name + '</span>' +
-      '<span class="step-detail">' + s.detail + '</span>';
-    container.appendChild(div);
-  });
-
-  // 逐步推进
-  var idx = 0;
-  var total = filtered.length;
-  var bar = document.getElementById('loadingProgressBar');
-
-  function advanceStep(){
-    if(idx >= total || !_analysisRunning){
-      finishAnalysis();
-      return;
-    }
-    var icons = document.querySelectorAll('[id^="lsIcon_"]');
-    var stepsAll = container.querySelectorAll('.loading-step');
-
-    // 当前步骤标为完成
-    if(idx > 0){
-      var prevIcon = document.getElementById('lsIcon_' + (idx-1));
-      if(prevIcon){
-        prevIcon.textContent = '✅';
-        prevIcon.classList.remove('pulse');
-      }
-      var prevStep = stepsAll[idx-1];
-      if(prevStep){
-        prevStep.classList.remove('active');
-        prevStep.classList.add('done');
-      }
-    }
-
-    // 当前步骤标为进行中
-    if(idx < total){
-      var curIcon = document.getElementById('lsIcon_' + idx);
-      if(curIcon){
-        curIcon.textContent = '🔄';
-        curIcon.classList.add('pulse');
-      }
-      var curStep = stepsAll[idx];
-      if(curStep){
-        curStep.classList.remove('pending');
-        curStep.classList.add('active');
-      }
-    }
-
-    // 更新进度条
-    var pct = Math.round((idx / total) * 100);
-    if(bar) bar.style.width = Math.min(pct, 98) + '%';
-
-    idx++;
-    var delay = 400 + Math.random() * 200; // 每步 0.4-0.6s
-    _analysisTimer = setTimeout(advanceStep, delay);
-  }
-
-  advanceStep();
 }
 
-function finishAnalysis(){
+function finishAnalysisReal(analysisData, verificationData, narrativeData, kronosEnabled){
   _analysisRunning = false;
   var loading = document.getElementById('strategyLoading');
   var results = document.getElementById('strategyResults');
@@ -2381,37 +2561,65 @@ function finishAnalysis(){
   if(loading) loading.classList.remove('show');
   if(bar) bar.style.width = '100%';
 
-  // 显示各维度（根据勾选策略）
-  if(results){
-    results.classList.add('show');
-    var checkedNames = [];
-    document.querySelectorAll('#strategyOptions input[type=checkbox]:checked').forEach(function(c){
-      checkedNames.push(c.nextSibling.textContent.trim());
-    });
-    var dimMap = {
-      '缠论走势分析':'chanlun',
-      '量价形态分析':'volume-price',
-      '筹码与资金':'chip',
-      '情绪环境':'emotion',
-      '多因子分析':'conflict'
-    };
-    var dimCards = results.querySelectorAll('.dim-card');
-    dimCards.forEach(function(card){
-      var dim = card.getAttribute('data-dim');
-      var show = false;
-      checkedNames.forEach(function(n){
-        if(dimMap[n] === dim) show = true;
+  // 填充5维卡
+  if(analysisData && analysisData.dimensions){
+    renderDimensionCards(analysisData.dimensions, analysisData.kronos);
+    // 显示各维度
+    if(results){
+      results.classList.add('show');
+      var checkedNames = [];
+      document.querySelectorAll('#strategyOptions input[type=checkbox]:checked').forEach(function(c){
+        checkedNames.push(c.nextSibling.textContent.trim());
       });
-      card.style.display = show ? '' : 'none';
-    });
+      var dimMap = {
+        '缠论走势分析':'chanlun',
+        '量价形态分析':'volume-price',
+        '筹码与资金':'chip',
+        '情绪环境':'emotion',
+        '多因子分析':'conflict'
+      };
+      var dimCards = results.querySelectorAll('.dim-card');
+      dimCards.forEach(function(card){
+        var dim = card.getAttribute('data-dim');
+        var show = false;
+        checkedNames.forEach(function(n){
+          if(dimMap[n] === dim) show = true;
+        });
+        card.style.display = show ? '' : 'none';
+      });
+    }
   }
 
-  if(crossVerify) crossVerify.classList.add('show');
+  // 填充交叉验证
+  if(verificationData){
+    renderVerificationChains(verificationData);
+    if(crossVerify) crossVerify.classList.add('show');
+  }
+
+  // Kronos标签
+  if(kronosEnabled && analysisData && analysisData.kronos){
+    renderKronosTag(analysisData.kronos);
+  }
+
+  // E14 AI叙事
+  if(narrativeData){
+    renderNarrative(narrativeData);
+  }
+
   if(aiArbitration) aiArbitration.classList.add('show');
 
-  // 更新策略栏标签
   updateStrategyBarTags();
   showToast('✅ 策略分析完成');
+}
+
+// 保留旧finishAnalysis作降级
+function finishAnalysis(){
+  finishAnalysisReal(
+    _analysisCache[_currentTsCode],
+    _verificationCache[_currentTsCode],
+    _narrativeCache[_currentTsCode],
+    document.getElementById('kronosToggle') && document.getElementById('kronosToggle').checked
+  );
 }
 
 function cancelAnalysis(){
@@ -2470,12 +2678,27 @@ function toggleArbitrationBody(){
 }
 
 function triggerArbitrate(){
-  showToast('⚡ DeepSeek V4 仲裁已触发...');
-  setTimeout(function(){
+  showToast('⚡ DeepSeek 仲裁已触发...');
+  // 清除缓存，重新加载E12+E13
+  delete _analysisCache[_currentTsCode];
+  delete _verificationCache[_currentTsCode];
+  var kronosEnabled = document.getElementById('kronosToggle') && document.getElementById('kronosToggle').checked;
+  Promise.all([
+    loadAnalysis(_currentTsCode, kronosEnabled),
+    loadVerification(_currentTsCode),
+    loadNarrative(_currentTsCode),
+  ]).then(function(results){
+    var analysis=results[0], verification=results[1], narrative=results[2];
+    if(analysis && analysis.dimensions) renderDimensionCards(analysis.dimensions, analysis.kronos);
+    if(verification) renderVerificationChains(verification);
+    if(kronosEnabled && analysis && analysis.kronos) renderKronosTag(analysis.kronos);
+    if(narrative) renderNarrative(narrative);
     var badge = document.getElementById('arbBadge');
     if(badge) badge.textContent = '仲裁已更新';
     showToast('✅ 仲裁完成，情景推演已更新');
-  }, 1500);
+  }).catch(function(){
+    showToast('❌ 仲裁失败');
+  });
 }
 
 function toggleSources(){
@@ -2578,9 +2801,15 @@ function showToast(msg){
   setTimeout(function(){ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(function(){ el.remove(); }, 400); }, 2000);
 }
 
-// 页面加载时恢复默认配置+检查是否显示引导
+// 页面加载时恢复默认配置+检查是否显示引导+Kronos状态
 (function(){
   loadDefaultConfig();
+  // Kronos状态恢复
+  try{ var ke=localStorage.getItem('kronos_enabled'); if(ke==='true'){ var kt=document.getElementById('kronosToggle'); if(kt) kt.checked=true; } }catch(e){}
+  document.getElementById('kronosToggle') && document.getElementById('kronosToggle').addEventListener('change', function(){
+    try{ localStorage.setItem('kronos_enabled', this.checked ? 'true' : 'false'); }catch(e){}
+  });
+
   var hasDefault = false;
   try {
     var raw = localStorage.getItem('strategyDefaultConfig');
@@ -2589,11 +2818,23 @@ function showToast(msg){
   if(hasDefault){
     var empty = document.getElementById('strategyEmpty');
     if(empty) empty.classList.remove('show');
-    // 自动运行
+    // 自动运行 — 使用真实API
     setTimeout(startAnalysis, 500);
   }
   // 同步策略栏标签
   updateStrategyBarTags();
+
+  // 初始加载 E07/E12/E13
+  var ts = _currentTsCode;
+  var ke = document.getElementById('kronosToggle') && document.getElementById('kronosToggle').checked;
+  loadQuote(ts);
+  Promise.all([loadAnalysis(ts, ke), loadVerification(ts), loadNarrative(ts)]).then(function(results){
+    var analysis=results[0], verification=results[1], narrative=results[2];
+    if(analysis && analysis.dimensions) renderDimensionCards(analysis.dimensions, analysis.kronos);
+    if(verification) renderVerificationChains(verification);
+    if(ke && analysis && analysis.kronos) renderKronosTag(analysis.kronos);
+    if(narrative) renderNarrative(narrative);
+  }).catch(function(){});
 })();
 
 // ── 同步侧栏高度与chart-section对齐 ──

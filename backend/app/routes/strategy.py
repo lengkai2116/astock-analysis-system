@@ -321,25 +321,25 @@ def _process_trade_with_signals(ts_code, trade_date_str, action,
         'reason': reason,
     })
     return matched
-# ── 策略模板 API（保持不变）──
+# ── 策略模板 API ──
 
 @strategy_bp.route('/templates', methods=['GET'])
 @handle_exceptions
 def get_templates():
+    tab = request.args.get('tab')
+    cat = request.args.get('cat')
     template_type = request.args.get('template_type')
-    is_system = request.args.get('is_system')
-
-    if is_system is not None:
-        is_system = is_system.lower() == 'true'
 
     templates = StrategyTemplateService.get_templates(
         template_type=template_type,
-        is_system=is_system
+        tab=tab,
+        cat=cat,
     )
 
     return jsonify({
         'success': True,
-        'data': [t.to_dict() for t in templates]
+        'data': [t.to_dict() for t in templates],
+        'total': len(templates),
     })
 
 
@@ -352,7 +352,20 @@ def create_template():
         description=data.get('description'),
         template_type=data.get('template_type', 'indicator'),
         code_template=data.get('code_template'),
-        author=data.get('author')
+        author=data.get('author'),
+        is_system=data.get('is_system', False),
+        cat=data.get('cat'),
+        catLabel=data.get('catLabel'),
+        catCN=data.get('catCN'),
+        icon=data.get('icon'),
+        nameCN=data.get('nameCN'),
+        tags=data.get('tags'),
+        ready=data.get('ready', True),
+        vibe=data.get('vibe', False),
+        devLabel=data.get('devLabel'),
+        inputs=data.get('inputs'),
+        wiki=data.get('wiki'),
+        iconLarge=data.get('iconLarge'),
     )
     return jsonify({
         'success': True,
@@ -385,7 +398,16 @@ def update_template(template_id):
         name=data.get('name'),
         description=data.get('description'),
         code_template=data.get('code_template'),
-        is_active=data.get('is_active')
+        is_active=data.get('is_active'),
+        cat=data.get('cat'),
+        catLabel=data.get('catLabel'),
+        nameCN=data.get('nameCN'),
+        icon=data.get('icon'),
+        tags=data.get('tags'),
+        ready=data.get('ready'),
+        devLabel=data.get('devLabel'),
+        updated=data.get('updated'),
+        iconLarge=data.get('iconLarge'),
     )
 
     if not template:
@@ -417,4 +439,43 @@ def use_template(template_id):
     return jsonify({
         'success': True,
         'message': '使用次数已更新'
+    })
+
+
+@strategy_bp.route('/templates/<int:template_id>/clone', methods=['POST'])
+@handle_exceptions
+def clone_template(template_id):
+    template = StrategyTemplateService.clone_template(template_id, author='user')
+    if not template:
+        return jsonify({
+            'success': False,
+            'message': '模板不存在'
+        }), 404
+    return jsonify({
+        'success': True,
+        'data': template.to_dict(),
+        'message': '已复制为 Vibe 自建策略'
+    })
+
+
+@strategy_bp.route('/generate', methods=['POST'])
+@handle_exceptions
+def generate_strategy():
+    """AI 策略生成（挂接 AIStrategyGenerator 服务）"""
+    data = request.json
+    description = data.get('prompt', data.get('description', ''))
+
+    if not description or not description.strip():
+        return jsonify({
+            'success': False,
+            'message': '请提供策略描述'
+        }), 400
+
+    from app.services.ai_strategy_generator import AIStrategyGenerator
+    generator = AIStrategyGenerator()
+    result = generator.generate_indicator_from_description(description)
+
+    return jsonify({
+        'success': True,
+        'data': result
     })

@@ -20,6 +20,7 @@ class AIInterpretInput:
     status_recognition: Optional[Dict] = None
     market_context: Optional[Dict] = None
     signals: List[Dict] = field(default_factory=list)
+    kronos_forecast: Optional[Dict] = None  # Kronos预测摘要（融合点4）
 
 
 @dataclass
@@ -128,5 +129,16 @@ class UIDFEngine:
             return DecisionResult(signal="NEUTRAL", confidence=0.2,
                 decision_detail={"mode": "full_analysis", "requires_full_ai": True}).to_dict()
 
-    def build_ai_context(self, upf_result=None, signals=None) -> AIInterpretInput:
-        return AIInterpretInput(upf_result=upf_result, signals=signals or [])
+    def build_ai_context(self, upf_result=None, signals=None,
+                         kronos_forecast=None) -> AIInterpretInput:
+        ctx = AIInterpretInput(upf_result=upf_result, signals=signals or [])
+        if kronos_forecast:
+            # 只传递摘要（5个字段），避免完整预测K线浪费Token
+            ctx.kronos_forecast = {
+                'predicted_direction': kronos_forecast.get('direction'),
+                'predicted_volatility': kronos_forecast.get('volatility_regime'),
+                'predicted_trend_strength': kronos_forecast.get('trend_strength'),
+                'price_range_low': kronos_forecast.get('price_range_low'),
+                'price_range_high': kronos_forecast.get('price_range_high'),
+            }
+        return ctx

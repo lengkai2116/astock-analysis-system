@@ -62,7 +62,7 @@ class StrategyOutput(db.Model):
 
 class StrategyTemplateV2(db.Model):
     __tablename__ = 'strategy_templates_v2'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text)
@@ -77,7 +77,23 @@ class StrategyTemplateV2(db.Model):
     usage_count = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
-    
+
+    # A 股策略专属字段（全部 nullable，向后兼容）
+    cat = db.Column(db.String(50))
+    catLabel = db.Column(db.String(50))
+    catCN = db.Column(db.String(50))
+    icon = db.Column(db.String(10))
+    nameCN = db.Column(db.String(100))
+    tags = db.Column(JSON)
+    ready = db.Column(db.Boolean, default=True)
+    vibe = db.Column(db.Boolean, default=False)
+    devLabel = db.Column(db.String(50))
+    devPriority = db.Column(db.String(10))
+    inputs = db.Column(JSON)
+    wiki = db.Column(JSON)
+    updated = db.Column(db.String(20))
+    iconLarge = db.Column(db.String(10))
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -93,5 +109,20 @@ class StrategyTemplateV2(db.Model):
             'version': self.version,
             'usage_count': self.usage_count,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-            'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+            'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M:%S'),
+            # A 股字段
+            'cat': self.cat,
+            'catLabel': self.catLabel,
+            'catCN': self.catCN,
+            'icon': self.icon,
+            'nameCN': self.nameCN,
+            'tags': self.tags,
+            'ready': self.ready,
+            'vibe': self.vibe,
+            'devLabel': self.devLabel,
+            'devPriority': self.devPriority,
+            'inputs': self.inputs,
+            'wiki': self.wiki,
+            'updated': self.updated,
+            'iconLarge': self.iconLarge,
         }

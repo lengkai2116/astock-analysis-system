@@ -27,8 +27,9 @@ class ConflictArbiter:
 
     KEY_POSITIONS = ['中枢边界', 'MA120', 'MA250', 'MA60', '前高/前低']
 
-    def arbitrate(self, signals: List[Dict], zhongshu=None, market_context=None) -> Dict:
-        """四级裁定"""
+    def arbitrate(self, signals: List[Dict], zhongshu=None, market_context=None,
+                  kronos_result: Optional[Dict] = None) -> Dict:
+        """四级裁定 + L5 Kronos前瞻验证"""
         if not signals:
             return {'final_signal': 'neutral', 'final_confidence': 0.0, 'arbitration_log': ['无信号'], 'details': {}}
         log = []
@@ -62,6 +63,34 @@ class ConflictArbiter:
         bearish = sum(1 for s in signals if self._get_signal_value(s) < 0)
         if bullish > 0 and bearish > 0:
             log.append(f"嵌套处理: 看涨={bullish} 看空={bearish}")
+
+        # 第5级（新增）：Kronos 前瞻验证
+        if kronos_result:
+            k_dir = kronos_result.get('direction')
+            k_conf = kronos_result.get('confidence', 0.5)
+            k_vol = kronos_result.get('volatility_regime', 'normal')
+            if k_dir:
+                total_other = [s for s in signals if 'kronos' not in s.get('strategy_name', '').lower()]
+                aligned = sum(1 for s in total_other if self._get_direction(s) == k_dir)
+                total = len(total_other)
+                if total > 0:
+                    alignment_ratio = aligned / total
+                    if alignment_ratio >= 0.6 and k_conf > 0.6:
+                        # Kronos确认多数策略方向 → 增强置信度
+                        log.append(f"Kronos前瞻验证: {k_dir}, 对齐率={alignment_ratio:.0%}, 置信度增强 +0.05~0.10")
+                        for s in total_other:
+                            if self._get_direction(s) == k_dir:
+                                s['confidence'] = min(1.0, s.get('confidence', 0.5) + 0.05)
+                    elif alignment_ratio < 0.3 and k_conf > 0.7:
+                        # Kronos与多数策略冲突 → 标记高风险
+                        log.append(f"Kronos前瞻冲突: 多数策略反向, 置信度降低")
+                        for s in total_other:
+                            s['confidence'] = max(0.0, s.get('confidence', 0.5) - 0.10)
+                # Kronos高波动预警
+                if k_vol == 'high':
+                    log.append("Kronos高波动预警: 所有信号置信度降低")
+                    for s in signals:
+                        s['confidence'] = max(0.0, s.get('confidence', 0.5) - 0.10)
 
         final_sig, final_conf = self._synthesize(signals, log)
         return {

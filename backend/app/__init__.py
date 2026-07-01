@@ -139,12 +139,23 @@ def create_app():
 
     # 首次启动时自动创建表（兜底，生产环境应使用 flask db upgrade）
     with app.app_context():
+        # 显式导入所有模型以确保 db.create_all() 能创建对应表
+        from app.models.strategy import StrategyTemplateV2  # noqa: F401
+
         try:
             db.create_all()
             app.logger.info("数据库表已就绪（db.create_all）")
         except Exception as e:
             app.logger.warning(f"数据库表创建失败（可忽略）: {e}")
-    
+
+        # 策略模板种子数据（幂等）
+        try:
+            from app.services.init_system_templates import init_system_templates
+            init_system_templates()
+            app.logger.info("策略模板种子数据已初始化")
+        except Exception as e:
+            app.logger.warning(f"策略模板种子数据初始化失败: {e}")
+
     from app.routes.market import market_bp
     from app.routes.health import health_bp
     from app.routes.phase3 import phase3_bp
@@ -173,6 +184,7 @@ def create_app():
     from app.routes.alert_route import alert_bp
     from app.routes.conditions import conditions_bp
     from app.routes.system_config import system_bp
+    from app.routes.strategy_analyze import strategy_analyze_bp
 
     app.register_blueprint(market_bp)
     app.register_blueprint(health_bp)
@@ -202,6 +214,7 @@ def create_app():
     app.register_blueprint(alert_bp)
     app.register_blueprint(conditions_bp)
     app.register_blueprint(system_bp)
+    app.register_blueprint(strategy_analyze_bp)
 
     # ============================================================
     # RuntimeConfigManager 初始化 + 种子数据

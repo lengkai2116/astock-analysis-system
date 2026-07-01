@@ -123,6 +123,20 @@ def extract_indicators(df):
     return asr, concentration, vol_ratio, rsi
 
 
+def _get_grade_info(score):
+    """按214号§2.1评分等级映射"""
+    if score >= 85:
+        return 'S', '🔥 强烈推荐'
+    elif score >= 75:
+        return 'A', '✅ 推荐'
+    elif score >= 65:
+        return 'B', '👀 关注'
+    elif score >= 50:
+        return 'C', '⚠️ 谨慎'
+    else:
+        return 'D', '❌ 回避'
+
+
 def compute_screening(stock_list):
     """
     核心计算：对股票列表执行 L1→L2→L3 筛选
@@ -171,6 +185,10 @@ def compute_screening(stock_list):
             'symbol': item['symbol'],
             'name': '',  # 将在外层填充
             'score': score_100,
+            'close': round(float(df['close'].iloc[-1]), 2) if 'close' in df.columns else None,
+            'pct_chg': round(float(df['pct_chg'].iloc[-1]), 2) if 'pct_chg' in df.columns else None,
+            'grade': _get_grade_info(score_100)[0],
+            'grade_label': _get_grade_info(score_100)[1],
             'phase': phase,
             'asr': round(asr, 3),
             'concentration': round(conc, 3),
@@ -474,5 +492,65 @@ def screener_stats():
                 _screener_cache['timestamp']
             ).isoformat() if _screener_cache['timestamp'] else None,
             'cache_ttl_seconds': _screener_cache['ttl']
+        }
+    })
+
+
+@handle_exceptions
+@screener_bp.route('/strategies/vibe', methods=['GET'])
+def get_vibe_strategies():
+    """
+    获取 Vibe Coding 策略列表（214号 §2.7）
+    初始返回 3 个默认策略，后续与策略模板 strategy-templates 集成
+    TODO Phase 1: 从 strategy-templates 数据库动态读取
+    """
+    filter_type = request.args.get('type', 'all')
+
+    default_strategies = [
+        {
+            "id": "vibe_001",
+            "name": "业绩超预期+MACD金叉",
+            "type": "system",
+            "description": "选出业绩预告超预期且MACD金叉的股票",
+            "code_summary": "MACD金叉+业绩预增",
+            "default_checked": True,
+            "created_at": "2026-06-12",
+            "source": "vibe_coding"
+        },
+        {
+            "id": "vibe_002",
+            "name": "涨停突破回调确认",
+            "type": "system",
+            "description": "涨停后缩量回调不破涨停底，次日放量上攻",
+            "code_summary": "涨停突破+缩量回调+放量确认",
+            "default_checked": False,
+            "created_at": "2026-06-12",
+            "source": "vibe_coding"
+        },
+        {
+            "id": "vibe_003",
+            "name": "我的短线策略",
+            "type": "user",
+            "description": "自建短线策略",
+            "code_summary": "多因子短线评分",
+            "default_checked": True,
+            "created_at": "2026-06-15",
+            "source": "vibe_coding"
+        }
+    ]
+
+    if filter_type == 'system':
+        filtered = [s for s in default_strategies if s['type'] == 'system']
+    elif filter_type == 'user':
+        filtered = [s for s in default_strategies if s['type'] == 'user']
+    else:
+        filtered = default_strategies
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'strategies': filtered,
+            'total_count': len(filtered),
+            'synced_from': 'strategy-templates'
         }
     })
