@@ -1,12 +1,12 @@
 """
 账户交易数据模型
 
-Trade: 用户实盘交易记录
+Trade: 用户实盘交易记录（226号方案扩展）
 AccountSnapshot: 每日账户净值快照（资金曲线用）
 """
 from app import db
 from datetime import datetime, date
-from sqlalchemy import DECIMAL, Text
+from sqlalchemy import DECIMAL, Text, Boolean
 
 
 class Trade(db.Model):
@@ -28,6 +28,15 @@ class Trade(db.Model):
     matched_signal_type = db.Column(db.String(20), nullable=True)
     matched_signal_confidence = db.Column(DECIMAL(5, 2), nullable=True)
     match_score = db.Column(DECIMAL(5, 2), nullable=True)     # 0-100
+    # 226号方案新增字段
+    buy_reason = db.Column(db.String(32), nullable=True)       # 买入理由分类
+    sell_reason = db.Column(db.String(32), nullable=True)      # 卖出理由分类
+    review_unit_id = db.Column(db.String(16), nullable=True)   # 关联复盘策略ID (RV-xxx)
+    is_partial = db.Column(Boolean, default=False)             # 是否部分卖出
+    # 手续费明细（自动核算）
+    stamp_tax = db.Column(DECIMAL(10, 2), default=0.00)       # 印花税（卖出时收取）
+    transfer_fee = db.Column(DECIMAL(10, 2), default=0.00)    # 过户费
+    realized_pnl = db.Column(DECIMAL(14, 2), nullable=True)   # 已实现盈亏（卖出时核算）
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -49,6 +58,22 @@ class Trade(db.Model):
                 'confidence': float(self.matched_signal_confidence) if self.matched_signal_confidence else None,
                 'score': float(self.match_score) if self.match_score else None,
             } if self.matched_signal_id else None,
+            # 226号方案新增字段
+            'buy_reason': self.buy_reason,
+            'sell_reason': self.sell_reason,
+            'review_unit_id': self.review_unit_id,
+            'is_partial': bool(self.is_partial) if self.is_partial is not None else False,
+            'fee': {
+                'commission': float(self.commission) if self.commission else 0,
+                'stamp_tax': float(self.stamp_tax) if self.stamp_tax else 0,
+                'transfer_fee': float(self.transfer_fee) if self.transfer_fee else 0,
+                'total': round(
+                    (float(self.commission) if self.commission else 0) +
+                    (float(self.stamp_tax) if self.stamp_tax else 0) +
+                    (float(self.transfer_fee) if self.transfer_fee else 0), 2
+                ),
+            },
+            'realized_pnl': float(self.realized_pnl) if self.realized_pnl else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -63,8 +88,12 @@ class AccountSnapshot(db.Model):
     cash_balance = db.Column(DECIMAL(14, 2), default=0.00)        # 现金余额
     position_value = db.Column(DECIMAL(14, 2), default=0.00)      # 持仓市值
     total_profit = db.Column(DECIMAL(14, 2), default=0.00)        # 总盈亏
-    total_return_pct = db.Column(DECIMAL(8, 4), default=0.00)    # 总收益率(%)
-    initial_capital = db.Column(DECIMAL(14, 2), default=0.00)     # 初始本金
+    total_return_pct = db.Column(DECIMAL(8, 4), default=0.00)     # 总收益率(%)
+    initial_capital = db.Column(DECIMAL(14, 2), default=0.00)      # 初始本金
+    # 226号方案新增
+    daily_pnl = db.Column(DECIMAL(14, 2), default=0.00)           # 当日盈亏
+    max_drawdown = db.Column(DECIMAL(8, 4), default=0.00)         # 最大回撤(%)
+    win_rate = db.Column(DECIMAL(5, 2), default=0.00)             # 胜率(%)
     created_at = db.Column(db.DateTime, default=datetime.now)
 
     def to_dict(self):
@@ -77,4 +106,7 @@ class AccountSnapshot(db.Model):
             'total_profit': float(self.total_profit) if self.total_profit else None,
             'total_return_pct': float(self.total_return_pct) if self.total_return_pct else None,
             'initial_capital': float(self.initial_capital) if self.initial_capital else None,
+            'daily_pnl': float(self.daily_pnl) if self.daily_pnl else None,
+            'max_drawdown': float(self.max_drawdown) if self.max_drawdown else None,
+            'win_rate': float(self.win_rate) if self.win_rate else None,
         }

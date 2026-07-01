@@ -1,18 +1,19 @@
 """
-账户管理 API 路由 — P3.1
+账户管理 API 路由 — P3.1 / 226号方案升级
 
-12个端点覆盖 125 号文档全部需求：
-  交易 CRUD | 持仓 | 总览 | 资金曲线 | 绩效 | 复盘 | 信号匹配 | 虚拟验证
+10后端已就绪 + 4新端点:
+  Phase 0: trades CRUD/import/match | positions | summary | equity-curve | performance
+  Phase 1: review(6D) | periodic-review | review-link | match-review
 """
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from flask import Blueprint, request, jsonify
 
 from app import db
 from app.models.trade import Trade
 from app.services.account_service import AccountService
 from app.services.signal_match_service import SignalMatchService
-from app.services.review_engine import ReviewEngine
+from app.services.review_engine import ReviewEngine6D, ReviewEngine
 from app.services.report_generator import ReportGenerator
 from app.utils.error_handlers import handle_exceptions
 
@@ -22,7 +23,8 @@ account_bp = Blueprint('account', __name__, url_prefix='/api/v1/account')
 
 _account_svc = AccountService()
 _match_svc = SignalMatchService()
-_review_engine = ReviewEngine()
+_review_6d = ReviewEngine6D()
+_review_7d = ReviewEngine()  # 保留旧的7维引擎
 _report_gen = ReportGenerator()
 
 # ═══════════════════════════════════════════════
@@ -32,10 +34,10 @@ _report_gen = ReportGenerator()
 @account_bp.route('/trades', methods=['GET'])
 @handle_exceptions
 def list_trades():
-    """交易记录列表（分页+筛选）"""
-    ts_code = request.args.get('ts_code')
-    start = request.args.get('start_date')
-    end = request.args.get('end_date')
+    """交易记录列表（分页+筛选+226扩展字段）"""
+    ts_code = request.args.get('ts_code') or request.args.get('stock')
+    start = request.args.get('start_date') or request.args.get('date_from')
+    end = request.args.get('end_date') or request.args.get('date_to')
     direction = request.args.get('direction')
     page = int(request.args.get('page', 1))
     per_page = min(int(request.args.get('per_page', 50)), 200)
@@ -46,7 +48,7 @@ def list_trades():
     trades, total = _account_svc.get_trades(ts_code, start_date, end_date, direction, page, per_page)
     return jsonify({
         'success': True,
-        'data': [t.to_dict() for t in trades],
+        'data': {'trades': [t.to_dict() for t in trades]},
         'total': total,
         'page': page,
         'per_page': per_page,
@@ -56,26 +58,41 @@ def list_trades():
 @account_bp.route('/trades', methods=['POST'])
 @handle_exceptions
 def create_trade():
-    """新增交易记录"""
+    """新增交易记录（226号方案扩展字段）"""
     data = request.json or {}
     required = ['ts_code', 'direction', 'trade_date', 'price', 'quantity']
-    missing = [k for k in required if k not in data]
+    # 支持 stock / stock_name 字段名
+    ts_code = data.get('ts_code', data.get('stock', ''))
+    stock_name = data.get('stock_name', data.get('sname', ''))
+    missing = [k for k in required if k not in data and k != 'ts_code']
+    if not ts_code:
+        missing.append('ts_code')
     if missing:
         return jsonify({'success': False, 'error': f'缺少参数: {", ".join(missing)}'}), 400
+
+    if not ts_code:
+        return jsonify({'success': False, 'error': '缺少 ts_code'}), 400
 
     trade_date = data['trade_date']
     if isinstance(trade_date, str):
         trade_date = datetime.strptime(trade_date[:10], '%Y-%m-%d').date()
 
     trade = _account_svc.create_trade(
-        ts_code=data['ts_code'],
-        stock_name=data.get('stock_name', ''),
+        ts_code=ts_code,
+        stock_name=stock_name,
         direction=data['direction'],
         trade_date=trade_date,
         price=float(data['price']),
         quantity=int(data['quantity']),
         commission=float(data.get('commission', 0)),
         notes=data.get('notes', ''),
+        buy_reason=data.get('buy_reason'),
+        sell_reason=data.get('sell_reason'),
+        review_unit_id=data.get('review_unit_id'),
+        is_partial=data.get('is_partial', False),
+        stamp_tax=float(data.get('stamp_tax', 0)),
+        transfer_fee=float(data.get('transfer_fee', 0)),
+        realized_pnl=float(data['realized_pnl']) if data.get('realized_pnl') else None,
     )
     if trade:
         # 自动匹配信号
@@ -96,9 +113,11 @@ def create_trade():
 @account_bp.route('/trades/<int:trade_id>', methods=['PUT'])
 @handle_exceptions
 def update_trade(trade_id):
-    """修改交易记录"""
+    """修改交易记录（含226号方案字段）"""
     data = request.json or {}
-    allowed = ['ts_code', 'stock_name', 'direction', 'trade_date', 'price', 'quantity', 'commission', 'notes']
+    allowed = ['ts_code', 'stock_name', 'direction', 'trade_date', 'price', 'quantity',
+               'commission', 'notes', 'buy_reason', 'sell_reason', 'review_unit_id',
+               'is_partial', 'stamp_tax', 'transfer_fee', 'realized_pnl']
     kwargs = {k: v for k, v in data.items() if k in allowed and v is not None}
     if 'trade_date' in kwargs and isinstance(kwargs['trade_date'], str):
         kwargs['trade_date'] = datetime.strptime(kwargs['trade_date'][:10], '%Y-%m-%d').date()
@@ -121,7 +140,7 @@ def delete_trade(trade_id):
 @account_bp.route('/trades/import', methods=['POST'])
 @handle_exceptions
 def import_trades():
-    """批量导入交易记录"""
+    """批量导入交易记录（含226扩展字段）"""
     data = request.json or {}
     trades_data = data.get('trades', [])
     if not trades_data:
@@ -145,19 +164,28 @@ def match_trades():
 @account_bp.route('/positions', methods=['GET'])
 @handle_exceptions
 def get_positions():
-    """当前持仓列表"""
+    """当前持仓列表（226号方案增强字段）"""
     positions = _account_svc.get_current_positions()
-    return jsonify({'success': True, 'data': positions})
+    total_pos_value = sum(p.get('market_value', 0) for p in positions)
+    summary = _account_svc.get_account_summary()
+    return jsonify({
+        'success': True,
+        'data': {
+            'positions': positions,
+            'total_position_value': total_pos_value,
+            'total_assets': summary.get('total_assets', 0),
+        }
+    })
 
 
 # ═══════════════════════════════════════════════
-# 账户总览
+# 账户总览（KPI芯片条7项）
 # ═══════════════════════════════════════════════
 
 @account_bp.route('/summary', methods=['GET'])
 @handle_exceptions
 def get_summary():
-    """账户总览指标"""
+    """账户总览指标（226号方案增强：7项KPI芯片+持仓汇总）"""
     summary = _account_svc.get_account_summary()
     return jsonify({'success': True, 'data': summary})
 
@@ -184,49 +212,49 @@ def get_performance():
 
 
 # ═══════════════════════════════════════════════
-# Tab D: 智能复盘
+# Tab D: 六维操作复盘（226号方案）
 # ═══════════════════════════════════════════════
 
 @account_bp.route('/review', methods=['POST'])
 @handle_exceptions
 def run_review():
     """
-    执行复盘
+    执行六维复盘（226号方案A-F维度，去评分化叙事格式）
 
     请求体:
     {
-        "start_date": "2026-05-01",
+        "trade_ids": [1,2,3],  // 可选，指定交易ID
+        "start_date": "2026-05-01",  // 可选，与 trade_ids 二选一
         "end_date": "2026-05-28",
-        "format": "markdown" (可选, 默认返回JSON结构化数据)
+        "format": "json"  // 支持 json/markdown
     }
     """
     data = request.json or {}
+    trade_ids = data.get('trade_ids')
     start_str = data.get('start_date')
     end_str = data.get('end_date')
     fmt = data.get('format', 'json')
 
-    if not start_str or not end_str:
-        return jsonify({'success': False, 'error': '需要 start_date 和 end_date'}), 400
+    if trade_ids:
+        trades = Trade.query.filter(Trade.id.in_(trade_ids)).order_by(Trade.trade_date.asc()).all()
+        if not trades:
+            return jsonify({'success': False, 'error': '指定交易ID均不存在'}), 404
+        start_date = trades[0].trade_date
+        end_date = trades[-1].trade_date
+    elif start_str and end_str:
+        start_date = datetime.strptime(start_str[:10], '%Y-%m-%d').date()
+        end_date = datetime.strptime(end_str[:10], '%Y-%m-%d').date()
+        trades = Trade.query.filter(
+            Trade.trade_date >= start_date, Trade.trade_date <= end_date
+        ).order_by(Trade.trade_date.asc()).all()
+    else:
+        return jsonify({'success': False, 'error': '需要 trade_ids 或 start_date+end_date'}), 400
 
-    start_date = datetime.strptime(start_str[:10], '%Y-%m-%d').date()
-    end_date = datetime.strptime(end_str[:10], '%Y-%m-%d').date()
-
-    trades = Trade.query.filter(
-        Trade.trade_date >= start_date,
-        Trade.trade_date <= end_date,
-    ).order_by(Trade.trade_date.asc()).all()
-
-    review = _review_engine.run_review(trades, start_date, end_date)
+    review = _review_6d.run_review(trades, start_date, end_date)
 
     if fmt == 'markdown':
         content = _report_gen.generate_review_report(review, format='markdown')
-        return jsonify({
-            'success': True,
-            'data': {
-                'total_score': review['total_score'],
-                'markdown': content,
-            }
-        })
+        return jsonify({'success': True, 'data': {'review_id': review.get('review_id'), 'markdown': content}})
 
     return jsonify({'success': True, 'data': review})
 
@@ -234,27 +262,142 @@ def run_review():
 @account_bp.route('/review/export', methods=['POST'])
 @handle_exceptions
 def export_review():
-    """导出复盘报告为 Markdown 文件"""
+    """导出六维复盘报告为 Markdown 文件"""
     data = request.json or {}
+    trade_ids = data.get('trade_ids')
     start_str = data.get('start_date')
     end_str = data.get('end_date')
-    if not start_str or not end_str:
-        return jsonify({'success': False, 'error': '需要 start_date 和 end_date'}), 400
 
-    start_date = datetime.strptime(start_str[:10], '%Y-%m-%d').date()
-    end_date = datetime.strptime(end_str[:10], '%Y-%m-%d').date()
-    trades = Trade.query.filter(
-        Trade.trade_date >= start_date,
-        Trade.trade_date <= end_date,
-    ).order_by(Trade.trade_date.asc()).all()
+    if trade_ids:
+        trades = Trade.query.filter(Trade.id.in_(trade_ids)).order_by(Trade.trade_date.asc()).all()
+        if not trades:
+            return jsonify({'success': False, 'error': '指定交易ID均不存在'}), 404
+        start_date = trades[0].trade_date
+        end_date = trades[-1].trade_date
+    elif start_str and end_str:
+        start_date = datetime.strptime(start_str[:10], '%Y-%m-%d').date()
+        end_date = datetime.strptime(end_str[:10], '%Y-%m-%d').date()
+        trades = Trade.query.filter(
+            Trade.trade_date >= start_date, Trade.trade_date <= end_date
+        ).order_by(Trade.trade_date.asc()).all()
+    else:
+        return jsonify({'success': False, 'error': '需要 trade_ids 或 start_date+end_date'}), 400
 
-    review = _review_engine.run_review(trades, start_date, end_date)
+    review = _review_6d.run_review(trades, start_date, end_date)
     content = _report_gen.generate_review_report(review, format='markdown')
-
-    filename = f"复盘报告-{start_str}-{end_str}.md"
-    path = _report_gen.save_report(content, filename)
+    fname = f"六维复盘-{start_date}-{end_date}.md"
+    path = _report_gen.save_report(content, fname)
     return jsonify({'success': True, 'data': {'filepath': path}})
 
+
+# ═══════════════════════════════════════════════
+# Tab E: 周期回顾（226号方案）
+# ═══════════════════════════════════════════════
+
+@account_bp.route('/periodic-review', methods=['POST'])
+@handle_exceptions
+def periodic_review():
+    """
+    周期回顾（本周/本月/本季/自定义）
+
+    请求体:
+    {
+        "period": "week" | "month" | "quarter" | "custom",
+        "start_date": "2026-06-01",  // 当 period=custom 时必填
+        "end_date": "2026-06-30"
+    }
+    """
+    data = request.json or {}
+    period = data.get('period', 'month')
+    today = date.today()
+
+    if period == 'week':
+        start_date = today - timedelta(days=today.weekday())
+        end_date = today
+    elif period == 'month':
+        start_date = today.replace(day=1)
+        end_date = today
+    elif period == 'quarter':
+        q_start = (today.month - 1) // 3 * 3 + 1
+        start_date = today.replace(month=q_start, day=1)
+        end_date = today
+    elif period == 'custom':
+        start_str = data.get('start_date')
+        end_str = data.get('end_date')
+        if not start_str or not end_str:
+            return jsonify({'success': False, 'error': '自定义周期需要 start_date 和 end_date'}), 400
+        start_date = datetime.strptime(start_str[:10], '%Y-%m-%d').date()
+        end_date = datetime.strptime(end_str[:10], '%Y-%m-%d').date()
+    else:
+        return jsonify({'success': False, 'error': f'无效周期: {period}'}), 400
+
+    trades = Trade.query.filter(
+        Trade.trade_date >= start_date, Trade.trade_date <= end_date
+    ).order_by(Trade.trade_date.asc()).all()
+
+    # 运行六维复盘
+    review = _review_6d.run_review(trades, start_date, end_date)
+    summary = _account_svc.get_account_summary()
+
+    # 构造周期回顾报告
+    review_data = {
+        'period': period,
+        'start_date': start_date.isoformat(),
+        'end_date': end_date.isoformat(),
+        'review': review,
+        'summary': summary,
+        'trade_count': len(trades),
+    }
+
+    return jsonify({'success': True, 'data': review_data})
+
+
+# ═══════════════════════════════════════════════
+# 复盘策略关联（226号方案）
+# ═══════════════════════════════════════════════
+
+@account_bp.route('/trades/<int:trade_id>/review-link', methods=['GET'])
+@handle_exceptions
+def review_link_candidates(trade_id):
+    """获取可关联的复盘策略候选列表（按同票检索复盘中心RV）"""
+    trade = Trade.query.get(trade_id)
+    if not trade:
+        return jsonify({'success': False, 'error': '交易记录不存在'}), 404
+
+    candidates = _account_svc.get_review_candidates(trade.ts_code)
+    return jsonify({'success': True, 'data': {'trade_id': trade_id, 'ts_code': trade.ts_code, 'candidates': candidates}})
+
+
+@account_bp.route('/trades/<int:trade_id>/match-review', methods=['POST'])
+@handle_exceptions
+def match_trade_to_review(trade_id):
+    """关联交易到复盘策略"""
+    data = request.json or {}
+    review_unit_id = data.get('review_unit_id', '')
+
+    if not review_unit_id:
+        return jsonify({'success': False, 'error': '缺少 review_unit_id'}), 400
+
+    trade = Trade.query.get(trade_id)
+    if not trade:
+        return jsonify({'success': False, 'error': '交易记录不存在'}), 404
+
+    trade.review_unit_id = review_unit_id
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'trade_id': trade_id,
+            'review_unit_id': review_unit_id,
+            'ts_code': trade.ts_code,
+        }
+    })
+
+
+# ═══════════════════════════════════════════════
+# 虚拟验证复盘分区（保持兼容）
+# ═══════════════════════════════════════════════
 
 @account_bp.route('/virtual-reviews', methods=['GET'])
 @handle_exceptions

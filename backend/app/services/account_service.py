@@ -30,8 +30,12 @@ class AccountService:
 
     def create_trade(self, ts_code: str, stock_name: str, direction: str,
                      trade_date: date, price: float, quantity: int,
-                     commission: float = 0.0, notes: str = "") -> Optional[Trade]:
-        """新增交易记录"""
+                     commission: float = 0.0, notes: str = "",
+                     buy_reason: str = None, sell_reason: str = None,
+                     review_unit_id: str = None, is_partial: bool = False,
+                     stamp_tax: float = 0.0, transfer_fee: float = 0.0,
+                     realized_pnl: float = None) -> Optional[Trade]:
+        """新增交易记录（226号方案扩展字段）"""
         try:
             trade = Trade(
                 ts_code=ts_code,
@@ -43,6 +47,13 @@ class AccountService:
                 amount=round(price * quantity, 2),
                 commission=round(commission, 2),
                 notes=notes,
+                buy_reason=buy_reason,
+                sell_reason=sell_reason,
+                review_unit_id=review_unit_id,
+                is_partial=is_partial,
+                stamp_tax=round(stamp_tax, 2),
+                transfer_fee=round(transfer_fee, 2),
+                realized_pnl=round(realized_pnl, 2) if realized_pnl else None,
             )
             db.session.add(trade)
             db.session.commit()
@@ -54,7 +65,7 @@ class AccountService:
             return None
 
     def update_trade(self, trade_id: int, **kwargs) -> Optional[Trade]:
-        """修改交易记录"""
+        """修改交易记录（含新字段）"""
         trade = Trade.query.get(trade_id)
         if not trade:
             return None
@@ -112,16 +123,25 @@ class AccountService:
         ok = fail = 0
         for item in trades_data:
             try:
+                t_date = item['trade_date']
+                if isinstance(t_date, str):
+                    t_date = datetime.strptime(t_date[:10], '%Y-%m-%d').date()
                 t = self.create_trade(
                     ts_code=item['ts_code'],
                     stock_name=item.get('stock_name', ''),
                     direction=item['direction'],
-                    trade_date=item['trade_date'] if isinstance(item['trade_date'], date)
-                               else datetime.strptime(item['trade_date'][:10], '%Y-%m-%d').date(),
+                    trade_date=t_date,
                     price=float(item['price']),
                     quantity=int(item['quantity']),
                     commission=float(item.get('commission', 0)),
                     notes=item.get('notes', ''),
+                    buy_reason=item.get('buy_reason'),
+                    sell_reason=item.get('sell_reason'),
+                    review_unit_id=item.get('review_unit_id'),
+                    is_partial=item.get('is_partial', False),
+                    stamp_tax=float(item.get('stamp_tax', 0)),
+                    transfer_fee=float(item.get('transfer_fee', 0)),
+                    realized_pnl=float(item['realized_pnl']) if item.get('realized_pnl') else None,
                 )
                 if t:
                     ok += 1
@@ -136,16 +156,14 @@ class AccountService:
 
     def get_current_positions(self) -> List[Dict]:
         """
-        从交易记录计算当前持仓
-
-        按 ts_code 汇总：买入总量/金额 vs 卖出总量/金额
-        余量 > 0 即为持仓。
+        从交易记录计算当前持仓（226号方案增强）
+        新增字段: hold_days, first_buy, pnl_pct, ratio, market_value
         """
         trades = Trade.query.order_by(Trade.trade_date.asc()).all()
         if not trades:
             return []
 
-        holdings = {}  # ts_code -> {qty, cost, total_buy, total_sell, ...}
+        holdings = {}  # ts_code -> {qty, cost, total_buy, total_sell, first_buy_date, ...}
         for t in trades:
             code = t.ts_code
             if code not in holdings:
@@ -154,12 +172,15 @@ class AccountService:
                     'stock_name': t.stock_name or '',
                     'buy_qty': 0, 'buy_amount': 0.0,
                     'sell_qty': 0, 'sell_amount': 0.0,
+                    'first_buy_date': None,
                     'realized_pnl': 0.0,
                 }
             h = holdings[code]
             if t.stock_name:
                 h['stock_name'] = t.stock_name
             if t.direction == '买入':
+                if h['buy_qty'] == 0:
+                    h['first_buy_date'] = t.trade_date
                 h['buy_qty'] += t.quantity
                 h['buy_amount'] += float(t.amount)
             elif t.direction == '卖出':
@@ -167,6 +188,10 @@ class AccountService:
                 h['sell_amount'] += float(t.amount)
 
         positions = []
+        today = date.today()
+        total_position_value = 0
+        position_cost_total = 0
+
         for code, h in holdings.items():
             hold_qty = h['buy_qty'] - h['sell_qty']
             if hold_qty <= 0:
@@ -180,6 +205,12 @@ class AccountService:
             current_price = float(latest.close) if latest else None
             market_value = round(current_price * hold_qty, 2) if current_price else round(avg_cost * hold_qty, 2)
             unrealized_pnl = round((current_price - avg_cost) * hold_qty, 2) if current_price else 0.0
+            total_cost = round(avg_cost * hold_qty, 2)
+            pnl_pct = round((current_price - avg_cost) / avg_cost * 100, 2) if avg_cost and current_price else 0
+            hold_days = (today - h['first_buy_date']).days if h['first_buy_date'] else 0
+
+            total_position_value += market_value
+            position_cost_total += total_cost
 
             positions.append({
                 'ts_code': code,
@@ -187,18 +218,26 @@ class AccountService:
                 'hold_qty': hold_qty,
                 'avg_cost': round(avg_cost, 2),
                 'current_price': current_price,
-                'total_cost': round(avg_cost * hold_qty, 2),
+                'total_cost': total_cost,
                 'market_value': market_value,
                 'unrealized_pnl': unrealized_pnl,
                 'realized_pnl': round(realized_pnl, 2),
+                # 新增字段
+                'hold_days': hold_days,
+                'first_buy_date': h['first_buy_date'].isoformat() if h['first_buy_date'] else None,
+                'pnl_pct': pnl_pct,
             })
+
+        # 计算占比
+        for p in positions:
+            p['ratio'] = round(p['market_value'] / total_position_value * 100, 2) if total_position_value else 0
 
         return positions
 
     # ── 账户总览 ──
 
     def get_account_summary(self) -> Dict:
-        """账户总览指标"""
+        """账户总览指标（226号方案增强：7项KPI芯片+持仓汇总）"""
         trades = Trade.query.all()
         if not trades:
             return self._empty_summary()
@@ -220,30 +259,78 @@ class AccountService:
 
         buy_trades = [t for t in trades if t.direction == '买入']
         sell_trades = [t for t in trades if t.direction == '卖出']
-        win_sells = [t for t in sell_trades if float(t.amount) > float(t.price) * t.quantity * 0.99]
+
+        # 胜率：卖出盈利笔数 / 总卖出笔数
+        win_sells = [t for t in sell_trades if (float(t.price) * t.quantity - float(t.amount)) > 0]
+        win_rate = round(len(win_sells) / max(len(sell_trades), 1) * 100, 2)
 
         total_return_pct = (total_profit / initial_capital * 100) if initial_capital else 0
 
+        # 最大回撤（从交易记录推算，避免与 get_equity_curve 循环引用）
+        max_drawdown = 0.0
+        buy_amount = 0.0
+        peak_asset = initial_capital
+        running_cash = 0.0
+        running_positions = {}
+        sorted_by_date = sorted(trades, key=lambda t: t.trade_date)
+        for t in sorted_by_date:
+            code = t.ts_code
+            if code not in running_positions:
+                running_positions[code] = 0
+            if t.direction == '买入':
+                running_positions[code] += t.quantity
+                running_cash -= float(t.amount)
+            else:
+                running_positions[code] -= t.quantity
+                running_cash += float(t.amount)
+            pos_value = sum(
+                n * float(t.price) for c, n in running_positions.items() if n > 0
+            )
+            total = running_cash + pos_value
+            if total > peak_asset:
+                peak_asset = total
+            dd = (peak_asset - total) / peak_asset if peak_asset else 0
+            if dd > max_drawdown:
+                max_drawdown = dd
+
+        # 盈亏比
+        pnl_list = [float(t.amount) - float(t.price) * t.quantity for t in sell_trades] if sell_trades else []
+        wins = [p for p in pnl_list if p > 0]
+        losses = [p for p in pnl_list if p <= 0]
+        avg_win = float(np.mean(wins)) if wins else 0
+        avg_loss = abs(float(np.mean(losses))) if losses else 1
+        profit_ratio = round(avg_win / max(avg_loss, 1), 2)
+
+        # 年化收益
+        days_traded = (trades[-1].trade_date - trades[0].trade_date).days if len(trades) > 1 else 0
+        annualized_return = round(
+            ((1 + total_return_pct / 100) ** (365 / max(days_traded, 1)) - 1) * 100, 2
+        ) if days_traded > 0 else 0
+
         return {
-            'total_asset': round(total_asset, 2),
+            'total_assets': round(total_asset, 2),
             'cash_balance': round(max(cash_balance, 0), 2),
             'position_value': round(position_value, 2),
-            'total_profit': round(total_profit, 2),
-            'total_return_pct': round(total_return_pct, 4),
-            'initial_capital': round(initial_capital, 2),
-            'total_trades': len(trades),
+            'total_pnl': round(total_profit, 2),
+            'total_pnl_pct': round(total_return_pct, 2),
+            'annualized_return': annualized_return,
+            'trade_count': len(trades),
             'buy_count': len(buy_trades),
             'sell_count': len(sell_trades),
+            'win_rate': win_rate,
+            'max_drawdown': round(max_drawdown * 100, 2),
+            'profit_ratio': f'1:{profit_ratio}',
             'positions_count': len(positions),
-            'win_rate': round(len(win_sells) / max(len(sell_trades), 1), 4),
+            'position_total': round(position_value, 2),
         }
 
     def _empty_summary(self) -> Dict:
         return {
-            'total_asset': 0.0, 'cash_balance': 0.0, 'position_value': 0.0,
-            'total_profit': 0.0, 'total_return_pct': 0.0, 'initial_capital': 0.0,
-            'total_trades': 0, 'buy_count': 0, 'sell_count': 0,
-            'positions_count': 0, 'win_rate': 0.0,
+            'total_assets': 0.0, 'cash_balance': 0.0, 'position_value': 0.0,
+            'total_pnl': 0.0, 'total_pnl_pct': 0.0, 'annualized_return': 0.0,
+            'trade_count': 0, 'buy_count': 0, 'sell_count': 0,
+            'win_rate': 0.0, 'max_drawdown': 0.0, 'profit_ratio': '0:0',
+            'positions_count': 0, 'position_total': 0.0,
         }
 
     # ── 资金曲线 ──
@@ -268,8 +355,10 @@ class AccountService:
         if not trades:
             return []
 
-        summary = self.get_account_summary()
-        initial = summary.get('initial_capital', 100000)
+        # 初始本金 ≈ 所有买入金额总和
+        initial = sum(float(t.amount) for t in trades if t.direction == '买入')
+        if initial <= 0:
+            return []
         curve = []
         daily_holdings = {}
         cash = float(initial)
@@ -364,3 +453,27 @@ class AccountService:
             VirtualPosition.status == 'completed'
         ).order_by(VirtualPosition.start_date.desc()).limit(100).all()
         return [vp.to_dict() for vp in vps]
+
+    # ── 复盘策略候选 ──
+
+    def get_review_candidates(self, ts_code: str) -> List[Dict]:
+        """获取可关联的复盘策略候选列表（按同票检索复盘中心RV）"""
+        try:
+            from app.models.playback import ReviewUnit
+            units = ReviewUnit.query.filter(
+                ReviewUnit.ts_code == ts_code
+            ).order_by(ReviewUnit.added_at.desc()).limit(20).all()
+            return [
+                {
+                    'unit_id': u.unit_id,
+                    'ts_code': u.ts_code,
+                    'name': u.name,
+                    'stage': u.stage,
+                    'strategy_config': u.strategy_config,
+                    'entry_date': u.entry_date.isoformat() if u.entry_date else None,
+                }
+                for u in units
+            ]
+        except Exception as e:
+            logger.warning(f"获取复盘策略候选失败: {e}")
+            return []

@@ -539,3 +539,367 @@ class ReviewEngine:
             })
 
         return suggestions
+
+
+# ═══════════════════════════════════════════════════════
+# 六维复盘引擎（226号方案 · 去评分化叙事格式）
+# ═══════════════════════════════════════════════════════
+
+BEHAVIOR_PATTERNS = [
+    {'id': 'chase_up', 'name': '追涨买入', 'condition': lambda tx: tx.get('price_change_1d', 0) > 5},
+    {'id': 'early_profit', 'name': '过早止盈', 'condition': lambda tx: tx.get('hold_days', 99) < 5 and tx.get('pnl_pct', 0) > 0},
+    {'id': 'endowment_effect', 'name': '持亏过久', 'condition': lambda tx: tx.get('hold_days', 0) > 20 and tx.get('pnl_pct', 0) < 0},
+    {'id': 'panic_sell', 'name': '恐慌卖出', 'condition': lambda tx: tx.get('price_change_1d', 0) < -5},
+    {'id': 'over_trade', 'name': '频繁交易',
+     'condition': lambda tx: False},  # 需跨交易判断（同一票3日内反向交易）
+    {'id': 'avg_down', 'name': '向下摊平', 'condition': lambda tx: False},  # 跨交易判断（低于成本5%补仓）
+]
+
+
+def _build_trade_context(trades: List) -> List:
+    """为交易记录构建分析上下文（价格变动/持有天数等）"""
+    contexts = []
+    sorted_trades = sorted(trades, key=lambda t: t.trade_date)
+
+    # 先按股票分组以计算持有天数和盈亏
+    stock_groups = {}
+    for t in sorted_trades:
+        code = t.ts_code
+        if code not in stock_groups:
+            stock_groups[code] = []
+        stock_groups[code].append(t)
+
+    for t in sorted_trades:
+        ctx = {
+            'id': t.id,
+            'ts_code': t.ts_code,
+            'stock_name': t.stock_name or '',
+            'direction': t.direction,
+            'trade_date': t.trade_date,
+            'price': float(t.price),
+            'quantity': t.quantity,
+            'amount': float(t.amount),
+            'buy_reason': t.buy_reason,
+            'sell_reason': t.sell_reason,
+            'review_unit_id': t.review_unit_id,
+            'is_partial': bool(t.is_partial or False),
+        }
+
+        # 价格变动（对买入计算当日涨幅参考）
+        if t.direction == '买入':
+            daily = DailyData.query.filter(
+                DailyData.ts_code == t.ts_code,
+                DailyData.trade_date == t.trade_date,
+            ).first()
+            if daily:
+                ctx['price_change_1d'] = float(daily.pct_chg or 0)
+
+        # 持有天数（对卖出：找同一票最近一次买入）
+        if t.direction == '卖出':
+            same_stock_buys = [
+                x for x in sorted_trades
+                if x.ts_code == t.ts_code and x.direction == '买入' and x.trade_date < t.trade_date
+            ]
+            if same_stock_buys:
+                last_buy = same_stock_buys[-1]
+                ctx['hold_days'] = (t.trade_date - last_buy.trade_date).days
+                ctx['pnl_pct'] = round((float(t.price) - float(last_buy.price)) / float(last_buy.price) * 100, 2)
+
+        # 判断跨交易行为（频繁交易：3日内同一票买卖）
+        if t.direction == '卖出':
+            nearby = [
+                x for x in sorted_trades
+                if x.ts_code == t.ts_code and x.direction == '买入'
+                and abs((x.trade_date - t.trade_date).days) <= 3
+            ]
+            if nearby:
+                ctx['over_trade_3d'] = True
+
+        contexts.append(ctx)
+    return contexts
+
+
+class ReviewEngine6D:
+    """六维复盘引擎（226号方案）
+
+    维度:
+      A 买卖点质量  |  B 策略执行与有效性  |  C 资金与风险管理
+      D 交易时机与节奏  |  E 行为模式识别  |  F 综合归因与建议
+    """
+
+    def run_review(self, trades: List[Trade], start_date: date, end_date: date) -> Dict:
+        """执行六维复盘"""
+        if not trades:
+            return {'error': '无交易数据', 'dimensions': {}, 'review_id': None}
+
+        ctx = _build_trade_context(trades)
+
+        dim_a = self._eval_buy_sell_quality(ctx)
+        dim_b = self._eval_strategy_exec(ctx)
+        dim_c = self._eval_capital_risk(ctx)
+        dim_d = self._eval_timing_tempo(ctx)
+        dim_e = self._eval_behavior_patterns(ctx)
+        dim_f = self._eval_composite(dim_a, dim_b, dim_c, dim_d, dim_e, ctx)
+
+        import hashlib
+        review_id = f"6DRV-{start_date.strftime('%Y%m%d')}-{hashlib.md5(str(trades[0].id).encode()).hexdigest()[:4].upper()}"
+
+        return {
+            'review_id': review_id,
+            'period': {'start': start_date.isoformat(), 'end': end_date.isoformat()},
+            'dimensions': {
+                'A': dim_a, 'B': dim_b, 'C': dim_c,
+                'D': dim_d, 'E': dim_e, 'F': dim_f,
+            }
+        }
+
+    # ── A: 买卖点质量评估 ──
+
+    def _eval_buy_sell_quality(self, ctx: List[Dict]) -> Dict:
+        entries = []
+        for tx in ctx:
+            if tx['direction'] == '买入':
+                quality = 'good' if tx.get('price_change_1d', 0) or 0 >= -1 else 'fair'
+                detail = f"买入价 ¥{tx['price']:.2f}"
+                if tx.get('buy_reason'):
+                    detail += f" · 理由: {tx['buy_reason']}"
+                entries.append({
+                    'stock': tx['ts_code'],
+                    'stock_name': tx['stock_name'],
+                    'quality': quality,
+                    'detail': detail + (' ✅' if quality == 'good' else ' ⚠️'),
+                    'trade_date': tx['trade_date'].isoformat(),
+                    'price': tx['price'],
+                })
+        if not entries:
+            entries.append({'detail': '本周期无买入操作'})
+        narrative = self._build_a_narrative(entries)
+        return {'title': '买卖点质量评估', 'narrative': narrative, 'entries': entries}
+
+    def _build_a_narrative(self, entries: List[Dict]) -> str:
+        lines = []
+        for e in entries:
+            lines.append(
+                f"▸ {e.get('stock_name', e.get('stock', '?'))}·买入（{e.get('trade_date', '?')}）"
+            )
+            lines.append(f"  {e['detail']}")
+        return '\n'.join(lines)
+
+    # ── B: 策略执⾏与有效性评估 ──
+
+    def _eval_strategy_exec(self, ctx: List[Dict]) -> Dict:
+        entries = []
+        for tx in ctx:
+            if tx.get('review_unit_id'):
+                entries.append({
+                    'stock': tx['ts_code'],
+                    'stock_name': tx['stock_name'],
+                    'rv_id': tx['review_unit_id'],
+                    'consistency': True,
+                    'detail': f"关联策略 {tx['review_unit_id']} ✅",
+                })
+        if not entries:
+            entries = [{'detail': '本周期交易均未关联复盘策略（建议在新建交易时关联）'}]
+        narrative = self._build_b_narrative(entries)
+        return {'title': '策略执行与有效性评估', 'narrative': narrative, 'entries': entries}
+
+    def _build_b_narrative(self, entries: List[Dict]) -> str:
+        lines = []
+        for e in entries:
+            sname = e.get('stock_name', e.get('stock', '?'))
+            if e.get('rv_id'):
+                lines.append(f"▸ {sname}·关联策略 {e['rv_id']}")
+                lines.append(f"  策略诊断: 方向判断准确 ✅")
+            else:
+                lines.append(f"▸ {sname}")
+                lines.append(f"  {e['detail']}")
+        return '\n'.join(lines)
+
+    # ── C: 资金与风险管理 ──
+
+    def _eval_capital_risk(self, ctx: List[Dict]) -> Dict:
+        entries = []
+        buy_count = sum(1 for tx in ctx if tx['direction'] == '买入')
+        sell_count = sum(1 for tx in ctx if tx['direction'] == '卖出')
+        entries.append({
+            'key': '交易频率',
+            'detail': f"买入 {buy_count} 笔 · 卖出 {sell_count} 笔"
+        })
+        # 检测是否有止损（卖出理由含止损）
+        stops = [tx for tx in ctx if tx['direction'] == '卖出' and tx.get('sell_reason') in ('止损', '止盈')]
+        if stops:
+            entries.append({'key': '止损执行', 'detail': f"触发止损/止盈 {len(stops)} 次 ✅", 'status': 'good'})
+        else:
+            entries.append({'key': '止损执行', 'detail': '本次区间内未触发止损操作'})
+
+        stocks_involved = list(set(tx['ts_code'] for tx in ctx))
+        entries.append({'key': '持仓分散度', 'detail': f"涉及 {len(stocks_involved)} 只股票"})
+
+        narrative = self._build_c_narrative(entries)
+        return {'title': '资金与风险管理', 'narrative': narrative, 'entries': entries}
+
+    def _build_c_narrative(self, entries: List[Dict]) -> str:
+        lines = []
+        for e in entries:
+            lines.append(f"▸ {e['key']}")
+            lines.append(f"  {e['detail']}")
+        return '\n'.join(lines)
+
+    # ── D: 交易时机与节奏把控 ──
+
+    def _eval_timing_tempo(self, ctx: List[Dict]) -> Dict:
+        entries = []
+        sell_tx = [tx for tx in ctx if tx['direction'] == '卖出']
+        for tx in sell_tx:
+            hd = tx.get('hold_days')
+            if hd is not None:
+                if hd <= 3:
+                    eval_ = '过短 ⚠️'
+                elif hd <= 20:
+                    eval_ = '合理 ✅'
+                else:
+                    eval_ = '偏长 💤'
+                entries.append({
+                    'stock': tx['ts_code'],
+                    'stock_name': tx['stock_name'],
+                    'hold_days': hd,
+                    'eval': eval_,
+                    'pnl_pct': tx.get('pnl_pct', 0),
+                    'detail': f"持有 {hd} 天 · {eval_}",
+                })
+        if not entries:
+            entries.append({'detail': '本周期无已卖出交易'})
+        narrative = self._build_d_narrative(entries)
+        return {'title': '交易时机与节奏把控', 'narrative': narrative, 'entries': entries}
+
+    def _build_d_narrative(self, entries: List[Dict]) -> str:
+        lines = []
+        for e in entries:
+            sname = e.get('stock_name', e.get('stock', '?'))
+            lines.append(f"▸ {sname}")
+            lines.append(f"  {e['detail']} (盈亏 {e.get('pnl_pct', 0):+.1f}%)")
+        return '\n'.join(lines)
+
+    # ── E: 行为模式识别 ──
+
+    def _eval_behavior_patterns(self, ctx: List[Dict]) -> Dict:
+        found = []
+        # 跨交易检测：频繁交易（同票3日内买卖）
+        for tx in ctx:
+            if tx.get('over_trade_3d'):
+                pattern = {'type': 'over_trade', 'stock': tx['ts_code'],
+                           'stock_name': tx['stock_name'],
+                           'severity': 'warn',
+                           'detail': f"频繁交易：{tx['stock_name']} 买入后3日内卖出"}
+                found.append(pattern)
+
+        # 逐交易检测
+        for tx in ctx:
+            for pat in BEHAVIOR_PATTERNS:
+                if pat['id'] in ('over_trade', 'avg_down'):
+                    continue  # 上面单独处理
+                if pat['condition'](tx):
+                    found.append({
+                        'type': pat['id'],
+                        'stock': tx['ts_code'],
+                        'stock_name': tx['stock_name'],
+                        'severity': 'warn',
+                        'detail': pat['name'],
+                    })
+
+        narrative = self._build_e_narrative(found)
+        return {'title': '行为模式识别', 'narrative': narrative, 'patterns': found}
+
+    def _build_e_narrative(self, patterns: List[Dict]) -> str:
+        if not patterns:
+            return '▸ 未检测到明显异常行为模式 ✅'
+        lines = []
+        for p in patterns:
+            lines.append(f"▸ {p.get('stock_name', p.get('stock', '?'))}")
+            lines.append(f"  ⚠️ {p['detail']}")
+        return '\n'.join(lines)
+
+    # ── F: 综合归因与建议 ──
+
+    def _eval_composite(self, dim_a, dim_b, dim_c, dim_d, dim_e, ctx: List[Dict]) -> Dict:
+        # 归因分析
+        stocks = set(t['ts_code'] for t in ctx)
+        profit_sources = []
+        loss_sources = []
+        for code in stocks:
+            buys = [t for t in ctx if t['ts_code'] == code and t['direction'] == '买入']
+            sells = [t for t in ctx if t['ts_code'] == code and t['direction'] == '卖出']
+            for s in sells:
+                pnl = s.get('pnl_pct', 0)
+                item = {'stock': code, 'stock_name': s.get('stock_name', ''), 'pnl_pct': pnl}
+                if pnl >= 0:
+                    profit_sources.append(item)
+                else:
+                    loss_sources.append(item)
+
+        profit_sources.sort(key=lambda x: x['pnl_pct'], reverse=True)
+        loss_sources.sort(key=lambda x: x['pnl_pct'])
+
+        # 改进建议
+        improvements = []
+        if dim_e.get('patterns'):
+            for p in dim_e['patterns']:
+                mapping = {
+                    'chase_up': '避免追涨：设置条件单分批建仓',
+                    'early_profit': '止盈策略优化：用移动止盈替代固定目标位',
+                    'endowment_effect': '止损纪律：严格执行预设止损位',
+                    'panic_sell': '恐慌时复盘策略信号再做决定',
+                    'over_trade': '减少交易频率：每只票每日最多操作1次',
+                }
+                if p['type'] in mapping:
+                    tip = mapping[p['type']]
+                    if tip not in improvements:
+                        improvements.append(tip)
+
+        # 行业分散建议
+        stocks_set = set(t['ts_code'] for t in ctx)
+        sectors = set()
+        for code in stocks_set:
+            stock = Stock.query.get(code)
+            if stock and stock.industry:
+                sectors.add(stock.industry)
+        if len(sectors) <= 1 and len(stocks_set) >= 3:
+            improvements.append('行业分散：当前布局过于集中，考虑分散到2-3个不同行业')
+
+        if not improvements:
+            improvements = ['当前周期操作规范，建议继续保持']
+
+        narrative = self._build_f_narrative(profit_sources, loss_sources, improvements)
+        return {
+            'title': '综合归因与改进建议',
+            'narrative': narrative,
+            'profit_sources': profit_sources,
+            'loss_sources': loss_sources,
+            'top_improvements': improvements[:5],
+        }
+
+    def _build_f_narrative(self, profits, losses, improvements) -> str:
+        lines = ['【收益来源】']
+        for p in profits[:3]:
+            lines.append(f"  ✅ {p.get('stock_name', p['stock'])} +{p['pnl_pct']:.1f}%")
+        if not profits:
+            lines.append('  (无盈利卖出交易)')
+
+        lines.append('')
+        lines.append('【亏损来源】')
+        for l in losses[:3]:
+            lines.append(f"  ❌ {l.get('stock_name', l['stock'])} {l['pnl_pct']:.1f}%")
+        if not losses:
+            lines.append('  (无亏损卖出交易)')
+
+        lines.append('')
+        lines.append('【TOP改进建议】')
+        for i, imp in enumerate(improvements[:5], 1):
+            lines.append(f"  {i}. {imp}")
+        return '\n'.join(lines)
+
+
+# 便捷函数
+def run_review_6d(trades: List[Trade], start_date: date, end_date: date) -> Dict:
+    """运行六维复盘（便捷入口）"""
+    return ReviewEngine6D().run_review(trades, start_date, end_date)

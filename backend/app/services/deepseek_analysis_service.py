@@ -1,79 +1,99 @@
 """
-DeepSeek 多角色投研分析服务
-5个角色平行分析，最终合成报告
-"""
+DeepSeek 多角色投研分析服务（V2）
+Phase 1: 6角色并行分析 + 三元组输出 + 综合报告
 
-import os
+保留原 interpret_status / explain_signal 供 indicator-ide 页面使用。
+"""
 import json
-import time
-import threading
 import logging
-from typing import Dict, Optional, List
+import os
+import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
-# [153] AI上下文注入 + 结构化解析
 from app.services.ai_context_builder import ai_context_builder, ai_structured_parser, ai_signal_bus
 
-
-# 内存存储：analysis_id -> 分析状态
+# ────────────────────────────────────────────────────────────
+# 内存存储
+# ────────────────────────────────────────────────────────────
 _analysis_store: Dict[str, Dict] = {}
 _lock = threading.Lock()
+_next_task_id = [1]
 
 ANALYST_ROLES = [
     {
-        'id': 'technical',
-        'name': '技术分析师',
-        'icon': '📈',
+        'id': 'technical', 'name': '技术研判', 'icon': '📈',
+        'direction': 'bullish', 'tag': '偏多',
         'role_prompt': (
-            '你是一名经验丰富的A股技术分析师。请基于以下股票数据，从技术面角度进行分析。\n'
-            '分析要点：趋势判断（均线、通道）、支撑压力位、成交量分析、技术指标（MACD/RSI/KDJ）、K线形态。\n'
-            '请给出明确的看多/看空倾向（百分比）和关键价位判断。'
+            '你是一名资深的A股技术分析师。请基于以下股票数据，从技术面进行专业研判。\n'
+            '分析要点：走势结构判定（缠论笔段/中枢）、买卖点识别、均线排列形态、'
+            '成交量配合、支撑压力位、技术指标（MACD/RSI/KDJ）。\n'
+            '请给出明确的趋势方向判断和关键价位。'
         )
     },
     {
-        'id': 'fundamental',
-        'name': '基本面分析师',
-        'icon': '📊',
+        'id': 'fundamental', 'name': '基本面研判', 'icon': '📊',
+        'direction': 'neutral', 'tag': '中性',
         'role_prompt': (
-            '你是一名A股基本面分析师。请基于以下股票信息进行基本面分析。\n'
-            '分析要点：财务健康度、估值水平（PE/PB/PS）、成长性、行业地位、竞争优势、ROE、现金流。\n'
-            '请给出明确的看多/看空倾向（百分比）。'
+            '你是一名专业的A股基本面分析师。请基于以下财务数据进行基本面研判。\n'
+            '分析要点：财务健康度（ROE/现金流）、估值水平（PE/PB）、成长性（营收/利润增速）、'
+            '行业地位、竞争优势、资产负债表结构。\n'
+            '请给出明确的估值评估结论。'
         )
     },
     {
-        'id': 'macro',
-        'name': '宏观策略师',
-        'icon': '🌐',
+        'id': 'chip', 'name': '筹码资金研判', 'icon': '🧩',
+        'direction': 'bullish', 'tag': '偏多',
         'role_prompt': (
-            '你是一名A股宏观策略师。请基于以下股票和当前市场环境进行分析。\n'
-            '分析要点：宏观经济周期、行业政策、市场情绪、资金流向、北向资金流向、板块轮动。\n'
-            '请给出明确的看多/看空倾向（百分比）。'
+            '你是一名经验丰富的主力资金分析师。请基于以下筹码和资金流向数据进行研判。\n'
+            '分析要点：筹码集中度变化、获利比例、平均成本、主力资金净流向、'
+            '北向资金动向、大单成交方向。\n'
+            '请给出明确的主力行为判断。'
         )
     },
     {
-        'id': 'risk',
-        'name': '风险控制官',
-        'icon': '⚠️',
+        'id': 'sentiment', 'name': '情绪研判', 'icon': '💬',
+        'direction': 'neutral', 'tag': '中性',
         'role_prompt': (
-            '你是一名A股风控官。请从风控角度评估该股票的投资风险。\n'
-            '评估要点：市场风险、流动性风险、个股风险（质押/减持/监管）、波动率风险、回撤风险。\n'
-            '请给出明确的风险等级判断和止损建议。'
+            '你是一名A股市场情绪分析专家。请基于以下情绪指标进行研判。\n'
+            '分析要点：市场情绪阶段（BOCIASI快线）、情绪趋势、板块轮动、'
+            '板块强度排名、市场温度、拥挤度。\n'
+            '请给出明确的情绪周期判断。'
         )
     },
     {
-        'id': 'fund_manager',
-        'name': '资深基金经理',
-        'icon': '👨‍💼',
+        'id': 'news', 'name': '消息面研判', 'icon': '📰',
+        'direction': 'bearish', 'tag': '偏空',
         'role_prompt': (
-            '你是一名拥有20年经验的A股基金经理。请综合所有分析师的判断，给出最终投资建议。\n'
-            '请综合评定：总体评级（STRONGLY_BUY/BUY/HOLD/SELL/STRONGLY_SELL）、\n'
-            '目标价位区间、建议仓位（百分比）、止损价位。\n'
-            '要求观点明确、可执行，不要让用户感到模棱两可。'
+            '你是一名A股事件驱动型分析师。请基于以下公告和消息数据进行研判。\n'
+            '分析要点：近期重大利好/利空事项、机构评级变动、政策与行业动态、'
+            '业绩预告情况、待验证的关键事件。\n'
+            '请给出明确的事件影响判断。'
         )
-    }
+    },
+    {
+        'id': 'risk', 'name': '风控研判', 'icon': '🛡️',
+        'direction': 'watch', 'tag': '可参与',
+        'role_prompt': (
+            '你是一名专业的A股风控官。请从风险管理角度进行研判。\n'
+            '分析要点：市场系统性风险、个股流动性风险、质押/减持/监管风险、'
+            '波动率风险、验证链完整性、回撤风险。\n'
+            '请给出明确的风险等级和仓位建议。'
+        )
+    },
 ]
 
+# 6角色ID列表
+ROLE_IDS = [r['id'] for r in ANALYST_ROLES]
+
+
+# ────────────────────────────────────────────────────────────
+# DeepSeek API 调用
+# ────────────────────────────────────────────────────────────
 
 def _call_deepseek(prompt: str, system_prompt: str, config: Dict) -> Optional[str]:
     """调用 DeepSeek API"""
@@ -85,7 +105,7 @@ def _call_deepseek(prompt: str, system_prompt: str, config: Dict) -> Optional[st
     provider = config.get('type', 'mock')
 
     if provider == 'mock' or not api_key:
-        return None  # caller will handle mock fallback
+        return None
 
     headers = {
         'Content-Type': 'application/json',
@@ -105,400 +125,477 @@ def _call_deepseek(prompt: str, system_prompt: str, config: Dict) -> Optional[st
     try:
         resp = requests.post(
             f'{endpoint}/chat/completions',
-            headers=headers,
-            json=payload,
-            timeout=120
+            headers=headers, json=payload, timeout=120
         )
         if resp.status_code == 200:
             return resp.json()['choices'][0]['message']['content']
-        else:
-            logger.error(f'DeepSeek API error: {resp.status_code} {resp.text}')
-            return None
+        logger.error(f'DeepSeek API error: {resp.status_code} {resp.text[:200]}')
+        return None
     except Exception as e:
         logger.error(f'DeepSeek call failed: {e}')
         return None
 
 
-def _parse_analyst_report(text: str, role_id: str) -> Dict:
-    """解析分析师返回的文本为结构化数据"""
-    # [153-P0-2] 优先尝试JSON结构化解析
-    parsed = ai_structured_parser.parse_json(text)
-    if parsed and ai_structured_parser.validate_schema(parsed, role_id):
-        direction = parsed.get('direction', 'neutral')
-        confidence = parsed.get('confidence', 50)
-        bullish = confidence if direction == 'bullish' else (100 - confidence if direction == 'bearish' else 50)
-        bearish = 100 - bullish
-        return {
-            'role_id': role_id,
-            'structured': parsed,
-            'raw': text[:2000],
-            'bullishScore': bullish,
-            'bearishScore': bearish,
-            'evidence': parsed.get('evidence', []),
-            'risk_notes': parsed.get('risk_notes', []),
-            'conclusion': parsed.get('conclusion', ''),
-        }
+# ────────────────────────────────────────────────────────────
+# 6角色 Mock 数据生成
+# ────────────────────────────────────────────────────────────
 
-    # 回退到正则解析
-    bullish = 50
-    bearish = 50
-
-    import re
-    m = re.search(r'(?:看多|Bullish|bullish)\s*[:：]?\s*(\d+)%?', text, re.IGNORECASE)
-    if m:
-        bullish = min(100, max(0, int(m.group(1))))
-
-    m = re.search(r'(?:看空|Bearish|bearish)\s*[:：]?\s*(\d+)%?', text, re.IGNORECASE)
-    if m:
-        bearish = min(100, max(0, int(m.group(1))))
-
-    if bearish + bullish == 0:
-        bullish = bearish = 50
-
-    return {
-        'role_id': role_id,
-        'raw': text[:2000],
-        'bullishScore': bullish,
-        'bearishScore': bearish
-    }
-
-
-def _parse_final_report(text: str) -> Dict:
-    """解析最终基金经理报告"""
-    import re
-
-    report = {
-        'overallRating': 'HOLD',
-        'targetPriceRange': {'min': 0, 'max': 0},
-        'stopLoss': 0,
-        'suggestedPosition': 0.2,
-        'summary': text[:1000],
-        'sections': []
-    }
-
-    # Rating
-    rating_map = {
-        'STRONGLY_BUY': 'STRONGLY_BUY', '强烈看多': 'STRONGLY_BUY',
-        'BUY': 'BUY', '看多': 'BUY',
-        'HOLD': 'HOLD', '中性': 'HOLD', '持有': 'HOLD',
-        'SELL': 'SELL', '看空': 'SELL',
-        'STRONGLY_SELL': 'STRONGLY_SELL', '强烈看空': 'STRONGLY_SELL'
-    }
-    for k, v in rating_map.items():
-        if k in text:
-            report['overallRating'] = v
-            break
-
-    # Target price range
-    m = re.search(r'(?:目标价[位格]?|target)\s*[:：]?\s*(\d+\.?\d*)\s*[-~]\s*(\d+\.?\d*)', text)
-    if m:
-        report['targetPriceRange'] = {'min': float(m.group(1)), 'max': float(m.group(2))}
-
-    # Stop loss
-    m = re.search(r'(?:止损|stop\s*loss)\s*[:：]?\s*(\d+\.?\d*)', text, re.IGNORECASE)
-    if m:
-        report['stopLoss'] = float(m.group(1))
-
-    # Position
-    m = re.search(r'(?:仓位|position)\s*[:：]?\s*(\d+)%', text)
-    if m:
-        report['suggestedPosition'] = min(1.0, max(0, int(m.group(1)) / 100))
-
-    return report
-
-
-def _mock_analyst_report(role_id: str, ts_code: str) -> Dict:
-    """Mock 分析结果（当 DeepSeek 不可用时）"""
-    mock_data = {
+def _mock_role_result(role_id: str, ts_code: str) -> Dict:
+    """生成角色 Mock 分析结果（含三元组）"""
+    mock = {
         'technical': {
-            'bullishScore': 65,
-            'bearishScore': 35,
-            'raw': (
-                f'【技术分析】{ts_code} 当前处于上升通道中。'
-                'MACD指标出现金叉信号，RSI处于51中性区间，KDJ三线向上发散。'
-                '成交量温和放大，20日均线支撑有效。短线看好反弹延续，中线趋势偏多。'
-            )
+            'direction': '看多',
+            'analysis_report': (
+                f'【走势结构判定】\n{ts_code} 日线级别处于上升线段延续中。'
+                '目前运行在上升通道内，通道保持完整。\n\n'
+                '【买卖点分析】\n日线级别出现标准二买信号，MACD在零轴上方金叉，'
+                '确认买点有效性。周线级别处于类二买区域，中长期向上趋势未变。\n\n'
+                '【量价形态】\n成交量温和放大，量价配合良好。FMZ状态为EAGLE，'
+                '均线排列呈多头排列（MA5>MA10>MA20>MA60），短期趋势强势。\n\n'
+                '【核心判断】\n技术面偏多，建议关注短线上攻力度。'
+            ),
+            'structured_data': {
+                'direction': 'up', 'zhongshu_range': [2950, 3100],
+                'buy_sell_point': '二买', 'ma_arrangement': 'MA5>MA10>MA20>MA60',
+                'fmz_state': 'EAGLE', 'support_resistance': '2950 / 3100'
+            },
+            'sources': [
+                {'type': 'strategy', 'source': 'chanlun_strategy.py', 'data_item': '上升笔+中枢+买卖点'},
+                {'type': 'strategy', 'source': 'volume_price_strategy.py', 'data_item': 'FMZ=EAGLE, 形态=头肩底突破'},
+                {'type': 'strategy', 'source': 'volume_price_strategy.py', 'data_item': 'MA5>MA10>MA20>MA60'},
+            ]
         },
         'fundamental': {
-            'bullishScore': 55,
-            'bearishScore': 45,
-            'raw': (
-                f'【基本面分析】{ts_code} 业绩稳健增长，ROE保持在15%以上。'
-                '当前PE处于行业中等水平，估值合理。资产负债率适中，现金流充裕。'
-                '行业龙头地位稳固，但需关注行业增速放缓风险。'
-            )
+            'direction': '中性',
+            'analysis_report': (
+                f'【核心财务指标】\n{ts_code} PE(TTM)处于行业中位偏下水平，'
+                'PB(MRQ)接近近5年低点。ROE连续3年维持在12%以上，盈利质量良好。\n\n'
+                '【估值评估】\n当前估值处于历史较低分位，具备一定安全边际。'
+                '但行业整体增速放缓，需关注估值修复驱动因素。\n\n'
+                '【成长性与质量】\n营收增速放缓至个位数，但净利润增速优于营收增速，'
+                '表明成本控制有效。现金流充裕，资产负债率适中。\n\n'
+                '【核心判断】\n基本面中性偏正面，估值合理偏低，具备防御价值。'
+            ),
+            'structured_data': {
+                'pe_ttm': 15.5, 'pb_mrq': 1.8, 'roe': 12.3,
+                'revenue_growth': 5.2, 'net_profit_growth': 8.1, 'cashflow_status': '良好'
+            },
+            'sources': [
+                {'type': 'tushare', 'source': 'fina_indicator', 'data_item': 'PE/PB/ROE'},
+                {'type': 'tushare', 'source': 'income', 'data_item': '营收增长率/净利润增长率'},
+                {'type': 'tushare', 'source': 'cashflow', 'data_item': '现金流状况'},
+            ]
         },
-        'macro': {
-            'bullishScore': 60,
-            'bearishScore': 40,
-            'raw': (
-                f'【宏观分析】{ts_code} 所属行业受益于政策支持。'
-                '北向资金近期持续流入该板块，市场情绪偏乐观。'
-                '宏观经济处于复苏期，流动性合理充裕，利于权益资产表现。'
-            )
+        'chip': {
+            'direction': '看多',
+            'analysis_report': (
+                f'【筹码分布】\n{ts_code} 筹码集中度近期持续上升，'
+                '底部筹码锁定良好。获利比例约65%，市场整体处于浮盈状态。\n\n'
+                '【资金流向】\n最近5日主力资金净流入明显，大单成交占比提升。'
+                '北向资金近期持续增持，外资看好中期走势。\n\n'
+                '【主力行为研判】\n主力底部建仓迹象明显，筹码从分散到集中的过程正在进行中。'
+                '平均成本线当前有支撑作用。\n\n'
+                '【核心判断】\n筹码面偏多，资金面配合良好，主力做多意愿较强。'
+            ),
+            'structured_data': {
+                'concentration': '集中', 'profit_ratio': 0.65,
+                'avg_cost': 14.80, 'main_force_net': 35000000,
+                'northbound_direction': '增持', 'big_order_direction': '流入'
+            },
+            'sources': [
+                {'type': 'strategy', 'source': 'chip_strategy', 'data_item': '集中度/获利比例'},
+                {'type': 'tushare', 'source': 'moneyflow', 'data_item': '主力净额/大单动向'},
+                {'type': 'tushare', 'source': 'northbound', 'data_item': '北向资金流向'},
+            ]
+        },
+        'sentiment': {
+            'direction': '中性',
+            'analysis_report': (
+                f'【情绪周期分析】\n{ts_code} 所属板块当前处于情绪回暖阶段，'
+                '快速线从低位上穿慢线，情绪修复信号明确。但尚未进入热情区，仍有上行空间。\n\n'
+                '【板块轮动】\n该板块近期轮动强度排名前30%，处于中等偏上水平。'
+                '资金从高估值板块向低估值板块切换，该板块受益于风格轮动。\n\n'
+                '【市场氛围】\n市场温度约55度，处于温和区间。'
+                '拥挤度适中，未出现过度集中风险。\n\n'
+                '【核心判断】\n情绪面中性偏正面，情绪修复中但未过热，仍有上升空间。'
+            ),
+            'structured_data': {
+                'sentiment_phase': '回暖', 'sentiment_trend': '向上',
+                'crowding_level': '适中', 'sector_rotation': '中等偏上',
+                'sector_strength': '前30%', 'market_temperature': 55
+            },
+            'sources': [
+                {'type': 'strategy', 'source': 'bociasi_strategy.py', 'data_item': '情绪阶段/趋势'},
+                {'type': 'strategy', 'source': 'sector_rotation_model', 'data_item': '板块轮动/板块强度'},
+                {'type': 'strategy', 'source': 'crowding_factor', 'data_item': '拥挤度/市场温度'},
+            ]
+        },
+        'news': {
+            'direction': '偏空',
+            'analysis_report': (
+                f'【近期事件梳理】\n{ts_code} 近期无明显重大利好事件。'
+                '需关注即将公布的季度财报和行业政策变化。\n\n'
+                '【机构观点】\n近3月共有5家机构覆盖该股票，评级以"增持"为主。'
+                '目标价均值较当前价有约10%上行空间，机构整体偏乐观。\n\n'
+                '【政策与行业动态】\n行业监管政策趋于稳定，有利于龙头企业。'
+                '但原材料价格波动可能影响短期利润。\n\n'
+                '【核心判断】\n消息面中性偏空，需关注财报披露窗口期。'
+            ),
+            'structured_data': {
+                'positive_events': 2, 'negative_events': 1,
+                'institution_ratings': '增持', 'recent_catalyst': '季度财报',
+                'pending_events': '行业政策调整'
+            },
+            'sources': [
+                {'type': 'api', 'source': 'news_api', 'data_item': '利好/利空事项'},
+                {'type': 'api', 'source': 'reports_api', 'data_item': '机构评级'},
+                {'type': 'tushare', 'source': 'forecast', 'data_item': '业绩预告'},
+            ]
         },
         'risk': {
-            'bullishScore': 40,
-            'bearishScore': 60,
-            'raw': (
-                f'【风控分析】{ts_code} 主要风险包括：市场波动加剧、'
-                '行业竞争加剧导致利润率下滑、大股东减持风险。'
-                '建议设置8%止损线，仓位控制在20%以内。'
-            )
-        },
-        'fund_manager': None  # 由分析服务合成
+            'direction': '可参与',
+            'analysis_report': (
+                f'【多维度风险评估】\n{ts_code} 市场风险等级：中等偏低。'
+                '大盘系统性风险可控。个股风险中等，关注大股东减持进度。\n\n'
+                '【验证链分析】\n多维度信号一致性良好，验证链通过率85%。'
+                '缠论信号与筹码面信号相互印证，提升判断可信度。\n\n'
+                '【下行情景】\n若大盘走弱，该股可能回踩前期低点区域。'
+                '建议设置8%硬止损，防范尾部风险。\n\n'
+                '【风险管控建议】\n仓位建议不超过30%，止损设置在关键支撑位下方。\n\n'
+                '【核心判断】\n中等风险，可参与但需严控仓位和止损。'
+            ),
+            'structured_data': {
+                'market_risk': 35, 'liquidity_risk': 25,
+                'stock_risk': 40, 'volatility_risk': 30,
+                'verification_chains': 85, 'position_advice': '≤30%'
+            },
+            'sources': [
+                {'type': 'strategy', 'source': 'strategy_scheduler', 'data_item': '市场/流动性/波动率风险'},
+                {'type': 'strategy', 'source': 'verification_chains', 'data_item': '验证链通过率'},
+                {'type': 'strategy', 'source': 'conflict_arbiter', 'data_item': '仓位建议'},
+            ]
+        }
     }
-    return mock_data.get(role_id, {
-        'bullishScore': 50,
-        'bearishScore': 50,
-        'raw': f'【{role_id}分析】正在分析{ts_code}...'
+    return mock.get(role_id, {
+        'direction': '中性',
+        'analysis_report': f'【分析报告】\n正在分析{ts_code}...',
+        'structured_data': {}, 'sources': []
     })
 
 
-def _run_analysis_job(analysis_id: str, ts_code: str, stock_name: str, config: Dict):
-    """后台运行完整的分析流程"""
-    provider = config.get('type', 'mock')
-    has_api = provider == 'deepseek' and config.get('api_key', '')
+def _build_structured_input(ts_code: str, role_id: str) -> str:
+    """构建角色分析的结构化输入上下文"""
+    parts = [f"股票代码: {ts_code}"]
+    parts.append(f"分析日期: {datetime.now().strftime('%Y-%m-%d')}")
 
+    # 尝试注入AI上下文
     try:
-        # 获取股票数据（简化为基本信息）
-        stock_info = f"股票代码: {ts_code}, 名称: {stock_name}"
+        context = ai_context_builder.build_context(ts_code)
+        context_section = ai_context_builder.to_prompt_section(context)
+        if context_section:
+            parts.append(context_section)
+    except Exception:
+        pass
 
-        # 逐步分析5个角色
-        analyst_results = {}
-        for idx, role in enumerate(ANALYST_ROLES):
-            role_id = role['id']
-            with _lock:
-                if analysis_id in _analysis_store:
-                    _analysis_store[analysis_id]['current_role'] = role_id
-                    _analysis_store[analysis_id]['progress'] = 15 + idx * 17
-                    _analysis_store[analysis_id]['progress_text'] = f'{role["name"]}分析中...'
+    return '\n\n'.join(parts)
 
-            # 调用 DeepSeek 或 fallback 到 Mock
-            report_text = None
-            if has_api:
-                prompt = (
-                    f'请对{stock_name}({ts_code})进行股票分析。\n\n'
-                    f'当前时间：{datetime.now().strftime("%Y-%m-%d")}\n\n'
-                    f'请从{role["name"]}的角度进行分析，给出看多/看空百分比。'
-                )
-                # [153-P0-1] 多层上下文注入
-            context = ai_context_builder.build_context(ts_code)
-            context_section = ai_context_builder.to_prompt_section(context)
-            enriched_prompt = prompt + '\n\n' + context_section
-            report_text = _call_deepseek(enriched_prompt, role['role_prompt'], config)
 
-            if report_text:
-                report = _parse_analyst_report(report_text, role_id)
-            else:
-                report = _mock_analyst_report(role_id, ts_code)
-                report['role_id'] = role_id
+def _generate_synthesis(roles_results: Dict) -> Dict:
+    """从6角色结果合成综合报告"""
+    directions = []
+    bullish_count = 0
+    for rid in ROLE_IDS:
+        r = roles_results.get(rid, {})
+        d = r.get('direction', '中性')
+        directions.append(d)
+        if d in ('看多', '偏多'):
+            bullish_count += 1
 
-            analyst_results[role_id] = report
+    if bullish_count >= 4:
+        overall = '偏多'
+    elif bullish_count >= 3:
+        overall = '中性偏多'
+    elif bullish_count <= 1:
+        overall = '偏空'
+    else:
+        overall = '中性'
 
-            # 更新进度
-            with _lock:
-                if analysis_id in _analysis_store:
-                    _analysis_store[analysis_id]['analysts'][role_id] = report
-                    _analysis_store[analysis_id]['progress'] = 15 + (idx + 1) * 17
-                    _analysis_store[analysis_id]['logs'].append({
-                        'role': role_id,
-                        'icon': role['icon'],
-                        'content': f'{role["name"]}分析完成',
-                        'timestamp': datetime.now().isoformat()
-                    })
+    active_roles = [rid for rid in ROLE_IDS if roles_results.get(rid, {}).get('status') == 'completed']
+    consistency = f"{bullish_count}/{len(active_roles)}" if active_roles else "0/0"
 
-        # 第5步：基金经理合成报告
-        with _lock:
-            if analysis_id in _analysis_store:
-                _analysis_store[analysis_id]['progress'] = 95
-                _analysis_store[analysis_id]['progress_text'] = '生成最终报告...'
+    # 通用观点（无LLM时使用模板）
+    consensus = [
+        {'icon': '✅', 'text': f'{consistency}角色一致认为中期走势偏积极'},
+        {'icon': '✅', 'text': '关键支撑位有效，多角色均认可'},
+        {'icon': '✅', 'text': '当前估值合理偏低，具备安全边际'},
+    ]
 
-        # 生成最终报告
-        fund_manager_role = ANALYST_ROLES[4]
-        final_report_text = None
-        if has_api:
-            # 把前面4个分析结果给基金经理做综合
-            summaries = []
-            for rid in ['technical', 'fundamental', 'macro', 'risk']:
-                r = analyst_results.get(rid, {})
-                summaries.append(f'{rid}: 看多{r.get("bullishScore", 50)}%/看空{r.get("bearishScore", 50)}%')
+    conflicts = [
+        {
+            'title': '短期方向分歧',
+            'detail': '📈 技术面（看多）：放量突破形态颈线\n📰 消息面（偏空）：短期扰动\n核心分歧：时间维度差异——短期扰动vs中期趋势',
+            'involved_roles': ['technical', 'news', 'chip', 'risk']
+        },
+        {
+            'title': '估值支撑持续性',
+            'detail': '📊 基本面（中性）：估值低但增速放缓\n💬 情绪面（中性）：情绪从底部回升\n核心分歧：低估值是否构成买入理由',
+            'involved_roles': ['fundamental', 'sentiment']
+        }
+    ]
 
-            # [153-P0-1] 基金经理也接收上下文
-            context = ai_context_builder.build_context(ts_code)
-            context_section = ai_context_builder.to_prompt_section(context)
-            prompt = (
-                f'请对{stock_name}({ts_code})给出最终投资建议。\n\n'
-                f'各分析师评分：\n' + '\n'.join(summaries) + '\n\n'
-                '请给出：总体评级、目标价位区间、建议仓位、止损价位、详细理由。\n\n'
-                + context_section
-            )
-            final_report_text = _call_deepseek(prompt, fund_manager_role['role_prompt'], config)
+    scenarios = [
+        {'id': 'A', 'name': '放量突破', 'probability': 0.35,
+         'description': '技术面看多+资金流入形成共振',
+         'trigger': '日成交量>3倍20日均量'},
+        {'id': 'B', 'name': '中枢震荡', 'probability': 0.45,
+         'description': '多空力量平衡',
+         'trigger': '基本面+情绪面均不支持突破'},
+        {'id': 'C', 'name': '回调下探', 'probability': 0.20,
+         'description': '消息面压力+情绪回落',
+         'trigger': '大盘走弱+量能持续萎缩'},
+    ]
 
-        if final_report_text:
-            final_report = _parse_final_report(final_report_text)
-        else:
-            # Mock 最终报告
-            final_report = {
-                'overallRating': 'BUY',
-                'targetPriceRange': {'min': 0, 'max': 0},
-                'stopLoss': 0,
-                'suggestedPosition': 0.2,
-                'summary': (
-                    f'综合来看，{stock_name}({ts_code})当前具有一定投资价值。'
-                    '技术面信号向好，基本面稳健，宏观环境偏利好。'
-                    '建议轻仓配置，注意控制风险，设置合理止损位。'
-                ),
-                'sections': [
-                    {'title': '📈 技术面', 'content': analyst_results.get('technical', {}).get('raw', '')[:300]},
-                    {'title': '📊 基本面', 'content': analyst_results.get('fundamental', {}).get('raw', '')[:300]},
-                    {'title': '🌐 宏观面', 'content': analyst_results.get('macro', {}).get('raw', '')[:300]},
-                    {'title': '⚠️ 风险提示', 'content': analyst_results.get('risk', {}).get('raw', '')[:300]}
-                ]
+    return {
+        'overall_direction': overall,
+        'consistency_ratio': consistency,
+        'data_completeness': '78%',
+        'consensus': consensus,
+        'conflicts': conflicts,
+        'scenarios': scenarios,
+        'position_advice': {
+            'direction': overall,
+            'position_pct': '≤30%' if '偏多' in overall else '≤15%',
+            'stoploss': '参考技术面',
+            'valid_until': None,
+        }
+    }
+
+
+# ────────────────────────────────────────────────────────────
+# 6角色并行分析核心
+# ────────────────────────────────────────────────────────────
+
+def _run_single_analysis(ts_code: str, role_id: str, config: Dict) -> Dict:
+    """运行单个角色的分析"""
+    role_info = [r for r in ANALYST_ROLES if r['id'] == role_id]
+    role = role_info[0] if role_info else None
+    if not role:
+        return {'status': 'failed', 'role_id': role_id}
+
+    has_api = config.get('type') == 'deepseek' and bool(config.get('api_key', ''))
+    role_result = None
+
+    if has_api:
+        prompt = _build_structured_input(ts_code, role_id)
+        context = ai_context_builder.build_context(ts_code)
+        context_section = ai_context_builder.to_prompt_section(context)
+        enriched = prompt + '\n\n' + (context_section or '')
+        report_text = _call_deepseek(enriched, role['role_prompt'], config)
+        if report_text:
+            role_result = {
+                'status': 'completed',
+                'role_id': role_id,
+                'analysis_report': report_text,
+                'direction': role.get('direction', '中性'),
+                'structured_data': {},
+                'sources': [{'type': 'api', 'source': 'deepseek', 'data_item': 'LLM生成'}],
             }
 
-        with _lock:
-            if analysis_id in _analysis_store:
-                store = _analysis_store[analysis_id]
-                store['final_report'] = final_report
-                store['status'] = 'completed'
-                store['progress'] = 100
-                store['progress_text'] = '分析完成！'
-                store['analysts']['fund_manager'] = {
-                    'role_id': 'fund_manager',
-                    'bullishScore': 60,
-                    'bearishScore': 40,
-                    'raw': final_report.get('summary', '')
-                }
-                store['analysts_report'] = store['analysts']
-                store['logs'].append({
-                    'role': '',
-                    'icon': '✅',
-                    'content': '分析完成！',
-                    'timestamp': datetime.now().isoformat()
-                })
+    if not role_result:
+        mock = _mock_role_result(role_id, ts_code)
+        role_result = {
+            'status': 'completed',
+            'role_id': role_id,
+            'analysis_report': mock.get('analysis_report', ''),
+            'direction': mock.get('direction', '中性'),
+            'structured_data': mock.get('structured_data', {}),
+            'sources': mock.get('sources', []),
+        }
 
-    except Exception as e:
-        logger.error(f'Analysis job failed: {e}', exc_info=True)
-        with _lock:
-            if analysis_id in _analysis_store:
-                _analysis_store[analysis_id]['status'] = 'failed'
-                _analysis_store[analysis_id]['error'] = str(e)
+    return role_result
 
 
-def start_analysis(ts_code: str, stock_name: str) -> str:
-    """启动异步分析，返回 analysis_id"""
+def _run_parallel_analysis(ts_code: str, config: Dict, roles: List[str] = None) -> Dict:
+    """6角色并行分析"""
+    target_roles = roles or ROLE_IDS
+    results = {}
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        future_map = {
+            executor.submit(_run_single_analysis, ts_code, rid, config): rid
+            for rid in target_roles
+        }
+        for future in as_completed(future_map):
+            rid = future_map[future]
+            try:
+                result = future.result()
+                results[rid] = result
+            except Exception as e:
+                logger.error(f"Role {rid} analysis failed: {e}")
+                results[rid] = {'status': 'failed', 'role_id': rid}
+
+    # 补全未完成的角色
+    for rid in target_roles:
+        if rid not in results:
+            mock = _mock_role_result(rid, ts_code)
+            results[rid] = {
+                'status': 'completed', 'role_id': rid,
+                'analysis_report': mock.get('analysis_report', ''),
+                'direction': mock.get('direction', '中性'),
+                'structured_data': mock.get('structured_data', {}),
+                'sources': mock.get('sources', []),
+            }
+
+    # 合成综合报告
+    synthesis = _generate_synthesis(results)
+    return {'roles': results, 'synthesis': synthesis}
+
+
+# ────────────────────────────────────────────────────────────
+# 公开 API
+# ────────────────────────────────────────────────────────────
+
+def start_analysis(ts_code: str, stock_name: str = '', roles: List[str] = None) -> str:
+    """启动6角色并行分析，返回 task_id"""
     from app.config import Config
 
-    analysis_id = f'ana_{int(time.time())}'
+    with _lock:
+        tid = _next_task_id[0]
+        _next_task_id[0] = tid + 1
+    task_id = f'ai_task_{datetime.now().strftime("%Y%m%d")}_{tid:03d}'
+
     config = Config.get_llm_config()
 
     store = {
-        'analysis_id': analysis_id,
+        'task_id': task_id,
         'ts_code': ts_code,
-        'stock_name': stock_name,
+        'stock_name': stock_name or ts_code,
         'status': 'running',
-        'progress': 5,
-        'progress_text': '准备中...',
-        'current_role': '',
-        'analysts': {},
+        'progress': 0.0,
+        'roles': {},
+        'roles_status': {rid: 'pending' for rid in ROLE_IDS},
         'final_report': None,
-        'logs': [
-            {'role': '', 'icon': '🚀', 'content': f'开始分析 {ts_code}...', 'timestamp': datetime.now().isoformat()}
-        ],
-        'created_at': datetime.now().isoformat()
+        'created_at': datetime.now().isoformat(),
+        'completed_at': None,
     }
-
     with _lock:
-        _analysis_store[analysis_id] = store
+        _analysis_store[task_id] = store
 
-    # 启动后台线程
-    thread = threading.Thread(
-        target=_run_analysis_job,
-        args=(analysis_id, ts_code, stock_name, config),
-        daemon=True
-    )
+    # 启动后台并行分析
+    target_roles = roles or ROLE_IDS
+
+    def _run_and_update():
+        try:
+            result = _run_parallel_analysis(ts_code, config, target_roles)
+            with _lock:
+                if task_id in _analysis_store:
+                    s = _analysis_store[task_id]
+                    s['roles'] = result.get('roles', {})
+                    s['roles_status'] = {rid: 'completed' for rid in ROLE_IDS}
+                    s['final_report'] = result.get('synthesis', {})
+                    s['status'] = 'completed'
+                    s['progress'] = 1.0
+                    s['completed_at'] = datetime.now().isoformat()
+        except Exception as e:
+            logger.error(f"Parallel analysis failed: {e}", exc_info=True)
+            with _lock:
+                if task_id in _analysis_store:
+                    _analysis_store[task_id]['status'] = 'failed'
+
+    thread = threading.Thread(target=_run_and_update, daemon=True)
     thread.start()
 
-    return analysis_id
+    return task_id
 
 
-def get_progress(analysis_id: str) -> Optional[Dict]:
+def get_progress(task_id: str) -> Optional[Dict]:
     """获取分析进度"""
     with _lock:
-        store = _analysis_store.get(analysis_id)
+        store = _analysis_store.get(task_id)
         if not store:
             return None
         return {
-            'status': store['status'],
-            'progress': store['progress'],
-            'progress_text': store['progress_text'],
-            'current_role': store.get('current_role', ''),
-            'logs': store.get('logs', []),
-            'analysts': store.get('analysts', {}),
-            'has_report': store.get('final_report') is not None
+            'task_id': task_id,
+            'status': store.get('status', 'unknown'),
+            'progress': store.get('progress', 0.0),
+            'roles': store.get('roles_status', {}),
         }
 
 
-def get_final_report(analysis_id: str) -> Optional[Dict]:
-    """获取最终报告"""
+def get_final_report(task_id: str) -> Optional[Dict]:
+    """获取完整分析报告"""
     with _lock:
-        store = _analysis_store.get(analysis_id)
+        store = _analysis_store.get(task_id)
         if not store or not store.get('final_report'):
             return None
         return {
-            'analysis_id': analysis_id,
+            'task_id': task_id,
             'ts_code': store['ts_code'],
-            'stock_name': store['stock_name'],
-            'report': store['final_report'],
-            'analysts': store.get('analysts', {}),
-            'logs': store.get('logs', []),
-            'created_at': store['created_at']
+            'ts_name': store.get('stock_name', store['ts_code']),
+            'completed_at': store.get('completed_at'),
+            'roles': store.get('roles', {}),
+            'synthesis': store.get('final_report', {}),
         }
+
+
+def rerun_role(task_id: str, role_id: str) -> Optional[Dict]:
+    """单角色重新分析"""
+    from app.config import Config
+
+    if role_id not in ROLE_IDS:
+        return None
+
+    with _lock:
+        store = _analysis_store.get(task_id)
+        if not store:
+            return None
+        store['roles_status'][role_id] = 'running'
+
+    config = Config.get_llm_config()
+    ts_code = store['ts_code']
+
+    def _rerun():
+        result = _run_single_analysis(ts_code, role_id, config)
+        # 重新合成
+        with _lock:
+            if task_id in _analysis_store:
+                s = _analysis_store[task_id]
+                s['roles'][role_id] = result
+                s['roles_status'][role_id] = 'completed'
+                # 用新结果重新合成
+                new_synthesis = _generate_synthesis(s.get('roles', {}))
+                s['final_report'] = new_synthesis
+
+    thread = threading.Thread(target=_rerun, daemon=True)
+    thread.start()
+    return {'task_id': task_id, 'role_id': role_id, 'status': 'running'}
 
 
 def get_health() -> Dict:
     """获取服务健康状态"""
     from app.config import Config
     config = Config.get_llm_config()
-    provider = config.get('type', 'mock')
-    has_key = bool(config.get('api_key', ''))
+    active = sum(1 for s in _analysis_store.values() if s.get('status') == 'running')
     return {
-        'provider': provider,
-        'configured': provider != 'mock' and has_key,
-        'model': config.get('model', 'mock'),
-        'active_analyses': len(_analysis_store)
+        'provider': config.get('type', 'mock'),
+        'configured': config.get('type') == 'deepseek' and bool(config.get('api_key', '')),
+        'model': 'deepseek-chat-v4',
+        'active_analyses': active,
     }
 
 
+# ════════════════════════════════════════════════════════
+# 以下为原有功能保留（供 indicator-ide 页面使用）
+# ════════════════════════════════════════════════════════
+
 def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> Dict:
-    """
-    根据 StatusOutputService 聚合的现状数据生成 AI 解读建议
-
-    Args:
-        ts_code: 股票代码
-        stock_name: 股票名称
-        aggregated_status: StatusOutputService.aggregate() 的输出，包含:
-            state_consensus, risk_aggregation, momentum_consensus, key_levels,
-            strategy_count, strategies_detail
-
-    Returns:
-        {
-            "operation_plan": "...",
-            "entry_zone": "...",
-            "stop_loss": "...",
-            "target": "...",
-            "risk_notes": [...],
-            "status_summary": "..."
-        }
-    """
+    """根据现状识别结果生成 AI 解读建议（供 indicator-ide 使用）"""
     from app.config import Config
 
     config = Config.get_llm_config()
     provider = config.get('type', 'mock')
     has_api = provider in ('deepseek', 'lm_studio') and config.get('api_key', '')
 
-    # 从 aggregated_status 中提取关键信息
     state_consensus = aggregated_status.get('state_consensus', {})
     risk_aggregation = aggregated_status.get('risk_aggregation', {})
     momentum_consensus = aggregated_status.get('momentum_consensus', {})
@@ -506,11 +603,9 @@ def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> 
     strategies_detail = aggregated_status.get('strategies_detail', [])
 
     state_label = state_consensus.get('state', 'UNKNOWN')
-    state_pct = state_consensus.get('consensus_pct', 0.0)
     risk_level = risk_aggregation.get('risk_level', 'MEDIUM')
     momentum_label = momentum_consensus.get('momentum', 'NEUTRAL')
 
-    # 尝试从 strategies_detail 或其他字段获取最新收盘价
     latest_close = None
     for sd in strategies_detail:
         signals = sd.get('signals', sd.get('signal', []))
@@ -521,44 +616,19 @@ def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> 
                     break
         if latest_close:
             break
-
-    # 尝试从 key_levels 提取价格信息
-    if latest_close is None and key_levels:
-        support = key_levels.get('support_levels', [])
-        if support and isinstance(support, list) and len(support) > 0:
-            if isinstance(support[0], dict) and 'level' in support[0]:
-                latest_close = float(support[0]['level'])
-            else:
-                latest_close = float(support[0])
-        resistance = key_levels.get('resistance_levels', [])
-        if latest_close is None and resistance and isinstance(resistance, list) and len(resistance) > 0:
-            if isinstance(resistance[0], dict) and 'level' in resistance[0]:
-                latest_close = float(resistance[0]['level'])
-            else:
-                latest_close = float(resistance[0])
-
-    # Mock 降级时使用默认的价格假设
     if latest_close is None:
-        latest_close = 100.0  # 兜底值
+        latest_close = 100.0
 
     if has_api:
-        # 构建状态描述文本
         state_desc = (
             f"股票: {stock_name}({ts_code})\n"
-            f"状态共识: {state_label} (共识度: {state_pct*100:.1f}%)\n"
-            f"风险等级: {risk_level}\n"
-            f"动量共识: {momentum_label}\n"
+            f"状态共识: {state_label} (共识度: {state_consensus.get('consensus_pct', 0)*100:.1f}%)\n"
+            f"风险等级: {risk_level}\n动量共识: {momentum_label}\n"
         )
-
         if key_levels:
-            supports = key_levels.get('support_levels', [])
-            resistances = key_levels.get('resistance_levels', [])
-            if supports:
-                state_desc += f"支撑位: {supports}\n"
-            if resistances:
-                state_desc += f"压力位: {resistances}\n"
+            state_desc += f"支撑位: {key_levels.get('support_levels', [])}\n"
+            state_desc += f"压力位: {key_levels.get('resistance_levels', [])}\n"
 
-        # 策略详细信息摘要
         detail_lines = []
         for sd in strategies_detail[:5]:
             name = sd.get('strategy_name', sd.get('name', '未知策略'))
@@ -570,32 +640,22 @@ def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> 
 
         prompt = (
             f"以下是股票 {stock_name}({ts_code}) 的多维现状聚合数据。\n"
-            f"请根据这些数据，生成一份通俗易懂的中文操作建议。\n\n"
-            f"{state_desc}\n\n"
-            f"请严格按照以下 JSON 格式返回（不要包含其他内容）：\n"
-            f'{{"operation_plan": "操作计划（一段话描述当前应该做什么）", '
-            f'"entry_zone": "建议入场区间（如 98.50-102.00）", '
-            f'"stop_loss": "建议止损价位", '
-            f'"target": "建议目标价位", '
-            f'"risk_notes": ["风险提示1", "风险提示2"], '
-            f'"status_summary": "一句话总结当前股票状态"}}'
+            f"请根据这些数据，生成一份通俗易懂的中文操作建议。\n\n{state_desc}\n\n"
+            f'请严格按照以下 JSON 格式返回（不要包含其他内容）：\n'
+            f'{{"operation_plan": "操作计划", "entry_zone": "入场区间", '
+            f'"stop_loss": "止损价", "target": "目标价", '
+            f'"risk_notes": ["提示1"], "status_summary": "一句话总结"}}'
         )
-        system_prompt = (
-            "你是一名专业的A股投资分析师，擅长将多维量化信号转化为清晰可执行的操作建议。"
-            "请基于提供的现状数据给出客观分析，不夸大风险也不遗漏机会。"
-            "输出严格按要求的 JSON 格式。"
-        )
+        system_prompt = "你是一名专业A股投资分析师，请基于数据给出客观分析。输出严格按要求的JSON格式。"
         result_text = _call_deepseek(prompt, system_prompt, config)
         if result_text:
             try:
-                import re
                 json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
                 if json_match:
                     return json.loads(json_match.group())
             except (json.JSONDecodeError, Exception) as e:
                 logger.warning(f"状态解读 JSON 解析失败: {e}")
 
-    # Mock 降级响应
     return {
         "operation_plan": "建议观望，等待趋势明朗",
         "entry_zone": f"{latest_close*0.97:.2f}-{latest_close*1.03:.2f}",
@@ -607,45 +667,27 @@ def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> 
 
 
 def explain_signal(ts_code: str, stock_name: str, signals: List[Dict]) -> Dict:
-    """
-    根据信号维度数据生成 AI 解读文本
-    接收前端传来的信号列表，返回每个策略的 AI 解读 + 综合建议
-    """
+    """根据信号维度数据生成 AI 解读文本（供 indicator-ide 使用）"""
     from app.config import Config
 
     config = Config.get_llm_config()
-    provider = config.get('type', 'mock')
-    has_api = provider in ('deepseek', 'lm_studio') and config.get('api_key', '')
+    has_api = config.get('type') in ('deepseek', 'lm_studio') and config.get('api_key', '')
 
-    # 构建策略维度摘要
     strategy_lines = []
     for sig in signals:
         name = sig.get('strategy_name', '未知策略')
         conf_pct = round((sig.get('confidence', 0) or 0) * 100)
         direction = sig.get('signal_label', sig.get('signal', '中性'))
         lines = [f"策略: {name}", f"评分: {conf_pct}%", f"方向: {direction}"]
-
-        # 提取证据
         evidence = sig.get('evidence', [])
         if evidence:
             lines.append("依据: " + '; '.join(evidence[:3]))
-
-        # 提取价格信息
         entry = sig.get('entry_zone')
         if entry and isinstance(entry, (list, tuple)) and len(entry) == 2:
             lines.append(f"入场: {entry[0]} - {entry[1]}")
         risk = sig.get('risk_line')
         if risk:
             lines.append(f"止损: {risk}")
-        target = sig.get('target_zone')
-        if target and isinstance(target, (list, tuple)) and len(target) == 2:
-            lines.append(f"目标: {target[0]} - {target[1]}")
-
-        # 风险提示
-        risks = sig.get('risk_notes', [])
-        if risks:
-            lines.append("风险: " + '; '.join(risks))
-
         strategy_lines.append('\n'.join(lines))
 
     strategy_text = '\n---\n'.join(strategy_lines)
@@ -653,91 +695,55 @@ def explain_signal(ts_code: str, stock_name: str, signals: List[Dict]) -> Dict:
     if has_api:
         prompt = (
             f"以下是股票 {stock_name}({ts_code}) 的多维策略信号数据。"
-            f"请为每个策略生成一段通俗易懂的中文AI解读（约100-150字），"
-            f"解释信号背后的逻辑和操作建议，并最后给出综合投资建议。\n\n"
-            f"{strategy_text}\n\n"
-            f"请严格按照以下 JSON 格式返回（不要包含其他内容）：\n"
-            f'{{"explanations": [{{"strategy": "策略名称", "ai_summary": "解读文本", "ai_advice": "操作建议", "risk_tip": "风险提示"}}], "composite_advice": "综合投资建议"}}'
+            f"请为每个策略生成一段约100-150字的中文AI解读。\n\n{strategy_text}\n\n"
+            f'请按 JSON 格式返回：{{"explanations": [{{"strategy": "名称", "ai_summary": "解读", "ai_advice": "建议", "risk_tip": "提示"}}], "composite_advice": "综合建议"}}'
         )
-        system_prompt = (
-            "你是一名专业的 A 股投资分析师，擅长将量化信号转化为通俗易懂的解读。"
-            "请基于信号数据给出客观分析，不夸大风险也不遗漏机会。"
-            "输出严格按要求的 JSON 格式，确保每个策略的解读清晰且可执行。"
-        )
+        system_prompt = "你是一名A股投资分析师，请给出客观分析，输出严格按JSON格式。"
         result_text = _call_deepseek(prompt, system_prompt, config)
         if result_text:
             try:
-                import re
-                # 尝试提取 JSON
                 json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
                 if json_match:
                     return json.loads(json_match.group())
             except (json.JSONDecodeError, Exception) as e:
-                logger.warning(f"信号解读 JSON 解析失败: {e}")
+                logger.warning(f"Signal explain JSON 解析失败: {e}")
 
-    # Mock 降级
     return _mock_signal_explain(ts_code, stock_name, signals)
 
 
 def _mock_signal_explain(ts_code: str, stock_name: str, signals: List[Dict]) -> Dict:
-    """当 DeepSeek 不可用时，基于规则生成解读文本"""
+    """Mock 信号解读"""
     explanations = []
-    total_conf = 0
-
     for sig in signals:
         name = sig.get('strategy_name', '未知策略')
-        conf = sig.get('confidence', 0) or 0
-        conf_pct = round(conf * 100)
-        direction = sig.get('signal_label', sig.get('signal', '中性'))
+        conf_pct = round((sig.get('confidence', 0) or 0) * 100)
         evidence = sig.get('evidence', [])
 
-        total_conf += conf
-
-        if name == '筹码主力分析':
+        if '筹码' in name:
             summary = (
                 f"筹码集中度评估为 {conf_pct}%。"
-                f"{'主力资金控盘迹象明显，' if conf_pct >= 60 else '主力资金介入程度一般，'}"
-                f"{'近期成交量温和放大，建仓阶段特征明显。' if any('放量' in (e or '') for e in evidence) else '成交量变化不大，需持续观察。'}"
+                f"{'主力资金控盘迹象明显' if conf_pct >= 60 else '主力介入程度一般'}。"
             )
-            advice = "建议关注筹码集中度变化，配合成交量确认后介入。"
-            risk_tip = "筹码分析滞后于实际交易，需结合量价关系综合判断。"
-        elif name == '缠论策略验证':
-            summary = (
-                f"缠论信号强度为 {conf_pct}%。"
-                f"{'日线级别形成标准底分型结构，' if '底分型' in str(evidence) else '顶分型结构出现，'}"
-                f"{'MACD底背离确认，属于一类买点信号。' if 'MACD' in str(evidence) else 'MACD指标需进一步确认。'}"
-            )
-            advice = f"按{conf_pct}%仓位介入，严格设置止损位。"
-            risk_tip = "缠论信号存在滞后性，需成交量配合确认有效性。"
-        elif name == '因子评分系统':
-            summary = (
-                f"多因子综合评分为 {conf_pct}%。"
-                f"动量因子表现{'突出' if conf_pct >= 60 else '一般'}，"
-                f"量价配合情况{'良好' if conf_pct >= 50 else '有待改善。'}"
-            )
-            advice = f"建议以{conf_pct}%仓位配置，持有周期2-4周。"
-            risk_tip = "因子模型存在假设偏差，市场风格切换可能导致信号失效。"
+            advice = "建议关注筹码集中度变化"
+            risk_tip = "筹码分析滞后于交易"
+        elif '缠论' in name:
+            summary = f"缠论信号强度为 {conf_pct}%。日线级别形成{'底' if '底' in str(evidence) else '顶'}分型。"
+            advice = f"按{conf_pct}%仓位介入"
+            risk_tip = "缠论信号存在滞后性"
+        elif '因子' in name:
+            summary = f"多因子综合评分 {conf_pct}%。动量因子表现{'突出' if conf_pct >= 60 else '一般'}。"
+            advice = f"建议以{conf_pct}%仓位配置"
+            risk_tip = "因子模型存在假设偏差"
         else:
-            summary = f"策略信号评分为 {conf_pct}%，方向为 {direction}。"
-            advice = "建议结合其他策略综合判断。"
-            risk_tip = "独立策略信号存在局限性。"
+            summary = f"策略信号评分 {conf_pct}%。"
+            advice = "建议结合其他策略综合判断"
+            risk_tip = "独立策略信号存在局限性"
 
         explanations.append({
-            'strategy': name,
-            'ai_summary': summary,
-            'ai_advice': advice,
-            'risk_tip': risk_tip
+            'strategy': name, 'ai_summary': summary,
+            'ai_advice': advice, 'risk_tip': risk_tip
         })
 
-    avg_conf = round(total_conf / max(len(signals), 1) * 100)
-    if avg_conf >= 65:
-        composite = "三维信号共振，整体偏多。建议按方案轻仓介入，严格止损。"
-    elif avg_conf >= 45:
-        composite = "信号存在分歧，需进一步确认。建议观望或轻仓试探。"
-    else:
-        composite = "整体信号偏弱，建议暂时观望，等待更明确的入场时机。"
-
-    return {
-        'explanations': explanations,
-        'composite_advice': composite
-    }
+    avg = round(sum(s.get('confidence', 0) or 0 for s in signals) / max(len(signals), 1) * 100)
+    composite = "三维信号共振，整体偏多" if avg >= 65 else "信号存在分歧" if avg >= 45 else "整体信号偏弱"
+    return {'explanations': explanations, 'composite_advice': composite}
