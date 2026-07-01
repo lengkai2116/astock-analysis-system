@@ -128,14 +128,22 @@ def create_app():
         """503 统一 JSON 响应"""
         return {"success": False, "error": "服务暂时不可用", "error_type": "ServiceUnavailable"}, 503
 
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev')
-    
+    # 从 Config 类加载全部配置
+    from app.config import Config
+    app.config.from_object(Config)
+
     _setup_logging(app)
     db.init_app(app)
     migrate.init_app(app, db)
     socketio.init_app(app, cors_allowed_origins="*")
+
+    # 首次启动时自动创建表（兜底，生产环境应使用 flask db upgrade）
+    with app.app_context():
+        try:
+            db.create_all()
+            app.logger.info("数据库表已就绪（db.create_all）")
+        except Exception as e:
+            app.logger.warning(f"数据库表创建失败（可忽略）: {e}")
     
     from app.routes.market import market_bp
     from app.routes.health import health_bp
@@ -164,6 +172,7 @@ def create_app():
     from app.routes.news_route import news_bp
     from app.routes.alert_route import alert_bp
     from app.routes.conditions import conditions_bp
+    from app.routes.system_config import system_bp
 
     app.register_blueprint(market_bp)
     app.register_blueprint(health_bp)
@@ -192,8 +201,33 @@ def create_app():
     app.register_blueprint(news_bp)
     app.register_blueprint(alert_bp)
     app.register_blueprint(conditions_bp)
+    app.register_blueprint(system_bp)
 
+    # ============================================================
+    # RuntimeConfigManager 初始化 + 种子数据
+    # ============================================================
+    try:
+        with app.app_context():
+            from app.services.runtime_config import runtime_config_manager
+            runtime_config_manager.load()
+            logger.info("RuntimeConfigManager 配置已加载")
 
+            # 首次运行时写入默认配置
+            if not runtime_config_manager.get_all():
+                _seed_default_config(runtime_config_manager)
+    except Exception as e:
+        logger.warning(f"RuntimeConfigManager 初始化失败（表可能尚未创建）: {e}")
+
+    # ============================================================
+    # APScheduler 初始化
+    # ============================================================
+    try:
+        with app.app_context():
+            from app.scheduler_manager import scheduler_manager
+            scheduler_manager.init_app(app)
+            logger.info("APScheduler 已初始化")
+    except Exception as e:
+        logger.warning(f"APScheduler 初始化失败: {e}")
 
     # ============================================================
     # 观潮对标服务初始化
@@ -209,12 +243,22 @@ def create_app():
         tushare = TushareProvider()
         data_source_manager.register_source('tushare', lambda ep, p: _route_provider(ep, p, tushare), priority=0)
 
-        # 注册 AKShare 作为备用数据源
+        # 注册 AKShare 作为盘中数据源（priority=-1 最高，盘中优先）
         try:
             akshare = AkshareProvider()
-            data_source_manager.register_source('akshare', lambda ep, p: _route_provider(ep, p, akshare), priority=1)
+            data_source_manager.register_source('akshare', lambda ep, p: _route_provider(ep, p, akshare), priority=-1)
         except Exception:
-            logger.warning("AKShare provider 注册失败（可忽略）")
+            logger.warning("AKShare provider 注册失败（盘中实时数据将不可用，不影响盘后Tushare）")
+
+        # 注册 QMT 作为最高优先级数据源（条件启用，priority=-2）
+        if os.environ.get('QMT_ENABLED', '').lower() == 'true':
+            try:
+                from app.data.qmt_provider import QmtDataProvider
+                qmt = QmtDataProvider()
+                data_source_manager.register_source('qmt', lambda ep, p: _route_provider(ep, p, qmt), priority=-2)
+                logger.info("QMT 数据源已注册（最高优先级，priority=-2）")
+            except Exception as e:
+                logger.warning(f"QMT provider 注册失败: {e}")
 
         logger.info("数据源管理器初始化完成")
     except Exception as e:
@@ -280,7 +324,78 @@ def _route_provider(endpoint, params, provider):
     if endpoint == 'get_news':
         return provider.get_news(params.get('start_date'), params.get('end_date'))
 
+    # ══════════════════════════════════════════════
+    # AKShare 专有端点路由（盘中实时数据）
+    # ══════════════════════════════════════════════
+    if endpoint == 'get_realtime_spot':
+        return provider.get_realtime_spot(params.get('ts_code'))
+    if endpoint == 'get_market_snapshot':
+        return provider.get_market_snapshot()
+    if endpoint == 'get_sector_rankings':
+        return provider.get_sector_rankings()
+    if endpoint == 'get_concept_rankings':
+        return provider.get_concept_rankings()
+    if endpoint == 'get_batch_quotes':
+        return provider.get_batch_quotes(params.get('ts_codes', []))
+    if endpoint == 'get_limit_pool':
+        return provider.get_limit_pool()
+    if endpoint == 'get_lhb_detail':
+        return provider.get_lhb_detail(params.get('trade_date'))
+
+    # ══════════════════════════════════════════════
+    # QMT 专有端点路由（L2 实时行情）
+    # ══════════════════════════════════════════════
+    if endpoint == 'get_qmt_tick':
+        return provider.get_tick(params.get('ts_codes', []))
+    if endpoint == 'get_qmt_kline':
+        return provider.get_kline(params.get('stock_code'), params.get('period'),
+                                  params.get('start_time', ''), params.get('end_time', ''), params.get('count', -1))
+    if endpoint == 'get_qmt_snapshot':
+        return provider.get_market_snapshot(params.get('ts_codes', []))
+
     return provider.get_daily_data(endpoint, params)
 
 
-
+def _seed_default_config(rcm):
+    """首次运行时写入默认配置种子数据"""
+    default_config = {
+        'llm': {
+            'provider': 'mock',
+            'deepseek_api_key': '',
+            'deepseek_base_url': 'https://api.deepseek.com/v1',
+            'deepseek_model': 'deepseek-chat-v4',
+            'lm_studio_endpoint': 'http://localhost:1234/v1',
+            'lm_studio_model': 'local-model'
+        },
+        'data_source': {
+            'tushare_token': os.environ.get('TUSHARE_TOKEN', '')
+        },
+        'notification': {
+            'smtp': {'host': '', 'port': 587, 'username': '', 'password': '', 'to': ''},
+            'webhook_url': ''
+        },
+        'scheduling': {
+            'daily_sync': {
+                'enabled': True, 'trigger_time': '15:30', 'mode': 'incremental',
+                'data_types': ['daily', 'basic', 'moneyflow', 'index', 'adj_factor'],
+                'warmup_cache': True, 'timeout_minutes': 30
+            },
+            'intraday': {
+                'enabled': True, 'moneyflow_interval_min': 30,
+                'index_mode': 'on_demand', 'quote_ttl_sec': 3
+            },
+            'analysis': {
+                'weekly_eval': {'enabled': True, 'day_of_week': 'mon', 'time': '06:00'},
+                'health_check': {'enabled': True, 'day_of_week': 'mon', 'time': '06:30'},
+                'weekly_report': {'enabled': True, 'day_of_week': 'sun', 'time': '20:00'},
+                'param_plateau': {'enabled': True, 'day_of_month': 1, 'time': '05:00'}
+            },
+            'monitor': {
+                'default_scan_interval_min': 15,
+                'post_market_eval_time': '15:30',
+                'auto_sleep': {'enabled': True}
+            }
+        }
+    }
+    rcm.save(default_config)
+    logger.info("默认配置种子数据已写入")

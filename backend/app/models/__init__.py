@@ -364,5 +364,8 @@ class Drawing(db.Model):
 
 from app.models.condition import ConditionRegistry
 
+# ============================================================
+# 系统管理 — system_config + sync_log
+# ============================================================
 
-
+from app.models.system_config import SystemConfig, SyncLog
