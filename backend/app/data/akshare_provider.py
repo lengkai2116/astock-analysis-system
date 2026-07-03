@@ -11,8 +11,16 @@ AkshareProvider — 免费的实时/盘中数据提供者
 """
 
 import logging
+import os
 from datetime import datetime
 from typing import List, Dict, Optional, Any
+
+# ── 代理环境变量免疫 ──────────────────────────────────
+# 清除 shell 中残留的 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY
+# 避免 requests 自动应用指向死代理的隧道配置（240号方案 §1.4 方案C）
+for _key in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
+             'http_proxy', 'https_proxy', 'all_proxy']:
+    os.environ.pop(_key, None)
 
 logger = logging.getLogger(__name__)
 

@@ -4,6 +4,12 @@ import pandas as pd
 from datetime import datetime
 import tushare as ts
 
+# ── 代理环境变量免疫 ──────────────────────────────────
+# 与 akshare_provider.py 同步处理（240号方案 §1.4 方案C）
+for _key in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
+             'http_proxy', 'https_proxy', 'all_proxy']:
+    os.environ.pop(_key, None)
+
 
 import logging
 logger = logging.getLogger(__name__)
