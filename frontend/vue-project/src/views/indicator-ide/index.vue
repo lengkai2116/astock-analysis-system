@@ -109,6 +109,12 @@
       </div>
 
       <div class="toolbar-right">
+        <span
+          :class="['ws-indicator', socketConnected ? 'ws-connected' : 'ws-disconnected']"
+          :title="socketConnected ? '实时行情已连接' : '实时行情未连接'"
+        >
+          {{ socketConnected ? '● 实时' : '○ 离线' }}
+        </span>
         <a-button
           size="small"
           @click="refreshChart"
@@ -529,6 +535,7 @@ import AiSignalBus from '@/components/AiSignalBus'
 import chartService from '@/services/chartService'
 import axios from '@/utils/request'
 import DisclaimerFooter from '@/components/DisclaimerFooter'
+import socketService from '@/services/socketService'
 
 export default {
   name: 'IndicatorIde',
@@ -558,7 +565,8 @@ export default {
 
       aEmptyImage: '',
       watchlistStocks: [],
-      watchlistDropdownVisible: false
+      watchlistDropdownVisible: false,
+      socketConnected: false
     }
   },
 
@@ -644,6 +652,13 @@ export default {
     this.loadStockInfo()
     this.loadSignals()
     this.loadIndicators()
+    this.initSocket()
+  },
+
+  beforeUnmount() {
+    try {
+      if (socketService) socketService.off('stock:quotes', this._wsHandler)
+    } catch {}
   },
 
   methods: {
@@ -811,6 +826,23 @@ export default {
       if (data && data.signals) {
         this.customSignals = data.signals
       }
+    },
+
+    initSocket() {
+      if (!socketService) return
+      this._wsHandler = (data) => {
+        // stock:quotes 数据可选择性更新当前页面行情信息
+        if (data?.quotes && this.currentTsCode) {
+          const quote = data.quotes.find(q => q.ts_code === this.currentTsCode)
+          if (quote) {
+            // 标记连接状态即可，个股行情由 KLineChart 自行管理
+          }
+        }
+      }
+      socketService.on('stock:quotes', this._wsHandler)
+      socketService.on('connect', () => { this.socketConnected = true })
+      socketService.on('disconnect', () => { this.socketConnected = false })
+      this.socketConnected = socketService.connected || false
     }
   }
 }
@@ -842,7 +874,16 @@ export default {
 .toolbar-right {
   display: flex;
   gap: 8px;
+  align-items: center;
 }
+
+.ws-indicator {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.ws-connected { color: #22c55e; }
+.ws-disconnected { color: #6b7280; }
 
 .indicator-chips {
   display: flex;

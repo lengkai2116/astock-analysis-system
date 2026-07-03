@@ -513,18 +513,30 @@ export default {
     initSocket() {
       if (!socketService) return () => {}
       const handler = (data) => {
-        if (data?.data?.stocks) {
-          this.updateWatchlistData(data.data.stocks)
+        if (data?.quotes) {
+          this.updateWatchlistData(data.quotes)
         }
       }
+      const onConnect = () => {
+        this.socketConnected = true
+        const codes = this.watchlist.map(s => s.symbol || s.ts_code).filter(Boolean)
+        if (codes.length > 0) {
+          socketService.subscribeWatchlist(codes)
+        }
+      }
+      const onDisconnect = () => { this.socketConnected = false }
       try {
-        socketService.on('market-data', handler)
-        socketService.on('connect', () => { this.socketConnected = true })
-        socketService.on('disconnect', () => { this.socketConnected = false })
+        socketService.on('stock:quotes', handler)
+        socketService.on('connect', onConnect)
+        socketService.on('disconnect', onDisconnect)
         this.socketConnected = socketService.connected || false
       } catch {}
       return () => {
-        try { socketService.off('market-data', handler) } catch {}
+        try {
+          socketService.off('stock:quotes', handler)
+          socketService.off('connect', onConnect)
+          socketService.off('disconnect', onDisconnect)
+        } catch {}
       }
     },
 

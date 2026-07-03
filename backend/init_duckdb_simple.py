@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from app import create_app, db
-from app.data import DataManager, CacheManager
+from app.data import DataManager, get_ecm_instance
 from app.models import Stock, DailyData
 from datetime import datetime
 
@@ -25,9 +25,9 @@ def init_duckdb_cache():
         app = create_app()
         
         with app.app_context():
-            # 1. 初始化CacheManager
+            # 1. 初始化DuckDB缓存（EnhancedCacheManager 单例）
             print("\n📦 步骤1: 初始化DuckDB缓存...")
-            cache_manager = CacheManager()
+            cache_manager = get_ecm_instance()
             print("✅ DuckDB缓存数据库创建成功")
             print(f"   数据库路径: {cache_manager.db_path}")
             

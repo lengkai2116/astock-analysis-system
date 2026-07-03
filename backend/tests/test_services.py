@@ -102,21 +102,13 @@ def test_ai_analysis_service_import():
 # ========== Cache Manager ==========
 
 def test_cache_manager_import():
-    """测试缓存管理器可导入"""
-    try:
-        from app.data.cache_manager import CacheManager
-        assert CacheManager is not None
-    except ImportError as e:
-        pytest.skip(f"缓存管理器不可用: {e}")
+    """CacheManager 已移除，改用 ECM 单例"""
+    pytest.skip("CacheManager 已移除，使用 EnhancedCacheManager（get_ecm_instance()）")
 
 
 def test_redis_cache_manager_import():
-    """测试 Redis 缓存管理器可导入"""
-    try:
-        from app.data.redis_cache_manager import RedisCacheManager
-        assert RedisCacheManager is not None
-    except ImportError as e:
-        pytest.skip(f"Redis 缓存管理器不可用: {e}")
+    """Redis 缓存管理器已移除，改用 ECM 单例"""
+    pytest.skip("Redis 缓存管理器已移除，使用 EnhancedCacheManager（get_ecm_instance()）")
 
 
 if __name__ == '__main__':

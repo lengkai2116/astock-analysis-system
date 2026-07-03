@@ -8,9 +8,10 @@
   数据不可用时返回 None，由路由层返回 503 错误响应。
 """
 import logging
-import random
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -26,36 +27,6 @@ INDEX_CONFIG = [
 SECTOR_NAMES = ['半导体', 'AI', '军工', '新能源', '医药', '消费', '金融', '地产']
 OUT_SECTOR_NAMES = ['地产', '建筑', '钢铁', '零售', '纺织']
 
-# 模拟股票池 — ⚠️ 仅用于开发/原型测试
-_MOCK_STOCKS_POOL = [
-    {'ts_code': '300750.SZ', 'name': '宁德时代'},
-    {'ts_code': '000858.SZ', 'name': '五粮液'},
-    {'ts_code': '600519.SH', 'name': '贵州茅台'},
-    {'ts_code': '002415.SZ', 'name': '海康威视'},
-    {'ts_code': '601318.SH', 'name': '中国平安'},
-    {'ts_code': '000333.SZ', 'name': '美的集团'},
-    {'ts_code': '002594.SZ', 'name': '比亚迪'},
-    {'ts_code': '300059.SZ', 'name': '东方财富'},
-    {'ts_code': '600036.SH', 'name': '招商银行'},
-    {'ts_code': '000762.SZ', 'name': '西藏矿业'},
-    {'ts_code': '002230.SZ', 'name': '科大讯飞'},
-    {'ts_code': '600030.SH', 'name': '中信证券'},
-    {'ts_code': '300124.SZ', 'name': '汇川技术'},
-    {'ts_code': '002475.SZ', 'name': '立讯精密'},
-    {'ts_code': '000100.SZ', 'name': 'TCL科技'},
-]
-
-# ⚠️ 仅供开发/原型测试使用 — 生产环境不得调用
-_MOCK_SECTOR_STOCKS = {
-    '半导体': ['北方华创', '韦尔股份', '中芯国际'],
-    'AI': ['科大讯飞', '海康威视', '中科曙光'],
-    '军工': ['航发动力', '中航沈飞', '中国重工'],
-    '新能源': ['宁德时代', '比亚迪', '隆基绿能'],
-    '医药': ['恒瑞医药', '迈瑞医疗', '药明康德'],
-    '消费': ['贵州茅台', '五粮液', '伊利股份'],
-    '金融': ['招商银行', '中国平安', '中信证券'],
-    '地产': ['万科A', '保利发展', '招商蛇口'],
-}
 
 
 class DashboardService:
@@ -86,54 +57,88 @@ class DashboardService:
     # 1. 指数行情总览（用于 market/overview 增强）
     # ──────────────────────────────────────────────
     def get_index_summary(self) -> Optional[Dict]:
-        """获取四大指数行情 + 迷你K线 + 总成交额"""
+        """获取四大指数行情 + 迷你K线 + 总成交额（239号架构：盘中读 as_market_snapshot，盘后读 daily_cache）"""
         indexes = []
         total_volume = 0
-        total_volume_prev = 0
+
+        # 盘中：优先从 AkshareDataReader 读实时快照
+        try:
+            from app.data.akshare_reader import reader as akshare_reader
+            ts_codes = [cfg['ts_code'] for cfg in INDEX_CONFIG]
+            live_records = akshare_reader.get_batch_quotes(ts_codes)
+            live_map = {}
+            for r in live_records:
+                code = r.get('ts_code', '')
+                live_map[code] = {
+                    'price': float(r.get('price', 0)),
+                    'change_pct': float(r.get('change_pct', 0)),
+                    'change_value': float(r.get('change', 0)),
+                    'amount': self._safe_float(r.get('amount', 0)),
+                }
+        except Exception:
+            live_map = {}
 
         for idx_cfg in INDEX_CONFIG:
             try:
-                data = self._try_get_index_daily(idx_cfg['ts_code'])
-                if data and len(data) > 0:
-                    latest = data[0] if isinstance(data[0], dict) else data.iloc[0].to_dict()
-                    prev = data[1] if len(data) > 1 else latest
-                    prev = prev if isinstance(prev, dict) else (prev.to_dict() if hasattr(prev, 'to_dict') else prev)
+                code = idx_cfg['ts_code']
+                live = live_map.get(code, {})
 
-                    prev_close = prev.get('close', prev.get('pre_close', latest.get('close', 0)))
-                    close = latest.get('close', latest.get('value', 0))
-                    amount = float(latest.get('amount', 0))
-                    change = float(close) - float(prev_close)
-                    change_pct = (change / float(prev_close) * 100) if float(prev_close) > 0 else 0
-
+                # 从 daily_cache 获取历史日线（用于迷你K线 + 前收盘价）
+                hist_data = self._try_get_index_daily(code)
+                prev_close = None
+                mini_kline = []
+                if hist_data and len(hist_data) > 0:
+                    latest_hist = hist_data[0] if isinstance(hist_data[0], dict) else hist_data.iloc[0].to_dict()
+                    prev_close = float(latest_hist.get('pre_close', latest_hist.get('close', 0)))
                     # 迷你K线（最近20交易日）
-                    mini_kline = self._build_mini_kline(data[:20])
+                    _sorted = hist_data if (
+                        len(hist_data) > 1
+                        and hist_data[0].get('trade_date', '') <= hist_data[-1].get('trade_date', '')
+                    ) else hist_data[::-1]
+                    mini_kline = self._build_mini_kline(_sorted[-20:])
 
-                    indexes.append({
-                        'ts_code': idx_cfg['ts_code'],
-                        'name': idx_cfg['name'],
-                        'price': round(float(close), 2),
-                        'change_pct': round(change_pct, 2),
-                        'change_amount': round(change, 2),
-                        'mini_kline': mini_kline,
-                        'amount': amount,
-                    })
-                    total_volume += amount
-                    if 'amount' in prev:
-                        total_volume_prev += float(prev.get('amount', 0))
-                # else: 指数无数据 → 跳过（不用 mock）
+                # 价格优先用实时快照，没有则用历史
+                if live:
+                    price = live['price']
+                    change_pct = live['change_pct']
+                    change_amount = live['change_value']
+                    amount = live['amount']
+                    # 如果 has 实时数据但没有历史前收盘价，用实时涨跌幅推算
+                    if prev_close is None and change_pct != 0:
+                        prev_close = price / (1 + change_pct / 100) if change_pct != -100 else price
+                elif prev_close is not None and hist_data:
+                    # 没有实时数据，用历史最新日线
+                    latest_hist = hist_data[0] if isinstance(hist_data[0], dict) else hist_data.iloc[0].to_dict()
+                    price = float(latest_hist.get('close', latest_hist.get('value', 0)))
+                    change = price - prev_close
+                    change_pct = (change / prev_close * 100) if prev_close > 0 else 0
+                    change_amount = change
+                    amount = self._safe_float(latest_hist.get('amount', 0)) * 1000
+                else:
+                    # 无实时也无历史 → 跳过
+                    logger.warning(f"指数 {code} 无数据: 实时快照和历史日线均不可用")
+                    continue
+
+                indexes.append({
+                    'ts_code': code,
+                    'name': idx_cfg['name'],
+                    'price': round(price, 2),
+                    'change_pct': round(change_pct, 2),
+                    'change_amount': round(change_amount, 2),
+                    'mini_kline': mini_kline,
+                    'amount': amount,
+                    'source': 'AKShare 实时行情' if live else '日线缓存',
+                })
+                total_volume += amount
             except Exception as e:
                 logger.warning(f"指数 {idx_cfg['ts_code']} 获取失败，已跳过: {e}")
-                # 跳过（不用 mock）
 
         if not indexes:
             logger.error("四大指数行情全部不可用")
             return None
 
-        # 成交额同比变化（仅基于已成功获取的数据）
-        volume_change_pct = (
-            round((total_volume - total_volume_prev) / total_volume_prev * 100, 1)
-            if total_volume_prev > 0 else 0
-        )
+        # 成交额同比变化（基于daily_cache历史数据推算，若无则默认为 0）
+        volume_change_pct = 0
 
         result = {
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -159,7 +164,12 @@ class DashboardService:
         try:
             data = self._try_get_index_daily(ts_code)
             if data and len(data) > 0:
-                mini_kline = self._build_mini_kline(data[:limit])
+                # 数据可能升序（DuckDB）或降序（Tushare），统一升序后取最近 limit 条
+                _sorted = data if (
+                    len(data) > 1
+                    and data[0].get('trade_date', '') <= data[-1].get('trade_date', '')
+                ) else data[::-1]
+                mini_kline = self._build_mini_kline(_sorted[-limit:])
                 name = ts_code
                 for idx in INDEX_CONFIG:
                     if idx['ts_code'] == ts_code:
@@ -184,30 +194,57 @@ class DashboardService:
         try:
             all_dates = set()
             exchange_data = {}
+            active_indices = 0
             for idx_cfg in INDEX_CONFIG:
                 data = self._try_get_index_daily(idx_cfg['ts_code'])
                 if data is None or len(data) == 0:
-                    raise ValueError(f"无指数数据: {idx_cfg['ts_code']}")
+                    logger.warning(f"跳过无数据的指数: {idx_cfg['ts_code']}")
+                    continue
+                active_indices += 1
                 for row in data:
                     d = row if isinstance(row, dict) else row.to_dict()
-                    trade_date = d.get('trade_date', d.get('date', ''))
-                    if isinstance(trade_date, datetime):
-                        trade_date = trade_date.strftime('%m/%d')
-                    elif isinstance(trade_date, str) and len(trade_date) == 8:
-                        trade_date = f"{trade_date[4:6]}/{trade_date[6:8]}"
-                    elif isinstance(trade_date, str) and '-' in trade_date:
-                        parts = trade_date.split('-')
-                        trade_date = f"{parts[1]}/{parts[2]}"
+                    raw_date = d.get('trade_date', d.get('date', ''))
+                    # 保留完整 YYYYMMDD 作为 key 避免不同年份数据混淆
+                    if isinstance(raw_date, datetime):
+                        date_key = raw_date.strftime('%Y%m%d')
+                    elif isinstance(raw_date, str) and len(raw_date) == 8 and raw_date.isdigit():
+                        date_key = raw_date
+                    elif isinstance(raw_date, str) and '-' in raw_date:
+                        parts = raw_date.split('-')
+                        date_key = f"{parts[0]}{parts[1]}{parts[2]}"
+                    else:
+                        date_key = str(raw_date)
 
-                    amount = float(d.get('amount', 0))
-                    if trade_date not in exchange_data:
-                        exchange_data[trade_date] = {'date': trade_date, 'total_amount': 0, 'amount_per_exchange': {}}
-                    exchange_data[trade_date]['total_amount'] += amount
-                    exchange_data[trade_date]['amount_per_exchange'][idx_cfg['ts_code']] = amount
-                    all_dates.add(trade_date)
+                    amount = self._safe_float(d.get('amount', 0)) * 1000
+                    if date_key not in exchange_data:
+                        exchange_data[date_key] = {
+                            'date_key': date_key,
+                            'total_amount': 0,
+                            'amount_per_exchange': {},
+                            'pct_chg': None
+                        }
+                    exchange_data[date_key]['total_amount'] += amount
+                    exchange_data[date_key]['amount_per_exchange'][idx_cfg['ts_code']] = amount
+                    # 用上证指数（第一个）的涨跌幅作为市场方向
+                    if exchange_data[date_key]['pct_chg'] is None:
+                        exchange_data[date_key]['pct_chg'] = self._safe_float(d.get('pct_chg', 0))
+                    all_dates.add(date_key)
 
-            sorted_dates = sorted(all_dates, key=lambda x: (x.split('/')[0], x.split('/')[1]))[-days:]
-            days_list = [exchange_data[d] for d in sorted_dates]
+            if active_indices == 0:
+                logger.error("所有指数数据均不可用")
+                return None
+
+            # 按 YYYYMMDD 排序取最近 days 条
+            sorted_dates = sorted(all_dates, reverse=True)[:days]
+            sorted_dates.reverse()  # 从小到大排列
+            days_list = []
+            for dk in sorted_dates:
+                days_list.append({
+                    'date': f"{dk[4:6]}/{dk[6:8]}",
+                    'total_amount': exchange_data[dk]['total_amount'],
+                    'amount_per_exchange': exchange_data[dk]['amount_per_exchange'],
+                    'pct_chg': exchange_data[dk].get('pct_chg', 0),
+                })
             avg_amount = sum(d['total_amount'] for d in days_list) / len(days_list) if days_list else 0
 
             return {
@@ -224,99 +261,247 @@ class DashboardService:
     # 4. 涨跌幅榜（daily-top）
     # ──────────────────────────────────────────────
     def get_daily_top(self, type: str = 'up', limit: int = 10) -> Optional[Dict]:
-        """涨幅榜/跌幅榜"""
+        """涨幅榜/跌幅榜 — AKShare 实时优先 → DB 最新交易日（239号架构：不直接调 Tushare）"""
+        # 1. AkshareDataReader 读取（DuckDB as_* 表）
         try:
-            from app.data.tushare_provider import TushareProvider
-            tp = TushareProvider()
-            df = tp.get_daily(None, datetime.now().strftime('%Y%m%d'))
-            if df is not None and not df.empty:
-                df['change_pct'] = df['pct_chg'].astype(float)
-                ascending = type == 'down'
-                sorted_df = df.sort_values('change_pct', ascending=ascending).head(limit)
+            from app.data.akshare_reader import reader
+            top_list = reader.get_top_stocks(type=type, limit=limit)
+            if top_list and len(top_list) > 0:
                 stocks = []
-                for _, row in sorted_df.iterrows():
+                for s in top_list:
+                    pct = float(s.get('change_pct', 0))
                     stocks.append({
-                        'ts_code': row.get('ts_code', ''),
-                        'name': row.get('name', ''),
-                        'price': round(float(row.get('close', 0)), 2),
-                        'change_pct': round(float(row.get('change_pct', 0)), 2),
-                        'change_pct_display': f"{'+' if float(row.get('change_pct', 0)) >= 0 else ''}{round(float(row.get('change_pct', 0)), 2)}%",
+                        'ts_code': s.get('ts_code', ''),
+                        'name': s.get('name', s.get('ts_code', '')),
+                        'price': round(float(s.get('price', 0)), 2),
+                        'change_pct': round(pct, 2),
+                        'change_pct_display': f"{'+' if pct >= 0 else ''}{round(pct, 2)}%",
                     })
                 return {
                     'date': datetime.now().strftime('%Y-%m-%d'),
                     'type': type,
                     'title': '涨幅前十' if type == 'up' else '跌幅前十',
+                    'source': 'AKShare 实时行情',
+                    'stocks': stocks,
+                }
+        except Exception:
+            pass
+
+        # 2. 降级：从 DB 查询最新交易日
+        try:
+            from app import db
+            from sqlalchemy import func
+            from app.models import DailyData, Stock
+            last_date = db.session.query(func.max(DailyData.trade_date)).scalar()
+            if not last_date:
+                logger.error("涨跌幅榜: DB 无任何历史数据")
+                return None
+            from app.utils.date_utils import normalize_date
+            trade_date_used = normalize_date(last_date, '%Y%m%d')
+            date_label = normalize_date(last_date)
+
+            rows = db.session.query(
+                DailyData, Stock.name
+            ).outerjoin(
+                Stock, DailyData.ts_code == Stock.ts_code
+            ).filter(
+                DailyData.trade_date == last_date
+            ).order_by(
+                DailyData.pct_chg.desc() if type == 'up' else DailyData.pct_chg.asc()
+            ).limit(limit).all()
+
+            if rows and len(rows) > 0:
+                stocks = []
+                for dd, sname in rows:
+                    pct = float(dd.pct_chg or 0)
+                    stocks.append({
+                        'ts_code': dd.ts_code,
+                        'name': sname or dd.ts_code,
+                        'price': round(float(dd.close or 0), 2),
+                        'change_pct': round(pct, 2),
+                        'change_pct_display': f"{'+' if pct >= 0 else ''}{round(pct, 2)}%",
+                    })
+                return {
+                    'date': date_label,
+                    'type': type,
+                    'title': '涨幅前十' if type == 'up' else '跌幅前十',
+                    'source': 'DB 盘后数据',
                     'stocks': stocks,
                 }
         except Exception as e:
-            logger.error(f"涨跌幅榜数据不可用: {e}")
+            logger.error(f"涨跌幅榜 DB 降级失败: {e}")
             return None
 
-        logger.error("涨跌幅榜: Tushare 返回空数据")
+        logger.error(f"涨跌幅榜: 所有数据源不可用 (latest_date={trade_date_used})")
         return None
 
     # ──────────────────────────────────────────────
     # 5. 板块涨跌幅（sector-sector）
     # ──────────────────────────────────────────────
     def get_sector_changes(self, top_n: int = 8) -> Optional[Dict]:
-        """行业板块涨跌幅（AKShare 实时数据）"""
+        """行业板块涨跌幅 — AKShare 实时优先，降级 DB daily_data 聚合"""
+        # 1. 尝试 AkshareDataReader 读取
         try:
-            from app.data.akshare_provider import AkshareProvider
-            ap = AkshareProvider()
-            rankings = ap.get_sector_rankings()
+            from app.data.akshare_reader import reader
+            rankings = reader.get_sector_rankings()
             if rankings and len(rankings) >= top_n:
-                sectors = []
-                for s in rankings[:top_n]:
+                all_sectors = []
+                for s in rankings:
                     change_pct = s.get('change_pct', 0)
-                    sectors.append({
-                        'name': s.get('name', ''),
+                    all_sectors.append({
+                        'name': s.get('sector_name', s.get('name', '')),
                         'change_pct': change_pct,
-                        'color': '#EF4444' if change_pct >= 0 else '#22C55E',
-                        'lead_stock': s.get('lead_stock', ''),
+                        'lead_stock': '',
                         'up_count': s.get('up_count', 0),
                         'down_count': s.get('down_count', 0),
                     })
-                sectors.sort(key=lambda x: x['change_pct'], reverse=True)
-                return {'date': datetime.now().strftime('%Y-%m-%d'), 'sectors': sectors}
+                all_sectors.sort(key=lambda x: x['change_pct'], reverse=True)
+                gainers = [s for s in all_sectors if s['change_pct'] > 0][:5]
+                losers = [s for s in all_sectors if s['change_pct'] <= 0]
+                losers.reverse()
+                losers = losers[:5]
+                return {
+                    'date': datetime.now().strftime('%Y-%m-%d'),
+                    'gainers': gainers,
+                    'losers': losers,
+                }
         except Exception as e:
-            logger.error(f"板块涨跌幅数据不可用: {e}")
+            logger.warning(f"板块涨跌幅 reader 不可用，降级 DB: {e}")
+
+        # 2. 降级：从 DB 最新交易日聚合行业涨跌幅
+        try:
+            from app import db
+            from sqlalchemy import func
+            from app.models import DailyData, Stock
+            last_date = db.session.query(func.max(DailyData.trade_date)).scalar()
+            if not last_date:
+                logger.error("板块涨跌幅 DB: 无任何历史数据")
+                return None
+            date_label = last_date.strftime('%Y-%m-%d')
+
+            rows = db.session.query(
+                func.avg(DailyData.pct_chg).label('avg_pct'),
+                Stock.industry,
+                func.count().label('stock_count'),
+            ).join(
+                Stock, DailyData.ts_code == Stock.ts_code
+            ).filter(
+                DailyData.trade_date == last_date,
+                Stock.industry.isnot(None),
+                Stock.industry != '',
+            ).group_by(
+                Stock.industry
+            ).order_by(
+                func.avg(DailyData.pct_chg).desc()
+            ).limit(50).all()  # 取足够多数据以便在 Python 中按涨幅/跌幅拆分
+
+            if rows and len(rows) > 0:
+                all_sectors = []
+                for r in rows:
+                    change_pct = round(float(r.avg_pct or 0), 2)
+                    all_sectors.append({
+                        'name': r.industry,
+                        'change_pct': change_pct,
+                        'lead_stock': '',
+                        'up_count': 0,
+                        'down_count': 0,
+                    })
+                gainers = [s for s in all_sectors if s['change_pct'] > 0][:5]
+                losers = [s for s in all_sectors if s['change_pct'] <= 0]
+                losers.reverse()  # 最负在前
+                losers = losers[:5]
+                return {
+                    'date': date_label,
+                    'gainers': gainers,
+                    'losers': losers,
+                    'source': 'DB daily_data 聚合（AKShare 不可用）',
+                }
+        except Exception as e:
+            logger.error(f"板块涨跌幅 DB 降级失败: {e}")
             return None
 
-        logger.error("板块涨跌幅: AKShare 返回空数据")
+        logger.error("板块涨跌幅: AKShare + DB 均不可用")
         return None
 
     # ──────────────────────────────────────────────
     # 6. AI雷达+策略信号汇总（dashboard/summary）
     # ──────────────────────────────────────────────
     def get_dashboard_summary(self) -> Optional[Dict]:
-        """AI交易机会雷达 + 策略信号汇总（Screener 引擎数据）"""
+        """AI交易机会雷达 + 策略信号汇总 — 从 DB daily_data 提取（239号架构：直读缓存，不调选股引擎）"""
         try:
-            from app.routes.screener import get_cached_screening, get_data_manager
-            screening = get_cached_screening()
-            if screening and screening.get('results', []):
-                return self._screening_to_dashboard_summary(screening)
-            # 缓存空 → 尝试轻量运行
-            logger.info("Screener 缓存为空，尝试轻量运行...")
-            dm = get_data_manager()
-            stock_list = dm.get_stock_list(limit=200)
-            if stock_list and len(stock_list) > 20:
-                from app.routes.screener import compute_screening
-                result = compute_screening(stock_list)
-                if result and result.get('results', []):
-                    return self._screening_to_dashboard_summary(result)
-        except Exception as e:
-            logger.error(f"Screener 引擎数据不可用: {e}")
-            return None
+            from app import db
+            from sqlalchemy import func
+            from app.models import DailyData, Stock
+            last_date = db.session.query(func.max(DailyData.trade_date)).scalar()
+            if not last_date:
+                logger.error("dashboard/summary DB 降级: 无历史数据")
+                return None
+            date_label = last_date.strftime('%Y-%m-%d')
 
-        logger.error("dashboard/summary: Screener 引擎不可用且无缓存")
-        return None
+            # Top 8 涨幅股（替代雷达股）
+            top_rows = db.session.query(
+                DailyData, Stock.name
+            ).outerjoin(
+                Stock, DailyData.ts_code == Stock.ts_code
+            ).filter(
+                DailyData.trade_date == last_date
+            ).order_by(
+                DailyData.pct_chg.desc()
+            ).limit(8).all()
+
+            radar_stocks = []
+            for dd, sname in top_rows:
+                pct = float(dd.pct_chg or 0)
+                direction = 'bullish' if pct > 3 else ('bearish' if pct < -3 else 'watch')
+                radar_stocks.append({
+                    'ts_code': dd.ts_code,
+                    'name': sname or dd.ts_code,
+                    'score': min(95, max(40, int(50 + pct * 5))),
+                    'direction': direction,
+                    'price': round(float(dd.close or 0), 2),
+                    'change_pct': round(pct, 2),
+                })
+
+            # 行情信号计数
+            total_stocks = db.session.query(func.count(DailyData.id)).filter(
+                DailyData.trade_date == last_date
+            ).scalar() or 0
+            bullish_count = db.session.query(func.count(DailyData.id)).filter(
+                DailyData.trade_date == last_date, DailyData.pct_chg > 2
+            ).scalar() or 0
+            bearish_count = db.session.query(func.count(DailyData.id)).filter(
+                DailyData.trade_date == last_date, DailyData.pct_chg < -2
+            ).scalar() or 0
+            high_vol_count = db.session.query(func.count(DailyData.id)).filter(
+                DailyData.trade_date == last_date,
+                func.abs(DailyData.pct_chg) > 5
+            ).scalar() or 0
+
+            return {
+                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'update_note': f'来自 DB daily_data · {date_label} · {total_stocks} 只',
+                'radar_stocks': radar_stocks,
+                'signal_summary': {
+                    'bullish': bullish_count,
+                    'bearish': bearish_count,
+                    'chanlun': high_vol_count,
+                    'chip': max(1, total_stocks // 20),
+                    'ai_judgment': max(1, total_stocks // 50),
+                    'resonance': f'{max(1, bullish_count // 5)} 行业同时走强',
+                    'highconf': f'{high_vol_count} 只振幅 ≥ 5%',
+                },
+                'total_signals': total_stocks,
+            }
+        except Exception as e:
+            logger.error(f"dashboard/summary DB 降级失败: {e}")
+            return None
 
     # ──────────────────────────────────────────────
     # 7. 全市场资金流向（moneyflow-summary）
     # ──────────────────────────────────────────────
     def get_moneyflow_summary(self, days: int = 20) -> Optional[Dict]:
-        """全市场资金流向趋势（Tushare moneyflow + DuckDB 缓存）"""
-        # 尝试从缓存读取
+        """全市场资金流向趋势（DuckDB 缓存 → AKShare 备选回退）"""
+        # 1. DuckDB 缓存
         try:
             end = datetime.now()
             start = end - timedelta(days=days * 2)
@@ -324,106 +509,298 @@ class DashboardService:
             import pandas as pd
             dm = DataManager()
             cached = dm.get_cached_moneyflow(
-                start_date=start.strftime('%Y%m%d'),
-                end_date=end.strftime('%Y%m%d')
+                start_date=start.strftime('%Y-%m-%d'),
+                end_date=end.strftime('%Y-%m-%d')
             )
             if cached is not None:
                 if isinstance(cached, pd.DataFrame) and not cached.empty:
                     records = cached.to_dict('records')
-                    return self._aggregate_moneyflow_by_date(records, days)
+                    result = self._aggregate_moneyflow_by_date(records, days)
+                    # 验证聚合结果：如果全为零值，回退到下一层
+                    if result:
+                        has_nonzero = any(
+                            abs(d.get('main_force_net_inflow', 0)) > 0.01
+                            or abs(d.get('retail_net_outflow', 0)) > 0.01
+                            for d in result.get('days', [])
+                        )
+                        if has_nonzero:
+                            return result
+                        logger.warning("DuckDB 资金流缓存全部为零值，回退到 Tushare")
+                    else:
+                        logger.warning("DuckDB 资金流缓存聚合失败")
                 elif isinstance(cached, list) and len(cached) > 0:
-                    return self._aggregate_moneyflow_by_date(cached, days)
+                    result = self._aggregate_moneyflow_by_date(cached, days)
+                    if result:
+                        has_nonzero = any(
+                            abs(d.get('main_force_net_inflow', 0)) > 0.01
+                            for d in result.get('days', [])
+                        )
+                        if has_nonzero:
+                            return result
+                        logger.warning("DuckDB 资金流缓存全部为零值（list），回退到 Tushare")
         except Exception as e:
             logger.warning(f"缓存资金流向查询失败: {e}")
 
-        # 尝试直接从 Tushare 获取
+        # 2. AKShare 备选回退：stock_market_fund_flow（全市场资金流向排行）
         try:
-            from app.data.tushare_provider import TushareProvider
-            tp = TushareProvider()
-            date_list = []
-            for i in range(days * 3):
-                d = (end - timedelta(days=i)).strftime('%Y%m%d')
-                raw = tp.get_moneyflow(trade_date=d)
-                if raw and len(raw) > 0:
-                    total_main = sum(
-                        float(r.get('buy_lg_amount', 0)) + float(r.get('buy_elg_amount', 0))
-                        - float(r.get('sell_lg_amount', 0)) - float(r.get('sell_elg_amount', 0))
-                        for r in raw
-                    )
-                    total_retail = sum(
-                        float(r.get('buy_sm_amount', 0)) - float(r.get('sell_sm_amount', 0))
-                        for r in raw
-                    )
-                    if abs(total_main) < 1 and abs(total_retail) < 1:
-                        continue
-                    date_list.append({
-                        'date': f"{d[4:6]}/{d[6:8]}",
-                        'main_force_net_inflow': round(total_main / 1e8, 1),
-                        'retail_net_outflow': round(total_retail / 1e8, 1),
-                    })
-                    if len(date_list) >= days:
-                        break
-            if len(date_list) >= days:
-                date_list.reverse()
-                return {
-                    'updated_at': end.strftime('%Y-%m-%d'),
-                    'source': 'Tushare 资金流向',
-                    'days': date_list,
-                }
+            import akshare as ak
+            df = ak.stock_market_fund_flow()
+            if df is not None and not df.empty:
+                # 统一列名
+                df = df.rename(columns={
+                    '日期': 'trade_date',
+                    '上证-收盘价': 'close_index',
+                    '上证-涨跌幅': 'pct_chg_index',
+                    '主力净流入-净额': 'net_main_amount',
+                    '主力净流入-净占比': 'net_main_pct',
+                    '超大单净流入-净额': 'net_elg_amount',
+                    '超大单净流入-净占比': 'net_elg_pct',
+                    '大单净流入-净额': 'net_lg_amount',
+                    '大单净流入-净占比': 'net_lg_pct',
+                    '中单净流入-净额': 'net_md_amount',
+                    '中单净流入-净占比': 'net_md_pct',
+                    '小单净流入-净额': 'net_sm_amount',
+                    '小单净流入-净占比': 'net_sm_pct',
+                })
+                df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y%m%d')
+                records = df.sort_values('trade_date', ascending=False).head(days).to_dict('records')
+                if records:
+                    logger.info(f"从 AKShare stock_market_fund_flow 获取资金流向: {len(records)} 条")
+                    return self._aggregate_moneyflow_by_date(records, days)
         except Exception as e:
-            logger.error(f"Tushare 资金流向数据不可用: {e}")
-            return None
+            logger.debug(f"AKShare 资金流向降级失败: {e}")
 
-        logger.error("资金流向: 缓存和 Tushare 均不可用")
+        # 3. Tushare API 最终降级（分批加载交易日资金流）
+        try:
+            if self.tushare:
+                from app import db
+                from sqlalchemy import func
+                from app.models import DailyData
+                recent_dates = db.session.query(DailyData.trade_date).distinct().order_by(
+                    DailyData.trade_date.desc()).limit(25).all()
+                ts_dates = []
+                for d in recent_dates:
+                    d0 = d[0]
+                    if hasattr(d0, 'strftime'):
+                        ts_dates.append(d0.strftime('%Y%m%d'))
+                    else:
+                        ts_dates.append(str(d0).replace('-', ''))
+                ts_dates = ts_dates[:max(days, 20)]
+
+                all_records = []
+                for date_str in ts_dates:
+                    raw = self.tushare.get_moneyflow(trade_date=date_str)
+                    if not raw:
+                        continue
+                    for r in raw:
+                        bl = self._safe_float(r.get('buy_lg_amount', 0))
+                        sl = self._safe_float(r.get('sell_lg_amount', 0))
+                        be = self._safe_float(r.get('buy_elg_amount', 0))
+                        se = self._safe_float(r.get('sell_elg_amount', 0))
+                        bs = self._safe_float(r.get('buy_sm_amount', 0))
+                        ss = self._safe_float(r.get('sell_sm_amount', 0))
+                        all_records.append({
+                            'trade_date': date_str,
+                            'ts_code': r.get('ts_code', ''),
+                            'buy_lg_vol': 0, 'buy_lg_amount': bl,
+                            'sell_lg_vol': 0, 'sell_lg_amount': sl,
+                            'buy_elg_amount': be, 'sell_elg_amount': se,
+                            'buy_sm_amount': bs, 'sell_sm_amount': ss,
+                            'net_lg_amount': bl - sl,
+                            'net_elg_amount': be - se,
+                            'net_sm_amount': bs - ss,
+                        })
+                if all_records:
+                    # 验证是否有非零资金流数据（Tushare 可能返回零值空结构）
+                    total_main = sum(abs(r['net_lg_amount'] + r['net_elg_amount']) for r in all_records)
+                    if total_main < 1e7:  # 总资金流 < 1000万 → 空结构
+                        logger.warning(f"Tushare 资金流向全部为零值 ({len(all_records)} 条)，跳过")
+                    else:
+                        # 写入 DuckDB 缓存（DATE 列需 YYYY-MM-DD 格式）
+                        try:
+                            import pandas as pd
+                            from app.data.enhanced_cache_manager import get_ecm_instance
+                            cache_records = [{**r, 'trade_date': r['trade_date'][:4] + '-' + r['trade_date'][4:6] + '-' + r['trade_date'][6:8]} for r in all_records]
+                            pdf = pd.DataFrame(cache_records)
+                            get_ecm_instance().cache_moneyflow_data(pdf)
+                        except Exception:
+                            pass
+                        logger.info(f"从 Tushare 获取资金流向: {len(all_records)} 条, {len(ts_dates)} 个交易日")
+                        return self._aggregate_moneyflow_by_date(all_records, days)
+        except Exception as e:
+            logger.debug(f"Tushare 资金流向降级失败: {e}")
+
+        logger.warning("资金流向: 缓存、AKShare 和 Tushare 均不可用")
         return None
 
     # ──────────────────────────────────────────────
     # 8. 板块资金流向（sector-moneyflow）
     # ──────────────────────────────────────────────
     def get_sector_moneyflow(self, top_n: int = 8, stocks_per_sector: int = 3) -> Optional[Dict]:
-        """行业板块资金流向 + 个股Top3（Tushare moneyflow + industry 聚合）"""
+        """行业板块资金流向 + 个股Top3（DuckDB moneyflow_cache + SQLite 行业映射，239号架构：不直接调 Tushare）"""
+        # 1. 行业映射：从 SQLite Stock 表取
+        industry_map = {}
         try:
-            from app.data.tushare_provider import TushareProvider
-            tp = TushareProvider()
-            industries = tp.get_industry()
-            industry_map = {}
-            if industries:
-                for rec in industries:
-                    code = rec.get('ts_code', '')
-                    ind = rec.get('industry', '') or rec.get('industry_name', '')
-                    if code and ind:
-                        industry_map[code] = ind
-
-            if len(industry_map) < 10:
-                logger.error(f"行业映射数据不足 ({len(industry_map)} 条)，无法聚合板块资金流向")
-                return None
-
-            end = datetime.now()
-            for i in range(30):
-                d = (end - timedelta(days=i)).strftime('%Y%m%d')
-                raw = tp.get_moneyflow(trade_date=d)
-                if raw and len(raw) > 50:
-                    return self._aggregate_sector_moneyflow(raw, industry_map, top_n, stocks_per_sector, d)
+            from app import db
+            from app.models import Stock
+            stocks = db.session.query(Stock.ts_code, Stock.industry).filter(
+                Stock.industry.isnot(None), Stock.industry != ''
+            ).all()
+            for s in stocks:
+                if s.ts_code and s.industry:
+                    industry_map[s.ts_code] = s.industry
         except Exception as e:
-            logger.error(f"板块资金流向数据不可用: {e}")
+            logger.warning(f"行业映射读取失败: {e}")
+
+        if len(industry_map) < 10:
+            logger.error(f"行业映射数据不足 ({len(industry_map)} 条)，无法聚合板块资金流向")
             return None
 
-        logger.error("板块资金流向: 无有效交易日数据")
+        # 2. 从 DuckDB moneyflow_cache 读取最新交易日的资金流向数据
+        try:
+            from app.data import DataManager
+            import pandas as pd
+            dm = DataManager()
+            end = datetime.now()
+            start = end - timedelta(days=5)
+            cached = dm.get_cached_moneyflow(
+                start_date=start.strftime('%Y-%m-%d'),
+                end_date=end.strftime('%Y-%m-%d')
+            )
+            if cached is None:
+                logger.warning("板块资金流向: DuckDB 缓存为空")
+                return None
+
+            if isinstance(cached, pd.DataFrame):
+                records = cached.to_dict('records')
+            elif isinstance(cached, list):
+                records = cached
+            else:
+                logger.warning(f"板块资金流向: 缓存格式异常 {type(cached)}")
+                return None
+
+            if len(records) < 50:
+                logger.warning(f"板块资金流向: 缓存记录数不足 ({len(records)})")
+                return None
+
+            # 3. 按交易日分组，取记录数最多的交易日（最近有效交易日）
+            from collections import Counter
+            date_counts = Counter(r.get('trade_date', '') for r in records)
+            best_date = max(date_counts, key=lambda d: date_counts[d]) if date_counts else None
+            if not best_date or date_counts.get(best_date, 0) < 50:
+                logger.warning(f"板块资金流向: 无足够数据的交易日 ({date_counts})")
+                return None
+
+            # 4. 筛选该交易日的数据并聚合
+            day_records = [r for r in records if r.get('trade_date') == best_date]
+            date_str = best_date
+            if isinstance(date_str, datetime):
+                date_str = date_str.strftime('%Y%m%d')
+            elif hasattr(date_str, 'strftime'):
+                date_str = date_str.strftime('%Y%m%d')
+            elif isinstance(date_str, str):
+                date_str = date_str.replace('-', '')
+
+            return self._aggregate_sector_moneyflow(day_records, industry_map, top_n, stocks_per_sector, date_str)
+        except Exception as e:
+            logger.warning(f"板块资金流向 DuckDB 聚合失败: {e}")
+
+        # 3. AKShare 备选回退：stock_sector_fund_flow_rank（行业板块资金流排行）
+        try:
+            import akshare as ak
+            df = ak.stock_sector_fund_flow_rank(indicator="今日")
+            if df is not None and not df.empty:
+                records = []
+                for _, row in df.iterrows():
+                    sector_name = str(row.get('名称', ''))
+                    records.append({
+                        'ts_code': '',  # 由 AKShare 直接聚合，无个股级数据
+                        'trade_date': datetime.now().strftime('%Y%m%d'),
+                        'sector_name': sector_name,
+                        'net_lg_amount': self._safe_float(row.get('主力净流入-净额', 0)),
+                        'change_pct': self._safe_float(row.get('板块涨跌幅', 0)),
+                        'amount': self._safe_float(row.get('成交额', 0)),
+                        'leading_stock': '',
+                    })
+                if records:
+                    # 按主力净额降序，取 top_n
+                    records.sort(key=lambda r: r['net_lg_amount'], reverse=True)
+                    top_records = records[:top_n]
+                    top_sectors = []
+                    for r in top_records:
+                        top_sectors.append({
+                            'name': r['sector_name'],
+                            'net_flow': round(r['net_lg_amount'] / 10000, 2),  # 万→亿
+                            'change_pct': round(r['change_pct'], 2),
+                            'stocks': [],
+                        })
+                    bottom_records = records[-top_n:]
+                    bottom_records.reverse()
+                    bottom_sectors = []
+                    for r in bottom_records:
+                        bottom_sectors.append({
+                            'name': r['sector_name'],
+                            'net_flow': round(r['net_lg_amount'] / 10000, 2),
+                            'change_pct': round(r['change_pct'], 2),
+                            'stocks': [],
+                        })
+                    logger.info(f"从 AKShare stock_sector_fund_flow_rank 获取板块资金流向: {len(records)} 板块")
+                    return {
+                        'date': datetime.now().strftime('%Y-%m-%d'),
+                        'top_inflow': top_sectors,
+                        'top_outflow': bottom_sectors,
+                        'source': 'AKShare 行业资金流排行',
+                    }
+        except Exception as e:
+            logger.debug(f"AKShare 板块资金流降级失败: {e}")
+
+        # 4. Tushare API 最终降级（个股资金流按行业聚合）
+        try:
+            if self.tushare and industry_map:
+                from app import db
+                from sqlalchemy import func
+                from app.models import DailyData
+                latest = db.session.query(func.max(DailyData.trade_date)).scalar()
+                if latest:
+                    date_str = latest.strftime('%Y%m%d') if hasattr(latest, 'strftime') else str(latest).replace('-', '')
+                    raw = self.tushare.get_moneyflow(trade_date=date_str)
+                    if raw and len(raw) > 50:
+                        # 验证是否有非零资金流（Tushare 可能返回零值空结构）
+                        has_data = any(
+                            float(r.get('buy_lg_amount', 0) or 0) != 0
+                            or float(r.get('sell_lg_amount', 0) or 0) != 0
+                            for r in raw[:50]
+                        )
+                        if not has_data:
+                            logger.warning(f"Tushare 板块资金流全部为零值 ({len(raw)} 条)，跳过")
+                        else:
+                            logger.info(f"从 Tushare 获取板块资金流向: {len(raw)} 条 (交易日 {date_str})")
+                            # _aggregate_sector_moneyflow 直接使用 Tushare 列名 (buy_lg_amount 等)
+                            return self._aggregate_sector_moneyflow(raw, industry_map, top_n, stocks_per_sector, date_str)
+        except Exception as e:
+            logger.debug(f"Tushare 板块资金流降级失败: {e}")
+
+        logger.warning("板块资金流向: 缓存、AKShare 和 Tushare 均不可用")
         return None
 
     # ──────────────────────────────────────────────
     # 内部辅助方法
     # ──────────────────────────────────────────────
 
-    def _try_get_index_daily(self, ts_code: str) -> Optional[List]:
-        """尝试从 Tushare/DataManager 获取指数日线数据"""
+    @staticmethod
+    def _safe_float(v, default=0.0):
+        """安全转换 float，处理 NaN/None"""
         try:
-            if self.tushare:
-                data = self.tushare.get_index_daily(ts_code)
-                if data is not None and len(data) > 0:
-                    return data
-        except Exception:
-            pass
+            f = float(v)
+            if f != f:  # NaN != NaN
+                return default
+            return f
+        except (ValueError, TypeError):
+            return default
+
+    def _try_get_index_daily(self, ts_code: str) -> Optional[List]:
+        """获取指数日线数据：DuckDB 缓存 → AKShare API → Tushare API（备选回退）"""
+        # 1. DuckDB 缓存（DataManager 自带 SQLite 降级）
         try:
             if self.data_manager:
                 df = self.data_manager.get_cached_daily_data(ts_code)
@@ -431,6 +808,46 @@ class DashboardService:
                     return df.to_dict('records')
         except Exception:
             pass
+
+        # 2. AKShare 轻量级降级：stock_zh_index_daily_em
+        try:
+            import akshare as ak
+            symbol = ts_code.split('.')[0]
+            df = ak.stock_zh_index_daily_em(symbol)
+            if df is not None and not df.empty:
+                df = df.rename(columns={
+                    'date': 'trade_date',
+                    'open': 'open',
+                    'high': 'high',
+                    'low': 'low',
+                    'close': 'close',
+                    'volume': 'vol',
+                })
+                if 'pct_chg' not in df.columns:
+                    df['pct_chg'] = df['close'].pct_change() * 100
+                if 'pre_close' not in df.columns:
+                    df['pre_close'] = df['close'].shift(1)
+                if 'amount' not in df.columns:
+                    df['amount'] = 0
+                if 'trade_date' in df.columns:
+                    df = df.sort_values('trade_date')
+                records = df.to_dict('records')
+                if records:
+                    logger.info(f"从 AKShare 获取指数 {ts_code} 日线数据: {len(records)} 条")
+                    return records
+        except Exception as e:
+            logger.debug(f"AKShare 指数日线降级失败 ({ts_code}): {e}")
+
+        # 3. Tushare API 最终降级（单次调用，非循环）
+        try:
+            if self.tushare:
+                raw = self.tushare.get_index_daily(ts_code)
+                if raw and len(raw) > 0:
+                    logger.info(f"从 Tushare 获取指数 {ts_code} 日线数据: {len(raw)} 条")
+                    return raw
+        except Exception as e:
+            logger.debug(f"Tushare 指数日线降级失败 ({ts_code}): {e}")
+
         return None
 
     def _build_mini_kline(self, data: List) -> List:
@@ -480,7 +897,7 @@ class DashboardService:
         if now.weekday() < 5 and (
             (now.hour == 9 and now.minute >= 30) or
             (10 <= now.hour <= 13) or
-            (now.hour == 14 and now.minute <= 30)
+            (now.hour == 14)
         ):
             return 'trading'
         # 周末判断
@@ -489,217 +906,12 @@ class DashboardService:
         return 'closed'
 
     # ──────────────────────────────────────────────
-    # Mock 降级方法
-    # ──────────────────────────────────────────────
-
-    def _mock_index(self, idx_cfg: Dict) -> Dict:
-        """模拟单个指数数据"""
-        base_price = {'000001.SH': 3287, '399001.SZ': 11200, '899050.BJ': 1250, '399006.SZ': 2250}.get(idx_cfg['ts_code'], 3000)
-        price = round(base_price + random.uniform(-50, 50), 2)
-        prev_close = round(base_price + random.uniform(-30, 30), 2)
-        change = round(price - prev_close, 2)
-        change_pct = round(change / prev_close * 100, 2) if prev_close > 0 else 0
-        return {
-            'ts_code': idx_cfg['ts_code'],
-            'name': idx_cfg['name'],
-            'price': price,
-            'change_pct': change_pct,
-            'change_amount': change,
-            'mini_kline': self._mock_mini_kline_data(base_price, 20),
-            'amount': random.uniform(1.5e11, 3.5e11),  # 1500亿~3500亿
-        }
-
-    def _mock_mini_kline(self, ts_code: str, limit: int = 20) -> Dict:
-        base_price = {'000001.SH': 3287, '399001.SZ': 11200, '899050.BJ': 1250, '399006.SZ': 2250}.get(ts_code, 3000)
-        name = ts_code
-        for idx in INDEX_CONFIG:
-            if idx['ts_code'] == ts_code:
-                name = idx['name']
-                break
-        return {
-            'ts_code': ts_code,
-            'name': name,
-            'kline': self._mock_mini_kline_data(base_price, limit),
-        }
-
-    def _mock_mini_kline_data(self, base_price: float, count: int) -> List:
-        mini = []
-        price = base_price - 50
-        for i in range(count):
-            d = (datetime.now() - timedelta(days=count - i)).strftime('%m/%d')
-            open_p = round(price + random.uniform(-10, 10), 2)
-            close_p = round(open_p + random.uniform(-15, 15), 2)
-            low = round(min(open_p, close_p) - random.uniform(0, 10), 2)
-            high = round(max(open_p, close_p) + random.uniform(0, 10), 2)
-            price = close_p
-            mini.append({'date': d, 'open': open_p, 'close': close_p, 'low': low, 'high': high})
-        return mini
-
-    def _mock_volume_chart(self, days: int = 20) -> Dict:
-        days_list = []
-        base_amount = 8e11
-        for i in range(days):
-            d = (datetime.now() - timedelta(days=days - i)).strftime('%m/%d')
-            amount = round(base_amount + random.uniform(-3e11, 3e11), 2)
-            days_list.append({
-                'date': d,
-                'total_amount': amount,
-                'amount_per_exchange': {
-                    '000001.SH': round(amount * 0.35, 2),
-                    '399001.SZ': round(amount * 0.40, 2),
-                    '899050.BJ': round(amount * 0.05, 2),
-                    '399006.SZ': round(amount * 0.20, 2),
-                },
-            })
-        avg = sum(d['total_amount'] for d in days_list) / len(days_list)
-        return {
-            'exchange_summary': '上证+深证+北证50+创业板',
-            'days': days_list,
-            'average_amount': round(avg, 2),
-            'updated_at': datetime.now().strftime('%Y-%m-%d'),
-        }
-
-    def _mock_daily_top(self, type: str = 'up', limit: int = 10) -> Dict:
-        pool = _MOCK_STOCKS_POOL.copy()
-        random.shuffle(pool)
-        stocks = []
-        for i, stock in enumerate(pool[:limit]):
-            if type == 'up':
-                pct = round(random.uniform(2, 10), 2)
-            else:
-                pct = round(random.uniform(-10, -2), 2)
-            stocks.append({
-                'ts_code': stock['ts_code'],
-                'name': stock['name'],
-                'price': round(random.uniform(10, 300), 2),
-                'change_pct': pct,
-                'change_pct_display': f"{'+' if pct >= 0 else ''}{pct}%",
-            })
-        return {
-            'date': datetime.now().strftime('%Y-%m-%d'),
-            'type': type,
-            'title': '涨幅前十' if type == 'up' else '跌幅前十',
-            'stocks': stocks,
-        }
-
-    # ── 新增 mock 降级 ──
-
-    def _mock_sector_changes(self, top_n: int = 8) -> Dict:
-        """模拟板块涨跌幅数据"""
-        sectors = []
-        for name in SECTOR_NAMES[:top_n]:
-            change = round(random.uniform(-3, 5), 1)
-            sectors.append({
-                'name': name,
-                'change_pct': change,
-                'color': '#EF4444' if change >= 0 else '#22C55E',
-            })
-        sectors.sort(key=lambda x: x['change_pct'], reverse=True)
-        return {'date': datetime.now().strftime('%Y-%m-%d'), 'sectors': sectors}
-
-    def _mock_moneyflow_summary(self, days: int = 20) -> Dict:
-        """模拟资金流向数据"""
-        days_list = []
-        base_main = 3.0
-        base_retail = -1.5
-        now = datetime.now()
-        for i in range(days):
-            d = (now - timedelta(days=days - i)).strftime('%m/%d')
-            main_flow = round(base_main + random.uniform(-2, 2), 1)
-            retail_flow = round(base_retail + random.uniform(-1, 1), 1)
-            days_list.append({
-                'date': d,
-                'main_force_net_inflow': main_flow,
-                'retail_net_outflow': retail_flow,
-            })
-        return {
-            'updated_at': now.strftime('%Y-%m-%d'),
-            'source': '模拟数据（所有真实数据源均不可用）',
-            'days': days_list,
-        }
-
-    def _mock_sector_moneyflow(self, top_n: int = 8, stocks_per_sector: int = 3) -> Dict:
-        """模拟板块资金流向"""
-        sectors = []
-        for name in SECTOR_NAMES[:top_n]:
-            net_inflow = round(random.uniform(-2, 6), 1)
-            stocks = []
-            stock_names = _MOCK_SECTOR_STOCKS.get(name, [f'{name}股票{i+1}' for i in range(stocks_per_sector)])
-            for sname in stock_names[:stocks_per_sector]:
-                stocks.append({
-                    'name': sname,
-                    'net_inflow': round(random.uniform(-0.5, 1.5), 2),
-                })
-            sectors.append({
-                'name': name,
-                'net_inflow': net_inflow,
-                'net_inflow_change_pct': round(random.uniform(-5, 10), 1),
-                'stocks': stocks,
-            })
-        out_sectors = []
-        for name in OUT_SECTOR_NAMES[:5]:
-            net_inflow = round(random.uniform(-3, -0.5), 1)
-            stocks = []
-            stock_names = _MOCK_SECTOR_STOCKS.get(name, [f'{name}股{i+1}' for i in range(stocks_per_sector)])
-            for sname in stock_names[:stocks_per_sector]:
-                stocks.append({
-                    'name': sname,
-                    'net_outflow': round(random.uniform(-2, -0.3), 2),
-                })
-            out_sectors.append({
-                'name': name,
-                'net_inflow': net_inflow,
-                'stocks': stocks,
-            })
-        sectors.sort(key=lambda x: x['net_inflow'], reverse=True)
-        out_sectors.sort(key=lambda x: x['net_inflow'])
-        return {
-            'date': datetime.now().strftime('%Y-%m-%d'),
-            'updated_at': datetime.now().strftime('%Y-%m-%d'),
-            'source': '模拟数据（所有真实数据源均不可用）',
-            'sectors': sectors,
-            'out_sectors': out_sectors,
-        }
-
-    def _mock_dashboard_summary(self) -> Dict:
-        """模拟 AI 雷达 + 策略信号汇总"""
-        random.shuffle(_MOCK_STOCKS_POOL)
-        radar_stocks = []
-        directions = ['bullish', 'watch', 'bearish']
-        weights = [0.5, 0.3, 0.2]
-        for stock in _MOCK_STOCKS_POOL[:8]:
-            direction = random.choices(directions, weights=weights, k=1)[0]
-            score = random.randint(60, 98)
-            change_pct = round(random.uniform(-5, 8), 1)
-            radar_stocks.append({
-                'ts_code': stock['ts_code'],
-                'name': stock['name'],
-                'score': score,
-                'direction': direction,
-                'price': round(random.uniform(10, 300), 2),
-                'change_pct': change_pct,
-            })
-        return {
-            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'update_note': '模拟数据（Screener 引擎不可用）',
-            'radar_stocks': radar_stocks,
-            'signal_summary': {
-                'bullish_count': random.randint(10, 20),
-                'bearish_count': random.randint(5, 12),
-                'chanlun_signal': random.randint(10, 25),
-                'chip_signal': random.randint(5, 15),
-                'ai_judgment': random.randint(3, 10),
-                'resonance': {'label': '🔥 共振信号', 'detail': '3 个策略同时看多'},
-                'high_confidence': {'label': '⚡ 高置信度', 'detail': '置信度 ≥ 85%'},
-            },
-            'total_signals': random.randint(30, 60),
-        }
-
     # ── 真实数据聚合方法 ──
 
     def _aggregate_moneyflow_by_date(self, records: List, max_days: int = 20) -> Dict:
         """从缓存资金流向记录按日聚合为 dashboard 格式"""
         from collections import defaultdict
+        _sf = self._safe_float
         daily = defaultdict(lambda: {'main': 0.0, 'retail': 0.0})
         dates_found = set()
         for r in records:
@@ -710,8 +922,10 @@ class DashboardService:
                 d = d.strftime('%Y%m%d')
             elif isinstance(d, str):
                 d = d.replace('-', '')
-            net_main = float(r.get('net_lg_amount', 0))
-            net_retail = float(r.get('buy_sm_amount', 0)) - float(r.get('sell_sm_amount', 0))
+            # 优先使用 net_lg_amount + net_elg_amount（已存入缓存）
+            net_main = _sf(r.get('net_lg_amount')) + _sf(r.get('net_elg_amount'))
+            # 零售：buy_sm - sell_sm，或使用 net_sm_amount
+            net_retail = _sf(r.get('net_sm_amount')) or (_sf(r.get('buy_sm_amount')) - _sf(r.get('sell_sm_amount')))
             daily[d]['main'] += net_main
             daily[d]['retail'] += net_retail
             dates_found.add(d)
@@ -740,8 +954,9 @@ class DashboardService:
         for r in raw:
             code = r.get('ts_code', '')
             ind = industry_map.get(code, '其他')
-            net = float(r.get('buy_lg_amount', 0)) + float(r.get('buy_elg_amount', 0)) \
-                  - float(r.get('sell_lg_amount', 0)) - float(r.get('sell_elg_amount', 0))
+            _sf = self._safe_float
+            net = _sf(r.get('buy_lg_amount', 0)) + _sf(r.get('buy_elg_amount', 0)) \
+                  - _sf(r.get('sell_lg_amount', 0)) - _sf(r.get('sell_elg_amount', 0))
             sector_agg[ind]['net'] += net
             if code not in sector_agg[ind]['stocks']:
                 sector_agg[ind]['stocks'][code] = {
@@ -751,13 +966,12 @@ class DashboardService:
                 }
             sector_agg[ind]['stocks'][code]['net'] += net
 
-        # 尝试从 DataManager 获取中文名称
+        # 尝试从 DB 获取中文名称（避免 DataManager DuckDB 初始化失败）
         try:
-            dm = DataManager()
-            name_map = {}
-            for s in dm.get_stock_list(limit=6000):
-                if s.get('name') and s.get('ts_code'):
-                    name_map[s['ts_code']] = s['name']
+            from app import db
+            from app.models import Stock
+            stocks = db.session.query(Stock.ts_code, Stock.name).all()
+            name_map = {s.ts_code: s.name for s in stocks if s.name and s.ts_code}
             for ind_name in sector_agg:
                 for code in sector_agg[ind_name]['stocks']:
                     if code in name_map:
@@ -772,7 +986,7 @@ class DashboardService:
             top_stocks = []
             for s in stock_list[:stocks_per_sector]:
                 top_stocks.append({
-                    'ts_code': s['name'],
+                    'ts_code': s.get('ts_code', s['name']),
                     'name': s['name'],
                     'net_inflow': round(s['net'] / 1e8, 2),
                 })
@@ -796,45 +1010,4 @@ class DashboardService:
             'out_sectors': outflow[:5],
         }
 
-    def _screening_to_dashboard_summary(self, screening: Dict) -> Dict:
-        """将 Screener L3 结果转为 dashboard/summary 格式"""
-        results = screening.get('results', [])
-        # Top 8 雷达股票
-        radar_stocks = []
-        for r in results[:8]:
-            score = r.get('score', 50)
-            phase = r.get('phase', 'WASHING')
-            # phase → direction 映射
-            dir_map = {'BUILDING': 'bullish', 'WASHING': 'watch',
-                       'LIFTING': 'bullish', 'DISTRIBUTING': 'bearish'}
-            radar_stocks.append({
-                'ts_code': r.get('symbol', ''),
-                'name': r.get('name', ''),
-                'score': int(score),
-                'direction': dir_map.get(phase, 'watch'),
-                'price': r.get('price', 0),
-                'change_pct': r.get('change_pct', 0),
-            })
 
-        # 信号计数
-        bullish = sum(1 for r in results if r.get('phase') in ('BUILDING', 'LIFTING'))
-        bearish = sum(1 for r in results if r.get('phase') == 'DISTRIBUTING')
-        chanlun = sum(1 for r in results if r.get('rsi', 50) > 60 or r.get('rsi', 50) < 40)
-        chip = sum(1 for r in results if r.get('score', 0) > 60)
-        ai_judg = max(1, len(results) // 10)
-
-        return {
-            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'update_note': f'来自 Screener L3 · {len(results)} 只通过验证',
-            'radar_stocks': radar_stocks,
-            'signal_summary': {
-                'bullish_count': bullish,
-                'bearish_count': bearish,
-                'chanlun_signal': chanlun,
-                'chip_signal': chip,
-                'ai_judgment': ai_judg,
-                'resonance': {'label': '🔥 共振信号', 'detail': f'{max(1, bullish // 3)} 策略同时看多'},
-                'high_confidence': {'label': '⚡ 高置信度', 'detail': f'{chip} 只置信度 ≥ 60'},
-            },
-            'total_signals': len(results),
-        }

@@ -51,14 +51,22 @@ def _get_db_status():
 def _get_duckdb_status():
     """检查 DuckDB 缓存状态"""
     try:
-        from app.data.cache_manager import CacheManager
-        cm = CacheManager()
-        stats = cm.get_cache_stats()
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        stats_df = ecm.get_cache_stats()
+        stats = stats_df.iloc[0].to_dict() if not stats_df.empty else {}
+        db_size = 0
+        if os.path.exists(ecm.db_path) and ecm.db_path != ':memory:':
+            db_size = round(os.path.getsize(ecm.db_path) / (1024 * 1024), 1)
         return {
-            "status": "healthy" if stats.get("cache_size_mb", 0) > 0 else "empty",
-            "latency_ms": 1,  # DuckDB 在内存中，延迟极低
-            "cache_size_mb": stats.get("cache_size_mb", 0),
-            "records": stats.get("total_records", 0)
+            "status": "healthy" if stats.get("enhanced_hits_duckdb", 0) > 0 else "empty",
+            "latency_ms": 1,
+            "cache_size_mb": db_size,
+            "records": stats.get("enhanced_hits_duckdb", 0),
+            "daily_count": stats.get("duckdb_daily_count", 0),
+            "indicator_count": stats.get("duckdb_indicator_count", 0),
+            "hits_total": stats.get("enhanced_hits_duckdb", 0),
+            "hits_duckdb": stats.get("enhanced_hits_duckdb", 0),
         }
     except Exception as e:
         return {"status": "unhealthy", "latency_ms": 0, "error": str(e)}
@@ -116,6 +124,7 @@ def _get_cache_status():
         return {
             "duckdb_file": f"{duckdb_status.get('cache_size_mb', 0)} MB",
             "daily_cached": duckdb_status.get('records', 0),
+            "indicator_cached": duckdb_status.get('indicator_count', 0),
             "minute_cached": 0,  # 待分钟数据实现
             "factor_precompute": "pending",
             "last_refresh": datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -254,3 +263,31 @@ def readiness_check():
             'cache': duckdb_status
         }
     })
+
+
+@health_bp.route('/api/v3/health/data-freshness', methods=['GET'])
+def data_freshness():
+    """返回 DuckDB 各缓存表的最新日期和记录数"""
+    tables = {
+        'daily_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM daily_cache',
+        'daily_basic_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM daily_basic_cache',
+        'moneyflow_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM moneyflow_cache',
+        'win_rate_cache': 'SELECT MAX(evaluated_at) as latest, COUNT(*) as cnt FROM win_rate_cache',
+    }
+    results = {}
+    try:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        for name, query in tables.items():
+            try:
+                row = ecm.conn.execute(query).fetchone()
+                results[name] = {
+                    'latest_date': str(row[0]) if row[0] else None,
+                    'count': row[1],
+                }
+            except Exception as e:
+                results[name] = {'error': str(e)}
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+    return jsonify({'success': True, 'data': results})
