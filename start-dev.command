@@ -18,7 +18,7 @@ echo "════════════════════════�
 echo "  A股分析系统 · 全栈开发"
 echo "  后端 Flask  → http://localhost:5001"
 echo "  Vue 前端     → http://localhost:9000"
-echo "  UI原型服务   → http://localhost:8082"
+echo "  HTML原型     → http://localhost:8082/dashboard.html"
 echo "  Ctrl+C → 全部停止"
 echo "═══════════════════════════════════════════════"
 
@@ -69,6 +69,6 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 sleep 2
-open http://localhost:9000 2>/dev/null
+open http://localhost:8082/dashboard.html 2>/dev/null
 
 wait
