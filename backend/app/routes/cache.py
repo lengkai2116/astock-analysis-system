@@ -162,17 +162,21 @@ def invalidate_cache():
     try:
         ts_code = request.json.get('ts_code')
         days = request.json.get('days', 30)
-        
+
         data_manager = DataManager()
-        
         if ts_code:
-            data_manager.cache.redis_cache.invalidate_daily(ts_code)
+            # 单只股票缓存清除：从 DuckDB 删除对应记录
+            ecm = data_manager.cache
+            ecm.conn.execute("DELETE FROM daily_cache WHERE ts_code = ?", [ts_code])
+            ecm.conn.commit()
+            msg = f'股票 {ts_code} 缓存已清除'
         else:
             data_manager.cache.invalidate_old_data(days)
-        
+            msg = f'缓存清除成功 (保留最近{days}天)'
+
         return jsonify({
             'success': True,
-            'message': f'缓存清除成功 (保留最近{days}天)'
+            'message': msg
         })
     except Exception as e:
         return jsonify({

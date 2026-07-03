@@ -1,5 +1,5 @@
 from .tushare_provider import TushareProvider
-from .enhanced_cache_manager import EnhancedCacheManager
+from .enhanced_cache_manager import get_ecm_instance, EnhancedCacheManager
 from app.models import Stock, DailyData
 from app import db
 from datetime import datetime
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class DataManager:
     def __init__(self):
         self.tushare = TushareProvider()
-        self.cache = EnhancedCacheManager()
+        self.cache = get_ecm_instance()
     
     def sync_stock_list(self):
         stocks = self.tushare.get_stock_list()
@@ -361,20 +361,21 @@ class DataManager:
         monthly['pct_chg'] = monthly['close'].pct_change() * 100
         return monthly
     
-    def sync_daily_basic_data(self, ts_code=None, start_date=None, end_date=None):
+    def sync_daily_basic_data(self, ts_code=None, start_date=None, end_date=None, trade_date=None):
         """
         同步每日基础数据（换手率、市盈率、市值等）
-        
+
         Args:
             ts_code: 股票代码（如果None则获取当日全部）
             start_date: 开始日期
             end_date: 结束日期
-            
+            trade_date: 指定交易日（传此参数则获取当日全部股票）
+
         Returns:
             同步的数据条数
         """
-        data = self.tushare.get_daily_basic(ts_code, start_date, end_date)
-        
+        data = self.tushare.get_daily_basic(ts_code, start_date, end_date, trade_date)
+
         if not data:
             return 0
         
@@ -431,7 +432,7 @@ class DataManager:
         """同步全部股票每日基础数据"""
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y%m%d')
-        
+
         return self.sync_daily_basic_data(trade_date=trade_date)
 
 
@@ -449,6 +450,10 @@ class DataManager:
                 continue
             buy_lg = item.get('buy_lg_amount', 0) or 0
             sell_lg = item.get('sell_lg_amount', 0) or 0
+            buy_elg = item.get('buy_elg_amount', 0) or 0
+            sell_elg = item.get('sell_elg_amount', 0) or 0
+            buy_sm = item.get('buy_sm_amount', 0) or 0
+            sell_sm = item.get('sell_sm_amount', 0) or 0
             df_data.append({
                 'ts_code': item['ts_code'],
                 'trade_date': datetime.strptime(trade_date_str, '%Y%m%d').date(),
@@ -456,7 +461,13 @@ class DataManager:
                 'buy_lg_amount': buy_lg,
                 'sell_lg_vol': item.get('sell_lg_vol'),
                 'sell_lg_amount': sell_lg,
-                'net_lg_amount': round(float(buy_lg) - float(sell_lg), 2)
+                'buy_elg_amount': buy_elg,
+                'sell_elg_amount': sell_elg,
+                'buy_sm_amount': buy_sm,
+                'sell_sm_amount': sell_sm,
+                'net_lg_amount': round(float(buy_lg) - float(sell_lg), 2),
+                'net_elg_amount': round(float(buy_elg) - float(sell_elg), 2),
+                'net_sm_amount': round(float(buy_sm) - float(sell_sm), 2),
             })
         if df_data:
             df = pd.DataFrame(df_data)
@@ -471,8 +482,114 @@ class DataManager:
             start_date=start_date, end_date=end_date
         )
 
-    # ══════════════════════════════════════════════
-    # 以下为 5000积分 级别补齐 API（DataManager层）
+    # ==========================================
+    # 批量数据同步方法（供 scheduler 调用）
+    # ==========================================
+
+    def sync_daily_data_range(self, start_date: str, end_date: str = None, mode: str = 'incremental') -> int:
+        """同步指定日期范围内所有股票的日线数据
+
+        Args:
+            start_date: 起始日期 YYYYMMDD 或 datetime.date
+            end_date: 结束日期 YYYYMMDD 或 datetime.date（默认今天）
+            mode: 'incremental'（增量）或 'full'（全量强制覆盖）
+
+        Returns:
+            同步的记录总数
+        """
+        from app.models import Stock
+        stocks = Stock.query.all()
+        if end_date is None:
+            end_date = datetime.now().strftime('%Y%m%d')
+        if hasattr(start_date, 'strftime'):
+            start_date = start_date.strftime('%Y%m%d')
+        if hasattr(end_date, 'strftime'):
+            end_date = end_date.strftime('%Y%m%d')
+
+        total = 0
+        for stock in stocks:
+            cnt = self.sync_daily_data(
+                stock.ts_code, use_cache=False,
+                start_date=start_date, end_date=end_date
+            )
+            total += cnt
+            if total % 100 == 0:
+                logger.info(f"日线同步进度: {total} 条")
+        return total
+
+    def sync_index_daily_data(self, trade_date: str = None) -> int:
+        """同步指数日线数据到缓存
+
+        Args:
+            trade_date: 日期 YYYYMMDD（默认空，表示获取最新）
+
+        Returns:
+            缓存的指数记录数
+        """
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        total = 0
+        index_codes = ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']
+        import pandas as pd
+        for code in index_codes:
+            try:
+                raw = self.tushare.get_index_daily(code)
+                if raw:
+                    df = pd.DataFrame(raw)
+                    # trade_date 来自 Tushare 为 YYYYMMDD, DuckDB DATE 列需要 YYYY-MM-DD
+                    if not df.empty and 'trade_date' in df.columns:
+                        df['trade_date'] = pd.to_datetime(
+                            df['trade_date'], format='%Y%m%d'
+                        ).dt.date
+                    self.cache.cache_daily_data(df)
+                    total += len(df)
+            except Exception as e:
+                logger.warning(f"同步指数 {code} 失败: {e}")
+        logger.info(f"指数日线缓存同步完成: {total} 条")
+        return total
+
+    def sync_adj_factor_data(self, ts_code: str = None, start_date: str = None, end_date: str = None) -> int:
+        """同步复权因子数据到缓存
+
+        Args:
+            ts_code: 股票代码（None 则同步全部）
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            同步的记录数
+        """
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        if ts_code:
+            raw = self.tushare.get_adj_factor(ts_code, start_date, end_date)
+            if raw:
+                df = pd.DataFrame(raw)
+                # adj_factor 仅含 ts_code/trade_date/adj_factor, 写入独立表
+                if not df.empty and 'trade_date' in df.columns:
+                    df['trade_date'] = pd.to_datetime(
+                        df['trade_date'], format='%Y%m%d'
+                    ).dt.date
+                self.cache.cache_adj_factor_data(df)
+                return len(df)
+            return 0
+        # 同步全部股票
+        from app.models import Stock
+        stocks = Stock.query.all()
+        total = 0
+        for stk in stocks:
+            raw = self.tushare.get_adj_factor(stk.ts_code, start_date, end_date)
+            if raw:
+                df = pd.DataFrame(raw)
+                if not df.empty and 'trade_date' in df.columns:
+                    df['trade_date'] = pd.to_datetime(
+                        df['trade_date'], format='%Y%m%d'
+                    ).dt.date
+                self.cache.cache_adj_factor_data(df)
+                total += len(df)
+        return total
+
     # ══════════════════════════════════════════════
 
     def get_fina_indicator(self, ts_code, start_date=None, end_date=None):

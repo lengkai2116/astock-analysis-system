@@ -7,26 +7,64 @@ import shutil
 
 logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta
-from .redis_cache_manager import RedisCacheManager
+import threading
 from .memory_cache import TieredMemoryCache
+
+# 全局 ECM 单例（解决多个实例连接同一 DuckDB 文件冲突）
+_ecm_instance = None
+_ecm_lock = threading.Lock()
+
+
+def get_ecm_instance() -> 'EnhancedCacheManager':
+    """获取全局共享的 EnhancedCacheManager 单例。DataManager 等模块应调用此函数而非 new EnhancedCacheManager()"""
+    global _ecm_instance
+    if _ecm_instance is None:
+        with _ecm_lock:
+            if _ecm_instance is None:
+                _ecm_instance = EnhancedCacheManager()
+    return _ecm_instance
+
+
+def _clean_stale_duckdb_locks(data_dir: str):
+    """启动前清理 DuckDB 僵尸锁文件（.wal / .tmp）"""
+    db_dir = os.path.join(data_dir, "duckdb")
+    if not os.path.isdir(db_dir):
+        return
+    now = time.time()
+    for fname in os.listdir(db_dir):
+        if fname.endswith(".wal") or fname.endswith(".tmp"):
+            fpath = os.path.join(db_dir, fname)
+            try:
+                mtime = os.path.getmtime(fpath)
+                # 超过 60 秒的锁文件 -> 僵尸进程残留，删除
+                if now - mtime > 60:
+                    os.remove(fpath)
+                    logger.warning(f"已清理僵尸锁文件: {fpath}")
+            except (OSError, FileNotFoundError):
+                pass
+
 
 class EnhancedCacheManager:
     """
     增强型缓存管理器
     包含：
     - DuckDB主缓存
-    - Redis二级缓存（热点数据）
     - 缓存失效策略
     - 缓存命中率统计
     """
     
     def __init__(self):
-        self.redis_cache = RedisCacheManager()
+        self._lock = threading.RLock()
+        self._write_lock = threading.RLock()
         self.memory_cache = TieredMemoryCache()
         
         # DuckDB配置 - 性能优化版
         data_dir = os.getenv('DATA_DIR', '/data')
         self.db_path = os.path.join(data_dir, 'duckdb', 'stock_cache.db')
+
+        # 启动前清理僵尸锁文件（避免上次崩溃残留 .wal/.tmp 阻塞连接）
+        _clean_stale_duckdb_locks(data_dir)
+
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         
         # 创建临时目录
@@ -81,7 +119,6 @@ class EnhancedCacheManager:
         # 统计信息
         self.cache_stats = {
             'hits_duckdb': 0,
-            'hits_redis': 0,
             'misses': 0,
             'total_requests': 0
         }
@@ -231,20 +268,12 @@ class EnhancedCacheManager:
     
     def get_cached_daily(self, ts_code, start_date=None, end_date=None):
         """
-        三层缓存策略：
-        1. Redis缓存（最快）
-        2. DuckDB缓存
-        3. PostgreSQL（由调用方处理）
+        两层缓存策略：
+        2. PostgreSQL（由调用方处理）
         """
         self.cache_stats['total_requests'] += 1
-        
-        # 1. 先查Redis
-        redis_df = self.redis_cache.get_daily_data(ts_code, start_date, end_date)
-        if redis_df is not None and not redis_df.empty:
-            self.cache_stats['hits_redis'] += 1
-            return redis_df
-        
-        # 2. 查询DuckDB
+
+        # 查询DuckDB
         query = "SELECT * FROM daily_cache WHERE ts_code = ?"
         params = [ts_code]
         
@@ -261,8 +290,6 @@ class EnhancedCacheManager:
             df = self.conn.execute(query, params).fetchdf()
             if not df.empty:
                 self.cache_stats['hits_duckdb'] += 1
-                # 同时缓存到Redis
-                self.redis_cache.set_daily_data(ts_code, df, start_date, end_date)
                 return df
         except Exception as e:
             logger.warning(f"DuckDB查询失败: {e}")
@@ -272,28 +299,22 @@ class EnhancedCacheManager:
     
     def cache_daily_data(self, df):
         """
-        缓存日线数据到DuckDB和Redis
+        缓存日线数据到DuckDB
         """
         if df.empty:
             return
-        
-        # 写入DuckDB
-        self.conn.register('temp_df', df)
-        self.conn.execute("""
-            INSERT OR REPLACE INTO daily_cache 
-            (ts_code, trade_date, open, high, low, close, vol, amount, pct_chg, cached_at)
-            SELECT ts_code, trade_date, open, high, low, close, vol, amount, pct_chg, CURRENT_TIMESTAMP 
-            FROM temp_df
-        """)
-        self.conn.commit()
-        
-        # 缓存到Redis（只缓存最近的数据）
-        ts_codes = df['ts_code'].unique()
-        for ts_code in ts_codes:
-            stock_df = df[df['ts_code'] == ts_code].sort_values('trade_date')
-            recent_df = stock_df.tail(250)  # 约1年数据
-            self.redis_cache.set_daily_data(ts_code, recent_df)
-        
+
+        with self._write_lock:
+            # 写入DuckDB
+            self.conn.register('temp_df', df)
+            self.conn.execute("""
+                INSERT OR REPLACE INTO daily_cache
+                (ts_code, trade_date, open, high, low, close, vol, amount, pct_chg, cached_at)
+                SELECT ts_code, trade_date, open, high, low, close, vol, amount, pct_chg, CURRENT_TIMESTAMP
+                FROM temp_df
+            """)
+            self.conn.commit()
+
         self._update_metadata('last_cache_time', datetime.now().isoformat())
     
     def get_indicator_data(self, ts_code, indicator_name):
@@ -301,20 +322,13 @@ class EnhancedCacheManager:
         获取指标缓存数据
         """
         self.cache_stats['total_requests'] += 1
-        
-        # Redis优先查Redis
-        redis_df = self.redis_cache.get_indicator_data(ts_code, indicator_name)
-        if redis_df is not None and not redis_df.empty:
-            self.cache_stats['hits_redis'] += 1
-            return redis_df
-        
+
         # 查询DuckDB
         query = "SELECT * FROM indicator_cache WHERE ts_code = ? AND indicator_name = ? ORDER BY trade_date"
         try:
             df = self.conn.execute(query, [ts_code, indicator_name]).fetchdf()
             if not df.empty:
                 self.cache_stats['hits_duckdb'] += 1
-                self.redis_cache.set_indicator_data(ts_code, indicator_name, df)
                 return df
         except Exception as e:
             logger.warning(f"查询指标失败: {e}")
@@ -326,15 +340,26 @@ class EnhancedCacheManager:
         """
         缓存单个指标
         """
-        try:
-            self.conn.execute("""
-                INSERT OR REPLACE INTO indicator_cache 
-                (ts_code, trade_date, indicator_name, value)
-                VALUES (?, ?, ?, ?)
-            """, [ts_code, trade_date, indicator_name, value])
-            self.conn.commit()
-        except Exception as e:
-            logger.warning(f"缓存指标失败: {e}")
+        with self._write_lock:
+
+            try:
+
+                self.conn.execute("""
+
+                    INSERT OR REPLACE INTO indicator_cache 
+
+                    (ts_code, trade_date, indicator_name, value)
+
+                    VALUES (?, ?, ?, ?)
+
+                """, [ts_code, trade_date, indicator_name, value])
+
+                self.conn.commit()
+
+            except Exception as e:
+
+                logger.warning(f"缓存指标失败: {e}")
+
     
     def batch_cache_indicators(self, records):
         """
@@ -344,19 +369,33 @@ class EnhancedCacheManager:
         if not records:
             return
         
-        try:
-            df = pd.DataFrame(records)
-            self.conn.register('temp_indicators', df)
+        with self._write_lock:
+
+            try:
+
+                df = pd.DataFrame(records)
+
+                self.conn.register('temp_indicators', df)
+
             
-            self.conn.execute("""
-                INSERT OR REPLACE INTO indicator_cache 
-                (ts_code, trade_date, indicator_name, value, cached_at)
-                SELECT ts_code, trade_date, indicator_name, value, cached_at
-                FROM temp_indicators
-            """)
-            self.conn.commit()
-        except Exception as e:
-            logger.warning(f"批量缓存指标失败: {e}")
+                self.conn.execute("""
+
+                    INSERT OR REPLACE INTO indicator_cache 
+
+                    (ts_code, trade_date, indicator_name, value, cached_at)
+
+                    SELECT ts_code, trade_date, indicator_name, value, cached_at
+
+                    FROM temp_indicators
+
+                """)
+
+                self.conn.commit()
+
+            except Exception as e:
+
+                logger.warning(f"批量缓存指标失败: {e}")
+
     
     # ==================== TieredMemoryCache 集成 ====================
 
@@ -390,33 +429,37 @@ class EnhancedCacheManager:
             daily_count = self.conn.execute("SELECT COUNT(*) FROM daily_cache").fetchone()[0]
             indicator_count = self.conn.execute("SELECT COUNT(*) FROM indicator_cache").fetchone()[0]
             
-            redis_stats = self.redis_cache.get_hit_rate()
             
             return pd.DataFrame([{
                 'duckdb_daily_count': daily_count,
                 'duckdb_indicator_count': indicator_count,
-                'redis_hits': redis_stats['hits'],
-                'redis_misses': redis_stats['misses'],
-                'redis_hit_rate': redis_stats['hit_rate_percent'],
                 'enhanced_hits_duckdb': self.cache_stats['hits_duckdb'],
-                'enhanced_hits_redis': self.cache_stats['hits_redis'],
                 'enhanced_misses': self.cache_stats['misses'],
-                'enhanced_hit_rate': (self.cache_stats['hits_redis'] + self.cache_stats['hits_duckdb']) / 
-                                   max(self.cache_stats['total_requests'], 1) * 100 if self.cache_stats['total_requests'] > 0 else 0
+                'enhanced_hit_rate': self.cache_stats['hits_duckdb'] / max(self.cache_stats['total_requests'], 1) * 100 if self.cache_stats['total_requests'] > 0 else 0
             }])
         except Exception:
             return pd.DataFrame()
     
     def _update_metadata(self, key, value):
         """更新元数据"""
-        try:
-            self.conn.execute("""
-                INSERT OR REPLACE INTO cache_metadata (key, value)
-                VALUES (?, ?)
-            """, [key, value])
-            self.conn.commit()
-        except Exception:
-            pass
+        with self._write_lock:
+
+            try:
+
+                self.conn.execute("""
+
+                    INSERT OR REPLACE INTO cache_metadata (key, value)
+
+                    VALUES (?, ?)
+
+                """, [key, value])
+
+                self.conn.commit()
+
+            except Exception:
+
+                pass
+
     
     def invalidate_old_data(self, days=30):
         """
@@ -428,19 +471,31 @@ class EnhancedCacheManager:
         Returns:
             是否成功
         """
-        try:
-            cutoff = datetime.now() - timedelta(days=days)
-            self.conn.execute("""
-                DELETE FROM daily_cache 
-                WHERE cached_at < ?
-            """, [cutoff])
-            self.conn.commit()
+        with self._write_lock:
+
+            try:
+
+                cutoff = datetime.now() - timedelta(days=days)
+
+                self.conn.execute("""
+
+                    DELETE FROM daily_cache 
+
+                    WHERE cached_at < ?
+
+                """, [cutoff])
+
+                self.conn.commit()
+
             
-            self.redis_cache.clear_all()
-            return True
-        except Exception as e:
-            logger.warning(f"清除旧缓存失败: {e}")
-            return False
+                return True
+
+            except Exception as e:
+
+                logger.warning(f"清除旧缓存失败: {e}")
+
+                return False
+
     
     def clear_old_cache(self, days=30):
         return self.invalidate_old_data(days)
@@ -461,22 +516,40 @@ class EnhancedCacheManager:
         if df.empty:
             return
         
-        try:
-            self.conn.register('temp_df', df)
-            self.conn.execute("""
-                INSERT OR REPLACE INTO daily_basic_cache 
-                (ts_code, trade_date, close, turnover_rate, turnover_rate_f, volume_ratio,
-                 pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm,
-                 total_share, float_share, free_share, total_mv, circ_mv, cached_at)
-                SELECT ts_code, trade_date, close, turnover_rate, turnover_rate_f, volume_ratio,
-                       pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm,
-                       total_share, float_share, free_share, total_mv, circ_mv, CURRENT_TIMESTAMP 
-                FROM temp_df
-            """)
-            self.conn.commit()
-            self._update_metadata('last_daily_basic_cache_time', datetime.now().isoformat())
-        except Exception as e:
-            logger.warning(f"缓存daily_basic数据失败: {e}")
+        with self._write_lock:
+
+            try:
+
+                self.conn.register('temp_df', df)
+
+                self.conn.execute("""
+
+                    INSERT OR REPLACE INTO daily_basic_cache 
+
+                    (ts_code, trade_date, close, turnover_rate, turnover_rate_f, volume_ratio,
+
+                     pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm,
+
+                     total_share, float_share, free_share, total_mv, circ_mv, cached_at)
+
+                    SELECT ts_code, trade_date, close, turnover_rate, turnover_rate_f, volume_ratio,
+
+                           pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm,
+
+                           total_share, float_share, free_share, total_mv, circ_mv, CURRENT_TIMESTAMP 
+
+                    FROM temp_df
+
+                """)
+
+                self.conn.commit()
+
+                self._update_metadata('last_daily_basic_cache_time', datetime.now().isoformat())
+
+            except Exception as e:
+
+                logger.warning(f"缓存daily_basic数据失败: {e}")
+
     
     def get_cached_daily_basic(self, ts_code, start_date=None, end_date=None):
         """
@@ -494,12 +567,20 @@ class EnhancedCacheManager:
         
         query += " ORDER BY trade_date"
         
-        try:
-            df = self.conn.execute(query, params).fetchdf()
-            return df
-        except Exception as e:
-            logger.warning(f"查询daily_basic数据失败: {e}")
-            return pd.DataFrame()
+        with self._lock:
+
+            try:
+
+                df = self.conn.execute(query, params).fetchdf()
+
+                return df
+
+            except Exception as e:
+
+                logger.warning(f"查询daily_basic数据失败: {e}")
+
+                return pd.DataFrame()
+
     
     # ==================== 筹码分布缓存方法 ====================
     
@@ -516,30 +597,54 @@ class EnhancedCacheManager:
         if not chip_data:
             return
         
-        try:
-            records = []
-            for bin_data in chip_data:
-                records.append({
-                    'ts_code': ts_code,
-                    'trade_date': trade_date,
-                    'price_bin': bin_data['price_bin'],
-                    'chip_ratio': bin_data['chip_ratio'],
-                    'accumulated_ratio': bin_data['accumulated_ratio'],
-                    'peak_flag': bin_data['peak_flag']
-                })
+        with self._write_lock:
+
+            try:
+
+                records = []
+
+                for bin_data in chip_data:
+
+                    records.append({
+
+                        'ts_code': ts_code,
+
+                        'trade_date': trade_date,
+
+                        'price_bin': bin_data['price_bin'],
+
+                        'chip_ratio': bin_data['chip_ratio'],
+
+                        'accumulated_ratio': bin_data['accumulated_ratio'],
+
+                        'peak_flag': bin_data['peak_flag']
+
+                    })
+
             
-            df = pd.DataFrame(records)
-            self.conn.register('temp_chips', df)
+                df = pd.DataFrame(records)
+
+                self.conn.register('temp_chips', df)
+
             
-            self.conn.execute("""
-                INSERT OR REPLACE INTO chip_distribution_cache 
-                (ts_code, trade_date, price_bin, chip_ratio, accumulated_ratio, peak_flag, update_time)
-                SELECT ts_code, trade_date, price_bin, chip_ratio, accumulated_ratio, peak_flag, CURRENT_TIMESTAMP
-                FROM temp_chips
-            """)
-            self.conn.commit()
-        except Exception as e:
-            logger.warning(f"缓存筹码分布失败: {e}")
+                self.conn.execute("""
+
+                    INSERT OR REPLACE INTO chip_distribution_cache 
+
+                    (ts_code, trade_date, price_bin, chip_ratio, accumulated_ratio, peak_flag, update_time)
+
+                    SELECT ts_code, trade_date, price_bin, chip_ratio, accumulated_ratio, peak_flag, CURRENT_TIMESTAMP
+
+                    FROM temp_chips
+
+                """)
+
+                self.conn.commit()
+
+            except Exception as e:
+
+                logger.warning(f"缓存筹码分布失败: {e}")
+
     
     def batch_cache_chips(self, records):
         """
@@ -548,19 +653,33 @@ class EnhancedCacheManager:
         if not records:
             return
         
-        try:
-            df = pd.DataFrame(records)
-            self.conn.register('temp_chips_batch', df)
+        with self._write_lock:
+
+            try:
+
+                df = pd.DataFrame(records)
+
+                self.conn.register('temp_chips_batch', df)
+
             
-            self.conn.execute("""
-                INSERT OR REPLACE INTO chip_distribution_cache 
-                (ts_code, trade_date, price_bin, chip_ratio, accumulated_ratio, peak_flag, update_time)
-                SELECT ts_code, trade_date, price_bin, chip_ratio, accumulated_ratio, peak_flag, CURRENT_TIMESTAMP
-                FROM temp_chips_batch
-            """)
-            self.conn.commit()
-        except Exception as e:
-            logger.warning(f"批量缓存筹码分布失败: {e}")
+                self.conn.execute("""
+
+                    INSERT OR REPLACE INTO chip_distribution_cache 
+
+                    (ts_code, trade_date, price_bin, chip_ratio, accumulated_ratio, peak_flag, update_time)
+
+                    SELECT ts_code, trade_date, price_bin, chip_ratio, accumulated_ratio, peak_flag, CURRENT_TIMESTAMP
+
+                    FROM temp_chips_batch
+
+                """)
+
+                self.conn.commit()
+
+            except Exception as e:
+
+                logger.warning(f"批量缓存筹码分布失败: {e}")
+
     
     def get_chip_distribution(self, ts_code, start_date=None, end_date=None):
         """
@@ -578,12 +697,20 @@ class EnhancedCacheManager:
         
         query += " ORDER BY trade_date, price_bin"
         
-        try:
-            df = self.conn.execute(query, params).fetchdf()
-            return df
-        except Exception as e:
-            logger.warning(f"查询筹码分布数据失败: {e}")
-            return pd.DataFrame()
+        with self._lock:
+
+            try:
+
+                df = self.conn.execute(query, params).fetchdf()
+
+                return df
+
+            except Exception as e:
+
+                logger.warning(f"查询筹码分布数据失败: {e}")
+
+                return pd.DataFrame()
+
     
     def get_latest_chip_distribution(self, ts_code):
         """
@@ -598,12 +725,20 @@ class EnhancedCacheManager:
             ORDER BY price_bin
         """
         
-        try:
-            df = self.conn.execute(query, [ts_code, ts_code]).fetchdf()
-            return df
-        except Exception as e:
-            logger.warning(f"查询最新筹码分布数据失败: {e}")
-            return pd.DataFrame()
+        with self._lock:
+
+            try:
+
+                df = self.conn.execute(query, [ts_code, ts_code]).fetchdf()
+
+                return df
+
+            except Exception as e:
+
+                logger.warning(f"查询最新筹码分布数据失败: {e}")
+
+                return pd.DataFrame()
+
     
 
     # ==================== 资金流向缓存方法 ====================
@@ -615,18 +750,32 @@ class EnhancedCacheManager:
         if df.empty:
             return
 
-        try:
-            self.conn.register('temp_mf', df)
-            self.conn.execute("""
-                INSERT OR REPLACE INTO moneyflow_cache
-                (ts_code, trade_date, buy_lg_vol, buy_lg_amount, sell_lg_vol, sell_lg_amount, net_lg_amount, cached_at)
-                SELECT ts_code, trade_date, buy_lg_vol, buy_lg_amount, sell_lg_vol, sell_lg_amount, net_lg_amount, CURRENT_TIMESTAMP
-                FROM temp_mf
-            """)
-            self.conn.commit()
-            self._update_metadata('last_moneyflow_cache_time', datetime.now().isoformat())
-        except Exception as e:
-            logger.warning(f"缓存资金流向数据失败: {e}")
+        with self._write_lock:
+
+            try:
+
+                self.conn.register('temp_mf', df)
+
+                self.conn.execute("""
+
+                    INSERT OR REPLACE INTO moneyflow_cache
+
+                    (ts_code, trade_date, buy_lg_vol, buy_lg_amount, sell_lg_vol, sell_lg_amount, net_lg_amount, cached_at)
+
+                    SELECT ts_code, trade_date, buy_lg_vol, buy_lg_amount, sell_lg_vol, sell_lg_amount, net_lg_amount, CURRENT_TIMESTAMP
+
+                    FROM temp_mf
+
+                """)
+
+                self.conn.commit()
+
+                self._update_metadata('last_moneyflow_cache_time', datetime.now().isoformat())
+
+            except Exception as e:
+
+                logger.warning(f"缓存资金流向数据失败: {e}")
+
 
     def get_cached_moneyflow(self, ts_code=None, trade_date=None, start_date=None, end_date=None):
         """
@@ -672,70 +821,130 @@ class EnhancedCacheManager:
         """缓存赢率数据到 DuckDB"""
         if df.empty:
             return
-        try:
-            self.conn.register('temp_wr', df)
-            self.conn.execute("""
-                INSERT OR REPLACE INTO win_rate_cache
-                (signal_type, samples, win_rate_5d, win_rate_10d, win_rate_20d,
-                 avg_return_5d, avg_return_20d, sharpe_5d, sharpe_20d, evaluated_at)
-                SELECT signal_type, samples, win_rate_5d, win_rate_10d, win_rate_20d,
-                       avg_return_5d, avg_return_20d, sharpe_5d, sharpe_20d, evaluated_at
-                FROM temp_wr
-            """)
-            self.conn.commit()
-        except Exception as e:
-            logger.warning(f"缓存赢率数据失败: {e}")
+        with self._write_lock:
+
+            try:
+
+                self.conn.register('temp_wr', df)
+
+                self.conn.execute("""
+
+                    INSERT OR REPLACE INTO win_rate_cache
+
+                    (signal_type, samples, win_rate_5d, win_rate_10d, win_rate_20d,
+
+                     avg_return_5d, avg_return_20d, sharpe_5d, sharpe_20d, evaluated_at)
+
+                    SELECT signal_type, samples, win_rate_5d, win_rate_10d, win_rate_20d,
+
+                           avg_return_5d, avg_return_20d, sharpe_5d, sharpe_20d, evaluated_at
+
+                    FROM temp_wr
+
+                """)
+
+                self.conn.commit()
+
+            except Exception as e:
+
+                logger.warning(f"缓存赢率数据失败: {e}")
+
 
     def get_cached_win_rates(self) -> list:
         """获取所有缓存的赢率数据"""
-        try:
-            df = self.conn.execute("SELECT * FROM win_rate_cache ORDER BY signal_type").fetchdf()
-            return df.to_dict('records') if not df.empty else []
-        except Exception as e:
-            logger.warning(f"查询赢率数据失败: {e}")
-            return []
+        with self._lock:
+
+            try:
+
+                df = self.conn.execute("SELECT * FROM win_rate_cache ORDER BY signal_type").fetchdf()
+
+                return df.to_dict('records') if not df.empty else []
+
+            except Exception as e:
+
+                logger.warning(f"查询赢率数据失败: {e}")
+
+                return []
+
 
     def get_cached_win_rate(self, signal_type: str) -> dict:
         """获取指定信号类型的赢率数据"""
-        try:
-            df = self.conn.execute('SELECT * FROM win_rate_cache WHERE signal_type = ?', [signal_type]
-            ).fetchdf()
-            return df.to_dict('records')[0] if not df.empty else {}
-        except Exception as e:
-            logger.warning(f"查询赢率数据失败: {e}")
-            return {}
+        with self._lock:
+
+            try:
+
+                df = self.conn.execute('SELECT * FROM win_rate_cache WHERE signal_type = ?', [signal_type]
+
+                ).fetchdf()
+
+                return df.to_dict('records')[0] if not df.empty else {}
+
+            except Exception as e:
+
+                logger.warning(f"查询赢率数据失败: {e}")
+
+                return {}
+
 
     def cache_conditional_win_rates(self, df):
         """缓存条件概率数据到 DuckDB"""
         if df.empty:
             return
-        try:
-            self.conn.register('temp_cwr', df)
-            self.conn.execute("""
-                INSERT OR REPLACE INTO conditional_win_rate_cache
-                (signal_type, total_samples, with_div_samples, with_div_win_rate,
-                 without_div_samples, without_div_win_rate,
-                 market_good_samples, market_good_win_rate,
-                 market_poor_samples, market_poor_win_rate, evaluated_at)
-                SELECT signal_type, total_samples, with_div_samples, with_div_win_rate,
-                       without_div_samples, without_div_win_rate,
-                       market_good_samples, market_good_win_rate,
-                       market_poor_samples, market_poor_win_rate, CURRENT_TIMESTAMP
-                FROM temp_cwr
-            """)
-            self.conn.commit()
-        except Exception as e:
-            logger.warning(f"缓存条件概率数据失败: {e}")
+        with self._write_lock:
+
+            try:
+
+                self.conn.register('temp_cwr', df)
+
+                self.conn.execute("""
+
+                    INSERT OR REPLACE INTO conditional_win_rate_cache
+
+                    (signal_type, total_samples, with_div_samples, with_div_win_rate,
+
+                     without_div_samples, without_div_win_rate,
+
+                     market_good_samples, market_good_win_rate,
+
+                     market_poor_samples, market_poor_win_rate, evaluated_at)
+
+                    SELECT signal_type, total_samples, with_div_samples, with_div_win_rate,
+
+                           without_div_samples, without_div_win_rate,
+
+                           market_good_samples, market_good_win_rate,
+
+                           market_poor_samples, market_poor_win_rate, CURRENT_TIMESTAMP
+
+                    FROM temp_cwr
+
+                """)
+
+                self.conn.commit()
+
+            except Exception as e:
+
+                logger.warning(f"缓存条件概率数据失败: {e}")
+
 
     def get_cached_conditional_win_rates(self) -> list:
         """获取所有缓存的条件下概率数据"""
-        try:
-            df = self.conn.execute('SELECT * FROM conditional_win_rate_cache ORDER BY signal_type'
-            ).fetchdf()
-            return df.to_dict('records') if not df.empty else []
-        except Exception as e:
-            logger.warning(f"查询条件下概率数据失败: {e}")
-            return []
+        with self._lock:
+
+            try:
+
+                df = self.conn.execute('SELECT * FROM conditional_win_rate_cache ORDER BY signal_type'
+
+                ).fetchdf()
+
+                return df.to_dict('records') if not df.empty else []
+
+            except Exception as e:
+
+                logger.warning(f"查询条件下概率数据失败: {e}")
+
+                return []
+
 
     def __del__(self):
         self.close()
