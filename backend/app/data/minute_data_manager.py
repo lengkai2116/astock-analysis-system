@@ -13,7 +13,7 @@ import pandas as pd
 from typing import List, Optional, Dict
 from datetime import datetime, timedelta
 from app.data.tushare_provider import TushareProvider
-from app.data.cache_manager import CacheManager
+from app.data.memory_cache import TieredMemoryCache
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +25,13 @@ class MinuteDataManager:
 
     def __init__(self):
         self.tushare = TushareProvider()
-        self.cache = CacheManager()
+        self.cache = TieredMemoryCache()
         self._has_tushare_high = self._check_tushare_permission()
 
     def _check_tushare_permission(self) -> bool:
-        """检查 Tushare 是否有 stk_mins 权限（5000积分+）"""
+        """检查 Tushare 是否有分钟数据权限（5000积分+）"""
         try:
-            data = self.tushare.get_minute_data('000001.SZ', freq='5min', limit=1)
+            data = self.tushare.get_minute_data('000001.SZ', freq='5min')
             return data is not None and len(data) > 0
         except Exception:
             return False
@@ -59,7 +59,7 @@ class MinuteDataManager:
             freq = '15min'
 
         cache_key = f"minute:{ts_code}:{freq}"
-        cached = self.cache.get(cache_key)
+        cached = self.cache.get(cache_key, level='intraday')
         if cached:
             return cached
 
@@ -88,7 +88,7 @@ class MinuteDataManager:
                 logger.debug(f"AKShare 分钟数据降级也失败 ({ts_code}): {e}")
 
         if data:
-            self.cache.set(cache_key, data, ttl=300)  # 5分钟缓存
+            self.cache.set(cache_key, data, level='intraday')  # 5分钟缓存
         return data
 
     def _normalize_tushare(self, raw: List[Dict]) -> List[Dict]:
