@@ -189,6 +189,7 @@ def create_app():
     from app.routes.system_config import system_bp
     from app.routes.strategy_analyze import strategy_analyze_bp
     from app.routes.watchlist import watchlist_bp
+    from app.routes.dashboard import dashboard_bp
     from app.routes.notifications import notifications_bp
 
     app.register_blueprint(market_bp)
@@ -223,6 +224,7 @@ def create_app():
     app.register_blueprint(system_bp)
     app.register_blueprint(strategy_analyze_bp)
     app.register_blueprint(watchlist_bp)
+    app.register_blueprint(dashboard_bp)
     app.register_blueprint(notifications_bp)
 
     # ============================================================
