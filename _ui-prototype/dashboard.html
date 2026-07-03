@@ -240,11 +240,12 @@ function loadMarketOverview(){
       // 更新顶栏
       if(ov.market_status){
         var dot=document.getElementById('market-status-dot');
-        dot.className='status-dot '+(ov.market_status.trading?'green':'gray');
-        dot.title=ov.market_status.status||'';
+        var isTrading=ov.market_status==='trading'||(ov.market_status.trading);
+        dot.className='status-dot '+(isTrading?'green':'gray');
+        dot.title=typeof ov.market_status==='string'?ov.market_status:(ov.market_status.status||'');
       }
-      if(ov.update_time) document.getElementById('market-update-time').textContent=ov.update_time;
-      if(ov.total_volume_text) document.getElementById('total-volume-text').textContent=ov.total_volume_text;
+      if(ov.timestamp) document.getElementById('market-update-time').textContent=ov.timestamp;
+      if(ov.total_volume!==undefined) document.getElementById('total-volume-text').textContent=(ov.total_volume/1e8).toFixed(0)+'亿';
       if(ov.total_volume_change_pct!==undefined){
         var chgEl=document.getElementById('total-volume-change');
         var pct=ov.total_volume_change_pct;
@@ -258,11 +259,11 @@ function loadMarketOverview(){
           var vEl=document.getElementById('idx-val-'+i),cEl=document.getElementById('idx-chg-'+i);
           if(vEl){
             vEl.textContent=idx.price!==undefined?(+idx.price).toLocaleString("zh-CN",{minimumFractionDigits:2}):'--';
-            vEl.className='value '+(idx.pct_chg>=0?'up':'down');
+            vEl.className='value '+(idx.change_pct>=0?'up':'down');
           }
           if(cEl){
-            cEl.className='change '+(idx.pct_chg>=0?'up':'down');
-            cEl.innerHTML=idx.pct_chg!==undefined?(idx.pct_chg>=0?'↑ +':'↓ ')+Math.abs(idx.pct_chg).toFixed(2)+'%':'--';
+            cEl.className='change '+(idx.change_pct>=0?'up':'down');
+            cEl.innerHTML=idx.change_pct!==undefined?(idx.change_pct>=0?'↑ +':'↓ ')+Math.abs(idx.change_pct).toFixed(2)+'%':'--';
           }
           // 迷你K线
           if(idx.mini_kline&&idx.mini_kline.length){
@@ -280,11 +281,11 @@ function loadVolumeChart(){
   fetch(API+'/market/index-daily')
     .then(function(r){return r.json();})
     .then(function(d){
-      if(!d.success||!d.data||!d.data.length)return;
+      if(!d.success||!d.data||!d.data.days||!d.data.days.length)return;
       var c=echarts.init(document.getElementById('volume-chart'));
-      var data=d.data.reverse(); // 旧→新
+      var data=d.data.days.reverse(); // 旧→新
       var days=data.map(function(v){return v.trade_date&&v.trade_date.slice(5)||v.date;});
-      var vals=data.map(function(v){return +(v.amount/1e8).toFixed(0);});
+      var vals=data.map(function(v){return +(v.total_amount/1e8).toFixed(0);});
       c.setOption({
         backgroundColor:'transparent',grid:{left:50,right:20,bottom:20,top:10},
         xAxis:{type:'category',data:days,axisLabel:{color:'#64748B',fontSize:10}},
@@ -304,17 +305,17 @@ function loadRadar(){
   fetch(API+'/dashboard/summary')
     .then(function(r){return r.json();})
     .then(function(d){
-      if(!d.success||!d.data||!d.data.stocks||!d.data.stocks.length)return;
-      var stocks=d.data.stocks;
+      if(!d.success||!d.data||!d.data.radar_stocks||!d.data.radar_stocks.length)return;
+      var stocks=d.data.radar_stocks;
       var track=document.getElementById('radar-track');
       var allCards=stocks.concat(stocks);
       allCards.forEach(function(s){
         var card=document.createElement('div');
         card.className='radar-card';
-        card.onclick=function(){location.href='indicator-ide.html?code='+s.code;};
+        card.onclick=function(){location.href='indicator-ide.html?code='+s.ts_code;};
         var dir=s.direction||'watch';
         card.innerHTML='<div class="color-bar" style="background:'+colorMap[dir]+'"></div>'
-          +'<div class="info"><span class="stock-name">'+(s.name||'')+'</span><span class="stock-code">'+(s.code||'')+'</span></div>'
+          +'<div class="info"><span class="stock-name">'+(s.name||'')+'</span><span class="stock-code">'+(s.ts_code||'')+'</span></div>'
           +'<div class="score" style="color:'+colorMap[dir]+'">★'+(s.score||'--')+'</div>'
           +'<span class="dir-tag" style="background:'+colorMap[dir]+'22;color:'+colorMap[dir]+'">'+dirLabelMap[dir]+'</span>';
         track.appendChild(card);
@@ -331,12 +332,12 @@ function loadMoneyflow(){
   fetch(API+'/market/moneyflow-summary')
     .then(function(r){return r.json();})
     .then(function(d){
-      if(!d.success||!d.data||!d.data.daily_flow||!d.data.daily_flow.length)return;
+      if(!d.success||!d.data||!d.data.days||!d.data.days.length)return;
       var c=echarts.init(document.getElementById('chart-fund-flow'));
-      var flow=d.data.daily_flow.reverse();
+      var flow=d.data.days.reverse();
       var days=flow.map(function(v){return v.date&&v.date.slice(5)||'';});
-      var main=flow.map(function(v){return +(v.net_main||0).toFixed(1);});
-      var retail=flow.map(function(v){return +(v.net_retail||-(v.net_main||0)*0.4).toFixed(1);});
+      var main=flow.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
+      var retail=flow.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
       c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流出'],textStyle:{color:'#94A3B8'},top:0},grid:{left:50,right:20,bottom:20,top:40},
         xAxis:{type:'category',data:days,axisLabel:{color:'#64748B',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
         yAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
@@ -352,13 +353,13 @@ function loadSectorChanges(){
   fetch(API+'/market/sector-sector')
     .then(function(r){return r.json();})
     .then(function(d){
-      if(!d.success||!d.data||!d.data.length)return;
+      if(!d.success||!d.data||!d.data.gainers)return;
       var c=echarts.init(document.getElementById('chart-sector'));
-      var sectors=d.data.slice(0,8);
+      var sectors=(d.data.gainers||[]).slice(0,8);
       c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:50,right:20,bottom:10,top:10},
         xAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
         yAxis:{type:'category',data:sectors.map(function(v){return v.name;}),axisLabel:{color:'#94A3B8',fontSize:11},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
-        series:[{type:'bar',data:sectors.map(function(v){return {value:+v.pct_chg.toFixed(1),itemStyle:{color:v.pct_chg>=0?'#EF4444':'#22C55E'}};}),barWidth:12,
+        series:[{type:'bar',data:sectors.map(function(v){return {value:+v.change_pct.toFixed(1),itemStyle:{color:v.change_pct>=0?'#EF4444':'#22C55E'}};}),barWidth:12,
           label:{show:true,position:'right',formatter:'{c}%',fontSize:11,color:'#94A3B8'}}]});
       charts.push(c);
     })
@@ -439,7 +440,7 @@ function loadTopGainers(){
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d.success||!d.data)throw new Error('no data');
-      renderGainers(d.data.gainers||[d.data.gainers]);
+      renderGainers(d.data.stocks||[]);
     })
     .catch(function(e){
       console.warn('daily-top 加载失败，使用Mock数据',e);
@@ -453,7 +454,7 @@ function renderGainers(list){
   while(tbl.rows.length>1)tbl.deleteRow(1);
   list.slice(0,10).forEach(function(s){
     var row=tbl.insertRow();
-    var chg=+(s.pct_chg||0);
+    var chg=+(s.change_pct||s.pct_chg||0);
     var priceStr=s.price!==undefined?'¥'+Number(s.price).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2}):'--';
     row.innerHTML='<td>'+(s.ts_code||'')+'</td><td>'+(s.name||'')+'</td><td>'+priceStr+'</td><td class="'+(chg>=0?'up':'down')+'">'+(chg>=0?'+':'')+chg.toFixed(2)+'%</td>';
   });
@@ -489,7 +490,7 @@ function applySignals(s){
   if(s.bearish!==undefined&&el('sig-bearish'))el('sig-bearish').textContent=s.bearish;
   if(s.chanlun!==undefined&&el('sig-chanlun'))el('sig-chanlun').textContent=s.chanlun;
   if(s.chip!==undefined&&el('sig-chip'))el('sig-chip').textContent=s.chip;
-  if(s.ai!==undefined&&el('sig-ai'))el('sig-ai').textContent=s.ai;
+  if(s.ai_judgment!==undefined&&el('sig-ai'))el('sig-ai').textContent=s.ai_judgment;
   if(s.resonance!==undefined&&el('sig-resonance'))el('sig-resonance').textContent=s.resonance;
   if(s.highconf!==undefined&&el('sig-highconf'))el('sig-highconf').textContent=s.highconf;
 }
