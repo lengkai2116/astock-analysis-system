@@ -9,6 +9,9 @@
           style="margin-right: 12px"
           @change="onDateRangeChange"
         />
+        <span class="ws-badge" :class="{ connected: wsConnected }" :title="wsConnected ? '实时推送已连接' : '实时推送未连接，REST 降级'">
+          ●
+        </span>
         <a-button @click="refreshData">
           刷新数据
         </a-button>
@@ -363,6 +366,7 @@
 </template>
 
 <script>
+import { watch } from 'vue'
 import { ReloadOutlined } from '@ant-design/icons-vue'
 import { mapState } from 'pinia'
 import { useAppStore } from '@/stores'
@@ -373,6 +377,7 @@ import KLineChart from '@/components/KLineChart'
 import AiSignalBus from '@/components/AiSignalBus'
 import ResonancePanel from '@/components/ResonancePanel'
 import dataService from '@/services/dataService'
+import { useRealtimeData } from '@/composables/useRealtimeData'
 
 export default {
   name: 'Dashboard',
@@ -383,6 +388,12 @@ export default {
     KLineChart,
     AiSignalBus,
     ResonancePanel},
+
+  setup() {
+    const { connected, marketSummary, topStocks, sectors, init, destroy } = useRealtimeData({ autoConnect: false })
+    return { wsConnected: connected, wsMarketSummary: marketSummary, wsTopStocks: topStocks, wsSectors: sectors, wsInit: init, wsDestroy: destroy }
+  },
+
   data() {
     return {
       loading: true,
@@ -431,13 +442,41 @@ export default {
       return this.stats.avgChange >= 0 ? 'up' : 'down'
     },
   },
+
+  // 240号方案 Phase B: WebSocket 推送增量更新
+  watch: {
+    wsMarketSummary(val) {
+      if (!val) return
+      this.stats.totalStocks = val.total_count || 0
+      this.stats.upStocks = val.up_count || 0
+      this.stats.downStocks = val.down_count || 0
+    },
+    wsTopStocks(val) {
+      if (!val) return
+      this.rankList = (val.up || []).slice(0, 10).map(s => ({
+        ...s,
+        changePercent: s.change_pct || s.changePercent || 0,
+      }))
+    },
+    wsSectors(val) {
+      if (!val || !val.sectors) return
+      this.marketIndexes = val.sectors.map(s => ({
+        name: s.name,
+        value: s.index_price || 0,
+        change: s.change_pct || 0,
+      }))
+    },
+  },
+
   async mounted() {
     await this.loadData()
+    this.wsInit()
 
     // 监听全局数据刷新事件
     window.addEventListener('app:refresh-data', this.refreshData)
   },
   beforeUnmount() {
+    this.wsDestroy()
     window.removeEventListener('app:refresh-data', this.refreshData)
   },
   methods: {
@@ -658,6 +697,18 @@ export default {
   font-weight: 600;
   color: var(--text-primary);
   max-width: 100%;
+}
+
+.ws-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  margin-right: 8px;
+  color: var(--color-down, #ff4d4f);
+  transition: color 0.3s;
+}
+.ws-badge.connected {
+  color: var(--color-up, #22c55e);
 }
 
 
