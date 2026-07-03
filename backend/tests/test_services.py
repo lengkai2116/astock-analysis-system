@@ -106,10 +106,5 @@ def test_cache_manager_import():
     pytest.skip("CacheManager 已移除，使用 EnhancedCacheManager（get_ecm_instance()）")
 
 
-def test_redis_cache_manager_import():
-    """Redis 缓存管理器已移除，改用 ECM 单例"""
-    pytest.skip("Redis 缓存管理器已移除，使用 EnhancedCacheManager（get_ecm_instance()）")
-
-
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
