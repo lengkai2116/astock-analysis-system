@@ -435,6 +435,15 @@ export default {
         overallScore: 0,
         dimensions: [],
       },
+
+      // 各区域 skeleton 加载状态（默认全true，在 loadData() 完成后逐个关闭）
+      loadingAreas: {
+        stats: true,
+        rank: true,
+        market: true,
+        signals: true,
+        activities: true,
+      },
     }
   },
   computed: {
