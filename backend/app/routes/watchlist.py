@@ -180,11 +180,10 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
             stock['big_net'] = mf.get('buy_lg_amount')
     except Exception as e:
         logger.warning(f"资金流向获取失败({ts_code}): {e}")
-        logger.warning(f"资金流向获取失败({ts_code}): {e}")
 
     # 4. 财务指标
     try:
-        fina_list = tp.get_fina_indicator(ts_code)
+        fina_list = dm.get_fina_indicator(ts_code)
         if fina_list:
             fina = fina_list[-1]
             stock['eps'] = fina.get('eps')
@@ -198,7 +197,7 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
 
     # 5. 上市日期
     try:
-        stock_basic = tp.get_stock_info(ts_code)
+        stock_basic = dm.get_stock_info(ts_code)
         if stock_basic:
             stock['list_date'] = stock_basic.get('list_date')
             stock['industry'] = stock_basic.get('industry', '')

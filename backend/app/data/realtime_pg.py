@@ -362,10 +362,9 @@ def upsert_limit_pool(records: list[dict], limit_type: str):
                     INSERT INTO realtime_limit_pool
                         (limit_type, ts_code, name, price, change_pct,
                          force_amount, turn_over, limit_count)
-                    VALUES (%s, %(ts_code)s, %(name)s, %(price)s, %(change_pct)s,
+                    VALUES (%(limit_type)s, %(ts_code)s, %(name)s, %(price)s, %(change_pct)s,
                             %(force_amount)s, %(turn_over)s, %(limit_count)s)
-                """, (limit_type, *[r[k] for k in ('ts_code', 'name', 'price', 'change_pct',
-                                                      'force_amount', 'turn_over', 'limit_count')]))
+                """, {'limit_type': limit_type, **r})
         conn.commit()
     except Exception as e:
         logger.warning(f"[realtime_pg] upsert_limit_pool 失败: {e}")

@@ -37,7 +37,7 @@ config.set_main_option('sqlalchemy.url', get_engine_url())
 # 导入所有模型以便 Alembic 自动检测变更
 from app import db
 from app.models import (
-    Stock, DailyData, Signal, Holding,
+    Stock, Signal, Holding,
     TechnicalIndicator, Watchlist, UserMemory,
     Portfolio, PortfolioHolding, PaperTrade,
     Alert, Drawing,

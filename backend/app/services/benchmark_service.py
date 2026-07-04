@@ -96,7 +96,7 @@ class BenchmarkService:
 
         df = data.copy()
         
-        df = df[(df['trade_date'] >= start_date) & (df['trade_date'] <= end_date)]
+        # DuckDB daily_cache 已过滤日期范围，无需再次过滤
         df = df.sort_values('trade_date')
         
         self.cache[cache_key] = df.copy()

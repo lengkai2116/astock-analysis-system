@@ -34,7 +34,7 @@ def clean(days: int = 30):
     import duckdb
     ecm = get_ecm_instance()
     from datetime import datetime, timedelta
-    cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
+    cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
 
     # 获取所有表名
     existing = ecm.conn.execute(
@@ -50,8 +50,7 @@ def clean(days: int = 30):
             affected = ecm.conn.execute(
                 f"DELETE FROM {table} WHERE trade_date < ?", [cutoff]
             ).fetchdf()
-            deleted_rows = len(affected) if not affected.empty else 0
-            logger.info(f"已清理 {table}: 删除 {deleted_rows} 行（截止 {cutoff}）")
+            logger.info(f"已清理 {table}: 条件 trade_date < {cutoff}")
         except (duckdb.CatalogException, duckdb.BinderException):
             # 表可能没有 trade_date 列
             try:

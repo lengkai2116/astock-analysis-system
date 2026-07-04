@@ -184,7 +184,7 @@ class SchedulerManager:
         wr = config.get('analysis', {}).get('weekly_report', {})
         if wr.get('enabled', True):
             try:
-                day_map = {'sun': 6, '周日': 6, '周日': 6}
+                day_map = {'sun': 6, '周日': 6}
                 day = day_map.get(wr.get('day_of_week', 'sun'), 6)
                 t = wr.get('time', '20:00')
                 h, m = t.split(':')
@@ -382,9 +382,12 @@ class SchedulerManager:
                     return
             logger.info("=== Stock 月度同步检查: 执行同步 ===")
             from app.data import DataManager
+            from app import db
             count = DataManager().sync_stock_list()
             logger.info(f"Stock 月度同步完成: {count} 只")
         except Exception as e:
+            from app import db
+            db.session.rollback()
             logger.warning(f"Stock 月度同步启动检查失败: {e}")
 
     def _sync_by_type(self, data_type: str, mode: str) -> int:

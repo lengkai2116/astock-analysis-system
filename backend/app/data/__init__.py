@@ -51,8 +51,7 @@ class DataManager:
         if use_cache:
             cached_df = self.cache.get_cached_daily(ts_code, start_date, end_date)
             if not cached_df.empty:
-                logger.info(r"使用缓存数据: {ts_code}")
-                self._sync_cached_to_postgres(ts_code, cached_df)
+                logger.info(f"使用缓存数据: {ts_code}")
                 return len(cached_df)
         
         # 缓存未命中，从Tushare获取

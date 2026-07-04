@@ -13,6 +13,17 @@ logger = logging.getLogger(__name__)
 
 from app.data.realtime_pg import _get_conn, _put_conn, _pg_pool
 
+TABLES = [
+    'realtime_snapshot',
+    'realtime_top_stocks',
+    'realtime_sectors',
+    'realtime_concepts',
+    'realtime_limit_pool',
+    'realtime_minute_kline',
+    'realtime_lhb',
+    'realtime_news',
+]
+
 
 def clean():
     if _pg_pool is None:
