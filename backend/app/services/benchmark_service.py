@@ -5,12 +5,11 @@
 import pandas as pd
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
-from app.data.tushare_provider import TushareProvider
 
 
 class BenchmarkIndex:
     """基准指数定义"""
-    
+
     HS300 = "000300.SH"
     ZZ500 = "000905.SH"
     ZZ1000 = "000852.SH"
@@ -18,7 +17,7 @@ class BenchmarkIndex:
     SZ_COMP = "399001.SZ"
     CYB = "399006.SZ"
     KCB = "000688.SH"
-    
+
     NAMES = {
         HS300: "沪深300",
         ZZ500: "中证500",
@@ -33,13 +32,20 @@ class BenchmarkIndex:
 class BenchmarkService:
     """
     基准数据获取服务
-    
+
     提供A股主要指数的历史数据获取和缓存
     """
-    
-    def __init__(self, provider: Optional[TushareProvider] = None):
-        self.provider = provider or TushareProvider()
+
+    def __init__(self, data_manager=None):
+        self._dm = data_manager
         self.cache: Dict[str, pd.DataFrame] = {}
+
+    @property
+    def _data_manager(self):
+        if self._dm is None:
+            from app.data import DataManager
+            self._dm = DataManager()
+        return self._dm
     
     def get_index_list(self) -> List[Dict]:
         """
@@ -83,12 +89,12 @@ class BenchmarkService:
         if end_date is None:
             end_date = datetime.now().strftime('%Y%m%d')
         
-        data = self.provider.get_index_daily(ts_code)
-        
-        if not data:
+        data = self._data_manager.get_cached_daily_data(ts_code, start_date, end_date)
+
+        if data.empty:
             return pd.DataFrame()
-        
-        df = pd.DataFrame(data)
+
+        df = data.copy()
         
         df = df[(df['trade_date'] >= start_date) & (df['trade_date'] <= end_date)]
         df = df.sort_values('trade_date')
@@ -327,6 +333,6 @@ class BenchmarkService:
         return dates.get(ts_code, "")
 
 
-def create_benchmark_service(provider: Optional[TushareProvider] = None) -> BenchmarkService:
+def create_benchmark_service() -> BenchmarkService:
     """创建基准服务实例"""
-    return BenchmarkService(provider)
+    return BenchmarkService()

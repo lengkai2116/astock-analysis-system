@@ -1,4 +1,4 @@
-from app.models import Stock, DailyData
+from app.models import Stock
 from datetime import datetime
 import logging
 
@@ -56,25 +56,20 @@ class MarketService:
         return stock.to_dict() if stock else None
     
     def get_daily_data(self, ts_code, start_date=None, end_date=None):
-        # 避免不必要的DuckDB连接
-        # 先从PostgreSQL获取
-        query = DailyData.query.filter_by(ts_code=ts_code)
-        
-        if start_date:
-            try:
-                start = datetime.strptime(start_date, '%Y-%m-%d').date()
-                query = query.filter(DailyData.trade_date >= start)
-            except ValueError:
-                pass
-        
-        if end_date:
-            try:
-                end = datetime.strptime(end_date, '%Y-%m-%d').date()
-                query = query.filter(DailyData.trade_date <= end)
-            except ValueError:
-                pass
-        
-        return [d.to_dict() for d in query.order_by(DailyData.trade_date).all()]
+        # 通过 DataManager 走 DuckDB
+        try:
+            df = self.data_manager.get_cached_daily_data(ts_code, start_date, end_date)
+            if df is not None and not df.empty:
+                df = df.sort_values('trade_date')
+                # 将 DataFrame 的 trade_date 转为 date 对象（兼容原接口返回格式）
+                records = []
+                for _, r in df.iterrows():
+                    d = dict(r)
+                    records.append(d)
+                return records
+        except Exception:
+            pass
+        return []
     
     def sync_stock_data(self):
         try:

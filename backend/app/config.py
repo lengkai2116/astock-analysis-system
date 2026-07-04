@@ -14,9 +14,19 @@ class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev')
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    # 生产化连接池配置（PostgreSQL 多 worker 共享）
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_size': int(os.getenv('DB_POOL_SIZE', '10')),
+        'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '20')),
+        'pool_pre_ping': True,
+        'pool_recycle': 3600,
+    }
     TUSHARE_TOKEN = os.getenv('TUSHARE_TOKEN', '')
     DATA_DIR = os.getenv('DATA_DIR', _get_default_data_dir())
     CACHE_EXPIRE_TIME = 3600
+
+    # Redis（Gunicorn 多 Worker SocketIO 广播）
+    REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 
     # LLM配置 - DeepSeek API (预留)
     DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY', '')

@@ -18,7 +18,6 @@ import numpy as np
 from app import db
 from app.models.trade import Trade, AccountSnapshot, AccountCashFlow
 from app.models.verification import VirtualPosition
-from app.models import DailyData
 
 logger = logging.getLogger(__name__)
 
@@ -207,11 +206,11 @@ class AccountService:
                 continue
             avg_cost = h['buy_amount'] / h['buy_qty'] if h['buy_qty'] > 0 else 0
             realized_pnl = h['sell_amount'] - (avg_cost * h['sell_qty'])
-            # 查询最新收盘价
-            latest = DailyData.query.filter(
-                DailyData.ts_code == code
-            ).order_by(DailyData.trade_date.desc()).first()
-            current_price = float(latest.close) if latest else None
+            # 查询最新收盘价（通过 DataManager 走 DuckDB，不直调 DailyData）
+            from app.data import DataManager
+            _dm = DataManager()
+            latest_df = _dm.get_cached_daily_data(code)
+            current_price = float(latest_df['close'].iloc[-1]) if not latest_df.empty else None
             market_value = round(current_price * hold_qty, 2) if current_price else round(avg_cost * hold_qty, 2)
             unrealized_pnl = round((current_price - avg_cost) * hold_qty, 2) if current_price else 0.0
             total_cost = round(avg_cost * hold_qty, 2)

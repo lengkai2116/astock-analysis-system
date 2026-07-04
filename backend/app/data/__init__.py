@@ -1,6 +1,6 @@
 from .tushare_provider import TushareProvider
 from .enhanced_cache_manager import get_ecm_instance, EnhancedCacheManager
-from app.models import Stock, DailyData
+from app.models import Stock
 from app import db
 from datetime import datetime
 import pandas as pd
@@ -57,10 +57,10 @@ class DataManager:
         
         # 缓存未命中，从Tushare获取
         data = self.tushare.get_daily_data(ts_code, start_date, end_date)
-        
+
         if not data:
             return 0
-        
+
         # 转换为DataFrame
         df_data = []
         for item in data:
@@ -78,41 +78,15 @@ class DataManager:
                 'amount': item.get('amount'),
                 'pct_chg': item.get('pct_chg')
             })
-        
+
         if df_data:
             df = pd.DataFrame(df_data)
             # 缓存到增强缓存系统
             self.cache.cache_daily_data(df)
-            # 同步到PostgreSQL
-            self._sync_cached_to_postgres(ts_code, df)
             return len(df)
-        
+
         return 0
-    
-    def _sync_cached_to_postgres(self, ts_code, df):
-        """将缓存数据同步到PostgreSQL"""
-        for _, row in df.iterrows():
-            existing = DailyData.query.filter_by(
-                ts_code=row['ts_code'],
-                trade_date=row['trade_date']
-            ).first()
-            
-            if not existing:
-                daily = DailyData(
-                    ts_code=row['ts_code'],
-                    trade_date=row['trade_date'],
-                    open=row.get('open'),
-                    high=row.get('high'),
-                    low=row.get('low'),
-                    close=row.get('close'),
-                    vol=row.get('vol'),
-                    amount=row.get('amount'),
-                    pct_chg=row.get('pct_chg')
-                )
-                db.session.add(daily)
-        
-        db.session.commit()
-    
+
     def sync_all_daily_data(self):
         stocks = Stock.query.all()
         count = 0
@@ -123,69 +97,20 @@ class DataManager:
         return count
     
     def get_cached_daily_data(self, ts_code, start_date=None, end_date=None):
-        """从缓存获取日线数据"""
-        cached_df = self.cache.get_cached_daily(ts_code, start_date, end_date)
-        
-        # 如果缓存为空，尝试从PostgreSQL获取并缓存
-        if cached_df.empty:
-            from app.models import DailyData
-            query = DailyData.query.filter_by(ts_code=ts_code)
-            
-            if start_date:
-                try:
-                    start = datetime.strptime(start_date, '%Y-%m-%d').date()
-                    query = query.filter(DailyData.trade_date >= start)
-                except (ValueError, TypeError):
-                    pass
-            if end_date:
-                try:
-                    end = datetime.strptime(end_date, '%Y-%m-%d').date()
-                    query = query.filter(DailyData.trade_date <= end)
-                except (ValueError, TypeError):
-                    pass
-            
-            daily_data = query.order_by(DailyData.trade_date).all()
-            
-            if daily_data:
-                df_data = []
-                for d in daily_data:
-                    df_data.append({
-                        'ts_code': d.ts_code,
-                        'trade_date': d.trade_date,
-                        'open': d.open,
-                        'high': d.high,
-                        'low': d.low,
-                        'close': d.close,
-                        'vol': d.vol,
-                        'amount': d.amount,
-                        'pct_chg': d.pct_chg
-                    })
-                cached_df = pd.DataFrame(df_data)
-                self.cache.cache_daily_data(cached_df)
-        
-        return cached_df
-    
+        """从缓存获取日线数据（244号方案：移除PG DailyData降级，只走内存→DuckDB）"""
+        return self.cache.get_cached_daily(ts_code, start_date, end_date)
+
     def preload_cache(self):
-        """预加载缓存"""
-        logger.info(r"开始缓存预热")
-        from app.models import DailyData
-        
-        # 获取有数据的股票列表
-        from sqlalchemy import func
-        stock_counts = db.session.query(
-            DailyData.ts_code,
-            func.count(DailyData.ts_code).label('count')
-        ).group_by(DailyData.ts_code).all()
-        
+        """缓存预热 — 从 Stock 表获取股票列表，逐只预热"""
+        stocks = Stock.query.all()
         count = 0
-        for ts_code, _ in stock_counts:
-            self.get_cached_daily_data(ts_code)
+        for s in stocks:
+            self.get_cached_daily_data(s.ts_code)
             count += 1
             if count % 50 == 0:
-                logger.info(r"已预热 {count} 只股票")
-        
-        logger.info(r"缓存预热完成: {count} 只股票")
-    
+                logger.info(f"已预热 {count} 只股票")
+        logger.info(f"缓存预热完成: {count} 只股票")
+
     def get_cache_stats(self):
         """获取缓存统计信息"""
         return self.cache.get_cache_stats()

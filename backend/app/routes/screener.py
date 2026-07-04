@@ -467,17 +467,13 @@ def screener_stats():
     cache_status = 'valid' if get_cached_screening() else 'empty'
 
     # 统计有数据的股票数量
-    from app.models import DailyData
-    from sqlalchemy import func
+    from app.models import Stock
     try:
         stock_count = len(set(
             row[0] for row in
             dm.get_stock_list() or []
         ))
-        data_count = len(set(
-            row[0] for row in
-            DailyData.query.with_entities(DailyData.ts_code).distinct().all()
-        ) if DailyData.query.first() else [])
+        data_count = Stock.query.count()
     except Exception:
         stock_count = 0
         data_count = 0

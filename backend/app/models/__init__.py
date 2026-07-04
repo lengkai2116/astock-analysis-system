@@ -26,38 +26,6 @@ class Stock(db.Model):
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M:%S')
         }
 
-class DailyData(db.Model):
-    __tablename__ = 'daily_data'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    ts_code = db.Column(db.String(10), nullable=False)
-    trade_date = db.Column(db.Date, nullable=False)
-    open = db.Column(DECIMAL(10, 2))
-    high = db.Column(DECIMAL(10, 2))
-    low = db.Column(DECIMAL(10, 2))
-    close = db.Column(DECIMAL(10, 2))
-    vol = db.Column(DECIMAL(20, 2))
-    amount = db.Column(DECIMAL(20, 2))
-    pct_chg = db.Column(DECIMAL(10, 2))
-    
-    __table_args__ = (
-        db.UniqueConstraint('ts_code', 'trade_date'),
-    )
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'ts_code': self.ts_code,
-            'trade_date': self.trade_date.strftime('%Y-%m-%d'),
-            'open': float(self.open) if self.open else None,
-            'high': float(self.high) if self.high else None,
-            'low': float(self.low) if self.low else None,
-            'close': float(self.close) if self.close else None,
-            'vol': float(self.vol) if self.vol else None,
-            'amount': float(self.amount) if self.amount else None,
-            'pct_chg': float(self.pct_chg) if self.pct_chg else None
-        }
-
 class Signal(db.Model):
     __tablename__ = 'signals'
     

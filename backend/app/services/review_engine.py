@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from app import db
-from app.models import Stock, DailyData
+from app.models import Stock
 from app.models.trade import Trade
 from app.models.strategy import StrategyOutput
 from app.models.verification import SignalRecord
@@ -104,18 +104,9 @@ class ReviewEngine:
         index_data = []
 
         for ts_code, name in indices:
-            start_row = DailyData.query.filter(
-                DailyData.ts_code == ts_code,
-                DailyData.trade_date >= start_date,
-            ).order_by(DailyData.trade_date.asc()).first()
-
-            end_row = DailyData.query.filter(
-                DailyData.ts_code == ts_code,
-                DailyData.trade_date <= end_date,
-            ).order_by(DailyData.trade_date.desc()).first()
-
-            if start_row and end_row and start_row.close:
-                ret = (float(end_row.close) - float(start_row.close)) / float(start_row.close)
+            df = self._get_index_data(ts_code, start_date, end_date)
+            if df is not None:
+                ret = float(df['pct_change'])
                 total_return += ret
                 direction = '上涨' if ret > 0 else '下跌'
                 details.append(f'{name} {direction} {abs(ret)*100:.2f}%')
@@ -153,6 +144,23 @@ class ReviewEngine:
             'bear_signals_count': bear_signals,
             'assessment': f'震荡{assessment}' if assessment == '震荡' else assessment,
         }
+
+    def _get_index_data(self, ts_code: str, start_date: date, end_date: date):
+        """从 DuckDB 获取指数区间涨跌幅（244号方案 D2）"""
+        import pandas as pd
+        from app.data import DataManager
+        try:
+            sd = start_date.strftime('%Y%m%d') if hasattr(start_date, 'strftime') else str(start_date)
+            ed = end_date.strftime('%Y%m%d') if hasattr(end_date, 'strftime') else str(end_date)
+            df = DataManager().get_cached_daily_data(ts_code, sd, ed)
+            if df is not None and not df.empty:
+                start_close = float(df.iloc[0]['close'])
+                end_close = float(df.iloc[-1]['close'])
+                pct_change = (end_close - start_close) / start_close
+                return {'start_close': start_close, 'end_close': end_close, 'pct_change': pct_change}
+        except Exception:
+            pass
+        return None
 
     # ── 维度 2: 板块与题材分析 ──
 
@@ -587,12 +595,14 @@ def _build_trade_context(trades: List) -> List:
 
         # 价格变动（对买入计算当日涨幅参考）
         if t.direction == '买入':
-            daily = DailyData.query.filter(
-                DailyData.ts_code == t.ts_code,
-                DailyData.trade_date == t.trade_date,
-            ).first()
-            if daily:
-                ctx['price_change_1d'] = float(daily.pct_chg or 0)
+            from app.data import DataManager
+            try:
+                date_str = t.trade_date.strftime('%Y%m%d')
+                df = DataManager().get_cached_daily_data(t.ts_code, date_str, date_str)
+                if not df.empty:
+                    ctx['price_change_1d'] = float(df.iloc[-1].get('pct_chg', 0) or 0)
+            except Exception:
+                pass
 
         # 持有天数（对卖出：找同一票最近一次买入）
         if t.direction == '卖出':

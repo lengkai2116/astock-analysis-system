@@ -1,4 +1,5 @@
 import os
+import sys
 from flask import Flask, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
@@ -135,7 +136,9 @@ def create_app():
     _setup_logging(app)
     db.init_app(app)
     migrate.init_app(app, db)
-    socketio.init_app(app, cors_allowed_origins="*")
+    # Gunicorn 多 Worker：SocketIO 消息通过 Redis 广播
+    redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+    socketio.init_app(app, cors_allowed_origins="*", message_queue=redis_url)
 
     # 首次启动时自动创建表（兜底，生产环境应使用 flask db upgrade）
     with app.app_context():
@@ -143,6 +146,7 @@ def create_app():
         from app.models.strategy import StrategyTemplateV2  # noqa: F401
         from app.models.playback import ReviewUnit, PlaybackAccount, PlaybackReport  # noqa: F401
         from app.models.notification import NotificationRule, Notification, NotificationRuleStats, ReportArchive  # noqa: F401
+        from app.models.verification import SignalRecord, VirtualPosition  # noqa: F401
 
         try:
             db.create_all()
@@ -258,6 +262,9 @@ def create_app():
                 logger.info("通知模块调度任务已注册")
             except Exception as e:
                 logger.warning(f"通知模块调度任务注册失败: {e}")
+
+            # 启动补采：自动检测是否缺少交易日数据，立即触发同步
+            scheduler_manager.catch_up_if_needed()
     except Exception as e:
         logger.warning(f"APScheduler 初始化失败: {e}")
 
@@ -296,7 +303,31 @@ def create_app():
     except Exception as e:
         logger.warning(f"数据源管理器初始化失败（可忽略）: {e}")
 
+    # ============================================================
+    # AkshareCollector 启动（盘中数据采集器，5 线程）
+    # 仅在非 Gunicorn 模式下启动（Gunicorn 由 on_starting hook 管理）
+    # ============================================================
+    try:
+        from app.data.akshare_collector import akshare_collector
+        if not any('gunicorn' in arg for arg in sys.argv):
+            akshare_collector.start()
+            import atexit
+            atexit.register(lambda: akshare_collector.stop())
+            logger.info("AkshareCollector 已启动（5 个采集线程）")
+        else:
+            logger.info("AkshareCollector 由 Gunicorn on_starting hook 管理，跳过")
+    except Exception as e:
+        logger.warning(f"AkshareCollector 启动失败: {e}")
 
+    # ============================================================
+    # PostgreSQL 盘中实时连接池初始化
+    # ============================================================
+    try:
+        from app.data.realtime_pg import init_realtime_pg
+        init_realtime_pg()
+        logger.info("PostgreSQL 盘中实时连接池已初始化")
+    except Exception as e:
+        logger.warning(f"PostgreSQL 盘中实时连接池初始化失败: {e}")
 
     return app
 

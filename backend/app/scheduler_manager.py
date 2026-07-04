@@ -213,6 +213,23 @@ class SchedulerManager:
             except Exception:
                 pass
 
+        # ── 月度 Stock 同步（244号方案 D5） ──
+        ss = config.get('stock_sync', {})
+        if ss.get('enabled', True):
+            try:
+                dom = ss.get('day_of_month', 1)
+                t = ss.get('time', '04:00')
+                h, m = t.split(':')
+                self._scheduler.add_job(
+                    self._run_stock_sync,
+                    CronTrigger(day=dom, hour=int(h), minute=int(m)),
+                    id='monthly_stock_sync',
+                    name='月度 Stock 列表同步'
+                )
+                logger.info(f"注册月度 Stock 同步: 每月 {dom} 日 {t}")
+            except Exception:
+                pass
+
     def reschedule_from_config(self, config: Dict[str, Any]):
         """根据新配置动态更新 Job（无需重启）"""
         if self._scheduler:
@@ -309,6 +326,67 @@ class SchedulerManager:
 
         return result
 
+    def catch_up_if_needed(self):
+        """应用启动时检测：若缺少交易日数据则自动触发同步
+
+        取代固定 cron 时间（15:30）的依赖。每次应用启动时检查：
+          - 非交易日 → 跳过
+          - 完全无数据 → 全量同步
+          - 数据最新日期 < 今日 → 增量同步
+          - 数据已最新 → 跳过
+        """
+        if not self._app:
+            logger.warning("启动补采: 无 app 引用，跳过")
+            return
+        with self._app.app_context():
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            from app.utils.trading_hours import is_holiday
+            from datetime import date, datetime
+
+            today = date.today()
+            if is_holiday(datetime.combine(today, datetime.min.time())):
+                logger.info("启动补采: 今日非交易日，跳过")
+                return
+
+            ecm = get_ecm_instance()
+            date_df = ecm.conn.execute(
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+            ).fetchdf()
+            max_date = date_df['trade_date'].iloc[0] if not date_df.empty else None
+            if max_date is None:
+                logger.info("=== 启动补采: DuckDB 无数据, 开始全量同步 ===")
+            elif max_date < today:
+                logger.info(f"=== 启动补采: 数据最新 {max_date}, 早于今日 {today}, 开始增量同步 ===")
+            else:
+                logger.info(f"启动补采: 数据已最新 ({max_date}), 跳过")
+                # 即使数据最新，仍执行 Stock 月度同步启动检查（244号方案 D5）
+                self._run_stock_sync_if_needed()
+                return
+
+            self.run_daily_sync()
+            # 日终同步后执行 Stock 月度同步启动检查
+            self._run_stock_sync_if_needed()
+
+    def _run_stock_sync_if_needed(self):
+        """启动时检查 Stock 表是否需要月度更新（244号方案 A7）"""
+        try:
+            from app.models import Stock
+            from datetime import date
+            today = date.today()
+            # 检查是否有本月同步的股票数据——用 max(updated_at) 判断
+            latest = Stock.query.order_by(Stock.updated_at.desc()).first()
+            if latest and latest.updated_at:
+                from datetime import timedelta
+                if latest.updated_at.month == today.month and latest.updated_at.year == today.year:
+                    logger.info("Stock 月度同步检查: 本月已同步，跳过")
+                    return
+            logger.info("=== Stock 月度同步检查: 执行同步 ===")
+            from app.data import DataManager
+            count = DataManager().sync_stock_list()
+            logger.info(f"Stock 月度同步完成: {count} 只")
+        except Exception as e:
+            logger.warning(f"Stock 月度同步启动检查失败: {e}")
+
     def _sync_by_type(self, data_type: str, mode: str) -> int:
         """按数据类型执行同步"""
         from app import db
@@ -319,22 +397,30 @@ class SchedulerManager:
             if mode == 'full':
                 return dm.sync_all_daily_data()
             else:
-                # 增量：获取最后交易日，从该日期同步
-                from app.models import DailyData
-                from sqlalchemy import func
-                last_date = db.session.query(func.max(DailyData.trade_date)).scalar()
+                # 增量：从 DuckDB 获取最后交易日
+                from app.data.enhanced_cache_manager import get_ecm_instance
+                ecm = get_ecm_instance()
+                date_df = ecm.conn.execute(
+                    "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+                ).fetchdf()
+                last_date = date_df['trade_date'].iloc[0] if not date_df.empty else None
                 if last_date:
-                    return dm.sync_daily_data_range(str(last_date), mode='incremental')
+                    try:
+                        from datetime import datetime
+                        last_date_str = last_date.strftime('%Y%m%d') if hasattr(last_date, 'strftime') else str(last_date).replace('-', '')
+                    except Exception:
+                        last_date_str = str(last_date)
+                    return dm.sync_daily_data_range(last_date_str, mode='incremental')
                 return dm.sync_all_daily_data()
 
         elif data_type == 'basic':
-            return dm.sync_daily_basic(mode=mode)
+            return dm.sync_all_daily_basic_data()
         elif data_type == 'moneyflow':
-            return dm.sync_moneyflow(mode=mode)
+            return dm.sync_moneyflow_data()
         elif data_type == 'index':
-            return dm.sync_index_data(mode=mode)
+            return dm.sync_index_daily_data()
         elif data_type == 'adj_factor':
-            return dm.sync_adj_factor(mode=mode)
+            return dm.sync_adj_factor_data()
         return 0
 
     def _record_sync_start(self, sync_type: str) -> Optional[int]:
@@ -351,6 +437,8 @@ class SchedulerManager:
             db.session.commit()
             return log_entry.id
         except Exception:
+            from app import db
+            db.session.rollback()
             return None
 
     def _record_sync_end(self, log_id: Optional[int], result: Dict[str, Any]):
@@ -407,6 +495,17 @@ class SchedulerManager:
             run_monthly_parameter_plateau_check()
         except Exception as e:
             logger.error(f"月度参数校验失败: {e}")
+
+    def _run_stock_sync(self):
+        """月度 Stock 列表同步（244号方案 D5）"""
+        try:
+            from flask import current_app
+            with current_app.app_context():
+                from app.data import DataManager
+                count = DataManager().sync_stock_list()
+                logger.info(f"月度 Stock 同步完成: {count} 只")
+        except Exception as e:
+            logger.error(f"月度 Stock 同步失败: {e}")
 
     def shutdown(self):
         """关闭调度器"""

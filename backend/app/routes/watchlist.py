@@ -9,10 +9,10 @@ import logging
 from typing import Dict, List, Optional
 
 from app import db
-from app.models import Watchlist
-from app.data.tushare_provider import TushareProvider
+from app.models import Watchlist, Stock
 from app.data.enhanced_cache_manager import EnhancedCacheManager
 from app.data.memory_cache import TieredMemoryCache
+from app.data import DataManager
 from app.utils.error_handlers import handle_exceptions
 
 watchlist_bp = Blueprint('watchlist', __name__, url_prefix='/api/v3/watchlist')
@@ -26,15 +26,9 @@ def _get_cache():
     return mc.TieredMemoryCache()
 
 
-def _get_tp() -> Optional[TushareProvider]:
-    """获取Tushare数据源实例（处理不可用情况）"""
-    try:
-        tp = TushareProvider()
-        if tp.pro:
-            return tp
-    except Exception:
-        pass
-    return None
+def _get_dm() -> DataManager:
+    """获取 DataManager 实例"""
+    return DataManager()
 
 
 # ── W5: GET /api/v3/watchlist/quotes — 批量行情聚合（P0）──
@@ -50,7 +44,7 @@ def get_watchlist_quotes():
     """
     ts_codes_str = request.args.get('ts_codes', '')
     cache = _get_cache()
-    tp = _get_tp()
+    dm = _get_dm()
 
     # 解析股票列表
     if ts_codes_str:
@@ -79,13 +73,13 @@ def get_watchlist_quotes():
             evaluated[ts_code] = True
             continue
 
-        if not tp:
+        if not dm:
             # 数据源不可用，返回空结构
             stocks[ts_code] = _empty_stock(ts_code)
             evaluated[ts_code] = False
             continue
 
-        stock_data = _fetch_stock_quotes(ts_code, tp)
+        stock_data = _fetch_stock_quotes(ts_code, dm)
         stocks[ts_code] = stock_data
         evaluated[ts_code] = True
 
@@ -93,8 +87,8 @@ def get_watchlist_quotes():
         ttl_s = 3 if cache_level == 'realtime' else 1800
         cache.set(cache_key, stock_data, ttl=ttl_s)
 
-    # 获取股票名称
-    stock_names = _batch_get_names(list(stocks.keys()), tp)
+    # 获取股票名称（从 PG Stock 表）
+    stock_names = _batch_get_names(list(stocks.keys()))
     for code, data in stocks.items():
         if code in stock_names:
             data['name'] = stock_names[code]
@@ -111,8 +105,8 @@ def get_watchlist_quotes():
     })
 
 
-def _fetch_stock_quotes(ts_code: str, tp: TushareProvider) -> Dict:
-    """获取单只股票的全量行情数据（基础行情+基本面+资金流向）"""
+def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
+    """获取单只股票的全量行情数据（基础行情+基本面+资金流向）—— 通过 DataManager 走 DuckDB"""
     today = datetime.now().strftime('%Y%m%d')
     start_30 = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
     start_10 = (datetime.now() - timedelta(days=10)).strftime('%Y%m%d')
@@ -145,11 +139,11 @@ def _fetch_stock_quotes(ts_code: str, tp: TushareProvider) -> Dict:
         'list_date': None, 'industry': '', 'industry_full': '',
     }
 
-    # 1. 日线数据
+    # 1. 日线数据（从 DuckDB）
     try:
-        daily_list = tp.get_daily_data(ts_code, start_30, today)
-        if daily_list:
-            latest = daily_list[-1]
+        df_daily = dm.get_cached_daily_data(ts_code, start_30, today)
+        if not df_daily.empty:
+            latest = df_daily.iloc[-1]
             stock['price'] = latest.get('close')
             stock['open'] = latest.get('open')
             stock['high'] = latest.get('high')
@@ -163,11 +157,11 @@ def _fetch_stock_quotes(ts_code: str, tp: TushareProvider) -> Dict:
     except Exception as e:
         logger.warning(f"日线数据获取失败({ts_code}): {e}")
 
-    # 2. daily_basic
+    # 2. daily_basic（从 DuckDB）
     try:
-        basic_list = tp.get_daily_basic(ts_code, start_10, today)
-        if basic_list:
-            basic = basic_list[-1]
+        df_basic = dm.get_cached_daily_basic(ts_code, start_10, today)
+        if not df_basic.empty:
+            basic = df_basic.iloc[-1]
             stock['turnover'] = basic.get('turnover_rate')
             stock['pe_ttm'] = basic.get('pe_ttm')
             stock['pb'] = basic.get('pb')
@@ -176,21 +170,16 @@ def _fetch_stock_quotes(ts_code: str, tp: TushareProvider) -> Dict:
     except Exception as e:
         logger.warning(f"daily_basic获取失败({ts_code}): {e}")
 
-    # 3. 资金流向
+    # 3. 资金流向（从 DuckDB）
     try:
-        mf_list = tp.get_moneyflow_data(ts_code)
-        if mf_list:
-            mf = mf_list[-1] if isinstance(mf_list[-1], dict) else mf_list[-1]
-            stock['fund_net'] = mf.get('net_mf_amount') or mf.get('fund_net')
-            stock['fund_vol'] = mf.get('net_mf_vol') or mf.get('fund_vol')
-            stock['fund_inflow'] = mf.get('buy_sm_vol') or mf.get('fund_inflow')
-            stock['fund_outflow'] = mf.get('sell_sm_vol') or mf.get('fund_outflow')
-            stock['big_net'] = mf.get('buy_lg_amount') or mf.get('big_net')
-            stock['big_in'] = mf.get('buy_lg_vol') or mf.get('big_in')
-            stock['big_out'] = mf.get('sell_lg_vol') or mf.get('big_out')
-            stock['mid_net'] = mf.get('buy_md_amount') or mf.get('mid_net')
-            stock['sml_net'] = mf.get('buy_sm_amount') or mf.get('sml_net')
+        df_mf = dm.get_cached_moneyflow(ts_code=ts_code)
+        if not df_mf.empty:
+            mf = df_mf.iloc[-1]
+            stock['fund_net'] = mf.get('net_mf_amount')
+            stock['fund_vol'] = mf.get('net_mf_vol')
+            stock['big_net'] = mf.get('buy_lg_amount')
     except Exception as e:
+        logger.warning(f"资金流向获取失败({ts_code}): {e}")
         logger.warning(f"资金流向获取失败({ts_code}): {e}")
 
     # 4. 财务指标
@@ -248,18 +237,17 @@ def _empty_stock(ts_code: str) -> Dict:
     }
 
 
-def _batch_get_names(ts_codes: List[str], tp: Optional[TushareProvider]) -> Dict[str, str]:
-    """批量获取股票名称"""
+def _batch_get_names(ts_codes: List[str]) -> Dict[str, str]:
+    """从 PG Stock 表批量获取股票名称"""
     names = {}
-    if not tp:
+    if not ts_codes:
         return names
-    for code in ts_codes:
-        try:
-            info = tp.get_stock_info(code)
-            if info:
-                names[code] = info.get('name', '')
-        except Exception:
-            pass
+    try:
+        stocks = Stock.query.filter(Stock.ts_code.in_(ts_codes)).all()
+        for s in stocks:
+            names[s.ts_code] = s.name
+    except Exception as e:
+        logger.warning(f"批量获取股票名称失败: {e}")
     return names
 
 
@@ -332,15 +320,14 @@ def reorder_watchlist():
 def get_watchlist_dashboard():
     """看板级自选汇总"""
     items = Watchlist.query.order_by(Watchlist.created_at.desc()).all()
-    from app.data.tushare_provider import TushareProvider
-    tp = TushareProvider()
+    dm = DataManager()
 
     stocks_data = []
     for item in items:
         try:
-            daily = tp.get_daily_data(item.ts_code, '', '')
-            if daily:
-                latest = daily[-1]
+            df = dm.get_cached_daily_data(item.ts_code)
+            if not df.empty:
+                latest = df.iloc[-1]
                 stocks_data.append({
                     'ts_code': item.ts_code,
                     'price': latest.get('close'),

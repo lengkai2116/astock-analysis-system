@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.stock.analyzer.backend</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/.venv/bin/python</string>
+        <string>-m</string>
+        <string>gunicorn</string>
+        <string>-c</string>
+        <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/gunicorn_config.py</string>
+        <string>app:create_app()</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kalence/Desktop/01-A股股票分析系统/backend</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>DATABASE_URL</key>
+        <string>postgresql:///stock_analysis</string>
+        <key>REDIS_URL</key>
+        <string>redis://localhost:6379/0</string>
+        <key>FLASK_ENV</key>
+        <string>production</string>
+        <key>DATA_DIR</key>
+        <string>/Users/kalence/Desktop/01-A股股票分析系统/data</string>
+        <key>LOG_DIR</key>
+        <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/logs</string>
+        <key>TUSHARE_TOKEN</key>
+        <string>0ef90eacb9926e6e6007a3df09931ba6e88bfa86d5576280cbfdad3b</string>
+        <key>DEEPSEEK_API_KEY</key>
+        <string>sk-56efa3f976e9499cb645c3a0b4cdcf4c</string>
+        <key>SECRET_KEY</key>
+        <string>GiAEpUkodzr9M63Ao3OBHEzYQcy4u9l1UqEwjeM4e0I</string>
+    </dict>
+
+    <!-- 崩溃后自动重启 -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- 开机自动启动 -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- 标准输出/错误日志 -->
+    <key>StandardOutPath</key>
+    <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/logs/gunicorn.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/logs/gunicorn.stderr.log</string>
+</dict>
+</plist>

@@ -64,6 +64,36 @@ def _get_ecm():
 # 盘中数据内存状态（优先写入，Flask 路由从此读取）
 from app.data.in_memory_store import store as mem_store
 
+# ── PostgreSQL 持久化写入（惰性单例，避免循环导入） ──────────
+
+_pg_instance = None
+
+
+def _get_pg():
+    """获取 PostgreSQL 盘中实时写入单例"""
+    global _pg_instance
+    if _pg_instance is None:
+        try:
+            from app.data.realtime_pg import (
+                upsert_snapshot, upsert_top_stocks, upsert_sectors,
+                upsert_concepts, upsert_limit_pool, upsert_minute_kline,
+                upsert_lhb, upsert_news,
+            )
+            _pg_instance = {
+                'snapshot': upsert_snapshot,
+                'top_stocks': upsert_top_stocks,
+                'sectors': upsert_sectors,
+                'concepts': upsert_concepts,
+                'limit_pool': upsert_limit_pool,
+                'minute_kline': upsert_minute_kline,
+                'lhb': upsert_lhb,
+                'news': upsert_news,
+            }
+        except Exception as e:
+            logger.warning(f"realtime_pg 不可用（盘中数据不会写入 PG）: {e}")
+            _pg_instance = {}
+    return _pg_instance
+
 
 # ── 交易时段判断 ─────────────────────────────────────────
 
@@ -178,6 +208,14 @@ def _collect_market_snapshot():
             _get_ecm().write_as_market_snapshot(records)
         except Exception:
             pass
+        # 持久化：再写 PostgreSQL（L2 持久，跨 worker 共享）
+        pg = _get_pg()
+        snapshot_fn = pg.get('snapshot')
+        if snapshot_fn:
+            try:
+                snapshot_fn(records)
+            except Exception:
+                pass
     except Exception as e:
         logger.warning(f"[market_snapshot] 采集失败: {e}")
 
@@ -218,6 +256,14 @@ def _collect_top_stocks():
                 _get_ecm().write_as_top_stocks(rank_type, records)
             except Exception:
                 pass
+            # 持久化：再写 PostgreSQL
+            pg = _get_pg()
+            ts_fn = pg.get('top_stocks')
+            if ts_fn:
+                try:
+                    ts_fn(rank_type, records)
+                except Exception:
+                    pass
     except Exception as e:
         logger.warning(f"[top_stocks] 采集失败: {e}")
 
@@ -252,6 +298,14 @@ def _collect_sector_and_limit():
                 _get_ecm().write_as_sector_ranking(records)
             except Exception:
                 pass
+            # 持久化：再写 PostgreSQL
+            pg = _get_pg()
+            sec_fn = pg.get('sectors')
+            if sec_fn:
+                try:
+                    sec_fn(records)
+                except Exception:
+                    pass
     except Exception as e:
         logger.warning(f"[sector_ranking] 采集失败: {e}")
 
@@ -279,6 +333,14 @@ def _collect_sector_and_limit():
                 _get_ecm().write_as_concept_ranking(records)
             except Exception:
                 pass
+            # 持久化：再写 PostgreSQL
+            pg = _get_pg()
+            con_fn = pg.get('concepts')
+            if con_fn:
+                try:
+                    con_fn(records)
+                except Exception:
+                    pass
     except Exception as e:
         logger.warning(f"[concept_ranking] 采集失败: {e}")
 
@@ -305,6 +367,14 @@ def _collect_sector_and_limit():
                     _get_ecm().write_as_limit_pool(records, limit_type)
                 except Exception:
                     pass
+                # 持久化：再写 PostgreSQL
+                pg = _get_pg()
+                lp_fn = pg.get('limit_pool')
+                if lp_fn:
+                    try:
+                        lp_fn(records, limit_type)
+                    except Exception:
+                        pass
         except Exception as e:
             logger.warning(f"[limit_pool:{limit_type}] 采集失败: {e}")
 
@@ -364,6 +434,14 @@ def _collect_minute_kline():
                 ecm.append_as_minute_kline(records)
             except Exception:
                 pass
+            # 持久化：再写 PostgreSQL
+            pg = _get_pg()
+            mk_fn = pg.get('minute_kline')
+            if mk_fn:
+                try:
+                    mk_fn(records)
+                except Exception:
+                    pass
             logger.debug(f"[minute_kline] {ts_code}: {len(records)} 条追加")
             time.sleep(0.1)  # 轻微节流避免触发频次限制
         except Exception as e:
@@ -402,6 +480,14 @@ def _collect_lhb_and_news():
                 ecm.write_as_lhb_detail(records)
             except Exception:
                 pass
+            # 持久化：再写 PostgreSQL
+            pg = _get_pg()
+            lhb_fn = pg.get('lhb')
+            if lhb_fn:
+                try:
+                    lhb_fn(records)
+                except Exception:
+                    pass
             logger.info(f"[lhb_detail] {len(records)} 条")
     except Exception as e:
         logger.warning(f"[lhb_detail] 采集失败: {e}")
@@ -435,6 +521,14 @@ def _collect_lhb_and_news():
                 ecm.write_as_news(records)
             except Exception:
                 pass
+            # 持久化：再写 PostgreSQL
+            pg = _get_pg()
+            news_fn = pg.get('news')
+            if news_fn:
+                try:
+                    news_fn(records)
+                except Exception:
+                    pass
             logger.info(f"[news] {len(records)} 条")
     except Exception as e:
         logger.warning(f"[news] 采集失败: {e}")

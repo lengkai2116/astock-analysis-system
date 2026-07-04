@@ -11,7 +11,7 @@ from flask import Blueprint, request, jsonify
 from app import db
 from app.models import (
     TechnicalIndicator, Signal, Watchlist,
-    Portfolio, PortfolioHolding, PaperTrade, Stock, DailyData
+    Portfolio, PortfolioHolding, PaperTrade, Stock
 )
 from app.indicators import TechnicalIndicatorEngine
 from app.signals import SignalGenerator

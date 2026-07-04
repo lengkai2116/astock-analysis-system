@@ -11,7 +11,7 @@ import logging
 import uuid
 
 from app.engine.backtest_v2 import AShareBacktestEngine, BacktestConfig, create_default_engine
-from app.data.tushare_provider import TushareProvider
+from app.data import DataManager
 
 logger = logging.getLogger(__name__)
 
@@ -27,17 +27,15 @@ class SandboxService:
     """
 
     def __init__(self):
-        self._tp: Optional[TushareProvider] = None
+        self._dm: Optional[DataManager] = None
 
-    def _get_provider(self) -> Optional[TushareProvider]:
-        if self._tp is None:
+    def _get_dm(self) -> Optional[DataManager]:
+        if self._dm is None:
             try:
-                self._tp = TushareProvider()
-                if not self._tp.pro:
-                    self._tp = None
+                self._dm = DataManager()
             except Exception:
-                self._tp = None
-        return self._tp
+                self._dm = None
+        return self._dm
 
     def run_single(
         self,
@@ -60,8 +58,8 @@ class SandboxService:
         Returns:
             简化绩效结果（5区域）
         """
-        tp = self._get_provider()
-        if not tp:
+        dm = self._get_dm()
+        if not dm:
             return {'success': False, 'error': '数据源不可用'}
 
         params = params or {}
@@ -69,11 +67,9 @@ class SandboxService:
 
         # 1. 获取数据（含信号预热期）
         warmup = (datetime.strptime(start_date, '%Y%m%d') - timedelta(days=90)).strftime('%Y%m%d')
-        raw = tp.get_daily_data(ts_code, warmup, end_date)
-        if not raw:
+        df = dm.get_cached_daily_data(ts_code, warmup, end_date)
+        if df.empty:
             return {'success': False, 'error': f'获取{ts_code}日线数据为空'}
-
-        df = pd.DataFrame(raw)
         date_col = 'trade_date' if 'trade_date' in df.columns else 'date'
         if date_col not in df.columns:
             return {'success': False, 'error': '数据缺少日期列'}

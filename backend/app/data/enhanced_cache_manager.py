@@ -44,6 +44,28 @@ def _clean_stale_duckdb_locks(data_dir: str):
                 pass
 
 
+def _kill_stale_duckdb_pids(db_path: str):
+    """启动时清理持有 DuckDB 文件锁的旧进程（来自热重载崩溃遗留）"""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['lsof', '-F', 'p', db_path],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith('p'):
+                pid = int(line[1:])
+                if pid == os.getpid():
+                    continue
+                try:
+                    os.kill(pid, 9)
+                    logger.warning(f"已 kill 旧 DuckDB 进程 PID {pid}")
+                except (OSError, ProcessLookupError):
+                    pass
+    except Exception:
+        pass  # lsof 不可用时静默跳过
+
+
 class EnhancedCacheManager:
     """
     增强型缓存管理器
@@ -59,7 +81,12 @@ class EnhancedCacheManager:
         self.memory_cache = TieredMemoryCache()
         
         # DuckDB配置 - 性能优化版
-        data_dir = os.getenv('DATA_DIR', '/data')
+        # 修复: 默认值从 '/data' 改为 Config.DATA_DIR（之前使用了硬编码默认值，导致
+        #       DATA_DIR 未设置时 ECM 试图连接 /data/duckdb/ 而非实际数据目录）
+        data_dir = os.getenv('DATA_DIR') or (
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__)))), 'data')
+        )
         self.db_path = os.path.join(data_dir, 'duckdb', 'stock_cache.db')
 
         # 启动前清理僵尸锁文件（避免上次崩溃残留 .wal/.tmp 阻塞连接）
@@ -79,19 +106,33 @@ class EnhancedCacheManager:
             'max_memory': '4GB',
             'temp_directory': temp_dir
         }
-        
-        try:
-            self.conn = duckdb.connect(self.db_path, config=duckdb_config, read_only=False)
+
+        # 尝试 kill 旧 DuckDB PID（热重载遗留的锁持有者）
+        _kill_stale_duckdb_pids(self.db_path)
+
+        # 连接 DuckDB（带重试，指数退避 1s→2s→4s）
+        _last_err = None
+        for attempt in range(3):
             try:
-                self.conn.execute("PRAGMA enable_object_cache")
-            except Exception:
-                pass
-            try:
-                self.conn.execute("PRAGMA force_index_scan")
-            except Exception:
-                pass
-        except Exception as e:
-            logger.warning(f"DuckDB 主库连接失败: {e}")
+                self.conn = duckdb.connect(self.db_path, config=duckdb_config, read_only=False)
+                try:
+                    self.conn.execute("PRAGMA enable_object_cache")
+                except Exception:
+                    pass
+                try:
+                    self.conn.execute("PRAGMA force_index_scan")
+                except Exception:
+                    pass
+                break
+            except Exception as e:
+                _last_err = e
+                if attempt < 2:
+                    import time
+                    wait = 2 ** attempt  # 1s, 2s
+                    logger.warning(f"DuckDB 连接重试 (attempt={attempt+1}/3, wait={wait}s): {e}")
+                    time.sleep(wait)
+        else:
+            logger.warning(f"DuckDB 主库连接失败（3次重试均失败）: {_last_err}")
             # 降级策略：先尝试备份库，再创建新库，最后用内存模式
             backup_path = self.db_path + '.backup'
             try:
@@ -106,6 +147,18 @@ class EnhancedCacheManager:
                         rotated_path = self.db_path + f'.corrupted.{int(time.time())}'
                         shutil.copy2(self.db_path, rotated_path)
                         logger.info(f"已将损坏的数据库备份到: {rotated_path}")
+                        # 限制 corrupted 文件最大数量（防止热重载无限膨胀）
+                        try:
+                            dir_name = os.path.dirname(self.db_path)
+                            pattern = os.path.basename(self.db_path) + '.corrupted.*'
+                            backups = sorted([
+                                os.path.join(dir_name, f) for f in os.listdir(dir_name)
+                                if f.startswith(os.path.basename(self.db_path) + '.corrupted.')
+                            ])
+                            while len(backups) >= 3:
+                                os.remove(backups.pop(0))
+                        except Exception:
+                            pass
                     self.conn = duckdb.connect(self.db_path, config=duckdb_config)
                     logger.info("已创建新的 DuckDB 空数据库")
                 except Exception as e3:

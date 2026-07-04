@@ -7,7 +7,7 @@ from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, jsonify, request
 from app import db
 from app.data import DataManager
-from app.models import Stock, DailyData
+from app.models import Stock
 from datetime import datetime
 
 cache_bp = Blueprint('cache', __name__, url_prefix='/api/cache')
@@ -87,9 +87,17 @@ def get_cache_stats():
         data_manager = DataManager()
         stats_df = data_manager.get_cache_stats()
         
-        # 获取PostgreSQL数据统计
+        # 获取缓存统计（244号方案：从 DuckDB 替代 PG DailyData）
+        from app.data.enhanced_cache_manager import get_ecm_instance
         stock_count = Stock.query.count()
-        daily_count = DailyData.query.count()
+        try:
+            ecm = get_ecm_instance()
+            count_df = ecm.conn.execute(
+                "SELECT COUNT(*) AS cnt FROM daily_cache"
+            ).fetchdf()
+            daily_count = int(count_df['cnt'].iloc[0]) if not count_df.empty else 0
+        except Exception:
+            daily_count = 0
         
         # 转换为字典
         result = {

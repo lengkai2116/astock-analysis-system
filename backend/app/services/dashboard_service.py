@@ -287,52 +287,66 @@ class DashboardService:
         except Exception:
             pass
 
-        # 2. 降级：从 DB 查询最新交易日
+        # 2. 降级：从 DuckDB 查询最新交易日
         try:
-            from app import db
-            from sqlalchemy import func
-            from app.models import DailyData, Stock
-            last_date = db.session.query(func.max(DailyData.trade_date)).scalar()
-            if not last_date:
-                logger.error("涨跌幅榜: DB 无任何历史数据")
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            import pandas as pd
+            from app.models import Stock
+
+            ecm = get_ecm_instance()
+            # 查询 daily_cache 最新日期
+            date_df = ecm.conn.execute(
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+            ).fetchdf()
+            if date_df.empty:
+                logger.error("涨跌幅榜: DuckDB 无任何历史数据")
                 return None
-            from app.utils.date_utils import normalize_date
-            trade_date_used = normalize_date(last_date, '%Y%m%d')
-            date_label = normalize_date(last_date)
+            last_date = date_df['trade_date'].iloc[0]
 
-            rows = db.session.query(
-                DailyData, Stock.name
-            ).outerjoin(
-                Stock, DailyData.ts_code == Stock.ts_code
-            ).filter(
-                DailyData.trade_date == last_date
-            ).order_by(
-                DailyData.pct_chg.desc() if type == 'up' else DailyData.pct_chg.asc()
-            ).limit(limit).all()
+            # 取该日全市场数据
+            all_df = ecm.conn.execute(
+                "SELECT * FROM daily_cache WHERE trade_date = ? ORDER BY pct_chg DESC",
+                [last_date]
+            ).fetchdf()
+            if all_df.empty:
+                logger.error("涨跌幅榜: DuckDB 查询为空")
+                return None
 
-            if rows and len(rows) > 0:
-                stocks = []
-                for dd, sname in rows:
-                    pct = float(dd.pct_chg or 0)
-                    stocks.append({
-                        'ts_code': dd.ts_code,
-                        'name': sname or dd.ts_code,
-                        'price': round(float(dd.close or 0), 2),
-                        'change_pct': round(pct, 2),
-                        'change_pct_display': f"{'+' if pct >= 0 else ''}{round(pct, 2)}%",
-                    })
-                return {
-                    'date': date_label,
-                    'type': type,
-                    'title': '涨幅前十' if type == 'up' else '跌幅前十',
-                    'source': 'DB 盘后数据',
-                    'stocks': stocks,
-                }
+            # 补齐股票名称（从 PG Stock 表）
+            ts_codes = all_df['ts_code'].unique().tolist()
+            stock_map = {}
+            try:
+                for s in Stock.query.filter(Stock.ts_code.in_(ts_codes)).all():
+                    stock_map[s.ts_code] = s.name
+            except Exception:
+                pass
+
+            all_df['name'] = all_df['ts_code'].map(lambda x: stock_map.get(x, ''))
+            sort_asc = (type == 'down')
+            top_df = all_df.sort_values('pct_chg', ascending=sort_asc).head(limit)
+
+            stocks = []
+            for _, row in top_df.iterrows():
+                pct = float(row.get('pct_chg', 0))
+                stocks.append({
+                    'ts_code': row.get('ts_code', ''),
+                    'name': row.get('name', row.get('ts_code', '')),
+                    'price': round(float(row.get('close', 0)), 2),
+                    'change_pct': round(pct, 2),
+                    'change_pct_display': f"{'+' if pct >= 0 else ''}{round(pct, 2)}%",
+                })
+            return {
+                'date': str(last_date),
+                'type': type,
+                'title': '涨幅前十' if type == 'up' else '跌幅前十',
+                'source': 'DuckDB 盘后数据',
+                'stocks': stocks,
+            }
         except Exception as e:
-            logger.error(f"涨跌幅榜 DB 降级失败: {e}")
+            logger.error(f"涨跌幅榜 DuckDB 降级失败: {e}")
             return None
 
-        logger.error(f"涨跌幅榜: 所有数据源不可用 (latest_date={trade_date_used})")
+        logger.error("涨跌幅榜: 所有数据源不可用")
         return None
 
     # ──────────────────────────────────────────────
@@ -368,39 +382,58 @@ class DashboardService:
         except Exception as e:
             logger.warning(f"板块涨跌幅 reader 不可用，降级 DB: {e}")
 
-        # 2. 降级：从 DB 最新交易日聚合行业涨跌幅
+        # 2. 降级：从 DuckDB 最新交易日聚合行业涨跌幅
         try:
-            from app import db
-            from sqlalchemy import func
-            from app.models import DailyData, Stock
-            last_date = db.session.query(func.max(DailyData.trade_date)).scalar()
-            if not last_date:
-                logger.error("板块涨跌幅 DB: 无任何历史数据")
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            from app.models import Stock
+            import pandas as pd
+
+            ecm = get_ecm_instance()
+            # 取最新交易日
+            date_df = ecm.conn.execute(
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+            ).fetchdf()
+            if date_df.empty:
+                logger.error("板块涨跌幅 DuckDB: 无任何历史数据")
                 return None
-            date_label = last_date.strftime('%Y-%m-%d')
+            last_date = date_df['trade_date'].iloc[0]
+            date_label = str(last_date)
 
-            rows = db.session.query(
-                func.avg(DailyData.pct_chg).label('avg_pct'),
-                Stock.industry,
-                func.count().label('stock_count'),
-            ).join(
-                Stock, DailyData.ts_code == Stock.ts_code
-            ).filter(
-                DailyData.trade_date == last_date,
-                Stock.industry.isnot(None),
-                Stock.industry != '',
-            ).group_by(
-                Stock.industry
-            ).order_by(
-                func.avg(DailyData.pct_chg).desc()
-            ).limit(50).all()  # 取足够多数据以便在 Python 中按涨幅/跌幅拆分
+            # 取该日全市场 pct_chg + ts_code
+            all_df = ecm.conn.execute(
+                "SELECT ts_code, pct_chg FROM daily_cache WHERE trade_date = ?",
+                [last_date]
+            ).fetchdf()
+            if all_df.empty:
+                logger.error("板块涨跌幅 DuckDB: 当日无数据")
+                return None
 
-            if rows and len(rows) > 0:
+            # 补齐行业信息（从 PG Stock 表），两步法
+            ts_codes = all_df['ts_code'].unique().tolist()
+            industry_map = {}
+            try:
+                for s in Stock.query.filter(Stock.ts_code.in_(ts_codes)).all():
+                    if s.industry:
+                        industry_map[s.ts_code] = s.industry
+            except Exception:
+                pass
+
+            all_df['industry'] = all_df['ts_code'].map(lambda x: industry_map.get(x, None))
+            all_df = all_df.dropna(subset=['industry'])
+            all_df['industry'] = all_df['industry'].astype(str)
+
+            # 按行业聚合
+            agg = all_df.groupby('industry').agg(
+                avg_pct=('pct_chg', 'mean'),
+                stock_count=('pct_chg', 'count')
+            ).reset_index().sort_values('avg_pct', ascending=False)
+
+            if not agg.empty:
                 all_sectors = []
-                for r in rows:
-                    change_pct = round(float(r.avg_pct or 0), 2)
+                for _, r in agg.iterrows():
+                    change_pct = round(float(r['avg_pct'] or 0), 2)
                     all_sectors.append({
-                        'name': r.industry,
+                        'name': r['industry'],
                         'change_pct': change_pct,
                         'lead_stock': '',
                         'up_count': 0,
@@ -408,78 +441,84 @@ class DashboardService:
                     })
                 gainers = [s for s in all_sectors if s['change_pct'] > 0][:5]
                 losers = [s for s in all_sectors if s['change_pct'] <= 0]
-                losers.reverse()  # 最负在前
+                losers.reverse()
                 losers = losers[:5]
                 return {
                     'date': date_label,
                     'gainers': gainers,
                     'losers': losers,
-                    'source': 'DB daily_data 聚合（AKShare 不可用）',
+                    'source': 'DuckDB daily_cache 聚合',
                 }
         except Exception as e:
-            logger.error(f"板块涨跌幅 DB 降级失败: {e}")
+            logger.error(f"板块涨跌幅 DuckDB 降级失败: {e}")
             return None
 
-        logger.error("板块涨跌幅: AKShare + DB 均不可用")
+        logger.error("板块涨跌幅: AKShare + DuckDB 均不可用")
         return None
 
     # ──────────────────────────────────────────────
     # 6. AI雷达+策略信号汇总（dashboard/summary）
     # ──────────────────────────────────────────────
     def get_dashboard_summary(self) -> Optional[Dict]:
-        """AI交易机会雷达 + 策略信号汇总 — 从 DB daily_data 提取（239号架构：直读缓存，不调选股引擎）"""
+        """AI交易机会雷达 + 策略信号汇总 — 从 DuckDB daily_cache 提取"""
         try:
-            from app import db
-            from sqlalchemy import func
-            from app.models import DailyData, Stock
-            last_date = db.session.query(func.max(DailyData.trade_date)).scalar()
-            if not last_date:
-                logger.error("dashboard/summary DB 降级: 无历史数据")
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            from app.models import Stock
+            import pandas as pd
+
+            ecm = get_ecm_instance()
+            date_df = ecm.conn.execute(
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+            ).fetchdf()
+            if date_df.empty:
+                logger.error("dashboard/summary DuckDB: 无历史数据")
                 return None
-            date_label = last_date.strftime('%Y-%m-%d')
+            last_date = date_df['trade_date'].iloc[0]
+            date_label = str(last_date)
 
-            # Top 8 涨幅股（替代雷达股）
-            top_rows = db.session.query(
-                DailyData, Stock.name
-            ).outerjoin(
-                Stock, DailyData.ts_code == Stock.ts_code
-            ).filter(
-                DailyData.trade_date == last_date
-            ).order_by(
-                DailyData.pct_chg.desc()
-            ).limit(8).all()
+            # 取该日全市场数据
+            all_df = ecm.conn.execute(
+                "SELECT ts_code, close, pct_chg FROM daily_cache WHERE trade_date = ?",
+                [last_date]
+            ).fetchdf()
+            if all_df.empty:
+                logger.error("dashboard/summary DuckDB: 当日无数据")
+                return None
 
+            # 补齐名称（从 PG Stock 表）
+            ts_codes = all_df['ts_code'].unique().tolist()
+            name_map = {}
+            try:
+                for s in Stock.query.filter(Stock.ts_code.in_(ts_codes)).all():
+                    name_map[s.ts_code] = s.name
+            except Exception:
+                pass
+            all_df['name'] = all_df['ts_code'].map(lambda x: name_map.get(x, x))
+
+            # Top 8 涨幅股
+            top_df = all_df.nlargest(8, 'pct_chg')
             radar_stocks = []
-            for dd, sname in top_rows:
-                pct = float(dd.pct_chg or 0)
+            for _, r in top_df.iterrows():
+                pct = float(r['pct_chg'] or 0)
                 direction = 'bullish' if pct > 3 else ('bearish' if pct < -3 else 'watch')
                 radar_stocks.append({
-                    'ts_code': dd.ts_code,
-                    'name': sname or dd.ts_code,
+                    'ts_code': r['ts_code'],
+                    'name': r['name'],
                     'score': min(95, max(40, int(50 + pct * 5))),
                     'direction': direction,
-                    'price': round(float(dd.close or 0), 2),
+                    'price': round(float(r['close'] or 0), 2),
                     'change_pct': round(pct, 2),
                 })
 
             # 行情信号计数
-            total_stocks = db.session.query(func.count(DailyData.id)).filter(
-                DailyData.trade_date == last_date
-            ).scalar() or 0
-            bullish_count = db.session.query(func.count(DailyData.id)).filter(
-                DailyData.trade_date == last_date, DailyData.pct_chg > 2
-            ).scalar() or 0
-            bearish_count = db.session.query(func.count(DailyData.id)).filter(
-                DailyData.trade_date == last_date, DailyData.pct_chg < -2
-            ).scalar() or 0
-            high_vol_count = db.session.query(func.count(DailyData.id)).filter(
-                DailyData.trade_date == last_date,
-                func.abs(DailyData.pct_chg) > 5
-            ).scalar() or 0
+            total_stocks = len(all_df)
+            bullish_count = int((all_df['pct_chg'] > 2).sum())
+            bearish_count = int((all_df['pct_chg'] < -2).sum())
+            high_vol_count = int((all_df['pct_chg'].abs() > 5).sum())
 
             return {
                 'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'update_note': f'来自 DB daily_data · {date_label} · {total_stocks} 只',
+                'update_note': f'来自 DuckDB daily_cache · {date_label} · {total_stocks} 只',
                 'radar_stocks': radar_stocks,
                 'signal_summary': {
                     'bullish': bullish_count,
@@ -493,7 +532,7 @@ class DashboardService:
                 'total_signals': total_stocks,
             }
         except Exception as e:
-            logger.error(f"dashboard/summary DB 降级失败: {e}")
+            logger.error(f"dashboard/summary DuckDB 降级失败: {e}")
             return None
 
     # ──────────────────────────────────────────────
@@ -573,18 +612,12 @@ class DashboardService:
         # 3. Tushare API 最终降级（分批加载交易日资金流）
         try:
             if self.tushare:
-                from app import db
-                from sqlalchemy import func
-                from app.models import DailyData
-                recent_dates = db.session.query(DailyData.trade_date).distinct().order_by(
-                    DailyData.trade_date.desc()).limit(25).all()
-                ts_dates = []
-                for d in recent_dates:
-                    d0 = d[0]
-                    if hasattr(d0, 'strftime'):
-                        ts_dates.append(d0.strftime('%Y%m%d'))
-                    else:
-                        ts_dates.append(str(d0).replace('-', ''))
+                from app.data.enhanced_cache_manager import get_ecm_instance
+                ecm = get_ecm_instance()
+                dates_df = ecm.conn.execute(
+                    "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 25"
+                ).fetchdf()
+                ts_dates = [str(d) for d in dates_df['trade_date'].tolist() if d]
                 ts_dates = ts_dates[:max(days, 20)]
 
                 all_records = []
@@ -759,10 +792,13 @@ class DashboardService:
             if self.tushare and industry_map:
                 from app import db
                 from sqlalchemy import func
-                from app.models import DailyData
-                latest = db.session.query(func.max(DailyData.trade_date)).scalar()
-                if latest:
-                    date_str = latest.strftime('%Y%m%d') if hasattr(latest, 'strftime') else str(latest).replace('-', '')
+                from app.data.enhanced_cache_manager import get_ecm_instance
+                ecm = get_ecm_instance()
+                date_df = ecm.conn.execute(
+                    "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+                ).fetchdf()
+                if not date_df.empty:
+                    date_str = str(date_df['trade_date'].iloc[0]).replace('-', '')
                     raw = self.tushare.get_moneyflow(trade_date=date_str)
                     if raw and len(raw) > 50:
                         # 验证是否有非零资金流（Tushare 可能返回零值空结构）
@@ -843,7 +879,7 @@ class DashboardService:
             if self.tushare:
                 raw = self.tushare.get_index_daily(ts_code)
                 if raw and len(raw) > 0:
-                    logger.info(f"从 Tushare 获取指数 {ts_code} 日线数据: {len(raw)} 条")
+                    logger.warning(f"从 Tushare 获取指数 {ts_code} 日线数据（降级）: {len(raw)} 条")
                     return raw
         except Exception as e:
             logger.debug(f"Tushare 指数日线降级失败 ({ts_code}): {e}")
