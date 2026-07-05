@@ -317,6 +317,50 @@ class SchedulerManager:
                 data_types=data_types
             )
 
+            # ── 盘后清理链（239/244号方案 §2.2/§5 Phase 2） ───────────
+            if result['status'] == 'success' and records_added > 0:
+                today = datetime.now().strftime('%Y-%m-%d')
+                # 1. 清理 DuckDB as_minute_kline（当日分钟K线）
+                try:
+                    from app.data.enhanced_cache_manager import get_ecm_instance
+                    ecm = get_ecm_instance()
+                    ecm.clean_as_minute_kline(today)
+                except Exception as e:
+                    logger.warning(f"盘后清理 as_minute_kline 失败: {e}")
+
+                # 2. 清理 InMemoryStateStore（盘中内存缓存）
+                try:
+                    from app.data.in_memory_store import store as mem_store
+                    mem_store.clear_all()
+                    logger.info("InMemoryStateStore 盘中缓存已清理")
+                except Exception as e:
+                    logger.warning(f"清理 InMemoryStateStore 失败: {e}")
+
+                # 3. 清理 TieredMemoryCache（盘中三级缓存）
+                try:
+                    from app.data.memory_cache import TieredMemoryCache
+                    tmc = TieredMemoryCache()
+                    tmc.clear()
+                    logger.info("TieredMemoryCache 盘中缓存已清理")
+                except Exception as e:
+                    logger.warning(f"清理 TieredMemoryCache 失败: {e}")
+
+                # 4. 清理 AkshareCollector 关注列表（为次日做准备）
+                try:
+                    from app.data.akshare_collector import akshare_collector
+                    akshare_collector.clear_watchlist()
+                except Exception as e:
+                    logger.debug(f"清理采集器关注列表失败: {e}")
+
+                # 5. 清理 PostgreSQL 盘中实时表（realtime_* 当日数据）
+                try:
+                    from app.data.realtime_pg import cleanup_old_data
+                    cleanup_old_data(retention_days=0)  # 0 = 仅清理当日之前
+                except Exception as e:
+                    logger.debug(f"清理 PG realtime_* 表失败: {e}")
+
+                logger.info(f"=== 盘后清理链完成 (date={today}) ===")
+
         except Exception as e:
             duration_ms = int((time.time() - start_ts) * 1000)
             result['status'] = 'failed'

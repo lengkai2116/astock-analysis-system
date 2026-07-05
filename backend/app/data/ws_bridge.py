@@ -67,6 +67,7 @@ class WsBridge:
 
         if thread_name == 'market_snapshot':
             self._broadcast_market_summary(sio)
+            self._broadcast_market_indices(sio)
 
         elif thread_name == 'top_stocks':
             self._broadcast_top_stocks(sio)
@@ -98,6 +99,47 @@ class WsBridge:
             'flat_count': len(snapshot) - up - down,
             'timestamp': datetime.now().isoformat(),
         })
+
+    def _broadcast_market_indices(self, sio):
+        """推送四大指数实时行情（market:indices）
+
+        从 InMemoryStateStore 快照中查找四大指数代码，提取实时行情。
+        前端收到后更新 marketIndexes，与 REST /market/overview 互补。
+        """
+        store = self._get_store()
+        if store is None:
+            return
+        # 四大指数的东方财富行情代码映射
+        index_codes = {
+            '1.000001': '上证指数',
+            '0.399001': '深证成指',
+            '0.399300': '沪深300',
+            '1.000016': '上证50',
+            '0.399006': '创业板指',
+        }
+        snapshot = store.get_snapshot()
+        indices = []
+        for s in snapshot:
+            code = str(s.get('ts_code', ''))
+            # 东方财富实时快照使用纯数字代码（无后缀）
+            # 兼容 ts_code=000001.SH 或代码=1.000001
+            short_code = code.split('.')[0]
+            for ec_code, name in index_codes.items():
+                ec_short = ec_code.split('.')[-1]
+                if short_code == ec_short or code.startswith(ec_code):
+                    indices.append({
+                        'ts_code': code,
+                        'name': name,
+                        'price': float(s.get('price', 0)),
+                        'change_pct': float(s.get('change_pct', 0)),
+                        'change': float(s.get('change', 0)),
+                    })
+                    break
+        if indices:
+            self._try_emit(sio, 'market:indices', {
+                'indices': indices,
+                'timestamp': datetime.now().isoformat(),
+            })
 
     def _broadcast_top_stocks(self, sio):
         """推送涨幅榜/跌幅榜 Top10"""

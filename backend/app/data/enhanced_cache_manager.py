@@ -269,11 +269,31 @@ class EnhancedCacheManager:
                 buy_lg_amount DECIMAL,    -- 大单买入额(万)
                 sell_lg_vol DECIMAL,      -- 大单卖出量(手)
                 sell_lg_amount DECIMAL,   -- 大单卖出额(万)
+                buy_elg_amount DECIMAL,   -- 超大单买入额(万)
+                sell_elg_amount DECIMAL,  -- 超大单卖出额(万)
+                buy_sm_amount DECIMAL,    -- 小单买入额(万)
+                sell_sm_amount DECIMAL,   -- 小单卖出额(万)
                 net_lg_amount DECIMAL,    -- 大单净额(万)
+                net_elg_amount DECIMAL,   -- 超大单净额(万)
+                net_sm_amount DECIMAL,    -- 小单净额(万)
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, trade_date)
             )
         """)
+        # 迁移：为已有表添加缺失列（安全幂等）
+        _moneyflow_cols = [
+            ('buy_elg_amount', 'DECIMAL'),
+            ('sell_elg_amount', 'DECIMAL'),
+            ('buy_sm_amount', 'DECIMAL'),
+            ('sell_sm_amount', 'DECIMAL'),
+            ('net_elg_amount', 'DECIMAL'),
+            ('net_sm_amount', 'DECIMAL'),
+        ]
+        for col_name, col_type in _moneyflow_cols:
+            try:
+                self.conn.execute(f"ALTER TABLE moneyflow_cache ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+            except Exception:
+                pass
 
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS win_rate_cache (
@@ -318,7 +338,138 @@ class EnhancedCacheManager:
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_moneyflow_date ON moneyflow_cache(trade_date)")
         except Exception:
             pass
-    
+
+        # ── AKShare 盘中数据 as_* 表（239/244号方案） ──────────────
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS as_market_snapshot (
+                ts_code VARCHAR PRIMARY KEY,
+                name VARCHAR,
+                price DECIMAL,
+                change DECIMAL,
+                change_pct DECIMAL,
+                volume DECIMAL,
+                amount DECIMAL,
+                pe DECIMAL,
+                pb DECIMAL,
+                amplitude DECIMAL,
+                circ_mv DECIMAL,
+                total_mv DECIMAL,
+                volume_ratio DECIMAL,
+                open DECIMAL,
+                high DECIMAL,
+                low DECIMAL,
+                pre_close DECIMAL,
+                turnover_rate DECIMAL,
+                source VARCHAR DEFAULT 'akshare',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS as_top_stocks (
+                rank_type VARCHAR,
+                ts_code VARCHAR,
+                name VARCHAR,
+                price DECIMAL,
+                change_pct DECIMAL,
+                volume DECIMAL,
+                amount DECIMAL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (rank_type, ts_code)
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS as_sector_ranking (
+                sector_name VARCHAR PRIMARY KEY,
+                ts_code VARCHAR,
+                change_pct DECIMAL,
+                up_count INTEGER,
+                down_count INTEGER,
+                lead_ts_code VARCHAR,
+                lead_name VARCHAR,
+                lead_change_pct DECIMAL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS as_concept_ranking (
+                concept_name VARCHAR PRIMARY KEY,
+                ts_code VARCHAR,
+                change_pct DECIMAL,
+                up_count INTEGER,
+                down_count INTEGER,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS as_limit_pool (
+                limit_type VARCHAR,
+                ts_code VARCHAR,
+                name VARCHAR,
+                price DECIMAL,
+                change_pct DECIMAL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (limit_type, ts_code)
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS as_minute_kline (
+                ts_code VARCHAR,
+                trade_date DATE,
+                trade_time VARCHAR,
+                freq VARCHAR DEFAULT '5min',
+                open DECIMAL,
+                high DECIMAL,
+                low DECIMAL,
+                close DECIMAL,
+                volume DECIMAL,
+                amount DECIMAL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, trade_date, trade_time, freq)
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS as_lhb_detail (
+                ts_code VARCHAR,
+                trade_date DATE,
+                name VARCHAR,
+                change_pct DECIMAL,
+                buy_amount DECIMAL,
+                sell_amount DECIMAL,
+                net_amount DECIMAL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, trade_date)
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS as_news (
+                id VARCHAR PRIMARY KEY,
+                title VARCHAR,
+                summary VARCHAR,
+                source VARCHAR,
+                publish_time VARCHAR,
+                url VARCHAR,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS as_quote_cache (
+                ts_code VARCHAR PRIMARY KEY,
+                bid_price DECIMAL,
+                bid_volume INTEGER,
+                ask_price DECIMAL,
+                ask_volume INTEGER,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        try:
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_as_snapshot_ts ON as_market_snapshot(ts_code)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_as_minute_ts ON as_minute_kline(ts_code)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_as_minute_date ON as_minute_kline(trade_date)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_as_lhb_date ON as_lhb_detail(trade_date)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_as_news_time ON as_news(publish_time)")
+        except Exception:
+            pass
+
     def get_cached_daily(self, ts_code, start_date=None, end_date=None):
         """
         两层缓存策略：
@@ -568,10 +719,18 @@ class EnhancedCacheManager:
         """
         if df.empty:
             return
-        
+
         with self._write_lock:
 
             try:
+                # ponytail: 统一日期格式 YYYYMMDD → YYYY-MM-DD
+                if 'trade_date' in df.columns:
+                    if df['trade_date'].dtype in ('object', 'str'):
+                        sample = str(df['trade_date'].iloc[0]) if len(df) > 0 else ''
+                        if sample.isdigit() and len(sample) == 8:
+                            df['trade_date'] = df['trade_date'].astype(str).str.replace(
+                                r'^(\d{4})(\d{2})(\d{2})$', r'\1-\2-\3', regex=True
+                            )
 
                 self.conn.register('temp_df', df)
 
@@ -806,19 +965,38 @@ class EnhancedCacheManager:
         with self._write_lock:
 
             try:
+                # 统一日期格式：Ymd → YYYY-MM-DD
+                if 'trade_date' in df.columns:
+                    if df['trade_date'].dtype == object:
+                        df['trade_date'] = df['trade_date'].str.replace(
+                            r'^(\d{4})(\d{2})(\d{2})$', r'\1-\2-\3', regex=True
+                        )
+                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
 
                 self.conn.register('temp_mf', df)
 
+                # ponytail: 补齐 net_* 列（Tushare raw 返回 net_mf_amount，无 net_lg/elg/sm）
+                net_cols = {'net_lg_amount': 'buy_lg_amount', 'net_elg_amount': 'buy_elg_amount', 'net_sm_amount': 'buy_sm_amount'}
+                for net_col, buy_col in net_cols.items():
+                    if net_col not in df.columns and buy_col in df.columns:
+                        sell_col = 'sell_' + buy_col[4:]
+                        df[net_col] = df[buy_col].fillna(0) - df.get(sell_col, pd.Series([0]*len(df))).fillna(0)
+                self.conn.unregister('temp_mf')
+                self.conn.register('temp_mf', df)
+
                 self.conn.execute("""
-
                     INSERT OR REPLACE INTO moneyflow_cache
-
-                    (ts_code, trade_date, buy_lg_vol, buy_lg_amount, sell_lg_vol, sell_lg_amount, net_lg_amount, cached_at)
-
-                    SELECT ts_code, trade_date, buy_lg_vol, buy_lg_amount, sell_lg_vol, sell_lg_amount, net_lg_amount, CURRENT_TIMESTAMP
-
+                    (ts_code, trade_date, buy_lg_vol, buy_lg_amount,
+                     sell_lg_vol, sell_lg_amount,
+                     buy_elg_amount, sell_elg_amount,
+                     buy_sm_amount, sell_sm_amount,
+                     net_lg_amount, net_elg_amount, net_sm_amount, cached_at)
+                    SELECT ts_code, trade_date, buy_lg_vol, buy_lg_amount,
+                           sell_lg_vol, sell_lg_amount,
+                           buy_elg_amount, sell_elg_amount,
+                           buy_sm_amount, sell_sm_amount,
+                           net_lg_amount, net_elg_amount, net_sm_amount, CURRENT_TIMESTAMP
                     FROM temp_mf
-
                 """)
 
                 self.conn.commit()
@@ -999,5 +1177,322 @@ class EnhancedCacheManager:
                 return []
 
 
+    def close(self):
+        if hasattr(self, 'conn') and self.conn:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+
     def __del__(self):
         self.close()
+
+    # ==================== as_* AKShare 盘中数据写入方法（239/244号方案） ====================
+
+    def write_as_market_snapshot(self, records: list):
+        """覆盖式写入全市场快照（as_market_snapshot）"""
+        if not records:
+            return
+        try:
+            df = pd.DataFrame(records)
+            self.conn.register('_tmp_as_ms', df)
+            self.conn.execute("""
+                INSERT OR REPLACE INTO as_market_snapshot
+                (ts_code, name, price, change, change_pct, volume, amount,
+                 pe, pb, amplitude, circ_mv, total_mv, volume_ratio,
+                 open, high, low, pre_close, turnover_rate, source, updated_at)
+                SELECT ts_code, name, price, change, change_pct, volume, amount,
+                       pe, pb, amplitude, circ_mv, total_mv, volume_ratio,
+                       open, high, low, pre_close, turnover_rate, 'akshare', CURRENT_TIMESTAMP
+                FROM _tmp_as_ms
+            """)
+            self.conn.commit()
+        except Exception as e:
+            logger.debug(f"[ECM] write_as_market_snapshot 失败: {e}")
+
+    def write_as_top_stocks(self, rank_type: str, records: list):
+        """覆盖式写入涨跌榜（as_top_stocks）"""
+        if not records:
+            return
+        try:
+            for r in records:
+                r['rank_type'] = rank_type
+            df = pd.DataFrame(records)
+            self.conn.register('_tmp_as_ts', df)
+            self.conn.execute("DELETE FROM as_top_stocks WHERE rank_type = ?", [rank_type])
+            self.conn.execute("""
+                INSERT INTO as_top_stocks
+                (rank_type, ts_code, name, price, change_pct, volume, amount, updated_at)
+                SELECT rank_type, ts_code, name, price, change_pct, volume, amount, CURRENT_TIMESTAMP
+                FROM _tmp_as_ts
+            """)
+            self.conn.commit()
+        except Exception as e:
+            logger.debug(f"[ECM] write_as_top_stocks 失败: {e}")
+
+    def write_as_sector_ranking(self, records: list):
+        """覆盖式写入行业板块排行（as_sector_ranking）"""
+        if not records:
+            return
+        try:
+            df = pd.DataFrame(records)
+            self.conn.register('_tmp_as_sr', df)
+            self.conn.execute("DELETE FROM as_sector_ranking")
+            self.conn.execute("""
+                INSERT INTO as_sector_ranking
+                (sector_name, ts_code, change_pct, up_count, down_count,
+                 lead_ts_code, lead_name, lead_change_pct, updated_at)
+                SELECT sector_name, ts_code, change_pct, up_count, down_count,
+                       lead_ts_code, lead_name, lead_change_pct, CURRENT_TIMESTAMP
+                FROM _tmp_as_sr
+            """)
+            self.conn.commit()
+        except Exception as e:
+            logger.debug(f"[ECM] write_as_sector_ranking 失败: {e}")
+
+    def write_as_concept_ranking(self, records: list):
+        """覆盖式写入概念板块排行（as_concept_ranking）"""
+        if not records:
+            return
+        try:
+            df = pd.DataFrame(records)
+            self.conn.register('_tmp_as_cr', df)
+            self.conn.execute("DELETE FROM as_concept_ranking")
+            self.conn.execute("""
+                INSERT INTO as_concept_ranking
+                (concept_name, ts_code, change_pct, up_count, down_count, updated_at)
+                SELECT concept_name, ts_code, change_pct, up_count, down_count, CURRENT_TIMESTAMP
+                FROM _tmp_as_cr
+            """)
+            self.conn.commit()
+        except Exception as e:
+            logger.debug(f"[ECM] write_as_concept_ranking 失败: {e}")
+
+    def write_as_limit_pool(self, records: list, limit_type: str):
+        """覆盖式写入涨跌停池（as_limit_pool）"""
+        if not records:
+            return
+        try:
+            for r in records:
+                r['limit_type'] = limit_type
+            df = pd.DataFrame(records)
+            self.conn.register('_tmp_as_lp', df)
+            self.conn.execute("DELETE FROM as_limit_pool WHERE limit_type = ?", [limit_type])
+            self.conn.execute("""
+                INSERT INTO as_limit_pool
+                (limit_type, ts_code, name, price, change_pct, updated_at)
+                SELECT limit_type, ts_code, name, price, change_pct, CURRENT_TIMESTAMP
+                FROM _tmp_as_lp
+            """)
+            self.conn.commit()
+        except Exception as e:
+            logger.debug(f"[ECM] write_as_limit_pool 失败: {e}")
+
+    def append_as_minute_kline(self, records: list):
+        """追加式写入分钟K线（as_minute_kline）"""
+        if not records:
+            return
+        try:
+            df = pd.DataFrame(records)
+            self.conn.register('_tmp_as_mk', df)
+            self.conn.execute("""
+                INSERT OR REPLACE INTO as_minute_kline
+                (ts_code, trade_date, trade_time, freq, open, high, low, close, volume, amount, updated_at)
+                SELECT ts_code, trade_date, trade_time, freq, open, high, low, close, volume, amount, CURRENT_TIMESTAMP
+                FROM _tmp_as_mk
+            """)
+            self.conn.commit()
+        except Exception as e:
+            logger.debug(f"[ECM] append_as_minute_kline 失败: {e}")
+
+    def write_as_lhb_detail(self, records: list):
+        """覆盖式写入龙虎榜数据（as_lhb_detail）"""
+        if not records:
+            return
+        try:
+            df = pd.DataFrame(records)
+            self.conn.register('_tmp_as_lhb', df)
+            self.conn.execute("""
+                INSERT OR REPLACE INTO as_lhb_detail
+                (ts_code, trade_date, name, change_pct, buy_amount, sell_amount, net_amount, updated_at)
+                SELECT ts_code, trade_date, name, change_pct, buy_amount, sell_amount, net_amount, CURRENT_TIMESTAMP
+                FROM _tmp_as_lhb
+            """)
+            self.conn.commit()
+        except Exception as e:
+            logger.debug(f"[ECM] write_as_lhb_detail 失败: {e}")
+
+    def write_as_news(self, records: list):
+        """覆盖式写入盘中新闻（as_news）"""
+        if not records:
+            return
+        try:
+            df = pd.DataFrame(records)
+            self.conn.register('_tmp_as_n', df)
+            self.conn.execute("""
+                INSERT OR REPLACE INTO as_news
+                (id, title, summary, source, publish_time, url, updated_at)
+                SELECT id, title, summary, source, publish_time, url, CURRENT_TIMESTAMP
+                FROM _tmp_as_n
+            """)
+            self.conn.commit()
+        except Exception as e:
+            logger.debug(f"[ECM] write_as_news 失败: {e}")
+
+    # ==================== as_* AKShare 盘中数据读取方法 ====================
+
+    def read_as_market_snapshot(self) -> 'pd.DataFrame':
+        """读取全市场快照"""
+        try:
+            return self.conn.execute("SELECT * FROM as_market_snapshot ORDER BY change_pct DESC").fetchdf()
+        except Exception as e:
+            logger.debug(f"[ECM] read_as_market_snapshot 失败: {e}")
+            return pd.DataFrame()
+
+    def read_as_market_snapshot_by_codes(self, ts_codes: list) -> 'pd.DataFrame':
+        """按代码列表读取市场快照"""
+        if not ts_codes:
+            return pd.DataFrame()
+        try:
+            placeholders = ','.join('?' for _ in ts_codes)
+            return self.conn.execute(
+                f"SELECT * FROM as_market_snapshot WHERE ts_code IN ({placeholders})",
+                ts_codes
+            ).fetchdf()
+        except Exception as e:
+            logger.debug(f"[ECM] read_as_market_snapshot_by_codes 失败: {e}")
+            return pd.DataFrame()
+
+    def read_as_top_stocks(self, rank_type: str = None) -> 'pd.DataFrame':
+        """读取涨跌榜"""
+        try:
+            if rank_type:
+                return self.conn.execute(
+                    "SELECT * FROM as_top_stocks WHERE rank_type = ? ORDER BY ABS(change_pct) DESC",
+                    [rank_type]
+                ).fetchdf()
+            return self.conn.execute(
+                "SELECT * FROM as_top_stocks ORDER BY rank_type, ABS(change_pct) DESC"
+            ).fetchdf()
+        except Exception as e:
+            logger.debug(f"[ECM] read_as_top_stocks 失败: {e}")
+            return pd.DataFrame()
+
+    def read_as_sector_ranking(self, top_n: int = 50) -> 'pd.DataFrame':
+        """读取行业板块排行"""
+        try:
+            return self.conn.execute(
+                "SELECT * FROM as_sector_ranking ORDER BY change_pct DESC LIMIT ?",
+                [top_n]
+            ).fetchdf()
+        except Exception as e:
+            logger.debug(f"[ECM] read_as_sector_ranking 失败: {e}")
+            return pd.DataFrame()
+
+    def read_as_concept_ranking(self, top_n: int = 50) -> 'pd.DataFrame':
+        """读取概念板块排行"""
+        try:
+            return self.conn.execute(
+                "SELECT * FROM as_concept_ranking ORDER BY change_pct DESC LIMIT ?",
+                [top_n]
+            ).fetchdf()
+        except Exception as e:
+            logger.debug(f"[ECM] read_as_concept_ranking 失败: {e}")
+            return pd.DataFrame()
+
+    def read_as_limit_pool(self, limit_type: str = None) -> 'pd.DataFrame':
+        """读取涨跌停池"""
+        try:
+            if limit_type:
+                return self.conn.execute(
+                    "SELECT * FROM as_limit_pool WHERE limit_type = ? ORDER BY ABS(change_pct) DESC",
+                    [limit_type]
+                ).fetchdf()
+            return self.conn.execute(
+                "SELECT * FROM as_limit_pool ORDER BY limit_type, ABS(change_pct) DESC"
+            ).fetchdf()
+        except Exception as e:
+            logger.debug(f"[ECM] read_as_limit_pool 失败: {e}")
+            return pd.DataFrame()
+
+    def read_as_minute_kline(self, ts_code: str, trade_date: str = '',
+                             freq: str = '5min') -> 'pd.DataFrame':
+        """读取分钟K线"""
+        try:
+            if trade_date:
+                return self.conn.execute(
+                    "SELECT * FROM as_minute_kline WHERE ts_code = ? AND trade_date = ? AND freq = ? ORDER BY trade_time",
+                    [ts_code, trade_date, freq]
+                ).fetchdf()
+            return self.conn.execute(
+                "SELECT * FROM as_minute_kline WHERE ts_code = ? AND freq = ? ORDER BY trade_date, trade_time",
+                [ts_code, freq]
+            ).fetchdf()
+        except Exception as e:
+            logger.debug(f"[ECM] read_as_minute_kline 失败: {e}")
+            return pd.DataFrame()
+
+    def read_as_lhb_detail(self, trade_date: str = None) -> 'pd.DataFrame':
+        """读取龙虎榜数据"""
+        try:
+            if trade_date:
+                return self.conn.execute(
+                    "SELECT * FROM as_lhb_detail WHERE trade_date = ? ORDER BY net_amount DESC",
+                    [trade_date]
+                ).fetchdf()
+            return self.conn.execute(
+                "SELECT * FROM as_lhb_detail ORDER BY trade_date DESC, net_amount DESC"
+            ).fetchdf()
+        except Exception as e:
+            logger.debug(f"[ECM] read_as_lhb_detail 失败: {e}")
+            return pd.DataFrame()
+
+    def read_as_news(self, limit: int = 50) -> 'pd.DataFrame':
+        """读取盘中新闻"""
+        try:
+            return self.conn.execute(
+                "SELECT * FROM as_news ORDER BY publish_time DESC LIMIT ?",
+                [limit]
+            ).fetchdf()
+        except Exception as e:
+            logger.debug(f"[ECM] read_as_news 失败: {e}")
+            return pd.DataFrame()
+
+    def read_as_quote_cache(self, ts_code: str) -> dict:
+        """读取个股盘口缓存"""
+        try:
+            df = self.conn.execute(
+                "SELECT * FROM as_quote_cache WHERE ts_code = ?", [ts_code]
+            ).fetchdf()
+            return df.to_dict('records')[0] if not df.empty else {}
+        except Exception as e:
+            logger.debug(f"[ECM] read_as_quote_cache 失败: {e}")
+            return {}
+
+    def clean_as_minute_kline(self, trade_date: str = None):
+        """清理盘中分钟K线数据（日终同步后调用）"""
+        try:
+            if trade_date:
+                self.conn.execute("DELETE FROM as_minute_kline WHERE trade_date = ?", [trade_date])
+            else:
+                self.conn.execute("DELETE FROM as_minute_kline")
+            self.conn.commit()
+            logger.info(f"[ECM] 已清理 as_minute_kline (date={trade_date or 'all'})")
+        except Exception as e:
+            logger.warning(f"[ECM] clean_as_minute_kline 失败: {e}")
+
+    def get_as_table_stats(self) -> dict:
+        """获取 as_* 各表的行数统计"""
+        tables = [
+            'as_market_snapshot', 'as_top_stocks', 'as_sector_ranking',
+            'as_concept_ranking', 'as_limit_pool', 'as_minute_kline',
+            'as_lhb_detail', 'as_news', 'as_quote_cache'
+        ]
+        stats = {}
+        for t in tables:
+            try:
+                df = self.conn.execute(f"SELECT COUNT(*) as cnt FROM {t}").fetchdf()
+                stats[t] = int(df['cnt'].iloc[0])
+            except Exception:
+                stats[t] = -1
+        return stats

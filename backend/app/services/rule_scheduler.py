@@ -153,11 +153,12 @@ class RuleScheduler:
             def daily_eval_job():
                 """日终评估执行体"""
                 try:
-                    from app.services.notification_service import run_evaluation
-                    result = run_evaluation(mode='daily')
-                    stats = result or {'evaluated': 0, 'triggered': 0, 'errors': 0}
-                    logger.info(f"日终评估完成: {stats.get('evaluated', 0)} 规则, "
-                                 f"{stats.get('triggered', 0)} 条触发")
+                    with scheduler_manager._app.app_context():
+                        from app.services.notification_service import run_evaluation
+                        result = run_evaluation(mode='daily')
+                        stats = result or {'evaluated': 0, 'triggered': 0, 'errors': 0}
+                        logger.info(f"日终评估完成: {stats.get('evaluated', 0)} 规则, "
+                                     f"{stats.get('triggered', 0)} 条触发")
                 except Exception as e:
                     logger.error(f"日终评估异常: {e}")
 
@@ -167,7 +168,6 @@ class RuleScheduler:
                 func=daily_eval_job,
                 hour=15,
                 minute=35,
-                max_instances=1,
             )
 
             # 同时注册信号监听（daily_sync_completed 后立即触发）
@@ -188,15 +188,16 @@ class RuleScheduler:
             def dormancy_check_job():
                 """休眠检查执行体"""
                 try:
-                    from app import db
-                    from app.models.notification import NotificationRule
-                    from app.services.dormancy_manager import DormancyManager
+                    with scheduler_manager._app.app_context():
+                        from app import db
+                        from app.models.notification import NotificationRule
+                        from app.services.dormancy_manager import DormancyManager
 
-                    rules = NotificationRule.query.filter(
-                        NotificationRule.deleted_at.is_(None)
-                    ).all()
-                    result = DormancyManager.run_daily_check(rules)
-                    logger.info(f"休眠检查完成: {result}")
+                        rules = NotificationRule.query.filter(
+                            NotificationRule.deleted_at.is_(None)
+                        ).all()
+                        result = DormancyManager.run_daily_check(rules)
+                        logger.info(f"休眠检查完成: {result}")
                 except Exception as e:
                     logger.error(f"休眠检查异常: {e}")
 
@@ -205,7 +206,6 @@ class RuleScheduler:
                 func=dormancy_check_job,
                 hour=6,
                 minute=0,
-                max_instances=1,
             )
             logger.info(f"每日休眠检查任务已注册: {job_id}")
         except Exception as e:
@@ -223,32 +223,33 @@ class RuleScheduler:
             def weekly_report_job():
                 """每周健康报告执行体"""
                 try:
-                    from app import db
-                    from app.models.notification import NotificationRule
-                    from app.services.dormancy_manager import DormancyManager
+                    with scheduler_manager._app.app_context():
+                        from app import db
+                        from app.models.notification import NotificationRule
+                        from app.services.dormancy_manager import DormancyManager
 
-                    rules = NotificationRule.query.filter(
-                        NotificationRule.deleted_at.is_(None)
-                    ).all()
-                    summary = DormancyManager.run_weekly_health_report(rules)
+                        rules = NotificationRule.query.filter(
+                            NotificationRule.deleted_at.is_(None)
+                        ).all()
+                        summary = DormancyManager.run_weekly_health_report(rules)
 
-                    # 写入报告归档
-                    from app.models.notification import ReportArchive
-                    report = ReportArchive(
-                        source='notification',
-                        source_id='__weekly__',
-                        report_type='weekly',
-                        period_start=datetime.now().date(),
-                        period_end=datetime.now().date(),
-                        generated_at=datetime.now(),
-                        file_path='',
-                        total_triggers=summary.get('total_triggers', 0) if isinstance(summary, dict) else 0,
-                        active_rules=len([r for r in rules if r.status == 'running']),
-                    )
-                    db.session.add(report)
-                    db.session.commit()
+                        # 写入报告归档
+                        from app.models.notification import ReportArchive
+                        report = ReportArchive(
+                            source='notification',
+                            source_id='__weekly__',
+                            report_type='weekly',
+                            period_start=datetime.now().date(),
+                            period_end=datetime.now().date(),
+                            generated_at=datetime.now(),
+                            file_path='',
+                            total_triggers=summary.get('total_triggers', 0) if isinstance(summary, dict) else 0,
+                            active_rules=len([r for r in rules if r.status == 'running']),
+                        )
+                        db.session.add(report)
+                        db.session.commit()
 
-                    logger.info(f"每周健康报告完成: {summary}")
+                        logger.info(f"每周健康报告完成: {summary}")
                 except Exception as e:
                     logger.error(f"每周健康报告异常: {e}")
 
@@ -258,7 +259,6 @@ class RuleScheduler:
                 day_of_week='mon',
                 hour=6,
                 minute=30,
-                max_instances=1,
             )
             logger.info(f"每周健康报告任务已注册: {job_id}")
         except Exception as e:
@@ -273,10 +273,11 @@ class RuleScheduler:
             def retry_check_job():
                 """重推检查执行体"""
                 try:
-                    from app.services.notification_pusher import NotificationPusher
-                    result = NotificationPusher.run_retry_check()
-                    if result['retried'] > 0 or result['errors'] > 0:
-                        logger.info(f"重推检查: {result}")
+                    with scheduler_manager._app.app_context():
+                        from app.services.notification_pusher import NotificationPusher
+                        result = NotificationPusher.run_retry_check()
+                        if result['retried'] > 0 or result['errors'] > 0:
+                            logger.info(f"重推检查: {result}")
                 except Exception as e:
                     logger.error(f"重推检查异常: {e}")
 

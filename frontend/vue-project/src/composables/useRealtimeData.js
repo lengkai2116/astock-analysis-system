@@ -9,6 +9,7 @@
  *
  * 后端 WsBridge 推送事件（ws_bridge.py）：
  *   market:summary    — { total_count, up_ratio, up_count, down_count, flat_count, timestamp }
+ *   market:indices    — { indices[], timestamp }
  *   market:top_stocks — { up[], down[], timestamp }
  *   market:sectors    — { sectors[], timestamp }
  *   market:news       — { headlines[], total, timestamp }
@@ -53,6 +54,7 @@ export function useRealtimeData(opts = {}) {
 
   // 推送数据（shallowRef 避免深层次响应式开销）
   const marketSummary = shallowRef(null)
+  const marketIndices = shallowRef(null)
   const topStocks = shallowRef(null)
   const sectors = shallowRef(null)
   const news = shallowRef(null)
@@ -77,6 +79,7 @@ export function useRealtimeData(opts = {}) {
   }
 
   function handleMarketSummary(data) { marketSummary.value = data }
+  function handleMarketIndices(data) { marketIndices.value = data }
   function handleTopStocks(data) { topStocks.value = data }
   function handleSectors(data) { sectors.value = data }
   function handleNews(data) { news.value = data }
@@ -87,6 +90,7 @@ export function useRealtimeData(opts = {}) {
     socketService.on('connect', handleConnect)
     socketService.on('disconnect', handleDisconnect)
     socketService.on('market:summary', handleMarketSummary)
+    socketService.on('market:indices', handleMarketIndices)
     socketService.on('market:top_stocks', handleTopStocks)
     socketService.on('market:sectors', handleSectors)
     socketService.on('market:news', handleNews)
@@ -107,6 +111,7 @@ export function useRealtimeData(opts = {}) {
     socketService.off('connect', handleConnect)
     socketService.off('disconnect', handleDisconnect)
     socketService.off('market:summary', handleMarketSummary)
+    socketService.off('market:indices', handleMarketIndices)
     socketService.off('market:top_stocks', handleTopStocks)
     socketService.off('market:sectors', handleSectors)
     socketService.off('market:news', handleNews)
@@ -189,6 +194,7 @@ export function useRealtimeData(opts = {}) {
     connected,
     connectionStatus,
     marketSummary,
+    marketIndices,
     topStocks,
     sectors,
     news,

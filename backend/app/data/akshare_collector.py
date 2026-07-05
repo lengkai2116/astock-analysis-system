@@ -593,6 +593,16 @@ class AkshareCollector:
                 stats['active'] += 1
         return stats
 
+    def clear_watchlist(self):
+        """清空采集器关注列表（盘后清理链调用）"""
+        try:
+            for t in self._threads:
+                if hasattr(t, '_watchlist'):
+                    t._watchlist = []
+            logger.debug("AkshareCollector 关注列表已清空")
+        except Exception as e:
+            logger.debug(f"清空关注列表失败: {e}")
+
 
 # ── 工具函数 ─────────────────────────────────────────────
 

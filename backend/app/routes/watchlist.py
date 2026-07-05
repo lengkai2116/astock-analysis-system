@@ -317,23 +317,50 @@ def reorder_watchlist():
 @watchlist_bp.route('/dashboard', methods=['GET'])
 @handle_exceptions
 def get_watchlist_dashboard():
-    """看板级自选汇总"""
+    """看板级自选汇总 — 含涨跌统计"""
     items = Watchlist.query.order_by(Watchlist.created_at.desc()).all()
     dm = DataManager()
 
     stocks_data = []
+    up_count = 0
+    down_count = 0
+    total_change = 0.0
+    total_amount = 0.0
     for item in items:
         try:
             df = dm.get_cached_daily_data(item.ts_code)
             if not df.empty:
                 latest = df.iloc[-1]
+                pct_chg = float(latest.get('pct_chg', 0)) or 0.0
+                amount = float(latest.get('amount', 0)) or 0.0
                 stocks_data.append({
                     'ts_code': item.ts_code,
-                    'price': latest.get('close'),
-                    'change_pct': latest.get('pct_chg'),
-                    'volume': latest.get('vol')
+                    'name': latest.get('name', ''),
+                    'price': float(latest.get('close', 0)),
+                    'changePercent': pct_chg,
+                    'pct_chg': pct_chg,
+                    'volume': float(latest.get('vol', 0)),
+                    'amount': amount,
                 })
+                if pct_chg > 0:
+                    up_count += 1
+                elif pct_chg < 0:
+                    down_count += 1
+                total_change += pct_chg
+                total_amount += amount
         except Exception:
             continue
 
-    return jsonify({'code': 0, 'data': {'stocks': stocks_data, 'total': len(stocks_data)}})
+    total = len(stocks_data)
+    return jsonify({
+        'code': 0,
+        'data': {
+            'stocks': stocks_data,
+            'total': total,
+            'totalStocks': total,
+            'up_count': up_count,
+            'down_count': down_count,
+            'avg_change': round(total_change / max(total, 1), 2),
+            'total_amount': total_amount,
+        }
+    })

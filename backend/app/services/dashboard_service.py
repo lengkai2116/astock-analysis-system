@@ -8,10 +8,13 @@
   数据不可用时返回 None，由路由层返回 503 错误响应。
 """
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import pandas as pd
+
+from app.data import DataManager
 
 logger = logging.getLogger(__name__)
 
@@ -33,18 +36,8 @@ class DashboardService:
     """仪表盘数据服务 — 8 个数据方法（不含 mock 降级）"""
 
     def __init__(self):
-        self._tushare = None
         self._data_manager = None
-
-    @property
-    def tushare(self):
-        if self._tushare is None:
-            try:
-                from app.data.tushare_provider import TushareProvider
-                self._tushare = TushareProvider()
-            except ImportError:
-                self._tushare = None
-        return self._tushare
+        self._tushare = None
 
     @property
     def data_manager(self):
@@ -88,8 +81,10 @@ class DashboardService:
                 prev_close = None
                 mini_kline = []
                 if hist_data and len(hist_data) > 0:
-                    latest_hist = hist_data[0] if isinstance(hist_data[0], dict) else hist_data.iloc[0].to_dict()
-                    prev_close = float(latest_hist.get('pre_close', latest_hist.get('close', 0)))
+                    # hist_data 是旧→新排序
+                    latest_hist = hist_data[-1] if isinstance(hist_data[-1], dict) else hist_data.iloc[-1].to_dict()
+                    prev_close_val = float(latest_hist.get('pre_close', 0)) or float(hist_data[-2].get('close', 0)) if len(hist_data) > 1 else 0
+                    prev_close = prev_close_val
                     # 迷你K线（最近20交易日）
                     _sorted = hist_data if (
                         len(hist_data) > 1
@@ -108,7 +103,7 @@ class DashboardService:
                         prev_close = price / (1 + change_pct / 100) if change_pct != -100 else price
                 elif prev_close is not None and hist_data:
                     # 没有实时数据，用历史最新日线
-                    latest_hist = hist_data[0] if isinstance(hist_data[0], dict) else hist_data.iloc[0].to_dict()
+                    latest_hist = hist_data[-1] if isinstance(hist_data[-1], dict) else hist_data.iloc[-1].to_dict()
                     price = float(latest_hist.get('close', latest_hist.get('value', 0)))
                     change = price - prev_close
                     change_pct = (change / prev_close * 100) if prev_close > 0 else 0
@@ -300,7 +295,7 @@ class DashboardService:
             ).fetchdf()
             if date_df.empty:
                 logger.error("涨跌幅榜: DuckDB 无任何历史数据")
-                return None
+                raise ValueError("DuckDB daily_cache 无日期记录，走 Tushare 降级")
             last_date = date_df['trade_date'].iloc[0]
 
             # 取该日全市场数据
@@ -310,7 +305,7 @@ class DashboardService:
             ).fetchdf()
             if all_df.empty:
                 logger.error("涨跌幅榜: DuckDB 查询为空")
-                return None
+                raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
 
             # 补齐股票名称（从 PG Stock 表）
             ts_codes = all_df['ts_code'].unique().tolist()
@@ -320,6 +315,17 @@ class DashboardService:
                     stock_map[s.ts_code] = s.name
             except Exception:
                 pass
+            # ponytail: 如果 Stock 表为空，从 Tushare stock_basic 获取一次
+            if not stock_map:
+                try:
+                    from app.data.tushare_provider import TushareProvider
+                    tp = TushareProvider()
+                    basic = tp.get_stock_list()
+                    if basic:
+                        for r in basic:
+                            stock_map[r.get('ts_code', '')] = r.get('name', '')
+                except Exception:
+                    pass
 
             all_df['name'] = all_df['ts_code'].map(lambda x: stock_map.get(x, ''))
             sort_asc = (type == 'down')
@@ -344,7 +350,6 @@ class DashboardService:
             }
         except Exception as e:
             logger.error(f"涨跌幅榜 DuckDB 降级失败: {e}")
-            return None
 
         logger.error("涨跌幅榜: 所有数据源不可用")
         return None
@@ -395,7 +400,7 @@ class DashboardService:
             ).fetchdf()
             if date_df.empty:
                 logger.error("板块涨跌幅 DuckDB: 无任何历史数据")
-                return None
+                raise ValueError("DuckDB daily_cache 无日期记录，走 Tushare 降级")
             last_date = date_df['trade_date'].iloc[0]
             date_label = str(last_date)
 
@@ -406,7 +411,7 @@ class DashboardService:
             ).fetchdf()
             if all_df.empty:
                 logger.error("板块涨跌幅 DuckDB: 当日无数据")
-                return None
+                raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
 
             # 补齐行业信息（从 PG Stock 表），两步法
             ts_codes = all_df['ts_code'].unique().tolist()
@@ -417,6 +422,18 @@ class DashboardService:
                         industry_map[s.ts_code] = s.industry
             except Exception:
                 pass
+            # ponytail: Stock 行业表为空时从 Tushare 获取一次
+            if len(industry_map) < 10:
+                try:
+                    from app.data.tushare_provider import TushareProvider
+                    tp = TushareProvider()
+                    basic = tp.get_stock_list()
+                    if basic:
+                        for r in basic:
+                            if r.get('industry'):
+                                industry_map[r.get('ts_code', '')] = r['industry']
+                except Exception:
+                    pass
 
             all_df['industry'] = all_df['ts_code'].map(lambda x: industry_map.get(x, None))
             all_df = all_df.dropna(subset=['industry'])
@@ -445,15 +462,15 @@ class DashboardService:
                 losers = losers[:5]
                 return {
                     'date': date_label,
+                    'cached_at': date_label,
                     'gainers': gainers,
                     'losers': losers,
                     'source': 'DuckDB daily_cache 聚合',
                 }
         except Exception as e:
             logger.error(f"板块涨跌幅 DuckDB 降级失败: {e}")
-            return None
 
-        logger.error("板块涨跌幅: AKShare + DuckDB 均不可用")
+        logger.error("板块涨跌幅: 所有数据源不可用")
         return None
 
     # ──────────────────────────────────────────────
@@ -472,7 +489,7 @@ class DashboardService:
             ).fetchdf()
             if date_df.empty:
                 logger.error("dashboard/summary DuckDB: 无历史数据")
-                return None
+                raise ValueError("DuckDB daily_cache 无日期记录，走 Tushare 降级")
             last_date = date_df['trade_date'].iloc[0]
             date_label = str(last_date)
 
@@ -483,7 +500,7 @@ class DashboardService:
             ).fetchdf()
             if all_df.empty:
                 logger.error("dashboard/summary DuckDB: 当日无数据")
-                return None
+                raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
 
             # 补齐名称（从 PG Stock 表）
             ts_codes = all_df['ts_code'].unique().tolist()
@@ -533,19 +550,23 @@ class DashboardService:
             }
         except Exception as e:
             logger.error(f"dashboard/summary DuckDB 降级失败: {e}")
-            return None
 
+        logger.error("dashboard/summary: 所有数据源不可用")
+        return None
     # ──────────────────────────────────────────────
     # 7. 全市场资金流向（moneyflow-summary）
     # ──────────────────────────────────────────────
     def get_moneyflow_summary(self, days: int = 20) -> Optional[Dict]:
-        """全市场资金流向趋势（DuckDB 缓存 → AKShare 备选回退）"""
-        # 1. DuckDB 缓存
+        """全市场资金流向趋势（DuckDB 缓存 → Tushare 备选回退）"""
+        # ── 代理环境变量免疫（与 tushare_provider.py 同步） ──────────
+        for _key in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
+                     'http_proxy', 'https_proxy', 'all_proxy']:
+            os.environ.pop(_key, None)
+
+        # 1. DuckDB 缓存（244号全局数据体系：Service 层只读消费）
         try:
             end = datetime.now()
             start = end - timedelta(days=days * 2)
-            from app.data import DataManager
-            import pandas as pd
             dm = DataManager()
             cached = dm.get_cached_moneyflow(
                 start_date=start.strftime('%Y-%m-%d'),
@@ -554,8 +575,7 @@ class DashboardService:
             if cached is not None:
                 if isinstance(cached, pd.DataFrame) and not cached.empty:
                     records = cached.to_dict('records')
-                    result = self._aggregate_moneyflow_by_date(records, days)
-                    # 验证聚合结果：如果全为零值，回退到下一层
+                    result = self._aggregate_moneyflow_by_date(records, days, source_label='DuckDB 资金流向缓存')
                     if result:
                         has_nonzero = any(
                             abs(d.get('main_force_net_inflow', 0)) > 0.01
@@ -564,11 +584,9 @@ class DashboardService:
                         )
                         if has_nonzero:
                             return result
-                        logger.warning("DuckDB 资金流缓存全部为零值，回退到 Tushare")
-                    else:
-                        logger.warning("DuckDB 资金流缓存聚合失败")
+                        logger.warning("DuckDB 资金流缓存全部为零值，跳过")
                 elif isinstance(cached, list) and len(cached) > 0:
-                    result = self._aggregate_moneyflow_by_date(cached, days)
+                    result = self._aggregate_moneyflow_by_date(cached, days, source_label='DuckDB 资金流向缓存')
                     if result:
                         has_nonzero = any(
                             abs(d.get('main_force_net_inflow', 0)) > 0.01
@@ -576,101 +594,23 @@ class DashboardService:
                         )
                         if has_nonzero:
                             return result
-                        logger.warning("DuckDB 资金流缓存全部为零值（list），回退到 Tushare")
+                        logger.warning("DuckDB 资金流缓存全部为零值（list），跳过")
         except Exception as e:
             logger.warning(f"缓存资金流向查询失败: {e}")
 
-        # 2. AKShare 备选回退：stock_market_fund_flow（全市场资金流向排行）
-        try:
-            import akshare as ak
-            df = ak.stock_market_fund_flow()
-            if df is not None and not df.empty:
-                # 统一列名
-                df = df.rename(columns={
-                    '日期': 'trade_date',
-                    '上证-收盘价': 'close_index',
-                    '上证-涨跌幅': 'pct_chg_index',
-                    '主力净流入-净额': 'net_main_amount',
-                    '主力净流入-净占比': 'net_main_pct',
-                    '超大单净流入-净额': 'net_elg_amount',
-                    '超大单净流入-净占比': 'net_elg_pct',
-                    '大单净流入-净额': 'net_lg_amount',
-                    '大单净流入-净占比': 'net_lg_pct',
-                    '中单净流入-净额': 'net_md_amount',
-                    '中单净流入-净占比': 'net_md_pct',
-                    '小单净流入-净额': 'net_sm_amount',
-                    '小单净流入-净占比': 'net_sm_pct',
-                })
-                df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y%m%d')
-                records = df.sort_values('trade_date', ascending=False).head(days).to_dict('records')
-                if records:
-                    logger.info(f"从 AKShare stock_market_fund_flow 获取资金流向: {len(records)} 条")
-                    return self._aggregate_moneyflow_by_date(records, days)
-        except Exception as e:
-            logger.debug(f"AKShare 资金流向降级失败: {e}")
-
-        # 3. Tushare API 最终降级（分批加载交易日资金流）
-        try:
-            if self.tushare:
-                from app.data.enhanced_cache_manager import get_ecm_instance
-                ecm = get_ecm_instance()
-                dates_df = ecm.conn.execute(
-                    "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 25"
-                ).fetchdf()
-                ts_dates = [str(d) for d in dates_df['trade_date'].tolist() if d]
-                ts_dates = ts_dates[:max(days, 20)]
-
-                all_records = []
-                for date_str in ts_dates:
-                    raw = self.tushare.get_moneyflow(trade_date=date_str)
-                    if not raw:
-                        continue
-                    for r in raw:
-                        bl = self._safe_float(r.get('buy_lg_amount', 0))
-                        sl = self._safe_float(r.get('sell_lg_amount', 0))
-                        be = self._safe_float(r.get('buy_elg_amount', 0))
-                        se = self._safe_float(r.get('sell_elg_amount', 0))
-                        bs = self._safe_float(r.get('buy_sm_amount', 0))
-                        ss = self._safe_float(r.get('sell_sm_amount', 0))
-                        all_records.append({
-                            'trade_date': date_str,
-                            'ts_code': r.get('ts_code', ''),
-                            'buy_lg_vol': 0, 'buy_lg_amount': bl,
-                            'sell_lg_vol': 0, 'sell_lg_amount': sl,
-                            'buy_elg_amount': be, 'sell_elg_amount': se,
-                            'buy_sm_amount': bs, 'sell_sm_amount': ss,
-                            'net_lg_amount': bl - sl,
-                            'net_elg_amount': be - se,
-                            'net_sm_amount': bs - ss,
-                        })
-                if all_records:
-                    # 验证是否有非零资金流数据（Tushare 可能返回零值空结构）
-                    total_main = sum(abs(r['net_lg_amount'] + r['net_elg_amount']) for r in all_records)
-                    if total_main < 1e7:  # 总资金流 < 1000万 → 空结构
-                        logger.warning(f"Tushare 资金流向全部为零值 ({len(all_records)} 条)，跳过")
-                    else:
-                        # 写入 DuckDB 缓存（DATE 列需 YYYY-MM-DD 格式）
-                        try:
-                            import pandas as pd
-                            from app.data.enhanced_cache_manager import get_ecm_instance
-                            cache_records = [{**r, 'trade_date': r['trade_date'][:4] + '-' + r['trade_date'][4:6] + '-' + r['trade_date'][6:8]} for r in all_records]
-                            pdf = pd.DataFrame(cache_records)
-                            get_ecm_instance().cache_moneyflow_data(pdf)
-                        except Exception:
-                            pass
-                        logger.info(f"从 Tushare 获取资金流向: {len(all_records)} 条, {len(ts_dates)} 个交易日")
-                        return self._aggregate_moneyflow_by_date(all_records, days)
-        except Exception as e:
-            logger.debug(f"Tushare 资金流向降级失败: {e}")
-
-        logger.warning("资金流向: 缓存、AKShare 和 Tushare 均不可用")
+        logger.warning("资金流向: 缓存不可用")
         return None
 
     # ──────────────────────────────────────────────
     # 8. 板块资金流向（sector-moneyflow）
     # ──────────────────────────────────────────────
     def get_sector_moneyflow(self, top_n: int = 8, stocks_per_sector: int = 3) -> Optional[Dict]:
-        """行业板块资金流向 + 个股Top3（DuckDB moneyflow_cache + SQLite 行业映射，239号架构：不直接调 Tushare）"""
+        """行业板块资金流向 + 个股Top3（DuckDB 缓存 → Tushare 备选回退）"""
+        # ── 代理环境变量免疫（与 tushare_provider.py 同步） ──────────
+        for _key in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
+                     'http_proxy', 'https_proxy', 'all_proxy']:
+            os.environ.pop(_key, None)
+
         # 1. 行业映射：从 SQLite Stock 表取
         industry_map = {}
         try:
@@ -691,8 +631,6 @@ class DashboardService:
 
         # 2. 从 DuckDB moneyflow_cache 读取最新交易日的资金流向数据
         try:
-            from app.data import DataManager
-            import pandas as pd
             dm = DataManager()
             end = datetime.now()
             start = end - timedelta(days=5)
@@ -716,7 +654,6 @@ class DashboardService:
                 logger.warning(f"板块资金流向: 缓存记录数不足 ({len(records)})")
                 return None
 
-            # 3. 按交易日分组，取记录数最多的交易日（最近有效交易日）
             from collections import Counter
             date_counts = Counter(r.get('trade_date', '') for r in records)
             best_date = max(date_counts, key=lambda d: date_counts[d]) if date_counts else None
@@ -724,7 +661,6 @@ class DashboardService:
                 logger.warning(f"板块资金流向: 无足够数据的交易日 ({date_counts})")
                 return None
 
-            # 4. 筛选该交易日的数据并聚合
             day_records = [r for r in records if r.get('trade_date') == best_date]
             date_str = best_date
             if isinstance(date_str, datetime):
@@ -738,85 +674,7 @@ class DashboardService:
         except Exception as e:
             logger.warning(f"板块资金流向 DuckDB 聚合失败: {e}")
 
-        # 3. AKShare 备选回退：stock_sector_fund_flow_rank（行业板块资金流排行）
-        try:
-            import akshare as ak
-            df = ak.stock_sector_fund_flow_rank(indicator="今日")
-            if df is not None and not df.empty:
-                records = []
-                for _, row in df.iterrows():
-                    sector_name = str(row.get('名称', ''))
-                    records.append({
-                        'ts_code': '',  # 由 AKShare 直接聚合，无个股级数据
-                        'trade_date': datetime.now().strftime('%Y%m%d'),
-                        'sector_name': sector_name,
-                        'net_lg_amount': self._safe_float(row.get('主力净流入-净额', 0)),
-                        'change_pct': self._safe_float(row.get('板块涨跌幅', 0)),
-                        'amount': self._safe_float(row.get('成交额', 0)),
-                        'leading_stock': '',
-                    })
-                if records:
-                    # 按主力净额降序，取 top_n
-                    records.sort(key=lambda r: r['net_lg_amount'], reverse=True)
-                    top_records = records[:top_n]
-                    top_sectors = []
-                    for r in top_records:
-                        top_sectors.append({
-                            'name': r['sector_name'],
-                            'net_flow': round(r['net_lg_amount'] / 10000, 2),  # 万→亿
-                            'change_pct': round(r['change_pct'], 2),
-                            'stocks': [],
-                        })
-                    bottom_records = records[-top_n:]
-                    bottom_records.reverse()
-                    bottom_sectors = []
-                    for r in bottom_records:
-                        bottom_sectors.append({
-                            'name': r['sector_name'],
-                            'net_flow': round(r['net_lg_amount'] / 10000, 2),
-                            'change_pct': round(r['change_pct'], 2),
-                            'stocks': [],
-                        })
-                    logger.info(f"从 AKShare stock_sector_fund_flow_rank 获取板块资金流向: {len(records)} 板块")
-                    return {
-                        'date': datetime.now().strftime('%Y-%m-%d'),
-                        'top_inflow': top_sectors,
-                        'top_outflow': bottom_sectors,
-                        'source': 'AKShare 行业资金流排行',
-                    }
-        except Exception as e:
-            logger.debug(f"AKShare 板块资金流降级失败: {e}")
-
-        # 4. Tushare API 最终降级（个股资金流按行业聚合）
-        try:
-            if self.tushare and industry_map:
-                from app import db
-                from sqlalchemy import func
-                from app.data.enhanced_cache_manager import get_ecm_instance
-                ecm = get_ecm_instance()
-                date_df = ecm.conn.execute(
-                    "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-                ).fetchdf()
-                if not date_df.empty:
-                    date_str = str(date_df['trade_date'].iloc[0]).replace('-', '')
-                    raw = self.tushare.get_moneyflow(trade_date=date_str)
-                    if raw and len(raw) > 50:
-                        # 验证是否有非零资金流（Tushare 可能返回零值空结构）
-                        has_data = any(
-                            float(r.get('buy_lg_amount', 0) or 0) != 0
-                            or float(r.get('sell_lg_amount', 0) or 0) != 0
-                            for r in raw[:50]
-                        )
-                        if not has_data:
-                            logger.warning(f"Tushare 板块资金流全部为零值 ({len(raw)} 条)，跳过")
-                        else:
-                            logger.info(f"从 Tushare 获取板块资金流向: {len(raw)} 条 (交易日 {date_str})")
-                            # _aggregate_sector_moneyflow 直接使用 Tushare 列名 (buy_lg_amount 等)
-                            return self._aggregate_sector_moneyflow(raw, industry_map, top_n, stocks_per_sector, date_str)
-        except Exception as e:
-            logger.debug(f"Tushare 板块资金流降级失败: {e}")
-
-        logger.warning("板块资金流向: 缓存、AKShare 和 Tushare 均不可用")
+        logger.warning("板块资金流向: 缓存不可用")
         return None
 
     # ──────────────────────────────────────────────
@@ -833,6 +691,27 @@ class DashboardService:
             return f
         except (ValueError, TypeError):
             return default
+
+    def _try_get_latest_trade_date(self) -> Optional[str]:
+        """获取最近可用的交易日（YYYYMMDD），优先 DuckDB daily_cache → 推算"""
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            ecm = get_ecm_instance()
+            date_df = ecm.conn.execute(
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+            ).fetchdf()
+            if not date_df.empty:
+                return str(date_df['trade_date'].iloc[0]).replace('-', '')
+        except Exception:
+            pass
+        # 推算：如果今日为周末，取上周五
+        today = datetime.now()
+        weekday = today.weekday()
+        if weekday == 5:  # 周六
+            return (today - timedelta(days=1)).strftime('%Y%m%d')
+        elif weekday == 6:  # 周日
+            return (today - timedelta(days=2)).strftime('%Y%m%d')
+        return today.strftime('%Y%m%d')
 
     def _try_get_index_daily(self, ts_code: str) -> Optional[List]:
         """获取指数日线数据：DuckDB 缓存 → AKShare API → Tushare API（备选回退）"""
@@ -873,16 +752,6 @@ class DashboardService:
                     return records
         except Exception as e:
             logger.debug(f"AKShare 指数日线降级失败 ({ts_code}): {e}")
-
-        # 3. Tushare API 最终降级（单次调用，非循环）
-        try:
-            if self.tushare:
-                raw = self.tushare.get_index_daily(ts_code)
-                if raw and len(raw) > 0:
-                    logger.warning(f"从 Tushare 获取指数 {ts_code} 日线数据（降级）: {len(raw)} 条")
-                    return raw
-        except Exception as e:
-            logger.debug(f"Tushare 指数日线降级失败 ({ts_code}): {e}")
 
         return None
 
@@ -944,7 +813,7 @@ class DashboardService:
     # ──────────────────────────────────────────────
     # ── 真实数据聚合方法 ──
 
-    def _aggregate_moneyflow_by_date(self, records: List, max_days: int = 20) -> Dict:
+    def _aggregate_moneyflow_by_date(self, records: List, max_days: int = 20, source_label: str = '') -> Dict:
         """从缓存资金流向记录按日聚合为 dashboard 格式"""
         from collections import defaultdict
         _sf = self._safe_float
@@ -958,9 +827,7 @@ class DashboardService:
                 d = d.strftime('%Y%m%d')
             elif isinstance(d, str):
                 d = d.replace('-', '')
-            # 优先使用 net_lg_amount + net_elg_amount（已存入缓存）
             net_main = _sf(r.get('net_lg_amount')) + _sf(r.get('net_elg_amount'))
-            # 零售：buy_sm - sell_sm，或使用 net_sm_amount
             net_retail = _sf(r.get('net_sm_amount')) or (_sf(r.get('buy_sm_amount')) - _sf(r.get('sell_sm_amount')))
             daily[d]['main'] += net_main
             daily[d]['retail'] += net_retail
@@ -971,13 +838,14 @@ class DashboardService:
         for d in sorted_dates:
             days_list.append({
                 'date': f"{d[4:6]}/{d[6:8]}",
-                'main_force_net_inflow': round(daily[d]['main'] / 1e8, 1),
-                'retail_net_outflow': round(daily[d]['retail'] / 1e8, 1),
+                'main_force_net_inflow': round(daily[d]['main'] / 1e4, 1),
+                'retail_net_outflow': round(daily[d]['retail'] / 1e4, 1),
             })
         days_list.reverse()
         return {
             'updated_at': datetime.now().strftime('%Y-%m-%d'),
-            'source': 'Tushare 资金流向 · DuckDB 缓存',
+            'cached_at': sorted_dates[0] if sorted_dates else '',
+            'source': source_label or '资金流向',
             'days': days_list,
         }
 
@@ -1024,11 +892,11 @@ class DashboardService:
                 top_stocks.append({
                     'ts_code': s.get('ts_code', s['name']),
                     'name': s['name'],
-                    'net_inflow': round(s['net'] / 1e8, 2),
+                    'net_inflow': round(s['net'] / 1e4, 2),
                 })
             all_sectors.append({
                 'name': name,
-                'net_inflow': round(data['net'] / 1e8, 1),
+                'net_inflow': round(data['net'] / 1e4, 1),
                 'stocks': top_stocks,
             })
 
@@ -1041,7 +909,7 @@ class DashboardService:
         return {
             'date': trade_date[:4] + '-' + trade_date[4:6] + '-' + trade_date[6:8],
             'updated_at': datetime.now().strftime('%Y-%m-%d'),
-            'source': 'Tushare 资金流向 + industry 聚合',
+            'source': 'DuckDB moneyflow_cache 聚合',
             'sectors': inflow[:top_n],
             'out_sectors': outflow[:5],
         }

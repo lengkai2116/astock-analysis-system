@@ -390,8 +390,8 @@ export default {
     ResonancePanel},
 
   setup() {
-    const { connected, marketSummary, topStocks, sectors, init, destroy } = useRealtimeData({ autoConnect: false })
-    return { wsConnected: connected, wsMarketSummary: marketSummary, wsTopStocks: topStocks, wsSectors: sectors, wsInit: init, wsDestroy: destroy }
+    const { connected, marketSummary, marketIndices, topStocks, sectors, init, destroy } = useRealtimeData({ autoConnect: false })
+    return { wsConnected: connected, wsMarketSummary: marketSummary, wsMarketIndices: marketIndices, wsTopStocks: topStocks, wsSectors: sectors, wsInit: init, wsDestroy: destroy }
   },
 
   data() {
@@ -460,19 +460,22 @@ export default {
       this.stats.upStocks = val.up_count || 0
       this.stats.downStocks = val.down_count || 0
     },
+    wsMarketIndices(val) {
+      if (!val || !val.indices) return
+      this.marketIndexes = val.indices.map(s => ({
+        name: s.name,
+        value: s.price || 0,
+        change: s.change_pct || 0,
+        changePercent: s.change_pct || 0,
+        changeAmount: s.change || 0,
+        symbol: s.ts_code,
+      }))
+    },
     wsTopStocks(val) {
       if (!val) return
       this.rankList = (val.up || []).slice(0, 10).map(s => ({
         ...s,
         changePercent: s.change_pct || s.changePercent || 0,
-      }))
-    },
-    wsSectors(val) {
-      if (!val || !val.sectors) return
-      this.marketIndexes = val.sectors.map(s => ({
-        name: s.name,
-        value: s.index_price || 0,
-        change: s.change_pct || 0,
       }))
     },
   },

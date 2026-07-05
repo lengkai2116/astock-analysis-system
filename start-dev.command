@@ -69,6 +69,18 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 sleep 2
-open http://localhost:8082/dashboard.html 2>/dev/null
+
+# ── 等待后端就绪（最多 15s） ────────────────────────
+echo "  ⏳ 等待后端启动..."
+for i in $(seq 1 15); do
+    if curl -s --max-time 2 http://127.0.0.1:5001/api/v3/health 2>/dev/null | grep -q '"status":"healthy"\|"success":true'; then
+        echo "  ✅ 后端就绪（${i}s）"
+        break
+    fi
+    sleep 1
+done
+
+echo "  ✅ 打开仪表盘..."
+open http://localhost:5001/dashboard.html 2>/dev/null
 
 wait

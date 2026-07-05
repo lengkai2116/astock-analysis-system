@@ -457,3 +457,43 @@ def upsert_news(records: list[dict]):
             pass
     finally:
         _put_conn(conn)
+
+
+def cleanup_old_data(retention_days: int = 0):
+    """清理 PostgreSQL 盘中实时表（盘后清理链调用）
+
+    Args:
+        retention_days: 保留天数，0=仅清理当日之前的数据
+    """
+    tables = [
+        'realtime_snapshot', 'realtime_top_stocks', 'realtime_sectors',
+        'realtime_concepts', 'realtime_limit_pool', 'realtime_minute_kline',
+        'realtime_lhb', 'realtime_news',
+    ]
+    if retention_days < 0:
+        logger.info("[realtime_pg] retention_days<0，跳过清理")
+        return
+    conn = _get_conn()
+    if conn is None:
+        logger.warning("[realtime_pg] 无可用连接，跳过清理")
+        return
+    try:
+        cutoff = (datetime.now() - timedelta(days=retention_days)).strftime('%Y-%m-%d')
+        for table in tables:
+            try:
+                conn.execute(f"DELETE FROM {table} WHERE trade_date < %(cutoff)s OR trade_date IS NULL", {'cutoff': cutoff})
+            except Exception:
+                try:
+                    conn.execute(f"TRUNCATE {table}")
+                except Exception:
+                    pass
+        conn.commit()
+        logger.info(f"[realtime_pg] 盘中实时表清理完成 (retention_days={retention_days}, cutoff={cutoff})")
+    except Exception as e:
+        logger.warning(f"[realtime_pg] 清理失败: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        _put_conn(conn)

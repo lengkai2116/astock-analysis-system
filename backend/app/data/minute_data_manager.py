@@ -26,14 +26,18 @@ class MinuteDataManager:
     def __init__(self):
         self.tushare = TushareProvider()
         self.cache = TieredMemoryCache()
-        self._has_tushare_high = self._check_tushare_permission()
+        self._has_tushare_high = None  # 惰性检测，首次 get_minute_data 时获取
 
     def _check_tushare_permission(self) -> bool:
-        """检查 Tushare 是否有分钟数据权限（5000积分+）"""
+        """惰性检查 Tushare 分钟数据权限（只在首次 get_minute_data 时触发）"""
+        if self._has_tushare_high is not None:
+            return self._has_tushare_high
         try:
             data = self.tushare.get_minute_data('000001.SZ', freq='5min')
-            return data is not None and len(data) > 0
+            self._has_tushare_high = data is not None and len(data) > 0
+            return self._has_tushare_high
         except Exception:
+            self._has_tushare_high = False
             return False
 
     def get_minute_data(self, ts_code: str, freq: str = '15min',

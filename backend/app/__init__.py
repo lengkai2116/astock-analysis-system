@@ -136,9 +136,8 @@ def create_app():
     _setup_logging(app)
     db.init_app(app)
     migrate.init_app(app, db)
-    # Gunicorn 多 Worker：SocketIO 消息通过 Redis 广播
-    redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
-    socketio.init_app(app, cors_allowed_origins="*", message_queue=redis_url)
+    # 单进程模式：SocketIO 直接广播，无需 Redis
+    socketio.init_app(app, cors_allowed_origins="*")
 
     # 首次启动时自动创建表（兜底，生产环境应使用 flask db upgrade）
     with app.app_context():
@@ -230,6 +229,20 @@ def create_app():
     app.register_blueprint(watchlist_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(notifications_bp)
+
+    # ── 前端静态文件（原型/生产共用） ──
+    # _ui-prototype 位于项目根目录，与 backend/ 同级
+    _proto_dir = os.path.join(os.path.dirname(app.root_path), '..', '_ui-prototype')
+    if os.path.isdir(_proto_dir):
+        from flask import send_from_directory
+        @app.route('/dashboard.html')
+        @app.route('/dashboard')
+        def serve_dashboard():
+            return send_from_directory(_proto_dir, 'dashboard.html')
+        @app.route('/assets/<path:filename>')
+        def serve_assets(filename):
+            return send_from_directory(os.path.join(_proto_dir, 'assets'), filename)
+        logger.info(f"原型前端静态文件已挂载: {_proto_dir}")
 
     # ============================================================
     # RuntimeConfigManager 初始化 + 种子数据

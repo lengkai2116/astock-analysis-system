@@ -21,20 +21,40 @@ from flask import Blueprint, request
 from flask_socketio import emit, join_room
 from .. import socketio
 from ..data.in_memory_store import store
-from ..data.tushare_provider import TushareProvider
-from ..data.akshare_provider import AkShareRealtimeProvider, AkshareProvider
-from ..data.enhanced_cache_manager import EnhancedCacheManager
-from ..data.minute_data_manager import MinuteDataManager
 from ..utils.trading_hours import is_trading_time
 
 logger = logging.getLogger(__name__)
 
 realtime_bp = Blueprint('realtime', __name__)
 
-tushare = TushareProvider()
-akshare = AkShareRealtimeProvider()
-cache_manager = EnhancedCacheManager()
-minute_data_mgr = MinuteDataManager()
+# ponytail: 惰性初始化，避免模块导入时连接外部服务
+_tushare = None
+_akshare = None
+_ak = None
+
+
+def _get_tushare():
+    global _tushare
+    if _tushare is None:
+        from ..data.tushare_provider import TushareProvider
+        _tushare = TushareProvider()
+    return _tushare
+
+
+def _get_akshare():
+    global _akshare
+    if _akshare is None:
+        from ..data.akshare_provider import AkShareRealtimeProvider
+        _akshare = AkShareRealtimeProvider()
+    return _akshare
+
+
+def _get_ak():
+    global _ak
+    if _ak is None:
+        from ..data.akshare_provider import AkshareProvider
+        _ak = AkshareProvider()
+    return _ak
 
 
 # ── 辅助函数（替换旧 RealtimeDataService._fetch_current_market_data） ──────
@@ -51,7 +71,7 @@ def _fetch_current_market_data() -> dict:
     if not data:
         for code in _DEFAULT_WATCHLIST:
             try:
-                daily = tushare.get_daily_data(code)
+                daily = _get_tushare().get_daily_data(code)
                 if daily and len(daily) > 0:
                     latest = daily[0]
                     data.append({
@@ -119,7 +139,7 @@ def handle_subscribe_kline(data):
         logger.info(f"客户端订阅K线: {ts_code} ({freq})")
 
         try:
-            kline_data = minute_data_mgr.get_minute_data(ts_code, freq)
+            kline_data = _get_tushare().get_minute_data(ts_code, freq) if _get_tushare else []
             if kline_data:
                 emit('kline_init', {
                     'ts_code': ts_code,
@@ -225,7 +245,7 @@ def get_indexes_realtime():
                     continue
 
             # 盘后 → Tushare
-            idx_data = tushare.get_index_daily(idx['ts_code'])
+            idx_data = _get_tushare().get_index_daily(idx['ts_code'])
             if idx_data and len(idx_data) > 0:
                 latest = idx_data[0]
                 prev_data = idx_data[1] if len(idx_data) > 1 else None
@@ -307,7 +327,7 @@ def get_realtime_indicator():
         from app.indicators import TechnicalIndicatorEngine
         calculator = TechnicalIndicatorEngine()
 
-        daily_data = tushare.get_daily_data(ts_code)
+        daily_data = _get_tushare().get_daily_data(ts_code)
         result_df = calculator.calculate_all_indicators(daily_data)
         result = calculator.get_latest_indicators(result_df)
 
