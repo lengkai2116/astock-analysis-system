@@ -13,6 +13,12 @@ class DataManager:
     def __init__(self):
         self.tushare = TushareProvider()
         self.cache = get_ecm_instance()
+        # 加载活跃数据源（支持 AKShare 回退）
+        try:
+            from .data_source_manager import data_source_manager
+            self._source_mgr = data_source_manager
+        except Exception:
+            self._source_mgr = None
     
     def sync_stock_list(self):
         stocks = self.tushare.get_stock_list()
@@ -54,8 +60,20 @@ class DataManager:
                 logger.info(f"使用缓存数据: {ts_code}")
                 return len(cached_df)
         
-        # 缓存未命中，从Tushare获取
+        # 缓存未命中，从活跃数据源获取（Tushare → AKShare 回退）
         data = self.tushare.get_daily_data(ts_code, start_date, end_date)
+
+        if not data and self._source_mgr:
+            try:
+                active = self._source_mgr.get_active_source_name()
+                if active and active != 'tushare':
+                    from .akshare_provider import AkshareProvider
+                    akshare = AkshareProvider()
+                    data = akshare.get_daily_data(ts_code, start_date, end_date)
+                    if data:
+                        logger.info(f"从 akshare 获取 {ts_code} 日线数据: {len(data)} 条")
+            except Exception as e:
+                logger.warning(f"回退 akshare 获取 {ts_code} 数据失败: {e}")
 
         if not data:
             return 0
@@ -86,13 +104,67 @@ class DataManager:
 
         return 0
 
-    def sync_all_daily_data(self):
-        stocks = Stock.query.all()
+    def sync_all_daily_data(self, max_stocks: int = None, resume_from: str = None) -> int:
+        """全量同步所有股票日线数据（带断点续传）
+
+        对每只股票检查 daily_cache 中已有数据的天数：
+        - 已有 120 天以上数据 → 跳过（不需要全量覆盖）
+        - 数据不足 120 天 → 增量同步（从最后交易日到今日）
+        - 完全无数据 → 全量同步
+
+        每 100 只提交一次批次。
+        中途失败后可通过 resume_from 参数（ts_code）断点续传。
+
+        Args:
+            max_stocks: 最大同步数量（None = 全部）
+            resume_from: 从指定 ts_code 开始续传（None = 从头开始）
+
+        Returns:
+            同步的记录总数
+        """
+        stocks = Stock.query.order_by(Stock.ts_code).all()
         count = 0
-        
+        skipped = 0
+        started = resume_from is None  # resume_from=None 直接开始
+
         for stock in stocks:
-            count += self.sync_daily_data(stock.ts_code)
-        
+            if resume_from and stock.ts_code == resume_from:
+                started = True
+            if not started:
+                continue
+
+            # 检查已有数据量
+            existing_df = self.cache.get_cached_daily(stock.ts_code)
+            if not existing_df.empty and len(existing_df) >= 120:
+                skipped += 1
+                if skipped % 200 == 0:
+                    logger.info(f"全量同步跳过已有数据的股票: {skipped} 只")
+                continue
+
+            if existing_df.empty:
+                # 无数据 → 全量同步（5年）
+                cnt = self.sync_daily_data(stock.ts_code, use_cache=False)
+            else:
+                # 数据不足 → 增量补齐
+                last_date = existing_df['trade_date'].max()
+                if hasattr(last_date, 'strftime'):
+                    start_date = last_date.strftime('%Y%m%d')
+                else:
+                    start_date = str(last_date).replace('-', '')
+                cnt = self.sync_daily_data(
+                    stock.ts_code, use_cache=False,
+                    start_date=start_date
+                )
+
+            count += cnt
+            if count % 100 == 0:
+                logger.info(f"全量同步进度: {count} 条（跳过 {skipped} 只已有数据）")
+                db.session.commit()
+            if max_stocks and count >= max_stocks:
+                break
+
+        db.session.commit()
+        logger.info(f"全量同步完成: {count} 条（跳过 {skipped} 只已有数据）")
         return count
     
     def get_cached_daily_data(self, ts_code, start_date=None, end_date=None):
@@ -358,6 +430,76 @@ class DataManager:
             trade_date = datetime.now().strftime('%Y%m%d')
 
         return self.sync_daily_basic_data(trade_date=trade_date)
+
+    def sync_daily_basic_history(self, max_days: int = 120, sleep_sec: float = 0.3) -> int:
+        """
+        回填 daily_basic_cache 历史数据（方案A：补齐120交易日）
+
+        从 daily_cache 获取最近 max_days 个交易日作为目标日期列表，
+        检查 daily_basic_cache 已有哪些日期，对有缺失的日期
+        逐日调用 Tushare daily_basic(trade_date=YYYYMMDD) 补全。
+
+        Args:
+            max_days: 目标保留的历史交易日数
+            sleep_sec: 每两次 API 调用间的间隔（秒），防限流
+
+        Returns:
+            补充的总数据条数
+        """
+        import time
+
+        # 1. 从 daily_cache 获取可用的交易日列表
+        target_dates = self.cache.conn.execute("""
+            SELECT DISTINCT trade_date FROM daily_cache
+            ORDER BY trade_date DESC LIMIT ?
+        """, [max_days]).fetchdf()
+
+        if target_dates.empty:
+            logger.warning("daily_basic 历史回填: daily_cache 无交易日数据，跳过")
+            return 0
+
+        target_dates = target_dates['trade_date'].tolist()
+        logger.info(f"daily_basic 历史回填: 目标 {len(target_dates)} 个交易日")
+
+        # 2. 查询 daily_basic_cache 中已有的日期
+        existing_dates = set()
+        try:
+            existing_df = self.cache.conn.execute(
+                "SELECT DISTINCT trade_date FROM daily_basic_cache"
+            ).fetchdf()
+            if not existing_df.empty:
+                existing_dates = set(existing_df['trade_date'].tolist())
+        except Exception:
+            pass
+
+        # 3. 计算缺失日期
+        missing = [d for d in target_dates if d not in existing_dates]
+        missing.sort()  # 从远到近
+        logger.info(f"daily_basic 历史回填: 已有 {len(existing_dates)} 天, 需补充 {len(missing)} 天")
+
+        if not missing:
+            return 0
+
+        # 4. 逐日调用 Tushare 补全
+        total_inserted = 0
+        for i, trade_date in enumerate(missing):
+            try:
+                date_str = trade_date.strftime('%Y%m%d') if hasattr(trade_date, 'strftime') else str(trade_date).replace('-', '')
+                data = self.tushare.get_daily_basic(trade_date=date_str)
+                if data:
+                    df = pd.DataFrame(data)
+                    self.cache.cache_daily_basic_data(df)
+                    total_inserted += len(df)
+                if (i + 1) % 10 == 0:
+                    logger.info(f"daily_basic 回填进度: {i+1}/{len(missing)} 天, 已插入 {total_inserted} 条")
+                time.sleep(sleep_sec)
+            except Exception as e:
+                logger.warning(f"daily_basic 回填 {trade_date} 失败: {e}")
+                time.sleep(1.0)  # 失败后多等一秒
+                continue
+
+        logger.info(f"daily_basic 历史回填完成: 共处理 {len(missing)} 天, 插入 {total_inserted} 条")
+        return total_inserted
 
 
     def sync_moneyflow_data(self, trade_date=None):

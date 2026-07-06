@@ -228,81 +228,150 @@ class ChipRiskManagementModel(RiskManagementModel):
 
 class ChipScorer:
     """
-    筹码分布选股评分器
-    用于评估单只股票的主力资金吸引力
-    """
-    
-    def get_available_windows(self) -> list:
-        """[#46] 返回筹码分析支持的回看周期
+    筹码分布选股评分器 — V2 方向正确版
 
-        Returns:
-            [60, 120]  — 60日轻量分析和120日完整分析
-        """
+    用于 L2 批量筛选 4000+ 只股票的场景。
+    通过四维 OHLCV-only 评分评估主力资金吸引力。
+
+    Returns:
+        float: 0-10 评分，越高越看多
+    """
+
+    def get_available_windows(self) -> list:
+        """返回筹码分析支持的回看周期"""
         return [60, 120]
 
     def score(self, data: pd.DataFrame) -> float:
-        """
-        计算综合评分
-        
-        Args:
-            data: OHLCV数据
-        
-        Returns:
-            评分值 (0-10)，越高越有吸引力
-        """
         if data.empty or len(data) < 120:
             return 0.0
-        
+
         try:
-            # 简化实现：基于价格和成交量计算评分
-            score = self._calculate_simple_score(data)
-            return score
-        
+            return self._calculate_v2_score(data)
         except Exception as e:
-            logger.error(f"计算评分失败: {e}")
+            logger.error(f"ChipScorer V2 评分失败: {e}")
             return 0.0
-    
-    def _calculate_simple_score(self, data: pd.DataFrame) -> float:
-        """简化的评分计算"""
-        score = 0.0
-        
-        # 计算简单的技术指标
+
+    def _calculate_v2_score(self, data: pd.DataFrame) -> float:
         closes = data['close'].values
-        volumes = data['vol'].values if 'vol' in data.columns else data['amount'].values
-        
-        # 1. 价格动量评分
-        if len(closes) >= 20:
-            recent_return = (closes[-1] - closes[-20]) / closes[-20]
-            if recent_return > 0:
-                score += 3.0
-            elif recent_return > -0.05:
-                score += 1.5
-        
-        # 2. 成交量评分
-        if len(volumes) >= 20:
-            avg_vol = np.mean(volumes[-20:])
-            current_vol = volumes[-1]
-            vol_ratio = current_vol / avg_vol if avg_vol > 0 else 0
-            
-            if vol_ratio >= 1.5:
-                score += 4.0
-            elif vol_ratio >= 1.2:
-                score += 2.5
-            else:
-                score += 1.0
-        
-        # 3. 价格位置评分
+        volumes = data['vol'].values if 'vol' in data.columns else (
+            data['amount'].values if 'amount' in data.columns
+            else np.ones(len(data))
+        )
+
+        score = 0.0
+        details = {}
+
+        # ─── 维度1: 成本位置 (0-3分) ───
+        # VWAP(120) 作为主力平均成本代理
+        # 价格在成本附近 → 安全；价格远离成本 → 谨慎
+        vwap_120 = np.average(closes, weights=volumes) if len(closes) >= 20 else closes[-1]
+        current_price = closes[-1]
+        cost_deviation = (current_price - vwap_120) / vwap_120 if vwap_120 > 0 else 0
+
+        if -0.05 <= cost_deviation <= 0.10:
+            # 价格在成本 ±10% 内 → 安全区，主力未大幅盈利
+            cost_score = 3.0
+        elif -0.10 <= cost_deviation < -0.05:
+            # 略低于成本 → 洗盘/建仓末期，机会
+            cost_score = 2.5
+        elif 0.10 < cost_deviation <= 0.25:
+            # 已脱离成本区 10-25% → 拉升中段
+            cost_score = 2.0
+        elif cost_deviation < -0.10:
+            # 深跌低于成本
+            cost_score = 1.0
+        else:
+            # 大幅高于成本 > 25% → 出货风险区
+            cost_score = 0.5
+        details['cost_position'] = round(cost_deviation, 4)
+        score += cost_score
+
+        # ─── 维度2: 量能剖面 (0-3分) ───
+        # 比较 5日 → 20日 → 60日 均量，判断量能趋势
+        # 低位放量 = 建仓 ✓  高位放量 = 出货 ✗
+        vol_5 = np.mean(volumes[-5:]) if len(volumes) >= 5 else 0
+        vol_20 = np.mean(volumes[-20:]) if len(volumes) >= 20 else 0
+        vol_60 = np.mean(volumes[-60:]) if len(volumes) >= 60 else 0
+
+        # 计算价格在 120 日区间的位置
+        price_high = np.max(closes[-120:])
+        price_low = np.min(closes[-120:])
+        price_range = price_high - price_low if price_high > price_low else 1.0
+        price_position = (current_price - price_low) / price_range
+
+        # 量比指标
+        vol_ratio_5_20 = vol_5 / vol_20 if vol_20 > 0 else 1.0
+        vol_ratio_20_60 = vol_20 / vol_60 if vol_60 > 0 else 1.0
+
+        if price_position < 0.4 and 1.0 <= vol_ratio_5_20 <= 2.0:
+            # 低位放量（非暴量）→ 建仓特征
+            volume_score = 3.0
+        elif price_position >= 0.7 and vol_ratio_5_20 >= 1.5:
+            # 高位放量 → 出货特征
+            volume_score = 0.5
+        elif price_position < 0.3 and vol_ratio_20_60 < 1.0:
+            # 低位缩量 → 洗盘后期
+            volume_score = 2.5
+        elif vol_ratio_5_20 < 0.7:
+            # 短期极度缩量 → 交投不活跃
+            volume_score = 1.0
+        elif price_position >= 0.8 and vol_ratio_5_20 < 1.0:
+            # 高位缩量 → 追高意愿不足
+            volume_score = 0.5
+        else:
+            # 中性
+            volume_score = 2.0
+        details['volume_signal'] = round(vol_ratio_5_20, 2)
+        score += volume_score
+
+        # ─── 维度3: 趋势健康度 (0-2分) ───
+        # 短中期趋势方向一致性
         if len(closes) >= 60:
-            highest_60 = np.max(closes[-60:])
-            lowest_60 = np.min(closes[-60:])
-            current_price = closes[-1]
-            
-            position = (current_price - lowest_60) / (highest_60 - lowest_60 + 1e-9)
-            if 0.3 <= position <= 0.6:
-                score += 3.0
-            elif 0.6 < position <= 0.8:
-                score += 2.0
+            ma_5 = np.mean(closes[-5:])
+            ma_20 = np.mean(closes[-20:])
+            ma_60 = np.mean(closes[-60:])
+            # 多头排列: MA5 > MA20 > MA60
+            if ma_5 > ma_20 > ma_60:
+                trend_score = 2.0
+            # 空头排列: MA5 < MA20 < MA60
+            elif ma_5 < ma_20 < ma_60:
+                # 但价格已靠近底部 → 可能底部区域
+                if price_position < 0.3:
+                    trend_score = 1.5  # 底部区域空头排列是机会
+                else:
+                    trend_score = 0.5
+            # 短期上穿中期 → 拐点
+            elif ma_5 > ma_20 and ma_20 <= ma_60:
+                trend_score = 1.5
+            # 短期下穿中期 → 调整
+            elif ma_5 < ma_20 and ma_20 > ma_60:
+                if price_position < 0.4:
+                    trend_score = 1.0  # 回调但未破位
+                else:
+                    trend_score = 0.5
             else:
-                score += 1.0
-        
-        return score
+                trend_score = 1.0
+        else:
+            trend_score = 1.0
+        score += trend_score
+
+        # ─── 维度4: 价格稳定性 (0-2分) ───
+        # 窄幅震荡在低位 = 吸筹  |  宽幅波动在高位 = 出货
+        if len(closes) >= 20:
+            recent_volatility = np.std(closes[-20:]) / np.mean(closes[-20:])
+            if price_position < 0.4 and recent_volatility < 0.05:
+                # 低位窄幅 → 吸筹特征
+                stability_score = 2.0
+            elif price_position >= 0.7 and recent_volatility > 0.08:
+                # 高位宽幅 → 出货特征
+                stability_score = 0.5
+            elif recent_volatility < 0.03:
+                # 极低波动 → 变盘前兆
+                stability_score = 1.5
+            else:
+                stability_score = 1.0
+        else:
+            stability_score = 1.0
+        score += stability_score
+
+        return min(10.0, max(0.0, score))

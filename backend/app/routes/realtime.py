@@ -310,6 +310,18 @@ def stop_realtime_service():
         return {'status': 'error', 'message': str(e)}, 500
 
 
+@realtime_bp.route('/api/v3/market/connectivity', methods=['GET'])
+def check_eastmoney_connectivity():
+    """测试与东方财富各 API 端点的连接状态（诊断用）"""
+    try:
+        from app.data.akshare_collector import test_eastmoney_connectivity
+        result = test_eastmoney_connectivity()
+        status_code = 200 if result['reachable'] >= 1 else 503
+        return result, status_code
+    except Exception as e:
+        return {'error': str(e)}, 500
+
+
 @realtime_bp.route('/api/v3/watchlist/stream', methods=['GET'])
 def get_watchlist_stream():
     """获取自选股流式数据 — REST 接口（降级用）"""

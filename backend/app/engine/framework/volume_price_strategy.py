@@ -228,7 +228,16 @@ class StatusRecognition:
     risk_level: str = "MEDIUM"
 
     def to_dict(self) -> Dict:
-        return dataclasses.asdict(self)
+        """将 dataclass 转为字典"""
+        return {
+            'state': self.state,
+            'state_label': self.state_label,
+            'trend': self.trend,
+            'momentum': self.momentum,
+            'volume': self.volume,
+            'support_resistance': self.support_resistance,
+            'risk_level': self.risk_level,
+        }
 
 
 # ──────────────────────────────────────────────
@@ -2815,6 +2824,38 @@ class VolumePriceRelationAnalyzer:
         return MomentumProfile(score=total, level=level, candle_force=candle_desc,
                                volume_direction=vol_desc, price_accel=accel_label, interpretation=interp)
 
+    def _calc_price_acceleration(self, closes) -> tuple:
+        """计算价格加速度（动量的变化率）
+
+        基于最近 N 日价格变化率的变化来判断动能是否加速/减速。
+        Returns:
+            (score, label) — score ∈ [-1, 1], label 为中文描述
+        """
+        if len(closes) < 12:
+            return 0.0, '数据不足'
+
+        # 取最近 10 个交易日的收益率
+        roc = np.diff(closes[-11:]) / np.maximum(closes[-11:-1], 1e-9)
+        # 加速度 = 前 5 日均 ROC - 后 5 日均 ROC
+        recent = np.mean(roc[-5:])
+        earlier = np.mean(roc[-10:-5])
+        accel = recent - earlier
+
+        # 标准化到 [-1, 1]
+        score = max(-1.0, min(1.0, np.tanh(accel * 50)))
+
+        if score > 0.3:
+            label = '加速上涨'
+        elif score > 0.1:
+            label = '温和上涨'
+        elif score < -0.3:
+            label = '加速下跌'
+        elif score < -0.1:
+            label = '温和下跌'
+        else:
+            label = '动能平稳'
+        return score, label
+
     def _calc_candle_force(self, closes, opens, highs, lows) -> float:
         if len(closes) < 10:
             return 0.0
@@ -3465,55 +3506,60 @@ class VolumePriceStrategy:
         if df.empty or len(df) < 30:
             return {"error": "数据不足", "success": False}
 
-        # [P0-优化1] 大盘环境权重计算
-        market_mult = DEFAULT_MARKET_MULTIPLIER
-        env_note = ""
-        if self.market_env:
-            condition = self.market_env.get('condition', 'UNKNOWN')
-            if condition == 'POOR':
-                market_mult = 0.70
-                env_note = "大盘环境偏弱，信号乘数0.7"
-            elif condition == 'UNKNOWN':
-                market_mult = 0.85
-                env_note = "大盘环境未知，保守处理"
+        # ── 全局压制 np.mean 空切片 RuntimeWarning ──
+        # L3 遍历大量股票时，部分股票数据不足导致 np.mean(empty_slice) 产生
+        # RuntimeWarning。NaN 在后续 try/except 兜底中安全处理，不影响结果，
+        # 但数百条 "Mean of empty slice" 日志噪音严重扰乱监控。
+        with np.errstate(all='ignore'):
+            # [P0-优化1] 大盘环境权重计算
+            market_mult = DEFAULT_MARKET_MULTIPLIER
+            env_note = ""
+            if self.market_env:
+                condition = self.market_env.get('condition', 'UNKNOWN')
+                if condition == 'POOR':
+                    market_mult = 0.70
+                    env_note = "大盘环境偏弱，信号乘数0.7"
+                elif condition == 'UNKNOWN':
+                    market_mult = 0.85
+                    env_note = "大盘环境未知，保守处理"
 
-        try:
-            stage = self.stage_detector.detect(df)
-        except Exception as e:
-            logger.error(f"阶段判定异常: {e}")
-            return {"error": f"阶段判定异常: {e}", "success": False}
+            try:
+                stage = self.stage_detector.detect(df)
+            except Exception as e:
+                logger.error(f"阶段判定异常: {e}")
+                return {"error": f"阶段判定异常: {e}", "success": False}
 
-        try:
-            vol_state = self.volume_analyzer.analyze(df, stage)
-        except Exception as e:
-            logger.error(f"成交量分析异常: {e}")
-            vol_state = VolumeState()
+            try:
+                vol_state = self.volume_analyzer.analyze(df, stage)
+            except Exception as e:
+                logger.error(f"成交量分析异常: {e}")
+                vol_state = VolumeState()
 
-        try:
-            relation = self.relation_analyzer.analyze(df, stage, vol_state)
-        except Exception as e:
-            logger.error(f"量价关系异常: {e}")
-            relation = RelationResult()
+            try:
+                relation = self.relation_analyzer.analyze(df, stage, vol_state)
+            except Exception as e:
+                logger.error(f"量价关系异常: {e}")
+                relation = RelationResult()
 
-        try:
-            signal = self.signal_generator.generate(
-                stage, vol_state, relation, df, market_mult)
-        except Exception as e:
-            logger.error(f"信号生成异常: {e}")
-            signal = VolumePriceSignal(direction="HOLD", signal_label="分析异常", confidence=0.0)
+            try:
+                signal = self.signal_generator.generate(
+                    stage, vol_state, relation, df, market_mult)
+            except Exception as e:
+                logger.error(f"信号生成异常: {e}")
+                signal = VolumePriceSignal(direction="HOLD", signal_label="分析异常", confidence=0.0)
 
-        # 大盘环境提示加入evidence
-        if env_note and signal.evidence:
-            signal.evidence.insert(1, f"【大盘】{env_note}")
+            # 大盘环境提示加入evidence
+            if env_note and signal.evidence:
+                signal.evidence.insert(1, f"【大盘】{env_note}")
 
-        return {
-            "success": True,
-            "stage": stage.to_dict(),
-            "volume_state": vol_state.to_dict(),
-            "relation": relation.to_dict(),
-            "signal_output": signal.to_output_dict(""),
-            "volume_price_detail": self._build_detail(stage, vol_state, relation),
-        }
+            return {
+                "success": True,
+                "stage": stage.to_dict(),
+                "volume_state": vol_state.to_dict(),
+                "relation": relation.to_dict(),
+                "signal_output": signal.to_output_dict(""),
+                "volume_price_detail": self._build_detail(stage, vol_state, relation),
+            }
 
     def _build_detail(self, stage, vol_state, relation):
         return {"阶段判定": stage.to_dict(), "成交量状态": vol_state.to_dict(), "量价关系": relation.to_dict()}

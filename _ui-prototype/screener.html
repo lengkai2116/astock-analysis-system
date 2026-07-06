@@ -211,9 +211,10 @@
         <div id="screen-loading" style="display:none;text-align:center;padding:var(--space-12);color:var(--text-muted);font-size:13px;">⏳ 正在筛选中，请稍候...</div>
         <div id="results-table" style="display:none;">
           <table class="table">
-            <tr><th>代码</th><th>名称</th><th>最新价</th><th>综合评分</th><th>评级</th><th>触发信号</th><th>自选</th><th></th></tr>
+            <tr><th>代码</th><th>名称</th><th>行业</th><th>昨收</th><th>涨跌幅</th><th>综合评分</th><th>评级</th><th>触发信号</th><th>操作</th></tr>
             <tbody id="results-body"></tbody>
           </table>
+          <div style="font-size:10px;color:var(--text-muted);padding:4px 8px;text-align:right;">* 价格/涨跌幅为最近交易日收盘数据（日线），非实时行情</div>
         </div>
       </div>
 
@@ -267,7 +268,7 @@
 
 <script>
 // ── API 基地址 ──
-var API_BASE = 'http://localhost:15003';
+var API_BASE = '';
 
 // ── 权重调整 ──
 function adjWeight(btn, delta) {
@@ -435,27 +436,41 @@ function renderResults(data) {
   // 渲染结果表
   var body = document.getElementById('results-body');
   if (_screenResults.length === 0) {
-    body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:var(--space-12);color:var(--text-muted);">当前无满足条件的股票，请调整筛选参数</td></tr>';
+    body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:var(--space-12);color:var(--text-muted);">当前无满足条件的股票，请调整筛选参数</td></tr>';
     return;
   }
 
   var html = '';
+  var gradeLabels = {S:'🔥 强烈推荐',A:'✅ 推荐',B:'👀 关注',C:'⚠️ 谨慎',D:'❌ 回避'};
   _screenResults.forEach(function(r) {
     var code = r.symbol || r.ts_code || '';
     var name = r.name || '';
+    var industry = r.industry || '—';
     var price = r.close != null ? '¥' + r.close.toFixed(2) : '—';
+    // 涨跌颜色
+    var pct = r.pct_chg;
+    var pctDisplay = '—';
+    var pctColor = 'var(--text-muted)';
+    if (pct != null) {
+      var pctNum = parseFloat(pct);
+      if (pctNum > 0) { pctColor = '#e74c3c'; pctDisplay = '+' + pctNum.toFixed(2) + '%'; }
+      else if (pctNum < 0) { pctColor = '#27ae60'; pctDisplay = pctNum.toFixed(2) + '%'; }
+      else { pctDisplay = '0.00%'; }
+    }
     var score = r.score || 0;
-    var gradeLabel = r.grade_label || '';
-    var triggers = r.phase || '';
+    var grade = gradeLabels[r.grade] || r.grade_label || '';
+    var triggers = (r.triggers && Array.isArray(r.triggers))
+      ? r.triggers.join(', ') : (r.phase || '');
     var tagClass = score >= 75 ? 'tag-bullish' : (score >= 50 ? 'tag-watch' : 'tag-neutral');
     html += '<tr class="clickable" onclick="showDetail(\'' + code + '\')">'
       + '<td>' + code + '</td>'
       + '<td>' + name + '</td>'
-      + '<td>' + price + '</td>'
+      + '<td style="font-size:12px;">' + industry + '</td>'
+      + '<td style="font-size:12px;">' + price + '</td>'
+      + '<td style="color:' + pctColor + ';font-weight:600;font-size:13px;">' + pctDisplay + '</td>'
       + '<td><span class="tag ' + tagClass + '">' + score + '</span></td>'
-      + '<td>' + gradeLabel + '</td>'
-      + '<td><span class="tag ' + tagClass + '">' + triggers + '</span></td>'
-      + '<td><span style="color:var(--text-muted);">☆</span></td>'
+      + '<td>' + grade + '</td>'
+      + '<td><span class="tag ' + tagClass + '" style="font-size:11px;">' + (triggers.length > 12 ? triggers.substr(0,12) + '…' : triggers) + '</span></td>'
       + '<td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>';
   });
   body.innerHTML = html;
@@ -474,21 +489,21 @@ function showDetail(code) {
   if (!d) return;
   document.getElementById('modal-stock').textContent = code + ' ' + (d.name || '');
 
-  var html = '<div style="margin-bottom:var(--space-12);"><table class="table"><tr><th>策略</th><th>输出</th></tr>';
   var score = d.score || 0;
-  html += '<tr><td>🧩 综合评分</td><td>' + score + ' 分 · ' + (d.grade_label || '') + '</td></tr>';
-  html += '<tr><td>📊 主力阶段</td><td>' + (d.phase || '') + '</td></tr>';
-  if (d.asr != null) html += '<tr><td>📈 ASR</td><td>' + d.asr + '</td></tr>';
-  if (d.concentration != null) html += '<tr><td>🎯 集中度</td><td>' + d.concentration + '</td></tr>';
-  if (d.volume_ratio != null) html += '<tr><td>📊 量比</td><td>' + d.volume_ratio + '</td></tr>';
-  if (d.rsi != null) html += '<tr><td>📉 RSI</td><td>' + d.rsi + '</td></tr>';
+  var reasons = (d.reasons && Array.isArray(d.reasons)) ? d.reasons : [];
+  var sd = d.strategy_detail || {};
+
+  html += '<div style="margin-bottom:var(--space-12);"><table class="table"><tr><th>策略</th><th>输出</th></tr>';
+  html += '<tr><td>🧩 综合评分</td><td>' + score + ' 分 · ' + (gradeLabels[d.grade] || '') + '</td></tr>';
+  if (sd.chanlun) html += '<tr><td>📐 缠论</td><td>方向:' + sd.chanlun.direction + ' 评分:' + (sd.chanlun.score||'') + ' 信号:' + (sd.chanlun.signal||'') + '</td></tr>';
+  if (sd.volume_price) html += '<tr><td>📊 量价</td><td>方向:' + sd.volume_price.direction + ' 评分:' + (sd.volume_price.score||'') + ' 信号:' + (sd.volume_price.signal||'') + '</td></tr>';
+  if (sd.factor) html += '<tr><td>🎯 因子</td><td>' + (sd.factor.combination_note||'') + ' 评分:' + (sd.factor.score||'') + '</td></tr>';
   html += '</table></div>';
-  html += '<h4 style="font-size:13px;margin-bottom:var(--space-8);">📝 选股理由</h4>'
-    + '<ul style="padding-left:var(--space-16);">'
-    + '<li>L1 风险剔除通过 · L2 主力识别通过 · L3 策略验证通过</li>'
-    + '<li>评分: ' + score + ' / 100</li>'
-    + '<li>主力阶段: ' + (d.phase || '—') + '</li>'
-    + '</ul>';
+  if (reasons.length > 0) {
+    html += '<h4 style="font-size:13px;margin-bottom:var(--space-8);">📝 选股理由</h4><ul style="padding-left:var(--space-16);">';
+    reasons.forEach(function(r) { html += '<li>' + r + '</li>'; });
+    html += '</ul>';
+  }
   html += '<div style="margin-top:var(--space-12);padding:var(--space-8);background:var(--bg-subtle);border-radius:var(--radius-sm);font-size:11px;color:var(--text-muted);">提示：点击下方按钮查看更多操作</div>';
 
   document.getElementById('modal-body').innerHTML = html;

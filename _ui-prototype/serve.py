@@ -48,7 +48,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                 if h in self.headers:
                     req.add_header(h, self.headers[h])
 
-            resp = urllib.request.urlopen(req, timeout=30)
+            resp = urllib.request.urlopen(req, timeout=120)
             self.send_response(resp.status)
             self.send_header('Content-Type', resp.headers.get('Content-Type', 'application/json'))
             self.send_header('Access-Control-Allow-Origin', '*')

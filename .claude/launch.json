@@ -11,15 +11,14 @@
     },
     {
       "name": "flask-backend",
-      "runtimeExecutable": "/Users/kalence/Desktop/01-A股股票分析系统/backend/.venv/bin/python",
       "runtimeArgs": ["run.py", "--port", "5001"],
+      "runtimeExecutable": "/Users/kalence/Desktop/01-A股股票分析系统/backend/.venv/bin/python",
       "cwd": "/Users/kalence/Desktop/01-A股股票分析系统/backend",
       "port": 5001
     },
     {
       "name": "ui-prototype",
       "autoPort": true,
-      "env": {"BACKEND_URL": "http://localhost:5001"},
       "runtimeExecutable": "/Users/kalence/.local/bin/python3.11",
       "runtimeArgs": ["serve.py", "--port", "${PORT}"],
       "cwd": "/Users/kalence/Desktop/01-A股股票分析系统/_ui-prototype",

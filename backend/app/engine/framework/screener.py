@@ -10,58 +10,9 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import pandas as pd
 import numpy as np
-import requests
-from functools import lru_cache
-import os
-from dotenv import load_dotenv
 
 from . import UniverseSelectionModel, Algorithm
 from .chip_strategy import ChipUniverseSelectionModel, ChipScorer
-
-
-# ── Tushare Pro API 辅助函数 ──
-@lru_cache(maxsize=1)
-def _get_tushare_token() -> Optional[str]:
-    load_dotenv()
-    load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '..', '.env.local'))
-    return os.getenv('TUSHARE_TOKEN')
-
-
-def _tushare_pro(api_name: str, params: dict, fields: str) -> Optional[dict]:
-    token = _get_tushare_token()
-    if not token:
-        return None
-    try:
-        resp = requests.post('http://api.tushare.pro', json={
-            'api_name': api_name, 'token': token,
-            'params': params, 'fields': fields
-        }, timeout=10)
-        data = resp.json()
-        if data.get('code') == 0 and data.get('data', {}).get('items'):
-            return data['data']
-    except Exception:
-        pass
-    return None
-
-
-@lru_cache(maxsize=2048)
-def _fetch_stock_name(symbol: str) -> Optional[str]:
-    result = _tushare_pro('stock_basic',
-        {'ts_code': symbol, 'list_status': ''},
-        'ts_code,name')
-    if result and result['items']:
-        for item in result['items']:
-            if item[0] == symbol:
-                return str(item[1])
-    return None
-
-
-@lru_cache(maxsize=2048)
-def _is_st_stock(symbol: str) -> Optional[bool]:
-    name = _fetch_stock_name(symbol)
-    if name:
-        return '*ST' in name or 'ST' in name or '退市' in name or 'SST' in name
-    return None
 
 import logging
 logger = logging.getLogger(__name__)
@@ -130,7 +81,13 @@ class DarwinRiskFilter:
 
     # ── 规则1: ST/退市 → 名称过滤 ──
     def _filter_st(self, symbol: str, data: pd.DataFrame) -> bool:
-        """过滤ST/退市股票 - 基于股票名称"""
+        """过滤ST/退市股票 - 基于股票名称
+
+        合规路径（244号§2.3 R3）:
+          1. Stock ORM 表（精准，Tushare 同步的官方名称）
+          2. stock_list 缓存（DataManager.get_stock_list）
+          3. 默认通过（避免 HTTP 直调 Tushare API）
+        """
         # 1. 优先从数据库 Stock 表查询（精准）
         try:
             from app.models import Stock
@@ -150,15 +107,7 @@ class DarwinRiskFilter:
                 return False
             return True  # 缓存查到名称且非ST
 
-        # 3. Tushare API 直接查询
-        try:
-            is_st = _is_st_stock(symbol)
-            if is_st is not None:
-                return not is_st  # ST→False(剔除), 非ST→True(通过)
-        except Exception:
-            pass
-
-        # 4. 以上均不可用：默认通过
+        # 3. 以上均不可用：默认通过（历史同期可通过 DataManager 补采 Stock 表）
         return True
 
     # ── 规则2: 低流动性 → 换手率<1% 或 成交额<1000万 ──
@@ -170,7 +119,7 @@ class DarwinRiskFilter:
         # 成交额检查（防数据缺失时最低保障）
         if 'amount' in data.columns:
             avg_amount = data['amount'].tail(20).mean()
-            if avg_amount < 10000000:  # 日均成交额 < 1000万
+            if avg_amount < 10000:  # 日均成交额 < 1000万（amount=千元）
                 return False
         elif 'vol' in data.columns:
             avg_vol = data['vol'].tail(20).mean()
@@ -178,7 +127,7 @@ class DarwinRiskFilter:
                 return False
 
         # 换手率检查（方案G: 阈值 1%）
-        turnover_checked = False
+        # 合规路径（244号§2.3 R3）：从 daily_basic_cache 获取，不直调 Tushare
         try:
             basic_df = self.data_manager.get_cached_daily_basic(
                 symbol,
@@ -190,29 +139,8 @@ class DarwinRiskFilter:
                     avg_tr = float(tr_series.mean())
                     if avg_tr < 1.0:  # 20日均换手率<1% 排除
                         return False
-                    turnover_checked = True
         except Exception:
             pass
-        
-        # Tushare API 回退（缓存为空时）
-        if not turnover_checked:
-            try:
-                today = datetime.now().strftime('%Y%m%d')
-                start = (datetime.now() - pd.Timedelta(days=60)).strftime('%Y%m%d')
-                result = _tushare_pro('daily_basic',
-                    {'ts_code': symbol, 'start_date': start, 'end_date': today},
-                    'trade_date,turnover_rate')
-                if result and result['items']:
-                    fields = result['fields']
-                    tr_idx = fields.index('turnover_rate')
-                    tr_values = [float(item[tr_idx]) for item in result['items']
-                                 if item[tr_idx] is not None]
-                    if len(tr_values) >= 5:
-                        avg_tr = sum(tr_values[-20:]) / min(len(tr_values[-20:]), 20)
-                        if avg_tr < 1.0:
-                            return False
-            except Exception:
-                pass
 
         return True
 
@@ -243,11 +171,11 @@ class DarwinRiskFilter:
         过滤亏损微盘股（三重条件防误杀）
 
         仅当同时满足以下条件时才剔除:
-          - PE_TTM = 0（Tushare亏损标记）
+          - PE_TTM = NULL（Tushare亏损标记，返回NULL而非0值）
           - 流通市值 < 30亿元（小盘）
           - 20日均换手率 < 3%（低流动性）
 
-        金融行业豁免（银行PE常为0）。
+        金融行业豁免（银行PE常偏低）。
         """
         try:
             basic_df = self.data_manager.get_cached_daily_basic(
@@ -259,10 +187,17 @@ class DarwinRiskFilter:
 
             latest = basic_df.iloc[-1]
 
-            # PE_TTM = 0 → 亏损标记
+            # PE_TTM 亏损判断：Tushare 对亏损企业返回 NULL（非"0"值）
+            # NULL/NaN → 视为亏损继续检查；正值 → 有盈利，跳过此规则
             pe_ttm = latest.get('pe_ttm')
-            if pd.isna(pe_ttm) or float(pe_ttm) != 0.0:
-                return True  # PE正常，不适用此规则
+            if not pd.isna(pe_ttm):
+                try:
+                    pe_val = float(pe_ttm)
+                    if pe_val > 0:
+                        return True  # PE为正→有盈利，不适用此规则
+                except (ValueError, TypeError):
+                    pass  # 无法转换为数值→继续检查
+            # 至此：PE=NULL 或 PE<=0 → 可能亏损，继续检查市值和换手率
 
             # 金融行业豁免
             industry = self._get_stock_industry(symbol)
@@ -288,7 +223,13 @@ class DarwinRiskFilter:
 
     # ── 辅助方法 ──
     def _get_stock_name(self, symbol: str) -> Optional[str]:
-        """获取股票名称（缓存）"""
+        """获取股票名称（缓存）
+
+        合规路径（244号§2.3 R3）:
+          1. 内存缓存（本次筛选中已查过的股票）
+          2. DataManager.get_stock_list（从 Stock 表读取）
+          3. 返回 None（不直调 Tushare API）
+        """
         if symbol in self._stock_info_cache:
             return self._stock_info_cache[symbol]
 
@@ -300,15 +241,6 @@ class DarwinRiskFilter:
                     if name:
                         self._stock_info_cache[symbol] = name
                         return name
-        except Exception:
-            pass
-
-        # 3. Tushare API 回退
-        try:
-            name = _fetch_stock_name(symbol)
-            if name:
-                self._stock_info_cache[symbol] = name
-                return name
         except Exception:
             pass
 

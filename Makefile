@@ -4,13 +4,9 @@
 
 # ============ 开发环境 ============
 
-## 构建前端
-dev-build:
-	cd frontend/vue-project && npm ci && npm run build
-
-## 启动前端开发服务器（端口 9000，自动代理 API 到 5001）
+## 启动前端原型服务器（端口 8082，自动代理 API 到 5001）
 dev-frontend:
-	cd frontend/vue-project && npm run dev
+	cd _ui-prototype && python3 serve.py --port 8082
 
 ## 启动后端开发服务器（端口 5001）
 dev-backend:
@@ -20,13 +16,15 @@ dev-backend:
 dev-db:
 	docker compose up -d postgres redis
 
-## 一键启动开发环境（DB + 后端 + 前端）
+## 一键启动开发环境（DB + 后端 + 前端原型）
 dev: dev-db
 	@echo "=== 启动后端 ==="
 	cd backend && python run.py --port 5001 &
 	@sleep 2
-	@echo "=== 启动前端 ==="
-	cd frontend/vue-project && npm run dev
+	@echo "=== 启动前端原型 ==="
+	cd _ui-prototype && python3 serve.py --port 8082 &
+	@sleep 1
+	@echo "✅ 打开 http://localhost:8082"
 
 # ============ Docker 部署 ============
 
@@ -73,7 +71,6 @@ docker-images:
 
 ## 清理构建产物
 clean:
-	rm -rf frontend/vue-project/dist
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete
 
@@ -90,11 +87,10 @@ help:
 	@echo "可用命令："
 	@echo ""
 	@echo "--- 开发环境 ---"
-	@echo "  make dev          — 启动开发环境（DB + 后端 + 前端）"
+	@echo "  make dev          — 启动开发环境（DB + 后端 + 前端原型）"
 	@echo "  make dev-db       — 仅启动数据库"
 	@echo "  make dev-backend  — 仅启动后端"
-	@echo "  make dev-frontend — 仅启动前端"
-	@echo "  make dev-build    — 构建前端产物"
+	@echo "  make dev-frontend — 仅启动前端原型（端口 8082）"
 	@echo ""
 	@echo "--- Docker 部署 ---"
 	@echo "  make docker-build      — 构建全部 Docker 镜像"
@@ -132,10 +128,6 @@ test:
 ## 运行所有质量检查
 check: lint typecheck test
 
-## 前端构建检查
-frontend-check:
-	cd frontend/vue-project && npx vite build --logLevel error
-
 ## 完整的 CI 流水线
-ci: lint typecheck frontend-check
+ci: lint typecheck
 	@echo "✅ CI 全部通过"

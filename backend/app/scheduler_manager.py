@@ -377,7 +377,8 @@ class SchedulerManager:
           - 非交易日 → 跳过
           - 完全无数据 → 全量同步
           - 数据最新日期 < 今日 → 增量同步
-          - 数据已最新 → 跳过
+          - 数据已最新 → 检查单只股票数据完整性（新上市/数据不全股票）
+          - 数据不足 120 日的股票 → 按需触发增量同步
         """
         if not self._app:
             logger.warning("启动补采: 无 app 引用，跳过")
@@ -386,6 +387,13 @@ class SchedulerManager:
             from app.data.enhanced_cache_manager import get_ecm_instance
             from app.utils.trading_hours import is_holiday
             from datetime import date, datetime
+
+            # ── 检查 daily_basic_cache 历史数据完整性（247号方案 §4） ──
+            # 注意：此检查不依赖是否交易日，始终执行
+            try:
+                self._catch_up_daily_basic()
+            except Exception as e:
+                logger.warning(f"启动补采: daily_basic 历史补齐失败（可忽略）: {e}")
 
             today = date.today()
             if is_holiday(datetime.combine(today, datetime.min.time())):
@@ -399,17 +407,104 @@ class SchedulerManager:
             max_date = date_df['trade_date'].iloc[0] if not date_df.empty else None
             if max_date is None:
                 logger.info("=== 启动补采: DuckDB 无数据, 开始全量同步 ===")
+                self.run_daily_sync()
+                self._run_stock_sync_if_needed()
+                return
             elif max_date < today:
                 logger.info(f"=== 启动补采: 数据最新 {max_date}, 早于今日 {today}, 开始增量同步 ===")
-            else:
-                logger.info(f"启动补采: 数据已最新 ({max_date}), 跳过")
-                # 即使数据最新，仍执行 Stock 月度同步启动检查（244号方案 D5）
+                self.run_daily_sync()
                 self._run_stock_sync_if_needed()
                 return
 
-            self.run_daily_sync()
-            # 日终同步后执行 Stock 月度同步启动检查
+            logger.info(f"启动补采: 数据已最新 ({max_date}), 跳过")
+
+            # ── 即使数据全局最新，仍检查数据不足 120 日的股票 ──
+            try:
+                self._replenish_sparse_stocks(ecm, min_days=120)
+            except Exception as e:
+                logger.warning(f"启动补采: 数据补齐失败（可忽略）: {e}")
+
+            # 执行 Stock 月度同步启动检查（244号方案 D5）
             self._run_stock_sync_if_needed()
+
+    _last_replenish_date: 'date' = None  # 上次补采日期，同一自然日不重复
+
+    def _replenish_sparse_stocks(self, ecm, min_days: int = 120, max_stocks: int = 100):
+        """补齐数据不足 min_days 天的股票
+
+        查询 daily_cache 中每条数据的行数，对数据量不足的股票
+        触发按需增量同步。
+
+        过滤逻辑：
+          - 新股/次新股（最早交易日期距今不足 min_days 天）→ 跳过
+          - 同一自然日内已补采过 → 跳过（避免每次重启重复补）
+
+        Args:
+            ecm: EnhancedCacheManager 实例
+            min_days: 最低所需天数
+            max_stocks: 每轮最多补齐的股票数
+        """
+        from datetime import date, timedelta
+        import pandas as pd
+
+        today = date.today()
+
+        # 同一自然日不重复补采（避免多次重启重复触发）
+        if self._last_replenish_date == today:
+            logger.info(f"启动补采: 今日({today})已补采过，跳过")
+            return
+
+        # 查询数据不足的股票，同时取最早和最晚交易日
+        sparse_df = ecm.conn.execute("""
+            SELECT ts_code, COUNT(*) as cnt,
+                   MAX(trade_date) as last_date,
+                   MIN(trade_date) as first_date
+            FROM daily_cache
+            GROUP BY ts_code
+            HAVING cnt < ?
+            ORDER BY cnt ASC
+            LIMIT ?
+        """, [min_days, max_stocks]).fetchdf()
+
+        if sparse_df.empty:
+            logger.info(f"启动补采: 所有股票数据均 >= {min_days} 天，无需补齐")
+            self._last_replenish_date = today
+            return
+
+        # 过滤新股/次新股（上市不足 min_days 天，不可能有足够数据）
+        cutoff_date = pd.Timestamp(today) - pd.Timedelta(days=min_days)
+        pre_filter = len(sparse_df)
+        sparse_df = sparse_df[sparse_df['first_date'] <= cutoff_date].copy()
+        new_listing_skipped = pre_filter - len(sparse_df)
+
+        if sparse_df.empty:
+            logger.info(f"启动补采: {pre_filter} 只数据不足的股票均为新股/次新股（上市不满 {min_days} 天），跳过")
+            self._last_replenish_date = today
+            return
+
+        logger.info(f"启动补采: {pre_filter} 只数据不足，其中新股/次新股 {new_listing_skipped} 只已跳过，实际需补 {len(sparse_df)} 只")
+
+        from app.data import DataManager
+        dm = DataManager()
+
+        replenished = 0
+        for _, row in sparse_df.iterrows():
+            ts_code = row['ts_code']
+            last_date = row['last_date']
+            try:
+                if pd.isna(last_date):
+                    cnt = dm.sync_daily_data(ts_code, use_cache=False)
+                else:
+                    start_str = last_date.strftime('%Y%m%d') if hasattr(last_date, 'strftime') else str(last_date).replace('-', '')
+                    cnt = dm.sync_daily_data(ts_code, use_cache=False, start_date=start_str)
+                if cnt > 0:
+                    replenished += 1
+                    logger.info(f"启动补采: {ts_code} 补齐 {cnt} 条（现有 {row['cnt']} 天）")
+            except Exception as e:
+                logger.debug(f"启动补采: {ts_code} 补齐失败: {e}")
+
+        logger.info(f"启动补采完成: 补齐 {replenished}/{len(sparse_df)} 只股票（跳过 {new_listing_skipped} 只新股）")
+        self._last_replenish_date = today
 
     def _run_stock_sync_if_needed(self):
         """启动时检查 Stock 表是否需要月度更新（244号方案 A7）"""
@@ -433,6 +528,27 @@ class SchedulerManager:
             from app import db
             db.session.rollback()
             logger.warning(f"Stock 月度同步启动检查失败: {e}")
+
+    def _catch_up_daily_basic(self):
+        """检查 daily_basic_cache 历史数据完整性，不足时触发回填（247号方案 §4）"""
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        try:
+            date_count = ecm.conn.execute(
+                "SELECT COUNT(DISTINCT trade_date) FROM daily_basic_cache"
+            ).fetchone()[0]
+        except Exception:
+            date_count = 0
+
+        if date_count >= 60:
+            logger.info(f"daily_basic 历史检查: {date_count} 天，满足要求")
+            return
+
+        logger.info(f"daily_basic 历史检查: 仅 {date_count} 天，不足 60 天，触发历史回填...")
+        from app.data import DataManager
+        dm = DataManager()
+        count = dm.sync_daily_basic_history(max_days=120)
+        logger.info(f"daily_basic 历史回填完成: {count} 条")
 
     def _sync_by_type(self, data_type: str, mode: str) -> int:
         """按数据类型执行同步"""
