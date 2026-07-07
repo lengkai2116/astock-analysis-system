@@ -1,20 +1,11 @@
 """
-Gunicorn 生产配置 — 243号方案
-==============================
-- 4 worker 进程（eventlet 异步模式）
-- on_starting hook：启动 AkshareCollector 采集器
-- 通过 Redis pub/sub 实现多 worker SocketIO 消息广播
-"""
+Gunicorn 生产配置 — 243号方案（2026-07-07 修订）
+=============================================
+⚠️ 当前不使用 Gunicorn。启动方式：run.py（socketio.run + eventlet）
+Gunicorn 后续版本（26.x）移除了 eventlet worker 支持，
+待 gevent-websocket 方案验证后恢复使用。
 
-import os
-import multiprocessing
-
-# ── Worker 配置 ────────────────────────────────────────────
-
-# 检测 CPU 核心数，默认 4
-workers = int(os.environ.get('GUNICORN_WORKERS', '4'))
-# 使用 gevent（生产环境最稳定，与 Flask-SocketIO 兼容）
-worker_class = 'gevent'
+保留此文件供未来参考。"""
 # 每个 worker 的最大连接数
 worker_connections = 1000
 # 超时时间（秒）
@@ -60,11 +51,13 @@ def on_starting(server):
         logger.warning(f"AkshareCollector 启动失败（盘中数据推送不可用）: {e}")
 
     try:
-        from app.data.realtime_pg import init_realtime_pg
-        init_realtime_pg()
-        logger.info("PostgreSQL 盘中实时连接池已初始化")
+        from app.data.mootdx_collector import mootdx_collector
+        mootdx_collector.start()
+        atexit.register(lambda: mootdx_collector.stop())
+        logger.info("MootdxCollector 已启动（on_starting hook, TCP 直连）")
     except Exception as e:
-        logger.warning(f"PG 连接池初始化失败: {e}")
+        logger.warning(f"MootdxCollector 启动失败: {e}")
+
 
 
 def when_ready(server):
@@ -82,5 +75,11 @@ def on_exit(server):
         from app.data.akshare_collector import akshare_collector
         akshare_collector.stop()
         logger.info("AkshareCollector 已停止")
+    except Exception:
+        pass
+    try:
+        from app.data.mootdx_collector import mootdx_collector
+        mootdx_collector.stop()
+        logger.info("MootdxCollector 已停止")
     except Exception:
         pass

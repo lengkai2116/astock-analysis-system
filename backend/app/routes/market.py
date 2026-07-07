@@ -4,7 +4,7 @@
 """
 from flask import Blueprint, request, jsonify
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.services.market_service import MarketService
 from app.services.dashboard_service import DashboardService
 from app.utils.error_handlers import handle_exceptions
@@ -13,6 +13,17 @@ market_bp = Blueprint('market', __name__)
 market_service = MarketService()
 dashboard_service = DashboardService()
 logger = logging.getLogger(__name__)
+
+
+def _sf(val, default=None):
+    """safe float: 处理 None/NaN，缺失返回 default"""
+    if val is None:
+        return default
+    try:
+        v = float(val)
+        return v if v == v else default
+    except (TypeError, ValueError):
+        return default
 
 @market_bp.route('/api/v3/stocks', methods=['GET'])
 @market_bp.route('/api/v1/stocks', methods=['GET'])
@@ -98,109 +109,164 @@ def _get_cache_level() -> str:
 @handle_exceptions
 def get_stock_quote(ts_code):
     """
-    E07: 个股行情综合端点 — 聚合4个Tushare数据源返回28字段
+    E07: 个股行情综合端点 — ECM缓存优先，Tushare降级（252号方案 Phase 5）
 
     数据源:
-      1. pro.daily()        → open/high/low/close/pre_close/volume/amount/pct_chg
-      2. pro.daily_basic()  → turnover_rate/volume_ratio/pe_ttm/pb/total_mv/circ_mv
-      3. pro.stk_limit()    → high_limit/low_limit
-      4. pro.fina_indicator() → eps/bvps (5000积分)
+      1. daily_cache        → open/high/low/close/pre_close/volume/amount/pct_chg
+      2. daily_basic_cache  → turnover_rate/volume_ratio/pe_ttm/pb/total_mv/circ_mv
+      3. stk_limit_cache    → high_limit/low_limit
+      4. fina_indicator_cache → eps/bvps
+      5. adj_factor_cache   → 复权收盘价
 
-    缓存: realtime(3s 盘中) / analysis(30min 盘后), key=`quote:{ts_code}`
+    缓存: TieredMemoryCache reaaltime(3s盘中) / analysis(30min盘后)
     错误: 全源失败 → 503 DataUnavailable
     """
-    from app.data.tushare_provider import TushareProvider
     from app.data.memory_cache import TieredMemoryCache
-    from datetime import timedelta
+    from app.data.enhanced_cache_manager import get_ecm_instance
 
     cache = TieredMemoryCache()
     cache_key = f'quote:{ts_code}'
     cache_level = _get_cache_level()
 
-    # 尝试缓存
     cached = cache.get(cache_key, cache_level)
     if cached is not None:
         return jsonify({'code': 0, 'data': cached})
 
-    tp = TushareProvider()
-    if not tp.pro:
-        return jsonify({
-            'code': -1, 'message': 'Tushare 数据源不可用',
-            'error_type': 'DataUnavailable',
-        }), 503
+    ecm = get_ecm_instance()
+    tp = None
+    _lazy_tp = None
 
-    # 1. 获取最新日线数据
-    start = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
-    end = datetime.now().strftime('%Y%m%d')
-    daily_list = tp.get_daily_data(ts_code, start, end)
-    if not daily_list:
+    def _get_tp():
+        nonlocal tp
+        if tp is None:
+            from app.data.tushare_provider import TushareProvider
+            tp = TushareProvider()
+        return tp
+
+    # ── 1. 日线：ECM daily_cache 优先 ────────────────────
+    end_dt = datetime.now()
+    start_dt = end_dt - timedelta(days=30)
+    start_str = start_dt.strftime('%Y%m%d')
+    end_str = end_dt.strftime('%Y%m%d')
+
+    daily_df = ecm.get_cached_daily(ts_code, start_date=start_str, end_date=end_str)
+    daily_fallback = daily_df.empty
+    if daily_df.empty:
+        _tp = _get_tp()
+        if _tp.pro:
+            raw = _tp.get_daily_data(ts_code, start_str, end_str)
+            if raw:
+                import pandas as pd
+                daily_df = pd.DataFrame(raw)
+
+    if daily_df.empty:
         return jsonify({
             'code': -1, 'message': '个股行情数据不可用',
             'error_type': 'DataUnavailable',
         }), 503
 
-    latest = daily_list[-1]
-    trade_date = latest['trade_date']
+    if isinstance(daily_df, pd.DataFrame):
+        # ECM 返回已排序，取最后一条
+        latest = daily_df.iloc[-1].to_dict()
+    else:
+        latest = daily_df[-1]
 
-    open_price = latest.get('open')
-    high = latest.get('high')
-    low = latest.get('low')
-    close = latest.get('close')
-    pre_close = latest.get('pre_close')
-    vol = latest.get('vol')
-    amount = latest.get('amount')
-    pct_chg = latest.get('pct_chg')
+    trade_date = latest.get('trade_date')
+    if hasattr(trade_date, 'strftime'):
+        trade_date = trade_date.strftime('%Y%m%d')
+    else:
+        trade_date = str(trade_date).replace('-', '')
 
-    # avg_price = amount / (vol × 100)
+    open_price = _sf(latest.get('open'))
+    high = _sf(latest.get('high'))
+    low = _sf(latest.get('low'))
+    close = _sf(latest.get('close'))
+    pre_close = _sf(latest.get('pre_close'))
+    vol = _sf(latest.get('vol', latest.get('volume', 0)))
+    amount = _sf(latest.get('amount'))
+    pct_chg = _sf(latest.get('pct_chg'))
+
     avg_price = round(amount / (vol * 100), 2) if (amount and vol and vol > 0) else None
 
-    # 2. daily_basic
+    # ── 2. daily_basic：ECM → Tushare ────────────────────
     turnover_rate = volume_ratio = pe_ttm = pb = total_mv = circ_mv = None
-    try:
-        basic_list = tp.get_daily_basic(ts_code, start, end)
-        if basic_list:
-            basic = basic_list[-1]
-            turnover_rate = basic.get('turnover_rate')
-            volume_ratio = basic.get('volume_ratio')
-            pe_ttm = basic.get('pe_ttm')
-            pb = basic.get('pb')
-            total_mv = basic.get('total_mv')
-            circ_mv = basic.get('circ_mv')
-    except Exception as e:
-        logger.warning(f"daily_basic 获取失败 ({ts_code}): {e}")
+    basic_df = ecm.get_cached_daily_basic(ts_code, start_date=start_str, end_date=end_str)
+    if not basic_df.empty:
+        basic = basic_df.iloc[-1].to_dict()
+        turnover_rate = basic.get('turnover_rate')
+        volume_ratio = basic.get('volume_ratio')
+        pe_ttm = basic.get('pe_ttm')
+        pb = basic.get('pb')
+        total_mv = basic.get('total_mv')
+        circ_mv = basic.get('circ_mv')
+    else:
+        try:
+            _tp = _get_tp()
+            basic_list = _tp.get_daily_basic(ts_code, start_str, end_str)
+            if basic_list:
+                basic = basic_list[-1]
+                turnover_rate = basic.get('turnover_rate')
+                volume_ratio = basic.get('volume_ratio')
+                pe_ttm = basic.get('pe_ttm')
+                pb = basic.get('pb')
+                total_mv = basic.get('total_mv')
+                circ_mv = basic.get('circ_mv')
+        except Exception as e:
+            logger.warning(f"daily_basic 获取失败 ({ts_code}): {e}")
 
-    # 3. stk_limit
+    # ── 3. 涨跌停：ECM → Tushare ────────────────────────
     high_limit = low_limit = None
-    try:
-        limit_all = tp.get_stk_limit(trade_date)
-        if limit_all:
-            limit_row = next((r for r in limit_all if r.get('ts_code') == ts_code), None)
-            if limit_row:
-                high_limit = limit_row.get('high_limit')
-                low_limit = limit_row.get('low_limit')
-    except Exception as e:
-        logger.warning(f"stk_limit 获取失败 ({ts_code}): {e}")
+    limit_df = ecm.get_cached_stk_limit(trade_date)
+    if not limit_df.empty:
+        row = limit_df[limit_df['ts_code'] == ts_code]
+        if not row.empty:
+            high_limit = _sf(row.iloc[0].get('high_limit'))
+            low_limit = _sf(row.iloc[0].get('low_limit'))
+    else:
+        try:
+            _tp = _get_tp()
+            limit_all = _tp.get_stk_limit(trade_date)
+            if limit_all:
+                limit_row = next((r for r in limit_all if r.get('ts_code') == ts_code), None)
+                if limit_row:
+                    high_limit = _sf(limit_row.get('high_limit'))
+                    low_limit = _sf(limit_row.get('low_limit'))
+        except Exception as e:
+            logger.warning(f"stk_limit 获取失败 ({ts_code}): {e}")
 
-    # 4. fina_indicator (5000积分)
+    # ── 4. 财务指标：ECM → Tushare ──────────────────────
     eps = bvps = None
-    try:
-        fina_list = tp.get_fina_indicator(ts_code)
-        if fina_list:
-            fina = fina_list[-1]
-            eps = fina.get('eps')
-            bvps = fina.get('bvps')
-    except Exception as e:
-        logger.warning(f"fina_indicator 获取失败 ({ts_code}): {e}")
+    fina_df = ecm.get_cached_fina_indicator(ts_code)
+    if not fina_df.empty:
+        fina = fina_df.iloc[-1].to_dict()
+        eps = fina.get('eps')
+        bvps = fina.get('bvps')
+    else:
+        try:
+            _tp = _get_tp()
+            fina_list = _tp.get_fina_indicator(ts_code)
+            if fina_list:
+                fina = fina_list[-1]
+                eps = fina.get('eps')
+                bvps = fina.get('bvps')
+        except Exception as e:
+            logger.warning(f"fina_indicator 获取失败 ({ts_code}): {e}")
 
-    # 5. 复权因子
+    # ── 5. 复权因子：ECM → Tushare ──────────────────────
     adj_close = None
-    try:
-        adj_list = tp.get_adj_factor(ts_code, start, end)
-        if adj_list:
-            adj_latest = adj_list[-1]
-            adj_close = round(close * adj_latest.get('adj_factor', 1), 2) if close else None
-    except Exception as e:
-        logger.warning(f"adj_factor 获取失败 ({ts_code}): {e}")
+    adj_df = ecm.get_cached_adj_factor(ts_code, start_date=start_str, end_date=end_str)
+    if not adj_df.empty:
+        adj_factor = _sf(adj_df.iloc[-1].get('adj_factor', 1))
+        adj_close = round(_sf(close) * adj_factor, 2) if close and adj_factor else None
+    else:
+        try:
+            _tp = _get_tp()
+            adj_list = _tp.get_adj_factor(ts_code, start_str, end_str)
+            if adj_list:
+                adj_factor = _sf(adj_list[-1].get('adj_factor', 1))
+                adj_close = round(_sf(close) * adj_factor, 2) if close and adj_factor else None
+        except Exception as e:
+            logger.warning(f"adj_factor 获取失败 ({ts_code}): {e}")
 
     data = {
         'ts_code': ts_code,
@@ -241,14 +307,14 @@ def get_stock_quote(ts_code):
 @handle_exceptions
 def get_stock_moneyflow(ts_code):
     """
-    E10: 个股资金流向端点 — 聚合最近5交易日超大单/大单/中单/小单净额
+    E10: 个股资金流向端点 — ECM moneyflow_cache 优先（252号方案 Phase 5）
 
-    数据源: Tushare pro.moneyflow() — 按股票+日期查询
-    缓存: analysis(30min), key=`moneyflow:{ts_code}`
+    数据源: moneyflow_cache（全市场日终同步，T+1可用）
+    缓存: TieredMemoryCache analysis(30min)
     错误: 全源失败 → 503 DataUnavailable
     """
     from app.data.memory_cache import TieredMemoryCache
-    from datetime import timedelta
+    from app.data.enhanced_cache_manager import get_ecm_instance
 
     cache = TieredMemoryCache()
     cache_key = f'moneyflow:{ts_code}'
@@ -257,25 +323,50 @@ def get_stock_moneyflow(ts_code):
     if cached is not None:
         return jsonify({'code': 0, 'data': cached})
 
-    from app.data.tushare_provider import TushareProvider
-    tp = TushareProvider()
-    if not tp.pro:
+    ecm = get_ecm_instance()
+
+    # 从 moneyflow_cache 取最近30日数据
+    end_dt = datetime.now()
+    start_dt = end_dt - timedelta(days=30)
+    mf_df = ecm.get_cached_moneyflow(
+        ts_code=ts_code,
+        start_date=start_dt.strftime('%Y-%m-%d'),
+        end_date=end_dt.strftime('%Y-%m-%d')
+    )
+
+    # 如果 ECM 无数据，降级 Tushare
+    if mf_df.empty:
+        try:
+            from app.data.tushare_provider import TushareProvider
+            tp = TushareProvider()
+            if tp.pro:
+                records = []
+                for i in range(30):
+                    d = (end_dt - timedelta(days=i)).strftime('%Y%m%d')
+                    raw = tp.get_moneyflow(trade_date=d)
+                    if raw:
+                        row = next((r for r in raw if r.get('ts_code') == ts_code), None)
+                        if row:
+                            records.append(row)
+                            if len(records) >= 5:
+                                break
+                if records:
+                    return jsonify({'code': 0, 'data': _build_moneyflow_response(ts_code, records)})
+        except Exception as e:
+            logger.warning(f"资金流向 Tushare 降级失败 ({ts_code}): {e}")
         return jsonify({
-            'code': -1, 'message': 'Tushare 数据源不可用',
+            'code': -1, 'message': '资金流向数据不可用',
             'error_type': 'DataUnavailable',
         }), 503
 
-    # 最近30日内取有数据的5天
+    # 从 DataFrame 提取最近5个交易日
+    mf_df = mf_df.sort_values('trade_date', ascending=False)
+    unique_dates = mf_df['trade_date'].unique()[:5]
     records = []
-    for i in range(30):
-        d = (datetime.now() - timedelta(days=i)).strftime('%Y%m%d')
-        raw = tp.get_moneyflow(trade_date=d)
-        if raw:
-            row = next((r for r in raw if r.get('ts_code') == ts_code), None)
-            if row:
-                records.append(row)
-                if len(records) >= 5:
-                    break
+    for d in unique_dates:
+        day = mf_df[mf_df['trade_date'] == d]
+        if not day.empty:
+            records.append(day.iloc[0].to_dict())
 
     if not records:
         return jsonify({
@@ -283,53 +374,9 @@ def get_stock_moneyflow(ts_code):
             'error_type': 'DataUnavailable',
         }), 503
 
-    def _net(buy_key, sell_key, rec) -> float:
-        buy = float(rec.get(buy_key, 0) or 0)
-        sell = float(rec.get(sell_key, 0) or 0)
-        return round(buy - sell, 2)
-
-    latest_rec = records[-1]
-    xl_net = _net('buy_elg_amount', 'sell_elg_amount', latest_rec)
-    lg_net = _net('buy_lg_amount', 'sell_lg_amount', latest_rec)
-    md_net = _net('buy_md_amount', 'sell_md_amount', latest_rec)
-    sm_net = _net('buy_sm_amount', 'sell_sm_amount', latest_rec)
-    net_amount = round(xl_net + lg_net + md_net + sm_net, 2)
-
-    main_force = xl_net + lg_net
-    total_abs = abs(xl_net) + abs(lg_net) + abs(md_net) + abs(sm_net)
-    main_force_pct = round(main_force / total_abs * 100, 2) if total_abs > 0 else 0.0
-
-    history_5day = []
-    for rec in records[:-1]:
-        history_5day.append({
-            'date': rec['trade_date'],
-            'net_amount': round(
-                _net('buy_elg_amount', 'sell_elg_amount', rec)
-                + _net('buy_lg_amount', 'sell_lg_amount', rec)
-                + _net('buy_md_amount', 'sell_md_amount', rec)
-                + _net('buy_sm_amount', 'sell_sm_amount', rec),
-                2
-            ),
-        })
-
-    data = {
-        'ts_code': ts_code,
-        'trade_date': latest_rec['trade_date'],
-        'latest': {
-            'net_amount': net_amount,
-            'sub_orders': {
-                'xl_order_net': xl_net,
-                'lg_order_net': lg_net,
-                'md_order_net': md_net,
-                'sm_order_net': sm_net,
-            },
-            'main_force_pct': main_force_pct,
-        },
-        'history_5day': history_5day,
-    }
-
-    cache.set(cache_key, data, 'analysis')
-    return jsonify({'code': 0, 'data': data})
+    result = _build_moneyflow_response(ts_code, records)
+    cache.set(cache_key, result, 'analysis')
+    return jsonify({'code': 0, 'data': result})
 
 
 @market_bp.route('/api/v3/market/overview', methods=['GET'])
@@ -349,3 +396,50 @@ def get_market_overview():
 @market_bp.route('/api/v1/market/overview', methods=['GET'])
 def get_market_overview_v1():
     return get_market_overview()
+
+
+def _build_moneyflow_response(ts_code: str, records: list) -> dict:
+    """从资金流向记录构建 E10 统一响应格式"""
+    def _net(buy_key, sell_key, rec) -> float:
+        buy = float(rec.get(buy_key, 0) or 0)
+        sell = float(rec.get(sell_key, 0) or 0)
+        return round(buy - sell, 2)
+
+    latest_rec = records[-1]
+    xl_net = _net('buy_elg_amount', 'sell_elg_amount', latest_rec)
+    lg_net = _net('buy_lg_amount', 'sell_lg_amount', latest_rec)
+    md_net = _net('buy_md_amount', 'sell_md_amount', latest_rec)
+    sm_net = _net('buy_sm_amount', 'sell_sm_amount', latest_rec)
+    net_amount = round(xl_net + lg_net + md_net + sm_net, 2)
+    main_force = xl_net + lg_net
+    total_abs = abs(xl_net) + abs(lg_net) + abs(md_net) + abs(sm_net)
+    main_force_pct = round(main_force / total_abs * 100, 2) if total_abs > 0 else 0.0
+
+    history_5day = []
+    for rec in records[:-1]:
+        history_5day.append({
+            'date': rec['trade_date'],
+            'net_amount': round(
+                _net('buy_elg_amount', 'sell_elg_amount', rec)
+                + _net('buy_lg_amount', 'sell_lg_amount', rec)
+                + _net('buy_md_amount', 'sell_md_amount', rec)
+                + _net('buy_sm_amount', 'sell_sm_amount', rec),
+                2
+            ),
+        })
+
+    return {
+        'ts_code': ts_code,
+        'trade_date': latest_rec['trade_date'],
+        'latest': {
+            'net_amount': net_amount,
+            'sub_orders': {
+                'xl_order_net': xl_net,
+                'lg_order_net': lg_net,
+                'md_order_net': md_net,
+                'sm_order_net': sm_net,
+            },
+            'main_force_pct': main_force_pct,
+        },
+        'history_5day': history_5day,
+    }

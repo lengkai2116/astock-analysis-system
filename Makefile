@@ -8,9 +8,9 @@
 dev-frontend:
 	cd _ui-prototype && python3 serve.py --port 8082
 
-## 启动后端开发服务器（端口 5001）
+## 启动后端开发服务器（端口 5001，Gunicorn + sync worker）
 dev-backend:
-	cd backend && python run.py --port 5001
+	cd backend && python -m gunicorn -c gunicorn_config.py "app:create_app()"
 
 ## 启动数据库依赖（PostgreSQL + Redis）
 dev-db:

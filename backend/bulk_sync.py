@@ -67,10 +67,10 @@ def bulk_sync_with_progress(limit=None, shuffle=True, skip_existing=True):
             try:
                 # 检查 DuckDB 是否已有数据（244号方案：取代 PG DailyData 检查）
                 if skip_existing:
-                    count_df = ecm.conn.execute(
+                    count_df = pd.read_sql(
                         "SELECT COUNT(*) AS cnt FROM daily_cache WHERE ts_code = ?",
                         [stock.ts_code]
-                    ).fetchdf()
+                    , ecm.conn)
                     existing_count = int(count_df['cnt'].iloc[0]) if not count_df.empty else 0
                     if existing_count > 100:  # 已有超过100天数据就跳过
                         print(f"{idx:<6} {stock.ts_code:<12} {stock.name:<10} {'已存在':<8} ⏭️ 跳过")

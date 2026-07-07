@@ -1,5 +1,5 @@
 """
-分钟级数据 API 路由 — 151-P1-1
+分钟级数据 API 路由 — 151-P1-1 / 252号方案
 """
 import logging
 from app.utils.error_handlers import handle_exceptions
@@ -16,10 +16,18 @@ def get_minute_kline(ts_code):
     freq = request.args.get('freq', '15min')
     days_back = request.args.get('days_back', '5')
     try:
+        # 252号方案 Phase 1：优先从 ECM minute_kline_cache 读取
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        cache_df = minute_mgr.get_cached_minute(ts_code, freq)
+        if cache_df is not None and len(cache_df) > 0:
+            return jsonify({'code': 0, 'data': cache_df, 'total': len(cache_df), 'source': 'cache'})
+
+        # 降级：Tushare/AKShare 直调
         data = minute_mgr.get_minute_data(
             ts_code, freq=freq, days_back=int(days_back)
         )
-        return jsonify({'code': 0, 'data': data, 'total': len(data)})
+        return jsonify({'code': 0, 'data': data, 'total': len(data), 'source': 'api'})
     except Exception as e:
         logger.error(f"分钟数据获取失败: {e}")
         return jsonify({'code': -1, 'msg': str(e), 'data': []})

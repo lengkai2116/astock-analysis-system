@@ -48,8 +48,8 @@ def _get_db_status():
         return {"status": "unhealthy", "latency_ms": 0, "type": "SQLite", "error": str(e)}
 
 
-def _get_duckdb_status():
-    """检查 DuckDB 缓存状态"""
+def _get_sqlite_cache_status():
+    """检查 SQLite WAL 缓存状态（250号方案替代 DuckDB）"""
     try:
         from app.data.enhanced_cache_manager import get_ecm_instance
         ecm = get_ecm_instance()
@@ -62,11 +62,10 @@ def _get_duckdb_status():
             "status": "healthy" if stats.get("enhanced_hits_duckdb", 0) > 0 else "empty",
             "latency_ms": 1,
             "cache_size_mb": db_size,
-            "records": stats.get("enhanced_hits_duckdb", 0),
             "daily_count": stats.get("duckdb_daily_count", 0),
             "indicator_count": stats.get("duckdb_indicator_count", 0),
             "hits_total": stats.get("enhanced_hits_duckdb", 0),
-            "hits_duckdb": stats.get("enhanced_hits_duckdb", 0),
+            "storage": "sqlite_wal",
         }
     except Exception as e:
         return {"status": "unhealthy", "latency_ms": 0, "error": str(e)}
@@ -120,21 +119,19 @@ def _get_data_source_status():
 def _get_cache_status():
     """获取缓存状态"""
     try:
-        duckdb_status = _get_duckdb_status()
+        cs = _get_sqlite_cache_status()
         return {
-            "duckdb_file": f"{duckdb_status.get('cache_size_mb', 0)} MB",
-            "daily_cached": duckdb_status.get('records', 0),
-            "indicator_cached": duckdb_status.get('indicator_count', 0),
-            "minute_cached": 0,  # 待分钟数据实现
-            "factor_precompute": "pending",
+            "db_file": f"{cs.get('cache_size_mb', 0)} MB",
+            "daily_cached": cs.get('daily_count', 0),
+            "indicator_cached": cs.get('indicator_count', 0),
+            "storage_type": "sqlite_wal",
             "last_refresh": datetime.now().strftime("%Y-%m-%d %H:%M")
         }
     except Exception as e:
         return {
-            "duckdb_file": "0 MB",
+            "db_file": "0 MB",
             "daily_cached": 0,
-            "minute_cached": 0,
-            "factor_precompute": "unknown",
+            "storage_type": "unknown",
             "last_refresh": "never",
             "error": str(e)
         }
@@ -147,7 +144,7 @@ def health_check():
     from app import db
 
     db_status = _get_db_status()
-    duckdb_status = _get_duckdb_status()
+    cache_status = _get_sqlite_cache_status()
     ws_status = _get_ws_status()
     data_sources = _get_data_source_status()
     cache = _get_cache_status()
@@ -189,11 +186,11 @@ def health_check():
                     "ttl": "3600s"
                 },
                 {
-                    "name": "DuckDB (缓存)",
-                    "status": duckdb_status.get('status'),
-                    "latency": duckdb_status.get('latency_ms', 0),
-                    "records": duckdb_status.get('records', 0),
-                    "cache_size_mb": duckdb_status.get('cache_size_mb', 0)
+                    "name": "SQLite WAL (缓存)",
+                    "status": cache_status.get('status'),
+                    "latency": cache_status.get('latency_ms', 0),
+                    "records": cache_status.get('daily_count', 0),
+                    "cache_size_mb": cache_status.get('cache_size_mb', 0)
                 },
                 {
                     "name": "Backend (Flask+eventlet)",
@@ -253,21 +250,21 @@ def liveness_check():
 def readiness_check():
     """依赖就绪检查（readiness probe）"""
     db_status = _get_db_status()
-    duckdb_status = _get_duckdb_status()
+    cache_status = _get_sqlite_cache_status()
 
     return jsonify({
         'success': True,
         'status': 'ready',
         'dependencies': {
             'database': db_status,
-            'cache': duckdb_status
+            'cache': cache_status
         }
     })
 
 
 @health_bp.route('/api/v3/health/data-freshness', methods=['GET'])
 def data_freshness():
-    """返回 DuckDB 各缓存表的最新日期和记录数"""
+    """返回 SQLite WAL 各缓存表的最新日期和记录数"""
     tables = {
         'daily_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM daily_cache',
         'daily_basic_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM daily_basic_cache',

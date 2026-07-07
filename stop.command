@@ -1,29 +1,12 @@
 #!/bin/bash
-# A股分析系统 — 停止脚本（macOS）
-# 优雅停止后端服务
-
-PID=$(pgrep -f "python3.*run.py")
-
-if [ -z "$PID" ]; then
-    echo "后端未运行"
-    exit 0
+# A股分析系统 — 停止（254号双进程架构）
+echo "正在停止 A股分析系统..."
+kill $(lsof -ti :5001) 2>/dev/null && echo "  API 进程已停止" || echo "  API 进程未运行"
+DATA_PID=$(pgrep -f "data_daemon" 2>/dev/null)
+if [ -n "$DATA_PID" ]; then
+    kill $DATA_PID 2>/dev/null
+    echo "  数据进程已停止"
+else
+    echo "  数据进程未运行"
 fi
-
-echo "正在停止后端 (PID=$PID)..."
-
-# 先尝试优雅停止（SIGTERM）
-kill -TERM $PID 2>/dev/null
-
-# 等待最多 10 秒
-for i in $(seq 1 10); do
-    if ! kill -0 $PID 2>/dev/null; then
-        echo "后端已停止"
-        exit 0
-    fi
-    sleep 1
-done
-
-# 超时则强制结束（SIGKILL）
-echo "超时未响应，强制停止..."
-kill -KILL $PID 2>/dev/null
-echo "后端已强制停止"
+echo "✅ 服务已停止"

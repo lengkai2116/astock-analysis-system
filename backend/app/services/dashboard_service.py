@@ -54,20 +54,22 @@ class DashboardService:
         indexes = []
         total_volume = 0
 
-        # 盘中：优先从 AkshareDataReader 读实时快照
+        # 盘中：直接从 InMemoryStateStore 读取（全局数据体系架构：mootdx TCP → store）
         try:
-            from app.data.akshare_reader import reader as akshare_reader
-            ts_codes = [cfg['ts_code'] for cfg in INDEX_CONFIG]
-            live_records = akshare_reader.get_batch_quotes(ts_codes)
+            from app.data.in_memory_store import store as mem_store
+            snapshot = mem_store.get_snapshot()
             live_map = {}
-            for r in live_records:
-                code = r.get('ts_code', '')
-                live_map[code] = {
-                    'price': float(r.get('price', 0)),
-                    'change_pct': float(r.get('change_pct', 0)),
-                    'change_value': float(r.get('change', 0)),
-                    'amount': self._safe_float(r.get('amount', 0)),
-                }
+            for cfg in INDEX_CONFIG:
+                code = cfg['ts_code']
+                for r in snapshot:
+                    if r.get('ts_code') == code:
+                        live_map[code] = {
+                            'price': float(r.get('price', 0)),
+                            'change_pct': float(r.get('change_pct', 0)),
+                            'change_value': float(r.get('change', 0)),
+                            'amount': self._safe_float(r.get('amount', 0)),
+                        }
+                        break
         except Exception:
             live_map = {}
 
@@ -290,19 +292,20 @@ class DashboardService:
 
             ecm = get_ecm_instance()
             # 查询 daily_cache 最新日期
-            date_df = ecm.conn.execute(
-                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-            ).fetchdf()
+            date_df = pd.read_sql(
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1",
+                ecm.conn
+            )
             if date_df.empty:
                 logger.error("涨跌幅榜: DuckDB 无任何历史数据")
                 raise ValueError("DuckDB daily_cache 无日期记录，走 Tushare 降级")
             last_date = date_df['trade_date'].iloc[0]
 
             # 取该日全市场数据
-            all_df = ecm.conn.execute(
+            all_df = pd.read_sql(
                 "SELECT * FROM daily_cache WHERE trade_date = ? ORDER BY pct_chg DESC",
-                [last_date]
-            ).fetchdf()
+                ecm.conn, params=[last_date]
+            )
             if all_df.empty:
                 logger.error("涨跌幅榜: DuckDB 查询为空")
                 raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
@@ -315,15 +318,14 @@ class DashboardService:
                     stock_map[s.ts_code] = s.name
             except Exception:
                 pass
-            # ponytail: 如果 Stock 表为空，从 Tushare stock_basic 获取一次
+            # ponytail: 如果 Stock 表为空，从 DataManager 获取一次（全局数据体系 §2.4 例外：降级场景）
             if not stock_map:
                 try:
-                    from app.data.tushare_provider import TushareProvider
-                    tp = TushareProvider()
-                    basic = tp.get_stock_list()
-                    if basic:
-                        for r in basic:
-                            stock_map[r.get('ts_code', '')] = r.get('name', '')
+                    if self.data_manager:
+                        basic = self.data_manager.get_stock_list()
+                        if basic:
+                            for r in basic:
+                                stock_map[r.get('ts_code', '')] = r.get('name', '')
                 except Exception:
                     pass
 
@@ -366,24 +368,29 @@ class DashboardService:
             if rankings and len(rankings) >= top_n:
                 all_sectors = []
                 for s in rankings:
+                    name = s.get('sector_name', s.get('name', ''))
                     change_pct = s.get('change_pct', 0)
+                    if not name or str(name).strip().lower() in ('nan', 'none', ''):
+                        continue  # 跳过无效数据，降级到 DB
                     all_sectors.append({
-                        'name': s.get('sector_name', s.get('name', '')),
+                        'name': name,
                         'change_pct': change_pct,
                         'lead_stock': '',
                         'up_count': s.get('up_count', 0),
                         'down_count': s.get('down_count', 0),
                     })
-                all_sectors.sort(key=lambda x: x['change_pct'], reverse=True)
-                gainers = [s for s in all_sectors if s['change_pct'] > 0][:5]
-                losers = [s for s in all_sectors if s['change_pct'] <= 0]
-                losers.reverse()
-                losers = losers[:5]
-                return {
-                    'date': datetime.now().strftime('%Y-%m-%d'),
-                    'gainers': gainers,
-                    'losers': losers,
-                }
+                if len(all_sectors) >= top_n:
+                    all_sectors.sort(key=lambda x: x['change_pct'], reverse=True)
+                    gainers = [s for s in all_sectors if s['change_pct'] > 0][:5]
+                    losers = [s for s in all_sectors if s['change_pct'] <= 0]
+                    losers.reverse()
+                    losers = losers[:5]
+                    return {
+                        'date': datetime.now().strftime('%Y-%m-%d'),
+                        'gainers': gainers,
+                        'losers': losers,
+                        'source': 'AKShare 实时行情',
+                    }
         except Exception as e:
             logger.warning(f"板块涨跌幅 reader 不可用，降级 DB: {e}")
 
@@ -394,21 +401,18 @@ class DashboardService:
             import pandas as pd
 
             ecm = get_ecm_instance()
-            # 取最新交易日
-            date_df = ecm.conn.execute(
-                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-            ).fetchdf()
-            if date_df.empty:
-                logger.error("板块涨跌幅 DuckDB: 无任何历史数据")
-                raise ValueError("DuckDB daily_cache 无日期记录，走 Tushare 降级")
-            last_date = date_df['trade_date'].iloc[0]
+            # 取最近数据充足的交易日
+            best_date = self._get_best_trade_date()
+            if not best_date:
+                raise ValueError("无不含日线数据")
+            last_date = best_date
             date_label = str(last_date)
 
             # 取该日全市场 pct_chg + ts_code
-            all_df = ecm.conn.execute(
+            all_df = pd.read_sql(
                 "SELECT ts_code, pct_chg FROM daily_cache WHERE trade_date = ?",
-                [last_date]
-            ).fetchdf()
+                ecm.conn, params=[last_date]
+            )
             if all_df.empty:
                 logger.error("板块涨跌幅 DuckDB: 当日无数据")
                 raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
@@ -422,18 +426,35 @@ class DashboardService:
                         industry_map[s.ts_code] = s.industry
             except Exception:
                 pass
-            # ponytail: Stock 行业表为空时从 Tushare 获取一次
+            # ponytail: Stock 行业表为空时从 DataManager 获取一次（全局数据体系 §2.4 例外）
             if len(industry_map) < 10:
                 try:
-                    from app.data.tushare_provider import TushareProvider
-                    tp = TushareProvider()
-                    basic = tp.get_stock_list()
-                    if basic:
-                        for r in basic:
-                            if r.get('industry'):
-                                industry_map[r.get('ts_code', '')] = r['industry']
+                    if self.data_manager:
+                        basic = self.data_manager.get_stock_list()
+                        if basic:
+                            for r in basic:
+                                if r.get('industry'):
+                                    industry_map[r.get('ts_code', '')] = r['industry']
                 except Exception:
                     pass
+            # ponytail 2: 前两条路都失败时，直调 Tushare stock_basic（降级场景例外）
+            if len(industry_map) < 10:
+                try:
+                    import tushare as ts
+                    for _key in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy']:
+                        os.environ.pop(_key, None)
+                    token = os.getenv('TUSHARE_TOKEN', '')
+                    if token:
+                        ts.set_token(token)
+                        pro = ts.pro_api()
+                        df_basic = pro.stock_basic(fields='ts_code,industry')
+                        if df_basic is not None and not df_basic.empty:
+                            for _, row in df_basic.iterrows():
+                                if row.get('industry'):
+                                    industry_map[row['ts_code']] = row['industry']
+                            logger.info(f"行业映射 Tushare 降级: {len(industry_map)} 条")
+                except Exception as e:
+                    logger.warning(f"行业映射 Tushare 降级失败: {e}")
 
             all_df['industry'] = all_df['ts_code'].map(lambda x: industry_map.get(x, None))
             all_df = all_df.dropna(subset=['industry'])
@@ -484,20 +505,18 @@ class DashboardService:
             import pandas as pd
 
             ecm = get_ecm_instance()
-            date_df = ecm.conn.execute(
-                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-            ).fetchdf()
-            if date_df.empty:
+            best_date = self._get_best_trade_date()
+            if not best_date:
                 logger.error("dashboard/summary DuckDB: 无历史数据")
                 raise ValueError("DuckDB daily_cache 无日期记录，走 Tushare 降级")
-            last_date = date_df['trade_date'].iloc[0]
+            last_date = best_date
             date_label = str(last_date)
 
             # 取该日全市场数据
-            all_df = ecm.conn.execute(
+            all_df = pd.read_sql(
                 "SELECT ts_code, close, pct_chg FROM daily_cache WHERE trade_date = ?",
-                [last_date]
-            ).fetchdf()
+                ecm.conn, params=[last_date]
+            )
             if all_df.empty:
                 logger.error("dashboard/summary DuckDB: 当日无数据")
                 raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
@@ -697,9 +716,9 @@ class DashboardService:
         try:
             from app.data.enhanced_cache_manager import get_ecm_instance
             ecm = get_ecm_instance()
-            date_df = ecm.conn.execute(
+            date_df = pd.read_sql(
                 "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-            ).fetchdf()
+            , ecm.conn)
             if not date_df.empty:
                 return str(date_df['trade_date'].iloc[0]).replace('-', '')
         except Exception:
@@ -713,9 +732,29 @@ class DashboardService:
             return (today - timedelta(days=2)).strftime('%Y%m%d')
         return today.strftime('%Y%m%d')
 
+    def _get_best_trade_date(self, min_stocks: int = 1000) -> Optional[str]:
+        """获取最近且数据充足的交易日（避免当日数据未同步时取到残缺日期）"""
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            import pandas as pd
+            ecm = get_ecm_instance()
+            df = pd.read_sql(
+                "SELECT trade_date, COUNT(*) as cnt FROM daily_cache "
+                "GROUP BY trade_date HAVING cnt >= ? ORDER BY trade_date DESC LIMIT 1",
+                ecm.conn, params=[min_stocks]
+            )
+            if not df.empty:
+                return str(df['trade_date'].iloc[0])
+        except Exception:
+            pass
+        return self._try_get_latest_trade_date()
+
     def _try_get_index_daily(self, ts_code: str) -> Optional[List]:
-        """获取指数日线数据：DuckDB 缓存 → AKShare API → Tushare API（备选回退）"""
-        # 1. DuckDB 缓存（DataManager 自带 SQLite 降级）
+        """获取指数日线数据：仅从 SQLite daily_cache 读取（全局数据体系 §2.3）
+
+        不允许直调 Tushare/AKShare API（违反架构红线规则）。
+        如 SQLite 中无数据，返回 None，由调用方降级处理。
+        """
         try:
             if self.data_manager:
                 df = self.data_manager.get_cached_daily_data(ts_code)
@@ -723,36 +762,7 @@ class DashboardService:
                     return df.to_dict('records')
         except Exception:
             pass
-
-        # 2. AKShare 轻量级降级：stock_zh_index_daily_em
-        try:
-            import akshare as ak
-            symbol = ts_code.split('.')[0]
-            df = ak.stock_zh_index_daily_em(symbol)
-            if df is not None and not df.empty:
-                df = df.rename(columns={
-                    'date': 'trade_date',
-                    'open': 'open',
-                    'high': 'high',
-                    'low': 'low',
-                    'close': 'close',
-                    'volume': 'vol',
-                })
-                if 'pct_chg' not in df.columns:
-                    df['pct_chg'] = df['close'].pct_change() * 100
-                if 'pre_close' not in df.columns:
-                    df['pre_close'] = df['close'].shift(1)
-                if 'amount' not in df.columns:
-                    df['amount'] = 0
-                if 'trade_date' in df.columns:
-                    df = df.sort_values('trade_date')
-                records = df.to_dict('records')
-                if records:
-                    logger.info(f"从 AKShare 获取指数 {ts_code} 日线数据: {len(records)} 条")
-                    return records
-        except Exception as e:
-            logger.debug(f"AKShare 指数日线降级失败 ({ts_code}): {e}")
-
+        # 无可用的缓存数据，返回 None（由调用方决定是否降级展示）
         return None
 
     def _build_mini_kline(self, data: List) -> List:

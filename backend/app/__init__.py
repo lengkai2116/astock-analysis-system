@@ -317,30 +317,42 @@ def create_app():
         logger.warning(f"数据源管理器初始化失败（可忽略）: {e}")
 
     # ============================================================
-    # AkshareCollector 启动（盘中数据采集器，5 线程）
+    # AkshareCollector 启动（盘中数据低频补充采集器，3 线程）
+    # L1 行情已由 MootdxCollector TCP 直连替代，本采集器仅补充板块/分钟/龙虎榜
     # 仅在非 Gunicorn 模式下启动（Gunicorn 由 on_starting hook 管理）
+    # 双进程模式下由 data_daemon 管理（DATA_DAEMON_RUNNING=1）
     # ============================================================
+    _is_daemon_mode = os.environ.get('DATA_DAEMON_RUNNING') == '1'
     try:
         from app.data.akshare_collector import akshare_collector
-        if not any('gunicorn' in arg for arg in sys.argv):
+        if not any('gunicorn' in arg for arg in sys.argv) and not _is_daemon_mode:
             akshare_collector.start()
             import atexit
             atexit.register(lambda: akshare_collector.stop())
-            logger.info("AkshareCollector 已启动（5 个采集线程）")
+            logger.info("AkshareCollector 已启动（3 线程, 低频补充）")
         else:
-            logger.info("AkshareCollector 由 Gunicorn on_starting hook 管理，跳过")
+            logger.info("AkshareCollector 由外部管理，跳过")
     except Exception as e:
         logger.warning(f"AkshareCollector 启动失败: {e}")
 
     # ============================================================
-    # PostgreSQL 盘中实时连接池初始化
+    # MootdxCollector 启动（mootdx TCP 盘中数据采集器，1 线程）
+    # 双进程模式下由 data_daemon 管理（DATA_DAEMON_RUNNING=1）
     # ============================================================
+    _is_daemon_mode = os.environ.get('DATA_DAEMON_RUNNING') == '1'
     try:
-        from app.data.realtime_pg import init_realtime_pg
-        init_realtime_pg()
-        logger.info("PostgreSQL 盘中实时连接池已初始化")
+        from app.data.mootdx_collector import mootdx_collector
+        if not any('gunicorn' in arg for arg in sys.argv) and not _is_daemon_mode:
+            if mootdx_collector.start():
+                import atexit
+                atexit.register(lambda: mootdx_collector.stop())
+                logger.info("MootdxCollector 已启动（TCP 直连）")
+            else:
+                logger.warning("MootdxCollector 未启动（mootdx 客户端不可用，大盘实时行情由 AKShare 补充）")
+        else:
+            logger.info("MootdxCollector 由外部管理，跳过")
     except Exception as e:
-        logger.warning(f"PostgreSQL 盘中实时连接池初始化失败: {e}")
+        logger.warning(f"MootdxCollector 启动失败: {e}")
 
     return app
 
@@ -350,6 +362,8 @@ def _route_provider(endpoint, params, provider):
     新增端点对应于 TushareProvider 中为 5000分 级别补齐的方法。
     """
     if endpoint == 'health_check':
+        if hasattr(provider, 'check_health'):
+            return provider.check_health()
         return {'status': 'ok'}
     if endpoint == 'get_kline':
         return provider.get_daily_data(params.get('ts_code'), params.get('start_date'), params.get('end_date'))
@@ -453,7 +467,9 @@ def _seed_default_config(rcm):
         'scheduling': {
             'daily_sync': {
                 'enabled': True, 'trigger_time': '15:30', 'mode': 'incremental',
-                'data_types': ['daily', 'basic', 'moneyflow', 'index', 'adj_factor'],
+                'data_types': ['daily', 'basic', 'moneyflow', 'index', 'adj_factor',
+                               'fina_indicator', 'income', 'balancesheet', 'cashflow',
+                               'forecast', 'stk_limit', 'lhb', 'top10_holders', 'stk_holder'],
                 'warmup_cache': True, 'timeout_minutes': 30
             },
             'intraday': {

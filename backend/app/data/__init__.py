@@ -449,10 +449,10 @@ class DataManager:
         import time
 
         # 1. 从 daily_cache 获取可用的交易日列表
-        target_dates = self.cache.conn.execute("""
+        target_dates = pd.read_sql("""
             SELECT DISTINCT trade_date FROM daily_cache
             ORDER BY trade_date DESC LIMIT ?
-        """, [max_days]).fetchdf()
+        """, self.cache.conn, params=[max_days])
 
         if target_dates.empty:
             logger.warning("daily_basic 历史回填: daily_cache 无交易日数据，跳过")
@@ -464,9 +464,10 @@ class DataManager:
         # 2. 查询 daily_basic_cache 中已有的日期
         existing_dates = set()
         try:
-            existing_df = self.cache.conn.execute(
-                "SELECT DISTINCT trade_date FROM daily_basic_cache"
-            ).fetchdf()
+            existing_df = pd.read_sql(
+                "SELECT DISTINCT trade_date FROM daily_basic_cache",
+                self.cache.conn
+            )
             if not existing_df.empty:
                 existing_dates = set(existing_df['trade_date'].tolist())
         except Exception:
@@ -602,11 +603,16 @@ class DataManager:
                 raw = self.tushare.get_index_daily(code)
                 if raw:
                     df = pd.DataFrame(raw)
-                    # trade_date 来自 Tushare 为 YYYYMMDD, DuckDB DATE 列需要 YYYY-MM-DD
                     if not df.empty and 'trade_date' in df.columns:
                         df['trade_date'] = pd.to_datetime(
                             df['trade_date'], format='%Y%m%d'
                         ).dt.date
+                    # 过滤仅保留 daily_cache 存在的字段
+                    daily_cols = {'ts_code', 'trade_date', 'open', 'high', 'low',
+                                  'close', 'vol', 'amount', 'pct_chg'}
+                    extra = [c for c in df.columns if c not in daily_cols]
+                    if extra:
+                        df = df.drop(columns=extra)
                     self.cache.cache_daily_data(df)
                     total += len(df)
             except Exception as e:
@@ -654,6 +660,262 @@ class DataManager:
                     ).dt.date
                 self.cache.cache_adj_factor_data(df)
                 total += len(df)
+        return total
+
+    # ══════════════════════════════════════════════
+    # 252号方案：新增批量同步方法
+    # ══════════════════════════════════════════════
+
+    def sync_fina_indicator_data(self, ts_code=None) -> int:
+        """同步财务指标数据（可指定股票或全市场）"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        stocks = [ts_code] if ts_code else [s.ts_code for s in Stock.query.all()]
+        total = 0
+        for code in stocks:
+            try:
+                raw = self.tushare.get_fina_indicator(code)
+                if raw:
+                    df = pd.DataFrame(raw)
+                    if not df.empty and 'end_date' in df.columns:
+                        df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                    if 'ann_date' in df.columns:
+                        df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                    self.cache.cache_fina_indicator_data(df)
+                    total += len(df)
+            except Exception as e:
+                logger.warning(f"同步财务指标 {code} 失败: {e}")
+        return total
+
+    def sync_income_data(self, ts_code=None) -> int:
+        """同步利润表数据"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        stocks = [ts_code] if ts_code else [s.ts_code for s in Stock.query.all()]
+        total = 0
+        for code in stocks:
+            try:
+                raw = self.tushare.get_income(code)
+                if raw:
+                    df = pd.DataFrame(raw)
+                    if 'end_date' in df.columns:
+                        df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                    if 'ann_date' in df.columns:
+                        df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                    self.cache.cache_income_data(df)
+                    total += len(df)
+            except Exception as e:
+                logger.warning(f"同步利润表 {code} 失败: {e}")
+        return total
+
+    def sync_balancesheet_data(self, ts_code=None) -> int:
+        """同步资产负债表数据"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        stocks = [ts_code] if ts_code else [s.ts_code for s in Stock.query.all()]
+        total = 0
+        for code in stocks:
+            try:
+                raw = self.tushare.get_balancesheet(code)
+                if raw:
+                    df = pd.DataFrame(raw)
+                    if 'end_date' in df.columns:
+                        df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                    if 'ann_date' in df.columns:
+                        df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                    self.cache.cache_balancesheet_data(df)
+                    total += len(df)
+            except Exception as e:
+                logger.warning(f"同步资产负债表 {code} 失败: {e}")
+        return total
+
+    def sync_cashflow_data(self, ts_code=None) -> int:
+        """同步现金流量表数据"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        stocks = [ts_code] if ts_code else [s.ts_code for s in Stock.query.all()]
+        total = 0
+        for code in stocks:
+            try:
+                raw = self.tushare.get_cashflow(code)
+                if raw:
+                    df = pd.DataFrame(raw)
+                    if 'end_date' in df.columns:
+                        df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                    if 'ann_date' in df.columns:
+                        df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                    self.cache.cache_cashflow_data(df)
+                    total += len(df)
+            except Exception as e:
+                logger.warning(f"同步现金流量表 {code} 失败: {e}")
+        return total
+
+    def sync_forecast_data(self, ts_code=None) -> int:
+        """同步业绩预告数据"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        stocks = [ts_code] if ts_code else [s.ts_code for s in Stock.query.all()]
+        total = 0
+        for code in stocks:
+            try:
+                raw = self.tushare.get_forecast(code)
+                if raw:
+                    df = pd.DataFrame(raw)
+                    if 'end_date' in df.columns:
+                        df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                    if 'ann_date' in df.columns:
+                        df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                    self.cache.cache_forecast_data(df)
+                    total += len(df)
+            except Exception as e:
+                logger.warning(f"同步业绩预告 {code} 失败: {e}")
+        return total
+
+    def sync_margin_data(self, trade_date=None) -> int:
+        """同步融资融券数据（按交易日，全市场一次返回）"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y%m%d')
+        raw = self.tushare.get_margin('000001.SZ',
+            start_date=trade_date, end_date=trade_date)
+        if raw:
+            # margin by trade_date requires iterating stocks; simpler: use margin() with date
+            try:
+                data = self.tushare.pro.margin(trade_date=trade_date)
+                if data is not None and not data.empty:
+                    df = data.copy()
+                    if 'trade_date' in df.columns:
+                        df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+                    self.cache.cache_margin_data(df)
+                    return len(df)
+            except Exception as e:
+                logger.warning(f"同步融资融券失败: {e}")
+        return 0
+
+    def sync_stk_limit_data(self, trade_date=None) -> int:
+        """同步涨跌停数据（按交易日，全市场一次返回）"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y%m%d')
+        raw = self.tushare.get_stk_limit(trade_date)
+        if raw:
+            df = pd.DataFrame(raw)
+            if 'trade_date' in df.columns:
+                df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+            self.cache.cache_stk_limit_data(df)
+            return len(df)
+        return 0
+
+    def sync_lhb_data(self, trade_date=None) -> int:
+        """同步龙虎榜数据（按交易日）"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y%m%d')
+        raw = self.tushare.get_top_list(trade_date)
+        if raw:
+            df = pd.DataFrame(raw)
+            if 'trade_date' in df.columns:
+                df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+            self.cache.cache_lhb_data(df)
+            return len(df)
+        return 0
+
+    def sync_top10_holders_data(self, ts_code=None) -> int:
+        """同步前十大股东数据"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        stocks = [ts_code] if ts_code else [s.ts_code for s in Stock.query.all()]
+        total = 0
+        for code in stocks:
+            try:
+                raw = self.tushare.get_top10_holders(code)
+                if raw:
+                    df = pd.DataFrame(raw)
+                    if 'end_date' in df.columns:
+                        df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                    if 'ann_date' in df.columns:
+                        df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                    self.cache.cache_top10_holders(df)
+                    total += len(df)
+            except Exception as e:
+                logger.warning(f"同步前十大股东 {code} 失败: {e}")
+        return total
+
+    def sync_stk_holder_data(self, ts_code=None) -> int:
+        """同步股东人数数据"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        stocks = [ts_code] if ts_code else [s.ts_code for s in Stock.query.all()]
+        total = 0
+        for code in stocks:
+            try:
+                raw = self.tushare.get_stk_holdernumber(code)
+                if raw:
+                    df = pd.DataFrame(raw)
+                    if 'end_date' in df.columns:
+                        df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                    if 'ann_date' in df.columns:
+                        df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                    self.cache.cache_stk_holder_data(df)
+                    total += len(df)
+            except Exception as e:
+                logger.warning(f"同步股东人数 {code} 失败: {e}")
+        return total
+
+    def sync_concept_data(self) -> int:
+        """同步概念分类数据（全量刷新）"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        raw = self.tushare.get_concept()
+        if raw:
+            df = pd.DataFrame(raw)
+            self.cache.cache_concept_data(df)
+            return len(df)
+        return 0
+
+    def sync_index_member_data(self) -> int:
+        """同步指数成分股数据（主要指数）"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        index_codes = ['000001.SH', '000300.SH', '000016.SH', '000688.SH',
+                       '399001.SZ', '399006.SZ', '399005.SZ']
+        total = 0
+        for idx_code in index_codes:
+            try:
+                raw = self.tushare.get_index_member(idx_code)
+                if raw:
+                    df = pd.DataFrame(raw)
+                    self.cache.cache_index_member_data(df)
+                    total += len(df)
+            except Exception as e:
+                logger.warning(f"同步指数成分 {idx_code} 失败: {e}")
+        return total
+
+    def sync_financial_all(self) -> int:
+        """批量同步全部财务数据（fina_indicator + income + balancesheet + cashflow）"""
+        total = 0
+        for sync_fn in [self.sync_fina_indicator_data, self.sync_income_data,
+                        self.sync_balancesheet_data, self.sync_cashflow_data]:
+            try:
+                total += sync_fn()
+            except Exception as e:
+                logger.warning(f"财务数据同步子任务失败: {e}")
+        logger.info(f"财务数据批量同步完成: {total} 条")
         return total
 
     # ══════════════════════════════════════════════

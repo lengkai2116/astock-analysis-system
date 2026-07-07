@@ -51,7 +51,19 @@ class TushareProvider:
             return pro
         except Exception:
             return None
-    
+
+    def check_health(self) -> dict:
+        """真实健康检查：调用 Tushare API 验证连通性"""
+        if not self.pro:
+            return {'status': 'error', 'message': 'API 未初始化'}
+        try:
+            df = self.pro.trade_cal(exchange='SSE', start_date='20260706', end_date='20260706')
+            if df is not None and not df.empty:
+                return {'status': 'ok'}
+            return {'status': 'error', 'message': 'API 返回空'}
+        except Exception as e:
+            return {'status': 'error', 'message': str(e)[:80]}
+
     def get_stock_list(self, market='all'):
         if not self.pro:
             return []
@@ -156,12 +168,98 @@ class TushareProvider:
                 return data.to_dict('records')
             return []
         except Exception as e:
-            logger.warning(r"获取分钟线数据失败 ({ts_code}, {freq}): {e}")
+            logger.warning(f"获取分钟线数据失败 ({ts_code}, {freq}): {e}")
             return []
     
+
     def get_daily_by_date(self, trade_date):
         """按日期获取所有股票日线数据"""
         if not self.pro:
+            return []
+        
+        try:
+            data = self.pro.daily(trade_date=trade_date)
+            return data.to_dict('records')
+        except Exception:
+            return []
+    
+    def get_index_daily(self, ts_code='000001.SH'):
+        if not self.pro:
+            return []
+        
+        try:
+            data = self.pro.index_daily(ts_code=ts_code)
+            return data.to_dict('records')
+        except Exception:
+            return []
+    
+    def get_stk_limit(self, trade_date):
+        """获取涨跌停数据"""
+        if not self.pro:
+            return []
+        
+        try:
+            data = self.pro.stk_limit(trade_date=trade_date)
+            return data.to_dict('records')
+        except Exception:
+            return []
+    
+    def get_moneyflow(self, trade_date):
+        """获取资金流向数据"""
+        if not self.pro:
+            return []
+        
+        try:
+            data = self.pro.moneyflow(trade_date=trade_date)
+            return data.to_dict('records')
+        except Exception:
+            return []
+    
+    def get_top_list(self, trade_date):
+        """获取龙虎榜数据"""
+        if not self.pro:
+            return []
+        
+        try:
+            data = self.pro.top_list(trade_date=trade_date)
+            return data.to_dict('records')
+        except Exception:
+            return []
+    
+    def get_daily_basic(self, ts_code=None, start_date=None, end_date=None, trade_date=None):
+        """
+        获取每日基础数据（换手率、市盈率、市值等）
+        
+        Args:
+            ts_code: 股票代码（可选，如果None则获取当日全部股票）
+            start_date: 开始日期（格式YYYYMMDD）
+            end_date: 结束日期（格式YYYYMMDD）
+            trade_date: 指定交易日期（格式YYYYMMDD，与ts_code二选一）
+            
+        Returns:
+            数据列表
+        """
+        if not self.pro:
+            return []
+        
+        try:
+            if trade_date:
+                data = self.pro.daily_basic(trade_date=trade_date)
+            else:
+                if start_date is None:
+                    start_date = (datetime.now() - pd.Timedelta(days=5*365)).strftime('%Y%m%d')
+                if end_date is None:
+                    end_date = datetime.now().strftime('%Y%m%d')
+                
+                data = self.pro.daily_basic(
+                    ts_code=ts_code, 
+                    start_date=start_date, 
+                    end_date=end_date
+                )
+            
+            return data.to_dict('records') if not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取每日基础数据失败: {e}")
             return []
         
         try:
@@ -280,7 +378,7 @@ class TushareProvider:
             
             return data.to_dict('records') if not data.empty else []
         except Exception as e:
-            logger.warning(r"获取复权因子失败 ({ts_code}): {e}")
+            logger.warning(f"获取复权因子失败 ({ts_code}): {e}")
             return []
     
     def test_connection(self):

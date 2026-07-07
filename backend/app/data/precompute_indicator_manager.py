@@ -54,7 +54,7 @@ class PrecomputeIndicatorManager:
             
             return True
         except Exception as e:
-            logger.warning(r"预计算指标失败 [{ts_code}]: {e}")
+            logger.warning(f"预计算指标失败 [{ts_code}]: {e}")
             return False
     
     def _batch_cache_indicators(self, df: pd.DataFrame, ts_code: str):
@@ -75,7 +75,7 @@ class PrecomputeIndicatorManager:
         ]
         
         records = []
-        now = datetime.now()
+        now = datetime.now().isoformat()
         
         for _, row in df.iterrows():
             for col in indicator_cols:

@@ -118,3 +118,36 @@ class MinuteDataManager:
         for code in ts_codes:
             result[code] = self.get_minute_data(code, freq=freq, days_back=days_back)
         return result
+
+    # ══════════════════════════════════════════════
+    # 252号方案：从 ECM minute_kline_cache 读取
+    # ══════════════════════════════════════════════
+
+    def get_cached_minute(self, ts_code: str, freq: str = '1min') -> Optional[List[Dict]]:
+        """优先从 ECM minute_kline_cache 读取分钟线数据"""
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            ecm = get_ecm_instance()
+            trade_date = datetime.now().strftime('%Y-%m-%d')
+            df = ecm.get_cached_minute_kline(ts_code, trade_date=trade_date, freq=freq)
+            if df is not None and not df.empty:
+                records = df.to_dict('records')
+                # 兼容前端格式：trade_time 字段
+                for r in records:
+                    if 'trade_time' not in r:
+                        r['trade_time'] = str(r.get('datetime', ''))
+                return records
+            # 尝试跨日期读取（盘后数据）
+            df = ecm.get_cached_minute_kline(ts_code, freq=freq)
+            if df is not None and not df.empty:
+                records = df.to_dict('records')
+                # 只取最近 days_back 天
+                cutoff = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
+                records = [r for r in records if str(r.get('trade_date', '')) >= cutoff]
+                for r in records:
+                    if 'trade_time' not in r:
+                        r['trade_time'] = str(r.get('datetime', ''))
+                return records
+        except Exception as e:
+            logger.debug(f"ECM 分钟数据读取失败: {e}")
+        return None

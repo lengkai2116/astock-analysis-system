@@ -312,14 +312,20 @@ def stop_realtime_service():
 
 @realtime_bp.route('/api/v3/market/connectivity', methods=['GET'])
 def check_eastmoney_connectivity():
-    """测试与东方财富各 API 端点的连接状态（诊断用）"""
+    """测试数据源连接状态（诊断用）
+
+    mootdx TCP 已替代 EastMoney HTTP 作为主数据源，此端点保留为诊断兼容。
+    """
     try:
-        from app.data.akshare_collector import test_eastmoney_connectivity
-        result = test_eastmoney_connectivity()
-        status_code = 200 if result['reachable'] >= 1 else 503
-        return result, status_code
+        # 尝试检查 mootdx 连接
+        from app.data.mootdx_collector import mootdx_collector
+        is_mootdx_alive = mootdx_collector.is_running()
+        return {
+            'mootdx': {'status': 'running' if is_mootdx_alive else 'stopped'},
+            'message': 'mootdx TCP 已替代 AKShare HTTP 作为主数据源',
+        }, 200
     except Exception as e:
-        return {'error': str(e)}, 500
+        return {'status': 'error', 'message': str(e)}, 500
 
 
 @realtime_bp.route('/api/v3/watchlist/stream', methods=['GET'])

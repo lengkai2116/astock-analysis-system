@@ -102,7 +102,10 @@ class SchedulerManager:
                         "enabled": True,
                         "trigger_time": "15:30",
                         "mode": "incremental",
-                        "data_types": ["daily", "basic", "moneyflow", "index", "adj_factor"],
+                        "data_types": ["daily", "basic", "moneyflow", "index", "adj_factor",
+                                       "fina_indicator", "income", "balancesheet", "cashflow",
+                                       "forecast", "stk_limit", "lhb",
+                                       "top10_holders", "stk_holder"],
                         "warmup_cache": True,
                         "timeout_minutes": 30
                     },
@@ -290,15 +293,10 @@ class SchedulerManager:
                 except Exception as e:
                     logger.error(f"同步 {data_type} 失败: {e}")
 
-            # 预热缓存
+            # 预热缓存（已废弃：InMemoryStateStore 无需预热，SQLite WAL 直接访问）
+            # 旧 CacheManager 已被 EnhancedCacheManager 替代
             if warmup and records_added > 0:
-                try:
-                    from app.data.cache_manager import CacheManager
-                    cm = CacheManager()
-                    cm.warmup_cache()
-                    logger.info("DuckDB 缓存预热完成")
-                except Exception as e:
-                    logger.warning(f"缓存预热失败: {e}")
+                pass
 
             duration_ms = int((time.time() - start_ts) * 1000)
             result['status'] = 'success'
@@ -352,12 +350,8 @@ class SchedulerManager:
                 except Exception as e:
                     logger.debug(f"清理采集器关注列表失败: {e}")
 
-                # 5. 清理 PostgreSQL 盘中实时表（realtime_* 当日数据）
-                try:
-                    from app.data.realtime_pg import cleanup_old_data
-                    cleanup_old_data(retention_days=0)  # 0 = 仅清理当日之前
-                except Exception as e:
-                    logger.debug(f"清理 PG realtime_* 表失败: {e}")
+                # 5. [已废弃] PostgreSQL 盘中实时表清理 — realtime_pg.py 已于 248号方案 Phase C 移除
+                # PG realtime_* 表不再写入，盘中数据使用 InMemoryStateStore + mootdx TCP
 
                 logger.info(f"=== 盘后清理链完成 (date={today}) ===")
 
@@ -389,11 +383,9 @@ class SchedulerManager:
             from datetime import date, datetime
 
             # ── 检查 daily_basic_cache 历史数据完整性（247号方案 §4） ──
-            # 注意：此检查不依赖是否交易日，始终执行
-            try:
-                self._catch_up_daily_basic()
-            except Exception as e:
-                logger.warning(f"启动补采: daily_basic 历史补齐失败（可忽略）: {e}")
+            # 后台线程执行，不阻塞服务器启动
+            import threading as _th
+            _th.Thread(target=self._catch_up_daily_basic, daemon=True).start()
 
             today = date.today()
             if is_holiday(datetime.combine(today, datetime.min.time())):
@@ -401,19 +393,24 @@ class SchedulerManager:
                 return
 
             ecm = get_ecm_instance()
-            date_df = ecm.conn.execute(
-                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-            ).fetchdf()
+            import pandas as pd
+            date_df = pd.read_sql(
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1",
+                ecm.conn
+            )
             max_date = date_df['trade_date'].iloc[0] if not date_df.empty else None
             if max_date is None:
-                logger.info("=== 启动补采: DuckDB 无数据, 开始全量同步 ===")
-                self.run_daily_sync()
-                self._run_stock_sync_if_needed()
+                logger.info("=== 启动补采: 无数据, 后台线程开始全量同步（不影响服务器启动）===")
+                import threading
+                t = threading.Thread(target=self.run_daily_sync, daemon=True)
+                t.start()
+                # Stock 同步也后台执行
+                threading.Thread(target=self._run_stock_sync_if_needed, daemon=True).start()
                 return
             elif max_date < today:
-                logger.info(f"=== 启动补采: 数据最新 {max_date}, 早于今日 {today}, 开始增量同步 ===")
-                self.run_daily_sync()
-                self._run_stock_sync_if_needed()
+                logger.info(f"=== 启动补采: 数据最新 {max_date}, 早于今日 {today}, 后台增量同步 ===")
+                import threading
+                threading.Thread(target=self.run_daily_sync, daemon=True).start()
                 return
 
             logger.info(f"启动补采: 数据已最新 ({max_date}), 跳过")
@@ -455,7 +452,7 @@ class SchedulerManager:
             return
 
         # 查询数据不足的股票，同时取最早和最晚交易日
-        sparse_df = ecm.conn.execute("""
+        sparse_df = pd.read_sql("""
             SELECT ts_code, COUNT(*) as cnt,
                    MAX(trade_date) as last_date,
                    MIN(trade_date) as first_date
@@ -464,7 +461,7 @@ class SchedulerManager:
             HAVING cnt < ?
             ORDER BY cnt ASC
             LIMIT ?
-        """, [min_days, max_stocks]).fetchdf()
+        """, ecm.conn, params=[min_days, max_stocks])
 
         if sparse_df.empty:
             logger.info(f"启动补采: 所有股票数据均 >= {min_days} 天，无需补齐")
@@ -563,9 +560,11 @@ class SchedulerManager:
                 # 增量：从 DuckDB 获取最后交易日
                 from app.data.enhanced_cache_manager import get_ecm_instance
                 ecm = get_ecm_instance()
-                date_df = ecm.conn.execute(
-                    "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-                ).fetchdf()
+                import pandas as pd
+                date_df = pd.read_sql(
+                    "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1",
+                    ecm.conn
+                )
                 last_date = date_df['trade_date'].iloc[0] if not date_df.empty else None
                 if last_date:
                     try:
@@ -584,6 +583,30 @@ class SchedulerManager:
             return dm.sync_index_daily_data()
         elif data_type == 'adj_factor':
             return dm.sync_adj_factor_data()
+        elif data_type == 'fina_indicator':
+            return dm.sync_fina_indicator_data()
+        elif data_type == 'income':
+            return dm.sync_income_data()
+        elif data_type == 'balancesheet':
+            return dm.sync_balancesheet_data()
+        elif data_type == 'cashflow':
+            return dm.sync_cashflow_data()
+        elif data_type == 'forecast':
+            return dm.sync_forecast_data()
+        elif data_type == 'margin':
+            return dm.sync_margin_data()
+        elif data_type == 'stk_limit':
+            return dm.sync_stk_limit_data()
+        elif data_type == 'lhb':
+            return dm.sync_lhb_data()
+        elif data_type == 'top10_holders':
+            return dm.sync_top10_holders_data()
+        elif data_type == 'stk_holder':
+            return dm.sync_stk_holder_data()
+        elif data_type == 'concept':
+            return dm.sync_concept_data()
+        elif data_type == 'index_member':
+            return dm.sync_index_member_data()
         return 0
 
     def _record_sync_start(self, sync_type: str) -> Optional[int]:

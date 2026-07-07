@@ -92,9 +92,9 @@ def get_cache_stats():
         stock_count = Stock.query.count()
         try:
             ecm = get_ecm_instance()
-            count_df = ecm.conn.execute(
+            count_df = pd.read_sql(
                 "SELECT COUNT(*) AS cnt FROM daily_cache"
-            ).fetchdf()
+            , ecm.conn)
             daily_count = int(count_df['cnt'].iloc[0]) if not count_df.empty else 0
         except Exception:
             daily_count = 0
