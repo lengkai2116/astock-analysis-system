@@ -75,3 +75,14 @@ frontend/vue-project/test-results/
 # Logs
 backend/logs/
 test-results/
+
+# 数据库文件（排除所有 .db .sqlite）
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# ECM 缓存目录
+data/duckdb/
+backend/data/
