@@ -10,7 +10,7 @@ import numpy as np
 from flask import Blueprint, jsonify, request
 
 from app.data import DataManager
-from app.engine.framework.chip_strategy import ChipScorer
+from app.engine.framework.chip_strategy import MainForceFilter
 from app.engine.framework.screener import DarwinRiskFilter
 from app.utils.error_handlers import handle_exceptions
 
@@ -47,71 +47,84 @@ def load_stock_data_batch(stock_list, lookback=120):
     """
     批量加载股票 K 线数据
 
-    数据不足 lookback 天时触发按需补采（DataManager.sync_daily_data），
-    然后重试读取一次。
+    使用 ECM 全量预加载（1 次 SQL 读取全部日线到内存），
+    然后在内存中按 ts_code 分组。
 
-    新股过滤：若已有部分数据但最早交易日距今不足 lookback 天
-    （即刚上市，不可能有足够数据），跳过补采。
+    新股过滤 + 按需补采流程不变。
 
     返回 {ts_code: DataFrame}
     """
-    from datetime import date, timedelta
+    from datetime import date
     import pandas as pd
 
     dm = get_data_manager()
-    data_dict = {}
-    replenished = 0
-    skipped_new = 0
-    today = date.today()
-
+    ts_codes = []
     for stock in stock_list:
         ts_code = stock.get('ts_code', '') or stock.get('symbol', '')
-        if not ts_code:
+        if ts_code:
+            ts_codes.append(ts_code)
+
+    # 批量获取全量日线（1次SQL → 内存 DataFrame，比逐只查询快 5-10x）
+    t0 = time.time()
+    # 预加载全量数据到内存（日线 + 基础数据 + 资金流向）
+    dm.cache.preload_all()
+    logger.info(f"全量数据预加载: {time.time()-t0:.1f}s")
+    data_dict = dm.get_cached_daily_batch(ts_codes)
+
+    # 数据足量检查 + 新股过滤 + 补采
+    today = date.today()
+    replenished = 0
+    skipped_new = 0
+    result = {}
+
+    for ts_code in ts_codes:
+        df = data_dict.get(ts_code, pd.DataFrame())
+        if not df.empty and len(df) >= lookback:
+            # 数据足够，直接使用
+            result[ts_code] = df.tail(lookback).copy()
             continue
-        try:
-            df = dm.get_cached_daily_data(ts_code)
-            if df.empty or len(df) < lookback:
-                # 新股判断：已有部分数据但最早交易日距今不足 lookback 天 → 跳过
-                if not df.empty and 'trade_date' in df.columns:
-                    first_date = df['trade_date'].min()
-                    if hasattr(first_date, 'strftime'):
-                        first_dt = first_date
-                    else:
-                        first_dt = pd.Timestamp(str(first_date))
-                    days_since_listing = (pd.Timestamp(today) - first_dt).days
-                    if days_since_listing < lookback:
-                        skipped_new += 1
-                        if len(df) < lookback:
-                            continue  # 新股数据不足但无可补，跳过
 
-                # 数据不足 → 触发按需补采
-                try:
-                    cnt = dm.sync_daily_data(ts_code, use_cache=False)
-                    if cnt > 0:
-                        replenished += 1
-                        logger.info(f"按需补采 {ts_code}: {cnt} 条")
-                        # 重试读取
-                        df = dm.get_cached_daily_data(ts_code)
-                except Exception as e:
-                    logger.debug(f"按需补采 {ts_code} 失败: {e}")
-
-            if df.empty or len(df) < lookback:
+        # 新股判断
+        if not df.empty and 'trade_date' in df.columns:
+            first_date = df['trade_date'].min()
+            if hasattr(first_date, 'strftime'):
+                first_dt = first_date
+            else:
+                first_dt = pd.Timestamp(str(first_date))
+            days_since_listing = (pd.Timestamp(today) - first_dt).days
+            if days_since_listing < lookback:
+                skipped_new += 1
                 continue
 
-            # 确保列名符合要求
-            if 'vol' not in df.columns and 'amount' in df.columns:
-                df['vol'] = df['amount']
-            df = df.tail(lookback).copy()
-            for col in ['open', 'high', 'low', 'close', 'vol']:
-                if col in df.columns:
-                    df[col] = df[col].astype(float)
-            data_dict[ts_code] = df
+        # 数据不足 → 触发按需补采
+        try:
+            cnt = dm.sync_daily_data(ts_code, use_cache=False)
+            if cnt > 0:
+                replenished += 1
+                logger.info(f"按需补采 {ts_code}: {cnt} 条")
+                df = dm.get_cached_daily_data(ts_code)
+            else:
+                continue
         except Exception as e:
-            logger.debug(f"加载 {ts_code} 数据失败: {e}")
+            logger.debug(f"按需补采 {ts_code} 失败: {e}")
+            continue
+
+        if df.empty or len(df) < lookback:
+            continue
+
+        result[ts_code] = df.tail(lookback).copy()
+
+    # 标准化列
+    for ts_code, df in result.items():
+        if 'vol' not in df.columns and 'amount' in df.columns:
+            df['vol'] = df['amount']
+        for col in ['open', 'high', 'low', 'close', 'vol']:
+            if col in df.columns:
+                df[col] = df[col].astype(float)
 
     if replenished > 0 or skipped_new > 0:
         logger.info(f"按需补采: 补齐 {replenished} 只, 跳过 {skipped_new} 只新股")
-    return data_dict
+    return result
 
 
 def extract_phase(score_0_10, df):
@@ -180,10 +193,16 @@ def _get_grade_info(score):
         return 'D', '❌ 回避'
 
 
-def compute_screening(stock_list):
+def compute_screening(stock_list, weights=None, combinations=None, vibe_strategies=None):
     """
     核心计算：对股票列表执行 L1→L2→L3 筛选
-    L3 使用真实策略（缠论+量价）评分
+    L3 使用真实策略（缠论+量价+因子组合）评分
+
+    Args:
+        stock_list: 股票列表
+        weights: 信号权重 {chanlun, vp, factor, vibe} 0.0-1.0
+        combinations: 选中的因子组合 ID 列表
+        vibe_strategies: 选中的 Vibe 策略 ID 列表
     """
 
     # ── L1: 风险剔除 ──
@@ -194,30 +213,38 @@ def compute_screening(stock_list):
 
     logger.info(f"L1 风险剔除: {len(l1_symbols)} -> {len(l1_passed)}")
 
-    # ── L2: 主力评分 ──
-    scorer = ChipScorer()
-    scored = []
-    for symbol in l1_passed:
-        df = data_dict.get(symbol)
-        if df is None or df.empty:
-            continue
-        try:
-            s = scorer.score(df)
-            if s > 0:
-                scored.append({'symbol': symbol, 'score': s})
-        except Exception as e:
-            logger.debug(f"评分 {symbol} 失败: {e}")
-    scored.sort(key=lambda x: x['score'], reverse=True)
-    l2_top = scored[:100]
+    # ── L2: 主力关注度筛选（核心层） ──
+    # 使用 MainForceFilter：资金流向 + 价量特征 + 筹码集中度
+    # 阈值 ≥6 分视为有主力关注，若无达标则取评分最高的 20 只兜底
+    main_force_filter = MainForceFilter(min_score=6.4, top_k=20)
+    # 构建带 symbol 的列表供 MainForceFilter 使用
+    l1_items = [{'ts_code': s, 'name': ''} for s in l1_passed]
+    # 补充名称
+    name_map = {s.get('ts_code', ''): s.get('name', '') for s in stock_list}
+    for it in l1_items:
+        it['name'] = name_map.get(it['ts_code'], it['name'])
+    
+    l2_passed = main_force_filter.filter(l1_items, data_dict)
 
-    logger.info(f"L2 主力评分: {len(l1_passed)} -> {len(l2_top)}")
+    logger.info(f"L2 主力关注度筛选: {len(l1_passed)} -> {len(l2_passed)} 只")
+    # 携带 phase 信息到后续层
+    l2_top = [{'symbol': r['symbol'], 'score': r['mf_score'],
+               'phase': r['phase']} for r in l2_passed]
 
     # ── L3: 策略验证（缠论+量价共振评分，与L2筹码评分正交独立） ──
     #     per-stock 失败已在 screen_l3_candidates 内部处理（跳过单只）
     #     此处 catch 的是全局性失败（import错误、数据层不可用等），绝不降级到纯数据检查
     try:
         from app.engine.framework.screener_strategy_integration import screen_l3_candidates
-        validated = screen_l3_candidates(l2_top, data_dict)
+        # 构建 L2 phase 映射供 L3 阶段感知评分使用
+        l2_phase_map = {r['symbol']: r.get('phase', 'unknown') for r in l2_passed}
+        validated = screen_l3_candidates(
+            l2_top, data_dict,
+            weights=weights,
+            combinations=combinations,
+            vibe_strategies=vibe_strategies,
+            l2_phase_map=l2_phase_map,
+        )
     except Exception as e:
         logger.error(f"L3 策略引擎全局异常: {e}")
         # 安全降级：只保留有有效 strategy_detail 的股票（如果有的话）
@@ -328,12 +355,25 @@ def compute_screening(stock_list):
 @handle_exceptions
 @screener_bp.route('/run', methods=['POST'])
 def run_screener():
-    """执行完整的三层筛选流程"""
+    """执行完整的三层筛选流程，支持权重/组合/Vibe参数"""
     data = request.get_json(silent=True) or {}
     market = data.get('market')
     industry = data.get('industry')
     use_cache = data.get('useCache', True)
     stock_pool = data.get('stock_pool') or data.get('stockPool')
+
+    # ── 读取策略选择与权重配置 ──
+    weights = data.get('weights')  # {chanlun: 0.35, vp: 0.30, factor: 0.25, vibe: 0.10}
+    combinations = data.get('combinations')  # ['p1', 'p2', ...]
+    vibe_strategies = data.get('vibe_strategies')  # ['vibe_001', ...]
+
+    # 校验格式
+    if not isinstance(weights, dict):
+        weights = None
+    if not isinstance(combinations, list) or not combinations:
+        combinations = None
+    if not isinstance(vibe_strategies, list) or not vibe_strategies:
+        vibe_strategies = None
 
     start_time = time.time()
 
@@ -377,7 +417,12 @@ def run_screener():
         stock_list = [s for s in stock_list if s.get('market') == market]
 
     # 限制处理数量，分批处理
-    result = compute_screening(stock_list)
+    result = compute_screening(
+        stock_list,
+        weights=weights,
+        combinations=combinations,
+        vibe_strategies=vibe_strategies,
+    )
     result['execution_ms'] = int((time.time() - start_time) * 1000)
 
     set_cached_screening(result)
@@ -423,7 +468,7 @@ def run_layer1():
 @handle_exceptions
 @screener_bp.route('/layer2', methods=['POST'])
 def run_layer2():
-    """第二层：主力识别"""
+    """第二层：主力关注度识别"""
     data = request.get_json(silent=True) or {}
     stock_pool = data.get('stock_pool') or data.get('stockPool')
 
@@ -437,27 +482,14 @@ def run_layer2():
         stock_list = dm.get_stock_list(limit=5000)
 
     data_dict = load_stock_data_batch(stock_list)
-    scorer = ChipScorer()
-    scored = []
-
-    for stock in stock_list:
-        ts_code = stock.get('ts_code', '')
-        if not ts_code or ts_code not in data_dict:
-            continue
-        try:
-            s = scorer.score(data_dict[ts_code])
-            if s > 0:
-                scored.append({'symbol': ts_code, 'score': round(s, 2)})
-        except Exception:
-            continue
-
-    scored.sort(key=lambda x: x['score'], reverse=True)
+    mf_filter = MainForceFilter(min_score=6.0, top_k=20)
+    scored = mf_filter.filter(stock_list, data_dict)
 
     return jsonify({
         'success': True,
         'data': {
             'passed': len(scored),
-            'scored': scored[:50]
+            'scored': [{'symbol': s['symbol'], 'score': s['mf_score']} for s in scored[:50]]
         }
     })
 @handle_exceptions
@@ -607,14 +639,11 @@ def screener_stats():
     dm = get_data_manager()
     cache_status = 'valid' if get_cached_screening() else 'empty'
 
-    # 统计有数据的股票数量（复用原有逻辑）
+    # 统计有数据的股票数量
     try:
-        stock_count = len(set(
-            row[0] for row in
-            dm.get_stock_list() or []
-        ))
         from app.models import Stock
         data_count = Stock.query.count()
+        stock_count = data_count  # 从 Stock 表直接获取
     except Exception:
         stock_count = 0
         data_count = 0
@@ -644,8 +673,20 @@ def get_vibe_strategies():
     """
     获取 Vibe Coding 策略列表（214号 §2.7）
     优先从 strategy_templates_v2 数据库动态读取，回退到默认策略
+
+    Vibe 策略应排除已内置在 L1/L2/L3 管道中的策略：
+      L1: DarwinRisk, MultiLevelRiskControl
+      L2: MainForceTracking, Chip
+      L3: Chanlun, VolumePrice
     """
     filter_type = request.args.get('type', 'all')
+
+    # 内置策略排除名单（已在选股系统管道中固定使用的策略）
+    EXCLUDED_NAMES = {
+        'DarwinRiskStrategy', 'MultiLevelRiskControlStrategy',
+        'MainForceTrackingStrategy', 'ChipStrategy',
+        'ChanlunStrategy', 'VolumePriceStrategy',
+    }
 
     strategies = []
 
@@ -660,15 +701,18 @@ def get_vibe_strategies():
         db_strategies = query.order_by(StrategyTemplateV2.usage_count.desc()).all()
 
         for s in db_strategies:
+            if s.name in EXCLUDED_NAMES:
+                continue  # 跳过管道内置策略
             strategies.append({
                 "id": f"vibe_{s.id}",
-                "name": s.name,
+                "name": s.nameCN or s.name,
                 "type": "system" if s.is_system else "user",
                 "description": s.description or "",
                 "code_summary": s.catCN or s.name,
                 "default_checked": s.is_system or False,
                 "created_at": s.created_at.strftime('%Y-%m-%d') if s.created_at else "2026-06-12",
                 "source": "strategy_templates_v2",
+                "ready": getattr(s, 'ready', True),
             })
     except Exception as e:
         logger.warning(f"从 strategy_templates_v2 读取失败，使用默认策略: {e}")

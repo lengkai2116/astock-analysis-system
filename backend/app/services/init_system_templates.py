@@ -565,4 +565,25 @@ def init_system_templates():
 
     db.session.commit()
     logger.info(f"初始化完成: 新增 {created_count} 个模板, 更新 {updated_count} 个已存在的模板")
+
+    # ── 设置 Vibe 策略标记 ──
+    # 将不在 L1/L2/L3 管道中的候选策略标记为 vibe=True
+    _VIBE_CANDIDATES = [
+        'MarketSentimentCycleStrategy',
+        'TrendChannelStrategy',
+        'LimitUpShortTermStrategy',
+        'WaveTheoryStrategy',
+        'FibonacciTimeCycleStrategy',
+    ]
+    try:
+        updated = StrategyTemplateV2.query.filter(
+            StrategyTemplateV2.name.in_(_VIBE_CANDIDATES)
+        ).update({'vibe': True}, synchronize_session=False)
+        db.session.commit()
+        if updated:
+            logger.info(f"Vibe 策略标记完成: {updated} 个")
+    except Exception as e:
+        db.session.rollback()
+        logger.warning(f"Vibe 策略标记失败: {e}")
+
     return created_count, updated_count

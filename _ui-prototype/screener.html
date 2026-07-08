@@ -142,9 +142,9 @@
         <!-- 左栏: 策略多选 -->
         <div class="l3-panel">
           <h4>🎯 策略多选</h4>
-          <div class="l3-check"><input type="checkbox" checked id="ch-chanlun"><label for="ch-chanlun">缠论策略</label></div>
-          <div class="l3-check"><input type="checkbox" checked id="ch-vp"><label for="ch-vp">量价策略</label></div>
-          <div class="l3-check"><input type="checkbox" checked id="ch-factor"><label for="ch-factor">多因子评分</label></div>
+          <div class="l3-check"><input type="checkbox" checked id="ch-chanlun" onchange="toggleChanlun(this.checked)"><label for="ch-chanlun">缠论策略</label></div>
+          <div class="l3-check"><input type="checkbox" checked id="ch-vp" onchange="toggleVolumePrice(this.checked)"><label for="ch-vp">量价策略</label></div>
+          <div class="l3-check"><input type="checkbox" checked id="ch-factor" onchange="toggleFactorMaster(this.checked)"><label for="ch-factor">多因子评分</label></div>
           <div id="factor-combos" style="margin:var(--space-4) 0 var(--space-4) 22px;">
             <div id="combos-loading" style="font-size:11px;color:var(--text-muted);padding:var(--space-2) 0;">⏳ 加载因子组合...</div>
           </div>
@@ -214,6 +214,7 @@
             <tr><th>代码</th><th>名称</th><th>行业</th><th>昨收</th><th>涨跌幅</th><th>综合评分</th><th>评级</th><th>触发信号</th><th>操作</th></tr>
             <tbody id="results-body"></tbody>
           </table>
+          <div id="pagination-bar" style="display:flex;justify-content:center;align-items:center;gap:var(--space-8);padding:var(--space-8) 0;font-size:12px;"></div>
           <div style="font-size:10px;color:var(--text-muted);padding:4px 8px;text-align:right;">* 价格/涨跌幅为最近交易日收盘数据（日线），非实时行情</div>
         </div>
       </div>
@@ -276,7 +277,7 @@ function adjWeight(btn, delta) {
   var valEl = row.querySelector('.w-value');
   var fillEl = row.querySelector('.w-bar-fill');
   var cur = parseInt(valEl.textContent);
-  var newVal = Math.max(5, Math.min(80, cur + delta));
+  var newVal = Math.max(0, Math.min(100, cur + delta));
   valEl.textContent = newVal + '%';
   fillEl.style.width = newVal + '%';
 
@@ -291,6 +292,9 @@ function adjWeight(btn, delta) {
 var _screenResults = null;
 var _selectedCombos = {};   // {id: {name, id}} 已勾选因子组合
 var _selectedVibes = {};    // {id: {name, id}} 已勾选Vibe策略
+var _pageSize = 20;
+var _currentPage = 1;
+var _watchlistSet = {};     // {ts_code: true} 已加载的自选股名单
 
 // ── 页面加载：因子组合 ──
 function loadFactorCombos() {
@@ -332,12 +336,40 @@ function toggleCombo(id, name, checked) {
     delete _selectedCombos[id];
   }
   updateComboCount();
+  // 因子组合全取消时→因子权重归零，有勾选时恢复默认
+  var hasFactor = Object.keys(_selectedCombos).length > 0;
+  var wRow = document.querySelector('.weight-row[data-key="factor"]');
+  if (wRow && !hasFactor) {
+    var valEl = wRow.querySelector('.w-value');
+    var fillEl = wRow.querySelector('.w-bar-fill');
+    valEl.textContent = '0%';
+    fillEl.style.width = '0%';
+    updateWeightTotal();
+  }
 }
 
 function updateComboCount() {
   var count = Object.keys(_selectedCombos).length;
   var el = document.getElementById('combo-count');
   if (el) el.textContent = '已选 ' + count + ' 个组合';
+}
+
+// ── 搜集当前权重为 POST payload ──
+function collectWeights() {
+  var w = {};
+  document.querySelectorAll('#weight-config .weight-row').forEach(function(r) {
+    var key = r.getAttribute('data-key');
+    var val = parseInt(r.querySelector('.w-value').textContent);
+    if (key) w[key] = Math.max(0, Math.min(1, val / 100));
+  });
+  return w;
+}
+function updateWeightTotal() {
+  var total = 0;
+  document.querySelectorAll('#weight-config .weight-row').forEach(function(r){
+    total += parseInt(r.querySelector('.w-value').textContent);
+  });
+  document.getElementById('weight-sum').textContent = total + '%';
 }
 
 // ── 页面加载：Vibe策略 ──
@@ -381,6 +413,54 @@ function toggleVibe(id, name, checked) {
   } else {
     delete _selectedVibes[id];
   }
+  // Vibe 全取消时→Vibe权重归零
+  var hasVibe = Object.keys(_selectedVibes).length > 0;
+  var wRow = document.querySelector('.weight-row[data-key="vibe"]');
+  if (wRow) {
+    var valEl = wRow.querySelector('.w-value');
+    var fillEl = wRow.querySelector('.w-bar-fill');
+    valEl.textContent = hasVibe ? '10%' : '0%';
+    fillEl.style.width = hasVibe ? '10%' : '0%';
+    updateWeightTotal();
+  }
+}
+
+// ── 缠论勾选 → 权重归零/恢复 ──
+function toggleChanlun(checked) {
+  var wRow = document.querySelector('.weight-row[data-key="chanlun"]');
+  if (wRow) {
+    var valEl = wRow.querySelector('.w-value');
+    var fillEl = wRow.querySelector('.w-bar-fill');
+    valEl.textContent = checked ? '35%' : '0%';
+    fillEl.style.width = checked ? '35%' : '0%';
+    updateWeightTotal();
+  }
+}
+
+// ── 量价勾选 → 权重归零/恢复 ──
+function toggleVolumePrice(checked) {
+  var wRow = document.querySelector('.weight-row[data-key="vp"]');
+  if (wRow) {
+    var valEl = wRow.querySelector('.w-value');
+    var fillEl = wRow.querySelector('.w-bar-fill');
+    valEl.textContent = checked ? '30%' : '0%';
+    fillEl.style.width = checked ? '30%' : '0%';
+    updateWeightTotal();
+  }
+}
+
+// ── 多因子评分勾选 → 控制组合区域显示 + 权重归零/恢复 ──
+function toggleFactorMaster(checked) {
+  var combos = document.getElementById('factor-combos');
+  if (combos) combos.style.display = checked ? '' : 'none';
+  var wRow = document.querySelector('.weight-row[data-key="factor"]');
+  if (wRow) {
+    var valEl = wRow.querySelector('.w-value');
+    var fillEl = wRow.querySelector('.w-bar-fill');
+    valEl.textContent = checked ? '25%' : '0%';
+    fillEl.style.width = checked ? '25%' : '0%';
+    updateWeightTotal();
+  }
 }
 
 // ── 执行筛选 ──
@@ -396,9 +476,20 @@ function runScreening() {
   table.style.display = '';
   if (loading) loading.style.display = '';
 
-  var timeout = setTimeout(function() { showError('筛选超时，请重试'); if(btn)btn.innerHTML='⚡ 执行筛选'; }, 30000);
+  // 搜集策略选择与权重
+  var comboIds = Object.keys(_selectedCombos);
+  var vibeIds = Object.keys(_selectedVibes);
+  var weights = collectWeights();
+  var payload = JSON.stringify({
+    useCache: false,
+    weights: weights,
+    combinations: comboIds.length > 0 ? comboIds : null,
+    vibe_strategies: vibeIds.length > 0 ? vibeIds : null,
+  });
 
-  fetch(API_BASE + '/api/v3/screener/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{"useCache":true}'})
+  var timeout = setTimeout(function() { showError('筛选超时，请重试'); if(btn)btn.innerHTML='⚡ 执行筛选'; }, 60000);
+
+  fetch(API_BASE + '/api/v3/screener/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:payload})
     .then(function(r) { return r.json(); })
     .then(function(res) {
       clearTimeout(timeout);
@@ -407,6 +498,8 @@ function runScreening() {
 
       if (res.success && res.data) {
         renderResults(res.data);
+        // 缓存到 sessionStorage，切换页面返回后自动恢复
+        try { sessionStorage.setItem('screener_results', JSON.stringify(res.data)); } catch(e) {}
       } else {
         showError(res.message || '筛选失败，请重试');
       }
@@ -419,9 +512,10 @@ function runScreening() {
     });
 }
 
-// ── 渲染结果 ──
+// ── 渲染结果（带分页 + 操作按钮） ──
 function renderResults(data) {
   _screenResults = data.results || [];
+  _currentPage = 1;
 
   // 更新Pipeline横条
   if (data.layers && data.layers.length >= 3) {
@@ -430,24 +524,31 @@ function renderResults(data) {
     document.getElementById('l3-count').textContent = data.layers[2].output.toLocaleString();
   }
 
-  // 更新结果计数
   document.getElementById('result-count').textContent = _screenResults.length;
+  renderPage();
+}
 
-  // 渲染结果表
+function renderPage() {
   var body = document.getElementById('results-body');
-  if (_screenResults.length === 0) {
+  if (!_screenResults || _screenResults.length === 0) {
     body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:var(--space-12);color:var(--text-muted);">当前无满足条件的股票，请调整筛选参数</td></tr>';
     return;
   }
 
+  var totalPages = Math.ceil(_screenResults.length / _pageSize);
+  if (_currentPage > totalPages) _currentPage = totalPages;
+  var start = (_currentPage - 1) * _pageSize;
+  var end = Math.min(start + _pageSize, _screenResults.length);
+  var pageItems = _screenResults.slice(start, end);
+
   var html = '';
   var gradeLabels = {S:'🔥 强烈推荐',A:'✅ 推荐',B:'👀 关注',C:'⚠️ 谨慎',D:'❌ 回避'};
-  _screenResults.forEach(function(r) {
+
+  pageItems.forEach(function(r) {
     var code = r.symbol || r.ts_code || '';
     var name = r.name || '';
     var industry = r.industry || '—';
     var price = r.close != null ? '¥' + r.close.toFixed(2) : '—';
-    // 涨跌颜色
     var pct = r.pct_chg;
     var pctDisplay = '—';
     var pctColor = 'var(--text-muted)';
@@ -462,6 +563,14 @@ function renderResults(data) {
     var triggers = (r.triggers && Array.isArray(r.triggers))
       ? r.triggers.join(', ') : (r.phase || '');
     var tagClass = score >= 75 ? 'tag-bullish' : (score >= 50 ? 'tag-watch' : 'tag-neutral');
+
+    // 操作按钮
+    var inWatch = _watchlistSet[code] ? true : false;
+    var watchBtn = inWatch
+      ? '<span style="color:var(--text-muted);font-size:11px;cursor:default;">⭐ 已添加</span>'
+      : '<span style="color:var(--color-brand-500);font-size:11px;cursor:pointer;" onclick="event.stopPropagation();addToWatchlist(\'' + code + '\',this)">☆ 添加自选</span>';
+    var analysisBtn = '<span style="color:var(--color-brand-500);font-size:11px;cursor:pointer;margin-left:6px;" onclick="event.stopPropagation();location.href=\'indicator-ide.html?code=' + code + '\'">📈 策略分析</span>';
+
     html += '<tr class="clickable" onclick="showDetail(\'' + code + '\')">'
       + '<td>' + code + '</td>'
       + '<td>' + name + '</td>'
@@ -471,9 +580,63 @@ function renderResults(data) {
       + '<td><span class="tag ' + tagClass + '">' + score + '</span></td>'
       + '<td>' + grade + '</td>'
       + '<td><span class="tag ' + tagClass + '" style="font-size:11px;">' + (triggers.length > 12 ? triggers.substr(0,12) + '…' : triggers) + '</span></td>'
-      + '<td style="font-size:11px;color:var(--text-muted);">详情 →</td></tr>';
+      + '<td style="white-space:nowrap;">' + watchBtn + analysisBtn + '</td></tr>';
   });
   body.innerHTML = html;
+
+  // 分页栏
+  renderPagination(totalPages);
+}
+
+function renderPagination(totalPages) {
+  var bar = document.getElementById('pagination-bar');
+  if (totalPages <= 1) { bar.innerHTML = ''; return; }
+
+  var h = '';
+  // 上一页
+  h += '<span style="cursor:' + (_currentPage > 1 ? 'pointer' : 'default') + ';color:' + (_currentPage > 1 ? 'var(--text-primary)' : 'var(--text-muted)') + ';" onclick="' + (_currentPage > 1 ? 'goPage(' + (_currentPage - 1) + ')' : '') + '">‹ 上一页</span>';
+
+  // 页码
+  var maxVisible = 7;
+  var startP = Math.max(1, _currentPage - Math.floor(maxVisible / 2));
+  var endP = Math.min(totalPages, startP + maxVisible - 1);
+  if (endP - startP < maxVisible - 1) startP = Math.max(1, endP - maxVisible + 1);
+
+  if (startP > 1) h += '<span style="color:var(--text-muted);font-size:11px;">…</span>';
+  for (var p = startP; p <= endP; p++) {
+    h += '<span style="cursor:pointer;padding:2px 8px;border-radius:var(--radius-xs);font-weight:' + (p === _currentPage ? '700' : '400') + ';background:' + (p === _currentPage ? 'var(--color-brand-500)' : 'transparent') + ';color:' + (p === _currentPage ? '#fff' : 'var(--text-primary)') + ';" onclick="goPage(' + p + ')">' + p + '</span>';
+  }
+  if (endP < totalPages) h += '<span style="color:var(--text-muted);font-size:11px;">…</span>';
+
+  // 下一页
+  h += '<span style="cursor:' + (_currentPage < totalPages ? 'pointer' : 'default') + ';color:' + (_currentPage < totalPages ? 'var(--text-primary)' : 'var(--text-muted)') + ';" onclick="' + (_currentPage < totalPages ? 'goPage(' + (_currentPage + 1) + ')' : '') + '">下一页 ›</span>';
+
+  bar.innerHTML = h;
+}
+
+function goPage(page) {
+  _currentPage = page;
+  renderPage();
+}
+
+// ── 添加自选 ──
+function addToWatchlist(code, el) {
+  fetch(API_BASE + '/api/v3/watchlist', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ts_code: code})
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(res) {
+    if (res.success) {
+      _watchlistSet[code] = true;
+      if (el) el.textContent = '⭐ 已添加';
+      if (el) el.style.color = 'var(--text-muted)';
+      if (el) el.style.cursor = 'default';
+      if (el) el.onclick = null;
+    }
+  })
+  .catch(function() {});
 }
 
 // ── 详情弹窗 ──
@@ -531,45 +694,125 @@ function showVibeModal() {
 function closeVibeModal() {
   document.getElementById('vibe-modal').style.display = 'none';
 }
+
+var _generatedVibeData = null;
+
 function generateVibeStrategy() {
   var desc = document.getElementById('vibe-input').value.trim();
   if (!desc) { alert('请先输入策略描述'); return; }
-  document.getElementById('vibe-code-area').textContent =
-    'def custom_strategy(data):\n'
-    + '    """\n'
-    + '    ' + desc + '\n'
-    + '    """\n'
-    + '    # 选股逻辑\n'
-    + '    score = 0\n'
-    + '    # MACD金叉检测\n'
-    + '    if data["macd_diff"].iloc[-1] > data["macd_dea"].iloc[-1]:\n'
-    + '        score += 40\n'
-    + '    # 业绩预增检测\n'
-    + '    if data["yoy_profit"].iloc[-1] > 50:\n'
-    + '        score += 30\n'
-    + '    return score';
-}
-function addVibeStrategy() {
-  var name = document.getElementById('vibe-name').value.trim();
-  var code = document.getElementById('vibe-code-area').textContent;
-  if (!name) { alert('请输入策略名称'); return; }
-  if (code.indexOf('def custom_strategy') === -1) { alert('请先生成策略代码'); return; }
+  var btn = document.querySelector('#vibe-modal .btn-primary');
+  var codeArea = document.getElementById('vibe-code-area');
+  btn.disabled = true;
+  btn.textContent = '⏳ AI 生成中...';
+  codeArea.textContent = '正在调用 AI 生成策略...';
 
-  var html = '<div class="vibe-strategy" style="border-color:var(--color-brand-500);">'
-    + '<div class="l3-check" style="padding:var(--space-2) 0;"><input type="checkbox" checked>'
-    + '<label style="font-size:12px;font-weight:500;color:var(--color-brand-500);">⭐ ' + name + '</label></div>'
-    + '<div style="font-size:11px;color:var(--text-muted);margin-left:22px;">用户自建 · ' + new Date().toISOString().slice(0,10) + '</div>'
-    + '</div>';
-  document.getElementById('vibe-content').insertAdjacentHTML('afterbegin', html);
-  closeVibeModal();
-  alert('✅ 策略「' + name + '」已添加\n\n• 已加入L3 Vibe Coding 策略列表');
+  fetch(API_BASE + '/api/v2/strategy/generate', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({prompt: desc})
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(res) {
+    btn.disabled = false;
+    btn.textContent = '🤖 AI 生成';
+    if (res.success && res.data) {
+      _generatedVibeData = res.data;
+      codeArea.textContent = res.data.code_template || res.data.code || '# AI 生成的策略代码';
+      if (res.data.nameCN && !document.getElementById('vibe-name').value) {
+        document.getElementById('vibe-name').value = res.data.nameCN;
+      }
+    } else {
+      codeArea.textContent = '生成失败，请重试';
+    }
+  })
+  .catch(function() {
+    btn.disabled = false;
+    btn.textContent = '🤖 AI 生成';
+    codeArea.textContent = '网络错误，请重试';
+  });
+}
+
+function addVibeStrategy() {
+  var nameCN = document.getElementById('vibe-name').value.trim();
+  var code = document.getElementById('vibe-code-area').textContent;
+  if (!nameCN) { alert('请输入策略名称'); return; }
+  if (code.indexOf('def ') === -1 && code.indexOf('function ') === -1 && code.indexOf('#') === -1) {
+    if (!confirm('策略代码似乎不完整，确定要保存吗？')) return;
+  }
+
+  var payload = {
+    name: nameCN.replace(/\s+/g, '_'),
+    nameCN: nameCN,
+    description: document.getElementById('vibe-input').value.trim(),
+    template_type: 'indicator',
+    code_template: code,
+    parameters: (_generatedVibeData && _generatedVibeData.parameters) || [],
+    author: 'user',
+    catLabel: 'Vibe自建',
+    vibe: true,
+    ready: true,
+    icon: '✨',
+    iconLarge: '✨',
+    tags: ['Vibe', '自建'],
+    updated: new Date().toISOString().slice(0, 10),
+  };
+
+  fetch(API_BASE + '/api/v2/strategy/templates', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(res) {
+    if (res.success) {
+      closeVibeModal();
+      document.getElementById('vibe-input').value = '';
+      document.getElementById('vibe-name').value = '';
+      document.getElementById('vibe-code-area').textContent = '点击「AI 生成」后，策略代码将出现在这里...';
+      _generatedVibeData = null;
+      loadVibeStrategies();
+      alert('✅ 策略「' + nameCN + '」已创建');
+    } else {
+      alert('❌ 保存失败，请重试');
+    }
+  })
+  .catch(function() {
+    alert('❌ 网络错误，请重试');
+  });
 }
 
 // ── 页面加载 ──
 (function() {
   loadFactorCombos();
   loadVibeStrategies();
+  loadWatchlist();
+
+  // 恢复之前缓存的筛选结果（sessionStorage，切换页面返回后可用）
+  try {
+    var cached = sessionStorage.getItem('screener_results');
+    if (cached) {
+      var data = JSON.parse(cached);
+      if (data && data.results && data.results.length > 0) {
+        renderResults(data);
+      }
+    }
+  } catch(e) {}
 })();
+
+function loadWatchlist() {
+  fetch(API_BASE + '/api/v3/watchlist')
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+      if (res.success && res.data) {
+        var items = Array.isArray(res.data) ? res.data : (res.data.items || []);
+        items.forEach(function(item) {
+          var code = item.ts_code || item.symbol || '';
+          if (code) _watchlistSet[code] = true;
+        });
+      }
+    })
+    .catch(function() {});
+}
 </script>
 <script>
 var sidebarCollapsed = true;

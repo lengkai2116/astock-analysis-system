@@ -235,6 +235,8 @@ def create_app():
     _proto_dir = os.path.join(os.path.dirname(app.root_path), '..', '_ui-prototype')
     if os.path.isdir(_proto_dir):
         from flask import send_from_directory
+
+        # 优先注册具体的页面路由
         @app.route('/dashboard.html')
         @app.route('/dashboard')
         def serve_dashboard():
@@ -242,6 +244,13 @@ def create_app():
         @app.route('/assets/<path:filename>')
         def serve_assets(filename):
             return send_from_directory(os.path.join(_proto_dir, 'assets'), filename)
+
+        # 通用路由：/<name>.html → _ui-prototype/<name>.html
+        # 覆盖 screener/backtest/watchlist 等所有原型页面
+        @app.route('/<path:filename>.html')
+        def serve_prototype_html(filename):
+            return send_from_directory(_proto_dir, f'{filename}.html')
+
         logger.info(f"原型前端静态文件已挂载: {_proto_dir}")
 
     # ============================================================

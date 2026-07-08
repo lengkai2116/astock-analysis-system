@@ -168,8 +168,12 @@ class DataManager:
         return count
     
     def get_cached_daily_data(self, ts_code, start_date=None, end_date=None):
-        """从缓存获取日线数据（244号方案：移除PG DailyData降级，只走内存→DuckDB）"""
+        """从缓存获取日线数据"""
         return self.cache.get_cached_daily(ts_code, start_date, end_date)
+
+    def get_cached_daily_batch(self, ts_codes, start_date=None, end_date=None):
+        """批量获取日线数据（全量预加载 + 内存分组）"""
+        return self.cache.get_cached_daily_batch(ts_codes, start_date, end_date)
 
     def preload_cache(self):
         """缓存预热 — 从 Stock 表获取股票列表，逐只预热"""
@@ -192,13 +196,20 @@ class DataManager:
         return stock.to_dict() if stock else None
     
     def get_stock_list(self, keyword=None, limit=50):
-        """获取股票列表，支持按代码/名称搜索"""
+        """
+        获取股票列表，支持按代码/名称/行业搜索
+        
+        Args:
+            keyword: 搜索关键词（匹配 ts_code / name / industry）
+            limit: 最大返回数量
+        """
         query = Stock.query.order_by(Stock.ts_code)
         if keyword:
             query = query.filter(
                 or_(
                     Stock.ts_code.ilike(f'%{keyword}%'),
-                    Stock.name.ilike(f'%{keyword}%')
+                    Stock.name.ilike(f'%{keyword}%'),
+                    Stock.industry.ilike(f'%{keyword}%'),
                 )
             )
         stocks = query.limit(limit).all()
@@ -548,6 +559,10 @@ class DataManager:
             ts_code=ts_code, trade_date=trade_date,
             start_date=start_date, end_date=end_date
         )
+
+    def get_cached_stk_holder(self, ts_code):
+        """从缓存获取股东户数数据"""
+        return self.cache.get_cached_stk_holder(ts_code)
 
     # ==========================================
     # 批量数据同步方法（供 scheduler 调用）

@@ -430,6 +430,32 @@ class EnhancedCacheManager:
             self.cache_stats['misses'] += 1
         return df
 
+    def preload_all(self):
+        """预加载全量日线到内存（加速批量筛选）"""
+        if getattr(self, '_all_daily', None) is None:
+            self._all_daily = self._query_df("SELECT * FROM daily_cache ORDER BY ts_code, trade_date")
+            logger.info(f"日线预加载: {len(self._all_daily)} 行")
+
+    def get_cached_daily_batch(self, ts_codes, start_date=None, end_date=None):
+        """批量获取多只股票的日线数据（使用全量预加载 + 自动加载）"""
+        df = getattr(self, '_all_daily', None)
+        if df is None:
+            df = self._query_df("SELECT * FROM daily_cache ORDER BY ts_code, trade_date")
+            self._all_daily = df
+            logger.info(f"日线自动加载: {len(df)} 行")
+        if df.empty:
+            return {}
+        m = df['ts_code'].isin(ts_codes)
+        if start_date:
+            m &= df['trade_date'] >= start_date
+        if end_date:
+            m &= df['trade_date'] <= end_date
+        subset = df[m]
+        result = {}
+        for ts_code, grp in subset.groupby('ts_code'):
+            result[ts_code] = grp.reset_index(drop=True)
+        return result
+
     def cache_daily_data(self, df):
         if df.empty:
             return
@@ -545,6 +571,17 @@ class EnhancedCacheManager:
                 logger.warning(f"缓存daily_basic数据失败: {e}")
 
     def get_cached_daily_basic(self, ts_code, start_date=None, end_date=None):
+        """从缓存获取每日基础数据（优先使用预加载内存）"""
+        all_df = getattr(self, '_all_daily_basic', None)
+        if all_df is not None:
+            m = all_df['ts_code'] == ts_code
+            if start_date:
+                m &= all_df['trade_date'] >= start_date
+            if end_date:
+                m &= all_df['trade_date'] <= end_date
+            df = all_df[m].copy()
+            if not df.empty:
+                return df
         query = "SELECT * FROM daily_basic_cache WHERE ts_code = ?"
         params = [ts_code]
         if start_date:
@@ -555,6 +592,27 @@ class EnhancedCacheManager:
             params.append(end_date)
         query += " ORDER BY trade_date"
         return self._query_df(query, params)
+
+    def get_cached_daily_basic_batch(self, ts_codes, start_date=None, end_date=None):
+        """批量获取多只股票的基础数据"""
+        if not ts_codes:
+            return {}
+        placeholders = ','.join(['?' for _ in ts_codes])
+        query = f"SELECT * FROM daily_basic_cache WHERE ts_code IN ({placeholders})"
+        params = list(ts_codes)
+        if start_date:
+            query += " AND trade_date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND trade_date <= ?"
+            params.append(end_date)
+        df = self._query_df(query, params)
+        if df.empty:
+            return {}
+        result = {}
+        for ts_code, grp in df.groupby('ts_code'):
+            result[ts_code] = grp.sort_values('trade_date').reset_index(drop=True)
+        return result
 
     # ==================== 筹码分布 ====================
 
@@ -627,6 +685,18 @@ class EnhancedCacheManager:
                 logger.warning(f"缓存资金流向数据失败: {e}")
 
     def get_cached_moneyflow(self, ts_code=None, trade_date=None, start_date=None, end_date=None):
+        """从缓存获取资金流向（优先使用预加载内存）"""
+        if ts_code and not trade_date:
+            all_df = getattr(self, '_all_moneyflow', None)
+            if all_df is not None:
+                m = all_df['ts_code'] == ts_code
+                if start_date:
+                    m &= all_df['trade_date'] >= start_date
+                if end_date:
+                    m &= all_df['trade_date'] <= end_date
+                df = all_df[m].copy()
+                if not df.empty:
+                    return df
         query = "SELECT * FROM moneyflow_cache WHERE 1=1"
         params = []
         if ts_code:
@@ -639,6 +709,27 @@ class EnhancedCacheManager:
             query += " AND trade_date <= ?"; params.append(end_date)
         query += " ORDER BY trade_date, ts_code"
         return self._query_df(query, params)
+
+    def get_cached_moneyflow_batch(self, ts_codes, start_date=None, end_date=None):
+        """批量获取多只股票的资金流向数据"""
+        if not ts_codes:
+            return {}
+        placeholders = ','.join(['?' for _ in ts_codes])
+        query = f"SELECT * FROM moneyflow_cache WHERE ts_code IN ({placeholders})"
+        params = list(ts_codes)
+        if start_date:
+            query += " AND trade_date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND trade_date <= ?"
+            params.append(end_date)
+        df = self._query_df(query, params)
+        if df.empty:
+            return {}
+        result = {}
+        for ts_code, grp in df.groupby('ts_code'):
+            result[ts_code] = grp.sort_values('trade_date').reset_index(drop=True)
+        return result
 
     # ==================== 赢率缓存 ====================
 

@@ -135,15 +135,17 @@ def _compute_volume_price_score(vp_result: Dict) -> Tuple[float, str, str]:
         return 0.0, '分析失败', 'neutral'
 
     signal_output = vp_result.get('signal_output', {})
-    direction = signal_output.get('signal', 'NEUTRAL')
+    director = signal_output.get('signal', 'NEUTRAL')
     confidence = signal_output.get('confidence', 0.0)
     signal_label = signal_output.get('signal_label', '')
     stage = vp_result.get('stage', {})
 
-    dir_map = {'BULLISH': 7.0, 'WATCH': 5.5, 'HOLD': 5.0, 'NEUTRAL': 5.0, 'BEARISH': 3.0}
-    base = dir_map.get(direction, 5.0)
-    score = base * confidence * 2  # confidence 0-1, 乘2映射到0-10
-    score = max(0.0, min(10.0, score))
+    # VP 策略输出 BUY/SELL/WATCH/HOLD，映射到基础分
+    # BUY=7.0, WATCH=5.5, HOLD=5.0, SELL=3.0, 其余默认5.0
+    dir_map = {'BUY': 7.0, 'BULLISH': 7.0, 'WATCH': 5.5, 'HOLD': 5.0,
+               'NEUTRAL': 5.0, 'SELL': 3.0, 'BEARISH': 3.0}
+    base = dir_map.get(director, 5.0)
+    score = base * confidence * 2
 
     # 阶段加分
     current_stage = stage.get('current_stage', '')
@@ -154,30 +156,353 @@ def _compute_volume_price_score(vp_result: Dict) -> Tuple[float, str, str]:
 
     score = max(0.0, min(10.0, score))
     direction_str = (
-        'bullish' if direction in ('BULLISH',)
-        else 'bearish' if direction in ('BEARISH',)
+        'bullish' if director in ('BUY', 'BULLISH')
+        else 'bearish' if director in ('SELL', 'BEARISH')
         else 'neutral'
     )
-    signal_text = signal_label if signal_label else direction
+    signal_text = signal_label if signal_label else director
 
     return round(score, 2), signal_text, direction_str
 
 
 def _compute_combined_score(chanlun_score: float, vp_score: float,
-                            chanlun_dir: str, vp_dir: str) -> float:
+                            chanlun_dir: str, vp_dir: str,
+                            weights: dict = None,
+                            factor_score: float = 0.0,
+                            vibe_bonus: float = 0.0) -> float:
     """
-    综合评分（L3 多策略共振评分）
+    综合评分（L3 多策略共振评分，带权重参数）
 
-    L3 仅包含缠论+量价，筹码评分已在 L2 独立完成，两者正交不重复。
-    权重: 缠论 50% + 量价 50%（等权，因为同属策略验证层）
+    权重参数格式: {'chanlun': 0.35, 'vp': 0.30, 'factor': 0.25, 'vibe': 0.10}
+    权重 0 的策略不参与计算，未提供的策略使用默认等权。
+
+    筹码评分已在 L2 独立完成，L3 不做筹码分析。
     """
-    total = chanlun_score * 0.5 + vp_score * 0.5
+    # 应用前端传入的权重，未指定的策略使用剩余等权
+    default_w = {'chanlun': 0.4, 'vp': 0.4, 'factor': 0.2, 'vibe': 0.0}
+    if weights:
+        default_w.update(weights)
 
-    # 方向一致性加分: 缠论和量价同向 +1
-    if chanlun_dir == vp_dir and chanlun_dir != 'neutral':
-        total += 1.0
+    w_cl = max(0.0, default_w.get('chanlun', 0.0))
+    w_vp = max(0.0, default_w.get('vp', 0.0))
+    w_fx = max(0.0, default_w.get('factor', 0.0))
+    w_vb = max(0.0, default_w.get('vibe', 0.0))
 
-    return min(10.0, max(0.0, total))
+    total_w = w_cl + w_vp + w_fx + w_vb
+    if total_w <= 0:
+        return 5.0  # 所有权重为0时返回中性分
+
+    score = (chanlun_score * w_cl + vp_score * w_vp +
+             factor_score * w_fx + vibe_bonus * w_vb) / total_w
+
+    # 方向一致性加分: 缠论和量价同向 +1（仅当两者权重都>0时生效）
+    if w_cl > 0 and w_vp > 0 and chanlun_dir == vp_dir and chanlun_dir != 'neutral':
+        score += 0.5
+
+    return min(10.0, max(0.0, score))
+
+
+# ── 因子中⽂名 → 计算函数映射表 ──
+# 供 _compute_factor_score 将 PRESET_COMBOS 中的因子名映射为实际计算
+_FACTOR_COMPUTERS = {}
+
+def _register_factor(name, func):
+    _FACTOR_COMPUTERS[name] = func
+
+def _f_momentum(closes, volumes, days=20):
+    """动量因子：N日收益率 → 0-10"""
+    if len(closes) < days + 1:
+        return None
+    ret = (closes[-1] / closes[-days-1]) - 1
+    return max(0, min(10, (ret * 100 + 10) / 2))
+
+def _f_rsi(closes, volumes, period=14):
+    """RSI因子 → 0-10"""
+    if len(closes) < period + 2:
+        return None
+    import numpy as np
+    deltas = np.diff(closes[-(period+1):])
+    gains = np.sum(deltas[deltas > 0])
+    losses = abs(np.sum(deltas[deltas < 0]))
+    if losses > 1e-9:
+        rsi = 100 - 100 / (1 + gains / losses)
+    elif gains > 0:
+        rsi = 100
+    else:
+        rsi = 50
+    return max(0, min(10, (rsi - 30) / 4))
+
+def _f_volume_ratio(closes, volumes, period=5):
+    """量比因子 → 0-10"""
+    if len(volumes) < period + 16:
+        return None
+    import numpy as np
+    vol_recent = np.mean(volumes[-period:])
+    vol_base = np.mean(volumes[-(period+15):-period])
+    if vol_base < 1e-9:
+        return 5.0
+    vr = vol_recent / vol_base
+    return max(0, min(10, vr * 2.5))
+
+def _f_volatility(closes, volumes, period=20):
+    """波动率因子（低波=高分）→ 0-10"""
+    import numpy as np
+    if len(closes) < period + 1:
+        return None
+    vol = np.std(closes[-period:]) / max(np.mean(closes[-period:]), 1e-9)
+    return max(0, min(10, (1 - vol) * 10))
+
+def _f_reversal(closes, volumes, period=5):
+    """反转因子：短期涨多了扣分 → 0-10（与动量反向）"""
+    mom = _f_momentum(closes, volumes, period)
+    if mom is None:
+        return None
+    return 10 - mom
+
+def _f_bias(closes, volumes, period=20):
+    """均线乖离率 → 0-10"""
+    import numpy as np
+    if len(closes) < period + 1:
+        return None
+    ma = np.mean(closes[-period:])
+    bias = (closes[-1] - ma) / max(ma, 1e-9)
+    # bias -5% ≈ 2.5分, 0% ≈ 5分, +5% ≈ 7.5分
+    return max(0, min(10, 5 + bias * 50))
+
+# 注册所有可计算的因子
+_register_factor('20日动量', lambda c, v: _f_momentum(c, v, 20))
+_register_factor('5日动量', lambda c, v: _f_momentum(c, v, 5))
+_register_factor('动量因子(MOM)', lambda c, v: _f_momentum(c, v, 20))
+_register_factor('14日RSI', lambda c, v: _f_rsi(c, v, 14))
+_register_factor('5日量比', lambda c, v: _f_volume_ratio(c, v, 5))
+_register_factor('量比', lambda c, v: _f_volume_ratio(c, v, 5))
+_register_factor('20日波动率', lambda c, v: _f_volatility(c, v, 20))
+_register_factor('5日反转因子', lambda c, v: _f_reversal(c, v, 5))
+_register_factor('20日均线乖离率', lambda c, v: _f_bias(c, v, 20))
+# ● 以下因子需要 ECM 数据支持，暂用简化计算
+# 20日换手率 — 需要 daily_basic_cache.turnover_rate
+# 市盈率倒数(EP) — 需要 daily_basic_cache.pe_ttm
+# ROE — 需要 fina_indicator_cache.roe
+# 股息率 — 需要 daily_basic_cache.dv_ratio
+# 营收增长率 — 需要 income_cache
+# 净利润增长率 — 需要 fina_indicator_cache
+# 大单净买入 — 需要 moneyflow_cache
+# 资金流向强度 — 需要 moneyflow_cache
+# 换手率变化 — 需要 daily_basic_cache
+# 资产负债率 — 需要 balancesheet_cache
+
+
+def _compute_factor_score(df, symbol=None, combo_ids=None, data_dict=None, dm=None):
+    """
+    根据选中的因子组合计算因子评分（0-10）
+
+    遍历每个选中组合的因子定义，用 _FACTOR_COMPUTERS 逐个计算，
+    按权重加权得到每个组合的分，再对所有组合等权平均。
+
+    Args:
+        df: 股票的 OHLCV DataFrame
+        symbol: 股票代码（用于获取 ECM 数据）
+        combo_ids: 选中的组合 ID 列表（如 ['p1','p3']）
+        data_dict: {symbol: DataFrame} 全量数据池（当前未使用，预留）
+        dm: DataManager 实例（用于 ECM 数据获取）
+
+    Returns:
+        float: 0-10 因子评分
+    """
+    import numpy as np
+    closes = df['close'].values
+    volumes = (df['vol'].values if 'vol' in df.columns
+               else df.get('amount', df['close']).values)
+
+    if not combo_ids:
+        return 0.0
+
+    # 导入 PRESET_COMBOS
+    try:
+        from app.routes.factors import PRESET_COMBOS
+    except ImportError:
+        logger.warning("PRESET_COMBOS 导入失败，使用通用因子评分")
+        return _fallback_factor_score(closes, volumes)
+
+    # 构建组合 ID → 组合定义 的映射
+    combo_map = {c['id']: c for c in PRESET_COMBOS}
+
+    combo_scores = []
+    for cid in combo_ids:
+        combo = combo_map.get(cid)
+        if not combo:
+            continue
+        factors = combo.get('factors', [])
+        if not factors:
+            continue
+
+        # 逐因子计算
+        factor_vals = []
+        total_weight = 0
+        for f in factors:
+            fname = f.get('n', '')
+            fweight = f.get('w', 0)
+            computer = _FACTOR_COMPUTERS.get(fname)
+            if computer:
+                val = computer(closes, volumes)
+                if val is not None:
+                    factor_vals.append(val * fweight)
+                    total_weight += fweight
+            else:
+                # 未注册的因子用中性分 5
+                factor_vals.append(5.0 * fweight)
+                total_weight += fweight
+
+        if total_weight > 0:
+            combo_score = sum(factor_vals) / total_weight
+            combo_scores.append(combo_score)
+
+    if not combo_scores:
+        return 0.0
+
+    # 所有选中的组合等权平均
+    return sum(combo_scores) / len(combo_scores)
+
+
+def _fallback_factor_score(closes, volumes):
+    """通用因子评分（无组合选择时的回退）"""
+    scores = []
+    # 动量
+    m = _f_momentum(closes, volumes, 20)
+    if m is not None: scores.append(m)
+    # RSI
+    r = _f_rsi(closes, volumes, 14)
+    if r is not None: scores.append(r)
+    # 量比
+    v = _f_volume_ratio(closes, volumes, 5)
+    if v is not None: scores.append(v)
+    # 波动率
+    vol = _f_volatility(closes, volumes, 20)
+    if vol is not None: scores.append(vol)
+    return sum(scores) / len(scores) if scores else 5.0
+
+
+def _compute_vibe_bonus(vibe_strategy_ids: list, df=None, strategy_details: list = None) -> float:
+    """
+    计算 Vibe Coding 策略评分（真实执行模式）
+
+    当提供 df 和 strategy_details 时，真实执行每只股票的策略代码。
+    否则回退到差异化加分（无代码可执行时的降级）。
+
+    Args:
+        vibe_strategy_ids: 选中的策略 ID 列表（来自前端）
+        df: 当前股票的 OHLCV DataFrame（用于代码执行）
+        strategy_details: 策略详情（含 code_template）
+
+    Returns:
+        float: 0-10 评分
+    """
+    import numpy as np
+
+    if not vibe_strategy_ids:
+        return 0.0
+
+    # ── 真实执行模式 ──
+    if df is not None and strategy_details:
+        total_score = 0.0
+        executed_count = 0
+        for sid in vibe_strategy_ids:
+            detail = next((s for s in strategy_details if s.get('id') == sid), None)
+            if not detail:
+                continue
+            code = detail.get('code_template') or detail.get('code', '')
+            if not code or code.strip() == '':
+                continue
+            try:
+                score = _execute_single_strategy(code, df)
+                total_score += score
+                executed_count += 1
+            except Exception as e:
+                logger.debug(f"Vibe策略执行失败 {sid}: {e}")
+                _record_engine_error('vibe', sid)
+                continue
+        if executed_count > 0:
+            return min(10.0, total_score / executed_count)
+        return 0.0
+
+    # ── 降级模式：无详情时使用默认值 ──
+    extra = len(vibe_strategy_ids) * 0.5
+    return min(5.0, extra)
+
+
+def _execute_single_strategy(code: str, df) -> float:
+    """
+    执行单个 Vibe 策略代码，返回 0-10 评分
+
+    注入变量：
+      - open, high, low, close, volume: pandas Series
+      - MA(s, n): 移动平均
+      - STD(s, n): 标准差
+      - 所有 Series 的 .iloc, .values, 标准 pandas 运算
+
+    捕获策略输出的 signal 变量（0/1/-1 或 0-100 数值）
+    """
+    import numpy as np
+    import pandas as pd
+    import re
+
+    # 准备数据
+    close = df['close'].astype(float)
+    high = df['high'].astype(float) if 'high' in df else close
+    low = df['low'].astype(float) if 'low' in df else close
+    open_p = df['open'].astype(float) if 'open' in df else close
+    volume = df['vol'].astype(float) if 'vol' in df else (
+        df['amount'].astype(float) if 'amount' in df else pd.Series(np.ones(len(df))))
+    date_idx = df['trade_date'] if 'trade_date' in df else pd.Series(range(len(df)))
+
+    # 预计算常用指标
+    def _ma(s, n):
+        return s.rolling(window=n, min_periods=1).mean()
+    def _std(s, n):
+        return s.rolling(window=n, min_periods=1).std()
+    def _rsi(s, n=14):
+        delta = s.diff()
+        gain = delta.where(delta > 0, 0).rolling(n).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(n).mean()
+        rs = gain / loss.replace(0, np.nan)
+        return 100 - (100 / (1 + rs))
+    def _macd(s):
+        ema12 = s.ewm(span=12).mean()
+        ema26 = s.ewm(span=26).mean()
+        dif = ema12 - ema26
+        dea = dif.ewm(span=9).mean()
+        hist = 2 * (dif - dea)
+        return dif, dea, hist
+
+    # 注入命名空间
+    namespace = {
+        'open': open_p, 'high': high, 'low': low,
+        'close': close, 'volume': volume,
+        'MA': _ma, 'STD': _std, 'RSI': _rsi, 'MACD': _macd,
+        'np': np, 'pd': pd,
+        'signal': 0,
+    }
+
+    # 编译执行
+    # AI 生成的代码常以 return signal 结尾，但 module 级 exec 不支持 return
+    cleaned_code = re.sub(r'^\s*return\s+', 'pass  # ', code, flags=re.MULTILINE)
+    compiled = compile(cleaned_code, '<vibe_strategy>', 'exec')
+    exec(compiled, namespace)
+
+    # 捕获输出
+    signal = namespace.get('signal', 0)
+    if signal is None:
+        signal = 0
+    signal = float(signal)
+
+    # 归一化到 0-10
+    # signal 可能：0/1/-1 分类或 0-100 分值
+    if -1 <= signal <= 1:
+        # 分类信号：1=buy(7.0), 0=neutral(5.0), -1=sell(3.0)
+        return 7.0 if signal > 0 else (3.0 if signal < 0 else 5.0)
+    else:
+        # 分值信号：0-100 → 0-10
+        return max(0.0, min(10.0, signal / 10.0))
 
 
 def _extract_chanlun_evidence(chanlun_result: Dict) -> List[str]:
@@ -252,127 +577,300 @@ def _extract_vp_evidence(vp_result: Dict) -> List[str]:
     return evidences
 
 
+def _phase_timing_bonus(l2_phase: str, cl_dir: str, cl_signal: str) -> float:
+    """
+    阶段-时机共振加分（Wiki: 三重过滤系统的核心思想）
+
+    根据 L2 主力阶段和 L3 缠论信号的对齐程度，计算额外加分。
+
+    L2 阶段: accumulating(建仓) | markup(拉升) | washing(洗盘) | distributing(出货) | neutral | unknown
+    L3 信号: bullish (买入型) | neutral | bearish (卖出型)
+
+    核心逻辑:
+      - 建仓期 + 缠论第一类买点 → 最佳介入时机 (三重过滤全对齐)
+      - 拉升期 + 缠论无明确信号 → 趋势延续（可持有/介入）
+      - 建仓期 + 缠论卖出信号 → 短期调整（等待二买）
+      - 出货期 + 任何信号 → 回避
+
+    Returns: -1.0 到 +2.0 的调整值（加到 0-10 综合评分上）
+    """
+    # 判断缠论信号是买入型还是卖出型
+    cl_bullish = cl_dir == 'bullish' or ('买' in cl_signal and '卖' not in cl_signal)
+    cl_bearish = cl_dir == 'bearish' or ('卖' in cl_signal) or 'sell' in cl_signal
+
+    # 阶段-信号对齐矩阵
+    if l2_phase == 'accumulating':
+        if cl_bullish:
+            return 2.0    # 建仓+买点 → 最佳时机
+        elif cl_bearish:
+            return 0.5    # 建仓+卖点 → 调整期，等待二买
+        else:
+            return 1.0    # 建仓+中性 → 可以逐步介入
+
+    elif l2_phase == 'markup':
+        if cl_bullish:
+            return 1.5    # 拉升+买点 → 强势延续
+        elif cl_bearish:
+            return -0.5   # 拉升+卖点 → 可能见顶，谨慎
+        else:
+            return 1.0    # 拉升+中性 → 趋势运行中
+
+    elif l2_phase == 'washing':
+        if cl_bullish:
+            return 1.5    # 洗盘+买点 → 洗盘结束信号
+        elif cl_bearish:
+            return -1.0   # 洗盘+卖点 → 洗盘可能失败
+        else:
+            return 0.0    # 洗盘+中性 → 等待
+
+    elif l2_phase == 'distributing':
+        return -1.0        # 出货期 → 无论什么信号都回避
+
+    else:
+        # unknown / neutral
+        if cl_bullish:
+            return 0.5
+        elif cl_bearish:
+            return -0.5
+        else:
+            return 0.0
+
+
+def _zscore_normalize(scores: list, new_min: float = 0, new_max: float = 10) -> list:
+    """
+    z-score 归一化：消除各策略评分均值和标准差差异
+
+    将原始分通过 z = (x-μ)/σ 转换后映射到 [new_min, new_max]，
+    保证各策略的均值和标准差一致，权重精确反映预期影响力。
+
+    当样本 < 2 或标准差接近零时返回中性分(5.0)。
+    z 值截断到 [-3, 3] 防止极端值主导。
+    """
+    if len(scores) < 2:
+        return [5.0] * len(scores)
+    n = len(scores)
+    mean = sum(scores) / n
+    var = sum((x - mean) ** 2 for x in scores) / n
+    std = var ** 0.5
+    if std < 1e-6:
+        return [5.0] * n
+    result = []
+    for x in scores:
+        z = (x - mean) / std
+        z = max(-3.0, min(3.0, z))
+        normalized = (z + 3.0) / 6.0 * (new_max - new_min) + new_min
+        result.append(round(normalized, 2))
+    return result
+
+
 def screen_l3_candidates(
     candidates: List[Dict],
     data_dict: Dict[str, pd.DataFrame],
+    weights: dict = None,
+    combinations: list = None,
+    vibe_strategies: list = None,
+    l2_phase_map: dict = None,
 ) -> List[Dict]:
     """
-    对L2通过的候选股执行L3策略验证（缠论+量价共振评分）
+    对L2通过的候选股执行L3策略验证（缠论+量价+因子组合共振评分）
 
-    L3 与 L2 的筹码评分 正交独立——L3 不做筹码分析，
-    只做缠论买卖点 + 量价关系 的多策略共振验证。
+    === v2 两阶段归一化评分 ===
+    阶段一：对所有候选股逐只计算各策略原始分
+    阶段二：对每个策略的评分做 z-score 归一化（消除均值/标准差差异）
+    阶段三：用归一化后分数 + 用户权重 + L2阶段感知调整计算综合评分
 
-    从 DuckDB 每日基础数据 + 资金流向数据 构建 market_context，
-    传递到缠论评分系统用于环境感知评分调整。
+    权重参数格式: {'chanlun': w1, 'vp': w2, 'factor': w3, 'vibe': w4}
+    combinations: 已勾选的因子组合 ID 列表
+    vibe_strategies: 已勾选的 Vibe 策略 ID 列表
+    l2_phase_map: {symbol: phase} L2 主力阶段（用于阶段-时机共振评分）
 
-    Args:
-        candidates: L2输出的候选列表 [{symbol, score(筹码评分), ...}]
-        data_dict: {symbol: DataFrame} 数据池
-
-    Returns:
-        带 strategy_detail 的最终结果列表
+    权重为 0 或列表为空的策略不参与评分。
     """
-    validated = []
     logger.info(f"L3 策略验证开始: {len(candidates)} 只候选股")
     _L3_ENGINE_HEALTH['total_runs'] += 1
     _L3_ENGINE_HEALTH['last_run_status'] = 'running'
     stocks_processed = 0
 
-    # 构建大盘环境条件（用于全部候选股的 market_context.index_condition）
+    # ── 预处理权重 ──
+    default_weights = {'chanlun': 0.4, 'vp': 0.4, 'factor': 0.2, 'vibe': 0.0}
+    w = dict(default_weights)
+    if isinstance(weights, dict):
+        w.update(weights)
+    if not combinations:
+        w['factor'] = 0
+    if not vibe_strategies:
+        w['vibe'] = 0
+    need_cl = w.get('chanlun', 0) > 0
+    need_vp = w.get('vp', 0) > 0
+    need_fx = w.get('factor', 0) > 0
+    need_vb = w.get('vibe', 0) > 0
+
+    # ── 加载 Vibe 策略代码（从数据库） ──
+    _vibe_details = None
+    if need_vb and vibe_strategies:
+        try:
+            from app.models.strategy import StrategyTemplateV2
+            # 从 vibe IDs 提取数字 ID
+            vibe_ids = []
+            for vid in vibe_strategies:
+                sid = str(vid).replace('vibe_', '')
+                if sid.isdigit():
+                    vibe_ids.append(int(sid))
+            if vibe_ids:
+                records = StrategyTemplateV2.query.filter(
+                    StrategyTemplateV2.id.in_(vibe_ids)
+                ).all()
+                _vibe_details = [{
+                    'id': f'vibe_{r.id}',
+                    'code_template': r.code_template,
+                    'type': 'system' if r.is_system else 'user',
+                    'ready': getattr(r, 'ready', True),
+                } for r in records]
+                logger.info(f"Vibe 策略已加载: {len(_vibe_details)} 个")
+        except Exception as e:
+            logger.debug(f"Vibe 策略加载失败: {e}")
+            _vibe_details = None
+
+    # 构建大盘环境条件
     index_condition = _compute_index_condition(data_dict)
 
+    # ════════════════════════════════════════════════════════════
+    # 阶段一：逐只计算原始分
+    # ════════════════════════════════════════════════════════════
+    raw = []  # [{symbol, df, name, market_context, cl_score, cl_dir, cl_signal, cl_result, vp_*, fx_score, vibe_bonus}]
     for item in candidates:
         symbol = item.get('symbol', item.get('ts_code', ''))
         if not symbol or symbol not in data_dict:
             continue
-
         df = data_dict[symbol]
         if df.empty or len(df) < 60:
             continue
 
-        # ── 构建 market_context（从 DuckDB 每日基础 + 资金流向数据） ──
-        market_context = _build_market_context(symbol, df)
+        r = {'symbol': symbol, 'df': df, 'name': item.get('name', '')}
 
-        # 覆盖大盘环境条件（全局已计算）
+        # market_context
+        market_context = _build_market_context(symbol, df)
         if market_context:
             market_context['index_condition'] = index_condition
+        r['market_context'] = market_context
 
-        # ── 量价策略评分 ──
-        vp_result = None
-        vp_score, vp_signal, vp_dir = 0.0, 'N/A', 'neutral'
-        try:
-            from .volume_price_strategy import VolumePriceStrategy
-            vp = VolumePriceStrategy()
-            vp_result = vp.analyze(df)
-            if vp_result.get('success'):
-                vp_score, vp_signal, vp_dir = _compute_volume_price_score(vp_result)
-        except Exception as e:
-            logger.debug(f"量价分析失败 {symbol}: {e}")
-            _record_engine_error('volume_price', symbol)
+        # ── 量价 ──
+        r['vp_result'], r['vp_score'], r['vp_signal'], r['vp_dir'] = None, 0.0, 'N/A', 'neutral'
+        if need_vp:
+            try:
+                from .volume_price_strategy import VolumePriceStrategy
+                vp = VolumePriceStrategy()
+                vp_r = vp.analyze(df)
+                if vp_r.get('success'):
+                    s, sig, d = _compute_volume_price_score(vp_r)
+                    r['vp_result'], r['vp_score'], r['vp_signal'], r['vp_dir'] = vp_r, s, sig, d
+            except Exception as e:
+                logger.debug(f"量价分析失败 {symbol}: {e}")
+                _record_engine_error('volume_price', symbol)
 
-        # ── 缠论策略评分 ──
-        cl_result = None
-        cl_score, cl_signal, cl_dir = 0.0, 'N/A', 'neutral'
-        try:
-            from .chanlun_strategy import analyze_chanlun
-            cl_result = analyze_chanlun(df)
-            if cl_result.get('success'):
-                cl_score, cl_signal, cl_dir = _compute_chanlun_score(cl_result)
-                # market_context 环境感知评分调整（等效于 ChanlunScorer.score 的逻辑）
-                cl_score = _adjust_score_with_context(cl_score, market_context)
-        except Exception as e:
-            logger.debug(f"缠论分析失败 {symbol}: {e}")
-            _record_engine_error('chanlun', symbol)
+        # ── 缠论 ──
+        r['cl_result'], r['cl_score'], r['cl_signal'], r['cl_dir'] = None, 0.0, 'N/A', 'neutral'
+        if need_cl:
+            try:
+                from .chanlun_strategy import analyze_chanlun
+                cl_r = analyze_chanlun(df)
+                if cl_r.get('success'):
+                    s, sig, d = _compute_chanlun_score(cl_r)
+                    s = _adjust_score_with_context(s, r['market_context'])
+                    r['cl_result'], r['cl_score'], r['cl_signal'], r['cl_dir'] = cl_r, s, sig, d
+            except Exception as e:
+                logger.debug(f"缠论分析失败 {symbol}: {e}")
+                _record_engine_error('chanlun', symbol)
 
-        # ── 综合评分（仅缠论+量价，不含筹码） ──
-        combined_score = _compute_combined_score(
-            cl_score, vp_score, cl_dir, vp_dir,
+        # ── 因子组合评分（按选中的组合真实计算） ──
+        r['factor_score'] = _compute_factor_score(df, symbol=symbol, combo_ids=combinations) if need_fx else 0.0
+
+        # ── Vibe Coding 真实执行（每只股票独立计算） ──
+        r['vibe_bonus'] = _compute_vibe_bonus(
+            vibe_strategies or [],
+            df=df,
+            strategy_details=_vibe_details,
+        ) if need_vb else 0.0
+
+        raw.append(r)
+        stocks_processed += 1
+
+    if not raw:
+        _L3_ENGINE_HEALTH['last_run_status'] = 'no_results'
+        return []
+
+    # ════════════════════════════════════════════════════════════
+    # 阶段二：对每个策略的评分做 z-score 归一化
+    # ════════════════════════════════════════════════════════════
+    raw_cl = [r['cl_score'] for r in raw]
+    raw_vp = [r['vp_score'] for r in raw]
+    raw_fx = [r['factor_score'] for r in raw]
+
+    norm_cl = _zscore_normalize(raw_cl) if need_cl else [0.0] * len(raw)
+    norm_vp = _zscore_normalize(raw_vp) if need_vp else [0.0] * len(raw)
+    norm_fx = _zscore_normalize(raw_fx) if need_fx else [0.0] * len(raw)
+
+    # Vibe 不归一化（加分性质，不区分股票间差异）
+    vibe_bonus_values = [r['vibe_bonus'] for r in raw]
+
+    # ════════════════════════════════════════════════════════════
+    # 阶段三：用归一化分 + 权重计算综合评分 → 构建结果
+    # ════════════════════════════════════════════════════════════
+    validated = []
+    for i, r in enumerate(raw):
+        symbol = r['symbol']
+        df = r['df']
+        cl_score_n = norm_cl[i]
+        vp_score_n = norm_vp[i]
+        fx_score_n = norm_fx[i]
+        vb = vibe_bonus_values[i]
+
+        # L2 阶段感知评分调整（Wiki: 三重过滤 — 阶段+时机对齐）
+        l2_phase = (l2_phase_map or {}).get(symbol, 'unknown')
+        phase_bonus = _phase_timing_bonus(l2_phase, r['cl_dir'], r['cl_signal'])
+
+        combined = _compute_combined_score(
+            cl_score_n, vp_score_n, r['cl_dir'], r['vp_dir'],
+            weights=w,
+            factor_score=fx_score_n,
+            vibe_bonus=vb,
         )
-        grade = _score_to_grade(combined_score)
+        # 阶段加分直接加到综合评分上（已归一化到0-10）
+        combined = max(0.0, min(10.0, combined + phase_bonus * 0.5))  # phase_bonus 缩放后叠加
+        grade = _score_to_grade(combined)
 
-        # ── 信号标签 ──
+        # 信号标签（使用原始方向判断，归一化不影响方向）
         triggers = []
-        if cl_dir == 'bullish' and cl_score >= 6:
-            triggers.append(cl_signal)
-        if vp_dir == 'bullish' and vp_score >= 6:
-            triggers.append(vp_signal)
+        if need_cl and r['cl_dir'] == 'bullish' and r['cl_score'] >= 6:
+            triggers.append(r['cl_signal'])
+        if need_vp and r['vp_dir'] == 'bullish' and r['vp_score'] >= 6:
+            triggers.append(r['vp_signal'])
         if not triggers:
             triggers.append('待观察')
 
-        # ── 依据合并 ──
+        # 依据
         reasons = []
-        reasons.extend(_extract_chanlun_evidence(cl_result))
-        reasons.extend(_extract_vp_evidence(vp_result))
+        if l2_phase != 'unknown':
+            _pn = {'accumulating': '建仓期', 'markup': '拉升期', 'washing': '洗盘期', 'distributing': '出货期'}
+            reasons.append(f'主力阶段: {_pn.get(l2_phase, l2_phase)}')
+        if need_cl:
+            reasons.extend(_extract_chanlun_evidence(r['cl_result']))
+        if need_vp:
+            reasons.extend(_extract_vp_evidence(r['vp_result']))
+        if need_fx and fx_score_n > 0:
+            reasons.append(f'因子组合评分: {fx_score_n:.1f}')
+        if vb > 0:
+            reasons.append(f'Vibe 策略加分: +{vb:.1f}')
+        if phase_bonus != 0:
+            reasons.append(f'阶段共振: {phase_bonus:+.1f}')
         if not reasons:
             reasons.append('基础数据通过验证')
 
-        # ── 构建 strategy_detail（214号方案格式） ──
-        strategy_detail = {
-            'chanlun': {
-                'direction': cl_dir,
-                'score': round(cl_score / 10.0, 2),
-                'signal': cl_signal,
-            },
-            'volume_price': {
-                'direction': vp_dir,
-                'score': round(vp_score / 10.0, 2),
-                'signal': vp_signal,
-            },
-            'factor': {
-                'score': round(
-                    max(cl_score, vp_score) * 10, 1
-                ) if cl_score > 0 or vp_score > 0 else 0,
-                'grade': grade,
-                'combinations': [],
-                'combination_note': '缠论+量价共振评分',
-            },
-        }
-
-        score_100 = round(combined_score * 10, 1)
+        score_100 = round(combined * 10, 1)
 
         validated.append({
             'symbol': symbol,
-            'name': item.get('name', ''),
+            'name': r['name'],
             'score': score_100,
             'close': round(float(df['close'].iloc[-1]), 2) if 'close' in df.columns else None,
             'pct_chg': round(float(df['pct_chg'].iloc[-1]), 2) if 'pct_chg' in df.columns else None,
@@ -380,11 +878,31 @@ def screen_l3_candidates(
             'industry': '',
             'triggers': triggers,
             'reasons': reasons,
-            'strategy_detail': strategy_detail,
-            'chanlun_score': round(cl_score, 2),
-            'vp_score': round(vp_score, 2),
+            'strategy_detail': {
+                'chanlun': {
+                    'direction': r['cl_dir'],
+                    'score': round(cl_score_n / 10.0, 2),
+                    'signal': r['cl_signal'],
+                    'raw': round(r['cl_score'], 2),
+                },
+                'volume_price': {
+                    'direction': r['vp_dir'],
+                    'score': round(vp_score_n / 10.0, 2),
+                    'signal': r['vp_signal'],
+                    'raw': round(r['vp_score'], 2),
+                },
+                'factor': {
+                    'score': round(fx_score_n, 1),
+                    'raw': round(r['factor_score'], 2),
+                    'grade': grade,
+                    'combinations': combinations or [],
+                    'combination_note': f'因子评分: {fx_score_n:.1f}' if need_fx else '未启用',
+                },
+            },
+            'chanlun_score': round(cl_score_n, 2),
+            'vp_score': round(vp_score_n, 2),
+            'factor_score': round(fx_score_n, 2),
         })
-        stocks_processed += 1
 
     validated.sort(key=lambda x: x['score'], reverse=True)
     _L3_ENGINE_HEALTH['total_stocks_processed'] += stocks_processed

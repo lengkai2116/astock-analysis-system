@@ -1,48 +1,166 @@
-# A股股票分析系统 - 全局规则
+# A股股票分析系统 — Agent 指令
 
-> 本文件设置项目级别的全局指令，任何Codex实例访问本项目时自动遵循。
+> 本文件存储项目级全局指令，任何 AI 编码代理访问本项目时自动遵循。
+> 目标：防止反复试错，加速每次会话的启动。
 
 ---
 
-## 规则一：文档存档规范
+## 一、文档存档规范
 
-**每次操作完成后必须执行以下存档动作：**
+**每次操作完成后必须执行：**
 
-### 📝 沟通记录存档
-- 当前日期对应的 `001-沟通记录/YYYY-MM-DD.md` 存在 → 追加内容
-- 不存在 → 新建文件，格式：
-  ```
-  # YYYY-MM-DD 沟通纪要
+### 📝 沟通记录
 
-  ## ### 序号 - 主题
-
-  **用户输入**：...
-  **AI执行内容**：...
-  ```
-- 每个独立主题使用一个 `###` 小节
-- 若同一日有多个独立沟通文件，使用 `YYYY-MM-DD-02.md` 等后缀
+- `001-沟通记录/YYYY-MM-DD.md` 存在则追加，不存在则新建
+- 格式：`### 序号 - 主题` → **用户输入** / **AI执行内容**
+- 同一日多文件：`YYYY-MM-DD-02.md` 等后缀
+- 完成后更新 `001-沟通记录/沟通索引.md`
 
 ### 📋 方案存档
-- 设计方案、评估报告、技术方案等 → 存入 `002-方案存档/`
-- 文件命名格式：`序号-标题.md`（序号接续最新文档编号）
-- 需包含文档编号、日期、状态等元信息
+
+- 设计方案、评估报告等 → `002-方案存档/序号-标题.md`
+- 编号 = 目录中已有文件最大编号 + 1，跨会话持续递增
+- 文件头包含 title、type、date 元信息
 
 ---
 
-## 规则二：Windows 迁移兼容性
+## 二、Windows 迁移兼容性
 
-**所有代码调整必须考虑后续迁移到 Windows 系统的兼容性：**
+所有代码必须考虑未来迁移到 Windows：
 
-### 必须遵循
+| 级别 | 规则 |
+|------|------|
+| **必须** | 文件路径用 `pathlib.Path`（禁止 `os.path`、硬编码 `/` 或 `\`） |
+| **必须** | SocketIO 后端避免 `eventlet`（Windows 兼容性差），新代码用 `gevent-websocket` 或抽象切换层 |
+| **必须** | 避免 `os.fork()`、`signal.SIGKILL` 等 Unix-only API |
+| **必须** | 文件读写始终指定 `encoding='utf-8'` |
+| **必须** | 服务优先 Docker 容器化 |
+| **建议** | 环境变量路径分隔符用 `os.sep` / `pathlib`；自动化提供 `.ps1` 替代 `.sh`；避免 `fcntl`、`termios` |
 
-1. **文件路径**：使用 `pathlib.Path`（禁止 `os.path`、硬编码 `/` 或 `\`）
-2. **SocketIO 后端**：当前使用 `eventlet`，它在 Windows 上兼容性差。新代码应使用 `gevent-websocket` 或抽象出一层让 SocketIO 可以切换后端
-3. **进程管理**：避免使用 `os.fork()`、`signal.SIGKILL` 等 Unix-only API
-4. **编码**：文件读写始终指定 `encoding='utf-8'`
-5. **Docker 优先**：所有服务和依赖优先通过 Docker 容器化，确保 Windows + Docker Desktop 可运行
+---
 
-### 建议遵循
+## 三、系统架构要点
 
-- 环境变量中的路径分隔符使用 `os.sep` 或 `pathlib`
-- 避免 shell 脚本（`.sh`），如需自动化提供 `.ps1`（PowerShell）替代方案
-- Python 依赖避免使用 `fcntl`、`termios` 等 Unix-only 库
+### 生产环境（桌面应用）
+
+- **单进程 Flask**（eventlet）: `python backend/run.py --port 5001`
+- **唯一端口 5001**：托管 SPA + REST API + WebSocket，禁止引入其他端口
+- **数据库**：SQLite（OLTP, app.db）+ DuckDB（OLAP, 缓存），禁用 PostgreSQL/Redis
+- **缓存**：`cachetools.TTLCache`（内存），禁用 Redis
+- **前端**：Flask `send_from_directory` 托管 Vue 构建产物，无需 Nginx
+- **数据目录**：`DATA_DIR` 环境变量，禁止硬编码
+
+### 开发环境（Docker Compose）
+
+```bash
+make dev-db          # 启动 PostgreSQL + Redis（Docker）
+make dev-backend     # 启动后端（Gunicorn 端口 5001）
+make dev-frontend    # 启动前端原型（端口 8082）
+make dev             # 一键启动上面全部
+```
+
+### 双进程架构
+
+| 进程 | 文件 | 职责 |
+|------|------|------|
+| **数据进程** | `backend/data_daemon.py` | mootdx TCP 采集（5s）、日终同步（15:30）、完整性检查 |
+| **API 进程** | `backend/run.py` | Flask REST API + SocketIO 推送 |
+
+数据进程启动时会设置 `DATA_DAEMON_RUNNING=1`，API 进程据此跳过采集器初始化。
+
+---
+
+## 四、关键命令
+
+所有命令从**项目根目录**执行：
+
+### 代码质量
+
+```bash
+make lint       # ruff check backend/app/ tests/
+make typecheck  # mypy backend/app/
+make test       # pytest backend/tests/ -v（--tb=short）
+make check      # lint + typecheck + test
+make ci         # lint + typecheck（不含测试）
+```
+
+### 开发/部署
+
+```bash
+python backend/run.py --port 5001   # 启动开发服务器
+python backend/data_daemon.py       # 启动数据采集进程（data_daemon 模式）
+open start.command                   # macOS 一键启动
+cd frontend/vue-project && npm run build  # 构建前端
+make docker-up                      # Docker 部署
+```
+
+### 健康检查
+
+```bash
+curl http://localhost:5001/api/v3/health         # 综合健康
+curl http://localhost:5001/api/v3/health/live    # 存活检查
+curl http://localhost:5001/api/v3/health/ready   # 就绪检查
+```
+
+---
+
+## 五、配置
+
+`.env` 文件（复制自 `.env.example`）关键变量：
+
+| 变量 | 说明 | 默认 |
+|------|------|------|
+| `LLM_PROVIDER` | AI 提供者 | `mock`（`deepseek` / `lm_studio`） |
+| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | — |
+| `DEEPSEEK_MODEL` | 模型 | `deepseek-chat-v4` |
+| `TUSHARE_TOKEN` | Tushare Pro Token | — |
+| `DATABASE_URL` | 数据库连接 | `sqlite:///data/app.db` |
+| `DATA_DIR` | 数据目录 | `./data` |
+| `AUTH_TOKEN` | API 鉴权令牌（留空=不鉴权） | — |
+
+> ⚠️ `deepseek-chat-v4` 将于 **2026/07/24 废弃**，需迁移至 `v4-flash` 或 `v4-pro`。
+
+---
+
+## 六、重要约束
+
+### 数据完整性（§13 规则）
+
+**生产环境禁止使用模拟数据（Mock）作为数据源降级方案。** 允许的降级优先级：
+1. **缓存数据**（DuckDB 最近一次成功数据，返回 `cached_at` 字段）
+2. **空结构**（空列表/空对象，前端展示空状态）
+3. **明确错误**（HTTP 503 + 错误信息）
+
+**禁止**：随机数填充、造假走势/信号/板块数据。
+
+### 已知技术细节
+
+- **run.py 启动时清除代理变量**：`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 在 `run.py` 第 8 行清除，防止 Claude Code 注入代理导致数据源请求失败。这是数据采集正常工作的前提。
+- **DuckDB → SQLite WAL**：`enhanced_cache_manager.py` 已使用 `sqlite3`（WAL 模式）替代 DuckDB。代码中不应出现新的 duckdb 引用。
+- **Gunicorn 当前未使用**：`gunicorn_config.py` 注释声明暂不使用（eventlet worker 被 Gunicorn 26.x 移除）。启动始终走 `run.py`（`socketio.run`）。
+- **mootdx TCP**：实时行情通过通达信 TCP 协议采集（非 HTTP），不依赖 AKShare HTTP。AKShare 仅作低频补充。
+- **前端产物缺失**：`frontend/vue-project/` 目录当前不完整（仅 `.DS_Store`），`npm run build` 前需先恢复项目文件。
+
+---
+
+## 七、测试说明
+
+- 框架：**pytest**（配置在 `pyproject.toml`）
+- 测试目录：`backend/tests/`
+- 测试文件：`test_*.py`（5 个文件：`test_api_health` / `test_api_routes` / `test_backtest_engine` / `test_core` / `test_services`）
+- 部分测试可直接 `python backend/tests/test_xxx.py` 运行
+- 测试创建 Flask app 实例（`create_app()`），无需外部服务依赖
+
+---
+
+## 八、目录体系
+
+```
+001-沟通记录/     # 按日期的 AI 沟通纪要，含 沟通索引.md 和 待解决事项.md
+002-方案存档/     # 155+ 份编号技术方案（编号接续递增）
+docs/            # 技术文档（CODE_STANDARDS.md 等）
+_prototype/      # 前端原型（HTML）
+_原型定稿-不可修改/  # UI 规范真理源（只读快照）
+_项目运行手册.md    # 详细运维手册（覆盖架构/启动/故障排查/部署）
+_工作上下文.md      # AI 会话持久化工作状态
+```

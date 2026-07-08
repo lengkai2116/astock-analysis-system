@@ -10,7 +10,7 @@ from app.indicators import TechnicalIndicatorEngine
 from app.data import DataManager
 from app.services.dashboard_service import DashboardService
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ SUB_INDICATORS = {
 
 
 def _format_time(ts_code, trade_date):
-    """将trade_date转换为TradingView时间戳（秒级）"""
+    """将trade_date转换为TradingView时间戳（秒级，UTC）"""
     if pd.isna(trade_date):
         return None
     if isinstance(trade_date, str):
@@ -59,6 +59,9 @@ def _format_time(ts_code, trade_date):
         dt = trade_date.to_pydatetime()
     else:
         dt = datetime.strptime(str(trade_date), '%Y-%m-%d')
+    # 统一使用 UTC 时间戳，避免因本地时区差异导致同一天不同时间戳
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
     return int(dt.timestamp())
 
 

@@ -4,10 +4,9 @@ import logging
 参考 Algorithm Framework 的设计
 """
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
-import logging
 
 from . import (
     UniverseSelectionModel,
@@ -18,7 +17,7 @@ from . import (
     Insight
 )
 
-
+logger = logging.getLogger(__name__)
 class ChipUniverseSelectionModel(UniverseSelectionModel):
     """
     筹码分布股票池选择模型
@@ -375,3 +374,392 @@ class ChipScorer:
         score += stability_score
 
         return min(10.0, max(0.0, score))
+
+
+class MainForceScorer:
+    """
+    主力资金关注度评分器 — 替代 ChipScorer 用于 L2 筛选
+
+    =================================================================
+    设计理念：L2 的目标是识别「市场主力资金正在关注的股票」。
+    
+    主力资金的典型行为特征：
+      1. 大单持续净流入（资金流向）
+      2. 低位吸筹（价平量增，窄幅震荡）
+      3. 筹码集中（股东户数减少）
+
+    数据源优先级：
+      [P0] moneyflow_cache — 大单/超大单净流入（核心指标）
+      [P1] daily_cache — 价量特征（OHLCV）
+      [P2] stk_holder_cache — 股东户数变化（辅助）
+
+    评分范围 0-10，阈值建议 ≥6 分视为"有主力关注"。
+    =================================================================
+    """
+
+    def __init__(self):
+        self._dm = None
+
+    @property
+    def dm(self):
+        if self._dm is None:
+            from app.data import DataManager
+            self._dm = DataManager()
+        return self._dm
+
+    def score(self, data: pd.DataFrame, symbol: str = None) -> float:
+        """
+        综合评分：0-10，越高代表主力关注度越强
+
+        Args:
+            data: OHLCV DataFrame（120 天以上）
+            symbol: 股票代码（传入后可获取资金流向和股东数据）
+
+        Returns:
+            0-10 分
+        """
+        if data.empty or len(data) < 60:
+            return 0.0
+
+        try:
+            closes = data['close'].values
+            volumes = data['vol'].values if 'vol' in data.columns else (
+                data['amount'].values if 'amount' in data.columns
+                else np.ones(len(data))
+            )
+            price_high = np.max(closes[-120:])
+            price_low = np.min(closes[-120:])
+            price_range = price_high - price_low if price_high > price_low else 1.0
+            price_position = (closes[-1] - price_low) / price_range
+
+            score_a = self._score_moneyflow(symbol)
+            score_b = self._score_volume_price(closes, volumes, price_position)
+            score_c = self._score_concentration(symbol, closes, price_position)
+            score_d = self._score_retail_contrarian(symbol, price_position)
+
+            total = score_a + score_b + score_c + score_d
+            return min(10.0, max(0.0, total))
+        except Exception as e:
+            logger.error(f"MainForceScorer 评分失败 {symbol}: {e}")
+            return 0.0
+
+    # ─── A: 资金流向维度 (0-3分) ───────────────────────────────
+    # Wiki 核心思想：大单连续性 > 单日强度；融资暴增+股价不动=危险信号
+    def _score_moneyflow(self, symbol: str) -> float:
+        """
+        评估主力资金净流入强度（基于 LLM Wiki 主力行为分析）
+
+        使用 moneyflow_cache 分析：
+          1. 5日累积大单净额（净流入率）
+          2. 大单成交占比（大单主导程度）
+          3. **资金连续性**（Wiki: "连续买超+股价上涨=机构看多"）
+
+        Returns: 0-3 分（无数据时返回 0）
+        """
+        if not symbol:
+            return 0.0
+
+        try:
+            end_str = datetime.now().strftime('%Y-%m-%d')
+            start_str = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
+            mf_df = self.dm.get_cached_moneyflow(
+                symbol, start_date=start_str, end_date=end_str
+            )
+            if mf_df.empty:
+                mf_df = self.dm.get_cached_moneyflow(symbol)
+                if mf_df.empty:
+                    return 0.0
+            mf_5 = mf_df.tail(5)
+
+            # 1. 5日累积大单净额 (0-1.0分)
+            net_lg_sum = mf_5['net_lg_amount'].sum()
+            abs_big = (mf_5['buy_lg_amount'].abs().sum()
+                       + mf_5['sell_lg_amount'].abs().sum()
+                       + mf_5['buy_elg_amount'].abs().sum()
+                       + mf_5['sell_elg_amount'].abs().sum())
+            net_ratio = net_lg_sum / max(abs_big, 1)
+            flow_score = min(1.0, max(0, net_ratio * 4))
+
+            # 2. 大单成交占比 (0-0.5分) — Wiki: 机构主导程度
+            total_small = (mf_5['buy_sm_amount'].abs().sum()
+                           + mf_5['sell_sm_amount'].abs().sum())
+            if abs_big + total_small > 0:
+                lg_ratio = abs_big / (abs_big + total_small)
+                ratio_score = min(0.5, lg_ratio * 1.0)  # 大单占50%得0.5
+            else:
+                ratio_score = 0.0
+
+            # 3. 资金连续性 (0-1.5分) — Wiki 重点：连续性比绝对量更重要
+            pos_days = (mf_5['net_lg_amount'] > 0).sum()
+            neg_days = (mf_5['net_lg_amount'] < 0).sum()
+            # 连续净流入加分：连续2天以上净流入+0.5
+            streak = 0
+            max_streak = 0
+            for _, row in mf_5.iterrows():
+                if row['net_lg_amount'] > 0:
+                    streak += 1
+                    max_streak = max(max_streak, streak)
+                else:
+                    streak = 0
+            continuity = min(1.0, max_streak * 0.3)
+            # 净胜天数
+            net_days_score = min(0.5, max(0, pos_days - neg_days) * 0.15)
+
+            return min(3.0, flow_score + ratio_score + continuity + net_days_score)
+        except Exception:
+            return 0.0
+
+    # ─── B: 价量主力信号 (0-3分) ───────────────────────────────
+    # Wiki 核心思想：主力四阶段（建仓/洗盘/拉升/出货）各有专属价量特征
+    def _score_volume_price(self, closes, volumes, price_position) -> float:
+        """
+        从价量关系识别主力操盘阶段（Wiki: 筹码分析+主力行为四阶段）
+
+        建仓: 低位价平量增        → 高分
+        洗盘: 价跌量减，缩量企稳  → 中分（即将结束）
+        拉升: 价涨量增，多头排列  → 最高分
+        出货: 高位放量滞涨/量价背离 → 低分/负分
+
+        Returns: 0-3 分
+        """
+        if len(closes) < 20:
+            return 1.0
+
+        vol_5 = np.mean(volumes[-5:]) if len(volumes) >= 5 else 0
+        vol_20 = np.mean(volumes[-20:]) if len(volumes) >= 20 else 0
+        vol_60 = np.mean(volumes[-60:]) if len(volumes) >= 60 else 0
+        vol_ratio_5_20 = vol_5 / max(vol_20, 1)
+        vol_ratio_20_60 = vol_20 / max(vol_60, 1) if vol_60 > 0 else 1.0
+
+        # 均线排列
+        ma_5 = np.mean(closes[-5:])
+        ma_20 = np.mean(closes[-20:])
+        ma_60 = np.mean(closes[-60:]) if len(closes) >= 60 else closes[-1]
+        bull_market = ma_5 > ma_20 > ma_60
+        bear_market = ma_5 < ma_20 < ma_60
+
+        # ── 拉升阶段 (2.5-3分) — 价涨量增 + 多头排列
+        if bull_market and vol_ratio_5_20 >= 1.1:
+            return 3.0 if price_position < 0.7 else 2.5
+
+        # ── 建仓阶段 (1.5-2.5分) — 低位价平量增
+        if price_position < 0.5 and 1.1 <= vol_ratio_5_20 <= 2.0:
+            if vol_ratio_20_60 >= 1.15:
+                return 2.5  # 低位放量且有持续增量
+            return 2.0
+
+        # ── 洗盘后期 (1.0-1.5分) — 价跌量减后缩量企稳
+        if price_position < 0.4 and vol_ratio_5_20 < 0.8:
+            if vol_ratio_20_60 < 0.9:
+                return 1.5  # 长期缩量→洗盘临近结束
+            return 1.0
+
+        # ── 出货嫌疑 (0-0.5分) — 高位放量不涨
+        if price_position >= 0.7 and vol_ratio_5_20 >= 1.5:
+            return 0.0
+        if price_position >= 0.8 and vol_ratio_5_20 < 0.7:
+            return 0.5  # 高位缩量→追高意愿不足
+
+        # ── 中性 (1.0分)
+        return 1.0
+
+    # ─── C: 筹码集中度 (0-2分) ───────────────────────────────
+    # Wiki 核心思想：筹码从分散到集中=建仓；股东户数下降+稳定价格=吸筹
+    def _score_concentration(self, symbol: str, closes, price_position) -> float:
+        """
+        评估筹码集中度
+
+        Wiki 核心理念：
+          - 大户比例上升+散户比例下降=筹码集中→后续拉升
+          - 低位窄幅震荡=吸筹特征
+          也可参考"主力集中价"概念：VWAP(仅大单日)与当前价的偏离
+
+        Returns: 0-2 分
+        """
+        # 1. 优先使用股东户数数据
+        if symbol:
+            try:
+                holder_df = self.dm.get_cached_stk_holder(symbol)
+                if not holder_df.empty and 'holder_number' in holder_df.columns:
+                    h = holder_df.dropna(subset=['holder_number']).sort_values('end_date')
+                    if len(h) >= 2:
+                        latest = float(h['holder_number'].iloc[-1])
+                        earliest = float(h['holder_number'].iloc[0])
+                        if earliest > 0 and latest > 0:
+                            change = (latest - earliest) / earliest
+                            if change <= -0.05: return 2.0
+                            elif change <= -0.02: return 1.5
+                            elif change <= 0: return 1.0
+                            else: return 0.5
+            except Exception:
+                pass
+
+        # 2. 回退：OHLCV 稳定性评估
+        if len(closes) < 20:
+            return 1.0
+        recent_vol = np.std(closes[-20:]) / max(np.mean(closes[-20:]), 1e-9)
+        if price_position < 0.5 and recent_vol < 0.05:
+            return 1.5
+        elif price_position >= 0.7 and recent_vol > 0.08:
+            return 0.0
+        elif recent_vol < 0.03:
+            return 1.0
+        else:
+            return 0.5
+
+    # ─── D: 散户反向指标 (0-2分) ───────────────────────────────
+    # Wiki 核心思想：散户接盘=危险信号；融资暴增+股价不涨=出货
+    def _score_retail_contrarian(self, symbol: str, price_position) -> float:
+        """
+        散户反向指标（Wiki: "散户行为模式通常是追涨杀跌，其集体行为常被用作反向指标"）
+
+        逻辑：
+          - 散户净买入（small_order）偏高且价格在高位 → 散户接盘 → 负分
+          - 散户净卖出且价格在低位 → 散户割肉 → 正分（筹码从弱手到强手）
+          - 散户交易占比低 → 中性（机构主导）
+
+        Returns: 0-2 分
+        """
+        if not symbol:
+            return 1.0
+        try:
+            mf_df = self.dm.get_cached_moneyflow(symbol)
+            if mf_df.empty or len(mf_df) < 3:
+                return 1.0
+            mf_5 = mf_df.tail(5)
+
+            # 散户5日累积净额（buy_sm - sell_sm）
+            retail_net = (mf_5['buy_sm_amount'].sum()
+                          - mf_5['sell_sm_amount'].sum())
+            total_flow = (mf_5['buy_sm_amount'].abs().sum()
+                          + mf_5['sell_sm_amount'].abs().sum())
+
+            if total_flow < 1:
+                return 1.0
+
+            retail_ratio = retail_net / total_flow  # -1 ~ 1
+
+            # 散户在高位大量买入 → 危险
+            if price_position >= 0.7 and retail_ratio > 0.2:
+                return 0.0
+            # 散户在低位大量卖出 → 机会（筹码从散户到主力）
+            if price_position < 0.4 and retail_ratio < -0.2:
+                return 2.0
+            # 散户卖出（中性偏积极）
+            if retail_ratio < -0.1:
+                return 1.5
+            # 散户买入（中性偏消极）
+            if retail_ratio > 0.1:
+                return 0.5
+            return 1.0
+        except Exception:
+            return 1.0
+
+
+    def identify_phase(self, data: pd.DataFrame, symbol: str = None) -> str:
+        """
+        识别主力操盘阶段（Wiki: "建仓→洗盘→拉升→出货" 四阶段）
+
+        用于 L2 结果标注，帮助用户理解当前主力处于哪个阶段。
+        """
+        try:
+            if data.empty or len(data) < 60:
+                return 'unknown'
+            closes = data['close'].values
+            volumes = data['vol'].values if 'vol' in data.columns else data.get('amount', closes)
+            price_high = np.max(closes[-120:])
+            price_low = np.min(closes[-120:])
+            price_range = price_high - price_low if price_high > price_low else 1.0
+            price_pos = (closes[-1] - price_low) / price_range
+
+            vol_5 = np.mean(volumes[-5:]) if len(volumes) >= 5 else 0
+            vol_20 = np.mean(volumes[-20:]) if len(volumes) >= 20 else 0
+            vol_ratio_5_20 = vol_5 / max(vol_20, 1)
+
+            ma_5 = np.mean(closes[-5:])
+            ma_20 = np.mean(closes[-20:])
+            ma_60 = np.mean(closes[-60:]) if len(closes) >= 60 else closes[-1]
+
+            # 出货: 高位+异常量/量缩
+            if price_pos >= 0.7 and vol_ratio_5_20 >= 1.5:
+                return 'distributing'
+            if price_pos >= 0.8 and vol_ratio_5_20 < 0.7:
+                return 'distributing'
+
+            # 拉升: 多头排列+放量
+            if ma_5 > ma_20 > ma_60 and vol_ratio_5_20 >= 1.0:
+                return 'markup'
+
+            # 洗盘: 价跌+缩量+中低位置
+            if price_pos < 0.5 and vol_ratio_5_20 < 0.85:
+                return 'washing'
+
+            # 建仓: 低位+放量
+            if price_pos < 0.5 and 1.1 <= vol_ratio_5_20 <= 2.0:
+                return 'accumulating'
+
+            return 'neutral'
+        except Exception:
+            return 'unknown'
+
+
+class MainForceFilter:
+    """
+    主力关注度过滤器 — 用于 L2 筛选
+
+    对股票列表使用 MainForceScorer 评分，
+    返回评分 ≥ min_score 的股票（若无达到阈值则取 top_k 兜底）。
+    """
+
+    def __init__(self, min_score: float = 6.0, min_data_days: int = 60, top_k: int = 20):
+        self.min_score = min_score
+        self.min_data_days = min_data_days
+        self.top_k = top_k
+        self.scorer = MainForceScorer()
+
+    def filter(self, stock_list: list, data_dict: dict) -> list:
+        """
+        执行主力关注度筛选
+
+        Args:
+            stock_list: [{ts_code, name}, ...] 或 [ts_code, ...]
+            data_dict: {ts_code: DataFrame}
+
+        Returns:
+            [{symbol, name, mf_score, phase}, ...] 按评分降序
+        """
+        results = []
+        for item in stock_list:
+            ts_code = item if isinstance(item, str) else item.get('ts_code', '')
+            name = '' if isinstance(item, str) else item.get('name', '')
+            if not ts_code or ts_code not in data_dict:
+                continue
+            df = data_dict[ts_code]
+            if df.empty or len(df) < self.min_data_days:
+                continue
+            try:
+                score = self.scorer.score(df, symbol=ts_code)
+                phase = self.scorer.identify_phase(df, symbol=ts_code)
+                if score > 0:
+                    results.append({
+                        'symbol': ts_code,
+                        'name': name,
+                        'mf_score': round(score, 2),
+                        'phase': phase,
+                    })
+            except Exception:
+                continue
+
+        results.sort(key=lambda x: x['mf_score'], reverse=True)
+
+        # 阈值筛选：≥ min_score 通过，若无则取 top_k 兜底
+        passed = [r for r in results if r['mf_score'] >= self.min_score]
+        if not passed:
+            top_score = results[0]["mf_score"] if results else 0
+            passed = results[:self.top_k]
+            logger.warning(
+                f"无股票达到阈值 {self.min_score}，取 top {self.top_k} 兜底 "
+                f"(最高分 {top_score})"
+            )
+
+        return passed
