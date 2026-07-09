@@ -22,8 +22,9 @@ WsBridge — 采集器 → WebSocket 桥接器
 """
 
 import logging
+import threading
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,8 @@ class WsBridge:
     def __init__(self):
         self._socketio = None
         self._store = None
+        self._watchlist_codes: set = set()
+        self._watchlist_lock = threading.Lock()
 
     # ── 惰性引用 ─────────────────────────────────────────────
 
@@ -57,6 +60,23 @@ class WsBridge:
                 return None
         return self._store
 
+    # ── 自选股推送管理 ─────────────────────────────────────
+
+    def update_watchlist_codes(self, codes: List[str]):
+        """注册需要实时推送的自选股代码（由 subscribe_watchlist 调用）"""
+        with self._watchlist_lock:
+            self._watchlist_codes.update(codes)
+
+    def remove_watchlist_codes(self, codes: List[str]):
+        """移除自选股代码推送"""
+        with self._watchlist_lock:
+            self._watchlist_codes.difference_update(codes)
+
+    def clear_watchlist_codes(self):
+        """清空全部自选股推送注册"""
+        with self._watchlist_lock:
+            self._watchlist_codes.clear()
+
     # ── 统一入口（由 _CollectThread.run 调用） ──────────────
 
     def on_collect_complete(self, thread_name: str):
@@ -68,6 +88,7 @@ class WsBridge:
         if thread_name == 'market_snapshot':
             self._broadcast_market_summary(sio)
             self._broadcast_market_indices(sio)
+            self._broadcast_watchlist_quotes(sio)
 
         elif thread_name == 'top_stocks':
             self._broadcast_top_stocks(sio)
@@ -200,14 +221,38 @@ class WsBridge:
                 'timestamp': datetime.now().isoformat(),
             })
 
+    def _broadcast_watchlist_quotes(self, sio):
+        """推送自选股实时行情到 watchlist 房间（每5s采集后自动触发）"""
+        store = self._get_store()
+        if store is None:
+            return
+        with self._watchlist_lock:
+            codes = list(self._watchlist_codes)
+        if not codes:
+            return
+        quotes = store.batch_get(codes)
+        if quotes:
+            self._try_emit_to_room(sio, 'watchlist', 'stock:quotes', {
+                'quotes': quotes,
+                'ts_codes': codes,
+                'timestamp': datetime.now().isoformat(),
+            })
+
     # ── 内部辅助 ─────────────────────────────────────────────
 
     def _try_emit(self, sio, event: str, data: dict):
-        """容错 emit"""
+        """容错 emit（广播到所有客户端）"""
         try:
             sio.emit(event, data)
         except Exception as e:
             logger.debug(f"[WsBridge] emit {event} 失败: {e}")
+
+    def _try_emit_to_room(self, sio, room: str, event: str, data: dict):
+        """容错 emit 到指定房间"""
+        try:
+            sio.emit(event, data, room=room)
+        except Exception as e:
+            logger.debug(f"[WsBridge] emit {event} → room {room} 失败: {e}")
 
 
 # 全局单例

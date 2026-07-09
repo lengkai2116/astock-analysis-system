@@ -84,8 +84,8 @@ def get_watchlist_quotes():
         evaluated[ts_code] = True
 
         # 缓存（实时: 3s / 分析: 30min）
-        ttl_s = 3 if cache_level == 'realtime' else 1800
-        cache.set(cache_key, stock_data, ttl=ttl_s)
+        cache_level_name = 'realtime' if cache_level == 'realtime' else 'analysis'
+        cache.set(cache_key, stock_data, level=cache_level_name)
 
     # 获取股票名称（从 PG Stock 表）
     stock_names = _batch_get_names(list(stocks.keys()))
@@ -107,9 +107,9 @@ def get_watchlist_quotes():
 
 def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
     """获取单只股票的全量行情数据（基础行情+基本面+资金流向）—— 通过 DataManager 走 DuckDB"""
-    today = datetime.now().strftime('%Y%m%d')
-    start_30 = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
-    start_10 = (datetime.now() - timedelta(days=10)).strftime('%Y%m%d')
+    today = datetime.now().strftime('%Y-%m-%d')
+    start_30 = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+    start_10 = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
 
     stock = {
         'ts_code': ts_code,
@@ -118,7 +118,8 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
         'price': None, 'change_pct': None, 'volume': None, 'amount': None,
         'turnover': None, 'amplitude': None, 'high': None, 'low': None,
         'open': None, 'pre_close': None,
-        # ── 策略评分（占位，由评估端点填充）──
+        'chg_5d': None, 'chg_10d': None,  # N日涨幅
+        # ── 策略评分 ──
         'composite_score': None, 'chanlun_score': None,
         'volume_price_score': None, 'factor_score': None,
         'signal_tags': [], 'buy_signal': None, 'sell_signal': None,
@@ -148,12 +149,23 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
             stock['open'] = latest.get('open')
             stock['high'] = latest.get('high')
             stock['low'] = latest.get('low')
-            stock['pre_close'] = latest.get('pre_close')
+            cp = latest.get('close')
+            pct = latest.get('pct_chg')
+            stock['pre_close'] = round(cp / (1 + pct/100), 2) if cp and pct else None
             stock['volume'] = latest.get('vol')
             stock['amount'] = latest.get('amount')
-            stock['change_pct'] = latest.get('pct_chg')
+            stock['change_pct'] = pct
             if stock['high'] and stock['low'] and stock['pre_close'] and stock['pre_close'] > 0:
                 stock['amplitude'] = round((stock['high'] - stock['low']) / stock['pre_close'] * 100, 2)
+            # N日涨幅：从日线序列取前第5/10个交易日收盘价
+            if len(df_daily) >= 6:
+                close_5 = df_daily.iloc[-6].get('close')
+                if close_5 and close_5 > 0 and cp:
+                    stock['chg_5d'] = round((cp - close_5) / close_5 * 100, 2)
+            if len(df_daily) >= 11:
+                close_10 = df_daily.iloc[-11].get('close')
+                if close_10 and close_10 > 0 and cp:
+                    stock['chg_10d'] = round((cp - close_10) / close_10 * 100, 2)
     except Exception as e:
         logger.warning(f"日线数据获取失败({ts_code}): {e}")
 
@@ -164,6 +176,7 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
             basic = df_basic.iloc[-1]
             stock['turnover'] = basic.get('turnover_rate')
             stock['pe_ttm'] = basic.get('pe_ttm')
+            stock['pe_static'] = basic.get('pe')  # 静态市盈率
             stock['pb'] = basic.get('pb')
             stock['mkt_cap_circ'] = basic.get('circ_mv')
             stock['mkt_cap_total'] = basic.get('total_mv')
@@ -175,9 +188,50 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
         df_mf = dm.get_cached_moneyflow(ts_code=ts_code)
         if not df_mf.empty:
             mf = df_mf.iloc[-1]
-            stock['fund_net'] = mf.get('net_mf_amount')
-            stock['fund_vol'] = mf.get('net_mf_vol')
-            stock['big_net'] = mf.get('buy_lg_amount')
+            # 净额 — 从真实列名读取
+            blg = mf.get('buy_lg_amount') or 0
+            slg = mf.get('sell_lg_amount') or 0
+            belg = mf.get('buy_elg_amount') or 0
+            selg = mf.get('sell_elg_amount') or 0
+            bsm = mf.get('buy_sm_amount') or 0
+            ssm = mf.get('sell_sm_amount') or 0
+            stock['fund_net'] = round(blg - slg, 2)  # 大单净额
+            stock['fund_vol'] = mf.get('buy_lg_vol')
+            stock['big_net'] = round(blg - slg, 2)
+            stock['big_in'] = round(blg, 2)
+            stock['big_out'] = round(slg, 2)
+            stock['sml_net'] = round(bsm - ssm, 2)
+            stock['fund_inflow'] = round(blg + belg, 2)
+            stock['fund_outflow'] = round(slg + selg, 2)
+            # 中单净额 = -(大单+超大单+小单净额之和)
+            lg_net = (blg - slg) + (belg - selg) + (bsm - ssm)
+            stock['mid_net'] = round(-lg_net, 2)
+
+            # 多日累计大单净额
+            if len(df_mf) > 1:
+                mf_sorted = df_mf.sort_values('trade_date')
+                _big_net_5 = (mf_sorted['buy_lg_amount'].fillna(0) - mf_sorted['sell_lg_amount'].fillna(0) +
+                              mf_sorted['buy_elg_amount'].fillna(0) - mf_sorted['sell_elg_amount'].fillna(0)).tail(5).sum()
+                stock['big_5d'] = round(_big_net_5, 2)
+                if len(mf_sorted) >= 10:
+                    _big_net_10 = (mf_sorted['buy_lg_amount'].fillna(0) - mf_sorted['sell_lg_amount'].fillna(0) +
+                                   mf_sorted['buy_elg_amount'].fillna(0) - mf_sorted['sell_elg_amount'].fillna(0)).tail(10).sum()
+                    stock['big_10d'] = round(_big_net_10, 2)
+
+            # 主力增仓占比 = 主力净额 / 流通市值 * 100
+            circ_mv = stock.get('mkt_cap_circ')
+            if circ_mv and circ_mv > 0:
+                net_main = (blg + belg) - (slg + selg)
+                stock['fund_add_td'] = round(net_main / circ_mv * 100, 3)
+                if len(df_mf) > 1:
+                    mf_sorted = df_mf.sort_values('trade_date')
+                    _net_2d_main = (mf_sorted['buy_lg_amount'].fillna(0) + mf_sorted['buy_elg_amount'].fillna(0) -
+                                    mf_sorted['sell_lg_amount'].fillna(0) - mf_sorted['sell_elg_amount'].fillna(0)).tail(2).sum()
+                    stock['fund_add_2d'] = round(_net_2d_main / circ_mv * 100, 3)
+                if len(mf_sorted) >= 5:
+                    _net_5d_main = (mf_sorted['buy_lg_amount'].fillna(0) + mf_sorted['buy_elg_amount'].fillna(0) -
+                                    mf_sorted['sell_lg_amount'].fillna(0) - mf_sorted['sell_elg_amount'].fillna(0)).tail(5).sum()
+                    stock['fund_add_5d'] = round(_net_5d_main / circ_mv * 100, 3)
     except Exception as e:
         logger.warning(f"资金流向获取失败({ts_code}): {e}")
 
@@ -204,6 +258,28 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
             stock['industry_full'] = stock_basic.get('industry_full', stock_basic.get('industry', ''))
             stock['shares_total'] = stock_basic.get('total_share')
             stock['shares_circ'] = stock_basic.get('float_share')
+    except Exception as e:
+        pass
+
+    # 6. 股东户数（stk_holder_cache）
+    try:
+        df_holder = dm.cache.get_cached_stk_holder(ts_code)
+        if df_holder is not None and not df_holder.empty:
+            holder = df_holder.iloc[0]
+            hn = holder.get('holder_number')
+            if hn is not None:
+                stock['shareholder_n'] = int(hn)
+    except Exception as e:
+        pass
+
+    # 7. 大股东持股（top10_holders_cache，取最大比例）
+    try:
+        df_top10 = dm.cache.get_cached_top10_holders(ts_code)
+        if df_top10 is not None and not df_top10.empty:
+            top = df_top10.iloc[0]
+            hr = top.get('hold_ratio')
+            if hr is not None:
+                stock['major_holder'] = round(float(hr), 2)
     except Exception as e:
         pass
 

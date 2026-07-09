@@ -10,7 +10,7 @@ import numpy as np
 from flask import Blueprint, jsonify, request
 
 from app.data import DataManager
-from app.engine.framework.chip_strategy import MainForceFilter
+from app.engine.framework.chip_strategy import ChipScorer, MainForceFilter
 from app.engine.framework.screener import DarwinRiskFilter
 from app.utils.error_handlers import handle_exceptions
 
@@ -55,6 +55,7 @@ def load_stock_data_batch(stock_list, lookback=120):
     返回 {ts_code: DataFrame}
     """
     from datetime import date
+
     import pandas as pd
 
     dm = get_data_manager()
@@ -223,7 +224,7 @@ def compute_screening(stock_list, weights=None, combinations=None, vibe_strategi
     name_map = {s.get('ts_code', ''): s.get('name', '') for s in stock_list}
     for it in l1_items:
         it['name'] = name_map.get(it['ts_code'], it['name'])
-    
+
     l2_passed = main_force_filter.filter(l1_items, data_dict)
 
     logger.info(f"L2 主力关注度筛选: {len(l1_passed)} -> {len(l2_passed)} 只")
@@ -816,3 +817,167 @@ def get_screener_factor_combinations():
     except Exception as e:
         logger.warning(f"获取因子组合失败: {e}")
         return jsonify({'success': True, 'data': []})
+
+
+# ── W7: POST /api/v3/screener/evaluate-batch — 批量策略评分（自选监控用）──
+@screener_bp.route('/evaluate-batch', methods=['POST'])
+@handle_exceptions
+def evaluate_batch():
+    """
+    对自选股批量运行 L3 策略评分（缠论/量价/因子）
+    专供自选监控「🔄策略刷新」按钮使用
+
+    请求:
+    {
+        "ts_codes": ["000762.SZ", "000001.SZ"],
+        "strategies": ["chanlun", "volume_price", "factor"],
+        "weights": {"chanlun": 0.4, "volume_price": 0.4, "factor": 0.2}
+    }
+
+    响应:
+    {
+        "success": true,
+        "data": {
+            "stocks": {
+                "000762.SZ": {
+                    "composite_score": 6.5,
+                    "chanlun_score": 5.0,
+                    "volume_price_score": 7.0,
+                    "factor_score": 6.0,
+                    "signal": "watch",
+                    "buy_signal": null,
+                    "sell_signal": null,
+                    "tech_pattern": null
+                },
+                ...
+            },
+            "evaluated": {"000762.SZ": true, ...}
+        }
+    }
+    """
+    req = request.get_json() or {}
+    ts_codes = req.get('ts_codes', [])
+    if not ts_codes:
+        return jsonify({'success': False, 'error': 'ts_codes 不能为空'}), 400
+    ts_codes = list(dict.fromkeys(ts_codes))[:50]  # 去重+限制50只
+
+    weights = req.get('weights', {'chanlun': 0.4, 'vp': 0.4, 'factor': 0.2})
+    need_cl = weights.get('chanlun', 0) > 0
+    need_vp = weights.get('volume_price', 0) > 0 or weights.get('vp', 0) > 0
+    need_fx = weights.get('factor', 0) > 0
+
+    dm = get_data_manager()
+    dm.cache.preload_all()
+    data_dict = dm.get_cached_daily_batch(ts_codes)
+
+    stocks = {}
+    evaluated = {}
+    for ts_code in ts_codes:
+        result = {
+            'composite_score': None,
+            'chanlun_score': None,
+            'volume_price_score': None,
+            'factor_score': None,
+            'signal': None,
+            'buy_signal': None,
+            'sell_signal': None,
+            'tech_pattern': None,
+        }
+        df = data_dict.get(ts_code) if data_dict else None
+        if df is None or df.empty:
+            stocks[ts_code] = result
+            evaluated[ts_code] = False
+            continue
+
+        scores = {'chanlun': 0.0, 'vp': 0.0, 'factor': 0.0}
+        signals = []
+        signal_dirs = []
+
+        # ── 缠论评分 ──
+        if need_cl:
+            try:
+                from app.engine.framework.chanlun_strategy import analyze_chanlun
+                from app.engine.framework.screener_strategy_integration import (
+                    _compute_chanlun_score,
+                )
+                cl_r = analyze_chanlun(df)
+                if cl_r and cl_r.get('success'):
+                    s, sig, d = _compute_chanlun_score(cl_r)
+                    scores['chanlun'] = s
+                    result['chanlun_score'] = round(min(s * 10, 100), 0)
+                    if sig and sig != '无明确信号':
+                        signals.append(sig)
+                        signal_dirs.append(d)
+            except Exception as e:
+                logger.debug(f"缠论评分失败({ts_code}): {e}")
+
+        # ── 量价评分 ──
+        if need_vp:
+            try:
+                from app.engine.framework.screener_strategy_integration import (
+                    _compute_volume_price_score,
+                )
+                from app.engine.framework.volume_price_strategy import VolumePriceStrategy
+                vp = VolumePriceStrategy()
+                vp_r = vp.analyze(df)
+                if vp_r and vp_r.get('success'):
+                    s, sig, d = _compute_volume_price_score(vp_r)
+                    scores['vp'] = s
+                    result['volume_price_score'] = round(min(s * 10, 100), 0)
+                    if sig and sig != 'N/A':
+                        signals.append(sig)
+                        signal_dirs.append(d)
+            except Exception as e:
+                logger.debug(f"量价评分失败({ts_code}): {e}")
+
+        # ── 因子评分 ──
+        if need_fx:
+            try:
+                from app.engine.framework.screener_strategy_integration import _compute_factor_score
+                fx_score = _compute_factor_score(df, symbol=ts_code, dm=dm)
+                scores['factor'] = float(fx_score) if fx_score else 0.0
+                result['factor_score'] = round(min(scores['factor'] * 10, 100), 0)
+            except Exception as e:
+                logger.debug(f"因子评分失败({ts_code}): {e}")
+
+        # ── 综合评分（加权）──
+        w_chanlun = weights.get('chanlun', 0)
+        w_vp = weights.get('volume_price', weights.get('vp', 0))
+        w_factor = weights.get('factor', 0)
+        total_w = w_chanlun + w_vp + w_factor
+        if total_w > 0:
+            composite = (
+                scores['chanlun'] * w_chanlun +
+                scores['vp'] * w_vp +
+                scores['factor'] * w_factor
+            ) / total_w
+            result['composite_score'] = round(composite, 1)
+            # 前端的 signalTagLabel 使用 0-100 分制，乘 10 对齐
+            result['composite_score'] = round(min(composite * 10, 100), 0)
+        else:
+            result['composite_score'] = 0.0
+
+        # ── 信号标签（0-100 分制）──
+        cs = result['composite_score']
+        if cs is not None:
+            if cs >= 80:
+                result['signal'] = 'strong_buy'
+            elif cs >= 60:
+                result['signal'] = 'buy'
+            elif cs >= 40:
+                result['signal'] = 'watch'
+            else:
+                result['signal'] = 'neutral'
+            # 策略具体信号
+            if signals:
+                result['buy_signal'] = '; '.join([s for s in signals if '买' in s]) or None
+                result['sell_signal'] = '; '.join([s for s in signals if '卖' in s]) or None
+
+        stocks[ts_code] = result
+        evaluated[ts_code] = True
+
+    return jsonify({
+        'success': True,
+        'code': 0,
+        'data': {'stocks': stocks, 'evaluated': evaluated}
+    })

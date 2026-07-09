@@ -130,6 +130,32 @@ def _batch_moneyflow(trade_date: str) -> int:
     return len(df)
 
 
+def _batch_index_daily(trade_date: str) -> int:
+    """四大指数日线 — 批量 API 调用"""
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    total = 0
+    for code in ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']:
+        try:
+            raw = pro.index_daily(ts_code=code, trade_date=trade_date)
+            if raw is None or raw.empty:
+                continue
+            df = raw.copy()
+            if 'trade_date' in df.columns:
+                df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+            # 保留 daily_cache 有的字段
+            daily_cols = {'ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg'}
+            extra = [c for c in df.columns if c not in daily_cols]
+            if extra:
+                df = df.drop(columns=extra)
+            _ecm.cache_daily_data(df)
+            total += len(df)
+        except Exception as e:
+            logger.warning(f"指数 {code} 同步失败: {e}")
+    return total
+
+
 def _batch_stk_limit(trade_date: str) -> int:
     """全市场涨跌停 — 1 次 API 调用"""
     import tushare as ts
@@ -198,6 +224,24 @@ def run_integrity_check(backfill_days: int = 1):
     today_fmt = datetime.now().strftime('%Y-%m-%d')
     logger.info("开始完整性检查...")
 
+    # 指数日线检查：4只指数代码在 daily_cache 中的记录数
+    idx_codes = ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']
+    idx_checks = []
+    for offset in range(0, backfill_days):
+        d = (datetime.now() - timedelta(days=offset))
+        ds = d.strftime('%Y-%m-%d')
+        if d.weekday() >= 5:
+            continue
+        try:
+            cnt = _ecm.conn.execute(
+                "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND ts_code IN (?,?,?,?)",
+                [ds] + idx_codes
+            ).fetchone()[0]
+        except Exception:
+            cnt = 0
+        if cnt < 4:
+            idx_checks.append(ds)
+
     checks = [
         ('daily_cache',     _batch_daily,      DAILY_THRESHOLD,  '日线'),
         ('daily_basic_cache', _batch_daily_basic, BASIC_THRESHOLD, '基本面'),
@@ -229,6 +273,12 @@ def run_integrity_check(backfill_days: int = 1):
                     logger.info(f"  [{label}] {df} {cnt}行，补采...")
                     batch_fn(ds)
 
+    # 独立检查指数日线（因 index_daily_cache 为空表，不走通用 _check_count）
+    for idx_date in idx_checks:
+        ds_api = idx_date.replace('-', '')
+        logger.info(f"  [指数日线] {idx_date} 4只指数数据不足，补采...")
+        _batch_index_daily(ds_api)
+
     logger.info("完整性检查完成")
 
 
@@ -250,6 +300,7 @@ def run_daily_sync():
         ('daily_basic_cache',_batch_daily_basic,'基本面'),
         ('moneyflow_cache',  _batch_moneyflow,  '资金流向'),
         ('stk_limit_cache',  _batch_stk_limit,  '涨跌停'),
+        ('index_daily_cache',_batch_index_daily,'指数日线'),
         ('lhb_cache',        _batch_lhb,        '龙虎榜'),
     ]
 
@@ -330,9 +381,9 @@ def main():
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
 
-    # 启动完整性检查
+    # 启动完整性检查（回溯最近3个交易日）
     _ensure_pd()
-    run_integrity_check(backfill_days=1)
+    run_integrity_check(backfill_days=3)
 
     # 主循环（每 30 秒检查一次）
     _last_patrol = 0
@@ -343,13 +394,13 @@ def main():
         now = datetime.now()
         ts = time.time()
 
-        # ── 日终同步 (15:30) ──
-        if now.hour == 15 and now.minute == 30 and not _daily_sync_triggered:
+        # ── 日终同步 (15:30-15:35，5分钟窗口避免错过) ──
+        if now.hour == 15 and 30 <= now.minute <= 35 and not _daily_sync_triggered:
             _daily_sync_triggered = True
             run_daily_sync()
 
-        # 重置日终同步标记（次日）
-        if now.hour != 15 or now.minute != 30:
+        # 重置日终同步标记（离开15:30-15:35窗口后重置）
+        if not (now.hour == 15 and 30 <= now.minute <= 35):
             _daily_sync_triggered = False
 
         # ── 定时巡检（每整点，非交易时段） ──

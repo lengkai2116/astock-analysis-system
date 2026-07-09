@@ -459,6 +459,12 @@ class EnhancedCacheManager:
     def cache_daily_data(self, df):
         if df.empty:
             return
+        # 过滤 DataFrame 列到表结构子集：Tushare 可能新增字段（如 pre_close）
+        table_cols = {r[1] for r in self.conn.execute(f'PRAGMA table_info(daily_cache)').fetchall()}
+        extra = set(df.columns) - table_cols
+        if extra:
+            logger.warning(f"忽略 daily_cache 中不存在的列: {extra}")
+            df = df[[c for c in df.columns if c in table_cols]]
         with self._write_lock:
             self._insert_from_df('daily_cache', df)
             self._update_metadata('last_cache_time', datetime.now().isoformat())
@@ -679,6 +685,12 @@ class EnhancedCacheManager:
                     if net_col not in df.columns and buy_col in df.columns:
                         sell_col = 'sell_' + buy_col[4:]
                         df[net_col] = df[buy_col].fillna(0) - df.get(sell_col, pd.Series([0]*len(df))).fillna(0)
+                # 过滤 DataFrame 列到表结构子集
+                table_cols = {r[1] for r in self.conn.execute(f'PRAGMA table_info(moneyflow_cache)').fetchall()}
+                extra = set(df.columns) - table_cols
+                if extra:
+                    logger.warning(f"忽略 moneyflow_cache 中不存在的列: {extra}")
+                    df = df[[c for c in df.columns if c in table_cols]]
                 self._insert_from_df('moneyflow_cache', df)
                 self._update_metadata('last_moneyflow_cache_time', datetime.now().isoformat())
             except Exception as e:

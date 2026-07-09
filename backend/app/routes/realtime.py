@@ -14,11 +14,11 @@ Flask-SocketIO 事件协议：
   join_room                stock:quotes
 """
 import logging
-import json
-import threading
-from datetime import datetime, timedelta
+from datetime import datetime
+
 from flask import Blueprint, request
 from flask_socketio import emit, join_room
+
 from .. import socketio
 from ..data.in_memory_store import store
 from ..utils.trading_hours import is_trading_time
@@ -114,10 +114,17 @@ def handle_disconnect():
 
 @socketio.on('subscribe_watchlist')
 def handle_subscribe_watchlist(data):
-    """订阅自选股更新 — 初始推送 InMemoryStateStore 快照"""
+    """订阅自选股更新 — 注册到桥接器自动推送 + 初始快照"""
     watchlist = data.get('watchlist', [])
     join_room('watchlist')
-    logger.info(f"客户端订阅自选股: {watchlist}")
+    logger.info(f"客户端订阅自选股: {len(watchlist)} 只")
+
+    # 注册到 WsBridge，后续采集循环自动推送
+    try:
+        from app.data.ws_bridge import ws_bridge
+        ws_bridge.update_watchlist_codes(watchlist)
+    except Exception:
+        pass
 
     quotes = store.batch_get(watchlist)
     emit('watchlist_update', {

@@ -296,7 +296,7 @@ def paper_trade(id):
 @phase3_bp.route('/symbols/search', methods=['GET'])
 def search_symbols():
     """股票搜索（支持代码/名称/拼音）"""
-    query = request.args.get('q', '').strip()
+    query = request.args.get('q', request.args.get('query', '')).strip()
     limit = request.args.get('limit', 20, type=int)
 
     from app.services.stock_search_service import stock_search_service
@@ -308,7 +308,7 @@ def search_symbols():
 @phase3_bp.route('/symbols/search/suggestions', methods=['GET'])
 def search_suggestions():
     """搜索建议（自动补全）"""
-    query = request.args.get('q', '').strip()
+    query = request.args.get('q', request.args.get('query', '')).strip()
     limit = request.args.get('limit', 8, type=int)
 
     from app.services.stock_search_service import stock_search_service

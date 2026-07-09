@@ -48,6 +48,23 @@
 .combo-select { font-size: 12px; padding: var(--space-2); border-radius: var(--radius-xs); border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-primary); width: 100%; margin-top: var(--space-4); }
 .combo-tag { display: inline-block; font-size: 11px; padding: 1px var(--space-4); border-radius: var(--radius-xs); margin: 1px; background: var(--bg-subtle); color: var(--text-secondary); }
 
+/* ── 滚动容器 — 三栏等高 + overflow ── */
+.l3-panel { display: flex; flex-direction: column; }
+.l3-panel .panel-body { flex: 1; overflow-y: auto; min-height: 0; margin: var(--space-4) 0; padding-right: var(--space-2); }
+.l3-panel .panel-body::-webkit-scrollbar { width: 4px; }
+.l3-panel .panel-body::-webkit-scrollbar-track { background: transparent; }
+.l3-panel .panel-body::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 2px; }
+.l3-panel .panel-body::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* 因子组合 2 列网格 */
+.combo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--space-4); }
+
+/* 权重预设按钮 */
+.preset-group { display: flex; gap: var(--space-4); }
+.preset-btn { flex: 1; font-size: 12px; padding: var(--space-4) var(--space-2); border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: var(--bg-subtle); color: var(--text-secondary); cursor: pointer; text-align: center; transition: all .15s; }
+.preset-btn:hover { border-color: #3B82F6; color: #3B82F6; }
+.preset-btn.active { background: rgba(59,130,246,0.12); border-color: #3B82F6; color: #3B82F6; font-weight: 600; }
+
 /* 第三层: 结果 */
 .results-panel { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-14); }
 .results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-10); }
@@ -145,53 +162,72 @@
           <div class="l3-check"><input type="checkbox" checked id="ch-chanlun" onchange="toggleChanlun(this.checked)"><label for="ch-chanlun">缠论策略</label></div>
           <div class="l3-check"><input type="checkbox" checked id="ch-vp" onchange="toggleVolumePrice(this.checked)"><label for="ch-vp">量价策略</label></div>
           <div class="l3-check"><input type="checkbox" checked id="ch-factor" onchange="toggleFactorMaster(this.checked)"><label for="ch-factor">多因子评分</label></div>
-          <div id="factor-combos" style="margin:var(--space-4) 0 var(--space-4) 22px;">
-            <div id="combos-loading" style="font-size:11px;color:var(--text-muted);padding:var(--space-2) 0;">⏳ 加载因子组合...</div>
+          <div class="panel-body">
+            <div id="factor-combos">
+              <div id="combos-loading" style="font-size:11px;color:var(--text-muted);padding:var(--space-2) 0;">⏳ 加载因子组合...</div>
+            </div>
           </div>
-          <div id="combo-count" style="font-size:11px;color:var(--text-muted);margin-left:22px;">已选 0 个组合</div>
-          <div style="margin-top:var(--space-6);padding:var(--space-6);background:var(--bg-subtle);border-radius:var(--radius-sm);">
-            <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-2);">最低通过阈值 (min_score)</div>
-            <select class="select" style="width:100%;font-size:12px;"><option>≥ 30 分（后端默认）</option><option>≥ 50 分</option><option>≥ 70 分</option></select>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-4);padding-top:var(--space-4);border-top:1px solid var(--border-default);">
+            <span id="combo-count" style="font-size:11px;color:var(--text-muted);">已选 0 个组合</span>
+            <div style="display:flex;align-items:center;gap:var(--space-4);">
+              <span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">min_score</span>
+              <select class="select" style="width:auto;font-size:11px;padding:var(--space-2) var(--space-4);"><option>≥30</option><option>≥50</option><option>≥70</option></select>
+            </div>
           </div>
         </div>
 
         <!-- 中栏: 权重配置 -->
         <div class="l3-panel">
           <h4>⚖️ 信号权重配置</h4>
-          <div id="weight-config">
-            <div class="weight-row" data-key="chanlun">
-              <span class="w-label" style="color:#EF4444;">缠论</span>
-              <div class="w-bar-wrap"><div class="w-bar-fill" style="width:35%;background:#EF4444;"></div></div>
-              <span class="w-value">35%</span>
-              <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
+          <div class="panel-body">
+            <div id="weight-config">
+              <div class="weight-row" data-key="chanlun">
+                <span class="w-label" style="color:#EF4444;">缠论</span>
+                <div class="w-bar-wrap"><div class="w-bar-fill" style="width:35%;background:#EF4444;"></div></div>
+                <span class="w-value">35%</span>
+                <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
+              </div>
+              <div class="weight-row" data-key="vp">
+                <span class="w-label" style="color:#3B82F6;">量价</span>
+                <div class="w-bar-wrap"><div class="w-bar-fill" style="width:30%;background:#3B82F6;"></div></div>
+                <span class="w-value">30%</span>
+                <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
+              </div>
+              <div class="weight-row" data-key="factor">
+                <span class="w-label" style="color:#F59E0B;">因子</span>
+                <div class="w-bar-wrap"><div class="w-bar-fill" style="width:25%;background:#F59E0B;"></div></div>
+                <span class="w-value">25%</span>
+                <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
+              </div>
+              <div class="weight-row" data-key="vibe">
+                <span class="w-label" style="color:#8B5CF6;">Vibe</span>
+                <div class="w-bar-wrap"><div class="w-bar-fill" style="width:10%;background:#8B5CF6;"></div></div>
+                <span class="w-value">10%</span>
+                <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
+              </div>
             </div>
-            <div class="weight-row" data-key="vp">
-              <span class="w-label" style="color:#3B82F6;">量价</span>
-              <div class="w-bar-wrap"><div class="w-bar-fill" style="width:30%;background:#3B82F6;"></div></div>
-              <span class="w-value">30%</span>
-              <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
-            </div>
-            <div class="weight-row" data-key="factor">
-              <span class="w-label" style="color:#F59E0B;">因子</span>
-              <div class="w-bar-wrap"><div class="w-bar-fill" style="width:25%;background:#F59E0B;"></div></div>
-              <span class="w-value">25%</span>
-              <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
-            </div>
-            <div class="weight-row" data-key="vibe">
-              <span class="w-label" style="color:#8B5CF6;">Vibe</span>
-              <div class="w-bar-wrap"><div class="w-bar-fill" style="width:10%;background:#8B5CF6;"></div></div>
-              <span class="w-value">10%</span>
-              <div class="w-adj"><button onclick="adjWeight(this,-5)">−</button><button onclick="adjWeight(this,5)">+</button></div>
+            <div class="weight-total">合计: <span id="weight-sum">100%</span> ✅</div>
+            <div style="margin-top:var(--space-10);">
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-5);">快速预设</div>
+              <div class="preset-group">
+                <button class="preset-btn active" data-preset="balanced" onclick="applyWeightPreset('balanced')">⚖️ 均衡</button>
+                <button class="preset-btn" data-preset="conservative" onclick="applyWeightPreset('conservative')">🛡️ 保守</button>
+                <button class="preset-btn" data-preset="aggressive" onclick="applyWeightPreset('aggressive')">🚀 进取</button>
+              </div>
             </div>
           </div>
-          <div class="weight-total">合计: <span id="weight-sum">100%</span> ✅</div>
         </div>
 
         <!-- 右栏: Vibe Coding -->
         <div class="l3-panel">
-          <h4>🤖 Vibe Coding</h4>
-          <div id="vibe-content">
-            <div id="vibe-loading" style="font-size:11px;color:var(--text-muted);padding:var(--space-8);text-align:center;">⏳ 加载Vibe策略...</div>
+          <h4 style="display:flex;align-items:center;justify-content:space-between;">
+            <span>🤖 Vibe Coding</span>
+            <button class="btn" style="font-size:11px;padding:var(--space-2) var(--space-6);height:auto;" onclick="showVibeModal()">+ 创建</button>
+          </h4>
+          <div class="panel-body">
+            <div id="vibe-content">
+              <div id="vibe-loading" style="font-size:11px;color:var(--text-muted);padding:var(--space-8);text-align:center;">⏳ 加载Vibe策略...</div>
+            </div>
           </div>
         </div>
       </div>
@@ -286,6 +322,7 @@ function adjWeight(btn, delta) {
     total += parseInt(r.querySelector('.w-value').textContent);
   });
   document.getElementById('weight-sum').textContent = total + '%';
+
 }
 
 // ── 全局状态 ──
@@ -308,7 +345,7 @@ function loadFactorCombos() {
         if (loading) loading.textContent = '因子配置暂不可用';
         return;
       }
-      var html = '';
+      var html = '<div class="combo-grid">';
       res.data.forEach(function(c) {
         var prefix = c.type === 'user' ? '⭐' : '📊';
         var checked = c.default_checked ? 'checked' : '';
@@ -320,6 +357,7 @@ function loadFactorCombos() {
           _selectedCombos[c.id] = {id: c.id, name: c.name};
         }
       });
+      html += '</div>';
       if (loading) loading.style.display = 'none';
       container.insertAdjacentHTML('beforeend', html);
       updateComboCount();
@@ -346,6 +384,7 @@ function toggleCombo(id, name, checked) {
     fillEl.style.width = '0%';
     updateWeightTotal();
   }
+
 }
 
 function updateComboCount() {
@@ -370,6 +409,29 @@ function updateWeightTotal() {
     total += parseInt(r.querySelector('.w-value').textContent);
   });
   document.getElementById('weight-sum').textContent = total + '%';
+}
+
+// ── 权重快速预设 ──
+var _presetWeights = {
+  balanced:      {chanlun:35, vp:30, factor:25, vibe:10},
+  conservative:  {chanlun:50, vp:25, factor:15, vibe:10},
+  aggressive:    {chanlun:20, vp:30, factor:35, vibe:15}
+};
+function applyWeightPreset(name) {
+  var w = _presetWeights[name];
+  if (!w) return;
+  document.querySelectorAll('#weight-config .weight-row').forEach(function(r) {
+    var key = r.getAttribute('data-key');
+    if (key && w[key] !== undefined) {
+      r.querySelector('.w-value').textContent = w[key] + '%';
+      r.querySelector('.w-bar-fill').style.width = w[key] + '%';
+    }
+  });
+  updateWeightTotal();
+  // 高亮当前预设
+  document.querySelectorAll('.preset-btn').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-preset') === name);
+  });
 }
 
 // ── 页面加载：Vibe策略 ──
@@ -397,8 +459,6 @@ function loadVibeStrategies() {
           _selectedVibes[s.id] = {id: s.id, name: s.name};
         }
       });
-      html += '<div style="margin-top:var(--space-8);">'
-        + '<button class="btn" style="width:100%;font-size:12px;justify-content:center;" onclick="showVibeModal()">+ 创建新策略（描述→AI生成）</button></div>';
       if (loading) loading.style.display = 'none';
       container.innerHTML = html;
     })
@@ -423,6 +483,7 @@ function toggleVibe(id, name, checked) {
     fillEl.style.width = hasVibe ? '10%' : '0%';
     updateWeightTotal();
   }
+
 }
 
 // ── 缠论勾选 → 权重归零/恢复 ──
@@ -435,6 +496,7 @@ function toggleChanlun(checked) {
     fillEl.style.width = checked ? '35%' : '0%';
     updateWeightTotal();
   }
+
 }
 
 // ── 量价勾选 → 权重归零/恢复 ──
@@ -447,6 +509,7 @@ function toggleVolumePrice(checked) {
     fillEl.style.width = checked ? '30%' : '0%';
     updateWeightTotal();
   }
+
 }
 
 // ── 多因子评分勾选 → 控制组合区域显示 + 权重归零/恢复 ──
@@ -461,6 +524,7 @@ function toggleFactorMaster(checked) {
     fillEl.style.width = checked ? '25%' : '0%';
     updateWeightTotal();
   }
+
 }
 
 // ── 执行筛选 ──
@@ -498,8 +562,13 @@ function runScreening() {
 
       if (res.success && res.data) {
         renderResults(res.data);
-        // 缓存到 sessionStorage，切换页面返回后自动恢复
-        try { sessionStorage.setItem('screener_results', JSON.stringify(res.data)); } catch(e) {}
+        // 持久化：结果 + 权重
+        var w = {};
+        document.querySelectorAll('#weight-config .weight-row').forEach(function(r) {
+          var key = r.getAttribute('data-key');
+          if (key) w[key] = parseInt(r.querySelector('.w-value').textContent);
+        });
+        _store('results', {rows: _screenResults, w: w});
       } else {
         showError(res.message || '筛选失败，请重试');
       }
@@ -781,22 +850,68 @@ function addVibeStrategy() {
   });
 }
 
-// ── 页面加载 ──
+// ── 页面状态持久化（localStorage，跨页面导航不丢失）──
+function _store(key, val) {
+  try { localStorage.setItem('ss_' + key, JSON.stringify(val)); return true; } catch(e) { console.error('存储失败', key, e); return false; }
+}
+function _restore(key) {
+  try { return JSON.parse(localStorage.getItem('ss_' + key)); } catch(e) { return null; }
+}
+
+// 调试标记：记录每次页面加载时的缓存状态
 (function() {
+  var _debug = document.createElement('div');
+  _debug.id = 'ss_debug';
+  _debug.style.cssText = 'position:fixed;bottom:2px;right:2px;font-size:9px;color:rgba(255,255,255,0.25);z-index:99999;pointer-events:none;';
+  var _s = _restore('results');
+  _debug.textContent = _s && _s.rows ? '📦' + _s.rows.length + '只+' + (_s.w ? Object.keys(_s.w).length + '权' : '0权') : '📭空';
+  document.body.appendChild(_debug);
+
+  // 恢复筛选结果（如果存在且有效）
+  if (_s && _s.rows && _s.rows.length > 0) {
+    _screenResults = _s.rows;
+    // 显示结果表格、隐藏空状态和加载提示
+    var _empty = document.getElementById('empty-state');
+    var _table = document.getElementById('results-table');
+    var _loading = document.getElementById('screen-loading');
+    if (_empty) _empty.style.display = 'none';
+    if (_table) _table.style.display = '';
+    if (_loading) _loading.style.display = 'none';
+    // 恢复权重
+    if (_s.w) {
+      document.querySelectorAll('#weight-config .weight-row').forEach(function(r) {
+        var key = r.getAttribute('data-key');
+        if (key && _s.w[key] !== undefined) {
+          r.querySelector('.w-value').textContent = _s.w[key] + '%';
+          r.querySelector('.w-bar-fill').style.width = _s.w[key] + '%';
+        }
+      });
+      updateWeightTotal();
+    }
+    renderPage();
+    document.getElementById('result-count').textContent = _screenResults.length;
+  }
+
+  // 异步加载
   loadFactorCombos();
   loadVibeStrategies();
   loadWatchlist();
 
-  // 恢复之前缓存的筛选结果（sessionStorage，切换页面返回后可用）
-  try {
-    var cached = sessionStorage.getItem('screener_results');
-    if (cached) {
-      var data = JSON.parse(cached);
-      if (data && data.results && data.results.length > 0) {
-        renderResults(data);
+  // bfcache 回退时重新恢复
+  window.addEventListener('pageshow', function(evt) {
+    if (evt.persisted) {
+      var s = _restore('results');
+      if (s && s.rows && s.rows.length > 0) {
+        _screenResults = s.rows;
+        var _e2 = document.getElementById('empty-state');
+        var _t2 = document.getElementById('results-table');
+        if (_e2) _e2.style.display = 'none';
+        if (_t2) _t2.style.display = '';
+        renderPage();
+        document.getElementById('result-count').textContent = _screenResults.length;
       }
     }
-  } catch(e) {}
+  });
 })();
 
 function loadWatchlist() {
