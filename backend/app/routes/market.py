@@ -14,6 +14,15 @@ market_service = MarketService()
 dashboard_service = DashboardService()
 logger = logging.getLogger(__name__)
 
+_data_manager = None
+
+def _get_dm():
+    global _data_manager
+    if _data_manager is None:
+        from app.data import DataManager
+        _data_manager = DataManager()
+    return _data_manager
+
 
 def _sf(val, default=None):
     """safe float: 处理 None/NaN，缺失返回 default"""
@@ -443,3 +452,62 @@ def _build_moneyflow_response(ts_code: str, records: list) -> dict:
         },
         'history_5day': history_5day,
     }
+
+
+@market_bp.route('/api/v3/stock/<ts_code>/orderbook', methods=['GET'])
+@handle_exceptions
+def get_stock_orderbook(ts_code):
+    """E8: 盘口五档数据（实时）"""
+    try:
+        from app.data.in_memory_store import store as mem_store
+        snapshot = mem_store.get_snapshot()
+        for item in snapshot:
+            if item.get('ts_code') == ts_code:
+                bid = []
+                ask = []
+                for i in range(1, 6):
+                    bp = item.get(f'bid{i}_price')
+                    bv = item.get(f'bid{i}_volume')
+                    if bp is not None:
+                        bid.append({'price': float(bp), 'volume': int(bv or 0)})
+                    ap = item.get(f'ask{i}_price')
+                    av = item.get(f'ask{i}_volume')
+                    if ap is not None:
+                        ask.append({'price': float(ap), 'volume': int(av or 0)})
+                if bid or ask:
+                    return jsonify({'success': True, 'data': {'ts_code': ts_code, 'bid': bid, 'ask': ask}})
+        return jsonify({'success': True, 'data': {'ts_code': ts_code, 'bid': [], 'ask': [], 'message': '非交易时段或盘口数据不可用'}})
+    except Exception as e:
+        logger.warning(f"盘口数据获取失败 ({ts_code}): {e}")
+        return jsonify({'success': True, 'data': {'ts_code': ts_code, 'bid': [], 'ask': [], 'message': '盘口数据源未就绪'}})
+
+
+@market_bp.route('/api/v3/stock/<ts_code>/stk-limit', methods=['GET'])
+@handle_exceptions
+def get_stock_stk_limit(ts_code):
+    """E9: 涨跌停/笼子价格"""
+    from app.data.enhanced_cache_manager import get_ecm_instance
+    ecm = get_ecm_instance()
+    today = datetime.now().strftime('%Y-%m-%d')
+    df = ecm.get_cached_stk_limit(trade_date=today)
+    if df is not None and not df.empty:
+        row = df[df['ts_code'] == ts_code]
+        if row.empty:
+            return jsonify({'success': True, 'data': {'ts_code': ts_code, 'trade_date': today, 'high_limit': 0, 'low_limit': 0, 'cage_price': None, 'message': '今日无涨跌停数据'}})
+        latest = row.iloc[-1].to_dict()
+        high_limit = float(latest.get('high_limit', 0))
+        low_limit = float(latest.get('low_limit', 0))
+        result = {'success': True, 'data': {'ts_code': ts_code, 'trade_date': today, 'high_limit': high_limit, 'low_limit': low_limit, 'cage_price': None, 'cage_up_pct': 2.0, 'cage_down_pct': -2.0}}
+        try:
+            dm = _get_dm()
+            daily_df = dm.get_cached_daily_data(ts_code, start_date=today)
+            if daily_df is not None and not daily_df.empty:
+                pre_close = float(daily_df.iloc[-1].get('pre_close', 0))
+                if pre_close > 0:
+                    result['data']['cage_price'] = pre_close
+                    result['data']['cage_up_price'] = round(pre_close * 1.02, 2)
+                    result['data']['cage_down_price'] = round(pre_close * 0.98, 2)
+        except Exception:
+            pass
+        return jsonify(result)
+    return jsonify({'success': True, 'data': {'ts_code': ts_code, 'trade_date': today, 'high_limit': 0, 'low_limit': 0, 'cage_price': None, 'message': '涨跌停数据不可用'}})

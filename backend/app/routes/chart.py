@@ -36,6 +36,11 @@ OVERLAY_INDICATORS = {
     'boll_upper':  {'name': 'BOLL上轨',  'color': '#e91e63', 'type': 'overlay', 'line_style': 'dashed'},
     'boll_middle': {'name': 'BOLL中轨',  'color': '#4caf50', 'type': 'overlay', 'line_style': 'solid'},
     'boll_lower':  {'name': 'BOLL下轨',  'color': '#e91e63', 'type': 'overlay', 'line_style': 'dashed'},
+    'bbi':   {'name': 'BBI',   'color': '#ec4899', 'type': 'overlay'},
+    'ene_upper': {'name': 'ENE上轨', 'color': '#06b6d4', 'type': 'overlay', 'line_style': 'dashed'},
+    'ene_lower': {'name': 'ENE下轨', 'color': '#06b6d4', 'type': 'overlay', 'line_style': 'dashed'},
+    'nine_buy':  {'name': '九转买入', 'color': '#ef4444', 'type': 'overlay'},
+    'nine_sell': {'name': '九转卖出', 'color': '#22c55e', 'type': 'overlay'},
 }
 
 # 副图指标（独立面板）
@@ -52,7 +57,17 @@ def _format_time(ts_code, trade_date):
     if pd.isna(trade_date):
         return None
     if isinstance(trade_date, str):
-        dt = datetime.strptime(trade_date, '%Y%m%d') if len(str(trade_date)) == 8 else datetime.strptime(str(trade_date), '%Y-%m-%d')
+        s = str(trade_date)
+        if len(s) == 8 and s.isdigit():
+            dt = datetime.strptime(s, '%Y%m%d')
+        elif ' ' in s and '-' in s:
+            # datetime string like "2026-07-09 10:30:00"
+            try:
+                dt = datetime.strptime(s, '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                dt = datetime.strptime(s.split(' ')[0], '%Y-%m-%d')
+        else:
+            dt = datetime.strptime(s, '%Y-%m-%d')
     elif isinstance(trade_date, datetime):
         dt = trade_date
     elif isinstance(trade_date, pd.Timestamp):
@@ -70,10 +85,35 @@ def _get_kline_data(data_manager, ts_code, limit=200, period='D'):
     获取K线数据
     period: D (日线)/W (周线)/M (月线)/1m/5m/15m/30m/60m
     """
-    # 分钟线数据暂时通过日线降采样或返回提示，目前优先用日线
+    import pandas as pd
+    # 分钟线：通过 MinuteDataManager 获取真实分钟数据
     if period in ['1m', '5m', '15m', '30m', '60m']:
-        # 分钟线暂时降级到日线，后续可接入实时行情源
-        kline_data = data_manager.get_cached_daily_data(ts_code, start_date=None, end_date=None)
+        freq_map = {'1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '60m': '60min'}
+        freq = freq_map.get(period, '15min')
+        try:
+            from app.data.minute_data_manager import MinuteDataManager
+            mdm = MinuteDataManager()
+            # 从 ECM minute_kline_cache 读取（mootdx TCP 实时写入）
+            records = mdm.get_cached_minute(ts_code, freq=freq)
+            if records and len(records) > 0:
+                df = pd.DataFrame(records)
+                df.rename(columns={'trade_time': 'trade_date'}, inplace=True)
+                # 确保数值列类型正确
+                for col in ['open', 'high', 'low', 'close', 'vol', 'amount']:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                return df, 'minute'
+        except Exception as e:
+            logger.warning(f"分钟K线获取失败 ({ts_code}/{freq}): {e}")
+        # 降级：分钟数据不可用时回退到日线（而非返回空）
+        logger.info(f"分钟数据不可用 ({ts_code}/{freq})，回退到日线")
+        kline_data = data_manager.get_kline_data(ts_code, period='D', start_date=None, end_date=None)
+        if kline_data is not None and not kline_data.empty:
+            for col in ['open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg']:
+                if col in kline_data.columns:
+                    kline_data[col] = pd.to_numeric(kline_data[col], errors='coerce')
+            return kline_data, None
+        return pd.DataFrame(), None
     else:
         # 使用DataManager的get_kline_data方法获取对应周期的数据
         kline_data = data_manager.get_kline_data(ts_code, period=period, start_date=None, end_date=None)
@@ -135,9 +175,6 @@ def get_kline_chart_data(ts_code):
     # 规范化周期参数：数字转换为带m的格式，其他保持原样
     if period in ['1', '5', '15', '30', '60']:
         period = period + 'm'
-    # 小周期降级到日线
-    if period in ['1m', '5m', '15m', '30m', '60m']:
-        period = 'D'
     
     # 解析指标列表
     requested_indicators = [i.strip() for i in indicators_param.split(',') if i.strip()] if indicators_param else ['ma5', 'ma20', 'macd', 'rsi', 'kdj']
@@ -147,6 +184,18 @@ def get_kline_chart_data(ts_code):
         for boll_key in ['boll_upper', 'boll_middle', 'boll_lower']:
             if boll_key not in requested_indicators:
                 requested_indicators.append(boll_key)
+    
+    # 处理ENE特殊情况：请求ene时自动包含ene_upper/lower
+    if 'ene' in requested_indicators:
+        for ene_key in ['ene_upper', 'ene_lower']:
+            if ene_key not in requested_indicators:
+                requested_indicators.append(ene_key)
+    
+    # 处理九转特殊情况：请求nine时自动包含nine_buy/nine_sell
+    if 'nine' in requested_indicators:
+        for nine_key in ['nine_buy', 'nine_sell']:
+            if nine_key not in requested_indicators:
+                requested_indicators.append(nine_key)
     
     # 分离主图和副图指标
     overlay_keys = [k for k in requested_indicators if k in OVERLAY_INDICATORS]
@@ -165,13 +214,48 @@ def get_kline_chart_data(ts_code):
     
     try:
         data_manager = get_data_manager()
-        daily_data, _ = _get_kline_data(data_manager, ts_code, limit=limit, period=period)
+        daily_data, data_source = _get_kline_data(data_manager, ts_code, limit=limit, period=period)
         
         if daily_data is None or daily_data.empty:
             return jsonify({
                 'success': False,
                 'message': f'未找到{period}周期数据'
             }), 404
+        
+        # 分钟线数据：跳过指标计算，直接返回K线数据
+        if data_source == 'minute':
+            kline_data = []
+            for _, row in daily_data.iterrows():
+                t = _format_time(ts_code, row.get('trade_date'))
+                if t is None:
+                    continue
+                kline_data.append({
+                    'time': t,
+                    'open': float(row.get('open', 0)),
+                    'high': float(row.get('high', 0)),
+                    'low': float(row.get('low', 0)),
+                    'close': float(row.get('close', 0)),
+                    'volume': float(row.get('vol', 0)) if pd.notna(row.get('vol', 0)) else 0,
+                    'pct_chg': 0  # 分钟级无涨跌幅
+                })
+            
+            stock_info = data_manager.get_stock_info(ts_code)
+            last_k = kline_data[-1] if kline_data else {}
+            return jsonify({
+                'success': True,
+                'data': {
+                    'kline': kline_data,
+                    'overlays': [],
+                    'subcharts': [],
+                    'stock': stock_info if stock_info else {},
+                    'latest': {
+                        'close': last_k.get('close', 0),
+                        'pct_chg': last_k.get('pct_chg', 0)
+                    },
+                    'period': period,
+                    'data_source': 'minute'
+                }
+            })
         
         # 指标计算需要足够的数据（至少50条），所以先取足够数据
         min_data_for_indicators = 50
@@ -224,6 +308,24 @@ def get_kline_chart_data(ts_code):
                     })
             elif key.startswith('boll'):
                 info = OVERLAY_INDICATORS.get(key, {'name': key, 'color': '#4caf50'})
+                series_data = []
+                for _, row in df.iterrows():
+                    t = _format_time(ts_code, row.get('trade_date'))
+                    if t is None or pd.isna(row.get(key)):
+                        continue
+                    series_data.append({'time': t, 'value': float(row[key])})
+                if series_data:
+                    overlays.append({
+                        'id': key,
+                        'name': info['name'],
+                        'data': series_data,
+                        'color': info['color'],
+                        'line_style': info.get('line_style', 'solid'),
+                        'panel': 0
+                    })
+            elif key in OVERLAY_INDICATORS and key not in ['ma5','ma10','ma20']:
+                # 通用处理：bbi, ene_upper, ene_lower, nine_buy, nine_sell 等
+                info = OVERLAY_INDICATORS[key]
                 series_data = []
                 for _, row in df.iterrows():
                     t = _format_time(ts_code, row.get('trade_date'))
@@ -437,9 +539,15 @@ def get_indicator_list():
             {'id': 'ma5',   'name': 'MA5',   'category': '均线', 'default': True},
             {'id': 'ma10',  'name': 'MA10',  'category': '均线', 'default': False},
             {'id': 'ma20',  'name': 'MA20',  'category': '均线', 'default': True},
+            {'id': 'ma60',  'name': 'MA60',  'category': '均线', 'default': False},
             {'id': 'boll_upper',  'name': 'BOLL上轨', 'category': '布林带', 'default': False},
             {'id': 'boll_middle', 'name': 'BOLL中轨', 'category': '布林带', 'default': False},
             {'id': 'boll_lower',  'name': 'BOLL下轨', 'category': '布林带', 'default': False},
+            {'id': 'bbi',   'name': 'BBI',   'category': '多空线', 'default': False},
+            {'id': 'ene_upper',  'name': 'ENE上轨', 'category': '轨道', 'default': False},
+            {'id': 'ene_lower',  'name': 'ENE下轨', 'category': '轨道', 'default': False},
+            {'id': 'nine_buy',   'name': '九转买入', 'category': '九转序列', 'default': False},
+            {'id': 'nine_sell',  'name': '九转卖出', 'category': '九转序列', 'default': False},
         ],
         'subcharts': [
             {'id': 'vol',   'name': '成交量', 'category': '成交量', 'default': True},
@@ -475,3 +583,38 @@ def get_stock_list():
             'success': False,
             'message': str(e)
         }), 500
+
+
+@chart_bp.route('/chip-distribution/<ts_code>', methods=['GET'])
+@handle_exceptions
+def get_chip_distribution(ts_code):
+    """
+    E11: 筹码分布数据
+    使用 ChipDistributionEstimator 基于OHLCV估算筹码分布
+    参数: ?lookback=120（回顾天数）
+    """
+    lookback = request.args.get('lookback', 120, type=int)
+    from app.data.chip_distribution_service import ChipDistributionService
+
+    dm = get_data_manager()
+    service = ChipDistributionService()
+    result = service.calculate_chip_distribution(
+        ts_code=ts_code,
+        lookback_days=lookback,
+        data_manager=dm,
+    )
+    # 清洗NumPy类型，确保JSON可序列化
+    import json
+    class NpEncoder(json.JSONEncoder):
+        def default(self, obj):
+            import numpy as np
+            if isinstance(obj, (np.integer,)): return int(obj)
+            if isinstance(obj, (np.floating,)): return float(obj)
+            if isinstance(obj, (np.bool_,)): return bool(obj)
+            if isinstance(obj, np.ndarray): return obj.tolist()
+            return super().default(obj)
+    cleaned = json.loads(json.dumps(result, cls=NpEncoder))
+    return jsonify({
+        'success': True,
+        'data': cleaned
+    })

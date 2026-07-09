@@ -129,25 +129,74 @@ class MinuteDataManager:
             from app.data.enhanced_cache_manager import get_ecm_instance
             ecm = get_ecm_instance()
             trade_date = datetime.now().strftime('%Y-%m-%d')
-            df = ecm.get_cached_minute_kline(ts_code, trade_date=trade_date, freq=freq)
-            if df is not None and not df.empty:
-                records = df.to_dict('records')
-                # 兼容前端格式：trade_time 字段
-                for r in records:
-                    if 'trade_time' not in r:
-                        r['trade_time'] = str(r.get('datetime', ''))
-                return records
-            # 尝试跨日期读取（盘后数据）
-            df = ecm.get_cached_minute_kline(ts_code, freq=freq)
-            if df is not None and not df.empty:
-                records = df.to_dict('records')
-                # 只取最近 days_back 天
-                cutoff = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
-                records = [r for r in records if str(r.get('trade_date', '')) >= cutoff]
-                for r in records:
-                    if 'trade_time' not in r:
-                        r['trade_time'] = str(r.get('datetime', ''))
-                return records
+
+            # Step 1: 尝试精确freq匹配
+            for try_freq in [freq, '5min', '1min']:
+                df = ecm.get_cached_minute_kline(ts_code, trade_date=trade_date, freq=try_freq)
+                if df is not None and not df.empty:
+                    records = df.to_dict('records')
+                    for r in records:
+                        if 'trade_time' not in r:
+                            r['trade_time'] = str(r.get('datetime', ''))
+                    # 如果请求的freq与实际获取的不一致，做重采样
+                    if try_freq != freq:
+                        records = self._resample_minute(records, try_freq, freq)
+                    return records
+
+            # Step 2: 尝试跨日期读取（盘后数据）
+            for try_freq in [freq, '5min', '1min']:
+                df = ecm.get_cached_minute_kline(ts_code, freq=try_freq)
+                if df is not None and not df.empty:
+                    records = df.to_dict('records')
+                    cutoff = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
+                    records = [r for r in records if str(r.get('trade_date', '')) >= cutoff]
+                    for r in records:
+                        if 'trade_time' not in r:
+                            r['trade_time'] = str(r.get('datetime', ''))
+                    if try_freq != freq:
+                        records = self._resample_minute(records, try_freq, freq)
+                    return records
         except Exception as e:
             logger.debug(f"ECM 分钟数据读取失败: {e}")
         return None
+
+    def _resample_minute(self, records: list, from_freq: str, to_freq: str) -> list:
+        """分钟线频率转换（如 1min → 15min）"""
+        from collections import defaultdict
+        if not records:
+            return []
+        total_min = int(to_freq.replace('min', ''))
+        base_min = int(from_freq.replace('min', ''))
+        group_size = total_min // base_min
+        if group_size <= 1:
+            return records
+        # 按日期+时间片分组聚合
+        groups = defaultdict(list)
+        for r in records:
+            tt = r.get('trade_time', '')
+            # 取时间部分 "2026-07-07 10:08:00" → 取分钟
+            try:
+                ts = tt.split(' ')[1] if ' ' in tt else tt
+                parts = ts.split(':')
+                minute_slot = int(parts[0]) * 60 + int(parts[1])
+                slot = minute_slot // total_min
+                key = (tt[:10] if len(tt) > 10 else tt.split(' ')[0], slot)
+            except Exception:
+                key = (tt, 0)
+            groups[key].append(r)
+
+        result = []
+        for (date, slot), bars in sorted(groups.items()):
+            o = bars[0].get('open', 0)
+            c = bars[-1].get('close', 0)
+            h = max(b.get('high', 0) for b in bars)
+            lv = min(b.get('low', float('inf')) for b in bars)
+            v = sum(b.get('volume', 0) or b.get('vol', 0) for b in bars)
+            a = sum(b.get('amount', 0) for b in bars)
+            first_tt = bars[0].get('trade_time', '')
+            result.append({
+                'trade_time': first_tt,
+                'open': float(o), 'high': float(h), 'low': float(lv), 'close': float(c),
+                'vol': float(v), 'amount': float(a),
+            })
+        return result

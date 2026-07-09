@@ -20,6 +20,8 @@ from app.services.deepseek_analysis_service import (
 )
 from app.services.signal_computation_service import SignalComputationService
 from app.services.status_output_service import StatusOutputService
+from app.services.ai_context_builder import WikiConceptMatcher
+from app.engine.framework.unified_investment_decision_framework import UIDFEngine
 
 ai_analysis_bp = Blueprint('ai_analysis', __name__)
 
@@ -302,3 +304,78 @@ def get_ai_analysis_signals():
             }
         }
     })
+
+
+@handle_exceptions
+@ai_analysis_bp.route('/api/v3/ai/arbitrate', methods=['POST'])
+def arbitrate():
+    """验证链冲突 → LLM Wiki概念匹配 → 返回仲裁意见（供 indicator-ide 卡5B区使用）"""
+    data = request.get_json(silent=True) or {}
+    ts_code = data.get('ts_code', '')
+    market_state = data.get('market_state', 'UNKNOWN')
+    status_recognition = data.get('status_recognition')
+
+    concepts = WikiConceptMatcher.match(market_state, status_recognition)
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'ts_code': ts_code,
+            'market_state': market_state,
+            'arbitration': concepts,
+            'wiki_references': [c.get('reference', '') for c in concepts if c.get('reference')],
+        }
+    })
+
+
+@handle_exceptions
+@ai_analysis_bp.route('/api/v3/uidf/consolidate', methods=['POST'])
+def uidf_consolidate():
+    """UPF输出 + 验证链 + AI仲裁 → 三级决策融合 → 最终信号（供 indicator-ide 使用）"""
+    data = request.get_json(silent=True) or {}
+    upf_result = data.get('upf_result')
+    verification_chains = data.get('verification_chains', [])
+    conflicts_for_ai = data.get('conflicts_for_ai', [])
+    ai_mode = data.get('ai_mode', 'summary_only')
+    ai_arbitration = data.get('ai_arbitration')
+
+    engine = UIDFEngine()
+    result = engine.consolidate_with_conflicts(
+        upf_result=upf_result,
+        verification_chains=verification_chains,
+        conflicts_for_ai=conflicts_for_ai,
+        ai_mode=ai_mode,
+        ai_arbitration=ai_arbitration,
+    )
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'result': result,
+            'mode': ai_mode,
+        }
+    })
+
+
+@handle_exceptions
+@ai_analysis_bp.route('/api/v3/llm-wiki/search', methods=['POST'])
+def llm_wiki_search():
+    """查询LLM Wiki知识库（桌面App 127.0.0.1:19828）"""
+    data = request.get_json(silent=True) or {}
+    query = data.get('query', '').strip()
+    if not query:
+        return jsonify({'success': False, 'error': 'query必填'}), 400
+
+    try:
+        import requests
+        resp = requests.post(
+            'http://127.0.0.1:19828/api/search',
+            json={'query': query, 'limit': data.get('limit', 5)},
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            return jsonify({'success': True, 'data': resp.json()})
+        return jsonify({'success': True, 'data': {'results': [], 'message': 'LLM Wiki未响应'}})
+    except Exception as e:
+        logger.debug(f"LLM Wiki查询失败: {e}")
+        return jsonify({'success': True, 'data': {'results': [], 'message': 'LLM Wiki服务不可用'}})

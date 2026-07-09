@@ -30,6 +30,7 @@ class SignalComputationService:
         self._data_manager = None
         self._chip_strategy = None
         self._benchmark_service = None
+        self.last_data_availability = {}  # 上次计算的扩展数据可用性状态
 
     @property
     def data_manager(self):
@@ -69,6 +70,14 @@ class SignalComputationService:
         """
         df = self.data_manager.get_cached_daily_data(ts_code)
         if df.empty or len(df) < 60:
+            self.last_data_availability = {
+                'ts_code': ts_code,
+                'kline': len(df) >= 60,
+                'daily_basic': False,
+                'moneyflow': False,
+                'index': False,
+                'market_state': False,
+            }
             return []
 
         # 确保列名统一
@@ -80,6 +89,7 @@ class SignalComputationService:
 
         # ── 加载扩展数据：基本面 + 资金流向 + 大盘环境 ──
         market_context = {}  # 传递到各策略的通用上下文
+        da = {'daily_basic': False, 'moneyflow': False, 'index': False, 'market_state': False}  # 数据可用性跟踪
 
         # 1) daily_basic: 换手率、市值、PE/PB
         try:
@@ -94,6 +104,7 @@ class SignalComputationService:
                 market_context['pe_ttm'] = latest_basic.get('pe_ttm', None)
                 market_context['pb'] = latest_basic.get('pb', None)
                 market_context['volume_ratio'] = latest_basic.get('volume_ratio', None)
+                da['daily_basic'] = True
                 logger.debug(f"{ts_code} 已加载 daily_basic: 换手率={market_context.get('turnover_rate')}, "
                              f"市值={market_context.get('circ_mv')}")
         except Exception as e:
@@ -103,12 +114,12 @@ class SignalComputationService:
         try:
             df_mf = self.data_manager.get_cached_moneyflow(ts_code)
             if df_mf is not None and not df_mf.empty:
-                # 取最近5日汇总
                 recent_mf = df_mf.tail(5)
                 market_context['net_lg_amount'] = float(recent_mf['net_lg_amount'].sum())
                 market_context['net_mf_amount'] = float(recent_mf['net_mf_amount'].sum()) if 'net_mf_amount' in recent_mf.columns else 0
                 market_context['buy_lg_amount'] = float(recent_mf['buy_lg_amount'].sum())
                 market_context['sell_lg_amount'] = float(recent_mf['sell_lg_amount'].sum())
+                da['moneyflow'] = True
                 logger.debug(f"{ts_code} 已加载资金流向: 近5日大单净额={market_context.get('net_lg_amount')}")
         except Exception as e:
             logger.debug(f"{ts_code} 资金流向加载跳过: {e}")
@@ -128,6 +139,7 @@ class SignalComputationService:
                     market_context['index_condition'] = 'NEUTRAL'
                 market_context['idx_5d_ret'] = round(float(idx_5d_ret * 100), 2)
                 market_context['idx_20d_ret'] = round(float(idx_20d_ret * 100), 2)
+                da['index'] = True
                 logger.debug(f"{ts_code} 大盘环境: {market_context.get('index_condition')}, "
                              f"5日={market_context.get('idx_5d_ret')}%, 20日={market_context.get('idx_20d_ret')}%")
         except Exception as e:
@@ -141,6 +153,7 @@ class SignalComputationService:
             market_context['market_state'] = market_state.get('market_state', 'UNKNOWN')
             market_context['ma_trend'] = market_state.get('ma_trend', 'neutral')
             market_context['market_volatility'] = market_state.get('bb_width', 0)
+            da['market_state'] = True
             logger.debug(f"{ts_code} 市场状态: {market_context.get('market_state')}")
         except Exception as e:
             logger.debug(f"{ts_code} 市场状态识别跳过: {e}")
@@ -254,6 +267,16 @@ class SignalComputationService:
 
         # 持久化到数据库
         self._persist_signals(ts_code, signals)
+
+        # 记录数据可用性（供前端展示）
+        self.last_data_availability = {
+            'ts_code': ts_code,
+            'kline': len(df) >= 60,
+            'daily_basic': da.get('daily_basic', False),
+            'moneyflow': da.get('moneyflow', False),
+            'index': da.get('index', False),
+            'market_state': da.get('market_state', False),
+        }
 
         return signals[:limit]
 

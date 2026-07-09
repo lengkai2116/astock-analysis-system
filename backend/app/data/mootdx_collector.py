@@ -364,6 +364,96 @@ def collect_market_snapshot() -> int:
         return 0
 
 
+# ── 分钟K线全覆盖采集 ─────────────────────────────────────
+
+def collect_minute_full() -> int:
+    """全市场分钟K线补齐（使用 mootdx minutes() API）
+
+    quotes() 只返回有交易活动的股票(price≠0)，冷门股无数据。
+    本函数用 minutes() 对缺失股票逐一补采 minutes tick 数据，
+    转换为 1min OHLC 写入 ECM minute_kline_cache。
+
+    运行频率：每 5 分钟 (300s)，每次限 200 只避免耗时过长。
+    """
+    client = _get_client()
+    if client is None:
+        return 0
+
+    today = datetime.now().strftime('%Y-%m-%d')
+    trade_date = datetime.now().strftime('%Y%m%d')
+    codes = _get_a_share_codes()
+    if not codes:
+        return 0
+
+    # 查询已有分钟数据的股票
+    try:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        minute_df = ecm.get_cached_minute_kline(trade_date=today)
+        if minute_df is not None and not minute_df.empty:
+            existing = set(minute_df['ts_code'].unique())
+        else:
+            existing = set()
+    except Exception:
+        existing = set()
+
+    # 计算缺失股票，限 200 只
+    missing = [c for c in codes if c not in existing][:200]
+    if not missing:
+        return 0
+
+    total_ok = 0
+    for code in missing:
+        try:
+            raw = client.minutes(symbol=code, dest='/tmp/min_backfill')
+            if raw is None or raw.empty:
+                continue
+            # minutes 返回 price/vol/volume，构建 1min OHLC
+            rows = []
+            prev_price = None
+            for _, r in raw.iterrows():
+                price = float(r.get('price', 0))
+                vol_val = int(r.get('vol', 0))
+                if price == 0:
+                    continue
+                # 取 trade_time（分钟索引从 9:30 开始）
+                idx = len(rows)
+                hour = 9 + (idx + 30) // 60
+                minute = (idx + 30) % 60
+                trade_time = f"{today} {hour:02d}:{minute:02d}:00"
+                # high/low 近似：从价格变动范围估算 ±0.1%
+                spread = price * 0.001
+                open_price = prev_price if prev_price else price
+                high_price = max(price, open_price) + spread
+                low_price = min(price, open_price) - spread
+                rows.append({
+                    'ts_code': code,
+                    'trade_date': today,
+                    'trade_time': trade_time,
+                    'freq': '1min',
+                    'open': round(open_price, 2),
+                    'high': round(high_price, 2),
+                    'low': round(max(low_price, 0.01), 2),
+                    'close': round(price, 2),
+                    'volume': vol_val,
+                    'amount': round(price * vol_val, 2),
+                })
+                prev_price = price
+
+            if rows:
+                import pandas as pd
+                ecm._insert_from_df('minute_kline_cache', pd.DataFrame(rows))
+                total_ok += 1
+
+        except Exception as e:
+            logger.debug(f"[minutes补齐] {code} 失败: {e}")
+            continue
+
+    if total_ok:
+        logger.info(f"[minutes补齐] 完成: {total_ok} 只")
+    return total_ok
+
+
 # ── 指数数据采集 ───────────────────────────────────────────
 
 # 上次采集成功的时间戳，用于降频（指数数据不需要每轮都刷新）
@@ -767,6 +857,8 @@ class MootdxCollector:
 
         self._threads = [
             _MootdxThread('market_snapshot', 5, collect_market_snapshot, initial_delay=3),
+            _MootdxThread('minute_full', 300, collect_minute_full, initial_delay=60,
+                          check_trading_time=False),
         ]
 
         for t in self._threads:

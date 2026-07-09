@@ -188,6 +188,53 @@ def _batch_lhb(trade_date: str) -> int:
     return len(df)
 
 
+def _batch_fina_indicator(trade_date: str = None) -> int:
+    """全市场财务指标 — 后台低优任务"""
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    total = 0
+    try:
+        # Tushare fina_indicator 可指定 period 获取最近一期
+        df = pro.fina_indicator(period=trade_date)
+        if df is not None and not df.empty:
+            for col in ['end_date', 'ann_date']:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col]).dt.date
+            _ecm.cache_fina_indicator_data(df)
+            total = len(df)
+            logger.info(f"  [财务指标] 同步 {total} 条")
+    except Exception as e:
+        logger.warning(f"  [财务指标] 批量同步失败: {e}")
+    return total
+
+
+def _batch_income_recent(limit_days: int = 90) -> int:
+    """增量同步最近一期利润表 — 后台低优"""
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    total = 0
+    codes = _ecm.conn.execute(
+        "SELECT DISTINCT ts_code FROM daily_cache"
+    ).fetchall()
+    codes = [r[0] for r in codes[:500]]  # 限500只，避免过长
+    for code in codes:
+        try:
+            raw = pro.income(ts_code=code, start_date=None, end_date=None)
+            if raw is not None and not raw.empty:
+                if 'end_date' in raw.columns:
+                    raw['end_date'] = pd.to_datetime(raw['end_date']).dt.date
+                if 'ann_date' in raw.columns:
+                    raw['ann_date'] = pd.to_datetime(raw['ann_date']).dt.date
+                _ecm.cache_income_data(raw)
+                total += len(raw)
+        except Exception:
+            continue
+    logger.info(f"  [利润表] 增量同步 {total} 条 (共 {len(codes)} 只)")
+    return total
+
+
 # ══════════════════════════════════════════════════════════
 # 完整性检查与补采
 # ══════════════════════════════════════════════════════════
@@ -196,6 +243,7 @@ DAILY_THRESHOLD = 5000
 BASIC_THRESHOLD = 5000
 MF_THRESHOLD = 1000
 LIMIT_THRESHOLD = 1000
+LHB_THRESHOLD = 20
 
 IMPORT_PD = False
 
@@ -247,6 +295,7 @@ def run_integrity_check(backfill_days: int = 1):
         ('daily_basic_cache', _batch_daily_basic, BASIC_THRESHOLD, '基本面'),
         ('moneyflow_cache', _batch_moneyflow,   MF_THRESHOLD,    '资金流向'),
         ('stk_limit_cache', _batch_stk_limit,   LIMIT_THRESHOLD, '涨跌停'),
+        ('lhb_cache',       _batch_lhb,         LHB_THRESHOLD,   '龙虎榜'),
     ]
 
     # 检查今日数据
@@ -318,6 +367,20 @@ def run_daily_sync():
     except Exception as e:
         logger.warning(f"  指标预计算触发失败: {e}")
 
+    # 财务数据同步（后台低优，不阻塞主同步流程）
+    try:
+        threading.Thread(target=_run_financial_sync, daemon=True).start()
+        logger.info("  财务数据同步已触发（后台）")
+    except Exception as e:
+        logger.warning(f"  财务数据同步触发失败: {e}")
+
+    # 分钟K线回填（后台低优，补齐盘中未覆盖的股票）
+    try:
+        threading.Thread(target=_run_minute_backfill, daemon=True).start()
+        logger.info("  分钟K线回填已触发（后台）")
+    except Exception as e:
+        logger.warning(f"  分钟K线回填触发失败: {e}")
+
     _SYNCED_TODAY = True
     logger.info("=== 日终同步完成 ===")
 
@@ -342,6 +405,99 @@ def _run_precompute():
         except Exception:
             pass
     logger.info(f"指标预计算完成: {ok}/{len(codes)} 只")
+
+
+def _run_financial_sync():
+    """后台同步财务数据（低优，全市场约5-10分钟）"""
+    _ensure_pd()
+    logger.info("财务数据同步开始...")
+    today = datetime.now().strftime('%Y%m%d')
+    try:
+        _batch_fina_indicator(today)
+    except Exception as e:
+        logger.warning(f"财务指标同步异常: {e}")
+    try:
+        _batch_income_recent()
+    except Exception as e:
+        logger.warning(f"利润表同步异常: {e}")
+    logger.info("财务数据同步完成")
+
+
+def _batch_backfill_minute_kline(trade_date: str = None):
+    """日终补齐分钟K线数据
+
+    用 Tushare pro_bar 补齐今日有日线但缺分钟数据的股票。
+    后台低优，每次最多处理 500 只，避免拖慢主流程。
+    """
+    _ensure_pd()
+    if trade_date is None:
+        trade_date = datetime.now().strftime('%Y%m%d')
+    trade_date_fmt = datetime.now().strftime('%Y-%m-%d')
+
+    # Step 1: 获取今日有日线数据的股票列表
+    try:
+        daily_stocks = _ecm.conn.execute(
+            "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?",
+            [trade_date_fmt]
+        ).fetchall()
+        daily_stocks = [r[0] for r in daily_stocks]
+    except Exception as e:
+        logger.warning(f"[分钟回填] 查询日线股票列表失败: {e}")
+        return
+
+    if not daily_stocks:
+        logger.info(f"[分钟回填] 今日无日线数据，跳过")
+        return
+
+    # Step 2: 查询已有分钟数据的股票
+    try:
+        minute_stocks = _ecm.conn.execute(
+            "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE trade_date=?",
+            [trade_date_fmt]
+        ).fetchall()
+        minute_stocks = set(r[0] for r in minute_stocks)
+    except Exception:
+        minute_stocks = set()
+
+    # Step 3: 计算缺失股票，限500只
+    missing = [s for s in daily_stocks if s not in minute_stocks][:500]
+    if not missing:
+        logger.info(f"[分钟回填] 今日分钟数据已完整 ({len(daily_stocks)} 只)")
+        return
+
+    logger.info(f"[分钟回填] 需补齐 {len(missing)} 只 (已有 {len(minute_stocks)} 只, 共 {len(daily_stocks)} 只)")
+
+    # Step 4: 逐只调用 Tushare pro_bar 补齐
+    import tushare as ts
+    pro = ts.pro_api()
+    ok = 0
+    for i, code in enumerate(missing):
+        try:
+            raw = ts.pro_bar(ts_code=code, start_date=trade_date, end_date=trade_date, freq='1min', adj='qfq')
+            if raw is not None and not raw.empty:
+                raw['trade_date'] = pd.to_datetime(raw['trade_date']).dt.date
+                # 统一列名: volume → vol
+                if 'volume' in raw.columns and 'vol' not in raw.columns:
+                    raw['vol'] = raw['volume']
+                _ecm.cache_minute_kline(raw)
+                ok += 1
+            if (i + 1) % 100 == 0:
+                logger.info(f"[分钟回填] 进度: {i+1}/{len(missing)}, 成功 {ok}")
+        except Exception as e:
+            logger.debug(f"[分钟回填] {code} 失败: {e}")
+            continue
+
+    logger.info(f"[分钟回填] 完成: 成功 {ok}/{len(missing)} 只")
+
+
+def _run_minute_backfill():
+    """后台分钟K线回填包装"""
+    from app.data.enhanced_cache_manager import get_ecm_instance
+    global _ecm
+    if _ecm is None:
+        _ecm = get_ecm_instance()
+    today = datetime.now().strftime('%Y%m%d')
+    _batch_backfill_minute_kline(today)
 
 
 # ══════════════════════════════════════════════════════════

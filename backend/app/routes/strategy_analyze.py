@@ -56,6 +56,9 @@ def _build_chanlun_dimension(sig: Optional[Dict]) -> Dict:
     sr = sig.get('status_recognition', {})
     trend = sr.get('trend', {})
     levels = sr.get('support_resistance', {})
+    # 从evidence获取描述性文本，优于signal_label
+    evidence = sig.get('evidence', [])
+    status_text = '; '.join(evidence[:2]) if evidence else sig.get('signal_label', '')
     return {
         'direction': sig.get('signal', 'neutral'),
         'buy_point': sig.get('signal_label', ''),
@@ -65,7 +68,7 @@ def _build_chanlun_dimension(sig: Optional[Dict]) -> Dict:
         'trend_type': trend.get('stage', ''),
         'ma_alignment': trend.get('strength', ''),
         'critical_levels': {'support': levels.get('support', 0), 'resistance': levels.get('resistance', 0)},
-        'status_text': sig.get('signal_label', ''),
+        'status_text': status_text,
     }
 
 
@@ -76,6 +79,8 @@ def _build_volume_price_dimension(sig: Optional[Dict]) -> Dict:
     sr = sig.get('status_recognition', {})
     trend = sr.get('trend', {})
     levels = sr.get('support_resistance', {})
+    evidence = sig.get('evidence', [])
+    status_text = '; '.join(evidence[:2]) if evidence else sig.get('signal_label', '')
     return {
         'direction': sig.get('signal', 'neutral'),
         'phase': trend.get('stage', 'RANGING'),
@@ -86,7 +91,7 @@ def _build_volume_price_dimension(sig: Optional[Dict]) -> Dict:
         'support': levels.get('support', 0),
         'resistance': levels.get('resistance', 0),
         'trend_strength': min(1.0, abs(sig.get('confidence', 0.5))),
-        'status_text': sig.get('signal_label', ''),
+        'status_text': status_text,
     }
 
 
@@ -95,6 +100,8 @@ def _build_chip_dimension(sig: Optional[Dict]) -> Dict:
     if not sig:
         return {'direction': 'neutral', 'status_text': '无筹码信号'}
     sr = sig.get('status_recognition', {})
+    evidence = sig.get('evidence', [])
+    status_text = '; '.join(evidence[:2]) if evidence else sig.get('signal_label', '')
     return {
         'direction': sig.get('signal', 'neutral'),
         'profit_ratio': sr.get('support_resistance', {}).get('support', 42.0),
@@ -104,7 +111,7 @@ def _build_chip_dimension(sig: Optional[Dict]) -> Dict:
         'main_force_direction': sig.get('signal_label', ''),
         'large_order_net': sr.get('momentum', {}).get('score', 0),
         'lock_up_ratio': sr.get('risk_level') == 'HIGH' and 55.0 or 35.0,
-        'status_text': sig.get('signal_label', ''),
+        'status_text': status_text,
     }
 
 
@@ -114,8 +121,22 @@ def _build_emotion_dimension(
 ) -> Dict:
     """从BOCIASI信号构建卡4格式"""
     sr = sig.get('status_recognition', {}) if sig else {}
-    sector_name = (signal_context or {}).get('sector_name', '未知')
-    sector_pct = (signal_context or {}).get('sector_pct', 0)
+    # 从Stock表获取行业板块信息（比daily_basic_cache更准确）
+    sector_name = '未知'
+    sector_pct = 0
+    if (signal_context or {}).get('sector_name'):
+        sector_name = signal_context['sector_name']
+        sector_pct = (signal_context or {}).get('sector_pct', 0)
+    else:
+        try:
+            from app.models import Stock
+            stk = Stock.query.get(signal_context.get('ts_code', '')) if signal_context else None
+            if stk and stk.industry:
+                sector_name = stk.industry
+        except Exception:
+            pass
+    evidence = sig.get('evidence', []) if sig else []
+    status_text = '; '.join(evidence[:2]) if evidence else (sig.get('signal_label', '行业板块情况正常') if sig else '行业板块情况正常')
     return {
         'direction': sig.get('signal', 'neutral') if sig else 'neutral',
         'sector': sector_name,
@@ -123,7 +144,7 @@ def _build_emotion_dimension(
         'market_temp': sr.get('volume', {}).get('state', '中性'),
         'valuation': '合理' if sr.get('risk_level') == 'MEDIUM' else '偏低',
         'risk_level': sr.get('risk_level', '中等'),
-        'status_text': sig.get('signal_label', '行业板块情况正常') if sig else '行业板块情况正常',
+        'status_text': status_text,
     }
 
 
@@ -186,6 +207,7 @@ def strategy_analyze():
         # Step 1: 计算5策略信号
         scs = SignalComputationService()
         signals = scs.compute_for_stock(ts_code)
+        data_availability = scs.last_data_availability  # 扩展数据可用性状态
 
         # Step 2: 构建信号上下文（包含板块信息等）
         signal_context = _build_signal_context(ts_code)
@@ -217,6 +239,7 @@ def strategy_analyze():
                 'ts_code': ts_code,
                 'trade_date': _today_str(),
                 'dimensions': dimensions,
+                'data_availability': data_availability,
             }
         }
 
@@ -340,14 +363,25 @@ def _compute_kronos(ts_code: str) -> Optional[Dict]:
 
 def _build_signal_context(ts_code: str) -> Dict:
     """构建信号上下文（板块信息等）"""
-    ctx = {}
+    ctx = {'ts_code': ts_code}
+    # 从 Stock 表查询行业（最准确来源）
+    try:
+        from app.data import DataManager
+        dm = DataManager()
+        stk = dm.get_stock_info(ts_code)
+        if stk and stk.get('industry'):
+            ctx['sector_name'] = stk['industry']
+    except Exception:
+        pass
+    # 从 daily_basic 获取板块涨跌幅
     try:
         from app.data import DataManager
         dm = DataManager()
         df_basic = dm.get_cached_daily_basic(ts_code)
         if df_basic is not None and not df_basic.empty:
             latest = df_basic.iloc[-1]
-            ctx['sector_name'] = str(latest.get('industry', '未知'))
+            if 'sector_name' not in ctx:
+                ctx['sector_name'] = str(latest.get('industry', '未知'))
             ctx['sector_pct'] = float(latest.get('pct_chg', 0))
     except Exception:
         pass

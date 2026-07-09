@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.stock.analyzer.datadaemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/.venv/bin/python</string>
+        <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/data_daemon.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kalence/Desktop/01-A股股票分析系统/backend</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>DATA_DIR</key>
+        <string>/Users/kalence/Desktop/01-A股股票分析系统/data</string>
+        <key>TUSHARE_TOKEN</key>
+        <string>0ef90eacb9926e6e6007a3df09931ba6e88bfa86d5576280cbfdad3b</string>
+    </dict>
+
+    <!-- 崩溃后自动重启 -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- 开机自动启动 -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- 标准输出/错误日志 -->
+    <key>StandardOutPath</key>
+    <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/logs/data_daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/logs/data_daemon.log</string>
+</dict>
+</plist>

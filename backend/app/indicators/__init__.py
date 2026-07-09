@@ -101,6 +101,44 @@ class TechnicalIndicatorEngine:
         if len(result) >= 10:
             result['vol_ma10'] = result['vol'].rolling(window=10).mean()
         
+        # 7. 计算BBI (Bull and Bear Index) = (MA3 + MA6 + MA12 + MA24) / 4
+        if len(result) >= 24:
+            ma3 = result['close'].rolling(window=3).mean()
+            ma6 = result['close'].rolling(window=6).mean()
+            ma12 = result['close'].rolling(window=12).mean()
+            ma24 = result['close'].rolling(window=24).mean()
+            result['bbi'] = (ma3 + ma6 + ma12 + ma24) / 4
+        
+        # 8. 计算ENE (Envelope) = MA25 * (1 ± M/100), M=6
+        if len(result) >= 25:
+            ma25 = result['close'].rolling(window=25).mean()
+            ene_m = 6.0
+            result['ene_upper'] = ma25 * (1 + ene_m / 100)
+            result['ene_lower'] = ma25 * (1 - ene_m / 100)
+        
+        # 9. 计算九转序列 (Nine Turner)
+        if len(result) >= 8:
+            nine_buy_arr = np.zeros(len(result), dtype=int)
+            nine_sell_arr = np.zeros(len(result), dtype=int)
+            cnt_buy = 0
+            cnt_sell = 0
+            for i in range(4, len(result)):
+                if result['close'].iloc[i] < result['close'].iloc[i-4]:
+                    cnt_buy = min(cnt_buy + 1, 9)
+                    cnt_sell = 0
+                elif result['close'].iloc[i] > result['close'].iloc[i-4]:
+                    cnt_sell = min(cnt_sell + 1, 9)
+                    cnt_buy = 0
+                else:
+                    cnt_buy = 0
+                    cnt_sell = 0
+                if cnt_buy > 0:
+                    nine_buy_arr[i] = cnt_buy
+                if cnt_sell > 0:
+                    nine_sell_arr[i] = cnt_sell
+            result['nine_buy'] = nine_buy_arr
+            result['nine_sell'] = nine_sell_arr
+        
         return result
     
     # 保留单个方法以保持向后兼容
