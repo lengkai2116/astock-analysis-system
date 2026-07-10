@@ -2576,6 +2576,8 @@ function renderChipData(idx){
   var chipData = _chipCache && _chipCache[_currentTsCode];
   var cd;
   if(chipData){
+    // 指标数据在 chipData.indicators 下
+    var ind = chipData.indicators || {};
     // 计算光标获利：光标所在价格的获利筹码比例
     var cursorProfit = '—';
     if(chipData.chip_bins && idx >= 0 && ohlc[idx]){
@@ -2590,13 +2592,13 @@ function renderChipData(idx){
     }
     cd = {
       time: dates[idx] || '—',
-      profit: (chipData.profit_ratio != null ? Number(chipData.profit_ratio).toFixed(1) + '%' : '—'),
+      profit: (ind.profit_ratio != null ? Number(ind.profit_ratio * 100).toFixed(1) + '%' : '—'),
       cursorProfit: cursorProfit,
-      cost: (chipData.ssrp != null ? Number(chipData.ssrp).toFixed(2) : '—'),
-      cost90: (chipData.cost_90 && chipData.cost_90.low != null ? Number(chipData.cost_90.low).toFixed(2) + '~' + Number(chipData.cost_90.high).toFixed(2) : '—'),
-      con90: (chipData.concentration_90 != null ? Number(chipData.concentration_90).toFixed(1) + '%' : '—'),
-      cost70: (chipData.cost_70 && chipData.cost_70.low != null ? Number(chipData.cost_70.low).toFixed(2) + '~' + Number(chipData.cost_70.high).toFixed(2) : '—'),
-      con70: (chipData.concentration_70 != null ? Number(chipData.concentration_70).toFixed(1) + '%' : '—')
+      cost: (ind.ssrp != null ? Number(ind.ssrp).toFixed(2) : '—'),
+      cost90: (ind.cost_90 && ind.cost_90.low != null ? Number(ind.cost_90.low).toFixed(2) + '~' + Number(ind.cost_90.high).toFixed(2) : '—'),
+      con90: (ind.concentration_90 != null ? Number(ind.concentration_90 * 100).toFixed(1) + '%' : '—'),
+      cost70: (ind.cost_70 && ind.cost_70.low != null ? Number(ind.cost_70.low).toFixed(2) + '~' + Number(ind.cost_70.high).toFixed(2) : '—'),
+      con70: (ind.concentration_70 != null ? Number(ind.concentration_70 * 100).toFixed(1) + '%' : '—')
     };
   } else {
     cd = {
