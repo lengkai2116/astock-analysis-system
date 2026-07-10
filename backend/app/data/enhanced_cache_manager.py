@@ -44,6 +44,7 @@ class EnhancedCacheManager:
     def __init__(self):
         self._lock = threading.RLock()
         self._write_lock = threading.RLock()
+        self._snapshot_write_lock = threading.RLock()
         self.memory_cache = TieredMemoryCache()
 
         data_dir = os.getenv('DATA_DIR') or (
@@ -1228,12 +1229,11 @@ class EnhancedCacheManager:
             try:
                 records = []
                 for sig in signals:
-                    trade_date = sig.get('signal_date', datetime.now().strftime('%Y-%m-%d'))
-                    if hasattr(trade_date, 'strftime'):
-                        trade_date = trade_date.strftime('%Y-%m-%d')
+                    trade_date_raw = sig.get('signal_date')
+                    trade_date = self._fmt_date(trade_date_raw) if trade_date_raw else datetime.now().strftime('%Y%m%d')
                     records.append({
                         'ts_code': ts_code,
-                        'trade_date': str(trade_date)[:10],
+                        'trade_date': trade_date,
                         'signal_name': sig.get('strategy_name', 'unknown'),
                         'signal_value': sig.get('confidence'),
                         'signal_level': sig.get('signal'),
@@ -1256,7 +1256,8 @@ class EnhancedCacheManager:
         """批量写入快照数据到独立 market_snapshot.db（INSERT OR REPLACE, batch write）"""
         if not records:
             return
-        try:
+        with self._snapshot_write_lock:
+            try:
             cols = ['ts_code', 'code', 'name', 'price', 'open', 'high', 'low',
                     'prev_close', 'volume', 'amount',
                     'bid1', 'ask1', 'bid_vol1', 'ask_vol1',

@@ -208,12 +208,38 @@ def _batch_concept() -> int:
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
+    # 1. 获取概念列表
     concept_list = pro.concept()
     if concept_list is None or concept_list.empty:
         return 0
-    # 存概念列表
-    _ecm.cache_concept_data(concept_list)
-    total = len(concept_list)
+    # 2. 获取每个概念的成分股
+    detail_records = []
+    for _, row in concept_list.iterrows():
+        concept_code = row.get('code') or row.get('concept_code')
+        concept_name = row.get('name') or row.get('concept_name')
+        if not concept_code:
+            continue
+        try:
+            detail = pro.concept_detail(id=concept_code)
+            if detail is not None and not detail.empty:
+                for _, d in detail.iterrows():
+                    detail_records.append({
+                        'ts_code': d.get('ts_code'),
+                        'concept_name': concept_name or concept_code,
+                        'concept_code': concept_code,
+                    })
+        except Exception as e:
+            logger.debug(f"概念 {concept_code} 详情获取失败: {e}")
+    # 存概念列表（兼容 pro.concept() 输出）
+    try:
+        _ecm.cache_concept_data(concept_list)
+    except Exception as e:
+        logger.warning(f"概念列表缓存失败: {e}")
+    # 存成分股映射
+    if detail_records:
+        _ecm.cache_concept_data(pd.DataFrame(detail_records))
+    total = len(concept_list) + len(detail_records)
+    logger.info(f"概念板块同步完成: {len(concept_list)} 个概念, {len(detail_records)} 条成分股映射")
     return total
 
 
