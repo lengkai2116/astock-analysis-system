@@ -233,6 +233,41 @@ class SchedulerManager:
             except Exception:
                 pass
 
+        # ── 盘中快照推送（迭代2：API 进程 APScheduler 推送） ──
+        # 始终注册，不受配置影响（盘中推送是基础功能）
+        try:
+            from datetime import timedelta
+            now = datetime.now()
+            self._scheduler.add_job(
+                self._market_snapshot_push_wrapper_5s,
+                IntervalTrigger(seconds=5),
+                id='market_snapshot_push_5s',
+                name='盘中快照推送（涨跌/涨幅榜/自选）',
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=15,
+                next_run_time=now + timedelta(seconds=10),  # 冷启动保护：首次延迟10s
+            )
+            logger.debug("注册盘中快照推送: 每 5s 推送涨跌分布+涨幅榜+自选行情")
+        except Exception as e:
+            logger.warning("注册盘中快照推送(5s)失败: %s", e)
+
+        try:
+            self._scheduler.add_job(
+                self._market_snapshot_push_wrapper_30s,
+                IntervalTrigger(seconds=30),
+                id='market_snapshot_push_30s',
+                name='盘中板块排行推送',
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=60,
+            )
+            logger.debug("注册盘中板块排行推送: 每 30s 推送板块排行")
+        except Exception as e:
+            logger.warning("注册盘中板块排行推送(30s)失败: %s", e)
+
     def reschedule_from_config(self, config: Dict[str, Any]):
         """根据新配置动态更新 Job（无需重启）"""
         if self._scheduler:
@@ -692,6 +727,53 @@ class SchedulerManager:
                 logger.info(f"月度 Stock 同步完成: {count} 只")
         except Exception as e:
             logger.error(f"月度 Stock 同步失败: {e}")
+
+    # ── 盘中快照推送包装器（迭代2） ─────────────────────────
+
+    def _market_snapshot_push_wrapper_5s(self):
+        """盘中快照推送包装器（每 5s）：检查交易时段，推送涨跌/涨幅榜/自选
+
+        冷启动保护：首次执行由 next_run_time=now+10s 延迟。
+        """
+        # 非交易时段跳过
+        try:
+            from app.utils.trading_hours import is_trading_time
+            if not is_trading_time():
+                return
+        except Exception:
+            pass  # 导入失败则默认执行
+
+        try:
+            from flask import current_app
+            with current_app.app_context():
+                from app.services.push_service import (
+                    push_market_summary,
+                    push_top_stocks,
+                    push_watchlist_quotes,
+                )
+                push_market_summary()
+                push_top_stocks()
+                push_watchlist_quotes()
+        except Exception as e:
+            logger.error("盘中快照推送(5s)异常: %s", e)
+
+    def _market_snapshot_push_wrapper_30s(self):
+        """盘中板块排行推送包装器（每 30s）"""
+        # 非交易时段跳过
+        try:
+            from app.utils.trading_hours import is_trading_time
+            if not is_trading_time():
+                return
+        except Exception:
+            pass
+
+        try:
+            from flask import current_app
+            with current_app.app_context():
+                from app.services.push_service import push_sector_rankings
+                push_sector_rankings()
+        except Exception as e:
+            logger.error("盘中板块排行推送(30s)异常: %s", e)
 
     def shutdown(self):
         """关闭调度器"""

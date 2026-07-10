@@ -37,6 +37,8 @@ class WsBridge:
         self._store = None
         self._watchlist_codes: set = set()
         self._watchlist_lock = threading.Lock()
+        # API 进程主导推送（APScheduler），采集进程不再推送
+        self._api_push_active = True
 
     # ── 惰性引用 ─────────────────────────────────────────────
 
@@ -77,6 +79,11 @@ class WsBridge:
         with self._watchlist_lock:
             self._watchlist_codes.clear()
 
+    def get_watchlist_codes(self) -> list:
+        """获取当前注册的自选股代码列表（供 push_service 读取）"""
+        with self._watchlist_lock:
+            return list(self._watchlist_codes)
+
     # ── 统一入口（由 _CollectThread.run 调用） ──────────────
 
     def on_collect_complete(self, thread_name: str):
@@ -106,6 +113,8 @@ class WsBridge:
 
     def _broadcast_market_summary(self, sio):
         """推送市场概况（涨跌比、总数）"""
+        if self._api_push_active:
+            return
         store = self._get_store()
         if store is None:
             return
@@ -124,9 +133,11 @@ class WsBridge:
     def _broadcast_market_indices(self, sio):
         """推送四大指数实时行情（market:indices）
 
+        API 进程接管后禁用双推。
         从 InMemoryStateStore 快照中查找四大指数代码，提取实时行情。
-        前端收到后更新 marketIndexes，与 REST /market/overview 互补。
         """
+        if self._api_push_active:
+            return
         store = self._get_store()
         if store is None:
             return
@@ -164,6 +175,8 @@ class WsBridge:
 
     def _broadcast_top_stocks(self, sio):
         """推送涨幅榜/跌幅榜 Top10"""
+        if self._api_push_active:
+            return
         store = self._get_store()
         if store is None:
             return
@@ -175,6 +188,8 @@ class WsBridge:
 
     def _broadcast_sectors(self, sio):
         """推送行业板块排行 + 涨跌停池"""
+        if self._api_push_active:
+            return
         store = self._get_store()
         if store is None:
             return
@@ -185,6 +200,8 @@ class WsBridge:
 
     def _broadcast_limit_pools(self, sio):
         """推送涨跌停池"""
+        if self._api_push_active:
+            return
         store = self._get_store()
         if store is None:
             return
@@ -197,6 +214,8 @@ class WsBridge:
 
     def _broadcast_news(self, sio):
         """推送新闻头条"""
+        if self._api_push_active:
+            return
         store = self._get_store()
         if store is None:
             return
@@ -223,6 +242,8 @@ class WsBridge:
 
     def _broadcast_watchlist_quotes(self, sio):
         """推送自选股实时行情到 watchlist 房间（每5s采集后自动触发）"""
+        if self._api_push_active:
+            return
         store = self._get_store()
         if store is None:
             return

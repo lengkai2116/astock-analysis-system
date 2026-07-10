@@ -90,11 +90,13 @@ def test_snapshot_batch_write_and_read_all():
     assert '000002.SZ' in ts_codes
     assert '600000.SH' in ts_codes
 
-    # 验证数据完整性
+    # 验证数据完整性（仅检查我们写入的测试记录）
+    test_codes = ['000001.SZ', '000002.SZ', '600000.SH']
     for s in all_snaps:
-        assert float(s['price']) > 0
-        assert float(s['bid1']) > 0
-        assert float(s['ask1']) > 0
+        if s['ts_code'] in test_codes:
+            assert float(s['price']) > 0
+            assert float(s['bid1']) > 0
+            assert float(s['ask1']) > 0
     print("✅ test_snapshot_batch_write_and_read_all PASSED")
 
 

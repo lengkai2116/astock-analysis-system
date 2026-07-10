@@ -240,7 +240,9 @@ def create_app():
         @app.route('/dashboard.html')
         @app.route('/dashboard')
         def serve_dashboard():
-            return send_from_directory(_proto_dir, 'dashboard.html')
+            resp = send_from_directory(_proto_dir, 'dashboard.html')
+            resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            return resp
         @app.route('/assets/<path:filename>')
         def serve_assets(filename):
             return send_from_directory(os.path.join(_proto_dir, 'assets'), filename)
@@ -249,7 +251,11 @@ def create_app():
         # 覆盖 screener/backtest/watchlist 等所有原型页面
         @app.route('/<path:filename>.html')
         def serve_prototype_html(filename):
-            return send_from_directory(_proto_dir, f'{filename}.html')
+            resp = send_from_directory(_proto_dir, f'{filename}.html')
+            resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            resp.headers['Pragma'] = 'no-cache'
+            resp.headers['Expires'] = '0'
+            return resp
 
         logger.info(f"原型前端静态文件已挂载: {_proto_dir}")
 
