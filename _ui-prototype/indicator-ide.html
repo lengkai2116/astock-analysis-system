@@ -1596,7 +1596,7 @@ function rebuildChart(){
       xAxis: xAxes,
       yAxis: yAxes,
       dataZoom: [{
-        type:'slider', xAxisIndex:Array.from({length:1+activeSubs.length},function(_,i){return i}), start:86, end:100,
+        type:'slider', xAxisIndex:Array.from({length:1+activeSubs.length},function(_,i){return i}), start: dates.length < 100 ? 0 : Math.max(0, 100 - Math.round(20000 / dates.length)), end:100,
         height:0, bottom:-30, showDetail:false, showDataShadow:false,
         borderColor:'transparent', backgroundColor:'transparent', fillerColor:'transparent',
         handleStyle:{color:'transparent', borderColor:'transparent'},
@@ -2123,6 +2123,8 @@ function switchStock(tsCode){
     var analysis=results[0], verification=results[1], narrative=results[2];
     if(analysis && analysis.dimensions){
       renderDimensionCards(analysis.dimensions, analysis.kronos);
+      // 从E12维度数据生成情景推演（覆盖初始硬编码HTML）
+      generateScenariosFromDimensions(analysis.dimensions);
     }
     if(verification){
       renderVerificationChains(verification);
@@ -2634,20 +2636,25 @@ function loadQuote(tsCode){
 function renderZszqGrid(d){
   function s(id,v,c){ var el=document.getElementById('zq-'+id); if(el){ if(v==null||v==='--'||v===''){el.textContent='--';return;} var txt=typeof v==='number'?v.toFixed(2):v; el.textContent=txt; if(c){el.style.color=c(el,txt)?'#EF4444':'#22C55E';} }}
   function sv(id,val){ var el=document.getElementById('zq-'+id); if(el) el.textContent=val!=null?(typeof val==='number'?val.toFixed(2):val):'--'; }
-  sv('open',d.open); sv('high',d.high); sv('low',d.low); sv('avg_price',d.avg_price);
-  sv('high_limit',d.high_limit); sv('low_limit',d.low_limit); sv('volume_ratio',d.volume_ratio);
+  sv('open',d.open); sv('high',d.high); sv('low',d.low);
+  sv('avg_price',d.avg_price!=null&&d.avg_price>0?d.avg_price:'--');
+  sv('high_limit',d.high_limit); sv('low_limit',d.low_limit);
+  sv('volume_ratio',d.volume_ratio);
   sv('speed','--'); sv('commission','--');
   if(d.volume!=null){ var v=d.volume; sv('volume',v>=10000?(v/10000).toFixed(2)+'万':v); }else sv('volume','--');
   if(d.amount!=null){ var a=d.amount; sv('amount',a>=100000000?(a/100000000).toFixed(2)+'亿':a>=10000?(a/10000).toFixed(2)+'万':a); }else sv('amount','--');
   sv('circ_mv',d.circ_mv!=null?d.circ_mv>=10000?(d.circ_mv/10000).toFixed(2)+'亿':d.circ_mv:'--');
   sv('total_mv',d.total_mv!=null?d.total_mv>=10000?(d.total_mv/10000).toFixed(2)+'亿':d.total_mv:'--');
   sv('inside','--'); sv('outside','--'); sv('present','--'); sv('after_vol','--'); sv('after_amt','--');
-  sv('eps',d.eps); sv('bvps',d.bvps); sv('circ_share','--'); sv('total_share','--');
+  sv('eps',d.eps); sv('bvps',d.bvps);
+  // 流通股本/总股本（单位：万股 → 亿股/万股）
+  if(d.float_share!=null){ var fs=d.float_share; sv('circ_share',fs>=10000?(fs/10000).toFixed(2)+'亿':fs.toFixed(2)+'万'); }else sv('circ_share','--');
+  if(d.total_share!=null){ var ts=d.total_share; sv('total_share',ts>=10000?(ts/10000).toFixed(2)+'亿':ts.toFixed(2)+'万'); }else sv('total_share','--');
   sv('pb',d.pb); sv('pe_ttm',d.pe_ttm);
   // PE(静)和PE(动)借用pe_ttm（Tushare无多口径）
   sv('pe_static',d.pe_ttm); sv('pe_dynamic',d.pe_ttm);
   sv('turnover',d.turnover_rate!=null?d.turnover_rate.toFixed(2)+'%':'--');
-  sv('sector','--');
+  sv('sector',d.industry||'--');
   if(d.close!=null) updateTopBarPrice(d.close,d.pct_chg);
   var sn=document.getElementById('sh-name-text'); if(sn) sn.textContent=_currentTsName||d.ts_code||'--';
   var sc=document.getElementById('sh-tscode'); if(sc) sc.textContent=d.ts_code||'';
