@@ -437,24 +437,9 @@ class DashboardService:
                                     industry_map[r.get('ts_code', '')] = r['industry']
                 except Exception:
                     pass
-            # ponytail 2: 前两条路都失败时，直调 Tushare stock_basic（降级场景例外）
+            # 前两条路都失败时，返回现有数据（不再降级到 Tushare — 260 §11 V2 修复）
             if len(industry_map) < 10:
-                try:
-                    import tushare as ts
-                    for _key in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy']:
-                        os.environ.pop(_key, None)
-                    token = os.getenv('TUSHARE_TOKEN', '')
-                    if token:
-                        ts.set_token(token)
-                        pro = ts.pro_api()
-                        df_basic = pro.stock_basic(fields='ts_code,industry')
-                        if df_basic is not None and not df_basic.empty:
-                            for _, row in df_basic.iterrows():
-                                if row.get('industry'):
-                                    industry_map[row['ts_code']] = row['industry']
-                            logger.info(f"行业映射 Tushare 降级: {len(industry_map)} 条")
-                except Exception as e:
-                    logger.warning(f"行业映射 Tushare 降级失败: {e}")
+                logger.info(f"行业映射不完整 ({len(industry_map)} 条)，使用现有数据")
 
             all_df['industry'] = all_df['ts_code'].map(lambda x: industry_map.get(x, None))
             all_df = all_df.dropna(subset=['industry'])

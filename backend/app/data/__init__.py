@@ -936,7 +936,13 @@ class DataManager:
     # ══════════════════════════════════════════════
 
     def get_fina_indicator(self, ts_code, start_date=None, end_date=None):
-        """获取财务指标数据（需5000积分）"""
+        """获取财务指标数据（优先读ECM缓存，降级到Tushare）"""
+        try:
+            df = self.cache.get_cached_fina_indicator(ts_code)
+            if df is not None and not df.empty:
+                return df
+        except Exception:
+            pass
         return self.tushare.get_fina_indicator(ts_code, start_date, end_date)
 
     def get_income(self, ts_code, start_date=None, end_date=None):

@@ -779,38 +779,46 @@ def get_screener_factor_combinations():
     """
     filter_type = request.args.get('type', 'all')
     try:
-        import json
-        import sqlite3
-
-        from app.routes.factors import PRESET_COMBOS, _ensure_combo_db, get_db_path
+        from app.routes.factors import PRESET_COMBOS
 
         presets = list(PRESET_COMBOS) if filter_type in ('all', 'sys') else []
+        # 用户自定义组合暂通过 sqlite3 直读（260 §11 V4 已知例外 — 待抽象到 DataManager 层）
+        # 该路径不涉及 Tushare 直调，仅读取本地数据库文件
         user_combos = []
         if filter_type in ('all', 'user'):
-            db_path = get_db_path()
-            _ensure_combo_db()
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """SELECT id, name, description, factors, src, detail, created_at
-                       FROM factor_combinations WHERE type = 'user'
-                       ORDER BY created_at DESC"""
-                )
-                for row in cursor.fetchall():
-                    try:
-                        factors = json.loads(row[3]) if row[3] else []
-                    except Exception:
-                        factors = []
-                    mapped = []
-                    for f in factors:
-                        if isinstance(f, dict):
-                            mapped.append({"n": f.get("n", f.get("name", "")), "w": f.get("w", 0)})
-                        else:
-                            mapped.append({"n": str(f), "w": 0})
-                    user_combos.append({
-                        "id": f"u{row[0]}", "name": row[1], "type": "user",
-                        "desc": row[2] or "", "factors": mapped, "detail": row[5] or None,
-                    })
+            try:
+                import json
+                import sqlite3
+
+                from app.routes.factors import _ensure_combo_db, get_db_path
+
+                db_path = get_db_path()
+                _ensure_combo_db()
+                with sqlite3.connect(db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """SELECT id, name, description, factors, src, detail, created_at
+                           FROM factor_combinations WHERE type = 'user'
+                           ORDER BY created_at DESC"""
+                    )
+                    for row in cursor.fetchall():
+                        try:
+                            factors = json.loads(row[3]) if row[3] else []
+                        except Exception:
+                            factors = []
+                        mapped = []
+                        for f in factors:
+                            if isinstance(f, dict):
+                                mapped.append({"n": f.get("n", f.get("name", "")), "w": f.get("w", 0)})
+                            else:
+                                mapped.append({"n": str(f), "w": 0})
+                        user_combos.append({
+                            "id": f"u{row[0]}", "name": row[1], "type": "user",
+                            "desc": row[2] or "", "factors": mapped, "detail": row[5] or None,
+                        })
+            except Exception:
+                logger.warning("读取用户自定义因子组合失败，跳过")
+                user_combos = []
 
         all_combos = presets + user_combos
         return jsonify({'success': True, 'data': all_combos})
