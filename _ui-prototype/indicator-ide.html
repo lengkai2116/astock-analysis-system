@@ -2456,16 +2456,27 @@ function renderChipChart(idx, closePrice, crosshairY){
   if(!container) return;
   if(!ohlc[idx]) return;
   if(closePrice == null) closePrice = ohlc[idx][1];
-  // 计算价格范围: 取最近60天最高/最低作为筹码分布Y轴区间
-  var lo = closePrice * 0.92, hi = closePrice * 1.08;
-  for(var i = Math.max(0, idx-60); i <= idx; i++){
-    if(!ohlc[i]) continue;
-    lo = Math.min(lo, ohlc[i][2]);
-    hi = Math.max(hi, ohlc[i][3]);
+  // 计算价格范围: 优先使用后端API返回的price_range（全量120天OHLC覆盖）
+  // 修复 C2: 避免前端独立重算窗口导致筹码被裁剪
+  var chipData = _chipCache && _chipCache[_currentTsCode];
+  var lo, hi;
+  if(chipData && chipData.price_range){
+    lo = chipData.price_range.min;
+    hi = chipData.price_range.max;
+    // 略微扩展边界，避免柱子顶到边缘
+    var pad = (hi - lo) * 0.03;
+    lo -= pad; hi += pad;
+  } else {
+    // 降级: 使用最近60天价格范围
+    lo = closePrice * 0.92, hi = closePrice * 1.08;
+    for(var i = Math.max(0, idx-60); i <= idx; i++){
+      if(!ohlc[i]) continue;
+      lo = Math.min(lo, ohlc[i][2]);
+      hi = Math.max(hi, ohlc[i][3]);
+    }
+    var pad = (hi - lo) * 0.05;
+    lo -= pad; hi += pad;
   }
-  // 略微扩展边界，避免柱子顶到边缘
-  var pad = (hi - lo) * 0.05;
-  lo -= pad; hi += pad;
   var range = hi - lo || 1;
   // ② 以0.01元为档位，紧密排列
   var bins = Math.max(20, Math.round(range / 0.01));
@@ -2565,11 +2576,23 @@ function renderChipData(idx){
   var chipData = _chipCache && _chipCache[_currentTsCode];
   var cd;
   if(chipData){
+    // 计算光标获利：光标所在价格的获利筹码比例
+    var cursorProfit = '—';
+    if(chipData.chip_bins && idx >= 0 && ohlc[idx]){
+      var cursorPrice = ohlc[idx][1];
+      var cp = 0;
+      for(var bi = 0; bi < chipData.chip_bins.length; bi++){
+        if(chipData.chip_bins[bi].price_bin <= cursorPrice){
+          cp += chipData.chip_bins[bi].chip_ratio;
+        }
+      }
+      cursorProfit = (cp * 100).toFixed(1) + '%';
+    }
     cd = {
       time: dates[idx] || '—',
       profit: (chipData.profit_ratio != null ? Number(chipData.profit_ratio).toFixed(1) + '%' : '—'),
-      cursorProfit: '—',
-      cost: (chipData.avg_cost != null ? Number(chipData.avg_cost).toFixed(2) : '—'),
+      cursorProfit: cursorProfit,
+      cost: (chipData.ssrp != null ? Number(chipData.ssrp).toFixed(2) : '—'),
       cost90: (chipData.cost_90 && chipData.cost_90.low != null ? Number(chipData.cost_90.low).toFixed(2) + '~' + Number(chipData.cost_90.high).toFixed(2) : '—'),
       con90: (chipData.concentration_90 != null ? Number(chipData.concentration_90).toFixed(1) + '%' : '—'),
       cost70: (chipData.cost_70 && chipData.cost_70.low != null ? Number(chipData.cost_70.low).toFixed(2) + '~' + Number(chipData.cost_70.high).toFixed(2) : '—'),
