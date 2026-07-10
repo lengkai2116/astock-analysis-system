@@ -221,11 +221,11 @@ def _ts_code(code: str, market: int) -> str:
 
 
 def _get_a_share_codes() -> List[str]:
-    """获取所有 A 股代码列表（沪深主板/创业板/科创板）"""
+    """获取所有 A 股代码列表（沪深主板/中小板/创业板/科创板）"""
     name_map = _refresh_stock_name_map()
     return [
         c for c in name_map
-        if isinstance(c, str) and len(c) == 6 and c[0] in ('0', '3', '6')
+        if isinstance(c, str) and len(c) == 6 and c[0] in ('0', '2', '3', '6')
     ]
 
 
