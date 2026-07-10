@@ -4,9 +4,10 @@
 """
 import sys
 import os
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from datetime import datetime
+
 
 
 def _make_test_records(count=3):
