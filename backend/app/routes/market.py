@@ -5,6 +5,7 @@
 from flask import Blueprint, request, jsonify
 import logging
 from datetime import datetime, timedelta
+import pandas as pd
 from app.services.market_service import MarketService
 from app.services.dashboard_service import DashboardService
 from app.utils.error_handlers import handle_exceptions
@@ -165,7 +166,6 @@ def get_stock_quote(ts_code):
         if _tp.pro:
             raw = _tp.get_daily_data(ts_code, start_str, end_str)
             if raw:
-                import pandas as pd
                 daily_df = pd.DataFrame(raw)
 
     if daily_df.empty:
@@ -197,8 +197,15 @@ def get_stock_quote(ts_code):
 
     avg_price = round(amount / (vol * 100), 2) if (amount and vol and vol > 0) else None
 
+    # ── 1b. pre_close：取前一个交易日的 close ──────────────
+    if pre_close is None:
+        prev_df = ecm.get_cached_daily(ts_code, end_date=end_str)
+        if len(prev_df) >= 2:
+            pre_close = _sf(prev_df.iloc[-2].get('close'))
+
     # ── 2. daily_basic：ECM → Tushare ────────────────────
     turnover_rate = volume_ratio = pe_ttm = pb = total_mv = circ_mv = None
+    float_share = total_share = None
     basic_df = ecm.get_cached_daily_basic(ts_code, start_date=start_str, end_date=end_str)
     if not basic_df.empty:
         basic = basic_df.iloc[-1].to_dict()
@@ -208,6 +215,8 @@ def get_stock_quote(ts_code):
         pb = basic.get('pb')
         total_mv = basic.get('total_mv')
         circ_mv = basic.get('circ_mv')
+        float_share = basic.get('float_share')
+        total_share = basic.get('total_share')
     else:
         try:
             _tp = _get_tp()
@@ -220,28 +229,21 @@ def get_stock_quote(ts_code):
                 pb = basic.get('pb')
                 total_mv = basic.get('total_mv')
                 circ_mv = basic.get('circ_mv')
+                float_share = basic.get('float_share')
+                total_share = basic.get('total_share')
         except Exception as e:
             logger.warning(f"daily_basic 获取失败 ({ts_code}): {e}")
 
-    # ── 3. 涨跌停：ECM → Tushare ────────────────────────
+    # ── 3. 涨跌停：ECM → Tushare（先查当日，查不到查前一日）──
     high_limit = low_limit = None
-    limit_df = ecm.get_cached_stk_limit(trade_date)
-    if not limit_df.empty:
-        row = limit_df[limit_df['ts_code'] == ts_code]
-        if not row.empty:
-            high_limit = _sf(row.iloc[0].get('high_limit'))
-            low_limit = _sf(row.iloc[0].get('low_limit'))
-    else:
-        try:
-            _tp = _get_tp()
-            limit_all = _tp.get_stk_limit(trade_date)
-            if limit_all:
-                limit_row = next((r for r in limit_all if r.get('ts_code') == ts_code), None)
-                if limit_row:
-                    high_limit = _sf(limit_row.get('high_limit'))
-                    low_limit = _sf(limit_row.get('low_limit'))
-        except Exception as e:
-            logger.warning(f"stk_limit 获取失败 ({ts_code}): {e}")
+    for try_date in [trade_date, (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')]:
+        limit_df = ecm.get_cached_stk_limit(try_date)
+        if not limit_df.empty:
+            row = limit_df[limit_df['ts_code'] == ts_code]
+            if not row.empty:
+                high_limit = _sf(row.iloc[0].get('high_limit'))
+                low_limit = _sf(row.iloc[0].get('low_limit'))
+                break
 
     # ── 4. 财务指标：ECM → Tushare ──────────────────────
     eps = bvps = None
@@ -277,6 +279,17 @@ def get_stock_quote(ts_code):
         except Exception as e:
             logger.warning(f"adj_factor 获取失败 ({ts_code}): {e}")
 
+    # ── 6. 行业信息：PostgreSQL Stock 表 ──────────────────
+    industry = None
+    try:
+        from app import db
+        from app.models import Stock
+        stock_row = db.session.query(Stock.industry).filter(Stock.ts_code == ts_code).first()
+        if stock_row:
+            industry = stock_row.industry
+    except Exception as e:
+        logger.warning(f"行业信息获取失败 ({ts_code}): {e}")
+
     data = {
         'ts_code': ts_code,
         'trade_date': trade_date,
@@ -292,13 +305,16 @@ def get_stock_quote(ts_code):
         'high_limit': high_limit,
         'low_limit': low_limit,
         'turnover_rate': turnover_rate,
-        'volume_ratio': volume_ratio,
+        'volume_ratio': None if (volume_ratio is None or (isinstance(volume_ratio, float) and str(volume_ratio) == 'nan')) else volume_ratio,
         'pe_ttm': pe_ttm,
         'pb': pb,
         'total_mv': total_mv,
         'circ_mv': circ_mv,
         'eps': eps,
         'bvps': bvps,
+        'float_share': float_share,
+        'total_share': total_share,
+        'industry': industry,
         'adj_close': adj_close,
         'inside': None,
         'outside': None,
@@ -457,8 +473,28 @@ def _build_moneyflow_response(ts_code: str, records: list) -> dict:
 @market_bp.route('/api/v3/stock/<ts_code>/orderbook', methods=['GET'])
 @handle_exceptions
 def get_stock_orderbook(ts_code):
-    """E8: 盘口五档数据（实时）"""
+    """E8: 盘口五档数据（实时）— 快照库优先，InMemoryStateStore 降级（迭代1）"""
     try:
+        # 第一优先：快照库读取（独立 market_snapshot.db，§3.1 物理存储方案）
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        snap = ecm.get_market_snapshot(ts_code)
+        if snap:
+            bid = []
+            ask = []
+            for i in range(1, 6):
+                bp = snap.get(f'bid{i}')
+                bv = snap.get(f'bid_vol{i}')
+                if bp is not None and float(bp) > 0:
+                    bid.append({'price': float(bp), 'volume': int(bv or 0)})
+                ap = snap.get(f'ask{i}')
+                av = snap.get(f'ask_vol{i}')
+                if ap is not None and float(ap) > 0:
+                    ask.append({'price': float(ap), 'volume': int(av or 0)})
+            if bid or ask:
+                return jsonify({'success': True, 'data': {'ts_code': ts_code, 'bid': bid, 'ask': ask}})
+
+        # 第二优先：InMemoryStateStore（兼容旧数据路径）
         from app.data.in_memory_store import store as mem_store
         snapshot = mem_store.get_snapshot()
         for item in snapshot:
@@ -466,16 +502,18 @@ def get_stock_orderbook(ts_code):
                 bid = []
                 ask = []
                 for i in range(1, 6):
-                    bp = item.get(f'bid{i}_price')
-                    bv = item.get(f'bid{i}_volume')
+                    bp = item.get(f'bid{i}_price') or item.get(f'bid{i}')
+                    bv = item.get(f'bid{i}_volume') or item.get(f'bid_vol{i}')
                     if bp is not None:
                         bid.append({'price': float(bp), 'volume': int(bv or 0)})
-                    ap = item.get(f'ask{i}_price')
-                    av = item.get(f'ask{i}_volume')
+                    ap = item.get(f'ask{i}_price') or item.get(f'ask{i}')
+                    av = item.get(f'ask{i}_volume') or item.get(f'ask_vol{i}')
                     if ap is not None:
                         ask.append({'price': float(ap), 'volume': int(av or 0)})
                 if bid or ask:
                     return jsonify({'success': True, 'data': {'ts_code': ts_code, 'bid': bid, 'ask': ask}})
+
+        # 第三优先：无数据（移除 mootdx TCP 直连，§11.2 V3）
         return jsonify({'success': True, 'data': {'ts_code': ts_code, 'bid': [], 'ask': [], 'message': '非交易时段或盘口数据不可用'}})
     except Exception as e:
         logger.warning(f"盘口数据获取失败 ({ts_code}): {e}")

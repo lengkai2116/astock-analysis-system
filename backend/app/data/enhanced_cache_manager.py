@@ -64,6 +64,16 @@ class EnhancedCacheManager:
 
         self._init_tables()
 
+        # 独立快照数据库（§3.1 物理存储方案：写入锁竞争、故障隔离、文件大小管理）
+        self.snapshot_db_path = os.path.join(db_dir, 'market_snapshot.db')
+        self.snapshot_conn = sqlite3.connect(self.snapshot_db_path, check_same_thread=False)
+        self.snapshot_conn.execute("PRAGMA journal_mode=WAL")
+        self.snapshot_conn.execute("PRAGMA synchronous=NORMAL")
+        self.snapshot_conn.execute("PRAGMA cache_size=-8192")
+        self.snapshot_conn.execute("PRAGMA temp_store=MEMORY")
+        self.snapshot_conn.execute("PRAGMA busy_timeout=5000")
+        self._init_snapshot_tables()
+
         self.cache_stats = {
             'hits_duckdb': 0,  # 保留旧字段名兼容
             'misses': 0,
@@ -406,11 +416,40 @@ class EnhancedCacheManager:
                 pass
         self.conn.commit()
 
+    # ── 快照数据库建表 ──────────────────────────────────────────
+
+    def _init_snapshot_tables(self):
+        """建表：实时快照表（独立 market_snapshot.db，§3.3 实时快照表设计）"""
+        self.snapshot_conn.execute("""
+            CREATE TABLE IF NOT EXISTS as_market_snapshot (
+                ts_code TEXT PRIMARY KEY,
+                code TEXT, name TEXT, price REAL, open REAL, high REAL, low REAL,
+                prev_close REAL, volume INTEGER, amount REAL,
+                bid1 REAL, ask1 REAL, bid_vol1 INTEGER, ask_vol1 INTEGER,
+                bid2 REAL, ask2 REAL, bid_vol2 INTEGER, ask_vol2 INTEGER,
+                bid3 REAL, ask3 REAL, bid_vol3 INTEGER, ask_vol3 INTEGER,
+                bid4 REAL, ask4 REAL, bid_vol4 INTEGER, ask_vol4 INTEGER,
+                bid5 REAL, ask5 REAL, bid_vol5 INTEGER, ask_vol5 INTEGER,
+                cached_at TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
+        self.snapshot_conn.commit()
+
     # ════════════════════════════════════════════════════════════
     # 业务方法（以下方法签名与 DuckDB 版本完全一致）
     # ════════════════════════════════════════════════════════════
 
     # ── 日线 ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _fmt_date(d):
+        """兼容 YYYYMMDD → YYYY-MM-DD"""
+        if d is None:
+            return None
+        s = str(d).replace('-', '')
+        if len(s) == 8:
+            return f'{s[:4]}-{s[4:6]}-{s[6:]}'
+        return str(d)
 
     def get_cached_daily(self, ts_code, start_date=None, end_date=None):
         self.cache_stats['total_requests'] += 1
@@ -418,10 +457,10 @@ class EnhancedCacheManager:
         params = [ts_code]
         if start_date:
             query += " AND trade_date >= ?"
-            params.append(start_date)
+            params.append(self._fmt_date(start_date))
         if end_date:
             query += " AND trade_date <= ?"
-            params.append(end_date)
+            params.append(self._fmt_date(end_date))
         query += " ORDER BY trade_date"
         df = self._query_df(query, params)
         if not df.empty:
@@ -554,6 +593,11 @@ class EnhancedCacheManager:
             self.conn.close()
         except Exception:
             pass
+        try:
+            if hasattr(self, 'snapshot_conn'):
+                self.snapshot_conn.close()
+        except Exception:
+            pass
 
     def __del__(self):
         self.close()
@@ -578,24 +622,26 @@ class EnhancedCacheManager:
 
     def get_cached_daily_basic(self, ts_code, start_date=None, end_date=None):
         """从缓存获取每日基础数据（优先使用预加载内存）"""
+        sd = self._fmt_date(start_date) if start_date else None
+        ed = self._fmt_date(end_date) if end_date else None
         all_df = getattr(self, '_all_daily_basic', None)
         if all_df is not None:
             m = all_df['ts_code'] == ts_code
-            if start_date:
-                m &= all_df['trade_date'] >= start_date
-            if end_date:
-                m &= all_df['trade_date'] <= end_date
+            if sd:
+                m &= all_df['trade_date'] >= sd
+            if ed:
+                m &= all_df['trade_date'] <= ed
             df = all_df[m].copy()
             if not df.empty:
                 return df
         query = "SELECT * FROM daily_basic_cache WHERE ts_code = ?"
         params = [ts_code]
-        if start_date:
+        if sd:
             query += " AND trade_date >= ?"
-            params.append(start_date)
-        if end_date:
+            params.append(sd)
+        if ed:
             query += " AND trade_date <= ?"
-            params.append(end_date)
+            params.append(ed)
         query += " ORDER BY trade_date"
         return self._query_df(query, params)
 
@@ -885,9 +931,9 @@ class EnhancedCacheManager:
         if ts_code:
             query += " AND ts_code = ?"; params.append(ts_code)
         if start_date:
-            query += " AND trade_date >= ?"; params.append(start_date)
+            query += " AND trade_date >= ?"; params.append(self._fmt_date(start_date))
         if end_date:
-            query += " AND trade_date <= ?"; params.append(end_date)
+            query += " AND trade_date <= ?"; params.append(self._fmt_date(end_date))
         query += " ORDER BY trade_date"
         return self._query_df(query, params)
 
@@ -1039,8 +1085,11 @@ class EnhancedCacheManager:
         if df.empty: return
         with self._write_lock:
             try:
-                if 'trade_date' in df.columns:
-                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+                # stk_limit 列名：ts_code, trade_date(YYYYMMDD), up_limit, down_limit
+                if 'trade_date' in df.columns and not pd.api.types.is_string_dtype(df['trade_date']):
+                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y%m%d')
+                if 'up_limit' in df.columns and 'high_limit' not in df.columns:
+                    df = df.rename(columns={'up_limit': 'high_limit', 'down_limit': 'low_limit'})
                 self._insert_from_df('stk_limit_cache', df)
             except Exception as e:
                 logger.warning(f"缓存涨跌停失败: {e}")
@@ -1141,3 +1190,60 @@ class EnhancedCacheManager:
             "SELECT * FROM index_member_cache WHERE index_code = ?",
             [index_code]
         )
+
+    # ==================== 实时快照数据库 ====================
+
+    def cache_market_snapshot_data(self, records: list):
+        """批量写入快照数据到独立 market_snapshot.db（INSERT OR REPLACE, batch write）"""
+        if not records:
+            return
+        try:
+            cols = ['ts_code', 'code', 'name', 'price', 'open', 'high', 'low',
+                    'prev_close', 'volume', 'amount',
+                    'bid1', 'ask1', 'bid_vol1', 'ask_vol1',
+                    'bid2', 'ask2', 'bid_vol2', 'ask_vol2',
+                    'bid3', 'ask3', 'bid_vol3', 'ask_vol3',
+                    'bid4', 'ask4', 'bid_vol4', 'ask_vol4',
+                    'bid5', 'ask5', 'bid_vol5', 'ask_vol5']
+            rows = [tuple(r.get(c, 0) for c in cols) for r in records]
+            col_list = ', '.join(cols)
+            placeholders = ', '.join('?' for _ in cols)
+            self.snapshot_conn.executemany(
+                f"INSERT OR REPLACE INTO as_market_snapshot ({col_list}) VALUES ({placeholders})",
+                rows
+            )
+            self.snapshot_conn.commit()
+        except Exception as e:
+            logger.warning(f"快照数据库写入失败: {e}")
+
+    def get_market_snapshot(self, ts_code: str) -> dict:
+        """查询单只股票的实时快照（用于 orderbook 端点）"""
+        try:
+            cur = self.snapshot_conn.execute(
+                "SELECT * FROM as_market_snapshot WHERE ts_code = ?", [ts_code]
+            )
+            row = cur.fetchone()
+            if row is None:
+                return {}
+            cols = [d[0] for d in cur.description]
+            return dict(zip(cols, row))
+        except Exception as e:
+            logger.debug(f"快照查询失败 ({ts_code}): {e}")
+            return {}
+
+    def get_all_market_snapshots(self, codes: list = None) -> list:
+        """查询全市场或指定股票列表的实时快照（用于 SocketIO 推送）"""
+        try:
+            if codes:
+                placeholders = ', '.join('?' for _ in codes)
+                cur = self.snapshot_conn.execute(
+                    f"SELECT * FROM as_market_snapshot WHERE ts_code IN ({placeholders})",
+                    codes
+                )
+            else:
+                cur = self.snapshot_conn.execute("SELECT * FROM as_market_snapshot")
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        except Exception as e:
+            logger.debug(f"批量快照查询失败: {e}")
+            return []

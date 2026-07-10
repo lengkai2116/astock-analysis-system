@@ -343,6 +343,15 @@ def collect_market_snapshot() -> int:
             return 0
 
         mem_store.update_snapshot(all_records)
+
+        # 迭代1：实时快照入库 → 写入 ECM 独立快照数据库
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            ecm = get_ecm_instance()
+            ecm.cache_market_snapshot_data(all_records)
+        except Exception:
+            logger.debug("[mootdx] 快照数据库写入失败（非关键）")
+
         logger.info(f"[mootdx] 快照采集完成: {len(all_records)} 只 ({elapsed:.1f}s, {len(codes)} 批)")
 
         # 252号方案 Phase 1：分钟K线聚合
