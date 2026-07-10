@@ -123,6 +123,13 @@ class MinuteDataManager:
     # 252号方案：从 ECM minute_kline_cache 读取
     # ══════════════════════════════════════════════
 
+    def _normalize_records(self, records: list) -> list:
+        """归一化分钟数据字段名：volume → vol"""
+        for r in records:
+            if 'volume' in r and 'vol' not in r:
+                r['vol'] = r.pop('volume')
+        return records
+
     def get_cached_minute(self, ts_code: str, freq: str = '1min') -> Optional[List[Dict]]:
         """优先从 ECM minute_kline_cache 读取分钟线数据"""
         try:
@@ -135,6 +142,7 @@ class MinuteDataManager:
                 df = ecm.get_cached_minute_kline(ts_code, trade_date=trade_date, freq=try_freq)
                 if df is not None and not df.empty:
                     records = df.to_dict('records')
+                    self._normalize_records(records)
                     for r in records:
                         if 'trade_time' not in r:
                             r['trade_time'] = str(r.get('datetime', ''))
@@ -148,6 +156,7 @@ class MinuteDataManager:
                 df = ecm.get_cached_minute_kline(ts_code, freq=try_freq)
                 if df is not None and not df.empty:
                     records = df.to_dict('records')
+                    self._normalize_records(records)
                     cutoff = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
                     records = [r for r in records if str(r.get('trade_date', '')) >= cutoff]
                     for r in records:

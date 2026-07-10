@@ -98,6 +98,9 @@ def _get_kline_data(data_manager, ts_code, limit=200, period='D'):
             if records and len(records) > 0:
                 df = pd.DataFrame(records)
                 df.rename(columns={'trade_time': 'trade_date'}, inplace=True)
+                # ECM 存储 volume 列，代码层统一用 vol
+                if 'vol' not in df.columns and 'volume' in df.columns:
+                    df.rename(columns={'volume': 'vol'}, inplace=True)
                 # 确保数值列类型正确
                 for col in ['open', 'high', 'low', 'close', 'vol', 'amount']:
                     if col in df.columns:
