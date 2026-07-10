@@ -188,6 +188,72 @@ def _batch_lhb(trade_date: str) -> int:
     return len(df)
 
 
+def _batch_margin(trade_date: str) -> int:
+    """全市场融资融券 — 1 次 API 调用"""
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    raw = pro.margin(trade_date=trade_date)
+    if raw is None or raw.empty:
+        return 0
+    df = raw.copy()
+    if 'trade_date' in df.columns:
+        df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+    _ecm.cache_margin_data(df)
+    return len(df)
+
+
+def _batch_concept() -> int:
+    """全市场概念板块及成分股 — 2 次 API 调用"""
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    concept_list = pro.concept()
+    if concept_list is None or concept_list.empty:
+        return 0
+    # 存概念列表
+    _ecm.cache_concept_data(concept_list)
+    total = len(concept_list)
+    return total
+
+
+def _batch_index_member() -> int:
+    """指数成分股 — 对主要指数逐一查询"""
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    total = 0
+    main_indices = ['000300.SH', '000016.SH', '000905.SH', '399006.SZ']
+    for code in main_indices:
+        try:
+            raw = pro.index_member(ts_code=code)
+            if raw is not None and not raw.empty:
+                df = raw.copy()
+                if 'in_date' in df.columns:
+                    df['in_date'] = pd.to_datetime(df['in_date']).dt.date
+                _ecm.cache_index_member_data(df)
+                total += len(df)
+        except Exception as e:
+            logger.warning(f"指数 {code} 成分股同步失败: {e}")
+    return total
+
+
+def _batch_win_rate() -> int:
+    """策略胜率计算 — 从历史信号计算，不调外部 API"""
+    _ensure_pd()
+    try:
+        from app.data.precompute_indicator_manager import PrecomputeIndicatorManager
+        manager = PrecomputeIndicatorManager()
+        manager.compute_win_rates()
+        win_df = manager.get_win_rates()
+        if win_df is not None and not win_df.empty:
+            _ecm.cache_win_rates(win_df)
+            return len(win_df)
+    except Exception as e:
+        logger.warning(f"胜率计算失败: {e}")
+    return 0
+
+
 def _batch_fina_indicator(trade_date: str = None) -> int:
     """全市场财务指标 — 后台低优任务"""
     _ensure_pd()
@@ -359,6 +425,28 @@ def run_daily_sync():
             logger.info(f"  {label}: {added} 条")
         except Exception as e:
             logger.warning(f"  {label} 失败: {e}")
+
+    # ── 补齐空表（迭代4）──
+    try:
+        n = _batch_margin(today)
+        logger.info(f"  融资融券: {n} 条")
+    except Exception as e:
+        logger.warning(f"  融资融券同步失败: {e}")
+    try:
+        n = _batch_concept()
+        logger.info(f"  概念板块: {n} 条")
+    except Exception as e:
+        logger.warning(f"  概念板块同步失败: {e}")
+    try:
+        n = _batch_index_member()
+        logger.info(f"  指数成分股: {n} 条")
+    except Exception as e:
+        logger.warning(f"  指数成分股同步失败: {e}")
+    try:
+        n = _batch_win_rate()
+        logger.info(f"  策略胜率: {n} 条")
+    except Exception as e:
+        logger.warning(f"  策略胜率计算失败: {e}")
 
     # 触发指标预计算（后台线程）
     try:
