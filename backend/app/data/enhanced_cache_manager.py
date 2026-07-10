@@ -377,6 +377,17 @@ class EnhancedCacheManager:
                 PRIMARY KEY (index_code, ts_code)
             )
         """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS strategy_signals (
+                ts_code TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                signal_name TEXT NOT NULL,
+                signal_value REAL,
+                signal_level TEXT,
+                cached_at TEXT DEFAULT (datetime('now','localtime')),
+                PRIMARY KEY (ts_code, trade_date, signal_name)
+            )
+        """)
         # 索引
         for idx_sql in [
             "CREATE INDEX IF NOT EXISTS idx_daily_ts_code ON daily_cache(ts_code)",
@@ -1206,6 +1217,38 @@ class EnhancedCacheManager:
             "SELECT * FROM index_member_cache WHERE index_code = ?",
             [index_code]
         )
+
+    # ==================== 策略信号缓存（迭代7a） ====================
+
+    def cache_strategy_signals(self, ts_code: str, signals: list):
+        """缓存预计算策略信号"""
+        if not signals:
+            return
+        with self._write_lock:
+            try:
+                records = []
+                for sig in signals:
+                    trade_date = sig.get('signal_date', datetime.now().strftime('%Y-%m-%d'))
+                    if hasattr(trade_date, 'strftime'):
+                        trade_date = trade_date.strftime('%Y-%m-%d')
+                    records.append({
+                        'ts_code': ts_code,
+                        'trade_date': str(trade_date)[:10],
+                        'signal_name': sig.get('strategy_name', 'unknown'),
+                        'signal_value': sig.get('confidence'),
+                        'signal_level': sig.get('signal'),
+                    })
+                self._insert_from_df('strategy_signals', pd.DataFrame(records))
+            except Exception as e:
+                logger.warning(f"缓存策略信号失败 [{ts_code}]: {e}")
+
+    def get_strategy_signals(self, ts_code: str, signal_names: list = None) -> pd.DataFrame:
+        """读取预计算策略信号"""
+        if signal_names:
+            placeholders = ','.join(['?'] * len(signal_names))
+            sql = f"SELECT * FROM strategy_signals WHERE ts_code=? AND signal_name IN ({placeholders})"
+            return self._query_df(sql, [ts_code] + signal_names)
+        return self._query_df("SELECT * FROM strategy_signals WHERE ts_code=?", [ts_code])
 
     # ==================== 实时快照数据库 ====================
 

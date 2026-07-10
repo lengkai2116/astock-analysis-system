@@ -984,3 +984,41 @@ class DataManager:
     def get_index_member(self, index_code):
         """获取指数成分股（需5000积分）"""
         return self.tushare.get_index_member(index_code)
+
+    # ══════════════════════════════════════════════
+    # 迭代7：计算层 — 数据源选择 & 预计算数据读取
+    # ══════════════════════════════════════════════
+
+    def select_data_source(self, data_type: str = 'indicators') -> str:
+        """
+        根据当前时间和日终标志位，返回数据源选择：
+        - 'eager': 使用预计算结果（日终后）
+        - 'lazy': 实时计算 + 缓存
+        """
+        from datetime import time
+        now = datetime.now()
+        # 日终判断：当前时间 >= 15:30 表示日终已过
+        eod_time = time(15, 30)
+        if now.time() >= eod_time and now.weekday() < 5:
+            return 'eager'
+        return 'lazy'
+
+    def get_cached_indicators(self, ts_code: str, indicators: list = None) -> pd.DataFrame:
+        """读取预计算指标"""
+        from app.data.precompute_indicator_manager import PrecomputeIndicatorManager
+        mgr = PrecomputeIndicatorManager(self.cache)
+        return mgr.get_precomputed_indicators(ts_code, indicators)
+
+    def get_cached_factors(self, ts_code: str, factor_names: list = None) -> pd.DataFrame:
+        """读取预计算因子"""
+        from app.data.factor_precompute import FactorPrecomputeManager
+        mgr = FactorPrecomputeManager()
+        if factor_names:
+            return mgr.get_cached_factors(ts_code, factor_names)
+        return mgr.get_cached_factors(ts_code, [])
+
+    def get_cached_signals(self, ts_code: str, signal_names: list = None) -> pd.DataFrame:
+        """读取预计算策略信号"""
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        return ecm.get_strategy_signals(ts_code, signal_names)

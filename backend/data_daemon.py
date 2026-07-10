@@ -494,6 +494,24 @@ def _run_precompute():
             pass
     logger.info(f"指标预计算完成: {ok}/{len(codes)} 只")
 
+    # ── 策略信号预计算（迭代7a） ──
+    try:
+        from app.services.signal_computation_service import SignalComputationService
+        scs = SignalComputationService()
+        active_codes = [row[0] for row in codes]
+        count = 0
+        for ts_code in active_codes:
+            try:
+                signals = scs.compute_for_stock(ts_code)
+                if signals:
+                    _ecm.cache_strategy_signals(ts_code, signals)
+                    count += 1
+            except Exception:
+                continue
+        logger.info(f"策略信号预计算完成: {count}/{len(active_codes)} 只")
+    except Exception as e:
+        logger.warning(f"策略信号预计算失败: {e}")
+
 
 def _run_financial_sync():
     """后台同步财务数据（低优，全市场约5-10分钟）"""
