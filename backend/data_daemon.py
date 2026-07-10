@@ -588,6 +588,45 @@ def _run_minute_backfill():
     _batch_backfill_minute_kline(today)
 
 
+def _run_data_cleanup():
+    """执行数据清理（迭代5：日期格式统一 + 存储清理）"""
+    today = datetime.now().strftime('%Y%m%d')
+
+    # 计算各表的清理截止日期
+    one_year_ago = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
+    three_years_ago = (datetime.now() - timedelta(days=1095)).strftime('%Y%m%d')
+    thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
+
+    try:
+        _ecm.clean_stk_limit_cache(one_year_ago)
+    except Exception as e:
+        logger.warning(f"清理 stk_limit_cache 失败: {e}")
+
+    try:
+        _ecm.clean_lhb_cache(one_year_ago)
+    except Exception as e:
+        logger.warning(f"清理 lhb_cache 失败: {e}")
+
+    try:
+        _ecm.clean_fina_indicator_cache(three_years_ago)
+    except Exception as e:
+        logger.warning(f"清理 fina_indicator_cache 失败: {e}")
+
+    try:
+        _ecm.clean_minute_cache(thirty_days_ago)
+    except Exception as e:
+        logger.warning(f"清理 minute_cache 失败: {e}")
+
+    # 每月执行一次 VACUUM
+    if datetime.now().day == 1:
+        try:
+            _ecm.vacuum_db()
+        except Exception as e:
+            logger.warning(f"VACUUM 失败: {e}")
+
+    logger.info("数据清理完成")
+
+
 # ══════════════════════════════════════════════════════════
 # 主循环
 # ══════════════════════════════════════════════════════════
@@ -642,6 +681,7 @@ def main():
         if now.hour == 15 and 30 <= now.minute <= 35 and not _daily_sync_triggered:
             _daily_sync_triggered = True
             run_daily_sync()
+            _run_data_cleanup()  # 日终同步完成后执行清理
 
         # 重置日终同步标记（离开15:30-15:35窗口后重置）
         if not (now.hour == 15 and 30 <= now.minute <= 35):

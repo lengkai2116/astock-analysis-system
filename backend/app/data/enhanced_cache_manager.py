@@ -18,7 +18,7 @@ import pandas as pd
 import logging
 import time
 import shutil
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import threading
 from .memory_cache import TieredMemoryCache
 
@@ -442,14 +442,18 @@ class EnhancedCacheManager:
     # ── 日线 ─────────────────────────────────────────────────
 
     @staticmethod
-    def _fmt_date(d):
-        """兼容 YYYYMMDD → YYYY-MM-DD"""
-        if d is None:
+    def _fmt_date(date_val) -> str:
+        """归一化日期格式为 YYYYMMDD 字符串"""
+        if date_val is None:
             return None
-        s = str(d).replace('-', '')
-        if len(s) == 8:
-            return f'{s[:4]}-{s[4:6]}-{s[6:]}'
-        return str(d)
+        if isinstance(date_val, datetime):
+            return date_val.strftime('%Y%m%d')
+        if isinstance(date_val, date):
+            return date_val.strftime('%Y%m%d')
+        s = str(date_val).replace('-', '').replace('/', '').strip()
+        if len(s) == 8 and s.isdigit():
+            return s
+        raise ValueError(f'无法解析日期: {date_val}')
 
     def get_cached_daily(self, ts_code, start_date=None, end_date=None):
         self.cache_stats['total_requests'] += 1
@@ -457,10 +461,12 @@ class EnhancedCacheManager:
         params = [ts_code]
         if start_date:
             query += " AND trade_date >= ?"
-            params.append(self._fmt_date(start_date))
+            s = str(start_date).replace('-', '')
+            params.append(f'{s[:4]}-{s[4:6]}-{s[6:]}' if len(s) == 8 else str(start_date))
         if end_date:
             query += " AND trade_date <= ?"
-            params.append(self._fmt_date(end_date))
+            s = str(end_date).replace('-', '')
+            params.append(f'{s[:4]}-{s[4:6]}-{s[6:]}' if len(s) == 8 else str(end_date))
         query += " ORDER BY trade_date"
         df = self._query_df(query, params)
         if not df.empty:
@@ -622,8 +628,14 @@ class EnhancedCacheManager:
 
     def get_cached_daily_basic(self, ts_code, start_date=None, end_date=None):
         """从缓存获取每日基础数据（优先使用预加载内存）"""
-        sd = self._fmt_date(start_date) if start_date else None
-        ed = self._fmt_date(end_date) if end_date else None
+        sd = None
+        if start_date:
+            s = str(start_date).replace('-', '')
+            sd = f'{s[:4]}-{s[4:6]}-{s[6:]}' if len(s) == 8 else str(start_date)
+        ed = None
+        if end_date:
+            s = str(end_date).replace('-', '')
+            ed = f'{s[:4]}-{s[4:6]}-{s[6:]}' if len(s) == 8 else str(end_date)
         all_df = getattr(self, '_all_daily_basic', None)
         if all_df is not None:
             m = all_df['ts_code'] == ts_code
@@ -931,9 +943,13 @@ class EnhancedCacheManager:
         if ts_code:
             query += " AND ts_code = ?"; params.append(ts_code)
         if start_date:
-            query += " AND trade_date >= ?"; params.append(self._fmt_date(start_date))
+            query += " AND trade_date >= ?"
+            s = str(start_date).replace('-', '')
+            params.append(f'{s[:4]}-{s[4:6]}-{s[6:]}' if len(s) == 8 else str(start_date))
         if end_date:
-            query += " AND trade_date <= ?"; params.append(self._fmt_date(end_date))
+            query += " AND trade_date <= ?"
+            s = str(end_date).replace('-', '')
+            params.append(f'{s[:4]}-{s[4:6]}-{s[6:]}' if len(s) == 8 else str(end_date))
         query += " ORDER BY trade_date"
         return self._query_df(query, params)
 
@@ -1247,3 +1263,34 @@ class EnhancedCacheManager:
         except Exception as e:
             logger.debug(f"批量快照查询失败: {e}")
             return []
+
+    # ════════════════════════════════════════════════════════════
+    # 迭代5：数据清理（存储生命周期管理）
+    # ════════════════════════════════════════════════════════════
+
+    def clean_stk_limit_cache(self, cutoff: str):
+        """清理 stk_limit_cache 中早于 cutoff 的记录"""
+        sql = "DELETE FROM stk_limit_cache WHERE trade_date < ?"
+        self._execute(sql, [cutoff])
+        self.conn.commit()
+        logger.info(f"清理 stk_limit_cache (cutoff={cutoff})")
+
+    def clean_lhb_cache(self, cutoff: str):
+        """清理 lhb_cache 中早于 cutoff 的记录"""
+        self._execute("DELETE FROM lhb_cache WHERE trade_date < ?", [cutoff])
+        self.conn.commit()
+
+    def clean_fina_indicator_cache(self, cutoff: str):
+        """清理 fina_indicator_cache 中早于 cutoff 的记录"""
+        self._execute("DELETE FROM fina_indicator_cache WHERE end_date < ?", [cutoff])
+        self.conn.commit()
+
+    def clean_minute_cache(self, cutoff: str):
+        """清理 minute_kline_cache 中早于 cutoff 的记录"""
+        self._execute("DELETE FROM minute_kline_cache WHERE trade_date < ?", [cutoff])
+        self.conn.commit()
+
+    def vacuum_db(self):
+        """执行 VACUUM 回收空间（应在低负载时段执行）"""
+        self.conn.execute("VACUUM")
+        logger.info("VACUUM 完成")
