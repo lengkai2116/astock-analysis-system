@@ -145,10 +145,13 @@ class ChipDistributionEstimator:
 
             if np.isnan(price_high) or np.isnan(price_low) or price_high <= price_low:
                 continue
+            close = row.get('close')
+            if close is None or np.isnan(close):
+                close = (price_high + price_low) / 2  # 缺收盘价时用中间价
 
             # 使用三角分布分配（替代均匀分配）
             self._allocate_volume_triangular(
-                chip_dist, vol, price_low, price_high, row['close'],
+                chip_dist, vol, price_low, price_high, close,
                 min_price, price_step
             )
 
