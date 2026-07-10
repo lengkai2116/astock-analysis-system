@@ -97,7 +97,10 @@ def _get_kline_data(data_manager, ts_code, limit=200, period='D'):
             records = mdm.get_cached_minute(ts_code, freq=freq)
             if records and len(records) > 0:
                 df = pd.DataFrame(records)
-                df.rename(columns={'trade_time': 'trade_date'}, inplace=True)
+                # ECM 同时有 trade_date(日期) 和 trade_time(时间)，前端需要 trade_date 作为时间戳
+                if 'trade_time' in df.columns:
+                    df['trade_date'] = df['trade_time']
+                    df.drop(columns=['trade_time'], inplace=True)
                 # ECM 存储 volume 列，代码层统一用 vol
                 if 'vol' not in df.columns and 'volume' in df.columns:
                     df.rename(columns={'volume': 'vol'}, inplace=True)
