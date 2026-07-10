@@ -1258,23 +1258,23 @@ class EnhancedCacheManager:
             return
         with self._snapshot_write_lock:
             try:
-            cols = ['ts_code', 'code', 'name', 'price', 'open', 'high', 'low',
+                cols = ['ts_code', 'code', 'name', 'price', 'open', 'high', 'low',
                     'prev_close', 'volume', 'amount',
                     'bid1', 'ask1', 'bid_vol1', 'ask_vol1',
                     'bid2', 'ask2', 'bid_vol2', 'ask_vol2',
                     'bid3', 'ask3', 'bid_vol3', 'ask_vol3',
                     'bid4', 'ask4', 'bid_vol4', 'ask_vol4',
                     'bid5', 'ask5', 'bid_vol5', 'ask_vol5']
-            rows = [tuple(r.get(c, 0) for c in cols) for r in records]
-            col_list = ', '.join(cols)
-            placeholders = ', '.join('?' for _ in cols)
-            self.snapshot_conn.executemany(
-                f"INSERT OR REPLACE INTO as_market_snapshot ({col_list}) VALUES ({placeholders})",
-                rows
-            )
-            self.snapshot_conn.commit()
-        except Exception as e:
-            logger.warning(f"快照数据库写入失败: {e}")
+                rows = [tuple(r.get(c, 0) for c in cols) for r in records]
+                col_list = ', '.join(cols)
+                placeholders = ', '.join('?' for _ in cols)
+                self.snapshot_conn.executemany(
+                    f"INSERT OR REPLACE INTO as_market_snapshot ({col_list}) VALUES ({placeholders})",
+                    rows
+                )
+                self.snapshot_conn.commit()
+            except Exception as e:
+                logger.warning(f"快照数据库写入失败: {e}")
 
     def get_market_snapshot(self, ts_code: str) -> dict:
         """查询单只股票的实时快照（用于 orderbook 端点）"""
