@@ -189,14 +189,18 @@ def _batch_lhb(trade_date: str) -> int:
 
 
 def _batch_margin(trade_date: str) -> int:
-    """全市场融资融券 — 1 次 API 调用"""
+    """全市场融资融券个股明细 — 1 次 API 调用"""
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
-    raw = pro.margin(trade_date=trade_date)
+    raw = pro.margin_detail(trade_date=trade_date)
     if raw is None or raw.empty:
         return 0
     df = raw.copy()
+    # margin_detail 返回 name/rqchl 列，表结构无这些字段
+    for col in ['name', 'rqchl']:
+        if col in df.columns:
+            df = df.drop(columns=[col])
     if 'trade_date' in df.columns:
         df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
     _ecm.cache_margin_data(df)
@@ -327,6 +331,81 @@ def _batch_income_recent(limit_days: int = 90) -> int:
     return total
 
 
+def _batch_balancesheet(limit_days: int = 90) -> int:
+    """增量同步最近一期资产负债表 — 后台低优"""
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    total = 0
+    codes = _ecm.conn.execute(
+        "SELECT DISTINCT ts_code FROM daily_cache"
+    ).fetchall()
+    codes = [r[0] for r in codes[:500]]
+    for code in codes:
+        try:
+            raw = pro.balancesheet(ts_code=code, start_date=None, end_date=None)
+            if raw is not None and not raw.empty:
+                for col in ['end_date', 'ann_date', 'f_ann_date']:
+                    if col in raw.columns:
+                        raw[col] = pd.to_datetime(raw[col]).dt.date
+                _ecm.cache_balancesheet_data(raw)
+                total += len(raw)
+        except Exception:
+            continue
+    logger.info(f"  [资产负债表] 同步 {total} 条 (共 {len(codes)} 只)")
+    return total
+
+
+def _batch_cashflow(limit_days: int = 90) -> int:
+    """增量同步最近一期现金流量表 — 后台低优"""
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    total = 0
+    codes = _ecm.conn.execute(
+        "SELECT DISTINCT ts_code FROM daily_cache"
+    ).fetchall()
+    codes = [r[0] for r in codes[:500]]
+    for code in codes:
+        try:
+            raw = pro.cashflow(ts_code=code, start_date=None, end_date=None)
+            if raw is not None and not raw.empty:
+                for col in ['end_date', 'ann_date', 'f_ann_date']:
+                    if col in raw.columns:
+                        raw[col] = pd.to_datetime(raw[col]).dt.date
+                _ecm.cache_cashflow_data(raw)
+                total += len(raw)
+        except Exception:
+            continue
+    logger.info(f"  [现金流量表] 同步 {total} 条 (共 {len(codes)} 只)")
+    return total
+
+
+def _batch_forecast(limit_days: int = 90) -> int:
+    """增量同步最近一期业绩预告 — 后台低优"""
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    total = 0
+    codes = _ecm.conn.execute(
+        "SELECT DISTINCT ts_code FROM daily_cache"
+    ).fetchall()
+    codes = [r[0] for r in codes[:500]]
+    for code in codes:
+        try:
+            raw = pro.forecast(ts_code=code, start_date=None, end_date=None)
+            if raw is not None and not raw.empty:
+                for col in ['end_date', 'ann_date']:
+                    if col in raw.columns:
+                        raw[col] = pd.to_datetime(raw[col]).dt.date
+                _ecm.cache_forecast_data(raw)
+                total += len(raw)
+        except Exception:
+            continue
+    logger.info(f"  [业绩预告] 同步 {total} 条 (共 {len(codes)} 只)")
+    return total
+
+
 # ══════════════════════════════════════════════════════════
 # 完整性检查与补采
 # ══════════════════════════════════════════════════════════
@@ -389,6 +468,29 @@ def run_integrity_check(backfill_days: int = 1):
         ('stk_limit_cache', _batch_stk_limit,   LIMIT_THRESHOLD, '涨跌停'),
         ('lhb_cache',       _batch_lhb,         LHB_THRESHOLD,   '龙虎榜'),
     ]
+
+    # 融资融券单独检查（margin_detail 非每日必须，空表时补采）
+    try:
+        margin_cnt = _check_count('margin_cache', today_fmt) if today_fmt else 0
+        if margin_cnt == 0:
+            logger.info("  [融资融券] 空表，触发补采...")
+            added = _batch_margin(today)
+            logger.info(f"    → 补采 {added} 条")
+        else:
+            logger.info(f"  [融资融券] {margin_cnt} 行 ✅")
+    except Exception as e:
+        logger.warning(f"  融资融券检查失败: {e}")
+
+    # 财务指标补充检查（非每日判断，仅检查有无数据）
+    try:
+        fina_cnt = _ecm.conn.execute(
+            "SELECT COUNT(*) FROM fina_indicator_cache"
+        ).fetchone()[0]
+        if fina_cnt < 100:
+            logger.info(f"  [财务指标] {fina_cnt}行 (需≥100)，触发补采...")
+            _batch_fina_indicator(today)
+    except Exception as e:
+        logger.warning(f"  财务指标检查失败: {e}")
 
     # 检查今日数据
     for table, batch_fn, threshold, label in checks:
@@ -500,17 +602,23 @@ def run_daily_sync():
 
 
 def _run_precompute():
-    """后台预计算指标"""
+    """后台预计算指标（仅当日有日线数据的活跃股票）"""
     _ensure_pd()
     logger.info("指标预计算开始...")
+    today_fmt = datetime.now().strftime('%Y-%m-%d')
     codes = _ecm.conn.execute(
-        "SELECT DISTINCT ts_code FROM daily_cache"
+        "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?",
+        [today_fmt]
     ).fetchall()
+    if not codes:
+        logger.info(" 今日无日线数据，跳过预计算")
+        return
+    codes = [r[0] for r in codes]
+    logger.info(f" 活跃股票: {len(codes)} 只")
     from app.data.precompute_indicator_manager import PrecomputeIndicatorManager
     mgr = PrecomputeIndicatorManager(_ecm)
     ok = 0
-    for row in codes:
-        code = row[0]
+    for code in codes:
         try:
             df = _ecm.get_cached_daily(code)
             if len(df) >= 30:
@@ -520,13 +628,12 @@ def _run_precompute():
             pass
     logger.info(f"指标预计算完成: {ok}/{len(codes)} 只")
 
-    # ── 策略信号预计算（迭代7a） ──
+    # ── 策略信号预计算（仅活跃股票） ──
     try:
         from app.services.signal_computation_service import SignalComputationService
         scs = SignalComputationService()
-        active_codes = [row[0] for row in codes]
         count = 0
-        for ts_code in active_codes:
+        for ts_code in codes:
             try:
                 signals = scs.compute_for_stock(ts_code)
                 if signals:
@@ -534,7 +641,7 @@ def _run_precompute():
                     count += 1
             except Exception:
                 continue
-        logger.info(f"策略信号预计算完成: {count}/{len(active_codes)} 只")
+        logger.info(f"策略信号预计算完成: {count}/{len(codes)} 只")
     except Exception as e:
         logger.warning(f"策略信号预计算失败: {e}")
 
@@ -552,6 +659,18 @@ def _run_financial_sync():
         _batch_income_recent()
     except Exception as e:
         logger.warning(f"利润表同步异常: {e}")
+    try:
+        _batch_balancesheet()
+    except Exception as e:
+        logger.warning(f"资产负债表同步异常: {e}")
+    try:
+        _batch_cashflow()
+    except Exception as e:
+        logger.warning(f"现金流量表同步异常: {e}")
+    try:
+        _batch_forecast()
+    except Exception as e:
+        logger.warning(f"业绩预告同步异常: {e}")
     logger.info("财务数据同步完成")
 
 
@@ -607,10 +726,15 @@ def _batch_backfill_minute_kline(trade_date: str = None):
         try:
             raw = ts.pro_bar(ts_code=code, start_date=trade_date, end_date=trade_date, freq='1min', adj='qfq')
             if raw is not None and not raw.empty:
-                raw['trade_date'] = pd.to_datetime(raw['trade_date']).dt.date
-                # 统一列名: volume → vol
-                if 'volume' in raw.columns and 'vol' not in raw.columns:
-                    raw['vol'] = raw['volume']
+                # pro_bar 分钟数据返回 trade_time，需提取 trade_date
+                if 'trade_time' in raw.columns:
+                    raw['trade_date'] = pd.to_datetime(raw['trade_time']).dt.date
+                elif 'trade_date' in raw.columns:
+                    raw['trade_date'] = pd.to_datetime(raw['trade_date']).dt.date
+                # 列名统一: vol → volume
+                if 'vol' in raw.columns and 'volume' not in raw.columns:
+                    raw['volume'] = raw['vol']
+                    raw = raw.drop(columns=['vol'])
                 _ecm.cache_minute_kline(raw)
                 ok += 1
             if (i + 1) % 100 == 0:

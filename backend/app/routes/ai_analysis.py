@@ -361,6 +361,7 @@ def uidf_consolidate():
 @ai_analysis_bp.route('/api/v3/llm-wiki/search', methods=['POST'])
 def llm_wiki_search():
     """查询LLM Wiki知识库（桌面App 127.0.0.1:19828）"""
+    import os
     data = request.get_json(silent=True) or {}
     query = data.get('query', '').strip()
     if not query:
@@ -368,8 +369,11 @@ def llm_wiki_search():
 
     try:
         import requests
+        wiki_token = os.environ.get('LLM_WIKI_API_TOKEN', '')
+        headers = {'Authorization': f'Bearer {wiki_token}'} if wiki_token else {}
         resp = requests.post(
             'http://127.0.0.1:19828/api/search',
+            headers=headers,
             json={'query': query, 'limit': data.get('limit', 5)},
             timeout=5,
         )

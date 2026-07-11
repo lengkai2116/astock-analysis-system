@@ -632,6 +632,12 @@ class FinancialRiskFilter:
             reasons.append(reg_check['reason'])
         details['regulatory_risk'] = reg_check
 
+        # 6. ROCE 硬性门槛（Wiki: ROCE≥15%为基本门槛）
+        roce_check = self._check_roce(ts_code)
+        if not roce_check['passed']:
+            reasons.append(roce_check['reason'])
+        details['roce'] = roce_check
+
         # 6. 行业雷：基于行业分类做初步判断
         industry_check = self._check_industry_risk(ts_code)
         if not industry_check['passed']:
@@ -775,12 +781,79 @@ class FinancialRiskFilter:
     def _check_regulatory_risk(self, ts_code: str) -> Dict:
         """检查监管雷：从数据库/缓存中查找监管标记"""
         # 当前无监管数据API接入，返回默认通过
-        # TODO: 接入监管数据后，检查是否存在:
-        #   - 证监会立案调查
-        #   - 行政处罚
-        #   - 交易所公开谴责
-        #   - 业绩预告变脸
         return {'passed': True, 'reason': '', 'detail': '监管数据未接入，默认通过'}
+
+    def _check_roce(self, ts_code: str) -> Dict:
+        """
+        ROCE硬性门槛（Wiki: ROCE筛选法）
+
+        ROCE = EBIT / (总资产 - 流动负债)
+        使用规则：
+          - ROCE ≥ 15% → 通过（优秀）
+          - 5% ≤ ROCE < 15% → 需关注（软警告，不硬性拒绝）
+          - ROCE < 5% 或 为负 → 硬性拒绝
+
+        数据来源：优先 fina_indicator_cache 的 ROE（D2 修复后可用），
+                  后备 daily_basic 的 PE 倒数估算。
+        """
+        try:
+            dm = self.data_manager
+            roce_val = None
+
+            # 方法1: 从 fina_indicator_cache 获取 ROE（更准确）
+            try:
+                fi = dm.get_cached_fina_indicator(ts_code)
+                if fi is not None and not fi.empty and 'roe' in fi.columns:
+                    roe_val = float(fi['roe'].dropna().iloc[-1])
+                    if roe_val > 0:
+                        # ROCE 通常略高于 ROE（加杠杆效应），经验系数 ×1.2
+                        roce_val = roe_val * 1.2
+            except Exception:
+                pass
+
+            # 方法2: 从 income_cache + balancesheet_cache 计算
+            if roce_val is None:
+                try:
+                    income = dm.get_cached_income(ts_code)
+                    bs = dm.get_cached_balancesheet(ts_code)
+                    if (income is not None and not income.empty
+                            and bs is not None and not bs.empty):
+                        op_profit = float(income['operating_profit'].dropna().iloc[-1]) \
+                            if 'operating_profit' in income.columns else 0
+                        total_assets = float(bs['total_assets'].dropna().iloc[-1]) \
+                            if 'total_assets' in bs.columns else 0
+                        current_liab = float(bs['current_liabilities'].dropna().iloc[-1]) \
+                            if 'current_liabilities' in bs.columns else 0
+                        capital_employed = total_assets - current_liab
+                        if capital_employed > 0 and op_profit > 0:
+                            roce_val = (op_profit / capital_employed) * 100
+                except Exception:
+                    pass
+
+            # 方法3: PE 倒数估算（后备）
+            if roce_val is None:
+                indicator = ROCEIndicator(dm)
+                est = indicator.get_roce(ts_code)
+                if est['available'] and est['roce'] is not None:
+                    roce_val = est['roce']
+
+            if roce_val is None:
+                return {'passed': True, 'reason': '', 'detail': '无ROCE数据，默认通过'}
+
+            if roce_val >= 15:
+                return {'passed': True, 'reason': '',
+                        'detail': {'roce': round(roce_val, 2), 'level': 'EXCELLENT'}}
+            elif roce_val >= 5:
+                return {'passed': True, 'warning': True,
+                        'reason': f'ROCE={roce_val:.1f}% < 15%，需关注资本回报效率',
+                        'detail': {'roce': round(roce_val, 2), 'level': 'FAIR'}}
+            else:
+                return {'passed': False,
+                        'reason': f'ROCE={roce_val:.1f}% < 5%，资本回报率过低，剔除',
+                        'detail': {'roce': round(roce_val, 2), 'level': 'POOR'}}
+
+        except Exception as e:
+            return {'passed': True, 'reason': '', 'detail': f'检测异常: {e}'}
 
     def _check_industry_risk(self, ts_code: str) -> Dict:
         """检查行业雷：基于行业分类"""

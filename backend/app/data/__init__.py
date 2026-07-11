@@ -564,6 +564,30 @@ class DataManager:
         """从缓存获取股东户数数据"""
         return self.cache.get_cached_stk_holder(ts_code)
 
+    def get_cached_margin(self, ts_code, start_date=None, end_date=None):
+        """从缓存获取融资融券个股数据"""
+        return self.cache.get_cached_margin(ts_code, start_date, end_date)
+
+    def get_cached_lhb(self, ts_code, trade_date=None):
+        """从缓存获取龙虎榜数据"""
+        return self.cache.get_cached_lhb(ts_code, trade_date)
+
+    def get_cached_fina_indicator(self, ts_code):
+        """从缓存获取财务指标"""
+        return self.cache.get_cached_fina_indicator(ts_code)
+
+    def get_cached_income(self, ts_code):
+        """从缓存获取利润表"""
+        return self.cache.get_cached_income(ts_code)
+
+    def get_cached_balancesheet(self, ts_code):
+        """从缓存获取资产负债表"""
+        return self.cache.get_cached_balancesheet(ts_code)
+
+    def get_cached_chip_distribution(self, ts_code):
+        """从缓存获取筹码分布数据"""
+        return self.cache.get_cached_chip_distribution(ts_code)
+
     # ==========================================
     # 批量数据同步方法（供 scheduler 调用）
     # ==========================================
@@ -792,26 +816,25 @@ class DataManager:
         return total
 
     def sync_margin_data(self, trade_date=None) -> int:
-        """同步融资融券数据（按交易日，全市场一次返回）"""
+        """同步融资融券个股明细数据（按交易日，全市场一次返回）"""
         if not self.tushare or not self.tushare.pro:
             return 0
         import pandas as pd
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y%m%d')
-        raw = self.tushare.get_margin('000001.SZ',
-            start_date=trade_date, end_date=trade_date)
-        if raw:
-            # margin by trade_date requires iterating stocks; simpler: use margin() with date
-            try:
-                data = self.tushare.pro.margin(trade_date=trade_date)
-                if data is not None and not data.empty:
-                    df = data.copy()
-                    if 'trade_date' in df.columns:
-                        df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
-                    self.cache.cache_margin_data(df)
-                    return len(df)
-            except Exception as e:
-                logger.warning(f"同步融资融券失败: {e}")
+        try:
+            data = self.tushare.pro.margin_detail(trade_date=trade_date)
+            if data is not None and not data.empty:
+                df = data.copy()
+                for col in ['name', 'rqchl']:
+                    if col in df.columns:
+                        df = df.drop(columns=[col])
+                if 'trade_date' in df.columns:
+                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+                self.cache.cache_margin_data(df)
+                return len(df)
+        except Exception as e:
+            logger.warning(f"同步融资融券失败: {e}")
         return 0
 
     def sync_stk_limit_data(self, trade_date=None) -> int:

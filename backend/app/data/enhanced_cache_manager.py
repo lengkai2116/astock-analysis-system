@@ -1091,6 +1091,13 @@ class EnhancedCacheManager:
         if df.empty: return
         with self._write_lock:
             try:
+                # 动态过滤：只保留表中存在的列
+                table_cols = set(row[1] for row in self.conn.execute(
+                    "PRAGMA table_info(margin_cache)").fetchall())
+                extra = [c for c in df.columns if c not in table_cols]
+                if extra:
+                    df = df.drop(columns=extra)
+                    logger.debug(f"margin_cache 过滤多余列: {extra}")
                 if 'trade_date' in df.columns:
                     df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
                 self._insert_from_df('margin_cache', df)

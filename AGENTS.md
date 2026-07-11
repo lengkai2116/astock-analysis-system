@@ -112,13 +112,11 @@ curl http://localhost:5001/api/v3/health/ready   # 就绪检查
 |------|------|------|
 | `LLM_PROVIDER` | AI 提供者 | `mock`（`deepseek` / `lm_studio`） |
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | — |
-| `DEEPSEEK_MODEL` | 模型 | `deepseek-chat-v4` |
+| `DEEPSEEK_MODEL` | 模型 | `deepseek-v4-flash` |
 | `TUSHARE_TOKEN` | Tushare Pro Token | — |
 | `DATABASE_URL` | 数据库连接 | `sqlite:///data/app.db` |
 | `DATA_DIR` | 数据目录 | `./data` |
 | `AUTH_TOKEN` | API 鉴权令牌（留空=不鉴权） | — |
-
-> ⚠️ `deepseek-chat-v4` 将于 **2026/07/24 废弃**，需迁移至 `v4-flash` 或 `v4-pro`。
 
 ---
 

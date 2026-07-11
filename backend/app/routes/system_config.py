@@ -58,7 +58,7 @@ DEFAULT_LLM_CONFIG = {
     "provider": "mock",
     "deepseek_api_key": "",
     "deepseek_base_url": "https://api.deepseek.com/v1",
-    "deepseek_model": "deepseek-chat-v4",
+    "deepseek_model": "deepseek-v4-flash",
     "lm_studio_endpoint": "http://localhost:1234/v1",
     "lm_studio_model": "local-model"
 }

@@ -14,12 +14,32 @@ import secrets
 import hashlib
 import logging
 from functools import wraps
+from pathlib import Path
 from flask import request, jsonify, current_app
 
 logger = logging.getLogger(__name__)
 
-# 从环境变量获取 token，未设置时自动生成一个
-_AUTH_TOKEN = os.environ.get('AUTH_TOKEN', '').strip()
+
+def _load_auth_token() -> str:
+    """加载认证 Token：优先环境变量，后备 data/auth_token.txt"""
+    token = os.environ.get('AUTH_TOKEN', '').strip()
+    if token:
+        return token
+    # 尝试从持久化文件读取
+    try:
+        data_dir = os.environ.get('DATA_DIR', '')
+        token_file = Path(data_dir) / 'auth_token.txt' if data_dir else Path.cwd() / 'data' / 'auth_token.txt'
+        if token_file.exists():
+            token = token_file.read_text(encoding='utf-8').strip()
+            if token:
+                return token
+    except Exception:
+        pass
+    return ''
+
+
+# 从环境变量获取 token，未设置时尝试持久化文件
+_AUTH_TOKEN = _load_auth_token()
 
 # 跳过认证的白名单路径
 WHITELIST_PATHS = [

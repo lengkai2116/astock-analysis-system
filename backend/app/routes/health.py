@@ -116,6 +116,63 @@ def _get_data_source_status():
     return statuses
 
 
+def _get_external_api_status():
+    """检查外部 API 连通性（Tushare / DeepSeek）"""
+    import requests as http_requests
+    results = {}
+
+    # 1. Tushare 连通性
+    tushare_token = os.getenv('TUSHARE_TOKEN', '')
+    if tushare_token:
+        try:
+            resp = http_requests.post(
+                'http://api.tushare.pro',
+                json={'api_name': 'stock_basic', 'token': tushare_token, 'params': {'exchange': '', 'list_status': 'L', 'fields': 'ts_code'}},
+                timeout=10,
+            )
+            data = resp.json()
+            if data.get('code') == 0 and data.get('data', {}).get('items'):
+                results['tushare'] = {'status': 'connected', 'msg': f"{len(data['data']['items'])} stocks available"}
+            else:
+                results['tushare'] = {'status': 'error', 'msg': data.get('msg', 'unknown error')}
+        except Exception as e:
+            results['tushare'] = {'status': 'unreachable', 'msg': str(e)}
+    else:
+        results['tushare'] = {'status': 'not_configured', 'msg': 'TUSHARE_TOKEN not set'}
+
+    # 2. DeepSeek 连通性
+    deepseek_key = os.getenv('DEEPSEEK_API_KEY', '')
+    if deepseek_key:
+        try:
+            resp = http_requests.get(
+                os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1') + '/models',
+                headers={'Authorization': f'Bearer {deepseek_key}'},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                models = resp.json().get('data', [])
+                results['deepseek'] = {'status': 'connected', 'msg': f"{len(models)} models available"}
+            else:
+                results['deepseek'] = {'status': 'error', 'msg': f"HTTP {resp.status_code}: {resp.text[:100]}"}
+        except Exception as e:
+            results['deepseek'] = {'status': 'unreachable', 'msg': str(e)}
+    else:
+        results['deepseek'] = {'status': 'not_configured', 'msg': 'DEEPSEEK_API_KEY not set'}
+
+    # 3. LLM Wiki 端点可达性
+    wiki_token = os.getenv('LLM_WIKI_API_TOKEN', '')
+    try:
+        resp = http_requests.get('http://127.0.0.1:19828/api/health', timeout=3)
+        if resp.status_code == 200:
+            results['llm_wiki'] = {'status': 'connected', 'msg': 'LLM Wiki running'}
+        else:
+            results['llm_wiki'] = {'status': 'error', 'msg': f"HTTP {resp.status_code}"}
+    except Exception:
+        results['llm_wiki'] = {'status': 'unreachable', 'msg': 'LLM Wiki not running or token not set' if not wiki_token else 'LLM Wiki not reachable'}
+
+    return results
+
+
 def _get_cache_status():
     """获取缓存状态"""
     try:
@@ -211,6 +268,7 @@ def health_check():
             ],
             "system": system_info,
             "data_sources": data_sources,
+            "external_apis": _get_external_api_status(),
             "cache": cache
         }
     })

@@ -86,3 +86,4 @@ test-results/
 # ECM 缓存目录
 data/duckdb/
 backend/data/
+.mimocode/

@@ -184,6 +184,25 @@ def _build_factor_dimension(signals: List[Dict]) -> Dict:
     }
 
 
+def _build_vibe_dimension(ts_code: str, signals: List[Dict]) -> Dict:
+    """从信号中提取Vibe策略分析结果"""
+    vibe_sig = None
+    for s in signals:
+        if 'vibe' in (s.get('strategy_name', '') or '').lower():
+            vibe_sig = s
+            break
+    if not vibe_sig:
+        return {'signal': 'NEUTRAL', 'signal_label': '无Vibe策略分析', 'confidence': 0.0}
+    return {
+        'strategy_name': vibe_sig.get('strategy_name', 'Vibe策略'),
+        'signal': vibe_sig.get('signal', 'NEUTRAL'),
+        'signal_label': vibe_sig.get('signal_label', ''),
+        'confidence': vibe_sig.get('confidence', 0.0),
+        'evidence': vibe_sig.get('evidence', []),
+        'description': vibe_sig.get('description', ''),
+    }
+
+
 # ──────────────────────────────────────────────
 # E12: 策略分析流水线
 # ──────────────────────────────────────────────
@@ -204,6 +223,19 @@ def strategy_analyze():
     kronos_enabled = bool(data.get('kronos_enabled', False))
 
     try:
+        # Step 0: L1风控检查（渠道二前置风控）
+        risk_check = None
+        try:
+            from app.engine.framework.screener import DarwinRiskFilter
+            filter_engine = DarwinRiskFilter()
+            passed = filter_engine.filter([ts_code], {ts_code: None})
+            risk_check = {
+                'passed': len(passed) > 0 and passed[0] == ts_code if isinstance(passed, list) else bool(passed),
+                'reasons': [] if (len(passed) > 0 and passed[0] == ts_code) else ['未通过风控排查'] if isinstance(passed, list) else ['风控检查异常'],
+            }
+        except Exception as e:
+            risk_check = {'passed': True, 'reasons': [f'风控检查跳过: {e}']}
+
         # Step 1: 计算5策略信号
         scs = SignalComputationService()
         signals = scs.compute_for_stock(ts_code)
@@ -219,13 +251,21 @@ def strategy_analyze():
         bociasi_sig = _find_signal(signals, 'BOCIASI')
         factor_sig = _find_signal(signals, '因子')
 
-        # Step 4: 组装五维数据
+        # Step 4: 组装五维数据 + Vibe策略
         dimensions = {
             'chanlun': _build_chanlun_dimension(chanlun_sig),
             'volume_price': _build_volume_price_dimension(vp_sig),
             'chip': _build_chip_dimension(chip_sig),
             'emotion': _build_emotion_dimension(bociasi_sig, signal_context),
             'factor': _build_factor_dimension(signals),
+            'vibe': _build_vibe_dimension(ts_code, signals),
+        }
+
+        response_data = {
+            'ts_code': ts_code,
+            'trade_date': trade_date_str,
+            'dimensions': dimensions,
+            'risk_check': risk_check,  # L1风控结果
         }
 
         # Step 5: 可选 Kronos 推理

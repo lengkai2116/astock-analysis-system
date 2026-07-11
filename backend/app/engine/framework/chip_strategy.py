@@ -437,7 +437,13 @@ class MainForceScorer:
             score_c = self._score_concentration(symbol, closes, price_position)
             score_d = self._score_retail_contrarian(symbol, price_position)
 
-            total = score_a + score_b + score_c + score_d
+            # E: 龙虎榜席位加分
+            score_e = self._score_lhb(symbol)
+
+            # F: 筹码分布维度（新增 — 真实筹码分布计算，与渠道二共享 ChipDistributionService）
+            score_f = self._score_chip_distribution(symbol, data)
+
+            total = score_a + score_b + score_c + score_d + score_e + score_f
             return min(10.0, max(0.0, total))
         except Exception as e:
             logger.error(f"MainForceScorer 评分失败 {symbol}: {e}")
@@ -612,11 +618,13 @@ class MainForceScorer:
     def _score_retail_contrarian(self, symbol: str, price_position) -> float:
         """
         散户反向指标（Wiki: "散户行为模式通常是追涨杀跌，其集体行为常被用作反向指标"）
+        含融资融券信号（Wiki: "融资余额过高是危险的，而非繁荣的信号"）
 
         逻辑：
           - 散户净买入（small_order）偏高且价格在高位 → 散户接盘 → 负分
-          - 散户净卖出且价格在低位 → 散户割肉 → 正分（筹码从弱手到强手）
-          - 散户交易占比低 → 中性（机构主导）
+          - 散户净卖出且价格在低位 → 散户割肉 → 正分
+          - 融资余额暴增+股价横盘 → 散户杠杆接盘 → 负分
+          - 融资余额骤降+股价下跌 → 恐慌杀跌 → 正分
 
         Returns: 0-2 分
         """
@@ -639,22 +647,137 @@ class MainForceScorer:
 
             retail_ratio = retail_net / total_flow  # -1 ~ 1
 
+            score = 1.0  # 基础分
+
             # 散户在高位大量买入 → 危险
             if price_position >= 0.7 and retail_ratio > 0.2:
-                return 0.0
-            # 散户在低位大量卖出 → 机会（筹码从散户到主力）
-            if price_position < 0.4 and retail_ratio < -0.2:
-                return 2.0
-            # 散户卖出（中性偏积极）
-            if retail_ratio < -0.1:
-                return 1.5
-            # 散户买入（中性偏消极）
-            if retail_ratio > 0.1:
-                return 0.5
-            return 1.0
+                score = 0.0
+            # 散户在低位大量卖出 → 机会
+            elif price_position < 0.4 and retail_ratio < -0.2:
+                score = 2.0
+            elif retail_ratio < -0.1:
+                score = 1.5
+            elif retail_ratio > 0.1:
+                score = 0.5
+
+            # ── 融资融券反向信号（D1 margin_detail 修复后可用）──
+            try:
+                mrg = self.dm.get_cached_margin(symbol)
+                if mrg is not None and len(mrg) >= 5:
+                    mrg_5 = mrg.tail(5)
+                    rzye_series = mrg_5['rzye'].dropna().values
+                    if len(rzye_series) >= 3:
+                        # 融资余额趋势
+                        margin_change = (rzye_series[-1] - rzye_series[0]) / max(rzye_series[0], 1)
+                        # 融资暴增(>10%) + 股价不涨 → 散户杠杆接盘
+                        if margin_change > 0.10 and price_position >= 0.5:
+                            score -= 0.5  # 扣分
+                        # 融资骤降(<-10%) + 股价下跌 → 恐慌杀跌，中期底部
+                        elif margin_change < -0.10 and price_position <= 0.3:
+                            score += 0.3  # 加分的左侧机会
+            except Exception:
+                pass  # margin数据不可用时不调整
+
+            return max(0.0, min(2.0, score))
         except Exception:
             return 1.0
 
+
+    def _score_lhb(self, symbol: str) -> float:
+        """龙虎榜席位加分（0-0.5分）：有机构专用席位大额买入时加分"""
+        if not symbol:
+            return 0.0
+        try:
+            lhb = self.dm.get_cached_lhb(symbol)
+            if lhb is not None and not lhb.empty and len(lhb) > 0:
+                recent = lhb.tail(10)
+                buy_amounts = recent['buy_amount'].dropna()
+                if len(buy_amounts) > 0:
+                    total_buy = buy_amounts.sum()
+                    if total_buy > 1e7:  # 千万级买入
+                        return min(0.5, total_buy / 5e8 * 0.5)  # 5亿→0.5分
+            return 0.0
+        except Exception:
+            return 0.0
+
+    def _score_chip_distribution(self, symbol: str, data: pd.DataFrame) -> float:
+        """
+        筹码分布维度（0-1分）：基于真实筹码分布计算的评分
+
+        使用 ChipDistributionService（与渠道二共享）分析筹码集中度：
+          - ASR > 50% → 浮筹比例适中，有利于上涨
+          - SSRP 接近当前价 → 平均成本附近，抛压小
+          - 筹码单峰密集 → 主力控盘度高
+
+        Returns: 0-1 分
+        """
+        if not symbol or data is None or len(data) < 30:
+            return 0.0
+        try:
+            from app.data.chip_distribution_service import ChipDistributionService
+            cds = ChipDistributionService()
+            result = cds.calculate_chip_distribution(symbol, data)
+            if not result or not result.get('success'):
+                return 0.0
+            indicators = result.get('indicators', {})
+            chip_bins = result.get('chip_bins', [])
+
+            score = 0.5  # 基础分
+
+            # ASR 评估（浮筹比例）
+            asr = indicators.get('asr', indicators.get('ASR', 50))
+            if 30 <= asr <= 70:
+                score += 0.2  # 适中的浮筹比例
+            elif asr > 80:
+                score -= 0.2  # 浮筹过多，抛压大
+
+            # 筹码峰检测（单峰密集=主力控盘）
+            if chip_bins and len(chip_bins) > 0:
+                ratios = [b.get('chip_ratio', 0) for b in chip_bins]
+                max_ratio = max(ratios) if ratios else 0
+                if max_ratio > 0.15:
+                    score += 0.3  # 单峰密集
+
+            return max(0.0, min(1.0, score))
+        except Exception as e:
+            logger.debug(f"筹码分布评分失败 {symbol}: {e}")
+            return 0.0
+
+    def _calc_main_force_cost(self, symbol: str, latest_close: float) -> dict:
+        """
+        主力集中价计算（Wiki: 主力集中价是大户平均买入成本）
+
+        基于 moneyflow_cache 大单买入金额估算主力加权成本价。
+        当股价接近主力集中价时加分，远离时扣分。
+
+        Returns:
+            {"cost_price": float, "distance_pct": float, "near_cost": bool}
+        """
+        try:
+            mf = self.dm.get_cached_moneyflow(symbol)
+            if mf is None or mf.empty or len(mf) < 3:
+                return {"cost_price": 0, "distance_pct": 0, "near_cost": False}
+            recent = mf.tail(20)
+            # 估算主力买入总金额和总成交量
+            buy_total = (recent['buy_lg_amount'].sum() + recent['buy_elg_amount'].sum())
+            sell_total = (recent['sell_lg_amount'].sum() + recent['sell_elg_amount'].sum())
+            net_buy = buy_total - sell_total
+            if net_buy <= 0:
+                return {"cost_price": 0, "distance_pct": 0, "near_cost": False}
+            # 用成交均价近似估算主力成本（假设大单成交价接近当日均价）
+            avg_prices = (recent['open'] + recent['high'] + recent['low'] + recent['close']) / 4
+            # 用成交额/成交量估算
+            total_amount = recent['amount'].sum() if 'amount' in recent.columns else 0
+            total_vol = recent['vol'].sum() if 'vol' in recent.columns else 1
+            avg_price = (total_amount / total_vol) if total_vol > 0 else latest_close
+            distance = (latest_close - avg_price) / avg_price if avg_price > 0 else 0
+            return {
+                "cost_price": round(avg_price, 2),
+                "distance_pct": round(distance * 100, 2),
+                "near_cost": abs(distance) < 0.05,  # 5%内视为接近主力成本
+            }
+        except Exception:
+            return {"cost_price": 0, "distance_pct": 0, "near_cost": False}
 
     def identify_phase(self, data: pd.DataFrame, symbol: str = None) -> str:
         """

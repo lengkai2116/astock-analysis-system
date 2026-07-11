@@ -62,9 +62,11 @@ def _score_to_grade(score: float) -> str:
     return 'D'
 
 
-def _compute_chanlun_score(chanlun_result: Dict) -> Tuple[float, str, str]:
+def _compute_chanlun_score(chanlun_result: Dict, df: pd.DataFrame = None) -> Tuple[float, str, str]:
     """
     从缠论分析结果提取选股评分（0-10）
+    使用 ChanlunScorer 完整评分（11维度：买卖点/价格距离/背离/冲突检测/趋势/中枢）
+    可选传入 df 进行级别递归验证（缠中说禅买卖点级别定理）
 
     Returns:
         (score_0_10, signal_text, direction)
@@ -72,50 +74,58 @@ def _compute_chanlun_score(chanlun_result: Dict) -> Tuple[float, str, str]:
     if not chanlun_result or not chanlun_result.get('success'):
         return 0.0, '分析失败', 'neutral'
 
-    buy_pts = chanlun_result.get('buy_points', [])
-    sell_pts = chanlun_result.get('sell_points', [])
-    trend = chanlun_result.get('trend', 'unknown')
-    summary = chanlun_result.get('summary', {})
-
-    score = 5.0  # 基础分
-
-    # 买点加分
     signal_texts = []
-    for bp in buy_pts:
-        bp_type = (bp.type if hasattr(bp, 'type')
-                   else bp.get('type', '') if isinstance(bp, dict) else '')
-        confidence = (bp.confidence if hasattr(bp, 'confidence')
-                      else bp.get('confidence', 0.5) if isinstance(bp, dict) else 0.5)
-        if 'first_buy' in str(bp_type):
-            score += 3.0 * confidence
-            signal_texts.append('一买')
-        elif 'second_buy' in str(bp_type):
-            score += 2.5 * confidence
-            signal_texts.append('二买')
-        elif 'third_buy' in str(bp_type):
-            score += 2.0 * confidence
-            signal_texts.append('三买')
+    # 使用 ChanlunScorer 完整评分（与渠道二一致）
+    try:
+        from .chanlun_strategy import ChanlunScorer
+        scorer = ChanlunScorer()
+        latest_close = float(chanlun_result.get('latest_close', 0))
+        score_result = scorer.score(chanlun_result, latest_close)
+        raw_score = score_result.get('score', 50)  # 0-100
+        signal = score_result.get('signal', 'HOLD')
+        score = raw_score / 10.0
+        direction = ('bullish' if signal in ('STRONG_BUY', 'BUY')
+                     else 'bearish' if signal in ('STRONG_SELL', 'SELL')
+                     else 'neutral')
+        signal_texts.append(signal)
+    except Exception as e:
+        logger.debug(f"ChanlunScorer 评分失败，回退轻量评分: {e}")
+        buy_pts = chanlun_result.get('buy_points', [])
+        sell_pts = chanlun_result.get('sell_points', [])
+        trend = chanlun_result.get('trend', 'unknown')
+        summary = chanlun_result.get('summary', {})
+        score = 5.0
+        for bp in buy_pts:
+            bp_type = (bp.type if hasattr(bp, 'type') else bp.get('type', '') if isinstance(bp, dict) else '')
+            confidence = (bp.confidence if hasattr(bp, 'confidence') else bp.get('confidence', 0.5) if isinstance(bp, dict) else 0.5)
+            if 'first_buy' in str(bp_type): score += 3.0 * confidence; signal_texts.append('一买')
+            elif 'second_buy' in str(bp_type): score += 2.5 * confidence; signal_texts.append('二买')
+            elif 'third_buy' in str(bp_type): score += 2.0 * confidence; signal_texts.append('三买')
+        for sp in sell_pts:
+            sp_type = (sp.type if hasattr(sp, 'type') else sp.get('type', '') if isinstance(sp, dict) else '')
+            confidence = (sp.confidence if hasattr(sp, 'confidence') else sp.get('confidence', 0.5) if isinstance(sp, dict) else 0.5)
+            if 'sell' in str(sp_type): score -= 2.0 * confidence; signal_texts.append(str(sp_type))
+        if trend == 'up': score += 0.5
+        elif trend == 'down': score -= 0.5
+        if summary.get('total_zhongshu', 0) >= 1: score += 0.3
+        direction = 'bullish' if score >= 6 else ('bearish' if score <= 4 else 'neutral')
 
-    # 卖点扣分
-    for sp in sell_pts:
-        sp_type = (sp.type if hasattr(sp, 'type')
-                   else sp.get('type', '') if isinstance(sp, dict) else '')
-        confidence = (sp.confidence if hasattr(sp, 'confidence')
-                      else sp.get('confidence', 0.5) if isinstance(sp, dict) else 0.5)
-        if 'sell' in str(sp_type):
-            score -= 2.0 * confidence
-            signal_texts.append(str(sp_type))
-
-    # 趋势加分
-    if trend == 'up':
-        score += 0.5
-    elif trend == 'down':
-        score -= 0.5
-
-    # 中枢数量加分（有中枢说明结构完整）
-    zs_count = summary.get('total_zhongshu', 0)
-    if zs_count >= 1:
-        score += 0.3
+    # === 级别递归验证（缠中说禅买卖点级别定理） ===
+    if df is not None and len(df) >= 60:
+        try:
+            from .chanlun_level_validator import ChanlunLevelValidator
+            validator = ChanlunLevelValidator()
+            level_result = validator.validate(df)
+            cross_score = level_result.get('cross_score', 0.5)
+            adj = level_result.get('validation', {}).get('adjustment', 0)
+            # cross_score: 0-1, 映射到 0-10 后再按调整量修正
+            level_component = (cross_score - 0.5) * 2  # -1 到 +1
+            score += level_component * 1.5 + adj * 10
+            level_detail = '; '.join(level_result.get('details', []))
+            if level_detail:
+                signal_texts.append(f"级别({level_detail})")
+        except Exception as e:
+            logger.debug(f"级别递归验证失败: {e}")
 
     score = max(0.0, min(10.0, score))
     direction = 'bullish' if score >= 6 else ('bearish' if score <= 4 else 'neutral')
@@ -124,9 +134,10 @@ def _compute_chanlun_score(chanlun_result: Dict) -> Tuple[float, str, str]:
     return round(score, 2), signal_text, direction
 
 
-def _compute_volume_price_score(vp_result: Dict) -> Tuple[float, str, str]:
+def _compute_volume_price_score(vp_result: Dict, symbol: str = None, df: pd.DataFrame = None) -> Tuple[float, str, str]:
     """
     从量价分析结果提取选股评分（0-10）
+    可选传入 symbol+df 用于 RPS 计算和形态评分
 
     Returns:
         (score_0_10, signal_text, direction)
@@ -153,6 +164,48 @@ def _compute_volume_price_score(vp_result: Dict) -> Tuple[float, str, str]:
         score += 0.5
     elif current_stage in ('DOWNTREND_ACTIVE',):
         score -= 0.5
+
+    # 量价评分引用筹码数据：筹码单峰密集加分（Wiki: 量价形态打分系统中的加分项）
+    if symbol is not None:
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            ecm = get_ecm_instance()
+            chip_df = ecm.get_cached_chip_distribution(symbol) if hasattr(ecm, 'get_cached_chip_distribution') else None
+            if chip_df is not None and not chip_df.empty:
+                chip_bins = chip_df['chip_ratio'].dropna().values if 'chip_ratio' in chip_df.columns else None
+                if chip_bins is not None and len(chip_bins) > 0:
+                    max_ratio = chip_bins.max()
+                    if max_ratio > 0.15:  # 单峰密集（单一价格区间筹码 > 15%）
+                        score += 0.5
+        except Exception:
+            pass
+
+    # ── RPS 相对强弱（需全市场数据） ──
+    if symbol is not None and df is not None and len(df) >= 20:
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            ecm = get_ecm_instance()
+            latest_close = float(df['close'].iloc[-1])
+            close_20d = float(df['close'].iloc[-21]) if len(df) >= 21 else latest_close
+            ret_20d = (latest_close / close_20d - 1) * 100
+            trade_date = str(df['trade_date'].iloc[-1]) if 'trade_date' in df.columns else ''
+            if trade_date:
+                row = ecm.conn.execute(
+                    "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [trade_date]
+                ).fetchone()
+                above = ecm.conn.execute(
+                    "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg > ?",
+                    [trade_date, ret_20d]
+                ).fetchone()
+                if row and row[0] > 0 and above:
+                    rps = above[0] / row[0] * 100
+                    if rps > 85:
+                        score += 1.0  # RPS>85 加1分
+                        signal_label = (signal_label or '') + '+RPS'
+                    elif rps > 70:
+                        score += 0.5
+        except Exception:
+            pass
 
     score = max(0.0, min(10.0, score))
     direction_str = (
@@ -269,16 +322,38 @@ def _f_bias(closes, volumes, period=20):
     # bias -5% ≈ 2.5分, 0% ≈ 5分, +5% ≈ 7.5分
     return max(0, min(10, 5 + bias * 50))
 
-# 注册所有可计算的因子
+# 注册所有可计算的因子（含 PRESET_COMBOS 中的别名）
 _register_factor('20日动量', lambda c, v: _f_momentum(c, v, 20))
 _register_factor('5日动量', lambda c, v: _f_momentum(c, v, 5))
 _register_factor('动量因子(MOM)', lambda c, v: _f_momentum(c, v, 20))
+_register_factor('截面动量', lambda c, v: _f_momentum(c, v, 20))
 _register_factor('14日RSI', lambda c, v: _f_rsi(c, v, 14))
 _register_factor('5日量比', lambda c, v: _f_volume_ratio(c, v, 5))
 _register_factor('量比', lambda c, v: _f_volume_ratio(c, v, 5))
 _register_factor('20日波动率', lambda c, v: _f_volatility(c, v, 20))
+_register_factor('低波因子', lambda c, v: _f_volatility(c, v, 20))
 _register_factor('5日反转因子', lambda c, v: _f_reversal(c, v, 5))
 _register_factor('20日均线乖离率', lambda c, v: _f_bias(c, v, 20))
+
+# 动量/量价/乖离的所有别名变体
+_register_factor('短期动量', lambda c, v: _f_momentum(c, v, 5))
+_register_factor('动量', lambda c, v: _f_momentum(c, v, 20))
+_register_factor('均线乖离率', lambda c, v: _f_bias(c, v, 20))
+_register_factor('20日换手率', lambda c, v: _f_volume_ratio(c, v, 20))
+
+# BOCIASI 情绪因子（基于四象限的市场情绪感知）
+def _f_sentiment(closes, volumes):
+    """情绪因子：BOCIASI四象限感知 → 0-10"""
+    try:
+        from app.engine.framework.bociasi_quadrant import BociasiQuadrantAnalyzer
+        bq = BociasiQuadrantAnalyzer()
+        q = bq.analyze()
+        mult = q.get('weight_multiplier', 1.0)
+        # mult: 0.75-1.15 映射到 4-8分
+        return max(0, min(10, (mult - 0.7) * 15 + 5))
+    except Exception:
+        return 5.0
+_register_factor('情绪因子', _f_sentiment)
 # ● 以下因子需要 ECM 数据支持，暂用简化计算
 # 20日换手率 — 需要 daily_basic_cache.turnover_rate
 # 市盈率倒数(EP) — 需要 daily_basic_cache.pe_ttm
@@ -361,7 +436,25 @@ def _compute_factor_score(df, symbol=None, combo_ids=None, data_dict=None, dm=No
         return 0.0
 
     # 所有选中的组合等权平均
-    return sum(combo_scores) / len(combo_scores)
+    base_score = sum(combo_scores) / len(combo_scores)
+
+    # BOCIASI 四象限情绪加权
+    try:
+        from app.engine.framework.bociasi_quadrant import BociasiQuadrantAnalyzer
+        bq = BociasiQuadrantAnalyzer()
+        quadrant = bq.analyze()
+        mult = quadrant.get('weight_multiplier', 1.0)
+        # 只在中性区域(MM)不做调整，极端情绪(LL/HH)做±15%调整
+        if abs(mult - 1.0) > 0.01:
+            adjusted = base_score * mult
+            adjusted = max(0, min(10, adjusted))
+            logger.debug(f"BOCIASI情绪加权: {quadrant['quadrant']} mult={mult:.2f} "
+                         f"{base_score:.2f}→{adjusted:.2f}")
+            return round(adjusted, 2)
+    except Exception as e:
+        logger.debug(f"BOCIASI情绪加权失败: {e}")
+
+    return round(base_score, 2)
 
 
 def _fallback_factor_score(closes, volumes):
@@ -759,10 +852,10 @@ def screen_l3_candidates(
         if need_vp:
             try:
                 from .volume_price_strategy import VolumePriceStrategy
-                vp = VolumePriceStrategy()
+                vp = VolumePriceStrategy(market_env=market_context)
                 vp_r = vp.analyze(df)
                 if vp_r.get('success'):
-                    s, sig, d = _compute_volume_price_score(vp_r)
+                    s, sig, d = _compute_volume_price_score(vp_r, symbol, df)
                     r['vp_result'], r['vp_score'], r['vp_signal'], r['vp_dir'] = vp_r, s, sig, d
             except Exception as e:
                 logger.debug(f"量价分析失败 {symbol}: {e}")
@@ -775,7 +868,7 @@ def screen_l3_candidates(
                 from .chanlun_strategy import analyze_chanlun
                 cl_r = analyze_chanlun(df)
                 if cl_r.get('success'):
-                    s, sig, d = _compute_chanlun_score(cl_r)
+                    s, sig, d = _compute_chanlun_score(cl_r, df)
                     s = _adjust_score_with_context(s, r['market_context'])
                     r['cl_result'], r['cl_score'], r['cl_signal'], r['cl_dir'] = cl_r, s, sig, d
             except Exception as e:
@@ -829,6 +922,24 @@ def screen_l3_candidates(
         l2_phase = (l2_phase_map or {}).get(symbol, 'unknown')
         phase_bonus = _phase_timing_bonus(l2_phase, r['cl_dir'], r['cl_signal'])
 
+        # 风控→全策略融合: L1 风控标记的股票整体降权10%
+        risk_flag = r.get('risk_flag', False)
+        risk_mult = 0.9 if risk_flag else 1.0
+
+        # BOCIASI 四象限自适应调节（P0-② 实现后可用）
+        try:
+            from app.engine.framework.bociasi_quadrant import BociasiQuadrantAnalyzer
+            bq = BociasiQuadrantAnalyzer()
+            q = bq.analyze()
+            # HH(行情尾声): 缠论权重降30%, 因子权重升20%
+            # LL(情绪底部): 加大量价权重, 降低因子权重
+            if q['quadrant'] == 'HH':
+                w_cl *= 0.7; w_fx *= 1.2
+            elif q['quadrant'] == 'LL':
+                w_vp *= 1.2; w_fx *= 0.8
+        except Exception:
+            pass
+
         combined = _compute_combined_score(
             cl_score_n, vp_score_n, r['cl_dir'], r['vp_dir'],
             weights=w,
@@ -837,6 +948,8 @@ def screen_l3_candidates(
         )
         # 阶段加分直接加到综合评分上（已归一化到0-10）
         combined = max(0.0, min(10.0, combined + phase_bonus * 0.5))  # phase_bonus 缩放后叠加
+        # 风控降权因子
+        combined = combined * risk_mult
         grade = _score_to_grade(combined)
 
         # 信号标签（使用原始方向判断，归一化不影响方向）

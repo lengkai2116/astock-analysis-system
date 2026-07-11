@@ -265,6 +265,14 @@ class SignalComputationService:
                 elif sig.get('signal') == 'neutral':
                     sig['signal'] = 'watch'
 
+        # ── Vibe 策略分析（渠道二新增） ──
+        try:
+            vibe_signal = self._compute_vibe_signal(ts_code, df)
+            if vibe_signal:
+                signals.append(vibe_signal)
+        except Exception as e:
+            logger.debug(f"{ts_code} Vibe 策略跳过: {e}")
+
         # 持久化到数据库
         self._persist_signals(ts_code, signals)
 
@@ -1073,8 +1081,31 @@ class SignalComputationService:
         if len(closes) < 20:
             return None
 
-        # 尝试 FactorRegistry 计算
-        registry_scores, registry_ok = self._compute_via_registry(df)
+        # 优先从 factor_cache 读取预计算因子值
+        from app.data import get_data_manager
+        try:
+            dm = get_data_manager()
+            cached_factors = dm.get_cached_factors(ts_code)
+            if cached_factors is not None and not cached_factors.empty:
+                # cached_factors: [factor_name, value, trade_date]
+                latest = cached_factors.loc[cached_factors.groupby('factor_name')['trade_date'].idxmax()]
+                scores = {row['factor_name']: float(row['value']) for _, row in latest.iterrows()}
+                weights = {'ROC': 0.25, 'VOL_RATIO': 0.20, 'ATR': 0.15, 'RSI': 0.25, 'LINEARREG_SLOPE': 0.15}
+                valid = {k: v for k, v in scores.items() if k in weights}
+                if valid:
+                    composite = sum(valid[k] * weights[k] for k in valid)
+                    evidence_keys = list(valid.keys())
+                    registry_ok = True
+                    registry_scores = scores
+                    scores['source'] = 'cache'
+                    logger.debug(f"{ts_code} 使用 factor_cache 预计算因子 ({len(valid)} 因子)")
+                else:
+                    raise ValueError("缓存因子不匹配")
+            else:
+                raise ValueError("无缓存因子")
+        except Exception:
+            # 回退到 FactorRegistry 实时计算
+            registry_scores, registry_ok = self._compute_via_registry(df)
         if registry_ok:
             scores = registry_scores
             weights = {'ROC': 0.25, 'VOL_RATIO': 0.20, 'ATR': 0.15, 'RSI': 0.25, 'LINEARREG_SLOPE': 0.15}
@@ -1578,3 +1609,67 @@ class SignalComputationService:
                     pass
         except Exception as e:
             logger.warning(f"{ts_code}: 同步到StrategyOutput失败: {e}")
+
+    def _compute_vibe_signal(self, ts_code: str, df: pd.DataFrame) -> Optional[Dict]:
+        """
+        计算 Vibe 策略信号（渠道二新增）
+
+        从 strategy_template_v2 加载 vibe=True 的策略，执行 code_template。
+        将执行结果转化为"现状解读文本"而非加分值。
+
+        Returns: 信号 dict 或 None
+        """
+        import pandas as pd
+        try:
+            from app import db
+            from app.models.strategy_template import StrategyTemplateV2
+            from sqlalchemy import and_
+
+            templates = db.session.query(StrategyTemplateV2).filter(
+                and_(StrategyTemplateV2.vibe == True, StrategyTemplateV2.status != 'disabled')
+            ).all()
+            if not templates:
+                return None
+
+            descriptions = []
+            max_confidence = 0.0
+            best_dir = 'NEUTRAL'
+
+            for tmpl in templates:
+                code = tmpl.code_template or ''
+                if not code or 'return' not in code:
+                    continue
+                try:
+                    import re
+                    cleaned = re.sub(r'^\s*return\s+', 'pass  # ', code)
+                    local_vars = {'df': df, 'closes': df['close'].values, 'volumes': df['vol'].values if 'vol' in df.columns else df['amount'].values}
+                    exec(compile(cleaned, '<vibe_strategy>', 'exec'), local_vars)
+                    result = local_vars.get('signal', {})
+                    if isinstance(result, dict) and result.get('signal'):
+                        conf = result.get('confidence', 0.3)
+                        if conf > max_confidence:
+                            max_confidence = conf
+                            best_dir = result['signal']
+                        desc = f"{tmpl.name}: {result.get('signal_label', result['signal'])}"
+                        descriptions.append(desc)
+                except Exception:
+                    continue
+
+            if not descriptions:
+                return None
+
+            return {
+                'strategy_name': 'Vibe策略',
+                'signal': best_dir.lower(),
+                'signal_label': best_dir,
+                'confidence': round(max_confidence, 2),
+                'evidence': descriptions,
+                'description': '; '.join(descriptions),
+                'risk_notes': ['Vibe策略由AI生成，仅供参考'],
+                'entry_zone': [0, 0],
+                'risk_line': 0,
+                'target_zone': [0, 0],
+            }
+        except Exception as e:
+            logger.debug(f"{ts_code} Vibe策略计算失败: {e}")
+            return None

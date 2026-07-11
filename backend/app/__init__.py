@@ -60,9 +60,9 @@ def create_app():
         return response
     
     # 全局请求鉴权（如已配置 AUTH_TOKEN）
-    from app.auth import is_auth_enabled, _constant_time_compare
+    from app.auth import is_auth_enabled, _constant_time_compare, _load_auth_token
     
-    _AUTH_TOKEN = os.environ.get('AUTH_TOKEN', '').strip()
+    _AUTH_TOKEN = _load_auth_token()
     
     @app.before_request
     def check_auth():
@@ -468,7 +468,7 @@ def _seed_default_config(rcm):
             'provider': 'mock',
             'deepseek_api_key': '',
             'deepseek_base_url': 'https://api.deepseek.com/v1',
-            'deepseek_model': 'deepseek-chat-v4',
+            'deepseek_model': 'deepseek-v4-flash',
             'lm_studio_endpoint': 'http://localhost:1234/v1',
             'lm_studio_model': 'local-model'
         },
