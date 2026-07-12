@@ -709,6 +709,69 @@ class DashboardService:
         return None
 
     # ──────────────────────────────────────────────
+    # 9. 聚合仪表盘（测试用 — 一次性返回全部数据）
+    # ──────────────────────────────────────────────
+    def get_dashboard_full(self) -> Optional[Dict]:
+        """聚合仪表盘全部数据（一次调用替代 7 次独立请求）"""
+        result = {'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+        try:
+            overview = self.get_index_summary()
+            if overview:
+                result['market_overview'] = overview
+        except Exception:
+            pass
+
+        try:
+            volume = self.get_market_volume()
+            if volume:
+                result['market_volume'] = volume
+        except Exception:
+            pass
+
+        try:
+            summary = self.get_dashboard_summary()
+            if summary:
+                result['dashboard_summary'] = summary
+        except Exception:
+            pass
+
+        try:
+            moneyflow = self.get_moneyflow_summary()
+            if moneyflow:
+                result['moneyflow_summary'] = moneyflow
+        except Exception:
+            pass
+
+        try:
+            sector = self.get_sector_changes()
+            if sector:
+                result['sector_changes'] = sector
+        except Exception:
+            pass
+
+        try:
+            sec_mf = self.get_sector_moneyflow()
+            if sec_mf:
+                result['sector_moneyflow'] = sec_mf
+        except Exception:
+            pass
+
+        try:
+            top_up = self.get_daily_top(type='up', limit=10)
+            if top_up:
+                result['daily_top_up'] = top_up
+            top_down = self.get_daily_top(type='down', limit=10)
+            if top_down:
+                result['daily_top_down'] = top_down
+        except Exception:
+            pass
+
+        if not result:
+            return None
+        return result
+
+    # ──────────────────────────────────────────────
     # 内部辅助方法
     # ──────────────────────────────────────────────
 

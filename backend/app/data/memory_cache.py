@@ -22,9 +22,10 @@ logger = logging.getLogger(__name__)
 
 # 缓存级别配置
 CACHE_LEVELS = {
-    'realtime': {'ttl': 3, 'maxsize': 100},        # 实时行情，3s 刷新
-    'intraday': {'ttl': 300, 'maxsize': 200},       # 盘中数据，5min 过期
-    'analysis': {'ttl': 1800, 'maxsize': 100},      # 分析数据，30min 过期
+    'realtime': {'ttl': 3, 'maxsize': 200},         # 实时行情，3s 刷新（原100→200）
+    'intraday': {'ttl': 300, 'maxsize': 500},        # 盘中数据，5min 过期（原200→500）
+    'analysis': {'ttl': 1800, 'maxsize': 300},       # 分析数据，30min 过期（原100→300）
+    'dashboard': {'ttl': 60, 'maxsize': 500},        # 仪表盘响应，60s 过期（新增）
 }
 
 VALID_LEVELS = set(CACHE_LEVELS.keys())

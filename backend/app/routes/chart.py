@@ -268,24 +268,18 @@ def get_kline_chart_data(ts_code):
         actual_limit = max(limit, min_data_for_indicators)
         daily_data = daily_data.tail(actual_limit) if len(daily_data) > actual_limit else daily_data
         
-        # 优先从 indicator_cache 读取预计算指标
+        # 优先从 indicator_cache 读取预计算指标（宽表格式，无需 pivot）
         df = None
         try:
             cached = data_manager.get_cached_indicators(ts_code)
             if cached is not None and not cached.empty:
-                pivot = cached.pivot_table(
-                    index='trade_date', columns='indicator_name', values='value', aggfunc='first'
-                ).reset_index()
-                if 'trade_date' in daily_data.columns and 'trade_date' in pivot.columns:
-                    min_d = daily_data['trade_date'].min()
-                    max_d = daily_data['trade_date'].max()
-                    pivot = pivot[(pivot['trade_date'] >= min_d) & (pivot['trade_date'] <= max_d)]
-                if not pivot.empty:
-                    needed_sub = set(k for k in requested_indicators if k in SUB_INDICATORS)
-                    cached_cols = set(pivot.columns)
-                    if needed_sub.issubset(cached_cols):
-                        df = daily_data.merge(pivot, on='trade_date', how='left')
-                        logger.debug(f"使用 indicator_cache 预计算指标 ({len(pivot)} 行)")
+                cached_cols = set(cached.columns) - {'ts_code', 'trade_date'}
+                needed_sub = set(k for k in requested_indicators if k in SUB_INDICATORS)
+                if needed_sub.issubset(cached_cols):
+                    df = daily_data.merge(cached, on='trade_date', how='left')
+                    logger.debug(f"使用宽表预计算指标 ({len(cached)} 行)")
+                else:
+                    logger.debug(f"宽表缺少必要指标: need={needed_sub}, have={cached_cols}")
         except Exception as e:
             logger.debug(f"indicator_cache 读取失败，回退实时计算: {e}")
 

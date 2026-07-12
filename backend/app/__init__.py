@@ -297,8 +297,9 @@ def create_app():
             except Exception as e:
                 logger.warning(f"通知模块调度任务注册失败: {e}")
 
-            # 启动补采：自动检测是否缺少交易日数据，立即触发同步
-            scheduler_manager.catch_up_if_needed()
+            # 启动补采：延迟 30s 执行，避免前台启动竞争 I/O
+            import threading
+            threading.Timer(30, scheduler_manager.catch_up_if_needed).start()
     except Exception as e:
         logger.warning(f"APScheduler 初始化失败: {e}")
 

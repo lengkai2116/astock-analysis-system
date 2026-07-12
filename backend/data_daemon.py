@@ -1043,6 +1043,16 @@ def _run_data_cleanup():
     except Exception as e:
         logger.warning(f"清理 minute_cache 失败: {e}")
 
+    try:
+        _ecm.clean_indicator_cache(one_year_ago)
+    except Exception as e:
+        logger.warning(f"清理 indicator_cache 失败: {e}")
+
+    try:
+        _ecm.clean_factor_cache(one_year_ago)
+    except Exception as e:
+        logger.warning(f"清理 factor_cache 失败: {e}")
+
     # 每月执行一次 VACUUM
     if datetime.now().day == 1:
         try:

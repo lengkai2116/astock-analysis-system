@@ -1027,18 +1027,29 @@ class DataManager:
         return 'lazy'
 
     def get_cached_indicators(self, ts_code: str, indicators: list = None) -> pd.DataFrame:
-        """读取预计算指标"""
+        """读取预计算指标（优先读宽表，降级读旧 EAV）"""
+        # 尝试宽表
+        try:
+            wide = self.cache.get_indicators_wide(ts_code)
+            if wide is not None and not wide.empty:
+                return wide
+        except Exception:
+            pass
+        # 降级到旧 EAV
         from app.data.precompute_indicator_manager import PrecomputeIndicatorManager
         mgr = PrecomputeIndicatorManager(self.cache)
         return mgr.get_precomputed_indicators(ts_code, indicators)
 
     def get_cached_factors(self, ts_code: str, factor_names: list = None) -> pd.DataFrame:
-        """读取预计算因子"""
-        from app.data.factor_precompute import FactorPrecomputeManager
-        mgr = FactorPrecomputeManager()
+        """读取预计算因子（通过 ECM 统一连接）"""
         if factor_names:
-            return mgr.get_cached_factors(ts_code, factor_names)
-        return mgr.get_cached_factors(ts_code, [])
+            result = pd.DataFrame()
+            for name in factor_names:
+                series = self.cache.get_cached_factor(ts_code, name)
+                if series is not None:
+                    result[name] = series
+            return result
+        return pd.DataFrame()
 
     def get_cached_signals(self, ts_code: str, signal_names: list = None) -> pd.DataFrame:
         """读取预计算策略信号"""

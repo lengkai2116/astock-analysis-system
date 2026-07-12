@@ -131,6 +131,34 @@ class EnhancedCacheManager:
                 PRIMARY KEY (ts_code, trade_date, indicator_name)
             )
         """)
+        # ── 宽表指标缓存（替代 EAV 格式，减少 93% 行数）──
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS indicator_ma (
+                ts_code TEXT, trade_date TEXT,
+                ma5 REAL, ma10 REAL, ma20 REAL,
+                vol_ma5 REAL, vol_ma10 REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, trade_date)
+            )
+        """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS indicator_macd (
+                ts_code TEXT, trade_date TEXT,
+                macd_dif REAL, macd_dea REAL, macd_hist REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, trade_date)
+            )
+        """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS indicator_other (
+                ts_code TEXT, trade_date TEXT,
+                rsi14 REAL,
+                kdj_k REAL, kdj_d REAL, kdj_j REAL,
+                boll_upper REAL, boll_mid REAL, boll_lower REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, trade_date)
+            )
+        """)
         self._execute("""
             CREATE TABLE IF NOT EXISTS cache_metadata (
                 key TEXT PRIMARY KEY, value TEXT,
@@ -389,6 +417,15 @@ class EnhancedCacheManager:
                 PRIMARY KEY (ts_code, trade_date, signal_name)
             )
         """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS factor_cache (
+                ts_code TEXT, trade_date TEXT,
+                factor_name TEXT,
+                value REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, trade_date, factor_name)
+            )
+        """)
         # 索引
         for idx_sql in [
             "CREATE INDEX IF NOT EXISTS idx_daily_ts_code ON daily_cache(ts_code)",
@@ -421,6 +458,11 @@ class EnhancedCacheManager:
             "CREATE INDEX IF NOT EXISTS idx_stk_holder_ts ON stk_holder_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_concept_ts ON concept_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_index_member_code ON index_member_cache(index_code)",
+            "CREATE INDEX IF NOT EXISTS idx_indicator_ts_name ON indicator_cache(ts_code, indicator_name)",
+            "CREATE INDEX IF NOT EXISTS idx_factor_ts_name ON factor_cache(ts_code, factor_name)",
+            "CREATE INDEX IF NOT EXISTS idx_ind_ma_ts ON indicator_ma(ts_code)",
+            "CREATE INDEX IF NOT EXISTS idx_ind_macd_ts ON indicator_macd(ts_code)",
+            "CREATE INDEX IF NOT EXISTS idx_ind_other_ts ON indicator_other(ts_code)",
         ]:
             try:
                 self.conn.execute(idx_sql)
@@ -469,7 +511,7 @@ class EnhancedCacheManager:
 
     def get_cached_daily(self, ts_code, start_date=None, end_date=None):
         self.cache_stats['total_requests'] += 1
-        query = "SELECT * FROM daily_cache WHERE ts_code = ?"
+        query = "SELECT ts_code, trade_date, open, high, low, close, vol, amount, pct_chg FROM daily_cache WHERE ts_code = ?"
         params = [ts_code]
         if start_date:
             query += " AND trade_date >= ?"
@@ -553,6 +595,48 @@ class EnhancedCacheManager:
             return
         with self._write_lock:
             self._insert_from_df('indicator_cache', pd.DataFrame(records))
+
+    def cache_indicators_wide(self, ts_code: str, df: 'pd.DataFrame'):
+        """批量写入宽表指标（df 需含 trade_date 及全部指标列）"""
+        if df.empty:
+            return
+        with self._write_lock:
+            ma_cols = {'trade_date', 'ma5', 'ma10', 'ma20', 'vol_ma5', 'vol_ma10'}
+            if ma_cols.issubset(set(df.columns)):
+                ma_df = df[list(ma_cols)].copy()
+                ma_df['ts_code'] = ts_code
+                self._insert_from_df('indicator_ma', ma_df)
+            macd_cols = {'trade_date', 'macd_dif', 'macd_dea', 'macd_hist'}
+            if macd_cols.issubset(set(df.columns)):
+                macd_df = df[list(macd_cols)].copy()
+                macd_df['ts_code'] = ts_code
+                self._insert_from_df('indicator_macd', macd_df)
+            other_cols = {'trade_date', 'rsi14', 'kdj_k', 'kdj_d', 'kdj_j',
+                           'boll_upper', 'boll_mid', 'boll_lower'}
+            if other_cols.issubset(set(df.columns)):
+                other_df = df[list(other_cols)].copy()
+                other_df['ts_code'] = ts_code
+                self._insert_from_df('indicator_other', other_df)
+            self.conn.commit()
+
+    def get_indicators_wide(self, ts_code: str) -> 'pd.DataFrame':
+        """读取宽表指标数据，合并 3 张表为 1 个 DataFrame"""
+        ma = self._query_df(
+            "SELECT ts_code, trade_date, ma5, ma10, ma20, vol_ma5, vol_ma10 "
+            "FROM indicator_ma WHERE ts_code = ? ORDER BY trade_date", [ts_code])
+        macd = self._query_df(
+            "SELECT trade_date, macd_dif, macd_dea, macd_hist "
+            "FROM indicator_macd WHERE ts_code = ? ORDER BY trade_date", [ts_code])
+        other = self._query_df(
+            "SELECT trade_date, rsi14, kdj_k, kdj_d, kdj_j, boll_upper, boll_mid, boll_lower "
+            "FROM indicator_other WHERE ts_code = ? ORDER BY trade_date", [ts_code])
+        result = ma
+        for _df in [macd, other]:
+            if not _df.empty and not result.empty:
+                result = result.merge(_df, on='trade_date', how='left')
+            elif not _df.empty:
+                result = _df
+        return result
 
     # ── 内存缓存 ────────────────────────────────────────────
 
@@ -1316,6 +1400,43 @@ class EnhancedCacheManager:
             return []
 
     # ════════════════════════════════════════════════════════════
+    # factor_cache 统一管理方法
+    # ════════════════════════════════════════════════════════════
+
+    def cache_factor_data(self, records):
+        """批量写入因子数据"""
+        if not records:
+            return
+        with self._write_lock:
+            self._insert_from_df('factor_cache', pd.DataFrame(records))
+            self.conn.commit()
+
+    def get_cached_factor(self, ts_code: str, factor_name: str):
+        """获取单个因子序列"""
+        df = self._query_df(
+            "SELECT trade_date, value FROM factor_cache "
+            "WHERE ts_code = ? AND factor_name = ? ORDER BY trade_date",
+            [ts_code, factor_name]
+        )
+        if df.empty:
+            return None
+        return pd.Series(df['value'].values, index=df['trade_date'])
+
+    def get_cached_factors(self, ts_code: str) -> 'pd.DataFrame':
+        """获取某股票所有因子"""
+        return self._query_df(
+            "SELECT trade_date, factor_name, value FROM factor_cache "
+            "WHERE ts_code = ? ORDER BY trade_date, factor_name",
+            [ts_code]
+        )
+
+    def clean_factor_cache(self, cutoff: str):
+        """清理 factor_cache 中早于 cutoff 的记录"""
+        self._execute("DELETE FROM factor_cache WHERE trade_date < ?", [cutoff])
+        self.conn.commit()
+        logger.info(f"清理 factor_cache (cutoff={cutoff})")
+
+    # ════════════════════════════════════════════════════════════
     # 迭代5：数据清理（存储生命周期管理）
     # ════════════════════════════════════════════════════════════
 
@@ -1340,6 +1461,12 @@ class EnhancedCacheManager:
         """清理 minute_kline_cache 中早于 cutoff 的记录"""
         self._execute("DELETE FROM minute_kline_cache WHERE trade_date < ?", [cutoff])
         self.conn.commit()
+
+    def clean_indicator_cache(self, cutoff: str):
+        """清理 indicator_cache 中早于 cutoff 的记录（cutoff 格式 YYYYMMDD）"""
+        self._execute("DELETE FROM indicator_cache WHERE trade_date < ?", [cutoff])
+        self.conn.commit()
+        logger.info(f"清理 indicator_cache (cutoff={cutoff})")
 
     def vacuum_db(self):
         """执行 VACUUM 回收空间（应在低负载时段执行）"""

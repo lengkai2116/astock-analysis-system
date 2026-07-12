@@ -45,7 +45,7 @@
 
 - **单进程 Flask**（eventlet）: `python backend/run.py --port 5001`
 - **唯一端口 5001**：托管 SPA + REST API + WebSocket，禁止引入其他端口
-- **数据库**：SQLite（OLTP, app.db）+ DuckDB（OLAP, 缓存），禁用 PostgreSQL/Redis
+- **数据库**：SQLite（OLTP, app.db）+ SQLite WAL（盘后缓存, stock_cache.db），禁用 PostgreSQL/Redis
 - **缓存**：`cachetools.TTLCache`（内存），禁用 Redis
 - **前端**：Flask `send_from_directory` 托管 Vue 构建产物，无需 Nginx
 - **数据目录**：`DATA_DIR` 环境变量，禁止硬编码

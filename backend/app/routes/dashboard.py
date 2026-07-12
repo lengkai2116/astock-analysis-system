@@ -19,6 +19,7 @@ import logging
 from flask import Blueprint, request, jsonify
 from app.services.dashboard_service import DashboardService
 from app.utils.error_handlers import handle_exceptions
+from app.utils.api_cache import api_cache
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ _service = DashboardService()
 # 3. 成交额柱状图（index-daily）
 # ──────────────────────────────────────────────
 @dashboard_bp.route('/api/v3/market/index-daily', methods=['GET'])
+@api_cache(ttl=120)
 @handle_exceptions
 def get_index_daily():
     """四大交易所合计成交额柱状图（近20日）"""
@@ -60,6 +62,7 @@ def get_daily_top():
 # 5. 板块涨跌幅（sector-sector）
 # ──────────────────────────────────────────────
 @dashboard_bp.route('/api/v3/market/sector-sector', methods=['GET'])
+@api_cache(ttl=120)
 @handle_exceptions
 def get_sector_sector():
     """行业板块涨跌幅排行"""
@@ -83,6 +86,7 @@ def get_dashboard_summary():
 # 7. 全市场资金流向（moneyflow-summary）
 # ──────────────────────────────────────────────
 @dashboard_bp.route('/api/v3/market/moneyflow-summary', methods=['GET'])
+@api_cache(ttl=120)
 @handle_exceptions
 def get_moneyflow_summary():
     """全市场资金流向趋势（近20日）"""
@@ -95,10 +99,23 @@ def get_moneyflow_summary():
 # 8. 板块资金流向（sector-moneyflow）
 # ──────────────────────────────────────────────
 @dashboard_bp.route('/api/v3/market/sector-moneyflow', methods=['GET'])
+@api_cache(ttl=120)
 @handle_exceptions
 def get_sector_moneyflow():
     """行业板块净流入排行 + Top5板块×前3个股"""
     top_n = request.args.get('top_n', 8, type=int)
     stocks_per = request.args.get('stocks_per_sector', 3, type=int)
     data = _service.get_sector_moneyflow(top_n=top_n, stocks_per_sector=stocks_per)
+    return _data_response(data)
+
+
+# ──────────────────────────────────────────────
+# 9. 仪表盘聚合（聚合全部 7 个数据源）
+# ──────────────────────────────────────────────
+@dashboard_bp.route('/api/v3/dashboard/full', methods=['GET'])
+@api_cache(ttl=30)
+@handle_exceptions
+def get_dashboard_full():
+    """聚合仪表盘全部数据 — 一次调用替代 7 次独立请求"""
+    data = _service.get_dashboard_full()
     return _data_response(data)

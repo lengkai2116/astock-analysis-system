@@ -4,8 +4,8 @@
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>仪表盘 — A股分析系统</title>
 <link rel="stylesheet" href="assets/base.css">
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="assets/echarts.min.js"></script>
+<script src="assets/socket.io.min.js"></script>
 <style>
 /* 四大指数卡片 */
 .index-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-16); margin-bottom: var(--space-20); }
@@ -233,108 +233,38 @@ function drawMiniK(domId,data){
 
 // ===== 1. 加载市场总览 =====
 function loadMarketOverview(){
-  fetch(API+'/market/overview')
-    .then(function(r){return r.json();})
+  _cachedFetch(API+'/market/overview',30)
     .then(function(d){
       if(!d.success||!d.data)return;
-      var ov=d.data;
-      // 更新顶栏
-      if(ov.market_status){
-        var dot=document.getElementById('market-status-dot');
-        var isTrading=ov.market_status==='trading'||(ov.market_status.trading);
-        dot.className='status-dot '+(isTrading?'green':'gray');
-        dot.title=typeof ov.market_status==='string'?ov.market_status:(ov.market_status.status||'');
-      }
-      if(ov.timestamp) document.getElementById('market-update-time').textContent=ov.timestamp;
-      if(ov.total_volume!==undefined) document.getElementById('total-volume-text').textContent=(ov.total_volume/1e8).toFixed(0)+'亿';
-      if(ov.total_volume_change_pct!==undefined){
-        var chgEl=document.getElementById('total-volume-change');
-        var pct=ov.total_volume_change_pct;
-        chgEl.className=pct>=0?'up':'down';
-        chgEl.innerHTML=(pct>=0?'↑ +':'↓ ')+pct.toFixed(1)+'%';
-      }
-      // 四大指数
-      if(ov.indexes&&ov.indexes.length){
-        ov.indexes.forEach(function(idx,i){
-          if(i>3)return;
-          var vEl=document.getElementById('idx-val-'+i),cEl=document.getElementById('idx-chg-'+i);
-          if(vEl){
-            vEl.textContent=idx.price!==undefined?(+idx.price).toLocaleString("zh-CN",{minimumFractionDigits:2}):'--';
-            vEl.className='value '+(idx.change_pct>=0?'up':'down');
-          }
-          if(cEl){
-            cEl.className='change '+(idx.change_pct>=0?'up':'down');
-            cEl.innerHTML=idx.change_pct!==undefined?(idx.change_pct>=0?'↑ +':'↓ ')+Math.abs(idx.change_pct).toFixed(2)+'%':'--';
-          }
-          // 迷你K线
-          if(idx.mini_kline&&idx.mini_kline.length){
-            var mini=drawMiniK('mini-'+i,idx.mini_kline);
-            if(mini) charts.push(mini);
-          }
-        });
-      }
+      applyMarketOverview(d.data);
     })
     .catch(function(e){console.warn('market/overview 加载失败',e);});
 }
 
 // ===== 2. 加载成交额柱状图 =====
 function loadVolumeChart(){
-  fetch(API+'/market/index-daily')
-    .then(function(r){return r.json();})
+  _cachedFetch(API+'/market/index-daily',120)
     .then(function(d){
-      if(!d.success||!d.data||!d.data.days||!d.data.days.length)return;
-      var c=echarts.init(document.getElementById('volume-chart'));
-      var data=d.data.days; // API返回旧→新，ECharts xAxis默认左→右正确
-      var days=data.map(function(v){return v.trade_date&&v.trade_date.slice(5)||v.date;});
-      var vals=data.map(function(v){return +(v.total_amount/1e8).toFixed(0);});
-      c.setOption({
-        backgroundColor:'transparent',grid:{left:50,right:20,bottom:20,top:10},
-        xAxis:{type:'category',data:days,axisLabel:{color:'#64748B',fontSize:10}},
-        yAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
-        tooltip:{trigger:'axis',formatter:function(p){return p[0].axisValue+'<br/>成交额: ¥'+(p[0].value/10000).toFixed(2)+'万亿';}},
-        series:[{type:'bar',data:vals,itemStyle:{color:function(p){
-          var chg=data[p.dataIndex].pct_chg||0;
-          return chg>=0?'#EF4444':'#22C55E'; // 红涨绿跌
-        }},barWidth:12}]
-      });
-      charts.push(c);
+      if(!d.success||!d.data)return;
+      renderVolumeChart(d.data);
     })
     .catch(function(e){console.warn('index-daily 加载失败',e);});
 }
 
 // ===== 3. 加载AI雷达 =====
-var colorMap={bullish:'#EF4444',bearish:'#22C55E',watch:'#F59E0B'};
-var dirLabelMap={bullish:'看多',bearish:'看空',watch:'关注'};
 function loadRadar(){
-  fetch(API+'/dashboard/summary')
-    .then(function(r){return r.json();})
+  _cachedFetch(API+'/dashboard/summary',60)
     .then(function(d){
-      if(!d.success||!d.data||!d.data.radar_stocks||!d.data.radar_stocks.length)return;
-      var stocks=d.data.radar_stocks;
-      var track=document.getElementById('radar-track');
-      var allCards=stocks.concat(stocks);
-      allCards.forEach(function(s){
-        var card=document.createElement('div');
-        card.className='radar-card';
-        card.onclick=function(){location.href='indicator-ide.html?code='+s.ts_code;};
-        var dir=s.direction||'watch';
-        card.innerHTML='<div class="color-bar" style="background:'+colorMap[dir]+'"></div>'
-          +'<div class="info"><span class="stock-name">'+(s.name||'')+'</span><span class="stock-code">'+(s.ts_code||'')+'</span></div>'
-          +'<div class="score" style="color:'+colorMap[dir]+'">★'+(s.score||'--')+'</div>'
-          +'<span class="dir-tag" style="background:'+colorMap[dir]+'22;color:'+colorMap[dir]+'">'+dirLabelMap[dir]+'</span>';
-        track.appendChild(card);
-      });
-      // 更新"更新于"标注
-      var ut=document.querySelector('.update-tag');
-      if(ut&&d.data.updated_at) ut.textContent='来自 Screener L3 · '+d.data.updated_at;
+      if(!d.success||!d.data)return;
+      applyRadar(d.data);
+      applySignals(d.data.signal_summary||{});
     })
     .catch(function(e){console.warn('dashboard/summary 加载失败',e);});
 }
 
 // ===== 4. 加载资金流向图 =====
 function loadMoneyflow(){
-  fetch(API+'/market/moneyflow-summary')
-    .then(function(r){return r.json();})
+  _cachedFetch(API+'/market/moneyflow-summary',120)
     .then(function(d){
       if(!d.success||!d.data||!d.data.days||!d.data.days.length)return;
       var c=echarts.init(document.getElementById('chart-fund-flow'));
@@ -354,8 +284,7 @@ function loadMoneyflow(){
 
 // ===== 5. 加载行业板块涨跌幅图（top5红涨 + top5绿跌）=====
 function loadSectorChanges(){
-  fetch(API+'/market/sector-sector')
-    .then(function(r){return r.json();})
+  _cachedFetch(API+'/market/sector-sector',120)
     .then(function(d){
       if(!d.success||!d.data)return;
       var inArr=(d.data.gainers||[]).slice(0,5);
@@ -376,8 +305,7 @@ function loadSectorChanges(){
 
 // ===== 6. 加载板块资金流向 + Top个股 =====
 function loadSectorMoneyflow(){
-  fetch(API+'/market/sector-moneyflow')
-    .then(function(r){return r.json();})
+  _cachedFetch(API+'/market/sector-moneyflow',120)
     .then(function(d){
       if(!d.success||!d.data)return;
       // 板块净流入排行图（top5红流入 + top5绿流出）
@@ -460,8 +388,7 @@ document.getElementById('losers-tab').onclick=function(){switchGainers('down');}
 function loadTopGainers(type){type=type||'up';
   var url=API+'/market/daily-top';
   if(type=='down')url+='?type=down';
-  fetch(url)
-    .then(function(r){return r.json();})
+  _cachedFetch(url,60)
     .then(function(d){
       if(!d.success||!d.data)throw new Error('no data');
       renderGainers(d.data.stocks||[]);
@@ -497,8 +424,7 @@ function loadSignalSummary(){
     })
     .catch(function(){
       // 降级: 尝试 /dashboard/summary 中的 signal_summary
-      fetch(API+'/dashboard/summary')
-        .then(function(r){return r.json();})
+      _cachedFetch(API+'/dashboard/summary',60)
         .then(function(d){
           if(d.success&&d.data&&d.data.signal_summary)applySignals(d.data.signal_summary);
           else throw new Error('fallback no data');
@@ -520,16 +446,209 @@ function applySignals(s){
   if(s.highconf!==undefined&&el('sig-highconf'))el('sig-highconf').textContent=s.highconf;
 }
 
-// ===== 启动 =====
-// 优先 REST API 加载，覆盖 MOCK 数据
-loadMarketOverview();
-loadVolumeChart();
-loadRadar();
-loadMoneyflow();
-loadSectorChanges();
-loadSectorMoneyflow();
-loadTopGainers();
-loadSignalSummary();
+// ===== 启动（聚合加载，降级到独立请求）=====
+var colorMap={bullish:'#EF4444',bearish:'#22C55E',watch:'#F59E0B'};
+var dirLabelMap={bullish:'看多',bearish:'看空',watch:'关注'};
+
+// 前端数据缓存（30s TTL，避免短时间内重复请求）
+var _apiCache={};
+function _cachedFetch(url,ttl){
+  ttl=ttl||30;
+  var now=Date.now();
+  if(_apiCache[url]&&_apiCache[url].expires>now){
+    return Promise.resolve(_apiCache[url].data);
+  }
+  return fetch(url).then(function(r){return r.json();}).then(function(d){
+    _apiCache[url]={data:d,expires:now+ttl*1000};
+    return d;
+  });
+}
+
+function loadDashboardFull(){
+  _cachedFetch(API+'/dashboard/full',30)
+    .then(function(d){
+      if(!d.success||!d.data)throw new Error('no data');
+      var dd=d.data;
+      if(dd.market_overview) applyMarketOverview(dd.market_overview);
+      if(dd.market_volume) renderVolumeChart(dd.market_volume);
+      if(dd.dashboard_summary){
+        applyRadar(dd.dashboard_summary);
+        applySignals(dd.dashboard_summary.signal_summary||{});
+      }
+      if(dd.moneyflow_summary) renderMoneyflow(dd.moneyflow_summary);
+      if(dd.sector_changes) renderSectorChart(dd.sector_changes);
+      if(dd.sector_moneyflow) renderSectorMoneyflow(dd.sector_moneyflow);
+      if(dd.daily_top_up) renderGainers(dd.daily_top_up.stocks||[]);
+    })
+    .catch(function(e){
+      console.warn('聚合加载失败，降级到独立请求',e);
+      loadMarketOverview();
+      loadVolumeChart();
+      loadRadar();
+      loadMoneyflow();
+      loadSectorChanges();
+      loadSectorMoneyflow();
+      loadTopGainers();
+      loadSignalSummary();
+    });
+}
+
+// 提取 applyMarketOverview 供聚合端点和 WebSocket 共用
+function applyMarketOverview(ov){
+  if(!ov)return;
+  if(ov.market_status){
+    var dot=document.getElementById('market-status-dot');
+    var isTrading=ov.market_status==='trading'||(ov.market_status.trading);
+    dot.className='status-dot '+(isTrading?'green':'gray');
+    dot.title=typeof ov.market_status==='string'?ov.market_status:(ov.market_status.status||'');
+  }
+  if(ov.timestamp) document.getElementById('market-update-time').textContent=ov.timestamp;
+  if(ov.total_volume!==undefined) document.getElementById('total-volume-text').textContent=(ov.total_volume/1e8).toFixed(0)+'亿';
+  if(ov.total_volume_change_pct!==undefined){
+    var chgEl=document.getElementById('total-volume-change');
+    var pct=ov.total_volume_change_pct;
+    chgEl.className=pct>=0?'up':'down';
+    chgEl.innerHTML=(pct>=0?'↑ +':'↓ ')+pct.toFixed(1)+'%';
+  }
+  if(ov.indexes&&ov.indexes.length){
+    ov.indexes.forEach(function(idx,i){
+      if(i>3)return;
+      var vEl=document.getElementById('idx-val-'+i),cEl=document.getElementById('idx-chg-'+i);
+      if(vEl){
+        vEl.textContent=idx.price!==undefined?(+idx.price).toLocaleString("zh-CN",{minimumFractionDigits:2}):'--';
+        vEl.className='value '+(idx.change_pct>=0?'up':'down');
+      }
+      if(cEl){
+        cEl.className='change '+(idx.change_pct>=0?'up':'down');
+        cEl.innerHTML=idx.change_pct!==undefined?(idx.change_pct>=0?'↑ +':'↓ ')+Math.abs(idx.change_pct).toFixed(2)+'%':'--';
+      }
+      if(idx.mini_kline&&idx.mini_kline.length){
+        var mini=drawMiniK('mini-'+i,idx.mini_kline);
+        if(mini) charts.push(mini);
+      }
+    });
+  }
+}
+
+function renderVolumeChart(vd){
+  if(!vd||!vd.days||!vd.days.length)return;
+  var c=echarts.init(document.getElementById('volume-chart'));
+  var data=vd.days;
+  var days=data.map(function(v){return v.trade_date&&v.trade_date.slice(5)||v.date;});
+  var vals=data.map(function(v){return +(v.total_amount/1e8).toFixed(0);});
+  c.setOption({
+    backgroundColor:'transparent',grid:{left:50,right:20,bottom:20,top:10},
+    xAxis:{type:'category',data:days,axisLabel:{color:'#64748B',fontSize:10}},
+    yAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
+    tooltip:{trigger:'axis',formatter:function(p){return p[0].axisValue+'<br/>成交额: ¥'+(p[0].value/10000).toFixed(2)+'万亿';}},
+    series:[{type:'bar',data:vals,itemStyle:{color:function(p){
+      var chg=data[p.dataIndex].pct_chg||0;
+      return chg>=0?'#EF4444':'#22C55E';
+    }},barWidth:12}]
+  });
+  charts.push(c);
+}
+
+function applyRadar(rs){
+  if(!rs||!rs.radar_stocks||!rs.radar_stocks.length)return;
+  var stocks=rs.radar_stocks;
+  var track=document.getElementById('radar-track');track.innerHTML='';
+  var allCards=stocks.concat(stocks);
+  allCards.forEach(function(s){
+    var card=document.createElement('div');card.className='radar-card';
+    card.onclick=function(){location.href='indicator-ide.html?code='+s.ts_code;};
+    var dir=s.direction||'watch';
+    card.innerHTML='<div class="color-bar" style="background:'+colorMap[dir]+'"></div>'
+      +'<div class="info"><span class="stock-name">'+(s.name||'')+'</span><span class="stock-code">'+(s.ts_code||'')+'</span></div>'
+      +'<div class="score" style="color:'+colorMap[dir]+'">★'+(s.score||'--')+'</div>'
+      +'<span class="dir-tag" style="background:'+colorMap[dir]+'22;color:'+colorMap[dir]+'">'+dirLabelMap[dir]+'</span>';
+    track.appendChild(card);
+  });
+  var ut=document.querySelector('.update-tag');
+  if(ut&&rs.updated_at) ut.textContent='来自 Screener L3 · '+rs.updated_at;
+}
+
+function renderMoneyflow(md){
+  if(!md||!md.days||!md.days.length)return;
+  var c=echarts.init(document.getElementById('chart-fund-flow'));
+  var flow=md.days.reverse();
+  var days=flow.map(function(v){return v.date&&v.date.slice(5)||'';});
+  var main=flow.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
+  var retail=flow.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
+  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流出'],textStyle:{color:'#94A3B8'},top:0},grid:{left:50,right:20,bottom:20,top:40},
+    xAxis:{type:'category',data:days,axisLabel:{color:'#64748B',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
+    yAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
+    series:[{name:'主力净流入',type:'bar',data:main,itemStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#3B82F6'},{offset:1,color:'rgba(59,130,246,0.2)'}])}},
+      {name:'散户净流出',type:'line',data:retail,smooth:true,lineStyle:{color:'#EF4444',width:1.5},symbol:'none',areaStyle:{color:'rgba(239,68,68,0.08)'}}]});
+  charts.push(c);
+}
+
+function renderSectorChart(sd){
+  if(!sd||!sd.data)return;
+  var inArr=(sd.gainers||[]).slice(0,5);
+  var outArr=(sd.losers||[]).slice(0,5);
+  var chartData=inArr.concat(outArr).sort(function(a,b){return (a.change_pct||0)-(b.change_pct||0);});
+  if(!chartData.length)return;
+  var c=echarts.init(document.getElementById('chart-sector'));
+  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:60,right:30,bottom:10,top:10},
+    xAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
+    yAxis:{type:'category',data:chartData.map(function(v){return v.name;}),axisLabel:{color:'#94A3B8',fontSize:11,width:50,overflow:'truncate'},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
+    series:[{type:'bar',data:chartData.map(function(v){var pct=+(v.change_pct||0).toFixed(1);return {value:pct,itemStyle:{color:pct>=0?'#EF4444':'#22C55E'}};}),barWidth:12,
+      label:{show:true,position:'right',formatter:function(p){return p.value>0?'+'+p.value+'%':p.value+'%';},fontSize:11,color:'#94A3B8'}}]});
+  charts.push(c);
+}
+
+function renderSectorMoneyflow(smd){
+  if(!smd||!smd.data)return;
+  var inArr=(smd.data.sectors||[]).slice(0,5);
+  var outArr=(smd.data.out_sectors||[]).slice(0,5);
+  var chartData=inArr.concat(outArr).sort(function(a,b){return (a.net_inflow||0)-(b.net_inflow||0);});
+  if(chartData.length){
+    var c=echarts.init(document.getElementById('sector-inflow-chart'));
+    c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:60,right:50,bottom:10,top:5},
+      xAxis:{show:false},yAxis:{type:'category',data:chartData.map(function(v){return v.name;}),axisLabel:{color:'#94A3B8',fontSize:11,width:50,overflow:'truncate'}},
+      series:[{type:'bar',data:chartData.map(function(v){var nf=+(v.net_inflow||0).toFixed(1);return {value:nf,itemStyle:{color:nf>=0?'#EF4444':'#22C55E'}};}),barWidth:10,
+        label:{show:true,position:'right',formatter:function(p){return p.value>0?'+'+p.value+'亿':p.value+'亿';},fontSize:10,color:'#94A3B8'}}]});
+    charts.push(c);
+  }
+  if(smd.data.sectors&&smd.data.sectors.length){
+    var inCont=document.getElementById('top-stock-cards');inCont.innerHTML='';
+    smd.data.sectors.slice(0,5).forEach(function(s){
+      var wrap=document.createElement('div');
+      wrap.style.cssText='background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:var(--space-4);flex:1;min-width:0;';
+      var h=document.createElement('div');
+      h.style.cssText='font-size:11px;font-weight:500;color:var(--text-primary);margin-bottom:var(--space-3);';
+      h.textContent=s.name;wrap.appendChild(h);
+      (s.stocks||[]).forEach(function(st){
+        var row=document.createElement('div');
+        row.style.cssText='display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
+        row.innerHTML='<span>'+(st.name||'')+'</span><span class="up">'+(st.net_inflow>0?'+':'')+st.net_inflow.toFixed(2)+'</span>';
+        wrap.appendChild(row);
+      });
+      inCont.appendChild(wrap);
+    });
+  }
+  if(smd.data.out_sectors&&smd.data.out_sectors.length){
+    var outCont=document.getElementById('outflow-cards');outCont.innerHTML='';
+    smd.data.out_sectors.slice(0,5).forEach(function(s){
+      var wrap=document.createElement('div');
+      wrap.style.cssText='background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:var(--space-4);flex:1;min-width:0;';
+      var h=document.createElement('div');
+      h.style.cssText='font-size:11px;font-weight:500;color:var(--text-primary);margin-bottom:var(--space-3);';
+      h.textContent=s.name;wrap.appendChild(h);
+      (s.stocks||[]).forEach(function(st){
+        var row=document.createElement('div');
+        row.style.cssText='display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
+        row.innerHTML='<span>'+(st.name||'')+'</span><span class="down">-'+Math.abs(st.net_inflow).toFixed(2)+'</span>';
+        wrap.appendChild(row);
+      });
+      outCont.appendChild(wrap);
+    });
+  }
+}
+
+// 启动：优先聚合加载
+loadDashboardFull();
 
 window.addEventListener('resize',function(){charts.forEach(function(c){if(c&&c.resize)c.resize();});});
 
