@@ -184,6 +184,12 @@ def _batch_lhb(trade_date: str) -> int:
     })
     if 'trade_date' in df.columns:
         df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+    # 只保留 lhb_cache 表有定义的列，避免列冲突（Tushare 可能返回 close/amount 等额外列）
+    lhb_cols = {'ts_code', 'trade_date', 'name', 'change_pct', 'buy_amount', 'sell_amount',
+                'net_amount', 'buy_rate', 'sell_rate'}
+    extra_cols = [c for c in df.columns if c not in lhb_cols]
+    if extra_cols:
+        df = df.drop(columns=extra_cols)
     _ecm.cache_lhb_data(df)
     return len(df)
 
@@ -208,52 +214,124 @@ def _batch_margin(trade_date: str) -> int:
 
 
 def _batch_concept() -> int:
-    """全市场概念板块及成分股 — 2 次 API 调用"""
+    """全市场概念板块及成分股 — 2 次 API 调用（Tushare + AKShare 降级）"""
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
     # 1. 获取概念列表
-    concept_list = pro.concept()
-    if concept_list is None or concept_list.empty:
-        return 0
-    # 2. 获取每个概念的成分股
-    detail_records = []
-    for _, row in concept_list.iterrows():
-        concept_code = row.get('code') or row.get('concept_code')
-        concept_name = row.get('name') or row.get('concept_name')
-        if not concept_code:
-            continue
-        try:
-            detail = pro.concept_detail(id=concept_code)
-            if detail is not None and not detail.empty:
-                for _, d in detail.iterrows():
-                    detail_records.append({
-                        'ts_code': d.get('ts_code'),
-                        'concept_name': concept_name or concept_code,
-                        'concept_code': concept_code,
-                    })
-        except Exception as e:
-            logger.debug(f"概念 {concept_code} 详情获取失败: {e}")
-    # 存概念列表（兼容 pro.concept() 输出）
     try:
-        _ecm.cache_concept_data(concept_list)
+        concept_list = pro.concept()
     except Exception as e:
-        logger.warning(f"概念列表缓存失败: {e}")
-    # 存成分股映射
-    if detail_records:
-        _ecm.cache_concept_data(pd.DataFrame(detail_records))
-    total = len(concept_list) + len(detail_records)
-    logger.info(f"概念板块同步完成: {len(concept_list)} 个概念, {len(detail_records)} 条成分股映射")
-    return total
+        logger.info(f"Tushare concept() 异常({e})，切换 AKShare 降级...")
+        concept_list = None
+    if concept_list is not None and not concept_list.empty:
+        # Tushare 成功路径
+        detail_records = []
+        for _, row in concept_list.iterrows():
+            concept_code = row.get('code') or row.get('concept_code')
+            concept_name = row.get('name') or row.get('concept_name')
+            if not concept_code:
+                continue
+            try:
+                detail = pro.concept_detail(id=concept_code)
+                if detail is not None and not detail.empty:
+                    for _, d in detail.iterrows():
+                        detail_records.append({
+                            'ts_code': d.get('ts_code'),
+                            'concept_name': concept_name or concept_code,
+                            'concept_code': concept_code,
+                        })
+            except Exception as e:
+                logger.debug(f"概念 {concept_code} 详情获取失败: {e}")
+        try:
+            _ecm.cache_concept_data(concept_list)
+        except Exception as e:
+            logger.warning(f"概念列表缓存失败: {e}")
+        if detail_records:
+            _ecm.cache_concept_data(pd.DataFrame(detail_records))
+        total = len(concept_list) + len(detail_records)
+        logger.info(f"概念板块同步完成(Tushare): {len(concept_list)} 个概念, {len(detail_records)} 条成分股映射")
+        return total
+
+    # 降级：AKShare 概念板块
+    logger.info("Tushare concept() 返回空，切换 AKShare 降级...")
+    try:
+        import akshare as ak
+        board_df = ak.stock_board_concept_name_em()
+        if board_df is None or board_df.empty:
+            raise ValueError("AKShare 返回空")
+        # AKShare 列名: '板块名称', '成分股数量', ...
+        concept_records = []
+        detail_records = []
+        concept_count = 0
+        code_idx = 0
+        for _, row in board_df.iterrows():
+            name = row.get('板块名称', '')
+            if not name:
+                continue
+            code = f"AK_CONCEPT_{code_idx}"
+            code_idx += 1
+            concept_count += 1
+            concept_records.append({
+                'ts_code': code,
+                'concept_name': name,
+                'concept_code': code,
+            })
+            # 只取前 50 个概念获取成分股（避免 AKShare 限流）
+            if concept_count <= 50:
+                try:
+                    hist = ak.stock_board_concept_hist_em(symbol=name)
+                    if hist is not None and not hist.empty and '代码' in hist.columns:
+                        for _, h in hist.iterrows():
+                            detail_records.append({
+                                'ts_code': str(h['代码']) + '.SH' if str(h['代码']).startswith('6') else str(h['代码']) + '.SZ',
+                                'concept_name': name,
+                                'concept_code': code,
+                            })
+                except Exception as e:
+                    logger.debug(f"AKShare 概念 {name} 成分股获取失败: {e}")
+                    continue
+        if concept_records:
+            _ecm.cache_concept_data(pd.DataFrame(concept_records))
+        if detail_records:
+            _ecm.cache_concept_data(pd.DataFrame(detail_records))
+        total = concept_count + len(detail_records)
+        logger.info(f"概念板块同步完成(AKShare): {concept_count} 个概念, {len(detail_records)} 条成分股映射")
+        return total
+    except Exception as e:
+        logger.warning(f"AKShare 概念板块降级失败: {e}")
+        # 最后降级：使用 stock_basic 行业分类替代概念数据
+        logger.info("最后降级：使用 stock_basic 行业分类...")
+        try:
+            stock_df = pro.stock_basic(fields='ts_code,name,industry,area')
+            if stock_df is not None and not stock_df.empty and 'industry' in stock_df.columns:
+                industry_records = []
+                for _, row in stock_df.iterrows():
+                    ind = row.get('industry', '')
+                    ts_code = row.get('ts_code', '')
+                    if ind and ts_code:
+                        industry_records.append({
+                            'ts_code': ts_code,
+                            'concept_name': ind,
+                            'concept_code': f"INDUSTRY_{ind}",
+                        })
+                if industry_records:
+                    _ecm.cache_concept_data(pd.DataFrame(industry_records))
+                    logger.info(f"行业分类替代概念数据: {len(industry_records)} 条, {stock_df['industry'].nunique()} 个行业")
+                    return len(industry_records)
+        except Exception as e2:
+            logger.warning(f"stock_basic 行业降级也失败: {e2}")
+        return 0
 
 
 def _batch_index_member() -> int:
-    """指数成分股 — 对主要指数逐一查询"""
+    """指数成分股 — 对主要指数逐一查询（Tushare + AKShare 降级）"""
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
     total = 0
     main_indices = ['000300.SH', '000016.SH', '000905.SH', '399006.SZ']
+    tushare_failed = []
     for code in main_indices:
         try:
             raw = pro.index_member(ts_code=code)
@@ -263,8 +341,57 @@ def _batch_index_member() -> int:
                     df['in_date'] = pd.to_datetime(df['in_date']).dt.date
                 _ecm.cache_index_member_data(df)
                 total += len(df)
+            else:
+                tushare_failed.append(code)
         except Exception as e:
-            logger.warning(f"指数 {code} 成分股同步失败: {e}")
+            logger.warning(f"Tushare 指数 {code} 成分股同步失败: {e}")
+            tushare_failed.append(code)
+
+    # 对 Tushare 失败的指数，用 AKShare 降级
+    if tushare_failed:
+        logger.info(f"Tushare index_member 返回空，切换 AKShare 降级: {tushare_failed}")
+        try:
+            import akshare as ak
+            akshare_index_map = {
+                '000300.SH': '000300', '000016.SH': '000016',
+                '000905.SH': '000905', '399006.SZ': '399006',
+            }
+            for code in tushare_failed:
+                try:
+                    ak_code = akshare_index_map.get(code, code.replace('.SH', '').replace('.SZ', ''))
+                    raw_df = ak.index_stock_cons(symbol=ak_code)
+                    if raw_df is not None and not raw_df.empty:
+                        # 映射AKShare中文列名到标准列名
+                        ak_df = pd.DataFrame()
+                        ak_df['index_code'] = code
+                        # 品种代码 → ts_code（补全后缀）
+                        if '品种代码' in raw_df.columns:
+                            ak_df['ts_code'] = raw_df['品种代码'].apply(
+                                lambda x: str(x) + '.SH' if str(x).startswith('6') else str(x) + '.SZ'
+                            )
+                        elif 'stock_code' in raw_df.columns:
+                            ak_df['ts_code'] = raw_df['stock_code']
+                        # 品种名称 → coname
+                        if '品种名称' in raw_df.columns:
+                            ak_df['coname'] = raw_df['品种名称']
+                        elif 'name' in raw_df.columns:
+                            ak_df['coname'] = raw_df['name']
+                        elif 'stock_name' in raw_df.columns:
+                            ak_df['coname'] = raw_df['stock_name']
+                        # 纳入日期 → in_date
+                        if '纳入日期' in raw_df.columns:
+                            ak_df['in_date'] = raw_df['纳入日期']
+                        if 'in_date' in ak_df.columns:
+                            ak_df['in_date'] = pd.to_datetime(ak_df['in_date']).dt.date
+                        _ecm.cache_index_member_data(ak_df)
+                        ak_total = len(ak_df)
+                        total += ak_total
+                        logger.info(f"AKShare 指数 {code} 成分股: {ak_total} 条")
+                except Exception as e:
+                    logger.warning(f"AKShare 指数 {code} 成分股获取失败: {e}")
+        except Exception as e:
+            logger.warning(f"AKShare index_stock_cons 降级失败: {e}")
+
     return total
 
 
@@ -273,12 +400,13 @@ def _batch_win_rate() -> int:
     _ensure_pd()
     try:
         from app.data.precompute_indicator_manager import PrecomputeIndicatorManager
-        manager = PrecomputeIndicatorManager()
-        manager.compute_win_rates()
-        win_df = manager.get_win_rates()
+        manager = PrecomputeIndicatorManager(_ecm)
+        win_df = manager.compute_win_rates()
         if win_df is not None and not win_df.empty:
             _ecm.cache_win_rates(win_df)
             return len(win_df)
+        else:
+            logger.info("胜率计算: 无足够历史信号")
     except Exception as e:
         logger.warning(f"胜率计算失败: {e}")
     return 0
@@ -601,8 +729,109 @@ def run_daily_sync():
     logger.info("=== 日终同步完成 ===")
 
 
+def _write_factor_signals(codes):
+    """兜底写入：对无法运行完整策略信号的股票，写入基于因子的简化信号"""
+    _ensure_pd()
+    today_fmt = datetime.now().strftime('%Y-%m-%d')
+    try:
+        from app.data.factor_precompute import FactorPrecomputeManager
+        fpm = FactorPrecomputeManager(_ecm)
+        for ts_code in codes[:200]:  # 限200只避免过长
+            try:
+                df = _ecm.get_cached_daily(ts_code)
+                if df is None or len(df) < 30:
+                    continue
+                closes = df['close'].values
+                if len(closes) < 20:
+                    continue
+                # 简单动量+波动率评分
+                mom = (closes[-1] / closes[-21] - 1) * 100 if len(closes) >= 21 else 0
+                vol = float(df['close'].std()) / max(float(df['close'].mean()), 1e-9) if len(df) > 0 else 0.5
+                score = max(0.0, min(1.0, (mom + 5) / 20 + (1 - vol)))
+                signal = 'BUY' if score >= 0.6 else ('WATCH' if score >= 0.4 else 'NEUTRAL')
+                signals = [{
+                    'signal_date': today_fmt,
+                    'strategy_name': '因子评分系统',
+                    'confidence': round(score, 2),
+                    'signal': signal,
+                }]
+                _ecm.cache_strategy_signals(ts_code, signals)
+            except Exception:
+                continue
+        logger.info(f"因子信号兜底写入完成（{len(codes[:200])} 只）")
+    except Exception as e:
+        logger.warning(f"因子信号兜底写入失败: {e}")
+
+def _precompute_preset_combos(codes):
+    """预计算 PRESET_COMBOS 因子值并写入 factor_cache"""
+    _ensure_pd()
+    try:
+        from app.routes.factors import PRESET_COMBOS
+        from app.engine.framework.screener_strategy_integration import _FACTOR_COMPUTERS
+        from app.data.factor_precompute import FactorPrecomputeManager
+    except ImportError as e:
+        logger.warning(f"PRESET_COMBOS/因子模块导入失败，跳过因子预计算: {e}")
+        return
+
+    # 收集所有唯一的因子名（去重）
+    all_factor_names = set()
+    for combo in PRESET_COMBOS:
+        for f in combo.get('factors', []):
+            fname = f.get('n', '')
+            if fname and fname not in _FACTOR_COMPUTERS:
+                continue  # 未注册的因子跳过（如 Fama-French 等尚未实现的）
+            all_factor_names.add(fname)
+
+    if not all_factor_names:
+        logger.info("PRESET_COMBOS 因子预计算: 无已注册因子")
+        return
+
+    logger.info(f"PRESET_COMBOS 因子预计算: {len(all_factor_names)} 个因子, {len(codes)} 只股票")
+
+    from app.data import DataManager
+    dm = DataManager()
+    fpm = FactorPrecomputeManager(_ecm)
+
+    precomputed = 0
+    for code in codes:
+        try:
+            df = _ecm.get_cached_daily(code)
+            if df is None or len(df) < 30:
+                continue
+            closes = df['close'].values
+            volumes = df['vol'].values if 'vol' in df.columns else df['amount'].values
+
+            for fname in all_factor_names:
+                computer = _FACTOR_COMPUTERS.get(fname)
+                if computer is None:
+                    continue
+                try:
+                    val = computer(closes, volumes, code, dm)
+                except TypeError:
+                    val = computer(closes, volumes)
+                if val is not None:
+                    # 写入 factor_cache
+                    try:
+                        latest_date = str(df['trade_date'].iloc[-1]) if 'trade_date' in df.columns else \
+                                     str(df.index[-1]) if hasattr(df.index, 'format') else ''
+                        if latest_date:
+                            fpm._bulk_insert_factors([{
+                                'ts_code': code,
+                                'trade_date': latest_date,
+                                'factor_name': fname,
+                                'value': float(val),
+                                'cached_at': datetime.now(),
+                            }])
+                    except Exception:
+                        pass
+            precomputed += 1
+        except Exception:
+            continue
+
+    logger.info(f"PRESET_COMBOS 因子预计算完成: {precomputed}/{len(codes)} 只")
+
 def _run_precompute():
-    """后台预计算指标（仅当日有日线数据的活跃股票）"""
+    """后台预计算指标（仅当日有日线数据的活跃股票，非交易日自动回退到最近交易日）"""
     _ensure_pd()
     logger.info("指标预计算开始...")
     today_fmt = datetime.now().strftime('%Y-%m-%d')
@@ -611,8 +840,20 @@ def _run_precompute():
         [today_fmt]
     ).fetchall()
     if not codes:
-        logger.info(" 今日无日线数据，跳过预计算")
-        return
+        # 非交易日无数据，用最近交易日
+        row = _ecm.conn.execute(
+            "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+        ).fetchone()
+        if row:
+            today_fmt = row[0]
+            codes = _ecm.conn.execute(
+                "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?",
+                [today_fmt]
+            ).fetchall()
+            logger.info(f" 今日无数据，回退到最近交易日: {today_fmt}")
+        else:
+            logger.info(" 数据库无日线数据，跳过预计算")
+            return
     codes = [r[0] for r in codes]
     logger.info(f" 活跃股票: {len(codes)} 只")
     from app.data.precompute_indicator_manager import PrecomputeIndicatorManager
@@ -633,17 +874,34 @@ def _run_precompute():
         from app.services.signal_computation_service import SignalComputationService
         scs = SignalComputationService()
         count = 0
+        error_logged = 0
         for ts_code in codes:
             try:
                 signals = scs.compute_for_stock(ts_code)
                 if signals:
                     _ecm.cache_strategy_signals(ts_code, signals)
                     count += 1
-            except Exception:
+                elif count == 0 and error_logged < 3:
+                    logger.debug(f"策略信号预计算: {ts_code} 返回空信号")
+                    error_logged += 1
+            except Exception as e:
+                if error_logged < 3:
+                    logger.warning(f"策略信号预计算失败 [{ts_code}]: {e}")
+                    error_logged += 1
                 continue
         logger.info(f"策略信号预计算完成: {count}/{len(codes)} 只")
+        # 如果预计算全部失败，尝试最小化写入：写入因子信号
+        if count == 0 and codes:
+            logger.info("策略信号全部失败，回退到因子信号写入...")
+            _write_factor_signals(codes)
     except Exception as e:
-        logger.warning(f"策略信号预计算失败: {e}")
+        logger.warning(f"策略信号预计算整体失败: {e}")
+
+    # ── 3. PRESET_COMBOS 因子值预计算（写入 factor_cache） ──
+    try:
+        _precompute_preset_combos(codes)
+    except Exception as e:
+        logger.warning(f"PRESET_COMBOS 因子预计算失败: {e}")
 
 
 def _run_financial_sync():

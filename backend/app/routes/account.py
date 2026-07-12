@@ -5,6 +5,8 @@
   Phase 0: trades CRUD/import/match | positions | summary | equity-curve | performance
   Phase 1: review(6D) | periodic-review | review-link | match-review
   D7: POST /trades/{id}/save-report | D8: GET/POST /config | D10: GET/POST /funds
+
+DEPRECATED: /api/v1/account will be removed in future; use /api/v3/account
 """
 import logging
 from datetime import date, datetime, timedelta
@@ -507,3 +509,32 @@ def archive_periodic_report():
     rgen = ReportGenerator()
     fpath = rgen.save_report(content, f'{title}.md')
     return jsonify({'success': True, 'data': {'filepath': fpath}})
+
+
+# ═══════════════════════════════════════════════
+# v3 Blueprint (primary version)
+# ═══════════════════════════════════════════════
+
+account_v3_bp = Blueprint('account_v3', __name__, url_prefix='/api/v3/account')
+
+account_v3_bp.add_url_rule('/trades', view_func=list_trades, methods=['GET'])
+account_v3_bp.add_url_rule('/trades', view_func=create_trade, methods=['POST'])
+account_v3_bp.add_url_rule('/trades/<int:trade_id>', view_func=update_trade, methods=['PUT'])
+account_v3_bp.add_url_rule('/trades/<int:trade_id>', view_func=delete_trade, methods=['DELETE'])
+account_v3_bp.add_url_rule('/trades/import', view_func=import_trades, methods=['POST'])
+account_v3_bp.add_url_rule('/trades/match', view_func=match_trades, methods=['POST'])
+account_v3_bp.add_url_rule('/positions', view_func=get_positions, methods=['GET'])
+account_v3_bp.add_url_rule('/summary', view_func=get_summary, methods=['GET'])
+account_v3_bp.add_url_rule('/equity-curve', view_func=get_equity_curve, methods=['GET'])
+account_v3_bp.add_url_rule('/performance', view_func=get_performance, methods=['GET'])
+account_v3_bp.add_url_rule('/review', view_func=run_review, methods=['POST'])
+account_v3_bp.add_url_rule('/review/export', view_func=export_review, methods=['POST'])
+account_v3_bp.add_url_rule('/periodic-review', view_func=periodic_review, methods=['POST'])
+account_v3_bp.add_url_rule('/trades/<int:trade_id>/review-link', view_func=review_link_candidates, methods=['GET'])
+account_v3_bp.add_url_rule('/trades/<int:trade_id>/match-review', view_func=match_trade_to_review, methods=['POST'])
+account_v3_bp.add_url_rule('/virtual-reviews', view_func=get_virtual_reviews, methods=['GET'])
+account_v3_bp.add_url_rule('/funds', view_func=list_fund_changes, methods=['GET'])
+account_v3_bp.add_url_rule('/funds', view_func=add_fund_change, methods=['POST'])
+account_v3_bp.add_url_rule('/config', view_func=load_config, methods=['GET'])
+account_v3_bp.add_url_rule('/config', view_func=save_config, methods=['POST'])
+account_v3_bp.add_url_rule('/archive-report', view_func=archive_periodic_report, methods=['POST'])

@@ -273,8 +273,33 @@ class SignalComputationService:
         except Exception as e:
             logger.debug(f"{ts_code} Vibe 策略跳过: {e}")
 
-        # 持久化到数据库
-        self._persist_signals(ts_code, signals)
+        # ── 新闻情绪修正因子（C2） ──
+        try:
+            from app.data.news_provider import NewsProvider as NP
+            np_provider = NP()
+            news_items = np_provider.get_news(ts_code, days_back=3, max_count=5)
+            if news_items:
+                sentiments = [n.sentiment for n in news_items if n.sentiment is not None]
+                if sentiments:
+                    avg_sentiment = sum(sentiments) / len(sentiments)
+                    # avg_sentiment: -1.0 ~ 1.0, 钳制到 [-0.15, 0.15] 避免噪声放大
+                    clipped = max(-0.15, min(0.15, avg_sentiment))
+                    modifier = 1.0 + (clipped * 0.33)  # ±5% 封顶
+                    for sig in signals:
+                        sig['confidence'] = min(1.0, sig.get('confidence', 0.5) * modifier)
+                        label = '正面' if clipped > 0 else ('负面' if clipped < 0 else '中性')
+                        sig['evidence'] = sig.get('evidence', []) + [
+                            f"新闻情绪: {label} (修正{modifier:.2f}x, {len(sentiments)}条)"
+                        ]
+                    logger.debug(f"{ts_code} 新闻情绪修正: avg={avg_sentiment:.3f} -> modifier={modifier:.3f}")
+        except Exception as e:
+            logger.debug(f"{ts_code} 新闻情绪修正跳过: {e}")
+
+        # 持久化到数据库（非关键：daemon 环境无 Flask 上下文时会失败，不影响信号返回）
+        try:
+            self._persist_signals(ts_code, signals)
+        except Exception as e:
+            logger.debug(f"{ts_code}: 信号持久化到数据库跳过 (非关键): {e}")
 
         # 记录数据可用性（供前端展示）
         self.last_data_availability = {

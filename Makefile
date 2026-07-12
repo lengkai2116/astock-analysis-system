@@ -113,17 +113,21 @@ help:
 
 # ============ 代码质量 & CI ============
 
+PYTHON = backend/.venv/bin/python
+RUFF = backend/.venv/bin/ruff
+MYPY = backend/.venv/bin/mypy
+
 ## Python 代码检查
 lint:
-	cd backend && ruff check app/ tests/
+	cd backend && $(RUFF) check app/ tests/
 
 ## Python 类型检查
 typecheck:
-	cd backend && mypy app/
+	cd backend && $(MYPY) app/
 
 ## 运行后端测试
 test:
-	cd backend && python -m pytest tests/ -v
+	cd backend && $(PYTHON) -m pytest tests/ -v
 
 ## 运行所有质量检查
 check: lint typecheck test

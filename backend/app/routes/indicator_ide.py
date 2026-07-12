@@ -1,6 +1,7 @@
 """
 "指标 IDE API 路由
 提供指标合约解析、质量检查、沙箱运行等功能"
+DEPRECATED: /api/v2/indicator will be removed in future; use /api/v3/indicator
 """
 from app.utils.error_handlers import handle_exceptions
 from flask import Blueprint, request, jsonify
@@ -184,3 +185,15 @@ def _get_stock_data(ts_code: str, start_date: str = None, end_date: str = None) 
             'vol': np.random.uniform(1000000, 10000000, 100),
             'amount': np.random.uniform(10000000, 100000000, 100)
         })
+
+
+# ═══════════════════════════════════════════════
+# v3 Blueprint (primary version)
+# ═══════════════════════════════════════════════
+
+indicator_ide_v3_bp = Blueprint('indicator_ide_v3', __name__, url_prefix='/api/v3/indicator')
+
+indicator_ide_v3_bp.add_url_rule('/parse', view_func=parse_indicator, methods=['POST'])
+indicator_ide_v3_bp.add_url_rule('/check', view_func=check_indicator, methods=['POST'])
+indicator_ide_v3_bp.add_url_rule('/execute', view_func=execute_indicator, methods=['POST'])
+indicator_ide_v3_bp.add_url_rule('/validate', view_func=validate_indicator, methods=['POST'])

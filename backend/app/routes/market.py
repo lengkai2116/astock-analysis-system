@@ -36,7 +36,7 @@ def _sf(val, default=None):
         return default
 
 @market_bp.route('/api/v3/stocks', methods=['GET'])
-@market_bp.route('/api/v1/stocks', methods=['GET'])
+@market_bp.route('/api/v1/stocks', methods=['GET'])  # DEPRECATED: use /api/v3/stocks
 @handle_exceptions
 def get_stocks():
     page = request.args.get('page', 1, type=int)
@@ -48,7 +48,7 @@ def get_stocks():
     return jsonify(result)
 
 @market_bp.route('/api/v3/stocks/<ts_code>', methods=['GET'])
-@market_bp.route('/api/v1/stocks/<ts_code>', methods=['GET'])
+@market_bp.route('/api/v1/stocks/<ts_code>', methods=['GET'])  # DEPRECATED: use /api/v3/stocks/<ts_code>
 @handle_exceptions
 def get_stock_detail(ts_code):
     stock = market_service.get_stock_detail(ts_code)
@@ -57,7 +57,7 @@ def get_stock_detail(ts_code):
     return jsonify({'success': True, 'data': stock})
 
 @market_bp.route('/api/v3/stocks/<ts_code>/daily', methods=['GET'])
-@market_bp.route('/api/v1/stocks/<ts_code>/daily', methods=['GET'])
+@market_bp.route('/api/v1/stocks/<ts_code>/daily', methods=['GET'])  # DEPRECATED: use /api/v3/stocks/<ts_code>/daily
 @handle_exceptions
 def get_daily_data(ts_code):
     start_date = request.args.get('start_date')
@@ -67,35 +67,35 @@ def get_daily_data(ts_code):
     return jsonify({'success': True, 'data': data})
 
 @market_bp.route('/api/v3/stocks/sync', methods=['POST'])
-@market_bp.route('/api/v1/stocks/sync', methods=['POST'])
+@market_bp.route('/api/v1/stocks/sync', methods=['POST'])  # DEPRECATED: use /api/v3/stocks/sync
 @handle_exceptions
 def sync_stocks():
     result = market_service.sync_stock_data()
     return jsonify(result)
 
 @market_bp.route('/api/v3/stocks/<ts_code>/sync', methods=['POST'])
-@market_bp.route('/api/v1/stocks/<ts_code>/sync', methods=['POST'])
+@market_bp.route('/api/v1/stocks/<ts_code>/sync', methods=['POST'])  # DEPRECATED: use /api/v3/stocks/<ts_code>/sync
 @handle_exceptions
 def sync_stock_daily(ts_code):
     result = market_service.sync_daily_data(ts_code)
     return jsonify(result)
 
 @market_bp.route('/api/v3/market/index', methods=['GET'])
-@market_bp.route('/api/v1/market/index', methods=['GET'])
+@market_bp.route('/api/v1/market/index', methods=['GET'])  # DEPRECATED: use /api/v3/market/index
 @handle_exceptions
 def get_index_data():
     indices = market_service.get_index_data()
     return jsonify({'success': True, 'data': indices})
 
 @market_bp.route('/api/v3/market/industries', methods=['GET'])
-@market_bp.route('/api/v1/market/industries', methods=['GET'])
+@market_bp.route('/api/v1/market/industries', methods=['GET'])  # DEPRECATED: use /api/v3/market/industries
 @handle_exceptions
 def get_industries():
     industries = market_service.get_industries()
     return jsonify({'success': True, 'data': industries})
 
 @market_bp.route('/api/v3/market/markets', methods=['GET'])
-@market_bp.route('/api/v1/market/markets', methods=['GET'])
+@market_bp.route('/api/v1/market/markets', methods=['GET'])  # DEPRECATED: use /api/v3/market/markets
 @handle_exceptions
 def get_markets():
     markets = market_service.get_markets()
@@ -418,7 +418,7 @@ def get_market_overview():
     return jsonify({'success': True, 'data': data})
 
 
-@market_bp.route('/api/v1/market/overview', methods=['GET'])
+@market_bp.route('/api/v1/market/overview', methods=['GET'])  # DEPRECATED: use /api/v3/market/overview
 def get_market_overview_v1():
     return get_market_overview()
 

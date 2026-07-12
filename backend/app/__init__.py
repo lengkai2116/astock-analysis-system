@@ -170,14 +170,17 @@ def create_app():
     from app.routes.ai_analysis import ai_analysis_bp
     from app.routes.factors import factors_bp
     from app.routes.strategy import strategy_bp
+    from app.routes.strategy import strategy_v3_bp
     from app.routes.backtest import backtest_bp
     from app.routes.indicator_ide import indicator_ide_bp
+    from app.routes.indicator_ide import indicator_ide_v3_bp
     from app.routes.reports import reports_bp
     from app.routes.screener import screener_bp
     from app.routes.strategy_templates import strategy_templates_bp
     from app.routes.qmt import qmt_bp
     from app.routes.sandbox import sandbox_bp, sandbox_v3_bp
     from app.routes.account import account_bp
+    from app.routes.account import account_v3_bp
     from app.auth import auth_bp
     from app.routes.minute_data import minute_data_bp
     from app.routes.playback import playback_bp
@@ -204,8 +207,10 @@ def create_app():
     app.register_blueprint(ai_analysis_bp)
     app.register_blueprint(factors_bp)
     app.register_blueprint(strategy_bp)
+    app.register_blueprint(strategy_v3_bp)
     app.register_blueprint(backtest_bp)
     app.register_blueprint(indicator_ide_bp)
+    app.register_blueprint(indicator_ide_v3_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(screener_bp)
     app.register_blueprint(strategy_templates_bp)
@@ -213,6 +218,7 @@ def create_app():
     app.register_blueprint(sandbox_v3_bp)
     app.register_blueprint(qmt_bp)
     app.register_blueprint(account_bp)
+    app.register_blueprint(account_v3_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(minute_data_bp)
     app.register_blueprint(playback_bp)

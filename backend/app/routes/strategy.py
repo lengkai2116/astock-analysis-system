@@ -1,6 +1,7 @@
 """
 "策略系统 API 路由
 提供策略输出、模板管理、信号计算等功能"
+DEPRECATED: /api/v2/strategy will be removed in future; use /api/v3/strategy
 """
 from flask import Blueprint, request, jsonify
 from app import db
@@ -479,3 +480,24 @@ def generate_strategy():
         'success': True,
         'data': result
     })
+
+
+# ═══════════════════════════════════════════════
+# v3 Blueprint (primary version)
+# ═══════════════════════════════════════════════
+
+strategy_v3_bp = Blueprint('strategy_v3', __name__, url_prefix='/api/v3/strategy')
+
+strategy_v3_bp.add_url_rule('/outputs', view_func=get_strategy_outputs, methods=['GET'])
+strategy_v3_bp.add_url_rule('/outputs', view_func=create_strategy_output, methods=['POST'])
+strategy_v3_bp.add_url_rule('/outputs/<int:output_id>', view_func=delete_strategy_output, methods=['DELETE'])
+strategy_v3_bp.add_url_rule('/outputs/latest', view_func=get_latest_signal, methods=['GET'])
+strategy_v3_bp.add_url_rule('/match-check', view_func=signal_match_check, methods=['POST'])
+strategy_v3_bp.add_url_rule('/templates', view_func=get_templates, methods=['GET'])
+strategy_v3_bp.add_url_rule('/templates', view_func=create_template, methods=['POST'])
+strategy_v3_bp.add_url_rule('/templates/<int:template_id>', view_func=get_template, methods=['GET'])
+strategy_v3_bp.add_url_rule('/templates/<int:template_id>', view_func=update_template, methods=['PUT'])
+strategy_v3_bp.add_url_rule('/templates/<int:template_id>', view_func=delete_template, methods=['DELETE'])
+strategy_v3_bp.add_url_rule('/templates/<int:template_id>/use', view_func=use_template, methods=['POST'])
+strategy_v3_bp.add_url_rule('/templates/<int:template_id>/clone', view_func=clone_template, methods=['POST'])
+strategy_v3_bp.add_url_rule('/generate', view_func=generate_strategy, methods=['POST'])

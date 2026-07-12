@@ -20,21 +20,38 @@ class FactorCalculator:
     def __init__(self):
         self.registry = get_factor_registry()
     
-    def calculate_single_factor(self, data: pd.DataFrame, 
-                                factor_name: str, 
+    def calculate_single_factor(self, data: pd.DataFrame,
+                                factor_name: str,
+                                ts_code: str = None,
                                 **kwargs) -> Optional[pd.Series]:
         """
         计算单个因子
+        优先读取 factor_cache（需提供 ts_code），无缓存时实时计算
         """
+        # 缓存优先
+        if ts_code is not None:
+            try:
+                from app.data import get_data_manager
+                dm = get_data_manager()
+                cached = dm.get_cached_factors(ts_code, [factor_name])
+                if cached is not None and not cached.empty:
+                    cached = cached[cached['factor_name'] == factor_name]
+                    if not cached.empty:
+                        cached = cached.sort_values('trade_date')
+                        result = cached.set_index('trade_date')['value']
+                        logger.debug(f"factor_cache 命中: {factor_name}")
+                        return result
+            except Exception as e:
+                logger.debug(f"factor_cache 读取失败({factor_name}): {e}")
+
+        # 实时计算
         factor = self.registry.get_factor(factor_name, **kwargs)
         if factor is None:
             logger.error(f"未找到因子: {factor_name}")
             return None
-        
         if not factor.check_data(data):
             logger.error(f"数据不满足因子 {factor_name} 的要求")
             return None
-        
         try:
             result = factor.calculate(data)
             return result

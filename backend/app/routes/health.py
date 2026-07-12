@@ -195,7 +195,7 @@ def _get_cache_status():
 
 
 @health_bp.route('/api/v3/health', methods=['GET'])
-@health_bp.route('/api/v1/health', methods=['GET'])
+@health_bp.route('/api/v1/health', methods=['GET'])  # DEPRECATED: use /api/v3/health
 def health_check():
     """综合健康检查 — 返回服务状态、系统信息、数据源、缓存详情"""
     from app import db
@@ -275,7 +275,7 @@ def health_check():
 
 
 @health_bp.route('/api/v3/health/database', methods=['GET'])
-@health_bp.route('/api/v1/health/database', methods=['GET'])
+@health_bp.route('/api/v1/health/database', methods=['GET'])  # DEPRECATED: use /api/v3/health/database
 def database_check():
     """数据库专项健康检查"""
     from app import db

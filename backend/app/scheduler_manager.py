@@ -442,7 +442,7 @@ class SchedulerManager:
                 # Stock 同步也后台执行
                 threading.Thread(target=self._run_stock_sync_if_needed, daemon=True).start()
                 return
-            elif max_date < today:
+            elif date.fromisoformat(str(max_date)) < today:
                 logger.info(f"=== 启动补采: 数据最新 {max_date}, 早于今日 {today}, 后台增量同步 ===")
                 import threading
                 threading.Thread(target=self.run_daily_sync, daemon=True).start()
@@ -527,7 +527,11 @@ class SchedulerManager:
                 if pd.isna(last_date):
                     cnt = dm.sync_daily_data(ts_code, use_cache=False)
                 else:
-                    start_str = last_date.strftime('%Y%m%d') if hasattr(last_date, 'strftime') else str(last_date).replace('-', '')
+                    # SQLite 可能返回 date 对象或字符串，统一处理
+                    if hasattr(last_date, 'strftime'):
+                        start_str = last_date.strftime('%Y%m%d')
+                    else:
+                        start_str = str(last_date).replace('-', '').replace(' ', '')[:8]
                     cnt = dm.sync_daily_data(ts_code, use_cache=False, start_date=start_str)
                 if cnt > 0:
                     replenished += 1

@@ -22,6 +22,7 @@ from app.services.signal_computation_service import SignalComputationService
 from app.services.status_output_service import StatusOutputService
 from app.services.ai_context_builder import WikiConceptMatcher
 from app.engine.framework.unified_investment_decision_framework import UIDFEngine
+from app.services.ai_consensus_service import AiConsensusEngine
 
 ai_analysis_bp = Blueprint('ai_analysis', __name__)
 
@@ -383,3 +384,34 @@ def llm_wiki_search():
     except Exception as e:
         logger.debug(f"LLM Wiki查询失败: {e}")
         return jsonify({'success': True, 'data': {'results': [], 'message': 'LLM Wiki服务不可用'}})
+
+
+@handle_exceptions
+@ai_analysis_bp.route('/api/v3/ai/consensus', methods=['POST'])
+def ai_consensus():
+    """A11: 6角色研判共识分析 — 全面聚合+辩论检测
+    请求体: {analysis_id}
+    返回: 共识评分 + 辩论分析 + 综合建议
+    """
+    data = request.get_json(silent=True) or {}
+    analysis_id = data.get('analysis_id', '')
+
+    if not analysis_id or analysis_id not in _analysis_store:
+        return jsonify({'success': False, 'error': 'analysis_id无效或不存在',
+                        'error_type': 'BadRequest'}), 400
+
+    state = _analysis_store.get(analysis_id, {})
+    role_results = state.get('roles', {})
+
+    engine = AiConsensusEngine()
+    result = engine.full_analysis(role_results)
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'analysis_id': analysis_id,
+            'ts_code': state.get('ts_code', ''),
+            'stock_name': state.get('stock_name', ''),
+            **result,
+        }
+    })

@@ -12,6 +12,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Tuple
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -156,7 +157,9 @@ def _compute_volume_price_score(vp_result: Dict, symbol: str = None, df: pd.Data
     dir_map = {'BUY': 7.0, 'BULLISH': 7.0, 'WATCH': 5.5, 'HOLD': 5.0,
                'NEUTRAL': 5.0, 'SELL': 3.0, 'BEARISH': 3.0}
     base = dir_map.get(director, 5.0)
-    score = base * confidence * 2
+    # score = base * confidence * 2  # 旧公式：confidence ∈ [0,1] 时分数过低
+    # 修正：confidence ∈ [0,1]，映射到 [0.5, 1.0] 系数，使分数在 base 附近合理波动
+    score = base * (0.5 + confidence * 0.5)
 
     # 阶段加分
     current_stage = stage.get('current_stage', '')
@@ -262,6 +265,11 @@ _FACTOR_COMPUTERS = {}
 def _register_factor(name, func):
     _FACTOR_COMPUTERS[name] = func
 
+# ECM 因子注册（需要 symbol + dm 参数）。_compute_factor_score 调用时传入这些参数
+def _register_ecm_factor(name, func):
+    """注册需要ECM数据源的因子，调用时传入 (c, v, symbol, dm)"""
+    _FACTOR_COMPUTERS[name] = func
+
 def _f_momentum(closes, volumes, days=20):
     """动量因子：N日收益率 → 0-10"""
     if len(closes) < days + 1:
@@ -354,17 +362,463 @@ def _f_sentiment(closes, volumes):
     except Exception:
         return 5.0
 _register_factor('情绪因子', _f_sentiment)
-# ● 以下因子需要 ECM 数据支持，暂用简化计算
-# 20日换手率 — 需要 daily_basic_cache.turnover_rate
-# 市盈率倒数(EP) — 需要 daily_basic_cache.pe_ttm
-# ROE — 需要 fina_indicator_cache.roe
-# 股息率 — 需要 daily_basic_cache.dv_ratio
-# 营收增长率 — 需要 income_cache
-# 净利润增长率 — 需要 fina_indicator_cache
-# 大单净买入 — 需要 moneyflow_cache
-# 资金流向强度 — 需要 moneyflow_cache
-# 换手率变化 — 需要 daily_basic_cache
-# 资产负债率 — 需要 balancesheet_cache
+# ══════════════════════════════════════════════════════════════════
+# ECM 数据源因子（需要 symbol + dm 参数）
+# ══════════════════════════════════════════════════════════════════
+
+def _f_ep_ratio(closes, volumes, symbol, dm):
+    """市盈率倒数(EP): daily_basic_cache.pe_ttm → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        basic = dm.get_cached_daily_basic(symbol)
+        if basic is not None and not basic.empty and 'pe_ttm' in basic.columns:
+            pe = float(basic['pe_ttm'].dropna().iloc[-1])
+            if pe > 0 and pe < 1e5:
+                return max(0, min(10, (1/pe) * 100))
+    except Exception:
+        pass
+    return None
+
+def _f_roe(closes, volumes, symbol, dm):
+    """ROE: fina_indicator_cache.roe → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        fina = dm.get_cached_fina_indicator(symbol)
+        if fina is not None and not fina.empty and 'roe' in fina.columns:
+            roe = float(fina['roe'].dropna().iloc[-1])
+            # roe (%) 映射: 0%→3, 10%→5, 20%→7, 30%→9
+            return max(0, min(10, 3 + roe * 20))
+    except Exception:
+        pass
+    return None
+
+def _f_dividend(closes, volumes, symbol, dm):
+    """股息率: daily_basic_cache.dv_ratio → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        basic = dm.get_cached_daily_basic(symbol)
+        if basic is not None and not basic.empty and 'dv_ratio' in basic.columns:
+            dv = float(basic['dv_ratio'].dropna().iloc[-1])
+            return max(0, min(10, dv * 2))
+    except Exception:
+        pass
+    return None
+
+def _f_big_order(closes, volumes, symbol, dm):
+    """大单净买入: moneyflow_cache 5日累计大单净额 → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        mf = dm.get_cached_moneyflow(symbol)
+        if mf is not None and not mf.empty and 'net_lg_amount' in mf.columns:
+            net = mf['net_lg_amount'].dropna().tail(5).sum()
+            # 归一化: 取绝对值对数 + 正负号
+            if abs(net) > 0:
+                return max(0, min(10, 5 + (net / (abs(net) + 1e8)) * 5))
+    except Exception:
+        pass
+    return None
+
+def _f_moneyflow_strength(closes, volumes, symbol, dm):
+    """资金流向强度: moneyflow_cache 综合 → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        mf = dm.get_cached_moneyflow(symbol)
+        if mf is not None and not mf.empty:
+            cols = ['net_lg_amount', 'net_elg_amount']
+            cols = [c for c in cols if c in mf.columns]
+            if cols:
+                total_net = mf[cols].dropna().tail(5).sum().sum()
+                total_amount = (mf.get('buy_lg_amount', pd.Series([0]*len(mf))).fillna(0).tail(5).sum() +
+                                mf.get('sell_lg_amount', pd.Series([0]*len(mf))).fillna(0).tail(5).sum())
+                if total_amount > 0:
+                    ratio = total_net / total_amount
+                    return max(0, min(10, 5 + ratio * 20))
+    except Exception:
+        pass
+    return None
+
+def _f_turnover_change(closes, volumes, symbol, dm):
+    """换手率变化: daily_basic_cache.turnover_rate 环比 → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        basic = dm.get_cached_daily_basic(symbol)
+        if basic is not None and not basic.empty and 'turnover_rate' in basic.columns:
+            tr = basic['turnover_rate'].dropna().tail(10)
+            if len(tr) >= 5:
+                recent = tr.tail(5).mean()
+                prev = tr.head(5).mean()
+                if prev > 0:
+                    change = recent / prev
+                    # 换手率上升: >1 加分; 下降: <1 扣分
+                    return max(0, min(10, 5 + (change - 1) * 10))
+    except Exception:
+        pass
+    return None
+
+def _f_revenue_growth(closes, volumes, symbol, dm):
+    """营收增长率: income_cache 同比 → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        income = dm.get_cached_income(symbol) if hasattr(dm, 'get_cached_income') else None
+        if income is None or income.empty or 'revenue' not in income.columns:
+            return None
+        revenues = income['revenue'].dropna()
+        if len(revenues) >= 2:
+            # 最近两期同比
+            yoy = (revenues.iloc[-1] - revenues.iloc[-2]) / abs(revenues.iloc[-2]) if revenues.iloc[-2] != 0 else 0
+            return max(0, min(10, 5 + yoy * 20))
+    except Exception:
+        pass
+    return None
+
+def _f_profit_growth(closes, volumes, symbol, dm):
+    """净利润增长率: fina_indicator_cache 同比 → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        fina = dm.get_cached_fina_indicator(symbol)
+        if fina is not None and not fina.empty:
+            # 取净利润增长率（如果直接有则用，否则计算）
+            if 'profit_ttm' in fina.columns:
+                profits = fina['profit_ttm'].dropna()
+                if len(profits) >= 2:
+                    yoy = (profits.iloc[-1] - profits.iloc[-2]) / abs(profits.iloc[-2]) if profits.iloc[-2] != 0 else 0
+                    return max(0, min(10, 5 + yoy * 10))
+    except Exception:
+        pass
+    return None
+
+def _f_debt_ratio(closes, volumes, symbol, dm):
+    """资产负债率: balancesheet_cache → 0-10（越低分越高）"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        bs = dm.get_cached_balancesheet(symbol) if hasattr(dm, 'get_cached_balancesheet') else None
+        if bs is None or bs.empty:
+            return None
+        if 'total_liab' in bs.columns and 'total_assets' in bs.columns:
+            liab = float(bs['total_liab'].dropna().iloc[-1])
+            assets = float(bs['total_assets'].dropna().iloc[-1])
+            if assets > 0:
+                ratio = liab / assets
+                # 资产负债率: 20%→8分, 50%→5分, 80%→2分
+                return max(0, min(10, 10 - ratio * 10))
+    except Exception:
+        pass
+    return None
+
+# ── 注册 ECM 因子 ──
+_register_ecm_factor('市盈率倒数(EP)', lambda c, v, s=None, d=None: _f_ep_ratio(c, v, s, d))
+_register_ecm_factor('ROE', lambda c, v, s=None, d=None: _f_roe(c, v, s, d))
+_register_ecm_factor('股息率', lambda c, v, s=None, d=None: _f_dividend(c, v, s, d))
+_register_ecm_factor('大单净买入', lambda c, v, s=None, d=None: _f_big_order(c, v, s, d))
+_register_ecm_factor('资金流向强度', lambda c, v, s=None, d=None: _f_moneyflow_strength(c, v, s, d))
+_register_ecm_factor('换手率变化', lambda c, v, s=None, d=None: _f_turnover_change(c, v, s, d))
+_register_ecm_factor('营收增长率', lambda c, v, s=None, d=None: _f_revenue_growth(c, v, s, d))
+_register_ecm_factor('净利润增长率', lambda c, v, s=None, d=None: _f_profit_growth(c, v, s, d))
+_register_ecm_factor('资产负债率', lambda c, v, s=None, d=None: _f_debt_ratio(c, v, s, d))
+
+# ══════════════════════════════════════════════════════════════════
+# Fama-French 五因子（横截面分组计算，需全市场数据）
+# ══════════════════════════════════════════════════════════════════
+
+_FF_CACHE = {}  # {date: {factor_name: {ts_code: score}}}
+
+def _refresh_ff_cache(dm, trade_date):
+    """刷新 Fama-French 横截面计算结果缓存"""
+    if not dm:
+        return
+    import numpy as np
+    cache_key = str(trade_date)
+    if cache_key in _FF_CACHE:
+        return
+    try:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        # 获取当日所有股票的基础数据
+        daily_df = ecm._query_df(
+            "SELECT ts_code, pct_chg, close FROM daily_cache WHERE trade_date=?",
+            [cache_key]
+        )
+        if daily_df is None or daily_df.empty:
+            return
+
+        basic_df = ecm._query_df(
+            "SELECT ts_code, circ_mv, pe_ttm FROM daily_basic_cache WHERE trade_date=?",
+            [cache_key]
+        )
+        # 获取财务数据（最新一期）
+        fina_df = ecm._query_df(
+            "SELECT ts_code, roe FROM fina_indicator_cache"
+        )
+        bs_df = ecm._query_df(
+            "SELECT ts_code, total_assets FROM balancesheet_cache"
+        )
+
+        # 合并数据
+        merged = daily_df.merge(basic_df, on='ts_code', how='left') if basic_df is not None else daily_df
+        if fina_df is not None and not fina_df.empty:
+            # 取每个股票最新的 ROE
+            fina_latest = fina_df.dropna(subset=['roe']).groupby('ts_code').last().reset_index()
+            merged = merged.merge(fina_latest[['ts_code', 'roe']], on='ts_code', how='left')
+        if bs_df is not None and not bs_df.empty:
+            bs_latest = bs_df.dropna(subset=['total_assets']).groupby('ts_code').last().reset_index()
+            merged = merged.merge(bs_latest[['ts_code', 'total_assets']], on='ts_code', how='left')
+
+        if merged.empty:
+            return
+
+        # 全市场平均收益 (Market Factor)
+        all_returns = merged['pct_chg'].dropna().values
+        if len(all_returns) == 0:
+            return
+        market_ret = float(np.mean(all_returns))
+
+        # Market Factor: 每只股票 = 全市场平均收益归一化到 0-10
+        market_scores = {}
+        # SMB/HML/RMW/CMA: 分组后每组内收益相对市场超额归一化
+        # 用 DataFrame 分组
+        result = {'市场因子': {}, '规模因子(SMB)': {}, '价值因子(HML)': {},
+                  '盈利因子(RMW)': {}, '投资因子(CMA)': {}}
+
+        # 市场因子：个股收益相对于市场的强弱
+        for _, row in merged.iterrows():
+            ts_code = row['ts_code']
+            ret = row.get('pct_chg', 0)
+            if pd.isna(ret):
+                continue
+            # 相对于市场平均，归一化到 0-10
+            rel = ret - market_ret
+            result['市场因子'][ts_code] = max(0, min(10, 5 + rel * 10))
+
+        # SMB: 按 circ_mv 分组（小盘/大盘）
+        merged_mv = merged[merged['circ_mv'].notna()].copy()
+        if len(merged_mv) >= 20:
+            merged_mv['mv_group'] = pd.qcut(merged_mv['circ_mv'], 4, labels=['small', 'mid_low', 'mid_high', 'big'],
+                                            duplicates='drop')
+            for _, row in merged_mv.iterrows():
+                ts_code = row['ts_code']
+                grp = row['mv_group']
+                ret = row.get('pct_chg', 0)
+                if pd.isna(ret):
+                    continue
+                if grp == 'small':
+                    # 小盘溢价 = 小盘收益 - 大盘收益
+                    big_ret = merged_mv[merged_mv['mv_group'] == 'big']['pct_chg'].mean()
+                    if pd.notna(big_ret):
+                        smb_val = ret - big_ret
+                        result['规模因子(SMB)'][ts_code] = max(0, min(10, 5 + smb_val * 10))
+                elif grp == 'big':
+                    small_ret = merged_mv[merged_mv['mv_group'] == 'small']['pct_chg'].mean()
+                    if pd.notna(small_ret):
+                        smb_val = small_ret - ret
+                        result['规模因子(SMB)'][ts_code] = max(0, min(10, 5 + smb_val * 10))
+
+        # HML: 按 pe_ttm 分组（高PE=成长，低PE=价值）
+        merged_pe = merged[merged['pe_ttm'].notna() & (merged['pe_ttm'] > 0) & (merged['pe_ttm'] < 1e4)].copy()
+        if len(merged_pe) >= 20:
+            merged_pe['pe_group'] = pd.qcut(merged_pe['pe_ttm'], 3, labels=['value', 'neutral', 'growth'],
+                                            duplicates='drop')
+            for _, row in merged_pe.iterrows():
+                ts_code = row['ts_code']
+                grp = row['pe_group']
+                ret = row.get('pct_chg', 0)
+                if pd.isna(ret):
+                    continue
+                if grp == 'value':
+                    # 价值溢价 = 价值股收益 - 成长股收益
+                    growth_ret = merged_pe[merged_pe['pe_group'] == 'growth']['pct_chg'].mean()
+                    if pd.notna(growth_ret):
+                        hml_val = ret - growth_ret
+                        result['价值因子(HML)'][ts_code] = max(0, min(10, 5 + hml_val * 10))
+                elif grp == 'growth':
+                    value_ret = merged_pe[merged_pe['pe_group'] == 'value']['pct_chg'].mean()
+                    if pd.notna(value_ret):
+                        hml_val = value_ret - ret
+                        result['价值因子(HML)'][ts_code] = max(0, min(10, 5 + hml_val * 10))
+                else:  # neutral
+                    result['价值因子(HML)'][ts_code] = 5.0
+
+        # RMW: 按 ROE 分组（高盈利/低盈利）
+        merged_roe = merged[merged['roe'].notna()].copy()
+        if len(merged_roe) >= 20:
+            merged_roe['roe_group'] = pd.qcut(merged_roe['roe'], 3, labels=['weak', 'neutral', 'robust'],
+                                              duplicates='drop')
+            for _, row in merged_roe.iterrows():
+                ts_code = row['ts_code']
+                grp = row['roe_group']
+                ret = row.get('pct_chg', 0)
+                if pd.isna(ret):
+                    continue
+                if grp == 'robust':
+                    weak_ret = merged_roe[merged_roe['roe_group'] == 'weak']['pct_chg'].mean()
+                    if pd.notna(weak_ret):
+                        rmw_val = ret - weak_ret
+                        result['盈利因子(RMW)'][ts_code] = max(0, min(10, 5 + rmw_val * 10))
+                elif grp == 'weak':
+                    robust_ret = merged_roe[merged_roe['roe_group'] == 'robust']['pct_chg'].mean()
+                    if pd.notna(robust_ret):
+                        rmw_val = robust_ret - ret
+                        result['盈利因子(RMW)'][ts_code] = max(0, min(10, 5 + rmw_val * 10))
+                else:  # neutral
+                    result['盈利因子(RMW)'][ts_code] = 5.0
+
+        # CMA: 按 total_assets 增长率分组
+        merged_cma = merged[merged['total_assets'].notna()].copy()
+        if len(merged_cma) >= 20:
+            merged_cma['asset_growth'] = merged_cma.groupby('ts_code')['total_assets'].pct_change()
+            merged_cma_valid = merged_cma[merged_cma['asset_growth'].notna()].copy()
+            if len(merged_cma_valid) >= 20:
+                merged_cma_valid['cma_group'] = pd.qcut(merged_cma_valid['asset_growth'], 3,
+                                                        labels=['conservative', 'neutral', 'aggressive'],
+                                                        duplicates='drop')
+                for _, row in merged_cma_valid.iterrows():
+                    ts_code = row['ts_code']
+                    grp = row['cma_group']
+                    ret = row.get('pct_chg', 0)
+                    if pd.isna(ret):
+                        continue
+                    if grp == 'conservative':
+                        agg_ret = merged_cma_valid[merged_cma_valid['cma_group'] == 'aggressive']['pct_chg'].mean()
+                        if pd.notna(agg_ret):
+                            cma_val = ret - agg_ret
+                            result['投资因子(CMA)'][ts_code] = max(0, min(10, 5 + cma_val * 10))
+                    elif grp == 'aggressive':
+                        cons_ret = merged_cma_valid[merged_cma_valid['cma_group'] == 'conservative']['pct_chg'].mean()
+                        if pd.notna(cons_ret):
+                            cma_val = cons_ret - ret
+                            result['投资因子(CMA)'][ts_code] = max(0, min(10, 5 + cma_val * 10))
+                    else:
+                        result['投资因子(CMA)'][ts_code] = 5.0
+
+        _FF_CACHE[cache_key] = result
+        logger.debug(f"Fama-French 横截面计算完成: {len(merged)} 只股票")
+    except Exception as e:
+        logger.debug(f"Fama-French 计算失败: {e}")
+
+def _f_market_factor(closes, volumes, symbol, dm):
+    """市场因子：全市场加权收益 → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        # 从 closes 的最后一根 K 线获取 trade_date
+        _refresh_ff_cache(dm, _get_latest_date(closes))
+        for cache_key in _FF_CACHE:
+            scores = _FF_CACHE[cache_key].get('市场因子', {})
+            if symbol in scores:
+                return scores[symbol]
+    except Exception:
+        pass
+    return None
+
+def _f_smb(closes, volumes, symbol, dm):
+    """规模因子(SMB): 小盘股相对大盘超额 → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        _refresh_ff_cache(dm, _get_latest_date(closes))
+        for cache_key in _FF_CACHE:
+            scores = _FF_CACHE[cache_key].get('规模因子(SMB)', {})
+            if symbol in scores:
+                return scores[symbol]
+    except Exception:
+        pass
+    return None
+
+def _f_hml(closes, volumes, symbol, dm):
+    """价值因子(HML): 低PE相对高PE超额 → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        _refresh_ff_cache(dm, _get_latest_date(closes))
+        for cache_key in _FF_CACHE:
+            scores = _FF_CACHE[cache_key].get('价值因子(HML)', {})
+            if symbol in scores:
+                return scores[symbol]
+    except Exception:
+        pass
+    return None
+
+def _f_rmw(closes, volumes, symbol, dm):
+    """盈利因子(RMW): 高ROE相对低ROE超额 → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        _refresh_ff_cache(dm, _get_latest_date(closes))
+        for cache_key in _FF_CACHE:
+            scores = _FF_CACHE[cache_key].get('盈利因子(RMW)', {})
+            if symbol in scores:
+                return scores[symbol]
+    except Exception:
+        pass
+    return None
+
+def _f_cma(closes, volumes, symbol, dm):
+    """投资因子(CMA): 低资产增长相对高资产增长超额 → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        _refresh_ff_cache(dm, _get_latest_date(closes))
+        for cache_key in _FF_CACHE:
+            scores = _FF_CACHE[cache_key].get('投资因子(CMA)', {})
+            if symbol in scores:
+                return scores[symbol]
+    except Exception:
+        pass
+    return None
+
+def _get_latest_date(closes):
+    """从 ndarray 推断最新日期（当前场景下返回 today 字符串）"""
+    from datetime import date
+    return str(date.today())
+
+# ── 注册 Fama-French 因子 ──
+_register_ecm_factor('市场因子', _f_market_factor)
+_register_ecm_factor('规模因子(SMB)', _f_smb)
+_register_ecm_factor('规模因子', _f_smb)  # 别名（用于 p4）
+_register_ecm_factor('价值因子(HML)', _f_hml)
+_register_ecm_factor('价值因子', _f_hml)  # 别名（用于 p4）
+_register_ecm_factor('盈利因子(RMW)', _f_rmw)
+_register_ecm_factor('投资因子(CMA)', _f_cma)
+_register_ecm_factor('投资因子', _f_cma)  # 别名（用于 p4）
+
+# 质量因子（基于 ROE + 低负债的综合评分）
+def _f_quality(closes, volumes, symbol, dm):
+    """质量因子: ROE高 + 负债低 → 0-10（综合指标）"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        roe_score = _f_roe(closes, volumes, symbol, dm)
+        debt_score = _f_debt_ratio(closes, volumes, symbol, dm)
+        if roe_score is not None and debt_score is not None:
+            return round((roe_score * 0.6 + debt_score * 0.4), 2)
+        return roe_score or debt_score or None
+    except Exception:
+        return None
+_register_ecm_factor('质量因子', _f_quality)
+
+# 成长因子（基于营收 + 利润增长的综合评分）
+def _f_growth(closes, volumes, symbol, dm):
+    """成长因子: 营收增长 + 利润增长 → 0-10"""
+    if dm is None or symbol is None:
+        return None
+    try:
+        rev_score = _f_revenue_growth(closes, volumes, symbol, dm)
+        profit_score = _f_profit_growth(closes, volumes, symbol, dm)
+        scores = [s for s in [rev_score, profit_score] if s is not None]
+        if scores:
+            return round(sum(scores) / len(scores), 2)
+    except Exception:
+        pass
+    return None
+_register_ecm_factor('成长因子', _f_growth)
 
 
 def _compute_factor_score(df, symbol=None, combo_ids=None, data_dict=None, dm=None):
@@ -419,7 +873,11 @@ def _compute_factor_score(df, symbol=None, combo_ids=None, data_dict=None, dm=No
             fweight = f.get('w', 0)
             computer = _FACTOR_COMPUTERS.get(fname)
             if computer:
-                val = computer(closes, volumes)
+                try:
+                    # ECM 因子需要 symbol+dm，普通因子不需要
+                    val = computer(closes, volumes, symbol, dm)
+                except TypeError:
+                    val = computer(closes, volumes)
                 if val is not None:
                     factor_vals.append(val * fweight)
                     total_weight += fweight

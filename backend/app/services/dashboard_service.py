@@ -50,7 +50,8 @@ class DashboardService:
     # 1. 指数行情总览（用于 market/overview 增强）
     # ──────────────────────────────────────────────
     def get_index_summary(self) -> Optional[Dict]:
-        """获取四大指数行情 + 迷你K线 + 总成交额（239号架构：盘中读 as_market_snapshot，盘后读 daily_cache）"""
+        """获取四大指数行情 + 迷你K线 + 总成交额
+        （239号架构：盘中读 as_market_snapshot，盘后读 daily_cache）"""
         indexes = []
         total_volume = 0
 
@@ -84,13 +85,21 @@ class DashboardService:
                 mini_kline = []
                 if hist_data and len(hist_data) > 0:
                     # hist_data 是旧→新排序
-                    latest_hist = hist_data[-1] if isinstance(hist_data[-1], dict) else hist_data.iloc[-1].to_dict()
-                    prev_close_val = float(latest_hist.get('pre_close', 0)) or float(hist_data[-2].get('close', 0)) if len(hist_data) > 1 else 0
+                    latest_hist = (
+                        hist_data[-1] if isinstance(hist_data[-1], dict)
+                        else hist_data.iloc[-1].to_dict()
+                    )
+                    prev_close_val = (
+                        float(latest_hist.get('pre_close', 0))
+                        or float(hist_data[-2].get('close', 0))
+                        if len(hist_data) > 1 else 0
+                    )
                     prev_close = prev_close_val
                     # 迷你K线（最近20交易日）
                     _sorted = hist_data if (
                         len(hist_data) > 1
-                        and hist_data[0].get('trade_date', '') <= hist_data[-1].get('trade_date', '')
+                        and hist_data[0].get('trade_date', '')
+                        <= hist_data[-1].get('trade_date', '')
                     ) else hist_data[::-1]
                     mini_kline = self._build_mini_kline(_sorted[-20:])
 
@@ -105,7 +114,10 @@ class DashboardService:
                         prev_close = price / (1 + change_pct / 100) if change_pct != -100 else price
                 elif prev_close is not None and hist_data:
                     # 没有实时数据，用历史最新日线
-                    latest_hist = hist_data[-1] if isinstance(hist_data[-1], dict) else hist_data.iloc[-1].to_dict()
+                    latest_hist = (
+                        hist_data[-1] if isinstance(hist_data[-1], dict)
+                        else hist_data.iloc[-1].to_dict()
+                    )
                     price = float(latest_hist.get('close', latest_hist.get('value', 0)))
                     change = price - prev_close
                     change_pct = (change / prev_close * 100) if prev_close > 0 else 0
@@ -242,7 +254,10 @@ class DashboardService:
                     'amount_per_exchange': exchange_data[dk]['amount_per_exchange'],
                     'pct_chg': exchange_data[dk].get('pct_chg', 0),
                 })
-            avg_amount = sum(d['total_amount'] for d in days_list) / len(days_list) if days_list else 0
+            avg_amount = (
+                sum(d['total_amount'] for d in days_list) / len(days_list)
+                if days_list else 0
+            )
 
             return {
                 'exchange_summary': '上证+深证+北证50+创业板',
@@ -286,8 +301,9 @@ class DashboardService:
 
         # 2. 降级：从 DuckDB 查询最新交易日
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
             import pandas as pd
+
+            from app.data.enhanced_cache_manager import get_ecm_instance
             from app.models import Stock
 
             ecm = get_ecm_instance()
@@ -318,7 +334,8 @@ class DashboardService:
                     stock_map[s.ts_code] = s.name
             except Exception:
                 pass
-            # ponytail: 如果 Stock 表为空，从 DataManager 获取一次（全局数据体系 §2.4 例外：降级场景）
+            # ponytail: 如果 Stock 表为空，从 DataManager 获取一次
+            # （全局数据体系 §2.4 例外：降级场景）
             if not stock_map:
                 try:
                     if self.data_manager:
@@ -396,9 +413,10 @@ class DashboardService:
 
         # 2. 降级：从 DuckDB 最新交易日聚合行业涨跌幅
         try:
+            import pandas as pd
+
             from app.data.enhanced_cache_manager import get_ecm_instance
             from app.models import Stock
-            import pandas as pd
 
             ecm = get_ecm_instance()
             # 取最近数据充足的交易日
@@ -485,9 +503,10 @@ class DashboardService:
     def get_dashboard_summary(self) -> Optional[Dict]:
         """AI交易机会雷达 + 策略信号汇总 — 从 DuckDB daily_cache 提取"""
         try:
+            import pandas as pd
+
             from app.data.enhanced_cache_manager import get_ecm_instance
             from app.models import Stock
-            import pandas as pd
 
             ecm = get_ecm_instance()
             best_date = self._get_best_trade_date()
@@ -579,7 +598,10 @@ class DashboardService:
             if cached is not None:
                 if isinstance(cached, pd.DataFrame) and not cached.empty:
                     records = cached.to_dict('records')
-                    result = self._aggregate_moneyflow_by_date(records, days, source_label='DuckDB 资金流向缓存')
+                    result = self._aggregate_moneyflow_by_date(
+                        records, days,
+                        source_label='DuckDB 资金流向缓存'
+                    )
                     if result:
                         has_nonzero = any(
                             abs(d.get('main_force_net_inflow', 0)) > 0.01
@@ -590,7 +612,10 @@ class DashboardService:
                             return result
                         logger.warning("DuckDB 资金流缓存全部为零值，跳过")
                 elif isinstance(cached, list) and len(cached) > 0:
-                    result = self._aggregate_moneyflow_by_date(cached, days, source_label='DuckDB 资金流向缓存')
+                    result = self._aggregate_moneyflow_by_date(
+                        cached, days,
+                        source_label='DuckDB 资金流向缓存'
+                    )
                     if result:
                         has_nonzero = any(
                             abs(d.get('main_force_net_inflow', 0)) > 0.01
@@ -674,7 +699,9 @@ class DashboardService:
             elif isinstance(date_str, str):
                 date_str = date_str.replace('-', '')
 
-            return self._aggregate_sector_moneyflow(day_records, industry_map, top_n, stocks_per_sector, date_str)
+            return self._aggregate_sector_moneyflow(
+                day_records, industry_map, top_n, stocks_per_sector, date_str
+            )
         except Exception as e:
             logger.warning(f"板块资金流向 DuckDB 聚合失败: {e}")
 
@@ -720,8 +747,9 @@ class DashboardService:
     def _get_best_trade_date(self, min_stocks: int = 1000) -> Optional[str]:
         """获取最近且数据充足的交易日（避免当日数据未同步时取到残缺日期）"""
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
             import pandas as pd
+
+            from app.data.enhanced_cache_manager import get_ecm_instance
             ecm = get_ecm_instance()
             df = pd.read_sql(
                 "SELECT trade_date, COUNT(*) as cnt FROM daily_cache "
@@ -808,7 +836,9 @@ class DashboardService:
     # ──────────────────────────────────────────────
     # ── 真实数据聚合方法 ──
 
-    def _aggregate_moneyflow_by_date(self, records: List, max_days: int = 20, source_label: str = '') -> Dict:
+    def _aggregate_moneyflow_by_date(
+        self, records: List, max_days: int = 20, source_label: str = '',
+    ) -> Dict:
         """从缓存资金流向记录按日聚合为 dashboard 格式"""
         from collections import defaultdict
         _sf = self._safe_float
@@ -823,7 +853,10 @@ class DashboardService:
             elif isinstance(d, str):
                 d = d.replace('-', '')
             net_main = _sf(r.get('net_lg_amount')) + _sf(r.get('net_elg_amount'))
-            net_retail = _sf(r.get('net_sm_amount')) or (_sf(r.get('buy_sm_amount')) - _sf(r.get('sell_sm_amount')))
+            net_retail = (
+                _sf(r.get('net_sm_amount'))
+                or (_sf(r.get('buy_sm_amount')) - _sf(r.get('sell_sm_amount')))
+            )
             daily[d]['main'] += net_main
             daily[d]['retail'] += net_retail
             dates_found.add(d)

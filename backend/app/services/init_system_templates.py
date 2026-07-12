@@ -230,16 +230,40 @@ SYSTEM_TEMPLATES = [
             'signal': {'type': 'enum', 'values': ['积极', '谨慎', '观望', '回避']}
         },
         'wiki': ['市场情绪周期理论', 'A股情绪指标研究'],
-        'code_template': '''# S1 市场情绪周期策略
-# 状态: P0 开发中 — 规格预览
-class MarketSentimentCycleStrategy:
-    def __init__(self, ctx):
-        self.updown_period = ctx.params.updown_ratio_period
+        'code_template': '''# S1 市场情绪周期策略 — 真实实现
+# 基于个股价格行为推断市场情绪阶段
+import numpy as np
 
-    def analyze(self, data):
-        ratio = self._calc_updown_ratio(data)
-        phase = self._identify_phase(ratio)
-        return {"phase": phase, "sentiment_score": self._calc_score(phase)}''',
+ret = np.diff(close.values) / np.maximum(close.values[:-1], 1e-10)
+ret = np.append(ret, 0.0)
+
+vol_short = pd.Series(ret).rolling(5, min_periods=3).std().fillna(0).values
+vol_long = pd.Series(ret).rolling(20, min_periods=8).std().fillna(0).values
+vol_ratio = np.where(vol_long > 1e-10, vol_short / vol_long, 1.0)
+
+n = len(close)
+recent_ret = ret[-20:] if n >= 20 else ret
+direction = np.sign(recent_ret)
+consistency = abs(direction.mean())
+
+momentum = (close.iloc[-1] / max(close.iloc[-20], 1e-10) - 1) if n >= 20 else 0.0
+momentum = np.clip(momentum, -0.2, 0.2)
+
+vol_ratio_latest = vol_ratio[-1] if len(vol_ratio) > 0 else 1.0
+consistency_latest = float(consistency)
+vol_long_latest = vol_long[-1] if len(vol_long) > 0 else 0.0
+vol_long_median = float(np.median(vol_long[-20:])) if len(vol_long) >= 20 else vol_long_latest
+vol_regime = vol_long_latest > vol_long_median * 1.2
+
+if consistency_latest > 0.6 and momentum > 0.03 and vol_regime:
+    signal = 1
+elif consistency_latest > 0.4 and momentum > 0.0 and not vol_regime:
+    signal = 1 if momentum > 0.02 else 0
+elif consistency_latest < 0.2 and abs(momentum) < 0.02:
+    signal = 0
+else:
+    signal = -1 if momentum < -0.03 else 0
+signal = int(np.clip(signal, -1, 1))''',
         'is_system': True,
         'author': 'System',
         'updated': '2026-06-24',
@@ -316,16 +340,41 @@ class MainForceTrackingStrategy:
             'signal': {'type': 'enum', 'values': ['通道突破', '趋势加速', '趋势减速', '无信号']}
         },
         'wiki': ['趋势通道理论', '唐奇安通道'],
-        'code_template': '''# S3 趋势通道识别策略
-# 状态: P1 待开发 — 规格预览
-class TrendChannelStrategy:
-    def __init__(self, ctx):
-        self.channel_period = ctx.params.channel_period
+        'code_template': '''# S3 趋势通道识别策略 — 真实实现
+# 识别上升/下降/横盘通道，检测通道突破
+import numpy as np
 
-    def analyze(self, data):
-        channel = self._calc_channel(data)
-        signal = self._detect_breakout(data, channel)
-        return {"channel_type": channel.type, "signal": signal}''',
+n_period = 20
+confirm = 3
+
+if len(close) < n_period + confirm:
+    signal = 0
+else:
+    recent_high = high.iloc[-n_period:].max()
+    recent_low = low.iloc[-n_period:].min()
+    channel_height = recent_high - recent_low
+
+    pos = (close.iloc[-1] - recent_low) / max(channel_height, 1e-10)
+
+    x = np.arange(n_period)
+    y = close.iloc[-n_period:].values
+    slope = np.polyfit(x, y, 1)[0] / max(np.mean(y), 1e-10)
+
+    last_n_close = close.iloc[-confirm:].values
+    breakout_up = all(c > recent_high * 0.99 for c in last_n_close[-2:]) and slope > 0.005
+    breakout_down = all(c < recent_low * 1.01 for c in last_n_close[-2:]) and slope < -0.005
+
+    if breakout_up:
+        signal = 1
+    elif breakout_down:
+        signal = -1
+    elif slope > 0.003:
+        signal = 1 if pos > 0.5 else 0
+    elif slope < -0.003:
+        signal = -1 if pos < 0.5 else 0
+    else:
+        signal = 0
+signal = int(np.clip(signal, -1, 1))''',
         'is_system': True,
         'author': 'System',
         'updated': '2026-06-24',
@@ -359,16 +408,38 @@ class TrendChannelStrategy:
             'signal': {'type': 'enum', 'values': ['打板', '排板', '观望']}
         },
         'wiki': ['涨停板交易策略', 'A股涨停板制度'],
-        'code_template': '''# S4 涨停板短线策略
-# 状态: P2 待开发 — 规格预览
-class LimitUpShortTermStrategy:
-    def __init__(self, ctx):
-        self.seal_ratio_min = ctx.params.seal_ratio_min
+        'code_template': '''# S4 涨停板短线策略 — 真实实现
+# 基于OHLCV检测涨停板质量和连板潜力
+import numpy as np
 
-    def analyze(self, data):
-        quality = self._assess_quality(data)
-        potential = self._calc_potential(data)
-        return {"quality": quality, "consecutive_potential": potential}''',
+if len(close) < 5:
+    signal = 0
+else:
+    limit_up_threshold = 0.095
+    prev_close = close.shift(1)
+
+    is_limit_up = (close / prev_close - 1) >= limit_up_threshold
+
+    consecutive = 0
+    for i in range(len(is_limit_up) - 1, -1, -1):
+        if is_limit_up.iloc[i]:
+            consecutive += 1
+        else:
+            break
+
+    if consecutive > 0:
+        avg_vol = volume.iloc[-min(20, len(volume)):-1].mean() if len(volume) > 1 else volume.iloc[-1]
+        vol_ratio_today = volume.iloc[-1] / max(avg_vol, 1)
+
+        if consecutive >= 3:
+            signal = 0
+        elif vol_ratio_today < 1.2:
+            signal = 1
+        else:
+            signal = 0
+    else:
+        signal = 0
+signal = int(np.clip(signal, -1, 1))''',
         'is_system': True,
         'author': 'System',
         'updated': '2026-06-24',
@@ -444,16 +515,51 @@ class MultiLevelRiskControlStrategy:
             'completion_pct': {'type': 'number', 'desc': '当前浪完成度%'}
         },
         'wiki': ['艾略特波浪理论', '斐波那契与波浪'],
-        'code_template': '''# S6 波浪理论阶段识别策略
-# 状态: P3 待开发 — 规格预览
-class WaveTheoryStrategy:
-    def __init__(self, ctx):
-        self.wave_min_bars = ctx.params.wave_min_bars
-        self.fib_retrace_threshold = ctx.params.fib_retrace_threshold
+        'code_template': '''# S6 波浪理论阶段识别策略 — 真实实现
+# 识别摆动高低点，判断波浪阶段
+import numpy as np
 
-    def analyze(self, data):
-        waves = self._identify_waves(data)
-        return {"wave_phase": waves.current, "trend": waves.trend, "completion_pct": waves.completion}''',
+if len(close) < 30:
+    signal = 0
+else:
+    window = 5
+    closes = close.values
+    highs_v = high.values
+    lows_v = low.values
+
+    peaks = []
+    troughs = []
+
+    for i in range(window, len(closes) - window):
+        if highs_v[i] == max(highs_v[i - window:i + window + 1]):
+            peaks.append(highs_v[i])
+        if lows_v[i] == min(lows_v[i - window:i + window + 1]):
+            troughs.append(lows_v[i])
+
+    if len(peaks) < 2 or len(troughs) < 2:
+        signal = 0
+    else:
+        last_peak = peaks[-1]
+        last_trough = troughs[-1]
+        prev_peak = peaks[-2] if len(peaks) >= 2 else last_peak
+        prev_trough = troughs[-2] if len(troughs) >= 2 else last_trough
+
+        higher_high = last_peak > prev_peak * 1.02
+        higher_low = last_trough > prev_trough * 1.02
+        lower_high = last_peak < prev_peak * 0.98
+        lower_low = last_trough < prev_trough * 0.98
+
+        current = closes[-1]
+        recent_range = max(highs_v[-20:]) - min(lows_v[-20:]) if len(closes) >= 20 else 0
+        pos_in_wave = (current - min(lows_v[-20:])) / max(recent_range, 1e-10) if recent_range > 0 else 0.5
+
+        if higher_high and higher_low:
+            signal = 1 if pos_in_wave < 0.7 else 0
+        elif lower_high and lower_low:
+            signal = -1 if pos_in_wave > 0.3 else 0
+        else:
+            signal = 0
+signal = int(np.clip(signal, -1, 1))''',
         'is_system': True,
         'author': 'System',
         'updated': '2026-06-24',
@@ -488,17 +594,53 @@ class WaveTheoryStrategy:
             'signal': {'type': 'enum', 'values': ['回调到位', '反弹遇阻', '趋势延续', '无信号']}
         },
         'wiki': ['斐波那契分析', '时间周期理论'],
-        'code_template': '''# S7 斐波那契时间周期策略
-# 状态: P3 待开发 — 规格预览
-class FibonacciTimeCycleStrategy:
-    def __init__(self, ctx):
-        self.fib_levels = ctx.params.fib_levels
-        self.time_period = ctx.params.time_period
+        'code_template': '''# S7 斐波那契时间周期策略 — 真实实现
+# 基于波段极值计算斐波那契回调位
+import numpy as np
 
-    def analyze(self, data):
-        levels = self._calc_fib_levels(data)
-        turns = self._calc_time_turns(data)
-        return {"support_levels": levels.support, "resistance_levels": levels.resistance, "turn_points": turns}''',
+if len(close) < 30:
+    signal = 0
+else:
+    lookback = min(60, len(close))
+    recent_high = high.iloc[-lookback:].max()
+    recent_low = low.iloc[-lookback:].min()
+    high_idx = high.iloc[-lookback:].idxmax()
+    low_idx = low.iloc[-lookback:].idxmin()
+
+    if isinstance(high_idx, (int, np.integer)):
+        high_pos = high_idx
+        low_pos = low_idx
+    else:
+        idx_list = list(close.index)
+        high_pos = idx_list.index(high_idx) if high_idx in idx_list else 0
+        low_pos = idx_list.index(low_idx) if low_idx in idx_list else 0
+
+    up_swing = high_pos > low_pos
+    swing_range = abs(recent_high - recent_low)
+
+    if swing_range < recent_low * 0.05:
+        signal = 0
+    else:
+        current = close.iloc[-1]
+        fib_levels = [0.236, 0.382, 0.5, 0.618, 0.786]
+
+        if up_swing:
+            fib_prices = [recent_high - lvl * swing_range for lvl in fib_levels]
+            near_support = False
+            for fp in fib_prices[2:]:
+                if abs(current - fp) / max(swing_range, 1e-10) < 0.05:
+                    near_support = True
+                    break
+            signal = 1 if near_support else 0
+        else:
+            fib_prices = [recent_low + lvl * swing_range for lvl in fib_levels]
+            near_resistance = False
+            for fp in fib_prices[2:]:
+                if abs(current - fp) / max(swing_range, 1e-10) < 0.05:
+                    near_resistance = True
+                    break
+            signal = -1 if near_resistance else 0
+signal = int(np.clip(signal, -1, 1))''',
         'is_system': True,
         'author': 'System',
         'updated': '2026-06-24',

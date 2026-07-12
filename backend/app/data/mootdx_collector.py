@@ -63,6 +63,9 @@ def _get_client():
             _client_instance = client
             logger.info(f"mootdx 客户端已创建（{len(stocks)} 只股票）")
             return client
+        except NotImplementedError:
+            logger.warning("mootdx Quotes.factory() 不支持当前协议版本（协议可能已变更）")
+            return None
         except Exception as e:
             logger.warning(f"mootdx 客户端创建失败: {e}")
             return None
@@ -279,6 +282,11 @@ def collect_market_snapshot() -> int:
             batch = codes[batch_start:batch_start + _BATCH_SIZE]
             try:
                 df = client.quotes(batch)
+            except NotImplementedError:
+                logger.warning("[mootdx] quotes() 不支持当前协议版本，重置客户端")
+                global _client_instance
+                _client_instance = None
+                return 0
             except Exception as e:
                 logger.debug(f"[mootdx] batch {batch_start} 请求失败: {e}")
                 continue
@@ -367,8 +375,7 @@ def collect_market_snapshot() -> int:
 
     except Exception as e:
         logger.warning(f"[mootdx] 快照采集失败: {e}")
-        # 连接失败时重置客户端，下次采集自动重连
-        global _client_instance
+        # 连接失败时重置客户端，下次采集自动重连（global 已在函数顶部声明）
         _client_instance = None
         return 0
 

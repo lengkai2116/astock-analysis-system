@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 sandbox_bp = Blueprint('sandbox_v1', __name__, url_prefix='/api/v1/verify')
 
 
-@sandbox_bp.route('/signal-records', methods=['GET'])
+@sandbox_bp.route('/signal-records', methods=['GET'])  # DEPRECATED: use /api/v3/sandbox
 @handle_exceptions
 def list_signal_records():
     """获取策略信号记录 — 策略沙箱的明细数据源"""

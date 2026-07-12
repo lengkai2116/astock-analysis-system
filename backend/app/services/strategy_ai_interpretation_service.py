@@ -87,6 +87,7 @@ class StrategyAIInterpretationService:
             'key_points': key_points,
             'risk_notes': risk_notes,
             'trading_hint': self._build_trading_hint(signal_data),
+            'wiki_context': None,
             'generated_at': datetime.now().isoformat(),
         }
 
@@ -199,19 +200,66 @@ class StrategyAIInterpretationService:
                 return "有初步看空信号"
         return "等待方向明确"
 
+    def _search_llm_wiki(self, query: str) -> str:
+        """查询 LLM Wiki 桌面 App 获取相关知识
+
+        向本地 LLM Wiki 服务 (127.0.0.1:19828) 发送搜索请求，
+        提取前 3 条结果摘要作为上下文。服务未运行时静默返回空字符串。
+        """
+        import requests
+        try:
+            resp = requests.post(
+                'http://127.0.0.1:19828/api/search',
+                json={'query': query, 'limit': 3},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                results = data.get('results', []) if isinstance(data, dict) else data
+                if results and isinstance(results, list):
+                    snippets = []
+                    for r in results[:3]:
+                        title = r.get('title', r.get('name', ''))
+                        snippet = r.get('snippet', r.get('content', ''))[:200]
+                        snippets.append(f"- {title}: {snippet}")
+                    return '\n'.join(snippets)
+        except Exception as e:
+            logger.debug(f"LLM Wiki 查询失败({query}): {e}")
+        return ''
+
     def _generate_llm_interpretation(self, strategy_name: str,
                                      signal_data: Dict,
                                      ts_code: str,
                                      stock_name: str) -> Optional[Dict]:
-        """调用 LLM 生成增强解读"""
+        """调用 LLM 生成增强解读（含 Wiki 知识库上下文注入）"""
         try:
+            # 1. 构建 Wiki 查询关键词（策略名 + 市场状态 + 信号方向）
+            wiki_query_parts = [strategy_name]
+            market_state = signal_data.get('market_state', signal_data.get('market', ''))
+            if market_state:
+                wiki_query_parts.append(str(market_state))
+            direction = signal_data.get('direction', '')
+            if direction:
+                wiki_query_parts.append(str(direction))
+            # 使用 STRATEGY_WIKI_KEYWORDS 中的映射作为补充
+            kw = self.STRATEGY_WIKI_KEYWORDS.get(strategy_name, '')
+            if kw:
+                wiki_query_parts.append(kw)
+            wiki_query = ' '.join(wiki_query_parts)
+
+            # 2. 查询 LLM Wiki
+            wiki_context = self._search_llm_wiki(wiki_query)
+
+            # 3. 调用 DeepSeek 解读（传入 wiki 上下文）
             from app.services.deepseek_analysis_service import explain_signal
-            result = explain_signal(ts_code, stock_name, [signal_data])
+            result = explain_signal(ts_code, stock_name, [signal_data],
+                                    wiki_context=wiki_context)
             if result:
                 return {
                     'llm_interpretation': result.get('explanation', ''),
                     'llm_confidence': result.get('confidence', 0),
                     'llm_rating': result.get('rating', 'neutral'),
+                    'wiki_context': wiki_context or None,
                 }
         except Exception as e:
             logger.debug(f"LLM 解读失败（可忽略）: {e}")

@@ -634,9 +634,43 @@ class AkshareProvider:
     # ── `_route_provider` 兼容方法 ──
 
     def get_index_member(self, index_code: str) -> List[Dict]:
-        """获取指数成分股（AKShare 暂不支持，返回空列表）"""
-        logger.warning(f"Akshare 暂不支持 get_index_member({index_code})")
-        return []
+        """获取指数成分股列表（AKShare index_stock_cons）"""
+        ak = _get_ak()
+        if ak is None:
+            return []
+        # AKShare 指数代码映射（去掉 .SH/.SZ 后缀）
+        ts_code_map = {
+            '000300.SH': '000300',
+            '000016.SH': '000016',
+            '000905.SH': '000905',
+            '399001.SZ': '399001',
+            '399006.SZ': '399006',
+            '000001.SH': '000001',
+            '399300.SZ': '399300',
+        }
+        ak_code = ts_code_map.get(index_code)
+        if ak_code is None:
+            logger.warning(f"get_index_member: 不支持的指数代码 {index_code}")
+            return []
+        try:
+            df = ak.index_stock_cons(symbol=ak_code)
+            if df is None or df.empty:
+                return []
+            results = []
+            for _, row in df.iterrows():
+                raw_code = str(row.get('品种代码', ''))
+                # 补全后缀：6xx → .SH，其余 → .SZ
+                suffix = '.SH' if raw_code.startswith('6') else '.SZ'
+                results.append({
+                    'ts_code': raw_code + suffix,
+                    'coname': str(row.get('品种名称', '')),
+                    'in_date': str(row.get('纳入日期', '')),
+                })
+            logger.info(f"get_index_member({index_code}): 返回 {len(results)} 只成分股")
+            return results
+        except Exception as e:
+            logger.error(f"get_index_member({index_code}) AKShare 调用失败: {e}")
+            return []
 
     def get_adj_factor(self, ts_code: str, start_date: str = None, end_date: str = None) -> List[Dict]:
         """获取复权因子（AKShare 通过 get_daily_data 含复权数据）"""
