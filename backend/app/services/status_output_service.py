@@ -238,19 +238,20 @@ class StatusOutputService:
     # 验证链（V2）
     # ──────────────────────────────────────────────
 
-    def _verify_chip_volume(self, status_list: List[Dict]) -> VerificationChainResult:
+    def _verify_chip_volume(self, signals: List[Dict]) -> VerificationChainResult:
         """链 1：筹码 × 成交量 — 验证放量/缩量是否与筹码方向一致"""
         chip_state = None
         chip_name = ''
         volume_state = None
 
-        for st in status_list:
-            name = (st.get('strategy_name', '') or '').upper()
+        for sig in signals:
+            sr = sig.get('status_recognition', {}) or {}
+            name = (sig.get('strategy_name', '') or '').upper()
             if 'CHIP' in name or '筹码' in name:
-                chip_state = str(st.get('state', '')).upper()
-                chip_name = st.get('strategy_name', '')
+                chip_state = str(sr.get('state', '')).upper()
+                chip_name = sig.get('strategy_name', '')
             if 'VOLUME' in name or '量价' in name or '成交量' in name:
-                vol_m = st.get('momentum', {}) or {}
+                vol_m = sr.get('momentum', {}) or {}
                 volume_state = str(vol_m.get('level', '')).upper()
 
         # Chip accumulating + volume fangliang -> uptrend confirmation
@@ -284,20 +285,21 @@ class StatusOutputService:
             evidence=['Chip-volume chain: insufficient data'],
         )
 
-    def _verify_chanlun_factor(self, status_list: List[Dict]) -> VerificationChainResult:
+    def _verify_chanlun_factor(self, signals: List[Dict]) -> VerificationChainResult:
         """链 2：缠论 × 因子 — 验证技术结构方向与动量方向是否一致"""
         chanlun_support = 0.0
         chanlun_resistance = 0.0
         factor_momentum = ''
 
-        for st in status_list:
-            name = (st.get('strategy_name', '') or '').upper()
+        for sig in signals:
+            sr = sig.get('status_recognition', {}) or {}
+            name = (sig.get('strategy_name', '') or '').upper()
             if 'CHANLUN' in name or '缠' in name:
-                sr = st.get('support_resistance', {}) or {}
-                chanlun_support = sr.get('support', 0.0) or 0.0
-                chanlun_resistance = sr.get('resistance', 0.0) or 0.0
+                sup_res = sr.get('support_resistance', {}) or {}
+                chanlun_support = sup_res.get('support', 0.0) or 0.0
+                chanlun_resistance = sup_res.get('resistance', 0.0) or 0.0
             if 'FACTOR' in name or '因子' in name:
-                mom = st.get('momentum', {}) or {}
+                mom = sr.get('momentum', {}) or {}
                 factor_momentum = str(mom.get('level', '')).upper()
 
         if factor_momentum in ('BUY', 'BULLISH') and chanlun_support > 0:
@@ -321,19 +323,20 @@ class StatusOutputService:
             evidence=['Chanlun-factor chain: insufficient data'],
         )
 
-    def _verify_emotion_fundamental(self, status_list: List[Dict]) -> VerificationChainResult:
+    def _verify_emotion_fundamental(self, signals: List[Dict]) -> VerificationChainResult:
         """链 3：情绪 × 筹码 — 验证市场情绪与筹码分布方向一致性"""
         bociasi_state = None
         chip_state = None
         chip_name = ''
 
-        for st in status_list:
-            name = (st.get('strategy_name', '') or '').upper()
+        for sig in signals:
+            sr = sig.get('status_recognition', {}) or {}
+            name = (sig.get('strategy_name', '') or '').upper()
             if 'BOCIASI' in name or '情绪' in name:
-                bociasi_state = str(st.get('state', '')).upper()
+                bociasi_state = str(sr.get('state', '')).upper()
             if 'CHIP' in name or '筹码' in name:
-                chip_state = str(st.get('state', '')).upper()
-                chip_name = st.get('strategy_name', '')
+                chip_state = str(sr.get('state', '')).upper()
+                chip_name = sig.get('strategy_name', '')
 
         bociasi_bull = bociasi_state in ('ACCUMULATING', 'BULLISH', 'BUY')
         bociasi_bear = bociasi_state in ('DISTRIBUTING', 'BEARISH', 'SELL')
@@ -368,9 +371,9 @@ class StatusOutputService:
             evidence=['Emotion-fundamental chain: insufficient data'],
         )
 
-    def _verify_tech_fundamental(self, status_list: List[Dict]) -> VerificationChainResult:
+    def _verify_tech_fundamental(self, signals: List[Dict]) -> VerificationChainResult:
         """链 4：技术基本面全维度 — 跨策略共识验证"""
-        total = len(status_list)
+        total = len(signals)
         if total == 0:
             return VerificationChainResult(
                 chain_id='tech_fundamental', chain_name='技术基本面全维度',
@@ -379,13 +382,13 @@ class StatusOutputService:
             )
 
         bullish_count = sum(
-            1 for st in status_list
-            if str(st.get('momentum', {}).get('level', '')).upper()
+            1 for sig in signals
+            if str(sig.get('status_recognition', {}).get('momentum', {}).get('level', '')).upper()
             in ('BUY', 'BULLISH', 'ACCUMULATING')
         )
         bearish_count = sum(
-            1 for st in status_list
-            if str(st.get('momentum', {}).get('level', '')).upper()
+            1 for sig in signals
+            if str(sig.get('status_recognition', {}).get('momentum', {}).get('level', '')).upper()
             in ('SELL', 'BEARISH', 'DISTRIBUTING')
         )
 
@@ -432,10 +435,10 @@ class StatusOutputService:
             return self._empty_result_v2()
 
         chains = [
-            self._verify_chip_volume(status_list),
-            self._verify_chanlun_factor(status_list),
-            self._verify_emotion_fundamental(status_list),
-            self._verify_tech_fundamental(status_list),
+            self._verify_chip_volume(signals),
+            self._verify_chanlun_factor(signals),
+            self._verify_emotion_fundamental(signals),
+            self._verify_tech_fundamental(signals),
         ]
 
         chain_passed = sum(1 for c in chains if c.passed)

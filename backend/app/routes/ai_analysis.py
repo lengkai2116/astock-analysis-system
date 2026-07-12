@@ -162,18 +162,23 @@ def signal_explain():
 @handle_exceptions
 @ai_analysis_bp.route('/api/v3/ai/status-interpret', methods=['POST'])
 def status_interpret():
-    """A7: 现状识别 → AI解读（供 indicator-ide 使用）"""
+    """A7: 现状识别 → AI解读（供 indicator-ide 使用）
+
+    支持传入预计算 signals 以复用 E12 结果（避免重复计算）。
+    """
     data = request.get_json(silent=True) or {}
     ts_code = data.get('ts_code', '')
     stock_name = data.get('stock_name', '')
+    signals = data.get('signals')  # 可选：E12 已计算的信号
 
     if not ts_code:
         return jsonify({'success': False, 'error': '缺少 ts_code',
                         'error_type': 'BadRequest'}), 400
 
     try:
-        computation_service = SignalComputationService()
-        signals = computation_service.compute_for_stock(ts_code)
+        if signals is None:
+            computation_service = SignalComputationService()
+            signals = computation_service.compute_for_stock(ts_code)
 
         market_state = "UNKNOWN"
         market_state_sigs = [s for s in signals if s.get('market_state') and s['market_state'] != 'UNKNOWN']

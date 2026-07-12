@@ -176,7 +176,8 @@ class ChipDistributionService:
                                      ts_code: str,
                                      df_ohlcv: pd.DataFrame = None,
                                      lookback_days: int = 120,
-                                     data_manager = None) -> Dict:
+                                     data_manager = None,
+                                     end_date: str = None) -> Dict:
         """
         计算单只股票的筹码分布
         
@@ -185,15 +186,19 @@ class ChipDistributionService:
             df_ohlcv: OHLCV数据（如果None，则从缓存获取）
             lookback_days: 回顾天数（默认120天）
             data_manager: DataManager实例（用于获取数据）
+            end_date: 截止日期（可选，YYYY-MM-DD格式，默认最新交易日）
             
         Returns:
             筹码分布数据字典
         """
         # 1. 获取数据
         if df_ohlcv is None and data_manager:
-            end_date = datetime.now().strftime('%Y-%m-%d')
-            start_date = (datetime.now() - pd.Timedelta(days=lookback_days)).strftime('%Y-%m-%d')
-            df_ohlcv = data_manager.get_cached_daily_data(ts_code, start_date, end_date)
+            if end_date:
+                ref_date = end_date
+            else:
+                ref_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.strptime(ref_date, '%Y-%m-%d') - pd.Timedelta(days=lookback_days)).strftime('%Y-%m-%d')
+            df_ohlcv = data_manager.get_cached_daily_data(ts_code, start_date, ref_date)
         
         if df_ohlcv is None or df_ohlcv.empty:
             return {

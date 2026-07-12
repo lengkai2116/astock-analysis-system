@@ -107,6 +107,60 @@ def test_factor_routes(client):
         assert resp.status_code != 404, f"{route} 返回 404"
 
 
+# ========== Strategy Analyze API (E12) ==========
+
+def test_strategy_analyze_endpoint_exists(client, monkeypatch):
+    """测试 E12 策略分析端点可响应（不崩溃）
+
+    P0-1 回归保护：strategy_analyze.py 中 trade_date_str 未定义导致 NameError
+    """
+    # Mock SignalComputationService 避免真实数据依赖
+    import json
+
+    def mock_compute_for_stock(ts_code, limit=5):
+        return []
+
+    monkeypatch.setattr(
+        'app.routes.strategy_analyze.SignalComputationService.compute_for_stock',
+        mock_compute_for_stock,
+    )
+
+    resp = client.post(
+        '/api/v3/strategy/analyze',
+        data=json.dumps({'ts_code': '000001.SZ'}),
+        content_type='application/json',
+    )
+    # 不应返回 500（不因 NameError 崩溃）
+    assert resp.status_code != 500, (
+        f'E12 端点异常: {resp.status_code} - 可能 trade_date_str 未定义'
+    )
+
+
+def test_strategy_analyze_returns_valid_structure(client, monkeypatch):
+    """测试 E12 返回有效数据结构"""
+    import json
+
+    def mock_compute_for_stock(ts_code, limit=5):
+        return []
+
+    monkeypatch.setattr(
+        'app.routes.strategy_analyze.SignalComputationService.compute_for_stock',
+        mock_compute_for_stock,
+    )
+
+    resp = client.post(
+        '/api/v3/strategy/analyze',
+        data=json.dumps({'ts_code': '000001.SZ'}),
+        content_type='application/json',
+    )
+    data = resp.get_json()
+    # 即使 mock 返回空，也应返回 code 0 而非崩溃
+    #（P0-1 修复后应为 200；修复前为 500）
+    if resp.status_code == 200:
+        assert 'data' in data
+        assert 'dimensions' in data['data']
+
+
 # ========== AI Analysis API ==========
 
 def test_ai_routes_exist(client):

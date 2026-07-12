@@ -619,9 +619,10 @@ def get_chip_distribution(ts_code):
     """
     E11: 筹码分布数据
     使用 ChipDistributionEstimator 基于OHLCV估算筹码分布
-    参数: ?lookback=120（回顾天数）
+    参数: ?lookback=120（回顾天数）&date=2026-06-30（可选，指定计算日期）
     """
     lookback = request.args.get('lookback', 120, type=int)
+    date_str = request.args.get('date', None)  # 可选：计算日期（如 2026-06-30）
     from app.data.chip_distribution_service import ChipDistributionService
 
     dm = get_data_manager()
@@ -630,6 +631,7 @@ def get_chip_distribution(ts_code):
         ts_code=ts_code,
         lookback_days=lookback,
         data_manager=dm,
+        end_date=date_str,
     )
     # 清洗NumPy类型，确保JSON可序列化
     import json

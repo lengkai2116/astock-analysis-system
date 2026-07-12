@@ -348,7 +348,7 @@
 .verify-rate-fill { height:100%; border-radius:2px; }
 .verify-ai-btn { display:none; }
 
-/* — AI仲裁与建议输出（DeepSeek V4 Layer 2） — */
+/* — AI仲裁与建议输出（AI Layer 2） — */
 .ai-arbitration { display:none; }
 .ai-arbitration.show { display:block; }
 .ai-arbitration { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); overflow:hidden; }
@@ -583,6 +583,8 @@
               <div class="chip-chart" id="chip-chart"></div>
               <div class="chip-data" id="chip-data">
               <div class="row"><span class="label">时间</span><span class="val" id="cd-time">—</span></div>
+              <div class="row"><span class="label">筹码数据日</span><span class="val" id="cd-chip-date" style="font-size:10px;color:var(--signal-watch);">—</span></div>
+              <div class="row"><span class="label">请求日</span><span class="val" id="cd-req-date" style="font-size:10px;color:#F59E0B;">—</span></div>
               <div class="row"><span class="label">收盘获利</span><span class="val" id="cd-profit">—</span></div>
               <div class="row"><span class="label">光标获利</span><span class="val" id="cd-cursor-profit">—</span></div>
               <div class="row"><span class="label">平均成本</span><span class="val" id="cd-cost">—</span></div>
@@ -830,7 +832,7 @@
           </div>
 
           <!-- 四、情绪环境 -->
-          <div class="dim-card" data-dim="emotion" style="display:none;">
+          <div class="dim-card" data-dim="emotion">
             <div class="dim-card-header">🌊 四、情绪环境</div>
             <div class="dim-card-body">
               <div class="dim-metrics">
@@ -846,9 +848,26 @@
             </div>
           </div>
 
-          <!-- 五、冲突与不确定性（卡5） -->
+          <!-- 五、Vibe 策略 -->
+          <div class="dim-card" data-dim="vibe">
+            <div class="dim-card-header">🌀 五、Vibe 策略</div>
+            <div class="dim-card-body">
+              <div class="dim-metrics">
+                <div class="dim-metric"><span class="icon">🎯</span><span class="label">信号方向</span><span class="val" id="cm-vibe-signal">--</span></div>
+                <div class="dim-metric"><span class="icon">📋</span><span class="label">策略模板</span><span class="val" id="cm-vibe-template">--</span></div>
+                <div class="dim-metric"><span class="icon">⚡</span><span class="label">置信度</span><span class="val" id="cm-vibe-confidence">--</span></div>
+              </div>
+              <div class="dim-narrative" id="cm-vibe-narrative">加载中...</div>
+            </div>
+            <div class="dim-footer" id="cm-vibe-footer">
+              <span class="tag" id="cm-vibe-tag">--</span>
+              <span id="cm-vibe-footer-text">--</span>
+            </div>
+          </div>
+
+          <!-- 六、冲突与不确定性（卡6） -->
           <div class="dim-card" data-dim="conflict">
-            <div class="dim-card-header">⚠️ 五、冲突与不确定性</div>
+            <div class="dim-card-header">⚠️ 六、冲突与不确定性</div>
             <div class="dim-card-body">
               <!-- B区：维度间关系 -->
               <div class="conflict-section">
@@ -950,17 +969,17 @@
               <div class="verify-rate-bar"><div class="verify-rate-fill" id="verifyRateFill" style="width:62.5%;background:var(--signal-watch);"></div></div>
               <span id="verifyRateText">2.5/4 (62.5%)</span>
             </div>
-            <button class="btn-sm" id="verifyAiBtn" style="background:var(--color-brand-500);color:white;border-color:var(--color-brand-500);" onclick="triggerArbitrate()">⚡ 待DeepSeek仲裁</button>
+            <button class="btn-sm" id="verifyAiBtn" style="background:var(--color-brand-500);color:white;border-color:var(--color-brand-500);" onclick="triggerArbitrate()">⚡ AI仲裁</button>
           </div>
         </div>
 
-        <!-- AI仲裁与建议输出（DeepSeek V4 Layer 2） -->
+        <!-- AI仲裁与建议输出（AI Layer 2） -->
         <div class="ai-arbitration" id="aiArbitration">
           <div class="ai-arb-header" onclick="toggleArbitrationBody()">
             <span class="toggle-icon" id="arbToggleIcon">▶</span>
             <span class="title">🤖 策略仲裁</span>
             <span class="summary" id="arbSummary">跨维度判断：震荡偏多，卡1~卡4一致性75%... 点击展开详情</span>
-            <span class="badge" id="arbBadge">DeepSeek V4</span>
+            <span class="badge" id="arbBadge">AI研判</span>
           </div>
           <div class="ai-arb-body" id="arbBody">
             <!-- 仲裁摘要 -->
@@ -1122,6 +1141,8 @@ var m5=ma(closes,5),m10=ma(closes,10),m20=ma(closes,20),m60=ma(closes,60);
 // ── 全局状态 ──
 var _useRealData = false;       // 当前是否使用真实API数据
 var _realKlineData = null;      // 最近一次API返回的完整数据
+var _datesFull = [];             // 完整日期字符串 YYYY-MM-DD
+var _currentChipData = null;     // 当前显示的筹码分布数据
 var _currentPeriod = 'D';       // 当前周期（D/W/M/1m/5m/15m/30m/60m）
 
 // ── 指标数据对象（所有副图/叠加指标计算后存入此处） ──
@@ -1242,11 +1263,12 @@ function applyRealData(apiData){
   }
   
   // 清空并重新填充全局数组
-  dates = []; ohlc = []; vol = [];
+  dates = []; ohlc = []; vol = []; _datesFull = [];
   for(var i = 0; i < kd.length; i++){
     var bar = kd[i];
     var d = new Date(bar.time * 1000);
     dates.push((d.getMonth()+1)+'/'+d.getDate());
+    _datesFull.push(d.getFullYear()+'-'+((d.getMonth()+1)+'').padStart(2,'0')+'-'+((d.getDate()+'').padStart(2,'0')));
     ohlc.push([bar.open, bar.close, bar.low, bar.high]);
     vol.push(bar.volume);
   }
@@ -1731,6 +1753,13 @@ function updateCrosshair(idx){
   if(gridRects.length === 0) return;
   var firstGrid = gridRects[0];
   var lastGrid = gridRects[gridRects.length - 1];
+  // 同步筹码分布容器高度到K线图网格高度，实现纵轴对齐
+  if(chipOpen){
+    var chipContainer = document.getElementById('chip-chart');
+    if(chipContainer && firstGrid.height > 50){
+      chipContainer.style.height = firstGrid.height + 'px';
+    }
+  }
   
   var graphics = [
     {id:'cv', type:'line', shape:{x1:x, y1:firstGrid.y, x2:x, y2:lastGrid.y + lastGrid.height},
@@ -1754,8 +1783,33 @@ function updateCrosshair(idx){
   }
 
   chart.setOption({graphic: {elements: graphics}});
-  if(chipOpen && typeof renderChipData === 'function') renderChipData(idx);
-  if(chipOpen && typeof renderChipChart === 'function') renderChipChart(idx, closePrice, y);
+  // 十字光标移动 → 按日期加载筹码分布
+  if(chipOpen){
+    // 优先从 _realKlineData 获取当前索引的原始时间戳 → YYYY-MM-DD
+    var dateForChip = '';
+    try {
+      if(_realKlineData && _realKlineData.kline && _realKlineData.kline[idx] && _realKlineData.kline[idx].time){
+        var dt = new Date(_realKlineData.kline[idx].time * 1000);
+        dateForChip = dt.getFullYear()+'-'+((dt.getMonth()+1)+'').padStart(2,'0')+'-'+((dt.getDate()+'').padStart(2,'0'));
+      }
+    } catch(e){}
+    // fallback: 使用 _datesFull 数组
+    if(!dateForChip) dateForChip = _datesFull && _datesFull[idx] ? _datesFull[idx] : '';
+
+    // 显示当前请求的日期（调试用）
+    var reqEl = document.getElementById('cd-req-date');
+    if(reqEl) reqEl.textContent = dateForChip || '(无日期)';
+
+    if(dateForChip){
+      loadChipDistribution(_currentTsCode, dateForChip).then(function(){
+        if(typeof renderChipData === 'function') renderChipData(idx);
+        if(typeof renderChipChart === 'function') renderChipChart(idx, closePrice);
+      });
+    } else {
+      if(typeof renderChipData === 'function') renderChipData(idx);
+      if(typeof renderChipChart === 'function') renderChipChart(idx, closePrice);
+    }
+  }
   updateSubHeaders(idx);
 }
 
@@ -2061,6 +2115,34 @@ function switchPeriod(period){
 // ── 切换股票 ──
 
 function switchStock(tsCode){
+  // 切换股票时重置策略分析状态到未分析页
+  _analysisRunning = false;
+  var empty = document.getElementById('strategyEmpty');
+  var results = document.getElementById('strategyResults');
+  var verify = document.getElementById('crossVerify');
+  var arbit = document.getElementById('aiArbitration');
+  var loading = document.getElementById('strategyLoading');
+  var cfg = document.getElementById('strategyConfig');
+  if(empty) empty.style.display = 'flex';
+  if(results){ results.style.display = 'none'; results.classList.remove('show'); }
+  if(verify){ verify.style.display = 'none'; verify.classList.remove('show'); }
+  if(arbit){ arbit.style.display = 'none'; arbit.classList.remove('show'); }
+  if(loading){ loading.style.display = 'none'; loading.classList.remove('show'); }
+  if(cfg) cfg.classList.remove('open');
+  // 清空五维卡片内容
+  ['cm-chanlun-direction','cm-chanlun-zhongshu','cm-chanlun-narrative','cm-chanlun-tag',
+   'cm-vp-phase','cm-vp-narrative','cm-vp-tag',
+   'cm-chip-profit_ratio','cm-chip-narrative','cm-chip-tag',
+   'cm-emotion-cycle','cm-emotion-narrative','cm-emotion-tag',
+   'cm-vibe-signal','cm-vibe-narrative','cm-vibe-tag',
+   'cm-chip-date','cd-chip-date','cd-req-date'].forEach(function(id){
+    var el = document.getElementById(id);
+    if(el) el.textContent = '—';
+  });
+  // 重置筹码面板日期显示
+  var reqEl = document.getElementById('cd-req-date');
+  if(reqEl) reqEl.textContent = '—';
+
   var period = _currentPeriod || 'D';
   var p1 = fetch('/api/v3/chart/kline/' + tsCode + '?limit=200&period=' + period)
     .then(function(r){ return r.json(); })
@@ -2100,13 +2182,9 @@ function switchStock(tsCode){
     })
     .catch(function(){});
 
-  // 并行加载E07/E10/E12/E13，各区独立缓存
-  var kronosEnabled = document.getElementById('kronosToggle') && document.getElementById('kronosToggle').checked;
+  // 股票切换时仅加载基础行情数据，策略分析和AI根据用户操作触发
   var p2 = loadQuote(tsCode);
-  var p3 = loadAnalysis(tsCode, kronosEnabled);
-  var p4 = loadVerification(tsCode);
   var p5 = loadMoneyflow(tsCode);
-  var p6 = loadNarrative(tsCode);
   // 盘口+笼子（并行，不阻塞）
   loadOrderbook(tsCode);
   loadStkLimit(tsCode);
@@ -2118,24 +2196,6 @@ function switchStock(tsCode){
       if(typeof renderChipData === 'function') renderChipData(lastIdx);
     }
   });
-
-  Promise.all([p3, p4, p6]).then(function(results){
-    var analysis=results[0], verification=results[1], narrative=results[2];
-    if(analysis && analysis.dimensions){
-      renderDimensionCards(analysis.dimensions, analysis.kronos);
-      // 从E12维度数据生成情景推演（覆盖初始硬编码HTML）
-      generateScenariosFromDimensions(analysis.dimensions);
-    }
-    if(verification){
-      renderVerificationChains(verification);
-    }
-    if(kronosEnabled && analysis && analysis.kronos){
-      renderKronosTag(analysis.kronos);
-    }
-    if(narrative){
-      renderNarrative(narrative);
-    }
-  }).catch(function(){});
 
   console.log('股票已切换至: ' + tsCode);
 }
@@ -2451,36 +2511,55 @@ function toggleOverlay(el, name){
 
 // ── 筹码面板 ──
 var chipOpen = false;
-function renderChipChart(idx, closePrice, crosshairY){
+function renderChipChart(idx, closePrice){
   var container = document.getElementById('chip-chart');
   if(!container) return;
   if(!ohlc[idx]) return;
   if(closePrice == null) closePrice = ohlc[idx][1];
-  // 计算价格范围: 优先使用后端API返回的price_range（全量120天OHLC覆盖）
-  // 修复 C2: 避免前端独立重算窗口导致筹码被裁剪
-  var chipData = _chipCache && _chipCache[_currentTsCode];
+  // 计算价格范围: 从K线图的当前可见Y轴区间获取，保证筹码图与K线图纵轴对齐
   var lo, hi;
-  if(chipData && chipData.price_range){
-    lo = chipData.price_range.min;
-    hi = chipData.price_range.max;
-    // 略微扩展边界，避免柱子顶到边缘
-    var pad = (hi - lo) * 0.03;
-    lo -= pad; hi += pad;
-  } else {
-    // 降级: 使用最近60天价格范围
-    lo = closePrice * 0.92, hi = closePrice * 1.08;
+  try {
+    var yAxisModel = chart.getModel().getComponent('yAxis', 0);
+    if(yAxisModel && yAxisModel.axis && yAxisModel.axis.scale){
+      var extent = yAxisModel.axis.scale.getExtent();
+      if(extent && extent.length === 2 && extent[0] < extent[1]){
+        lo = extent[0];
+        hi = extent[1];
+      }
+    }
+  } catch(e){}
+  // fallback: 从可见K线数据范围计算
+  if(lo == null || hi == null || lo >= hi){
+    try {
+      var dz = chart.getOption().dataZoom[0];
+      var totalN = dates.length;
+      var sIdx = Math.max(0, Math.round(totalN * dz.start / 100));
+      var eIdx = Math.min(totalN - 1, Math.round(totalN * dz.end / 100));
+      var tmpLo = Infinity, tmpHi = -Infinity;
+      for(var vi = sIdx; vi <= eIdx; vi++){
+        if(!ohlc[vi]) continue;
+        tmpLo = Math.min(tmpLo, ohlc[vi][2]);
+        tmpHi = Math.max(tmpHi, ohlc[vi][3]);
+      }
+      if(tmpLo < tmpHi){ lo = tmpLo; hi = tmpHi; }
+    } catch(e){}
+  }
+  // 兜底: 使用当前K线前后60天范围
+  if(lo == null || hi == null || lo >= hi){
+    lo = closePrice * 0.92; hi = closePrice * 1.08;
     for(var i = Math.max(0, idx-60); i <= idx; i++){
       if(!ohlc[i]) continue;
       lo = Math.min(lo, ohlc[i][2]);
       hi = Math.max(hi, ohlc[i][3]);
     }
-    var pad = (hi - lo) * 0.05;
-    lo -= pad; hi += pad;
   }
+  // 略微扩展边界，避免柱子顶到边缘
+  var pad = (hi - lo) * 0.03;
+  lo -= pad; hi += pad;
   var range = hi - lo || 1;
   // ② 以0.01元为档位，紧密排列
   var bins = Math.max(20, Math.round(range / 0.01));
-  var containerH = 325;       // chip-chart 高度
+  var containerH = container.offsetHeight || 325;       // chip-chart 高度（动态匹配K线网格）
   var containerW = container.offsetWidth || 130; // 实际可用宽度（含padding上下文）
   // ① 价格标签移到右侧，筹码线从左侧2px开始
   var priceAxisLeft = 2;      // 筹码线从左边界2px开始
@@ -2490,7 +2569,7 @@ function renderChipChart(idx, closePrice, crosshairY){
   var barHeight = Math.max(1, Math.min(Math.round(containerH / bins) - 1, 4));
 
   // ---- 从真实API筹码数据或模拟数据构建分布 ----
-  var chipData = _chipCache && _chipCache[_currentTsCode];
+  var chipData = _currentChipData;
   var counts = new Array(bins).fill(0);
   var maxCount = 1;
   
@@ -2539,17 +2618,8 @@ function renderChipChart(idx, closePrice, crosshairY){
   }
 
   // ③ 白色当前价线位置 — 在筹码线循环前计算，用于红蓝颜色判定
-  var ownWhiteY = (1 - (closePrice - lo) / range) * containerH;
-  var whiteY;
-  if(crosshairY != null){
-    // 有十字光标 → DOM坐标对齐，确保白线与横线同水平
-    var chipRect = container.getBoundingClientRect();
-    var ecRect = chart.getDom().getBoundingClientRect();
-    whiteY = crosshairY - (chipRect.top - ecRect.top);
-    whiteY = Math.max(0, Math.min(containerH, whiteY));
-  } else {
-    whiteY = ownWhiteY;
-  }
+  var whiteY = (1 - (closePrice - lo) / range) * containerH;
+  whiteY = Math.max(0, Math.min(containerH, whiteY));
 
   // ② 筹码分布水平线（红色=获利、蓝色=套牢）
   // 从 priceAxisLeft 位置开始向右延伸，到达右侧标签区域之前
@@ -2573,7 +2643,7 @@ function renderChipChart(idx, closePrice, crosshairY){
   container.innerHTML = html;
 }
 function renderChipData(idx){
-  var chipData = _chipCache && _chipCache[_currentTsCode];
+  var chipData = _currentChipData;
   var cd;
   if(chipData){
     // 指标数据在 chipData.indicators 下
@@ -2592,6 +2662,7 @@ function renderChipData(idx){
     }
     cd = {
       time: dates[idx] || '—',
+      chipDate: chipData.trade_date || '—',
       profit: (ind.profit_ratio != null ? Number(ind.profit_ratio * 100).toFixed(1) + '%' : '—'),
       cursorProfit: cursorProfit,
       cost: (ind.ssrp != null ? Number(ind.ssrp).toFixed(2) : '—'),
@@ -2603,6 +2674,7 @@ function renderChipData(idx){
   } else {
     cd = {
       time: dates[idx] || '—',
+      chipDate: '—',
       profit: (Math.random()*40+50).toFixed(1)+'%',
       cursorProfit: (Math.random()*30+10).toFixed(1)+'%',
       cost: (ohlc[idx]?ohlc[idx][1].toFixed(2):'—'),
@@ -2612,7 +2684,7 @@ function renderChipData(idx){
       con70: (Math.random()*10+3).toFixed(1)+'%'
     };
   }
-  var map = {time:cd.time, profit:cd.profit, 'cursor-profit':cd.cursorProfit, cost:cd.cost, '90':cd.cost90, con90:cd.con90, '70':cd.cost70, con70:cd.con70};
+  var map = {time:cd.time, 'chip-date':cd.chipDate, profit:cd.profit, 'cursor-profit':cd.cursorProfit, cost:cd.cost, '90':cd.cost90, con90:cd.con90, '70':cd.cost70, con70:cd.con70};
   for(var k in map){
     var el = document.getElementById('cd-'+k);
     if(el) el.textContent = map[k];
@@ -2632,11 +2704,21 @@ function toggleChipPanel(){
   var startVal = chipOpen ? 89 : 86;
   chart.dispatchAction({type:'dataZoom', start:startVal, end:100});
   if(chipOpen){
+    // 同步筹码容器高度到K线网格高度（在渲染前执行）
+    try {
+      var grid0 = chart.getModel().getComponent('grid', 0);
+      if(grid0 && grid0.coordinateSystem){
+        var rect = grid0.coordinateSystem.getRect();
+        if(rect && rect.height > 50){
+          document.getElementById('chip-chart').style.height = rect.height + 'px';
+        }
+      }
+    } catch(e){}
     // 若没有十字光标，取可见范围最右K线
     var idx = (_cursorIdx != null && _cursorIdx >= 0) ? _cursorIdx : dates.length - 1;
     var cp = ohlc[idx] ? ohlc[idx][1] : null;
     if(typeof renderChipData === 'function') renderChipData(idx);
-    if(typeof renderChipChart === 'function') renderChipChart(idx, cp); // 无crosshairY参数，不传
+    if(typeof renderChipChart === 'function') renderChipChart(idx, cp);
   }
 }
 
@@ -2645,7 +2727,7 @@ function toggleChipPanel(){
 // 8. API 数据加载与缓存（E07/E10/E12/E13/E14）
 // ════════════════════════════════════════════════════════════
 
-var _quoteCache = {}, _analysisCache = {}, _verificationCache = {}, _moneyflowCache = {}, _narrativeCache = {}, _chipCache = {}, _orderbookCache = {};
+var _quoteCache = {}, _moneyflowCache = {}, _chipCache = {}, _orderbookCache = {};
 
 function _fmt(v, d){ if(v==null||v==='--') return '--'; var n=parseFloat(v); return isNaN(n)?v:n.toFixed(d!=null?d:2); }
 function _colorVal(v, upColor, dnColor){ if(v==null||v==='--')return ''; return parseFloat(v)>=0?upColor:dnColor; }
@@ -2768,22 +2850,18 @@ function setText(id,txt){ var el=document.getElementById(id); if(el) el.textCont
 
 // ── B2: E12 策略分析 ──
 function loadAnalysis(tsCode, kronosEnabled){
-  if(_analysisCache[tsCode]) return Promise.resolve(_analysisCache[tsCode]);
   return fetch('/api/v3/strategy/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts_code:tsCode,kronos_enabled:kronosEnabled||false})})
     .then(function(r){return r.json();}).then(function(res){
       if(res.code!==0||!res.data) throw new Error('E12 fail');
-      _analysisCache[tsCode]=res.data;
       return res.data;
     });
 }
 
 // ── B2: E13 交叉验证 ──
 function loadVerification(tsCode){
-  if(_verificationCache[tsCode]) return Promise.resolve(_verificationCache[tsCode]);
   return fetch('/api/v3/strategy/status-aggregate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts_code:tsCode})})
     .then(function(r){return r.json();}).then(function(res){
       if(res.code!==0||!res.data) throw new Error('E13 fail');
-      _verificationCache[tsCode]=res.data;
       return res.data;
     });
 }
@@ -2845,11 +2923,9 @@ function renderStkLimit(data){
 
 // ── C2: E14 AI叙事 ──
 function loadNarrative(tsCode){
-  if(_narrativeCache[tsCode]) return Promise.resolve(_narrativeCache[tsCode]);
   return fetch('/api/v3/ai/status-interpret',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts_code:tsCode})})
     .then(function(r){return r.json();}).then(function(res){
       if(!res.success||!res.data) throw new Error('E14 fail');
-      _narrativeCache[tsCode]=res.data;
       return res.data;
     }).catch(function(){ return null; });
 }
@@ -2857,18 +2933,34 @@ function loadNarrative(tsCode){
 // ── C3: E11 筹码分布 ──
 var _chipCache = {};
 
-function loadChipDistribution(tsCode){
-  if(_chipCache[tsCode]) return Promise.resolve(_chipCache[tsCode]);
-  return fetch('/api/v3/chart/chip-distribution/' + tsCode + '?lookback=120')
+function loadChipDistribution(tsCode, dateKey){
+  if(!dateKey) dateKey = '';
+  var cacheKey = tsCode + ':' + dateKey;
+  if(_chipCache[cacheKey]) {
+    _currentChipData = _chipCache[cacheKey];
+    return Promise.resolve(_chipCache[cacheKey]);
+  }
+  var url = '/api/v3/chart/chip-distribution/' + tsCode + '?lookback=120';
+  if(dateKey) url += '&date=' + dateKey;
+  return fetch(url)
     .then(function(r){ return r.json(); })
     .then(function(res){
-      if(!res.success || !res.data || !res.data.chip_bins || !res.data.chip_bins.length) throw new Error('E11 fail');
-      _chipCache[tsCode] = res.data;
-      return res.data;
+      if(res.success && res.data && res.data.chip_bins && res.data.chip_bins.length > 0){
+        _chipCache[cacheKey] = res.data;
+        _currentChipData = res.data;
+      }
+      // 无论数据是否为空，返回当前 _currentChipData（空时不更新，保留旧数据）
+      return _currentChipData;
     }).catch(function(){ return null; });
 }
 
 // ── 策略卡渲染（从E12 data填充5维卡） ──
+function _dirTag(dir){
+  if(dir==='bullish') return '✅ 通过';
+  if(dir==='bearish') return '🔴 看空';
+  if(dir==='watch') return '👀 观望';
+  return '⚪ 中性';
+}
 function renderDimensionCards(dimensions, kronos){
   if(!dimensions) return;
   function setId(id,val){var el=document.getElementById(id);if(el)el.textContent=val!=null?val:'--';}
@@ -2879,24 +2971,45 @@ function renderDimensionCards(dimensions, kronos){
   setId('cm-chanlun-narrative',cl.status_text||'--');
   var ft=dimensions.factor||{}; var ftText=ft.driving_factor?'驱动力:'+(ft.driving_factor||'--')+', 冲突:'+(ft.conflict_type||'--'):'--';
   setId('cm-chanlun-footer-text',ftText);
-  var ct=dimensions.chanlun?cl.direction==='bullish'?'✅ 通过':'⚠️ 待确认':'--'; setId('cm-chanlun-tag',ct);
+  setId('cm-chanlun-tag',cl.direction?_dirTag(cl.direction):'--');
   // 量价形态
   var vp=dimensions.volume_price||{}; setId('cm-vp-phase',vp.phase||'--'); setId('cm-vp-pattern',vp.phase_label||'--');
   setId('cm-vp-vp_relation',vp.volume_price_relation||'--'); setId('cm-vp-resonance',vp.trend_strength>0.5?'偏多':'偏空');
   setId('cm-vp-volume_detail',vp.support?'支撑'+_fmt(vp.support)+' 阻力'+_fmt(vp.resistance):'--');
   setId('cm-vp-narrative',vp.status_text||'--');
-  var vt=vp.direction==='bullish'?'✅ 通过':'⚠️ 待确认'; setId('cm-vp-tag',vt);
+  setId('cm-vp-tag',vp.direction?_dirTag(vp.direction):'--');
   // 筹码
   var cp=dimensions.chip||{}; setId('cm-chip-profit_ratio',cp.profit_ratio!=null?cp.profit_ratio+'%':'--');
   setId('cm-chip-avg_cost',_fmt(cp.avg_cost)); setId('cm-chip-concentration',cp.concentration||'--');
   setId('cm-chip-main_force',cp.main_force_direction||'--'); setId('cm-chip-large_order',cp.large_order_net?String(cp.large_order_net):'--');
   setId('cm-chip-narrative',cp.status_text||'--');
-  var cpt=cp.direction==='bullish'?'✅ 通过':'⚠️ 待确认'; setId('cm-chip-tag',cpt);
+  setId('cm-chip-tag',cp.direction?_dirTag(cp.direction):'--');
   // 情绪
   var em=dimensions.emotion||{}; setId('cm-emotion-cycle',em.market_temp||'--');
   setId('cm-emotion-sector_pct',em.sector_pct!=null?em.sector_pct+'%':'--'); setId('cm-emotion-market_temp',em.valuation||'--');
   setId('cm-emotion-narrative',em.status_text||'--');
-  var emt=em.direction==='bullish'?'✅ 通过':'⚠️ 待确认'; setId('cm-emotion-tag',emt);
+  setId('cm-emotion-tag',em.direction?_dirTag(em.direction):'--');
+  // Vibe
+  var vb=dimensions.vibe||{}; setId('cm-vibe-signal',vb.signal_label||'--');
+  setId('cm-vibe-template',vb.strategy_name||'--');
+  setId('cm-vibe-confidence',vb.confidence!=null?Math.round(vb.confidence*100)+'%':'--');
+  var vibeText = vb.evidence ? (Array.isArray(vb.evidence) ? vb.evidence.join('；') : vb.evidence) : (vb.description||'--');
+  setId('cm-vibe-narrative',vibeText);
+  setId('cm-vibe-tag',vb.direction?_dirTag(vb.direction):'--');
+  setId('cm-vibe-footer-text',vb.description||'--');
+}
+
+// ── 数据完整度渲染（从analysisData.data_availability填充卡5 C区） ──
+function renderDataCompleteness(dataAvail){
+  if(!dataAvail) return;
+  var dc = document.querySelector('.data-completeness');
+  if(!dc) return;
+  var items = [];
+  if(dataAvail.kline != null) items.push('卡1·走势结构：'+(dataAvail.kline?'100%':'0%'));
+  if(dataAvail.daily_basic != null) items.push('卡2·量价形态：'+(dataAvail.daily_basic?'100%':'60%'));
+  if(dataAvail.moneyflow != null) items.push('卡3·筹码资金：'+(dataAvail.moneyflow?'100%':'80%'));
+  if(dataAvail.market_state != null) items.push('卡4·情绪环境：'+(dataAvail.market_state?'100%':'60%'));
+  if(items.length) dc.innerHTML = items.map(function(t){return '<span class="dc-item">'+t+'</span>';}).join('');
 }
 
 // ── 交叉验证条渲染（从E13 data填充） ──
@@ -3139,19 +3252,18 @@ function startAnalysis(){
   // Kronos开关
   var kronosEnabled = document.getElementById('kronosToggle') && document.getElementById('kronosToggle').checked;
 
-  // 并行调用 E12 + E13 + E14
+  // 并行调用 E12 + E13（策略现状识别，不包含AI仲裁）
   var ts = _currentTsCode;
 
   Promise.all([
     loadAnalysis(ts, kronosEnabled),
     loadVerification(ts),
-    loadNarrative(ts),
     new Promise(function(resolve){ setTimeout(resolve, 1200); }) // 至少1.2s动画
   ]).then(function(results){
-    var analysis=results[0], verification=results[1], narrative=results[2];
+    var analysis=results[0], verification=results[1];
     // 检查是否被取消
     if(!_analysisRunning) return;
-    finishAnalysisReal(analysis, verification, narrative, kronosEnabled);
+    finishAnalysisReal(analysis, verification, kronosEnabled);
   }).catch(function(e){
     if(!_analysisRunning) return;
     showToast('❌ 分析失败: '+e.message);
@@ -3159,7 +3271,7 @@ function startAnalysis(){
   });
 }
 
-function finishAnalysisReal(analysisData, verificationData, narrativeData, kronosEnabled){
+function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
   _analysisRunning = false;
   var loading = document.getElementById('strategyLoading');
   var results = document.getElementById('strategyResults');
@@ -3173,6 +3285,8 @@ function finishAnalysisReal(analysisData, verificationData, narrativeData, krono
   // 填充5维卡
   if(analysisData && analysisData.dimensions){
     renderDimensionCards(analysisData.dimensions, analysisData.kronos);
+    // 数据完整度
+    if(analysisData.data_availability) renderDataCompleteness(analysisData.data_availability);
     // 显示各维度
     if(results){
       results.classList.add('show');
@@ -3185,11 +3299,12 @@ function finishAnalysisReal(analysisData, verificationData, narrativeData, krono
         '量价形态分析':'volume-price',
         '筹码与资金':'chip',
         '情绪环境':'emotion',
-        '多因子分析':'conflict'
+        '多因子分析':'conflict',
       };
       var dimCards = results.querySelectorAll('.dim-card');
       dimCards.forEach(function(card){
         var dim = card.getAttribute('data-dim');
+        if(dim === 'vibe') { card.style.display = ''; return; }  // Vibe 始终显示
         var show = false;
         checkedNames.forEach(function(n){
           if(dimMap[n] === dim) show = true;
@@ -3209,13 +3324,8 @@ function finishAnalysisReal(analysisData, verificationData, narrativeData, krono
   if(kronosEnabled && analysisData && analysisData.kronos){
     renderKronosTag(analysisData.kronos);
   }
-
-  // E14 AI叙事
-  if(narrativeData){
-    renderNarrative(narrativeData);
-  }
   
-  // 从五维数据生成本地情景推演（E14不返回scenarios时作为补充）
+  // 从五维数据生成本地情景推演（AI仲裁完成后再覆盖）
   if(analysisData && analysisData.dimensions){
     generateScenariosFromDimensions(analysisData.dimensions);
   }
@@ -3228,12 +3338,7 @@ function finishAnalysisReal(analysisData, verificationData, narrativeData, krono
 
 // 保留旧finishAnalysis作降级
 function finishAnalysis(){
-  finishAnalysisReal(
-    _analysisCache[_currentTsCode],
-    _verificationCache[_currentTsCode],
-    _narrativeCache[_currentTsCode],
-    document.getElementById('kronosToggle') && document.getElementById('kronosToggle').checked
-  );
+  startAnalysis();
 }
 
 function cancelAnalysis(){
@@ -3292,10 +3397,7 @@ function toggleArbitrationBody(){
 }
 
 function triggerArbitrate(){
-  showToast('⚡ DeepSeek 仲裁已触发...');
-  // 清除缓存，重新加载E12+E13
-  delete _analysisCache[_currentTsCode];
-  delete _verificationCache[_currentTsCode];
+  showToast('⚡ AI 仲裁已触发...');
   var kronosEnabled = document.getElementById('kronosToggle') && document.getElementById('kronosToggle').checked;
   Promise.all([
     loadAnalysis(_currentTsCode, kronosEnabled),
@@ -3307,6 +3409,30 @@ function triggerArbitrate(){
     if(verification) renderVerificationChains(verification);
     if(kronosEnabled && analysis && analysis.kronos) renderKronosTag(analysis.kronos);
     if(narrative) renderNarrative(narrative);
+
+    // 调用 E15 仲裁接口：从 narrative.aggregated_status 提取 market_state + status_recognition
+    var aggStatus = narrative && narrative.aggregated_status;
+    var marketState = (aggStatus && aggStatus.status && aggStatus.status.market_state) || 'UNKNOWN';
+    var dimsForArbitration = (aggStatus && aggStatus.dimensions) || [];
+    fetch('/api/v3/ai/arbitrate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        ts_code: _currentTsCode,
+        market_state: marketState,
+        status_recognition: dimsForArbitration.length > 0 ? dimsForArbitration : null,
+      })
+    }).then(function(r){ return r.json(); }).then(function(arbRes){
+      if(arbRes.success && arbRes.data && arbRes.data.wiki_references && arbRes.data.wiki_references.length > 0){
+        var sourcesBody = document.getElementById('arbSourcesBody');
+        if(sourcesBody){
+          sourcesBody.innerHTML = arbRes.data.wiki_references.map(function(ref){
+            return '<span class="src">· [知识:' + ref + ']</span>';
+          }).join('');
+        }
+      }
+    }).catch(function(){});
+
     var badge = document.getElementById('arbBadge');
     if(badge) badge.textContent = '仲裁已更新';
     showToast('✅ 仲裁完成，情景推演已更新');
@@ -3437,18 +3563,6 @@ function showToast(msg){
   }
   // 同步策略栏标签
   updateStrategyBarTags();
-
-  // 初始加载 E07/E12/E13
-  var ts = _currentTsCode;
-  var ke = document.getElementById('kronosToggle') && document.getElementById('kronosToggle').checked;
-  loadQuote(ts);
-  Promise.all([loadAnalysis(ts, ke), loadVerification(ts), loadNarrative(ts)]).then(function(results){
-    var analysis=results[0], verification=results[1], narrative=results[2];
-    if(analysis && analysis.dimensions) renderDimensionCards(analysis.dimensions, analysis.kronos);
-    if(verification) renderVerificationChains(verification);
-    if(ke && analysis && analysis.kronos) renderKronosTag(analysis.kronos);
-    if(narrative) renderNarrative(narrative);
-  }).catch(function(){});
 })();
 
 // ── 同步侧栏高度与chart-section对齐 ──

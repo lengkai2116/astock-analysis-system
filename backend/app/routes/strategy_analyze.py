@@ -193,10 +193,12 @@ def _build_vibe_dimension(ts_code: str, signals: List[Dict]) -> Dict:
             break
     if not vibe_sig:
         return {'signal': 'NEUTRAL', 'signal_label': '无Vibe策略分析', 'confidence': 0.0}
+    sig = vibe_sig.get('signal', 'NEUTRAL')
     return {
         'strategy_name': vibe_sig.get('strategy_name', 'Vibe策略'),
-        'signal': vibe_sig.get('signal', 'NEUTRAL'),
+        'signal': sig,
         'signal_label': vibe_sig.get('signal_label', ''),
+        'direction': 'bullish' if sig == 'BUY' else ('bearish' if sig == 'SELL' else 'neutral'),
         'confidence': vibe_sig.get('confidence', 0.0),
         'evidence': vibe_sig.get('evidence', []),
         'description': vibe_sig.get('description', ''),
@@ -259,13 +261,6 @@ def strategy_analyze():
             'emotion': _build_emotion_dimension(bociasi_sig, signal_context),
             'factor': _build_factor_dimension(signals),
             'vibe': _build_vibe_dimension(ts_code, signals),
-        }
-
-        response_data = {
-            'ts_code': ts_code,
-            'trade_date': trade_date_str,
-            'dimensions': dimensions,
-            'risk_check': risk_check,  # L1风控结果
         }
 
         # Step 5: 可选 Kronos 推理

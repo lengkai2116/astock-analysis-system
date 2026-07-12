@@ -464,10 +464,6 @@ class SignalComputationService:
             'risk_notes': risk_notes,
             'signal_date': latest_date if isinstance(latest_date, str) else latest_date.strftime('%Y-%m-%d'),
             'backtest_win_rates': self._get_signal_win_rates(signal),
-            # L3 缠论评分
-            'chanlun_score': chanlun_score,
-            'chanlun_recommendation': score_recommendation,
-            'score_details': score_details,
 
             'signal_source_detail': {
                 'phase': phase,
@@ -1465,7 +1461,7 @@ class SignalComputationService:
                 'risk_notes': ['情绪指标偏短期，需结合其他策略使用'],
                 'signal_date': '',
                 'status_recognition': {
-                    'state': 'ACCUMULATING' if result['signal'] == 'BUY' else ('DISTRIBUTING' if result['signal'] == 'NEUTRAL' else 'RANGING'),
+                    'state': 'ACCUMULATING' if result['signal'] == 'BUY' else 'RANGING',
                     'state_label': label_map.get(result['signal'], ''),
                     'trend': {'direction': '', 'strength': '', 'stage': ''},
                     'momentum': {'level': result['signal'], 'score': result['confidence']},
