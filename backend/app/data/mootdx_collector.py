@@ -835,7 +835,10 @@ class _MootdxThread(threading.Thread):
                                   self._MAX_BACKOFF)
                 self._stop_event.wait(backoff_sec)
 
-        logger.info(f"[{self.name}] 线程停止 (采集{self._collect_count}次, 错误{self._error_count}次)")
+        try:
+            logger.info(f"[{self.name}] 线程停止 (采集{self._collect_count}次, 错误{self._error_count}次)")
+        except ValueError:
+            pass  # atexit 时 logger stream 已不可用
 
     def stop(self):
         self._stop_event.set()

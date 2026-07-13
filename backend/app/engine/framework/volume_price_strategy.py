@@ -195,6 +195,7 @@ class VolumePriceSignal:
     def to_output_dict(self, ts_code: str) -> Dict:
         d = {
             "strategy_name": "量价分析策略",
+            "status_recognition": self.status.to_dict() if self.status else {},
             "signal": self._map_signal(),
             "signal_label": self.signal_label,
             "confidence": round(self.confidence, 2),
@@ -207,8 +208,6 @@ class VolumePriceSignal:
             "evidence": self.evidence,
             "risk_notes": self.risk_notes,
         }
-        if self.status:
-            d["status_recognition"] = self.status.to_dict()
         return d
 
     def _map_signal(self) -> str:
@@ -3411,12 +3410,17 @@ class VolumePriceSignalGenerator:
             "score": round(relation.momentum.score, 4) if relation.momentum else 0.0,
         }
 
-        # 量能信息
+        # 量能信息 + 具体形态命名
         vol_state_map = {"EXPANDING": "放量", "CONTRACTING": "缩量", "STABLE": "平量"}
         volma_map = {"BULLISH": "多头排列", "BEARISH": "空头排列", "MIXED": "交叉"}
+        structure_parts = []
+        if vol_state.volma_structure:
+            structure_parts.append(volma_map.get(vol_state.volma_structure, ""))
+        if relation.pattern_name:
+            structure_parts.append(relation.pattern_name)
         volume = {
             "state": vol_state_map.get(vol_state.trend, "平量"),
-            "structure": volma_map.get(vol_state.volma_structure, ""),
+            "structure": "，".join(structure_parts) if structure_parts else volma_map.get(vol_state.volma_structure, ""),
         }
 
         # 支撑/阻力

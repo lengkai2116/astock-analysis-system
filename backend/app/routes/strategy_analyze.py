@@ -15,6 +15,13 @@ from app.engine.framework.conflict_arbiter import ConflictArbiter
 from app.engine.framework.unified_practical_framework import UPFEngine
 from app.services.kronos_forecaster import KronosForecaster
 
+# NLG 渲染器
+try:
+    from app.services.nlg import render_chanlun_trend, render_volume_price_trend, render_chip_volume
+    _HAVE_NLG = True
+except Exception:
+    _HAVE_NLG = False
+
 logger = logging.getLogger(__name__)
 
 strategy_analyze_bp = Blueprint('strategy_analyze', __name__)
@@ -56,9 +63,8 @@ def _build_chanlun_dimension(sig: Optional[Dict]) -> Dict:
     sr = sig.get('status_recognition', {})
     trend = sr.get('trend', {})
     levels = sr.get('support_resistance', {})
-    # 从evidence获取描述性文本，优于signal_label
-    evidence = sig.get('evidence', [])
-    status_text = '; '.join(evidence[:2]) if evidence else sig.get('signal_label', '')
+    # NLG渲染status_text
+    status_text = render_chanlun_trend(sr) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
     return {
         'direction': sig.get('signal', 'neutral'),
         'buy_point': sig.get('signal_label', ''),
@@ -79,8 +85,7 @@ def _build_volume_price_dimension(sig: Optional[Dict]) -> Dict:
     sr = sig.get('status_recognition', {})
     trend = sr.get('trend', {})
     levels = sr.get('support_resistance', {})
-    evidence = sig.get('evidence', [])
-    status_text = '; '.join(evidence[:2]) if evidence else sig.get('signal_label', '')
+    status_text = render_volume_price_trend(sr) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
     return {
         'direction': sig.get('signal', 'neutral'),
         'phase': trend.get('stage', 'RANGING'),
@@ -100,8 +105,7 @@ def _build_chip_dimension(sig: Optional[Dict]) -> Dict:
     if not sig:
         return {'direction': 'neutral', 'status_text': '无筹码信号'}
     sr = sig.get('status_recognition', {})
-    evidence = sig.get('evidence', [])
-    status_text = '; '.join(evidence[:2]) if evidence else sig.get('signal_label', '')
+    status_text = render_chip_volume(sr) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
     return {
         'direction': sig.get('signal', 'neutral'),
         'profit_ratio': sr.get('support_resistance', {}).get('support', 42.0),

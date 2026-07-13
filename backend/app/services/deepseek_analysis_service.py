@@ -397,7 +397,11 @@ def get_health() -> Dict:
 # ════════════════════════════════════════════════════════
 
 def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> Dict:
-    """根据现状识别结果生成 AI 解读建议（供 indicator-ide 使用）"""
+    """根据现状识别结果生成 AI 解读建议（供 indicator-ide 使用）
+
+    使用 NLG 渲染器将结构化状态转为中文描述，配合验证链和知识库
+    构建三段式 prompt 发送给 DeepSeek，提升解读质量。
+    """
     from app.config import Config
 
     config = Config.get_llm_config()
@@ -408,15 +412,16 @@ def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> 
     risk_aggregation = aggregated_status.get('risk_aggregation', {})
     momentum_consensus = aggregated_status.get('momentum_consensus', {})
     key_levels = aggregated_status.get('key_levels', {})
-    strategies_detail = aggregated_status.get('strategies_detail', [])
+    dimensions = aggregated_status.get('dimensions', [])
+    verification_chains = aggregated_status.get('verification_chains', [])
 
     state_label = state_consensus.get('state', 'UNKNOWN')
     risk_level = risk_aggregation.get('risk_level', 'MEDIUM')
     momentum_label = momentum_consensus.get('momentum', 'NEUTRAL')
 
     latest_close = None
-    for sd in strategies_detail:
-        signals = sd.get('signals', sd.get('signal', []))
+    for dim in dimensions:
+        signals = dim.get('signals', dim.get('signal', []))
         if isinstance(signals, list):
             for sig in signals:
                 if isinstance(sig, dict) and sig.get('close'):
@@ -428,31 +433,41 @@ def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> 
         latest_close = 100.0
 
     if has_api:
-        state_desc = (
-            f"股票: {stock_name}({ts_code})\n"
-            f"状态共识: {state_label} (共识度: {state_consensus.get('consensus_pct', 0)*100:.1f}%)\n"
-            f"风险等级: {risk_level}\n动量共识: {momentum_label}\n"
-        )
-        if key_levels:
-            state_desc += f"支撑位: {key_levels.get('support_levels', [])}\n"
-            state_desc += f"压力位: {key_levels.get('resistance_levels', [])}\n"
+        # ── 1. 五维现状详述（通过 NLG 渲染器） ──
+        nlg_descriptions = _build_nlg_descriptions(dimensions)
 
-        detail_lines = []
-        for sd in strategies_detail[:5]:
-            name = sd.get('strategy_name', sd.get('name', '未知策略'))
-            status = sd.get('status_recognition', {})
-            s = status.get('state', 'N/A') if isinstance(status, dict) else 'N/A'
-            detail_lines.append(f"  - {name}: {s}")
-        if detail_lines:
-            state_desc += "各策略状态:\n" + '\n'.join(detail_lines)
+        # ── 2. 验证链状态 ──
+        chain_lines = []
+        for vc in verification_chains:
+            name = vc.get('chain_name', '验证链')
+            passed = vc.get('passed', False)
+            conflict = vc.get('conflict_detail', '')
+            evidence = vc.get('evidence', [])
+            status = '✅ 通过' if passed else '❌ 未通过'
+            if conflict:
+                chain_lines.append(f"  {name}: {status} — {conflict}")
+            elif evidence:
+                chain_lines.append(f"  {name}: {status}（{'；'.join(evidence[:2])}）")
+            else:
+                chain_lines.append(f"  {name}: {status}")
+        verification_text = '\n'.join(chain_lines) if chain_lines else '  无可用的验证链数据'
+
+        # ── 3. 知识库参考 ──
+        knowledge_text = _build_knowledge_context(dimensions, state_label)
 
         prompt = (
-            f"以下是股票 {stock_name}({ts_code}) 的多维现状聚合数据。\n"
-            f"请根据这些数据，生成一份通俗易懂的中文操作建议。\n\n{state_desc}\n\n"
+            f"以下是股票 {stock_name}({ts_code}) 的多维现状分析数据。\n"
+            f"最新价: {latest_close}\n\n"
+            f"【五维现状详述】\n{nlg_descriptions}\n\n"
+            f"【验证链状态】\n{verification_text}\n\n"
+            f"【知识库参考】\n{knowledge_text}\n\n"
+            f"请基于以上完整信息，生成一份通俗易懂的中文操作建议。\n"
             f'请严格按照以下 JSON 格式返回（不要包含其他内容）：\n'
-            f'{{"operation_plan": "操作计划", "entry_zone": "入场区间", '
+            f'{{"operation_plan": "操作计划（含具体操作方向逻辑和持仓建议）", '
+            f'"entry_zone": "入场区间", '
             f'"stop_loss": "止损价", "target": "目标价", '
-            f'"risk_notes": ["提示1"], "status_summary": "一句话总结"}}'
+            f'"risk_notes": ["提示1","提示2"], '
+            f'"status_summary": "一句话总结（含核心判断依据）"}}'
         )
         system_prompt = "你是一名专业A股投资分析师，请基于数据给出客观分析。输出严格按要求的JSON格式。"
         result_text = _call_deepseek(prompt, system_prompt, config)
@@ -472,6 +487,70 @@ def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> 
         "risk_notes": ["市场存在不确定性"],
         "status_summary": f"{stock_name}({ts_code})当前{state_label}"
     }
+
+
+def _build_nlg_descriptions(dimensions: list) -> str:
+    """用 NLG 渲染器为每个维度生成中文描述。"""
+    try:
+        from app.services.nlg import render_five_dimensions
+        dim_texts = render_five_dimensions(dimensions)
+        if dim_texts:
+            lines = []
+            for dim_name, desc in dim_texts.items():
+                lines.append(f"{dim_name}：{desc}")
+            return '\n'.join(lines)
+    except Exception:
+        pass
+
+    # 降级：取 state 字段
+    lines = []
+    for dim in dimensions[:5]:
+        name = dim.get('strategy_name', dim.get('name', '未知'))
+        status = dim.get('status_recognition', {})
+        s = status.get('state', 'N/A') if isinstance(status, dict) else 'N/A'
+        lines.append(f"  {name}: {s}")
+    return '\n'.join(lines)
+
+
+def _build_knowledge_context(dimensions: list, state_label: str) -> str:
+    """从 KnowledgeReader 查询与当前状态相关的知识概念。"""
+    try:
+        from app.services.knowledge_reader import get_knowledge_reader
+        reader = get_knowledge_reader()
+        reader.initialize()
+
+        # 从各维度提取关键词
+        keywords = []
+        for dim in dimensions[:3]:
+            status = dim.get('status_recognition', {})
+            if isinstance(status, dict):
+                state = status.get('state', '')
+                if state:
+                    keywords.append(state)
+                trend = status.get('trend', {})
+                if trend.get('direction'):
+                    keywords.append(trend['direction'])
+                bp = status.get('buy_sell_point', {})
+                if bp.get('buy'):
+                    keywords.extend(bp['buy'][:2])
+                if bp.get('sell'):
+                    keywords.extend(bp['sell'][:2])
+
+        if state_label and state_label not in ('UNKNOWN', 'UNCERTAIN'):
+            keywords.append(state_label)
+
+        query = ' '.join(set(keywords)) if keywords else f'{state_label} 股票分析'
+        results = reader.match(query, top_k=3)
+        if results:
+            lines = []
+            for r in results:
+                lines.append(f"- {r['title']}（相关度 {r['relevance']:.2f}）")
+                snippet = r['content'][:100].replace('\n', ' ')
+                lines.append(f"  {snippet}")
+            return '\n'.join(lines)
+    except Exception:
+        pass
+    return "暂无相关知识库匹配结果"
 
 
 def explain_signal(ts_code: str, stock_name: str, signals: List[Dict],

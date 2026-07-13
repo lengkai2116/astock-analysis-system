@@ -134,9 +134,16 @@ class AShareBacktestEngine:
     5. 滑点：默认万分之一
     """
     
-    def __init__(self, config: Optional[BacktestConfig] = None):
+    def __init__(self, config: Optional[BacktestConfig] = None, initial_capital: Optional[float] = None):
         self.config = config or BacktestConfig()
+        if initial_capital is not None:
+            self.config.initial_capital = initial_capital
+        self._initial_capital = self.config.initial_capital
         self.reset()
+
+    @property
+    def initial_capital(self):
+        return self._initial_capital
     
     def reset(self):
         """重置回测状态"""

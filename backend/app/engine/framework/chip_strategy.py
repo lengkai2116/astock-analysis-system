@@ -826,6 +826,51 @@ class MainForceScorer:
             return 'unknown'
 
 
+def _phase_to_status(phase: str, score: float) -> dict:
+    """将 MainForceScorer 的操盘阶段 phase 映射为标准 status_recognition 格式。
+
+    Args:
+        phase: 操盘阶段（accumulating/markup/washing/distributing/neutral/unknown）
+        score: MainForceScorer 评分（0-10）
+
+    Returns:
+        status_recognition 结构化字典（7 字段统一格式）
+    """
+    state_map = {
+        "accumulating": "ACCUMULATING",
+        "markup": "ACCUMULATING",
+        "washing": "RANGING",
+        "distributing": "DISTRIBUTING",
+        "neutral": "RANGING",
+        "unknown": "RANGING",
+    }
+    state_label_map = {
+        "ACCUMULATING": "主力建仓",
+        "DISTRIBUTING": "主力出货",
+        "RANGING": "筹码换手",
+    }
+    state = state_map.get(phase, "RANGING")
+    state_label = state_label_map.get(state, "中性")
+
+    # 用评分映射动量和趋势强度
+    if score >= 7:
+        momentum_level, strength = "bullish", "strong"
+    elif score >= 4:
+        momentum_level, strength = "neutral", "moderate"
+    else:
+        momentum_level, strength = "bearish", "weak"
+
+    return {
+        "state": state,
+        "state_label": state_label,
+        "trend": {"direction": "", "strength": strength, "stage": phase},
+        "momentum": {"level": momentum_level, "score": round(score / 10, 2)},
+        "volume": {"state": "", "structure": ""},
+        "support_resistance": {"support": 0.0, "resistance": 0.0},
+        "risk_level": "MEDIUM",
+    }
+
+
 class MainForceFilter:
     """
     主力关注度过滤器 — 用于 L2 筛选
@@ -864,11 +909,14 @@ class MainForceFilter:
                 score = self.scorer.score(df, symbol=ts_code)
                 phase = self.scorer.identify_phase(df, symbol=ts_code)
                 if score > 0:
+                    # phase → status_recognition 映射
+                    sr = _phase_to_status(phase, score)
                     results.append({
                         'symbol': ts_code,
                         'name': name,
                         'mf_score': round(score, 2),
                         'phase': phase,
+                        'status_recognition': sr,
                     })
             except Exception:
                 continue

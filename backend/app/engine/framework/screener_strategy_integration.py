@@ -153,12 +153,9 @@ def _compute_volume_price_score(vp_result: Dict, symbol: str = None, df: pd.Data
     stage = vp_result.get('stage', {})
 
     # VP 策略输出 BUY/SELL/WATCH/HOLD，映射到基础分
-    # BUY=7.0, WATCH=5.5, HOLD=5.0, SELL=3.0, 其余默认5.0
     dir_map = {'BUY': 7.0, 'BULLISH': 7.0, 'WATCH': 5.5, 'HOLD': 5.0,
                'NEUTRAL': 5.0, 'SELL': 3.0, 'BEARISH': 3.0}
     base = dir_map.get(director, 5.0)
-    # score = base * confidence * 2  # 旧公式：confidence ∈ [0,1] 时分数过低
-    # 修正：confidence ∈ [0,1]，映射到 [0.5, 1.0] 系数，使分数在 base 附近合理波动
     score = base * (0.5 + confidence * 0.5)
 
     # 阶段加分
@@ -178,7 +175,7 @@ def _compute_volume_price_score(vp_result: Dict, symbol: str = None, df: pd.Data
                 chip_bins = chip_df['chip_ratio'].dropna().values if 'chip_ratio' in chip_df.columns else None
                 if chip_bins is not None and len(chip_bins) > 0:
                     max_ratio = chip_bins.max()
-                    if max_ratio > 0.15:  # 单峰密集（单一价格区间筹码 > 15%）
+                    if max_ratio > 0.15:  # 单峰密集
                         score += 0.5
         except Exception:
             pass
@@ -203,7 +200,7 @@ def _compute_volume_price_score(vp_result: Dict, symbol: str = None, df: pd.Data
                 if row and row[0] > 0 and above:
                     rps = above[0] / row[0] * 100
                     if rps > 85:
-                        score += 1.0  # RPS>85 加1分
+                        score += 1.0
                         signal_label = (signal_label or '') + '+RPS'
                     elif rps > 70:
                         score += 0.5
@@ -357,11 +354,46 @@ def _f_sentiment(closes, volumes):
         bq = BociasiQuadrantAnalyzer()
         q = bq.analyze()
         mult = q.get('weight_multiplier', 1.0)
-        # mult: 0.75-1.15 映射到 4-8分
         return max(0, min(10, (mult - 0.7) * 15 + 5))
     except Exception:
         return 5.0
 _register_factor('情绪因子', _f_sentiment)
+
+# BOCIASI 快线（个股级情绪，基于OHLCV，~5ms/只）
+def _f_bociasi_quickline(closes, volumes):
+    """个股BOCIASI快线：基于短期价量判断情绪 → 0-10"""
+    try:
+        import numpy as np
+        if len(closes) < 20:
+            return 5.0
+        score = 5.0
+        # 价格动量（5日涨幅）
+        mom_5 = (closes[-1] / closes[-6] - 1) * 100 if len(closes) >= 6 else 0
+        if mom_5 > 3:
+            score += 2.0
+        elif mom_5 > 1:
+            score += 1.0
+        elif mom_5 < -3:
+            score -= 2.0
+        elif mom_5 < -1:
+            score -= 1.0
+        # 成交量确认
+        if len(volumes) >= 20:
+            vol_ratio = volumes[-1] / (np.mean(volumes[-20:-1]) + 1e-9)
+            if vol_ratio > 1.5 and mom_5 > 0:
+                score += 1.0  # 放量上涨
+            elif vol_ratio > 1.5 and mom_5 < 0:
+                score -= 1.0  # 放量下跌
+        # 价格相对均线位置
+        ma_5 = np.mean(closes[-5:]) if len(closes) >= 5 else closes[-1]
+        if closes[-1] > ma_5:
+            score += 0.5
+        else:
+            score -= 0.5
+        return max(0, min(10, score))
+    except Exception:
+        return 5.0
+_register_factor('BOCIASI快线', _f_bociasi_quickline)
 # ══════════════════════════════════════════════════════════════════
 # ECM 数据源因子（需要 symbol + dm 参数）
 # ══════════════════════════════════════════════════════════════════
@@ -1461,6 +1493,7 @@ def screen_l3_candidates(
                     'score': round(vp_score_n / 10.0, 2),
                     'signal': r['vp_signal'],
                     'raw': round(r['vp_score'], 2),
+                    'status_recognition': (r.get('vp_result') or {}).get('signal_output', {}).get('status_recognition'),
                 },
                 'factor': {
                     'score': round(fx_score_n, 1),

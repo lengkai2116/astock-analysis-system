@@ -523,39 +523,90 @@ def build_multistep_context(ts_code: str, steps: List[str] = None) -> Dict:
 
 
 class WikiConceptMatcher:
-    """Map current stock status to LLM Wiki knowledge base concepts."""
+    """LLM Wiki 知识库概念匹配器（基于 SQLite FTS5 内嵌知识库）。
 
-    CONCEPT_MAP = {
-        "MOMENTUM": {"concept": "Main upswing acceleration", "reference": "Three-line bloom / MA bullish alignment", "typical_action": "Trend following, momentum factor weight raised to 0.6"},
-        "MEAN_REV": {"concept": "RSI extreme value reversion", "reference": "Mean reversion strategy / RSI reversal", "typical_action": "Contrarian trading, reversal factor weight raised to 0.65"},
-        "WOLF": {"concept": "Panic sell-off", "reference": "Emotion freezing point / panic bottom", "typical_action": "Defense mode, reduce position cap to 30%"},
-        "EAGLE": {"concept": "Healthy low-vol bull market", "reference": "Slow bull characteristics / trend continuation", "typical_action": "Best environment for trend following strategies"},
-        "BOX": {"concept": "Extremely narrow range oscillation", "reference": "Zhongshu oscillation / consolidation characteristics", "typical_action": "Buy low sell high, watch for zhongshu boundary breakout"},
-        "MACRO": {"concept": "Macro event driven", "reference": "Event-driven strategy / gap jump", "typical_action": "Reduce quant weight, increase manual judgment"},
-        "TRENDING_BULL": {"concept": "Uptrend", "reference": "Dow theory uptrend", "typical_action": "Go with trend, trend following as main approach"},
-        "TRENDING_BEAR": {"concept": "Downtrend", "reference": "Dow theory downtrend", "typical_action": "Defense or short, reduce positions on rebounds"},
-        "HIGH_VOL": {"concept": "High volatility environment", "reference": "Volatility clustering / market uncertainty", "typical_action": "Shorten analysis window to 15 days, sentiment factor priority"},
-        "RANGING": {"concept": "Range oscillation", "reference": "Consolidation market / zhongshu oscillation", "typical_action": "Balanced allocation, watch for breakout direction"},
+    替代原硬编码 CONCEPT_MAP，通过 KnowledgeReader 动态查询
+    data/knowledge/concepts/ 中的概念文件。外部接口不变。
+    """
+
+    # 市场状态 → 关键词映射（用于知识库查询）
+    STATE_KEYWORDS = {
+        "MOMENTUM": "动量趋势加速",
+        "MEAN_REV": "均值回归 RSI 反转",
+        "WOLF": "恐慌杀跌 情绪冰点",
+        "EAGLE": "慢牛 低波动 趋势延续",
+        "BOX": "窄幅震荡 中枢 盘整",
+        "MACRO": "宏观事件驱动 跳空",
+        "TRENDING_BULL": "上升趋势 上涨 多头",
+        "TRENDING_BEAR": "下降趋势 下跌 空头",
+        "HIGH_VOL": "高波动 波动率聚集 情绪",
+        "RANGING": "横盘震荡 盘整 中枢",
+        "ACCUMULATING": "主力建仓 吸筹 筹码收集",
+        "DISTRIBUTING": "主力出货 派筹 筹码派发",
+        "BEARISH": "看空 空头 下跌",
+        "BULLISH": "看多 多头 上涨",
+        "NEUTRAL": "中性 观望 盘整",
     }
 
     @classmethod
     def match(cls, market_state, status_recognition=None):
+        """匹配知识库概念。
+
+        Args:
+            market_state: 市场状态标识（如 "MOMENTUM"、"RANGING"）
+            status_recognition: 可选，策略现状识别 dict
+
+        Returns:
+            [{concept, relevance, reference, typical_action, matched_by}, ...]
+            最多 3 条
+        """
         concepts = []
-        if market_state and market_state in cls.CONCEPT_MAP:
-            info = cls.CONCEPT_MAP[market_state]
-            concepts.append({"concept": info["concept"], "relevance": 0.85,
-                "reference": info["reference"], "typical_action": info["typical_action"],
-                "matched_by": "market_state"})
+
+        # 从 market_state 构建查询关键词
+        query_terms = cls.STATE_KEYWORDS.get(market_state, market_state.lower())
+        if query_terms:
+            kb_results = cls._query_knowledge(query_terms, top_k=2)
+            for r in kb_results:
+                concepts.append({
+                    "concept": r["title"],
+                    "relevance": r["relevance"],
+                    "reference": r["content"][:120],
+                    "typical_action": "参考知识库概念进行判断",
+                    "matched_by": "market_state",
+                })
+
+        # 从 status_recognition 的趋势方向补充查询
         if status_recognition:
             trend_dir = status_recognition.get("trend", {}).get("direction", "")
-            if trend_dir == "up":
-                concepts.append({"concept": "Uptrend continuation", "relevance": 0.70,
-                    "reference": "Chanlun structure / trend divergence",
-                    "typical_action": "Hold long until divergence signal appears",
-                    "matched_by": "trend_direction"})
-            elif trend_dir == "down":
-                concepts.append({"concept": "Downtrend continuation", "relevance": 0.70,
-                    "reference": "Chanlun downtrend / divergence buy point",
-                    "typical_action": "Wait and watch, wait for bottom divergence confirmation",
-                    "matched_by": "trend_direction"})
-        return concepts[:3]
+            if trend_dir in ("up", "down"):
+                extra_kw = "上升趋势 多头" if trend_dir == "up" else "下降趋势 空头 下跌"
+                extra = cls._query_knowledge(extra_kw, top_k=1)
+                for r in extra:
+                    concepts.append({
+                        "concept": r["title"],
+                        "relevance": r["relevance"] * 0.85,
+                        "reference": r["content"][:120],
+                        "typical_action": "结合趋势方向判断",
+                        "matched_by": "trend_direction",
+                    })
+
+        # 去重（按标题去重）
+        seen = set()
+        deduped = []
+        for c in concepts:
+            if c["concept"] not in seen:
+                seen.add(c["concept"])
+                deduped.append(c)
+
+        return deduped[:3]
+
+    @classmethod
+    def _query_knowledge(cls, keywords: str, top_k: int = 2) -> list:
+        """查询内嵌知识库。"""
+        try:
+            from app.services.knowledge_reader import get_knowledge_reader
+            reader = get_knowledge_reader()
+            return reader.match(keywords, top_k=top_k)
+        except Exception:
+            logger.debug("KnowledgeReader 不可用，回退到空结果")
+            return []

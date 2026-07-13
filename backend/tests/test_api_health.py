@@ -16,7 +16,8 @@ def test_health_endpoint():
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['success'] is True
-        assert data['status'] == 'healthy'
+        # 状态在 data.data.status 中
+        assert data['data']['status'] == 'healthy'
 
 
 def test_health_v1_endpoint():

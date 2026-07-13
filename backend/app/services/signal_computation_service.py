@@ -23,6 +23,26 @@ from app.factors.calculator import FactorCalculator
 logger = logging.getLogger(__name__)
 
 
+# ── FMZ 10态 → 情绪周期四阶段映射 ──
+_FMZ_TO_EMOTION = {
+    "WOLF": "情绪冰点",
+    "MACRO": "情绪中性",
+    "MEAN_REV": "情绪复苏",
+    "MOMENTUM": "情绪高潮",
+    "BOX": "情绪中性",
+    "EAGLE": "情绪复苏",
+    "HIGH_VOL": "情绪高潮",
+    "TRENDING_BEAR": "情绪衰退",
+    "TRENDING_BULL": "情绪高潮",
+    "RANGING": "情绪中性",
+}
+
+
+def _fmz_to_emotion_cycle(market_state: str) -> str:
+    """将 FMZ 10态市场状态映射到情绪周期四阶段。"""
+    return _FMZ_TO_EMOTION.get(market_state, "情绪中性")
+
+
 class SignalComputationService:
     """策略信号计算服务"""
 
@@ -190,9 +210,16 @@ class SignalComputationService:
         except Exception as e:
             logger.debug(f"{ts_code} Chip 信号计算失败: {e}")
 
-        # ── L3: 缠论信号 ──
+        # ── L3: 缠论信号（优先读缓存） ──
         try:
-            chanlun_signal = self._compute_chanlun_signal(ts_code, df, market_context)
+            from app.services.analysis_cache import get_analysis_cache
+            cache = get_analysis_cache()
+            cl_key = f"chanlun:{ts_code}:{len(df)}"
+            chanlun_signal = cache.get(cl_key)
+            if chanlun_signal is None:
+                chanlun_signal = self._compute_chanlun_signal(ts_code, df, market_context)
+                if chanlun_signal:
+                    cache.set(cl_key, chanlun_signal)
             if chanlun_signal:
                 signals.append(chanlun_signal)
         except Exception as e:
@@ -206,9 +233,16 @@ class SignalComputationService:
         except Exception as e:
             logger.debug(f"{ts_code} 因子信号计算失败: {e}")
 
-        # ── L3: 量价分析信号 ──
+        # ── L3: 量价分析信号（优先读缓存） ──
         try:
-            volume_price_signal = self._compute_volume_price_signal(ts_code, df, market_context, market_env)
+            from app.services.analysis_cache import get_analysis_cache
+            cache = get_analysis_cache()
+            vp_key = f"vp:{ts_code}:{len(df)}"
+            volume_price_signal = cache.get(vp_key)
+            if volume_price_signal is None:
+                volume_price_signal = self._compute_volume_price_signal(ts_code, df, market_context, market_env)
+                if volume_price_signal:
+                    cache.set(vp_key, volume_price_signal)
             if volume_price_signal:
                 signals.append(volume_price_signal)
         except Exception as e:
@@ -235,20 +269,20 @@ class SignalComputationService:
             if bociasi_slow:
                 signals.append({
                     'strategy_name': 'BOCIASI慢线(情绪-跨市场)',
-                    'signal': bociasi_slow.get('signal', 'NEUTRAL').lower(),
-                    'signal_label': '做多' if bociasi_slow.get('signal') == 'BULLISH' else ('做空' if bociasi_slow.get('signal') == 'BEARISH' else '中性'),
-                    'confidence': bociasi_slow.get('confidence', 0.3),
-                    'evidence': [f"ERP={bociasi_slow['details'].get('erp','N/A')}", f"相对强度={bociasi_slow['details'].get('sb_details',{}).get('relative_strength','N/A')}%"],
-                    'risk_notes': ['模型依赖PE数据和国债收益率近似值'],
                     'status_recognition': {
                         'state': 'ACCUMULATING' if bociasi_slow.get('signal') == 'BULLISH' else ('DISTRIBUTING' if bociasi_slow.get('signal') == 'BEARISH' else 'RANGING'),
-                        'state_label': bociasi_slow.get('signal', 'NEUTRAL'),
-                        'trend': {'direction': bociasi_slow.get('signal', ''), 'strength': '', 'stage': ''},
+                        'state_label': _fmz_to_emotion_cycle(market_context.get('market_state', '')),
+                        'trend': {'direction': 'up' if bociasi_slow.get('signal') == 'BULLISH' else ('down' if bociasi_slow.get('signal') == 'BEARISH' else ''), 'strength': '', 'stage': ''},
                         'momentum': {'level': bociasi_slow.get('signal', ''), 'score': bociasi_slow.get('confidence', 0.0)},
                         'volume': {'state': '', 'structure': ''},
                         'support_resistance': {'support': 0.0, 'resistance': 0.0},
                         'risk_level': 'MEDIUM',
                     },
+                    'signal': bociasi_slow.get('signal', 'NEUTRAL').lower(),
+                    'signal_label': '做多' if bociasi_slow.get('signal') == 'BULLISH' else ('做空' if bociasi_slow.get('signal') == 'BEARISH' else '中性'),
+                    'confidence': bociasi_slow.get('confidence', 0.3),
+                    'evidence': [f"ERP={bociasi_slow['details'].get('erp','N/A')}", f"相对强度={bociasi_slow['details'].get('sb_details',{}).get('relative_strength','N/A')}%"],
+                    'risk_notes': ['模型依赖PE数据和国债收益率近似值'],
                 })
         except Exception as e:
             logger.debug(f"{ts_code} BOCIASI慢线跳过: {e}")
@@ -440,18 +474,48 @@ class SignalComputationService:
             confidence = 0.5
 
         # 筹码策略现状识别
+        indicators = analysis.get('indicators', {})
+        chip_bins = analysis.get('chip_bins', [])
+        asr_val = indicators.get('asr', indicators.get('ASR'))
+        chip_peak = 0.0
+        concentration = 0.0
+        if chip_bins and len(chip_bins) > 0:
+            ratios = [b.get('chip_ratio', 0) for b in chip_bins]
+            peak_idx = int(np.argmax(ratios)) if ratios else 0
+            chip_peak = round(float(chip_bins[peak_idx].get('price', 0)), 2) if peak_idx < len(chip_bins) else 0.0
+            concentration = round(float(max(ratios)), 4) if ratios else 0.0
+
+        # 主力集中价
+        main_force_cost = {"cost_price": 0, "distance_pct": 0, "near_cost": False}
+        try:
+            from app.engine.framework.chip_strategy import MainForceScorer
+            scorer = MainForceScorer()
+            mf_result = scorer._calc_main_force_cost(ts_code, latest_close)
+            if mf_result and mf_result.get('cost_price', 0) > 0:
+                main_force_cost = mf_result
+        except Exception:
+            pass
+
         chip_status = {
             'state': 'ACCUMULATING' if action == 'BUY' else ('DISTRIBUTING' if action == 'SELL' else 'RANGING'),
             'state_label': signal_label,
             'trend': {'direction': '', 'strength': '', 'stage': phase},
             'momentum': {'level': action, 'score': round(float(confidence), 2)},
             'volume': {'state': '', 'structure': ''},
-            'support_resistance': {'support': 0.0, 'resistance': 0.0},
+            'support_resistance': {
+                'support': round(float(chip_peak), 2) if chip_peak > 0 else 0.0,
+                'resistance': round(float(chip_peak), 2) if chip_peak > 0 else 0.0,
+            },
             'risk_level': 'HIGH' if cap else 'MEDIUM',
+            'chip_peak': chip_peak,
+            'concentration': concentration,
+            'asr': asr_val,
+            'main_force_cost': main_force_cost,
         }
 
         return {
             'strategy_name': '筹码主力分析',
+            'status_recognition': chip_status,
             'signal': signal,
             'signal_label': signal_label,
             'confidence': round(float(confidence), 2),
@@ -473,7 +537,6 @@ class SignalComputationService:
                 'cap_level': cap,
                 'pre_filter_pass': True,
             },
-            'status_recognition': chip_status,
         }
 
     def _compute_chanlun_signal(self, ts_code: str, df: pd.DataFrame, market_context: Optional[Dict] = None) -> Optional[Dict]:
@@ -588,6 +651,21 @@ class SignalComputationService:
         # ─── 3. 买卖点过滤（当前中枢之后） ───
         recent_buy = []
         recent_sell = []
+
+        # 级别间背驰对比验证
+        level_cross_info = ""
+        level_cross_score = 0.0
+        try:
+            from app.engine.framework.chanlun_level_validator import ChanlunLevelValidator
+            validator = ChanlunLevelValidator()
+            lv_result = validator.validate(df)
+            if lv_result.get('cross_score', 0.5) != 0.5:
+                level_cross_score = lv_result['cross_score']
+                details = lv_result.get('details', [])
+                if details:
+                    level_cross_info = "；".join(details[:2])
+        except Exception:
+            pass
         zs_formed_date = str(latest_zhongshu.start_date)[:10] if latest_zhongshu and hasattr(latest_zhongshu, 'start_date') else None
 
         for p in buy_points:
@@ -1003,6 +1081,31 @@ class SignalComputationService:
 
         return {
             'strategy_name': '缠论走势分析',
+            'status_recognition': {
+                'state': 'ACCUMULATING' if trend_str == '上升' else ('BEARISH' if trend_str == '下降' else 'RANGING'),
+                'state_label': trend_str or '方向待定',
+                'trend': {
+                    'direction': 'up' if trend_str == '上升' else ('down' if trend_str == '下降' else ''),
+                    'strength': 'strong' if '延续' in (last_bi_status or '') else 'weakening',
+                    'stage': f'日线{last_bi_status}' if last_bi_status else '',
+                },
+                'momentum': {
+                    'level': str(divergence.direction) if divergence else '',
+                    'score': round(divergence.confidence, 4) if divergence else 0.0,
+                    'level_cross': level_cross_info,
+                    'level_cross_score': round(level_cross_score, 4),
+                },
+                'volume': {'state': '', 'structure': '/'.join(BP_TYPE_CN.get(t, t) for t in buy_types) if buy_types else ''},
+                'buy_sell_point': {
+                    'buy': [BP_TYPE_CN.get(t, t) for t in buy_types],
+                    'sell': [BP_TYPE_CN.get(t, t) for t in sell_types],
+                },
+                'support_resistance': {
+                    'support': round(float(zs_low), 2) if zs_low else 0.0,
+                    'resistance': round(float(zs_high), 2) if zs_high else 0.0,
+                },
+                'risk_level': 'HIGH' if trend_str == '下降' and confidence < 0.5 else 'MEDIUM',
+            },
             'signal': internal_signal,
             'signal_label': internal_label,
             'confidence': round(confidence, 2),
@@ -1070,27 +1173,6 @@ class SignalComputationService:
             
             # 全中文分析报告（主要用户输出）
             '分析报告': analysis_report,
-
-            # 缠论现状识别
-            'status_recognition': {
-                'state': 'ACCUMULATING' if trend_str == '上升' else ('BEARISH' if trend_str == '下降' else 'RANGING'),
-                'state_label': trend_str or '方向待定',
-                'trend': {
-                    'direction': 'up' if trend_str == '上升' else ('down' if trend_str == '下降' else ''),
-                    'strength': 'strong' if '延续' in (last_bi_status or '') else 'weakening',
-                    'stage': last_bi_status or '',
-                },
-                'momentum': {
-                    'level': str(divergence.direction) if divergence else '',
-                    'score': round(divergence.confidence, 4) if divergence else 0.0,
-                },
-                'volume': {'state': '', 'structure': ''},
-                'support_resistance': {
-                    'support': round(float(zs_low), 2) if zs_low else 0.0,
-                    'resistance': round(float(zs_high), 2) if zs_high else 0.0,
-                },
-                'risk_level': 'HIGH' if trend_str == '下降' and confidence < 0.5 else 'MEDIUM',
-            },
         }
     def _compute_factor_signal(self, ts_code: str, df: pd.DataFrame, market_context: Optional[Dict] = None) -> Optional[Dict]:
         """计算因子评分信号 (L3) — 优先使用 FactorRegistry"""
@@ -1111,7 +1193,8 @@ class SignalComputationService:
                 # cached_factors: [factor_name, value, trade_date]
                 latest = cached_factors.loc[cached_factors.groupby('factor_name')['trade_date'].idxmax()]
                 scores = {row['factor_name']: float(row['value']) for _, row in latest.iterrows()}
-                weights = {'ROC': 0.25, 'VOL_RATIO': 0.20, 'ATR': 0.15, 'RSI': 0.25, 'LINEARREG_SLOPE': 0.15}
+                weights = {'ROC': 0.15, 'VOL_RATIO': 0.15, 'ATR': 0.10, 'RSI': 0.15, 'LINEARREG_SLOPE': 0.10,
+                           'MFI': 0.10, 'MA_CROSS': 0.15, 'ACCEL': 0.10}
                 valid = {k: v for k, v in scores.items() if k in weights}
                 if valid:
                     composite = sum(valid[k] * weights[k] for k in valid)
@@ -1129,7 +1212,8 @@ class SignalComputationService:
             registry_scores, registry_ok = self._compute_via_registry(df)
         if registry_ok:
             scores = registry_scores
-            weights = {'ROC': 0.25, 'VOL_RATIO': 0.20, 'ATR': 0.15, 'RSI': 0.25, 'LINEARREG_SLOPE': 0.15}
+            weights = {'ROC': 0.15, 'VOL_RATIO': 0.15, 'ATR': 0.10, 'RSI': 0.15, 'LINEARREG_SLOPE': 0.10,
+                       'MFI': 0.10, 'MA_CROSS': 0.15, 'ACCEL': 0.10}
             composite = sum(scores.get(k, 0.5) * weights[k] for k in weights)
             evidence_keys = list(scores.keys())
 
@@ -1170,6 +1254,22 @@ class SignalComputationService:
 
         return {
             'strategy_name': '因子评分系统',
+            'status_recognition': {
+                'state': 'ACCUMULATING' if composite >= 0.6 else ('BEARISH' if composite < 0.4 else 'RANGING'),
+                'state_label': signal_label,
+                'trend': {
+                    'direction': 'up' if composite >= 0.6 else ('down' if composite < 0.4 else ''),
+                    'strength': 'strong' if composite >= 0.7 else ('moderate' if composite >= 0.4 else 'weak'),
+                    'stage': '',
+                },
+                'momentum': {
+                    'level': signal,
+                    'score': round(max(scores.values()), 4) if scores else round(composite, 4),
+                },
+                'volume': {'state': '', 'structure': ''},
+                'support_resistance': {'support': 0.0, 'resistance': 0.0},
+                'risk_level': 'HIGH' if composite < 0.4 else 'LOW',
+            },
             'signal': signal,
             'signal_label': signal_label,
             'confidence': round(composite, 2),
@@ -1182,20 +1282,6 @@ class SignalComputationService:
             'risk_notes': ['因子模型假设偏差', '市场风格切换风险'],
             'signal_date': latest_date if isinstance(latest_date, str) else latest_date.strftime('%Y-%m-%d'),
             'backtest_win_rates': self._get_signal_win_rates(signal),
-
-            # 因子现状识别
-            'status_recognition': {
-                'state': 'ACCUMULATING' if composite >= 0.6 else ('BEARISH' if composite < 0.4 else 'RANGING'),
-                'state_label': signal_label,
-                'trend': {'direction': '', 'strength': '', 'stage': ''},
-                'momentum': {
-                    'level': signal,
-                    'score': round(max(scores.values()), 4) if scores else round(composite, 4),
-                },
-                'volume': {'state': '', 'structure': ''},
-                'support_resistance': {'support': 0.0, 'resistance': 0.0},
-                'risk_level': 'HIGH' if composite < 0.4 else 'LOW',
-            },
         }
 
     def _compute_via_registry(self, df: pd.DataFrame) -> tuple:
@@ -1214,19 +1300,48 @@ class SignalComputationService:
                 series = calculator.calculate_single_factor(df, cfg['name'], **cfg['params'])
                 if series is not None and not series.empty:
                     val = float(series.iloc[-1])
-                    # 归一化到 [0,1]
                     name = cfg['name']
                     if name == 'ROC':
                         scores[name] = min(max(val * 5 + 0.5, 0), 1)
                     elif name == 'VOL_RATIO':
                         scores[name] = min(val * 0.4, 1)
                     elif name == 'ATR':
-                        # ATR 归一化：相对价格位置
                         scores[name] = min(val / (float(df['close'].iloc[-1]) * 0.1 + 1e-9), 1)
                     elif name == 'RSI':
                         scores[name] = 1 - abs(val - 50) / 50
                     elif name == 'LINEARREG_SLOPE':
                         scores[name] = min(max(val * 10 + 0.5, 0), 1)
+
+            # 扩展因子：直接在 OHLCV 上计算（不依赖 FactorRegistry）
+            closes = df['close'].values
+            volumes = df['vol'].values if 'vol' in df.columns else df['amount'].values
+
+            # MFI (资金流强度) — 用价量关系估算
+            if len(closes) >= 14 and len(volumes) >= 14:
+                typical_prices = (df['high'].values[-14:] + df['low'].values[-14:] + closes[-14:]) / 3
+                vol_slice = volumes[-14:]
+                pos_flow = sum(vol_slice[i] for i in range(1, 14) if typical_prices[i] > typical_prices[i-1])
+                neg_flow = sum(vol_slice[i] for i in range(1, 14) if typical_prices[i] < typical_prices[i-1])
+                if neg_flow > 0:
+                    mfi = 100 - (100 / (1 + pos_flow / neg_flow))
+                    scores['MFI'] = min(mfi / 100, 1)
+                else:
+                    scores['MFI'] = 0.6
+
+            # MA 交叉强度 (5日 vs 20日)
+            if len(closes) >= 20:
+                ma_5 = np.mean(closes[-5:])
+                ma_20 = np.mean(closes[-20:])
+                cross_ratio = (ma_5 - ma_20) / (ma_20 + 1e-9)
+                scores['MA_CROSS'] = min(max(cross_ratio * 20 + 0.5, 0), 1)
+
+            # 价格加速度 (对比近5日 vs 近20日涨幅)
+            if len(closes) >= 20:
+                mom_5 = (closes[-1] / closes[-6] - 1) if len(closes) >= 6 else 0
+                mom_20 = (closes[-1] / closes[-21] - 1) if len(closes) >= 21 else 0
+                accel = mom_5 - mom_20 / 4  # 近5日动量 vs 近20日平均动量
+                scores['ACCEL'] = min(max(accel * 20 + 0.5, 0), 1)
+
             if len(scores) >= 3:
                 return scores, True
         except Exception as e:
@@ -1449,6 +1564,15 @@ class SignalComputationService:
 
             return {
                 'strategy_name': 'BOCIASI快线',
+                'status_recognition': {
+                    'state': 'ACCUMULATING' if result['signal'] == 'BUY' else ('BEARISH' if result['signal'] in ('NEUTRAL',) else 'RANGING'),
+                    'state_label': label_map.get(result['signal'], ''),
+                    'trend': {'direction': '', 'strength': '', 'stage': ''},
+                    'momentum': {'level': result['signal'], 'score': result['confidence']},
+                    'volume': {'state': '放量' if ind.get('fast_vol') else '平量', 'structure': ''},
+                    'support_resistance': {'support': 0.0, 'resistance': 0.0},
+                    'risk_level': 'LOW' if result['signal'] == 'BUY' else ('HIGH' if result['signal'] == 'NEUTRAL' else 'MEDIUM'),
+                },
                 'signal': signal_map.get(result['signal'], 'NEUTRAL'),
                 'signal_label': label_map.get(result['signal'], '情绪中性'),
                 'confidence': result['confidence'],
@@ -1460,15 +1584,6 @@ class SignalComputationService:
                 'evidence': evidence,
                 'risk_notes': ['情绪指标偏短期，需结合其他策略使用'],
                 'signal_date': '',
-                'status_recognition': {
-                    'state': 'ACCUMULATING' if result['signal'] == 'BUY' else 'RANGING',
-                    'state_label': label_map.get(result['signal'], ''),
-                    'trend': {'direction': '', 'strength': '', 'stage': ''},
-                    'momentum': {'level': result['signal'], 'score': result['confidence']},
-                    'volume': {'state': '放量' if ind.get('fast_vol') else '平量', 'structure': ''},
-                    'support_resistance': {'support': 0.0, 'resistance': 0.0},
-                    'risk_level': 'LOW' if result['signal'] == 'BUY' else 'MEDIUM',
-                },
             }
         except Exception as e:
             logger.debug(f"{ts_code} BOCIASI 信号异常: {e}")

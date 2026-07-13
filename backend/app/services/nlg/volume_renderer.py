@@ -1,0 +1,85 @@
+"""
+量价/筹码维度 NLG 渲染器 — 成交量、形态、筹码峰 → 中文描述
+"""
+
+from .templates import VOLUME_STATE, VOLUME_RELATION
+
+
+def render_volume(volume: dict) -> str:
+    """渲染量价维度中文描述。
+
+    Args:
+        volume: {state, structure}
+
+    Returns:
+        中文量价描述段落（20-60 字）
+    """
+    vol_state = volume.get("state", "")
+    structure = volume.get("structure", "")
+
+    parts = []
+    if vol_state:
+        parts.append(f"成交量{vol_state}")
+    if structure:
+        parts.append(structure)
+
+    return "，".join(parts) + "。" if parts else ""
+
+
+def render_volume_with_relation(volume: dict, trend: dict = None) -> str:
+    """渲染带量价关系的描述。"""
+    vol_state = volume.get("state", "")
+    structure = volume.get("structure", "")
+    trend_dir = trend.get("direction", "") if trend else ""
+
+    parts = []
+    if vol_state and trend_dir:
+        # 量价配合关系
+        if vol_state == "放量" and trend_dir == "up":
+            parts.append("放量上攻，量价配合良好")
+        elif vol_state == "放量" and trend_dir == "down":
+            parts.append("放量下跌，空头释放中")
+        elif vol_state == "缩量" and trend_dir == "up":
+            parts.append("缩量上涨，上攻动能不足")
+        elif vol_state == "缩量" and trend_dir == "down":
+            parts.append("缩量回调，下跌动能减弱")
+        else:
+            parts.append(f"成交量{vol_state}")
+    elif vol_state:
+        parts.append(f"成交量{vol_state}")
+
+    if structure:
+        parts.append(structure)
+
+    return "，".join(parts) + "。" if parts else ""
+
+
+def render_chip_volume(chip_status: dict) -> str:
+    """渲染筹码维度量价描述（含筹码峰/ASR信息）。"""
+    parts = []
+
+    chip_peak = chip_status.get("chip_peak", 0)
+    asr_val = chip_status.get("asr")
+    concentration = chip_status.get("concentration", 0)
+    mf_cost = chip_status.get("main_force_cost", {})
+
+    if chip_peak > 0:
+        parts.append(f"筹码主峰位于 {chip_peak} 附近")
+
+    if asr_val is not None:
+        asr_pct = asr_val if isinstance(asr_val, (int, float)) and asr_val <= 1 else (asr_val / 100 if asr_val > 1 else asr_val)
+        parts.append(f"浮筹比例 {asr_pct:.0%}")
+
+    if concentration > 0:
+        parts.append(f"集中度 {concentration:.1%}")
+
+    cost_price = mf_cost.get("cost_price", 0)
+    if cost_price > 0:
+        distance = mf_cost.get("distance_pct", 0)
+        near = mf_cost.get("near_cost", False)
+        if near:
+            parts.append(f"主力成本价约 {cost_price}，当前价接近主力成本")
+        else:
+            parts.append(f"主力成本价约 {cost_price}，偏离 {distance:+.1f}%")
+
+    return "，".join(parts) + "。" if parts else ""

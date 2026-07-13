@@ -153,7 +153,10 @@ class _CollectThread(threading.Thread):
                                   self._MAX_BACKOFF)
                 self._stop_event.wait(backoff_sec)
 
-        logger.info(f"[{self.name}] 线程停止 (采集{self._collect_count}次, 错误{self._error_count}次)")
+        try:
+            logger.info(f"[{self.name}] 线程停止 (采集{self._collect_count}次, 错误{self._error_count}次)")
+        except ValueError:
+            pass  # atexit 时 logger stream 已不可用
 
     def _log_error_throttled(self, e):
         n = self._consecutive_failures
@@ -385,7 +388,10 @@ class AkshareCollector:
             t.stop()
         for t in self._threads:
             t.join(timeout=5)
-        logger.info(f"AkshareCollector 已停止 ({len(self._threads)} 线程)")
+        try:
+            logger.info(f"AkshareCollector 已停止 ({len(self._threads)} 线程)")
+        except ValueError:
+            pass  # pytest 关闭时 logger stream 已不可用
         self._threads = []
 
     def is_running(self) -> bool:

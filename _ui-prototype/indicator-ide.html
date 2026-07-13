@@ -278,6 +278,7 @@
   background:var(--bg-subtle); border-bottom:1px solid var(--border-default);
   font-size:12px; font-weight:600; color:var(--text-primary);
 }
+.dim-tag-header { margin-left:auto; font-size:11px; font-weight:400; }
 .dim-card-body { display:grid; grid-template-columns:1fr 1.5fr; gap:0; }
 @media (max-width:1100px){
   .dim-card-body { grid-template-columns:1fr; }
@@ -775,7 +776,9 @@
 
           <!-- 一、走势结构 -->
           <div class="dim-card" data-dim="chanlun">
-            <div class="dim-card-header">📉 一、走势结构</div>
+            <div class="dim-card-header">📉 一、走势结构
+              <span class="tag dim-tag-header" id="cm-chanlun-tag">--</span>
+            </div>
             <div class="dim-card-body">
               <div class="dim-metrics">
                 <div class="dim-metric"><span class="icon">📉</span><span class="label">趋势方向</span><span class="val dn" id="cm-chanlun-direction">--</span></div>
@@ -788,14 +791,15 @@
               <div class="dim-narrative" id="cm-chanlun-narrative">加载中...</div>
             </div>
             <div class="dim-footer" id="cm-chanlun-footer">
-              <span class="tag" id="cm-chanlun-tag">--</span>
               <span id="cm-chanlun-footer-text">--</span>
             </div>
           </div>
 
           <!-- 二、量价形态 -->
           <div class="dim-card" data-dim="volume-price">
-            <div class="dim-card-header">🌡 二、量价形态</div>
+            <div class="dim-card-header">🌡 二、量价形态
+              <span class="tag dim-tag-header" id="cm-vp-tag">--</span>
+            </div>
             <div class="dim-card-body">
               <div class="dim-metrics">
                 <div class="dim-metric"><span class="icon">🌡</span><span class="label">FMZ状态</span><span class="val" id="cm-vp-phase" style="color:var(--signal-watch);">--</span></div>
@@ -807,14 +811,15 @@
               <div class="dim-narrative" id="cm-vp-narrative">加载中...</div>
             </div>
             <div class="dim-footer" id="cm-vp-footer">
-              <span class="tag" id="cm-vp-tag">--</span>
               <span id="cm-vp-footer-text">--</span>
             </div>
           </div>
 
           <!-- 三、筹码与资金 -->
           <div class="dim-card" data-dim="chip">
-            <div class="dim-card-header">🧩 三、筹码与资金</div>
+            <div class="dim-card-header">🧩 三、筹码与资金
+              <span class="tag dim-tag-header" id="cm-chip-tag">--</span>
+            </div>
             <div class="dim-card-body">
               <div class="dim-metrics">
                 <div class="dim-metric"><span class="icon">💎</span><span class="label">获利比例</span><span class="val" id="cm-chip-profit_ratio">--</span></div>
@@ -826,14 +831,15 @@
               <div class="dim-narrative" id="cm-chip-narrative">加载中...</div>
             </div>
             <div class="dim-footer" id="cm-chip-footer">
-              <span class="tag" id="cm-chip-tag">--</span>
               <span id="cm-chip-footer-text">--</span>
             </div>
           </div>
 
           <!-- 四、情绪环境 -->
           <div class="dim-card" data-dim="emotion">
-            <div class="dim-card-header">🌊 四、情绪环境</div>
+            <div class="dim-card-header">🌊 四、情绪环境
+              <span class="tag dim-tag-header" id="cm-emotion-tag">--</span>
+            </div>
             <div class="dim-card-body">
               <div class="dim-metrics">
                 <div class="dim-metric"><span class="icon">🌡</span><span class="label">情绪周期</span><span class="val" id="cm-emotion-cycle">--</span></div>
@@ -843,14 +849,15 @@
               <div class="dim-narrative" id="cm-emotion-narrative">加载中...</div>
             </div>
             <div class="dim-footer" id="cm-emotion-footer">
-              <span class="tag" id="cm-emotion-tag">--</span>
               <span id="cm-emotion-footer-text">--</span>
             </div>
           </div>
 
           <!-- 五、Vibe 策略 -->
           <div class="dim-card" data-dim="vibe">
-            <div class="dim-card-header">🌀 五、Vibe 策略</div>
+            <div class="dim-card-header">🌀 五、Vibe 策略
+              <span class="tag dim-tag-header" id="cm-vibe-tag">--</span>
+            </div>
             <div class="dim-card-body">
               <div class="dim-metrics">
                 <div class="dim-metric"><span class="icon">🎯</span><span class="label">信号方向</span><span class="val" id="cm-vibe-signal">--</span></div>
@@ -860,7 +867,6 @@
               <div class="dim-narrative" id="cm-vibe-narrative">加载中...</div>
             </div>
             <div class="dim-footer" id="cm-vibe-footer">
-              <span class="tag" id="cm-vibe-tag">--</span>
               <span id="cm-vibe-footer-text">--</span>
             </div>
           </div>
