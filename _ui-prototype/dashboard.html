@@ -269,7 +269,7 @@ function loadMoneyflow(){
       if(!d.success||!d.data||!d.data.days||!d.data.days.length)return;
       var c=echarts.init(document.getElementById('chart-fund-flow'));
       var flow=d.data.days.reverse();
-      var days=flow.map(function(v){return v.date&&v.date.slice(5)||'';});
+      var days=flow.map(function(v){return v.date||'';});
       var main=flow.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
       var retail=flow.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
       c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流出'],textStyle:{color:'#94A3B8'},top:0},grid:{left:50,right:20,bottom:20,top:40},
@@ -572,7 +572,7 @@ function renderMoneyflow(md){
   if(!md||!md.days||!md.days.length)return;
   var c=echarts.init(document.getElementById('chart-fund-flow'));
   var flow=md.days.reverse();
-  var days=flow.map(function(v){return v.date&&v.date.slice(5)||'';});
+  var days=flow.map(function(v){return v.date||'';});
   var main=flow.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
   var retail=flow.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
   c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流出'],textStyle:{color:'#94A3B8'},top:0},grid:{left:50,right:20,bottom:20,top:40},
@@ -584,7 +584,7 @@ function renderMoneyflow(md){
 }
 
 function renderSectorChart(sd){
-  if(!sd||!sd.data)return;
+  if(!sd)return;
   var inArr=(sd.gainers||[]).slice(0,5);
   var outArr=(sd.losers||[]).slice(0,5);
   var chartData=inArr.concat(outArr).sort(function(a,b){return (a.change_pct||0)-(b.change_pct||0);});
@@ -599,9 +599,9 @@ function renderSectorChart(sd){
 }
 
 function renderSectorMoneyflow(smd){
-  if(!smd||!smd.data)return;
-  var inArr=(smd.data.sectors||[]).slice(0,5);
-  var outArr=(smd.data.out_sectors||[]).slice(0,5);
+  if(!smd)return;
+  var inArr=(smd.sectors||[]).slice(0,5);
+  var outArr=(smd.out_sectors||[]).slice(0,5);
   var chartData=inArr.concat(outArr).sort(function(a,b){return (a.net_inflow||0)-(b.net_inflow||0);});
   if(chartData.length){
     var c=echarts.init(document.getElementById('sector-inflow-chart'));
@@ -611,9 +611,9 @@ function renderSectorMoneyflow(smd){
         label:{show:true,position:'right',formatter:function(p){return p.value>0?'+'+p.value+'亿':p.value+'亿';},fontSize:10,color:'#94A3B8'}}]});
     charts.push(c);
   }
-  if(smd.data.sectors&&smd.data.sectors.length){
+  if(smd.sectors&&smd.sectors.length){
     var inCont=document.getElementById('top-stock-cards');inCont.innerHTML='';
-    smd.data.sectors.slice(0,5).forEach(function(s){
+    smd.sectors.slice(0,5).forEach(function(s){
       var wrap=document.createElement('div');
       wrap.style.cssText='background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:var(--space-4);flex:1;min-width:0;';
       var h=document.createElement('div');
@@ -628,9 +628,9 @@ function renderSectorMoneyflow(smd){
       inCont.appendChild(wrap);
     });
   }
-  if(smd.data.out_sectors&&smd.data.out_sectors.length){
+  if(smd.out_sectors&&smd.out_sectors.length){
     var outCont=document.getElementById('outflow-cards');outCont.innerHTML='';
-    smd.data.out_sectors.slice(0,5).forEach(function(s){
+    smd.out_sectors.slice(0,5).forEach(function(s){
       var wrap=document.createElement('div');
       wrap.style.cssText='background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:var(--space-4);flex:1;min-width:0;';
       var h=document.createElement('div');
