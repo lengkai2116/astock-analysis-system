@@ -3247,7 +3247,7 @@ function startAnalysis(){
   var empty = document.getElementById('strategyEmpty');
   var cfg = document.getElementById('strategyConfig');
   var loading = document.getElementById('strategyLoading');
-  if(empty) empty.classList.remove('show');
+  if(empty){ empty.style.display = 'none'; empty.classList.remove('show'); }
   if(cfg) cfg.classList.remove('open');
   if(loading) loading.classList.add('show');
 
@@ -3287,6 +3287,10 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
 
   if(loading) loading.classList.remove('show');
   if(bar) bar.style.width = '100%';
+
+  // 确保空状态隐藏（清除 switchStock 可能设置的 display:flex）
+  var empty = document.getElementById('strategyEmpty');
+  if(empty) empty.style.display = 'none';
 
   // 填充5维卡
   if(analysisData && analysisData.dimensions){
@@ -3352,6 +3356,9 @@ function cancelAnalysis(){
   if(_analysisTimer){ clearTimeout(_analysisTimer); _analysisTimer = null; }
   var loading = document.getElementById('strategyLoading');
   if(loading) loading.classList.remove('show');
+  // 显示空状态
+  var empty = document.getElementById('strategyEmpty');
+  if(empty) empty.style.display = 'flex';
   // 显示配置面板
   var cfg = document.getElementById('strategyConfig');
   if(cfg) cfg.classList.add('open');
