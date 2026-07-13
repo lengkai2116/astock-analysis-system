@@ -3299,6 +3299,7 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
     if(analysisData.data_availability) renderDataCompleteness(analysisData.data_availability);
     // 显示各维度
     if(results){
+      results.style.display = '';  // 清除 switchStock 设置的内联样式
       results.classList.add('show');
       var checkedNames = [];
       document.querySelectorAll('#strategyOptions input[type=checkbox]:checked').forEach(function(c){
@@ -3327,7 +3328,7 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
   // 填充交叉验证
   if(verificationData){
     renderVerificationChains(verificationData);
-    if(crossVerify) crossVerify.classList.add('show');
+    if(crossVerify){ crossVerify.style.display = ''; crossVerify.classList.add('show'); }
   }
 
   // Kronos标签
@@ -3340,7 +3341,7 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
     generateScenariosFromDimensions(analysisData.dimensions);
   }
 
-  if(aiArbitration) aiArbitration.classList.add('show');
+  if(aiArbitration){ aiArbitration.style.display = ''; aiArbitration.classList.add('show'); }
 
   updateStrategyBarTags();
   showToast('✅ 策略分析完成');
@@ -3356,6 +3357,13 @@ function cancelAnalysis(){
   if(_analysisTimer){ clearTimeout(_analysisTimer); _analysisTimer = null; }
   var loading = document.getElementById('strategyLoading');
   if(loading) loading.classList.remove('show');
+  // 隐藏结果/验证/AI区
+  var results = document.getElementById('strategyResults');
+  var verify = document.getElementById('crossVerify');
+  var arbit = document.getElementById('aiArbitration');
+  if(results){ results.style.display = 'none'; results.classList.remove('show'); }
+  if(verify){ verify.style.display = 'none'; verify.classList.remove('show'); }
+  if(arbit){ arbit.style.display = 'none'; arbit.classList.remove('show'); }
   // 显示空状态
   var empty = document.getElementById('strategyEmpty');
   if(empty) empty.style.display = 'flex';
