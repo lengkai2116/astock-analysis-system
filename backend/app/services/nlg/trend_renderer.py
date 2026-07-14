@@ -55,49 +55,89 @@ def render_trend(trend: dict) -> str:
     return "，".join(parts) + "。" if parts else "趋势方向不明。"
 
 
-def render_chanlun_trend(status: dict) -> str:
-    """渲染缠论趋势中文描述（含买卖点和背驰信息）。"""
+def render_chanlun_trend(status: dict, latest_close: float = None) -> str:
+    """渲染缠论趋势中文描述（三段式连贯叙事）。
+    
+    第一句：多级别趋势结论
+    第二句：买卖点+背驰信息
+    第三句：关键价位与距离
+    """
     trend = status.get("trend", {})
     momentum = status.get("momentum", {})
     sr = status.get("support_resistance", {})
     bp = status.get("buy_sell_point", {})
+    multi_level = status.get("multi_level", {})
 
     parts = []
+    
+    # === 第一句：趋势结论（优先使用多级别描述）===
+    direction_text = multi_level.get('direction_text', '')
+    if direction_text:
+        parts.append(direction_text)
+    else:
+        # 降级到原有的 render_trend
+        trend_text = render_trend(trend)
+        parts.append(trend_text.rstrip('。'))
 
-    # 趋势描述
-    trend_text = render_trend(trend)
-    parts.append(trend_text)
-
-    # 买卖点
+    # === 第二句：买卖点+背驰 ===
+    extra = []
     buy_list = bp.get("buy", [])
     sell_list = bp.get("sell", [])
-    if buy_list or sell_list:
-        bp_parts = []
-        if buy_list:
-            bp_parts.append("买点: " + "/".join(buy_list))
-        if sell_list:
-            bp_parts.append("卖点: " + "/".join(sell_list))
-        parts.append("当前" + "，".join(bp_parts))
-
-    # 背驰信息
+    if buy_list:
+        extra.append("买点:" + "/".join(buy_list))
+    if sell_list:
+        extra.append("卖点:" + "/".join(sell_list))
+    
     div_level = momentum.get("level", "")
     if div_level and div_level not in ("none", "unknown", ""):
         div_cn = {"bullish": "底背驰", "bearish": "顶背驰"}.get(div_level, div_level)
-        parts.append(f"存在{div_cn}信号")
+        extra.append(f"存在{div_cn}信号")
+    
+    if extra:
+        parts.append("；".join(extra))
 
-    # 支撑压力
-    support = sr.get("support", 0)
-    resistance = sr.get("resistance", 0)
-    if support or resistance:
-        sp = []
-        if resistance:
-            sp.append(f"上方压力 {resistance}")
-        if support:
-            sp.append(f"下方支撑 {support}")
-        if sp:
-            parts.append("，".join(sp))
+    # === 第三句：关键价位与距离 ===
+    level_parts = []
+    
+    # 优先使用 multi_level 中的 near_levels
+    near_levels = multi_level.get('near_levels', [])
+    if near_levels:
+        for nl in near_levels[:2]:  # 最多2个级别
+            lv = nl.get('level', '')
+            sup = nl.get('support', 0)
+            res = nl.get('resistance', 0)
+            if lv and (sup or res):
+                if latest_close and sup > 0:
+                    dist = (latest_close - sup) / sup * 100
+                    level_parts.append(f"{lv}支撑{sup:.2f}(距当前{dist:+.1f}%)")
+                if latest_close and res > 0:
+                    dist = (res - latest_close) / latest_close * 100
+                    level_parts.append(f"{lv}压力{res:.2f}(距当前+{dist:.1f}%)")
+    else:
+        # 降级：原有的 support/resistance，加距离
+        support = sr.get("support", 0)
+        resistance = sr.get("resistance", 0)
+        if support or resistance:
+            sp = []
+            if resistance:
+                if latest_close and latest_close > 0:
+                    dist = (resistance - latest_close) / latest_close * 100
+                    sp.append(f"上方压力{resistance:.2f}(距当前+{dist:.1f}%)")
+                else:
+                    sp.append(f"上方压力{resistance:.2f}")
+            if support:
+                if latest_close and latest_close > 0:
+                    dist = (latest_close - support) / latest_close * 100
+                    sp.append(f"下方支撑{support:.2f}(距当前-{abs(dist):.1f}%)")
+                else:
+                    sp.append(f"下方支撑{support:.2f}")
+            if sp:
+                level_parts = sp
+    
+    if level_parts:
+        parts.append("，".join(level_parts))
 
-    return "".join(parts)
+    return "。".join(parts) + "。" if parts else "走势结构分析数据不足。"
 
 
 def render_volume_price_trend(status: dict) -> str:

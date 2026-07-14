@@ -17,9 +17,13 @@ from app.services.kronos_forecaster import KronosForecaster
 
 # NLG 渲染器
 try:
-    from app.services.nlg import render_chanlun_trend, render_volume_price_trend, render_chip_volume
+    from app.services.nlg import render_chanlun_trend, render_volume_price_trend, render_chip_volume, render_emotion
     _HAVE_NLG = True
-except Exception:
+except ImportError as _nlg_err:
+    logger.warning("NLG 渲染模块导入失败，将使用 evidence 拼接降级: %s", _nlg_err)
+    _HAVE_NLG = False
+except Exception as _nlg_exc:
+    logger.warning("NLG 渲染模块异常导入: %s", _nlg_exc)
     _HAVE_NLG = False
 
 logger = logging.getLogger(__name__)
@@ -56,25 +60,73 @@ def _safe_str(val, default='未知') -> str:
     return str(val) if val is not None else default
 
 
-def _build_chanlun_dimension(sig: Optional[Dict]) -> Dict:
+def _build_chanlun_dimension(sig: Optional[Dict], latest_close: float = None) -> Dict:
     """从缠论信号构建卡1格式"""
     if not sig:
         return {'direction': 'neutral', 'status_text': '无缠论信号'}
     sr = sig.get('status_recognition', {})
     trend = sr.get('trend', {})
     levels = sr.get('support_resistance', {})
-    # NLG渲染status_text
-    status_text = render_chanlun_trend(sr) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
+    detail = sig.get('chanlun_analysis_detail', {})
+    # NLG渲染status_text（传入最新收盘价以计算距离）
+    status_text = render_chanlun_trend(sr, latest_close) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
+
+    # 从 chanlun_analysis_detail 提取中文趋势方向（'上升'/'下降'/'待定'）
+    structure = detail.get('走势结构', {})
+    trend_str = structure.get('趋势方向', '')
+    direction = trend_str if trend_str else sig.get('signal', 'neutral')
+
+    # 从中枢分析提取价格相对中枢位置（'上方'/'内部'/'下方'/'无中枢'）
+    zhongshu = detail.get('中枢分析', {})
+    zhongshu_position = zhongshu.get('价格相对位置', '') or trend.get('direction', '')
+
+    # 买卖点描述：优先从 buy_sell_point 列表拼接中文名称
+    bp = sr.get('buy_sell_point', {})
+    buy_list = bp.get('buy', [])
+    sell_list = bp.get('sell', [])
+    ops = detail.get('操作建议', {})
+    action_cn = ops.get('建议动作', '')
+    if buy_list or sell_list:
+        bp_parts = []
+        if buy_list:
+            bp_parts.append('买点:' + ','.join(buy_list))
+        if sell_list:
+            bp_parts.append('卖点:' + ','.join(sell_list))
+        buy_point = ' '.join(bp_parts)
+    elif action_cn:
+        buy_point = action_cn
+    else:
+        buy_point = sig.get('signal_label', '')
+
+    # 均线排列：从趋势方向推导中文描述
+    trend_dir = trend.get('direction', '')
+    strength = trend.get('strength', '')
+    if trend_dir == 'up':
+        ma_alignment = '多头排列' if strength != 'weakening' else '多头减弱'
+    elif trend_dir == 'down':
+        ma_alignment = '空头排列' if strength != 'weakening' else '空头减弱'
+    else:
+        ma_alignment = '粘合'
+
     return {
-        'direction': sig.get('signal', 'neutral'),
-        'buy_point': sig.get('signal_label', ''),
+        'direction': direction,
+        'buy_point': buy_point,
         'level': trend.get('stage', '30min'),
         'zhongshu_range': [levels.get('support', 0), levels.get('resistance', 0)],
-        'zhongshu_position': trend.get('direction', ''),
+        'zhongshu_position': zhongshu_position,
         'trend_type': trend.get('stage', ''),
-        'ma_alignment': trend.get('strength', ''),
+        'ma_alignment': ma_alignment,
         'critical_levels': {'support': levels.get('support', 0), 'resistance': levels.get('resistance', 0)},
         'status_text': status_text,
+        # 多级别联立数据
+        'multi_level': sr.get('multi_level', {}),
+        'zhongshu_list': [
+            {'low': round(zs.get('low', 0), 2), 'high': round(zs.get('high', 0), 2),
+             'type': zs.get('type', ''), 'level': zs.get('level', ''),
+             'duration': zs.get('duration', '')}
+            for zs in detail.get('zhongshu_list', [])[:3]
+        ],
+        'position_detail': sr.get('position_detail', ''),
     }
 
 
@@ -86,12 +138,16 @@ def _build_volume_price_dimension(sig: Optional[Dict]) -> Dict:
     trend = sr.get('trend', {})
     levels = sr.get('support_resistance', {})
     status_text = render_volume_price_trend(sr) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
+    # 读取量价形态命名（P3.2）
+    pattern = sig.get('current_pattern', '') or sr.get('volume', {}).get('structure', '')
+    enhance = sig.get('enhance_patterns', [])
+    phase_label = pattern if pattern else (trend.get('direction', '横盘'))
     return {
         'direction': sig.get('signal', 'neutral'),
         'phase': trend.get('stage', 'RANGING'),
-        'phase_label': trend.get('direction', '横盘'),
+        'phase_label': phase_label,
         'volume_price_relation': sr.get('volume', {}).get('state', ''),
-        'active_pattern': sr.get('volume', {}).get('structure', ''),
+        'active_pattern': pattern if pattern else '--',
         'ma_alignment': trend.get('strength', ''),
         'support': levels.get('support', 0),
         'resistance': levels.get('resistance', 0),
@@ -106,14 +162,39 @@ def _build_chip_dimension(sig: Optional[Dict]) -> Dict:
         return {'direction': 'neutral', 'status_text': '无筹码信号'}
     sr = sig.get('status_recognition', {})
     status_text = render_chip_volume(sr) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
+
+    # 从 status_recognition 读取真实计算的筹码指标
+    chip_peak = sr.get('chip_peak', 0) or 0
+    concentration = sr.get('concentration', 0) or 0
+    mf_cost = sr.get('main_force_cost', {}) or {}
+    cost_price = mf_cost.get('cost_price', 0) or 0
+    distance_pct = mf_cost.get('distance_pct', 0) or 0
+
+    # avg_cost: 优先取主力成本价，其次筹码主峰价格
+    avg_cost = cost_price if cost_price > 0 else chip_peak
+
+    # concentration: 数值格式化为百分比字符串
+    concentration_str = f'{concentration*100:.1f}%' if concentration > 0 else '--'
+
+    # 从 evidence 中解析大单净额
+    evidence = sig.get('evidence', [])
+    large_order_net = 0
+    for ev in evidence:
+        if '大单净额' in ev:
+            try:
+                num_str = ev.split(':')[-1].strip().replace(',', '').replace('+', '').replace(' ', '')
+                large_order_net = float(num_str)
+            except (ValueError, IndexError):
+                pass
+
     return {
         'direction': sig.get('signal', 'neutral'),
-        'profit_ratio': sr.get('support_resistance', {}).get('support', 42.0),
-        'avg_cost': sr.get('support_resistance', {}).get('resistance', 12.50),
-        'concentration': sr.get('risk_level', '中等'),
+        'profit_ratio': sr.get('support_resistance', {}).get('support', None),
+        'avg_cost': avg_cost if avg_cost > 0 else None,
+        'concentration': concentration_str,
         'trend': sr.get('volume', {}).get('state', ''),
         'main_force_direction': sig.get('signal_label', ''),
-        'large_order_net': sr.get('momentum', {}).get('score', 0),
+        'large_order_net': large_order_net,
         'lock_up_ratio': sr.get('risk_level') == 'HIGH' and 55.0 or 35.0,
         'status_text': status_text,
     }
@@ -140,7 +221,8 @@ def _build_emotion_dimension(
         except Exception:
             pass
     evidence = sig.get('evidence', []) if sig else []
-    status_text = '; '.join(evidence[:2]) if evidence else (sig.get('signal_label', '行业板块情况正常') if sig else '行业板块情况正常')
+    # NLG渲染status_text（比evidence拼接更流畅）
+    status_text = render_emotion(sr) if (_HAVE_NLG and sr) else ('; '.join(evidence[:2]) if evidence else (sig.get('signal_label', '行业板块情况正常') if sig else '行业板块情况正常'))
     return {
         'direction': sig.get('signal', 'neutral') if sig else 'neutral',
         'sector': sector_name,
@@ -259,13 +341,32 @@ def strategy_analyze():
 
         # Step 4: 组装五维数据 + Vibe策略
         dimensions = {
-            'chanlun': _build_chanlun_dimension(chanlun_sig),
+            'chanlun': _build_chanlun_dimension(chanlun_sig, 
+                latest_close=chanlun_sig.get('latest_close') if chanlun_sig else None),
             'volume_price': _build_volume_price_dimension(vp_sig),
             'chip': _build_chip_dimension(chip_sig),
             'emotion': _build_emotion_dimension(bociasi_sig, signal_context),
             'factor': _build_factor_dimension(signals),
             'vibe': _build_vibe_dimension(ts_code, signals),
         }
+
+        # Step 4.5: 基于 factor 数据为各维度填充 footer_text
+        factor = dimensions.get('factor', {})
+        conflict_type = factor.get('conflict_type', '一致')
+        driving = factor.get('driving_factor', '')
+        _dim_name_map = {'chanlun': '走势结构', 'volume_price': '量价形态', 'chip': '筹码资金', 'emotion': '情绪环境'}
+        for dim_key in ('chanlun', 'volume_price', 'chip', 'emotion'):
+            dim = dimensions.get(dim_key, {})
+            dim_label = _dim_name_map.get(dim_key, dim_key)
+            # 找与该维度相关的冲突
+            related_conflicts = [c for c in factor.get('conflict_items', []) if dim_label in c.get('pair', '')]
+            if related_conflicts:
+                footer_text = related_conflicts[0].get('detail', '') + ' → ' + conflict_type
+            elif dim.get('direction') == 'neutral':
+                footer_text = f'{dim_label}方向中性，参考主驱动力: {driving}' if driving else f'{dim_label}方向中性'
+            else:
+                footer_text = f'{dim_label}方向: {dim.get("direction", "中性")}，主驱动力: {driving}' if driving else f'{dim_label}方向: {dim.get("direction", "中性")}'
+            dim['footer_text'] = footer_text
 
         # Step 5: 可选 Kronos 推理
         kronos_result = None
@@ -500,22 +601,62 @@ def _build_dimension_relations_from_signals(signals: List[Dict]) -> List[Dict]:
 
 def _build_default_chains(signals: List[Dict]) -> List[Dict]:
     """构建默认的四条验证链"""
-    chains = [
-        {'id': 'money', 'name': '主力行为验证', 'passed': True, 'evidence': '资金流向与筹码信号', 'confidence_multiplier': 1.0, 'conflict_detail': ''},
-        {'id': 'structure', 'name': '结构位置验证', 'passed': True, 'evidence': '缠论结构信号', 'confidence_multiplier': 1.0, 'conflict_detail': ''},
-        {'id': 'environment', 'name': '外部环境验证', 'passed': True, 'evidence': 'BOCIASI情绪信号', 'confidence_multiplier': 1.0, 'conflict_detail': ''},
-        {'id': 'resonance', 'name': '共振验证', 'passed': True, 'evidence': '多维度综合分析', 'confidence_multiplier': 1.0, 'conflict_detail': ''},
-    ]
-    # 用实际信号填充
+    # 先提取各策略的简略方向用于冲突检测
+    sig_dirs = {}
     for s in signals:
-        evidence = s.get('evidence', [])
-        ev_str = '; '.join(evidence[:2]) if evidence else s.get('signal_label', '')
         name = s.get('strategy_name', '')
-        if '缠论' in name and chains[1]['evidence'] == '缠论结构信号':
+        sig_dirs[name] = s.get('signal', 'neutral')
+
+    chanlun_dir = sig_dirs.get('缠论走势分析', 'neutral')
+    vp_dir = sig_dirs.get('量价分析策略', 'neutral')
+    chip_dir = sig_dirs.get('筹码主力分析', 'neutral')
+    bociasi_dir = sig_dirs.get('BOCIASI快线', 'neutral')
+
+    # 冲突检测：缠论 vs 量价
+    structure_conflict = (chanlun_dir != vp_dir and chanlun_dir != 'neutral' and vp_dir != 'neutral')
+    # 筹码 vs 其他
+    chip_conflict = (chip_dir != chanlun_dir and chip_dir != 'neutral' and chanlun_dir != 'neutral')
+
+    chains = [
+        {
+            'id': 'money', 'name': '主力行为验证',
+            'passed': not chip_conflict,
+            'evidence': '资金流向与筹码信号',
+            'confidence_multiplier': 1.0,
+            'conflict_detail': f'筹码({chip_dir}) vs 缠论({chanlun_dir})方向不一致' if chip_conflict else '资金流向与筹码方向一致',
+        },
+        {
+            'id': 'structure', 'name': '结构位置验证',
+            'passed': not structure_conflict,
+            'evidence': '缠论结构信号',
+            'confidence_multiplier': 1.0,
+            'conflict_detail': f'缠论({chanlun_dir}) vs 量价({vp_dir})趋势分歧' if structure_conflict else '结构位置与量价形态方向一致',
+        },
+        {
+            'id': 'environment', 'name': '外部环境验证',
+            'passed': True,
+            'evidence': 'BOCIASI情绪信号',
+            'confidence_multiplier': 1.0,
+            'conflict_detail': f'情绪方向: {bociasi_dir}' if bociasi_dir != 'neutral' else '情绪中性，无显著方向',
+        },
+        {
+            'id': 'resonance', 'name': '共振验证',
+            'passed': not structure_conflict and not chip_conflict,
+            'evidence': '多维度综合分析',
+            'confidence_multiplier': 1.0,
+            'conflict_detail': '多维度方向一致' if not structure_conflict and not chip_conflict else (('缠论量价冲突' if structure_conflict else '') + ('; ' if structure_conflict and chip_conflict else '') + ('筹码方向分歧' if chip_conflict else '')),
+        },
+    ]
+    # 用实际信号填充evidence具体内容
+    for s in signals:
+        ev = s.get('evidence', [])
+        ev_str = '; '.join(ev[:2]) if ev else s.get('signal_label', '')
+        name = s.get('strategy_name', '')
+        if '缠论' in name:
             chains[1]['evidence'] = ev_str or '缠论信号'
-        elif '筹码' in name and chains[0]['evidence'] == '资金流向与筹码信号':
+        elif '筹码' in name:
             chains[0]['evidence'] = ev_str or '筹码信号'
-        elif 'BOCIASI' in name and chains[2]['evidence'] == 'BOCIASI情绪信号':
+        elif 'BOCIASI' in name:
             chains[2]['evidence'] = ev_str or '情绪信号'
     return chains
 

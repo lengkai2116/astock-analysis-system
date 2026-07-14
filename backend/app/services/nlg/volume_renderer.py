@@ -54,6 +54,25 @@ def render_volume_with_relation(volume: dict, trend: dict = None) -> str:
     return "，".join(parts) + "。" if parts else ""
 
 
+def render_emotion(status: dict) -> str:
+    """渲染情绪维度中文描述（含情绪周期和市场温度）。"""
+    parts = []
+    # 情绪周期阶段（来自FMZ→四阶段映射，如"情绪冰点""情绪复苏"）
+    state_label = status.get("state_label", "")
+    if state_label:
+        parts.append(state_label)
+    # 市场温度（volume.state作为补充）
+    market_temp = status.get("volume", {}).get("state", "")
+    if market_temp and market_temp != state_label:
+        parts.append(f"市场情绪{market_temp}")
+    # 风险等级
+    risk = status.get("risk_level", "")
+    if risk:
+        risk_cn = {"LOW": "低", "MEDIUM": "中等", "HIGH": "高"}.get(risk, risk)
+        parts.append(f"风险等级{risk_cn}")
+    return "，".join(parts) + "。" if parts else "情绪数据不足。"
+
+
 def render_chip_volume(chip_status: dict) -> str:
     """渲染筹码维度量价描述（含筹码峰/ASR信息）。"""
     parts = []

@@ -875,65 +875,16 @@
           <div class="dim-card" data-dim="conflict">
             <div class="dim-card-header">⚠️ 六、冲突与不确定性</div>
             <div class="dim-card-body">
-              <!-- B区：维度间关系 -->
+              <!-- B区：维度间关系（由 renderDimensionRelations 动态填充） -->
               <div class="conflict-section">
                 <div class="sec-title">B区：维度间关系</div>
-                <div class="conflict-pair" onclick="this.querySelector('.cp-evidence').classList.toggle('open')">
-                  <div class="cp-status align">✅</div>
-                  <div class="cp-info">
-                    <div class="cp-label">卡1·走势结构 ↔ 卡2·量价形态：一致</div>
-                    <div class="cp-desc">缠论下降笔#7震荡偏弱 + B2看多形态 → 结构量价分歧中待选择</div>
-                    <div class="cp-evidence">走势结构在中枢下沿获得支撑(12.10)，量价B2信号看多，二者方向尚未完全一致</div>
-                  </div>
-                </div>
-                <div class="conflict-pair" onclick="this.querySelector('.cp-evidence').classList.toggle('open')">
-                  <div class="cp-status conflict">🔴</div>
-                  <div class="cp-info">
-                    <div class="cp-label">卡1·走势结构 ↔ 卡3·筹码资金：矛盾</div>
-                    <div class="cp-desc">结构看反弹但主力资金持续流出 → 主力态度背离</div>
-                    <div class="cp-evidence">价格中枢下沿获得支撑，但主力近5日净流出2.3亿，大单持续为负</div>
-                  </div>
-                </div>
-                <div class="conflict-pair" onclick="this.querySelector('.cp-evidence').classList.toggle('open')">
-                  <div class="cp-status offset">⏳</div>
-                  <div class="cp-info">
-                    <div class="cp-label">卡2·量价形态 ↔ 卡3·筹码资金：时序错位</div>
-                    <div class="cp-desc">量价B2看多信号已持续3天，但筹码资金信号刚刚开始变化</div>
-                    <div class="cp-evidence">量价指标领先约3个交易日，需确认筹码跟随后才能形成共振</div>
-                  </div>
-                </div>
-                <div class="conflict-pair" onclick="this.querySelector('.cp-evidence').classList.toggle('open')">
-                  <div class="cp-status conflict">🔴</div>
-                  <div class="cp-info">
-                    <div class="cp-label">卡4·情绪环境 ↔ 整体信号：偏离</div>
-                    <div class="cp-desc">情绪冰点区域，与结构量价看多方向背离</div>
-                    <div class="cp-evidence">情绪周期处于冰点(23°)，行业指数-1.87%，对看多信号形成压制</div>
-                  </div>
-                </div>
+                <div id="dimensionRelationsContainer"></div>
               </div>
-              <!-- C区：不确定因素清单 -->
+              <!-- C区：不确定因素（由 renderUncertainties 动态填充） -->
               <div class="conflict-section">
                 <div class="sec-title">C区：不确定因素</div>
-                <div class="uncertainty-item">
-                  <span class="ui-icon">⚠️</span>
-                  <div class="ui-info">
-                    <div class="ui-label">卡2·量价形态：FMZ状态=RANGING → 不确定性偏高</div>
-                    <div class="ui-detail">影响范围：走势结构判断受箱体震荡干扰，趋势信号不明确</div>
-                  </div>
-                </div>
-                <div class="uncertainty-item">
-                  <span class="ui-icon">⚠️</span>
-                  <div class="ui-info">
-                    <div class="ui-label">卡4·情绪环境：数据完整度 60% → 判断受限</div>
-                    <div class="ui-detail">缺失字段：行业指数涨跌幅（板块数据暂不可用）</div>
-                  </div>
-                </div>
-                <div class="data-completeness">
-                  <span class="dc-item">卡1·走势结构：100%</span>
-                  <span class="dc-item">卡2·量价形态：100%</span>
-                  <span class="dc-item">卡3·筹码资金：80%</span>
-                  <span class="dc-item">卡4·情绪环境：60%</span>
-                </div>
+                <div id="uncertaintiesContainer"></div>
+                <div class="data-completeness" id="dataCompletenessContainer"></div>
               </div>
             </div>
           </div>
@@ -2975,25 +2926,27 @@ function renderDimensionCards(dimensions, kronos){
   setId('cm-chanlun-position',cl.zhongshu_position||'--'); setId('cm-chanlun-buy_point',cl.buy_point||'--');
   setId('cm-chanlun-ma_alignment',cl.ma_alignment||'--'); setId('cm-chanlun-ma_detail',cl.critical_levels?'支撑'+_fmt(cl.critical_levels.support)+' 阻力'+_fmt(cl.critical_levels.resistance):'--');
   setId('cm-chanlun-narrative',cl.status_text||'--');
-  var ft=dimensions.factor||{}; var ftText=ft.driving_factor?'驱动力:'+(ft.driving_factor||'--')+', 冲突:'+(ft.conflict_type||'--'):'--';
-  setId('cm-chanlun-footer-text',ftText);
+  setId('cm-chanlun-footer-text',cl.footer_text||'--');
   setId('cm-chanlun-tag',cl.direction?_dirTag(cl.direction):'--');
   // 量价形态
   var vp=dimensions.volume_price||{}; setId('cm-vp-phase',vp.phase||'--'); setId('cm-vp-pattern',vp.phase_label||'--');
   setId('cm-vp-vp_relation',vp.volume_price_relation||'--'); setId('cm-vp-resonance',vp.trend_strength>0.5?'偏多':'偏空');
   setId('cm-vp-volume_detail',vp.support?'支撑'+_fmt(vp.support)+' 阻力'+_fmt(vp.resistance):'--');
   setId('cm-vp-narrative',vp.status_text||'--');
+  setId('cm-vp-footer-text',vp.footer_text||'--');
   setId('cm-vp-tag',vp.direction?_dirTag(vp.direction):'--');
   // 筹码
   var cp=dimensions.chip||{}; setId('cm-chip-profit_ratio',cp.profit_ratio!=null?cp.profit_ratio+'%':'--');
   setId('cm-chip-avg_cost',_fmt(cp.avg_cost)); setId('cm-chip-concentration',cp.concentration||'--');
   setId('cm-chip-main_force',cp.main_force_direction||'--'); setId('cm-chip-large_order',cp.large_order_net?String(cp.large_order_net):'--');
   setId('cm-chip-narrative',cp.status_text||'--');
+  setId('cm-chip-footer-text',cp.footer_text||'--');
   setId('cm-chip-tag',cp.direction?_dirTag(cp.direction):'--');
   // 情绪
   var em=dimensions.emotion||{}; setId('cm-emotion-cycle',em.market_temp||'--');
   setId('cm-emotion-sector_pct',em.sector_pct!=null?em.sector_pct+'%':'--'); setId('cm-emotion-market_temp',em.valuation||'--');
   setId('cm-emotion-narrative',em.status_text||'--');
+  setId('cm-emotion-footer-text',em.footer_text||'--');
   setId('cm-emotion-tag',em.direction?_dirTag(em.direction):'--');
   // Vibe
   var vb=dimensions.vibe||{}; setId('cm-vibe-signal',vb.signal_label||'--');
@@ -3008,7 +2961,7 @@ function renderDimensionCards(dimensions, kronos){
 // ── 数据完整度渲染（从analysisData.data_availability填充卡5 C区） ──
 function renderDataCompleteness(dataAvail){
   if(!dataAvail) return;
-  var dc = document.querySelector('.data-completeness');
+  var dc = document.getElementById('dataCompletenessContainer');
   if(!dc) return;
   var items = [];
   if(dataAvail.kline != null) items.push('卡1·走势结构：'+(dataAvail.kline?'100%':'0%'));
@@ -3018,7 +2971,50 @@ function renderDataCompleteness(dataAvail){
   if(items.length) dc.innerHTML = items.map(function(t){return '<span class="dc-item">'+t+'</span>';}).join('');
 }
 
-// ── 交叉验证条渲染（从E13 data填充） ──
+// ── 维度间关系渲染（从E13 data.dimension_relations 填充卡6 B区） ──
+function renderDimensionRelations(relations){
+  if(!relations||!relations.length) return;
+  var container=document.getElementById('dimensionRelationsContainer');
+  if(!container) return;
+  container.innerHTML='';
+  relations.forEach(function(r){
+    var icon=r.status==='consistent'?'✅':(r.status==='conflict'?'🔴':'⏳');
+    var cls=r.status==='consistent'?'align':(r.status==='conflict'?'conflict':'offset');
+    var item=document.createElement('div'); item.className='conflict-pair';
+    item.onclick=function(){this.querySelector('.cp-evidence').classList.toggle('open');};
+    var fromLabel={'chanlun':'卡1·走势结构','volume_price':'卡2·量价形态','chip':'卡3·筹码资金','emotion':'卡4·情绪环境'}[r.from]||r.from;
+    var toLabel=({overall:'整体信号'})[r.to]||({'chanlun':'卡1·走势结构','volume_price':'卡2·量价形态','chip':'卡3·筹码资金','emotion':'卡4·情绪环境'}[r.to])||r.to;
+    var statusText=r.status==='consistent'?'一致':(r.status==='conflict'?'矛盾':'偏差');
+    item.innerHTML='<div class="cp-status '+cls+'">'+icon+'</div>'+
+      '<div class="cp-info">'+
+      '<div class="cp-label">'+fromLabel+' ↔ '+toLabel+'：'+statusText+'</div>'+
+      '<div class="cp-desc">'+(r.detail||'')+'</div>'+
+      '<div class="cp-evidence">'+(r.detail||'')+'</div>'+
+      '</div>';
+    container.appendChild(item);
+  });
+}
+
+// ── 不确定因素渲染（从E13 data.uncertainties 填充卡6 C区） ──
+function renderUncertainties(uncertainties){
+  var container=document.getElementById('uncertaintiesContainer');
+  if(!container) return;
+  container.innerHTML='';
+  if(!uncertainties||!uncertainties.length){
+    container.innerHTML='<div style="font-size:11px;color:var(--text-muted);padding:var(--space-2) 0;">暂无不确定因素</div>';
+    return;
+  }
+  uncertainties.forEach(function(u){
+    var item=document.createElement('div'); item.className='uncertainty-item';
+    var dimName={'缠论走势分析':'卡1','量价分析策略':'卡2','筹码主力分析':'卡3','BOCIASI快线':'卡4'}[u.dimension]||u.dimension;
+    item.innerHTML='<span class="ui-icon">⚠️</span>'+
+      '<div class="ui-info">'+
+      '<div class="ui-label">'+(dimName)+'：'+(u.factor||u.detail||'')+' → '+(u.impact||'判断受限')+'</div>'+
+      '<div class="ui-detail">'+(u.detail||u.factor||'')+'</div>'+
+      '</div>';
+    container.appendChild(item);
+  });
+}
 function renderVerificationChains(data){
   if(!data||!data.verification_chains) return;
   var chains=data.verification_chains;
@@ -3427,7 +3423,12 @@ function triggerArbitrate(){
   ]).then(function(results){
     var analysis=results[0], verification=results[1], narrative=results[2];
     if(analysis && analysis.dimensions) renderDimensionCards(analysis.dimensions, analysis.kronos);
-    if(verification) renderVerificationChains(verification);
+    if(verification) {
+      renderVerificationChains(verification);
+      renderDimensionRelations(verification.dimension_relations);
+      renderUncertainties(verification.uncertainties);
+    }
+    if(analysis && analysis.data_availability) renderDataCompleteness(analysis.data_availability);
     if(kronosEnabled && analysis && analysis.kronos) renderKronosTag(analysis.kronos);
     if(narrative) renderNarrative(narrative);
 

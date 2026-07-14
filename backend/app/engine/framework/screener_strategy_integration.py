@@ -1375,6 +1375,18 @@ def screen_l3_candidates(
             strategy_details=_vibe_details,
         ) if need_vb else 0.0
 
+        # ── BOCIASI 快线评分（个股级情绪，C6） ──
+        r['bociasi_score'] = 0.0
+        try:
+            closes_arr = df['close'].values
+            volumes_arr = df['vol'].values if 'vol' in df.columns else df['amount'].values
+            if len(closes_arr) >= 20:
+                bociasi_val = _f_bociasi_quickline(closes_arr, volumes_arr)
+                if bociasi_val is not None:
+                    r['bociasi_score'] = bociasi_val / 10.0
+        except Exception:
+            pass
+
         raw.append(r)
         stocks_processed += 1
 
@@ -1388,10 +1400,12 @@ def screen_l3_candidates(
     raw_cl = [r['cl_score'] for r in raw]
     raw_vp = [r['vp_score'] for r in raw]
     raw_fx = [r['factor_score'] for r in raw]
+    raw_bo = [r['bociasi_score'] for r in raw]
 
     norm_cl = _zscore_normalize(raw_cl) if need_cl else [0.0] * len(raw)
     norm_vp = _zscore_normalize(raw_vp) if need_vp else [0.0] * len(raw)
     norm_fx = _zscore_normalize(raw_fx) if need_fx else [0.0] * len(raw)
+    norm_bo = [max(0.0, min(1.0, v)) for v in raw_bo]  # BOCIASI 已归一化 0-1，无需 z-score
 
     # Vibe 不归一化（加分性质，不区分股票间差异）
     vibe_bonus_values = [r['vibe_bonus'] for r in raw]
@@ -1438,6 +1452,9 @@ def screen_l3_candidates(
         )
         # 阶段加分直接加到综合评分上（已归一化到0-10）
         combined = max(0.0, min(10.0, combined + phase_bonus * 0.5))  # phase_bonus 缩放后叠加
+        # BOCIASI 情绪调整（-0.15 ~ +0.15）
+        bociasi_bonus = (norm_bo[i] - 0.5) * 0.3
+        combined = max(0.0, min(10.0, combined + bociasi_bonus))
         # 风控降权因子
         combined = combined * risk_mult
         grade = _score_to_grade(combined)

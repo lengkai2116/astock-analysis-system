@@ -490,6 +490,7 @@ class StatusOutputService:
             'risk_aggregation': base.get('risk_aggregation', {}),
             'momentum_consensus': base.get('momentum_consensus', {}),
             'dimensions': base.get('strategies_detail', []),
+            'dimension_relations': self._build_dimension_relations(signals),
         }
 
     def _empty_result_v2(self):
@@ -502,6 +503,7 @@ class StatusOutputService:
             'risk_aggregation': {'max_risk': 'LOW', 'distribution': {'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}},
             'momentum_consensus': {'bullish_pct': 0.0, 'bearish_pct': 0.0, 'neutral_pct': 0.0, 'consensus': 'DIVERGENT'},
             'dimensions': [],
+            'dimension_relations': [],
         }
 
     def _strategies_detail(self, signals: List[Dict], status_list: List[Dict]) -> List[Dict]:
@@ -524,6 +526,35 @@ class StatusOutputService:
                 "status_recognition": sr,
             })
         return details
+
+    @staticmethod
+    def _find_signal(signals: list, keyword: str) -> Optional[dict]:
+        """按策略名关键词查找信号"""
+        for sig in signals:
+            if keyword in sig.get('strategy_name', ''):
+                return sig
+        return None
+
+    def _build_dimension_relations(self, signals: list) -> list:
+        """从信号列表构建维度间关系"""
+        relations = []
+        names = ['缠论', '量价', '筹码', 'BOCIASI', '因子']
+        for i, na in enumerate(names):
+            sa = self._find_signal(signals, na)
+            if not sa:
+                continue
+            for nb in names[i+1:]:
+                sb = self._find_signal(signals, nb)
+                if not sb:
+                    continue
+                da = sa.get('signal', 'neutral')
+                db = sb.get('signal', 'neutral')
+                status = 'consistent' if da == db else ('conflict' if da != 'neutral' and db != 'neutral' else 'mismatch')
+                relations.append({
+                    'from': na, 'to': nb, 'status': status,
+                    'detail': f"{da} vs {db}" if status != 'consistent' else f"方向一致({da})",
+                })
+        return relations
 
     def _empty_result(self) -> Dict:
         """无信号时的空结果"""

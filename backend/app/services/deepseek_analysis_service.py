@@ -414,6 +414,7 @@ def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> 
     key_levels = aggregated_status.get('key_levels', {})
     dimensions = aggregated_status.get('dimensions', [])
     verification_chains = aggregated_status.get('verification_chains', [])
+    dimension_relations = aggregated_status.get('dimension_relations', [])
 
     state_label = state_consensus.get('state', 'UNKNOWN')
     risk_level = risk_aggregation.get('risk_level', 'MEDIUM')
@@ -452,7 +453,17 @@ def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> 
                 chain_lines.append(f"  {name}: {status}")
         verification_text = '\n'.join(chain_lines) if chain_lines else '  无可用的验证链数据'
 
-        # ── 3. 知识库参考 ──
+        # ── 3. 维度间关系 ──
+        if dimension_relations:
+            dr_lines = []
+            for dr in dimension_relations:
+                status_cn = '一致' if dr['status'] == 'consistent' else ('矛盾' if dr['status'] == 'conflict' else '偏差')
+                dr_lines.append(f"  {dr['from']} ↔ {dr['to']}: {status_cn}（{dr['detail']}）")
+            dimension_text = '\n'.join(dr_lines)
+        else:
+            dimension_text = '  无可用的维度关系数据'
+
+        # ── 4. 知识库参考 ──
         knowledge_text = _build_knowledge_context(dimensions, state_label)
 
         prompt = (
@@ -460,6 +471,7 @@ def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> 
             f"最新价: {latest_close}\n\n"
             f"【五维现状详述】\n{nlg_descriptions}\n\n"
             f"【验证链状态】\n{verification_text}\n\n"
+            f"【维度间关系】\n{dimension_text}\n\n"
             f"【知识库参考】\n{knowledge_text}\n\n"
             f"请基于以上完整信息，生成一份通俗易懂的中文操作建议。\n"
             f'请严格按照以下 JSON 格式返回（不要包含其他内容）：\n'
@@ -519,28 +531,55 @@ def _build_knowledge_context(dimensions: list, state_label: str) -> str:
         reader = get_knowledge_reader()
         reader.initialize()
 
-        # 从各维度提取关键词
+        # 从各维度提取中文关键词（忽略英文状态码，只保留有语义的中文词）
         keywords = []
+        eng_state_set = {'ACCUMULATING', 'DISTRIBUTING', 'RANGING', 'BEARISH', 'BULLISH',
+                         'NEUTRAL', 'UNKNOWN', 'WATCH', 'BUY', 'SELL', 'HOLD',
+                         'LOW', 'MEDIUM', 'HIGH', 'UP', 'DOWN', ''}
         for dim in dimensions[:3]:
             status = dim.get('status_recognition', {})
-            if isinstance(status, dict):
-                state = status.get('state', '')
-                if state:
-                    keywords.append(state)
-                trend = status.get('trend', {})
-                if trend.get('direction'):
-                    keywords.append(trend['direction'])
-                bp = status.get('buy_sell_point', {})
-                if bp.get('buy'):
-                    keywords.extend(bp['buy'][:2])
-                if bp.get('sell'):
-                    keywords.extend(bp['sell'][:2])
+            if not isinstance(status, dict):
+                continue
+            # 用中文 state_label 而非英文 state
+            label = status.get('state_label', '')
+            if label and label not in eng_state_set:
+                keywords.append(label)
+            # 趋势方向（已在模板转为中文）
+            trend = status.get('trend', {})
+            td = trend.get('direction', '')
+            if td and td not in eng_state_set:
+                keywords.append(td)
+            trend_stage = trend.get('stage', '')
+            if trend_stage:
+                # 提取中文部分，如 '日线up_延续' → '日线'
+                cn_parts = re.findall(r'[\u4e00-\u9fff]+', trend_stage)
+                keywords.extend(cn_parts)
+            # 量价形态（结构字段有中文形态名）
+            vol_struct = status.get('volume', {}).get('structure', '')
+            if vol_struct:
+                cn_parts = re.findall(r'[\u4e00-\u9fff]+', vol_struct)
+                keywords.extend(cn_parts[:2])
+            # 买卖点
+            bp = status.get('buy_sell_point', {})
+            if bp.get('buy'):
+                keywords.extend(bp['buy'][:2])
+            if bp.get('sell'):
+                keywords.extend(bp['sell'][:2])
 
-        if state_label and state_label not in ('UNKNOWN', 'UNCERTAIN'):
-            keywords.append(state_label)
+        # 去重 + 过滤空/单字母/纯英文
+        unique_keywords = []
+        seen = set()
+        for kw in keywords:
+            kw_stripped = kw.strip()
+            if not kw_stripped or kw_stripped in seen or kw_stripped.upper() in eng_state_set:
+                continue
+            if len(kw_stripped) < 2 and kw_stripped.isascii():
+                continue
+            seen.add(kw_stripped)
+            unique_keywords.append(kw_stripped)
 
-        query = ' '.join(set(keywords)) if keywords else f'{state_label} 股票分析'
-        results = reader.match(query, top_k=3)
+        query = ' '.join(unique_keywords[:6]) if unique_keywords else f'{state_label} 股票分析'
+        results = reader.match(query, top_k=3, min_tier='T2')
         if results:
             lines = []
             for r in results:
@@ -548,8 +587,8 @@ def _build_knowledge_context(dimensions: list, state_label: str) -> str:
                 snippet = r['content'][:100].replace('\n', ' ')
                 lines.append(f"  {snippet}")
             return '\n'.join(lines)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"知识库查询跳过: {e}")
     return "暂无相关知识库匹配结果"
 
 

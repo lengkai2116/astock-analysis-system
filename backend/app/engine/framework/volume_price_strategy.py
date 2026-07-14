@@ -208,6 +208,16 @@ class VolumePriceSignal:
             "evidence": self.evidence,
             "risk_notes": self.risk_notes,
         }
+        # 量价形态命名（P3.2 补充）
+        pattern = f"{self.pattern_id} {self.pattern_name}" if self.pattern_id else ""
+        if pattern:
+            d["current_pattern"] = pattern
+        if self.enhance_patterns:
+            d["enhance_patterns"] = self.enhance_patterns
+        # 将形态名同步到 volume.structure（供_volume_price_dimension消费）
+        if pattern and self.status:
+            self.status.volume['structure'] = pattern
+            d['status_recognition']['volume']['structure'] = pattern
         return d
 
     def _map_signal(self) -> str:
@@ -3363,6 +3373,39 @@ class VolumePriceSignalGenerator:
             ev.append(f"【共振】多形态评分={relation.resonance_score:+d}")
         sig_cn = {"BUY": "买入", "SELL": "卖出", "WATCH": "预警", "HOLD": "观望"}
         ev.append(f"【信号】{signal_id}: {sig_cn.get(direction, '')}")
+
+        # ========== 因果链合成（C4） ==========
+        causal_parts = []
+        # 阶段+量价形态→因果映射
+        CAUSAL_MAP = {
+            ("UPTREND_ACTIVE", "VP-1"): "放量上攻→趋势延续",
+            ("UPTREND_ACTIVE", "VP-3"): "量价背离→上涨动能减弱",
+            ("UPTREND_ACTIVE", "VP-9"): "缩量回调→健康调整",
+            ("UPTREND_TOPPING", "VP-1"): "天量天价→行情尾声",
+            ("UPTREND_TOPPING", "VP-4"): "放量滞涨→出货迹象",
+            ("DOWNTREND_ACTIVE", "VP-7"): "放量下跌→恐慌出逃",
+            ("DOWNTREND_BOTTOMING", "VP-9"): "缩量探底→抛压枯竭",
+            ("CONSOLIDATION", "VP-6"): "缩量横盘→变盘前兆",
+        }
+        causal = CAUSAL_MAP.get((stage.name, relation.pattern_id))
+        if causal:
+            causal_parts.append(causal)
+        # 增强形态中提取因果
+        for ep in relation.enhance_patterns:
+            if "放量突破" in ep or "放量站上" in ep:
+                causal_parts.append("放量突破关键位→趋势延续信号")
+                break
+            elif "放量滞涨" in ep or "天量" in ep:
+                causal_parts.append("异常放量→警示信号")
+                break
+        # 背离因果
+        if relation.divergence_type == "top" and relation.divergence_confidence > 0.5:
+            causal_parts.append("顶背离→上涨衰竭，趋势反转风险")
+        elif relation.divergence_type == "bottom" and relation.divergence_confidence > 0.5:
+            causal_parts.append("底背离→下跌衰竭，趋势转折机会")
+
+        if causal_parts:
+            ev.extend(causal_parts[:2])
         return ev
 
     def _build_risk_notes(self, stage, vol_state, relation):

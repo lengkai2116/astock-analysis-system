@@ -1173,6 +1173,7 @@ class SignalComputationService:
             
             # 全中文分析报告（主要用户输出）
             '分析报告': analysis_report,
+            'latest_close': latest_close,
         }
     def _compute_factor_signal(self, ts_code: str, df: pd.DataFrame, market_context: Optional[Dict] = None) -> Optional[Dict]:
         """计算因子评分信号 (L3) — 优先使用 FactorRegistry"""
@@ -1341,6 +1342,24 @@ class SignalComputationService:
                 mom_20 = (closes[-1] / closes[-21] - 1) if len(closes) >= 21 else 0
                 accel = mom_5 - mom_20 / 4  # 近5日动量 vs 近20日平均动量
                 scores['ACCEL'] = min(max(accel * 20 + 0.5, 0), 1)
+
+            # 从 _FACTOR_COMPUTERS 扩展因子（C5）
+            if len(closes) >= 20:
+                try:
+                    from app.engine.framework.screener_strategy_integration import (
+                        _f_bociasi_quickline, _f_bias, _f_reversal
+                    )
+                    bociasi_val = _f_bociasi_quickline(closes, volumes)
+                    if bociasi_val is not None:
+                        scores['BOCIASI'] = bociasi_val / 10.0
+                    bias_val = _f_bias(closes, volumes, period=20)
+                    if bias_val is not None:
+                        scores['BIAS'] = min(bias_val / 10.0, 1.0)
+                    rev_val = _f_reversal(closes, volumes, period=5)
+                    if rev_val is not None:
+                        scores['REVERSAL'] = min(rev_val / 10.0, 1.0)
+                except Exception:
+                    pass
 
             if len(scores) >= 3:
                 return scores, True
@@ -1565,7 +1584,7 @@ class SignalComputationService:
             return {
                 'strategy_name': 'BOCIASI快线',
                 'status_recognition': {
-                    'state': 'ACCUMULATING' if result['signal'] == 'BUY' else ('BEARISH' if result['signal'] in ('NEUTRAL',) else 'RANGING'),
+                    'state': 'ACCUMULATING' if result['signal'] == 'BUY' else ('BEARISH' if result['signal'] == 'WATCH' and result['confidence'] < 0.3 else 'RANGING'),
                     'state_label': label_map.get(result['signal'], ''),
                     'trend': {'direction': '', 'strength': '', 'stage': ''},
                     'momentum': {'level': result['signal'], 'score': result['confidence']},

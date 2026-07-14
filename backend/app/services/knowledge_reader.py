@@ -102,10 +102,16 @@ class KnowledgeReader:
             CREATE TABLE IF NOT EXISTS knowledge_meta (
                 file_path TEXT PRIMARY KEY,
                 doc_type TEXT,
+                tier TEXT DEFAULT 'T3',
                 file_size INTEGER DEFAULT 0,
                 indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # 兼容旧表：若tier列不存在则添加
+        try:
+            self._db.execute("ALTER TABLE knowledge_meta ADD COLUMN tier TEXT DEFAULT 'T3'")
+        except sqlite3.OperationalError:
+            pass
 
         # 检查是否需要索引（文件数变化时全量重建）
         meta_count = self._db.execute("SELECT COUNT(*) FROM knowledge_meta").fetchone()[0]
@@ -127,6 +133,41 @@ class KnowledgeReader:
         for file_path in files:
             self._index_file(file_path)
 
+    @staticmethod
+    def _classify_tier(file_path: Path, frontmatter: dict) -> str:
+        """根据文件名和frontmatter自动判定知识层级（T1/T2/T3）。
+
+        T1 — 策略直接支撑（缠论/量价/筹码/情绪/因子）
+        T2 — AI 解读增强（风险剔除/周期/结构/形态/突破）
+        T3 — 通用背景（仓位/风控/验证/回测/无关内容）
+        """
+        if frontmatter.get("tier"):
+            return frontmatter["tier"]
+        name = file_path.stem
+        # T1: 策略直接支撑
+        t1_keywords = [
+            '缠', '中枢', '背驰', '买卖点', '笔段', '分型', '区间套', '走势',
+            '量价', '形态', '威科夫', '吸筹', '派筹',
+            '筹码', 'ASR', '集中度', '主力', '融资', 'CYQKL',
+            '情绪', 'BOCIASI', '周期', '冰点', '复苏', '高潮', '衰退',
+            '因子', '多因子', 'IC', 'ALPHA', 'BETA',
+        ]
+        # T2: AI 解读增强
+        t2_keywords = [
+            '风险剔除', '风险排除', '多周期', '突破', 'BOLL', 'K线包含', '攻击日',
+            '三层分析', '状态依赖', '合成', '喇叭口',
+        ]
+        for kw in t1_keywords:
+            if kw.lower() in name.lower():
+                return 'T1'
+        for kw in t2_keywords:
+            if kw.lower() in name.lower():
+                return 'T2'
+        # 类型过滤：entity 降为 T3
+        if frontmatter.get('type') == 'entity':
+            return 'T3'
+        return 'T3'
+
     def _index_file(self, file_path: Path) -> None:
         """索引单个概念文件。"""
         try:
@@ -139,6 +180,7 @@ class KnowledgeReader:
 
         title = frontmatter.get("title", file_path.stem)
         doc_type = frontmatter.get("type", "concept")
+        tier = self._classify_tier(file_path, frontmatter)
         tags_list: list = frontmatter.get("tags", [])
 
         # FTS5 索引时对 CJK 做空格处理
@@ -151,19 +193,20 @@ class KnowledgeReader:
             (title_idx, content_idx, tags_idx),
         )
         self._db.execute(
-            "INSERT INTO knowledge_meta(file_path, doc_type, file_size) VALUES (?, ?, ?)",
-            (str(file_path), doc_type, len(text)),
+            "INSERT INTO knowledge_meta(file_path, doc_type, tier, file_size) VALUES (?, ?, ?, ?)",
+            (str(file_path), doc_type, tier, len(text)),
         )
 
-    def match(self, keywords: str, top_k: int = 3) -> List[Dict]:
+    def match(self, keywords: str, top_k: int = 3, min_tier: Optional[str] = None) -> List[Dict]:
         """查询知识库，返回匹配的概念内容。
 
         Args:
             keywords: 查询关键词（如"背驰 中枢 买点"）
             top_k: 最多返回条数
+            min_tier: 最低层级过滤（如 'T2' 仅返回 T1+T2）
 
         Returns:
-            [{title, content, tags, relevance, doc_type}, ...]
+            [{title, content, tags, relevance, doc_type, tier}, ...]
         """
         self.initialize()
         self._check_and_reload()
@@ -171,26 +214,47 @@ class KnowledgeReader:
         if not keywords.strip():
             return []
 
-        # 对查询词也做 CJK 空格处理
+        # 对查询词也做 CJK 空格处理（与索引一致）
         query_terms = _cjk_spaced(keywords).strip()
-        # 用空格分隔的词默认 AND 查询
-        query = " AND ".join(query_terms.split())
+        # 用空格分隔的词默认 OR 查询（AND 对多字符 CJK 词过于严格）
+        query = " OR ".join(query_terms.split())
+        # 若查询词太多，取相关性最高的前 6 个限制 OR 扩散
+        terms = query_terms.split()
+        if len(terms) > 12:
+            query = " OR ".join(terms[:6])
 
         try:
-            rows = self._db.execute(
-                """SELECT title, content, tags, rank
-                   FROM knowledge_fts
-                   WHERE knowledge_fts MATCH ?
-                   ORDER BY rank
-                   LIMIT ?""",
-                (query, top_k),
-            ).fetchall()
+            if min_tier:
+                rows = self._db.execute(
+                    """SELECT fts.title, fts.content, fts.tags, km.tier, fts.rank
+                       FROM knowledge_fts fts
+                       JOIN knowledge_meta km ON km.file_path = (
+                           SELECT file_path FROM knowledge_meta WHERE rowid = fts.rowid
+                       )
+                       WHERE knowledge_fts MATCH ?
+                         AND km.tier IN ('T1', 'T2')
+                       ORDER BY rank
+                       LIMIT ?""",
+                    (query, top_k),
+                ).fetchall()
+            else:
+                rows = self._db.execute(
+                    "SELECT title, content, tags, 'T3', rank FROM knowledge_fts WHERE knowledge_fts MATCH ? ORDER BY rank LIMIT ?",
+                    (query, top_k),
+                ).fetchall()
         except sqlite3.OperationalError:
-            logger.debug(f"FTS5 查询语法错误: {query}")
-            return []
+            logger.debug(f"FTS5 查询语法错误，回退精确短语: {keywords}")
+            try:
+                phrase = f'"{keywords}"'
+                rows = self._db.execute(
+                    "SELECT title, content, tags, 'T3', rank FROM knowledge_fts WHERE knowledge_fts MATCH ? ORDER BY rank LIMIT ?",
+                    (phrase, top_k),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return []
 
         results = []
-        for title_idx, content_idx, tags, rank in rows:
+        for title_idx, content_idx, tags, tier_val, rank in rows:
             # 从索引格式恢复可读文本（去除 CJK 空格）
             title = re.sub(r'([\u4e00-\u9fff]) ', r'\1', title_idx)
             # 截取前 300 字作为摘要
@@ -201,6 +265,7 @@ class KnowledgeReader:
                 "content": snippet,
                 "tags": tags.split() if tags else [],
                 "relevance": round(-float(rank), 4) if rank else 0.0,
+                "tier": tier_val,
             })
 
         return results
