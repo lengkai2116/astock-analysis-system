@@ -5,6 +5,7 @@
 """
 
 from .templates import TREND_DIRECTION, TREND_STRENGTH, TREND_STAGE
+from .volume_renderer import render_volume_with_relation
 
 
 def render_trend(trend: dict) -> str:
@@ -141,7 +142,7 @@ def render_chanlun_trend(status: dict, latest_close: float = None) -> str:
 
 
 def render_volume_price_trend(status: dict) -> str:
-    """渲染量价趋势中文描述（含形态和量价关系）。"""
+    """渲染量价趋势中文描述（含形态和量价关系因果链）。"""
     trend = status.get("trend", {})
     volume = status.get("volume", {})
     sr = status.get("support_resistance", {})
@@ -152,16 +153,18 @@ def render_volume_price_trend(status: dict) -> str:
     trend_text = render_trend(trend)
     parts.append(trend_text)
 
-    # 量价形态
-    vol_state = volume.get("state", "")
+    # 量价因果链（使用 render_volume_with_relation 增强因果关系）
+    vol_relation = render_volume_with_relation(volume, trend)
+    if vol_relation:
+        # 去掉句号，避免双句号
+        parts.append(vol_relation.rstrip('。'))
+
+    # 量价形态补充（structure字段含均线排列或具体形态名）
     vol_struct = volume.get("structure", "")
-    if vol_struct:
-        if vol_state:
-            parts.append(f"成交量{vol_state}，均线{vol_struct}")
-        else:
-            parts.append(f"均线{vol_struct}")
-    elif vol_state:
-        parts.append(f"成交量{vol_state}")
+    if vol_struct and vol_relation:
+        pass  # render_volume_with_relation 已包含 structure
+    elif vol_struct:
+        parts.append(f"均线{vol_struct}")
 
     # 支撑压力
     support = sr.get("support", 0)

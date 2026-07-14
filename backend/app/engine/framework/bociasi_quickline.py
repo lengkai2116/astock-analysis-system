@@ -10,7 +10,8 @@ BOCIASI 快线四指标（情绪层）
 综合判定规则：
   ≥3 项通过 → BUY（情绪积极）
   ≥2 项通过 → WATCH（情绪中性偏暖）
-  否则       → HOLD（情绪平淡或低迷）
+  ≤1 项通过 + 价格弱势（日均价下） → BEARISH（情绪低迷/看空）
+  否则       → NEUTRAL（情绪平淡）
 """
 from typing import Dict, Optional
 import pandas as pd
@@ -37,7 +38,7 @@ class BociasiQuickLine:
 
         Returns:
             {
-                "signal": "BUY" | "WATCH" | "NEUTRAL",
+                "signal": "BUY" | "WATCH" | "NEUTRAL" | "BEARISH",
                 "confidence": float,
                 "indicators": { "fast_vol": bool, "fast_price": bool, ... },
                 "details": { ... },
@@ -88,6 +89,10 @@ class BociasiQuickLine:
         elif pass_count >= 2:
             signal = "WATCH"
             base_conf = 0.50
+        elif not fast_price and mom_5d < -3:
+            # ≤1 项通过 + 价格弱势 + 负动量 → BEARISH
+            signal = "BEARISH"
+            base_conf = 0.35
         else:
             signal = "NEUTRAL"
             base_conf = 0.35

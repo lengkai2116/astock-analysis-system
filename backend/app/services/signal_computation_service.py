@@ -250,7 +250,7 @@ class SignalComputationService:
 
         # ── BOCIASI 快线（情绪层）──
         try:
-            bociasi_signal = self._compute_bociasi_signal(ts_code, df)
+            bociasi_signal = self._compute_bociasi_signal(ts_code, df, market_context)
             if bociasi_signal:
                 signals.append(bociasi_signal)
         except Exception as e:
@@ -655,15 +655,34 @@ class SignalComputationService:
         # 级别间背驰对比验证
         level_cross_info = ""
         level_cross_score = 0.0
+        level_details = {}
         try:
             from app.engine.framework.chanlun_level_validator import ChanlunLevelValidator
             validator = ChanlunLevelValidator()
             lv_result = validator.validate(df)
-            if lv_result.get('cross_score', 0.5) != 0.5:
-                level_cross_score = lv_result['cross_score']
-                details = lv_result.get('details', [])
-                if details:
-                    level_cross_info = "；".join(details[:2])
+            # 始终提取各级别基础数据
+            cross_score = lv_result.get('cross_score', 0.5)
+            level_cross_score = cross_score
+            details = lv_result.get('details', [])
+            level_cross_info = "；".join(details[:3]) if details else ""
+            # 仅在 cross_score ≠ 0.5 时追加验证结论
+            if cross_score != 0.5:
+                validation = lv_result.get('validation', {})
+                reasons = validation.get('reasons', [])
+                if reasons:
+                    level_cross_info = level_cross_info + " | " + "；".join(reasons[:2]) if level_cross_info else "；".join(reasons[:2])
+            # 提取各级别信号详情（评分/趋势/买卖点数）
+            for level_name in ('monthly', 'weekly', 'daily'):
+                sig_data = lv_result.get('signals', {}).get(level_name, {})
+                if sig_data:
+                    level_details[level_name] = {
+                        'score': sig_data.get('score', 50),
+                        'trend': sig_data.get('trend', 'unknown'),
+                        'signal': sig_data.get('signal', 'HOLD'),
+                        'buy_count': len(sig_data.get('buy_points', [])),
+                        'sell_count': len(sig_data.get('sell_points', [])),
+                        'zhongshu_count': sig_data.get('zhongshu_count', 0),
+                    }
         except Exception:
             pass
         zs_formed_date = str(latest_zhongshu.start_date)[:10] if latest_zhongshu and hasattr(latest_zhongshu, 'start_date') else None
@@ -684,8 +703,12 @@ class SignalComputationService:
 
         # 买卖点类型映射
         BP_TYPE_CN = {
-            'first_buy': '第一类买点', 'second_buy': '第二类买点', 'third_buy': '第三类买点',
-            'first_sell': '第一类卖点', 'second_sell': '第二类卖点', 'third_sell': '第三类卖点',
+            'first_buy': '第一类买点', 'first_buy_p': '盘整背驰第一类买点',
+            'second_buy': '第二类买点', 'second_buy_s': '类第二类买点',
+            'third_buy': '第三类买点', 'third_buy_a': '第三类买点(一类后)', 'third_buy_b': '第三类买点(一类前)',
+            'first_sell': '第一类卖点', 'first_sell_p': '盘整背驰第一类卖点',
+            'second_sell': '第二类卖点', 'second_sell_s': '类第二类卖点',
+            'third_sell': '第三类卖点', 'third_sell_a': '第三类卖点(一类后)', 'third_sell_b': '第三类卖点(一类前)',
         }
         BP_ORDER = {'first_buy': 1, 'second_buy': 2, 'third_buy': 3,
                     'first_sell': 1, 'second_sell': 2, 'third_sell': 3}
@@ -1090,7 +1113,9 @@ class SignalComputationService:
                     'stage': f'日线{last_bi_status}' if last_bi_status else '',
                 },
                 'momentum': {
-                    'level': str(divergence.direction) if divergence else '',
+                    'level': '/'.join(
+                        [BP_TYPE_CN.get(t, t) for t in buy_types | sell_types]
+                    ) if (buy_types or sell_types) else (str(divergence.direction) if divergence else '无信号'),
                     'score': round(divergence.confidence, 4) if divergence else 0.0,
                     'level_cross': level_cross_info,
                     'level_cross_score': round(level_cross_score, 4),
@@ -1105,6 +1130,19 @@ class SignalComputationService:
                     'resistance': round(float(zs_high), 2) if zs_high else 0.0,
                 },
                 'risk_level': 'HIGH' if trend_str == '下降' and confidence < 0.5 else 'MEDIUM',
+                'multi_level': {
+                    'direction_text': level_cross_info or '',
+                    'level_cross_score': round(level_cross_score, 4),
+                    'near_levels': [
+                        {'level': zs.level, 'price': round(float(zs.center), 2),
+                         'support': round(float(zs.low), 2),
+                         'resistance': round(float(zs.high), 2),
+                         'type': zs.type, 'duration': zs.duration,
+                         'distance_pct': round((latest_close - zs.center) / zs.center * 100, 1) if latest_close and zs.center else None}
+                        for zs in zhongshu_list[-3:]
+                    ] if zhongshu_list else [],
+                    'level_details': level_details,
+                },
             },
             'signal': internal_signal,
             'signal_label': internal_label,
@@ -1139,6 +1177,17 @@ class SignalComputationService:
                     '价格相对位置': position_vs_zs,
                     '价格详情': position_detail,
                 } if latest_zhongshu else {},
+                'zhongshu_list': [
+                    {'low': round(float(zs.low), 2), 'high': round(float(zs.high), 2),
+                     'center': round(float(zs.center), 2) if zs.center else None,
+                     'type': zs.type, 'level': zs.level,
+                     'direction': zs.direction, 'duration': zs.duration,
+                     'start_date': str(zs.start_date)[:10] if zs.start_date else '',
+                     'end_date': str(zs.end_date)[:10] if zs.end_date else '',
+                     'range_width': round(float(zs.range_width), 2) if zs.range_width else None,
+                     'seg_count': len(zs.segments) if zs.segments else 0}
+                    for zs in zhongshu_list
+                ] if zhongshu_list else [],
                 '买卖点信号': {
                     '中枢形成后买点数': len(recent_buy),
                     '中枢形成后卖点数': len(recent_sell),
@@ -1558,7 +1607,7 @@ class SignalComputationService:
             'risk_level': risk_level,
         }
 
-    def _compute_bociasi_signal(self, ts_code: str, df: pd.DataFrame) -> Optional[Dict]:
+    def _compute_bociasi_signal(self, ts_code: str, df: pd.DataFrame, market_context: Optional[Dict] = None) -> Optional[Dict]:
         """计算 BOCIASI 快线情绪信号"""
         from app.engine.framework.bociasi_quickline import BociasiQuickLine
         try:
@@ -1567,8 +1616,8 @@ class SignalComputationService:
             if result['pass_count'] == 0:
                 return None
 
-            signal_map = {'BUY': 'BULLISH', 'WATCH': 'WATCH', 'NEUTRAL': 'NEUTRAL'}
-            label_map = {'BUY': '情绪积极', 'WATCH': '情绪中性', 'NEUTRAL': '情绪低迷'}
+            signal_map = {'BUY': 'BULLISH', 'WATCH': 'WATCH', 'NEUTRAL': 'NEUTRAL', 'BEARISH': 'BEARISH'}
+            label_map = {'BUY': '情绪积极', 'WATCH': '情绪中性', 'NEUTRAL': '情绪平淡', 'BEARISH': '情绪低迷看空'}
             ind = result['indicators']
 
             evidence = []
@@ -1581,11 +1630,20 @@ class SignalComputationService:
             if ind.get('fast_breadth'):
                 evidence.append(f"波动活跃: 日内振幅{result['details']['amplitude_pct']:.1f}%")
 
+            # 注入情绪周期信息
+            emotion_cycle = _fmz_to_emotion_cycle((market_context or {}).get('market_state', ''))
+            state_label = label_map.get(result['signal'], '')
+            if emotion_cycle and emotion_cycle != '情绪中性':
+                state_label = f'{emotion_cycle}·{state_label}'
+
             return {
                 'strategy_name': 'BOCIASI快线',
                 'status_recognition': {
-                    'state': 'ACCUMULATING' if result['signal'] == 'BUY' else ('BEARISH' if result['signal'] == 'WATCH' and result['confidence'] < 0.3 else 'RANGING'),
-                    'state_label': label_map.get(result['signal'], ''),
+                    'state': ('ACCUMULATING' if result['signal'] == 'BUY' else
+                          'BEARISH' if result['signal'] == 'BEARISH' else
+                          'DISTRIBUTING' if result['signal'] == 'WATCH' and (result['confidence'] < 0.5 or not ind.get('fast_price')) else
+                          'RANGING'),
+                    'state_label': state_label,
                     'trend': {'direction': '', 'strength': '', 'stage': ''},
                     'momentum': {'level': result['signal'], 'score': result['confidence']},
                     'volume': {'state': '放量' if ind.get('fast_vol') else '平量', 'structure': ''},

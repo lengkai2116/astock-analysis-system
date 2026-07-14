@@ -27,29 +27,37 @@ def render_volume(volume: dict) -> str:
 
 
 def render_volume_with_relation(volume: dict, trend: dict = None) -> str:
-    """渲染带量价关系的描述。"""
+    """渲染带量价因果关系的描述（含形态和均线排列）。"""
     vol_state = volume.get("state", "")
     structure = volume.get("structure", "")
     trend_dir = trend.get("direction", "") if trend else ""
+    trend_strength = trend.get("strength", "") if trend else ""
 
     parts = []
     if vol_state and trend_dir:
-        # 量价配合关系
+        # 量价配合关系 — 因果关系描述
         if vol_state == "放量" and trend_dir == "up":
-            parts.append("放量上攻，量价配合良好")
+            if trend_strength == "strong":
+                parts.append("放量上攻，量价配合良好，上涨动能充足")
+            else:
+                parts.append("放量上攻，量价配合良好")
         elif vol_state == "放量" and trend_dir == "down":
-            parts.append("放量下跌，空头释放中")
+            parts.append("放量下跌，空头力量集中释放，短期趋势偏空")
         elif vol_state == "缩量" and trend_dir == "up":
-            parts.append("缩量上涨，上攻动能不足")
+            parts.append("缩量上涨，上攻动能不足，需警惕量价背离")
         elif vol_state == "缩量" and trend_dir == "down":
-            parts.append("缩量回调，下跌动能减弱")
+            parts.append("缩量回调，下跌动能减弱，关注止跌信号")
+        elif vol_state == "平量" and trend_dir == "up":
+            parts.append("平量上行，趋势延续性待观察")
+        elif vol_state == "平量" and trend_dir == "down":
+            parts.append("平量下行，下跌趋势延续中")
         else:
             parts.append(f"成交量{vol_state}")
     elif vol_state:
         parts.append(f"成交量{vol_state}")
 
     if structure:
-        parts.append(structure)
+        parts.append(f"均线{structure}")
 
     return "，".join(parts) + "。" if parts else ""
 

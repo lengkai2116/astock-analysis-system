@@ -1337,13 +1337,22 @@ def screen_l3_candidates(
             market_context['index_condition'] = index_condition
         r['market_context'] = market_context
 
-        # ── 量价 ──
+        # ── 量价（优先读取 AnalysisCache） ──
         r['vp_result'], r['vp_score'], r['vp_signal'], r['vp_dir'] = None, 0.0, 'N/A', 'neutral'
         if need_vp:
             try:
-                from .volume_price_strategy import VolumePriceStrategy
-                vp = VolumePriceStrategy(market_env=market_context)
-                vp_r = vp.analyze(df)
+                from app.services.analysis_cache import get_analysis_cache
+                vp_cache = get_analysis_cache()
+                vp_cache_key = f"vp:{symbol}:{len(df)}"
+                cached_vp = vp_cache.get(vp_cache_key)
+                if cached_vp is not None:
+                    vp_r = cached_vp
+                else:
+                    from .volume_price_strategy import VolumePriceStrategy
+                    vp = VolumePriceStrategy(market_env=market_context)
+                    vp_r = vp.analyze(df)
+                    if vp_r.get('success'):
+                        vp_cache.set(vp_cache_key, vp_r)
                 if vp_r.get('success'):
                     s, sig, d = _compute_volume_price_score(vp_r, symbol, df)
                     r['vp_result'], r['vp_score'], r['vp_signal'], r['vp_dir'] = vp_r, s, sig, d
@@ -1351,12 +1360,21 @@ def screen_l3_candidates(
                 logger.debug(f"量价分析失败 {symbol}: {e}")
                 _record_engine_error('volume_price', symbol)
 
-        # ── 缠论 ──
+        # ── 缠论（优先读取 AnalysisCache） ──
         r['cl_result'], r['cl_score'], r['cl_signal'], r['cl_dir'] = None, 0.0, 'N/A', 'neutral'
         if need_cl:
             try:
-                from .chanlun_strategy import analyze_chanlun
-                cl_r = analyze_chanlun(df)
+                from app.services.analysis_cache import get_analysis_cache
+                cl_cache = get_analysis_cache()
+                cl_cache_key = f"chanlun:{symbol}:{len(df)}"
+                cached_cl = cl_cache.get(cl_cache_key)
+                if cached_cl is not None:
+                    cl_r = cached_cl
+                else:
+                    from .chanlun_strategy import analyze_chanlun
+                    cl_r = analyze_chanlun(df)
+                    if cl_r.get('success'):
+                        cl_cache.set(cl_cache_key, cl_r)
                 if cl_r.get('success'):
                     s, sig, d = _compute_chanlun_score(cl_r, df)
                     s = _adjust_score_with_context(s, r['market_context'])

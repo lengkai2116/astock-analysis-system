@@ -108,6 +108,13 @@ def _build_chanlun_dimension(sig: Optional[Dict], latest_close: float = None) ->
     else:
         ma_alignment = '粘合'
 
+    # 多级别联立数据（含降级默认值）
+    sr_ml = sr.get('multi_level', {}) or {}
+    if not sr_ml.get('direction_text'):
+        sr_ml['direction_text'] = '仅单级别分析，无跨级别验证数据'
+    if 'near_levels' not in sr_ml:
+        sr_ml['near_levels'] = []
+
     return {
         'direction': direction,
         'buy_point': buy_point,
@@ -118,12 +125,14 @@ def _build_chanlun_dimension(sig: Optional[Dict], latest_close: float = None) ->
         'ma_alignment': ma_alignment,
         'critical_levels': {'support': levels.get('support', 0), 'resistance': levels.get('resistance', 0)},
         'status_text': status_text,
-        # 多级别联立数据
-        'multi_level': sr.get('multi_level', {}),
+        'multi_level': sr_ml,
         'zhongshu_list': [
             {'low': round(zs.get('low', 0), 2), 'high': round(zs.get('high', 0), 2),
              'type': zs.get('type', ''), 'level': zs.get('level', ''),
-             'duration': zs.get('duration', '')}
+             'duration': zs.get('duration', ''),
+             'direction': zs.get('direction', ''),
+             'seg_count': zs.get('seg_count', 0),
+             'center': zs.get('center', None)}
             for zs in detail.get('zhongshu_list', [])[:3]
         ],
         'position_detail': sr.get('position_detail', ''),
@@ -133,7 +142,7 @@ def _build_chanlun_dimension(sig: Optional[Dict], latest_close: float = None) ->
 def _build_volume_price_dimension(sig: Optional[Dict]) -> Dict:
     """从量价信号构建卡2格式"""
     if not sig:
-        return {'direction': 'neutral', 'status_text': '无量价信号'}
+        return {'direction': 'neutral', 'status_text': '量价分析数据不足，暂无量价形态信号'}
     sr = sig.get('status_recognition', {})
     trend = sr.get('trend', {})
     levels = sr.get('support_resistance', {})
@@ -142,8 +151,11 @@ def _build_volume_price_dimension(sig: Optional[Dict]) -> Dict:
     pattern = sig.get('current_pattern', '') or sr.get('volume', {}).get('structure', '')
     enhance = sig.get('enhance_patterns', [])
     phase_label = pattern if pattern else (trend.get('direction', '横盘'))
+    # 从 status_recognition.trend 推导方向（优先于 signal）
+    trend_dir = trend.get('direction', '')
+    vp_direction = trend_dir if trend_dir in ('up', 'down') else sig.get('signal', 'neutral')
     return {
-        'direction': sig.get('signal', 'neutral'),
+        'direction': vp_direction,
         'phase': trend.get('stage', 'RANGING'),
         'phase_label': phase_label,
         'volume_price_relation': sr.get('volume', {}).get('state', ''),
@@ -159,7 +171,7 @@ def _build_volume_price_dimension(sig: Optional[Dict]) -> Dict:
 def _build_chip_dimension(sig: Optional[Dict]) -> Dict:
     """从筹码信号构建卡3格式"""
     if not sig:
-        return {'direction': 'neutral', 'status_text': '无筹码信号'}
+        return {'direction': 'neutral', 'status_text': '筹码数据不足，无法分析主力动向'}
     sr = sig.get('status_recognition', {})
     status_text = render_chip_volume(sr) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
 
@@ -187,8 +199,20 @@ def _build_chip_dimension(sig: Optional[Dict]) -> Dict:
             except (ValueError, IndexError):
                 pass
 
+    # 从 status_recognition 推导方向（优先于 signal）
+    chip_state = sr.get('state', '')
+    chip_dir = 'neutral'
+    if chip_state == 'ACCUMULATING':
+        chip_dir = 'bullish'
+    elif chip_state == 'DISTRIBUTING':
+        chip_dir = 'bearish'
+    elif chip_state == 'RANGING':
+        chip_dir = 'neutral'
+    else:
+        chip_dir = sig.get('signal', 'neutral')
+
     return {
-        'direction': sig.get('signal', 'neutral'),
+        'direction': chip_dir,
         'profit_ratio': sr.get('support_resistance', {}).get('support', None),
         'avg_cost': avg_cost if avg_cost > 0 else None,
         'concentration': concentration_str,
@@ -223,8 +247,17 @@ def _build_emotion_dimension(
     evidence = sig.get('evidence', []) if sig else []
     # NLG渲染status_text（比evidence拼接更流畅）
     status_text = render_emotion(sr) if (_HAVE_NLG and sr) else ('; '.join(evidence[:2]) if evidence else (sig.get('signal_label', '行业板块情况正常') if sig else '行业板块情况正常'))
+    # 从 status_recognition 推导方向（优先于 signal）
+    emotion_state = sr.get('state', '')
+    emotion_dir = 'neutral'
+    if emotion_state == 'ACCUMULATING':
+        emotion_dir = 'bullish'
+    elif emotion_state in ('BEARISH', 'DISTRIBUTING'):
+        emotion_dir = 'bearish'
+    else:
+        emotion_dir = sig.get('signal', 'neutral') if sig else 'neutral'
     return {
-        'direction': sig.get('signal', 'neutral') if sig else 'neutral',
+        'direction': emotion_dir,
         'sector': sector_name,
         'sector_pct': sector_pct,
         'market_temp': sr.get('volume', {}).get('state', '中性'),

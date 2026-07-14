@@ -8,14 +8,15 @@
 知识库: 缠中说禅买卖点级别定理 — 大级别买卖点必然是次级别以下某一级别买卖点
 """
 import logging
-from typing import Dict, List, Optional, Tuple
 from collections import OrderedDict
+from typing import Dict, List, Optional
 
-from app.engine.framework.chanlun_strategy import (
-    ChanlunAnalyzer, Zhongshu, Stroke, Segment,
-)
-from app.engine.framework.chanlun_config import ChanlunConfig
 from app.data.memory_cache import TieredMemoryCache
+from app.engine.framework.chanlun_config import ChanlunConfig
+from app.engine.framework.chanlun_strategy import (
+    ChanlunAnalyzer,
+    Zhongshu,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ class MultiLevelChanlunAnalyzer:
         self.config = config or ChanlunConfig.default()
         self.results: Dict[str, dict] = {}
         # 进程级内存缓存（批次4c）
-        self._cache = TieredMemoryCache(maxsize=128, ttl=3600)
+        self._cache = TieredMemoryCache()
 
     def analyze(self, df_dict: Dict[str, 'pd.DataFrame']) -> Dict:
         """对每个级别独立运行缠论分析链。
