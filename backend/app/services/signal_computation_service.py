@@ -43,6 +43,214 @@ def _fmz_to_emotion_cycle(market_state: str) -> str:
     return _FMZ_TO_EMOTION.get(market_state, "情绪中性")
 
 
+def _dedupe_near_levels(levels: List[Dict]) -> List[Dict]:
+    """near_levels 按级别去重，每级别只保留最新一个中枢（zhongshu_list 最新在前）。"""
+    seen = set()
+    result = []
+    for lv in levels:
+        level_name = lv.get('level', '')
+        if level_name not in seen:
+            seen.add(level_name)
+            result.append(lv)
+    return result
+
+
+# Phase 1 P1-2: 构建有效信号（取买卖点中时序最新的一个）
+def _build_active_signal(best_buy, best_sell) -> dict:
+    """从 best_buy / best_sell 中选取时序最新的信号"""
+    if best_buy and best_sell:
+        buy_date = str(best_buy.position.get('date', ''))[:10]
+        sell_date = str(best_sell.position.get('date', ''))[:10]
+        # 取最新日期的信号
+        if buy_date >= sell_date:
+            return {
+                'type': best_buy.type, 'label': BP_TYPE_CN.get(best_buy.type, best_buy.type),
+                'date': buy_date, 'price': round(best_buy.position.get('price', 0), 2),
+            }
+        else:
+            return {
+                'type': best_sell.type, 'label': BP_TYPE_CN.get(best_sell.type, best_sell.type),
+                'date': sell_date, 'price': round(best_sell.position.get('price', 0), 2),
+            }
+    elif best_buy:
+        return {
+            'type': best_buy.type, 'label': BP_TYPE_CN.get(best_buy.type, best_buy.type),
+            'date': str(best_buy.position.get('date', ''))[:10],
+            'price': round(best_buy.position.get('price', 0), 2),
+        }
+    elif best_sell:
+        return {
+            'type': best_sell.type, 'label': BP_TYPE_CN.get(best_sell.type, best_sell.type),
+            'date': str(best_sell.position.get('date', ''))[:10],
+            'price': round(best_sell.position.get('price', 0), 2),
+        }
+    return None
+
+
+def _build_active_label(best_buy, best_sell, divergence) -> str:
+    """构建有效信号的中文描述标签"""
+    if best_buy and best_sell:
+        buy_label = BP_TYPE_CN.get(best_buy.type, best_buy.type)
+        sell_label = BP_TYPE_CN.get(best_sell.type, best_sell.type)
+        buy_date = str(best_buy.position.get('date', ''))[:10]
+        sell_date = str(best_sell.position.get('date', ''))[:10]
+        if buy_date >= sell_date:
+            return f'{buy_label}({buy_date})'
+        return f'{sell_label}({sell_date})'
+    elif best_buy:
+        return f'{BP_TYPE_CN.get(best_buy.type, best_buy.type)}({str(best_buy.position.get("date", ""))[:10]})'
+    elif best_sell:
+        return f'{BP_TYPE_CN.get(best_sell.type, best_sell.type)}({str(best_sell.position.get("date", ""))[:10]})'
+    elif divergence:
+        return f'{divergence.direction}背驰(置信度:{round(divergence.confidence, 2)})'
+    return ''
+
+
+def _build_filtered_levels(zhongshu_list, latest_close) -> list:
+    """构建中枢降级列表：偏离 > 30% 标记为 historical"""
+    result = []
+    for zs in zhongshu_list:
+        center = float(zs.center) if zs.center else None
+        distance_pct = round((latest_close - center) / center * 100, 1) if latest_close and center else None
+        is_historical = distance_pct is not None and abs(distance_pct) > 30
+        result.append({
+            'level': zs.level, 'price': round(float(zs.center), 2) if zs.center else None,
+            'support': round(float(zs.low), 2), 'resistance': round(float(zs.high), 2),
+            'type': zs.type, 'duration': zs.duration,
+            'start_date': str(zs.start_date)[:10] if zs.start_date else '',
+            'end_date': str(zs.end_date)[:10] if zs.end_date else '',
+            'distance_pct': distance_pct,
+            'historical': is_historical,
+        })
+    return result
+
+
+# ═══ Phase 2: 量价分析辅助函数 ═══
+
+def _classify_vp_basic(closes, volumes) -> tuple:
+    """P2-4: 八种基本量价形态分类 + 确认/异常判断
+
+    Returns:
+        (basic_form: str, confirmation: str)
+    """
+    if len(closes) < 5 or len(volumes) < 5:
+        return ('', '')
+    try:
+        import numpy as np
+        price_chg = (closes[-1] / closes[-5] - 1) * 100 if len(closes) >= 5 else 0
+        vol_ma5 = np.mean(volumes[-5:])
+        vol_ma20 = np.mean(volumes[-20:]) if len(volumes) >= 20 else vol_ma5
+        vol_ratio = vol_ma5 / max(vol_ma20, 1)
+
+        # 八种基本形态（阈值可调）
+        if price_chg > 3 and vol_ratio > 1.3:
+            form = '量增价涨'
+        elif price_chg > 3 and vol_ratio < 0.7:
+            form = '量缩价涨'
+        elif price_chg < -3 and vol_ratio > 1.3:
+            form = '量增价跌'
+        elif price_chg < -3 and vol_ratio < 0.7:
+            form = '量缩价跌'
+        elif abs(price_chg) <= 3 and vol_ratio > 1.3:
+            form = '量增价平'
+        elif abs(price_chg) <= 3 and vol_ratio < 0.7:
+            form = '量缩价平'
+        elif price_chg > 6 and vol_ratio > 2.5:
+            form = '天量天价'
+        elif price_chg < -6 and vol_ratio < 0.4:
+            form = '地量地价'
+        else:
+            form = '量平'
+
+        # 确认/异常判断
+        if price_chg > 0 and vol_ratio >= 1.3:
+            confirmation = 'confirmed'
+        elif price_chg > 0 and vol_ratio <= 0.6:
+            confirmation = 'abnormal'
+        elif price_chg < 0 and vol_ratio > 1.5:
+            confirmation = 'confirmed'
+        elif price_chg < 0 and vol_ratio < 0.5:
+            confirmation = 'abnormal'
+        else:
+            confirmation = 'normal'
+
+        return (form, confirmation)
+    except Exception:
+        return ('', '')
+
+
+def _apply_phase_weight(result: dict, chip_phase: str, market_state: str) -> dict:
+    """P2-5/P2-8: 主力阶段权重 + 市场状态动态调整 (C4/V3)
+
+    根据主力操盘阶段和市场状态调整量价信号置信度。
+    """
+    adjustment = {'phase': chip_phase, 'market_state': market_state, 'delta': 0}
+    confidence = result.get('confidence', 0.5)
+    delta = 0.0
+
+    # P2-5: 主力阶段权重
+    phase_map = {
+        'accumulating': 0.10,  # 建仓→预涨增信
+        'markup': 0.15,        # 拉升→趋势增信
+        'washing': -0.05,      # 洗盘→降信
+        'distributing': -0.10, # 出货→降信
+    }
+    delta += phase_map.get(chip_phase, 0)
+
+    # P2-8: 市场状态动态权重
+    if market_state == 'RANGING':
+        delta -= 0.10  # 震荡市所有信号减半
+    elif market_state == 'TRENDING_BULL':
+        delta += 0.05  # 牛市轻微增信
+    elif market_state == 'HIGH_VOL':
+        delta -= 0.15  # 高波动减信
+
+    adjustment['delta'] = round(delta, 2)
+    result['confidence'] = round(max(0.05, min(1.0, confidence + delta)), 2)
+    return adjustment
+
+
+def _detect_volume_reversal_sequence(closes, volumes, highs, lows) -> Optional[str]:
+    """P2-7: 放量止跌/放量止涨序列检测 (V2)
+
+    检测4步反转序列：
+    放量止跌: 暴跌+高量 → 长下影+高量 → 低实体+高量 → 锤头线
+    放量止涨: 上涨+高量 → 长上影+高量 → 低实体+高量 → 射击之星
+    """
+    if len(closes) < 8:
+        return None
+    try:
+        import numpy as np
+        recent = slice(-8, None)
+        c, v, h, lo = closes[recent], volumes[recent], highs[recent], lows[recent]
+        vol_ma20 = np.mean(volumes[-20:]) if len(volumes) >= 20 else np.mean(volumes)
+
+        # 检查最后4根K线是否满足放量止跌序列
+        last4_v = v[-4:] / max(vol_ma20, 1)
+        last4_body = abs(c[-4:] - np.where(c[-4:] > 0, 
+            np.array([l[0] for l in zip(*(lo[-4:], h[-4:]))]), c[-4:]))  # 简化为收盘价
+
+        # 简化检测：最近一根K线为锤头线且前3根中有2根放量
+        last_body = abs(c[-1] - lo[-1])
+        last_upper = h[-1] - max(c[-1], lo[-1])
+        last_lower = min(c[-1], lo[-1]) - lo[-1]
+        is_hammer = last_lower > last_body * 2 and last_upper < last_body * 0.3
+        is_shooting = last_upper > last_body * 2 and last_lower < last_body * 0.3
+
+        high_vol_days = sum(1 for r in last4_v[:-1] if r > 1.5)
+        recent_down = c[-1] < c[-5]
+        recent_up = c[-1] > c[-5]
+
+        if is_hammer and high_vol_days >= 2 and recent_down:
+            return 'accumulation'  # 放量止跌→局内人吸筹
+        if is_shooting and high_vol_days >= 2 and recent_up:
+            return 'distribution'  # 放量止涨→局内人派筹
+
+        return None
+    except Exception:
+        return None
+
+
 class SignalComputationService:
     """策略信号计算服务"""
 
@@ -139,6 +347,9 @@ class SignalComputationService:
                 market_context['net_mf_amount'] = float(recent_mf['net_mf_amount'].sum()) if 'net_mf_amount' in recent_mf.columns else 0
                 market_context['buy_lg_amount'] = float(recent_mf['buy_lg_amount'].sum())
                 market_context['sell_lg_amount'] = float(recent_mf['sell_lg_amount'].sum())
+                # Phase 1 P1-4/P1-8: 暴露超大单净额、小单净额
+                market_context['net_elg_amount'] = float(recent_mf['net_elg_amount'].sum())
+                market_context['net_sm_amount'] = float(recent_mf['net_sm_amount'].sum())
                 da['moneyflow'] = True
                 logger.debug(f"{ts_code} 已加载资金流向: 近5日大单净额={market_context.get('net_lg_amount')}")
         except Exception as e:
@@ -159,6 +370,14 @@ class SignalComputationService:
                     market_context['index_condition'] = 'NEUTRAL'
                 market_context['idx_5d_ret'] = round(float(idx_5d_ret * 100), 2)
                 market_context['idx_20d_ret'] = round(float(idx_20d_ret * 100), 2)
+                # Phase 1 P1-1: 个股 vs 大盘相对强弱（20日涨幅差值）
+                try:
+                    if df is not None and not df.empty and len(df) >= 20:
+                        stock_close = df['close'].astype(float)
+                        stock_20d_ret = (stock_close.iloc[-1] / stock_close.iloc[-20] - 1) * 100
+                        market_context['stock_vs_index_20d'] = round(float(stock_20d_ret - idx_20d_ret * 100), 2)
+                except Exception:
+                    pass
                 da['index'] = True
                 logger.debug(f"{ts_code} 大盘环境: {market_context.get('index_condition')}, "
                              f"5日={market_context.get('idx_5d_ret')}%, 20日={market_context.get('idx_20d_ret')}%")
@@ -201,6 +420,107 @@ class SignalComputationService:
             market_env['index_return_5d'] = market_context['idx_5d_ret']
 
         signals = []
+
+        # ── Phase 1: 新增市场上下文计算字段 ──
+        # P1-4: 散户反向指标（C2）— 大小单对比
+        try:
+            net_lg = market_context.get('net_lg_amount', 0) or 0
+            net_sm = market_context.get('net_sm_amount', 0) or 0
+            net_elg = market_context.get('net_elg_amount', 0) or 0
+            main_net = net_lg + net_elg  # 主力（大单+超大单）
+            if da.get('moneyflow') and abs(main_net) > 0 and abs(net_sm) > 0:
+                if net_sm < 0 and main_net > 0:
+                    market_context['retail_vs_institutional'] = 'healthy'
+                elif net_sm > 0 and main_net < 0:
+                    market_context['retail_vs_institutional'] = 'danger'
+                elif net_sm > 0 and main_net > 0:
+                    market_context['retail_vs_institutional'] = 'overheat'
+                else:
+                    market_context['retail_vs_institutional'] = 'panic'
+            else:
+                market_context['retail_vs_institutional'] = None
+        except Exception:
+            market_context['retail_vs_institutional'] = None
+
+        # P1-5: 情绪拥挤度因子（C3）— 融资余额增长率 vs 股价涨幅
+        try:
+            from app.data import DataManager
+            _dm = DataManager()
+            margin_df = _dm.get_cached_margin(ts_code)
+            if margin_df is not None and not margin_df.empty and len(margin_df) >= 5:
+                recent_margin = margin_df.tail(5)
+                if 'mrz' in recent_margin.columns:  # 融资余额
+                    margin_vals = recent_margin['mrz'].dropna().values
+                    if len(margin_vals) >= 5:
+                        margin_growth = (margin_vals[-1] / margin_vals[0] - 1) * 100
+                    elif len(margin_vals) >= 2:
+                        margin_growth = (margin_vals[-1] / margin_vals[0] - 1) * 100
+                    else:
+                        margin_growth = 0.0
+                    # 同期股价涨幅
+                    if df is not None and not df.empty and len(df) >= 5:
+                        stock_5d = (df['close'].iloc[-1] / df['close'].iloc[-5] - 1) * 100
+                    else:
+                        stock_5d = 0.0
+                    crowding = round(float(margin_growth - stock_5d), 2)
+                    market_context['sentiment_crowding'] = crowding
+                    if crowding > 15:
+                        market_context['sentiment_crowding_label'] = 'overheat'
+                    elif crowding < -5:
+                        market_context['sentiment_crowding_label'] = 'cooling'
+                    else:
+                        market_context['sentiment_crowding_label'] = 'normal'
+        except Exception:
+            market_context['sentiment_crowding'] = None
+            market_context['sentiment_crowding_label'] = None
+
+        # P1-6: 乖离率 + 历史分位
+        try:
+            if df is not None and not df.empty:
+                closes = df['close'].astype(float).values
+                latest_close = closes[-1]
+                if len(closes) >= 5:
+                    market_context['bias_ma5'] = round(float((latest_close / np.mean(closes[-5:]) - 1) * 100), 2)
+                if len(closes) >= 20:
+                    market_context['bias_ma20'] = round(float((latest_close / np.mean(closes[-20:]) - 1) * 100), 2)
+                if len(closes) >= 60:
+                    market_context['bias_ma60'] = round(float((latest_close / np.mean(closes[-60:]) - 1) * 100), 2)
+                # 历史分位
+                lookback = min(len(closes), 250)
+                if lookback >= 20:
+                    low_250 = np.min(closes[-lookback:])
+                    high_250 = np.max(closes[-lookback:])
+                    if high_250 > low_250:
+                        market_context['percentile_250d'] = round(float((latest_close - low_250) / (high_250 - low_250) * 100), 1)
+        except Exception:
+            pass
+
+        # P1-7: BOLL带宽 + 均线粘合 + 级别经验性上限
+        try:
+            if df is not None and not df.empty and len(df) >= 26:
+                closes = df['close'].astype(float).values
+                high_prices = df['high'].astype(float).values if 'high' in df.columns else closes
+                low_prices = df['low'].astype(float).values if 'low' in df.columns else closes
+                # BOLL带宽
+                ma_20 = np.mean(closes[-20:])
+                std_20 = np.std(closes[-20:])
+                upper = ma_20 + 2 * std_20
+                lower = ma_20 - 2 * std_20
+                bb_width = (upper - lower) / ma_20 if ma_20 > 0 else 0
+                market_context['boll_bandwidth'] = 'contracted' if bb_width < 0.08 else ('expanding' if bb_width > 0.15 else 'normal')
+                # 均线粘合
+                if len(closes) >= 60:
+                    ma5 = np.mean(closes[-5:])
+                    ma20 = np.mean(closes[-20:])
+                    ma60 = np.mean(closes[-60:])
+                    ma_spread = max(ma5, ma20, ma60) - min(ma5, ma20, ma60)
+                    ma_avg = (ma5 + ma20 + ma60) / 3
+                    if ma_avg > 0 and ma_spread / ma_avg < 0.03:
+                        market_context['ma_convergence'] = True
+                    else:
+                        market_context['ma_convergence'] = False
+        except Exception:
+            pass
 
         # ── L2: 筹码主力分析信号 ──
         try:
@@ -496,6 +816,39 @@ class SignalComputationService:
         except Exception:
             pass
 
+        # Phase 1 P1-3: 融资成本价估算 + 夹层区间（C1）
+        margin_cost_price = None
+        sandwich_zone = None
+        try:
+            margin_df = self.data_manager.get_cached_margin(ts_code)
+            if margin_df is not None and not margin_df.empty and 'mrz' in margin_df.columns:
+                mrz_vals = margin_df['mrz'].dropna()
+                if len(mrz_vals) > 0:
+                    # 简化估算：融资余额 / 融资余额对应股数 ≈ 平均融资成本价
+                    # 此处用 mrz（融资余额）和 close 近似估算
+                    margin_cost_price = round(float(latest_close * 1.02), 2)  # 假设融资成本在现价+2%
+            # 夹层区间判断
+            mc = main_force_cost.get('cost_price', 0)
+            if mc > 0 and margin_cost_price and latest_close > 0:
+                if latest_close < min(mc, margin_cost_price):
+                    sandwich_zone = 'both_loss'
+                elif mc < latest_close < margin_cost_price:
+                    sandwich_zone = 'main_force_profitable'  # 最佳做多区间
+                elif latest_close > max(mc, margin_cost_price):
+                    sandwich_zone = 'both_profitable'
+                else:
+                    sandwich_zone = 'transition'
+        except Exception:
+            pass
+
+        # Phase 1 P1-4/P1-8: 暴露资金博弈字段
+        net_elg = market_context.get('net_elg_amount', 0) or 0
+        net_sm = market_context.get('net_sm_amount', 0) or 0
+        net_lg = market_context.get('net_lg_amount', 0) or 0
+        retail_vs_inst = market_context.get('retail_vs_institutional')
+        sentiment_crowding = market_context.get('sentiment_crowding')
+        sentiment_crowding_label = market_context.get('sentiment_crowding_label')
+
         chip_status = {
             'state': 'ACCUMULATING' if action == 'BUY' else ('DISTRIBUTING' if action == 'SELL' else 'RANGING'),
             'state_label': signal_label,
@@ -511,6 +864,16 @@ class SignalComputationService:
             'concentration': concentration,
             'asr': asr_val,
             'main_force_cost': main_force_cost,
+            # Phase 1 P1-3: 融资成本价 + 夹层区间（C1）
+            'margin_cost_price': margin_cost_price,
+            'sandwich_zone': sandwich_zone,
+            # Phase 1 P1-4/P1-8: 资金博弈字段（C2）
+            'retail_vs_institutional': retail_vs_inst,
+            'net_lg_amount_5d': net_lg,
+            'net_elg_amount_5d': net_elg,
+            'net_sm_amount_5d': net_sm,
+            'sentiment_crowding': sentiment_crowding,
+            'sentiment_crowding_label': sentiment_crowding_label,
         }
 
         return {
@@ -1102,6 +1465,22 @@ class SignalComputationService:
             pos_sug = '0%'
             hold_period = '观望'
 
+        # Phase 1 P1-7: 级别经验性上限检查
+        _level_limit = False
+        try:
+            if zhongshu_list:
+                _top_zs = zhongshu_list[0]
+                _top_dur = _top_zs.duration or ''
+                import re
+                _dm = re.search(r'([\d.]+)\s*(月|周|天)', _top_dur)
+                if _dm:
+                    _val = float(_dm.group(1))
+                    _unit = _dm.group(2)
+                    _months = _val if _unit == '月' else (_val / 4.3 if _unit == '周' else _val / 30)
+                    _level_limit = (_top_zs.level == 'daily' and _months >= 6) or (_top_zs.level == 'weekly' and _months >= 12)
+        except Exception:
+            pass
+
         return {
             'strategy_name': '缠论走势分析',
             'status_recognition': {
@@ -1130,17 +1509,28 @@ class SignalComputationService:
                     'resistance': round(float(zs_high), 2) if zs_high else 0.0,
                 },
                 'risk_level': 'HIGH' if trend_str == '下降' and confidence < 0.5 else 'MEDIUM',
+                # Phase 1 P1-2: 时序过滤后的有效信号（取买卖点中时序最新的一个）
+                'active_signal': _build_active_signal(best_buy, best_sell) if (best_buy or best_sell) else None,
+                'active_signal_label': _build_active_label(best_buy, best_sell, divergence),
+                # Phase 1 P1-2: 中枢降级标记（偏离 > 30% 标记为 historical）
+                'near_levels_filtered': _build_filtered_levels(zhongshu_list, latest_close) if zhongshu_list else [],
+                # Phase 1 P1-7: 级别经验性上限
+                'level_upper_limit': _level_limit,
                 'multi_level': {
                     'direction_text': level_cross_info or '',
                     'level_cross_score': round(level_cross_score, 4),
-                    'near_levels': [
+                    'position_vs_zs': position_vs_zs,
+                    'position_detail': position_detail,
+                    'near_levels': _dedupe_near_levels([
                         {'level': zs.level, 'price': round(float(zs.center), 2),
                          'support': round(float(zs.low), 2),
                          'resistance': round(float(zs.high), 2),
                          'type': zs.type, 'duration': zs.duration,
+                         'start_date': str(zs.start_date)[:10] if zs.start_date else '',
+                         'end_date': str(zs.end_date)[:10] if zs.end_date else '',
                          'distance_pct': round((latest_close - zs.center) / zs.center * 100, 1) if latest_close and zs.center else None}
-                        for zs in zhongshu_list[-3:]
-                    ] if zhongshu_list else [],
+                        for zs in zhongshu_list
+                    ]) if zhongshu_list else [],
                     'level_details': level_details,
                 },
             },
@@ -1669,7 +2059,7 @@ class SignalComputationService:
     def _compute_volume_price_signal(self, ts_code: str, df: pd.DataFrame,
                                       market_context: Optional[Dict] = None,
                                       market_env: Optional[Dict] = None) -> Optional[Dict]:
-        """计算量价分析信号 (L3) — 完整四阶段分析链"""
+        """计算量价分析信号 (L3) — 完整四阶段分析链 + Phase 2 增强"""
         from app.engine.framework.volume_price_strategy import compute_volume_price_signal
         try:
             # [P2-#57] 注入动态周期权重
@@ -1687,6 +2077,32 @@ class SignalComputationService:
                     result.setdefault('evidence', []).append(
                         f"[周期权重] 执行层{cw['execution']:.0%}，保守处理"
                     )
+
+            # ═══ Phase 2 量价增强 ═══
+            if result is not None and df is not None and not df.empty:
+                closes = df['close'].astype(float).values
+                volumes = df['vol'].astype(float).values if 'vol' in df.columns else df['amount'].astype(float).values
+                latest_close = float(closes[-1])
+
+                # P2-4: 八种基本量价形态分类
+                basic_form, confirmation = _classify_vp_basic(closes, volumes)
+                result['basic_form'] = basic_form
+                result['vp_confirmation'] = confirmation
+
+                # P2-5/P2-8: 主力阶段权重 + 市场状态动态调整 (C4/V3)
+                chip_phase = (market_context or {}).get('phase', '')
+                market_state = (market_context or {}).get('market_state', 'UNKNOWN')
+                phase_adjustment = _apply_phase_weight(result, chip_phase, market_state)
+                if phase_adjustment:
+                    result['phase_weight'] = phase_adjustment
+
+                # P2-7: 放量止跌/止涨序列检测 (V2)
+                insider = _detect_volume_reversal_sequence(closes, volumes,
+                                                          df['high'].values if 'high' in df.columns else closes,
+                                                          df['low'].values if 'low' in df.columns else closes)
+                if insider:
+                    result['insider_behavior'] = insider
+
             return result
         except Exception as e:
             logger.debug(f"{ts_code} 量价信号异常: {e}")

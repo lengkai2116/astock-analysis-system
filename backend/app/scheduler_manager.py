@@ -636,6 +636,8 @@ class SchedulerManager:
             return dm.sync_margin_data()
         elif data_type == 'stk_limit':
             return dm.sync_stk_limit_data()
+        elif data_type == 'finance_report':
+            return dm.sync_finance_report_data()
         elif data_type == 'lhb':
             return dm.sync_lhb_data()
         elif data_type == 'top10_holders':

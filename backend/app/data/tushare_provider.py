@@ -399,8 +399,22 @@ class TushareProvider:
     # 前置条件：Tushare Pro Token 具备 5000分 权限（已确认就绪）
     # ══════════════════════════════════════════════
 
+    # 273a: 扩展字段列表包含排雷所需指标
+    FINA_FIELDS_ORIGINAL = (
+        'ts_code,end_date,ann_date,eps,eps_diluted,eps_ttm,bvps,roe,revenue_ps,profit_ps,cf_ps'
+    )
+    FINA_FIELDS_EXTENDED = (
+        'ts_code,end_date,ann_date,'
+        'eps,eps_diluted,eps_ttm,bvps,roe,revenue_ps,profit_ps,cf_ps,'
+        'roce,quick_ratio,ocfps,current_ratio,'
+        'ebit,operating_profit,total_assets,total_liab,'
+        'current_assets,current_liab'
+    )
+
     def get_fina_indicator(self, ts_code, start_date=None, end_date=None):
-        """获取财务指标数据（需5000积分）"""
+        """获取财务指标数据（需5000积分）
+        默认返回原始字段集（向后兼容 fina_indicator_cache）。
+        """
         if not self.pro:
             return []
         try:
@@ -408,10 +422,29 @@ class TushareProvider:
                 start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = self.pro.fina_indicator(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = self.pro.fina_indicator(ts_code=ts_code,
+                fields=self.FINA_FIELDS_ORIGINAL,
+                start_date=start_date, end_date=end_date)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取财务指标失败 ({ts_code}): {e}")
+            return []
+
+    def get_fina_indicator_extended(self, ts_code, start_date=None, end_date=None):
+        """获取扩展财务指标（含 roce/quick_ratio/ocfps 等，供 273a 排雷使用）"""
+        if not self.pro:
+            return []
+        try:
+            if start_date is None:
+                start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
+            if end_date is None:
+                end_date = datetime.now().strftime('%Y%m%d')
+            data = self.pro.fina_indicator(ts_code=ts_code,
+                fields=self.FINA_FIELDS_EXTENDED,
+                start_date=start_date, end_date=end_date)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取扩展财务指标失败 ({ts_code}): {e}")
             return []
 
     def get_income(self, ts_code, start_date=None, end_date=None):

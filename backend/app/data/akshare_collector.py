@@ -288,6 +288,64 @@ def _collect_minute_kline():
             logger.debug(f"[minute_kline] {ts_code} 跳过: {e}")
 
 
+def _collect_sentiment_pool():
+    """Thread 6: 涨跌停情绪池（覆盖式，30min，通过 AKShare stock_zt_pool_em）"""
+    ak = _get_ak()
+    if ak is None:
+        return
+    ecm = _get_ecm()
+    today = datetime.now().strftime('%Y%m%d')
+    records = []
+
+    # AKShare 代码→标准 ts_code 格式映射
+    _exchange_code = {'SH': '.SH', 'SZ': '.SZ'}
+
+    for market in ('SH', 'SZ'):
+        suffix = _exchange_code.get(market, f'.{market}')
+        for limit_type in ('up', 'down'):
+            try:
+                params = {'market': market}
+                if limit_type == 'down':
+                    params['type'] = 'down'
+                df = ak.stock_zt_pool_em(**params)
+                if df is None or df.empty:
+                    continue
+                for _, row in df.iterrows():
+                    raw_code = str(row.get('代码', '') or '').replace(')配股', '').strip()
+                    # 统一为 ts_code 格式: 600000.SH / 000001.SZ
+                    if raw_code and not raw_code.endswith(suffix):
+                        full_ts_code = raw_code + suffix
+                    else:
+                        full_ts_code = raw_code
+                    try:
+                        consecutive = int(row.get('连板数', 1)) if str(row.get('连板数', '1')).strip() not in ('', 'None', 'nan', '0') else 1
+                    except (ValueError, TypeError):
+                        consecutive = 1
+                    rec = {
+                        'trade_date': today,
+                        'ts_code': full_ts_code,
+                        'name': str(row.get('名称', '') or ''),
+                        'change_pct': _safe_float(row.get('涨跌幅', 0)),
+                        'price': _safe_float(row.get('最新价', 0)),
+                        'limit_type': limit_type,
+                        'consecutive_days': consecutive,
+                        'reason_category': str(row.get('涨停原因', row.get('跌停原因', '')) or ''),
+                        'first_seal_time': str(row.get('首次封板时间', '') or ''),
+                        'data_source': 'akshare',
+                    }
+                    records.append(rec)
+                logger.info(f"[sentiment_pool] {market} {limit_type}: {len(df)} 只")
+            except Exception as e:
+                logger.debug(f"[sentiment_pool] {market} {limit_type} 跳过: {e}")
+
+    if records:
+        try:
+            ecm.write_sentiment_pool(records)
+        except Exception as e:
+            logger.warning(f"[sentiment_pool] 写入缓存失败: {e}")
+    logger.info(f"[sentiment_pool] 共 {len(records)} 条")
+
+
 def _collect_lhb_and_news():
     """Thread 5: 龙虎榜 + 新闻（覆盖式，30min，通过 AKShare）"""
     ak = _get_ak()
@@ -376,6 +434,7 @@ class AkshareCollector:
             _CollectThread('sector_and_limit', 1800, _collect_sector_and_limit, initial_delay=15),
             _CollectThread('minute_kline', 300, _collect_minute_kline, initial_delay=20),
             _CollectThread('lhb_and_news', 1800, _collect_lhb_and_news, initial_delay=25),
+            _CollectThread('sentiment_pool', 1800, _collect_sentiment_pool, initial_delay=30),
         ]
 
         for t in self._threads:

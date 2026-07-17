@@ -426,6 +426,32 @@ class EnhancedCacheManager:
                 PRIMARY KEY (ts_code, trade_date, factor_name)
             )
         """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS sentiment_pool_cache (
+                trade_date TEXT, ts_code TEXT, name TEXT,
+                change_pct REAL, price REAL,
+                limit_type TEXT,
+                consecutive_days INTEGER DEFAULT 1,
+                reason_category TEXT,
+                first_seal_time TEXT,
+                data_source TEXT DEFAULT 'akshare',
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (trade_date, ts_code, limit_type)
+            )
+        """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS finance_report_cache (
+                ts_code TEXT, end_date TEXT,
+                roe REAL, roce REAL,
+                quick_ratio REAL, ocfps REAL,
+                current_ratio REAL, asset_liab_ratio REAL,
+                ebit REAL, operating_profit REAL,
+                total_assets REAL, total_liab REAL,
+                current_assets REAL, current_liab REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, end_date)
+            )
+        """)
         # 索引
         for idx_sql in [
             "CREATE INDEX IF NOT EXISTS idx_daily_ts_code ON daily_cache(ts_code)",
@@ -460,6 +486,10 @@ class EnhancedCacheManager:
             "CREATE INDEX IF NOT EXISTS idx_index_member_code ON index_member_cache(index_code)",
             "CREATE INDEX IF NOT EXISTS idx_indicator_ts_name ON indicator_cache(ts_code, indicator_name)",
             "CREATE INDEX IF NOT EXISTS idx_factor_ts_name ON factor_cache(ts_code, factor_name)",
+            "CREATE INDEX IF NOT EXISTS idx_sentiment_pool_date ON sentiment_pool_cache(trade_date)",
+            "CREATE INDEX IF NOT EXISTS idx_sentiment_pool_ts ON sentiment_pool_cache(ts_code)",
+            "CREATE INDEX IF NOT EXISTS idx_finance_report_ts ON finance_report_cache(ts_code)",
+            "CREATE INDEX IF NOT EXISTS idx_finance_report_date ON finance_report_cache(end_date)",
             "CREATE INDEX IF NOT EXISTS idx_ind_ma_ts ON indicator_ma(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_ind_macd_ts ON indicator_macd(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_ind_other_ts ON indicator_other(ts_code)",
@@ -1235,6 +1265,56 @@ class EnhancedCacheManager:
         return self._query_df(
             "SELECT * FROM lhb_cache WHERE trade_date = ? ORDER BY net_amount DESC",
             [trade_date]
+        )
+
+    # ==================== 273a方案：情绪涨停池 ====================
+
+    def write_sentiment_pool(self, records: list):
+        """写入涨跌停池数据（覆盖式，按 trade_date + limit_type）"""
+        if not records:
+            return
+        try:
+            df = pd.DataFrame(records)
+            if 'trade_date' in df.columns:
+                df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y%m%d')
+            self._insert_from_df('sentiment_pool_cache', df)
+        except Exception as e:
+            logger.warning(f"缓存涨跌停池失败: {e}")
+
+    def get_cached_sentiment_pool(self, trade_date: str = None) -> pd.DataFrame:
+        """查询涨跌停池数据"""
+        if trade_date:
+            return self._query_df(
+                "SELECT * FROM sentiment_pool_cache WHERE trade_date = ? ORDER BY limit_type, change_pct DESC",
+                [trade_date]
+            )
+        return self._query_df(
+            "SELECT * FROM sentiment_pool_cache ORDER BY trade_date DESC, limit_type, change_pct DESC"
+        )
+
+    # ==================== 273a方案：财务报告缓存 ====================
+
+    def cache_finance_report_data(self, df):
+        if df.empty:
+            return
+        with self._write_lock:
+            try:
+                if 'end_date' in df.columns:
+                    df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                # 过滤列：只保留 finance_report_cache 表中存在的列
+                table_cols = set(row[1] for row in self.conn.execute(
+                    "PRAGMA table_info(finance_report_cache)").fetchall())
+                extra = [c for c in df.columns if c not in table_cols]
+                if extra:
+                    df = df.drop(columns=extra)
+                self._insert_from_df('finance_report_cache', df)
+            except Exception as e:
+                logger.warning(f"缓存财务报告失败: {e}")
+
+    def get_cached_finance_report(self, ts_code: str) -> pd.DataFrame:
+        return self._query_df(
+            "SELECT * FROM finance_report_cache WHERE ts_code = ? ORDER BY end_date DESC",
+            [ts_code]
         )
 
     # ==================== 252号方案：前十大股东 ====================

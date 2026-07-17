@@ -1,0 +1,15 @@
+{
+  "description_source": "auto",
+  "description_fallback": "fallback_description",
+
+  "_comment_description_source": [
+    "auto: 优先使用 DeepSeek，不可用时自动 fallback",
+    "deepseek: 强制使用 DeepSeek（若API不可用则报错）",
+    "fallback: 强制使用 fallback_description（绕过 DeepSeek）"
+  ],
+
+  "_comment_description_fallback": [
+    "fallback_description: 新 fallback（简洁三要素）",
+    "nlg_renderer: 旧 NLG renderer（保留兼容）"
+  ]
+}

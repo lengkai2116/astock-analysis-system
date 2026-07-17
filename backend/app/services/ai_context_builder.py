@@ -136,21 +136,34 @@ class AiContextBuilder:
 
     def build_context(self, ts_code: str, market_env: Optional[Dict] = None) -> Dict:
         """
-        构建完整分析上下文
+        构建完整分析上下文 — Phase 2: 使用 SnapshotAssembler 生成完整快照
 
         Returns:
             {
                 'stock_context': {...},
                 'market_context': {...},
-                'history_context': {...},
                 'news_context': {...},
+                'snapshot': {...},   # ← 新增：完整结构化快照
             }
         """
-        return {
+        ctx = {
             'stock_context': self._build_stock_context(ts_code),
             'market_context': self._build_market_context(market_env),
             'news_context': self._build_news_context(ts_code),
         }
+        # Phase 2 P2-3: 注入 SnapshotAssembler 的结构化快照
+        try:
+            from app.services.signal_computation_service import SignalComputationService
+            from app.services.snapshot_assembler import SnapshotAssembler
+            scs = SignalComputationService()
+            signals = scs.compute_for_stock(ts_code)
+            assembler = SnapshotAssembler()
+            snapshot = assembler.assemble(signals, ts_code, scs.last_data_availability)
+            ctx['snapshot'] = snapshot
+        except Exception as e:
+            logger.debug(f"快照组装跳过: {e}")
+            ctx['snapshot'] = {}
+        return ctx
 
     def _build_stock_context(self, ts_code: str) -> Dict:
         """构建股票基础上下文"""
@@ -195,12 +208,16 @@ class AiContextBuilder:
         }
 
     def to_prompt_section(self, context: Dict) -> str:
-        """将上下文渲染为AI提示文本"""
+        """将上下文渲染为AI提示文本 — Phase 2: 优先输出结构化快照JSON"""
+        snapshot = context.get('snapshot', {})
+        if snapshot and len(snapshot) > 1:
+            import json
+            return '【结构化快照】\n' + json.dumps(snapshot, ensure_ascii=False, indent=2, default=str)
+
+        # 降级：输出原有文本上下文
         stock = context.get('stock_context', {})
         market = context.get('market_context', {})
-
-        lines = []
-        lines.append('【分析上下文】')
+        lines = ['【分析上下文】']
         lines.append(f'股票: {stock.get("name", "")}({stock.get("ts_code", "")})')
         if stock.get('industry'):
             lines.append(f'行业: {stock["industry"]}')

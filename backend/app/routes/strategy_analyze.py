@@ -15,7 +15,7 @@ from app.engine.framework.conflict_arbiter import ConflictArbiter
 from app.engine.framework.unified_practical_framework import UPFEngine
 from app.services.kronos_forecaster import KronosForecaster
 
-# NLG 渲染器
+# NLG 渲染器 + Fallback 描述
 try:
     from app.services.nlg import render_chanlun_trend, render_volume_price_trend, render_chip_volume, render_emotion
     _HAVE_NLG = True
@@ -26,6 +26,7 @@ except Exception as _nlg_exc:
     logger.warning("NLG 渲染模块异常导入: %s", _nlg_exc)
     _HAVE_NLG = False
 
+from app.services.fallback_description import fallback_description
 logger = logging.getLogger(__name__)
 
 strategy_analyze_bp = Blueprint('strategy_analyze', __name__)
@@ -69,7 +70,12 @@ def _build_chanlun_dimension(sig: Optional[Dict], latest_close: float = None) ->
     levels = sr.get('support_resistance', {})
     detail = sig.get('chanlun_analysis_detail', {})
     # NLG渲染status_text（传入最新收盘价以计算距离）
-    status_text = render_chanlun_trend(sr, latest_close) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
+    # 优先级: NLG renderer → fallback_description → evidence拼接
+    if _HAVE_NLG and sr:
+        status_text = render_chanlun_trend(sr, latest_close)
+    else:
+        fb = fallback_description(sr) if sr else ''
+        status_text = fb or ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
 
     # 从 chanlun_analysis_detail 提取中文趋势方向（'上升'/'下降'/'待定'）
     structure = detail.get('走势结构', {})
@@ -108,8 +114,8 @@ def _build_chanlun_dimension(sig: Optional[Dict], latest_close: float = None) ->
     else:
         ma_alignment = '粘合'
 
-    # 多级别联立数据（含降级默认值）
-    sr_ml = sr.get('multi_level', {}) or {}
+    # 多级别联立数据（拷贝，不污染原始 status_recognition）
+    sr_ml = dict(sr.get('multi_level', {})) if isinstance(sr.get('multi_level'), dict) else {}
     if not sr_ml.get('direction_text'):
         sr_ml['direction_text'] = '仅单级别分析，无跨级别验证数据'
     if 'near_levels' not in sr_ml:
@@ -132,10 +138,15 @@ def _build_chanlun_dimension(sig: Optional[Dict], latest_close: float = None) ->
              'duration': zs.get('duration', ''),
              'direction': zs.get('direction', ''),
              'seg_count': zs.get('seg_count', 0),
-             'center': zs.get('center', None)}
+             'center': zs.get('center', None),
+             'start_date': zs.get('start_date', ''), 'end_date': zs.get('end_date', '')}
             for zs in detail.get('zhongshu_list', [])[:3]
         ],
         'position_detail': sr.get('position_detail', ''),
+        # Phase 1 P1-2: 有效信号 + 中枢降级
+        'active_signal': sr.get('active_signal'),
+        'active_signal_label': sr.get('active_signal_label'),
+        'near_levels_filtered': sr.get('near_levels_filtered', []),
     }
 
 
@@ -221,6 +232,16 @@ def _build_chip_dimension(sig: Optional[Dict]) -> Dict:
         'large_order_net': large_order_net,
         'lock_up_ratio': sr.get('risk_level') == 'HIGH' and 55.0 or 35.0,
         'status_text': status_text,
+        # Phase 1: 筹码资金新字段
+        'distance_pct': round(distance_pct, 1) if distance_pct else None,
+        'margin_cost_price': sr.get('margin_cost_price'),
+        'sandwich_zone': sr.get('sandwich_zone'),
+        'retail_vs_institutional': sr.get('retail_vs_institutional'),
+        'net_lg_amount_5d': sr.get('net_lg_amount_5d'),
+        'net_elg_amount_5d': sr.get('net_elg_amount_5d'),
+        'net_sm_amount_5d': sr.get('net_sm_amount_5d'),
+        'sentiment_crowding': sr.get('sentiment_crowding'),
+        'sentiment_crowding_label': sr.get('sentiment_crowding_label'),
     }
 
 

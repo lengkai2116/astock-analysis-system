@@ -2921,31 +2921,35 @@ function _dirTag(dir){
 function renderDimensionCards(dimensions, kronos){
   if(!dimensions) return;
   function setId(id,val){var el=document.getElementById(id);if(el)el.textContent=val!=null?val:'--';}
+  // Phase 3 P3-1: 优先展示 deepseek_text，fallback 到 status_text
+  function narrativeText(dim, field){
+    return dim.deepseek_text || dim[field] || dim.status_text || '--';
+  }
   // 走势结构
   var cl=dimensions.chanlun||{}; setId('cm-chanlun-direction',cl.direction||'--'); setId('cm-chanlun-zhongshu',cl.zhongshu_range?cl.zhongshu_range.join(' — '):'--');
   setId('cm-chanlun-position',cl.zhongshu_position||'--'); setId('cm-chanlun-buy_point',cl.buy_point||'--');
   setId('cm-chanlun-ma_alignment',cl.ma_alignment||'--'); setId('cm-chanlun-ma_detail',cl.critical_levels?'支撑'+_fmt(cl.critical_levels.support)+' 阻力'+_fmt(cl.critical_levels.resistance):'--');
-  setId('cm-chanlun-narrative',cl.status_text||'--');
+  setId('cm-chanlun-narrative',narrativeText(cl));
   setId('cm-chanlun-footer-text',cl.footer_text||'--');
   setId('cm-chanlun-tag',cl.direction?_dirTag(cl.direction):'--');
   // 量价形态
   var vp=dimensions.volume_price||{}; setId('cm-vp-phase',vp.phase||'--'); setId('cm-vp-pattern',vp.phase_label||'--');
   setId('cm-vp-vp_relation',vp.volume_price_relation||'--'); setId('cm-vp-resonance',vp.trend_strength>0.5?'偏多':'偏空');
   setId('cm-vp-volume_detail',vp.support?'支撑'+_fmt(vp.support)+' 阻力'+_fmt(vp.resistance):'--');
-  setId('cm-vp-narrative',vp.status_text||'--');
+  setId('cm-vp-narrative',narrativeText(vp));
   setId('cm-vp-footer-text',vp.footer_text||'--');
   setId('cm-vp-tag',vp.direction?_dirTag(vp.direction):'--');
   // 筹码
   var cp=dimensions.chip||{}; setId('cm-chip-profit_ratio',cp.profit_ratio!=null?cp.profit_ratio+'%':'--');
   setId('cm-chip-avg_cost',_fmt(cp.avg_cost)); setId('cm-chip-concentration',cp.concentration||'--');
   setId('cm-chip-main_force',cp.main_force_direction||'--'); setId('cm-chip-large_order',cp.large_order_net?String(cp.large_order_net):'--');
-  setId('cm-chip-narrative',cp.status_text||'--');
+  setId('cm-chip-narrative',narrativeText(cp));
   setId('cm-chip-footer-text',cp.footer_text||'--');
   setId('cm-chip-tag',cp.direction?_dirTag(cp.direction):'--');
   // 情绪
   var em=dimensions.emotion||{}; setId('cm-emotion-cycle',em.market_temp||'--');
   setId('cm-emotion-sector_pct',em.sector_pct!=null?em.sector_pct+'%':'--'); setId('cm-emotion-market_temp',em.valuation||'--');
-  setId('cm-emotion-narrative',em.status_text||'--');
+  setId('cm-emotion-narrative',narrativeText(em));
   setId('cm-emotion-footer-text',em.footer_text||'--');
   setId('cm-emotion-tag',em.direction?_dirTag(em.direction):'--');
   // Vibe

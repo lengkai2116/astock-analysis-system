@@ -576,6 +576,14 @@ class DataManager:
         """从缓存获取财务指标"""
         return self.cache.get_cached_fina_indicator(ts_code)
 
+    def get_cached_sentiment_pool(self, trade_date=None):
+        """从缓存获取涨跌停情绪池"""
+        return self.cache.get_cached_sentiment_pool(trade_date)
+
+    def get_cached_finance_report(self, ts_code):
+        """从缓存获取财务排雷报告"""
+        return self.cache.get_cached_finance_report(ts_code)
+
     def get_cached_income(self, ts_code):
         """从缓存获取利润表"""
         return self.cache.get_cached_income(ts_code)
@@ -725,6 +733,26 @@ class DataManager:
                     total += len(df)
             except Exception as e:
                 logger.warning(f"同步财务指标 {code} 失败: {e}")
+        return total
+
+    def sync_finance_report_data(self, ts_code=None) -> int:
+        """273a: 同步扩展财务指标（含 roce/quick_ratio/ocfps，供排雷使用）"""
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        import pandas as pd
+        stocks = [ts_code] if ts_code else [s.ts_code for s in Stock.query.all()]
+        total = 0
+        for code in stocks:
+            try:
+                raw = self.tushare.get_fina_indicator_extended(code)
+                if raw:
+                    df = pd.DataFrame(raw)
+                    if 'end_date' in df.columns:
+                        df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                    self.cache.cache_finance_report_data(df)
+                    total += len(df)
+            except Exception as e:
+                logger.warning(f"同步扩展财务指标 {code} 失败: {e}")
         return total
 
     def sync_income_data(self, ts_code=None) -> int:
@@ -945,10 +973,11 @@ class DataManager:
         return total
 
     def sync_financial_all(self) -> int:
-        """批量同步全部财务数据（fina_indicator + income + balancesheet + cashflow）"""
+        """批量同步全部财务数据"""
         total = 0
-        for sync_fn in [self.sync_fina_indicator_data, self.sync_income_data,
-                        self.sync_balancesheet_data, self.sync_cashflow_data]:
+        for sync_fn in [self.sync_fina_indicator_data, self.sync_finance_report_data,
+                        self.sync_income_data, self.sync_balancesheet_data,
+                        self.sync_cashflow_data]:
             try:
                 total += sync_fn()
             except Exception as e:
