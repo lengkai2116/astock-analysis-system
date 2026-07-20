@@ -1041,31 +1041,6 @@ class ZhongshuAnalyzer:
         return 'detach'
 
     @staticmethod
-    def _expand_zhongshu(zs: Zhongshu, seg: Segment):
-        """中枢扩张：保留当前中枢为子中枢，扩大区间。"""
-        seg_r = seg.range
-        # 保存当前中枢为子中枢
-        if zs.segments:
-            zs.sub_zhongshu_list.append(Zhongshu(
-                start_idx=zs.start_idx, end_idx=zs.end_idx,
-                start_date=zs.start_date, end_date=zs.end_date,
-                high=zs.high, low=zs.low, center=zs.center,
-                level=zs.level, direction=zs.direction,
-                segments=list(zs.segments), range_width=zs.range_width,
-                type='normal',
-            ))
-        # 扩张边界
-        zs.low = min(zs.low, seg_r['low'])
-        zs.high = max(zs.high, seg_r['high'])
-        zs.center = (zs.low + zs.high) / 2
-        zs.range_width = zs.high - zs.low
-        zs.type = 'expanded'
-        zs.end_idx = seg.end_idx
-        zs.end_date = seg.end_date
-        if zs.segments is not None:
-            zs.segments = zs.segments + [seg]
-
-    @staticmethod
     def _merge_zhongshu(zs: Zhongshu, seg_a: Segment, seg_b: Segment,
                         seg_c: Segment, overlap: tuple):
         """中枢合并：两中枢区间重叠时合并，保留各自为子中枢。"""

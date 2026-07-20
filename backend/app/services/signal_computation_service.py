@@ -65,35 +65,72 @@ BP_TYPE_CN = {
     'third_sell': '第三类卖点', 'third_sell_a': '第三类卖点(一类后)', 'third_sell_b': '第三类卖点(一类前)',
 }
 
-# Phase 1 P1-2: 构建有效信号（取买卖点中时序最新的一个）
-def _build_active_signal(best_buy, best_sell) -> dict:
-    """从 best_buy / best_sell 中选取时序最新的信号"""
+# Phase 1 P1-2: 构建有效信号（取买卖点中时序最新的一个，过滤过时信号）
+def _build_active_signal(best_buy, best_sell, trade_date: str = None, latest_close: float = None) -> dict:
+    """从 best_buy / best_sell 中选取时序最新的信号。
+    
+    过滤规则：
+    - 信号日期超过3个月且当前价偏离信号价>20% → 标记为historical，不作为active_signal
+    """
+    def _is_stale(signal_date: str, signal_price: float) -> bool:
+        """判断信号是否过时"""
+        if not trade_date or not signal_date or not latest_close or not signal_price:
+            return False
+        # 计算时间差（月）
+        try:
+            from datetime import datetime
+            sig_dt = datetime.strptime(signal_date[:10], '%Y-%m-%d')
+            cur_dt = datetime.strptime(trade_date[:10], '%Y-%m-%d')
+            months = (cur_dt.year - sig_dt.year) * 12 + (cur_dt.month - sig_dt.month)
+            # 超过3个月且价格偏离>20% → 过时
+            if months > 3:
+                deviation = abs(latest_close - signal_price) / max(signal_price, 0.01)
+                if deviation > 0.20:
+                    return True
+        except (ValueError, TypeError):
+            pass
+        return False
+
+    def _make_signal(bp, historical=False):
+        return {
+            'type': bp.type, 'label': BP_TYPE_CN.get(bp.type, bp.type),
+            'date': str(bp.position.get('date', ''))[:10],
+            'price': round(bp.position.get('price', 0), 2),
+            'current_price': round(latest_close, 2) if latest_close else None,
+            'historical': historical,
+        }
+
     if best_buy and best_sell:
         buy_date = str(best_buy.position.get('date', ''))[:10]
         sell_date = str(best_sell.position.get('date', ''))[:10]
-        # 取最新日期的信号
-        if buy_date >= sell_date:
-            return {
-                'type': best_buy.type, 'label': BP_TYPE_CN.get(best_buy.type, best_buy.type),
-                'date': buy_date, 'price': round(best_buy.position.get('price', 0), 2),
-            }
-        else:
-            return {
-                'type': best_sell.type, 'label': BP_TYPE_CN.get(best_sell.type, best_sell.type),
-                'date': sell_date, 'price': round(best_sell.position.get('price', 0), 2),
-            }
+        buy_price = round(best_buy.position.get('price', 0), 2)
+        sell_price = round(best_sell.position.get('price', 0), 2)
+        buy_stale = _is_stale(buy_date, buy_price)
+        sell_stale = _is_stale(sell_date, sell_price)
+        # 如果两个都过时，返回historical标记
+        if buy_stale and sell_stale:
+            result = _make_signal(best_sell if sell_date >= buy_date else best_buy, historical=True)
+            result['historical'] = True
+            return result
+        # 取最新且不过时的信号
+        if buy_date >= sell_date and not buy_stale:
+            return _make_signal(best_buy)
+        elif sell_date >= buy_date and not sell_stale:
+            return _make_signal(best_sell)
+        # 最新信号过时，用另一个
+        return _make_signal(best_buy if not buy_stale else best_sell)
     elif best_buy:
-        return {
-            'type': best_buy.type, 'label': BP_TYPE_CN.get(best_buy.type, best_buy.type),
-            'date': str(best_buy.position.get('date', ''))[:10],
-            'price': round(best_buy.position.get('price', 0), 2),
-        }
+        buy_date = str(best_buy.position.get('date', ''))[:10]
+        buy_price = round(best_buy.position.get('price', 0), 2)
+        if _is_stale(buy_date, buy_price):
+            return _make_signal(best_buy, historical=True)
+        return _make_signal(best_buy)
     elif best_sell:
-        return {
-            'type': best_sell.type, 'label': BP_TYPE_CN.get(best_sell.type, best_sell.type),
-            'date': str(best_sell.position.get('date', ''))[:10],
-            'price': round(best_sell.position.get('price', 0), 2),
-        }
+        sell_date = str(best_sell.position.get('date', ''))[:10]
+        sell_price = round(best_sell.position.get('price', 0), 2)
+        if _is_stale(sell_date, sell_price):
+            return _make_signal(best_sell, historical=True)
+        return _make_signal(best_sell)
     return None
 
 
@@ -873,6 +910,38 @@ class SignalComputationService:
                              f"市值={market_context.get('circ_mv')}")
         except Exception as e:
             logger.debug(f"{ts_code} daily_basic 加载跳过: {e}")
+
+        # 1.5) 价格位置计算：乖离率、历史分位、BOLL带宽、均线粘合
+        try:
+            closes = df['close'].values
+            n = len(closes)
+            if n >= 60:
+                latest_c = float(closes[-1])
+                ma5 = float(np.mean(closes[-5:])) if n >= 5 else latest_c
+                ma20 = float(np.mean(closes[-20:])) if n >= 20 else latest_c
+                ma60 = float(np.mean(closes[-60:])) if n >= 60 else latest_c
+                market_context['bias_ma5'] = round((latest_c - ma5) / ma5 * 100, 2) if ma5 else None
+                market_context['bias_ma20'] = round((latest_c - ma20) / ma20 * 100, 2) if ma20 else None
+                market_context['bias_ma60'] = round((latest_c - ma60) / ma60 * 100, 2) if ma60 else None
+                lookback = min(n, 250)
+                recent = closes[-lookback:]
+                rank = sum(1 for v in recent if v <= latest_c)
+                market_context['percentile_250d'] = round(rank / lookback * 100, 1) if lookback else None
+                if n >= 20:
+                    ma20_arr = float(np.mean(closes[-20:]))
+                    std20 = float(np.std(closes[-20:]))
+                    if ma20_arr:
+                        boll_upper = ma20_arr + 2 * std20
+                        boll_lower = ma20_arr - 2 * std20
+                        market_context['boll_bandwidth'] = round((boll_upper - boll_lower) / ma20_arr * 100, 2)
+                if n >= 60:
+                    ma10 = float(np.mean(closes[-10:]))
+                    mas = [ma5, ma10, ma20, ma60]
+                    ma_min = min(mas)
+                    ma_max = max(mas)
+                    market_context['ma_convergence'] = round((ma_max - ma_min) / ma_min * 100, 2) if ma_min else None
+        except Exception as e:
+            logger.debug(f"{ts_code} 价格位置计算跳过: {e}")
 
         # 2) 资金流向
         try:
@@ -1684,13 +1753,21 @@ class SignalComputationService:
 
         # ─── 2. 中枢分析 ───
         latest_zhongshu = zhongshu_list[-1] if zhongshu_list else None
-        # 批次2b: expanded中枢使用子中枢链中的最近标准中枢
-        if latest_zhongshu and latest_zhongshu.type == 'expanded':
-            sub_list = latest_zhongshu.sub_zhongshu_list
-            if sub_list:
+        # 批次2b: 查找最适合作为位置基准的中枢
+        # 优先级: normal(标准) > expanded(扩张→子中枢中找normal) > newborn(新生→列表中找上一个normal)
+        if latest_zhongshu:
+            if latest_zhongshu.type == 'expanded' and latest_zhongshu.sub_zhongshu_list:
+                sub_list = latest_zhongshu.sub_zhongshu_list
                 normal_zs = [zs for zs in sub_list if zs.type == 'normal']
                 if normal_zs:
                     latest_zhongshu = normal_zs[-1]
+            elif latest_zhongshu.type == 'newborn':
+                # newborn中枢是脱离后形成的次级结构，回溯到上一个normal中枢做位置基准
+                # 这样position_detail能反映价格相对于主中枢的位置，而非仅对新生中枢
+                for zs in reversed(zhongshu_list):
+                    if zs.type == 'normal':
+                        latest_zhongshu = zs
+                        break
         zs_high = float(latest_zhongshu.high) if latest_zhongshu else None
         zs_low = float(latest_zhongshu.low) if latest_zhongshu else None
         zs_center = float(latest_zhongshu.center) if latest_zhongshu else None
@@ -2203,7 +2280,7 @@ class SignalComputationService:
                 },
                 'risk_level': 'HIGH' if trend_str == '下降' and confidence < 0.5 else 'MEDIUM',
                 # Phase 1 P1-2: 时序过滤后的有效信号（取买卖点中时序最新的一个）
-                'active_signal': _build_active_signal(best_buy, best_sell) if (best_buy or best_sell) else None,
+                'active_signal': _build_active_signal(best_buy, best_sell, latest_date, latest_close) if (best_buy or best_sell) else None,
                 'active_signal_label': _build_active_label(best_buy, best_sell, divergence),
                 # Phase 1 P1-2: 中枢降级标记（偏离 > 30% 标记为 historical）
                 'near_levels_filtered': _build_filtered_levels(zhongshu_list, latest_close) if zhongshu_list else [],
