@@ -1683,9 +1683,14 @@ class SignalComputationService:
         try:
             analyzer = MultiLevelChanlunAnalyzer(config=chanlun_cfg)
             multi_result = analyzer.analyze(df_dict)
-            # 使用日线级别的详细结果作为主分析结果
-            daily_result = multi_result.get('levels', {}).get('daily', {})
-            result = analyzer.results.get('daily', {}) if hasattr(analyzer, 'results') else {}
+            # 根据period选择主分析级别：long→daily, medium→daily(背景), short→5min(决策)
+            primary_level = 'daily'
+            if period == 'short':
+                primary_level = '5min'  # short的决策级别是5分钟
+            elif period == 'medium':
+                primary_level = 'daily'  # medium的背景级别是日线
+            daily_result = multi_result.get('levels', {}).get(primary_level, {})
+            result = analyzer.results.get(primary_level, {}) if hasattr(analyzer, 'results') else {}
         except Exception as e:
             logger.warning(f"{ts_code} 多级别缠论分析异常，降级到单级别: {e}")
             try:
