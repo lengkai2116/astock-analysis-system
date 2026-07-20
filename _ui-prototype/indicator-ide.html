@@ -3381,9 +3381,11 @@ function updateConsoleRunState(state){
 document.addEventListener('click', function(e){
   var toggle = e.target.closest('.console-toggle');
   if(toggle && toggle.closest('#consoleStrategyToggles')){
+    e.preventDefault();
+    var isChecked = toggle.classList.contains('checked');
     toggle.classList.toggle('checked');
     var cb = toggle.querySelector('input[type=checkbox]');
-    if(cb) cb.checked = toggle.classList.contains('checked');
+    if(cb) cb.checked = !isChecked;
     // 更新计数
     var count = document.querySelectorAll('#consoleStrategyToggles .console-toggle.checked').length;
     var total = document.querySelectorAll('#consoleStrategyToggles .console-toggle').length;
