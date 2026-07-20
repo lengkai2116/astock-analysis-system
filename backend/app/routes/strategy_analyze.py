@@ -218,10 +218,11 @@ def _build_volume_price_dimension(sig: Optional[Dict]) -> Dict:
     trend = sr.get('trend', {})
     levels = sr.get('support_resistance', {})
     status_text = render_volume_price_trend(sr) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
-    # 读取量价形态命名（P3.2）
+    # 读取量价形态命名（P3.2）/ [281号方案 v3] 状态标签优先
+    pattern_name = sig.get('pattern_name', '')
     pattern = sig.get('current_pattern', '') or sr.get('volume', {}).get('structure', '')
     enhance = sig.get('enhance_patterns', [])
-    phase_label = pattern if pattern else (trend.get('direction', '横盘'))
+    phase_label = pattern_name if pattern_name else (pattern if pattern else trend.get('direction', '横盘'))
     # 从 status_recognition.trend 推导方向（优先于 signal）
     trend_dir = trend.get('direction', '')
     vp_direction = trend_dir if trend_dir in ('up', 'down') else sig.get('signal', 'neutral')

@@ -3148,11 +3148,13 @@ class VolumePriceSignalGenerator:
     """
     信号生成 + 四维校准 + 右侧交易过滤
     [P1-优化6] 多形态共振评分校准
+    [281号方案 v3] 接入 VPStateMachine 状态机
     """
 
     def __init__(self):
         self.position_mgr = PositionManager()  # [P0-优化2]
         self.entry_target = EntryTargetCalculator()  # [P2-优化7&8]
+        self.state_machine = VPStateMachine()  # [281号方案 v3]
 
     def _adjust_confidence_by_structure(self, base_confidence: float, direction: str,
                                           zhongshu_position: Optional[str] = None) -> float:
@@ -3207,17 +3209,41 @@ class VolumePriceSignalGenerator:
         latest_close = float(closes[-1])
         highs = self._safe_col(df, 'high').values if 'high' in df.columns else closes
         volumes = get_best_volume_series(df)
+        opens = self._safe_col(df, 'open').values if 'open' in df.columns else closes
+        lows = self._safe_col(df, 'low').values if 'low' in df.columns else closes
 
         # [P1-#18] 真实突破判断
         breakout_check = self._verify_breakout(closes, highs, volumes)
 
-        # 1. 匹配基础信号
-        base_signal = self._match_base_signal(stage.name, relation.pattern_id)
-        if not base_signal:
-            return VolumePriceSignal(direction="HOLD", signal_label="持仓等待",
-                                     confidence=0.45, evidence=["信号不匹配"])
+        # [281号方案 v3] 状态机分类
+        sm_result = self.state_machine.define(closes, volumes, highs, lows,
+                                               matched_patterns=relation.enhance_patterns)
+        state_label = sm_result['state']
+        state_signal = STATE_SIGNAL_MAP.get(state_label)
 
-        signal_id, direction, base_conf = base_signal
+        # [281号方案 v4 #10] 连续确认切换：状态切换需连续2天处于新状态才执行
+        fast_hist = sm_result.get('fast_history', [])
+        if len(fast_hist) >= 2:
+            prev_state = fast_hist[-2]
+            if state_label != prev_state:
+                # 状态刚切换，暂不改变方向——沿用前一天状态的方向
+                prev_signal = STATE_SIGNAL_MAP.get(prev_state)
+                if prev_signal:
+                    state_signal = prev_signal
+                    state_label = prev_state
+
+        # 1. 确定基础信号
+        if state_signal:
+            direction = state_signal['direction']
+            base_conf = state_signal['base_conf']
+            signal_id = f"VP-{list(STATE_SIGNAL_MAP.keys()).index(state_label) + 1}"
+        else:
+            # 旧路径降级
+            base_signal = self._match_base_signal(stage.name, relation.pattern_id)
+            if not base_signal:
+                return VolumePriceSignal(direction="HOLD", signal_label="持仓等待",
+                                         confidence=0.45, evidence=["信号不匹配"])
+            signal_id, direction, base_conf = base_signal
 
         # [P1-#10] 结构感知形态因子：SignalComputationService 调用处设置 zhongshu_position
         # 在 compute_for_stock 中通过 market_context 传入
@@ -3282,6 +3308,18 @@ class VolumePriceSignalGenerator:
 
         conf = max(0.0, min(1.0, conf))
 
+        # [281号方案 v4] 连续确认切换：状态机历史中前一天与当前状态不同 → 降置信度
+        sm_history = self.state_machine._fast_history
+        if len(sm_history) >= 2:
+            prev_state = sm_history[-2]
+            curr_state = sm_history[-1]
+            if prev_state and curr_state and prev_state != curr_state:
+                prev_level = STATE_LEVEL_MAP.get(prev_state, "NEUTRAL")
+                curr_level = STATE_LEVEL_MAP.get(curr_state, "NEUTRAL")
+                if prev_level != curr_level:
+                    conf *= 0.85
+                    switch_note = f"【状态切换】前一状态({prev_state[:8]}→当前({curr_state[:8]})，未连续确认降低置信度"
+
         # 4. [P2-优化8] 入场/止损计算（基于关键位）
         entry_low, entry_high = self.entry_target.calc_entry_zone(
             vol_state.volume_keypoints, latest_close)
@@ -3292,30 +3330,57 @@ class VolumePriceSignalGenerator:
         target_low, target_high = self.entry_target.calc_target(
             stage, vol_state.volume_keypoints, latest_close)
 
-        # [P0-优化2] 动态仓位
+        # [P0-优化2] 动态仓位 — 若状态机有建议仓位则优先使用，否则R乘数计算
         volatility = relation.momentum.score if relation.momentum else None
-        pos_suggestion, pos_detail = self.position_mgr.calc_position(
-            latest_close, risk_line, direction, volatility)
+        if state_signal:
+            pos_suggestion = state_signal['position_suggestion']
+            pos_detail = f"量价状态机建议仓位: {pos_suggestion}"
+        else:
+            pos_suggestion, pos_detail = self.position_mgr.calc_position(
+                latest_close, risk_line, direction, volatility)
 
-        # 证据链
-        evidence = self._build_evidence(stage, vol_state, relation, signal_id, direction)
-        # [P1-#18] 真实突破判断加入证据
+        # 证据链 — 注入状态信息
+        evidence = []
+        evidence.append(f"【量价状态】{state_label}")
+        if sm_result['slow_dist']:
+            top_states = sorted(sm_result['slow_dist'].items(), key=lambda x: -x[1])[:3]
+            evidence.append(f"【慢线分布】{' '.join(f'{s}({p:.0%})' for s, p in top_states)}")
+        if 'switch_note' in dir() and switch_note:
+            evidence.append(switch_note)
+        transition = sm_result.get('transition')
+        if transition:
+            evidence.append(f"【状态转换】{transition['reason']} ({transition['from'][:8]}→{transition['to'][:8]})")
+        if sm_result['pattern_hits']:
+            evidence.append(f"【增强形态】{' '.join(sm_result['pattern_hits'][:3])}")
+        old_evidence = self._build_evidence(stage, vol_state, relation, signal_id, direction)
+        evidence.extend(old_evidence[1:])  # 跳过旧的第一条（阶段），已在状态中涵盖
         for note in breakout_check.get('notes', []):
             evidence.append(f"【突破验证】{note}")
         risk_notes = self._build_risk_notes(stage, vol_state, relation)
 
-        signal_label_map = {"BUY": "买入", "SELL": "卖出", "WATCH": "观察", "HOLD": "持仓等待"}
-        hold_map = {"BUY": "2-4周（波段持有）", "SELL": "立即", "WATCH": "观察等待", "HOLD": "继续持仓"}
+        # 信号label和持有周期 — 优先使用状态机的
+        if state_signal:
+            signal_label = state_signal['signal_label']
+            holding_period = state_signal['holding_period']
+        else:
+            signal_label_map = {"BUY": "买入", "SELL": "卖出", "WATCH": "观察", "HOLD": "持仓等待"}
+            hold_map = {"BUY": "2-4周（波段持有）", "SELL": "立即", "WATCH": "观察等待", "HOLD": "继续持仓"}
+            signal_label = signal_label_map.get(direction, "等待")
+            holding_period = hold_map.get(direction, "观望")
 
         return VolumePriceSignal(
-            signal_id=signal_id, direction=direction, confidence=conf,
-            signal_label=signal_label_map.get(direction, "等待"),
+            signal_id=signal_id, direction=direction, confidence=round(conf, 2),
+            signal_label=signal_label,
             entry_zone=(entry_low, entry_high), risk_line=risk_line,
             target_zone=(target_low, target_high),
             position_suggestion=pos_suggestion, position_detail=pos_detail,
-            holding_period=hold_map.get(direction, "观望"),
+            holding_period=holding_period,
             evidence=evidence, risk_notes=risk_notes,
             status=self._build_status(stage, vol_state, relation, latest_close),
+            # [281号方案 v3] 注入状态标签
+            pattern_id=f"VP-{list(STATE_SIGNAL_MAP.keys()).index(state_label) + 1}" if state_signal else signal_id,
+            pattern_name=state_label,
+            enhance_patterns=sm_result['pattern_hits'],
         )
 
     def _safe_col(self, df, col):
@@ -3533,6 +3598,362 @@ class VolumePriceSignalGenerator:
             notes.append('✅ 真实突破确认')
 
         return {'is_valid': is_valid, 'notes': notes}
+
+
+# ══════════════════════════════════════════════
+# VPStateMachine — 量价状态机（281号方案 v3）
+# ══════════════════════════════════════════════
+
+# 八种量价状态
+VP_HEALTHY_BULL = "价涨量增(强势)"
+VP_HEALTHY_BEAR = "价跌量缩(健康回调)"
+VP_DIVERGE_BULL = "价涨量缩(顶背离预警)"
+VP_DIVERGE_BEAR = "价跌量增(底背离)"
+VP_EXTREME_BULL = "天量天价(极端)"
+VP_EXTREME_BEAR = "地量地价(极端)"
+VP_BREAKOUT = "放量突破(筹码转换)"
+VP_PULLBACK = "缩量回踩(筹码转换)"
+
+# 状态级别（用于信号映射）
+STATE_LEVEL_MAP = {
+    VP_HEALTHY_BULL: "BULLISH",
+    VP_HEALTHY_BEAR: "BULLISH",   # 健康回调是买入机会
+    VP_DIVERGE_BULL: "BEARISH",   # 顶背离是卖出信号
+    VP_DIVERGE_BEAR: "WATCH",     # 底背离需等待确认
+    VP_EXTREME_BULL: "BEARISH",   # 天量天价见顶
+    VP_EXTREME_BEAR: "BULLISH",   # 地量地价见底
+    VP_BREAKOUT: "BULLISH",
+    VP_PULLBACK: "BULLISH",
+}
+
+# 状态→子形态注册表：每个状态关联的形态名称列表（来自 EnhancedPatternDetector 的输出）
+# 形态命中数加权后输入状态置信度
+STATE_PATTERN_REGISTRY = {
+    VP_HEALTHY_BULL: [
+        '量价齐升突破前高(预涨)', '底部放量长阳黑马首板(黑马)',
+        '地量后的倍量启动(预涨)', '平台放量突破(预涨)',
+        '放量站上60日线(预涨)', 'MA5金叉MA10(预涨)',
+        '均线多头排列(预涨)', '连续站上60日线(预涨)',
+        'MA5上穿MA20(预涨)', 'MA5上穿MA60(预涨)',
+        '低位连续小阳线黑马前奏(黑马)', '地量后倍量启动(黑马)',
+        '底部连续小阳线', '低位连阳', '阳包阴(底部)',
+        '均线粘合后放量上攻', '低位十字星',
+        '箱底放量反弹', '低位堆量',
+        '三白兵(预涨)', '看涨吞没(预涨)',
+        '低位横盘突破(预涨)', '灼阳形态(预涨)',
+        '三阳开泰(预涨)', '双阳缺口(预涨)',
+        '震仓向上(预涨)', '底部出水芙蓉',
+        '三线开花多头(预涨)', '站上MA120(预涨)',
+        '站上MA250(预涨)', '放量跳空阴阳(预涨)',
+        'W底(预涨)', '下降楔形(预涨)',
+        '突破缺口(预涨)', '格兰维尔买点1-突破买(预涨)',
+    ],
+    VP_HEALTHY_BEAR: [
+        '缩量回踩筹码密集区(预涨)', '缩量回踩20日线不破(预涨)',
+        '回踩MA60获支撑(预涨)', '格兰维尔买点2-回踩买(预涨)',
+        '缩量下跌(底背离)', '三连阴缩量(预涨)',
+    ],
+    VP_DIVERGE_BULL: [
+        '量价背离(顶背离)', '缩量冲高诱多(预跌)',
+        '高位十字星(顶部反转)', '高位长上影线',
+        '格兰维尔卖点3-偏离卖(预跌)', '格兰维尔卖点4-新高卖(预跌)',
+        '缩量冲高(诱多)', '连续缩量反弹(弱势反弹)',
+    ],
+    VP_DIVERGE_BEAR: [
+        '量价背离(底背离)', '缩量下跌(底背离)',
+        '低位长下影线(探底针)', '双针探底(预涨)',
+        '低位十字星(底部反转)', '低位连阳',
+        '格兰维尔买点4-新低买(预涨)',
+    ],
+    VP_EXTREME_BULL: [
+        '天量天价(预跌)', '天量天价',
+        '放量冲高回落(预跌)', '高位巨量换手(出货)',
+    ],
+    VP_EXTREME_BEAR: [
+        '地量地价', '缩量振荡筹码快移动',
+        '地量后的倍量启动(预涨)',
+    ],
+    VP_BREAKOUT: [
+        '平台放量突破(预涨)', '放量突破筹码单峰区(预涨)',
+        '放量站上60日线(预涨)', '量价齐升突破前高(预涨)',
+        '底部放量长阳', '均线粘合后放量上攻',
+        '突破下降趋势线(带量)', '突破缺口(预涨)',
+        '格兰维尔买点1-突破买(预涨)',
+    ],
+    VP_PULLBACK: [
+        '缩量回踩筹码密集区(预涨)', '缩量回踩20日线不破(预涨)',
+        '回踩MA60获支撑(预涨)', '格兰维尔买点2-回踩买(预涨)',
+        '缩量下跌(底背离)', '地量后的倍量启动(预涨)',
+    ],
+}
+
+
+# 状态→策略映射表：每个状态的买卖逻辑核心参数
+STATE_SIGNAL_MAP = {
+    VP_HEALTHY_BULL: {
+        'direction': 'BUY', 'base_conf': 0.65, 'position_suggestion': '60%',
+        'holding_period': '2-4周（波段持有）', 'signal_label': '买入',
+        'rule': '价涨量增趋势健康，持有至状态切换',
+    },
+    VP_HEALTHY_BEAR: {
+        'direction': 'BUY', 'base_conf': 0.55, 'position_suggestion': '40%',
+        'holding_period': '1-3周（波段持有）', 'signal_label': '观察',
+        'rule': '缩量回调健康调整，支撑位可建仓',
+    },
+    VP_DIVERGE_BULL: {
+        'direction': 'SELL', 'base_conf': 0.60, 'position_suggestion': '20%',
+        'holding_period': '立即', 'signal_label': '卖出',
+        'rule': '顶背离预警，减仓或做空',
+    },
+    VP_DIVERGE_BEAR: {
+        'direction': 'WATCH', 'base_conf': 0.45, 'position_suggestion': '30%',
+        'holding_period': '观察等待', 'signal_label': '观察',
+        'rule': '底背离出现，等待放量阳线确认',
+    },
+    VP_EXTREME_BULL: {
+        'direction': 'SELL', 'base_conf': 0.65, 'position_suggestion': '10%',
+        'holding_period': '立即', 'signal_label': '卖出',
+        'rule': '天量天价见顶信号，当日不追高',
+    },
+    VP_EXTREME_BEAR: {
+        'direction': 'BUY', 'base_conf': 0.50, 'position_suggestion': '30%',
+        'holding_period': '1-3个月（左侧轻仓）', 'signal_label': '观察',
+        'rule': '地量地价见底信号，配合底部形态可介入',
+    },
+    VP_BREAKOUT: {
+        'direction': 'BUY', 'base_conf': 0.60, 'position_suggestion': '50%',
+        'holding_period': '2-4周（波段持有）', 'signal_label': '买入',
+        'rule': '放量突破关键位，确认有效后加仓',
+    },
+    VP_PULLBACK: {
+        'direction': 'BUY', 'base_conf': 0.55, 'position_suggestion': '40%',
+        'holding_period': '1-3周（波段持有）', 'signal_label': '观察',
+        'rule': '缩量回踩支撑位，不破可加仓',
+    },
+}
+
+
+class VPStateMachine:
+    """
+    量价状态机 — 快线+慢线双通道（281号方案 v3）
+
+    核心设计：
+    - 顶层：8 种互斥量价状态（快线每日更新）
+    - 慢线：过去 5 天快线结果的频率统计
+    - 子形态增强：来自 EnhancedPatternDetector 的检测结果加权到状态置信度
+
+    用法:
+        sm = VPStateMachine()
+        result = sm.define(closes=..., volumes=..., highs=..., lows=...,
+                           matched_patterns=[...], n_days=5)
+        # result = { state, state_label, slow_distribution, confidence,
+        #            fast_history, pattern_hits }
+    """
+
+    def __init__(self):
+        self._fast_history: List[str] = []  # 存储最近 N 天的快线结果
+
+    def classify_fast(self, closes: np.ndarray, volumes: np.ndarray,
+                       highs: Optional[np.ndarray] = None,
+                       lows: Optional[np.ndarray] = None) -> str:
+        """快线：单日量价状态分类（8 种互斥）
+
+        根据当日 OHLCV 数据判定属于哪个状态。
+        判定优先级：极端信号 > 背离预警 > 筹码转换 > 健康动量
+        """
+        if len(closes) < 5 or len(volumes) < 5:
+            return VP_HEALTHY_BULL
+
+        price_chg_1d = (closes[-1] / closes[-2] - 1) * 100 if len(closes) >= 2 else 0
+        vol_ma20 = float(np.mean(volumes[-20:])) if len(volumes) >= 20 else float(np.mean(volumes))
+        vol_ratio = volumes[-1] / max(vol_ma20, 1e-9)
+        vol_ma5 = float(np.mean(volumes[-5:])) if len(volumes) >= 5 else vol_ma20
+
+        # 1) 极端信号：天量天价 / 地量地价（最高优先级）
+        # [281号方案 v4] 改用历史极值判定（60日量/20日价），替代固定倍数
+        if len(volumes) >= 60 and len(closes) >= 20:
+            vol_60d_max = float(np.max(volumes[-60:]))
+            vol_60d_min = float(np.min(volumes[-60:]))
+            price_20d_max = float(np.max(closes[-20:]))
+            price_20d_min = float(np.min(closes[-20:]))
+            if volumes[-1] >= vol_60d_max and closes[-1] >= price_20d_max:
+                return VP_EXTREME_BULL
+            if volumes[-1] <= vol_60d_min and closes[-1] <= price_20d_min:
+                return VP_EXTREME_BEAR
+        else:
+            # 数据不足时降级为固定倍数判定
+            if vol_ratio > 2.5 and price_chg_1d > 6:
+                return VP_EXTREME_BULL
+            if vol_ratio < 0.4 and price_chg_1d < -6:
+                return VP_EXTREME_BEAR
+
+        # 2) 背离预警 [281号方案 v4] 顶背离成交量条件去掉0.8乘数
+        price_high_condition = closes[-1] >= max(closes[-10:-1]) if len(closes) >= 10 else False
+        vol_low_3d = all(volumes[-i] < vol_ma5 for i in range(1, 4)) if len(volumes) >= 4 else False
+        if price_high_condition and vol_low_3d:
+            return VP_DIVERGE_BULL
+
+        price_low_condition = closes[-1] <= min(closes[-10:-1]) if len(closes) >= 10 else False
+        vol_high_3d = all(volumes[-i] > vol_ma5 * 1.3 for i in range(1, 4)) if len(volumes) >= 4 else False
+        if price_low_condition and vol_high_3d:
+            return VP_DIVERGE_BEAR
+
+        # 3) 筹码转换
+        # 放量突破：价格站上短期均线 + 放量
+        ma5 = float(np.mean(closes[-5:])) if len(closes) >= 5 else closes[-1]
+        ma20 = float(np.mean(closes[-20:])) if len(closes) >= 20 else closes[-1]
+        if closes[-1] > ma5 > ma20 and vol_ratio > 1.5:
+            return VP_BREAKOUT
+        # 缩量回踩：价格回调但不破均线 + 缩量
+        if closes[-1] >= ma20 * 0.97 and closes[-1] <= ma20 * 1.03 and vol_ratio < 0.6:
+            return VP_PULLBACK
+
+        # 4) 健康动量（最低优先级）
+        if price_chg_1d > 0 and vol_ratio > 1.2:
+            return VP_HEALTHY_BULL
+        if price_chg_1d < 0 and vol_ratio < 0.8:
+            return VP_HEALTHY_BEAR
+
+        # 5) 无明确信号时，取前一天状态（如有）
+        if self._fast_history:
+            return self._fast_history[-1]
+        return VP_HEALTHY_BULL
+
+    def update_fast(self, state: str):
+        """记录快线结果（当日判定后调用）"""
+        self._fast_history.append(state)
+        # 保留最近 20 天历史
+        if len(self._fast_history) > 20:
+            self._fast_history = self._fast_history[-20:]
+
+    def calc_slow(self, n_days: int = 5) -> Dict[str, float]:
+        """慢线：过去 N 天快线结果的频率分布"""
+        if not self._fast_history:
+            return {}
+        recent = self._fast_history[-n_days:]
+        total = len(recent)
+        dist = {}
+        for s in recent:
+            dist[s] = dist.get(s, 0) + 1
+        return {k: round(v / total, 2) for k, v in dist.items()}
+
+    def calc_confidence(self, fast_state: str, slow_dist: Dict[str, float],
+                        matched_patterns: List[str]) -> float:
+        """计算当前状态的置信度（0.0 - 1.0）
+
+        置信度由三个因素决定：
+        1. 慢线频率：该状态在过去 5 天的占比
+        2. 子形态命中率：匹配到的形态数 / 该状态注册的形态数
+        3. 方向一致性：命中的形态是否与状态方向一致
+        """
+        # 1) 慢线基础分
+        slow_base = slow_dist.get(fast_state, 0.2)
+
+        # 2) 子形态命中率
+        registered = STATE_PATTERN_REGISTRY.get(fast_state, [])
+        if registered and matched_patterns:
+            hits = sum(1 for p in matched_patterns if any(rp in p for rp in registered))
+            hit_rate = hits / len(registered)
+        else:
+            hit_rate = 0.0
+
+        # 3) 方向一致性
+        state_level = STATE_LEVEL_MAP.get(fast_state, "NEUTRAL")
+        consistent_hits = sum(1 for p in matched_patterns
+                              if ("预涨" in p and state_level == "BULLISH")
+                              or ("预跌" in p and state_level == "BEARISH"))
+        total_dir_hits = sum(1 for p in matched_patterns if "预涨" in p or "预跌" in p)
+        consistency = consistent_hits / max(total_dir_hits, 1)
+
+        # 4) 综合计算
+        confidence = slow_base * 0.4 + hit_rate * 0.35 + consistency * 0.25
+        return round(min(1.0, max(0.1, confidence)), 4)
+
+    def check_transition(self, closes: np.ndarray, volumes: np.ndarray,
+                         current_state: str) -> Optional[Dict]:
+        """[281号方案 v4] 显式状态转换规则（3 条）
+
+        Args:
+            closes: 收盘价序列
+            volumes: 成交量序列
+            current_state: 当前快线状态
+
+        Returns:
+            None 表示无转换触发，dict 表示触发的转换信息
+        """
+        if len(closes) < 5 or len(volumes) < 5:
+            return None
+        vol_ma5 = float(np.mean(volumes[-5:])) if len(volumes) >= 5 else 0
+        ma60 = float(np.mean(closes[-60:])) if len(closes) >= 60 else closes[-1]
+        price_chg_1d = (closes[-1] / closes[-2] - 1) * 100 if len(closes) >= 2 else 0
+
+        # 规则1: 价跌量缩(健康) → 价跌量增(底背离)
+        if current_state == VP_HEALTHY_BEAR:
+            vol_incr_3d = all(volumes[-i] > volumes[-i-1] for i in range(1, 4)) if len(volumes) >= 4 else False
+            if vol_incr_3d and closes[-1] < ma60 * 0.97:
+                return {'from': current_state, 'to': VP_DIVERGE_BEAR,
+                        'reason': '成交量连续3日放大+跌破MA60'}
+
+        # 规则2: 价涨量增(强势) → 价涨量缩(顶背离)
+        if current_state == VP_HEALTHY_BULL:
+            vol_decr_3d = all(volumes[-i] < volumes[-i-1] for i in range(1, 4)) if len(volumes) >= 4 else False
+            price_slow = all(abs((closes[-i] / closes[-i-1] - 1)) < 0.005 for i in range(1, 4)) if len(closes) >= 4 else False
+            if vol_decr_3d and price_slow:
+                return {'from': current_state, 'to': VP_DIVERGE_BULL,
+                        'reason': '量缩价平连续3日'}
+
+        # 规则3: 价跌量增(底背离) → 放量止跌入场窗口
+        if current_state == VP_DIVERGE_BEAR:
+            vol_ratio = volumes[-1] / max(vol_ma5, 1e-9)
+            if vol_ratio > 1.5 and price_chg_1d > 0:
+                return {'from': current_state, 'to': VP_HEALTHY_BULL,
+                        'reason': '放量止跌，入场窗口开启'}
+
+        return None
+
+    def define(self, closes: np.ndarray, volumes: np.ndarray,
+               highs: Optional[np.ndarray] = None, lows: Optional[np.ndarray] = None,
+               matched_patterns: Optional[List[str]] = None,
+               n_days: int = 5) -> Dict:
+        """执行完整状态判定（快线 + 慢线 + 置信度）
+
+        Returns:
+            dict: { state, state_label, level, confidence, slow_dist,
+                    fast_history, pattern_hits }
+        """
+        matched_patterns = matched_patterns or []
+
+        # 快线
+        fast_state = self.classify_fast(closes, volumes, highs, lows)
+        self.update_fast(fast_state)
+
+        # 慢线
+        slow_dist = self.calc_slow(n_days)
+
+        # 置信度
+        confidence = self.calc_confidence(fast_state, slow_dist, matched_patterns)
+
+        # [281号方案 v4] 显式状态转换检查
+        transition = self.check_transition(closes, volumes, fast_state)
+
+        if matched_patterns:
+            registered = STATE_PATTERN_REGISTRY.get(fast_state, [])
+            pattern_hits = [p for p in matched_patterns if any(rp in p for rp in registered)]
+            pattern_hits.extend(p for p in matched_patterns if p not in pattern_hits
+                                and ("预涨" in p or "预跌" in p))
+        else:
+            pattern_hits = matched_patterns or []
+
+        return {
+            'state': fast_state,
+            'state_label': fast_state,
+            'level': STATE_LEVEL_MAP.get(fast_state, "NEUTRAL"),
+            'confidence': confidence,
+            'slow_dist': slow_dist,
+            'fast_history': self._fast_history[-n_days:] if self._fast_history else [],
+            'pattern_hits': pattern_hits[:5],
+            'transition': transition,
+        }
 
 
 # ══════════════════════════════════════════════
