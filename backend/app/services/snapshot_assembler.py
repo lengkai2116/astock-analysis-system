@@ -51,18 +51,34 @@ def _extract_structure(signals: List[Dict]) -> Dict:
     detail = chanlun_sig.get('chanlun_analysis_detail', {})
     trend = sr.get('trend', {})
     zs_info = detail.get('中枢分析', {})
+    # 中枢区间合理性过滤：宽度 > 当前价40%时标记无效
+    zs_range, zs_pos = None, None
+    near_levels = sr.get('near_levels_filtered', [])
+    if zs_info:
+        zs_low = zs_info.get('最新中枢区间', [None, None])[0]
+        zs_high = zs_info.get('最新中枢区间', [None, None])[1]
+        if zs_low and zs_high and zs_high > zs_low:
+            zs_center = (zs_low + zs_high) / 2
+            zs_width_pct = (zs_high - zs_low) / zs_center
+            if zs_width_pct > 0.4:
+                # 中枢过宽→无效，不传给DeepSeek，同时清理关联的near_levels
+                zs_range, zs_pos, near_levels = None, None, []
+            else:
+                zs_range = [zs_low, zs_high]
+                zs_pos = zs_info.get('价格相对位置', '')
     return {
         'level': trend.get('stage', ''),
         'trend_direction': trend.get('direction', ''),
         'trend_strength': trend.get('strength', ''),
-        'zhongshu_range': [zs_info.get('最新中枢区间', [None, None])[0],
-                           zs_info.get('最新中枢区间', [None, None])[1]] if zs_info else None,
-        'position_vs_zhongshu': zs_info.get('价格相对位置', ''),
+        'zhongshu_range': zs_range,
+        'position_vs_zhongshu': zs_pos,
         'beichi': detail.get('买卖点信号', {}).get('背驰信号'),
         'active_signal': sr.get('active_signal'),
         'active_signal_label': sr.get('active_signal_label'),
-        'near_levels_filtered': sr.get('near_levels_filtered', []),
+        'near_levels_filtered': near_levels,
         'level_upper_limit': sr.get('level_upper_limit', False),
+        # Phase 2 P2-6: 形态量化中枢 (V1)
+        'zhongshu_strength': sr.get('zhongshu_strength'),
     }
 
 
@@ -105,6 +121,10 @@ def _extract_price(signals: List[Dict], market_context: Optional[Dict] = None) -
         levels = sr.get('support_resistance', {})
         price['support'] = levels.get('support')
         price['resistance'] = levels.get('resistance')
+    # Phase 2 P2-9: VAP 支撑/阻力 (V4)
+    if market_context:
+        price['vap_support'] = market_context.get('vap_support')
+        price['vap_resistance'] = market_context.get('vap_resistance')
     return price
 
 

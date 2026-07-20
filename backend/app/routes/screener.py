@@ -233,8 +233,16 @@ def compute_screening(stock_list, weights=None, combinations=None, vibe_strategi
                'phase': r['phase']} for r in l2_passed]
 
     # ── L3: 策略验证（缠论+量价共振评分，与L2筹码评分正交独立） ──
-    #     per-stock 失败已在 screen_l3_candidates 内部处理（跳过单只）
-    #     此处 catch 的是全局性失败（import错误、数据层不可用等），绝不降级到纯数据检查
+    #     确保候选股有分钟数据用于多级别缠论分析
+    try:
+        from app.data.minute_backfill import ensure_minute_data
+        l2_symbols = [r['symbol'] for r in l2_top]
+        n = ensure_minute_data(l2_symbols, days_back=20)
+        if n > 0:
+            logger.info(f"L3 分钟数据快速补足: {n}/{len(l2_symbols)} 只")
+    except Exception as e:
+        logger.warning(f"L3 分钟数据准备异常（非阻塞）: {e}")
+    
     try:
         from app.engine.framework.screener_strategy_integration import screen_l3_candidates
         # 构建 L2 phase 映射供 L3 阶段感知评分使用

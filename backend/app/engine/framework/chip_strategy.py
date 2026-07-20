@@ -399,6 +399,8 @@ class MainForceScorer:
 
     def __init__(self):
         self._dm = None
+        self._chip_indicators: Optional[dict] = None
+        self._chip_bins: Optional[list] = None
 
     @property
     def dm(self):
@@ -437,8 +439,8 @@ class MainForceScorer:
             score_c = self._score_concentration(symbol, closes, price_position)
             score_d = self._score_retail_contrarian(symbol, price_position)
 
-            # E: 龙虎榜席位加分
-            score_e = self._score_lhb(symbol)
+            # E: 龙虎榜席位加分（包含假机构识别）
+            score_e = self._score_lhb(symbol, data)
 
             # F: 筹码分布维度（新增 — 真实筹码分布计算，与渠道二共享 ChipDistributionService）
             score_f = self._score_chip_distribution(symbol, data)
@@ -683,11 +685,21 @@ class MainForceScorer:
             return 1.0
 
 
-    def _score_lhb(self, symbol: str) -> float:
-        """龙虎榜席位加分（0-0.5分）：有机构专用席位大额买入时加分"""
+    def _score_lhb(self, symbol: str, data: pd.DataFrame = None) -> float:
+        """龙虎榜席位加分（-0.5 至 +1.0 分）
+
+        使用 _detect_fake_institution 识别假机构信号，
+        真机构大额买入加分，假机构信号扣分。
+        """
         if not symbol:
             return 0.0
         try:
+            # 假机构检测
+            fake_result = self._detect_fake_institution(symbol, data)
+            if fake_result['suspected']:
+                return -fake_result['confidence']  # 假机构扣分
+
+            # 真机构加分
             lhb = self.dm.get_cached_lhb(symbol)
             if lhb is not None and not lhb.empty and len(lhb) > 0:
                 recent = lhb.tail(10)
@@ -695,21 +707,114 @@ class MainForceScorer:
                 if len(buy_amounts) > 0:
                     total_buy = buy_amounts.sum()
                     if total_buy > 1e7:  # 千万级买入
-                        return min(0.5, total_buy / 5e8 * 0.5)  # 5亿→0.5分
+                        return min(1.0, total_buy / 5e8 * 1.0)  # 5亿→1.0分
             return 0.0
         except Exception:
             return 0.0
 
+    def _detect_fake_institution(self, symbol: str, data: pd.DataFrame) -> dict:
+        """假机构识别（基于 LLM Wiki 假机构识别概念）
+
+        检查龙虎榜数据中疑似假机构的行为特征：
+        1. 买入金额占比过高（>30%）→ 警惕
+        2. 价格处于高位/下跌反弹途中 → 警惕
+        3. 机构集中单日大额买入 → 警惕
+
+        Returns:
+            {"suspected": bool, "reason": str, "confidence": float}
+        """
+        result = {"suspected": False, "reason": "", "confidence": 0.0}
+        try:
+            # 优先使用股票级 lhb_cache；若为空则回退到席位级 lhb_detail_cache
+            lhb = self.dm.get_cached_lhb(symbol)
+            use_detail_only = False
+            if lhb is not None and not lhb.empty and len(lhb) > 0:
+                recent = lhb.tail(10)
+                if 'buy_amount' not in recent.columns or 'sell_amount' not in recent.columns:
+                    use_detail_only = True
+                    recent = None
+            else:
+                use_detail_only = True
+                recent = None
+
+            # 价格位置（低位=0.0, 高位=1.0）
+            closes = data['close'].values if data is not None and not data.empty else None
+            price_pos = None
+            if closes is not None and len(closes) >= 60:
+                p_high = np.max(closes[-120:])
+                p_low = np.min(closes[-120:])
+                p_range = p_high - p_low if p_high > p_low else 1.0
+                price_pos = (closes[-1] - p_low) / p_range
+
+            if not use_detail_only and recent is not None:
+                for _, row in recent.iterrows():
+                    buy_amt = row.get('buy_amount', 0) or 0
+                    sell_amt = row.get('sell_amount', 0) or 0
+                    total = buy_amt + sell_amt
+                    if total <= 0:
+                        continue
+                    buy_ratio = buy_amt / total
+
+                    # 买入占比 > 30% + 高位 → 假机构信号
+                    if buy_ratio > 0.3 and price_pos is not None and price_pos > 0.6:
+                        result['suspected'] = True
+                        result['reason'] = f'高位(分位{price_pos:.0%})买入占比{buy_ratio:.0%}>30%'
+                        result['confidence'] = min(1.0, result['confidence'] + 0.5)
+
+                    # 单日 买入金额占比 > 40% (无论位置)
+                    if buy_ratio > 0.4:
+                        result['suspected'] = True
+                        detail = f'买入占比{buy_ratio:.0%}>40%'
+                        result['reason'] = result['reason'] + ('; ' + detail if result['reason'] else detail)
+                        result['confidence'] = min(1.0, result['confidence'] + 0.3)
+
+                # 多日连续买入+价格未涨 → 可能是真机构吸货，降低怀疑
+                if result['suspected'] and len(recent) >= 3:
+                    buy_days = (recent['buy_amount'].fillna(0) > 1e6).sum()
+                    if buy_days >= 3 and price_pos is not None and price_pos < 0.5:
+                        result['confidence'] = max(0.0, result['confidence'] - 0.3)
+                        result['reason'] += '（连续买入+低位，可能真机构）'
+
+            # 278号方案：席位级数据增强检测
+            try:
+                detail_df = self.dm.get_lhb_detail(symbol)
+                if detail_df is not None and not detail_df.empty:
+                    detail_recent = detail_df.tail(50)
+                    if 'seat_type' in detail_recent.columns and 'buy_amount' in detail_recent.columns:
+                        inst_mask = detail_recent['seat_type'] == 'institution'
+                        inst_buy = detail_recent[inst_mask]['buy_amount'].sum()
+                        broker_buy = detail_recent[~inst_mask]['buy_amount'].sum()
+                        total_buy_seat = inst_buy + broker_buy
+                        if total_buy_seat > 1e6:
+                            inst_ratio = inst_buy / total_buy_seat
+                            # 机构买入占比极低 + 买入额很大 → 可能是营业部冒充
+                            if inst_ratio < 0.15 and inst_buy < broker_buy * 0.2:
+                                result['suspected'] = True
+                                result['confidence'] = min(1.0, result['confidence'] + 0.4)
+                                detail_msg = f'机构买入仅{inst_ratio:.0%}(席位明细)'
+                                result['reason'] = result['reason'] + ('; ' + detail_msg if result['reason'] else detail_msg)
+                            # 机构买入占比高 → 真机构，降低怀疑
+                            elif inst_ratio > 0.6 and result['suspected']:
+                                result['confidence'] = max(0.0, result['confidence'] - 0.3)
+                                result['reason'] += '（机构买入占比高，真机构可能大）'
+            except Exception:
+                pass
+
+            return result
+        except Exception:
+            return result
+
     def _score_chip_distribution(self, symbol: str, data: pd.DataFrame) -> float:
         """
-        筹码分布维度（0-1分）：基于真实筹码分布计算的评分
+        筹码分布维度（0-1.5分）：基于真实筹码分布计算的评分
 
         使用 ChipDistributionService（与渠道二共享）分析筹码集中度：
           - ASR > 50% → 浮筹比例适中，有利于上涨
           - SSRP 接近当前价 → 平均成本附近，抛压小
+          - CYQKL 高 → 当前K线实体穿越筹码密集区，突破确认
           - 筹码单峰密集 → 主力控盘度高
 
-        Returns: 0-1 分
+        Returns: 0-1.5 分
         """
         if not symbol or data is None or len(data) < 30:
             return 0.0
@@ -721,6 +826,9 @@ class MainForceScorer:
                 return 0.0
             indicators = result.get('indicators', {})
             chip_bins = result.get('chip_bins', [])
+            # 缓存筹码数据供 identify_phase 使用
+            self._chip_indicators = indicators
+            self._chip_bins = chip_bins
 
             score = 0.5  # 基础分
 
@@ -730,6 +838,30 @@ class MainForceScorer:
                 score += 0.2  # 适中的浮筹比例
             elif asr > 80:
                 score -= 0.2  # 浮筹过多，抛压大
+            elif asr < 20:
+                score += 0.1  # 浮筹极低，筹码锁定良好
+
+            # SSRP 评估：当前价接近市场平均成本时加分
+            ssrp = indicators.get('ssrp', indicators.get('SSRP', 0))
+            current_price = float(data['close'].iloc[-1])
+            if ssrp > 0:
+                ssrp_deviation = abs(current_price - ssrp) / ssrp
+                if ssrp_deviation < 0.03:
+                    score += 0.3  # 价格在SSRP ±3%内 → 成本附近，抛压小
+                elif ssrp_deviation < 0.1:
+                    score += 0.1  # 价格在SSRP ±10%内
+                # 价格在SSRP上方且未远离 → 做多信号
+                if current_price > ssrp and ssrp_deviation < 0.15:
+                    score += 0.1
+
+            # CYQKL 评估：高CYQKL = 突破确认信号
+            cyqkl = indicators.get('cyqkl', indicators.get('CYQKL', 0))
+            if cyqkl >= 0.5:
+                score += 0.3  # 极强穿越
+            elif cyqkl >= 0.3:
+                score += 0.2  # 强穿越
+            elif cyqkl >= 0.2:
+                score += 0.1  # 中等穿越（达标）
 
             # 筹码峰检测（单峰密集=主力控盘）
             if chip_bins and len(chip_bins) > 0:
@@ -738,7 +870,7 @@ class MainForceScorer:
                 if max_ratio > 0.15:
                     score += 0.3  # 单峰密集
 
-            return max(0.0, min(1.0, score))
+            return max(0.0, min(1.5, score))
         except Exception as e:
             logger.debug(f"筹码分布评分失败 {symbol}: {e}")
             return 0.0
@@ -779,11 +911,17 @@ class MainForceScorer:
         except Exception:
             return {"cost_price": 0, "distance_pct": 0, "near_cost": False}
 
-    def identify_phase(self, data: pd.DataFrame, symbol: str = None) -> str:
+    def identify_phase(self, data: pd.DataFrame, symbol: str = None,
+                       chip_data: dict = None) -> str:
         """
         识别主力操盘阶段（Wiki: "建仓→洗盘→拉升→出货" 四阶段）
 
-        用于 L2 结果标注，帮助用户理解当前主力处于哪个阶段。
+        当 chip_data 提供 ASR/筹码峰信息时，使用筹码数据增强判断。
+
+        Args:
+            data: OHLCV DataFrame
+            symbol: 股票代码
+            chip_data: 可选筹码数据字典，包含 asr, chip_peak, concentration 等
         """
         try:
             if data.empty or len(data) < 60:
@@ -803,27 +941,140 @@ class MainForceScorer:
             ma_20 = np.mean(closes[-20:])
             ma_60 = np.mean(closes[-60:]) if len(closes) >= 60 else closes[-1]
 
-            # 出货: 高位+异常量/量缩
+            # ASR 数据（从 chip_data 或上次筹码评分缓存中获取）
+            asr = None
+            chip_peak = None
+            concentration = None
+            if chip_data:
+                asr = chip_data.get('asr')
+                chip_peak = chip_data.get('chip_peak')
+                concentration = chip_data.get('concentration')
+            elif self._chip_indicators:
+                asr = self._chip_indicators.get('asr') or self._chip_indicators.get('ASR')
+                concentration = self._chip_indicators.get('concentration')
+                # 从 chip_bins 中提取 chip_peak（最大峰值对应的价格）
+                if self._chip_bins:
+                    peaks = sorted(self._chip_bins, key=lambda b: b.get('chip_ratio', 0), reverse=True)
+                    chip_peak = peaks[0].get('price', 0) if peaks else None
+
+            # CYQKL（筹码盈亏比例）：(现价 - 筹码峰) / 筹码峰
+            cyqkl = None
+            if chip_peak and chip_peak > 0:
+                cyqkl = (closes[-1] - chip_peak) / chip_peak
+
+            # RSI 背离检测（用于出货/建仓阶段识别）
+            rsi_bearish_div = False  # 价格新高但RSI未新高 → 顶背离
+            rsi_bullish_div = False  # 价格新低但RSI未新低 → 底背离
+            if len(closes) >= 30:
+                try:
+                    # 计算 RSI(14)
+                    deltas = np.diff(closes)
+                    gains = np.where(deltas > 0, deltas, 0)
+                    losses = np.where(deltas < 0, -deltas, 0)
+                    avg_gain = np.mean(gains[-14:]) if len(gains) >= 14 else np.mean(gains)
+                    avg_loss = np.mean(losses[-14:]) if len(losses) >= 14 else np.mean(losses)
+                    rsi = 100 - (100 / (1 + avg_gain / max(avg_loss, 1e-10))) if avg_loss > 0 else 100
+
+                    # 前一段 RSI
+                    avg_gain_prev = np.mean(gains[-28:-14]) if len(gains) >= 28 else avg_gain
+                    avg_loss_prev = np.mean(losses[-28:-14]) if len(losses) >= 28 else avg_loss
+                    rsi_prev = 100 - (100 / (1 + avg_gain_prev / max(avg_loss_prev, 1e-10))) if avg_loss_prev > 0 else 100
+
+                    # 价格两段高点
+                    high_recent = np.max(closes[-14:])
+                    high_prev = np.max(closes[-28:-14]) if len(closes) >= 28 else high_recent
+                    low_recent = np.min(closes[-14:])
+                    low_prev = np.min(closes[-28:-14]) if len(closes) >= 28 else low_recent
+
+                    # 顶背离：价格新高但RSI未新高
+                    if high_recent >= high_prev and rsi < rsi_prev - 5:
+                        rsi_bearish_div = True
+
+                    # 底背离：价格新低但RSI未新低
+                    if low_recent <= low_prev and rsi > rsi_prev + 5:
+                        rsi_bullish_div = True
+                except Exception:
+                    pass
+
+            # 阶段 1: 出货 — 高位 + 放量/量缩 + RSI顶背离 + 浮筹高企
+            if rsi_bearish_div and price_pos >= 0.5:
+                # RSI顶背离是最强的出货信号
+                return 'distributing'
             if price_pos >= 0.7 and vol_ratio_5_20 >= 1.5:
                 return 'distributing'
             if price_pos >= 0.8 and vol_ratio_5_20 < 0.7:
                 return 'distributing'
+            if price_pos >= 0.6 and asr is not None and asr > 60:
+                return 'distributing'
+            if price_pos >= 0.6 and cyqkl is not None and cyqkl > 0.3:
+                # CYQKL > 30% + 中高位 → 获利盘丰厚, 出货迹象
+                return 'distributing'
 
-            # 拉升: 多头排列+放量
+            # 阶段 2: 拉升 — 多头排列 + 放量 + CYQKL达标(>20%) + SSRP穿越
             if ma_5 > ma_20 > ma_60 and vol_ratio_5_20 >= 1.0:
+                if cyqkl is not None and cyqkl >= 0.2:
+                    return 'markup'  # CYQKL达标确认拉升
+                if asr is None or asr < 50:
+                    return 'markup'
                 return 'markup'
 
-            # 洗盘: 价跌+缩量+中低位置
+            # 阶段 3: 洗盘 — 价跌缩量 + 中低位 + 低位筹码峰稳定
             if price_pos < 0.5 and vol_ratio_5_20 < 0.85:
                 return 'washing'
+            if price_pos < 0.4 and asr is not None and asr > 50 and vol_ratio_5_20 < 1.0:
+                return 'washing'
+            if price_pos < 0.4 and cyqkl is not None and cyqkl < -0.1 and vol_ratio_5_20 < 1.0:
+                # CYQKL < -10% (深度亏损) + 低位缩量 → 洗盘特征
+                return 'washing'
 
-            # 建仓: 低位+放量
+            # 阶段 4: 建仓 — 低位 + 温和放量 + 浮筹锁定的迹象
+            if rsi_bullish_div and price_pos <= 0.5:
+                # RSI底背离是最强的建仓/见底信号
+                return 'accumulating'
             if price_pos < 0.5 and 1.1 <= vol_ratio_5_20 <= 2.0:
+                return 'accumulating'
+            if price_pos < 0.4 and asr is not None and asr < 40 and vol_ratio_5_20 >= 0.8:
+                return 'accumulating'
+            if price_pos < 0.3 and cyqkl is not None and cyqkl < -0.15 and concentration is not None and concentration > 0.1:
+                # 低位 + 深度亏损 + 筹码集中 → 建仓尾声
                 return 'accumulating'
 
             return 'neutral'
         except Exception:
             return 'unknown'
+
+    def _calc_margin_cost_price(self, symbol: str, latest_close: float) -> dict:
+        """计算融资成本价（散户融资买入的平均成本）
+        基于 margin_cache 的 rzmje(融资买入额) 和当日均价估算。
+        Returns:
+            {"cost_price": float | None, "distance_pct": float | None}
+        """
+        try:
+            margin_df = self.dm.get_cached_margin(symbol)
+            if margin_df is None or margin_df.empty:
+                return {"cost_price": None, "distance_pct": None}
+            df = margin_df.tail(60).copy()
+            if 'rzye' not in df.columns:
+                return {"cost_price": None, "distance_pct": None}
+            buy_mask = df['rzmje'].fillna(0) > 0 if 'rzmje' in df.columns else None
+            if buy_mask is None or buy_mask.sum() < 3:
+                return {"cost_price": None, "distance_pct": None}
+            df_buy = df[buy_mask].copy()
+            avg_prices = (df_buy['open'].fillna(latest_close)
+                         + df_buy['high'].fillna(latest_close)
+                         + df_buy['low'].fillna(latest_close)
+                         + df_buy['close'].fillna(latest_close)) / 4
+            weights = df_buy['rzmje'].fillna(0)
+            if weights.sum() <= 0:
+                return {"cost_price": None, "distance_pct": None}
+            cost_price = (weights * avg_prices).sum() / weights.sum()
+            distance_pct = (latest_close - cost_price) / cost_price * 100 if cost_price > 0 else None
+            return {
+                "cost_price": round(float(cost_price), 2),
+                "distance_pct": round(float(distance_pct), 2) if distance_pct is not None else None,
+            }
+        except Exception:
+            return {"cost_price": None, "distance_pct": None}
 
 
 def _phase_to_status(phase: str, score: float) -> dict:

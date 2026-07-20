@@ -115,6 +115,22 @@ def _get_cache_level() -> str:
         return 'realtime'
 
 
+def _get_realtime_field(ts_code: str, field: str):
+    """从 InMemoryStateStore 实时快照获取指定字段（盘中数据，盘后返回 None）"""
+    try:
+        from app.data.in_memory_store import store as mem_store
+        snapshot = mem_store.get_snapshot()
+        for item in snapshot:
+            if item.get('ts_code') == ts_code:
+                val = item.get(field)
+                if val is not None:
+                    return val
+                break
+    except Exception:
+        pass
+    return None
+
+
 @market_bp.route('/api/v3/stock/<ts_code>/quote', methods=['GET'])
 @handle_exceptions
 def get_stock_quote(ts_code):
@@ -195,7 +211,7 @@ def get_stock_quote(ts_code):
     amount = _sf(latest.get('amount'))
     pct_chg = _sf(latest.get('pct_chg'))
 
-    avg_price = round(amount / (vol * 100), 2) if (amount and vol and vol > 0) else None
+    avg_price = round(amount * 10 / vol, 2) if (amount and vol and vol > 0) else None
 
     # ── 1b. pre_close：取前一个交易日的 close ──────────────
     if pre_close is None:
@@ -316,8 +332,11 @@ def get_stock_quote(ts_code):
         'total_share': total_share,
         'industry': industry,
         'adj_close': adj_close,
-        'inside': None,
-        'outside': None,
+        # D3: 盘中实时字段 — 从 InMemoryStateStore 快照获取（盘后无数据时返回 None）
+        'speed': _get_realtime_field(ts_code, 'speed'),
+        'commission': _get_realtime_field(ts_code, 'commission'),
+        'inside': _get_realtime_field(ts_code, 'inside'),
+        'outside': _get_realtime_field(ts_code, 'outside'),
     }
 
     cache.set(cache_key, data, cache_level)
@@ -430,7 +449,7 @@ def _build_moneyflow_response(ts_code: str, records: list) -> dict:
         sell = float(rec.get(sell_key, 0) or 0)
         return round(buy - sell, 2)
 
-    latest_rec = records[-1]
+    latest_rec = records[0]
     xl_net = _net('buy_elg_amount', 'sell_elg_amount', latest_rec)
     lg_net = _net('buy_lg_amount', 'sell_lg_amount', latest_rec)
     md_net = _net('buy_md_amount', 'sell_md_amount', latest_rec)
@@ -441,7 +460,7 @@ def _build_moneyflow_response(ts_code: str, records: list) -> dict:
     main_force_pct = round(main_force / total_abs * 100, 2) if total_abs > 0 else 0.0
 
     history_5day = []
-    for rec in records[:-1]:
+    for rec in records[1:]:
         history_5day.append({
             'date': rec['trade_date'],
             'net_amount': round(
@@ -526,19 +545,21 @@ def get_stock_stk_limit(ts_code):
     """E9: 涨跌停/笼子价格"""
     from app.data.enhanced_cache_manager import get_ecm_instance
     ecm = get_ecm_instance()
-    today = datetime.now().strftime('%Y-%m-%d')
-    df = ecm.get_cached_stk_limit(trade_date=today)
+    # 使用最新交易日查询（非硬编码 today，避免非交易日查不到数据）
+    latest_dates = ecm._query_df("SELECT DISTINCT trade_date FROM stk_limit_cache ORDER BY trade_date DESC LIMIT 1")
+    trade_date = latest_dates.iloc[0, 0] if not latest_dates.empty else datetime.now().strftime('%Y-%m-%d')
+    df = ecm.get_cached_stk_limit(trade_date=trade_date)
     if df is not None and not df.empty:
         row = df[df['ts_code'] == ts_code]
         if row.empty:
-            return jsonify({'success': True, 'data': {'ts_code': ts_code, 'trade_date': today, 'high_limit': 0, 'low_limit': 0, 'cage_price': None, 'message': '今日无涨跌停数据'}})
+            return jsonify({'success': True, 'data': {'ts_code': ts_code, 'trade_date': trade_date, 'high_limit': 0, 'low_limit': 0, 'cage_price': None, 'message': '该日无涨跌停数据'}})
         latest = row.iloc[-1].to_dict()
         high_limit = float(latest.get('high_limit', 0))
         low_limit = float(latest.get('low_limit', 0))
-        result = {'success': True, 'data': {'ts_code': ts_code, 'trade_date': today, 'high_limit': high_limit, 'low_limit': low_limit, 'cage_price': None, 'cage_up_pct': 2.0, 'cage_down_pct': -2.0}}
+        result = {'success': True, 'data': {'ts_code': ts_code, 'trade_date': trade_date, 'high_limit': high_limit, 'low_limit': low_limit, 'cage_price': None, 'cage_up_pct': 2.0, 'cage_down_pct': -2.0}}
         try:
             dm = _get_dm()
-            daily_df = dm.get_cached_daily_data(ts_code, start_date=today)
+            daily_df = dm.get_cached_daily_data(ts_code, start_date=trade_date)
             if daily_df is not None and not daily_df.empty:
                 pre_close = float(daily_df.iloc[-1].get('pre_close', 0))
                 if pre_close > 0:
@@ -548,4 +569,4 @@ def get_stock_stk_limit(ts_code):
         except Exception:
             pass
         return jsonify(result)
-    return jsonify({'success': True, 'data': {'ts_code': ts_code, 'trade_date': today, 'high_limit': 0, 'low_limit': 0, 'cage_price': None, 'message': '涨跌停数据不可用'}})
+    return jsonify({'success': True, 'data': {'ts_code': ts_code, 'trade_date': trade_date, 'high_limit': 0, 'low_limit': 0, 'cage_price': None, 'message': '涨跌停数据不可用'}})

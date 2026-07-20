@@ -1360,27 +1360,52 @@ def screen_l3_candidates(
                 logger.debug(f"量价分析失败 {symbol}: {e}")
                 _record_engine_error('volume_price', symbol)
 
-        # ── 缠论（优先读取 AnalysisCache） ──
+        # ── 缠论多级别分析（需分钟数据支撑，无分钟数据则跳过） ──
         r['cl_result'], r['cl_score'], r['cl_signal'], r['cl_dir'] = None, 0.0, 'N/A', 'neutral'
         if need_cl:
             try:
                 from app.services.analysis_cache import get_analysis_cache
                 cl_cache = get_analysis_cache()
-                cl_cache_key = f"chanlun:{symbol}:{len(df)}"
+                cl_cache_key = f"chanlun_multi:{symbol}:{len(df)}"
                 cached_cl = cl_cache.get(cl_cache_key)
                 if cached_cl is not None:
                     cl_r = cached_cl
                 else:
-                    from .chanlun_strategy import analyze_chanlun
-                    cl_r = analyze_chanlun(df)
-                    if cl_r.get('success'):
-                        cl_cache.set(cl_cache_key, cl_r)
+                    # 使用多级别缠论分析（需要W/D/60m数据）
+                    # 分钟数据应已由 screener.py 在L3前调用 ensure_minute_data 准备好
+                    from app.data import DataManager
+                    dm = DataManager()
+                    # 检查是否有分钟数据（5min存在=就绪）
+                    from app.data.enhanced_cache_manager import get_ecm_instance
+                    ecm = get_ecm_instance()
+                    has_5min = ecm.conn.execute(
+                        'SELECT COUNT(*) FROM minute_kline_cache WHERE ts_code=? AND freq="5min"',
+                        [symbol]
+                    ).fetchone()[0]
+                    
+                    if has_5min > 0:
+                        from app.services.signal_computation_service import SignalComputationService
+                        scs = SignalComputationService()
+                        signals = scs.compute_for_stock(symbol, limit=1, period='long')
+                        if signals:
+                            cl_sig = signals[0]
+                            cl_r = cl_sig.get('chanlun_analysis_detail', {})
+                            cl_r['success'] = True
+                            cl_r['status_recognition'] = cl_sig.get('status_recognition', {})
+                            cl_cache.set(cl_cache_key, cl_r)
+                        else:
+                            cl_r = {'success': False, 'error': '多级别分析无返回'}
+                    else:
+                        # 无分钟数据 → 跳过缠论（日线单级别无效）
+                        logger.debug(f"缠论跳过 {symbol}: 无分钟数据")
+                        cl_r = {'success': False, 'error': '缺少分钟数据'}
+                        
                 if cl_r.get('success'):
                     s, sig, d = _compute_chanlun_score(cl_r, df)
                     s = _adjust_score_with_context(s, r['market_context'])
                     r['cl_result'], r['cl_score'], r['cl_signal'], r['cl_dir'] = cl_r, s, sig, d
             except Exception as e:
-                logger.debug(f"缠论分析失败 {symbol}: {e}")
+                logger.debug(f"缠论多级别分析失败 {symbol}: {e}")
                 _record_engine_error('chanlun', symbol)
 
         # ── 因子组合评分（按选中的组合真实计算） ──

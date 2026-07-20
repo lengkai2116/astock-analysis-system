@@ -167,9 +167,45 @@ class DataManager:
         logger.info(f"全量同步完成: {count} 条（跳过 {skipped} 只已有数据）")
         return count
     
-    def get_cached_daily_data(self, ts_code, start_date=None, end_date=None):
-        """从缓存获取日线数据"""
-        return self.cache.get_cached_daily(ts_code, start_date, end_date)
+    def get_cached_daily_data(self, ts_code, start_date=None, end_date=None, adj=None):
+        """从缓存获取日线数据
+        Args:
+            adj: 复权方式 None=不复权 'hfq'=后复权 'qfq'=前复权
+        """
+        df = self.cache.get_cached_daily(ts_code, start_date, end_date)
+        if df.empty or adj is None:
+            return df
+        return self._apply_adjust_factor(df, adj)
+    
+    def _apply_adjust_factor(self, df, adj):
+        """对日线DataFrame应用复权因子"""
+        if df.empty or adj not in ('hfq', 'qfq'):
+            return df
+        try:
+            ts_code = df['ts_code'].iloc[0]
+            df_adj = self.cache.get_cached_adj_factor(ts_code)
+            if df_adj is None or df_adj.empty:
+                return df
+            df_merged = df.merge(df_adj[['trade_date', 'adj_factor']], on='trade_date', how='left')
+            df_merged['adj_factor'] = df_merged['adj_factor'].ffill().fillna(1.0)
+            if adj == 'hfq':
+                # 后复权：以最新复权因子为基准
+                base_adj = df_merged['adj_factor'].iloc[-1]
+                df_merged['adj_factor'] = df_merged['adj_factor'] / base_adj
+            else:
+                # 前复权：以最早复权因子为基准
+                base_adj = df_merged['adj_factor'].iloc[0]
+                df_merged['adj_factor'] = df_merged['adj_factor'] / base_adj
+            for col in ['open', 'high', 'low', 'close']:
+                if col in df_merged.columns:
+                    df_merged[col] = df_merged[col] * df_merged['adj_factor']
+            if 'vol' in df_merged.columns:
+                df_merged['vol'] = df_merged['vol'] / df_merged['adj_factor'].replace(0, 1)
+            df_merged.drop(columns=['adj_factor'], inplace=True)
+            return df_merged
+        except Exception as e:
+            logger.warning("复权计算失败 (%s): %s", df.get('ts_code', '?'), e)
+            return df
 
     def get_cached_daily_batch(self, ts_codes, start_date=None, end_date=None):
         """批量获取日线数据（全量预加载 + 内存分组）"""
@@ -231,14 +267,77 @@ class DataManager:
         else:
             return self.get_cached_daily_data(ts_code, start_date, end_date)
     
+    def _get_mootdx_bars(self, ts_code: str, freq: int = 9,
+                         start: int = 0, offset: int = 800):
+        """从 mootdx(TDX TCP) 获取K线数据，统一返回标准化 DataFrame
+        
+        Args:
+            ts_code: 股票代码（含市场后缀，如 301042.SZ）
+            freq: TDX频率码 9=日线 5=周线 2=5分钟 1=1分钟
+            start: 起始偏移（用于分页）
+            offset: 返回行数上限（最大800）
+        
+        Returns:
+            标准化 DataFrame，列: ts_code, trade_date/trade_time, open, high, low, close, vol, amount
+        """
+        try:
+            from mootdx.quotes import Quotes
+            client = Quotes.factory(market='std')
+            symbol = ts_code.replace('.SH', '').replace('.SZ', '').replace('.BJ', '')
+            raw = client.bars(symbol=symbol, frequency=freq, start=start, offset=offset)
+            if raw is None or raw.empty:
+                return pd.DataFrame()
+            # 统一vol列名（mootdx同时返回vol和volume）
+            if 'volume' in raw.columns and 'vol' not in raw.columns:
+                df = raw.rename(columns={'volume': 'vol'})
+            elif 'vol' in raw.columns:
+                df = raw.copy()
+                if 'volume' in raw.columns:
+                    df.drop(columns=['volume'], inplace=True)
+            else:
+                df = raw.copy()
+            df['ts_code'] = ts_code
+            if 'date' in df.columns:
+                df = df.rename(columns={'date': 'trade_date'})
+            elif 'datetime' in df.columns:
+                df = df.rename(columns={'datetime': 'trade_time'})
+                if 'trade_date' not in df.columns and 'year' in df.columns:
+                    df['trade_date'] = pd.to_datetime(
+                        df[['year', 'month', 'day']].astype(int).astype(str).agg('-'.join, axis=1)
+                    )
+            cols = {'ts_code', 'open', 'high', 'low', 'close', 'vol', 'amount'}
+            cols_exist = [c for c in cols if c in df.columns]
+            return df[cols_exist]
+        except Exception as e:
+            logger.warning("_get_mootdx_bars(%s) 失败: %s", ts_code, e)
+            return pd.DataFrame()
+    
     def _get_weekly_data(self, ts_code, start_date=None, end_date=None):
-        """获取周线数据，优先从本地日线聚合"""
-        # 优先使用本地日线聚合，确保数据新鲜
+        """获取周线数据，ECM缓存优先"""
+        # 查ECM缓存（用 minute_kline_cache freq='W' 存储）
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            ecm = get_ecm_instance()
+            df_cached = ecm.get_cached_minute_kline(ts_code, freq='W')
+            if df_cached is not None and not df_cached.empty:
+                if 'vol' not in df_cached.columns and 'volume' in df_cached.columns:
+                    df_cached = df_cached.rename(columns={'volume': 'vol'})
+                return df_cached
+        except Exception:
+            pass
+        
+        # 从 mootdx bars(freq=5) 获取
+        df = self._get_mootdx_bars(ts_code, freq=5)
+        if not df.empty:
+            self._cache_minute_to_ecm(df, ts_code, 'W')
+            return df
+        
+        # 降级: 从日线聚合
         daily_data = self.get_cached_daily_data(ts_code, start_date, end_date)
         if not daily_data.empty:
             return self._aggregate_daily_to_weekly(daily_data)
         
-        # 日线数据不存在时才从Tushare获取
+        # Tushare 备选
         data = self.tushare.get_weekly_data(ts_code, start_date, end_date)
         if not data:
             return pd.DataFrame()
@@ -298,27 +397,158 @@ class DataManager:
         return df
     
     def _get_minute_data(self, ts_code, freq, start_date=None, end_date=None):
-        """获取分钟线数据"""
-        data = self.tushare.get_minute_data(ts_code, freq, start_date, end_date)
-        if not data:
-            return pd.DataFrame()
+        """获取分钟线数据 — ECM缓存优先的cache-on-demand
         
-        df_data = []
-        for item in data:
-            trade_date_str = item.get('trade_date')
-            if not trade_date_str:
-                continue
-            df_data.append({
-                'ts_code': item['ts_code'],
-                'trade_date': datetime.strptime(trade_date_str, '%Y%m%d%H%M%S') if len(trade_date_str) > 8 else datetime.strptime(trade_date_str, '%Y%m%d').date(),
-                'open': item.get('open'),
-                'high': item.get('high'),
-                'low': item.get('low'),
-                'close': item.get('close'),
-                'vol': item.get('vol'),
-                'amount': item.get('amount')
-            })
-        return pd.DataFrame(df_data) if df_data else pd.DataFrame()
+        Args:
+            ts_code: 股票代码
+            freq: 频率，格式 '5m'/'15m'/'30m'/'60m'
+            start_date: 起始日期（未使用，保持接口兼容）
+            end_date: 结束日期（未使用，保持接口兼容）
+        """
+        freq_map = {'1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '60m': '60min'}
+        ecm_freq = freq_map.get(freq, '5min')
+        
+        # 第一步：查 ECM 缓存
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            ecm = get_ecm_instance()
+            df_cache = ecm.get_cached_minute_kline(ts_code, freq=ecm_freq)
+            if df_cache is not None and not df_cache.empty:
+                return df_cache
+        except Exception:
+            pass
+        
+        # 第二步：从 mootdx 获取数据
+        if ecm_freq == '5min':
+            df = self._get_mootdx_bars(ts_code, freq=2)
+            if not df.empty:
+                self._cache_minute_to_ecm(df, ts_code, '5min')
+                return df
+            # 当 bars(freq=2) 不可用时（非交易时段），用 minutes() 获取1min数据聚合
+            try:
+                from collections import defaultdict
+                today_s = datetime.now().strftime('%Y%m%d')
+                df_1min = self._get_mootdx_minutes(ts_code)
+                if df_1min is not None and not df_1min.empty:
+                    records = df_1min.to_dict('records')
+                    # 1min→5min聚合
+                    groups = defaultdict(list)
+                    for r in records:
+                        tt = r.get('trade_time', '')
+                        try:
+                            ts = tt.split(' ')[1]
+                            parts = ts.split(':')
+                            slot = (int(parts[0])*60+int(parts[1]))//5
+                            key = (tt[:10], slot)
+                        except:
+                            key = (tt, 0)
+                        groups[key].append(r)
+                    agg = []
+                    for k, bars in sorted(groups.items()):
+                        agg.append({
+                            'trade_time': bars[0]['trade_time'],
+                            'open': float(bars[0]['open']),
+                            'high': max(float(b.get('high',0)) for b in bars),
+                            'low': min(float(b.get('low',float('inf'))) for b in bars),
+                            'close': float(bars[-1]['close']),
+                            'amount': sum(float(b.get('amount',0)) for b in bars),
+                        })
+                    if agg:
+                        df_5m = pd.DataFrame(agg)
+                        self._cache_minute_to_ecm(df_5m, ts_code, '5min')
+                        return df_5m
+            except Exception:
+                pass
+        elif ecm_freq == '1min':
+            df = self._get_mootdx_minutes(ts_code)
+            if not df.empty:
+                self._cache_minute_to_ecm(df, ts_code, '1min')
+                return df
+        elif ecm_freq in ('15min', '30min', '60min'):
+            # 从5min数据聚合为目标频率
+            df_5min = self._get_mootdx_bars(ts_code, freq=2)
+            if not df_5min.empty:
+                from app.data.minute_data_manager import MinuteDataManager
+                mm = MinuteDataManager()
+                records = df_5min.to_dict('records')
+                aggregated = mm._resample_minute(records, '5min', ecm_freq)
+                if aggregated:
+                    df_agg = pd.DataFrame(aggregated)
+                    df_agg['ts_code'] = ts_code
+                    self._cache_minute_to_ecm(df_agg, ts_code, ecm_freq)
+                    return df_agg
+        
+        # 第三步：Tushare 降级
+        try:
+            data = self.tushare.get_minute_data(ts_code, freq, start_date, end_date)
+            if data:
+                return pd.DataFrame(data)
+        except Exception:
+            pass
+        
+        # 第四步：AKShare 降级（Tushare分钟数据付费产品，AKShare作为免费备选）
+        try:
+            from app.data.akshare_provider import AkshareProvider
+            ak = AkshareProvider()
+            ak_data = ak.get_minute_data(ts_code, freq=ecm_freq,
+                                          start_date=start_date, end_date=end_date)
+            if ak_data:
+                logger.info(f"AKShare分钟数据降级成功 ({ts_code}/{ecm_freq})")
+                return pd.DataFrame(ak_data)
+        except Exception as e:
+            logger.debug(f"AKShare分钟数据降级失败 ({ts_code}): {e}")
+        
+        return pd.DataFrame()
+    
+    def _cache_minute_to_ecm(self, df, ts_code, freq):
+        """将分钟K线写入 ECM minute_kline_cache 持久化"""
+        if df.empty:
+            return
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            ecm = get_ecm_instance()
+            df_copy = df.copy()
+            df_copy['ts_code'] = ts_code
+            df_copy['freq'] = freq
+            # 确保有 trade_time 列供ECM存储
+            if 'trade_time' not in df_copy.columns:
+                if 'trade_date' in df_copy.columns:
+                    df_copy['trade_time'] = df_copy['trade_date'].astype(str)
+                else:
+                    df_copy['trade_time'] = ''
+            # ECM用volume列名
+            if 'vol' in df_copy.columns and 'volume' not in df_copy.columns:
+                df_copy = df_copy.rename(columns={'vol': 'volume'})
+            ecm.cache_minute_kline(df_copy)
+        except Exception as e:
+            logger.debug("缓存分钟K线失败 (%s/%s): %s", ts_code, freq, e)
+    
+    def _get_mootdx_minutes(self, ts_code):
+        """从 mootdx minutes() 获取当日1分钟数据"""
+        try:
+            from mootdx.quotes import Quotes
+            client = Quotes.factory(market='std')
+            symbol = ts_code.replace('.SH', '').replace('.SZ', '').replace('.BJ', '')
+            today = datetime.now().strftime('%Y%m%d')
+            raw = client.minutes(symbol=symbol, date=today)
+            if raw is not None and not raw.empty:
+                rows = []
+                for idx, r in raw.iterrows():
+                    hour = 9 + (idx + 30) // 60
+                    minute = (idx + 30) % 60
+                    trade_time = f"{today[:4]}-{today[4:6]}-{today[6:8]} {hour:02d}:{minute:02d}:00"
+                    price = float(r.get('price', 0))
+                    if price == 0:
+                        continue
+                    rows.append({
+                        'trade_time': trade_time,
+                        'open': price, 'high': price, 'low': price, 'close': price,
+                        'vol': int(r.get('vol', 0)),
+                    })
+                return pd.DataFrame(rows)
+        except Exception as e:
+            logger.debug("_get_mootdx_minutes(%s) 失败: %s", ts_code, e)
+        return pd.DataFrame()
     
     def _aggregate_daily_to_weekly(self, daily_df):
         """将日线数据聚合为周线数据"""
@@ -564,6 +794,10 @@ class DataManager:
         """从缓存获取股东户数数据"""
         return self.cache.get_cached_stk_holder(ts_code)
 
+    def get_cached_top10_holders(self, ts_code):
+        """从缓存获取前十大股东数据"""
+        return self.cache.get_cached_top10_holders(ts_code)
+
     def get_cached_margin(self, ts_code, start_date=None, end_date=None):
         """从缓存获取融资融券个股数据"""
         return self.cache.get_cached_margin(ts_code, start_date, end_date)
@@ -571,6 +805,22 @@ class DataManager:
     def get_cached_lhb(self, ts_code, trade_date=None):
         """从缓存获取龙虎榜数据"""
         return self.cache.get_cached_lhb(ts_code, trade_date)
+
+    def get_lhb_detail(self, ts_code: str = None, trade_date: str = None):
+        """获取席位级龙虎榜明细
+
+        优先级：
+          1. InMemoryStateStore（盘中最新，按 ts_code）
+          2. ECM lhb_detail_cache（持久化回退）
+        """
+        try:
+            from app.data.in_memory_store import store as mem_store
+            mem_records = mem_store.get_lhb_detail(ts_code)
+            if mem_records:
+                return pd.DataFrame(mem_records)
+        except Exception:
+            pass
+        return self.cache.get_cached_lhb_detail(ts_code, trade_date)
 
     def get_cached_fina_indicator(self, ts_code):
         """从缓存获取财务指标"""
@@ -583,6 +833,10 @@ class DataManager:
     def get_cached_finance_report(self, ts_code):
         """从缓存获取财务排雷报告"""
         return self.cache.get_cached_finance_report(ts_code)
+
+    def get_cached_concept(self, ts_code=None):
+        """从缓存获取概念板块数据"""
+        return self.cache.get_cached_concept(ts_code)
 
     def get_cached_income(self, ts_code):
         """从缓存获取利润表"""
@@ -643,7 +897,7 @@ class DataManager:
         if not self.tushare or not self.tushare.pro:
             return 0
         total = 0
-        index_codes = ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']
+        index_codes = ['000001.SH', '000300.SH', '399001.SZ', '899050.BJ', '399006.SZ']
         import pandas as pd
         for code in index_codes:
             try:
@@ -891,11 +1145,78 @@ class DataManager:
         raw = self.tushare.get_top_list(trade_date)
         if raw:
             df = pd.DataFrame(raw)
+            # 列名映射：Tushare 原始列名 → lhb_cache 表列名
+            df = df.rename(columns={
+                'pct_change': 'change_pct', 'l_buy': 'buy_amount',
+                'l_sell': 'sell_amount', 'net_rate': 'buy_rate',
+                'amount_rate': 'sell_rate',
+            })
             if 'trade_date' in df.columns:
                 df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+            # 只保留 lhb_cache 表有定义的列
+            lhb_cols = {'ts_code', 'trade_date', 'name', 'change_pct',
+                        'buy_amount', 'sell_amount', 'net_amount',
+                        'buy_rate', 'sell_rate'}
+            extra = [c for c in df.columns if c not in lhb_cols]
+            if extra:
+                df = df.drop(columns=extra)
             self.cache.cache_lhb_data(df)
             return len(df)
         return 0
+
+    def sync_lhb_detail_data(self, trade_date=None) -> int:
+        """同步龙虎榜席位明细（278号方案：按交易日，Tushare top_inst）
+
+        Returns:
+            写入的席位记录数
+        """
+        if not self.tushare or not self.tushare.pro:
+            return 0
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y%m%d')
+        raw = self.tushare.get_top_inst(trade_date)
+        if not raw:
+            return 0
+        import pandas as pd
+        # 映射 Tushare 字段 → lhb_detail_cache 字段
+        records = []
+        for r in raw:
+            ts_code = r.get('ts_code', '')
+            if not ts_code:
+                continue
+            seat_name = r.get('exalter', '')
+            if not seat_name:
+                continue
+            side = r.get('side_label', 'buy')
+            records.append({
+                'ts_code': ts_code,
+                'trade_date': trade_date,
+                'seat_name': seat_name,
+                'seat_type': self._classify_seat_name(seat_name),
+                'buy_amount': float(r.get('buy', 0)),
+                'sell_amount': float(r.get('sell', 0)),
+                'net_amount': float(r.get('net_buy', 0) if r.get('net_buy') is not None else (
+                    float(r.get('buy', 0)) - float(r.get('sell', 0)))),
+                'buy_rank': 0,
+                'sell_rank': 0,
+                'reason_category': str(r.get('reason', '')),
+                'side': side,
+                'data_source': 'tushare',
+            })
+        if records:
+            self.cache.cache_lhb_detail_data(records)
+        return len(records)
+
+    @staticmethod
+    def _classify_seat_name(seat_name: str) -> str:
+        """根据席位名称推断类型"""
+        seat_lower = seat_name.lower()
+        if any(kw in seat_lower for kw in [
+            '机构专用', '机构', '基金', '自营', '社保', 'qfii',
+            '资产管理', '资管', '保险', '信托', '年金',
+        ]):
+            return 'institution'
+        return 'brokerage'
 
     def sync_top10_holders_data(self, ts_code=None) -> int:
         """同步前十大股东数据"""
@@ -1056,18 +1377,14 @@ class DataManager:
         return 'lazy'
 
     def get_cached_indicators(self, ts_code: str, indicators: list = None) -> pd.DataFrame:
-        """读取预计算指标（优先读宽表，降级读旧 EAV）"""
-        # 尝试宽表
+        """读取预计算指标（宽表格式，D1: 已移除旧 EAV 降级）"""
         try:
             wide = self.cache.get_indicators_wide(ts_code)
             if wide is not None and not wide.empty:
                 return wide
         except Exception:
             pass
-        # 降级到旧 EAV
-        from app.data.precompute_indicator_manager import PrecomputeIndicatorManager
-        mgr = PrecomputeIndicatorManager(self.cache)
-        return mgr.get_precomputed_indicators(ts_code, indicators)
+        return pd.DataFrame()
 
     def get_cached_factors(self, ts_code: str, factor_names: list = None) -> pd.DataFrame:
         """读取预计算因子（通过 ECM 统一连接）"""
@@ -1078,7 +1395,8 @@ class DataManager:
                 if series is not None:
                     result[name] = series
             return result
-        return pd.DataFrame()
+        # 未指定因子名时返回所有因子（用于 _compute_factor_signal 批量读取）
+        return self.cache.get_cached_factors(ts_code)
 
     def get_cached_signals(self, ts_code: str, signal_names: list = None) -> pd.DataFrame:
         """读取预计算策略信号"""

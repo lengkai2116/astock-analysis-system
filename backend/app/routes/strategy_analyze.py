@@ -6,6 +6,7 @@
 """
 
 import logging
+import os
 from flask import Blueprint, request, jsonify
 from typing import Dict, List, Optional
 
@@ -43,6 +44,65 @@ def _get_kronos_forecaster() -> KronosForecaster:
     if _kronos_forecaster is None:
         _kronos_forecaster = KronosForecaster()
     return _kronos_forecaster
+
+
+# ── P3-1/P3-2: DeepSeek 九层现状描述 ──
+
+def _get_deepseek_status_text(ts_code: str) -> Optional[str]:
+    """通过 DeepSeek 生成九层框架股票现状描述
+
+    优先级层级:
+      1. DeepSeek 九层描述（主输出）
+      2. 不可用时返回 None → 前端展示各维度 status_text
+
+    Args:
+        ts_code: 股票代码
+
+    Returns:
+        str | None: DeepSeek 生成的描述文本，不可用时返回 None
+    """
+    try:
+        from app.config import Config
+        cfg = Config.get_llm_config()
+        if cfg.get('type', 'mock') == 'mock' or not cfg.get('api_key', ''):
+            return None
+
+        # 构建结构化快照
+        from app.services.ai_context_builder import ai_context_builder
+        context = ai_context_builder.build_context(ts_code)
+        snapshot_section = ai_context_builder.to_prompt_section(context)
+        if not snapshot_section:
+            return None
+
+        # 加载九层框架 System Prompt
+        prompt_path = os.path.join(
+            os.path.dirname(__file__),
+            '..', '..', '..', 'config', 'prompts', 'stock_status_description.txt'
+        )
+        prompt_path = os.path.normpath(prompt_path)
+        if not os.path.isfile(prompt_path):
+            logger.warning("九层描述 prompt 模板未找到: %s", prompt_path)
+            return None
+
+        with open(prompt_path, 'r', encoding='utf-8') as f:
+            system_prompt = f.read()
+
+        # 组装 user prompt：结构化快照 JSON
+        user_prompt = (
+            "请基于以下结构化数据生成这只股票的现状描述。\n"
+            "严格按照【九层描述输出规范】的顺序输出，有数据的维度写，无数据的维度跳过。\n\n"
+            f"{snapshot_section}"
+        )
+
+        # 调用 DeepSeek
+        from app.services.deepseek_analysis_service import _call_deepseek
+        result = _call_deepseek(user_prompt, system_prompt, cfg)
+        if result:
+            return result.strip()
+        return None
+    except Exception as e:
+        logger.debug("DeepSeek 九层描述生成跳过: %s", e)
+        return None
 
 
 # ──────────────────────────────────────────────
@@ -117,7 +177,7 @@ def _build_chanlun_dimension(sig: Optional[Dict], latest_close: float = None) ->
     # 多级别联立数据（拷贝，不污染原始 status_recognition）
     sr_ml = dict(sr.get('multi_level', {})) if isinstance(sr.get('multi_level'), dict) else {}
     if not sr_ml.get('direction_text'):
-        sr_ml['direction_text'] = '仅单级别分析，无跨级别验证数据'
+        sr_ml['direction_text'] = sr_ml.get('cross_direction_text', '') or '仅单级别分析，无跨级别验证数据'
     if 'near_levels' not in sr_ml:
         sr_ml['near_levels'] = []
 
@@ -242,6 +302,10 @@ def _build_chip_dimension(sig: Optional[Dict]) -> Dict:
         'net_sm_amount_5d': sr.get('net_sm_amount_5d'),
         'sentiment_crowding': sr.get('sentiment_crowding'),
         'sentiment_crowding_label': sr.get('sentiment_crowding_label'),
+        # P1-4: CYQKL（筹码盈亏比例）
+        'cyqkl': sr.get('cyqkl'),
+        # P1-3: 假机构识别
+        'fake_institution': sr.get('fake_institution', {"suspected": False, "reason": "", "confidence": 0.0}),
     }
 
 
@@ -426,6 +490,12 @@ def strategy_analyze():
         kronos_result = None
         if kronos_enabled:
             kronos_result = _compute_kronos(ts_code)
+
+        # ── P3-1/P3-2: DeepSeek 九层描述（主输出） ──
+        deepseek_text = _get_deepseek_status_text(ts_code)
+        if deepseek_text:
+            # 前端 narrativeText() 从维度对象读取 deepseek_text，注入到"走势结构"卡片
+            dimensions['chanlun']['deepseek_text'] = deepseek_text
 
         response = {
             'code': 0,

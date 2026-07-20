@@ -20,6 +20,14 @@ for k in list(os.environ.keys()):
 os.environ['DATA_DAEMON_RUNNING'] = '1'
 os.environ.setdefault('DATA_DIR', '/Users/kalence/Desktop/01-A股股票分析系统/data')
 
+# 加载 .env 文件（确保 DATABASE_URL 等配置就绪）
+try:
+    from dotenv import load_dotenv
+    dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+    load_dotenv(dotenv_path)
+except Exception:
+    pass
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] data_daemon: %(message)s',
@@ -109,6 +117,73 @@ def _batch_daily_basic(trade_date: str) -> int:
     return len(df)
 
 
+def _compute_volume_ratio(trade_date: str) -> int:
+    """计算量比并回写 daily_basic_cache
+
+    量比 = 今日成交量 / 过去5日平均成交量
+    计算层：数据到达后自动触发，符合红线规则3。
+    """
+    _ensure_pd()
+    import pandas as pd
+    try:
+        # 获取最近5个交易日
+        dates = _ecm.conn.execute(
+            "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 5"
+        ).fetchall()
+        if not dates or len(dates) < 5:
+            return 0
+        date_list = [r[0] for r in dates]
+        today = str(trade_date).replace('-', '')
+        today = f'{today[:4]}-{today[4:6]}-{today[6:]}' if len(today) == 8 else str(trade_date)
+
+        if today not in date_list:
+            date_list.insert(0, today)
+
+        # 获取这5天的 vol 数据
+        placeholders = ','.join(['?'] * len(date_list))
+        rows = _ecm.conn.execute(
+            f"SELECT ts_code, trade_date, vol FROM daily_cache WHERE trade_date IN ({placeholders})",
+            date_list
+        ).fetchall()
+        if not rows:
+            return 0
+
+        df = pd.DataFrame(rows, columns=['ts_code', 'trade_date', 'vol'])
+        df['vol'] = pd.to_numeric(df['vol'], errors='coerce').fillna(0)
+
+        today_df = df[df['trade_date'] == today].copy()
+        hist_df = df[df['trade_date'] != today].copy()
+
+        if today_df.empty:
+            return 0
+
+        # 计算每只股票的5日均量
+        hist_avg = hist_df.groupby('ts_code')['vol'].mean().reset_index()
+        hist_avg.columns = ['ts_code', 'avg_vol']
+
+        merged = today_df.merge(hist_avg, on='ts_code', how='left')
+        merged['volume_ratio'] = merged.apply(
+            lambda r: round(r['vol'] / r['avg_vol'], 2) if r['avg_vol'] > 0 else None, axis=1
+        )
+
+        # 回写到 daily_basic_cache
+        updated = 0
+        for _, r in merged.iterrows():
+            if r['volume_ratio'] is not None:
+                _ecm.conn.execute(
+                    "UPDATE daily_basic_cache SET volume_ratio = ? WHERE ts_code = ? AND trade_date = ?",
+                    [r['volume_ratio'], r['ts_code'], today]
+                )
+                updated += 1
+        _ecm.conn.commit()
+        if updated > 0:
+            logger.info(f"  [量比] 自算回写 {updated} 条")
+        return updated
+    except Exception as e:
+        logger.warning(f"  [量比] 计算失败: {e}")
+        return 0
+
+
 def _batch_moneyflow(trade_date: str) -> int:
     """全市场资金流向 — 1 次 API 调用"""
     import tushare as ts
@@ -194,6 +269,55 @@ def _batch_lhb(trade_date: str) -> int:
     return len(df)
 
 
+def _batch_lhb_detail(trade_date: str) -> int:
+    """全市场龙虎榜席位明细（278号方案）— 1 次 API 调用
+
+    从 Tushare top_inst 获取各股票的买卖席位详情，
+    写入 ECM lhb_detail_cache 表。
+    """
+    import tushare as ts
+    pro = ts.pro_api()
+    raw = pro.top_inst(trade_date=trade_date)
+    if raw is None or raw.empty:
+        return 0
+    records = []
+    for _, r in raw.iterrows():
+        ts_code = r.get('ts_code', '')
+        seat_name = r.get('exalter', '')
+        if not ts_code or not seat_name:
+            continue
+        side_val = r.get('side', '0')
+        side_label = 'buy' if str(side_val) == '0' else 'sell'
+        records.append({
+            'ts_code': ts_code,
+            'trade_date': trade_date,
+            'seat_name': seat_name,
+            'seat_type': _classify_seat_name(seat_name),
+            'buy_amount': float(r.get('buy', 0)),
+            'sell_amount': float(r.get('sell', 0)),
+            'net_amount': float(r.get('net_buy', 0) if r.get('net_buy') is not None else 0),
+            'buy_rank': 0,
+            'sell_rank': 0,
+            'reason_category': str(r.get('reason', '')),
+            'side': side_label,
+            'data_source': 'tushare',
+        })
+    if records:
+        _ecm.cache_lhb_detail_data(records)
+    return len(records)
+
+
+def _classify_seat_name(seat_name: str) -> str:
+    """根据席位名称推断类型"""
+    seat_lower = seat_name.lower()
+    if any(kw in seat_lower for kw in [
+        '机构专用', '机构', '基金', '自营', '社保', 'qfii',
+        '资产管理', '资管', '保险', '信托', '年金',
+    ]):
+        return 'institution'
+    return 'brokerage'
+
+
 def _batch_margin(trade_date: str) -> int:
     """全市场融资融券个股明细 — 1 次 API 调用"""
     _ensure_pd()
@@ -213,7 +337,7 @@ def _batch_margin(trade_date: str) -> int:
     return len(df)
 
 
-def _batch_concept() -> int:
+def _batch_concept(trade_date: str = None) -> int:
     """全市场概念板块及成分股 — 2 次 API 调用（Tushare + AKShare 降级）"""
     _ensure_pd()
     import tushare as ts
@@ -595,7 +719,20 @@ def run_integrity_check(backfill_days: int = 1):
         ('moneyflow_cache', _batch_moneyflow,   MF_THRESHOLD,    '资金流向'),
         ('stk_limit_cache', _batch_stk_limit,   LIMIT_THRESHOLD, '涨跌停'),
         ('lhb_cache',       _batch_lhb,         LHB_THRESHOLD,   '龙虎榜'),
+        ('concept_cache',   _batch_concept,     0,               '概念'),
     ]
+
+    # 龙虎榜席位明细（278号方案独立检查：lhb_detail_cache）
+    try:
+        detail_cnt = _check_count('lhb_detail_cache', today_fmt) if today_fmt else 0
+        if detail_cnt == 0:
+            logger.info("  [龙虎榜席位] 今日无数据，补采...")
+            detail_added = _batch_lhb_detail(today)
+            logger.info(f"    → 补采 {detail_added} 条")
+        else:
+            logger.info(f"  [龙虎榜席位] {detail_cnt} 行 ✅")
+    except Exception as e:
+        logger.warning(f"  龙虎榜席位检查失败: {e}")
 
     # 融资融券单独检查（margin_detail 非每日必须，空表时补采）
     try:
@@ -630,6 +767,9 @@ def run_integrity_check(backfill_days: int = 1):
         else:
             logger.info(f"  [{label}] 今日 {cnt}行 ✅")
 
+    # 量比自算：基于 daily_cache 回写 volume_ratio（Tushare 免费 API 不提供该字段）
+    _compute_volume_ratio(today)
+
     # 回退补采最近 N 个交易日（检查前一天的完整性）
     if backfill_days > 1:
         for offset in range(1, backfill_days):
@@ -651,6 +791,41 @@ def run_integrity_check(backfill_days: int = 1):
         _batch_index_daily(ds_api)
 
     logger.info("完整性检查完成")
+    
+    # 自选股分钟数据完整性检查（后台低优，缺失时自动补采）
+    try:
+        _check_watchlist_minute()
+    except Exception:
+        pass
+
+
+def _check_watchlist_minute():
+    """检查自选股分钟数据完整性，缺失时触发后台补采"""
+    try:
+        from app.data.minute_backfill import get_watchlist_stocks, run_backfill_all
+        codes = get_watchlist_stocks()
+        if not codes:
+            return
+        
+        # 检查哪些自选股缺失分钟数据
+        missing_5min = []
+        for code in codes:
+            cnt = _ecm.conn.execute(
+                'SELECT COUNT(*) FROM minute_kline_cache WHERE ts_code=? AND freq="5min"',
+                [code]
+            ).fetchone()[0]
+            if cnt == 0:
+                missing_5min.append(code)
+        
+        if not missing_5min:
+            logger.info(f"  [自选股分钟] {len(codes)} 只全部有分钟数据 ✅")
+            return
+        
+        logger.info(f"  [自选股分钟] {len(codes)} 只中 {len(missing_5min)} 只缺失分钟数据，触发补采...")
+        run_backfill_all(ts_codes=missing_5min)
+        logger.info(f"  [自选股分钟] 补采完成")
+    except Exception as e:
+        logger.warning(f"  [自选股分钟] 检查失败: {e}")
 
 
 # ══════════════════════════════════════════════════════════
@@ -673,6 +848,8 @@ def run_daily_sync():
         ('stk_limit_cache',  _batch_stk_limit,  '涨跌停'),
         ('index_daily_cache',_batch_index_daily,'指数日线'),
         ('lhb_cache',        _batch_lhb,        '龙虎榜'),
+        ('lhb_detail_cache', _batch_lhb_detail, '龙虎榜席位'),
+        ('concept_cache',    _batch_concept,    '概念板块'),
     ]
 
     for table, batch_fn, label in tasks:
@@ -681,6 +858,9 @@ def run_daily_sync():
             logger.info(f"  {label}: {added} 条")
         except Exception as e:
             logger.warning(f"  {label} 失败: {e}")
+
+    # 量比自算（Tushare 免费 API 不提供 volume_ratio，计算层自算）
+    _compute_volume_ratio(today)
 
     # ── 补齐空表（迭代4）──
     try:
@@ -724,6 +904,13 @@ def run_daily_sync():
         logger.info("  分钟K线回填已触发（后台）")
     except Exception as e:
         logger.warning(f"  分钟K线回填触发失败: {e}")
+
+    # 自选股分钟数据闲时补采（后台低优，使用 mootdx 填充历史数据）
+    try:
+        threading.Thread(target=_run_minute_backfill_v2, daemon=True).start()
+        logger.info("  分钟数据闲时补采已触发（后台）")
+    except Exception as e:
+        logger.warning(f"  分钟数据闲时补采触发失败: {e}")
 
     _SYNCED_TODAY = True
     logger.info("=== 日终同步完成 ===")
@@ -1014,6 +1201,17 @@ def _run_minute_backfill():
     _batch_backfill_minute_kline(today)
 
 
+def _run_minute_backfill_v2():
+    """自选股分钟数据闲时补采（使用 mootdx 填充历史数据）"""
+    try:
+        from app.data.minute_backfill import run_backfill_all
+        result = run_backfill_all()
+        logger.info(f"  分钟数据闲时补采: 5min={result.get('5min', 0)}, "
+                    f"1min={result.get('1min', 0)}, 聚合={result.get('aggregate', 0)}")
+    except Exception as e:
+        logger.warning(f"  分钟数据闲时补采失败: {e}")
+
+
 def _run_data_cleanup():
     """执行数据清理（迭代5：日期格式统一 + 存储清理）"""
     today = datetime.now().strftime('%Y%m%d')
@@ -1043,10 +1241,7 @@ def _run_data_cleanup():
     except Exception as e:
         logger.warning(f"清理 minute_cache 失败: {e}")
 
-    try:
-        _ecm.clean_indicator_cache(one_year_ago)
-    except Exception as e:
-        logger.warning(f"清理 indicator_cache 失败: {e}")
+    # D1: 旧 indicator_cache EAV 表已于 2026-07-19 停止写入，清理逻辑已移除
 
     try:
         _ecm.clean_factor_cache(one_year_ago)

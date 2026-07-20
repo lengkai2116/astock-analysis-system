@@ -86,34 +86,20 @@ def _get_kline_data(data_manager, ts_code, limit=200, period='D'):
     period: D (日线)/W (周线)/M (月线)/1m/5m/15m/30m/60m
     """
     import pandas as pd
-    # 分钟线：通过 MinuteDataManager 获取真实分钟数据
+    # 分钟线：通过 DataManager.get_kline_data 统一获取（触发cache-on-demand）
     if period in ['1m', '5m', '15m', '30m', '60m']:
-        freq_map = {'1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '60m': '60min'}
-        freq = freq_map.get(period, '15min')
         try:
-            from app.data.minute_data_manager import MinuteDataManager
-            mdm = MinuteDataManager()
-            # 从 ECM minute_kline_cache 读取（mootdx TCP 实时写入）
-            records = mdm.get_cached_minute(ts_code, freq=freq)
-            if records and len(records) > 0:
-                df = pd.DataFrame(records)
-                # ECM 同时有 trade_date(日期) 和 trade_time(时间)，前端需要 trade_date 作为时间戳
-                if 'trade_time' in df.columns:
-                    df['trade_date'] = df['trade_time']
-                    df.drop(columns=['trade_time'], inplace=True)
-                # ECM 存储 volume 列，代码层统一用 vol
-                if 'vol' not in df.columns and 'volume' in df.columns:
-                    df.rename(columns={'volume': 'vol'}, inplace=True)
+            kline_data = data_manager.get_kline_data(ts_code, period=period)
+            if kline_data is not None and not kline_data.empty:
                 # 确保数值列类型正确
                 for col in ['open', 'high', 'low', 'close', 'vol', 'amount']:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                return df, 'minute'
+                    if col in kline_data.columns:
+                        kline_data[col] = pd.to_numeric(kline_data[col], errors='coerce')
+                return kline_data, 'minute'
         except Exception as e:
-            logger.warning(f"分钟K线获取失败 ({ts_code}/{freq}): {e}")
-        # 降级：分钟数据不可用时回退到日线（而非返回空）
-        logger.info(f"分钟数据不可用 ({ts_code}/{freq})，回退到日线")
-        kline_data = data_manager.get_kline_data(ts_code, period='D', start_date=None, end_date=None)
+            logger.warning(f"分钟K线获取失败 ({ts_code}/{period}): {e}")
+        # 降级到日线
+        kline_data = data_manager.get_kline_data(ts_code, period='D')
         if kline_data is not None and not kline_data.empty:
             for col in ['open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg']:
                 if col in kline_data.columns:
@@ -273,13 +259,18 @@ def get_kline_chart_data(ts_code):
         try:
             cached = data_manager.get_cached_indicators(ts_code)
             if cached is not None and not cached.empty:
+                # 宽表预计算数据包含 ma5/ma10/ma20/macd_dif/macd_dea/macd_hist/
+                # rsi14/kdj_k/kdj_d/kdj_j/boll_upper/boll_mid/boll_lower 等列
+                # 检查是否包含至少一个代表性子图表列
                 cached_cols = set(cached.columns) - {'ts_code', 'trade_date'}
-                needed_sub = set(k for k in requested_indicators if k in SUB_INDICATORS)
-                if needed_sub.issubset(cached_cols):
+                has_macd = 'macd_dif' in cached_cols
+                has_rsi = 'rsi14' in cached_cols
+                has_kdj = 'kdj_k' in cached_cols
+                if has_macd and has_rsi and has_kdj:
                     df = daily_data.merge(cached, on='trade_date', how='left')
                     logger.debug(f"使用宽表预计算指标 ({len(cached)} 行)")
                 else:
-                    logger.debug(f"宽表缺少必要指标: need={needed_sub}, have={cached_cols}")
+                    logger.debug(f"宽表缺少基本指标列: have={cached_cols}")
         except Exception as e:
             logger.debug(f"indicator_cache 读取失败，回退实时计算: {e}")
 
@@ -491,11 +482,39 @@ def get_chart_signals(ts_code):
     """
     获取指定股票的信号标记数据
     返回 TradingView 格式的信号点
+    优先读取预计算信号缓存，未命中时回退实时计算
     """
     limit = request.args.get('limit', 100, type=int)
     
     try:
         data_manager = get_data_manager()
+        
+        # 优先读取预计算信号缓存（由 data_daemon 日终预计算写入）
+        try:
+            cached = data_manager.get_cached_signals(ts_code)
+            if cached is not None and not cached.empty:
+                logger.debug(f"使用预计算信号缓存 ({len(cached)} 条)")
+                signal_markers = []
+                for _, sig in cached.tail(limit).iterrows():
+                    t = _format_time(ts_code, sig.get('trade_date'))
+                    if t is None:
+                        continue
+                    sig_level = str(sig.get('signal_level', '')).upper()
+                    is_buy = sig_level in ('BUY', 'BULLISH', 'STRONG_BUY')
+                    signal_markers.append({
+                        'time': t,
+                        'type': 'buy' if is_buy else 'sell',
+                        'price': float(sig.get('signal_value', 0)),
+                        'text': 'B' if is_buy else 'S',
+                        'color': '#22C55E' if is_buy else '#EF4444',
+                        'indicator': sig.get('signal_name', ''),
+                        'confidence': float(sig.get('confidence', 0.5)),
+                    })
+                return jsonify({'success': True, 'data': signal_markers})
+        except Exception as e:
+            logger.debug(f"预计算信号读取失败，回退实时计算: {e}")
+        
+        # 缓存未命中，回退实时计算（兼容已有逻辑）
         daily_data = data_manager.get_cached_daily_data(ts_code, start_date=None, end_date=None)
         
         if daily_data.empty:

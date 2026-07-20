@@ -92,6 +92,18 @@ class BenchmarkService:
         data = self._data_manager.get_cached_daily_data(ts_code, start_date, end_date)
 
         if data.empty:
+            # 降级：通过 DataManager 获取指数日线数据
+            try:
+                df_idx = self._data_manager.get_kline_data(ts_code, period='D')
+                if df_idx is not None and not df_idx.empty:
+                    if 'pct_chg' not in df_idx.columns:
+                        df_idx = df_idx.copy()
+                        df_idx['pct_chg'] = df_idx['close'].astype(float).pct_change() * 100
+                    self.cache[cache_key] = df_idx.copy()
+                    return df_idx
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).debug(f"指数降级获取失败 ({ts_code}): {e}")
             return pd.DataFrame()
 
         df = data.copy()

@@ -42,6 +42,8 @@ class InMemoryStateStore:
         self._minute_kline: List[Dict] = []
         # 龙虎榜（覆盖式）
         self._lhb: List[Dict] = []
+        # 席位级龙虎榜详情（覆盖式）：{ts_code: [seat_records]}
+        self._lhb_detail: Dict[str, List[Dict]] = {}
         # 新闻（按需缓存）
         self._news: List[Dict] = []
         # 元信息：{topic_name: datetime}
@@ -178,6 +180,12 @@ class InMemoryStateStore:
             self._minute_kline.clear()
             self._meta.pop('minute_kline', None)
 
+    def clear_lhb_detail(self):
+        """盘后清理席位级龙虎榜（由 scheduler 日终调用）"""
+        with self._lock:
+            self._lhb_detail.clear()
+            self._meta.pop('lhb_detail', None)
+
     # ── 龙虎榜（覆盖式，30min 刷新）─────────────────────────
 
     def update_lhb(self, records: List[Dict]):
@@ -188,6 +196,29 @@ class InMemoryStateStore:
     def get_lhb(self) -> List[Dict]:
         with self._lock:
             return [dict(r) for r in self._lhb]
+
+    # ── 龙虎榜席位级详情（覆盖式，30min 刷新）────────────────
+
+    def update_lhb_detail(self, records: List[Dict]):
+        """更新席位级龙虎榜数据（覆盖式，按 ts_code 索引）"""
+        with self._lock:
+            self._lhb_detail.clear()
+            for r in records:
+                ts = r.get('ts_code', '')
+                if ts:
+                    self._lhb_detail.setdefault(ts, []).append(dict(r))
+            self._touch('lhb_detail')
+
+    def get_lhb_detail(self, ts_code: str = None) -> List[Dict]:
+        """获取席位级龙虎榜数据"""
+        with self._lock:
+            if ts_code:
+                return [dict(r) for r in self._lhb_detail.get(ts_code, [])]
+            # 全量展平
+            result = []
+            for records in self._lhb_detail.values():
+                result.extend(dict(r) for r in records)
+            return result
 
     # ── 新闻（按需缓存，30min 刷新）─────────────────────────
 

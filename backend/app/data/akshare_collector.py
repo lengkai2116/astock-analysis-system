@@ -377,6 +377,69 @@ def _collect_lhb_and_news():
             except Exception:
                 pass
             logger.info(f"[lhb_detail] {len(records)} 条")
+
+            # ── 278号方案：席位级龙虎榜明细 ──
+            try:
+                detail_all = []
+                ts_codes = list(set(r.get('ts_code', '') for r in records if r.get('ts_code')))
+                # 限前30只，避免 AKShare 频率限制
+                for idx, ts_code in enumerate(ts_codes[:30]):
+                    try:
+                        symbol = ts_code.split('.')[0]  # 去掉 .SZ/.SH 后缀
+                        detail_df = ak.stock_lhb_jgmm_em(symbol=symbol, start_date=today, end_date=today)
+                        if detail_df is None or detail_df.empty:
+                            continue
+                        for _, dr in detail_df.iterrows():
+                            buy_name = str(dr.get('买方营业部', dr.get('营业部名称', '')))
+                            sell_name = str(dr.get('卖方营业部', ''))
+                            buy_amt = _safe_float(dr.get('买方金额', 0))
+                            sell_amt = _safe_float(dr.get('卖方金额', 0))
+                            buy_r = int(_safe_float(dr.get('买方排名', 0)))
+                            sell_r = int(_safe_float(dr.get('卖方排名', 0)))
+
+                            # 买方记录
+                            if buy_name and buy_amt > 0:
+                                detail_all.append({
+                                    'ts_code': ts_code,
+                                    'trade_date': today,
+                                    'seat_name': buy_name,
+                                    'seat_type': _classify_seat(buy_name),
+                                    'buy_amount': buy_amt,
+                                    'sell_amount': 0,
+                                    'net_amount': buy_amt,
+                                    'buy_rank': buy_r,
+                                    'sell_rank': 0,
+                                    'side': 'buy',
+                                    'data_source': 'akshare',
+                                })
+                            # 卖方记录
+                            if sell_name and sell_amt > 0:
+                                detail_all.append({
+                                    'ts_code': ts_code,
+                                    'trade_date': today,
+                                    'seat_name': sell_name,
+                                    'seat_type': _classify_seat(sell_name),
+                                    'buy_amount': 0,
+                                    'sell_amount': sell_amt,
+                                    'net_amount': -sell_amt,
+                                    'buy_rank': 0,
+                                    'sell_rank': sell_r,
+                                    'side': 'sell',
+                                    'data_source': 'akshare',
+                                })
+                    except Exception as e:
+                        logger.debug(f"[lhb_detail_seat] {ts_code} 跳过: {e}")
+                        continue
+
+                if detail_all:
+                    mem_store.update_lhb_detail(detail_all)
+                    try:
+                        ecm.cache_lhb_detail_data(detail_all)
+                    except Exception:
+                        pass
+                    logger.info(f"[lhb_detail_seat] {len(detail_all)} 条席位记录 (覆盖 {len(ts_codes[:30])} 只股票)")
+            except Exception as e:
+                logger.warning(f"[lhb_detail_seat] 采集失败: {e}")
     except Exception as e:
         logger.warning(f"[lhb_detail] 采集失败: {e}")
 
@@ -483,6 +546,23 @@ def _safe_float(val) -> float:
         return float(val)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _classify_seat(seat_name: str) -> str:
+    """根据席位名称推断类型（机构专用 vs 普通营业部）
+
+    机构特征词：机构专用、基金、自营、社保、QFII、资管
+    营业部特征：证券营业部、分公司、事业部
+    """
+    seat_lower = seat_name.lower()
+    # 机构特征
+    if any(kw in seat_lower for kw in [
+        '机构专用', '机构', '基金', '自营', '社保', 'qfii',
+        '资产管理', '资管', '保险', '信托', '年金',
+    ]):
+        return 'institution'
+    # 营业部特征（默认）
+    return 'brokerage'
 
 
 # ── 全局单例 ─────────────────────────────────────────────

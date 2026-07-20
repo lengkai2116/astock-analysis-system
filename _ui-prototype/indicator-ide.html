@@ -98,7 +98,7 @@
 .zszq-l { color:var(--text-muted); white-space:nowrap; font-size:12px; }
 .zszq-r { color:var(--text-primary); font-weight:500; text-align:right; font-size:13px; }
 /* 盘口 — 4列 */
-.order-grid { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:2px; padding:var(--space-2) 0; }
+.order-grid { display:grid; grid-template-columns:1fr 1fr; gap:2px; padding:var(--space-2) 0; }
 .order-grid .hdr { font-size:12px; color:var(--text-muted); padding-bottom:2px; }
 .order-sell { color:#22C55E; font-size:13px; }
 .order-buy { color:#EF4444; font-size:13px; }
@@ -625,11 +625,6 @@
           <div class="zszq-item"><span class="zszq-l">成交额</span><span class="zszq-r" id="zq-amount">--</span></div>
           <div class="zszq-item"><span class="zszq-l">流通值</span><span class="zszq-r" id="zq-circ_mv">--</span></div>
           <div class="zszq-item"><span class="zszq-l">总市值</span><span class="zszq-r" id="zq-total_mv">--</span></div>
-          <div class="zszq-item"><span class="zszq-l">内盘</span><span class="zszq-r" id="zq-inside">--</span></div>
-          <div class="zszq-item"><span class="zszq-l">外盘</span><span class="zszq-r" id="zq-outside">--</span></div>
-          <div class="zszq-item"><span class="zszq-l">现量</span><span class="zszq-r" id="zq-present">16</span></div>
-          <div class="zszq-item"><span class="zszq-l">盘后量</span><span class="zszq-r" id="zq-after_vol">--</span></div>
-          <div class="zszq-item"><span class="zszq-l">盘后额</span><span class="zszq-r" id="zq-after_amt">--</span></div>
           <!-- 第3列：估值/股本 -->
           <div class="zszq-item"><span class="zszq-l">收益</span><span class="zszq-r" id="zq-eps">--</span></div>
           <div class="zszq-item"><span class="zszq-l">净资</span><span class="zszq-r" id="zq-bvps">--</span></div>
@@ -646,18 +641,18 @@
         <!-- 盘口 — 4列 grid + 表头行 + 底部 footer -->
         <div class="right-panel-card" style="padding:var(--space-6);margin-bottom:var(--space-3);">
           <div class="order-grid">
-            <span class="hdr">价格</span><span class="hdr" style="text-align:right;">数量</span><span class="hdr" style="text-align:right;">时间</span><span class="hdr" style="text-align:right;">时间</span>
-            <span class="order-sell"><span id="ask-5-price">--</span></span><span class="order-qty" id="ask-5-vol">--</span><span class="order-time">--</span><span class="order-time">--</span>
-            <span class="order-sell"><span id="ask-4-price">--</span></span><span class="order-qty" id="ask-4-vol">--</span><span class="order-time">--</span><span class="order-time">--</span>
-            <span class="order-sell"><span id="ask-3-price">--</span></span><span class="order-qty" id="ask-3-vol">--</span><span class="order-time">--</span><span class="order-time">--</span>
-            <span class="order-sell"><span id="ask-2-price">--</span></span><span class="order-qty" id="ask-2-vol">--</span><span class="order-time">--</span><span class="order-time">--</span>
-            <span class="order-sell" style="font-weight:600;"><span id="ask-1-price">--</span></span><span class="order-qty" style="font-weight:600;" id="ask-1-vol">--</span><span class="order-time" style="font-weight:600;">--</span><span class="order-time" style="font-weight:600;">--</span>
+            <span class="hdr">卖盘</span><span class="hdr" style="text-align:right;">数量</span>
+            <span class="order-sell"><span id="ask-5-price">--</span></span><span class="order-qty" id="ask-5-vol">--</span>
+            <span class="order-sell"><span id="ask-4-price">--</span></span><span class="order-qty" id="ask-4-vol">--</span>
+            <span class="order-sell"><span id="ask-3-price">--</span></span><span class="order-qty" id="ask-3-vol">--</span>
+            <span class="order-sell"><span id="ask-2-price">--</span></span><span class="order-qty" id="ask-2-vol">--</span>
+            <span class="order-sell" style="font-weight:600;"><span id="ask-1-price">--</span></span><span class="order-qty" style="font-weight:600;" id="ask-1-vol">--</span>
             <span class="order-sep"></span>
-            <span class="order-buy" style="font-weight:600;"><span id="bid-1-price">--</span></span><span class="order-qty" style="font-weight:600;" id="bid-1-vol">--</span><span class="order-time" style="font-weight:600;">--</span><span class="order-time" style="font-weight:600;">--</span>
-            <span class="order-buy"><span id="bid-2-price">--</span></span><span class="order-qty" id="bid-2-vol">--</span><span class="order-time">--</span><span class="order-time">--</span>
-            <span class="order-buy"><span id="bid-3-price">--</span></span><span class="order-qty" id="bid-3-vol">--</span><span class="order-time">--</span><span class="order-time">--</span>
-            <span class="order-buy"><span id="bid-4-price">--</span></span><span class="order-qty" id="bid-4-vol">--</span><span class="order-time">--</span><span class="order-time">--</span>
-            <span class="order-buy"><span id="bid-5-price">--</span></span><span class="order-qty" id="bid-5-vol">--</span><span class="order-time">--</span><span class="order-time">--</span>
+            <span class="order-buy" style="font-weight:600;"><span id="bid-1-price">--</span></span><span class="order-qty" style="font-weight:600;" id="bid-1-vol">--</span>
+            <span class="order-buy"><span id="bid-2-price">--</span></span><span class="order-qty" id="bid-2-vol">--</span>
+            <span class="order-buy"><span id="bid-3-price">--</span></span><span class="order-qty" id="bid-3-vol">--</span>
+            <span class="order-buy"><span id="bid-4-price">--</span></span><span class="order-qty" id="bid-4-vol">--</span>
+            <span class="order-buy"><span id="bid-5-price">--</span></span><span class="order-qty" id="bid-5-vol">--</span>
           </div>
           <div class="order-footer" id="order-footer">
             <span><span class="ft-label">笼子：</span><span class="ft-val">--</span></span>
@@ -2704,12 +2699,11 @@ function renderZszqGrid(d){
   sv('avg_price',d.avg_price!=null&&d.avg_price>0?d.avg_price:'--');
   sv('high_limit',d.high_limit); sv('low_limit',d.low_limit);
   sv('volume_ratio',d.volume_ratio);
-  sv('speed','--'); sv('commission','--');
+  sv('speed',d.speed); sv('commission',d.commission);
   if(d.volume!=null){ var v=d.volume; sv('volume',v>=10000?(v/10000).toFixed(2)+'万':v); }else sv('volume','--');
   if(d.amount!=null){ var a=d.amount; sv('amount',a>=100000000?(a/100000000).toFixed(2)+'亿':a>=10000?(a/10000).toFixed(2)+'万':a); }else sv('amount','--');
   sv('circ_mv',d.circ_mv!=null?d.circ_mv>=10000?(d.circ_mv/10000).toFixed(2)+'亿':d.circ_mv:'--');
   sv('total_mv',d.total_mv!=null?d.total_mv>=10000?(d.total_mv/10000).toFixed(2)+'亿':d.total_mv:'--');
-  sv('inside','--'); sv('outside','--'); sv('present','--'); sv('after_vol','--'); sv('after_amt','--');
   sv('eps',d.eps); sv('bvps',d.bvps);
   // 流通股本/总股本（单位：万股 → 亿股/万股）
   if(d.float_share!=null){ var fs=d.float_share; sv('circ_share',fs>=10000?(fs/10000).toFixed(2)+'亿':fs.toFixed(2)+'万'); }else sv('circ_share','--');

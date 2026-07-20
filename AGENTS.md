@@ -63,10 +63,50 @@ make dev             # 一键启动上面全部
 
 | 进程 | 文件 | 职责 |
 |------|------|------|
-| **数据进程** | `backend/data_daemon.py` | mootdx TCP 采集（5s）、日终同步（15:30）、完整性检查 |
+| **数据进程** | `backend/data_daemon.py` | mootdx TCP 采集（5s）、日终同步（15:30）、完整性检查、分钟数据采集与聚合、指标预计算、因子预计算、信号预计算 |
 | **API 进程** | `backend/run.py` | Flask REST API + SocketIO 推送 |
 
 数据进程启动时会设置 `DATA_DAEMON_RUNNING=1`，API 进程据此跳过采集器初始化。
+
+### 🔴 全局数据体系架构红线（强制性标准）
+
+所有系统编码必须严格遵循以下四层架构：
+
+```
+采集层 (Collection Layer) — 独立进程，系统开机自动启动
+  数据源连接（mootdx TCP / Tushare HTTP / AKShare）只允许出现在采集进程
+  采集频率由 data_daemon 主循环或 APScheduler 统一管理
+  ↓ 写入
+存储层 (Storage Layer) — DataManager 为唯一网关
+  ECM SQLite WAL（盘后持久化）+ InMemoryStateStore（盘中实时）
+  DataManager 是所有数据访问的统一入口，禁止绕过
+  ↓ 读取
+计算层 (Computation Layer) — 数据到达时后台自动触发，非等待请求
+  日终同步后自动触发：指标预计算 → 因子预计算 → 信号预计算
+  盘中增量计算：分钟K线聚合
+  ↓ 写入
+调用层 (Call Layer) — 仅从存储层只读，前端请求时提取
+  Flask REST API 只读存储层，不得直接调用外部数据源
+  不得在路由中触发实时计算，不得生成 Mock 数据
+  ↓
+前端
+```
+
+**红线规则（违反=必须修复）：**
+1. API 路由中禁止 `new TushareProvider()`、`mootdx.Quotes.factory()`、`DataManager.sync_*()` 等采集操作
+2. API 路由中禁止实时计算技术指标等**数据计算**（应当在后台预计算）。**策略核算**（缠论/量价/筹码等策略分析）可按用户操作触发
+3. 计算层执行时机：**数据计算**在数据到达时自动触发；**策略核算**在用户触发时执行
+4. DataManager 是存储层的**唯一数据网关**，任何数据读取通过 DataManager
+5. **禁止使用 Mock/随机数据作为数据降级方案**（§13规则，参见第六节）
+6. 分钟K线数据必须持久化到 `minute_kline_cache` 表，禁止直调 Tushare 不落缓存
+
+**关键概念区分：**
+| 维度 | 数据计算（预计算） | 策略核算（按需） |
+|------|-------------------|-----------------|
+| 定义 | 纯数学变换（MA/MACD/RSI/分钟聚合等） | 策略推理（缠论分析/量价识别/筹码判断等） |
+| 触发 | 数据到达时后台自动触发 | 用户点击"运行分析"时触发 |
+| 存储 | 写入 indicator_ma/macd/other、factor_cache | 内存缓存 AnalysisCache |
+| 消费方 | K线图指标展示、策略核算的输入 | 前端五维卡片
 
 ---
 
@@ -137,6 +177,10 @@ curl http://localhost:5001/api/v3/health/ready   # 就绪检查
 - **DuckDB → SQLite WAL**：`enhanced_cache_manager.py` 已使用 `sqlite3`（WAL 模式）替代 DuckDB。代码中不应出现新的 duckdb 引用。
 - **Gunicorn 当前未使用**：`gunicorn_config.py` 注释声明暂不使用（eventlet worker 被 Gunicorn 26.x 移除）。启动始终走 `run.py`（`socketio.run`）。
 - **mootdx TCP**：实时行情通过通达信 TCP 协议采集（非 HTTP），不依赖 AKShare HTTP。AKShare 仅作低频补充。
+- **DataManager 唯一数据网关**：`data/__init__.py` 中的 `DataManager` 是所有数据访问的唯一入口。`get_kline_data()` 方法统一支持 `D/W/M/1m/5m/15m/30m/60m` 周期。任何代码（路由/服务/策略）不得绕过 DataManager 直调数据源。
+- **分钟数据持久化**：`_get_minute_data()` 必须走 ECM `minute_kline_cache` 表的 cache-on-demand 策略——首次从 mootdx 获取并缓存，后续直接命中缓存。禁止直调 Tushare/AKShare 不落缓存。
+- **指标预计算**：`indicator_ma`/`indicator_macd`/`indicator_other` 宽表已有数据，`chart.py` 必须优先从宽表读取，禁止回退到实时计算。`factor_cache`(3715万行) 和 `strategy_signals` 同理。
+- **前段产物缺失**：`frontend/vue-project/` 目录当前不完整（仅 `.DS_Store`），`npm run build` 前需先恢复项目文件。
 - **前端产物缺失**：`frontend/vue-project/` 目录当前不完整（仅 `.DS_Store`），`npm run build` 前需先恢复项目文件。
 
 ---

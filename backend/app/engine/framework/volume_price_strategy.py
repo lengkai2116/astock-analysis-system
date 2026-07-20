@@ -191,6 +191,10 @@ class VolumePriceSignal:
     evidence: List[str] = field(default_factory=list)
     risk_notes: List[str] = field(default_factory=list)
     status: Optional['StatusRecognition'] = None
+    # [P3.2] 量价形态命名 — 由 SignalGenerator 设置
+    pattern_id: str = ""
+    pattern_name: str = ""
+    enhance_patterns: List[str] = field(default_factory=list)
 
     def to_output_dict(self, ts_code: str) -> Dict:
         d = {

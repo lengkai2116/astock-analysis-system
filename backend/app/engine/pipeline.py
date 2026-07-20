@@ -91,8 +91,11 @@ class ChipDistributionStrategy(BaseStrategy):
         self.lookback_period = lookback_period
         self.data_manager = data_manager
         # 加载外部配置（覆盖默认值）
-        from ...config import get_strategy_config
-        self.strategy_config = config or get_strategy_config().get('chip_distribution', {})
+        try:
+            from ...config import get_strategy_config
+            self.strategy_config = config or get_strategy_config().get('chip_distribution', {})
+        except ImportError:
+            self.strategy_config = config or {}
         if config is None:
             self.lookback_period = self.strategy_config.get('lookback_period', lookback_period)
         

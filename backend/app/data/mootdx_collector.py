@@ -91,6 +91,34 @@ def _refresh_stock_name_map():
     return _stock_name_map
 
 
+# ── D3: 盘中实时字段计算 ─────────────────────────────────
+
+def _calc_commission(row) -> float:
+    """从五档盘口计算委比 (%)"""
+    bid_sum = sum(
+        int(_safe_float(row.get(f'bid_vol{i}', 0)))
+        for i in range(1, 6)
+    )
+    ask_sum = sum(
+        int(_safe_float(row.get(f'ask_vol{i}', 0)))
+        for i in range(1, 6)
+    )
+    total = bid_sum + ask_sum
+    if total == 0:
+        return 0.0
+    return round((bid_sum - ask_sum) / total * 100, 2)
+
+
+def _calc_speed(code: str, price: float) -> float:
+    """计算涨速 (%) — 基于相邻两次采集的价格变化"""
+    global _prev_prices
+    prev = _prev_prices.get(code, 0.0)
+    _prev_prices[code] = price
+    if prev == 0 or price == 0:
+        return 0.0
+    return round((price - prev) / prev * 100, 2)
+
+
 # ── 盘中数据引用 ──────────────────────────────────────────
 
 from app.data.in_memory_store import store as mem_store
@@ -105,6 +133,8 @@ _minute_window: dict = {}
 _minute_window_lock = threading.Lock()
 _MINUTE_AGG_FREQ = '1min'  # 聚合频率
 _FLUSH_BATCH_SIZE = 200    # 每批写入ECM的股票数
+# D3: 上一轮采集价格，用于计算涨速（盘后重置）
+_prev_prices: Dict[str, float] = {}
 
 
 def _feed_minute_aggregator(records: List[Dict]):
@@ -339,6 +369,10 @@ def collect_market_snapshot() -> int:
                     'ask5': _safe_float(row.get('ask5')),
                     'bid_vol5': int(_safe_float(row.get('bid_vol5', 0))),
                     'ask_vol5': int(_safe_float(row.get('ask_vol5', 0))),
+                    # D3: 委比 = (∑买量-∑卖量)/(∑买量+∑卖量)*100
+                    'commission': _calc_commission(row),
+                    # D3: 涨速 = (现价-上一轮价格)/上一轮价格*100
+                    'speed': _calc_speed(code, price),
                     'timestamp': datetime.now().isoformat(),
                     'source': 'mootdx_collector',
                 }

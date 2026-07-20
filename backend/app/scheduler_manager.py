@@ -640,6 +640,8 @@ class SchedulerManager:
             return dm.sync_finance_report_data()
         elif data_type == 'lhb':
             return dm.sync_lhb_data()
+        elif data_type == 'lhb_detail':
+            return dm.sync_lhb_detail_data()
         elif data_type == 'top10_holders':
             return dm.sync_top10_holders_data()
         elif data_type == 'stk_holder':

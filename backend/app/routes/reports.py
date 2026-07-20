@@ -442,24 +442,7 @@ async def _generate_single_stock_report(data: Dict) -> Dict:
 
 async def _generate_backtest_report(data: Dict) -> Dict:
     """生成回测报告"""
-    generator = AIStrategyGenerator()
-    description = data.get('description', '基于移动平均线的策略')
-    strategy_result = generator.generate_indicator_from_description(description=description)
-    backtest_result = _mock_backtest_result(data)
-    interpretation = generator.interpret_backtest_result(
-        backtest_result=backtest_result, strategy_description=description)
-    report_generator = ReportGenerator()
-    output_format = data.get('format', 'markdown')
-    report_content = report_generator.generate_backtest_report(
-        backtest_result=backtest_result, interpretation=interpretation, format=output_format)
-    return {
-        'title': '量化策略回测报告', 'ts_code': data.get('ts_code', '600519.SH'),
-        'strategy': strategy_result, 'backtest': backtest_result,
-        'interpretation': interpretation, 'content': report_content,
-        'format': output_format, 'summary': interpretation.get('summary', ''),
-        'overall_score': interpretation.get('overall_score', 0),
-        'risk_level': interpretation.get('risk_level', '未知')
-    }
+    raise RuntimeError("回测报告生成需要真实回测数据，请先运行回测引擎获取结果后再生成报告。")
 
 
 async def _generate_research_report(data: Dict) -> Dict:
@@ -505,30 +488,7 @@ async def _generate_research_report(data: Dict) -> Dict:
     }
 
 
-def _mock_backtest_result(data: Dict) -> Dict:
-    """生成模拟回测结果（仅供开发/原型测试使用 — 生产环境不得调用）"""
-    import random
-    total_return = random.uniform(-0.1, 0.3)
-    sharpe_ratio = random.uniform(0.5, 2.0)
-    max_drawdown = random.uniform(-0.05, -0.2)
-    win_rate = random.uniform(0.4, 0.7)
-    return {
-        'ts_code': data.get('ts_code', '600519.SH'),
-        'start_date': data.get('start_date', '20250101'),
-        'end_date': data.get('end_date', '20250501'),
-        'config': {'initial_capital': data.get('initial_capital', 100000),
-                   'commission_rate': 0.0003, 'stamp_duty_rate': 0.001, 'slippage_rate': 0.0001},
-        'metrics': {
-            'initial_capital': data.get('initial_capital', 100000),
-            'final_value': data.get('initial_capital', 100000) * (1 + total_return),
-            'total_return': total_return, 'annual_return': total_return * 1.5,
-            'sharpe_ratio': sharpe_ratio, 'sortino_ratio': sharpe_ratio * 1.2,
-            'max_drawdown': max_drawdown, 'volatility': abs(max_drawdown) * 2,
-            'win_rate': win_rate, 'profit_loss_ratio': 1.5,
-            'total_trades': random.randint(10, 50)
-        },
-        'trades': [], 'daily_equity': []
-    }
+
 
 
 # ── 旧端点策略生成/解读保持可用（报告中心前端不使用） ──

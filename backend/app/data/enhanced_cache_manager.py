@@ -377,6 +377,20 @@ class EnhancedCacheManager:
             )
         """)
         self._execute("""
+            CREATE TABLE IF NOT EXISTS lhb_detail_cache (
+                ts_code TEXT, trade_date TEXT,
+                seat_name TEXT, seat_type TEXT DEFAULT '',
+                buy_amount REAL DEFAULT 0, sell_amount REAL DEFAULT 0,
+                net_amount REAL DEFAULT 0,
+                buy_rank INTEGER DEFAULT 0, sell_rank INTEGER DEFAULT 0,
+                reason_category TEXT DEFAULT '',
+                side TEXT DEFAULT '',
+                data_source TEXT DEFAULT 'akshare',
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, trade_date, seat_name)
+            )
+        """)
+        self._execute("""
             CREATE TABLE IF NOT EXISTS top10_holders_cache (
                 ts_code TEXT, end_date TEXT, ann_date TEXT,
                 holder_name TEXT, hold_amount REAL, hold_ratio REAL,
@@ -469,6 +483,7 @@ class EnhancedCacheManager:
             "CREATE INDEX IF NOT EXISTS idx_as_news_time ON as_news(publish_time)",
             "CREATE INDEX IF NOT EXISTS idx_minute_kline_ts ON minute_kline_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_minute_kline_date ON minute_kline_cache(trade_date)",
+            "CREATE INDEX IF NOT EXISTS idx_minute_kline_ts_freq ON minute_kline_cache(ts_code, freq)",
             "CREATE INDEX IF NOT EXISTS idx_fina_ind_ts ON fina_indicator_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_fina_ind_date ON fina_indicator_cache(end_date)",
             "CREATE INDEX IF NOT EXISTS idx_income_ts ON income_cache(ts_code)",
@@ -480,6 +495,8 @@ class EnhancedCacheManager:
             "CREATE INDEX IF NOT EXISTS idx_stk_limit_ts ON stk_limit_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_stk_limit_date ON stk_limit_cache(trade_date)",
             "CREATE INDEX IF NOT EXISTS idx_lhb_date ON lhb_cache(trade_date)",
+            "CREATE INDEX IF NOT EXISTS idx_lhb_detail_ts ON lhb_detail_cache(ts_code, trade_date)",
+            "CREATE INDEX IF NOT EXISTS idx_lhb_detail_date ON lhb_detail_cache(trade_date)",
             "CREATE INDEX IF NOT EXISTS idx_top10_ts ON top10_holders_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_stk_holder_ts ON stk_holder_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_concept_ts ON concept_cache(ts_code)",
@@ -1109,6 +1126,16 @@ class EnhancedCacheManager:
                     df['end_date'] = pd.to_datetime(df['end_date']).dt.date
                 if 'ann_date' in df.columns:
                     df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                # 列名映射：Tushare 原生列名 → 数据库列名
+                # Tushare fina_indicator 返回的各字段列名与 fina_indicator_cache 表字段名不一致
+                # 不加映射会导致 _insert_from_df 按列名匹配合并时整列丢弃
+                column_map = {
+                    'bps': 'bvps',
+                    'dt_eps': 'eps_diluted',
+                    'cfps': 'cf_ps',
+                    'ocfps': 'cf_ps',
+                }
+                df.rename(columns=column_map, inplace=True)
                 self._insert_from_df('fina_indicator_cache', df)
             except Exception as e:
                 logger.warning(f"缓存财务指标失败: {e}")
@@ -1261,10 +1288,55 @@ class EnhancedCacheManager:
             except Exception as e:
                 logger.warning(f"缓存龙虎榜失败: {e}")
 
-    def get_cached_lhb(self, trade_date):
+    def get_cached_lhb(self, ts_code=None, trade_date=None):
+        """从缓存获取龙虎榜数据，可按股票代码或交易日期过滤"""
+        conditions = []
+        params = []
+        if ts_code:
+            conditions.append("ts_code = ?"); params.append(ts_code)
+        if trade_date:
+            conditions.append("trade_date = ?"); params.append(trade_date)
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
         return self._query_df(
-            "SELECT * FROM lhb_cache WHERE trade_date = ? ORDER BY net_amount DESC",
-            [trade_date]
+            f"SELECT * FROM lhb_cache{where} ORDER BY trade_date DESC, net_amount DESC",
+            params
+        )
+
+    # ==================== 278号方案：席位级龙虎榜 ====================
+
+    def cache_lhb_detail_data(self, records: list):
+        """写入席位级龙虎榜明细数据（覆盖式按 trade_date 写入）"""
+        if not records:
+            return
+        with self._write_lock:
+            try:
+                df = pd.DataFrame(records)
+                if df.empty:
+                    return
+                # 按 trade_date 删除旧数据后全量覆盖
+                trade_dates = df['trade_date'].unique()
+                for td in trade_dates:
+                    self.conn.execute(
+                        "DELETE FROM lhb_detail_cache WHERE trade_date = ?", [td]
+                    )
+                if 'trade_date' in df.columns:
+                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+                self._insert_from_df('lhb_detail_cache', df)
+            except Exception as e:
+                logger.warning(f"缓存席位级龙虎榜失败: {e}")
+
+    def get_cached_lhb_detail(self, ts_code: str = None, trade_date: str = None) -> pd.DataFrame:
+        """从缓存获取席位级龙虎榜明细"""
+        conditions = []
+        params = []
+        if ts_code:
+            conditions.append("ts_code = ?"); params.append(ts_code)
+        if trade_date:
+            conditions.append("trade_date = ?"); params.append(trade_date)
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        return self._query_df(
+            f"SELECT * FROM lhb_detail_cache{where} ORDER BY trade_date DESC, buy_amount DESC",
+            params
         )
 
     # ==================== 273a方案：情绪涨停池 ====================
@@ -1530,6 +1602,7 @@ class EnhancedCacheManager:
     def clean_lhb_cache(self, cutoff: str):
         """清理 lhb_cache 中早于 cutoff 的记录"""
         self._execute("DELETE FROM lhb_cache WHERE trade_date < ?", [cutoff])
+        self._execute("DELETE FROM lhb_detail_cache WHERE trade_date < ?", [cutoff])
         self.conn.commit()
 
     def clean_fina_indicator_cache(self, cutoff: str):

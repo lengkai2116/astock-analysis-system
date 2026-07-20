@@ -226,6 +226,22 @@ class TushareProvider:
         except Exception:
             return []
     
+    def get_top_inst(self, trade_date):
+        """获取龙虎榜席位明细（278号方案：席位级数据用于假机构识别）"""
+        if not self.pro:
+            return []
+        try:
+            data = self.pro.top_inst(trade_date=trade_date)
+            if data is None:
+                return []
+            records = data.to_dict('records')
+            for r in records:
+                if r.get('side') in ('0', 0, '1', 1):
+                    r['side_label'] = 'buy' if str(r['side']) == '0' else 'sell'
+            return records
+        except Exception:
+            return []
+    
     def get_daily_basic(self, ts_code=None, start_date=None, end_date=None, trade_date=None):
         """
         获取每日基础数据（换手率、市盈率、市值等）
@@ -308,6 +324,22 @@ class TushareProvider:
         try:
             data = self.pro.top_list(trade_date=trade_date)
             return data.to_dict('records')
+        except Exception:
+            return []
+    
+    def get_top_inst(self, trade_date):
+        """获取龙虎榜席位明细（278号方案：席位级数据用于假机构识别）"""
+        if not self.pro:
+            return []
+        try:
+            data = self.pro.top_inst(trade_date=trade_date)
+            if data is None:
+                return []
+            records = data.to_dict('records')
+            for r in records:
+                if r.get('side') in ('0', 0, '1', 1):
+                    r['side_label'] = 'buy' if str(r['side']) == '0' else 'sell'
+            return records
         except Exception:
             return []
     

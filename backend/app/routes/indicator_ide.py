@@ -163,28 +163,12 @@ def _get_stock_data(ts_code: str, start_date: str = None, end_date: str = None) 
                     raise ValueError(f'缺少必需的数据列: {col}')
             return df
         
-        dates = pd.date_range(start='2023-01-01', periods=100, freq='D')
-        return pd.DataFrame({
-            'trade_date': dates,
-            'open': np.random.uniform(10, 20, 100),
-            'high': np.random.uniform(15, 25, 100),
-            'low': np.random.uniform(5, 15, 100),
-            'close': np.random.uniform(10, 20, 100),
-            'vol': np.random.uniform(1000000, 10000000, 100),
-            'amount': np.random.uniform(10000000, 100000000, 100)
-        })
+        from flask import jsonify
+        raise ValueError(f'股票 {ts_code} 日线数据不可用，无法计算指标')
         
-    except Exception:
-        dates = pd.date_range(start='2023-01-01', periods=100, freq='D')
-        return pd.DataFrame({
-            'trade_date': dates,
-            'open': np.random.uniform(10, 20, 100),
-            'high': np.random.uniform(15, 25, 100),
-            'low': np.random.uniform(5, 15, 100),
-            'close': np.random.uniform(10, 20, 100),
-            'vol': np.random.uniform(1000000, 10000000, 100),
-            'amount': np.random.uniform(10000000, 100000000, 100)
-        })
+    except Exception as e:
+        logger.warning(f"获取股票数据失败 ({ts_code}): {e}")
+        raise ValueError(f'股票 {ts_code} 日线数据不可用，无法计算指标')
 
 
 # ═══════════════════════════════════════════════

@@ -170,6 +170,7 @@ class Divergence:
     confidence: float
     position: Dict = None
     details: Dict = None
+    dual_confirmed: bool = False  # 面积法+力度法双确认（批次4b）
 
     def __repr__(self):
         return f"Divergence({self.type}, {self.direction}, confidence={self.confidence:.2f})"
@@ -200,7 +201,7 @@ class KLineMerger:
     @staticmethod
     def merge(klines: List[KLine]) -> List[KLine]:
         """
-        处理K线包含关系（严格缠论标准）
+        处理K线包含关系（严格缠论标准，递归至无包含，上限10次）
         
         规则：
         - 上升趋势（向上处理）：取高高（高点取最高，低点取最高）
@@ -217,50 +218,70 @@ class KLineMerger:
         """
         if len(klines) < 2:
             return klines
+        
+        max_iter = 10
+        current = klines
+        for _ in range(max_iter):
+            merged = KLineMerger._merge_once(current)
+            if len(merged) == len(current):
+                return merged  # 不再变化，完成
+            current = merged
+        return current  # 达到上限后返回
 
+    @staticmethod
+    def _merge_once(klines: List[KLine]) -> List[KLine]:
+        """单次包含合并"""
+        if len(klines) < 2:
+            return klines
         result = [klines[0]]
-        direction = None  # 'up' or 'down'
-
+        direction = None
         for i in range(1, len(klines)):
             current = klines[i]
             prev = result[-1]
-
-            # 检查包含关系
             if KLineMerger.is_contained(prev, current):
                 if direction is not None:
-                    # 方向已知，合并：向上取高高，向下取低低
                     if direction == 'up':
                         new_high = max(prev.high, current.high)
                         new_low = max(prev.low, current.low)
                     else:
                         new_high = min(prev.high, current.high)
                         new_low = min(prev.low, current.low)
-
-                    merged = KLine(
-                        idx=prev.idx,
-                        open=prev.open,
-                        high=new_high,
-                        low=new_low,
-                        close=current.close,
-                        date=current.date,
-                        volume=prev.volume + current.volume
-                    )
+                    merged = KLine(idx=prev.idx, open=prev.open, high=new_high,
+                                  low=new_low, close=current.close, date=current.date,
+                                  volume=prev.volume + current.volume)
                     result[-1] = merged
-                    # 合并后不改变方向
-                # 方向未知：跳过当前包含K线，用下一根非包含K线确定方向
             else:
-                # 非包含：更新方向
                 if direction is None:
                     if current.high > prev.high:
                         direction = 'up'
                     elif current.high < prev.high:
                         direction = 'down'
                     else:
-                        # 高点相等，对比低点
                         direction = 'up' if current.low >= prev.low else 'down'
                 result.append(current)
-
         return result
+
+    @staticmethod
+    def filter_limit_klines(klines: List[KLine]) -> List[KLine]:
+        """过滤涨跌停K线（无量涨停/跌停不参与笔的生成）
+        
+        涨停：收盘 = 最高价 且 成交量显著萎缩（<5日均量30%）
+        跌停：收盘 = 最低价 且 成交量显著萎缩（<5日均量30%）
+        """
+        if len(klines) < 6:
+            return klines
+        volumes = [k.volume for k in klines]
+        result = []
+        for i, k in enumerate(klines):
+            if k.volume <= 0:
+                continue
+            start = max(0, i - 5)
+            avg_vol_5 = sum(volumes[start:i]) / max(i - start, 1) if i > start else float('inf')
+            if avg_vol_5 > 0 and k.volume < avg_vol_5 * 0.3:
+                if k.close == k.high or k.close == k.low:
+                    continue
+            result.append(k)
+        return result if len(result) >= 6 else klines
 
 
 class FractalDetector:
@@ -650,6 +671,94 @@ class SegmentAnalyzer:
                 return False
         return True
 
+    def _merge_feature_sequence(self, strokes: List[Stroke]) -> List[Stroke]:
+        """特征序列元素包含处理（与K线包含处理相同的逻辑）
+        
+        对特征序列元素按包含关系进行合并，直到不再包含。
+        上升段的特征序列（下跌笔）：按下降方向合并（取min高min低）
+        下降段的特征序列（上涨笔）：按上升方向合并（取max高max低）
+        
+        Args:
+            strokes: 特征序列元素列表（方向均为特征序列方向）
+        Returns:
+            合并后的特征序列元素列表
+        """
+        if len(strokes) < 2:
+            return strokes
+        
+        # 确定方向：第一笔方向决定合并规则
+        # 特征序列元素与线段方向相反，所以下跌笔特征序列=向下合并
+        is_down_seq = strokes[0].direction == 'down'
+        
+        merged = [strokes[0]]
+        for i in range(1, len(strokes)):
+            prev = merged[-1]
+            curr = strokes[i]
+            
+            # 判断包含：prev的范围是否包含curr，或curr包含prev
+            p_low = min(prev.start_price, prev.end_price, prev.low or prev.start_price)
+            p_high = max(prev.start_price, prev.end_price, prev.high or prev.end_price)
+            c_low = min(curr.start_price, curr.end_price, curr.low or curr.start_price)
+            c_high = max(curr.start_price, curr.end_price, curr.high or curr.end_price)
+            
+            prev_contains_curr = c_low >= p_low and c_high <= p_high
+            curr_contains_prev = p_low >= c_low and p_high <= c_high
+            
+            if prev_contains_curr or curr_contains_prev:
+                # 包含关系：合并
+                if is_down_seq:
+                    # 下跌特征序列：取低低（min高, min低）
+                    new_high = min(p_high, c_high)
+                    new_low = min(p_low, c_low)
+                else:
+                    # 上涨特征序列：取高高（max高, max低）
+                    new_high = max(p_high, c_high)
+                    new_low = max(p_low, c_low)
+                # 创建合并后的stroke（保留prev的时间范围，取合并后的价格范围）
+                new_stroke = Stroke(
+                    start_idx=prev.start_idx, end_idx=curr.end_idx,
+                    start_price=prev.start_price, end_price=curr.end_price,
+                    start_date=prev.start_date, end_date=curr.end_date,
+                    direction=prev.direction, high=new_high, low=new_low
+                )
+                merged[-1] = new_stroke
+            else:
+                merged.append(curr)
+        
+        return merged
+
+    def _feature_sequence_fractal_break(self, feature_seq: List[Stroke], seg_direction: str) -> bool:
+        """检查合并后的特征序列是否形成分型破坏
+        
+        Args:
+            feature_seq: 合并后的特征序列元素列表
+            seg_direction: 线段方向 'up'/'down'
+        Returns:
+            True表示特征序列形成分型破坏（线段终结）
+        """
+        if len(feature_seq) < 3:
+            return False
+        
+        # 取最近3个元素检查分型
+        f1, f2, f3 = feature_seq[-3], feature_seq[-2], feature_seq[-1]
+        f1_high = max(f1.start_price, f1.end_price, f1.high or f1.end_price)
+        f2_high = max(f2.start_price, f2.end_price, f2.high or f2.end_price)
+        f3_high = max(f3.start_price, f3.end_price, f3.high or f3.end_price)
+        f1_low = min(f1.start_price, f1.end_price, f1.low or f1.start_price)
+        f2_low = min(f2.start_price, f2.end_price, f2.low or f2.start_price)
+        f3_low = min(f3.start_price, f3.end_price, f3.low or f3.start_price)
+        
+        if seg_direction == 'up':
+            # 上升段的特征序列为下跌笔：顶分型 → 线段终结
+            # 中间元素 high > 两侧 high，中间 low > 两侧 low
+            return (f2_high > f1_high and f2_high > f3_high and
+                    f2_low > f1_low and f2_low > f3_low)
+        else:
+            # 下降段的特征序列为上涨笔：底分型 → 线段终结
+            # 中间元素 low < 两侧 low，中间 high < 两侧 high
+            return (f2_low < f1_low and f2_low < f3_low and
+                    f2_high < f1_high and f2_high < f3_high)
+
     def build(self, strokes: List[Stroke]) -> List[Segment]:
         """
         从笔构建线段
@@ -658,11 +767,11 @@ class SegmentAnalyzer:
         - 线段由至少 min_stroke_count 笔构成
         - 三笔之间存在重叠则形成线段
         - 线段延续：后续笔不破坏特征序列关系时，线段延续
-        - 线段终结：特征序列被反向笔破坏
+        - 线段终结：特征序列经包含处理后形成分型破坏
         
-        特征序列定义：
-          上升段：观察下跌笔（奇数笔）——若跌破前笔低点，段终结
-          下降段：观察上涨笔（偶数笔）——若突破前笔高点，段终结
+        特征序列定义（与K线包含处理相同）：
+          上升段：合并下跌笔（取min高min低），形成顶分型时终结
+          下降段：合并上涨笔（取max高max低），形成底分型时终结
         """
         segments = []
         if len(strokes) < self.min_stroke_count:
@@ -679,32 +788,34 @@ class SegmentAnalyzer:
             seg_direction = s1.direction
             current_strokes = [s1, s2, s3]
 
-            # 尝试延续线段（特征序列法）
+            # 尝试延续线段（特征序列法——含包含处理+分型终结）
             j = i + 3
             while j < len(strokes):
                 next_stroke = strokes[j]
 
-                # 特征序列终结判定
-                if seg_direction == 'up':
-                    # 上升段：下跌笔（反向笔）跌破前一笔低点 → 终结
-                    if next_stroke.direction == 'down' and len(current_strokes) >= 2:
-                        last_bull = current_strokes[-1]
-                        ref_low = last_bull.low if last_bull.low is not None else last_bull.start_price
-                        if next_stroke.end_price < ref_low:
-                            break
-                        # [P1-#8] 特征序列缺口处理：检查是否有跳空缺口
+                # 特征序列终结判定（使用包含处理后的分型检查）
+                if seg_direction == 'up' and next_stroke.direction == 'down':
+                    # 上升段：提取下跌笔作为特征序列
+                    feature_elements = [s for s in current_strokes if s.direction == 'down']
+                    feature_elements.append(next_stroke)
+                    merged = self._merge_feature_sequence(feature_elements)
+                    if self._feature_sequence_fractal_break(merged, 'up'):
+                        break
+                    # 跳空缺口处理：有缺口时不终结（原逻辑保持）
+                    if len(current_strokes) >= 2:
                         if self._has_feature_sequence_gap(next_stroke, current_strokes[-1], seg_direction):
                             current_strokes.append(next_stroke)
                             j += 1
                             continue
-                else:
-                    # 下降段：上涨笔（反向笔）突破前一笔高点 → 终结
-                    if next_stroke.direction == 'up' and len(current_strokes) >= 2:
-                        last_bear = current_strokes[-1]
-                        ref_high = last_bear.high if last_bear.high is not None else last_bear.start_price
-                        if next_stroke.end_price > ref_high:
-                            break
-                        # [P1-#8] 特征序列缺口处理：检查是否有跳空缺口
+                elif seg_direction == 'down' and next_stroke.direction == 'up':
+                    # 下降段：提取上涨笔作为特征序列
+                    feature_elements = [s for s in current_strokes if s.direction == 'up']
+                    feature_elements.append(next_stroke)
+                    merged = self._merge_feature_sequence(feature_elements)
+                    if self._feature_sequence_fractal_break(merged, 'down'):
+                        break
+                    # 跳空缺口处理
+                    if len(current_strokes) >= 2:
                         if self._has_feature_sequence_gap(next_stroke, current_strokes[-1], seg_direction):
                             current_strokes.append(next_stroke)
                             j += 1
@@ -753,7 +864,13 @@ class SegmentAnalyzer:
         """判断三笔是否构成线段"""
         if s1.direction == s2.direction or s2.direction == s3.direction:
             return False
-        return self._has_overlap(s1, s2, s3)
+        if not self._has_overlap(s1, s2, s3):
+            return False
+        # 终止条件：向上线段第三笔终点 > 第一笔起点；向下线段第三笔终点 < 第一笔起点
+        if s1.direction == 'up':
+            return s3.end_price > s1.start_price
+        else:
+            return s3.end_price < s1.start_price
 
     def _has_overlap(self, s1: Stroke, s2: Stroke, s3: Stroke) -> bool:
         """检查三笔是否有重叠"""
@@ -888,9 +1005,6 @@ class ZhongshuAnalyzer:
                 if zs.segments is not None:
                     zs.segments = zs.segments + [seg]
                 j += 1
-            elif evolution == 'expand':
-                self._expand_zhongshu(zs, seg)
-                j += 1
             elif evolution == 'detach':
                 remaining = len(segments) - j
                 if remaining >= 2:
@@ -916,22 +1030,15 @@ class ZhongshuAnalyzer:
         """判断中枢演化方向。
         
         Returns:
-            'extend' → 线段完全在中枢区间内
-            'expand' → 部分重叠且超出，触发扩张
+            'extend' → 线段在中枢区间内或部分超出（区间不变）
             'detach' → 完全不重叠，中枢破坏
-            'none'   → 部分重叠但不足以扩张（等待后续确认）
         """
         seg_r = seg.range
-        # 完全在区间内
-        if seg_r['low'] >= zs.low and seg_r['high'] <= zs.high:
+        # 完全在区间内或部分超出 → 延伸（区间不变）
+        if seg_r['low'] <= zs.high and seg_r['high'] >= zs.low:
             return 'extend'
-        # 完全不重叠
-        if seg_r['low'] > zs.high or seg_r['high'] < zs.low:
-            return 'detach'
-        # 部分重叠但超出 → 扩张
-        if seg_r['low'] < zs.high and seg_r['high'] > zs.low:
-            return 'expand'
-        return 'none'
+        # 完全不重叠 → 中枢破坏
+        return 'detach'
 
     @staticmethod
     def _expand_zhongshu(zs: Zhongshu, seg: Segment):
@@ -1029,7 +1136,7 @@ class DivergenceDetector:
               volume: pd.Series = None,
               closes: np.ndarray = None) -> Optional[Divergence]:
         """
-        检测背驰（支持多种算法）
+        检测背驰（支持多种算法 + 力度法辅助验证）
         """
         if len(strokes) < 4:
             return None
@@ -1046,26 +1153,26 @@ class DivergenceDetector:
         if trend_div:
             if trend_bt:
                 trend_div.details['trend_backtesting'] = trend_bt
-            return trend_div
-
-        if trend_bt:
-            return Divergence(
+            result = trend_div
+        elif trend_bt:
+            result = Divergence(
                 type='trend',
                 direction=trend_bt['direction'],
                 confidence=trend_bt['confidence'],
                 details={'trend_backtesting': trend_bt}
             )
-
-        # 检测盘整背驰
-        consolid_div = self._detect_consolidation_divergence(strokes)
-        if consolid_div:
-            return consolid_div
-
-        # 检测中枢破坏
-        if zhongshu_list:
-            zhongshu_div = self._detect_zhongshu_divergence(strokes, zhongshu_list)
-            if zhongshu_div:
-                return zhongshu_div
+        else:
+            result = self._detect_consolidation_divergence(strokes)
+        if not result and zhongshu_list:
+            result = self._detect_zhongshu_divergence(strokes, zhongshu_list)
+        
+        if result:
+            # 批次4: 力度法辅助验证 + dual_confirmed
+            if closes is not None and len(strokes) >= 4:
+                result.dual_confirmed = self._check_strength_method(strokes[-3], strokes[-1])
+                if result.dual_confirmed:
+                    result.confidence = min(1.0, result.confidence * 1.3)
+            return result
 
         return None
 
@@ -1091,6 +1198,28 @@ class DivergenceDetector:
             return self._calc_stroke_volume(stroke)
         else:
             return self._calc_stroke_macd_area(stroke)
+    
+    def _check_strength_method(self, stroke1, stroke2) -> bool:
+        """力度比较法辅助验证：比较两段走势DIF高度
+        
+        前段顶部DIF - 前段底部DIF = 高度H1
+        当前段顶部DIF - 当前段底部DIF = 高度H2
+        若 H2 < H1 * 0.75 → 背驰确认（力度减弱）
+        """
+        if self._closes is None:
+            return False
+        s1_start = min(stroke1.start_idx, len(self._closes) - 1)
+        s1_end = min(stroke1.end_idx, len(self._closes) - 1)
+        s2_start = min(stroke2.start_idx, len(self._closes) - 1)
+        s2_end = min(stroke2.end_idx, len(self._closes) - 1)
+        if s1_start >= s1_end or s2_start >= s2_end:
+            return False
+        dif, _, _ = calc_macd(self._closes)
+        h1 = abs(dif[s1_start] - dif[s1_end])
+        h2 = abs(dif[s2_start] - dif[s2_end])
+        if h1 <= 0:
+            return False
+        return h2 < h1 * 0.75
 
     def _calc_stroke_macd_peak(self, stroke) -> float:
         """MACD 红绿柱绝对高度（峰值法）。"""
@@ -1907,9 +2036,12 @@ class ChanlunAnalyzer:
 
         # 2. 包含处理
         klines_no_contain = self.kline_merger.merge(self.klines)
+        
+        # 2b. 涨跌停K线过滤（批次1b）
+        klines_filtered = self.kline_merger.filter_limit_klines(klines_no_contain)
 
         # 3. 分型识别
-        self.fractals = self.fractal_detector.detect(klines_no_contain)
+        self.fractals = self.fractal_detector.detect(klines_filtered)
 
         if len(self.fractals) < 4:
             return {'error': '分型不足，无法构建笔'}
@@ -2855,11 +2987,28 @@ class ChanlunTheoremValidator:
 
     def _check_t8(self, segments, zhongshu_list, closes) -> Dict:
         """
-        T8: 多级别联立（占位）
-        需要多级别数据支持。当前返回占位通过。
+        T8: 多级别联立方向一致性检查
+        检查当前级别的方向与其他级别的潜在冲突。
         """
-        desc = 'T8 多级别联立：占位实现，需要多级别数据'
-        return {'passed': True, 'score': 1.0, 'issues': ['需多级别数据(日/周/月联立)'], 'description': desc}
+        if not zhongshu_list:
+            return {'passed': True, 'score': 1.0, 'issues': ['无中枢数据'], 'description': 'T8 多级别联立'}
+        latest_zs = zhongshu_list[-1]
+        duration = latest_zs.duration or ''
+        is_long = '月' in duration
+        # 如果中枢持续时间超过级别经验性上限，可能存在级别升级
+        issues = []
+        if is_long:
+            days_str = duration.replace('月', '').replace('周', '').replace('天', '')
+            try:
+                months = float(days_str) if '月' in duration else (
+                    float(duration.replace('周', '')) / 4.3 if '周' in duration else
+                    float(duration.replace('天', '')) / 30)
+                if months > 6:
+                    issues.append(f"中枢持续{months:.0f}月，超过日线经验上限，可能已升级为周线级别")
+            except ValueError:
+                pass
+        return {'passed': len(issues) == 0, 'score': 0.7 if issues else 1.0,
+                'issues': issues, 'description': 'T8 多级别联立方向一致性检查'}
 
     def _check_t9(self, strokes, segments) -> Dict:
         """

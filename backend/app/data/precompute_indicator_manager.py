@@ -49,8 +49,8 @@ class PrecomputeIndicatorManager:
             # 计算所有指标
             result = self.engine.calculate_all_indicators(df)
             
-            # 批量缓存指标（旧 EAV 格式，兼容现有消费者）
-            self._batch_cache_indicators(result, ts_code)
+            # 旧 EAV 写入已停用（D1: 宽表已稳定运行，删除冗余）
+            # 原 self._batch_cache_indicators(result, ts_code) 于 2026-07-19 停用
             
             # 写入宽表格式（新，93% 行数压缩）
             if 'ts_code' not in result.columns:

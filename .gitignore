@@ -72,6 +72,13 @@ data/duckdb/*.corrupted*
 screenshot_*.png
 frontend/vue-project/test-results/
 
+# Generated images & PDFs
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
+
 # Logs
 backend/logs/
 test-results/
@@ -87,3 +94,9 @@ test-results/
 data/duckdb/
 backend/data/
 .mimocode/
+
+# Compose workflow artifacts
+.compose/
+
+# Shell scripts (temporary)
+start_daemon.sh

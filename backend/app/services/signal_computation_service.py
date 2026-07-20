@@ -55,6 +55,16 @@ def _dedupe_near_levels(levels: List[Dict]) -> List[Dict]:
     return result
 
 
+# 买卖点类型中文映射（模块级常量，供 _build_active_signal / _build_active_label 使用）
+BP_TYPE_CN = {
+    'first_buy': '第一类买点', 'first_buy_p': '盘整背驰第一类买点',
+    'second_buy': '第二类买点', 'second_buy_s': '类第二类买点',
+    'third_buy': '第三类买点', 'third_buy_a': '第三类买点(一类后)', 'third_buy_b': '第三类买点(一类前)',
+    'first_sell': '第一类卖点', 'first_sell_p': '盘整背驰第一类卖点',
+    'second_sell': '第二类卖点', 'second_sell_s': '类第二类卖点',
+    'third_sell': '第三类卖点', 'third_sell_a': '第三类卖点(一类后)', 'third_sell_b': '第三类卖点(一类前)',
+}
+
 # Phase 1 P1-2: 构建有效信号（取买卖点中时序最新的一个）
 def _build_active_signal(best_buy, best_sell) -> dict:
     """从 best_buy / best_sell 中选取时序最新的信号"""
@@ -107,9 +117,18 @@ def _build_active_label(best_buy, best_sell, divergence) -> str:
 
 
 def _build_filtered_levels(zhongshu_list, latest_close) -> list:
-    """构建中枢降级列表：偏离 > 30% 标记为 historical"""
-    result = []
+    """构建中枢降级列表：展开expanded中枢为子中枢，偏离 > 30% 标记为 historical"""
+    # 先展开: expanded 中枢替换为子中枢链
+    refined = []
     for zs in zhongshu_list:
+        if zs.type == 'expanded' and zs.sub_zhongshu_list:
+            for sub_zs in zs.sub_zhongshu_list:
+                if sub_zs.type == 'normal':
+                    refined.append(sub_zs)
+        else:
+            refined.append(zs)
+    result = []
+    for zs in refined:
         center = float(zs.center) if zs.center else None
         distance_pct = round((latest_close - center) / center * 100, 1) if latest_close and center else None
         is_historical = distance_pct is not None and abs(distance_pct) > 30
@@ -177,6 +196,509 @@ def _classify_vp_basic(closes, volumes) -> tuple:
         return (form, confirmation)
     except Exception:
         return ('', '')
+
+
+def _calc_zhongshu_strength(df, zhongshu_list, chip_signal=None) -> Optional[str]:
+    """P2-6: 形态量化中枢 (V1) — 中枢区间+量价集中度+筹码锁定 → 中枢强度评分
+
+    Args:
+        df: K线 DataFrame (含 close, vol, high, low)
+        zhongshu_list: 中枢列表
+        chip_signal: 可选，筹码信号 status_recognition（含 asr 字段）
+
+    Returns:
+        "strong" / "weak" / None（数据不足时）
+    """
+    if df is None or df.empty or not zhongshu_list:
+        return None
+    try:
+        latest_zs = zhongshu_list[0]
+        zs_low = float(latest_zs.low)
+        zs_high = float(latest_zs.high)
+        if zs_low <= 0 or zs_high <= 0 or zs_low >= zs_high:
+            return None
+
+        closes = df['close'].astype(float).values
+        volumes = df['vol'].astype(float).values
+        if len(closes) < 20:
+            return None
+
+        # 1) 量价集中度: 落在中枢区间的K线中，成交量占比
+        in_zone = (closes >= zs_low) & (closes <= zs_high)
+        vol_in_zone = volumes[in_zone].sum() if in_zone.any() else 0
+        total_vol = volumes.sum()
+        vol_concentration = vol_in_zone / total_vol if total_vol > 0 else 0
+
+        # 2) 筹码锁定程度 (ASR): 低 ASR → 筹码锁定好 → 中枢稳固
+        asr = None
+        if chip_signal:
+            asr_val = chip_signal.get('asr') if isinstance(chip_signal, dict) else None
+            if asr_val is not None:
+                try:
+                    asr = float(asr_val)
+                except (ValueError, TypeError):
+                    asr = None
+
+        # 3) 中枢宽度（宽中枢不如窄中枢稳固）
+        zs_center = (zs_low + zs_high) / 2
+        range_pct = (zs_high - zs_low) / zs_center if zs_center > 0 else 0
+
+        # 评分规则
+        score = 0.0
+        # 量价集中度 > 40% → +1 分
+        if vol_concentration > 0.4:
+            score += 1.0
+        elif vol_concentration > 0.25:
+            score += 0.5
+
+        # ASR < 30% (筹码锁定) → +1 分; ASR > 60% (松散) → -0.5
+        if asr is not None:
+            if asr < 0.3:
+                score += 1.0
+            elif asr < 0.45:
+                score += 0.5
+            elif asr > 0.6:
+                score -= 0.5
+
+        # 窄中枢 < 5% → +0.5 分; 宽中枢 > 15% → -0.5
+        if range_pct < 0.05:
+            score += 0.5
+        elif range_pct > 0.15:
+            score -= 0.5
+
+        return "strong" if score >= 1.0 else "weak"
+    except Exception:
+        return None
+
+
+def _calc_vap_support_resistance(closes, highs, lows, volumes, latest_close, n_buckets=50) -> Dict:
+    """P2-9: VAP 支撑/阻力 (V4) — OHLCV → 成交量密集价格区
+
+    Args:
+        closes: 收盘价序列
+        highs: 最高价序列
+        lows: 最低价序列
+        volumes: 成交量序列
+        latest_close: 最新收盘价
+        n_buckets: 价格桶数量
+
+    Returns:
+        {'vap_support': float|None, 'vap_resistance': float|None}
+    """
+    if len(closes) < 30 or latest_close <= 0:
+        return {'vap_support': None, 'vap_resistance': None}
+    try:
+        # 取最近 120 根K线
+        n = min(120, len(closes))
+        closes = closes[-n:]
+        highs = highs[-n:]
+        lows = lows[-n:]
+        volumes = volumes[-n:]
+
+        price_min = min(lows)
+        price_max = max(highs)
+        if price_max <= price_min:
+            return {'vap_support': None, 'vap_resistance': None}
+
+        bucket_size = (price_max - price_min) / n_buckets
+
+        # 初始化桶
+        buckets = [0.0] * n_buckets
+
+        # 每根K线的成交量按价格区间分配到桶
+        for i in range(len(closes)):
+            vol = float(volumes[i])
+            h = float(highs[i])
+            l = float(lows[i])
+            # 粗略分配: 将成交量均分到高-低跨越的每个桶
+            start_bucket = max(0, int((l - price_min) / bucket_size))
+            end_bucket = min(n_buckets - 1, int((h - price_min) / bucket_size))
+            span = max(1, end_bucket - start_bucket + 1)
+            vol_per_bucket = vol / span
+            for b in range(start_bucket, end_bucket + 1):
+                buckets[b] += vol_per_bucket
+
+        # 找到成交量最大的桶 -> 价格中心
+        total_vol_all = sum(buckets)
+        if total_vol_all <= 0:
+            return {'vap_support': None, 'vap_resistance': None}
+
+        # 将桶按成交量排序，取前 20% 的桶的中心价
+        threshold = 0.02  # 最低成交量阈值（占总量的比例）
+        significant_prices = []
+        for b in range(n_buckets):
+            ratio = buckets[b] / total_vol_all
+            if ratio >= threshold:
+                price = price_min + (b + 0.5) * bucket_size
+                significant_prices.append({'price': round(price, 2), 'weight': ratio})
+
+        if not significant_prices:
+            return {'vap_support': None, 'vap_resistance': None}
+
+        # 按价格排序
+        significant_prices.sort(key=lambda x: x['price'])
+
+        # 支撑: 低于当前价的最大成交量密集区
+        support = None
+        resistance = None
+        for sp in significant_prices:
+            if sp['price'] < latest_close * 0.98:
+                if support is None or sp['weight'] > support.get('weight', 0):
+                    support = sp
+            elif sp['price'] > latest_close * 1.02:
+                if resistance is None or sp['weight'] > resistance.get('weight', 0):
+                    resistance = sp
+
+        return {
+            'vap_support': support['price'] if support else None,
+            'vap_resistance': resistance['price'] if resistance else None,
+        }
+    except Exception:
+        return {'vap_support': None, 'vap_resistance': None}
+
+
+def _calc_cross_compare(
+    net_lg_amount_5d: Optional[float],
+    main_force_cost_price: float,
+    margin_cost_price: Optional[float],
+    latest_close: float,
+    sentiment_crowding_label: Optional[str] = None,
+    price_position: Optional[float] = None,
+) -> dict:
+    """P2-2: 交叉比对比法 — 主力资金+散户情绪+股价位置三维交叉
+
+    知识库定义（筹码分布分析-主力视角.md）：
+      - 做多场景：法人持续买超 + 股价站稳主力集中价 + 融资在低位
+      - 卖出场景：融资急剧增加 + 股价滞涨 / 开始下跌
+      - 分歧信号：主力买 vs 法人卖 → 保持谨慎
+
+    Args:
+        net_lg_amount_5d: 近5日大单净额（正=主力流入，负=主力流出）
+        main_force_cost_price: 主力集中价
+        margin_cost_price: 融资成本价（散户买入均价）
+        latest_close: 当前收盘价
+        sentiment_crowding_label: 情绪拥挤度标签 (overheat/cooling/normal)
+        price_position: 价格在120日区间中的分位 (0.0-1.0)
+
+    Returns:
+        {"conclusion": str, "detail": str, "score": float}
+        conclusion: consensus_bullish / consensus_bearish / divergence_main_strong
+                    / divergence_retail_danger / neutral
+    """
+    result = {"conclusion": "neutral", "detail": "", "score": 0.0}
+    try:
+        # === 维度1：主力资金方向 ===
+        main_bullish = None  # True=看多, False=看空, None=中性
+        main_detail = ""
+        if net_lg_amount_5d is not None and abs(net_lg_amount_5d) > 1e5:
+            if net_lg_amount_5d > 0:
+                main_bullish = True
+                main_detail = f"主力净流入{net_lg_amount_5d / 1e4:.0f}万"
+            else:
+                main_bullish = False
+                main_detail = f"主力净流出{abs(net_lg_amount_5d) / 1e4:.0f}万"
+
+        # === 维度2：散户情绪（融资成本 vs 情绪拥挤度）===
+        retail_danger = False  # 散户危险信号
+        retail_detail = ""
+        # 情绪拥挤度：overheat = 散户过热 → 危险
+        if sentiment_crowding_label == 'overheat':
+            retail_danger = True
+            retail_detail = "情绪过热"
+        elif sentiment_crowding_label == 'cooling':
+            retail_detail = "情绪冷却"
+
+        # 融资成本价：股价接近/低于融资成本 → 散户亏损，抛压减轻
+        margin_position = None  # 'above' / 'below' / 'near'
+        if margin_cost_price and margin_cost_price > 0 and latest_close > 0:
+            margin_distance = (latest_close - margin_cost_price) / margin_cost_price
+            if margin_distance < -0.03:
+                margin_position = 'below'  # 股价低于融资成本，散户套牢
+                retail_detail += " 散户套牢"
+            elif margin_distance < 0.03:
+                margin_position = 'near'  # 接近融资成本
+                retail_detail += " 接近融资成本"
+            else:
+                margin_position = 'above'  # 股价高于融资成本
+                retail_detail += " 散户盈利"
+
+        # === 维度3：股价位置 vs 主力成本 ===
+        main_pos_detail = ""
+        main_force_protected = False  # 股价在主力成本附近，有支撑
+        if main_force_cost_price > 0 and latest_close > 0:
+            cost_distance = (latest_close - main_force_cost_price) / main_force_cost_price
+            if abs(cost_distance) < 0.05:
+                main_force_protected = True
+                main_pos_detail = "站稳主力成本"
+            elif cost_distance > 0.15:
+                main_pos_detail = "偏离主力成本过高"
+            elif cost_distance < -0.1:
+                main_pos_detail = "跌破主力成本"
+            else:
+                main_pos_detail = "在主力成本上方"
+
+        # === 综合判断 ===
+        details = [d for d in [main_detail, retail_detail, main_pos_detail] if d]
+        result['detail'] = '; '.join(details)
+
+        if main_bullish is True and not retail_danger and main_force_protected:
+            result['conclusion'] = 'consensus_bullish'
+            result['score'] = 1.0
+            result['detail'] += " → 一致看多"
+        elif main_bullish is False and retail_danger:
+            result['conclusion'] = 'consensus_bearish'
+            result['score'] = -1.0
+            result['detail'] += " → 一致看空"
+        elif main_bullish is True and retail_danger:
+            result['conclusion'] = 'divergence_retail_danger'
+            result['score'] = -0.3
+            result['detail'] += " → 分歧:主力做多但散户过热"
+        elif main_bullish is False and main_force_protected:
+            result['conclusion'] = 'divergence_main_strong'
+            result['score'] = 0.2
+            result['detail'] += " → 分歧:主力流出但成本有支撑"
+        elif main_bullish is True and margin_position == 'above':
+            result['conclusion'] = 'divergence_main_bullish'
+            result['score'] = 0.5
+            result['detail'] += " → 分歧:主力做多但散户已盈利"
+        elif not retail_danger and main_force_protected:
+            result['conclusion'] = 'consensus_bullish'
+            result['score'] = 0.5
+            result['detail'] += " → 温和看多"
+
+        return result
+    except Exception:
+        return result
+
+
+def _calc_lhb_high_success_strategy(
+    symbol: str,
+    lhb_detail_df,
+    df,
+    concept_name: str = None,
+    idx_5d_ret: float = None,
+    idx_20d_ret: float = None,
+) -> dict:
+    """P3-1: 龙虎榜高成功率战法 — 四条件评分
+
+    知识库定义（龙虎榜高成功率战法.md）：
+      条件1: 机构重金 — 机构席位买入占比高
+      条件2: 攻击形态 — 突破性K线形态
+      条件3: 板块效应 — 所属板块近期强势
+      条件4: 大盘环境 — 大盘趋势稳定或向上
+
+    Args:
+        symbol: 股票代码
+        lhb_detail_df: 席位级龙虎榜数据
+        df: OHLCV K线数据
+        concept_name: 所属行业/概念名称
+        idx_5d_ret: 大盘5日收益率(%)
+        idx_20d_ret: 大盘20日收益率(%)
+
+    Returns:
+        {"score": float, "conditions": dict, "detail": str}
+        score: 0-100分，>=60表示高成功率战法机会
+    """
+    result = {"score": 0.0, "conditions": {}, "detail": ""}
+    try:
+        conditions = []
+        details = []
+
+        # 条件1: 机构重金 (0-40分)
+        inst_score = 0.0
+        if lhb_detail_df is not None and not lhb_detail_df.empty:
+            if 'seat_type' in lhb_detail_df.columns and 'buy_amount' in lhb_detail_df.columns:
+                inst_mask = lhb_detail_df['seat_type'] == 'institution'
+                inst_buy = lhb_detail_df[inst_mask]['buy_amount'].sum()
+                total_buy = lhb_detail_df['buy_amount'].sum()
+                if total_buy > 0:
+                    inst_ratio = inst_buy / total_buy
+                    if inst_ratio > 0.5:
+                        inst_score = 40.0
+                        details.append("机构重金:机构买入占比{:.0%}>50%".format(inst_ratio))
+                    elif inst_ratio > 0.3:
+                        inst_score = 30.0
+                        details.append("机构重金:机构买入占比{:.0%}>30%".format(inst_ratio))
+                    elif inst_ratio > 0.1:
+                        inst_score = 15.0
+                        details.append("机构重金:机构买入占比{:.0%}>10%".format(inst_ratio))
+                    else:
+                        details.append("机构重金:机构买入仅{:.0%}，力度不足".format(inst_ratio))
+                else:
+                    details.append("机构重金:龙虎榜无买入数据")
+            else:
+                details.append("机构重金:无席位明细数据")
+        else:
+            inst_score = 0.0
+            details.append("机构重金:未上龙虎榜")
+        result['conditions']['institutional_money'] = inst_score
+
+        # 条件2: 攻击形态 (0-30分)
+        shape_score = 0.0
+        if df is not None and len(df) >= 30:
+            try:
+                from app.engine.framework.volume_price_strategy import VolumePriceStrategy
+                vp = VolumePriceStrategy()
+                vp_result = vp.analyze(df)
+                if vp_result and vp_result.get('success'):
+                    signal = vp_result.get('signal', '')
+                    if signal in ('BUY', 'STRONG_BUY'):
+                        shape_score = 30.0
+                        details.append("攻击形态:量价给出买入信号({})".format(signal))
+                    elif signal in ('WATCH',):
+                        shape_score = 15.0
+                        details.append("攻击形态:量价信号中性({})".format(signal))
+                    else:
+                        details.append("攻击形态:量价信号{}，非买入时机".format(signal))
+                else:
+                    details.append("攻击形态:量价分析未成功")
+            except Exception:
+                # 降级：用简单价格突破判断
+                closes = df['close'].values
+                ma_20 = float(pd.Series(closes[-20:]).mean()) if len(closes) >= 20 else closes[-1]
+                ma_60 = float(pd.Series(closes[-60:]).mean()) if len(closes) >= 60 else closes[-1]
+                if closes[-1] > ma_20 > ma_60:
+                    shape_score = 25.0
+                    details.append("攻击形态:价格站上MA20>MA60，多头排列")
+                elif closes[-1] > ma_20:
+                    shape_score = 15.0
+                    details.append("攻击形态:价格站上MA20，短期偏多")
+                else:
+                    details.append("攻击形态:价格在MA20下方，形态偏弱")
+        else:
+            details.append("攻击形态:数据不足")
+        result['conditions']['attack_shape'] = shape_score
+
+        # 条件3: 板块效应 (0-20分)
+        sector_score = 0.0
+        if concept_name and concept_name != 'nan':
+            try:
+                # 从 InMemoryStateStore 获取板块排行
+                from app.data.in_memory_store import store as mem_store
+                sectors = mem_store.get_concepts()
+                if sectors:
+                    for s in sectors:
+                        if s.get('concept_name') == concept_name or s.get('name') == concept_name:
+                            pct = float(s.get('change_pct', 0))
+                            if pct > 3:
+                                sector_score = 20.0
+                                details.append("板块效应:{}涨幅{:.1f}%领先".format(concept_name, pct))
+                            elif pct > 1:
+                                sector_score = 10.0
+                                details.append("板块效应:{}涨幅{:.1f}%".format(concept_name, pct))
+                            else:
+                                details.append("板块效应:{}涨幅{:.1f}%偏弱".format(concept_name, pct))
+                            break
+                    else:
+                        details.append("板块效应:{}未在活跃板块排行中".format(concept_name))
+                else:
+                    details.append("板块效应:板块排行数据暂不可用(非交易时段)")
+            except Exception:
+                details.append("板块效应:板块排行查询异常")
+        else:
+            details.append("板块效应:无行业分类")
+        result['conditions']['sector_momentum'] = sector_score
+
+        # 条件4: 大盘环境 (0-10分)
+        env_score = 0.0
+        if idx_5d_ret is not None and idx_20d_ret is not None:
+            try:
+                idx_5d = float(idx_5d_ret)
+                idx_20d = float(idx_20d_ret)
+                if idx_5d > 2 or idx_20d > 5:
+                    env_score = 10.0
+                    details.append("大盘环境:偏强(5日{:.1f}%/20日{:.1f}%)".format(idx_5d, idx_20d))
+                elif idx_5d > 0 or idx_20d > 0:
+                    env_score = 5.0
+                    details.append("大盘环境:中性(5日{:.1f}%/20日{:.1f}%)".format(idx_5d, idx_20d))
+                else:
+                    details.append("大盘环境:偏弱(5日{:.1f}%/20日{:.1f}%)".format(idx_5d, idx_20d))
+            except Exception:
+                details.append("大盘环境:收益率数据异常")
+        else:
+            details.append("大盘环境:无大盘数据")
+        result['conditions']['market_environment'] = env_score
+
+        # 总评
+        total = inst_score + shape_score + sector_score + env_score
+        result['score'] = round(total, 1)
+        result['detail'] = '; '.join(details)
+
+        return result
+    except Exception:
+        return result
+
+
+def _calc_chip_concentration_factor(symbol: str, dm=None) -> dict:
+    """P2-1: 筹码集中度因子 — 大股东持仓比例变化率
+
+    知识库定义（筹码集中度因子.md）：
+      正值增加：筹码在集中，大股东在增持 → 利好
+      负值减少：筹码在分散，大股东在减持 → 利空
+
+    数据路径：
+      主路径: top10_holders_cache.hold_ratio → 前十大股东合计持仓变化率
+      降级路径: stk_holder_cache.holder_number → 股东户数变化率
+
+    Args:
+        symbol: 股票代码
+        dm: DataManager 实例
+
+    Returns:
+        {"factor": float, "change_pct": float, "source": str, "detail": str}
+        factor: 因子值 >0 集中，<0 分散，0 无数据
+        change_pct: 变化率（%）
+        source: 'top10_holders' / 'stk_holder' / 'none'
+        detail: 文字说明
+    """
+    result = {"factor": 0.0, "change_pct": 0.0, "source": "none", "detail": "数据不足"}
+    if not symbol or dm is None:
+        return result
+    try:
+        # 主路径: top10_holders_cache 计算前十大持仓变化率
+        top10_df = dm.get_cached_top10_holders(symbol)
+        if top10_df is not None and not top10_df.empty and 'hold_ratio' in top10_df.columns:
+            # 按 end_date 分组聚合，计算每个季度前十大合计持仓比例
+            top10_df = top10_df.dropna(subset=['hold_ratio'])
+            if not top10_df.empty:
+                grouped = top10_df.groupby('end_date')['hold_ratio'].sum().reset_index()
+                grouped = grouped.sort_values('end_date')
+                if len(grouped) >= 2:
+                    latest = float(grouped['hold_ratio'].iloc[-1])
+                    earliest = float(grouped['hold_ratio'].iloc[-2])
+                    if earliest > 0:
+                        change_pct = round((latest - earliest) / earliest * 100, 2)
+                        factor = round(change_pct / 10, 2)  # 归一化：10%变化→1.0
+                        detail = "前十大合计持仓{:.2f}%→{:.2f}%（变化{:+.2f}%）".format(
+                            earliest, latest, change_pct)
+                        return {"factor": factor, "change_pct": change_pct,
+                                "source": "top10_holders", "detail": detail}
+                elif len(grouped) == 1:
+                    # 只有一期数据，输出绝对值
+                    latest = float(grouped['hold_ratio'].iloc[-1])
+                    factor = round(latest / 100, 2)  # 50% → 0.5
+                    return {"factor": factor, "change_pct": 0.0,
+                            "source": "top10_holders",
+                            "detail": "前十大持仓{:.2f}%（仅一期数据，无变化率）".format(latest)}
+
+        # 降级路径: stk_holder_cache 股东户数变化率
+        holder_df = dm.get_cached_stk_holder(symbol)
+        if holder_df is not None and not holder_df.empty and 'holder_number' in holder_df.columns:
+            h = holder_df.dropna(subset=['holder_number']).sort_values('end_date')
+            if len(h) >= 2:
+                latest = float(h['holder_number'].iloc[-1])
+                prev = float(h['holder_number'].iloc[-2])
+                if prev > 0:
+                    change_pct = round((latest - prev) / prev * 100, 2)
+                    factor = round(-change_pct / 10, 2)  # 户数减少=集中→正因子
+                    return {"factor": factor, "change_pct": change_pct,
+                            "source": "stk_holder",
+                            "detail": "股东户数{:.0f}→{:.0f}（变化{:+.2f}%，减少=集中）".format(
+                                prev, latest, change_pct)}
+
+        return result
+    except Exception:
+        return result
 
 
 def _apply_phase_weight(result: dict, chip_phase: str, market_state: str) -> dict:
@@ -289,20 +811,34 @@ class SignalComputationService:
         'long_term': 260,    # 长线锚点需250日线
     }
 
-    def compute_for_stock(self, ts_code: str, limit: int = 5) -> List[Dict]:
+    def compute_for_stock(self, ts_code: str, limit: int = 5, period: str = 'long') -> List[Dict]:
         """
         对单只股票计算多维策略信号
+        
+        Args:
+            period: 分析周期 'long'(长线)/'medium'(中线)/'short'(短线)
+                    对应数据：
+                    long:   周线/日线/60分钟
+                    medium: 日线/30分钟/5分钟
+                    short:  30分钟/5分钟/1分钟
 
         Returns:
             信号列表，格式与 StrategyOutput.to_dict() 一致
         """
-        df = self.data_manager.get_cached_daily_data(ts_code)
+        df = self.data_manager.get_cached_daily_data(ts_code, adj='hfq')
         if df.empty or len(df) < 60:
+            # 即使日线不足，也独立检测资金流向数据可用性
+            mf_available = False
+            try:
+                mf_check = self.data_manager.get_cached_moneyflow(ts_code)
+                mf_available = mf_check is not None and not mf_check.empty
+            except Exception:
+                pass
             self.last_data_availability = {
                 'ts_code': ts_code,
                 'kline': len(df) >= 60,
                 'daily_basic': False,
-                'moneyflow': False,
+                'moneyflow': mf_available,
                 'index': False,
                 'market_state': False,
             }
@@ -537,7 +1073,7 @@ class SignalComputationService:
             cl_key = f"chanlun:{ts_code}:{len(df)}"
             chanlun_signal = cache.get(cl_key)
             if chanlun_signal is None:
-                chanlun_signal = self._compute_chanlun_signal(ts_code, df, market_context)
+                chanlun_signal = self._compute_chanlun_signal(ts_code, df, market_context, period=period)
                 if chanlun_signal:
                     cache.set(cl_key, chanlun_signal)
             if chanlun_signal:
@@ -649,6 +1185,48 @@ class SignalComputationService:
         except Exception as e:
             logger.debug(f"{ts_code} 新闻情绪修正跳过: {e}")
 
+        # ═══ Phase 2 P2-9: VAP 支撑/阻力 (V4) ═══
+        try:
+            if df is not None and not df.empty and len(df) >= 30:
+                closes = df['close'].astype(float).values
+                highs = df['high'].astype(float).values
+                lows = df['low'].astype(float).values
+                volumes = df['vol'].astype(float).values if 'vol' in df.columns else df['amount'].astype(float).values
+                latest_close = float(closes[-1])
+                vap = _calc_vap_support_resistance(closes, highs, lows, volumes, latest_close)
+                market_context['vap_support'] = vap.get('vap_support')
+                market_context['vap_resistance'] = vap.get('vap_resistance')
+        except Exception:
+            pass
+
+        # ═══ Phase 2 P2-6: 中枢强度 (V1) — 注入 chanlun signal ═══
+        try:
+            chip_sr = None
+            if chip_signal:
+                chip_sr = chip_signal.get('status_recognition', {})
+            for sig in signals:
+                if sig.get('strategy_name') == '缠论走势分析':
+                    cl_sr = sig.get('status_recognition', {})
+                    # 从 chanlun_analysis_detail 获取 zhongshu_list
+                    cl_detail = sig.get('chanlun_analysis_detail', {})
+                    zs_list_raw = cl_detail.get('zhongshu_list', [])
+                    if zs_list_raw:
+                        # 将 zhongshu_list dict 转回类似 namedtuple 的对象
+                        ZS = type('ZS', (), {})
+                        zhongshu_objs = []
+                        for z in zs_list_raw:
+                            obj = ZS()
+                            obj.low = z.get('low', 0)
+                            obj.high = z.get('high', 0)
+                            obj.center = z.get('center', 0)
+                            zhongshu_objs.append(obj)
+                        strength = _calc_zhongshu_strength(df, zhongshu_objs, chip_sr)
+                        if strength:
+                            cl_sr['zhongshu_strength'] = strength
+                    break
+        except Exception:
+            pass
+
         # 持久化到数据库（非关键：daemon 环境无 Flask 上下文时会失败，不影响信号返回）
         try:
             self._persist_signals(ts_code, signals)
@@ -675,8 +1253,23 @@ class SignalComputationService:
             df = df.copy()
             df['ts_code'] = ts_code
 
-        # 运行完整筹码分析
-        analysis = self.chip_strategy.analyze(df)
+        # 预检: 大盘指数数据不可用时 MarketEnvironmentFilter 会挂起，跳过完整分析
+        idx_available = market_context and (
+            market_context.get('idx_5d_ret') is not None or
+            market_context.get('idx_20d_ret') is not None
+        )
+        if not idx_available:
+            logger.debug(f"{ts_code} 大盘指数数据不可用，跳过筹码PreFilter，使用默认空信号")
+            # 直接构建一个空信号(无筹码数据)，避免数据源挂起
+            return self._build_default_chip_signal(ts_code, df, market_context)
+
+        # 运行完整筹码分析（带超时保护）
+        analysis = {}
+        try:
+            analysis = self.chip_strategy.analyze(df)
+        except Exception as e:
+            logger.debug(f"{ts_code} 筹码分析异常: {e}")
+            return None
         
         # 检查 PreFilter 结果
         if not analysis.get('pre_filter_passed', True):
@@ -795,7 +1388,8 @@ class SignalComputationService:
 
         # 筹码策略现状识别
         indicators = analysis.get('indicators', {})
-        chip_bins = analysis.get('chip_bins', [])
+        chip_dist = analysis.get('chip_distribution', {})
+        chip_bins = chip_dist.get('chip_bins', [])
         asr_val = indicators.get('asr', indicators.get('ASR'))
         chip_peak = 0.0
         concentration = 0.0
@@ -807,6 +1401,7 @@ class SignalComputationService:
 
         # 主力集中价
         main_force_cost = {"cost_price": 0, "distance_pct": 0, "near_cost": False}
+        scorer = None
         try:
             from app.engine.framework.chip_strategy import MainForceScorer
             scorer = MainForceScorer()
@@ -819,27 +1414,24 @@ class SignalComputationService:
         # Phase 1 P1-3: 融资成本价估算 + 夹层区间（C1）
         margin_cost_price = None
         sandwich_zone = None
-        try:
-            margin_df = self.data_manager.get_cached_margin(ts_code)
-            if margin_df is not None and not margin_df.empty and 'mrz' in margin_df.columns:
-                mrz_vals = margin_df['mrz'].dropna()
-                if len(mrz_vals) > 0:
-                    # 简化估算：融资余额 / 融资余额对应股数 ≈ 平均融资成本价
-                    # 此处用 mrz（融资余额）和 close 近似估算
-                    margin_cost_price = round(float(latest_close * 1.02), 2)  # 假设融资成本在现价+2%
-            # 夹层区间判断
-            mc = main_force_cost.get('cost_price', 0)
-            if mc > 0 and margin_cost_price and latest_close > 0:
-                if latest_close < min(mc, margin_cost_price):
-                    sandwich_zone = 'both_loss'
-                elif mc < latest_close < margin_cost_price:
-                    sandwich_zone = 'main_force_profitable'  # 最佳做多区间
-                elif latest_close > max(mc, margin_cost_price):
-                    sandwich_zone = 'both_profitable'
-                else:
-                    sandwich_zone = 'transition'
-        except Exception:
-            pass
+        if scorer:
+            try:
+                margin_result = scorer._calc_margin_cost_price(ts_code, latest_close)
+                if margin_result.get('cost_price'):
+                    margin_cost_price = margin_result['cost_price']
+                # 夹层区间判断
+                mc = main_force_cost.get('cost_price', 0)
+                if mc > 0 and margin_cost_price and latest_close > 0:
+                    if latest_close < min(mc, margin_cost_price):
+                        sandwich_zone = 'both_loss'
+                    elif mc < latest_close < margin_cost_price:
+                        sandwich_zone = 'main_force_profitable'
+                    elif latest_close > max(mc, margin_cost_price):
+                        sandwich_zone = 'both_profitable'
+                    else:
+                        sandwich_zone = 'transition'
+            except Exception:
+                pass
 
         # Phase 1 P1-4/P1-8: 暴露资金博弈字段
         net_elg = market_context.get('net_elg_amount', 0) or 0
@@ -848,6 +1440,38 @@ class SignalComputationService:
         retail_vs_inst = market_context.get('retail_vs_institutional')
         sentiment_crowding = market_context.get('sentiment_crowding')
         sentiment_crowding_label = market_context.get('sentiment_crowding_label')
+
+        # P2-2: 交叉比对比法
+        price_position = None
+        try:
+            closes_arr = df['close'].values
+            if len(closes_arr) >= 60:
+                p_high = np.max(closes_arr[-120:])
+                p_low = np.min(closes_arr[-120:])
+                p_range = p_high - p_low if p_high > p_low else 1.0
+                price_position = (closes_arr[-1] - p_low) / p_range
+        except Exception:
+            pass
+        cross_compare = _calc_cross_compare(
+            net_lg_amount_5d=net_lg,
+            main_force_cost_price=main_force_cost.get('cost_price', 0),
+            margin_cost_price=margin_cost_price,
+            latest_close=latest_close,
+            sentiment_crowding_label=sentiment_crowding_label,
+            price_position=price_position,
+        )
+
+        # P2-1: 筹码集中度因子
+        concentration_factor = _calc_chip_concentration_factor(ts_code, self.data_manager)
+
+        # P3-1: 查询股票行业用于板块效应判断
+        concept_name = None
+        try:
+            con_df = self.data_manager.get_cached_concept(ts_code=ts_code)
+            if con_df is not None and not con_df.empty:
+                concept_name = str(con_df.iloc[0]['concept_name'])
+        except Exception:
+            pass
 
         chip_status = {
             'state': 'ACCUMULATING' if action == 'BUY' else ('DISTRIBUTING' if action == 'SELL' else 'RANGING'),
@@ -863,6 +1487,8 @@ class SignalComputationService:
             'chip_peak': chip_peak,
             'concentration': concentration,
             'asr': asr_val,
+            # P1-4: CYQKL（筹码盈亏比例）
+            'cyqkl': round((latest_close - chip_peak) / chip_peak, 4) if chip_peak > 0 else None,
             'main_force_cost': main_force_cost,
             # Phase 1 P1-3: 融资成本价 + 夹层区间（C1）
             'margin_cost_price': margin_cost_price,
@@ -874,6 +1500,22 @@ class SignalComputationService:
             'net_sm_amount_5d': net_sm,
             'sentiment_crowding': sentiment_crowding,
             'sentiment_crowding_label': sentiment_crowding_label,
+            # P1-3: 假机构识别
+            'fake_institution': scorer._detect_fake_institution(ts_code, df) if (scorer and idx_available)
+                                else {"suspected": False, "reason": "大盘数据不可用" if not idx_available else "scorer初始化失败", "confidence": 0.0},
+            # P2-2: 交叉比对比法结论
+            'cross_compare': cross_compare,
+            # P2-1: 筹码集中度因子
+            'concentration_factor': concentration_factor,
+            # P3-1: 龙虎榜高成功率战法
+            'lhb_high_success': _calc_lhb_high_success_strategy(
+                ts_code,
+                self.data_manager.get_lhb_detail(ts_code=ts_code),
+                df,
+                concept_name=concept_name,
+                idx_5d_ret=market_context.get('idx_5d_ret') if market_context else None,
+                idx_20d_ret=market_context.get('idx_20d_ret') if market_context else None,
+            ),
         }
 
         return {
@@ -902,9 +1544,16 @@ class SignalComputationService:
             },
         }
 
-    def _compute_chanlun_signal(self, ts_code: str, df: pd.DataFrame, market_context: Optional[Dict] = None) -> Optional[Dict]:
-        """计算缠论策略建议 — 基于缠论决策树的全中文分析报告"""
-        from app.engine.framework.chanlun_strategy import ChanlunAnalyzer, ChanlunScorer, BuySellPoint
+    def _compute_chanlun_signal(self, ts_code: str, df: pd.DataFrame, 
+                                market_context: Optional[Dict] = None,
+                                period: str = 'long') -> Optional[Dict]:
+        """计算缠论策略建议 — 基于缠论决策树的全中文分析报告
+        
+        Args:
+            period: 'long'(周线/日线/60min) / 'medium'(日线/30min/5min) / 'short'(30min/5min/1min)
+        """
+        from app.engine.framework.chanlun_strategy import ChanlunScorer, BuySellPoint
+        from app.engine.framework.chanlun_multi_level import MultiLevelChanlunAnalyzer
 
         if df.empty or len(df) < 60:
             return None
@@ -914,19 +1563,64 @@ class SignalComputationService:
         if not isinstance(latest_date, str):
             latest_date = str(latest_date)[:10]
 
-        # 准备数据
-        df_analysis = df.copy()
-        if 'vol' in df_analysis.columns and 'volume' not in df_analysis.columns:
-            df_analysis['volume'] = df_analysis['vol']
-        if 'trade_date' not in df_analysis.columns:
-            if isinstance(df_analysis.index, pd.DatetimeIndex):
-                df_analysis['trade_date'] = df_analysis.index.strftime('%Y-%m-%d')
-            else:
-                df_analysis['trade_date'] = ''
+        # 根据分析周期确定级别组合
+        # 映射到 MultiLevelChanlunAnalyzer 期望的级别名称
+        period_levels = {
+            'long':  {'names': ('weekly', 'daily', 'hourly'),       'periods': ('W', 'D', '60m')},
+            'medium':{'names': ('daily', '30min', '5min'),           'periods': ('D', '30m', '5m')},
+            'short': {'names': ('30min', '5min', '1min'),           'periods': ('30m', '5m', '1m')},
+        }
+        pl = period_levels.get(period, period_levels['long'])
+        
+        # 获取多级别K线数据
+        df_dict = {}
+        for level_name, period_name in zip(pl['names'], pl['periods']):
+            try:
+                if period_name == 'D':
+                    src_df = df if period != 'short' else self.data_manager.get_kline_data(ts_code, period='30m')
+                else:
+                    src_df = self.data_manager.get_kline_data(ts_code, period=period_name)
+                if src_df is not None and not src_df.empty:
+                    df_proc = src_df.copy()
+                    if 'vol' in df_proc.columns and 'volume' not in df_proc.columns:
+                        df_proc['volume'] = df_proc['vol']
+                    if 'trade_date' not in df_proc.columns:
+                        if isinstance(df_proc.index, pd.DatetimeIndex):
+                            df_proc['trade_date'] = df_proc.index.strftime('%Y-%m-%d')
+                        else:
+                            df_proc['trade_date'] = ''
+                    df_dict[level_name] = df_proc
+            except Exception:
+                continue
+        
+        # 动态配置 MultiLevelChanlunAnalyzer 的级别列表
+        from app.engine.framework.chanlun_config import ChanlunConfig
+        chanlun_cfg = ChanlunConfig.default()
+        chanlun_cfg.multi_level.levels = pl['names']
+        # S2: 按周期配置笔参数——短线用宽笔(3K线)，长线用严格笔(5K线)
+        bi_min_klines = 5 if period == 'long' else 3
+        chanlun_cfg.bi.min_klines = bi_min_klines
 
         try:
-            analyzer = ChanlunAnalyzer()
-            result = analyzer.analyze(df_analysis)
+            analyzer = MultiLevelChanlunAnalyzer(config=chanlun_cfg)
+            multi_result = analyzer.analyze(df_dict)
+            # 使用日线级别的详细结果作为主分析结果
+            daily_result = multi_result.get('levels', {}).get('daily', {})
+            result = analyzer.results.get('daily', {}) if hasattr(analyzer, 'results') else {}
+        except Exception as e:
+            logger.warning(f"{ts_code} 多级别缠论分析异常，降级到单级别: {e}")
+            try:
+                from app.engine.framework.chanlun_strategy import ChanlunAnalyzer
+                daily_df_proc = df_dict.get('daily', df)
+                if isinstance(daily_df_proc, pd.DataFrame) and not daily_df_proc.empty:
+                    single = ChanlunAnalyzer()
+                    result = single.analyze(daily_df_proc)
+                    multi_result = {}
+                else:
+                    return None
+            except Exception as e2:
+                logger.warning(f"{ts_code} 单级别降级也失败: {e2}")
+                return None
         except Exception as e:
             logger.warning(f"{ts_code} ChanlunAnalyzer 异常: {e}")
             return None
@@ -990,6 +1684,13 @@ class SignalComputationService:
 
         # ─── 2. 中枢分析 ───
         latest_zhongshu = zhongshu_list[-1] if zhongshu_list else None
+        # 批次2b: expanded中枢使用子中枢链中的最近标准中枢
+        if latest_zhongshu and latest_zhongshu.type == 'expanded':
+            sub_list = latest_zhongshu.sub_zhongshu_list
+            if sub_list:
+                normal_zs = [zs for zs in sub_list if zs.type == 'normal']
+                if normal_zs:
+                    latest_zhongshu = normal_zs[-1]
         zs_high = float(latest_zhongshu.high) if latest_zhongshu else None
         zs_low = float(latest_zhongshu.low) if latest_zhongshu else None
         zs_center = float(latest_zhongshu.center) if latest_zhongshu else None
@@ -1064,15 +1765,7 @@ class SignalComputationService:
             elif not zs_formed_date:
                 recent_sell.append(p)
 
-        # 买卖点类型映射
-        BP_TYPE_CN = {
-            'first_buy': '第一类买点', 'first_buy_p': '盘整背驰第一类买点',
-            'second_buy': '第二类买点', 'second_buy_s': '类第二类买点',
-            'third_buy': '第三类买点', 'third_buy_a': '第三类买点(一类后)', 'third_buy_b': '第三类买点(一类前)',
-            'first_sell': '第一类卖点', 'first_sell_p': '盘整背驰第一类卖点',
-            'second_sell': '第二类卖点', 'second_sell_s': '类第二类卖点',
-            'third_sell': '第三类卖点', 'third_sell_a': '第三类卖点(一类后)', 'third_sell_b': '第三类卖点(一类前)',
-        }
+        # 买卖点类型映射（已提升为模块级常量 BP_TYPE_CN）
         BP_ORDER = {'first_buy': 1, 'second_buy': 2, 'third_buy': 3,
                     'first_sell': 1, 'second_sell': 2, 'third_sell': 3}
 
@@ -1532,6 +2225,10 @@ class SignalComputationService:
                         for zs in zhongshu_list
                     ]) if zhongshu_list else [],
                     'level_details': level_details,
+                    # 批次3: 多级别联立数据
+                    'levels': multi_result.get('levels', {}),
+                    'direction_map': multi_result.get('direction_map', {}),
+                    'cross_direction_text': multi_result.get('direction_text', ''),
                 },
             },
             'signal': internal_signal,
@@ -1881,6 +2578,49 @@ class SignalComputationService:
             evidence.append('基础技术分析信号')
 
         return evidence
+
+    def _build_default_chip_signal(self, ts_code: str, df: pd.DataFrame,
+                                    market_context: Optional[Dict] = None) -> Dict:
+        """构建空筹码信号（大盘数据不可用时降级使用）"""
+        latest_close = float(df['close'].iloc[-1])
+        latest_date = df.index[-1] if isinstance(df.index, pd.DatetimeIndex) else df.iloc[-1].get('trade_date', '')
+        evidence = []
+        if market_context:
+            tr = market_context.get('turnover_rate')
+            if tr: evidence.append(f"换手率: {tr:.2f}%")
+            net_lg = market_context.get('net_lg_amount')
+            if net_lg: evidence.append(f"近5日大单净额: {net_lg:+.0f}")
+        chip_status = {
+            'state': 'RANGING', 'state_label': '观望',
+            'trend': {'direction': '', 'strength': '', 'stage': '未知'},
+            'momentum': {'level': 'HOLD', 'score': 0.5},
+            'volume': {'state': '', 'structure': ''},
+            'support_resistance': {'support': 0.0, 'resistance': 0.0},
+            'risk_level': 'MEDIUM',
+            'chip_peak': 0.0, 'concentration': 0.0, 'asr': None,
+            'main_force_cost': {"cost_price": 0, "distance_pct": 0, "near_cost": False},
+            'margin_cost_price': None, 'sandwich_zone': None,
+            'retail_vs_institutional': None,
+            'net_lg_amount_5d': None, 'net_elg_amount_5d': None, 'net_sm_amount_5d': None,
+            'sentiment_crowding': None, 'sentiment_crowding_label': None,
+            'cyqkl': None,
+            'fake_institution': {"suspected": False, "reason": "大盘数据不可用", "confidence": 0.0},
+            'cross_compare': {"conclusion": "neutral", "detail": "大盘数据不可用", "score": 0.0},
+            'lhb_high_success': {"score": 0.0, "conditions": {}, "detail": "大盘数据不可用"},
+            'concentration_factor': {"factor": 0.0, "change_pct": 0.0, "source": "none", "detail": "大盘数据不可用"},
+        }
+        return {
+            'strategy_name': '筹码主力分析',
+            'status_recognition': chip_status,
+            'signal': 'neutral', 'signal_label': '观望',
+            'confidence': 0.5,
+            'entry_zone': [round(latest_close * 0.97, 2), round(latest_close * 1.02, 2)],
+            'risk_line': round(latest_close * 0.92, 2),
+            'target_zone': [round(latest_close * 1.02, 2), round(latest_close * 1.12, 2)],
+            'position_suggestion': '10%', 'holding_period': '1-3个月',
+            'evidence': evidence, 'risk_notes': ['大盘数据不可用，筹码信号降级'],
+            'signal_date': latest_date if isinstance(latest_date, str) else str(latest_date)[:10],
+        }
 
     def _build_chip_status(self, chip_signal: Dict) -> Dict:
         """构建筹码策略的现状识别"""

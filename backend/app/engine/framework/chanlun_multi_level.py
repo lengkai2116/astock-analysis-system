@@ -83,7 +83,7 @@ class MultiLevelChanlunAnalyzer:
             segments = result.get('segments', [])
             zhongshu_list = result.get('zhongshu', [])
             summary = result.get('summary', {})
-            trend = summary.get('trend', 'unknown')
+            trend = summary.get('current_trend', summary.get('trend', 'unknown'))
 
             levels_data[level_name] = {
                 'stroke_count': len(strokes),
@@ -94,7 +94,11 @@ class MultiLevelChanlunAnalyzer:
                      'level': zs.level, 'duration': zs.duration}
                     for zs in zhongshu_list[-3:]  # 最多展示最近3个
                 ],
-                'latest_zhongshu': zhongshu_list[-1] if zhongshu_list else None,
+                'latest_zhongshu': {
+                    'low': zhongshu_list[-1].low, 'high': zhongshu_list[-1].high,
+                    'center': zhongshu_list[-1].center, 'type': zhongshu_list[-1].type,
+                    'level': zhongshu_list[-1].level, 'duration': zhongshu_list[-1].duration,
+                } if zhongshu_list else None,
             }
             direction_map[level_name] = trend
 
@@ -114,9 +118,13 @@ class MultiLevelChanlunAnalyzer:
 
     def _build_direction_text(self, direction_map: Dict[str, str]) -> str:
         """构建多级别方向描述，消除"上升趋势+下降笔"矛盾。"""
-        weekly_dir = direction_map.get('weekly', '')
-        daily_dir = direction_map.get('daily', '')
-        hourly_dir = direction_map.get('hourly', '')
+        _dir_cn = {
+            'up': '上升', 'down': '下降',
+            '上升': '上升', '下降': '下降',
+        }
+        weekly_dir = _dir_cn.get(direction_map.get('weekly', ''), '')
+        daily_dir = _dir_cn.get(direction_map.get('daily', ''), '')
+        hourly_dir = _dir_cn.get(direction_map.get('hourly', ''), '')
 
         # 周线决定大方向
         if weekly_dir == '上升':
@@ -158,9 +166,9 @@ class MultiLevelChanlunAnalyzer:
             if zs:
                 near_levels.append({
                     'level': level_name,
-                    'support': round(zs.low, 2),
-                    'resistance': round(zs.high, 2),
-                    'center': round(zs.center, 2) if zs.center else None,
+                    'support': round(zs['low'], 2),
+                    'resistance': round(zs['high'], 2),
+                    'center': round(zs['center'], 2) if zs.get('center') else None,
                 })
         return near_levels
 
