@@ -465,9 +465,20 @@ class DataManager:
                 self._cache_minute_to_ecm(df, ts_code, '1min')
                 return df
         elif ecm_freq in ('15min', '30min', '60min'):
-            # 从5min数据聚合为目标频率
-            df_5min = self._get_mootdx_bars(ts_code, freq=2)
-            if not df_5min.empty:
+            # 从5min数据聚合为目标频率（先查ECM缓存，没有再通过mootdx获取）
+            df_5min = None
+            try:
+                from app.data.enhanced_cache_manager import get_ecm_instance
+                ecm = get_ecm_instance()
+                df_5min = ecm.get_cached_minute_kline(ts_code, freq='5min')
+            except Exception:
+                pass
+            if df_5min is None or df_5min.empty:
+                df_5min = self._get_mootdx_bars(ts_code, freq=2)
+            if df_5min is not None and not df_5min.empty:
+                # 确保5min缓存已写入
+                if df_5min is not None:
+                    self._cache_minute_to_ecm(df_5min, ts_code, '5min')
                 from app.data.minute_data_manager import MinuteDataManager
                 mm = MinuteDataManager()
                 records = df_5min.to_dict('records')
