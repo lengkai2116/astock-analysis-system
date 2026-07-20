@@ -428,6 +428,9 @@ def strategy_analyze():
         return jsonify({'code': -1, 'message': 'ts_code必填'}), 400
 
     kronos_enabled = bool(data.get('kronos_enabled', False))
+    period = data.get('period', 'long')
+    if period not in ('long', 'medium', 'short'):
+        period = 'long'
 
     try:
         # Step 0: L1风控检查（渠道二前置风控）
@@ -443,9 +446,9 @@ def strategy_analyze():
         except Exception as e:
             risk_check = {'passed': True, 'reasons': [f'风控检查跳过: {e}']}
 
-        # Step 1: 计算5策略信号
+        # Step 1: 计算5策略信号（传入分析周期）
         scs = SignalComputationService()
-        signals = scs.compute_for_stock(ts_code)
+        signals = scs.compute_for_stock(ts_code, period=period)
         data_availability = scs.last_data_availability  # 扩展数据可用性状态
 
         # Step 2: 构建信号上下文（包含板块信息等）
@@ -503,6 +506,7 @@ def strategy_analyze():
             'data': {
                 'ts_code': ts_code,
                 'trade_date': _today_str(),
+                'period': period,
                 'dimensions': dimensions,
                 'data_availability': data_availability,
             }

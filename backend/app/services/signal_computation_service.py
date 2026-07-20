@@ -65,6 +65,16 @@ BP_TYPE_CN = {
     'third_sell': '第三类卖点', 'third_sell_a': '第三类卖点(一类后)', 'third_sell_b': '第三类卖点(一类前)',
 }
 
+# 周期→级别标签映射
+_LEVEL_LABELS = {
+    'long': '日线',
+    'medium': '30分钟',   # medium的决策级别是30分钟
+    'short': '5分钟',     # short的决策级别是5分钟
+}
+def _level_label(period: str) -> str:
+    """返回周期对应的中文级别标签"""
+    return _LEVEL_LABELS.get(period, '日线')
+
 # Phase 1 P1-2: 构建有效信号（取买卖点中时序最新的一个，过滤过时信号）
 def _build_active_signal(best_buy, best_sell, trade_date: str = None, latest_close: float = None) -> dict:
     """从 best_buy / best_sell 中选取时序最新的信号。
@@ -2253,13 +2263,14 @@ class SignalComputationService:
 
         return {
             'strategy_name': '缠论走势分析',
+            'period': period,
             'status_recognition': {
                 'state': 'ACCUMULATING' if trend_str == '上升' else ('BEARISH' if trend_str == '下降' else 'RANGING'),
                 'state_label': trend_str or '方向待定',
                 'trend': {
                     'direction': 'up' if trend_str == '上升' else ('down' if trend_str == '下降' else ''),
                     'strength': 'strong' if '延续' in (last_bi_status or '') else 'weakening',
-                    'stage': f'日线{last_bi_status}' if last_bi_status else '',
+                    'stage': f'{_level_label(period)}{last_bi_status}' if last_bi_status else '',
                 },
                 'momentum': {
                     'level': '/'.join(
