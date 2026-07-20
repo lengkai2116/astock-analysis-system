@@ -495,11 +495,12 @@ def strategy_analyze():
         if kronos_enabled:
             kronos_result = _compute_kronos(ts_code)
 
-        # ── P3-1/P3-2: DeepSeek 九层描述（主输出） ──
+        # ── P3-1/P3-2: DeepSeek 九层描述（主输出，替代NLG status_text）──
         deepseek_text = _get_deepseek_status_text(ts_code)
         if deepseek_text:
-            # 前端 narrativeText() 从维度对象读取 deepseek_text，注入到"走势结构"卡片
             dimensions['chanlun']['deepseek_text'] = deepseek_text
+            # Phase 3: DeepSeek 文本接管 status_text（272号方案）
+            dimensions['chanlun']['status_text'] = deepseek_text
 
         response = {
             'code': 0,
