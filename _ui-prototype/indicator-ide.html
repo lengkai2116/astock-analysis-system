@@ -333,8 +333,8 @@
 /* ═══════════════════════════════════════
    股票现状卡片 STOCK STATUS CARD
    ═══════════════════════════════════════ */
-.stock-status-card { display: none; flex-direction: column; gap: var(--space-6); }
-.stock-status-card.show { display: flex; }
+.ss-card { display: none; flex-direction: column; gap: var(--space-6); }
+.ss-card.show { display: flex; }
 .status-dashboard { display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--space-4); }
 @media (max-width:900px) { .status-dashboard { grid-template-columns: repeat(2, 1fr); } }
 .dash-card {
@@ -756,7 +756,7 @@
         </div>
 
         <!-- ════════════════════ 股票现状卡片 STOCK STATUS CARD ════════════════════ -->
-        <div class="stock-status-card" id="stockStatus">
+        <div class="ss-card" id="stockStatus">
 
           <!-- 5格指标条 -->
           <div class="status-dashboard" id="statusDashboard">
@@ -2987,7 +2987,6 @@ var _analysisRunning = false;
 var _analysisTimer = null;
 
 // toggleStrategyConfig 已废弃，由操作台替代
-}
 
 function syncFromScreener(){
   fetch('/api/v3/screener/fusion-config')
@@ -3648,8 +3647,6 @@ function showToast(msg){
   initConsole();
   try{ var ke=localStorage.getItem('kronos_enabled'); if(ke==='true'){ var kt=document.getElementById('kronosToggle'); if(kt) kt.checked=true; } }catch(e){}
   document.getElementById('kronosToggle') && document.getElementById('kronosToggle').addEventListener('change', function(){
-    try{ localStorage.setItem('kronos_enabled', this.checked); }catch(e){}
-  });
     try{ localStorage.setItem('kronos_enabled', this.checked ? 'true' : 'false'); }catch(e){}
   });
 
@@ -3659,13 +3656,8 @@ function showToast(msg){
     if(raw) hasDefault = true;
   } catch(e){}
   if(hasDefault){
-    var empty = document.getElementById('strategyEmpty');
-    if(empty) empty.classList.remove('show');
-    // 自动运行 — 使用真实API
     setTimeout(startAnalysis, 500);
   }
-  // 同步策略栏标签
-  updateStrategyBarTags();
 })();
 
 // ── 同步侧栏高度与chart-section对齐 ──
