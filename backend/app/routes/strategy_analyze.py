@@ -816,3 +816,70 @@ def _empty_dimensions() -> Dict:
 def _today_str() -> str:
     from datetime import date
     return date.today().strftime('%Y-%m-%d')
+
+
+# ══════════════════════════════════════════════════
+# P4: 缠论结构图 API
+# ══════════════════════════════════════════════════
+
+@strategy_analyze_bp.route('/api/v3/chanlun/chart', methods=['GET'])
+def chanlun_chart():
+    """生成缠论结构图 HTML
+
+    根据周期参数获取对应 K 线数据，运行 ChanlunAnalyzer 分析，
+    通过 ChartBuilder 渲染为自包含交互式 HTML。
+
+    请求参数:
+        ts_code: 股票代码
+        period: 分析周期，'long'=日线（默认），'short'=60分钟
+
+    返回:
+        HTML content-type: text/html
+    """
+    ts_code = (request.args.get('ts_code') or '').strip()
+    if not ts_code:
+        return '<h2>缺少 ts_code 参数</h2>', 400, {'Content-Type': 'text/html'}
+
+    period = request.args.get('period', 'long')
+    if period not in ('long', 'short'):
+        period = 'long'
+
+    try:
+        from app.engine.framework.chanlun_strategy import ChanlunAnalyzer
+        from app.services.chart_builder import ChartBuilder
+        from app.data import DataManager
+
+        dm = DataManager()
+
+        # 根据周期获取 K 线数据
+        if period == 'short':
+            df = dm.get_kline_data(ts_code, period='60m')
+            title_suffix = '60分钟'
+        else:
+            df = dm.get_cached_daily_data(ts_code)
+            title_suffix = '日线'
+
+        if df is None or df.empty:
+            return f'<h2>{ts_code} {title_suffix}数据不可用</h2>', 503, {'Content-Type': 'text/html'}
+
+        # 运行缠论分析
+        cl = ChanlunAnalyzer(config={})
+        result = cl.analyze(df)
+
+        if 'error' in result:
+            return f'<h2>缠论分析失败: {result["error"]}</h2>', 500, {'Content-Type': 'text/html'}
+
+        # 构建图表
+        builder = ChartBuilder(title=f'{ts_code} {title_suffix}缠论结构')
+        builder.set_klines(df)
+        builder.add_fractals(result.get('fractals', []))
+        builder.add_strokes(result.get('strokes', []))
+        builder.add_zhongshu(result.get('zhongshu', []))
+        builder.add_buy_sell(result.get('buy_points', []), result.get('sell_points', []))
+
+        html = builder.to_html()
+        return html, 200, {'Content-Type': 'text/html'}
+
+    except Exception as e:
+        logger.error(f'缠论制图失败 ({ts_code}): {e}')
+        return f'<h2>缠论制图失败: {str(e)}</h2>', 500, {'Content-Type': 'text/html'}

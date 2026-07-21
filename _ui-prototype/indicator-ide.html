@@ -367,6 +367,15 @@
 .ds-body { padding: var(--space-8) var(--space-10); }
 .ds-body .ds-placeholder { font-size: 15px; color: var(--text-muted); text-align: center; padding: var(--space-12) 0; }
 .ds-body .ds-text { font-size: 15px; line-height: 1.9; color: var(--text-primary); white-space: pre-wrap; }
+
+/* ── 缠论结构图 ── */
+.chanlun-charts { display: none; flex-direction: column; gap: var(--space-4); margin-top: var(--space-6); }
+.chanlun-charts.show { display: flex; }
+.cl-chart { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); overflow: hidden; }
+.cl-header { padding: var(--space-4) var(--space-6); font-size: 13px; font-weight: 600; color: var(--text-primary); background: rgba(99,102,241,0.08); border-bottom: 1px solid var(--border-color); }
+.cl-body { overflow-x: auto; }
+.cl-body iframe { width: 100%; height: 620px; border: none; display: block; }
+.cl-body .cl-placeholder { font-size: 14px; color: var(--text-muted); text-align: center; padding: var(--space-10) 0; }
 .ds-footer {
   display: flex; align-items: center; justify-content: space-between;
   padding: var(--space-4) var(--space-10);
@@ -784,6 +793,18 @@
               <div class="dash-label">数据完整度</div>
               <div class="dash-value" id="dash-completeness-value">--</div>
               <div class="dash-detail" id="dash-completeness-detail">--</div>
+            </div>
+          </div>
+
+          <!-- 缠论结构图 -->
+          <div class="chanlun-charts" id="chanlunCharts" style="display:none;">
+            <div class="cl-chart" id="chanlunChartLong">
+              <div class="cl-header">日线走势结构（长期策略）</div>
+              <div class="cl-body" id="clBodyLong"><div class="cl-placeholder">缠论分析中...</div></div>
+            </div>
+            <div class="cl-chart" id="chanlunChartShort">
+              <div class="cl-header">60分钟走势结构（短期策略）</div>
+              <div class="cl-body" id="clBodyShort"><div class="cl-placeholder">缠论分析中...</div></div>
             </div>
           </div>
 
@@ -2626,6 +2647,46 @@ function loadAnalysis(tsCode, kronosEnabled){
     });
 }
 
+// ── P4: 缠论结构图加载 ──
+function loadChanlunCharts(tsCode){
+  var container = document.getElementById('chanlunCharts');
+  if(!container) return;
+  container.style.display = ''; container.classList.add('show');
+
+  var longBody = document.getElementById('clBodyLong');
+  var shortBody = document.getElementById('clBodyShort');
+
+  // 日线图
+  if(longBody){
+    longBody.innerHTML = '<div class="cl-placeholder">加载日线缠论结构...</div>';
+    fetch('/api/v3/chanlun/chart?ts_code='+encodeURIComponent(tsCode)+'&period=long')
+      .then(function(r){ return r.text(); })
+      .then(function(html){
+        longBody.innerHTML = '<iframe srcdoc="'+html.replace(/"/g,'&quot;').replace(/\n/g,' ')+'"></iframe>';
+      })
+      .catch(function(){
+        longBody.innerHTML = '<div class="cl-placeholder">日线数据暂不可用</div>';
+      });
+  }
+
+  // 60分钟图
+  if(shortBody){
+    shortBody.innerHTML = '<div class="cl-placeholder">加载60分钟缠论结构...</div>';
+    fetch('/api/v3/chanlun/chart?ts_code='+encodeURIComponent(tsCode)+'&period=short')
+      .then(function(r){ return r.text(); })
+      .then(function(html){
+        if(html.indexOf('</h2>')<200){
+          shortBody.innerHTML = '<iframe srcdoc="'+html.replace(/"/g,'&quot;').replace(/\n/g,' ')+'"></iframe>';
+        } else {
+          shortBody.innerHTML = '<div class="cl-placeholder">短期数据不足（需要更多分钟K线）</div>';
+        }
+      })
+      .catch(function(){
+        shortBody.innerHTML = '<div class="cl-placeholder">短期数据暂不可用</div>';
+      });
+  }
+}
+
 // ── B2: E13 交叉验证 ──
 function loadVerification(tsCode){
   return fetch('/api/v3/strategy/status-aggregate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts_code:tsCode})})
@@ -3135,6 +3196,12 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
     // 3. 实操建议
     renderActionPlan(analysisData, verificationData);
     if(actionPlan) { actionPlan.style.display = ''; actionPlan.classList.add('show'); }
+
+    // 4. 缠论结构图（当缠论策略勾选时）
+    var config = getConsoleConfig();
+    if(config && config.strategies && config.strategies.chanlun){
+      loadChanlunCharts(_currentTsCode);
+    }
 
     // 更新运行按钮状态
     updateConsoleRunState('complete');
