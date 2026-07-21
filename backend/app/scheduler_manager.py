@@ -17,6 +17,7 @@ APScheduler 定时任务管理器
   - blinker（Flask 依赖自带）
 """
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Any
@@ -130,9 +131,9 @@ class SchedulerManager:
         # 移除所有现有 Job（避免重复注册）
         self._scheduler.remove_all_jobs()
 
-        # ── 日终数据同步 ──
+        # ── 日终数据同步（仅在无 data_daemon 时注册）──
         ds = config.get('daily_sync', {})
-        if ds.get('enabled', True):
+        if ds.get('enabled', True) and not os.environ.get('DATA_DAEMON_RUNNING'):
             trigger_time = ds.get('trigger_time', '15:30')
             try:
                 hour, minute = trigger_time.split(':')

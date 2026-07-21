@@ -66,7 +66,42 @@ make dev             # 一键启动上面全部
 | **数据进程** | `backend/data_daemon.py` | mootdx TCP 采集（5s）、日终同步（15:30）、完整性检查、分钟数据采集与聚合、指标预计算、因子预计算、信号预计算 |
 | **API 进程** | `backend/run.py` | Flask REST API + SocketIO 推送 |
 
-数据进程启动时会设置 `DATA_DAEMON_RUNNING=1`，API 进程据此跳过采集器初始化。
+数据进程启动时会设置 `DATA_DAEMON_RUNNING=1`，API 进程据此跳过采集器初始化和日终同步注册。
+
+### Data Daemon 全量采集覆盖清单
+
+data_daemon 启动后先后执行：
+1. 实时采集器：mootdx TCP（5s 快照）+ AKShare（1800s 板块/分钟线/龙虎榜/舆情）
+2. `run_integrity_check(backfill_days=3)`：回溯 3 个交易日批量补采以下 10 类
+3. 主循环 30s：消费 sync_requests 队列、15:30 日终同步、整点非交易时段巡检
+
+| 数据表 | 采集函数 | 完整性检查 | 日终同步 | sync_requests |
+|--------|----------|:----------:|:--------:|:-------------:|
+| daily_cache | `_batch_daily` | ✅ 阈值5000行 | ✅ | ✅ `full_daily` |
+| daily_basic_cache | `_batch_daily_basic` | ✅ 阈值5000行 | ✅ | ✅ `full_basic` |
+| moneyflow_cache | `_batch_moneyflow` | ✅ 阈值1000行 | ✅ | ✅ `full_moneyflow` |
+| stk_limit_cache | `_batch_stk_limit` | ✅ 阈值1000行 | ✅ | — |
+| lhb_cache | `_batch_lhb` | ✅ 阈值20行 | ✅ | — |
+| lhb_detail_cache | `_batch_lhb_detail` | ✅ 空表检查 | ✅ | — |
+| concept_cache | `_batch_concept` | ✅ 有数据即可 | ✅ | — |
+| index_member_cache | `_batch_index_member` | — | ✅ | — |
+| margin_cache | `_batch_margin` | ✅ 空表检查 | ✅ | — |
+| fina_indicator_cache | `_batch_fina_indicator` | ✅ ≥100行 | 财务同步后台 | — |
+| income_cache | `_batch_income_recent` | — | 财务同步后台 | — |
+| balancesheet_cache | `_batch_balancesheet` | — | 财务同步后台 | — |
+| cashflow_cache | `_batch_cashflow` | — | 财务同步后台 | — |
+| forecast_cache | `_batch_forecast` | — | 财务同步后台 | — |
+| **adj_factor_cache** | `_batch_adj_factor` | ✅ 空表检查 | ✅ 日终补充 | ✅ `adj_factor` |
+| **top10_holders_cache** | `_batch_top10_holders` | ✅ 空表检查 | ✅ 日终补充 | ✅ `top10_holders` |
+| **stk_holder_cache** | `_batch_stk_holder` | ✅ 空表检查 | ✅ 日终补充 | ✅ `stk_holder` |
+| **finance_report_cache** | `_batch_finance_report` | ✅ 空表检查 | ✅ 日终补充 | ✅ `finance_report` |
+| minute_kline_cache | `_run_minute_backfill` | ✅ 自选股检查 | ✅ 分钟回填后台 | — |
+| strategy_signals | `_run_precompute` | — | ✅ 预计算后台 | — |
+| factor_cache | `_precompute_preset_combos` | — | ✅ 预计算后台 | — |
+| win_rate_cache | `_batch_win_rate` | — | ✅ | — |
+
+> API 进程的 `scheduler_manager.py` 在检测到 `DATA_DAEMON_RUNNING=1` 时跳过日终同步注册。
+> 所有采集操作由 data_daemon 统一管理，API 进程只读存储层。
 
 ### 🔴 全局数据体系架构红线（强制性标准）
 

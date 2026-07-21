@@ -557,6 +557,127 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
     return total
 
 
+def _batch_adj_factor() -> int:
+    """全市场复权因子 — 逐只 API 调用（pro.adj_factor 不支持按 trade_date 批量）
+
+    后台低优，每次最多处理 500 只，缓存结果到 adj_factor_cache。
+    """
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    codes = _ecm.conn.execute(
+        "SELECT DISTINCT ts_code FROM daily_cache"
+    ).fetchall()
+    codes = [r[0] for r in codes[:500]]
+    total = 0
+    for code in codes:
+        try:
+            raw = pro.adj_factor(ts_code=code)
+            if raw is not None and not raw.empty:
+                df = raw.copy()
+                if 'trade_date' in df.columns:
+                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+                _ecm.cache_adj_factor_data(df)
+                total += len(df)
+        except Exception:
+            continue
+    logger.info(f"  [复权因子] 同步 {total} 条 (共 {len(codes)} 只)")
+    return total
+
+
+def _batch_top10_holders() -> int:
+    """全市场前十大股东 — 逐只 API 调用
+
+    后台低优，每次最多处理 500 只，缓存结果到 top10_holders_cache。
+    """
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    codes = _ecm.conn.execute(
+        "SELECT DISTINCT ts_code FROM daily_cache"
+    ).fetchall()
+    codes = [r[0] for r in codes[:500]]
+    total = 0
+    for code in codes:
+        try:
+            raw = pro.top10_holders(ts_code=code)
+            if raw is not None and not raw.empty:
+                df = raw.copy()
+                for col in ['end_date', 'ann_date']:
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(df[col]).dt.date
+                _ecm.cache_top10_holders(df)
+                total += len(df)
+        except Exception:
+            continue
+    logger.info(f"  [前十大股东] 同步 {total} 条 (共 {len(codes)} 只)")
+    return total
+
+
+def _batch_stk_holder() -> int:
+    """全市场股东人数 — 逐只 API 调用
+
+    后台低优，每次最多处理 500 只，缓存结果到 stk_holder_cache。
+    """
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    codes = _ecm.conn.execute(
+        "SELECT DISTINCT ts_code FROM daily_cache"
+    ).fetchall()
+    codes = [r[0] for r in codes[:500]]
+    total = 0
+    for code in codes:
+        try:
+            raw = pro.stk_holdernumber(ts_code=code)
+            if raw is not None and not raw.empty:
+                df = raw.copy()
+                for col in ['end_date', 'ann_date']:
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(df[col]).dt.date
+                _ecm.cache_stk_holder_data(df)
+                total += len(df)
+        except Exception:
+            continue
+    logger.info(f"  [股东人数] 同步 {total} 条 (共 {len(codes)} 只)")
+    return total
+
+
+def _batch_finance_report() -> int:
+    """全市场扩展财务指标（273a 排雷指标）
+
+    后台低优，每次最多处理 500 只。
+    使用 pro.fina_indicator 带 FINA_FIELDS_EXTENDED 字段集。
+    """
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    codes = _ecm.conn.execute(
+        "SELECT DISTINCT ts_code FROM daily_cache"
+    ).fetchall()
+    codes = [r[0] for r in codes[:500]]
+    FINA_FIELDS_EXTENDED = (
+        'ts_code,end_date,roce,dt_eps,profit_dedt,'
+        'q_sales,q_profit,q_eps,yoy_tr,yoy_profit,'
+        'bps,ocfps,quick_ratio,free_cashflow_ps'
+    )
+    total = 0
+    for code in codes:
+        try:
+            raw = pro.fina_indicator(ts_code=code, fields=FINA_FIELDS_EXTENDED)
+            if raw is not None and not raw.empty:
+                df = raw.copy()
+                for col in ['end_date', 'ann_date']:
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(df[col]).dt.date
+                _ecm.cache_finance_report_data(df)
+                total += len(df)
+        except Exception:
+            continue
+    logger.info(f"  [扩展财务] 同步 {total} 条 (共 {len(codes)} 只)")
+    return total
+
+
 def _batch_stock_list() -> int:
     """全市场股票列表同步（通过 DataManager）"""
     try:
@@ -796,6 +917,25 @@ def run_integrity_check(backfill_days: int = 1):
     except Exception as e:
         logger.warning(f"  财务指标检查失败: {e}")
 
+    # ── 4 类后台低优数据检查（空表时触发补采，非每日必须）──
+    batch_background = [
+        ('adj_factor_cache',    _batch_adj_factor,    '复权因子'),
+        ('top10_holders_cache', _batch_top10_holders, '前十大股东'),
+        ('stk_holder_cache',    _batch_stk_holder,    '股东人数'),
+        ('finance_report_cache', _batch_finance_report, '扩展财务'),
+    ]
+    for table, batch_fn, label in batch_background:
+        try:
+            cnt = _ecm.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            if cnt == 0:
+                logger.info(f"  [{label}] 空表，触发补采...")
+                added = batch_fn()
+                logger.info(f"    → 补采 {added} 条")
+            else:
+                logger.info(f"  [{label}] {cnt} 行 ✅")
+        except Exception as e:
+            logger.warning(f"  [{label}] 检查失败: {e}")
+
     # 检查今日数据
     for table, batch_fn, threshold, label in checks:
         cnt = _check_count(table, today_fmt)
@@ -922,6 +1062,20 @@ def run_daily_sync():
         logger.info(f"  策略胜率: {n} 条")
     except Exception as e:
         logger.warning(f"  策略胜率计算失败: {e}")
+
+    # ── 日终补充：4 类后台低优数据（非每日必须，补采空表）──
+    for batch_fn, label in [
+        (_batch_adj_factor,    '复权因子'),
+        (_batch_top10_holders, '前十大股东'),
+        (_batch_stk_holder,    '股东人数'),
+        (_batch_finance_report,'扩展财务'),
+    ]:
+        try:
+            n = batch_fn()
+            if n > 0:
+                logger.info(f"  {label}: {n} 条")
+        except Exception as e:
+            logger.warning(f"  {label} 同步失败: {e}")
 
     # 触发指标预计算（后台线程）
     try:
@@ -1364,6 +1518,14 @@ def main():
                         _batch_stock_list()
                     elif req['task_type'] == 'per_stock':
                         _batch_daily(datetime.now().strftime('%Y%m%d'))
+                    elif req['task_type'] == 'adj_factor':
+                        _batch_adj_factor()
+                    elif req['task_type'] == 'top10_holders':
+                        _batch_top10_holders()
+                    elif req['task_type'] == 'stk_holder':
+                        _batch_stk_holder()
+                    elif req['task_type'] == 'finance_report':
+                        _batch_finance_report()
                     _ecm.mark_request_done(req['id'])
                     logger.info(f"  sync_request {req['id']} 完成")
                 except Exception as e:
