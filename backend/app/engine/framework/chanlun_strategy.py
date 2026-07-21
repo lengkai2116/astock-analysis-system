@@ -192,35 +192,37 @@ class BuySellPoint:
 class KLineMerger:
     """K线包含关系处理"""
 
+    def __init__(self, merge_depth: int = 3):
+        """
+        Args:
+            merge_depth: 包含处理递归深度上限，默认 3
+                         0=czsc模式（单次合并，不回退检查）
+                         1-3=推荐（适度合并）
+                         10=激进（原默认值，丢失细节较多）
+        """
+        self.max_iter = max(0, merge_depth)
+
     @staticmethod
     def is_contained(k1: KLine, k2: KLine) -> bool:
         """检查两根K线是否有包含关系"""
         return (k2.high <= k1.high and k2.low >= k1.low) or \
                (k1.high <= k2.high and k1.low >= k2.low)
 
-    @staticmethod
-    def merge(klines: List[KLine]) -> List[KLine]:
+    def merge(self, klines: List[KLine]) -> List[KLine]:
         """
-        处理K线包含关系（严格缠论标准，递归至无包含，上限10次）
+        处理K线包含关系（根据 merge_depth 递归合并）
         
-        规则：
-        - 上升趋势（向上处理）：取高高（高点取最高，低点取最高）
-        - 下降趋势（向下处理）：取低低（低点取最低，高点取最低）
-        - 方向由相邻非包含K线的高点比较确定
-        - 方向未确定时遇到包含K线则跳过（保留prev作参考）
-        - 高点相等时对比低点确定方向
-        
-        Args:
-            klines: 原始K线列表
-        
-        Returns:
-            处理后的无包含K线列表
+        规则同 _merge_once，迭代执行直到稳定或达到深度上限。
+        merge_depth=0 时只执行一次（czsc 模式）。
         """
         if len(klines) < 2:
             return klines
         
-        max_iter = 10
         current = klines
+        max_iter = self.max_iter
+        if max_iter == 0:
+            # czsc 模式：单次合并，不回退检查
+            return KLineMerger._merge_once(current)
         for _ in range(max_iter):
             merged = KLineMerger._merge_once(current)
             if len(merged) == len(current):
@@ -810,47 +812,59 @@ class SegmentAnalyzer:
 
             seg_direction = s1.direction
             current_strokes = [s1, s2, s3]
+            # 记录线段第一笔的起点（用于"新笔突破起点→断线"判断）
+            seg_start_price = s1.start_price
 
-            # 尝试延续线段（特征序列法——含包含处理+分型终结）
+            # 尝试延续线段（特征序列法 + 价格突破辅助判断）
             j = i + 3
             while j < len(strokes):
                 next_stroke = strokes[j]
 
-                # 特征序列终结判定（使用包含处理后的分型检查）
+                # ── 价格突破检查 —— 新笔突破线段起点边界时提前断线 ──
                 if seg_direction == 'up' and next_stroke.direction == 'down':
-                    # 上升段：提取下跌笔作为特征序列
+                    if next_stroke.end_price <= seg_start_price and len(current_strokes) >= self.min_stroke_count:
+                        break
+                if seg_direction == 'down' and next_stroke.direction == 'up':
+                    if next_stroke.end_price >= seg_start_price and len(current_strokes) >= self.min_stroke_count:
+                        break
+
+                # ── 特征序列终结判定（使用包含处理后的分型检查）──
+                if seg_direction == 'up' and next_stroke.direction == 'down':
                     feature_elements = [s for s in current_strokes if s.direction == 'down']
                     feature_elements.append(next_stroke)
                     merged = self._merge_feature_sequence(feature_elements)
                     if self._feature_sequence_fractal_break(merged, 'up'):
                         break
-                    # 跳空缺口处理：有缺口时不终结（原逻辑保持）
+                    # 跳空缺口处理：有缺口时不终结
                     if len(current_strokes) >= 2:
                         if self._has_feature_sequence_gap(next_stroke, current_strokes[-1], seg_direction):
                             current_strokes.append(next_stroke)
                             j += 1
                             continue
                 elif seg_direction == 'down' and next_stroke.direction == 'up':
-                    # 下降段：提取上涨笔作为特征序列
                     feature_elements = [s for s in current_strokes if s.direction == 'up']
                     feature_elements.append(next_stroke)
                     merged = self._merge_feature_sequence(feature_elements)
                     if self._feature_sequence_fractal_break(merged, 'down'):
                         break
-                    # 跳空缺口处理
                     if len(current_strokes) >= 2:
                         if self._has_feature_sequence_gap(next_stroke, current_strokes[-1], seg_direction):
                             current_strokes.append(next_stroke)
                             j += 1
                             continue
 
+                # 更新价格边界（预留未来扩展）
                 current_strokes.append(next_stroke)
                 j += 1
+                # ── 段长上限：段内笔数超过上限时强制断线（防止单段吞噬全图）──
+                # 日线级别建议每段不超过9笔（约3-4个月）
+                if len(current_strokes) >= 9:
+                    break
 
             segment = self._create_segment_from_strokes(current_strokes)
             segments.append(segment)
-            # 线段方向必须强制交替
-            # 从断点位置向前跳过直到找到可以形成反向线段的三笔
+            # 线段方向强制交替：新线段第一笔方向必须与上一段相反
+            # 从 j 开始找到第一个能形成反向线段的三笔起始位置
             i = j
             while i < len(strokes) - 2:
                 s1, s2, s3 = strokes[i], strokes[i+1], strokes[i+2]
@@ -1120,6 +1134,97 @@ class ZhongshuAnalyzer:
             segments=[seg1, seg2, seg3],
             range_width=high - low
         )
+
+
+class BiZhongshuFinder:
+    """笔中枢检测器：直接从笔序列构建中枢，不经过线段
+
+    当 bi_zs_mode=True 时替代 ZhongshuAnalyzer。
+    解决特征序列分型几乎不触发线段终结导致的单一中枢覆盖全周期问题。
+
+    笔中枢规则（对标 czsc 实践）：
+    1. 连续 3 笔存在价格重叠 → 形成中枢起点
+    2. 后续笔进入重叠区间 → 中枢延伸（不扩展边界）
+    3. 后续笔完全离开重叠区间 → 中枢闭合，从离开笔开始检测新中枢
+
+    Args:
+        min_bi_count: 构成中枢的最少笔数
+    """
+
+    def __init__(self, min_bi_count: int = 3, min_width: float = 0.5):
+        """
+        Args:
+            min_bi_count: 构成中枢的最少笔数
+            min_width: 中枢最小宽度，过滤零宽/过窄中枢
+        """
+        self.min_bi_count = min_bi_count
+        self.min_width = min_width
+
+    def find(self, strokes: List[Stroke]) -> List[Zhongshu]:
+        """从笔序列检测中枢
+
+        Args:
+            strokes: 笔列表（已保证方向交替）
+
+        Returns:
+            中枢列表
+        """
+        zhongshu_list = []
+        if len(strokes) < self.min_bi_count:
+            return zhongshu_list
+
+        i = 0
+        while i <= len(strokes) - self.min_bi_count:
+            s1, s2, s3 = strokes[i], strokes[i+1], strokes[i+2]
+
+            # 计算连续3笔的重叠区间
+            ranges = [
+                (min(s1.start_price, s1.end_price), max(s1.start_price, s1.end_price)),
+                (min(s2.start_price, s2.end_price), max(s2.start_price, s2.end_price)),
+                (min(s3.start_price, s3.end_price), max(s3.start_price, s3.end_price)),
+            ]
+            overlap_low = max(r[0] for r in ranges)
+            overlap_high = min(r[1] for r in ranges)
+            if overlap_low > overlap_high:
+                i += 1
+                continue
+
+            # 创建笔中枢
+            low, high = overlap_low, overlap_high
+            if high - low < self.min_width:
+                i += 1
+                continue
+            zs = Zhongshu(
+                start_idx=s1.start_idx,
+                end_idx=s3.end_idx,
+                start_date=s1.start_date,
+                end_date=s3.end_date,
+                high=high, low=low,
+                center=(high + low) / 2,
+                direction=s1.direction,
+                segments=[],  # 笔中枢不使用 segment
+                range_width=high - low,
+                type='bi_zhongshu',
+            )
+
+            # 延伸：后续笔不离开中枢区间
+            j = i + 3
+            while j < len(strokes):
+                seg = strokes[j]
+                end_p = seg.end_price
+                if end_p > high or end_p < low:
+                    # 笔离开中枢 → 闭合
+                    break
+                zs.end_idx = seg.end_idx
+                zs.end_date = seg.end_date
+                j += 1
+
+            zhongshu_list.append(zs)
+            # 从离开中枢的笔开始检测下一个
+            i = j
+
+        return zhongshu_list
+
 
 class DivergenceDetector:
     """背驰检测器 — 支持多种背驰算法"""
@@ -1959,9 +2064,12 @@ class ChanlunAnalyzer:
             self.config = config or {}
             self.trigger_step = self.config.get('trigger_step', False)
             self.only_judge_last = self.config.get('only_judge_last', False)
+            self.bi_zs_mode = self.config.get('bi_zs_mode', True)
 
         # 初始化各组件
-        self.kline_merger = KLineMerger()
+        self.kline_merger = KLineMerger(
+            merge_depth=self.config.get('merge_depth', 3),
+        )
 
         if _chanlun_cfg:
             bi_cfg = _chanlun_cfg.bi
@@ -1978,10 +2086,10 @@ class ChanlunAnalyzer:
 
         self.fractal_detector = FractalDetector(
             fx_check=bi_cfg.bi_fx_check if bi_cfg else 'strict',
-            threshold_pct=self.config.get('fractal_threshold_pct', 0.5),
+            threshold_pct=self.config.get('fractal_threshold_pct', 0),
         )
         self.stroke_builder = StrokeBuilder(
-            min_klines=bi_cfg.min_klines if bi_cfg else self.config.get('min_klines', 5),
+            min_klines=bi_cfg.min_klines if bi_cfg else self.config.get('min_klines', 6),
             min_amplitude_pct=bi_cfg.min_amplitude_pct if bi_cfg else 0.0,
             fx_check=bi_cfg.bi_fx_check if bi_cfg else 'strict',
         )
@@ -2005,6 +2113,11 @@ class ChanlunAnalyzer:
             bsp3_follow_1=bs_cfg.bsp3_follow_1 if bs_cfg else True,
         )
 
+        # 笔中枢检测器（bi_zs_mode=True 时替代线段中枢）
+        self.bi_zs_finder = BiZhongshuFinder(
+            min_bi_count=self.config.get('min_bi_count', 3),
+        )
+
         # 分析结果
         self.klines = []
         self.fractals = []
@@ -2017,14 +2130,15 @@ class ChanlunAnalyzer:
 
     @staticmethod
     def _default_config() -> Dict:
-        """默认配置（对齐缠论标准定义）"""
+        """默认配置（对齐 czsc 标准）"""
         return {
-            'min_klines': 5,  # 严格笔：顶底分型之间至少5根不含包含关系的K线（含分形本身）
+            'min_klines': 6,  # 严格笔：对齐 czsc min_bi_len=6，包含后K线数
             'min_stroke_count': 3,  # 构成线段的最少笔数
             'min_segment_count': 3,  # 构成中枢的最少线段数
             'lookback_period': 120,  # 回看周期 (P1-#29: ⬆60→120)
             'min_confidence': 0.6,  # 最小置信度
-            'fractal_threshold_pct': 0.5,  # 分形确认阈值(%)，过滤弱势分形
+            'fractal_threshold_pct': 0,  # 分形确认阈值，0=关闭（对齐 czsc 标准）
+            'merge_depth': 3,  # 包含处理递归深度，0=czsc单次，3=推荐
         }
 
     def analyze(self, df: pd.DataFrame) -> Dict:
@@ -2059,14 +2173,20 @@ class ChanlunAnalyzer:
         self.strokes = self.stroke_builder.build(self.fractals, merged_klines=klines_filtered)
 
         if len(self.strokes) < 3:
-            return {'error': '笔不足，无法构建线段'}
+            return {'error': '数据不足，无法构建中枢'}
 
-        # 5. 线段识别
-        self.segments = self.segment_analyzer.build(self.strokes)
-
-        # 6. 中枢识别
-        if len(self.segments) >= 3:
-            self.zhongshu_list = self.zhongshu_analyzer.find(self.segments)
+        # 5-6. 中枢识别（根据 bi_zs_mode 选择路径）
+        if self.bi_zs_mode:
+            # ── 笔中枢模式（日线默认，对标 czsc）──
+            self.segments = []
+            self.zhongshu_list = self.bi_zs_finder.find(self.strokes)
+        else:
+            # ── 线段中枢模式（保留原实现）──
+            self.segments = self.segment_analyzer.build(self.strokes)
+            if len(self.segments) >= 3:
+                self.zhongshu_list = self.zhongshu_analyzer.find(self.segments)
+            else:
+                self.zhongshu_list = []
 
         # 7. 背驰判断（支持 MACD 面积确认）
         self.divergence = self.divergence_detector.detect(
@@ -2199,16 +2319,21 @@ class ChanlunAnalyzer:
                 'weight_adjustment': self.factor_weight_adj,
                 'selected_factors': self.selected_factors
             },
-            'pending_judgment': self.pending_judgment
+            'pending_judgment': self.pending_judgment,
+            'bi_zs_mode': self.bi_zs_mode,
         }
 
     def _determine_trend(self) -> str:
         """判断当前趋势"""
+        if self.bi_zs_mode:
+            # 笔中枢模式：用最后一笔的方向判断趋势
+            if self.strokes:
+                return self.strokes[-1].direction
+            return 'unknown'
+        # 线段中枢模式：用最后一段的方向
         if not self.segments:
             return 'unknown'
-
-        last_segment = self.segments[-1]
-        return last_segment.direction
+        return self.segments[-1].direction
 
     def _generate_summary(self) -> Dict:
         """生成分析摘要"""
@@ -2223,9 +2348,9 @@ class ChanlunAnalyzer:
             'divergence_type': self.divergence.type if self.divergence else None,
             'buy_point_count': len(self.buy_points),
             'sell_point_count': len(self.sell_points),
+            'bi_zs_mode': self.bi_zs_mode,
             'latest_zhongshu': str(self.zhongshu_list[-1]) if self.zhongshu_list else None
         }
-
         return summary
 
 
