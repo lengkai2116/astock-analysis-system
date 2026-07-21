@@ -382,8 +382,8 @@ def collect_market_snapshot() -> int:
 
         if not all_records:
             logger.warning(f"[mootdx] 快照采集完成，但无有效数据 ({elapsed:.1f}s)")
-            # mootdx 不可用时，尝试 AKShare 降级
-            fallback = collect_market_snapshot_akshare()
+            # mootdx 不可用时，尝试 HTTP 双源热备降级
+            fallback = _collect_dual_source_fallback()
             if fallback > 0:
                 return fallback
             return 0
@@ -418,117 +418,330 @@ def collect_market_snapshot() -> int:
         return 0
 
 
-def collect_market_snapshot_akshare() -> int:
-    """Sina 财经实时行情降级（mootdx TCP + EastMoney 均不可用时）
+# ══════════════════════════════════════════════════════════
+# 双源热备 HTTP 实时行情降级（Sina 主 + Tencent 备）
+# ══════════════════════════════════════════════════════════
 
-    使用 hq.sinajs.cn 获取沪深 A 股实时报价（HTTP API），写入 InMemoryStateStore。
-    Sina 接口返回 CSV 格式文本，解析为与 mootdx 一致的字段结构。
+# ── 源健康统计 ──
+_source_stats = {
+    'mootdx':  {'ok': 0, 'fail': 0},
+    'sina':    {'ok': 0, 'fail': 0},
+    'tencent': {'ok': 0, 'fail': 0},
+}
+_active_source = 'mootdx'  # 当前活跃源名称
 
-    Sina 单次请求可携带最多约 50 只股票，分批获取全市场后合并。
+
+def get_source_stats() -> dict:
+    """返回采集源健康统计（供健康检查端点使用）"""
+    global _active_source
+    rates = {}
+    for name, st in _source_stats.items():
+        total = st['ok'] + st['fail']
+        rates[name] = {
+            'ok': st['ok'],
+            'fail': st['fail'],
+            'rate': f'{st["ok"] / total * 100:.1f}%' if total > 0 else 'N/A',
+        }
+    return {
+        'active_source': _active_source,
+        'sources': rates,
+    }
+
+
+def _record_source_result(source: str, success: bool):
+    """记录单次采集结果到统计"""
+    global _source_stats
+    _source_stats.setdefault(source, {'ok': 0, 'fail': 0})
+    if success:
+        _source_stats[source]['ok'] += 1
+    else:
+        _source_stats[source]['fail'] += 1
+
+
+# ── 双源热备管理器 ─────────────────────────────────────
+
+
+class _SnapshotSourceManager:
+    """双源热备管理器：Sina 主 / Tencent 备，自动切换"""
+
+    FAILOVER_THRESHOLD = 3    # 主源连续失败 N 次后切换到备用源
+    RECOVERY_THRESHOLD = 2    # 备用源连续成功 N 次后切回主源
+
+    def __init__(self):
+        self._primary = 'sina'
+        self._consecutive_failures = 0
+        self._recovery_successes = 0
+
+    @property
+    def active_source(self) -> str:
+        return self._primary
+
+    def fetch(self, codes: list, name_map: dict) -> list:
+        """按主备顺序获取行情，返回 records 列表（空列表=双源均失败）"""
+        global _active_source
+
+        # Phase 1: 主源
+        result = self._fetch_source(self._primary, codes, name_map)
+        if result:
+            _record_source_result(self._primary, True)
+            self._consecutive_failures = 0
+            self._recovery_successes = 0
+            _active_source = self._primary
+            return result
+
+        _record_source_result(self._primary, False)
+        self._consecutive_failures += 1
+
+        # Phase 2: 备用源（主源失败时自动尝试）
+        backup = 'tencent' if self._primary == 'sina' else 'sina'
+        result = self._fetch_source(backup, codes, name_map)
+        if result:
+            _record_source_result(backup, True)
+            self._recovery_successes += 1
+            _active_source = backup
+
+            # 备源连续成功后切回主源
+            if self._recovery_successes >= self.RECOVERY_THRESHOLD:
+                self._primary = backup  # 更新主源为当前更稳定的
+                self._consecutive_failures = 0
+                self._recovery_successes = 0
+            return result
+
+        _record_source_result(backup, False)
+        self._recovery_successes = 0
+        return []
+
+    def _fetch_source(self, source: str, codes: list, name_map: dict) -> list:
+        if source == 'sina':
+            return _fetch_sina(codes, name_map)
+        return _fetch_tencent(codes, name_map)
+
+
+# ── Sina 解析器 ─────────────────────────────────────────
+
+
+def _fetch_sina(codes: list, name_map: dict) -> list:
+    """从 hq.sinajs.cn 获取实时行情
+
+    单次最多约 100 只，返回解析后的 dict 列表。
+    格式: var hq_str_sh600519="name,open,close,price,high,low,...,date,time";
+    字段: 0=名称,1=今开,2=昨收,3=当前价,4=最高,5=最低,
+          6=买一价,7=卖一价,8=成交量(手),9=成交额
+          10~19=买二~买五, 20~29=卖二~卖五
+    """
+    import urllib.request
+    all_records = []
+    batch_size = 100
+
+    for batch_start in range(0, min(len(codes), 2000), batch_size):
+        batch = codes[batch_start:batch_start + batch_size]
+        sina_codes = []
+        for c in batch:
+            m = 0 if c.startswith(('6', '9')) else 1
+            prefix = 'sh' if m == 0 else 'sz'
+            sina_codes.append(f'{prefix}{c}')
+
+        url = 'https://hq.sinajs.cn/list=' + ','.join(sina_codes)
+        req = urllib.request.Request(url, headers={
+            'Referer': 'https://finance.sina.com.cn',
+            'User-Agent': 'Mozilla/5.0',
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw = resp.read().decode('gbk')
+        except Exception:
+            continue
+
+        for line in raw.strip().split('\n'):
+            if not line.strip():
+                continue
+            try:
+                parts = line.split('="')
+                if len(parts) < 2:
+                    continue
+                values = parts[1].rstrip('";').split(',')
+                if len(values) < 32:
+                    continue
+                code_str = parts[0].split('_')[-1] if '_' in parts[0] else ''
+                code = code_str[2:] if code_str.startswith(('sh', 'sz')) else code_str
+                name = values[0]
+                open_p = _safe_float(values[1])
+                close_p = _safe_float(values[2])
+                price = _safe_float(values[3])
+                high = _safe_float(values[4])
+                low = _safe_float(values[5])
+                if price == 0 or close_p == 0:
+                    continue
+                volume = _safe_float(values[8])
+                amount = _safe_float(values[9])
+                market = 0 if code.startswith(('6', '9')) else 1
+                ts_code = f'{code}.SH' if market == 0 else f'{code}.SZ'
+                change = round(price - close_p, 2)
+                change_pct = round(change / close_p * 100, 2) if close_p else 0.0
+
+                record = {
+                    'ts_code': ts_code, 'code': code,
+                    'name': name_map.get(code, name),
+                    'price': price, 'change': change, 'change_pct': change_pct,
+                    'open': open_p, 'high': high, 'low': low,
+                    'prev_close': close_p,
+                    'volume': int(volume * 100),  'amount': amount,
+                    'bid1': 0.0, 'ask1': 0.0,
+                    'bid_vol1': 0, 'ask_vol1': 0,
+                    'bid2': 0.0, 'ask2': 0.0,
+                    'bid_vol2': 0, 'ask_vol2': 0,
+                    'bid3': 0.0, 'ask3': 0.0,
+                    'bid_vol3': 0, 'ask_vol3': 0,
+                    'bid4': 0.0, 'ask4': 0.0,
+                    'bid_vol4': 0, 'ask_vol4': 0,
+                    'bid5': 0.0, 'ask5': 0.0,
+                    'bid_vol5': 0, 'ask_vol5': 0,
+                    'commission': 0.0, 'speed': 0.0,
+                    'timestamp': datetime.now().isoformat(),
+                    'source': 'sina',
+                }
+                all_records.append(record)
+            except Exception:
+                continue
+
+    return all_records
+
+
+# ── Tencent 解析器 ──────────────────────────────────────
+
+
+def _fetch_tencent(codes: list, name_map: dict) -> list:
+    """从 qt.gtimg.cn 获取实时行情（含完整五档盘口）
+
+    Tencent 格式:
+      v_sh600519="1~贵州茅台~600519~30.88~30.72~30.90~...~date;time"
+
+    字段位置:
+      3=当前价, 4=昨收, 5=今开, 6=成交量(手), 7=成交额
+      8=买一量, 9=买一价, 10=买二量, 11=买二价, ...(至买五)
+      20=卖一量, 21=卖一价, 22=卖二量, 23=卖二价, ...(至卖五)
+      33=最高, 34=最低
+    """
+    import urllib.request
+    all_records = []
+    batch_size = 100
+
+    for batch_start in range(0, min(len(codes), 2000), batch_size):
+        batch = codes[batch_start:batch_start + batch_size]
+        tencent_codes = []
+        for c in batch:
+            m = 0 if c.startswith(('6', '9')) else 1
+            prefix = 'sh' if m == 0 else 'sz'
+            tencent_codes.append(f'{prefix}{c}')
+
+        url = 'https://qt.gtimg.cn/q=' + ','.join(tencent_codes)
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0',
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw = resp.read().decode('gbk')
+        except Exception:
+            continue
+
+        for line in raw.strip().split('\n'):
+            if not line.strip():
+                continue
+            try:
+                eq_pos = line.index('="')
+                values = line[eq_pos + 2:line.rindex('";')].split('~')
+                if len(values) < 40:
+                    continue
+
+                code_str = line.split('=')[0].lstrip('v_')
+                code = code_str[2:]
+                price = _safe_float(values[3])
+                close_p = _safe_float(values[4])
+                if price == 0 or close_p == 0:
+                    continue
+
+                market = 0 if code.startswith(('6', '9')) else 1
+                ts_code = f'{code}.SH' if market == 0 else f'{code}.SZ'
+                change = round(price - close_p, 2)
+                change_pct = round(change / close_p * 100, 2) if close_p else 0.0
+
+                record = {
+                    'ts_code': ts_code, 'code': code,
+                    'name': name_map.get(code, values[1]),
+                    'price': price, 'change': change, 'change_pct': change_pct,
+                    'open': _safe_float(values[5]),
+                    'high': _safe_float(values[33]),
+                    'low': _safe_float(values[34]),
+                    'prev_close': close_p,
+                    'volume': int(_safe_float(values[6]) * 100),
+                    'amount': _safe_float(values[7]),
+                    # 五档盘口：(量,价) 交替
+                    'bid1': _safe_float(values[9]),
+                    'bid_vol1': int(_safe_float(values[8])),
+                    'ask1': _safe_float(values[21]),
+                    'ask_vol1': int(_safe_float(values[20])),
+                    'bid2': _safe_float(values[11]),
+                    'bid_vol2': int(_safe_float(values[10])),
+                    'ask2': _safe_float(values[23]),
+                    'ask_vol2': int(_safe_float(values[22])),
+                    'bid3': _safe_float(values[13]),
+                    'bid_vol3': int(_safe_float(values[12])),
+                    'ask3': _safe_float(values[25]),
+                    'ask_vol3': int(_safe_float(values[24])),
+                    'bid4': _safe_float(values[15]),
+                    'bid_vol4': int(_safe_float(values[14])),
+                    'ask4': _safe_float(values[27]),
+                    'ask_vol4': int(_safe_float(values[26])),
+                    'bid5': _safe_float(values[17]),
+                    'bid_vol5': int(_safe_float(values[16])),
+                    'ask5': _safe_float(values[29]),
+                    'ask_vol5': int(_safe_float(values[28])),
+                    # 委比 = (∑买量-∑卖量)/(∑买量+∑卖量)*100
+                    'commission': 0.0, 'speed': 0.0,
+                    'timestamp': datetime.now().isoformat(),
+                    'source': 'tencent',
+                }
+                all_records.append(record)
+            except Exception:
+                continue
+
+    return all_records
+
+
+# ── 双源热备采集入口 ─────────────────────────────────────
+
+
+_http_source_mgr = _SnapshotSourceManager()
+
+
+def _collect_dual_source_fallback() -> int:
+    """HTTP 双源热备采集：Sina 主 / Tencent 备，自动切换
+
+    由 collect_market_snapshot() 在 mootdx 不可用时调用。
+    将采集结果写入 InMemoryStateStore 并计算涨跌榜/涨跌停池。
     """
     from app.data.in_memory_store import store as mem_store
-    import urllib.request
 
     codes = _get_a_share_codes()
     if not codes:
         return 0
 
-    try:
-        t_start = time.time()
-        name_map = _stock_name_map
-        all_records = []
-        batch_size = 100
-        max_stocks = 2000  # 限前 2000 只，覆盖主流活跃股
+    t_start = time.time()
+    name_map = _stock_name_map
 
-        for batch_start in range(0, min(len(codes), max_stocks), batch_size):
-            batch = codes[batch_start:batch_start + batch_size]
-            # Sina 格式：sh600519, sz000001
-            sina_codes = []
-            market_map = {}
-            for c in batch:
-                m = 0 if c.startswith('6') or c.startswith('9') else 1
-                prefix = 'sh' if m == 0 else 'sz'
-                sina_codes.append(f'{prefix}{c}')
-                market_map[c] = m
-
-            url = 'https://hq.sinajs.cn/list=' + ','.join(sina_codes)
-            req = urllib.request.Request(url, headers={
-                'Referer': 'https://finance.sina.com.cn',
-                'User-Agent': 'Mozilla/5.0',
-            })
-            try:
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    raw = resp.read().decode('gbk')
-            except Exception:
-                continue
-
-            for line in raw.strip().split('\n'):
-                if not line.strip():
-                    continue
-                try:
-                    parts = line.split('="')
-                    if len(parts) < 2:
-                        continue
-                    values = parts[1].rstrip('";').split(',')
-                    if len(values) < 32:
-                        continue
-                    code_str = parts[0].split('_')[-1] if '_' in parts[0] else ''
-                    code = code_str[2:] if code_str.startswith(('sh', 'sz')) else code_str
-                    name = values[0]
-                    open_p = _safe_float(values[1])
-                    close_p = _safe_float(values[2])
-                    price = _safe_float(values[3])
-                    high = _safe_float(values[4])
-                    low = _safe_float(values[5])
-                    if price == 0 or close_p == 0:
-                        continue
-                    volume = _safe_float(values[8])  # 成交量(手)
-                    amount = _safe_float(values[9])   # 成交额
-                    market = market_map.get(code, 0)
-                    ts_code = f'{code}.SH' if market == 0 else f'{code}.SZ'
-                    change = round(price - close_p, 2)
-                    change_pct = round(change / close_p * 100, 2) if close_p else 0.0
-                    record = {
-                        'ts_code': ts_code, 'code': code,
-                        'name': name_map.get(code, name),
-                        'price': price, 'change': change, 'change_pct': change_pct,
-                        'open': open_p, 'high': high, 'low': low,
-                        'prev_close': close_p,
-                        'volume': int(volume * 100),  # Sina 返回手，转股
-                        'amount': amount,
-                        'bid1': 0.0, 'ask1': 0.0,
-                        'bid_vol1': 0, 'ask_vol1': 0,
-                        'bid2': 0.0, 'ask2': 0.0,
-                        'bid_vol2': 0, 'ask_vol2': 0,
-                        'bid3': 0.0, 'ask3': 0.0,
-                        'bid_vol3': 0, 'ask_vol3': 0,
-                        'bid4': 0.0, 'ask4': 0.0,
-                        'bid_vol4': 0, 'ask_vol4': 0,
-                        'bid5': 0.0, 'ask5': 0.0,
-                        'bid_vol5': 0, 'ask_vol5': 0,
-                        'commission': 0.0, 'speed': 0.0,
-                        'timestamp': datetime.now().isoformat(),
-                        'source': 'sina_fallback',
-                    }
-                    all_records.append(record)
-                except Exception:
-                    continue
-
-        elapsed = time.time() - t_start
-
-        if not all_records:
-            return 0
-
-        mem_store.update_snapshot(all_records)
-        _compute_top_stocks(all_records)
-        _compute_limit_pools(all_records)
-
-        logger.info(f"[sina] 实时行情降级完成: {len(all_records)} 只 ({elapsed:.1f}s)")
-        return len(all_records)
-
-    except Exception as e:
-        logger.warning(f"[sina] 快照降级失败: {e}")
+    all_records = _http_source_mgr.fetch(codes, name_map)
+    if not all_records:
         return 0
+
+    elapsed = time.time() - t_start
+    source = _http_source_mgr.active_source
+
+    mem_store.update_snapshot(all_records)
+    _compute_top_stocks(all_records)
+    _compute_limit_pools(all_records)
+
+    logger.info(f"[{source}] 实时行情降级完成: {len(all_records)} 只 ({elapsed:.1f}s)")
+    return len(all_records)
 
 
 # ── 分钟K线全覆盖采集 ─────────────────────────────────────

@@ -194,6 +194,19 @@ def _get_cache_status():
         }
 
 
+def _get_collector_status():
+    """获取采集器健康状态"""
+    try:
+        from app.data.mootdx_collector import get_source_stats
+        return get_source_stats()
+    except Exception as e:
+        return {
+            "active_source": "unknown",
+            "sources": {},
+            "error": str(e)
+        }
+
+
 @health_bp.route('/api/v3/health', methods=['GET'])
 @health_bp.route('/api/v1/health', methods=['GET'])  # DEPRECATED: use /api/v3/health
 def health_check():
@@ -269,7 +282,8 @@ def health_check():
             "system": system_info,
             "data_sources": data_sources,
             "external_apis": _get_external_api_status(),
-            "cache": cache
+            "cache": cache,
+            "collector": _get_collector_status()
         }
     })
 
