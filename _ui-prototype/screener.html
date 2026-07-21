@@ -551,14 +551,20 @@ function runScreening() {
     vibe_strategies: vibeIds.length > 0 ? vibeIds : null,
   });
 
-  var timeout = setTimeout(function() { showError('筛选超时，请重试'); if(btn)btn.innerHTML='⚡ 执行筛选'; }, 60000);
+  var timeout = setTimeout(function() { showError('筛选超时（数据预热中，请稍后重试）'); if(btn)btn.innerHTML='⚡ 执行筛选'; }, 120000);
 
   fetch(API_BASE + '/api/v3/screener/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:payload})
-    .then(function(r) { return r.json(); })
-    .then(function(res) {
+    .then(function(r) { return r.json().then(function(d) { return { status: r.status, body: d }; }); })
+    .then(function(resp) {
       clearTimeout(timeout);
       if (btn) btn.innerHTML = '⚡ 执行筛选';
       if (loading) loading.style.display = 'none';
+      var res = resp.body;
+
+      if (resp.status === 503 && res.message) {
+        showError(res.message + '（数据采集进程正在同步，请几秒后重试）');
+        return;
+      }
 
       if (res.success && res.data) {
         renderResults(res.data);

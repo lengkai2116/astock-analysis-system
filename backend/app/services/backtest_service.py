@@ -15,7 +15,7 @@ from app.engine.backtest_v2 import (
     AShareBacktestEngine, BacktestConfig,
     create_default_engine
 )
-from app.data.tushare_provider import TushareProvider
+from app.data import DataManager
 from app.data.memory_cache import TieredMemoryCache
 
 logger = logging.getLogger(__name__)
@@ -78,18 +78,7 @@ class CrossSectionalBacktestService:
     """横截面回测聚合服务"""
 
     def __init__(self):
-        self._tp: Optional[TushareProvider] = None
         self._cache = TieredMemoryCache()
-
-    def _get_provider(self) -> Optional[TushareProvider]:
-        if self._tp is None:
-            try:
-                self._tp = TushareProvider()
-                if not self._tp.pro:
-                    self._tp = None
-            except Exception:
-                self._tp = None
-        return self._tp
 
     def run_strategy_backtest(
         self,
@@ -116,9 +105,7 @@ class CrossSectionalBacktestService:
             task_id = _init_task(ts_codes, start_date, end_date)
 
         ts_codes = list(dict.fromkeys([c.strip() for c in ts_codes if c.strip()]))
-        tp = self._get_provider()
-        if not tp:
-            return {'success': False, 'error': 'Tushare数据源不可用', 'task_id': task_id}
+        dm = DataManager()
 
         backtest_config = BacktestConfig(
             initial_capital=config.get('initial_capital', 100000) if config else 100000,
@@ -135,7 +122,7 @@ class CrossSectionalBacktestService:
 
         # ── 阶段1：数据获取 ──
         _update_progress(task_id, 'data_fetch', 0.05, message='正在获取行情数据...')
-        stock_data_map, failed_codes = self._fetch_all_prices(tp, ts_codes, start_date, end_date)
+        stock_data_map, failed_codes = self._fetch_all_prices(dm, ts_codes, start_date, end_date)
         ts_codes = [c for c in ts_codes if c in stock_data_map]
         _update_progress(task_id, 'data_fetch', 0.15, stocks_total=len(ts_codes))
 
@@ -205,10 +192,10 @@ class CrossSectionalBacktestService:
     # ── 私有方法 ──────────────────────────────────────────────
 
     def _fetch_all_prices(
-        self, tp: TushareProvider, ts_codes: List[str],
+        self, dm: DataManager, ts_codes: List[str],
         start_date: str, end_date: str
     ) -> Tuple[Dict[str, pd.DataFrame], List[str]]:
-        """并行获取所有股票的历史日线数据"""
+        """并行获取所有股票的历史日线数据（通过 DataManager 只读存储层）"""
         stock_data_map = {}
         failed = []
 
@@ -220,19 +207,19 @@ class CrossSectionalBacktestService:
             warmup_start = start_date
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            def _fetch_stock(c):
+                df = dm.get_cached_daily_data(c, start_date=warmup_start, end_date=end_date)
+                return c, df
+
             future_map = {
-                executor.submit(tp.get_daily_data, c, warmup_start, end_date): c
+                executor.submit(_fetch_stock, c): c
                 for c in ts_codes
             }
             for future in as_completed(future_map):
                 ts_code = future_map[future]
                 try:
-                    raw = future.result()
-                    if not raw:
-                        failed.append(ts_code)
-                        continue
-                    df = pd.DataFrame(raw)
-                    if df.empty:
+                    c, df = future.result()
+                    if df is None or df.empty:
                         failed.append(ts_code)
                         continue
                     # 确保列名统一
@@ -727,17 +714,16 @@ class ParameterOptimizer:
         Returns:
             优化结果（包含所有组合的评分排序）
         """
-        from app.data.tushare_provider import TushareProvider
-        tp = TushareProvider()
-        if not tp.pro:
-            return {'success': False, 'error': '数据源不可用'}
+        from app.data import DataManager
+        dm = DataManager()
 
         # 获取数据
         warmup = (datetime.strptime(start_date, '%Y%m%d') - timedelta(days=90)).strftime('%Y%m%d')
-        raw = tp.get_daily_data(ts_code, warmup, end_date)
-        if not raw:
+        df = dm.get_cached_daily_data(ts_code, start_date=warmup, end_date=end_date)
+        if df is None or df.empty:
             return {'success': False, 'error': f'获取{ts_code}数据失败'}
-        df = pd.DataFrame(raw)
+        if 'pct_chg' not in df.columns and 'close' in df.columns:
+            df['pct_chg'] = df['close'].pct_change() * 100
         date_col = 'trade_date' if 'trade_date' in df.columns else 'date'
         df = df.set_index(date_col).sort_index()
 

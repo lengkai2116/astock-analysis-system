@@ -8,19 +8,7 @@ logger = logging.getLogger(__name__)
 class MarketService:
     def __init__(self):
         self._data_manager = None
-        self._akshare = None
 
-    @property
-    def akshare(self):
-        """懒加载 AkshareProvider"""
-        if self._akshare is None:
-            try:
-                from app.data.akshare_provider import AkshareProvider
-                self._akshare = AkshareProvider()
-            except ImportError:
-                self._akshare = None
-        return self._akshare
-    
     @property
     def data_manager(self):
         """懒加载DataManager"""
@@ -71,32 +59,6 @@ class MarketService:
             pass
         return []
     
-    def sync_stock_data(self):
-        try:
-            count = self.data_manager.sync_stock_list()
-            return {
-                'success': True,
-                'message': f'成功同步 {count} 只股票'
-            }
-        except Exception as e:
-            return {
-                'success': False,
-                'message': f'同步失败: {str(e)}'
-            }
-    
-    def sync_daily_data(self, ts_code):
-        try:
-            count = self.data_manager.sync_daily_data(ts_code)
-            return {
-                'success': True,
-                'message': f'成功同步 {count} 条日线数据'
-            }
-        except Exception as e:
-            return {
-                'success': False,
-                'message': f'同步失败: {str(e)}'
-            }
-    
     def get_index_data(self):
         indices = [
             {'ts_code': '000001.SH', 'name': '上证指数'},
@@ -104,29 +66,41 @@ class MarketService:
             {'ts_code': '399006.SZ', 'name': '创业板指'}
         ]
 
-        # 盘中 → AKShare 实时指数
+        # 从 ECM 读取最近交易日日线数据
         try:
-            from app.utils.trading_hours import is_trading_time
-            if is_trading_time() and self.akshare:
-                results = []
-                for idx in indices:
-                    try:
-                        data = self.akshare.get_index_daily(idx['ts_code'])
-                        if data:
-                            data['name'] = idx['name']
-                            data['source'] = 'akshare'
-                            results.append(data)
-                        else:
-                            results.append({**idx, 'value': 0, 'timestamp': datetime.now().isoformat(), 'source': 'akshare'})
-                    except Exception as e:
-                        logger.warning(f"AKShare 指数失败 ({idx['ts_code']}): {e}")
-                        results.append({**idx, 'value': 0, 'timestamp': datetime.now().isoformat(), 'source': 'akshare'})
-                return results
-        except ImportError:
-            pass
-
-        # 盘后 / AKShare 不可用 → 返回元数据
-        return indices
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            ecm = get_ecm_instance()
+            results = []
+            for idx in indices:
+                try:
+                    df = ecm.get_cached_daily(idx['ts_code'], limit=2)
+                    if df is not None and not df.empty:
+                        latest = df.iloc[-1].to_dict()
+                        prev = df.iloc[-2].to_dict() if len(df) >= 2 else latest
+                        prev_close = prev.get('close', latest.get('pre_close', 0))
+                        close_val = latest.get('close', 0)
+                        change = close_val - prev_close if prev_close else 0
+                        change_pct = (change / prev_close * 100) if prev_close > 0 else 0
+                        results.append({
+                            'ts_code': idx['ts_code'],
+                            'name': idx['name'],
+                            'value': close_val,
+                            'change': round(change, 2),
+                            'changePercent': round(change_pct, 2),
+                            'close': close_val,
+                            'pre_close': prev_close,
+                            'volume': latest.get('vol', 0),
+                            'amount': latest.get('amount', 0),
+                            'source': 'ecm',
+                        })
+                    else:
+                        results.append({**idx, 'value': 0, 'timestamp': datetime.now().isoformat(), 'source': 'ecm'})
+                except Exception as e:
+                    logger.warning(f"指数数据获取失败 ({idx['ts_code']}): {e}")
+                    results.append({**idx, 'value': 0, 'timestamp': datetime.now().isoformat(), 'source': 'ecm'})
+            return results
+        except Exception:
+            return indices
     
     def get_industries(self):
         industries = Stock.query.with_entities(Stock.industry).distinct().all()

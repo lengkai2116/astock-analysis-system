@@ -418,20 +418,22 @@ class ResearchPipeline:
             raise RuntimeError("回测引擎未初始化")
         
         try:
-            from app.data.tushare_provider import TushareProvider
+            from app.data import DataManager
             
             validated_input = context['validated_input']
             
-            provider = TushareProvider()
+            dm = DataManager()
             
-            price_data = provider.get_daily_basic(
-                ts_code=validated_input['ts_code'],
+            price_df = dm.get_cached_daily_data(
+                validated_input['ts_code'],
                 start_date=validated_input['start_date'],
                 end_date=validated_input['end_date']
             )
             
-            if price_data is None or len(price_data) == 0:
+            if price_df is None or price_df.empty:
                 raise RuntimeError("无法获取股票数据")
+            
+            price_data = price_df.to_dict('records')
             
             step.logs.append(f"获取到 {len(price_data)} 条历史数据")
             

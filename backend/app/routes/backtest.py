@@ -21,7 +21,6 @@ from app.services.benchmark_service import (
     BenchmarkIndex,
     create_benchmark_service
 )
-from app.data.tushare_provider import TushareProvider
 from app.utils.error_handlers import handle_exceptions
 from app.services.backtest_service import (
     CrossSectionalBacktestService,
@@ -591,8 +590,11 @@ def get_status():
     获取回测服务状态
     """
     try:
-        provider = TushareProvider()
-        success, msg = provider.test_connection()
+        # 检查 ECM 健康状态
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        success = ecm is not None
+        msg = 'ECM 就绪' if success else 'ECM 不可用'
         
         return jsonify({
             'success': True,

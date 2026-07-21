@@ -515,6 +515,19 @@ class EnhancedCacheManager:
                 self.conn.execute(idx_sql)
             except Exception:
                 pass
+
+        # sync_requests 队列表：调用层→采集层的"数据缺失"信号
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS sync_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_type TEXT NOT NULL,
+                ts_code TEXT,
+                status TEXT DEFAULT 'pending',
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP
+            )
+        """)
+        self._execute("CREATE INDEX IF NOT EXISTS idx_sync_req_status ON sync_requests(status)")
         self.conn.commit()
 
     # ── 快照数据库建表 ──────────────────────────────────────────
@@ -1620,6 +1633,60 @@ class EnhancedCacheManager:
         self._execute("DELETE FROM indicator_cache WHERE trade_date < ?", [cutoff])
         self.conn.commit()
         logger.info(f"清理 indicator_cache (cutoff={cutoff})")
+
+    def request_data(self, task_type: str, ts_code: str = None) -> int:
+        """写 sync_requests 队列表：通知 data_daemon 异步补采
+
+        Args:
+            task_type: 任务类型 ('full_daily' | 'full_moneyflow' | 'full_basic' | 'per_stock' | 'full_stock_list')
+            ts_code: 股票代码（None 表示全市场）
+
+        Returns:
+            request_id
+        """
+        cur = self.conn.execute(
+            "INSERT INTO sync_requests (task_type, ts_code, status) VALUES (?, ?, 'pending')",
+            [task_type, ts_code]
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def poll_data_ready(self, request_id: int) -> str:
+        """轮询 sync_requests 状态
+
+        Args:
+            request_id: request_data() 返回的 id
+
+        Returns:
+            'pending' | 'running' | 'done' | 'failed'
+        """
+        row = self.conn.execute(
+            "SELECT status FROM sync_requests WHERE id=?", [request_id]
+        ).fetchone()
+        return row[0] if row else 'unknown'
+
+    def consume_pending_requests(self) -> list:
+        """获取所有 pending 的 sync_requests（供 data_daemon 消费）"""
+        rows = self.conn.execute(
+            "SELECT id, task_type, ts_code, status FROM sync_requests WHERE status='pending' ORDER BY requested_at ASC"
+        ).fetchall()
+        return [{'id': r[0], 'task_type': r[1], 'ts_code': r[2], 'status': r[3]} for r in rows]
+
+    def mark_request_done(self, request_id: int):
+        """标记 sync_requests 为完成"""
+        self.conn.execute(
+            "UPDATE sync_requests SET status='done', completed_at=CURRENT_TIMESTAMP WHERE id=?",
+            [request_id]
+        )
+        self.conn.commit()
+
+    def mark_request_failed(self, request_id: int):
+        """标记 sync_requests 为失败"""
+        self.conn.execute(
+            "UPDATE sync_requests SET status='failed', completed_at=CURRENT_TIMESTAMP WHERE id=?",
+            [request_id]
+        )
+        self.conn.commit()
 
     def vacuum_db(self):
         """执行 VACUUM 回收空间（应在低负载时段执行）"""

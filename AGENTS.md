@@ -75,12 +75,13 @@ make dev             # 一键启动上面全部
 ```
 采集层 (Collection Layer) — 独立进程，系统开机自动启动
   数据源连接（mootdx TCP / Tushare HTTP / AKShare）只允许出现在采集进程
-  采集频率由 data_daemon 主循环或 APScheduler 统一管理
+  采集频率由 data_daemon 主循环统一管理（禁止在 API 进程中触发）
   ↓ 写入
 存储层 (Storage Layer) — DataManager 为唯一网关
   ECM SQLite WAL（盘后持久化）+ InMemoryStateStore（盘中实时）
   DataManager 是所有数据访问的统一入口，禁止绕过
-  ↓ 读取
+  sync_requests 队列表（新增）：调用层→存储层的"数据缺失"信号
+  ↓ 读取（写入 sync_requests）
 计算层 (Computation Layer) — 数据到达时后台自动触发，非等待请求
   日终同步后自动触发：指标预计算 → 因子预计算 → 信号预计算
   盘中增量计算：分钟K线聚合
@@ -88,17 +89,53 @@ make dev             # 一键启动上面全部
 调用层 (Call Layer) — 仅从存储层只读，前端请求时提取
   Flask REST API 只读存储层，不得直接调用外部数据源
   不得在路由中触发实时计算，不得生成 Mock 数据
+  数据缺失时：写入 sync_requests 队列表 → 返回空/503 → daemon 异步补采
   ↓
 前端
 ```
 
 **红线规则（违反=必须修复）：**
-1. API 路由中禁止 `new TushareProvider()`、`mootdx.Quotes.factory()`、`DataManager.sync_*()` 等采集操作
-2. API 路由中禁止实时计算技术指标等**数据计算**（应当在后台预计算）。**策略核算**（缠论/量价/筹码等策略分析）可按用户操作触发
-3. 计算层执行时机：**数据计算**在数据到达时自动触发；**策略核算**在用户触发时执行
-4. DataManager 是存储层的**唯一数据网关**，任何数据读取通过 DataManager
-5. **禁止使用 Mock/随机数据作为数据降级方案**（§13规则，参见第六节）
-6. 分钟K线数据必须持久化到 `minute_kline_cache` 表，禁止直调 Tushare 不落缓存
+1. **所有非采集层代码**（包括 `routes/` 和 `services/`）禁止以下操作：
+   - `new TushareProvider()`、`new AkshareProvider()`、`mootdx.Quotes.factory()` 等数据源提供者实例化
+   - `DataManager.sync_*()` 系列方法调用（`sync_daily_data`、`sync_stock_list`、`sync_all_daily_data` 等）
+   - 任何直接调用 `pro.daily()`、`pro.moneyflow()` 等 Tushare API 的行为
+2. 禁止 `use_cache=False` 参数——非采集层代码不得显式绕过存储层
+3. API 路由中禁止实时计算技术指标等**数据计算**（应当在后台预计算）。**策略核算**（缠论/量价/筹码等策略分析）可按用户操作触发
+4. 计算层执行时机：**数据计算**在数据到达时自动触发；**策略核算**在用户触发时执行
+5. DataManager 是存储层的**唯一数据网关**，任何数据读取通过 DataManager
+6. **禁止使用 Mock/随机数据作为数据降级方案**（§13规则，参见第六节）
+7. 分钟K线数据必须持久化到 `minute_kline_cache` 表，禁止直调 Tushare 不落缓存
+8. **数据缺失时禁止直调数据源降级**——必须走 sync_requests 异步队列机制（详见下文"数据就绪保障机制"）
+
+**数据就绪保障机制（sync_requests 异步队列）：**
+
+当调用层访问存储层发现数据缺失时，禁止直调采集层。改为：
+
+```
+调用层 → DataManager.request_data(task_type, ts_code?)
+       → 写入 SQLite sync_requests 表 (status='pending')
+       → 返回空结果 / HTTP 503
+       → data_daemon 30s 轮询消费
+       → 批量同步（_batch_daily 等全量API，非逐只）
+       → 写入存储层 + 标记 status='done'
+       → 计算层自动触发预计算
+       → 调用层下次请求命中缓存
+```
+
+sync_requests 表结构（后续实现）：
+```sql
+CREATE TABLE sync_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_type TEXT NOT NULL,       -- 'full_daily' | 'full_moneyflow' | 'full_basic' | etc.
+    ts_code TEXT,                  -- NULL 表示全市场
+    status TEXT DEFAULT 'pending', -- pending | running | done | failed
+    requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+```
+
+**注意**：对于轻量缺失（如单日数据），可在 daemon 主循环中快速补采；
+对于重量缺失（首次开机/全量建库），daemon 执行批量 API 调用后通知调用层。
 
 **关键概念区分：**
 | 维度 | 数据计算（预计算） | 策略核算（按需） |
@@ -165,11 +202,16 @@ curl http://localhost:5001/api/v3/health/ready   # 就绪检查
 ### 数据完整性（§13 规则）
 
 **生产环境禁止使用模拟数据（Mock）作为数据源降级方案。** 允许的降级优先级：
-1. **缓存数据**（DuckDB 最近一次成功数据，返回 `cached_at` 字段）
+1. **缓存数据**（ECM 最近一次成功数据，返回 `cached_at` 字段）
 2. **空结构**（空列表/空对象，前端展示空状态）
 3. **明确错误**（HTTP 503 + 错误信息）
+4. **异步队列补采**（调用层写入 `sync_requests` → daemon 异步补 → 下次请求命中）
 
-**禁止**：随机数填充、造假走势/信号/板块数据。
+**禁止**：
+- 随机数填充、造假走势/信号/板块数据
+- **直调 TushareProvider / AkshareProvider / mootdx 作为降级方案**
+- **在调用层（routes/）或服务层（services/）中使用 `use_cache=False`**
+- **在非采集层代码中实例化任何数据源 Provider**
 
 ### 已知技术细节
 
@@ -182,6 +224,10 @@ curl http://localhost:5001/api/v3/health/ready   # 就绪检查
 - **指标预计算**：`indicator_ma`/`indicator_macd`/`indicator_other` 宽表已有数据，`chart.py` 必须优先从宽表读取，禁止回退到实时计算。`factor_cache`(3715万行) 和 `strategy_signals` 同理。
 - **前段产物缺失**：`frontend/vue-project/` 目录当前不完整（仅 `.DS_Store`），`npm run build` 前需先恢复项目文件。
 - **前端产物缺失**：`frontend/vue-project/` 目录当前不完整（仅 `.DS_Store`），`npm run build` 前需先恢复项目文件。
+- **sync_requests 异步队列**：当调用层（routes/）访问存储层数据缺失时，禁止直调数据源降级。必须写 `sync_requests` 表通知 daemon 异步补采。该机制是四层架构红线规则的数据就绪保障。详见 §III 红线规则 8。
+- **红线违规历史记录**：全系统曾在 10 个文件（4 个 routes/ + 4 个 services/ + 2 个其他）中存在 20+ 处直调数据源/`use_cache=False`/`sync_*` 违规。详情见 `002-方案存档/284-全局数据体系违规审计与架构整改方案.md`。新代码必须通过以下合规检查：
+  - `git diff` 不引入新的 `TushareProvider()`/`AkshareProvider()`/`sync_*`/`use_cache=False`
+  - 数据读取必经 DataManager 只读方法（`get_*`），不走 `sync_*`
 
 ---
 

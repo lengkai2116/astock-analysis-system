@@ -557,6 +557,45 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
     return total
 
 
+def _batch_stock_list() -> int:
+    """全市场股票列表同步（通过 DataManager）"""
+    try:
+        from app.data import DataManager
+        dm = DataManager()
+        from app.models import Stock
+        stocks = dm.tushare.get_stock_list()
+        if not stocks:
+            return 0
+        for stock in stocks:
+            existing = Stock.query.get(stock['ts_code'])
+            list_date = stock.get('list_date')
+            if existing:
+                existing.symbol = stock['symbol']
+                existing.name = stock['name']
+                existing.industry = stock.get('industry')
+                existing.market = stock.get('market')
+                if list_date:
+                    existing.list_date = datetime.strptime(list_date, '%Y%m%d').date()
+            else:
+                new_stock = Stock(
+                    ts_code=stock['ts_code'],
+                    symbol=stock['symbol'],
+                    name=stock['name'],
+                    industry=stock.get('industry'),
+                    market=stock.get('market'),
+                    list_date=datetime.strptime(list_date, '%Y%m%d').date() if list_date else None
+                )
+                from app import db
+                db.session.add(new_stock)
+        from app import db
+        db.session.commit()
+        logger.info(f"股票列表同步: {len(stocks)} 只")
+        return len(stocks)
+    except Exception as e:
+        logger.warning(f"股票列表同步失败: {e}")
+        return 0
+
+
 def _batch_income_recent(limit_days: int = 90) -> int:
     """增量同步最近一期利润表 — 后台低优"""
     _ensure_pd()
@@ -1305,6 +1344,33 @@ def main():
 
     logger.info("data_daemon 进入主循环")
     while _running:
+        now = datetime.now()
+        ts = time.time()
+
+        # ── sync_requests 队列消费 ──
+        try:
+            pending = _ecm.consume_pending_requests()
+            for req in pending:
+                logger.info(f"消费 sync_requests: id={req['id']} type={req['task_type']} ts_code={req.get('ts_code')}")
+                try:
+                    if req['task_type'] == 'full_daily':
+                        _batch_daily(datetime.now().strftime('%Y%m%d'))
+                        _batch_daily_basic(datetime.now().strftime('%Y%m%d'))
+                    elif req['task_type'] == 'full_moneyflow':
+                        _batch_moneyflow(datetime.now().strftime('%Y%m%d'))
+                    elif req['task_type'] == 'full_basic':
+                        _batch_daily_basic(datetime.now().strftime('%Y%m%d'))
+                    elif req['task_type'] == 'full_stock_list':
+                        _batch_stock_list()
+                    elif req['task_type'] == 'per_stock':
+                        _batch_daily(datetime.now().strftime('%Y%m%d'))
+                    _ecm.mark_request_done(req['id'])
+                    logger.info(f"  sync_request {req['id']} 完成")
+                except Exception as e:
+                    _ecm.mark_request_failed(req['id'])
+                    logger.warning(f"  sync_request {req['id']} 失败: {e}")
+        except Exception as e:
+            logger.warning(f"sync_requests 消费异常: {e}")
         now = datetime.now()
         ts = time.time()
 

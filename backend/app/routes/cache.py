@@ -14,42 +14,26 @@ cache_bp = Blueprint('cache', __name__, url_prefix='/api/cache')
 @handle_exceptions
 @cache_bp.route('/sync', methods=['POST'])
 def sync_data():
-    """同步数据"""
+    """提交同步请求（通过 sync_requests 队列通知 daemon 异步执行）"""
     try:
         ts_code = request.json.get('ts_code')
-        start_date = request.json.get('start_date')
-        end_date = request.json.get('end_date')
-        force_refresh = request.json.get('force_refresh', False)
         
         data_manager = DataManager()
         
-        # 同步股票列表
-        stock_count = data_manager.sync_stock_list()
-        
-        daily_count = 0
-        
         if ts_code:
-            # 同步单只股票
-            daily_count = data_manager.sync_daily_data(
-                ts_code, 
-                use_cache=not force_refresh,
-                start_date=start_date,
-                end_date=end_date
-            )
+            request_id = data_manager.request_data('per_stock', ts_code)
+            return jsonify({
+                'success': True,
+                'message': f'{ts_code} 同步请求已提交（异步）',
+                'request_id': request_id
+            })
         else:
-            # 同步所有股票
-            daily_count = data_manager.sync_all_daily_data()
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'stock_count': stock_count,
-                'daily_count': daily_count,
-                'ts_code': ts_code,
-                'start_date': start_date,
-                'end_date': end_date
-            }
-        })
+            request_id = data_manager.request_data('full_daily')
+            return jsonify({
+                'success': True,
+                'message': '全市场日线同步请求已提交（异步）',
+                'request_id': request_id
+            })
     except Exception as e:
         return jsonify({
             'success': False,

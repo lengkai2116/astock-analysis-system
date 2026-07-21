@@ -27,35 +27,6 @@ logger = logging.getLogger(__name__)
 
 realtime_bp = Blueprint('realtime', __name__)
 
-# ponytail: 惰性初始化，避免模块导入时连接外部服务
-_tushare = None
-_akshare = None
-_ak = None
-
-
-def _get_tushare():
-    global _tushare
-    if _tushare is None:
-        from ..data.tushare_provider import TushareProvider
-        _tushare = TushareProvider()
-    return _tushare
-
-
-def _get_akshare():
-    global _akshare
-    if _akshare is None:
-        from ..data.akshare_provider import AkShareRealtimeProvider
-        _akshare = AkShareRealtimeProvider()
-    return _akshare
-
-
-def _get_ak():
-    global _ak
-    if _ak is None:
-        from ..data.akshare_provider import AkshareProvider
-        _ak = AkshareProvider()
-    return _ak
-
 
 # ── 辅助函数（替换旧 RealtimeDataService._fetch_current_market_data） ──────
 
@@ -65,28 +36,9 @@ _DEFAULT_WATCHLIST = ['600519.SH', '000001.SZ', '000002.SZ']
 def _fetch_current_market_data() -> dict:
     """从 InMemoryStateStore 读取当前市场数据（兼容旧返回格式）"""
     snapshot = store.get_snapshot()
-    # 按默认自选股过滤
     data = [s for s in snapshot if s.get('ts_code') in _DEFAULT_WATCHLIST]
-    # 如果没有数据（非交易时段），降级为当日 DuckDB 数据
     if not data:
-        for code in _DEFAULT_WATCHLIST:
-            try:
-                daily = _get_tushare().get_daily_data(code)
-                if daily and len(daily) > 0:
-                    latest = daily[0]
-                    data.append({
-                        'ts_code': code,
-                        'name': '—',
-                        'price': float(latest.get('close', 0)),
-                        'change': round(float(latest.get('change', 0)), 2),
-                        'change_pct': round(float(latest.get('pct_chg', 0)), 2),
-                        'volume': latest.get('vol', 0),
-                        'amount': latest.get('amount', 0),
-                        'timestamp': datetime.now().isoformat(),
-                        'source': 'tushare',
-                    })
-            except Exception:
-                continue
+        data = []
     return {
         'type': 'market_realtime',
         'data': data,
@@ -146,12 +98,14 @@ def handle_subscribe_kline(data):
         logger.info(f"客户端订阅K线: {ts_code} ({freq})")
 
         try:
-            kline_data = _get_tushare().get_minute_data(ts_code, freq) if _get_tushare else []
-            if kline_data:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            ecm = get_ecm_instance()
+            kline_data = ecm.get_cached_kline(ts_code, freq)
+            if kline_data is not None and not kline_data.empty:
                 emit('kline_init', {
                     'ts_code': ts_code,
                     'freq': freq,
-                    'data': kline_data,
+                    'data': kline_data.to_dict('records'),
                 }, room=room)
         except Exception as e:
             logger.warning(f"获取初始K线失败: {e}")
@@ -251,30 +205,41 @@ def get_indexes_realtime():
                     })
                     continue
 
-            # 盘后 → Tushare
-            idx_data = _get_tushare().get_index_daily(idx['ts_code'])
-            if idx_data and len(idx_data) > 0:
-                latest = idx_data[0]
-                prev_data = idx_data[1] if len(idx_data) > 1 else None
-                prev_close = prev_data['close'] if prev_data else latest.get('pre_close', latest['close'])
-                change = latest['close'] - prev_close
-                change_pct = (change / prev_close * 100) if prev_close > 0 else 0
-
-                result.append({
-                    'ts_code': idx['ts_code'],
-                    'name': idx['name'],
-                    'value': latest['close'],
-                    'change': round(change, 2),
-                    'changePercent': round(change_pct, 2),
-                    'open': latest['open'],
-                    'high': latest['high'],
-                    'low': latest['low'],
-                    'close': latest['close'],
-                    'pre_close': prev_close,
-                    'volume': latest['vol'],
-                    'amount': latest['amount'],
-                })
-            else:
+            # 盘后 → 从 ECM 读取最近交易日日线数据
+            try:
+                from app.data.enhanced_cache_manager import get_ecm_instance
+                ecm = get_ecm_instance()
+                idx_df = ecm.get_cached_daily(idx['ts_code'], limit=2)
+                if idx_df is not None and not idx_df.empty:
+                    latest = idx_df.iloc[-1].to_dict()
+                    prev = idx_df.iloc[-2].to_dict() if len(idx_df) >= 2 else latest
+                    prev_close = prev.get('close', latest.get('pre_close', 0))
+                    close_val = latest.get('close', 0)
+                    change = close_val - prev_close if prev_close else 0
+                    change_pct = (change / prev_close * 100) if prev_close > 0 else 0
+                    result.append({
+                        'ts_code': idx['ts_code'],
+                        'name': idx['name'],
+                        'value': close_val,
+                        'change': round(change, 2),
+                        'changePercent': round(change_pct, 2),
+                        'open': latest.get('open', 0),
+                        'high': latest.get('high', 0),
+                        'low': latest.get('low', 0),
+                        'close': close_val,
+                        'pre_close': prev_close,
+                        'volume': latest.get('vol', 0),
+                        'amount': latest.get('amount', 0),
+                    })
+                else:
+                    result.append({
+                        'ts_code': idx['ts_code'],
+                        'name': idx['name'],
+                        'value': 0, 'change': 0, 'changePercent': 0,
+                        'open': 0, 'high': 0, 'low': 0, 'close': 0,
+                        'pre_close': 0, 'volume': 0, 'amount': 0,
+                    })
+            except Exception:
                 result.append({
                     'ts_code': idx['ts_code'],
                     'name': idx['name'],
@@ -352,7 +317,11 @@ def get_realtime_indicator():
         from app.indicators import TechnicalIndicatorEngine
         calculator = TechnicalIndicatorEngine()
 
-        daily_data = _get_tushare().get_daily_data(ts_code)
+        from app.data import DataManager
+        dm = DataManager()
+        daily_data = dm.get_cached_daily_data(ts_code)
+        if daily_data is None or daily_data.empty:
+            return {'error': '数据不可用'}, 503
         result_df = calculator.calculate_all_indicators(daily_data)
         result = calculator.get_latest_indicators(result_df)
 

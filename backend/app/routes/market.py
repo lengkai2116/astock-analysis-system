@@ -70,15 +70,29 @@ def get_daily_data(ts_code):
 @market_bp.route('/api/v1/stocks/sync', methods=['POST'])  # DEPRECATED: use /api/v3/stocks/sync
 @handle_exceptions
 def sync_stocks():
-    result = market_service.sync_stock_data()
-    return jsonify(result)
+    """触发全市场股票列表同步（通过 sync_requests 队列通知 daemon）"""
+    from app.data import DataManager
+    dm = DataManager()
+    request_id = dm.request_data('full_stock_list')
+    return jsonify({
+        'success': True,
+        'message': '同步请求已提交（异步，请稍后检查结果）',
+        'request_id': request_id
+    })
 
 @market_bp.route('/api/v3/stocks/<ts_code>/sync', methods=['POST'])
 @market_bp.route('/api/v1/stocks/<ts_code>/sync', methods=['POST'])  # DEPRECATED: use /api/v3/stocks/<ts_code>/sync
 @handle_exceptions
 def sync_stock_daily(ts_code):
-    result = market_service.sync_daily_data(ts_code)
-    return jsonify(result)
+    """触发单只股票日线同步（通过 sync_requests 队列通知 daemon）"""
+    from app.data import DataManager
+    dm = DataManager()
+    request_id = dm.request_data('per_stock', ts_code)
+    return jsonify({
+        'success': True,
+        'message': f'{ts_code} 同步请求已提交（异步）',
+        'request_id': request_id
+    })
 
 @market_bp.route('/api/v3/market/index', methods=['GET'])
 @market_bp.route('/api/v1/market/index', methods=['GET'])  # DEPRECATED: use /api/v3/market/index
@@ -159,15 +173,6 @@ def get_stock_quote(ts_code):
         return jsonify({'code': 0, 'data': cached})
 
     ecm = get_ecm_instance()
-    tp = None
-    _lazy_tp = None
-
-    def _get_tp():
-        nonlocal tp
-        if tp is None:
-            from app.data.tushare_provider import TushareProvider
-            tp = TushareProvider()
-        return tp
 
     # ── 1. 日线：ECM daily_cache 优先 ────────────────────
     end_dt = datetime.now()
@@ -176,14 +181,6 @@ def get_stock_quote(ts_code):
     end_str = end_dt.strftime('%Y%m%d')
 
     daily_df = ecm.get_cached_daily(ts_code, start_date=start_str, end_date=end_str)
-    daily_fallback = daily_df.empty
-    if daily_df.empty:
-        _tp = _get_tp()
-        if _tp.pro:
-            raw = _tp.get_daily_data(ts_code, start_str, end_str)
-            if raw:
-                daily_df = pd.DataFrame(raw)
-
     if daily_df.empty:
         return jsonify({
             'code': -1, 'message': '个股行情数据不可用',
@@ -219,7 +216,7 @@ def get_stock_quote(ts_code):
         if len(prev_df) >= 2:
             pre_close = _sf(prev_df.iloc[-2].get('close'))
 
-    # ── 2. daily_basic：ECM → Tushare ────────────────────
+    # ── 2. daily_basic：ECM 优先 ────────────────────
     turnover_rate = volume_ratio = pe_ttm = pb = total_mv = circ_mv = None
     float_share = total_share = None
     basic_df = ecm.get_cached_daily_basic(ts_code, start_date=start_str, end_date=end_str)
@@ -233,22 +230,6 @@ def get_stock_quote(ts_code):
         circ_mv = basic.get('circ_mv')
         float_share = basic.get('float_share')
         total_share = basic.get('total_share')
-    else:
-        try:
-            _tp = _get_tp()
-            basic_list = _tp.get_daily_basic(ts_code, start_str, end_str)
-            if basic_list:
-                basic = basic_list[-1]
-                turnover_rate = basic.get('turnover_rate')
-                volume_ratio = basic.get('volume_ratio')
-                pe_ttm = basic.get('pe_ttm')
-                pb = basic.get('pb')
-                total_mv = basic.get('total_mv')
-                circ_mv = basic.get('circ_mv')
-                float_share = basic.get('float_share')
-                total_share = basic.get('total_share')
-        except Exception as e:
-            logger.warning(f"daily_basic 获取失败 ({ts_code}): {e}")
 
     # ── 3. 涨跌停：ECM → Tushare（先查当日，查不到查前一日）──
     high_limit = low_limit = None
@@ -261,39 +242,20 @@ def get_stock_quote(ts_code):
                 low_limit = _sf(row.iloc[0].get('low_limit'))
                 break
 
-    # ── 4. 财务指标：ECM → Tushare ──────────────────────
+    # ── 4. 财务指标：ECM 优先 ──────────────────────
     eps = bvps = None
     fina_df = ecm.get_cached_fina_indicator(ts_code)
     if not fina_df.empty:
         fina = fina_df.iloc[-1].to_dict()
         eps = fina.get('eps')
         bvps = fina.get('bvps')
-    else:
-        try:
-            _tp = _get_tp()
-            fina_list = _tp.get_fina_indicator(ts_code)
-            if fina_list:
-                fina = fina_list[-1]
-                eps = fina.get('eps')
-                bvps = fina.get('bvps')
-        except Exception as e:
-            logger.warning(f"fina_indicator 获取失败 ({ts_code}): {e}")
 
-    # ── 5. 复权因子：ECM → Tushare ──────────────────────
+    # ── 5. 复权因子：ECM 优先 ──────────────────────
     adj_close = None
     adj_df = ecm.get_cached_adj_factor(ts_code, start_date=start_str, end_date=end_str)
     if not adj_df.empty:
         adj_factor = _sf(adj_df.iloc[-1].get('adj_factor', 1))
         adj_close = round(_sf(close) * adj_factor, 2) if close and adj_factor else None
-    else:
-        try:
-            _tp = _get_tp()
-            adj_list = _tp.get_adj_factor(ts_code, start_str, end_str)
-            if adj_list:
-                adj_factor = _sf(adj_list[-1].get('adj_factor', 1))
-                adj_close = round(_sf(close) * adj_factor, 2) if close and adj_factor else None
-        except Exception as e:
-            logger.warning(f"adj_factor 获取失败 ({ts_code}): {e}")
 
     # ── 6. 行业信息：PostgreSQL Stock 表 ──────────────────
     industry = None
@@ -378,26 +340,8 @@ def get_stock_moneyflow(ts_code):
         end_date=end_dt.strftime('%Y-%m-%d')
     )
 
-    # 如果 ECM 无数据，降级 Tushare
+    # ECM 无数据 → 503
     if mf_df.empty:
-        try:
-            from app.data.tushare_provider import TushareProvider
-            tp = TushareProvider()
-            if tp.pro:
-                records = []
-                for i in range(30):
-                    d = (end_dt - timedelta(days=i)).strftime('%Y%m%d')
-                    raw = tp.get_moneyflow(trade_date=d)
-                    if raw:
-                        row = next((r for r in raw if r.get('ts_code') == ts_code), None)
-                        if row:
-                            records.append(row)
-                            if len(records) >= 5:
-                                break
-                if records:
-                    return jsonify({'code': 0, 'data': _build_moneyflow_response(ts_code, records)})
-        except Exception as e:
-            logger.warning(f"资金流向 Tushare 降级失败 ({ts_code}): {e}")
         return jsonify({
             'code': -1, 'message': '资金流向数据不可用',
             'error_type': 'DataUnavailable',

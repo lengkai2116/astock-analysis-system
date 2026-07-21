@@ -98,17 +98,12 @@ def load_stock_data_batch(stock_list, lookback=120):
                 continue
 
         # 数据不足 → 触发按需补采
+        # 数据不足 → 写 sync_requests → 跳过（daemon 异步补采）
         try:
-            cnt = dm.sync_daily_data(ts_code, use_cache=False)
-            if cnt > 0:
-                replenished += 1
-                logger.info(f"按需补采 {ts_code}: {cnt} 条")
-                df = dm.get_cached_daily_data(ts_code)
-            else:
-                continue
-        except Exception as e:
-            logger.debug(f"按需补采 {ts_code} 失败: {e}")
-            continue
+            dm.request_data('per_stock', ts_code)
+        except Exception:
+            pass
+        continue
 
         if df.empty or len(df) < lookback:
             continue
@@ -410,16 +405,16 @@ def run_screener():
             pass
     else:
         stock_list = dm.get_stock_list(keyword=industry, limit=5000)
-        if not stock_list:
-            logger.info("股票列表为空，尝试从 Tushare 同步...")
-            count = dm.sync_stock_list()
-            logger.info(f"同步完成: {count} 只股票")
-            stock_list = dm.get_stock_list(keyword=industry, limit=5000)
 
     if not stock_list:
+        # 数据缺失，写 sync_requests 通知 daemon 异步补采
+        try:
+            dm.request_data('full_stock_list')
+        except Exception:
+            pass
         return jsonify({
             'success': False,
-            'message': '无可用的股票列表，请先同步数据'
+            'message': '股票列表数据未就绪，数据采集进程正在同步，请稍后重试'
         }), 503
 
     if market:

@@ -1414,3 +1414,29 @@ class DataManager:
         from app.data.enhanced_cache_manager import get_ecm_instance
         ecm = get_ecm_instance()
         return ecm.get_strategy_signals(ts_code, signal_names)
+
+    # ── sync_requests 队列（调用层→采集层的"数据缺失"信号） ──
+
+    def request_data(self, task_type: str, ts_code: str = None) -> int:
+        """数据缺失时写 sync_requests 队列表，通知 daemon 异步补采
+
+        替代旧的 sync_daily_data(use_cache=False) 模式。
+        调用层不得直接调数据源，通过此机制通知采集层异步处理。
+
+        Args:
+            task_type: 任务类型
+                'full_daily': 全市场日线补采
+                'full_moneyflow': 全市场资金流向补采
+                'full_basic': 全市场基本面补采
+                'per_stock': 单只股票补采（ts_code 参数）
+                'full_stock_list': 全量股票列表同步
+            ts_code: 股票代码（仅 per_stock 需要）
+
+        Returns:
+            request_id（可用于 poll_data_ready 轮询）
+        """
+        return self.cache.request_data(task_type, ts_code)
+
+    def poll_data_ready(self, request_id: int) -> str:
+        """轮询 sync_requests 任务状态"""
+        return self.cache.poll_data_ready(request_id)

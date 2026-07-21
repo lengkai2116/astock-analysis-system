@@ -415,15 +415,15 @@ class MultiStepContextBuilder:
             'patterns_detected': [],
         }
         try:
-            from app.data.tushare_provider import TushareProvider
-            provider = TushareProvider()
+            from app.data import DataManager
+            dm = DataManager()
             end = datetime.now().strftime('%Y%m%d')
             start = (datetime.now() - timedelta(days=120)).strftime('%Y%m%d')
-            data = provider.get_daily_data(ts_code, start, end)
-            if data and len(data) >= 60:
-                closes = [float(d['close']) for d in data]
-                volumes = [float(d['vol']) for d in data]
-                ctx['last_price'] = closes[-1]
+            df = dm.get_cached_daily_data(ts_code, start, end)
+            if df is not None and not df.empty and len(df) >= 60:
+                closes = df['close'].values
+                volumes = df['vol'].values if 'vol' in df.columns else df.get('amount', df['close']).values
+                ctx['last_price'] = float(closes[-1])
                 ctx['ma5'] = float(np.mean(closes[-5:])) if len(closes) >= 5 else 0
                 ctx['ma10'] = float(np.mean(closes[-10:])) if len(closes) >= 10 else 0
                 ctx['ma20'] = float(np.mean(closes[-20:])) if len(closes) >= 20 else 0
@@ -431,7 +431,7 @@ class MultiStepContextBuilder:
                 avg_vol = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else 0
                 ctx['volume_ratio'] = round(volumes[-1] / max(avg_vol, 1), 2) if avg_vol > 0 else 1.0
                 if len(closes) >= 2:
-                    ctx['amplitude'] = round(abs(closes[-1] - closes[-2]) / closes[-2] * 100, 2)
+                    ctx['amplitude'] = round(abs(float(closes[-1]) - float(closes[-2])) / float(closes[-2]) * 100, 2)
         except Exception as e:
             import logging
             logging.getLogger(__name__).debug(f'技术面上下文构建失败: {e}')
