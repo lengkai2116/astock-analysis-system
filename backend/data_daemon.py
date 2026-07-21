@@ -971,9 +971,9 @@ def run_integrity_check(backfill_days: int = 1):
 
     logger.info("完整性检查完成")
     
-    # 自选股分钟数据完整性检查（后台低优，缺失时自动补采）
+    # 自选股分钟数据完整性检查（后台线程，不阻塞主循环）
     try:
-        _check_watchlist_minute()
+        threading.Thread(target=_check_watchlist_minute, daemon=True).start()
     except Exception:
         pass
 

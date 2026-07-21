@@ -740,6 +740,14 @@ def _collect_dual_source_fallback() -> int:
     _compute_top_stocks(all_records)
     _compute_limit_pools(all_records)
 
+    # 持久化到 ECM market_snapshot.db（供 API 进程读取）
+    try:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        ecm.cache_market_snapshot_data(all_records)
+    except Exception:
+        logger.debug("[http] 快照数据库写入失败（非关键）")
+
     logger.info(f"[{source}] 实时行情降级完成: {len(all_records)} 只 ({elapsed:.1f}s)")
     return len(all_records)
 
