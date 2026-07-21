@@ -1028,16 +1028,18 @@ class ZhongshuAnalyzer:
     @staticmethod
     def _evolve_zhongshu(zs: Zhongshu, seg: Segment) -> str:
         """判断中枢演化方向。
-        
+
         Returns:
-            'extend' → 线段在中枢区间内或部分超出（区间不变）
-            'detach' → 完全不重叠，中枢破坏
+            'extend' → 线段终点在中枢区间内，中枢延伸
+            'detach' → 线段终点在中枢区间外 → 中枢破坏
+                        _evolve_pending 会检查后续线段：
+                        若后续3段形成新重叠且与旧区间重叠 → 扩张合并
+                        若完全不重叠 → 新生中枢
         """
-        seg_r = seg.range
-        # 完全在区间内或部分超出 → 延伸（区间不变）
-        if seg_r['low'] <= zs.high and seg_r['high'] >= zs.low:
+        # 线段终点在中枢区间内 → 延伸
+        if zs.low <= seg.end_price <= zs.high:
             return 'extend'
-        # 完全不重叠 → 中枢破坏
+        # 线段终点在中枢区间外 → 中枢破坏，触发扩张/新生检测
         return 'detach'
 
     @staticmethod

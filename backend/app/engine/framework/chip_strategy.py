@@ -896,12 +896,32 @@ class MainForceScorer:
             net_buy = buy_total - sell_total
             if net_buy <= 0:
                 return {"cost_price": 0, "distance_pct": 0, "near_cost": False}
-            # 用成交均价近似估算主力成本（假设大单成交价接近当日均价）
-            avg_prices = (recent['open'] + recent['high'] + recent['low'] + recent['close']) / 4
-            # 用成交额/成交量估算
-            total_amount = recent['amount'].sum() if 'amount' in recent.columns else 0
-            total_vol = recent['vol'].sum() if 'vol' in recent.columns else 1
-            avg_price = (total_amount / total_vol) if total_vol > 0 else latest_close
+            # 从 moneyflow_cache 估算主力加权均价
+            # Tushare moneyflow 字段单位：
+            #   buy_lg_vol: 手（1手=100股）
+            #   buy_lg_amount / buy_elg_amount: 万元（需×10000转元）
+            has_lg_vol = 'buy_lg_vol' in recent.columns
+            has_lg_amt = 'buy_lg_amount' in recent.columns
+            has_elg_amt = 'buy_elg_amount' in recent.columns
+
+            if has_lg_vol and has_lg_amt:
+                lg_sum_vol = recent['buy_lg_vol'].sum() * 100  # 手→股
+                lg_sum_amt = recent['buy_lg_amount'].sum() * 10000  # 万元→元
+                if lg_sum_vol > 0 and lg_sum_amt > 0:
+                    # 大单均价（元/股）
+                    unit_price = lg_sum_amt / lg_sum_vol
+                    # 超大单成交量 = 金额 / 大单均价
+                    elg_sum_amt = recent['buy_elg_amount'].sum() * 10000  # 万元→元
+                    est_elg_vol = elg_sum_amt / unit_price if unit_price > 0 else 0
+                    total_vol = lg_sum_vol + est_elg_vol
+                    avg_price = (lg_sum_amt + elg_sum_amt) / total_vol if total_vol > 0 else latest_close
+                else:
+                    avg_price = latest_close
+            else:
+                # 退回到用 open/high/low/close 均值估算
+                avg_prices = (recent['open'] + recent['high'] + recent['low'] + recent['close']) / 4
+                avg_price = float(avg_prices.tail(5).mean()) if not avg_prices.empty else latest_close
+            avg_price = float(avg_price) if avg_price > 0 else latest_close
             distance = (latest_close - avg_price) / avg_price if avg_price > 0 else 0
             return {
                 "cost_price": round(avg_price, 2),
