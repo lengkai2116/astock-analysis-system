@@ -382,6 +382,10 @@ def collect_market_snapshot() -> int:
 
         if not all_records:
             logger.warning(f"[mootdx] 快照采集完成，但无有效数据 ({elapsed:.1f}s)")
+            # mootdx 不可用时，尝试 AKShare 降级
+            fallback = collect_market_snapshot_akshare()
+            if fallback > 0:
+                return fallback
             return 0
 
         mem_store.update_snapshot(all_records)
@@ -411,6 +415,119 @@ def collect_market_snapshot() -> int:
         logger.warning(f"[mootdx] 快照采集失败: {e}")
         # 连接失败时重置客户端，下次采集自动重连（global 已在函数顶部声明）
         _client_instance = None
+        return 0
+
+
+def collect_market_snapshot_akshare() -> int:
+    """Sina 财经实时行情降级（mootdx TCP + EastMoney 均不可用时）
+
+    使用 hq.sinajs.cn 获取沪深 A 股实时报价（HTTP API），写入 InMemoryStateStore。
+    Sina 接口返回 CSV 格式文本，解析为与 mootdx 一致的字段结构。
+
+    Sina 单次请求可携带最多约 50 只股票，分批获取全市场后合并。
+    """
+    from app.data.in_memory_store import store as mem_store
+    import urllib.request
+
+    codes = _get_a_share_codes()
+    if not codes:
+        return 0
+
+    try:
+        t_start = time.time()
+        name_map = _stock_name_map
+        all_records = []
+        batch_size = 100
+        max_stocks = 2000  # 限前 2000 只，覆盖主流活跃股
+
+        for batch_start in range(0, min(len(codes), max_stocks), batch_size):
+            batch = codes[batch_start:batch_start + batch_size]
+            # Sina 格式：sh600519, sz000001
+            sina_codes = []
+            market_map = {}
+            for c in batch:
+                m = 0 if c.startswith('6') or c.startswith('9') else 1
+                prefix = 'sh' if m == 0 else 'sz'
+                sina_codes.append(f'{prefix}{c}')
+                market_map[c] = m
+
+            url = 'https://hq.sinajs.cn/list=' + ','.join(sina_codes)
+            req = urllib.request.Request(url, headers={
+                'Referer': 'https://finance.sina.com.cn',
+                'User-Agent': 'Mozilla/5.0',
+            })
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    raw = resp.read().decode('gbk')
+            except Exception:
+                continue
+
+            for line in raw.strip().split('\n'):
+                if not line.strip():
+                    continue
+                try:
+                    parts = line.split('="')
+                    if len(parts) < 2:
+                        continue
+                    values = parts[1].rstrip('";').split(',')
+                    if len(values) < 32:
+                        continue
+                    code_str = parts[0].split('_')[-1] if '_' in parts[0] else ''
+                    code = code_str[2:] if code_str.startswith(('sh', 'sz')) else code_str
+                    name = values[0]
+                    open_p = _safe_float(values[1])
+                    close_p = _safe_float(values[2])
+                    price = _safe_float(values[3])
+                    high = _safe_float(values[4])
+                    low = _safe_float(values[5])
+                    if price == 0 or close_p == 0:
+                        continue
+                    volume = _safe_float(values[8])  # 成交量(手)
+                    amount = _safe_float(values[9])   # 成交额
+                    market = market_map.get(code, 0)
+                    ts_code = f'{code}.SH' if market == 0 else f'{code}.SZ'
+                    change = round(price - close_p, 2)
+                    change_pct = round(change / close_p * 100, 2) if close_p else 0.0
+                    record = {
+                        'ts_code': ts_code, 'code': code,
+                        'name': name_map.get(code, name),
+                        'price': price, 'change': change, 'change_pct': change_pct,
+                        'open': open_p, 'high': high, 'low': low,
+                        'prev_close': close_p,
+                        'volume': int(volume * 100),  # Sina 返回手，转股
+                        'amount': amount,
+                        'bid1': 0.0, 'ask1': 0.0,
+                        'bid_vol1': 0, 'ask_vol1': 0,
+                        'bid2': 0.0, 'ask2': 0.0,
+                        'bid_vol2': 0, 'ask_vol2': 0,
+                        'bid3': 0.0, 'ask3': 0.0,
+                        'bid_vol3': 0, 'ask_vol3': 0,
+                        'bid4': 0.0, 'ask4': 0.0,
+                        'bid_vol4': 0, 'ask_vol4': 0,
+                        'bid5': 0.0, 'ask5': 0.0,
+                        'bid_vol5': 0, 'ask_vol5': 0,
+                        'commission': 0.0, 'speed': 0.0,
+                        'timestamp': datetime.now().isoformat(),
+                        'source': 'sina_fallback',
+                    }
+                    all_records.append(record)
+                except Exception:
+                    continue
+
+        elapsed = time.time() - t_start
+
+        if not all_records:
+            return 0
+
+        mem_store.update_snapshot(all_records)
+        _compute_top_stocks(all_records)
+        _compute_limit_pools(all_records)
+
+        logger.info(f"[sina] 实时行情降级完成: {len(all_records)} 只 ({elapsed:.1f}s)")
+        return len(all_records)
+
+    except Exception as e:
+        logger.warning(f"[sina] 快照降级失败: {e}")
         return 0
 
 
