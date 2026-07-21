@@ -285,41 +285,56 @@ class KLineMerger:
 
 
 class FractalDetector:
-    """分型识别器（含严格确认机制）"""
+    """分型识别器（含严格确认机制 + 弱势分形过滤）"""
 
-    def __init__(self, confirm_bars: int = 1, fx_check: str = 'strict'):
+    def __init__(self, confirm_bars: int = 1, fx_check: str = 'strict',
+                 threshold_pct: float = 0.5):
         """
         Args:
             confirm_bars: 分型确认所需的后续K线数（默认1根）
                           顶分型：后续K线不再创新高即确认
                           底分型：后续K线不再创新低即确认
             fx_check: 分型检查模式 strict/totally/loss/half
+            threshold_pct: 分形确认阈值(%)，中间K线须超过两侧K线至少此比例
+                           0.5% 过滤弱势分形，设置0.0为不过滤
         """
         self.confirm_bars = confirm_bars
         self.fx_check = fx_check
+        self.threshold_pct = max(0.0, threshold_pct)
 
     def _is_top_fractal(self, curr, prev, next_k) -> bool:
-        """检查顶分型（根据 fx_check 模式）"""
+        """检查顶分型（根据 fx_check 模式 + 弱势分形过滤）"""
         if self.fx_check == 'totally':
-            return curr.high > prev.high and curr.high > next_k.high
+            ok = curr.high > prev.high and curr.high > next_k.high
         elif self.fx_check == 'loss':
-            return (curr.high > prev.high and curr.high > next_k.high and
-                    (curr.low > prev.low or curr.low > next_k.low))
+            ok = (curr.high > prev.high and curr.high > next_k.high and
+                  (curr.low > prev.low or curr.low > next_k.low))
         else:  # strict / half
-            return (curr.high > prev.high and curr.high > next_k.high and
-                    curr.low > prev.low and curr.low > next_k.low)
+            ok = (curr.high > prev.high and curr.high > next_k.high and
+                  curr.low > prev.low and curr.low > next_k.low)
+        if ok and self.threshold_pct > 0:
+            # 分形确认阈值：中间K线须超过两侧至少 threshold_pct%
+            t = self.threshold_pct / 100
+            ok = (curr.high >= max(prev.high, next_k.high) * (1 + t) or
+                  curr.low >= max(prev.low, next_k.low) * (1 + t))
+        return ok
 
     def _is_bottom_fractal(self, curr, prev, next_k) -> bool:
-        """检查底分型（根据 fx_check 模式）"""
+        """检查底分型（根据 fx_check 模式 + 弱势分形过滤）"""
         if self.fx_check == 'totally':
-            return curr.low < prev.low and curr.low < next_k.low
+            ok = curr.low < prev.low and curr.low < next_k.low
         elif self.fx_check == 'loss':
-            return (curr.low < prev.low and curr.low < next_k.low and
-                    (curr.high < prev.high or curr.high < next_k.high))
+            ok = (curr.low < prev.low and curr.low < next_k.low and
+                  (curr.high < prev.high or curr.high < next_k.high))
         else:  # strict / half
-            return (curr.low < prev.low and curr.low < next_k.low and
-                    curr.high < prev.high and curr.high < next_k.high)
-        self.fx_check = fx_check
+            ok = (curr.low < prev.low and curr.low < next_k.low and
+                  curr.high < prev.high and curr.high < next_k.high)
+        if ok and self.threshold_pct > 0:
+            # 分形确认阈值：中间K线须低于两侧至少 threshold_pct%
+            t = self.threshold_pct / 100
+            ok = (curr.low <= min(prev.low, next_k.low) * (1 - t) or
+                  curr.high <= min(prev.high, next_k.high) * (1 - t))
+        return ok
 
     def detect(self, klines: List[KLine]) -> List[Fractal]:
         """
@@ -478,7 +493,7 @@ class StrokeBuilder:
         self.min_amplitude_pct = min_amplitude_pct
         self.fx_check = fx_check
 
-    def build(self, fractals: List[Fractal]) -> List[Stroke]:
+    def build(self, fractals: List[Fractal], merged_klines: List = None) -> List[Stroke]:
         """
         从分型构建笔（严格缠论标准）
         
@@ -486,11 +501,13 @@ class StrokeBuilder:
         1. 笔必须方向交替（向上→向下→向上→...）
         2. 分型必须交替（底-顶或顶-底）
         3. 同向分型出现时保留更极端的作为新起点（回溯机制）
-        4. 前后分型之间至少包含min_klines根K线
+        4. 前后分型之间至少包含min_klines根不含包含关系的K线
         5. 价格方向必须合理（向上笔顶>底，向下笔顶>底）
         
         Args:
             fractals: 过滤后的分型列表（已保证相邻异向）
+            merged_klines: 包含处理后的K线列表（用于精确计数不含包含关系的K线数）
+                          为None时回退到使用fractal的idx差值
         
         Returns:
             笔列表
@@ -532,8 +549,14 @@ class StrokeBuilder:
                     match_j = None  # 新起点需重新匹配
                     continue
 
-                # 检查间距（至少包含min_klines根独立K线）
-                k_count = f2.idx - f1.idx
+                # 检查间距（至少包含min_klines根不含包含关系的K线）
+                if merged_klines is not None:
+                    # 用合并后K线列表中的位置差计算实际K线数
+                    p1 = next((i for i, k in enumerate(merged_klines) if k.idx == f1.idx), -1)
+                    p2 = next((i for i, k in enumerate(merged_klines) if k.idx == f2.idx), -1)
+                    k_count = p2 - p1 + 1 if p1 >= 0 and p2 >= 0 else (f2.idx - f1.idx)
+                else:
+                    k_count = f2.idx - f1.idx + 1
                 if k_count < self.min_klines:
                     j += 1
                     continue
@@ -826,7 +849,14 @@ class SegmentAnalyzer:
 
             segment = self._create_segment_from_strokes(current_strokes)
             segments.append(segment)
+            # 线段方向必须强制交替
+            # 从断点位置向前跳过直到找到可以形成反向线段的三笔
             i = j
+            while i < len(strokes) - 2:
+                s1, s2, s3 = strokes[i], strokes[i+1], strokes[i+2]
+                if s1.direction != seg_direction and self._is_valid_segment(s1, s2, s3):
+                    break
+                i += 1
 
         return segments
 
@@ -1007,7 +1037,7 @@ class ZhongshuAnalyzer:
                 j += 1
             elif evolution == 'detach':
                 remaining = len(segments) - j
-                if remaining >= 2:
+                if remaining >= 3:
                     seg_b = segments[j + 1]
                     seg_c = segments[j + 2]
                     new_ov = self._calculate_overlap(seg, seg_b, seg_c)
@@ -1948,9 +1978,10 @@ class ChanlunAnalyzer:
 
         self.fractal_detector = FractalDetector(
             fx_check=bi_cfg.bi_fx_check if bi_cfg else 'strict',
+            threshold_pct=self.config.get('fractal_threshold_pct', 0.5),
         )
         self.stroke_builder = StrokeBuilder(
-            min_klines=bi_cfg.min_klines if bi_cfg else self.config.get('min_klines', 4),
+            min_klines=bi_cfg.min_klines if bi_cfg else self.config.get('min_klines', 5),
             min_amplitude_pct=bi_cfg.min_amplitude_pct if bi_cfg else 0.0,
             fx_check=bi_cfg.bi_fx_check if bi_cfg else 'strict',
         )
@@ -1986,13 +2017,14 @@ class ChanlunAnalyzer:
 
     @staticmethod
     def _default_config() -> Dict:
-        """默认配置"""
+        """默认配置（对齐缠论标准定义）"""
         return {
-            'min_klines': 4,  # 笔包含的最少K线数
+            'min_klines': 5,  # 严格笔：顶底分型之间至少5根不含包含关系的K线（含分形本身）
             'min_stroke_count': 3,  # 构成线段的最少笔数
             'min_segment_count': 3,  # 构成中枢的最少线段数
             'lookback_period': 120,  # 回看周期 (P1-#29: ⬆60→120)
-            'min_confidence': 0.6  # 最小置信度
+            'min_confidence': 0.6,  # 最小置信度
+            'fractal_threshold_pct': 0.5,  # 分形确认阈值(%)，过滤弱势分形
         }
 
     def analyze(self, df: pd.DataFrame) -> Dict:
@@ -2023,8 +2055,8 @@ class ChanlunAnalyzer:
         if len(self.fractals) < 4:
             return {'error': '分型不足，无法构建笔'}
 
-        # 4. 笔构建
-        self.strokes = self.stroke_builder.build(self.fractals)
+        # 4. 笔构建（传入包含处理后的K线列表用于精确计数）
+        self.strokes = self.stroke_builder.build(self.fractals, merged_klines=klines_filtered)
 
         if len(self.strokes) < 3:
             return {'error': '笔不足，无法构建线段'}
