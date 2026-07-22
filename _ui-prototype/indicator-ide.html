@@ -3381,42 +3381,80 @@ function renderStrategyRecommendation(dimensions, verificationData){
 
 function setText(id, val){ var el=document.getElementById(id); if(el) el.textContent=val; }
 
-// ── 3. 渲染实操建议 ──
+// ── 3. 渲染实操建议（289号方案 §4.3 方案A：从策略数据驱动）──
 function renderActionPlan(analysisData, verificationData){
   var dims = analysisData.dimensions || {};
   var sr = dims.chanlun && dims.chanlun.status_recognition || {};
   var levels = sr.support_resistance || {};
   var nearZones = sr.near_levels_filtered || [];
-  var support = levels.support || (nearZones.length > 0 ? nearZones[0].support : '--');
-  var resistance = levels.resistance || (nearZones.length > 0 ? nearZones[0].resistance : '--');
-  var price = dims.chanlun && dims.chanlun.latest_close || '--';
+  var support = levels.support || (nearZones.length > 0 ? nearZones[0].support : null);
+  var resistance = levels.resistance || (nearZones.length > 0 ? nearZones[0].resistance : null);
+  var price = dims.chanlun && dims.chanlun.latest_close || null;
 
-  // 情景A: 趋势延续
+  // 从策略数据推导信号方向
+  var trend = dims.factor && dims.factor.trend || '';
+  var conf = dims.factor && dims.factor.confidence || 0.5;
+  var chipDir = dims.chip && dims.chip.main_force_direction || '';
+  var emotion = dims.emotion && dims.emotion.rotation_state || 'NEUTRAL';
+  var buyPoint = dims.chanlun && dims.chanlun.buy_point || '';
+
+  // 格式化价位
+  var fmtPrice = function(v){ return v !== null && v !== '--' ? v.toFixed(2) : '--'; };
+  var supStr = fmtPrice(support);
+  var resStr = fmtPrice(resistance);
+  var priStr = fmtPrice(price);
+
+  // 情景A: 趋势延续（方向看涨时积极，看跌时保守）
   var stepsA = document.getElementById('apStepsA');
   if(stepsA){
-    stepsA.innerHTML = [
-      '① 当前价附近建仓 30% 底仓',
-      '② 放量突破'+(typeof resistance==='number'?resistance.toFixed(2):resistance)+'加仓至 50%',
-      '③ 持有至目标位减仓 50%，余仓跟随均线',
-      '④ 跌破'+(typeof support==='number'?support.toFixed(2):support)+'全部离场',
-    ].map(function(s){ return '<div class="s-step">'+s+'</div>'; }).join('');
+    if(trend === 'bullish' || trend === 'up'){
+      stepsA.innerHTML = [
+        '① '+(buyPoint ? '当前为'+buyPoint+'区域，' : '')+'建议建仓 30% 底仓',
+        '② 放量突破 '+resStr+' 加仓至 50%',
+        '③ 趋势延续持仓，跌破 '+supStr+' 减半',
+        '④ 目标位看至 '+(resistance ? (resistance*1.15).toFixed(2) : '--')+'，到位减仓',
+      ].map(function(s){ return '<div class="s-step">'+s+'</div>'; }).join('');
+    } else if(trend === 'bearish' || trend === 'down'){
+      stepsA.innerHTML = [
+        '① 当前偏空，不建议开新仓',
+        '② 已持仓者反弹至 '+resStr+' 减仓',
+        '③ 仓位控制在 20% 以内',
+        '④ 等待底部分形确认后再介入',
+      ].map(function(s){ return '<div class="s-step">'+s+'</div>'; }).join('');
+    } else {
+      stepsA.innerHTML = [
+        '① 方向不明确，建议观望或轻仓 10-20%',
+        '② 突破 '+resStr+' 可加仓至 30%',
+        '③ 跌破 '+supStr+' 止损离场',
+        '④ 等待趋势信号明朗',
+      ].map(function(s){ return '<div class="s-step">'+s+'</div>'; }).join('');
+    }
   }
 
-  // 情景B: 冲高回落
+  // 情景B: 冲高回落（根据资金流向调整）
   var stepsB = document.getElementById('apStepsB');
   if(stepsB){
-    stepsB.innerHTML = [
-      '① 若放量冲高回落（上影线>3%），不开新仓',
-      '② 已持仓者在'+(typeof resistance==='number'?resistance.toFixed(2):resistance)+'附近减仓至 20%',
-    ].map(function(s){ return '<div class="s-step">'+s+'</div>'; }).join('');
+    if(chipDir === '流出' || chipDir === 'outflow'){
+      stepsB.innerHTML = [
+        '① 主力资金流出，反弹至 '+resStr+' 附近减仓',
+        '② 不开新仓，等待资金回流信号',
+      ].map(function(s){ return '<div class="s-step">'+s+'</div>'; }).join('');
+    } else {
+      stepsB.innerHTML = [
+        '① 若放量冲高回落（上影线>3%），减仓至 20%',
+        '② '+(resistance ? '重新站稳 '+resStr+' 可回补' : '等待企稳信号'),
+      ].map(function(s){ return '<div class="s-step">'+s+'</div>'; }).join('');
+    }
   }
 
-  // 情景C: 破位下行
+  // 情景C: 破位下行（根据置信度调整止损力度）
   var stepsC = document.getElementById('apStepsC');
   if(stepsC){
+    var stopUrgency = conf > 0.6 ? '立即' : '考虑';
     stepsC.innerHTML = [
-      '① 跌破'+(typeof support==='number'?support.toFixed(2):support)+'立即止损',
-      '② 等待次级别底背驰出现后再入场',
+      '① 跌破 '+supStr+' '+stopUrgency+'止损',
+      '② 止损后等待次级别底背驰出现后再入场',
+      '③ 关注 '+(support ? (support*0.95).toFixed(2) : '--')+' 附近是否形成底部结构',
     ].map(function(s){ return '<div class="s-step">'+s+'</div>'; }).join('');
   }
 }

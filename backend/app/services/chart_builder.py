@@ -267,7 +267,6 @@ class ChartBuilder:
                 {{ time: zs.end_date, value: zs.low }},
             ]);
         }});
-        }});
 
         // 买卖点
         buyData.forEach(d => {{
