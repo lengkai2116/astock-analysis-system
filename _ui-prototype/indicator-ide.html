@@ -2652,7 +2652,7 @@ function htmlToIframe(html){
   // 用 Blob URL 安全嵌入 HTML，避免 srcdoc 转义问题（289号方案 F1-1）
   var blob = new Blob([html], {type: 'text/html;charset=utf-8'});
   var url = URL.createObjectURL(blob);
-  return '<iframe src="'+url+'" style="width:100%;height:600px;border:none;" onload="URL.revokeObjectURL(this.src)"></iframe>';
+  return '<iframe src="'+url+'" style="width:100%;height:600px;border:none;"></iframe>';
 }
 
 function loadChanlunCharts(tsCode){
@@ -3289,7 +3289,14 @@ function renderStockStatus(dimensions, availability, deepseekText){
       if(countEl) countEl.textContent = '共'+deepseekText.length+'字';
       if(dsFooter) dsFooter.style.display = '';
     } else {
-      dsBody.innerHTML = '<div class="ds-text">'+ (dimensions.chanlun && dimensions.chanlun.deepseek_text ? dimensions.chanlun.deepseek_text : '数据不足以生成现状描述') +'</div>';
+      // 无 DeepSeek 时，拼接各维度的 status_text 作为默认描述
+      var fallbackParts = [];
+      for(var k in dimensions){
+        var d = dimensions[k];
+        if(d && d.status_text && d.status_text.length > 2) fallbackParts.push(d.status_text);
+      }
+      var fallbackText = fallbackParts.length > 0 ? fallbackParts.join('；') : '暂无深度分析数据';
+      dsBody.innerHTML = '<div class="ds-text status-text-fallback">'+fallbackText+'</div>';
     }
   }
 }

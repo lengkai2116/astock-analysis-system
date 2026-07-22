@@ -1540,10 +1540,10 @@ class EnhancedCacheManager:
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y%m%d')
         try:
-            row = self._fetchone(
+            row = self.conn.execute(
                 "SELECT signal_json FROM strategy_signal_detail WHERE ts_code=? AND trade_date=?",
                 [ts_code, trade_date]
-            )
+            ).fetchone()
             if row:
                 data = _json.loads(row[0])
                 if data.get('schema_version', 1) != 1:
@@ -1558,10 +1558,10 @@ class EnhancedCacheManager:
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y%m%d')
         try:
-            row = self._fetchone(
+            row = self.conn.execute(
                 "SELECT 1 FROM strategy_signal_detail WHERE ts_code=? AND trade_date=?",
                 [ts_code, trade_date]
-            )
+            ).fetchone()
             return row is not None
         except Exception:
             return False
@@ -1571,9 +1571,9 @@ class EnhancedCacheManager:
     def read_as_sector_ranking(self) -> list[dict]:
         """读取归档的行业板块排行"""
         try:
-            rows = self._fetchall(
+            rows = self.conn.execute(
                 "SELECT * FROM as_sector_ranking ORDER BY change_pct DESC"
-            )
+            ).fetchall()
             if rows:
                 cols = ['sector_name', 'ts_code', 'change_pct', 'up_count', 'down_count',
                         'lead_ts_code', 'lead_name', 'lead_change_pct', 'updated_at']
@@ -1585,9 +1585,9 @@ class EnhancedCacheManager:
     def read_as_concept_ranking(self) -> list[dict]:
         """读取归档的概念板块排行"""
         try:
-            rows = self._fetchall(
+            rows = self.conn.execute(
                 "SELECT * FROM as_concept_ranking ORDER BY change_pct DESC"
-            )
+            ).fetchall()
             if rows:
                 cols = ['concept_name', 'ts_code', 'change_pct', 'up_count', 'down_count', 'updated_at']
                 return [dict(zip(cols, r)) for r in rows]

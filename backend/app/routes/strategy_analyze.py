@@ -544,6 +544,11 @@ def strategy_analyze():
             _result = _core.compute(ts_code, period=period)
             signals = _restore_signals_from_cache(_result.to_dict())
             data_availability = _result.data_availability
+            # 实时计算结果落盘，供 DeepSeek 端点消费（289号方案 §六）
+            try:
+                _dm.cache.cache_signal_detail(ts_code, _result.to_dict())
+            except Exception:
+                pass
 
         # Step 2: 构建信号上下文（包含板块信息等）
         signal_context = _build_signal_context(ts_code)
