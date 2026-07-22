@@ -418,7 +418,8 @@ class DataManager:
         except Exception:
             pass
         
-        # 第二步：从 mootdx 获取数据
+        # 第二步：从 mootdx 获取数据（P9: 同时通知 daemon 异步补采确保完整性）
+        self.request_data('per_stock', ts_code)
         if ecm_freq == '5min':
             df = self._get_mootdx_bars(ts_code, freq=2)
             if not df.empty:

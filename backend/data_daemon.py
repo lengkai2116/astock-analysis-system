@@ -1184,7 +1184,27 @@ def _write_factor_signals(codes):
                     'confidence': round(score, 2),
                     'signal': signal,
                 }]
-                _ecm.cache_strategy_signals(ts_code, signals)
+                # 适配 strategy_signal_detail 表格式（287号方案统一存储）
+                result_dict = {
+                    'ts_code': ts_code,
+                    'trade_date': today_fmt.replace('-', ''),
+                    'signals': {},
+                    'market_context': {},
+                    'data_availability': {'kline': True},
+                }
+                for idx, sig in enumerate(signals):
+                    key = f'factor_fallback_{idx}'
+                    result_dict['signals'][key] = {
+                        'strategy_name': sig.get('strategy_name', ''),
+                        'direction': 'bullish' if sig.get('signal') == 'BUY' else ('bearish' if sig.get('signal') == 'SELL' else 'neutral'),
+                        'confidence': sig.get('confidence', 0),
+                        'signal': 'BULLISH' if sig.get('signal') == 'BUY' else ('BEARISH' if sig.get('signal') == 'SELL' else 'NEUTRAL'),
+                        'signal_label': sig.get('signal', 'NEUTRAL'),
+                        'evidence': [f"因子评分: {sig.get('confidence', 0)}"],
+                        'status_recognition': {},
+                        'raw_detail': sig,
+                    }
+                _ecm.cache_signal_detail(ts_code, result_dict)
             except Exception:
                 continue
         logger.info(f"因子信号兜底写入完成（{len(codes[:200])} 只）")
@@ -1304,6 +1324,115 @@ def _run_precompute():
         _precompute_preset_combos(codes)
     except Exception as e:
         logger.warning(f"PRESET_COMBOS 因子预计算失败: {e}")
+
+
+def _precompute_single(ts_code: str):
+    """单只股票策略预计算（P6增量触发用）
+
+    用于自选股变动/开机自检时对单只股票执行策略预计算并写入缓存。
+    不阻塞调用方，异常仅日志记录。
+
+    注意：如果日线数据不足 60 行，说明数据采集未完成，
+    先请求数据补采，跳过预计算，下次循环再试。
+    """
+    try:
+        # 检查日线数据就绪性（问题4修复）
+        df = _ecm.get_cached_daily(ts_code)
+        if df is None or len(df) < 60:
+            _ecm.request_data('per_stock', ts_code)
+            logger.debug(f"  {ts_code} 日线不足 {len(df) if df is not None else 0} 行，先补采")
+            return
+
+        from app.engine.unified_core import UnifiedStrategyCore
+        core = UnifiedStrategyCore()
+        result = core.compute(ts_code)
+        _ecm.cache_signal_detail(ts_code, result.to_dict())
+        logger.debug(f"  单只预计算完成: {ts_code}")
+    except Exception as e:
+        logger.debug(f"  单只预计算跳过 ({ts_code}): {e}")
+
+
+def _check_precompute_status(today: str):
+    """开机自检：检查当日预计算完整性，按当前时间决策是否需要补算
+
+    决策逻辑：
+      - 非交易日 → 跳过
+      - 9:30 前  → 跳过（尚未开盘，预计算无意义）
+      - 当前 > 15:30 → 全市场检查 strategy_signal_detail → 缺失则全量预计算
+      - 9:30~15:30  → 检查自选股 → 缺失的发起增量请求
+    """
+    from datetime import datetime
+    now = datetime.now()
+    if now.weekday() >= 5:
+        logger.info("  [P6自检] 非交易日，跳过")
+        return
+
+    from app.data.enhanced_cache_manager import get_ecm_instance
+    ecm = get_ecm_instance()
+
+    hour = now.hour
+    minute = now.minute
+
+    if hour < 9 or (hour == 9 and minute < 30):
+        logger.info("  [P6自检] 盘中前（<9:30），跳过预计算检查")
+        return
+
+    # >15:30: 全市场预计算完整性检查
+    if hour > 15 or (hour == 15 and minute >= 30):
+        logger.info("  [P6自检] 日终后，检查全市场预计算完整性...")
+        today_fmt = datetime.now().strftime('%Y-%m-%d')
+        try:
+            row = ecm.conn.execute(
+                "SELECT COUNT(*) FROM strategy_signal_detail WHERE trade_date=?",
+                [today_fmt]
+            ).fetchone()
+            count = row[0] if row else 0
+        except Exception:
+            count = 0
+        if count == 0:
+            logger.info(f"  [P6自检] 当日无预计算数据，触发全量预计算")
+            _run_precompute()
+        else:
+            logger.info(f"  [P6自检] 当日已有 {count} 只预计算 ✅")
+        return
+
+    # 9:30~15:30: 检查自选股
+    logger.info("  [P6自检] 盘中，检查自选股预计算完整性...")
+    watchlist_codes = []
+    try:
+        import sqlite3
+        data_dir = os.environ.get('DATA_DIR', '')
+        app_db = os.path.join(data_dir, 'app.db') if data_dir else ''
+        if app_db and os.path.exists(app_db):
+            conn = sqlite3.connect(app_db)
+            rows = conn.execute("SELECT ts_code FROM watchlist").fetchall()
+            watchlist_codes = [r[0] for r in rows]
+            conn.close()
+    except Exception:
+        watchlist_codes = []
+    except Exception:
+        watchlist_codes = []
+
+    if not watchlist_codes:
+        logger.info("  [P6自检] 无自选股，跳过")
+        return
+
+    today_fmt = datetime.now().strftime('%Y%m%d')
+    logger.info(f"  [P6自检] 自选股 {len(watchlist_codes)} 只，检查缓存...")
+    need_count = 0
+    for code in watchlist_codes:
+        try:
+            has = ecm.has_signal_detail(code, today_fmt)
+            if not has:
+                _ecm.request_data('precompute_strategy', code)
+                need_count += 1
+        except Exception:
+            _ecm.request_data('precompute_strategy', code)
+            need_count += 1
+    if need_count:
+        logger.info(f"  [P6自检] 发起 {need_count}/{len(watchlist_codes)} 只增量预计算请求")
+    else:
+        logger.info(f"  [P6自检] 自选股全部有缓存 ✅")
 
 
 def _run_financial_sync():
@@ -1514,6 +1643,10 @@ def main():
     _ensure_pd()
     run_integrity_check(backfill_days=3)
 
+    # 开机预计算自检（P6：检查当日预计算完整性，按时间补算）
+    today = datetime.now().strftime('%Y%m%d')
+    _check_precompute_status(today)
+
     # 主循环（每 30 秒检查一次）
     _last_patrol = 0
     _daily_sync_triggered = False
@@ -1548,6 +1681,12 @@ def main():
                         _batch_stk_holder()
                     elif req['task_type'] == 'finance_report':
                         _batch_finance_report()
+                    elif req['task_type'] == 'margin':
+                        _batch_margin(datetime.now().strftime('%Y%m%d'))
+                    elif req['task_type'] == 'concept':
+                        _batch_concept()
+                    elif req['task_type'] == 'precompute_strategy':
+                        _precompute_single(req.get('ts_code', ''))
                     _ecm.mark_request_done(req['id'])
                     logger.info(f"  sync_request {req['id']} 完成")
                 except Exception as e:

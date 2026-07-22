@@ -389,10 +389,51 @@ def _build_emotion_dimension(
     }
 
 
-def _build_factor_dimension(signals: List[Dict]) -> Dict:
-    """从所有信号的相互关系构建卡5（冲突检测）"""
+def _build_factor_dimension(signals: List[Dict], zhongshu=None,
+                             market_context=None, kronos_result=None) -> Dict:
+    """从所有信号的相互关系构建卡5（冲突检测）——使用 ConflictArbiter 四级仲裁"""
+    driving = max(signals, key=lambda s: s.get('confidence', 0)) if signals else None
+    driving_name = driving.get('strategy_name', '') if driving else ''
+
+    # 优先使用 ConflictArbiter 四级仲裁
+    try:
+        arbiter = ConflictArbiter()
+        result = arbiter.arbitrate(
+            signals=signals,
+            zhongshu=zhongshu,
+            market_context=market_context,
+            kronos_result=kronos_result,
+        )
+
+        n_bullish = result['details'].get('bullish', 0)
+        n_bearish = result['details'].get('bearish', 0)
+
+        if n_bullish > 0 and n_bearish > 0:
+            conflict_type = '严重分歧'
+        elif n_bullish > 0 or n_bearish > 0:
+            conflict_type = '一致'
+        else:
+            conflict_type = '中性'
+
+        return {
+            'conflict_type': conflict_type,
+            'conflict_items': [
+                {'pair': f"看涨({n_bullish}) vs 看空({n_bearish})",
+                 'relation': '矛盾', 'detail': step}
+                for step in result.get('arbitration_log', [])
+            ],
+            'driving_factor': driving_name,
+            'trend': result['final_signal'],
+            'arbitration_log': result.get('arbitration_log', []),
+        }
+    except Exception as e:
+        logger.warning(f"ConflictArbiter 仲裁失败，回退方向比较: {e}")
+        return _build_factor_dimension_fallback(signals, driving)
+
+
+def _build_factor_dimension_fallback(signals, driving=None):
+    """冲突仲裁回退方案：简单方向冲突检测"""
     conflicted_pairs = []
-    driving = None
     for i, sa in enumerate(signals):
         for sb in signals[i+1:]:
             da = sa.get('signal', 'neutral')
@@ -404,12 +445,10 @@ def _build_factor_dimension(signals: List[Dict]) -> Dict:
                     'detail': f"{da} vs {db}",
                 })
 
-    # 找置信度最高的信号作为驱动力
-    if signals:
+    if signals and not driving:
         driving = max(signals, key=lambda s: s.get('confidence', 0))
-        driving_name = driving.get('strategy_name', '')
+    driving_name = driving.get('strategy_name', '') if driving else ''
 
-    # 判断冲突类型
     if not conflicted_pairs:
         conflict_type = '一致'
     elif len(conflicted_pairs) == 1:
@@ -423,6 +462,15 @@ def _build_factor_dimension(signals: List[Dict]) -> Dict:
         'driving_factor': driving_name if driving else 'unknown',
         'trend': driving.get('signal', '中性') if driving else '中性',
     }
+
+
+def _get_latest_close(signals: List[Dict]) -> Optional[float]:
+    """从策略信号中提取最新收盘价"""
+    for s in signals:
+        close = s.get('latest_close')
+        if close is not None:
+            return float(close)
+    return None
 
 
 def _build_vibe_dimension(ts_code: str, signals: List[Dict]) -> Dict:
@@ -507,6 +555,11 @@ def strategy_analyze():
         bociasi_sig = _find_signal(signals, 'BOCIASI')
         factor_sig = _find_signal(signals, '因子')
 
+        # Step 3.5: 可选 Kronos 推理（先于 factor 维度，为仲裁器提供输入）
+        kronos_result = None
+        if kronos_enabled:
+            kronos_result = _compute_kronos(ts_code)
+
         # Step 4: 组装五维数据 + Vibe策略
         dimensions = {
             'chanlun': _build_chanlun_dimension(chanlun_sig, 
@@ -514,7 +567,11 @@ def strategy_analyze():
             'volume_price': _build_volume_price_dimension(vp_sig),
             'chip': _build_chip_dimension(chip_sig),
             'emotion': _build_emotion_dimension(bociasi_sig, signal_context),
-            'factor': _build_factor_dimension(signals),
+            'factor': _build_factor_dimension(
+                signals,
+                market_context={'current_price': _get_latest_close(signals)},
+                kronos_result=kronos_result,
+            ),
             'vibe': _build_vibe_dimension(ts_code, signals),
         }
 
@@ -535,11 +592,6 @@ def strategy_analyze():
             else:
                 footer_text = f'{dim_label}方向: {dim.get("direction", "中性")}，主驱动力: {driving}' if driving else f'{dim_label}方向: {dim.get("direction", "中性")}'
             dim['footer_text'] = footer_text
-
-        # Step 5: 可选 Kronos 推理
-        kronos_result = None
-        if kronos_enabled:
-            kronos_result = _compute_kronos(ts_code)
 
         # ── E12 不再包含 DeepSeek 文本（287号方案 v2.3）──
         # DeepSeek 九层描述改为用户触发，走独立端点 /api/v3/strategy/deepseek
@@ -623,6 +675,25 @@ def strategy_status_aggregate():
         chains = aggregated.get('verification_chains', aggregated.get('chains', []))
         if not chains:
             chains = _build_default_chains(signals)
+
+        # Step 5.5: 加入 ConflictArbiter 仲裁结果作为补充验证链（P4）
+        try:
+            arbiter = ConflictArbiter()
+            arbiter_result = arbiter.arbitrate(signals)
+            if arbiter_result.get('arbitration_log'):
+                chains.append({
+                    'id': 'arbitration',
+                    'name': '四级仲裁验证',
+                    'passed': arbiter_result['final_signal'] != 'neutral',
+                    'evidence': '; '.join(arbiter_result['arbitration_log'][-2:]),
+                    'confidence_multiplier': arbiter_result['final_confidence'],
+                    'conflict_detail': (
+                        f"终裁: {arbiter_result['final_signal']}"
+                        f"(置信度{arbiter_result['final_confidence']:.2f})"
+                    ),
+                })
+        except Exception as e:
+            logger.debug(f"ConflictArbiter E13 补充链失败: {e}")
 
         pass_count = sum(1 for c in chains if c.get('passed', False))
 

@@ -169,7 +169,6 @@ def create_app():
     from app.routes.realtime import realtime_bp
     from app.routes.ai_analysis import ai_analysis_bp
     from app.routes.factors import factors_bp
-    from app.routes.strategy import strategy_bp
     from app.routes.strategy import strategy_v3_bp
     from app.routes.backtest import backtest_bp
     from app.routes.indicator_ide import indicator_ide_bp
@@ -206,7 +205,6 @@ def create_app():
     app.register_blueprint(realtime_bp)
     app.register_blueprint(ai_analysis_bp)
     app.register_blueprint(factors_bp)
-    app.register_blueprint(strategy_bp)
     app.register_blueprint(strategy_v3_bp)
     app.register_blueprint(backtest_bp)
     app.register_blueprint(indicator_ide_bp)

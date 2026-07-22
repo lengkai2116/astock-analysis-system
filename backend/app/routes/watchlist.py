@@ -357,6 +357,14 @@ def add_to_watchlist():
     db.session.add(item)
     db.session.commit()
 
+    # 触发 daemon 增量预计算（P6）
+    try:
+        from app.data import DataManager
+        DataManager().request_data('precompute_strategy', ts_code)
+        logger.debug(f"已触发 {ts_code} 增量预计算")
+    except Exception:
+        pass
+
     return jsonify({'success': True, 'data': item.to_dict()}), 201
 
 
