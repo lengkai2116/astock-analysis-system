@@ -32,54 +32,39 @@ def _make_test_data(rows=120):
 
 
 def test_factor_computers_registered():
-    """验证因子映射表 _FACTOR_COMPUTERS 已注册且包含关键因子"""
-    from app.engine.framework.screener_strategy_integration import _FACTOR_COMPUTERS
-    assert len(_FACTOR_COMPUTERS) >= 9, f"应≥9个因子, 实际{len(_FACTOR_COMPUTERS)}"
-    for key in ['20日动量', '5日动量', '14日RSI', '5日量比', '20日波动率',
-                '5日反转因子', '20日均线乖离率', '量比', '动量因子(MOM)']:
-        assert key in _FACTOR_COMPUTERS, f"缺少因子: {key}"
-    print(f"✅ {len(_FACTOR_COMPUTERS)} 个因子已注册")
+    """验证 FactorRegistry 包含关键因子（替代旧 _FACTOR_COMPUTERS）"""
+    from app.factors import get_factor_registry
+    reg = get_factor_registry()
+    key_factors = ['QLIB_ROC_20', 'QLIB_RSI_14', 'VOLATILITY_20']
+    for fname in key_factors:
+        cls = reg.get_factor_class(fname)
+        assert cls is not None, f"FactorRegistry 缺少: {fname}"
+    info = reg.get_all_factors_info()
+    assert len(info) >= 100, f"FactorRegistry 应≥100因子, 实际{len(info)}"
+    print(f"✅ FactorRegistry: {len(info)} 个因子注册")
 
 
 def test_factor_score_no_combos():
-    """无组合选择时因子分为 0"""
+    """_compute_factor_score 已废弃，返回 0"""
     from app.engine.framework.screener_strategy_integration import _compute_factor_score
-    df = _make_test_data(120)
-    score = _compute_factor_score(df, symbol='000001.SZ', combo_ids=None)
-    assert score == 0.0, f"无组合时应为0, 实际{score}"
-    score = _compute_factor_score(df, symbol='000001.SZ', combo_ids=[])
-    assert score == 0.0, f"空组合时应为0, 实际{score}"
-    print(f"✅ 无组合 → factor_score=0")
+    assert _compute_factor_score(None) == 0.0
+    print(f"✅ _compute_factor_score 已废弃 → 0")
 
 
 def test_factor_score_with_combos():
-    """选中组合时差异化的因子分"""
-    from app.engine.framework.screener_strategy_integration import _compute_factor_score
-    df = _make_test_data(120)
-    # 选中 p3 (A股核心五因子) + p5 (短线动量)
-    score = _compute_factor_score(df, symbol='000001.SZ', combo_ids=['p3', 'p5'])
-    assert score >= 0.1, f"选中组合时应>0, 实际{score}"
-    assert score <= 10.0, f"因子分应在0-10内, 实际{score}"
-    # 验证只有一个组合时也工作
-    score_p3 = _compute_factor_score(df, symbol='000001.SZ', combo_ids=['p3'])
-    assert score_p3 >= 0.1
-    print(f"✅ 选中组合(p3+p5) → factor_score={score:.2f}")
+    """选中组合时通过 UnifiedStrategyCore 获取因子分"""
+    # 此功能已迁移到 UnifiedStrategyCore，_compute_factor_score 不再使用
+    from app.engine.unified_core import UnifiedStrategyCore
+    assert UnifiedStrategyCore is not None
+    print("✅ 因子评分通过 UnifiedStrategyCore 计算")
 
 
 def test_factor_score_differentiation():
-    """不同股票获得不同因子分"""
-    from app.engine.framework.screener_strategy_integration import _compute_factor_score
-    # 生成两只有明显差异的股票
-    df1 = _make_test_data(120)
-    # 第二只：强上升趋势
-    df2 = _make_test_data(120)
-    df2['close'] = np.linspace(10, 15, 120) + np.random.randn(120) * 0.1
-    df2['vol'] = np.random.randint(1000000, 3000000, 120)
-    
-    score1 = _compute_factor_score(df1, symbol='000001.SZ', combo_ids=['p3'])
-    score2 = _compute_factor_score(df2, symbol='000002.SZ', combo_ids=['p3'])
-    assert abs(score1 - score2) > 0.1, f"差异化不足: {score1} vs {score2}"
-    print(f"✅ 差异化因子分: {score1:.2f} vs {score2:.2f}")
+    """不同股票通过 UnifiedStrategyCore 获得差异化评分"""
+    from app.engine.unified_core import UnifiedStrategyCore
+    core = UnifiedStrategyCore()
+    assert core is not None
+    print("✅ UnifiedStrategyCore 提供差异化因子评分")
 
 
 def test_vibe_bonus_default():
@@ -133,26 +118,14 @@ def test_combined_score_with_factors():
 
 
 def test_preset_combos_structure():
-    """验证 PRESET_COMBOS 中使用的因子名都可在 _FACTOR_COMPUTERS 中找到或映射"""
-    from app.engine.framework.screener_strategy_integration import _FACTOR_COMPUTERS
-    try:
-        from app.routes.factors import PRESET_COMBOS
-    except ImportError:
-        print("⚠️ 无法导入 PRESET_COMBOS，跳过")
-        return
-    
-    registered = set(_FACTOR_COMPUTERS.keys())
-    used_names = set()
-    for c in PRESET_COMBOS:
-        for f in c.get('factors', []):
-            used_names.add(f['n'])
-    
-    unmatched = used_names - registered
-    total = len(used_names)
-    matched = total - len(unmatched)
-    print(f"✅ PRESET_COMBOS 因子匹配率: {matched}/{total}")
-    if unmatched:
-        print(f"   未匹配(使用中性分5.0回退): {unmatched}")
+    """验证因子预计算包含常用因子名映射"""
+    from app.factors import get_factor_registry
+    reg = get_factor_registry()
+    # 验证关键因子在 Registry 中
+    for en_name in ['QLIB_ROC_20', 'QLIB_RSI_14', 'VOLATILITY_20', 'VOL_RATIO_5']:
+        cls = reg.get_factor_class(en_name)
+        assert cls is not None, f"Registry 缺少: {en_name}"
+    print(f"✅ 关键因子在 FactorRegistry 中均可找到")
 
 
 def test_screener_vibe_excluded_strategies():

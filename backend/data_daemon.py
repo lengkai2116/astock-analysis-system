@@ -206,11 +206,13 @@ def _batch_moneyflow(trade_date: str) -> int:
 
 
 def _batch_index_daily(trade_date: str) -> int:
-    """四大指数日线 — 批量 API 调用"""
+    """四大指数日线 + 申万行业指数日线 — 批量 API 调用"""
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
     total = 0
+
+    # 四大宽基指数
     for code in ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']:
         try:
             raw = pro.index_daily(ts_code=code, trade_date=trade_date)
@@ -219,7 +221,6 @@ def _batch_index_daily(trade_date: str) -> int:
             df = raw.copy()
             if 'trade_date' in df.columns:
                 df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
-            # 保留 daily_cache 有的字段
             daily_cols = {'ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg'}
             extra = [c for c in df.columns if c not in daily_cols]
             if extra:
@@ -228,6 +229,36 @@ def _batch_index_daily(trade_date: str) -> int:
             total += len(df)
         except Exception as e:
             logger.warning(f"指数 {code} 同步失败: {e}")
+
+    # 申万一级行业指数（31个）
+    sw_codes = [
+        '801010.SI','801020.SI','801030.SI','801040.SI','801050.SI',
+        '801080.SI','801110.SI','801120.SI','801130.SI','801140.SI',
+        '801150.SI','801160.SI','801170.SI','801180.SI','801200.SI',
+        '801210.SI','801230.SI','801710.SI','801720.SI','801730.SI',
+        '801740.SI','801750.SI','801760.SI','801770.SI','801780.SI',
+        '801790.SI','801880.SI','801890.SI',
+    ]
+    sw_count = 0
+    for code in sw_codes:
+        try:
+            raw = pro.index_daily(ts_code=code, trade_date=trade_date)
+            if raw is None or raw.empty:
+                continue
+            df = raw.copy()
+            if 'trade_date' in df.columns:
+                df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+            daily_cols = {'ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg'}
+            extra = [c for c in df.columns if c not in daily_cols]
+            if extra:
+                df = df.drop(columns=extra)
+            _ecm.cache_daily_data(df)
+            sw_count += 1
+        except Exception as e:
+            logger.debug(f"行业指数 {code} 同步失败: {e}")
+    if sw_count > 0:
+        logger.info(f"  申万行业指数: {sw_count}/{len(sw_codes)} 个")
+    total += sw_count
     return total
 
 
@@ -969,6 +1000,24 @@ def run_integrity_check(backfill_days: int = 1):
         logger.info(f"  [指数日线] {idx_date} 4只指数数据不足，补采...")
         _batch_index_daily(ds_api)
 
+    # 申万行业指数完整性检查（31个行业，缺失时回填60日）
+    try:
+        sw_cnt = _ecm.conn.execute(
+            "SELECT COUNT(DISTINCT ts_code) FROM daily_cache WHERE ts_code LIKE '801%.SI'"
+        ).fetchone()[0]
+        if sw_cnt < 31:
+            logger.info(f"  [申万行业指数] 当前 {sw_cnt}/31 个，触发回填...")
+            today_str = datetime.now().strftime('%Y%m%d')
+            for offset in range(60):
+                d = (datetime.now() - timedelta(days=offset))
+                if d.weekday() >= 5:
+                    continue
+                ds = d.strftime('%Y%m%d')
+                _batch_index_daily(ds)
+            logger.info(f"  [申万行业指数] 回填完成（近60个交易日）")
+    except Exception as e:
+        logger.warning(f"  申万行业指数检查失败: {e}")
+
     logger.info("完整性检查完成")
     
     # 自选股分钟数据完整性检查（后台线程，不阻塞主循环）
@@ -1143,72 +1192,54 @@ def _write_factor_signals(codes):
         logger.warning(f"因子信号兜底写入失败: {e}")
 
 def _precompute_preset_combos(codes):
-    """预计算 PRESET_COMBOS 因子值并写入 factor_cache"""
+    """预计算常用因子值并写入 factor_cache（通过 FactorRegistry）"""
     _ensure_pd()
     try:
-        from app.routes.factors import PRESET_COMBOS
-        from app.engine.framework.screener_strategy_integration import _FACTOR_COMPUTERS
         from app.data.factor_precompute import FactorPrecomputeManager
+        from app.factors import get_factor_registry
     except ImportError as e:
-        logger.warning(f"PRESET_COMBOS/因子模块导入失败，跳过因子预计算: {e}")
+        logger.warning(f"因子模块导入失败，跳过因子预计算: {e}")
         return
 
-    # 收集所有唯一的因子名（去重）
-    all_factor_names = set()
-    for combo in PRESET_COMBOS:
-        for f in combo.get('factors', []):
-            fname = f.get('n', '')
-            if fname and fname not in _FACTOR_COMPUTERS:
-                continue  # 未注册的因子跳过（如 Fama-French 等尚未实现的）
-            all_factor_names.add(fname)
+    # 将旧中文因子名映射到 FactorRegistry 英文名
+    FACTOR_NAME_MAP = {
+        '20日动量': 'QLIB_ROC_20', '5日动量': 'QLIB_ROC_5', '动量因子(MOM)': 'QLIB_ROC_20',
+        '短期动量': 'QLIB_ROC_5', '动量': 'QLIB_ROC_20',
+        '14日RSI': 'QLIB_RSI_14', '5日量比': 'VOL_RATIO_5',
+        '量比': 'VOL_RATIO_5', '20日换手率': 'VOL_RATIO_20',
+        '20日波动率': 'VOLATILITY_20', '低波因子': 'VOLATILITY_20',
+        '20日均线乖离率': 'BIAS_20', '均线乖离率': 'BIAS_20',
+        '5日反转因子': 'QLIB_REVERSAL_5',
+    }
 
-    if not all_factor_names:
-        logger.info("PRESET_COMBOS 因子预计算: 无已注册因子")
+    reg = get_factor_registry()
+    # 找出所有可映射的因子名
+    mapped_factors = {}
+    for cn_name, en_name in FACTOR_NAME_MAP.items():
+        if reg.get_factor_class(en_name) is not None:
+            mapped_factors[cn_name] = en_name
+
+    if not mapped_factors:
+        logger.info("因子预计算: 无可用因子")
         return
 
-    logger.info(f"PRESET_COMBOS 因子预计算: {len(all_factor_names)} 个因子, {len(codes)} 只股票")
-
-    from app.data import DataManager
-    dm = DataManager()
+    logger.info(f"因子预计算: {len(mapped_factors)} 个因子, {len(codes)} 只股票")
     fpm = FactorPrecomputeManager(_ecm)
-
     precomputed = 0
     for code in codes:
         try:
             df = _ecm.get_cached_daily(code)
             if df is None or len(df) < 30:
                 continue
-            closes = df['close'].values
-            volumes = df['vol'].values if 'vol' in df.columns else df['amount'].values
-
-            for fname in all_factor_names:
-                computer = _FACTOR_COMPUTERS.get(fname)
-                if computer is None:
-                    continue
+            for cn_name, en_name in mapped_factors.items():
                 try:
-                    val = computer(closes, volumes, code, dm)
-                except TypeError:
-                    val = computer(closes, volumes)
-                if val is not None:
-                    # 写入 factor_cache
-                    try:
-                        latest_date = str(df['trade_date'].iloc[-1]) if 'trade_date' in df.columns else \
-                                     str(df.index[-1]) if hasattr(df.index, 'format') else ''
-                        if latest_date:
-                            fpm._bulk_insert_factors([{
-                                'ts_code': code,
-                                'trade_date': latest_date,
-                                'factor_name': fname,
-                                'value': float(val),
-                                'cached_at': datetime.now(),
-                            }])
-                    except Exception:
-                        pass
+                    fpm.precompute_factor(code, df, en_name)
+                except Exception:
+                    pass
             precomputed += 1
         except Exception:
             continue
-
-    logger.info(f"PRESET_COMBOS 因子预计算完成: {precomputed}/{len(codes)} 只")
+    logger.info(f"因子预计算完成: {precomputed}/{len(codes)} 只")
 
 def _run_precompute():
     """后台预计算指标（仅当日有日线数据的活跃股票，非交易日自动回退到最近交易日）"""
@@ -1249,28 +1280,19 @@ def _run_precompute():
             pass
     logger.info(f"指标预计算完成: {ok}/{len(codes)} 只")
 
-    # ── 策略信号预计算（仅活跃股票） ──
+    # ── 策略信号预计算（UnifiedStrategyCore，287号方案 v2.3） ──
     try:
-        from app.services.signal_computation_service import SignalComputationService
-        scs = SignalComputationService()
+        from app.engine.unified_core import UnifiedStrategyCore
+        core = UnifiedStrategyCore()
+        results = core.compute_batch(codes, max_workers=4)
         count = 0
-        error_logged = 0
-        for ts_code in codes:
+        for ts_code, result in results.items():
             try:
-                signals = scs.compute_for_stock(ts_code)
-                if signals:
-                    _ecm.cache_strategy_signals(ts_code, signals)
-                    count += 1
-                elif count == 0 and error_logged < 3:
-                    logger.debug(f"策略信号预计算: {ts_code} 返回空信号")
-                    error_logged += 1
-            except Exception as e:
-                if error_logged < 3:
-                    logger.warning(f"策略信号预计算失败 [{ts_code}]: {e}")
-                    error_logged += 1
+                _ecm.cache_signal_detail(ts_code, result.to_dict())
+                count += 1
+            except Exception:
                 continue
-        logger.info(f"策略信号预计算完成: {count}/{len(codes)} 只")
-        # 如果预计算全部失败，尝试最小化写入：写入因子信号
+        logger.info(f"策略信号预计算完成: {count}/{len(codes)} 只 (UnifiedStrategyCore)")
         if count == 0 and codes:
             logger.info("策略信号全部失败，回退到因子信号写入...")
             _write_factor_signals(codes)

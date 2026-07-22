@@ -255,714 +255,20 @@ def _compute_combined_score(chanlun_score: float, vp_score: float,
     return min(10.0, max(0.0, score))
 
 
-# ── 因子中⽂名 → 计算函数映射表 ──
-# 供 _compute_factor_score 将 PRESET_COMBOS 中的因子名映射为实际计算
-_FACTOR_COMPUTERS = {}
-
-def _register_factor(name, func):
-    _FACTOR_COMPUTERS[name] = func
-
-# ECM 因子注册（需要 symbol + dm 参数）。_compute_factor_score 调用时传入这些参数
-def _register_ecm_factor(name, func):
-    """注册需要ECM数据源的因子，调用时传入 (c, v, symbol, dm)"""
-    _FACTOR_COMPUTERS[name] = func
-
-def _f_momentum(closes, volumes, days=20):
-    """动量因子：N日收益率 → 0-10"""
-    if len(closes) < days + 1:
-        return None
-    ret = (closes[-1] / closes[-days-1]) - 1
-    return max(0, min(10, (ret * 100 + 10) / 2))
-
-def _f_rsi(closes, volumes, period=14):
-    """RSI因子 → 0-10"""
-    if len(closes) < period + 2:
-        return None
-    import numpy as np
-    deltas = np.diff(closes[-(period+1):])
-    gains = np.sum(deltas[deltas > 0])
-    losses = abs(np.sum(deltas[deltas < 0]))
-    if losses > 1e-9:
-        rsi = 100 - 100 / (1 + gains / losses)
-    elif gains > 0:
-        rsi = 100
-    else:
-        rsi = 50
-    return max(0, min(10, (rsi - 30) / 4))
-
-def _f_volume_ratio(closes, volumes, period=5):
-    """量比因子 → 0-10"""
-    if len(volumes) < period + 16:
-        return None
-    import numpy as np
-    vol_recent = np.mean(volumes[-period:])
-    vol_base = np.mean(volumes[-(period+15):-period])
-    if vol_base < 1e-9:
-        return 5.0
-    vr = vol_recent / vol_base
-    return max(0, min(10, vr * 2.5))
-
-def _f_volatility(closes, volumes, period=20):
-    """波动率因子（低波=高分）→ 0-10"""
-    import numpy as np
-    if len(closes) < period + 1:
-        return None
-    vol = np.std(closes[-period:]) / max(np.mean(closes[-period:]), 1e-9)
-    return max(0, min(10, (1 - vol) * 10))
-
-def _f_reversal(closes, volumes, period=5):
-    """反转因子：短期涨多了扣分 → 0-10（与动量反向）"""
-    mom = _f_momentum(closes, volumes, period)
-    if mom is None:
-        return None
-    return 10 - mom
-
-def _f_bias(closes, volumes, period=20):
-    """均线乖离率 → 0-10"""
-    import numpy as np
-    if len(closes) < period + 1:
-        return None
-    ma = np.mean(closes[-period:])
-    bias = (closes[-1] - ma) / max(ma, 1e-9)
-    # bias -5% ≈ 2.5分, 0% ≈ 5分, +5% ≈ 7.5分
-    return max(0, min(10, 5 + bias * 50))
-
-# 注册所有可计算的因子（含 PRESET_COMBOS 中的别名）
-_register_factor('20日动量', lambda c, v: _f_momentum(c, v, 20))
-_register_factor('5日动量', lambda c, v: _f_momentum(c, v, 5))
-_register_factor('动量因子(MOM)', lambda c, v: _f_momentum(c, v, 20))
-_register_factor('截面动量', lambda c, v: _f_momentum(c, v, 20))
-_register_factor('14日RSI', lambda c, v: _f_rsi(c, v, 14))
-_register_factor('5日量比', lambda c, v: _f_volume_ratio(c, v, 5))
-_register_factor('量比', lambda c, v: _f_volume_ratio(c, v, 5))
-_register_factor('20日波动率', lambda c, v: _f_volatility(c, v, 20))
-_register_factor('低波因子', lambda c, v: _f_volatility(c, v, 20))
-_register_factor('5日反转因子', lambda c, v: _f_reversal(c, v, 5))
-_register_factor('20日均线乖离率', lambda c, v: _f_bias(c, v, 20))
-
-# 动量/量价/乖离的所有别名变体
-_register_factor('短期动量', lambda c, v: _f_momentum(c, v, 5))
-_register_factor('动量', lambda c, v: _f_momentum(c, v, 20))
-_register_factor('均线乖离率', lambda c, v: _f_bias(c, v, 20))
-_register_factor('20日换手率', lambda c, v: _f_volume_ratio(c, v, 20))
-
-# BOCIASI 情绪因子（基于四象限的市场情绪感知）
-def _f_sentiment(closes, volumes):
-    """情绪因子：BOCIASI四象限感知 → 0-10"""
-    try:
-        from app.engine.framework.bociasi_quadrant import BociasiQuadrantAnalyzer
-        bq = BociasiQuadrantAnalyzer()
-        q = bq.analyze()
-        mult = q.get('weight_multiplier', 1.0)
-        return max(0, min(10, (mult - 0.7) * 15 + 5))
-    except Exception:
-        return 5.0
-_register_factor('情绪因子', _f_sentiment)
-
-# BOCIASI 快线（个股级情绪，基于OHLCV，~5ms/只）
-def _f_bociasi_quickline(closes, volumes):
-    """个股BOCIASI快线：基于短期价量判断情绪 → 0-10"""
-    try:
-        import numpy as np
-        if len(closes) < 20:
-            return 5.0
-        score = 5.0
-        # 价格动量（5日涨幅）
-        mom_5 = (closes[-1] / closes[-6] - 1) * 100 if len(closes) >= 6 else 0
-        if mom_5 > 3:
-            score += 2.0
-        elif mom_5 > 1:
-            score += 1.0
-        elif mom_5 < -3:
-            score -= 2.0
-        elif mom_5 < -1:
-            score -= 1.0
-        # 成交量确认
-        if len(volumes) >= 20:
-            vol_ratio = volumes[-1] / (np.mean(volumes[-20:-1]) + 1e-9)
-            if vol_ratio > 1.5 and mom_5 > 0:
-                score += 1.0  # 放量上涨
-            elif vol_ratio > 1.5 and mom_5 < 0:
-                score -= 1.0  # 放量下跌
-        # 价格相对均线位置
-        ma_5 = np.mean(closes[-5:]) if len(closes) >= 5 else closes[-1]
-        if closes[-1] > ma_5:
-            score += 0.5
-        else:
-            score -= 0.5
-        return max(0, min(10, score))
-    except Exception:
-        return 5.0
-_register_factor('BOCIASI快线', _f_bociasi_quickline)
-# ══════════════════════════════════════════════════════════════════
-# ECM 数据源因子（需要 symbol + dm 参数）
-# ══════════════════════════════════════════════════════════════════
-
-def _f_ep_ratio(closes, volumes, symbol, dm):
-    """市盈率倒数(EP): daily_basic_cache.pe_ttm → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        basic = dm.get_cached_daily_basic(symbol)
-        if basic is not None and not basic.empty and 'pe_ttm' in basic.columns:
-            pe = float(basic['pe_ttm'].dropna().iloc[-1])
-            if pe > 0 and pe < 1e5:
-                return max(0, min(10, (1/pe) * 100))
-    except Exception:
-        pass
-    return None
-
-def _f_roe(closes, volumes, symbol, dm):
-    """ROE: fina_indicator_cache.roe → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        fina = dm.get_cached_fina_indicator(symbol)
-        if fina is not None and not fina.empty and 'roe' in fina.columns:
-            roe = float(fina['roe'].dropna().iloc[-1])
-            # roe (%) 映射: 0%→3, 10%→5, 20%→7, 30%→9
-            return max(0, min(10, 3 + roe * 20))
-    except Exception:
-        pass
-    return None
-
-def _f_dividend(closes, volumes, symbol, dm):
-    """股息率: daily_basic_cache.dv_ratio → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        basic = dm.get_cached_daily_basic(symbol)
-        if basic is not None and not basic.empty and 'dv_ratio' in basic.columns:
-            dv = float(basic['dv_ratio'].dropna().iloc[-1])
-            return max(0, min(10, dv * 2))
-    except Exception:
-        pass
-    return None
-
-def _f_big_order(closes, volumes, symbol, dm):
-    """大单净买入: moneyflow_cache 5日累计大单净额 → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        mf = dm.get_cached_moneyflow(symbol)
-        if mf is not None and not mf.empty and 'net_lg_amount' in mf.columns:
-            net = mf['net_lg_amount'].dropna().tail(5).sum()
-            # 归一化: 取绝对值对数 + 正负号
-            if abs(net) > 0:
-                return max(0, min(10, 5 + (net / (abs(net) + 1e8)) * 5))
-    except Exception:
-        pass
-    return None
-
-def _f_moneyflow_strength(closes, volumes, symbol, dm):
-    """资金流向强度: moneyflow_cache 综合 → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        mf = dm.get_cached_moneyflow(symbol)
-        if mf is not None and not mf.empty:
-            cols = ['net_lg_amount', 'net_elg_amount']
-            cols = [c for c in cols if c in mf.columns]
-            if cols:
-                total_net = mf[cols].dropna().tail(5).sum().sum()
-                total_amount = (mf.get('buy_lg_amount', pd.Series([0]*len(mf))).fillna(0).tail(5).sum() +
-                                mf.get('sell_lg_amount', pd.Series([0]*len(mf))).fillna(0).tail(5).sum())
-                if total_amount > 0:
-                    ratio = total_net / total_amount
-                    return max(0, min(10, 5 + ratio * 20))
-    except Exception:
-        pass
-    return None
-
-def _f_turnover_change(closes, volumes, symbol, dm):
-    """换手率变化: daily_basic_cache.turnover_rate 环比 → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        basic = dm.get_cached_daily_basic(symbol)
-        if basic is not None and not basic.empty and 'turnover_rate' in basic.columns:
-            tr = basic['turnover_rate'].dropna().tail(10)
-            if len(tr) >= 5:
-                recent = tr.tail(5).mean()
-                prev = tr.head(5).mean()
-                if prev > 0:
-                    change = recent / prev
-                    # 换手率上升: >1 加分; 下降: <1 扣分
-                    return max(0, min(10, 5 + (change - 1) * 10))
-    except Exception:
-        pass
-    return None
-
-def _f_revenue_growth(closes, volumes, symbol, dm):
-    """营收增长率: income_cache 同比 → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        income = dm.get_cached_income(symbol) if hasattr(dm, 'get_cached_income') else None
-        if income is None or income.empty or 'revenue' not in income.columns:
-            return None
-        revenues = income['revenue'].dropna()
-        if len(revenues) >= 2:
-            # 最近两期同比
-            yoy = (revenues.iloc[-1] - revenues.iloc[-2]) / abs(revenues.iloc[-2]) if revenues.iloc[-2] != 0 else 0
-            return max(0, min(10, 5 + yoy * 20))
-    except Exception:
-        pass
-    return None
-
-def _f_profit_growth(closes, volumes, symbol, dm):
-    """净利润增长率: fina_indicator_cache 同比 → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        fina = dm.get_cached_fina_indicator(symbol)
-        if fina is not None and not fina.empty:
-            # 取净利润增长率（如果直接有则用，否则计算）
-            if 'profit_ttm' in fina.columns:
-                profits = fina['profit_ttm'].dropna()
-                if len(profits) >= 2:
-                    yoy = (profits.iloc[-1] - profits.iloc[-2]) / abs(profits.iloc[-2]) if profits.iloc[-2] != 0 else 0
-                    return max(0, min(10, 5 + yoy * 10))
-    except Exception:
-        pass
-    return None
-
-def _f_debt_ratio(closes, volumes, symbol, dm):
-    """资产负债率: balancesheet_cache → 0-10（越低分越高）"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        bs = dm.get_cached_balancesheet(symbol) if hasattr(dm, 'get_cached_balancesheet') else None
-        if bs is None or bs.empty:
-            return None
-        if 'total_liab' in bs.columns and 'total_assets' in bs.columns:
-            liab = float(bs['total_liab'].dropna().iloc[-1])
-            assets = float(bs['total_assets'].dropna().iloc[-1])
-            if assets > 0:
-                ratio = liab / assets
-                # 资产负债率: 20%→8分, 50%→5分, 80%→2分
-                return max(0, min(10, 10 - ratio * 10))
-    except Exception:
-        pass
-    return None
-
-# ── 注册 ECM 因子 ──
-_register_ecm_factor('市盈率倒数(EP)', lambda c, v, s=None, d=None: _f_ep_ratio(c, v, s, d))
-_register_ecm_factor('ROE', lambda c, v, s=None, d=None: _f_roe(c, v, s, d))
-_register_ecm_factor('股息率', lambda c, v, s=None, d=None: _f_dividend(c, v, s, d))
-_register_ecm_factor('大单净买入', lambda c, v, s=None, d=None: _f_big_order(c, v, s, d))
-_register_ecm_factor('资金流向强度', lambda c, v, s=None, d=None: _f_moneyflow_strength(c, v, s, d))
-_register_ecm_factor('换手率变化', lambda c, v, s=None, d=None: _f_turnover_change(c, v, s, d))
-_register_ecm_factor('营收增长率', lambda c, v, s=None, d=None: _f_revenue_growth(c, v, s, d))
-_register_ecm_factor('净利润增长率', lambda c, v, s=None, d=None: _f_profit_growth(c, v, s, d))
-_register_ecm_factor('资产负债率', lambda c, v, s=None, d=None: _f_debt_ratio(c, v, s, d))
-
-# ══════════════════════════════════════════════════════════════════
-# Fama-French 五因子（横截面分组计算，需全市场数据）
-# ══════════════════════════════════════════════════════════════════
-
-_FF_CACHE = {}  # {date: {factor_name: {ts_code: score}}}
-
-def _refresh_ff_cache(dm, trade_date):
-    """刷新 Fama-French 横截面计算结果缓存"""
-    if not dm:
-        return
-    import numpy as np
-    cache_key = str(trade_date)
-    if cache_key in _FF_CACHE:
-        return
-    try:
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
-        # 获取当日所有股票的基础数据
-        daily_df = ecm._query_df(
-            "SELECT ts_code, pct_chg, close FROM daily_cache WHERE trade_date=?",
-            [cache_key]
-        )
-        if daily_df is None or daily_df.empty:
-            return
-
-        basic_df = ecm._query_df(
-            "SELECT ts_code, circ_mv, pe_ttm FROM daily_basic_cache WHERE trade_date=?",
-            [cache_key]
-        )
-        # 获取财务数据（最新一期）
-        fina_df = ecm._query_df(
-            "SELECT ts_code, roe FROM fina_indicator_cache"
-        )
-        bs_df = ecm._query_df(
-            "SELECT ts_code, total_assets FROM balancesheet_cache"
-        )
-
-        # 合并数据
-        merged = daily_df.merge(basic_df, on='ts_code', how='left') if basic_df is not None else daily_df
-        if fina_df is not None and not fina_df.empty:
-            # 取每个股票最新的 ROE
-            fina_latest = fina_df.dropna(subset=['roe']).groupby('ts_code').last().reset_index()
-            merged = merged.merge(fina_latest[['ts_code', 'roe']], on='ts_code', how='left')
-        if bs_df is not None and not bs_df.empty:
-            bs_latest = bs_df.dropna(subset=['total_assets']).groupby('ts_code').last().reset_index()
-            merged = merged.merge(bs_latest[['ts_code', 'total_assets']], on='ts_code', how='left')
-
-        if merged.empty:
-            return
-
-        # 全市场平均收益 (Market Factor)
-        all_returns = merged['pct_chg'].dropna().values
-        if len(all_returns) == 0:
-            return
-        market_ret = float(np.mean(all_returns))
-
-        # Market Factor: 每只股票 = 全市场平均收益归一化到 0-10
-        market_scores = {}
-        # SMB/HML/RMW/CMA: 分组后每组内收益相对市场超额归一化
-        # 用 DataFrame 分组
-        result = {'市场因子': {}, '规模因子(SMB)': {}, '价值因子(HML)': {},
-                  '盈利因子(RMW)': {}, '投资因子(CMA)': {}}
-
-        # 市场因子：个股收益相对于市场的强弱
-        for _, row in merged.iterrows():
-            ts_code = row['ts_code']
-            ret = row.get('pct_chg', 0)
-            if pd.isna(ret):
-                continue
-            # 相对于市场平均，归一化到 0-10
-            rel = ret - market_ret
-            result['市场因子'][ts_code] = max(0, min(10, 5 + rel * 10))
-
-        # SMB: 按 circ_mv 分组（小盘/大盘）
-        merged_mv = merged[merged['circ_mv'].notna()].copy()
-        if len(merged_mv) >= 20:
-            merged_mv['mv_group'] = pd.qcut(merged_mv['circ_mv'], 4, labels=['small', 'mid_low', 'mid_high', 'big'],
-                                            duplicates='drop')
-            for _, row in merged_mv.iterrows():
-                ts_code = row['ts_code']
-                grp = row['mv_group']
-                ret = row.get('pct_chg', 0)
-                if pd.isna(ret):
-                    continue
-                if grp == 'small':
-                    # 小盘溢价 = 小盘收益 - 大盘收益
-                    big_ret = merged_mv[merged_mv['mv_group'] == 'big']['pct_chg'].mean()
-                    if pd.notna(big_ret):
-                        smb_val = ret - big_ret
-                        result['规模因子(SMB)'][ts_code] = max(0, min(10, 5 + smb_val * 10))
-                elif grp == 'big':
-                    small_ret = merged_mv[merged_mv['mv_group'] == 'small']['pct_chg'].mean()
-                    if pd.notna(small_ret):
-                        smb_val = small_ret - ret
-                        result['规模因子(SMB)'][ts_code] = max(0, min(10, 5 + smb_val * 10))
-
-        # HML: 按 pe_ttm 分组（高PE=成长，低PE=价值）
-        merged_pe = merged[merged['pe_ttm'].notna() & (merged['pe_ttm'] > 0) & (merged['pe_ttm'] < 1e4)].copy()
-        if len(merged_pe) >= 20:
-            merged_pe['pe_group'] = pd.qcut(merged_pe['pe_ttm'], 3, labels=['value', 'neutral', 'growth'],
-                                            duplicates='drop')
-            for _, row in merged_pe.iterrows():
-                ts_code = row['ts_code']
-                grp = row['pe_group']
-                ret = row.get('pct_chg', 0)
-                if pd.isna(ret):
-                    continue
-                if grp == 'value':
-                    # 价值溢价 = 价值股收益 - 成长股收益
-                    growth_ret = merged_pe[merged_pe['pe_group'] == 'growth']['pct_chg'].mean()
-                    if pd.notna(growth_ret):
-                        hml_val = ret - growth_ret
-                        result['价值因子(HML)'][ts_code] = max(0, min(10, 5 + hml_val * 10))
-                elif grp == 'growth':
-                    value_ret = merged_pe[merged_pe['pe_group'] == 'value']['pct_chg'].mean()
-                    if pd.notna(value_ret):
-                        hml_val = value_ret - ret
-                        result['价值因子(HML)'][ts_code] = max(0, min(10, 5 + hml_val * 10))
-                else:  # neutral
-                    result['价值因子(HML)'][ts_code] = 5.0
-
-        # RMW: 按 ROE 分组（高盈利/低盈利）
-        merged_roe = merged[merged['roe'].notna()].copy()
-        if len(merged_roe) >= 20:
-            merged_roe['roe_group'] = pd.qcut(merged_roe['roe'], 3, labels=['weak', 'neutral', 'robust'],
-                                              duplicates='drop')
-            for _, row in merged_roe.iterrows():
-                ts_code = row['ts_code']
-                grp = row['roe_group']
-                ret = row.get('pct_chg', 0)
-                if pd.isna(ret):
-                    continue
-                if grp == 'robust':
-                    weak_ret = merged_roe[merged_roe['roe_group'] == 'weak']['pct_chg'].mean()
-                    if pd.notna(weak_ret):
-                        rmw_val = ret - weak_ret
-                        result['盈利因子(RMW)'][ts_code] = max(0, min(10, 5 + rmw_val * 10))
-                elif grp == 'weak':
-                    robust_ret = merged_roe[merged_roe['roe_group'] == 'robust']['pct_chg'].mean()
-                    if pd.notna(robust_ret):
-                        rmw_val = robust_ret - ret
-                        result['盈利因子(RMW)'][ts_code] = max(0, min(10, 5 + rmw_val * 10))
-                else:  # neutral
-                    result['盈利因子(RMW)'][ts_code] = 5.0
-
-        # CMA: 按 total_assets 增长率分组
-        merged_cma = merged[merged['total_assets'].notna()].copy()
-        if len(merged_cma) >= 20:
-            merged_cma['asset_growth'] = merged_cma.groupby('ts_code')['total_assets'].pct_change()
-            merged_cma_valid = merged_cma[merged_cma['asset_growth'].notna()].copy()
-            if len(merged_cma_valid) >= 20:
-                merged_cma_valid['cma_group'] = pd.qcut(merged_cma_valid['asset_growth'], 3,
-                                                        labels=['conservative', 'neutral', 'aggressive'],
-                                                        duplicates='drop')
-                for _, row in merged_cma_valid.iterrows():
-                    ts_code = row['ts_code']
-                    grp = row['cma_group']
-                    ret = row.get('pct_chg', 0)
-                    if pd.isna(ret):
-                        continue
-                    if grp == 'conservative':
-                        agg_ret = merged_cma_valid[merged_cma_valid['cma_group'] == 'aggressive']['pct_chg'].mean()
-                        if pd.notna(agg_ret):
-                            cma_val = ret - agg_ret
-                            result['投资因子(CMA)'][ts_code] = max(0, min(10, 5 + cma_val * 10))
-                    elif grp == 'aggressive':
-                        cons_ret = merged_cma_valid[merged_cma_valid['cma_group'] == 'conservative']['pct_chg'].mean()
-                        if pd.notna(cons_ret):
-                            cma_val = cons_ret - ret
-                            result['投资因子(CMA)'][ts_code] = max(0, min(10, 5 + cma_val * 10))
-                    else:
-                        result['投资因子(CMA)'][ts_code] = 5.0
-
-        _FF_CACHE[cache_key] = result
-        logger.debug(f"Fama-French 横截面计算完成: {len(merged)} 只股票")
-    except Exception as e:
-        logger.debug(f"Fama-French 计算失败: {e}")
-
-def _f_market_factor(closes, volumes, symbol, dm):
-    """市场因子：全市场加权收益 → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        # 从 closes 的最后一根 K 线获取 trade_date
-        _refresh_ff_cache(dm, _get_latest_date(closes))
-        for cache_key in _FF_CACHE:
-            scores = _FF_CACHE[cache_key].get('市场因子', {})
-            if symbol in scores:
-                return scores[symbol]
-    except Exception:
-        pass
-    return None
-
-def _f_smb(closes, volumes, symbol, dm):
-    """规模因子(SMB): 小盘股相对大盘超额 → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        _refresh_ff_cache(dm, _get_latest_date(closes))
-        for cache_key in _FF_CACHE:
-            scores = _FF_CACHE[cache_key].get('规模因子(SMB)', {})
-            if symbol in scores:
-                return scores[symbol]
-    except Exception:
-        pass
-    return None
-
-def _f_hml(closes, volumes, symbol, dm):
-    """价值因子(HML): 低PE相对高PE超额 → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        _refresh_ff_cache(dm, _get_latest_date(closes))
-        for cache_key in _FF_CACHE:
-            scores = _FF_CACHE[cache_key].get('价值因子(HML)', {})
-            if symbol in scores:
-                return scores[symbol]
-    except Exception:
-        pass
-    return None
-
-def _f_rmw(closes, volumes, symbol, dm):
-    """盈利因子(RMW): 高ROE相对低ROE超额 → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        _refresh_ff_cache(dm, _get_latest_date(closes))
-        for cache_key in _FF_CACHE:
-            scores = _FF_CACHE[cache_key].get('盈利因子(RMW)', {})
-            if symbol in scores:
-                return scores[symbol]
-    except Exception:
-        pass
-    return None
-
-def _f_cma(closes, volumes, symbol, dm):
-    """投资因子(CMA): 低资产增长相对高资产增长超额 → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        _refresh_ff_cache(dm, _get_latest_date(closes))
-        for cache_key in _FF_CACHE:
-            scores = _FF_CACHE[cache_key].get('投资因子(CMA)', {})
-            if symbol in scores:
-                return scores[symbol]
-    except Exception:
-        pass
-    return None
-
-def _get_latest_date(closes):
-    """从 ndarray 推断最新日期（当前场景下返回 today 字符串）"""
-    from datetime import date
-    return str(date.today())
-
-# ── 注册 Fama-French 因子 ──
-_register_ecm_factor('市场因子', _f_market_factor)
-_register_ecm_factor('规模因子(SMB)', _f_smb)
-_register_ecm_factor('规模因子', _f_smb)  # 别名（用于 p4）
-_register_ecm_factor('价值因子(HML)', _f_hml)
-_register_ecm_factor('价值因子', _f_hml)  # 别名（用于 p4）
-_register_ecm_factor('盈利因子(RMW)', _f_rmw)
-_register_ecm_factor('投资因子(CMA)', _f_cma)
-_register_ecm_factor('投资因子', _f_cma)  # 别名（用于 p4）
-
-# 质量因子（基于 ROE + 低负债的综合评分）
-def _f_quality(closes, volumes, symbol, dm):
-    """质量因子: ROE高 + 负债低 → 0-10（综合指标）"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        roe_score = _f_roe(closes, volumes, symbol, dm)
-        debt_score = _f_debt_ratio(closes, volumes, symbol, dm)
-        if roe_score is not None and debt_score is not None:
-            return round((roe_score * 0.6 + debt_score * 0.4), 2)
-        return roe_score or debt_score or None
-    except Exception:
-        return None
-_register_ecm_factor('质量因子', _f_quality)
-
-# 成长因子（基于营收 + 利润增长的综合评分）
-def _f_growth(closes, volumes, symbol, dm):
-    """成长因子: 营收增长 + 利润增长 → 0-10"""
-    if dm is None or symbol is None:
-        return None
-    try:
-        rev_score = _f_revenue_growth(closes, volumes, symbol, dm)
-        profit_score = _f_profit_growth(closes, volumes, symbol, dm)
-        scores = [s for s in [rev_score, profit_score] if s is not None]
-        if scores:
-            return round(sum(scores) / len(scores), 2)
-    except Exception:
-        pass
-    return None
-_register_ecm_factor('成长因子', _f_growth)
-
+# ════════════════════════════════════════════════
+# 旧因子系统 _FACTOR_COMPUTERS 已废弃（287号方案 v2.3）
+# 因子体系统一通过 FactorRegistry + UnifiedStrategyCore
+# 参见 backend/app/factors/
+# ════════════════════════════════════════════════
 
 def _compute_factor_score(df, symbol=None, combo_ids=None, data_dict=None, dm=None):
-    """
-    根据选中的因子组合计算因子评分（0-10）
-
-    遍历每个选中组合的因子定义，用 _FACTOR_COMPUTERS 逐个计算，
-    按权重加权得到每个组合的分，再对所有组合等权平均。
-
-    Args:
-        df: 股票的 OHLCV DataFrame
-        symbol: 股票代码（用于获取 ECM 数据）
-        combo_ids: 选中的组合 ID 列表（如 ['p1','p3']）
-        data_dict: {symbol: DataFrame} 全量数据池（当前未使用，预留）
-        dm: DataManager 实例（用于 ECM 数据获取）
-
-    Returns:
-        float: 0-10 因子评分
-    """
-    import numpy as np
-    closes = df['close'].values
-    volumes = (df['vol'].values if 'vol' in df.columns
-               else df.get('amount', df['close']).values)
-
-    if not combo_ids:
-        return 0.0
-
-    # 导入 PRESET_COMBOS
-    try:
-        from app.routes.factors import PRESET_COMBOS
-    except ImportError:
-        logger.warning("PRESET_COMBOS 导入失败，使用通用因子评分")
-        return _fallback_factor_score(closes, volumes)
-
-    # 构建组合 ID → 组合定义 的映射
-    combo_map = {c['id']: c for c in PRESET_COMBOS}
-
-    combo_scores = []
-    for cid in combo_ids:
-        combo = combo_map.get(cid)
-        if not combo:
-            continue
-        factors = combo.get('factors', [])
-        if not factors:
-            continue
-
-        # 逐因子计算
-        factor_vals = []
-        total_weight = 0
-        for f in factors:
-            fname = f.get('n', '')
-            fweight = f.get('w', 0)
-            computer = _FACTOR_COMPUTERS.get(fname)
-            if computer:
-                try:
-                    # ECM 因子需要 symbol+dm，普通因子不需要
-                    val = computer(closes, volumes, symbol, dm)
-                except TypeError:
-                    val = computer(closes, volumes)
-                if val is not None:
-                    factor_vals.append(val * fweight)
-                    total_weight += fweight
-            else:
-                # 未注册的因子用中性分 5
-                factor_vals.append(5.0 * fweight)
-                total_weight += fweight
-
-        if total_weight > 0:
-            combo_score = sum(factor_vals) / total_weight
-            combo_scores.append(combo_score)
-
-    if not combo_scores:
-        return 0.0
-
-    # 所有选中的组合等权平均
-    base_score = sum(combo_scores) / len(combo_scores)
-
-    # BOCIASI 四象限情绪加权
-    try:
-        from app.engine.framework.bociasi_quadrant import BociasiQuadrantAnalyzer
-        bq = BociasiQuadrantAnalyzer()
-        quadrant = bq.analyze()
-        mult = quadrant.get('weight_multiplier', 1.0)
-        # 只在中性区域(MM)不做调整，极端情绪(LL/HH)做±15%调整
-        if abs(mult - 1.0) > 0.01:
-            adjusted = base_score * mult
-            adjusted = max(0, min(10, adjusted))
-            logger.debug(f"BOCIASI情绪加权: {quadrant['quadrant']} mult={mult:.2f} "
-                         f"{base_score:.2f}→{adjusted:.2f}")
-            return round(adjusted, 2)
-    except Exception as e:
-        logger.debug(f"BOCIASI情绪加权失败: {e}")
-
-    return round(base_score, 2)
-
+    """已废弃：请使用 UnifiedStrategyCore 获取因子评分"""
+    return 0.0
 
 def _fallback_factor_score(closes, volumes):
-    """通用因子评分（无组合选择时的回退）"""
-    scores = []
-    # 动量
-    m = _f_momentum(closes, volumes, 20)
-    if m is not None: scores.append(m)
-    # RSI
-    r = _f_rsi(closes, volumes, 14)
-    if r is not None: scores.append(r)
-    # 量比
-    v = _f_volume_ratio(closes, volumes, 5)
-    if v is not None: scores.append(v)
-    # 波动率
-    vol = _f_volatility(closes, volumes, 20)
-    if vol is not None: scores.append(vol)
-    return sum(scores) / len(scores) if scores else 5.0
+    """已废弃"""
+    return 0.0
+
 
 
 def _compute_vibe_bonus(vibe_strategy_ids: list, df=None, strategy_details: list = None) -> float:
@@ -1253,6 +559,7 @@ def screen_l3_candidates(
     combinations: list = None,
     vibe_strategies: list = None,
     l2_phase_map: dict = None,
+    sector_filter: dict = None,
 ) -> List[Dict]:
     """
     对L2通过的候选股执行L3策略验证（缠论+量价+因子组合共振评分）
@@ -1318,9 +625,19 @@ def screen_l3_candidates(
     index_condition = _compute_index_condition(data_dict)
 
     # ════════════════════════════════════════════════════════════
-    # 阶段一：逐只计算原始分
+    # 阶段一：逐只计算原始分（通过 UnifiedStrategyCore 统一计算）
     # ════════════════════════════════════════════════════════════
-    raw = []  # [{symbol, df, name, market_context, cl_score, cl_dir, cl_signal, cl_result, vp_*, fx_score, vibe_bonus}]
+    # 先批量预计算所有候选股的策略信号
+    from app.engine.unified_core import UnifiedStrategyCore
+    _core = UnifiedStrategyCore()
+    candidate_symbols = [
+        item.get('symbol', item.get('ts_code', ''))
+        for item in candidates
+        if item.get('symbol', item.get('ts_code', '')) in data_dict
+    ]
+    batch_results = _core.compute_batch(candidate_symbols, max_workers=4)
+
+    raw = []
     for item in candidates:
         symbol = item.get('symbol', item.get('ts_code', ''))
         if not symbol or symbol not in data_dict:
@@ -1337,98 +654,72 @@ def screen_l3_candidates(
             market_context['index_condition'] = index_condition
         r['market_context'] = market_context
 
-        # ── 量价（优先读取 AnalysisCache） ──
+        # 从 UnifiedStrategyCore 批量结果中提取各策略信号
+        core_result = batch_results.get(symbol)
+        core_signals = core_result.signals if core_result else {}
+
+        # ── 量价 ──
         r['vp_result'], r['vp_score'], r['vp_signal'], r['vp_dir'] = None, 0.0, 'N/A', 'neutral'
         if need_vp:
             try:
-                from app.services.analysis_cache import get_analysis_cache
-                vp_cache = get_analysis_cache()
-                vp_cache_key = f"vp:{symbol}:{len(df)}"
-                cached_vp = vp_cache.get(vp_cache_key)
-                if cached_vp is not None:
-                    vp_r = cached_vp
-                else:
-                    from .volume_price_strategy import VolumePriceStrategy
-                    vp = VolumePriceStrategy(market_env=market_context)
-                    vp_r = vp.analyze(df)
-                    if vp_r.get('success'):
-                        vp_cache.set(vp_cache_key, vp_r)
-                if vp_r.get('success'):
+                vp_sig = core_signals.get('volume_price')
+                if vp_sig and vp_sig.raw_score > 0:
+                    vp_r = dict(vp_sig.raw_detail) if vp_sig.raw_detail else {}
+                    vp_r['success'] = True
                     s, sig, d = _compute_volume_price_score(vp_r, symbol, df)
                     r['vp_result'], r['vp_score'], r['vp_signal'], r['vp_dir'] = vp_r, s, sig, d
             except Exception as e:
-                logger.debug(f"量价分析失败 {symbol}: {e}")
+                logger.debug(f"量价评分失败 {symbol}: {e}")
                 _record_engine_error('volume_price', symbol)
 
-        # ── 缠论多级别分析（需分钟数据支撑，无分钟数据则跳过） ──
+        # ── 缠论多级别分析 ──
         r['cl_result'], r['cl_score'], r['cl_signal'], r['cl_dir'] = None, 0.0, 'N/A', 'neutral'
         if need_cl:
             try:
-                from app.services.analysis_cache import get_analysis_cache
-                cl_cache = get_analysis_cache()
-                cl_cache_key = f"chanlun_multi:{symbol}:{len(df)}"
-                cached_cl = cl_cache.get(cl_cache_key)
-                if cached_cl is not None:
-                    cl_r = cached_cl
-                else:
-                    # 使用多级别缠论分析（需要W/D/60m数据）
-                    # 分钟数据应已由 screener.py 在L3前调用 ensure_minute_data 准备好
-                    from app.data import DataManager
-                    dm = DataManager()
-                    # 检查是否有分钟数据（5min存在=就绪）
-                    from app.data.enhanced_cache_manager import get_ecm_instance
-                    ecm = get_ecm_instance()
-                    has_5min = ecm.conn.execute(
-                        'SELECT COUNT(*) FROM minute_kline_cache WHERE ts_code=? AND freq="5min"',
-                        [symbol]
-                    ).fetchone()[0]
-                    
-                    if has_5min > 0:
-                        from app.services.signal_computation_service import SignalComputationService
-                        scs = SignalComputationService()
-                        signals = scs.compute_for_stock(symbol, limit=1, period='long')
-                        if signals:
-                            cl_sig = signals[0]
-                            cl_r = cl_sig.get('chanlun_analysis_detail', {})
-                            cl_r['success'] = True
-                            cl_r['status_recognition'] = cl_sig.get('status_recognition', {})
-                            cl_cache.set(cl_cache_key, cl_r)
-                        else:
-                            cl_r = {'success': False, 'error': '多级别分析无返回'}
-                    else:
-                        # 无分钟数据 → 跳过缠论（日线单级别无效）
-                        logger.debug(f"缠论跳过 {symbol}: 无分钟数据")
-                        cl_r = {'success': False, 'error': '缺少分钟数据'}
-                        
-                if cl_r.get('success'):
+                cl_sig = core_signals.get('chanlun')
+                if cl_sig and cl_sig.raw_detail:
+                    cl_r = dict(cl_sig.raw_detail)
+                    cl_r['success'] = True
+                    cl_r['status_recognition'] = cl_sig.status_recognition
                     s, sig, d = _compute_chanlun_score(cl_r, df)
                     s = _adjust_score_with_context(s, r['market_context'])
                     r['cl_result'], r['cl_score'], r['cl_signal'], r['cl_dir'] = cl_r, s, sig, d
             except Exception as e:
-                logger.debug(f"缠论多级别分析失败 {symbol}: {e}")
+                logger.debug(f"缠论评分失败 {symbol}: {e}")
                 _record_engine_error('chanlun', symbol)
 
-        # ── 因子组合评分（按选中的组合真实计算） ──
-        r['factor_score'] = _compute_factor_score(df, symbol=symbol, combo_ids=combinations) if need_fx else 0.0
+        # ── 因子评分（从 core 提取，已通过 FactorRegistry 计算） ──
+        fx_sig = core_signals.get('factor')
+        r['factor_score'] = (fx_sig.raw_score * 10) if fx_sig else 0.0
 
-        # ── Vibe Coding 真实执行（每只股票独立计算） ──
+        # ── Vibe Coding（保持不变） ──
         r['vibe_bonus'] = _compute_vibe_bonus(
             vibe_strategies or [],
             df=df,
             strategy_details=_vibe_details,
         ) if need_vb else 0.0
 
-        # ── BOCIASI 快线评分（个股级情绪，C6） ──
-        r['bociasi_score'] = 0.0
-        try:
-            closes_arr = df['close'].values
-            volumes_arr = df['vol'].values if 'vol' in df.columns else df['amount'].values
-            if len(closes_arr) >= 20:
-                bociasi_val = _f_bociasi_quickline(closes_arr, volumes_arr)
-                if bociasi_val is not None:
-                    r['bociasi_score'] = bociasi_val / 10.0
-        except Exception:
-            pass
+        # ── BOCIASI 情绪（从 core 提取） ──
+        bo_sig = core_signals.get('bociasi')
+        r['bociasi_score'] = bo_sig.raw_score if bo_sig else 0.0
+
+        # ── 板块过滤（288号方案 v1.1，可选） ──
+        if sector_filter:
+            try:
+                from app.services.sector_analysis_service import SectorAnalysisService
+                _sas = SectorAnalysisService()
+                _sctx = _sas.get_sector_context(symbol)
+                if _sctx.get('available'):
+                    r['sector_rank'] = _sctx.get('sector_rank_1d', 99)
+                    r['sector_rotation'] = _sctx.get('rotation_state', 'UNKNOWN')
+                    r['excess_return'] = _sctx.get('excess_return_20d', 0)
+                    top_n = sector_filter.get('momentum_rank_top_n', 0)
+                    if top_n > 0 and r['sector_rank'] > top_n:
+                        if sector_filter.get('skip_weak_sectors', False):
+                            continue  # 直接跳过弱势行业候选
+                        r['sector_penalty'] = (r['sector_rank'] / top_n) * 0.2  # 降权系数
+            except Exception:
+                pass
 
         raw.append(r)
         stocks_processed += 1
@@ -1500,6 +791,18 @@ def screen_l3_candidates(
         combined = max(0.0, min(10.0, combined + bociasi_bonus))
         # 风控降权因子
         combined = combined * risk_mult
+
+        # 板块过滤降权（288号方案 v1.1）
+        if 'sector_penalty' in r:
+            combined = max(0.0, combined * (1 - r['sector_penalty']))
+        # 板块共振加减分
+        if sector_filter and sector_filter.get('enable_resonance_bonus', False):
+            sector_rank = r.get('sector_rank', 99)
+            if need_cl and r['cl_score'] >= 6 and sector_rank <= 5:
+                combined = min(10.0, combined + 0.5)  # 共振加分
+            elif need_cl and r['cl_score'] >= 6 and sector_rank >= 25:
+                combined = max(0.0, combined - 0.3)  # 风险降权
+
         grade = _score_to_grade(combined)
 
         # 信号标签（使用原始方向判断，归一化不影响方向）

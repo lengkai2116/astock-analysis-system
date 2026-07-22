@@ -941,12 +941,19 @@ def evaluate_batch():
             except Exception as e:
                 logger.debug(f"量价评分失败({ts_code}): {e}")
 
-        # ── 因子评分 ──
+        # ── 因子评分（通过 FactorRegistry） ──
         if need_fx:
             try:
-                from app.engine.framework.screener_strategy_integration import _compute_factor_score
-                fx_score = _compute_factor_score(df, symbol=ts_code, dm=dm)
-                scores['factor'] = float(fx_score) if fx_score else 0.0
+                from app.factors import FactorCalculator
+                calc = FactorCalculator()
+                # 计算一个综合因子评分
+                factor_result = calc.calculate_single_factor(df, 'ROC', ts_code=ts_code)
+                if factor_result is not None and not factor_result.empty:
+                    latest_val = float(factor_result.iloc[-1])
+                    fx_score = max(0.0, min(10.0, (latest_val * 100 + 10) / 2))
+                else:
+                    fx_score = 5.0
+                scores['factor'] = fx_score
                 result['factor_score'] = round(min(scores['factor'] * 10, 100), 0)
             except Exception as e:
                 logger.debug(f"因子评分失败({ts_code}): {e}")

@@ -10,7 +10,6 @@ import os
 from flask import Blueprint, request, jsonify
 from typing import Dict, List, Optional
 
-from app.services.signal_computation_service import SignalComputationService
 from app.services.status_output_service import StatusOutputService
 from app.engine.framework.conflict_arbiter import ConflictArbiter
 from app.engine.framework.unified_practical_framework import UPFEngine
@@ -105,9 +104,41 @@ def _get_deepseek_status_text(ts_code: str) -> Optional[str]:
         return None
 
 
+def _is_deepseek_available() -> bool:
+    """检查 DeepSeek 是否可用（LLM 配置就绪）"""
+    provider = os.getenv('LLM_PROVIDER', 'mock')
+    if provider in ('mock', 'none'):
+        return False
+    if provider == 'deepseek':
+        return bool(os.getenv('DEEPSEEK_API_KEY'))
+    return True
+
+
 # ──────────────────────────────────────────────
 # 信号 → 五维展示格式 映射辅助
 # ──────────────────────────────────────────────
+
+def _restore_signals_from_cache(cached: dict) -> list:
+    """从 StandardizedResult dict 恢复 List[Dict] 格式信号，兼容下游 _build_*_dimension"""
+    signals = []
+    for key, sig in cached.get('signals', {}).items():
+        if not isinstance(sig, dict):
+            continue
+        raw = sig.get('raw_detail', {})
+        if not isinstance(raw, dict):
+            raw = {}
+        raw.update({
+            'strategy_name': sig.get('strategy_name', ''),
+            'signal': sig.get('direction', 'neutral'),
+            'signal_date': cached.get('trade_date', ''),
+            'confidence': sig.get('confidence', 0),
+            'signal_level': sig.get('signal', 'NEUTRAL'),
+            'signal_label': sig.get('signal_label', ''),
+            'evidence': sig.get('evidence', []),
+            'status_recognition': sig.get('status_recognition', {}),
+        })
+        signals.append(raw)
+    return signals
 
 def _find_signal(signals: List[Dict], keyword: str) -> Optional[Dict]:
     """从信号列表中按策略名关键词查找"""
@@ -346,6 +377,11 @@ def _build_emotion_dimension(
         'direction': emotion_dir,
         'sector': sector_name,
         'sector_pct': sector_pct,
+        # 板块增强字段（288号方案 v1.1）
+        'sector_rank_1d': (signal_context or {}).get('sector_rank_1d', 0),
+        'excess_return_1d': (signal_context or {}).get('excess_return_1d', 0),
+        'excess_return_20d': (signal_context or {}).get('excess_return_20d', 0),
+        'rotation_state': (signal_context or {}).get('rotation_state', 'UNKNOWN'),
         'market_temp': sr.get('volume', {}).get('state', '中性'),
         'valuation': '合理' if sr.get('risk_level') == 'MEDIUM' else '偏低',
         'risk_level': sr.get('risk_level', '中等'),
@@ -418,9 +454,10 @@ def _build_vibe_dimension(ts_code: str, signals: List[Dict]) -> Dict:
 def strategy_analyze():
     """
     策略分析流水线：
-    1. 调用 SignalComputationService 计算5策略信号
-    2. 可选执行 Kronos 推理增强
-    3. 组装为五维展现格式
+    1. 优先读取 strategy_signal_detail 缓存（5-50ms）
+    2. 未命中时使用 UnifiedStrategyCore 实时计算
+    3. 可选执行 Kronos 推理增强
+    4. 组装为五维展现格式（不含 DeepSeek，由独立端点提供）
     """
     data = request.get_json() or {}
     ts_code = (data.get('ts_code') or '').strip()
@@ -446,10 +483,19 @@ def strategy_analyze():
         except Exception as e:
             risk_check = {'passed': True, 'reasons': [f'风控检查跳过: {e}']}
 
-        # Step 1: 计算5策略信号（传入分析周期）
-        scs = SignalComputationService()
-        signals = scs.compute_for_stock(ts_code, period=period)
-        data_availability = scs.last_data_availability  # 扩展数据可用性状态
+        # Step 1: 优先从缓存读取策略信号（287号方案 v2.3）
+        from app.data import DataManager
+        _dm = DataManager()
+        cached = _dm.get_signal_detail(ts_code)
+        if cached:
+            signals = _restore_signals_from_cache(cached)
+            data_availability = cached.get('data_availability', {})
+        else:
+            from app.engine.unified_core import UnifiedStrategyCore
+            _core = UnifiedStrategyCore()
+            _result = _core.compute(ts_code, period=period)
+            signals = _restore_signals_from_cache(_result.to_dict())
+            data_availability = _result.data_availability
 
         # Step 2: 构建信号上下文（包含板块信息等）
         signal_context = _build_signal_context(ts_code)
@@ -495,12 +541,9 @@ def strategy_analyze():
         if kronos_enabled:
             kronos_result = _compute_kronos(ts_code)
 
-        # ── P3-1/P3-2: DeepSeek 九层描述（主输出，替代NLG status_text）──
-        deepseek_text = _get_deepseek_status_text(ts_code)
-        if deepseek_text:
-            dimensions['chanlun']['deepseek_text'] = deepseek_text
-            # Phase 3: DeepSeek 文本接管 status_text（272号方案）
-            dimensions['chanlun']['status_text'] = deepseek_text
+        # ── E12 不再包含 DeepSeek 文本（287号方案 v2.3）──
+        # DeepSeek 九层描述改为用户触发，走独立端点 /api/v3/strategy/deepseek
+        # NLG 规则生成的 status_text 保留在各维度中
 
         response = {
             'code': 0,
@@ -510,6 +553,10 @@ def strategy_analyze():
                 'period': period,
                 'dimensions': dimensions,
                 'data_availability': data_availability,
+                # NLG 规则生成的现状文本（读取时从信号数据自动渲染，非 DeepSeek）
+                'nlg_status_text': {k: v.get('status_text', '') for k, v in dimensions.items() if isinstance(v, dict)},
+                # 标记前端可调用 DeepSeek 独立端点
+                'deepseek_available': _is_deepseek_available(),
             }
         }
 
@@ -547,9 +594,17 @@ def strategy_status_aggregate():
     dimensions = data.get('dimensions')
 
     try:
-        # Step 1: 获取策略信号
-        scs = SignalComputationService()
-        signals = scs.compute_for_stock(ts_code)
+        # Step 1: 获取策略信号（优先缓存，未命中实时计算）
+        from app.data import DataManager
+        _dm = DataManager()
+        _cached = _dm.get_signal_detail(ts_code)
+        if _cached:
+            signals = _restore_signals_from_cache(_cached)
+        else:
+            from app.engine.unified_core import UnifiedStrategyCore
+            _core = UnifiedStrategyCore()
+            _result = _core.compute(ts_code)
+            signals = _restore_signals_from_cache(_result.to_dict())
 
         # Step 2: 获取市场状态
         market_state = _detect_market_state(signals)
@@ -632,21 +687,33 @@ def _compute_kronos(ts_code: str) -> Optional[Dict]:
 
 
 def _build_signal_context(ts_code: str) -> Dict:
-    """构建信号上下文（板块信息等）"""
+    """构建信号上下文（含真实板块数据，288号方案 v1.1）"""
     ctx = {'ts_code': ts_code}
-    # 从 Stock 表查询行业（最准确来源）
+
+    # 优先通过 SectorAnalysisService 获取真实板块数据
+    try:
+        from app.services.sector_analysis_service import SectorAnalysisService
+        sas = SectorAnalysisService()
+        sector_ctx = sas.get_sector_context(ts_code)
+        if sector_ctx.get('available'):
+            ctx['sector_name'] = sector_ctx['sector_name']
+            ctx['sector_pct'] = sector_ctx['sector_daily_return']
+            ctx['sector_rank_1d'] = sector_ctx['sector_rank_1d']
+            ctx['excess_return_1d'] = sector_ctx['excess_return_1d']
+            ctx['excess_return_20d'] = sector_ctx['excess_return_20d']
+            ctx['rotation_state'] = sector_ctx['rotation_state']
+            ctx['sector_moneyflow_rank'] = sector_ctx['sector_moneyflow_rank']
+            return ctx
+    except Exception as e:
+        logger.debug(f"SectorAnalysisService 不可用: {e}")
+
+    # fallback: Stock.industry + daily_basic 个股数据
     try:
         from app.data import DataManager
         dm = DataManager()
         stk = dm.get_stock_info(ts_code)
         if stk and stk.get('industry'):
             ctx['sector_name'] = stk['industry']
-    except Exception:
-        pass
-    # 从 daily_basic 获取板块涨跌幅
-    try:
-        from app.data import DataManager
-        dm = DataManager()
         df_basic = dm.get_cached_daily_basic(ts_code)
         if df_basic is not None and not df_basic.empty:
             latest = df_basic.iloc[-1]
@@ -883,3 +950,45 @@ def chanlun_chart():
     except Exception as e:
         logger.error(f'缠论制图失败 ({ts_code}): {e}')
         return f'<h2>缠论制图失败: {str(e)}</h2>', 500, {'Content-Type': 'text/html'}
+
+
+# ══════════════════════════════════════════════════
+# DeepSeek 九层描述（用户触发，287号方案 v2.3）
+# ══════════════════════════════════════════════════
+
+@strategy_analyze_bp.route('/api/v3/strategy/deepseek', methods=['GET'])
+def strategy_deepseek():
+    """用户触发的 DeepSeek 九层股票现状描述
+
+    从缓存读取策略信号数据构建上下文，调用 DeepSeek API 生成九层描述。
+    策略信号已由 daemon 预计算写入 strategy_signal_detail 表，
+    无需重复运行策略引擎。
+    """
+    ts_code = (request.args.get('ts_code') or '').strip().upper()
+    if not ts_code:
+        return jsonify({'code': -1, 'message': 'ts_code必填'}), 400
+
+    try:
+        # 从缓存读取信号数据
+        from app.data import DataManager
+        dm = DataManager()
+        cached = dm.get_signal_detail(ts_code)
+        if not cached:
+            return jsonify({
+                'code': -1,
+                'message': '策略信号未就绪，请稍后重试或先调用策略分析',
+            }), 503
+
+        # 调用 DeepSeek 生成九层描述
+        text = _get_deepseek_status_text(ts_code)
+        if not text:
+            return jsonify({
+                'code': -1,
+                'message': 'DeepSeek 不可用（请检查 LLM 配置或 API Key）',
+            }), 503
+
+        return jsonify({'code': 0, 'data': {'ts_code': ts_code, 'deepseek_text': text}})
+
+    except Exception as e:
+        logger.error(f"DeepSeek 九层描述生成失败 ({ts_code}): {e}", exc_info=True)
+        return jsonify({'code': -1, 'message': f'DeepSeek 生成异常: {str(e)}'}), 500

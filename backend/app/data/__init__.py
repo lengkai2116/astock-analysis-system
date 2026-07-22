@@ -1415,6 +1415,105 @@ class DataManager:
         ecm = get_ecm_instance()
         return ecm.get_strategy_signals(ts_code, signal_names)
 
+    # ── 策略信号详情缓存（287号方案 v2.3） ──
+
+    def cache_signal_detail(self, ts_code: str, result_dict: dict):
+        """缓存完整策略信号详情"""
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        ecm.cache_signal_detail(ts_code, result_dict)
+
+    def get_signal_detail(self, ts_code: str, trade_date: str = None) -> dict | None:
+        """读取缓存策略信号详情"""
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        return ecm.get_signal_detail(ts_code, trade_date)
+
+    def has_signal_detail(self, ts_code: str, trade_date: str = None) -> bool:
+        """检查缓存是否存在"""
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        return ecm.has_signal_detail(ts_code, trade_date)
+
+    # ── 行业指数数据（288号方案 v1.1） ──
+
+    SUB_INDUSTRY_TO_CODE: dict[str, str] = {
+        '白酒':'801120.SI','啤酒':'801120.SI','红黄酒':'801120.SI','乳制品':'801120.SI',
+        '食品':'801120.SI','软饮料':'801120.SI',
+        '半导体':'801080.SI','元器件':'801080.SI','电器仪表':'801080.SI',
+        '通信设备':'801080.SI','IT设备':'801080.SI',
+        '银行':'801780.SI',
+        '证券':'801790.SI','保险':'801790.SI','多元金融':'801790.SI',
+        '化学制药':'801150.SI','中成药':'801150.SI','生物制药':'801150.SI',
+        '医药商业':'801150.SI','医疗保健':'801150.SI',
+        '煤炭开采':'801020.SI','焦炭加工':'801020.SI','石油开采':'801020.SI',
+        '石油加工':'801020.SI','石油贸易':'801020.SI',
+        '化工原料':'801030.SI','农药化肥':'801030.SI','化纤':'801030.SI',
+        '橡胶':'801030.SI','塑料':'801030.SI','染料涂料':'801030.SI','日用化工':'801030.SI',
+        '普钢':'801040.SI','特种钢':'801040.SI','钢加工':'801040.SI',
+        '铜':'801050.SI','铝':'801050.SI','铅锌':'801050.SI','黄金':'801050.SI',
+        '小金属':'801050.SI','矿物制品':'801050.SI',
+        '家用电器':'801110.SI',
+        '纺织':'801130.SI','服饰':'801130.SI','纺织机械':'801130.SI',
+        '造纸':'801140.SI','轻工机械':'801140.SI',
+        '水力发电':'801160.SI','火力发电':'801160.SI','新型电力':'801160.SI',
+        '供气供热':'801160.SI','水务':'801160.SI','环境保护':'801160.SI',
+        '公路':'801170.SI','铁路':'801170.SI','水运':'801170.SI','空运':'801170.SI',
+        '机场':'801170.SI','港口':'801170.SI','仓储物流':'801170.SI','公共交通':'801170.SI',
+        '全国地产':'801180.SI','区域地产':'801180.SI','房产服务':'801180.SI','园区开发':'801180.SI',
+        '百货':'801200.SI','超市连锁':'801200.SI','商贸代理':'801200.SI',
+        '其他商业':'801200.SI','批发业':'801200.SI','商品城':'801200.SI','电器连锁':'801200.SI',
+        '旅游景点':'801210.SI','旅游服务':'801210.SI','酒店餐饮':'801210.SI','文教休闲':'801210.SI',
+        '综合类':'801230.SI',
+        '水泥':'801710.SI','玻璃':'801710.SI','陶瓷':'801710.SI','其他建材':'801710.SI',
+        '建筑工程':'801720.SI','装修装饰':'801720.SI','建筑':'801720.SI',
+        '电气设备':'801730.SI',
+        '航空':'801740.SI','船舶':'801740.SI','国防军工':'801740.SI',
+        '软件服务':'801750.SI','互联网':'801750.SI','电脑':'801750.SI',
+        '出版业':'801760.SI','影视音像':'801760.SI','广告包装':'801760.SI',
+        '汽车整车':'801880.SI','汽车配件':'801880.SI','汽车服务':'801880.SI','摩托车':'801880.SI',
+        '机床制造':'801890.SI','工程机械':'801890.SI','机械基件':'801890.SI',
+        '专用机械':'801890.SI','运输设备':'801890.SI','化工机械':'801890.SI',
+        '农业综合':'801010.SI','林业':'801010.SI','渔业':'801010.SI','种植业':'801010.SI',
+        '饲料':'801010.SI','农用机械':'801010.SI',
+        '电信运营':'801770.SI',
+        '路桥':'801170.SI','家居用品':'801140.SI',
+    }
+
+    def get_industry_for_stock(self, ts_code: str) -> str | None:
+        """获取个股所属行业名"""
+        try:
+            stk = self.get_stock_info(ts_code)
+            if stk:
+                return stk.get('industry') or None
+            return None
+        except Exception:
+            return None
+
+    def get_industry_index_data(self, industry_name: str):
+        """获取行业指数日线数据"""
+        code = self.SUB_INDUSTRY_TO_CODE.get(industry_name)
+        if not code:
+            return None
+        return self.get_cached_daily_data(code)
+
+    def get_all_industry_rankings(self) -> list[dict]:
+        """获取所有行业当日涨跌幅排名"""
+        rankings = []
+        for ind_name, code in self.SUB_INDUSTRY_TO_CODE.items():
+            df = self.get_industry_index_data(ind_name)
+            if df is not None and not df.empty:
+                pct = float(df.iloc[-1].get('pct_chg', 0))
+                rankings.append({'name': ind_name, 'code': code, 'pct': pct})
+        # 按行业代码去重（只保留每个申万一级行业的最新数据）
+        seen = {}
+        for r in rankings:
+            seen[r['code']] = r  # 后覆盖，保留同一行业的最新子行业结果
+        unique = sorted(seen.values(), key=lambda x: x['pct'], reverse=True)
+        for i, r in enumerate(unique, 1):
+            r['rank'] = i
+        return unique
+
     # ── sync_requests 队列（调用层→采集层的"数据缺失"信号） ──
 
     def request_data(self, task_type: str, ts_code: str = None) -> int:

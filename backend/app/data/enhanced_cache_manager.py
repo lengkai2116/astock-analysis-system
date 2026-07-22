@@ -432,6 +432,16 @@ class EnhancedCacheManager:
             )
         """)
         self._execute("""
+            CREATE TABLE IF NOT EXISTS strategy_signal_detail (
+                ts_code TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                signal_json TEXT NOT NULL,
+                schema_version INTEGER DEFAULT 1,
+                cached_at TEXT DEFAULT (datetime('now','localtime')),
+                PRIMARY KEY (ts_code, trade_date)
+            )
+        """)
+        self._execute("""
             CREATE TABLE IF NOT EXISTS factor_cache (
                 ts_code TEXT, trade_date TEXT,
                 factor_name TEXT,
@@ -1505,6 +1515,85 @@ class EnhancedCacheManager:
             sql = f"SELECT * FROM strategy_signals WHERE ts_code=? AND signal_name IN ({placeholders})"
             return self._query_df(sql, [ts_code] + signal_names)
         return self._query_df("SELECT * FROM strategy_signals WHERE ts_code=?", [ts_code])
+
+    # ==================== 策略信号详情缓存（287号方案 v2.3） ====================
+
+    def cache_signal_detail(self, ts_code: str, result_dict: dict):
+        """缓存完整策略信号详情（替代 cache_strategy_signals）"""
+        import json as _json
+        trade_date = result_dict.get('trade_date', datetime.now().strftime('%Y%m%d'))
+        signal_json = _json.dumps(result_dict, ensure_ascii=False, default=str)
+        with self._write_lock:
+            try:
+                self._execute(
+                    """INSERT OR REPLACE INTO strategy_signal_detail
+                       (ts_code, trade_date, signal_json, schema_version, cached_at)
+                       VALUES (?, ?, ?, 1, datetime('now','localtime'))""",
+                    [ts_code, trade_date, signal_json]
+                )
+            except Exception as e:
+                logger.warning(f"缓存信号详情失败 [{ts_code}]: {e}")
+
+    def get_signal_detail(self, ts_code: str, trade_date: str = None) -> dict | None:
+        """读取缓存策略信号详情，返回反序列化的 dict 或 None"""
+        import json as _json
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y%m%d')
+        try:
+            row = self._fetchone(
+                "SELECT signal_json FROM strategy_signal_detail WHERE ts_code=? AND trade_date=?",
+                [ts_code, trade_date]
+            )
+            if row:
+                data = _json.loads(row[0])
+                if data.get('schema_version', 1) != 1:
+                    return None
+                return data
+        except Exception:
+            pass
+        return None
+
+    def has_signal_detail(self, ts_code: str, trade_date: str = None) -> bool:
+        """检查是否存在缓存"""
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y%m%d')
+        try:
+            row = self._fetchone(
+                "SELECT 1 FROM strategy_signal_detail WHERE ts_code=? AND trade_date=?",
+                [ts_code, trade_date]
+            )
+            return row is not None
+        except Exception:
+            return False
+
+    # ==================== 板块排行归档读取（288号方案 v1.1） ====================
+
+    def read_as_sector_ranking(self) -> list[dict]:
+        """读取归档的行业板块排行"""
+        try:
+            rows = self._fetchall(
+                "SELECT * FROM as_sector_ranking ORDER BY change_pct DESC"
+            )
+            if rows:
+                cols = ['sector_name', 'ts_code', 'change_pct', 'up_count', 'down_count',
+                        'lead_ts_code', 'lead_name', 'lead_change_pct', 'updated_at']
+                return [dict(zip(cols, r)) for r in rows]
+        except Exception:
+            pass
+        return []
+
+    def read_as_concept_ranking(self) -> list[dict]:
+        """读取归档的概念板块排行"""
+        try:
+            rows = self._fetchall(
+                "SELECT * FROM as_concept_ranking ORDER BY change_pct DESC"
+            )
+            if rows:
+                cols = ['concept_name', 'ts_code', 'change_pct', 'up_count', 'down_count', 'updated_at']
+                return [dict(zip(cols, r)) for r in rows]
+        except Exception:
+            pass
+        return []
 
     # ==================== 实时快照数据库 ====================
 

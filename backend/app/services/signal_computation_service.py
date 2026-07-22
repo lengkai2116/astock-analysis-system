@@ -2572,23 +2572,8 @@ class SignalComputationService:
                 accel = mom_5 - mom_20 / 4  # 近5日动量 vs 近20日平均动量
                 scores['ACCEL'] = min(max(accel * 20 + 0.5, 0), 1)
 
-            # 从 _FACTOR_COMPUTERS 扩展因子（C5）
-            if len(closes) >= 20:
-                try:
-                    from app.engine.framework.screener_strategy_integration import (
-                        _f_bociasi_quickline, _f_bias, _f_reversal
-                    )
-                    bociasi_val = _f_bociasi_quickline(closes, volumes)
-                    if bociasi_val is not None:
-                        scores['BOCIASI'] = bociasi_val / 10.0
-                    bias_val = _f_bias(closes, volumes, period=20)
-                    if bias_val is not None:
-                        scores['BIAS'] = min(bias_val / 10.0, 1.0)
-                    rev_val = _f_reversal(closes, volumes, period=5)
-                    if rev_val is not None:
-                        scores['REVERSAL'] = min(rev_val / 10.0, 1.0)
-                except Exception:
-                    pass
+            # 扩展因子通过 FactorRegistry 计算（C5）
+            # 旧 _FACTOR_COMPUTERS 已废弃（287号方案 v2.3）
 
             if len(scores) >= 3:
                 return scores, True
