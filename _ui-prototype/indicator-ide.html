@@ -2648,6 +2648,13 @@ function loadAnalysis(tsCode, kronosEnabled){
 }
 
 // ── P4: 缠论结构图加载 ──
+function htmlToIframe(html){
+  // 用 Blob URL 安全嵌入 HTML，避免 srcdoc 转义问题（289号方案 F1-1）
+  var blob = new Blob([html], {type: 'text/html;charset=utf-8'});
+  var url = URL.createObjectURL(blob);
+  return '<iframe src="'+url+'" style="width:100%;height:600px;border:none;" onload="URL.revokeObjectURL(this.src)"></iframe>';
+}
+
 function loadChanlunCharts(tsCode){
   var container = document.getElementById('chanlunCharts');
   if(!container) return;
@@ -2660,9 +2667,13 @@ function loadChanlunCharts(tsCode){
   if(longBody){
     longBody.innerHTML = '<div class="cl-placeholder">加载日线缠论结构...</div>';
     fetch('/api/v3/chanlun/chart?ts_code='+encodeURIComponent(tsCode)+'&period=long')
-      .then(function(r){ return r.text(); })
+      .then(function(r){
+        // 检查 HTTP 状态码
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        return r.text();
+      })
       .then(function(html){
-        longBody.innerHTML = '<iframe srcdoc="'+html.replace(/"/g,'&quot;').replace(/\n/g,' ')+'"></iframe>';
+        longBody.innerHTML = htmlToIframe(html);
       })
       .catch(function(){
         longBody.innerHTML = '<div class="cl-placeholder">日线数据暂不可用</div>';
@@ -2673,18 +2684,38 @@ function loadChanlunCharts(tsCode){
   if(shortBody){
     shortBody.innerHTML = '<div class="cl-placeholder">加载60分钟缠论结构...</div>';
     fetch('/api/v3/chanlun/chart?ts_code='+encodeURIComponent(tsCode)+'&period=short')
-      .then(function(r){ return r.text(); })
+      .then(function(r){
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        return r.text();
+      })
       .then(function(html){
-        if(html.indexOf('</h2>')<200){
-          shortBody.innerHTML = '<iframe srcdoc="'+html.replace(/"/g,'&quot;').replace(/\n/g,' ')+'"></iframe>';
-        } else {
-          shortBody.innerHTML = '<div class="cl-placeholder">短期数据不足（需要更多分钟K线）</div>';
-        }
+        shortBody.innerHTML = htmlToIframe(html);
       })
       .catch(function(){
-        shortBody.innerHTML = '<div class="cl-placeholder">短期数据暂不可用</div>';
+        shortBody.innerHTML = '<div class="cl-placeholder">短期数据不足（需要更多分钟K线）</div>';
       });
   }
+}
+
+// ── 289号方案 F2-2: 异步加载 DeepSeek 九层解读 ──
+var _deepseekText = '';
+function loadDeepseekText(tsCode){
+  fetch('/api/v3/strategy/deepseek?ts_code='+encodeURIComponent(tsCode))
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      if(res.code === 0 && res.data && res.data.deepseek_text){
+        _deepseekText = res.data.deepseek_text;
+        // 重新渲染现状卡片（此时 deepseek_text 有值）
+        renderStockStatus(
+          window._lastDims || {},
+          window._lastAvailability || {},
+          _deepseekText
+        );
+      }
+    })
+    .catch(function(){
+      // 静默失败，保持已有的 status_text 显示
+    });
 }
 
 // ── B2: E13 交叉验证 ──
@@ -3184,6 +3215,9 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
   if(analysisData && analysisData.dimensions){
     var dims = analysisData.dimensions;
     var availability = analysisData.data_availability;
+    // 保存供异步 DeepSeek 回调使用
+    window._lastDims = dims;
+    window._lastAvailability = availability;
 
     // 1. 股票现状卡片
     renderStockStatus(dims, availability, analysisData.deepseek_text);
@@ -3201,6 +3235,11 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
     var config = getConsoleConfig();
     if(config && config.strategies && config.strategies.chanlun){
       loadChanlunCharts(_currentTsCode);
+    }
+
+    // 5. 异步加载 DeepSeek 九层解读（289号方案 F2-2）
+    if(analysisData.deepseek_available){
+      loadDeepseekText(_currentTsCode);
     }
 
     // 更新运行按钮状态

@@ -607,8 +607,10 @@ def strategy_analyze():
                 'data_availability': data_availability,
                 # NLG 规则生成的现状文本（读取时从信号数据自动渲染，非 DeepSeek）
                 'nlg_status_text': {k: v.get('status_text', '') for k, v in dimensions.items() if isinstance(v, dict)},
-                # 标记前端可调用 DeepSeek 独立端点
+                # 标记前端可调用 DeepSeek 独立端点（287号§十零改动选项）
                 'deepseek_available': _is_deepseek_available(),
+                # 零改动选项：保持字段存在但为空，前端不报 undefined
+                'deepseek_text': '',
             }
         }
 
