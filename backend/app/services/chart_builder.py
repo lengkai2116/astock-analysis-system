@@ -36,12 +36,18 @@ LW_VERSION = '4.2.1'
 
 
 def _fmt_date(d) -> str:
-    """格式化日期为 YYYY-MM-DD"""
-    if isinstance(d, str):
-        return d[:10]
-    if isinstance(d, datetime):
-        return d.strftime('%Y-%m-%d')
-    return str(d)[:10]
+    """格式化日期为 YYYY-MM-DD，无效值返回空字符串"""
+    if d is None:
+        return ''
+    try:
+        if isinstance(d, datetime):
+            return d.strftime('%Y-%m-%d')
+        s = str(d).strip().lower()
+        if s in ('', 'nan', 'none', 'nat', 'null'):
+            return ''
+        return s[:10]
+    except Exception:
+        return ''
 
 
 def _safe_float(v, default=0.0) -> float:
@@ -86,7 +92,8 @@ class ChartBuilder:
     def set_klines(self, df) -> None:
         """设置 K 线数据"""
         import pandas as pd
-        rename = {'trade_date': 'time', 'vol': 'volume'}
+        # 兼容日线(trade_date)和分钟线(trade_time)两种列名，trade_time优先
+        rename = {'trade_time': 'time', 'trade_date': 'time', 'vol': 'volume'}
         for old, new in rename.items():
             if old in df.columns and new not in df.columns:
                 df = df.rename(columns={old: new})
@@ -95,7 +102,7 @@ class ChartBuilder:
         subset = df[available].copy()
         if 'time' in subset.columns:
             subset['time'] = subset['time'].apply(
-                lambda x: str(x)[:10] if pd.notna(x) else '')
+                lambda x: str(x)[:10] if pd.notna(x) and str(x).strip() != 'nan' else '')
         self._klines_json = subset.to_json(orient='records', date_format='iso')
 
     def add_fractals(self, fractals: List) -> None:
@@ -110,22 +117,30 @@ class ChartBuilder:
             })
 
     def add_strokes(self, strokes: List) -> None:
-        """添加笔数据"""
+        """添加笔数据（跳过日期无效的笔）"""
         for s in strokes:
+            sd = _fmt_date(s.start_date)
+            ed = _fmt_date(s.end_date)
+            if not sd or not ed:
+                continue
             self._strokes.append({
-                'start_date': _fmt_date(s.start_date),
-                'end_date': _fmt_date(s.end_date),
+                'start_date': sd,
+                'end_date': ed,
                 'start_price': _safe_float(s.start_price),
                 'end_price': _safe_float(s.end_price),
                 'direction': s.direction,
             })
 
     def add_zhongshu(self, zhongshu_list: List) -> None:
-        """添加中枢数据"""
+        """添加中枢数据（跳过日期无效的中枢）"""
         for zs in zhongshu_list:
+            sd = _fmt_date(zs.start_date)
+            ed = _fmt_date(zs.end_date)
+            if not sd or not ed:
+                continue
             self._zhongshu.append({
-                'start_date': _fmt_date(zs.start_date),
-                'end_date': _fmt_date(zs.end_date),
+                'start_date': sd,
+                'end_date': ed,
                 'high': _safe_float(zs.high),
                 'low': _safe_float(zs.low),
                 'center': _safe_float(
