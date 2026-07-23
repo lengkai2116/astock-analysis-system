@@ -58,6 +58,32 @@ class _DedupLogFilter(logging.Filter):
 
 logger.addFilter(_DedupLogFilter())
 
+# ── Tushare 全局速率限制（防止误伤，确保 ≤5次/秒） ──
+_ts_last_call = 0.0
+_TS_MIN_INTERVAL = 0.2  # 5次/秒
+
+def _ts(pro_func, *args, **kwargs):
+    """带速率限制的 Tushare API 调用"""
+    global _ts_last_call
+    elapsed = time.time() - _ts_last_call
+    if elapsed < _TS_MIN_INTERVAL:
+        time.sleep(_TS_MIN_INTERVAL - elapsed)
+    _ts_last_call = time.time()
+    return pro_func(*args, **kwargs)
+
+# 补充：stk_mins 极严限流（1次/分钟）
+_ts_minute_last_call = 0.0
+_TS_MINUTE_INTERVAL = 60.0
+
+def _ts_minute(pro_func, *args, **kwargs):
+    """极严限流的分钟数据接口（1次/分钟）"""
+    global _ts_minute_last_call
+    elapsed = time.time() - _ts_minute_last_call
+    if elapsed < _TS_MINUTE_INTERVAL:
+        time.sleep(_TS_MINUTE_INTERVAL - elapsed)
+    _ts_minute_last_call = time.time()
+    return pro_func(*args, **kwargs)
+
 # ── 全局引用 ──
 _running = True
 _ecm = None
@@ -114,7 +140,7 @@ def _batch_daily(trade_date: str) -> int:
     """全市场日线 — 1 次 API 调用"""
     import tushare as ts
     pro = ts.pro_api()
-    df = pro.daily(trade_date=trade_date)
+    df = _ts(pro.daily, trade_date=trade_date)
     if df is None or df.empty:
         return 0
     if 'trade_date' in df.columns:
@@ -127,7 +153,7 @@ def _batch_daily_basic(trade_date: str) -> int:
     """全市场基本面 — 1 次 API 调用"""
     import tushare as ts
     pro = ts.pro_api()
-    df = pro.daily_basic(trade_date=trade_date)
+    df = _ts(pro.daily_basic, trade_date=trade_date)
     if df is None or df.empty:
         return 0
     if 'trade_date' in df.columns:
@@ -207,7 +233,7 @@ def _batch_moneyflow(trade_date: str) -> int:
     """全市场资金流向 — 1 次 API 调用"""
     import tushare as ts
     pro = ts.pro_api()
-    raw = pro.moneyflow(trade_date=trade_date)
+    raw = _ts(pro.moneyflow, trade_date=trade_date)
     if raw is None or raw.empty:
         return 0
     df = raw.copy()
@@ -234,7 +260,7 @@ def _batch_index_daily(trade_date: str) -> int:
     # 四大宽基指数
     for code in ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']:
         try:
-            raw = pro.index_daily(ts_code=code, trade_date=trade_date)
+            raw = _ts(pro.index_daily, ts_code=code, trade_date=trade_date)
             if raw is None or raw.empty:
                 continue
             df = raw.copy()
@@ -261,7 +287,7 @@ def _batch_index_daily(trade_date: str) -> int:
     sw_count = 0
     for code in sw_codes:
         try:
-            raw = pro.index_daily(ts_code=code, trade_date=trade_date)
+            raw = _ts(pro.index_daily, ts_code=code, trade_date=trade_date)
             if raw is None or raw.empty:
                 continue
             df = raw.copy()
@@ -285,7 +311,7 @@ def _batch_stk_limit(trade_date: str) -> int:
     """全市场涨跌停 — 1 次 API 调用"""
     import tushare as ts
     pro = ts.pro_api()
-    raw = pro.stk_limit(trade_date=trade_date)
+    raw = _ts(pro.stk_limit, trade_date=trade_date)
     if raw is None or raw.empty:
         return 0
     df = raw.rename(columns={'up_limit': 'high_limit', 'down_limit': 'low_limit'})
@@ -299,7 +325,7 @@ def _batch_lhb(trade_date: str) -> int:
     """全市场龙虎榜 — 1 次 API 调用"""
     import tushare as ts
     pro = ts.pro_api()
-    raw = pro.top_list(trade_date=trade_date)
+    raw = _ts(pro.top_list, trade_date=trade_date)
     if raw is None or raw.empty:
         return 0
     df = raw.rename(columns={
@@ -327,7 +353,7 @@ def _batch_lhb_detail(trade_date: str) -> int:
     """
     import tushare as ts
     pro = ts.pro_api()
-    raw = pro.top_inst(trade_date=trade_date)
+    raw = _ts(pro.top_inst, trade_date=trade_date)
     if raw is None or raw.empty:
         return 0
     records = []
@@ -373,7 +399,7 @@ def _batch_margin(trade_date: str) -> int:
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
-    raw = pro.margin_detail(trade_date=trade_date)
+    raw = _ts(pro.margin_detail, trade_date=trade_date)
     if raw is None or raw.empty:
         return 0
     df = raw.copy()
@@ -394,7 +420,7 @@ def _batch_concept(trade_date: str = None) -> int:
     pro = ts.pro_api()
     # 1. 获取概念列表
     try:
-        concept_list = pro.concept()
+        concept_list = _ts(pro.concept)
     except Exception as e:
         logger.info(f"Tushare concept() 异常({e})，切换 AKShare 降级...")
         concept_list = None
@@ -407,7 +433,7 @@ def _batch_concept(trade_date: str = None) -> int:
             if not concept_code:
                 continue
             try:
-                detail = pro.concept_detail(id=concept_code)
+                detail = _ts(pro.concept_detail, id=concept_code)
                 if detail is not None and not detail.empty:
                     for _, d in detail.iterrows():
                         detail_records.append({
@@ -477,7 +503,7 @@ def _batch_concept(trade_date: str = None) -> int:
         # 最后降级：使用 stock_basic 行业分类替代概念数据
         logger.info("最后降级：使用 stock_basic 行业分类...")
         try:
-            stock_df = pro.stock_basic(fields='ts_code,name,industry,area')
+            stock_df = _ts(pro.stock_basic, fields='ts_code,name,industry,area')
             if stock_df is not None and not stock_df.empty and 'industry' in stock_df.columns:
                 industry_records = []
                 for _, row in stock_df.iterrows():
@@ -508,7 +534,7 @@ def _batch_index_member() -> int:
     tushare_failed = []
     for code in main_indices:
         try:
-            raw = pro.index_member(ts_code=code)
+            raw = _ts(pro.index_member, ts_code=code)
             if raw is not None and not raw.empty:
                 df = raw.copy()
                 if 'in_date' in df.columns:
@@ -594,7 +620,7 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
     total = 0
     try:
         # Tushare fina_indicator 可指定 period 获取最近一期
-        df = pro.fina_indicator(period=trade_date)
+        df = _ts(pro.fina_indicator, period=trade_date)
         if df is not None and not df.empty:
             for col in ['end_date', 'ann_date']:
                 if col in df.columns:
@@ -608,13 +634,27 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
 
 
 def _batch_adj_factor() -> int:
-    """全市场复权因子 — 逐只 API 调用（pro.adj_factor 不支持按 trade_date 批量）
+    """全市场复权因子 — 批量按 trade_date（替代逐只500次）
 
-    后台低优，每次最多处理 500 只，缓存结果到 adj_factor_cache。
+    实测 pro.adj_factor(trade_date=date) 可返回全市场数据，
+    等价于逐只调用但只需 1 次 API 请求。
     """
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
+    # 用最近交易日
+    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
+    try:
+        raw = _ts(pro.adj_factor, trade_date=yesterday)
+        if raw is not None and not raw.empty:
+            df = raw.copy()
+            if 'trade_date' in df.columns:
+                df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+            _ecm.cache_adj_factor_data(df)
+            return len(df)
+    except Exception:
+        pass
+    # 降级：逐只（仅当批量失败时）
     codes = _ecm.conn.execute(
         "SELECT DISTINCT ts_code FROM daily_cache"
     ).fetchall()
@@ -622,7 +662,7 @@ def _batch_adj_factor() -> int:
     total = 0
     for code in codes:
         try:
-            raw = pro.adj_factor(ts_code=code)
+            raw = _ts(pro.adj_factor, ts_code=code)
             if raw is not None and not raw.empty:
                 df = raw.copy()
                 if 'trade_date' in df.columns:
@@ -631,26 +671,38 @@ def _batch_adj_factor() -> int:
                 total += len(df)
         except Exception:
             continue
-    logger.info(f"  [复权因子] 同步 {total} 条 (共 {len(codes)} 只)")
+    logger.info(f"  [复权因子] 降级逐只同步 {total} 条 (共 {len(codes)} 只)")
     return total
 
 
 def _batch_top10_holders() -> int:
-    """全市场前十大股东 — 逐只 API 调用
+    """全市场前十大股东 — 批量按 end_date（替代逐只500次）
 
-    后台低优，每次最多处理 500 只，缓存结果到 top10_holders_cache。
+    实测 pro.top10_holders(end_date=date) 可返回全市场数据。
+    不再逐只 Tushare 查询，1 次 API 请求完成。
     """
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
-    codes = _ecm.conn.execute(
-        "SELECT DISTINCT ts_code FROM daily_cache"
-    ).fetchall()
+    end_dt = (datetime.now().replace(day=1) - timedelta(days=30)).strftime('%Y%m%d')
+    try:
+        raw = _ts(pro.top10_holders, end_date=end_dt)
+        if raw is not None and not raw.empty:
+            df = raw.copy()
+            for col in ['end_date', 'ann_date']:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col]).dt.date
+            _ecm.cache_top10_holders(df)
+            return len(df)
+    except Exception:
+        pass
+    # 降级：逐只
+    codes = _ecm.conn.execute("SELECT DISTINCT ts_code FROM daily_cache").fetchall()
     codes = [r[0] for r in codes[:500]]
     total = 0
     for code in codes:
         try:
-            raw = pro.top10_holders(ts_code=code)
+            raw = _ts(pro.top10_holders, ts_code=code)
             if raw is not None and not raw.empty:
                 df = raw.copy()
                 for col in ['end_date', 'ann_date']:
@@ -660,26 +712,37 @@ def _batch_top10_holders() -> int:
                 total += len(df)
         except Exception:
             continue
-    logger.info(f"  [前十大股东] 同步 {total} 条 (共 {len(codes)} 只)")
+    logger.info(f"  [前十大股东] 降级逐只同步 {total} 条")
     return total
 
 
 def _batch_stk_holder() -> int:
-    """全市场股东人数 — 逐只 API 调用
+    """全市场股东人数 — 批量按 end_date（替代逐只500次）
 
-    后台低优，每次最多处理 500 只，缓存结果到 stk_holder_cache。
+    实测 pro.stk_holdernumber(end_date=date) 可返回全市场数据。
     """
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
-    codes = _ecm.conn.execute(
-        "SELECT DISTINCT ts_code FROM daily_cache"
-    ).fetchall()
+    end_dt = (datetime.now().replace(day=1) - timedelta(days=30)).strftime('%Y%m%d')
+    try:
+        raw = _ts(pro.stk_holdernumber, end_date=end_dt)
+        if raw is not None and not raw.empty:
+            df = raw.copy()
+            for col in ['end_date', 'ann_date']:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col]).dt.date
+            _ecm.cache_stk_holder_data(df)
+            return len(df)
+    except Exception:
+        pass
+    # 降级：逐只
+    codes = _ecm.conn.execute("SELECT DISTINCT ts_code FROM daily_cache").fetchall()
     codes = [r[0] for r in codes[:500]]
     total = 0
     for code in codes:
         try:
-            raw = pro.stk_holdernumber(ts_code=code)
+            raw = _ts(pro.stk_holdernumber, ts_code=code)
             if raw is not None and not raw.empty:
                 df = raw.copy()
                 for col in ['end_date', 'ann_date']:
@@ -689,7 +752,7 @@ def _batch_stk_holder() -> int:
                 total += len(df)
         except Exception:
             continue
-    logger.info(f"  [股东人数] 同步 {total} 条 (共 {len(codes)} 只)")
+    logger.info(f"  [股东人数] 降级逐只同步 {total} 条")
     return total
 
 
@@ -714,7 +777,7 @@ def _batch_finance_report() -> int:
     total = 0
     for code in codes:
         try:
-            raw = pro.fina_indicator(ts_code=code, fields=FINA_FIELDS_EXTENDED)
+            raw = _ts(pro.fina_indicator, ts_code=code, fields=FINA_FIELDS_EXTENDED)
             if raw is not None and not raw.empty:
                 df = raw.copy()
                 for col in ['end_date', 'ann_date']:
@@ -779,7 +842,7 @@ def _batch_income_recent(limit_days: int = 90) -> int:
     codes = [r[0] for r in codes[:500]]  # 限500只，避免过长
     for code in codes:
         try:
-            raw = pro.income(ts_code=code, start_date=None, end_date=None)
+            raw = _ts(pro.income, ts_code=code, start_date=None, end_date=None)
             if raw is not None and not raw.empty:
                 if 'end_date' in raw.columns:
                     raw['end_date'] = pd.to_datetime(raw['end_date']).dt.date
@@ -805,7 +868,7 @@ def _batch_balancesheet(limit_days: int = 90) -> int:
     codes = [r[0] for r in codes[:500]]
     for code in codes:
         try:
-            raw = pro.balancesheet(ts_code=code, start_date=None, end_date=None)
+            raw = _ts(pro.balancesheet, ts_code=code, start_date=None, end_date=None)
             if raw is not None and not raw.empty:
                 for col in ['end_date', 'ann_date', 'f_ann_date']:
                     if col in raw.columns:
@@ -830,7 +893,7 @@ def _batch_cashflow(limit_days: int = 90) -> int:
     codes = [r[0] for r in codes[:500]]
     for code in codes:
         try:
-            raw = pro.cashflow(ts_code=code, start_date=None, end_date=None)
+            raw = _ts(pro.cashflow, ts_code=code, start_date=None, end_date=None)
             if raw is not None and not raw.empty:
                 for col in ['end_date', 'ann_date', 'f_ann_date']:
                     if col in raw.columns:
@@ -855,7 +918,7 @@ def _batch_forecast(limit_days: int = 90) -> int:
     codes = [r[0] for r in codes[:500]]
     for code in codes:
         try:
-            raw = pro.forecast(ts_code=code, start_date=None, end_date=None)
+            raw = _ts(pro.forecast, ts_code=code, start_date=None, end_date=None)
             if raw is not None and not raw.empty:
                 for col in ['end_date', 'ann_date']:
                     if col in raw.columns:

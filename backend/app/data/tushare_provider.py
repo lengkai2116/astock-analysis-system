@@ -13,6 +13,20 @@ for _key in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
 
 import logging
 logger = logging.getLogger(__name__)
+
+# ── Tushare 全局速率限制（与 data_daemon.py 同步） ──
+import time as _time
+_ts_last_call = 0.0
+_TS_MIN_INTERVAL = 0.2  # 5次/秒
+
+def _ts(pro_func, *args, **kwargs):
+    """带速率限制的 Tushare API 调用"""
+    global _ts_last_call
+    elapsed = _time.time() - _ts_last_call
+    if elapsed < _TS_MIN_INTERVAL:
+        _time.sleep(_TS_MIN_INTERVAL - elapsed)
+    _ts_last_call = _time.time()
+    return pro_func(*args, **kwargs)
 class TushareProvider:
     def __init__(self):
         self.token = self._load_token()
@@ -57,7 +71,7 @@ class TushareProvider:
         if not self.pro:
             return {'status': 'error', 'message': 'API 未初始化'}
         try:
-            df = self.pro.trade_cal(exchange='SSE', start_date='20260706', end_date='20260706')
+            df = _ts(self.pro.trade_cal, exchange='SSE', start_date='20260706', end_date='20260706')
             if df is not None and not df.empty:
                 return {'status': 'ok'}
             return {'status': 'error', 'message': 'API 返回空'}
@@ -69,8 +83,7 @@ class TushareProvider:
             return []
         
         try:
-            data = self.pro.stock_basic(
-                exchange='', 
+            data = _ts(self.pro.stock_basic, exchange='', 
                 list_status='L', 
                 fields='ts_code,symbol,name,industry,list_date,market'
             )
@@ -91,7 +104,7 @@ class TushareProvider:
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
             
-            data = self.pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.daily,ts_code=ts_code, start_date=start_date, end_date=end_date)
             return data.to_dict('records')
         except Exception:
             return []
@@ -107,7 +120,7 @@ class TushareProvider:
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
             
-            data = self.pro.weekly(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.weekly, ts_code=ts_code, start_date=start_date, end_date=end_date)
             return data.to_dict('records')
         except Exception:
             return []
@@ -123,7 +136,7 @@ class TushareProvider:
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
             
-            data = self.pro.monthly(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.monthly, ts_code=ts_code, start_date=start_date, end_date=end_date)
             return data.to_dict('records')
         except Exception:
             return []
@@ -178,7 +191,7 @@ class TushareProvider:
             return []
         
         try:
-            data = self.pro.daily(trade_date=trade_date)
+            data = _ts(self.pro.daily, trade_date=trade_date)
             return data.to_dict('records')
         except Exception:
             return []
@@ -188,7 +201,7 @@ class TushareProvider:
             return []
         
         try:
-            data = self.pro.index_daily(ts_code=ts_code)
+            data = _ts(self.pro.index_daily, ts_code=ts_code)
             return data.to_dict('records')
         except Exception:
             return []
@@ -199,7 +212,7 @@ class TushareProvider:
             return []
         
         try:
-            data = self.pro.stk_limit(trade_date=trade_date)
+            data = _ts(self.pro.stk_limit, trade_date=trade_date)
             return data.to_dict('records')
         except Exception:
             return []
@@ -210,7 +223,7 @@ class TushareProvider:
             return []
         
         try:
-            data = self.pro.moneyflow(trade_date=trade_date)
+            data = _ts(self.pro.moneyflow, trade_date=trade_date)
             return data.to_dict('records')
         except Exception:
             return []
@@ -221,7 +234,7 @@ class TushareProvider:
             return []
         
         try:
-            data = self.pro.top_list(trade_date=trade_date)
+            data = _ts(self.pro.top_list, trade_date=trade_date)
             return data.to_dict('records')
         except Exception:
             return []
@@ -231,7 +244,7 @@ class TushareProvider:
         if not self.pro:
             return []
         try:
-            data = self.pro.top_inst(trade_date=trade_date)
+            data = _ts(self.pro.top_inst, trade_date=trade_date)
             if data is None:
                 return []
             records = data.to_dict('records')
@@ -260,15 +273,15 @@ class TushareProvider:
         
         try:
             if trade_date:
-                data = self.pro.daily_basic(trade_date=trade_date)
+                data = _ts(self.pro.daily_basic, trade_date=trade_date)
             else:
                 if start_date is None:
                     start_date = (datetime.now() - pd.Timedelta(days=5*365)).strftime('%Y%m%d')
                 if end_date is None:
                     end_date = datetime.now().strftime('%Y%m%d')
                 
-                data = self.pro.daily_basic(
-                    ts_code=ts_code, 
+                data = _ts(self.pro.daily_basic,
+ts_code=ts_code, 
                     start_date=start_date, 
                     end_date=end_date
                 )
@@ -279,7 +292,7 @@ class TushareProvider:
             return []
         
         try:
-            data = self.pro.daily(trade_date=trade_date)
+            data = _ts(self.pro.daily, trade_date=trade_date)
             return data.to_dict('records')
         except Exception:
             return []
@@ -289,7 +302,7 @@ class TushareProvider:
             return []
         
         try:
-            data = self.pro.index_daily(ts_code=ts_code)
+            data = _ts(self.pro.index_daily, ts_code=ts_code)
             return data.to_dict('records')
         except Exception:
             return []
@@ -300,7 +313,7 @@ class TushareProvider:
             return []
         
         try:
-            data = self.pro.stk_limit(trade_date=trade_date)
+            data = _ts(self.pro.stk_limit, trade_date=trade_date)
             return data.to_dict('records')
         except Exception:
             return []
@@ -311,7 +324,7 @@ class TushareProvider:
             return []
         
         try:
-            data = self.pro.moneyflow(trade_date=trade_date)
+            data = _ts(self.pro.moneyflow, trade_date=trade_date)
             return data.to_dict('records')
         except Exception:
             return []
@@ -322,7 +335,7 @@ class TushareProvider:
             return []
         
         try:
-            data = self.pro.top_list(trade_date=trade_date)
+            data = _ts(self.pro.top_list, trade_date=trade_date)
             return data.to_dict('records')
         except Exception:
             return []
@@ -332,7 +345,7 @@ class TushareProvider:
         if not self.pro:
             return []
         try:
-            data = self.pro.top_inst(trade_date=trade_date)
+            data = _ts(self.pro.top_inst, trade_date=trade_date)
             if data is None:
                 return []
             records = data.to_dict('records')
@@ -362,7 +375,7 @@ class TushareProvider:
         try:
             if trade_date:
                 # 获取指定日期全部股票
-                data = self.pro.daily_basic(trade_date=trade_date)
+                data = _ts(self.pro.daily_basic, trade_date=trade_date)
             else:
                 # 获取指定股票的历史数据
                 if start_date is None:
@@ -370,8 +383,8 @@ class TushareProvider:
                 if end_date is None:
                     end_date = datetime.now().strftime('%Y%m%d')
                 
-                data = self.pro.daily_basic(
-                    ts_code=ts_code, 
+                data = _ts(self.pro.daily_basic,
+ts_code=ts_code, 
                     start_date=start_date, 
                     end_date=end_date
                 )
@@ -402,7 +415,7 @@ class TushareProvider:
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
             
-            data = self.pro.adj_factor(
+            data = _ts(self.pro.adj_factor,
                 ts_code=ts_code, 
                 start_date=start_date, 
                 end_date=end_date
@@ -419,7 +432,7 @@ class TushareProvider:
             return False, '未初始化API'
         
         try:
-            df = self.pro.stock_basic(list_status='L', fields='ts_code,name', limit=5)
+            df = _ts(self.pro.stock_basic, list_status='L', fields='ts_code,name', limit=5)
             if df is not None and not df.empty:
                 return True, f'连接成功，获取到{len(df)}只股票'
             return False, '数据为空'
@@ -454,7 +467,7 @@ class TushareProvider:
                 start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = self.pro.fina_indicator(ts_code=ts_code,
+            data = _ts(self.pro.fina_indicator, ts_code=ts_code,
                 fields=self.FINA_FIELDS_ORIGINAL,
                 start_date=start_date, end_date=end_date)
             return data.to_dict('records') if data is not None and not data.empty else []
@@ -471,7 +484,7 @@ class TushareProvider:
                 start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = self.pro.fina_indicator(ts_code=ts_code,
+            data = _ts(self.pro.fina_indicator, ts_code=ts_code,
                 fields=self.FINA_FIELDS_EXTENDED,
                 start_date=start_date, end_date=end_date)
             return data.to_dict('records') if data is not None and not data.empty else []
@@ -488,7 +501,7 @@ class TushareProvider:
                 start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = self.pro.income(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.income, ts_code=ts_code, start_date=start_date, end_date=end_date)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取利润表失败 ({ts_code}): {e}")
@@ -503,7 +516,7 @@ class TushareProvider:
                 start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = self.pro.balancesheet(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.balancesheet, ts_code=ts_code, start_date=start_date, end_date=end_date)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取资产负债表失败 ({ts_code}): {e}")
@@ -518,7 +531,7 @@ class TushareProvider:
                 start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = self.pro.cashflow(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.cashflow, ts_code=ts_code, start_date=start_date, end_date=end_date)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取现金流量表失败 ({ts_code}): {e}")
@@ -529,7 +542,7 @@ class TushareProvider:
         if not self.pro:
             return []
         try:
-            data = self.pro.top10_holders(ts_code=ts_code)
+            data = _ts(self.pro.top10_holders, ts_code=ts_code)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取前十大股东失败 ({ts_code}): {e}")
@@ -544,7 +557,7 @@ class TushareProvider:
                 start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = self.pro.stk_holdernumber(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.stk_holdernumber, ts_code=ts_code, start_date=start_date, end_date=end_date)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取股东人数失败 ({ts_code}): {e}")
@@ -559,7 +572,7 @@ class TushareProvider:
                 start_date = (datetime.now() - pd.Timedelta(days=1*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = self.pro.margin(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.margin, ts_code=ts_code, start_date=start_date, end_date=end_date)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取融资融券失败 ({ts_code}): {e}")
@@ -574,7 +587,7 @@ class TushareProvider:
                 start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = self.pro.forecast(ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.forecast, ts_code=ts_code, start_date=start_date, end_date=end_date)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取业绩预告失败 ({ts_code}): {e}")
@@ -586,9 +599,9 @@ class TushareProvider:
             return []
         try:
             if ts_code:
-                data = self.pro.industry(ts_code=ts_code)
+                data = _ts(self.pro.industry, ts_code=ts_code)
             else:
-                data = self.pro.industry()
+                data = _ts(self.pro.industry)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取行业分类失败: {e}")
@@ -600,9 +613,9 @@ class TushareProvider:
             return []
         try:
             if ts_code:
-                data = self.pro.concept(ts_code=ts_code)
+                data = _ts(self.pro.concept, ts_code=ts_code)
             else:
-                data = self.pro.concept()
+                data = _ts(self.pro.concept)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取概念分类失败: {e}")
@@ -613,7 +626,7 @@ class TushareProvider:
         if not self.pro:
             return []
         try:
-            data = self.pro.index_member(index_code=index_code)
+            data = _ts(self.pro.index_member, index_code=index_code)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取指数成分股失败 ({index_code}): {e}")
@@ -627,7 +640,7 @@ class TushareProvider:
         if not self.pro:
             return []
         try:
-            data = self.pro.moneyflow(ts_code=ts_code)
+            data = _ts(self.pro.moneyflow, ts_code=ts_code)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取资金流向失败 ({ts_code}): {e}")
@@ -638,7 +651,7 @@ class TushareProvider:
         if not self.pro:
             return None
         try:
-            data = self.pro.stock_basic(ts_code=ts_code)
+            data = _ts(self.pro.stock_basic, ts_code=ts_code)
             if data is not None and not data.empty:
                 row = data.iloc[0].to_dict()
                 return {
