@@ -490,26 +490,9 @@ class DataManager:
                     self._cache_minute_to_ecm(df_agg, ts_code, ecm_freq)
                     return df_agg
         
-        # 第三步：Tushare 降级
-        try:
-            data = self.tushare.get_minute_data(ts_code, freq, start_date, end_date)
-            if data:
-                return pd.DataFrame(data)
-        except Exception:
-            pass
-        
-        # 第四步：AKShare 降级（Tushare分钟数据付费产品，AKShare作为免费备选）
-        try:
-            from app.data.akshare_provider import AkshareProvider
-            ak = AkshareProvider()
-            ak_data = ak.get_minute_data(ts_code, freq=ecm_freq,
-                                          start_date=start_date, end_date=end_date)
-            if ak_data:
-                logger.info(f"AKShare分钟数据降级成功 ({ts_code}/{ecm_freq})")
-                return pd.DataFrame(ak_data)
-        except Exception as e:
-            logger.debug(f"AKShare分钟数据降级失败 ({ts_code}): {e}")
-        
+        # 第三步：Tushare/AKShare 降级移除（292号架构红线8）
+        # 数据缺失走 sync_requests 异步补采，不阻塞 API 进程
+        # daemon 的 5s 快照聚合会写入分钟数据，下次请求命中缓存
         return pd.DataFrame()
     
     def _cache_minute_to_ecm(self, df, ts_code, freq):
