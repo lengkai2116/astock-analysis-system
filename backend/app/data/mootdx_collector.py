@@ -726,6 +726,12 @@ def _collect_dual_source_fallback() -> int:
     _compute_top_stocks(all_records)
     _compute_limit_pools(all_records)
 
+    # 分钟K线聚合（从5s快照自聚合1min OHLC，写入ECM持久化）
+    try:
+        _feed_minute_aggregator(all_records)
+    except Exception as e:
+        logger.debug(f"[{source}] 分钟聚合异常（非关键）: {e}")
+
     # 持久化到 ECM market_snapshot.db（供 API 进程读取）
     try:
         from app.data.enhanced_cache_manager import get_ecm_instance

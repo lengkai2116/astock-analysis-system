@@ -39,6 +39,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger('data_daemon')
 
+# ── 重复日志去重过滤器（Task 3：预计算异常刷爆日志时，同内容只警告一次） ──
+class _DedupLogFilter(logging.Filter):
+    """按消息前缀去重，同内容只放行第一条 WARNING，后续降为 DEBUG"""
+    def __init__(self):
+        super().__init__()
+        self._seen = set()
+    def filter(self, record):
+        if record.levelno < logging.WARNING:
+            return True
+        key = record.getMessage()[:80]
+        if key in self._seen:
+            record.levelno = logging.DEBUG
+            record.levelname = 'DEBUG'
+            return True
+        self._seen.add(key)
+        return True
+
+logger.addFilter(_DedupLogFilter())
+
 # ── 全局引用 ──
 _running = True
 _ecm = None
@@ -1617,6 +1636,33 @@ def _is_market_hours() -> bool:
     return 9 <= h <= 15
 
 
+def _check_daily_sync_backfill():
+    """开机兜底：如果当前 >15:35 且今日日终同步未执行，立即触发（Task 2）
+
+    daemon 可能在 15:30-15:35 窗口期不在运行（崩溃/重启），
+    用日线数据量判断日终同步是否已被执行。
+    """
+    now = datetime.now()
+    if now.weekday() >= 5:
+        logger.info("  [日终兜底] 非交易日，跳过")
+        return
+    if now.hour < 15 or (now.hour == 15 and now.minute <= 35):
+        return  # 还没到窗口，等主循环正常触发
+
+    today_fmt = now.strftime('%Y-%m-%d')
+    try:
+        cnt = _ecm.conn.execute(
+            "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [today_fmt]
+        ).fetchone()[0]
+        if cnt >= 5000:
+            logger.info(f"  [日终兜底] 今日日终同步已完成（日线{cnt}行），跳过")
+            return
+        logger.info(f"  [日终兜底] 检测到今日日终同步未执行（日线{cnt}行），触发补采...")
+        run_daily_sync()
+    except Exception as e:
+        logger.warning(f"  [日终兜底] 自检失败: {e}")
+
+
 def main():
     global _ecm, _running
 
@@ -1642,6 +1688,9 @@ def main():
     # 启动完整性检查（回溯最近3个交易日）
     _ensure_pd()
     run_integrity_check(backfill_days=3)
+
+    # 日终同步兜底（Task 2：如错过15:30窗口，开机即补）
+    _check_daily_sync_backfill()
 
     # 开机预计算自检（P6：检查当日预计算完整性，按时间补算）
     today = datetime.now().strftime('%Y%m%d')
