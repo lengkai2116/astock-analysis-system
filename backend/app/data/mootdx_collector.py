@@ -343,34 +343,59 @@ def _record_source_result(source: str, success: bool):
 
 
 class _SnapshotSourceManager:
-    """双源热备管理器：Sina 主 / Tencent 备，自动切换"""
+    """三源热备管理器：东财主 / Sina备 / Tencent备，自动切换与恢复探测"""
 
     FAILOVER_THRESHOLD = 3    # 主源连续失败 N 次后切换到备用源
-    RECOVERY_THRESHOLD = 2    # 备用源连续成功 N 次后切回主源
+    RECOVERY_THRESHOLD = 2    # 备用源连续成功 N 次后更新主源（更稳定者上位）
+    RECOVERY_PROBE_INTERVAL = 10  # 降级到备用源后，每 N 次周期探测一次东财是否恢复
 
     def __init__(self):
-        self._primary = 'eastmoney'  # 东财主源（289号方案实测验证），Sina/Tencent 备源
+        self._primary = 'eastmoney'  # 东财主源，Sina/Tencent 备源
         self._consecutive_failures = 0
         self._recovery_successes = 0
+        self._backup_streak = 0       # 备用源连续成功次数（用于周期探测东财）
 
     @property
     def active_source(self) -> str:
         return self._primary
 
     def fetch(self, codes: list, name_map: dict) -> list:
-        """按主备顺序获取行情，返回 records 列表（空列表=双源均失败）"""
+        """按主备顺序获取行情，返回 records 列表（空列表=双源均失败）
+        
+        自动恢复策略：
+        - 降级到备用源后，每 RECOVERY_PROBE_INTERVAL 次成功采集，
+          主动探测东财一次，恢复后自动切回。
+        """
         global _active_source
 
-        # Phase 1: 主源
-        result = self._fetch_source(self._primary, codes, name_map)
+        # Phase 1: 主源（降级后周期探测东财恢复）
+        probe_source = self._primary
+        if self._primary != 'eastmoney':
+            self._backup_streak += 1
+            if self._backup_streak >= self.RECOVERY_PROBE_INTERVAL:
+                probe_source = 'eastmoney'  # 周期探测东财
+
+        result = self._fetch_source(probe_source, codes, name_map)
         if result:
-            _record_source_result(self._primary, True)
+            _record_source_result(probe_source, True)
             self._consecutive_failures = 0
             self._recovery_successes = 0
+            if probe_source == 'eastmoney' and self._primary != 'eastmoney':
+                # 东财已恢复，切回主源
+                self._primary = 'eastmoney'
+                self._backup_streak = 0
+                _active_source = 'eastmoney'
+                return result
+            if probe_source == self._primary:
+                self._backup_streak = 0
+                _active_source = self._primary
+                return result
+            # 探测到东财恢复 → 上面已处理；探测但东财非当前主源且返回了数据→继续用当前主源
+            self._backup_streak = 0
             _active_source = self._primary
             return result
 
-        _record_source_result(self._primary, False)
+        _record_source_result(probe_source, False)
         self._consecutive_failures += 1
 
         # Phase 2: 备用源（主源失败时自动尝试）
@@ -381,11 +406,12 @@ class _SnapshotSourceManager:
             self._recovery_successes += 1
             _active_source = backup
 
-            # 备源连续成功后切回主源
+            # 备用源连续成功后切换主源（更稳定者上位）
             if self._recovery_successes >= self.RECOVERY_THRESHOLD:
-                self._primary = backup  # 更新主源为当前更稳定的
+                self._primary = backup
                 self._consecutive_failures = 0
                 self._recovery_successes = 0
+                self._backup_streak = 0
             return result
 
         _record_source_result(backup, False)
