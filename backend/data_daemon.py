@@ -55,9 +55,9 @@ def _start_collectors():
         from app.data.mootdx_collector import mootdx_collector
         if mootdx_collector.start():
             ok.append('mootdx')
-            logger.info("MootdxCollector 已启动")
+            logger.info("MootdxCollector 已启动（快照:东财HTTP, 分钟:mootdx）")
         else:
-            logger.warning("MootdxCollector 未启动（客户端不可用）")
+            logger.warning("MootdxCollector 启动失败（降级模式不可用）")
     except Exception as e:
         logger.warning(f"MootdxCollector 启动失败: {e}")
 

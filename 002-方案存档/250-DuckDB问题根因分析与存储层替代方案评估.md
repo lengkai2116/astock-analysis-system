@@ -2,7 +2,8 @@
 title: DuckDB 问题根因分析与存储层替代方案评估
 type: 技术评估报告
 date: 2026-07-06
-status: ✅ 全量实施完成 — SQLite WAL 已替换 DuckDB，ECM 已重写，死引用已清理
+status: ⏹️ 已过时（已被292号方案替代。SQLite WAL 已替换 DuckDB，操作完成）
+superseded_by: 292
 ---
 
 # DuckDB 问题根因分析与存储层替代方案评估

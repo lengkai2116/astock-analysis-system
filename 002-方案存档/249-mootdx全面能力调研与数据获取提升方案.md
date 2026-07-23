@@ -2,7 +2,8 @@
 title: mootdx 全面能力调研与数据获取提升方案
 type: 技术调研报告
 date: 2026-07-06
-status: ✅ 已完成
+status: ⏹️ 已过时（已被292号方案替代。mootdx TCP 因通达信协议更新于2026-07-20断裂，`quotes()`/`bars()`返回空）
+superseded_by: 292
 ---
 
 # mootdx 全面能力调研与数据获取提升方案

@@ -2,7 +2,8 @@
 title: mootdx 接入全局数据体系方案
 type: 技术方案
 date: 2026-07-06
-status: ✅ 全量实施完成（Phase 0~E 均已实施。Phase A: mootdx_collector.py 新建; Phase B: akshare_collector.py 瘦身; Phase C: realtime_pg.py 移除; Phase D: PG配置清理; Phase E: 端到端验证通过）
+status: ⏹️ 已过时（已被292号方案替代。mootdx TCP 因通达信协议更新于2026-07-20断裂，`quotes()`/`bars()`返回空，主数据源已变更为东财HTTP API）
+superseded_by: 292
 ---
 
 # mootdx 接入全局数据体系方案

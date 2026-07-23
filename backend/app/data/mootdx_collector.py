@@ -25,6 +25,7 @@ MootdxCollector — mootdx(TCP) 盘中数据后台采集器
 """
 
 import os
+
 # 免发环境变量代理干扰：mootdx TCP 直连无需 HTTP_PROXY
 for _k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']:
     os.environ.pop(_k, None)
@@ -33,7 +34,8 @@ import logging
 import threading
 import time
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Dict, List
+
 import requests
 
 logger = logging.getLogger(__name__)
@@ -122,7 +124,6 @@ def _calc_speed(code: str, price: float) -> float:
 # ── 盘中数据引用 ──────────────────────────────────────────
 
 from app.data.in_memory_store import store as mem_store
-
 
 # ── 分钟K线聚合 ───────────────────────────────────────────
 # 252号方案 Phase 1：从 mootdx L1 快照自聚合 1min K线
@@ -284,151 +285,31 @@ INDEX_CONFIG = {
 
 
 def collect_market_snapshot() -> int:
-    """全市场 L1 快照采集（mootdx TCP，分批）
+    """全市场快照采集（东财 HTTP 主源，Sina/Tencent 降级）
 
-    mootdx server 单次 quotes() 最多返回 ~80 只，将全市场代码分批查询后合并。
-    从快照自算涨跌榜 + 涨跌停池，无需独立 HTTP 采集。
+    mootdx TCP 协议自 2026-07-20 起因通达信服务端更新而断裂，
+    quotes() 返回空。按 289号方案，实时快照改用以下优先级：
+      东财 HTTP (主) → 新浪 HTTP (备1) → 腾讯 HTTP (备2)
 
     Returns:
         采集的有效股票数量
     """
-    global _client_instance
-    client = _get_client()
-    if client is None:
-        logger.warning("[mootdx] 客户端不可用，跳过快照采集")
-        return 0
-
-    codes = _get_a_share_codes()
-    if not codes:
-        return 0
-
-    name_map = _stock_name_map
-    _BATCH_SIZE = 100
-    all_records = []
-
-    try:
-        t_start = time.time()
-        for batch_start in range(0, len(codes), _BATCH_SIZE):
-            batch = codes[batch_start:batch_start + _BATCH_SIZE]
-            try:
-                df = client.quotes(batch)
-            except NotImplementedError:
-                logger.warning("[mootdx] quotes() 不支持当前协议版本，重置客户端")
-                global _client_instance
-                _client_instance = None
-                return 0
-            except Exception as e:
-                logger.debug(f"[mootdx] batch {batch_start} 请求失败: {e}")
-                continue
-
-            if df is None or df.empty:
-                continue
-
-            for _, row in df.iterrows():
-                code = str(row.get('code', ''))
-                market = int(row.get('market', 0))
-                price = _safe_float(row.get('price'))
-                last_close = _safe_float(row.get('last_close'))
-
-                if price == 0 or last_close == 0:
-                    continue
-
-                change = round(price - last_close, 2)
-                change_pct = round(change / last_close * 100, 2) if last_close else 0.0
-
-                record = {
-                    'ts_code': _ts_code(code, market),
-                    'code': code,
-                    'name': name_map.get(code, ''),
-                    'price': price,
-                    'change': change,
-                    'change_pct': change_pct,
-                    'open': _safe_float(row.get('open')),
-                    'high': _safe_float(row.get('high')),
-                    'low': _safe_float(row.get('low')),
-                    'prev_close': last_close,
-                    'volume': int(_safe_float(row.get('volume', row.get('vol', 0)))),
-                    'amount': _safe_float(row.get('amount')),
-                    'bid1': _safe_float(row.get('bid1')),
-                    'ask1': _safe_float(row.get('ask1')),
-                    'bid_vol1': int(_safe_float(row.get('bid_vol1', 0))),
-                    'ask_vol1': int(_safe_float(row.get('ask_vol1', 0))),
-                    'bid2': _safe_float(row.get('bid2')),
-                    'ask2': _safe_float(row.get('ask2')),
-                    'bid_vol2': int(_safe_float(row.get('bid_vol2', 0))),
-                    'ask_vol2': int(_safe_float(row.get('ask_vol2', 0))),
-                    'bid3': _safe_float(row.get('bid3')),
-                    'ask3': _safe_float(row.get('ask3')),
-                    'bid_vol3': int(_safe_float(row.get('bid_vol3', 0))),
-                    'ask_vol3': int(_safe_float(row.get('ask_vol3', 0))),
-                    'bid4': _safe_float(row.get('bid4')),
-                    'ask4': _safe_float(row.get('ask4')),
-                    'bid_vol4': int(_safe_float(row.get('bid_vol4', 0))),
-                    'ask_vol4': int(_safe_float(row.get('ask_vol4', 0))),
-                    'bid5': _safe_float(row.get('bid5')),
-                    'ask5': _safe_float(row.get('ask5')),
-                    'bid_vol5': int(_safe_float(row.get('bid_vol5', 0))),
-                    'ask_vol5': int(_safe_float(row.get('ask_vol5', 0))),
-                    # D3: 委比 = (∑买量-∑卖量)/(∑买量+∑卖量)*100
-                    'commission': _calc_commission(row),
-                    # D3: 涨速 = (现价-上一轮价格)/上一轮价格*100
-                    'speed': _calc_speed(code, price),
-                    'timestamp': datetime.now().isoformat(),
-                    'source': 'mootdx_collector',
-                }
-                all_records.append(record)
-
-        elapsed = time.time() - t_start
-
-        if not all_records:
-            logger.warning(f"[mootdx] 快照采集完成，但无有效数据 ({elapsed:.1f}s)")
-            # mootdx 不可用时，尝试 HTTP 双源热备降级
-            fallback = _collect_dual_source_fallback()
-            if fallback > 0:
-                return fallback
-            return 0
-
-        mem_store.update_snapshot(all_records)
-
-        # 迭代1：实时快照入库 → 写入 ECM 独立快照数据库
-        try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            ecm = get_ecm_instance()
-            ecm.cache_market_snapshot_data(all_records)
-        except Exception:
-            logger.debug("[mootdx] 快照数据库写入失败（非关键）")
-
-        logger.info(f"[mootdx] 快照采集完成: {len(all_records)} 只 ({elapsed:.1f}s, {len(codes)} 批)")
-
-        # 252号方案 Phase 1：分钟K线聚合
-        _feed_minute_aggregator(all_records)
-
-        _compute_top_stocks(all_records)
-        _compute_limit_pools(all_records)
-        _collect_indices()         # 指数数据（修复SH/SZ标记）
-        _compute_sector_rankings()  # 板块排行（替代AKShare）
-        _collect_bse_quotes()       # 北交所行情（腾讯API补充）
-
-        return len(all_records)
-
-    except Exception as e:
-        logger.warning(f"[mootdx] 快照采集失败: {e}")
-        # 连接失败时重置客户端，下次采集自动重连（global 已在函数顶部声明）
-        _client_instance = None
-        return 0
+    # mootdx quotes() 已断裂，快照直接走 HTTP 降级（东财主源 → 新浪 → 腾讯）
+    return _collect_dual_source_fallback()
 
 
 # ══════════════════════════════════════════════════════════
-# 双源热备 HTTP 实时行情降级（Sina 主 + Tencent 备）
+# 双源热备 HTTP 实时行情降级（东财主 + Sina备 + Tencent备）
 # ══════════════════════════════════════════════════════════
 
 # ── 源健康统计 ──
 _source_stats = {
     'mootdx':  {'ok': 0, 'fail': 0},
+    'eastmoney': {'ok': 0, 'fail': 0},
     'sina':    {'ok': 0, 'fail': 0},
     'tencent': {'ok': 0, 'fail': 0},
 }
-_active_source = 'mootdx'  # 当前活跃源名称
+_active_source = 'eastmoney'  # 当前活跃源
 
 
 def get_source_stats() -> dict:
@@ -468,7 +349,7 @@ class _SnapshotSourceManager:
     RECOVERY_THRESHOLD = 2    # 备用源连续成功 N 次后切回主源
 
     def __init__(self):
-        self._primary = 'sina'
+        self._primary = 'eastmoney'  # 东财主源（289号方案实测验证），Sina/Tencent 备源
         self._consecutive_failures = 0
         self._recovery_successes = 0
 
@@ -512,6 +393,8 @@ class _SnapshotSourceManager:
         return []
 
     def _fetch_source(self, source: str, codes: list, name_map: dict) -> list:
+        if source == 'eastmoney':
+            return _fetch_eastmoney(codes, name_map)
         if source == 'sina':
             return _fetch_sina(codes, name_map)
         return _fetch_tencent(codes, name_map)
@@ -702,6 +585,109 @@ def _fetch_tencent(codes: list, name_map: dict) -> list:
                     'source': 'tencent',
                 }
                 all_records.append(record)
+            except Exception:
+                continue
+
+    return all_records
+
+
+# ── East Money 解析器（289号方案：主源替代 mootdx） ──────
+
+
+def _fetch_eastmoney(codes: list, name_map: dict) -> list:
+    """从 push2.eastmoney.com 获取实时行情（主源）
+
+    使用 ulist.np 批量端点，fltt=2 自动缩放，60只/批，
+    并行4线程采集，全市场5000只约5s（经289号方案实测验证）。
+
+    东财字段 → 内部标准字段:
+      f2=price, f3=change_pct, f4=change, f5=volume(手),
+      f6=amount, f12=6位代码, f14=name,
+      f15=high, f16=low, f17=open, f18=prev_close,
+      f20=总市值, f21=流通市值, f57=ts_code, f60=昨收
+    """
+    import concurrent.futures
+    import json
+    import urllib.request
+
+    all_records = []
+    batch_size = 60
+    max_workers = 4
+    field_str = 'f2,f3,f4,f5,f6,f7,f10,f12,f14,f15,f16,f17,f18,f20,f21,f57,f60'
+
+    def _fetch_batch(code_batch: list) -> list:
+        secids = ','.join(
+            f"1.{c}" if c.startswith(('6', '9')) else f"0.{c}"
+            for c in code_batch
+        )
+        url = (f"https://push2.eastmoney.com/api/qt/ulist.np/get"
+               f"?fltt=2&fields={field_str}&secids={secids}")
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+            'Referer': 'https://www.eastmoney.com/',
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode('utf-8')
+                data = json.loads(raw)
+                diff = data.get('data', {}).get('diff', [])
+        except Exception:
+            return []
+
+        records = []
+        for s in diff:
+            if not s or not s.get('f12'):
+                continue
+            code = str(s.get('f12', ''))
+            price = _safe_float(s.get('f2'))
+            prev_close = _safe_float(s.get('f18'))
+            if price == 0 or prev_close == 0:
+                continue
+
+            change = round(price - prev_close, 2)
+            change_pct = round(change / prev_close * 100, 2) if prev_close else 0.0
+            market = 0 if code.startswith(('6', '9')) else 1
+            ts_code = f'{code}.SH' if market == 0 else f'{code}.SZ'
+
+            records.append({
+                'ts_code': ts_code,
+                'code': code,
+                'name': s.get('f14', '') or name_map.get(code, ''),
+                'price': price,
+                'change': change,
+                'change_pct': change_pct,
+                'open': _safe_float(s.get('f17')),
+                'high': _safe_float(s.get('f15')),
+                'low': _safe_float(s.get('f16')),
+                'prev_close': prev_close,
+                'volume': int(_safe_float(s.get('f5', 0))),
+                'amount': _safe_float(s.get('f6')),
+                'bid1': 0.0, 'ask1': 0.0,
+                'bid_vol1': 0, 'ask_vol1': 0,
+                'bid2': 0.0, 'ask2': 0.0,
+                'bid_vol2': 0, 'ask_vol2': 0,
+                'bid3': 0.0, 'ask3': 0.0,
+                'bid_vol3': 0, 'ask_vol3': 0,
+                'bid4': 0.0, 'ask4': 0.0,
+                'bid_vol4': 0, 'ask_vol4': 0,
+                'bid5': 0.0, 'ask5': 0.0,
+                'bid_vol5': 0, 'ask_vol5': 0,
+                'commission': 0.0,
+                'speed': _calc_speed(code, price),
+                'timestamp': datetime.now().isoformat(),
+                'source': 'eastmoney',
+            })
+        return records
+
+    # 分批并行采集
+    batches = [codes[i:i + batch_size] for i in range(0, len(codes), batch_size)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_fetch_batch, b) for b in batches]
+        for f in concurrent.futures.as_completed(futures):
+            try:
+                result = f.result()
+                if result:
+                    all_records.extend(result)
             except Exception:
                 continue
 
@@ -1240,23 +1226,37 @@ class MootdxCollector:
             logger.warning("MootdxCollector 已在运行，跳过")
             return True
 
-        # 延迟初始化：仅当 mootdx 可用时启动
+        # mootdx 不再作为快照采集的必需条件（289号：通达信协议断裂，改用东财HTTP）
+        # 分钟数据仍尝试使用 mootdx（minutes() 尚可用）
         client = _get_client()
         if client is None:
-            logger.warning("mootdx 不可用，MootdxCollector 未启动")
-            return False
+            logger.info("mootdx 客户端不可用，快照使用 HTTP 降级（东财/新浪/腾讯）")
+        else:
+            logger.info("mootdx 客户端可用（stocks OK），分钟数据继续使用 mootdx")
 
+        # 快照线程始终启动（走 HTTP 降级链：东财 → 新浪 → 腾讯）
         self._threads = [
             _MootdxThread('market_snapshot', 5, collect_market_snapshot, initial_delay=3),
-            _MootdxThread('minute_full', 300, collect_minute_full, initial_delay=60,
-                          check_trading_time=False),
         ]
+
+        # 分钟数据线程：仅 mootdx 可用时启动（minutes() 尚可用）
+        if client is not None:
+            self._threads.append(
+                _MootdxThread('minute_full', 300, collect_minute_full, initial_delay=60,
+                              check_trading_time=False),
+            )
 
         for t in self._threads:
             t.start()
 
         self._started = True
-        logger.info(f"MootdxCollector 已启动 ({len(self._threads)} 线程, TCP 直连)")
+        if client is not None:
+            logger.info(
+                f"MootdxCollector 已启动 ({len(self._threads)} 线程, "
+                "快照:东财HTTP, 分钟:mootdx)"
+            )
+        else:
+            logger.info("MootdxCollector 已启动（降级模式, 快照:东财HTTP, 分钟:跳过）")
         return True
 
     def stop(self):
