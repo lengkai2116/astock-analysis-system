@@ -430,26 +430,19 @@ class _SnapshotSourceManager:
 
 
 def _fetch_sina(codes: list, name_map: dict) -> list:
-    """从 hq.sinajs.cn 获取实时行情
+    """从 hq.sinajs.cn 获取实时行情（并行4线程，全量覆盖）
 
-    单次最多约 100 只，返回解析后的 dict 列表。
-    格式: var hq_str_sh600519="name,open,close,price,high,low,...,date,time";
-    字段: 0=名称,1=今开,2=昨收,3=当前价,4=最高,5=最低,
-          6=买一价,7=卖一价,8=成交量(手),9=成交额
-          10~19=买二~买五, 20~29=卖二~卖五
+    旧版限 `min(len(codes), 2000)` 导致 SH 代码（索引 12000+）永不触达。
+    改为并行全量：147 批 × 4 线程 ≈ 3-5s 覆盖全部 A 股。
     """
     import urllib.request
+    import concurrent.futures
     all_records = []
     batch_size = 100
+    max_workers = 4
 
-    for batch_start in range(0, min(len(codes), 2000), batch_size):
-        batch = codes[batch_start:batch_start + batch_size]
-        sina_codes = []
-        for c in batch:
-            m = 0 if c.startswith(('6', '9')) else 1
-            prefix = 'sh' if m == 0 else 'sz'
-            sina_codes.append(f'{prefix}{c}')
-
+    def _fetch_one(batch: list) -> list:
+        sina_codes = [f"{'sh' if c.startswith(('6','9')) else 'sz'}{c}" for c in batch]
         url = 'https://hq.sinajs.cn/list=' + ','.join(sina_codes)
         req = urllib.request.Request(url, headers={
             'Referer': 'https://finance.sina.com.cn',
@@ -459,8 +452,8 @@ def _fetch_sina(codes: list, name_map: dict) -> list:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 raw = resp.read().decode('gbk')
         except Exception:
-            continue
-
+            return []
+        records = []
         for line in raw.strip().split('\n'):
             if not line.strip():
                 continue
@@ -477,42 +470,44 @@ def _fetch_sina(codes: list, name_map: dict) -> list:
                 open_p = _safe_float(values[1])
                 close_p = _safe_float(values[2])
                 price = _safe_float(values[3])
-                high = _safe_float(values[4])
-                low = _safe_float(values[5])
                 if price == 0 or close_p == 0:
                     continue
-                volume = _safe_float(values[8])
-                amount = _safe_float(values[9])
                 market = 0 if code.startswith(('6', '9')) else 1
                 ts_code = f'{code}.SH' if market == 0 else f'{code}.SZ'
                 change = round(price - close_p, 2)
                 change_pct = round(change / close_p * 100, 2) if close_p else 0.0
-
-                record = {
+                records.append({
                     'ts_code': ts_code, 'code': code,
                     'name': name_map.get(code, name),
                     'price': price, 'change': change, 'change_pct': change_pct,
-                    'open': open_p, 'high': high, 'low': low,
-                    'prev_close': close_p,
-                    'volume': int(volume * 100),  'amount': amount,
-                    'bid1': 0.0, 'ask1': 0.0,
-                    'bid_vol1': 0, 'ask_vol1': 0,
-                    'bid2': 0.0, 'ask2': 0.0,
-                    'bid_vol2': 0, 'ask_vol2': 0,
-                    'bid3': 0.0, 'ask3': 0.0,
-                    'bid_vol3': 0, 'ask_vol3': 0,
-                    'bid4': 0.0, 'ask4': 0.0,
-                    'bid_vol4': 0, 'ask_vol4': 0,
-                    'bid5': 0.0, 'ask5': 0.0,
-                    'bid_vol5': 0, 'ask_vol5': 0,
+                    'open': open_p, 'high': _safe_float(values[4]),
+                    'low': _safe_float(values[5]), 'prev_close': close_p,
+                    'volume': int(_safe_float(values[8]) * 100) if _safe_float(values[8]) else 0,
+                    'amount': _safe_float(values[9]),
+                    'bid1': 0.0, 'ask1': 0.0, 'bid_vol1': 0, 'ask_vol1': 0,
+                    'bid2': 0.0, 'ask2': 0.0, 'bid_vol2': 0, 'ask_vol2': 0,
+                    'bid3': 0.0, 'ask3': 0.0, 'bid_vol3': 0, 'ask_vol3': 0,
+                    'bid4': 0.0, 'ask4': 0.0, 'bid_vol4': 0, 'ask_vol4': 0,
+                    'bid5': 0.0, 'ask5': 0.0, 'bid_vol5': 0, 'ask_vol5': 0,
                     'commission': 0.0, 'speed': 0.0,
                     'timestamp': datetime.now().isoformat(),
                     'source': 'sina',
-                }
-                all_records.append(record)
+                })
             except Exception:
                 continue
+        return records
 
+    # 全量分批并行（不限2000，覆盖SH 2311只）
+    batches = [codes[i:i + batch_size] for i in range(0, len(codes), batch_size)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_fetch_one, b) for b in batches]
+        for f in concurrent.futures.as_completed(futures):
+            try:
+                result = f.result()
+                if result:
+                    all_records.extend(result)
+            except Exception:
+                continue
     return all_records
 
 
