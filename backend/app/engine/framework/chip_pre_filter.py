@@ -551,16 +551,6 @@ class ChipPreFilter:
             else:
                 failed[code] = result['reasons']
 
-
-        # Phase 2: 财务风险检查
-        fin_risk = self.financial_risk_filter.check(ts_code)
-        if not fin_risk['passed']:
-            passed = False
-            reasons.extend(fin_risk['reasons'])
-
-        # ROCE 指标（不排除股票，仅作为辅助参考）
-        roce_result = self.roce_indicator.get_roce(ts_code)
-
         return {
             'passed': passed,
             'failed': failed,
@@ -644,15 +634,6 @@ class FinancialRiskFilter:
             reasons.append(industry_check['reason'])
         details['industry_risk'] = industry_check
 
-
-        # Phase 2: 财务风险检查
-        fin_risk = self.financial_risk_filter.check(ts_code)
-        if not fin_risk['passed']:
-            passed = False
-            reasons.extend(fin_risk['reasons'])
-
-        # ROCE 指标（不排除股票，仅作为辅助参考）
-        roce_result = self.roce_indicator.get_roce(ts_code)
 
         return {
             'passed': len(reasons) == 0,

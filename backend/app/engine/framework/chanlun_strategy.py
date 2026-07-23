@@ -2060,6 +2060,7 @@ class ChanlunAnalyzer:
             _chanlun_cfg = config
             self.trigger_step = getattr(config.multi_level, 'trigger_step', False) if hasattr(config, 'multi_level') else False
             self.only_judge_last = getattr(config.multi_level, 'only_judge_last', False) if hasattr(config, 'multi_level') else False
+            self.bi_zs_mode = getattr(config.multi_level, 'bi_zs_mode', True) if hasattr(config, 'multi_level') else True
         else:
             self.config = config or {}
             self.trigger_step = self.config.get('trigger_step', False)
