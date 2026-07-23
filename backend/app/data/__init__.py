@@ -466,7 +466,7 @@ class DataManager:
                 self._cache_minute_to_ecm(df, ts_code, '1min')
                 return df
         elif ecm_freq in ('15min', '30min', '60min'):
-            # 从5min数据聚合为目标频率（先查ECM缓存，没有再通过mootdx获取）
+            # 从5min数据聚合为目标频率
             df_5min = None
             try:
                 from app.data.enhanced_cache_manager import get_ecm_instance
@@ -476,6 +476,38 @@ class DataManager:
                 pass
             if df_5min is None or df_5min.empty:
                 df_5min = self._get_mootdx_bars(ts_code, freq=2)
+            if df_5min is None or df_5min.empty:
+                # mootdx bars 断裂，用 minutes + transactions 组合补全天分钟数据
+                df_1min = self._get_mootdx_minutes_full(ts_code)
+                if df_1min is not None and not df_1min.empty:
+                    # 1min → 5min 聚合
+                    from collections import defaultdict
+                    records = df_1min.to_dict('records')
+                    groups = defaultdict(list)
+                    for r in records:
+                        tt = r.get('trade_time', '')
+                        try:
+                            ts = tt.split(' ')[1] if ' ' in tt else tt
+                            parts = ts.split(':')
+                            slot = (int(parts[0]) * 60 + int(parts[1])) // 5
+                            key = (tt[:10], slot)
+                        except Exception:
+                            key = (tt, 0)
+                        groups[key].append(r)
+                    agg_5min = []
+                    for k, bars in sorted(groups.items()):
+                        agg_5min.append({
+                            'trade_time': bars[0]['trade_time'],
+                            'open': float(bars[0]['open']),
+                            'high': max(float(b.get('high', 0)) for b in bars),
+                            'low': min(float(b.get('low', float('inf'))) for b in bars),
+                            'close': float(bars[-1]['close']),
+                            'vol': sum(float(b.get('vol', 0)) for b in bars),
+                            'amount': 0,
+                        })
+                    if agg_5min:
+                        df_5min = pd.DataFrame(agg_5min)
+                        self._cache_minute_to_ecm(df_5min, ts_code, '5min')
             if df_5min is not None and not df_5min.empty:
                 # 确保5min缓存已写入
                 if df_5min is not None:
@@ -544,6 +576,87 @@ class DataManager:
         except Exception as e:
             logger.debug("_get_mootdx_minutes(%s) 失败: %s", ts_code, e)
         return pd.DataFrame()
+    
+    def _get_mootdx_minutes_full(self, ts_code: str, target_date: str = None) -> pd.DataFrame:
+        """从 mootdx 获取全天分钟数据（minutes + transactions 合并）
+
+        mootdx minutes() 覆盖 09:30~13:29（240点），
+        transactions() 覆盖 11:25~15:29（2000笔逐笔），
+        两者合并得到 09:30~15:00 的 1min OHLC bars。
+
+        Returns:
+            DataFrame with columns: trade_time, open, high, low, close, vol
+        """
+        from collections import defaultdict
+        from mootdx.quotes import Quotes
+
+        if target_date is None:
+            target_date = datetime.now().strftime('%Y%m%d')
+        symbol = ts_code.replace('.SH', '').replace('.SZ', '').replace('.BJ', '')
+        client = Quotes.factory(market='std')
+
+        # 步骤1: 获取 minutes() 数据（09:30~13:29）
+        minute_map = {}
+        try:
+            raw = client.minutes(symbol=symbol, date=target_date)
+            if raw is not None and not raw.empty:
+                for idx, r in raw.iterrows():
+                    hour = 9 + (idx + 30) // 60
+                    minute = (idx + 30) % 60
+                    key = f"{hour:02d}:{minute:02d}"
+                    price = float(r.get('price', 0))
+                    if price == 0:
+                        continue
+                    minute_map[key] = {
+                        'open': price, 'high': price, 'low': price, 'close': price,
+                        'vol': int(r.get('vol', 0)),
+                    }
+        except Exception:
+            pass
+
+        # 步骤2: 获取 transactions() 逐笔数据（覆盖下午）
+        tick_groups = defaultdict(list)
+        try:
+            raw_t = client.transactions(symbol=symbol, start=0, offset=2000, date=target_date)
+            if raw_t is not None and not raw_t.empty:
+                for _, r in raw_t.iterrows():
+                    t = str(r.get('time', ''))
+                    price = float(r.get('price', 0))
+                    if price == 0:
+                        continue
+                    tick_groups[t].append(price)
+        except Exception:
+            pass
+
+        # 将 transactions tick 聚合为 1min OHLC（跳过 minutes 已覆盖的）
+        tm_fmt = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
+        for time_key, prices in tick_groups.items():
+            if time_key in minute_map:
+                continue
+            prices_f = [float(p) for p in prices if p]
+            if not prices_f:
+                continue
+            minute_map[time_key] = {
+                'open': prices_f[0],
+                'high': max(prices_f),
+                'low': min(prices_f),
+                'close': prices_f[-1],
+                'vol': len(prices_f),
+            }
+
+        if not minute_map:
+            return pd.DataFrame()
+
+        records = []
+        for key in sorted(minute_map.keys()):
+            r = minute_map[key]
+            records.append({
+                'trade_time': f"{tm_fmt} {key}:00",
+                'open': r['open'], 'high': r['high'],
+                'low': r['low'], 'close': r['close'],
+                'vol': r['vol'],
+            })
+        return pd.DataFrame(records)
     
     def _aggregate_daily_to_weekly(self, daily_df):
         """将日线数据聚合为周线数据"""
