@@ -78,7 +78,7 @@ body { overflow-x:hidden; }
       <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
     <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item active" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
     <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
-      <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
+      <a href="opportunity-treemap.html" class="sidebar-item" data-name="机会图谱"><span class="icon">🗺️</span><span>机会图谱</span></a>
       <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
       <a href="indicator-ide.html" class="sidebar-item" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
       <a href="ai-analysis.html" class="sidebar-item" data-name="AI多角色投研"><span class="icon">🤖</span><span>AI 多角色投研</span></a>
@@ -268,10 +268,9 @@ function loadMoneyflow(){
     .then(function(d){
       if(!d.success||!d.data||!d.data.days||!d.data.days.length)return;
       var c=echarts.init(document.getElementById('chart-fund-flow'));
-      var flow=d.data.days.reverse();
-      var days=flow.map(function(v){return v.date||'';});
-      var main=flow.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
-      var retail=flow.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
+      var days=d.data.days.map(function(v){return v.date||'';});
+      var main=d.data.days.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
+      var retail=d.data.days.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
       c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流出'],textStyle:{color:'#94A3B8'},top:0},grid:{left:50,right:20,bottom:20,top:40},
         xAxis:{type:'category',data:days,axisLabel:{color:'#64748B',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
         yAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
@@ -571,10 +570,9 @@ function applyRadar(rs){
 function renderMoneyflow(md){
   if(!md||!md.days||!md.days.length)return;
   var c=echarts.init(document.getElementById('chart-fund-flow'));
-  var flow=md.days.reverse();
-  var days=flow.map(function(v){return v.date||'';});
-  var main=flow.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
-  var retail=flow.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
+  var days=md.days.map(function(v){return v.date||'';});
+  var main=md.days.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
+  var retail=md.days.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
   c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流出'],textStyle:{color:'#94A3B8'},top:0},grid:{left:50,right:20,bottom:20,top:40},
     xAxis:{type:'category',data:days,axisLabel:{color:'#64748B',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
     yAxis:{type:'value',axisLabel:{color:'#64748B',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},

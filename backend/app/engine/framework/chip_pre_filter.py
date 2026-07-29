@@ -945,6 +945,29 @@ class ROCEIndicator:
         return {'roce': None, 'available': False,
                 'level': 'UNKNOWN', 'reason': '财务数据接口未接入', 'detail': {}}
 
+    def get_risk_tags(self, symbol) -> dict:
+        """返回财务风险标签"""
+        tags = {}
+        try:
+            from app.data import DataManager
+            dm = DataManager()
+            fina_df = dm.get_cached_fina_indicator(symbol)
+            if fina_df is not None and not fina_df.empty:
+                latest = fina_df.iloc[-1]
+                roce = latest.get('roce', 0) or 0
+                debt = latest.get('debt_ratio', 0) or 0
+
+                tags['roce_pass'] = roce >= 15
+                if roce >= 15 and debt < 70:
+                    tags['fina_health'] = 'pass'
+                elif roce < 5 or debt > 80:
+                    tags['fina_health'] = 'fail'
+                else:
+                    tags['fina_health'] = 'suspicious'
+        except Exception:
+            tags.update({'fina_health': 'suspicious', 'roce_pass': False})
+        return tags
+
     @staticmethod
     def _classify_roce(roce: float) -> str:
         """ROCE等级分类"""

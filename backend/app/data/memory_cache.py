@@ -26,6 +26,7 @@ CACHE_LEVELS = {
     'intraday': {'ttl': 300, 'maxsize': 500},        # 盘中数据，5min 过期（原200→500）
     'analysis': {'ttl': 1800, 'maxsize': 300},       # 分析数据，30min 过期（原100→300）
     'dashboard': {'ttl': 60, 'maxsize': 500},        # 仪表盘响应，60s 过期（新增）
+    'treemap': {'ttl': 3600, 'maxsize': 50},         # Treemap 全量响应，1h TTL（305号§2.3）
 }
 
 VALID_LEVELS = set(CACHE_LEVELS.keys())

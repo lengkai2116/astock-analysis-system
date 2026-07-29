@@ -300,6 +300,11 @@ class SchedulerManager:
         从 RuntimeConfigManager 读取用户配置，执行增量/全量同步，
         完成后触发 daily_sync_completed 信号通知下游模块。
         """
+        # DATA_DAEMON_RUNNING 模式下，数据守护进程独立管理日终同步
+        if os.environ.get('DATA_DAEMON_RUNNING') == '1':
+            return {'status': 'skipped', 'reason': 'managed_by_data_daemon',
+                    'records_added': 0, 'data_types': []}
+
         start_ts = time.time()
         sync_type = 'daily'
         result = {'status': 'running', 'records_added': 0, 'data_types': []}
@@ -744,6 +749,9 @@ class SchedulerManager:
 
         冷启动保护：首次执行由 next_run_time=now+10s 延迟。
         """
+        # DATA_DAEMON_RUNNING 模式下，采集进程独立管理推送，API 进程不执行盘中推送
+        if os.environ.get('DATA_DAEMON_RUNNING') == '1':
+            return
         # 非交易时段跳过
         try:
             from app.utils.trading_hours import is_trading_time
@@ -768,6 +776,9 @@ class SchedulerManager:
 
     def _market_snapshot_push_wrapper_30s(self):
         """盘中板块排行推送包装器（每 30s）"""
+        # DATA_DAEMON_RUNNING 模式下跳过
+        if os.environ.get('DATA_DAEMON_RUNNING') == '1':
+            return
         # 非交易时段跳过
         try:
             from app.utils.trading_hours import is_trading_time

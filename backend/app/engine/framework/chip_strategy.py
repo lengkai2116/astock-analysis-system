@@ -1096,6 +1096,29 @@ class MainForceScorer:
         except Exception:
             return {"cost_price": None, "distance_pct": None}
 
+    def get_tags(self, symbol: str) -> dict:
+        """返回主力资金标签"""
+        tags = {}
+        try:
+            mf_score = self._score_moneyflow(symbol)
+            if mf_score >= 2.0:
+                tags['fund_flow'] = '5d_inflow'
+            elif mf_score >= 1.0:
+                tags['fund_flow'] = 'mixed'
+            else:
+                tags['fund_flow'] = 'none'
+
+            lhb_score = self._score_lhb(symbol, pd.DataFrame())
+            if lhb_score >= 0.5:
+                tags['capital_nature'] = 'institutional'
+            elif lhb_score >= 0.2:
+                tags['capital_nature'] = 'hot_money'
+            else:
+                tags['capital_nature'] = 'unknown'
+        except Exception:
+            pass
+        return tags
+
 
 def _phase_to_status(phase: str, score: float) -> dict:
     """将 MainForceScorer 的操盘阶段 phase 映射为标准 status_recognition 格式。

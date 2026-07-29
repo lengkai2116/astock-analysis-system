@@ -1976,6 +1976,20 @@ class EnhancedPatternDetector:
         gap_partial_fill = closes[-1] < highs[-1] and closes[-1] < opens[-1] * 0.995
         return gap_partial_fill
 
+    def get_tags(self, df: pd.DataFrame) -> dict:
+        """返回增强形态检测器产出的 pattern_signal 标签"""
+        tags = {}
+        try:
+            from app.engine.patterns.adapters.kline_adapter import KlinePatternAdapter
+            adapter = KlinePatternAdapter()
+            results = adapter.detect(df)
+            if results:
+                best = max(results, key=lambda r: abs(r.confidence or 0))
+                tags['pattern_signal'] = best.pattern_type
+        except Exception:
+            pass
+        return tags
+
 # ══════════════════════════════════════════════
 # Phase 1: 阶段判定 + 价格分位
 # ══════════════════════════════════════════════
@@ -4035,6 +4049,57 @@ class VolumePriceStrategy:
 
     def _build_detail(self, stage, vol_state, relation):
         return {"阶段判定": stage.to_dict(), "成交量状态": vol_state.to_dict(), "量价关系": relation.to_dict()}
+
+    def get_tags(self, df: pd.DataFrame) -> dict:
+        """返回量价引擎产出的标签"""
+        tags = {}
+        try:
+            # ma_alignment: MA5/MA10/MA20 排列
+            if len(df) >= 20:
+                ma5 = df['close'].rolling(5).mean().iloc[-1]
+                ma10 = df['close'].rolling(10).mean().iloc[-1]
+                ma20 = df['close'].rolling(20).mean().iloc[-1]
+                if ma5 > ma10 > ma20:
+                    tags['ma_alignment'] = 'bullish'
+                elif ma5 < ma10 < ma20:
+                    tags['ma_alignment'] = 'bearish'
+                else:
+                    tags['ma_alignment'] = 'mixed'
+
+            # volume_price_fit: 量价协调性
+            if len(df) >= 20:
+                ret_5 = df['close'].pct_change(5).iloc[-1] if len(df) >= 5 else 0
+                vol_ratio = df['vol'].iloc[-5:].mean() / max(df['vol'].iloc[-20:-5].mean(), 1)
+                if ret_5 > 0.02 and vol_ratio > 1.2:
+                    tags['volume_price_fit'] = 'healthy'
+                elif ret_5 < -0.02 and vol_ratio > 1.2:
+                    tags['volume_price_fit'] = 'diverging'
+                else:
+                    tags['volume_price_fit'] = 'neutral'
+
+            # volatility_level: 20日波动率
+            if len(df) >= 20:
+                vol = df['close'].pct_change().rolling(20).std().iloc[-1] * 100
+                tags['volatility_level'] = 'high' if vol > 4 else ('medium' if vol > 2 else 'low')
+
+            # gap_type
+            if len(df) >= 2:
+                gap = (df['low'].iloc[-1] - df['high'].iloc[-2]) / df['high'].iloc[-2]
+                if gap > 0.015:
+                    tags['gap_type'] = 'breakaway'
+                elif gap > 0.005:
+                    tags['gap_type'] = 'common'
+                else:
+                    tags['gap_type'] = 'none'
+
+            # breakout_attempts: 近20日尝试突破次数
+            if len(df) >= 20:
+                high_20 = df['high'].rolling(20).max()
+                recent_high = high_20.iloc[-20:]
+                tags['breakout_attempts'] = min(int((recent_high == recent_high).sum()), 10)
+        except Exception:
+            pass
+        return tags
 
 
 # ══════════════════════════════════════════════

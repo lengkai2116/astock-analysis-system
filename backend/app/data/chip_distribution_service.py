@@ -162,6 +162,35 @@ class ChipDistributionEstimator:
 
         return chip_dist, min_price, max_price, price_step
 
+    def get_tags(self, df_ohlcv: pd.DataFrame, turnover_rates=None) -> dict:
+        """返回筹码分布标签"""
+        tags = {}
+        try:
+            chip_dist, min_p, max_p, step = self.estimate(df_ohlcv, turnover_rates)
+            if min_p == max_p:
+                return tags
+            current_price = df_ohlcv['close'].iloc[-1]
+            peak_idx = int(np.argmax(chip_dist))
+            peak_price = min_p + peak_idx * step
+
+            if current_price > peak_price * 1.2:
+                tags['chip_position'] = 'above_peak'
+            elif current_price > peak_price * 0.85:
+                tags['chip_position'] = 'in_peak'
+            else:
+                tags['chip_position'] = 'below_peak'
+
+            asr_est = chip_dist.std() / (chip_dist.mean() + 1e-9)
+            if asr_est > 2:
+                tags['chip_concentration'] = 'concentrating'
+            elif asr_est < 1:
+                tags['chip_concentration'] = 'dispersing'
+            else:
+                tags['chip_concentration'] = 'stable'
+        except Exception:
+            pass
+        return tags
+
 
 class ChipDistributionService:
     """

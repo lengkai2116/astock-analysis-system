@@ -58,7 +58,18 @@ done
 
 # ── 打开浏览器 ──
 echo "🌐 打开浏览器..."
+sleep 1
 open "http://localhost:5001/dashboard"
+
+# ── 后台检查 L2 标签就绪状态（不阻塞启动流程） ──
+{
+    sleep 5
+    L2_CHECK=$(curl -s --max-time 5 "http://127.0.0.1:5001/api/v3/opportunity-atlas/treemap?mode=market&ts_codes=600519.SH" 2>/dev/null)
+    if echo "$L2_CHECK" | grep -q '"signal_strength_fallback":true'; then
+        echo "ℹ️  机会图谱 L2 标签尚未生成，数据守护进程会在就绪后自动计算"
+        echo "   首次计算约需 4 分钟，完成后 Treemap 机会/价值地图将自动展示真实数据"
+    fi
+} &
 
 echo ""
 echo "═══════════════════════════════════════════════"

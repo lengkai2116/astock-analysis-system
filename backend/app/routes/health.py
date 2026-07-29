@@ -58,6 +58,7 @@ def _get_sqlite_cache_status():
         db_size = 0
         if os.path.exists(ecm.db_path) and ecm.db_path != ':memory:':
             db_size = round(os.path.getsize(ecm.db_path) / (1024 * 1024), 1)
+        daemon_mode = os.environ.get('DATA_DAEMON_RUNNING') == '1'
         return {
             "status": "healthy" if stats.get("enhanced_hits_duckdb", 0) > 0 else "empty",
             "latency_ms": 1,
@@ -66,6 +67,7 @@ def _get_sqlite_cache_status():
             "indicator_count": stats.get("duckdb_indicator_count", 0),
             "hits_total": stats.get("enhanced_hits_duckdb", 0),
             "storage": "sqlite_wal",
+            "collection_mode": "external_daemon" if daemon_mode else "embedded",
         }
     except Exception as e:
         return {"status": "unhealthy", "latency_ms": 0, "error": str(e)}

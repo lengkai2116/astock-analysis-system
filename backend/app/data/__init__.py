@@ -230,6 +230,25 @@ class DataManager:
         """获取单只股票信息"""
         stock = Stock.query.get(ts_code)
         return stock.to_dict() if stock else None
+
+    def get_stock_meta_batch(self, ts_codes: list[str]) -> dict[str, dict]:
+        """批量获取股票元信息（名称 + 行业），减少 ORM 查询次数"""
+        rows = db.session.query(Stock.ts_code, Stock.name, Stock.industry).filter(
+            Stock.ts_code.in_(ts_codes)
+        ).all()
+        return {r.ts_code: {'name': r.name, 'industry': r.industry} for r in rows}
+
+    def get_all_ts_codes(self, limit: int = 5000) -> list[str]:
+        """获取全市场股票代码列表"""
+        rows = Stock.query.with_entities(Stock.ts_code).limit(limit).all()
+        return [r.ts_code for r in rows]
+
+    def get_ts_codes_by_industry(self, industry: str, ts_codes: list[str] = None) -> list[str]:
+        """按行业筛选股票代码"""
+        query = db.session.query(Stock.ts_code).filter(Stock.industry == industry)
+        if ts_codes:
+            query = query.filter(Stock.ts_code.in_(ts_codes))
+        return [r.ts_code for r in query.all()]
     
     def get_stock_list(self, keyword=None, limit=50):
         """
@@ -251,6 +270,45 @@ class DataManager:
         stocks = query.limit(limit).all()
         return [s.to_dict() for s in stocks]
     
+    def get_stock_industry(self, ts_code: str) -> str | None:
+        """通过 DataManager 返回股票行业分类（申万一级），符合 Red Line 5"""
+        stock = db.session.query(Stock).filter(Stock.ts_code == ts_code).first()
+        return stock.industry if stock else None
+
+    def get_stock_industry_batch(self, ts_codes: list[str]) -> dict[str, str | None]:
+        """批量查询行业分类，减少 ORM 查询次数"""
+        stocks = db.session.query(Stock.ts_code, Stock.industry).filter(
+            Stock.ts_code.in_(ts_codes)
+        ).all()
+        return {s.ts_code: s.industry for s in stocks}
+
+    # ── Treemap 快照（305号§2.2） ──
+
+    def get_treemap_snapshot(self, ts_codes: list[str]) -> pd.DataFrame:
+        """从 treemap_snapshot 表批量读取快照数据（委托 ECM）"""
+        return self.cache.get_treemap_snapshot(ts_codes)
+
+    def get_treemap_snapshot_items(self, ts_codes: list[str]) -> list[dict]:
+        """获取组装好的快照数据（委托 ECM）"""
+        return self.cache.get_treemap_snapshot_items(ts_codes)
+
+    # ── 管道状态（305号§9.2） ──
+
+    def load_pipeline_status(self, pipeline_date: str) -> dict:
+        return self.cache.load_pipeline_status(pipeline_date)
+
+    def ensure_pipeline_steps(self, pipeline_date: str):
+        self.cache.ensure_pipeline_steps(pipeline_date)
+
+    def mark_step_running(self, pipeline_date: str, step_id: str) -> bool:
+        return self.cache.mark_step_running(pipeline_date, step_id)
+
+    def mark_step_done(self, pipeline_date: str, step_id: str, detail: str = ''):
+        self.cache.mark_step_done(pipeline_date, step_id, detail)
+
+    def mark_step_failed(self, pipeline_date: str, step_id: str, detail: str = ''):
+        self.cache.mark_step_failed(pipeline_date, step_id, detail)
+
     def get_kline_data(self, ts_code, period='D', start_date=None, end_date=None):
         """
         获取K线数据
@@ -1610,6 +1668,29 @@ class DataManager:
         for i, r in enumerate(unique, 1):
             r['rank'] = i
         return unique
+
+    # ── 机会库网关（Red Line 5 封装，ORM 直读统一收口） ──
+
+    def get_library_ts_codes(self, active_only: bool = True) -> list[str]:
+        """获取机会库中股票代码列表"""
+        from app.models.opportunity_library import OpportunityLibrary
+        query = db.session.query(OpportunityLibrary.ts_code)
+        if active_only:
+            query = query.filter(OpportunityLibrary.is_active == 1)
+        return [r.ts_code for r in query.all()]
+
+    def get_library_entry(self, ts_code: str):
+        """获取单只机会库标的"""
+        from app.models.opportunity_library import OpportunityLibrary
+        return OpportunityLibrary.query.get(ts_code)
+
+    def get_library_active_items(self):
+        """获取所有活跃机会库标的（ORM 对象列表）"""
+        from app.models.opportunity_library import OpportunityLibrary
+        return db.session.query(OpportunityLibrary).filter(
+            OpportunityLibrary.is_active == 1,
+            OpportunityLibrary.lib_level != 'done',
+        ).all()
 
     # ── sync_requests 队列（调用层→采集层的"数据缺失"信号） ──
 

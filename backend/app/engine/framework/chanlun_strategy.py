@@ -2369,6 +2369,24 @@ def analyze_chanlun(df: pd.DataFrame, config: Dict = None) -> Dict:
     analyzer = ChanlunAnalyzer(config)
     return analyzer.analyze(df)
 
+
+def get_chanlun_tags(result: dict) -> dict:
+    """从缠论分析结果中提取 buy_sell_point 标签"""
+    tags = {}
+    try:
+        buy_points = result.get('buy_points', [])
+        sell_points = result.get('sell_points', [])
+        if buy_points:
+            tags['buy_sell_point'] = buy_points[0].type if hasattr(buy_points[0], 'type') else 'none'
+        elif sell_points:
+            tags['buy_sell_point'] = sell_points[0].type if hasattr(sell_points[0], 'type') else 'none'
+        else:
+            tags['buy_sell_point'] = 'none'
+    except Exception:
+        tags['buy_sell_point'] = 'none'
+    return tags
+
+
 # ==========================================
 # 以下是新增的核心模块
 # ==========================================

@@ -7,8 +7,8 @@ MarketSentimentService — 市场情绪聚合服务
   sentiment_pool_cache (ECM) → 聚合 → 四阶段映射 → snapshot.verification
 """
 import logging
-from datetime import datetime, date
-from typing import Dict, Optional
+from datetime import datetime
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +30,8 @@ class MarketSentimentService:
 
         Returns:
             {
-                'phase': 'ice'|'recovery'|'high'|'ebb'|'neutral',
-                'phase_label': '情绪冰点'|'情绪复苏'|'情绪高潮'|'情绪退潮'|'情绪中性',
+                'phase': 'ice'|'recovery'|'climax'|'ebb',
+                'phase_label': '情绪冰点'|'情绪复苏'|'情绪高潮'|'情绪退潮',
                 'metrics': {...},
                 'data_available': bool,
             }
@@ -49,6 +49,7 @@ class MarketSentimentService:
                 'data_available': False,
             }
 
+
         # 涨停/跌停分类
         up_df = df[df['limit_type'] == 'up']
         down_df = df[df['limit_type'] == 'down']
@@ -62,7 +63,10 @@ class MarketSentimentService:
 
         # 封板率（涨停池中标记了首次封板时间的比例 ≈ 已封板 / 全部涨停）
         sealed = up_df['first_seal_time'].notna() & (up_df['first_seal_time'] != '')
-        sealing_rate = round(int(sealed.sum()) / max(limit_up_count, 1) * 100, 1) if limit_up_count > 0 else 0.0
+        sealing_rate = (
+            round(int(sealed.sum()) / max(limit_up_count, 1) * 100, 1)
+            if limit_up_count > 0 else 0.0
+        )
 
         metrics = {
             'limit_up_count': limit_up_count,
@@ -72,22 +76,22 @@ class MarketSentimentService:
             'up_down_ratio': up_down_ratio,
         }
 
-        # 四阶段映射
+        # 四阶段映射（全覆盖，无 neutral）
         if limit_up_count < 20 and max_board_height < 3 and sealing_rate < 40:
             phase = 'ice'
             phase_label = '情绪冰点'
         elif limit_up_count > 80 and sealing_rate > 75:
-            phase = 'high'
+            phase = 'climax'
             phase_label = '情绪高潮'
-        elif max_board_height >= 3 and sealing_rate < 50:
+        elif (
+            (max_board_height >= 3 and sealing_rate < 50)
+            or (sealing_rate < 40 and limit_up_count < 40)
+        ):
             phase = 'ebb'
             phase_label = '情绪退潮'
-        elif limit_up_count >= 20 and max_board_height >= 3:
+        else:
             phase = 'recovery'
             phase_label = '情绪复苏'
-        else:
-            phase = 'neutral'
-            phase_label = '情绪中性'
 
         return {
             'phase': phase,
@@ -95,6 +99,39 @@ class MarketSentimentService:
             'metrics': metrics,
             'data_available': True,
         }
+
+    def _estimate_daily_sealing_rate(self, trade_date: str = None) -> float:
+        """基于 daily_cache 的日频封板率近似值（备用，不阻塞主流程）"""
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y%m%d')
+
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            ecm = get_ecm_instance()
+            df = ecm._query_df(
+                "SELECT ts_code, trade_date, open, high, low, close, vol, amount, pct_chg "
+                "FROM daily_cache WHERE trade_date = ?",
+                [trade_date],
+            )
+        except Exception:
+            logger.warning("_estimate_daily_sealing_rate: 无法读取 daily_cache", exc_info=True)
+            return 100.0
+
+        if df is None or df.empty:
+            return 100.0
+
+        # 通过 pct_chg 推算 prev_close
+        # pct_chg = (close - prev_close) / prev_close * 100
+        # prev_close = close / (1 + pct_chg / 100)
+        df['prev_close'] = df['close'] / (1 + df['pct_chg'] / 100)
+
+        # 盘中触涨停: high >= prev_close * 1.099
+        touched = (df['high'] >= df['prev_close'] * 1.099).sum()
+        if touched == 0:
+            return 100.0
+
+        sealed = (df['close'] >= df['prev_close'] * 1.099).sum()
+        return round(sealed / touched * 100, 1)
 
     def get_sentiment_context(self, ts_code: str = '') -> Dict:
         """返回注入 snapshot verification 用的结构体"""

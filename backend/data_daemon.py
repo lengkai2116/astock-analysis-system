@@ -1407,6 +1407,466 @@ def _run_precompute():
     except Exception as e:
         logger.warning(f"PRESET_COMBOS 因子预计算失败: {e}")
 
+    # ── 4. L2 标签预计算（机会图谱，294号§三梯队7） ──
+    try:
+        _precompute_l2_labels(codes)
+    except Exception as e:
+        logger.warning(f"L2标签预计算失败: {e}")
+
+
+def _precompute_l2_labels(codes):
+    """L2标签预计算：估值引擎+阶段判定+情绪+板块 → 聚合写入 opportunity_tags_cache
+
+    执行顺序（对所有活跃股）：
+      1. 估值标签（ValuationEngine）→ 写入 tags
+      2. 阶段判定标签（PhaseDetectionEngine）→ 写入 tags
+      3. 情绪标签（MarketSentimentService）→ 写入 tags
+      4. 板块标签（SectorRotationModel）→ 写入 tags
+      5. 聚合衍生：计算 signal_strength → 写入 tags
+      6. 批量写入 opportunity_tags_cache
+    """
+    _ensure_pd()
+    if not codes:
+        return
+    logger.info(f"L2标签预计算开始: {len(codes)} 只...")
+
+    # 创建 Flask app context（供 ValuationEngine/MarketSentimentService/SectorRotationModel 使用 ORM）
+    from app import create_app
+    _flask_app = create_app()
+
+    with _flask_app.app_context():
+        # 延迟导入各引擎（只在 precompute 时加载，不占用主循环内存）
+        from app.opportunity_atlas.valuation_estimator import ValuationEngine
+        from app.opportunity_atlas.phase_detector import PhaseDetectionEngine
+        from app.services.market_sentiment_service import MarketSentimentService
+        from app.engine.framework.sector_rotation_model import SectorRotationModel
+
+        # 各引擎延迟初始化
+        ve = ValuationEngine()
+        pd_engine = PhaseDetectionEngine()
+        ms = MarketSentimentService()
+        sr = SectorRotationModel()
+        # P2.5 引擎：时间节奏
+        from app.opportunity_atlas.time_rhythm_engine import TimeRhythmEngine
+        tre = TimeRhythmEngine()
+        # P2.5 引擎：量价标签（VolumePriceStrategy + ChipDistribution + MainForce）
+        from app.engine.framework.volume_price_strategy import VolumePriceStrategy
+        vps = VolumePriceStrategy()
+        from app.engine.framework.chanlun_strategy import get_chanlun_tags as _get_chanlun_tags
+        from app.data.chip_distribution_service import ChipDistributionEstimator
+        cde = ChipDistributionEstimator()
+        # P2.1 引擎：事件监控器
+        from app.opportunity_atlas.event_monitor import EventMonitor
+        em = EventMonitor()
+
+        # 批量预加载全市场日线数据（减少逐只 SQL 查询）
+        all_data: dict[str, pd.DataFrame] = {}
+        for code in codes:
+            try:
+                df = _ecm.get_cached_daily(code)
+                if df is not None and not df.empty:
+                    all_data[code] = df
+            except Exception:
+                pass
+        logger.info(f"  日线数据加载完成: {len(all_data)}/{len(codes)} 只")
+
+        # 预计算板块热度（全市场一次性计算）
+        try:
+            sr.compute_all_heat(all_data)
+        except Exception as e:
+            logger.warning(f"  板块热度预计算失败: {e}")
+
+        # 预计算市场情绪（从 daily_cache 数据估算，替代 sentiment_pool 数据源缺失）
+        _sentiment_phase_global = 'neutral'
+        try:
+            last_date_row = _ecm.conn.execute(
+                "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+            ).fetchone()
+            if last_date_row:
+                last_date = last_date_row[0]
+                limit_up = _ecm.conn.execute(
+                    "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg > 9.9",
+                    [last_date]
+                ).fetchone()[0]
+                limit_down = _ecm.conn.execute(
+                    "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg < -9.9",
+                    [last_date]
+                ).fetchone()[0]
+                if limit_up > 80:
+                    _sentiment_phase_global = 'climax'
+                elif limit_up > 30:
+                    _sentiment_phase_global = 'recovery'
+                elif limit_up < 10 and limit_down > 20:
+                    _sentiment_phase_global = 'ebb'
+                elif limit_up < 5:
+                    _sentiment_phase_global = 'ice'
+                else:
+                    _sentiment_phase_global = 'recovery'
+        except Exception:
+            pass
+
+        t0 = time.time()
+        succeeded = 0
+        commit_count = 0
+        BATCH_SIZE = 500
+
+        for code in codes:
+            try:
+                tags = {}
+
+                # 1. 估值引擎产出（P0.1）— 只需要 ts_code
+                try:
+                    v_tags = ve.compute_tags(code)
+                    if v_tags:
+                        tags.update(v_tags)
+                except Exception:
+                    pass
+
+                # 2. 阶段判定引擎产出（P0.2）— 使用预加载的日线数据
+                df = all_data.get(code)
+                if df is not None and len(df) >= 30:
+                    try:
+                        p_tags = pd_engine.compute_tags(code, df)
+                        if p_tags:
+                            tags.update(p_tags)
+                    except Exception:
+                        pass
+
+                # 3. 情绪引擎产出（P0.5）— 不需要 ts_code
+                try:
+                    sentiment = ms.get_sentiment_phase()
+                    if sentiment.get('data_available'):
+                        tags['sentiment_phase'] = sentiment['phase']
+                    elif _sentiment_phase_global != 'neutral':
+                        tags['sentiment_phase'] = _sentiment_phase_global
+                except Exception:
+                    if _sentiment_phase_global != 'neutral':
+                        tags['sentiment_phase'] = _sentiment_phase_global
+
+                # 4. 板块热度（P0.6）— 从缓存读取预计算结果
+                try:
+                    sector = sr.evaluate(code)
+                    tags['sector_heat'] = sector.get('sector_heat', 'none')
+                except Exception:
+                    pass
+
+                # 5. style_exposure（295号§3.2 标签12）
+                try:
+                    tags['style_exposure'] = _compute_style_exposure(code, tags, df)
+                except Exception:
+                    pass
+
+                # 5b. time_rhythm（P2.5，302号§四）— 需要日线数据
+                if df is not None and len(df) >= 30:
+                    try:
+                        tr_tags = tre.compute_tags(df)
+                        if tr_tags:
+                            tags.update(tr_tags)
+                    except Exception:
+                        pass
+
+                    # 5c. VolumePrice 量价标签 + 缠论买点 + 筹码（P2.5）
+                    try:
+                        vp_tags = vps.get_tags(df)
+                        if vp_tags:
+                            tags.update(vp_tags)
+                    except Exception:
+                        pass
+                    # volume_price_fit / volatility_level / ma_alignment（简单计算）
+                    try:
+                        _add_vp_simple_tags(df, tags)
+                    except Exception:
+                        pass
+                    # 缠论买卖点
+                    try:
+                        from app.engine.framework.chanlun_strategy import ChanlunAnalyzer
+                        cl = ChanlunAnalyzer()
+                        cl_result = cl.analyze(df)
+                        cl_tags = _get_chanlun_tags(cl_result)
+                        if cl_tags:
+                            tags.update(cl_tags)
+                    except Exception:
+                        pass
+                    # 筹码分布
+                    try:
+                        chip_tags = cde.get_tags(df)
+                        if chip_tags:
+                            tags.update(chip_tags)
+                    except Exception:
+                        pass
+
+                    # 5. 聚合衍生 → signal_strength
+                try:
+                    tags['signal_strength'] = _compute_signal_strength(tags)
+                except Exception:
+                    pass
+
+                # 兜底标签
+                for _mandatory_tag, _default_val in [
+                    ('pattern_signal', 'none'), ('capital_nature', 'unknown'),
+                ]:
+                    if _mandatory_tag not in tags:
+                        tags[_mandatory_tag] = _default_val
+
+                # 4b. 事件监控（P2.1）
+                try:
+                    _update_with_event_tags(code, tags)
+                except Exception:
+                    pass
+
+                # 4c. upward_driver（P2.1 收益分解, 302号§三）
+                if df is not None and len(df) >= 20:
+                    try:
+                        _add_upward_driver(df, tags)
+                    except Exception:
+                        pass
+
+                # 6. 写入数据库
+                if len(tags) > 0:
+                    _ecm.write_tags(code, tags)
+                    succeeded += 1
+                    commit_count += 1
+                    if commit_count >= BATCH_SIZE:
+                        _ecm.conn.commit()
+                        commit_count = 0
+
+            except Exception:
+                continue
+
+        if commit_count > 0:
+            _ecm.conn.commit()
+
+        elapsed = time.time() - t0
+        logger.info(f"L2标签预计算完成: {succeeded}/{len(codes)} 只, 耗时 {elapsed:.1f}s")
+
+
+def _add_vp_simple_tags(df, tags):
+    """计算简单量价标签：ma_alignment / volume_price_fit / volatility_level / gap_type / breakout_attempts"""
+    closes = df['close'].values
+    highs = df['high'].values if 'high' in df.columns else closes
+    lows = df['low'].values if 'low' in df.columns else closes
+    vols = df['vol'].values if 'vol' in df.columns else np.ones(len(closes))
+
+    if len(closes) >= 20:
+        ma5 = np.mean(closes[-5:])
+        ma10 = np.mean(closes[-10:])
+        ma20 = np.mean(closes[-20:])
+        ma60 = np.mean(closes[-60:]) if len(closes) >= 60 else 0
+        # ma_alignment
+        if ma5 > ma10 > ma20 > ma60 and ma60 > 0:
+            tags['ma_alignment'] = 'bullish'
+        elif ma5 < ma10 < ma20 < ma60 and ma60 > 0:
+            tags['ma_alignment'] = 'bearish'
+        else:
+            tags['ma_alignment'] = 'mixed'
+
+        # volume_price_fit: 价格趋势 vs 量能趋势
+        if len(closes) >= 10:
+            price_trend = closes[-1] / closes[-10] - 1
+            vol_trend = np.mean(vols[-5:]) / max(np.mean(vols[-10:-5]), 1) - 1
+            if price_trend > 0.02 and vol_trend > 0.1:
+                tags['volume_price_fit'] = 'healthy'  # 放量上涨
+            elif price_trend < -0.02 and vol_trend < -0.1:
+                tags['volume_price_fit'] = 'healthy'  # 缩量下跌
+            elif price_trend > 0.02 and vol_trend < -0.1:
+                tags['volume_price_fit'] = 'diverging'  # 缩量上涨(背离)
+            elif abs(price_trend) < 0.01 and vol_trend > 0.2:
+                tags['volume_price_fit'] = 'diverging'  # 放量滞涨
+            else:
+                tags['volume_price_fit'] = 'neutral'
+
+        # volatility_level: 20日波动率
+        if len(closes) >= 20:
+            returns = np.diff(closes[-21:]) / closes[-21:-1]
+            vol = np.std(returns) * 100
+            if vol > 3:
+                tags['volatility_level'] = 'high'
+            elif vol > 1.5:
+                tags['volatility_level'] = 'medium'
+            else:
+                tags['volatility_level'] = 'low'
+
+        # gap_type: 最近5日跳空
+        gap_found = False
+        for i in range(-min(5, len(closes)), 0):
+            if i < -1:
+                prev_high = highs[i-1] if abs(i-1) < len(highs) else highs[i]
+                cur_low = lows[i]
+                if cur_low > prev_high * 1.005:
+                    tags['gap_type'] = 'common' if abs(i) > 2 else 'breakaway'
+                    gap_found = True
+                    break
+        if not gap_found:
+            tags['gap_type'] = 'none'
+
+        # breakout_attempts: 近60日突破尝试次数
+        if len(closes) >= 60:
+            current = closes[-1]
+            nearby_mask = np.abs(closes[-60:] - current) / max(current, 1) < 0.03
+            vol_avg = np.mean(vols[-60:])
+            attempts = 0
+            for j in range(len(closes) - 60, len(closes)):
+                if nearby_mask[j - (len(closes) - 60)] and vols[j] > vol_avg * 1.5:
+                    attempts += 1
+            tags['breakout_attempts'] = min(attempts, 4)
+
+        # pattern_signal: 简单的K线形态检测（替代 KlinePatternAdapter，因依赖 Flask）
+        if len(closes) >= 5:
+            # 双底形态：最近5日形成两次探底
+            recent_low = np.min(lows[-5:])
+            recent_high = np.max(highs[-5:])
+            mid = (recent_low + recent_high) / 2
+            dips = sum(1 for i in range(-5, 0) if abs(lows[i] - recent_low) / max(recent_low, 1) < 0.01)
+            if dips >= 2 and closes[-1] > mid:
+                tags['pattern_signal'] = 'double_bottom'
+            # 突破形态：价格突破近期高点
+            elif len(closes) >= 20 and closes[-1] > np.max(highs[-20:-1]) * 1.02:
+                tags['pattern_signal'] = 'breakout'
+            else:
+                tags['pattern_signal'] = 'none'
+
+
+def _update_with_event_tags(ts_code: str, tags: dict):
+    """调用 EventMonitor 获取事件标签（P2.1）"""
+    from app.opportunity_atlas.event_monitor import EventMonitor
+    em = EventMonitor()
+    em_tags = em.compute_tags(ts_code)
+    if em_tags:
+        tags.update(em_tags)
+
+
+def _add_upward_driver(df, tags):
+    """计算 upward_driver 上涨驱动力标签（302号§三 收益分解框架）"""
+    closes = df['close'].values
+    opens = df['open'].values
+    if len(closes) < 20:
+        return
+    n = min(20, len(closes))
+    overnight_returns = np.abs(np.array([
+        (opens[-(i+1)] / closes[-(i+2)] - 1) for i in range(n-1)
+    ]))
+    intraday_returns = np.abs(np.array([
+        (closes[-(i+1)] / opens[-(i+1)] - 1) for i in range(n-1)
+    ]))
+    total_returns = overnight_returns + intraday_returns
+    if total_returns.sum() < 0.01:
+        tags['upward_driver'] = 'no_upward'
+        return
+    overnight_ratio = overnight_returns.sum() / total_returns.sum()
+    extreme_count = sum(1 for r in intraday_returns if r > 0.03)
+    extreme_ratio = extreme_count / max(len(intraday_returns), 1)
+    if overnight_ratio > 0.4 and extreme_ratio < 0.3:
+        tags['upward_driver'] = 'info_driven'
+    elif extreme_ratio > 0.4 and overnight_ratio < 0.2:
+        tags['upward_driver'] = 'emotion_driven'
+    elif overnight_ratio > 0.25:
+        tags['upward_driver'] = 'mixed'
+    else:
+        tags['upward_driver'] = 'no_upward'
+
+
+def _compute_signal_strength(tags: dict) -> float:
+    """计算 signal_strength 衍生标签（不含 catalyst_event 维度）
+
+    计算公式：
+      基础分 0-10:
+        main_force_phase=building→7.0, washing→5.5, lifting→6.0,
+                          distributing→2.0, unknown→3.0
+        + valuation_level=extreme_low→+1.5, low→+1.0, fair→0.0, high→-1.0, extreme_high→-2.0
+        + trend_alignment=up_aligned→+1.0, down_aligned→-1.0
+      ⇒ 范围控制在 0-10
+
+      置信度调整 ×0.8~×1.0:
+        phase_confidence < 0.6 → ×0.8, 0.6-0.8 → ×0.9, > 0.8 → ×1.0
+
+      环境调整 ×0.7~×1.0:
+        sentiment_phase=ebb→×0.7, climax→×0.85, recovery→×1.0, ice→×0.9
+
+    ⚠ 不含 catalyst_event 维度（P2.1 未就绪）
+    """
+    # 基础分
+    base = 3.0  # 默认
+
+    mfp = str(tags.get('main_force_phase', 'unknown'))
+    phase_map = {'building': 7.0, 'washing': 5.5, 'lifting': 6.0,
+                 'distributing': 2.0, 'unknown': 3.0}
+    base = phase_map.get(mfp, 3.0)
+
+    # 估值调整
+    vl = str(tags.get('valuation_level', 'fair'))
+    val_map = {'extreme_low': 1.5, 'low': 1.0, 'fair': 0.0,
+               'high': -1.0, 'extreme_high': -2.0}
+    base += val_map.get(vl, 0.0)
+
+    # 趋势调整（使用 trend_alignment，与295号标签体系一致）
+    ta = str(tags.get('trend_alignment', 'no_trend'))
+    trend_map = {'up_aligned': 1.0, 'down_aligned': -1.0, 'mixed': 0.0, 'no_trend': 0.0}
+    base += trend_map.get(ta, 0.0)
+
+    base = max(0.0, min(10.0, base))
+
+    # 置信度调整
+    pc = tags.get('phase_confidence')
+    confidence_factor = 1.0
+    if pc is not None:
+        try:
+            pc_f = float(pc)
+            if pc_f < 0.6:
+                confidence_factor = 0.8
+            elif pc_f < 0.8:
+                confidence_factor = 0.9
+        except (ValueError, TypeError):
+            pass
+
+    # 环境调整
+    sp = str(tags.get('sentiment_phase', ''))
+    env_map = {'ebb': 0.7, 'climax': 0.85, 'recovery': 1.0, 'ice': 0.9}
+    env_factor = env_map.get(sp, 1.0)
+
+    strength = base * confidence_factor * env_factor
+    return round(max(0.0, min(10.0, strength)), 1)
+
+
+def _compute_style_exposure(ts_code: str, tags: dict, df: 'pd.DataFrame' = None) -> str:
+    """计算 style_exposure 标签（295号§3.2 标签12）
+    
+    基于行业分类和市值判定风格归属：
+    - 金融/银行 → large_value
+    - 科技/高研发 → large_growth（如果大市值）或 small_growth
+    - 周期行业 → small_value（如果小市值）或 large_value
+    """
+    vl = tags.get('valuation_level', 'fair')
+    sector = tags.get('sector_heat', 'none')
+    
+    # 简单的行业风格映射
+    try:
+        from app.data import DataManager
+        dm = DataManager()
+        industry = dm.get_stock_industry(ts_code)
+    except Exception:
+        industry = None
+
+    if not industry:
+        return 'none'
+
+    is_large = sector in ('top_10', 'top_20')
+    is_value = vl in ('extreme_low', 'low')
+
+    if industry in ('银行', '非银金融'):
+        return 'large_value'
+    elif industry in ('电子', '计算机', '通信', '电力设备', '国防军工', '医药生物'):
+        return 'large_growth' if is_large else 'small_growth'
+    elif industry in ('钢铁', '有色金属', '煤炭', '石油石化', '基础化工', '房地产', '建筑材料'):
+        return 'large_value' if is_large else 'small_value'
+    elif is_large and is_value:
+        return 'large_value'
+    elif is_large:
+        return 'large_growth'
+    elif is_value:
+        return 'small_value'
+    else:
+        return 'cyclical'
+
 
 def _precompute_single(ts_code: str):
     """单只股票策略预计算（P6增量触发用）
@@ -1432,6 +1892,365 @@ def _precompute_single(ts_code: str):
         logger.debug(f"  单只预计算完成: {ts_code}")
     except Exception as e:
         logger.debug(f"  单只预计算跳过 ({ts_code}): {e}")
+
+
+# ══════════════════════════════════════════════════════════
+# Treemap 快照构建（305号§2.2.2）
+# ══════════════════════════════════════════════════════════
+
+def _get_active_codes(today_fmt: str = None) -> list[str]:
+    """获取当日活跃股票代码列表"""
+    if today_fmt is None:
+        today_fmt = datetime.now().strftime('%Y-%m-%d')
+    rows = _ecm.conn.execute(
+        "SELECT ts_code FROM daily_cache WHERE trade_date=? "
+        "GROUP BY ts_code ORDER BY ts_code",
+        [today_fmt]
+    ).fetchall()
+    if not rows:
+        row = _ecm.conn.execute(
+            "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+        ).fetchone()
+        if row:
+            today_fmt = row[0]
+            rows = _ecm.conn.execute(
+                "SELECT ts_code FROM daily_cache WHERE trade_date=? "
+                "GROUP BY ts_code ORDER BY ts_code", [today_fmt]
+            ).fetchall()
+    return [r[0] for r in rows] if rows else []
+
+
+def _build_treemap_snapshot(codes: list[str]):
+    """日终预计算完成后，构建 treemap_snapshot 快照表（S1 管道环节）
+
+    从 daily_cache / daily_basic_cache / opportunity_tags_cache 提取最新数据，
+    平铺写入 treemap_snapshot 表（4800 行 × ~25 列 ≈ 2-3 MB）。
+    使用原子表替换避免读写不一致。
+    """
+    t0 = time.time()
+    logger.info(f"构建 treemap_snapshot 快照: {len(codes)} 只...")
+
+    if not codes:
+        logger.info("  无活跃股票，跳过快照构建")
+        return
+
+    # 1. 元数据（名称 + 行业）
+    from app.data import DataManager
+    dm = DataManager()
+    meta = dm.get_stock_meta_batch(codes)
+    if not meta:
+        logger.warning("  元数据为空，跳过快照构建")
+        return
+
+    # 2. 最新日线（每只最新一条，用子查询避免全表扫描）
+    ph = ','.join('?' for _ in codes)
+    daily_df = _ecm._query_df(f"""
+        SELECT ts_code, close, pct_chg, trade_date FROM daily_cache
+        WHERE (ts_code, trade_date) IN (
+            SELECT ts_code, MAX(trade_date) FROM daily_cache
+            WHERE ts_code IN ({ph}) GROUP BY ts_code
+        )
+    """, codes)
+
+    # 3. 最新基本面
+    basic_df = _ecm._query_df(f"""
+        SELECT ts_code, total_mv FROM daily_basic_cache
+        WHERE (ts_code, trade_date) IN (
+            SELECT ts_code, MAX(trade_date) FROM daily_basic_cache
+            WHERE ts_code IN ({ph}) GROUP BY ts_code
+        )
+    """, codes)
+
+    # 4. L2 标签（平铺：每只一行，每标签一列）
+    tags_df = _ecm._query_df(f"""
+        SELECT ts_code,
+               MAX(CASE WHEN tag_name='signal_strength'     THEN tag_value END) as signal_strength,
+               MAX(CASE WHEN tag_name='valuation_level'     THEN tag_value END) as valuation_level,
+               MAX(CASE WHEN tag_name='valuation_deviation' THEN tag_value END) as valuation_deviation,
+               MAX(CASE WHEN tag_name='main_force_phase'    THEN tag_value END) as main_force_phase,
+               MAX(CASE WHEN tag_name='phase_confidence'    THEN tag_value END) as phase_confidence,
+               MAX(CASE WHEN tag_name='sentiment_phase'     THEN tag_value END) as sentiment_phase,
+               MAX(CASE WHEN tag_name='sector_heat'         THEN tag_value END) as sector_heat,
+               MAX(CASE WHEN tag_name='fina_health'         THEN tag_value END) as fina_health,
+               MAX(CASE WHEN tag_name='hold_period'         THEN tag_value END) as hold_period,
+               MAX(CASE WHEN tag_name='trend_alignment'     THEN tag_value END) as trend_alignment,
+               MAX(CASE WHEN tag_name='price_position'      THEN tag_value END) as price_position,
+               MAX(CASE WHEN tag_name='fund_flow'           THEN tag_value END) as fund_flow,
+               MAX(CASE WHEN tag_name='capital_nature'      THEN tag_value END) as capital_nature,
+               MAX(CASE WHEN tag_name='chip_concentration'  THEN tag_value END) as chip_concentration,
+               MAX(CASE WHEN tag_name='volatility_level'    THEN tag_value END) as volatility_level,
+               MAX(CASE WHEN tag_name='dividend_yield'      THEN tag_value END) as dividend_yield,
+               MAX(CASE WHEN tag_name='composite_rating'    THEN tag_value END) as composite_rating
+        FROM opportunity_tags_cache
+        WHERE ts_code IN ({ph})
+        GROUP BY ts_code
+    """, codes)
+
+    # 5. 构建行数据字典
+    daily_map = {r['ts_code']: r for _, r in daily_df.iterrows()} if not daily_df.empty else {}
+    basic_map = {r['ts_code']: r for _, r in basic_df.iterrows()} if not basic_df.empty else {}
+    tags_map = {r['ts_code']: r for _, r in tags_df.iterrows()} if not tags_df.empty else {}
+
+    # 6. 原子表替换写入
+    NEW_TABLE = 'treemap_snapshot_new'
+    # 建新表（结构与目标表一致）
+    _ecm.conn.execute(f"DROP TABLE IF EXISTS {NEW_TABLE}")
+    _ecm.conn.execute(f"""
+        CREATE TABLE {NEW_TABLE} (
+            ts_code TEXT PRIMARY KEY, name TEXT, industry TEXT,
+            close REAL, pct_chg REAL, total_mv REAL, trade_date TEXT,
+            signal_strength REAL, valuation_level TEXT, valuation_deviation REAL,
+            main_force_phase TEXT, phase_confidence REAL,
+            sentiment_phase TEXT, sector_heat TEXT, fina_health TEXT,
+            hold_period TEXT, trend_alignment TEXT, price_position TEXT,
+            fund_flow TEXT, capital_nature TEXT, chip_concentration TEXT,
+            volatility_level TEXT, dividend_yield REAL, composite_rating REAL,
+            snapshot_date TEXT DEFAULT (date('now'))
+        )
+    """)
+
+    written = 0
+    for code in codes:
+        m = meta.get(code, {})
+        d = daily_map.get(code, {})
+        b = basic_map.get(code, {})
+        t = tags_map.get(code, {})
+        try:
+            _ecm.conn.execute(f"""
+                INSERT INTO {NEW_TABLE}
+                (ts_code, name, industry, close, pct_chg, total_mv, trade_date,
+                 signal_strength, valuation_level, valuation_deviation, main_force_phase,
+                 phase_confidence, sentiment_phase, sector_heat, fina_health, hold_period,
+                 trend_alignment, price_position, fund_flow, capital_nature,
+                 chip_concentration, volatility_level, dividend_yield, composite_rating)
+                VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?,?)
+            """, (
+                code, m.get('name', ''), m.get('industry', ''),
+                float(d['close']) if pd.notna(d.get('close')) else None,
+                float(d['pct_chg']) if pd.notna(d.get('pct_chg')) else None,
+                float(b['total_mv']) if pd.notna(b.get('total_mv')) else None,
+                str(d['trade_date']) if pd.notna(d.get('trade_date')) else None,
+                _safe_float(t.get('signal_strength')),
+                t.get('valuation_level'), _safe_float(t.get('valuation_deviation')),
+                t.get('main_force_phase'), _safe_float(t.get('phase_confidence')),
+                t.get('sentiment_phase'), t.get('sector_heat'),
+                t.get('fina_health'), t.get('hold_period'),
+                t.get('trend_alignment'), t.get('price_position'),
+                t.get('fund_flow'), t.get('capital_nature'),
+                t.get('chip_concentration'), t.get('volatility_level'),
+                _safe_float(t.get('dividend_yield')),
+                _safe_float(t.get('composite_rating')),
+            ))
+            written += 1
+        except Exception:
+            continue
+    _ecm.conn.commit()
+
+    # 原子切换
+    _ecm.conn.execute("DROP TABLE IF EXISTS treemap_snapshot")
+    _ecm.conn.execute(f"ALTER TABLE {NEW_TABLE} RENAME TO treemap_snapshot")
+    _ecm.conn.commit()
+
+    elapsed = time.time() - t0
+    logger.info(f"treemap_snapshot 构建完成: {written}/{len(codes)} 只, 耗时 {elapsed:.1f}s")
+
+
+def _safe_float(v):
+    if v is None or v == '' or v == 'None':
+        return None
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
+# ══════════════════════════════════════════════════════════
+# 管道驱动（305号§9，取代定时窗口）
+# ══════════════════════════════════════════════════════════
+
+def _is_market_day() -> bool:
+    return datetime.now().weekday() < 5
+
+
+def _is_pipeline_complete(pipeline_date: str) -> bool:
+    """检查当日管道是否已全部完成"""
+    try:
+        row = _ecm.conn.execute(
+            "SELECT COUNT(*) FROM pipeline_status "
+            "WHERE pipeline_date=? AND step_id IN ('C1','C2','C3','C4','C5','C6',"
+            "'P1','P2','P3','P4','S1') AND status='done'",
+            [pipeline_date]
+        ).fetchone()
+        return row and row[0] >= 11  # 11 个环节全 done
+    except Exception:
+        return False
+
+
+def _all_steps_done(status: dict, step_ids: list[str]) -> bool:
+    return all(status.get(s, {}).get('status') == 'done' for s in step_ids)
+
+
+def _has_failed(status: dict, step_ids: list[str]) -> bool:
+    return any(status.get(s, {}).get('status') == 'failed' for s in step_ids)
+
+
+def _drive_pipeline():
+    """管道驱动：检查当前状态，推进到下一个可执行的环节
+
+    每 30s tick 由主循环调用一次。每次只推进一个环节。
+    """
+    today = datetime.now().strftime('%Y%m%d')
+
+    # Guard: 非交易日跳过
+    if not _is_market_day():
+        return
+
+    # Guard: 今日管道已完成
+    if _is_pipeline_complete(today):
+        return
+
+    # Guard: 交易日判断（数据驱动，非时间驱动）
+    today_fmt = datetime.now().strftime('%Y-%m-%d')
+    has_data = _ecm.conn.execute(
+        "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [today_fmt]
+    ).fetchone()[0] >= 4000
+    if not has_data:
+        return  # 数据未到达，下一 tick 再检查
+
+    # 确保当日管道环节已初始化
+    _ecm.ensure_pipeline_steps(today)
+    status = _ecm.load_pipeline_status(today)
+
+    # ── 采集阶段 C1→C6 ──
+    COLLECT = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6']
+    for sid, func, arg in [
+        ('C1', _batch_daily, today_fmt),
+        ('C2', _batch_daily_basic, today_fmt),
+        ('C3', _batch_moneyflow, today_fmt),
+        ('C4', _batch_stk_limit, today_fmt),
+        ('C5', _batch_lhb, today_fmt),
+        ('C6', _batch_concept, None),
+    ]:
+        if status.get(sid, {}).get('status') in ('done', 'running'):
+            continue
+        _run_pipeline_step(today, sid, func, arg)
+        return  # 每 tick 只推进一个环节
+
+    # C1~C6 有 failed？重试
+    if _has_failed(status, COLLECT):
+        for sid in COLLECT:
+            if status.get(sid, {}).get('status') == 'failed':
+                rc = status[sid].get('retry_count', 0)
+                if rc < 3:
+                    _ecm.conn.execute(
+                        "UPDATE pipeline_status SET status='pending', retry_count=? "
+                        "WHERE pipeline_date=? AND step_id=?",
+                        [rc + 1, today, sid]
+                    )
+                    _ecm.conn.commit()
+                return  # 每 tick 重试一个
+
+    # 进入 P 阶段：需要 C1~C6 全部 done
+    if not _all_steps_done(status, COLLECT):
+        return
+
+    # ── 预计算阶段 P1→P4 ──
+    codes = _get_active_codes(today_fmt)
+    if not codes:
+        return
+
+    PRECOMPUTE = ['P1', 'P2', 'P3', 'P4']
+    for sid, func in [
+        ('P1', lambda: _precompute_indicators(codes)),
+        ('P2', lambda: _precompute_strategy_signals(codes)),
+        ('P3', lambda: _precompute_preset_combos(codes)),
+        ('P4', lambda: _precompute_l2_labels(codes)),
+    ]:
+        if status.get(sid, {}).get('status') in ('done', 'running'):
+            continue
+        _run_pipeline_step(today, sid, func, None)
+        return
+
+    if _has_failed(status, PRECOMPUTE):
+        for sid in PRECOMPUTE:
+            if status.get(sid, {}).get('status') == 'failed':
+                rc = status[sid].get('retry_count', 0)
+                if rc < 3:
+                    _ecm.conn.execute(
+                        "UPDATE pipeline_status SET status='pending', retry_count=? "
+                        "WHERE pipeline_date=? AND step_id=?",
+                        [rc + 1, today, sid]
+                    )
+                    _ecm.conn.commit()
+                return
+
+    if not _all_steps_done(status, PRECOMPUTE):
+        return
+
+    # ── 快照构建阶段 S1 ──
+    if status.get('S1', {}).get('status') != 'done':
+        _run_pipeline_step(today, 'S1', lambda: _build_treemap_snapshot(codes), None)
+        return
+
+    logger.info(f"  [管道] 今日全链路完成 ✅")
+
+
+def _run_pipeline_step(pipeline_date: str, step_id: str, func, arg):
+    """执行单个管道环节，记录状态（含幂等锁）"""
+    if not _ecm.mark_step_running(pipeline_date, step_id):
+        return  # 另一个 tick 已抢到锁
+
+    t0 = time.time()
+    try:
+        if arg is not None:
+            func(arg)
+        else:
+            func()
+        detail = f"OK ({time.time() - t0:.1f}s)"
+        _ecm.mark_step_done(pipeline_date, step_id, detail)
+        logger.info(f"  [管道] {step_id} → done ({detail})")
+    except Exception as e:
+        detail = f"ERROR: {e} ({time.time() - t0:.1f}s)"
+        _ecm.mark_step_failed(pipeline_date, step_id, detail)
+        logger.warning(f"  [管道] {step_id} → failed ({detail})")
+
+
+def _precompute_indicators(codes):
+    """包装原有的指标预计算逻辑（P1）"""
+    _ensure_pd()
+    from app.data.precompute_indicator_manager import PrecomputeIndicatorManager
+    mgr = PrecomputeIndicatorManager(_ecm)
+    ok = 0
+    for code in codes:
+        try:
+            df = _ecm.get_cached_daily(code)
+            if df is not None and len(df) >= 30 and mgr.precompute_all_indicators(code, df):
+                ok += 1
+        except Exception:
+            pass
+    logger.info(f"指标预计算完成: {ok}/{len(codes)} 只")
+
+
+def _precompute_strategy_signals(codes):
+    """包装原有的策略信号预计算逻辑（P2）"""
+    try:
+        from app.engine.unified_core import UnifiedStrategyCore
+        core = UnifiedStrategyCore()
+        results = core.compute_batch(codes, max_workers=4)
+        count = 0
+        for ts_code, result in results.items():
+            try:
+                _ecm.cache_signal_detail(ts_code, result.to_dict())
+                count += 1
+            except Exception:
+                continue
+        logger.info(f"策略信号预计算完成: {count}/{len(codes)} 只")
+        if count == 0 and codes:
+            logger.info("策略信号全部失败，回退到因子信号写入...")
+            _write_factor_signals(codes)
+    except Exception as e:
+        logger.warning(f"策略信号预计算整体失败: {e}")
+        _write_factor_signals(codes)
 
 
 def _check_precompute_status(today: str):
@@ -1471,15 +2290,71 @@ def _check_precompute_status(today: str):
             count = row[0] if row else 0
         except Exception:
             count = 0
-        if count == 0:
-            logger.info(f"  [P6自检] 当日无预计算数据，触发全量预计算")
+        need_precompute = (count == 0)
+        # 同时检查 L2 标签是否已预计算（opportunity_tags_cache）
+        try:
+            tag_row = ecm.conn.execute(
+                "SELECT COUNT(*) FROM opportunity_tags_cache"
+            ).fetchone()
+            tag_count = tag_row[0] if tag_row else 0
+        except Exception:
+            tag_count = 0
+        if tag_count == 0:
+            logger.info("  [P6自检] opportunity_tags_cache 为空，需触L2标签预计算")
+            need_precompute = True
+        if need_precompute:
+            logger.info(f"  [P6自检] 触发全量预计算")
             _run_precompute()
         else:
-            logger.info(f"  [P6自检] 当日已有 {count} 只预计算 ✅")
+            logger.info(f"  [P6自检] 当日已有预计算数据 ({count}只策略信号, {tag_count}条标签) ✅")
         return
 
-    # 9:30~15:30: 检查自选股
-    logger.info("  [P6自检] 盘中，检查自选股预计算完整性...")
+    # 9:30~15:30: 检查全市场预计算完整性（含 L2 标签）
+    logger.info("  [P6自检] 盘中，检查全市场预计算完整性...")
+
+    # 检查 daily_cache 是否有今日数据（若有则说明是交易日且有数据可算）
+    today_fmt = datetime.now().strftime('%Y-%m-%d')
+    try:
+        has_today_data = ecm.conn.execute(
+            "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [today_fmt]
+        ).fetchone()[0] > 0
+    except Exception:
+        has_today_data = False
+
+    need_precompute = False
+
+    if has_today_data:
+        # 检查 strategy_signal_detail
+        try:
+            row = ecm.conn.execute(
+                "SELECT COUNT(*) FROM strategy_signal_detail WHERE trade_date=?",
+                [today_fmt]
+            ).fetchone()
+            if row and row[0] == 0:
+                need_precompute = True
+        except Exception:
+            need_precompute = True
+
+        # 检查 opportunity_tags_cache
+        if not need_precompute:
+            try:
+                tag_row = ecm.conn.execute(
+                    "SELECT COUNT(*) FROM opportunity_tags_cache"
+                ).fetchone()
+                if not tag_row or tag_row[0] == 0:
+                    need_precompute = True
+            except Exception:
+                need_precompute = True
+
+    if need_precompute:
+        logger.info(f"  [P6自检] 有今日数据但无预计算，触发全量预计算")
+        # 后台线程执行，不阻塞启动流程
+        threading.Thread(target=_run_precompute, daemon=True).start()
+        logger.info("  [P6自检] 全量预计算已在后台启动")
+        return
+
+    # 盘中无全量数据或无预计算缺失 → 走自选股增量检查
+    logger.info("  [P6自检] 检查盘中自选股增量请求...")
     watchlist_codes = []
     try:
         import sqlite3
@@ -1688,9 +2563,7 @@ def _run_data_cleanup():
 # 主循环
 # ══════════════════════════════════════════════════════════
 
-def _is_market_day() -> bool:
-    """粗略判断是否为交易日（周一至周五）"""
-    return datetime.now().weekday() < 5
+# _is_market_day 在管道驱动模块中已定义（305号§9）
 
 
 def _is_market_hours() -> bool:
@@ -1752,23 +2625,19 @@ def main():
     _ensure_pd()
     run_integrity_check(backfill_days=3)
 
-    # 日终同步兜底（Task 2：如错过15:30窗口，开机即补）
-    _check_daily_sync_backfill()
-
-    # 开机预计算自检（P6：检查当日预计算完整性，按时间补算）
-    today = datetime.now().strftime('%Y%m%d')
-    _check_precompute_status(today)
+    # 管道驱动兜底：开机后自动从断点恢复
+    # 替代 _check_daily_sync_backfill() + _check_precompute_status()
+    _drive_pipeline()
 
     # 主循环（每 30 秒检查一次）
     _last_patrol = 0
-    _daily_sync_triggered = False
 
-    logger.info("data_daemon 进入主循环")
+    logger.info("data_daemon 进入主循环（管道驱动）")
     while _running:
         now = datetime.now()
         ts = time.time()
 
-        # ── sync_requests 队列消费 ──
+        # ── sync_requests 队列消费（不变） ──
         try:
             pending = _ecm.consume_pending_requests()
             for req in pending:
@@ -1806,22 +2675,25 @@ def main():
                     logger.warning(f"  sync_request {req['id']} 失败: {e}")
         except Exception as e:
             logger.warning(f"sync_requests 消费异常: {e}")
-        now = datetime.now()
-        ts = time.time()
 
-        # ── 日终同步 (15:30-15:35，5分钟窗口避免错过) ──
-        if now.hour == 15 and 30 <= now.minute <= 35 and not _daily_sync_triggered:
-            _daily_sync_triggered = True
-            run_daily_sync()
-            _run_data_cleanup()  # 日终同步完成后执行清理
+        # ── 管道驱动（替代15:30-15:35定时窗口 + 兜底，305号§9） ──
+        try:
+            _drive_pipeline()
+        except Exception as e:
+            logger.warning(f"管道驱动异常: {e}")
 
-        # 重置日终同步标记（离开15:30-15:35窗口后重置）
-        if not (now.hour == 15 and 30 <= now.minute <= 35):
-            _daily_sync_triggered = False
+        # ── 数据清理（日终完成后触发一次，305号§9兼容） ──
+        if _is_pipeline_complete(datetime.now().strftime('%Y%m%d')):
+            if not getattr(_running, '_cleanup_done', False):
+                try:
+                    _run_data_cleanup()
+                    _running._cleanup_done = True  # type: ignore
+                except Exception as e:
+                    logger.warning(f"数据清理异常: {e}")
 
-        # ── 定时巡检（每整点，非交易时段） ──
+        # ── 定时巡检（每整点，非交易时段，不变） ──
         if now.minute == 0 and (now.hour < 9 or now.hour >= 16):
-            if ts - _last_patrol > 1800:  # 至少间隔30分钟
+            if ts - _last_patrol > 1800:
                 _last_patrol = ts
                 if _is_market_day():
                     logger.info("定时巡检...")

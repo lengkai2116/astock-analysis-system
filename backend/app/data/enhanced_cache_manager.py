@@ -12,14 +12,14 @@ EnhancedCacheManager — SQLite WAL 缓存管理器（250号方案）
 - 与 DuckDB 版本接口完全兼容（调用方无感知）
 """
 
+import logging
 import os
 import sqlite3
-import pandas as pd
-import logging
-import time
-import shutil
-from datetime import datetime, timedelta, date
 import threading
+from datetime import date, datetime, timedelta
+
+import pandas as pd
+
 from .memory_cache import TieredMemoryCache
 
 logger = logging.getLogger(__name__)
@@ -476,6 +476,71 @@ class EnhancedCacheManager:
                 PRIMARY KEY (ts_code, end_date)
             )
         """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS opportunity_tags_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_code TEXT NOT NULL,
+                tag_name TEXT NOT NULL,
+                tag_group TEXT NOT NULL,
+                tag_value TEXT NOT NULL,
+                confidence REAL DEFAULT 1.0,
+                evidence TEXT,
+                source TEXT,
+                updated_at TEXT,
+                UNIQUE(ts_code, tag_name, updated_at)
+            )
+        """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS opportunity_status_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                old_status TEXT,
+                new_status TEXT,
+                trigger_event TEXT,
+                score REAL,
+                detail TEXT
+            )
+        """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS opportunity_advice_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                advice_type TEXT,
+                target_price REAL,
+                stop_loss REAL,
+                reason TEXT
+            )
+        """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS opportunity_library (
+                ts_code TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                category TEXT,
+                pipeline TEXT,
+                lib_level TEXT DEFAULT 'scan',
+                added_date TEXT,
+                added_reason TEXT,
+                last_update TEXT,
+                status TEXT,
+                days_in_status INTEGER,
+                total_days INTEGER,
+                manual_keep INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                park_trigger_count INTEGER DEFAULT 0,
+                park_last_signal TEXT,
+                park_entered_signal REAL,
+                base_value_score REAL,
+                base_trend_score REAL,
+                base_event_score REAL,
+                base_technical_score REAL,
+                factor_boost REAL,
+                vibe_boost REAL,
+                composite_score REAL,
+                factor_vibe_version TEXT
+            )
+        """)
         # 索引
         for idx_sql in [
             "CREATE INDEX IF NOT EXISTS idx_daily_ts_code ON daily_cache(ts_code)",
@@ -517,6 +582,10 @@ class EnhancedCacheManager:
             "CREATE INDEX IF NOT EXISTS idx_sentiment_pool_ts ON sentiment_pool_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_finance_report_ts ON finance_report_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_finance_report_date ON finance_report_cache(end_date)",
+            "CREATE INDEX IF NOT EXISTS idx_tags_ts_code ON opportunity_tags_cache(ts_code)",
+            "CREATE INDEX IF NOT EXISTS idx_tags_name"
+            " ON opportunity_tags_cache(tag_name, tag_value)",
+            "CREATE INDEX IF NOT EXISTS idx_lib_level ON opportunity_library(lib_level, is_active)",
             "CREATE INDEX IF NOT EXISTS idx_ind_ma_ts ON indicator_ma(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_ind_macd_ts ON indicator_macd(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_ind_other_ts ON indicator_other(ts_code)",
@@ -538,6 +607,54 @@ class EnhancedCacheManager:
             )
         """)
         self._execute("CREATE INDEX IF NOT EXISTS idx_sync_req_status ON sync_requests(status)")
+
+        # ── treemap 快照表（305号§2.2.1）：日终预提取的轻量快照，每日替换 ──
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS treemap_snapshot (
+                ts_code            TEXT PRIMARY KEY,
+                name               TEXT,
+                industry           TEXT,
+                close              REAL,
+                pct_chg            REAL,
+                total_mv           REAL,
+                trade_date         TEXT,
+                signal_strength    REAL,
+                valuation_level    TEXT,
+                valuation_deviation REAL,
+                main_force_phase   TEXT,
+                phase_confidence   REAL,
+                sentiment_phase    TEXT,
+                sector_heat        TEXT,
+                fina_health        TEXT,
+                hold_period        TEXT,
+                trend_alignment    TEXT,
+                price_position     TEXT,
+                fund_flow          TEXT,
+                capital_nature     TEXT,
+                chip_concentration TEXT,
+                volatility_level   TEXT,
+                dividend_yield     REAL,
+                composite_rating   REAL,
+                snapshot_date      TEXT DEFAULT (date('now'))
+            )
+        """)
+        self._execute("CREATE INDEX IF NOT EXISTS idx_snapshot_ind ON treemap_snapshot(industry)")
+
+        # ── 管道状态表（305号§9.2）：链条驱动执行状态 ──
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_status (
+                pipeline_date TEXT,
+                step_id       TEXT,
+                step_name     TEXT,
+                status        TEXT DEFAULT 'pending',
+                started_at    TIMESTAMP,
+                completed_at  TIMESTAMP,
+                detail        TEXT,
+                retry_count   INTEGER DEFAULT 0,
+                PRIMARY KEY (pipeline_date, step_id)
+            )
+        """)
+
         self.conn.commit()
 
     # ── 快照数据库建表 ──────────────────────────────────────────
@@ -629,7 +746,7 @@ class EnhancedCacheManager:
         if df.empty:
             return
         # 过滤 DataFrame 列到表结构子集：Tushare 可能新增字段（如 pre_close）
-        table_cols = {r[1] for r in self.conn.execute(f'PRAGMA table_info(daily_cache)').fetchall()}
+        table_cols = {r[1] for r in self.conn.execute('PRAGMA table_info(daily_cache)').fetchall()}
         extra = set(df.columns) - table_cols
         if extra:
             logger.warning(f"忽略 daily_cache 中不存在的列: {extra}")
@@ -721,7 +838,20 @@ class EnhancedCacheManager:
     def get_cache_stats(self):
         try:
             daily_count = self.conn.execute("SELECT COUNT(*) FROM daily_cache").fetchone()[0]
-            indicator_count = self.conn.execute("SELECT COUNT(*) FROM indicator_cache").fetchone()[0]
+            # 用 indicator_ma 宽表估算指标总量（避免对 indicator_cache 8567万行做精确 COUNT，耗时 30s+）
+            indicator_count = 0
+            try:
+                row = self.conn.execute(
+                    "SELECT COUNT(*) FROM indicator_ma"
+                ).fetchone()
+                if row:
+                    indicator_count = int(row[0]) * 3  # ma/macd/other 三宽表近似
+            except Exception:
+                pass
+            if indicator_count == 0:
+                indicator_count = self.conn.execute(
+                    "SELECT COUNT(*) FROM indicator_cache"
+                ).fetchone()[0]
             return pd.DataFrame([{
                 'duckdb_daily_count': daily_count,
                 'duckdb_indicator_count': indicator_count,
@@ -910,7 +1040,7 @@ class EnhancedCacheManager:
                         sell_col = 'sell_' + buy_col[4:]
                         df[net_col] = df[buy_col].fillna(0) - df.get(sell_col, pd.Series([0]*len(df))).fillna(0)
                 # 过滤 DataFrame 列到表结构子集
-                table_cols = {r[1] for r in self.conn.execute(f'PRAGMA table_info(moneyflow_cache)').fetchall()}
+                table_cols = {r[1] for r in self.conn.execute('PRAGMA table_info(moneyflow_cache)').fetchall()}
                 extra = set(df.columns) - table_cols
                 if extra:
                     logger.warning(f"忽略 moneyflow_cache 中不存在的列: {extra}")
@@ -936,13 +1066,17 @@ class EnhancedCacheManager:
         query = "SELECT * FROM moneyflow_cache WHERE 1=1"
         params = []
         if ts_code:
-            query += " AND ts_code = ?"; params.append(ts_code)
+            query += " AND ts_code = ?"
+            params.append(ts_code)
         if trade_date:
-            query += " AND trade_date = ?"; params.append(trade_date)
+            query += " AND trade_date = ?"
+            params.append(trade_date)
         if start_date:
-            query += " AND trade_date >= ?"; params.append(start_date)
+            query += " AND trade_date >= ?"
+            params.append(start_date)
         if end_date:
-            query += " AND trade_date <= ?"; params.append(end_date)
+            query += " AND trade_date <= ?"
+            params.append(end_date)
         query += " ORDER BY trade_date, ts_code"
         return self._query_df(query, params)
 
@@ -1107,7 +1241,8 @@ class EnhancedCacheManager:
         query = "SELECT * FROM adj_factor_cache WHERE 1=1"
         params = []
         if ts_code:
-            query += " AND ts_code = ?"; params.append(ts_code)
+            query += " AND ts_code = ?"
+            params.append(ts_code)
         if start_date:
             query += " AND trade_date >= ?"
             s = str(start_date).replace('-', '')
@@ -1134,15 +1269,18 @@ class EnhancedCacheManager:
         query = "SELECT * FROM minute_kline_cache WHERE ts_code = ?"
         params = [ts_code]
         if trade_date:
-            query += " AND trade_date = ?"; params.append(trade_date)
-        query += " AND freq = ?"; params.append(freq)
+            query += " AND trade_date = ?"
+            params.append(trade_date)
+        query += " AND freq = ?"
+        params.append(freq)
         query += " ORDER BY trade_time"
         return self._query_df(query, params)
 
     # ==================== 252号方案：财务指标 ====================
 
     def cache_fina_indicator_data(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
@@ -1172,7 +1310,8 @@ class EnhancedCacheManager:
     # ==================== 252号方案：利润表 ====================
 
     def cache_income_data(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
@@ -1192,7 +1331,8 @@ class EnhancedCacheManager:
     # ==================== 252号方案：资产负债表 ====================
 
     def cache_balancesheet_data(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
@@ -1212,7 +1352,8 @@ class EnhancedCacheManager:
     # ==================== 252号方案：现金流量表 ====================
 
     def cache_cashflow_data(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
@@ -1232,7 +1373,8 @@ class EnhancedCacheManager:
     # ==================== 252号方案：业绩预告 ====================
 
     def cache_forecast_data(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
@@ -1252,7 +1394,8 @@ class EnhancedCacheManager:
     # ==================== 252号方案：融资融券 ====================
 
     def cache_margin_data(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 # 动态过滤：只保留表中存在的列
@@ -1272,16 +1415,19 @@ class EnhancedCacheManager:
         query = "SELECT * FROM margin_cache WHERE ts_code = ?"
         params = [ts_code]
         if start_date:
-            query += " AND trade_date >= ?"; params.append(start_date)
+            query += " AND trade_date >= ?"
+            params.append(start_date)
         if end_date:
-            query += " AND trade_date <= ?"; params.append(end_date)
+            query += " AND trade_date <= ?"
+            params.append(end_date)
         query += " ORDER BY trade_date"
         return self._query_df(query, params)
 
     # ==================== 252号方案：涨跌停 ====================
 
     def cache_stk_limit_data(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 # stk_limit 列名：ts_code, trade_date(YYYYMMDD), up_limit, down_limit
@@ -1302,7 +1448,8 @@ class EnhancedCacheManager:
     # ==================== 252号方案：龙虎榜 ====================
 
     def cache_lhb_data(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 if 'trade_date' in df.columns:
@@ -1316,9 +1463,11 @@ class EnhancedCacheManager:
         conditions = []
         params = []
         if ts_code:
-            conditions.append("ts_code = ?"); params.append(ts_code)
+            conditions.append("ts_code = ?")
+            params.append(ts_code)
         if trade_date:
-            conditions.append("trade_date = ?"); params.append(trade_date)
+            conditions.append("trade_date = ?")
+            params.append(trade_date)
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         return self._query_df(
             f"SELECT * FROM lhb_cache{where} ORDER BY trade_date DESC, net_amount DESC",
@@ -1353,9 +1502,11 @@ class EnhancedCacheManager:
         conditions = []
         params = []
         if ts_code:
-            conditions.append("ts_code = ?"); params.append(ts_code)
+            conditions.append("ts_code = ?")
+            params.append(ts_code)
         if trade_date:
-            conditions.append("trade_date = ?"); params.append(trade_date)
+            conditions.append("trade_date = ?")
+            params.append(trade_date)
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         return self._query_df(
             f"SELECT * FROM lhb_detail_cache{where} ORDER BY trade_date DESC, buy_amount DESC",
@@ -1415,7 +1566,8 @@ class EnhancedCacheManager:
     # ==================== 252号方案：前十大股东 ====================
 
     def cache_top10_holders(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
@@ -1435,7 +1587,8 @@ class EnhancedCacheManager:
     # ==================== 252号方案：股东人数 ====================
 
     def cache_stk_holder_data(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
@@ -1455,7 +1608,8 @@ class EnhancedCacheManager:
     # ==================== 252号方案：概念分类 ====================
 
     def cache_concept_data(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 self._insert_from_df('concept_cache', df)
@@ -1466,13 +1620,15 @@ class EnhancedCacheManager:
         query = "SELECT * FROM concept_cache"
         params = []
         if ts_code:
-            query += " WHERE ts_code = ?"; params.append(ts_code)
+            query += " WHERE ts_code = ?"
+            params.append(ts_code)
         return self._query_df(query, params)
 
     # ==================== 252号方案：指数成分股 ====================
 
     def cache_index_member_data(self, df):
-        if df.empty: return
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 self._insert_from_df('index_member_cache', df)
@@ -1777,7 +1933,297 @@ class EnhancedCacheManager:
         )
         self.conn.commit()
 
+    def write_tags(self, ts_code: str, tags: dict, trade_date: str = None):
+        """批量写入 L2 标签到 opportunity_tags_cache"""
+        if not tags:
+            return
+        from datetime import datetime
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y%m%d')
+
+        # 标签元数据映射（tag_name → (group, source)）
+        # 覆盖 295号§三 全部 29 个核心标签 + 引擎额外产出标签。
+        # 当引擎返回嵌套 dict {'value':v, 'group':g, 'source':s} 时优先使用引擎自描述。
+        TAG_META: dict[str, tuple[str, str]] = {
+            # ── direction 方向类（295号§3.1，7个） ──
+            'trend_alignment':      ('direction',  'PhaseDetectionEngine'),
+            'ma_alignment':         ('direction',  'VolumePriceStrategy'),
+            'buy_sell_point':       ('direction',  'ChanlunAnalyzer'),
+            'volume_price_fit':     ('direction',  'VolumePriceStrategy'),
+            'pattern_signal':       ('direction',  'EnhancedPatternDetector'),
+            'gap_type':             ('direction',  'VolumePriceStrategy'),
+            'breakout_attempts':    ('direction',  'VolumePriceStrategy'),
+            # ── position 位置类（295号§3.2，5个） ──
+            'price_position':       ('position',   'PhaseDetectionEngine'),
+            'valuation_level':      ('position',   'ValuationEngine'),
+            'valuation_deviation':  ('position',   'ValuationEngine'),
+            'chip_position':        ('position',   'ChipDistributionService'),
+            'style_exposure':       ('position',   'PrecomputeL2Labels'),
+            #  引擎额外产出
+            'fcf_yield':            ('position',   'ValuationEngine'),
+            'dividend_yield':       ('position',   'ValuationEngine'),
+            'composite_rating':     ('position',   'ValuationEngine'),
+            'pe_percentile_5y':     ('position',   'ValuationEngine'),
+            'pb_percentile_5y':     ('position',   'ValuationEngine'),
+            # ── quality 质量类（295号§3.3，7个） ──
+            'main_force_phase':     ('quality',    'PhaseDetectionEngine'),
+            'phase_confidence':     ('quality',    'PhaseDetectionEngine'),
+            'fund_flow':            ('quality',    'PhaseDetectionEngine'),
+            'capital_nature':       ('quality',    'MainForceScorer'),
+            'chip_concentration':   ('quality',    'ChipDistributionService'),
+            'fina_health':          ('quality',    'FinancialRiskFilter'),
+            'roce_pass':            ('quality',    'FinancialRiskFilter'),
+            # ── environment 环境类（295号§3.4，7个） ──
+            'sentiment_phase':      ('environment','MarketSentimentService'),
+            'sector_heat':          ('environment','SectorRotationModel'),
+            'catalyst_event':       ('environment','EventMonitor'),
+            'catalyst_impact':      ('environment','EventMonitor'),
+            'volatility_level':     ('environment','VolumePriceStrategy'),
+            'upward_driver':        ('environment','EventMonitor'),
+            'time_rhythm':          ('environment','TimeRhythmEngine'),
+            # ── derived 衍生（295号§3.5 signal_strength） ──
+            'signal_strength':      ('derived',    'PrecomputeL2Labels'),
+        }
+
+        # 标准化 tags 格式
+        records = []
+        now = datetime.now().isoformat()
+
+        for tag_name, raw_value in tags.items():
+            if raw_value is None:
+                continue
+
+            # 推断值类型
+            if isinstance(raw_value, dict):
+                value = raw_value.get('value', '')
+                meta_default = TAG_META.get(tag_name, (None, None))
+                group = raw_value.get('group', meta_default[0] or 'unknown')
+                confidence = raw_value.get('confidence', 1.0)
+                evidence = raw_value.get('evidence', '')
+                source = raw_value.get('source', meta_default[1] or 'unknown')
+            else:
+                value = str(raw_value)
+                meta = TAG_META.get(tag_name, ('unknown', 'unknown'))
+                group = meta[0]
+                source = meta[1]
+                confidence = 1.0
+                evidence = ''
+
+            records.append({
+                'ts_code': ts_code,
+                'tag_name': tag_name,
+                'tag_group': group,
+                'tag_value': value,
+                'confidence': confidence,
+                'evidence': evidence if isinstance(evidence, str) else str(evidence),
+                'source': source,
+                'updated_at': now[:10],  # YYYY-MM-DD 格式用于 updated_at 查询匹配
+            })
+
+        if not records:
+            return
+
+        # 批量写入
+        with self._write_lock:
+            for r in records:
+                self.conn.execute(
+                    """INSERT OR REPLACE INTO opportunity_tags_cache
+                       (ts_code, tag_name, tag_group, tag_value,
+                        confidence, evidence, source, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [r['ts_code'], r['tag_name'], r['tag_group'], r['tag_value'],
+                     r['confidence'], r['evidence'], r['source'], r['updated_at']]
+                )
+            self.conn.commit()
+
+    def get_tags(self, ts_code: str) -> dict:
+        """读取单只股票的最新标签"""
+        df = self._query_df(
+            "SELECT tag_name, tag_value, tag_group, confidence, source, updated_at "
+            "FROM opportunity_tags_cache WHERE ts_code=? "
+            "ORDER BY updated_at DESC LIMIT 60",
+            [ts_code]
+        )
+        if df.empty:
+            return {}
+        result = {}
+        for _, row in df.iterrows():
+            result[row['tag_name']] = row['tag_value']
+        return result
+
+    def query_tags(self, tag_filters: dict[str, list[str]], limit: int = 5000) -> list[dict]:
+        """按标签组合查询股票（AND 逻辑）
+
+        Args:
+            tag_filters: {tag_name: [allowed_values, ...], ...}
+                        例如 {'main_force_phase': ['building', 'lifting'], 'valuation_level': ['low', 'extreme_low']}
+            limit: 最大返回数量
+
+        Returns:
+            [{ts_code, tag_name, tag_value, tag_group, updated_at}, ...]
+        """
+        if not tag_filters:
+            return []
+
+        conditions = list(tag_filters.items())
+        first_tag, first_values = conditions[0]
+
+        placeholders = ','.join('?' for _ in first_values)
+        sql = f"""
+            SELECT DISTINCT a.ts_code
+            FROM opportunity_tags_cache a
+            WHERE a.tag_name = ? AND a.tag_value IN ({placeholders})
+        """
+        params = [first_tag] + first_values
+
+        for tag_name, values in conditions[1:]:
+            ph = ','.join('?' for _ in values)
+            sql += f"""
+                INTERSECT
+                SELECT ts_code FROM opportunity_tags_cache
+                WHERE tag_name = ? AND tag_value IN ({ph})
+            """
+            params += [tag_name] + values
+
+        sql += f" LIMIT {int(limit)}"
+
+        try:
+            rows = self.conn.execute(sql, params).fetchall()
+            return [{'ts_code': r[0]} for r in rows]
+        except Exception as e:
+            logger.warning(f"query_tags failed: {e}")
+            return []
+
+    def get_tags_batch(self, ts_codes: list[str]) -> dict[str, dict]:
+        """批量获取多只股票的最新标签
+
+        Returns:
+            {ts_code: {tag_name: tag_value, ...}, ...}
+        """
+        if not ts_codes:
+            return {}
+
+        placeholders = ','.join('?' for _ in ts_codes)
+        try:
+            df = self._query_df(
+                f"""SELECT ts_code, tag_name, tag_value, tag_group, source, updated_at
+                   FROM opportunity_tags_cache
+                   WHERE ts_code IN ({placeholders})
+                   ORDER BY ts_code, tag_name""",
+                ts_codes
+            )
+        except Exception as e:
+            logger.warning(f"get_tags_batch failed: {e}")
+            return {}
+
+        if df.empty:
+            return {}
+
+        result = {}
+        for ts_code, grp in df.groupby('ts_code'):
+            tags = {}
+            for _, row in grp.iterrows():
+                tags[row['tag_name']] = row['tag_value']
+            result[ts_code] = tags
+        return result
+
     def vacuum_db(self):
         """执行 VACUUM 回收空间（应在低负载时段执行）"""
         self.conn.execute("VACUUM")
         logger.info("VACUUM 完成")
+
+    # ════════════════════════════════════════════════════════════
+    # Treemap 快照（305号§2.2）
+    # ════════════════════════════════════════════════════════════
+
+    def get_treemap_snapshot(self, ts_codes: list[str]) -> pd.DataFrame:
+        """从 treemap_snapshot 表批量读取快照数据"""
+        if not ts_codes:
+            return pd.DataFrame()
+        placeholders = ','.join(['?' for _ in ts_codes])
+        return self._query_df(
+            f"SELECT * FROM treemap_snapshot WHERE ts_code IN ({placeholders})",
+            ts_codes
+        )
+
+    def get_treemap_snapshot_items(self, ts_codes: list[str]) -> list[dict]:
+        """从 treemap_snapshot 读取并组装为 dict 列表（直接可用于 API 响应）"""
+        df = self.get_treemap_snapshot(ts_codes)
+        if df.empty:
+            return []
+        items = []
+        for _, r in df.iterrows():
+            items.append({
+                'ts_code': r['ts_code'],
+                'name': r['name'],
+                'price': float(r['close']) if pd.notna(r.get('close')) else 0,
+                'pct_change': float(r['pct_chg']) if pd.notna(r.get('pct_chg')) else 0,
+                'market_cap': float(r['total_mv']) if pd.notna(r.get('total_mv')) else 0,
+                'signal_strength': float(r['signal_strength']) if pd.notna(r.get('signal_strength')) else 0,
+                'valuation_level': r.get('valuation_level'),
+                'main_force_phase': r.get('main_force_phase'),
+                'sentiment_phase': r.get('sentiment_phase'),
+                'sector_heat': r.get('sector_heat'),
+                'fina_health': r.get('fina_health'),
+                'hold_period': r.get('hold_period'),
+                'val_deviation': float(r['valuation_deviation']) if pd.notna(r.get('valuation_deviation')) else None,
+                'tags': {},  # 快照表不存完整 tags dict，detail 面板走 diagnose API
+                'snapshot': False,
+            })
+        return items
+
+    # ════════════════════════════════════════════════════════════
+    # 管道状态（305号§9.2）
+    # ════════════════════════════════════════════════════════════
+
+    def load_pipeline_status(self, pipeline_date: str) -> dict[str, dict]:
+        """读取指定交易日所有环节状态，返回 {step_id: row_dict}"""
+        try:
+            cur = self.conn.execute(
+                "SELECT * FROM pipeline_status WHERE pipeline_date=? ORDER BY step_id",
+                [pipeline_date]
+            )
+            cols = [d[0] for d in cur.description]
+            return {r[1]: dict(zip(cols, r)) for r in cur.fetchall()}
+        except Exception:
+            return {}
+
+    def ensure_pipeline_steps(self, pipeline_date: str):
+        """确保当日管道环节记录存在（幂等）"""
+        for step_id, step_name in [
+            ('C1', '日线采集'), ('C2', '基本面采集'), ('C3', '资金流采集'),
+            ('C4', '涨跌停采集'), ('C5', '龙虎榜采集'), ('C6', '概念板块采集'),
+            ('P1', '指标预计算'), ('P2', '策略信号预计算'), ('P3', '因子预计算'),
+            ('P4', 'L2标签预计算'), ('S1', 'Treemap快照'),
+        ]:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO pipeline_status "
+                "(pipeline_date, step_id, step_name) VALUES (?, ?, ?)",
+                [pipeline_date, step_id, step_name]
+            )
+        self.conn.commit()
+
+    def mark_step_running(self, pipeline_date: str, step_id: str) -> bool:
+        """尝试将环节标记为 running（幂等锁），成功返回 True"""
+        rc = self.conn.execute(
+            "UPDATE pipeline_status SET status='running', started_at=CURRENT_TIMESTAMP "
+            "WHERE pipeline_date=? AND step_id=? AND status='pending'",
+            [pipeline_date, step_id]
+        ).rowcount
+        return rc > 0
+
+    def mark_step_done(self, pipeline_date: str, step_id: str, detail: str = ''):
+        self.conn.execute(
+            "UPDATE pipeline_status SET status='done', completed_at=CURRENT_TIMESTAMP, detail=? "
+            "WHERE pipeline_date=? AND step_id=?",
+            [detail, pipeline_date, step_id]
+        )
+        self.conn.commit()
+
+    def mark_step_failed(self, pipeline_date: str, step_id: str, detail: str = ''):
+        self.conn.execute(
+            "UPDATE pipeline_status SET status='failed', completed_at=CURRENT_TIMESTAMP, detail=? "
+            "WHERE pipeline_date=? AND step_id=?",
+            [detail, pipeline_date, step_id]
+        )
+        self.conn.commit()

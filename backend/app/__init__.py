@@ -146,6 +146,7 @@ def create_app():
         from app.models.playback import ReviewUnit, PlaybackAccount, PlaybackReport  # noqa: F401
         from app.models.notification import NotificationRule, Notification, NotificationRuleStats, ReportArchive  # noqa: F401
         from app.models.verification import SignalRecord, VirtualPosition  # noqa: F401
+        from app.models.opportunity_library import OpportunityLibrary  # noqa: F401
 
         try:
             db.create_all()
@@ -196,6 +197,8 @@ def create_app():
     from app.routes.watchlist import watchlist_bp
     from app.routes.dashboard import dashboard_bp
     from app.routes.notifications import notifications_bp
+    from app.routes.opportunity_library import library_bp
+    from app.routes.opportunity_atlas import opportunity_bp
 
     app.register_blueprint(market_bp)
     app.register_blueprint(health_bp)
@@ -233,6 +236,8 @@ def create_app():
     app.register_blueprint(watchlist_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(notifications_bp)
+    app.register_blueprint(library_bp)
+    app.register_blueprint(opportunity_bp)
 
     # ── 前端静态文件（原型/生产共用） ──
     # _ui-prototype 位于项目根目录，与 backend/ 同级
