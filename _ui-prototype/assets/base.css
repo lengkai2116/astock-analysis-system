@@ -33,9 +33,9 @@
   --signal-invalid: #7F1D1D;
   /* 文字 */
   --text-primary: #F1F5F9;
-  --text-secondary: #94A3B8;
-  --text-muted: #6B7280;
-  --text-disabled: #404040;
+  --text-secondary: #CBD5E1;
+  --text-muted: #94A3B8;
+  --text-disabled: #475569;
   /* 边框 */
   --border-default: rgba(255,255,255,0.08);
   --border-strong: rgba(255,255,255,0.14);

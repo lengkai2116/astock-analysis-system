@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>机会图谱 · Treemap — A股分析系统</title>
 <link rel="stylesheet" href="assets/base.css">
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<script src="assets/echarts.min.js"></script>
 <style>
 /* ===== Treemap 页面专属样式（base.css 基础上覆盖/扩展） ===== */
 
@@ -14,18 +14,18 @@
 .page-header-left {}
 .page-header h1 { font-size: 22px; font-weight: 700; margin-bottom: var(--space-4); }
 .page-header .subtitle { font-size: 13px; color: var(--text-muted); }
-.page-header-actions { display: flex; gap: var(--space-8); align-items: center; flex-wrap: wrap; }
+.page-header-actions { display: flex; gap: var(--space-10); align-items: center; flex-wrap: wrap; }
 
 /* ===== Buttons ===== */
 .btn {
-  display: inline-flex; align-items: center; gap: var(--space-6); padding: var(--space-8) var(--space-14);
+  display: inline-flex; align-items: center; gap: var(--space-8); padding: var(--space-8) var(--space-16);
   border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s;
   border: 1px solid var(--border-default); background: var(--bg-subtle); color: var(--text-secondary);
 }
 .btn:hover { border-color: var(--accent-blue); color: var(--text-primary); }
 .btn-primary { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
 .btn-primary:hover { background: #2563eb; }
-.btn-sm { padding: var(--space-4) var(--space-10); font-size: 12px; }
+.btn-sm { padding: var(--space-6) var(--space-12); font-size: 12px; }
 .btn-group { display: flex; gap: 0; }
 .btn-group .btn { border-radius: 0; }
 .btn-group .btn:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
@@ -33,23 +33,23 @@
 .btn-group .btn.active { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
 
 /* ===== Preset Scene Buttons ===== */
-.preset-group { display: flex; gap: var(--space-6); align-items: center; }
+.preset-group { display: flex; gap: var(--space-8); align-items: center; }
 .preset-group .btn.active { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
 
 /* ===== Mode Toggle Bar ===== */
 .mode-bar {
   background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md);
-  padding: var(--space-12) var(--space-16); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-10);
+  padding: var(--space-12) var(--space-16); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-12);
   margin-bottom: var(--space-12);
 }
-.mode-bar-left { display: flex; align-items: center; gap: var(--space-12); }
-.mode-bar-right { display: flex; align-items: center; gap: var(--space-10); }
-.mode-label { font-size: 12px; color: var(--text-muted); }
-.mode-indicator { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: var(--space-6); }
+.mode-bar-left { display: flex; align-items: center; gap: var(--space-16); }
+.mode-bar-right { display: flex; align-items: center; gap: var(--space-12); }
+.mode-label { font-size: 13px; color: var(--text-muted); }
+.mode-indicator { font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: var(--space-6); }
 .mode-indicator .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot-green { background: var(--accent-green); }
 .dot-blue { background: var(--accent-blue); }
-.timestamp { font-size: 11px; color: var(--text-muted); }
+.timestamp { font-size: 12px; color: var(--text-muted); }
 
 /* ===== Fallback Badge ===== */
 .fallback-badge {
@@ -67,9 +67,9 @@
   padding: var(--space-8) var(--space-12); margin-bottom: var(--space-10);
   display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--space-6);
 }
-.tag-bar-scroll { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; flex: 1; }
+.tag-bar-scroll { display: flex; align-items: center; gap: var(--space-6); flex-wrap: wrap; flex: 1; }
 .tag-btn {
-  font-size: 11px; padding: 3px var(--space-10); border-radius: 14px;
+  font-size: 12px; padding: 5px var(--space-12); border-radius: 14px;
   border: 1px solid var(--border-default); background: transparent;
   color: var(--text-secondary); cursor: pointer; transition: all .15s;
   white-space: nowrap; user-select: none;
@@ -79,7 +79,7 @@
 .tag-btn.active-all { background: var(--accent-cyan); color: #fff; border-color: var(--accent-cyan); }
 .tag-more-wrap { position: relative; display: inline-block; }
 .tag-more-btn {
-  font-size: 11px; padding: 3px var(--space-10); border-radius: 14px;
+  font-size: 12px; padding: 5px var(--space-12); border-radius: 14px;
   border: 1px solid var(--border-default); background: var(--bg-subtle);
   color: var(--text-secondary); cursor: pointer; transition: all .15s;
   white-space: nowrap;
@@ -93,8 +93,8 @@
 }
 .tag-dropdown.open { display: block; }
 .tag-dropdown-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--space-4); }
-.tag-bar-right { display: flex; align-items: center; gap: var(--space-4); flex-shrink: 0; margin-left: auto; }
-.tag-bar-sep { width: 1px; height: 20px; background: var(--border-default); margin: 0 var(--space-4); }
+.tag-bar-right { display: flex; align-items: center; gap: var(--space-6); flex-shrink: 0; margin-left: auto; }
+.tag-bar-sep { width: 1px; height: 20px; background: var(--border-default); margin: 0 var(--space-6); }
 
 /* ===== Color Legend ===== */
 .legend {
@@ -203,7 +203,7 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
 .val-detail-item .vd-value { font-size: 14px; font-weight: 600; margin-top: 2px; }
 
 /* ===== Search bar ===== */
-.search-bar { display: flex; align-items: center; gap: var(--space-6); }
+.search-bar { display: flex; align-items: center; gap: var(--space-8); }
 .search-bar input {
   background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
   padding: var(--space-6) var(--space-10); font-size: 12px; color: var(--text-primary); width: 160px; outline: none;
@@ -596,17 +596,9 @@ async function loadMarketData() {
           signalQuality: s.main_force_phase || (s.tags && s.tags.main_force_phase) || 'unknown',
           signalPosition: (s.tags && s.tags.price_position) || 'unknown',
           // 持有周期 = f(主力阶段, 价格位置, 信号强度) — 非 signalStrength 虚假映射
-          holdPeriod: s.hold_period || (function() {
-            const mfp = s.main_force_phase || (s.tags && s.tags.main_force_phase) || '';
-            const pos = (s.tags && s.tags.price_position) || '';
-            if (mfp === 'building' && pos === 'low_zone') return '长线机会';
-            if (mfp === 'building') return '中线机会';
-            if (mfp === 'washing') return '中线机会';
-            if (mfp === 'lifting') return '短线机会';
-            if (mfp === 'distributing') return '超短机会';
-            // fallback: 无主力阶段时, 用信号强度粗略估计
-            return ss >= 7 ? '长线机会' : ss >= 5.5 ? '中线机会' : ss >= 4 ? '短线机会' : ss >= 2.5 ? '超短机会' : '无明确信号';
-          })(),
+          holdPeriod: s.hold_period || '无明确信号',
+          holdPeriodDays: s.hold_period_days || '',
+          holdStatusType: s.hold_status_type || '',
           valDeviation: s.val_deviation || 0,
           valDeviationValue: s.val_deviation || 0,
           valuation: s.valuation_level || 'unknown',
@@ -913,15 +905,16 @@ function _stockTooltip(d, stockName) {
       <div style="font-size:12px;margin-bottom:4px;">
         信号强度: <strong>${d.signalStrength.toFixed(1)}</strong>
         <span style="color:${hpColor};font-weight:600;"> ● ${d.holdPeriod}</span>
+        ${d.holdPeriodDays ? '<span style="color:#94A3B8;font-size:11px;margin-left:4px;">（' + d.holdPeriodDays + '）</span>' : ''}
       </div>
       <div class="signal-bar-wrap">
         <div class="signal-bar"><div class="signal-bar-fill" style="width:${pct}%;background:${barColor};height:8px;border-radius:4px;"></div></div>
       </div>
       <div class="signal-labels">
-        <div class="signal-label">↗ ${d.signalDirection}</div>
+        <div class="signal-label">↗ ${_tagCn(d.signalDirection)}</div>
         <div class="signal-label">💎 ${_tagCn(d.valuation) || _tagCn(d.signalPosition)}</div>
-        <div class="signal-label">🏗️ ${d.signalQuality}</div>
-        <div class="signal-label">🌤️ ${d.signalEnvironment}</div>
+        <div class="signal-label">🏗️ ${_tagCn(d.signalQuality)}</div>
+        <div class="signal-label">🌤️ ${_tagCn(d.signalEnvironment)}</div>
       </div>
       ${fallbackNote}
       <div style="border-top:1px solid #2e3245;margin-top:6px;padding-top:6px;font-size:11px;color:#3b82f6;">👆 点击查看完整诊断</div>
@@ -1120,7 +1113,7 @@ const TAG_CN = {
   // valuation_level
   'extreme_low': '极度低估', 'low': '偏低', 'fair': '合理', 'high': '偏高', 'extreme_high': '极度高估',
   // others
-  'none': '无信号', 'neutral': '中性', 'unknown': '待确认',
+  'none': '无信号', 'neutral': '中性',
   'top_10': '板块前10', 'top_20': '板块前20', 'normal': '板块中等', 'top_30': '板块中等',
 };
 function _tagCn(v) { return TAG_CN[v] || v || '--'; }
@@ -1140,6 +1133,8 @@ function showDetail(data) {
     <span style="color:${pctColor};margin-left:var(--space-8);font-weight:600;">${pctSign}${data.pctChange.toFixed(2)}%</span>
     <span style="color:var(--text-muted);margin-left:var(--space-8);font-size:12px;">📊 信号强度 ${data.signalStrength.toFixed(1)}</span>
     <span style="color:${HOLD_COLORS[data.holdPeriod] || '#6b7280'};margin-left:var(--space-8);font-size:12px;">● ${data.holdPeriod}</span>
+    ${data.holdPeriodDays ? '<span style="color:var(--text-muted);margin-left:var(--space-4);font-size:11px;">（' + data.holdPeriodDays + '）</span>' : ''}
+    ${data.holdStatusType && data.holdStatusType !== 'default' && data.holdStatusType !== 'no_signal' ? '<span style="color:var(--text-muted);margin-left:var(--space-6);font-size:11px;"># ' + data.holdStatusType + '</span>' : ''}
   `;
 
   document.getElementById('d-tags').innerHTML = `

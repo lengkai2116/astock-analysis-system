@@ -406,7 +406,7 @@ class DashboardService:
                         'date': datetime.now().strftime('%Y-%m-%d'),
                         'gainers': gainers,
                         'losers': losers,
-                        'source': 'AKShare 实时行情',
+                        'source': '东方财富行业板块（盘中）',
                     }
         except Exception as e:
             logger.warning(f"板块涨跌幅 reader 不可用，降级 DB: {e}")
@@ -484,6 +484,7 @@ class DashboardService:
                 losers = [s for s in all_sectors if s['change_pct'] <= 0]
                 losers.reverse()
                 losers = losers[:5]
+                # DB 聚合也可能出现单边行情，此时只返回有数据的一侧
                 return {
                     'date': date_label,
                     'cached_at': date_label,

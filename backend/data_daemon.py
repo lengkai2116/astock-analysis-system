@@ -1621,6 +1621,12 @@ def _precompute_l2_labels(codes):
                     except Exception:
                         pass
 
+                # 4d. 持有周期判定（306号§三：状态分类法）
+                try:
+                    _compute_hold_period(tags)
+                except Exception:
+                    pass
+
                 # 6. 写入数据库
                 if len(tags) > 0:
                     _ecm.write_tags(code, tags)
@@ -1827,6 +1833,104 @@ def _compute_signal_strength(tags: dict) -> float:
     return round(max(0.0, min(10.0, strength)), 1)
 
 
+def _compute_hold_period(tags: dict):
+    """持有周期判定 — 状态分类法（306号§三）
+
+    输入（从 tags 中读取的现状标签）：
+      main_force_phase / fina_health / valuation_level / sentiment_phase
+      sector_heat / volatility_level / dividend_yield / catalyst_event
+      time_rhythm / price_position
+
+    输出（写入 tags）：
+      hold_period       — "长线机会"/"中线机会"/"短线机会"/"超短机会"/"无明确信号"
+      hold_period_days  — "6月+"/"1-6月"/"1-4周"/"3-7天"/"观望"
+      hold_status_type  — 状态类型标识
+    """
+    mfp  = tags.get('main_force_phase')
+    fina = tags.get('fina_health')
+    val  = tags.get('valuation_level')
+    sp   = tags.get('sentiment_phase')
+    sh   = tags.get('sector_heat')
+    vl   = tags.get('volatility_level')
+    dy   = tags.get('dividend_yield')
+    ce   = tags.get('catalyst_event', 'none')
+    tr   = tags.get('time_rhythm', 'none')
+
+    # ── 规则树（优先级从高到低，命中即返回）──
+
+    # R1: 危险区 — 出货+财务风险 / 出货+高估值
+    if mfp == 'distributing' and fina == 'fail':
+        tags.update({'hold_period': '不持有', 'hold_period_days': '0', 'hold_status_type': 'danger_zone'}); return
+    if mfp == 'distributing' and val in ('high', 'extreme_high'):
+        tags.update({'hold_period': '超短机会', 'hold_period_days': '3-7天', 'hold_status_type': 'danger_overval'}); return
+
+    # R2: 价值底部区 — 建仓+财务健康+低估
+    if mfp == 'building' and fina == 'pass' and val in ('extreme_low', 'low'):
+        tags.update({'hold_period': '长线机会', 'hold_period_days': '6月+', 'hold_status_type': 'value_bottom'}); return
+
+    # R3: 建仓在高位 — 建仓+估值高（矛盾信号）
+    if mfp == 'building' and val in ('high', 'extreme_high'):
+        tags.update({'hold_period': '短线机会', 'hold_period_days': '1-4周', 'hold_status_type': 'build_high'}); return
+
+    # R4: 主力建仓观察 — 基线建仓
+    if mfp == 'building':
+        tags.update({'hold_period': '中线机会', 'hold_period_days': '1-6月', 'hold_status_type': 'building_watch'}); return
+
+    # R5: 主升浪 — 拉升+情绪高潮+热点
+    if mfp == 'lifting' and sp == 'climax' and sh in ('top_10', 'top_20'):
+        tags.update({'hold_period': '短线机会', 'hold_period_days': '1-4周', 'hold_status_type': 'main_upsurge'}); return
+    # R6: 慢牛 — 拉升+冷门板块
+    if mfp == 'lifting' and sh in ('none', 'normal'):
+        tags.update({'hold_period': '中线机会', 'hold_period_days': '1-3月', 'hold_status_type': 'steady_rise'}); return
+    # R7: 拉升基线
+    if mfp == 'lifting':
+        tags.update({'hold_period': '短线机会', 'hold_period_days': '1-4周', 'hold_status_type': 'lifting_general'}); return
+
+    # R8: 洗盘热点 — 洗盘+热点板块
+    if mfp == 'washing' and sh in ('top_10', 'top_20'):
+        tags.update({'hold_period': '中线观察', 'hold_period_days': '1-3月', 'hold_status_type': 'wash_hot'}); return
+    # R9: 洗盘基线
+    if mfp == 'washing':
+        tags.update({'hold_period': '中线机会', 'hold_period_days': '1-6月', 'hold_status_type': 'wash_general'}); return
+
+    # R10: 优质不明 — 阶段不明+财务健康+低估
+    if fina == 'pass' and val in ('extreme_low', 'low'):
+        tags.update({'hold_period': '中线机会', 'hold_period_days': '1-3月', 'hold_status_type': 'quality_unknown'}); return
+
+    # R11: 高股息策略 — 股息率>3%
+    if dy is not None:
+        try:
+            if float(dy) > 3:
+                tags.update({'hold_period': '长线机会', 'hold_period_days': '6月+', 'hold_status_type': 'dividend_play'}); return
+        except (ValueError, TypeError):
+            pass
+
+    # R12: 事件驱动 — 有催化剂+高波动
+    if ce and ce not in ('', 'none', 'None') and vl == 'high':
+        tags.update({'hold_period': '超短机会', 'hold_period_days': '3-7天', 'hold_status_type': 'event_driven'}); return
+    # R13: 事件观察 — 有催化剂
+    if ce and ce not in ('', 'none', 'None'):
+        tags.update({'hold_period': '短线观察', 'hold_period_days': '1-4周', 'hold_status_type': 'event_watch'}); return
+
+    # R14: 冷门价值 — 财务健康+冷门板块+合理估值（不依赖股息率，避免被R11覆盖）
+    if fina == 'pass' and sh in ('none', 'normal') and val in ('fair', 'extreme_low', 'low'):
+        tags.update({'hold_period': '中线机会', 'hold_period_days': '1-3月', 'hold_status_type': 'cold_value'}); return
+
+    # R15: 无信号（阶段不明且无其他特征）— 在兜底前检查
+    if mfp in (None, '', 'unknown'):
+        tags.update({'hold_period': '无明确信号', 'hold_period_days': '观望', 'hold_status_type': 'no_signal'}); return
+
+    # 兜底：根据情绪阶段确定基线
+    base = {'hold_period': '短线机会', 'hold_period_days': '1-4周', 'hold_status_type': 'default'}
+    if sp == 'ice':
+        base = {'hold_period': '中线机会', 'hold_period_days': '1-3月', 'hold_status_type': 'sentiment_ice'}
+    elif sp == 'climax':
+        base = {'hold_period': '超短机会', 'hold_period_days': '3-7天', 'hold_status_type': 'sentiment_climax'}
+    elif sp == 'ebb':
+        base = {'hold_period': '超短机会', 'hold_period_days': '3-7天', 'hold_status_type': 'sentiment_ebb'}
+    tags.update(base)
+
+
 def _compute_style_exposure(ts_code: str, tags: dict, df: 'pd.DataFrame' = None) -> str:
     """计算 style_exposure 标签（295号§3.2 标签12）
     
@@ -1980,7 +2084,9 @@ def _build_treemap_snapshot(codes: list[str]):
                MAX(CASE WHEN tag_name='chip_concentration'  THEN tag_value END) as chip_concentration,
                MAX(CASE WHEN tag_name='volatility_level'    THEN tag_value END) as volatility_level,
                MAX(CASE WHEN tag_name='dividend_yield'      THEN tag_value END) as dividend_yield,
-               MAX(CASE WHEN tag_name='composite_rating'    THEN tag_value END) as composite_rating
+               MAX(CASE WHEN tag_name='composite_rating'    THEN tag_value END) as composite_rating,
+               MAX(CASE WHEN tag_name='hold_period_days'   THEN tag_value END) as hold_period_days,
+               MAX(CASE WHEN tag_name='hold_status_type'   THEN tag_value END) as hold_status_type
         FROM opportunity_tags_cache
         WHERE ts_code IN ({ph})
         GROUP BY ts_code
@@ -2005,6 +2111,7 @@ def _build_treemap_snapshot(codes: list[str]):
             hold_period TEXT, trend_alignment TEXT, price_position TEXT,
             fund_flow TEXT, capital_nature TEXT, chip_concentration TEXT,
             volatility_level TEXT, dividend_yield REAL, composite_rating REAL,
+            hold_period_days TEXT, hold_status_type TEXT,
             snapshot_date TEXT DEFAULT (date('now'))
         )
     """)
@@ -2022,8 +2129,9 @@ def _build_treemap_snapshot(codes: list[str]):
                  signal_strength, valuation_level, valuation_deviation, main_force_phase,
                  phase_confidence, sentiment_phase, sector_heat, fina_health, hold_period,
                  trend_alignment, price_position, fund_flow, capital_nature,
-                 chip_concentration, volatility_level, dividend_yield, composite_rating)
-                VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?,?)
+                 chip_concentration, volatility_level, dividend_yield, composite_rating,
+                 hold_period_days, hold_status_type)
+                VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?)
             """, (
                 code, m.get('name', ''), m.get('industry', ''),
                 float(d['close']) if pd.notna(d.get('close')) else None,
@@ -2040,6 +2148,7 @@ def _build_treemap_snapshot(codes: list[str]):
                 t.get('chip_concentration'), t.get('volatility_level'),
                 _safe_float(t.get('dividend_yield')),
                 _safe_float(t.get('composite_rating')),
+                t.get('hold_period_days'), t.get('hold_status_type'),
             ))
             written += 1
         except Exception:

@@ -635,6 +635,9 @@ class EnhancedCacheManager:
                 volatility_level   TEXT,
                 dividend_yield     REAL,
                 composite_rating   REAL,
+                hold_period        TEXT,
+                hold_period_days   TEXT,
+                hold_status_type   TEXT,
                 snapshot_date      TEXT DEFAULT (date('now'))
             )
         """)
@@ -1983,6 +1986,10 @@ class EnhancedCacheManager:
             'time_rhythm':          ('environment','TimeRhythmEngine'),
             # ── derived 衍生（295号§3.5 signal_strength） ──
             'signal_strength':      ('derived',    'PrecomputeL2Labels'),
+            # ── 持有周期（306号§四.2） ──
+            'hold_period':          ('derived',    'PrecomputeL2Labels'),
+            'hold_period_days':     ('derived',    'PrecomputeL2Labels'),
+            'hold_status_type':     ('derived',    'PrecomputeL2Labels'),
         }
 
         # 标准化 tags 格式
@@ -2153,21 +2160,41 @@ class EnhancedCacheManager:
             return []
         items = []
         for _, r in df.iterrows():
+            dy = float(r['dividend_yield']) if pd.notna(r.get('dividend_yield')) else None
+
+            def _sv(key: str):
+                """取字符串值，将 pandas NaN 转为 None 避免 JSON 序列化输出非法 NaN"""
+                v = r.get(key)
+                return None if (v is None or (isinstance(v, float) and (v != v))) else v
+
             items.append({
                 'ts_code': r['ts_code'],
                 'name': r['name'],
-                'price': float(r['close']) if pd.notna(r.get('close')) else 0,
-                'pct_change': float(r['pct_chg']) if pd.notna(r.get('pct_chg')) else 0,
-                'market_cap': float(r['total_mv']) if pd.notna(r.get('total_mv')) else 0,
+                'industry': r.get('industry', ''),
+                'price': round(float(r['close']), 2) if pd.notna(r.get('close')) else 0,
+                'pct_change': round(float(r['pct_chg']), 2) if pd.notna(r.get('pct_chg')) else 0,
+                'market_cap': round(float(r['total_mv']), 2) if pd.notna(r.get('total_mv')) else 0,
+                'dividend_yield': dy,
                 'signal_strength': float(r['signal_strength']) if pd.notna(r.get('signal_strength')) else 0,
-                'valuation_level': r.get('valuation_level'),
-                'main_force_phase': r.get('main_force_phase'),
-                'sentiment_phase': r.get('sentiment_phase'),
-                'sector_heat': r.get('sector_heat'),
-                'fina_health': r.get('fina_health'),
-                'hold_period': r.get('hold_period'),
+                'valuation_level': _sv('valuation_level'),
+                'main_force_phase': _sv('main_force_phase'),
+                'sentiment_phase': _sv('sentiment_phase'),
+                'sector_heat': _sv('sector_heat'),
+                'fina_health': _sv('fina_health'),
+                'hold_period': _sv('hold_period'),
+                'hold_period_days': _sv('hold_period_days'),
+                'hold_status_type': _sv('hold_status_type'),
                 'val_deviation': float(r['valuation_deviation']) if pd.notna(r.get('valuation_deviation')) else None,
-                'tags': {},  # 快照表不存完整 tags dict，detail 面板走 diagnose API
+                'tags': {
+                    'trend_alignment': _sv('trend_alignment'),
+                    'price_position': _sv('price_position'),
+                    'fund_flow': _sv('fund_flow'),
+                    'capital_nature': _sv('capital_nature'),
+                    'chip_concentration': _sv('chip_concentration'),
+                    'volatility_level': _sv('volatility_level'),
+                    'dividend_yield': str(dy) if dy is not None else None,
+                    'composite_rating': str(r['composite_rating']) if pd.notna(r.get('composite_rating')) else None,
+                },
                 'snapshot': False,
             })
         return items
