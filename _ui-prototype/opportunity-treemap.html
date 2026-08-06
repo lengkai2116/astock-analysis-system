@@ -997,7 +997,9 @@ function buildTreeData(mode, stocks) {
         // 与 315 修复后新语义错配：fair 类（dev 均值 -11.3）被误染红。level 语义：
         // extreme_low/low=低估绿、fair=合理灰、high/extreme_high=高估红）
         value = Math.sqrt(s.price || s.prevClose || 10) * 15 + 10;
-        const vl = s.valuation_level || (s.tags && s.tags.valuation_level) || '';
+        // 2026-08-06 修复（二次）：读 stockItem.valuation（loadMarketData 已将 API 的
+        // valuation_level 映射到此字段）；stockItem.tags 为中文标签数组非 dict，不可用
+        const vl = s.valuation || '';
         let devKey = '合理';
         if (vl === 'extreme_low') devKey = '严重低估';
         else if (vl === 'low') devKey = '偏低';
@@ -1708,7 +1710,7 @@ function updateStats(stocks) {
   document.getElementById('stat-total').textContent = stocks.length;
   const highScore = stocks.filter(s => s.signalStrength >= 70).length;
   const building = stocks.filter(s => s.phase === '建仓期').length;
-  const undervalued = stocks.filter(s => ['extreme_low', 'low'].includes(s.valuation_level || (s.tags && s.tags.valuation_level))).length;  // 2026-08-06 修复：按 valuation_level 统计（原 deviation>10 与修复后语义错配）
+  const undervalued = stocks.filter(s => ['extreme_low', 'low'].includes(s.valuation || '')).length;  // 2026-08-06 修复：按 stockItem.valuation 统计（API 的 valuation_level 已映射至此）
   document.getElementById('stat-opp').textContent = highScore;
   document.getElementById('stat-phase').textContent = building;
   document.getElementById('stat-value').textContent = undervalued;
