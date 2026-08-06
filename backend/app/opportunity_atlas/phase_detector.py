@@ -5,8 +5,9 @@
 数据不足时静默降级，不抛异常。
 """
 
+import json
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -34,26 +35,33 @@ class PhaseDetectionEngine(DataAwareMixin):
         self._chip_indicators = None
         self._trading_phase_detector = None
         self._stage_detector = None
+        self._last_chip_indicators: dict = {}   # 312号：SSRP 维度复用
+        self._last_dim_insufficient = False     # 312号：数据不足标记（unknown 细分）
 
     # ── 主入口 ──────────────────────────────────────────────
-    def compute_tags(self, ts_code: str, df: pd.DataFrame) -> Dict:
-        """
-        计算阶段标签（五源融合投票）
+    def compute_tags(self, ts_code: str, df: pd.DataFrame,
+                     extra_tags: Optional[Dict] = None) -> Dict:
+        """计算阶段标签（312号方案：8 维度加权共识，替代原五源等权投票）
 
         Args:
             ts_code: 股票代码
             df: 日线 OHLCV DataFrame（必须含 trade_date, open, high, low, close, vol）
+            extra_tags: 可选下游标签 {buy_sell_point, sentiment_phase, sector_heat,
+                        capital_nature}（由 data_daemon 在缠论/情绪/板块计算后传入）
 
         Returns:
             {main_force_phase, phase_confidence, price_position,
-             trend_alignment, fund_flow}
+             trend_alignment, fund_flow, phase_conflict, phase_vote_ratio}
         """
+        extra_tags = extra_tags or {}
         result = {
             "main_force_phase": PHASE_UNKNOWN,
             "phase_confidence": 0.0,
             "price_position": "mid_zone",
             "trend_alignment": "no_trend",
             "fund_flow": "none",
+            "phase_conflict": False,
+            "phase_vote_ratio": json.dumps({"unknown_kind": "unknown_insufficient"}, ensure_ascii=False),
         }
 
         if df is None or df.empty or len(df) < 30:
@@ -64,65 +72,316 @@ class PhaseDetectionEngine(DataAwareMixin):
         except Exception:
             return result
 
-        # Step 1: 价格位置 & 均线排列
+        # 基础标签（保持输出契约）
         price_pos, ma_alignment = self._price_position_analysis(df_sorted)
         result["price_position"] = price_pos
-
-        # Step 2: 趋势方向
         trend_dir = self._detect_trend_direction(df_sorted)
         result["trend_alignment"] = trend_dir
-
-        # Step 3: 量能模式
-        volume_signal = self._volume_pattern_analysis(df_sorted)
-
-        # Step 4: 资金流向（异步加载）
         fund_flow = self._analyze_fund_flow(ts_code)
         result["fund_flow"] = fund_flow
-        moneyflow_direction = self._fund_flow_to_phase(fund_flow)
 
-        # Step 5: 筹码分布
-        chip_signal = self._chip_distribution_analysis(ts_code, df_sorted)
-        asr_phase = self._asr_to_phase(chip_signal, df_sorted)
+        # ── 8 维度阶段向量（批次1 可计算 7/8，控盘度批次3） ──
+        self._last_chip_indicators = {}   # 供 SSRP 维度复用
+        self._last_dim_insufficient = len(df_sorted) < 60   # 数据不足（unknown 细分）
+        dims = {
+            "chip":  self._dim_chip(ts_code, df_sorted),   # 1 筹码形态（真实 TradingPhase 评分）
+            "fund":  self._dim_fund(fund_flow, ts_code),   # 2 资金流向（方向+连续强度）
+            "stage": self._dim_stage(df_sorted),           # 3 量价四阶段（CONSOLIDATION 验证）
+            "asr":   self._dim_asr(ts_code, df_sorted),    # 4 ASR 筹码分布（去兜底）
+            "trend": self._dim_trend(df_sorted),           # 5 趋势方向（斜率连续）
+            "ssrp":  self._dim_ssrp(df_sorted),            # 6 主力成本锚定（真实 SSRP）
+            "chan":  self._dim_chan(extra_tags),           # 8 缠论买点（标签接入）
+        }
 
-        # Step 6: 加载既有阶段检测器结果
-        trading_phase = self._run_trading_phase_detector(ts_code, df_sorted)
-        stage_phase = self._run_stage_detector(df_sorted)
+        # 加权共识 + 修正/环境调整
+        main_phase, confidence, conflict, vote_ratio = self._consensus(dims, extra_tags)
 
-        # Step 7: 五源投票
-        votes = []
-        source_names = []
-
-        # 源1: TradingPhaseDetector
-        if trading_phase in ALL_PHASES:
-            votes.append(trading_phase)
-            source_names.append("trading_phase")
-        # 源2: MainForceScorer 资金流向
-        if moneyflow_direction in ALL_PHASES:
-            votes.append(moneyflow_direction)
-            source_names.append("moneyflow")
-        # 源3: StageDetector
-        if stage_phase in ALL_PHASES:
-            votes.append(stage_phase)
-            source_names.append("stage_detector")
-        # 源4: ASR 筹码分布
-        if asr_phase in ALL_PHASES:
-            votes.append(asr_phase)
-            source_names.append("asr")
-        # 源5: VolumePrice 量价趋势信号
-        vol_phase = self._volume_signal_to_phase(volume_signal, trend_dir)
-        if vol_phase in ALL_PHASES:
-            votes.append(vol_phase)
-            source_names.append("volume_price")
-
-        # 投票决策
-        main_phase, confidence = self._vote_decision(votes, source_names)
-
-        # 涨停交叉校验
+        # 涨停交叉校验（保持 298 号规则）
         main_phase = self._limit_up_cross_check(df_sorted, main_phase, price_pos)
 
         result["main_force_phase"] = main_phase
         result["phase_confidence"] = round(confidence, 4)
+        result["phase_conflict"] = conflict
+        result["phase_vote_ratio"] = json.dumps(vote_ratio, ensure_ascii=False)
         return result
+
+    # ═══════════════════════════════════════════════════════════
+    # 312号：8 维度阶段向量 + 加权共识
+    # ═══════════════════════════════════════════════════════════
+    # 维度权重（312号 §3.1）
+    _DIM_WEIGHTS = {"chip": 3.0, "fund": 3.0, "stage": 2.5, "asr": 2.0,
+                    "trend": 1.5, "ssrp": 2.5, "chan": 2.0}
+
+    def _dim_chip(self, ts_code: str, df: pd.DataFrame) -> dict:
+        """维度1 筹码形态：TradingPhaseDetector 五阶段评分 → 阶段分布向量
+
+        判定条件收紧（2026-08-02 校准：原门槛 2.0 = 单条件(+2.0)即投票，
+        导致"获利盘<40%"单条件大量投 building）：
+          最低门槛 4.0 → 要求 ≥2 个独立条件确认才投票（298号 building 多条件 AND 语义）
+        """
+        info = self._run_trading_phase_detector_v2(ts_code, df)
+        if info is None:
+            return {}
+        phase, scores = info
+        total = sum(scores.values()) or 1.0
+        best = max(scores.values())
+        if best < 4.0:            # 要求 ≥2 个条件确认（单条件不投票，312 §3.2 维度1 校准）
+            return {}
+        mapping = {"BUILDING": "building", "WASHING": "washing", "RAISING": "lifting",
+                   "SHIPPING": "distributing", "SUPPORT": "washing"}
+        vec = {}
+        for k, v in scores.items():
+            p = mapping.get(k)
+            if p and v > 0:
+                vec[p] = round(v / total, 3)
+        return vec
+
+    def _dim_fund(self, fund_flow: str, ts_code: str) -> dict:
+        """维度2 资金流向：方向 + 5日大单净额连续强度（mixed/none 不投票，去 washing 兜底）"""
+        strength = 0.0
+        try:
+            mf_df = self._get_dm().get_cached_moneyflow(ts_code)
+            if mf_df is not None and not mf_df.empty:
+                mf5 = mf_df.tail(5)
+                net = mf5["net_lg_amount"].sum()
+                tot = mf5["buy_lg_amount"].sum() + mf5["sell_lg_amount"].sum()
+                if tot > 0:
+                    strength = min(1.0, abs(net) / tot)
+        except Exception:
+            pass
+        if fund_flow == "5d_inflow":
+            return {"lifting": round(0.3 + 0.5 * strength, 3), "building": 0.2}
+        if fund_flow == "5d_outflow":
+            return {"distributing": round(0.3 + 0.5 * strength, 3)}
+        return {}   # mixed/none：方向不明不投票（312 §3.2 维度2）
+
+    def _dim_stage(self, df: pd.DataFrame) -> dict:
+        """维度3 量价四阶段：StageDetector + CONSOLIDATION 证据验证（312 §3.2 维度3）"""
+        stage_info = self._run_stage_detector_v2(df)
+        if stage_info is None:
+            return {}
+        stage_name, stage_conf = stage_info
+        mapping = {"UPTREND_ACTIVE": ("lifting", 0.7), "UPTREND_TOPPING": ("distributing", 0.6),
+                   "DOWNTREND_BOTTOMING": ("building", 0.6), "DOWNTREND_ACTIVE": ("washing", 0.4)}
+        if stage_name == "CONSOLIDATION":
+            # 证据验证：20 日振幅 < 15% 且 5 日均量 < 10 日均量（无证据 → 全 0，去兜底）
+            try:
+                closes = df["close"].values
+                highs = df["high"].values
+                lows = df["low"].values
+                vols = df["vol"].values if "vol" in df.columns else np.ones(len(closes))
+                if len(closes) < 20:
+                    return {}
+                amp20 = (max(highs[-20:]) - min(lows[-20:])) / closes[-1]
+                vol_shrink = sum(vols[-5:]) < sum(vols[-10:-5]) if sum(vols[-10:-5]) > 0 else False
+                if amp20 < 0.15 and vol_shrink:
+                    return {"washing": 0.5, "building": 0.3}
+                return {}
+            except Exception:
+                return {}
+        if stage_name in mapping:
+            p, base = mapping[stage_name]
+            return {p: round(base * min(stage_conf + 0.2, 1.0), 3)}
+        return {}
+
+    def _dim_asr(self, ts_code: str, df: pd.DataFrame) -> dict:
+        """维度4 ASR 筹码分布：298 号 4 条规则，else → 全 0（去 washing 兜底）"""
+        chip = self._chip_distribution_analysis(ts_code, df)
+        asr = chip.get("asr", 0.0)
+        peak_price = chip.get("peak_position", 0.0)
+        current = df["close"].values[-1]
+        rel = current / peak_price if peak_price > 0 else 1.0
+        if asr > 0.9 and rel < 0.95:
+            return {"lifting": 0.5}
+        if asr < 0.15 and abs(rel - 1.0) < 0.10:
+            return {"building": 0.6}
+        if asr < 0.15 and rel > 1.2:
+            return {"lifting": 0.5}
+        if asr > 0.3 and rel > 1.05:
+            return {"distributing": 0.5}
+        return {}   # 去 else→washing 兜底（312 §3.2 维度4）
+
+    def _dim_trend(self, df: pd.DataFrame) -> dict:
+        """维度5 趋势方向：三周期斜率连续强度"""
+        closes = df["close"].values
+        if len(closes) < 20:
+            return {}
+        def _slope(k):
+            if len(closes) < k + 1 or closes[k] <= 0:
+                return 0.0
+            return closes[-1] / closes[-k - 1] - 1
+        s5 = _slope(5)
+        s20 = _slope(20)
+        s60 = _slope(60) if len(closes) >= 60 else _slope(20)
+        up = sum(1 for x in (s5, s20, s60) if x > 0.01)
+        down = sum(1 for x in (s5, s20, s60) if x < -0.01)
+        strength = min(1.0, abs(s5) * 15)
+        if up >= 2:
+            return {"lifting": round(0.3 + 0.4 * strength, 3)}
+        if down >= 2:
+            return {"distributing": round(0.3 + 0.4 * strength, 3)}
+        return {}
+
+    def _dim_ssrp(self, df: pd.DataFrame) -> dict:
+        """维度6 主力成本锚定：现价 vs SSRP（真实主力成本，312 §3.2 维度6）
+
+        规则（2026-08-02 抽样校准：原 rel<0.95→building 触发面过宽 77%，收紧）：
+          rel < 0.85          → building（深度成本下方，安全边际大）
+          0.85 <= rel < 1.10  → washing（成本区/浅套，蓄势待变）
+          rel >= 1.20         → lifting（浮盈，拉升动力）
+          1.10 <= rel < 1.20  → 无明确阶段（不投票）
+        """
+        ssrp = self._last_chip_indicators.get("ssrp", 0)
+        if not ssrp:
+            return {}
+        current = df["close"].values[-1]
+        if current <= 0 or ssrp <= 0:
+            return {}
+        rel = current / ssrp
+        dev = abs(rel - 1.0)
+        if rel < 0.85:
+            # 成本下方 ≠ 建仓（主力可能被套/阴跌），降级为弱支持（校准：原 0.5+ 过宽）
+            return {"building": 0.3, "washing": 0.2}
+        if rel < 1.10:
+            return {"washing": 0.4, "building": 0.2}                        # 成本区/浅套
+        if rel >= 1.20:
+            return {"lifting": round(0.5 + 0.2 * min(1.0, dev), 3)}         # 浮盈
+        return {}                                                           # 1.10-1.20 模糊带
+
+    def _dim_chan(self, extra_tags: Dict) -> dict:
+        """维度8 缠论买点：buy_sell_point 标签（312 §3.2 维度8）
+
+        校准（2026-08-02）：单买点 ≠ 主力建仓，first_buy/third_buy 降为弱支持
+        （原 building 0.5 过宽，低位一买大量出现）
+        """
+        bsp = extra_tags.get("buy_sell_point")
+        if bsp in ("first_buy", "first_buy_p", "second_buy", "third_buy", "third_buy_a", "third_buy_b"):
+            return {"building": 0.3, "lifting": 0.1}
+        if bsp in ("first_sell", "first_sell_p", "second_sell", "third_sell"):
+            return {"distributing": 0.6}
+        return {}
+
+    def _consensus(self, dims: Dict, extra_tags: Dict):
+        """加权共识：阶段总分 → 主判定 + 连续置信度 + 分歧标记（312 §3.3/§四/§五）
+
+        修正维度（条件性）：capital_nature 调置信度
+        环境加权：情绪 climax 买入证据×0.7；热点板块 washing×0.7
+        """
+        phases = ["building", "washing", "lifting", "distributing"]
+        total = {p: 0.0 for p in phases}
+        w_sum = 0.0
+        active = 0
+        vote_ratio = {}
+        sp = extra_tags.get("sentiment_phase")
+        sh = extra_tags.get("sector_heat")
+        env_buy = 0.7 if sp == "climax" else 1.0
+        hot_wash = 0.7 if sh in ("top_10", "top_20") else 1.0
+        for name, vec in dims.items():
+            if not vec:
+                continue
+            active += 1
+            w = self._DIM_WEIGHTS.get(name, 1.0)
+            w_sum += w
+            vote_ratio[name] = vec
+            for p, v in vec.items():
+                f = env_buy if p in ("building", "lifting") else 1.0
+                if p == "washing":
+                    f *= hot_wash
+                total[p] += w * v * f
+
+        insufficient = self._last_dim_insufficient
+        if active == 0 or w_sum == 0:
+            kind = "unknown_insufficient" if insufficient else "unknown_no_evidence"
+            return PHASE_UNKNOWN, 0.0, False, {"unknown_kind": kind}
+
+        order = sorted(phases, key=lambda p: -total[p])
+        top, second = order[0], order[1]
+        t_sum = sum(total.values()) or 1.0
+        confidence = total[top] / t_sum
+        conflict = (total[top] - total[second]) / t_sum < 0.15
+        if conflict:
+            confidence *= 0.6
+
+        # 主判定确认门槛（2026-08-02 校准：判定条件不足 → 不判定）
+        # 支持阶段 p 的维度数 = 向量中 p 强度 > 0.25 的维度（跨维度 AND 确认，298号 ≥3 源思想的加权版）
+        def _supporters(p):
+            return [name for name, vec in dims.items() if vec.get(p, 0) > 0.25]
+        if len(_supporters(top)) < 2:
+            sup_second = _supporters(second)
+            if len(sup_second) >= 2 and total[second] > 0:
+                # 降级到次高阶段（若次高有 ≥2 维度确认）
+                top, second = second, top
+                confidence = total[top] / t_sum
+                conflict = (total[top] - total[second]) / t_sum < 0.15
+                if conflict:
+                    confidence *= 0.6
+            else:
+                # 两阶段均无 ≥2 维度确认 → 条件不足，不判定
+                return PHASE_UNKNOWN, 0.0, False, {"unknown_kind": "unknown_no_evidence",
+                                                   "reason": "support_insufficient"}
+
+        # 修正维度：资金性质（条件性）
+        cap_nature = extra_tags.get("capital_nature")
+        if cap_nature == "institutional" and not conflict:
+            confidence = min(1.0, confidence + 0.05)
+        elif cap_nature == "hot_money":
+            confidence *= 0.8
+        vote_ratio["_conflict"] = bool(conflict)
+        vote_ratio["_confidence"] = round(float(confidence), 4)
+        vote_ratio["_supporters"] = {top: len(_supporters(top))}
+        return top, confidence, conflict, vote_ratio
+
+    def _run_trading_phase_detector_v2(self, ts_code: str, df: pd.DataFrame):
+        """TradingPhaseDetector 阶段评分（返回 phase + scores，供维度1 阶段分布）"""
+        if len(df) < 60:
+            self._last_dim_insufficient = True
+            return None
+        try:
+            from app.data.chip_indicators import ChipIndicators
+            from app.engine.chip_strategy_impl import TradingPhaseDetector
+
+            chip_inds = ChipIndicators()
+            detector = TradingPhaseDetector(chip_inds)
+
+            estimator = self._get_chip_estimator()
+            chip_dist, min_p, max_p, step = estimator.estimate(df)
+            chip_bins = []
+            if step > 0:
+                total = chip_dist.sum() or 1
+                chip_bins = [
+                    {"price_bin": round(min_p + i * step, 2),
+                     "chip_ratio": float(chip_dist[i] / total)}
+                    for i in range(len(chip_dist))
+                ]
+
+            indicators = chip_inds.calculate_all_indicators(
+                chip_bins, df["close"].values[-1], kline_data=df
+            )
+            self._last_chip_indicators = indicators or {}
+
+            moneyflow_data = None
+            try:
+                moneyflow_data = self._get_dm().get_cached_moneyflow(ts_code)
+            except Exception:
+                pass
+
+            phase_info = detector.detect_phase(
+                df, chip_bins, indicators, moneyflow_data=moneyflow_data
+            )
+            scores = phase_info.get("scores") or {}
+            return phase_info.get("phase", ""), scores
+        except Exception:
+            return None
+
+    def _run_stage_detector_v2(self, df: pd.DataFrame):
+        """StageDetector 阶段（返回 stage 名 + 置信度，供维度3）"""
+        try:
+            from app.engine.framework.volume_price_strategy import StageDetector
+            detector = StageDetector()
+            stage = detector.detect(df)
+            return stage.name, float(stage.confidence or 0.0)
+        except Exception:
+            return None
 
     # ═══════════════════════════════════════════════════════════
     # Step 1: 价格位置判定

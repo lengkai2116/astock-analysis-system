@@ -124,18 +124,11 @@ class EnhancedCacheManager:
                 PRIMARY KEY (ts_code, trade_date)
             )
         """)
-        self._execute("""
-            CREATE TABLE IF NOT EXISTS indicator_cache (
-                ts_code TEXT, trade_date TEXT, indicator_name TEXT,
-                value REAL, cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (ts_code, trade_date, indicator_name)
-            )
-        """)
-        # ── 宽表指标缓存（替代 EAV 格式，减少 93% 行数）──
+        # ── 宽表指标缓存（替代旧 EAV 格式 indicator_cache，已于 2026-08-01 删除）──
         self._execute("""
             CREATE TABLE IF NOT EXISTS indicator_ma (
                 ts_code TEXT, trade_date TEXT,
-                ma5 REAL, ma10 REAL, ma20 REAL,
+                ma5 REAL, ma10 REAL, ma20 REAL, ma30 REAL, ma60 REAL,
                 vol_ma5 REAL, vol_ma10 REAL,
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, trade_date)
@@ -576,7 +569,6 @@ class EnhancedCacheManager:
             "CREATE INDEX IF NOT EXISTS idx_stk_holder_ts ON stk_holder_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_concept_ts ON concept_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_index_member_code ON index_member_cache(index_code)",
-            "CREATE INDEX IF NOT EXISTS idx_indicator_ts_name ON indicator_cache(ts_code, indicator_name)",
             "CREATE INDEX IF NOT EXISTS idx_factor_ts_name ON factor_cache(ts_code, factor_name)",
             "CREATE INDEX IF NOT EXISTS idx_sentiment_pool_date ON sentiment_pool_cache(trade_date)",
             "CREATE INDEX IF NOT EXISTS idx_sentiment_pool_ts ON sentiment_pool_cache(ts_code)",
@@ -626,7 +618,7 @@ class EnhancedCacheManager:
                 sentiment_phase    TEXT,
                 sector_heat        TEXT,
                 fina_health        TEXT,
-                hold_period        TEXT,
+                opportunity_type   TEXT,
                 trend_alignment    TEXT,
                 price_position     TEXT,
                 fund_flow          TEXT,
@@ -635,9 +627,8 @@ class EnhancedCacheManager:
                 volatility_level   TEXT,
                 dividend_yield     REAL,
                 composite_rating   REAL,
-                hold_period        TEXT,
-                hold_period_days   TEXT,
-                hold_status_type   TEXT,
+                opportunity_label  TEXT,
+                evidence_count     INTEGER,
                 snapshot_date      TEXT DEFAULT (date('now'))
             )
         """)
@@ -669,6 +660,7 @@ class EnhancedCacheManager:
                 ts_code TEXT PRIMARY KEY,
                 code TEXT, name TEXT, price REAL, open REAL, high REAL, low REAL,
                 prev_close REAL, volume INTEGER, amount REAL,
+                change REAL, change_pct REAL,
                 bid1 REAL, ask1 REAL, bid_vol1 INTEGER, ask_vol1 INTEGER,
                 bid2 REAL, ask2 REAL, bid_vol2 INTEGER, ask_vol2 INTEGER,
                 bid3 REAL, ask3 REAL, bid_vol3 INTEGER, ask_vol3 INTEGER,
@@ -760,38 +752,12 @@ class EnhancedCacheManager:
 
     # ── 指标 ─────────────────────────────────────────────────
 
-    def get_indicator_data(self, ts_code, indicator_name):
-        self.cache_stats['total_requests'] += 1
-        df = self._query_df(
-            "SELECT * FROM indicator_cache WHERE ts_code = ? AND indicator_name = ? ORDER BY trade_date",
-            [ts_code, indicator_name]
-        )
-        if not df.empty:
-            self.cache_stats['hits_duckdb'] += 1
-        else:
-            self.cache_stats['misses'] += 1
-        return df
-
-    def cache_indicator(self, ts_code, trade_date, indicator_name, value):
-        with self._write_lock:
-            self._execute(
-                "INSERT OR REPLACE INTO indicator_cache (ts_code, trade_date, indicator_name, value) VALUES (?, ?, ?, ?)",
-                [ts_code, trade_date, indicator_name, value]
-            )
-            self.conn.commit()
-
-    def batch_cache_indicators(self, records):
-        if not records:
-            return
-        with self._write_lock:
-            self._insert_from_df('indicator_cache', pd.DataFrame(records))
-
     def cache_indicators_wide(self, ts_code: str, df: 'pd.DataFrame'):
         """批量写入宽表指标（df 需含 trade_date 及全部指标列）"""
         if df.empty:
             return
         with self._write_lock:
-            ma_cols = {'trade_date', 'ma5', 'ma10', 'ma20', 'vol_ma5', 'vol_ma10'}
+            ma_cols = {'trade_date', 'ma5', 'ma10', 'ma20', 'ma30', 'ma60', 'vol_ma5', 'vol_ma10'}
             if ma_cols.issubset(set(df.columns)):
                 ma_df = df[list(ma_cols)].copy()
                 ma_df['ts_code'] = ts_code
@@ -812,7 +778,7 @@ class EnhancedCacheManager:
     def get_indicators_wide(self, ts_code: str) -> 'pd.DataFrame':
         """读取宽表指标数据，合并 3 张表为 1 个 DataFrame"""
         ma = self._query_df(
-            "SELECT ts_code, trade_date, ma5, ma10, ma20, vol_ma5, vol_ma10 "
+            "SELECT ts_code, trade_date, ma5, ma10, ma20, ma30, ma60, vol_ma5, vol_ma10 "
             "FROM indicator_ma WHERE ts_code = ? ORDER BY trade_date", [ts_code])
         macd = self._query_df(
             "SELECT trade_date, macd_dif, macd_dea, macd_hist "
@@ -841,7 +807,7 @@ class EnhancedCacheManager:
     def get_cache_stats(self):
         try:
             daily_count = self.conn.execute("SELECT COUNT(*) FROM daily_cache").fetchone()[0]
-            # 用 indicator_ma 宽表估算指标总量（避免对 indicator_cache 8567万行做精确 COUNT，耗时 30s+）
+            # 用 indicator_ma 宽表估算指标总量（ma/macd/other 三宽表近似）
             indicator_count = 0
             try:
                 row = self.conn.execute(
@@ -851,10 +817,6 @@ class EnhancedCacheManager:
                     indicator_count = int(row[0]) * 3  # ma/macd/other 三宽表近似
             except Exception:
                 pass
-            if indicator_count == 0:
-                indicator_count = self.conn.execute(
-                    "SELECT COUNT(*) FROM indicator_cache"
-                ).fetchone()[0]
             return pd.DataFrame([{
                 'duckdb_daily_count': daily_count,
                 'duckdb_indicator_count': indicator_count,
@@ -1592,6 +1554,15 @@ class EnhancedCacheManager:
     def cache_stk_holder_data(self, df):
         if df.empty:
             return
+        # 列名映射（修复 2026-08-02：Tushare stk_holdernumber 返回 holder_num，
+        # 表结构为 holder_number——不映射则股东户数数据全空）
+        if 'holder_num' in df.columns and 'holder_number' not in df.columns:
+            df = df.rename(columns={'holder_num': 'holder_number'})
+        # 过滤无数据的报表日行（holder_number NaN）
+        if 'holder_number' in df.columns:
+            df = df[df['holder_number'].notna()]
+        if df.empty:
+            return
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
@@ -1764,6 +1735,7 @@ class EnhancedCacheManager:
             try:
                 cols = ['ts_code', 'code', 'name', 'price', 'open', 'high', 'low',
                     'prev_close', 'volume', 'amount',
+                    'change', 'change_pct',
                     'bid1', 'ask1', 'bid_vol1', 'ask_vol1',
                     'bid2', 'ask2', 'bid_vol2', 'ask_vol2',
                     'bid3', 'ask3', 'bid_vol3', 'ask_vol3',
@@ -1876,12 +1848,6 @@ class EnhancedCacheManager:
         self._execute("DELETE FROM minute_kline_cache WHERE trade_date < ?", [cutoff])
         self.conn.commit()
 
-    def clean_indicator_cache(self, cutoff: str):
-        """清理 indicator_cache 中早于 cutoff 的记录（cutoff 格式 YYYYMMDD）"""
-        self._execute("DELETE FROM indicator_cache WHERE trade_date < ?", [cutoff])
-        self.conn.commit()
-        logger.info(f"清理 indicator_cache (cutoff={cutoff})")
-
     def request_data(self, task_type: str, ts_code: str = None) -> int:
         """写 sync_requests 队列表：通知 data_daemon 异步补采
 
@@ -1986,10 +1952,24 @@ class EnhancedCacheManager:
             'time_rhythm':          ('environment','TimeRhythmEngine'),
             # ── derived 衍生（295号§3.5 signal_strength） ──
             'signal_strength':      ('derived',    'PrecomputeL2Labels'),
-            # ── 持有周期（306号§四.2） ──
-            'hold_period':          ('derived',    'PrecomputeL2Labels'),
-            'hold_period_days':     ('derived',    'PrecomputeL2Labels'),
-            'hold_status_type':     ('derived',    'PrecomputeL2Labels'),
+            # ── 机会元信息（307号§3.1：七维画像 + 类型摘要 + 证据计数） ──
+            'opportunity_type':     ('derived',    'PrecomputeL2Labels'),
+            'opportunity_label':    ('derived',    'PrecomputeL2Labels'),
+            'opportunity_profile':  ('derived',    'PrecomputeL2Labels'),
+            'evidence_count':       ('derived',    'PrecomputeL2Labels'),
+            'confidence':           ('derived',    'PrecomputeL2Labels'),
+            # ── 闸门2右侧确认（308号/309号 S3） ──
+            'right_side_confirm':   ('derived',    'PrecomputeL2Labels'),
+            'confirm_evidence':     ('derived',    'PrecomputeL2Labels'),
+            # ── 三元框架入场/退出条件（307号§3.2/§3.3） ──
+            'entry_signals':        ('derived',    'PrecomputeL2Labels'),
+            'exit_conditions':      ('derived',    'PrecomputeL2Labels'),
+            # ── 主力阶段判定（312号：8 维度加权共识，分歧显性化） ──
+            'phase_conflict':       ('derived',    'PhaseDetectionEngine'),
+            'phase_vote_ratio':     ('derived',    'PhaseDetectionEngine'),
+            # ── 主力在场判定（313号 §十：行为证据主导） ──
+            'main_force_presence':  ('derived',    'PrecomputeL2Labels'),
+            'presence_evidence':    ('derived',    'PrecomputeL2Labels'),
         }
 
         # 标准化 tags 格式
@@ -2170,10 +2150,19 @@ class EnhancedCacheManager:
             items.append({
                 'ts_code': r['ts_code'],
                 'name': r['name'],
-                'industry': r.get('industry', ''),
+                'industry': _sv('industry') or '',
                 'price': round(float(r['close']), 2) if pd.notna(r.get('close')) else 0,
                 'pct_change': round(float(r['pct_chg']), 2) if pd.notna(r.get('pct_chg')) else 0,
+                'open': float(r['open']) if pd.notna(r.get('open')) else None,
+                'high': float(r['high']) if pd.notna(r.get('high')) else None,
+                'low': float(r['low']) if pd.notna(r.get('low')) else None,
+                'amplitude': float(r['amplitude']) if pd.notna(r.get('amplitude')) else None,
                 'market_cap': round(float(r['total_mv']), 2) if pd.notna(r.get('total_mv')) else 0,
+                'pe': float(r['pe']) if pd.notna(r.get('pe')) else None,
+                'pb': float(r['pb']) if pd.notna(r.get('pb')) else None,
+                'amount': float(r['amount']) if pd.notna(r.get('amount')) else None,
+                'turnover_rate': float(r['turnover_rate']) if pd.notna(r.get('turnover_rate')) else None,
+                'circ_mv': float(r['circ_mv']) if pd.notna(r.get('circ_mv')) else None,
                 'dividend_yield': dy,
                 'signal_strength': float(r['signal_strength']) if pd.notna(r.get('signal_strength')) else 0,
                 'valuation_level': _sv('valuation_level'),
@@ -2181,9 +2170,17 @@ class EnhancedCacheManager:
                 'sentiment_phase': _sv('sentiment_phase'),
                 'sector_heat': _sv('sector_heat'),
                 'fina_health': _sv('fina_health'),
-                'hold_period': _sv('hold_period'),
-                'hold_period_days': _sv('hold_period_days'),
-                'hold_status_type': _sv('hold_status_type'),
+                'opportunity_type': _sv('opportunity_type'),
+                'opportunity_label': _sv('opportunity_label'),
+                'evidence_count': int(r['evidence_count']) if pd.notna(r.get('evidence_count')) else None,
+                'right_side_confirm': _sv('right_side_confirm'),
+                'main_force_presence': _sv('main_force_presence'),
+                'presence_evidence': _sv('presence_evidence'),
+                'confirm_evidence': _sv('confirm_evidence'),
+                'consensus_rate': float(r['consensus_rate']) if pd.notna(r.get('consensus_rate')) else None,
+                'opportunity_profile': _sv('opportunity_profile'),
+                'entry_signals': _sv('entry_signals'),
+                'exit_conditions': _sv('exit_conditions'),
                 'val_deviation': float(r['valuation_deviation']) if pd.notna(r.get('valuation_deviation')) else None,
                 'tags': {
                     'trend_alignment': _sv('trend_alignment'),

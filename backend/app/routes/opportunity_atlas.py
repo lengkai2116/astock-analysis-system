@@ -137,7 +137,7 @@ def _build_stock_item(ts_code: str, name_map: dict, industry_map: dict,
     _promoted_keys = {
         'signal_strength', 'valuation_level', 'main_force_phase',
         'sentiment_phase', 'sector_heat', 'fina_health',
-        'hold_period', 'valuation_deviation',
+        'opportunity_type', 'opportunity_label', 'valuation_deviation',
     }
     return {
         'ts_code': ts_code, 'name': name,
@@ -149,7 +149,8 @@ def _build_stock_item(ts_code: str, name_map: dict, industry_map: dict,
         'sentiment_phase': tags.get('sentiment_phase'),
         'sector_heat': tags.get('sector_heat'),
         'fina_health': tags.get('fina_health'),
-        'hold_period': tags.get('hold_period'),
+        'opportunity_type': tags.get('opportunity_type'),
+        'opportunity_label': tags.get('opportunity_label'),
         'val_deviation': val_dev,
         'tags': {k: v for k, v in tags.items() if k not in _promoted_keys},
         'snapshot': snapshot is not None,
@@ -160,7 +161,12 @@ def _build_response(mode: str, items: list[dict]) -> dict:
     """按行业分组组装最终响应"""
     groups_dict: dict[str, list] = {}
     for item in items:
-        industry = item.get('industry', '') or '其他'
+        # industry 归一化：NaN/None/非字符串 → '其他'（否则 sorted 混合类型抛 TypeError）
+        raw_industry = item.get('industry')
+        if isinstance(raw_industry, str) and raw_industry.strip() and raw_industry != 'nan':
+            industry = raw_industry.strip()
+        else:
+            industry = '其他'
         groups_dict.setdefault(industry, []).append(item)
     groups_list = [
         {'industry': k, 'stocks': v}
@@ -168,6 +174,15 @@ def _build_response(mode: str, items: list[dict]) -> dict:
     ]
     tagged = sum(1 for it in items if it.get('signal_strength', 0) > 0)
     coverage = tagged / len(items) if items else 0.0
+    # 313号：潜力快照日期（前端时间标注：潜力基于快照、时机截至实时）
+    _snap_date = None
+    try:
+        from app.data import get_ecm
+        _r = get_ecm().conn.execute("SELECT MAX(snapshot_date) FROM treemap_snapshot").fetchone()
+        if _r and _r[0]:
+            _snap_date = str(_r[0])
+    except Exception:
+        pass
     return {
         'code': 0,
         'data': {
@@ -176,6 +191,7 @@ def _build_response(mode: str, items: list[dict]) -> dict:
             'signal_strength_fallback': coverage < 0.8,
             'data_status': 'pre_compute' if coverage < 0.8 else 'complete',
             'generated_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
+            'snapshot_date': _snap_date,   # 313号：潜力快照日期（时间标注）
         },
     }
 
@@ -260,8 +276,8 @@ def treemap():
         # 补充行业信息（快照表有 industry 字段）
         result = _build_response(mode, items)
 
-    except Exception:
-        logger.warning('treemap_snapshot 不可用，回退到逐表查询')
+    except Exception as _snap_exc:
+        logger.warning(f'treemap_snapshot 不可用，回退到逐表查询: {type(_snap_exc).__name__}: {_snap_exc}')
         items = _fallback_legacy_treemap(mode, ts_codes, dm)
         result = _build_response(mode, items)
 

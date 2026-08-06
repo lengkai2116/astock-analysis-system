@@ -4066,14 +4066,16 @@ class VolumePriceStrategy:
                 else:
                     tags['ma_alignment'] = 'mixed'
 
-            # volume_price_fit: 量价协调性
+            # volume_price_fit: 量价协调性（308号硬缺口④阈值调优，与 data_daemon._add_vp_simple_tags 对齐）
             if len(df) >= 20:
                 ret_5 = df['close'].pct_change(5).iloc[-1] if len(df) >= 5 else 0
                 vol_ratio = df['vol'].iloc[-5:].mean() / max(df['vol'].iloc[-20:-5].mean(), 1)
-                if ret_5 > 0.02 and vol_ratio > 1.2:
-                    tags['volume_price_fit'] = 'healthy'
-                elif ret_5 < -0.02 and vol_ratio > 1.2:
-                    tags['volume_price_fit'] = 'diverging'
+                if ret_5 > 0.02 and vol_ratio > 1.15:
+                    tags['volume_price_fit'] = 'healthy'       # 放量上涨
+                elif ret_5 < -0.02 and vol_ratio < 0.9:
+                    tags['volume_price_fit'] = 'healthy'       # 缩量下跌（卖压减轻）
+                elif ret_5 > 0.02 and vol_ratio < 0.8:
+                    tags['volume_price_fit'] = 'diverging'     # 显著缩量上涨(背离)
                 else:
                     tags['volume_price_fit'] = 'neutral'
 
@@ -4092,11 +4094,12 @@ class VolumePriceStrategy:
                 else:
                     tags['gap_type'] = 'none'
 
-            # breakout_attempts: 近20日尝试突破次数
+            # breakout_attempts: 近20日创出新高次数（L9修复：原 (recent_high==recent_high).sum() 恒真→恒10）
             if len(df) >= 20:
-                high_20 = df['high'].rolling(20).max()
-                recent_high = high_20.iloc[-20:]
-                tags['breakout_attempts'] = min(int((recent_high == recent_high).sum()), 10)
+                recent = df['high'].iloc[-20:]
+                # 严格大于此前累积最高才算一次突破（平台期相等不计数）
+                prev_max = recent.shift(1).cummax()
+                tags['breakout_attempts'] = min(int((recent > prev_max).sum()), 10)
         except Exception:
             pass
         return tags

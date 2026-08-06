@@ -239,6 +239,16 @@ def _is_trading_time() -> bool:
         return True
 
 
+def _is_market_day(dt=None) -> bool:
+    """是否为交易日（非周末/节假日）。T25-F3：首次采集仅交易日执行。"""
+    try:
+        from app.utils.trading_hours import is_holiday
+        from datetime import datetime
+        return not is_holiday(dt or datetime.now())
+    except ImportError:
+        return True
+
+
 # ── 工具函数 ──────────────────────────────────────────────
 
 def _safe_float(val) -> float:
@@ -255,12 +265,52 @@ def _ts_code(code: str, market: int) -> str:
 
 
 def _get_a_share_codes() -> List[str]:
-    """获取所有 A 股代码列表（沪深主板/中小板/创业板/科创板）"""
+    """获取所有 A 股代码列表（沪深主板/中小板/创业板/科创板）
+
+    T25-F2 修复：
+    1. 优先从 app.db stocks 表读取全市场 A 股（5530 只，含创业板/科创板，无债券）
+       —— mootdx stocks() 源不含创业板/科创板，且含债券/基金/逆回购等垃圾代码。
+    2. 回退：mootdx stocks() + 精确过滤（仅 000/001/002/003/300/301/600/601/603/605/688，
+       排除 '2' 开头债券/逆回购、'1'/'5' 基金、'8' 北交所、'7' 新股）。
+    """
+    # 首选：app.db stocks 表（权威全市场 A 股列表）
+    try:
+        import sqlite3 as _sqlite3
+        import os as _os
+        # mootdx_collector.py → data → app → backend → 项目根
+        _project = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+        _db = _os.path.join(_project, 'data', 'app.db')
+        if _os.path.exists(_db):
+            _conn = _sqlite3.connect(_db)
+            try:
+                rows = _conn.execute(
+                    "SELECT ts_code FROM stocks WHERE ts_code LIKE '%.SH' OR ts_code LIKE '%.SZ'"
+                ).fetchall()
+                if rows:
+                    return sorted(r[0].split('.')[0] for r in rows)
+            finally:
+                _conn.close()
+    except Exception:
+        pass
+
+    # 回退：mootdx stocks() + 精确过滤
     name_map = _refresh_stock_name_map()
-    return [
-        c for c in name_map
-        if isinstance(c, str) and len(c) == 6 and c[0] in ('0', '2', '3', '6')
-    ]
+
+    def _is_a_share(c: str) -> bool:
+        if not isinstance(c, str) or len(c) != 6:
+            return False
+        if c[0] == '0':                                   # 深市 000/001/002/003
+            return True
+        if c[0] == '3' and c[1] in ('0', '1'):            # 创业板 300/301
+            return True
+        if c[0] == '6':
+            if c[1] == '8' and c[2] == '8':               # 科创板 688
+                return True
+            if c[1] in ('0', '3', '5'):                   # 沪市 600/601/603/605
+                return True
+        return False
+
+    return [c for c in name_map if _is_a_share(c)]
 
 
 # ══════════════════════════════════════════════════════════
@@ -1176,11 +1226,14 @@ class _MootdxThread(threading.Thread):
     def run(self):
         logger.info(f"[{self.name}] 线程启动，间隔={self.interval}s，初始延迟={self._initial_delay}s")
         time.sleep(self._initial_delay)
-        # 首次采集：无论是否交易时段都执行一次，确保盘后也有缓存数据
+        # 首次采集：仅在交易日执行（T25-F3 修复：周末/节假日不采集，
+        # 否则写入非交易日的无意义快照）。交易日盘后（15:00 后）仍执行一次，
+        # 保留当日最终快照。
         try:
-            self.collect()
-            self._collect_count += 1
-            self._consecutive_failures = 0
+            if not self.check_trading or _is_market_day():
+                self.collect()
+                self._collect_count += 1
+                self._consecutive_failures = 0
         except Exception:
             pass
         # 之后的采集仅在交易时段执行

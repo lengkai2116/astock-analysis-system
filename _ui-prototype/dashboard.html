@@ -41,13 +41,8 @@
 .chart-card .chart-title { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-bottom: var(--space-12); }
 .chart-box { height: 260px; }
 .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:var(--space-16); }
-/* 涨幅排行 + 信号汇总 */
+/* 涨幅排行 */
 .rank-table { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
-.signal-summary { display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--space-10); margin-top: var(--space-12); }
-.signal-item { text-align: center; padding: var(--space-10); background: var(--bg-subtle); border-radius: var(--radius-sm); }
-.signal-item .count { font-size: 20px; font-weight: 700; }
-.signal-item .s-label { font-size: 11px; color: var(--text-muted); margin-top: var(--space-2); }
-.signal-note { font-size: 11px; color: var(--text-muted); text-align: right; margin-top: var(--space-6); }
 
 /* ── 响应式 ── */
 body { overflow-x:hidden; }
@@ -55,7 +50,6 @@ body { overflow-x:hidden; }
 @media (max-width:1100px){
   .index-grid { grid-template-columns:repeat(2,1fr); }
   .grid-2 { grid-template-columns:1fr; }
-  .signal-summary { grid-template-columns:repeat(3,1fr); }
 }
 @media (max-width:700px){
   .index-grid { grid-template-columns:1fr; }
@@ -63,7 +57,6 @@ body { overflow-x:hidden; }
   .radar-header { flex-wrap:wrap; }
   .page-header { flex-direction:column; align-items:flex-start; gap:var(--space-8); }
   .main-content { padding:var(--space-12); }
-  .signal-summary { grid-template-columns:repeat(2,1fr); }
 }
 
 .table { width: 100%; border-collapse: collapse; }
@@ -172,18 +165,7 @@ body { overflow-x:hidden; }
           <span style="font-weight:600;">🎯 策略信号汇总</span>
           <span style="font-size:12px;color:var(--text-muted);">来自 Screener L3 聚合</span>
         </div>
-        <div class="signal-summary" id="signal-summary">
-          <div class="signal-item"><div class="count up" id="sig-bullish">--</div><div class="s-label">看多信号</div></div>
-          <div class="signal-item"><div class="count down" id="sig-bearish">--</div><div class="s-label">看空信号</div></div>
-          <div class="signal-item"><div class="count" id="sig-chanlun" style="color:var(--signal-watch);">--</div><div class="s-label">缠论信号</div></div>
-          <div class="signal-item"><div class="count" id="sig-chip" style="color:var(--color-brand-500);">--</div><div class="s-label">筹码信号</div></div>
-          <div class="signal-item"><div class="count flat" id="sig-ai">--</div><div class="s-label">AI 研判</div></div>
-        </div>
-        <div style="margin-top:var(--space-12);padding:var(--space-10);background:var(--bg-subtle);border-radius:var(--radius-sm);">
-          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);margin-bottom:var(--space-4);"><span>🔥 共振信号</span><span class="up" id="sig-resonance">--</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);"><span>⚡ 高置信度</span><span id="sig-highconf" style="color:var(--color-brand-500);">--</span></div>
-        </div>
-        <div class="signal-note">数据源：Screener L1→L2→L3 | 场景A输出聚合</div>
+        <!-- 2026-08-04：移除伪信号面板（原 signal_summary 为 daily_cache 粗算计数，违反 §13 数据真实性规则） -->
       </div>
     </div>
 
@@ -257,7 +239,6 @@ function loadRadar(){
     .then(function(d){
       if(!d.success||!d.data)return;
       applyRadar(d.data);
-      applySignals(d.data.signal_summary||{});
     })
     .catch(function(e){console.warn('dashboard/summary 加载失败',e);});
 }
@@ -411,39 +392,8 @@ function renderGainers(list){
 }
 
 // ===== 8. 策略信号汇总 =====
-// ⚠️ MOCK_SIGNALS 仅供开发/原型测试使用 — 生产环境不得调用（§13.5）
-var MOCK_SIGNALS={bullish:12,bearish:8,chanlun:15,chip:7,ai:5,resonance:'3 个策略同时看多',highconf:'置信度 ≥ 85%'};
-function loadSignalSummary(){
-  // 优先尝试 POST /api/v3/screener/run dashboard模式，降级到 GET /dashboard/summary
-  fetch(API+'/screener/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'dashboard'})})
-    .then(function(r){return r.json();})
-    .then(function(d){
-      if(d.success&&d.data&&d.data.signal_summary)applySignals(d.data.signal_summary);
-      else throw new Error('no signal_summary');
-    })
-    .catch(function(){
-      // 降级: 尝试 /dashboard/summary 中的 signal_summary
-      _cachedFetch(API+'/dashboard/summary',60)
-        .then(function(d){
-          if(d.success&&d.data&&d.data.signal_summary)applySignals(d.data.signal_summary);
-          else throw new Error('fallback no data');
-        })
-        .catch(function(e2){
-          console.warn('signal_summary 加载失败，使用Mock数据',e2);
-          applySignals(MOCK_SIGNALS);
-        });
-    });
-}
-function applySignals(s){
-  var el=function(id){return document.getElementById(id);};
-  if(s.bullish!==undefined&&el('sig-bullish'))el('sig-bullish').textContent=s.bullish;
-  if(s.bearish!==undefined&&el('sig-bearish'))el('sig-bearish').textContent=s.bearish;
-  if(s.chanlun!==undefined&&el('sig-chanlun'))el('sig-chanlun').textContent=s.chanlun;
-  if(s.chip!==undefined&&el('sig-chip'))el('sig-chip').textContent=s.chip;
-  if(s.ai_judgment!==undefined&&el('sig-ai'))el('sig-ai').textContent=s.ai_judgment;
-  if(s.resonance!==undefined&&el('sig-resonance'))el('sig-resonance').textContent=s.resonance;
-  if(s.highconf!==undefined&&el('sig-highconf'))el('sig-highconf').textContent=s.highconf;
-}
+// 2026-08-04 移除：原 signal_summary 为 daily_cache 粗算伪信号（§13 违规），
+// MOCK_SIGNALS / loadSignalSummary / applySignals 一并移除；面板见 HTML 占位注释
 
 // ===== 启动（聚合加载，降级到独立请求）=====
 var colorMap={bullish:'#EF4444',bearish:'#22C55E',watch:'#F59E0B'};
@@ -472,7 +422,6 @@ function loadDashboardFull(){
       if(dd.market_volume) renderVolumeChart(dd.market_volume);
       if(dd.dashboard_summary){
         applyRadar(dd.dashboard_summary);
-        applySignals(dd.dashboard_summary.signal_summary||{});
       }
       if(dd.moneyflow_summary) renderMoneyflow(dd.moneyflow_summary);
       if(dd.sector_changes) renderSectorChart(dd.sector_changes);
@@ -488,7 +437,6 @@ function loadDashboardFull(){
       loadSectorChanges();
       loadSectorMoneyflow();
       loadTopGainers();
-      loadSignalSummary();
     });
 }
 

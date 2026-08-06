@@ -113,9 +113,10 @@ help:
 
 # ============ 代码质量 & CI ============
 
-PYTHON = backend/.venv/bin/python
-RUFF = backend/.venv/bin/ruff
-MYPY = backend/.venv/bin/mypy
+# L8修复：目标在 cd backend 后执行，路径用相对 backend 的 .venv（此前 backend/.venv 在 cd 后失效）
+PYTHON = .venv/bin/python
+RUFF = .venv/bin/ruff
+MYPY = .venv/bin/mypy
 
 ## Python 代码检查
 lint:

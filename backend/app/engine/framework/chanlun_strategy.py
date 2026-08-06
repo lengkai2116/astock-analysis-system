@@ -1811,8 +1811,9 @@ class BuySellPointDetector:
 
         if existing_buy:
             first_buy = existing_buy[0]
-            first_buy_idx = first_buy.position.get('idx', 0)
-            first_buy_price = first_buy.position.get('price', 0)
+            first_buy_pos = first_buy.position or {}   # position 可能为 None（2026-08-04 修复）
+            first_buy_idx = first_buy_pos.get('idx', 0)
+            first_buy_price = first_buy_pos.get('price', 0)
             base_confidence = min(0.8 * first_buy.confidence, 0.75)
 
             # 只找第一类买点后的第一个有效配对
@@ -1840,8 +1841,9 @@ class BuySellPointDetector:
 
         if existing_sell:
             first_sell = existing_sell[0]
-            first_sell_idx = first_sell.position.get('idx', 0)
-            first_sell_price = first_sell.position.get('price', 0)
+            first_sell_pos = first_sell.position or {}  # position 可能为 None（2026-08-04 修复：P4 缠论静默失败根因）
+            first_sell_idx = first_sell_pos.get('idx', 0)
+            first_sell_price = first_sell_pos.get('price', 0)
             base_confidence = min(0.8 * first_sell.confidence, 0.75)
 
             # 只找第一类卖点后的第一个有效配对
@@ -1965,7 +1967,7 @@ class BuySellPointDetector:
             return first_buy
 
         # 直接使用背驰位置的价格作为入场参考
-        entry_price = first_buy.position.get('price', 0)
+        entry_price = (first_buy.position or {}).get('price', 0)  # position 可能为 None（2026-08-04 修复）
 
         details = divergence.details or {}
         if divergence.type == 'trend_backtesting':
@@ -2005,7 +2007,7 @@ class BuySellPointDetector:
                 'step': 1,
                 'action': '卖出1/3',
                 'condition': '趋势背驰出现',
-                'price': float(divergence.position.get('price', current_price)),
+                'price': float((divergence.position or {}).get('price', current_price)),  # position 可能为 None（2026-08-04 修复）
                 'confidence': 0.80,
                 'reason': f"本级别{divergence.type}背驰出现, 背驰力度={divergence.confidence:.2f}",
             })
@@ -2371,15 +2373,27 @@ def analyze_chanlun(df: pd.DataFrame, config: Dict = None) -> Dict:
 
 
 def get_chanlun_tags(result: dict) -> dict:
-    """从缠论分析结果中提取 buy_sell_point 标签"""
+    """从缠论分析结果中提取 buy_sell_point 标签
+
+    右侧确认优先（309号 S0 硬缺口②）：二买/三买是右侧信号（入场扳机），
+    一买是左侧信号（下跌末端抄底），仅作观察。因此提取优先级：
+      buy: second_buy > third_buy > first_buy > first_buy_p
+      sell: second_sell > third_sell > first_sell > first_sell_p
+    """
     tags = {}
     try:
         buy_points = result.get('buy_points', [])
         sell_points = result.get('sell_points', [])
+        # 买点：右侧优先（second_buy > third_buy > first_buy > first_buy_p）
         if buy_points:
-            tags['buy_sell_point'] = buy_points[0].type if hasattr(buy_points[0], 'type') else 'none'
+            _rank = {'second_buy': 0, 'third_buy': 1, 'third_buy_a': 1, 'third_buy_b': 1,
+                     'first_buy': 2, 'first_buy_p': 3}
+            best = min(buy_points, key=lambda p: _rank.get(getattr(p, 'type', ''), 9))
+            tags['buy_sell_point'] = best.type if hasattr(best, 'type') else 'none'
         elif sell_points:
-            tags['buy_sell_point'] = sell_points[0].type if hasattr(sell_points[0], 'type') else 'none'
+            _rank = {'second_sell': 0, 'third_sell': 1, 'first_sell': 2, 'first_sell_p': 3}
+            best = min(sell_points, key=lambda p: _rank.get(getattr(p, 'type', ''), 9))
+            tags['buy_sell_point'] = best.type if hasattr(best, 'type') else 'none'
         else:
             tags['buy_sell_point'] = 'none'
     except Exception:

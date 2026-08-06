@@ -14,6 +14,7 @@ valuation_level 中基于 PE/PB 百分位（daily_basic 日频数据）的部分
 from __future__ import annotations
 
 import logging
+import os
 
 import pandas as pd
 
@@ -21,8 +22,9 @@ from app.data.mixins import DataAwareMixin
 
 logger = logging.getLogger(__name__)
 
-# 10年期国债收益率（百分比），季频更新即可
-CN_10Y_BOND_YIELD_PCT = 2.5
+# 10年期国债收益率（百分比）— 环境变量可配 CN_10Y_BOND_YIELD（315号方案阶段1）
+# 2026-08 中国 10Y 国债实际约 1.6-1.8%，默认 1.7（原硬编码 2.5 为 2022 前水平，致现金流锚系统性偏负）
+CN_10Y_BOND_YIELD_PCT = float(os.getenv('CN_10Y_BOND_YIELD', '1.7'))
 
 # 申万一级行业 → 七大分类
 INDUSTRY_CATEGORY: dict[str, str] = {
@@ -65,15 +67,15 @@ INDUSTRY_CATEGORY: dict[str, str] = {
     '综合': '微小/亏损',
 }
 
-# 七大权重配置: (资产锚, 收益锚, 现金流锚, 修正锚)
-CATEGORY_WEIGHTS: dict[str, tuple[float, float, float, float]] = {
-    '蓝筹':     (0.15, 0.40, 0.30, 0.15),
-    '成长':     (0.10, 0.35, 0.20, 0.35),
-    '周期':     (0.40, 0.20, 0.25, 0.15),
-    '科技':     (0.10, 0.20, 0.20, 0.50),
-    '金融':     (0.45, 0.25, 0.10, 0.20),
-    '稳定收息':  (0.15, 0.35, 0.35, 0.15),
-    '微小/亏损': (0.40, 0.10, 0.30, 0.20),
+# 七大权重配置: (资产锚, 收益锚, 现金流锚, 修正锚, 股债差锚[315 F4])
+CATEGORY_WEIGHTS: dict[str, tuple[float, float, float, float, float]] = {
+    '蓝筹':     (0.15, 0.30, 0.30, 0.15, 0.10),
+    '成长':     (0.10, 0.25, 0.20, 0.35, 0.10),
+    '周期':     (0.40, 0.15, 0.25, 0.15, 0.05),
+    '科技':     (0.10, 0.15, 0.20, 0.50, 0.05),
+    '金融':     (0.45, 0.20, 0.10, 0.20, 0.05),
+    '稳定收息':  (0.15, 0.25, 0.35, 0.15, 0.10),
+    '微小/亏损': (0.40, 0.05, 0.30, 0.20, 0.05),
 }
 
 # ── 百分位映射辅助函数 ──
@@ -115,11 +117,167 @@ class ValuationEngine(DataAwareMixin):
 
     def __init__(self, data_manager=None):
         self._dm = data_manager  # DataAwareMixin 统一注入点
+        self._comp_percentile = None   # 315号方案B：composite 截面百分位基准（precompute 前构建）
+        self._industry_mean = {}       # 315号 F2：行业中性化——7 大行业 composite 均值
+        self._fcf_percentile = None    # 315号 F5：FCF yield 截面百分位基准（锚3 相对化）
+
+    # ═══════════════════════════════════════════════
+    # 锚5: 股债收益差（315号 F4，知识库《BOCIASI》）
+    # ═══════════════════════════════════════════════
+
+    def _anchor_bond_stock(self, df_basic: pd.DataFrame) -> float:
+        """股债收益差：股息率 vs 10 年期国债收益率（股债性价比）
+
+        股息率 >> 国债 → 高性价比（低估方向 +）；股息率 << 国债 → 吸引力不足（-）
+        Returns: [-2, +2]
+        """
+        if df_basic.empty or 'dv_ttm' not in df_basic.columns:
+            return 0.0
+        dv = df_basic['dv_ttm'].dropna()
+        if dv.empty:
+            return 0.0
+        dy = float(dv.iloc[-1])
+        bond = CN_10Y_BOND_YIELD_PCT
+        if dy > bond * 2.0:
+            return 2.0
+        if dy > bond * 1.2:
+            return 1.0
+        if dy > bond * 0.6:
+            return 0.0
+        if dy > bond * 0.3:
+            return -1.0
+        return -2.0
+
+    # ═══════════════════════════════════════════════
+    # 315号 F5：锚3 现金流截面分位基准
+    # ═══════════════════════════════════════════════
+
+    def build_fcf_percentile(self, ecm) -> None:
+        """构建全市场 FCF yield 截面百分位基准（锚3 相对化用，precompute 前调用）"""
+        try:
+            import bisect
+            codes = ecm._query_df("SELECT ts_code FROM treemap_snapshot")["ts_code"].tolist()
+            vals = []
+            for code in codes[:3000]:  # 抽样 3000（截面近似，够分位）
+                try:
+                    df_b = ecm.get_cached_daily_basic(code)
+                    df_cf = ecm.cache.get_cached_cashflow(code)
+                    if df_b is not None and not df_b.empty and df_cf is not None and not df_cf.empty:
+                        if 'total_mv' in df_b.columns and 'free_cashflow' in df_cf.columns:
+                            mv = df_b['total_mv'].dropna()
+                            fcf = df_cf['free_cashflow'].dropna()
+                            if not mv.empty and not fcf.empty and mv.iloc[-1] > 0:
+                                vals.append(float(fcf.iloc[0]) / float(mv.iloc[-1]) * 100)
+                except Exception:
+                    continue
+            if len(vals) < 200:
+                self._fcf_percentile = None
+                return
+            vals.sort()
+            n = len(vals)
+            def _pct(v: float) -> float:
+                idx = bisect.bisect_left(vals, v)
+                return idx / n
+            self._fcf_percentile = _pct
+            logger.info(f"FCF yield 截面基准构建完成: {len(vals)} 只")
+        except Exception as e:
+            logger.warning(f"FCF 截面基准构建失败: {e}")
+            self._fcf_percentile = None
 
     def _category(self, industry: str | None) -> str:
         if not industry:
             return '微小/亏损'
         return INDUSTRY_CATEGORY.get(industry, '微小/亏损')
+
+    # ═══════════════════════════════════════════════
+    # 315号方案B：composite 截面百分位分档（对齐 416 设计 5/20/80/95）
+    # ═══════════════════════════════════════════════
+
+    def build_composite_percentile(self, ecm) -> None:
+        """构建全市场 composite_rating 截面百分位基准（precompute 前调用一次）
+
+        从标签表最近一次 composite_rating 排序（跨轮滞后一天，百分位相对语义可接受）。
+        无基准时 compute_tags 回退绝对阈值分档。
+        """
+        try:
+            import bisect
+            rows = ecm._query_df(
+                "SELECT DISTINCT ts_code, tag_value FROM opportunity_tags_cache "
+                "WHERE tag_name='composite_rating' AND tag_value IS NOT NULL AND tag_value != '' "
+                "AND id IN (SELECT MAX(id) FROM opportunity_tags_cache WHERE tag_name='composite_rating' GROUP BY ts_code)"
+            )
+            vals = []
+            for _, r in rows.iterrows():
+                try:
+                    vals.append(float(r['tag_value']))
+                except (TypeError, ValueError):
+                    continue
+            if len(vals) < 100:
+                self._comp_percentile = None
+                return
+            vals.sort()
+            n = len(vals)
+            def _pct(v: float) -> float:
+                idx = bisect.bisect_left(vals, v)
+                return idx / n
+            self._comp_percentile = _pct
+            # 315号 F2：行业中性化——按 7 大行业分类统计 composite 均值
+            # （行业内相对估值：个股 composite 减行业均值后再做截面分档，
+            #   避免"行业整体贵→行业内股票全判高估"的系统偏差）
+            self._industry_mean = {}
+            try:
+                from app.data import DataManager
+                dm = DataManager()
+                batch = dm.get_stock_industry_batch([r['ts_code'] for _, r in rows.iterrows()])
+                cat_sum: dict[str, float] = {}
+                cat_cnt: dict[str, int] = {}
+                for _, r in rows.iterrows():
+                    try:
+                        cval = float(r['tag_value'])
+                    except (TypeError, ValueError):
+                        continue
+                    ind = batch.get(r['ts_code'])
+                    cat = self._category(ind)
+                    cat_sum[cat] = cat_sum.get(cat, 0.0) + cval
+                    cat_cnt[cat] = cat_cnt.get(cat, 0) + 1
+                self._industry_mean = {c: s / cat_cnt[c] for c, s in cat_sum.items() if cat_cnt.get(c, 0) >= 30}
+                logger.info(f"行业中性化基准构建完成: {len(self._industry_mean)} 类行业均值")
+            except Exception as e:
+                logger.warning(f"行业中性化基准构建失败: {e}")
+                self._industry_mean = {}
+            logger.info(f"composite 截面基准构建完成: {n} 只")
+        except Exception as e:
+            logger.warning(f"composite 截面基准构建失败: {e}")
+            self._comp_percentile = None
+            self._industry_mean = {}
+
+    def _level_by_composite(self, composite: float) -> str:
+        """composite → level：有截面基准用百分位分档（5/20/80/95），否则绝对阈值回退
+
+        composite 大 = 低估方向（高分）→ pct 大 → 低估档；composite 小 = 高估方向 → 高估档
+        （2026-08-05 修复：原百分位分支方向反，致低估股被判 high）
+        """
+        if self._comp_percentile is not None:
+            pct = self._comp_percentile(composite)
+            if pct > 0.95:
+                return 'extreme_low'
+            if pct > 0.80:
+                return 'low'
+            if pct > 0.20:
+                return 'fair'
+            if pct > 0.05:
+                return 'high'
+            return 'extreme_high'
+        # 绝对阈值回退（原逻辑）
+        if composite > 1.0:
+            return 'extreme_low'
+        if composite >= 0.3:
+            return 'low'
+        if composite >= -0.3:
+            return 'fair'
+        if composite >= -1.0:
+            return 'high'
+        return 'extreme_high'
 
     # ═══════════════════════════════════════════════
     # 锚1: 资产锚（PB百分位法）
@@ -277,8 +435,14 @@ class ValuationEngine(DataAwareMixin):
             return 0.0
 
         fcf_yield = fcf / ev * 100  # 转为百分比
-        spread = fcf_yield - CN_10Y_BOND_YIELD_PCT
 
+        # 315号 F5：锚3 相对化——FCF yield 截面分位（高分位=现金流强=低估方向），
+        # 无基准回退原绝对比较（vs 国债收益率）
+        if getattr(self, '_fcf_percentile', None) is not None:
+            pct = self._fcf_percentile(fcf_yield)
+            return round(pct * 4 - 2, 2)   # 0-1 → [-2, +2]
+
+        spread = fcf_yield - CN_10Y_BOND_YIELD_PCT
         if spread > 3.0:
             return 2.0
         if spread > 1.0:
@@ -383,13 +547,14 @@ class ValuationEngine(DataAwareMixin):
         except Exception:
             df_cf = pd.DataFrame()
 
-        # ROE（近3年平均 > 10%）
+        # ROE（近3年平均 > 6%；校准 2026-08-02：原 10% 阈值过高——A股 ROE 中位仅 ~2.25，
+        # ROE>10% 仅 10.8% 达标，致 83% 股票被判 suspicious）
         roe_ok = False
         if not df_fina.empty and 'roe' in df_fina.columns:
             roe = df_fina['roe'].dropna()
             if len(roe) >= 3:
                 avg_roe = roe.head(3).mean()
-                roe_ok = avg_roe > 10.0
+                roe_ok = avg_roe > 6.0
 
         # ROCE（近3年平均 > 15%）
         roce_ok = False
@@ -420,16 +585,18 @@ class ValuationEngine(DataAwareMixin):
                     liab_ok = ratio < 70.0
 
         # 经营现金流/净利润 > 0.8 连续3年
+        # 字段校准 2026-08-02：原用 n_income_attr_p/n_cashflow_act 不存在 → 恒未生效；
+        # 实际列为 net_profit_atsopc/net_profit（income）、cashflow_oper（cashflow）
         ocf_ok = True
         if not df_cf.empty and not df_income.empty:
             cf = df_cf.sort_values('end_date', ascending=False)
             inc = df_income.sort_values('end_date', ascending=False)
-            n_col = 'n_income_attr_p' if 'n_income_attr_p' in inc.columns else 'n_income'
-            if 'n_cashflow_act' in cf.columns and n_col in inc.columns:
+            n_col = 'net_profit_atsopc' if 'net_profit_atsopc' in inc.columns else 'net_profit'
+            if 'cashflow_oper' in cf.columns and n_col in inc.columns:
                 ratios = []
                 for i in range(min(3, len(cf), len(inc))):
                     ni = inc[n_col].iloc[i]
-                    ocf = cf['n_cashflow_act'].iloc[i]
+                    ocf = cf['cashflow_oper'].iloc[i]
                     if ni and ni != 0:
                         ratios.append(ocf / ni)
                 if ratios:
@@ -450,7 +617,10 @@ class ValuationEngine(DataAwareMixin):
     def compute_tags(self, ts_code: str) -> dict:
         """计算并返回估值标签字典"""
         dm = self._get_dm()
-        industry = dm.get_stock_industry(ts_code)
+        try:
+            industry = dm.get_stock_industry(ts_code)
+        except Exception:
+            industry = None  # 行业查询失败不阻断估值计算（2026-08-04：P4 静默失败排查）
         cat = self._category(industry)
         weights = CATEGORY_WEIGHTS.get(cat, CATEGORY_WEIGHTS['微小/亏损'])
 
@@ -480,30 +650,54 @@ class ValuationEngine(DataAwareMixin):
         a2 = self._anchor_earnings(df_basic, df_income)
         a3 = self._anchor_cashflow(df_basic, df_cf, df_bs, cat)
         a4 = self._anchor_adjusted_pe(df_basic, df_income, cat)
+        a5 = self._anchor_bond_stock(df_basic)  # 315号 F4：股债收益差锚
 
         # ── 市值微调 + 综合评级（297号§3.1：<50亿资产锚×0.5后归一化） ──
-        w1, w2, w3, w4 = weights
+        w1, w2, w3, w4, w5 = weights
         if not df_basic.empty and 'total_mv' in df_basic.columns:
             mv = df_basic['total_mv'].dropna()
             if not mv.empty and mv.iloc[-1] < 5e9:
                 w1 *= 0.5
-                total = w1 + w2 + w3 + w4
+                total = w1 + w2 + w3 + w4 + w5
                 if total > 0:
-                    w1, w2, w3, w4 = w1/total, w2/total, w3/total, w4/total
+                    w1, w2, w3, w4, w5 = w1/total, w2/total, w3/total, w4/total, w5/total
 
-        composite = w1 * a1 + w2 * a2 + w3 * a3 + w4 * a4
+        composite = w1 * a1 + w2 * a2 + w3 * a3 + w4 * a4 + w5 * a5
         composite = max(-2.0, min(2.0, composite))
 
-        if composite > 1.0:
-            level = 'extreme_low'
-        elif composite >= 0.3:
-            level = 'low'
-        elif composite >= -0.3:
-            level = 'fair'
-        elif composite >= -1.0:
-            level = 'high'
-        else:
-            level = 'extreme_high'
+        # ── 315号阶段2：PB-ROE 质量修正（高 ROE 支撑高估值，主流框架；财务风险惩罚） ──
+        fina_health, roce_pass = self._fina_health(ts_code)
+        if fina_health == 'fail':
+            composite -= 0.5                                   # 财务风险：估值惩罚（低估值也不虚高）
+        elif fina_health == 'pass':
+            try:
+                df_fina = dm.get_cached_fina_indicator(ts_code)
+                if not df_fina.empty and 'roe' in df_fina.columns:
+                    roe = df_fina['roe'].dropna()
+                    if not roe.empty:
+                        roe_v = float(roe.iloc[0] or 0)
+                        if roe_v > 12.0:
+                            composite += 0.25 * min(1.0, roe_v / 20.0)   # 高质量溢价（质量修正量可配）
+            except Exception:
+                pass
+        composite = max(-2.0, min(2.0, composite))
+
+        # ── 315号 F3：生命周期成长修正（知识库《企业生命周期与估值》——成长股高估值容忍） ──
+        # 科技/成长类 + 营收高增长（>20%）+ 盈利 → 估值容忍（composite 上移，避免高成长被误判高估）
+        if cat in ('科技', '成长') and not df_income.empty and 'revenue' in df_income.columns:
+            try:
+                rev = df_income['revenue'].dropna()
+                if len(rev) >= 2 and rev.iloc[0] > 0 and rev.iloc[1] > 0:
+                    growth = rev.iloc[0] / rev.iloc[1] - 1
+                    if growth > 0.20:
+                        composite += 0.2   # 高成长溢价容忍
+            except Exception:
+                pass
+        composite = max(-2.0, min(2.0, composite))
+
+        # 315号方案B：level 按 composite 截面百分位分档（5/20/80/95），无基准回退绝对阈值
+        # 315号 F2：行业中性化——composite 减行业均值后分档（行业内相对估值）
+        level = self._level_by_composite(composite - self._industry_mean.get(cat, 0.0))
 
         deviation = round(composite * 20.0, 1)
 
@@ -549,8 +743,7 @@ class ValuationEngine(DataAwareMixin):
             if len(rev) >= 2:
                 revenue_growth = round((rev.iloc[0] / rev.iloc[1] - 1) * 100, 2)
 
-        # ── 财务健康 ──
-        fina_health, roce_pass = self._fina_health(ts_code)
+        # ── 财务健康（已在 composite 前计算，315号阶段2 质量修正使用） ──
 
         return {
             'valuation_level': level,
@@ -563,7 +756,7 @@ class ValuationEngine(DataAwareMixin):
             'revenue_growth': revenue_growth,
             'fina_health': fina_health,
             'roce_pass': roce_pass,
-            'composite_rating': round(composite, 2),
+            'composite_rating': round(composite, 4),  # 315号：精度 4 位（原 2 位致大量重复值，百分位分档边界失真）
             'asset_anchor_rating': round(a1, 1),
             'earnings_anchor_rating': round(a2, 1),
             'cashflow_anchor_rating': round(a3, 1),

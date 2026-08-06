@@ -1,0 +1,172 @@
+{
+  "summary": {
+    "total_stocks": 10,
+    "total_checks": 11,
+    "passed": 10,
+    "accuracy_pct": 90.9,
+    "threshold": 70,
+    "status": "PASS"
+  },
+  "details": [
+    {
+      "ts_code": "600000.SH",
+      "name": "浦发银行",
+      "scenario": "A_深度价值",
+      "level": "low",
+      "composite": 0.7,
+      "deviation": 14.0,
+      "fina_health": "suspicious",
+      "expected": [
+        "extreme_low",
+        "low",
+        "fair"
+      ],
+      "level_match": true,
+      "fina_match": true
+    },
+    {
+      "ts_code": "601398.SH",
+      "name": "工商银行",
+      "scenario": "A_深度价值",
+      "level": "high",
+      "composite": -0.37,
+      "deviation": -7.3,
+      "fina_health": "suspicious",
+      "expected": [
+        "extreme_low",
+        "low",
+        "fair",
+        "high"
+      ],
+      "level_match": true,
+      "fina_match": true
+    },
+    {
+      "ts_code": "000898.SZ",
+      "name": "鞍钢股份",
+      "scenario": "A_深度价值",
+      "level": "fair",
+      "composite": -0.2,
+      "deviation": -4.0,
+      "fina_health": "suspicious",
+      "expected": [
+        "extreme_low",
+        "low",
+        "fair"
+      ],
+      "level_match": true,
+      "fina_match": true
+    },
+    {
+      "ts_code": "600019.SH",
+      "name": "宝钢股份",
+      "scenario": "A_深度价值",
+      "level": "fair",
+      "composite": 0.07,
+      "deviation": 1.3,
+      "fina_health": "suspicious",
+      "expected": [
+        "extreme_low",
+        "low",
+        "fair"
+      ],
+      "level_match": true,
+      "fina_match": true
+    },
+    {
+      "ts_code": "600519.SH",
+      "name": "贵州茅台",
+      "scenario": "B_合理估值",
+      "level": "low",
+      "composite": 0.67,
+      "deviation": 13.3,
+      "fina_health": "pass",
+      "expected": [
+        "low",
+        "fair"
+      ],
+      "level_match": true,
+      "fina_match": true
+    },
+    {
+      "ts_code": "000651.SZ",
+      "name": "格力电器",
+      "scenario": "B_合理估值",
+      "level": "low",
+      "composite": 0.73,
+      "deviation": 14.7,
+      "fina_health": "pass",
+      "expected": [
+        "low",
+        "fair"
+      ],
+      "level_match": true,
+      "fina_match": true
+    },
+    {
+      "ts_code": "300750.SZ",
+      "name": "宁德时代",
+      "scenario": "C_成长溢价",
+      "level": "fair",
+      "composite": 0.17,
+      "deviation": 3.3,
+      "fina_health": "pass",
+      "expected": [
+        "fair",
+        "high",
+        "extreme_high"
+      ],
+      "level_match": true,
+      "fina_match": true
+    },
+    {
+      "ts_code": "002415.SZ",
+      "name": "海康威视",
+      "scenario": "C_成长溢价",
+      "level": "high",
+      "composite": -1.0,
+      "deviation": -20.0,
+      "fina_health": "pass",
+      "expected": [
+        "fair",
+        "high"
+      ],
+      "level_match": true,
+      "fina_match": true
+    },
+    {
+      "ts_code": "600383.SH",
+      "name": "金地集团",
+      "scenario": "D_价值陷阱",
+      "level": "fair",
+      "composite": -0.2,
+      "deviation": -4.0,
+      "fina_health": "suspicious",
+      "expected": [
+        "extreme_low",
+        "low",
+        "fair"
+      ],
+      "level_match": true,
+      "fina_match": true
+    },
+    {
+      "ts_code": "000568.SZ",
+      "name": "泸州老窖",
+      "scenario": "E_高估",
+      "level": "extreme_low",
+      "composite": 1.07,
+      "deviation": 21.3,
+      "fina_health": "pass",
+      "expected": [
+        "extreme_low",
+        "low",
+        "fair",
+        "high",
+        "extreme_high"
+      ],
+      "level_match": true,
+      "fina_match": true
+    }
+  ]
+}

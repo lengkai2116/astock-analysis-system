@@ -553,23 +553,11 @@ class DashboardService:
 
             # 行情信号计数
             total_stocks = len(all_df)
-            bullish_count = int((all_df['pct_chg'] > 2).sum())
-            bearish_count = int((all_df['pct_chg'] < -2).sum())
-            high_vol_count = int((all_df['pct_chg'].abs() > 5).sum())
 
             return {
                 'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'update_note': f'来自 DuckDB daily_cache · {date_label} · {total_stocks} 只',
                 'radar_stocks': radar_stocks,
-                'signal_summary': {
-                    'bullish': bullish_count,
-                    'bearish': bearish_count,
-                    'chanlun': high_vol_count,
-                    'chip': max(1, total_stocks // 20),
-                    'ai_judgment': max(1, total_stocks // 50),
-                    'resonance': f'{max(1, bullish_count // 5)} 行业同时走强',
-                    'highconf': f'{high_vol_count} 只振幅 ≥ 5%',
-                },
                 'total_signals': total_stocks,
             }
         except Exception as e:

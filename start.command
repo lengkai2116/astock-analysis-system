@@ -1,6 +1,7 @@
 #!/bin/bash
-# A股分析系统 — API 进程启动（数据进程由 launchd 管理）
-# 启动：API 进程 → 打开浏览器
+# A股分析系统 — 一键启动（API 进程 + 数据进程 + 浏览器）
+# 说明：launchd 数据进程因 macOS Desktop TCC 限制已停用（.disabled），
+#       数据进程改由本脚本检查并启动（单实例，避免 SQLite 锁冲突）
 
 cd "$(dirname "$0")"
 PROJECT_ROOT="$PWD"
@@ -18,7 +19,7 @@ export NO_PROXY="*"
 
 cleanup() {
     echo ""
-    echo "正在停止 API 服务..."
+    echo "正在停止 API 服务（数据进程保持运行）..."
     kill $API_PID 2>/dev/null
     exit 0
 }
@@ -29,11 +30,22 @@ echo "════════════════════════�
 echo "   A股分析系统 — 启动"
 echo ""
 echo "   API 进程 → 浏览器"
-echo "   数据进程由 launchd 管理（后台常驻）"
+echo "   数据进程 → 检查并启动（单实例）"
 echo "═══════════════════════════════════════════════"
 echo ""
 
-# ── 检查是否已在运行 ──
+# ── 数据进程：检查是否已在运行，未运行则启动 ──
+if pgrep -f "backend/data_daemon.py|data_daemon.py" > /dev/null 2>&1; then
+    echo "✅ 数据进程已在运行，跳过启动"
+else
+    echo "⏳ 启动数据进程..."
+    cd "$PROJECT_ROOT/backend"
+    DATA_DIR="$PROJECT_ROOT/data" nohup "$VENV_PYTHON" data_daemon.py >> "$PROJECT_ROOT/backend/logs/data_daemon.log" 2>&1 &
+    echo "   数据进程已启动（后台运行）"
+    cd "$PROJECT_ROOT"
+fi
+
+# ── 检查 API 是否已在运行 ──
 if curl -sf http://127.0.0.1:5001/api/v3/health/live > /dev/null 2>&1; then
     echo "✅ API 已在运行，直接打开浏览器"
     open "http://localhost:5001/dashboard"

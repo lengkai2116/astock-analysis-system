@@ -96,11 +96,12 @@ class AdviceGenerator(DataAwareMixin):
         """L4 不可用时使用简化规则回退"""
         signal_strength = float(tags.get('signal_strength', 0)) if tags else 0
 
-        if signal_strength >= 7:
+        # 313号：signal_strength 0-100 潜力强度（旧 0-10 的 ×10 迁移）
+        if signal_strength >= 70:
             action, label, max_ratio = 'build_position', '建仓', 0.6
-        elif signal_strength >= 5:
+        elif signal_strength >= 50:
             action, label, max_ratio = 'hold', '持有观察', 0.3
-        elif signal_strength >= 3:
+        elif signal_strength >= 30:
             action, label, max_ratio = 'reduce', '减仓', 0.1
         else:
             action, label, max_ratio = 'clear', '清仓', 0.0

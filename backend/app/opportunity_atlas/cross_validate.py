@@ -13,6 +13,7 @@ L4 交叉验证仲裁层 — 共识投票引擎
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 from typing import Any
 
@@ -34,6 +35,10 @@ TAG_LABELS: dict[str, str] = {
     'ma_alignment': '均线排列',
     'price_position': '价格位置',
     'sector_heat': '板块热度',
+    # 316号 P3：扩展票源
+    'small_cap': '市值规模',
+    'low_vol': '波动水平',
+    'liquidity': '流动性',
 }
 
 # ── 投票映射表 ────────────────────────────────────────────
@@ -45,20 +50,59 @@ VOTE_MAP: dict[str, dict[str | int, int]] = {
     'valuation_level': {'extreme_low': 1, 'low': 1, 'fair': 0, 'high': -1, 'extreme_high': -1},
     'trend_alignment': {'up_aligned': 1, 'down_aligned': -1, 'mixed': 0, 'no_trend': 0},
     'fund_flow': {'5d_inflow': 1, '5d_outflow': -1, 'mixed': 0, 'none': 0},
-    'fina_health': {'pass': 1, 'suspicious': -1, 'fail': -1},
+    'fina_health': {'pass': 1, 'suspicious': 0, 'fail': -1},  # 316号P2：suspicious→0（存疑≠看空，对齐033标尺）
     'catalyst_event': {
         'earnings': 1, 'lhb': 1, 'concept': 1, 'buyback': 1, 'breakout': 1,
         'pledge': -1, 'float': -1, 'reduce': -1, 'fraud_sign': -1, 'regulatory': -1, 'none': 0,
     },
-    'sentiment_phase': {'ice': 0, 'recovery': 1, 'climax': -1, 'ebb': -1},
-    'signal_strength': {},  # 数值映射：>=7 → +1, <=4 → -1, else 0
+    # 316号P2：sentiment_phase 移出个股票源（313 §4.1 情绪=环境变量，由 Step B 权重矩阵处理，不投票）
+    'signal_strength': {},  # 0-100 数值映射（313号）：>=70→+1, <=40→-1（见 _lookup_vote）
     'buy_sell_point': {
-        'buy_1': 1, 'buy_2': 1, 'buy_3': 1,
-        'sell_1': -1, 'sell_2': -1, 'sell_3': -1, 'none': 0,
+        'first_buy': 1, 'first_buy_p': 1, 'second_buy': 1,
+        'third_buy': 1, 'third_buy_a': 1, 'third_buy_b': 1,
+        'first_sell': -1, 'first_sell_p': -1, 'second_sell': -1,
+        'third_sell': -1, 'none': 0,
     },
     'ma_alignment': {'bullish': 1, 'bearish': -1, 'mixed': 0},
     'price_position': {'low_zone': 1, 'mid_zone': 0, 'high_zone': -1},
-    'sector_heat': {'top_10': 1, 'top_20': 0, 'normal': 0, 'none': -1},
+    # 316号P2：sector none→0（无热度≠看空）、top_20→+0.5（弱看多）
+    'sector_heat': {'top_10': 1, 'top_20': 0.5, 'normal': 0, 'none': 0},
+    # ── 309号 决策4 新增票源：量价形态 + 闸门2右侧确认 ──
+    # 316号 P5：扩展覆盖 EnhancedPatternDetector 实际输出形态（70+ 中文形态，split('(')[0] 后标签值）
+    'pattern_signal': {
+        # 看涨（预涨，19 旧 + 检测器实际输出）
+        'double_bottom': 1, 'breakout': 1, '红三兵': 1, '三白兵': 1, '双针探底': 1,
+        '三阳开泰': 1, '低位横盘突破': 1, '放量站上60日线': 1, '平台放量突破': 1,
+        '地量后倍量启动': 1, '阳吞阴反击': 1, '密底放量': 1, '震仓向上': 1,
+        '晨星': 1, '看涨吞没': 1, '锤子线': 1, '镊子底': 1, '刺透形态': 1,
+        # P5 补充（EnhancedPatternDetector 中文形态）
+        'MA5金叉MA10': 1, '均线多头排列': 1, '连续站上60日线': 1, 'MA5上穿MA20': 1,
+        '回踩MA60获支撑': 1, 'MA5上穿MA60': 1, '看涨孕线': 1, '十字晨星': 1,
+        '看涨捉腰带': 1, '倒锤子': 1, '看涨踢开': 1, '连续小阳盘升': 1, '灼阳形态': 1,
+        '低位崛起反击': 1, '双阳缺口': 1, '三连阴缩量': 1, '放量跳空阴阳': 1,
+        '振幅收敛趋稳': 1, '低位伏击反击': 1, '连续低位反复': 1, '三线开花多头': 1,
+        'MA30>MA60': 1, '站上MA120': 1, '站上MA250': 1,
+        '格兰维尔买点1-突破买': 1, '格兰维尔买点2-回踩买': 1,
+        '格兰维尔买点3-偏离买': 1, '格兰维尔买点4-新低买': 1,
+        '涨停形态': 1, 'W底': 1, '下降楔形': 1, '突破缺口': 1,
+        '地量后的倍量启动': 1, '低位连续小阳线黑马前奏': 1,
+        # 看跌（预跌）
+        '乌云盖顶': -1, '黄昏星': -1, '看跌吞没': -1, '射击之星': -1,
+        '三乌鸦': -1, '上吊线': -1, '放量冲高回落': -1, '天量天价': -1,
+        '放量滞涨': -1, '跳空高开低走': -1, '放量长阴': -1, '高台跳水': -1,
+        # P5 补充（看跌）
+        'MA5死叉MA10': -1, '均线空头排列': -1, '看跌孕线': -1, '看跌捉腰带': -1,
+        '看跌踢开': -1, '三线开花空头': -1,
+        '格兰维尔卖点1-跌破卖': -1, '格兰维尔卖点2-反抽卖': -1,
+        '格兰维尔卖点3-偏离卖': -1, '格兰维尔卖点4-新高卖': -1,
+        '头肩顶': -1, '上升楔形': -1, '扩散三角形': -1, 'M顶': -1, '衰竭缺口': -1,
+        '跳空高开低走巨量阴线': -1,
+    },
+    'right_side_confirm': {'强确认': 1, '基础确认': 0, '未确认': 0, '否决': -1},
+    # ── 316号 P3：扩展票源（规模/低波动/流动性）— 默认关闭（L4_EXTRA_VOTES=1 启用），见 _lookup_vote ──
+    'small_cap': {},
+    'low_vol': {},
+    'liquidity': {},
 }
 
 # ── 投票原因模板 ──────────────────────────────────────────
@@ -115,12 +159,16 @@ VOTE_REASONS: dict[str, dict[str | int, str]] = {
     },
     'signal_strength': {},
     'buy_sell_point': {
-        'buy_1': '出现强买入信号',
-        'buy_2': '出现次级买入信号',
-        'buy_3': '出现谨慎买入信号',
-        'sell_1': '出现强卖出信号',
-        'sell_2': '出现次级卖出信号',
-        'sell_3': '出现谨慎卖出信号',
+        'first_buy': '缠论第一类买点（趋势转折早期，左侧信号）',
+        'first_buy_p': '缠论类一买（盘整背驰）',
+        'second_buy': '缠论第二类买点（回抽不破前低，右侧确认）',
+        'third_buy': '缠论第三类买点（中枢突破回抽确认，右侧追击）',
+        'third_buy_a': '缠论三买a型',
+        'third_buy_b': '缠论三买b型',
+        'first_sell': '缠论第一类卖点',
+        'first_sell_p': '缠论类一卖',
+        'second_sell': '缠论第二类卖点',
+        'third_sell': '缠论第三类卖点',
         'none': '无明显买卖点信号',
     },
     'ma_alignment': {
@@ -139,13 +187,55 @@ VOTE_REASONS: dict[str, dict[str | int, str]] = {
         'normal': '板块热度一般',
         'none': '板块热度不足',
     },
+    'pattern_signal': {
+        'double_bottom': '双底形态确认',
+        'breakout': '突破形态确认',
+        '红三兵': '红三兵放量上涨',
+        '三白兵': '三白兵持续上涨',
+        '双针探底': '双针探底底部确认',
+        '三阳开泰': '三阳开泰强势形态',
+        '低位横盘突破': '低位横盘后突破',
+        '放量站上60日线': '放量站上60日均线',
+        '平台放量突破': '平台放量向上突破',
+        '地量后倍量启动': '地量后倍量启动',
+        '阳吞阴反击': '阳线吞没阴线反击',
+        '密底放量': '密集底部放量',
+        '震仓向上': '震仓后向上',
+        '晨星': '晨星底部反转',
+        '看涨吞没': '看涨吞没形态',
+        '锤子线': '锤子线底部信号',
+        '镊子底': '镊子底双底确认',
+        '刺透形态': '刺透形态反转',
+        '乌云盖顶': '乌云盖顶顶部反转',
+        '黄昏星': '黄昏星顶部反转',
+        '看跌吞没': '看跌吞没形态',
+        '射击之星': '射击之星顶部信号',
+        '三乌鸦': '三乌鸦持续下跌',
+        '上吊线': '上吊线顶部信号',
+        '放量冲高回落': '放量冲高回落（预跌）',
+        '天量天价': '天量天价（预跌）',
+        '放量滞涨': '放量滞涨（预跌）',
+        '跳空高开低走': '跳空高开低走（预跌）',
+        '放量长阴': '放量长阴（预跌）',
+        '高台跳水': '高台跳水破位（预跌）',
+    },
+    'right_side_confirm': {
+        '强确认': '右侧强确认（突破+结构+趋势背书）',
+        '基础确认': '右侧基础确认（仅基础信号）',
+        '未确认': '右侧信号未确认',
+        '否决': '右侧否决（卖出/背离/预跌信号）',
+    },
 }
 
 # ── 短线标签（climax 情绪下被折扣的标签集合）───────────────
 SHORT_TERM_TAGS = {
     'fund_flow', 'sector_heat', 'buy_sell_point',
-    'catalyst_event', 'sentiment_phase',
+    'catalyst_event', 'sentiment_phase', 'pattern_signal',
 }
+
+# ── 316号 P3：动量票源（climax 额外降权——追高风险）与质量票源（ice 升权——均值回归机会） ──
+MOMENTUM_TAGS = {'trend_alignment', 'buy_sell_point', 'pattern_signal', 'ma_alignment'}
+QUALITY_TAGS = {'valuation_level', 'fina_health', 'price_position', 'small_cap', 'low_vol'}
 
 
 class L4CrossValidator(DataAwareMixin):
@@ -173,11 +263,39 @@ class L4CrossValidator(DataAwareMixin):
 
         name = self._get_stock_name(ts_code)
 
-        # ── Step A: 前置估值门禁 ──
-        valuation_level = tags.get('valuation_level', '')
-        if valuation_level in ('high', 'extreme_high'):
-            # 估值偏高时直接返回不推荐
-            return self._build_gate_denied(ts_code, name, tags)
+        # ── Step A: 前置门禁评估（316号 P1：分级 + 风险项，不再投票前硬截断） ──
+        # 门禁结果在操作建议合成后应用（§3.3 门禁后移）：深度高估/负面事件才否决，
+        # 中/轻度与软风险作仓位约束 + 风险标注——强确认+高共识的合理偏贵股不再被吞
+        gate = self._evaluate_gate(ts_code, tags)
+
+        # ── 日线数据加载（316号 P4：操作建议的入场/止损/目标点位计算；P3 扩展票源复用） ──
+        df = None
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            df = get_ecm_instance().get_cached_daily(ts_code)
+        except Exception:
+            pass
+
+        # ── 316号 P3：扩展票源（规模/低波动/流动性）— 默认关闭（L4_EXTRA_VOTES=1 启用） ──
+        if os.getenv('L4_EXTRA_VOTES') == '1':
+            try:
+                dm = self._get_dm()
+                df_b = dm.get_cached_daily_basic(ts_code)
+                if df_b is not None and not df_b.empty:
+                    last = df_b.iloc[-1]
+                    mv = float(last.get('total_mv') or 0) if 'total_mv' in df_b.columns else 0
+                    tr = float(last.get('turnover_rate') or 0) if 'turnover_rate' in df_b.columns else None
+                    # 规模：<100亿 小盘(+1) / >500亿 大盘(-1) / 中间 0（total_mv 单位=万元）
+                    tags.setdefault('small_cap', 'small' if 0 < mv < 1e6 else ('big' if mv >= 5e6 else 'mid'))
+                    if tr is not None:
+                        tags.setdefault('liquidity', 'low' if tr < 1.0 else 'ok')
+                # 低波动：20 日日收益率标准差（低<2% / 高>3.5%）
+                if df is not None and len(df) >= 20 and 'close' in df.columns:
+                    rets = df['close'].pct_change().dropna().tail(20)
+                    std = float(rets.std() * 100)
+                    tags.setdefault('low_vol', 'low' if std < 2.0 else ('high' if std > 3.5 else 'mid'))
+            except Exception:
+                pass
 
         # ── 并行计算退出跟踪 ──
         valuation_tracking = self._check_valuation_exit(ts_code, tags)
@@ -197,8 +315,8 @@ class L4CrossValidator(DataAwareMixin):
         # ── 并行计算日常变化（299号§5.1 变更检测归属L4） ──
         daily_change = self._compute_daily_change(ts_code, tags)
 
-        operation_advice = self._build_operation_advice(ts_code, consensus, tags, signal_strength)
-        risk_warnings = self._build_risk_warnings(tags)
+        operation_advice = self._build_operation_advice(ts_code, consensus, tags, signal_strength, gate, df)
+        risk_warnings = self._build_risk_warnings(tags, gate)
         user_checklist = self._build_user_checklist(ts_code, tags, valuation_tracking)
         opportunity_summary = self._build_opportunity_summary(tags, consensus, risk_warnings)
         tags_summary = self._build_tags_summary(tags)
@@ -219,13 +337,69 @@ class L4CrossValidator(DataAwareMixin):
             },
             'operation_advice': operation_advice,
             'risk_warnings': risk_warnings,
+            'gate': gate,  # 316号 P1：门禁评估结果（估值分级 + 风险项）
             'valuation_tracking': valuation_tracking,
             'signal_strength_adjusted': signal_strength_adjusted,
         }
 
     # ══════════════════════════════════════════════════════════
-    # Step A: 前置估值门禁
+    # Step A: 前置估值门禁（316号 P1：分级 + 风险项扩展，不再投票前硬截断）
     # ══════════════════════════════════════════════════════════
+
+    def _evaluate_gate(self, ts_code: str, tags: dict) -> dict:
+        """估值分级 + 风险项识别（316号 §3.2/§3.4）
+
+        估值分级（连续偏离度，不依赖 5 档 level）：
+          deep     PE 历史分位 >90 或 deviation < -20   → 深度高估（泡沫，不推荐）
+          moderate PE 分位 >80 或 deviation < -12       → 中度偏高（仓位减半）
+          mild     PE 分位 >60 或 deviation < -6        → 轻度偏高（仓位压缩一档）
+        风险项：
+          hard_risks  event_negative（欺诈/监管事件）→ 直接不推荐
+          soft_risks  fina_fail / distributing / low_liquidity（换手率<1%）→ 仓位压缩
+
+        Returns: {'valuation': 'none'|'mild'|'moderate'|'deep',
+                  'hard_risks': [], 'soft_risks': []}
+        """
+        gate: dict[str, Any] = {'valuation': 'none', 'hard_risks': [], 'soft_risks': []}
+
+        # ── 估值分级（pe_percentile_5y 历史分位 + deviation，负=高估） ──
+        try:
+            pe_pct = self._safe_float(tags.get('pe_percentile_5y'), None)
+            dev = self._safe_float(tags.get('valuation_deviation'), None)
+            lv = 'none'
+            if (pe_pct is not None and pe_pct > 90) or (dev is not None and dev < -20):
+                lv = 'deep'
+            elif (pe_pct is not None and pe_pct > 80) or (dev is not None and dev < -12):
+                lv = 'moderate'
+            elif (pe_pct is not None and pe_pct > 60) or (dev is not None and dev < -6):
+                lv = 'mild'
+            gate['valuation'] = lv
+        except Exception:
+            pass
+
+        # ── 硬风险：监管立案（真硬风险，不可逆） → 直接不推荐 ──
+        if tags.get('catalyst_event') == 'regulatory':
+            gate['hard_risks'].append('event_negative')
+
+        # ── 软风险：仓位约束 ──
+        # 财务异常（fraud_sign 已修正语义=经营恶化非欺诈，2026-08-05）→ 仓位约束而非否决
+        if tags.get('catalyst_event') == 'fraud_sign':
+            gate['soft_risks'].append('fina_weak')
+        if tags.get('fina_health') == 'fail':
+            gate['soft_risks'].append('fina_fail')
+        if tags.get('main_force_phase') == 'distributing':
+            gate['soft_risks'].append('distributing')
+        # 流动性：换手率 <1%（daily_basic 最新）
+        try:
+            df = self._get_dm().get_cached_daily_basic(ts_code)
+            if df is not None and not df.empty and 'turnover_rate' in df.columns:
+                tr = df['turnover_rate'].dropna()
+                if not tr.empty and float(tr.iloc[-1]) < 1.0:
+                    gate['soft_risks'].append('low_liquidity')
+        except Exception:
+            pass
+
+        return gate
 
     def _build_gate_denied(self, ts_code: str, name: str, tags: dict) -> dict:
         """估值偏高时返回门禁拒绝结果"""
@@ -240,7 +414,7 @@ class L4CrossValidator(DataAwareMixin):
                 'score': 0,
                 'grade': 'D',
                 'risk_level': 'high',
-                'time_horizon': tags.get('hold_period', 'unknown'),
+                'time_horizon': tags.get('opportunity_label', tags.get('opportunity_type', 'unknown')),
                 'verification': '✗ 估值门禁拒绝：估值偏高，不推荐介入',
             },
             'tags_summary': self._build_tags_summary(tags),
@@ -299,13 +473,18 @@ class L4CrossValidator(DataAwareMixin):
                 if vote > 0:
                     adjusted = vote * weight
             elif sentiment_phase == 'climax':
-                # 短线标签看多票折扣
-                if vote > 0 and tag_name in SHORT_TERM_TAGS:
-                    adjusted = vote * weight
+                # 短线标签看多票折扣 + 动量票源额外降权（316号 P3：高潮期动量追高风险）
+                if vote > 0:
+                    if tag_name in MOMENTUM_TAGS:
+                        adjusted = vote * 0.6
+                    elif tag_name in SHORT_TERM_TAGS:
+                        adjusted = vote * weight
             elif sentiment_phase == 'ice':
-                # 看空票折扣
+                # 看空票折扣；质量/估值票看多升权（316号 P3：冰点期均值回归机会）
                 if vote < 0:
                     adjusted = vote * weight
+                elif vote > 0 and tag_name in QUALITY_TAGS:
+                    adjusted = vote * 1.2
 
             adjustments[tag_name] = adjusted
 
@@ -370,16 +549,20 @@ class L4CrossValidator(DataAwareMixin):
             return {
                 'bullish_votes': 0, 'bearish_votes': 0, 'neutral_votes': 0,
                 'total_active': total_active, 'consensus_rate': 0, 'direction': 'neutral',
+                'tie': False,
             }, detail
 
-        # 确定方向
-        if bullish > bearish:
+        # 确定方向（316号 P2：共识率用方向票分母——中性票不稀释方向共识；
+        # rate = 优势方向票 / (看多+看空)，全中性 → 0）
+        direction_active = bullish + bearish
+        if direction_active > 0 and bullish > bearish:
             direction = 'bullish'
-            rate = bullish / total_active
+            rate = bullish / direction_active
         elif bearish > bullish:
             direction = 'bearish'
-            rate = bearish / total_active
+            rate = bearish / direction_active
         else:
+            # L2修复：多空打平 → 标记"多空分歧"（tie=True），供前端显示而非误导为 0%
             direction = 'neutral'
             rate = 0
 
@@ -390,6 +573,7 @@ class L4CrossValidator(DataAwareMixin):
             'total_active': total_active,
             'consensus_rate': round(rate, 3),
             'direction': direction,
+            'tie': bullish == bearish and bullish > 0,
         }, detail
 
     @staticmethod
@@ -398,13 +582,21 @@ class L4CrossValidator(DataAwareMixin):
         mapping = VOTE_MAP.get(tag_name)
         if mapping is None:
             return 0
+        # 316号 P3：扩展票源（规模/低波动/流动性）— 值由 diagnose 计算
+        if tag_name == 'small_cap':
+            return 1 if value == 'small' else (-1 if value == 'big' else 0)
+        if tag_name == 'low_vol':
+            return 1 if value == 'low' else (-1 if value == 'high' else 0)
+        if tag_name == 'liquidity':
+            return -1 if value == 'low' else 0
         # signal_strength 是数值映射
         if tag_name == 'signal_strength':
             try:
                 v = float(value)
-                if v >= 7.0:
+                # 313号：signal_strength 改为 0-100 潜力强度（旧 0-10 的 ×10 迁移）
+                if v >= 70.0:
                     return 1
-                if v <= 4.0:
+                if v <= 40.0:
                     return -1
                 return 0
             except (ValueError, TypeError):
@@ -423,24 +615,24 @@ class L4CrossValidator(DataAwareMixin):
         direction = consensus.get('direction', 'neutral')
 
         if direction == 'bearish':
-            if rate >= 0.75:
+            if rate >= 0.80:
                 return 'clear', '清仓'
-            if rate >= 0.55:
+            if rate >= 0.65:
                 return 'reduce', '减仓'
-            if rate >= 0.40:
+            if rate >= 0.50:
                 return 'hold', '仅做T/持有'
-            if rate >= 0.25:
+            if rate >= 0.35:
                 return 'reduce', '减仓/回避'
             return 'hold', '仅做T/持有'
 
         # bullish or neutral
-        if rate >= 0.75:
+        if rate >= 0.80:
             return 'build_position', '建仓/加仓'
-        if rate >= 0.55:
+        if rate >= 0.65:
             return 'build_position', '建议建仓'
-        if rate >= 0.40:
+        if rate >= 0.50:
             return 'hold', '仅做T/持有'
-        if rate >= 0.25:
+        if rate >= 0.35:
             return 'reduce', '减仓/回避'
         return 'clear', '清仓/不推荐'
 
@@ -458,9 +650,9 @@ class L4CrossValidator(DataAwareMixin):
 
         if direction == 'bullish':
             desc = f'{b} 个标签看多，{be} 个看空，{n} 个中性，共识率 {rate*100:.1f}%'
-            if rate >= 0.75:
+            if rate >= 0.80:
                 desc += '（★ 强共识）。'
-            elif rate >= 0.55:
+            elif rate >= 0.65:
                 desc += '（✓ 中等确认）。'
             else:
                 desc += '（ℹ 分歧）。'
@@ -470,7 +662,7 @@ class L4CrossValidator(DataAwareMixin):
             if reasons:
                 desc += ' ' + '；'.join(reasons[:4])
 
-            if rate >= 0.55:
+            if rate >= 0.65:
                 desc += ' 综合判断为优质机会，建议关注。'
             else:
                 desc += ' 多空接近，建议观望。'
@@ -478,7 +670,7 @@ class L4CrossValidator(DataAwareMixin):
 
         if direction == 'bearish':
             desc = f'{be} 个标签看空，{b} 个看多，{n} 个中性，共识率 {rate*100:.1f}%'
-            if rate >= 0.55:
+            if rate >= 0.65:
                 desc += '（⚠ 偏空）。'
             else:
                 desc += '（ℹ 分歧）。'
@@ -516,9 +708,9 @@ class L4CrossValidator(DataAwareMixin):
 
         rate = consensus.get('consensus_rate', 0)
         total = consensus.get('total_active', 0)
-        if total >= 3 and rate >= 0.75:
+        if total >= 3 and rate >= 0.80:
             verification = f'★ 强共识（{consensus.get("bullish_votes", 0)}/{total} 标签方向一致）'
-        elif total >= 3 and rate >= 0.55:
+        elif total >= 3 and rate >= 0.65:
             verification = f'✓ 中等确认（共识率 {rate*100:.0f}%）'
         elif total >= 3:
             verification = f'ℹ 分歧（共识率 {rate*100:.0f}%）'
@@ -529,7 +721,7 @@ class L4CrossValidator(DataAwareMixin):
             'score': round(score, 1),
             'grade': grade,
             'risk_level': risk_level,
-            'time_horizon': tags.get('hold_period', 'unknown'),
+            'time_horizon': tags.get('opportunity_label', tags.get('opportunity_type', 'unknown')),
             'verification': verification,
         }
 
@@ -602,10 +794,30 @@ class L4CrossValidator(DataAwareMixin):
         }
 
     def _build_operation_advice(self, ts_code: str, consensus: dict, tags: dict,
-                                signal_strength: float) -> dict:
-        """构建操作建议"""
+                                signal_strength: float, gate: dict = None, df=None) -> dict:
+        """构建操作建议
+
+        309号 决策3：操作建议以 L4 共识率为唯一来源，但叠加闸门2右侧确认覆盖：
+          - right_side_confirm=否决 → 直接不推荐（无论共识率多高）
+          - right_side_confirm=未确认 → 降级为"观察/仅做T"
+          - right_side_confirm=强确认 → 仓位上限提升一档
+        316号 P1 门禁约束（合成后应用）：
+          - 深度高估 / 负面事件 → 强制不推荐（max_ratio=0）
+          - 中度偏高 / 财务fail / 出货 / 流动性差 → 仓位压缩
+        316号 P4 结构化输出：入场区间/建仓节奏/止损/止盈/时间止损（_build_trade_plan）
+        """
         total_active = consensus.get('total_active', 0)
         action, label = self._map_consensus_to_action(consensus, total_active)
+
+        # ── 闸门2右侧确认覆盖（309号§7.1） ──
+        rsc = tags.get('right_side_confirm', '')
+        if rsc == '否决':
+            action, label = 'not_recommended', '右侧否决：出现卖出/背离/预跌信号'
+        elif rsc == '未确认':
+            if action in ('build_position', 'add_position'):
+                action, label = 'hold', '右侧未确认：等待突破信号，仅观察'
+        elif rsc == '强确认':
+            pass  # 下方 max_position_ratio 提升一档
 
         # max_position_ratio：优先取 event_composite_score，否则共识率映射
         event_score = self._safe_int(tags.get('event_composite_score'), 0)
@@ -618,34 +830,154 @@ class L4CrossValidator(DataAwareMixin):
                 max_ratio = 0.4
         else:
             rate = consensus.get('consensus_rate', 0)
-            if rate >= 0.75:
+            if rate >= 0.80:
                 max_ratio = 0.8
-            elif rate >= 0.55:
+            elif rate >= 0.65:
                 max_ratio = 0.6
-            elif rate >= 0.40:
+            elif rate >= 0.50:
                 max_ratio = 0.4
-            elif rate >= 0.25:
+            elif rate >= 0.35:
                 max_ratio = 0.2
             else:
                 max_ratio = 0.0
 
-        # 简化入场计划
-        entry_plan: list[dict] = []
-        if action in ('build_position',):
-            entry_plan.append({'price': '当前价', 'ratio': '60%', 'condition': '首次建仓'})
-            entry_plan.append({'price': '回踩确认', 'ratio': '40%', 'condition': '分批加仓'})
+        # 右侧强确认 → 仓位上限提升一档（309号§7.1 增强加权）
+        if rsc == '强确认' and action in ('build_position', 'add_position'):
+            max_ratio = min(max_ratio + 0.1, 0.9)
+
+        # ── 316号 P1 门禁约束（合成后应用，§3.3 门禁后移） ──
+        if gate is None:
+            gate = self._evaluate_gate(ts_code, tags)
+        val_lv = gate.get('valuation', 'none')
+        hard = gate.get('hard_risks', [])
+        soft = gate.get('soft_risks', [])
+        if 'event_negative' in hard:
+            # 负面事件（监管/财务欺诈）：直接不推荐
+            action, label = 'not_recommended', '负面事件：监管/财务异常信号，规避'
+            max_ratio = 0.0
+        elif val_lv == 'deep':
+            # 深度高估（PE 历史分位>90% 或偏离<-20）：泡沫风险，暂不介入
+            action, label = 'not_recommended', '深度高估：估值泡沫风险，暂不介入'
+            max_ratio = 0.0
+        else:
+            # 仓位约束（软风险 + 估值级别）
+            if 'fina_weak' in soft:
+                max_ratio = round(max_ratio * 0.5, 2)   # 财务异常（经营恶化）→ 减半
+            if 'fina_fail' in soft:
+                max_ratio = round(max_ratio * 0.5, 2)
+            if 'distributing' in soft:
+                max_ratio = round(max_ratio * 0.7, 2)
+            if 'low_liquidity' in soft:
+                max_ratio = round(max_ratio * 0.7, 2)
+            if val_lv == 'moderate':
+                max_ratio = round(max_ratio * 0.5, 2)
+            elif val_lv == 'mild':
+                max_ratio = round(max_ratio * 0.8, 2)
+
+        # ── 316号 P4：结构化交易计划（入场/止损/止盈/时间止损/风险注记） ──
+        entry_plan, stop_loss, target_price, time_stop, risk_notes = self._build_trade_plan(
+            ts_code, tags, df, action, max_ratio, gate)
 
         return {
             'action': action,
             'label': label,
             'max_position_ratio': max_ratio,
             'entry_plan': entry_plan,
-            'stop_loss': None,
-            'target_price': None,
+            'stop_loss': stop_loss,
+            'target_price': target_price,
+            'time_stop': time_stop,
+            'risk_notes': risk_notes,
         }
 
-    def _build_risk_warnings(self, tags: dict) -> list[dict]:
-        """构建风险提示列表"""
+    def _build_trade_plan(self, ts_code: str, tags: dict, df, action: str,
+                          max_ratio: float, gate: dict) -> tuple:
+        """316号 P4：结构化交易计划（§5.3 规则）
+
+        - 入场区间：MA10-MA20 回踩带 / 突破 60 日前高确认
+        - 建仓节奏：首仓 40-60%（按 max_ratio 缩放）→ 回踩加仓 → 突破加仓（分批金字塔）
+        - 止损：结构位（MA20 与前低取高）×0.98（跌破离场）
+        - 止盈：60 日前高（前高突破目标）
+        - 时间止损：持仓 20 交易日未创新高则减半
+        - risk_notes：门禁软风险注记
+
+        Returns: (entry_plan, stop_loss, target_price, time_stop, risk_notes)
+        """
+        entry_plan: list[dict] = []
+        stop_loss: dict | None = None
+        target_price: dict | None = None
+        time_stop: str | None = None
+        risk_notes: list[str] = []
+
+        # 风险注记（来自门禁软风险）
+        if gate:
+            for r in gate.get('soft_risks', []):
+                if r == 'fina_weak':
+                    risk_notes.append('财务指标异常，仓位已减半')
+                elif r == 'fina_fail':
+                    risk_notes.append('财务健康不通过，仓位已减半')
+                elif r == 'distributing':
+                    risk_notes.append('主力出货阶段，仓位已压缩')
+                elif r == 'low_liquidity':
+                    risk_notes.append('流动性偏低（换手<1%），仓位已压缩')
+            if gate.get('valuation') == 'mild':
+                risk_notes.append('估值略偏高，仓位已压缩一档')
+            elif gate.get('valuation') == 'moderate':
+                risk_notes.append('估值偏高，仓位已减半')
+
+        # 数据不足：仅保留风险注记
+        if df is None or df.empty or 'close' not in df.columns or len(df) < 20:
+            return entry_plan, stop_loss, target_price, time_stop, risk_notes
+
+        closes = df['close'].values
+        price = float(closes[-1])
+        ma10 = float(df['close'].tail(10).mean()) if len(closes) >= 10 else None
+        ma20 = float(df['close'].tail(20).mean()) if len(closes) >= 20 else None
+        hi60 = float(df['high'].tail(60).max()) if len(df) >= 60 and 'high' in df.columns else (
+            float(closes[-60:].max()) if len(closes) >= 60 else None)
+        lo60 = float(df['low'].tail(60).min()) if len(df) >= 60 and 'low' in df.columns else (
+            float(closes[-60:].min()) if len(closes) >= 60 else None)
+
+        # 建仓类建议：分批入场 + 止损/目标（基于 max_ratio 缩放首仓比例）
+        if action in ('build_position', 'add_position') and max_ratio > 0:
+            first = round(0.4 * max_ratio / max(max_ratio, 0.1) * 100)  # 首仓约 40%（0.4/上限）
+            entry_plan = []
+            if ma10 and ma20 and price > ma20:
+                entry_plan.append({'price': f'回踩 MA10（{ma10:.2f}-{ma20:.2f}）', 'ratio': f'{first}%',
+                                   'condition': '首次建仓（分批）'})
+            else:
+                entry_plan.append({'price': f'当前价 {price:.2f}', 'ratio': f'{first}%', 'condition': '首次建仓'})
+            if hi60 and price < hi60:
+                entry_plan.append({'price': f'放量突破前高 {hi60:.2f}', 'ratio': '30%', 'condition': '右侧加仓'})
+            else:
+                entry_plan.append({'price': '回踩 MA10 不破', 'ratio': '30%', 'condition': '回踩加仓'})
+            entry_plan.append({'price': f'回踩 MA20（{ma20:.2f}）', 'ratio': '30%', 'condition': '深度回踩补仓'})
+
+            # 止损：max(MA20, 60日前低) × 0.98
+            stop_base = None
+            if ma20:
+                stop_base = ma20
+            if lo60 and (stop_base is None or lo60 > stop_base):
+                stop_base = lo60
+            if stop_base:
+                stop_loss = {'type': 'structure', 'price': round(stop_base * 0.98, 2),
+                             'reason': f'跌破 MA20/前低 {stop_base:.2f} 离场'}
+            # 止盈：60 日前高（或保守 15% 目标）
+            if hi60 and price < hi60:
+                target_price = {'price': round(hi60, 2), 'reason': f'前高 {hi60:.2f} 压力位'}
+            else:
+                target_price = {'price': round(price * 1.15, 2), 'reason': '保守 15% 目标'}
+            time_stop = '持仓 20 交易日未创新高则减半'
+        elif action == 'hold' and max_ratio > 0:
+            # 持有/观察：给出观察位（结构位止损）
+            stop_base = ma20 or lo60
+            if stop_base:
+                stop_loss = {'type': 'structure', 'price': round(stop_base * 0.97, 2),
+                             'reason': f'跌破 {stop_base:.2f} 转弱离场'}
+
+        return entry_plan, stop_loss, target_price, time_stop, risk_notes
+
+    def _build_risk_warnings(self, tags: dict, gate: dict = None) -> list[dict]:
+        """构建风险提示列表（316号 P1：估值分级提示 + 流动性风险）"""
         warnings: list[dict] = []
 
         fina = tags.get('fina_health', '')
@@ -654,9 +986,26 @@ class L4CrossValidator(DataAwareMixin):
         if fina in ('suspicious', 'fail'):
             warnings.append({'type': 'company', 'content': f'财务健康评级为{fina_label}，存在基本面风险'})
 
-        val = tags.get('valuation_level', '')
-        if val in ('high', 'extreme_high'):
+        # 316号 P1：估值分级风险标注（替代原"估值偏高"一刀切）
+        if gate is None:
+            gate = {'valuation': 'none', 'hard_risks': [], 'soft_risks': []}
+        val_lv = gate.get('valuation', 'none')
+        if val_lv == 'deep':
+            warnings.append({'type': 'valuation', 'content': '深度高估（PE 历史分位 >90%），估值泡沫风险，暂不介入'})
+        elif val_lv == 'moderate':
+            warnings.append({'type': 'valuation', 'content': '估值偏高（PE 分位 80-90%），安全边际有限，仓位减半'})
+        elif val_lv == 'mild':
+            warnings.append({'type': 'valuation', 'content': '估值略偏高（PE 分位 60-80%），注意追高风险'})
+        elif tags.get('valuation_level') in ('high', 'extreme_high'):
             warnings.append({'type': 'valuation', 'content': '估值偏高，安全边际不足'})
+
+        # 316号 P1：流动性风险（新增）
+        if 'low_liquidity' in gate.get('soft_risks', []):
+            warnings.append({'type': 'liquidity', 'content': '流动性偏低（换手率 <1%），注意买卖冲击成本'})
+        if 'fina_weak' in gate.get('soft_risks', []):
+            warnings.append({'type': 'company', 'content': '财务指标异常（营收下滑/现金流为负/亏损），经营恶化风险，仓位减半'})
+        if 'event_negative' in gate.get('hard_risks', []):
+            warnings.append({'type': 'event', 'content': '存在监管立案风险，需高度警惕'})
 
         catalyst = tags.get('catalyst_event', '')
         if catalyst in ('regulatory', 'fraud_sign'):

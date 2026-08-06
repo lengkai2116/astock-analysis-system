@@ -33,6 +33,10 @@ class TechnicalIndicatorEngine:
             result['ma10'] = result['close'].rolling(window=10).mean()
         if len(result) >= 20:
             result['ma20'] = result['close'].rolling(window=20).mean()
+        if len(result) >= 30:
+            result['ma30'] = result['close'].rolling(window=30).mean()
+        if len(result) >= 60:
+            result['ma60'] = result['close'].rolling(window=60).mean()
         
         # 2. 计算MACD
         if len(result) >= 26:

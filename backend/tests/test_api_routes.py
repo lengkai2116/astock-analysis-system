@@ -117,16 +117,27 @@ def test_strategy_analyze_endpoint_exists(client, monkeypatch):
     """测试 E12 策略分析端点可响应（不崩溃）
 
     P0-1 回归保护：strategy_analyze.py 中 trade_date_str 未定义导致 NameError
+    L1 修复：mock 路径从错误的 app.routes.strategy_analyze.SignalComputationService
+    改为实际调用链（DataManager.get_signal_detail + UnifiedStrategyCore.compute）
     """
-    # Mock SignalComputationService 避免真实数据依赖
+    # Mock 数据访问层，避免真实数据依赖
     import json
+    from app.engine.unified_core import StandardizedResult
 
-    def mock_compute_for_stock(ts_code, limit=5):
-        return []
+    def mock_get_signal_detail(self, ts_code):
+        return None  # 未命中缓存 → 走实时计算分支
 
+    def mock_compute(self, ts_code, period='long'):
+        return StandardizedResult()  # 空结果
+
+    # L1 修复：patch 类方法（函数内延迟 import 后实例化同样生效）
     monkeypatch.setattr(
-        'app.routes.strategy_analyze.SignalComputationService.compute_for_stock',
-        mock_compute_for_stock,
+        'app.data.DataManager.get_signal_detail',
+        mock_get_signal_detail,
+    )
+    monkeypatch.setattr(
+        'app.engine.unified_core.UnifiedStrategyCore.compute',
+        mock_compute,
     )
 
     resp = client.post(
@@ -143,13 +154,21 @@ def test_strategy_analyze_endpoint_exists(client, monkeypatch):
 def test_strategy_analyze_returns_valid_structure(client, monkeypatch):
     """测试 E12 返回有效数据结构"""
     import json
+    from app.engine.unified_core import StandardizedResult
 
-    def mock_compute_for_stock(ts_code, limit=5):
-        return []
+    def mock_get_signal_detail(self, ts_code):
+        return None
+
+    def mock_compute(self, ts_code, period='long'):
+        return StandardizedResult()
 
     monkeypatch.setattr(
-        'app.routes.strategy_analyze.SignalComputationService.compute_for_stock',
-        mock_compute_for_stock,
+        'app.data.DataManager.get_signal_detail',
+        mock_get_signal_detail,
+    )
+    monkeypatch.setattr(
+        'app.engine.unified_core.UnifiedStrategyCore.compute',
+        mock_compute,
     )
 
     resp = client.post(

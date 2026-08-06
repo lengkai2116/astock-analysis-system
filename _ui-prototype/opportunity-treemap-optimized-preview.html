@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>市场地图 · 优化原型 v2（单行业下钻）</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+:root {
+  --bg: #0f1117;
+  --panel: #1a1d27;
+  --panel2: #222634;
+  --text: #e8eaf0;
+  --muted: #8b93a7;
+  --accent: #3b82f6;
+  --up: #f87171;
+  --down: #4ade80;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  padding: 16px; height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+}
+.header { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
+.header h1 { font-size: 19px; font-weight: 700; }
+.badge { font-size: 11px; padding: 3px 10px; border-radius: 20px; background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+.controls {
+  display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+  background: var(--panel); padding: 10px 14px; border-radius: 10px;
+}
+.controls .group { display: flex; align-items: center; gap: 6px; }
+.controls label { font-size: 12px; color: var(--muted); }
+.btn { padding: 5px 14px; border-radius: 6px; font-size: 12px; border: 1px solid #2e3245; background: transparent; color: var(--text); cursor: pointer; transition: all .15s; }
+.btn:hover { border-color: var(--accent); }
+.btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+select { background: var(--panel); color: var(--text); border: 1px solid #2e3245; padding: 5px 10px; border-radius: 6px; font-size: 12px; }
+/* 行业选择器（模糊搜索 + 下拉） */
+.ind-selector { position: relative; }
+.ind-selector input {
+  background: var(--panel2); color: var(--text); border: 1px solid #2e3245;
+  padding: 6px 10px; border-radius: 6px; font-size: 12px; width: 180px;
+}
+.ind-dropdown {
+  position: absolute; top: 100%; left: 0; width: 220px; max-height: 300px;
+  background: var(--panel2); border: 1px solid #2e3245; border-radius: 8px;
+  margin-top: 4px; overflow-y: auto; z-index: 100; display: none;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.ind-dropdown.show { display: block; }
+.ind-dropdown .item { padding: 6px 12px; font-size: 12px; cursor: pointer; display: flex; justify-content: space-between; }
+.ind-dropdown .item:hover { background: rgba(59,130,246,0.15); }
+.ind-dropdown .item .cnt { color: var(--muted); font-size: 11px; }
+/* 主布局：左 treemap + 右列表 */
+.main { flex: 1; display: flex; gap: 12px; min-height: 0; }
+.chart-wrap { flex: 1; position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+#chart { width: 100%; height: 100%; background: var(--panel); border-radius: 12px; }
+.side-panel {
+  width: 300px; min-width: 280px; background: var(--panel); border-radius: 12px;
+  display: flex; flex-direction: column; overflow: hidden;
+  position: relative; z-index: 10;   /* 置于图表 canvas 之上，防止覆盖 */
+}
+.side-panel .sp-head {
+  padding: 10px 14px; font-size: 13px; font-weight: 600;
+  border-bottom: 1px solid #2e3245; display: flex; justify-content: space-between; align-items: center;
+}
+.side-panel .sp-head .close { cursor: pointer; color: var(--muted); font-size: 16px; }
+.side-panel .sp-head .close:hover { color: var(--text); }
+.side-list { flex: 1; overflow-y: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: #3b82f6 #2e3245; }
+.side-list::-webkit-scrollbar { width: 6px; }
+.side-list::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 3px; }
+.side-list::-webkit-scrollbar-track { background: #2e3245; }
+.stock-row {
+  display: grid; grid-template-columns: 1fr 64px 60px; gap: 4px;
+  padding: 7px 14px; font-size: 12px; cursor: pointer; align-items: center;
+  border-bottom: 1px solid rgba(46,50,69,0.4);
+}
+.stock-row:hover { background: rgba(59,130,246,0.12); }
+.stock-row .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stock-row .pct { text-align: right; font-weight: 600; }
+.stock-row .cap { text-align: right; color: var(--muted); font-size: 11px; }
+/* 列表行浮窗（跟随鼠标，样式与地图浮窗一致） */
+.row-tip {
+  position: fixed; z-index: 1000; pointer-events: none;
+  background: rgba(15,17,23,0.96); border: 1px solid #2e3245; border-radius: 8px;
+  padding: 10px 14px; font-size: 12px; color: #e8eaf0;
+  display: none; max-width: 260px; line-height: 1.7;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+}
+.stats { display: flex; gap: 20px; margin-top: 10px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+.stats b { color: var(--text); }
+.hint { position: absolute; top: 8px; right: 12px; z-index: 5; font-size: 11px; color: var(--muted); background: rgba(15,17,23,0.8); padding: 4px 10px; border-radius: 6px; pointer-events: none; }
+.note { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.6; }
+.note code { background: rgba(59,130,246,0.1); padding: 1px 6px; border-radius: 4px; color: #60a5fa; }
+.hl { color: #e6a23c; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🗺️ 市场地图 · 优化原型 v2</h1>
+  <span class="badge">原型样稿 v2（单行业下钻 + 右侧列表）</span>
+</div>
+
+<div class="controls">
+  <div class="group">
+    <label>面积编码</label>
+    <div class="btn active" data-size="cap" onclick="setSize('cap')">市值</div>
+    <div class="btn" data-size="amount" onclick="setSize('amount')">成交额</div>
+  </div>
+  <div class="group">
+    <label>个股数量</label>
+    <select id="topN" onchange="render()">
+      <option value="300">TOP 300</option>
+      <option value="500" selected>TOP 500</option>
+      <option value="1000">TOP 1000</option>
+      <option value="0">全部</option>
+    </select>
+  </div>
+  <div class="group">
+    <label>行业选择</label>
+    <div class="ind-selector">
+      <input type="text" id="indSearch" placeholder="🔍 搜索行业..." autocomplete="off"
+             oninput="filterInd(this.value)" onfocus="filterInd(this.value)">
+      <div class="ind-dropdown" id="indDropdown"></div>
+    </div>
+  </div>
+  <div class="group">
+    <div class="btn" id="clearIndBtn" onclick="clearIndustry()" style="display:none;">✕ 退出行业视图</div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="chart-wrap">
+    <div class="hint">点击行业块 → 单行业视图 · 滚轮缩放 · 悬浮查看</div>
+    <div id="chart"></div>
+  </div>
+  <div class="side-panel" id="sidePanel" style="display:none;">
+    <div class="sp-head">
+      <span id="spTitle">行业股票</span>
+      <span class="close" onclick="clearIndustry()">✕</span>
+    </div>
+    <div class="side-list" id="sideList"></div>
+    <div class="row-tip" id="rowTip"></div>
+  </div>
+</div>
+
+<div class="stats">
+  <span>展示个股：<b id="stCount">-</b></span>
+  <span>行业组：<b id="grpCount">-</b></span>
+  <span>涨：<b id="upCount" style="color:var(--up);">-</b></span>
+  <span>跌：<b id="dnCount" style="color:var(--down);">-</b></span>
+</div>
+
+<div class="note">
+  <b>v2 变更（相对 v1）：</b><br>
+  ① <code>行业不压缩</code> — 保持原 110 行业；② <code>点击行业块 / 行业选择器</code> → 左侧 treemap 仅显示该行业 + 右侧股票列表（悬浮行显示与地图一致的浮窗，点击行打开详情弹窗）；③ <code>成交额模式</code> — 注：系统快照接口当前未透出 amount/turnover（daily_cache 有数据但快照缺列），原型演示成交额效果需后端补透出；④ <code>标签隐藏默认开启</code>；⑤ <code>长尾聚合已移除</code>。
+</div>
+
+<script>
+// ── 全局状态 ──────────────────────────────
+let RAW = [];
+let sizeMode = 'cap';
+let currentInd = null;   // 当前选中的行业（null=全市场）
+let chart = null;
+
+const CANVAS_W = 1600, CANVAS_H = 800;
+const LABEL_MIN_AREA = 900;   // 标签隐藏阈值（px²，≈30px 边长）
+
+// ── 数据加载（真实 API） ─────────────────
+async function loadData() {
+  try {
+    const resp = await fetch('/api/v3/opportunity-atlas/treemap?mode=market');
+    const json = await resp.json();
+    const groups = json.data.groups || [];
+    RAW = [];
+    groups.forEach(g => {
+      (g.stocks || []).forEach(s => {
+        RAW.push({
+          name: s.name, ts: s.ts_code,
+          cap: s.market_cap || 0,
+          amount: 0,   // 快照未透出成交额，待后端补（见 note）
+          pct: s.pct_change || 0,
+          ind: g.industry || '其他',
+          sig: s.signal_strength || 0,
+          pe: s.pe, pb: s.pb,
+        });
+      });
+    });
+    render();
+  } catch (e) {
+    document.getElementById('chart').innerHTML =
+      '<div style="padding:40px;text-align:center;color:#f87171;">数据加载失败（请确认后端 API 运行在 5001 端口）</div>';
+  }
+}
+
+// ── 行业选择器 ────────────────────────────
+function getAllIndustries() {
+  const set = new Set(RAW.map(s => s.ind));
+  const map = {};
+  RAW.forEach(s => { map[s.ind] = (map[s.ind] || 0) + 1; });
+  return Array.from(set).map(n => ({ name: n, cnt: map[n] })).sort((a, b) => b.cnt - a.cnt);
+}
+
+function filterInd(q) {
+  const dd = document.getElementById('indDropdown');
+  q = (q || '').trim().toLowerCase();
+  const all = getAllIndustries();
+  const list = q ? all.filter(i => i.name.toLowerCase().includes(q)) : all;
+  dd.innerHTML = list.map(i =>
+    `<div class="item" onclick="selectIndustry('${i.name}')"><span>${i.name}</span><span class="cnt">${i.cnt}只</span></div>`
+  ).join('') || '<div class="item" style="color:var(--muted);">无匹配行业</div>';
+  dd.classList.add('show');
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.ind-selector')) document.getElementById('indDropdown').classList.remove('show');
+});
+
+function selectIndustry(name) {
+  currentInd = name;
+  document.getElementById('indSearch').value = name;
+  document.getElementById('indDropdown').classList.remove('show');
+  document.getElementById('clearIndBtn').style.display = 'inline-block';
+  render();
+  // 布局变更（侧栏显示）后：等 DOM 稳定 → resize → 重渲染重置 roam 视图到容器中间
+  requestAnimationFrame(() => {
+    if (!chart) return;
+    chart.resize();
+    render();   // 重新 setOption（zoom:1/translate:[0,0]）强制地图居中于新容器
+  });
+}
+
+function clearIndustry() {
+  currentInd = null;
+  document.getElementById('indSearch').value = '';
+  document.getElementById('clearIndBtn').style.display = 'none';
+  render();
+  requestAnimationFrame(() => {
+    if (!chart) return;
+    chart.resize();
+    render();
+  });
+}
+
+// ── 构建树 ────────────────────────────────
+function buildTree() {
+  const topN = parseInt(document.getElementById('topN').value);
+  let pool = [...RAW];
+
+  // 单行业过滤
+  if (currentInd) pool = pool.filter(s => s.ind === currentInd);
+
+  // 排序 + TOP N
+  pool.sort((a, b) => (sizeMode === 'cap' ? b.cap - a.cap : b.amount - a.amount));
+  if (topN > 0 && pool.length > topN) pool = pool.slice(0, topN);
+
+  // 行业分组
+  const groups = {};
+  pool.forEach(s => { (groups[s.ind] = groups[s.ind] || []).push(s); });
+
+  const children = Object.entries(groups).map(([indName, stocks]) => {
+    const items = stocks.map(s => ({
+      name: s.name, value: Math.max(sizeMode === 'cap' ? s.cap : s.amount, 1),
+      ts: s.ts, pct: s.pct, sig: s.sig, _ind: indName,
+    }));
+    items.sort((a, b) => b.value - a.value);
+    const total = items.reduce((sum, i) => sum + i.value, 0);
+    return { name: indName, children: items, _total: total };
+  });
+  children.sort((a, b) => (b._total || 0) - (a._total || 0));
+  return children;
+}
+
+// ── 渲染 ─────────────────────────────────
+function render() {
+  // 先设置侧栏显隐（影响 chart 容器宽度），再渲染图表，确保 setOption 时容器尺寸正确
+  const panel = document.getElementById('sidePanel');
+  panel.style.display = currentInd ? 'flex' : 'none';
+
+  const children = buildTree();
+  const container = document.getElementById('chart');
+  if (!chart) {
+    chart = echarts.init(container);
+    // 点击行业组（非叶子节点）→ 进入单行业视图（ECharts nodeClick 不支持函数，需用事件）
+    chart.on('click', function(params) {
+      const d = params.data;
+      if (d && d.children && !currentInd && d.name && d.name !== 'A股全市场') {
+        selectIndustry(d.name);
+      }
+    });
+  }
+
+  // 注入涨跌颜色
+  const walk = nodes => nodes.forEach(n => {
+    if (n.children) walk(n.children);
+    else {
+      const t = Math.max(-1, Math.min(1, (n.pct || 0) / 5));
+      const gb = Math.round(150 - 100 * Math.abs(t));
+      n.itemStyle = { color: t > 0 ? `rgb(${200 + 40*t},${gb},${gb})` : t < 0 ? `rgb(${gb},${200-40*Math.abs(t)},${gb})` : '#6b7280' };
+    }
+  });
+  walk(children);
+
+  const option = {
+    tooltip: {
+      trigger: 'item', triggerOn: 'mousemove',
+      backgroundColor: 'rgba(15,17,23,0.96)', borderColor: '#2e3245',
+      textStyle: { color: '#e8eaf0', fontSize: 12 },
+      formatter: function(p) {
+        if (!p.data || p.data.ts === undefined) {
+          const n = p.data && p.data.children ? p.data.children.length : 0;
+          return `<strong>${p.name}</strong>${n ? `<br/>${n} 只股票` : ''}`;
+        }
+        const s = p.data;
+        const col = s.pct >= 0 ? '#f87171' : '#4ade80';
+        const sz = sizeMode === 'cap' ? (s.value / 1e8).toFixed(1) + '亿' : (s.value / 1e8).toFixed(2) + '亿';
+        return `<strong>${s.name}</strong> <span style="color:#8b93a7;">${s.ts}</span><br/>` +
+          `涨跌 <b style="color:${col}">${s.pct >= 0 ? '+' : ''}${s.pct.toFixed(2)}%</b><br/>` +
+          `${sizeMode === 'cap' ? '市值' : '成交额'} <b>${sz}</b><br/>` +
+          (s.sig ? `信号强度 <b>${s.sig.toFixed(1)}</b>/10` : '');
+      }
+    },
+    series: [{
+      type: 'treemap', data: children, roam: true,
+      nodeClick: false,   // 禁用默认 zoomToNode，点击下钻由 chart.on('click') 处理
+      breadcrumb: { show: !currentInd, left: 8, top: 4, height: 20, itemStyle: { color: '#2e3245', textStyle: { color: '#e8eaf0' } } },
+      label: {
+        show: true,
+        formatter: function(p) {
+          const d = p.data;
+          if (!d || d.ts === undefined) return p.name;
+          // 标签阈值隐藏（默认开启）
+          if (p.treePathInfo && p.treePathInfo[1] && p.treePathInfo[1].area) {
+            const box = p.treePathInfo[1].area;
+            if (box.width * box.height < LABEL_MIN_AREA) return '';
+          }
+          return d.name;
+        },
+        fontSize: 10, color: '#e8eaf0', textShadowBlur: 2, textShadowColor: 'rgba(0,0,0,0.8)'
+      },
+      upperLabel: {
+        show: true, height: 22,
+        formatter: function(p) {
+          const n = p.data && p.data.children ? p.data.children.length : 0;
+          return `${p.name} ${n ? n + '只' : ''}`;
+        },
+        fontSize: 12, fontWeight: 600, color: '#e8eaf0'
+      },
+      itemStyle: { borderColor: '#0f1117', borderWidth: 1.5, borderRadius: 3, gapWidth: 1 },
+      levels: [
+        { itemStyle: { borderWidth: 0, gapWidth: 1 } },
+        {
+          itemStyle: { borderWidth: 3, borderColor: '#0f1117', gapWidth: 2, borderRadius: 5 },
+          upperLabel: { show: true, height: 22, padding: [3, 6], fontSize: 12, fontWeight: 700, color: '#fff', backgroundColor: 'rgba(15,17,23,0.7)' }
+        },
+        { itemStyle: { borderWidth: 1.5, borderColor: '#0f1117', gapWidth: 1, borderRadius: 2 } }
+      ],
+      animationDuration: 400, animationEasing: 'cubicOut',
+      // 每次 render 重置 roam 视图：zoom=1 translate=[0,0]（防切换行业后地图偏移在屏幕中间）
+      zoom: 1, translate: [0, 0]
+    }]
+  };
+  chart.setOption(option, true);
+
+  // 右侧列表
+  renderSideList();
+
+  // 统计
+  const shown = children.reduce((n, g) => n + (g.children ? g.children.length : 0), 0);
+  let up = 0, dn = 0;
+  RAW.forEach(s => { if (!currentInd || s.ind === currentInd) { s.pct > 0 ? up++ : (s.pct < 0 ? dn++ : 0); } });
+  document.getElementById('stCount').textContent = shown;
+  document.getElementById('grpCount').textContent = children.length;
+  document.getElementById('upCount').textContent = up;
+  document.getElementById('dnCount').textContent = dn;
+}
+
+// ── 右侧行业股票列表 ─────────────────────
+function renderSideList() {
+  const panel = document.getElementById('sidePanel');
+  const list = document.getElementById('sideList');
+  if (!currentInd) { panel.style.display = 'none'; return; }
+
+  panel.style.display = 'flex';
+  document.getElementById('spTitle').textContent = `行业：${currentInd}（${RAW.filter(s => s.ind === currentInd).length} 只）`;
+  const stocks = RAW.filter(s => s.ind === currentInd)
+    .sort((a, b) => sizeMode === 'cap' ? b.cap - a.cap : b.amount - a.amount);
+
+  list.innerHTML = stocks.map(s => {
+    const col = s.pct >= 0 ? 'var(--up)' : 'var(--down)';
+    const cap = (s.cap / 1e8).toFixed(0) + '亿';
+    return `<div class="stock-row" data-ts="${s.ts}">
+      <span class="nm">${s.name}</span>
+      <span class="pct" style="color:${col}">${s.pct >= 0 ? '+' : ''}${s.pct.toFixed(2)}%</span>
+      <span class="cap">${cap}</span>
+    </div>`;
+  }).join('');
+
+  // 列表滚轮：阻止冒泡到图表区（ECharts roam 会缩放），保留列表原生滚动
+  list.addEventListener('wheel', function(e) {
+    e.stopPropagation();
+  }, { passive: true });
+
+  // 行悬浮 → 自定义浮窗（跟随鼠标，样式与地图浮窗一致）
+  const tip = document.getElementById('rowTip');
+  list.querySelectorAll('.stock-row').forEach(row => {
+    const s = RAW.find(x => x.ts === row.dataset.ts);
+    if (!s) return;
+    row.addEventListener('mouseenter', () => {
+      const col = s.pct >= 0 ? '#f87171' : '#4ade80';
+      const sz = sizeMode === 'cap' ? (s.cap / 1e8).toFixed(1) + '亿' : (s.amount / 1e8).toFixed(2) + '亿';
+      tip.innerHTML = `<strong>${s.name}</strong> <span style="color:#8b93a7;">${s.ts}</span><br/>` +
+        `涨跌 <b style="color:${col}">${s.pct >= 0 ? '+' : ''}${s.pct.toFixed(2)}%</b><br/>` +
+        `${sizeMode === 'cap' ? '市值' : '成交额'} <b>${sz}</b><br/>` +
+        (s.sig ? `信号强度 <b>${s.sig.toFixed(1)}</b>/10` : '');
+      tip.style.display = 'block';
+    });
+    row.addEventListener('mousemove', e => {
+      tip.style.left = (e.clientX + 16) + 'px';
+      tip.style.top = (e.clientY + 12) + 'px';
+    });
+    row.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    row.addEventListener('click', () => showDetailDialog(s));
+  });
+}
+
+// ── 详情弹窗（简易） ──────────────────────
+function showDetailDialog(s) {
+  const col = s.pct >= 0 ? '#f87171' : '#4ade80';
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:var(--panel);border-radius:12px;padding:24px;min-width:320px;border:1px solid #2e3245;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:12px;">${s.name} <span style="color:var(--muted);font-size:12px;">${s.ts}</span></div>
+      <div style="font-size:13px;line-height:2;color:var(--text);">
+        现价 <b>${(s.cap > 0 ? (s.cap / 1e8 * 10).toFixed(2) : '-')}</b>（示意）<br/>
+        涨跌 <b style="color:${col}">${s.pct >= 0 ? '+' : ''}${s.pct.toFixed(2)}%</b><br/>
+        市值 <b>${(s.cap / 1e8).toFixed(1)}亿</b><br/>
+        信号强度 <b>${s.sig ? s.sig.toFixed(1) : '-'}</b>/10<br/>
+        PE <b>${typeof s.pe === 'number' ? s.pe.toFixed(1) : '--'}</b> · PB <b>${typeof s.pb === 'number' ? s.pb.toFixed(2) : '--'}</b>
+      </div>
+      <div style="margin-top:16px;text-align:right;">
+        <button class="btn" onclick="this.closest('div[style*=fixed]').remove()">关闭</button>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+function setSize(m) {
+  sizeMode = m;
+  document.querySelectorAll('[data-size]').forEach(b => b.classList.toggle('active', b.dataset.size === m));
+  render();
+}
+
+window.addEventListener('resize', () => chart && chart.resize());
+loadData();
+</script>
+</body>
+</html>

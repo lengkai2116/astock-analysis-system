@@ -11,7 +11,7 @@ data_daemon — 数据采集守护进程（254号方案）
 启动：DATA_DAEMON_RUNNING=1 python data_daemon.py
 停止：Ctrl+C 或 kill
 """
-import os, sys, time, threading, signal, logging
+import os, sys, time, threading, signal, logging, json
 from datetime import datetime, timedelta
 
 # ── 环境准备 ──
@@ -86,6 +86,7 @@ def _ts_minute(pro_func, *args, **kwargs):
 
 # ── 全局引用 ──
 _running = True
+_cleanup_done = False  # 数据清理一次性标记（日终完成后执行一次；修复 2026-08-04：原挂在 bool _running 上必然失败）
 _ecm = None
 
 
@@ -948,7 +949,9 @@ def _ensure_pd():
     global IMPORT_PD
     if not IMPORT_PD:
         import pandas as pd
+        import numpy as np
         globals()['pd'] = pd
+        globals()['np'] = np
         IMPORT_PD = True
 
 
@@ -1440,12 +1443,46 @@ def _precompute_l2_labels(codes):
         from app.opportunity_atlas.phase_detector import PhaseDetectionEngine
         from app.services.market_sentiment_service import MarketSentimentService
         from app.engine.framework.sector_rotation_model import SectorRotationModel
+        # 313号：机会潜力强度引擎（7 维截面百分位 + IC 加权 + 综合公式）
+        from app.opportunity_atlas.potential_engine import PotentialEngine, compute_fund_strength
+        from app.opportunity_atlas import potential_engine as _pe_module
+        import os as _os
+        _pe_module.IC_WEIGHTS_FILE = _os.path.join(
+            _os.environ.get('DATA_DIR', 'data'), 'ic_weights.json')
 
         # 各引擎延迟初始化
         ve = ValuationEngine()
         pd_engine = PhaseDetectionEngine()
         ms = MarketSentimentService()
         sr = SectorRotationModel()
+        # 315号方案B：估值引擎 composite 截面百分位基准（level 分档用，precompute 前一次）
+        try:
+            ve.build_composite_percentile(_ecm)
+        except Exception as e:
+            logger.warning(f"  估值截面基准构建失败: {e}")
+        # 315号 F5：FCF yield 截面基准（锚3 相对化）
+        try:
+            ve.build_fcf_percentile(_ecm)
+        except Exception as e:
+            logger.warning(f"  FCF 截面基准构建失败: {e}")
+        # 313号：潜力引擎 + 全市场截面百分位基准（precompute 前一次）
+        _potential_engine = PotentialEngine()
+        try:
+            _potential_engine.build_percentile_tables(_ecm)
+            logger.info("  机会潜力引擎截面基准构建完成")
+        except Exception as e:
+            logger.warning(f"  潜力截面构建失败: {e}")
+        # IC 滚动重估（313 §4.2 第三层：月度——权重文件超 30 天未更新则重估）
+        try:
+            import time as _time
+            if (not _os.path.exists(_pe_module.IC_WEIGHTS_FILE)
+                    or _time.time() - _os.path.getmtime(_pe_module.IC_WEIGHTS_FILE) > 30 * 86400):
+                logger.info("  IC 权重月度重估中...")
+                _new_w = _pe_module.recompute_ic_weights(_ecm)
+                _pe_module.save_ic_weights(_new_w)
+                logger.info(f"  IC 权重已更新: {_new_w}")
+        except Exception as e:
+            logger.warning(f"  IC 重估跳过: {e}")
         # P2.5 引擎：时间节奏
         from app.opportunity_atlas.time_rhythm_engine import TimeRhythmEngine
         tre = TimeRhythmEngine()
@@ -1509,28 +1546,24 @@ def _precompute_l2_labels(codes):
         succeeded = 0
         commit_count = 0
         BATCH_SIZE = 500
+        _val_fail = 0            # 估值引擎失败计数（2026-08-04：静默吞异常排查）
+        _val_fail_samples = []   # 估值失败样例（最多记 10 条）
+        _engine_fail = 0         # 整只失败计数（外层异常）
 
         for code in codes:
             try:
                 tags = {}
+                df = all_data.get(code)   # 2026-08-04 修复：循环开头取 df（原缺失→首只 NameError 跳过、后续量价/缠论用上一只错位 df→buy_sell_point 等标签不落库→闸门2 无输入）
 
                 # 1. 估值引擎产出（P0.1）— 只需要 ts_code
                 try:
                     v_tags = ve.compute_tags(code)
                     if v_tags:
                         tags.update(v_tags)
-                except Exception:
-                    pass
-
-                # 2. 阶段判定引擎产出（P0.2）— 使用预加载的日线数据
-                df = all_data.get(code)
-                if df is not None and len(df) >= 30:
-                    try:
-                        p_tags = pd_engine.compute_tags(code, df)
-                        if p_tags:
-                            tags.update(p_tags)
-                    except Exception:
-                        pass
+                except Exception as e:
+                    _val_fail += 1
+                    if len(_val_fail_samples) < 10:
+                        _val_fail_samples.append(f"{code}: {type(e).__name__}: {e}")
 
                 # 3. 情绪引擎产出（P0.5）— 不需要 ts_code
                 try:
@@ -1595,11 +1628,23 @@ def _precompute_l2_labels(codes):
                     except Exception:
                         pass
 
-                    # 5. 聚合衍生 → signal_strength
-                try:
-                    tags['signal_strength'] = _compute_signal_strength(tags)
-                except Exception:
-                    pass
+                    # 2. 阶段判定引擎产出（312号：8 维度加权共识）— 移到缠论/情绪/板块之后，
+                    #    以接入 buy_sell_point / sentiment_phase / sector_heat / capital_nature
+                    df = all_data.get(code)
+                    if df is not None and len(df) >= 30:
+                        try:
+                            p_tags = pd_engine.compute_tags(code, df, extra_tags={
+                                'buy_sell_point': tags.get('buy_sell_point'),
+                                'sentiment_phase': tags.get('sentiment_phase'),
+                                'sector_heat': tags.get('sector_heat'),
+                                'capital_nature': tags.get('capital_nature'),
+                            })
+                            if p_tags:
+                                tags.update(p_tags)
+                        except Exception:
+                            pass
+
+                    # 5. 机会潜力强度已由 4c2 计算（313号 v4 替代 311 旧评分）
 
                 # 兜底标签
                 for _mandatory_tag, _default_val in [
@@ -1621,9 +1666,42 @@ def _precompute_l2_labels(codes):
                     except Exception:
                         pass
 
-                # 4d. 持有周期判定（306号§三：状态分类法）
+                # 4c2. 机会潜力强度（313号 v4 §四）— 替代旧 signal_strength 主力评分；
+                #     移到事件之后（事件标签已就绪），消费方 opportunity_meta/闸门在其后
                 try:
-                    _compute_hold_period(tags)
+                    mf_strength = compute_fund_strength(_ecm, code)
+                    _roe = None
+                    try:
+                        _r = _ecm._query_df(
+                            "SELECT roe FROM fina_indicator_cache WHERE ts_code=? "
+                            "ORDER BY end_date DESC LIMIT 1", [code])
+                        if not _r.empty:
+                            _roe = _r["roe"].iloc[0]
+                    except Exception:
+                        pass
+                    tags["roe"] = _roe if _roe is not None else 0
+                    pot = _potential_engine.compute_potential(tags, mf_strength)
+                    tags.update(pot)
+                except Exception:
+                    pass
+
+                # 4c3. 主力在场判定（313号 §十：行为证据主导——龙虎榜/股东户数/融资异动）
+                try:
+                    mfp = _compute_main_force_presence(code, _ecm)
+                    tags.update(mfp)
+                except Exception:
+                    pass
+
+                # 4d. 机会元信息（307号：七维画像 + 机会类型摘要 + 证据计数，替代306号持有周期）
+                try:
+                    _compute_opportunity_meta(tags)
+                except Exception:
+                    pass
+
+                # 4e. 闸门2右侧确认（309号§7.1：否决/基础/增强三档判定）
+                try:
+                    rc = _check_right_side_confirm(tags.get('opportunity_type', 'default'), tags, df)
+                    tags.update(rc)
                 except Exception:
                     pass
 
@@ -1637,18 +1715,24 @@ def _precompute_l2_labels(codes):
                         commit_count = 0
 
             except Exception:
+                _engine_fail += 1
                 continue
 
         if commit_count > 0:
             _ecm.conn.commit()
 
         elapsed = time.time() - t0
-        logger.info(f"L2标签预计算完成: {succeeded}/{len(codes)} 只, 耗时 {elapsed:.1f}s")
+        _val_summary = f"，估值引擎失败 {_val_fail} 只"
+        if _val_fail_samples:
+            _val_summary += "（样例: " + "; ".join(_val_fail_samples[:3]) + "）"
+        logger.info(f"L2标签预计算完成: {succeeded}/{len(codes)} 只, 耗时 {elapsed:.1f}s"
+                    f"{_val_summary}，整只失败 {_engine_fail} 只")
 
 
 def _add_vp_simple_tags(df, tags):
     """计算简单量价标签：ma_alignment / volume_price_fit / volatility_level / gap_type / breakout_attempts"""
     closes = df['close'].values
+    opens = df['open'].values if 'open' in df.columns else closes
     highs = df['high'].values if 'high' in df.columns else closes
     lows = df['low'].values if 'low' in df.columns else closes
     vols = df['vol'].values if 'vol' in df.columns else np.ones(len(closes))
@@ -1670,12 +1754,13 @@ def _add_vp_simple_tags(df, tags):
         if len(closes) >= 10:
             price_trend = closes[-1] / closes[-10] - 1
             vol_trend = np.mean(vols[-5:]) / max(np.mean(vols[-10:-5]), 1) - 1
-            if price_trend > 0.02 and vol_trend > 0.1:
-                tags['volume_price_fit'] = 'healthy'  # 放量上涨
+            # 308号硬缺口④调优：收紧背离与健康阈值，减少过度否决/过度乐观
+            if price_trend > 0.02 and vol_trend > 0.15:
+                tags['volume_price_fit'] = 'healthy'  # 放量上涨（量增≥15%）
             elif price_trend < -0.02 and vol_trend < -0.1:
-                tags['volume_price_fit'] = 'healthy'  # 缩量下跌
-            elif price_trend > 0.02 and vol_trend < -0.1:
-                tags['volume_price_fit'] = 'diverging'  # 缩量上涨(背离)
+                tags['volume_price_fit'] = 'healthy'  # 缩量下跌（卖压减轻）
+            elif price_trend > 0.02 and vol_trend < -0.2:
+                tags['volume_price_fit'] = 'diverging'  # 显著缩量上涨(背离，vt<-20%)
             elif abs(price_trend) < 0.01 and vol_trend > 0.2:
                 tags['volume_price_fit'] = 'diverging'  # 放量滞涨
             else:
@@ -1716,20 +1801,45 @@ def _add_vp_simple_tags(df, tags):
                     attempts += 1
             tags['breakout_attempts'] = min(attempts, 4)
 
-        # pattern_signal: 简单的K线形态检测（替代 KlinePatternAdapter，因依赖 Flask）
+        # pattern_signal: EnhancedPatternDetector 完整形态检测（308号/309号 S1）
+        # 45+ 种规则（预涨/预跌/黑马/K线反转），预跌型优先（否决语义：风险信号比确认信号更重要）
         if len(closes) >= 5:
-            # 双底形态：最近5日形成两次探底
+            try:
+                from app.engine.framework.volume_price_strategy import EnhancedPatternDetector
+                detector = EnhancedPatternDetector()
+                pats = detector.detect_all(closes, opens, highs, lows, vols)
+                if pats:
+                    # 预跌型优先：若同时存在预涨/预跌形态，取预跌（保守，供闸门2否决）
+                    bearish = [p for p in pats if '预跌' in p]
+                    bullish = [p for p in pats if ('预涨' in p or '黑马' in p)]
+                    if bearish:
+                        tags['pattern_signal'] = bearish[0].split('(')[0]
+                    elif bullish:
+                        tags['pattern_signal'] = bullish[0].split('(')[0]
+                    else:
+                        tags['pattern_signal'] = pats[0].split('(')[0]
+                else:
+                    tags['pattern_signal'] = 'none'
+            except Exception:
+                # 兜底：回退到简单双底/突破检测
+                tags['pattern_signal'] = _simple_pattern_fallback(lows, highs, closes)
+
+
+def _simple_pattern_fallback(lows, highs, closes) -> str:
+    """EnhancedPatternDetector 不可用时的简单形态兜底检测"""
+    try:
+        if len(closes) >= 5:
             recent_low = np.min(lows[-5:])
             recent_high = np.max(highs[-5:])
             mid = (recent_low + recent_high) / 2
             dips = sum(1 for i in range(-5, 0) if abs(lows[i] - recent_low) / max(recent_low, 1) < 0.01)
             if dips >= 2 and closes[-1] > mid:
-                tags['pattern_signal'] = 'double_bottom'
-            # 突破形态：价格突破近期高点
-            elif len(closes) >= 20 and closes[-1] > np.max(highs[-20:-1]) * 1.02:
-                tags['pattern_signal'] = 'breakout'
-            else:
-                tags['pattern_signal'] = 'none'
+                return 'double_bottom'
+            if len(closes) >= 20 and closes[-1] > np.max(highs[-20:-1]) * 1.02:
+                return 'breakout'
+    except Exception:
+        pass
+    return 'none'
 
 
 def _update_with_event_tags(ts_code: str, tags: dict):
@@ -1771,80 +1881,10 @@ def _add_upward_driver(df, tags):
         tags['upward_driver'] = 'no_upward'
 
 
-def _compute_signal_strength(tags: dict) -> float:
-    """计算 signal_strength 衍生标签（不含 catalyst_event 维度）
+def _classify_opportunity_type(tags: dict) -> dict:
+    """规则树：根据多标签联合判定机会类型（307号§3.1.3，画像速览摘要）
 
-    计算公式：
-      基础分 0-10:
-        main_force_phase=building→7.0, washing→5.5, lifting→6.0,
-                          distributing→2.0, unknown→3.0
-        + valuation_level=extreme_low→+1.5, low→+1.0, fair→0.0, high→-1.0, extreme_high→-2.0
-        + trend_alignment=up_aligned→+1.0, down_aligned→-1.0
-      ⇒ 范围控制在 0-10
-
-      置信度调整 ×0.8~×1.0:
-        phase_confidence < 0.6 → ×0.8, 0.6-0.8 → ×0.9, > 0.8 → ×1.0
-
-      环境调整 ×0.7~×1.0:
-        sentiment_phase=ebb→×0.7, climax→×0.85, recovery→×1.0, ice→×0.9
-
-    ⚠ 不含 catalyst_event 维度（P2.1 未就绪）
-    """
-    # 基础分
-    base = 3.0  # 默认
-
-    mfp = str(tags.get('main_force_phase', 'unknown'))
-    phase_map = {'building': 7.0, 'washing': 5.5, 'lifting': 6.0,
-                 'distributing': 2.0, 'unknown': 3.0}
-    base = phase_map.get(mfp, 3.0)
-
-    # 估值调整
-    vl = str(tags.get('valuation_level', 'fair'))
-    val_map = {'extreme_low': 1.5, 'low': 1.0, 'fair': 0.0,
-               'high': -1.0, 'extreme_high': -2.0}
-    base += val_map.get(vl, 0.0)
-
-    # 趋势调整（使用 trend_alignment，与295号标签体系一致）
-    ta = str(tags.get('trend_alignment', 'no_trend'))
-    trend_map = {'up_aligned': 1.0, 'down_aligned': -1.0, 'mixed': 0.0, 'no_trend': 0.0}
-    base += trend_map.get(ta, 0.0)
-
-    base = max(0.0, min(10.0, base))
-
-    # 置信度调整
-    pc = tags.get('phase_confidence')
-    confidence_factor = 1.0
-    if pc is not None:
-        try:
-            pc_f = float(pc)
-            if pc_f < 0.6:
-                confidence_factor = 0.8
-            elif pc_f < 0.8:
-                confidence_factor = 0.9
-        except (ValueError, TypeError):
-            pass
-
-    # 环境调整
-    sp = str(tags.get('sentiment_phase', ''))
-    env_map = {'ebb': 0.7, 'climax': 0.85, 'recovery': 1.0, 'ice': 0.9}
-    env_factor = env_map.get(sp, 1.0)
-
-    strength = base * confidence_factor * env_factor
-    return round(max(0.0, min(10.0, strength)), 1)
-
-
-def _compute_hold_period(tags: dict):
-    """持有周期判定 — 状态分类法（306号§三）
-
-    输入（从 tags 中读取的现状标签）：
-      main_force_phase / fina_health / valuation_level / sentiment_phase
-      sector_heat / volatility_level / dividend_yield / catalyst_event
-      time_rhythm / price_position
-
-    输出（写入 tags）：
-      hold_period       — "长线机会"/"中线机会"/"短线机会"/"超短机会"/"无明确信号"
-      hold_period_days  — "6月+"/"1-6月"/"1-4周"/"3-7天"/"观望"
-      hold_status_type  — 状态类型标识
+    返回 {'opportunity_type': ..., 'opportunity_label': ...}
     """
     mfp  = tags.get('main_force_phase')
     fina = tags.get('fina_health')
@@ -1854,81 +1894,455 @@ def _compute_hold_period(tags: dict):
     vl   = tags.get('volatility_level')
     dy   = tags.get('dividend_yield')
     ce   = tags.get('catalyst_event', 'none')
-    tr   = tags.get('time_rhythm', 'none')
 
-    # ── 规则树（优先级从高到低，命中即返回）──
+    # 类型 → (标识, 中文标签)
+    def _t(t, label):
+        return {'opportunity_type': t, 'opportunity_label': label}
 
-    # R1: 危险区 — 出货+财务风险 / 出货+高估值
+    # R1: 危险区
     if mfp == 'distributing' and fina == 'fail':
-        tags.update({'hold_period': '不持有', 'hold_period_days': '0', 'hold_status_type': 'danger_zone'}); return
+        return _t('danger_zone', '出货已确认，风险区域')
     if mfp == 'distributing' and val in ('high', 'extreme_high'):
-        tags.update({'hold_period': '超短机会', 'hold_period_days': '3-7天', 'hold_status_type': 'danger_overval'}); return
+        return _t('danger_overval', '出货+高估，风险区域')
 
-    # R2: 价值底部区 — 建仓+财务健康+低估
+    # R2: 价值底部区
     if mfp == 'building' and fina == 'pass' and val in ('extreme_low', 'low'):
-        tags.update({'hold_period': '长线机会', 'hold_period_days': '6月+', 'hold_status_type': 'value_bottom'}); return
+        return _t('value_bottom', '估值底部，基本面优质')
 
-    # R3: 建仓在高位 — 建仓+估值高（矛盾信号）
+    # R3: 建仓在高位
     if mfp == 'building' and val in ('high', 'extreme_high'):
-        tags.update({'hold_period': '短线机会', 'hold_period_days': '1-4周', 'hold_status_type': 'build_high'}); return
+        return _t('build_high', '建仓在高位，矛盾信号')
 
-    # R4: 主力建仓观察 — 基线建仓
+    # R4: 主力建仓观察
     if mfp == 'building':
-        tags.update({'hold_period': '中线机会', 'hold_period_days': '1-6月', 'hold_status_type': 'building_watch'}); return
+        return _t('building_watch', '主力建仓观察')
 
-    # R5: 主升浪 — 拉升+情绪高潮+热点
+    # R5: 主升浪
     if mfp == 'lifting' and sp == 'climax' and sh in ('top_10', 'top_20'):
-        tags.update({'hold_period': '短线机会', 'hold_period_days': '1-4周', 'hold_status_type': 'main_upsurge'}); return
-    # R6: 慢牛 — 拉升+冷门板块
+        return _t('main_upsurge', '趋势加速，动量充分')
+    # R6: 慢牛
     if mfp == 'lifting' and sh in ('none', 'normal'):
-        tags.update({'hold_period': '中线机会', 'hold_period_days': '1-3月', 'hold_status_type': 'steady_rise'}); return
+        return _t('steady_rise', '慢牛上涨')
     # R7: 拉升基线
     if mfp == 'lifting':
-        tags.update({'hold_period': '短线机会', 'hold_period_days': '1-4周', 'hold_status_type': 'lifting_general'}); return
+        return _t('lifting_general', '拉升阶段')
 
-    # R8: 洗盘热点 — 洗盘+热点板块
+    # R8: 洗盘热点
     if mfp == 'washing' and sh in ('top_10', 'top_20'):
-        tags.update({'hold_period': '中线观察', 'hold_period_days': '1-3月', 'hold_status_type': 'wash_hot'}); return
+        return _t('wash_hot', '洗盘热点，关注突破')
     # R9: 洗盘基线
     if mfp == 'washing':
-        tags.update({'hold_period': '中线机会', 'hold_period_days': '1-6月', 'hold_status_type': 'wash_general'}); return
+        return _t('wash_general', '洗盘整理')
 
-    # R10: 优质不明 — 阶段不明+财务健康+低估
+    # R10: 优质不明
     if fina == 'pass' and val in ('extreme_low', 'low'):
-        tags.update({'hold_period': '中线机会', 'hold_period_days': '1-3月', 'hold_status_type': 'quality_unknown'}); return
+        return _t('quality_unknown', '优质不明')
 
-    # R11: 高股息策略 — 股息率>3%
+    # R11: 高股息策略
     if dy is not None:
         try:
             if float(dy) > 3:
-                tags.update({'hold_period': '长线机会', 'hold_period_days': '6月+', 'hold_status_type': 'dividend_play'}); return
+                return _t('dividend_play', '高股息收益')
         except (ValueError, TypeError):
             pass
 
-    # R12: 事件驱动 — 有催化剂+高波动
+    # R12: 事件驱动
     if ce and ce not in ('', 'none', 'None') and vl == 'high':
-        tags.update({'hold_period': '超短机会', 'hold_period_days': '3-7天', 'hold_status_type': 'event_driven'}); return
-    # R13: 事件观察 — 有催化剂
+        return _t('event_driven', '事件催化，快进快出')
+    # R13: 事件观察
     if ce and ce not in ('', 'none', 'None'):
-        tags.update({'hold_period': '短线观察', 'hold_period_days': '1-4周', 'hold_status_type': 'event_watch'}); return
+        return _t('event_watch', '事件观察')
 
-    # R14: 冷门价值 — 财务健康+冷门板块+合理估值（不依赖股息率，避免被R11覆盖）
+    # R14: 冷门价值
     if fina == 'pass' and sh in ('none', 'normal') and val in ('fair', 'extreme_low', 'low'):
-        tags.update({'hold_period': '中线机会', 'hold_period_days': '1-3月', 'hold_status_type': 'cold_value'}); return
+        return _t('cold_value', '冷门价值')
 
-    # R15: 无信号（阶段不明且无其他特征）— 在兜底前检查
+    # R15: 无信号
     if mfp in (None, '', 'unknown'):
-        tags.update({'hold_period': '无明确信号', 'hold_period_days': '观望', 'hold_status_type': 'no_signal'}); return
+        return _t('no_signal', '无明确信号')
 
     # 兜底：根据情绪阶段确定基线
-    base = {'hold_period': '短线机会', 'hold_period_days': '1-4周', 'hold_status_type': 'default'}
     if sp == 'ice':
-        base = {'hold_period': '中线机会', 'hold_period_days': '1-3月', 'hold_status_type': 'sentiment_ice'}
-    elif sp == 'climax':
-        base = {'hold_period': '超短机会', 'hold_period_days': '3-7天', 'hold_status_type': 'sentiment_climax'}
-    elif sp == 'ebb':
-        base = {'hold_period': '超短机会', 'hold_period_days': '3-7天', 'hold_status_type': 'sentiment_ebb'}
-    tags.update(base)
+        return _t('sentiment_ice', '情绪冰点')
+    if sp == 'climax':
+        return _t('sentiment_climax', '情绪高潮')
+    if sp == 'ebb':
+        return _t('sentiment_ebb', '情绪退潮')
+    return _t('default', '一般机会')
+
+
+def _build_opportunity_profile(tags: dict) -> dict:
+    """七维机会画像（307号§3.1.2）：七个维度独立判定、并列呈现
+
+    每维输出 {状态, 红绿灯}：🟢 好 / 🟡 中性 / 🔴 风险
+    返回 {'opportunity_profile': {维度: {status, light}}, ...}
+    """
+    def _light(v, green, red):
+        return '🟢' if v in green else ('🔴' if v in red else '🟡')
+
+    mfp = tags.get('main_force_phase')
+    fina = tags.get('fina_health')
+    val = tags.get('valuation_level')
+    ff = tags.get('fund_flow')
+    ce = tags.get('catalyst_event', 'none')
+    sp = tags.get('sentiment_phase')
+
+    # 风险：财务健康 + 出货
+    risk_status = ('安全' if fina == 'pass' else
+                   '危险' if fina == 'fail' or mfp == 'distributing' else '警戒')
+    risk_light = '🟢' if risk_status == '安全' else ('🔴' if risk_status == '危险' else '🟡')
+
+    # 价值：估值水平
+    val_status = ('低估' if val in ('low', 'extreme_low') else
+                  '高估' if val in ('high', 'extreme_high') else '合理')
+    val_light = '🟢' if val_status == '低估' else ('🔴' if val_status == '高估' else '🟡')
+
+    # 趋势：主力阶段
+    trend_map = {
+        'building': ('建仓', '🟡'), 'washing': ('洗盘', '🟡'), 'lifting': ('拉升', '🟢'),
+        'distributing': ('出货', '🔴'), None: ('不明', '🟡'), '': ('不明', '🟡'),
+        'unknown': ('不明', '🟡'),
+    }
+    trend_status, trend_light = trend_map.get(mfp, ('不明', '🟡'))
+
+    # 量价：量价配合
+    vpf = tags.get('volume_price_fit')
+    vp_status = '健康' if vpf == 'healthy' else ('背离' if vpf == 'diverging' else '中性')
+    vp_light = '🟢' if vp_status == '健康' else ('🔴' if vp_status == '背离' else '🟡')
+
+    # 资金：资金流 + 筹码
+    ff_status = '流入' if ff == '5d_inflow' else ('流出' if ff == '5d_outflow' else '中性')
+    ff_light = '🟢' if ff_status == '流入' else ('🔴' if ff_status == '流出' else '🟡')
+
+    # 情绪：市场情绪 + 板块热度
+    sp_status = {'ice': '冰点', 'recovery': '复苏', 'climax': '高潮', 'ebb': '退潮'}.get(sp, '中性')
+    sp_light = '🟡' if sp_status == '冰点' else ('🔴' if sp_status in ('高潮', '退潮') else '🟢')
+
+    # 事件：催化剂（L3修复：三态 正向🟢/负向🔴/无⚪，307号§3.1.9）
+    # 正向/负向分类与 L4 VOTE_MAP catalyst_event 保持一致
+    _POS_EVENTS = {'earnings', 'lhb', 'concept', 'buyback', 'breakout', 'new_high', 'profit_growth'}
+    _NEG_EVENTS = {'pledge', 'float', 'reduce', 'fraud_sign', 'regulatory', 'lawsuit', 'decline'}
+    ce = str(ce or 'none').strip()
+    if ce == 'none' or ce == 'None' or ce == '':
+        ev_status, ev_light = '无事件', '⚪'
+    elif ce in _POS_EVENTS:
+        ev_status, ev_light = f'正向({ce})', '🟢'
+    elif ce in _NEG_EVENTS:
+        ev_status, ev_light = f'负向({ce})', '🔴'
+    else:
+        ev_status, ev_light = f'事件({ce})', '🟡'
+
+    return {'opportunity_profile': {
+        'risk': {'status': risk_status, 'light': risk_light},
+        'value': {'status': val_status, 'light': val_light},
+        'trend': {'status': trend_status, 'light': trend_light},
+        'volume_price': {'status': vp_status, 'light': vp_light},
+        'fund': {'status': ff_status, 'light': ff_light},
+        'sentiment': {'status': sp_status, 'light': sp_light},
+        'event': {'status': ev_status, 'light': ev_light},
+    }}
+
+
+# 各机会类型的证据标签集（307号§3.1.7 证据计数）
+_TYPE_EVIDENCE = {
+    'value_bottom': ['main_force_phase', 'fina_health', 'valuation_level',
+                     'price_position', 'trend_alignment', 'chip_concentration',
+                     'signal_strength'],
+    'building_watch': ['main_force_phase', 'price_position', 'fund_flow',
+                       'chip_concentration', 'trend_alignment'],
+    'build_high': ['main_force_phase', 'valuation_level'],
+    'main_upsurge': ['main_force_phase', 'sentiment_phase', 'sector_heat',
+                     'trend_alignment', 'signal_strength'],
+    'steady_rise': ['main_force_phase', 'sector_heat', 'trend_alignment', 'ma_alignment'],
+    'wash_hot': ['main_force_phase', 'sector_heat', 'chip_concentration'],
+    'wash_general': ['main_force_phase', 'chip_concentration', 'volume_price_fit'],
+    'danger_zone': ['main_force_phase', 'fina_health'],
+    'danger_overval': ['main_force_phase', 'valuation_level'],
+    'dividend_play': ['dividend_yield', 'fina_health'],
+    'event_driven': ['catalyst_event', 'volatility_level'],
+    'event_watch': ['catalyst_event'],
+    'cold_value': ['fina_health', 'sector_heat', 'valuation_level'],
+    'quality_unknown': ['fina_health', 'valuation_level'],
+    'no_signal': ['main_force_phase'],
+}
+
+
+def _count_evidence(opportunity_type: str, tags: dict) -> dict:
+    """多标签共识证据计数（307号§3.1.7）
+
+    统计共同支持该机会类型判定的标签命中数，输出证据数与可信度。
+    """
+    evidence_tags = _TYPE_EVIDENCE.get(opportunity_type, [])
+    hit = 0
+    total = len(evidence_tags)
+    for t in evidence_tags:
+        v = tags.get(t)
+        if v is not None and v not in ('', 'none', 'None', 'unknown', 0):
+            hit += 1
+    # 可信度分档：≥5 强共识 / 3-4 中等 / 1-2 弱
+    if hit >= 5:
+        confidence = 'confident'
+    elif hit >= 3:
+        confidence = 'plausible'
+    else:
+        confidence = 'weak'
+    return {'evidence_count': hit, 'evidence_total': total, 'confidence': confidence}
+
+
+def _compute_opportunity_meta(tags: dict):
+    """机会元信息（307号）：七维画像 + 机会类型摘要 + 证据计数
+
+    替代 306号 _compute_hold_period 的三字段输出（hold_period/hold_period_days/hold_status_type）。
+    """
+    # 七维画像
+    profile = _build_opportunity_profile(tags)
+    # 画像为嵌套 dict，序列化为 JSON 字符串以便 write_tags 落库（309号 S3）
+    profile['opportunity_profile'] = json.dumps(
+        profile['opportunity_profile'], ensure_ascii=False)
+    tags.update(profile)
+
+    # 机会类型摘要
+    type_result = _classify_opportunity_type(tags)
+    tags.update(type_result)
+
+    # 证据计数
+    ev = _count_evidence(type_result['opportunity_type'], tags)
+    tags.update(ev)
+
+    # 入场/退出条件（307号§3.2/§3.3，结构化 JSON）
+    try:
+        tags.update(_compute_entry_signals(type_result['opportunity_type'], tags))
+    except Exception:
+        pass
+    try:
+        tags.update(_compute_exit_conditions(type_result['opportunity_type'], tags))
+    except Exception:
+        pass
+
+
+# 各机会类型入场条件模板（307号§3.2，右侧确认 + 类型特定条件）
+_ENTRY_SIGNAL_TEMPLATES = {
+    'value_bottom': [
+        {'desc': '估值仍在低估区间（low/extreme_low）', 'check': 'valuation_level in (low, extreme_low)'},
+        {'desc': '基本面未恶化（fina_health=pass）', 'check': 'fina_health == pass'},
+        {'desc': '右侧确认：放量站上MA20 或 底分型回踩确认', 'check': 'right_side_confirm in (基础确认, 强确认)'},
+    ],
+    'building_watch': [
+        {'desc': '主力阶段仍在建仓（building）', 'check': 'main_force_phase == building'},
+        {'desc': '突破建仓成本区间上沿（放量）', 'check': 'right_side_confirm in (基础确认, 强确认)'},
+    ],
+    'main_upsurge': [
+        {'desc': '主力阶段拉升（lifting）', 'check': 'main_force_phase == lifting'},
+        {'desc': '回踩关键支撑（MA10）不破时入场，不追高', 'check': 'close > ma10'},
+    ],
+    'steady_rise': [
+        {'desc': '主力阶段拉升（lifting）', 'check': 'main_force_phase == lifting'},
+        {'desc': '价格沿MA20缓步上行', 'check': 'close > ma20'},
+        {'desc': '无超买信号', 'check': 'not overbought'},
+    ],
+    'dividend_play': [
+        {'desc': '股息率 > 3%', 'check': 'dividend_yield > 3'},
+        {'desc': '价格未出现急涨（避免均值回归）', 'check': 'pct_chg < 5'},
+        {'desc': '基本面未恶化（fina_health=pass）', 'check': 'fina_health == pass'},
+    ],
+    'event_driven': [
+        {'desc': '催化剂事件确认', 'check': 'catalyst_event != none'},
+        {'desc': '放量启动', 'check': 'volume_price_fit == healthy'},
+        {'desc': '设置严格止损位后入场', 'check': 'stop_loss_set'},
+    ],
+    'wash_hot': [
+        {'desc': '洗盘结束信号（缩量到极致后放量）', 'check': 'volume_price_fit == healthy'},
+        {'desc': '突破洗盘区间上沿', 'check': 'right_side_confirm in (基础确认, 强确认)'},
+    ],
+    'wash_general': [
+        {'desc': '洗盘结束需站上短期均线', 'check': 'right_side_confirm in (基础确认, 强确认)'},
+    ],
+    'danger_zone': [
+        {'desc': '无条件——危险区不应入场', 'check': 'never'},
+    ],
+    'danger_overval': [
+        {'desc': '无条件——出货+高估不应入场', 'check': 'never'},
+    ],
+}
+
+# 各机会类型退出条件模板（307号§3.3，任一满足即退出）
+_EXIT_CONDITION_TEMPLATES = {
+    'value_bottom': [
+        {'desc': '估值回到 fair 以上', 'check': 'valuation_level in (fair, high, extreme_high)'},
+        {'desc': '基本面恶化（fina_health in (fail, suspicious)）', 'check': 'fina_health in (fail, suspicious)'},
+        {'desc': '出货信号（main_force_phase → distributing）', 'check': 'main_force_phase == distributing'},
+    ],
+    'building_watch': [
+        {'desc': '跌破建仓成本区间下沿（建仓失败）', 'check': 'close < build_cost_low'},
+        {'desc': '主力阶段变为 distributing', 'check': 'main_force_phase == distributing'},
+    ],
+    'main_upsurge': [
+        {'desc': '顶分型 + 量价背离', 'check': 'top_fractal and volume_price_fit == diverging'},
+        {'desc': '跌破 MA10/MA20', 'check': 'close < ma10 or close < ma20'},
+        {'desc': '主力阶段变为 distributing', 'check': 'main_force_phase == distributing'},
+    ],
+    'steady_rise': [
+        {'desc': '跌破 MA20 且 3 日内未收回', 'check': 'close < ma20'},
+        {'desc': '出货信号', 'check': 'main_force_phase == distributing'},
+    ],
+    'event_driven': [
+        {'desc': '催化剂事件已兑现', 'check': 'catalyst_event == consumed'},
+        {'desc': '高波动消退（volatility 恢复正常）', 'check': 'volatility_level == low'},
+        {'desc': '反向技术信号', 'check': 'right_side_confirm == 否决'},
+    ],
+    'dividend_play': [
+        {'desc': '股息率跌破 2%', 'check': 'dividend_yield < 2'},
+        {'desc': '基本面恶化（fina_health=fail）', 'check': 'fina_health == fail'},
+    ],
+    'wash_hot': [
+        {'desc': '跌破洗盘区间下沿', 'check': 'close < wash_low'},
+        {'desc': '主力阶段变为 distributing', 'check': 'main_force_phase == distributing'},
+    ],
+    'danger_zone': [
+        {'desc': '无条件——已入场者立即退出', 'check': 'always'},
+    ],
+    'danger_overval': [
+        {'desc': '无条件——已入场者立即退出', 'check': 'always'},
+    ],
+}
+
+
+def _compute_entry_signals(opportunity_type: str, tags: dict) -> dict:
+    """入场条件（307号§3.2）：按机会类型返回结构化入场条件列表
+
+    满足判定叠加 L4 共识率 ≥55% 门禁（入场条件 = 右侧确认 AND L4 共识率）。
+    """
+    templates = _ENTRY_SIGNAL_TEMPLATES.get(opportunity_type)
+    if not templates:
+        templates = [{'desc': '一般机会：等待右侧确认信号', 'check': 'right_side_confirm in (基础确认, 强确认)'}]
+    # 附加 L4 共识率门禁（307号§3.2：入场条件 = 类型条件 AND 共识率 ≥55%）
+    result = templates + [
+        {'desc': 'L4 共识率 ≥ 65%（方向可信度门禁）', 'check': 'consensus_rate >= 0.65'},
+    ]
+    return {'entry_signals': json.dumps(result, ensure_ascii=False)}
+
+
+def _compute_exit_conditions(opportunity_type: str, tags: dict) -> dict:
+    """退出条件（307号§3.3）：按机会类型返回结构化退出条件列表
+
+    任一满足即退出；与 L4 估值跟踪退出（300号§2.2）并列。
+    """
+    templates = _EXIT_CONDITION_TEMPLATES.get(opportunity_type)
+    if not templates:
+        templates = [
+            {'desc': '技术面走坏（右侧确认变为否决）', 'check': 'right_side_confirm == 否决'},
+            {'desc': '出货信号（main_force_phase → distributing）', 'check': 'main_force_phase == distributing'},
+        ]
+    result = templates + [
+        {'desc': 'L4 估值跟踪退出触发（估值修复完成）', 'check': 'valuation_tracking.action == exit'},
+    ]
+    return {'exit_conditions': json.dumps(result, ensure_ascii=False)}
+
+
+# 各机会类型的基础确认信号（308号§四映射表，STEP 2）
+_BASE_CONFIRM = {
+    'value_bottom':   'ma20',   # 放量站上MA20
+    'building_watch': 'chip',   # 突破建仓成本区上沿
+    'build_high':     'ma10',   # 高位需更强确认（回踩MA10不破）
+    'main_upsurge':   'ma10',   # 回踩MA10不破
+    'steady_rise':    'ma20',   # MA20之上稳步上行
+    'wash_hot':       'chip',   # 突破洗盘区间上沿（筹码峰近似）
+    'wash_general':   'ma10',   # 洗盘结束需站上短均线
+    'dividend_play':  'ma20',   # 价格低位企稳（站上MA20）
+    'event_driven':   'ma10',   # 放量启动后站上MA10
+    'event_watch':    'ma10',
+    'cold_value':     'ma20',
+    'quality_unknown':'ma20',
+}
+
+
+def _check_right_side_confirm(opportunity_type: str, tags: dict, df: 'pd.DataFrame') -> dict:
+    """闸门2右侧确认三档判定（309号§7.1，308号）
+
+    判定流程：
+      STEP 1 否决检查（一票否决）：缠论卖点 / 量价背离 / 预跌形态
+      STEP 2 基础确认（必选）：按机会类型查均线/筹码确认信号
+      STEP 3 增强确认（加分）：缠论二买三买 / 预涨黑马形态 / 级别验证
+
+    输出: right_side_confirm = 强确认|基础确认|未确认|否决
+         confirm_evidence = [命中信号列表]
+    """
+    confirm_evidence = []
+    bs = tags.get('buy_sell_point', 'none')
+    vpf = tags.get('volume_price_fit', 'neutral')
+    pat = tags.get('pattern_signal', 'none')
+
+    # ── STEP 1 否决检查（一票否决） ──
+    if bs in ('first_sell', 'first_sell_p', 'second_sell', 'third_sell'):
+        return {'right_side_confirm': '否决', 'confirm_evidence': json.dumps([f'缠论卖点 {bs}'], ensure_ascii=False)}
+    if vpf == 'diverging':
+        return {'right_side_confirm': '否决', 'confirm_evidence': json.dumps(['量价背离'], ensure_ascii=False)}
+    if pat and '预跌' in str(pat):
+        return {'right_side_confirm': '否决', 'confirm_evidence': json.dumps([f'预跌形态 {pat}'], ensure_ascii=False)}
+
+    # ── STEP 2 基础确认（按机会类型） ──
+    base_key = _BASE_CONFIRM.get(opportunity_type, 'ma20')
+    base_ok = False
+    has_df = df is not None and not df.empty and 'close' in df.columns
+    closes = df['close'].values if has_df else None
+    if closes is not None and len(closes) >= 20:
+        price = closes[-1]
+        if base_key == 'ma20':
+            ma20 = float(df['close'].tail(20).mean())
+            vol20 = float(df['vol'].tail(20).mean()) if 'vol' in df.columns else 0
+            vol5 = float(df['vol'].tail(5).mean()) if 'vol' in df.columns and len(df) >= 5 else 0
+            # 放量站上 MA20：收盘 > MA20 且近5日均量 ≥ 20日均量
+            if price > ma20 and vol5 >= vol20:
+                base_ok = True
+                confirm_evidence.append('放量站上20日均线')
+        elif base_key == 'ma10':
+            ma10 = float(df['close'].tail(10).mean())
+            if price > ma10:
+                base_ok = True
+                confirm_evidence.append('站上10日均线')
+        elif base_key == 'chip':
+            # 筹码峰近似：收盘价处于近60日区间上1/3（突破区间上沿的简化判定）
+            if len(closes) >= 60:
+                hi60 = (float(df['high'].tail(60).max()) if 'high' in df.columns
+                        else float(closes[-60:].max()))
+                lo60 = (float(df['low'].tail(60).min()) if 'low' in df.columns
+                        else float(closes[-60:].min()))
+                if price >= lo60 + (hi60 - lo60) * 0.75:
+                    base_ok = True
+                    confirm_evidence.append('突破60日区间上沿')
+    if not base_ok:
+        return {'right_side_confirm': '未确认',
+                'confirm_evidence': json.dumps(confirm_evidence or ['基础确认信号未满足'], ensure_ascii=False)}
+
+    # ── STEP 3 增强确认（加分） ──
+    enhance = 0
+    if bs in ('second_buy', 'third_buy', 'third_buy_a', 'third_buy_b'):
+        enhance += 1
+        confirm_evidence.append(f'缠论{bs}')
+    if pat and ('预涨' in str(pat) or '黑马' in str(pat)):
+        enhance += 1
+        confirm_evidence.append(f'形态确认 {pat}')
+    # 级别验证：周线向上近似（收盘 > 20周均线≈100日均线）
+    if closes is not None and len(closes) >= 100:
+        ma100 = float(df['close'].tail(100).mean())
+        if closes[-1] > ma100:
+            enhance += 1
+            confirm_evidence.append('中期趋势向上')
+    # S7二期（308号P3）：趋势线/123法则检测（结构反转确认）
+    if df is not None and len(df) >= 30:
+        try:
+            from app.engine.framework.trend_structure_detector import TrendStructureDetector
+            _tsd = TrendStructureDetector()
+            _ts = _tsd.detect(df)
+            if _ts and _ts.get('signal') in ('123_buy_breakout', 'higher_low'):
+                enhance += 1
+                confirm_evidence.append('123法则结构反转')
+        except Exception:
+            pass
+
+    level = '强确认' if enhance >= 2 else '基础确认'
+    return {'right_side_confirm': level,
+            'confirm_evidence': json.dumps(confirm_evidence, ensure_ascii=False)}
 
 
 def _compute_style_exposure(ts_code: str, tags: dict, df: 'pd.DataFrame' = None) -> str:
@@ -2024,13 +2438,117 @@ def _get_active_codes(today_fmt: str = None) -> list[str]:
     return [r[0] for r in rows] if rows else []
 
 
+def _compute_main_force_presence(code: str, ecm) -> dict:
+    """主力在场判定（313号 §十：行为证据主导，不参与机会强度核心）
+
+    行为证据（真实主力活动痕迹）：
+      1. 龙虎榜近 30 日有席位记录 → strong（游资/机构席位证据）
+      2. 股东户数环比减少 ≥5% → moderate（筹码集中吸筹证据）
+      3. 融资余额 30 日增幅 >50% → risk（散户杠杆接盘/出货风险，知识库反向指标）
+      无任何证据 → none
+
+    Returns:
+        {'main_force_presence': 'strong'|'moderate'|'risk'|'none',
+         'presence_evidence': JSON 证据列表}
+    """
+    evidence = []
+    presence = 'none'
+    try:
+        n_lhb = ecm.conn.execute(
+            "SELECT COUNT(*) FROM lhb_cache WHERE ts_code=? "
+            "AND trade_date >= date('now','-30 day')", [code]).fetchone()[0]
+        if n_lhb and n_lhb > 0:
+            evidence.append(f"龙虎榜 {min(n_lhb, 5)} 次")
+            presence = 'strong'
+    except Exception:
+        pass
+    try:
+        rows = ecm.conn.execute(
+            "SELECT end_date, holder_number FROM stk_holder_cache "
+            "WHERE ts_code=? ORDER BY end_date DESC LIMIT 2", [code]).fetchall()
+        if len(rows) >= 2 and rows[0][1] and rows[1][1]:
+            prev, cur = float(rows[1][1]), float(rows[0][1])
+            if prev > 0 and (prev - cur) / prev >= 0.05:
+                evidence.append(f"股东户数减少 {(prev - cur) / prev * 100:.0f}%")
+                if presence == 'none':
+                    presence = 'moderate'
+    except Exception:
+        pass
+    try:
+        rows = ecm.conn.execute(
+            "SELECT trade_date, rzye FROM margin_cache WHERE ts_code=? "
+            "ORDER BY trade_date DESC LIMIT 1", [code]).fetchall()
+        if rows and rows[0][1]:
+            cur_f = float(rows[0][1])
+            # 融资余额最早记录（30 日窗口内）：字符串日期直接比较（修复：原 date() 截断 bug）
+            oldest = ecm.conn.execute(
+                "SELECT rzye FROM margin_cache WHERE ts_code=? AND trade_date <= ? "
+                "ORDER BY trade_date ASC LIMIT 1", [code, str(rows[0][0])]).fetchall()
+            if oldest and oldest[0][0]:
+                old_f = float(oldest[0][0])
+                if old_f > 0 and (cur_f - old_f) / old_f > 0.5:
+                    evidence.append("融资余额暴增 >50%")
+                    presence = 'risk'
+    except Exception:
+        pass
+    return {
+        'main_force_presence': presence,
+        'presence_evidence': json.dumps(evidence, ensure_ascii=False),
+    }
+
+
+def _compute_snapshot_consensus_rate(t: dict) -> float:
+    """轻量 L4 共识率（313号 §五：闸门3 颜色细分）— 用 VOTE_MAP 对快照可用标签投票
+
+    共识率 = 优势方向票 / 方向票总数（316号 P2：中性票不稀释方向共识；与 L4 _compute_consensus 同口径）
+    """
+    try:
+        from app.opportunity_atlas.cross_validate import VOTE_MAP
+        bullish = bearish = total = 0
+        for tag_name, val in t.items():
+            if val is None or val == '':
+                continue
+            mapping = VOTE_MAP.get(tag_name)
+            if mapping is None:
+                continue
+            v = 0
+            if tag_name == 'signal_strength':
+                try:
+                    fv = float(val)
+                    v = 1 if fv >= 70.0 else (-1 if fv <= 40.0 else 0)
+                except (ValueError, TypeError):
+                    v = 0
+            else:
+                v = mapping.get(val, mapping.get(str(val), 0))
+            if v > 0:
+                bullish += 1
+            elif v < 0:
+                bearish += 1
+            total += 1
+        if total < 3:
+            return 0.0
+        direction_active = bullish + bearish
+        if direction_active == 0:
+            return 0.0
+        if bullish > bearish:
+            return round(bullish / direction_active, 3)
+        if bearish > bullish:
+            return round(bearish / direction_active, 3)
+        return 0.0
+    except Exception:
+        return 0.0
+
+
 def _build_treemap_snapshot(codes: list[str]):
     """日终预计算完成后，构建 treemap_snapshot 快照表（S1 管道环节）
+
+    修复 2026-08-02：函数内使用 pd.notna 但未导入 pandas → INSERT 全失败
 
     从 daily_cache / daily_basic_cache / opportunity_tags_cache 提取最新数据，
     平铺写入 treemap_snapshot 表（4800 行 × ~25 列 ≈ 2-3 MB）。
     使用原子表替换避免读写不一致。
     """
+    import pandas as pd  # 修复 2026-08-02：函数内 pd.notna 依赖
     t0 = time.time()
     logger.info(f"构建 treemap_snapshot 快照: {len(codes)} 只...")
 
@@ -2039,9 +2557,13 @@ def _build_treemap_snapshot(codes: list[str]):
         return
 
     # 1. 元数据（名称 + 行业）
-    from app.data import DataManager
-    dm = DataManager()
-    meta = dm.get_stock_meta_batch(codes)
+    # SQLAlchemy ORM 需 Flask app context（309号 S1：此前缺 context 导致连续2天 failed）
+    from app import create_app
+    _flask_app = create_app()
+    with _flask_app.app_context():
+        from app.data import DataManager
+        dm = DataManager()
+        meta = dm.get_stock_meta_batch(codes)
     if not meta:
         logger.warning("  元数据为空，跳过快照构建")
         return
@@ -2049,7 +2571,7 @@ def _build_treemap_snapshot(codes: list[str]):
     # 2. 最新日线（每只最新一条，用子查询避免全表扫描）
     ph = ','.join('?' for _ in codes)
     daily_df = _ecm._query_df(f"""
-        SELECT ts_code, close, pct_chg, trade_date FROM daily_cache
+        SELECT ts_code, close, pct_chg, trade_date, amount, open, high, low FROM daily_cache
         WHERE (ts_code, trade_date) IN (
             SELECT ts_code, MAX(trade_date) FROM daily_cache
             WHERE ts_code IN ({ph}) GROUP BY ts_code
@@ -2058,7 +2580,7 @@ def _build_treemap_snapshot(codes: list[str]):
 
     # 3. 最新基本面
     basic_df = _ecm._query_df(f"""
-        SELECT ts_code, total_mv FROM daily_basic_cache
+        SELECT ts_code, total_mv, pe, pb, turnover_rate, circ_mv FROM daily_basic_cache
         WHERE (ts_code, trade_date) IN (
             SELECT ts_code, MAX(trade_date) FROM daily_basic_cache
             WHERE ts_code IN ({ph}) GROUP BY ts_code
@@ -2066,29 +2588,47 @@ def _build_treemap_snapshot(codes: list[str]):
     """, codes)
 
     # 4. L2 标签（平铺：每只一行，每标签一列）
+    # 修复 2026-08-04：原 MAX(CASE...) 取历史累积行的最大/字典序最大（如 fina_health 取到旧
+    # suspicious、sentiment_phase 取到旧 recovery），改为先取每 (ts_code, tag_name) 最新一行再平铺
     tags_df = _ecm._query_df(f"""
         SELECT ts_code,
-               MAX(CASE WHEN tag_name='signal_strength'     THEN tag_value END) as signal_strength,
+               MAX(CASE WHEN tag_name='signal_strength'     THEN CAST(tag_value AS REAL) END) as signal_strength,
                MAX(CASE WHEN tag_name='valuation_level'     THEN tag_value END) as valuation_level,
-               MAX(CASE WHEN tag_name='valuation_deviation' THEN tag_value END) as valuation_deviation,
+               MAX(CASE WHEN tag_name='valuation_deviation' THEN CAST(tag_value AS REAL) END) as valuation_deviation,
                MAX(CASE WHEN tag_name='main_force_phase'    THEN tag_value END) as main_force_phase,
-               MAX(CASE WHEN tag_name='phase_confidence'    THEN tag_value END) as phase_confidence,
+               MAX(CASE WHEN tag_name='phase_confidence'    THEN CAST(tag_value AS REAL) END) as phase_confidence,
                MAX(CASE WHEN tag_name='sentiment_phase'     THEN tag_value END) as sentiment_phase,
                MAX(CASE WHEN tag_name='sector_heat'         THEN tag_value END) as sector_heat,
                MAX(CASE WHEN tag_name='fina_health'         THEN tag_value END) as fina_health,
-               MAX(CASE WHEN tag_name='hold_period'         THEN tag_value END) as hold_period,
+               MAX(CASE WHEN tag_name='opportunity_type'    THEN tag_value END) as opportunity_type,
                MAX(CASE WHEN tag_name='trend_alignment'     THEN tag_value END) as trend_alignment,
                MAX(CASE WHEN tag_name='price_position'      THEN tag_value END) as price_position,
                MAX(CASE WHEN tag_name='fund_flow'           THEN tag_value END) as fund_flow,
                MAX(CASE WHEN tag_name='capital_nature'      THEN tag_value END) as capital_nature,
                MAX(CASE WHEN tag_name='chip_concentration'  THEN tag_value END) as chip_concentration,
                MAX(CASE WHEN tag_name='volatility_level'    THEN tag_value END) as volatility_level,
-               MAX(CASE WHEN tag_name='dividend_yield'      THEN tag_value END) as dividend_yield,
-               MAX(CASE WHEN tag_name='composite_rating'    THEN tag_value END) as composite_rating,
-               MAX(CASE WHEN tag_name='hold_period_days'   THEN tag_value END) as hold_period_days,
-               MAX(CASE WHEN tag_name='hold_status_type'   THEN tag_value END) as hold_status_type
-        FROM opportunity_tags_cache
-        WHERE ts_code IN ({ph})
+               MAX(CASE WHEN tag_name='dividend_yield'      THEN CAST(tag_value AS REAL) END) as dividend_yield,
+               MAX(CASE WHEN tag_name='composite_rating'    THEN CAST(tag_value AS REAL) END) as composite_rating,
+               MAX(CASE WHEN tag_name='opportunity_label'   THEN tag_value END) as opportunity_label,
+               MAX(CASE WHEN tag_name='evidence_count'      THEN CAST(tag_value AS INTEGER) END) as evidence_count,
+               MAX(CASE WHEN tag_name='right_side_confirm'  THEN tag_value END) as right_side_confirm,
+               MAX(CASE WHEN tag_name='confirm_evidence'    THEN tag_value END) as confirm_evidence,
+               MAX(CASE WHEN tag_name='opportunity_profile' THEN tag_value END) as opportunity_profile,
+               MAX(CASE WHEN tag_name='entry_signals'       THEN tag_value END) as entry_signals,
+               MAX(CASE WHEN tag_name='exit_conditions'     THEN tag_value END) as exit_conditions,
+               MAX(CASE WHEN tag_name='catalyst_event'      THEN tag_value END) as catalyst_event,
+               MAX(CASE WHEN tag_name='buy_sell_point'      THEN tag_value END) as buy_sell_point,
+               MAX(CASE WHEN tag_name='pattern_signal'      THEN tag_value END) as pattern_signal,
+               MAX(CASE WHEN tag_name='ma_alignment'        THEN tag_value END) as ma_alignment,
+               MAX(CASE WHEN tag_name='main_force_presence' THEN tag_value END) as main_force_presence,
+               MAX(CASE WHEN tag_name='presence_evidence'  THEN tag_value END) as presence_evidence
+        FROM (
+            SELECT ts_code, tag_name, tag_value,
+                   ROW_NUMBER() OVER (PARTITION BY ts_code, tag_name ORDER BY id DESC) rn
+            FROM opportunity_tags_cache
+            WHERE ts_code IN ({ph})
+        )
+        WHERE rn = 1
         GROUP BY ts_code
     """, codes)
 
@@ -2105,13 +2645,21 @@ def _build_treemap_snapshot(codes: list[str]):
         CREATE TABLE {NEW_TABLE} (
             ts_code TEXT PRIMARY KEY, name TEXT, industry TEXT,
             close REAL, pct_chg REAL, total_mv REAL, trade_date TEXT,
+            open REAL, high REAL, low REAL, amplitude REAL,
+            pe REAL, pb REAL,
+            amount REAL, turnover_rate REAL, circ_mv REAL,
             signal_strength REAL, valuation_level TEXT, valuation_deviation REAL,
             main_force_phase TEXT, phase_confidence REAL,
             sentiment_phase TEXT, sector_heat TEXT, fina_health TEXT,
-            hold_period TEXT, trend_alignment TEXT, price_position TEXT,
+            opportunity_type TEXT, trend_alignment TEXT, price_position TEXT,
             fund_flow TEXT, capital_nature TEXT, chip_concentration TEXT,
             volatility_level TEXT, dividend_yield REAL, composite_rating REAL,
-            hold_period_days TEXT, hold_status_type TEXT,
+            opportunity_label TEXT, evidence_count INTEGER,
+            right_side_confirm TEXT, confirm_evidence TEXT, opportunity_profile TEXT,
+            entry_signals TEXT, exit_conditions TEXT,
+            consensus_rate REAL,
+            main_force_presence TEXT,
+            presence_evidence TEXT,
             snapshot_date TEXT DEFAULT (date('now'))
         )
     """)
@@ -2126,29 +2674,45 @@ def _build_treemap_snapshot(codes: list[str]):
             _ecm.conn.execute(f"""
                 INSERT INTO {NEW_TABLE}
                 (ts_code, name, industry, close, pct_chg, total_mv, trade_date,
+                 open, high, low, amplitude,
+                 pe, pb,
+                 amount, turnover_rate, circ_mv,
                  signal_strength, valuation_level, valuation_deviation, main_force_phase,
-                 phase_confidence, sentiment_phase, sector_heat, fina_health, hold_period,
+                 phase_confidence, sentiment_phase, sector_heat, fina_health, opportunity_type,
                  trend_alignment, price_position, fund_flow, capital_nature,
                  chip_concentration, volatility_level, dividend_yield, composite_rating,
-                 hold_period_days, hold_status_type)
-                VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?)
+                 opportunity_label, evidence_count,
+                 right_side_confirm, confirm_evidence, opportunity_profile,
+                 entry_signals, exit_conditions, consensus_rate, main_force_presence, presence_evidence)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 code, m.get('name', ''), m.get('industry', ''),
                 float(d['close']) if pd.notna(d.get('close')) else None,
                 float(d['pct_chg']) if pd.notna(d.get('pct_chg')) else None,
                 float(b['total_mv']) if pd.notna(b.get('total_mv')) else None,
                 str(d['trade_date']) if pd.notna(d.get('trade_date')) else None,
+                _safe_float(d.get('open')), _safe_float(d.get('high')), _safe_float(d.get('low')),
+                (_safe_float(d.get('high')) - _safe_float(d.get('low'))) / max(_safe_float(d.get('close')), 1e-9) * 100,
+                _safe_float(b.get('pe')), _safe_float(b.get('pb')),
+                _safe_float(d.get('amount')), _safe_float(b.get('turnover_rate')),
+                _safe_float(b.get('circ_mv')),
                 _safe_float(t.get('signal_strength')),
                 t.get('valuation_level'), _safe_float(t.get('valuation_deviation')),
                 t.get('main_force_phase'), _safe_float(t.get('phase_confidence')),
                 t.get('sentiment_phase'), t.get('sector_heat'),
-                t.get('fina_health'), t.get('hold_period'),
+                t.get('fina_health'), t.get('opportunity_type'),
                 t.get('trend_alignment'), t.get('price_position'),
                 t.get('fund_flow'), t.get('capital_nature'),
                 t.get('chip_concentration'), t.get('volatility_level'),
                 _safe_float(t.get('dividend_yield')),
                 _safe_float(t.get('composite_rating')),
-                t.get('hold_period_days'), t.get('hold_status_type'),
+                t.get('opportunity_label'), _safe_int(t.get('evidence_count')),
+                t.get('right_side_confirm'), t.get('confirm_evidence'),
+                t.get('opportunity_profile'),
+                t.get('entry_signals'), t.get('exit_conditions'),
+                _compute_snapshot_consensus_rate(t),
+                t.get('main_force_presence'),
+                t.get('presence_evidence'),
             ))
             written += 1
         except Exception:
@@ -2169,6 +2733,15 @@ def _safe_float(v):
         return None
     try:
         return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_int(v):
+    if v is None or v == '' or v == 'None':
+        return None
+    try:
+        return int(float(v))
     except (ValueError, TypeError):
         return None
 
@@ -2709,7 +3282,7 @@ def _check_daily_sync_backfill():
 
 
 def main():
-    global _ecm, _running
+    global _ecm, _running, _cleanup_done
 
     logger.info("data_daemon 启动")
     logger.info(f"DATA_DIR={os.environ.get('DATA_DIR')}")
@@ -2793,10 +3366,10 @@ def main():
 
         # ── 数据清理（日终完成后触发一次，305号§9兼容） ──
         if _is_pipeline_complete(datetime.now().strftime('%Y%m%d')):
-            if not getattr(_running, '_cleanup_done', False):
+            if not _cleanup_done:
                 try:
                     _run_data_cleanup()
-                    _running._cleanup_done = True  # type: ignore
+                    _cleanup_done = True
                 except Exception as e:
                     logger.warning(f"数据清理异常: {e}")
 

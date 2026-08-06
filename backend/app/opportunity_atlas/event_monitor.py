@@ -236,10 +236,11 @@ class EventMonitor(DataAwareMixin):
     def _detect_fraud_sign(self, ts_code: str) -> dict:
         """A5 财务异常: fina_indicator + income + cashflow 多项异常
 
-        检测项:
+        检测项（2026-08-05 收紧：原 ROE<3%/现金流<0.5 过宽，致 74.9% 股票误标 fraud_sign——
+        财务质量差 ≠ 财务欺诈；收紧至真实异常阈值）:
         1) 营收连续2年下降
-        2) 经营现金流/净利润 < 0.5
-        3) ROE 极低 < 3%
+        2) 经营现金流为负（原 <0.5 过宽）
+        3) ROE 为负（亏损，原 <3% 过宽；微利由 fina_health 覆盖）
         4) 资产负债率 > 90%
         """
         result = {"detected": False, "direction": 0, "confidence": 0.0,
@@ -261,7 +262,7 @@ class EventMonitor(DataAwareMixin):
                     if revenues.iloc[0] < revenues.iloc[1] * 0.9:
                         anomalies.append("营收连续下降")
 
-            # 2) 经营现金流/净利润 < 0.5
+            # 2) 经营现金流为负（原 <0.5 过宽，收紧为负）
             if df_cf is not None and df_inc is not None:
                 cf_sorted = df_cf.sort_values('end_date', ascending=False)
                 inc_sorted = df_inc.sort_values('end_date', ascending=False)
@@ -270,14 +271,14 @@ class EventMonitor(DataAwareMixin):
                     has_attr = 'n_income_attr_p' in inc_sorted.columns
                     n_col = 'n_income_attr_p' if has_attr else 'n_income'
                     ni = inc_sorted.iloc[0].get(n_col) or 0
-                    if abs(ni) > 1e-6 and ocf / abs(ni) < 0.5:
-                        anomalies.append("经营现金流/净利润<0.5")
+                    if ocf < 0 and abs(ni) > 1e-6:
+                        anomalies.append("经营现金流为负")
 
-            # 3) ROE < 3%
+            # 3) ROE 为负（亏损；原 <3% 过宽，微利由 fina_health 覆盖）
             if df_fi is not None and 'roe' in df_fi.columns:
                 roe = df_fi['roe'].dropna()
-                if not roe.empty and roe.iloc[0] < 3.0:
-                    anomalies.append(f"ROE={roe.iloc[0]:.1f}%<3%")
+                if not roe.empty and roe.iloc[0] < 0:
+                    anomalies.append(f"ROE={roe.iloc[0]:.1f}%<0")
 
             # 4) 资产负债率 > 90%
             if df_bs is not None:
