@@ -1000,11 +1000,7 @@ function buildTreeData(mode, stocks) {
         // 2026-08-06 修复（二次）：读 stockItem.valuation（loadMarketData 已将 API 的
         // valuation_level 映射到此字段）；stockItem.tags 为中文标签数组非 dict，不可用
         const vl = s.valuation || '';
-        let devKey = '合理';
-        if (vl === 'extreme_low') devKey = '严重低估';
-        else if (vl === 'low') devKey = '偏低';
-        else if (vl === 'high') devKey = '偏高';
-        else if (vl === 'extreme_high') devKey = '高估';
+        const devKey = _valuationKey(vl);
         color = DEVIATION_COLORS[devKey] || '#6b7280';
       }
 
@@ -1121,11 +1117,7 @@ function _stockTooltip(d, stockName) {
     // 原按 deviation 绝对阈值映射，fair 类 dev 落入负区间被误判偏高/高估）
     const devColors = {"严重低估":"#166534","偏低":"#22c55e","合理":"#6b7280","偏高":"#f87171","高估":"#dc2626"};
     const _vl = d.valuation || '';
-    let devKey = '合理';
-    if (_vl === 'extreme_low') devKey = '严重低估';
-    else if (_vl === 'low') devKey = '偏低';
-    else if (_vl === 'high') devKey = '偏高';
-    else if (_vl === 'extreme_high') devKey = '高估';
+    const devKey = _valuationKey(_vl);
     const devColor = devColors[devKey] || '#6b7280';
     const _dv = d.valDeviationValue;
     return `
@@ -1386,13 +1378,51 @@ function renderSideList() {
     .sort((a, b) => sizeMode === 'cap' ? (b.marketCap || 0) - (a.marketCap || 0) : (b.amount || 0) - (a.amount || 0));
   document.getElementById('spTitle').textContent = `行业：${currentInd}（${stocks.length} 只）`;
 
+  // 2026-08-06：三模式右侧列表各自展示专属信息（296号方案 能力二）
+  // market=当日交易数据；opportunity=信号强度+时机+机会类型；value=估值结论+评分+PE/PB
+  const mode = currentMode;
   list.innerHTML = stocks.map(s => {
-    const col = s.pctChange >= 0 ? 'var(--accent-red, #f87171)' : 'var(--accent-green, #4ade80)';
-    const cap = (s.marketCap / 1e4).toFixed(0) + '亿';   // marketCap 万元 → 亿
+    const pctCol = s.pctChange >= 0 ? 'var(--accent-red, #f87171)' : 'var(--accent-green, #4ade80)';
+    const nm = `<span class="nm">${s.name}</span>`;
+
+    if (mode === 'opportunity') {
+      // 机会模式：信号强度 + 右侧确认徽标 + 机会类型
+      const pct = Math.max(0, Math.min(100, s.signalStrength || 0));
+      const barColor = pct >= 70 ? '#22c55e' : pct >= 50 ? '#f59e0b' : pct >= 30 ? '#3b82f6' : '#6b7280';
+      const badge = CONFIRM_BADGE[s.rightSideConfirm] ? CONFIRM_BADGE[s.rightSideConfirm][0] : '';
+      return `<div class="stock-row" data-ts="${s.tsCode}">
+        ${nm}
+        <span class="sig" style="flex:1;display:flex;align-items:center;gap:4px;">
+          <span style="min-width:38px;color:${barColor};font-weight:600;">${Math.round(pct)}</span>
+          <span style="flex:1;background:#2a2e41;border-radius:3px;height:6px;overflow:hidden;">
+            <span style="display:block;height:100%;width:${pct}%;background:${barColor};"></span>
+          </span>
+          ${badge ? `<span>${badge}</span>` : ''}
+        </span>
+        <span class="pct" style="color:${pctCol}">${s.pctChange >= 0 ? '+' : ''}${s.pctChange.toFixed(2)}%</span>
+      </div>`;
+    }
+
+    if (mode === 'value') {
+      // 价值模式：估值结论（颜色）+ 估值评分 + PE/PB
+      const vKey = _valuationKey(s.valuation);
+      const vColor = DEVIATION_COLORS[vKey] || '#6b7280';
+      const dv = s.valDeviationValue;
+      return `<div class="stock-row" data-ts="${s.tsCode}">
+        ${nm}
+        <span class="val" style="flex:1;color:${vColor};font-weight:600;">${vKey}</span>
+        <span class="cap" style="color:#8b93a7;">${typeof dv === 'number' ? (dv > 0 ? '+' : '') + dv : '--'}</span>
+        <span class="cap" style="color:#8b93a7;">PE ${s.pe ? s.pe.toFixed(1) : '--'}</span>
+      </div>`;
+    }
+
+    // market 模式（默认）：涨跌 + 成交额 + 换手率
+    const cap = (s.marketCap / 1e4).toFixed(0) + '亿';
     return `<div class="stock-row" data-ts="${s.tsCode}">
-      <span class="nm">${s.name}</span>
-      <span class="pct" style="color:${col}">${s.pctChange >= 0 ? '+' : ''}${s.pctChange.toFixed(2)}%</span>
-      <span class="cap">${cap}</span>
+      ${nm}
+      <span class="pct" style="color:${pctCol}">${s.pctChange >= 0 ? '+' : ''}${s.pctChange.toFixed(2)}%</span>
+      <span class="cap">${(s.amount / 1e5).toFixed(1)}亿</span>
+      <span class="cap" style="color:#8b93a7;">${cap}</span>
     </div>`;
   }).join('');
 
@@ -1404,12 +1434,30 @@ function renderSideList() {
     const s = RAW_STOCKS.find(x => x.tsCode === row.dataset.ts);
     if (!s) return;
     row.addEventListener('mouseenter', () => {
-      const col = s.pctChange >= 0 ? '#f87171' : '#4ade80';
-      const sz = sizeMode === 'cap' ? (s.marketCap / 1e4).toFixed(1) + '亿' : (s.amount / 1e5).toFixed(2) + '亿';
-      tip.innerHTML = `<strong>${s.name}</strong> <span style="color:#8b93a7;">${s.tsCode}</span><br/>` +
-        `涨跌 <b style="color:${col}">${s.pctChange >= 0 ? '+' : ''}${s.pctChange.toFixed(2)}%</b><br/>` +
-        `${sizeMode === 'cap' ? '市值' : '成交额'} <b>${sz}</b><br/>` +
-        (s.signalStrength ? `信号强度 <b>${Math.round(s.signalStrength)}</b>/100` : '');
+      const pctCol = s.pctChange >= 0 ? '#f87171' : '#4ade80';
+      let html = `<strong>${s.name}</strong> <span style="color:#8b93a7;">${s.tsCode}</span><br/>`;
+
+      if (mode === 'opportunity') {
+        html += `信号强度 <b>${Math.round(s.signalStrength || 0)}</b>/100<br/>` +
+          `时机 <b>${s.rightSideConfirm || '未确认'}</b>` +
+          (s.consensusRate ? `（共识 ${(s.consensusRate * 100).toFixed(0)}%）` : '') +
+          (s.opportunityLabel ? `<br/>类型 <b>${s.opportunityLabel}</b>` : '') +
+          `<br/>涨跌 <b style="color:${pctCol}">${s.pctChange >= 0 ? '+' : ''}${s.pctChange.toFixed(2)}%</b>`;
+      } else if (mode === 'value') {
+        const vKey = _valuationKey(s.valuation);
+        const vColor = DEVIATION_COLORS[vKey] || '#6b7280';
+        const dv = s.valDeviationValue;
+        html += `估值结论 <b style="color:${vColor}">${vKey}</b><br/>` +
+          `估值评分 <b>${typeof dv === 'number' ? (dv > 0 ? '+' : '') + dv : '--'}</b>（&lt;0 偏贵 / &gt;0 偏便宜）<br/>` +
+          `PE <b>${s.pe ? s.pe.toFixed(1) : '--'}</b> / PB <b>${s.pb ? s.pb.toFixed(2) : '--'}</b>` +
+          (s.dividendYield ? `<br/>股息率 <b>${s.dividendYield.toFixed(2)}%</b>` : '');
+      } else {
+        const sz = sizeMode === 'cap' ? (s.marketCap / 1e4).toFixed(1) + '亿' : (s.amount / 1e5).toFixed(2) + '亿';
+        html += `涨跌 <b style="color:${pctCol}">${s.pctChange >= 0 ? '+' : ''}${s.pctChange.toFixed(2)}%</b><br/>` +
+          `${sizeMode === 'cap' ? '市值' : '成交额'} <b>${sz}</b><br/>` +
+          `换手 <b>${s.turnoverRate.toFixed(2)}%</b> / 振幅 <b>${s.amplitude.toFixed(2)}%</b>`;
+      }
+      tip.innerHTML = html;
       tip.style.display = 'block';
     });
     row.addEventListener('mousemove', e => {
@@ -1546,6 +1594,15 @@ const TAG_CN = {
   'top_10': '板块前10', 'top_20': '板块前20', 'normal': '板块中等', 'top_30': '板块中等',
 };
 function _tagCn(v) { return TAG_CN[v] || v || '--'; }
+
+// 估值等级 → 中文结论（2026-08-06：供价值模式列表/弹窗复用）
+function _valuationKey(vl) {
+  if (vl === 'extreme_low') return '严重低估';
+  if (vl === 'low') return '偏低';
+  if (vl === 'high') return '偏高';
+  if (vl === 'extreme_high') return '高估';
+  return '合理';
+}
 
 // ============================================================
 // DETAIL PANEL
