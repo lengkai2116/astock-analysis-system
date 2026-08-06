@@ -157,10 +157,8 @@ def invalidate_cache():
 
         data_manager = DataManager()
         if ts_code:
-            # 单只股票缓存清除：从 DuckDB 删除对应记录
-            ecm = data_manager.cache
-            ecm.conn.execute("DELETE FROM daily_cache WHERE ts_code = ?", [ts_code])
-            ecm.conn.commit()
+            # 单只缓存清除：经 DataManager 网关（合规整改，原直连 ecm.conn）
+            data_manager.clear_stock_cache(ts_code)
             msg = f'股票 {ts_code} 缓存已清除'
         else:
             data_manager.cache.invalidate_old_data(days)

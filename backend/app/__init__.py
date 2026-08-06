@@ -10,7 +10,12 @@ load_dotenv()
 
 db = SQLAlchemy()
 migrate = Migrate()
-socketio = SocketIO(cors_allowed_origins="*")
+# 2026-08-06 根治：强制 threading 模式（禁止 eventlet 自动选用）
+# 根因：本环境未调用 eventlet.monkey.patch_all()，但 Flask-SocketIO 检测到
+# 已安装 eventlet 即自动选用 → greenlet 调度异常 → psycopg2 连接借用不归还
+# → 连接池耗尽 → API CPU 99.6% + /api/v3/health 超时。threading 模式
+# （werkzeug 线程池）无此问题，单进程桌面应用无需 eventlet 的绿色协程。
+socketio = SocketIO(cors_allowed_origins="*", async_mode='threading')
 
 
 import logging

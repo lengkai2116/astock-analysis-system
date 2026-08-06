@@ -119,59 +119,29 @@ def _get_data_source_status():
 
 
 def _get_external_api_status():
-    """检查外部 API 连通性（Tushare / DeepSeek）"""
-    import requests as http_requests
+    """外部 API 状态（只读配置，不发起实时 HTTP 请求）
+
+    2026-08-06 根治：原实现用 requests 直调 Tushare/DeepSeek/LLM-Wiki（timeout 3-10s），
+    违反 AGENTS.md 四层架构红线（调用层不得直调外部数据源），且 eventlet/threading 下
+    同步 HTTP 会阻塞请求处理 → /api/v3/health 超时。
+    外部 API 连通性属采集进程职责（data_daemon 数据源统计），调用层只读配置状态。
+    """
     results = {}
-
-    # 1. Tushare 连通性
     tushare_token = os.getenv('TUSHARE_TOKEN', '')
-    if tushare_token:
-        try:
-            resp = http_requests.post(
-                'http://api.tushare.pro',
-                json={'api_name': 'stock_basic', 'token': tushare_token, 'params': {'exchange': '', 'list_status': 'L', 'fields': 'ts_code'}},
-                timeout=10,
-            )
-            data = resp.json()
-            if data.get('code') == 0 and data.get('data', {}).get('items'):
-                results['tushare'] = {'status': 'connected', 'msg': f"{len(data['data']['items'])} stocks available"}
-            else:
-                results['tushare'] = {'status': 'error', 'msg': data.get('msg', 'unknown error')}
-        except Exception as e:
-            results['tushare'] = {'status': 'unreachable', 'msg': str(e)}
-    else:
-        results['tushare'] = {'status': 'not_configured', 'msg': 'TUSHARE_TOKEN not set'}
-
-    # 2. DeepSeek 连通性
+    results['tushare'] = {
+        'status': 'configured' if tushare_token else 'not_configured',
+        'msg': 'token configured（连通性由数据进程采集统计）' if tushare_token else 'TUSHARE_TOKEN not set',
+    }
     deepseek_key = os.getenv('DEEPSEEK_API_KEY', '')
-    if deepseek_key:
-        try:
-            resp = http_requests.get(
-                os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1') + '/models',
-                headers={'Authorization': f'Bearer {deepseek_key}'},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                models = resp.json().get('data', [])
-                results['deepseek'] = {'status': 'connected', 'msg': f"{len(models)} models available"}
-            else:
-                results['deepseek'] = {'status': 'error', 'msg': f"HTTP {resp.status_code}: {resp.text[:100]}"}
-        except Exception as e:
-            results['deepseek'] = {'status': 'unreachable', 'msg': str(e)}
-    else:
-        results['deepseek'] = {'status': 'not_configured', 'msg': 'DEEPSEEK_API_KEY not set'}
-
-    # 3. LLM Wiki 端点可达性
+    results['deepseek'] = {
+        'status': 'configured' if deepseek_key else 'not_configured',
+        'msg': 'key configured（连通性由 AI 服务按需验证）' if deepseek_key else 'DEEPSEEK_API_KEY not set',
+    }
     wiki_token = os.getenv('LLM_WIKI_API_TOKEN', '')
-    try:
-        resp = http_requests.get('http://127.0.0.1:19828/api/health', timeout=3)
-        if resp.status_code == 200:
-            results['llm_wiki'] = {'status': 'connected', 'msg': 'LLM Wiki running'}
-        else:
-            results['llm_wiki'] = {'status': 'error', 'msg': f"HTTP {resp.status_code}"}
-    except Exception:
-        results['llm_wiki'] = {'status': 'unreachable', 'msg': 'LLM Wiki not running or token not set' if not wiki_token else 'LLM Wiki not reachable'}
-
+    results['llm_wiki'] = {
+        'status': 'configured' if wiki_token else 'not_configured',
+        'msg': 'token configured（本地服务可达性按需探测）' if wiki_token else 'LLM_WIKI_API_TOKEN not set',
+    }
     return results
 
 
@@ -265,7 +235,7 @@ def health_check():
                     "cache_size_mb": cache_status.get('cache_size_mb', 0)
                 },
                 {
-                    "name": "Backend (Flask+eventlet)",
+                    "name": "Backend (Flask+threading)",
                     "status": "healthy",
                     "pid": os.getpid(),
                     "memory_mb": 0  # 获取实际内存需 psutil

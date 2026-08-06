@@ -3313,11 +3313,22 @@ def main():
 
     # 主循环（每 30 秒检查一次）
     _last_patrol = 0
+    _last_ckpt = 0
 
     logger.info("data_daemon 进入主循环（管道驱动）")
     while _running:
         now = datetime.now()
         ts = time.time()
+
+        # ── WAL 周期 checkpoint（2026-08-06 根治③）──
+        # 每 5 分钟 PASSIVE checkpoint 一次：合并已提交帧、防 WAL 无限膨胀
+        # （原无 checkpoint，WAL 曾达 86G；PASSIVE 不阻塞读写）
+        if ts - _last_ckpt > 300:
+            try:
+                _ecm.wal_checkpoint('PASSIVE')
+                _last_ckpt = ts
+            except Exception as e:
+                logger.warning(f"WAL checkpoint 失败: {e}")
 
         # ── sync_requests 队列消费（不变） ──
         try:

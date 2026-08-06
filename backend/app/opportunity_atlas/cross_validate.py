@@ -86,10 +86,14 @@ VOTE_MAP: dict[str, dict[str | int, int]] = {
         '格兰维尔买点3-偏离买': 1, '格兰维尔买点4-新低买': 1,
         '涨停形态': 1, 'W底': 1, '下降楔形': 1, '突破缺口': 1,
         '地量后的倍量启动': 1, '低位连续小阳线黑马前奏': 1,
+        # 2026-08-06 修复（316号 P5）：黑马形态映射补齐（原缺失致投票失效）
+        '底部放量长阳黑马首板': 1,
         # 看跌（预跌）
         '乌云盖顶': -1, '黄昏星': -1, '看跌吞没': -1, '射击之星': -1,
         '三乌鸦': -1, '上吊线': -1, '放量冲高回落': -1, '天量天价': -1,
         '放量滞涨': -1, '跳空高开低走': -1, '放量长阴': -1, '高台跳水': -1,
+        # 2026-08-06 修复（316号 P5）：预跌形态映射补齐（原缺失致投票失效）
+        '放量下跌恐慌出逃': -1, '平台破位箱体下沿跌破': -1,
         # P5 补充（看跌）
         'MA5死叉MA10': -1, '均线空头排列': -1, '看跌孕线': -1, '看跌捉腰带': -1,
         '看跌踢开': -1, '三线开花空头': -1,
@@ -97,6 +101,9 @@ VOTE_MAP: dict[str, dict[str | int, int]] = {
         '格兰维尔卖点3-偏离卖': -1, '格兰维尔卖点4-新高卖': -1,
         '头肩顶': -1, '上升楔形': -1, '扩散三角形': -1, 'M顶': -1, '衰竭缺口': -1,
         '跳空高开低走巨量阴线': -1,
+        # 持续/待变盘形态（中性，显式声明防误判；2026-08-06 补齐）
+        '上升三法': 0, '下降三法': 0, '光头光脚': 0, '孕线十字': 0,
+        '陀螺线': 0, '收敛三角形': 0,
     },
     'right_side_confirm': {'强确认': 1, '基础确认': 0, '未确认': 0, '否决': -1},
     # ── 316号 P3：扩展票源（规模/低波动/流动性）— 默认关闭（L4_EXTRA_VOTES=1 启用），见 _lookup_vote ──
@@ -218,6 +225,16 @@ VOTE_REASONS: dict[str, dict[str | int, str]] = {
         '跳空高开低走': '跳空高开低走（预跌）',
         '放量长阴': '放量长阴（预跌）',
         '高台跳水': '高台跳水破位（预跌）',
+        # 2026-08-06 修复（316号 P5）：形态原因补齐
+        '放量下跌恐慌出逃': '放量下跌恐慌出逃（预跌）',
+        '平台破位箱体下沿跌破': '平台破位箱体下沿跌破（预跌）',
+        '底部放量长阳黑马首板': '底部放量长阳黑马首板（黑马）',
+        '上升三法': '上升三法（持续整理）',
+        '下降三法': '下降三法（持续整理）',
+        '光头光脚': '光头光脚（持续）',
+        '孕线十字': '孕线十字（持续）',
+        '陀螺线': '陀螺线（持续）',
+        '收敛三角形': '收敛三角形（待变盘）',
     },
     'right_side_confirm': {
         '强确认': '右侧强确认（突破+结构+趋势背书）',
@@ -230,7 +247,7 @@ VOTE_REASONS: dict[str, dict[str | int, str]] = {
 # ── 短线标签（climax 情绪下被折扣的标签集合）───────────────
 SHORT_TERM_TAGS = {
     'fund_flow', 'sector_heat', 'buy_sell_point',
-    'catalyst_event', 'sentiment_phase', 'pattern_signal',
+    'catalyst_event', 'pattern_signal',
 }
 
 # ── 316号 P3：动量票源（climax 额外降权——追高风险）与质量票源（ice 升权——均值回归机会） ──
@@ -315,7 +332,7 @@ class L4CrossValidator(DataAwareMixin):
         # ── 并行计算日常变化（299号§5.1 变更检测归属L4） ──
         daily_change = self._compute_daily_change(ts_code, tags)
 
-        operation_advice = self._build_operation_advice(ts_code, consensus, tags, signal_strength, gate, df)
+        operation_advice = self._build_operation_advice(ts_code, consensus, tags, gate, df)
         risk_warnings = self._build_risk_warnings(tags, gate)
         user_checklist = self._build_user_checklist(ts_code, tags, valuation_tracking)
         opportunity_summary = self._build_opportunity_summary(tags, consensus, risk_warnings)
@@ -401,40 +418,6 @@ class L4CrossValidator(DataAwareMixin):
 
         return gate
 
-    def _build_gate_denied(self, ts_code: str, name: str, tags: dict) -> dict:
-        """估值偏高时返回门禁拒绝结果"""
-        VAL_MAP = {'extreme_low': '极度低估', 'low': '偏低', 'fair': '合理',
-                    'high': '偏高', 'extreme_high': '极度高估'}
-        val_label = VAL_MAP.get(tags.get('valuation_level', ''), '未知')
-        return {
-            'ts_code': ts_code,
-            'name': name,
-            'diagnosis_date': datetime.now().strftime('%Y-%m-%d'),
-            'opportunity_summary': {
-                'score': 0,
-                'grade': 'D',
-                'risk_level': 'high',
-                'time_horizon': tags.get('opportunity_label', tags.get('opportunity_type', 'unknown')),
-                'verification': '✗ 估值门禁拒绝：估值偏高，不推荐介入',
-            },
-            'tags_summary': self._build_tags_summary(tags),
-            'cross_validation': {
-                'consensus': {'bullish_votes': 0, 'bearish_votes': 0, 'neutral_votes': 0,
-                              'total_active': 0, 'consensus_rate': 0, 'direction': 'neutral'},
-                'sentiment_weight': 1.0,
-                'voting_detail': [],
-                'verdict': f'当前估值{val_label}，不推荐介入。',
-                'user_checklist': [f'ℹ 估值{val_label}，建议等待回调至合理区间'],
-            },
-            'operation_advice': {
-                'action': 'not_recommended', 'label': '不推荐',
-                'max_position_ratio': 0, 'entry_plan': [], 'stop_loss': None, 'target_price': None,
-            },
-            'risk_warnings': [{'type': 'valuation', 'content': '估值偏高，安全边际不足'}],
-            'valuation_tracking': self._check_valuation_exit(ts_code, tags),
-            'signal_strength_adjusted': 0,
-        }
-
     # ══════════════════════════════════════════════════════════
     # Step B: 情绪加权
     # ══════════════════════════════════════════════════════════
@@ -495,10 +478,17 @@ class L4CrossValidator(DataAwareMixin):
     # ══════════════════════════════════════════════════════════
 
     def _compute_consensus(self, tags: dict, adjusted_votes: dict[str, float]) -> tuple[dict, list]:
-        """执行共识投票统计"""
+        """执行共识投票统计
+
+        316号 P3 修复（2026-08-06）：动态加权参与共识统计——
+        情绪加权后的投票（adjusted_votes）计入 bullish/bearish 强度，
+        共识率 = 优势方向加权强度 / 方向票加权强度（降权影响结果）。
+        """
         bullish = 0
         bearish = 0
         neutral = 0
+        w_bullish = 0.0   # 加权看多强度（316号 P3）
+        w_bearish = 0.0   # 加权看空强度
         total_active = 0
         detail: list[dict] = []
 
@@ -513,8 +503,10 @@ class L4CrossValidator(DataAwareMixin):
 
             if raw_vote > 0:
                 bullish += 1
+                w_bullish += adj_vote
             elif raw_vote < 0:
                 bearish += 1
+                w_bearish += abs(adj_vote)
             else:
                 neutral += 1
 
@@ -554,13 +546,14 @@ class L4CrossValidator(DataAwareMixin):
 
         # 确定方向（316号 P2：共识率用方向票分母——中性票不稀释方向共识；
         # rate = 优势方向票 / (看多+看空)，全中性 → 0）
-        direction_active = bullish + bearish
-        if direction_active > 0 and bullish > bearish:
+        # 316号 P3：分子分母均用加权强度（情绪加权真实参与共识）
+        direction_active = w_bullish + w_bearish
+        if direction_active > 0 and w_bullish > w_bearish:
             direction = 'bullish'
-            rate = bullish / direction_active
-        elif bearish > bullish:
+            rate = w_bullish / direction_active
+        elif w_bearish > w_bullish:
             direction = 'bearish'
-            rate = bearish / direction_active
+            rate = w_bearish / direction_active
         else:
             # L2修复：多空打平 → 标记"多空分歧"（tie=True），供前端显示而非误导为 0%
             direction = 'neutral'
@@ -620,9 +613,9 @@ class L4CrossValidator(DataAwareMixin):
             if rate >= 0.65:
                 return 'reduce', '减仓'
             if rate >= 0.50:
-                return 'hold', '仅做T/持有'
-            if rate >= 0.35:
                 return 'reduce', '减仓/回避'
+            if rate >= 0.35:
+                return 'hold', '仅做T/持有'
             return 'hold', '仅做T/持有'
 
         # bullish or neutral
@@ -794,7 +787,7 @@ class L4CrossValidator(DataAwareMixin):
         }
 
     def _build_operation_advice(self, ts_code: str, consensus: dict, tags: dict,
-                                signal_strength: float, gate: dict = None, df=None) -> dict:
+                                gate: dict = None, df=None) -> dict:
         """构建操作建议
 
         309号 决策3：操作建议以 L4 共识率为唯一来源，但叠加闸门2右侧确认覆盖：
@@ -937,9 +930,14 @@ class L4CrossValidator(DataAwareMixin):
         lo60 = float(df['low'].tail(60).min()) if len(df) >= 60 and 'low' in df.columns else (
             float(closes[-60:].min()) if len(closes) >= 60 else None)
 
-        # 建仓类建议：分批入场 + 止损/目标（基于 max_ratio 缩放首仓比例）
+        # 建仓类建议：分批入场 + 止损/目标（首仓随 max_ratio 缩放：40-60%）
         if action in ('build_position', 'add_position') and max_ratio > 0:
-            first = round(0.4 * max_ratio / max(max_ratio, 0.1) * 100)  # 首仓约 40%（0.4/上限）
+            # 2026-08-06 修复：原公式 0.4*max_ratio/max(max_ratio,0.1)*100 恒为 40%
+            # （冗余缩放抵消），未体现"首仓 40-60% 按风险等级下调"
+            # （方案 §5.3）。改为随 max_ratio 线性缩放：0.6→60%、≤0.1→43%
+            first = round((40 + 20 * min(max_ratio / 0.6, 1.0)))
+            remaining = 100 - first
+            second = third = remaining // 2
             entry_plan = []
             if ma10 and ma20 and price > ma20:
                 entry_plan.append({'price': f'回踩 MA10（{ma10:.2f}-{ma20:.2f}）', 'ratio': f'{first}%',
@@ -947,10 +945,13 @@ class L4CrossValidator(DataAwareMixin):
             else:
                 entry_plan.append({'price': f'当前价 {price:.2f}', 'ratio': f'{first}%', 'condition': '首次建仓'})
             if hi60 and price < hi60:
-                entry_plan.append({'price': f'放量突破前高 {hi60:.2f}', 'ratio': '30%', 'condition': '右侧加仓'})
+                entry_plan.append({'price': f'放量突破前高 {hi60:.2f}', 'ratio': f'{second}%',
+                                   'condition': '右侧加仓'})
             else:
-                entry_plan.append({'price': '回踩 MA10 不破', 'ratio': '30%', 'condition': '回踩加仓'})
-            entry_plan.append({'price': f'回踩 MA20（{ma20:.2f}）', 'ratio': '30%', 'condition': '深度回踩补仓'})
+                entry_plan.append({'price': '回踩 MA10 不破', 'ratio': f'{second}%',
+                                   'condition': '回踩加仓'})
+            entry_plan.append({'price': f'回踩 MA20（{ma20:.2f}）', 'ratio': f'{third}%',
+                               'condition': '深度回踩补仓'})
 
             # 止损：max(MA20, 60日前低) × 0.98
             stop_base = None
@@ -1089,18 +1090,8 @@ class L4CrossValidator(DataAwareMixin):
     ]
 
     def _get_previous_trade_date(self) -> str | None:
-        """获取上一个交易日（YYYY-MM-DD）"""
-        try:
-            cache = self._get_cache()
-            row = cache.conn.execute(
-                "SELECT DISTINCT trade_date FROM daily_cache "
-                "ORDER BY trade_date DESC LIMIT 1 OFFSET 1"
-            ).fetchone()
-            if row:
-                return row[0]
-            return None
-        except Exception:
-            return None
+        """获取上一个交易日（YYYY-MM-DD）——经 DataManager 网关（红线5）"""
+        return self._get_dm().get_previous_trade_date()
 
     def _compute_daily_change(self, ts_code: str, today_tags: dict) -> dict:
         """计算当日 vs 上日标签变化（299号§5.2 八维度监控）
@@ -1113,22 +1104,16 @@ class L4CrossValidator(DataAwareMixin):
             return {'has_changes': False, 'changes': [], 'change_count': 0,
                     'focus_items': []}
 
-        # 加载上日标签
+        # 加载上日标签（合规整改：经 DataManager 网关，替代直连 cache.conn）
         try:
-            cache = self._get_cache()
-            rows = cache.conn.execute(
-                "SELECT tag_name, tag_value FROM opportunity_tags_cache "
-                "WHERE ts_code=? AND updated_at=?",
-                [ts_code, yesterday]
-            ).fetchall()
+            yesterday_tags = self._get_dm().get_tags_by_date(ts_code, yesterday)
         except Exception:
-            rows = []
+            yesterday_tags = {}
 
-        if not rows:
+        if not yesterday_tags:
             return {'has_changes': False, 'changes': [], 'change_count': 0,
                     'focus_items': []}
 
-        yesterday_tags: dict[str, str] = {r[0]: r[1] for r in rows}
         changes: list[dict] = []
 
         # 检查各维度

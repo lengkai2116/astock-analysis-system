@@ -175,12 +175,10 @@ def _build_response(mode: str, items: list[dict]) -> dict:
     tagged = sum(1 for it in items if it.get('signal_strength', 0) > 0)
     coverage = tagged / len(items) if items else 0.0
     # 313号：潜力快照日期（前端时间标注：潜力基于快照、时机截至实时）
+    # 合规整改：经 DataManager 网关（红线5），原直连 get_ecm().conn 属违规
     _snap_date = None
     try:
-        from app.data import get_ecm
-        _r = get_ecm().conn.execute("SELECT MAX(snapshot_date) FROM treemap_snapshot").fetchone()
-        if _r and _r[0]:
-            _snap_date = str(_r[0])
+        _snap_date = get_data_manager().get_snapshot_max_date()
     except Exception:
         pass
     return {
@@ -314,21 +312,12 @@ def diagnose_stock():
 
     # 延迟导入 L4CrossValidator（避免循环导入）
     from app.opportunity_atlas.cross_validate import L4CrossValidator
-    from app.data.enhanced_cache_manager import get_ecm_instance
+    from app.data import DataManager
 
-    ecm = get_ecm_instance()
-    # 从标签表加载该股票的所有标签（扁平值）
-    tags = {}
-    try:
-        rows = ecm.conn.execute(
-            "SELECT tag_name, tag_value FROM opportunity_tags_cache "
-            "WHERE ts_code=? ORDER BY tag_name",
-            [ts_code]
-        ).fetchall()
-        for r in rows:
-            tags[r[0]] = r[1]
-    except Exception:
-        pass
+    # 2026-08-06 合规整改：经 DataManager 网关读取标签（红线5），
+    # 原直连 ecm.conn.execute 读 opportunity_tags_cache 属违规
+    dm = DataManager()
+    tags = dm.cache.get_tags(ts_code)
 
     if not tags:
         return jsonify({'success': False, 'error': f'股票 {ts_code} 暂无标签数据'}), 404

@@ -292,6 +292,31 @@ class DataManager:
         """获取组装好的快照数据（委托 ECM）"""
         return self.cache.get_treemap_snapshot_items(ts_codes)
 
+    def get_snapshot_max_date(self) -> str | None:
+        """获取 treemap_snapshot 最新构建日期（合规整改网关）"""
+        try:
+            return self.cache.get_snapshot_max_date()
+        except Exception:
+            return None
+
+    def get_previous_trade_date(self) -> str | None:
+        """获取上一交易日（L4 日变检测用，替代调用层直连 daily_cache）"""
+        try:
+            return self.cache.get_previous_trade_date()
+        except Exception:
+            return None
+
+    def get_tags_by_date(self, ts_code: str, trade_date: str | None = None) -> dict:
+        """获取指定股票在指定日期的标签 dict（L4 日变检测用）
+
+        未指定 trade_date 时返回该股票最新标签（委托 ECM.get_tags）。
+        """
+        return self.cache.get_tags_by_date(ts_code, trade_date)
+
+    def clear_stock_cache(self, ts_code: str) -> bool:
+        """清除单只股票缓存（缓存失效路由用，替代调用层直连 DELETE）"""
+        return self.cache.clear_stock_cache(ts_code)
+
     # ── 管道状态（305号§9.2） ──
 
     def load_pipeline_status(self, pipeline_date: str) -> dict:

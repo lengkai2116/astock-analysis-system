@@ -111,6 +111,25 @@ class EnhancedCacheManager:
         except Exception as e:
             logger.warning(f"SQLite 执行失败: {e}")
 
+    def wal_checkpoint(self, mode: str = 'PASSIVE') -> tuple:
+        """执行 SQLite WAL checkpoint，收缩 WAL 文件（2026-08-06 根治③）
+
+        根因：WAL 模式下无周期 checkpoint，文件只增不减（实测 86G），
+        SQLite 默认 wal_autocheckpoint 的 TRUNCATE 阶段常被读连接阻塞。
+        由 daemon 主循环周期调用（PASSIVE 模式不阻塞读写）；
+        mode: 'PASSIVE'（默认，不阻塞）/ 'TRUNCATE'（截断，需无活跃读事务）。
+
+        Returns: (busy, log_frames, checkpointed_frames)
+        """
+        try:
+            with self._write_lock:
+                return self.conn.execute(
+                    f"PRAGMA wal_checkpoint({mode})"
+                ).fetchone()
+        except Exception as e:
+            logger.warning(f"WAL checkpoint({mode}) 失败: {e}")
+            return (1, 0, 0)
+
     # ── 建表 ─────────────────────────────────────────────────
 
     def _init_tables(self):
@@ -848,6 +867,17 @@ class EnhancedCacheManager:
                 return True
             except Exception as e:
                 logger.warning(f"清除旧缓存失败: {e}")
+                return False
+
+    def clear_stock_cache(self, ts_code: str) -> bool:
+        """清除单只股票缓存（2026-08-06 合规整改：替代调用层直连 DELETE）"""
+        with self._write_lock:
+            try:
+                self.conn.execute("DELETE FROM daily_cache WHERE ts_code = ?", [ts_code])
+                self.conn.commit()
+                return True
+            except Exception as e:
+                logger.warning(f"清除股票缓存失败 ({ts_code}): {e}")
                 return False
 
     def clear_old_cache(self, days=30):
@@ -2037,6 +2067,50 @@ class EnhancedCacheManager:
         for _, row in df.iterrows():
             result[row['tag_name']] = row['tag_value']
         return result
+
+    def get_tags_by_date(self, ts_code: str, trade_date: str | None = None) -> dict:
+        """读取指定股票在指定日期的标签 dict（2026-08-06 合规整改网关）
+
+        未指定 trade_date 时返回该股票最新标签（等同 get_tags）。
+        指定时精确匹配 updated_at=该交易日 的行（L4 日变检测语义）。
+        """
+        if trade_date is None:
+            return self.get_tags(ts_code)
+        try:
+            df = self._query_df(
+                "SELECT tag_name, tag_value FROM opportunity_tags_cache "
+                "WHERE ts_code=? AND updated_at=?",
+                [ts_code, trade_date]
+            )
+            if df.empty:
+                return {}
+            return {r['tag_name']: r['tag_value'] for _, r in df.iterrows()}
+        except Exception as e:
+            logger.warning(f"get_tags_by_date({ts_code},{trade_date}) 失败: {e}")
+            return {}
+
+    def get_snapshot_max_date(self) -> str | None:
+        """获取 treemap_snapshot 最新构建日期（2026-08-06 合规整改网关）"""
+        try:
+            row = self.conn.execute(
+                "SELECT MAX(snapshot_date) FROM treemap_snapshot"
+            ).fetchone()
+            return str(row[0]) if row and row[0] else None
+        except Exception as e:
+            logger.warning(f"get_snapshot_max_date 失败: {e}")
+            return None
+
+    def get_previous_trade_date(self) -> str | None:
+        """获取上一交易日（daily_cache 倒数第二日，2026-08-06 合规整改网关）"""
+        try:
+            row = self.conn.execute(
+                "SELECT DISTINCT trade_date FROM daily_cache "
+                "ORDER BY trade_date DESC LIMIT 1 OFFSET 1"
+            ).fetchone()
+            return row[0] if row else None
+        except Exception as e:
+            logger.warning(f"get_previous_trade_date 失败: {e}")
+            return None
 
     def query_tags(self, tag_filters: dict[str, list[str]], limit: int = 5000) -> list[dict]:
         """按标签组合查询股票（AND 逻辑）

@@ -26,6 +26,15 @@ logger = logging.getLogger(__name__)
 # 2026-08 中国 10Y 国债实际约 1.6-1.8%，默认 1.7（原硬编码 2.5 为 2022 前水平，致现金流锚系统性偏负）
 CN_10Y_BOND_YIELD_PCT = float(os.getenv('CN_10Y_BOND_YIELD', '1.7'))
 
+# 315号阶段2：PB-ROE 质量修正参数（env 可配；原硬编码 12/20/0.25/0.5）
+# 注：原 315 方案要求 QUALITY_ADJUST 常量可配，2026-08-06 落地
+QUALITY_ADJUST = {
+    'roe_threshold': float(os.getenv('QUALITY_ROE_THRESHOLD', '12.0')),
+    'roe_norm': float(os.getenv('QUALITY_ROE_NORM', '20.0')),
+    'premium': float(os.getenv('QUALITY_PREMIUM', '0.25')),
+    'fail_penalty': float(os.getenv('QUALITY_FAIL_PENALTY', '0.5')),
+}
+
 # 申万一级行业 → 七大分类
 INDUSTRY_CATEGORY: dict[str, str] = {
     '食品饮料': '蓝筹',
@@ -158,7 +167,9 @@ class ValuationEngine(DataAwareMixin):
             import bisect
             codes = ecm._query_df("SELECT ts_code FROM treemap_snapshot")["ts_code"].tolist()
             vals = []
-            for code in codes[:3000]:  # 抽样 3000（截面近似，够分位）
+            # 2026-08-06 修复：原抽样 3000 与方案"全市场截面基准"不符，
+            # 改为全量遍历
+            for code in codes:
                 try:
                     df_b = ecm.get_cached_daily_basic(code)
                     df_cf = ecm.cache.get_cached_cashflow(code)
@@ -198,6 +209,10 @@ class ValuationEngine(DataAwareMixin):
 
         从标签表最近一次 composite_rating 排序（跨轮滞后一天，百分位相对语义可接受）。
         无基准时 compute_tags 回退绝对阈值分档。
+        2026-08-06 修复（315号 F2 口径）：基准值须与查询侧同口径——
+        查询侧 `_level_by_composite(composite - industry_mean)` 使用中性化后的值，
+        故基准分布也构建为「composite − 行业均值」的中性化分布，
+        否则口径错配致分档失真。
         """
         try:
             import bisect
@@ -206,38 +221,30 @@ class ValuationEngine(DataAwareMixin):
                 "WHERE tag_name='composite_rating' AND tag_value IS NOT NULL AND tag_value != '' "
                 "AND id IN (SELECT MAX(id) FROM opportunity_tags_cache WHERE tag_name='composite_rating' GROUP BY ts_code)"
             )
-            vals = []
+            items = []
             for _, r in rows.iterrows():
                 try:
-                    vals.append(float(r['tag_value']))
+                    items.append((r['ts_code'], float(r['tag_value'])))
                 except (TypeError, ValueError):
                     continue
-            if len(vals) < 100:
+            if len(items) < 100:
                 self._comp_percentile = None
                 return
-            vals.sort()
-            n = len(vals)
-            def _pct(v: float) -> float:
-                idx = bisect.bisect_left(vals, v)
-                return idx / n
-            self._comp_percentile = _pct
             # 315号 F2：行业中性化——按 7 大行业分类统计 composite 均值
             # （行业内相对估值：个股 composite 减行业均值后再做截面分档，
             #   避免"行业整体贵→行业内股票全判高估"的系统偏差）
             self._industry_mean = {}
+            cat_map: dict[str, str] = {}
             try:
                 from app.data import DataManager
                 dm = DataManager()
-                batch = dm.get_stock_industry_batch([r['ts_code'] for _, r in rows.iterrows()])
+                batch = dm.get_stock_industry_batch([code for code, _ in items])
                 cat_sum: dict[str, float] = {}
                 cat_cnt: dict[str, int] = {}
-                for _, r in rows.iterrows():
-                    try:
-                        cval = float(r['tag_value'])
-                    except (TypeError, ValueError):
-                        continue
-                    ind = batch.get(r['ts_code'])
+                for code, cval in items:
+                    ind = batch.get(code)
                     cat = self._category(ind)
+                    cat_map[code] = cat
                     cat_sum[cat] = cat_sum.get(cat, 0.0) + cval
                     cat_cnt[cat] = cat_cnt.get(cat, 0) + 1
                 self._industry_mean = {c: s / cat_cnt[c] for c, s in cat_sum.items() if cat_cnt.get(c, 0) >= 30}
@@ -245,6 +252,16 @@ class ValuationEngine(DataAwareMixin):
             except Exception as e:
                 logger.warning(f"行业中性化基准构建失败: {e}")
                 self._industry_mean = {}
+            # 基准分布 = 中性化后的 composite（与查询侧同口径）
+            vals = sorted(
+                cval - self._industry_mean.get(cat_map.get(code, '微小/亏损'), 0.0)
+                for code, cval in items
+            )
+            n = len(vals)
+            def _pct(v: float) -> float:
+                idx = bisect.bisect_left(vals, v)
+                return idx / n
+            self._comp_percentile = _pct
             logger.info(f"composite 截面基准构建完成: {n} 只")
         except Exception as e:
             logger.warning(f"composite 截面基准构建失败: {e}")
@@ -512,11 +529,12 @@ class ValuationEngine(DataAwareMixin):
     # 财务质量评分
     # ═══════════════════════════════════════════════
 
-    def _fina_health(self, ts_code: str) -> tuple[str, bool]:
-        """返回 (fina_health, roce_pass)
+    def _fina_health(self, ts_code: str) -> tuple[str, bool, pd.DataFrame]:
+        """返回 (fina_health, roce_pass, df_fina)
 
         fina_health: 'pass' | 'suspicious' | 'fail'
         roce_pass: bool
+        df_fina: 财务指标表（315号阶段2 质量修正复用，避免二次查询）
         """
         dm = self._get_dm()
         health = 'pass'
@@ -608,7 +626,7 @@ class ValuationEngine(DataAwareMixin):
         elif fail_count >= 1:
             health = 'suspicious'
 
-        return health, roce_pass
+        return health, roce_pass, df_fina
 
     # ═══════════════════════════════════════════════
     # 主入口
@@ -666,20 +684,19 @@ class ValuationEngine(DataAwareMixin):
         composite = max(-2.0, min(2.0, composite))
 
         # ── 315号阶段2：PB-ROE 质量修正（高 ROE 支撑高估值，主流框架；财务风险惩罚） ──
-        fina_health, roce_pass = self._fina_health(ts_code)
+        fina_health, roce_pass, df_fina = self._fina_health(ts_code)
+        qa = QUALITY_ADJUST
         if fina_health == 'fail':
-            composite -= 0.5                                   # 财务风险：估值惩罚（低估值也不虚高）
+            composite -= qa['fail_penalty']  # 财务风险：估值惩罚
         elif fina_health == 'pass':
-            try:
-                df_fina = dm.get_cached_fina_indicator(ts_code)
-                if not df_fina.empty and 'roe' in df_fina.columns:
-                    roe = df_fina['roe'].dropna()
-                    if not roe.empty:
-                        roe_v = float(roe.iloc[0] or 0)
-                        if roe_v > 12.0:
-                            composite += 0.25 * min(1.0, roe_v / 20.0)   # 高质量溢价（质量修正量可配）
-            except Exception:
-                pass
+            # 复用 _fina_health 已加载的 df_fina（避免二次查询）
+            if not df_fina.empty and 'roe' in df_fina.columns:
+                roe = df_fina['roe'].dropna()
+                if not roe.empty:
+                    roe_v = float(roe.iloc[0] or 0)
+                    if roe_v > qa['roe_threshold']:
+                        # 高质量溢价
+                        composite += qa['premium'] * min(1.0, roe_v / qa['roe_norm'])
         composite = max(-2.0, min(2.0, composite))
 
         # ── 315号 F3：生命周期成长修正（知识库《企业生命周期与估值》——成长股高估值容忍） ──
