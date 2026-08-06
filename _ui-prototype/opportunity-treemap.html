@@ -992,17 +992,17 @@ function buildTreeData(mode, stocks) {
         // 313号：颜色=时机信号（闸门2 右侧确认 × 闸门3 共识率细分；蓝/黄/灰/棕避开红绿）
         color = timingColor(s.rightSideConfirm, s.consensusRate);
       } else {
-        // value mode: size=price (sqrt scaled), color=valuation deviation
+        // value mode: size=price (sqrt scaled), color=valuation_level（2026-08-06 修复：
+        // 颜色改由修复后的 valuation_level 驱动——原按 deviation 绝对阈值（dv>10/<-10）映射，
+        // 与 315 修复后新语义错配：fair 类（dev 均值 -11.3）被误染红。level 语义：
+        // extreme_low/low=低估绿、fair=合理灰、high/extreme_high=高估红）
         value = Math.sqrt(s.price || s.prevClose || 10) * 15 + 10;
-        const dv = s.valDeviationValue;
+        const vl = s.valuation_level || (s.tags && s.tags.valuation_level) || '';
         let devKey = '合理';
-        if (typeof dv === 'number') {
-          // 2026-08-04 修复：valuation_deviation 正=低估、负=高估（原符号反）
-          if (dv > 20) devKey = '严重低估';
-          else if (dv > 10) devKey = '偏低';
-          else if (dv < -20) devKey = '高估';
-          else if (dv < -10) devKey = '偏高';
-        }
+        if (vl === 'extreme_low') devKey = '严重低估';
+        else if (vl === 'low') devKey = '偏低';
+        else if (vl === 'high') devKey = '偏高';
+        else if (vl === 'extreme_high') devKey = '高估';
         color = DEVIATION_COLORS[devKey] || '#6b7280';
       }
 
@@ -1115,24 +1115,24 @@ function _stockTooltip(d, stockName) {
       <div style="border-top:1px solid #2e3245;margin-top:6px;padding-top:6px;font-size:11px;color:#3b82f6;">👆 点击查看完整诊断</div>
     `;
   } else {
-    // value mode（2026-08-04 修复：deviation 正=低估/负=高估；估值结论按等级显示而非数值）
+    // value mode（2026-08-06 修复：估值结论改由 valuation_level 驱动，与方块颜色一致；
+    // 原按 deviation 绝对阈值映射，fair 类 dev 落入负区间被误判偏高/高估）
     const devColors = {"严重低估":"#166534","偏低":"#22c55e","合理":"#6b7280","偏高":"#f87171","高估":"#dc2626"};
-    const _dv = d.valDeviationValue;
+    const _vl = d.valuation || '';
     let devKey = '合理';
-    if (typeof _dv === 'number') {
-      if (_dv > 20) devKey = '严重低估';
-      else if (_dv > 10) devKey = '偏低';
-      else if (_dv < -20) devKey = '高估';
-      else if (_dv < -10) devKey = '偏高';
-    }
+    if (_vl === 'extreme_low') devKey = '严重低估';
+    else if (_vl === 'low') devKey = '偏低';
+    else if (_vl === 'high') devKey = '偏高';
+    else if (_vl === 'extreme_high') devKey = '高估';
     const devColor = devColors[devKey] || '#6b7280';
+    const _dv = d.valDeviationValue;
     return `
       <div style="font-size:13px;font-weight:600;margin-bottom:6px;">${displayName} <span style="font-size:11px;color:#6b728c;">${d.tsCode}</span></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;font-size:12px;">
         <div><span style="color:#6b728c;">现价</span> <strong>${d.price.toFixed(2)}</strong></div>
         <div><span style="color:#6b728c;">涨跌幅</span> <strong style="color:${pctColor}">${pctSign}${d.pctChange.toFixed(2)}%</strong></div>
         <div><span style="color:#6b728c;">估值结论</span> <strong style="color:${devColor}">${devKey}</strong></div>
-        <div><span style="color:#6b728c;">偏离度</span> <strong style="color:${devColor}">${_dv > 0 ? '+' : ''}${_dv}%</strong></div>
+        <div><span style="color:#6b728c;">偏离度</span> <strong style="color:${devColor}">${typeof _dv === 'number' ? (_dv > 0 ? '+' : '') + _dv + '%' : '--'}</strong></div>
         <div><span style="color:#6b728c;">PE</span> ${d.pe.toFixed(1)}</div>
         <div><span style="color:#6b728c;">PB</span> ${d.pb.toFixed(2)}</div>
         <div><span style="color:#6b728c;">股息率</span> ${typeof d.dividendYield === 'number' ? d.dividendYield.toFixed(2) + '%' : '--'}</div>
@@ -1514,10 +1514,10 @@ function updateLegend() {
     if (edgeLow) edgeLow.textContent = '← 低';
     if (edgeHigh) edgeHigh.textContent = '高 →';
     grad.className = 'legend-gradient value';
-    labelEl.textContent = '估值偏离度 · 深绿=严重低估 浅绿=偏低 灰=合理 浅红=偏高 深红=高估';
+    labelEl.textContent = '估值等级 · 深绿=严重低估 浅绿=低估 灰=合理 浅红=偏高 深红=高估（按 valuation_level）';
     itemsEl.innerHTML = `
       <span>⬜ 方块大小 = <strong style="color:#22c55e;">前收盘价</strong></span>
-      <span>🟢⬜🔴 颜色 = 估值偏离度</span>
+      <span>🟢⬜🔴 颜色 = 估值等级</span>
       <span style="color:#6b728c;">|</span>
       <span>🖱️ 悬停查看估值详情</span>
       <span>👆 点击进入个股诊断</span>
@@ -1581,8 +1581,12 @@ function showDetail(data) {
     ${oType ? `<span class="detail-tag tag-tech"># ${oType}</span>` : ''}
   `;
 
-  // 仲裁结论（含机会类型一句话）；valuation_deviation 正=低估、负=高估（2026-08-04 修复符号）
-  const devWord = data.valDeviationValue > 0 ? '偏低' : data.valDeviationValue < 0 ? '偏高' : '合理';
+  // 仲裁结论（含机会类型一句话）；2026-08-06 修复：估值措辞改由 valuation_level 驱动
+  // （原按 deviation 符号：正=偏低/负=偏高，与 315 修复后 fair 类 dev 为负的分布错配）
+  const _valLv = data.valuation || '';
+  let devWord = '合理';
+  if (_valLv === 'extreme_low' || _valLv === 'low') devWord = '低估';
+  else if (_valLv === 'high' || _valLv === 'extreme_high') devWord = '偏高';
   const verdictItems = [];
   if (data.signalDirection && data.signalDirection !== 'unknown') verdictItems.push(_tagCn(data.signalDirection));
   if (data.valuation && data.valuation !== 'unknown') verdictItems.push('估值' + devWord);
@@ -1637,11 +1641,11 @@ function showDetail(data) {
       </div>` : ''}
   `;
 
-  // 风险提示
+  // 风险提示（2026-08-06 修复：估值风险改由 valuation_level 驱动，原 deviation 阈值与新语义错配）
   const risks = [];
   if (data.signalStrength < 30) risks.push('信号强度偏低，趋势不明朗');
-  if (data.valDeviationValue < -20) risks.push('估值偏高，安全边际不足');  // 负=高估（2026-08-04 修复符号）
-  if (data.valDeviationValue > 30) risks.push('估值深度低估，需确认是否存在基本面风险');
+  if (['high', 'extreme_high'].includes(data.valuation || '')) risks.push('估值偏高，安全边际不足');
+  if ((data.valuation || '') === 'extreme_low') risks.push('估值深度低估，需确认是否存在基本面风险');
   if (!risks.length && data.signalStrength >= 40) risks.push('各维度信号一致，系统建议可参考');
   document.getElementById('d-risk').innerHTML = risks.length > 0
     ? risks.map(r => `<div style="margin-bottom:var(--space-4);">⚠ ${r}</div>`).join('')
@@ -1704,7 +1708,7 @@ function updateStats(stocks) {
   document.getElementById('stat-total').textContent = stocks.length;
   const highScore = stocks.filter(s => s.signalStrength >= 70).length;
   const building = stocks.filter(s => s.phase === '建仓期').length;
-  const undervalued = stocks.filter(s => s.valDeviationValue > 10).length;  // 2026-08-04 修复：正偏离=低估（原按等级文字匹配恒 0）
+  const undervalued = stocks.filter(s => ['extreme_low', 'low'].includes(s.valuation_level || (s.tags && s.tags.valuation_level))).length;  // 2026-08-06 修复：按 valuation_level 统计（原 deviation>10 与修复后语义错配）
   document.getElementById('stat-opp').textContent = highScore;
   document.getElementById('stat-phase').textContent = building;
   document.getElementById('stat-value').textContent = undervalued;
