@@ -1134,7 +1134,7 @@ function _stockTooltip(d, stockName) {
         <div><span style="color:#6b728c;">现价</span> <strong>${d.price.toFixed(2)}</strong></div>
         <div><span style="color:#6b728c;">涨跌幅</span> <strong style="color:${pctColor}">${pctSign}${d.pctChange.toFixed(2)}%</strong></div>
         <div><span style="color:#6b728c;">估值结论</span> <strong style="color:${devColor}">${devKey}</strong></div>
-        <div><span style="color:#6b728c;">偏离度</span> <strong style="color:${devColor}">${typeof _dv === 'number' ? (_dv > 0 ? '+' : '') + _dv + '%' : '--'}</strong></div>
+        <div><span style="color:#6b728c;">估值评分</span> <strong style="color:${devColor}">${typeof _dv === 'number' ? (_dv > 0 ? '+' : '') + _dv : '--'}<span style="font-size:10px;color:#6b728c;">（&lt;0 偏贵 / &gt;0 偏便宜）</span></strong></div>
         <div><span style="color:#6b728c;">PE</span> ${d.pe.toFixed(1)}</div>
         <div><span style="color:#6b728c;">PB</span> ${d.pb.toFixed(2)}</div>
         <div><span style="color:#6b728c;">股息率</span> ${typeof d.dividendYield === 'number' ? d.dividendYield.toFixed(2) + '%' : '--'}</div>
@@ -1734,7 +1734,8 @@ function showLegendHelp() {
     '  · 颜色 = 入场时机（蓝=可入场[深=共识≥70%] 黄=可轻仓 灰=等待 棕=回避）\n\n' +
     '💎 价值地图：估值定位视图\n' +
     '  · 方块大小 = 前收盘价\n' +
-    '  · 颜色 = 估值偏离度（深绿=严重低估 → 深红=高估）\n\n' +
+    '  · 颜色 = 估值等级（深绿=严重低估 → 深红=高估）\n' +
+    '  · 估值评分 &lt;0 偏贵 / &gt;0 偏便宜（评分 ≠ 价格偏离价值）\n\n' +
     '🏷️ 可点击标签进行 AND 组合筛选\n' +
     '🖱️ 悬停查看详情\n' +
     '👆 点击方块进入个股诊断'
