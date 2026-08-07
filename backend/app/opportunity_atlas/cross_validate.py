@@ -17,6 +17,8 @@ import os
 from datetime import datetime
 from typing import Any
 
+import pandas as pd
+
 from app.data.mixins import DataAwareMixin
 
 logger = logging.getLogger(__name__)
@@ -333,7 +335,10 @@ class L4CrossValidator(DataAwareMixin):
         daily_change = self._compute_daily_change(ts_code, tags)
 
         operation_advice = self._build_operation_advice(ts_code, consensus, tags, gate, df)
-        risk_warnings = self._build_risk_warnings(tags, gate)
+        # 319号修订版：EPS 同比 + PB 分位传入风险提示（估值矛盾场景数据驱动分叉）
+        _eps_yoy = self._eps_yoy(ts_code)
+        _pb_pct = self._safe_float(tags.get('pb_percentile_5y'), None)
+        risk_warnings = self._build_risk_warnings(tags, gate, eps_yoy=_eps_yoy, pb_pct=_pb_pct)
         user_checklist = self._build_user_checklist(ts_code, tags, valuation_tracking)
         opportunity_summary = self._build_opportunity_summary(tags, consensus, risk_warnings)
         tags_summary = self._build_tags_summary(tags)
@@ -379,17 +384,22 @@ class L4CrossValidator(DataAwareMixin):
         """
         gate: dict[str, Any] = {'valuation': 'none', 'hard_risks': [], 'soft_risks': []}
 
-        # ── 估值分级（pe_percentile_5y 历史分位 + deviation，负=高估） ──
+        # ── 估值分级（319号：valuation_level 主导，PE 分位仅作深度细分） ──
+        # 修复前：pe_pct/dev 独立判定（与 valuation_level 冲突根源，447+160 只股票矛盾）
+        # 修复后：仅 level ∈ (high, extreme_high) 时进入估值分级；
+        #         level=fair/low/extreme_low 不构成估值风险（PE 分位高=盈利下滑信号，归 R2 提示）
         try:
             pe_pct = self._safe_float(tags.get('pe_percentile_5y'), None)
             dev = self._safe_float(tags.get('valuation_deviation'), None)
+            level = tags.get('valuation_level', '')
             lv = 'none'
-            if (pe_pct is not None and pe_pct > 90) or (dev is not None and dev < -20):
-                lv = 'deep'
-            elif (pe_pct is not None and pe_pct > 80) or (dev is not None and dev < -12):
-                lv = 'moderate'
-            elif (pe_pct is not None and pe_pct > 60) or (dev is not None and dev < -6):
-                lv = 'mild'
+            if level in ('high', 'extreme_high'):
+                if (pe_pct is not None and pe_pct > 90) or (dev is not None and dev < -20):
+                    lv = 'deep'     # 双信号共振（相对贵 + 历史分位高）→ 深度高估
+                elif (pe_pct is not None and pe_pct > 80) or (dev is not None and dev < -12):
+                    lv = 'moderate'
+                else:
+                    lv = 'mild'     # level 高但 PE 分位不高 → 轻度标注，不硬否决
             gate['valuation'] = lv
         except Exception:
             pass
@@ -977,8 +987,46 @@ class L4CrossValidator(DataAwareMixin):
 
         return entry_plan, stop_loss, target_price, time_stop, risk_notes
 
-    def _build_risk_warnings(self, tags: dict, gate: dict = None) -> list[dict]:
-        """构建风险提示列表（316号 P1：估值分级提示 + 流动性风险）"""
+    def _eps_yoy(self, ts_code: str) -> float | None:
+        """计算每股收益同比（basic_eps 同月跨年，income_cache）
+
+        319号修订版：盈利方向用于估值矛盾场景的数据驱动分叉。
+        Returns: 同比变化率（小数，如 0.25 = +25%），无数据返回 None
+        """
+        try:
+            dm = self._get_dm()
+            df = dm.get_cached_income(ts_code)
+            if df is None or df.empty or 'basic_eps' not in df.columns:
+                return None
+            df = df.sort_values('end_date', ascending=False)
+            latest = df.iloc[0]
+            try:
+                latest_end = pd.Timestamp(latest['end_date'])
+            except Exception:
+                return None
+            target = latest_end - pd.DateOffset(years=1)
+            # end_date 可能是 date 对象或字符串，统一转 Timestamp 比较
+            match = df[df['end_date'].apply(lambda d: pd.Timestamp(d) == target)]
+            if match.empty:
+                return None
+            cur = latest['basic_eps']
+            prev = match.iloc[0]['basic_eps']
+            if pd.isna(cur) or pd.isna(prev) or prev == 0:
+                return None
+            return (float(cur) - float(prev)) / abs(float(prev))
+        except Exception:
+            return None
+
+    def _build_risk_warnings(self, tags: dict, gate: dict = None,
+                             eps_yoy: float = None, pb_pct: float = None) -> list[dict]:
+        """构建风险提示列表（316号 P1：估值分级提示 + 流动性风险）
+
+        319号修订版：估值矛盾场景数据驱动分叉（EPS 方向 × PB 分位）：
+          - EPS 下滑 → 盈利下滑风险
+          - EPS 增长 + PB 分位低 → 困境反转（机会类描述，非风险）
+          - EPS 增长 + PB 分位高 → 估值收缩风险
+          - 无 EPS 数据 → 不输出 PE 相关提示（避免无依据输出）
+        """
         warnings: list[dict] = []
 
         fina = tags.get('fina_health', '')
@@ -987,18 +1035,40 @@ class L4CrossValidator(DataAwareMixin):
         if fina in ('suspicious', 'fail'):
             warnings.append({'type': 'company', 'content': f'财务健康评级为{fina_label}，存在基本面风险'})
 
-        # 316号 P1：估值分级风险标注（替代原"估值偏高"一刀切）
+        # 319号：估值风险提示以 valuation_level 为准（消除"定位低估/提示偏高"冲突）
         if gate is None:
             gate = {'valuation': 'none', 'hard_risks': [], 'soft_risks': []}
         val_lv = gate.get('valuation', 'none')
+        _level = tags.get('valuation_level', '')
+        _pe_pct = tags.get('pe_percentile_5y', '')
         if val_lv == 'deep':
-            warnings.append({'type': 'valuation', 'content': '深度高估（PE 历史分位 >90%），估值泡沫风险，暂不介入'})
+            warnings.append({'type': 'valuation', 'content': '深度高估（估值等级高估 + PE 历史分位 >90%），估值泡沫风险，暂不介入'})
         elif val_lv == 'moderate':
-            warnings.append({'type': 'valuation', 'content': '估值偏高（PE 分位 80-90%），安全边际有限，仓位减半'})
+            warnings.append({'type': 'valuation', 'content': '估值偏高（估值等级偏高 + PE 分位 80-90%），安全边际有限，仓位减半'})
         elif val_lv == 'mild':
-            warnings.append({'type': 'valuation', 'content': '估值略偏高（PE 分位 60-80%），注意追高风险'})
-        elif tags.get('valuation_level') in ('high', 'extreme_high'):
-            warnings.append({'type': 'valuation', 'content': '估值偏高，安全边际不足'})
+            warnings.append({'type': 'valuation', 'content': '估值略偏高（估值等级偏高），注意追高风险'})
+        # 319号：矛盾场景——估值等级低估/合理但 PE 历史分位偏高
+        # 修订版：按 EPS 方向 × PB 分位数据驱动分叉（取消"需核实"推诿文案）
+        elif _level in ('low', 'extreme_low', 'fair') and _pe_pct:
+            try:
+                if float(_pe_pct) > 60:
+                    _pb = pb_pct if pb_pct is not None else self._safe_float(
+                        tags.get('pb_percentile_5y'), None)
+                    if eps_yoy is None:
+                        # 无 EPS 数据：不输出 PE 相关提示（避免无依据输出）
+                        pass
+                    elif eps_yoy < 0:
+                        warnings.append({'type': 'valuation',
+                                         'content': '盈利下滑，PE 高位源于盈利萎缩，注意基本面风险'})
+                    elif _pb is not None and _pb < 40:
+                        # 盈利增长 + 资产端便宜 → 困境反转机会特征（非风险）
+                        warnings.append({'type': 'valuation',
+                                         'content': '盈利改善中且资产端便宜（PB 近5年低分位），属周期底部/困境反转特征——PE 高源于盈利基数低，注意盈利持续性'})
+                    else:
+                        warnings.append({'type': 'valuation',
+                                         'content': '盈利增长，但 PE 处历史高位——已计入较多增长预期，若盈利增速回落，估值有收缩风险'})
+            except (ValueError, TypeError):
+                pass
 
         # 316号 P1：流动性风险（新增）
         if 'low_liquidity' in gate.get('soft_risks', []):

@@ -368,6 +368,30 @@
 .ds-body .ds-placeholder { font-size: 15px; color: var(--text-muted); text-align: center; padding: var(--space-12) 0; }
 .ds-body .ds-text { font-size: 15px; line-height: 1.9; color: var(--text-primary); white-space: pre-wrap; }
 
+/* ── 320号 S3：现状诊断卡（七维红绿灯+几何指标+风险边界，科技感霓虹渐变） ── */
+.status-diagnosis {
+  background: linear-gradient(135deg, rgba(37,99,235,0.08), rgba(139,92,246,0.06));
+  border: 1px solid rgba(59,130,246,0.35);
+  border-radius: 8px; margin-bottom: var(--space-4); overflow: hidden;
+}
+.ds-subheader { font-size: 11px; color: var(--text-muted); font-weight: 400; margin-left: var(--space-4); }
+.diag-grid { padding: var(--space-8) var(--space-10); display: flex; flex-wrap: wrap; gap: var(--space-6); }
+.diag-placeholder { font-size: 13px; color: var(--text-muted); }
+.diag-item {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 8px 12px; border-radius: 6px; background: rgba(15,17,23,0.6);
+  border: 1px solid var(--border-default); min-width: 110px;
+}
+.diag-item .diag-k { font-size: 10px; color: var(--text-muted); }
+.diag-item .diag-v { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.diag-item.diag-warn { border-color: rgba(230,162,60,0.6); }
+.diag-item.diag-risk { border-color: rgba(239,68,68,0.6); }
+.diag-metrics { padding: 0 var(--space-10) var(--space-8); display: flex; flex-wrap: wrap; gap: var(--space-8); font-size: 12px; color: var(--text-secondary); }
+.diag-metrics .dm-item { display: flex; gap: 4px; align-items: center; }
+.diag-metrics .dm-label { color: var(--text-muted); }
+.diag-tags { padding: 0 var(--space-10) var(--space-8); }
+.diag-tags-title { font-size: 12px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+
 /* ── 缠论结构图 ── */
 .chanlun-charts { display: none; flex-direction: column; gap: var(--space-4); margin-top: var(--space-6); }
 .chanlun-charts.show { display: flex; }
@@ -550,7 +574,9 @@
             <span><span class="ma-dot" style="background:#3B82F6;"></span>MA20 <b id="ma20-val">9.88</b></span>
             <span><span class="ma-dot" style="background:#22C55E;"></span>MA60 <b id="ma60-val">9.72</b></span>
           </div>
-          <span style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px;"><span class="status-dot" id="ws-dot"></span><span id="ws-label">数据</span></span></div>
+          <span style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px;"><span class="status-dot" id="ws-dot"></span><span id="ws-label">数据</span></span>
+          <!-- 320号 S4：回到机会图谱（带当前 ts_code，图谱自动高亮该股） -->
+          <span style="margin-left:auto;"><a href="opportunity-treemap.html?ts_code=__CUR__" id="backToMapLink" style="font-size:12px;color:#3b82f6;text-decoration:none;border:1px solid #3b82f6;border-radius:4px;padding:2px 8px;">🗺️ 回到机会图谱</a></span></div>
         <div class="chart-wrap">
           <div id="kline-chart"></div>
           <div id="cpl-dom"></div>
@@ -805,6 +831,20 @@
             <div class="cl-chart" id="chanlunChartShort">
               <div class="cl-header">60分钟走势结构（短期策略）</div>
               <div class="cl-body" id="clBodyShort"><div class="cl-placeholder">缠论分析中...</div></div>
+            </div>
+          </div>
+
+          <!-- 320号 S3：现状诊断卡（七维红绿灯 + 信号生命周期 + 几何化指标 + 风险边界） -->
+          <div class="status-diagnosis" id="statusDiagnosis">
+            <div class="ds-header">🧬 现状诊断 <span class="ds-subheader" id="diagTsLabel">--</span></div>
+            <div class="diag-grid" id="diagGrid">
+              <div class="diag-placeholder">加载中...</div>
+            </div>
+            <div class="diag-metrics" id="diagMetrics"></div>
+            <!-- 标签解说（大白话双栏） -->
+            <div class="diag-tags" id="diagTags" style="display:none;">
+              <div class="diag-tags-title">🏷️ 标签解说</div>
+              <div id="diagTagsBody" style="font-size:12px;color:var(--text-secondary);line-height:1.8;"></div>
             </div>
           </div>
 
@@ -1918,8 +1958,87 @@ function switchPeriod(period){
 
 // ── 切换股票 ──
 
+// 320号 S3：加载现状诊断卡（机会图谱快照：七维红绿灯+估值+风险边界+标签解说）
+function loadDiagnosisCard(tsCode){
+  var grid = document.getElementById('diagGrid');
+  if(!grid) return;
+  grid.innerHTML = '<div class="diag-placeholder">加载中...</div>';
+  var tagsEl = document.getElementById('diagTags');
+  if(tagsEl) tagsEl.style.display = 'none';
+  fetch('/api/v3/opportunity-atlas/treemap?mode=value&ts_codes=' + encodeURIComponent(tsCode))
+    .then(function(r){ return r.json(); })
+    .then(function(json){
+      var groups = (json.data || json).groups || [];
+      var stock = null;
+      for(var i=0;i<groups.length && !stock;i++){
+        var list = groups[i].stocks || [];
+        for(var j=0;j<list.length;j++){ if(list[j].ts_code === tsCode){ stock = list[j]; break; } }
+      }
+      if(!stock){ grid.innerHTML = '<div class="diag-placeholder">暂无图谱标签数据（K线或预计算未就绪）</div>'; return; }
+
+      var diagTs = document.getElementById('diagTsLabel');
+      if(diagTs) diagTs.textContent = stock.name + ' · ' + stock.ts_code;
+
+      // 1) 七维红绿灯（opportunity_profile）
+      var items = [];
+      var profile = null;
+      try { profile = typeof stock.opportunity_profile === 'string' ? JSON.parse(stock.opportunity_profile) : (stock.opportunity_profile || null); } catch(e){ profile = null; }
+      var PROFILE_CN = { risk:'风险', value:'价值', trend:'趋势', volume_price:'量价', fund:'资金', sentiment:'情绪', event:'事件' };
+      if(profile){
+        Object.keys(profile).forEach(function(k){
+          var v = profile[k];
+          if(!v || !v.light) return;
+          var cls = v.light === '🟢' ? '' : (v.light === '🟡' ? ' diag-warn' : ' diag-risk');
+          items.push('<div class="diag-item' + cls + '"><span class="diag-k">' + (PROFILE_CN[k]||k) + '</span><span class="diag-v">' + v.light + ' ' + (v.status||'') + '</span></div>');
+        });
+      }
+      // 估值结论 + 财务健康
+      var valKey = { extreme_low:'严重低估', low:'偏低', fair:'合理', high:'偏高', extreme_high:'高估' }[stock.valuation_level] || '合理';
+      var valColor = ['extreme_low','low'].indexOf(stock.valuation_level) >= 0 ? '' : (['high','extreme_high'].indexOf(stock.valuation_level) >= 0 ? ' diag-risk' : '');
+      items.push('<div class="diag-item' + valColor + '"><span class="diag-k">估值</span><span class="diag-v">' + valKey + '</span></div>');
+      if(stock.fina_health){
+        var fCls = stock.fina_health === 'pass' ? '' : (stock.fina_health === 'fail' ? ' diag-risk' : ' diag-warn');
+        var fTxt = { pass:'健康', suspicious:'存疑', fail:'风险' }[stock.fina_health] || stock.fina_health;
+        items.push('<div class="diag-item' + fCls + '"><span class="diag-k">财务</span><span class="diag-v">' + fTxt + '</span></div>');
+      }
+      grid.innerHTML = items.length ? items.join('') : '<div class="diag-placeholder">暂无画像数据</div>';
+
+      // 2) 几何化指标 + 风险边界（PE/PB 5年分位 + 估值偏离）
+      var metrics = [];
+      if(stock.tags && stock.tags.pe_percentile_5y != null)
+        metrics.push('<span class="dm-item"><span class="dm-label">PE 5年分位</span><b>' + stock.tags.pe_percentile_5y + '%</b></span>');
+      if(stock.tags && stock.tags.pb_percentile_5y != null)
+        metrics.push('<span class="dm-item"><span class="dm-label">PB 5年分位</span><b>' + stock.tags.pb_percentile_5y + '%</b></span>');
+      if(stock.val_deviation != null)
+        metrics.push('<span class="dm-item"><span class="dm-label">估值偏离</span><b>' + (stock.val_deviation>0?'+':'') + stock.val_deviation + '</b></span>');
+      if(stock.right_side_confirm)
+        metrics.push('<span class="dm-item"><span class="dm-label">右侧确认</span><b>' + stock.right_side_confirm + '</b></span>');
+      if(stock.main_force_phase)
+        metrics.push('<span class="dm-item"><span class="dm-label">主力阶段</span><b>' + ({building:'建仓',washing:'洗盘',lifting:'拉升',distributing:'出货'}[stock.main_force_phase]||stock.main_force_phase) + '</b></span>');
+      var metricsEl = document.getElementById('diagMetrics');
+      if(metricsEl) metricsEl.innerHTML = metrics.join('');
+
+      // 3) 标签解说（大白话双栏：来自 tags 字典 + 机会标签）
+      var tagsBody = document.getElementById('diagTagsBody');
+      if(tagsBody && tagsEl){
+        var lines = [];
+        if(stock.opportunity_label) lines.push('📌 机会类型：' + stock.opportunity_label);
+        if(stock.opportunity_type) lines.push('🔑 机会信号：' + (stock.opportunity_type||''));
+        if(stock.main_force_phase) lines.push('🏗️ 主力：' + ({building:'建仓',washing:'洗盘',lifting:'拉升',distributing:'出货'}[stock.main_force_phase]||stock.main_force_phase));
+        if(stock.fina_health) lines.push('🏥 财务：' + ({pass:'健康',suspicious:'存疑',fail:'风险'}[stock.fina_health]||stock.fina_health));
+        if(lines.length){ tagsBody.innerHTML = lines.join('<br/>'); tagsEl.style.display = ''; }
+      }
+    })
+    .catch(function(){ grid.innerHTML = '<div class="diag-placeholder">诊断卡加载失败</div>'; });
+}
+
 function switchStock(tsCode){
   _analysisRunning = false;
+  // 320号 S4：更新"回到机会图谱"链接的 ts_code
+  var backLink = document.getElementById('backToMapLink');
+  if (backLink) backLink.href = 'opportunity-treemap.html?ts_code=' + encodeURIComponent(tsCode);
+  // 320号 S3：异步加载现状诊断卡（机会图谱快照数据）
+  loadDiagnosisCard(tsCode);
   var loading = document.getElementById('strategyLoading');
   if(loading){ loading.style.display = 'none'; loading.classList.remove('show'); }
   // 清空新组件
@@ -2126,13 +2245,25 @@ updateSubHeaders(dates.length - 1);
 initStockSearch();
 
 // 初始加载默认股票的真实K线数据（替换mock数据）
-// 使用 000002.SZ（万科A）作为默认，缓存数据最完整
+// 320号 S2/S4：支持 ?ts_code=xxx 参数（从机会图谱弹窗"策略分析"跳转而来）；无参数默认 000002.SZ
 setTimeout(function(){
-  _currentTsCode = '000002.SZ';
-  _currentTsName = '万科A';
-  updateCodeInput('000002.SZ', '万科A');
-  updateStockStatus('000002.SZ');
-  switchStock('000002.SZ');
+  var urlTs = null;
+  try {
+    urlTs = new URLSearchParams(window.location.search).get('ts_code');
+  } catch (e) {}
+  if (urlTs) {
+    _currentTsCode = urlTs;
+    _currentTsName = '';
+    updateCodeInput(urlTs, urlTs);
+    updateStockStatus(urlTs);
+    switchStock(urlTs);
+  } else {
+    _currentTsCode = '000002.SZ';
+    _currentTsName = '万科A';
+    updateCodeInput('000002.SZ', '万科A');
+    updateStockStatus('000002.SZ');
+    switchStock('000002.SZ');
+  }
 }, 300);
 
 // ── Ctrl+滚轮: 阻止页面滚动 + 缩放时间轴（右锚定，最新K线始终可见） ──

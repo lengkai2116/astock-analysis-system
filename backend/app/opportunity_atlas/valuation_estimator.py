@@ -317,10 +317,17 @@ class ValuationEngine(DataAwareMixin):
     # ═══════════════════════════════════════════════
 
     def _yoY_growth(self, df_income: pd.DataFrame) -> float | None:
-        """计算归母净利润同比增速（小数形式，如 0.15 = 15%）"""
+        """计算归母净利润同比增速（小数形式，如 0.15 = 15%）
+
+        320号 F3：列名统一为表列名 net_profit_atsopc/net_profit
+        （原用 tushare 原始名 n_income_attr_p/n_income，表内无此列恒 None）
+        """
         try:
             df = df_income.sort_values('end_date', ascending=False)
-            n_col = 'n_income_attr_p' if 'n_income_attr_p' in df.columns else 'n_income'
+            n_col = 'net_profit_atsopc' if 'net_profit_atsopc' in df.columns else (
+                'net_profit' if 'net_profit' in df.columns else None)
+            if n_col is None:
+                return None
             latest = df.iloc[0]
             latest_end = pd.Timestamp(latest['end_date'])
             target = latest_end - pd.DateOffset(years=1)
@@ -331,6 +338,30 @@ class ValuationEngine(DataAwareMixin):
             if prev[n_col] == 0:
                 return None
             return (latest[n_col] - prev[n_col]) / abs(prev[n_col])
+        except Exception:
+            return None
+
+    def _revenue_yoy(self, df_income: pd.DataFrame) -> float | None:
+        """计算营业收入同比增速（同月跨年，小数形式，如 0.10 = +10%）
+
+        320号 F1：修复相邻期口径错配 bug（A股财报累计制，Q1 vs 年报必然暴跌，
+        全市场 99.7% 伪"下降"；正确同比仅 44.0%）。end_date 兼容 date/str。
+        """
+        try:
+            df = df_income.sort_values('end_date', ascending=False)
+            if 'revenue' not in df.columns:
+                return None
+            latest = df.iloc[0]
+            latest_end = pd.Timestamp(latest['end_date'])
+            target = latest_end - pd.DateOffset(years=1)
+            match = df[df['end_date'].apply(lambda d: pd.Timestamp(d) == target)]
+            if match.empty:
+                return None
+            prev = match.iloc[0]['revenue']
+            cur = latest['revenue']
+            if pd.isna(cur) or pd.isna(prev) or prev == 0:
+                return None
+            return (float(cur) - float(prev)) / abs(float(prev))
         except Exception:
             return None
 
@@ -354,9 +385,12 @@ class ValuationEngine(DataAwareMixin):
         has_positive_ni = False
         if not df_income.empty:
             income_sorted = df_income.sort_values('end_date', ascending=False)
-            n_col = 'n_income_attr_p' if 'n_income_attr_p' in df_income.columns else 'n_income'
-            if n_col in income_sorted.columns:
-                has_positive_ni = income_sorted[n_col].iloc[0] > 0
+            # 320号 F3：统一表列名（net_profit_atsopc/net_profit）
+            n_col = 'net_profit_atsopc' if 'net_profit_atsopc' in df_income.columns else (
+                'net_profit' if 'net_profit' in df_income.columns else None)
+            if n_col is not None and n_col in income_sorted.columns:
+                _ni = income_sorted[n_col].dropna()
+                has_positive_ni = bool(not _ni.empty and _ni.iloc[0] > 0)
 
         # 2) PEG评分 [-1, +1]
         peg_score = 0.0
@@ -505,8 +539,15 @@ class ValuationEngine(DataAwareMixin):
 
         # 调整后净利润 = 净利润 + 研发费用 × (1-税率) × 摊销率
         # 税率25%，摊销率20%
-        n_col = 'n_income_attr_p' if 'n_income_attr_p' in income.columns else 'n_income'
-        n_income = float(income[n_col].iloc[0] or 0)
+        # 320号 F3：统一表列名（net_profit_atsopc/net_profit）
+        n_col = 'net_profit_atsopc' if 'net_profit_atsopc' in income.columns else (
+            'net_profit' if 'net_profit' in income.columns else None)
+        if n_col is None:
+            return 0.0
+        _ni_series = income[n_col].dropna()
+        if _ni_series.empty:
+            return 0.0
+        n_income = float(_ni_series.iloc[0] or 0)
         if n_income <= 0:
             return 0.0
 
@@ -609,13 +650,14 @@ class ValuationEngine(DataAwareMixin):
         if not df_cf.empty and not df_income.empty:
             cf = df_cf.sort_values('end_date', ascending=False)
             inc = df_income.sort_values('end_date', ascending=False)
-            n_col = 'net_profit_atsopc' if 'net_profit_atsopc' in inc.columns else 'net_profit'
-            if 'cashflow_oper' in cf.columns and n_col in inc.columns:
+            n_col = 'net_profit_atsopc' if 'net_profit_atsopc' in inc.columns else (
+                'net_profit' if 'net_profit' in inc.columns else None)
+            if n_col is not None and 'cashflow_oper' in cf.columns:
                 ratios = []
                 for i in range(min(3, len(cf), len(inc))):
                     ni = inc[n_col].iloc[i]
                     ocf = cf['cashflow_oper'].iloc[i]
-                    if ni and ni != 0:
+                    if ni is not None and not pd.isna(ni) and ni != 0 and ocf is not None:
                         ratios.append(ocf / ni)
                 if ratios:
                     ocf_ok = all(r > 0.8 for r in ratios)
@@ -701,13 +743,12 @@ class ValuationEngine(DataAwareMixin):
 
         # ── 315号 F3：生命周期成长修正（知识库《企业生命周期与估值》——成长股高估值容忍） ──
         # 科技/成长类 + 营收高增长（>20%）+ 盈利 → 估值容忍（composite 上移，避免高成长被误判高估）
+        # 320号 F1：改同月跨年同比（原相邻期在累计制下失真）
         if cat in ('科技', '成长') and not df_income.empty and 'revenue' in df_income.columns:
             try:
-                rev = df_income['revenue'].dropna()
-                if len(rev) >= 2 and rev.iloc[0] > 0 and rev.iloc[1] > 0:
-                    growth = rev.iloc[0] / rev.iloc[1] - 1
-                    if growth > 0.20:
-                        composite += 0.2   # 高成长溢价容忍
+                growth = self._revenue_yoy(df_income)
+                if growth is not None and growth > 0.20:
+                    composite += 0.2   # 高成长溢价容忍
             except Exception:
                 pass
         composite = max(-2.0, min(2.0, composite))
@@ -753,12 +794,12 @@ class ValuationEngine(DataAwareMixin):
             if not dv.empty:
                 div_yield = round(float(dv.iloc[-1]), 2)
 
-        # ── 营业收入增长率 ──
+        # ── 营业收入增长率（320号 F1：改同月跨年同比，修复相邻期累计制口径错配） ──
         revenue_growth = None
         if not df_income.empty and 'revenue' in df_income.columns:
-            rev = df_income['revenue'].dropna()
-            if len(rev) >= 2:
-                revenue_growth = round((rev.iloc[0] / rev.iloc[1] - 1) * 100, 2)
+            _g = self._revenue_yoy(df_income)
+            if _g is not None:
+                revenue_growth = round(_g * 100, 2)
 
         # ── 财务健康（已在 composite 前计算，315号阶段2 质量修正使用） ──
 

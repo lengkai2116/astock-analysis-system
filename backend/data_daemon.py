@@ -634,9 +634,75 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
     return total
 
 
+def _find_kline_insufficient(threshold: int = 130, limit: int = 5000) -> list:
+    """320号 F1：找出 daily_cache K 线不足 threshold 根的股票
+
+    策略引擎需要 ≥130 根 K 线（缠论/量价门槛），不足则机会图谱标签与
+    九层解读的 K 线依赖维度同时失效。
+    """
+    global _ecm
+    if _ecm is None:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        _ecm = get_ecm_instance()
+    try:
+        rows = _ecm.conn.execute(
+            "SELECT ts_code, COUNT(*) cnt FROM daily_cache GROUP BY ts_code HAVING cnt < ? LIMIT ?",
+            [threshold, limit]
+        ).fetchall()
+        return [r[0] for r in rows]
+    except Exception as e:
+        logger.warning(f"_find_kline_insufficient failed: {e}")
+        return []
+
+
+def _backfill_kline_history(ts_code: str, years: int = 5) -> int:
+    """320号 F1：补采单股历史日线（pro.daily 指定 ts_code + 近 years 年）
+
+    用于 K 线深度不足的股票（如 600519 仅 1 行），补采后满足策略引擎 ≥130 根门槛。
+    """
+    global _ecm
+    if _ecm is None:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        _ecm = get_ecm_instance()
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    start = (datetime.now() - timedelta(days=years * 365)).strftime('%Y%m%d')
+    try:
+        raw = _ts(pro.daily, ts_code=ts_code, start_date=start, end_date=datetime.now().strftime('%Y%m%d'))
+        if raw is None or raw.empty:
+            logger.info(f"  [K线补采] {ts_code} 无返回（可能停牌/次新）")
+            return 0
+        df = raw.copy()
+        if 'trade_date' in df.columns:
+            df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+        # 按表列过滤（cache_daily_data 内部已处理，但避免多余警告）
+        _ecm.cache_daily_data(df)
+        logger.info(f"  [K线补采] {ts_code} 写入 {len(df)} 条")
+        return len(df)
+    except Exception as e:
+        logger.warning(f"  [K线补采] {ts_code} 失败: {e}")
+        return 0
+
+
+def _backfill_all_insufficient_kline(threshold: int = 130, max_codes: int = 200):
+    """320号 F1：批量补采 K 线不足股票（完整性检查内调用，后台低优）"""
+    codes = _find_kline_insufficient(threshold=threshold, limit=max_codes)
+    if not codes:
+        logger.info("  [K线深度] 全部股票 K 线充足 ✅")
+        return 0
+    logger.info(f"  [K线深度] {len(codes)} 只 K 线<{threshold} 根，开始补采...")
+    total = 0
+    for i, code in enumerate(codes):
+        total += _backfill_kline_history(code)
+        if (i + 1) % 50 == 0:
+            logger.info(f"    [K线补采] 进度 {i+1}/{len(codes)}")
+    logger.info(f"  [K线深度] 补采完成，共写入 {total} 条")
+    return total
+
+
 def _batch_adj_factor() -> int:
     """全市场复权因子 — 批量按 trade_date（替代逐只500次）
-
     实测 pro.adj_factor(trade_date=date) 可返回全市场数据，
     等价于逐只调用但只需 1 次 API 请求。
     """
@@ -1009,6 +1075,12 @@ def run_integrity_check(backfill_days: int = 1):
             logger.info(f"  [龙虎榜席位] {detail_cnt} 行 ✅")
     except Exception as e:
         logger.warning(f"  龙虎榜席位检查失败: {e}")
+
+    # 320号 F1：K 线深度检查（策略引擎需要 ≥130 根，不足则标签/九层解读 K 线维度失效）
+    try:
+        _backfill_all_insufficient_kline(threshold=130, max_codes=200)
+    except Exception as e:
+        logger.warning(f"  [K线深度] 检查失败: {e}")
 
     # 融资融券单独检查（margin_detail 非每日必须，空表时补采）
     try:

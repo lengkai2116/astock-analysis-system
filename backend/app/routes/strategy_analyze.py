@@ -54,6 +54,10 @@ def _get_deepseek_status_text(ts_code: str) -> Optional[str]:
       1. DeepSeek 九层描述（主输出）
       2. 不可用时返回 None → 前端展示各维度 status_text
 
+    320号 F3/F4：user prompt 注入 P2 策略信号摘要（strategy_signal_detail）
+    与机会图谱标签基线（opportunity_tags_cache），作为权威数据源——
+    避免实时重算（消除 E12/E13/E14 重复），并与机会图谱标签结论对齐。
+
     Args:
         ts_code: 股票代码
 
@@ -66,11 +70,16 @@ def _get_deepseek_status_text(ts_code: str) -> Optional[str]:
         if cfg.get('type', 'mock') == 'mock' or not cfg.get('api_key', ''):
             return None
 
-        # 构建结构化快照
+        # 320号 F3：P2 策略信号摘要（strategy_signal_detail 预计算产物，优先于实时计算）
+        p2_summary = _build_p2_signal_summary(ts_code)
+        # 320号 F4：机会图谱标签基线（tags_summary + opportunity_profile 七维红绿灯）
+        label_baseline = _build_label_baseline(ts_code)
+
+        # 构建结构化快照（兜底：P2 无数据时仍用实时上下文）
         from app.services.ai_context_builder import ai_context_builder
         context = ai_context_builder.build_context(ts_code)
         snapshot_section = ai_context_builder.to_prompt_section(context)
-        if not snapshot_section:
+        if not snapshot_section and not p2_summary and not label_baseline:
             return None
 
         # 加载九层框架 System Prompt
@@ -86,12 +95,15 @@ def _get_deepseek_status_text(ts_code: str) -> Optional[str]:
         with open(prompt_path, 'r', encoding='utf-8') as f:
             system_prompt = f.read()
 
-        # 组装 user prompt：结构化快照 JSON
-        user_prompt = (
-            "请基于以下结构化数据生成这只股票的现状描述。\n"
-            "严格按照【九层描述输出规范】的顺序输出，有数据的维度写，无数据的维度跳过。\n\n"
-            f"{snapshot_section}"
-        )
+        # 组装 user prompt：P2 策略信号摘要 + 标签基线 + 结构化快照
+        parts = ["请基于以下数据生成这只股票的现状描述。\n严格按照【九层描述输出规范】输出，有数据的维度写，无数据的跳过。\n"]
+        if p2_summary:
+            parts.append("【策略信号摘要（预计算）】\n" + p2_summary + "\n")
+        if label_baseline:
+            parts.append("【标签基线（系统权威结论，九层描述须与此一致，冲突时标注差异原因）】\n" + label_baseline + "\n")
+        if snapshot_section:
+            parts.append("【结构化快照（技术细节）】\n" + snapshot_section + "\n")
+        user_prompt = "\n".join(parts)
 
         # 调用 DeepSeek
         from app.services.deepseek_analysis_service import _call_deepseek
@@ -102,6 +114,73 @@ def _get_deepseek_status_text(ts_code: str) -> Optional[str]:
     except Exception as e:
         logger.debug("DeepSeek 九层描述生成跳过: %s", e)
         return None
+
+
+def _build_p2_signal_summary(ts_code: str) -> str:
+    """320号 F3：从 strategy_signal_detail（P2 预计算产物）构建策略信号摘要
+
+    提取各策略的 signal_label / evidence，作为九层解读的权威数据源。
+    读取最新 trade_date 记录（P2 日终产物，非当天日期）。
+    """
+    try:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        detail = ecm.get_latest_signal_detail(ts_code)
+        if not detail:
+            return ''
+        signals = detail.get('signals', {})
+        if not signals:
+            return ''
+        lines = []
+        for name, sig in signals.items():
+            if not isinstance(sig, dict):
+                continue
+            label = sig.get('signal_label') or sig.get('signal') or ''
+            direction = sig.get('direction', '')
+            ev = sig.get('evidence', [])
+            ev_txt = '；'.join(str(e)[:60] for e in ev[:3])
+            lines.append(f"- {name}: {label}（方向={direction}）" + (f" 证据: {ev_txt}" if ev_txt else ''))
+        return '\n'.join(lines)
+    except Exception as e:
+        logger.debug(f"_build_p2_signal_summary 失败: {e}")
+        return ''
+
+
+def _build_label_baseline(ts_code: str) -> str:
+    """320号 F4：从 opportunity_tags_cache 构建标签基线（tags_summary + 七维红绿灯）"""
+    try:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        tags = ecm.get_tags(ts_code)
+        if not tags:
+            return ''
+        # 七维红绿灯（opportunity_profile）
+        lines = []
+        prof = tags.get('opportunity_profile')
+        if prof:
+            try:
+                import json as _json
+                if isinstance(prof, str):
+                    prof = _json.loads(prof)
+                dim_cn = {'risk': '风险', 'value': '价值', 'trend': '趋势', 'volume_price': '量价',
+                          'fund': '资金', 'sentiment': '情绪', 'event': '事件'}
+                if isinstance(prof, dict):
+                    for k, v in prof.items():
+                        if isinstance(v, dict) and v.get('light') and v.get('status'):
+                            lines.append(f"- {dim_cn.get(k, k)}: {v['light']} {v['status']}")
+            except Exception:
+                pass
+        # tags_summary 风格摘要（方向/位置/质量/环境）
+        for grp, cn in [('trend_alignment', '方向'), ('price_position', '位置'),
+                        ('main_force_phase', '质量'), ('sentiment_phase', '环境'),
+                        ('valuation_level', '估值'), ('fund_flow', '资金')]:
+            v = tags.get(grp)
+            if v and v not in ('none', 'unknown', ''):
+                lines.append(f"- {cn}: {v}")
+        return '\n'.join(lines)
+    except Exception as e:
+        logger.debug(f"_build_label_baseline 失败: {e}")
+        return ''
 
 
 def _is_deepseek_available() -> bool:

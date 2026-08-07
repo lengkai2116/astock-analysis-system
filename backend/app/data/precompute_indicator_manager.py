@@ -65,9 +65,30 @@ class PrecomputeIndicatorManager:
         对 strategy_signals 表中每个信号，检查 signal_date 之后 lookahead 个交易日的
         价格变化，若方向与信号一致则记为 win。
 
+        320号 F2：数据新鲜度守卫——strategy_signals 旧表已停更（P2 迁移至
+        strategy_signal_detail），基于过期数据计算胜率会误导。旧表超过 STALE_DAYS
+        未更新时跳过计算并告警，避免产出过期统计。
+
         Returns:
             pd.DataFrame: [{signal_type, total_count, win_count, win_rate, ...}]
         """
+        # ── 320号 F2：数据新鲜度守卫（旧表停更保护） ──
+        try:
+            _row = self.cache_manager.conn.execute(
+                "SELECT MAX(trade_date) FROM strategy_signals").fetchone()
+            _max = _row[0] if _row else None
+            if _max:
+                try:
+                    _d = pd.Timestamp(str(_max))
+                except Exception:
+                    _d = None
+                if _d is not None and (pd.Timestamp.now() - _d).days > 3:
+                    logger.warning(
+                        f"胜率计算跳过: strategy_signals 旧表已停更 {_max} "
+                        f"(P2 已迁移至 strategy_signal_detail，待迁移胜率计算)")
+                    return pd.DataFrame()
+        except Exception:
+            pass
         try:
             # 获取所有历史信号
             sql = """SELECT s.ts_code,

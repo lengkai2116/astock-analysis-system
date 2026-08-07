@@ -83,6 +83,24 @@ class EnhancedCacheManager:
 
     # ── 工具方法 ─────────────────────────────────────────────
 
+    def _migrate_missing_columns(self, table: str, columns: list) -> None:
+        """320号 L2/L3：幂等补齐表缺失列（CREATE IF NOT EXISTS 不修改已存在表）
+
+        Args:
+            table: 表名
+            columns: [(列名, 类型), ...]
+        """
+        try:
+            exist = {r[1] for r in self.conn.execute(
+                f"PRAGMA table_info({table})").fetchall()}
+            for col, ctype in columns:
+                if col not in exist:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ctype}")
+                    logger.info(f"表 {table} 补列 {col} {ctype}")
+            self.conn.commit()
+        except Exception as e:
+            logger.warning(f"迁移 {table} 补列失败: {e}")
+
     def _insert_from_df(self, table: str, df: pd.DataFrame):
         """将 DataFrame 批量写入 SQLite 表（动态列名，兼容列顺序差异）"""
         if df.empty:
@@ -406,6 +424,7 @@ class EnhancedCacheManager:
             CREATE TABLE IF NOT EXISTS top10_holders_cache (
                 ts_code TEXT, end_date TEXT, ann_date TEXT,
                 holder_name TEXT, hold_amount REAL, hold_ratio REAL,
+                hold_float_ratio REAL,   # 320号 L3：Tushare top10_holders 返回列
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, end_date, holder_name)
             )
@@ -669,6 +688,16 @@ class EnhancedCacheManager:
         """)
 
         self.conn.commit()
+
+        # ── 320号 L2/L3：存量表补列（CREATE IF NOT EXISTS 不修改已存在表）──
+        # L2: indicator_ma 早期版本缺 ma30/ma60 → cache_indicators_wide 写入失败（P1 指标预计算全市场失败）
+        # L3: top10_holders_cache 早期版本缺 hold_float_ratio → 前十大股东采集失败
+        self._migrate_missing_columns('indicator_ma', [
+            ('ma30', 'REAL'), ('ma60', 'REAL'),
+        ])
+        self._migrate_missing_columns('top10_holders_cache', [
+            ('hold_float_ratio', 'REAL'),
+        ])
 
     # ── 快照数据库建表 ──────────────────────────────────────────
 
@@ -1307,13 +1336,30 @@ class EnhancedCacheManager:
     def cache_income_data(self, df):
         if df.empty:
             return
+        # 320号 F2：tushare pro.income 列名 → income_cache 表列名映射
+        # （tushare 返回 n_income/n_income_attr_p/operate_profit，表列为
+        #   net_profit/net_profit_atsopc/operating_profit，不映射则净利润列全空）
+        _COL_MAP = {
+            'n_income': 'net_profit',
+            'n_income_attr_p': 'net_profit_atsopc',
+            'operate_profit': 'operating_profit',
+        }
+        df = df.rename(columns=_COL_MAP)
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
                     df['end_date'] = pd.to_datetime(df['end_date']).dt.date
                 if 'ann_date' in df.columns:
                     df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
-                self._insert_from_df('income_cache', df)
+                # 320号 F2：只保留表已有列（tushare 返回 85 列含 f_ann_date 等表无列，
+                # 不过滤则 _insert_from_df 整体失败致净利润写入不生效）
+                table_cols = {r[1] for r in self.conn.execute(
+                    "PRAGMA table_info(income_cache)").fetchall()}
+                keep = [c for c in df.columns if c in table_cols]
+                if not keep:
+                    logger.warning("缓存利润表失败: 无匹配列可写入")
+                    return
+                self._insert_from_df('income_cache', df[keep])
             except Exception as e:
                 logger.warning(f"缓存利润表失败: {e}")
 
@@ -1713,6 +1759,27 @@ class EnhancedCacheManager:
             pass
         return None
 
+    def get_latest_signal_detail(self, ts_code: str) -> dict | None:
+        """320号 F3：读取最新 trade_date 的策略信号详情（P2 日终产物）
+
+        P2 预计算在日终运行（如 08-06），当天请求可能无当日记录，
+        故按 ORDER BY trade_date DESC 取最新一条。
+        """
+        import json as _json
+        try:
+            row = self.conn.execute(
+                "SELECT signal_json FROM strategy_signal_detail "
+                "WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1", [ts_code]
+            ).fetchone()
+            if row:
+                data = _json.loads(row[0])
+                if data.get('schema_version', 1) != 1:
+                    return None
+                return data
+        except Exception:
+            pass
+        return None
+
     def has_signal_detail(self, ts_code: str, trade_date: str = None) -> bool:
         """检查是否存在缓存"""
         if trade_date is None:
@@ -1822,6 +1889,13 @@ class EnhancedCacheManager:
         """批量写入因子数据"""
         if not records:
             return
+        # 320号 L1：datetime/Timestamp 转字符串（SQLite 原生驱动不支持 datetime 参数绑定，
+        # 原 cached_at=datetime.now() 导致 "parameter 5: type 'Timestamp'" 全市场失败）
+        for r in records:
+            if 'cached_at' in r and isinstance(r['cached_at'], (datetime, pd.Timestamp)):
+                r['cached_at'] = r['cached_at'].strftime('%Y-%m-%d %H:%M:%S')
+            if 'trade_date' in r and isinstance(r['trade_date'], (datetime, pd.Timestamp)):
+                r['trade_date'] = r['trade_date'].strftime('%Y-%m-%d')
         with self._write_lock:
             self._insert_from_df('factor_cache', pd.DataFrame(records))
             self.conn.commit()
@@ -2213,6 +2287,12 @@ class EnhancedCacheManager:
         if df.empty:
             return []
         items = []
+        # 317号：批量补齐快照表缺失的标签（style_exposure/catalyst_event 在标签表，不在快照表）
+        # 318号 S5：追加 pe_percentile_5y/pb_percentile_5y（估值举证直白化依赖）
+        extra_tags = self._get_latest_tags_for_codes(
+            ts_codes,
+            ['style_exposure', 'catalyst_event', 'pe_percentile_5y', 'pb_percentile_5y'],
+        )
         for _, r in df.iterrows():
             dy = float(r['dividend_yield']) if pd.notna(r.get('dividend_yield')) else None
 
@@ -2221,8 +2301,10 @@ class EnhancedCacheManager:
                 v = r.get(key)
                 return None if (v is None or (isinstance(v, float) and (v != v))) else v
 
+            _ts = r['ts_code']
+            _extra = extra_tags.get(_ts, {})
             items.append({
-                'ts_code': r['ts_code'],
+                'ts_code': _ts,
                 'name': r['name'],
                 'industry': _sv('industry') or '',
                 'price': round(float(r['close']), 2) if pd.notna(r.get('close')) else 0,
@@ -2265,10 +2347,47 @@ class EnhancedCacheManager:
                     'volatility_level': _sv('volatility_level'),
                     'dividend_yield': str(dy) if dy is not None else None,
                     'composite_rating': str(r['composite_rating']) if pd.notna(r.get('composite_rating')) else None,
+                    # 317号：补齐快照缺失的风格/催化剂标签（前端筛选"高成长/白马股/有催化剂"依赖）
+                    'style_exposure': _extra.get('style_exposure'),
+                    'catalyst_event': _extra.get('catalyst_event'),
+                    # 318号 S5：5 年估值分位（弹窗估值举证直白化依赖）
+                    'pe_percentile_5y': _extra.get('pe_percentile_5y'),
+                    'pb_percentile_5y': _extra.get('pb_percentile_5y'),
                 },
                 'snapshot': False,
             })
         return items
+
+    def _get_latest_tags_for_codes(self, ts_codes: list[str], tag_names: list[str]) -> dict[str, dict]:
+        """批量取多只股票多个标签的最新值（317号：快照缺 style_exposure/catalyst_event）
+
+        Returns:
+            {ts_code: {tag_name: tag_value}}（仅含最新 updated_at 的取值）
+        """
+        if not ts_codes or not tag_names:
+            return {}
+        out: dict[str, dict] = {}
+        try:
+            placeholders = ','.join('?' for _ in ts_codes)
+            tag_ph = ','.join('?' for _ in tag_names)
+            rows = self.conn.execute(
+                f"""SELECT ts_code, tag_name, tag_value, updated_at
+                    FROM opportunity_tags_cache
+                    WHERE ts_code IN ({placeholders}) AND tag_name IN ({tag_ph})
+                    ORDER BY ts_code, tag_name, updated_at DESC""",
+                ts_codes + tag_names
+            ).fetchall()
+            # 行已按 updated_at DESC 排序，首个出现的 (ts_code, tag_name) 即最新值
+            seen: set[tuple] = set()
+            for ts, tag, val, _upd in rows:
+                key = (ts, tag)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.setdefault(ts, {})[tag] = val
+        except Exception as e:
+            logger.warning(f"_get_latest_tags_for_codes failed: {e}")
+        return out
 
     # ════════════════════════════════════════════════════════════
     # 管道状态（305号§9.2）

@@ -487,6 +487,9 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
       <div class="detail-code" id="d-code">--</div>
       <div class="detail-name" id="d-name">--</div>
       <div class="detail-price-row" id="d-price-row"></div>
+      <div class="detail-price-row" id="d-timing-row" style="margin-top:6px;"></div>
+      <div class="detail-price-row" id="d-otype-row" style="margin-top:4px;"></div>
+      <div class="detail-price-row" id="d-profile-row" style="margin-top:6px;"></div>
       <div class="detail-tags" id="d-tags"></div>
     </div>
     <!-- 仲裁结论 -->
@@ -498,6 +501,7 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
     <div class="detail-section" id="d-tags-section">
       <h4>📊 标签摘要</h4>
       <div class="tag-summary-grid" id="d-tag-summary"></div>
+      <div id="d-ts-timestamp" style="font-size:10px;color:var(--text-muted);margin-top:6px;"></div>
     </div>
     <!-- 估值详情 -->
     <div class="detail-section" id="d-valuation-section">
@@ -517,7 +521,7 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
     <!-- 底部操作栏 -->
     <div class="detail-actions">
       <button class="btn btn-primary" onclick="closeDetail()">📋 加入自选</button>
-      <button class="btn" onclick="closeDetail()">📈 策略分析</button>
+      <button class="btn" onclick="goStockAnalysis()">📈 策略分析</button>
       <button class="btn" onclick="closeDetail()">🤖 AI 投研</button>
     </div>
   </div>
@@ -581,6 +585,16 @@ const OPPORTUNITY_PLAIN = {
   "default": "一般机会，先观望"
 };
 
+// 318号 S3：机会类型英文枚举 → 中文名（弹窗行业行/机会类型行展示，替代英文透出）
+const OPPORTUNITY_TYPE_CN = {
+  "value_bottom": "价值低估", "building_watch": "建仓观察", "build_high": "建仓在高位",
+  "main_upsurge": "主升加速", "steady_rise": "稳步上行", "wash_hot": "热门洗盘",
+  "wash_general": "震荡洗盘", "danger_zone": "危险区", "danger_overval": "高位危险",
+  "dividend_play": "高股息收益", "event_driven": "事件驱动", "event_watch": "事件观察",
+  "cold_value": "冷门价值", "quality_unknown": "优质不明", "no_signal": "无明确信号",
+  "default": "一般机会"
+};
+
 // 右侧确认徽标（309号§7.2 用户三层表达：状态徽标）
 const CONFIRM_BADGE = {
   "否决": ["🔴", "出现出货/背离信号，别碰"],
@@ -598,88 +612,32 @@ const DEVIATION_COLORS = {
   "高估": "#dc2626"
 };
 
-// All 21 tags (first 15 = visible, last 6 = collapsed under "+更多")
-const ALL_TAGS = [
-  "低估", "高成长", "高股息", "白马股", "北向增持",
-  "放量突破", "MACD金叉", "涨停", "科创板", "创业板",
-  "沪深300", "中证500", "次新股", "破净", "社保重仓",
-  "汇金持股", "基金重仓", "券商金股", "高质押", "ST", "龙虎榜"
-];
-const VISIBLE_TAG_COUNT = 15;
-
-// Stock definitions per sector
-const STOCK_DEFS = {
-  "电子": [
-    {name:"北方华创", tags:["高成长","沪深300","北向增持","基金重仓"]},
-    {name:"中芯国际", tags:["科创板","沪深300","基金重仓","北向增持"]},
-    {name:"韦尔股份", tags:["沪深300","北向增持","高成长"]},
-    {name:"兆易创新", tags:["科创板","高成长","中证500"]},
-    {name:"紫光国微", tags:["沪深300","高成长","北向增持"]},
-    {name:"澜起科技", tags:["科创板","中证500","北向增持"]},
-    {name:"长电科技", tags:["沪深300","中证500","放量突破"]},
-    {name:"卓胜微", tags:["创业板","中证500","高成长"]},
-    {name:"中微公司", tags:["科创板","沪深300","北向增持"]},
-    {name:"士兰微", tags:["中证500","放量突破","MACD金叉"]},
-    {name:"华天科技", tags:["中证500","MACD金叉"]},
-    {name:"三安光电", tags:["沪深300","中证500","社保重仓"]},
-    {name:"景嘉微", tags:["创业板","中证500"]},
-    {name:"圣邦股份", tags:["创业板","高成长"]}
+// 317号：按地图模式分组的真实标签按钮（替换原 ALL_TAGS 21 个中文标签）
+// 每个按钮映射后端真实字段：key=字段名，values=匹配值列表（数值条件用 __gt3__/__lt1__ 特殊标记）
+const MODE_TAG_GROUPS = {
+  market: [
+    { label: '资金流入', key: 'fund_flow', values: ['5d_inflow'] },
+    { label: '主力建仓', key: 'main_force_phase', values: ['building', 'lifting'] },
+    { label: '高波动',   key: 'volatility_level', values: ['high'] },
+    { label: '板块前10', key: 'sector_heat', values: ['top_10', 'top_20'] },
+    { label: '放量突破', key: 'right_side_confirm', values: ['强确认'] },
+    { label: '财务健康', key: 'fina_health', values: ['pass'] },
   ],
-  "医药生物": [
-    {name:"药明康德", tags:["沪深300","北向增持","白马股","基金重仓"]},
-    {name:"恒瑞医药", tags:["沪深300","白马股","北向增持","社保重仓"]},
-    {name:"迈瑞医疗", tags:["创业板","沪深300","白马股","深股通"]},
-    {name:"片仔癀", tags:["沪深300","白马股","北向增持"]},
-    {name:"智飞生物", tags:["创业板","沪深300","高成长"]},
-    {name:"沃森生物", tags:["创业板","沪深300","中证500"]},
-    {name:"长春高新", tags:["沪深300","白马股","北向增持"]},
-    {name:"康龙化成", tags:["创业板","沪深300","高成长"]},
-    {name:"泰格医药", tags:["创业板","沪深300","北向增持"]},
-    {name:"爱尔眼科", tags:["创业板","沪深300","白马股","北向增持"]},
-    {name:"通策医疗", tags:["中证500","北向增持"]},
-    {name:"凯莱英", tags:["中证500","高成长","北向增持"]},
-    {name:"我武生物", tags:["创业板","中证500"]}
+  opportunity: [
+    { label: '主力建仓', key: 'main_force_phase', values: ['building', 'lifting'] },
+    { label: '资金流入', key: 'fund_flow', values: ['5d_inflow'] },
+    { label: '高成长',   key: 'style_exposure', values: ['large_growth'] },
+    { label: '放量突破', key: 'right_side_confirm', values: ['强确认'] },
+    { label: '有催化剂', key: 'catalyst_event', values: ['__notnone__'] },
+    { label: '板块前10', key: 'sector_heat', values: ['top_10', 'top_20'] },
   ],
-  "电力设备": [
-    {name:"宁德时代", tags:["创业板","沪深300","白马股","北向增持","基金重仓"]},
-    {name:"比亚迪", tags:["沪深300","白马股","北向增持","高成长"]},
-    {name:"隆基绿能", tags:["沪深300","北向增持","高成长"]},
-    {name:"通威股份", tags:["沪深300","中证500","北向增持"]},
-    {name:"阳光电源", tags:["创业板","沪深300","高成长","北向增持"]},
-    {name:"晶盛机电", tags:["创业板","中证500","高成长"]},
-    {name:"汇川技术", tags:["创业板","沪深300","白马股"]},
-    {name:"先导智能", tags:["创业板","沪深300","北向增持"]},
-    {name:"亿纬锂能", tags:["创业板","沪深300","高成长"]},
-    {name:"锦浪科技", tags:["创业板","中证500","高成长"]},
-    {name:"天合光能", tags:["科创板","沪深300","中证500"]},
-    {name:"福斯特", tags:["中证500","北向增持"]}
+  value: [
+    { label: '低估',   key: 'valuation_level', values: ['low', 'extreme_low'] },
+    { label: '高股息', key: 'dividend_yield', values: ['__gt3__'] },   // 特殊：快照列 >3
+    { label: '破净',   key: 'pb', values: ['__lt1__'] },               // 特殊：快照列 <1
+    { label: '白马股', key: 'style_exposure', values: ['large_value'] },
+    { label: '财务健康', key: 'fina_health', values: ['pass'] },
   ],
-  "食品饮料": [
-    {name:"贵州茅台", tags:["沪深300","白马股","北向增持","社保重仓","高股息"]},
-    {name:"五粮液", tags:["沪深300","白马股","北向增持","基金重仓"]},
-    {name:"伊利股份", tags:["沪深300","白马股","北向增持","高股息","社保重仓"]},
-    {name:"泸州老窖", tags:["沪深300","白马股","北向增持"]},
-    {name:"山西汾酒", tags:["沪深300","白马股","高成长"]},
-    {name:"海天味业", tags:["沪深300","白马股","北向增持"]},
-    {name:"洋河股份", tags:["沪深300","白马股","高股息"]},
-    {name:"古井贡酒", tags:["中证500","白马股"]},
-    {name:"安井食品", tags:["中证500","高成长"]},
-    {name:"洽洽食品", tags:["中证500","高股息","北向增持"]},
-    {name:"东鹏饮料", tags:["次新股","中证500","高成长"]}
-  ],
-  "银行": [
-    {name:"招商银行", tags:["沪深300","白马股","高股息","北向增持","基金重仓"]},
-    {name:"兴业银行", tags:["沪深300","高股息","北向增持"]},
-    {name:"工商银行", tags:["沪深300","高股息","社保重仓","破净"]},
-    {name:"建设银行", tags:["沪深300","高股息","社保重仓","破净"]},
-    {name:"农业银行", tags:["沪深300","高股息","社保重仓","破净"]},
-    {name:"平安银行", tags:["沪深300","中证500","北向增持"]},
-    {name:"宁波银行", tags:["沪深300","高成长","北向增持"]},
-    {name:"交通银行", tags:["沪深300","高股息","破净"]},
-    {name:"邮储银行", tags:["沪深300","次新股","高股息"]},
-    {name:"浦发银行", tags:["沪深300","破净"]},
-    {name:"民生银行", tags:["沪深300","破净","高股息"]}
-  ]
 };
 
 // Rand helpers
@@ -696,29 +654,6 @@ const RAW_STOCKS = [];
 const _stockByName = {};  // name→完整数据，供 tooltipFormatter 反查（ECharts 会丢弃自定义字段）
 let ALL_GROUPS = [];
 let _loadingData = false;
-
-// 中文标签推导：从 API 顶层字段映射到 ALL_TAGS 中的筛选标签（与 296号§三能力三 对齐）
-function _deriveTags(s) {
-  const tags = [];
-  const sTags = s.tags || {};
-  const vl = s.valuation_level || sTags.valuation_level || '';
-  const dy = (s.dividend_yield != null ? s.dividend_yield : (sTags.dividend_yield != null ? parseFloat(sTags.dividend_yield) : null));
-  const mfp = s.main_force_phase || '';
-  const fund = sTags.fund_flow || s.fund_flow || '';
-  const pos = sTags.price_position || s.price_position || '';
-  const rsc = s.right_side_confirm || '';
-  // 估值/股息/破净
-  if (['extreme_low', 'low'].includes(vl)) tags.push('低估');
-  if (dy != null && dy > 3) tags.push('高股息');
-  if (s.pb != null && s.pb < 1) tags.push('破净');
-  // 主力/资金
-  if (['building', 'lifting'].includes(mfp)) tags.push('主力建仓');
-  if (fund === '5d_inflow') tags.push('资金流入');
-  // 风格/右侧确认
-  if (pos === 'low_zone') tags.push('白马股');
-  if (rsc === '强确认') tags.push('放量突破');
-  return [...new Set(tags)];  // 去重
-}
 
 async function loadMarketData() {
   if (_loadingData) return;
@@ -765,9 +700,23 @@ async function loadMarketData() {
           signalEnvironment: s.sentiment_phase || (s.tags && s.tags.sentiment_phase) || 'unknown',
           phase: s.main_force_phase || (ss >= 7 ? '拉升' : '震荡'),
           phaseTag: 'tag-phase-' + (s.main_force_phase || 'unknown'),
+          // 318号 S5：5 年估值分位（弹窗估值举证）
+          pePercentile5y: s.tags && s.tags.pe_percentile_5y != null ? parseFloat(s.tags.pe_percentile_5y) : null,
+          pbPercentile5y: s.tags && s.tags.pb_percentile_5y != null ? parseFloat(s.tags.pb_percentile_5y) : null,
+          // 320号 S1：机会画像七维红绿灯（opportunity_profile JSON → 对象）
+          opportunityProfile: (function() {
+            const raw = s.opportunity_profile;
+            if (!raw) return null;
+            try { return typeof raw === 'string' ? JSON.parse(raw) : raw; }
+            catch (e) { return null; }
+          })(),
           signalStrengthFallback: data.signal_strength_fallback || false,
-          tags: _deriveTags(s),
+          tags: [],   // 317号：中文标签推导已停用，过滤改按真实字段（_raw/tags 字典）匹配
           signals: [], summary: '',
+          // 317号：保留原始 API 字段，供标签过滤按真实 key 匹配（快照顶层+tags 字典）
+          _raw: s,
+          // 318号 S1：是否已被实时行情覆盖（盘中/日终角标依据）
+          isRealtime: !!(s.snapshot),
         };
         RAW_STOCKS.push(stockItem);
         _stockByName[stockItem.name.slice(0, 4)] = stockItem;
@@ -792,7 +741,8 @@ _applyModeControls('market');  // 2026-08-04：初始 market 模式，隐藏机�
 // ============================================================
 let chart = null;
 let currentMode = 'market';
-const activeTags = new Set();
+// 317号：activeTags 存储 {key, values, label} 过滤条件（AND 语义），替代原中文标签 Set
+let activeTags = [];
 let isFallbackVisible = false;
 let currentInd = null;    // 310号：当前选中行业（null=全市场）
 let sizeMode = 'cap';     // 310号：面积编码 cap=市值 amount=成交额
@@ -802,47 +752,30 @@ let timingFilter = '';       // 313号 §七2：时机色过滤（''全部 / '�
 let minStrength = 0;         // 313号 §七3：潜力阈值组合筛选（0=不过滤）
 let SNAPSHOT_DATE = '';   // 313号：潜力快照日期（时间标注）
 const LABEL_MIN_AREA = 900;  // 310号：标签隐藏阈值（px²，≈30px 边长）
+// 318号 S1：弹窗状态（30s 轮询据此刷新打开中的弹窗价格）
+let _detailTsCode = '';
+let _detailPanelOpen = false;
 
 // ============================================================
 // TAG FILTER
 // ============================================================
+// 317号：按当前地图模式渲染标签按钮组（MODE_TAG_GROUPS 配置）
 function initTags() {
   const scroll = document.getElementById('tagScroll');
+  const groups = MODE_TAG_GROUPS[currentMode] || [];
   let html = '<button class="tag-btn active-all" data-tag="__all__" onclick="toggleTag(\'__all__\')">🏠 全部</button>';
-  for (let i = 0; i < Math.min(VISIBLE_TAG_COUNT, ALL_TAGS.length); i++) {
-    html += `<button class="tag-btn" data-tag="${ALL_TAGS[i]}" onclick="toggleTag('${ALL_TAGS[i]}')">${ALL_TAGS[i]}</button>`;
-  }
-  // "+更多" dropdown
-  if (ALL_TAGS.length > VISIBLE_TAG_COUNT) {
-    html += '<div class="tag-more-wrap">';
-    html += '<button class="tag-more-btn" onclick="toggleMoreDropdown()">+更多 ▾</button>';
-    html += '<div class="tag-dropdown" id="moreDropdown">';
-    html += '<div class="tag-dropdown-grid">';
-    for (let i = VISIBLE_TAG_COUNT; i < ALL_TAGS.length; i++) {
-      html += `<button class="tag-btn" data-tag="${ALL_TAGS[i]}" onclick="toggleTag('${ALL_TAGS[i]}')">${ALL_TAGS[i]}</button>`;
-    }
-    html += '</div></div></div>';
-  }
+  groups.forEach((g, i) => {
+    html += `<button class="tag-btn" data-tag="t${i}" data-key="${g.key}" data-values='${JSON.stringify(g.values)}' onclick="toggleTag('t${i}')">${g.label}</button>`;
+  });
   scroll.innerHTML = html;
 }
 
-function toggleMoreDropdown() {
-  document.getElementById('moreDropdown').classList.toggle('open');
-}
-
-document.addEventListener('click', function(e) {
-  const dd = document.getElementById('moreDropdown');
-  if (dd && dd.classList.contains('open') && !e.target.closest('.tag-more-wrap')) {
-    dd.classList.remove('open');
-  }
-});
-
-function toggleTag(tag) {
+function toggleTag(tagId) {
   // Deactivate presets when manually toggling tags
   document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
 
-  if (tag === '__all__') {
-    activeTags.clear();
+  if (tagId === '__all__') {
+    activeTags = [];
     document.querySelectorAll('.tag-btn').forEach(b => {
       b.classList.remove('active');
       if (b.dataset.tag === '__all__') {
@@ -858,20 +791,30 @@ function toggleTag(tag) {
   const allBtn = document.querySelector('[data-tag="__all__"]');
   if (allBtn) { allBtn.classList.remove('active', 'active-all'); }
 
-  if (activeTags.has(tag)) {
-    activeTags.delete(tag);
+  const btn = document.querySelector(`.tag-btn[data-tag="${tagId}"]`);
+  const cond = btn ? {
+    key: btn.dataset.key,
+    values: JSON.parse(btn.dataset.values || '[]'),
+    label: btn.textContent.trim(),
+  } : null;
+  if (!cond) { renderChart(); return; }
+
+  const idx = activeTags.findIndex(c => c.key === cond.key);
+  if (idx >= 0) {
+    activeTags.splice(idx, 1);   // 同 key 点击取消（单值标签按 key 去重）
   } else {
-    activeTags.add(tag);
+    activeTags.push(cond);
   }
 
   // Update button visuals
   document.querySelectorAll('.tag-btn').forEach(b => {
     b.classList.remove('active');
     if (b.dataset.tag === '__all__') return;
-    if (activeTags.has(b.dataset.tag)) b.classList.add('active');
+    const k = b.dataset.key;
+    if (activeTags.some(c => c.key === k)) b.classList.add('active');
   });
 
-  if (activeTags.size === 0) {
+  if (activeTags.length === 0) {
     if (allBtn) allBtn.classList.add('active', 'active-all');
   }
 
@@ -879,7 +822,7 @@ function toggleTag(tag) {
 }
 
 function clearFilters() {
-  activeTags.clear();
+  activeTags = [];
   document.querySelectorAll('.tag-btn').forEach(b => {
     b.classList.remove('active');
     if (b.dataset.tag === '__all__') b.classList.add('active', 'active-all');
@@ -929,34 +872,68 @@ function applyPreset(name) {
   // Activate this preset button
   document.querySelectorAll(`.preset-btn[data-preset="${name}"]`).forEach(b => b.classList.add('active'));
 
-  activeTags.clear();
+  activeTags = [];
   document.querySelectorAll('.tag-btn').forEach(b => b.classList.remove('active'));
   const allBtn = document.querySelector('[data-tag="__all__"]');
   if (allBtn) allBtn.classList.remove('active', 'active-all');
 
+  // 317号：预设场景改真实字段映射（键值对数组），替代原中文标签组合
   const presets = {
-    // P1.5 scenario presets (per 296号§三能力三)
-    deep_value: ["低估", "高股息", "沪深300"],
-    main_force: ["主力建仓", "资金流入", "放量突破"],
-    event_driven: ["龙虎榜", "短线催化", "放量突破"],
-    t0: ["高波动", "短线交易", "MACD金叉"]
+    deep_value: [
+      { key: 'valuation_level', values: ['low', 'extreme_low'], label: '低估' },
+      { key: 'dividend_yield', values: ['__gt3__'], label: '高股息' },
+    ],
+    main_force: [
+      { key: 'main_force_phase', values: ['building', 'lifting'], label: '主力建仓' },
+      { key: 'fund_flow', values: ['5d_inflow'], label: '资金流入' },
+      { key: 'right_side_confirm', values: ['强确认'], label: '放量突破' },
+    ],
+    event_driven: [
+      { key: 'catalyst_event', values: ['__notnone__'], label: '有催化剂' },
+      { key: 'right_side_confirm', values: ['强确认'], label: '放量突破' },
+    ],
+    t0: [
+      { key: 'volatility_level', values: ['high'], label: '高波动' },
+      { key: 'time_rhythm', values: ['approaching_turn'], label: '临近变盘' },
+    ],
   };
-  const tags = presets[name] || [];
-  tags.forEach(t => {
-    activeTags.add(t);
-    document.querySelectorAll(`.tag-btn`).forEach(b => {
-      if (b.dataset.tag === t) b.classList.add('active');
+  const conds = presets[name] || [];
+  conds.forEach(c => {
+    activeTags.push(c);
+    // 高亮同 key 的标签按钮（若当前地图按钮组包含该 key）
+    document.querySelectorAll('.tag-btn').forEach(b => {
+      if (b.dataset.key === c.key) b.classList.add('active');
     });
   });
   renderChart();
 }
 
+// 317号：按真实字段过滤（key/values 匹配），支持数值特殊标记 __gt3__/__lt1__/__notnone__
+function _matchFilter(s, cond) {
+  // 值来源优先级：stockItem 顶层 → 原始 API 顶层 → 原始 API tags 字典
+  const raw = s._raw || {};
+  const rawTags = raw.tags || {};
+  let v = s[cond.key];
+  if (v === undefined) v = raw[cond.key];
+  if (v === undefined) v = rawTags[cond.key];
+  if (v === undefined) v = s.tags && s.tags[cond.key];
+  if (cond.values.includes('__notnone__')) {
+    return v != null && v !== '' && String(v) !== 'none' && String(v) !== 'unknown';
+  }
+  if (cond.values.includes('__gt3__')) {
+    const n = parseFloat(v);
+    return !isNaN(n) && n > 3;
+  }
+  if (cond.values.includes('__lt1__')) {
+    const n = parseFloat(v);
+    return !isNaN(n) && n < 1;
+  }
+  return cond.values.includes(String(v ?? ''));
+}
+
 function getFilteredStocks() {
-  if (activeTags.size === 0) return RAW_STOCKS;
-  const tagList = [...activeTags];  // Set 无 every，需转数组
-  return RAW_STOCKS.filter(s =>
-    tagList.every(t => s.tags.includes(t))
-  );
+  if (activeTags.length === 0) return RAW_STOCKS;
+  return RAW_STOCKS.filter(s => activeTags.every(c => _matchFilter(s, c)));
 }
 
 // ============================================================
@@ -1505,6 +1482,12 @@ function setMode(mode) {
     ['timingBlueBtn', 'timingYellowBtn', 'timingGrayBtn', 'timingBrownBtn'].forEach(id =>
       document.getElementById(id).classList.remove('active'));
   }
+  // 317号：切换地图模式时重置标签筛选并重渲染对应按钮组（各模式专属标签）
+  if (activeTags.length > 0) {
+    activeTags = [];
+    document.querySelectorAll('.tag-btn').forEach(b => b.classList.remove('active'));
+  }
+  initTags();
 
   const h1 = document.querySelector('.page-header h1');
   const modeNames = { market: '市场地图', opportunity: '机会地图', value: '价值地图' };
@@ -1604,12 +1587,41 @@ function _valuationKey(vl) {
   return '合理';
 }
 
+// 320号 S1：机会画像维度中文名（opportunity_profile 七维 → 展示名）
+const PROFILE_CN = {
+  risk: '风险', value: '价值', trend: '趋势',
+  volume_price: '量价', fund: '资金', sentiment: '情绪', event: '事件',
+};
+function _profileCN(k) { return PROFILE_CN[k] || k; }
+
 // ============================================================
 // DETAIL PANEL
 // ============================================================
+// 318号 S1：渲染弹窗价格行（含盘中/日终时效角标）；30s 轮询复用此函数刷新
+function _renderDetailPrice(data) {
+  const pctSign = data.pctChange >= 0 ? '+' : '';
+  const pctColor = data.pctChange >= 0 ? 'var(--accent-red)' : 'var(--accent-green)';
+  // 时效角标：实时覆盖过（snapshot=true）显示盘中，否则日终快照
+  const isRealtime = !!(data._raw && data._raw.snapshot) || data.isRealtime;
+  const tzBadge = isRealtime
+    ? '<span style="color:#22c55e;font-size:11px;margin-left:8px;">🕐 盘中</span>'
+    : `<span style="color:var(--text-muted);font-size:11px;margin-left:8px;">📅 日终${SNAPSHOT_DATE ? ' ' + SNAPSHOT_DATE : ''}</span>`;
+  const el = document.getElementById('d-price-row');
+  if (!el) return;
+  el.innerHTML = `
+    <span class="price">${(data.price || 0).toFixed(2)}</span>
+    <span style="color:${pctColor};margin-left:var(--space-8);font-weight:600;">${pctSign}${(data.pctChange || 0).toFixed(2)}%</span>
+    <span style="color:var(--text-muted);margin-left:var(--space-8);font-size:12px;">📊 信号强度 ${Math.round(data.signalStrength || 0)}/100</span>
+    ${tzBadge}
+  `;
+}
+
 function showDetail(data) {
   document.getElementById('d-code').textContent = data.tsCode;
   document.getElementById('d-name').textContent = data.fullName || data.name;
+  // 318号 S1：记录弹窗状态，供 30s 轮询刷新价格
+  _detailTsCode = data.tsCode;
+  _detailPanelOpen = true;
 
   // confirmEvidence 规范化：API 可能返回 JSON 字符串，统一为数组
   if (typeof data.confirmEvidence === 'string' && data.confirmEvidence) {
@@ -1618,26 +1630,39 @@ function showDetail(data) {
   }
   if (!Array.isArray(data.confirmEvidence)) data.confirmEvidence = [];
 
-  // Price row
-  const pctSign = data.pctChange >= 0 ? '+' : '';
-  const pctColor = data.pctChange >= 0 ? 'var(--accent-red)' : 'var(--accent-green)';
-  const oType = data.opportunityType || '';
-  const oLabel = data.opportunityLabel || data.holdPeriod || '';
-  const oColor = HOLD_COLORS[oType] || HOLD_COLORS[data.holdPeriod] || '#6b7280';
-  const badge = CONFIRM_BADGE[data.rightSideConfirm];
-  document.getElementById('d-price-row').innerHTML = `
-    <span class="price">${data.price.toFixed(2)}</span>
-    <span style="color:${pctColor};margin-left:var(--space-8);font-weight:600;">${pctSign}${data.pctChange.toFixed(2)}%</span>
-    <span style="color:var(--text-muted);margin-left:var(--space-8);font-size:12px;">📊 信号强度 ${Math.round(data.signalStrength)}/100</span>
-    <span style="color:${oColor};margin-left:var(--space-8);font-size:12px;">● ${oLabel}</span>
-    ${data.evidenceCount ? `<span style="color:var(--text-muted);margin-left:var(--space-4);font-size:11px;">证据 ${data.evidenceCount}</span>` : ''}
-    ${badge ? `<span style="color:var(--text-muted);margin-left:var(--space-6);font-size:11px;">${badge[0]} 右侧确认: ${data.rightSideConfirm}</span>` : ''}
+  _renderDetailPrice(data);
+
+  // 318号 S2：时机行（另起一行，颜色=时机信号 TIMING_COLORS 蓝黄灰棕，313号 §五）
+  const tColor = timingColor(data.rightSideConfirm, data.consensusRate);
+  const tText = data.rightSideConfirm || '未确认';
+  const tCn = { '强确认': '可入场', '基础确认': '可轻仓', '未确认': '等待', '否决': '回避' };
+  document.getElementById('d-timing-row').innerHTML = `
+    <span style="font-size:12px;color:var(--text-muted);">⏱ 时机</span>
+    <span style="color:${tColor};font-weight:600;font-size:13px;">● ${tCn[tText] || tText}</span>
+    ${data.consensusRate ? `<span style="color:var(--text-muted);font-size:11px;margin-left:6px;">L4共识 ${(data.consensusRate * 100).toFixed(0)}%</span>` : ''}
   `;
 
+  // 318号 S2/S3：机会类型降为辅助文本行（灰色小字，非颜色主信号）
+  const oType = data.opportunityType || '';
+  const oLabel = data.opportunityLabel || OPPORTUNITY_TYPE_CN[oType] || data.holdPeriod || '';
+  document.getElementById('d-otype-row').innerHTML = oLabel
+    ? `<span style="font-size:12px;color:var(--text-muted);">📌 机会类型</span> <span style="font-size:12px;color:var(--text-secondary);">${oLabel}</span>`
+    : '';
+
+  // 320号 S1：机会画像红绿灯浓缩（opportunity_profile 七维 → 精选 3-5 项）
+  const _profile = data.opportunityProfile;
+  document.getElementById('d-profile-row').innerHTML = _profile
+    ? '<span style="font-size:12px;color:var(--text-muted);margin-right:6px;">🧬 画像</span>' +
+      Object.entries(_profile)
+        .filter(([k, v]) => v && v.light && v.status && k !== 'event')
+        .slice(0, 5)
+        .map(([k, v]) => `<span style="font-size:12px;margin-right:8px;">${v.light} ${_profileCN(k)}: ${v.status}</span>`)
+        .join('')
+    : '';
+
   document.getElementById('d-tags').innerHTML = `
-    <span class="detail-tag ${data.phaseTag || 'tag-tech'}">${data.phase || '--'}</span>
     <span class="detail-tag tag-trend">${data.sector}</span>
-    ${oType ? `<span class="detail-tag tag-tech"># ${oType}</span>` : ''}
+    ${oType ? `<span class="detail-tag tag-tech"># ${OPPORTUNITY_TYPE_CN[oType] || oLabel || oType}</span>` : ''}
   `;
 
   // 仲裁结论（含机会类型一句话）；2026-08-06 修复：估值措辞改由 valuation_level 驱动
@@ -1659,7 +1684,7 @@ function showDetail(data) {
       : 'ℹ 信号不足，暂无法形成结论'}
   `;
 
-  // 四行标签
+  // 四行标签（318号 S4：初始单值兜底，diagnose 异步返回后升级为组合维度）
   const tagRows = [
     { label: '方向', value: _tagCn(data.signalDirection), icon: '↗' },
     { label: '位置', value: _tagCn(data.signalPosition), icon: '📍' },
@@ -1670,15 +1695,34 @@ function showDetail(data) {
     `<div class="tag-summary-item"><div class="ts-label">${r.icon} ${r.label}</div><div class="ts-value">${r.value}</div></div>`
   ).join('');
 
-  // 估值详情（空值守卫：API 可能返回 null 的 pe/pb）
-  const valItems = [
-    { label: 'PE', value: typeof data.pe === 'number' ? data.pe.toFixed(1) : '--' },
-    { label: 'PB', value: typeof data.pb === 'number' ? data.pb.toFixed(2) : '--' },
-    { label: '股息率', value: typeof data.dividendYield === 'number' ? data.dividendYield.toFixed(2) + '%' : '--' },
-  ];
-  document.getElementById('d-val-detail').innerHTML = valItems.map(v =>
-    `<div class="val-detail-item"><div class="vd-label">${v.label}</div><div class="vd-value">${v.value}</div></div>`
-  ).join('');
+  // 318号 S4/S5：估值定位改结论优先 + 举证（直白化，用户非量化分析师）
+  const _pe = (typeof data.pe === 'number' && data.pe > 0) ? data.pe : null;
+  const _pb = (typeof data.pb === 'number' && data.pb > 0) ? data.pb : null;
+  const _dy = (typeof data.dividendYield === 'number' && data.dividendYield > 0) ? data.dividendYield : null;
+  // 5 年分位（后端快照 tags 补齐后可用，诊断异步兜底在 S5 补充）
+  const _pePct = data.pePercentile5y != null ? data.pePercentile5y : null;
+  const _pbPct = data.pbPercentile5y != null ? data.pbPercentile5y : null;
+  const _vl = data.valuation || '';
+  const valConcl = _valuationKey(_vl);   // 严重低估/偏低/合理/偏高/高估
+  const valColor = DEVIATION_COLORS[valConcl] || '#6b7280';
+  // 大白话估值结论
+  let valPlain = '';
+  if (_vl === 'extreme_low' || _vl === 'low') valPlain = '估值便宜，适合价值型关注';
+  else if (_vl === 'high' || _vl === 'extreme_high') valPlain = '估值偏贵，追高需谨慎';
+  else if (_vl === 'fair') valPlain = '估值合理，不便宜也不贵';
+  const valItemsHtml = `
+    <div class="val-detail-item" style="grid-column:1/-1;background:var(--bg-surface);padding:8px 10px;border-radius:6px;border:1px solid ${valColor}55;">
+      <div style="font-size:13px;font-weight:600;color:${valColor};">💎 估值结论：${valConcl}</div>
+      ${valPlain ? `<div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">${valPlain}</div>` : ''}
+    </div>
+    <div class="val-detail-item"><div class="vd-label">PE（价格/年盈利）</div>
+      <div class="vd-value">${_pe ? _pe.toFixed(1) : '--'}${_pePct != null ? `<span style="font-size:10px;color:var(--text-muted);margin-left:4px;">近5年${_pePct}%分位</span>` : ''}</div></div>
+    <div class="val-detail-item"><div class="vd-label">PB（价格/净资产）</div>
+      <div class="vd-value">${_pb ? _pb.toFixed(2) : '--'}${_pbPct != null ? `<span style="font-size:10px;color:var(--text-muted);margin-left:4px;">近5年${_pbPct}%分位</span>` : ''}</div></div>
+    <div class="val-detail-item"><div class="vd-label">股息率（分红/价格）</div>
+      <div class="vd-value">${_dy ? _dy.toFixed(2) + '%' : '--'}</div></div>
+  `;
+  document.getElementById('d-val-detail').innerHTML = valItemsHtml;
 
   // 操作建议（309号：右侧确认影响建议；最终以 L4 为准，此处为本地近似）
   const rcBadge = CONFIRM_BADGE[data.rightSideConfirm];
@@ -1700,14 +1744,14 @@ function showDetail(data) {
       </div>` : ''}
   `;
 
-  // 风险提示（2026-08-06 修复：估值风险改由 valuation_level 驱动，原 deviation 阈值与新语义错配）
+  // 风险提示（320号 S1 简述化：只显示最关键的 1 条；完整风险在个股页详版）
   const risks = [];
   if (data.signalStrength < 30) risks.push('信号强度偏低，趋势不明朗');
   if (['high', 'extreme_high'].includes(data.valuation || '')) risks.push('估值偏高，安全边际不足');
   if ((data.valuation || '') === 'extreme_low') risks.push('估值深度低估，需确认是否存在基本面风险');
   if (!risks.length && data.signalStrength >= 40) risks.push('各维度信号一致，系统建议可参考');
   document.getElementById('d-risk').innerHTML = risks.length > 0
-    ? risks.map(r => `<div style="margin-bottom:var(--space-4);">⚠ ${r}</div>`).join('')
+    ? `<div>⚠ ${risks[0]}</div>`   // 简述版只显示关键 1 条
     : '<div style="font-size:12px;color:var(--text-muted);">暂无特别风险提示</div>';
 
   document.getElementById('detailOverlay').classList.add('open');
@@ -1733,6 +1777,26 @@ function showDetail(data) {
             : ` &nbsp; 共识率 ${(con.consensus_rate * 100).toFixed(0)}%（${dir}）`) +
           (cv.verdict ? `<br/><span style="font-size:12px;color:var(--text-muted);margin-top:4px;display:block;">${cv.verdict}</span>` : '');
       }
+      // 318号 S4：标签摘要升级为 diagnose.tags_summary 组合维度（每维度 2-3 项）
+      const ts = diag.tags_summary || {};
+      if (ts.direction || ts.position || ts.quality || ts.environment) {
+        const comboRows = [
+          { label: '方向', value: ts.direction, icon: '↗' },
+          { label: '位置', value: ts.position, icon: '📍' },
+          { label: '质量', value: ts.quality, icon: '🏗️' },
+          { label: '环境', value: ts.environment, icon: '🌤️' },
+        ];
+        document.getElementById('d-tag-summary').innerHTML = comboRows.map(r =>
+          `<div class="tag-summary-item"><div class="ts-label">${r.icon} ${r.label}</div><div class="ts-value">${r.value || '--'}</div></div>`
+        ).join('');
+      }
+      // 318号 S4：时间标注——潜力基于快照、时机截至实时（313号 C5）
+      const now = new Date();
+      const nowTxt = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+      const tzEl = document.getElementById('d-ts-timestamp');
+      if (tzEl) {
+        tzEl.textContent = `潜力基于 ${SNAPSHOT_DATE || '最近快照'} · 时机截至 ${nowTxt}`;
+      }
       const oa = diag.operation_advice || {};
       if (oa.label) {
         document.getElementById('d-advice').innerHTML =
@@ -1742,14 +1806,25 @@ function showDetail(data) {
           `${oa.stop_loss ? ' · 止损 '+oa.stop_loss : ''}` +
           `</div>`;
       }
-      const risks = (diag.risk_warnings || []).map(r => '⚠ ' + r.content).join('<br/>');
-      if (risks) document.getElementById('d-risk').innerHTML = risks;
+      // 320号 S1 简述化：异步风险警告只显示最关键 1 条（完整在个股页）
+      const risks = (diag.risk_warnings || []).map(r => '⚠ ' + r.content);
+      if (risks.length) document.getElementById('d-risk').innerHTML = `<div>${risks[0]}</div>`;
     })
     .catch(() => {});
 }
 
 function closeDetail() {
   document.getElementById('detailOverlay').classList.remove('open');
+  // 318号 S1：清理弹窗状态（停止 30s 轮询刷新该弹窗）
+  _detailTsCode = '';
+  _detailPanelOpen = false;
+}
+
+// 320号 S2：跳转个股策略分析页（indicator-ide.html?ts_code=xxx）
+function goStockAnalysis() {
+  const ts = _detailTsCode;
+  closeDetail();
+  if (ts) window.location.href = 'indicator-ide.html?ts_code=' + encodeURIComponent(ts);
 }
 
 document.getElementById('detailOverlay').addEventListener('click', function(e) {
@@ -1806,31 +1881,51 @@ document.addEventListener('DOMContentLoaded', function() {
   initTags();
   renderChart();
 
-  // 更新市场地图实时数据（30s 轮询 API）
-  setInterval(() => {
-    if (currentMode === 'market') {
-      fetch('/api/v3/opportunity-atlas/treemap?mode=market')
-        .then(r => r.json())
-        .then(json => {
-          const data = json.data || json;
-          (data.groups || []).forEach(g => {
-            (g.stocks || []).forEach(s => {
-              const found = RAW_STOCKS.find(r => r.tsCode === s.ts_code);
-              if (found) {
-                if (s.snapshot) {
-                  found.price = s.price;
-                  found.pctChange = s.pct_change;
-                } else {
-                  found.price = s.price || found.price;
-                  found.pctChange = s.pct_change;
-                }
-              }
-            });
-          });
-          renderChart();
-        })
-        .catch(() => {});
+  // 320号 S4：支持 ?ts_code=xxx 参数（从个股页"回到机会图谱"跳转）——数据加载后自动高亮该股弹窗
+  try {
+    const urlTs = new URLSearchParams(window.location.search).get('ts_code');
+    if (urlTs) {
+      const _openFromUrl = () => {
+        const found = RAW_STOCKS.find(r => r.tsCode === urlTs || r.name.includes(urlTs));
+        if (found) showDetail(found);
+      };
+      if (RAW_STOCKS.length) _openFromUrl();
+      else setTimeout(_openFromUrl, 4000);   // 等待首次加载完成（网络慢兜底）
     }
+  } catch (e) {}
+
+  // 318号 S1：更新实时数据（30s 轮询，三模式全量刷新——弹窗在机会/价值地图下也跟随盘中更新）
+  setInterval(() => {
+    fetch('/api/v3/opportunity-atlas/treemap?mode=market')
+      .then(r => r.json())
+      .then(json => {
+        const data = json.data || json;
+        (data.groups || []).forEach(g => {
+          (g.stocks || []).forEach(s => {
+            const found = RAW_STOCKS.find(r => r.tsCode === s.ts_code);
+            if (found) {
+              if (s.snapshot) {
+                found.price = s.price;
+                found.pctChange = s.pct_change;
+                found.isRealtime = true;
+              } else {
+                found.price = s.price || found.price;
+                found.pctChange = s.pct_change;
+                found.isRealtime = false;
+              }
+            }
+          });
+        });
+        // 318号 S1：轮询同步更新弹窗内价格（若当前正打开某股详情）
+        if (_detailTsCode && _detailTsCode !== '') {
+          const cur = RAW_STOCKS.find(r => r.tsCode === _detailTsCode);
+          if (cur && _detailPanelOpen) {
+            _renderDetailPrice(cur);
+          }
+        }
+        renderChart();
+      })
+      .catch(() => {});
     const now = new Date();
     // 313号：时间标注——潜力基于快照（日更）、时机截至实时刷新
     const snapTxt = SNAPSHOT_DATE ? `潜力快照 ${SNAPSHOT_DATE}` : '潜力快照 日更';
