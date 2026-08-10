@@ -485,7 +485,9 @@ class ValuationEngine(DataAwareMixin):
         if ev <= 0:
             return 0.0
 
-        fcf_yield = fcf / ev * 100  # 转为百分比
+        # 2026-08-10 核查修复：fcf 单位为元、ev(total_mv/负债/现金)为万元——
+        # fcf 统一转万元再除，消除 1e4 量级错
+        fcf_yield = fcf / 1e4 / ev * 100  # 转为百分比
 
         # 315号 F5：锚3 相对化——FCF yield 截面分位（高分位=现金流强=低估方向），
         # 无基准回退原绝对比较（vs 国债收益率）
@@ -786,7 +788,9 @@ class ValuationEngine(DataAwareMixin):
             if not fcf.empty and 'total_mv' in df_basic.columns:
                 mv = df_basic['total_mv'].dropna()
                 if not mv.empty and mv.iloc[-1] > 0:
-                    fcf_yield = round(fcf.iloc[0] / mv.iloc[-1] * 100, 2)
+                    # 2026-08-10 核查修复：daily_basic.total_mv 单位为万元，
+                    # free_cashflow 单位为元——换算对齐再除，消除 1e4 放大
+                    fcf_yield = round(fcf.iloc[0] / (mv.iloc[-1] * 1e4) * 100, 4)
 
         div_yield = None
         if not df_basic.empty and 'dv_ttm' in df_basic.columns:

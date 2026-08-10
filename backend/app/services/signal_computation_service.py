@@ -2310,7 +2310,17 @@ class SignalComputationService:
                     'support': round(float(zs_low), 2) if zs_low else 0.0,
                     'resistance': round(float(zs_high), 2) if zs_high else 0.0,
                 },
-                'risk_level': 'HIGH' if trend_str == '下降' and confidence < 0.5 else 'MEDIUM',
+                # 2026-08-10 核查修复：risk_level 公式退化（原条件不同源恒 MEDIUM）——
+                # 改用缠论结构自身风险信号组合（卖点/下降趋势+弱动量=HIGH；上升+背驰向上=LOW）
+                'risk_level': (
+                    'HIGH' if (bool(sell_types)
+                               or (trend_str == '下降'
+                                   and not (divergence is not None
+                                            and divergence.confidence < 0.5)))
+                    else ('LOW' if (not sell_types and trend_str == '上升'
+                                    and divergence is not None
+                                    and divergence.direction == 'up')
+                          else 'MEDIUM')),
                 # Phase 1 P1-2: 时序过滤后的有效信号（取买卖点中时序最新的一个）
                 'active_signal': _build_active_signal(best_buy, best_sell, latest_date, latest_close) if (best_buy or best_sell) else None,
                 'active_signal_label': _build_active_label(best_buy, best_sell, divergence),

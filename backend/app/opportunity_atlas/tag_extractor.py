@@ -46,26 +46,51 @@ def extract_chanlun_deep_tags(ts_code: str) -> dict:
         sr = chanlun.get('status_recognition', {})
         out = {}
         # 缠论结构深度字段（structure 组）
+        # 2026-08-10 核查修复：None 值跳过（原 str(None) 产生字面 "None" 假值）
+        def _mk(v, is_json=False):
+            if v is None:
+                return None
+            return (json.dumps(v, ensure_ascii=False) if is_json else str(v))
         if 'support_resistance' in sr:
-            out['support_resistance'] = json.dumps(sr['support_resistance'], ensure_ascii=False)
+            _v = _mk(sr['support_resistance'], is_json=True)
+            if _v is not None:
+                out['support_resistance'] = _v
         if 'zhongshu_strength' in sr:
-            out['zhongshu_strength'] = str(sr['zhongshu_strength'])
+            _v = _mk(sr['zhongshu_strength'])
+            if _v is not None:
+                out['zhongshu_strength'] = _v
         if 'multi_level' in sr:
-            out['multi_level'] = json.dumps(sr['multi_level'], ensure_ascii=False)
+            _v = _mk(sr['multi_level'], is_json=True)
+            if _v is not None:
+                out['multi_level'] = _v
         if 'near_levels_filtered' in sr:
-            out['near_levels_filtered'] = json.dumps(sr['near_levels_filtered'], ensure_ascii=False)
+            _v = _mk(sr['near_levels_filtered'], is_json=True)
+            if _v is not None:
+                out['near_levels_filtered'] = _v
         if 'active_signal' in sr:
-            out['active_signal'] = str(sr['active_signal'])
+            _v = _mk(sr['active_signal'])
+            if _v is not None:
+                out['active_signal'] = _v
         if 'active_signal_label' in sr:
-            out['active_signal_label'] = str(sr['active_signal_label'])
+            _v = _mk(sr['active_signal_label'])
+            if _v is not None:
+                out['active_signal_label'] = _v
         if 'level_upper_limit' in sr:
-            out['level_upper_limit'] = str(sr['level_upper_limit'])
+            _v = _mk(sr['level_upper_limit'])
+            if _v is not None:
+                out['level_upper_limit'] = _v
         if 'momentum' in sr:
-            out['momentum'] = json.dumps(sr['momentum'], ensure_ascii=False)
+            _v = _mk(sr['momentum'], is_json=True)
+            if _v is not None:
+                out['momentum'] = _v
         if 'state_label' in sr:
-            out['state_label'] = str(sr['state_label'])
+            _v = _mk(sr['state_label'])
+            if _v is not None:
+                out['state_label'] = _v
         if 'risk_level' in sr:
-            out['risk_level'] = str(sr['risk_level'])
+            _v = _mk(sr['risk_level'])
+            if _v is not None:
+                out['risk_level'] = _v
         return out
     except Exception as e:
         logger.debug(f"extract_chanlun_deep_tags 失败 ({ts_code}): {e}")
@@ -132,6 +157,8 @@ DEEP_TAG_GROUPS = {
     'retail_vs_institutional': 'chip_deep', 'sentiment_crowding': 'chip_deep',
     'sentiment_crowding_label': 'chip_deep', 'fake_institution': 'chip_deep',
     'asr_status': 'chip_deep', 'concentration_status': 'chip_deep', 'cyqkl_status': 'chip_deep',
+    'peak_count': 'chip_deep', 'peak_type': 'chip_deep',
+    'avg_vol_100': 'chip_deep', 'vol_ratio': 'chip_deep',
     # fund_risk 组（资金/风险）
     'net_lg_amount_5d': 'fund_risk', 'margin_cost_price': 'fund_risk',
     'risk_level': 'fund_risk',

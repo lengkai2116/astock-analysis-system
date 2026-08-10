@@ -2077,6 +2077,22 @@ class EnhancedCacheManager:
             # ── 跨维仲裁（321号：机会状态机，唯一结论收敛层） ──
             'opportunity_state':    ('derived',    'PrecomputeL2Labels'),
             'state_evidence':       ('derived',    'PrecomputeL2Labels'),
+            # ── 2026-08-10 标签库核查补注册（消除 unknown 归组遗漏） ──
+            # 估值锚评级/PS分位/营收增长（ValuationEngine 同源 → position）
+            'asset_anchor_rating':      ('position', 'ValuationEngine'),
+            'earnings_anchor_rating':   ('position', 'ValuationEngine'),
+            'cashflow_anchor_rating':   ('position', 'ValuationEngine'),
+            'adjusted_anchor_rating':   ('position', 'ValuationEngine'),
+            'ps_percentile_5y':         ('position', 'ValuationEngine'),
+            'revenue_growth':           ('position', 'ValuationEngine'),
+            # 财务质量（→ quality）
+            'roe':                      ('quality',  'PrecomputeL2Labels'),
+            # 潜力分解/证据总量（→ derived，与 signal_strength/evidence_count 同源）
+            'potential_breakdown':      ('derived',  'PrecomputeL2Labels'),
+            'evidence_total':           ('derived',  'PrecomputeL2Labels'),
+            # 事件监控（→ environment）
+            'event_composite_score':    ('environment', 'EventMonitor'),
+            'event_summary':            ('environment', 'EventMonitor'),
         }
 
         # 标准化 tags 格式

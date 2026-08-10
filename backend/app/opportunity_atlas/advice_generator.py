@@ -95,9 +95,18 @@ class AdviceGenerator(DataAwareMixin):
     def _generate_fallback(self, ts_code: str, tags: dict = None) -> dict:
         """L4 不可用时使用简化规则回退"""
         signal_strength = float(tags.get('signal_strength', 0)) if tags else 0
+        # 2026-08-10 核查修复：fallback 叠加 opportunity_state——
+        # 避免 ss=75 的 wait 股被误判"建仓"（321 状态机权威优先）
+        state = (tags or {}).get('opportunity_state')
 
         # 313号：signal_strength 0-100 潜力强度（旧 0-10 的 ×10 迁移）
-        if signal_strength >= 70:
+        if state == 'avoid':
+            action, label, max_ratio = 'clear', '清仓回避', 0.0
+        elif state == 'wait':
+            action, label, max_ratio = 'hold', '持有观察', 0.2
+        elif state in ('enter', 'light'):
+            action, label, max_ratio = 'build_position', '建仓', 0.4
+        elif signal_strength >= 70:
             action, label, max_ratio = 'build_position', '建仓', 0.6
         elif signal_strength >= 50:
             action, label, max_ratio = 'hold', '持有观察', 0.3
