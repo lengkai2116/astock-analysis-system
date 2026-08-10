@@ -2466,10 +2466,15 @@ class EnhancedCacheManager:
         self.conn.commit()
 
     def mark_step_running(self, pipeline_date: str, step_id: str) -> bool:
-        """尝试将环节标记为 running（幂等锁），成功返回 True"""
+        """尝试将环节标记为 running（幂等锁），成功返回 True
+
+        2026-08-10 修复：支持 failed → running 重试（原仅 pending→running，
+        导致 P3 failed 后管道永久卡死——_drive_pipeline 对 failed 步骤调用本方法
+        但 UPDATE 0 行即返回，重试分支永远到不了）。
+        """
         rc = self.conn.execute(
             "UPDATE pipeline_status SET status='running', started_at=CURRENT_TIMESTAMP "
-            "WHERE pipeline_date=? AND step_id=? AND status='pending'",
+            "WHERE pipeline_date=? AND step_id=? AND status IN ('pending', 'failed')",
             [pipeline_date, step_id]
         ).rowcount
         return rc > 0
