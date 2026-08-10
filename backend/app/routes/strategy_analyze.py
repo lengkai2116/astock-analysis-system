@@ -219,6 +219,26 @@ def _restore_signals_from_cache(cached: dict) -> list:
         signals.append(raw)
     return signals
 
+
+def _read_signal_cached(dm, ts_code: str) -> tuple:
+    """优先当日缓存，miss 时回退最新一条（320号 F3，322号 S0 对策1）
+
+    非交易日/新交易日 get_signal_detail(当日) 必 miss → 此前触发
+    UnifiedStrategyCore 实时计算（实测 4.5-6.1s/只）；回退 get_latest_signal_detail
+    直接命中最新缓存，毫秒级。
+
+    Returns:
+        (signals: list|None, signal_date: str|None)
+    """
+    cached = dm.get_signal_detail(ts_code)
+    if cached:
+        return _restore_signals_from_cache(cached), cached.get('trade_date')
+    latest = dm.cache.get_latest_signal_detail(ts_code)
+    if latest:
+        return _restore_signals_from_cache(latest), latest.get('trade_date')
+    return None, None
+
+
 def _find_signal(signals: List[Dict], keyword: str) -> Optional[Dict]:
     """从信号列表中按策略名关键词查找"""
     for s in signals:
@@ -231,13 +251,34 @@ def _safe_str(val, default='未知') -> str:
     return str(val) if val is not None else default
 
 
-def _build_chanlun_dimension(sig: Optional[Dict], latest_close: float = None) -> Dict:
-    """从缠论信号构建卡1格式"""
+def _build_chanlun_dimension(sig: Optional[Dict], latest_close: float = None,
+                             tags: Optional[Dict] = None) -> Dict:
+    """从缠论信号构建卡1格式（323号 S0.5：信号缺失时从标签库深度字段恢复）
+
+    tags: 机会图谱标签库（含 structure 组 support_resistance 等，S0 已落库）
+    """
+    # 323号 S0.5：从标签库恢复支撑/阻力（信号缺失或 levels 空时）
+    deep_sr = None
+    if tags:
+        try:
+            import json as _json
+            if tags.get('support_resistance'):
+                deep_sr = _json.loads(tags['support_resistance'])
+        except Exception:
+            deep_sr = None
     if not sig:
+        if deep_sr:
+            return {'direction': 'neutral', 'status_text': '无缠论信号',
+                    'critical_levels': {'support': deep_sr.get('support'),
+                                        'resistance': deep_sr.get('resistance')},
+                    'zhongshu_range': [deep_sr.get('support'), deep_sr.get('resistance')]}
         return {'direction': 'neutral', 'status_text': '无缠论信号'}
     sr = sig.get('status_recognition', {})
     trend = sr.get('trend', {})
-    levels = sr.get('support_resistance', {})
+    levels = sr.get('support_resistance', {}) or {}
+    # 信号 levels 为空时用标签库深度字段兜底
+    if not levels.get('support') and deep_sr:
+        levels = deep_sr
     detail = sig.get('chanlun_analysis_detail', {})
     # NLG渲染status_text（传入最新收盘价以计算距离）
     # 优先级: NLG renderer → fallback_description → evidence拼接
@@ -350,10 +391,22 @@ def _build_volume_price_dimension(sig: Optional[Dict]) -> Dict:
     }
 
 
-def _build_chip_dimension(sig: Optional[Dict]) -> Dict:
-    """从筹码信号构建卡3格式"""
+def _build_chip_dimension(sig: Optional[Dict], tags: Optional[Dict] = None) -> Dict:
+    """从筹码信号构建卡3格式（323号 S0.5：信号缺失时从标签库 chip_deep 恢复）"""
+    # 323号 S0.5：从标签库恢复筹码深度（chip_peak/asr/concentration 等，S0 已落库）
+    deep_chip = {}
+    if tags:
+        for k in ('chip_peak', 'asr', 'concentration', 'profit_ratio', 'cyqkl', 'ssrp'):
+            if tags.get(k) is not None:
+                try:
+                    deep_chip[k] = float(tags[k])
+                except (TypeError, ValueError):
+                    deep_chip[k] = tags[k]
     if not sig:
-        return {'direction': 'neutral', 'status_text': '筹码数据不足，无法分析主力动向'}
+        avg_cost = deep_chip.get('chip_peak')
+        return {'direction': 'neutral', 'status_text': '筹码数据不足，无法分析主力动向',
+                'avg_cost': avg_cost if avg_cost else None,
+                'concentration': f"{deep_chip.get('concentration', 0)*100:.1f}%" if deep_chip.get('concentration') else '--'}
     sr = sig.get('status_recognition', {})
     status_text = render_chip_volume(sr) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
 
@@ -613,11 +666,10 @@ def strategy_analyze():
         # Step 1: 优先从缓存读取策略信号（287号方案 v2.3）
         from app.data import DataManager
         _dm = DataManager()
-        cached = _dm.get_signal_detail(ts_code)
-        if cached:
-            signals = _restore_signals_from_cache(cached)
-            data_availability = cached.get('data_availability', {})
-        else:
+        # 322号 S0 对策1：优先当日缓存，miss 回退最新一条（非交易日命中），避免 5s 实时计算
+        signals, signal_date = _read_signal_cached(_dm, ts_code)
+        data_availability = {'signal_date': signal_date} if signal_date else {}
+        if not signals:
             from app.engine.unified_core import UnifiedStrategyCore
             _core = UnifiedStrategyCore()
             _result = _core.compute(ts_code, period=period)
@@ -639,6 +691,14 @@ def strategy_analyze():
         bociasi_sig = _find_signal(signals, 'BOCIASI')
         factor_sig = _find_signal(signals, '因子')
 
+        # 323号 S0.5：读取深度标签（structure/chip_deep/fund_risk 组），
+        # 供五维构建恢复深度字段
+        try:
+            _deep_tags = _dm.cache.get_tags_by_group(
+                ts_code, ['structure', 'chip_deep', 'fund_risk'])
+        except Exception:
+            _deep_tags = None
+
         # Step 3.5: 可选 Kronos 推理（先于 factor 维度，为仲裁器提供输入）
         kronos_result = None
         if kronos_enabled:
@@ -646,10 +706,11 @@ def strategy_analyze():
 
         # Step 4: 组装五维数据 + Vibe策略
         dimensions = {
-            'chanlun': _build_chanlun_dimension(chanlun_sig, 
-                latest_close=chanlun_sig.get('latest_close') if chanlun_sig else None),
+            'chanlun': _build_chanlun_dimension(chanlun_sig,
+                latest_close=chanlun_sig.get('latest_close') if chanlun_sig else None,
+                tags=_deep_tags),
             'volume_price': _build_volume_price_dimension(vp_sig),
-            'chip': _build_chip_dimension(chip_sig),
+            'chip': _build_chip_dimension(chip_sig, tags=_deep_tags),
             'emotion': _build_emotion_dimension(bociasi_sig, signal_context),
             'factor': _build_factor_dimension(
                 signals,
@@ -681,6 +742,26 @@ def strategy_analyze():
         # DeepSeek 九层描述改为用户触发，走独立端点 /api/v3/strategy/deepseek
         # NLG 规则生成的 status_text 保留在各维度中
 
+        # ── 322号 S1：操作建议（现状描述化，结论与机会图谱同源）──
+        # 实时组装（读缓存信号 + K线几何指标，毫秒级），不落库不入快照
+        response_advice = None
+        try:
+            from app.opportunity_atlas.advice_builder import build_operation_advice
+            _df = _dm.get_cached_daily_data(ts_code)
+            # 322号 统一两路径：传入真实标签（opportunity_tags_cache），
+            # advice_builder 优先采信真实 right_side_confirm/opportunity_state，
+            # 保证与机会图谱弹窗 diagnose 结论同源（000975 等否决股不再误判 enter）
+            try:
+                _tags = _dm.cache.get_tags(ts_code)
+            except Exception:
+                _tags = None
+            # 322号 S4：kronos_enabled 且推理成功时传入 Kronos 修正（AI预测仅供参考）
+            _kronos_in = kronos_result if (kronos_enabled and kronos_result) else None
+            response_advice = build_operation_advice(ts_code, dimensions, signals, _df,
+                                                     kronos=_kronos_in, tags=_tags)
+        except Exception as _adv_err:
+            logger.debug(f"operation_advice 生成跳过 ({ts_code}): {_adv_err}")
+
         response = {
             'code': 0,
             'data': {
@@ -689,6 +770,8 @@ def strategy_analyze():
                 'period': period,
                 'dimensions': dimensions,
                 'data_availability': data_availability,
+                # 322号：操作建议（七维红绿灯+几何+情景概率+executable）
+                'operation_advice': response_advice,
                 # NLG 规则生成的现状文本（读取时从信号数据自动渲染，非 DeepSeek）
                 'nlg_status_text': {k: v.get('status_text', '') for k, v in dimensions.items() if isinstance(v, dict)},
                 # 标记前端可调用 DeepSeek 独立端点（287号§十零改动选项）
@@ -732,13 +815,11 @@ def strategy_status_aggregate():
     dimensions = data.get('dimensions')
 
     try:
-        # Step 1: 获取策略信号（优先缓存，未命中实时计算）
+        # Step 1: 获取策略信号（322号 S0 对策1：当日 miss 回退最新缓存，避免实时计算）
         from app.data import DataManager
         _dm = DataManager()
-        _cached = _dm.get_signal_detail(ts_code)
-        if _cached:
-            signals = _restore_signals_from_cache(_cached)
-        else:
+        signals, _ = _read_signal_cached(_dm, ts_code)
+        if not signals:
             from app.engine.unified_core import UnifiedStrategyCore
             _core = UnifiedStrategyCore()
             _result = _core.compute(ts_code)
@@ -1126,11 +1207,11 @@ def strategy_deepseek():
         return jsonify({'code': -1, 'message': 'ts_code必填'}), 400
 
     try:
-        # 从缓存读取信号数据
+        # 从缓存读取信号数据（322号 S0 对策1：当日 miss 回退最新缓存）
         from app.data import DataManager
         dm = DataManager()
-        cached = dm.get_signal_detail(ts_code)
-        if not cached:
+        signals, _ = _read_signal_cached(dm, ts_code)
+        if not signals:
             return jsonify({
                 'code': -1,
                 'message': '策略信号未就绪，请稍后重试或先调用策略分析',

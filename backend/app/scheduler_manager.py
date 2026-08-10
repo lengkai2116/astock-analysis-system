@@ -235,39 +235,41 @@ class SchedulerManager:
                 pass
 
         # ── 盘中快照推送（迭代2：API 进程 APScheduler 推送） ──
-        # 始终注册，不受配置影响（盘中推送是基础功能）
-        try:
-            from datetime import timedelta
-            now = datetime.now()
-            self._scheduler.add_job(
-                self._market_snapshot_push_wrapper_5s,
-                IntervalTrigger(seconds=5),
-                id='market_snapshot_push_5s',
-                name='盘中快照推送（涨跌/涨幅榜/自选）',
-                replace_existing=True,
-                coalesce=True,
-                max_instances=1,
-                misfire_grace_time=15,
-                next_run_time=now + timedelta(seconds=10),  # 冷启动保护：首次延迟10s
-            )
-            logger.debug("注册盘中快照推送: 每 5s 推送涨跌分布+涨幅榜+自选行情")
-        except Exception as e:
-            logger.warning("注册盘中快照推送(5s)失败: %s", e)
+        # 320号 L4：仅 API 进程注册（daemon 模式跳过——daemon 独立管理推送，
+        # 否则 daemon 进程收盘后 APScheduler 每 5s 空转触发刷日志）
+        if not os.environ.get('DATA_DAEMON_RUNNING'):
+            try:
+                from datetime import timedelta
+                now = datetime.now()
+                self._scheduler.add_job(
+                    self._market_snapshot_push_wrapper_5s,
+                    IntervalTrigger(seconds=5),
+                    id='market_snapshot_push_5s',
+                    name='盘中快照推送（涨跌/涨幅榜/自选）',
+                    replace_existing=True,
+                    coalesce=True,
+                    max_instances=1,
+                    misfire_grace_time=15,
+                    next_run_time=now + timedelta(seconds=10),  # 冷启动保护：首次延迟10s
+                )
+                logger.debug("注册盘中快照推送: 每 5s 推送涨跌分布+涨幅榜+自选行情")
+            except Exception as e:
+                logger.warning("注册盘中快照推送(5s)失败: %s", e)
 
-        try:
-            self._scheduler.add_job(
-                self._market_snapshot_push_wrapper_30s,
-                IntervalTrigger(seconds=30),
-                id='market_snapshot_push_30s',
-                name='盘中板块排行推送',
-                replace_existing=True,
-                coalesce=True,
-                max_instances=1,
-                misfire_grace_time=60,
-            )
-            logger.debug("注册盘中板块排行推送: 每 30s 推送板块排行")
-        except Exception as e:
-            logger.warning("注册盘中板块排行推送(30s)失败: %s", e)
+            try:
+                self._scheduler.add_job(
+                    self._market_snapshot_push_wrapper_30s,
+                    IntervalTrigger(seconds=30),
+                    id='market_snapshot_push_30s',
+                    name='盘中板块排行推送',
+                    replace_existing=True,
+                    coalesce=True,
+                    max_instances=1,
+                    misfire_grace_time=60,
+                )
+                logger.debug("注册盘中板块排行推送: 每 30s 推送板块排行")
+            except Exception as e:
+                logger.warning("注册盘中板块排行推送(30s)失败: %s", e)
 
     def reschedule_from_config(self, config: Dict[str, Any]):
         """根据新配置动态更新 Job（无需重启）"""

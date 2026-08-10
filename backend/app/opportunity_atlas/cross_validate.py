@@ -327,14 +327,20 @@ class L4CrossValidator(DataAwareMixin):
         consensus, voting_detail = self._compute_consensus(tags, adjusted_votes)
 
         # ── 汇总输出 ──
-        verdict = self._build_verdict(consensus, voting_detail)
+        # 321号 S2：跨维仲裁（权威 gate + 情绪加权 consensus 同源传入，消除预计算/诊断偏差）
+        try:
+            from app.opportunity_atlas.arbiter import arbitrate
+            _arb = arbitrate(tags, gate=gate, consensus=consensus)
+        except Exception:
+            _arb = {'opportunity_state': 'wait', 'state_evidence': ['仲裁不可用']}
+        verdict = self._build_verdict(consensus, voting_detail, tags,
+                                      gate=gate, consensus_authority=consensus)
         signal_strength = self._safe_float(tags.get('signal_strength'), 0)
         signal_strength_adjusted = self._compute_signal_strength_adjusted(tags, signal_strength)
 
         # ── 并行计算日常变化（299号§5.1 变更检测归属L4） ──
         daily_change = self._compute_daily_change(ts_code, tags)
 
-        operation_advice = self._build_operation_advice(ts_code, consensus, tags, gate, df)
         # 319号修订版：EPS 同比 + PB 分位传入风险提示（估值矛盾场景数据驱动分叉）
         _eps_yoy = self._eps_yoy(ts_code)
         _pb_pct = self._safe_float(tags.get('pb_percentile_5y'), None)
@@ -343,12 +349,73 @@ class L4CrossValidator(DataAwareMixin):
         opportunity_summary = self._build_opportunity_summary(tags, consensus, risk_warnings)
         tags_summary = self._build_tags_summary(tags)
 
+        # 323号 S0.7：执行层统一——operation_advice 改由 advice_builder 生成
+        # （唯一仓位/止损/入场来源），用标签构造五维输入，保留旧字段兼容
+        # 旧 _build_operation_advice 仅作 advice_builder 失败时回退（废弃标记）
+        operation_advice = None
+        try:
+            from app.opportunity_atlas.advice_builder import build_operation_advice
+            _dm = self._get_dm()
+            _df = _dm.get_cached_daily_data(ts_code)
+            _ta = str(tags.get('trend_alignment', ''))
+            _ff = str(tags.get('fund_flow', ''))
+            _dims = {
+                'factor': {'trend': ('bullish' if _ta == 'up_aligned'
+                                     else ('bearish' if _ta == 'down_aligned'
+                                            else 'neutral'))},
+                'chanlun': {'direction': '上升',
+                            'buy_point': tags.get('buy_sell_point', '')},
+                'volume_price': {'direction': 'up'},
+                'chip': {'direction': ('bullish' if _ff == '5d_inflow'
+                                       else ('bearish' if _ff == '5d_outflow'
+                                              else 'neutral'))},
+                'emotion': {'direction': 'bullish'},
+            }
+            unified = build_operation_advice(ts_code, _dims, [], _df, tags=tags)
+            # 保留旧字段兼容（action/label/max_position_ratio/entry_plan/
+            # stop_loss/target_price），供机会库等旧消费方过渡
+            _ex = unified['executable']
+            _pos = _ex['position']
+            unified['action'] = _ex.get('action_type', 'hold')
+            unified['label'] = unified.get('summary', '')
+            unified['max_position_ratio'] = _pos.get('max_pct', 0.0)
+            unified['entry_plan'] = [{'trigger': e.get('trigger'),
+                                      'pct': e.get('size_pct')}
+                                     for e in _ex.get('entry_rules', [])]
+            _sl = _ex.get('exit_rules') or []
+            unified['stop_loss'] = (_sl[0].get('trigger') if _sl else None)
+            unified['target_price'] = None
+            operation_advice = unified
+        except Exception as _unify_err:
+            logger.debug(f"S0.7 执行层统一跳过 ({ts_code}): {_unify_err}")
+            # 回退旧 _build_operation_advice（321 逻辑，废弃过渡）
+            try:
+                operation_advice = self._build_operation_advice(
+                    ts_code, consensus, tags, gate, df)
+            except Exception as _old_err:
+                logger.debug(f"旧 _build_operation_advice 失败 ({ts_code}): {_old_err}")
+                operation_advice = {}
+        if not operation_advice:
+            operation_advice = {}
+
+        # 323号 S8：顶层 opportunity_state 同步为 advice_builder 降级后的 state
+        # （实时风控：≥2维反向/停牌等降级须在时机行与建议卡间保持一致）
+        _final_state = _arb['opportunity_state']
+        _final_evidence = _arb['state_evidence']
+        if operation_advice and operation_advice.get('state'):
+            if operation_advice['state'] != _arb['opportunity_state']:
+                _final_state = operation_advice['state']
+                _final_evidence = [operation_advice.get('state_reason')
+                                   or '实时风控降级'] + _final_evidence
+
         return {
             'ts_code': ts_code,
             'name': name,
             'diagnosis_date': datetime.now().strftime('%Y-%m-%d'),
             'opportunity_summary': opportunity_summary,
             'tags_summary': tags_summary,
+            'opportunity_state': _final_state,   # 321号：机会状态机（唯一结论，S8 实时风控同步）
+            'state_evidence': _final_evidence,   # 321号：仲裁依据
             'cross_validation': {
                 'consensus': consensus,
                 'sentiment_weight': sentiment_weight,
@@ -639,8 +706,26 @@ class L4CrossValidator(DataAwareMixin):
             return 'reduce', '减仓/回避'
         return 'clear', '清仓/不推荐'
 
-    def _build_verdict(self, consensus: dict, voting_detail: list) -> str:
-        """构建自然语言总结"""
+    def _build_verdict(self, consensus: dict, voting_detail: list, tags: dict = None,
+                       gate: dict = None, consensus_authority: dict = None) -> str:
+        """构建自然语言总结
+
+        321号 S2：跨维仲裁状态前置——右侧否决/硬风险/深度高估时，
+        verdict 直接输出"回避"语义，不再输出"优质机会建议关注"（修 T3 矛盾）。
+        2026-08-10 审查修复：arbitrate 传入权威 gate/consensus（与 diagnose 同源，
+        消除 P2 深度高估/P3 强看空边缘漏判）。
+        """
+        # ── 321号 S2：仲裁状态前置（仅 avoid 覆盖；其余沿用共识文本） ──
+        if tags:
+            try:
+                from app.opportunity_atlas.arbiter import arbitrate
+                _arb = arbitrate(tags, gate=gate, consensus=consensus_authority)
+                if _arb['opportunity_state'] == 'avoid':
+                    reason = _arb['state_evidence'][0] if _arb['state_evidence'] else '出现风险信号'
+                    return f'🚫 回避：{reason}'
+            except Exception:
+                pass
+
         b = consensus.get('bullish_votes', 0)
         be = consensus.get('bearish_votes', 0)
         n = consensus.get('neutral_votes', 0)
@@ -798,7 +883,9 @@ class L4CrossValidator(DataAwareMixin):
 
     def _build_operation_advice(self, ts_code: str, consensus: dict, tags: dict,
                                 gate: dict = None, df=None) -> dict:
-        """构建操作建议
+        """⚠️ 废弃（2026-08-10 标记）：323号 S0.7 起 operation_advice 由
+        advice_builder 生成（唯一仓位/止损/入场来源），本函数仅作 S0.7 失败回退
+        （cross_validate.diagnose except 分支）。迁移完成后删除。
 
         309号 决策3：操作建议以 L4 共识率为唯一来源，但叠加闸门2右侧确认覆盖：
           - right_side_confirm=否决 → 直接不推荐（无论共识率多高）
@@ -877,6 +964,25 @@ class L4CrossValidator(DataAwareMixin):
             elif val_lv == 'mild':
                 max_ratio = round(max_ratio * 0.8, 2)
 
+        # ── 321号 S2：跨维仲裁状态派生（统一结论源，修 T4：否决→仓位归零） ──
+        # 与 diagnose 传入的权威 gate + 情绪加权 consensus 同源，避免预计算/诊断偏差
+        try:
+            from app.opportunity_atlas.arbiter import arbitrate
+            _arb = arbitrate(tags, gate=gate, consensus=consensus)
+            _state = _arb['opportunity_state']
+            if _state == 'avoid':
+                action, label = 'not_recommended', f"回避：{_arb['state_evidence'][0]}"
+                max_ratio = 0.0
+            elif _state == 'wait':
+                if action in ('build_position', 'add_position'):
+                    action, label = 'hold', '等待：右侧信号未确认或共识不足'
+                max_ratio = min(max_ratio, 0.2)   # 等待态仓位上限 0.2（保守）
+            elif _state == 'light':
+                max_ratio = round(max_ratio * 0.5, 2)   # 可轻仓 → 仓位减半
+            # enter：保持上方闸门2/门禁计算的仓位
+        except Exception:
+            pass
+
         # ── 316号 P4：结构化交易计划（入场/止损/止盈/时间止损/风险注记） ──
         entry_plan, stop_loss, target_price, time_stop, risk_notes = self._build_trade_plan(
             ts_code, tags, df, action, max_ratio, gate)
@@ -894,7 +1000,11 @@ class L4CrossValidator(DataAwareMixin):
 
     def _build_trade_plan(self, ts_code: str, tags: dict, df, action: str,
                           max_ratio: float, gate: dict) -> tuple:
-        """316号 P4：结构化交易计划（§5.3 规则）
+        """⚠️ 废弃（2026-08-10 标记）：323号 S0.7 起交易计划由 advice_builder
+        executable 生成（现价入场 + 60日低点止损），本函数仅被已废弃的
+        _build_operation_advice 调用。迁移完成后删除。
+
+        316号 P4：结构化交易计划（§5.3 规则）
 
         - 入场区间：MA10-MA20 回踩带 / 突破 60 日前高确认
         - 建仓节奏：首仓 40-60%（按 max_ratio 缩放）→ 回踩加仓 → 突破加仓（分批金字塔）

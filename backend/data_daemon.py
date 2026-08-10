@@ -1718,6 +1718,32 @@ def _precompute_l2_labels(codes):
 
                     # 5. 机会潜力强度已由 4c2 计算（313号 v4 替代 311 旧评分）
 
+                    # 323号 S0：深度字段落库（缠论结构 + 筹码分布 + 资金风险）
+                    # phase_detector 已运行 → _last_chip_indicators 已填充（复用，不重复计算）
+                    try:
+                        from app.opportunity_atlas.tag_extractor import (
+                            extract_chanlun_deep_tags, extract_chip_deep_tags,
+                            extract_fund_risk_tags, DEEP_TAG_GROUPS,
+                        )
+                        _deep = {}
+                        _deep.update(extract_chanlun_deep_tags(code))
+                        _deep.update(extract_fund_risk_tags(code))
+                        # 筹码深度：复用 phase_detector 刚填充的指标，避免重复计算
+                        _chip_inds = getattr(pd_engine, '_last_chip_indicators', {}) or {}
+                        if _chip_inds:
+                            _deep.update(_chip_tags_from_indicators(_chip_inds))
+                        else:
+                            _deep.update(extract_chip_deep_tags(code))
+                        # 带 tag_group 写入（dict 格式显式指定 group）
+                        _deep_meta = {}
+                        for _k, _v in _deep.items():
+                            _g = DEEP_TAG_GROUPS.get(_k, 'unknown')
+                            _deep_meta[_k] = {'value': _v, 'group': _g, 'source': 'PrecomputeL2Labels'}
+                        if _deep_meta:
+                            tags.update(_deep_meta)
+                    except Exception:
+                        pass
+
                 # 兜底标签
                 for _mandatory_tag, _default_val in [
                     ('pattern_signal', 'none'), ('capital_nature', 'unknown'),
@@ -1777,6 +1803,27 @@ def _precompute_l2_labels(codes):
                 except Exception:
                     pass
 
+                # 4f. 跨维仲裁（321号：机会状态机 + 显式仲裁优先级表 P0-P7）
+                #     输入 4 链标签（含 4e 闸门2 结果），输出单一 opportunity_state +
+                #     state_evidence；消费点（颜色/建议/verdict/仓位）从状态派生。
+                try:
+                    from app.opportunity_atlas.arbiter import arbitrate
+                    arb = arbitrate(tags)
+                    if arb.get('opportunity_state'):
+                        tags.update(arb)
+                except Exception:
+                    pass
+
+                # 4g. 机会类型 avoid 降级（321号 S3：规则树互斥，修 T2）
+                #     4d 在仲裁前执行（state 未生成），此处按仲裁结果重判机会类型：
+                #     avoid 态 → "回避·仅观察"；非 avoid 保持 4d 原判定。
+                if tags.get('opportunity_state') == 'avoid':
+                    try:
+                        type_result = _classify_opportunity_type(tags)
+                        tags.update(type_result)
+                    except Exception:
+                        pass
+
                 # 6. 写入数据库
                 if len(tags) > 0:
                     _ecm.write_tags(code, tags)
@@ -1799,6 +1846,33 @@ def _precompute_l2_labels(codes):
             _val_summary += "（样例: " + "; ".join(_val_fail_samples[:3]) + "）"
         logger.info(f"L2标签预计算完成: {succeeded}/{len(codes)} 只, 耗时 {elapsed:.1f}s"
                     f"{_val_summary}，整只失败 {_engine_fail} 只")
+
+
+def _chip_tags_from_indicators(indicators: dict) -> dict:
+    """从 phase_detector._last_chip_indicators 提取筹码深度字段（323号 S0）
+
+    复用 phase_detector 已计算的指标（不重复运行引擎），提取 chip_peak/asr/cyqkl 等。
+    """
+    import json as _json
+    out = {}
+    if not indicators:
+        return out
+    if isinstance(indicators.get('main_peak'), dict):
+        pk = indicators['main_peak'].get('price')
+        if pk is not None:
+            try:
+                out['chip_peak'] = str(round(float(pk), 2))
+            except (TypeError, ValueError):
+                pass
+    for key in ('asr', 'cyqkl', 'concentration', 'profit_ratio', 'ssrp',
+                'sandwich_zone', 'retail_vs_institutional', 'sentiment_crowding',
+                'sentiment_crowding_label', 'fake_institution',
+                'asr_status', 'concentration_status', 'cyqkl_status',
+                'peak_count', 'peak_type', 'avg_vol_100', 'vol_ratio'):
+        if key in indicators and indicators[key] is not None:
+            v = indicators[key]
+            out[key] = _json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
+    return out
 
 
 def _add_vp_simple_tags(df, tags):
@@ -1970,6 +2044,11 @@ def _classify_opportunity_type(tags: dict) -> dict:
     # 类型 → (标识, 中文标签)
     def _t(t, label):
         return {'opportunity_type': t, 'opportunity_label': label}
+
+    # R0: 跨维仲裁 avoid 降级（321号 S3：规则树互斥——回避态强制降级，
+    #     不再输出"主力建仓观察/慢牛上涨"等看多类型，修 T2 矛盾）
+    if tags.get('opportunity_state') == 'avoid':
+        return _t('avoid_only', '回避·仅观察')
 
     # R1: 危险区
     if mfp == 'distributing' and fina == 'fail':
@@ -2693,7 +2772,9 @@ def _build_treemap_snapshot(codes: list[str]):
                MAX(CASE WHEN tag_name='pattern_signal'      THEN tag_value END) as pattern_signal,
                MAX(CASE WHEN tag_name='ma_alignment'        THEN tag_value END) as ma_alignment,
                MAX(CASE WHEN tag_name='main_force_presence' THEN tag_value END) as main_force_presence,
-               MAX(CASE WHEN tag_name='presence_evidence'  THEN tag_value END) as presence_evidence
+               MAX(CASE WHEN tag_name='presence_evidence'  THEN tag_value END) as presence_evidence,
+               MAX(CASE WHEN tag_name='opportunity_state'  THEN tag_value END) as opportunity_state,
+               MAX(CASE WHEN tag_name='state_evidence'     THEN tag_value END) as state_evidence
         FROM (
             SELECT ts_code, tag_name, tag_value,
                    ROW_NUMBER() OVER (PARTITION BY ts_code, tag_name ORDER BY id DESC) rn
@@ -2732,6 +2813,8 @@ def _build_treemap_snapshot(codes: list[str]):
             consensus_rate REAL,
             main_force_presence TEXT,
             presence_evidence TEXT,
+            opportunity_state TEXT,
+            state_evidence TEXT,
             snapshot_date TEXT DEFAULT (date('now'))
         )
     """)
@@ -2755,8 +2838,10 @@ def _build_treemap_snapshot(codes: list[str]):
                  chip_concentration, volatility_level, dividend_yield, composite_rating,
                  opportunity_label, evidence_count,
                  right_side_confirm, confirm_evidence, opportunity_profile,
-                 entry_signals, exit_conditions, consensus_rate, main_force_presence, presence_evidence)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 entry_signals, exit_conditions, consensus_rate, main_force_presence,
+                 presence_evidence, opportunity_state, state_evidence)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 code, m.get('name', ''), m.get('industry', ''),
                 float(d['close']) if pd.notna(d.get('close')) else None,
@@ -2785,6 +2870,8 @@ def _build_treemap_snapshot(codes: list[str]):
                 _compute_snapshot_consensus_rate(t),
                 t.get('main_force_presence'),
                 t.get('presence_evidence'),
+                t.get('opportunity_state'),
+                t.get('state_evidence'),
             ))
             written += 1
         except Exception:

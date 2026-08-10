@@ -490,6 +490,7 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
       <div class="detail-price-row" id="d-timing-row" style="margin-top:6px;"></div>
       <div class="detail-price-row" id="d-otype-row" style="margin-top:4px;"></div>
       <div class="detail-price-row" id="d-profile-row" style="margin-top:6px;"></div>
+      <div id="d-profile-explain" style="margin-top:2px;"></div>
       <div class="detail-tags" id="d-tags"></div>
     </div>
     <!-- 仲裁结论 -->
@@ -563,6 +564,38 @@ function timingColor(confirm, consensus) {
   if (confirm === '基础确认') return TIMING_COLORS['基础确认'];
   if (confirm === '否决') return TIMING_COLORS['否决'];
   return TIMING_COLORS['未确认'];
+}
+
+// 321号：机会状态机色板（§3.1 状态枚举）——与 TIMING_COLORS 同色系（蓝/黄/灰/棕）
+const STATE_COLORS = {
+  'enter': { high: '#2563eb', low: '#60a5fa' },   // 可入场：深蓝=共识≥70% / 浅蓝=55-70%
+  'light': '#eab308',                             // 可轻仓：黄
+  'wait': '#6b7280',                              // 等待：灰
+  'avoid': '#8b5a2b',                             // 回避：棕
+};
+const STATE_CN = { 'enter': '可入场', 'light': '可轻仓', 'wait': '等待', 'avoid': '回避' };
+
+// 321号：状态机颜色（唯一结论源）——优先 opportunity_state，旧快照缺字段时回退 timingColor
+function stateColor(state, consensus) {
+  if (state === 'enter') {
+    return (consensus || 0) >= 0.7 ? STATE_COLORS.enter.high : STATE_COLORS.enter.low;
+  }
+  if (state === 'light') return STATE_COLORS.light;
+  if (state === 'avoid') return STATE_COLORS.avoid;
+  return STATE_COLORS.wait;
+}
+
+// 321号：方块/弹窗时机色统一入口——有仲裁状态用状态机，否则回退旧闸门2映射
+function effectiveTimingColor(s) {
+  return s.opportunityState
+    ? stateColor(s.opportunityState, s.consensusRate)
+    : timingColor(s.rightSideConfirm, s.consensusRate);
+}
+// 321号：时机语义文案（弹窗时机行）
+function effectiveTimingText(s) {
+  return s.opportunityState
+    ? (STATE_CN[s.opportunityState] || s.opportunityState)
+    : ({ '强确认': '可入场', '基础确认': '可轻仓', '未确认': '等待', '否决': '回避' }[s.rightSideConfirm] || '等待');
 }
 
 // 机会类型 → 一句话大白话（307号§5.5.3 直白表述层）
@@ -690,6 +723,9 @@ async function loadMarketData() {
           rightSideConfirm: s.right_side_confirm || '',
           consensusRate: s.consensus_rate || 0,   // 313号：闸门3 L4 共识率（颜色细分）
           mainForcePresence: s.main_force_presence || '',   // 313号：主力在场（行为证据）
+          // 321号：跨维仲裁结论（机会状态机，单一结论源——颜色/弹窗/建议优先读此字段；
+          // 旧快照缺字段时兜底回退 rightSideConfirm 映射）
+          opportunityState: s.opportunity_state || '',
           confirmEvidence: s.confirm_evidence || [],
           evidenceCount: s.evidence_count || 0,
           valDeviation: s.val_deviation || 0,
@@ -966,8 +1002,8 @@ function buildTreeData(mode, stocks) {
         // 313号：大小=机会潜力强度（0-100 截面百分位综合），指数放大面积
         const ss01 = Math.max(0, Math.min(100, s.signalStrength || 0)) / 100;
         value = 10 + Math.pow(ss01, 2.5) * 300;
-        // 313号：颜色=时机信号（闸门2 右侧确认 × 闸门3 共识率细分；蓝/黄/灰/棕避开红绿）
-        color = timingColor(s.rightSideConfirm, s.consensusRate);
+        // 321号：颜色=跨维仲裁结论（机会状态机；旧快照缺字段回退闸门2 时机色）
+        color = effectiveTimingColor(s);
       } else {
         // value mode: size=price (sqrt scaled), color=valuation_level（2026-08-06 修复：
         // 颜色改由修复后的 valuation_level 驱动——原按 deviation 绝对阈值（dv>10/<-10）映射，
@@ -999,8 +1035,8 @@ function buildTreeData(mode, stocks) {
         pipeline: s.pipeline, phase: s.phase, phaseTag: s.phaseTag,
         valuation: s.valuation, signals: s.signals, summary: s.summary,
         action: s.action, tags: s.tags, value, color,
-        // 313号 §七5：矛盾组合弱化——回避（否决）块半透明，视觉"不可操作"
-        itemStyle: (mode === 'opportunity' && s.rightSideConfirm === '否决')
+        // 313号 §七5：矛盾组合弱化——回避（avoid/否决）块半透明，视觉"不可操作"
+        itemStyle: (mode === 'opportunity' && (s.opportunityState === 'avoid' || s.rightSideConfirm === '否决'))
           ? { color, opacity: 0.45 }
           : { color }
       };
@@ -1632,14 +1668,15 @@ function showDetail(data) {
 
   _renderDetailPrice(data);
 
-  // 318号 S2：时机行（另起一行，颜色=时机信号 TIMING_COLORS 蓝黄灰棕，313号 §五）
-  const tColor = timingColor(data.rightSideConfirm, data.consensusRate);
-  const tText = data.rightSideConfirm || '未确认';
-  const tCn = { '强确认': '可入场', '基础确认': '可轻仓', '未确认': '等待', '否决': '回避' };
+  // 321号 S5：时机行——优先读跨维仲裁结论 opportunity_state（唯一结论源）；
+  // 旧快照缺字段时回退闸门2 rightSideConfirm 映射（effectiveTimingColor/Text 统一处理）
+  const tColor = effectiveTimingColor(data);
+  const tText = effectiveTimingText(data);
   document.getElementById('d-timing-row').innerHTML = `
     <span style="font-size:12px;color:var(--text-muted);">⏱ 时机</span>
-    <span style="color:${tColor};font-weight:600;font-size:13px;">● ${tCn[tText] || tText}</span>
+    <span style="color:${tColor};font-weight:600;font-size:13px;">● ${tText}</span>
     ${data.consensusRate ? `<span style="color:var(--text-muted);font-size:11px;margin-left:6px;">L4共识 ${(data.consensusRate * 100).toFixed(0)}%</span>` : ''}
+    ${data.opportunityState ? `<span style="color:var(--text-muted);font-size:11px;margin-left:6px;">仲裁</span>` : ''}
   `;
 
   // 318号 S2/S3：机会类型降为辅助文本行（灰色小字，非颜色主信号）
@@ -1650,7 +1687,11 @@ function showDetail(data) {
     : '';
 
   // 320号 S1：机会画像红绿灯浓缩（opportunity_profile 七维 → 精选 3-5 项）
-  const _profile = data.opportunityProfile;
+  // 321号 S5：profile 统一解析为对象（API 为 JSON 字符串，原未解析致画像行/解释条失效）
+  let _profile = data.opportunityProfile;
+  if (typeof _profile === 'string' && _profile) {
+    try { _profile = JSON.parse(_profile); } catch (e) { _profile = null; }
+  }
   document.getElementById('d-profile-row').innerHTML = _profile
     ? '<span style="font-size:12px;color:var(--text-muted);margin-right:6px;">🧬 画像</span>' +
       Object.entries(_profile)
@@ -1659,6 +1700,21 @@ function showDetail(data) {
         .map(([k, v]) => `<span style="font-size:12px;margin-right:8px;">${v.light} ${_profileCN(k)}: ${v.status}</span>`)
         .join('')
     : '';
+
+  // 321号 S5：时间尺度解释条（313号 C5/C6 认知管理落地）——
+  // 仲裁状态=回避/等待（快变量时机）但画像主力趋势=建仓/拉升（慢变量阶段）并存时，
+  // 解释"主力阶段是慢变量、时机信号是快变量，当前以时机为准"，消除用户困惑（T1）
+  const _profTrend = _profile && _profile.trend && _profile.trend.status;
+  const _state = data.opportunityState || '';
+  const _trendBull = ['建仓', '拉升'].includes(_profTrend);
+  let explainHtml = '';
+  if ((_state === 'avoid' || _state === 'wait') && _trendBull) {
+    explainHtml = `<div style="margin-top:6px;font-size:11px;color:var(--warn,#e6a23c);background:rgba(230,162,60,0.08);padding:4px 8px;border-radius:4px;">
+      ⚠ 主力阶段显示${_profTrend}（慢变量），但短线时机出现${_state === 'avoid' ? '否决信号' : '未确认信号'}（快变量），当前以时机为准
+    </div>`;
+  }
+  const _explainEl = document.getElementById('d-profile-explain');
+  if (_explainEl) _explainEl.innerHTML = explainHtml;
 
   document.getElementById('d-tags').innerHTML = `
     <span class="detail-tag tag-trend">${data.sector}</span>
@@ -1724,9 +1780,13 @@ function showDetail(data) {
   `;
   document.getElementById('d-val-detail').innerHTML = valItemsHtml;
 
-  // 操作建议（309号：右侧确认影响建议；最终以 L4 为准，此处为本地近似）
-  const rcBadge = CONFIRM_BADGE[data.rightSideConfirm];
-  const advice = data.rightSideConfirm === '否决' ? '🚫 右侧否决：出现卖出/背离信号，暂不操作' :
+  // 操作建议本地近似（321号 S5：优先按跨维仲裁结论；最终以异步 diagnose L4 为准覆盖）
+  const _st = data.opportunityState || '';
+  const advice = _st === 'avoid' ? '🚫 回避：时机/风险信号否决，暂不操作' :
+                 _st === 'wait' ? '⏳ 等待：右侧信号未确认，仅观察' :
+                 _st === 'light' ? '🟡 可轻仓：右侧基础确认，控制仓位' :
+                 _st === 'enter' ? '🟦 可入场：右侧确认+共识支持' :
+                 data.rightSideConfirm === '否决' ? '🚫 右侧否决：出现卖出/背离信号，暂不操作' :
                  data.rightSideConfirm === '未确认' ? '⏳ 右侧未确认：等待突破信号，仅观察' :
                  data.signalStrength >= 70 ? '建议建仓·分批低吸' :
                  data.signalStrength >= 50 ? '建议观察·等待信号确认' :
@@ -1736,7 +1796,7 @@ function showDetail(data) {
     <div style="font-weight:600;font-size:14px;color:var(--text-primary);">${advice}</div>
     <div style="margin-top:var(--space-4);font-size:12px;color:var(--text-muted);">
       信号强度 ${Math.round(data.signalStrength)}/100 · ${oLabel}
-      ${data.rightSideConfirm ? ` · 右侧确认: ${data.rightSideConfirm}` : ''}
+      ${_st ? ` · 状态: ${STATE_CN[_st] || _st}` : (data.rightSideConfirm ? ` · 右侧确认: ${data.rightSideConfirm}` : '')}
     </div>
     ${data.confirmEvidence && data.confirmEvidence.length ? `
       <div style="margin-top:var(--space-4);font-size:11px;color:var(--text-muted);">
@@ -1798,13 +1858,34 @@ function showDetail(data) {
         tzEl.textContent = `潜力基于 ${SNAPSHOT_DATE || '最近快照'} · 时机截至 ${nowTxt}`;
       }
       const oa = diag.operation_advice || {};
-      if (oa.label) {
+      if (oa.label || oa.action_label) {
+        // 323号 S7b：弹窗精简 4 要素（信号灯 + 动作 + 仓位 + 止损）——第一屏快速浏览
+        const _sl = oa.stop_loss;
+        // 止损可能是 dict {price, reason} 或字符串 'close < X'——统一提取价格展示
+        let _slPrice = null;
+        if (_sl && typeof _sl === 'object') {
+          _slPrice = _sl.price != null ? _sl.price : null;
+        } else if (typeof _sl === 'string' && _sl) {
+          const m = _sl.match(/(\d+\.?\d*)/);
+          _slPrice = m ? m[1] : _sl;
+        }
+        const _slTxt = _sl ? ('止损 ' + (_slPrice != null ? _slPrice : _sl)) : '';
+        const _light = oa.signal_light || '';
+        const _lightColor = _light === '🟢' ? '#16a34a' : (_light === '🔴' ? '#dc2626' : '#ca8a04');
+        const _act = oa.action_label || oa.label || '';
+        const _pos = (oa.max_position_ratio != null ? oa.max_position_ratio : 0);
+        const _posPct = Math.round(_pos * 100) + '%';
         document.getElementById('d-advice').innerHTML =
-          `<div style="font-weight:600;font-size:14px;color:var(--text-primary);">${oa.label}</div>` +
+          `<div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:var(--text-primary);">` +
+          `<span style="font-size:16px;color:${_lightColor};">${_light}</span>` +
+          `<span>${_act}</span>` +
+          (oa.confidence ? `<span style="font-size:11px;color:var(--text-muted);font-weight:400;">置信度${oa.confidence}</span>` : '') +
+          `</div>` +
           `<div style="margin-top:var(--space-4);font-size:12px;color:var(--text-muted);">` +
-          `最大仓位 ${oa.max_position_ratio || 0} · ${oa.entry_plan ? oa.entry_plan.map(e => e.price+'建'+e.ratio).join(' | ') : ''}` +
-          `${oa.stop_loss ? ' · 止损 '+oa.stop_loss : ''}` +
-          `</div>`;
+          `仓位 ${_posPct}${_slTxt ? ' · ' + _slTxt : ''}` +
+          `</div>` +
+          (oa.invalidation && oa.invalidation.length
+            ? `<div style="margin-top:var(--space-4);font-size:11px;color:#dc2626;">⚠ ${oa.invalidation[0]}</div>` : '');
       }
       // 320号 S1 简述化：异步风险警告只显示最关键 1 条（完整在个股页）
       const risks = (diag.risk_warnings || []).map(r => '⚠ ' + r.content);

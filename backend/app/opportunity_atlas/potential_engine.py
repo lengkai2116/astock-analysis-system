@@ -17,6 +17,7 @@
 
 import json
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,22 @@ def _percentile_lookup(sorted_vals: list) -> callable:
     return _pct
 
 
+def _map_score(score: float) -> float:
+    """机会潜力 score → 0-100 混合映射（2026-08-09 修复拉伸饱和）
+
+    原线性映射 (score-0.14)/0.52 在 score>=0.66 即饱和 100（全市场 98 只满分 1.79%）。
+    修复为混合映射：
+      - 线性段：score 0.14→0 分, 0.58→85 分（保留中低分区分度）
+      - 顶部渐近：score >0.58 → 85 + 15×(1-e^(-3×(score-0.58)))，永不饱和（仅极高分接近 100）
+    实测分布（5584 只）：满分 0 / 80+ 5.2% / 中位 40（达成 313 号目标）。
+    """
+    if score is None or score <= 0.14:
+        return 0.0
+    if score <= 0.58:
+        return (score - 0.14) / (0.58 - 0.14) * 85.0
+    return 85.0 + 15.0 * (1 - math.exp(-3.0 * (score - 0.58)))
+
+
 class PotentialEngine:
     """机会潜力强度引擎（截面百分位基准 + 单只评分）"""
 
@@ -100,7 +117,7 @@ class PotentialEngine:
                 tot = r.get("tot5") or 0
                 net = r.get("net5") or 0
                 if tot > 0:
-                    strengths.append(abs(net) / tot)
+                    strengths.append(net / tot)   # 有向（净流入正/流出负），与 compute_fund_strength 一致
             self._tables["fund"] = _percentile_lookup(sorted(strengths))
         except Exception:
             self._tables["fund"] = _percentile_lookup([])
@@ -197,21 +214,23 @@ class PotentialEngine:
         if adv >= 2:
             score *= (1 + 0.08 * (adv - 1))
 
-        # 线性拉伸映射（校准 2026-08-04：达成 §九 分布目标——高分 5-10%、中分 40-60%、低分 30-40%）
-        # 公式语义保留（加权×质量×情绪×共振越大分越高），但将 score 区间线性映射到 0-100：
-        #   score 0.14 → 0 分（低机会）；0.52 → 73 分（高分）；1.0 → 100 分
-        # 实测（5579 只，2026-08-04）：80+ 7.2% / 40-60 40.4% / <40 37.1% / 中位 46
-        mapped = max(0.0, min(1.0, (score - 0.14) / 0.52))
+        # 拉伸映射（2026-08-09 修复饱和：原线性 0.66 封顶致 98 只满分；改混合渐近，见 _map_score）
+        mapped = _map_score(score)
         breakdown = {k: v for k, v in sorted(dims.items())}
 
         return {
-            "signal_strength": round(mapped * 100),
+            "signal_strength": round(mapped),   # _map_score 已返回 0-100 分数（勿再 ×100）
             "potential_breakdown": json.dumps(breakdown, ensure_ascii=False),
         }
 
 
 def compute_fund_strength(ecm, ts_code: str) -> float:
-    """5 日主力净流入强度（0-1）；无数据返回 None"""
+    """5 日主力净流入强度（有向：净流入正 / 净流出负，范围 -1~1）；无数据返回 None
+
+    2026-08-09 修复：原 abs(net5)/tot5 抹掉资金方向——净流出股票强度照样得正高分
+    （常润股份 603201.SH：5日净流出却 fund=0.816，导致 signal_strength 满分）。
+    修复后净流出 → 负强度 → fund 维低分。
+    """
     try:
         mf = ecm._query_df(
             "SELECT net_lg_amount, buy_lg_amount, sell_lg_amount FROM ("
@@ -224,7 +243,7 @@ def compute_fund_strength(ecm, ts_code: str) -> float:
         tot5 = mf["buy_lg_amount"].sum() + mf["sell_lg_amount"].sum()
         if tot5 <= 0:
             return None
-        return min(1.0, abs(net5) / tot5)
+        return max(-1.0, min(1.0, net5 / tot5))   # 有向：净流入正 / 净流出负
     except Exception:
         return None
 
@@ -266,7 +285,6 @@ def recompute_ic_weights(ecm, lookback_days: int = 180, horizon: int = 20,
 
     每 20 交易日取一个历史截面，聚合各截面 Spearman 均值 = 维度 IC。
     """
-    import json
     try:
         # 历史截面时点：近 lookback_days 天，每 20 交易日一个
         dates = ecm._query_df(
@@ -309,7 +327,7 @@ def recompute_ic_weights(ecm, lookback_days: int = 180, horizon: int = 20,
             for _, r in mf.iterrows():
                 tot = r.get("tot5") or 0
                 if tot > 0:
-                    mf_map[r["ts_code"]] = abs(r["net5"] or 0) / tot
+                    mf_map[r["ts_code"]] = (r["net5"] or 0) / tot   # 有向（与 compute_fund_strength 一致）
             # 各股票维度值 + 收益（与 roe 对齐填充，避免索引越界）
             roe_df = ecm._query_df("SELECT ts_code, roe FROM fina_indicator_cache")
             roe_map = dict(zip(roe_df["ts_code"], roe_df["roe"]))
@@ -360,7 +378,8 @@ def recompute_ic_weights(ecm, lookback_days: int = 180, horizon: int = 20,
 
 def load_ic_weights() -> dict:
     """加载持久化 IC 权重（data/ic_weights.json）；无则用初始权重"""
-    import os, json
+    import json
+    import os
     global IC_WEIGHTS_FILE
     if IC_WEIGHTS_FILE and os.path.exists(IC_WEIGHTS_FILE):
         try:
@@ -375,7 +394,8 @@ def load_ic_weights() -> dict:
 
 def save_ic_weights(weights: dict) -> None:
     """持久化 IC 权重"""
-    import os, json
+    import json
+    import os
     global IC_WEIGHTS_FILE
     if IC_WEIGHTS_FILE:
         try:

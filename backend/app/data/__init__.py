@@ -313,6 +313,10 @@ class DataManager:
         """
         return self.cache.get_tags_by_date(ts_code, trade_date)
 
+    def get_tags_by_group(self, ts_code: str, groups: list[str]) -> dict:
+        """按 tag_group 取子集（323号 S0.5：引擎B 差异化取用深度字段）"""
+        return self.cache.get_tags_by_group(ts_code, groups)
+
     def clear_stock_cache(self, ts_code: str) -> bool:
         """清除单只股票缓存（缓存失效路由用，替代调用层直连 DELETE）"""
         return self.cache.clear_stock_cache(ts_code)

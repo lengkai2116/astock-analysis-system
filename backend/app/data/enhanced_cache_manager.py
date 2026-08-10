@@ -2074,6 +2074,9 @@ class EnhancedCacheManager:
             # ── 主力在场判定（313号 §十：行为证据主导） ──
             'main_force_presence':  ('derived',    'PrecomputeL2Labels'),
             'presence_evidence':    ('derived',    'PrecomputeL2Labels'),
+            # ── 跨维仲裁（321号：机会状态机，唯一结论收敛层） ──
+            'opportunity_state':    ('derived',    'PrecomputeL2Labels'),
+            'state_evidence':       ('derived',    'PrecomputeL2Labels'),
         }
 
         # 标准化 tags 格式
@@ -2128,11 +2131,11 @@ class EnhancedCacheManager:
             self.conn.commit()
 
     def get_tags(self, ts_code: str) -> dict:
-        """读取单只股票的最新标签"""
+        """读取单只股票的最新标签（323号 S0：上限提至 200，避免深度标签落库后截断丢失）"""
         df = self._query_df(
             "SELECT tag_name, tag_value, tag_group, confidence, source, updated_at "
             "FROM opportunity_tags_cache WHERE ts_code=? "
-            "ORDER BY updated_at DESC LIMIT 60",
+            "ORDER BY updated_at DESC LIMIT 200",
             [ts_code]
         )
         if df.empty:
@@ -2140,6 +2143,29 @@ class EnhancedCacheManager:
         result = {}
         for _, row in df.iterrows():
             result[row['tag_name']] = row['tag_value']
+        return result
+
+    def get_tags_by_group(self, ts_code: str, groups: list[str]) -> dict:
+        """按 tag_group 取子集（323号 S0.5：引擎B 差异化取用深度字段）
+
+        从 opportunity_tags_cache 读取指定 tag_group 的最新标签，避免拉取全量。
+        Returns: {tag_name: tag_value}
+        """
+        if not groups:
+            return {}
+        ph = ','.join('?' for _ in groups)
+        df = self._query_df(
+            f"SELECT tag_name, tag_value FROM opportunity_tags_cache "
+            f"WHERE ts_code=? AND tag_group IN ({ph}) "
+            f"ORDER BY updated_at DESC",
+            [ts_code] + groups
+        )
+        if df.empty:
+            return {}
+        result = {}
+        for _, row in df.iterrows():
+            if row['tag_name'] not in result:   # 最新值优先
+                result[row['tag_name']] = row['tag_value']
         return result
 
     def get_tags_by_date(self, ts_code: str, trade_date: str | None = None) -> dict:
@@ -2332,6 +2358,9 @@ class EnhancedCacheManager:
                 'right_side_confirm': _sv('right_side_confirm'),
                 'main_force_presence': _sv('main_force_presence'),
                 'presence_evidence': _sv('presence_evidence'),
+                # 321号：跨维仲裁结论透出（机会状态机，前端颜色/建议/弹窗单源引用）
+                'opportunity_state': _sv('opportunity_state'),
+                'state_evidence': _sv('state_evidence'),
                 'confirm_evidence': _sv('confirm_evidence'),
                 'consensus_rate': float(r['consensus_rate']) if pd.notna(r.get('consensus_rate')) else None,
                 'opportunity_profile': _sv('opportunity_profile'),

@@ -913,7 +913,7 @@
 
           <div class="ap-scenarios" id="apScenarios">
             <div class="scenario-card scenario-a" data-scenario="a">
-              <div class="s-header"><span class="s-tag">情景A</span><span class="s-title">趋势延续</span><span class="s-prob">概率 60%</span></div>
+              <div class="s-header"><span class="s-tag">情景A</span><span class="s-title">趋势延续</span><span class="s-prob">概率 --</span></div>
               <div class="s-steps" id="apStepsA">
                 <div class="s-step">① 当前价附近建仓 30% 底仓</div>
                 <div class="s-step">② 放量突破关键位加仓至 50%</div>
@@ -922,14 +922,14 @@
               </div>
             </div>
             <div class="scenario-card scenario-b" data-scenario="b">
-              <div class="s-header"><span class="s-tag">情景B</span><span class="s-title">冲高回落</span><span class="s-prob">概率 30%</span></div>
+              <div class="s-header"><span class="s-tag">情景B</span><span class="s-title">冲高回落</span><span class="s-prob">概率 --</span></div>
               <div class="s-steps" id="apStepsB">
                 <div class="s-step">① 若放量冲高回落（上影线>3%），不开新仓</div>
                 <div class="s-step">② 已持仓者在阻力位附近减仓至 20%</div>
               </div>
             </div>
             <div class="scenario-card scenario-c" data-scenario="c">
-              <div class="s-header"><span class="s-tag">情景C</span><span class="s-title">破位下行</span><span class="s-prob">概率 10%</span></div>
+              <div class="s-header"><span class="s-tag">情景C</span><span class="s-title">破位下行</span><span class="s-prob">概率 --</span></div>
               <div class="s-steps" id="apStepsC">
                 <div class="s-step">① 跌破支撑位立即止损</div>
                 <div class="s-step">② 等待次级别底背驰出现后再入场</div>
@@ -2953,50 +2953,6 @@ function _dirTag(dir){
   if(dir==='watch') return '👀 观望';
   return '⚪ 中性';
 }
-function renderDimensionCards(dimensions, kronos){
-  if(!dimensions) return;
-  function setId(id,val){var el=document.getElementById(id);if(el)el.textContent=val!=null?val:'--';}
-  // Phase 3 P3-1: 优先展示 deepseek_text，fallback 到 status_text
-  function narrativeText(dim, field){
-    return dim.deepseek_text || dim[field] || dim.status_text || '--';
-  }
-  // 走势结构
-  var cl=dimensions.chanlun||{}; setId('cm-chanlun-direction',cl.direction||'--'); setId('cm-chanlun-zhongshu',cl.zhongshu_range?cl.zhongshu_range.join(' — '):'--');
-  setId('cm-chanlun-position',cl.zhongshu_position||'--'); setId('cm-chanlun-buy_point',cl.buy_point||'--');
-  setId('cm-chanlun-ma_alignment',cl.ma_alignment||'--'); setId('cm-chanlun-ma_detail',cl.critical_levels?'支撑'+_fmt(cl.critical_levels.support)+' 阻力'+_fmt(cl.critical_levels.resistance):'--');
-  setId('cm-chanlun-narrative',narrativeText(cl));
-  setId('cm-chanlun-footer-text',cl.footer_text||'--');
-  setId('cm-chanlun-tag',cl.direction?_dirTag(cl.direction):'--');
-  // 量价形态
-  var vp=dimensions.volume_price||{}; setId('cm-vp-phase',vp.phase||'--'); setId('cm-vp-pattern',vp.phase_label||'--');
-  setId('cm-vp-vp_relation',vp.volume_price_relation||'--'); setId('cm-vp-resonance',vp.trend_strength>0.5?'偏多':'偏空');
-  setId('cm-vp-volume_detail',vp.support?'支撑'+_fmt(vp.support)+' 阻力'+_fmt(vp.resistance):'--');
-  setId('cm-vp-narrative',narrativeText(vp));
-  setId('cm-vp-footer-text',vp.footer_text||'--');
-  setId('cm-vp-tag',vp.direction?_dirTag(vp.direction):'--');
-  // 筹码
-  var cp=dimensions.chip||{}; setId('cm-chip-profit_ratio',cp.profit_ratio!=null?cp.profit_ratio+'%':'--');
-  setId('cm-chip-avg_cost',_fmt(cp.avg_cost)); setId('cm-chip-concentration',cp.concentration||'--');
-  setId('cm-chip-main_force',cp.main_force_direction||'--'); setId('cm-chip-large_order',cp.large_order_net?String(cp.large_order_net):'--');
-  setId('cm-chip-narrative',narrativeText(cp));
-  setId('cm-chip-footer-text',cp.footer_text||'--');
-  setId('cm-chip-tag',cp.direction?_dirTag(cp.direction):'--');
-  // 情绪
-  var em=dimensions.emotion||{}; setId('cm-emotion-cycle',em.market_temp||'--');
-  setId('cm-emotion-sector_pct',em.sector_pct!=null?em.sector_pct+'%':'--'); setId('cm-emotion-market_temp',em.valuation||'--');
-  setId('cm-emotion-narrative',narrativeText(em));
-  setId('cm-emotion-footer-text',em.footer_text||'--');
-  setId('cm-emotion-tag',em.direction?_dirTag(em.direction):'--');
-  // Vibe
-  var vb=dimensions.vibe||{}; setId('cm-vibe-signal',vb.signal_label||'--');
-  setId('cm-vibe-template',vb.strategy_name||'--');
-  setId('cm-vibe-confidence',vb.confidence!=null?Math.round(vb.confidence*100)+'%':'--');
-  var vibeText = vb.evidence ? (Array.isArray(vb.evidence) ? vb.evidence.join('；') : vb.evidence) : (vb.description||'--');
-  setId('cm-vibe-narrative',vibeText);
-  setId('cm-vibe-tag',vb.direction?_dirTag(vb.direction):'--');
-  setId('cm-vibe-footer-text',vb.description||'--');
-}
-
 // ── 数据完整度渲染（从analysisData.data_availability填充卡5 C区） ──
 function renderDataCompleteness(dataAvail){
   if(!dataAvail) return;
@@ -3451,13 +3407,14 @@ function renderStrategyRecommendation(dimensions, verificationData){
   }
   if(signalEl){ signalEl.textContent = signalLabel; signalEl.className = 'rec-main-value '+signalClass; }
 
-  // 置信度
-  var conf = dimensions.factor && dimensions.chanlun ? 0.5 : 0.3;
-  // 检查是否有深度描述中的置信度信息
+  // 置信度（322号 S3：改读真实 factor.confidence，删除硬编码 0.5/0.3 兜底）
+  var confRaw = dimensions.factor && dimensions.factor.confidence;
+  var conf = (typeof confRaw === 'number' && !isNaN(confRaw)) ? confRaw : null;
+  // 深度描述中的置信度信息优先
   var dsText = dimensions.chanlun && dimensions.chanlun.deepseek_text || '';
   var confMatch = dsText.match(/置信度[\s:]*([\d.]+)/);
   if(confMatch) conf = parseFloat(confMatch[1]);
-  if(confEl) confEl.textContent = '置信度 '+(conf ? conf.toFixed(2) : '--');
+  if(confEl) confEl.textContent = '置信度 '+(conf != null ? conf.toFixed(2) : '--');
 
   // 关键价位 — 从缠论支撑阻力提取
   var sr = dimensions.chanlun && dimensions.chanlun.status_recognition;
@@ -3469,7 +3426,7 @@ function renderStrategyRecommendation(dimensions, verificationData){
   setText('recStopLoss', typeof stopLoss === 'number' ? stopLoss.toFixed(2) : stopLoss);
   setText('recTakeProfit', typeof takeProfit === 'number' ? takeProfit.toFixed(2) : takeProfit);
   setText('recEntry', typeof entry === 'number' ? '≤'+entry.toFixed(2) : '--');
-  setText('recTarget', typeof takeProfit === 'number' ? (takeProfit*1.1).toFixed(2) : '--');
+  setText('recTarget', typeof takeProfit === 'number' ? takeProfit.toFixed(2) : '--');  // 322号 S3：目标=压力位，删除×1.1 拍脑袋上浮
 
   // 关注点 — 从验证链和DeepSeek文本提取
   var focusList = document.getElementById('recFocusList');
@@ -3514,6 +3471,53 @@ function setText(id, val){ var el=document.getElementById(id); if(el) el.textCon
 
 // ── 3. 渲染实操建议（289号方案 §4.3 方案A：从策略数据驱动）──
 function renderActionPlan(analysisData, verificationData){
+  // 322号 S2：优先读后端 operation_advice（现状描述化：红绿灯+大白话+动态情景概率）；无则回退旧推导
+  var oa = analysisData && analysisData.operation_advice;
+  if (oa && oa.dimensions && oa.dimensions.length) {
+    // 323号 S7a：建议卡摘要（顶层信号灯 + 动作 + 仓位 + 止损 + 目标 + 持有期 + 置信度）
+    var cardHtml = '';
+    if (oa.signal_light || oa.action_label) {
+      var slTxt = oa.signal_light || '';
+      var lightColor = slTxt === '🟢' ? '#16a34a' : (slTxt === '🔴' ? '#dc2626' : '#ca8a04');
+      cardHtml += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;' +
+                  'padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;' +
+                  'background:var(--bg-card, rgba(255,255,255,0.03));">' +
+        '<span style="font-size:18px;color:'+lightColor+';font-weight:700;">'+slTxt+'</span>' +
+        '<span style="font-weight:700;color:var(--text-primary);font-size:14px;">'+(oa.action_label||'')+'</span>' +
+        (oa.confidence ? '<span class="s-tag" style="opacity:.8;">置信度 '+oa.confidence+'</span>' : '') +
+        (oa.kronos_note ? '<span style="font-size:11px;color:#8b5cf6;margin-left:4px;">'+oa.kronos_note+'</span>' : '') +
+        (oa.executable && oa.executable.position ? '<span class="s-tag" style="opacity:.8;">建议仓位 '+(oa.executable.position.max_pct*100)+'%</span>' : '') +
+        '<div style="flex-basis:100%;font-size:12px;color:var(--text-muted);margin-top:2px;">' +
+        (oa.expected_holding ? '预期持有：'+oa.expected_holding + '；' : '') +
+        ((oa.target_levels||[]).length ? '目标位：'+oa.target_levels.map(function(t){return t.price;}).join(' / ')+'（参考压力位）' : '') +
+        '</div></div>';
+    }
+    // 失效条件（红条提示）
+    var invHtml = (oa.invalidation && oa.invalidation.length) ?
+      '<div style="margin-top:8px;padding:8px 10px;border-left:3px solid #dc2626;font-size:12px;' +
+      'color:var(--text-secondary);background:rgba(220,38,38,0.06);">' +
+      '<b style="color:#dc2626;">失效条件：</b>' + oa.invalidation.join('；') + '</div>' : '';
+    // 依据（≤3条）
+    var evHtml = (oa.evidence_top3 && oa.evidence_top3.length) ?
+      '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);">' +
+      '<b>依据：</b>' + oa.evidence_top3.join('；') + '</div>' : '';
+    var dimHtml = oa.dimensions.map(function(d){
+      return '<div class="s-step">' + (d.light||'') + ' ' + (d.conclusion||'') +
+             (d.evidence ? ' <span style="color:#6b728c;">'+d.evidence+'</span>' : '') +
+             (d.plain ? ' <span style="color:#6b728c;">（'+d.plain+'）</span>' : '') + '</div>';
+    }).join('');
+    var scnHtml = (oa.scenarios||[]).map(function(s){
+      return '<div class="s-header" style="margin-top:8px;"><span class="s-tag">情景'+s.id.toUpperCase()+'</span><span class="s-title">'+s.name+'</span><span class="s-prob">概率 '+Math.round(s.prob*100)+'%</span></div>' +
+             '<div class="s-steps">' + (s.steps||[]).map(function(x){return '<div class="s-step">'+x+'</div>';}).join('') + '</div>';
+    }).join('');
+    var stepsA = document.getElementById('apStepsA');
+    if (stepsA) stepsA.innerHTML = cardHtml + invHtml + evHtml + dimHtml + scnHtml;
+    // 合并为单一报告：隐藏 B/C 情景卡片（概率已在 scenarios 统一展示）
+    ['apStepsB','apStepsC'].forEach(function(id){ var el=document.getElementById(id); if(el) el.innerHTML=''; });
+    var hdr = document.querySelector('.ap-header');
+    if (hdr && oa.summary) hdr.innerHTML = '📋 操作建议 <span class="ap-subtitle">'+oa.summary+'</span>';
+    return;  // 已有 operation_advice 则不再走旧情景推导
+  }
   var dims = analysisData.dimensions || {};
   var sr = dims.chanlun && dims.chanlun.status_recognition || {};
   var levels = sr.support_resistance || {};
@@ -3785,7 +3789,6 @@ function triggerArbitrate(){
     loadNarrative(_currentTsCode),
   ]).then(function(results){
     var analysis=results[0], verification=results[1], narrative=results[2];
-    if(analysis && analysis.dimensions) renderDimensionCards(analysis.dimensions, analysis.kronos);
     if(verification) {
       renderVerificationChains(verification);
       renderDimensionRelations(verification.dimension_relations);
