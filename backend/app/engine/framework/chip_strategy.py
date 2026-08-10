@@ -761,10 +761,12 @@ class MainForceScorer:
                         result['reason'] = f'高位(分位{price_pos:.0%})买入占比{buy_ratio:.0%}>30%'
                         result['confidence'] = min(1.0, result['confidence'] + 0.5)
 
-                    # 单日 买入金额占比 > 40% (无论位置)
-                    if buy_ratio > 0.4:
+                    # 2026-08-10 修复：单日买入占比 >40% 仅在高位才判疑似
+                    # （原无论位置裸阈值误伤低位吸筹真机构——000426 低位55%买入被误判；
+                    #  低位高买入占比是机构吸筹特征，由 :772 连续买入缓解逻辑处理）
+                    if buy_ratio > 0.4 and price_pos is not None and price_pos > 0.6:
                         result['suspected'] = True
-                        detail = f'买入占比{buy_ratio:.0%}>40%'
+                        detail = f'高位(分位{price_pos:.0%})买入占比{buy_ratio:.0%}>40%'
                         result['reason'] = result['reason'] + ('; ' + detail if result['reason'] else detail)
                         result['confidence'] = min(1.0, result['confidence'] + 0.3)
 
@@ -1108,10 +1110,20 @@ class MainForceScorer:
             else:
                 tags['fund_flow'] = 'none'
 
-            lhb_score = self._score_lhb(symbol, pd.DataFrame())
+            # 2026-08-10 修复：传入真实 K 线（原传空 DataFrame 致 price_pos=None，
+            # 假机构检测的"高位"约束失效 + 连续买入缓解逻辑失效 → capital_nature 全 unknown）
+            try:
+                _df = self.dm.get_cached_daily_data(symbol)
+            except Exception:
+                _df = pd.DataFrame()
+            lhb_score = self._score_lhb(symbol, _df)
             if lhb_score >= 0.5:
                 tags['capital_nature'] = 'institutional'
             elif lhb_score >= 0.2:
+                tags['capital_nature'] = 'hot_money'
+            elif lhb_score > -0.5:
+                # 2026-08-10 修复：轻微怀疑（-0.5~0.2）给 hot_money（营业部/游资特征），
+                # 不再一律 unknown——保留区分度（原 suspected 扣分后全落 unknown）
                 tags['capital_nature'] = 'hot_money'
             else:
                 tags['capital_nature'] = 'unknown'

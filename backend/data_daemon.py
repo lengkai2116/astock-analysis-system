@@ -1702,6 +1702,15 @@ def _precompute_l2_labels(codes):
 
                     # 2. 阶段判定引擎产出（312号：8 维度加权共识）— 移到缠论/情绪/板块之后，
                     #    以接入 buy_sell_point / sentiment_phase / sector_heat / capital_nature
+                    # 2026-08-10 修复：capital_nature 生产者接入（MainForceScorer 此前
+                    #    无 precompute 调用 → 100% unknown；lhb 数据充足 3308 行）
+                    try:
+                        from app.engine.framework.chip_strategy import MainForceScorer
+                        _mf_tags = MainForceScorer().get_tags(code)
+                        if _mf_tags.get('capital_nature'):
+                            tags['capital_nature'] = _mf_tags['capital_nature']
+                    except Exception:
+                        pass
                     df = all_data.get(code)
                     if df is not None and len(df) >= 30:
                         try:
@@ -2498,14 +2507,16 @@ def _check_right_side_confirm(opportunity_type: str, tags: dict, df: 'pd.DataFra
 
 def _compute_style_exposure(ts_code: str, tags: dict, df: 'pd.DataFrame' = None) -> str:
     """计算 style_exposure 标签（295号§3.2 标签12）
-    
+
     基于行业分类和市值判定风格归属：
     - 金融/银行 → large_value
     - 科技/高研发 → large_growth（如果大市值）或 small_growth
     - 周期行业 → small_value（如果小市值）或 large_value
+
+    2026-08-10 修复：大小盘判定改用市值（原用 sector_heat 板块热度——
+    茅台等超大盘股板块热度低被判 small，75.8% 落 cyclical 失真）。
     """
     vl = tags.get('valuation_level', 'fair')
-    sector = tags.get('sector_heat', 'none')
     
     # 简单的行业风格映射
     try:
@@ -2518,7 +2529,15 @@ def _compute_style_exposure(ts_code: str, tags: dict, df: 'pd.DataFrame' = None)
     if not industry:
         return 'none'
 
-    is_large = sector in ('top_10', 'top_20')
+    # 2026-08-10 修复：大小盘用市值判定（>500亿=大盘；daily_basic.total_mv 单位万元）
+    is_large = False
+    try:
+        _basic = dm.get_cached_daily_basic(ts_code)
+        if _basic is not None and not _basic.empty and 'total_mv' in _basic.columns:
+            _mv = float(_basic['total_mv'].iloc[-1])
+            is_large = _mv * 1e4 > 5e10  # 500亿元
+    except Exception:
+        pass
     is_value = vl in ('extreme_low', 'low')
 
     if industry in ('银行', '非银金融'):

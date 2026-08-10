@@ -630,6 +630,23 @@ class ValuationEngine(DataAwareMixin):
             if len(roce) >= 3:
                 avg_roce = roce.head(3).mean()
                 roce_ok = avg_roce > 15.0
+        # 2026-08-10 修复：Tushare fina_indicator 不返回 roce 字段（实测）——
+        # 从 income+balancesheet 计算 ROCE=营业利润/(总资产-流动负债)，近3期均值>15%
+        if not roce_ok and not df_income.empty and not df_bs.empty:
+            try:
+                _incs = df_income.sort_values('end_date', ascending=False)
+                _bs = df_bs.sort_values('end_date', ascending=False)
+                _roc_list = []
+                for _i in range(min(3, len(_incs), len(_bs))):
+                    _op = float(_incs.iloc[_i].get('operating_profit') or 0)
+                    _ta = float(_bs.iloc[_i].get('total_assets') or 0)
+                    _cl = float(_bs.iloc[_i].get('current_liab') or 0)
+                    if _op and _ta and (_ta - _cl) > 0:
+                        _roc_list.append(_op / (_ta - _cl) * 100)
+                if len(_roc_list) >= 1:
+                    roce_ok = (sum(_roc_list) / len(_roc_list)) > 15.0
+            except Exception:
+                pass
         roce_pass = roce_ok
 
         # 资产负债率 < 70%（金融除外）
