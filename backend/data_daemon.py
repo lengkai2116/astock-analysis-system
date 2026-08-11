@@ -1821,7 +1821,11 @@ def _precompute_l2_labels(codes):
                     if arb.get('opportunity_state'):
                         tags.update(arb)
                 except Exception:
-                    pass
+                    # 2026-08-10 325档案修复：仲裁异常兜底写 wait（原静默跳过致
+                    # opportunity_state 缺失；停牌/退市股不参与预计算
+                    # 也走此兜底）
+                    tags.setdefault('opportunity_state', 'wait')
+                    tags.setdefault('state_evidence', '仲裁异常，保守等待')
 
                 # 4g. 机会类型 avoid 降级（321号 S3：规则树互斥，修 T2）
                 #     4d 在仲裁前执行（state 未生成），此处按仲裁结果重判机会类型：
@@ -2224,6 +2228,19 @@ _TYPE_EVIDENCE = {
     'cold_value': ['fina_health', 'sector_heat', 'valuation_level'],
     'quality_unknown': ['fina_health', 'valuation_level'],
     'no_signal': ['main_force_phase'],
+    # 2026-08-10 325档案修复：补 6 类缺证据模板
+    # （原缺失致 evidence_count=0 达 597 只）
+    'avoid_only': ['fina_health', 'valuation_level', 'catalyst_event',
+                   'main_force_phase', 'volume_price_fit', 'price_position',
+                   'right_side_confirm'],
+    'sentiment_ice': ['sentiment_phase', 'sector_heat', 'volatility_level',
+                      'price_position', 'main_force_phase'],
+    'sentiment_ebb': ['sentiment_phase', 'sector_heat', 'volatility_level',
+                      'price_position', 'main_force_phase'],
+    'sentiment_climax': ['sentiment_phase', 'sector_heat', 'volatility_level',
+                         'price_position', 'main_force_phase'],
+    'lifting_general': ['main_force_phase', 'trend_alignment', 'ma_alignment',
+                        'volume_price_fit', 'signal_strength'],
 }
 
 
@@ -2433,8 +2450,18 @@ def _check_right_side_confirm(opportunity_type: str, tags: dict, df: 'pd.DataFra
     pat = tags.get('pattern_signal', 'none')
 
     # ── STEP 1 否决检查（一票否决） ──
-    if bs in ('first_sell', 'first_sell_p', 'second_sell', 'third_sell'):
-        return {'right_side_confirm': '否决', 'confirm_evidence': json.dumps([f'缠论卖点 {bs}'], ensure_ascii=False)}
+    # 2026-08-10 325档案修复：收缩否决面——仅强卖点（趋势顶背驰 first_sell /
+    # 盘整背驰 first_sell_p）一票否决；弱卖点（third_sell 中枢破位/second_sell
+    # 确认）降级"未确认"走 STEP2 基础确认闸（原四值全否决致否决率 49.9%、
+    # 86% 由缠论卖点触发，avoid 65% 主驱动）
+    if bs in ('first_sell', 'first_sell_p'):
+        return {'right_side_confirm': '否决',
+                'confirm_evidence': json.dumps([f'缠论强卖点 {bs}'],
+                                               ensure_ascii=False)}
+    if bs in ('second_sell', 'third_sell'):
+        return {'right_side_confirm': '未确认',
+                'confirm_evidence': json.dumps([f'缠论弱卖点 {bs}，降级观望'],
+                                               ensure_ascii=False)}
     if vpf == 'diverging':
         return {'right_side_confirm': '否决', 'confirm_evidence': json.dumps(['量价背离'], ensure_ascii=False)}
     if pat and '预跌' in str(pat):

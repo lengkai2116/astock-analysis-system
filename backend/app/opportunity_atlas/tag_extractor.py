@@ -166,29 +166,54 @@ DEEP_TAG_GROUPS = {
 
 
 def extract_fund_risk_tags(ts_code: str) -> dict:
-    """从 P2 筹码信号提取资金/风险深度字段（fund_risk 组）
+    """提取资金/风险深度字段（fund_risk 组）
 
-    net_lg_amount_5d / margin_cost_price 等——筹码信号 status_recognition 中有则提取。
-    Returns: 空 dict（当前 P2 筹码信号覆盖低，此组多为空，由 ChipIndicators 补充）。
+    2026-08-10 325档案修复：弃用 P2 筹码信号路径（覆盖仅 0.77% 致组近空），
+    改从 ECM 全市场表直接提取：
+    - net_lg_amount_5d：moneyflow_cache 近5日 net_lg_amount 求和（覆盖 5558 只）
+    - margin_cost_price：margin_cache rzmje(融资买入额) 加权成本价（覆盖 4414 只）
+    Returns: {net_lg_amount_5d, margin_cost_price}，缺失返回空 dict。
     """
     try:
         dm = DataManager()
-        cached = dm.cache.get_latest_signal_detail(ts_code)
-        if not cached:
-            return {}
-        signals = cached.get('signals', {})
-        chip = None
-        for name, s in signals.items():
-            if '筹码' in name:
-                chip = s
-                break
-        if not chip:
-            return {}
-        sr = chip.get('status_recognition', {})
         out = {}
-        for key in ('net_lg_amount_5d', 'margin_cost_price'):
-            if key in sr and sr[key] is not None:
-                out[key] = str(sr[key])
+        # net_lg_amount_5d：moneyflow_cache 近5日大单净额求和
+        try:
+            mf = dm.cache.get_cached_moneyflow(ts_code)
+            if mf is not None and not mf.empty and 'net_lg_amount' in mf.columns:
+                net5 = mf['net_lg_amount'].dropna().tail(5).sum()
+                if abs(net5) > 0:
+                    out['net_lg_amount_5d'] = str(round(float(net5), 2))
+        except Exception:
+            pass
+        # margin_cost_price：margin_cache rzmje 加权均价（近60日融资买入日）
+        try:
+            margin_df = dm.get_cached_margin(ts_code)
+            if margin_df is not None and not margin_df.empty and 'rzmje' in margin_df.columns:
+                _df = margin_df.tail(60)
+                _buy = _df[_df['rzmje'].fillna(0) > 0]
+                if len(_buy) >= 3:
+                    # margin 表无 K 线列——用 daily_cache 收盘价近似当日均价
+                    _k = dm.get_cached_daily_data(ts_code)
+                    _close_map = {}
+                    if _k is not None and not _k.empty and 'trade_date' in _k.columns:
+                        _close_map = dict(zip(_k['trade_date'].astype(str), _k['close']))
+                    _weights = []
+                    _prices = []
+                    for _i, _row in _buy.iterrows():
+                        _w = float(_row.get('rzmje') or 0)
+                        if _w <= 0:
+                            continue
+                        _p = _close_map.get(str(_row.get('trade_date')))
+                        if _p is None:
+                            continue
+                        _weights.append(_w)
+                        _prices.append(float(_p))
+                    if len(_weights) >= 3 and sum(_weights) > 0:
+                        out['margin_cost_price'] = str(round(
+                            sum(w * p for w, p in zip(_weights, _prices)) / sum(_weights), 2))
+        except Exception:
+            pass
         return out
     except Exception as e:
         logger.debug(f"extract_fund_risk_tags 失败 ({ts_code}): {e}")

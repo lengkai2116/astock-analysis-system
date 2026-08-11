@@ -298,7 +298,9 @@ class PhaseDetectionEngine(DataAwareMixin):
         top, second = order[0], order[1]
         t_sum = sum(total.values()) or 1.0
         confidence = total[top] / t_sum
-        conflict = (total[top] - total[second]) / t_sum < 0.15
+        # 2026-08-10 325档案修复：冲突阈值 0.15→0.08（实测 gap∈[0.08,0.15)
+        # 为噪声伪冲突，原阈值致冲突率 55.5% 失真；0.08 后约 ~35% 保留真正分歧）
+        conflict = (total[top] - total[second]) / t_sum < 0.08
         if conflict:
             confidence *= 0.6
 

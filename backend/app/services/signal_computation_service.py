@@ -2307,8 +2307,10 @@ class SignalComputationService:
                     'sell': [BP_TYPE_CN.get(t, t) for t in sell_types],
                 },
                 'support_resistance': {
-                    'support': round(float(zs_low), 2) if zs_low else 0.0,
-                    'resistance': round(float(zs_high), 2) if zs_high else 0.0,
+                    # 2026-08-10 修复：无中枢时返回 None（原 0.0 假值——
+                    # 104/4974 只 support=0 被消费端误判支撑位为 0）
+                    'support': round(float(zs_low), 2) if zs_low else None,
+                    'resistance': round(float(zs_high), 2) if zs_high else None,
                 },
                 # 2026-08-10 核查修复：risk_level 公式退化（原条件不同源恒 MEDIUM）——
                 # 改用缠论结构自身风险信号组合（卖点/下降趋势+弱动量=HIGH；上升+背驰向上=LOW）
