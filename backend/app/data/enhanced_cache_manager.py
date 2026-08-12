@@ -439,7 +439,7 @@ class EnhancedCacheManager:
             CREATE TABLE IF NOT EXISTS top10_holders_cache (
                 ts_code TEXT, end_date TEXT, ann_date TEXT,
                 holder_name TEXT, hold_amount REAL, hold_ratio REAL,
-                hold_float_ratio REAL,   # 320号 L3：Tushare top10_holders 返回列
+                hold_float_ratio REAL,
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, end_date, holder_name)
             )
