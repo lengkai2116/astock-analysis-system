@@ -181,6 +181,12 @@ def _build_response(mode: str, items: list[dict]) -> dict:
         _snap_date = get_data_manager().get_snapshot_max_date()
     except Exception:
         pass
+    # 327阶段3：数据交易日透出（快照 trade_date，区分构建时间 vs 数据时间）
+    _data_date = None
+    try:
+        _data_date = get_data_manager().get_snapshot_data_date()
+    except Exception:
+        pass
     return {
         'code': 0,
         'data': {
@@ -190,6 +196,7 @@ def _build_response(mode: str, items: list[dict]) -> dict:
             'data_status': 'pre_compute' if coverage < 0.8 else 'complete',
             'generated_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
             'snapshot_date': _snap_date,   # 313号：潜力快照日期（时间标注）
+            'data_date': _data_date,       # 327阶段3：数据交易日（前端标注"数据截至"）
         },
     }
 

@@ -697,6 +697,7 @@ async function loadMarketData() {
     const json = await resp.json();
     const data = json.data || json;
     SNAPSHOT_DATE = data.snapshot_date || '';   // 313号：潜力快照日期（时间标注）
+    DATA_DATE = data.data_date || '';            // 327阶段3：数据交易日（快照 trade_date）
     ALL_GROUPS = data.groups || [];
     ALL_GROUPS.forEach(g => {
       (g.stocks || []).forEach(s => {
@@ -787,6 +788,7 @@ let presenceFilter = false;  // 313号：只看有主力行为证据（龙虎榜
 let timingFilter = '';       // 313号 §七2：时机色过滤（''全部 / '强确认'/'基础确认'/'未确认'/'否决'）
 let minStrength = 0;         // 313号 §七3：潜力阈值组合筛选（0=不过滤）
 let SNAPSHOT_DATE = '';   // 313号：潜力快照日期（时间标注）
+let DATA_DATE = '';       // 327阶段3：数据交易日（快照 trade_date，陈旧提示用）
 const LABEL_MIN_AREA = 900;  // 310号：标签隐藏阈值（px²，≈30px 边长）
 // 318号 S1：弹窗状态（30s 轮询据此刷新打开中的弹窗价格）
 let _detailTsCode = '';
@@ -1851,11 +1853,16 @@ function showDetail(data) {
         ).join('');
       }
       // 318号 S4：时间标注——潜力基于快照、时机截至实时（313号 C5）
+      // 327阶段3：快照陈旧提示——若快照数据日 < 最近交易日，明确标注"数据截至 X"
       const now = new Date();
       const nowTxt = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
       const tzEl = document.getElementById('d-ts-timestamp');
       if (tzEl) {
-        tzEl.textContent = `潜力基于 ${SNAPSHOT_DATE || '最近快照'} · 时机截至 ${nowTxt}`;
+        const dataDate = DATA_DATE || SNAPSHOT_DATE || '最近快照';
+        const isStale = DATA_DATE && nowTxt > DATA_DATE;
+        tzEl.textContent = `潜力基于 ${SNAPSHOT_DATE || '最近快照'} · 数据截至 ${dataDate}` +
+          (isStale ? ' ⚠️ 快照待更新' : '');
+        tzEl.title = isStale ? `数据截至 ${DATA_DATE}，未更新至 ${nowTxt}（日终预计算完成后自动更新）` : '';
       }
       const oa = diag.operation_advice || {};
       if (oa.label || oa.action_label) {

@@ -1368,6 +1368,36 @@ def _write_factor_signals(codes):
     except Exception as e:
         logger.warning(f"因子信号兜底写入失败: {e}")
 
+def _run_with_timeout(func, timeout_sec: float = 30.0, desc: str = ""):
+    """单只计算超时保护（327阶段4）：超时返回 None 并记录日志，不中断全量
+
+    用独立线程执行 func，超过 timeout_sec 未完成则视为卡死跳过。
+    超时后**不等待后台线程**（不用 with shutdown(wait=True)——
+    那会在超时后仍阻塞主流程，使保护形同虚设）。
+    后台线程置为 daemon（随进程结束），该只结果丢弃，主流程立即继续。
+
+    Returns:
+        func() 的返回值，超时返回 None
+    """
+    import concurrent.futures as _cf
+    _exe = _cf.ThreadPoolExecutor(max_workers=1)
+    try:
+        fut = _exe.submit(func)
+        return fut.result(timeout=timeout_sec)
+    except _cf.TimeoutError:
+        logger.warning(f"  [超时] {desc} 超过 {timeout_sec}s 未完成，跳过该只（不中断全量）")
+        return None
+    except Exception as e:
+        logger.debug(f"  [单只] {desc} 失败: {type(e).__name__}")
+        return None
+    finally:
+        # 不等待：shutdown(wait=False) 立即返回，后台线程继续跑但不再阻塞主流程
+        try:
+            _exe.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+
+
 def _precompute_preset_combos(codes):
     """预计算常用因子值并写入 factor_cache（通过 FactorRegistry）"""
     _ensure_pd()
@@ -1403,20 +1433,30 @@ def _precompute_preset_combos(codes):
     logger.info(f"因子预计算: {len(mapped_factors)} 个因子, {len(codes)} 只股票")
     fpm = FactorPrecomputeManager(_ecm)
     precomputed = 0
+    timeout_count = 0
     for code in codes:
         try:
-            df = _ecm.get_cached_daily(code)
-            if df is None or len(df) < 30:
-                continue
-            for cn_name, en_name in mapped_factors.items():
-                try:
-                    fpm.precompute_factor(code, df, en_name)
-                except Exception:
-                    pass
-            precomputed += 1
+            # 327阶段4：单只因子计算超时保护（防止单只卡死拖垮全量）
+            def _factor_one(c=code, _fpm=fpm, _mf=mapped_factors):
+                df = _ecm.get_cached_daily(c)
+                if df is None or len(df) < 30:
+                    return 'skip'
+                for cn_name, en_name in _mf.items():
+                    try:
+                        _fpm.precompute_factor(c, df, en_name)
+                    except Exception:
+                        pass
+                return 'ok'
+            r = _run_with_timeout(_factor_one, timeout_sec=30.0,
+                                  desc=f"因子 {code}")
+            if r is None:
+                timeout_count += 1
+            elif r == 'ok':
+                precomputed += 1
         except Exception:
             continue
-    logger.info(f"因子预计算完成: {precomputed}/{len(codes)} 只")
+    logger.info(f"因子预计算完成: {precomputed}/{len(codes)} 只" +
+                (f"，超时跳过 {timeout_count} 只" if timeout_count else ""))
 
 def _run_precompute():
     """后台预计算指标（仅当日有日线数据的活跃股票，非交易日自动回退到最近交易日）"""
@@ -1714,12 +1754,19 @@ def _precompute_l2_labels(codes):
                     df = all_data.get(code)
                     if df is not None and len(df) >= 30:
                         try:
-                            p_tags = pd_engine.compute_tags(code, df, extra_tags={
-                                'buy_sell_point': tags.get('buy_sell_point'),
-                                'sentiment_phase': tags.get('sentiment_phase'),
-                                'sector_heat': tags.get('sector_heat'),
-                                'capital_nature': tags.get('capital_nature'),
-                            })
+                            # 327阶段4：单只阶段判定超时保护（历史 600218 卡死点——
+                            # compute_tags 死循环拖垮 P4 全量）
+                            def _phase_one(c=code, _df=df, _pd=pd_engine,
+                                           _tags=tags):
+                                return _pd.compute_tags(c, _df, extra_tags={
+                                    'buy_sell_point': _tags.get('buy_sell_point'),
+                                    'sentiment_phase': _tags.get('sentiment_phase'),
+                                    'sector_heat': _tags.get('sector_heat'),
+                                    'capital_nature': _tags.get('capital_nature'),
+                                })
+                            p_tags = _run_with_timeout(
+                                _phase_one, timeout_sec=30.0,
+                                desc=f"阶段判定 {code}")
                             if p_tags:
                                 tags.update(p_tags)
                         except Exception:
@@ -2981,34 +3028,153 @@ def _has_failed(status: dict, step_ids: list[str]) -> bool:
     return any(status.get(s, {}).get('status') == 'failed' for s in step_ids)
 
 
+def _consume_sync_requests_batch():
+    """消费 sync_requests 积压队列（327阶段5：主循环与启动时复用）
+
+    非24h开机时，API 调用层可能堆积 full_*/per_stock 请求——
+    daemon 启动后立即消费，不等主循环首个 tick。
+    """
+    pending = _ecm.consume_pending_requests()
+    for req in pending:
+        logger.info(f"消费 sync_requests: id={req['id']} type={req['task_type']} ts_code={req.get('ts_code')}")
+        try:
+            if req['task_type'] == 'full_daily':
+                _batch_daily(datetime.now().strftime('%Y%m%d'))
+                _batch_daily_basic(datetime.now().strftime('%Y%m%d'))
+            elif req['task_type'] == 'full_moneyflow':
+                _batch_moneyflow(datetime.now().strftime('%Y%m%d'))
+            elif req['task_type'] == 'full_basic':
+                _batch_daily_basic(datetime.now().strftime('%Y%m%d'))
+            elif req['task_type'] == 'full_stock_list':
+                _batch_stock_list()
+            elif req['task_type'] == 'per_stock':
+                _batch_daily(datetime.now().strftime('%Y%m%d'))
+            elif req['task_type'] == 'adj_factor':
+                _batch_adj_factor()
+            elif req['task_type'] == 'top10_holders':
+                _batch_top10_holders()
+            elif req['task_type'] == 'stk_holder':
+                _batch_stk_holder()
+            elif req['task_type'] == 'finance_report':
+                _batch_finance_report()
+            elif req['task_type'] == 'margin':
+                _batch_margin(datetime.now().strftime('%Y%m%d'))
+            elif req['task_type'] == 'concept':
+                _batch_concept()
+            elif req['task_type'] == 'precompute_strategy':
+                _precompute_single(req.get('ts_code', ''))
+            _ecm.mark_request_done(req['id'])
+            logger.info(f"  sync_request {req['id']} 完成")
+        except Exception as e:
+            _ecm.mark_request_failed(req['id'])
+            logger.warning(f"  sync_request {req['id']} 失败: {e}")
+
+
+def _recover_stale_running(timeout_hours: float = 4.0) -> int:
+    """清理超时 running 残留，防止管道永久阻塞（327阶段1）
+
+    daemon 重启/崩溃后，旧 running 记录无法被 mark_step_running 重置
+    （仅接受 pending/failed→running），导致 P4/S1 永不触发、快照陈旧。
+    将超过 timeout_hours 未完成的 running 统一重置为 pending，让管道自愈。
+
+    Returns: 重置的环节数
+    """
+    try:
+        rc = _ecm.conn.execute(
+            "UPDATE pipeline_status SET status='pending', detail='stale running 重置' "
+            "WHERE status='running' AND started_at < datetime('now', ?)",
+            [f'-{int(timeout_hours)} hours']
+        ).rowcount
+        if rc > 0:
+            _ecm.conn.commit()
+            logger.info(f"  [管道自愈] 清理 {rc} 个超时 running 环节（>{timeout_hours}h）")
+        return rc
+    except Exception as e:
+        logger.warning(f"  [管道自愈] 清理超时 running 失败: {e}")
+        return 0
+
+
+def _get_latest_data_date() -> str:
+    """获取 daily_cache 最新完整交易日（YYYY-MM-DD），无数据返回 None（327阶段2）
+
+    数据驱动核心：管道基于"最新数据日期"而非"当前日期"推进——
+    非24h开机/错过15:30/隔日启动时，用已有最新数据自动补算，而非等待"今天"。
+    """
+    try:
+        row = _ecm.conn.execute(
+            "SELECT trade_date FROM daily_cache "
+            "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 1"
+        ).fetchone()
+        if row:
+            return str(row[0])
+    except Exception:
+        pass
+    return None
+
+
+def _audit_data_freshness() -> str:
+    """数据年龄审计（327阶段2）：检查数据最新日期 vs 当前交易日，返回状态
+
+    Returns:
+        'fresh' 数据为当前交易日
+        'stale' 数据滞后（错过日终/隔日开机）
+        'empty' 无数据
+    """
+    latest = _get_latest_data_date()
+    if not latest:
+        logger.info("  [数据审计] daily_cache 无数据")
+        return 'empty'
+    today = datetime.now().strftime('%Y-%m-%d')
+    if latest == today:
+        logger.info(f"  [数据审计] 数据最新 {latest}，为当前交易日 ✅")
+        return 'fresh'
+    logger.info(f"  [数据审计] 数据最新 {latest}，滞后于今日 {today}——将基于 {latest} 补算")
+    return 'stale'
+
+
 def _drive_pipeline():
     """管道驱动：检查当前状态，推进到下一个可执行的环节
 
     每 30s tick 由主循环调用一次。每次只推进一个环节。
+    327阶段2：数据驱动——基于 daily_cache 最新交易日（非当前日期）推进，
+    实现任意时间开机（含错过15:30/隔日）自动补算。
     """
-    today = datetime.now().strftime('%Y%m%d')
+    # 327阶段1：先清理超时 running 残留（防止重启后永久卡死）
+    _recover_stale_running()
 
-    # Guard: 非交易日跳过
-    if not _is_market_day():
+    # 327阶段2：确定有效数据日期（最新完整交易日）
+    data_date = _get_latest_data_date()
+    if not data_date:
+        return  # 无数据，等采集
+    data_date_compact = data_date.replace('-', '')
+
+    # Guard: 非交易日跳过（周末/节假日，但若数据日期是最近交易日仍可补算）
+    if not _is_market_day() and _is_pipeline_complete(data_date_compact):
         return
 
-    # Guard: 今日管道已完成
-    if _is_pipeline_complete(today):
+    # Guard: 该数据日期的管道已完成
+    if _is_pipeline_complete(data_date_compact):
         return
 
-    # Guard: 交易日判断（数据驱动，非时间驱动）
-    today_fmt = datetime.now().strftime('%Y-%m-%d')
+    # 数据量门槛（该数据日期行数充足才推进，防止半载数据触发）
     has_data = _ecm.conn.execute(
-        "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [today_fmt]
+        "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [data_date]
     ).fetchone()[0] >= 4000
     if not has_data:
-        return  # 数据未到达，下一 tick 再检查
+        return  # 数据未完整到达，下一 tick 再检查
+
+    today_fmt = data_date
+    today = data_date_compact
 
     # 确保当日管道环节已初始化
     _ecm.ensure_pipeline_steps(today)
     status = _ecm.load_pipeline_status(today)
 
     # ── 采集阶段 C1→C6 ──
+    # 327阶段2修正：数据驱动下，若 C1-C6 未全部 done 且数据日期已完整，
+    # 直接标记 done 跳过（数据已存在，避免用 data_date 重采旧日期）。
+    # 注意：C6 概念板块无日期需独立采集；若采集环节已 done 则正常 continue。
+    # 数据缺失场景由完整性检查（run_integrity_check）独立补采，不在此阻塞。
     COLLECT = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6']
     for sid, func, arg in [
         ('C1', _batch_daily, today_fmt),
@@ -3019,6 +3185,15 @@ def _drive_pipeline():
         ('C6', _batch_concept, None),
     ]:
         if status.get(sid, {}).get('status') in ('done', 'running'):
+            continue
+        # 数据日期已完整 → 采集环节直接标记 done（数据已存在，无需重采）
+        if sid != 'C6':  # C6 概念板块需独立采集（无日期）
+            _ecm.conn.execute(
+                "UPDATE pipeline_status SET status='done', completed_at=CURRENT_TIMESTAMP, "
+                "detail='数据已完整，采集跳过' WHERE pipeline_date=? AND step_id=?",
+                [today, sid]
+            )
+            _ecm.conn.commit()
             continue
         _run_pipeline_step(today, sid, func, arg)
         return  # 每 tick 只推进一个环节
@@ -3203,144 +3378,6 @@ def _prewarm_weekly_cache(codes):
     finally:
         con.close()
 
-
-def _check_precompute_status(today: str):
-    """开机自检：检查当日预计算完整性，按当前时间决策是否需要补算
-
-    决策逻辑：
-      - 非交易日 → 跳过
-      - 9:30 前  → 跳过（尚未开盘，预计算无意义）
-      - 当前 > 15:30 → 全市场检查 strategy_signal_detail → 缺失则全量预计算
-      - 9:30~15:30  → 检查自选股 → 缺失的发起增量请求
-    """
-    from datetime import datetime
-    now = datetime.now()
-    if now.weekday() >= 5:
-        logger.info("  [P6自检] 非交易日，跳过")
-        return
-
-    from app.data.enhanced_cache_manager import get_ecm_instance
-    ecm = get_ecm_instance()
-
-    hour = now.hour
-    minute = now.minute
-
-    if hour < 9 or (hour == 9 and minute < 30):
-        logger.info("  [P6自检] 盘中前（<9:30），跳过预计算检查")
-        return
-
-    # >15:30: 全市场预计算完整性检查
-    if hour > 15 or (hour == 15 and minute >= 30):
-        logger.info("  [P6自检] 日终后，检查全市场预计算完整性...")
-        today_fmt = datetime.now().strftime('%Y-%m-%d')
-        try:
-            row = ecm.conn.execute(
-                "SELECT COUNT(*) FROM strategy_signal_detail WHERE trade_date=?",
-                [today_fmt]
-            ).fetchone()
-            count = row[0] if row else 0
-        except Exception:
-            count = 0
-        need_precompute = (count == 0)
-        # 同时检查 L2 标签是否已预计算（opportunity_tags_cache）
-        try:
-            tag_row = ecm.conn.execute(
-                "SELECT COUNT(*) FROM opportunity_tags_cache"
-            ).fetchone()
-            tag_count = tag_row[0] if tag_row else 0
-        except Exception:
-            tag_count = 0
-        if tag_count == 0:
-            logger.info("  [P6自检] opportunity_tags_cache 为空，需触L2标签预计算")
-            need_precompute = True
-        if need_precompute:
-            logger.info(f"  [P6自检] 触发全量预计算")
-            _run_precompute()
-        else:
-            logger.info(f"  [P6自检] 当日已有预计算数据 ({count}只策略信号, {tag_count}条标签) ✅")
-        return
-
-    # 9:30~15:30: 检查全市场预计算完整性（含 L2 标签）
-    logger.info("  [P6自检] 盘中，检查全市场预计算完整性...")
-
-    # 检查 daily_cache 是否有今日数据（若有则说明是交易日且有数据可算）
-    today_fmt = datetime.now().strftime('%Y-%m-%d')
-    try:
-        has_today_data = ecm.conn.execute(
-            "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [today_fmt]
-        ).fetchone()[0] > 0
-    except Exception:
-        has_today_data = False
-
-    need_precompute = False
-
-    if has_today_data:
-        # 检查 strategy_signal_detail
-        try:
-            row = ecm.conn.execute(
-                "SELECT COUNT(*) FROM strategy_signal_detail WHERE trade_date=?",
-                [today_fmt]
-            ).fetchone()
-            if row and row[0] == 0:
-                need_precompute = True
-        except Exception:
-            need_precompute = True
-
-        # 检查 opportunity_tags_cache
-        if not need_precompute:
-            try:
-                tag_row = ecm.conn.execute(
-                    "SELECT COUNT(*) FROM opportunity_tags_cache"
-                ).fetchone()
-                if not tag_row or tag_row[0] == 0:
-                    need_precompute = True
-            except Exception:
-                need_precompute = True
-
-    if need_precompute:
-        logger.info(f"  [P6自检] 有今日数据但无预计算，触发全量预计算")
-        # 后台线程执行，不阻塞启动流程
-        threading.Thread(target=_run_precompute, daemon=True).start()
-        logger.info("  [P6自检] 全量预计算已在后台启动")
-        return
-
-    # 盘中无全量数据或无预计算缺失 → 走自选股增量检查
-    logger.info("  [P6自检] 检查盘中自选股增量请求...")
-    watchlist_codes = []
-    try:
-        import sqlite3
-        data_dir = os.environ.get('DATA_DIR', '')
-        app_db = os.path.join(data_dir, 'app.db') if data_dir else ''
-        if app_db and os.path.exists(app_db):
-            conn = sqlite3.connect(app_db)
-            rows = conn.execute("SELECT ts_code FROM watchlist").fetchall()
-            watchlist_codes = [r[0] for r in rows]
-            conn.close()
-    except Exception:
-        watchlist_codes = []
-    except Exception:
-        watchlist_codes = []
-
-    if not watchlist_codes:
-        logger.info("  [P6自检] 无自选股，跳过")
-        return
-
-    today_fmt = datetime.now().strftime('%Y%m%d')
-    logger.info(f"  [P6自检] 自选股 {len(watchlist_codes)} 只，检查缓存...")
-    need_count = 0
-    for code in watchlist_codes:
-        try:
-            has = ecm.has_signal_detail(code, today_fmt)
-            if not has:
-                _ecm.request_data('precompute_strategy', code)
-                need_count += 1
-        except Exception:
-            _ecm.request_data('precompute_strategy', code)
-            need_count += 1
-    if need_count:
-        logger.info(f"  [P6自检] 发起 {need_count}/{len(watchlist_codes)} 只增量预计算请求")
-    else:
-        logger.info(f"  [P6自检] 自选股全部有缓存 ✅")
 
 
 def _run_financial_sync():
@@ -3574,11 +3611,23 @@ def main():
 
     # 启动完整性检查（回溯最近3个交易日）
     _ensure_pd()
+    # 327阶段2：开机数据审计（日志记录数据新鲜度，供运维核查）
+    try:
+        _audit_data_freshness()
+    except Exception as e:
+        logger.warning(f"数据审计异常: {e}")
     run_integrity_check(backfill_days=3)
 
     # 管道驱动兜底：开机后自动从断点恢复
     # 替代 _check_daily_sync_backfill() + _check_precompute_status()
     _drive_pipeline()
+
+    # 327阶段5：启动时立即消费 sync_requests 积压（非24h开机时调用层
+    # 堆积的 full_* 请求立即处理，不等主循环首个 30s tick）
+    try:
+        _consume_sync_requests_batch()
+    except Exception as e:
+        logger.warning(f"启动时消费 sync_requests 失败: {e}")
 
     # 主循环（每 30 秒检查一次）
     _last_patrol = 0
@@ -3599,42 +3648,9 @@ def main():
             except Exception as e:
                 logger.warning(f"WAL checkpoint 失败: {e}")
 
-        # ── sync_requests 队列消费（不变） ──
+        # ── sync_requests 队列消费（327阶段5：抽取为函数，主循环与启动时复用） ──
         try:
-            pending = _ecm.consume_pending_requests()
-            for req in pending:
-                logger.info(f"消费 sync_requests: id={req['id']} type={req['task_type']} ts_code={req.get('ts_code')}")
-                try:
-                    if req['task_type'] == 'full_daily':
-                        _batch_daily(datetime.now().strftime('%Y%m%d'))
-                        _batch_daily_basic(datetime.now().strftime('%Y%m%d'))
-                    elif req['task_type'] == 'full_moneyflow':
-                        _batch_moneyflow(datetime.now().strftime('%Y%m%d'))
-                    elif req['task_type'] == 'full_basic':
-                        _batch_daily_basic(datetime.now().strftime('%Y%m%d'))
-                    elif req['task_type'] == 'full_stock_list':
-                        _batch_stock_list()
-                    elif req['task_type'] == 'per_stock':
-                        _batch_daily(datetime.now().strftime('%Y%m%d'))
-                    elif req['task_type'] == 'adj_factor':
-                        _batch_adj_factor()
-                    elif req['task_type'] == 'top10_holders':
-                        _batch_top10_holders()
-                    elif req['task_type'] == 'stk_holder':
-                        _batch_stk_holder()
-                    elif req['task_type'] == 'finance_report':
-                        _batch_finance_report()
-                    elif req['task_type'] == 'margin':
-                        _batch_margin(datetime.now().strftime('%Y%m%d'))
-                    elif req['task_type'] == 'concept':
-                        _batch_concept()
-                    elif req['task_type'] == 'precompute_strategy':
-                        _precompute_single(req.get('ts_code', ''))
-                    _ecm.mark_request_done(req['id'])
-                    logger.info(f"  sync_request {req['id']} 完成")
-                except Exception as e:
-                    _ecm.mark_request_failed(req['id'])
-                    logger.warning(f"  sync_request {req['id']} 失败: {e}")
+            _consume_sync_requests_batch()
         except Exception as e:
             logger.warning(f"sync_requests 消费异常: {e}")
 

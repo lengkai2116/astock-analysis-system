@@ -308,12 +308,16 @@ def readiness_check():
 
 @health_bp.route('/api/v3/health/data-freshness', methods=['GET'])
 def data_freshness():
-    """返回 SQLite WAL 各缓存表的最新日期和记录数"""
+    """返回 SQLite WAL 各缓存表的最新日期和记录数（327阶段2：扩展预计算关键表+管道状态）"""
     tables = {
         'daily_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM daily_cache',
         'daily_basic_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM daily_basic_cache',
         'moneyflow_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM moneyflow_cache',
         'win_rate_cache': 'SELECT MAX(evaluated_at) as latest, COUNT(*) as cnt FROM win_rate_cache',
+        # 327阶段2：预计算关键表（策略信号/标签/快照）
+        'strategy_signal_detail': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM strategy_signal_detail',
+        'opportunity_tags_cache': 'SELECT MAX(updated_at) as latest, COUNT(*) as cnt FROM opportunity_tags_cache',
+        'treemap_snapshot': 'SELECT MAX(snapshot_date) as latest, COUNT(*) as cnt FROM treemap_snapshot',
     }
     results = {}
     try:
@@ -321,13 +325,31 @@ def data_freshness():
         ecm = get_ecm_instance()
         for name, query in tables.items():
             try:
-                row = ecm.conn.execute(query).fetchone()
+                row = ecm.read_conn.execute(query).fetchone()
                 results[name] = {
                     'latest_date': str(row[0]) if row[0] else None,
                     'count': row[1],
                 }
             except Exception as e:
                 results[name] = {'error': str(e)}
+        # 327阶段2：管道状态（最新数据日期的环节进度）
+        try:
+            pipe_row = ecm.read_conn.execute(
+                "SELECT pipeline_date, "
+                "SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as done_cnt, "
+                "SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) as running_cnt, "
+                "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending_cnt, "
+                "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed_cnt "
+                "FROM pipeline_status GROUP BY pipeline_date ORDER BY pipeline_date DESC LIMIT 1"
+            ).fetchone()
+            if pipe_row:
+                results['pipeline'] = {
+                    'pipeline_date': pipe_row[0],
+                    'done': pipe_row[1], 'running': pipe_row[2],
+                    'pending': pipe_row[3], 'failed': pipe_row[4],
+                }
+        except Exception as e:
+            results['pipeline'] = {'error': str(e)}
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 

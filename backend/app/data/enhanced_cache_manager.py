@@ -2235,6 +2235,18 @@ class EnhancedCacheManager:
             logger.warning(f"get_snapshot_max_date 失败: {e}")
             return None
 
+    def get_snapshot_data_date(self) -> str | None:
+        """获取 treemap_snapshot 数据交易日（327阶段3：区分构建时间 vs 数据时间）"""
+        try:
+            row = self.read_conn.execute(
+                "SELECT MAX(trade_date) FROM treemap_snapshot"
+            ).fetchone()
+            return str(row[0]) if row and row[0] else None
+        except Exception as e:
+            logger.warning(f"get_snapshot_data_date 失败: {e}")
+            return None
+            return None
+
     def get_previous_trade_date(self) -> str | None:
         """获取上一交易日（daily_cache 倒数第二日，2026-08-06 合规整改网关）"""
         try:
@@ -2484,13 +2496,23 @@ class EnhancedCacheManager:
             )
         self.conn.commit()
 
-    def mark_step_running(self, pipeline_date: str, step_id: str) -> bool:
-        """尝试将环节标记为 running（幂等锁），成功返回 True
+    def mark_step_running(self, pipeline_date: str, step_id: str, timeout_hours: float = 4.0) -> bool:
+        """尝试将环节标记为 running（幂等锁 + running 超时自动重置），成功返回 True
 
         2026-08-10 修复：支持 failed → running 重试（原仅 pending→running，
         导致 P3 failed 后管道永久卡死——_drive_pipeline 对 failed 步骤调用本方法
         但 UPDATE 0 行即返回，重试分支永远到不了）。
+        2026-08-12 修复（327阶段1）：running 超过 timeout_hours（默认4h，远大于
+        最长环节 P2=1.6h）自动重置为 pending——daemon 重启/卡死后旧 running
+        记录不再永久阻塞管道（P4/S1 永不触发，快照陈旧）。
         """
+        # 先处理超时的 running（4h 内未完成的环节视为中断，重置为 pending）
+        self.conn.execute(
+            "UPDATE pipeline_status SET status='pending', detail='timeout 自动重置' "
+            "WHERE pipeline_date=? AND step_id=? AND status='running' "
+            "AND started_at < datetime('now', ?)",
+            [pipeline_date, step_id, f'-{int(timeout_hours)} hours']
+        )
         rc = self.conn.execute(
             "UPDATE pipeline_status SET status='running', started_at=CURRENT_TIMESTAMP "
             "WHERE pipeline_date=? AND step_id=? AND status IN ('pending', 'failed')",

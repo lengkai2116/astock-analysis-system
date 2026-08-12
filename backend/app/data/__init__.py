@@ -299,6 +299,17 @@ class DataManager:
         except Exception:
             return None
 
+    def get_snapshot_data_date(self) -> str | None:
+        """获取 treemap_snapshot 的数据交易日（327阶段3：区分构建时间 vs 数据时间）
+
+        快照表 trade_date 列 = 实际数据交易日（如 08-10），snapshot_date = 构建日。
+        前端标注"数据截至 trade_date"用，避免将构建日误当数据日。
+        """
+        try:
+            return self.cache.get_snapshot_data_date()
+        except Exception:
+            return None
+
     def get_previous_trade_date(self) -> str | None:
         """获取上一交易日（L4 日变检测用，替代调用层直连 daily_cache）"""
         try:

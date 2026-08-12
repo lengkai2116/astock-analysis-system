@@ -45,6 +45,25 @@ else
     cd "$PROJECT_ROOT"
 fi
 
+# ── 327阶段5：等待数据进程就绪（确保采集/自愈/积压消费已启动，最长 30s） ──
+echo "⏳ 等待数据进程就绪..."
+DAEMON_LAST_LINE=""
+for i in $(seq 1 30); do
+    if pgrep -f "backend/data_daemon.py|data_daemon.py" > /dev/null 2>&1; then
+        # 检查日志最后一行是否为本实例"进入主循环"（避免历史日志残留误判）
+        DAEMON_LAST_LINE=$(tail -1 "$PROJECT_ROOT/backend/logs/data_daemon.log" 2>/dev/null)
+        if echo "$DAEMON_LAST_LINE" | grep -q "进入主循环"; then
+            echo "✅ 数据进程就绪 (${i}s)"
+            break
+        fi
+    fi
+    sleep 1
+done
+if ! pgrep -f "backend/data_daemon.py|data_daemon.py" > /dev/null 2>&1; then
+    echo "⚠️ 数据进程未能启动！API 将运行但预计算/采集不可用"
+    echo "   请检查 backend/logs/data_daemon.log"
+fi
+
 # ── 检查 API 是否已在运行 ──
 if curl -sf http://127.0.0.1:5001/api/v3/health/live > /dev/null 2>&1; then
     echo "✅ API 已在运行，直接打开浏览器"
@@ -73,13 +92,21 @@ echo "🌐 打开浏览器..."
 sleep 1
 open "http://localhost:5001/dashboard"
 
-# ── 后台检查 L2 标签就绪状态（不阻塞启动流程） ──
+# ── 后台检查数据新鲜度（327阶段5：不阻塞启动流程） ──
 {
     sleep 5
-    L2_CHECK=$(curl -s --max-time 5 "http://127.0.0.1:5001/api/v3/opportunity-atlas/treemap?mode=market&ts_codes=600519.SH" 2>/dev/null)
-    if echo "$L2_CHECK" | grep -q '"signal_strength_fallback":true'; then
-        echo "ℹ️  机会图谱 L2 标签尚未生成，数据守护进程会在就绪后自动计算"
-        echo "   首次计算约需 4 分钟，完成后 Treemap 机会/价值地图将自动展示真实数据"
+    FRESH=$(curl -s --max-time 5 "http://127.0.0.1:5001/api/v3/health/data-freshness" 2>/dev/null)
+    if echo "$FRESH" | grep -q '"success":true'; then
+        DAILY=$(echo "$FRESH" | grep -o '"daily_cache":{[^}]*"latest_date": *"[^"]*"' | grep -o '"latest_date": *"[^"]*"' | head -1 | cut -d'"' -f4)
+        SNAP=$(echo "$FRESH" | grep -o '"treemap_snapshot":{[^}]*"latest_date": *"[^"]*"' | grep -o '"latest_date": *"[^"]*"' | head -1 | cut -d'"' -f4)
+        PIPE=$(echo "$FRESH" | grep -o '"pipeline":{[^}]*' | head -1)
+        echo "ℹ️  数据新鲜度: 日线=${DAILY:-未知} 快照=${SNAP:-未知}"
+        echo "   管道状态: ${PIPE:-未知}"
+        if echo "$FRESH" | grep -q '"running": *[1-9]'; then
+            echo "   ⚠️ 管道有环节运行中，日终预计算完成后自动更新快照"
+        fi
+    else
+        echo "ℹ️  健康检查暂不可用（数据守护进程启动中）"
     fi
 } &
 
