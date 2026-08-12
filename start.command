@@ -88,6 +88,19 @@ for i in $(seq 1 15); do
     sleep 1
 done
 
+# ── 启动 WAL 定期收缩守护（328号 L2，单实例守卫）──
+# 非交易时段 + 管道空闲 + WAL 超阈值时自动收缩（停 daemon+API → TRUNCATE → 重启）
+if pgrep -f "wal_maintenance.py" > /dev/null 2>&1; then
+    echo "ℹ️ WAL 维护守护已在运行"
+else
+    echo "⏳ 启动 WAL 维护守护..."
+    cd "$PROJECT_ROOT/backend"
+    nohup "$VENV_PYTHON" wal_maintenance.py --daemon \
+        >> "$PROJECT_ROOT/data/logs/wal_maintenance.log" 2>&1 &
+    cd "$PROJECT_ROOT"
+    echo "✅ WAL 维护守护已启动"
+fi
+
 # ── 打开浏览器 ──
 echo "🌐 打开浏览器..."
 sleep 1

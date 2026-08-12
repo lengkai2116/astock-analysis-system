@@ -3696,6 +3696,24 @@ def main():
             except Exception as e:
                 logger.warning(f"WAL checkpoint 失败: {e}")
 
+        # ── WAL 阈值告警（2026-08-12 328号 L3）──
+        # WAL 超过 2GB 提示膨胀（自动 checkpoint 被读阻塞时只增不减）；
+        # 非交易时段 + 管道空闲时提示执行收缩（backend/wal_maintenance.py）。
+        if not _is_market_hours():
+            try:
+                _wal_mb = os.path.getsize(
+                    os.path.join(
+                        os.environ.get('DATA_DIR', 'data'), 'duckdb', 'stock_cache.db-wal'
+                    )
+                ) / 1024 / 1024
+                if _wal_mb > 2048:
+                    logger.warning(
+                        f"WAL 达 {_wal_mb:.0f}MB（>2GB）——建议执行收缩: "
+                        f"python backend/wal_maintenance.py --once"
+                    )
+            except OSError:
+                pass
+
         # ── sync_requests 队列消费（327阶段5：抽取为函数，主循环与启动时复用） ──
         try:
             _consume_sync_requests_batch()
