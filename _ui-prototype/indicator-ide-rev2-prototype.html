@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>个股策略分析 — 重排版原型</title>
+<link rel="stylesheet" href="assets/base.css">
+<style>
+/* ════════════════════════════════════════════════════════════
+   重排版原型 v3（左右分布：左侧缠论制图上下排，右侧现状+建议）
+   上部：K线图（左）+ 基础信息栏（右，现状保留）
+   下部：左侧=缠论结构图（日线/60分钟 上下分布）
+        右侧=现状描述 + 操作建议 + 深度依据（纵向堆叠）
+   ════════════════════════════════════════════════════════════ */
+
+body { background: var(--bg-canvas); color: var(--text-primary); }
+.prototype-wrap { max-width: 1600px; margin: 0 auto; padding: var(--space-6); }
+
+/* ── 上部：K线 + 基础信息栏（现状不变） ── */
+.top-flex { display: flex; gap: var(--space-4); align-items: stretch; }
+.chart-dummy { flex: 1.7; min-width: 0; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-12); display: flex; flex-direction: column; gap: var(--space-6); }
+.chart-dummy h2 { font-size: var(--fs-section); color: var(--text-secondary); }
+.placeholder-k { flex: 1; min-height: 360px; background: linear-gradient(180deg, rgba(59,130,246,0.06), rgba(59,130,246,0.02)); border: 1px dashed var(--border-strong); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: var(--fs-label); }
+.placeholder-sub { height: 120px; background: var(--bg-subtle); border: 1px dashed var(--border-default); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: var(--text-disabled); font-size: var(--fs-mini); }
+
+.side-panel { flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: var(--space-4); }
+.basic-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-8); }
+.stock-header-bar { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: var(--space-4); }
+.stock-name-code { font-size: var(--fs-card-title); font-weight: var(--fw-medium); }
+.stock-price { font-size: var(--fs-hero-sm); font-weight: var(--fw-bold); color: var(--color-up); }
+.zszq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border-default); border: 1px solid var(--border-default); border-radius: var(--radius-sm); overflow: hidden; }
+.zszq-item { background: var(--bg-subtle); padding: var(--space-3) var(--space-4); display: flex; justify-content: space-between; font-size: var(--fs-label); }
+.zszq-l { color: var(--text-muted); } .zszq-r { color: var(--text-primary); font-weight: var(--fw-medium); }
+.basic-placeholder { color: var(--text-disabled); font-size: var(--fs-mini); text-align: center; padding: var(--space-6); border: 1px dashed var(--border-default); border-radius: var(--radius-sm); }
+
+/* ── 下部：左右分布（左侧缠论制图 / 右侧现状+建议） ──
+   与上部 .top-flex 保持同 gap（space-4），右列 flex:1 同 .side-panel，
+   保证上下两行容器左右边缘精确对齐 */
+.analysis-below { margin-top: var(--space-6); display: flex; gap: var(--space-4); align-items: stretch; }
+
+/* ── 左列：缠论制图（日线 / 60分钟 上下分布） ──
+   容器样式与上部 K线图（.chart-dummy）完全同款：
+   flex:1.7 同宽 + 同 background/border/radius/padding，
+   使缠论容器边缘与 K线图容器边缘上下精确对齐 */
+.chanlun-col { flex: 1.7; min-width: 0; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-12); display: flex; flex-direction: column; gap: var(--space-6); }
+.panel-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-10); }
+.section-header { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-6); }
+.section-header h3 { font-size: var(--fs-section); font-weight: var(--fw-semibold); }
+.section-sub { font-size: var(--fs-label); color: var(--text-muted); }
+.cl-chart { background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow: hidden; flex: 1; display: flex; flex-direction: column; }
+.cl-header { font-size: var(--fs-label); font-weight: var(--fw-semibold); color: var(--text-secondary); padding: var(--space-4) var(--space-6); border-bottom: 1px solid var(--border-default); }
+.cl-body { flex: 1; min-height: 240px; display: flex; align-items: center; justify-content: center; color: var(--text-disabled); font-size: var(--fs-mini); background: linear-gradient(180deg, rgba(59,130,246,0.05), transparent); }
+
+/* ── 右列：现状 + 建议 + 依据（纵向堆叠） ── */
+/* 右列：现状 + 建议 + 依据（纵向堆叠）—— flex:1 与上部 .side-panel 相同，右边缘对齐 */
+.detail-col { flex: 1; min-width: 460px; display: flex; flex-direction: column; gap: var(--space-6); }
+
+/* 一句话总览（置顶 30 秒认知） */
+.overview-bar { display: flex; align-items: center; gap: var(--space-6); flex-wrap: wrap; padding: var(--space-8) var(--space-10); background: linear-gradient(90deg, rgba(59,130,246,0.10), rgba(59,130,246,0.03)); border: 1px solid rgba(59,130,246,0.25); border-radius: var(--radius-md); }
+.ov-light { font-size: 24px; line-height: 1; }
+.ov-action { font-size: var(--fs-section); font-weight: var(--fw-bold); color: #16a34a; }
+.ov-summary { font-size: var(--fs-body); color: var(--text-primary); flex: 1; min-width: 200px; }
+.ov-meta { font-size: var(--fs-label); color: var(--text-muted); white-space: nowrap; }
+.ov-price { font-size: var(--fs-hero-sm); font-weight: var(--fw-bold); color: var(--color-up); }
+
+/* 现状诊断：七维红绿灯 + 几何指标 */
+.status-flex { display: flex; gap: var(--space-6); align-items: flex-start; flex-wrap: wrap; }
+.diag-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-2); flex: 1.1; min-width: 300px; }
+.diag-item { display: flex; justify-content: space-between; align-items: center; padding: var(--space-4) var(--space-6); background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: var(--radius-sm); font-size: var(--fs-table); }
+.diag-k { color: var(--text-muted); }
+.diag-v { font-weight: var(--fw-medium); }
+.diag-v.green { color: #16a34a; } .diag-v.yellow { color: var(--signal-watch); } .diag-v.red { color: var(--color-up); }
+.geo-col { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: var(--space-2); }
+.geo-item { display: flex; justify-content: space-between; padding: var(--space-3) var(--space-5); background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: var(--radius-sm); font-size: var(--fs-label); color: var(--text-secondary); }
+.geo-item b { color: var(--text-primary); font-weight: var(--fw-medium); }
+.risk-boundary { margin-top: var(--space-6); padding: var(--space-5) var(--space-8); background: rgba(239,68,68,0.07); border-left: 3px solid #dc2626; border-radius: var(--radius-sm); font-size: var(--fs-label); color: var(--text-secondary); }
+
+/* 标签解说（折叠） */
+details.collapse { background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: var(--radius-md); margin-top: var(--space-6); }
+details.collapse summary { padding: var(--space-5) var(--space-8); font-size: var(--fs-body); font-weight: var(--fw-semibold); cursor: pointer; color: var(--text-secondary); list-style: none; display: flex; align-items: center; gap: var(--space-3); }
+details.collapse summary::-webkit-details-marker { display: none; }
+details.collapse summary::after { content: '▸'; margin-left: auto; color: var(--text-muted); transition: transform .2s; }
+details.collapse[open] summary::after { transform: rotate(90deg); }
+details.collapse .collapse-body { padding: var(--space-5) var(--space-8); border-top: 1px solid var(--border-default); font-size: var(--fs-label); color: var(--text-secondary); line-height: 1.9; }
+.tag-expl { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-3); }
+.tag-item { font-size: var(--fs-mini); color: var(--text-secondary); padding: var(--space-3) var(--space-5); background: var(--bg-subtle); border-radius: var(--radius-sm); border-left: 2px solid rgba(59,130,246,0.4); }
+.tag-item b { color: var(--text-primary); font-weight: var(--fw-medium); }
+.tag-explain { margin-top: var(--space-6); }
+.te-title { font-size: var(--fs-body); font-weight: var(--fw-semibold); color: var(--text-primary); margin-bottom: var(--space-4); display: flex; align-items: baseline; gap: var(--space-4); }
+.te-sub { font-size: var(--fs-mini); color: var(--text-muted); font-weight: var(--fw-regular); }
+.ds-ask-note { font-size: var(--fs-label); color: var(--text-muted); margin-bottom: var(--space-4); line-height: 1.7; }
+.ds-placeholder-line { font-size: var(--fs-label); color: var(--text-disabled); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); padding: var(--space-6); text-align: center; }
+
+/* 操作建议卡（完整 10 字段） */
+.advice-card { border: 1px solid rgba(59,130,246,0.30); border-radius: var(--radius-lg); overflow: hidden; }
+.advice-head { display: flex; align-items: center; gap: var(--space-6); flex-wrap: wrap; padding: var(--space-8) var(--space-10); background: linear-gradient(90deg, rgba(59,130,246,0.12), rgba(59,130,246,0.04)); border-bottom: 1px solid var(--border-default); }
+.advice-light { font-size: 26px; }
+.advice-action { font-size: var(--fs-page-title); font-weight: var(--fw-bold); color: #16a34a; }
+.advice-conf { font-size: var(--fs-label); color: var(--text-muted); }
+.advice-body { padding: var(--space-8) var(--space-10); }
+.advice-fields { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+.af-item { display: flex; justify-content: space-between; gap: var(--space-6); padding: var(--space-4) var(--space-6); background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: var(--radius-sm); font-size: var(--fs-table); }
+.af-label { color: var(--text-muted); white-space: nowrap; }
+.af-value { text-align: right; font-weight: var(--fw-medium); }
+.af-value.red { color: #dc2626; } .af-value.green { color: #16a34a; } .af-value.blue { color: #3b82f6; }
+.af-full { grid-column: 1 / -1; }
+.evidence-bar { margin-top: var(--space-4); font-size: var(--fs-label); color: var(--text-muted); }
+
+/* 情景推演 */
+.scn-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4); margin-top: var(--space-6); }
+.scn-card { background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-6); }
+.scn-tag { display: inline-block; font-size: var(--fs-badge); font-weight: var(--fw-semibold); color: #fff; background: #3b82f6; padding: 1px 6px; border-radius: 3px; }
+.scn-tag.b { background: var(--signal-watch); } .scn-tag.c { background: #64748b; }
+.scn-name { font-size: var(--fs-body); font-weight: var(--fw-semibold); margin-top: var(--space-3); }
+.scn-prob { font-size: var(--fs-label); color: var(--text-muted); margin-top: var(--space-1); }
+.scn-steps { margin-top: var(--space-3); font-size: var(--fs-label); color: var(--text-secondary); line-height: 1.8; }
+.ap-actions { display: flex; gap: var(--space-4); margin-top: var(--space-6); flex-wrap: wrap; }
+.ap-btn { padding: var(--space-4) var(--space-8); border-radius: var(--radius-sm); font-size: var(--fs-body); cursor: pointer; border: 1px solid transparent; }
+.ap-btn-primary { background: var(--color-brand-500, #3b82f6); color: #fff; }
+.ap-btn-secondary { background: transparent; border-color: var(--border-strong); color: var(--text-primary); }
+.ap-btn-link { background: transparent; color: #3b82f6; border-color: transparent; }
+
+/* 深度依据 */
+.src-item { display: flex; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px dashed var(--border-default); font-size: var(--fs-mini); }
+.src-name { color: var(--text-muted); width: 110px; flex-shrink: 0; }
+.src-val { color: var(--text-secondary); }
+
+/* 场景差异标签 */
+.prototype-note { position: fixed; bottom: var(--space-6); right: var(--space-6); background: rgba(0,0,0,0.75); border: 1px solid var(--border-strong); border-radius: var(--radius-md); padding: var(--space-4) var(--space-6); font-size: var(--fs-mini); color: var(--text-secondary); z-index: 99; max-width: 300px; }
+</style>
+</head>
+<body>
+
+<div class="prototype-wrap">
+
+  <!-- ═══ 上部：K线（左） + 基础信息栏（右，现状不变） ═══ -->
+  <div class="top-flex">
+
+    <div class="chart-dummy">
+      <h2>📈 K线图（现有，不变）</h2>
+      <div class="placeholder-k">K线主图（MA5/10/20/60 + 缠论结构绘制）</div>
+      <div class="placeholder-sub">MACD · VOL · 成交额 等副图（现有，不变）</div>
+    </div>
+
+    <div class="side-panel">
+      <div class="basic-card">
+        <div class="stock-header-bar">
+          <span class="stock-name-code">贵州茅台 · 600519.SH</span>
+          <span class="stock-price">40.67 <small style="font-size:12px;color:var(--color-up);">+2.30%</small></span>
+        </div>
+        <div class="zszq-grid">
+          <div class="zszq-item"><span class="zszq-l">今开</span><span class="zszq-r">39.90</span></div>
+          <div class="zszq-item"><span class="zszq-l">最高</span><span class="zszq-r">40.95</span></div>
+          <div class="zszq-item"><span class="zszq-l">最低</span><span class="zszq-r">39.60</span></div>
+          <div class="zszq-item"><span class="zszq-l">均价</span><span class="zszq-r">40.10</span></div>
+          <div class="zszq-item"><span class="zszq-l">成交量</span><span class="zszq-r">3.2万手</span></div>
+          <div class="zszq-item"><span class="zszq-l">成交额</span><span class="zszq-r">1.28亿</span></div>
+          <div class="zszq-item"><span class="zszq-l">总市值</span><span class="zszq-r">511亿</span></div>
+          <div class="zszq-item"><span class="zszq-l">PE(TTM)</span><span class="zszq-r">18.5</span></div>
+          <div class="zszq-item"><span class="zszq-l">市净率</span><span class="zszq-r">3.2</span></div>
+          <div class="zszq-item"><span class="zszq-l">换手</span><span class="zszq-r">1.2%</span></div>
+        </div>
+      </div>
+      <div class="basic-placeholder">盘口 / 五档买卖（现有，不变）</div>
+    </div>
+  </div>
+
+  <!-- ═══ 下部：左右分布 ═══ -->
+  <div class="analysis-below">
+
+    <!-- ── 左列：缠论结构图（容器与 K线图同款，日线/60分钟上下分布） ── -->
+    <div class="chanlun-col">
+      <div class="section-header">
+        <h3>📐 缠论结构图</h3>
+        <span class="section-sub">日线走势结构（长期策略）+ 60分钟走势结构（短期策略）</span>
+      </div>
+      <div class="cl-chart">
+        <div class="cl-header">日线走势结构（长期策略）</div>
+        <div class="cl-body">[ 缠论日线结构图 — 原图保留 ]</div>
+      </div>
+      <div class="cl-chart">
+        <div class="cl-header">60分钟走势结构（短期策略）</div>
+        <div class="cl-body">[ 缠论60分钟结构图 — 原图保留 ]</div>
+      </div>
+    </div>
+
+    <!-- ── 右列：现状描述 + 操作建议 + 深度依据（纵向堆叠） ── -->
+    <div class="detail-col">
+
+      <!-- ① 一句话总览（置顶 30 秒认知） -->
+      <div class="overview-bar">
+        <span class="ov-light">🟢</span>
+        <span class="ov-action">买入/建仓</span>
+        <span class="ov-summary">强趋势：信号确认 / 量价健康 / 风险边界清晰</span>
+        <span class="ov-price">40.67 <small style="font-size:12px;color:var(--color-up);">+2.30%</small></span>
+        <span class="ov-meta">数据截至 08-10 · 置信度 中</span>
+      </div>
+
+      <!-- ② 现状描述：七维诊断 + 几何指标 + 风险边界 -->
+      <div class="panel-card">
+        <div class="section-header">
+          <h3>🧬 现状描述</h3>
+          <span class="section-sub">七维红绿灯 + 几何化指标 + 风险边界</span>
+        </div>
+        <div class="status-flex">
+          <div class="diag-grid">
+            <div class="diag-item"><span class="diag-k">价值</span><span class="diag-v green">🟢 低估</span></div>
+            <div class="diag-item"><span class="diag-k">财务</span><span class="diag-v green">🟢 健康</span></div>
+            <div class="diag-item"><span class="diag-k">量价</span><span class="diag-v green">🟢 配合</span></div>
+            <div class="diag-item"><span class="diag-k">主力</span><span class="diag-v yellow">🟡 洗盘</span></div>
+            <div class="diag-item"><span class="diag-k">资金</span><span class="diag-v green">🟢 流入</span></div>
+            <div class="diag-item"><span class="diag-k">情绪</span><span class="diag-v red">🔴 高潮</span></div>
+            <div class="diag-item"><span class="diag-k">事件</span><span class="diag-v green">🟢 催化</span></div>
+            <div class="diag-item"><span class="diag-k">数据完整度</span><span class="diag-v">5/5 策略就绪</span></div>
+          </div>
+          <div class="geo-col">
+            <div class="geo-item"><span>距支撑</span><b>−3.8%</b></div>
+            <div class="geo-item"><span>距压力</span><b>+12.1%</b></div>
+            <div class="geo-item"><span>盈亏比</span><b>1:3.1</b></div>
+            <div class="geo-item"><span>右侧确认</span><b>强确认</b></div>
+            <div class="geo-item"><span>PE / PB 5年分位</span><b>12% / 8%</b></div>
+          </div>
+        </div>
+        <div class="risk-boundary">⚠️ 风险边界：止损 36.20（−4%）· 情绪高潮追涨风险大 · 盈利下滑（EPS −45%）</div>
+
+        <!-- v2：标签解说升级为词典化确定性解释（当前命中标签，大白话网格） -->
+        <div class="tag-explain">
+          <div class="te-title">🏷️ 标签解说 <span class="te-sub">确定性解释 · 85 标签词典 · 零延迟</span></div>
+          <div class="tag-expl">
+            <div class="tag-item"><b>缠论二买</b> — 日线回抽不破前低形成的买点，趋势延续信号（structure）</div>
+            <div class="tag-item"><b>量价配合</b> — 上涨放量、回调缩量，资金承接健康（volume_price）</div>
+            <div class="tag-item"><b>主力洗盘</b> — 拉升前的震仓阶段，筹码交换后继续上行（quality）</div>
+            <div class="tag-item"><b>情绪高潮</b> — 市场涨停家数超阈值，短期追涨风险积聚（environment）</div>
+            <div class="tag-item"><b>筹码主峰 36.8</b> — 最大筹码密集区，现价上方获利盘 62%（chip_deep）</div>
+            <div class="tag-item"><b>5日大单净流入</b> — 近5日主力大单净额 +2.1亿，资金承接（fund_risk）</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ③ 操作建议：完整卡 10 字段 -->
+      <div class="panel-card">
+        <div class="section-header">
+          <h3>📋 操作建议</h3>
+          <span class="section-sub">基于当前分析结果 · 2026-08-10</span>
+        </div>
+
+        <div class="advice-card">
+          <div class="advice-head">
+            <span class="advice-light">🟢</span>
+            <span class="advice-action">买入（建仓）</span>
+            <span class="advice-conf">置信度 中</span>
+            <span class="advice-conf">🔬 AI预测仅供参考（Kronos）</span>
+          </div>
+          <div class="advice-body">
+            <div class="advice-fields">
+              <div class="af-item"><span class="af-label">入场区间</span><span class="af-value blue">[39.20, 40.80]</span></div>
+              <div class="af-item"><span class="af-label">建议仓位</span><span class="af-value">40%（总仓位上限内）</span></div>
+              <div class="af-item"><span class="af-label">目标位</span><span class="af-value green">42.60 / 45.80（参考压力位）</span></div>
+              <div class="af-item"><span class="af-label">止损位</span><span class="af-value red">36.20（跌破无条件离场）</span></div>
+              <div class="af-item"><span class="af-label">预期持有</span><span class="af-value">20-30 个交易日</span></div>
+              <div class="af-item"><span class="af-label">触发条件</span><span class="af-value">站上 40.80 放量 → 加至 60%</span></div>
+              <div class="af-item af-full"><span class="af-label">失效条件</span><span class="af-value">跌破 36.20 / 大盘退潮 / 右侧转否决</span></div>
+            </div>
+            <div class="evidence-bar"><b>依据（≤3条）：</b>缠论二买确认 · 量价评分 72 · 情绪复苏（中证全指 5 日动能转正）</div>
+          </div>
+        </div>
+
+        <!-- 情景推演 -->
+        <div class="scn-row">
+          <div class="scn-card">
+            <span class="scn-tag">情景A</span>
+            <div class="scn-name">趋势延续</div>
+            <div class="scn-prob">概率 60%</div>
+            <div class="scn-steps">① 当前价附近建仓 30% 底仓<br>② 放量突破关键位加仓至 50%<br>③ 持有至目标位减仓 50%</div>
+          </div>
+          <div class="scn-card">
+            <span class="scn-tag b">情景B</span>
+            <div class="scn-name">冲高回落</div>
+            <div class="scn-prob">概率 25%</div>
+            <div class="scn-steps">① 放量冲高回落（上影线&gt;3%）不开新仓<br>② 已持仓者在阻力位附近减仓至 20%</div>
+          </div>
+          <div class="scn-card">
+            <span class="scn-tag c">情景C</span>
+            <div class="scn-name">破位下行</div>
+            <div class="scn-prob">概率 15%</div>
+            <div class="scn-steps">① 跌破支撑位立即止损<br>② 等待次级别底背驰出现后再入场</div>
+          </div>
+        </div>
+
+        <div class="ap-actions">
+          <button class="ap-btn ap-btn-primary">▶ 加入复盘池</button>
+          <button class="ap-btn ap-btn-secondary">📋 虚拟开仓·情景A</button>
+          <button class="ap-btn ap-btn-link">📊 查看复盘中心</button>
+        </div>
+      </div>
+
+      <!-- ④ 深度依据（v2：标签解说全量默认展开 + DeepSeek 可选追问 + 来源/关注点折叠） -->
+      <div class="panel-card">
+        <div class="section-header">
+          <h3>📖 深度依据</h3>
+          <span class="section-sub">标签解说全量 · 数据来源 · 关注点 · DeepSeek 追问（可选）</span>
+        </div>
+
+        <!-- v2：标签解说全量（词典化确定性解释，默认展开——"讲清现状"主线） -->
+        <details class="collapse" open>
+          <summary>🏷️ 标签解说全量（85 标签词典，当前命中 6 项）</summary>
+          <div class="collapse-body">
+            <div class="tag-expl">
+              <div class="tag-item"><b>缠论二买</b> — 日线回抽不破前低形成的买点，趋势延续信号（structure）</div>
+              <div class="tag-item"><b>量价配合</b> — 上涨放量、回调缩量，资金承接健康（volume_price）</div>
+              <div class="tag-item"><b>主力洗盘</b> — 拉升前的震仓阶段，筹码交换后继续上行（quality）</div>
+              <div class="tag-item"><b>情绪高潮</b> — 市场涨停家数超阈值，短期追涨风险积聚（environment）</div>
+              <div class="tag-item"><b>筹码主峰 36.8</b> — 最大筹码密集区，现价上方获利盘 62%（chip_deep）</div>
+              <div class="tag-item"><b>5日大单净流入</b> — 近5日主力大单净额 +2.1亿，资金承接（fund_risk）</div>
+            </div>
+            <div style="margin-top:var(--space-4);font-size:var(--fs-mini);color:var(--text-muted);">来源：opportunity_tags_cache（P4 预计算）· 词典配置（tag_name → 大白话，85 标签全覆盖）· 未命中标签不占位</div>
+          </div>
+        </details>
+
+        <!-- v2：DeepSeek 九层改为可选追问（默认折叠不调用，点击才触发 /strategy/deepseek） -->
+        <details class="collapse">
+          <summary>🤖 DeepSeek 追问：为什么给出这个判断？（可选，点击加载）</summary>
+          <div class="collapse-body">
+            <div class="ds-ask-note">点击后调用九层现状解读（DeepSeek + 知识库联动），默认不加载以保持零延迟。mock/无 key 时展示系统确定性结论。</div>
+            <div class="ds-placeholder-line">[ 🤖 追问内容占位 — 调用 /api/v3/strategy/deepseek 后渲染九层文本 ]</div>
+          </div>
+        </details>
+
+        <details class="collapse">
+          <summary>📎 数据来源追溯</summary>
+          <div class="collapse-body">
+            <div class="src-item"><span class="src-name">五维信号</span><span class="src-val">strategy_signal_detail · 2026-08-10 P2 预计算</span></div>
+            <div class="src-item"><span class="src-name">深度标签</span><span class="src-val">opportunity_tags_cache · 2026-08-10 P4 预计算</span></div>
+            <div class="src-item"><span class="src-name">K线</span><span class="src-val">daily_cache · 日终 08-10（631 万行）</span></div>
+            <div class="src-item"><span class="src-name">操作建议</span><span class="src-val">advice_builder.build_operation_advice · 点击时组装</span></div>
+          </div>
+        </details>
+
+        <details class="collapse">
+          <summary>🔎 关注点 / 风险评估</summary>
+          <div class="collapse-body">
+            <div>⚠️ 验证链：3/5 通过 · 未通过：资金流与量价背离（12:30 大单净流出）</div>
+            <div>📌 关注：情绪高潮期追涨回撤风险；60 分钟级别顶背驰隐现</div>
+          </div>
+        </details>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="prototype-note">
+  <b>重排版原型 v4（按 326 号 v2.0 修订）</b><br>
+  ① 下部左右分布：左=缠论制图（日线/60分钟上下排）<br>
+  ② 右=现状描述 + 操作建议 + 深度依据（纵向堆叠）<br>
+  ③ 上部 K线+基础信息栏 现状保留 · 缠论制图完整保留<br>
+  ④ 建议卡补全字段 · 前端推导已删除<br>
+  ⑤ 【v2】标签解说升级：词典化确定性解释（85 标签，替代九层默认输出）<br>
+  ⑥ 【v2】DeepSeek 九层改"可选追问"：默认折叠不加载，点击才调用
+</div>
+
+</body>
+</html>

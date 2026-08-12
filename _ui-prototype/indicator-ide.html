@@ -139,6 +139,43 @@
 .panel-card { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-10); }
 .panel-card h4 { font-size:11px; font-weight:600; color:var(--text-muted); letter-spacing:0.3px; margin-bottom:var(--space-6); display:flex; justify-content:space-between; align-items:center; }
 
+/* ── 326号：下部左右分布（左缠论同款容器 / 右现状+建议，与上部 K线+基础栏镜像对齐） ── */
+.analysis-below { display:flex; gap:var(--space-4); align-items:stretch; }
+.chanlun-col { flex:1.7; min-width:0; background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-md); padding:var(--space-12); display:flex; flex-direction:column; gap:var(--space-6); }
+.chanlun-col .cl-chart { flex:1; background:var(--bg-subtle); }
+.chanlun-col .cl-body iframe { height:100%; min-height:260px; }
+.detail-col { flex:1; min-width:420px; display:flex; flex-direction:column; gap:var(--space-6); }
+.section-header { display:flex; align-items:center; gap:var(--space-3); margin-bottom:var(--space-6); }
+.section-header h3 { font-size:var(--fs-section); font-weight:var(--fw-semibold); margin:0; }
+.section-sub { font-size:var(--fs-label); color:var(--text-muted); }
+
+/* 326号：一句话总览（置顶 30 秒认知） */
+.overview-bar { display:flex; align-items:center; gap:var(--space-6); flex-wrap:wrap; padding:var(--space-8) var(--space-10); background:linear-gradient(90deg, rgba(59,130,246,0.10), rgba(59,130,246,0.03)); border:1px solid rgba(59,130,246,0.25); border-radius:var(--radius-md); }
+.ov-light { font-size:24px; line-height:1; }
+.ov-action { font-size:var(--fs-section); font-weight:var(--fw-bold); }
+.ov-summary { font-size:var(--fs-body); color:var(--text-primary); flex:1; min-width:200px; }
+.ov-meta { font-size:var(--fs-label); color:var(--text-muted); white-space:nowrap; }
+.ov-price { font-size:var(--fs-hero-sm); font-weight:var(--fw-bold); color:var(--color-up); }
+
+/* 326号：5格指标条职责并入七维诊断卡（折叠保留 DOM，避免 JS 报错） */
+.status-dashboard { display:none !important; }
+
+/* 326号：标签解说词典化网格 */
+.tag-expl { display:grid; grid-template-columns:repeat(2, 1fr); gap:var(--space-3); }
+.tag-item { font-size:var(--fs-mini); color:var(--text-secondary); padding:var(--space-3) var(--space-5); background:var(--bg-subtle); border-radius:var(--radius-sm); border-left:2px solid rgba(59,130,246,0.4); line-height:1.6; }
+.tag-item b { color:var(--text-primary); font-weight:var(--fw-medium); }
+
+/* 326号：风险边界行（风险前置） */
+.risk-boundary { margin-top:var(--space-6); padding:var(--space-5) var(--space-8); background:rgba(239,68,68,0.07); border-left:3px solid #dc2626; border-radius:var(--radius-sm); font-size:var(--fs-label); color:var(--text-secondary); }
+
+/* 326号：折叠块（标签解说全量 / DeepSeek 追问） */
+details.collapse { background:var(--bg-subtle); border:1px solid var(--border-default); border-radius:var(--radius-md); margin-top:var(--space-6); }
+details.collapse summary { padding:var(--space-5) var(--space-8); font-size:var(--fs-body); font-weight:var(--fw-semibold); cursor:pointer; color:var(--text-secondary); list-style:none; display:flex; align-items:center; gap:var(--space-3); }
+details.collapse summary::-webkit-details-marker { display:none; }
+details.collapse summary::after { content:'▸'; margin-left:auto; color:var(--text-muted); transition:transform .2s; }
+details.collapse[open] summary::after { transform:rotate(90deg); }
+details.collapse .collapse-body { padding:var(--space-5) var(--space-8); border-top:1px solid var(--border-default); font-size:var(--fs-label); color:var(--text-secondary); line-height:1.9; }
+
 .main-content { min-width:0; overflow-x:hidden; }
 /* 缩放自适应 */
 .chart-section { min-width:0; }
@@ -790,8 +827,39 @@
           <div class="loading-cancel"><button class="btn-sm" onclick="cancelAnalysis()">取消</button></div>
         </div>
 
+        <!-- ════════════════════ 326号：下部左右分布（左缠论 / 右现状+建议） ════════════════════ -->
+        <div class="analysis-below">
+
+          <!-- 左列：缠论结构图容器（样式与 K线图容器同款，326号 §2.2） -->
+          <div class="chanlun-col">
+            <div class="section-header">
+              <h3>📐 缠论结构图</h3>
+              <span class="section-sub">日线走势结构（长期策略）+ 60分钟走势结构（短期策略）</span>
+            </div>
+            <div class="cl-chart" id="chanlunChartLong">
+              <div class="cl-header">日线走势结构（长期策略）</div>
+              <div class="cl-body" id="clBodyLong"><div class="cl-placeholder">缠论分析中...</div></div>
+            </div>
+            <div class="cl-chart" id="chanlunChartShort">
+              <div class="cl-header">60分钟走势结构（短期策略）</div>
+              <div class="cl-body" id="clBodyShort"><div class="cl-placeholder">缠论分析中...</div></div>
+            </div>
+          </div>
+
+          <!-- 右列：现状 + 建议 + 依据（纵向堆叠） -->
+          <div class="detail-col">
+
         <!-- ════════════════════ 股票现状卡片 STOCK STATUS CARD ════════════════════ -->
         <div class="ss-card" id="stockStatus">
+
+          <!-- 326号：一句话总览（置顶 30 秒认知，读 operation_advice） -->
+          <div class="overview-bar" id="overviewBar" style="display:none;">
+            <span class="ov-light" id="ovLight">--</span>
+            <span class="ov-action" id="ovAction">--</span>
+            <span class="ov-summary" id="ovSummary">--</span>
+            <span class="ov-price" id="ovPrice">--</span>
+            <span class="ov-meta" id="ovMeta">--</span>
+          </div>
 
           <!-- 5格指标条 -->
           <div class="status-dashboard" id="statusDashboard">
@@ -822,18 +890,6 @@
             </div>
           </div>
 
-          <!-- 缠论结构图 -->
-          <div class="chanlun-charts" id="chanlunCharts" style="display:none;">
-            <div class="cl-chart" id="chanlunChartLong">
-              <div class="cl-header">日线走势结构（长期策略）</div>
-              <div class="cl-body" id="clBodyLong"><div class="cl-placeholder">缠论分析中...</div></div>
-            </div>
-            <div class="cl-chart" id="chanlunChartShort">
-              <div class="cl-header">60分钟走势结构（短期策略）</div>
-              <div class="cl-body" id="clBodyShort"><div class="cl-placeholder">缠论分析中...</div></div>
-            </div>
-          </div>
-
           <!-- 320号 S3：现状诊断卡（七维红绿灯 + 信号生命周期 + 几何化指标 + 风险边界） -->
           <div class="status-diagnosis" id="statusDiagnosis">
             <div class="ds-header">🧬 现状诊断 <span class="ds-subheader" id="diagTsLabel">--</span></div>
@@ -841,23 +897,38 @@
               <div class="diag-placeholder">加载中...</div>
             </div>
             <div class="diag-metrics" id="diagMetrics"></div>
-            <!-- 标签解说（大白话双栏） -->
+            <!-- 326号：风险边界行（风险前置） -->
+            <div class="risk-boundary" id="diagRiskBoundary" style="display:none;"></div>
+            <!-- 标签解说（326号：词典化确定性解释网格） -->
             <div class="diag-tags" id="diagTags" style="display:none;">
-              <div class="diag-tags-title">🏷️ 标签解说</div>
-              <div id="diagTagsBody" style="font-size:12px;color:var(--text-secondary);line-height:1.8;"></div>
+              <div class="diag-tags-title">🏷️ 标签解说 <span style="font-size:11px;color:var(--text-muted);font-weight:400;">确定性解释 · 85 标签词典 · 零延迟</span></div>
+              <div class="tag-expl" id="diagTagsBody" style="font-size:12px;color:var(--text-secondary);line-height:1.8;"></div>
             </div>
+            <!-- 326号：标签解说全量（词典化确定性解释，默认展开——"讲清现状"主线） -->
+            <details class="collapse" id="tagExplainFull" style="margin-top:var(--space-6);" open>
+              <summary>🏷️ 标签解说全量（85 标签词典，当前命中 <span id="tagExplainCount">0</span> 项）</summary>
+              <div class="collapse-body">
+                <div class="tag-expl" id="tagExplainFullBody"><div style="color:var(--text-muted);font-size:12px;">暂无命中标签（点击「运行分析」加载）</div></div>
+                <div style="margin-top:var(--space-4);font-size:11px;color:var(--text-muted);">来源：opportunity_tags_cache（P4 预计算）· 词典配置（tag_name → 大白话，85 标签全覆盖）· 未命中标签不占位</div>
+              </div>
+            </details>
           </div>
 
-          <!-- DeepSeek 九层深度解读 -->
+          <!-- DeepSeek 九层深度解读（326号：可选追问，默认折叠不加载） -->
           <div class="status-deepseek" id="statusDeepseek">
-            <div class="ds-header">📖 现状深度解读</div>
-            <div class="ds-body" id="dsBody">
-              <div class="ds-placeholder">点击「运行分析」获取股票现状解读</div>
-            </div>
-            <div class="ds-footer" id="dsFooter" style="display:none;">
-              <span class="ds-word-count" id="dsWordCount"></span>
-              <button class="btn-link" onclick="copyDeepseekText()">📋 复制全文</button>
-            </div>
+            <details class="collapse">
+              <summary>🤖 DeepSeek 追问：为什么给出这个判断？（可选，点击加载）</summary>
+              <div class="collapse-body">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-4);">点击后调用九层现状解读（DeepSeek + 知识库联动），默认不加载以保持零延迟。mock/无 key 时展示系统确定性结论。</div>
+                <div class="ds-body" id="dsBody">
+                  <div class="ds-placeholder" id="dsPlaceholder">点击上方「🤖 追问」加载深度解读</div>
+                </div>
+                <div class="ds-footer" id="dsFooter" style="display:none;margin-top:var(--space-4);">
+                  <span class="ds-word-count" id="dsWordCount"></span>
+                  <button class="btn-link" onclick="copyDeepseekText()">📋 复制全文</button>
+                </div>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -949,6 +1020,9 @@
           <div class="arb-sources-header" onclick="toggleSources()">📎 数据来源 [点击展开]</div>
           <div class="arb-sources-body" id="arbSourcesBody"></div>
         </div>
+
+          </div><!-- /detail-col -->
+        </div><!-- /analysis-below -->
 
       </div>
 
@@ -2018,18 +2092,84 @@ function loadDiagnosisCard(tsCode){
       var metricsEl = document.getElementById('diagMetrics');
       if(metricsEl) metricsEl.innerHTML = metrics.join('');
 
-      // 3) 标签解说（大白话双栏：来自 tags 字典 + 机会标签）
+      // 326号：风险边界行（从快照风险类字段组装：right_side_confirm=否决 / risk_level=HIGH / 财务 fail / 事件负面）
+      var rbEl = document.getElementById('diagRiskBoundary');
+      if(rbEl){
+        var risks = [];
+        if(stock.right_side_confirm === '否决') risks.push('右侧确认已否决（卖出/背离/预跌信号）');
+        if(stock.risk_level === 'HIGH') risks.push('结构风险等级 HIGH（卖点或下降趋势）');
+        if(stock.fina_health === 'fail') risks.push('财务排雷：fail（盈利恶化）');
+        if(stock.volatility_level === 'high') risks.push('波动率偏高');
+        if(risks.length){
+          rbEl.innerHTML = '⚠️ 风险边界：' + risks.join(' · ');
+          rbEl.style.display = '';
+        } else {
+          rbEl.style.display = 'none';
+        }
+      }
+
+      // 3) 标签解说（326号：词典化确定性解释网格，替代 4 行硬编码）
       var tagsBody = document.getElementById('diagTagsBody');
       if(tagsBody && tagsEl){
-        var lines = [];
-        if(stock.opportunity_label) lines.push('📌 机会类型：' + stock.opportunity_label);
-        if(stock.opportunity_type) lines.push('🔑 机会信号：' + (stock.opportunity_type||''));
-        if(stock.main_force_phase) lines.push('🏗️ 主力：' + ({building:'建仓',washing:'洗盘',lifting:'拉升',distributing:'出货'}[stock.main_force_phase]||stock.main_force_phase));
-        if(stock.fina_health) lines.push('🏥 财务：' + ({pass:'健康',suspicious:'存疑',fail:'风险'}[stock.fina_health]||stock.fina_health));
-        if(lines.length){ tagsBody.innerHTML = lines.join('<br/>'); tagsEl.style.display = ''; }
+        var hitTags = collectHitTags(stock);
+        var html = renderTagExplainGrid(hitTags);
+        tagsBody.innerHTML = html || '<div style="color:var(--text-muted);">无命中标签（词典未覆盖或标签缺失）</div>';
+        tagsEl.style.display = hitTags.length ? '' : 'none';
+        // 同步填充"标签解说全量"折叠块
+        var fullBody = document.getElementById('tagExplainFullBody');
+        if(fullBody) fullBody.innerHTML = html || '<div style="color:var(--text-muted);font-size:12px;">无命中标签（词典未覆盖或标签缺失）</div>';
+        var cntEl = document.getElementById('tagExplainCount');
+        if(cntEl) cntEl.textContent = hitTags.length;
       }
     })
     .catch(function(){ grid.innerHTML = '<div class="diag-placeholder">诊断卡加载失败</div>'; });
+}
+
+// ── 326号：收集命中标签（快照字段 → 词典键） ──
+function collectHitTags(stock){
+  var hits = [];
+  if(!stock) return hits;
+  var keyMap = {
+    opportunity_state: stock.opportunity_state,
+    right_side_confirm: stock.right_side_confirm,
+    opportunity_type: stock.opportunity_type,
+    opportunity_label: stock.opportunity_label,
+    main_force_phase: stock.main_force_phase,
+    fina_health: stock.fina_health,
+    valuation_level: stock.valuation_level,
+    style_exposure: stock.style_exposure,
+    risk_level: stock.risk_level,
+    capital_nature: stock.capital_nature,
+    sentiment_phase: stock.sentiment_phase,
+    sector_heat: stock.sector_heat,
+    main_force_presence: stock.main_force_presence,
+    phase_conflict: stock.phase_conflict,
+  };
+  Object.keys(keyMap).forEach(function(k){
+    var v = keyMap[k];
+    if(v !== undefined && v !== null && v !== '' && v !== 'none' && v !== 'None'){
+      var exp = tagExplain(k);
+      if(exp) hits.push({ name: k, explain: exp });
+    }
+  });
+  // 深度标签（structure/chip_deep/fund_risk 组，来自 tags 字典）
+  var tags = stock.tags || {};
+  ['support_resistance','active_signal','active_signal_label','chip_peak','asr','net_lg_amount_5d','margin_cost_price','time_rhythm','price_position','chip_position','volume_price_fit','buy_sell_point'].forEach(function(k){
+    if(tags[k] !== undefined && tags[k] !== null && String(tags[k]) !== '' && String(tags[k]) !== 'None'){
+      var exp = tagExplain(k);
+      if(exp) hits.push({ name: k, explain: exp });
+    }
+  });
+  return hits;
+}
+
+// ── 326号：渲染标签解说网格（2列，命中项 + 组标注） ──
+function renderTagExplainGrid(hits){
+  if(!hits || !hits.length) return '';
+  return hits.slice(0, 12).map(function(h){
+    var grp = (window.TAG_DICTIONARY && window.TAG_DICTIONARY[h.name]) ? window.TAG_DICTIONARY[h.name][1] : '';
+    return '<div class="tag-item"><b>' + h.name + '</b> — ' + h.explain + (grp ? '（' + grp + '）' : '') + '</div>';
+  }).join('');
 }
 
 function switchStock(tsCode){
@@ -2829,23 +2969,136 @@ function loadChanlunCharts(tsCode){
 }
 
 // ── 289号方案 F2-2: 异步加载 DeepSeek 九层解读 ──
+// ── 326号：标签词典（tag_name → 大白话确定性解释，非 LLM；按 325 档案分组） ──
+window.TAG_DICTIONARY = {
+  // derived 组
+  'signal_strength': ['机会潜力强度（0-100）', 'derived'],
+  'right_side_confirm': ['右侧确认档位：强确认/基础确认/未确认/否决', 'derived'],
+  'opportunity_state': ['机会状态：enter 可入场 / light 轻仓 / wait 等待 / avoid 回避', 'derived'],
+  'opportunity_type': ['机会类型标签（估值/事件/趋势等归因）', 'derived'],
+  'opportunity_label': ['机会类型中文标签', 'derived'],
+  'opportunity_profile': ['七维机会画像（价值/风险/趋势/量价/资金/情绪/事件红绿灯）', 'derived'],
+  'evidence_count': ['交叉验证证据数（越多置信度越高）', 'derived'],
+  'main_force_presence': ['主力在场判定：strong 龙虎榜证据 / moderate 筹码集中 / risk 融资杠杆 / none', 'derived'],
+  'phase_conflict': ['主力阶段多维投票冲突标记（True=分歧大）', 'derived'],
+  // structure 组（缠论结构深度）
+  'support_resistance': ['缠论最近中枢区间，即当前主要支撑/阻力带', 'structure'],
+  'zhongshu_strength': ['缠论中枢强度（走势重心稳固度）', 'structure'],
+  'multi_level': ['多级别走势联立（日线/60分钟同向性）', 'structure'],
+  'near_levels_filtered': ['近端关键价位（过滤后的支撑/压力/中枢位）', 'structure'],
+  'active_signal': ['当前有效缠论信号（时序过滤后最新买卖点）', 'structure'],
+  'active_signal_label': ['有效信号中文名称（如缠论二买）', 'structure'],
+  'momentum': ['缠论动量/背驰强度（level+score）', 'structure'],
+  'state_label': ['缠论趋势中文态（上升/下降/待定）', 'structure'],
+  'risk_level': ['结构风险等级：HIGH/MEDIUM/LOW（卖点或下降趋势→HIGH）', 'fund_risk'],
+  // chip_deep 组（筹码分布深度）
+  'chip_peak': ['筹码主峰价（最大筹码密集区）', 'chip_deep'],
+  'asr': ['活跃浮筹比例 ASR（0-1，越高换手越活跃）', 'chip_deep'],
+  'cyqkl': ['K线穿越筹码强度（0-1，穿越密集区力度）', 'chip_deep'],
+  'concentration': ['筹码集中度（越高筹码越集中）', 'chip_deep'],
+  'profit_ratio': ['获利盘比例（现价下方筹码占比，0-1）', 'chip_deep'],
+  'ssrp': ['市场平均成本价（筹码重心）', 'chip_deep'],
+  'avg_vol_100': ['百日均量（量能基准）', 'chip_deep'],
+  'peak_count': ['筹码峰数量（单峰/双峰/多峰）', 'chip_deep'],
+  'peak_type': ['筹码峰类型', 'chip_deep'],
+  // fund_risk 组（资金/风险深度）
+  'net_lg_amount_5d': ['5日大单净额（主力大单资金方向，万元）', 'fund_risk'],
+  'margin_cost_price': ['融资加权成本价（融资盘平均持仓成本）', 'fund_risk'],
+  // direction 组
+  'buy_sell_point': ['缠论买卖点（一买/二买/三买或卖点）', 'direction'],
+  'trend_alignment': ['趋势一致性（多周期方向是否同向）', 'direction'],
+  'ma_alignment': ['均线排列（多头/空头/纠缠）', 'direction'],
+  'volume_price_fit': ['量价配合度（量价是否健康同向）', 'direction'],
+  'pattern_signal': ['K线形态信号（如预跌/突破形态）', 'direction'],
+  'gap_type': ['跳空缺口类型', 'direction'],
+  'breakout_attempts': ['突破尝试次数（近20日）', 'direction'],
+  // position 组
+  'valuation_level': ['估值档位：严重低估/偏低/合理/偏高/高估', 'position'],
+  'valuation_deviation': ['估值偏离度（估值评分 vs 合理值）', 'position'],
+  'pe_percentile_5y': ['PE 近5年百分位（越低越便宜）', 'position'],
+  'pb_percentile_5y': ['PB 近5年百分位', 'position'],
+  'ps_percentile_5y': ['PS 近5年百分位', 'position'],
+  'price_position': ['价格位置：高位/中位/低位（近250日）', 'position'],
+  'chip_position': ['筹码位置（现价相对筹码密集区）', 'position'],
+  'style_exposure': ['风格暴露：大盘/小盘 × 成长/价值', 'position'],
+  'fcf_yield': ['自由现金流收益率（%）', 'position'],
+  'dividend_yield': ['股息率（%）', 'position'],
+  'revenue_growth': ['营收同比增速（%）', 'position'],
+  // quality 组
+  'main_force_phase': ['主力阶段：建仓/洗盘/拉升/出货', 'quality'],
+  'phase_confidence': ['主力阶段判定置信度（0-1）', 'quality'],
+  'fund_flow': ['资金流向：净流入/净流出/均衡', 'quality'],
+  'capital_nature': ['资金性质：机构/游资/散户（龙虎榜席位）', 'quality'],
+  'chip_concentration': ['筹码集中状态：集中/分散/稳定', 'quality'],
+  'fina_health': ['财务健康：pass 健康 / suspicious 存疑 / fail 风险', 'quality'],
+  'roce_pass': ['资本回报率达标（ROCE>15%）', 'quality'],
+  'roe': ['净资产收益率（%）', 'quality'],
+  // environment 组
+  'sentiment_phase': ['市场情绪阶段（市场级环境变量）', 'environment'],
+  'sector_heat': ['板块热度（板块内个股强度排名）', 'environment'],
+  'catalyst_event': ['催化事件（龙虎榜/公告/新闻）', 'environment'],
+  'catalyst_impact': ['事件影响评分', 'environment'],
+  'volatility_level': ['波动率等级（低/中/高）', 'environment'],
+  'upward_driver': ['上涨驱动力归因（事件/资金/趋势等）', 'environment'],
+  'time_rhythm': ['时间节奏（变盘窗口/波段阶段）', 'environment'],
+  'event_composite_score': ['事件综合评分', 'environment'],
+  'event_summary': ['事件摘要', 'environment'],
+};
+// 获取标签大白话解释（未配置返回 null）
+function tagExplain(name){
+  var e = window.TAG_DICTIONARY && window.TAG_DICTIONARY[name];
+  return e ? e[0] : null;
+}
+
 var _deepseekText = '';
+var _deepseekLoaded = {};  // 326号：按 ts_code 缓存，追问首次点击加载后不再重复调用
+// 326号：绑定"🤖 追问"折叠块——展开时触发加载（可选追问，默认不调用）
+function bindDeepseekAsk(){
+  var ds = document.getElementById('statusDeepseek');
+  if(!ds) return;
+  var details = ds.querySelector('details');
+  if(details && !details._askBound){
+    details._askBound = true;
+    details.addEventListener('toggle', function(){
+      if(details.open && _currentTsCode) loadDeepseekText(_currentTsCode);
+    });
+  }
+}
 function loadDeepseekText(tsCode){
+  if(_deepseekLoaded[tsCode]) return;  // 已加载过，不重复调用
+  _deepseekLoaded[tsCode] = true;
+  var ph = document.getElementById('dsPlaceholder');
+  if(ph) ph.innerHTML = '🤖 加载中...';
   fetch('/api/v3/strategy/deepseek?ts_code='+encodeURIComponent(tsCode))
     .then(function(r){ return r.json(); })
     .then(function(res){
       if(res.code === 0 && res.data && res.data.deepseek_text){
         _deepseekText = res.data.deepseek_text;
-        // 重新渲染现状卡片（此时 deepseek_text 有值）
+        // 渲染九层文本到追问区
+        var dsBody = document.getElementById('dsBody');
+        if(dsBody){
+          var formatted = _deepseekText.replace(/(\d+)\.【(.+?)】/g, function(m, num, label){
+            var color = '#'+(Math.floor(Math.abs(hashCode(label))%0xFFFFFF)).toString(16).padStart(6,'0');
+            return '<span class="ds-layer-label" style="background:'+color+'22;color:'+color+'">'+num+'. '+label+'</span>';
+          });
+          dsBody.innerHTML = '<div class="ds-text">'+formatted+'</div>';
+        }
+        var countEl = document.getElementById('dsWordCount');
+        if(countEl) countEl.textContent = '共'+_deepseekText.length+'字';
+        var footerEl = document.getElementById('dsFooter');
+        if(footerEl) footerEl.style.display = '';
+        // 同步刷新现状卡片（deepseek_text 有值）
         renderStockStatus(
           window._lastDims || {},
           window._lastAvailability || {},
           _deepseekText
         );
+      } else {
+        if(ph) ph.innerHTML = '暂无可用解读（数据未就绪或 mock 模式）';
       }
     })
     .catch(function(){
-      // 静默失败，保持已有的 status_text 显示
+      if(ph) ph.innerHTML = '🤖 追问加载失败，请稍后重试';
     });
 }
 
@@ -3307,11 +3560,12 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
     window._lastAvailability = availability;
 
     // 1. 股票现状卡片
+    renderOverviewBar(analysisData);
     renderStockStatus(dims, availability, analysisData.deepseek_text);
     if(stockStatus) { stockStatus.style.display = ''; stockStatus.classList.add('show'); }
 
     // 2. 策略建议
-    renderStrategyRecommendation(dims, verificationData);
+    renderStrategyRecommendation(dims, verificationData, analysisData);
     if(strategyRec) { strategyRec.style.display = ''; strategyRec.classList.add('show'); }
 
     // 3. 实操建议
@@ -3324,10 +3578,8 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
       loadChanlunCharts(_currentTsCode);
     }
 
-    // 5. 异步加载 DeepSeek 九层解读（289号方案 F2-2）
-    if(analysisData.deepseek_available){
-      loadDeepseekText(_currentTsCode);
-    }
+    // 326号：DeepSeek 九层改为"可选追问"——移除自动调用，用户点击折叠块才加载（默认零调用）
+    bindDeepseekAsk();
 
     // 更新运行按钮状态
     updateConsoleRunState('complete');
@@ -3336,6 +3588,43 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
   }
 
   showToast('✅ 策略分析完成');
+}
+
+// ── 326号：渲染一句话总览（operation_advice 摘要，置顶 30 秒认知） ──
+function renderOverviewBar(analysisData){
+  var bar = document.getElementById('overviewBar');
+  if(!bar) return;
+  var oa = analysisData && analysisData.operation_advice;
+  if(!oa || !(oa.signal_light || oa.action_label || oa.summary)){
+    bar.style.display = 'none';
+    return;
+  }
+  var light = oa.signal_light || '';
+  var lightColor = light === '🟢' ? '#16a34a' : (light === '🔴' ? '#dc2626' : '#ca8a04');
+  var lightEl = document.getElementById('ovLight');
+  if(lightEl){ lightEl.textContent = light; lightEl.style.color = lightColor; }
+  var actEl = document.getElementById('ovAction');
+  if(actEl){ actEl.textContent = oa.action_label || ''; actEl.style.color = lightColor; }
+  var sumEl = document.getElementById('ovSummary');
+  if(sumEl) sumEl.textContent = oa.summary || '';
+  // 现价 + 涨跌幅（来自行情栏，若已有则展示）
+  var priceEl = document.getElementById('ovPrice');
+  if(priceEl){
+    var sh = document.getElementById('sh-price');
+    var pct = document.getElementById('sh-pct');
+    var txt = sh && sh.textContent && sh.textContent !== '--' ? sh.textContent : '';
+    if(pct && pct.textContent && pct.textContent !== '--') txt += ' <small style="font-size:12px;color:var(--color-up);">' + pct.textContent + '</small>';
+    priceEl.innerHTML = txt || '--';
+  }
+  var metaEl = document.getElementById('ovMeta');
+  if(metaEl){
+    var av = analysisData.data_availability || {};
+    var parts = [];
+    if(av.signal_date) parts.push('数据截至 ' + av.signal_date);
+    if(oa.confidence) parts.push('置信度 ' + oa.confidence);
+    metaEl.textContent = parts.join(' · ') || '';
+  }
+  bar.style.display = '';
 }
 
 // ── 1. 渲染股票现状卡片 ──
@@ -3390,43 +3679,59 @@ function renderStockStatus(dimensions, availability, deepseekText){
 
 function hashCode(s){ var h=0; for(var i=0;i<s.length;i++){ h=((h<<5)-h)+s.charCodeAt(i); h|=0; } return Math.abs(h); }
 
-// ── 2. 渲染策略建议 ──
-function renderStrategyRecommendation(dimensions, verificationData){
-  // 主信号 — 从 factor/emotion 维度推导
-  var trend = dimensions.factor && dimensions.factor.trend || (dimensions.chanlun && dimensions.chanlun.direction) || '';
+// ── 2. 渲染策略建议（326号：改读 operation_advice，删前端硬编码） ──
+function renderStrategyRecommendation(dimensions, verificationData, analysisData){
+  var oa = analysisData && analysisData.operation_advice;
   var signalEl = document.getElementById('recSignal');
   var confEl = document.getElementById('recConfidence');
+
+  // 主信号 + 置信度 — 优先 operation_advice（action_label/confidence）；回退五维推导
   var signalLabel = '观察';
   var signalClass = 'watch';
-  if(trend === 'up' || trend === 'bullish'){
-    signalLabel = '买入'; signalClass = 'buy';
-  } else if(trend === 'down' || trend === 'bearish'){
-    signalLabel = '卖出'; signalClass = 'sell';
-  } else if(trend === 'hold' || trend === 'neutral'){
-    signalLabel = '持仓'; signalClass = 'hold';
+  var conf = null;
+  if(oa){
+    if(oa.signal_light === '🔴'){ signalLabel = '回避'; signalClass = 'sell'; }
+    else if(oa.signal_light === '🟡'){ signalLabel = '观望'; signalClass = 'watch'; }
+    else if(oa.signal_light === '🟢'){ signalLabel = (oa.action_label || '关注'); signalClass = 'buy'; }
+    if(oa.confidence === '高') conf = 0.85;
+    else if(oa.confidence === '中') conf = 0.6;
+    else if(oa.confidence === '低') conf = 0.3;
+  } else {
+    var trend = dimensions.factor && dimensions.factor.trend || (dimensions.chanlun && dimensions.chanlun.direction) || '';
+    if(trend === 'up' || trend === 'bullish'){ signalLabel = '买入'; signalClass = 'buy'; }
+    else if(trend === 'down' || trend === 'bearish'){ signalLabel = '卖出'; signalClass = 'sell'; }
+    else if(trend === 'hold' || trend === 'neutral'){ signalLabel = '持仓'; signalClass = 'hold'; }
+    var confRaw = dimensions.factor && dimensions.factor.confidence;
+    conf = (typeof confRaw === 'number' && !isNaN(confRaw)) ? confRaw : null;
   }
   if(signalEl){ signalEl.textContent = signalLabel; signalEl.className = 'rec-main-value '+signalClass; }
-
-  // 置信度（322号 S3：改读真实 factor.confidence，删除硬编码 0.5/0.3 兜底）
-  var confRaw = dimensions.factor && dimensions.factor.confidence;
-  var conf = (typeof confRaw === 'number' && !isNaN(confRaw)) ? confRaw : null;
-  // 深度描述中的置信度信息优先
-  var dsText = dimensions.chanlun && dimensions.chanlun.deepseek_text || '';
-  var confMatch = dsText.match(/置信度[\s:]*([\d.]+)/);
-  if(confMatch) conf = parseFloat(confMatch[1]);
   if(confEl) confEl.textContent = '置信度 '+(conf != null ? conf.toFixed(2) : '--');
 
-  // 关键价位 — 从缠论支撑阻力提取
-  var sr = dimensions.chanlun && dimensions.chanlun.status_recognition;
-  var levels = sr && sr.support_resistance || {};
-  var nearLevels = sr && sr.near_levels_filtered || [];
-  var stopLoss = levels.support || (nearLevels.length > 0 ? nearLevels[0].support : '--');
-  var takeProfit = levels.resistance || (nearLevels.length > 0 ? nearLevels[0].resistance : '--');
-  var entry = dimensions.chanlun && dimensions.chanlun.latest_close || '--';
+  // 关键价位 — 优先 operation_advice（executable 60日低点防守位 / target_levels）；回退缠论
+  var stopLoss = null, takeProfit = null, entry = null, target = null;
+  if(oa){
+    if(oa.executable && oa.executable.exit_rules && oa.executable.exit_rules.length){
+      var m = String(oa.executable.exit_rules[0].trigger || '').match(/[\d.]+/);
+      if(m) stopLoss = parseFloat(m[0]);
+    }
+    if(oa.target_levels && oa.target_levels.length) target = oa.target_levels[0].price;
+    if(oa.executable && oa.executable.entry_rules && oa.executable.entry_rules.length){
+      var m2 = String(oa.executable.entry_rules[0].trigger || '').match(/[\d.]+/);
+      if(m2) entry = parseFloat(m2[0]);
+    }
+  }
+  if(stopLoss == null){
+    var sr = dimensions.chanlun && dimensions.chanlun.status_recognition;
+    var levels = sr && sr.support_resistance || {};
+    var nearLevels = sr && sr.near_levels_filtered || [];
+    stopLoss = levels.support || (nearLevels.length > 0 ? nearLevels[0].support : '--');
+    takeProfit = levels.resistance || (nearLevels.length > 0 ? nearLevels[0].resistance : '--');
+  }
+  if(target == null && takeProfit != null) target = takeProfit;
   setText('recStopLoss', typeof stopLoss === 'number' ? stopLoss.toFixed(2) : stopLoss);
   setText('recTakeProfit', typeof takeProfit === 'number' ? takeProfit.toFixed(2) : takeProfit);
-  setText('recEntry', typeof entry === 'number' ? '≤'+entry.toFixed(2) : '--');
-  setText('recTarget', typeof takeProfit === 'number' ? takeProfit.toFixed(2) : '--');  // 322号 S3：目标=压力位，删除×1.1 拍脑袋上浮
+  setText('recEntry', entry != null ? '≤'+entry.toFixed(2) : '--');
+  setText('recTarget', target != null ? target.toFixed(2) : '--');
 
   // 关注点 — 从验证链和DeepSeek文本提取
   var focusList = document.getElementById('recFocusList');
@@ -3437,7 +3742,7 @@ function renderStrategyRecommendation(dimensions, verificationData){
         if(!c.passed && c.conflict_detail) focuses.push(c.conflict_detail);
       });
     }
-    // 从DeepSeek文本提取前3个关键信息
+    var dsText = dimensions.chanlun && dimensions.chanlun.deepseek_text || '';
     if(dsText){
       var sentences = dsText.match(/[^。]+。[^。]*/g);
       if(sentences) for(var i=0;i<Math.min(3,sentences.length);i++){
@@ -3448,17 +3753,26 @@ function renderStrategyRecommendation(dimensions, verificationData){
     focusList.innerHTML = focuses.slice(0,4).map(function(f){ return '<div class="rec-focus-item">'+f+'</div>'; }).join('');
   }
 
-  // 仓位管理
-  var pos = dimensions.chip && dimensions.chip.fake_institution && dimensions.chip.fake_institution.suspected ? '20% (警惕假机构)' : '50%';
+  // 仓位管理 — 优先 operation_advice（executable.position）；回退旧规则
+  var pos = '--';
+  if(oa && oa.executable && oa.executable.position){
+    pos = Math.round(oa.executable.position.max_pct * 100) + '%';
+  } else if(dimensions.chip && dimensions.chip.fake_institution && dimensions.chip.fake_institution.suspected){
+    pos = '20% (警惕假机构)';
+  } else {
+    pos = '50%';
+  }
   setText('recPosition', pos);
-  setText('recHoldingPeriod', '波段持有 2-4周');
+  setText('recHoldingPeriod', (oa && oa.expected_holding) || '波段持有 2-4周');
   var posNote = document.getElementById('recPositionNote');
-  if(posNote) posNote.textContent = conf > 0.6 ? '放量突破后加仓至70%' : '当前观望为主，等待信号确认';
+  if(posNote) posNote.textContent = (oa && oa.executable && oa.executable.entry_rules && oa.executable.entry_rules.length)
+    ? '触发：' + oa.executable.entry_rules[0].trigger
+    : (conf > 0.6 ? '放量突破后加仓至70%' : '当前观望为主，等待信号确认');
 
-  // 风险评估
+  // 风险评估 — 验证链未通过数（并入诊断卡风险边界，此处保留摘要）
   var riskBody = document.getElementById('recRiskBody');
   if(riskBody){
-    var riskText = verificationData && verificationData.verification_chains ? 
+    var riskText = verificationData && verificationData.verification_chains ?
       verificationData.verification_chains.filter(function(c){ return !c.passed; }).length+'/'+verificationData.verification_chains.length+' 验证链未通过' : '暂无数据';
     riskBody.innerHTML = '<div>'+riskText+'</div>';
     if(verificationData && verificationData.uncertainties && verificationData.uncertainties.length){
@@ -3492,6 +3806,17 @@ function renderActionPlan(analysisData, verificationData){
         ((oa.target_levels||[]).length ? '目标位：'+oa.target_levels.map(function(t){return t.price;}).join(' / ')+'（参考压力位）' : '') +
         '</div></div>';
     }
+    // 326号：入场区间 + 触发条件（entry_rules 中文化，323 §3.1 补渲染）
+    var entryHtml = '';
+    if(oa.executable && oa.executable.entry_rules && oa.executable.entry_rules.length){
+      var er = oa.executable.entry_rules[0];
+      var trigCn = String(er.trigger || '').replace(/close\s*<=?\s*/g, '回踩≤ ').replace(/close\s*>=?\s*/g, '站上 ').replace(/[<>]=?/g, '');
+      var sizeTxt = er.size_pct ? '，加至 ' + er.size_pct + '%' : '';
+      entryHtml = '<div style="margin-top:8px;padding:8px 10px;border-left:3px solid #3b82f6;font-size:12px;' +
+        'color:var(--text-secondary);background:rgba(59,130,246,0.06);">' +
+        '<b style="color:#3b82f6;">入场触发：</b>' + trigCn + sizeTxt +
+        (oa.entry_zone ? ' · 区间 [' + oa.entry_zone + ']' : '') + '</div>';
+    }
     // 失效条件（红条提示）
     var invHtml = (oa.invalidation && oa.invalidation.length) ?
       '<div style="margin-top:8px;padding:8px 10px;border-left:3px solid #dc2626;font-size:12px;' +
@@ -3511,7 +3836,7 @@ function renderActionPlan(analysisData, verificationData){
              '<div class="s-steps">' + (s.steps||[]).map(function(x){return '<div class="s-step">'+x+'</div>';}).join('') + '</div>';
     }).join('');
     var stepsA = document.getElementById('apStepsA');
-    if (stepsA) stepsA.innerHTML = cardHtml + invHtml + evHtml + dimHtml + scnHtml;
+    if (stepsA) stepsA.innerHTML = cardHtml + entryHtml + invHtml + evHtml + dimHtml + scnHtml;
     // 合并为单一报告：隐藏 B/C 情景卡片（概率已在 scenarios 统一展示）
     ['apStepsB','apStepsC'].forEach(function(id){ var el=document.getElementById(id); if(el) el.innerHTML=''; });
     var hdr = document.querySelector('.ap-header');
