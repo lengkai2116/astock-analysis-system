@@ -1171,6 +1171,18 @@ def run_integrity_check(backfill_days: int = 1):
         # 致 sw_cnt<31 恒真 → 每次完整性检查都回填 60 天 → 死循环阻塞主循环）
         missing = [c for c in SW_INDEX_CODES if c not in have_set]
         if missing:
+            # 2026-08-12 修正2：回填后仍缺（如 801020 数据源永久缺失）不应每 tick 重试
+            # 60 天回填（死循环阻塞主循环）——检查当日是否已尝试过回填，是则跳过
+            today_key = f'sw_index_backfilled:{datetime.now().strftime("%Y%m%d")}'
+            try:
+                done_row = _ecm.conn.execute(
+                    "SELECT value FROM cache_metadata WHERE key=?", [today_key]
+                ).fetchone()
+                if done_row:
+                    logger.info(f"  [申万行业指数] 当日已回填尝试过（缺 {len(missing)} 个，跳过）")
+                    return
+            except Exception:
+                pass
             logger.info(f"  [申万行业指数] 缺 {len(missing)}/{len(SW_INDEX_CODES)} 个（{missing[:3]}...），触发回填...")
             today_str = datetime.now().strftime('%Y%m%d')
             for offset in range(60):
@@ -1179,7 +1191,16 @@ def run_integrity_check(backfill_days: int = 1):
                     continue
                 ds = d.strftime('%Y%m%d')
                 _batch_index_daily(ds)
-            logger.info(f"  [申万行业指数] 回填完成（近60个交易日）")
+            logger.info(f"  [申万行业指数] 回填完成（近60个交易日），仍缺 {len(missing)} 个标记跳过")
+            # 记录当日已尝试（避免死循环；次日数据源恢复时自动重试）
+            try:
+                _ecm.conn.execute(
+                    "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)",
+                    [today_key, str(len(missing))]
+                )
+                _ecm.conn.commit()
+            except Exception:
+                pass
         else:
             logger.info(f"  [申万行业指数] 完整（{len(SW_INDEX_CODES)} 个）✅")
     except Exception as e:
