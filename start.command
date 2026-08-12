@@ -46,15 +46,19 @@ else
 fi
 
 # ── 327阶段5：等待数据进程就绪（确保采集/自愈/积压消费已启动，最长 30s） ──
+# 2026-08-12 修正：改用"日志文件近 60s 有更新"判定就绪（主循环每 30s 有 tick/采集
+# 日志 = 活跃特征）——原 tail -1 匹配"进入主循环"会因日志被持续刷新（minutes补齐
+# 等）而永远匹配不到，导致等满 30s 超时。
 echo "⏳ 等待数据进程就绪..."
-DAEMON_LAST_LINE=""
 for i in $(seq 1 30); do
     if pgrep -f "backend/data_daemon.py|data_daemon.py" > /dev/null 2>&1; then
-        # 检查日志最后一行是否为本实例"进入主循环"（避免历史日志残留误判）
-        DAEMON_LAST_LINE=$(tail -1 "$PROJECT_ROOT/backend/logs/data_daemon.log" 2>/dev/null)
-        if echo "$DAEMON_LAST_LINE" | grep -q "进入主循环"; then
-            echo "✅ 数据进程就绪 (${i}s)"
-            break
+        # 日志文件近 60 秒有更新 = daemon 主循环活跃
+        if [ -f "$PROJECT_ROOT/backend/logs/data_daemon.log" ]; then
+            LOG_AGE=$(( $(date +%s) - $(stat -f %m "$PROJECT_ROOT/backend/logs/data_daemon.log" 2>/dev/null || echo 0) ))
+            if [ "$LOG_AGE" -le 60 ]; then
+                echo "✅ 数据进程就绪 (${i}s)"
+                break
+            fi
         fi
     fi
     sleep 1

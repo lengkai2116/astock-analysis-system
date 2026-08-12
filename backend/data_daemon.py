@@ -251,6 +251,17 @@ def _batch_moneyflow(trade_date: str) -> int:
     return len(df)
 
 
+# 申万一级行业指数代码（28 个，2026-08-12 修正：原注释误写 31，且完整性检查用错阈值致回填死循环）
+SW_INDEX_CODES = [
+    '801010.SI', '801020.SI', '801030.SI', '801040.SI', '801050.SI',
+    '801080.SI', '801110.SI', '801120.SI', '801130.SI', '801140.SI',
+    '801150.SI', '801160.SI', '801170.SI', '801180.SI', '801200.SI',
+    '801210.SI', '801230.SI', '801710.SI', '801720.SI', '801730.SI',
+    '801740.SI', '801750.SI', '801760.SI', '801770.SI', '801780.SI',
+    '801790.SI', '801880.SI', '801890.SI',
+]
+
+
 def _batch_index_daily(trade_date: str) -> int:
     """四大指数日线 + 申万行业指数日线 — 批量 API 调用"""
     _ensure_pd()
@@ -276,15 +287,8 @@ def _batch_index_daily(trade_date: str) -> int:
         except Exception as e:
             logger.warning(f"指数 {code} 同步失败: {e}")
 
-    # 申万一级行业指数（31个）
-    sw_codes = [
-        '801010.SI','801020.SI','801030.SI','801040.SI','801050.SI',
-        '801080.SI','801110.SI','801120.SI','801130.SI','801140.SI',
-        '801150.SI','801160.SI','801170.SI','801180.SI','801200.SI',
-        '801210.SI','801230.SI','801710.SI','801720.SI','801730.SI',
-        '801740.SI','801750.SI','801760.SI','801770.SI','801780.SI',
-        '801790.SI','801880.SI','801890.SI',
-    ]
+    # 申万一级行业指数（28 个，模块级常量 SW_INDEX_CODES）
+    sw_codes = SW_INDEX_CODES
     sw_count = 0
     for code in sw_codes:
         try:
@@ -1157,13 +1161,17 @@ def run_integrity_check(backfill_days: int = 1):
         logger.info(f"  [指数日线] {idx_date} 4只指数数据不足，补采...")
         _batch_index_daily(ds_api)
 
-    # 申万行业指数完整性检查（31个行业，缺失时回填60日）
+    # 申万行业指数完整性检查（28 个行业，缺失时回填60日）
     try:
-        sw_cnt = _ecm.conn.execute(
-            "SELECT COUNT(DISTINCT ts_code) FROM daily_cache WHERE ts_code LIKE '801%.SI'"
-        ).fetchone()[0]
-        if sw_cnt < 31:
-            logger.info(f"  [申万行业指数] 当前 {sw_cnt}/31 个，触发回填...")
+        have_rows = _ecm.conn.execute(
+            "SELECT DISTINCT ts_code FROM daily_cache WHERE ts_code LIKE '801%.SI'"
+        ).fetchall()
+        have_set = {r[0] for r in have_rows}
+        # 2026-08-12 修正：用实际 sw_codes 列表对比（原硬编码 31，实际 28，
+        # 致 sw_cnt<31 恒真 → 每次完整性检查都回填 60 天 → 死循环阻塞主循环）
+        missing = [c for c in SW_INDEX_CODES if c not in have_set]
+        if missing:
+            logger.info(f"  [申万行业指数] 缺 {len(missing)}/{len(SW_INDEX_CODES)} 个（{missing[:3]}...），触发回填...")
             today_str = datetime.now().strftime('%Y%m%d')
             for offset in range(60):
                 d = (datetime.now() - timedelta(days=offset))
@@ -1172,6 +1180,8 @@ def run_integrity_check(backfill_days: int = 1):
                 ds = d.strftime('%Y%m%d')
                 _batch_index_daily(ds)
             logger.info(f"  [申万行业指数] 回填完成（近60个交易日）")
+        else:
+            logger.info(f"  [申万行业指数] 完整（{len(SW_INDEX_CODES)} 个）✅")
     except Exception as e:
         logger.warning(f"  申万行业指数检查失败: {e}")
 
