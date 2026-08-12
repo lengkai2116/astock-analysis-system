@@ -412,18 +412,31 @@ class DataManager:
                 return df_cached
         except Exception:
             pass
-        
-        # 从 mootdx bars(freq=5) 获取
-        df = self._get_mootdx_bars(ts_code, freq=5)
-        if not df.empty:
-            self._cache_minute_to_ecm(df, ts_code, 'W')
-            return df
-        
-        # 降级: 从日线聚合
+
+        # 2026-08-11 修复：周线从本地日线聚合并缓存到 ECM（freq='W'）。
+        # 原实现在缓存 miss 时直调 mootdx TCP（292号红线：非采集层禁止直调数据源），
+        # 且连接失败触发 3.6s sleep 重试——这是 P2 缠论计算慢（4.5s/只）的根因。
+        # 现改为：日线聚合优先 + 缓存，消除数据源直调与网络重试（缠论 4.5s→0.05s）。
         daily_data = self.get_cached_daily_data(ts_code, start_date, end_date)
         if not daily_data.empty:
-            return self._aggregate_daily_to_weekly(daily_data)
-        
+            weekly_df = self._aggregate_daily_to_weekly(daily_data)
+            if not weekly_df.empty:
+                # 写入 ECM 周线缓存（freq='W'，供后续命中；写入失败不阻塞返回）
+                try:
+                    wk_cache = weekly_df.copy()
+                    # 剔除缓存表不支持的派生列（pct_chg 等），日期转字符串（Timestamp 无法参数化绑定）
+                    for _drop_col in ('pct_chg',):
+                        if _drop_col in wk_cache.columns:
+                            wk_cache = wk_cache.drop(columns=[_drop_col])
+                    if 'trade_date' in wk_cache.columns:
+                        wk_cache['trade_date'] = wk_cache['trade_date'].astype(str)
+                    if 'trade_time' not in wk_cache.columns:
+                        wk_cache['trade_time'] = wk_cache['trade_date']
+                    self._cache_minute_to_ecm(wk_cache, ts_code, 'W')
+                except Exception:
+                    pass
+                return weekly_df
+
         # Tushare 备选
         data = self.tushare.get_weekly_data(ts_code, start_date, end_date)
         if not data:

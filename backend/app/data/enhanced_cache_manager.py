@@ -63,6 +63,17 @@ class EnhancedCacheManager:
         self.conn.execute("PRAGMA temp_store=MEMORY")
         self.conn.execute("PRAGMA busy_timeout=5000")    # 等待 5s 而非立刻报错
 
+        # 2026-08-11 根治：WAL 读写分离连接——sqlite3 单连接跨线程并发读写不安全
+        # （多线程 compute_batch 工作线程读 + 主线程写共享 conn，事务交错致写库丢失）。
+        # WAL 模式下多连接并发读/写天然安全（读不阻塞写、写不阻塞读），
+        # 读路径（_query_df/get_*）统一走 read_conn，写路径（cache_*/write_*）走 conn（_write_lock 串行化）。
+        self.read_conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.read_conn.execute("PRAGMA journal_mode=WAL")
+        self.read_conn.execute("PRAGMA synchronous=NORMAL")
+        self.read_conn.execute("PRAGMA cache_size=-8192")
+        self.read_conn.execute("PRAGMA temp_store=MEMORY")
+        self.read_conn.execute("PRAGMA busy_timeout=5000")
+
         self._init_tables()
 
         # 独立快照数据库（§3.1 物理存储方案：写入锁竞争、故障隔离、文件大小管理）
@@ -116,9 +127,13 @@ class EnhancedCacheManager:
         self.conn.commit()
 
     def _query_df(self, sql: str, params=None) -> pd.DataFrame:
-        """执行查询并返回 DataFrame（替代 DuckDB 的 fetchdf()）"""
+        """执行查询并返回 DataFrame（替代 DuckDB 的 fetchdf()）
+
+        2026-08-11 根治：改用只读连接 read_conn——与写连接 conn 分离，
+        多线程并发读（compute_batch 工作线程）不与主线程写互相干扰。
+        """
         try:
-            return pd.read_sql(sql, self.conn, params=params)
+            return pd.read_sql(sql, self.read_conn, params=params)
         except Exception as e:
             logger.warning(f"SQLite 查询失败: {e}")
             return pd.DataFrame()
@@ -854,11 +869,11 @@ class EnhancedCacheManager:
 
     def get_cache_stats(self):
         try:
-            daily_count = self.conn.execute("SELECT COUNT(*) FROM daily_cache").fetchone()[0]
+            daily_count = self.read_conn.execute("SELECT COUNT(*) FROM daily_cache").fetchone()[0]
             # 用 indicator_ma 宽表估算指标总量（ma/macd/other 三宽表近似）
             indicator_count = 0
             try:
-                row = self.conn.execute(
+                row = self.read_conn.execute(
                     "SELECT COUNT(*) FROM indicator_ma"
                 ).fetchone()
                 if row:
@@ -1737,6 +1752,10 @@ class EnhancedCacheManager:
                        VALUES (?, ?, ?, 1, datetime('now','localtime'))""",
                     [ts_code, trade_date, signal_json]
                 )
+                # 2026-08-11 修复：_execute 不 commit——若 conn 处于活动读事务
+                # （P2 重算脚本 compute_batch 大量读取后写库），INSERT 不持久化
+                # 导致 strategy_signal_detail 更新丢失（与 ECM 其他 cache_* 方法一致）
+                self.conn.commit()
             except Exception as e:
                 logger.warning(f"缓存信号详情失败 [{ts_code}]: {e}")
 
@@ -1746,7 +1765,7 @@ class EnhancedCacheManager:
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y%m%d')
         try:
-            row = self.conn.execute(
+            row = self.read_conn.execute(
                 "SELECT signal_json FROM strategy_signal_detail WHERE ts_code=? AND trade_date=?",
                 [ts_code, trade_date]
             ).fetchone()
@@ -1767,7 +1786,7 @@ class EnhancedCacheManager:
         """
         import json as _json
         try:
-            row = self.conn.execute(
+            row = self.read_conn.execute(
                 "SELECT signal_json FROM strategy_signal_detail "
                 "WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1", [ts_code]
             ).fetchone()
@@ -1785,7 +1804,7 @@ class EnhancedCacheManager:
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y%m%d')
         try:
-            row = self.conn.execute(
+            row = self.read_conn.execute(
                 "SELECT 1 FROM strategy_signal_detail WHERE ts_code=? AND trade_date=?",
                 [ts_code, trade_date]
             ).fetchone()
@@ -1798,7 +1817,7 @@ class EnhancedCacheManager:
     def read_as_sector_ranking(self) -> list[dict]:
         """读取归档的行业板块排行"""
         try:
-            rows = self.conn.execute(
+            rows = self.read_conn.execute(
                 "SELECT * FROM as_sector_ranking ORDER BY change_pct DESC"
             ).fetchall()
             if rows:
@@ -1812,7 +1831,7 @@ class EnhancedCacheManager:
     def read_as_concept_ranking(self) -> list[dict]:
         """读取归档的概念板块排行"""
         try:
-            rows = self.conn.execute(
+            rows = self.read_conn.execute(
                 "SELECT * FROM as_concept_ranking ORDER BY change_pct DESC"
             ).fetchall()
             if rows:
@@ -1978,14 +1997,14 @@ class EnhancedCacheManager:
         Returns:
             'pending' | 'running' | 'done' | 'failed'
         """
-        row = self.conn.execute(
+        row = self.read_conn.execute(
             "SELECT status FROM sync_requests WHERE id=?", [request_id]
         ).fetchone()
         return row[0] if row else 'unknown'
 
     def consume_pending_requests(self) -> list:
         """获取所有 pending 的 sync_requests（供 data_daemon 消费）"""
-        rows = self.conn.execute(
+        rows = self.read_conn.execute(
             "SELECT id, task_type, ts_code, status FROM sync_requests WHERE status='pending' ORDER BY requested_at ASC"
         ).fetchall()
         return [{'id': r[0], 'task_type': r[1], 'ts_code': r[2], 'status': r[3]} for r in rows]
@@ -2208,7 +2227,7 @@ class EnhancedCacheManager:
     def get_snapshot_max_date(self) -> str | None:
         """获取 treemap_snapshot 最新构建日期（2026-08-06 合规整改网关）"""
         try:
-            row = self.conn.execute(
+            row = self.read_conn.execute(
                 "SELECT MAX(snapshot_date) FROM treemap_snapshot"
             ).fetchone()
             return str(row[0]) if row and row[0] else None
@@ -2219,7 +2238,7 @@ class EnhancedCacheManager:
     def get_previous_trade_date(self) -> str | None:
         """获取上一交易日（daily_cache 倒数第二日，2026-08-06 合规整改网关）"""
         try:
-            row = self.conn.execute(
+            row = self.read_conn.execute(
                 "SELECT DISTINCT trade_date FROM daily_cache "
                 "ORDER BY trade_date DESC LIMIT 1 OFFSET 1"
             ).fetchone()
@@ -2265,7 +2284,7 @@ class EnhancedCacheManager:
         sql += f" LIMIT {int(limit)}"
 
         try:
-            rows = self.conn.execute(sql, params).fetchall()
+            rows = self.read_conn.execute(sql, params).fetchall()
             return [{'ts_code': r[0]} for r in rows]
         except Exception as e:
             logger.warning(f"query_tags failed: {e}")
@@ -2415,7 +2434,7 @@ class EnhancedCacheManager:
         try:
             placeholders = ','.join('?' for _ in ts_codes)
             tag_ph = ','.join('?' for _ in tag_names)
-            rows = self.conn.execute(
+            rows = self.read_conn.execute(
                 f"""SELECT ts_code, tag_name, tag_value, updated_at
                     FROM opportunity_tags_cache
                     WHERE ts_code IN ({placeholders}) AND tag_name IN ({tag_ph})
@@ -2441,7 +2460,7 @@ class EnhancedCacheManager:
     def load_pipeline_status(self, pipeline_date: str) -> dict[str, dict]:
         """读取指定交易日所有环节状态，返回 {step_id: row_dict}"""
         try:
-            cur = self.conn.execute(
+            cur = self.read_conn.execute(
                 "SELECT * FROM pipeline_status WHERE pipeline_date=? ORDER BY step_id",
                 [pipeline_date]
             )

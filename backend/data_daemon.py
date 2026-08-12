@@ -3120,6 +3120,14 @@ def _precompute_indicators(codes):
 
 def _precompute_strategy_signals(codes):
     """包装原有的策略信号预计算逻辑（P2）"""
+    # 2026-08-11 修复：P2 前置预热周线缓存——缠论 long 周期依赖周线（_get_weekly_data）。
+    # 原实现缓存 miss 时直调 mootdx TCP（292号红线违规 + 连接失败 3.6s sleep/只，
+    # 致 P2 耗时 1.6h）；现周线改为日线聚合 + 缓存（缠论 4.5s→0.06s/只），
+    # 此处批量预热确保全市场周线就绪（增量：只补缺失股票）。
+    try:
+        _prewarm_weekly_cache(codes)
+    except Exception as e:
+        logger.warning(f"周线缓存预热失败（不影响 P2 主流程）: {e}")
     try:
         from app.engine.unified_core import UnifiedStrategyCore
         core = UnifiedStrategyCore()
@@ -3138,6 +3146,62 @@ def _precompute_strategy_signals(codes):
     except Exception as e:
         logger.warning(f"策略信号预计算整体失败: {e}")
         _write_factor_signals(codes)
+
+
+def _prewarm_weekly_cache(codes):
+    """批量预热周线缓存（从 daily_cache 聚合 freq='W'，零数据源直调）
+
+    P2 缠论 long 周期需要周线；日线聚合成本低（~82s/全市场），
+    只补缺失股票（已有缓存跳过），增量维护。
+    """
+    import sqlite3 as _sqlite3
+    import pandas as _pd
+    _ensure_pd()
+    # 找出缺周线缓存的股票
+    rows = _ecm.conn.execute(
+        "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE freq='W'"
+    ).fetchall()
+    cached_set = {r[0] for r in rows}
+    missing = [c for c in codes if c not in cached_set]
+    if not missing:
+        return
+    logger.info(f"  周线缓存预热: 缺 {len(missing)} 只，从日线聚合...")
+    db_path = _ecm.db_path
+    con = _sqlite3.connect(db_path)
+    try:
+        # 分批（每批 500 只）拉日线聚合，避免单次查询过大
+        for i in range(0, len(missing), 500):
+            batch = missing[i:i+500]
+            ph = ','.join('?' for _ in batch)
+            df = _pd.read_sql(
+                f"SELECT ts_code, trade_date, open, high, low, close, vol, amount "
+                f"FROM daily_cache WHERE ts_code IN ({ph}) ORDER BY ts_code, trade_date",
+                con, params=batch
+            )
+            if df.empty:
+                continue
+            df['trade_date'] = _pd.to_datetime(df['trade_date'])
+            from app.data import DataManager
+            dm = DataManager()
+            for ts_code, g in df.groupby('ts_code'):
+                if len(g) < 60:
+                    continue
+                try:
+                    wk = g.resample('W-FRI', on='trade_date').agg(
+                        open=('open', 'first'), high=('high', 'max'), low=('low', 'min'),
+                        close=('close', 'last'), vol=('vol', 'sum'), amount=('amount', 'sum'),
+                    ).dropna().reset_index()
+                    if wk.empty:
+                        continue
+                    wk['ts_code'] = ts_code
+                    wk['trade_date'] = wk['trade_date'].dt.strftime('%Y-%m-%d')
+                    wk['trade_time'] = wk['trade_date']
+                    dm._cache_minute_to_ecm(wk, ts_code, 'W')
+                except Exception:
+                    continue
+        logger.info(f"  周线缓存预热完成（批次 {i//500+1}）")
+    finally:
+        con.close()
 
 
 def _check_precompute_status(today: str):

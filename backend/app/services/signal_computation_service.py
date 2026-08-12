@@ -1707,6 +1707,20 @@ class SignalComputationService:
                 primary_level = 'daily'  # medium的背景级别是日线
             daily_result = multi_result.get('levels', {}).get(primary_level, {})
             result = analyzer.results.get(primary_level, {}) if hasattr(analyzer, 'results') else {}
+            # 2026-08-12 修复：严格笔（min_klines=5）对数据稀疏股票（次新/北交所）
+            # 笔数不足致分析为空（levels 空/strokes=0，structure 组标签缺失）。
+            # 降级：宽松笔（min_klines=3）重试多级别分析，仍空则走下方单级别降级。
+            if not result.get('success') or not result.get('strokes'):
+                logger.debug(f"{ts_code} 严格笔缠论分析为空（数据稀疏），宽松笔重试")
+                chanlun_cfg_loose = ChanlunConfig.default()
+                chanlun_cfg_loose.multi_level.levels = pl['names']
+                chanlun_cfg_loose.bi.min_klines = 3
+                analyzer_loose = MultiLevelChanlunAnalyzer(config=chanlun_cfg_loose)
+                multi_result_loose = analyzer_loose.analyze(df_dict)
+                daily_result = multi_result_loose.get('levels', {}).get(primary_level, {})
+                result = analyzer_loose.results.get(primary_level, {}) if hasattr(analyzer_loose, 'results') else {}
+                if result.get('success') and result.get('strokes'):
+                    logger.debug(f"{ts_code} 宽松笔重试成功（{len(result.get('strokes', []))} 笔）")
         except Exception as e:
             logger.warning(f"{ts_code} 多级别缠论分析异常，降级到单级别: {e}")
             try:
@@ -2313,16 +2327,17 @@ class SignalComputationService:
                     'resistance': round(float(zs_high), 2) if zs_high else None,
                 },
                 # 2026-08-10 核查修复：risk_level 公式退化（原条件不同源恒 MEDIUM）——
-                # 改用缠论结构自身风险信号组合（卖点/下降趋势+弱动量=HIGH；上升+背驰向上=LOW）
+                # 改用缠论结构自身风险信号组合。V2（08-11 复验修正）：
+                # 原 V1 依赖 sell_types（中枢过滤后空）+ divergence（触发率极低）致
+                # 真实数据仍全 MEDIUM；V2 改用 status_recognition.buy_sell_point 的
+                # sell 列表（实际卖点，000002 等有值）+ 趋势方向——保证区分度
+                '_bs_pt': {
+                    'buy': [BP_TYPE_CN.get(t, t) for t in buy_types],
+                    'sell': [BP_TYPE_CN.get(t, t) for t in sell_types],
+                },
                 'risk_level': (
-                    'HIGH' if (bool(sell_types)
-                               or (trend_str == '下降'
-                                   and not (divergence is not None
-                                            and divergence.confidence < 0.5)))
-                    else ('LOW' if (not sell_types and trend_str == '上升'
-                                    and divergence is not None
-                                    and divergence.direction == 'up')
-                          else 'MEDIUM')),
+                    'HIGH' if (sell_types and '下降' not in trend_str) or trend_str == '下降'
+                    else ('LOW' if trend_str == '上升' and not sell_types else 'MEDIUM')),
                 # Phase 1 P1-2: 时序过滤后的有效信号（取买卖点中时序最新的一个）
                 'active_signal': _build_active_signal(best_buy, best_sell, latest_date, latest_close) if (best_buy or best_sell) else None,
                 'active_signal_label': _build_active_label(best_buy, best_sell, divergence),
@@ -2783,8 +2798,9 @@ class SignalComputationService:
 
         zs_interval = zhongshu.get('最新中枢区间', [])
         support_resistance = {
-            'support': round(float(zs_interval[0]), 2) if len(zs_interval) > 0 else 0.0,
-            'resistance': round(float(zs_interval[1]), 2) if len(zs_interval) > 1 else 0.0,
+            # 2026-08-11 修复：无中枢时返回 None（原 0.0 假值被消费端误判支撑位为 0）
+            'support': round(float(zs_interval[0]), 2) if len(zs_interval) > 0 else None,
+            'resistance': round(float(zs_interval[1]), 2) if len(zs_interval) > 1 else None,
         }
 
         div = detail.get('买卖点信号', {}).get('背驰信号')
@@ -2794,7 +2810,13 @@ class SignalComputationService:
         }
 
         score = chanlun_signal.get('chanlun_score', 50)
-        risk_level = 'HIGH' if (score < 30 or state == 'BEARISH') else 'MEDIUM'
+        # 2026-08-11 修复：risk_level 公式退化（原 score<30 or BEARISH 致全 MEDIUM）——
+        # 改用缠论结构自身风险信号组合：有卖点/下降趋势=HIGH，上升+无卖点=LOW
+        _bs = detail.get('买卖点信号', {})
+        _sell_list = _bs.get('卖点', []) if isinstance(_bs, dict) else []
+        risk_level = (
+            'HIGH' if (_sell_list or label == '下降趋势')
+            else ('LOW' if label == '上升趋势' and not _sell_list else 'MEDIUM'))
 
         return {
             'state': state,
