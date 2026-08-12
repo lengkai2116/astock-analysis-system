@@ -3670,9 +3670,11 @@ def main():
         ts = time.time()
 
         # ── WAL 周期 checkpoint（2026-08-06 根治③）──
-        # 每 5 分钟 PASSIVE checkpoint 一次：合并已提交帧、防 WAL 无限膨胀
-        # （原无 checkpoint，WAL 曾达 86G；PASSIVE 不阻塞读写）
-        if ts - _last_ckpt > 300:
+        # 2026-08-12 328号P0：交易时段（API 5s推送活跃，读竞争致 busy=1 全失败）
+        # 降频至 30 分钟；非交易时段正常 5 分钟执行——避开读高峰，WAL 可有效收缩
+        # （原固定 5 分钟在交易时段撞上 API 读 → 158 次全失败 → WAL 膨胀 7.6G）
+        _ckpt_interval = 300 if not _is_market_hours() else 1800
+        if ts - _last_ckpt > _ckpt_interval:
             try:
                 _ecm.wal_checkpoint('PASSIVE')
                 _last_ckpt = ts
