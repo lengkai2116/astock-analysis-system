@@ -3475,40 +3475,55 @@ def _batch_backfill_minute_kline(trade_date: str = None):
     except Exception:
         minute_stocks = set()
 
-    # Step 3: 计算缺失股票，限500只
-    missing = [s for s in daily_stocks if s not in minute_stocks][:500]
-    if not missing:
-        logger.info(f"[分钟回填] 今日分钟数据已完整 ({len(daily_stocks)} 只)")
-        return
-
-    logger.info(f"[分钟回填] 需补齐 {len(missing)} 只 (已有 {len(minute_stocks)} 只, 共 {len(daily_stocks)} 只)")
-
-    # Step 4: 逐只调用 Tushare pro_bar 补齐
+    # Step 3: 计算缺失股票（2026-08-12 328号P1：多轮补齐，覆盖全市场未开机日）
+    # 原单轮限 500 只——未开机日全市场缺分钟（数千只）只能补 500，完整性不足。
+    # 改为循环补齐：每轮取缺失前 500 只补采，补完刷新缺失集，最多 MAX_ROUNDS 轮。
     import tushare as ts
     pro = ts.pro_api()
-    ok = 0
-    for i, code in enumerate(missing):
+    MAX_ROUNDS = 8   # 每轮 500 只，最多 8 轮 = 4000 只（覆盖全市场）
+    total_ok = 0
+    for round_idx in range(MAX_ROUNDS):
+        # 刷新缺失集（每轮结束后重新查已补齐的）
         try:
-            raw = ts.pro_bar(ts_code=code, start_date=trade_date, end_date=trade_date, freq='1min', adj='qfq')
-            if raw is not None and not raw.empty:
-                # pro_bar 分钟数据返回 trade_time，需提取 trade_date
-                if 'trade_time' in raw.columns:
-                    raw['trade_date'] = pd.to_datetime(raw['trade_time']).dt.date
-                elif 'trade_date' in raw.columns:
-                    raw['trade_date'] = pd.to_datetime(raw['trade_date']).dt.date
-                # 列名统一: vol → volume
-                if 'vol' in raw.columns and 'volume' not in raw.columns:
-                    raw['volume'] = raw['vol']
-                    raw = raw.drop(columns=['vol'])
-                _ecm.cache_minute_kline(raw)
-                ok += 1
-            if (i + 1) % 100 == 0:
-                logger.info(f"[分钟回填] 进度: {i+1}/{len(missing)}, 成功 {ok}")
-        except Exception as e:
-            logger.debug(f"[分钟回填] {code} 失败: {e}")
-            continue
+            minute_stocks = set(r[0] for r in _ecm.conn.execute(
+                "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE trade_date=?",
+                [trade_date_fmt]
+            ).fetchall())
+        except Exception:
+            minute_stocks = set()
+        missing = [s for s in daily_stocks if s not in minute_stocks][:500]
+        if not missing:
+            logger.info(f"[分钟回填] 今日分钟数据已完整 ({len(daily_stocks)} 只, 共{round_idx}轮)")
+            break
 
-    logger.info(f"[分钟回填] 完成: 成功 {ok}/{len(missing)} 只")
+        logger.info(f"[分钟回填] 第{round_idx+1}轮: 补齐 {len(missing)} 只 (已有 {len(minute_stocks)}/{len(daily_stocks)})")
+
+        # Step 4: 逐只调用 Tushare pro_bar 补齐
+        ok = 0
+        for i, code in enumerate(missing):
+            try:
+                raw = ts.pro_bar(ts_code=code, start_date=trade_date, end_date=trade_date, freq='1min', adj='qfq')
+                if raw is not None and not raw.empty:
+                    # pro_bar 分钟数据返回 trade_time，需提取 trade_date
+                    if 'trade_time' in raw.columns:
+                        raw['trade_date'] = pd.to_datetime(raw['trade_time']).dt.date
+                    elif 'trade_date' in raw.columns:
+                        raw['trade_date'] = pd.to_datetime(raw['trade_date']).dt.date
+                    # 列名统一: vol → volume
+                    if 'vol' in raw.columns and 'volume' not in raw.columns:
+                        raw['volume'] = raw['vol']
+                        raw = raw.drop(columns=['vol'])
+                    _ecm.cache_minute_kline(raw)
+                    ok += 1
+                if (i + 1) % 100 == 0:
+                    logger.info(f"[分钟回填] 进度: {i+1}/{len(missing)}, 成功 {ok}")
+            except Exception as e:
+                logger.debug(f"[分钟回填] {code} 失败: {e}")
+                continue
+        total_ok += ok
+        logger.info(f"[分钟回填] 第{round_idx+1}轮完成: 成功 {ok}/{len(missing)} 只")
+
+    logger.info(f"[分钟回填] 全部轮次完成: 成功 {total_ok} 只")
 
 
 def _run_minute_backfill():
