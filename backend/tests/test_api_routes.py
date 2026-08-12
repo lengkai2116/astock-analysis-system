@@ -269,5 +269,70 @@ def test_api_response_format(client):
     assert 'success' in data
 
 
+# ========== 方案B：调用层只读（2026-08-12） ==========
+
+def test_analyze_cache_miss_uses_sync_request_not_direct_write(client, monkeypatch):
+    """缓存完全 miss 时，analyze 应走 sync_requests 通知 daemon，而非直写 cache_signal_detail
+
+    方案B（SQLite 并发写锁根治）：调用层只读存储层（292红线），
+    API 直写策略信号与 daemon 并发写触发 database is locked。
+    """
+    import json
+    from app.engine.unified_core import StandardizedResult
+
+    def mock_get_signal_detail(self, ts_code):
+        return None  # 未命中当日缓存
+
+    def mock_get_latest_signal_detail(self, ts_code):
+        return None  # 也未命中最新缓存 → 完全 miss → 走实时计算+sync通知分支
+
+    def mock_compute(self, ts_code, period='long'):
+        return StandardizedResult()
+
+    monkeypatch.setattr(
+        'app.data.DataManager.get_signal_detail',
+        mock_get_signal_detail,
+    )
+    monkeypatch.setattr(
+        'app.data.enhanced_cache_manager.EnhancedCacheManager.get_latest_signal_detail',
+        mock_get_latest_signal_detail,
+    )
+    monkeypatch.setattr(
+        'app.engine.unified_core.UnifiedStrategyCore.compute',
+        mock_compute,
+    )
+
+    # spy：cache_signal_detail 不应被调用（直写移除）
+    from app.data import DataManager
+    written = []
+    orig_cache = DataManager().cache.cache_signal_detail
+    def spy_cache(ts, rd):
+        written.append(ts)
+        return orig_cache(ts, rd)
+    monkeypatch.setattr(
+        'app.data.enhanced_cache_manager.EnhancedCacheManager.cache_signal_detail',
+        spy_cache,
+    )
+    # spy：request_data 应被调用（通知 daemon 异步预计算）
+    requested = []
+    orig_request = DataManager().request_data
+    def spy_request(self, task_type, ts_code=None):
+        requested.append((task_type, ts_code))
+        return orig_request(task_type, ts_code)
+    monkeypatch.setattr('app.data.DataManager.request_data', spy_request)
+
+    resp = client.post(
+        '/api/v3/strategy/analyze',
+        data=json.dumps({'ts_code': '000001.SZ'}),
+        content_type='application/json',
+    )
+    assert resp.status_code != 500
+    assert not written, f'API 不应直写 cache_signal_detail: {written}'
+    assert requested, 'API 应写 sync_requests 通知 daemon 异步预计算'
+    assert any(t == 'precompute_strategy' for t, _ in requested), (
+        f'应请求 precompute_strategy 任务, 实际: {requested}'
+    )
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

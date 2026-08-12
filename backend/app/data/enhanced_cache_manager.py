@@ -61,7 +61,7 @@ class EnhancedCacheManager:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-8192")     # 8MB 缓存
         self.conn.execute("PRAGMA temp_store=MEMORY")
-        self.conn.execute("PRAGMA busy_timeout=5000")    # 等待 5s 而非立刻报错
+        self.conn.execute("PRAGMA busy_timeout=30000")    # 30s（2026-08-12方案B：覆盖长事务窗口，原5s短于P4批量事务致锁冲突）
 
         # 2026-08-11 根治：WAL 读写分离连接——sqlite3 单连接跨线程并发读写不安全
         # （多线程 compute_batch 工作线程读 + 主线程写共享 conn，事务交错致写库丢失）。
@@ -72,7 +72,7 @@ class EnhancedCacheManager:
         self.read_conn.execute("PRAGMA synchronous=NORMAL")
         self.read_conn.execute("PRAGMA cache_size=-8192")
         self.read_conn.execute("PRAGMA temp_store=MEMORY")
-        self.read_conn.execute("PRAGMA busy_timeout=5000")
+        self.read_conn.execute("PRAGMA busy_timeout=30000")
 
         self._init_tables()
 
@@ -83,7 +83,7 @@ class EnhancedCacheManager:
         self.snapshot_conn.execute("PRAGMA synchronous=NORMAL")
         self.snapshot_conn.execute("PRAGMA cache_size=-8192")
         self.snapshot_conn.execute("PRAGMA temp_store=MEMORY")
-        self.snapshot_conn.execute("PRAGMA busy_timeout=5000")
+        self.snapshot_conn.execute("PRAGMA busy_timeout=30000")
         self._init_snapshot_tables()
 
         self.cache_stats = {

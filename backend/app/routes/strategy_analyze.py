@@ -675,9 +675,11 @@ def strategy_analyze():
             _result = _core.compute(ts_code, period=period)
             signals = _restore_signals_from_cache(_result.to_dict())
             data_availability = _result.data_availability
-            # 实时计算结果落盘，供 DeepSeek 端点消费（289号方案 §六）
+            # 2026-08-12 方案B：不再直写 cache_signal_detail（调用层只读红线，
+            # 直写与 daemon 并发写触发 SQLite 锁冲突 database is locked）——
+            # 改走 sync_requests 通知 daemon 异步预计算（precompute_strategy 任务）
             try:
-                _dm.cache.cache_signal_detail(ts_code, _result.to_dict())
+                _dm.request_data('precompute_strategy', ts_code)
             except Exception:
                 pass
 
