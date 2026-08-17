@@ -39,7 +39,7 @@ def test_gate_level_low_with_high_pe_pct_no_valuation_risk(validator):
 
 
 def test_gate_level_high_pe_gt90_deep(validator):
-    """level=high 且 PE 分位>90（双信号共振）→ deep（深度高估，硬否决保留）"""
+    """level=high 且 PE 分位>90（双信号共振）→ deep 判定（处置=强提示+仓位压缩，335号非硬否决）"""
     tags = {
         'valuation_level': 'high',
         'pe_percentile_5y': '93.0',
@@ -174,3 +174,28 @@ def test_risk_warnings_no_conflict_for_level_fair(validator):
     warnings = validator._build_risk_warnings(tags, gate)
     val_warnings = [w['content'] for w in warnings if w['type'] == 'valuation']
     assert not val_warnings, f"level=fair+PE 正常分位不应有估值提示，实际 {val_warnings}"
+
+
+# ────────────────────────────────────────────────────────────
+# 335号 §3：deep 定位修正——由"硬否决"改为"高风险机会强提示"（仓位压缩，非剔除）
+# ────────────────────────────────────────────────────────────
+
+def test_deep_strong_hint_not_hard_veto(validator):
+    """335号：deep 判定保留，但不触发硬否决（不进 hard_risks），L0 软约束压缩仓位"""
+    tags = {
+        'valuation_level': 'extreme_high',
+        'pe_percentile_5y': '95.0',
+        'valuation_deviation': '-30.0',
+    }
+    gate = validator._evaluate_gate('TEST.SH', tags)
+    assert gate['valuation'] == 'deep', f"应判 deep，实际 {gate['valuation']}"
+    # 非否决：deep 不进 hard_risks（硬否决仅限不可逆项：regulatory 等）
+    assert 'event_negative' not in gate['hard_risks'], \
+        f"deep 不应触发硬否决，实际 hard_risks={gate['hard_risks']}"
+
+    # L0 软约束（status_engine）：deep → 仓位系数 ×0.3（强提示+压缩，非剔除）
+    from app.opportunity_atlas.status_engine import StatusEngine
+    se = StatusEngine()
+    l0 = se._apply_l0(tags, {}, None)
+    assert not l0['hard_veto'], "deep 不应硬否决"
+    assert l0['position_coeff'] < 1.0, f"deep 应压缩仓位，实际 position_coeff={l0['position_coeff']}"

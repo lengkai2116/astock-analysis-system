@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# 331号 Step5（2026-08-13）：防静默——业务库连接校验在日志配置后调用
+# （见 create_app 内 _setup_logging 之后）
+
 db = SQLAlchemy()
 migrate = Migrate()
 # 2026-08-06 根治：强制 threading 模式（禁止 eventlet 自动选用）
@@ -139,6 +142,12 @@ def create_app():
     app.config.from_object(Config)
 
     _setup_logging(app)
+    # 331号 Step5（2026-08-13）：防静默——日志就绪后打印业务库连接，非 SQLite 告警
+    try:
+        from app.config import verify_business_db
+        verify_business_db()
+    except Exception as _vbd_err:
+        app.logger.warning('业务库校验跳过: %s', _vbd_err)
     db.init_app(app)
     migrate.init_app(app, db)
     # 单进程模式：SocketIO 直接广播，无需 Redis
@@ -180,7 +189,6 @@ def create_app():
     from app.routes.indicator_ide import indicator_ide_bp
     from app.routes.indicator_ide import indicator_ide_v3_bp
     from app.routes.reports import reports_bp
-    from app.routes.screener import screener_bp
     from app.routes.strategy_templates import strategy_templates_bp
     from app.routes.qmt import qmt_bp
     from app.routes.sandbox import sandbox_bp, sandbox_v3_bp
@@ -218,7 +226,6 @@ def create_app():
     app.register_blueprint(indicator_ide_bp)
     app.register_blueprint(indicator_ide_v3_bp)
     app.register_blueprint(reports_bp)
-    app.register_blueprint(screener_bp)
     app.register_blueprint(strategy_templates_bp)
     app.register_blueprint(sandbox_bp)
     app.register_blueprint(sandbox_v3_bp)

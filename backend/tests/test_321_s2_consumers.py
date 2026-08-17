@@ -41,7 +41,7 @@ def test_t4_deny_max_ratio_zero(validator):
 
 
 def test_t4_deny_without_gate_ratio_zero(validator):
-    """T4 变体：gate 缺省（从 tags 推导深度高估）→ 同样归零"""
+    """T4 变体：gate 缺省（从 tags 推导深度高估）→ 335号 S2.3 改仓位压缩（≤0.3）非归零"""
     tags = {
         'right_side_confirm': '强确认',
         'valuation_level': 'extreme_high',
@@ -49,8 +49,8 @@ def test_t4_deny_without_gate_ratio_zero(validator):
     }
     consensus = {'direction': 'bullish', 'consensus_rate': 0.80, 'total_active': 8}
     advice = validator._build_operation_advice('TEST.SZ', consensus, tags, None, None)
-    assert advice['max_position_ratio'] == 0.0, \
-        f"深度高估（gate 缺省推导）应归零，实际 {advice['max_position_ratio']}"
+    assert advice['max_position_ratio'] <= 0.3, \
+        f"深度高估（gate 缺省推导）应仓位压缩≤0.3，实际 {advice['max_position_ratio']}"
 
 
 # ══════════════════════════════════════════════════════════
@@ -121,3 +121,22 @@ def test_diagnose_includes_state(validator):
     assert advice['max_position_ratio'] == 0.0
     assert '回避' in result['cross_validation']['verdict'] or \
            '否决' in result['cross_validation']['verdict']
+
+
+def test_diagnose_consensus_uses_nine_dim_not_five_dim(validator):
+    """336号 S2 遗留：弹窗共识应来自 L1 九维推导（status_verdict），非五维推导（consensus_5d）
+
+    336号 §2.2 要求：弹窗摘要/个股页/快照全部读同一 L2 输出共识（成品仓唯一消费）。
+    五维推导（consensus_5d）是 S1 过渡口径，S2 后应切换到 L1 九维推导。
+    """
+    # 用真实股票验证（300705.SZ StatusEngine 九维：7看多/4中性/0看空）
+    result = validator.diagnose('300705.SZ')
+    consensus = result.get('cross_validation', {}).get('consensus', {})
+    # 关键断言：source 不应是 'five_dim'（S1 过渡口径）
+    source = consensus.get('_source', '')
+    assert source != 'five_dim', \
+        f"弹窗共识仍用五维推导（source={source}），应切换到 L1 九维推导（336号 S2）"
+    # 九维推导下 neutral_votes 应 ≥ 2（量价/位置/筹码资金/时间 至少 2 个中性）
+    neutral = consensus.get('neutral_votes', 0)
+    assert neutral >= 2, \
+        f"中性维度数 {neutral} 过少（五维推导特征），L1 九维推导应有 ≥2 个中性维度"

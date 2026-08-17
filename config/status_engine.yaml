@@ -1,0 +1,43 @@
+# status_engine.yaml — 现状判定引擎 L2 聚合配置（336号 §7）
+# 版本化可回滚：修改后 version+1，旧版可回滚（334号阈值管理机制）
+version: 1
+
+consensus:
+  enter_threshold: 0.67        # 可入场门槛（知识库 ≥2/3，336号 C1）
+  bearish_strong: 0.67         # 强看空 → avoid（对称 2/3）
+  color_high: 0.70             # 深蓝（高共识）细分，待分布校准
+  color_low: 0.67              # 浅蓝下限（低于 → wait/轻仓语义）
+  neutral_is_zero: true        # 中性维度不稀释共识（口径与 L4 一致）
+
+dimension_weights:             # 维度权重（336号预留，默认等权——"融合优于仲裁"渐进项）
+  valuation: 1.0
+  structure: 1.0
+  position: 1.0
+  chip_fund: 1.0
+  emotion: 1.0
+  finance: 1.0
+  event: 1.0
+  time: 1.0
+  risk: 1.0
+  factor: 1.0                  # 因子校验维
+
+conflict_rules:                # conflict_evidence 规则登记（336号 §4；文案模板同文件维护）
+  enabled: true
+  rules:
+    - trend_vs_multi            # 缠论方向 vs 多周期趋势
+    - high_profit_no_flow       # 高位获利盘
+    - distributing_vs_confirm   # 主力出货 vs 右侧确认
+    - risk_high_vs_confirm      # 结构风险 HIGH vs 右侧确认
+    - high_profit_no_presence   # 高位无主力在场（336号扩展）
+    - deep_valuation_confirm    # 深度高估 + 强确认（335号 deep 改强提示）
+
+l0:
+  hard_risks: [regulatory, st, delist]   # L0a 硬否决（335号）
+  soft_risk_coeff:                       # L0b 仓位系数（对齐 cross_validate._evaluate_gate）
+    fina_weak: 0.5
+    fina_fail: 0.5
+    distributing: 0.7
+    low_liquidity: 0.7
+    valuation_moderate: 0.5
+    valuation_mild: 0.8
+    deep_position_cap: 0.3               # deep 强提示 + 仓位压缩（335号 §3）

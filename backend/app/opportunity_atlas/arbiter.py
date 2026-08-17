@@ -54,9 +54,23 @@ _POS_EVENTS = {'earnings', 'lhb', 'concept', 'buyback', 'breakout', 'new_high', 
 _NEG_EVENTS = {'pledge', 'float', 'reduce', 'fraud_sign', 'regulatory', 'lawsuit', 'decline'}
 
 # P3 强看空阈值
-_BEARISH_STRONG = 0.65
+_BEARISH_STRONG = 0.67   # 336号 C1：对齐知识库 ≥2/3（原 0.65，阈值迁移 yaml status_engine.yaml）
 # P6 可入场看多阈值
-_BULLISH_ENTER = 0.55
+_BULLISH_ENTER = 0.67    # 336号 C1：对齐知识库 ≥2/3（原 0.55）
+# 335号 S2.3：深度高估（deep）不再硬否决——估值非绝对精准、可能突破，改强提示
+_DEEP_HINT = '深度高估：价格高位风险，注意追涨（估值非绝对精准，存在突破可能）'
+
+
+def _load_thresholds() -> None:
+    """从 config/status_engine.yaml 加载共识阈值（336号 §7，版本化可回滚）"""
+    global _BEARISH_STRONG, _BULLISH_ENTER
+    try:
+        from app.services.status_config import get_status_engine_config
+        _cons = get_status_engine_config().get('consensus', {})
+        _BEARISH_STRONG = float(_cons.get('bearish_strong', 0.67))
+        _BULLISH_ENTER = float(_cons.get('enter_threshold', 0.67))
+    except Exception:
+        pass
 
 
 def _light_vote(tag_name: str, value: Any) -> float:
@@ -152,56 +166,100 @@ def arbitrate(tags: dict, gate: dict = None, consensus: dict = None) -> dict:
 
     Returns:
         {'opportunity_state': 'enter'|'light'|'wait'|'avoid',
-         'state_evidence': [仲裁依据列表]}
+         'state_evidence': [仲裁依据列表],
+         'conflict_evidence': [矛盾维度列表]}   # 330号改进4：暴露冲突
     """
     if gate is None:
         gate = _derive_gate(tags)
     if consensus is None:
         consensus = _derive_consensus(tags)
+    _load_thresholds()
 
     evidence: list[str] = []
     rsc = str(tags.get('right_side_confirm', '') or '')
     direction = consensus.get('direction', 'neutral')
     rate = float(consensus.get('consensus_rate') or 0)
 
+    # ── 330号改进4：冲突维度暴露 ──
+    # 检测标签间矛盾（如 缠论趋势向下 vs 多周期趋势向上 / 高位获利盘 vs 可入场 /
+    # 结构高风险 vs 强确认），供前端风险边界展示——原 arbiter 硬合成掩盖冲突。
+    conflict_evidence: list[str] = []
+    _state_label = str(tags.get('state_label', '') or '')
+    _trend_al = str(tags.get('trend_alignment', '') or '')
+    _price_pos = str(tags.get('price_position', '') or '')
+    _risk = str(tags.get('risk_level', '') or '')
+    _mfp = str(tags.get('main_force_phase', '') or '')
+    _profit = tags.get('profit_ratio')
+    try:
+        _profit_f = float(_profit) if _profit not in (None, '') else None
+    except (TypeError, ValueError):
+        _profit_f = None
+    # 缠论方向 vs 多周期趋势 矛盾
+    if ('下降' in _state_label and _trend_al == 'up_aligned'):
+        conflict_evidence.append('缠论趋势下降 vs 多周期趋势向上（方向分歧）')
+    if ('上升' in _state_label and _trend_al == 'down_aligned'):
+        conflict_evidence.append('缠论趋势上升 vs 多周期趋势向下（方向分歧）')
+    # 高位获利盘 + 出货 → 风险提示
+    if _profit_f is not None and _profit_f >= 0.8 and '高位' in _price_pos:
+        conflict_evidence.append(f'获利盘 {_profit_f:.0%} 高位（追涨风险大）')
+    if _mfp == 'distributing' and rsc in ('强确认', '基础确认'):
+        conflict_evidence.append('主力出货阶段 vs 右侧确认看多（资金分歧）')
+    # 结构高风险 + 可入场类
+    if _risk == 'HIGH' and rsc in ('强确认', '基础确认'):
+        conflict_evidence.append('结构风险 HIGH vs 右侧确认（风险收益不匹配）')
+    # 336号 §4.2 扩展（缺失证据类）：高位无主力在场 / 深度高估+强确认
+    if _profit_f is not None and _profit_f >= 0.8 and str(tags.get('main_force_presence', '')) == 'none':
+        conflict_evidence.append(f'获利盘 {_profit_f:.0%} 高位且无主力在场证据（接续乏力风险）')
+    if gate.get('valuation') == 'deep' and rsc in ('强确认', '基础确认'):
+        conflict_evidence.append('深度高估 + 右侧确认（价格高位风险，注意追涨）')
+
     # ── P0 硬否决：右侧否决（缠论卖点/量价背离/预跌形态） → avoid ──
     if rsc == '否决':
         _append(evidence, '右侧否决：出现卖出/背离/预跌信号')
-        return {'opportunity_state': STATE_AVOID, 'state_evidence': evidence}
+        return {'opportunity_state': STATE_AVOID, 'state_evidence': evidence,
+                'conflict_evidence': conflict_evidence}
 
     # ── P1 硬风险：监管立案等不可逆负面事件 → avoid ──
     if 'event_negative' in gate.get('hard_risks', []):
         _append(evidence, '负面事件：监管立案风险')
-        return {'opportunity_state': STATE_AVOID, 'state_evidence': evidence}
+        return {'opportunity_state': STATE_AVOID, 'state_evidence': evidence,
+                'conflict_evidence': conflict_evidence}
 
-    # ── P2 深度高估：PE分位>90 或 dev<-20 → avoid ──
+    # ── 335号 S2.3：deep 强提示（非否决）——正常走 P3-P7 时机判定 ──
+    # 估值非绝对精准、部分股票存在较大价格突破可能性（用户决策 08-15），
+    # 深度高估从"一票否决"改为"高风险机会强提示 + 仓位压缩"。
     if gate.get('valuation') == 'deep':
-        _append(evidence, '深度高估：估值泡沫风险')
-        return {'opportunity_state': STATE_AVOID, 'state_evidence': evidence}
+        _append(evidence, _DEEP_HINT)
 
     # ── P3 强看空：L4 bearish 共识≥65% → avoid ──
     if direction == 'bearish' and rate >= _BEARISH_STRONG:
         _append(evidence, f'L4 强看空共识 {rate:.0%}')
-        return {'opportunity_state': STATE_AVOID, 'state_evidence': evidence}
+        return {'opportunity_state': STATE_AVOID, 'state_evidence': evidence,
+                'conflict_evidence': conflict_evidence}
 
     # ── P4 未确认 → wait ──
     if rsc == '未确认':
         _append(evidence, '右侧未确认：等待突破信号')
-        return {'opportunity_state': STATE_WAIT, 'state_evidence': evidence}
+        return {'opportunity_state': STATE_WAIT, 'state_evidence': evidence,
+                'conflict_evidence': conflict_evidence}
 
     # ── P5 可轻仓：基础确认 + 非强看空 → light ──
     if rsc == '基础确认':
         _append(evidence, '右侧基础确认，可轻仓')
-        return {'opportunity_state': STATE_LIGHT, 'state_evidence': evidence}
+        return {'opportunity_state': STATE_LIGHT, 'state_evidence': evidence,
+                'conflict_evidence': conflict_evidence}
 
     # ── P6 可入场：强确认 + bullish 共识≥55% → enter ──
     if rsc == '强确认':
         if direction == 'bullish' and rate >= _BULLISH_ENTER:
             _append(evidence, f'右侧强确认 + L4 看多共识 {rate:.0%}')
-            return {'opportunity_state': STATE_ENTER, 'state_evidence': evidence}
+            return {'opportunity_state': STATE_ENTER, 'state_evidence': evidence,
+                    'conflict_evidence': conflict_evidence}
         _append(evidence, '右侧强确认但 L4 共识不足，等待确认')
-        return {'opportunity_state': STATE_WAIT, 'state_evidence': evidence}
+        return {'opportunity_state': STATE_WAIT, 'state_evidence': evidence,
+                'conflict_evidence': conflict_evidence}
 
     # ── P7 默认：无明确时机信号 → wait（保守） ──
     _append(evidence, '无明确时机信号，默认等待')
-    return {'opportunity_state': STATE_WAIT, 'state_evidence': evidence}
+    return {'opportunity_state': STATE_WAIT, 'state_evidence': evidence,
+            'conflict_evidence': conflict_evidence}

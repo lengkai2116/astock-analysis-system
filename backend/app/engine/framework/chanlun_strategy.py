@@ -1408,7 +1408,19 @@ class DivergenceDetector:
         last_up = recent_up[-1]
         prev_up = recent_up[-2]
 
-        if last_up.end_price > prev_up.end_price:
+        # 342号核查修复（2026-08-16）：趋势校验——顶背驰须处于上涨结构
+        # （最近 up 笔创新高 且 上一个 down 回调未破前低，即 HH/HL 序列）。
+        # 原实现仅比较相邻两 up 笔创新高+幅度减弱，上涨结构中的普通回调
+        # （前低未破但力度减弱）被误判顶背驰。
+        _prev_down_before_up = next((s for s in reversed(strokes[:strokes.index(last_up)])
+                                     if s.direction == 'down'), None)
+        up_struct_ok = True
+        if _prev_down_before_up is not None and len(recent_down) >= 2:
+            # 顶背驰须整体上行：前一个 down 回调低点 ≥ 更早 down 回调低点（未破前低）
+            earlier_down = recent_down[-2]
+            up_struct_ok = (_prev_down_before_up.end_price >= earlier_down.end_price) if earlier_down else True
+
+        if up_struct_ok and last_up.end_price > prev_up.end_price:
             current_amp = last_up.amplitude
             prev_amp = prev_up.amplitude
 
@@ -1453,7 +1465,19 @@ class DivergenceDetector:
         last_down = recent_down[-1]
         prev_down = recent_down[-2]
 
-        if last_down.end_price < prev_down.end_price:
+        # 342号核查修复（2026-08-16）：趋势校验——底背驰须处于下跌结构
+        # （最近 down 笔创新低 且 上一个 up 反弹未创新高，即 LL/LH 序列）。
+        # 原实现仅比较相邻两 down 笔创新低+幅度减弱，上涨趋势中的普通回调
+        # （回调低点下移但未破坏上升结构）被误判底背驰→first_buy 泛滥（1176只）。
+        _prev_up_before_down = next((s for s in reversed(strokes[:strokes.index(last_down)])
+                                     if s.direction == 'up'), None)
+        down_struct_ok = True
+        if _prev_up_before_down is not None and len(recent_up) >= 2:
+            # 底背驰须整体下行：前一个 up 反弹高点 ≤ 更早 up 反弹高点（未创新高）
+            earlier_up = recent_up[-2]
+            down_struct_ok = (_prev_up_before_down.end_price <= earlier_up.end_price) if earlier_up else True
+
+        if down_struct_ok and last_down.end_price < prev_down.end_price:
             current_amp = last_down.amplitude
             prev_amp = prev_down.amplitude
 
@@ -1736,7 +1760,14 @@ class BuySellPointDetector:
                 div_pos = divergence.position or {}
                 div_idx = div_pos.get('idx', -1)
                 if div_idx >= last_stroke.start_idx:
-                    if divergence.direction == 'up':
+                    # 342号核查修复（2026-08-16）：趋势背驰 direction=背驰发生的趋势方向
+                    # （顶背驰=up=看空卖点 / 底背驰=down=看多买点），与其他背驰（direction=背驰后
+                    # 方向，up=看多买点）语义相反——原统一按 up→first_buy 映射导致底背驰被标成卖点
+                    if divergence.type == 'trend':
+                        is_buy = divergence.direction == 'down'
+                    else:
+                        is_buy = divergence.direction == 'up'
+                    if is_buy:
                         buy_points.append(BuySellPoint(type='first_buy',
                             confidence=divergence.confidence, position=divergence.position,
                             reason=f'下跌趋势背驰，{divergence.type}类型(快速)'))
@@ -1748,7 +1779,13 @@ class BuySellPointDetector:
 
         # 第一类买卖点：基于背驰（区分趋势背驰1和盘整背驰1p）
         if divergence and self._has_type('1'):
-            if divergence.direction == 'up':
+            # 342号核查修复（2026-08-16）：trend 背驰 direction=趋势方向（up=顶背驰=卖点、
+            # down=底背驰=买点）；consolidation/zhongshu 背驰 direction=背驰后方向（up=买点、down=卖点）
+            if divergence.type == 'trend':
+                is_first_buy = divergence.direction == 'down'
+            else:
+                is_first_buy = divergence.direction == 'up'
+            if is_first_buy:
                 bp_type = 'first_buy_p' if divergence.type == 'consolidation' else 'first_buy'
                 buy_points.append(BuySellPoint(
                     type=bp_type,
@@ -2839,106 +2876,6 @@ class StrategyValidationLayer:
                     })
 
         return validated
-
-from .screener import DarwinRiskFilter as _RealDarwinRiskFilter
-
-
-class DarwinRiskFilter(_RealDarwinRiskFilter):
-    """
-    达尔文风险过滤 - 委托给 screener.DarwinRiskFilter（方案G）
-    
-    保持 UniverseSelectionModel 接口兼容，实际逻辑由父类实现。
-    """
-    pass
-
-
-class MultiLayerStockScreener:
-    """完整的三层筛选器"""
-
-    def __init__(self):
-        self.risk_filter = DarwinRiskFilter()
-        self.validation_layer = StrategyValidationLayer()
-
-    def screen(self, all_stocks: List[str], stock_data: Dict[str, pd.DataFrame]) -> List[Dict]:
-        """
-        完整的三层筛选流程
-        
-        Args:
-            all_stocks: 全市场股票
-            stock_data: 股票数据
-        
-        Returns:
-            最终精选股票列表
-        """
-        risk_passed = self.risk_filter.filter(all_stocks, stock_data)
-
-        chip_candidates = self._chip_selection(risk_passed, stock_data)
-
-        final_candidates = self.validation_layer.validate(chip_candidates, stock_data)
-
-        return final_candidates
-
-    def _chip_selection(self, symbols: List[str], stock_data: Dict[str, pd.DataFrame]) -> List[Dict]:
-        """第二层：筹码筛选（简化实现）"""
-        candidates = []
-
-        for symbol in symbols:
-            df = stock_data.get(symbol)
-            if df is None or len(df) < 60:
-                continue
-
-            candidates.append({
-                'symbol': symbol,
-                'code': symbol,
-                'chip_score': 60,
-                'phase': 'unknown'
-            })
-
-        return candidates
-
-def analyze_single_stock(symbol: str, data: pd.DataFrame) -> Dict:
-    """
-    单只股票完整分析（用户自选股支持）
-    
-    Args:
-        symbol: 股票代码
-        data: K线数据
-    
-    Returns:
-        完整分析报告
-    """
-    analysis_result = {'symbol': symbol}
-
-    risk_filter = DarwinRiskFilter()
-    risk_check = risk_filter._apply_filters(symbol, data)
-    analysis_result['risk_check'] = {'passed': risk_check, 'reasons': []}
-
-
-    try:
-        analyzer = ChanlunAnalyzer()
-        chanlun_result = analyzer.analyze(data)
-
-        if 'error' in chanlun_result:
-            analysis_result['chanlun'] = {'error': chanlun_result['error']}
-        else:
-            scorer = ChanlunScorer()
-            score_result = scorer.score(chanlun_result)
-
-            analysis_result['chanlun'] = {
-                'success': True,
-                'summary': chanlun_result.get('summary', {}),
-                'score': score_result['score'],
-                'recommendation': score_result['recommendation'],
-                'buy_points': len(chanlun_result.get('buy_points', [])),
-                'sell_points': len(chanlun_result.get('sell_points', [])),
-                'trend': chanlun_result.get('trend', 'unknown'),
-                'has_zhongshu': len(chanlun_result.get('zhongshu', [])) > 0,
-                'has_divergence': chanlun_result.get('divergence') is not None
-            }
-    except Exception as e:
-        analysis_result['chanlun'] = {'error': str(e)}
-
-    return analysis_result
 
 
 class ChanlunTheoremValidator:

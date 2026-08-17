@@ -234,6 +234,34 @@ class SchedulerManager:
             except Exception:
                 pass
 
+        # ── 信号验证回算 T+5/T+10/T+20（345号第③层核查激活） ──
+        # 2026-08-16 修复：scheduler.py register_scheduler_jobs 定义了
+        # t5/t10/t20_checkpoint（18:00/18:05/18:10）但 scheduler_manager 从未
+        # 调用 register_scheduler_jobs → 1083 条 signal_records 全部 pending
+        # 未回算（345号 G3.1 样本不足根因）。此处显式注册每日回算任务。
+        # 仅 API 进程注册（daemon 模式由 data_daemon 独立管理，避免双调度）。
+        if not os.environ.get('DATA_DAEMON_RUNNING'):
+            for off, job_id, name, hh, mm in [
+                (5, 't5_checkpoint', '信号验证回算 T+5', 18, 0),
+                (10, 't10_checkpoint', '信号验证回算 T+10', 18, 5),
+                (20, 't20_checkpoint', '信号验证回算 T+20', 18, 10),
+            ]:
+                try:
+                    self._scheduler.add_job(
+                        lambda o=off: self._run_signal_checkpoint(o),
+                        CronTrigger(hour=hh, minute=mm),
+                        id=job_id,
+                        name=name,
+                        replace_existing=True,
+                        coalesce=True,
+                        max_instances=1,
+                        misfire_grace_time=3600,
+                    )
+                except Exception as e:
+                    logger.warning(f"注册 {name} 失败: {e}")
+        else:
+            logger.info("daemon 模式：信号验证回算由 data_daemon 独立管理，跳过 APScheduler 注册")
+
         # ── 盘中快照推送（迭代2：API 进程 APScheduler 推送） ──
         # 320号 L4：仅 API 进程注册（daemon 模式跳过——daemon 独立管理推送，
         # 否则 daemon 进程收盘后 APScheduler 每 5s 空转触发刷日志）
@@ -743,6 +771,23 @@ class SchedulerManager:
                 logger.info(f"月度 Stock 同步完成: {count} 只")
         except Exception as e:
             logger.error(f"月度 Stock 同步失败: {e}")
+
+    def _run_signal_checkpoint(self, days_offset: int):
+        """信号验证回算 T+5/T+10/T+20（345号第③层核查激活，2026-08-16）
+
+        signal_records 生命周期：pending → t5_checked → t10_checked → completed。
+        scheduler.py register_scheduler_jobs 定义了任务但从未接入调度，
+        此处由 scheduler_manager 显式注册每日 18:00/18:05/18:10 执行。
+        """
+        try:
+            from flask import current_app
+            with current_app.app_context():
+                from app.services.backtest_evidence_service import BacktestEvidenceService
+                service = BacktestEvidenceService()
+                service.run_checkpoint_update(days_offset)
+                logger.info(f"信号验证回算 T+{days_offset} 完成")
+        except Exception as e:
+            logger.error(f"信号验证回算 T+{days_offset} 失败: {e}")
 
     # ── 盘中快照推送包装器（迭代2） ─────────────────────────
 

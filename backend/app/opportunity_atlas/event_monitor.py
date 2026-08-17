@@ -421,6 +421,12 @@ class EventMonitor(DataAwareMixin):
                 result["direction"] = -2
                 result["confidence"] = 1.0
                 result["description"] = f"*ST 预警: {name}"
+            elif '退' in name:
+                # 335号 S2.4：退市整理股（名称含"退"）并入 ST 预警（对齐 chip_pre_filter 检测）
+                result["detected"] = True
+                result["direction"] = -2
+                result["confidence"] = 0.95
+                result["description"] = f"退市整理: {name}"
             elif 'ST' in name:
                 result["detected"] = True
                 result["direction"] = -1

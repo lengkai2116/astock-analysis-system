@@ -185,19 +185,21 @@ class PhaseDetectionEngine(DataAwareMixin):
         return {}
 
     def _dim_asr(self, ts_code: str, df: pd.DataFrame) -> dict:
-        """维度4 ASR 筹码分布：298 号 4 条规则，else → 全 0（去 washing 兜底）"""
+        """维度4 ASR 筹码分布：298 号 4 条规则，else → 全 0（去 washing 兜底）
+        2026-08-13 知识库对齐：ASR 0-100 量级（原 0-1，阈值×100）
+        """
         chip = self._chip_distribution_analysis(ts_code, df)
         asr = chip.get("asr", 0.0)
         peak_price = chip.get("peak_position", 0.0)
         current = df["close"].values[-1]
         rel = current / peak_price if peak_price > 0 else 1.0
-        if asr > 0.9 and rel < 0.95:
+        if asr > 90 and rel < 0.95:
             return {"lifting": 0.5}
-        if asr < 0.15 and abs(rel - 1.0) < 0.10:
+        if asr < 15 and abs(rel - 1.0) < 0.10:
             return {"building": 0.6}
-        if asr < 0.15 and rel > 1.2:
+        if asr < 15 and rel > 1.2:
             return {"lifting": 0.5}
-        if asr > 0.3 and rel > 1.05:
+        if asr > 30 and rel > 1.05:
             return {"distributing": 0.5}
         return {}   # 去 else→washing 兜底（312 §3.2 维度4）
 
@@ -549,21 +551,22 @@ class PhaseDetectionEngine(DataAwareMixin):
                 for i in range(len(chip_dist))
                 if price_low <= min_p + i * step <= price_high
             ) / total_chips
-            result["asr"] = round(asr, 4)
+            # 2026-08-13 知识库对齐：ASR 0-100 量级（原 0-1）
+            result["asr"] = round(asr * 100, 2)
 
             # 筹码主峰
             peak_idx = int(np.argmax(chip_dist))
             peak_price = min_p + peak_idx * step
             result["peak_position"] = peak_price
 
-            # ASR 信号（298号§三Step4 ASR量化阈值规则）
-            if asr > 0.9 and current_price < peak_price * 0.95:
+            # ASR 信号（298号§三Step4 ASR量化阈值规则，2026-08-13 阈值×100 对齐 0-100 量级）
+            if asr > 90 and current_price < peak_price * 0.95:
                 result["signal"] = PHASE_LIFTING  # ASR极高 + 价格低于峰值
-            elif asr < 0.15 and abs(current_price - peak_price) / max(peak_price, 1) < 0.1:
+            elif asr < 15 and abs(current_price - peak_price) / max(peak_price, 1) < 0.1:
                 result["signal"] = PHASE_BUILDING  # ASR极低 + 近峰值（筹码锁定在建仓范围）
-            elif asr < 0.15 and current_price > peak_price * 1.2:
+            elif asr < 15 and current_price > peak_price * 1.2:
                 result["signal"] = PHASE_LIFTING  # ASR极低 + 有浮盈（拉升途中）
-            elif asr > 0.3 and current_price > peak_price * 1.05:
+            elif asr > 30 and current_price > peak_price * 1.05:
                 result["signal"] = PHASE_DISTRIBUTING  # ASR上升 + 高于峰值（筹码扩散）
             else:
                 result["signal"] = PHASE_WASHING

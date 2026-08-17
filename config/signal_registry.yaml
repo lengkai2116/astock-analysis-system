@@ -1,0 +1,41 @@
+# signal_registry.yaml — 右侧信号注册表（334号 §5，方案2 一步到位）
+# 版本化可回滚：修改后 version+1；阈值定标交校准脚本（334号 §6 双轨回算）
+version: 1
+
+signals:
+  chan_third_buy:
+    name: 缠论三买
+    trigger: "buy_sell_point in (third_buy, third_buy_a, third_buy_b) 或 active_signal.type 同类"
+    verify_days: 3
+    verify_rule: "信号后 3 日收盘不破信号价"
+    lifecycle: {initial: {dist_pct: 0.05, days: 3}, extended: {dist_pct: 0.12, days: 10}}
+
+  volume_breakout:
+    name: 放量突破
+    trigger: "pattern_signal 含'突破' 且 vol_ratio ≥ 1.5 且突破前高"
+    verify_days: 3
+    verify_rule: "3 日收盘站稳突破位"
+    lifecycle: {initial: {dist_pct: 0.05, days: 3}, extended: {dist_pct: 0.12, days: 10}}
+
+  ma_bullish:
+    name: 均线多头
+    trigger: "ma_alignment = 多头 且 trend_alignment = up_aligned"
+    verify_days: 5
+    verify_rule: "5 日维持多头排列"
+    lifecycle: {initial: {dist_pct: 0.05, days: 3}, extended: {dist_pct: 0.12, days: 10}}
+
+  platform_breakout:
+    name: 平台突破
+    trigger: "中枢内横盘（time_rhythm）后向上突破 zs_high"
+    verify_days: 3
+    verify_rule: "3 日收盘站稳中枢上沿"
+    lifecycle: {initial: {dist_pct: 0.05, days: 3}, extended: {dist_pct: 0.12, days: 10}}
+
+  pattern_up:
+    name: 量价强势形态
+    trigger: "pattern_signal 预涨型 且 volume_price_fit ≠ diverging"
+    verify_days: 3
+    verify_rule: "3 日不破形态起点"
+    lifecycle: {initial: {dist_pct: 0.05, days: 3}, extended: {dist_pct: 0.12, days: 10}}
+
+# 待扩展（334号 §5.2）：lhb（龙虎榜战法类）

@@ -484,16 +484,15 @@ class ChipPreFilter:
         reasons = []
         passed = True
 
-        # 1. 新股排除
+        # 1. 新股排除（数据有效性硬约束：上市初期筹码分布不可靠）
         elig = self.eligibility_filter.check(ts_code)
         if not elig['passed']:
             passed = False
             reasons.append(elig['reason'])
 
-        # 2. 流动性过滤
+        # 2. 流动性过滤（332号 P0：改为风险标注不硬剔除——335号 L0b 可逆不否决，流动性差=操作提示）
         liq = self.liquidity_filter.check(ts_code)
         if not liq['passed']:
-            passed = False
             reasons.append(liq['reason'])
 
         # 3. 市值适配（不排除股票，只调整参数）
@@ -507,11 +506,14 @@ class ChipPreFilter:
             turnover_rate = liq['turnover_rate']
 
 
-        # Phase 2: 财务风险检查
+        # Phase 2: 财务风险检查（332号 P0：仅 ST/退市 硬过滤，其余标注——335号 L0b 可逆不否决；
+        # 原 ROCE<5%/财务异常硬剔除大量误杀（fina 数据缺失/单位问题），覆盖度 5%→目标≥90%）
         fin_risk = self.financial_risk_filter.check(ts_code)
         if not fin_risk['passed']:
-            passed = False
-            reasons.extend(fin_risk['reasons'])
+            for _r in fin_risk['reasons']:
+                if ('退市' in _r) or ('ST' in _r):
+                    passed = False
+                reasons.append(_r)
 
         # ROCE 指标（不排除股票，仅作为辅助参考）
         roce_result = self.roce_indicator.get_roce(ts_code)
@@ -592,11 +594,8 @@ class FinancialRiskFilter:
         reasons = []
         details = {}
 
-        # 1. 退市雷：检查股票代码和名称的ST标记
-        st_check = self._check_st_status(ts_code)
-        if not st_check['passed']:
-            reasons.append(st_check['reason'])
-        details['st_status'] = st_check
+        # 1. 退市雷（ST/*ST/退市名称）检测已迁移至 event_monitor（335号 §4：
+        #    机会图谱链路 L0a 硬否决拦截；本处不再重复检测，原 _check_st_status 已删除）
 
         # 2. 业绩雷：基于PE和daily_basic数据做初步判断
         profit_check = self._check_profit_risk(ts_code)
@@ -640,28 +639,6 @@ class FinancialRiskFilter:
             'reasons': reasons,
             'details': details,
         }
-
-    def _check_st_status(self, ts_code: str) -> Dict:
-        """检查退市雷：ST/*ST标记"""
-        # 从股票简称判断：ST开头即为ST股
-        try:
-            from app.models import Stock
-            stock = Stock.query.get(ts_code)
-            if stock is not None:
-                name = getattr(stock, 'name', '') or ''
-                if name.startswith('*ST') or name.startswith('ST'):
-                    return {'passed': False, 'reason': f'退市雷: {name} 为ST/*ST股，排除', 'name': name}
-                if '退' in name:
-                    return {'passed': False, 'reason': f'退市雷: {name} 已进入退市程序', 'name': name}
-                return {'passed': True, 'reason': '', 'name': name}
-        except Exception:
-            pass
-
-        # 从ts_code判断：以ST或退开头
-        if ts_code.startswith('ST') or 'ST' in ts_code:
-            return {'passed': False, 'reason': f'退市雷: {ts_code} 为风险警示股', 'name': ''}
-
-        return {'passed': True, 'reason': '', 'name': ''}
 
     def _check_profit_risk(self, ts_code: str) -> Dict:
         """检查业绩雷：基于PE和daily_basic"""
@@ -747,7 +724,10 @@ class FinancialRiskFilter:
                 return {'passed': True, 'reason': '', 'detail': '无成交额数据'}
 
             avg_amount = float(recent_amount.mean())
-            if avg_amount < 5000000:  # 500万
+            # 332号 P0 修复：daily_cache.amount 单位为千元（Tushare 口径），
+            # 原代码按"元"与 500 万比较（avg_amount < 5000000）误杀全部正常成交股
+            # （603897 实测 avg_amount=33万 千元 ≈ 3.3 亿元，实为正常流动性）。
+            if avg_amount * 1000 < 5000000:  # 500万（元）
                 return {
                     'passed': False,
                     'reason': f'流动性雷: 20日日均成交额{avg_amount/10000:.0f}万 < 500万',

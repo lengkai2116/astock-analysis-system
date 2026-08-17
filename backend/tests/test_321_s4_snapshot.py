@@ -103,3 +103,36 @@ def test_treemap_api_exposes_state():
         if found:
             break
     assert found, "API 响应 stock 项未找到 opportunity_state 字段"
+
+
+def test_l0_low_liquidity_soft_risk():
+    """342号核查补齐：status_engine._apply_l0 应识别换手率<1% 为 low_liquidity 软风险
+
+    对齐 cross_validate._evaluate_gate / 335号 L0b（low_liquidity×0.7 仓位系数）。
+    通过 mock dm.get_cached_daily_basic 返回低换手率，验证 soft_risks 与 position_coeff。
+    """
+    from app.opportunity_atlas.status_engine import StatusEngine
+    import pandas as pd
+
+    class _FakeDM:
+        def get_cached_daily_basic(self, ts_code):
+            return pd.DataFrame({'ts_code': [ts_code], 'trade_date': ['2026-08-14'],
+                                 'turnover_rate': [0.5]})  # 换手率 0.5% < 1%
+
+    se = StatusEngine(dm=_FakeDM())
+    l0 = se._apply_l0('000001.SZ', {}, {}, None)
+    assert 'low_liquidity' in l0['soft_risks'], \
+        f"换手率<1% 应识别 low_liquidity, 实际: {l0['soft_risks']}"
+    assert abs(l0['position_coeff'] - 0.7) < 1e-6, \
+        f"low_liquidity 仓位系数应为 0.7, 实际: {l0['position_coeff']}"
+
+    class _FakeDM2:
+        def get_cached_daily_basic(self, ts_code):
+            return pd.DataFrame({'ts_code': [ts_code], 'trade_date': ['2026-08-14'],
+                                 'turnover_rate': [3.0]})  # 换手率 3% 正常
+
+    se2 = StatusEngine(dm=_FakeDM2())
+    l0_ok = se2._apply_l0('000002.SZ', {}, {}, None)
+    assert 'low_liquidity' not in l0_ok['soft_risks'], \
+        f"换手率正常不应识别 low_liquidity, 实际: {l0_ok['soft_risks']}"
+    assert abs(l0_ok['position_coeff'] - 1.0) < 1e-6

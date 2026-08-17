@@ -54,35 +54,38 @@ def test_p1_hard_risk_derived_from_tags():
 
 
 # ══════════════════════════════════════════════════════════
-# P2 深度高估：gate.valuation=deep → avoid
+# 深度高估（335号 S2.3）：不再硬否决，改强提示（估值非绝对精准，可能突破）
 # ══════════════════════════════════════════════════════════
 
-def test_p2_deep_overval_avoid():
-    """深度高估（PE分位>90 或 dev<-20）→ avoid，即使时机强确认"""
+def test_p2_deep_overval_not_avoid():
+    """深度高估（PE分位>90 或 dev<-20）→ 不再 avoid（335号改强提示），正常走时机判定"""
     tags = {'right_side_confirm': '强确认'}
     gate = {'valuation': 'deep', 'hard_risks': [], 'soft_risks': []}
-    result = arbitrate(tags, gate=gate)
-    assert result['opportunity_state'] == 'avoid'
-    assert any('高估' in e for e in result['state_evidence'])
+    consensus = {'direction': 'bullish', 'consensus_rate': 0.80}
+    result = arbitrate(tags, gate=gate, consensus=consensus)
+    assert result['opportunity_state'] != 'avoid'
+    assert any('高估' in e for e in result['state_evidence']), \
+        "deep 应保留高估强提示"
 
 
 def test_p2_deep_overval_derived_from_tags():
-    """无 gate 传入时，从 tags 推导深度高估（valuation_level=extreme_high + PE分位>90）"""
+    """无 gate 传入时，从 tags 推导深度高估 → 强提示不否决"""
     tags = {
         'right_side_confirm': '强确认',
         'valuation_level': 'extreme_high',
         'pe_percentile_5y': 95,
     }
-    result = arbitrate(tags)
-    assert result['opportunity_state'] == 'avoid'
+    consensus = {'direction': 'bullish', 'consensus_rate': 0.80}
+    result = arbitrate(tags, consensus=consensus)
+    assert result['opportunity_state'] != 'avoid'
 
 
 # ══════════════════════════════════════════════════════════
-# P3 强看空：L4 bearish 且 consensus_rate≥0.65 → avoid
+# P3 强看空：L4 bearish 且 consensus_rate≥0.67 → avoid（336号 C1 对齐 ≥2/3，原 0.65）
 # ══════════════════════════════════════════════════════════
 
 def test_p3_strong_bearish_avoid():
-    """L4 强看空（bearish≥65%）→ avoid，即使时机为强确认"""
+    """L4 强看空（bearish≥67%）→ avoid，即使时机为强确认"""
     tags = {'right_side_confirm': '强确认'}
     consensus = {'direction': 'bearish', 'consensus_rate': 0.70}
     result = arbitrate(tags, consensus=consensus)
@@ -90,12 +93,21 @@ def test_p3_strong_bearish_avoid():
 
 
 def test_p3_weak_bearish_not_avoid():
-    """L4 弱看空（bearish<65%）不触发 P3 avoid，但 P6 需 bullish 才可入场 → wait"""
+    """L4 弱看空（bearish<67%）不触发 P3 avoid，但 P6 需 bullish 才可入场 → wait"""
     tags = {'right_side_confirm': '强确认'}
     consensus = {'direction': 'bearish', 'consensus_rate': 0.50}
     result = arbitrate(tags, consensus=consensus)
-    # 321号 §3.2 P6：可入场=强确认且 L4 bullish≥55%；弱看空不满足 → 回落到 wait
+    # 321号 §3.2 P6：可入场=强确认且 L4 bullish≥67%；弱看空不满足 → 回落到 wait
     assert result['opportunity_state'] not in ('avoid', 'enter')
+
+
+def test_p3_bearish_exact_boundary_067():
+    """336号 C1 边界：bearish consensus_rate=0.67（恰好 ≥2/3）→ avoid；0.66 → 不 avoid"""
+    tags = {'right_side_confirm': '强确认'}
+    hit = arbitrate(tags, consensus={'direction': 'bearish', 'consensus_rate': 0.67})
+    assert hit['opportunity_state'] == 'avoid', f"0.67 应触发 P3，实际 {hit['opportunity_state']}"
+    miss = arbitrate(tags, consensus={'direction': 'bearish', 'consensus_rate': 0.66})
+    assert miss['opportunity_state'] != 'avoid', f"0.66 不应触发 P3，实际 {miss['opportunity_state']}"
 
 
 # ══════════════════════════════════════════════════════════
@@ -122,13 +134,13 @@ def test_p5_basic_confirm_light():
 
 
 # ══════════════════════════════════════════════════════════
-# P6 可入场：强确认 + bullish≥0.55 → enter
+# P6 可入场：强确认 + bullish≥0.67 → enter（336号 C1 门槛对齐 ≥2/3，原 0.55）
 # ══════════════════════════════════════════════════════════
 
 def test_p6_strong_confirm_bullish_enter():
-    """右侧强确认 + L4 看多共识≥55% → enter"""
+    """右侧强确认 + L4 看多共识≥67%（336号 C1 门槛对齐 ≥2/3）→ enter"""
     tags = {'right_side_confirm': '强确认'}
-    consensus = {'direction': 'bullish', 'consensus_rate': 0.60}
+    consensus = {'direction': 'bullish', 'consensus_rate': 0.80}
     result = arbitrate(tags, consensus=consensus)
     assert result['opportunity_state'] == 'enter'
 

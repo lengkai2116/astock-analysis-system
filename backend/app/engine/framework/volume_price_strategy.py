@@ -4066,18 +4066,32 @@ class VolumePriceStrategy:
                 else:
                     tags['ma_alignment'] = 'mixed'
 
-            # volume_price_fit: 量价协调性（308号硬缺口④阈值调优，与 data_daemon._add_vp_simple_tags 对齐）
+            # volume_price_fit: 量价协调性（333号 项4：统一 P2 完整 analyze 权威——
+            # 废弃粗启发式[5日收益+量比阈值]，与 P2 信号共用 compute_volume_price_signal 组件）
             if len(df) >= 20:
-                ret_5 = df['close'].pct_change(5).iloc[-1] if len(df) >= 5 else 0
-                vol_ratio = df['vol'].iloc[-5:].mean() / max(df['vol'].iloc[-20:-5].mean(), 1)
-                if ret_5 > 0.02 and vol_ratio > 1.15:
-                    tags['volume_price_fit'] = 'healthy'       # 放量上涨
-                elif ret_5 < -0.02 and vol_ratio < 0.9:
-                    tags['volume_price_fit'] = 'healthy'       # 缩量下跌（卖压减轻）
-                elif ret_5 > 0.02 and vol_ratio < 0.8:
-                    tags['volume_price_fit'] = 'diverging'     # 显著缩量上涨(背离)
-                else:
-                    tags['volume_price_fit'] = 'neutral'
+                try:
+                    from app.engine.framework.volume_price_strategy import compute_volume_price_signal as _full_vp
+                    _full = _full_vp('', df)
+                    _sig = str((_full or {}).get('signal', '')).lower()
+                    _detail = str((_full or {}).get('volume_price_detail') or {})
+                    if _sig in ('bullish', 'up'):
+                        tags['volume_price_fit'] = 'healthy'
+                    elif _sig in ('bearish', 'down') or '背离' in _detail:
+                        tags['volume_price_fit'] = 'diverging'
+                    else:
+                        tags['volume_price_fit'] = 'neutral'
+                except Exception:
+                    # 兜底：完整 analyze 不可用时回退原粗逻辑
+                    ret_5 = df['close'].pct_change(5).iloc[-1] if len(df) >= 5 else 0
+                    vol_ratio = df['vol'].iloc[-5:].mean() / max(df['vol'].iloc[-20:-5].mean(), 1)
+                    if ret_5 > 0.02 and vol_ratio > 1.15:
+                        tags['volume_price_fit'] = 'healthy'
+                    elif ret_5 < -0.02 and vol_ratio < 0.9:
+                        tags['volume_price_fit'] = 'healthy'
+                    elif ret_5 > 0.02 and vol_ratio < 0.8:
+                        tags['volume_price_fit'] = 'diverging'
+                    else:
+                        tags['volume_price_fit'] = 'neutral'
 
             # volatility_level: 20日波动率
             if len(df) >= 20:

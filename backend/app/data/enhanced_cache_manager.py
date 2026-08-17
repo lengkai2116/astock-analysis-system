@@ -653,6 +653,15 @@ class EnhancedCacheManager:
         """)
         self._execute("CREATE INDEX IF NOT EXISTS idx_sync_req_status ON sync_requests(status)")
 
+        # ── tag_history 标签历史归档表（347号：P4 写标签时同步归档，支撑 L1.5 跨日核查） ──
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS tag_history (
+                ts_code TEXT, tag_name TEXT, tag_group TEXT, tag_value TEXT,
+                confidence REAL, evidence TEXT, source TEXT, updated_at TEXT,
+                PRIMARY KEY (ts_code, tag_name, updated_at)
+            )
+        """)
+
         # ── treemap 快照表（305号§2.2.1）：日终预提取的轻量快照，每日替换 ──
         self._execute("""
             CREATE TABLE IF NOT EXISTS treemap_snapshot (
@@ -686,6 +695,29 @@ class EnhancedCacheManager:
             )
         """)
         self._execute("CREATE INDEX IF NOT EXISTS idx_snapshot_ind ON treemap_snapshot(industry)")
+
+        # ── 337号 §3：status_snapshot 日频现状成品表（332总纲 成品仓·日频类） ──
+        # 与 treemap_snapshot 同管道生成（S2 status_engine 生产环节），原子替换每日更新；
+        # 图谱 API 合并读取（九维灯/状态条/conflict 展示）
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS status_snapshot (
+                ts_code             TEXT PRIMARY KEY,
+                snapshot_date       TEXT DEFAULT (date('now')),
+                trade_date          TEXT,
+                dim_states          TEXT,
+                status_bar          TEXT,
+                opportunity_state   TEXT,
+                state_evidence      TEXT,
+                conflict_evidence   TEXT,
+                consensus_rate      REAL,
+                direction           TEXT,
+                l0                  TEXT,
+                lifecycle           TEXT,
+                advice_params       TEXT,
+                created_at          TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+        """)
+        self._execute("CREATE INDEX IF NOT EXISTS idx_status_snapshot_state ON status_snapshot(opportunity_state)")
 
         # ── 管道状态表（305号§9.2）：链条驱动执行状态 ──
         self._execute("""
@@ -1974,19 +2006,35 @@ class EnhancedCacheManager:
     def request_data(self, task_type: str, ts_code: str = None) -> int:
         """写 sync_requests 队列表：通知 data_daemon 异步补采
 
+        342号核查修复（2026-08-16）：原实现用写连接 self.conn + busy_timeout=30s，
+        与 daemon 主循环写冲突时阻塞 30s——P2 计算线程（compute_batch worker）在
+        缠论多级别取数 miss 时逐级调用，北交所/次新股被逐只阻塞（920020.BJ 实测
+        93.5s，其中 request_data 锁等待占主导）。sync_requests 为通知性质（可容忍
+        少量丢失，daemon 完整性检查会兜底），改用独立短连接 + 短超时 + 失败静默，
+        不阻塞计算线程。
+
         Args:
-            task_type: 任务类型 ('full_daily' | 'full_moneyflow' | 'full_basic' | 'per_stock' | 'full_stock_list')
+            task_type: 任务类型（full_daily/full_moneyflow/full_basic/per_stock/full_stock_list）
             ts_code: 股票代码（None 表示全市场）
 
         Returns:
             request_id
         """
-        cur = self.conn.execute(
-            "INSERT INTO sync_requests (task_type, ts_code, status) VALUES (?, ?, 'pending')",
-            [task_type, ts_code]
-        )
-        self.conn.commit()
-        return cur.lastrowid
+        try:
+            import sqlite3 as _sq
+            req_conn = _sq.connect(self.db_path, timeout=2)
+            req_conn.execute("PRAGMA busy_timeout=2000")
+            cur = req_conn.execute(
+                "INSERT INTO sync_requests (task_type, ts_code, status) VALUES (?, ?, 'pending')",
+                [task_type, ts_code]
+            )
+            req_conn.commit()
+            rid = cur.lastrowid
+            req_conn.close()
+            return rid
+        except Exception:
+            # 写失败静默降级：通知丢失由 daemon 完整性检查兜底（不阻塞计算）
+            return 0
 
     def poll_data_ready(self, request_id: int) -> str:
         """轮询 sync_requests 状态
@@ -2152,11 +2200,20 @@ class EnhancedCacheManager:
         if not records:
             return
 
-        # 批量写入
+        # 批量写入（含同步归档 tag_history，347号）
         with self._write_lock:
             for r in records:
                 self.conn.execute(
                     """INSERT OR REPLACE INTO opportunity_tags_cache
+                       (ts_code, tag_name, tag_group, tag_value,
+                        confidence, evidence, source, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [r['ts_code'], r['tag_name'], r['tag_group'], r['tag_value'],
+                     r['confidence'], r['evidence'], r['source'], r['updated_at']]
+                )
+                # 347号：同步归档到 tag_history（ts_code+tag_name+updated_at 复合主键幂等）
+                self.conn.execute(
+                    """INSERT OR REPLACE INTO tag_history
                        (ts_code, tag_name, tag_group, tag_value,
                         confidence, evidence, source, updated_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -2245,7 +2302,65 @@ class EnhancedCacheManager:
         except Exception as e:
             logger.warning(f"get_snapshot_data_date 失败: {e}")
             return None
-            return None
+
+    def get_snapshot_history(self, ts_code: str = None,
+                             start_date: str = None, end_date: str = None,
+                             table: str = 'status_snapshot_history') -> list[dict]:
+        """读取快照历史（346号：多交易日快照保留，342号 §6.2 / G3.3 依赖）
+
+        只读网关：调用层经 DataManager 访问，禁止直查。表不存在时返回空列表。
+        """
+        try:
+            if table not in ('status_snapshot_history', 'treemap_snapshot_history'):
+                logger.warning(f"get_snapshot_history 非法表名: {table}")
+                return []
+            sql = f"SELECT * FROM {table} WHERE 1=1"
+            params = []
+            if ts_code:
+                sql += " AND ts_code=?"
+                params.append(ts_code)
+            if start_date:
+                sql += " AND snapshot_date>=?"
+                params.append(start_date)
+            if end_date:
+                sql += " AND snapshot_date<=?"
+                params.append(end_date)
+            sql += " ORDER BY snapshot_date, ts_code"
+            rows = self.read_conn.execute(sql, params).fetchall()
+            cols = [d[0] for d in self.read_conn.execute(f"SELECT * FROM {table} LIMIT 0").description]
+            return [dict(zip(cols, r)) for r in rows]
+        except Exception as e:
+            logger.warning(f"get_snapshot_history 失败: {e}")
+            return []
+
+    def get_tag_history(self, ts_code: str = None, tag_name: str = None,
+                        start_date: str = None, end_date: str = None) -> list[dict]:
+        """读取标签历史（347号：P4 写标签同步归档，支撑 L1.5 跨日标签核查）
+
+        只读网关：调用层经 DataManager 访问，禁止直查。表不存在时返回空列表。
+        """
+        try:
+            sql = "SELECT * FROM tag_history WHERE 1=1"
+            params = []
+            if ts_code:
+                sql += " AND ts_code=?"
+                params.append(ts_code)
+            if tag_name:
+                sql += " AND tag_name=?"
+                params.append(tag_name)
+            if start_date:
+                sql += " AND updated_at>=?"
+                params.append(start_date)
+            if end_date:
+                sql += " AND updated_at<=?"
+                params.append(end_date)
+            sql += " ORDER BY updated_at, ts_code, tag_name"
+            rows = self.read_conn.execute(sql, params).fetchall()
+            cols = [d[0] for d in self.read_conn.execute("SELECT * FROM tag_history LIMIT 0").description]
+            return [dict(zip(cols, r)) for r in rows]
+        except Exception as e:
+            logger.warning(f"get_tag_history 失败: {e}")
+            return []
 
     def get_previous_trade_date(self) -> str | None:
         """获取上一交易日（daily_cache 倒数第二日，2026-08-06 合规整改网关）"""

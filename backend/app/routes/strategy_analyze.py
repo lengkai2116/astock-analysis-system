@@ -5,10 +5,14 @@
 底层复用现有的 SignalComputationService / UPFEngine / StatusOutputService 等组件。
 """
 
+import json
 import logging
 import os
 from flask import Blueprint, request, jsonify
 from typing import Dict, List, Optional
+
+import logging
+logger = logging.getLogger(__name__)
 
 from app.services.status_output_service import StatusOutputService
 from app.engine.framework.conflict_arbiter import ConflictArbiter
@@ -606,24 +610,30 @@ def _get_latest_close(signals: List[Dict]) -> Optional[float]:
 
 
 def _build_vibe_dimension(ts_code: str, signals: List[Dict]) -> Dict:
-    """从信号中提取Vibe策略分析结果"""
-    vibe_sig = None
-    for s in signals:
-        if 'vibe' in (s.get('strategy_name', '') or '').lower():
-            vibe_sig = s
-            break
-    if not vibe_sig:
-        return {'signal': 'NEUTRAL', 'signal_label': '无Vibe策略分析', 'confidence': 0.0}
-    sig = vibe_sig.get('signal', 'NEUTRAL')
-    return {
-        'strategy_name': vibe_sig.get('strategy_name', 'Vibe策略'),
-        'signal': sig,
-        'signal_label': vibe_sig.get('signal_label', ''),
-        'direction': 'bullish' if sig == 'BUY' else ('bearish' if sig == 'SELL' else 'neutral'),
-        'confidence': vibe_sig.get('confidence', 0.0),
-        'evidence': vibe_sig.get('evidence', []),
-        'description': vibe_sig.get('description', ''),
-    }
+    """从信号中提取Vibe策略分析结果（Vibe 已剔除出 P2，返回空对象保持接口兼容）"""
+    return {'signal': 'NEUTRAL', 'signal_label': '无Vibe策略分析', 'confidence': 0.0}
+
+
+def _derive_signal_source_type(signals: List[Dict], tags: dict) -> str:
+    """334号 S2.8：从信号/标签推导右侧信号类型（信号注册表挂接）
+
+    注册表 5 类（signal_registry.yaml）：缠论三买/放量突破/均线多头/平台突破/量价强势形态。
+    未匹配 → 'other'（回算分群时归入通用样本）。
+    """
+    bsp = str((tags or {}).get('buy_sell_point', ''))
+    if '三买' in bsp or 'third_buy' in bsp:
+        return 'chan_third_buy'
+    vp = (signals or {}).get('量价分析策略') or {}
+    if '突破' in str(vp.get('signal_label', '')):
+        return 'volume_breakout'
+    if '多头' in str((tags or {}).get('ma_alignment', '')):
+        return 'ma_bullish'
+    ps = str((tags or {}).get('pattern_signal', ''))
+    if '突破' in ps:
+        return 'platform_breakout'
+    if ps and ps != 'none':
+        return 'pattern_up'
+    return 'other'
 
 
 # ──────────────────────────────────────────────
@@ -650,20 +660,9 @@ def strategy_analyze():
         period = 'long'
 
     try:
-        # Step 0: L1风控检查（渠道二前置风控）
-        risk_check = None
-        try:
-            from app.engine.framework.screener import DarwinRiskFilter
-            filter_engine = DarwinRiskFilter()
-            passed = filter_engine.filter([ts_code], {ts_code: None})
-            risk_check = {
-                'passed': len(passed) > 0 and passed[0] == ts_code if isinstance(passed, list) else bool(passed),
-                'reasons': [] if (len(passed) > 0 and passed[0] == ts_code) else ['未通过风控排查'] if isinstance(passed, list) else ['风控检查异常'],
-            }
-        except Exception as e:
-            risk_check = {'passed': True, 'reasons': [f'风控检查跳过: {e}']}
-
         # Step 1: 优先从缓存读取策略信号（287号方案 v2.3）
+        # （335号 S2.9：删除 Step 0 DarwinRiskFilter 前置风控——与 L0 gate 重复双轨，
+        #   统一走 L0 分级；原 risk_check 为死变量无消费方）
         from app.data import DataManager
         _dm = DataManager()
         # 322号 S0 对策1：优先当日缓存，miss 回退最新一条（非交易日命中），避免 5s 实时计算
@@ -759,10 +758,198 @@ def strategy_analyze():
                 _tags = None
             # 322号 S4：kronos_enabled 且推理成功时传入 Kronos 修正（AI预测仅供参考）
             _kronos_in = kronos_result if (kronos_enabled and kronos_result) else None
+            # 336号统一口径：用 StatusEngine L1 九维共识替代五维推导（弹窗/个股页/快照同源）
+            try:
+                from app.opportunity_atlas.status_engine import StatusEngine
+                _sv = StatusEngine().evaluate(ts_code)
+                _l1_consensus = {
+                    'consensus_rate': _sv.get('consensus_rate', 0),
+                    'bullish_votes': sum(1 for d in json.loads(_sv.get('dim_states', '{}')).values()
+                                         if d.get('light') == 'green'),
+                    'bearish_votes': sum(1 for d in json.loads(_sv.get('dim_states', '{}')).values()
+                                         if d.get('light') == 'red'),
+                    'direction': _sv.get('direction', 'neutral'),
+                    '_source': 'nine_dim',
+                }
+            except Exception as _e:
+                import logging
+                logging.getLogger(__name__).warning(f'L1 九维共识获取失败，回退五维: {_e}')
+                _l1_consensus = None
+                _l1_dirs = None
+            else:
+                # 从 L1 九维 dim_states 构建 dirs（11 维，green=+1/red=-1/yellow=0）
+                _l1_dirs = []
+                for _d in json.loads(_sv.get('dim_states', '{}')).values():
+                    _light = _d.get('light', 'yellow')
+                    _l1_dirs.append(1 if _light == 'green' else (-1 if _light == 'red' else 0))
             response_advice = build_operation_advice(ts_code, dimensions, signals, _df,
-                                                     kronos=_kronos_in, tags=_tags)
+                                                     kronos=_kronos_in, tags=_tags,
+                                                     consensus=_l1_consensus, dirs=_l1_dirs)
+            # ── 336号 S1.4：顶层字段结构对齐（与 diagnose 同构）──
+            # diagnose 侧在 operation_advice 上补旧字段（action/label/max_position_ratio/
+            # entry_plan/stop_loss/target_price）供旧消费方过渡；analyze 侧补齐同字段，
+            # 保证双端结构一致、前端读法统一（stop_loss 同源 executable.exit_rules）
+            try:
+                _ex_s1 = response_advice.get('executable') or {}
+                _pos_s1 = _ex_s1.get('position') or {}
+                response_advice['action'] = _ex_s1.get('action_type', 'hold')
+                response_advice['label'] = response_advice.get('summary', '')
+                response_advice['max_position_ratio'] = _pos_s1.get('max_pct', 0.0)
+                response_advice['entry_plan'] = [
+                    {'trigger': e.get('trigger'), 'pct': e.get('size_pct')}
+                    for e in _ex_s1.get('entry_rules', [])]
+                _sl_s1 = _ex_s1.get('exit_rules') or []
+                response_advice['stop_loss'] = (_sl_s1[0].get('trigger') if _sl_s1 else None)
+                response_advice['target_price'] = None
+            except Exception:
+                pass
+            # ── 330号改进2：操作建议接入验证环 ──
+            # operation_advice 生成后落库 SignalRecord（entry/risk/target 字段已具备），
+            # 复用现有 T+5/T+10/T+20 回测回调跟踪胜率——让"建议有效性可回答"。
+            # 仅记录 enter/light 类可执行建议（wait/avoid 无操作意义，不入环）。
+            if response_advice:
+                try:
+                    _ex = response_advice.get('executable') or {}
+                    _state = response_advice.get('state', '')
+                    _entry_rules = _ex.get('entry_rules') or []
+                    _exit_rules = _ex.get('exit_rules') or []
+                    _pos = _ex.get('position') or {}
+                    _entry_p = None
+                    if _entry_rules:
+                        import re as _re
+                        _m = _re.search(r'[\d.]+', str(_entry_rules[0].get('trigger') or ''))
+                        _entry_p = float(_m.group(0)) if _m else None
+                    _stop_p = None
+                    if _exit_rules:
+                        import re as _re2
+                        _m2 = _re2.search(r'[\d.]+', str(_exit_rules[0].get('trigger') or ''))
+                        _stop_p = float(_m2.group(0)) if _m2 else None
+                    _tgt = response_advice.get('target_levels') or []
+                    _tgt_p = _tgt[0].get('price') if _tgt else None
+                    if _state in ('enter', 'light') and _entry_p:
+                        logger.info(f"330改进2落库触发 {ts_code} state={_state} entry={_entry_p}")
+                        # 334号 S2.8：右侧信号类型（signal_registry.yaml 5 类，未匹配 → other）
+                        _src_type = _derive_signal_source_type(signals, _tags)
+                        _snapshot = {
+                            'direction': _state,
+                            'action_label': response_advice.get('action_label'),
+                            'summary': response_advice.get('summary'),
+                            'stop_loss': _stop_p,
+                            'target': _tgt_p,
+                            # 334号 S2.8：验证环挂接信号注册表——记录右侧信号类型
+                            # （signal_source_type，供 T+5/10/20 回算按类型分群校准生命周期阈值）
+                            'signal_source_type': _src_type,
+                            'position_max_pct': (_pos.get('max_pct') or 0),
+                            'opportunity_type': (_tags or {}).get('opportunity_type'),
+                        }
+                        _conf = (0.85 if response_advice.get('confidence') == '高'
+                                 else 0.6 if response_advice.get('confidence') == '中' else 0.3)
+                        # 路径1：SQLAlchemy（PostgreSQL 开发库）——record_signal 内部吞异常，
+                        # 用返回 None 判断是否真正写入成功
+                        _pg_ok = False
+                        # PG 快速可达性探测（避免 SQLAlchemy 连接超时挂起 analyze 响应）
+                        _pg_reachable = True
+                        try:
+                            import socket as _sock
+                            _pg_reachable = _sock.socket().connect_ex(
+                                ('127.0.0.1', 5432)) == 0
+                        except Exception:
+                            _pg_reachable = False
+                        if _pg_reachable:
+                            try:
+                                from app.services.backtest_evidence_service import BacktestEvidenceService
+                                _rec = BacktestEvidenceService().record_signal(
+                                    ts_code=ts_code,
+                                    strategy_name='operation_advice',
+                                    signal_type=_src_type,
+                                    confidence=_conf,
+                                    entry_price=_entry_p,
+                                    risk_line=_stop_p,
+                                    target_price=_tgt_p,
+                                    entry_zone_low=_entry_p * 0.99 if _entry_p else None,
+                                    entry_zone_high=_entry_p * 1.01 if _entry_p else None,
+                                    signal_snapshot=_snapshot,
+                                )
+                                _pg_ok = _rec is not None
+                            except Exception as _pg_err:
+                                _pg_ok = False
+                        # 路径2：PG 不可用或写入失败 → 回退 SQLite（本地无 PG 环境，
+                        # 写 data/app.db signal_records）——保证建议级验证数据可达
+                        if not _pg_ok:
+                            try:
+                                import json as _json2
+                                import sqlite3 as _sqlite3
+                                from datetime import date as _date
+                                import os as _os2
+                                # strategy_analyze.py 位于 backend/app/routes/，
+                                # 项目根 = 向上 3 层，app.db 在项目根 data/ 下
+                                _db_path = _os2.path.join(
+                                    _os2.path.dirname(_os2.path.dirname(_os2.path.dirname(
+                                        _os2.path.dirname(_os2.path.abspath(__file__))))),
+                                    'data', 'app.db')
+                                _conn = _sqlite3.connect(_db_path)
+                                _conn.execute(
+                                    'INSERT INTO signal_records (ts_code, signal_date, strategy_name, '
+                                    'signal_type, confidence, entry_price, risk_line, target_price, '
+                                    'entry_zone_low, entry_zone_high, verification_status, signal_snapshot, '
+                                    'created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                                    (ts_code, _date.today().isoformat(), 'operation_advice', _src_type,
+                                     _conf, _entry_p, _stop_p, _tgt_p,
+                                     _entry_p * 0.99 if _entry_p else None,
+                                     _entry_p * 1.01 if _entry_p else None,
+                                     'pending',
+                                     _json2.dumps(_snapshot, ensure_ascii=False),
+                                     _date.today().isoformat(), _date.today().isoformat()))
+                                _conn.commit()
+                                _conn.close()
+                            except Exception as _sl_err:
+                                logger.warning(f"operation_advice SQLite 落库失败 ({ts_code}): {_sl_err}")
+                except Exception as _rec_err:
+                    logger.warning(f"operation_advice 落库跳过 ({ts_code}): {_rec_err}")
         except Exception as _adv_err:
-            logger.debug(f"operation_advice 生成跳过 ({ts_code}): {_adv_err}")
+            logger.warning(f"operation_advice 生成跳过 ({ts_code}): {_adv_err}")
+
+        # ── 337号 S3：成品仓数据透出（status_snapshot 日频现状成品；日终生成前=None） ──
+        _status_row = None
+        _seven_dim_report = None
+        _status_verdict = None
+        try:
+            from app.data import DataManager as _DM2
+            _dm2 = _DM2()
+            _row = _dm2.cache._query_df(
+                "SELECT * FROM status_snapshot WHERE ts_code=? LIMIT 1", [ts_code])
+            if _row is not None and not _row.empty:
+                _r = _row.iloc[0]
+                _status_row = {
+                    'opportunity_state': _r.get('opportunity_state'),
+                    'status_bar': _r.get('status_bar'),
+                    'consensus_rate': _r.get('consensus_rate'),
+                    'direction': _r.get('direction'),
+                    'conflict_evidence': _r.get('conflict_evidence'),
+                    'dim_states': _r.get('dim_states'),
+                }
+                from app.opportunity_atlas.status_engine import build_seven_dim_report
+                _seven_dim_report = build_seven_dim_report(_r.to_dict())
+        except Exception as _ss_err:
+            _status_row = None
+            _seven_dim_report = None
+        # 336号 成品仓切换：status_engine 生产环节权威结论（实时 evaluate，不依赖日终快照）
+        try:
+            from app.opportunity_atlas.status_engine import StatusEngine
+            _verdict = StatusEngine().evaluate(ts_code)
+            if _verdict:
+                import json as _json3
+                _status_verdict = {
+                    'opportunity_state': _verdict['opportunity_state'],
+                    'status_bar': _verdict['status_bar'],
+                    'consensus_rate': _verdict['consensus_rate'],
+                    'direction': _verdict['direction'],
+                    'conflict_evidence': _json3.loads(_verdict['conflict_evidence'] or '[]'),
+                    'dim_states': _json3.loads(_verdict['dim_states'] or '{}'),
+                    'advice_params': _json3.loads(_verdict['advice_params'] or '{}'),
+                }
+        except Exception as _vv_err:
+            _status_verdict = None
 
         response = {
             'code': 0,
@@ -774,6 +961,12 @@ def strategy_analyze():
                 'data_availability': data_availability,
                 # 322号：操作建议（七维红绿灯+几何+情景概率+executable）
                 'operation_advice': response_advice,
+                # 337号 S3：成品仓数据透出（status_snapshot 日频现状成品；无数据=None）
+                # 七维模板按需组装（build_seven_dim_report）+ 九维状态（dim_states，弹窗九维灯同源）
+                'seven_dim_report': _seven_dim_report,
+                'status_snapshot': _status_row,
+                # 336号 成品仓切换：status_engine 生产环节权威结论（双模块唯一消费源）
+                'status_verdict': _status_verdict,
                 # NLG 规则生成的现状文本（读取时从信号数据自动渲染，非 DeepSeek）
                 'nlg_status_text': {k: v.get('status_text', '') for k, v in dimensions.items() if isinstance(v, dict)},
                 # 标记前端可调用 DeepSeek 独立端点（287号§十零改动选项）

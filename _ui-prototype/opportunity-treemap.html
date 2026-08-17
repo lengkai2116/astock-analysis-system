@@ -497,6 +497,8 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
     <div class="detail-section" id="d-verdict-section">
       <h4>★ 交叉验证</h4>
       <div id="d-verdict" style="font-size:13px;color:var(--text-secondary);line-height:1.7;"></div>
+      <!-- 337号 S3.1：九维状态灯（status_snapshot 成品仓，日终生成后显示） -->
+      <div id="d-dim-lights" style="margin-top:6px;font-size:12px;"></div>
     </div>
     <!-- 四行标签 -->
     <div class="detail-section" id="d-tags-section">
@@ -552,7 +554,7 @@ const HOLD_COLORS = {
 // 313号：时机信号色板（§五 5.2）— 蓝/黄/灰/棕，避开 A 股红涨绿跌
 // 大小=机会潜力强度；颜色=时机（闸门2 右侧确认 × 闸门3 L4 共识率）
 const TIMING_COLORS = {
-  '强确认': { high: '#2563eb', low: '#60a5fa' },   // 蓝：深=共识≥70% / 浅=55-70%
+  '强确认': { high: '#2563eb', low: '#60a5fa' },   // 蓝：深=共识≥70% / 浅=67-70%（336号 C1 门槛对齐 ≥2/3）
   '基础确认': '#eab308',                            // 黄：可轻仓
   '未确认': '#6b7280',                              // 灰：等待
   '否决': '#8b5a2b',                                // 棕：回避
@@ -568,7 +570,7 @@ function timingColor(confirm, consensus) {
 
 // 321号：机会状态机色板（§3.1 状态枚举）——与 TIMING_COLORS 同色系（蓝/黄/灰/棕）
 const STATE_COLORS = {
-  'enter': { high: '#2563eb', low: '#60a5fa' },   // 可入场：深蓝=共识≥70% / 浅蓝=55-70%
+  'enter': { high: '#2563eb', low: '#60a5fa' },   // 可入场：深蓝=共识≥70% / 浅蓝=67-70%（336号 C1）
   'light': '#eab308',                             // 可轻仓：黄
   'wait': '#6b7280',                              // 等待：灰
   'avoid': '#8b5a2b',                             // 回避：棕
@@ -1839,6 +1841,31 @@ function showDetail(data) {
             : ` &nbsp; 共识率 ${(con.consensus_rate * 100).toFixed(0)}%（${dir}）`) +
           (cv.verdict ? `<br/><span style="font-size:12px;color:var(--text-muted);margin-top:4px;display:block;">${cv.verdict}</span>` : '');
       }
+      // 336号 成品仓切换：优先消费 status_engine 权威结论（status_verdict），
+      // 回退 status_snapshot（diag.dim_states）——双模块唯一消费源
+      const svd = diag.status_verdict || null;
+      const dimStates = svd || (diag.dim_states || null);
+      const dimEl = document.getElementById('d-dim-lights');
+      if (dimStates && dimStates.dim_states && dimEl) {
+        const dm = dimStates.dim_states;
+        const _names = {valuation:'估值',structure:'结构',vp:'量价',position:'位置',chip_fund:'筹码资金',
+          emotion:'情绪',finance:'财务',event:'事件',time:'时间',risk:'风险',factor:'因子',
+          signal_confirm:'信号确认'};
+        dimEl.innerHTML = Object.keys(_names).map(k => {
+          const d = dm[k] || {};
+          const icon = d.light === 'green' ? '🟢' : d.light === 'red' ? '🔴' : '🟡';
+          const tip = (d.evidence || []).join('; ') || _names[k];
+          return `<span style="margin:0 5px 4px 0;display:inline-block;cursor:help;" title="${tip}">${icon}${_names[k]}</span>`;
+        }).join('') +
+          (dimStates.status_bar ? ` &nbsp; <b style="font-size:12px;">${dimStates.status_bar}</b>` : '');
+      }
+      // 336号：弹窗状态行优先 status_verdict（维度共识口径）
+      if (svd && verdictEl) {
+        const dir2 = svd.direction === 'bullish' ? '看多' : svd.direction === 'bearish' ? '看空' : '中性';
+        verdictEl.innerHTML = `★ 维度共识 ${(svd.consensus_rate * 100).toFixed(0)}%（${dir2}）` +
+          ` &nbsp; <span style="font-weight:600;">${svd.opportunity_state === 'enter' ? '可入场' : svd.opportunity_state === 'light' ? '可轻仓' : svd.opportunity_state === 'avoid' ? '回避' : '观望'}</span>` +
+          (cv.verdict ? `<br/><span style="font-size:12px;color:var(--text-muted);margin-top:4px;display:block;">${cv.verdict}</span>` : '');
+      }
       // 318号 S4：标签摘要升级为 diagnose.tags_summary 组合维度（每维度 2-3 项）
       const ts = diag.tags_summary || {};
       if (ts.direction || ts.position || ts.quality || ts.environment) {
@@ -1951,7 +1978,8 @@ function showLegendHelp() {
     '  · 颜色 = 涨跌幅（红涨绿跌）\n\n' +
     '🎯 机会地图：机会信号视图（313号）\n' +
     '  · 方块大小 = 机会潜力强度（越大机会越大，≠现在入场）\n' +
-    '  · 颜色 = 入场时机（蓝=可入场[深=共识≥70%] 黄=可轻仓 灰=等待 棕=回避）\n\n' +
+    '  · 颜色 = 入场时机（蓝=可入场[深=共识≥70%，浅=67-70%] 黄=可轻仓 灰=等待 棕=回避）\n' +
+    '  · 可入场门槛 = 维度共识 ≥67%（336号 知识库 ≥2/3；三处结论一致优先于颜色激进）\n\n' +
     '💎 价值地图：估值定位视图\n' +
     '  · 方块大小 = 前收盘价\n' +
     '  · 颜色 = 估值等级（深绿=严重低估 → 深红=高估）\n' +

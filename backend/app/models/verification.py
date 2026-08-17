@@ -22,7 +22,7 @@ class SignalRecord(db.Model):
     ts_code = db.Column(db.String(10), nullable=False, index=True)
     signal_date = db.Column(db.Date, nullable=False, index=True)
     strategy_name = db.Column(db.String(50), nullable=False)
-    signal_type = db.Column(db.String(20), nullable=False)  # BULLISH/BEARISH/NEUTRAL/WATCH
+    signal_type = db.Column(db.String(20), nullable=False)  # 334号 S2.8：右侧信号类型（旧数据为方向枚举 BULLISH/BEARISH/NEUTRAL/WATCH）
     confidence = db.Column(db.Float, default=0.0)
     entry_price = db.Column(db.Float, nullable=True)
     risk_line = db.Column(db.Float, nullable=True)

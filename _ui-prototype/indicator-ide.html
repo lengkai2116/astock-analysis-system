@@ -179,7 +179,6 @@ details.collapse .collapse-body { padding:var(--space-5) var(--space-8); border-
 .main-content { min-width:0; overflow-x:hidden; }
 /* 缩放自适应 */
 .chart-section { min-width:0; }
-.side-panel { min-width:260px; }
 
 /* 叠加指标行 */
 .overlay-tabs { display:flex; gap:6px; padding:var(--space-4) 0; margin-bottom:var(--space-4); overflow-x:auto; }
@@ -191,6 +190,7 @@ details.collapse .collapse-body { padding:var(--space-5) var(--space-8); border-
 .custom-tooltip { background:var(--bg-surface)!important; border:1px solid var(--color-brand-500)!important; border-radius:var(--radius-sm)!important; padding:var(--space-6) var(--space-8)!important; font-size:12px!important; line-height:1.7!important; box-shadow:0 4px 12px rgba(0,0,0,0.3)!important; }
 .chart-flex { display:flex; flex:1; min-width:0; }
 .chart-flex > .chart-section { flex:1; min-width:0; }
+.side-panel { min-width:260px; display:flex; flex-direction:column; gap:0; }
 
 /* 十字光标浮窗 */
 .tooltip-grid { display:grid; grid-template-columns:auto auto; gap:2px 12px; font-size:11px; }
@@ -495,6 +495,28 @@ details.collapse .collapse-body { padding:var(--space-5) var(--space-8); border-
   background: var(--bg-subtle); border-bottom: 1px solid var(--border-default);
 }
 .ap-subtitle { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+/* 2026-08-13 修复：操作建议摘要独立区域（信号灯/入场/失效/依据/七维），
+   置于三情景卡上方，避免全部内容堆入情景A */
+#apAdviceCard { padding: var(--space-6) var(--space-10) 0; }
+#apAdviceCard:empty { display: none; }
+/* ── 326号定稿：操作建议卡（完整 10 字段两列网格） ── */
+.advice-card { border: 1px solid rgba(59,130,246,0.30); border-radius: var(--radius-lg); overflow: hidden; }
+.advice-head { display: flex; align-items: center; gap: var(--space-6); flex-wrap: wrap; padding: var(--space-8) var(--space-10); background: linear-gradient(90deg, rgba(59,130,246,0.12), rgba(59,130,246,0.04)); border-bottom: 1px solid var(--border-default); }
+.advice-light { font-size: 26px; line-height: 1; }
+.advice-action { font-size: var(--fs-page-title); font-weight: 700; }
+.advice-conf { font-size: var(--fs-label); color: var(--text-muted); }
+.advice-body { padding: var(--space-8) var(--space-10); }
+.advice-fields { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+@media (max-width:1100px){ .advice-fields { grid-template-columns: 1fr; } }
+.af-item { display: flex; justify-content: space-between; gap: var(--space-6); padding: var(--space-4) var(--space-6); background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: var(--radius-sm); font-size: var(--fs-table); }
+.af-label { color: var(--text-muted); white-space: nowrap; }
+.af-value { text-align: right; font-weight: 500; color: var(--text-primary); }
+.af-value.red { color: #dc2626; } .af-value.green { color: #16a34a; } .af-value.blue { color: #3b82f6; }
+.af-full { grid-column: 1 / -1; }
+.evidence-bar { margin-top: var(--space-4); font-size: var(--fs-label); color: var(--text-muted); }
+/* ── 326号定稿：深度依据（标签解说全量/追问/来源/关注点） ── */
+#depthPanel { display: none; }
+#depthPanel.show { display: block; }
 .ap-scenarios { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4); padding: var(--space-8) var(--space-10); }
 @media (max-width:1100px) { .ap-scenarios { grid-template-columns: 1fr; } }
 .ap-scenarios .scenario-card {
@@ -538,7 +560,6 @@ details.collapse .collapse-body { padding:var(--space-5) var(--space-8); border-
       <button class="sidebar-toggle" onclick="toggleSidebar()">◀</button>
       <div class="sidebar-group"><div class="sidebar-group-title">概览</div><a href="dashboard.html" class="sidebar-item" data-name="仪表盘"><span class="icon">📊</span><span>仪表盘</span></a></div>
       <div class="sidebar-group"><div class="sidebar-group-title">分析</div>
-        <a href="screener.html" class="sidebar-item" data-name="选股系统"><span class="icon">🔍</span><span>选股系统</span></a>
         <a href="watchlist.html" class="sidebar-item" data-name="自选监控"><span class="icon">⭐</span><span>自选监控</span></a>
         <a href="indicator-ide.html" class="sidebar-item active" data-name="个股策略分析"><span class="icon">📈</span><span>个股策略分析</span></a>
         <a href="ai-analysis.html" class="sidebar-item" data-name="AI多角色投研"><span class="icon">🤖</span><span>AI 多角色投研</span></a>
@@ -809,7 +830,6 @@ details.collapse .collapse-body { padding:var(--space-5) var(--space-8); border-
           <div class="console-actions">
             <div class="console-adv-settings">
               <label class="kronos-toggle"><input type="checkbox" id="kronosToggle"><span class="toggle-dot"></span>Kronos AI</label>
-              <button class="btn-link" onclick="syncFromScreener()">📡 同步选股权重</button>
               <button class="btn-link" onclick="saveDefaultConfig()">💾 保存为默认</button>
             </div>
             <button class="console-run-btn" id="consoleRunBtn" onclick="startAnalysis()">▶ 运行分析</button>
@@ -904,83 +924,12 @@ details.collapse .collapse-body { padding:var(--space-5) var(--space-8); border-
               <div class="diag-tags-title">🏷️ 标签解说 <span style="font-size:11px;color:var(--text-muted);font-weight:400;">确定性解释 · 85 标签词典 · 零延迟</span></div>
               <div class="tag-expl" id="diagTagsBody" style="font-size:12px;color:var(--text-secondary);line-height:1.8;"></div>
             </div>
-            <!-- 326号：标签解说全量（词典化确定性解释，默认展开——"讲清现状"主线） -->
-            <details class="collapse" id="tagExplainFull" style="margin-top:var(--space-6);" open>
-              <summary>🏷️ 标签解说全量（85 标签词典，当前命中 <span id="tagExplainCount">0</span> 项）</summary>
-              <div class="collapse-body">
-                <div class="tag-expl" id="tagExplainFullBody"><div style="color:var(--text-muted);font-size:12px;">暂无命中标签（点击「运行分析」加载）</div></div>
-                <div style="margin-top:var(--space-4);font-size:11px;color:var(--text-muted);">来源：opportunity_tags_cache（P4 预计算）· 词典配置（tag_name → 大白话，85 标签全覆盖）· 未命中标签不占位</div>
-              </div>
-            </details>
-          </div>
-
-          <!-- DeepSeek 九层深度解读（326号：可选追问，默认折叠不加载） -->
-          <div class="status-deepseek" id="statusDeepseek">
-            <details class="collapse">
-              <summary>🤖 DeepSeek 追问：为什么给出这个判断？（可选，点击加载）</summary>
-              <div class="collapse-body">
-                <div style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-4);">点击后调用九层现状解读（DeepSeek + 知识库联动），默认不加载以保持零延迟。mock/无 key 时展示系统确定性结论。</div>
-                <div class="ds-body" id="dsBody">
-                  <div class="ds-placeholder" id="dsPlaceholder">点击上方「🤖 追问」加载深度解读</div>
-                </div>
-                <div class="ds-footer" id="dsFooter" style="display:none;margin-top:var(--space-4);">
-                  <span class="ds-word-count" id="dsWordCount"></span>
-                  <button class="btn-link" onclick="copyDeepseekText()">📋 复制全文</button>
-                </div>
-              </div>
-            </details>
           </div>
         </div>
 
-        <!-- ════════════════════ 策略建议 STRATEGY RECOMMENDATION ════════════════════ -->
-        <div class="strategy-rec" id="strategyRec">
-          <div class="rec-header">🎯 策略建议 <span class="rec-subtitle">基于当前状态分析</span></div>
-          <div class="rec-body">
-            <!-- 左上半：主信号与关键价位 -->
-            <div class="rec-signal">
-              <div class="rec-main">
-                <div class="rec-main-label">主信号</div>
-                <div class="rec-main-value" id="recSignal">--</div>
-                <div class="rec-main-conf" id="recConfidence">--</div>
-              </div>
-              <div class="rec-levels">
-                <div class="rl-row"><span class="rl-label">止损 ▓</span><span class="rl-val" id="recStopLoss">--</span></div>
-                <div class="rl-row"><span class="rl-label">止盈 ▓</span><span class="rl-val" id="recTakeProfit">--</span></div>
-                <div class="rl-row"><span class="rl-label">入场 ▓</span><span class="rl-val" id="recEntry">--</span></div>
-                <div class="rl-row"><span class="rl-label">目标 ▓</span><span class="rl-val" id="recTarget">--</span></div>
-              </div>
-            </div>
-            <!-- 右上半：关注点 -->
-            <div class="rec-focus">
-              <div class="rec-focus-title">关注点</div>
-              <div id="recFocusList" class="rec-focus-list">
-                <div class="rec-focus-empty">暂无数据</div>
-              </div>
-            </div>
-            <!-- 左下半：仓位管理 -->
-            <div class="rec-position">
-              <div class="rec-pos-title">仓位管理</div>
-              <div class="rec-pos-row">
-                <span class="rec-pos-label">建议仓位</span>
-                <span class="rec-pos-val" id="recPosition">--</span>
-              </div>
-              <div class="rec-pos-row">
-                <span class="rec-pos-label">持有周期</span>
-                <span class="rec-pos-val" id="recHoldingPeriod">--</span>
-              </div>
-              <div class="rec-pos-note" id="recPositionNote"></div>
-            </div>
-            <!-- 右下半：风险评估 -->
-            <div class="rec-risk">
-              <div class="rec-risk-title">风险评估</div>
-              <div class="rec-risk-body" id="recRiskBody"><span class="rec-risk-empty">暂无数据</span></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ════════════════════ 实操建议 ACTION PLAN ════════════════════ -->
+        <!-- ════════════════════ 操作建议 ACTION PLAN（326号定稿：建议卡+情景+按钮） ════════════════════ -->
         <div class="action-plan" id="actionPlan">
-          <div class="ap-header">📋 实操建议 <span class="ap-subtitle">基于当前分析结果，建议的操盘计划</span></div>
+          <div class="ap-header">📋 操作建议 <span class="ap-subtitle">基于当前分析结果，建议的操盘计划</span></div>
 
           <div class="ap-scenarios" id="apScenarios">
             <div class="scenario-card scenario-a" data-scenario="a">
@@ -1015,10 +964,57 @@ details.collapse .collapse-body { padding:var(--space-5) var(--space-8); border-
           </div>
         </div>
 
-        <!-- 数据来源追溯（折叠） -->
-        <div class="arb-sources" id="arbSources" style="display:none;">
-          <div class="arb-sources-header" onclick="toggleSources()">📎 数据来源 [点击展开]</div>
-          <div class="arb-sources-body" id="arbSourcesBody"></div>
+        <!-- ════════════════════ 深度依据 DEPTH EVIDENCE（326号定稿：标签全量+追问+来源+关注点） ════════════════════ -->
+        <div class="panel-card" id="depthPanel">
+          <div class="section-header">
+            <h3>📖 深度依据</h3>
+            <span class="section-sub">标签解说全量 · 数据来源 · 关注点 · DeepSeek 追问（可选）</span>
+          </div>
+
+          <!-- 标签解说全量（326号：词典化确定性解释，默认展开——"讲清现状"主线） -->
+          <details class="collapse" id="tagExplainFull" style="margin-top:0;" open>
+            <summary>🏷️ 标签解说全量（85 标签词典，当前命中 <span id="tagExplainCount">0</span> 项）</summary>
+            <div class="collapse-body">
+              <div class="tag-expl" id="tagExplainFullBody"><div style="color:var(--text-muted);font-size:12px;">暂无命中标签（点击「运行分析」加载）</div></div>
+              <div style="margin-top:var(--space-4);font-size:11px;color:var(--text-muted);">来源：opportunity_tags_cache（P4 预计算）· 词典配置（tag_name → 大白话，85 标签全覆盖）· 未命中标签不占位</div>
+            </div>
+          </details>
+
+          <!-- 关注点 / 风险评估（原策略建议卡迁移，326号定稿并入深度依据） -->
+          <details class="collapse">
+            <summary>🔎 关注点 / 风险评估</summary>
+            <div class="collapse-body">
+              <div class="rec-focus-title">关注点</div>
+              <div id="recFocusList" class="rec-focus-list">
+                <div class="rec-focus-empty">暂无数据</div>
+              </div>
+              <div class="rec-risk-title" style="margin-top:var(--space-6);">风险评估</div>
+              <div class="rec-risk-body" id="recRiskBody"><span class="rec-risk-empty">暂无数据</span></div>
+            </div>
+          </details>
+
+          <!-- DeepSeek 追问（326号：可选追问，默认折叠不加载） -->
+          <div class="status-deepseek" id="statusDeepseek">
+            <details class="collapse">
+              <summary>🤖 DeepSeek 追问：为什么给出这个判断？（可选，点击加载）</summary>
+              <div class="collapse-body">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:var(--space-4);">点击后调用九层现状解读（DeepSeek + 知识库联动），默认不加载以保持零延迟。mock/无 key 时展示系统确定性结论。</div>
+                <div class="ds-body" id="dsBody">
+                  <div class="ds-placeholder" id="dsPlaceholder">点击上方「🤖 追问」加载深度解读</div>
+                </div>
+                <div class="ds-footer" id="dsFooter" style="display:none;margin-top:var(--space-4);">
+                  <span class="ds-word-count" id="dsWordCount"></span>
+                  <button class="btn-link" onclick="copyDeepseekText()">📋 复制全文</button>
+                </div>
+              </div>
+            </details>
+          </div>
+
+          <!-- 数据来源追溯（折叠） -->
+          <div class="arb-sources" id="arbSources" style="display:none;">
+            <div class="arb-sources-header" onclick="toggleSources()">📎 数据来源 [点击展开]</div>
+            <div class="arb-sources-body" id="arbSourcesBody"></div>
+          </div>
         </div>
 
           </div><!-- /detail-col -->
@@ -2092,7 +2088,7 @@ function loadDiagnosisCard(tsCode){
       var metricsEl = document.getElementById('diagMetrics');
       if(metricsEl) metricsEl.innerHTML = metrics.join('');
 
-      // 326号：风险边界行（从快照风险类字段组装：right_side_confirm=否决 / risk_level=HIGH / 财务 fail / 事件负面）
+      // 326号+352号：风险边界行（L0b 风险标注增强）
       var rbEl = document.getElementById('diagRiskBoundary');
       if(rbEl){
         var risks = [];
@@ -2100,6 +2096,10 @@ function loadDiagnosisCard(tsCode){
         if(stock.risk_level === 'HIGH') risks.push('结构风险等级 HIGH（卖点或下降趋势）');
         if(stock.fina_health === 'fail') risks.push('财务排雷：fail（盈利恶化）');
         if(stock.volatility_level === 'high') risks.push('波动率偏高');
+        // 335号 L0b 软风险标注
+        if(stock.main_force_phase === 'distributing') risks.push('主力出货阶段（仓位压缩）');
+        if(['high','extreme_high'].indexOf(stock.valuation_level) >= 0) risks.push('估值偏高（仓位约束）');
+        if(stock.turnover_rate && stock.turnover_rate < 1.0) risks.push('流动性偏低（换手率<1%）');
         if(risks.length){
           rbEl.innerHTML = '⚠️ 风险边界：' + risks.join(' · ');
           rbEl.style.display = '';
@@ -2115,12 +2115,61 @@ function loadDiagnosisCard(tsCode){
         var html = renderTagExplainGrid(hitTags);
         tagsBody.innerHTML = html || '<div style="color:var(--text-muted);">无命中标签（词典未覆盖或标签缺失）</div>';
         tagsEl.style.display = hitTags.length ? '' : 'none';
-        // 同步填充"标签解说全量"折叠块
+        // 2026-08-13 修复：全量折叠块不再复制标签解说同一 html（内容完全相同），
+        // 改为渲染全部命中项（不截断前12）+ 来源标注——"全量"名副其实
         var fullBody = document.getElementById('tagExplainFullBody');
-        if(fullBody) fullBody.innerHTML = html || '<div style="color:var(--text-muted);font-size:12px;">无命中标签（词典未覆盖或标签缺失）</div>';
+        if(fullBody){
+          var fullHtml = (hitTags.length ? hitTags.map(function(h){
+            var grp = (window.TAG_DICTIONARY && window.TAG_DICTIONARY[h.name]) ? window.TAG_DICTIONARY[h.name][1] : '';
+            var grpCn = (window.TAG_GROUP_CN && window.TAG_GROUP_CN[grp]) ? window.TAG_GROUP_CN[grp] : grp;
+            var cn = (window.TAG_CN_NAME && window.TAG_CN_NAME[h.name]) ? window.TAG_CN_NAME[h.name] : h.name;
+            var vMap = (window.TAG_VALUE_CN && window.TAG_VALUE_CN[h.name]);
+            var valTxt = '';
+            if(vMap && typeof vMap === 'object'){
+              valTxt = vMap[String(h.value)] || String(h.value);
+            } else if(vMap){
+              valTxt = vMap;
+            } else if(h.value !== undefined){
+              valTxt = String(h.value);
+            }
+            if(window.TAG_VALUE_ASIS && window.TAG_VALUE_ASIS[h.name] && h.value !== undefined){
+              return '<div class="tag-item"><b>' + String(h.value) + '</b>' + (grpCn ? '（' + grpCn + '）' : '') + '</div>';
+            }
+            return '<div class="tag-item"><b>' + cn + (valTxt ? '：' + valTxt : '') + '</b>' + (grpCn ? '（' + grpCn + '）' : '') + '</div>';
+          }).join('') : '')
+            + '<div style="margin-top:var(--space-4);font-size:11px;color:var(--text-muted);">来源：opportunity_tags_cache（P4 预计算）· 未命中标签不占位</div>';
+          fullBody.innerHTML = fullHtml || '<div style="color:var(--text-muted);font-size:12px;">无命中标签（词典未覆盖或标签缺失）</div>';
+        }
         var cntEl = document.getElementById('tagExplainCount');
         if(cntEl) cntEl.textContent = hitTags.length;
       }
+    })
+    // 330号改进4：并行读取 diagnose 接口的 conflict_evidence，追加到风险边界行
+    // （treemap 快照无此字段；冲突证据让"HIGH风险 vs 可入场"等矛盾显性可见）
+    .then(function(){
+      fetch('/api/v3/opportunity-atlas/diagnose?ts_code=' + encodeURIComponent(tsCode))
+        .then(function(r){ return r.json(); })
+        .then(function(diag){
+          if(!diag.success || !diag.data) return;
+          var ce = diag.data.conflict_evidence || [];
+          if(ce && ce.length){
+            var rbEl2 = document.getElementById('diagRiskBoundary');
+            if(rbEl2){
+              // 336号 S3.4：冲突证据独立展示块（多条逐条渲染，暴露矛盾交还用户决策）
+              var conflictBlock = document.getElementById('dimConflictBlock');
+              if(!conflictBlock){
+                conflictBlock = document.createElement('div');
+                conflictBlock.id = 'dimConflictBlock';
+                conflictBlock.style.cssText = 'margin-top:6px;font-size:12px;color:#e6a23c;line-height:1.7;';
+                rbEl2.parentNode.insertBefore(conflictBlock, rbEl2.nextSibling);
+              }
+              conflictBlock.innerHTML = '⚔️ 维度冲突：' + ce.map(function(c){
+                return '<span style="display:block;">· ' + c + '</span>';
+              }).join('');
+              rbEl2.style.display = '';
+            }
+          }
+        }).catch(function(){});
     })
     .catch(function(){ grid.innerHTML = '<div class="diag-placeholder">诊断卡加载失败</div>'; });
 }
@@ -2148,27 +2197,192 @@ function collectHitTags(stock){
   Object.keys(keyMap).forEach(function(k){
     var v = keyMap[k];
     if(v !== undefined && v !== null && v !== '' && v !== 'none' && v !== 'None'){
+      // opportunity_type 与 opportunity_label 同值（如"洗盘整理"）时，只展示 label（值即中文现状）
+      if(k === 'opportunity_type' && keyMap['opportunity_label'] !== undefined && keyMap['opportunity_label'] !== null){
+        var _tMap = (window.TAG_VALUE_CN && window.TAG_VALUE_CN['opportunity_type']);
+        var _tTxt = (_tMap && typeof _tMap === 'object') ? (_tMap[String(v)] || String(v)) : String(v);
+        if(_tTxt === String(keyMap['opportunity_label'])) return;
+      }
       var exp = tagExplain(k);
-      if(exp) hits.push({ name: k, explain: exp });
+      if(exp) hits.push({ name: k, explain: exp, value: v });
     }
   });
   // 深度标签（structure/chip_deep/fund_risk 组，来自 tags 字典）
+  // 330号改进4：扩源——补入快照 tags 字典中已有的全部标签字段
+  // （trend_alignment/fund_flow/ma_alignment/volatility_level/volume_price_fit/
+  //  gap_type/pattern_signal/buy_sell_point 等原未采集，导致 83 标签只展示 8 个）
   var tags = stock.tags || {};
-  ['support_resistance','active_signal','active_signal_label','chip_peak','asr','net_lg_amount_5d','margin_cost_price','time_rhythm','price_position','chip_position','volume_price_fit','buy_sell_point'].forEach(function(k){
+  ['support_resistance','active_signal','active_signal_label','chip_peak','asr','net_lg_amount_5d','margin_cost_price','time_rhythm','price_position','chip_position','volume_price_fit','buy_sell_point',
+   'trend_alignment','fund_flow','ma_alignment','volatility_level','gap_type','pattern_signal','breakout_attempts','fcf_yield','dividend_yield','revenue_growth','roce_pass','roe','pe_percentile_5y','pb_percentile_5y','ps_percentile_5y','valuation_deviation','composite_rating','event_composite_score','event_summary','catalyst_event','catalyst_impact','upward_driver','chip_concentration'
+  ].forEach(function(k){
     if(tags[k] !== undefined && tags[k] !== null && String(tags[k]) !== '' && String(tags[k]) !== 'None'){
       var exp = tagExplain(k);
-      if(exp) hits.push({ name: k, explain: exp });
+      if(exp) hits.push({ name: k, explain: exp, value: tags[k] });
     }
   });
   return hits;
 }
 
 // ── 326号：渲染标签解说网格（2列，命中项 + 组标注） ──
+// 2026-08-13 修复：原实现只渲染"词典值域枚举"（如"机会状态：可入场/轻仓/等待/回避"），
+// 完全未使用该股票的实际命中值——用户看到的是词典条目而非股票现状。
+// 改为：TAG_VALUE_CN 提供"实际值 → 中文现状叙述"，渲染 <字段名>：<实际值现状>（组）。
+window.TAG_GROUP_CN = {
+  'derived': '推导', 'structure': '结构', 'chip_deep': '筹码深度',
+  'fund_risk': '资金风险', 'direction': '方向', 'position': '位置',
+  'quality': '质量', 'environment': '环境',
+};
+window.TAG_CN_NAME = {
+  'signal_strength': '信号强度', 'right_side_confirm': '右侧确认',
+  'opportunity_state': '机会状态', 'opportunity_type': '机会类型',
+  'opportunity_label': '机会标签', 'opportunity_profile': '机会画像',
+  'evidence_count': '证据数', 'main_force_presence': '主力在场',
+  'phase_conflict': '阶段冲突', 'support_resistance': '支撑阻力',
+  'zhongshu_strength': '中枢强度', 'multi_level': '多级别联立',
+  'near_levels_filtered': '近端关键位', 'active_signal': '有效信号',
+  'active_signal_label': '信号名称', 'momentum': '动量背驰',
+  'state_label': '趋势状态', 'risk_level': '风险等级',
+  'chip_peak': '筹码主峰', 'asr': '活跃浮筹', 'cyqkl': '穿越筹码强度',
+  'concentration': '筹码集中度', 'profit_ratio': '获利盘比例',
+  'ssrp': '平均成本价', 'avg_vol_100': '百日均量', 'peak_count': '筹码峰数',
+  'peak_type': '筹码峰类型', 'net_lg_amount_5d': '5日大单净额',
+  'margin_cost_price': '融资成本价', 'buy_sell_point': '缠论买卖点',
+  'trend_alignment': '趋势一致性', 'ma_alignment': '均线排列',
+  'volume_price_fit': '量价配合度', 'pattern_signal': 'K线形态',
+  'gap_type': '跳空缺口', 'breakout_attempts': '突破尝试',
+  'valuation_level': '估值档位', 'valuation_deviation': '估值偏离',
+  'pe_percentile_5y': 'PE分位', 'pb_percentile_5y': 'PB分位',
+  'ps_percentile_5y': 'PS分位', 'price_position': '价格位置',
+  'chip_position': '筹码位置', 'style_exposure': '风格暴露',
+  'fcf_yield': '自由现金流收益率', 'dividend_yield': '股息率',
+  'revenue_growth': '营收增速', 'main_force_phase': '主力阶段',
+  'phase_confidence': '阶段置信度', 'fund_flow': '资金流向',
+  'capital_nature': '资金性质', 'chip_concentration': '筹码集中状态',
+  'fina_health': '财务健康', 'roce_pass': 'ROCE达标', 'roe': 'ROE',
+  'sentiment_phase': '市场情绪', 'sector_heat': '板块热度',
+  'catalyst_event': '催化事件', 'catalyst_impact': '事件影响',
+  'volatility_level': '波动率等级', 'upward_driver': '上涨驱动力',
+  'time_rhythm': '时间节奏', 'event_composite_score': '事件综合分',
+  'event_summary': '事件摘要',
+};
+window.TAG_VALUE_CN = {
+  'opportunity_state': {
+    'enter': '当前可入场', 'light': '当前可轻仓', 'wait': '当前建议等待', 'avoid': '当前建议回避',
+  },
+  'right_side_confirm': {
+    '强确认': '强确认（右侧信号明确）', '基础确认': '基础确认（右侧信号基本成立）',
+    '未确认': '未确认（右侧信号不足）', '否决': '否决（右侧信号转弱）',
+  },
+  'main_force_phase': {
+    'building': '主力建仓期', 'washing': '主力洗盘期', 'lifting': '主力拉升期',
+    'distributing': '主力出货期', 'unknown': '主力阶段不明',
+  },
+  'fina_health': {
+    'pass': '健康', 'suspicious': '存疑', 'fail': '风险',
+  },
+  'valuation_level': {
+    'extreme_low': '严重低估', 'low': '偏低', 'fair': '合理',
+    'high': '偏高', 'extreme_high': '高估',
+  },
+  'sentiment_phase': {
+    'recovery': '情绪复苏期', 'climax': '情绪高潮期', 'ebb': '情绪退潮期', 'ice': '情绪冰点期',
+  },
+  'main_force_presence': {
+    'strong': '主力在场（龙虎榜证据）', 'moderate': '主力在场（筹码集中）',
+    'risk': '主力杠杆风险', 'none': '主力不在场',
+  },
+  'trend_alignment': {
+    'up_aligned': '多周期趋势同向向上', 'down_aligned': '多周期趋势同向向下', 'mixed': '多周期趋势分歧',
+  },
+  'fund_flow': {
+    '5d_inflow': '5日主力净流入', '5d_outflow': '5日主力净流出',
+    'mixed': '资金流向均衡', 'none': '无明显资金流向',
+  },
+  'volume_price_fit': {
+    'healthy': '量价配合健康', 'diverging': '量价背离', 'neutral': '量价中性',
+  },
+  'risk_level': {
+    'HIGH': '结构风险高', 'MEDIUM': '结构风险中', 'LOW': '结构风险低',
+  },
+  'price_position': {
+    'high_zone': '价格处高位', 'mid_zone': '价格处中位', 'low_zone': '价格处低位',
+  },
+  'style_exposure': {
+    'cyclical': '周期风格', 'large_growth': '大盘成长', 'large_value': '大盘价值',
+    'small_value': '小盘价值', 'small_growth': '小盘成长', 'none': '风格不明',
+  },
+  'capital_nature': {
+    'hot_money': '游资主导', 'institutional': '机构主导', 'unknown': '资金性质不明',
+  },
+  'sector_heat': {
+    'none': '板块热度低', 'normal': '板块热度正常', 'top_10': '板块热度前10',
+    'top_20': '板块热度前20', 'top_30': '板块热度前30',
+  },
+  'phase_conflict': {
+    'True': '主力阶段多维分歧大', 'False': '主力阶段多维一致',
+  },
+  'support_resistance': '缠论中枢区间',
+  'active_signal': '当前有效缠论信号',
+  'active_signal_label': '有效信号',
+  'chip_peak': '筹码主峰',
+  'asr': '活跃浮筹比例',
+  'net_lg_amount_5d': '5日大单净额',
+  'margin_cost_price': '融资成本价',
+  'time_rhythm': '时间节奏',
+  'chip_position': '筹码位置',
+  'buy_sell_point': '缠论买卖点',
+  'opportunity_type': {
+    'avoid_only': '回避·仅观察', 'build_high': '建仓高位矛盾', 'building_watch': '主力建仓观察',
+    'cold_value': '冷门价值', 'danger_overval': '高估风险区域', 'danger_zone': '风险区域',
+    'default': '一般机会', 'dividend_play': '高股息机会', 'event_driven': '事件驱动',
+    'event_watch': '事件观察', 'lifting_general': '拉升阶段', 'no_signal': '无明确信号',
+    'quality_unknown': '优质不明', 'steady_rise': '慢牛上涨', 'value_bottom': '估值底部',
+    'wash_general': '洗盘整理', 'wash_hot': '洗盘热点关注突破',
+  },
+  'signal_strength': '机会潜力强度',
+};
+// 值即中文现状的字段（如 opportunity_label="洗盘整理"）：直接展示值，不重复字段名
+window.TAG_VALUE_ASIS = {
+  'opportunity_label': true,
+};
+
 function renderTagExplainGrid(hits){
   if(!hits || !hits.length) return '';
   return hits.slice(0, 12).map(function(h){
     var grp = (window.TAG_DICTIONARY && window.TAG_DICTIONARY[h.name]) ? window.TAG_DICTIONARY[h.name][1] : '';
-    return '<div class="tag-item"><b>' + h.name + '</b> — ' + h.explain + (grp ? '（' + grp + '）' : '') + '</div>';
+    var grpCn = (window.TAG_GROUP_CN && window.TAG_GROUP_CN[grp]) ? window.TAG_GROUP_CN[grp] : grp;
+    var cn = (window.TAG_CN_NAME && window.TAG_CN_NAME[h.name]) ? window.TAG_CN_NAME[h.name] : h.name;
+    // 330号改进4：结构位按现价过滤——support_resistance/near_levels_filtered 等
+    // JSON 结构位中 historical 中枢（偏离>30%）与现价下方"压力位"会误导用户，
+    // 渲染前剔除：保留距现价 ±30% 内的有效结构位。
+    if((h.name === 'support_resistance' || h.name === 'near_levels_filtered') && typeof h.value === 'string'){
+      try{
+        var _parsed = JSON.parse(h.value);
+        var _list = Array.isArray(_parsed) ? _parsed : [_parsed];
+        var _cur = window._currentTsCode ? (window._lastPrice || null) : null;
+        // 无法获取现价时（快照未带 price），直接剔除 historical 标记项
+        var _filtered = _list.filter(function(it){
+          if(it && it.historical) return false;
+          return true;
+        });
+        h.value = JSON.stringify(_filtered.length ? _filtered : _list.filter(function(it){ return !it.historical; }));
+      }catch(e){ /* 非 JSON 原样展示 */ }
+    }
+    // 实际值现状：优先 TAG_VALUE_CN 映射（值→中文现状）；纯解释型字段（如 chip_peak）用词典解释
+    var vMap = (window.TAG_VALUE_CN && window.TAG_VALUE_CN[h.name]);
+    var valTxt = '';
+    if(vMap && typeof vMap === 'object'){
+      valTxt = vMap[String(h.value)] || String(h.value);
+    } else if(vMap){
+      valTxt = vMap;   // 纯解释型字段：字段值即现状描述
+    } else if(h.value !== undefined){
+      valTxt = String(h.value);
+    }
+    // 值即中文现状的字段（opportunity_label 等）：直接用值作为标题，不再重复字段名
+    if(window.TAG_VALUE_ASIS && window.TAG_VALUE_ASIS[h.name] && h.value !== undefined){
+      return '<div class="tag-item"><b>' + String(h.value) + '</b>' + (grpCn ? '（' + grpCn + '）' : '') + '</div>';
+    }
+    return '<div class="tag-item"><b>' + cn + (valTxt ? '：' + valTxt : '') + '</b>' + (grpCn ? '（' + grpCn + '）' : '') + '</div>';
   }).join('');
 }
 
@@ -2182,7 +2396,7 @@ function switchStock(tsCode){
   var loading = document.getElementById('strategyLoading');
   if(loading){ loading.style.display = 'none'; loading.classList.remove('show'); }
   // 清空新组件
-  ['stockStatus','strategyRec','actionPlan'].forEach(function(id){
+  ['stockStatus','actionPlan','depthPanel'].forEach(function(id){
     var el = document.getElementById(id);
     if(el){ el.style.display = 'none'; el.classList.remove('show'); }
   });
@@ -2200,6 +2414,13 @@ function switchStock(tsCode){
       if(!res || !res.success || !res.data) return;
       var stock = res.data.stock;
       var latest = res.data.latest || {};
+
+      // 2026-08-13 修复：URL ?ts_code= 跳转（机会图谱弹窗）时 _currentTsName 为空，
+      // kline 接口返回 stock.name，回填名称避免名称位显示成代码
+      if(stock && stock.name && !_currentTsName){
+        _currentTsName = stock.name;
+        updateCodeInput(tsCode, stock.name);
+      }
 
       // 将真实K线数据应用到全局变量，替换mock
       var realApplied = applyRealData(res.data);
@@ -2223,12 +2444,9 @@ function switchStock(tsCode){
 
       updateTopBarPrice(latest.close, latest.pct_chg);
 
-      // 右侧股票名
-      var stockNameEl = document.querySelector('.stock-name-code');
-      if(stockNameEl){
-        var codeSpan = stockNameEl.querySelector('span');
-        if(codeSpan) codeSpan.textContent = ' ' + tsCode;
-      }
+      // 2026-08-13 修复：删除原"右侧股票名"覆盖逻辑——其 querySelector('span')
+      // 命中名称位 #sh-name-text 并改写为代码，导致名称/代码两处均显示 ts_code
+      // （renderZszqGrid 已正确更新名称位与代码位，kline 回调已回填名称）
     })
     .catch(function(){});
 
@@ -2927,7 +3145,10 @@ function htmlToIframe(html){
 }
 
 function loadChanlunCharts(tsCode){
-  var container = document.getElementById('chanlunCharts');
+  // 2026-08-13 修复：原查 getElementById('chanlunCharts') 但 HTML 无此 id
+  // （容器为 chanlunChartLong/Short）→ 函数直接 return，缠论永不加载。
+  // 改为查真实存在的容器 id。
+  var container = document.getElementById('chanlunChartLong') || document.getElementById('chanlunChartShort');
   if(!container) return;
   container.style.display = ''; container.classList.add('show');
 
@@ -2974,13 +3195,13 @@ window.TAG_DICTIONARY = {
   // derived 组
   'signal_strength': ['机会潜力强度（0-100）', 'derived'],
   'right_side_confirm': ['右侧确认档位：强确认/基础确认/未确认/否决', 'derived'],
-  'opportunity_state': ['机会状态：enter 可入场 / light 轻仓 / wait 等待 / avoid 回避', 'derived'],
+  'opportunity_state': ['机会状态：可入场 / 轻仓 / 等待 / 回避', 'derived'],
   'opportunity_type': ['机会类型标签（估值/事件/趋势等归因）', 'derived'],
   'opportunity_label': ['机会类型中文标签', 'derived'],
   'opportunity_profile': ['七维机会画像（价值/风险/趋势/量价/资金/情绪/事件红绿灯）', 'derived'],
   'evidence_count': ['交叉验证证据数（越多置信度越高）', 'derived'],
-  'main_force_presence': ['主力在场判定：strong 龙虎榜证据 / moderate 筹码集中 / risk 融资杠杆 / none', 'derived'],
-  'phase_conflict': ['主力阶段多维投票冲突标记（True=分歧大）', 'derived'],
+  'main_force_presence': ['主力在场判定：强（龙虎榜证据）/中（筹码集中）/风险（融资杠杆）/无', 'derived'],
+  'phase_conflict': ['主力阶段多维投票冲突标记（是=分歧大）', 'derived'],
   // structure 组（缠论结构深度）
   'support_resistance': ['缠论最近中枢区间，即当前主要支撑/阻力带', 'structure'],
   'zhongshu_strength': ['缠论中枢强度（走势重心稳固度）', 'structure'],
@@ -2990,11 +3211,11 @@ window.TAG_DICTIONARY = {
   'active_signal_label': ['有效信号中文名称（如缠论二买）', 'structure'],
   'momentum': ['缠论动量/背驰强度（level+score）', 'structure'],
   'state_label': ['缠论趋势中文态（上升/下降/待定）', 'structure'],
-  'risk_level': ['结构风险等级：HIGH/MEDIUM/LOW（卖点或下降趋势→HIGH）', 'fund_risk'],
+  'risk_level': ['结构风险等级：高/中/低（卖点或下降趋势→高）', 'fund_risk'],
   // chip_deep 组（筹码分布深度）
   'chip_peak': ['筹码主峰价（最大筹码密集区）', 'chip_deep'],
-  'asr': ['活跃浮筹比例 ASR（0-1，越高换手越活跃）', 'chip_deep'],
-  'cyqkl': ['K线穿越筹码强度（0-1，穿越密集区力度）', 'chip_deep'],
+  'asr': ['活跃浮筹比例 ASR（0-100，>90 高浮筹=当前价筹码密集=突破前蓄势）', 'chip_deep'],
+  'cyqkl': ['K线穿越筹码强度（0-100，>30 强、>60 加速拉升）', 'chip_deep'],
   'concentration': ['筹码集中度（越高筹码越集中）', 'chip_deep'],
   'profit_ratio': ['获利盘比例（现价下方筹码占比，0-1）', 'chip_deep'],
   'ssrp': ['市场平均成本价（筹码重心）', 'chip_deep'],
@@ -3030,7 +3251,7 @@ window.TAG_DICTIONARY = {
   'fund_flow': ['资金流向：净流入/净流出/均衡', 'quality'],
   'capital_nature': ['资金性质：机构/游资/散户（龙虎榜席位）', 'quality'],
   'chip_concentration': ['筹码集中状态：集中/分散/稳定', 'quality'],
-  'fina_health': ['财务健康：pass 健康 / suspicious 存疑 / fail 风险', 'quality'],
+  'fina_health': ['财务健康：健康 / 存疑 / 风险', 'quality'],
   'roce_pass': ['资本回报率达标（ROCE>15%）', 'quality'],
   'roe': ['净资产收益率（%）', 'quality'],
   // environment 组
@@ -3419,35 +3640,7 @@ var _analysisRunning = false;
 var _analysisTimer = null;
 
 // toggleStrategyConfig 已废弃，由操作台替代
-
-function syncFromScreener(){
-  fetch('/api/v3/screener/fusion-config')
-    .then(function(r){ return r.json(); })
-    .then(function(res){
-      if(!res || !res.success || !res.data) throw new Error('sync fail');
-      var weights = res.data.weights || {};
-      var dimMap = { 'chip': 'chip', 'chanlun': 'chanlun', 'factor': 'factor', 'vp': 'vp', 'bociasi': 'emotion' };
-      document.querySelectorAll('#consoleStrategyToggles .console-toggle').forEach(function(t){
-        var name = t.getAttribute('data-strategy');
-        var key = Object.keys(dimMap).find(function(k){ return dimMap[k] === name; });
-        if(key && weights[key] != null){
-          var checked = weights[key] > 0;
-          t.classList.toggle('checked', checked);
-          var cb = t.querySelector('input[type=checkbox]');
-          if(cb) cb.checked = checked;
-        }
-      });
-      var count = document.querySelectorAll('#consoleStrategyToggles .console-toggle.checked').length;
-      var total = document.querySelectorAll('#consoleStrategyToggles .console-toggle').length;
-      var countEl = document.getElementById('consoleStrategyCount');
-      if(countEl) countEl.textContent = count+'/'+total;
-      showToast('✅ 已从选股系统同步策略配置');
-      saveDefaultConfig();
-    }).catch(function(){
-      loadDefaultConfig();
-      showToast('⚠️ 使用本地保存的配置');
-    });
-}
+// syncFromScreener 已移除（335号 S2.9：选股器 API 清理，fusion-config 路由删除）
 
 function saveDefaultConfig(){
   try{ localStorage.setItem('strategy_console_config', JSON.stringify(getConsoleConfig())); }catch(e){}
@@ -3542,8 +3735,8 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
   _analysisRunning = false;
   var loading = document.getElementById('strategyLoading');
   var stockStatus = document.getElementById('stockStatus');
-  var strategyRec = document.getElementById('strategyRec');
   var actionPlan = document.getElementById('actionPlan');
+  var depthPanel = document.getElementById('depthPanel');
   var bar = document.getElementById('loadingProgressBar');
   var runBtn = document.getElementById('consoleRunBtn');
 
@@ -3559,20 +3752,18 @@ function finishAnalysisReal(analysisData, verificationData, kronosEnabled){
     window._lastDims = dims;
     window._lastAvailability = availability;
 
-    // 1. 股票现状卡片
+    // 1. 股票现状卡片（一句话总览 + 现状描述）
     renderOverviewBar(analysisData);
     renderStockStatus(dims, availability, analysisData.deepseek_text);
     if(stockStatus) { stockStatus.style.display = ''; stockStatus.classList.add('show'); }
 
-    // 2. 策略建议
+    // 2. 操作建议（建议卡 + 三情景）+ 深度依据（326号定稿：原策略建议卡并入）
     renderStrategyRecommendation(dims, verificationData, analysisData);
-    if(strategyRec) { strategyRec.style.display = ''; strategyRec.classList.add('show'); }
-
-    // 3. 实操建议
     renderActionPlan(analysisData, verificationData);
     if(actionPlan) { actionPlan.style.display = ''; actionPlan.classList.add('show'); }
+    if(depthPanel) { depthPanel.style.display = ''; depthPanel.classList.add('show'); }
 
-    // 4. 缠论结构图（当缠论策略勾选时）
+    // 3. 缠论结构图（当缠论策略勾选时）
     var config = getConsoleConfig();
     if(config && config.strategies && config.strategies.chanlun){
       loadChanlunCharts(_currentTsCode);
@@ -3679,59 +3870,9 @@ function renderStockStatus(dimensions, availability, deepseekText){
 
 function hashCode(s){ var h=0; for(var i=0;i<s.length;i++){ h=((h<<5)-h)+s.charCodeAt(i); h|=0; } return Math.abs(h); }
 
-// ── 2. 渲染策略建议（326号：改读 operation_advice，删前端硬编码） ──
+// ── 2. 渲染深度依据中的"关注点/风险"（326号定稿：原策略建议卡并入深度依据） ──
 function renderStrategyRecommendation(dimensions, verificationData, analysisData){
-  var oa = analysisData && analysisData.operation_advice;
-  var signalEl = document.getElementById('recSignal');
-  var confEl = document.getElementById('recConfidence');
-
-  // 主信号 + 置信度 — 优先 operation_advice（action_label/confidence）；回退五维推导
-  var signalLabel = '观察';
-  var signalClass = 'watch';
-  var conf = null;
-  if(oa){
-    if(oa.signal_light === '🔴'){ signalLabel = '回避'; signalClass = 'sell'; }
-    else if(oa.signal_light === '🟡'){ signalLabel = '观望'; signalClass = 'watch'; }
-    else if(oa.signal_light === '🟢'){ signalLabel = (oa.action_label || '关注'); signalClass = 'buy'; }
-    if(oa.confidence === '高') conf = 0.85;
-    else if(oa.confidence === '中') conf = 0.6;
-    else if(oa.confidence === '低') conf = 0.3;
-  } else {
-    var trend = dimensions.factor && dimensions.factor.trend || (dimensions.chanlun && dimensions.chanlun.direction) || '';
-    if(trend === 'up' || trend === 'bullish'){ signalLabel = '买入'; signalClass = 'buy'; }
-    else if(trend === 'down' || trend === 'bearish'){ signalLabel = '卖出'; signalClass = 'sell'; }
-    else if(trend === 'hold' || trend === 'neutral'){ signalLabel = '持仓'; signalClass = 'hold'; }
-    var confRaw = dimensions.factor && dimensions.factor.confidence;
-    conf = (typeof confRaw === 'number' && !isNaN(confRaw)) ? confRaw : null;
-  }
-  if(signalEl){ signalEl.textContent = signalLabel; signalEl.className = 'rec-main-value '+signalClass; }
-  if(confEl) confEl.textContent = '置信度 '+(conf != null ? conf.toFixed(2) : '--');
-
-  // 关键价位 — 优先 operation_advice（executable 60日低点防守位 / target_levels）；回退缠论
-  var stopLoss = null, takeProfit = null, entry = null, target = null;
-  if(oa){
-    if(oa.executable && oa.executable.exit_rules && oa.executable.exit_rules.length){
-      var m = String(oa.executable.exit_rules[0].trigger || '').match(/[\d.]+/);
-      if(m) stopLoss = parseFloat(m[0]);
-    }
-    if(oa.target_levels && oa.target_levels.length) target = oa.target_levels[0].price;
-    if(oa.executable && oa.executable.entry_rules && oa.executable.entry_rules.length){
-      var m2 = String(oa.executable.entry_rules[0].trigger || '').match(/[\d.]+/);
-      if(m2) entry = parseFloat(m2[0]);
-    }
-  }
-  if(stopLoss == null){
-    var sr = dimensions.chanlun && dimensions.chanlun.status_recognition;
-    var levels = sr && sr.support_resistance || {};
-    var nearLevels = sr && sr.near_levels_filtered || [];
-    stopLoss = levels.support || (nearLevels.length > 0 ? nearLevels[0].support : '--');
-    takeProfit = levels.resistance || (nearLevels.length > 0 ? nearLevels[0].resistance : '--');
-  }
-  if(target == null && takeProfit != null) target = takeProfit;
-  setText('recStopLoss', typeof stopLoss === 'number' ? stopLoss.toFixed(2) : stopLoss);
-  setText('recTakeProfit', typeof takeProfit === 'number' ? takeProfit.toFixed(2) : takeProfit);
-  setText('recEntry', entry != null ? '≤'+entry.toFixed(2) : '--');
-  setText('recTarget', target != null ? target.toFixed(2) : '--');
+  // 主信号/关键价位/仓位 已由操作建议卡（advice-card）承载，此处仅渲染关注点与风险评估
 
   // 关注点 — 从验证链和DeepSeek文本提取
   var focusList = document.getElementById('recFocusList');
@@ -3753,23 +3894,7 @@ function renderStrategyRecommendation(dimensions, verificationData, analysisData
     focusList.innerHTML = focuses.slice(0,4).map(function(f){ return '<div class="rec-focus-item">'+f+'</div>'; }).join('');
   }
 
-  // 仓位管理 — 优先 operation_advice（executable.position）；回退旧规则
-  var pos = '--';
-  if(oa && oa.executable && oa.executable.position){
-    pos = Math.round(oa.executable.position.max_pct * 100) + '%';
-  } else if(dimensions.chip && dimensions.chip.fake_institution && dimensions.chip.fake_institution.suspected){
-    pos = '20% (警惕假机构)';
-  } else {
-    pos = '50%';
-  }
-  setText('recPosition', pos);
-  setText('recHoldingPeriod', (oa && oa.expected_holding) || '波段持有 2-4周');
-  var posNote = document.getElementById('recPositionNote');
-  if(posNote) posNote.textContent = (oa && oa.executable && oa.executable.entry_rules && oa.executable.entry_rules.length)
-    ? '触发：' + oa.executable.entry_rules[0].trigger
-    : (conf > 0.6 ? '放量突破后加仓至70%' : '当前观望为主，等待信号确认');
-
-  // 风险评估 — 验证链未通过数（并入诊断卡风险边界，此处保留摘要）
+  // 风险评估 — 验证链未通过数
   var riskBody = document.getElementById('recRiskBody');
   if(riskBody){
     var riskText = verificationData && verificationData.verification_chains ?
@@ -3788,57 +3913,94 @@ function renderActionPlan(analysisData, verificationData){
   // 322号 S2：优先读后端 operation_advice（现状描述化：红绿灯+大白话+动态情景概率）；无则回退旧推导
   var oa = analysisData && analysisData.operation_advice;
   if (oa && oa.dimensions && oa.dimensions.length) {
-    // 323号 S7a：建议卡摘要（顶层信号灯 + 动作 + 仓位 + 止损 + 目标 + 持有期 + 置信度）
-    var cardHtml = '';
+    // 326号定稿：操作建议卡（advice-card 两列字段网格）
+    // ① advice-head：信号灯 + 动作 + 置信度 + Kronos
+    var headHtml = '';
     if (oa.signal_light || oa.action_label) {
       var slTxt = oa.signal_light || '';
       var lightColor = slTxt === '🟢' ? '#16a34a' : (slTxt === '🔴' ? '#dc2626' : '#ca8a04');
-      cardHtml += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;' +
-                  'padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;' +
-                  'background:var(--bg-card, rgba(255,255,255,0.03));">' +
-        '<span style="font-size:18px;color:'+lightColor+';font-weight:700;">'+slTxt+'</span>' +
-        '<span style="font-weight:700;color:var(--text-primary);font-size:14px;">'+(oa.action_label||'')+'</span>' +
-        (oa.confidence ? '<span class="s-tag" style="opacity:.8;">置信度 '+oa.confidence+'</span>' : '') +
-        (oa.kronos_note ? '<span style="font-size:11px;color:#8b5cf6;margin-left:4px;">'+oa.kronos_note+'</span>' : '') +
-        (oa.executable && oa.executable.position ? '<span class="s-tag" style="opacity:.8;">建议仓位 '+(oa.executable.position.max_pct*100)+'%</span>' : '') +
-        '<div style="flex-basis:100%;font-size:12px;color:var(--text-muted);margin-top:2px;">' +
-        (oa.expected_holding ? '预期持有：'+oa.expected_holding + '；' : '') +
-        ((oa.target_levels||[]).length ? '目标位：'+oa.target_levels.map(function(t){return t.price;}).join(' / ')+'（参考压力位）' : '') +
-        '</div></div>';
+      headHtml = '<div class="advice-head">' +
+        '<span class="advice-light" style="color:'+lightColor+';">'+slTxt+'</span>' +
+        '<span class="advice-action" style="color:'+lightColor+';">'+(oa.action_label||'')+'</span>' +
+        (oa.confidence ? '<span class="advice-conf">置信度 '+oa.confidence+'</span>' : '') +
+        (oa.kronos_note ? '<span class="advice-conf" style="color:#8b5cf6;">'+oa.kronos_note+'</span>' : '') +
+        '</div>';
     }
-    // 326号：入场区间 + 触发条件（entry_rules 中文化，323 §3.1 补渲染）
-    var entryHtml = '';
+    // ② advice-fields：入场/仓位/目标/止损/持有/触发/失效（两列网格）
+    var entryStr = '--', posStr = '--', targetStr = '--', stopStr = '--', holdStr = '--', trigStr = '--', invStr = '--';
     if(oa.executable && oa.executable.entry_rules && oa.executable.entry_rules.length){
       var er = oa.executable.entry_rules[0];
       var trigCn = String(er.trigger || '').replace(/close\s*<=?\s*/g, '回踩≤ ').replace(/close\s*>=?\s*/g, '站上 ').replace(/[<>]=?/g, '');
-      var sizeTxt = er.size_pct ? '，加至 ' + er.size_pct + '%' : '';
-      entryHtml = '<div style="margin-top:8px;padding:8px 10px;border-left:3px solid #3b82f6;font-size:12px;' +
-        'color:var(--text-secondary);background:rgba(59,130,246,0.06);">' +
-        '<b style="color:#3b82f6;">入场触发：</b>' + trigCn + sizeTxt +
-        (oa.entry_zone ? ' · 区间 [' + oa.entry_zone + ']' : '') + '</div>';
+      entryStr = (oa.entry_zone ? '[' + oa.entry_zone + ']' : trigCn || '--');
+      trigStr = trigCn + (er.size_pct ? '，加至 ' + er.size_pct + '%' : '');
     }
-    // 失效条件（红条提示）
-    var invHtml = (oa.invalidation && oa.invalidation.length) ?
-      '<div style="margin-top:8px;padding:8px 10px;border-left:3px solid #dc2626;font-size:12px;' +
-      'color:var(--text-secondary);background:rgba(220,38,38,0.06);">' +
-      '<b style="color:#dc2626;">失效条件：</b>' + oa.invalidation.join('；') + '</div>' : '';
-    // 依据（≤3条）
+    if(oa.executable && oa.executable.exit_rules && oa.executable.exit_rules.length){
+      var m = String(oa.executable.exit_rules[0].trigger || '').match(/[\d.]+/);
+      if(m) stopStr = parseFloat(m[0]).toFixed(2) + '（跌破无条件离场）';
+    }
+    if(oa.executable && oa.executable.position){
+      posStr = Math.round(oa.executable.position.max_pct * 100) + '%';
+    }
+    if((oa.target_levels||[]).length){
+      targetStr = oa.target_levels.map(function(t){ return t.price; }).join(' / ') + '（参考压力位）';
+    }
+    holdStr = oa.expected_holding || '--';
+    if(oa.invalidation && oa.invalidation.length) invStr = oa.invalidation.join('；');
+    var fieldsHtml = '<div class="advice-fields">' +
+      '<div class="af-item"><span class="af-label">入场区间</span><span class="af-value blue">'+entryStr+'</span></div>' +
+      '<div class="af-item"><span class="af-label">建议仓位</span><span class="af-value">'+posStr+'</span></div>' +
+      '<div class="af-item"><span class="af-label">目标位</span><span class="af-value green">'+targetStr+'</span></div>' +
+      '<div class="af-item"><span class="af-label">止损位</span><span class="af-value red">'+stopStr+'</span></div>' +
+      '<div class="af-item"><span class="af-label">预期持有</span><span class="af-value">'+holdStr+'</span></div>' +
+      '<div class="af-item"><span class="af-label">触发条件</span><span class="af-value">'+trigStr+'</span></div>' +
+      (invStr ? '<div class="af-item af-full"><span class="af-label">失效条件</span><span class="af-value red">'+invStr+'</span></div>' : '') +
+      '</div>';
+    // ③ evidence-bar：依据（≤3条）
     var evHtml = (oa.evidence_top3 && oa.evidence_top3.length) ?
-      '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);">' +
-      '<b>依据：</b>' + oa.evidence_top3.join('；') + '</div>' : '';
-    var dimHtml = oa.dimensions.map(function(d){
-      return '<div class="s-step">' + (d.light||'') + ' ' + (d.conclusion||'') +
-             (d.evidence ? ' <span style="color:#6b728c;">'+d.evidence+'</span>' : '') +
-             (d.plain ? ' <span style="color:#6b728c;">（'+d.plain+'）</span>' : '') + '</div>';
-    }).join('');
-    var scnHtml = (oa.scenarios||[]).map(function(s){
-      return '<div class="s-header" style="margin-top:8px;"><span class="s-tag">情景'+s.id.toUpperCase()+'</span><span class="s-title">'+s.name+'</span><span class="s-prob">概率 '+Math.round(s.prob*100)+'%</span></div>' +
-             '<div class="s-steps">' + (s.steps||[]).map(function(x){return '<div class="s-step">'+x+'</div>';}).join('') + '</div>';
-    }).join('');
-    var stepsA = document.getElementById('apStepsA');
-    if (stepsA) stepsA.innerHTML = cardHtml + entryHtml + invHtml + evHtml + dimHtml + scnHtml;
-    // 合并为单一报告：隐藏 B/C 情景卡片（概率已在 scenarios 统一展示）
-    ['apStepsB','apStepsC'].forEach(function(id){ var el=document.getElementById(id); if(el) el.innerHTML=''; });
+      '<div class="evidence-bar"><b>依据（≤3条）：</b>' + oa.evidence_top3.join(' · ') + '</div>' : '';
+    // 2026-08-13 定稿归位：建议卡独立于三情景卡（不再塞入情景A），
+    // 七维红绿灯归位"现状描述"（此处不再渲染 dimHtml）
+    var apScn = document.getElementById('apScenarios');
+    var adviceWrap = document.getElementById('apAdviceCard');
+    if(!adviceWrap && apScn){
+      adviceWrap = document.createElement('div');
+      adviceWrap.id = 'apAdviceCard';
+      apScn.parentNode.insertBefore(adviceWrap, apScn);
+    }
+    if(adviceWrap) adviceWrap.innerHTML = '<div class="advice-card">' + headHtml + '<div class="advice-body">' + fieldsHtml + evHtml + '</div></div>';
+    // 337号 S3.2：七维现状描述模板（体检报告式，status_snapshot 成品仓组装，日终生成后显示）
+    const sdr = (analysisData && analysisData.seven_dim_report) || null;
+    if (sdr && adviceWrap) {
+      const segOrder = ['signal','structure','volume_price','fund_chip','emotion','risk','summary'];
+      const segHtml = segOrder.map(k => {
+        const s = sdr[k];
+        if (!s) return '';
+        return '<div class="sdr-seg"><span class="sdr-light">' + s.light + '</span>' +
+          '<b>' + s.title + '</b>：' + s.text +
+          (s.plain ? ' <span style="color:var(--text-muted);font-size:11px;">（' + s.plain + '）</span>' : '') + '</div>';
+      }).join('');
+      let holder = document.getElementById('apSevenDim');
+      if (!holder) {
+        holder = document.createElement('div');
+        holder.id = 'apSevenDim';
+        holder.style.cssText = 'margin-top:10px;font-size:12px;color:var(--text-secondary);line-height:1.9;border-top:1px dashed var(--border,#333);padding-top:8px;';
+        if (adviceWrap.parentNode) adviceWrap.parentNode.insertBefore(holder, adviceWrap.nextSibling);
+      }
+      holder.innerHTML = '<div style="font-weight:600;margin-bottom:6px;">🧭 七维现状描述（体检报告）</div>' + segHtml;
+    }
+    var scnMap = {'a':'apStepsA','b':'apStepsB','c':'apStepsC'};
+    (oa.scenarios||[]).forEach(function(s){
+      var sid = String(s.id || '').toLowerCase();
+      var el = document.getElementById(scnMap[sid] || ('apSteps'+sid.toUpperCase()));
+      if(el) el.innerHTML = (s.steps||[]).map(function(x){ return '<div class="s-step">'+x+'</div>'; }).join('');
+      var card = apScn ? apScn.querySelector('.scenario-card[data-scenario="'+sid+'"]') : null;
+      if(card){
+        var tEl = card.querySelector('.s-title');
+        if(tEl && s.name) tEl.textContent = s.name;
+        var pEl = card.querySelector('.s-prob');
+        if(pEl && s.prob != null) pEl.textContent = '概率 '+Math.round(s.prob*100)+'%';
+      }
+    });
     var hdr = document.querySelector('.ap-header');
     if (hdr && oa.summary) hdr.innerHTML = '📋 操作建议 <span class="ap-subtitle">'+oa.summary+'</span>';
     return;  // 已有 operation_advice 则不再走旧情景推导
@@ -4010,7 +4172,7 @@ var _origSwitchStock = switchStock;
 switchStock = function(tsCode){
   _origSwitchStock(tsCode);
   // 清空新组件
-  var els = ['stockStatus','strategyRec','actionPlan'];
+  var els = ['stockStatus','actionPlan','depthPanel'];
   els.forEach(function(id){
     var el = document.getElementById(id);
     if(el){ el.style.display = 'none'; el.classList.remove('show'); }
@@ -4053,7 +4215,7 @@ function cancelAnalysis(){
   var loading = document.getElementById('strategyLoading');
   if(loading) loading.classList.remove('show');
   // 隐藏新组件
-  ['stockStatus','strategyRec','actionPlan'].forEach(function(id){
+  ['stockStatus','actionPlan','depthPanel'].forEach(function(id){
     var el = document.getElementById(id);
     if(el){ el.style.display = 'none'; el.classList.remove('show'); }
   });

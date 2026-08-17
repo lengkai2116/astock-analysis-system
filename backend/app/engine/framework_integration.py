@@ -26,7 +26,6 @@ from .framework.chip_strategy import (
     ChipScorer
 )
 
-from .framework.screener import MultiLayerStockScreener, DarwinRiskFilter, SignalFusion
 from .framework.optimizer import (
     GridSearchOptimizer,
     RandomSearchOptimizer,
@@ -101,25 +100,6 @@ def create_chip_strategy_algorithm() -> Algorithm:
     return algorithm
 
 
-def create_multi_layer_screener_strategy() -> Dict:
-    """
-    创建三层筛选策略
-    
-    Returns:
-        策略配置字典
-    """
-    return {
-        'name': 'MultiLayerStockScreener',
-        'description': '三层筛选策略：风险过滤 → 主力识别 → 策略验证',
-        'screener': MultiLayerStockScreener(),
-        'signal_fusion': SignalFusion({
-            'chip': 0.4,
-            'chanlun': 0.3,
-            'factor': 0.3
-        })
-    }
-
-
 class FrameworkIntegration:
     """
     框架集成管理器
@@ -154,20 +134,6 @@ class FrameworkIntegration:
         algorithm = create_chip_strategy_algorithm()
         self.register_algorithm('ChipStrategy', algorithm)
         return algorithm
-    
-    def run_screener(self, stock_data: Dict[str, pd.DataFrame]) -> List[Dict]:
-        """
-        运行多层筛选器
-        
-        Args:
-            stock_data: 股票数据 {symbol: DataFrame}
-        
-        Returns:
-            筛选结果列表
-        """
-        screener_config = create_multi_layer_screener_strategy()
-        screener = screener_config['screener']
-        return screener.screen(list(stock_data.keys()), stock_data)
     
     def optimize_strategy(self, param_space: Dict, objective_func, 
                           method: str = 'grid', max_iter: int = 100):

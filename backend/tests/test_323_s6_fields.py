@@ -84,15 +84,19 @@ def test_action_label_5tier():
 
 
 def test_target_levels():
-    """target_levels：60日高点=目标1，×1.15=目标2；K线不足返回[]"""
+    """target_levels（330号改进1）：目标1=60日高点真实压力、目标2=MA60 真实压力；
+    K线不足返回[]；不再使用 ×1.15 虚构目标"""
     from app.opportunity_atlas.advice_builder import build_operation_advice
     df = _mk_df(hi=38.0)
     a = build_operation_advice('TEST.SZ', _mk_dims(), [], df,
                                tags={'opportunity_state': 'enter'})
     levels = a['target_levels']
-    assert len(levels) == 2, f"应 2 级，实际 {levels}"
+    assert len(levels) >= 1, f"应至少 1 级真实压力，实际 {levels}"
     assert levels[0]['price'] == 38.0, f"目标1=60日高点 38.0，实际 {levels[0]}"
-    assert levels[1]['price'] == round(38.0 * 1.15, 2), f"目标2=×1.15，实际 {levels[1]}"
+    # 目标2 若存在须为真实压力位（MA60），不得是 ×1.15 虚构值
+    if len(levels) >= 2:
+        assert levels[1]['price'] != round(38.0 * 1.15, 2), \
+            f"目标2 不得为 ×1.15 虚构，实际 {levels[1]}"
     # K线不足（<60 行）返回 []
     a2 = build_operation_advice('TEST.SZ', _mk_dims(), _mk_df(n=30), None,
                                 tags={'opportunity_state': 'enter'})

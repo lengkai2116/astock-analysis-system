@@ -310,6 +310,43 @@ class DataManager:
         except Exception:
             return None
 
+    def get_snapshot_history(self, ts_code: str = None,
+                             start_date: str = None, end_date: str = None,
+                             table: str = 'status_snapshot_history') -> list[dict]:
+        """读取快照历史（346号：多交易日快照保留，342号 §6.2 / G3.3 依赖）
+
+        调用层只读网关：禁止 routes/services 直查 history 表。
+        status_snapshot_history / treemap_snapshot_history 二选一。
+
+        Args:
+            ts_code: 股票代码（None=全市场）
+            start_date / end_date: snapshot_date 过滤（YYYY-MM-DD）
+            table: 'status_snapshot_history' | 'treemap_snapshot_history'
+
+        Returns:
+            行 dict 列表（按 snapshot_date, ts_code 排序）
+        """
+        return self.cache.get_snapshot_history(
+            ts_code=ts_code, start_date=start_date, end_date=end_date, table=table)
+
+    def get_tag_history(self, ts_code: str = None, tag_name: str = None,
+                        start_date: str = None, end_date: str = None) -> list[dict]:
+        """读取标签历史（347号：P4 写标签同步归档，支撑 L1.5 跨日标签核查）
+
+        调用层只读网关：禁止 routes/services 直查 tag_history 表。
+
+        Args:
+            ts_code: 股票代码（None=全市场）
+            tag_name: 标签名过滤（None=全部标签）
+            start_date / end_date: updated_at 过滤（YYYY-MM-DD）
+
+        Returns:
+            行 dict 列表（按 updated_at, ts_code, tag_name 排序）
+        """
+        return self.cache.get_tag_history(
+            ts_code=ts_code, tag_name=tag_name,
+            start_date=start_date, end_date=end_date)
+
     def get_previous_trade_date(self) -> str | None:
         """获取上一交易日（L4 日变检测用，替代调用层直连 daily_cache）"""
         try:
@@ -529,115 +566,16 @@ class DataManager:
         except Exception:
             pass
         
-        # 第二步：从 mootdx 获取数据（P9: 同时通知 daemon 异步补采确保完整性）
+        # 第二步：数据缺失 → sync_requests 异步补采（292号架构红线8 / 342号核查修复）
+        # 2026-08-16 修复：原实现 miss 时直调 mootdx TCP（_get_mootdx_bars/_get_mootdx_minutes）——
+        # 非交易时段 mootdx 服务器不可达，每次连接重试 30-90s；P2 全市场重算时北交所/
+        # 次新股（分钟缓存缺失）被逐只阻塞，P2 需数小时且伴随 NotImplementedError 刷屏
+        # （cProfile 实证 920020.BJ compute 93.5s 中 93.3s 在 mootdx 直调路径）。
+        # 按红线规则：调用层禁止直调数据源，miss 只写 sync_requests，daemon 异步补采后
+        # 下次请求命中缓存。分钟数据由 daemon 5s 快照聚合 + 完整性检查补采（AGENTS.md）。
         self.request_data('per_stock', ts_code)
-        if ecm_freq == '5min':
-            df = self._get_mootdx_bars(ts_code, freq=2)
-            if not df.empty:
-                self._cache_minute_to_ecm(df, ts_code, '5min')
-                return df
-            # 当 bars(freq=2) 不可用时（非交易时段），用 minutes() 获取1min数据聚合
-            try:
-                from collections import defaultdict
-                today_s = datetime.now().strftime('%Y%m%d')
-                df_1min = self._get_mootdx_minutes(ts_code)
-                if df_1min is not None and not df_1min.empty:
-                    records = df_1min.to_dict('records')
-                    # 1min→5min聚合
-                    groups = defaultdict(list)
-                    for r in records:
-                        tt = r.get('trade_time', '')
-                        try:
-                            ts = tt.split(' ')[1]
-                            parts = ts.split(':')
-                            slot = (int(parts[0])*60+int(parts[1]))//5
-                            key = (tt[:10], slot)
-                        except:
-                            key = (tt, 0)
-                        groups[key].append(r)
-                    agg = []
-                    for k, bars in sorted(groups.items()):
-                        agg.append({
-                            'trade_time': bars[0]['trade_time'],
-                            'open': float(bars[0]['open']),
-                            'high': max(float(b.get('high',0)) for b in bars),
-                            'low': min(float(b.get('low',float('inf'))) for b in bars),
-                            'close': float(bars[-1]['close']),
-                            'amount': sum(float(b.get('amount',0)) for b in bars),
-                        })
-                    if agg:
-                        df_5m = pd.DataFrame(agg)
-                        self._cache_minute_to_ecm(df_5m, ts_code, '5min')
-                        return df_5m
-            except Exception:
-                pass
-        elif ecm_freq == '1min':
-            df = self._get_mootdx_minutes(ts_code)
-            if not df.empty:
-                self._cache_minute_to_ecm(df, ts_code, '1min')
-                return df
-        elif ecm_freq in ('15min', '30min', '60min'):
-            # 从5min数据聚合为目标频率
-            df_5min = None
-            try:
-                from app.data.enhanced_cache_manager import get_ecm_instance
-                ecm = get_ecm_instance()
-                df_5min = ecm.get_cached_minute_kline(ts_code, freq='5min')
-            except Exception:
-                pass
-            if df_5min is None or df_5min.empty:
-                df_5min = self._get_mootdx_bars(ts_code, freq=2)
-            if df_5min is None or df_5min.empty:
-                # mootdx bars 断裂，用 minutes + transactions 组合补全天分钟数据
-                df_1min = self._get_mootdx_minutes_full(ts_code)
-                if df_1min is not None and not df_1min.empty:
-                    # 1min → 5min 聚合
-                    from collections import defaultdict
-                    records = df_1min.to_dict('records')
-                    groups = defaultdict(list)
-                    for r in records:
-                        tt = r.get('trade_time', '')
-                        try:
-                            ts = tt.split(' ')[1] if ' ' in tt else tt
-                            parts = ts.split(':')
-                            slot = (int(parts[0]) * 60 + int(parts[1])) // 5
-                            key = (tt[:10], slot)
-                        except Exception:
-                            key = (tt, 0)
-                        groups[key].append(r)
-                    agg_5min = []
-                    for k, bars in sorted(groups.items()):
-                        agg_5min.append({
-                            'trade_time': bars[0]['trade_time'],
-                            'open': float(bars[0]['open']),
-                            'high': max(float(b.get('high', 0)) for b in bars),
-                            'low': min(float(b.get('low', float('inf'))) for b in bars),
-                            'close': float(bars[-1]['close']),
-                            'vol': sum(float(b.get('vol', 0)) for b in bars),
-                            'amount': 0,
-                        })
-                    if agg_5min:
-                        df_5min = pd.DataFrame(agg_5min)
-                        self._cache_minute_to_ecm(df_5min, ts_code, '5min')
-            if df_5min is not None and not df_5min.empty:
-                # 确保5min缓存已写入
-                if df_5min is not None:
-                    self._cache_minute_to_ecm(df_5min, ts_code, '5min')
-                from app.data.minute_data_manager import MinuteDataManager
-                mm = MinuteDataManager()
-                records = df_5min.to_dict('records')
-                aggregated = mm._resample_minute(records, '5min', ecm_freq)
-                if aggregated:
-                    df_agg = pd.DataFrame(aggregated)
-                    df_agg['ts_code'] = ts_code
-                    self._cache_minute_to_ecm(df_agg, ts_code, ecm_freq)
-                    return df_agg
-        
-        # 第三步：Tushare/AKShare 降级移除（292号架构红线8）
-        # 数据缺失走 sync_requests 异步补采，不阻塞 API 进程
-        # daemon 的 5s 快照聚合会写入分钟数据，下次请求命中缓存
         return pd.DataFrame()
-    
+
     def _cache_minute_to_ecm(self, df, ts_code, freq):
         """将分钟K线写入 ECM minute_kline_cache 持久化"""
         if df.empty:

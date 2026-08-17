@@ -56,13 +56,12 @@
 - **前端**：Flask `send_from_directory` 托管 Vue 构建产物，无需 Nginx
 - **数据目录**：`DATA_DIR` 环境变量，禁止硬编码
 
-### 开发环境（Docker Compose）
+### 开发环境（单机直跑，Docker 已废止——170号方案）
 
 ```bash
-make dev-db          # 启动 PostgreSQL + Redis（Docker）
-make dev-backend     # 启动后端（Gunicorn 端口 5001）
-make dev-frontend    # 启动前端原型（端口 8082）
-make dev             # 一键启动上面全部
+python backend/run.py --port 5001   # 启动后端（业务库=SQLite data/app.db，331号对齐292权威）
+cd frontend/vue-project && npm run build  # 构建前端（若存在）
+# 注：PostgreSQL/Redis 已废止（251号残留 .env 已清理，见 331号方案）
 ```
 
 ### 双进程架构

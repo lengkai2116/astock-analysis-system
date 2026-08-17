@@ -100,3 +100,7 @@ backend/data/
 
 # Shell scripts (temporary)
 start_daemon.sh
+
+# Backup files
+*.bak.*
+*.bak

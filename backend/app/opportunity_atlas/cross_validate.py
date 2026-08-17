@@ -23,6 +23,117 @@ from app.data.mixins import DataAwareMixin
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_real_dimensions(dm, ts_code: str) -> dict | None:
+    """330号改进3（2026-08-13）：从 strategy_signal_detail（P2 预计算）提取真实五维方向
+
+    与个股页 analyze（strategy_analyze.py）同源——消除弹窗 diagnose 标签轻量推导
+    导致的共识虚高（301119=100%/300759=90% vs 个股页真实五维 67%）。
+
+    方向口径与 analyze 各 _build_*_dimension 保持一致：
+      - chanlun: status_recognition.trend.direction（up/down）或缠论中文态
+      - volume_price: status_recognition.trend.direction（up/down）
+      - chip: status_recognition.state 中文阶段 → bull/bear
+      - emotion: 信号 signal（bullish/bearish）
+      - factor: 最高置信度信号方向（无因子信号时中性）
+
+    Returns:
+        dimensions dict 或 None（信号缓存缺失/解析失败）
+    """
+    try:
+        cached = dm.cache.get_latest_signal_detail(ts_code)
+        if not cached:
+            return None
+        signals = cached.get('signals', {})
+        if not signals:
+            return None
+
+        def _sig(name_keyword: str):
+            for name, s in signals.items():
+                if name_keyword in name:
+                    return s
+            return None
+
+        chan = _sig('缠论')
+        vp = _sig('量价')
+        chip_s = _sig('筹码')
+        emo = _sig('BOCIASI')
+        factor_s = _sig('因子')
+
+        # chanlun：优先 status_recognition.trend.direction，回退信号中文方向
+        chan_dir = '待定'
+        if chan:
+            trend = (chan.get('status_recognition') or {}).get('trend') or {}
+            td = trend.get('direction', '')
+            chan_dir = ('上升' if td == 'up' else ('下降' if td == 'down' else '待定'))
+            if chan_dir == '待定':
+                detail = chan.get('chanlun_analysis_detail') or {}
+                chan_dir = (detail.get('走势结构') or {}).get('趋势方向', '待定') or '待定'
+        # volume_price：status_recognition.trend.direction
+        vp_dir = 'neutral'
+        if vp:
+            vp_dir = ((vp.get('status_recognition') or {}).get('trend') or {}).get('direction', 'neutral')
+            if vp_dir not in ('up', 'down'):
+                vp_dir = 'neutral'
+        # chip：status_recognition.state 中文阶段（拉升/建仓→bullish，出货→bearish）
+        chip_dir = 'neutral'
+        if chip_s:
+            cstate = str((chip_s.get('status_recognition') or {}).get('state', ''))
+            chip_dir = ('bullish' if ('拉升' in cstate or '建仓' in cstate or '洗盘' in cstate)
+                        else ('bearish' if '出货' in cstate else 'neutral'))
+        # emotion：BOCIASI 信号 direction（up/down）或 signal
+        emo_dir = 'neutral'
+        if emo:
+            et = (emo.get('status_recognition') or {}).get('trend') or {}
+            ed = et.get('direction', '') or str(emo.get('signal', ''))
+            emo_dir = ('bullish' if ed in ('up', 'bullish', 'BULLISH')
+                       else ('bearish' if ed in ('down', 'bearish', 'BEARISH') else 'neutral'))
+        # factor：取最高置信度信号的 signal 方向
+        f_dir = 'neutral'
+        best = None
+        for s in signals.values():
+            if best is None or (s.get('confidence') or 0) > (best.get('confidence') or 0):
+                best = s
+        if best:
+            bs = str(best.get('signal', ''))
+            f_dir = ('bullish' if bs in ('bullish', 'BULLISH', 'up')
+                     else ('bearish' if bs in ('bearish', 'BEARISH', 'down') else 'neutral'))
+
+        # 336号 S1.5：emotion 维证据补全（603897 差异#3：弹窗"中性/空" vs 个股页"STRENGTHENING/电气设备"）
+        # 板块轮动状态用 SectorAnalysisService（读缓存计算），sector 名优先板块服务、
+        # 兜底 Stock.industry（与个股页 analyze 同源）
+        _rotation, _sector = '', ''
+        try:
+            from app.services.sector_analysis_service import SectorAnalysisService
+            _sctx = SectorAnalysisService().get_sector_context(ts_code)
+            if _sctx.get('available'):
+                _rotation = _sctx.get('rotation_state', '')
+                _sector = _sctx.get('sector_name', '')
+        except Exception:
+            pass
+        if not _sector:
+            try:
+                from app.models import Stock
+                _stk = Stock.query.get(ts_code)
+                if _stk and getattr(_stk, 'industry', None):
+                    _sector = _stk.industry
+            except Exception:
+                pass
+
+        return {
+            'factor': {'trend': f_dir},
+            'chanlun': {'direction': chan_dir,
+                        'buy_point': (str((chan or {}).get('buy_point') or '')
+                                      or str((signals.get('缠论走势分析') or {}).get('signal_label') or ''))},
+            'volume_price': {'direction': vp_dir},
+            'chip': {'direction': chip_dir},
+            'emotion': {'direction': emo_dir, 'rotation_state': _rotation, 'sector': _sector},
+        }
+    except Exception as e:
+        logger.debug(f"_extract_real_dimensions 失败 ({ts_code}): {e}")
+        return None
+
+
 # ── 标签 → 中文名映射 ─────────────────────────────────────
 TAG_LABELS: dict[str, str] = {
     'main_force_phase': '主力阶段',
@@ -326,15 +437,24 @@ class L4CrossValidator(DataAwareMixin):
         # ── Step C: 共识投票 + Step D: 结果映射 ──
         consensus, voting_detail = self._compute_consensus(tags, adjusted_votes)
 
+        # 336号S2 + 352号G3：_arb 仲裁共识从五维标签投票改为 L1 九维推导（消双口径）
+        _l1_for_arb = None
+        try:
+            _sv_tmp = self._get_status_verdict(ts_code)
+            if _sv_tmp:
+                _l1_for_arb = {'direction': _sv_tmp.get('direction', 'neutral'),
+                                'consensus_rate': _sv_tmp.get('consensus_rate', 0)}
+        except Exception:
+            pass
+
         # ── 汇总输出 ──
-        # 321号 S2：跨维仲裁（权威 gate + 情绪加权 consensus 同源传入，消除预计算/诊断偏差）
+        # 321号 S2：跨维仲裁（权威 gate + 共识同源传入）
         try:
             from app.opportunity_atlas.arbiter import arbitrate
-            _arb = arbitrate(tags, gate=gate, consensus=consensus)
+            _arb = arbitrate(tags, gate=gate, consensus=_l1_for_arb or consensus)
         except Exception:
             _arb = {'opportunity_state': 'wait', 'state_evidence': ['仲裁不可用']}
-        verdict = self._build_verdict(consensus, voting_detail, tags,
-                                      gate=gate, consensus_authority=consensus)
+        # verdict/opportunity_summary 移至 operation_advice 后计算（336号 S1.2：用五维共识）
         signal_strength = self._safe_float(tags.get('signal_strength'), 0)
         signal_strength_adjusted = self._compute_signal_strength_adjusted(tags, signal_strength)
 
@@ -346,7 +466,6 @@ class L4CrossValidator(DataAwareMixin):
         _pb_pct = self._safe_float(tags.get('pb_percentile_5y'), None)
         risk_warnings = self._build_risk_warnings(tags, gate, eps_yoy=_eps_yoy, pb_pct=_pb_pct)
         user_checklist = self._build_user_checklist(ts_code, tags, valuation_tracking)
-        opportunity_summary = self._build_opportunity_summary(tags, consensus, risk_warnings)
         tags_summary = self._build_tags_summary(tags)
 
         # 323号 S0.7：执行层统一——operation_advice 改由 advice_builder 生成
@@ -357,21 +476,63 @@ class L4CrossValidator(DataAwareMixin):
             from app.opportunity_atlas.advice_builder import build_operation_advice
             _dm = self._get_dm()
             _df = _dm.get_cached_daily_data(ts_code)
-            _ta = str(tags.get('trend_alignment', ''))
-            _ff = str(tags.get('fund_flow', ''))
-            _dims = {
-                'factor': {'trend': ('bullish' if _ta == 'up_aligned'
-                                     else ('bearish' if _ta == 'down_aligned'
-                                            else 'neutral'))},
-                'chanlun': {'direction': '上升',
-                            'buy_point': tags.get('buy_sell_point', '')},
-                'volume_price': {'direction': 'up'},
-                'chip': {'direction': ('bullish' if _ff == '5d_inflow'
-                                       else ('bearish' if _ff == '5d_outflow'
-                                              else 'neutral'))},
-                'emotion': {'direction': 'bullish'},
-            }
-            unified = build_operation_advice(ts_code, _dims, [], _df, tags=tags)
+            # ── 330号改进3（2026-08-13）：双引擎口径统一 ──
+            # 弹窗 diagnose 与个股页 analyze 共识双口径（弹窗标签轻量推导 100%/90%
+            # vs 个股页真实五维 67%）根因：两处构造 dimensions 的方式不同。
+            # 统一方案：diagnose 也从 strategy_signal_detail（P2 预计算，毫秒级读缓存）
+            # 提取真实五维方向——与 analyze 同源，消除共识虚高。
+            try:
+                _real_dims = _extract_real_dimensions(_dm, ts_code)
+            except Exception:
+                _real_dims = None
+            if _real_dims:
+                _dims = _real_dims
+            else:
+                # 回退：标签推导（信号缓存缺失时，保留旧口径保证弹窗可用）
+                _ta = str(tags.get('trend_alignment', ''))
+                _ff = str(tags.get('fund_flow', ''))
+                _bsp = str(tags.get('buy_sell_point', ''))
+                _vpf = str(tags.get('volume_price_fit', ''))
+                _sp = str(tags.get('sentiment_phase', ''))
+                _chan_dir = ('上升' if ('买' in _bsp and '卖' not in _bsp)
+                             else ('下降' if '卖' in _bsp else '待定'))
+                _vp_dir = ('up' if _vpf in ('healthy', 'strong')
+                           else ('down' if _vpf in ('unhealthy', 'weak') else 'neutral'))
+                _emo_dir = ('bullish' if _sp in ('recovery', 'boom', 'revival')
+                            else ('bearish' if _sp in ('ebb', 'ice', 'climax') else 'neutral'))
+                _dims = {
+                    'factor': {'trend': ('bullish' if _ta == 'up_aligned'
+                                         else ('bearish' if _ta == 'down_aligned'
+                                                else 'neutral'))},
+                    'chanlun': {'direction': _chan_dir,
+                                'buy_point': tags.get('buy_sell_point', '')},
+                    'volume_price': {'direction': _vp_dir},
+                    'chip': {'direction': ('bullish' if _ff == '5d_inflow'
+                                           else ('bearish' if _ff == '5d_outflow'
+                                                  else 'neutral'))},
+                    'emotion': {'direction': _emo_dir},
+                }
+            # 336号S2 + 352号G2：传入 L1 九维共识（与 analyze 同源）
+            _l1_consensus = None
+            _l1_dirs = None
+            try:
+                _sv = self._get_status_verdict(ts_code)
+                if _sv:
+                    _l1_consensus = {
+                        'consensus_rate': _sv.get('consensus_rate', 0),
+                        'bullish_votes': _sv.get('bullish_dims', 0),
+                        'bearish_votes': _sv.get('bearish_dims', 0),
+                        'direction': _sv.get('direction', 'neutral'),
+                        '_source': 'nine_dim',
+                    }
+                    for _d in _sv.get('dim_states', {}).values():
+                        _light = _d.get('light', 'yellow')
+                        _l1_dirs = _l1_dirs or []
+                        _l1_dirs.append(1 if _light == 'green' else (-1 if _light == 'red' else 0))
+            except Exception:
+                pass
+            unified = build_operation_advice(ts_code, _dims, [], _df, tags=tags,
+                                              consensus=_l1_consensus, dirs=_l1_dirs)
             # 保留旧字段兼容（action/label/max_position_ratio/entry_plan/
             # stop_loss/target_price），供机会库等旧消费方过渡
             _ex = unified['executable']
@@ -387,7 +548,8 @@ class L4CrossValidator(DataAwareMixin):
             unified['target_price'] = None
             operation_advice = unified
         except Exception as _unify_err:
-            logger.debug(f"S0.7 执行层统一跳过 ({ts_code}): {_unify_err}")
+            import traceback
+            logger.warning(f"S0.7 执行层统一跳过 ({ts_code}): {_unify_err}\n{traceback.format_exc()}")
             # 回退旧 _build_operation_advice（321 逻辑，废弃过渡）
             try:
                 operation_advice = self._build_operation_advice(
@@ -397,6 +559,66 @@ class L4CrossValidator(DataAwareMixin):
                 operation_advice = {}
         if not operation_advice:
             operation_advice = {}
+
+        # 336号 S2：弹窗摘要层共识切换到 L1 九维推导（成品仓唯一消费）
+        # 原 S1 过渡口径（consensus_5d 五维推导）已不满足 336号 §2.2 要求：
+        # "弹窗摘要/个股页/快照全部读同一 L2 输出共识"。
+        # 优先读 status_verdict（StatusEngine L1 九维），回退到五维推导。
+        try:
+            _sv = self._get_status_verdict(ts_code)
+            if _sv and _sv.get('dim_states'):
+                from app.opportunity_atlas.status_engine import _DIM_DIRECTION
+                _dims9 = _sv['dim_states']
+                _bull9 = _bear9 = _neu9 = 0
+                for _dim, _info in _dims9.items():
+                    _st = _info.get('state', '') if isinstance(_info, dict) else _info
+                    _v = _DIM_DIRECTION.get(_dim, {}).get(_st, 0)
+                    if _v > 0:
+                        _bull9 += 1
+                    elif _v < 0:
+                        _bear9 += 1
+                    else:
+                        _neu9 += 1
+                _dir_active = _bull9 + _bear9
+                _rate9 = max(_bull9, _bear9) / max(_dir_active, 1) if _dir_active else 0.0
+                consensus_display = {
+                    'bullish_votes': _bull9,
+                    'bearish_votes': _bear9,
+                    'neutral_votes': _neu9,
+                    'total_active': len(_dims9),
+                    'consensus_rate': round(_rate9, 3),
+                    'direction': 'bullish' if _bull9 > _bear9 else ('bearish' if _bear9 > _bull9 else 'neutral'),
+                    'tie': _bull9 == _bear9 and _bull9 > 0,
+                    '_source': 'nine_dim',
+                }
+            else:
+                raise RuntimeError("status_verdict 不可用，回退五维推导")
+        except Exception:
+            # 回退：五维推导（S1 过渡口径）
+            try:
+                _dims5 = locals().get('_dims') or {}
+                if _dims5:
+                    from app.opportunity_atlas.advice_builder import _dim_directions, _consensus_from_dirs
+                    _five_dirs = _dim_directions(_dims5)
+                    _five = _consensus_from_dirs(_five_dirs)
+                    consensus_display = {
+                        'bullish_votes': sum(1 for x in _five_dirs if x > 0),
+                        'bearish_votes': sum(1 for x in _five_dirs if x < 0),
+                        'neutral_votes': sum(1 for x in _five_dirs if x == 0),
+                        'total_active': len(_five_dirs),
+                        'consensus_rate': _five['consensus_rate'],
+                        'direction': _five['direction'],
+                        'tie': False,
+                        '_source': 'five_dim',
+                    }
+                else:
+                    consensus_display = consensus
+            except Exception:
+                consensus_display = consensus
+        verdict = self._build_verdict(consensus_display, [], tags,
+                                      gate=gate, consensus_authority=consensus_display,
+                                      final_state=(operation_advice or {}).get('state'))
+        opportunity_summary = self._build_opportunity_summary(tags, consensus_display, risk_warnings)
 
         # 323号 S8：顶层 opportunity_state 同步为 advice_builder 降级后的 state
         # （实时风控：≥2维反向/停牌等降级须在时机行与建议卡间保持一致）
@@ -416,8 +638,16 @@ class L4CrossValidator(DataAwareMixin):
             'tags_summary': tags_summary,
             'opportunity_state': _final_state,   # 321号：机会状态机（唯一结论，S8 实时风控同步）
             'state_evidence': _final_evidence,   # 321号：仲裁依据
+            # 330号改进4：暴露跨维冲突证据（缠论vs趋势/高位获利盘/结构风险vs确认），
+            # 前端风险边界展示——不再让 arbiter 硬合成掩盖真实矛盾
+            'conflict_evidence': _arb.get('conflict_evidence', []),
+            # 337号 S3.1：成品仓维度状态透出（弹窗九维灯；status_snapshot 日终生成前=None）
+            'dim_states': self._get_status_dim_states(ts_code),
+            # 336号 成品仓切换：status_engine 生产环节权威结论（双模块唯一消费源，
+            # 实时 evaluate，不依赖日终快照——盘中可用；前端优先展示）
+            'status_verdict': self._get_status_verdict(ts_code),
             'cross_validation': {
-                'consensus': consensus,
+                'consensus': consensus_display,   # 336号 S2：L1 九维推导共识（成品仓唯一消费）
                 'sentiment_weight': sentiment_weight,
                 'voting_detail': voting_detail,
                 'verdict': verdict,
@@ -434,6 +664,50 @@ class L4CrossValidator(DataAwareMixin):
     # ══════════════════════════════════════════════════════════
     # Step A: 前置估值门禁（316号 P1：分级 + 风险项扩展，不再投票前硬截断）
     # ══════════════════════════════════════════════════════════
+
+    def _get_status_verdict(self, ts_code: str) -> dict | None:
+        """336号 成品仓切换：status_engine 生产环节权威结论（双模块唯一消费源）
+
+        实时 evaluate（读缓存毫秒级，不依赖日终 status_snapshot）；前端优先展示。
+        """
+        try:
+            from app.opportunity_atlas.status_engine import StatusEngine
+            r = StatusEngine().evaluate(ts_code)
+            if not r:
+                return None
+            import json as _json
+            return {
+                'opportunity_state': r['opportunity_state'],
+                'status_bar': r['status_bar'],
+                'consensus_rate': r['consensus_rate'],
+                'direction': r['direction'],
+                'conflict_evidence': _json.loads(r['conflict_evidence'] or '[]'),
+                'dim_states': _json.loads(r['dim_states'] or '{}'),
+                'advice_params': _json.loads(r['advice_params'] or '{}'),
+            }
+        except Exception as e:
+            logger.debug("status_verdict 生成失败 %s: %s", ts_code, e)
+            return None
+
+    def _get_status_dim_states(self, ts_code: str) -> dict | None:
+        """337号 S3.1：读 status_snapshot.dim_states（日频现状成品九维状态，弹窗九维灯）"""
+        try:
+            _dm = self._get_dm()
+            _row = _dm.cache._query_df(
+                "SELECT dim_states, status_bar, consensus_rate, opportunity_state "
+                "FROM status_snapshot WHERE ts_code=? LIMIT 1", [ts_code])
+            if _row is None or _row.empty:
+                return None
+            import json as _json
+            return {
+                'dim_states': _json.loads(_row.iloc[0].get('dim_states') or '{}'),
+                'status_bar': _row.iloc[0].get('status_bar'),
+                'consensus_rate': _row.iloc[0].get('consensus_rate'),
+                'opportunity_state': _row.iloc[0].get('opportunity_state'),
+            }
+        except Exception as e:
+            logger.debug("status_snapshot 读取失败 %s: %s", ts_code, e)
+            return None
 
     def _evaluate_gate(self, ts_code: str, tags: dict) -> dict:
         """估值分级 + 风险项识别（316号 §3.2/§3.4）
@@ -707,13 +981,16 @@ class L4CrossValidator(DataAwareMixin):
         return 'clear', '清仓/不推荐'
 
     def _build_verdict(self, consensus: dict, voting_detail: list, tags: dict = None,
-                       gate: dict = None, consensus_authority: dict = None) -> str:
+                       gate: dict = None, consensus_authority: dict = None,
+                       final_state: str = None) -> str:
         """构建自然语言总结
 
         321号 S2：跨维仲裁状态前置——右侧否决/硬风险/深度高估时，
         verdict 直接输出"回避"语义，不再输出"优质机会建议关注"（修 T3 矛盾）。
         2026-08-10 审查修复：arbitrate 传入权威 gate/consensus（与 diagnose 同源，
         消除 P2 深度高估/P3 强看空边缘漏判）。
+        336号 S1.2：final_state 感知——五维共识看多但实时风控（盈亏比/纪律）已降级为
+        wait/avoid 时，verdict 不输出"优质机会建议关注"（消灭 603897 同屏矛盾残余）。
         """
         # ── 321号 S2：仲裁状态前置（仅 avoid 覆盖；其余沿用共识文本） ──
         if tags:
@@ -734,10 +1011,10 @@ class L4CrossValidator(DataAwareMixin):
         direction = consensus.get('direction', 'neutral')
 
         if total < 3:
-            return f'标签数据不足（仅{total}个有效标签），无法形成有效共识，暂不推荐。'
+            return f'维度数据不足（仅{total}个有效维度），无法形成有效共识，暂不推荐。'
 
         if direction == 'bullish':
-            desc = f'{b} 个标签看多，{be} 个看空，{n} 个中性，共识率 {rate*100:.1f}%'
+            desc = f'{b} 个维度看多，{be} 个看空，{n} 个中性，共识率 {rate*100:.1f}%'
             if rate >= 0.80:
                 desc += '（★ 强共识）。'
             elif rate >= 0.65:
@@ -751,13 +1028,16 @@ class L4CrossValidator(DataAwareMixin):
                 desc += ' ' + '；'.join(reasons[:4])
 
             if rate >= 0.65:
-                desc += ' 综合判断为优质机会，建议关注。'
+                if final_state in ('wait', 'avoid'):
+                    desc += ' 但实时风控（盈亏比/纪律约束）已降级，建议观望。'
+                else:
+                    desc += ' 综合判断为优质机会，建议关注。'
             else:
                 desc += ' 多空接近，建议观望。'
             return desc
 
         if direction == 'bearish':
-            desc = f'{be} 个标签看空，{b} 个看多，{n} 个中性，共识率 {rate*100:.1f}%'
+            desc = f'{be} 个维度看空，{b} 个看多，{n} 个中性，共识率 {rate*100:.1f}%'
             if rate >= 0.65:
                 desc += '（⚠ 偏空）。'
             else:
@@ -797,7 +1077,7 @@ class L4CrossValidator(DataAwareMixin):
         rate = consensus.get('consensus_rate', 0)
         total = consensus.get('total_active', 0)
         if total >= 3 and rate >= 0.80:
-            verification = f'★ 强共识（{consensus.get("bullish_votes", 0)}/{total} 标签方向一致）'
+            verification = f'★ 强共识（{consensus.get("bullish_votes", 0)}/{total} 方向一致）'
         elif total >= 3 and rate >= 0.65:
             verification = f'✓ 中等确认（共识率 {rate*100:.0f}%）'
         elif total >= 3:
@@ -946,9 +1226,10 @@ class L4CrossValidator(DataAwareMixin):
             action, label = 'not_recommended', '负面事件：监管/财务异常信号，规避'
             max_ratio = 0.0
         elif val_lv == 'deep':
-            # 深度高估（PE 历史分位>90% 或偏离<-20）：泡沫风险，暂不介入
-            action, label = 'not_recommended', '深度高估：估值泡沫风险，暂不介入'
-            max_ratio = 0.0
+            # 335号 S2.3：deep 从硬否决改"高风险机会强提示 + 仓位压缩"
+            # （估值非绝对精准，可能突破——用户决策；潜力侧 dev>30×0.3 已降级）
+            action, label = 'hold', '深度高估：价格高位风险，注意追涨（估值非绝对精准）'
+            max_ratio = round(max_ratio * 0.3, 2)   # 仓位压缩（status_engine.yaml l0.deep_position_cap）
         else:
             # 仓位约束（软风险 + 估值级别）
             if 'fina_weak' in soft:

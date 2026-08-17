@@ -1342,6 +1342,15 @@ def run_daily_sync():
     except Exception as e:
         logger.warning(f"  分钟数据闲时补采触发失败: {e}")
 
+    # 信号验证回算 T+5/T+10/T+20（345号第③层核查激活，后台低优）
+    # 2026-08-16 新增：scheduler_manager 仅 API 进程注册回算；daemon 模式
+    # （DATA_DAEMON_RUNNING=1）由日终同步后触发，避免双调度。
+    try:
+        threading.Thread(target=_run_signal_checkpoint, daemon=True).start()
+        logger.info("  信号验证回算已触发（后台）")
+    except Exception as e:
+        logger.warning(f"  信号验证回算触发失败: {e}")
+
     _SYNCED_TODAY = True
     logger.info("=== 日终同步完成 ===")
 
@@ -1528,7 +1537,20 @@ def _run_precompute():
             pass
     logger.info(f"指标预计算完成: {ok}/{len(codes)} 只")
 
-    # ── 策略信号预计算（UnifiedStrategyCore，287号方案 v2.3） ──
+    # ── 3. PRESET_COMBOS 因子值预计算（写入 factor_cache） ──
+    try:
+        _precompute_preset_combos(codes)
+    except Exception as e:
+        logger.warning(f"PRESET_COMBOS 因子预计算失败: {e}")
+
+    # ── 4. L2 标签预计算（机会图谱，294号§三梯队7） ──
+    try:
+        _precompute_l2_labels(codes)
+    except Exception as e:
+        logger.warning(f"L2标签预计算失败: {e}")
+
+    # ── 5. 策略信号预计算（UnifiedStrategyCore，287号方案 v2.3） ──
+    # 333号 v3.0 管道顺序：P4 标签先算当日 → P2 后算（P2 消费当日标签，杜绝"标签昨日/数据今日"时序错位）
     try:
         from app.engine.unified_core import UnifiedStrategyCore
         core = UnifiedStrategyCore()
@@ -1546,18 +1568,6 @@ def _run_precompute():
             _write_factor_signals(codes)
     except Exception as e:
         logger.warning(f"策略信号预计算整体失败: {e}")
-
-    # ── 3. PRESET_COMBOS 因子值预计算（写入 factor_cache） ──
-    try:
-        _precompute_preset_combos(codes)
-    except Exception as e:
-        logger.warning(f"PRESET_COMBOS 因子预计算失败: {e}")
-
-    # ── 4. L2 标签预计算（机会图谱，294号§三梯队7） ──
-    try:
-        _precompute_l2_labels(codes)
-    except Exception as e:
-        logger.warning(f"L2标签预计算失败: {e}")
 
 
 def _precompute_l2_labels(codes):
@@ -1657,6 +1667,9 @@ def _precompute_l2_labels(codes):
             logger.warning(f"  板块热度预计算失败: {e}")
 
         # 预计算市场情绪（从 daily_cache 数据估算，替代 sentiment_pool 数据源缺失）
+        # 342号核查修复（2026-08-16）：单指标涨停数>80 判 climax 与知识库《情绪周期四阶段模型》
+        # 多条件（涨停 50-100+封板率>75%+指数拉升+天量）不符，弱市（08-14 涨停84/跌停18）被误判
+        # climax 99.98%。升级为 涨停数 + 估算封板率 + 跌停数 多条件判定。
         _sentiment_phase_global = 'neutral'
         try:
             last_date_row = _ecm.conn.execute(
@@ -1672,13 +1685,31 @@ def _precompute_l2_labels(codes):
                     "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg < -9.9",
                     [last_date]
                 ).fetchone()[0]
-                if limit_up > 80:
+                # 估算封板率：触板（high>=prev_close*1.099）中收盘封住的比例
+                sealing_rate = 0.0
+                try:
+                    rows = _ecm.conn.execute(
+                        "SELECT high, close, pct_chg FROM daily_cache "
+                        "WHERE trade_date=? AND pct_chg > 5",
+                        [last_date]
+                    ).fetchall()
+                    touched = sealed = 0
+                    for high, close, pct in rows:
+                        prev_close = close / (1 + pct / 100)
+                        if high >= prev_close * 1.099:
+                            touched += 1
+                            if close >= prev_close * 1.099:
+                                sealed += 1
+                    if touched > 0:
+                        sealing_rate = round(sealed / touched * 100, 1)
+                except Exception:
+                    sealing_rate = 0.0
+                # 四阶段映射（对齐知识库《情绪周期四阶段模型》）
+                if limit_up > 50 and sealing_rate > 75:
                     _sentiment_phase_global = 'climax'
-                elif limit_up > 30:
-                    _sentiment_phase_global = 'recovery'
-                elif limit_up < 10 and limit_down > 20:
+                elif (limit_up < 40 and sealing_rate < 40) or limit_down > 20:
                     _sentiment_phase_global = 'ebb'
-                elif limit_up < 5:
+                elif limit_up < 20 and sealing_rate < 40:
                     _sentiment_phase_global = 'ice'
                 else:
                     _sentiment_phase_global = 'recovery'
@@ -2914,6 +2945,19 @@ def _build_treemap_snapshot(codes: list[str]):
     basic_map = {r['ts_code']: r for _, r in basic_df.iterrows()} if not basic_df.empty else {}
     tags_map = {r['ts_code']: r for _, r in tags_df.iterrows()} if not tags_df.empty else {}
 
+    # 5b. 成品仓 status_snapshot（336号 S2.5：快照字段来源切 L1/L2 输出——
+    #     consensus_rate/conflict/opportunity_state/state_evidence 读 status_engine 成品，
+    #     消除 tags 轻量投票口径；status_snapshot 由管道 S1 先行构建）
+    status_map: dict = {}
+    try:
+        _ss_df = _ecm._query_df(
+            "SELECT ts_code, consensus_rate, conflict_evidence, opportunity_state, state_evidence"
+            " FROM status_snapshot")
+        if _ss_df is not None and not _ss_df.empty:
+            status_map = {r['ts_code']: r.to_dict() for _, r in _ss_df.iterrows()}
+    except Exception as e:
+        logger.warning(f"status_snapshot 读取失败（快照字段回退 tags 口径）: {e}")
+
     # 6. 原子表替换写入
     NEW_TABLE = 'treemap_snapshot_new'
     # 建新表（结构与目标表一致）
@@ -2935,6 +2979,7 @@ def _build_treemap_snapshot(codes: list[str]):
             right_side_confirm TEXT, confirm_evidence TEXT, opportunity_profile TEXT,
             entry_signals TEXT, exit_conditions TEXT,
             consensus_rate REAL,
+            conflict TEXT,
             main_force_presence TEXT,
             presence_evidence TEXT,
             opportunity_state TEXT,
@@ -2962,10 +3007,10 @@ def _build_treemap_snapshot(codes: list[str]):
                  chip_concentration, volatility_level, dividend_yield, composite_rating,
                  opportunity_label, evidence_count,
                  right_side_confirm, confirm_evidence, opportunity_profile,
-                 entry_signals, exit_conditions, consensus_rate, main_force_presence,
+                 entry_signals, exit_conditions, consensus_rate, conflict, main_force_presence,
                  presence_evidence, opportunity_state, state_evidence)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 code, m.get('name', ''), m.get('industry', ''),
                 float(d['close']) if pd.notna(d.get('close')) else None,
@@ -2991,16 +3036,49 @@ def _build_treemap_snapshot(codes: list[str]):
                 t.get('right_side_confirm'), t.get('confirm_evidence'),
                 t.get('opportunity_profile'),
                 t.get('entry_signals'), t.get('exit_conditions'),
-                _compute_snapshot_consensus_rate(t),
+                (status_map.get(code, {}).get('consensus_rate')
+                 if code in status_map else _compute_snapshot_consensus_rate(t)),
+                status_map.get(code, {}).get('conflict_evidence') if code in status_map else None,
                 t.get('main_force_presence'),
                 t.get('presence_evidence'),
-                t.get('opportunity_state'),
-                t.get('state_evidence'),
+                status_map.get(code, {}).get('opportunity_state')
+                if code in status_map else t.get('opportunity_state'),
+                status_map.get(code, {}).get('state_evidence')
+                if code in status_map else t.get('state_evidence'),
             ))
             written += 1
         except Exception:
             continue
     _ecm.conn.commit()
+
+    # 346号：原子替换前归档 treemap 历史快照（ts_code+snapshot_date 复合主键幂等）
+    try:
+        _ecm.conn.execute("""
+            CREATE TABLE IF NOT EXISTS treemap_snapshot_history (
+                ts_code TEXT, snapshot_date TEXT, name TEXT, industry TEXT,
+                close REAL, pct_chg REAL, total_mv REAL, trade_date TEXT,
+                open REAL, high REAL, low REAL, amplitude REAL, pe REAL, pb REAL,
+                amount REAL, turnover_rate REAL, circ_mv REAL, signal_strength REAL,
+                valuation_level TEXT, valuation_deviation REAL, main_force_phase TEXT,
+                phase_confidence REAL, sentiment_phase TEXT, sector_heat TEXT,
+                fina_health TEXT, opportunity_type TEXT, trend_alignment TEXT,
+                price_position TEXT, fund_flow TEXT, capital_nature TEXT,
+                chip_concentration TEXT, volatility_level TEXT, dividend_yield REAL,
+                composite_rating REAL, opportunity_label TEXT, evidence_count INTEGER,
+                right_side_confirm TEXT, confirm_evidence TEXT, opportunity_profile TEXT,
+                entry_signals TEXT, exit_conditions TEXT, consensus_rate REAL,
+                conflict TEXT, main_force_presence TEXT, presence_evidence TEXT,
+                opportunity_state TEXT, state_evidence TEXT,
+                PRIMARY KEY (ts_code, snapshot_date)
+            )
+        """)
+        _ecm.conn.execute("""
+            INSERT OR REPLACE INTO treemap_snapshot_history
+                SELECT * FROM treemap_snapshot
+        """)
+        _ecm.conn.commit()
+    except Exception as e:
+        logger.warning(f"treemap_snapshot 历史归档失败: {e}")
 
     # 原子切换
     _ecm.conn.execute("DROP TABLE IF EXISTS treemap_snapshot")
@@ -3009,6 +3087,92 @@ def _build_treemap_snapshot(codes: list[str]):
 
     elapsed = time.time() - t0
     logger.info(f"treemap_snapshot 构建完成: {written}/{len(codes)} 只, 耗时 {elapsed:.1f}s")
+
+
+def _build_status_snapshot(codes: list[str]):
+    """337号 §3/§4：日频现状成品生成（S2 status_engine → status_snapshot 表）
+
+    全市场结构化落库（九维状态/状态条/opportunity_state/conflict/共识），
+    与 treemap_snapshot 同管道、原子表替换。
+    """
+    t0 = time.time()
+    logger.info(f"构建 status_snapshot 现状成品: {len(codes)} 只...")
+    if not codes:
+        return
+
+    from app import create_app
+    _flask_app = create_app()
+    with _flask_app.app_context():
+        from app.opportunity_atlas.status_engine import StatusEngine
+        engine = StatusEngine()
+        # 数据交易日（从日线取，独立于 treemap_snapshot——S1 先行构建时序）
+        trade_date = ''
+        try:
+            _row = _ecm.read_conn.execute(
+                "SELECT MAX(trade_date) FROM daily_cache").fetchone()
+            trade_date = _row[0] if _row else ''
+        except Exception:
+            pass
+
+        _NEW = 'status_snapshot_new'
+        _ecm.conn.execute(f"DROP TABLE IF EXISTS {_NEW}")
+        _ecm.conn.execute(f"""
+            CREATE TABLE {_NEW} (
+                ts_code TEXT PRIMARY KEY, snapshot_date TEXT, trade_date TEXT,
+                dim_states TEXT, status_bar TEXT, opportunity_state TEXT,
+                state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
+                direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
+                created_at TEXT
+            )
+        """)
+        written = 0
+        for code in codes:
+            try:
+                row = engine.evaluate(code)
+                if not row:
+                    continue
+                _ecm.conn.execute(
+                    f"INSERT OR REPLACE INTO {_NEW} (ts_code, snapshot_date, trade_date,"
+                    f" dim_states, status_bar, opportunity_state, state_evidence,"
+                    f" conflict_evidence, consensus_rate, direction, l0, lifecycle, advice_params)"
+                    f" VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [code, trade_date, row['dim_states'], row['status_bar'],
+                     row['opportunity_state'], row['state_evidence'],
+                     row['conflict_evidence'], row['consensus_rate'],
+                     row['direction'], row['l0'], row['lifecycle'], row['advice_params']])
+                written += 1
+            except Exception as e:
+                logger.warning(f"status_snapshot {code} 生成失败: {e}")
+        _ecm.conn.commit()
+        # 346号：原子替换前归档历史快照（多交易日保留，342号 §6.2 / G3.3 依赖）
+        # 将当前 status_snapshot 数据追加到 status_snapshot_history（ts_code+snapshot_date
+        # 复合主键，同一日重复构建幂等覆盖）。
+        try:
+            _ecm.conn.execute("""
+                CREATE TABLE IF NOT EXISTS status_snapshot_history (
+                    ts_code TEXT, snapshot_date TEXT, trade_date TEXT,
+                    dim_states TEXT, status_bar TEXT, opportunity_state TEXT,
+                    state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
+                    direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
+                    PRIMARY KEY (ts_code, snapshot_date)
+                )
+            """)
+            _ecm.conn.execute("""
+                INSERT OR REPLACE INTO status_snapshot_history
+                    (ts_code, snapshot_date, trade_date, dim_states, status_bar,
+                     opportunity_state, state_evidence, conflict_evidence, consensus_rate,
+                     direction, l0, lifecycle, advice_params)
+                SELECT ts_code, snapshot_date, trade_date, dim_states, status_bar,
+                       opportunity_state, state_evidence, conflict_evidence, consensus_rate,
+                       direction, l0, lifecycle, advice_params
+                FROM status_snapshot
+            """)
+            _ecm.conn.commit()
+        except Exception as e:
+            logger.warning(f"status_snapshot 历史归档失败: {e}")
+        _ecm.conn.execute("DROP TABLE IF EXISTS status_snapshot")
+        _ecm.conn.execute(f"ALTER TABLE {_NEW} RENAME TO status_snapshot")
+        logger.info(f"status_snapshot 构建完成: {written}/{len(codes)} 只, 耗时 {time.time()-t0:.1f}s")
 
 
 def _safe_float(v):
@@ -3053,6 +3217,32 @@ def _is_pipeline_complete(pipeline_date: str) -> bool:
 
 def _all_steps_done(status: dict, step_ids: list[str]) -> bool:
     return all(status.get(s, {}).get('status') == 'done' for s in step_ids)
+
+
+def _is_precompute_in_progress() -> bool:
+    """P2/P4/S1 重算是否进行中（P2 写锁死锁根治，2026-08-16）
+
+    重算期间（pending/running 未完成）跳过完整性检查等批量写操作，
+    避免与 P2 compute_batch 4 worker 的写锁竞争。
+    基于最新数据日期（与 _drive_pipeline 同口径，327阶段2数据驱动）。
+    """
+    global _ecm
+    if _ecm is None:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        _ecm = get_ecm_instance()
+    try:
+        data_date = _get_latest_data_date()
+        if not data_date:
+            return False
+        data_date_compact = data_date.replace('-', '')
+        row = _ecm.conn.execute(
+            "SELECT COUNT(*) FROM pipeline_status "
+            "WHERE pipeline_date=? AND step_id IN ('P2','P4','S1') AND status!='done'",
+            [data_date_compact]
+        ).fetchone()
+        return bool(row and row[0] > 0)
+    except Exception:
+        return False
 
 
 def _has_failed(status: dict, step_ids: list[str]) -> bool:
@@ -3252,12 +3442,13 @@ def _drive_pipeline():
     if not codes:
         return
 
-    PRECOMPUTE = ['P1', 'P2', 'P3', 'P4']
+    # 333号v3.0：P4标签先算（当日）→ P2后算（消费当日标签）
+    PRECOMPUTE = ['P1', 'P4', 'P2', 'P3']
     for sid, func in [
         ('P1', lambda: _precompute_indicators(codes)),
+        ('P4', lambda: _precompute_l2_labels(codes)),
         ('P2', lambda: _precompute_strategy_signals(codes)),
         ('P3', lambda: _precompute_preset_combos(codes)),
-        ('P4', lambda: _precompute_l2_labels(codes)),
     ]:
         if status.get(sid, {}).get('status') in ('done', 'running'):
             continue
@@ -3282,7 +3473,12 @@ def _drive_pipeline():
 
     # ── 快照构建阶段 S1 ──
     if status.get('S1', {}).get('status') != 'done':
-        _run_pipeline_step(today, 'S1', lambda: _build_treemap_snapshot(codes), None)
+        # 337号 S2.6 + 336号 S2.5：成品仓 status_snapshot 先行构建（L2 输出），
+        # treemap_snapshot 后建（consensus/conflict/state 从 status_snapshot 取，切 L1/L2 口径）
+        def _s1_build(_codes):
+            _build_status_snapshot(_codes)
+            _build_treemap_snapshot(_codes)
+        _run_pipeline_step(today, 'S1', _s1_build, codes)
         return
 
     logger.info(f"  [管道] 今日全链路完成 ✅")
@@ -3338,13 +3534,24 @@ def _precompute_strategy_signals(codes):
         from app.engine.unified_core import UnifiedStrategyCore
         core = UnifiedStrategyCore()
         results = core.compute_batch(codes, max_workers=4)
-        count = 0
+        # 2026-08-16 修复（P2 写锁死锁根治）：原实现逐只 cache_signal_detail
+        # （共享 conn + _write_lock + busy_timeout=30s），4 worker 高频写与 daemon
+        # 主循环写冲突——持锁 worker 阻塞于 SQLite 写锁等待，其余 worker 阻塞于
+        # _write_lock，形成锁链死锁（lldb 实证 4 线程 PyThread_acquire_lock_timed
+        # + 1 线程 _pysqlite_query_execute）；5571 次单独 commit 放大为卡死数小时
+        # 且 strategy_signal_detail 零写入。改为单连接批量 INSERT（executemany +
+        # 一次 commit），写路径从 5571 次短事务收敛为 1 次批量事务。
+        import json as _json
+        rows = []
         for ts_code, result in results.items():
             try:
-                _ecm.cache_signal_detail(ts_code, result.to_dict())
-                count += 1
+                rd = result.to_dict()
+                rows.append((ts_code, rd.get('trade_date', datetime.now().strftime('%Y%m%d')),
+                             _json.dumps(rd, ensure_ascii=False, default=str), 1))
             except Exception:
                 continue
+        _batch_write_signal_detail(rows)
+        count = len(rows)
         logger.info(f"策略信号预计算完成: {count}/{len(codes)} 只")
         if count == 0 and codes:
             logger.info("策略信号全部失败，回退到因子信号写入...")
@@ -3352,6 +3559,32 @@ def _precompute_strategy_signals(codes):
     except Exception as e:
         logger.warning(f"策略信号预计算整体失败: {e}")
         _write_factor_signals(codes)
+
+
+def _batch_write_signal_detail(rows):
+    """批量写 strategy_signal_detail（P2 写锁死锁根治，2026-08-16）
+
+    用独立短连接一次性 executemany + commit：与 daemon 主循环的共享写连接解耦，
+    单次批量事务替代逐只 INSERT，避免 4 worker × 5571 次短事务在 SQLite 写锁
+    上的锁链死锁。短 busy_timeout（10s）防极端长事务阻塞；失败静默降级
+    （P4 完整性检查会兜底补写）。
+    """
+    if not rows:
+        return
+    import sqlite3 as _sqlite3
+    try:
+        conn = _sqlite3.connect(_ecm.db_path, timeout=10)
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.executemany(
+            "INSERT OR REPLACE INTO strategy_signal_detail "
+            "(ts_code, trade_date, signal_json, schema_version, cached_at) "
+            "VALUES (?, ?, ?, ?, datetime('now','localtime'))",
+            rows
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"批量写 strategy_signal_detail 失败: {e}")
 
 
 def _prewarm_weekly_cache(codes):
@@ -3547,6 +3780,80 @@ def _run_minute_backfill_v2():
         logger.warning(f"  分钟数据闲时补采失败: {e}")
 
 
+def _run_signal_checkpoint():
+    """信号验证回算 T+5/T+10/T+20（345号第③层核查激活，2026-08-16）
+
+    daemon 模式回算入口（scheduler_manager 仅 API 进程注册；daemon 在
+    日终同步后触发）。回算写 app.db（API 业务库），daemon 只写 stock_cache.db，
+    无锁冲突；DataManager 读 stock_cache.db 在日终同步后数据完整。
+    """
+    try:
+        import os as _os
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        _ecm_local = get_ecm_instance()
+        # 回算依赖 app.db 的 Flask SQLAlchemy 模型——通过 API 进程的 create_app
+        # 上下文执行；daemon 不持有 Flask app，直接操作 app.db SQLite。
+        import sqlite3 as _sq
+        import json as _json
+        db_path = _os.path.join(_os.environ.get('DATA_DIR', 'data'), 'app.db')
+        if not _os.path.exists(db_path):
+            logger.warning("  信号验证回算: app.db 不存在，跳过")
+            return
+        conn = _sq.connect(db_path, timeout=15)
+        cur = conn.cursor()
+        # 读取待回算信号（已达 T+N 且未完成对应检查点）
+        import datetime as _dt
+        today = _dt.date.today()
+        rows = cur.execute(
+            "SELECT id, ts_code, signal_date, signal_type, confidence, entry_price, "
+            "target_price, risk_line, signal_snapshot, verification_status "
+            "FROM signal_records WHERE verification_status != 'completed'"
+        ).fetchall()
+        # 用 daily_cache 回算（只读 stock_cache.db）
+        ec = _sq.connect(f"file:{_ecm_local.db_path}?mode=ro", uri=True, timeout=15)
+        updated = 0
+        for rid, ts_code, sdate, stype, conf, entry, target, risk, snap, status in rows:
+            sdate_dt = _dt.date.fromisoformat(str(sdate)) if isinstance(sdate, str) else sdate
+            # 回算 T+5/10/20（已达的检查点）
+            for off, field in ((5, 't5'), (10, 't10'), (20, 't20')):
+                if status in ('completed',) or (off == 5 and status != 'pending') \
+                   or (off == 10 and status not in ('pending', 't5_checked')) \
+                   or (off == 20 and status not in ('pending', 't5_checked', 't10_checked')):
+                    continue
+                cutoff = today - _dt.timedelta(days=off)
+                if sdate_dt > cutoff:
+                    continue  # T+N 未到
+                # 取信号日后第 N 个交易日
+                rows2 = ec.execute(
+                    "SELECT close FROM daily_cache WHERE ts_code=? AND trade_date >= ? "
+                    "ORDER BY trade_date LIMIT ?", (ts_code, sdate_dt.strftime('%Y-%m-%d'), off + 1)
+                ).fetchall()
+                if len(rows2) < off + 1:
+                    continue
+                sig_price = rows2[0][0]
+                chk_price = rows2[off][0]
+                if not sig_price:
+                    continue
+                ret = round((chk_price - sig_price) / sig_price, 4)
+                bullish = stype in ('BULLISH', 'WATCH')
+                is_win = ret > 0 if bullish else ret < 0
+                # 更新检查点
+                new_status = 't5_checked' if off == 5 else ('t10_checked' if off == 10 else 'completed')
+                cur.execute(
+                    f"UPDATE signal_records SET price_{field}=?, return_{field}=?, "
+                    f"is_win_{field}d=?, verification_status=? WHERE id=?",
+                    (chk_price, ret, is_win, new_status, rid)
+                )
+                status = new_status
+                updated += 1
+        conn.commit()
+        conn.close()
+        ec.close()
+        logger.info(f"  信号验证回算完成: 更新 {updated} 条检查点")
+    except Exception as e:
+        logger.warning(f"  信号验证回算失败: {e}")
+
+
 def _run_data_cleanup():
     """执行数据清理（迭代5：日期格式统一 + 存储清理）"""
     today = datetime.now().strftime('%Y%m%d')
@@ -3639,10 +3946,13 @@ def main():
     logger.info("data_daemon 启动")
     logger.info(f"DATA_DIR={os.environ.get('DATA_DIR')}")
 
-    # 初始化 ECM
-    from app.data.enhanced_cache_manager import EnhancedCacheManager
-    _ecm = EnhancedCacheManager()
-    logger.info("ECM 就绪")
+    # 初始化 ECM——统一走全局单例（get_ecm_instance）
+    # 修复 2026-08-15：原 main 直接构造 EnhancedCacheManager() 与采集器/其他模块的
+    # get_ecm_instance() 单例并存（双实例、各自 _write_lock 不互斥）→ 并发写同库
+    # 触发 SQLite 写锁（实测全天 831 次 "database is locked"；双连接并发写复现 100% 失败）
+    from app.data.enhanced_cache_manager import get_ecm_instance
+    _ecm = get_ecm_instance()
+    logger.info("ECM 就绪（全局单例）")
 
     # 启动采集器
     collectors = _start_collectors()
@@ -3740,8 +4050,16 @@ def main():
             if ts - _last_patrol > 1800:
                 _last_patrol = ts
                 if _is_market_day():
-                    logger.info("定时巡检...")
-                    run_integrity_check(backfill_days=1)
+                    # 2026-08-16 修复（P2 写锁死锁根治）：P2/P4/S1 重算期间
+                    # 跳过完整性检查——run_integrity_check 批量补采写库（长事务）
+                    # 与 P2 compute_batch 4 worker 的写锁竞争（lldb 实证 4 线程
+                    # PyThread_acquire_lock_timed 锁链死锁 + strategy_signal_detail
+                    # 零写入）。重算完成（S1 done）后恢复完整性检查。
+                    if _is_precompute_in_progress():
+                        logger.info("定时巡检：预计算进行中，跳过完整性检查（避免写锁竞争）")
+                    else:
+                        logger.info("定时巡检...")
+                        run_integrity_check(backfill_days=1)
 
         time.sleep(30)
 

@@ -112,24 +112,36 @@ class BacktestEvidenceService:
         """
         执行指定偏移量的回调检查
 
+        2026-08-16 修复（345号第③层核查激活）：原实现按
+        `signal_date == target_date`（精确日期匹配）查信号——历史积压
+        （1083 条 pending，07-09~08-15 各日期）永不命中，导致从未回算。
+        改为"已达 T+N 且未完成对应检查点"的信号（signal_date <= 今天-N），
+        覆盖历史积压与当日新信号。
+
         Args:
             days_offset: 5 / 10 / 20 — 检查哪个时间窗口
         """
-        target_date = date.today() - timedelta(days=days_offset)
+        cutoff = date.today() - timedelta(days=days_offset)
         label = f't{days_offset}'
 
-        # 轨A: SignalRecord
+        # 轨A: SignalRecord（已达 T+N 且未回算该检查点）
+        if days_offset == 5:
+            status_filter = SignalRecord.verification_status.in_(['pending'])
+        elif days_offset == 10:
+            status_filter = SignalRecord.verification_status.in_(['pending', 't5_checked'])
+        else:  # 20
+            status_filter = SignalRecord.verification_status.in_(['pending', 't5_checked', 't10_checked'])
         pending = SignalRecord.query.filter(
-            SignalRecord.signal_date == target_date,
-            SignalRecord.verification_status.in_(['pending', f't{5 if days_offset>5 else 0}_checked'])
+            SignalRecord.signal_date <= cutoff,
+            status_filter
         ).all()
 
         for rec in pending:
             self._check_single_record(rec, days_offset, label)
 
-        # 轨B: VirtualPosition
+        # 轨B: VirtualPosition（同轨A：覆盖历史积压）
         vp_pending = VirtualPosition.query.filter(
-            VirtualPosition.start_date == target_date,
+            VirtualPosition.start_date <= cutoff,
             VirtualPosition.status == 'tracking'
         ).all()
         for vp in vp_pending:
@@ -137,55 +149,91 @@ class BacktestEvidenceService:
 
         logger.info(f"回调检查 T+{days_offset}: SignalRecord={len(pending)}, VP={len(vp_pending)}")
 
+    @staticmethod
+    def _record_is_bullish(rec: SignalRecord) -> bool:
+        """方向语义判断：新记录 signal_type=右侧信号类型（334号 S2.8，signal_registry.yaml 5 类），
+        方向从 signal_snapshot.direction 读取（enter/light=看多）；旧记录 signal_type
+        仍为方向枚举（BULLISH/WATCH=看多）时兼容回退。"""
+        if rec.signal_type in ('BULLISH', 'WATCH'):
+            return True
+        try:
+            snap = rec.signal_snapshot or {}
+            if isinstance(snap, str):
+                import json as _json
+                snap = _json.loads(snap)
+            return snap.get('direction') in ('enter', 'light')
+        except Exception:
+            return False
+
     def _check_single_record(self, rec: SignalRecord, days_offset: int, label: str):
-        """更新单条 SignalRecord 的回调检查点"""
+        """更新单条 SignalRecord 的回调检查点
+
+        2026-08-16 修复（345号第③层核查激活）：原实现把窗口末尾当信号价、
+        往前数 offset 天当检查价——收益方向错乱。改为按 signal_date 精确定位，
+        signal_price=信号日收盘，check_price=信号日后第 N 个交易日收盘。
+        """
         try:
             df = self.data_manager.get_cached_daily_data(
                 rec.ts_code,
                 start_date=(rec.signal_date - timedelta(days=5)).strftime('%Y-%m-%d'),
-                end_date=(rec.signal_date + timedelta(days=days_offset + 5)).strftime('%Y-%m-%d'),
+                end_date=(rec.signal_date + timedelta(days=days_offset * 2 + 10)).strftime('%Y-%m-%d'),
             )
             if df.empty:
                 return
 
-            # 找到 signal_date 之后第 days_offset 个交易日的价格
             closes = df['close'].values
-            signal_price = float(closes[-1])  # 最近（信号日）收盘价
-            target_idx = min(days_offset, len(closes) - 1)
-            check_price = float(closes[-1 - target_idx]) if len(closes) > target_idx else None
+            dates = df['trade_date'].astype(str).values if 'trade_date' in df.columns else None
+            # 定位 signal_date 在窗口中的索引
+            sig_str = rec.signal_date.strftime('%Y-%m-%d')
+            if dates is not None:
+                try:
+                    sig_idx = list(dates).index(sig_str)
+                except ValueError:
+                    # 信号日可能非交易日，找该日之后最近交易日
+                    sig_idx = next((i for i, d in enumerate(dates) if d >= sig_str), None)
+                    if sig_idx is None:
+                        return
+            else:
+                sig_idx = len(closes) - 1  # 兜底：信号日=窗口末（无日期列时近似）
 
-            if check_price is None or signal_price == 0:
+            signal_price = float(closes[sig_idx])
+            target_idx = sig_idx + days_offset
+            if target_idx >= len(closes):
+                return  # T+N 尚未到达（未来数据不足）
+            check_price = float(closes[target_idx])
+
+            if signal_price == 0:
                 return
 
             ret = (check_price - signal_price) / signal_price
-            entry = rec.entry_price or signal_price
 
             # 填充
             if days_offset == 5:
                 rec.price_t5 = check_price
                 rec.return_t5 = round(ret, 4)
-                rec.hit_target_t5 = rec.target_price and check_price >= rec.target_price if rec.signal_type in ('BULLISH', 'WATCH') else False
+                rec.hit_target_t5 = rec.target_price and check_price >= rec.target_price if self._record_is_bullish(rec) else False
                 rec.hit_stop_t5 = rec.risk_line and check_price <= rec.risk_line
-                rec.is_win_5d = ret > 0 if rec.signal_type in ('BULLISH', 'WATCH') else ret < 0
+                rec.is_win_5d = ret > 0 if self._record_is_bullish(rec) else ret < 0
                 rec.verification_status = 't5_checked'
             elif days_offset == 10:
                 rec.price_t10 = check_price
                 rec.return_t10 = round(ret, 4)
-                rec.hit_target_t10 = rec.target_price and check_price >= rec.target_price if rec.signal_type in ('BULLISH', 'WATCH') else False
+                rec.hit_target_t10 = rec.target_price and check_price >= rec.target_price if self._record_is_bullish(rec) else False
                 rec.hit_stop_t10 = rec.risk_line and check_price <= rec.risk_line
-                rec.is_win_10d = ret > 0 if rec.signal_type in ('BULLISH', 'WATCH') else ret < 0
+                rec.is_win_10d = ret > 0 if self._record_is_bullish(rec) else ret < 0
                 rec.verification_status = 't10_checked'
             elif days_offset == 20:
                 rec.price_t20 = check_price
                 rec.return_t20 = round(ret, 4)
-                rec.hit_target_t20 = rec.target_price and check_price >= rec.target_price if rec.signal_type in ('BULLISH', 'WATCH') else False
+                rec.hit_target_t20 = rec.target_price and check_price >= rec.target_price if self._record_is_bullish(rec) else False
                 rec.hit_stop_t20 = rec.risk_line and check_price <= rec.risk_line
-                # max drawdown
-                if len(closes) > 1:
-                    peak = np.maximum.accumulate(closes[::-1])[::-1]
-                    dd = (peak - closes) / peak
+                # max drawdown：信号日后 T+1..T+20 区间内最大回撤
+                seg = closes[sig_idx + 1:target_idx + 1]
+                if len(seg) > 1:
+                    peak = np.maximum.accumulate(seg[::-1])[::-1]
+                    dd = (peak - seg) / peak
                     rec.max_drawdown_t20 = round(float(np.max(dd)), 4)
-                rec.is_win_20d = ret > 0 if rec.signal_type in ('BULLISH', 'WATCH') else ret < 0
+                rec.is_win_20d = ret > 0 if self._record_is_bullish(rec) else ret < 0
                 rec.verification_status = 'completed'
 
             db.session.commit()

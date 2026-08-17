@@ -69,3 +69,22 @@ class Config:
                 'model': 'mock',
                 'api_key': ''
             }
+
+
+def verify_business_db():
+    """331号 Step5（2026-08-13）：防静默——启动时明确业务库连接，非 SQLite 告警
+
+    背景：251号方案残留的 .env DATABASE_URL=postgresql:///stock_analysis 曾被
+    load_dotenv() 静默加载，导致业务库实际连 PostgreSQL 而文档（292权威）要求
+    SQLite data/app.db。本函数在启动早期打印实际连接并告警非 SQLite 配置。
+    """
+    import logging
+    _log = logging.getLogger(__name__)
+    uri = os.getenv('DATABASE_URL', '')
+    if uri:
+        _log.info('业务数据库连接: %s', uri)
+        if not uri.startswith('sqlite'):
+            _log.warning(
+                '⚠️ 业务库非 SQLite（%s）——292权威要求 sqlite:///data/app.db，'
+                '请检查 .env（331号方案）。', uri)
+    return uri

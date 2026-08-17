@@ -77,8 +77,13 @@ def _normalize_scenarios(raw: list[dict]) -> list[dict]:
 def _geometric(df) -> dict:
     """几何化指标：距支撑/压力%、盈亏比、信号天数、防守位（K线不足返回空）
 
-    - support_price：真实防守位 = 60日低点（lo60，现价下方空间）；缠论中枢下沿
-      是上方阻力区，不当止损（600519 实证：中枢下沿 1367 而现价 1309）。
+    - support_price：近端防守位 = max(MA20, 近20日低点)（2026-08-13 知识库修正：
+      60日低点对右侧拉升股过宽，如 301119 现价22.35/止损16.69=-25.3% 不合理；
+      知识库《短线风险控制/交易计划制订》止损锚定突破大阳线实体近端结构位，
+      《短线高手的交易语言》止损≤1/2止盈即盈亏比≥2。取近端结构位 max(MA20,
+      lo20)，距现价不超过 15% 上限）。止损必须低于现价（322号 H3 教训：
+      600519 中枢下沿 1367 > 现价 1309 致止损立即触发，近端位高于现价时
+      回退 60日低点）。
     - signal_days：突破信号后已持续交易日数（收盘价站上前60日高点后至今）
     """
     if df is None or df.empty or 'close' not in df.columns or len(df) < 20:
@@ -89,12 +94,31 @@ def _geometric(df) -> dict:
     price = float(closes[-1])
     hi60 = float(df['high'].tail(60).max()) if len(df) >= 60 and 'high' in df.columns else None
     lo60 = float(df['low'].tail(60).min()) if len(df) >= 60 and 'low' in df.columns else None
-    # 压力位：60日高点与 MA60 取较低者（更贴近的阻力）；支撑位：60日低点
+    # 压力位：60日高点与 MA60 取较低者（更贴近的阻力）；支撑位：近端结构位
     ma60 = float(df['close'].tail(60).mean()) if len(df) >= 60 else None
     resistance = hi60
     if hi60 is not None and ma60 is not None:
         resistance = min(hi60, ma60)   # 更贴近的压力参考
-    support = lo60
+    ma20 = float(df['close'].tail(20).mean()) if len(df) >= 20 else None
+    lo20 = float(df['low'].tail(20).min()) if len(df) >= 20 and 'low' in df.columns else None
+    # 近端结构位：MA20 与 近20日低点取高者（更贴近现价的支撑）
+    near = None
+    if ma20 is not None and lo20 is not None:
+        near = max(ma20, lo20)
+    elif ma20 is not None:
+        near = ma20
+    elif lo20 is not None:
+        near = lo20
+    support = near
+    # 止损必须低于现价（H3 教训）：近端位高于现价时回退 60日低点
+    if support is not None and price is not None and support >= price:
+        support = lo60
+    # 止损距离上限 15%：近端结构位过远时压缩（知识库：止损不宜过宽）
+    if support is not None and price is not None:
+        max_stop_pct = 0.15
+        min_support = price * (1 - max_stop_pct)
+        if support < min_support:
+            support = min_support
     dist_sup = (support / price - 1) * 100 if support else None
     dist_res = (resistance / price - 1) * 100 if resistance else None
     rr = abs(dist_res / dist_sup) if dist_sup and dist_res else None
@@ -119,7 +143,8 @@ def _geometric(df) -> dict:
 
 
 def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
-                           kronos: dict = None, tags: dict = None) -> dict:
+                           kronos: dict = None, tags: dict = None,
+                           consensus: dict = None, dirs: list = None) -> dict:
     """构建 operation_advice（analyze 响应时调用，毫秒级）
 
     Args:
@@ -145,9 +170,11 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         'right_side_confirm': rsc,
         'main_force_phase': 'lifting' if inflow else ('distributing' if outflow else 'unknown'),
     }
-    # L4 共识近似：五维方向一致度（复用 _dim_directions，与 _scenario_base 同源）
-    dirs = _dim_directions(dimensions)
-    consensus = _consensus_from_dirs(dirs)
+    # L4 共识：优先用外部传入的 L1 九维共识（336号统一口径），否则回退五维推导
+    if dirs is None:
+        dirs = _dim_directions(dimensions)
+    if consensus is None:
+        consensus = _consensus_from_dirs(dirs)
     arb = arbitrate(arb_tags, consensus=consensus)
     state = real_state or arb['opportunity_state']
     state_reason = arb['state_evidence'][0] if arb['state_evidence'] else ''
@@ -157,12 +184,59 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
     # （含真实标签场景：实时五维与 P4 预计算冲突时保守降级）；
     # diagnose 侧会将顶层 opportunity_state 同步为降级后值（见 cross_validate）
     _pre_state = state
-    state = _apply_degradation(
+    state, _degrade_reason = _apply_degradation(
         state, dirs,
         sentiment_phase=str(dimensions.get('emotion', {}).get('rotation_state') or ''),
         df=df)
-    if state != _pre_state:
-        state_reason = '多维度方向冲突/市场情绪过激，建议观望'
+    # ── 2026-08-13 知识库修正：盈亏比门禁 ──
+    # 《短线高手的交易语言》：止损≤1/2止盈（盈亏比≥2）；《回报风险比》：风险>回报
+    # 的交易不可取。止损距离>目标收益（rr<1）时，入场类建议降级为观望——
+    # 避免"强右侧可入场 + 26% 宽止损"自相矛盾（301119 实证）。
+    geo = _geometric(df)
+    _rr = geo.get('risk_reward')
+    if _rr is not None and _rr < 1.0 and state in ('enter', 'light'):
+        state = 'wait'
+        state_reason = f'盈亏比不足（目标收益/止损风险≈{_rr}，止损过宽），建议观望'
+    elif state != _pre_state:
+        # 336号 S1.1 修复：按降级类型保留具体原因，不再无条件覆盖（603897 差异#4）
+        state_reason = _degrade_reason or '多维度方向冲突/市场情绪过激，建议观望'
+    # 335号 §5：L0c 持有期限制——信号已延伸（active_signal 距突破位 >12%）只可持有、不新开仓
+    try:
+        _asig = (tags or {}).get('active_signal')
+        if isinstance(_asig, str) and _asig:
+            import ast as _ast
+            try:
+                _asig = _ast.literal_eval(_asig)   # 标签为单引号字面量，ast 兼容
+            except Exception:
+                try:
+                    import json as _json
+                    _asig = _json.loads(_asig)
+                except Exception:
+                    _asig = None
+        if isinstance(_asig, dict) and _asig.get('price'):
+            _p0 = float(_asig['price'])
+            _last = float(df['close'].iloc[-1]) if (df is not None and not df.empty
+                                                    and 'close' in df.columns) else None
+            if _p0 > 0 and _last:
+                _dist = (_last - _p0) / _p0 * 100
+                # 334号 + 352号G6：生命周期阈值从 signal_registry.yaml 读取
+                try:
+                    from app.services.status_config import get_signal_registry
+                    _reg = get_signal_registry().get('signals', {})
+                    _max_ext_pct = 0
+                    for _sig_cfg in _reg.values():
+                        _ext = (_sig_cfg.get('lifecycle') or {}).get('extended') or {}
+                        _pct = _ext.get('dist_pct', 0)
+                        if _pct > _max_ext_pct:
+                            _max_ext_pct = _pct
+                    _ext_threshold = _max_ext_pct * 100 if _max_ext_pct <= 1 else _max_ext_pct
+                except Exception:
+                    _ext_threshold = 12  # 兜底默认值
+                if _dist > _ext_threshold and state in ('enter', 'light'):
+                    state = 'wait'
+                    state_reason = f'信号已延伸（距突破位+{_dist:.0f}%），只可持有、不新开仓（L0c）'
+    except Exception:
+        pass
     # 交易机制硬约束（T+1/涨跌停/停牌前置过滤）
     _hard = _apply_hard_constraints(df, state)
     state = _hard['state']
@@ -174,8 +248,7 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
     chip = dimensions.get('chip') or {}
     emo = dimensions.get('emotion') or {}
     chan = dimensions.get('chanlun') or {}
-    # 几何指标（真实防守位/压力位：60日低点/60日高点；先算供 structure/risk/executable 复用）
-    geo = _geometric(df)
+    # 几何指标（真实防守位/压力位：近端结构位/60日高点；先算供 structure/risk/executable 复用）
     support = geo.get('support_price')
     resistance = geo.get('resistance_price')
     # 当前价（structure/risk 维判定用；K线缺失时为 None）
@@ -207,7 +280,7 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
             'key': 'structure',
             'light': '✅' if above_support else ('🔴' if below_support else '🟡'),
             'conclusion': '结构位置',
-            'evidence': (f"防守位{support} / 压力{resistance}"
+            'evidence': (f"防守位{support} / 压力{resistance if resistance and price and resistance > price else (df['high'].tail(60).max() if df is not None and not df.empty and len(df) >= 60 and 'high' in df.columns else resistance)}"
                          if support or resistance else '结构位不足'),
             'plain': '站上防守位' if above_support else ('跌破防守位' if below_support else ''),
         },
@@ -262,13 +335,26 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         # base 边界保护（概率非负）
         for k in base:
             base[k] = max(0.0, base[k])
+    # 330号改进1：情景注入真实价位（原为写死模板"回踩支撑位可加仓"等空话，
+    # 用户无法执行；改为带真实支撑/压力/现价的可执行触发条件）。
+    # 压力位必须高于现价（ma60 < 现价时 resistance 已失真，回退 60日高点）；
+    # 支撑位必须低于现价。
+    _res_eff = resistance if (resistance and price and resistance > price) else (
+        (df['high'].tail(60).max() if df is not None and not df.empty and len(df) >= 60 and 'high' in df.columns else None))
+    _sup_eff = support if (support and price and support < price) else None
+    _sup_s = f'{_sup_eff:.2f}' if _sup_eff else '支撑位'
+    _res_s = f'{_res_eff:.2f}' if _res_eff else '压力位'
+    _price_s = f'{price:.2f}' if price else '现价'
     scenarios = _normalize_scenarios([
         {'id': 'a', 'name': '趋势延续', 'prob': base['a'],
-         'steps': ['回踩支撑位可加仓', '突破前高追进']},
+         'steps': [f'回踩 {_sup_s} 不破可加仓（现价 {_price_s}）',
+                   f'放量站稳 {_res_s} 追进']},
         {'id': 'b', 'name': '冲高回落', 'prob': base['b'],
-         'steps': ['阻力位附近减仓', '资金流出不开新仓']},
+         'steps': [f'反弹至 {_res_s} 附近减仓',
+                   '主力资金转流出则不开新仓']},
         {'id': 'c', 'name': '破位下行', 'prob': base['c'],
-         'steps': ['跌破支撑位止损', '等待底部结构']},
+         'steps': [f'跌破 {_sup_s} 立即止损',
+                   '等待次级别底背驰出现后再入场']},
     ])
 
     # 机器可执行（虚拟实盘前置契约；support 已由 geo 提供 = 60日低点防守位）
@@ -281,6 +367,21 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
     _n_bear = sum(1 for x in dirs if x < 0)
     if state in ('enter', 'light') and _n_bear == 1:
         max_pct = min(max_pct, 0.3)
+    # 336号 S1.3：L0b 软风险仓位约束（共享函数，口径对齐 diagnose gate soft_risks；
+    # 估值用 valuation_level 简化映射——S1 过渡，S2 status_engine 统一精确口径）
+    try:
+        _soft_risks: list = []
+        if (tags or {}).get('fina_health') == 'fail':
+            _soft_risks.append('fina_fail')
+        if (tags or {}).get('catalyst_event') == 'fraud_sign':
+            _soft_risks.append('fina_weak')
+        if (tags or {}).get('main_force_phase') == 'distributing':
+            _soft_risks.append('distributing')
+        _vl = (tags or {}).get('valuation_level', '')
+        _val_lv = 'moderate' if _vl in ('high', 'extreme_high') else ('mild' if _vl == 'fair' else 'none')
+        max_pct = apply_soft_risk_position(max_pct, _soft_risks, _val_lv)
+    except Exception:
+        pass
     executable = {
         'action_type': action_type,
         # 入场=现价市价买入（trigger 用现价，避免与止损同价歧义：方案322 entry 10.20/exit 9.80 两档）
@@ -329,8 +430,13 @@ def _map_action_label(state: str, signal_strength: float) -> str:
     return '清仓回避'   # avoid
 
 
-def _build_invalidation(state, support, sentiment_phase, rsc) -> list[str]:
-    """失效条件派生（§3.3：止损位 + 情绪退潮 + 右侧否决）"""
+def _build_invalidation(state, support, sentiment_phase, rsc, tags=None) -> list[str]:
+    """失效条件派生（§3.3：止损位 + 情绪退潮 + 右侧否决 + 330号改进1：接入 exit_conditions）
+
+    330号改进1：读取机会图谱标签 exit_conditions（P4 预计算，按机会类型模板生成
+    {desc, check} 列表），将 desc 中文化并入失效条件——原实现只显示"收盘跌破止损位"
+    一条，漏掉"跌破MA20且3日未收回/主力出货/估值退出"等真实退出信号。
+    """
     conditions = []
     if support is not None:
         conditions.append(f'收盘跌破止损位 {support}')
@@ -338,6 +444,20 @@ def _build_invalidation(state, support, sentiment_phase, rsc) -> list[str]:
         conditions.append('大盘进入退潮/高潮期，追涨风险大')
     if rsc == '否决':
         conditions.append('右侧确认已转为否决（卖出/背离/预跌信号）')
+    # 330号改进1：接入标签库真实退出条件（exit_conditions 是 {desc, check} JSON 列表）
+    if tags:
+        try:
+            import json as _json
+            ec = tags.get('exit_conditions')
+            if ec:
+                parsed = _json.loads(ec) if isinstance(ec, str) else ec
+                if isinstance(parsed, list):
+                    for item in parsed:
+                        desc = str(item.get('desc') or '').strip()
+                        if desc and desc not in conditions:
+                            conditions.append(desc)
+        except Exception:
+            pass
     return conditions
 
 
@@ -354,12 +474,26 @@ def _calc_confidence(consensus_rate: float, evidence_count: int,
 
 
 def _build_target_levels(df) -> list[dict]:
-    """目标位派生（§3.5：60日高点=目标1，×1.15=目标2；标注参考压力位）"""
+    """目标位派生（330号改进1：真实压力位，消灭 ×1.15 虚构）
+
+    目标1 = 60日高点压力位（上方第一真实压力）；
+    目标2 = MA60 若高于目标1 则作为第二压力，否则不返回（避免倒序）。
+    仅返回高于现价的真实压力位；无压力位时返回空。
+    """
     if df is None or df.empty or 'high' not in df.columns or len(df) < 60:
         return []
+    closes = df['close'].values
+    price = float(closes[-1])
     hi60 = float(df['high'].tail(60).max())
-    return [{'price': round(hi60, 2), 'reason': '60日高点压力位'},
-            {'price': round(hi60 * 1.15, 2), 'reason': '保守扩展目标'}]
+    ma60 = float(df['close'].tail(60).mean()) if len(df) >= 60 else None
+    levels = []
+    # 目标1：60日高点（真实压力位，须高于现价）
+    if hi60 > price:
+        levels.append({'price': round(hi60, 2), 'reason': '60日高点压力位'})
+    # 目标2：MA60 真实压力，须高于目标1（防倒序）
+    if ma60 and ma60 > price and (not levels or ma60 > levels[0]['price'] + 0.5):
+        levels.append({'price': round(ma60, 2), 'reason': 'MA60 压力位'})
+    return levels
 
 
 def _build_expected_holding(tags: dict) -> str:
@@ -385,8 +519,7 @@ def _build_advice_card_fields(state, tags, dims, geo, support, signal_light,
     except (TypeError, ValueError):
         _ss = 0.0
     action_label = _map_action_label(state, _ss)
-    # confidence：共识率（五维推导）+证据数+冲突数
-    # 注：consensus_rate 标签全市场缺失（实证 0 只），用函数内五维推导 consensus
+    # confidence：共识率（L1 九维或五维推导）+证据数+冲突数
     _consensus = consensus_rate if consensus_rate is not None else 0.0
     try:
         _ev_cnt = int((tags or {}).get('evidence_count') or 0)
@@ -415,12 +548,12 @@ def _build_advice_card_fields(state, tags, dims, geo, support, signal_light,
         _reason = (tags or {}).get('state_reason') or ''
         if _reason and _reason not in evidence_top3:
             evidence_top3.append(_reason)
-    # invalidation：止损位 + 情绪退潮 + 右侧否决
+    # invalidation：止损位 + 情绪退潮 + 右侧否决 + exit_conditions（330号改进1）
     _sent = str(dims.get('emotion', {}).get('rotation_state') or '')
     _sent_phase = ('ebb' if '退潮' in _sent else
                    ('climax' if '高潮' in _sent else ''))
     _rsc = str((tags or {}).get('right_side_confirm') or '')
-    invalidation = _build_invalidation(state, support, _sent_phase, _rsc)
+    invalidation = _build_invalidation(state, support, _sent_phase, _rsc, tags=tags)
 
     return {
         'signal_light': _light_map.get(state, '🟡'),
@@ -438,24 +571,44 @@ def _build_advice_card_fields(state, tags, dims, geo, support, signal_light,
 # ─────────────────────────────────────────────
 
 def _apply_degradation(state: str, dirs: list[int], sentiment_phase: str = '',
-                       df=None) -> str:
+                       df=None) -> tuple:
     """方向冲突降级 + 市场状态过滤（§三：1维反向→仓位减半由调用方处理；≥2维→强制观望）
 
     dirs: 五维方向（_dim_directions 输出：+1 看多 / -1 看空 / 0 中性）
     sentiment_phase: '高潮期'/'退潮期' 等中文（rotation_state）
-    Returns: 降级后的 state
+    Returns: (state, reason) —— reason 为降级原因（None=未降级），供 state_reason 使用（336号 S1.1）
     """
     n_bear = sum(1 for x in dirs if x < 0)
     n_bull = sum(1 for x in dirs if x > 0)
     # ≥2 维反向 → 强制观望（L4 tie 先例：分歧降级谨慎）
     if state in ('enter', 'light') and n_bear >= 2:
-        return 'wait'
+        return 'wait', '多维度方向冲突（≥2 维反向），建议观望'
     # 市场高潮/退潮期 → 买入类降级（不做重仓；wait 保持）
     if state in ('enter', 'light'):
         _sent = str(sentiment_phase or '')
         if '高潮' in _sent or '退潮' in _sent:
-            return 'light'
-    return state
+            return 'light', '市场情绪高潮/退潮，仓位压缩'
+    return state, None
+
+
+def apply_soft_risk_position(max_pct: float, soft_risks: list, valuation: str = 'none') -> float:
+    """L0b 软风险仓位约束共享函数（336号 S1.3，双模块同路径）
+
+    口径对齐 cross_validate._evaluate_gate 的 soft_risks 系数：
+      fina_weak/fina_fail ×0.5、distributing ×0.7、low_liquidity ×0.7、
+      估值 moderate ×0.5 / mild ×0.8
+    """
+    if 'fina_weak' in soft_risks or 'fina_fail' in soft_risks:
+        max_pct = round(max_pct * 0.5, 2)
+    if 'distributing' in soft_risks:
+        max_pct = round(max_pct * 0.7, 2)
+    if 'low_liquidity' in soft_risks:
+        max_pct = round(max_pct * 0.7, 2)
+    if valuation == 'moderate':
+        max_pct = round(max_pct * 0.5, 2)
+    elif valuation == 'mild':
+        max_pct = round(max_pct * 0.8, 2)
+    return max_pct
 
 
 def _apply_hard_constraints(df, state: str) -> dict:

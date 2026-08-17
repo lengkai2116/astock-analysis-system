@@ -56,10 +56,10 @@ def test_enter_state_action_is_buy():
 
 
 def test_support_present_generates_rules():
-    """有防守位（K线60日低点）→ entry_rules/exit_rules 生成价格触发条件"""
+    """有防守位（近端结构位）→ entry_rules/exit_rules 生成价格触发条件"""
     import numpy as np
     import pandas as pd
-    # 构造 60 日 K线：价格 10-12 区间，60日低点 9.0（防守位）
+    # 构造 60 日 K线：价格 10-12 区间，近20日低点 ≈ 10.5（近端防守位）
     closes = np.linspace(11.0, 12.0, 60)
     highs = closes + 0.5
     lows = np.concatenate([np.linspace(9.0, 10.5, 30), np.linspace(10.5, 11.5, 30)])
@@ -70,10 +70,11 @@ def test_support_present_generates_rules():
     assert len(ex['entry_rules']) >= 1, "有防守位应生成入场规则"
     assert len(ex['exit_rules']) >= 1, "有防守位应生成退出规则"
     # 触发条件为可解析价格比较（复盘中心回放 close 值即可判定）
-    # 2026-08-10 审查修正：入场=现价（市价买入）、止损=60日低点防守位（两档价，322号 §S5 示例 10.20/9.80）
+    # 2026-08-13 知识库修正：止损=近端结构位 max(MA20, 近20日低点)（约 11.84），
+    # 而非 60日低点 9.0（60日低点对右侧拉升股过宽，如 301119 曾致 -25.3% 止损）
     assert 'close <= 12.0' in ex['entry_rules'][0]['trigger'], \
         f"入场应为现价 12.0，实际 {ex['entry_rules'][0]['trigger']}"
-    assert 'close < 9.0' in ex['exit_rules'][0]['trigger'], \
-        f"止损应为 60日低点 9.0，实际 {ex['exit_rules'][0]['trigger']}"
+    assert 'close < 11.84' in ex['exit_rules'][0]['trigger'], \
+        f"止损应为近端结构位 max(MA20,lo20)≈11.84，实际 {ex['exit_rules'][0]['trigger']}"
     assert ex['entry_rules'][0]['trigger'] != ex['exit_rules'][0]['trigger'], \
         "入场与止损不得同价位（回放歧义）"

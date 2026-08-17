@@ -904,13 +904,20 @@ class SignalComputationService:
         market_context, da = self._load_market_context(ts_code, df)
         signals = []
 
-        # ── L2: 筹码主力分析信号 ──
+        # ── L2: 筹码主力分析信号（优先读缓存，333号 P0.8b 计算缓存扩展） ──
         try:
-            chip_signal = self._compute_chip_signal(ts_code, df, market_context)
+            from app.services.analysis_cache import get_analysis_cache
+            _ccache = get_analysis_cache()
+            chip_key = f"chip:{ts_code}:{len(df)}"
+            chip_signal = _ccache.get(chip_key)
+            if chip_signal is None:
+                chip_signal = self._compute_chip_signal(ts_code, df, market_context)
+                if chip_signal:
+                    _ccache.set(chip_key, chip_signal)
             if chip_signal:
                 signals.append(chip_signal)
         except Exception as e:
-            logger.debug(f"{ts_code} Chip 信号计算失败: {e}")
+            logger.warning(f"{ts_code} Chip 信号计算失败: {e}")
 
         # ── L3: 缠论信号（优先读缓存） ──
         try:
@@ -927,9 +934,16 @@ class SignalComputationService:
         except Exception as e:
             logger.debug(f"{ts_code} 缠论信号计算失败: {e}")
 
-        # ── L3: 因子评分信号 ──
+        # ── L3: 因子评分信号（优先读缓存，333号 P0.8b 计算缓存扩展） ──
         try:
-            factor_signal = self._compute_factor_signal(ts_code, df, market_context)
+            from app.services.analysis_cache import get_analysis_cache
+            _fcache = get_analysis_cache()
+            factor_key = f"factor:{ts_code}:{len(df)}"
+            factor_signal = _fcache.get(factor_key)
+            if factor_signal is None:
+                factor_signal = self._compute_factor_signal(ts_code, df, market_context)
+                if factor_signal:
+                    _fcache.set(factor_key, factor_signal)
             if factor_signal:
                 signals.append(factor_signal)
         except Exception as e:
@@ -942,7 +956,7 @@ class SignalComputationService:
             vp_key = f"vp:{ts_code}:{len(df)}"
             volume_price_signal = cache.get(vp_key)
             if volume_price_signal is None:
-                volume_price_signal = self._compute_volume_price_signal(ts_code, df, market_context, market_env)
+                volume_price_signal = self._compute_volume_price_signal(ts_code, df, market_context, market_context.get('market_env'))
                 if volume_price_signal:
                     cache.set(vp_key, volume_price_signal)
             if volume_price_signal:
@@ -950,9 +964,16 @@ class SignalComputationService:
         except Exception as e:
             logger.debug(f"{ts_code} 量价信号计算失败: {e}")
 
-        # ── BOCIASI 快线（情绪层）──
+        # ── BOCIASI 快线（情绪层，优先读缓存，333号 P0.8b）──
         try:
-            bociasi_signal = self._compute_bociasi_signal(ts_code, df, market_context)
+            from app.services.analysis_cache import get_analysis_cache
+            _bcache = get_analysis_cache()
+            bociasi_key = f"bociasi:{ts_code}:{len(df)}"
+            bociasi_signal = _bcache.get(bociasi_key)
+            if bociasi_signal is None:
+                bociasi_signal = self._compute_bociasi_signal(ts_code, df, market_context)
+                if bociasi_signal:
+                    _bcache.set(bociasi_key, bociasi_signal)
             if bociasi_signal:
                 signals.append(bociasi_signal)
         except Exception as e:
@@ -1002,13 +1023,7 @@ class SignalComputationService:
                 elif sig.get('signal') == 'neutral':
                     sig['signal'] = 'watch'
 
-        # ── Vibe 策略分析（渠道二新增） ──
-        try:
-            vibe_signal = self._compute_vibe_signal(ts_code, df)
-            if vibe_signal:
-                signals.append(vibe_signal)
-        except Exception as e:
-            logger.debug(f"{ts_code} Vibe 策略跳过: {e}")
+        # ── Vibe 策略已剔除出 P2（333号 v2.0，随 332 号 P0 实施） ──
 
         return self._apply_post_processing(signals, market_context, ts_code, df, limit)
 
@@ -1356,13 +1371,26 @@ class SignalComputationService:
             # 直接构建一个空信号(无筹码数据)，避免数据源挂起
             return self._build_default_chip_signal(ts_code, df, market_context)
 
+        # ── 333号 项4（v3.0）：P2 消费标签（主原料）──
+        # 筹码深度组/阶段主力组标签结论优先（P4 统一计算落标签，P2 消费），
+        # 不重算 120 日筹码分布（消除同算法双算，管道顺序 P4 先算保证当日标签）；
+        # 标签不足时回退完整分析（保底）。
+        try:
+            if self._tags_date_ok(ts_code, df):
+                _tags = self.data_manager.cache.get_tags(ts_code) or {}
+                _chip_from_tags = self._build_chip_signal_from_tags(ts_code, _tags, df, market_context)
+                if _chip_from_tags:
+                    return _chip_from_tags
+        except Exception as e:
+            logger.debug(f"{ts_code} 标签筹码信号构建失败，回退完整分析: {e}")
+
         # 运行完整筹码分析（带超时保护）
         analysis = {}
         try:
             analysis = self.chip_strategy.analyze(df)
         except Exception as e:
-            logger.debug(f"{ts_code} 筹码分析异常: {e}")
-            return None
+            logger.warning(f"{ts_code} 筹码分析异常，回退默认筹码信号: {e}")
+            return self._build_default_chip_signal(ts_code, df, market_context)
         
         # 检查 PreFilter 结果
         if not analysis.get('pre_filter_passed', True):
@@ -2458,9 +2486,8 @@ class SignalComputationService:
             return None
 
         # 优先从 factor_cache 读取预计算因子值
-        from app.data import get_data_manager
         try:
-            dm = get_data_manager()
+            dm = self.data_manager
             cached_factors = dm.get_cached_factors(ts_code)
             if cached_factors is not None and not cached_factors.empty:
                 # cached_factors: [factor_name, value, trade_date]
@@ -2538,7 +2565,7 @@ class SignalComputationService:
                 },
                 'momentum': {
                     'level': signal,
-                    'score': round(max(scores.values()), 4) if scores else round(composite, 4),
+                    'score': round(max((v for v in scores.values() if isinstance(v, (int, float))), default=0.0), 4) if scores else round(composite, 4),
                 },
                 'volume': {'state': '', 'structure': ''},
                 'support_resistance': {'support': 0.0, 'resistance': 0.0},
@@ -2742,6 +2769,74 @@ class SignalComputationService:
             'position_suggestion': '10%', 'holding_period': '1-3个月',
             'evidence': evidence, 'risk_notes': ['大盘数据不可用，筹码信号降级'],
             'signal_date': latest_date if isinstance(latest_date, str) else str(latest_date)[:10],
+        }
+
+    def _tags_date_ok(self, ts_code: str, df) -> bool:
+        """333号 项2：标签日期基线校验——标签 updated_at ≥ 数据日期才消费标签
+        （管道顺序已调 P4 先算保证当日标签；此兜底防极端时序错位，不符则回退完整分析）
+        """
+        try:
+            _row = self.data_manager.cache._query_df(
+                "SELECT MAX(updated_at) AS u FROM opportunity_tags_cache WHERE ts_code=?",
+                [ts_code])
+            if _row is None or _row.empty or not _row.iloc[0].get('u'):
+                return False
+            _u = str(_row.iloc[0]['u'])[:10]
+            _d = str(df['trade_date'].iloc[-1])[:10] if 'trade_date' in df.columns else ''
+            if not _d:
+                return True
+            if _u < _d:
+                logger.warning(f"{ts_code} 标签日期 {_u} < 数据日期 {_d}（333号 项2 日期基线，回退完整分析）")
+                return False
+            return True
+        except Exception:
+            return False
+
+    def _build_chip_signal_from_tags(self, ts_code: str, tags: dict, df: pd.DataFrame,
+                                     market_context: Optional[Dict] = None) -> Optional[Dict]:
+        """333号 项4：筹码引擎消费标签结论（不重算 120 日筹码分布）
+
+        阶段主力组（main_force_phase/fund_flow）+ 筹码深度组（chip_peak/ssrp/profit_ratio）
+        标签齐全时构造信号（P4 统一计算落标签，P2 消费）；不足返回 None 回退完整分析。
+        """
+        mfp = str(tags.get('main_force_phase', ''))
+        if mfp not in ('building', 'washing', 'lifting', 'distributing'):
+            return None
+        ff = str(tags.get('fund_flow', ''))
+        try:
+            profit = float(tags.get('profit_ratio') or 0)
+        except (TypeError, ValueError):
+            profit = 0.0
+        if mfp in ('building', 'lifting') or ff == '5d_inflow':
+            signal, label = StrategySignal.BULLISH.value, '建仓/拉升期，主力资金介入'
+        elif mfp == 'distributing' or ff == '5d_outflow':
+            signal, label = StrategySignal.BEARISH.value, '出货期，主力离场风险'
+        else:
+            signal, label = StrategySignal.NEUTRAL.value, '洗盘/中性，方向待确认'
+        evidence = [f"主力阶段: {mfp}",
+                    f"资金流向: {ff}" if ff else '资金流向: 无']
+        for k, name in (('chip_peak', '筹码主峰'), ('ssrp', '市场平均成本')):
+            if tags.get(k):
+                evidence.append(f"{name}: {tags.get(k)}")
+        if profit > 0:
+            evidence.append(f"获利盘: {profit:.0%}")
+        state = ('ACCUMULATING' if signal == StrategySignal.BULLISH.value
+                 else ('DISTRIBUTING' if signal == StrategySignal.BEARISH.value else 'RANGING'))
+        return {
+            'strategy_name': '筹码主力分析',
+            'status_recognition': {
+                'state': state, 'state_label': label,
+                'trend': {'direction': 'up' if signal == StrategySignal.BULLISH.value
+                          else ('down' if signal == StrategySignal.BEARISH.value else ''),
+                          'strength': '', 'stage': ''},
+                'momentum': {'level': signal, 'score': round(max(profit, 0.5), 2)},
+                'support_resistance': {'support': None, 'resistance': None},
+                'risk_level': 'HIGH' if mfp == 'distributing' else 'LOW',
+            },
+            'signal': signal, 'signal_label': label,
+            'confidence': 0.7,
+            'evidence': evidence,
+            'risk_notes': ['标签原料信号（P4 统一计算落标签，P2 消费——333号 项4）'],
         }
 
     def _build_chip_status(self, chip_signal: Dict) -> Dict:
@@ -3108,66 +3203,3 @@ class SignalComputationService:
         except Exception as e:
             logger.warning(f"{ts_code}: 同步到StrategyOutput失败: {e}")
 
-    def _compute_vibe_signal(self, ts_code: str, df: pd.DataFrame) -> Optional[Dict]:
-        """
-        计算 Vibe 策略信号（渠道二新增）
-
-        从 strategy_template_v2 加载 vibe=True 的策略，执行 code_template。
-        将执行结果转化为"现状解读文本"而非加分值。
-
-        Returns: 信号 dict 或 None
-        """
-        import pandas as pd
-        try:
-            from app import db
-            from app.models.strategy_template import StrategyTemplateV2
-            from sqlalchemy import and_
-
-            templates = db.session.query(StrategyTemplateV2).filter(
-                and_(StrategyTemplateV2.vibe == True, StrategyTemplateV2.status != 'disabled')
-            ).all()
-            if not templates:
-                return None
-
-            descriptions = []
-            max_confidence = 0.0
-            best_dir = 'NEUTRAL'
-
-            for tmpl in templates:
-                code = tmpl.code_template or ''
-                if not code or 'return' not in code:
-                    continue
-                try:
-                    import re
-                    cleaned = re.sub(r'^\s*return\s+', 'pass  # ', code)
-                    local_vars = {'df': df, 'closes': df['close'].values, 'volumes': df['vol'].values if 'vol' in df.columns else df['amount'].values}
-                    exec(compile(cleaned, '<vibe_strategy>', 'exec'), local_vars)
-                    result = local_vars.get('signal', {})
-                    if isinstance(result, dict) and result.get('signal'):
-                        conf = result.get('confidence', 0.3)
-                        if conf > max_confidence:
-                            max_confidence = conf
-                            best_dir = result['signal']
-                        desc = f"{tmpl.name}: {result.get('signal_label', result['signal'])}"
-                        descriptions.append(desc)
-                except Exception:
-                    continue
-
-            if not descriptions:
-                return None
-
-            return {
-                'strategy_name': 'Vibe策略',
-                'signal': best_dir.lower(),
-                'signal_label': best_dir,
-                'confidence': round(max_confidence, 2),
-                'evidence': descriptions,
-                'description': '; '.join(descriptions),
-                'risk_notes': ['Vibe策略由AI生成，仅供参考'],
-                'entry_zone': [0, 0],
-                'risk_line': 0,
-                'target_zone': [0, 0],
-            }
-        except Exception as e:
-            logger.debug(f"{ts_code} Vibe策略计算失败: {e}")
-            return None

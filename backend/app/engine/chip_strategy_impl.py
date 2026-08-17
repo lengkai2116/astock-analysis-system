@@ -122,7 +122,8 @@ class TradingPhaseDetector:
 
         if indicators.get('profit_ratio', 0) < 0.4:
             score += 2.0
-        if indicators.get('asr', 0) >= 0.7:
+        # 2026-08-13 知识库对齐：ASR 0-100 量级（原 0.7）
+        if indicators.get('asr', 0) >= 70:
             score += 2.0
         conc_status = indicators.get('concentration_status', '')
         if conc_status == '高度集中' or conc_status == '较集中':
@@ -158,7 +159,8 @@ class TradingPhaseDetector:
         if vol_status in ('缩量', '地量'):
             score += 2.0
         asr = indicators.get('asr', 0)
-        if 0.3 <= asr <= 0.6:
+        # 2026-08-13 知识库对齐：ASR 0-100 量级（原 0.3-0.6）
+        if 30 <= asr <= 60:
             score += 1.5
         ssrp = indicators.get('ssrp', 0)
         if ssrp > 0 and len(kline_data) > 0:
@@ -1133,7 +1135,11 @@ class ChipDistributionSignalGenerator:
             triggered = True
 
         ssrp = indicators.get('ssrp', 0)
-        if ssrp > 0 and len(kline_data) >= 3:
+        # 2026-08-16 修复（345号 bearish 方向反转 / T23 实证）：SSRP 条件仅
+        # SHIPPING（出货期）触发——建仓/洗盘期（BUILDING/WASHING）股价跌破
+        # 筹码成本是超跌机会（主力吸筹区）而非出货，原实现无条件触发致弱市
+        # 暴跌末端误判卖出（92 条重放 64% 触发，看空后 T+5 +3.26% 假阴性）。
+        if ssrp > 0 and len(kline_data) >= 3 and phase_info.get('phase') == 'SHIPPING':
             closes = kline_data['close'].values
             if len(closes) >= 2 and closes[-1] < ssrp and closes[-2] < ssrp:
                 conditions.append(f'✓ 连续2日低于SSRP({ssrp:.2f})')

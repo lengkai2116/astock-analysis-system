@@ -100,13 +100,16 @@ class ChipIndicators:
         计算ASR - 活跃浮筹比例（当前价格±N%区间的筹码比例）
         技术说明书要求：±5%
 
+        2026-08-13 知识库对齐（《ASR指标》）：ASR 为 0-100 量级，
+        >90 高浮筹 = 当前价附近筹码密集（突破前蓄势），与知识库口径一致。
+
         Args:
             chip_bins: 筹码分布数据
             current_price: 当前价格
             band_pct: 价格区间宽度（默认5%）
 
         Returns:
-            ASR值（0-1）
+            ASR值（0-100）
         """
         price_low = current_price * (1 - band_pct)
         price_high = current_price * (1 + band_pct)
@@ -114,19 +117,19 @@ class ChipIndicators:
         asr_ratio = sum(bin_data['chip_ratio'] for bin_data in chip_bins
                         if price_low <= bin_data['price_bin'] <= price_high)
 
-        return round(asr_ratio, 4)
+        return round(asr_ratio * 100, 2)
 
     def get_asr_status(self, asr: float) -> str:
         """
-        获取ASR状态分类
+        获取ASR状态分类（2026-08-13 知识库对齐：>90 高浮筹=筹码密集=突破前蓄势）
         """
-        if asr < 0.2:
+        if asr < 20:
             return '低浮筹'
-        elif asr < 0.5:
+        elif asr < 50:
             return '中等浮筹'
-        elif asr < 0.8:
+        elif asr < 80:
             return '高浮筹'
-        elif asr < 0.9:
+        elif asr < 90:
             return '极高浮筹'
         else:
             return '极限浮筹'
@@ -233,12 +236,21 @@ class ChipIndicators:
         计算CYQKL - K线实体穿越筹码强度
         技术说明书要求：当日K线实体（开盘到收盘）穿透的筹码数量
 
+        2026-08-13 知识库对齐（《CYQKL指标》）：CYQKL 为 0-100 量级，
+        >30 确认走势强劲、>60 加速拉升，与知识库口径一致。
+
+        2026-08-16 342号核查修复：原实现用 `entity_min <= price_bin <= entity_max`
+        精确匹配网格中心点——实体区间窄（如 0.01-0.1 元）时常常不命中任何网格点，
+        导致 cyqkl≈0（全市场 98.9% 为 0，与知识库"平淡走势也能达 10"矛盾）。
+        改为**区间重叠累计**：每个 bin 的代表区间 [price_bin-step/2, price_bin+step/2]
+        与实体区间求交集比例 × chip_ratio 累计，网格离散误差消除。
+
         Args:
             chip_bins: 筹码分布数据
             kline_data: K线数据（至少包含当前K线）
 
         Returns:
-            CYQKL值（0-1，值越大说明穿越强度越大）
+            CYQKL值（0-100，值越大说明穿越强度越大）
         """
         if kline_data.empty:
             return 0
@@ -252,24 +264,41 @@ class ChipIndicators:
         # K线实体区间
         entity_min = min(open_price, close_price)
         entity_max = max(open_price, close_price)
+        entity_len = entity_max - entity_min
 
-        # 计算被K线实体穿越的筹码总量
-        crossed_chips = sum(bin_data['chip_ratio'] for bin_data in chip_bins
-                           if entity_min <= bin_data['price_bin'] <= entity_max)
+        if not chip_bins or entity_len <= 0:
+            return 0
 
-        return round(crossed_chips, 4)
+        # 按价格排序并推断网格步长（相邻 bin 差）
+        sorted_bins = sorted(chip_bins, key=lambda x: x['price_bin'])
+        prices = [b['price_bin'] for b in sorted_bins]
+        diffs = [prices[i + 1] - prices[i] for i in range(len(prices) - 1) if prices[i + 1] > prices[i]]
+        if not diffs:
+            return 0
+        step = min(diffs)
+
+        # 区间重叠累计：每个 bin 代表 [price_bin-step/2, price_bin+step/2] 的价格段
+        crossed_chips = 0.0
+        for bin_data in sorted_bins:
+            bin_min = bin_data['price_bin'] - step / 2
+            bin_max = bin_data['price_bin'] + step / 2
+            overlap = min(entity_max, bin_max) - max(entity_min, bin_min)
+            if overlap > 0:
+                crossed_chips += bin_data['chip_ratio'] * (overlap / step)
+
+        return round(crossed_chips * 100, 2)
 
     def get_cyqkl_status(self, cyqkl: float) -> str:
         """
-        获取CYQKL状态
+        获取CYQKL状态（2026-08-13 知识库对齐：>30 强、>60 加速拉升）
         """
-        if cyqkl < 0.1:
+        if cyqkl < 10:
             return '弱'
-        elif cyqkl < 0.3:
+        elif cyqkl < 30:
             return '中等'
-        elif cyqkl < 0.5:
+        elif cyqkl < 60:
             return '强'
-        elif cyqkl < 0.6:
+        elif cyqkl < 80:
             return '很强'
         else:
             return '极强'
