@@ -240,7 +240,23 @@ def _collect_sector_and_limit():
 
 
 def _collect_minute_kline():
-    """Thread 4: 分钟K线（追加式，5min，通过 AKShare）"""
+    """Thread 4: 分钟K线（追加式，5min，通过 AKShare）
+
+    355号方案修复方案4：分钟数据采集器分工明确
+    - AKShare 分钟线采集仅在 mootdx 不可用时降级使用
+    - mootdx 是分钟数据主采集源（交易时段）
+    """
+    # 355号方案修复方案4：检查 mootdx 是否可用
+    try:
+        from app.data.mootdx_collector import _get_client
+        client = _get_client()
+        if client is not None:
+            # mootdx 可用，跳过 AKShare 分钟线采集
+            logger.debug("[minute_kline] mootdx 可用，跳过 AKShare 采集")
+            return
+    except Exception:
+        pass  # mootdx 不可用，继续使用 AKShare
+
     ak = _get_ak()
     if ak is None:
         return
