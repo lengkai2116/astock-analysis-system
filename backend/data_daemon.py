@@ -3977,7 +3977,87 @@ def _build_treemap_snapshot(codes: list[str]):
             continue
     _ecm.conn.commit()
 
-    # 346号：原子替换前归档 treemap 历史快照（ts_code+snapshot_date 复合主键幂等）
+    # 370号O5：归档逻辑已移至OUT步骤（_out_transmit_seven_dim），此处不再归档
+
+    # 原子切换
+    _ecm.conn.execute("DROP TABLE IF EXISTS treemap_snapshot")
+    _ecm.conn.execute(f"ALTER TABLE {NEW_TABLE} RENAME TO treemap_snapshot")
+    _ecm.conn.commit()
+
+    elapsed = time.time() - t0
+    logger.info(f"treemap_snapshot 构建完成: {written}/{len(codes)} 只, 耗时 {elapsed:.1f}s")
+
+
+def _out_transmit_seven_dim(codes: list[str]):
+    """370号方案 OUT步骤：七维透传 + 归档 + 自选股变更检测
+
+    统一归档逻辑（原分散在JUD的_build_status_snapshot/_build_treemap_snapshot中）：
+    1. seven_dim_json → status_snapshot.one_liner_detail（七维透传）
+    2. status_snapshot → status_snapshot_history（16列完整归档）
+    3. treemap_snapshot → treemap_snapshot_history（47列完整归档）
+    4. watchlist_status_diff（自选股状态变更检测）
+    """
+    t0 = time.time()
+    logger.info(f"OUT步骤: 七维透传+归档+变更检测: {len(codes)} 只...")
+
+    # 获取最新交易日
+    trade_date = ''
+    try:
+        _row = _ecm.read_conn.execute(
+            "SELECT MAX(trade_date) FROM daily_cache").fetchone()
+        trade_date = _row[0] if _row else ''
+    except Exception:
+        pass
+
+    # ── 1. 七维透传：seven_dim_json → one_liner_detail ──
+    if trade_date:
+        try:
+            _ecm.conn.execute("""
+                UPDATE status_snapshot SET one_liner_detail = (
+                    SELECT ssd.seven_dim_json
+                    FROM strategy_signal_detail ssd
+                    WHERE ssd.ts_code = status_snapshot.ts_code
+                    AND ssd.trade_date = ?
+                    AND ssd.seven_dim_json IS NOT NULL
+                )
+                WHERE status_snapshot.trade_date = ?
+            """, [trade_date, trade_date])
+            _ecm.conn.commit()
+            updated = _ecm.conn.execute("SELECT changes()").fetchone()[0]
+            logger.info(f"  七维透传: {updated} 只 one_liner_detail 已更新")
+        except Exception as e:
+            logger.warning(f"七维透传失败: {e}")
+
+    # ── 2. 归档 status_snapshot → status_snapshot_history（16列完整）──
+    try:
+        _ecm.conn.execute("""
+            CREATE TABLE IF NOT EXISTS status_snapshot_history (
+                ts_code TEXT, snapshot_date TEXT, trade_date TEXT,
+                dim_states TEXT, status_bar TEXT, opportunity_state TEXT,
+                state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
+                direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
+                summary_text TEXT, one_liner_detail TEXT, dim_engine_results TEXT,
+                PRIMARY KEY (ts_code, snapshot_date)
+            )
+        """)
+        _ecm.conn.execute("""
+            INSERT OR REPLACE INTO status_snapshot_history
+                (ts_code, snapshot_date, trade_date, dim_states, status_bar,
+                 opportunity_state, state_evidence, conflict_evidence, consensus_rate,
+                 direction, l0, lifecycle, advice_params,
+                 summary_text, one_liner_detail, dim_engine_results)
+            SELECT ts_code, snapshot_date, trade_date, dim_states, status_bar,
+                   opportunity_state, state_evidence, conflict_evidence, consensus_rate,
+                   direction, l0, lifecycle, advice_params,
+                   summary_text, one_liner_detail, dim_engine_results
+            FROM status_snapshot
+        """)
+        _ecm.conn.commit()
+        logger.info("  归档: status_snapshot → status_snapshot_history")
+    except Exception as e:
+        logger.warning(f"status_snapshot归档失败: {e}")
+
+    # ── 3. 归档 treemap_snapshot → treemap_snapshot_history ──
     try:
         _ecm.conn.execute("""
             CREATE TABLE IF NOT EXISTS treemap_snapshot_history (
@@ -4000,137 +4080,106 @@ def _build_treemap_snapshot(codes: list[str]):
         """)
         _ecm.conn.execute("""
             INSERT OR REPLACE INTO treemap_snapshot_history
-                SELECT ts_code, snapshot_date, name, industry,
-                close, pct_chg, total_mv, trade_date,
-                open, high, low, amplitude, pe, pb,
-                amount, turnover_rate, circ_mv, signal_strength,
-                valuation_level, valuation_deviation, main_force_phase,
-                phase_confidence, sentiment_phase, sector_heat,
-                fina_health, opportunity_type, trend_alignment,
-                price_position, fund_flow, capital_nature,
-                chip_concentration, volatility_level, dividend_yield,
-                composite_rating, opportunity_label, evidence_count,
-                right_side_confirm, confirm_evidence, opportunity_profile,
-                entry_signals, exit_conditions, consensus_rate,
-                conflict, main_force_presence, presence_evidence,
-                opportunity_state, state_evidence
-                FROM treemap_snapshot
+            SELECT * FROM treemap_snapshot
         """)
         _ecm.conn.commit()
-        # B7修复：同步 treemap_snapshot_history 到分库 snapshot_cache.db
-        try:
-            from app.data.sharding_manager import sharding_manager
-            shard_db = sharding_manager.get_db_for_table('treemap_snapshot_history')
-            if shard_db:
-                shard_conn = sharding_manager.get_connection(shard_db)
-                # 确保分库表存在
-                shard_conn.execute("""
-                    CREATE TABLE IF NOT EXISTS treemap_snapshot_history (
-                        ts_code TEXT, snapshot_date TEXT, name TEXT, industry TEXT,
-                        close REAL, pct_chg REAL, total_mv REAL, trade_date TEXT,
-                        open REAL, high REAL, low REAL, amplitude REAL, pe REAL, pb REAL,
-                        amount REAL, turnover_rate REAL, circ_mv REAL, signal_strength REAL,
-                        valuation_level TEXT, valuation_deviation REAL, main_force_phase TEXT,
-                        phase_confidence REAL, sentiment_phase TEXT, sector_heat TEXT,
-                        fina_health TEXT, opportunity_type TEXT, trend_alignment TEXT,
-                        price_position TEXT, fund_flow TEXT, capital_nature TEXT,
-                        chip_concentration TEXT, volatility_level TEXT, dividend_yield REAL,
-                        composite_rating REAL, opportunity_label TEXT, evidence_count INTEGER,
-                        right_side_confirm TEXT, confirm_evidence TEXT, opportunity_profile TEXT,
-                        entry_signals TEXT, exit_conditions TEXT, consensus_rate REAL,
-                        conflict TEXT, main_force_presence TEXT, presence_evidence TEXT,
-                        opportunity_state TEXT, state_evidence TEXT,
-                        PRIMARY KEY (ts_code, snapshot_date)
-                    )
-                """)
-                # 从主库读取数据写入分库
-                rows = _ecm.conn.execute("SELECT * FROM treemap_snapshot_history").fetchall()
-                if rows:
-                    cols = 'ts_code,snapshot_date,name,industry,close,pct_chg,total_mv,trade_date,open,high,low,amplitude,pe,pb,amount,turnover_rate,circ_mv,signal_strength,valuation_level,valuation_deviation,main_force_phase,phase_confidence,sentiment_phase,sector_heat,fina_health,opportunity_type,trend_alignment,price_position,fund_flow,capital_nature,chip_concentration,volatility_level,dividend_yield,composite_rating,opportunity_label,evidence_count,right_side_confirm,confirm_evidence,opportunity_profile,entry_signals,exit_conditions,consensus_rate,conflict,main_force_presence,presence_evidence,opportunity_state,state_evidence'
-                    ph = ','.join(['?' for _ in cols.split(',')])
-                    shard_conn.executemany(
-                        f"INSERT OR REPLACE INTO treemap_snapshot_history ({cols}) VALUES ({ph})",
-                        rows)
-                    shard_conn.commit()
-                    logger.debug(f"treemap_snapshot_history 分库同步: {len(rows)} 行")
-        except Exception as e:
-            logger.warning(f"treemap_snapshot_history 分库同步失败: {e}")
+        logger.info("  归档: treemap_snapshot → treemap_snapshot_history")
     except Exception as e:
-        logger.warning(f"treemap_snapshot 历史归档失败: {e}")
+        logger.warning(f"treemap_snapshot归档失败: {e}")
 
-    # 原子切换
-    _ecm.conn.execute("DROP TABLE IF EXISTS treemap_snapshot")
-    _ecm.conn.execute(f"ALTER TABLE {NEW_TABLE} RENAME TO treemap_snapshot")
-    _ecm.conn.commit()
-
-    elapsed = time.time() - t0
-    logger.info(f"treemap_snapshot 构建完成: {written}/{len(codes)} 只, 耗时 {elapsed:.1f}s")
-
-
-def _out_transmit_seven_dim(codes: list[str]):
-    """370号方案S6：OUT步骤简化 — 从strategy_signal_detail读取seven_dim_json透传到status_snapshot.one_liner_detail
-
-    七维描述由SIG直接产出（S5），OUT仅做透传写入。
-    同时执行归档（status_snapshot → status_snapshot_history）。
-    """
-    t0 = time.time()
-    logger.info(f"OUT七维透传+归档: {len(codes)} 只...")
-
-    # 透传 seven_dim_json → one_liner_detail
-    try:
-        today = datetime.now().strftime('%Y-%m-%d')
-        # 读取最新交易日
-        trade_date = ''
-        try:
-            _row = _ecm.read_conn.execute(
-                "SELECT MAX(trade_date) FROM daily_cache").fetchone()
-            trade_date = _row[0] if _row else ''
-        except Exception:
-            pass
-
-        if trade_date:
-            _ecm.conn.execute("""
-                UPDATE status_snapshot SET one_liner_detail = (
-                    SELECT ssd.seven_dim_json
-                    FROM strategy_signal_detail ssd
-                    WHERE ssd.ts_code = status_snapshot.ts_code
-                    AND ssd.trade_date = ?
-                    AND ssd.seven_dim_json IS NOT NULL
-                )
-                WHERE status_snapshot.trade_date = ?
-            """, [trade_date, trade_date])
-            _ecm.conn.commit()
-            updated = _ecm.conn.execute(
-                "SELECT changes()").fetchone()[0]
-            logger.info(f"  七维透传: {updated} 只股票 one_liner_detail 已更新")
-    except Exception as e:
-        logger.warning(f"七维透传失败: {e}")
-
-    # 归档 status_snapshot → status_snapshot_history
+    # ── 4. 自选股状态变更检测（watchlist_status_diff）──
     try:
         _ecm.conn.execute("""
-            CREATE TABLE IF NOT EXISTS status_snapshot_history (
-                ts_code TEXT, snapshot_date TEXT, trade_date TEXT,
-                dim_states TEXT, status_bar TEXT, opportunity_state TEXT,
-                state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
-                direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
+            CREATE TABLE IF NOT EXISTS watchlist_status_diff (
+                ts_code TEXT NOT NULL,
+                snapshot_date TEXT NOT NULL,
+                prev_date TEXT NOT NULL,
+                consensus_rate_change REAL,
+                direction_change TEXT,
+                opportunity_state_change TEXT,
+                risk_level_change TEXT,
+                changed_dims TEXT,
+                change_summary TEXT,
+                advice_changed INTEGER DEFAULT 0,
                 PRIMARY KEY (ts_code, snapshot_date)
             )
         """)
-        _ecm.conn.execute("""
-            INSERT OR REPLACE INTO status_snapshot_history
-                (ts_code, snapshot_date, trade_date, dim_states, status_bar,
-                 opportunity_state, state_evidence, conflict_evidence, consensus_rate,
-                 direction, l0, lifecycle, advice_params)
-            SELECT ts_code, snapshot_date, trade_date, dim_states, status_bar,
-                   opportunity_state, state_evidence, conflict_evidence, consensus_rate,
-                   direction, l0, lifecycle, advice_params
-            FROM status_snapshot
-        """)
-        _ecm.conn.commit()
-        logger.info(f"  归档完成: status_snapshot → status_snapshot_history")
+        # 获取上一交易日
+        prev_date = ''
+        try:
+            prev_row = _ecm.conn.execute(
+                "SELECT DISTINCT trade_date FROM status_snapshot "
+                "WHERE trade_date < ? ORDER BY trade_date DESC LIMIT 1",
+                [trade_date]
+            ).fetchone()
+            prev_date = prev_row[0] if prev_row else ''
+        except Exception:
+            pass
+
+        if trade_date and prev_date:
+            # 获取自选股列表
+            watchlist_codes = set()
+            try:
+                wl_rows = _ecm.conn.execute(
+                    "SELECT DISTINCT ts_code FROM opportunity_library "
+                    "WHERE lib_level != 'done'"
+                ).fetchall()
+                watchlist_codes = {r[0] for r in wl_rows}
+            except Exception:
+                pass
+
+            if watchlist_codes:
+                changes = []
+                for code in watchlist_codes:
+                    try:
+                        cur = _ecm.conn.execute(
+                            "SELECT consensus_rate, direction, opportunity_state "
+                            "FROM status_snapshot WHERE ts_code=? AND trade_date=?",
+                            [code, trade_date]
+                        ).fetchone()
+                        prev = _ecm.conn.execute(
+                            "SELECT consensus_rate, direction, opportunity_state "
+                            "FROM status_snapshot WHERE ts_code=? AND trade_date=?",
+                            [code, prev_date]
+                        ).fetchone()
+                        if cur and prev:
+                            cr_change = (cur[0] or 0) - (prev[0] or 0)
+                            d_change = cur[1] != prev[1]
+                            o_change = cur[2] != prev[2]
+                            if abs(cr_change) > 0.05 or d_change or o_change:
+                                summary_parts = []
+                                if abs(cr_change) > 0.05:
+                                    summary_parts.append(f"共识率{cr_change:+.0%}")
+                                if d_change:
+                                    summary_parts.append(f"方向{prev[1]}→{cur[1]}")
+                                if o_change:
+                                    summary_parts.append(f"状态{prev[2]}→{cur[2]}")
+                                changes.append((
+                                    code, trade_date, prev_date,
+                                    cr_change, f"{prev[1]}→{cur[1]}" if d_change else None,
+                                    f"{prev[2]}→{cur[2]}" if o_change else None,
+                                    None, None,
+                                    '; '.join(summary_parts),
+                                    1 if d_change or o_change else 0,
+                                ))
+                    except Exception:
+                        continue
+
+                if changes:
+                    _ecm.conn.executemany(
+                        "INSERT OR REPLACE INTO watchlist_status_diff "
+                        "(ts_code, snapshot_date, prev_date, consensus_rate_change, "
+                        "direction_change, opportunity_state_change, risk_level_change, "
+                        "changed_dims, change_summary, advice_changed) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        changes
+                    )
+                    _ecm.conn.commit()
+                    logger.info(f"  变更检测: {len(changes)} 只自选股状态变化")
+                else:
+                    logger.info("  变更检测: 无自选股状态变化")
     except Exception as e:
-        logger.warning(f"归档失败: {e}")
+        logger.warning(f"自选股变更检测失败: {e}")
 
     logger.info(f"OUT完成: {time.time() - t0:.1f}s")
 
@@ -4199,61 +4248,12 @@ def _build_status_snapshot(codes: list[str]):
             except Exception as e:
                 logger.warning(f"status_snapshot {code} 生成失败: {e}")
         _ecm.conn.commit()
-        # 346号：原子替换前归档历史快照（多交易日保留，342号 §6.2 / G3.3 依赖）
-        # 将当前 status_snapshot 数据追加到 status_snapshot_history（ts_code+snapshot_date
-        # 复合主键，同一日重复构建幂等覆盖）。
-        try:
-            _ecm.conn.execute("""
-                CREATE TABLE IF NOT EXISTS status_snapshot_history (
-                    ts_code TEXT, snapshot_date TEXT, trade_date TEXT,
-                    dim_states TEXT, status_bar TEXT, opportunity_state TEXT,
-                    state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
-                    direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
-                    PRIMARY KEY (ts_code, snapshot_date)
-                )
-            """)
-            _ecm.conn.execute("""
-                INSERT OR REPLACE INTO status_snapshot_history
-                    (ts_code, snapshot_date, trade_date, dim_states, status_bar,
-                     opportunity_state, state_evidence, conflict_evidence, consensus_rate,
-                     direction, l0, lifecycle, advice_params)
-                SELECT ts_code, snapshot_date, trade_date, dim_states, status_bar,
-                       opportunity_state, state_evidence, conflict_evidence, consensus_rate,
-                       direction, l0, lifecycle, advice_params
-                FROM status_snapshot
-            """)
-            _ecm.conn.commit()
-            # B7修复：同步 status_snapshot_history 到分库 snapshot_cache.db
-            try:
-                from app.data.sharding_manager import sharding_manager
-                shard_db = sharding_manager.get_db_for_table('status_snapshot_history')
-                if shard_db:
-                    shard_conn = sharding_manager.get_connection(shard_db)
-                    shard_conn.execute("""
-                        CREATE TABLE IF NOT EXISTS status_snapshot_history (
-                            ts_code TEXT, snapshot_date TEXT, trade_date TEXT,
-                            dim_states TEXT, status_bar TEXT, opportunity_state TEXT,
-                            state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
-                            direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
-                            PRIMARY KEY (ts_code, snapshot_date)
-                        )
-                    """)
-                    rows = _ecm.conn.execute("SELECT * FROM status_snapshot_history").fetchall()
-                    if rows:
-                        cols = 'ts_code,snapshot_date,trade_date,dim_states,status_bar,opportunity_state,state_evidence,conflict_evidence,consensus_rate,direction,l0,lifecycle,advice_params'
-                        ph = ','.join(['?' for _ in cols.split(',')])
-                        shard_conn.executemany(
-                            f"INSERT OR REPLACE INTO status_snapshot_history ({cols}) VALUES ({ph})",
-                            rows)
-                        shard_conn.commit()
-                        logger.debug(f"status_snapshot_history 分库同步: {len(rows)} 行")
-            except Exception as e:
-                logger.warning(f"status_snapshot_history 分库同步失败: {e}")
-        except Exception as e:
-            logger.warning(f"status_snapshot 历史归档失败: {e}")
+        # 370号O5：归档逻辑已移至OUT步骤（_out_transmit_seven_dim），此处不再归档
+        logger.info(f"  status_snapshot 构建完成: {written}/{len(codes)} 只")
+        # 原子替换
         _ecm.conn.execute("DROP TABLE IF EXISTS status_snapshot")
         _ecm.conn.execute(f"ALTER TABLE {_NEW} RENAME TO status_snapshot")
-        logger.info(f"status_snapshot 构建完成: {written}/{len(codes)} 只, 耗时 {time.time()-t0:.1f}s")
+        _ecm.conn.commit()
 
 
 def _safe_float(v):
