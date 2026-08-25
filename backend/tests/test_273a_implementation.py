@@ -219,7 +219,7 @@ class TestECMNewTables:
             },
         ]
         ecm.write_sentiment_pool(records)
-        df = ecm.get_cached_sentiment_pool('20260717')
+        df = ecm.get_cached_sentiment_pool('2026-07-17')
         assert df is not None and not df.empty
         assert len(df) >= 2
         up_df = df[df['limit_type'] == 'up']

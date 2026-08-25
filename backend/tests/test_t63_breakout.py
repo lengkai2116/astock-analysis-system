@@ -37,8 +37,8 @@ def test_breakout_attempts_not_always_ten(vps):
     # 长期横盘（无突破）→ 应为 0 或很小
     flat = [10.0] * 25 + [10.5, 10.2, 10.1, 10.0, 9.9]
 
-    tags_rising = vps.get_tags(_make_df(rising))
-    tags_flat = vps.get_tags(_make_df(flat))
+    tags_rising = vps._detect_kline_patterns(_make_df(rising))
+    tags_flat = vps._detect_kline_patterns(_make_df(flat))
 
     ba_rising = tags_rising.get('breakout_attempts')
     ba_flat = tags_flat.get('breakout_attempts')

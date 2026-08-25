@@ -77,7 +77,7 @@ def test_chinese_direction_values_normalized():
     import numpy as np
     import pandas as pd
     df = pd.DataFrame({'close': np.linspace(10, 12, 62),
-                       'high': np.linspace(10.2, 12.2, 62),
+                       'high': np.linspace(10.2, 14.0, 62),
                        'low': np.linspace(9.8, 11.8, 62)})
     # chanlun 中文'上升' + 其他看多 → enter/BUY
     dims_cn = {

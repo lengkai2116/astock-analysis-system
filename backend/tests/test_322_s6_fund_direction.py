@@ -6,6 +6,7 @@
 """
 import os
 import sys
+import sqlite3
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
@@ -18,11 +19,10 @@ from app.opportunity_atlas.potential_engine import compute_fund_strength  # noqa
 def test_fund_strength_directional_outflow_negative():
     """净流出股票 → 强度应为负（修复前 abs 抹掉方向得正高分）"""
     # 用真实数据：找一只 5 日净流出且绝对值强度高的股票（bug 高发区）
-    import sqlite3
-
+    import pathlib
     from app.data.enhanced_cache_manager import EnhancedCacheManager
     ecm = EnhancedCacheManager()
-    conn = sqlite3.connect('../data/duckdb/stock_cache.db')
+    conn = sqlite3.connect(ecm.db_path)
     # 找 5 日净额 < 0 且 |net|/tot 高的股票
     rows = conn.execute("""
         SELECT ts_code, SUM(net_lg_amount) net5, SUM(buy_lg_amount + sell_lg_amount) tot5 FROM (
@@ -44,11 +44,10 @@ def test_fund_strength_directional_outflow_negative():
 
 def test_fund_strength_directional_inflow_positive():
     """净流入股票 → 强度应为正"""
-    import sqlite3
-
+    import pathlib
     from app.data.enhanced_cache_manager import EnhancedCacheManager
     ecm = EnhancedCacheManager()
-    conn = sqlite3.connect('../data/duckdb/stock_cache.db')
+    conn = sqlite3.connect(ecm.db_path)
     rows = conn.execute("""
         SELECT ts_code FROM (
             SELECT ts_code, SUM(net_lg_amount) net5, SUM(buy_lg_amount + sell_lg_amount) tot5 FROM (

@@ -196,6 +196,6 @@ def test_deep_strong_hint_not_hard_veto(validator):
     # L0 软约束（status_engine）：deep → 仓位系数 ×0.3（强提示+压缩，非剔除）
     from app.opportunity_atlas.status_engine import StatusEngine
     se = StatusEngine()
-    l0 = se._apply_l0(tags, {}, None)
+    l0 = se._apply_l0('TEST.SH', tags, {}, None)
     assert not l0['hard_veto'], "deep 不应硬否决"
     assert l0['position_coeff'] < 1.0, f"deep 应压缩仓位，实际 position_coeff={l0['position_coeff']}"
