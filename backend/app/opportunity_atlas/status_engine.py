@@ -3,8 +3,9 @@
 落地分档：334（L1 维度判定+信号注册表+生命周期）、335（L0 风险分级）、
          336（L2 聚合：维度共识+conflict_evidence）、337（成品仓输出 status_snapshot 行）
 
-流水线：原料仓（标签 opportunity_tags_cache + P2 信号 strategy_signal_detail）
-  → L1 十维判定（每维 {state, light, confidence, evidence, conclusion, plain}）
+流水线（357号方案v2.1更新）：
+  原料仓（pre_feat_cache + P2 信号 strategy_signal_detail）
+  → L1 十二维判定（每维 {state, light, confidence, evidence, conclusion, plain}）
   → L0 风险分级（L0a 硬否决 / L0b 软约束 / L0c 持有期）
   → L2 聚合（维度共识 + conflict_evidence + opportunity_state 仲裁）
   → 成品仓输出（dim_states/status_bar/consensus/conflict/advice_params）
@@ -63,6 +64,8 @@ class StatusEngine:
     def evaluate(self, ts_code: str) -> Optional[dict]:
         """生产环节主流程：原料 → L1 → L0 → L2 → 成品仓行
 
+        366号步骤3：重构为调用维度引擎，通过兼容层保持下游兼容。
+
         Returns: status_snapshot 行 dict（或 None 数据缺失）
         """
         tags = self._load_tags(ts_code)
@@ -71,23 +74,61 @@ class StatusEngine:
             return None
 
         lifecycle = self._signal_lifecycle(ts_code, tags, signals)
-        dims = self._build_dimensions(ts_code, tags, signals, lifecycle)
+
+        # 366号步骤3：用维度引擎替代_build_dimensions()
+        dim_engine_results = self._build_dim_engine_results(tags, signals, {}, lifecycle)
+
+        # dim8 状态总结：读取 dim1-dim7 输出，组装综合报告
+        try:
+            from app.opportunity_atlas.dimensions.dim8_summary_engine import Dim8SummaryEngine
+            dim8 = Dim8SummaryEngine()
+            dim_engine_results['summary'] = dim8.evaluate(dims={}, tags=tags, lifecycle={'dim_results': dim_engine_results})
+        except Exception as e:
+            logger.warning(f"dim8 状态总结失败: {e}")
+            dim_engine_results['summary'] = None
+
+        # 兼容层：将维度引擎输出转为旧dims格式
+        dims = self._convert_to_dims_format(dim_engine_results, tags)
+
         l0 = self._apply_l0(ts_code, tags, dims, lifecycle)
         l2 = self._aggregate(tags, dims, l0, lifecycle)
         hits = self._detect_registered_signals(tags, signals)
 
-        return self._assemble(ts_code, dims, lifecycle, l0, l2, hits)
+        return self._assemble(ts_code, dims, lifecycle, l0, l2, hits, dim_engine_results)
 
     # ══════════════════════════════════════════════════════════
     # 原料加载（存储层只读）
     # ══════════════════════════════════════════════════════════
 
     def _load_tags(self, ts_code: str) -> dict:
+        """加载原料标签（357号方案：读pre_feat_cache）
+
+        pre_feat_cache 是嵌套JSON（11组特征），需扁平化为下游期望的flat dict格式。
+        P4已废弃，不再回退opportunity_tags_cache。
+        """
         try:
-            return self.dm.cache.get_tags(ts_code) or {}
+            pre_feat = self.dm.cache.get_pre_feat(ts_code)
+            if pre_feat:
+                return self._flatten_pre_feat(pre_feat)
         except Exception as e:
-            logger.debug("tags 读取失败 %s: %s", ts_code, e)
-            return {}
+            logger.debug("pre_feat 读取失败 %s: %s", ts_code, e)
+        return {}
+
+    @staticmethod
+    def _flatten_pre_feat(pre_feat: dict) -> dict:
+        """将 pre_feat_cache 嵌套JSON扁平化为下游期望的flat dict格式
+
+        pre_feat 结构: {valuation: {...}, sentiment: {...}, ..., depth: {...}}
+        输出: {valuation_level: 'fair', sentiment_phase: 'cautious', ...}
+        """
+        flat = {}
+        for group_name, group_data in pre_feat.items():
+            if not isinstance(group_data, dict):
+                continue
+            for key, value in group_data.items():
+                if value is not None:
+                    flat[key] = value
+        return flat
 
     def _load_signals(self, ts_code: str) -> dict:
         try:
@@ -156,8 +197,179 @@ class StatusEngine:
                     [f'volume_price_fit={vpf}'], conf)
         return ('中性', evidence or ['量价信号缺失'], conf)
 
+    def _build_dim_engine_results(self, tags: dict, signals: dict,
+                                   dims: dict, lifecycle: Optional[dict] = None) -> dict:
+        """365号批次C：调用6个维度引擎，返回结构化结果
+
+        与旧 _build_dimensions() 并行运行。结果作为附加字段写入 status_snapshot，
+        不影响旧仲裁路径。
+
+        Returns:
+            {'signal': {...}, 'structure': {...}, 'volume_price': {...},
+             'chip_fund': {...}, 'emotion': {...}, 'risk': {...}}
+        """
+        results = {}
+        engine_map = {
+            'signal': ('app.opportunity_atlas.dimensions.dim1_signal_engine', 'Dim1SignalEngine'),
+            'structure': ('app.opportunity_atlas.dimensions.dim2_structure_engine', 'Dim2StructureEngine'),
+            'volume_price': ('app.opportunity_atlas.dimensions.dim3_vp_engine', 'Dim3VPEngine'),
+            'chip_fund': ('app.opportunity_atlas.dimensions.dim4_chip_fund_engine', 'Dim4ChipFundEngine'),
+            'emotion': ('app.opportunity_atlas.dimensions.dim5_emotion_engine', 'Dim5EmotionEngine'),
+            'risk': ('app.opportunity_atlas.dimensions.dim6_risk_engine', 'Dim6RiskEngine'),
+            'valuation': ('app.opportunity_atlas.dimensions.dim7_valuation_engine', 'Dim7ValuationEngine'),
+        }
+        for dim_name, (module_path, class_name) in engine_map.items():
+            try:
+                import importlib
+                mod = importlib.import_module(module_path)
+                engine_cls = getattr(mod, class_name)
+                engine = engine_cls()
+                # 所有引擎统一接口：evaluate(dims, tags, signals, lifecycle)
+                # 各引擎内部按需取用，多余参数忽略
+                results[dim_name] = engine.evaluate(dims, tags, signals, lifecycle)
+            except Exception as e:
+                logger.warning(f"维度引擎 {dim_name} 调用失败: {e}")
+                results[dim_name] = None
+        return results
+
+    def _convert_to_dims_format(self, dim_results: dict, tags: dict) -> dict:
+        """366号步骤3：将维度引擎输出转为旧dims格式，保持下游兼容
+
+        Args:
+            dim_results: 6个维度引擎的输出结果
+            tags: 原始标签数据
+
+        Returns:
+            与旧_build_dimensions()输出格式兼容的dims字典
+        """
+        dims = {}
+
+        # 结构维：从dim2_structure_engine输出提取
+        s = dim_results.get('structure')
+        if s and isinstance(s, dict):
+            judg = s.get('judgment', {})
+            dims['structure'] = {
+                'state': judg.get('structure', tags.get('state_label', '盘整')),
+                'light': judg.get('light', 'yellow'),
+                'confidence': 0.7,
+                'evidence': [s.get('status_description', {}).get('plain', '')],
+            }
+        else:
+            # 回退到tags推断
+            dims['structure'] = {
+                'state': tags.get('state_label', '盘整'),
+                'light': 'yellow',
+                'confidence': 0.5,
+                'evidence': [],
+            }
+
+        # 量价维：从dim3_vp_engine输出提取
+        vp = dim_results.get('volume_price')
+        if vp and isinstance(vp, dict):
+            judg = vp.get('judgment', {})
+            dims['vp'] = {
+                'state': judg.get('vp_state', '中性'),
+                'light': judg.get('light', 'yellow'),
+                'confidence': 0.6,
+                'evidence': [],
+            }
+        else:
+            dims['vp'] = {'state': '中性', 'light': 'yellow', 'confidence': 0.5, 'evidence': []}
+
+        # 筹码维
+        cf = dim_results.get('chip_fund')
+        if cf and isinstance(cf, dict):
+            judg = cf.get('judgment', {})
+            dims['chip_fund'] = {
+                'state': judg.get('flow_direction', '中性'),
+                'light': judg.get('light', 'yellow'),
+                'confidence': 0.5,
+                'evidence': [],
+            }
+        else:
+            dims['chip_fund'] = {'state': '中性', 'light': 'yellow', 'confidence': 0.5, 'evidence': []}
+
+        # 情绪维
+        em = dim_results.get('emotion')
+        if em and isinstance(em, dict):
+            judg = em.get('judgment', {})
+            dims['emotion'] = {
+                'state': judg.get('phase', '正常'),
+                'light': judg.get('overall_light', 'yellow'),
+                'confidence': 0.6,
+                'evidence': [],
+            }
+        else:
+            dims['emotion'] = {'state': '正常', 'light': 'yellow', 'confidence': 0.5, 'evidence': []}
+
+        # 风险维
+        r = dim_results.get('risk')
+        if r and isinstance(r, dict):
+            judg = r.get('judgment', {})
+            dims['risk'] = {
+                'state': judg.get('risk_level', '中'),
+                'light': judg.get('light', 'yellow'),
+                'confidence': 0.6,
+                'evidence': [],
+            }
+        else:
+            dims['risk'] = {'state': '中', 'light': 'yellow', 'confidence': 0.5, 'evidence': []}
+
+        # 补充旧体系需要的其他维度（从tags直接推断）
+        dims['valuation'] = {
+            'state': tags.get('valuation_level', '合理'),
+            'light': 'yellow',
+            'confidence': 0.5,
+            'evidence': [],
+        }
+        dims['finance'] = {
+            'state': tags.get('fina_health', '关注'),
+            'light': 'yellow',
+            'confidence': 0.5,
+            'evidence': [],
+        }
+        dims['event'] = {
+            'state': tags.get('catalyst_event', '中性'),
+            'light': 'yellow',
+            'confidence': 0.5,
+            'evidence': [],
+        }
+        dims['time'] = {
+            'state': '中期',
+            'light': 'yellow',
+            'confidence': 0.5,
+            'evidence': [],
+        }
+        dims['position'] = {
+            'state': tags.get('price_position', '中位'),
+            'light': 'yellow',
+            'confidence': 0.5,
+            'evidence': [],
+        }
+        dims['factor'] = {
+            'state': '中性',
+            'light': 'yellow',
+            'confidence': 0.5,
+            'evidence': [],
+        }
+        dims['signal_confirm'] = {
+            'state': tags.get('right_side_confirm', '未确认'),
+            'light': 'yellow',
+            'confidence': 0.5,
+            'evidence': [],
+        }
+
+        return dims
+
     def _build_dimensions(self, ts_code: str, tags: dict, signals: dict,
                           lifecycle: Optional[dict] = None) -> dict[str, dict]:
+        """[已废弃] 旧10维内联判定逻辑
+
+        366号：此方法已被维度引擎替代。保留供兼容层回退使用。
+        待366号变更全部验证通过后删除。
+        """
+        import warnings
+        warnings.warn("_build_dimensions is deprecated, use dimension engines instead", DeprecationWarning, stacklevel=2)
         s = lambda *names: next((signals[n] for n in names if n in signals), None)  # noqa: E731
         chan = s('缠论走势分析')
         vp = s('量价分析策略')
@@ -508,21 +720,35 @@ class StatusEngine:
     # 成品仓输出（337号：status_snapshot 行结构）
     # ══════════════════════════════════════════════════════════
 
-    def _status_bar(self, dims: dict, state: str) -> str:
-        green = sum(1 for d in dims.values() if d['light'] == 'green')
-        red = sum(1 for d in dims.values() if d['light'] == 'red')
+    def _status_bar(self, dims: dict, state: str, l0: dict = None) -> str:
+        """364a Phase 1：status_bar 5态扩展"""
+        green = sum(1 for d in dims.values() if d.get('light') == 'green')
+        red = sum(1 for d in dims.values() if d.get('light') == 'red')
+        l0 = l0 or {}
+        # 优先级1：不可交易
         if state == 'avoid':
+            return '不可交易'
+        # 优先级2：风险区（硬否决或红灯>=6）
+        if l0.get('hard_veto') or red >= 6:
             return '风险区'
+        # 优先级3：持有观望
+        if l0.get('hold_only'):
+            return '持有观望'
+        # 优先级4：强趋势
         if green >= 6:
             return '强趋势'
+        # 优先级5：趋势确认
         if green >= 4:
             return '趋势确认'
+        # 优先级6：趋势转弱
         if red >= 4:
             return '趋势转弱'
-        return '趋势确认'
+        # 默认：趋势不明
+        return '趋势不明'
 
     def _assemble(self, ts_code: str, dims: dict, lifecycle: Optional[dict],
-                  l0: dict, l2: dict, hits: Optional[list] = None) -> dict:
+                  l0: dict, l2: dict, hits: Optional[list] = None,
+                  dim_engine_results: Optional[dict] = None) -> dict:
         # 337号 §6.2：建议规则参数（套算输入——仓位上限经 L0 系数、持有期限制、软风险）
         _state = l2['opportunity_state']
         _base = 0.6 if _state in ('enter', 'light') else (0.2 if _state == 'wait' else 0.0)
@@ -532,10 +758,10 @@ class StatusEngine:
             'soft_risks': l0['soft_risks'],
             'hard_veto': l0['hard_veto'],
         }
-        return {
+        result = {
             'ts_code': ts_code,
             'dim_states': json.dumps(dims, ensure_ascii=False),
-            'status_bar': self._status_bar(dims, l2['opportunity_state']),
+            'status_bar': self._status_bar(dims, l2['opportunity_state'], l0),
             'opportunity_state': l2['opportunity_state'],
             'state_evidence': json.dumps(l2['state_evidence'], ensure_ascii=False),
             'conflict_evidence': json.dumps(l2['conflict_evidence'], ensure_ascii=False),
@@ -546,6 +772,10 @@ class StatusEngine:
             'advice_params': json.dumps(advice_params, ensure_ascii=False),
             'signals': json.dumps(hits or [], ensure_ascii=False),  # 334号 §5：注册表触发列表
         }
+        # 365号批次C：维度引擎结果附加字段
+        if dim_engine_results:
+            result['dim_engine_results'] = json.dumps(dim_engine_results, ensure_ascii=False, default=str)
+        return result
 
 
 def apply_advice_params(params: dict, price: Optional[float],
@@ -581,53 +811,371 @@ def apply_advice_params(params: dict, price: Optional[float],
             'reason': '可入场' if state == 'enter' else '观望'}
 
 
-def build_seven_dim_report(snapshot_row: dict) -> dict:
-    """337号 §5：七维现状描述模板按需组装（个股页详述版，素材=status_snapshot.dim_states）
+def build_seven_dim_report(snapshot_row: dict, tags: dict = None,
+                           geo: dict = None, l0: dict = None, df=None) -> dict:
+    """364a/364b/364c Phase 1+2+3：七维现状描述模板（含audit+judgment+plain）
 
     七段模板：信号确认/结构位置/量价健康/资金筹码/情绪环境/风险边界/状态总结。
+    每段输出：title + light + judgment + audit + text + plain
     """
     import json as _json
+    from app.opportunity_atlas.condition_auditor import audit_dimension
+    from app.opportunity_atlas.risk_boundary_builder import build_risk_boundary
+    from app.opportunity_atlas.fund_chip_builder import build_fund_chip
+    from app.opportunity_atlas.emotion_builder import build_emotion
+    from app.opportunity_atlas.vp_health_builder import build_volume_price
+    from app.opportunity_atlas.structure_builder import build_structure
+    from app.opportunity_atlas.signal_attribute_classifier import build_signal_confirm
+
     try:
         dims = _json.loads(snapshot_row.get('dim_states') or '{}')
     except Exception:
         dims = {}
     st = snapshot_row.get('status_bar', '')
     state = snapshot_row.get('opportunity_state', 'wait')
+    consensus = snapshot_row.get('consensus_rate', 0)
+    conflict = snapshot_row.get('conflict_evidence', '[]')
     _l = {'green': '✅', 'yellow': '⚠️', 'red': '🚫'}
+    tags = tags or {}
 
-    def _seg(title: str, light: str, text: str, plain: str = '') -> dict:
-        return {'title': title, 'light': _l.get(light, '⚠️'), 'text': text, 'plain': plain}
+    # 366号步骤1：tags注入 - 补充builder所需但tags中缺失的key
+    enriched_tags = dict(tags) if tags else {}
 
-    segments = {
-        'signal': _seg('信号确认状态', dims.get('time', {}).get('light', 'yellow'),
-                       f"信号生命周期：{dims.get('time', {}).get('state', '中期')}"
-                       f"{'（' + dims.get('time', {}).get('evidence', [''])[0] + '）' if dims.get('time', {}).get('evidence') else ''}",
-                       '最近信号的介入贵贱'),
-        'structure': _seg('结构位置状态', dims.get('structure', {}).get('light', 'yellow'),
-                          f"走势结构：{dims.get('structure', {}).get('state', '盘整')}；"
-                          f"价格位置：{dims.get('position', {}).get('state', '中位')}",
-                          '价格站在哪里、趋势方向'),
-        'volume_price': _seg('量价健康度', dims.get('vp', {}).get('light', 'yellow'),
-                             f"量价健康度：{dims.get('vp', {}).get('state', '中性')}"
-                             f"{'（' + dims.get('vp', {}).get('evidence', [''])[0] + '）' if dims.get('vp', {}).get('evidence') else ''}",
-                             '涨得结不结实（量价配合/背离）'),
-        'fund_chip': _seg('资金与筹码状态', dims.get('chip_fund', {}).get('light', 'yellow'),
-                          f"筹码资金：{dims.get('chip_fund', {}).get('state', '中性')}",
-                          '谁在买、筹码状态'),
-        'emotion': _seg('情绪环境状态', dims.get('emotion', {}).get('light', 'yellow'),
+    # 1. 结构维：从中枢信号提取position_vs_zs
+    struct = dims.get('structure', {})
+    for ev in struct.get('evidence', []):
+        if '中枢' in str(ev):
+            enriched_tags.setdefault('position_vs_zs', str(ev))
+            # 提取百分比信息
+            import re
+            pct_match = re.search(r'([+-]?\d+\.?\d*%)', str(ev))
+            if pct_match:
+                enriched_tags.setdefault('pct_from_zs', pct_match.group(1))
+
+    # RSI/KDJ：从pre_feat_cache已有字段或daily_basic计算
+    enriched_tags.setdefault('RSI_14', tags.get('rsi_14') or tags.get('RSI_14'))
+    enriched_tags.setdefault('KDJ_J', tags.get('kdj_j') or tags.get('KDJ_J'))
+
+    # 2. 量价维：key名映射
+    if 'volume_ratio' not in enriched_tags and 'vol_price_ratio' in enriched_tags:
+        enriched_tags['volume_ratio'] = enriched_tags['vol_price_ratio']
+
+    # 3. 情绪维：sector_heat类型转换
+    if isinstance(enriched_tags.get('sector_heat'), (int, float)):
+        sh = enriched_tags['sector_heat']
+        if sh <= 10:
+            enriched_tags['sector_heat'] = 'top_10'
+        elif sh <= 20:
+            enriched_tags['sector_heat'] = 'top_20'
+        else:
+            enriched_tags['sector_heat'] = 'normal'
+
+    # 4. 资金维：从365号扩展字段补充
+    enriched_tags.setdefault('fund_flow_strength', tags.get('fund_flow_strength'))
+
+    # 5. 支撑阻力：从365号扩展字段构建geo
+    if not geo or not geo.get('support_price'):
+        geo = {
+            'support_price': tags.get('support_price'),
+            'resistance_price': tags.get('resistance_price'),
+            'dist_to_support_pct': tags.get('dist_to_support_pct'),
+            'dist_to_resistance_pct': tags.get('dist_to_resistance_pct'),
+        }
+
+    # 使用enriched_tags替代原始tags
+    tags = enriched_tags
+
+    def _seg(title, dim_key, light_source, text, plain, judgment=''):
+        """通用段落构建器"""
+        audit_result = audit_dimension(dim_key, dims, tags, {}) if dim_key else {
+            'conditions': [], 'satisfied_count': 0, 'total_count': 0, 'confidence': 0
+        }
+        return {
+            'title': title,
+            'light': _l.get(light_source, '⚠️'),
+            'judgment': judgment,
+            'audit': audit_result,
+            'text': text,
+            'plain': plain
+        }
+
+    # ── 各维度plain生成 ──
+    def _signal_plain():
+        time_state = dims.get('time', {}).get('state', '中期')
+        evidence = dims.get('time', {}).get('evidence', [])
+        ev_text = evidence[0] if evidence else '无明确证据'
+        return f"信号处于{time_state}阶段，{ev_text}"
+
+    def _structure_plain():
+        struct = dims.get('structure', {}).get('state', '盘整')
+        pos = dims.get('position', {}).get('state', '中位')
+        return f"走势{struct}，价格处于{pos}"
+
+    def _vp_plain():
+        vp_state = dims.get('vp', {}).get('state', '中性')
+        evidence = dims.get('vp', {}).get('evidence', [])
+        ev_text = evidence[0] if evidence else ''
+        return f"量价关系{vp_state}，{ev_text}" if ev_text else f"量价关系{vp_state}"
+
+    def _chip_plain():
+        chip_state = dims.get('chip_fund', {}).get('state', '中性')
+        return f"资金面{chip_state}"
+
+    def _emotion_plain():
+        emo = dims.get('emotion', {}).get('state', '正常')
+        event = dims.get('event', {}).get('state', '中性')
+        return f"市场情绪{emo}，事件影响{event}"
+
+    def _risk_plain():
+        risk = dims.get('risk', {}).get('state', '中')
+        val = dims.get('valuation', {}).get('state', '合理')
+        fin = dims.get('finance', {}).get('state', '关注')
+        return f"风险等级{risk}，估值{val}，财务{fin}"
+
+    # ── 各维度judgment生成 ──
+    def _signal_judgment():
+        time_state = dims.get('time', {}).get('state', '中期')
+        return f"信号{time_state}"
+
+    def _structure_judgment():
+        struct = dims.get('structure', {}).get('state', '盘整')
+        pos = dims.get('position', {}).get('state', '中位')
+        return f"{struct}趋势，{pos}"
+
+    def _vp_judgment():
+        return dims.get('vp', {}).get('state', '中性')
+
+    def _chip_judgment():
+        return dims.get('chip_fund', {}).get('state', '中性')
+
+    def _emotion_judgment():
+        emo = dims.get('emotion', {}).get('state', '正常')
+        event = dims.get('event', {}).get('state', '中性')
+        return f"{emo}，{event}"
+
+    def _risk_judgment():
+        risk = dims.get('risk', {}).get('state', '中')
+        val = dims.get('valuation', {}).get('state', '合理')
+        return f"风险{risk}，估值{val}"
+
+    # ── 一句话总结 ──
+    def _summary_text():
+        """365号修订：综合状态总结——用一句话概括全貌"""
+        # 状态条
+        bar = st  # e.g. '趋势确认', '趋势不明'
+        # 共识率
+        cr = snapshot_row.get('consensus_rate', 0) or 0
+        # 各维状态
+        s_struct = dims.get('structure', {}).get('state', '')
+        s_vp = dims.get('vp', {}).get('state', '')
+        s_chip = dims.get('chip_fund', {}).get('state', '')
+        s_emo = dims.get('emotion', {}).get('state', '')
+        s_risk = dims.get('risk', {}).get('state', '')
+        # 组装叙事
+        dim_parts = []
+        if s_struct:
+            dim_parts.append(f'结构{s_struct}')
+        if s_vp:
+            dim_parts.append(f'量价{s_vp}')
+        if s_chip:
+            dim_parts.append(f'资金{s_chip}')
+        if s_emo:
+            dim_parts.append(f'情绪{s_emo}')
+        if s_risk:
+            dim_parts.append(f'风险{s_risk}')
+        dims_text = '，'.join(dim_parts) if dim_parts else '各维数据不足'
+        return f'{bar}（共识{cr:.0%}）——{dims_text}'
+
+    def _build_signal_segment(dims, tags):
+        """364g Phase 7：信号确认7类分类结构化输出"""
+        try:
+            sc_result = build_signal_confirm(dims, tags, {})
+            sd = sc_result['status_description']
+            jdg = sc_result['judgment']
+            text = (f"信号属性：{sd['attribute']}；"
+                    f"强度：{sd['strength']}；"
+                    f"维持：{sd['maintenance']}")
+            return {
+                'title': '信号确认状态',
+                'light': _l.get(jdg.get('overall_light', 'yellow'), '⚠️'),
+                'judgment': jdg.get('attribute', {}).get('code', 'neutral'),
+                'audit': sc_result['audit'],
+                'text': text,
+                'plain': sd['plain'],
+                'status_description': sd,
+            }
+        except Exception as e:
+            logger.debug(f"信号确认构建异常: {e}")
+            return _seg('信号确认状态', 'signal', dims.get('time', {}).get('light', 'yellow'),
+                        f"信号生命周期：{dims.get('time', {}).get('state', '中期')}",
+                        _signal_plain(), _signal_judgment())
+
+    def _build_structure_segment(dims, tags, geo):
+        """364f Phase 6：结构位置结构化输出"""
+        try:
+            st_result = build_structure(dims, tags, geo)
+            sd = st_result['status_description']
+            text = (f"走势：{sd['vs_zhongshu']}；"
+                    f"均线：{sd['vs_ma']}；"
+                    f"支撑阻力：{sd['vs_support_resistance']}")
+            return {
+                'title': '结构位置状态',
+                'light': _l.get(st_result['judgment']['light'], '⚠️'),
+                'judgment': f"{st_result['judgment']['structure']}趋势，{st_result['judgment']['position']}",
+                'audit': st_result['audit'],
+                'text': text,
+                'plain': sd['plain'],
+                'status_description': sd,
+            }
+        except Exception as e:
+            logger.debug(f"结构位置构建异常: {e}")
+            return _seg('结构位置状态', 'structure', dims.get('structure', {}).get('light', 'yellow'),
+                        f"走势结构：{dims.get('structure', {}).get('state', '盘整')}；"
+                        f"价格位置：{dims.get('position', {}).get('state', '中位')}",
+                        _structure_plain(), _structure_judgment())
+
+    def _build_vp_segment(dims, tags):
+        """364e Phase 5：量价健康10分制结构化输出"""
+        try:
+            vp_result = build_volume_price(dims, tags)
+            sd = vp_result['status_description']
+            text = (f"量价关系：{sd['vp_state']}；"
+                    f"健康度：{sd['health_score']}；"
+                    f"背离：{sd['divergence']}；"
+                    f"量能：{sd['volume_energy']}")
+            return {
+                'title': '量价健康度',
+                'light': _l.get(vp_result['judgment']['light'], '⚠️'),
+                'judgment': f"{vp_result['judgment']['state']}（{vp_result['judgment']['score']}/10）",
+                'audit': vp_result['audit'],
+                'text': text,
+                'plain': sd['plain'],
+                'status_description': sd,
+            }
+        except Exception as e:
+            logger.debug(f"量价健康构建异常: {e}")
+            return _seg('量价健康度', 'volume_price', dims.get('vp', {}).get('light', 'yellow'),
+                        f"量价健康度：{dims.get('vp', {}).get('state', '中性')}",
+                        _vp_plain(), _vp_judgment())
+
+    def _build_emotion_segment(dims, tags):
+        """364d Phase 4：情绪环境结构化输出"""
+        try:
+            emo_result = build_emotion(dims, tags, l0)
+            sd = emo_result['status_description']
+            text = f"市场：{sd['market']}；板块：{sd['sector']}；个股：{sd['stock']}"
+            return {
+                'title': '情绪环境状态',
+                'light': _l.get(emo_result['judgment']['overall_light'], '⚠️'),
+                'judgment': f"市场{dims.get('emotion', {}).get('state', '正常')}",
+                'audit': emo_result['audit'],
+                'text': text,
+                'plain': sd['plain'],
+                'status_description': sd,
+            }
+        except Exception as e:
+            logger.debug(f"情绪环境构建异常: {e}")
+            return _seg('情绪环境状态', 'emotion', dims.get('emotion', {}).get('light', 'yellow'),
                         f"市场情绪：{dims.get('emotion', {}).get('state', '正常')}；"
                         f"事件：{dims.get('event', {}).get('state', '中性')}",
-                        '现在是不是好时候'),
-        'risk': _seg('风险边界状态', dims.get('risk', {}).get('light', 'yellow'),
-                     f"风险等级：{dims.get('risk', {}).get('state', '中')}；"
-                     f"估值：{dims.get('valuation', {}).get('state', '合理')}；"
-                     f"财务：{dims.get('finance', {}).get('state', '关注')}",
-                     '错了在哪认错'),
-        'summary': _seg('状态总结（仪表盘）', 'green' if state in ('enter', 'light') else 'yellow',
-                        f"{st}（{state}）——维度共识 {snapshot_row.get('consensus_rate', 0):.0%}",
-                        '综合状态条'),
+                        _emotion_plain(), _emotion_judgment())
+
+    def _build_fund_chip_segment(dims, tags, sub_scores):
+        """364c Phase 3：资金筹码结构化输出"""
+        try:
+            fc_result = build_fund_chip(dims, tags, {}, l0, sub_scores)
+            sd = fc_result['status_description']
+            text = (f"主力阶段：{sd['phase']}；"
+                    f"资金流向：{sd['fund_flow']}；"
+                    f"成本结构：{sd['cost_structure']}；"
+                    f"筹码信号：{sd['signal']}")
+            return {
+                'title': '资金与筹码状态',
+                'light': _l.get(fc_result['judgment']['light'], '⚠️'),
+                'judgment': f"{fc_result['judgment']['phase']}，{fc_result['judgment']['direction']}",
+                'audit': fc_result['audit'],
+                'text': text,
+                'plain': sd['plain'],
+                'status_description': sd,
+            }
+        except Exception as e:
+            logger.debug(f"资金筹码构建异常: {e}")
+            return _seg('资金与筹码状态', 'fund_chip', dims.get('chip_fund', {}).get('light', 'yellow'),
+                        f"筹码资金：{dims.get('chip_fund', {}).get('state', '中性')}",
+                        _chip_plain(), _chip_judgment())
+
+    def _build_risk_segment(dims, tags, geo, l0, df, snapshot_row):
+        """364b Phase 2：风险边界结构化输出"""
+        try:
+            risk_result = build_risk_boundary(dims, tags, geo, l0, df, snapshot_row)
+            sd = risk_result['status_description']
+            text = (f"风险等级：{sd['risk_level']}；"
+                    f"支撑阻力：{sd['support_resistance']}；"
+                    f"盈亏比：{sd['rr_assessment']}；"
+                    f"波动率：{sd['volatility']}")
+            return {
+                'title': '风险边界状态',
+                'light': _l.get(risk_result['judgment']['light'], '⚠️'),
+                'judgment': f"风险{risk_result['judgment']['level']}",
+                'audit': risk_result['audit'],
+                'text': text,
+                'plain': sd['plain'],
+                'status_description': sd,
+            }
+        except Exception as e:
+            logger.debug(f"风险边界构建异常: {e}")
+            return _seg('风险边界状态', 'risk', dims.get('risk', {}).get('light', 'yellow'),
+                        f"风险等级：{dims.get('risk', {}).get('state', '中')}",
+                        _risk_plain(), _risk_judgment())
+
+    # ── 冲突解析 ──
+    try:
+        conflict_list = _json.loads(conflict) if isinstance(conflict, str) else conflict
+        conflict_text = '；'.join(str(c) for c in (conflict_list or [])[:2])
+    except Exception:
+        conflict_text = ''
+
+    segments = {
+        'signal': _build_signal_segment(dims, tags),
+        'structure': _build_structure_segment(dims, tags, geo or {}),
+        'volume_price': _build_vp_segment(dims, tags),
+        'fund_chip': _build_fund_chip_segment(dims, tags, {}),
+        'emotion': _build_emotion_segment(dims, tags),
+        'risk': _build_risk_segment(dims, tags, geo or {}, l0 or {}, df, snapshot_row),
+        'summary': {
+            'title': '状态总结',
+            'light': _l.get('green' if state in ('enter', 'light') else 'yellow', '⚠️'),
+            'judgment': f"{st}（{state}）",
+            'audit': {'conditions': [], 'satisfied_count': 0, 'total_count': 0, 'confidence': 0},
+            'text': f"{st}（{state}）——维度共识 {consensus:.0%}",
+            'plain': _summary_text(),
+            'status_bar': st,
+            'consensus_rate': consensus,
+            'conflict': conflict_text,
+        },
     }
     return segments
+
+
+def generate_summary_text(snapshot_row: dict) -> str:
+    """364a Phase 1 / 365号修订：生成一句话总结"""
+    import json as _json
+    try:
+        dims = _json.loads(snapshot_row.get('dim_states') or '{}')
+    except Exception:
+        dims = {}
+    st = snapshot_row.get('status_bar', '')
+    cr = snapshot_row.get('consensus_rate', 0) or 0
+    dim_parts = []
+    for dim_key, name in [('structure', '结构'), ('vp', '量价'), ('chip_fund', '资金'), ('emotion', '情绪')]:
+        s = dims.get(dim_key, {}).get('state', '')
+        if s:
+            dim_parts.append(f'{name}{s}')
+    risk = dims.get('risk', {}).get('state', '')
+    if risk:
+        dim_parts.append(f'风险{risk}')
+    dims_text = '，'.join(dim_parts) if dim_parts else '各维数据不足'
+    return f'{st}（共识{cr:.0%}）——{dims_text}'
 
 
 def build_status_engine() -> StatusEngine:

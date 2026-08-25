@@ -94,11 +94,12 @@ def _geometric(df) -> dict:
     price = float(closes[-1])
     hi60 = float(df['high'].tail(60).max()) if len(df) >= 60 and 'high' in df.columns else None
     lo60 = float(df['low'].tail(60).min()) if len(df) >= 60 and 'low' in df.columns else None
-    # 压力位：60日高点与 MA60 取较低者（更贴近的阻力）；支撑位：近端结构位
+    # 压力位：取高于现价的最近位（364f修复：原逻辑min(hi60,ma60)在ma60<现价时返回低于现价的阻力位）
     ma60 = float(df['close'].tail(60).mean()) if len(df) >= 60 else None
     resistance = hi60
-    if hi60 is not None and ma60 is not None:
-        resistance = min(hi60, ma60)   # 更贴近的压力参考
+    resistance_candidates = [x for x in [hi60, ma60] if x is not None and x > price]
+    if resistance_candidates:
+        resistance = min(resistance_candidates)
     ma20 = float(df['close'].tail(20).mean()) if len(df) >= 20 else None
     lo20 = float(df['low'].tail(20).min()) if len(df) >= 20 and 'low' in df.columns else None
     # 近端结构位：MA20 与 近20日低点取高者（更贴近现价的支撑）

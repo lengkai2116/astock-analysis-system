@@ -24,11 +24,48 @@ from app.data.mixins import DataAwareMixin
 logger = logging.getLogger(__name__)
 
 
+def _convert_dim_engine_to_legacy(der: dict) -> dict:
+    """365号批次C：将维度引擎输出转换为旧5维格式（供 _extract_real_dimensions 回退使用）"""
+    dims = {}
+    # 结构维
+    s = der.get('structure') or {}
+    if s:
+        judg = s.get('judgment', {})
+        dims['chanlun'] = {'direction': 'up' if judg.get('overall_direction', 0) > 0 else 'down'}
+    # 量价维
+    vp = der.get('volume_price') or {}
+    if vp:
+        judg = vp.get('judgment', {})
+        dims['volume_price'] = {'direction': 'up' if judg.get('overall_direction', 0) > 0 else 'down'}
+    # 筹码维
+    cf = der.get('fund_chip') or {}
+    if cf:
+        judg = cf.get('judgment', {})
+        phase_dir = judg.get('phase', {}).get('direction', 0)
+        dims['chip'] = {'direction': 'up' if phase_dir > 0 else ('down' if phase_dir < 0 else 'neutral')}
+    # 情绪维
+    em = der.get('emotion') or {}
+    if em:
+        judg = em.get('judgment', {})
+        ol = judg.get('overall_light', 'yellow')
+        dims['emotion'] = {'direction': 'up' if ol == 'green' else ('down' if ol == 'red' else 'neutral')}
+    # 因子维（从 signal 维度派生）
+    sig = der.get('signal') or {}
+    if sig:
+        judg = sig.get('judgment', {})
+        od = judg.get('overall_direction', 0)
+        dims['factor'] = {'direction': 'up' if od > 0 else ('down' if od < 0 else 'neutral')}
+    return dims if dims else None
+
+
 def _extract_real_dimensions(dm, ts_code: str) -> dict | None:
     """330号改进3（2026-08-13）：从 strategy_signal_detail（P2 预计算）提取真实五维方向
 
     与个股页 analyze（strategy_analyze.py）同源——消除弹窗 diagnose 标签轻量推导
     导致的共识虚高（301119=100%/300759=90% vs 个股页真实五维 67%）。
+
+    365号批次C：优先尝试从 status_snapshot.dim_engine_results 读取维度引擎输出，
+    不存在时回退到旧5维提取逻辑。
 
     方向口径与 analyze 各 _build_*_dimension 保持一致：
       - chanlun: status_recognition.trend.direction（up/down）或缠论中文态
@@ -40,6 +77,20 @@ def _extract_real_dimensions(dm, ts_code: str) -> dict | None:
     Returns:
         dimensions dict 或 None（信号缓存缺失/解析失败）
     """
+    # 365号批次C：优先使用维度引擎结果
+    try:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        row = ecm.conn.execute(
+            "SELECT dim_engine_results FROM status_snapshot WHERE ts_code=?", [ts_code]
+        ).fetchone()
+        if row and row[0]:
+            import json
+            der = json.loads(row[0])
+            if der and any(v is not None for v in der.values()):
+                return _convert_dim_engine_to_legacy(der)
+    except Exception:
+        pass  # 回退到旧逻辑
     try:
         cached = dm.cache.get_latest_signal_detail(ts_code)
         if not cached:

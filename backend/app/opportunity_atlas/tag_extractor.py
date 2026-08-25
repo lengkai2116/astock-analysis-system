@@ -1,15 +1,19 @@
-"""323号 S0：深度字段提取器——从 P2 信号/phase_detector 提取深度字段供标签库落库
+"""323号 S0：深度字段提取器——从 P2 信号/筹码指标提取深度字段供标签库落库
 
 目的：引擎B（个股页五维）需要缠论结构/筹码分布/资金风险深度字段（约 20 个），
 当前存于 strategy_signal_detail 信号 status_recognition 或 phase_detector 内部，
-未落 opportunity_tags_cache 标签库。本模块提取这些字段，供 P4 预计算落库。
+未落 opportunity_tags_cache 标签库。本模块提取这些字段，供原料加工环节落库。
 
 实证（2026-08-09）：
 - 缠论深度字段（support_resistance/zhongshu_strength/multi_level 等）在 P2 信号中 99% 覆盖；
 - 筹码深度字段（asr/cyqkl/concentration/profit_ratio/ssrp/chip_peak）由 ChipIndicators
-  产出（phase_detector._last_chip_indicators 已含），但 P2 信号筹码深度缺失（仅 1.2%）；
+  产出，但 P2 信号筹码深度缺失（仅 1.2%）；
 - tag_group 列已存在（derived/direction/environment/position/quality/unknown），
   深度字段采用新增组 structure/chip_deep/fund_risk。
+
+2026-08-19 重构（357号方案决策1）：
+- extract_chip_deep_tags 不再依赖 phase_detector._last_chip_indicators
+- 改为独立调用 ChipDistributionEstimator + ChipIndicators
 """
 from __future__ import annotations
 
@@ -98,11 +102,12 @@ def extract_chanlun_deep_tags(ts_code: str) -> dict:
 
 
 def extract_chip_deep_tags(ts_code: str) -> dict:
-    """从 phase_detector._last_chip_indicators 提取筹码深度字段（筹码分布组）
+    """独立提取筹码深度字段（筹码分布组）——不依赖 phase_detector
 
-    筹码深度字段（asr/cyqkl/concentration/profit_ratio/ssrp 等）由 ChipIndicators
-    产出并缓存于 phase_detector._last_chip_indicators，但未落标签库。
-    通过重新运行 phase_detector.compute_tags 触发计算后提取。
+    直接调用 ChipDistributionEstimator + ChipIndicators 计算筹码指标，
+    产出 asr/cyqkl/concentration/profit_ratio/ssrp/chip_peak 等深度字段。
+
+    重构依据：357号方案决策1（深度字段解耦），消除对 phase_detector._last_chip_indicators 的依赖。
 
     Returns:
         {chip_peak, asr, cyqkl, concentration, profit_ratio, ssrp, ...}
@@ -110,16 +115,36 @@ def extract_chip_deep_tags(ts_code: str) -> dict:
     """
     try:
         from app.data import DataManager
-        from app.opportunity_atlas.phase_detector import PhaseDetectionEngine
+        from app.data.chip_distribution_service import ChipDistributionEstimator
+        from app.data.chip_indicators import ChipIndicators
         dm = DataManager()
         df = dm.get_cached_daily_data(ts_code)
         if df is None or df.empty or len(df) < 30:
             return {}
-        pd_engine = PhaseDetectionEngine()
-        pd_engine.compute_tags(ts_code, df)   # 触发 _last_chip_indicators 填充
-        ind = getattr(pd_engine, '_last_chip_indicators', {}) or {}
+
+        # 1. 估算筹码分布
+        estimator = ChipDistributionEstimator()
+        chip_dist, min_p, max_p, step = estimator.estimate(df)
+        if step <= 0:
+            return {}
+
+        # 2. 构建 chip_bins
+        total = chip_dist.sum() or 1
+        chip_bins = [
+            {"price_bin": round(min_p + i * step, 2),
+             "chip_ratio": float(chip_dist[i] / total)}
+            for i in range(len(chip_dist))
+        ]
+
+        # 3. 计算筹码指标
+        chip_inds = ChipIndicators()
+        current_price = float(df["close"].values[-1])
+        ind = chip_inds.calculate_all_indicators(
+            chip_bins, current_price, kline_data=df
+        ) or {}
+
+        # 4. 提取深度字段
         out = {}
-        # main_peak → chip_peak 映射（main_peak 是筹码主峰 dict {price, ratio}）
         if 'main_peak' in ind and isinstance(ind['main_peak'], dict):
             pk_price = ind['main_peak'].get('price')
             if pk_price is not None:

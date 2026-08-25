@@ -35,7 +35,6 @@ class PhaseDetectionEngine(DataAwareMixin):
         self._chip_indicators = None
         self._trading_phase_detector = None
         self._stage_detector = None
-        self._last_chip_indicators: dict = {}   # 312号：SSRP 维度复用
         self._last_dim_insufficient = False     # 312号：数据不足标记（unknown 细分）
 
     # ── 主入口 ──────────────────────────────────────────────
@@ -81,7 +80,6 @@ class PhaseDetectionEngine(DataAwareMixin):
         result["fund_flow"] = fund_flow
 
         # ── 8 维度阶段向量（批次1 可计算 7/8，控盘度批次3） ──
-        self._last_chip_indicators = {}   # 供 SSRP 维度复用
         self._last_dim_insufficient = len(df_sorted) < 60   # 数据不足（unknown 细分）
         dims = {
             "chip":  self._dim_chip(ts_code, df_sorted),   # 1 筹码形态（真实 TradingPhase 评分）
@@ -89,7 +87,7 @@ class PhaseDetectionEngine(DataAwareMixin):
             "stage": self._dim_stage(df_sorted),           # 3 量价四阶段（CONSOLIDATION 验证）
             "asr":   self._dim_asr(ts_code, df_sorted),    # 4 ASR 筹码分布（去兜底）
             "trend": self._dim_trend(df_sorted),           # 5 趋势方向（斜率连续）
-            "ssrp":  self._dim_ssrp(df_sorted),            # 6 主力成本锚定（真实 SSRP）
+            "ssrp":  self._dim_ssrp(df_sorted, extra_tags),# 6 主力成本锚定（真实 SSRP，从pre_feat_cache读取）
             "chan":  self._dim_chan(extra_tags),           # 8 缠论买点（标签接入）
         }
 
@@ -224,8 +222,10 @@ class PhaseDetectionEngine(DataAwareMixin):
             return {"distributing": round(0.3 + 0.4 * strength, 3)}
         return {}
 
-    def _dim_ssrp(self, df: pd.DataFrame) -> dict:
+    def _dim_ssrp(self, df: pd.DataFrame, extra_tags: Dict = None) -> dict:
         """维度6 主力成本锚定：现价 vs SSRP（真实主力成本，312 §3.2 维度6）
+
+        367号：改为从 extra_tags（pre_feat_cache）读取 SSRP，不再依赖 _last_chip_indicators。
 
         规则（2026-08-02 抽样校准：原 rel<0.95→building 触发面过宽 77%，收紧）：
           rel < 0.85          → building（深度成本下方，安全边际大）
@@ -233,7 +233,12 @@ class PhaseDetectionEngine(DataAwareMixin):
           rel >= 1.20         → lifting（浮盈，拉升动力）
           1.10 <= rel < 1.20  → 无明确阶段（不投票）
         """
-        ssrp = self._last_chip_indicators.get("ssrp", 0)
+        extra_tags = extra_tags or {}
+        ssrp = extra_tags.get("ssrp", 0) or 0
+        try:
+            ssrp = float(ssrp) if ssrp else 0
+        except (TypeError, ValueError):
+            ssrp = 0
         if not ssrp:
             return {}
         current = df["close"].values[-1]
@@ -361,7 +366,6 @@ class PhaseDetectionEngine(DataAwareMixin):
             indicators = chip_inds.calculate_all_indicators(
                 chip_bins, df["close"].values[-1], kline_data=df
             )
-            self._last_chip_indicators = indicators or {}
 
             moneyflow_data = None
             try:

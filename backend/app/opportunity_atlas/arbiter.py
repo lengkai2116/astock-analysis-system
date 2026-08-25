@@ -156,13 +156,15 @@ def _append(evidence: list[str], text: str, check: bool = True) -> None:
         evidence.append(text)
 
 
-def arbitrate(tags: dict, gate: dict = None, consensus: dict = None) -> dict:
+def arbitrate(tags: dict, gate: dict = None, consensus: dict = None,
+              dim_results: dict = None) -> dict:
     """跨维仲裁（321号 §3.2 优先级表）
 
     Args:
         tags: 4 链标签（right_side_confirm/main_force_phase/signal_strength 等）
         gate: 门禁评估结果（cross_validate._evaluate_gate 输出；None 则从 tags 推导）
         consensus: L4 共识（{'direction','consensus_rate'}；None 则从 tags 轻量推导）
+        dim_results: 365号批次C — 维度引擎输出（可选），提供时用于增强仲裁依据
 
     Returns:
         {'opportunity_state': 'enter'|'light'|'wait'|'avoid',
