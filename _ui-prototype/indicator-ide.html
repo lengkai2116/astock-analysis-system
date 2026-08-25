@@ -3969,16 +3969,40 @@ function renderActionPlan(analysisData, verificationData){
     }
     if(adviceWrap) adviceWrap.innerHTML = '<div class="advice-card">' + headHtml + '<div class="advice-body">' + fieldsHtml + evHtml + '</div></div>';
     // 337号 S3.2：七维现状描述模板（体检报告式，status_snapshot 成品仓组装，日终生成后显示）
+    // 365号批次D：增加audit条件稽核+judgment判定标签渲染
     const sdr = (analysisData && analysisData.seven_dim_report) || null;
     if (sdr && adviceWrap) {
       const segOrder = ['signal','structure','volume_price','fund_chip','emotion','risk','summary'];
       const segHtml = segOrder.map(k => {
         const s = sdr[k];
         if (!s) return '';
-        return '<div class="sdr-seg"><span class="sdr-light">' + s.light + '</span>' +
-          '<b>' + s.title + '</b>：' + s.text +
-          (s.plain ? ' <span style="color:var(--text-muted);font-size:11px;">（' + s.plain + '）</span>' : '') + '</div>';
+        // judgment标签
+        let judgHtml = '';
+        if (s.judgment && s.judgment.overall_light) {
+          const jl = s.judgment.overall_light;
+          const jColor = jl === 'green' ? '#0a7a0a' : (jl === 'red' ? '#a70000' : '#b36b00');
+          const jBg = jl === 'green' ? '#e6ffe6' : (jl === 'red' ? '#ffe6e6' : '#fff8e1');
+          judgHtml = '<span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:11px;background:'+jBg+';color:'+jColor+';margin-left:4px;">' +
+            (s.judgment.overall_direction > 0 ? '↑看多' : (s.judgment.overall_direction < 0 ? '↓看空' : '→中性')) + '</span>';
+        }
+        // audit条件列表
+        let auditHtml = '';
+        if (s.audit && s.audit.conditions && s.audit.conditions.length) {
+          const pct = s.audit.confidence != null ? Math.round(s.audit.confidence * 100) : '?';
+          auditHtml = '<div style="margin:4px 0 4px 16px;font-size:11px;color:var(--text-muted);">' +
+            '<span style="opacity:0.7;">条件稽核 ' + s.audit.satisfied_count + '/' + s.audit.total_count + ' (置信' + pct + '%)</span><br>' +
+            s.audit.conditions.map(c =>
+              '<span style="color:' + (c.satisfied ? '#0a7a0a' : '#a70000') + ';">' +
+              (c.satisfied ? '✓' : '✗') + '</span> ' + (c.detail || c.name || '')
+            ).join('<br>') + '</div>';
+        }
+        return '<div class="sdr-seg" style="margin-bottom:6px;"><span class="sdr-light">' + s.light + '</span>' +
+          '<b>' + s.title + '</b>：' + s.text + judgHtml +
+          (s.plain ? ' <span style="color:var(--text-muted);font-size:11px;">（' + s.plain + '）</span>' : '') +
+          auditHtml + '</div>';
       }).join('');
+      // summary_text 一句话总结
+      const summaryLine = (sdr.summary && sdr.summary.text) ? '<div style="margin-top:8px;padding:6px 8px;background:var(--surface,#1a1a2e);border-radius:4px;font-size:12px;font-weight:600;">' + sdr.summary.text + '</div>' : '';
       let holder = document.getElementById('apSevenDim');
       if (!holder) {
         holder = document.createElement('div');
@@ -3986,7 +4010,7 @@ function renderActionPlan(analysisData, verificationData){
         holder.style.cssText = 'margin-top:10px;font-size:12px;color:var(--text-secondary);line-height:1.9;border-top:1px dashed var(--border,#333);padding-top:8px;';
         if (adviceWrap.parentNode) adviceWrap.parentNode.insertBefore(holder, adviceWrap.nextSibling);
       }
-      holder.innerHTML = '<div style="font-weight:600;margin-bottom:6px;">🧭 七维现状描述（体检报告）</div>' + segHtml;
+      holder.innerHTML = '<div style="font-weight:600;margin-bottom:6px;">🧭 七维现状描述（体检报告）</div>' + segHtml + summaryLine;
     }
     var scnMap = {'a':'apStepsA','b':'apStepsB','c':'apStepsC'};
     (oa.scenarios||[]).forEach(function(s){

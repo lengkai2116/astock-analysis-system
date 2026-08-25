@@ -1,0 +1,175 @@
+# 数据源配置文件（355号方案规则8）
+# 定义数据源优先级、降级策略、速率限制等
+
+# 数据源优先级配置
+data_sources:
+  # 日线数据
+  daily_cache:
+    primary: tushare
+    fallback: null
+    priority: P0
+    batch_api: true
+    rate_limit: 5  # 次/秒
+    
+  # 基本面数据
+  daily_basic_cache:
+    primary: tushare
+    fallback: null
+    priority: P0
+    batch_api: true
+    rate_limit: 5
+    
+  # 资金流向
+  moneyflow_cache:
+    primary: tushare
+    fallback: null
+    priority: P0
+    batch_api: true
+    rate_limit: 5
+    
+  # 涨跌停
+  stk_limit_cache:
+    primary: tushare
+    fallback: null
+    priority: P0
+    batch_api: true
+    rate_limit: 5
+    
+  # 龙虎榜
+  lhb_cache:
+    primary: tushare
+    fallback: null
+    priority: P0
+    batch_api: true
+    rate_limit: 5
+    
+  # 龙虎榜席位
+  lhb_detail_cache:
+    primary: akshare
+    fallback: null
+    priority: P1
+    batch_api: false
+    rate_limit: 2
+    
+  # 概念板块
+  concept_cache:
+    primary: tushare
+    fallback: akshare
+    priority: P1
+    batch_api: true
+    rate_limit: 5
+    
+  # 分钟K线
+  minute_kline_cache:
+    primary: mootdx
+    fallback: akshare
+    priority: P0
+    batch_api: false
+    rate_limit: 1
+    
+  # 盘中快照
+  market_snapshot:
+    primary: eastmoney_http
+    fallback: mootdx
+    priority: P0
+    batch_api: true
+    rate_limit: 10
+    
+  # 融资融券
+  margin_cache:
+    primary: tushare
+    fallback: null
+    priority: P1
+    batch_api: true
+    rate_limit: 5
+    
+  # 复权因子
+  adj_factor_cache:
+    primary: tushare
+    fallback: null
+    priority: P2
+    batch_api: true
+    rate_limit: 5
+    
+  # 股东信息
+  top10_holders_cache:
+    primary: tushare
+    fallback: null
+    priority: P2
+    batch_api: true
+    rate_limit: 5
+    
+  # 财务报告
+  finance_report_cache:
+    primary: tushare
+    fallback: null
+    priority: P3
+    batch_api: true
+    rate_limit: 5
+
+# 采集时段配置
+collection_schedule:
+  # 交易时段采集
+  trading:
+    - market_snapshot  # 5s
+    - minute_kline    # 300s
+    
+  # 日终同步采集
+  settlement:
+    - daily_cache
+    - daily_basic_cache
+    - moneyflow_cache
+    - stk_limit_cache
+    - lhb_cache
+    - lhb_detail_cache
+    - concept_cache
+    - margin_cache
+    
+  # 后台补采
+  background:
+    - adj_factor_cache
+    - top10_holders_cache
+    - finance_report_cache
+
+# 速率限制配置
+rate_limits:
+  tushare:
+    requests_per_second: 5
+    requests_per_minute: 300
+  akshare:
+    requests_per_second: 2
+    requests_per_minute: 120
+  mootdx:
+    requests_per_second: 1
+    requests_per_minute: 60
+  eastmoney_http:
+    requests_per_second: 10
+    requests_per_minute: 600
+
+# 降级策略配置
+fallback_strategy:
+  # 主数据源故障时的降级链
+  eastmoney_http:
+    - mootdx
+    - sina_http
+    - tencent_http
+    - cache
+    
+  mootdx:
+    - akshare
+    - cache
+    
+  tushare:
+    - akshare
+    - cache
+    
+  akshare:
+    - cache
+
+# 健康检查配置
+health_check:
+  interval: 60  # 秒
+  timeout: 10   # 秒
+  max_retries: 3
+  healthy_threshold: 0.9  # 健康评分阈值
+  degraded_threshold: 0.6  # 降级评分阈值

@@ -743,8 +743,15 @@ async function loadMarketData() {
           pePercentile5y: s.tags && s.tags.pe_percentile_5y != null ? parseFloat(s.tags.pe_percentile_5y) : null,
           pbPercentile5y: s.tags && s.tags.pb_percentile_5y != null ? parseFloat(s.tags.pb_percentile_5y) : null,
           // 320号 S1：机会画像七维红绿灯（opportunity_profile JSON → 对象）
+          // 365号批次D：优先使用seven_dim_report（新版七维体检报告）
           opportunityProfile: (function() {
             const raw = s.opportunity_profile;
+            if (!raw) return null;
+            try { return typeof raw === 'string' ? JSON.parse(raw) : raw; }
+            catch (e) { return null; }
+          })(),
+          sevenDimReport: (function() {
+            const raw = s.seven_dim_report || s.one_liner_detail;
             if (!raw) return null;
             try { return typeof raw === 'string' ? JSON.parse(raw) : raw; }
             catch (e) { return null; }
@@ -1692,22 +1699,38 @@ function showDetail(data) {
 
   // 320号 S1：机会画像红绿灯浓缩（opportunity_profile 七维 → 精选 3-5 项）
   // 321号 S5：profile 统一解析为对象（API 为 JSON 字符串，原未解析致画像行/解释条失效）
+  // 365号批次D：优先使用seven_dim_report（新版七维体检报告），回退到opportunity_profile
   let _profile = data.opportunityProfile;
   if (typeof _profile === 'string' && _profile) {
     try { _profile = JSON.parse(_profile); } catch (e) { _profile = null; }
   }
-  document.getElementById('d-profile-row').innerHTML = _profile
-    ? '<span style="font-size:12px;color:var(--text-muted);margin-right:6px;">🧬 画像</span>' +
-      Object.entries(_profile)
-        .filter(([k, v]) => v && v.light && v.status && k !== 'event')
-        .slice(0, 5)
-        .map(([k, v]) => `<span style="font-size:12px;margin-right:8px;">${v.light} ${_profileCN(k)}: ${v.status}</span>`)
-        .join('')
-    : '';
+  let _sdr = data.sevenDimReport;
+  if (typeof _sdr === 'string' && _sdr) {
+    try { _sdr = JSON.parse(_sdr); } catch (e) { _sdr = null; }
+  }
+  if (_sdr && _sdr.signal) {
+    const dimOrder = ['signal','structure','volume_price','fund_chip','emotion','risk'];
+    const dimCN = {signal:'信号确认',structure:'结构位置',volume_price:'量价健康',fund_chip:'资金筹码',emotion:'情绪环境',risk:'风险边界'};
+    document.getElementById('d-profile-row').innerHTML =
+      '<span style="font-size:12px;color:var(--text-muted);margin-right:6px;">🧬 七维体检</span>' +
+      dimOrder.filter(k => _sdr[k]).map(k => {
+        const d = _sdr[k];
+        return `<span style="font-size:12px;margin-right:8px;">${d.light || '⚪'} ${dimCN[k] || k}</span>`;
+      }).join('') +
+      (_sdr.summary && _sdr.summary.text ? `<div style="margin-top:4px;font-size:11px;color:var(--text-muted);">${_sdr.summary.text}</div>` : '');
+  } else {
+    document.getElementById('d-profile-row').innerHTML = _profile
+      ? '<span style="font-size:12px;color:var(--text-muted);margin-right:6px;">🧬 画像</span>' +
+        Object.entries(_profile)
+          .filter(([k, v]) => v && v.light && v.status && k !== 'event')
+          .slice(0, 5)
+          .map(([k, v]) => `<span style="font-size:12px;margin-right:8px;">${v.light} ${_profileCN(k)}: ${v.status}</span>`)
+          .join('')
+      : '';
+  }
 
-  // 321号 S5：时间尺度解释条（313号 C5/C6 认知管理落地）——
-  // 仲裁状态=回避/等待（快变量时机）但画像主力趋势=建仓/拉升（慢变量阶段）并存时，
-  // 解释"主力阶段是慢变量、时机信号是快变量，当前以时机为准"，消除用户困惑（T1）
+  // 321号 S5：时间尺度解释条——仲裁状态=回避/等待但画像主力趋势=建仓/拉升并存时
+  // 365号批次D：兼容seven_dim_report
   const _profTrend = _profile && _profile.trend && _profile.trend.status;
   const _state = data.opportunityState || '';
   const _trendBull = ['建仓', '拉升'].includes(_profTrend);
