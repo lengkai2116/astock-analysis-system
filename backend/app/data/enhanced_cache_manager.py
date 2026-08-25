@@ -87,6 +87,23 @@ class EnhancedCacheManager:
         self.snapshot_conn.execute("PRAGMA busy_timeout=30000")
         self._init_snapshot_tables()
 
+        # 356号方案：计算分库（pattern_score_cache 等计算结果表）
+        self.compute_db_path = os.path.join(db_dir, 'compute_cache.db')
+        self.compute_conn = sqlite3.connect(self.compute_db_path, check_same_thread=False)
+        self.compute_conn.execute("PRAGMA journal_mode=WAL")
+        self.compute_conn.execute("PRAGMA synchronous=NORMAL")
+        self.compute_conn.execute("PRAGMA cache_size=-16384")  # 16MB
+        self.compute_conn.execute("PRAGMA temp_store=MEMORY")
+        self.compute_conn.execute("PRAGMA busy_timeout=30000")
+        self.compute_read_conn = sqlite3.connect(self.compute_db_path, check_same_thread=False)
+        self.compute_read_conn.execute("PRAGMA journal_mode=WAL")
+        self.compute_read_conn.execute("PRAGMA synchronous=NORMAL")
+        self.compute_read_conn.execute("PRAGMA cache_size=-16384")
+        self.compute_read_conn.execute("PRAGMA temp_store=MEMORY")
+        self.compute_read_conn.execute("PRAGMA busy_timeout=30000")
+        self._init_compute_tables()
+        self._migrate_pattern_score_to_compute_db()  # 迁移现有数据到 compute_cache.db
+
         self.cache_stats = {
             'hits_duckdb': 0,  # 保留旧字段名兼容
             'misses': 0,
@@ -691,20 +708,6 @@ class EnhancedCacheManager:
         self._execute("""
             CREATE INDEX IF NOT EXISTS idx_pre_feat_date ON pre_feat_cache(trade_date)
         """)
-        # 353/358号方案：pattern_score_cache（形态评分缓存，日终批量计算产物）
-        self._execute("""
-            CREATE TABLE IF NOT EXISTS pattern_score_cache (
-                ts_code TEXT NOT NULL,
-                trade_date TEXT NOT NULL,
-                score REAL NOT NULL,
-                details_json TEXT NOT NULL,
-                computed_at TEXT DEFAULT (datetime('now','localtime')),
-                PRIMARY KEY (ts_code, trade_date)
-            )
-        """)
-        self._execute("""
-            CREATE INDEX IF NOT EXISTS idx_pattern_score_date ON pattern_score_cache(trade_date)
-        """)
         self._execute("""
             CREATE TABLE IF NOT EXISTS opportunity_status_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -943,6 +946,66 @@ class EnhancedCacheManager:
             )
         """)
         self.snapshot_conn.commit()
+
+    # ── 计算分库建表（356号方案）──────────────────────────────────────────
+
+    def _init_compute_tables(self):
+        """建表：计算结果表（独立 compute_cache.db，356号方案）
+        包含：pattern_score_cache、pre_feat_cache 等计算结果
+        """
+        # 353/358号方案：pattern_score_cache（形态评分缓存，日终批量计算产物）
+        self.compute_conn.execute("""
+            CREATE TABLE IF NOT EXISTS pattern_score_cache (
+                ts_code TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                score REAL NOT NULL,
+                details_json TEXT NOT NULL,
+                computed_at TEXT DEFAULT (datetime('now','localtime')),
+                PRIMARY KEY (ts_code, trade_date)
+            )
+        """)
+        self.compute_conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pattern_score_date ON pattern_score_cache(trade_date)
+        """)
+        self.compute_conn.commit()
+
+    def _migrate_pattern_score_to_compute_db(self):
+        """迁移 pattern_score_cache 数据从 stock_cache.db 到 compute_cache.db（356号方案）"""
+        try:
+            # 检查主库是否有 pattern_score_cache 表
+            cursor = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='pattern_score_cache'"
+            )
+            if cursor.fetchone() is None:
+                return  # 主库没有表，无需迁移
+
+            # 检查主库是否有数据
+            count = self.conn.execute("SELECT COUNT(*) FROM pattern_score_cache").fetchone()[0]
+            if count == 0:
+                return  # 无数据，无需迁移
+
+            logger.info(f"迁移 pattern_score_cache 数据: {count} 条记录从 stock_cache.db 到 compute_cache.db")
+
+            # 读取所有数据
+            rows = self.conn.execute("SELECT * FROM pattern_score_cache").fetchall()
+
+            # 写入 compute_cache.db
+            for row in rows:
+                self.compute_conn.execute(
+                    """INSERT OR REPLACE INTO pattern_score_cache
+                       (ts_code, trade_date, score, details_json, computed_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    row
+                )
+            self.compute_conn.commit()
+
+            # 重命名主库中的表作为备份
+            self.conn.execute("ALTER TABLE pattern_score_cache RENAME TO pattern_score_cache_backup")
+            self.conn.commit()
+
+            logger.info(f"pattern_score_cache 迁移完成: {count} 条记录已迁移")
+        except Exception as e:
+            logger.warning(f"迁移 pattern_score_cache 失败: {e}")
 
     # ════════════════════════════════════════════════════════════
     # 业务方法（以下方法签名与 DuckDB 版本完全一致）
@@ -2180,10 +2243,10 @@ class EnhancedCacheManager:
         except Exception:
             return False
 
-    # ==================== 形态评分缓存（353/358号方案） ====================
+    # ==================== 形态评分缓存（353/358号方案，356号分库：compute_cache.db） ====================
 
     def cache_pattern_score(self, ts_code: str, trade_date: str, score: float, details: dict):
-        """缓存形态评分结果
+        """缓存形态评分结果（356号方案：写入 compute_cache.db）
 
         Args:
             ts_code: 股票代码
@@ -2195,18 +2258,18 @@ class EnhancedCacheManager:
         details_json = _json.dumps(details, ensure_ascii=False, default=str)
         with self._write_lock:
             try:
-                self._execute(
+                self.compute_conn.execute(
                     """INSERT OR REPLACE INTO pattern_score_cache
                        (ts_code, trade_date, score, details_json, computed_at)
                        VALUES (?, ?, ?, ?, datetime('now','localtime'))""",
                     [ts_code, trade_date, score, details_json]
                 )
-                self.conn.commit()
+                self.compute_conn.commit()
             except Exception as e:
                 logger.warning(f"缓存形态评分失败 [{ts_code}]: {e}")
 
     def get_pattern_score(self, ts_code: str, trade_date: str = None) -> dict | None:
-        """读取形态评分缓存
+        """读取形态评分缓存（356号方案：从 compute_cache.db 读取）
 
         Returns:
             {'score': float, 'details': dict} 或 None
@@ -2214,12 +2277,12 @@ class EnhancedCacheManager:
         import json as _json
         try:
             if trade_date:
-                row = self.read_conn.execute(
+                row = self.compute_read_conn.execute(
                     "SELECT score, details_json FROM pattern_score_cache WHERE ts_code=? AND trade_date=?",
                     [ts_code, trade_date]
                 ).fetchone()
             else:
-                row = self.read_conn.execute(
+                row = self.compute_read_conn.execute(
                     "SELECT score, details_json FROM pattern_score_cache WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
                     [ts_code]
                 ).fetchone()
@@ -2231,11 +2294,11 @@ class EnhancedCacheManager:
             return None
 
     def has_pattern_score(self, ts_code: str, trade_date: str = None) -> bool:
-        """检查是否存在形态评分缓存"""
+        """检查是否存在形态评分缓存（356号方案：从 compute_cache.db 读取）"""
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y-%m-%d')
         try:
-            row = self.read_conn.execute(
+            row = self.compute_read_conn.execute(
                 "SELECT 1 FROM pattern_score_cache WHERE ts_code=? AND trade_date=?",
                 [ts_code, trade_date]
             ).fetchone()

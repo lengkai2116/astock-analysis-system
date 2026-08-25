@@ -142,6 +142,8 @@ def ecm(tmp_path):
     from app.data.enhanced_cache_manager import EnhancedCacheManager
 
     db_path = str(tmp_path / 'test_cache.db')
+    compute_db_path = str(tmp_path / 'test_compute_cache.db')
+
     ecm = EnhancedCacheManager.__new__(EnhancedCacheManager)
     ecm._lock = threading.RLock()
     ecm._write_lock = threading.RLock()
@@ -159,6 +161,14 @@ def ecm(tmp_path):
     ecm.read_conn = sqlite3.connect(db_path)
     ecm.read_conn.execute("PRAGMA journal_mode=WAL")
 
+    # 356号方案：计算分库连接
+    ecm.compute_db_path = compute_db_path
+    ecm.compute_conn = sqlite3.connect(compute_db_path)
+    ecm.compute_conn.execute("PRAGMA journal_mode=WAL")
+    ecm.compute_read_conn = sqlite3.connect(compute_db_path)
+    ecm.compute_read_conn.execute("PRAGMA journal_mode=WAL")
+
+    # 建表（主库）
     ecm.conn.execute("""
         CREATE TABLE IF NOT EXISTS pattern_score_cache (
             ts_code TEXT NOT NULL,
@@ -170,10 +180,26 @@ def ecm(tmp_path):
         )
     """)
     ecm.conn.commit()
+
+    # 建表（计算分库）
+    ecm.compute_conn.execute("""
+        CREATE TABLE IF NOT EXISTS pattern_score_cache (
+            ts_code TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            score REAL NOT NULL,
+            details_json TEXT NOT NULL,
+            computed_at TEXT DEFAULT (datetime('now','localtime')),
+            PRIMARY KEY (ts_code, trade_date)
+        )
+    """)
+    ecm.compute_conn.commit()
+
     ecm.cache_stats = {'hits_duckdb': 0, 'misses': 0, 'total_requests': 0}
     yield ecm
     ecm.conn.close()
     ecm.read_conn.close()
+    ecm.compute_conn.close()
+    ecm.compute_read_conn.close()
 
 
 # ═══════════════════════════════════════════════════
