@@ -4350,7 +4350,23 @@ def _get_latest_data_date() -> str:
 
     数据驱动核心：管道基于"最新数据日期"而非"当前日期"推进——
     非24h开机/错过15:30/隔日启动时，用已有最新数据自动补算，而非等待"今天"。
+
+    356号方案修复：daily_cache 已迁移到 market_cache.db，必须通过 _query_table 路由读取
+    （之前直接从 _ecm.conn 读 stock_cache.db 导致拿到旧日期 2026-08-21）。
     """
+    try:
+        # 优先从分库读取（daily_cache 已路由到 market_cache.db）
+        count = _query_table('daily_cache',
+            "SELECT COUNT(*) FROM daily_cache")
+        if count and count > 0:
+            row = _query_table('daily_cache',
+                "SELECT trade_date FROM daily_cache "
+                "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 1")
+            if row:
+                return str(row)
+    except Exception:
+        pass
+    # 回退：从 stock_cache.db 读取（兼容未迁移场景）
     try:
         row = _ecm.conn.execute(
             "SELECT trade_date FROM daily_cache "
