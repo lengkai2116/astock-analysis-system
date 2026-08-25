@@ -62,6 +62,7 @@ class EnhancedCacheManager:
         self.conn.execute("PRAGMA cache_size=-8192")     # 8MB 缓存
         self.conn.execute("PRAGMA temp_store=MEMORY")
         self.conn.execute("PRAGMA busy_timeout=30000")    # 30s（2026-08-12方案B：覆盖长事务窗口，原5s短于P4批量事务致锁冲突）
+        self.conn.execute("PRAGMA journal_size_limit=1048576")  # 2026-08-20：WAL上限1GB，防止无限膨胀
 
         # 2026-08-11 根治：WAL 读写分离连接——sqlite3 单连接跨线程并发读写不安全
         # （多线程 compute_batch 工作线程读 + 主线程写共享 conn，事务交错致写库丢失）。
@@ -113,18 +114,121 @@ class EnhancedCacheManager:
             logger.warning(f"迁移 {table} 补列失败: {e}")
 
     def _insert_from_df(self, table: str, df: pd.DataFrame):
-        """将 DataFrame 批量写入 SQLite 表（动态列名，兼容列顺序差异）"""
+        """将 DataFrame 批量写入 SQLite 表（动态列名，兼容列顺序差异）
+
+        356号方案（重构）：单写直路由
+        - 分库表 → 直接写入对应分库（不再双写 stock_cache.db）
+        - 非分库表 → 写入总库 stock_cache.db
+        """
         if df.empty:
             return
+
+        # 数据格式修订（355号方案规则1-3）
+        df = self._validate_and_fix_data_format(df)
+
         cols = list(df.columns)
         col_list = ', '.join(f'"{c}"' for c in cols)
         placeholders = ', '.join(['?' for _ in cols])
         rows = [tuple(r[c] for c in cols) for _, r in df.iterrows()]
-        self.conn.executemany(
-            f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})",
-            rows
-        )
-        self.conn.commit()
+
+        # 356号方案：路由到正确的数据库
+        try:
+            from app.data.sharding_manager import sharding_manager
+            db_name = sharding_manager.get_db_for_table(table)
+        except Exception:
+            db_name = None
+
+        if db_name:
+            # 分库表 → 直接写分库
+            try:
+                # 检查分库表是否存在，不存在则自动建表
+                try:
+                    shard_col_rows = sharding_manager.execute_query(
+                        table, f"PRAGMA table_info({table})")
+                    shard_cols = {row[1] for row in shard_col_rows} if shard_col_rows else set()
+                except Exception:
+                    shard_cols = set()
+
+                if not shard_cols:
+                    # 从总库复制表结构到分库
+                    try:
+                        main_sql = self.conn.execute(
+                            f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table}'"
+                        ).fetchone()
+                        if main_sql and main_sql[0]:
+                            create_sql = main_sql[0].replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS')
+                            sharding_manager.get_connection(db_name).execute(create_sql)
+                            sharding_manager.get_connection(db_name).commit()
+                            shard_col_rows = sharding_manager.execute_query(
+                                table, f"PRAGMA table_info({table})")
+                            shard_cols = {row[1] for row in shard_col_rows} if shard_col_rows else set()
+                            logger.info(f"分库自动建表: {table} on {db_name}")
+                    except Exception as e:
+                        logger.warning(f"分库自动建表失败: {table} on {db_name}: {e}")
+
+                if shard_cols and not shard_cols.issuperset(set(cols)):
+                    # 分库列是总库列的子集，过滤后写入
+                    keep = [c for c in cols if c in shard_cols]
+                    if keep:
+                        shard_rows = [tuple(r[c] for c in keep) for _, r in df.iterrows()]
+                        shard_col_list = ', '.join(f'"{c}"' for c in keep)
+                        shard_ph = ', '.join(['?' for _ in keep])
+                        sharding_manager.execute_batch_insert(
+                            table, f"INSERT OR REPLACE INTO {table} ({shard_col_list}) VALUES ({shard_ph})", shard_rows)
+                elif shard_cols:
+                    sharding_manager.execute_batch_insert(
+                        table, f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})", rows)
+                else:
+                    logger.warning(f"分库表不存在且自动建表失败: {table} on {db_name}，跳过写入")
+            except Exception as e:
+                logger.warning(f"分库写入失败: {table} on {db_name}, {type(e).__name__}: {e}")
+        else:
+            # 非分库表 → 写入总库 stock_cache.db
+            try:
+                self.conn.executemany(
+                    f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})",
+                    rows
+                )
+                self.conn.commit()
+            except Exception as e:
+                logger.warning(f"总库写入失败: {table}, {type(e).__name__}: {e}")
+
+    def _validate_and_fix_data_format(self, df: pd.DataFrame) -> pd.DataFrame:
+        """数据格式验证和修订（355号方案规则1-3）
+
+        规则1：日期格式统一为 YYYY-MM-DD
+        规则2：股票代码格式统一为 XXX.SH/SZ/BJ
+        规则3：列名规范（小写+下划线）
+        """
+        if df.empty:
+            return df
+
+        # 规则1：日期格式统一为 YYYY-MM-DD
+        date_columns = ['trade_date', 'list_date', 'ann_date', 'end_date']
+        for col in date_columns:
+            if col in df.columns:
+                try:
+                    # 统一转换为 YYYY-MM-DD 格式
+                    df[col] = pd.to_datetime(df[col]).dt.strftime('%Y-%m-%d')
+                except Exception:
+                    pass  # 保持原格式
+
+        # 规则2：股票代码格式统一为 XXX.SH/SZ/BJ
+        if 'ts_code' in df.columns:
+            try:
+                # 确保股票代码格式正确
+                df['ts_code'] = df['ts_code'].astype(str).str.upper()
+                # 如果是纯数字，添加后缀
+                mask = df['ts_code'].str.match(r'^\d{6}$')
+                if mask.any():
+                    # 根据代码规则添加后缀
+                    df.loc[mask, 'ts_code'] = df.loc[mask, 'ts_code'].apply(
+                        lambda x: f"{x}.SZ" if x.startswith(('0', '3')) else f"{x}.SH"
+                    )
+            except Exception:
+                pass  # 保持原格式
+
+        return df
 
     def _query_df(self, sql: str, params=None) -> pd.DataFrame:
         """执行查询并返回 DataFrame（替代 DuckDB 的 fetchdf()）
@@ -138,6 +242,48 @@ class EnhancedCacheManager:
             logger.warning(f"SQLite 查询失败: {e}")
             return pd.DataFrame()
 
+    def _query_shard(self, table: str, sql: str, params=None) -> pd.DataFrame:
+        """356号方案：从分库读取数据。
+
+        如果表在分库中，从分库读取；否则从总库读取（兼容未迁移的表）。
+        """
+        try:
+            from app.data.sharding_manager import sharding_manager
+            db_name = sharding_manager.get_db_for_table(table)
+        except Exception:
+            db_name = None
+
+        if db_name:
+            try:
+                conn = sharding_manager.get_connection(db_name)
+                return pd.read_sql(sql, conn, params=params)
+            except Exception as e:
+                logger.warning(f"分库查询失败: {table} on {db_name}: {e}")
+                return pd.DataFrame()
+        else:
+            return self._query_df(sql, params)
+
+    def _exec_shard(self, table: str, sql: str, params=None):
+        """356号方案：在分库上执行写操作（UPDATE/DELETE等）。"""
+        try:
+            from app.data.sharding_manager import sharding_manager
+            db_name = sharding_manager.get_db_for_table(table)
+        except Exception:
+            db_name = None
+
+        if db_name:
+            try:
+                conn = sharding_manager.get_connection(db_name)
+                lock = sharding_manager.get_write_lock(db_name)
+                with lock:
+                    conn.execute(sql, params or [])
+                    conn.commit()
+            except Exception as e:
+                logger.warning(f"分库执行失败: {table} on {db_name}: {e}")
+        else:
+            self.conn.execute(sql, params or [])
+            self.conn.commit()
+
     def _execute(self, sql: str, params=None):
         try:
             self.conn.execute(sql, params or [])
@@ -145,23 +291,28 @@ class EnhancedCacheManager:
             logger.warning(f"SQLite 执行失败: {e}")
 
     def wal_checkpoint(self, mode: str = 'PASSIVE') -> tuple:
-        """执行 SQLite WAL checkpoint，收缩 WAL 文件（2026-08-06 根治③）
+        """执行 SQLite WAL checkpoint，收缩 WAL 文件（2026-08-06 根治③ + 2026-08-20 修复自我锁定）
 
-        根因：WAL 模式下无周期 checkpoint，文件只增不减（实测 86G），
-        SQLite 默认 wal_autocheckpoint 的 TRUNCATE 阶段常被读连接阻塞。
-        由 daemon 主循环周期调用（PASSIVE 模式不阻塞读写）；
+        使用独立连接执行 checkpoint，避免与 self.conn 的写事务互相阻塞。
         mode: 'PASSIVE'（默认，不阻塞）/ 'TRUNCATE'（截断，需无活跃读事务）。
 
         Returns: (busy, log_frames, checkpointed_frames)
         """
+        ckpt_conn = None
         try:
-            with self._write_lock:
-                return self.conn.execute(
-                    f"PRAGMA wal_checkpoint({mode})"
-                ).fetchone()
+            ckpt_conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            ckpt_conn.execute("PRAGMA journal_mode=WAL")
+            result = ckpt_conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+            return result or (1, 0, 0)
         except Exception as e:
             logger.warning(f"WAL checkpoint({mode}) 失败: {e}")
             return (1, 0, 0)
+        finally:
+            if ckpt_conn:
+                try:
+                    ckpt_conn.close()
+                except Exception:
+                    pass
 
     # ── 建表 ─────────────────────────────────────────────────
 
@@ -466,17 +617,8 @@ class EnhancedCacheManager:
                 PRIMARY KEY (index_code, ts_code)
             )
         """)
-        self._execute("""
-            CREATE TABLE IF NOT EXISTS strategy_signals (
-                ts_code TEXT NOT NULL,
-                trade_date TEXT NOT NULL,
-                signal_name TEXT NOT NULL,
-                signal_value REAL,
-                signal_level TEXT,
-                cached_at TEXT DEFAULT (datetime('now','localtime')),
-                PRIMARY KEY (ts_code, trade_date, signal_name)
-            )
-        """)
+        # 363号F57-1修复：strategy_signals旧表已删除（功能由strategy_signal_detail替代）
+        # 注意：不再创建旧表，已在363号方案中确认删除
         self._execute("""
             CREATE TABLE IF NOT EXISTS strategy_signal_detail (
                 ts_code TEXT NOT NULL,
@@ -535,6 +677,33 @@ class EnhancedCacheManager:
                 updated_at TEXT,
                 UNIQUE(ts_code, tag_name, updated_at)
             )
+        """)
+        # 357号方案：pre_feat_cache（原料加工特征提取产物，JSON存储10组54字段）
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS pre_feat_cache (
+                ts_code TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                features_json TEXT NOT NULL,
+                computed_at TEXT DEFAULT (datetime('now','localtime')),
+                PRIMARY KEY (ts_code, trade_date)
+            )
+        """)
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_pre_feat_date ON pre_feat_cache(trade_date)
+        """)
+        # 353/358号方案：pattern_score_cache（形态评分缓存，日终批量计算产物）
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS pattern_score_cache (
+                ts_code TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                score REAL NOT NULL,
+                details_json TEXT NOT NULL,
+                computed_at TEXT DEFAULT (datetime('now','localtime')),
+                PRIMARY KEY (ts_code, trade_date)
+            )
+        """)
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_pattern_score_date ON pattern_score_cache(trade_date)
         """)
         self._execute("""
             CREATE TABLE IF NOT EXISTS opportunity_status_history (
@@ -714,10 +883,19 @@ class EnhancedCacheManager:
                 l0                  TEXT,
                 lifecycle           TEXT,
                 advice_params       TEXT,
+                summary_text        TEXT,
+                one_liner_detail    TEXT,
+                dim_engine_results  TEXT,
                 created_at          TEXT DEFAULT (datetime('now', 'localtime'))
             )
         """)
         self._execute("CREATE INDEX IF NOT EXISTS idx_status_snapshot_state ON status_snapshot(opportunity_state)")
+        # 365号批次C：新增维度引擎结果字段（兼容已有数据库）
+        for col, typ in [('dim_engine_results', 'TEXT'), ('summary_text', 'TEXT'), ('one_liner_detail', 'TEXT')]:
+            try:
+                self._execute(f"ALTER TABLE status_snapshot ADD COLUMN {col} {typ}")
+            except Exception:
+                pass  # 列已存在
 
         # ── 管道状态表（305号§9.2）：链条驱动执行状态 ──
         self._execute("""
@@ -799,7 +977,7 @@ class EnhancedCacheManager:
             s = str(end_date).replace('-', '')
             params.append(f'{s[:4]}-{s[4:6]}-{s[6:]}' if len(s) == 8 else str(end_date))
         query += " ORDER BY trade_date"
-        df = self._query_df(query, params)
+        df = self._query_shard('daily_cache', query, params)
         if not df.empty:
             self.cache_stats['hits_duckdb'] += 1
         else:
@@ -809,14 +987,14 @@ class EnhancedCacheManager:
     def preload_all(self):
         """预加载全量日线到内存（加速批量筛选）"""
         if getattr(self, '_all_daily', None) is None:
-            self._all_daily = self._query_df("SELECT * FROM daily_cache ORDER BY ts_code, trade_date")
+            self._all_daily = self._query_shard('daily_cache', "SELECT * FROM daily_cache ORDER BY ts_code, trade_date")
             logger.info(f"日线预加载: {len(self._all_daily)} 行")
 
     def get_cached_daily_batch(self, ts_codes, start_date=None, end_date=None):
         """批量获取多只股票的日线数据（使用全量预加载 + 自动加载）"""
         df = getattr(self, '_all_daily', None)
         if df is None:
-            df = self._query_df("SELECT * FROM daily_cache ORDER BY ts_code, trade_date")
+            df = self._query_shard('daily_cache', "SELECT * FROM daily_cache ORDER BY ts_code, trade_date")
             self._all_daily = df
             logger.info(f"日线自动加载: {len(df)} 行")
         if df.empty:
@@ -835,12 +1013,7 @@ class EnhancedCacheManager:
     def cache_daily_data(self, df):
         if df.empty:
             return
-        # 过滤 DataFrame 列到表结构子集：Tushare 可能新增字段（如 pre_close）
-        table_cols = {r[1] for r in self.conn.execute('PRAGMA table_info(daily_cache)').fetchall()}
-        extra = set(df.columns) - table_cols
-        if extra:
-            logger.warning(f"忽略 daily_cache 中不存在的列: {extra}")
-            df = df[[c for c in df.columns if c in table_cols]]
+        # 列过滤由 _insert_from_df 的分库路由自动处理
         with self._write_lock:
             self._insert_from_df('daily_cache', df)
             self._update_metadata('last_cache_time', datetime.now().isoformat())
@@ -872,13 +1045,13 @@ class EnhancedCacheManager:
 
     def get_indicators_wide(self, ts_code: str) -> 'pd.DataFrame':
         """读取宽表指标数据，合并 3 张表为 1 个 DataFrame"""
-        ma = self._query_df(
+        ma = self._query_shard('indicator_ma',
             "SELECT ts_code, trade_date, ma5, ma10, ma20, ma30, ma60, vol_ma5, vol_ma10 "
             "FROM indicator_ma WHERE ts_code = ? ORDER BY trade_date", [ts_code])
-        macd = self._query_df(
+        macd = self._query_shard('indicator_macd',
             "SELECT trade_date, macd_dif, macd_dea, macd_hist "
             "FROM indicator_macd WHERE ts_code = ? ORDER BY trade_date", [ts_code])
-        other = self._query_df(
+        other = self._query_shard('indicator_other',
             "SELECT trade_date, rsi14, kdj_k, kdj_d, kdj_j, boll_upper, boll_mid, boll_lower "
             "FROM indicator_other WHERE ts_code = ? ORDER BY trade_date", [ts_code])
         result = ma
@@ -1022,7 +1195,7 @@ class EnhancedCacheManager:
             query += " AND trade_date <= ?"
             params.append(ed)
         query += " ORDER BY trade_date"
-        return self._query_df(query, params)
+        return self._query_shard('daily_basic_cache', query, params)
 
     def get_cached_daily_basic_batch(self, ts_codes, start_date=None, end_date=None):
         """批量获取多只股票的基础数据"""
@@ -1084,12 +1257,12 @@ class EnhancedCacheManager:
             query += " AND trade_date <= ?"
             params.append(end_date)
         query += " ORDER BY trade_date, price_bin"
-        return self._query_df(query, params)
+        return self._query_shard('chip_distribution_cache', query, params)
 
     def get_latest_chip_distribution(self, ts_code):
-        return self._query_df("""
-            SELECT * FROM chip_distribution_cache 
-            WHERE ts_code = ? 
+        return self._query_shard('chip_distribution_cache', """
+            SELECT * FROM chip_distribution_cache
+            WHERE ts_code = ?
             AND trade_date = (SELECT MAX(trade_date) FROM chip_distribution_cache WHERE ts_code = ?)
             ORDER BY price_bin
         """, [ts_code, ts_code])
@@ -1110,12 +1283,7 @@ class EnhancedCacheManager:
                     if net_col not in df.columns and buy_col in df.columns:
                         sell_col = 'sell_' + buy_col[4:]
                         df[net_col] = df[buy_col].fillna(0) - df.get(sell_col, pd.Series([0]*len(df))).fillna(0)
-                # 过滤 DataFrame 列到表结构子集
-                table_cols = {r[1] for r in self.conn.execute('PRAGMA table_info(moneyflow_cache)').fetchall()}
-                extra = set(df.columns) - table_cols
-                if extra:
-                    logger.warning(f"忽略 moneyflow_cache 中不存在的列: {extra}")
-                    df = df[[c for c in df.columns if c in table_cols]]
+                # 列过滤由 _insert_from_df 的分库路由自动处理
                 self._insert_from_df('moneyflow_cache', df)
                 self._update_metadata('last_moneyflow_cache_time', datetime.now().isoformat())
             except Exception as e:
@@ -1149,7 +1317,7 @@ class EnhancedCacheManager:
             query += " AND trade_date <= ?"
             params.append(end_date)
         query += " ORDER BY trade_date, ts_code"
-        return self._query_df(query, params)
+        return self._query_shard('moneyflow_cache', query, params)
 
     def get_cached_moneyflow_batch(self, ts_codes, start_date=None, end_date=None):
         """批量获取多只股票的资金流向数据"""
@@ -1164,7 +1332,7 @@ class EnhancedCacheManager:
         if end_date:
             query += " AND trade_date <= ?"
             params.append(end_date)
-        df = self._query_df(query, params)
+        df = self._query_shard('moneyflow_cache', query, params)
         if df.empty:
             return {}
         result = {}
@@ -1193,7 +1361,7 @@ class EnhancedCacheManager:
 
     def get_cached_win_rate(self, signal_type: str) -> dict:
         try:
-            df = self._query_df("SELECT * FROM win_rate_cache WHERE signal_type = ?", [signal_type])
+            df = self._query_shard('win_rate_cache', "SELECT * FROM win_rate_cache WHERE signal_type = ?", [signal_type])
             return df.to_dict('records')[0] if not df.empty else {}
         except Exception as e:
             logger.warning(f"查询赢率数据失败: {e}")
@@ -1297,18 +1465,89 @@ class EnhancedCacheManager:
     # ==================== 复权因子缓存 ====================
 
     def cache_adj_factor_data(self, df):
+        """缓存复权因子数据 — 支持按年份写入不同表（356号方案大表拆分）
+
+        拆分策略：按年份拆分，每年一个表（adj_factor_cache_YYYY）
+        """
         if df.empty:
             return
         with self._write_lock:
             try:
                 if 'trade_date' in df.columns:
-                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
-                self._insert_from_df('adj_factor_cache', df)
+                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y-%m-%d')
+
+                # 按年份分组写入不同表
+                if 'trade_date' in df.columns:
+                    df['year'] = pd.to_datetime(df['trade_date']).dt.year
+                    for year, group in df.groupby('year'):
+                        table_name = f'adj_factor_cache_{year}'
+                        # 确保表存在
+                        self._ensure_adj_factor_table(table_name)
+                        # 写入数据
+                        group_to_insert = group.drop(columns=['year'])
+                        self._insert_from_df(table_name, group_to_insert)
+                else:
+                    # 无日期字段，写入默认表
+                    self._insert_from_df('adj_factor_cache', df)
+
                 self._update_metadata('last_adj_factor_cache_time', datetime.now().isoformat())
             except Exception as e:
                 logger.warning(f"缓存复权因子失败: {e}")
 
+    def _ensure_adj_factor_table(self, table_name: str):
+        """确保复权因子表存在（按年份拆分）"""
+        try:
+            # 检查表是否存在
+            exists = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                [table_name]
+            ).fetchone()
+            if not exists:
+                # 创建表
+                self.conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {table_name} (
+                        ts_code TEXT,
+                        trade_date TEXT,
+                        adj_factor REAL,
+                        cached_at TIMESTAMP,
+                        PRIMARY KEY (ts_code, trade_date)
+                    )
+                """)
+                # 创建索引
+                self.conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_date ON {table_name}(trade_date)")
+                self.conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_ts ON {table_name}(ts_code)")
+                self.conn.commit()
+                logger.info(f"创建复权因子表: {table_name}")
+        except Exception as e:
+            logger.warning(f"创建复权因子表失败: {e}")
+
     def get_cached_adj_factor(self, ts_code=None, start_date=None, end_date=None):
+        # 367号方案：优先从分库读取
+        try:
+            from app.data.sharding_manager import sharding_manager
+            if sharding_manager.table_exists('adj_factor_cache'):
+                query = "SELECT * FROM adj_factor_view WHERE 1=1"
+                params = []
+                if ts_code:
+                    query += " AND ts_code = ?"
+                    params.append(ts_code)
+                if start_date:
+                    query += " AND trade_date >= ?"
+                    s = str(start_date).replace('-', '')
+                    params.append(f'{s[:4]}-{s[4:6]}-{s[6:]}' if len(s) == 8 else str(start_date))
+                if end_date:
+                    query += " AND trade_date <= ?"
+                    s = str(end_date).replace('-', '')
+                    params.append(f'{s[:4]}-{s[4:6]}-{s[6:]}' if len(s) == 8 else str(end_date))
+                query += " ORDER BY trade_date"
+                df = sharding_manager.execute_query('adj_factor_cache', query, params)
+                if df is not None and not df.empty:
+                    import pandas as pd
+                    return pd.DataFrame(df)
+        except Exception as e:
+            logger.debug(f"分库读取失败，降级到ECM: {e}")
+
+        # 降级到ECM读取
         query = "SELECT * FROM adj_factor_cache WHERE 1=1"
         params = []
         if ts_code:
@@ -1337,6 +1576,26 @@ class EnhancedCacheManager:
                 logger.warning(f"缓存分钟K线失败: {e}")
 
     def get_cached_minute_kline(self, ts_code, trade_date=None, freq='5min'):
+        # 367号方案：优先从分库读取
+        try:
+            from app.data.sharding_manager import sharding_manager
+            if sharding_manager.table_exists('minute_kline_cache'):
+                query = "SELECT * FROM minute_kline_cache WHERE ts_code = ?"
+                params = [ts_code]
+                if trade_date:
+                    query += " AND trade_date = ?"
+                    params.append(trade_date)
+                query += " AND freq = ?"
+                params.append(freq)
+                query += " ORDER BY trade_time"
+                df = sharding_manager.execute_query('minute_kline_cache', query, params)
+                if df is not None and not df.empty:
+                    import pandas as pd
+                    return pd.DataFrame(df)
+        except Exception as e:
+            logger.debug(f"分库读取失败，降级到ECM: {e}")
+
+        # 降级到ECM读取
         query = "SELECT * FROM minute_kline_cache WHERE ts_code = ?"
         params = [ts_code]
         if trade_date:
@@ -1359,8 +1618,6 @@ class EnhancedCacheManager:
                 if 'ann_date' in df.columns:
                     df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
                 # 列名映射：Tushare 原生列名 → 数据库列名
-                # Tushare fina_indicator 返回的各字段列名与 fina_indicator_cache 表字段名不一致
-                # 不加映射会导致 _insert_from_df 按列名匹配合并时整列丢弃
                 column_map = {
                     'bps': 'bvps',
                     'dt_eps': 'eps_diluted',
@@ -1368,12 +1625,26 @@ class EnhancedCacheManager:
                     'ocfps': 'cf_ps',
                 }
                 df.rename(columns=column_map, inplace=True)
+                # 只写入表中已有的列，忽略 Tushare 返回的多余字段
+                # 列过滤由 _insert_from_df 的分库路由自动处理
+                # 转换 Series/DataFrame 类型列为标量（Tushare 某些字段返回嵌套对象或重复列名）
+                for col in df.columns:
+                    try:
+                        s = df[col]
+                        if isinstance(s, pd.DataFrame):
+                            # 重复列名导致 df[col] 返回 DataFrame，取第一列
+                            df[col] = s.iloc[:, 0]
+                            s = df[col]
+                        if hasattr(s, 'dtype') and s.dtype == 'object':
+                            df[col] = s.apply(lambda x: x.iloc[0] if hasattr(x, 'iloc') else x)
+                    except Exception:
+                        pass
                 self._insert_from_df('fina_indicator_cache', df)
             except Exception as e:
                 logger.warning(f"缓存财务指标失败: {e}")
 
     def get_cached_fina_indicator(self, ts_code):
-        return self._query_df(
+        return self._query_shard('fina_indicator_cache',
             "SELECT * FROM fina_indicator_cache WHERE ts_code = ? ORDER BY end_date DESC",
             [ts_code]
         )
@@ -1398,20 +1669,13 @@ class EnhancedCacheManager:
                     df['end_date'] = pd.to_datetime(df['end_date']).dt.date
                 if 'ann_date' in df.columns:
                     df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
-                # 320号 F2：只保留表已有列（tushare 返回 85 列含 f_ann_date 等表无列，
-                # 不过滤则 _insert_from_df 整体失败致净利润写入不生效）
-                table_cols = {r[1] for r in self.conn.execute(
-                    "PRAGMA table_info(income_cache)").fetchall()}
-                keep = [c for c in df.columns if c in table_cols]
-                if not keep:
-                    logger.warning("缓存利润表失败: 无匹配列可写入")
-                    return
-                self._insert_from_df('income_cache', df[keep])
+                # 列过滤由 _insert_from_df 的分库路由自动处理
+                self._insert_from_df('income_cache', df)
             except Exception as e:
                 logger.warning(f"缓存利润表失败: {e}")
 
     def get_cached_income(self, ts_code):
-        return self._query_df(
+        return self._query_shard('income_cache',
             "SELECT * FROM income_cache WHERE ts_code = ? ORDER BY end_date DESC",
             [ts_code]
         )
@@ -1427,12 +1691,13 @@ class EnhancedCacheManager:
                     df['end_date'] = pd.to_datetime(df['end_date']).dt.date
                 if 'ann_date' in df.columns:
                     df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                # 列过滤由 _insert_from_df 的分库路由自动处理
                 self._insert_from_df('balancesheet_cache', df)
             except Exception as e:
                 logger.warning(f"缓存资产负债表失败: {e}")
 
     def get_cached_balancesheet(self, ts_code):
-        return self._query_df(
+        return self._query_shard('balancesheet_cache',
             "SELECT * FROM balancesheet_cache WHERE ts_code = ? ORDER BY end_date DESC",
             [ts_code]
         )
@@ -1448,12 +1713,13 @@ class EnhancedCacheManager:
                     df['end_date'] = pd.to_datetime(df['end_date']).dt.date
                 if 'ann_date' in df.columns:
                     df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                # 列过滤由 _insert_from_df 的分库路由自动处理
                 self._insert_from_df('cashflow_cache', df)
             except Exception as e:
                 logger.warning(f"缓存现金流量表失败: {e}")
 
     def get_cached_cashflow(self, ts_code):
-        return self._query_df(
+        return self._query_shard('cashflow_cache',
             "SELECT * FROM cashflow_cache WHERE ts_code = ? ORDER BY end_date DESC",
             [ts_code]
         )
@@ -1469,12 +1735,13 @@ class EnhancedCacheManager:
                     df['end_date'] = pd.to_datetime(df['end_date']).dt.date
                 if 'ann_date' in df.columns:
                     df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                # 列过滤由 _insert_from_df 的分库路由自动处理
                 self._insert_from_df('forecast_cache', df)
             except Exception as e:
                 logger.warning(f"缓存业绩预告失败: {e}")
 
     def get_cached_forecast(self, ts_code):
-        return self._query_df(
+        return self._query_shard('forecast_cache',
             "SELECT * FROM forecast_cache WHERE ts_code = ? ORDER BY end_date DESC",
             [ts_code]
         )
@@ -1486,15 +1753,9 @@ class EnhancedCacheManager:
             return
         with self._write_lock:
             try:
-                # 动态过滤：只保留表中存在的列
-                table_cols = set(row[1] for row in self.conn.execute(
-                    "PRAGMA table_info(margin_cache)").fetchall())
-                extra = [c for c in df.columns if c not in table_cols]
-                if extra:
-                    df = df.drop(columns=extra)
-                    logger.debug(f"margin_cache 过滤多余列: {extra}")
                 if 'trade_date' in df.columns:
                     df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+                # 列过滤由 _insert_from_df 的分库路由自动处理
                 self._insert_from_df('margin_cache', df)
             except Exception as e:
                 logger.warning(f"缓存融资融券失败: {e}")
@@ -1509,18 +1770,18 @@ class EnhancedCacheManager:
             query += " AND trade_date <= ?"
             params.append(end_date)
         query += " ORDER BY trade_date"
-        return self._query_df(query, params)
-
-    # ==================== 252号方案：涨跌停 ====================
+        return self._query_shard('margin_cache', query, params)
 
     def cache_stk_limit_data(self, df):
+        """缓存涨跌停数据 — 统一日期格式为 YYYY-MM-DD"""
         if df.empty:
             return
         with self._write_lock:
             try:
-                # stk_limit 列名：ts_code, trade_date(YYYYMMDD), up_limit, down_limit
-                if 'trade_date' in df.columns and not pd.api.types.is_string_dtype(df['trade_date']):
-                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y%m%d')
+                # stk_limit 列名：ts_code, trade_date, high_limit, low_limit
+                # 统一日期格式为 YYYY-MM-DD（355号方案规则1）
+                if 'trade_date' in df.columns:
+                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y-%m-%d')
                 if 'up_limit' in df.columns and 'high_limit' not in df.columns:
                     df = df.rename(columns={'up_limit': 'high_limit', 'down_limit': 'low_limit'})
                 self._insert_from_df('stk_limit_cache', df)
@@ -1635,23 +1896,16 @@ class EnhancedCacheManager:
             try:
                 if 'end_date' in df.columns:
                     df['end_date'] = pd.to_datetime(df['end_date']).dt.date
-                # 过滤列：只保留 finance_report_cache 表中存在的列
-                table_cols = set(row[1] for row in self.conn.execute(
-                    "PRAGMA table_info(finance_report_cache)").fetchall())
-                extra = [c for c in df.columns if c not in table_cols]
-                if extra:
-                    df = df.drop(columns=extra)
+                # 列过滤由 _insert_from_df 的分库路由自动处理
                 self._insert_from_df('finance_report_cache', df)
             except Exception as e:
                 logger.warning(f"缓存财务报告失败: {e}")
 
     def get_cached_finance_report(self, ts_code: str) -> pd.DataFrame:
-        return self._query_df(
+        return self._query_shard('finance_report_cache',
             "SELECT * FROM finance_report_cache WHERE ts_code = ? ORDER BY end_date DESC",
             [ts_code]
         )
-
-    # ==================== 252号方案：前十大股东 ====================
 
     def cache_top10_holders(self, df):
         if df.empty:
@@ -1667,7 +1921,7 @@ class EnhancedCacheManager:
                 logger.warning(f"缓存前十大股东失败: {e}")
 
     def get_cached_top10_holders(self, ts_code):
-        return self._query_df(
+        return self._query_shard('top10_holders_cache',
             "SELECT * FROM top10_holders_cache WHERE ts_code = ? ORDER BY end_date DESC",
             [ts_code]
         )
@@ -1697,7 +1951,7 @@ class EnhancedCacheManager:
                 logger.warning(f"缓存股东人数失败: {e}")
 
     def get_cached_stk_holder(self, ts_code):
-        return self._query_df(
+        return self._query_shard('stk_holder_cache',
             "SELECT * FROM stk_holder_cache WHERE ts_code = ? ORDER BY end_date DESC",
             [ts_code]
         )
@@ -1719,9 +1973,7 @@ class EnhancedCacheManager:
         if ts_code:
             query += " WHERE ts_code = ?"
             params.append(ts_code)
-        return self._query_df(query, params)
-
-    # ==================== 252号方案：指数成分股 ====================
+        return self._query_shard('concept_cache', query, params)
 
     def cache_index_member_data(self, df):
         if df.empty:
@@ -1733,41 +1985,10 @@ class EnhancedCacheManager:
                 logger.warning(f"缓存指数成分股失败: {e}")
 
     def get_cached_index_member(self, index_code):
-        return self._query_df(
+        return self._query_shard('index_member_cache',
             "SELECT * FROM index_member_cache WHERE index_code = ?",
             [index_code]
         )
-
-    # ==================== 策略信号缓存（迭代7a） ====================
-
-    def cache_strategy_signals(self, ts_code: str, signals: list):
-        """缓存预计算策略信号"""
-        if not signals:
-            return
-        with self._write_lock:
-            try:
-                records = []
-                for sig in signals:
-                    trade_date_raw = sig.get('signal_date')
-                    trade_date = self._fmt_date(trade_date_raw) if trade_date_raw else datetime.now().strftime('%Y%m%d')
-                    records.append({
-                        'ts_code': ts_code,
-                        'trade_date': trade_date,
-                        'signal_name': sig.get('strategy_name', 'unknown'),
-                        'signal_value': sig.get('confidence'),
-                        'signal_level': sig.get('signal'),
-                    })
-                self._insert_from_df('strategy_signals', pd.DataFrame(records))
-            except Exception as e:
-                logger.warning(f"缓存策略信号失败 [{ts_code}]: {e}")
-
-    def get_strategy_signals(self, ts_code: str, signal_names: list = None) -> pd.DataFrame:
-        """读取预计算策略信号"""
-        if signal_names:
-            placeholders = ','.join(['?'] * len(signal_names))
-            sql = f"SELECT * FROM strategy_signals WHERE ts_code=? AND signal_name IN ({placeholders})"
-            return self._query_df(sql, [ts_code] + signal_names)
-        return self._query_df("SELECT * FROM strategy_signals WHERE ts_code=?", [ts_code])
 
     # ==================== 策略信号详情缓存（287号方案 v2.3） ====================
 
@@ -1838,6 +2059,184 @@ class EnhancedCacheManager:
         try:
             row = self.read_conn.execute(
                 "SELECT 1 FROM strategy_signal_detail WHERE ts_code=? AND trade_date=?",
+                [ts_code, trade_date]
+            ).fetchone()
+            return row is not None
+        except Exception:
+            return False
+
+    # ==================== 原料加工特征缓存（357号方案 PRE-FEAT） ====================
+
+    def cache_pre_feat(self, ts_code: str, trade_date: str, features: dict):
+        """缓存原料加工特征提取结果（JSON格式，10组54字段）
+
+        Args:
+            ts_code: 股票代码
+            trade_date: 交易日期 YYYY-MM-DD
+            features: 特征字典（10组：valuation/sentiment/sector/style/timing/volume_price/chanlun/chip/event/depth）
+        """
+        import json as _json
+        features_json = _json.dumps(features, ensure_ascii=False, default=str)
+        with self._write_lock:
+            try:
+                self._execute(
+                    """INSERT OR REPLACE INTO pre_feat_cache
+                       (ts_code, trade_date, features_json, computed_at)
+                       VALUES (?, ?, ?, datetime('now','localtime'))""",
+                    [ts_code, trade_date, features_json]
+                )
+                self.conn.commit()
+            except Exception as e:
+                logger.warning(f"缓存pre_feat失败 [{ts_code}]: {e}")
+
+    def cache_pre_feat_batch(self, records: list[dict]):
+        """批量缓存原料加工特征（用于日终管道批量写入）
+
+        Args:
+            records: [{ts_code, trade_date, features: dict}, ...]
+        """
+        import json as _json
+        rows = []
+        for r in records:
+            features_json = _json.dumps(r.get('features', {}), ensure_ascii=False, default=str)
+            rows.append((r['ts_code'], r['trade_date'], features_json))
+        with self._write_lock:
+            try:
+                self._execute(
+                    """INSERT OR REPLACE INTO pre_feat_cache
+                       (ts_code, trade_date, features_json, computed_at)
+                       VALUES (?, ?, ?, datetime('now','localtime'))""",
+                    rows
+                )
+                self.conn.commit()
+            except Exception as e:
+                logger.warning(f"批量缓存pre_feat失败: {e}")
+
+    def get_pre_feat(self, ts_code: str, trade_date: str = None) -> dict | None:
+        """读取原料加工特征缓存
+
+        Returns:
+            features dict（10组特征）或 None
+        """
+        import json as _json
+        try:
+            if trade_date:
+                row = self.read_conn.execute(
+                    "SELECT features_json FROM pre_feat_cache WHERE ts_code=? AND trade_date=?",
+                    [ts_code, trade_date]
+                ).fetchone()
+            else:
+                row = self.read_conn.execute(
+                    "SELECT features_json FROM pre_feat_cache WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
+                    [ts_code]
+                ).fetchone()
+            if row and row[0]:
+                return _json.loads(row[0])
+            return None
+        except Exception as e:
+            logger.warning(f"读取pre_feat失败 [{ts_code}]: {e}")
+            return None
+
+    def get_pre_feat_batch(self, ts_codes: list[str], trade_date: str = None) -> dict[str, dict]:
+        """批量读取原料加工特征
+
+        Returns:
+            {ts_code: features_dict, ...}
+        """
+        import json as _json
+        result = {}
+        try:
+            if trade_date:
+                placeholders = ','.join(['?'] * len(ts_codes))
+                rows = self.read_conn.execute(
+                    f"SELECT ts_code, features_json FROM pre_feat_cache WHERE ts_code IN ({placeholders}) AND trade_date=?",
+                    ts_codes + [trade_date]
+                ).fetchall()
+            else:
+                placeholders = ','.join(['?'] * len(ts_codes))
+                rows = self.read_conn.execute(
+                    f"""SELECT ts_code, features_json FROM pre_feat_cache
+                        WHERE ts_code IN ({placeholders})
+                        AND trade_date = (SELECT MAX(trade_date) FROM pre_feat_cache)""",
+                    ts_codes
+                ).fetchall()
+            for ts_code, features_json in rows:
+                if features_json:
+                    result[ts_code] = _json.loads(features_json)
+        except Exception as e:
+            logger.warning(f"批量读取pre_feat失败: {e}")
+        return result
+
+    def has_pre_feat(self, ts_code: str, trade_date: str = None) -> bool:
+        """检查是否存在pre_feat缓存"""
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y-%m-%d')
+        try:
+            row = self.read_conn.execute(
+                "SELECT 1 FROM pre_feat_cache WHERE ts_code=? AND trade_date=?",
+                [ts_code, trade_date]
+            ).fetchone()
+            return row is not None
+        except Exception:
+            return False
+
+    # ==================== 形态评分缓存（353/358号方案） ====================
+
+    def cache_pattern_score(self, ts_code: str, trade_date: str, score: float, details: dict):
+        """缓存形态评分结果
+
+        Args:
+            ts_code: 股票代码
+            trade_date: 交易日期 YYYY-MM-DD
+            score: 0-10 分
+            details: 详细分解（bull_count, bear_count, patterns 等）
+        """
+        import json as _json
+        details_json = _json.dumps(details, ensure_ascii=False, default=str)
+        with self._write_lock:
+            try:
+                self._execute(
+                    """INSERT OR REPLACE INTO pattern_score_cache
+                       (ts_code, trade_date, score, details_json, computed_at)
+                       VALUES (?, ?, ?, ?, datetime('now','localtime'))""",
+                    [ts_code, trade_date, score, details_json]
+                )
+                self.conn.commit()
+            except Exception as e:
+                logger.warning(f"缓存形态评分失败 [{ts_code}]: {e}")
+
+    def get_pattern_score(self, ts_code: str, trade_date: str = None) -> dict | None:
+        """读取形态评分缓存
+
+        Returns:
+            {'score': float, 'details': dict} 或 None
+        """
+        import json as _json
+        try:
+            if trade_date:
+                row = self.read_conn.execute(
+                    "SELECT score, details_json FROM pattern_score_cache WHERE ts_code=? AND trade_date=?",
+                    [ts_code, trade_date]
+                ).fetchone()
+            else:
+                row = self.read_conn.execute(
+                    "SELECT score, details_json FROM pattern_score_cache WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
+                    [ts_code]
+                ).fetchone()
+            if row:
+                return {'score': row[0], 'details': _json.loads(row[1])}
+            return None
+        except Exception as e:
+            logger.warning(f"读取形态评分失败 [{ts_code}]: {e}")
+            return None
+
+    def has_pattern_score(self, ts_code: str, trade_date: str = None) -> bool:
+        """检查是否存在形态评分缓存"""
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y-%m-%d')
+        try:
+            row = self.read_conn.execute(
+                "SELECT 1 FROM pattern_score_cache WHERE ts_code=? AND trade_date=?",
                 [ts_code, trade_date]
             ).fetchone()
             return row is not None
@@ -1948,12 +2347,16 @@ class EnhancedCacheManager:
             if 'trade_date' in r and isinstance(r['trade_date'], (datetime, pd.Timestamp)):
                 r['trade_date'] = r['trade_date'].strftime('%Y-%m-%d')
         with self._write_lock:
+            before = self.conn.execute("SELECT COUNT(*) FROM factor_cache").fetchone()[0]
             self._insert_from_df('factor_cache', pd.DataFrame(records))
+            after = self.conn.execute("SELECT COUNT(*) FROM factor_cache").fetchone()[0]
             self.conn.commit()
+            if after != before:
+                logger.debug(f"factor_cache 写入: {after - before} 行 (总计 {after})")
 
     def get_cached_factor(self, ts_code: str, factor_name: str):
         """获取单个因子序列"""
-        df = self._query_df(
+        df = self._query_shard('factor_cache',
             "SELECT trade_date, value FROM factor_cache "
             "WHERE ts_code = ? AND factor_name = ? ORDER BY trade_date",
             [ts_code, factor_name]
@@ -1964,16 +2367,22 @@ class EnhancedCacheManager:
 
     def get_cached_factors(self, ts_code: str) -> 'pd.DataFrame':
         """获取某股票所有因子"""
-        return self._query_df(
+        return self._query_shard('factor_cache',
             "SELECT trade_date, factor_name, value FROM factor_cache "
             "WHERE ts_code = ? ORDER BY trade_date, factor_name",
             [ts_code]
         )
 
     def clean_factor_cache(self, cutoff: str):
-        """清理 factor_cache 中早于 cutoff 的记录"""
-        self._execute("DELETE FROM factor_cache WHERE trade_date < ?", [cutoff])
-        self.conn.commit()
+        """清理 factor_cache 中早于 cutoff 的记录
+
+        B4修复：cutoff 可能是 YYYYMMDD 或 YYYY-MM-DD 格式，
+        trade_date 存储为 YYYY-MM-DD，需统一格式后比较。
+        """
+        # 统一 cutoff 为 YYYY-MM-DD 格式（兼容 YYYYMMDD 输入）
+        if cutoff and len(cutoff) == 8 and cutoff.isdigit():
+            cutoff = f"{cutoff[:4]}-{cutoff[4:6]}-{cutoff[6:8]}"
+        self._exec_shard('factor_cache', "DELETE FROM factor_cache WHERE trade_date < ?", [cutoff])
         logger.info(f"清理 factor_cache (cutoff={cutoff})")
 
     # ════════════════════════════════════════════════════════════
@@ -2463,6 +2872,21 @@ class EnhancedCacheManager:
         """从 treemap_snapshot 表批量读取快照数据"""
         if not ts_codes:
             return pd.DataFrame()
+
+        # 367号方案：优先从分库读取
+        try:
+            from app.data.sharding_manager import sharding_manager
+            if sharding_manager.table_exists('treemap_snapshot'):
+                placeholders = ','.join(['?' for _ in ts_codes])
+                query = f"SELECT * FROM treemap_snapshot WHERE ts_code IN ({placeholders})"
+                df = sharding_manager.execute_query('treemap_snapshot', query, ts_codes)
+                if df is not None and not df.empty:
+                    import pandas as pd
+                    return pd.DataFrame(df)
+        except Exception as e:
+            logger.debug(f"分库读取失败，降级到ECM: {e}")
+
+        # 降级到ECM读取
         placeholders = ','.join(['?' for _ in ts_codes])
         return self._query_df(
             f"SELECT * FROM treemap_snapshot WHERE ts_code IN ({placeholders})",
@@ -2597,12 +3021,12 @@ class EnhancedCacheManager:
             return {}
 
     def ensure_pipeline_steps(self, pipeline_date: str):
-        """确保当日管道环节记录存在（幂等）"""
+        """确保当日管道环节记录存在（幂等）— 353号方案统一命名"""
         for step_id, step_name in [
-            ('C1', '日线采集'), ('C2', '基本面采集'), ('C3', '资金流采集'),
-            ('C4', '涨跌停采集'), ('C5', '龙虎榜采集'), ('C6', '概念板块采集'),
-            ('P1', '指标预计算'), ('P2', '策略信号预计算'), ('P3', '因子预计算'),
-            ('P4', 'L2标签预计算'), ('S1', 'Treemap快照'),
+            ('COL-1', '日线采集'), ('COL-2', '基本面采集'), ('COL-3', '资金流采集'),
+            ('COL-4', '涨跌停采集'), ('COL-5', '龙虎榜采集'), ('COL-6', '概念板块采集'),
+            ('RAW-1', '技术指标(IND)'), ('RAW-2', '特征提取(FEAT)'), ('RAW-3', '量化因子(FAC)'),
+            ('SIG', '策略分析'), ('OUT', '成品仓'),
         ]:
             self.conn.execute(
                 "INSERT OR IGNORE INTO pipeline_status "

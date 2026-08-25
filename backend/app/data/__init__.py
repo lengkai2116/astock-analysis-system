@@ -3,6 +3,7 @@ from .enhanced_cache_manager import get_ecm_instance, EnhancedCacheManager
 from app.models import Stock
 from app import db
 from datetime import datetime
+from typing import Dict, Optional
 import pandas as pd
 from sqlalchemy import or_
 
@@ -19,6 +20,14 @@ class DataManager:
             self._source_mgr = data_source_manager
         except Exception:
             self._source_mgr = None
+
+        # 356号方案：初始化分库管理器
+        self._sharding_manager = None
+        try:
+            from .sharding_manager import sharding_manager
+            self._sharding_manager = sharding_manager
+        except Exception:
+            pass
     
     def sync_stock_list(self):
         stocks = self.tushare.get_stock_list()
@@ -169,9 +178,36 @@ class DataManager:
     
     def get_cached_daily_data(self, ts_code, start_date=None, end_date=None, adj=None):
         """从缓存获取日线数据
+
+        356号方案：从market_cache.db读取
         Args:
             adj: 复权方式 None=不复权 'hfq'=后复权 'qfq'=前复权
         """
+        # 356号方案：优先从分库读取
+        try:
+            from app.data.sharding_manager import sharding_manager
+            if sharding_manager.table_exists('daily_cache'):
+                # 从分库读取
+                query = "SELECT * FROM daily_cache WHERE ts_code = ?"
+                params = [ts_code]
+                if start_date:
+                    query += " AND trade_date >= ?"
+                    params.append(start_date)
+                if end_date:
+                    query += " AND trade_date <= ?"
+                    params.append(end_date)
+                query += " ORDER BY trade_date"
+                df = sharding_manager.execute_query('daily_cache', query, params)
+                if df is not None and not df.empty:
+                    import pandas as pd
+                    df = pd.DataFrame(df, columns=['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg', 'cached_at'])
+                    if adj is None:
+                        return df
+                    return self._apply_adjust_factor(df, adj)
+        except Exception as e:
+            logger.debug(f"分库读取失败，降级到ECM: {e}")
+
+        # 降级到ECM读取
         df = self.cache.get_cached_daily(ts_code, start_date, end_date)
         if df.empty or adj is None:
             return df
@@ -809,17 +845,32 @@ class DataManager:
         return 0
     
     def get_cached_daily_basic(self, ts_code, start_date=None, end_date=None):
+        """从缓存获取每日基础数据
+
+        356号方案：从market_cache.db读取
         """
-        从缓存获取每日基础数据
-        
-        Args:
-            ts_code: 股票代码
-            start_date: 开始日期
-            end_date: 结束日期
-            
-        Returns:
-            DataFrame
-        """
+        # 356号方案：优先从分库读取
+        if self._sharding_manager:
+            try:
+                query = "SELECT * FROM daily_basic_cache WHERE ts_code = ?"
+                params = [ts_code]
+                if start_date:
+                    query += " AND trade_date >= ?"
+                    params.append(start_date)
+                if end_date:
+                    query += " AND trade_date <= ?"
+                    params.append(end_date)
+                query += " ORDER BY trade_date"
+                result = self._sharding_manager.execute_query('daily_basic_cache', query, params)
+                if result:
+                    import pandas as pd
+                    columns = ['ts_code', 'trade_date', 'close', 'turnover_rate', 'turnover_rate_f',
+                              'volume_ratio', 'pe', 'pe_ttm', 'pb', 'ps', 'ps_ttm', 'dv_ratio', 'dv_ttm',
+                              'total_share', 'float_share', 'free_share', 'total_mv', 'circ_mv', 'cached_at']
+                    return pd.DataFrame(result, columns=columns[:len(result[0])])
+            except Exception as e:
+                logger.debug(f"分库读取失败，降级到ECM: {e}")
+
         return self.cache.get_cached_daily_basic(ts_code, start_date, end_date)
     
     def sync_all_daily_basic_data(self, trade_date=None):
@@ -941,7 +992,38 @@ class DataManager:
         return 0
 
     def get_cached_moneyflow(self, ts_code=None, trade_date=None, start_date=None, end_date=None):
-        """从缓存获取资金流向数据"""
+        """从缓存获取资金流向数据
+
+        356号方案：从market_cache.db读取
+        """
+        # 356号方案：优先从分库读取
+        if self._sharding_manager:
+            try:
+                query = "SELECT * FROM moneyflow_cache WHERE 1=1"
+                params = []
+                if ts_code:
+                    query += " AND ts_code = ?"
+                    params.append(ts_code)
+                if trade_date:
+                    query += " AND trade_date = ?"
+                    params.append(trade_date)
+                if start_date:
+                    query += " AND trade_date >= ?"
+                    params.append(start_date)
+                if end_date:
+                    query += " AND trade_date <= ?"
+                    params.append(end_date)
+                query += " ORDER BY trade_date"
+                result = self._sharding_manager.execute_query('moneyflow_cache', query, params)
+                if result:
+                    import pandas as pd
+                    columns = ['ts_code', 'trade_date', 'buy_lg_vol', 'buy_lg_amount', 'sell_lg_vol',
+                              'sell_lg_amount', 'buy_elg_amount', 'sell_elg_amount', 'buy_sm_amount',
+                              'sell_sm_amount', 'net_lg_amount', 'net_elg_amount', 'net_sm_amount', 'cached_at']
+                    return pd.DataFrame(result, columns=columns[:len(result[0])])
+            except Exception as e:
+                logger.debug(f"分库读取失败，降级到ECM: {e}")
+
         return self.cache.get_cached_moneyflow(
             ts_code=ts_code, trade_date=trade_date,
             start_date=start_date, end_date=end_date
@@ -1556,10 +1638,11 @@ class DataManager:
         return self.cache.get_cached_factors(ts_code)
 
     def get_cached_signals(self, ts_code: str, signal_names: list = None) -> pd.DataFrame:
-        """读取预计算策略信号"""
+        """读取预计算策略信号 — 363号F57-1修复：重定向到get_signal_detail"""
         from app.data.enhanced_cache_manager import get_ecm_instance
         ecm = get_ecm_instance()
-        return ecm.get_strategy_signals(ts_code, signal_names)
+        # 旧表strategy_signals已删除，重定向到新表strategy_signal_detail
+        return ecm.get_signal_detail(ts_code)
 
     # ── 策略信号详情缓存（287号方案 v2.3） ──
 
@@ -1580,6 +1663,63 @@ class DataManager:
         from app.data.enhanced_cache_manager import get_ecm_instance
         ecm = get_ecm_instance()
         return ecm.has_signal_detail(ts_code, trade_date)
+
+    # ── 原料加工特征缓存（357号方案 PRE-FEAT） ──
+
+    def cache_pre_feat(self, ts_code: str, trade_date: str, features: dict):
+        """缓存原料加工特征"""
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        ecm.cache_pre_feat(ts_code, trade_date, features)
+
+    def get_pre_feat(self, ts_code: str, trade_date: str = None) -> dict | None:
+        """读取原料加工特征"""
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        return ecm.get_pre_feat(ts_code, trade_date)
+
+    def get_pre_feat_batch(self, ts_codes: list[str], trade_date: str = None) -> dict[str, dict]:
+        """批量读取原料加工特征"""
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        return ecm.get_pre_feat_batch(ts_codes, trade_date)
+
+    def has_pre_feat(self, ts_code: str, trade_date: str = None) -> bool:
+        """检查是否存在pre_feat缓存"""
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        return ecm.has_pre_feat(ts_code, trade_date)
+
+    # ── 形态评分缓存（353/358号方案） ──
+
+    def cache_pattern_score(self, ts_code: str, trade_date: str, score: float, details: Dict):
+        """
+        缓存形态评分
+
+        Args:
+            ts_code: 股票代码
+            trade_date: 交易日期
+            score: 0-10 分
+            details: 详细分解
+        """
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        ecm.cache_pattern_score(ts_code, trade_date, score, details)
+
+    def get_pattern_score(self, ts_code: str, trade_date: str = None) -> Optional[Dict]:
+        """
+        获取形态评分
+
+        Args:
+            ts_code: 股票代码
+            trade_date: 交易日期
+
+        Returns:
+            Dict: {'score': float, 'details': dict} 或 None
+        """
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        return ecm.get_pattern_score(ts_code, trade_date)
 
     # ── 行业指数数据（288号方案 v1.1） ──
 
