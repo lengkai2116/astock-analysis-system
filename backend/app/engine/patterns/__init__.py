@@ -25,6 +25,10 @@ class PatternCategory(Enum):
     VOLUME = 'volume'
     CHANLUN = 'chanlun'
     VOLUME_PRICE = 'volume_price'
+    BULLISH_PATTERNS = 'bullish_patterns'
+    BEARISH_PATTERNS = 'bearish_patterns'
+    BLACKHORSE = 'blackhorse'
+    STATE = 'state'
 
 
 class PatternStage(Enum):
