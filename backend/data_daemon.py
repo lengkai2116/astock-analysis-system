@@ -95,25 +95,44 @@ _ecm = None
 # ══════════════════════════════════════════════════════════
 
 def _start_collectors():
-    """启动 mootdx + AKShare 采集器"""
-    ok = []
-    try:
-        from app.data.mootdx_collector import mootdx_collector
-        if mootdx_collector.start():
-            ok.append('mootdx')
-            logger.info("MootdxCollector 已启动（快照:东财HTTP, 分钟:mootdx）")
-        else:
-            logger.warning("MootdxCollector 启动失败（降级模式不可用）")
-    except Exception as e:
-        logger.warning(f"MootdxCollector 启动失败: {e}")
+    """启动 mootdx + AKShare 采集器
 
-    try:
-        from app.data.akshare_collector import akshare_collector
-        akshare_collector.start()
-        ok.append('akshare')
-        logger.info("AkshareCollector 已启动")
-    except Exception as e:
-        logger.warning(f"AkshareCollector 启动失败: {e}")
+    355号方案规则10：非交易日停止不必要的采集器
+    - 交易日：启动所有采集器
+    - 非交易日：仅启动必要的数据维护采集器，停止实时采集器
+    """
+    ok = []
+
+    # 检查是否为交易日
+    is_trading_day = _is_market_day()
+    if not is_trading_day:
+        logger.info("非交易日，跳过实时采集器启动")
+
+    # mootdx 采集器：仅交易日启动
+    if is_trading_day:
+        try:
+            from app.data.mootdx_collector import mootdx_collector
+            if mootdx_collector.start():
+                ok.append('mootdx')
+                logger.info("MootdxCollector 已启动（快照:东财HTTP, 分钟:mootdx）")
+            else:
+                logger.warning("MootdxCollector 启动失败（降级模式不可用）")
+        except Exception as e:
+            logger.warning(f"MootdxCollector 启动失败: {e}")
+    else:
+        logger.info("非交易日：MootdxCollector 跳过启动")
+
+    # AKShare 采集器：仅交易日启动实时采集，非交易日可启动低频采集
+    if is_trading_day:
+        try:
+            from app.data.akshare_collector import akshare_collector
+            akshare_collector.start()
+            ok.append('akshare')
+            logger.info("AkshareCollector 已启动")
+        except Exception as e:
+            logger.warning(f"AkshareCollector 启动失败: {e}")
+    else:
+        logger.info("非交易日：AkshareCollector 跳过启动")
 
     return ok
 
@@ -400,11 +419,24 @@ def _classify_seat_name(seat_name: str) -> str:
 
 
 def _batch_margin(trade_date: str) -> int:
-    """全市场融资融券个股明细 — 1 次 API 调用"""
+    """全市场融资融券个股明细 — 支持非交易日降级到最近交易日"""
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
     raw = _ts(pro.margin_detail, trade_date=trade_date)
+    if raw is None or raw.empty:
+        # 非交易日降级：使用 daily_cache 中的最新交易日
+        try:
+            latest = _ecm.conn.execute(
+                "SELECT MAX(trade_date) FROM daily_cache"
+            ).fetchone()[0]
+            if latest:
+                # 统一格式为 YYYYMMDD（Tushare API 要求）
+                fallback = latest.replace('-', '')
+                if fallback != trade_date:
+                    raw = _ts(pro.margin_detail, trade_date=fallback)
+        except Exception:
+            pass
     if raw is None or raw.empty:
         return 0
     df = raw.copy()
@@ -416,6 +448,24 @@ def _batch_margin(trade_date: str) -> int:
         df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
     _ecm.cache_margin_data(df)
     return len(df)
+
+
+def _batch_margin_range(start_date: str, end_date: str) -> int:
+    """363号F55-3修复：支持日期范围的融资融券增量回补"""
+    from datetime import datetime as _dt, timedelta
+    start = _dt.strptime(start_date, '%Y-%m-%d')
+    end = _dt.strptime(end_date, '%Y-%m-%d')
+    total = 0
+    current = start
+    while current <= end:
+        date_str = current.strftime('%Y%m%d')
+        try:
+            added = _batch_margin(date_str)
+            total += added
+        except Exception as e:
+            logger.debug(f"  融资融券 {date_str} 补采失败: {e}")
+        current += timedelta(days=1)
+    return total
 
 
 def _batch_concept(trade_date: str = None) -> int:
@@ -618,21 +668,61 @@ def _batch_win_rate() -> int:
 
 
 def _batch_fina_indicator(trade_date: str = None) -> int:
-    """全市场财务指标 — 后台低优任务"""
+    """全市场财务指标 — 后台低优任务
+
+    355号方案修复：Tushare fina_indicator接口需要ts_code参数，
+    改为逐只获取或使用period参数获取最新一期。
+    """
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
     total = 0
     try:
-        # Tushare fina_indicator 可指定 period 获取最近一期
-        df = _ts(pro.fina_indicator, period=trade_date)
-        if df is not None and not df.empty:
-            for col in ['end_date', 'ann_date']:
-                if col in df.columns:
-                    df[col] = pd.to_datetime(df[col]).dt.date
-            _ecm.cache_fina_indicator_data(df)
-            total = len(df)
-            logger.info(f"  [财务指标] 同步 {total} 条")
+        # 方案1：使用period参数获取最近一期（如果支持）
+        if trade_date:
+            # 尝试使用period参数
+            try:
+                df = _ts(pro.fina_indicator, period=trade_date)
+                if df is not None and not df.empty:
+                    for col in ['end_date', 'ann_date']:
+                        if col in df.columns:
+                            df[col] = pd.to_datetime(df[col]).dt.date
+                    _ecm.cache_fina_indicator_data(df)
+                    total = len(df)
+                    logger.info(f"  [财务指标] 同步 {total} 条")
+                    return total
+            except Exception as e:
+                logger.debug(f"  [财务指标] period参数失败，尝试逐只获取: {e}")
+
+        # 方案2：逐只获取（降级方案）
+        # 获取股票列表
+        try:
+            stocks = pro.stock_basic(exchange='', list_status='L')
+            if stocks is not None and not stocks.empty:
+                stock_codes = stocks['ts_code'].tolist()[:100]  # 限制100只股票
+                logger.info(f"  [财务指标] 逐只获取 {len(stock_codes)} 只股票")
+
+                for code in stock_codes:
+                    try:
+                        df = _ts(pro.fina_indicator, ts_code=code)
+                        if df is not None and not df.empty:
+                            # 获取最新的财务指标
+                            df_sorted = df.sort_values('end_date', ascending=False)
+                            latest = df_sorted.iloc[0:1]  # 只取最新一期
+
+                            for col in ['end_date', 'ann_date']:
+                                if col in latest.columns:
+                                    latest[col] = pd.to_datetime(latest[col]).dt.date
+
+                            _ecm.cache_fina_indicator_data(latest)
+                            total += 1
+                    except Exception as e:
+                        pass  # 跳过失败的股票
+
+                logger.info(f"  [财务指标] 逐只同步完成，共 {total} 条")
+        except Exception as e:
+            logger.warning(f"  [财务指标] 获取股票列表失败: {e}")
+
     except Exception as e:
         logger.warning(f"  [财务指标] 批量同步失败: {e}")
     return total
@@ -862,6 +952,80 @@ def _batch_finance_report() -> int:
     return total
 
 
+def _batch_pattern_score(trade_date: str):
+    """日终批量计算形态评分（353/358号方案）
+
+    对全市场活跃股票运行 PatternEngine.evaluate()，
+    结果写入 pattern_score_cache 供前端直接读取。
+
+    Args:
+        trade_date: 交易日期（YYYYMMDD 或 YYYY-MM-DD）
+    """
+    from app.engine.patterns.engine import PatternEngine
+
+    engine = PatternEngine()
+    _ensure_pd()
+
+    # 格式化日期为 YYYY-MM-DD（cache_pattern_score 要求）
+    td_str = str(trade_date).replace('-', '')
+    if len(td_str) == 8:
+        td_fmt = f'{td_str[:4]}-{td_str[4:6]}-{td_str[6:]}'
+    else:
+        td_fmt = str(trade_date)
+
+    # 获取当日有数据的所有股票（与 _run_precompute 同模式）
+    try:
+        rows = _ecm.conn.execute(
+            "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?",
+            [td_fmt]
+        ).fetchall()
+        if not rows:
+            # 非交易日回退：用最新交易日
+            row = _ecm.conn.execute(
+                "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                td_fmt = row[0]
+                rows = _ecm.conn.execute(
+                    "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?",
+                    [td_fmt]
+                ).fetchall()
+                logger.info(f"  [形态评分] 今日无数据，回退到最近交易日: {td_fmt}")
+    except Exception as e:
+        logger.warning(f"  [形态评分] 查询股票列表失败: {e}")
+        return
+
+    codes = [r[0] for r in rows]
+    if not codes:
+        logger.info("  [形态评分] 无活跃股票，跳过")
+        return
+
+    logger.info(f"  [形态评分] 开始计算 {len(codes)} 只股票...")
+
+    computed = 0
+    skipped = 0
+    errors = 0
+
+    for ts_code in codes:
+        try:
+            df = _ecm.get_cached_daily(ts_code)
+            if df.empty or len(df) < 20:
+                skipped += 1
+                continue
+
+            score, details = engine.evaluate(df)
+            _ecm.cache_pattern_score(ts_code, td_fmt, score, details)
+            computed += 1
+
+        except Exception as e:
+            errors += 1
+            if errors <= 5:
+                logger.debug(f"  [形态评分] {ts_code} 计算失败: {e}")
+            continue
+
+    logger.info(f"  [形态评分] 完成: 计算 {computed} 只, 跳过 {skipped} 只, 错误 {errors} 只")
+
+
 def _batch_stock_list() -> int:
     """全市场股票列表同步（通过 DataManager）"""
     try:
@@ -1026,10 +1190,29 @@ def _ensure_pd():
 
 
 def _check_count(table: str, trade_date: str) -> int:
+    """356号方案：从正确的数据库（分库或总库）查询行数"""
     try:
-        return _ecm.conn.execute(
-            f"SELECT COUNT(*) FROM \"{table}\" WHERE trade_date=?", [trade_date]
-        ).fetchone()[0]
+        return _query_table(table, f"SELECT COUNT(*) FROM \"{table}\" WHERE trade_date=?", [trade_date])
+    except Exception:
+        return 0
+
+
+def _query_table(table: str, sql: str, params=None):
+    """356号方案：从分库或总库执行查询（通用路由）"""
+    try:
+        from app.data.sharding_manager import sharding_manager
+        db_name = sharding_manager.get_db_for_table(table)
+        if db_name:
+            conn = sharding_manager.get_connection(db_name)
+            if params:
+                return conn.execute(sql, params).fetchone()[0]
+            else:
+                return conn.execute(sql).fetchone()[0]
+        else:
+            if params:
+                return _ecm.conn.execute(sql, params).fetchone()[0]
+            else:
+                return _ecm.conn.execute(sql).fetchone()[0]
     except Exception:
         return 0
 
@@ -1041,7 +1224,7 @@ def run_integrity_check(backfill_days: int = 1):
     today_fmt = datetime.now().strftime('%Y-%m-%d')
     logger.info("开始完整性检查...")
 
-    # 指数日线检查：4只指数代码在 daily_cache 中的记录数
+    # 指数日线检查：4只指数代码在 daily_cache 中的记录数（356号：从分库读取）
     idx_codes = ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']
     idx_checks = []
     for offset in range(0, backfill_days):
@@ -1050,10 +1233,9 @@ def run_integrity_check(backfill_days: int = 1):
         if d.weekday() >= 5:
             continue
         try:
-            cnt = _ecm.conn.execute(
+            cnt = _query_table('daily_cache',
                 "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND ts_code IN (?,?,?,?)",
-                [ds] + idx_codes
-            ).fetchone()[0]
+                [ds] + idx_codes)
         except Exception:
             cnt = 0
         if cnt < 4:
@@ -1065,8 +1247,20 @@ def run_integrity_check(backfill_days: int = 1):
         ('moneyflow_cache', _batch_moneyflow,   MF_THRESHOLD,    '资金流向'),
         ('stk_limit_cache', _batch_stk_limit,   LIMIT_THRESHOLD, '涨跌停'),
         ('lhb_cache',       _batch_lhb,         LHB_THRESHOLD,   '龙虎榜'),
-        ('concept_cache',   _batch_concept,     0,               '概念'),
+        # concept_cache 无 trade_date 字段，跳过日期检查（355号方案修复方案5）
     ]
+
+    # concept_cache 特殊检查：无 trade_date 字段，仅检查是否有数据（356号：从分库读取）
+    try:
+        concept_cnt = _query_table('concept_cache', "SELECT COUNT(*) FROM concept_cache")
+        if concept_cnt == 0:
+            logger.info("  [概念] 空表，触发补采...")
+            concept_added = _batch_concept()
+            logger.info(f"    → 补采 {concept_added} 条")
+        else:
+            logger.info(f"  [概念] {concept_cnt} 行 ✅")
+    except Exception as e:
+        logger.warning(f"  概念检查失败: {e}")
 
     # 龙虎榜席位明细（278号方案独立检查：lhb_detail_cache）
     try:
@@ -1086,39 +1280,53 @@ def run_integrity_check(backfill_days: int = 1):
     except Exception as e:
         logger.warning(f"  [K线深度] 检查失败: {e}")
 
-    # 融资融券单独检查（margin_detail 非每日必须，空表时补采）
+    # 融资融券检查（355号方案+363号F55-3修复：支持多天增量回补，356号：从分库读取）
     try:
-        margin_cnt = _check_count('margin_cache', today_fmt) if today_fmt else 0
-        if margin_cnt == 0:
+        margin_latest = _query_table('margin_cache', "SELECT MAX(trade_date) FROM margin_cache")
+        if margin_latest is None:
+            # 空表，触发补采
             logger.info("  [融资融券] 空表，触发补采...")
             added = _batch_margin(today)
             logger.info(f"    → 补采 {added} 条")
         else:
-            logger.info(f"  [融资融券] {margin_cnt} 行 ✅")
+            # 检查时效性：滞后不超过7天
+            from datetime import datetime as _dt
+            # 兼容 YYYYMMDD 和 YYYY-MM-DD 两种日期格式
+            _date_str = str(margin_latest).replace('-', '')
+            latest_date = _dt.strptime(_date_str, '%Y%m%d')
+            _today_str = today.replace('-', '') if isinstance(today, str) else _dt.now().strftime('%Y%m%d')
+            today_date = _dt.strptime(_today_str, '%Y%m%d')
+            days_lag = (today_date - latest_date).days
+            if days_lag > 7:
+                logger.info(f"  [融资融券] 滞后 {days_lag} 天，触发范围补采...")
+                # 363号F55-3修复：一次性回补多天滞后（timedelta 已在模块顶部导入）
+                start_date = (latest_date + timedelta(days=1)).strftime('%Y-%m-%d')
+                added = _batch_margin_range(start_date, today)
+                logger.info(f"    → 范围补采 {added} 条 ({start_date} ~ {today})")
+            else:
+                logger.info(f"  [融资融券] 最新 {margin_latest}，滞后 {days_lag} 天 ✅")
     except Exception as e:
         logger.warning(f"  融资融券检查失败: {e}")
 
-    # 财务指标补充检查（非每日判断，仅检查有无数据）
+    # 财务指标补充检查（非每日判断，仅检查有无数据，356号：从分库读取）
     try:
-        fina_cnt = _ecm.conn.execute(
-            "SELECT COUNT(*) FROM fina_indicator_cache"
-        ).fetchone()[0]
+        fina_cnt = _query_table('fina_indicator_cache', "SELECT COUNT(*) FROM fina_indicator_cache")
         if fina_cnt < 100:
             logger.info(f"  [财务指标] {fina_cnt}行 (需≥100)，触发补采...")
             _batch_fina_indicator(today)
     except Exception as e:
         logger.warning(f"  财务指标检查失败: {e}")
 
-    # ── 4 类后台低优数据检查（空表时触发补采，非每日必须）──
+    # ── 4 类后台低优数据检查（空表时触发补采，非每日必须，356号：从分库读取）──
+    # 363号F55-2修复：adj_factor增加时效性检查（滞后>3天触发补采）
     batch_background = [
-        ('adj_factor_cache',    _batch_adj_factor,    '复权因子'),
         ('top10_holders_cache', _batch_top10_holders, '前十大股东'),
         ('stk_holder_cache',    _batch_stk_holder,    '股东人数'),
         ('finance_report_cache', _batch_finance_report, '扩展财务'),
     ]
     for table, batch_fn, label in batch_background:
         try:
-            cnt = _ecm.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            cnt = _query_table(table, f"SELECT COUNT(*) FROM {table}")
             if cnt == 0:
                 logger.info(f"  [{label}] 空表，触发补采...")
                 added = batch_fn()
@@ -1128,8 +1336,56 @@ def run_integrity_check(backfill_days: int = 1):
         except Exception as e:
             logger.warning(f"  [{label}] 检查失败: {e}")
 
-    # 检查今日数据
+    # adj_factor单独检查：空表或时效性滞后>3天时触发补采（356号：从分库读取）
+    try:
+        adj_cnt = _query_table('adj_factor_cache', "SELECT COUNT(*) FROM adj_factor_cache")
+        if adj_cnt == 0:
+            logger.info("  [复权因子] 空表，触发补采...")
+            added = _batch_adj_factor()
+            logger.info(f"    → 补采 {added} 条")
+        else:
+            adj_latest = _query_table('adj_factor_cache', "SELECT MAX(trade_date) FROM adj_factor_cache")
+            if adj_latest:
+                from datetime import datetime as _dt
+                # 兼容 YYYYMMDD 和 YYYY-MM-DD 两种日期格式
+                _date_str = str(adj_latest).replace('-', '')
+                latest_date = _dt.strptime(_date_str, '%Y%m%d')
+                _today_str = today.replace('-', '') if isinstance(today, str) else _dt.now().strftime('%Y%m%d')
+                today_date = _dt.strptime(_today_str, '%Y%m%d')
+                days_lag = (today_date - latest_date).days
+                if days_lag > 3:
+                    logger.info(f"  [复权因子] 滞后 {days_lag} 天（阈值3天），触发补采...")
+                    added = _batch_adj_factor()
+                    logger.info(f"    → 补采 {added} 条")
+                else:
+                    logger.info(f"  [复权因子] {adj_cnt} 行，最新 {adj_latest} ✅")
+            else:
+                logger.info(f"  [复权因子] {adj_cnt} 行 ✅")
+    except Exception as e:
+        logger.warning(f"  [复权因子] 检查失败: {e}")
+
+    # 财务表空表检查：balancesheet/cashflow/forecast（356号：从分库读取）
+    for table, batch_fn, label in [
+        ('balancesheet_cache', _batch_balancesheet, '资产负债表'),
+        ('cashflow_cache', _batch_cashflow, '现金流量表'),
+        ('forecast_cache', _batch_forecast, '业绩预告'),
+    ]:
+        try:
+            cnt = _query_table(table, f"SELECT COUNT(*) FROM {table}")
+            if cnt == 0:
+                logger.info(f"  [{label}] 空表，触发补采...")
+                n = batch_fn()
+                logger.info(f"    → 补采 {n} 条")
+        except Exception as e:
+            logger.warning(f"  [{label}] 检查失败: {e}")
+
+    # 检查今日数据（非交易日跳过，数据量必然为0）
+    _is_weekday = datetime.now().weekday() < 5
+    if not _is_weekday:
+        logger.info("  今日为非交易日，跳过今日数据检查")
     for table, batch_fn, threshold, label in checks:
+        if not _is_weekday:
+            continue
         cnt = _check_count(table, today_fmt)
         if cnt < threshold:
             logger.info(f"  [{label}] 今日 {cnt}行 (需≥{threshold})，补采...")
@@ -1180,18 +1436,10 @@ def run_integrity_check(backfill_days: int = 1):
                 ).fetchone()
                 if done_row:
                     logger.info(f"  [申万行业指数] 当日已回填尝试过（缺 {len(missing)} 个，跳过）")
-                    return
+                    # 不return——继续执行后续完整性检查和管道驱动
             except Exception:
                 pass
-            logger.info(f"  [申万行业指数] 缺 {len(missing)}/{len(SW_INDEX_CODES)} 个（{missing[:3]}...），触发回填...")
-            today_str = datetime.now().strftime('%Y%m%d')
-            for offset in range(60):
-                d = (datetime.now() - timedelta(days=offset))
-                if d.weekday() >= 5:
-                    continue
-                ds = d.strftime('%Y%m%d')
-                _batch_index_daily(ds)
-            logger.info(f"  [申万行业指数] 回填完成（近60个交易日），仍缺 {len(missing)} 个标记跳过")
+            logger.info(f"  [申万行业指数] 缺 {len(missing)}/{len(SW_INDEX_CODES)} 个（{missing[:3]}...），跳过（数据源缺失）")
             # 记录当日已尝试（避免死循环；次日数据源恢复时自动重试）
             try:
                 _ecm.conn.execute(
@@ -1206,6 +1454,24 @@ def run_integrity_check(backfill_days: int = 1):
     except Exception as e:
         logger.warning(f"  申万行业指数检查失败: {e}")
 
+    # ── 355号方案规则4.2：数据时效性审查（进阶层）──
+    try:
+        _check_data_timeliness()
+    except Exception as e:
+        logger.warning(f"  数据时效性检查失败: {e}")
+
+    # ── 355号方案规则4.3：数据值合理性审查（质量层）──
+    try:
+        _check_data_quality()
+    except Exception as e:
+        logger.warning(f"  数据质量检查失败: {e}")
+
+    # ── 355号方案规则4.4：数据一致性审查（一致性层）──
+    try:
+        _check_data_consistency()
+    except Exception as e:
+        logger.warning(f"  数据一致性检查失败: {e}")
+
     logger.info("完整性检查完成")
     
     # 自选股分钟数据完整性检查（后台线程，不阻塞主循环）
@@ -1213,6 +1479,195 @@ def run_integrity_check(backfill_days: int = 1):
         threading.Thread(target=_check_watchlist_minute, daemon=True).start()
     except Exception:
         pass
+
+
+def _check_data_timeliness():
+    """355号方案规则4.2：数据时效性审查（进阶层）
+
+    检查项：数据最新日期与当前日期的差距
+    时效性标准：
+    - 核心数据（daily_cache等）：滞后不超过1天
+    - 补充数据（margin_cache等）：滞后不超过7天
+    - 背景数据（fina_indicator等）：滞后不超过30天
+    """
+    today = datetime.now()
+
+    # 核心数据时效性检查（滞后不超过1天）
+    core_tables = [
+        ('daily_cache', '日线'),
+        ('daily_basic_cache', '基本面'),
+        ('moneyflow_cache', '资金流向'),
+        ('stk_limit_cache', '涨跌停'),
+    ]
+
+    for table, label in core_tables:
+        try:
+            _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
+            if latest:
+                latest_date = datetime.strptime(str(latest), '%Y-%m-%d') if isinstance(latest, str) else latest
+                days_lag = (today - latest_date).days
+                if days_lag > 1:
+                    logger.warning(f"  [时效性] {label}({table}) 滞后 {days_lag} 天")
+                else:
+                    logger.debug(f"  [时效性] {label}({table}) 滞后 {days_lag} 天 ✅")
+        except Exception as e:
+            logger.debug(f"  {label}时效性检查失败: {e}")
+
+    # 补充数据时效性检查（滞后不超过7天）
+    supplement_tables = [
+        ('margin_cache', '融资融券'),
+        ('adj_factor_cache', '复权因子'),
+    ]
+
+    for table, label in supplement_tables:
+        try:
+            _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
+            if latest:
+                latest_date = datetime.strptime(str(latest), '%Y-%m-%d') if isinstance(latest, str) else latest
+                days_lag = (today - latest_date).days
+                if days_lag > 7:
+                    logger.warning(f"  [时效性] {label}({table}) 滞后 {days_lag} 天")
+                else:
+                    logger.debug(f"  [时效性] {label}({table}) 滞后 {days_lag} 天 ✅")
+        except Exception as e:
+            logger.debug(f"  {label}时效性检查失败: {e}")
+
+    # 背景数据时效性检查（滞后不超过30天）
+    background_tables = [
+        ('fina_indicator_cache', '财务指标'),
+        ('income_cache', '利润表'),
+        ('balancesheet_cache', '资产负债表'),
+        ('cashflow_cache', '现金流量表'),
+    ]
+
+    for table, label in background_tables:
+        try:
+            _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
+            if latest:
+                latest_date = datetime.strptime(str(latest), '%Y-%m-%d') if isinstance(latest, str) else latest
+                days_lag = (today - latest_date).days
+                if days_lag > 30:
+                    logger.warning(f"  [时效性] {label}({table}) 滞后 {days_lag} 天")
+                else:
+                    logger.debug(f"  [时效性] {label}({table}) 滞后 {days_lag} 天 ✅")
+        except Exception as e:
+            logger.debug(f"  {label}时效性检查失败: {e}")
+
+    logger.debug("  [时效性] 检查完成")
+
+
+def _check_data_quality():
+    """355号方案规则4.3：数据值合理性审查（质量层）
+
+    检查项：
+    - 价格字段：close/open/high/low > 0
+    - 成交量字段：vol/amount >= 0
+    - 涨跌幅字段：-20% <= pct_chg <= 20%（排除新股上市首日）
+    - 基本面字段：pe/pb/tot_mv > 0
+    """
+    _ensure_pd()
+    today_fmt = datetime.now().strftime('%Y-%m-%d')
+
+    # 检查价格字段异常（356号：从分库读取）
+    try:
+        price_anomaly = _query_table('daily_cache', """
+            SELECT COUNT(*) FROM daily_cache
+            WHERE trade_date = ? AND (close <= 0 OR open <= 0 OR high <= 0 OR low <= 0)
+        """, [today_fmt])
+        if price_anomaly > 0:
+            logger.warning(f"  [数据质量] 价格异常记录: {price_anomaly} 条")
+    except Exception as e:
+        logger.debug(f"  价格异常检查失败: {e}")
+
+    # 检查成交量字段异常
+    try:
+        vol_anomaly = _query_table('daily_cache', """
+            SELECT COUNT(*) FROM daily_cache
+            WHERE trade_date = ? AND (vol < 0 OR amount < 0)
+        """, [today_fmt])
+        if vol_anomaly > 0:
+            logger.warning(f"  [数据质量] 成交量异常记录: {vol_anomaly} 条")
+    except Exception as e:
+        logger.debug(f"  成交量异常检查失败: {e}")
+
+    # 检查涨跌幅异常（排除新股上市首日）— 363号F55-1修复：AND改为OR
+    try:
+        pct_anomaly = _query_table('daily_cache', """
+            SELECT COUNT(*) FROM daily_cache
+            WHERE trade_date = ? AND (pct_chg > 20 OR pct_chg < -20)
+        """, [today_fmt])
+        if pct_anomaly > 0:
+            logger.warning(f"  [数据质量] 涨跌幅异常记录: {pct_anomaly} 条")
+    except Exception as e:
+        logger.debug(f"  涨跌幅异常检查失败: {e}")
+
+    logger.debug("  [数据质量] 检查完成")
+
+
+def _check_data_consistency():
+    """355号方案规则4.4：数据一致性审查（一致性层）
+
+    检查项：
+    - 跨表一致性：daily_cache与daily_basic_cache的ts_code交集
+    - 时间一致性：同一股票在不同表的日期对齐（363号F55-5新增）
+    - 逻辑一致性：high >= close >= low
+    """
+    today_fmt = datetime.now().strftime('%Y-%m-%d')
+
+    # 检查跨表一致性：daily_cache与daily_basic_cache的ts_code交集
+    try:
+        daily_codes = set(row[0] for row in _ecm.conn.execute(
+            "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date = ?",
+            [today_fmt]
+        ).fetchall())
+        basic_codes = set(row[0] for row in _ecm.conn.execute(
+            "SELECT DISTINCT ts_code FROM daily_basic_cache WHERE trade_date = ?",
+            [today_fmt]
+        ).fetchall())
+
+        if daily_codes and basic_codes:
+            missing_in_basic = daily_codes - basic_codes
+            missing_in_daily = basic_codes - daily_codes
+            if missing_in_basic:
+                logger.warning(f"  [数据一致性] daily_basic缺失: {len(missing_in_basic)} 只股票")
+            if missing_in_daily:
+                logger.warning(f"  [数据一致性] daily_cache缺失: {len(missing_in_daily)} 只股票")
+    except Exception as e:
+        logger.debug(f"  跨表一致性检查失败: {e}")
+
+    # 363号F55-5修复：检查时间一致性（同一股票在不同表的日期差不超过3天）
+    try:
+        time_check = _ecm.conn.execute("""
+            SELECT COUNT(*) FROM (
+                SELECT d.ts_code,
+                       MAX(d.trade_date) as daily_date,
+                       MAX(b.trade_date) as basic_date,
+                       JULIANDAY(MAX(d.trade_date)) - JULIANDAY(MAX(b.trade_date)) as date_diff
+                FROM daily_cache d
+                JOIN daily_basic_cache b ON d.ts_code = b.ts_code
+                WHERE d.trade_date >= date(?, '-7 days')
+                  AND b.trade_date >= date(?, '-7 days')
+                GROUP BY d.ts_code
+                HAVING ABS(date_diff) > 3
+            )
+        """, [today_fmt, today_fmt]).fetchone()[0]
+        if time_check > 0:
+            logger.warning(f"  [数据一致性] 时间不一致: {time_check} 只股票跨表日期差>3天")
+    except Exception as e:
+        logger.debug(f"  时间一致性检查失败: {e}")
+
+    # 检查逻辑一致性：high >= close >= low
+    try:
+        logic_anomaly = _ecm.conn.execute("""
+            SELECT COUNT(*) FROM daily_cache
+            WHERE trade_date = ? AND (high < close OR close < low)
+        """, [today_fmt]).fetchone()[0]
+        if logic_anomaly > 0:
+            logger.warning(f"  [数据一致性] 逻辑异常记录: {logic_anomaly} 条 (high < close 或 close < low)")
+    except Exception as e:
+        logger.debug(f"  逻辑一致性检查失败: {e}")
+
+    logger.debug("  [数据一致性] 检查完成")
 
 
 def _check_watchlist_minute():
@@ -1278,6 +1733,12 @@ def run_daily_sync():
     # 量比自算（Tushare 免费 API 不提供 volume_ratio，计算层自算）
     _compute_volume_ratio(today)
 
+    # 形态评分批量计算（353/358号方案：日终批量 + 缓存）
+    try:
+        _batch_pattern_score(today)
+    except Exception as e:
+        logger.warning(f"  形态评分批量计算失败: {e}")
+
     # ── 补齐空表（迭代4）──
     try:
         n = _batch_margin(today)
@@ -1314,12 +1775,8 @@ def run_daily_sync():
         except Exception as e:
             logger.warning(f"  {label} 同步失败: {e}")
 
-    # 触发指标预计算（后台线程）
-    try:
-        threading.Thread(target=_run_precompute, daemon=True).start()
-        logger.info("  指标预计算已触发（后台）")
-    except Exception as e:
-        logger.warning(f"  指标预计算触发失败: {e}")
+    # 指标预计算已由管道驱动统一管理（_drive_pipeline），不再单独触发
+    # 旧代码 _run_precompute 与管道驱动竞争写入，导致数据丢失
 
     # 财务数据同步（后台低优，不阻塞主同步流程）
     try:
@@ -1543,11 +2000,17 @@ def _run_precompute():
     except Exception as e:
         logger.warning(f"PRESET_COMBOS 因子预计算失败: {e}")
 
-    # ── 4. L2 标签预计算（机会图谱，294号§三梯队7） ──
+    # ── 3.5 RAW-2 原料加工特征提取（357号方案 → pre_feat_cache） ──
     try:
-        _precompute_l2_labels(codes)
+        _precompute_raw_features(codes)
     except Exception as e:
-        logger.warning(f"L2标签预计算失败: {e}")
+        logger.warning(f"RAW-2原料加工失败: {e}")
+
+    # ── 4. [已废弃] L2标签预计算 → 已由RAW-2替代 ──
+    # try:
+    #     _precompute_l2_labels(codes)
+    # except Exception as e:
+    #     logger.warning(f"L2标签预计算失败: {e}")
 
     # ── 5. 策略信号预计算（UnifiedStrategyCore，287号方案 v2.3） ──
     # 333号 v3.0 管道顺序：P4 标签先算当日 → P2 后算（P2 消费当日标签，杜绝"标签昨日/数据今日"时序错位）
@@ -1774,7 +2237,7 @@ def _precompute_l2_labels(codes):
 
                     # 5c. VolumePrice 量价标签 + 缠论买点 + 筹码（P2.5）
                     try:
-                        vp_tags = vps.get_tags(df)
+                        vp_tags = vps._detect_kline_patterns(df)
                         if vp_tags:
                             tags.update(vp_tags)
                     except Exception:
@@ -1837,7 +2300,7 @@ def _precompute_l2_labels(codes):
                     # 5. 机会潜力强度已由 4c2 计算（313号 v4 替代 311 旧评分）
 
                     # 323号 S0：深度字段落库（缠论结构 + 筹码分布 + 资金风险）
-                    # phase_detector 已运行 → _last_chip_indicators 已填充（复用，不重复计算）
+                    # 367号：统一使用 extract_chip_deep_tags，不再依赖 _last_chip_indicators
                     try:
                         from app.opportunity_atlas.tag_extractor import (
                             extract_chanlun_deep_tags, extract_chip_deep_tags,
@@ -1846,12 +2309,7 @@ def _precompute_l2_labels(codes):
                         _deep = {}
                         _deep.update(extract_chanlun_deep_tags(code))
                         _deep.update(extract_fund_risk_tags(code))
-                        # 筹码深度：复用 phase_detector 刚填充的指标，避免重复计算
-                        _chip_inds = getattr(pd_engine, '_last_chip_indicators', {}) or {}
-                        if _chip_inds:
-                            _deep.update(_chip_tags_from_indicators(_chip_inds))
-                        else:
-                            _deep.update(extract_chip_deep_tags(code))
+                        _deep.update(extract_chip_deep_tags(code))
                         # 带 tag_group 写入（dict 格式显式指定 group）
                         _deep_meta = {}
                         for _k, _v in _deep.items():
@@ -1971,9 +2429,10 @@ def _precompute_l2_labels(codes):
 
 
 def _chip_tags_from_indicators(indicators: dict) -> dict:
-    """从 phase_detector._last_chip_indicators 提取筹码深度字段（323号 S0）
+    """[已废弃] 从 phase_detector._last_chip_indicators 提取筹码深度字段（323号 S0）
 
-    复用 phase_detector 已计算的指标（不重复运行引擎），提取 chip_peak/asr/cyqkl 等。
+    367号：此函数已废弃，统一使用 extract_chip_deep_tags() 替代。
+    保留供向后兼容使用，待后续版本删除。
     """
     import json as _json
     out = {}
@@ -1995,6 +2454,460 @@ def _chip_tags_from_indicators(indicators: dict) -> dict:
             v = indicators[key]
             out[key] = _json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
     return out
+
+
+def _precompute_raw_features(codes):
+    """原料加工环节：特征提取（RAW-2 FEAT）→ 写入 pre_feat_cache
+
+    357号方案：从 _precompute_l2_labels 中提取纯原料加工步骤，
+    仅计算10组特征（valuation/sentiment/sector/style/timing/volume_price/chanlun/chip/event/depth），
+    写入 pre_feat_cache（JSON格式，54字段）。
+
+    不含阶段判定/主力在场/机会潜力/仲裁等判定层操作（移到JUD环节）。
+
+    Args:
+        codes: 股票代码列表
+    """
+    _ensure_pd()
+    if not codes:
+        return
+    logger.info(f"RAW-2 原料加工开始: {len(codes)} 只...")
+
+    from app import create_app
+    _flask_app = create_app()
+
+    with _flask_app.app_context():
+        # 延迟导入各引擎
+        from app.opportunity_atlas.valuation_estimator import ValuationEngine
+        from app.services.market_sentiment_service import MarketSentimentService
+        from app.engine.framework.sector_rotation_model import SectorRotationModel
+        from app.opportunity_atlas.time_rhythm_engine import TimeRhythmEngine
+        from app.engine.framework.volume_price_strategy import VolumePriceStrategy
+        from app.engine.framework.chanlun_strategy import get_chanlun_tags as _get_chanlun_tags
+        from app.data.chip_distribution_service import ChipDistributionEstimator
+        from app.opportunity_atlas.event_monitor import EventMonitor
+        from app.opportunity_atlas.tag_extractor import (
+            extract_chanlun_deep_tags, extract_chip_deep_tags,
+            extract_fund_risk_tags,
+        )
+        # 365号批次A：新增引擎导入（pre_feat_cache扩展字段）
+        from app.opportunity_atlas.risk_boundary_builder import _calc_volatility_percentile
+        from app.engine.framework.chip_strategy import MainForceScorer
+        from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
+        from app.opportunity_atlas.dimensions.shared_vol_ratio import calc_vol_ratio
+        from app.opportunity_atlas.signal_attribute_classifier import classify_attribute
+        from app.opportunity_atlas.signal_decay_detector import detect_decay
+
+        # 各引擎初始化
+        ve = ValuationEngine()
+        ms = MarketSentimentService()
+        sr = SectorRotationModel()
+        tre = TimeRhythmEngine()
+        vps = VolumePriceStrategy()
+        cde = ChipDistributionEstimator()
+        em = EventMonitor()
+
+        # 截面基准构建
+        try:
+            ve.build_composite_percentile(_ecm)
+        except Exception:
+            pass
+        try:
+            ve.build_fcf_percentile(_ecm)
+        except Exception:
+            pass
+
+        # 批量加载日线数据
+        all_data: dict[str, pd.DataFrame] = {}
+        for code in codes:
+            try:
+                df = _ecm.get_cached_daily(code)
+                if df is not None and not df.empty:
+                    all_data[code] = df
+            except Exception:
+                pass
+        logger.info(f"  日线数据加载完成: {len(all_data)}/{len(codes)} 只")
+
+        # 预计算板块热度
+        try:
+            sr.compute_all_heat(all_data)
+        except Exception:
+            pass
+
+        # 市场情绪全局值
+        _sentiment_phase_global = 'neutral'
+        try:
+            last_date_row = _ecm.conn.execute(
+                "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+            ).fetchone()
+            if last_date_row:
+                last_date = last_date_row[0]
+                limit_up = _ecm.conn.execute(
+                    "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg > 9.9",
+                    [last_date]
+                ).fetchone()[0]
+                limit_down = _ecm.conn.execute(
+                    "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg < -9.9",
+                    [last_date]
+                ).fetchone()[0]
+                sealing_rate = 0.0
+                try:
+                    rows = _ecm.conn.execute(
+                        "SELECT high, close, pct_chg FROM daily_cache "
+                        "WHERE trade_date=? AND pct_chg > 5",
+                        [last_date]
+                    ).fetchall()
+                    touched = sealed = 0
+                    for high, close, pct in rows:
+                        prev_close = close / (1 + pct / 100)
+                        if high >= prev_close * 1.099:
+                            touched += 1
+                            if close >= prev_close * 1.099:
+                                sealed += 1
+                    if touched > 0:
+                        sealing_rate = round(sealed / touched * 100, 1)
+                except Exception:
+                    pass
+                if limit_up > 50 and sealing_rate > 75:
+                    _sentiment_phase_global = 'climax'
+                elif (limit_up < 40 and sealing_rate < 40) or limit_down > 20:
+                    _sentiment_phase_global = 'ebb'
+                elif limit_up < 20 and sealing_rate < 40:
+                    _sentiment_phase_global = 'ice'
+                else:
+                    _sentiment_phase_global = 'recovery'
+        except Exception:
+            pass
+
+        t0 = time.time()
+        succeeded = 0
+        commit_count = 0
+        BATCH_SIZE = 500
+        trade_date = None
+
+        for code in codes:
+            try:
+                df = all_data.get(code)
+                if df is None or df.empty or len(df) < 5:
+                    continue
+                if trade_date is None:
+                    trade_date = str(df['trade_date'].iloc[-1])[:10]
+
+                features = {}
+
+                # 1. 估值特征（17字段）
+                try:
+                    v_tags = ve.compute_tags(code)
+                    if v_tags:
+                        features['valuation'] = {k: v for k, v in v_tags.items()
+                            if k in ('pe_percentile', 'pb_percentile', 'ps_percentile',
+                                     'pe_percentile_5y', 'pb_percentile_5y', 'ps_percentile_5y',
+                                     'valuation_level', 'valuation_deviation',
+                                     'fcf_yield', 'dividend_yield', 'composite_rating',
+                                     'revenue_growth', 'roe', 'fina_health',
+                                     'asset_anchor_rating', 'earnings_anchor_rating',
+                                     'cashflow_anchor_rating', 'adjusted_anchor_rating')}
+                except Exception as e:
+                    logger.warning(f"RAW估值特征失败 [{code}]: {e}")
+
+                # 2. 情绪特征（2字段：sentiment_phase + bociasi_signal）
+                try:
+                    _sent = {}
+                    # sentiment_phase：始终写入（默认neutral）
+                    try:
+                        sentiment = ms.get_sentiment_phase()
+                        if sentiment.get('data_available'):
+                            _sent['sentiment_phase'] = sentiment['phase']
+                        else:
+                            _sent['sentiment_phase'] = _sentiment_phase_global or 'neutral'
+                    except Exception:
+                        _sent['sentiment_phase'] = _sentiment_phase_global or 'neutral'
+                    # bociasi_signal：跨市场资金情绪（读HS300指数）
+                    try:
+                        from app.services.benchmark_service import BenchmarkService
+                        bm = BenchmarkService()
+                        idx_df = bm.get_index_daily('000300.SH')
+                        if idx_df is not None and len(idx_df) >= 20:
+                            idx_close = idx_df['close'].values
+                            fast = float(np.mean(idx_close[-5:]))
+                            slow = float(np.mean(idx_close[-20:]))
+                            _sent['bociasi_signal'] = 'bullish' if fast > slow else 'bearish'
+                        else:
+                            _sent['bociasi_signal'] = 'neutral'
+                    except Exception:
+                        _sent['bociasi_signal'] = 'neutral'
+                    features['sentiment'] = _sent
+                except Exception as e:
+                    logger.warning(f"RAW情绪特征失败 [{code}]: {e}")
+
+                # 3. 板块特征（4字段）
+                try:
+                    sector = sr.evaluate(code)
+                    features['sector'] = {
+                        'sector_heat': sector.get('sector_heat', 0),
+                        'sector_momentum': sector.get('sector_momentum', 0),
+                        'sector_rank': sector.get('sector_rank', 0),
+                        'is_sector_leader': sector.get('is_sector_leader', False),
+                    }
+                except Exception as e:
+                    logger.warning(f"RAW板块特征失败 [{code}]: {e}")
+
+                # 4. 风格特征（2字段：style_exposure + size_factor）
+                try:
+                    style = _compute_style_exposure(code, {}, df)
+                    _sz = 'unknown'
+                    try:
+                        _db = _ecm.get_cached_daily_basic(code)
+                        if _db is not None and not _db.empty and 'circ_mv' in _db.columns:
+                            circ = float(_db['circ_mv'].iloc[-1] or 0)
+                            if circ > 5e10:
+                                _sz = 'large_cap'
+                            elif circ > 1e10:
+                                _sz = 'mid_cap'
+                            else:
+                                _sz = 'small_cap'
+                    except Exception:
+                        pass
+                    features['style'] = {
+                        'style_exposure': style if isinstance(style, str) else 'balanced',
+                        'size_factor': _sz,
+                    }
+                except Exception as e:
+                    logger.warning(f"RAW风格特征失败 [{code}]: {e}")
+
+                # 5. 时间特征（3字段）
+                if len(df) >= 30:
+                    try:
+                        tr_tags = tre.compute_tags(df)
+                        if tr_tags:
+                            features['timing'] = {k: v for k, v in tr_tags.items()
+                                if k in ('time_rhythm', 'cycle_position', 'turnover_signal')}
+                    except Exception as e:
+                        logger.warning(f"RAW时间特征失败 [{code}]: {e}")
+
+                # 6. 量价特征（6字段）
+                if len(df) >= 20:
+                    try:
+                        vp_tags = vps._detect_kline_patterns(df)
+                        _simple = {}
+                        _add_vp_simple_tags(df, _simple)
+                        features['volume_price'] = {
+                            'kline_pattern': vp_tags.get('pattern_signal', 'none'),
+                            'ma_alignment': _simple.get('ma_alignment', 'neutral'),
+                            'volume_price_fit': _simple.get('volume_price_fit', 'neutral'),
+                            'gap_type': _simple.get('gap_type', 'none'),
+                            'breakout_attempts': _simple.get('breakout_attempts', 0),
+                            'vol_price_ratio': _simple.get('vol_price_ratio', 1.0),
+                        }
+                    except Exception as e:
+                        logger.warning(f"RAW量价特征失败 [{code}]: {e}")
+
+                # 7. 缠论特征（5字段）
+                if len(df) >= 30:
+                    try:
+                        from app.engine.framework.chanlun_strategy import ChanlunAnalyzer
+                        cl = ChanlunAnalyzer()
+                        cl_result = cl.analyze(df)
+                        cl_tags = _get_chanlun_tags(cl_result)
+                        features['chanlun'] = {k: v for k, v in (cl_tags or {}).items()
+                            if k in ('trend_direction', 'zhongshu_count', 'buy_sell_point',
+                                     'bi_count', 'duan_count')}
+                    except Exception as e:
+                        logger.warning(f"RAW缠论特征失败 [{code}]: {e}")
+
+                # 8. 筹码特征（4字段）
+                if len(df) >= 30:
+                    try:
+                        chip_tags = cde.get_tags(df)
+                        features['chip'] = {k: v for k, v in (chip_tags or {}).items()
+                            if k in ('chip_position', 'chip_concentration', 'asr', 'cyqkl')}
+                    except Exception as e:
+                        logger.warning(f"RAW筹码特征失败 [{code}]: {e}")
+
+                # 9. 事件特征（3字段）
+                try:
+                    _evt_tags = {}
+                    _update_with_event_tags(code, _evt_tags)
+                    features['event'] = {
+                        'catalyst_event': _evt_tags.get('catalyst_event', 'none'),
+                        'catalyst_impact': _evt_tags.get('catalyst_impact', 'neutral'),
+                        'event_composite_score': _evt_tags.get('event_composite_score', 0),
+                    }
+                except Exception as e:
+                    logger.warning(f"RAW事件特征失败 [{code}]: {e}")
+
+                # 10. 深度字段（8字段，独立调用不依赖 phase_detector）
+                try:
+                    _depth = {}
+                    _depth.update(extract_chanlun_deep_tags(code))
+                    _depth.update(extract_chip_deep_tags(code))
+                    _depth.update(extract_fund_risk_tags(code))
+                    features['depth'] = {
+                        'hold_float_ratio': _depth.get('hold_float_ratio'),
+                        'turnover_rate': _depth.get('turnover_rate'),
+                        'main_force_phase': _depth.get('main_force_phase'),
+                        'phase_confidence': _depth.get('phase_confidence'),
+                        'fund_flow': _depth.get('fund_flow'),
+                        'capital_nature': _depth.get('capital_nature'),
+                        'main_force_presence': _depth.get('main_force_presence'),
+                        'presence_evidence': _depth.get('presence_evidence'),
+                    }
+                except Exception as e:
+                    logger.warning(f"RAW深度字段失败 [{code}]: {e}")
+
+                # 预提取各特征组引用（供后续扩展字段使用）
+                _cl = features.get('chanlun', {})
+                _vp_f = features.get('volume_price', {})
+                _chip_f = features.get('chip', {})
+                _depth_f = features.get('depth', {})
+
+                # 11. 衍生特征（从已有特征组中提取下游消费方需要的扁平key）
+                try:
+                    _derived = {}
+                    _val = features.get('valuation', {})
+                    # 位置维
+                    _derived['price_position'] = 'low_zone' if _cl.get('buy_sell_point', '') in ('first_buy', 'second_buy') else ('high_zone' if _cl.get('buy_sell_point', '') in ('first_sell', 'second_sell') else 'mid')
+                    _derived['support_resistance'] = _depth_f.get('support_resistance', '{}')
+                    # 风险维
+                    _derived['volatility_level'] = _vp_f.get('vol_price_ratio', 1.0) and ('high' if abs(float(_vp_f.get('vol_price_ratio', 1.0) or 1) - 1) > 0.5 else 'low')
+                    _derived['risk_level'] = 'HIGH' if _depth_f.get('main_force_phase') == 'shipping' else 'LOW'
+                    # 信号确认
+                    _derived['right_side_confirm'] = 'strong_confirm' if _cl.get('buy_sell_point', '') in ('first_buy', 'second_buy') and _vp_f.get('volume_price_fit') == 'healthy' else 'unconfirmed'
+                    _derived['pattern_signal'] = _vp_f.get('kline_pattern', 'none')
+                    # 生命信号
+                    _derived['active_signal'] = _cl.get('buy_sell_point', '') if _cl.get('buy_sell_point', '') not in ('none',) else None
+                    # 状态标签
+                    _derived['state_label'] = _cl.get('trend_direction', 'unknown')
+                    _derived['trend_alignment'] = 'aligned' if _cl.get('trend_direction') == 'up' and _vp_f.get('ma_alignment') == 'bullish' else 'misaligned'
+                    # 利润比
+                    _derived['profit_ratio'] = _chip_f.get('chip_position', 0)
+                    if _derived:
+                        features['derived'] = _derived
+                except Exception as e:
+                    logger.warning(f"RAW衍生特征失败 [{code}]: {e}")
+
+                # 12. 风险边界扩展字段（365号批次A / Phase 2）
+                try:
+                    _risk_feat = {}
+                    if len(df) >= 20:
+                        _risk_feat['volatility_percentile'] = _calc_volatility_percentile(df)
+                    else:
+                        _risk_feat['volatility_percentile'] = None
+                    features['risk_ext'] = _risk_feat
+                except Exception as e:
+                    logger.warning(f"RAW风险扩展字段失败 [{code}]: {e}")
+
+                # 13. 资金筹码扩展字段（365号批次A / Phase 3）
+                try:
+                    _chip_fund_feat = {}
+                    # fund_flow_strength: 大单净流入强度（0-1）
+                    try:
+                        mfs = MainForceScorer()
+                        _sub = mfs.get_sub_scores(df, symbol=code)
+                        _chip_fund_feat['fund_flow_strength'] = min(1.0, max(0.0, (_sub.get('total', 0) or 0) / 10.0))
+                    except Exception:
+                        _chip_fund_feat['fund_flow_strength'] = None
+                    # chip_transfer: 筹码转移方向
+                    _chip_fund_feat['chip_transfer'] = _depth_f.get('main_force_phase', 'unknown') if _depth_f.get('main_force_phase') in ('accumulating', 'shipping') else 'neutral'
+                    # control_degree: 控盘度
+                    _chip_fund_feat['control_degree'] = _depth.get('hold_float_ratio')
+                    features['chip_fund_ext'] = _chip_fund_feat
+                except Exception as e:
+                    logger.warning(f"RAW资金筹码扩展字段失败 [{code}]: {e}")
+
+                # 14. 情绪环境扩展字段（365号批次A+B / Phase 4）
+                try:
+                    from app.opportunity_atlas.emotion_temperature import calc_emotion_temperature
+                    _emotion_feat = {}
+                    # emotion_temperature: 0-100温度值
+                    _sent = features.get('sentiment', {})
+                    _sect = features.get('sector', {})
+                    _vp_f_em = features.get('volume_price', {})
+                    _emotion_feat['emotion_temperature'] = calc_emotion_temperature(
+                        sentiment_phase=_sent.get('sentiment_phase', 'neutral'),
+                        limit_up_count=_sent.get('limit_up_count', 0) if isinstance(_sent.get('limit_up_count'), int) else 0,
+                        sealing_rate=_sent.get('sealing_rate', 50.0) if isinstance(_sent.get('sealing_rate'), (int, float)) else 50.0,
+                        sector_rank=_sect.get('sector_rank'),
+                        volume_price_fit=_vp_f_em.get('volume_price_fit', 'neutral'),
+                    )
+                    # market_emotion: 市场情绪阶段
+                    _emotion_feat['market_emotion'] = _sent.get('sentiment_phase', 'neutral')
+                    # sector_emotion: 板块情绪
+                    _emotion_feat['sector_emotion'] = 'hot' if (_sect.get('sector_rank') or 999) <= 10 else 'normal'
+                    # stock_emotion: 个股情绪
+                    _emotion_feat['stock_emotion'] = 'positive' if _vp_f_em.get('volume_price_fit') == 'healthy' else ('negative' if _vp_f_em.get('volume_price_fit') == 'diverging' else 'neutral')
+                    features['emotion_ext'] = _emotion_feat
+                except Exception as e:
+                    logger.warning(f"RAW情绪扩展字段失败 [{code}]: {e}")
+
+                # 15. 量价健康扩展字段（365号批次A / Phase 5）
+                try:
+                    _vp_health_feat = {}
+                    # vp_score: 10分制评分（占位，使用粗略估算）
+                    _vp_health_feat['vp_score'] = None  # 待 vp_health_builder 独立函数就绪后填充
+                    # vp_state_type: 量价状态类型
+                    _vp_stage = _vp_f.get('kline_pattern', '')
+                    _vp_health_feat['vp_state_type'] = 'fast_line' if '突破' in str(_vp_stage) else ('slow_line' if '回踩' in str(_vp_stage) else 'background')
+                    # volume_energy: 量能强度
+                    if len(df) >= 5:
+                        _vols = df['volume'].values
+                        _avg5 = float(_vols[-5:].mean()) if len(_vols) >= 5 else float(_vols.mean())
+                        _vr = calc_vol_ratio(float(_vols[-1]), _avg5)
+                        _vp_health_feat['volume_energy'] = min(1.0, max(0.0, (_vr - 0.5) / 2.0)) if _vr else None
+                    else:
+                        _vp_health_feat['volume_energy'] = None
+                    features['vp_health_ext'] = _vp_health_feat
+                except Exception as e:
+                    logger.warning(f"RAW量价健康扩展字段失败 [{code}]: {e}")
+
+                # 16. 结构位置扩展字段（365号批次A / Phase 6）
+                try:
+                    _struct_feat = {}
+                    _sr_result = calc_support_resistance(df)
+                    _struct_feat['support_price'] = _sr_result.get('support_price')
+                    _struct_feat['resistance_price'] = _sr_result.get('resistance_price')
+                    # indicator_status: 均线排列+趋势方向综合
+                    _ma = _vp_f.get('ma_alignment', '')
+                    _trend = _cl.get('trend_direction', '')
+                    _struct_feat['indicator_status'] = f"ma={_ma},trend={_trend}"
+                    features['structure_ext'] = _struct_feat
+                except Exception as e:
+                    logger.warning(f"RAW结构位置扩展字段失败 [{code}]: {e}")
+
+                # 17. 信号确认扩展字段（365号批次A / Phase 7）
+                try:
+                    _signal_feat = {}
+                    _signal_feat['signal_attribute'] = _derived.get('right_side_confirm', 'unconfirmed')
+                    # decay_score: 衰减检测
+                    try:
+                        _decay_result = detect_decay(_derived)
+                        _signal_feat['decay_score'] = _decay_result.get('overall_score', 0)
+                    except Exception:
+                        _signal_feat['decay_score'] = None
+                    # resonance_score: 共振评分（占位）
+                    _signal_feat['resonance_score'] = None
+                    features['signal_ext'] = _signal_feat
+                except Exception as e:
+                    logger.warning(f"RAW信号确认扩展字段失败 [{code}]: {e}")
+
+                # 写入 pre_feat_cache
+                if features:
+                    _ecm.cache_pre_feat(code, trade_date, features)
+                    succeeded += 1
+                    commit_count += 1
+                    if commit_count >= BATCH_SIZE:
+                        _ecm.conn.commit()
+                        commit_count = 0
+
+            except Exception:
+                continue
+
+        if commit_count > 0:
+            _ecm.conn.commit()
+
+        elapsed = time.time() - t0
+        logger.info(f"RAW-2 原料加工完成: {succeeded}/{len(codes)} 只, 耗时 {elapsed:.1f}s"
+                    f", trade_date={trade_date}")
 
 
 def _add_vp_simple_tags(df, tags):
@@ -3074,9 +3987,61 @@ def _build_treemap_snapshot(codes: list[str]):
         """)
         _ecm.conn.execute("""
             INSERT OR REPLACE INTO treemap_snapshot_history
-                SELECT * FROM treemap_snapshot
+                SELECT ts_code, snapshot_date, name, industry,
+                close, pct_chg, total_mv, trade_date,
+                open, high, low, amplitude, pe, pb,
+                amount, turnover_rate, circ_mv, signal_strength,
+                valuation_level, valuation_deviation, main_force_phase,
+                phase_confidence, sentiment_phase, sector_heat,
+                fina_health, opportunity_type, trend_alignment,
+                price_position, fund_flow, capital_nature,
+                chip_concentration, volatility_level, dividend_yield,
+                composite_rating, opportunity_label, evidence_count,
+                right_side_confirm, confirm_evidence, opportunity_profile,
+                entry_signals, exit_conditions, consensus_rate,
+                conflict, main_force_presence, presence_evidence,
+                opportunity_state, state_evidence
+                FROM treemap_snapshot
         """)
         _ecm.conn.commit()
+        # B7修复：同步 treemap_snapshot_history 到分库 snapshot_cache.db
+        try:
+            from app.data.sharding_manager import sharding_manager
+            shard_db = sharding_manager.get_db_for_table('treemap_snapshot_history')
+            if shard_db:
+                shard_conn = sharding_manager.get_connection(shard_db)
+                # 确保分库表存在
+                shard_conn.execute("""
+                    CREATE TABLE IF NOT EXISTS treemap_snapshot_history (
+                        ts_code TEXT, snapshot_date TEXT, name TEXT, industry TEXT,
+                        close REAL, pct_chg REAL, total_mv REAL, trade_date TEXT,
+                        open REAL, high REAL, low REAL, amplitude REAL, pe REAL, pb REAL,
+                        amount REAL, turnover_rate REAL, circ_mv REAL, signal_strength REAL,
+                        valuation_level TEXT, valuation_deviation REAL, main_force_phase TEXT,
+                        phase_confidence REAL, sentiment_phase TEXT, sector_heat TEXT,
+                        fina_health TEXT, opportunity_type TEXT, trend_alignment TEXT,
+                        price_position TEXT, fund_flow TEXT, capital_nature TEXT,
+                        chip_concentration TEXT, volatility_level TEXT, dividend_yield REAL,
+                        composite_rating REAL, opportunity_label TEXT, evidence_count INTEGER,
+                        right_side_confirm TEXT, confirm_evidence TEXT, opportunity_profile TEXT,
+                        entry_signals TEXT, exit_conditions TEXT, consensus_rate REAL,
+                        conflict TEXT, main_force_presence TEXT, presence_evidence TEXT,
+                        opportunity_state TEXT, state_evidence TEXT,
+                        PRIMARY KEY (ts_code, snapshot_date)
+                    )
+                """)
+                # 从主库读取数据写入分库
+                rows = _ecm.conn.execute("SELECT * FROM treemap_snapshot_history").fetchall()
+                if rows:
+                    cols = 'ts_code,snapshot_date,name,industry,close,pct_chg,total_mv,trade_date,open,high,low,amplitude,pe,pb,amount,turnover_rate,circ_mv,signal_strength,valuation_level,valuation_deviation,main_force_phase,phase_confidence,sentiment_phase,sector_heat,fina_health,opportunity_type,trend_alignment,price_position,fund_flow,capital_nature,chip_concentration,volatility_level,dividend_yield,composite_rating,opportunity_label,evidence_count,right_side_confirm,confirm_evidence,opportunity_profile,entry_signals,exit_conditions,consensus_rate,conflict,main_force_presence,presence_evidence,opportunity_state,state_evidence'
+                    ph = ','.join(['?' for _ in cols.split(',')])
+                    shard_conn.executemany(
+                        f"INSERT OR REPLACE INTO treemap_snapshot_history ({cols}) VALUES ({ph})",
+                        rows)
+                    shard_conn.commit()
+                    logger.debug(f"treemap_snapshot_history 分库同步: {len(rows)} 行")
+        except Exception as e:
+            logger.warning(f"treemap_snapshot_history 分库同步失败: {e}")
     except Exception as e:
         logger.warning(f"treemap_snapshot 历史归档失败: {e}")
 
@@ -3122,24 +4087,43 @@ def _build_status_snapshot(codes: list[str]):
                 dim_states TEXT, status_bar TEXT, opportunity_state TEXT,
                 state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
                 direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
+                summary_text TEXT, one_liner_detail TEXT, dim_engine_results TEXT,
                 created_at TEXT
             )
         """)
         written = 0
+        from app.opportunity_atlas.status_engine import generate_summary_text
+        from app.opportunity_atlas.status_engine import build_seven_dim_report
+        from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
         for code in codes:
             try:
                 row = engine.evaluate(code)
                 if not row:
                     continue
+                # 366号步骤2：计算geo参数并传入build_seven_dim_report
+                geo = {}
+                try:
+                    df = _ecm.get_cached_daily(code)
+                    if df is not None and not df.empty:
+                        geo = calc_support_resistance(df) or {}
+                except Exception:
+                    pass
+                # 364a Phase 1：生成summary_text和one_liner_detail
+                summary_text = generate_summary_text(row)
+                one_liner = build_seven_dim_report(row, geo=geo)
+                one_liner_json = json.dumps(one_liner, ensure_ascii=False)
                 _ecm.conn.execute(
                     f"INSERT OR REPLACE INTO {_NEW} (ts_code, snapshot_date, trade_date,"
                     f" dim_states, status_bar, opportunity_state, state_evidence,"
-                    f" conflict_evidence, consensus_rate, direction, l0, lifecycle, advice_params)"
-                    f" VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    f" conflict_evidence, consensus_rate, direction, l0, lifecycle, advice_params,"
+                    f" summary_text, one_liner_detail, dim_engine_results)"
+                    f" VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [code, trade_date, row['dim_states'], row['status_bar'],
                      row['opportunity_state'], row['state_evidence'],
                      row['conflict_evidence'], row['consensus_rate'],
-                     row['direction'], row['l0'], row['lifecycle'], row['advice_params']])
+                     row['direction'], row['l0'], row['lifecycle'], row['advice_params'],
+                     summary_text, one_liner_json,
+                     row.get('dim_engine_results')])
                 written += 1
             except Exception as e:
                 logger.warning(f"status_snapshot {code} 生成失败: {e}")
@@ -3168,6 +4152,32 @@ def _build_status_snapshot(codes: list[str]):
                 FROM status_snapshot
             """)
             _ecm.conn.commit()
+            # B7修复：同步 status_snapshot_history 到分库 snapshot_cache.db
+            try:
+                from app.data.sharding_manager import sharding_manager
+                shard_db = sharding_manager.get_db_for_table('status_snapshot_history')
+                if shard_db:
+                    shard_conn = sharding_manager.get_connection(shard_db)
+                    shard_conn.execute("""
+                        CREATE TABLE IF NOT EXISTS status_snapshot_history (
+                            ts_code TEXT, snapshot_date TEXT, trade_date TEXT,
+                            dim_states TEXT, status_bar TEXT, opportunity_state TEXT,
+                            state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
+                            direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
+                            PRIMARY KEY (ts_code, snapshot_date)
+                        )
+                    """)
+                    rows = _ecm.conn.execute("SELECT * FROM status_snapshot_history").fetchall()
+                    if rows:
+                        cols = 'ts_code,snapshot_date,trade_date,dim_states,status_bar,opportunity_state,state_evidence,conflict_evidence,consensus_rate,direction,l0,lifecycle,advice_params'
+                        ph = ','.join(['?' for _ in cols.split(',')])
+                        shard_conn.executemany(
+                            f"INSERT OR REPLACE INTO status_snapshot_history ({cols}) VALUES ({ph})",
+                            rows)
+                        shard_conn.commit()
+                        logger.debug(f"status_snapshot_history 分库同步: {len(rows)} 行")
+            except Exception as e:
+                logger.warning(f"status_snapshot_history 分库同步失败: {e}")
         except Exception as e:
             logger.warning(f"status_snapshot 历史归档失败: {e}")
         _ecm.conn.execute("DROP TABLE IF EXISTS status_snapshot")
@@ -3198,7 +4208,17 @@ def _safe_int(v):
 # ══════════════════════════════════════════════════════════
 
 def _is_market_day() -> bool:
-    return datetime.now().weekday() < 5
+    """判断是否为交易日（考虑法定节假日）
+
+    使用 trading_hours.py 的 is_holiday() 函数判断，
+    替代原有的仅判断工作日逻辑（weekday < 5）。
+    """
+    try:
+        from app.utils.trading_hours import is_holiday
+        return not is_holiday(datetime.now())
+    except ImportError:
+        # 降级：如果 trading_hours 模块不可用，仅判断工作日
+        return datetime.now().weekday() < 5
 
 
 def _is_pipeline_complete(pipeline_date: str) -> bool:
@@ -3206,8 +4226,8 @@ def _is_pipeline_complete(pipeline_date: str) -> bool:
     try:
         row = _ecm.conn.execute(
             "SELECT COUNT(*) FROM pipeline_status "
-            "WHERE pipeline_date=? AND step_id IN ('C1','C2','C3','C4','C5','C6',"
-            "'P1','P2','P3','P4','S1') AND status='done'",
+            "WHERE pipeline_date=? AND step_id IN ('COL-1','COL-2','COL-3','COL-4','COL-5','COL-6',"
+            "'RAW-1','RAW-2','RAW-3','SIG','OUT') AND status='done'",
             [pipeline_date]
         ).fetchone()
         return row and row[0] >= 11  # 11 个环节全 done
@@ -3237,7 +4257,7 @@ def _is_precompute_in_progress() -> bool:
         data_date_compact = data_date.replace('-', '')
         row = _ecm.conn.execute(
             "SELECT COUNT(*) FROM pipeline_status "
-            "WHERE pipeline_date=? AND step_id IN ('P2','P4','S1') AND status!='done'",
+            "WHERE pipeline_date=? AND step_id IN ('SIG','RAW-2','OUT') AND status!='done'",
             [data_date_compact]
         ).fetchone()
         return bool(row and row[0] > 0)
@@ -3256,10 +4276,16 @@ def _consume_sync_requests_batch():
     daemon 启动后立即消费，不等主循环首个 tick。
     """
     pending = _ecm.consume_pending_requests()
+    processed = 0
+    MAX_PER_TICK = 50  # 每tick最多处理50条，避免阻塞管道
     for req in pending:
         logger.info(f"消费 sync_requests: id={req['id']} type={req['task_type']} ts_code={req.get('ts_code')}")
         try:
-            if req['task_type'] == 'full_daily':
+            # 跳过已过时的 factor_precompute 请求（P3 管道会统一处理）
+            if req['task_type'] == 'factor_precompute':
+                _ecm.mark_request_done(req['id'])
+                continue
+            elif req['task_type'] == 'full_daily':
                 _batch_daily(datetime.now().strftime('%Y%m%d'))
                 _batch_daily_basic(datetime.now().strftime('%Y%m%d'))
             elif req['task_type'] == 'full_moneyflow':
@@ -3289,6 +4315,10 @@ def _consume_sync_requests_batch():
         except Exception as e:
             _ecm.mark_request_failed(req['id'])
             logger.warning(f"  sync_request {req['id']} 失败: {e}")
+        processed += 1
+        if processed >= MAX_PER_TICK:
+            logger.info(f"  sync_requests 本轮处理 {processed} 条，剩余下轮继续")
+            break
 
 
 def _recover_stale_running(timeout_hours: float = 4.0) -> int:
@@ -3359,9 +4389,23 @@ def _drive_pipeline():
     每 30s tick 由主循环调用一次。每次只推进一个环节。
     327阶段2：数据驱动——基于 daily_cache 最新交易日（非当前日期）推进，
     实现任意时间开机（含错过15:30/隔日）自动补算。
+
+    355号方案规则11：分时段采集策略
+    - 交易时段(trading)：执行盘中实时采集
+    - 准备时段(preparing)：执行数据准备和系统检查
+    - 结算时段(settlement)：执行日终数据采集
+    - 维护时段(maintenance)：执行数据维护和备份
     """
     # 327阶段1：先清理超时 running 残留（防止重启后永久卡死）
     _recover_stale_running()
+
+    # 355号方案规则11：分时段采集策略
+    try:
+        from app.utils.trading_hours import get_session_for_collection
+        collection_session = get_session_for_collection()
+        logger.debug(f"当前采集时段: {collection_session}")
+    except ImportError:
+        collection_session = 'maintenance'
 
     # 327阶段2：确定有效数据日期（最新完整交易日）
     data_date = _get_latest_data_date()
@@ -3378,9 +4422,9 @@ def _drive_pipeline():
         return
 
     # 数据量门槛（该数据日期行数充足才推进，防止半载数据触发）
-    has_data = _ecm.conn.execute(
-        "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [data_date]
-    ).fetchone()[0] >= 4000
+    # 356号：从分库读取（daily_cache 已迁移到 market_cache.db）
+    has_data = _query_table('daily_cache',
+        "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [data_date]) >= 4000
     if not has_data:
         return  # 数据未完整到达，下一 tick 再检查
 
@@ -3392,23 +4436,23 @@ def _drive_pipeline():
     status = _ecm.load_pipeline_status(today)
 
     # ── 采集阶段 C1→C6 ──
-    # 327阶段2修正：数据驱动下，若 C1-C6 未全部 done 且数据日期已完整，
+    # 327阶段2修正：数据驱动下，若 COL-1~COL-6 未全部 done 且数据日期已完整，
     # 直接标记 done 跳过（数据已存在，避免用 data_date 重采旧日期）。
-    # 注意：C6 概念板块无日期需独立采集；若采集环节已 done 则正常 continue。
+    # 注意：COL-6 概念板块无日期需独立采集；若采集环节已 done 则正常 continue。
     # 数据缺失场景由完整性检查（run_integrity_check）独立补采，不在此阻塞。
-    COLLECT = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6']
+    COLLECT = ['COL-1', 'COL-2', 'COL-3', 'COL-4', 'COL-5', 'COL-6']
     for sid, func, arg in [
-        ('C1', _batch_daily, today_fmt),
-        ('C2', _batch_daily_basic, today_fmt),
-        ('C3', _batch_moneyflow, today_fmt),
-        ('C4', _batch_stk_limit, today_fmt),
-        ('C5', _batch_lhb, today_fmt),
-        ('C6', _batch_concept, None),
+        ('COL-1', _batch_daily, today_fmt),
+        ('COL-2', _batch_daily_basic, today_fmt),
+        ('COL-3', _batch_moneyflow, today_fmt),
+        ('COL-4', _batch_stk_limit, today_fmt),
+        ('COL-5', _batch_lhb, today_fmt),
+        ('COL-6', _batch_concept, None),
     ]:
         if status.get(sid, {}).get('status') in ('done', 'running'):
             continue
         # 数据日期已完整 → 采集环节直接标记 done（数据已存在，无需重采）
-        if sid != 'C6':  # C6 概念板块需独立采集（无日期）
+        if sid != 'COL-6':  # COL-6 概念板块需独立采集（无日期）
             _ecm.conn.execute(
                 "UPDATE pipeline_status SET status='done', completed_at=CURRENT_TIMESTAMP, "
                 "detail='数据已完整，采集跳过' WHERE pipeline_date=? AND step_id=?",
@@ -3419,7 +4463,7 @@ def _drive_pipeline():
         _run_pipeline_step(today, sid, func, arg)
         return  # 每 tick 只推进一个环节
 
-    # C1~C6 有 failed？重试
+    # COL-1~COL-6 有 failed？重试
     if _has_failed(status, COLLECT):
         for sid in COLLECT:
             if status.get(sid, {}).get('status') == 'failed':
@@ -3433,30 +4477,29 @@ def _drive_pipeline():
                     _ecm.conn.commit()
                 return  # 每 tick 重试一个
 
-    # 进入 P 阶段：需要 C1~C6 全部 done
+    # 进入 RAW 阶段：需要 COL-1~COL-6 全部 done
     if not _all_steps_done(status, COLLECT):
         return
 
-    # ── 预计算阶段 P1→P4 ──
+    # ── 原料数据加工阶段 RAW-1(IND) → RAW-2(FEAT) → RAW-3(FAC) ──
     codes = _get_active_codes(today_fmt)
     if not codes:
         return
 
-    # 333号v3.0：P4标签先算（当日）→ P2后算（消费当日标签）
-    PRECOMPUTE = ['P1', 'P4', 'P2', 'P3']
+    # 353号总纲：RAW-1(IND) → RAW-2(FEAT) → RAW-3(FAC)
+    RAW_STEPS = ['RAW-1', 'RAW-2', 'RAW-3']
     for sid, func in [
-        ('P1', lambda: _precompute_indicators(codes)),
-        ('P4', lambda: _precompute_l2_labels(codes)),
-        ('P2', lambda: _precompute_strategy_signals(codes)),
-        ('P3', lambda: _precompute_preset_combos(codes)),
+        ('RAW-1', lambda: _precompute_indicators(codes)),
+        ('RAW-2', lambda: _precompute_raw_features(codes)),
+        ('RAW-3', lambda: _precompute_preset_combos(codes)),
     ]:
         if status.get(sid, {}).get('status') in ('done', 'running'):
             continue
         _run_pipeline_step(today, sid, func, None)
         return
 
-    if _has_failed(status, PRECOMPUTE):
-        for sid in PRECOMPUTE:
+    if _has_failed(status, RAW_STEPS):
+        for sid in RAW_STEPS:
             if status.get(sid, {}).get('status') == 'failed':
                 rc = status[sid].get('retry_count', 0)
                 if rc < 3:
@@ -3468,17 +4511,38 @@ def _drive_pipeline():
                     _ecm.conn.commit()
                 return
 
-    if not _all_steps_done(status, PRECOMPUTE):
+    if not _all_steps_done(status, RAW_STEPS):
         return
 
-    # ── 快照构建阶段 S1 ──
-    if status.get('S1', {}).get('status') != 'done':
-        # 337号 S2.6 + 336号 S2.5：成品仓 status_snapshot 先行构建（L2 输出），
-        # treemap_snapshot 后建（consensus/conflict/state 从 status_snapshot 取，切 L1/L2 口径）
-        def _s1_build(_codes):
+    # ── 策略分析阶段 SIG ──
+    if status.get('SIG', {}).get('status') != 'done':
+        def _sig_build(_codes):
+            _precompute_strategy_signals(_codes)
+        _run_pipeline_step(today, 'SIG', _sig_build, codes)
+        return
+
+    if _has_failed(status, ['SIG']):
+        for sid in ['SIG']:
+            if status.get(sid, {}).get('status') == 'failed':
+                rc = status[sid].get('retry_count', 0)
+                if rc < 3:
+                    _ecm.conn.execute(
+                        "UPDATE pipeline_status SET status='pending', retry_count=? "
+                        "WHERE pipeline_date=? AND step_id=?",
+                        [rc + 1, today, sid]
+                    )
+                    _ecm.conn.commit()
+                return
+
+    if not _all_steps_done(status, ['SIG']):
+        return
+
+    # ── 成品仓阶段 OUT ──
+    if status.get('OUT', {}).get('status') != 'done':
+        def _out_build(_codes):
             _build_status_snapshot(_codes)
             _build_treemap_snapshot(_codes)
-        _run_pipeline_step(today, 'S1', _s1_build, codes)
+        _run_pipeline_step(today, 'OUT', _out_build, codes)
         return
 
     logger.info(f"  [管道] 今日全链路完成 ✅")
@@ -3546,7 +4610,7 @@ def _precompute_strategy_signals(codes):
         for ts_code, result in results.items():
             try:
                 rd = result.to_dict()
-                rows.append((ts_code, rd.get('trade_date', datetime.now().strftime('%Y%m%d')),
+                rows.append((ts_code, rd.get('trade_date', datetime.now().strftime('%Y-%m-%d')),
                              _json.dumps(rd, ensure_ascii=False, default=str), 1))
             except Exception:
                 continue
@@ -3954,6 +5018,11 @@ def main():
     _ecm = get_ecm_instance()
     logger.info("ECM 就绪（全局单例）")
 
+    # 356号方案：初始化分库管理器（指向正确的 data 目录）
+    from app.data.sharding_manager import init_sharding
+    init_sharding(os.environ.get('DATA_DIR', 'data'))
+    logger.info("分库管理器就绪")
+
     # 启动采集器
     collectors = _start_collectors()
 
@@ -3988,11 +5057,39 @@ def main():
     # 主循环（每 30 秒检查一次）
     _last_patrol = 0
     _last_ckpt = 0
+    _last_session = None  # 355号方案规则11：时段切换跟踪
 
     logger.info("data_daemon 进入主循环（管道驱动）")
     while _running:
         now = datetime.now()
         ts = time.time()
+
+        # 355号方案规则11：时段切换机制
+        try:
+            from app.utils.trading_hours import get_current_session, get_session_for_collection
+            current_session = get_current_session()
+            collection_session = get_session_for_collection()
+
+            # 检测时段切换
+            if _last_session is not None and _last_session != current_session:
+                logger.info(f"时段切换: {_last_session} → {current_session} (采集时段: {collection_session})")
+
+                # 时段切换时执行相应操作
+                if current_session == 'close' and _last_session == 'afternoon':
+                    # 收盘处理时段开始，触发日终同步
+                    logger.info("收盘处理时段开始，触发日终同步...")
+                    try:
+                        run_daily_sync()
+                    except Exception as e:
+                        logger.warning(f"日终同步失败: {e}")
+
+                elif current_session == 'morning' and _last_session in ('off', 'night'):
+                    # 开盘前时段结束，上午盘开始
+                    logger.info("上午盘开始，启动盘中采集...")
+
+            _last_session = current_session
+        except ImportError:
+            pass
 
         # ── WAL 周期 checkpoint（2026-08-06 根治③）──
         # 2026-08-12 328号P0：交易时段（API 5s推送活跃，读竞争致 busy=1 全失败）
@@ -4016,6 +5113,22 @@ def main():
                         os.environ.get('DATA_DIR', 'data'), 'duckdb', 'stock_cache.db-wal'
                     )
                 ) / 1024 / 1024
+
+                # 356号方案：集成监控告警
+                try:
+                    from app.data.monitor import monitor
+                    monitor.record_metric('wal_size_mb', _wal_mb)
+                    if _wal_mb > 2048:
+                        monitor.create_alert(
+                            'WARNING',
+                            'WAL文件过大',
+                            f'WAL文件大小 {_wal_mb:.0f}MB 超过阈值 2GB',
+                            source='wal_monitor',
+                            metrics={'wal_size_mb': _wal_mb}
+                        )
+                except Exception:
+                    pass
+
                 if _wal_mb > 2048:
                     logger.warning(
                         f"WAL 达 {_wal_mb:.0f}MB（>2GB）——建议执行收缩: "
