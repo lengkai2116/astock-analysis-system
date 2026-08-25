@@ -4,6 +4,7 @@
 文件路径：backend/app/data/factor_precompute.py
 """
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from typing import Optional, List, Dict
 
@@ -37,7 +38,8 @@ class FactorPrecomputeManager:
             if factor_series is None or factor_series.empty:
                 return False
 
-            self._batch_cache_factor_series(factor_series, ts_code, factor_name)
+            # 因子可能返回整数索引(RangeIndex)，需要映射回原始trade_date
+            self._batch_cache_factor_series(factor_series, ts_code, factor_name, data)
 
             return True
         except Exception as e:
@@ -45,7 +47,8 @@ class FactorPrecomputeManager:
             return False
 
     def _batch_cache_factor_series(self, factor_series: pd.Series,
-                                   ts_code: str, factor_name: str):
+                                   ts_code: str, factor_name: str,
+                                   data: pd.DataFrame = None):
         """
         批量缓存因子序列
         """
@@ -54,12 +57,44 @@ class FactorPrecomputeManager:
 
         records = []
         now = datetime.now()
+        # 获取原始trade_date列表用于映射
+        dates = data['trade_date'].tolist() if data is not None and 'trade_date' in data.columns else None
 
-        for date, value in factor_series.items():
+        for idx, value in factor_series.items():
             if pd.notna(value):
+                # 映射日期：优先从原始DataFrame获取，否则用索引值
+                trade_date = None
+                if dates and isinstance(idx, (int, np.integer)) and 0 <= idx < len(dates):
+                    trade_date = dates[idx]
+                elif isinstance(idx, str):
+                    trade_date = idx
+                elif isinstance(idx, (datetime, pd.Timestamp)):
+                    trade_date = idx.strftime('%Y-%m-%d')
+                elif isinstance(idx, pd.Timestamp):
+                    trade_date = idx.strftime('%Y-%m-%d')
+                else:
+                    trade_date = str(idx)
+
+                # 统一转换为 YYYY-MM-DD 字符串格式
+                if isinstance(trade_date, (datetime, pd.Timestamp)):
+                    trade_date = trade_date.strftime('%Y-%m-%d')
+                elif hasattr(trade_date, 'strftime'):
+                    # datetime.date 对象
+                    trade_date = trade_date.strftime('%Y-%m-%d')
+                elif isinstance(trade_date, str):
+                    # 兼容 YYYYMMDD 格式
+                    clean = trade_date.replace('-', '')
+                    if len(clean) == 8 and clean.isdigit():
+                        trade_date = f"{clean[:4]}-{clean[4:6]}-{clean[6:8]}"
+                    # 如果包含时间部分（如 "2026-08-21 00:00:00"），截取日期部分
+                    if ' ' in trade_date:
+                        trade_date = trade_date.split(' ')[0]
+                else:
+                    trade_date = str(trade_date)
+
                 records.append({
                     'ts_code': ts_code,
-                    'trade_date': date if isinstance(date, str) else date,
+                    'trade_date': trade_date,
                     'factor_name': factor_name,
                     'value': float(value),
                     'cached_at': now
