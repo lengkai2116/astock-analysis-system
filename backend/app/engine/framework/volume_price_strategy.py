@@ -1976,20 +1976,6 @@ class EnhancedPatternDetector:
         gap_partial_fill = closes[-1] < highs[-1] and closes[-1] < opens[-1] * 0.995
         return gap_partial_fill
 
-    def get_tags(self, df: pd.DataFrame) -> dict:
-        """返回增强形态检测器产出的 pattern_signal 标签"""
-        tags = {}
-        try:
-            from app.engine.patterns.adapters.kline_adapter import KlinePatternAdapter
-            adapter = KlinePatternAdapter()
-            results = adapter.detect(df)
-            if results:
-                best = max(results, key=lambda r: abs(r.confidence or 0))
-                tags['pattern_signal'] = best.pattern_type
-        except Exception:
-            pass
-        return tags
-
 # ══════════════════════════════════════════════
 # Phase 1: 阶段判定 + 价格分位
 # ══════════════════════════════════════════════
@@ -4050,8 +4036,8 @@ class VolumePriceStrategy:
     def _build_detail(self, stage, vol_state, relation):
         return {"阶段判定": stage.to_dict(), "成交量状态": vol_state.to_dict(), "量价关系": relation.to_dict()}
 
-    def get_tags(self, df: pd.DataFrame) -> dict:
-        """返回量价引擎产出的标签"""
+    def _detect_kline_patterns(self, df: pd.DataFrame) -> dict:
+        """返回量价引擎产出的标签（357号方案：重命名消除与策略层命名混淆）"""
         tags = {}
         try:
             # ma_alignment: MA5/MA10/MA20 排列

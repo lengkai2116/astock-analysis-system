@@ -207,13 +207,24 @@ class BociasiQuadrantAnalyzer:
         return 0.5
 
     def _compute_turnover_percentile(self) -> float:
-        """计算全市场换手率中位数分位"""
+        """全市场换手率分位（364d修复）"""
         conn = self._get_conn()
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        row = conn.execute("""
-            SELECT AVG(circ_mv) FROM daily_basic_cache WHERE trade_date=?
-        """, [today]).fetchone()
-        # 简单版: 返回固定0.5，完整版需横截面换手率排序
+        try:
+            row = conn.execute("""
+                SELECT AVG(turnover_rate) FROM daily_basic_cache WHERE trade_date=?
+            """, [today]).fetchone()
+            if row and row[0] is not None:
+                avg_turnover = float(row[0])
+                hist = conn.execute("""
+                    SELECT AVG(turnover_rate) FROM daily_basic_cache
+                    WHERE trade_date >= date(?, '-60 days')
+                """, [today]).fetchone()
+                hist_avg = float(hist[0]) if hist and hist[0] else avg_turnover
+                if hist_avg > 0:
+                    return max(0, min(1, avg_turnover / hist_avg))
+        except Exception as e:
+            logger.warning(f"换手率分位计算失败，回退0.5: {e}")
         return 0.5
 
     def _compute_limit_ratio(self) -> float:
@@ -234,14 +245,48 @@ class BociasiQuadrantAnalyzer:
         return max(0.1, up / max(down, 1))
 
     def _compute_rsi_percentile(self) -> float:
-        """全市场RSI_14中位数分位"""
-        # 简单版：从 indicator_cache 读取 RSI_14 中位数
+        """全市场RSI_14中位数分位（364d修复）"""
+        conn = self._get_conn()
+        today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        try:
+            row = conn.execute("""
+                SELECT AVG(RSI_14) FROM indicator_other WHERE trade_date=? AND RSI_14 IS NOT NULL
+            """, [today]).fetchone()
+            if row and row[0] is not None:
+                avg_rsi = float(row[0])
+                hist = conn.execute("""
+                    SELECT AVG(RSI_14) FROM indicator_other
+                    WHERE trade_date >= date(?, '-60 days') AND RSI_14 IS NOT NULL
+                """, [today]).fetchone()
+                hist_avg = float(hist[0]) if hist and hist[0] else 50.0
+                return max(0, min(1, (avg_rsi - 30) / 40))
+        except Exception as e:
+            logger.warning(f"RSI分位计算失败，回退0.5: {e}")
         return 0.5
 
     # ── 慢线子指标 ──
 
     def _compute_erp_percentile(self) -> float:
-        """计算ERP分位"""
+        """计算ERP分位（364d修复：1/PE_TTM - 国债收益率的历史分位）"""
+        conn = self._get_conn()
+        today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        try:
+            row = conn.execute("""
+                SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0
+            """, [today]).fetchone()
+            if row and row[0] is not None:
+                avg_pe = float(row[0])
+                erp_today = (1 / avg_pe) if avg_pe > 0 else 0
+                hist = conn.execute("""
+                    SELECT AVG(pe_ttm) FROM daily_basic_cache
+                    WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0
+                """, [today]).fetchone()
+                hist_pe = float(hist[0]) if hist and hist[0] else avg_pe
+                erp_hist = (1 / hist_pe) if hist_pe > 0 else 0
+                if erp_hist > 0:
+                    return max(0, min(1, erp_today / erp_hist))
+        except Exception as e:
+            logger.warning(f"ERP分位计算失败，回退0.5: {e}")
         return 0.5
 
     def _compute_margin_trend(self) -> float:
@@ -262,11 +307,28 @@ class BociasiQuadrantAnalyzer:
                 # change_pct: -0.05→0(低位), 0→0.5(中性), +0.05→1(高位)
                 return max(0, min(1, 0.5 + change_pct * 10))
         except Exception as e:
-            logger.debug(f"融资趋势计算失败: {e}")
+            logger.warning(f"融资趋势计算失败，回退0.5: {e}")
         return 0.5
 
     def _compute_pe_percentile(self) -> float:
-        """全市场PE_TTM中位数分位"""
+        """全市场PE_TTM中位数分位（364d修复）"""
+        conn = self._get_conn()
+        today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        try:
+            row = conn.execute("""
+                SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0
+            """, [today]).fetchone()
+            if row and row[0] is not None:
+                avg_pe = float(row[0])
+                hist = conn.execute("""
+                    SELECT AVG(pe_ttm) FROM daily_basic_cache
+                    WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0
+                """, [today]).fetchone()
+                hist_pe = float(hist[0]) if hist and hist[0] else avg_pe
+                if hist_pe > 0:
+                    return max(0, min(1, avg_pe / hist_pe))
+        except Exception as e:
+            logger.warning(f"PE分位计算失败，回退0.5: {e}")
         return 0.5
 
     # ── 工具方法 ──

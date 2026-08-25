@@ -113,7 +113,7 @@ class UnifiedStrategyCore:
         scs: object = None,
     ) -> StandardizedResult:
         """将 SignalComputationService 的 List[Dict] 输出转为 StandardizedResult"""
-        today = datetime.now().strftime('%Y%m%d')
+        today = datetime.now().strftime('%Y-%m-%d')
         result_signals: dict[str, StrategySignal] = {}
 
         for sig in signals:

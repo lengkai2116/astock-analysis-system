@@ -451,6 +451,114 @@ class MainForceScorer:
             logger.error(f"MainForceScorer 评分失败 {symbol}: {e}")
             return 0.0
 
+    def get_sub_scores(self, data: pd.DataFrame, symbol: str = None) -> dict:
+        """返回各子维度独立评分（364c Phase 3）"""
+        if data.empty or len(data) < 60:
+            return {'total': 0.0, 'moneyflow': 0.0, 'volume_price': 0.0,
+                    'concentration': 0.0, 'retail_contrarian': 0.0,
+                    'lhb': 0.0, 'chip_distribution': 0.0, 'sub_details': {}}
+        try:
+            closes = data['close'].values
+            volumes = data['vol'].values if 'vol' in data.columns else np.ones(len(data))
+            price_high = np.max(closes[-120:]) if len(closes) >= 120 else np.max(closes)
+            price_low = np.min(closes[-120:]) if len(closes) >= 120 else np.min(closes)
+            price_range = price_high - price_low if price_high > price_low else 1.0
+            price_position = (closes[-1] - price_low) / price_range
+
+            score_a = self._score_moneyflow(symbol)
+            score_b = self._score_volume_price(closes, volumes, price_position)
+            score_c = self._score_concentration(symbol, closes, price_position)
+            score_d = self._score_retail_contrarian(symbol, price_position)
+            score_e = self._score_lhb(symbol, data)
+            score_f = self._score_chip_distribution(symbol, data)
+            total = score_a + score_b + score_c + score_d + score_e + score_f
+
+            return {
+                'total': round(min(10.0, max(0.0, total)), 2),
+                'moneyflow': round(score_a, 2),
+                'volume_price': round(score_b, 2),
+                'concentration': round(score_c, 2),
+                'retail_contrarian': round(score_d, 2),
+                'lhb': round(score_e, 2),
+                'chip_distribution': round(score_f, 2),
+                'sub_details': {},
+            }
+        except Exception:
+            return {'total': 0.0, 'moneyflow': 0.0, 'volume_price': 0.0,
+                    'concentration': 0.0, 'retail_contrarian': 0.0,
+                    'lhb': 0.0, 'chip_distribution': 0.0, 'sub_details': {}}
+
+    def get_fund_flow_strength(self, symbol: str) -> dict:
+        """资金流向5级强度分层（364c Phase 3）"""
+        if not symbol:
+            return {'level': 'none', 'level_cn': '中性', 'direction': 'neutral', 'detail': '无数据'}
+        try:
+            mf_df = self._dm.get_cached_moneyflow(symbol)
+            if mf_df is None or mf_df.empty:
+                return {'level': 'none', 'level_cn': '中性', 'direction': 'neutral', 'detail': '无资金数据'}
+            mf_5 = mf_df.tail(5)
+            net_lg_5d = float(mf_5['net_lg_amount'].sum())
+            pos_days = int((mf_5['net_lg_amount'] > 0).sum())
+            positive_ratio = pos_days / max(len(mf_5), 1)
+
+            if pos_days >= 3 and net_lg_5d > 100000000:
+                return {'level': 'very_strong', 'level_cn': '极强', 'direction': 'inflow',
+                        'detail': f'连续{pos_days}日净流入，累计{net_lg_5d/1e8:.1f}亿'}
+            elif positive_ratio > 0.6:
+                return {'level': 'strong', 'level_cn': '强', 'direction': 'inflow',
+                        'detail': f'多数日净流入（{pos_days}/5日）'}
+            elif positive_ratio > 0.4:
+                return {'level': 'medium', 'level_cn': '中等', 'direction': 'mixed',
+                        'detail': f'流入流出交替（{pos_days}/5日净流入）'}
+            elif net_lg_5d < 0:
+                return {'level': 'weak', 'level_cn': '弱', 'direction': 'outflow',
+                        'detail': f'净流出（累计{net_lg_5d/1e4:.0f}万）'}
+            else:
+                return {'level': 'none', 'level_cn': '中性', 'direction': 'neutral',
+                        'detail': '无明确资金方向'}
+        except Exception:
+            return {'level': 'none', 'level_cn': '中性', 'direction': 'neutral', 'detail': '计算异常'}
+
+    def get_chip_transfer(self, symbol: str) -> dict:
+        """筹码转移方向检测（364c Phase 3）"""
+        if not symbol:
+            return {'direction': 'unknown', 'speed': 'unknown', 'detail': '无数据'}
+        try:
+            indicators = self._chip_indicators or {}
+            asr = indicators.get('asr') or indicators.get('ASR')
+            concentration = indicators.get('concentration')
+            if asr is not None:
+                asr_val = float(asr)
+                if asr_val > 70:
+                    return {'direction': '集中', 'speed': '快速', 'detail': f'筹码高度集中（ASR={asr_val:.0f}）'}
+                elif asr_val > 50:
+                    return {'direction': '集中', 'speed': '中等', 'detail': f'筹码中等集中（ASR={asr_val:.0f}）'}
+                else:
+                    return {'direction': '分散', 'speed': '中等', 'detail': f'筹码分散（ASR={asr_val:.0f}）'}
+        except Exception:
+            pass
+        return {'direction': 'unknown', 'speed': 'unknown', 'detail': '筹码数据不足'}
+
+    def get_control_degree(self, symbol: str) -> dict:
+        """控盘度计算（364c Phase 3：三维度加权）"""
+        if not symbol:
+            return {'level': 'unknown', 'score': 0, 'detail': '无数据'}
+        try:
+            indicators = self._chip_indicators or {}
+            asr = float(indicators.get('asr') or indicators.get('ASR') or 0)
+            concentration = float(indicators.get('concentration') or 0)
+            main_flow = 1.0 if str(tags.get('fund_flow', '')) == '5d_inflow' else 0.5
+            score = (asr / 100 * 0.4) + (concentration * 0.3 if concentration else 0.5 * 0.3) + (main_flow * 0.3)
+            if score > 0.7:
+                level = '高控盘'
+            elif score > 0.4:
+                level = '中等控盘'
+            else:
+                level = '低控盘'
+            return {'level': level, 'score': round(score, 2), 'detail': f'{level}（{score:.2f}）'}
+        except Exception:
+            return {'level': 'unknown', 'score': 0, 'detail': '计算异常'}
+
     # ─── A: 资金流向维度 (0-3分) ───────────────────────────────
     # Wiki 核心思想：大单连续性 > 单日强度；融资暴增+股价不动=危险信号
     def _score_moneyflow(self, symbol: str) -> float:

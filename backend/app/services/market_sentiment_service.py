@@ -1,10 +1,13 @@
 """
 MarketSentimentService — 市场情绪聚合服务
 
-273a 方案：基于涨停池数据计算全市场情绪指标，映射四阶段。
+273a 方案：基于涨停池数据计算全市场情绪指标，映射六段论。
 
 数据流:
-  sentiment_pool_cache (ECM) → 聚合 → 四阶段映射 → snapshot.verification
+  sentiment_pool_cache (ECM) → 聚合 → 六段论映射 → snapshot.verification
+
+六段论（365号批次B升级）:
+  ice(冰点) → sprout(萌芽) → ferment(发酵) → climax(高潮) → ebb(退潮) → regression(回归)
 """
 import logging
 from datetime import datetime
@@ -14,7 +17,17 @@ logger = logging.getLogger(__name__)
 
 
 class MarketSentimentService:
-    """市场情绪聚合服务 — 涨跌停数据 → 四阶段映射"""
+    """市场情绪聚合服务 — 涨跌停数据 → 六段论映射"""
+
+    PHASE_LABELS = {
+        'ice': '情绪冰点',
+        'sprout': '情绪萌芽',
+        'ferment': '情绪发酵',
+        'climax': '情绪高潮',
+        'ebb': '情绪退潮',
+        'regression': '情绪回归',
+        'neutral': '情绪中性',
+    }
 
     def __init__(self, data_manager=None):
         if data_manager is None:
@@ -23,15 +36,15 @@ class MarketSentimentService:
         self.data_manager = data_manager
 
     def get_sentiment_phase(self, trade_date: str = None) -> Dict:
-        """获取当前市场情绪阶段
+        """获取当前市场情绪阶段（六段论）
 
         Args:
             trade_date: 交易日期 YYYYMMDD，默认今天
 
         Returns:
             {
-                'phase': 'ice'|'recovery'|'climax'|'ebb',
-                'phase_label': '情绪冰点'|'情绪复苏'|'情绪高潮'|'情绪退潮',
+                'phase': 'ice'|'sprout'|'ferment'|'climax'|'ebb'|'regression',
+                'phase_label': str,
                 'metrics': {...},
                 'data_available': bool,
             }
@@ -76,22 +89,26 @@ class MarketSentimentService:
             'up_down_ratio': up_down_ratio,
         }
 
-        # 四阶段映射（全覆盖，无 neutral）
+        # 六段论映射（365号批次B升级：ice/sprout/ferment/climax/ebb/regression）
         if limit_up_count < 20 and max_board_height < 3 and sealing_rate < 40:
             phase = 'ice'
-            phase_label = '情绪冰点'
+        elif limit_up_count < 40 and max_board_height <= 2 and sealing_rate < 50:
+            phase = 'sprout'
+        elif limit_up_count >= 40 and limit_up_count <= 80 and max_board_height >= 3 and sealing_rate >= 40:
+            phase = 'ferment'
         elif limit_up_count > 80 and sealing_rate > 75:
             phase = 'climax'
-            phase_label = '情绪高潮'
         elif (
             (max_board_height >= 3 and sealing_rate < 50)
             or (sealing_rate < 40 and limit_up_count < 40)
         ):
             phase = 'ebb'
-            phase_label = '情绪退潮'
+        elif limit_up_count >= 20 and limit_up_count <= 60 and max_board_height <= 2:
+            phase = 'regression'
         else:
-            phase = 'recovery'
-            phase_label = '情绪复苏'
+            phase = 'ferment'  # 默认归入发酵期
+
+        phase_label = self.PHASE_LABELS.get(phase, '情绪中性')
 
         return {
             'phase': phase,
