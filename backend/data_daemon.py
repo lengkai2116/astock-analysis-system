@@ -4054,6 +4054,74 @@ def _build_treemap_snapshot(codes: list[str]):
     logger.info(f"treemap_snapshot 构建完成: {written}/{len(codes)} 只, 耗时 {elapsed:.1f}s")
 
 
+def _out_transmit_seven_dim(codes: list[str]):
+    """370号方案S6：OUT步骤简化 — 从strategy_signal_detail读取seven_dim_json透传到status_snapshot.one_liner_detail
+
+    七维描述由SIG直接产出（S5），OUT仅做透传写入。
+    同时执行归档（status_snapshot → status_snapshot_history）。
+    """
+    t0 = time.time()
+    logger.info(f"OUT七维透传+归档: {len(codes)} 只...")
+
+    # 透传 seven_dim_json → one_liner_detail
+    try:
+        today = datetime.now().strftime('%Y-%m-%d')
+        # 读取最新交易日
+        trade_date = ''
+        try:
+            _row = _ecm.read_conn.execute(
+                "SELECT MAX(trade_date) FROM daily_cache").fetchone()
+            trade_date = _row[0] if _row else ''
+        except Exception:
+            pass
+
+        if trade_date:
+            _ecm.conn.execute("""
+                UPDATE status_snapshot SET one_liner_detail = (
+                    SELECT ssd.seven_dim_json
+                    FROM strategy_signal_detail ssd
+                    WHERE ssd.ts_code = status_snapshot.ts_code
+                    AND ssd.trade_date = ?
+                    AND ssd.seven_dim_json IS NOT NULL
+                )
+                WHERE status_snapshot.trade_date = ?
+            """, [trade_date, trade_date])
+            _ecm.conn.commit()
+            updated = _ecm.conn.execute(
+                "SELECT changes()").fetchone()[0]
+            logger.info(f"  七维透传: {updated} 只股票 one_liner_detail 已更新")
+    except Exception as e:
+        logger.warning(f"七维透传失败: {e}")
+
+    # 归档 status_snapshot → status_snapshot_history
+    try:
+        _ecm.conn.execute("""
+            CREATE TABLE IF NOT EXISTS status_snapshot_history (
+                ts_code TEXT, snapshot_date TEXT, trade_date TEXT,
+                dim_states TEXT, status_bar TEXT, opportunity_state TEXT,
+                state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
+                direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
+                PRIMARY KEY (ts_code, snapshot_date)
+            )
+        """)
+        _ecm.conn.execute("""
+            INSERT OR REPLACE INTO status_snapshot_history
+                (ts_code, snapshot_date, trade_date, dim_states, status_bar,
+                 opportunity_state, state_evidence, conflict_evidence, consensus_rate,
+                 direction, l0, lifecycle, advice_params)
+            SELECT ts_code, snapshot_date, trade_date, dim_states, status_bar,
+                   opportunity_state, state_evidence, conflict_evidence, consensus_rate,
+                   direction, l0, lifecycle, advice_params
+            FROM status_snapshot
+        """)
+        _ecm.conn.commit()
+        logger.info(f"  归档完成: status_snapshot → status_snapshot_history")
+    except Exception as e:
+        logger.warning(f"归档失败: {e}")
+
+    logger.info(f"OUT完成: {time.time() - t0:.1f}s")
+
+
 def _build_status_snapshot(codes: list[str]):
     """337号 §3/§4：日频现状成品生成（S2 status_engine → status_snapshot 表）
 
@@ -4093,25 +4161,15 @@ def _build_status_snapshot(codes: list[str]):
         """)
         written = 0
         from app.opportunity_atlas.status_engine import generate_summary_text
-        from app.opportunity_atlas.status_engine import build_seven_dim_report
-        from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
+        # 370号S6：build_seven_dim_report已废弃，one_liner_detail由OUT从seven_dim_json透传
         for code in codes:
             try:
                 row = engine.evaluate(code)
                 if not row:
                     continue
-                # 366号步骤2：计算geo参数并传入build_seven_dim_report
-                geo = {}
-                try:
-                    df = _ecm.get_cached_daily(code)
-                    if df is not None and not df.empty:
-                        geo = calc_support_resistance(df) or {}
-                except Exception:
-                    pass
-                # 364a Phase 1：生成summary_text和one_liner_detail
+                # 364a Phase 1：生成summary_text
                 summary_text = generate_summary_text(row)
-                one_liner = build_seven_dim_report(row, geo=geo)
-                one_liner_json = json.dumps(one_liner, ensure_ascii=False)
+                # 370号S6：one_liner_detail不再在此生成，由OUT从strategy_signal_detail.seven_dim_json透传
                 _ecm.conn.execute(
                     f"INSERT OR REPLACE INTO {_NEW} (ts_code, snapshot_date, trade_date,"
                     f" dim_states, status_bar, opportunity_state, state_evidence,"
@@ -4122,7 +4180,7 @@ def _build_status_snapshot(codes: list[str]):
                      row['opportunity_state'], row['state_evidence'],
                      row['conflict_evidence'], row['consensus_rate'],
                      row['direction'], row['l0'], row['lifecycle'], row['advice_params'],
-                     summary_text, one_liner_json,
+                     summary_text, None,
                      row.get('dim_engine_results')])
                 written += 1
             except Exception as e:
@@ -4227,10 +4285,10 @@ def _is_pipeline_complete(pipeline_date: str) -> bool:
         row = _ecm.conn.execute(
             "SELECT COUNT(*) FROM pipeline_status "
             "WHERE pipeline_date=? AND step_id IN ('COL-1','COL-2','COL-3','COL-4','COL-5','COL-6',"
-            "'RAW-1','RAW-2','RAW-3','SIG','OUT') AND status='done'",
+            "'RAW-1','RAW-2','RAW-3','SIG','JUD','OUT') AND status='done'",
             [pipeline_date]
         ).fetchone()
-        return row and row[0] >= 11  # 11 个环节全 done
+        return row and row[0] >= 12  # 12 个环节全 done（370号：JUD独立步骤）
     except Exception:
         return False
 
@@ -4553,11 +4611,34 @@ def _drive_pipeline():
     if not _all_steps_done(status, ['SIG']):
         return
 
-    # ── 成品仓阶段 OUT ──
-    if status.get('OUT', {}).get('status') != 'done':
-        def _out_build(_codes):
+    # ── 判定及操作建议阶段 JUD（370号方案S4）──
+    if status.get('JUD', {}).get('status') != 'done':
+        def _jud_build(_codes):
             _build_status_snapshot(_codes)
             _build_treemap_snapshot(_codes)
+        _run_pipeline_step(today, 'JUD', _jud_build, codes)
+        return
+
+    if _has_failed(status, ['JUD']):
+        for sid in ['JUD']:
+            if status.get(sid, {}).get('status') == 'failed':
+                rc = status[sid].get('retry_count', 0)
+                if rc < 3:
+                    _ecm.conn.execute(
+                        "UPDATE pipeline_status SET status='pending', retry_count=? "
+                        "WHERE pipeline_date=? AND step_id=?",
+                        [rc + 1, today, sid]
+                    )
+                    _ecm.conn.commit()
+                return
+
+    if not _all_steps_done(status, ['JUD']):
+        return
+
+    # ── 成品仓阶段 OUT（370号方案S6：简化，仅做七维透传+归档）──
+    if status.get('OUT', {}).get('status') != 'done':
+        def _out_build(_codes):
+            _out_transmit_seven_dim(_codes)
         _run_pipeline_step(today, 'OUT', _out_build, codes)
         return
 
@@ -4626,8 +4707,16 @@ def _precompute_strategy_signals(codes):
         for ts_code, result in results.items():
             try:
                 rd = result.to_dict()
+                # 370号S5：生成seven_dim_json
+                seven_dim = {}
+                try:
+                    from app.opportunity_atlas.status_engine import generate_seven_dim_from_signals
+                    seven_dim = generate_seven_dim_from_signals(rd)
+                except Exception:
+                    pass
                 rows.append((ts_code, rd.get('trade_date', datetime.now().strftime('%Y-%m-%d')),
-                             _json.dumps(rd, ensure_ascii=False, default=str), 1))
+                             _json.dumps(rd, ensure_ascii=False, default=str), 1,
+                             _json.dumps(seven_dim, ensure_ascii=False) if seven_dim else None))
             except Exception:
                 continue
         _batch_write_signal_detail(rows)
@@ -4657,8 +4746,8 @@ def _batch_write_signal_detail(rows):
         conn.execute("PRAGMA busy_timeout=10000")
         conn.executemany(
             "INSERT OR REPLACE INTO strategy_signal_detail "
-            "(ts_code, trade_date, signal_json, schema_version, cached_at) "
-            "VALUES (?, ?, ?, ?, datetime('now','localtime'))",
+            "(ts_code, trade_date, signal_json, schema_version, cached_at, seven_dim_json) "
+            "VALUES (?, ?, ?, ?, datetime('now','localtime'), ?)",
             rows
         )
         conn.commit()

@@ -646,6 +646,12 @@ class EnhancedCacheManager:
                 PRIMARY KEY (ts_code, trade_date)
             )
         """)
+        # 370号方案S1：新增SIG双产出列（seven_dim_json→OUT直通，dim_results_json→JUD消费）
+        for col, default in [('seven_dim_json', 'NULL'), ('dim_results_json', 'NULL')]:
+            try:
+                self._execute(f"ALTER TABLE strategy_signal_detail ADD COLUMN {col} TEXT DEFAULT {default}")
+            except Exception:
+                pass  # 列已存在则忽略
         self._execute("""
             CREATE TABLE IF NOT EXISTS factor_cache (
                 ts_code TEXT, trade_date TEXT,
@@ -3133,7 +3139,7 @@ class EnhancedCacheManager:
             ('COL-1', '日线采集'), ('COL-2', '基本面采集'), ('COL-3', '资金流采集'),
             ('COL-4', '涨跌停采集'), ('COL-5', '龙虎榜采集'), ('COL-6', '概念板块采集'),
             ('RAW-1', '技术指标(IND)'), ('RAW-2', '特征提取(FEAT)'), ('RAW-3', '量化因子(FAC)'),
-            ('SIG', '策略分析'), ('OUT', '成品仓'),
+            ('SIG', '策略分析'), ('JUD', '判定及操作建议'), ('OUT', '成品仓'),
         ]:
             self.conn.execute(
                 "INSERT OR IGNORE INTO pipeline_status "
