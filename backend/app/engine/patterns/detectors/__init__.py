@@ -3,7 +3,9 @@
 包含预涨型、预跌型、黑马型、四类八种状态检测器
 """
 from .base import PatternDetector
+from .bullish_patterns import BullishPatternDetector
 
 __all__ = [
     'PatternDetector',
+    'BullishPatternDetector',
 ]
