@@ -5020,8 +5020,10 @@ def main():
 
     # 356号方案：初始化分库管理器（指向正确的 data 目录）
     from app.data.sharding_manager import init_sharding
-    init_sharding(os.environ.get('DATA_DIR', 'data'))
-    logger.info("分库管理器就绪")
+    # 使用项目根目录下的 data 目录，而不是 backend/data
+    data_dir = os.environ.get('DATA_DIR') or os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data')
+    init_sharding(data_dir)
+    logger.info(f"分库管理器就绪 (data_dir: {data_dir})")
 
     # 启动采集器
     collectors = _start_collectors()
