@@ -6,10 +6,12 @@ from .base import PatternDetector
 from .bullish_patterns import BullishPatternDetector
 from .bearish_patterns import BearishPatternDetector
 from .blackhorse_patterns import BlackHorsePatternDetector
+from .state_detectors import StateDetector
 
 __all__ = [
     'PatternDetector',
     'BullishPatternDetector',
     'BearishPatternDetector',
     'BlackHorsePatternDetector',
+    'StateDetector',
 ]
