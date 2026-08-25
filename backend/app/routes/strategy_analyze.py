@@ -931,40 +931,20 @@ def strategy_analyze():
                     'summary_text': _r.get('summary_text'),
                     'one_liner_detail': _r.get('one_liner_detail'),
                 }
-                from app.opportunity_atlas.status_engine import build_seven_dim_report
-                from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
-                # 364i Phase 9：从pre_feat_cache.features_json读取tags并扁平化
+                # 370号修复：七维描述从strategy_signal_detail.seven_dim_json读取（SIG直出）
+                # 不再调用已废弃的build_seven_dim_report
                 try:
-                    _tags_dict = None
                     if hasattr(_dm, 'cache') and hasattr(_dm.cache, '_ecm'):
                         _ecm = _dm.cache._ecm
-                        _feat_row = _ecm.read_conn.execute(
-                            "SELECT features_json FROM pre_feat_cache WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
+                        _ssd_row = _ecm.read_conn.execute(
+                            "SELECT seven_dim_json FROM strategy_signal_detail WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
                             [ts_code]
                         ).fetchone()
-                        if _feat_row and _feat_row[0]:
-                            import json as _json_feat
-                            _groups = _json_feat.loads(_feat_row[0])
-                            _tags_dict = {}
-                            for _group, _data in _groups.items():
-                                if isinstance(_data, dict):
-                                    _tags_dict.update(_data)
-                except Exception:
-                    _tags_dict = None
-                # 366号步骤2：计算geo参数并传入build_seven_dim_report
-                geo = {}
-                try:
-                    if hasattr(_dm, 'cache') and hasattr(_dm.cache, '_ecm'):
-                        _ecm = _dm.cache._ecm
-                        _daily_df = _ecm.read_conn.execute(
-                            "SELECT * FROM daily_cache WHERE ts_code=? ORDER BY trade_date DESC LIMIT 60",
-                            [ts_code]
-                        ).fetchdf()
-                        if _daily_df is not None and not _daily_df.empty:
-                            geo = calc_support_resistance(_daily_df) or {}
+                        if _ssd_row and _ssd_row[0]:
+                            import json as _json_ssd
+                            _seven_dim_report = _json_ssd.loads(_ssd_row[0])
                 except Exception:
                     pass
-                _seven_dim_report = build_seven_dim_report(_r.to_dict(), tags=_tags_dict, geo=geo)
         except Exception as _ss_err:
             _status_row = None
             _seven_dim_report = None

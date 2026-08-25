@@ -2491,11 +2491,24 @@ def _precompute_raw_features(codes):
             extract_fund_risk_tags,
         )
         # 365号批次A：新增引擎导入（pre_feat_cache扩展字段）
-        from app.opportunity_atlas.risk_boundary_builder import _calc_volatility_percentile
+        # 370号修复：risk_boundary_builder/signal_attribute_classifier已删除，
+        # _calc_volatility_percentile内联实现（从dim6_risk_engine等效逻辑提取）
+        def _calc_volatility_percentile(df_local):
+            """波动率历史分位（替代已删除的risk_boundary_builder._calc_volatility_percentile）"""
+            import math as _math
+            close = df_local['close'].astype(float)
+            returns = close.pct_change().dropna()
+            if len(returns) >= 20:
+                vol_20d = returns.rolling(20).std() * _math.sqrt(252)
+                vol_20d = vol_20d.dropna()
+                if len(vol_20d) >= 2:
+                    current_vol = vol_20d.iloc[-1]
+                    return float((vol_20d < current_vol).sum() / len(vol_20d))
+            return 0.5
         from app.engine.framework.chip_strategy import MainForceScorer
         from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
         from app.opportunity_atlas.dimensions.shared_vol_ratio import calc_vol_ratio
-        from app.opportunity_atlas.signal_attribute_classifier import classify_attribute
+        # 370号修复：classify_attribute已删除（dim1_signal_engine中有同名函数），此处未使用，移除import
         from app.opportunity_atlas.signal_decay_detector import detect_decay
 
         # 各引擎初始化
