@@ -2410,12 +2410,56 @@ class EnhancedCacheManager:
             if 'trade_date' in r and isinstance(r['trade_date'], (datetime, pd.Timestamp)):
                 r['trade_date'] = r['trade_date'].strftime('%Y-%m-%d')
         with self._write_lock:
-            before = self.conn.execute("SELECT COUNT(*) FROM factor_cache").fetchone()[0]
-            self._insert_from_df('factor_cache', pd.DataFrame(records))
-            after = self.conn.execute("SELECT COUNT(*) FROM factor_cache").fetchone()[0]
-            self.conn.commit()
-            if after != before:
-                logger.debug(f"factor_cache 写入: {after - before} 行 (总计 {after})")
+            # 356号方案：factor_cache 写入分库 compute_cache.db
+            try:
+                from app.data.sharding_manager import sharding_manager
+                db_name = sharding_manager.get_db_for_table('factor_cache')
+            except Exception:
+                db_name = None
+
+            if db_name:
+                # 写入分库
+                try:
+                    # 检查分库表是否存在
+                    shard_col_rows = sharding_manager.execute_query(
+                        'factor_cache', 'PRAGMA table_info(factor_cache)')
+                    shard_cols = {row[1] for row in shard_col_rows} if shard_col_rows else set()
+
+                    if not shard_cols:
+                        # 从总库复制表结构到分库
+                        try:
+                            main_sql = self.conn.execute(
+                                "SELECT sql FROM sqlite_master WHERE type='table' AND name='factor_cache'"
+                            ).fetchone()
+                            if main_sql and main_sql[0]:
+                                create_sql = main_sql[0].replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS')
+                                sharding_manager.get_connection(db_name).execute(create_sql)
+                                sharding_manager.get_connection(db_name).commit()
+                                shard_col_rows = sharding_manager.execute_query(
+                                    'factor_cache', 'PRAGMA table_info(factor_cache)')
+                                shard_cols = {row[1] for row in shard_col_rows} if shard_col_rows else set()
+                                logger.info(f"分库自动建表: factor_cache on {db_name}")
+                        except Exception as e:
+                            logger.warning(f"分库自动建表失败: factor_cache on {db_name}: {e}")
+
+                    if shard_cols:
+                        # 写入分库
+                        cols = list(pd.DataFrame(records).columns)
+                        col_list = ', '.join(f'"{c}"' for c in cols)
+                        placeholders = ', '.join(['?' for _ in cols])
+                        rows = [tuple(r[c] for c in cols) for _, r in pd.DataFrame(records).iterrows()]
+                        sharding_manager.execute_batch_insert(
+                            'factor_cache', f'INSERT OR REPLACE INTO factor_cache ({col_list}) VALUES ({placeholders})', rows)
+                        logger.debug(f"factor_cache 写入分库 {db_name}: {len(rows)} 行")
+                except Exception as e:
+                    logger.warning(f"factor_cache 分库写入失败: {db_name}, {e}")
+            else:
+                # 非分库表 → 写入总库 stock_cache.db
+                try:
+                    self._insert_from_df('factor_cache', pd.DataFrame(records))
+                    self.conn.commit()
+                except Exception as e:
+                    logger.warning(f"factor_cache 总库写入失败: {e}")
 
     def get_cached_factor(self, ts_code: str, factor_name: str):
         """获取单个因子序列"""
