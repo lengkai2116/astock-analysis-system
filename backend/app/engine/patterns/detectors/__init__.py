@@ -4,8 +4,10 @@
 """
 from .base import PatternDetector
 from .bullish_patterns import BullishPatternDetector
+from .bearish_patterns import BearishPatternDetector
 
 __all__ = [
     'PatternDetector',
     'BullishPatternDetector',
+    'BearishPatternDetector',
 ]
