@@ -45,7 +45,7 @@ class ShardingManager:
             'lhb_cache': 'system_cache.db',
             'index_member_cache': 'system_cache.db',
 
-            # market_cache.db — 行情数据
+            # market_cache.db — 行情数据（356号分库迁移目标）
             'daily_cache': 'market_cache.db',
             'daily_basic_cache': 'market_cache.db',
             'moneyflow_cache': 'market_cache.db',

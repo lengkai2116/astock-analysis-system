@@ -151,7 +151,7 @@ class DashboardService:
         volume_change_pct = 0
         try:
             from app.data.sharding_manager import sharding_manager
-            _conn = sharding_manager.get_connection('market_cache.db')
+            _conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('daily_cache'))
             _idx_codes = ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']
             _placeholders = ','.join(['?' for _ in _idx_codes])
             _today_row = _conn.execute(

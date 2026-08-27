@@ -95,6 +95,14 @@ def _ts_minute(pro_func, *args, **kwargs):
 _running = True
 _cleanup_done = False  # 数据清理一次性标记（日终完成后执行一次；修复 2026-08-04：原挂在 bool _running 上必然失败）
 _ecm = None
+
+def _ensure_ecm():
+    """确保 _ecm 已初始化（支持从外部脚本调用管道函数）"""
+    global _ecm
+    if _ecm is None:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        _ecm = get_ecm_instance()
+    return _ecm
 _last_step_counts = {}  # 371号P0#3：管道步骤成功计数
 _jud_meta_cache = {}  # 371号JUD接入：{ts_code: enriched_meta_dict} 供 treemap_snapshot 读取
 
@@ -292,7 +300,7 @@ def _backfill_moneyflow(days: int = 25) -> int:
     # 检查已有数据量
     try:
         from app.data.sharding_manager import sharding_manager
-        conn = sharding_manager.get_connection('market_cache')
+        conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('daily_cache'))
         existing = conn.execute(
             "SELECT COUNT(DISTINCT trade_date) FROM moneyflow_cache"
         ).fetchone()[0]
@@ -401,7 +409,7 @@ def _backfill_index_daily(days: int = 25) -> int:
     # 检查已有数据量
     try:
         from app.data.sharding_manager import sharding_manager
-        conn = sharding_manager.get_connection('market_cache')
+        conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('daily_cache'))
         existing = conn.execute(
             "SELECT COUNT(DISTINCT trade_date) FROM daily_cache WHERE ts_code='000001.SH'"
         ).fetchone()[0]
@@ -2074,6 +2082,7 @@ def _precompute_raw_features(codes):
         return
     logger.info(f"RAW-2 原料加工开始: {len(codes)} 只...")
 
+    _ensure_ecm()
     from app import create_app
     _flask_app = create_app()
 
@@ -3256,7 +3265,7 @@ def _get_active_codes(today_fmt: str = None) -> list[str]:
         today_fmt = datetime.now().strftime('%Y-%m-%d')
     try:
         from app.data.sharding_manager import sharding_manager
-        conn = sharding_manager.get_connection('market_cache')
+        conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('daily_cache'))
         rows = conn.execute(
             "SELECT ts_code FROM daily_cache WHERE trade_date=? GROUP BY ts_code ORDER BY ts_code",
             [today_fmt]
@@ -4523,6 +4532,7 @@ def _run_pipeline_step(pipeline_date: str, step_id: str, func, arg):
 
 def _precompute_indicators(codes):
     """包装原有的指标预计算逻辑（P1）"""
+    _ensure_ecm()
     _ensure_pd()
     from app.data.precompute_indicator_manager import PrecomputeIndicatorManager
     mgr = PrecomputeIndicatorManager(_ecm)
@@ -4539,6 +4549,7 @@ def _precompute_indicators(codes):
 
 def _precompute_strategy_signals(codes):
     """包装原有的策略信号预计算逻辑（P2）"""
+    _ensure_ecm()
     # 2026-08-11 修复：P2 前置预热周线缓存——缠论 long 周期依赖周线（_get_weekly_data）。
     # 原实现缓存 miss 时直调 mootdx TCP（292号红线违规 + 连接失败 3.6s sleep/只，
     # 致 P2 耗时 1.6h）；现周线改为日线聚合 + 缓存（缠论 4.5s→0.06s/只），

@@ -324,12 +324,13 @@ def data_freshness():
         from app.data import DataManager
         from app.data.sharding_manager import sharding_manager
         ecm = DataManager().cache
-        # 分库表用 sharding_manager 读取 market_cache.db
+        # 分库表用 sharding_manager 读取（由 sharding_manager 路由到正确数据库）
         sharded_tables = {'daily_cache', 'daily_basic_cache', 'moneyflow_cache'}
         for name, query in tables.items():
             try:
                 if name in sharded_tables:
-                    conn = sharding_manager.get_connection('market_cache.db')
+                    db_name = sharding_manager.get_db_for_table(name)
+                    conn = sharding_manager.get_connection(db_name)
                     row = conn.execute(query).fetchone()
                 else:
                     row = ecm.read_conn.execute(query).fetchone()
