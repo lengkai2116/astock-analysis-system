@@ -146,8 +146,28 @@ class DashboardService:
             logger.error("四大指数行情全部不可用")
             return None
 
-        # 成交额同比变化（基于daily_cache历史数据推算，若无则默认为 0）
+        # 成交额同比变化（基于daily_cache历史数据推算）
         volume_change_pct = 0
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            _ecm = get_ecm_instance()
+            _idx_codes = ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']
+            _placeholders = ','.join(['?' for _ in _idx_codes])
+            _today_row = _ecm.conn.execute(
+                f"SELECT SUM(amount) as total FROM daily_cache WHERE ts_code IN ({_placeholders}) "
+                "AND trade_date = (SELECT MAX(trade_date) FROM daily_cache)",
+                _idx_codes
+            ).fetchone()
+            _prev_row = _ecm.conn.execute(
+                f"SELECT SUM(amount) as total FROM daily_cache WHERE ts_code IN ({_placeholders}) "
+                "AND trade_date < (SELECT MAX(trade_date) FROM daily_cache) "
+                "ORDER BY trade_date DESC LIMIT 1",
+                _idx_codes
+            ).fetchone()
+            if _today_row and _today_row[0] and _prev_row and _prev_row[0] and _prev_row[0] > 0:
+                volume_change_pct = round((_today_row[0] - _prev_row[0]) / _prev_row[0] * 100, 1)
+        except Exception:
+            pass
 
         result = {
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -307,20 +327,22 @@ class DashboardService:
             from app.models import Stock
 
             ecm = get_ecm_instance()
-            # 查询 daily_cache 最新日期
+            # 查询 daily_cache 最新日期（从分库）
+            from app.data.sharding_manager import sharding_manager
+            conn = sharding_manager.get_connection('market_cache')
             date_df = pd.read_sql(
                 "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1",
-                ecm.conn
+                conn
             )
             if date_df.empty:
-                logger.error("涨跌幅榜: DuckDB 无任何历史数据")
-                raise ValueError("DuckDB daily_cache 无日期记录，走 Tushare 降级")
+                logger.error("涨跌幅榜: daily_cache 无任何历史数据")
+                raise ValueError("daily_cache 无日期记录")
             last_date = date_df['trade_date'].iloc[0]
 
             # 取该日全市场数据
             all_df = pd.read_sql(
                 "SELECT * FROM daily_cache WHERE trade_date = ? ORDER BY pct_chg DESC",
-                ecm.conn, params=[last_date]
+                conn, params=[last_date]
             )
             if all_df.empty:
                 logger.error("涨跌幅榜: DuckDB 查询为空")
@@ -346,7 +368,7 @@ class DashboardService:
                 except Exception:
                     pass
 
-            all_df['name'] = all_df['ts_code'].map(lambda x: stock_map.get(x, ''))
+            all_df['name'] = all_df['ts_code'].map(lambda x: stock_map.get(x, x))
             sort_asc = (type == 'down')
             top_df = all_df.sort_values('pct_chg', ascending=sort_asc).head(limit)
 

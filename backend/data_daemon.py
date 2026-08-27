@@ -270,6 +270,54 @@ def _batch_moneyflow(trade_date: str) -> int:
     return len(df)
 
 
+def _backfill_moneyflow(days: int = 25) -> int:
+    """启动时回填资金流历史数据（25天）"""
+    _ensure_pd()
+    import tushare as ts
+    from datetime import timedelta
+    pro = ts.pro_api()
+    total = 0
+    end_date = datetime.now().strftime('%Y%m%d')
+    start_date = (datetime.now() - timedelta(days=days + 10)).strftime('%Y%m%d')
+
+    # 检查已有数据量
+    try:
+        from app.data.sharding_manager import sharding_manager
+        conn = sharding_manager.get_connection('market_cache')
+        existing = conn.execute(
+            "SELECT COUNT(DISTINCT trade_date) FROM moneyflow_cache"
+        ).fetchone()[0]
+    except Exception:
+        existing = 0
+
+    if existing >= days:
+        logger.info(f"资金流回填: 已有{existing}天数据，跳过")
+        return 0
+
+    logger.info(f"资金流回填: 从{start_date}到{end_date}")
+    try:
+        raw = _ts(pro.moneyflow, start_date=start_date, end_date=end_date)
+        if raw is None or raw.empty:
+            logger.warning("资金流回填: API返回空")
+            return 0
+        df = raw.copy()
+        if 'trade_date' in df.columns:
+            df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+        for net_col, buy_col in [('net_lg_amount','buy_lg_amount'),
+                                  ('net_elg_amount','buy_elg_amount'),
+                                  ('net_sm_amount','buy_sm_amount')]:
+            if net_col not in df.columns and buy_col in df.columns:
+                sell_col = 'sell_' + buy_col[4:]
+                df[net_col] = df[buy_col].fillna(0) - df.get(sell_col, pd.Series([0]*len(df))).fillna(0)
+        _ecm.cache_moneyflow_data(df)
+        total = len(df)
+    except Exception as e:
+        logger.warning(f"资金流回填失败: {e}")
+    if total > 0:
+        logger.info(f"资金流回填完成: {total} 条记录")
+    return total
+
+
 # 申万一级行业指数代码（28 个，2026-08-12 修正：原注释误写 31，且完整性检查用错阈值致回填死循环）
 SW_INDEX_CODES = [
     '801010.SI', '801020.SI', '801030.SI', '801040.SI', '801050.SI',
@@ -328,6 +376,52 @@ def _batch_index_daily(trade_date: str) -> int:
     if sw_count > 0:
         logger.info(f"  申万行业指数: {sw_count}/{len(sw_codes)} 个")
     total += sw_count
+    return total
+
+
+def _backfill_index_daily(days: int = 25) -> int:
+    """启动时回填指数日线历史数据（25天）"""
+    _ensure_pd()
+    import tushare as ts
+    from datetime import timedelta
+    pro = ts.pro_api()
+    total = 0
+    end_date = datetime.now().strftime('%Y%m%d')
+    start_date = (datetime.now() - timedelta(days=days + 10)).strftime('%Y%m%d')  # 多取10天覆盖周末
+
+    # 检查已有数据量
+    try:
+        from app.data.sharding_manager import sharding_manager
+        conn = sharding_manager.get_connection('market_cache')
+        existing = conn.execute(
+            "SELECT COUNT(DISTINCT trade_date) FROM daily_cache WHERE ts_code='000001.SH'"
+        ).fetchone()[0]
+    except Exception:
+        existing = 0
+
+    if existing >= days:
+        logger.info(f"指数日线回填: 已有{existing}天数据，跳过")
+        return 0
+
+    logger.info(f"指数日线回填: 从{start_date}到{end_date}")
+    for code in ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']:
+        try:
+            raw = _ts(pro.index_daily, ts_code=code, start_date=start_date, end_date=end_date)
+            if raw is None or raw.empty:
+                continue
+            df = raw.copy()
+            if 'trade_date' in df.columns:
+                df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+            daily_cols = {'ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg'}
+            extra = [c for c in df.columns if c not in daily_cols]
+            if extra:
+                df = df.drop(columns=extra)
+            _ecm.cache_daily_data(df)
+            total += len(df)
+        except Exception as e:
+            logger.warning(f"指数回填 {code} 失败: {e}")
+    if total > 0:
+        logger.info(f"指数日线回填完成: {total} 条记录")
     return total
 
 
@@ -3647,25 +3741,30 @@ def _precompute_single(ts_code: str):
 # ══════════════════════════════════════════════════════════
 
 def _get_active_codes(today_fmt: str = None) -> list[str]:
-    """获取当日活跃股票代码列表"""
+    """获取当日活跃股票代码列表（356号：从分库读取）"""
     if today_fmt is None:
         today_fmt = datetime.now().strftime('%Y-%m-%d')
-    rows = _ecm.conn.execute(
-        "SELECT ts_code FROM daily_cache WHERE trade_date=? "
-        "GROUP BY ts_code ORDER BY ts_code",
-        [today_fmt]
-    ).fetchall()
-    if not rows:
-        row = _ecm.conn.execute(
-            "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-        ).fetchone()
-        if row:
-            today_fmt = row[0]
-            rows = _ecm.conn.execute(
-                "SELECT ts_code FROM daily_cache WHERE trade_date=? "
-                "GROUP BY ts_code ORDER BY ts_code", [today_fmt]
-            ).fetchall()
-    return [r[0] for r in rows] if rows else []
+    try:
+        from app.data.sharding_manager import sharding_manager
+        conn = sharding_manager.get_connection('market_cache')
+        rows = conn.execute(
+            "SELECT ts_code FROM daily_cache WHERE trade_date=? GROUP BY ts_code ORDER BY ts_code",
+            [today_fmt]
+        ).fetchall()
+        if not rows:
+            row = conn.execute(
+                "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                today_fmt = row[0]
+                rows = conn.execute(
+                    "SELECT ts_code FROM daily_cache WHERE trade_date=? GROUP BY ts_code ORDER BY ts_code",
+                    [today_fmt]
+                ).fetchall()
+        return [r[0] for r in rows] if rows else []
+    except Exception as e:
+        logger.warning(f"_get_active_codes 分库查询失败: {e}")
+        return []
 
 
 def _compute_main_force_presence(code: str, ecm) -> dict:
@@ -4511,6 +4610,7 @@ def _drive_pipeline():
     has_data = _query_table('daily_cache',
         "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [data_date]) >= 4000
     if not has_data:
+        logger.debug(f"管道数据未就绪: {data_date} 行数不足4000，等待下一tick")
         return  # 数据未完整到达，下一 tick 再检查
 
     today_fmt = data_date
@@ -5160,6 +5260,16 @@ def main():
     except Exception as e:
         logger.warning(f"数据审计异常: {e}")
     run_integrity_check(backfill_days=3)
+
+    # 启动回填：指数日线 & 资金流历史数据（25天，供 Dashboard 图表展示）
+    try:
+        _backfill_index_daily(25)
+    except Exception as e:
+        logger.warning(f"指数日线回填失败: {e}")
+    try:
+        _backfill_moneyflow(25)
+    except Exception as e:
+        logger.warning(f"资金流回填失败: {e}")
 
     # 管道驱动兜底：开机后自动从断点恢复
     # 替代 _check_daily_sync_backfill() + _check_precompute_status()
