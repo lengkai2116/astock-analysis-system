@@ -295,12 +295,8 @@ class AkshareDataReader:
     # ── 个股盘口 ─────────────────────────────────────────────
 
     def get_quote_cache(self, ts_code: str) -> Dict:
-        """获取个股盘口缓存"""
-        try:
-            return self._ecm.read_as_quote_cache(ts_code)
-        except Exception as e:
-            logger.debug(f"AkshareDataReader.get_quote_cache 失败: {e}")
-            return {}
+        """获取个股盘口缓存（373号§9.3：as_quote_cache 已废弃，始终返回空）"""
+        return {}
 
     # ── 健康检查 ──────────────────────────────────────────────
 

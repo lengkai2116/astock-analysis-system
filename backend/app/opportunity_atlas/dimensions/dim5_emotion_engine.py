@@ -695,17 +695,17 @@ class BociasiQuadrantAnalyzer:
 
     def _compute_margin_trend(self) -> float:
         """计算融资余额趋势（5日变化率归一化）"""
-        conn = self._get_conn()
         try:
-            recent = conn.execute("""
+            cutoff = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
+            df = self._ecm._query_df("""
                 SELECT trade_date, SUM(rzye) as total
                 FROM margin_cache
                 WHERE trade_date >= ?
                 GROUP BY trade_date ORDER BY trade_date DESC LIMIT 5
-            """, [(datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')]).fetchall()
-            if len(recent) >= 2:
-                oldest = recent[-1][1] or 1
-                newest = recent[0][1] or 1
+            """, [cutoff])
+            if len(df) >= 2:
+                oldest = df.iloc[-1]['total'] or 1
+                newest = df.iloc[0]['total'] or 1
                 change_pct = (newest - oldest) / oldest
                 # 融资余额增长→情绪过热→慢线高位
                 # change_pct: -0.05→0(低位), 0→0.5(中性), +0.05→1(高位)
@@ -741,13 +741,6 @@ class BociasiQuadrantAnalyzer:
         if high <= low:
             return 0.5
         return max(0, min(1, (value - low) / (high - low)))
-
-    def _get_conn(self):
-        """获取数据库连接（356号方案：通过分库路由获取正确连接）"""
-        if self._ecm is None:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            self._ecm = get_ecm_instance()
-        return self._ecm.conn
 
     def _query_from_shard(self, table: str, sql: str, params=None):
         """356号方案：从分库路由查询，返回 fetchone() 结果"""

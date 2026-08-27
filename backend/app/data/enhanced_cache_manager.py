@@ -491,14 +491,15 @@ class EnhancedCacheManager:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        self._execute("""
-            CREATE TABLE IF NOT EXISTS as_quote_cache (
-                ts_code TEXT PRIMARY KEY,
-                bid_price REAL, bid_volume INTEGER,
-                ask_price REAL, ask_volume INTEGER,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # 373号§9.3：as_quote_cache 已废弃（无写入函数，读取返回空），不再建表
+        # self._execute("""
+        #     CREATE TABLE IF NOT EXISTS as_quote_cache (
+        #         ts_code TEXT PRIMARY KEY,
+        #         bid_price REAL, bid_volume INTEGER,
+        #         ask_price REAL, ask_volume INTEGER,
+        #         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        #     )
+        # """)
         self._execute("""
             CREATE TABLE IF NOT EXISTS adj_factor_cache (
                 ts_code TEXT, trade_date TEXT,
@@ -1456,6 +1457,7 @@ class EnhancedCacheManager:
     # ==================== as_* 盘中数据（保留兼容） ====================
 
     def write_as_market_snapshot(self, records: list):
+        # 373号§9.3：已废弃，保留兼容（盘中数据已迁移至 InMemoryStateStore）
         if not records:
             return
         try:
@@ -1464,6 +1466,7 @@ class EnhancedCacheManager:
             pass
 
     def write_as_top_stocks(self, rank_type: str, records: list):
+        # 373号§9.3：已废弃，保留兼容（盘中数据已迁移至 InMemoryStateStore）
         if not records:
             return
         try:
@@ -1490,6 +1493,7 @@ class EnhancedCacheManager:
             pass
 
     def write_as_limit_pool(self, records: list, limit_type: str):
+        # 373号§9.3：已废弃，保留兼容（盘中数据已迁移至 InMemoryStateStore）
         if not records:
             return
         try:
@@ -3187,3 +3191,207 @@ class EnhancedCacheManager:
             [detail, pipeline_date, step_id]
         )
         self.conn.commit()
+
+    # ════════════════════════════════════════════════════════════
+    # 372号§九：新增ECM方法（市场级聚合统计+状态查询+写入）
+    # ════════════════════════════════════════════════════════════
+
+    def get_market_ma20_ratio(self) -> float:
+        """全市场MA20比率：收盘价>MA20的股票占比"""
+        try:
+            row = self._query_df("""
+                SELECT COUNT(CASE WHEN d.close > m.close THEN 1 END) as above,
+                       COUNT(*) as total
+                FROM daily_cache d
+                JOIN indicator_ma m ON d.ts_code = m.ts_code AND d.trade_date = m.trade_date
+                WHERE d.trade_date = (SELECT MAX(trade_date) FROM daily_cache)
+            """).iloc[0]
+            return row['above'] / row['total'] if row['total'] > 0 else 0.5
+        except Exception:
+            return 0.5
+
+    def get_market_turnover_percentile(self) -> float:
+        """全市场换手率百分位（中位数归一化）"""
+        try:
+            df = self._query_df("""
+                SELECT turnover_rate FROM daily_basic_cache
+                WHERE trade_date = (SELECT MAX(trade_date) FROM daily_basic_cache)
+                AND turnover_rate IS NOT NULL
+            """)
+            if df.empty:
+                return 0.5
+            median = df['turnover_rate'].median()
+            return min(1.0, median / 10.0) if median else 0.5
+        except Exception:
+            return 0.5
+
+    def get_market_limit_ratio(self) -> dict:
+        """涨跌停比率"""
+        try:
+            df = self._query_df("""
+                SELECT SUM(CASE WHEN change_pct >= 9.9 THEN 1 ELSE 0 END) as up_limit,
+                       SUM(CASE WHEN change_pct <= -9.9 THEN 1 ELSE 0 END) as down_limit,
+                       COUNT(*) as total
+                FROM daily_cache
+                WHERE trade_date = (SELECT MAX(trade_date) FROM daily_cache)
+            """)
+            if df.empty or df.iloc[0]['total'] == 0:
+                return {'up': 0.0, 'down': 0.0}
+            r = df.iloc[0]
+            return {'up': r['up_limit'] / r['total'], 'down': r['down_limit'] / r['total']}
+        except Exception:
+            return {'up': 0.0, 'down': 0.0}
+
+    def get_market_rsi_percentile(self) -> float:
+        """RSI14百分位"""
+        try:
+            df = self._query_df("""
+                SELECT rsi14 FROM indicator_other
+                WHERE trade_date = (SELECT MAX(trade_date) FROM indicator_other)
+                AND rsi14 IS NOT NULL
+            """)
+            if df.empty:
+                return 0.5
+            median = df['rsi14'].median()
+            return median / 100.0 if median else 0.5
+        except Exception:
+            return 0.5
+
+    def get_market_erp_percentile(self) -> float:
+        """ERP（股权风险溢价）百分位"""
+        try:
+            df = self._query_df("""
+                SELECT pe_ttm FROM daily_basic_cache
+                WHERE trade_date = (SELECT MAX(trade_date) FROM daily_basic_cache)
+                AND pe_ttm > 0
+            """)
+            if df.empty:
+                return 0.5
+            median_pe = df['pe_ttm'].median()
+            erp = (1.0 / median_pe) if median_pe and median_pe > 0 else 0.03
+            return min(1.0, erp / 0.08) if erp else 0.5
+        except Exception:
+            return 0.5
+
+    def get_market_margin_trend(self) -> dict:
+        """融资趋势（5日变化率）"""
+        try:
+            df = self._query_df("""
+                SELECT trade_date, SUM(rzye) as total
+                FROM margin_cache
+                WHERE trade_date >= date('now', '-10 days')
+                GROUP BY trade_date ORDER BY trade_date DESC LIMIT 5
+            """)
+            if len(df) < 2:
+                return {'trend': 'neutral', 'change_pct': 0.0}
+            oldest = df.iloc[-1]['total'] or 1
+            newest = df.iloc[0]['total'] or 1
+            change_pct = (newest - oldest) / oldest
+            trend = 'up' if change_pct > 0.01 else ('down' if change_pct < -0.01 else 'neutral')
+            return {'trend': trend, 'change_pct': round(change_pct, 4)}
+        except Exception:
+            return {'trend': 'neutral', 'change_pct': 0.0}
+
+    def get_market_pe_median_percentile(self) -> float:
+        """PE_TTM中位数百分位"""
+        try:
+            df = self._query_df("""
+                SELECT pe_ttm FROM daily_basic_cache
+                WHERE trade_date = (SELECT MAX(trade_date) FROM daily_basic_cache)
+                AND pe_ttm > 0
+            """)
+            if df.empty:
+                return 0.5
+            median_pe = df['pe_ttm'].median()
+            return min(1.0, median_pe / 100.0) if median_pe else 0.5
+        except Exception:
+            return 0.5
+
+    def get_status_snapshot_row(self, ts_code: str) -> dict:
+        """读取status_snapshot行（含dim_engine_results）"""
+        try:
+            df = self._query_df(
+                "SELECT * FROM status_snapshot WHERE ts_code=? LIMIT 1", [ts_code])
+            if df.empty:
+                return {}
+            return df.iloc[0].to_dict()
+        except Exception:
+            return {}
+
+    def get_cache_freshness_stats(self) -> dict:
+        """多表新鲜度统计"""
+        tables = {
+            'daily_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM daily_cache',
+            'daily_basic_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM daily_basic_cache',
+            'moneyflow_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM moneyflow_cache',
+            'strategy_signal_detail': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM strategy_signal_detail',
+            'treemap_snapshot': 'SELECT MAX(snapshot_date) as latest, COUNT(*) as cnt FROM treemap_snapshot',
+        }
+        results = {}
+        for name, query in tables.items():
+            try:
+                row = self.conn.execute(query).fetchone()
+                results[name] = {
+                    'latest_date': str(row[0]) if row[0] else None,
+                    'count': row[1],
+                }
+            except Exception as e:
+                results[name] = {'error': str(e)}
+        return results
+
+    def get_pipeline_step_status(self, date: str = None) -> list:
+        """管道步骤状态查询"""
+        try:
+            if date is None:
+                row = self.conn.execute(
+                    "SELECT pipeline_date FROM pipeline_status GROUP BY pipeline_date ORDER BY pipeline_date DESC LIMIT 1"
+                ).fetchone()
+                date = row[0] if row else None
+            if not date:
+                return []
+            df = self._query_df(
+                "SELECT step_id, status, started_at, completed_at, detail FROM pipeline_status WHERE pipeline_date=?",
+                [date])
+            return df.to_dict('records') if not df.empty else []
+        except Exception:
+            return []
+
+    def get_all_active_codes(self) -> list:
+        """获取所有活跃股票代码"""
+        try:
+            df = self._query_df(
+                "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date = (SELECT MAX(trade_date) FROM daily_cache)")
+            return df['ts_code'].tolist() if not df.empty else []
+        except Exception:
+            return []
+
+    def write_signal_record(self, record: dict):
+        """写入信号记录到app.db"""
+        try:
+            import sqlite3 as _sqlite3
+            import os
+            app_db = os.path.join(os.getenv('DATA_DIR', 'data'), 'app.db')
+            with _sqlite3.connect(app_db) as conn:
+                cols = list(record.keys())
+                placeholders = ','.join(['?' for _ in cols])
+                conn.execute(
+                    f"INSERT OR REPLACE INTO signal_records ({','.join(cols)}) VALUES ({placeholders})",
+                    [record[c] for c in cols])
+        except Exception as e:
+            logger.warning(f"写入信号记录失败: {e}")
+
+    def save_factor_combination(self, data: dict):
+        """保存因子组合到factor_combinations表"""
+        try:
+            import sqlite3 as _sqlite3
+            import os
+            app_db = os.path.join(os.getenv('DATA_DIR', 'data'), 'factor_combos.db')
+            with _sqlite3.connect(app_db) as conn:
+                cols = list(data.keys())
+                placeholders = ','.join(['?' for _ in cols])
+                conn.execute(
+                    f"INSERT OR REPLACE INTO factor_combinations ({','.join(cols)}) VALUES ({placeholders})",
+                    [data[c] for c in cols])
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"保存因子组合失败: {e}")

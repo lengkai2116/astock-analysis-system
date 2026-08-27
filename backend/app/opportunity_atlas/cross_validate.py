@@ -79,14 +79,10 @@ def _extract_real_dimensions(dm, ts_code: str) -> dict | None:
     """
     # 365号批次C：优先使用维度引擎结果
     try:
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
-        row = ecm.conn.execute(
-            "SELECT dim_engine_results FROM status_snapshot WHERE ts_code=?", [ts_code]
-        ).fetchone()
-        if row and row[0]:
+        row = dm.cache.get_status_snapshot_row(ts_code)
+        if row and row.get('dim_engine_results'):
             import json
-            der = json.loads(row[0])
+            der = json.loads(row['dim_engine_results'])
             if der and any(v is not None for v in der.values()):
                 return _convert_dim_engine_to_legacy(der)
     except Exception:

@@ -606,9 +606,8 @@ class SchedulerManager:
         from app.data.enhanced_cache_manager import get_ecm_instance
         ecm = get_ecm_instance()
         try:
-            date_count = ecm.conn.execute(
-                "SELECT COUNT(DISTINCT trade_date) FROM daily_basic_cache"
-            ).fetchone()[0]
+            df = ecm._query_df("SELECT COUNT(DISTINCT trade_date) as cnt FROM daily_basic_cache")
+            date_count = df.iloc[0]['cnt'] if not df.empty else 0
         except Exception:
             date_count = 0
 

@@ -934,15 +934,13 @@ def strategy_analyze():
                 # 370号修复：七维描述从strategy_signal_detail.seven_dim_json读取（SIG直出）
                 # 不再调用已废弃的build_seven_dim_report
                 try:
-                    if hasattr(_dm, 'cache') and hasattr(_dm.cache, '_ecm'):
-                        _ecm = _dm.cache._ecm
-                        _ssd_row = _ecm.read_conn.execute(
+                    if hasattr(_dm, 'cache'):
+                        _ssd_df = _dm.cache._query_df(
                             "SELECT seven_dim_json FROM strategy_signal_detail WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
-                            [ts_code]
-                        ).fetchone()
-                        if _ssd_row and _ssd_row[0]:
+                            [ts_code])
+                        if not _ssd_df.empty and _ssd_df.iloc[0].get('seven_dim_json'):
                             import json as _json_ssd
-                            _seven_dim_report = _json_ssd.loads(_ssd_row[0])
+                            _seven_dim_report = _json_ssd.loads(_ssd_df.iloc[0]['seven_dim_json'])
                 except Exception:
                     pass
         except Exception as _ss_err:

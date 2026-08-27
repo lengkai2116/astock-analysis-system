@@ -55,14 +55,11 @@ class RadarService(DataAwareMixin):
 
         # 1. 获取所有有标签的 ts_code
         try:
-            rows = ecm.conn.execute(
-                "SELECT DISTINCT ts_code FROM opportunity_tags_cache"
-            ).fetchall()
+            df = ecm._query_df("SELECT DISTINCT ts_code FROM opportunity_tags_cache")
+            all_tagged = df['ts_code'].tolist() if not df.empty else []
         except Exception as e:
             logger.warning("get_radar_signals: 查询标签表失败: %s", e)
             return []
-
-        all_tagged = [r[0] for r in rows]
         if not all_tagged:
             return []
 

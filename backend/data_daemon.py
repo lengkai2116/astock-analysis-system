@@ -1707,20 +1707,22 @@ _SYNCED_TODAY = False
 
 
 def run_daily_sync():
-    """15:30 触发：批量 API 同步 5 类数据"""
+    """15:30 触发：日终批量同步 + 后台任务触发
+
+    COL-1~COL-6（日线/基本面/资金流/涨跌停/龙虎榜/概念）已由管道驱动
+    _drive_pipeline() 统一管理，此处只执行管道未覆盖的额外同步。
+
+    373号方案§五决策点#1：合并 run_daily_sync 与 _drive_pipeline 重叠的
+    COL 采集调用，消除交易日重复工作。
+    """
     global _SYNCED_TODAY
     today = datetime.now().strftime('%Y%m%d')
     logger.info("=== 日终同步开始 ===")
 
+    # ── 管道未覆盖的额外数据采集（COL-1~COL-6 由 _drive_pipeline 管理） ──
     tasks = [
-        ('daily_cache',      _batch_daily,      '日线'),
-        ('daily_basic_cache',_batch_daily_basic,'基本面'),
-        ('moneyflow_cache',  _batch_moneyflow,  '资金流向'),
-        ('stk_limit_cache',  _batch_stk_limit,  '涨跌停'),
-        ('index_daily_cache',_batch_index_daily,'指数日线'),
-        ('lhb_cache',        _batch_lhb,        '龙虎榜'),
-        ('lhb_detail_cache', _batch_lhb_detail, '龙虎榜席位'),
-        ('concept_cache',    _batch_concept,    '概念板块'),
+        ('index_daily_cache', _batch_index_daily, '指数日线'),
+        ('lhb_detail_cache',  _batch_lhb_detail,  '龙虎榜席位'),
     ]
 
     for table, batch_fn, label in tasks:
@@ -1745,11 +1747,7 @@ def run_daily_sync():
         logger.info(f"  融资融券: {n} 条")
     except Exception as e:
         logger.warning(f"  融资融券同步失败: {e}")
-    try:
-        n = _batch_concept()
-        logger.info(f"  概念板块: {n} 条")
-    except Exception as e:
-        logger.warning(f"  概念板块同步失败: {e}")
+    # 注：_batch_concept 已由管道 COL-6 统一管理，不再此处重复调用
     try:
         n = _batch_index_member()
         logger.info(f"  指数成分股: {n} 条")
