@@ -113,7 +113,15 @@ class UnifiedStrategyCore:
         scs: object = None,
     ) -> StandardizedResult:
         """将 SignalComputationService 的 List[Dict] 输出转为 StandardizedResult"""
-        today = datetime.now().strftime('%Y-%m-%d')
+        # 374号修正：使用最新交易日而非今日日期（今日可能非交易日）
+        try:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            _ecm = get_ecm_instance()
+            today = _ecm.conn.execute("SELECT MAX(trade_date) FROM daily_cache").fetchone()[0]
+            if not today:
+                today = datetime.now().strftime('%Y-%m-%d')
+        except Exception:
+            today = datetime.now().strftime('%Y-%m-%d')
         result_signals: dict[str, StrategySignal] = {}
 
         for sig in signals:
