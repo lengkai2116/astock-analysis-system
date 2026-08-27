@@ -104,3 +104,4 @@ start_daemon.sh
 # Backup files
 *.bak.*
 *.bak
+.worktrees
