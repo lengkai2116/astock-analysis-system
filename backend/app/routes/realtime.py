@@ -98,8 +98,8 @@ def handle_subscribe_kline(data):
         logger.info(f"客户端订阅K线: {ts_code} ({freq})")
 
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            ecm = get_ecm_instance()
+            from app.data import DataManager
+            ecm = DataManager().cache
             kline_data = ecm.get_cached_kline(ts_code, freq)
             if kline_data is not None and not kline_data.empty:
                 emit('kline_init', {
@@ -207,8 +207,8 @@ def get_indexes_realtime():
 
             # 盘后 → 从 ECM 读取最近交易日日线数据
             try:
-                from app.data.enhanced_cache_manager import get_ecm_instance
-                ecm = get_ecm_instance()
+                from app.data import DataManager
+                ecm = DataManager().cache
                 idx_df = ecm.get_cached_daily(idx['ts_code'], limit=2)
                 if idx_df is not None and not idx_df.empty:
                     latest = idx_df.iloc[-1].to_dict()

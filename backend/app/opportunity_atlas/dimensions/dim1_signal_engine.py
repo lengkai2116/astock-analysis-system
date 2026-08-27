@@ -3,7 +3,6 @@
 358号方案 v4.1：第1维信号确认维度引擎。
 
 整合源：
-  - signal_attribute_classifier.py（384行）：7类信号属性分类 + 共振评分 + 条件稽核
   - signal_decay_detector.py（145行）：5维度联合衰减检测
   - confirm_layer.py（230行）中的信号验证逻辑
 
@@ -203,7 +202,7 @@ def detect_decay(tags: dict, lifecycle: dict = None) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════
-# 信号属性分类（从 signal_attribute_classifier.py 迁移）
+# 信号属性分类
 # ═══════════════════════════════════════════════════════════
 
 def classify_attribute(dims: dict, tags: dict, lifecycle: dict) -> dict:

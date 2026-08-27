@@ -261,21 +261,7 @@ class StageDetector:
 
 # === DataAwareMixin (app/data/mixins.py) ===
 
-class DataAwareMixin:
-    """统一 DataManager 延迟注入 Mixin"""
-    _dm = None
-
-    def _get_dm(self):
-        if self._dm is None:
-            from app.data import DataManager
-            self._dm = DataManager()
-        return self._dm
-
-    def _get_cache(self):
-        return self._get_dm().cache
-
-    def _inject_dm(self, dm):
-        self._dm = dm
+from app.data.mixins import DataAwareMixin
 
 
 
@@ -5745,8 +5731,11 @@ def _fund_chip_plain(phase, fund_flow, cost, signal, retail_inst, margin):
     return '，'.join(parts) if parts else '资金筹码数据不足，无法判断主力动向'
 
 
-class Dim4ChipFundEngine:
+class Dim4ChipFundEngine(DataAwareMixin):
     """第4维 资金筹码引擎 — 阶段判定 + 6信号 + 拥挤度 + 标签提取"""
+
+    def __init__(self):
+        self._dm = None
 
     def evaluate(self, dims, tags, signals=None, lifecycle=None):
         phase_info = _assess_phase(tags, dims)
@@ -5760,8 +5749,7 @@ class Dim4ChipFundEngine:
         ts_code = tags.get('ts_code', '')
         phase_engine_result = None
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            ecm = get_ecm_instance()
+            ecm = self._get_dm().cache
             if ts_code:
                 df = ecm.get_cached_daily(ts_code)
                 if df is not None and not df.empty and len(df) >= 30:

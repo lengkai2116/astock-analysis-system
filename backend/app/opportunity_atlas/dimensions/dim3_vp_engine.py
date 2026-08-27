@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from app.engine.patterns.engine import PatternEngine
+from app.data.mixins import DataAwareMixin
 
 logger = logging.getLogger(__name__)
 
@@ -4355,15 +4356,15 @@ def classify_vol_ratio(vol_ratio):
 # 第3维 引擎
 # ═══════════════════════════════════════════════════════════
 
-class Dim3VPEngine:
+class Dim3VPEngine(DataAwareMixin):
     """第3维 量价健康引擎 — 四阶段链 + 形态检测 + 背离检测 + 10分制评分"""
 
     def __init__(self):
+        self._dm = None
         self.pattern_engine = PatternEngine()
 
     def evaluate(self, dims, tags, signals=None, lifecycle=None):
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
+        ecm = self._get_dm().cache
         ts_code = tags.get('ts_code', '')
         try:
             df = ecm.get_cached_daily(ts_code)

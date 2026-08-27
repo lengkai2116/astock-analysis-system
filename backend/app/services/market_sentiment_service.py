@@ -123,8 +123,7 @@ class MarketSentimentService:
             trade_date = datetime.now().strftime('%Y%m%d')
 
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            ecm = get_ecm_instance()
+            ecm = self.data_manager.cache
             df = ecm._query_df(
                 "SELECT ts_code, trade_date, open, high, low, close, vol, amount, pct_chg "
                 "FROM daily_cache WHERE trade_date = ?",

@@ -161,18 +161,19 @@ class ValuationEngine(DataAwareMixin):
     # 315号 F5：锚3 现金流截面分位基准
     # ═══════════════════════════════════════════════
 
-    def build_fcf_percentile(self, ecm) -> None:
+    def build_fcf_percentile(self, ecm=None) -> None:
         """构建全市场 FCF yield 截面百分位基准（锚3 相对化用，precompute 前调用）"""
         try:
             import bisect
-            codes = ecm._query_df("SELECT ts_code FROM treemap_snapshot")["ts_code"].tolist()
+            cache = self._get_dm().cache
+            codes = cache._query_df("SELECT ts_code FROM treemap_snapshot")["ts_code"].tolist()
             vals = []
             # 2026-08-06 修复：原抽样 3000 与方案"全市场截面基准"不符，
             # 改为全量遍历
             for code in codes:
                 try:
-                    df_b = ecm.get_cached_daily_basic(code)
-                    df_cf = ecm.cache.get_cached_cashflow(code)
+                    df_b = cache.get_cached_daily_basic(code)
+                    df_cf = cache.get_cached_cashflow(code)
                     if df_b is not None and not df_b.empty and df_cf is not None and not df_cf.empty:
                         if 'total_mv' in df_b.columns and 'free_cashflow' in df_cf.columns:
                             mv = df_b['total_mv'].dropna()
@@ -204,7 +205,7 @@ class ValuationEngine(DataAwareMixin):
     # 315号方案B：composite 截面百分位分档（对齐 416 设计 5/20/80/95）
     # ═══════════════════════════════════════════════
 
-    def build_composite_percentile(self, ecm) -> None:
+    def build_composite_percentile(self, ecm=None) -> None:
         """构建全市场 composite_rating 截面百分位基准（precompute 前调用一次）
 
         从标签表最近一次 composite_rating 排序（跨轮滞后一天，百分位相对语义可接受）。
@@ -216,7 +217,8 @@ class ValuationEngine(DataAwareMixin):
         """
         try:
             import bisect
-            rows = ecm._query_df(
+            cache = self._get_dm().cache
+            rows = cache._query_df(
                 "SELECT DISTINCT ts_code, tag_value FROM opportunity_tags_cache "
                 "WHERE tag_name='composite_rating' AND tag_value IS NOT NULL AND tag_value != '' "
                 "AND id IN (SELECT MAX(id) FROM opportunity_tags_cache WHERE tag_name='composite_rating' GROUP BY ts_code)"

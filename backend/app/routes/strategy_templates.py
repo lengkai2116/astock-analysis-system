@@ -3,10 +3,10 @@
 提供策略模板的CRUD操作
 """
 from flask import Blueprint, request, jsonify
-import sqlite3
 import json
 from datetime import datetime
 import logging
+from sqlalchemy import create_engine
 from app.utils.error_handlers import handle_exceptions
 
 strategy_templates_bp = Blueprint('strategy_templates', __name__, url_prefix='/api/strategy-templates')
@@ -19,8 +19,36 @@ def get_db_path():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_dir, '..', DB_PATH)
 
+
+# ══════════════════════════════════════════════════════════════
+# RL5 合规：通过 SQLAlchemy 引擎管理 strategy_templates.db 连接
+# 不直接使用 sqlite3.connect()，统一走 SQLAlchemy 连接池
+# ══════════════════════════════════════════════════════════════
+_st_engine = None
+
+
+def _get_st_engine():
+    """获取策略模板数据库的 SQLAlchemy 引擎（延迟初始化、单例）"""
+    global _st_engine
+    if _st_engine is None:
+        import os
+        db_path = os.path.abspath(get_db_path())
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        _st_engine = create_engine(
+            f"sqlite:///{db_path}",
+            echo=False,
+            pool_pre_ping=True,
+        )
+    return _st_engine
+
+
+def _get_st_conn():
+    """获取策略模板数据库连接（通过 SQLAlchemy 引擎，RL5 合规）"""
+    return _get_st_engine().raw_connection()
+
+
 def init_db():
-    conn = sqlite3.connect(get_db_path())
+    conn = _get_st_conn()
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -289,7 +317,7 @@ def get_templates():
     category = request.args.get('category')
     search = request.args.get('search')
     
-    conn = sqlite3.connect(get_db_path())
+    conn = _get_st_conn()
     cursor = conn.cursor()
     
     query = "SELECT * FROM strategy_templates WHERE 1=1"
@@ -364,7 +392,7 @@ def get_categories():
 @handle_exceptions
 def get_template(template_id):
     """获取单个策略模板详情"""
-    conn = sqlite3.connect(get_db_path())
+    conn = _get_st_conn()
     cursor = conn.cursor()
     
     cursor.execute("SELECT * FROM strategy_templates WHERE id = ?", (template_id,))
@@ -423,7 +451,7 @@ def create_template():
             "message": "名称、分类和代码模板为必填项"
         }), 400
     
-    conn = sqlite3.connect(get_db_path())
+    conn = _get_st_conn()
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -454,7 +482,7 @@ def update_template(template_id):
     code_template = data.get('code_template')
     parameters = data.get('parameters')
     
-    conn = sqlite3.connect(get_db_path())
+    conn = _get_st_conn()
     cursor = conn.cursor()
     
     update_fields = []
@@ -497,7 +525,7 @@ def update_template(template_id):
 @handle_exceptions
 def delete_template(template_id):
     """删除策略模板"""
-    conn = sqlite3.connect(get_db_path())
+    conn = _get_st_conn()
     cursor = conn.cursor()
     
     # 检查是否为系统模板

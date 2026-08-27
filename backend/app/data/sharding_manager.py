@@ -91,7 +91,7 @@ class ShardingManager:
             'lhb_detail_cache': None,
             'sentiment_pool_cache': None,
             'conditional_win_rate_cache': None,
-            'indicator_cache': None,
+
             'opportunity_advice_history': None,
             'opportunity_library': None,
             'opportunity_status_history': None,

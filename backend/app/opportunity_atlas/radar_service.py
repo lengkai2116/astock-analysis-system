@@ -51,12 +51,14 @@ class RadarService(DataAwareMixin):
         3. 按 signal_strength 降序排列取 top N
         4. 对每只雷达股展示关键标签
         """
-        ecm = self._get_ecm()
+        cache = self._get_dm().cache
 
         # 1. 获取所有有标签的 ts_code
         try:
-            df = ecm._query_df("SELECT DISTINCT ts_code FROM opportunity_tags_cache")
-            all_tagged = df['ts_code'].tolist() if not df.empty else []
+            df = cache._query_df(
+                "SELECT DISTINCT ts_code FROM opportunity_tags_cache"
+            )
+            all_tagged = df["ts_code"].tolist()
         except Exception as e:
             logger.warning("get_radar_signals: 查询标签表失败: %s", e)
             return []
@@ -75,7 +77,7 @@ class RadarService(DataAwareMixin):
             return []
 
         # 3. 批量获取标签（最多取 200 只候选避免过大开销）
-        batch = ecm.get_tags_batch(candidates[:200])
+        batch = cache.get_tags_batch(candidates[:200])
 
         # 4. 按 signal_strength 降序排列
         scored: list[dict] = []

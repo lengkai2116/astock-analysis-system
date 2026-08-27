@@ -72,13 +72,12 @@ def get_cache_stats():
         stats_df = data_manager.get_cache_stats()
         
         # 获取缓存统计（244号方案：从 DuckDB 替代 PG DailyData）
-        from app.data.enhanced_cache_manager import get_ecm_instance
         stock_count = Stock.query.count()
         try:
-            ecm = get_ecm_instance()
+            ecm = data_manager.cache
             count_df = pd.read_sql(
                 "SELECT COUNT(*) AS cnt FROM daily_cache"
-            , ecm.conn)
+            , ecm.read_conn)
             daily_count = int(count_df['cnt'].iloc[0]) if not count_df.empty else 0
         except Exception:
             daily_count = 0

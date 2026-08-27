@@ -61,10 +61,16 @@ class StatusEngine:
     # 主入口
     # ══════════════════════════════════════════════════════════
 
-    def evaluate(self, ts_code: str) -> Optional[dict]:
+    def evaluate(self, ts_code: str, dim_results: Optional[dict] = None) -> Optional[dict]:
         """生产环节主流程：原料 → L1 → L0 → L2 → 成品仓行
 
         366号步骤3：重构为调用维度引擎，通过兼容层保持下游兼容。
+        370号修正：支持传入预计算的 dim_results（从 strategy_signal_detail.dim_results_json），
+        跳过重复的维度引擎计算，提升JUD步骤性能。
+
+        Args:
+            ts_code: 股票代码
+            dim_results: 预计算的维度引擎结果（可选），跳过 _build_dim_engine_results
 
         Returns: status_snapshot 行 dict（或 None 数据缺失）
         """
@@ -75,8 +81,12 @@ class StatusEngine:
 
         lifecycle = self._signal_lifecycle(ts_code, tags, signals)
 
-        # 366号步骤3：用维度引擎替代_build_dimensions()
-        dim_engine_results = self._build_dim_engine_results(tags, signals, {}, lifecycle)
+        # 370号修正：优先使用预计算的维度引擎结果，避免重复计算
+        if dim_results:
+            dim_engine_results = dim_results
+        else:
+            # 366号步骤3：用维度引擎替代_build_dimensions()
+            dim_engine_results = self._build_dim_engine_results(tags, signals, {}, lifecycle)
 
         # dim8 状态总结：读取 dim1-dim7 输出，组装综合报告
         try:
@@ -690,15 +700,6 @@ def apply_advice_params(params: dict, price: Optional[float],
             pass
     return {'state': state, 'max_position_ratio': params.get('max_position_ratio', 0.0),
             'reason': '可入场' if state == 'enter' else '观望'}
-
-
-def build_seven_dim_report(snapshot_row: dict, tags: dict = None,
-                           geo: dict = None, l0: dict = None, df=None) -> dict:
-    """[已废弃] 旧Path B七维描述生成 — 370号方案确认由SIG直接产出seven_dim_json替代
-
-    保留空壳函数避免管道崩溃，待S6步骤（OUT简化）完成后彻底删除。
-    """
-    return {}
 
 
 def generate_seven_dim_from_signals(signal_json: dict) -> dict:

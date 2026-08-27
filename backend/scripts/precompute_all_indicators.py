@@ -1,7 +1,7 @@
 """
 全市场技术指标预计算脚本
 =========================
-读取 daily_cache → 逐只股票计算 MA/MACD/RSI/KDJ/BOLL → 写入 indicator_cache
+读取 daily_cache → 逐只股票计算 MA/MACD/RSI/KDJ/BOLL → 写入宽表 indicator_ma/indicator_macd/indicator_other
 约 5500 只 × 1200 天 × 15 指标，预估耗时 ~30 分钟。
 """
 import sys, os, time
@@ -83,16 +83,22 @@ with app.app_context():
     ecm.conn.commit()
     t_elapsed = time.time() - t_start
 
-    # 3. 验证结果
-    cnt = ecm.conn.execute(
-        "SELECT COUNT(*) FROM indicator_cache"
+    # 3. 验证结果（旧 indicator_cache 已拆分为 indicator_ma/indicator_macd/indicator_other 宽表）
+    cnt_ma = ecm.conn.execute(
+        "SELECT COUNT(*) FROM indicator_ma"
+    ).fetchone()[0]
+    cnt_macd = ecm.conn.execute(
+        "SELECT COUNT(*) FROM indicator_macd"
+    ).fetchone()[0]
+    cnt_other = ecm.conn.execute(
+        "SELECT COUNT(*) FROM indicator_other"
     ).fetchone()[0]
     stocks_with_data = ecm.conn.execute(
-        "SELECT COUNT(DISTINCT ts_code) FROM indicator_cache"
+        "SELECT COUNT(DISTINCT ts_code) FROM indicator_ma"
     ).fetchone()[0]
 
     logger.info("=" * 50)
     logger.info(f"预计算完成: {ok} 只成功, {skip} 只跳过")
     logger.info(f"总耗时: {t_elapsed:.0f}s ({t_elapsed/60:.1f}min)")
-    logger.info(f"indicator_cache: {cnt} 行, {stocks_with_data} 只")
+    logger.info(f"indicator_ma: {cnt_ma} 行, indicator_macd: {cnt_macd} 行, indicator_other: {cnt_other} 行, {stocks_with_data} 只")
     logger.info("=" * 50)

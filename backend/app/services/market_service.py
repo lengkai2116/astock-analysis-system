@@ -68,8 +68,7 @@ class MarketService:
 
         # 从 ECM 读取最近交易日日线数据
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            ecm = get_ecm_instance()
+            ecm = self.data_manager.cache
             results = []
             for idx in indices:
                 try:

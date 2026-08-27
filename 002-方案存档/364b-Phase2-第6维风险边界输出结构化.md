@@ -4,6 +4,7 @@ type: 实施方案（子方案）
 date: 2026-08-21
 version: v1.0
 parent: 364-七维现状描述系统实施方案（总纲）
+status: 已废弃——369号维度引擎整合后，dim6_risk_engine已替代本方案Phase2功能
 ---
 
 # 364b - Phase 2：第6维风险边界输出结构化（8h）

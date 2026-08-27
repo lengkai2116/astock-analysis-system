@@ -147,25 +147,35 @@ class DashboardService:
             return None
 
         # 成交额同比变化（基于daily_cache历史数据推算）
+        # Tushare index_daily 的 amount 单位是千元，需 ×1000 转为元
         volume_change_pct = 0
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            _ecm = get_ecm_instance()
+            from app.data.sharding_manager import sharding_manager
+            _conn = sharding_manager.get_connection('market_cache.db')
             _idx_codes = ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']
             _placeholders = ','.join(['?' for _ in _idx_codes])
-            _today_row = _ecm.conn.execute(
+            _today_row = _conn.execute(
                 f"SELECT SUM(amount) as total FROM daily_cache WHERE ts_code IN ({_placeholders}) "
                 "AND trade_date = (SELECT MAX(trade_date) FROM daily_cache)",
                 _idx_codes
             ).fetchone()
-            _prev_row = _ecm.conn.execute(
-                f"SELECT SUM(amount) as total FROM daily_cache WHERE ts_code IN ({_placeholders}) "
+            _prev_date = _conn.execute(
+                "SELECT trade_date FROM daily_cache WHERE ts_code='000001.SH' "
                 "AND trade_date < (SELECT MAX(trade_date) FROM daily_cache) "
-                "ORDER BY trade_date DESC LIMIT 1",
-                _idx_codes
+                "ORDER BY trade_date DESC LIMIT 1"
             ).fetchone()
+            _prev_row = None
+            if _prev_date:
+                _prev_row = _conn.execute(
+                    f"SELECT SUM(amount) as total FROM daily_cache WHERE ts_code IN ({_placeholders}) "
+                    f"AND trade_date = ?",
+                    _idx_codes + [_prev_date[0]]
+                ).fetchone()
             if _today_row and _today_row[0] and _prev_row and _prev_row[0] and _prev_row[0] > 0:
-                volume_change_pct = round((_today_row[0] - _prev_row[0]) / _prev_row[0] * 100, 1)
+                # amount 单位千元 → 元（×1000），与 total_volume（元）对齐
+                today_amt = _today_row[0] * 1000
+                prev_amt = _prev_row[0] * 1000
+                volume_change_pct = round((today_amt - prev_amt) / prev_amt * 100, 1)
         except Exception:
             pass
 
@@ -323,26 +333,23 @@ class DashboardService:
         try:
             import pandas as pd
 
-            from app.data.enhanced_cache_manager import get_ecm_instance
             from app.models import Stock
 
-            ecm = get_ecm_instance()
-            # 查询 daily_cache 最新日期（从分库）
-            from app.data.sharding_manager import sharding_manager
-            conn = sharding_manager.get_connection('market_cache')
+            ecm = self.data_manager.cache
+            # 查询 daily_cache 最新日期
             date_df = pd.read_sql(
                 "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1",
-                conn
+                ecm.read_conn
             )
             if date_df.empty:
-                logger.error("涨跌幅榜: daily_cache 无任何历史数据")
-                raise ValueError("daily_cache 无日期记录")
+                logger.error("涨跌幅榜: DuckDB 无任何历史数据")
+                raise ValueError("DuckDB daily_cache 无日期记录，走 Tushare 降级")
             last_date = date_df['trade_date'].iloc[0]
 
             # 取该日全市场数据
             all_df = pd.read_sql(
                 "SELECT * FROM daily_cache WHERE trade_date = ? ORDER BY pct_chg DESC",
-                conn, params=[last_date]
+                ecm.read_conn, params=[last_date]
             )
             if all_df.empty:
                 logger.error("涨跌幅榜: DuckDB 查询为空")
@@ -368,7 +375,7 @@ class DashboardService:
                 except Exception:
                     pass
 
-            all_df['name'] = all_df['ts_code'].map(lambda x: stock_map.get(x, x))
+            all_df['name'] = all_df['ts_code'].map(lambda x: stock_map.get(x, ''))
             sort_asc = (type == 'down')
             top_df = all_df.sort_values('pct_chg', ascending=sort_asc).head(limit)
 
@@ -437,10 +444,9 @@ class DashboardService:
         try:
             import pandas as pd
 
-            from app.data.enhanced_cache_manager import get_ecm_instance
             from app.models import Stock
 
-            ecm = get_ecm_instance()
+            ecm = self.data_manager.cache
             # 取最近数据充足的交易日
             best_date = self._get_best_trade_date()
             if not best_date:
@@ -451,7 +457,7 @@ class DashboardService:
             # 取该日全市场 pct_chg + ts_code
             all_df = pd.read_sql(
                 "SELECT ts_code, pct_chg FROM daily_cache WHERE trade_date = ?",
-                ecm.conn, params=[last_date]
+                ecm.read_conn, params=[last_date]
             )
             if all_df.empty:
                 logger.error("板块涨跌幅 DuckDB: 当日无数据")
@@ -528,10 +534,9 @@ class DashboardService:
         try:
             import pandas as pd
 
-            from app.data.enhanced_cache_manager import get_ecm_instance
             from app.models import Stock
 
-            ecm = get_ecm_instance()
+            ecm = self.data_manager.cache
             best_date = self._get_best_trade_date()
             if not best_date:
                 logger.error("dashboard/summary DuckDB: 无历史数据")
@@ -542,7 +547,7 @@ class DashboardService:
             # 取该日全市场数据
             all_df = pd.read_sql(
                 "SELECT ts_code, close, pct_chg FROM daily_cache WHERE trade_date = ?",
-                ecm.conn, params=[last_date]
+                ecm.read_conn, params=[last_date]
             )
             if all_df.empty:
                 logger.error("dashboard/summary DuckDB: 当日无数据")
@@ -800,11 +805,10 @@ class DashboardService:
     def _try_get_latest_trade_date(self) -> Optional[str]:
         """获取最近可用的交易日（YYYYMMDD），优先 DuckDB daily_cache → 推算"""
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            ecm = get_ecm_instance()
+            ecm = self.data_manager.cache
             date_df = pd.read_sql(
                 "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-            , ecm.conn)
+            , ecm.read_conn)
             if not date_df.empty:
                 return str(date_df['trade_date'].iloc[0]).replace('-', '')
         except Exception:
@@ -823,12 +827,11 @@ class DashboardService:
         try:
             import pandas as pd
 
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            ecm = get_ecm_instance()
+            ecm = self.data_manager.cache
             df = pd.read_sql(
                 "SELECT trade_date, COUNT(*) as cnt FROM daily_cache "
                 "GROUP BY trade_date HAVING cnt >= ? ORDER BY trade_date DESC LIMIT 1",
-                ecm.conn, params=[min_stocks]
+                ecm.read_conn, params=[min_stocks]
             )
             if not df.empty:
                 return str(df['trade_date'].iloc[0])

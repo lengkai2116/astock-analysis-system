@@ -18,6 +18,8 @@ import pandas as pd
 from typing import Dict, Optional, Tuple
 from datetime import datetime, timedelta
 
+from app.data.mixins import DataAwareMixin
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,10 +30,11 @@ SLOW_HIGH_THRESHOLD = 0.70   # 慢线值高于70%分位=高位
 SLOW_LOW_THRESHOLD = 0.30    # 慢线值低于30%分位=低位
 
 
-class BociasiQuadrantAnalyzer:
+class BociasiQuadrantAnalyzer(DataAwareMixin):
     """BOCIASI四象限分析器 — 基于全市场数据的情绪状态判定"""
 
     def __init__(self, ecm=None):
+        self._dm = None
         self._ecm = ecm
         self._cache = {}  # 计算缓存
 
@@ -188,7 +191,7 @@ class BociasiQuadrantAnalyzer:
 
     def _compute_ma20_ratio(self) -> float:
         """计算MA20强势股占比"""
-        conn = self._get_conn()
+        conn = self._get_dm().cache.conn
         # 获取昨日有日线数据的股票
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         row = conn.execute("""
@@ -208,7 +211,7 @@ class BociasiQuadrantAnalyzer:
 
     def _compute_turnover_percentile(self) -> float:
         """全市场换手率分位（364d修复）"""
-        conn = self._get_conn()
+        conn = self._get_dm().cache.conn
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         try:
             row = conn.execute("""
@@ -229,7 +232,7 @@ class BociasiQuadrantAnalyzer:
 
     def _compute_limit_ratio(self) -> float:
         """计算涨跌停比"""
-        conn = self._get_conn()
+        conn = self._get_dm().cache.conn
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         yesterday = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
         row = conn.execute("""
@@ -246,7 +249,7 @@ class BociasiQuadrantAnalyzer:
 
     def _compute_rsi_percentile(self) -> float:
         """全市场RSI_14中位数分位（364d修复）"""
-        conn = self._get_conn()
+        conn = self._get_dm().cache.conn
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         try:
             row = conn.execute("""
@@ -268,7 +271,7 @@ class BociasiQuadrantAnalyzer:
 
     def _compute_erp_percentile(self) -> float:
         """计算ERP分位（364d修复：1/PE_TTM - 国债收益率的历史分位）"""
-        conn = self._get_conn()
+        conn = self._get_dm().cache.conn
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         try:
             row = conn.execute("""
@@ -291,7 +294,7 @@ class BociasiQuadrantAnalyzer:
 
     def _compute_margin_trend(self) -> float:
         """计算融资余额趋势（5日变化率归一化）"""
-        conn = self._get_conn()
+        conn = self._get_dm().cache.conn
         try:
             recent = conn.execute("""
                 SELECT trade_date, SUM(rzye) as total
@@ -312,7 +315,7 @@ class BociasiQuadrantAnalyzer:
 
     def _compute_pe_percentile(self) -> float:
         """全市场PE_TTM中位数分位（364d修复）"""
-        conn = self._get_conn()
+        conn = self._get_dm().cache.conn
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         try:
             row = conn.execute("""
@@ -338,10 +341,3 @@ class BociasiQuadrantAnalyzer:
         if high <= low:
             return 0.5
         return max(0, min(1, (value - low) / (high - low)))
-
-    def _get_conn(self):
-        """获取数据库连接"""
-        if self._ecm is None:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            self._ecm = get_ecm_instance()
-        return self._ecm.conn

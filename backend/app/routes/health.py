@@ -51,8 +51,8 @@ def _get_db_status():
 def _get_sqlite_cache_status():
     """检查 SQLite WAL 缓存状态（250号方案替代 DuckDB）"""
     try:
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
+        from app.data import DataManager
+        ecm = DataManager().cache
         stats_df = ecm.get_cache_stats()
         stats = stats_df.iloc[0].to_dict() if not stats_df.empty else {}
         db_size = 0
@@ -309,22 +309,51 @@ def readiness_check():
 @health_bp.route('/api/v3/health/data-freshness', methods=['GET'])
 def data_freshness():
     """返回 SQLite WAL 各缓存表的最新日期和记录数（327阶段2：扩展预计算关键表+管道状态）"""
+    tables = {
+        'daily_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM daily_cache',
+        'daily_basic_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM daily_basic_cache',
+        'moneyflow_cache': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM moneyflow_cache',
+        'win_rate_cache': 'SELECT MAX(evaluated_at) as latest, COUNT(*) as cnt FROM win_rate_cache',
+        # 327阶段2：预计算关键表（策略信号/标签/快照）
+        'strategy_signal_detail': 'SELECT MAX(trade_date) as latest, COUNT(*) as cnt FROM strategy_signal_detail',
+        'opportunity_tags_cache': 'SELECT MAX(updated_at) as latest, COUNT(*) as cnt FROM opportunity_tags_cache',
+        'treemap_snapshot': 'SELECT MAX(snapshot_date) as latest, COUNT(*) as cnt FROM treemap_snapshot',
+    }
+    results = {}
     try:
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
-        results = ecm.get_cache_freshness_stats()
-        # 管道状态
+        from app.data import DataManager
+        from app.data.sharding_manager import sharding_manager
+        ecm = DataManager().cache
+        # 分库表用 sharding_manager 读取 market_cache.db
+        sharded_tables = {'daily_cache', 'daily_basic_cache', 'moneyflow_cache'}
+        for name, query in tables.items():
+            try:
+                if name in sharded_tables:
+                    conn = sharding_manager.get_connection('market_cache.db')
+                    row = conn.execute(query).fetchone()
+                else:
+                    row = ecm.read_conn.execute(query).fetchone()
+                results[name] = {
+                    'latest_date': str(row[0]) if row[0] else None,
+                    'count': row[1],
+                }
+            except Exception as e:
+                results[name] = {'error': str(e)}
+        # 327阶段2：管道状态（最新数据日期的环节进度）
         try:
-            pipe_df = ecm.get_pipeline_step_status()
-            if pipe_df:
-                done_cnt = sum(1 for r in pipe_df if r.get('status') == 'done')
-                running_cnt = sum(1 for r in pipe_df if r.get('status') == 'running')
-                pending_cnt = sum(1 for r in pipe_df if r.get('status') == 'pending')
-                failed_cnt = sum(1 for r in pipe_df if r.get('status') == 'failed')
+            pipe_row = ecm.read_conn.execute(
+                "SELECT pipeline_date, "
+                "SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as done_cnt, "
+                "SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) as running_cnt, "
+                "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending_cnt, "
+                "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed_cnt "
+                "FROM pipeline_status GROUP BY pipeline_date ORDER BY pipeline_date DESC LIMIT 1"
+            ).fetchone()
+            if pipe_row:
                 results['pipeline'] = {
-                    'pipeline_date': pipe_df[0].get('pipeline_date', '') if pipe_df else '',
-                    'done': done_cnt, 'running': running_cnt,
-                    'pending': pending_cnt, 'failed': failed_cnt,
+                    'pipeline_date': pipe_row[0],
+                    'done': pipe_row[1], 'running': pipe_row[2],
+                    'pending': pipe_row[3], 'failed': pipe_row[4],
                 }
         except Exception as e:
             results['pipeline'] = {'error': str(e)}

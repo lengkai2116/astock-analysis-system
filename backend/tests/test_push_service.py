@@ -135,6 +135,12 @@ def _make_mock_app():
     mock_data_mod.enhanced_cache_manager = mock_ecm_mod
     mock_data_mod.ws_bridge = MagicMock()
     mock_data_mod.ws_bridge.ws_bridge = mock_ws_bridge
+    # Mock DataManager().cache to return mock_ecm (new pattern)
+    mock_dm_cls = MagicMock()
+    mock_dm_instance = MagicMock()
+    mock_dm_instance.cache = mock_ecm
+    mock_dm_cls.return_value = mock_dm_instance
+    mock_data_mod.DataManager = mock_dm_cls
 
     mock_app = MagicMock()
     mock_app.data = mock_data_mod

@@ -162,7 +162,7 @@ def get_stock_quote(ts_code):
     错误: 全源失败 → 503 DataUnavailable
     """
     from app.data.memory_cache import TieredMemoryCache
-    from app.data.enhanced_cache_manager import get_ecm_instance
+    from app.data import DataManager
 
     cache = TieredMemoryCache()
     cache_key = f'quote:{ts_code}'
@@ -172,7 +172,7 @@ def get_stock_quote(ts_code):
     if cached is not None:
         return jsonify({'code': 0, 'data': cached})
 
-    ecm = get_ecm_instance()
+    ecm = DataManager().cache
 
     # ── 1. 日线：ECM daily_cache 优先 ────────────────────
     end_dt = datetime.now()
@@ -320,7 +320,7 @@ def get_stock_moneyflow(ts_code):
     错误: 全源失败 → 503 DataUnavailable
     """
     from app.data.memory_cache import TieredMemoryCache
-    from app.data.enhanced_cache_manager import get_ecm_instance
+    from app.data import DataManager
 
     cache = TieredMemoryCache()
     cache_key = f'moneyflow:{ts_code}'
@@ -329,7 +329,7 @@ def get_stock_moneyflow(ts_code):
     if cached is not None:
         return jsonify({'code': 0, 'data': cached})
 
-    ecm = get_ecm_instance()
+    ecm = DataManager().cache
 
     # 从 moneyflow_cache 取最近30日数据
     end_dt = datetime.now()
@@ -439,8 +439,8 @@ def get_stock_orderbook(ts_code):
     """E8: 盘口五档数据（实时）— 快照库优先，InMemoryStateStore 降级（迭代1）"""
     try:
         # 第一优先：快照库读取（独立 market_snapshot.db，§3.1 物理存储方案）
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
+        from app.data import DataManager
+        ecm = DataManager().cache
         snap = ecm.get_market_snapshot(ts_code)
         if snap:
             bid = []
@@ -487,8 +487,8 @@ def get_stock_orderbook(ts_code):
 @handle_exceptions
 def get_stock_stk_limit(ts_code):
     """E9: 涨跌停/笼子价格"""
-    from app.data.enhanced_cache_manager import get_ecm_instance
-    ecm = get_ecm_instance()
+    from app.data import DataManager
+    ecm = DataManager().cache
     # 使用最新交易日查询（非硬编码 today，避免非交易日查不到数据）
     latest_dates = ecm._query_df("SELECT DISTINCT trade_date FROM stk_limit_cache ORDER BY trade_date DESC LIMIT 1")
     trade_date = latest_dates.iloc[0, 0] if not latest_dates.empty else datetime.now().strftime('%Y-%m-%d')

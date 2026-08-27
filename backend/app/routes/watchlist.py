@@ -398,6 +398,24 @@ def reorder_watchlist():
     return jsonify({'success': True})
 
 
+@watchlist_bp.route('/changes', methods=['GET'])
+def get_watchlist_changes():
+    """373号：自选股状态变更（预计算的watchlist_status_diff）"""
+    try:
+        dm = DataManager()
+        today = datetime.now().strftime('%Y-%m-%d')
+        df = dm.cache._query_df(
+            "SELECT ts_code, snapshot_date, prev_date, consensus_rate_change, "
+            "direction_change, opportunity_state_change, change_summary, advice_changed "
+            "FROM watchlist_status_diff WHERE snapshot_date=? ORDER BY advice_changed DESC",
+            [today]
+        )
+        changes = df.to_dict('records') if df is not None and not df.empty else []
+        return jsonify({'success': True, 'data': changes, 'count': len(changes)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @watchlist_bp.route('/dashboard', methods=['GET'])
 @handle_exceptions
 def get_watchlist_dashboard():

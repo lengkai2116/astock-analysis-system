@@ -21,6 +21,8 @@ from typing import Optional
 
 import pandas as pd
 
+from app.data.mixins import DataAwareMixin
+
 logger = logging.getLogger(__name__)
 
 
@@ -303,10 +305,11 @@ def compute_fund_strength(ecm, ts_code: str) -> float:
     except Exception:
         return None
 
-class Dim7ValuationEngine:
+class Dim7ValuationEngine(DataAwareMixin):
     """第7维 价值估算引擎 — 四锚加权估值 + 7维潜力评分"""
 
     def __init__(self):
+        self._dm = None
         self._comp_percentile = None
         self._industry_mean: dict[str, float] = {}
         self._fcf_percentile = None
@@ -982,8 +985,7 @@ class Dim7ValuationEngine:
         Returns:
             {status_description, judgment, audit}
         """
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
+        ecm = self._get_dm().cache
         ts_code = tags.get('ts_code', '')
 
         # 1. 四锚加权估值

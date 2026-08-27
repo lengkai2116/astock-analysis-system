@@ -90,8 +90,8 @@ def push_market_summary():
         return
 
     try:
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
+        from app.data import DataManager
+        ecm = DataManager().cache
         snapshots = ecm.get_all_market_snapshots()
 
         total = len(snapshots)
@@ -136,8 +136,8 @@ def push_top_stocks():
         return
 
     try:
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
+        from app.data import DataManager
+        ecm = DataManager().cache
         snapshots = ecm.get_all_market_snapshots()
 
         # 补充计算 change_pct
@@ -186,8 +186,8 @@ def push_sector_rankings():
         return
 
     try:
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
+        from app.data import DataManager
+        ecm = DataManager().cache
         snapshots = ecm.get_all_market_snapshots()
 
         if not snapshots:
@@ -256,8 +256,8 @@ def push_watchlist_quotes():
         if not codes:
             return
 
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
+        from app.data import DataManager
+        ecm = DataManager().cache
         snapshots = ecm.get_all_market_snapshots(codes=list(codes))
 
         if not snapshots:

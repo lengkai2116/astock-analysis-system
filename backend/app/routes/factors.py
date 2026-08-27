@@ -10,9 +10,9 @@ from flask import Blueprint, request, jsonify, current_app
 import pandas as pd
 import json
 from datetime import datetime
-import sqlite3
 import os
 import logging
+from sqlalchemy import create_engine
 
 from app.factors import get_factor_registry, FactorCalculator
 from app.data.factor_precompute import FactorPrecomputeManager
@@ -38,6 +38,32 @@ def get_db_path():
     return os.path.join(os.getenv('DATA_DIR', '/data'), 'factors_combos.db')
 
 
+# ══════════════════════════════════════════════════════════════
+# RL5 合规：通过 SQLAlchemy 引擎管理 factors_combos.db 连接
+# 不直接使用 sqlite3.connect()，统一走 SQLAlchemy 连接池
+# ══════════════════════════════════════════════════════════════
+_combo_engine = None
+
+
+def _get_combo_engine():
+    """获取因子组合数据库的 SQLAlchemy 引擎（延迟初始化、单例）"""
+    global _combo_engine
+    if _combo_engine is None:
+        db_path = os.path.abspath(get_db_path())
+        os.makedirs(os.path.dirname(db_path) or '.', exist_ok=True)
+        _combo_engine = create_engine(
+            f"sqlite:///{db_path}",
+            echo=False,
+            pool_pre_ping=True,
+        )
+    return _combo_engine
+
+
+def _get_combo_conn():
+    """获取因子组合数据库连接（通过 SQLAlchemy 引擎，RL5 合规）"""
+    return _get_combo_engine().raw_connection()
+
+
 _COMBO_DB_INIT = False
 
 
@@ -46,9 +72,8 @@ def _ensure_combo_db():
     global _COMBO_DB_INIT
     if _COMBO_DB_INIT:
         return
-    db_path = get_db_path()
-    os.makedirs(os.path.dirname(db_path) or '.', exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    _get_combo_engine()  # 确保引擎已初始化、目录已创建
+    conn = _get_combo_conn()
     try:
         cursor = conn.cursor()
         cursor.execute("""
@@ -516,7 +541,7 @@ def get_combinations():
     if filter_type in ('all', 'user'):
         db_path = get_db_path()
         _ensure_combo_db()
-        conn = sqlite3.connect(db_path)
+        conn = _get_combo_conn()
         try:
             cursor = conn.cursor()
             cursor.execute(
@@ -607,7 +632,7 @@ def save_combination():
     db_path = get_db_path()
     _ensure_combo_db()
 
-    conn = sqlite3.connect(db_path)
+    conn = _get_combo_conn()
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -648,11 +673,9 @@ def update_combination(combo_id):
     factors = data.get('factors')
     src = data.get('src')
 
-    db_path = get_db_path()
-    if not os.path.exists(db_path):
-        return jsonify({'success': False, 'error': '组合不存在', 'error_type': 'ComboNotFound'}), 404
+    _ensure_combo_db()
 
-    conn = sqlite3.connect(db_path)
+    conn = _get_combo_conn()
     try:
         cursor = conn.cursor()
         update_fields = []
@@ -708,8 +731,8 @@ def delete_combination(combo_id):
     删除因子组合（219 规格书 §2.7）
     仅可删除用户自建组合，系统预设不可删除
     """
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    _ensure_combo_db()
+    conn = _get_combo_conn()
     try:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM factor_combinations WHERE id = ? AND type = 'user'", (combo_id,))
@@ -734,8 +757,8 @@ def set_default_combination(combo_id):
     设置默认组合
     仅可对用户自建组合操作
     """
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    _ensure_combo_db()
+    conn = _get_combo_conn()
     try:
         cursor = conn.cursor()
         cursor.execute("UPDATE factor_combinations SET is_default = 0 WHERE type = 'user'")

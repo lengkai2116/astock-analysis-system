@@ -391,8 +391,8 @@ class SchedulerManager:
                 today = datetime.now().strftime('%Y-%m-%d')
                 # 1. 清理 DuckDB as_minute_kline（当日分钟K线）
                 try:
-                    from app.data.enhanced_cache_manager import get_ecm_instance
-                    ecm = get_ecm_instance()
+                    from app.data import DataManager
+                    ecm = DataManager().cache
                     ecm.clean_as_minute_kline(today)
                 except Exception as e:
                     logger.warning(f"盘后清理 as_minute_kline 失败: {e}")
@@ -449,7 +449,7 @@ class SchedulerManager:
             logger.warning("启动补采: 无 app 引用，跳过")
             return
         with self._app.app_context():
-            from app.data.enhanced_cache_manager import get_ecm_instance
+            from app.data import DataManager
             from app.utils.trading_hours import is_holiday
             from datetime import date, datetime
 
@@ -463,11 +463,11 @@ class SchedulerManager:
                 logger.info("启动补采: 今日非交易日，跳过")
                 return
 
-            ecm = get_ecm_instance()
+            ecm = DataManager().cache
             import pandas as pd
             date_df = pd.read_sql(
                 "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1",
-                ecm.conn
+                ecm.read_conn
             )
             max_date = date_df['trade_date'].iloc[0] if not date_df.empty else None
             if max_date is None:
@@ -532,7 +532,7 @@ class SchedulerManager:
             HAVING cnt < ?
             ORDER BY cnt ASC
             LIMIT ?
-        """, ecm.conn, params=[min_days, max_stocks])
+        """, ecm.read_conn, params=[min_days, max_stocks])
 
         if sparse_df.empty:
             logger.info(f"启动补采: 所有股票数据均 >= {min_days} 天，无需补齐")
@@ -603,11 +603,12 @@ class SchedulerManager:
 
     def _catch_up_daily_basic(self):
         """检查 daily_basic_cache 历史数据完整性，不足时触发回填（247号方案 §4）"""
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
+        from app.data import DataManager
+        ecm = DataManager().cache
         try:
-            df = ecm._query_df("SELECT COUNT(DISTINCT trade_date) as cnt FROM daily_basic_cache")
-            date_count = df.iloc[0]['cnt'] if not df.empty else 0
+            date_count = ecm.read_conn.execute(
+                "SELECT COUNT(DISTINCT trade_date) FROM daily_basic_cache"
+            ).fetchone()[0]
         except Exception:
             date_count = 0
 
@@ -632,12 +633,11 @@ class SchedulerManager:
                 return dm.sync_all_daily_data()
             else:
                 # 增量：从 DuckDB 获取最后交易日
-                from app.data.enhanced_cache_manager import get_ecm_instance
-                ecm = get_ecm_instance()
+                ecm = dm.cache
                 import pandas as pd
                 date_df = pd.read_sql(
                     "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1",
-                    ecm.conn
+                    ecm.read_conn
                 )
                 last_date = date_df['trade_date'].iloc[0] if not date_df.empty else None
                 if last_date:

@@ -429,7 +429,9 @@ class EnhancedCacheManager:
                 evaluated_at TIMESTAMP
             )
         """)
-        # as_* 表（盘中数据，已不再写入但保留表结构避免旧代码报错）
+        # as_* 表（盘中数据）
+        # 仍活跃写入: as_sector_ranking, as_concept_ranking, as_minute_kline, as_lhb_detail, as_news（akshare_collector）
+        # 已停止写入但保留表结构: as_market_snapshot, as_top_stocks, as_limit_pool, as_quote_cache
         self._execute("""
             CREATE TABLE IF NOT EXISTS as_market_snapshot (
                 ts_code TEXT PRIMARY KEY, name TEXT, price REAL, change REAL, change_pct REAL,
@@ -648,11 +650,11 @@ class EnhancedCacheManager:
             )
         """)
         # 370号方案S1：新增SIG双产出列（seven_dim_json→OUT直通，dim_results_json→JUD消费）
+        _existing_cols = {r[1] for r in self.conn.execute(
+            "PRAGMA table_info(strategy_signal_detail)").fetchall()}
         for col, default in [('seven_dim_json', 'NULL'), ('dim_results_json', 'NULL')]:
-            try:
+            if col not in _existing_cols:
                 self._execute(f"ALTER TABLE strategy_signal_detail ADD COLUMN {col} TEXT DEFAULT {default}")
-            except Exception:
-                pass  # 列已存在则忽略
         self._execute("""
             CREATE TABLE IF NOT EXISTS factor_cache (
                 ts_code TEXT, trade_date TEXT,
@@ -900,12 +902,6 @@ class EnhancedCacheManager:
             )
         """)
         self._execute("CREATE INDEX IF NOT EXISTS idx_status_snapshot_state ON status_snapshot(opportunity_state)")
-        # 365号批次C：新增维度引擎结果字段（兼容已有数据库）
-        for col, typ in [('dim_engine_results', 'TEXT'), ('summary_text', 'TEXT'), ('one_liner_detail', 'TEXT')]:
-            try:
-                self._execute(f"ALTER TABLE status_snapshot ADD COLUMN {col} {typ}")
-            except Exception:
-                pass  # 列已存在
 
         # ── 管道状态表（305号§9.2）：链条驱动执行状态 ──
         self._execute("""
@@ -2599,154 +2595,6 @@ class EnhancedCacheManager:
         )
         self.conn.commit()
 
-    def write_tags(self, ts_code: str, tags: dict, trade_date: str = None):
-        """批量写入 L2 标签到 opportunity_tags_cache"""
-        if not tags:
-            return
-        from datetime import datetime
-        if trade_date is None:
-            trade_date = datetime.now().strftime('%Y%m%d')
-
-        # 标签元数据映射（tag_name → (group, source)）
-        # 覆盖 295号§三 全部 29 个核心标签 + 引擎额外产出标签。
-        # 当引擎返回嵌套 dict {'value':v, 'group':g, 'source':s} 时优先使用引擎自描述。
-        TAG_META: dict[str, tuple[str, str]] = {
-            # ── direction 方向类（295号§3.1，7个） ──
-            'trend_alignment':      ('direction',  'PhaseDetectionEngine'),
-            'ma_alignment':         ('direction',  'VolumePriceStrategy'),
-            'buy_sell_point':       ('direction',  'ChanlunAnalyzer'),
-            'volume_price_fit':     ('direction',  'VolumePriceStrategy'),
-            'pattern_signal':       ('direction',  'EnhancedPatternDetector'),
-            'gap_type':             ('direction',  'VolumePriceStrategy'),
-            'breakout_attempts':    ('direction',  'VolumePriceStrategy'),
-            # ── position 位置类（295号§3.2，5个） ──
-            'price_position':       ('position',   'PhaseDetectionEngine'),
-            'valuation_level':      ('position',   'ValuationEngine'),
-            'valuation_deviation':  ('position',   'ValuationEngine'),
-            'chip_position':        ('position',   'ChipDistributionService'),
-            'style_exposure':       ('position',   'PrecomputeL2Labels'),
-            #  引擎额外产出
-            'fcf_yield':            ('position',   'ValuationEngine'),
-            'dividend_yield':       ('position',   'ValuationEngine'),
-            'composite_rating':     ('position',   'ValuationEngine'),
-            'pe_percentile_5y':     ('position',   'ValuationEngine'),
-            'pb_percentile_5y':     ('position',   'ValuationEngine'),
-            # ── quality 质量类（295号§3.3，7个） ──
-            'main_force_phase':     ('quality',    'PhaseDetectionEngine'),
-            'phase_confidence':     ('quality',    'PhaseDetectionEngine'),
-            'fund_flow':            ('quality',    'PhaseDetectionEngine'),
-            'capital_nature':       ('quality',    'MainForceScorer'),
-            'chip_concentration':   ('quality',    'ChipDistributionService'),
-            'fina_health':          ('quality',    'FinancialRiskFilter'),
-            'roce_pass':            ('quality',    'FinancialRiskFilter'),
-            # ── environment 环境类（295号§3.4，7个） ──
-            'sentiment_phase':      ('environment','MarketSentimentService'),
-            'sector_heat':          ('environment','SectorRotationModel'),
-            'catalyst_event':       ('environment','EventMonitor'),
-            'catalyst_impact':      ('environment','EventMonitor'),
-            'volatility_level':     ('environment','VolumePriceStrategy'),
-            'upward_driver':        ('environment','EventMonitor'),
-            'time_rhythm':          ('environment','TimeRhythmEngine'),
-            # ── derived 衍生（295号§3.5 signal_strength） ──
-            'signal_strength':      ('derived',    'PrecomputeL2Labels'),
-            # ── 机会元信息（307号§3.1：七维画像 + 类型摘要 + 证据计数） ──
-            'opportunity_type':     ('derived',    'PrecomputeL2Labels'),
-            'opportunity_label':    ('derived',    'PrecomputeL2Labels'),
-            'opportunity_profile':  ('derived',    'PrecomputeL2Labels'),
-            'evidence_count':       ('derived',    'PrecomputeL2Labels'),
-            'confidence':           ('derived',    'PrecomputeL2Labels'),
-            # ── 闸门2右侧确认（308号/309号 S3） ──
-            'right_side_confirm':   ('derived',    'PrecomputeL2Labels'),
-            'confirm_evidence':     ('derived',    'PrecomputeL2Labels'),
-            # ── 三元框架入场/退出条件（307号§3.2/§3.3） ──
-            'entry_signals':        ('derived',    'PrecomputeL2Labels'),
-            'exit_conditions':      ('derived',    'PrecomputeL2Labels'),
-            # ── 主力阶段判定（312号：8 维度加权共识，分歧显性化） ──
-            'phase_conflict':       ('derived',    'PhaseDetectionEngine'),
-            'phase_vote_ratio':     ('derived',    'PhaseDetectionEngine'),
-            # ── 主力在场判定（313号 §十：行为证据主导） ──
-            'main_force_presence':  ('derived',    'PrecomputeL2Labels'),
-            'presence_evidence':    ('derived',    'PrecomputeL2Labels'),
-            # ── 跨维仲裁（321号：机会状态机，唯一结论收敛层） ──
-            'opportunity_state':    ('derived',    'PrecomputeL2Labels'),
-            'state_evidence':       ('derived',    'PrecomputeL2Labels'),
-            # ── 2026-08-10 标签库核查补注册（消除 unknown 归组遗漏） ──
-            # 估值锚评级/PS分位/营收增长（ValuationEngine 同源 → position）
-            'asset_anchor_rating':      ('position', 'ValuationEngine'),
-            'earnings_anchor_rating':   ('position', 'ValuationEngine'),
-            'cashflow_anchor_rating':   ('position', 'ValuationEngine'),
-            'adjusted_anchor_rating':   ('position', 'ValuationEngine'),
-            'ps_percentile_5y':         ('position', 'ValuationEngine'),
-            'revenue_growth':           ('position', 'ValuationEngine'),
-            # 财务质量（→ quality）
-            'roe':                      ('quality',  'PrecomputeL2Labels'),
-            # 潜力分解/证据总量（→ derived，与 signal_strength/evidence_count 同源）
-            'potential_breakdown':      ('derived',  'PrecomputeL2Labels'),
-            'evidence_total':           ('derived',  'PrecomputeL2Labels'),
-            # 事件监控（→ environment）
-            'event_composite_score':    ('environment', 'EventMonitor'),
-            'event_summary':            ('environment', 'EventMonitor'),
-        }
-
-        # 标准化 tags 格式
-        records = []
-        now = datetime.now().isoformat()
-
-        for tag_name, raw_value in tags.items():
-            if raw_value is None:
-                continue
-
-            # 推断值类型
-            if isinstance(raw_value, dict):
-                value = raw_value.get('value', '')
-                meta_default = TAG_META.get(tag_name, (None, None))
-                group = raw_value.get('group', meta_default[0] or 'unknown')
-                confidence = raw_value.get('confidence', 1.0)
-                evidence = raw_value.get('evidence', '')
-                source = raw_value.get('source', meta_default[1] or 'unknown')
-            else:
-                value = str(raw_value)
-                meta = TAG_META.get(tag_name, ('unknown', 'unknown'))
-                group = meta[0]
-                source = meta[1]
-                confidence = 1.0
-                evidence = ''
-
-            records.append({
-                'ts_code': ts_code,
-                'tag_name': tag_name,
-                'tag_group': group,
-                'tag_value': value,
-                'confidence': confidence,
-                'evidence': evidence if isinstance(evidence, str) else str(evidence),
-                'source': source,
-                'updated_at': now[:10],  # YYYY-MM-DD 格式用于 updated_at 查询匹配
-            })
-
-        if not records:
-            return
-
-        # 批量写入（含同步归档 tag_history，347号）
-        with self._write_lock:
-            for r in records:
-                self.conn.execute(
-                    """INSERT OR REPLACE INTO opportunity_tags_cache
-                       (ts_code, tag_name, tag_group, tag_value,
-                        confidence, evidence, source, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    [r['ts_code'], r['tag_name'], r['tag_group'], r['tag_value'],
-                     r['confidence'], r['evidence'], r['source'], r['updated_at']]
-                )
-                # 347号：同步归档到 tag_history（ts_code+tag_name+updated_at 复合主键幂等）
-                self.conn.execute(
-                    """INSERT OR REPLACE INTO tag_history
-                       (ts_code, tag_name, tag_group, tag_value,
-                        confidence, evidence, source, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    [r['ts_code'], r['tag_name'], r['tag_group'], r['tag_value'],
-                     r['confidence'], r['evidence'], r['source'], r['updated_at']]
-                )
-            self.conn.commit()
 
     def get_tags(self, ts_code: str) -> dict:
         """读取单只股票的最新标签（323号 S0：上限提至 200，避免深度标签落库后截断丢失）"""
@@ -3142,6 +2990,7 @@ class EnhancedCacheManager:
         for step_id, step_name in [
             ('COL-1', '日线采集'), ('COL-2', '基本面采集'), ('COL-3', '资金流采集'),
             ('COL-4', '涨跌停采集'), ('COL-5', '龙虎榜采集'), ('COL-6', '概念板块采集'),
+            ('COL-7', '财务全量同步'),
             ('RAW-1', '技术指标(IND)'), ('RAW-2', '特征提取(FEAT)'), ('RAW-3', '量化因子(FAC)'),
             ('SIG', '策略分析'), ('JUD', '判定及操作建议'), ('OUT', '成品仓'),
         ]:

@@ -12,6 +12,7 @@ data_daemon — 数据采集守护进程（254号方案）
 停止：Ctrl+C 或 kill
 """
 import os, sys, time, threading, signal, logging, json
+from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime, timedelta
 
 # ── 环境准备 ──
@@ -28,12 +29,18 @@ try:
 except Exception:
     pass
 
+log_handler = TimedRotatingFileHandler(
+    os.path.join(os.path.dirname(__file__), 'logs', 'data_daemon.log'),
+    when='midnight',
+    backupCount=7,
+    encoding='utf-8'
+)
+log_handler.suffix = '%Y-%m-%d'
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] data_daemon: %(message)s',
     handlers=[
-        logging.FileHandler(os.path.join(
-            os.path.dirname(__file__), 'logs', 'data_daemon.log')),
+        log_handler,
         logging.StreamHandler()
     ]
 )
@@ -88,6 +95,8 @@ def _ts_minute(pro_func, *args, **kwargs):
 _running = True
 _cleanup_done = False  # 数据清理一次性标记（日终完成后执行一次；修复 2026-08-04：原挂在 bool _running 上必然失败）
 _ecm = None
+_last_step_counts = {}  # 371号P0#3：管道步骤成功计数
+_jud_meta_cache = {}  # 371号JUD接入：{ts_code: enriched_meta_dict} 供 treemap_snapshot 读取
 
 
 # ══════════════════════════════════════════════════════════
@@ -1067,7 +1076,7 @@ def _batch_pattern_score(trade_date: str):
     else:
         td_fmt = str(trade_date)
 
-    # 获取当日有数据的所有股票（与 _run_precompute 同模式）
+    # 获取当日有数据的所有股票
     try:
         rows = _ecm.conn.execute(
             "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?",
@@ -1868,7 +1877,6 @@ def run_daily_sync():
             logger.warning(f"  {label} 同步失败: {e}")
 
     # 指标预计算已由管道驱动统一管理（_drive_pipeline），不再单独触发
-    # 旧代码 _run_precompute 与管道驱动竞争写入，导致数据丢失
 
     # 财务数据同步（后台低优，不阻塞主同步流程）
     try:
@@ -2047,505 +2055,6 @@ def _precompute_preset_combos(codes):
     logger.info(f"因子预计算完成: {precomputed}/{len(codes)} 只" +
                 (f"，超时跳过 {timeout_count} 只" if timeout_count else ""))
 
-def _run_precompute():
-    """后台预计算指标（仅当日有日线数据的活跃股票，非交易日自动回退到最近交易日）"""
-    _ensure_pd()
-    logger.info("指标预计算开始...")
-    today_fmt = datetime.now().strftime('%Y-%m-%d')
-    codes = _ecm.conn.execute(
-        "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?",
-        [today_fmt]
-    ).fetchall()
-    if not codes:
-        # 非交易日无数据，用最近交易日
-        row = _ecm.conn.execute(
-            "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-        ).fetchone()
-        if row:
-            today_fmt = row[0]
-            codes = _ecm.conn.execute(
-                "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?",
-                [today_fmt]
-            ).fetchall()
-            logger.info(f" 今日无数据，回退到最近交易日: {today_fmt}")
-        else:
-            logger.info(" 数据库无日线数据，跳过预计算")
-            return
-    codes = [r[0] for r in codes]
-    logger.info(f" 活跃股票: {len(codes)} 只")
-    from app.data.precompute_indicator_manager import PrecomputeIndicatorManager
-    mgr = PrecomputeIndicatorManager(_ecm)
-    ok = 0
-    for code in codes:
-        try:
-            df = _ecm.get_cached_daily(code)
-            if len(df) >= 30:
-                if mgr.precompute_all_indicators(code, df):
-                    ok += 1
-        except Exception:
-            pass
-    logger.info(f"指标预计算完成: {ok}/{len(codes)} 只")
-
-    # ── 3. PRESET_COMBOS 因子值预计算（写入 factor_cache） ──
-    try:
-        _precompute_preset_combos(codes)
-    except Exception as e:
-        logger.warning(f"PRESET_COMBOS 因子预计算失败: {e}")
-
-    # ── 3.5 RAW-2 原料加工特征提取（357号方案 → pre_feat_cache） ──
-    try:
-        _precompute_raw_features(codes)
-    except Exception as e:
-        logger.warning(f"RAW-2原料加工失败: {e}")
-
-    # ── 4. [已废弃] L2标签预计算 → 已由RAW-2替代 ──
-    # try:
-    #     _precompute_l2_labels(codes)
-    # except Exception as e:
-    #     logger.warning(f"L2标签预计算失败: {e}")
-
-    # ── 5. 策略信号预计算（UnifiedStrategyCore，287号方案 v2.3） ──
-    # 333号 v3.0 管道顺序：P4 标签先算当日 → P2 后算（P2 消费当日标签，杜绝"标签昨日/数据今日"时序错位）
-    try:
-        from app.engine.unified_core import UnifiedStrategyCore
-        core = UnifiedStrategyCore()
-        results = core.compute_batch(codes, max_workers=4)
-        count = 0
-        for ts_code, result in results.items():
-            try:
-                _ecm.cache_signal_detail(ts_code, result.to_dict())
-                count += 1
-            except Exception:
-                continue
-        logger.info(f"策略信号预计算完成: {count}/{len(codes)} 只 (UnifiedStrategyCore)")
-        if count == 0 and codes:
-            logger.info("策略信号全部失败，回退到因子信号写入...")
-            _write_factor_signals(codes)
-    except Exception as e:
-        logger.warning(f"策略信号预计算整体失败: {e}")
-
-
-def _precompute_l2_labels(codes):
-    """L2标签预计算：估值引擎+阶段判定+情绪+板块 → 聚合写入 opportunity_tags_cache
-
-    执行顺序（对所有活跃股）：
-      1. 估值标签（ValuationEngine）→ 写入 tags
-      2. 阶段判定标签（PhaseDetectionEngine）→ 写入 tags
-      3. 情绪标签（MarketSentimentService）→ 写入 tags
-      4. 板块标签（SectorRotationModel）→ 写入 tags
-      5. 聚合衍生：计算 signal_strength → 写入 tags
-      6. 批量写入 opportunity_tags_cache
-    """
-    _ensure_pd()
-    if not codes:
-        return
-    logger.info(f"L2标签预计算开始: {len(codes)} 只...")
-
-    # 创建 Flask app context（供 ValuationEngine/MarketSentimentService/SectorRotationModel 使用 ORM）
-    from app import create_app
-    _flask_app = create_app()
-
-    with _flask_app.app_context():
-        # 延迟导入各引擎（只在 precompute 时加载，不占用主循环内存）
-        from app.opportunity_atlas.valuation_estimator import ValuationEngine
-        from app.opportunity_atlas.phase_detector import PhaseDetectionEngine
-        from app.services.market_sentiment_service import MarketSentimentService
-        from app.engine.framework.sector_rotation_model import SectorRotationModel
-        # 313号：机会潜力强度引擎（7 维截面百分位 + IC 加权 + 综合公式）
-        from app.opportunity_atlas.potential_engine import PotentialEngine, compute_fund_strength
-        from app.opportunity_atlas import potential_engine as _pe_module
-        import os as _os
-        _pe_module.IC_WEIGHTS_FILE = _os.path.join(
-            _os.environ.get('DATA_DIR', 'data'), 'ic_weights.json')
-
-        # 各引擎延迟初始化
-        ve = ValuationEngine()
-        pd_engine = PhaseDetectionEngine()
-        ms = MarketSentimentService()
-        sr = SectorRotationModel()
-        # 315号方案B：估值引擎 composite 截面百分位基准（level 分档用，precompute 前一次）
-        try:
-            ve.build_composite_percentile(_ecm)
-        except Exception as e:
-            logger.warning(f"  估值截面基准构建失败: {e}")
-        # 315号 F5：FCF yield 截面基准（锚3 相对化）
-        try:
-            ve.build_fcf_percentile(_ecm)
-        except Exception as e:
-            logger.warning(f"  FCF 截面基准构建失败: {e}")
-        # 313号：潜力引擎 + 全市场截面百分位基准（precompute 前一次）
-        _potential_engine = PotentialEngine()
-        try:
-            _potential_engine.build_percentile_tables(_ecm)
-            logger.info("  机会潜力引擎截面基准构建完成")
-        except Exception as e:
-            logger.warning(f"  潜力截面构建失败: {e}")
-        # IC 滚动重估（313 §4.2 第三层：月度——权重文件超 30 天未更新则重估）
-        try:
-            import time as _time
-            if (not _os.path.exists(_pe_module.IC_WEIGHTS_FILE)
-                    or _time.time() - _os.path.getmtime(_pe_module.IC_WEIGHTS_FILE) > 30 * 86400):
-                logger.info("  IC 权重月度重估中...")
-                _new_w = _pe_module.recompute_ic_weights(_ecm)
-                _pe_module.save_ic_weights(_new_w)
-                logger.info(f"  IC 权重已更新: {_new_w}")
-        except Exception as e:
-            logger.warning(f"  IC 重估跳过: {e}")
-        # P2.5 引擎：时间节奏
-        from app.opportunity_atlas.time_rhythm_engine import TimeRhythmEngine
-        tre = TimeRhythmEngine()
-        # P2.5 引擎：量价标签（VolumePriceStrategy + ChipDistribution + MainForce）
-        from app.engine.framework.volume_price_strategy import VolumePriceStrategy
-        vps = VolumePriceStrategy()
-        from app.engine.framework.chanlun_strategy import get_chanlun_tags as _get_chanlun_tags
-        from app.data.chip_distribution_service import ChipDistributionEstimator
-        cde = ChipDistributionEstimator()
-        # P2.1 引擎：事件监控器
-        from app.opportunity_atlas.event_monitor import EventMonitor
-        em = EventMonitor()
-
-        # 批量预加载全市场日线数据（减少逐只 SQL 查询）
-        all_data: dict[str, pd.DataFrame] = {}
-        for code in codes:
-            try:
-                df = _ecm.get_cached_daily(code)
-                if df is not None and not df.empty:
-                    all_data[code] = df
-            except Exception:
-                pass
-        logger.info(f"  日线数据加载完成: {len(all_data)}/{len(codes)} 只")
-
-        # 预计算板块热度（全市场一次性计算）
-        try:
-            sr.compute_all_heat(all_data)
-        except Exception as e:
-            logger.warning(f"  板块热度预计算失败: {e}")
-
-        # 预计算市场情绪（从 daily_cache 数据估算，替代 sentiment_pool 数据源缺失）
-        # 342号核查修复（2026-08-16）：单指标涨停数>80 判 climax 与知识库《情绪周期四阶段模型》
-        # 多条件（涨停 50-100+封板率>75%+指数拉升+天量）不符，弱市（08-14 涨停84/跌停18）被误判
-        # climax 99.98%。升级为 涨停数 + 估算封板率 + 跌停数 多条件判定。
-        _sentiment_phase_global = 'neutral'
-        try:
-            last_date_row = _ecm.conn.execute(
-                "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-            ).fetchone()
-            if last_date_row:
-                last_date = last_date_row[0]
-                limit_up = _ecm.conn.execute(
-                    "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg > 9.9",
-                    [last_date]
-                ).fetchone()[0]
-                limit_down = _ecm.conn.execute(
-                    "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg < -9.9",
-                    [last_date]
-                ).fetchone()[0]
-                # 估算封板率：触板（high>=prev_close*1.099）中收盘封住的比例
-                sealing_rate = 0.0
-                try:
-                    rows = _ecm.conn.execute(
-                        "SELECT high, close, pct_chg FROM daily_cache "
-                        "WHERE trade_date=? AND pct_chg > 5",
-                        [last_date]
-                    ).fetchall()
-                    touched = sealed = 0
-                    for high, close, pct in rows:
-                        prev_close = close / (1 + pct / 100)
-                        if high >= prev_close * 1.099:
-                            touched += 1
-                            if close >= prev_close * 1.099:
-                                sealed += 1
-                    if touched > 0:
-                        sealing_rate = round(sealed / touched * 100, 1)
-                except Exception:
-                    sealing_rate = 0.0
-                # 四阶段映射（对齐知识库《情绪周期四阶段模型》）
-                if limit_up > 50 and sealing_rate > 75:
-                    _sentiment_phase_global = 'climax'
-                elif (limit_up < 40 and sealing_rate < 40) or limit_down > 20:
-                    _sentiment_phase_global = 'ebb'
-                elif limit_up < 20 and sealing_rate < 40:
-                    _sentiment_phase_global = 'ice'
-                else:
-                    _sentiment_phase_global = 'recovery'
-        except Exception:
-            pass
-
-        t0 = time.time()
-        succeeded = 0
-        commit_count = 0
-        BATCH_SIZE = 500
-        _val_fail = 0            # 估值引擎失败计数（2026-08-04：静默吞异常排查）
-        _val_fail_samples = []   # 估值失败样例（最多记 10 条）
-        _engine_fail = 0         # 整只失败计数（外层异常）
-
-        for code in codes:
-            try:
-                tags = {}
-                df = all_data.get(code)   # 2026-08-04 修复：循环开头取 df（原缺失→首只 NameError 跳过、后续量价/缠论用上一只错位 df→buy_sell_point 等标签不落库→闸门2 无输入）
-
-                # 1. 估值引擎产出（P0.1）— 只需要 ts_code
-                try:
-                    v_tags = ve.compute_tags(code)
-                    if v_tags:
-                        tags.update(v_tags)
-                except Exception as e:
-                    _val_fail += 1
-                    if len(_val_fail_samples) < 10:
-                        _val_fail_samples.append(f"{code}: {type(e).__name__}: {e}")
-
-                # 3. 情绪引擎产出（P0.5）— 不需要 ts_code
-                try:
-                    sentiment = ms.get_sentiment_phase()
-                    if sentiment.get('data_available'):
-                        tags['sentiment_phase'] = sentiment['phase']
-                    elif _sentiment_phase_global != 'neutral':
-                        tags['sentiment_phase'] = _sentiment_phase_global
-                except Exception:
-                    if _sentiment_phase_global != 'neutral':
-                        tags['sentiment_phase'] = _sentiment_phase_global
-
-                # 4. 板块热度（P0.6）— 从缓存读取预计算结果
-                try:
-                    sector = sr.evaluate(code)
-                    tags['sector_heat'] = sector.get('sector_heat', 'none')
-                except Exception:
-                    pass
-
-                # 5. style_exposure（295号§3.2 标签12）
-                try:
-                    tags['style_exposure'] = _compute_style_exposure(code, tags, df)
-                except Exception:
-                    pass
-
-                # 5b. time_rhythm（P2.5，302号§四）— 需要日线数据
-                if df is not None and len(df) >= 30:
-                    try:
-                        tr_tags = tre.compute_tags(df)
-                        if tr_tags:
-                            tags.update(tr_tags)
-                    except Exception:
-                        pass
-
-                    # 5c. VolumePrice 量价标签 + 缠论买点 + 筹码（P2.5）
-                    try:
-                        vp_tags = vps._detect_kline_patterns(df)
-                        if vp_tags:
-                            tags.update(vp_tags)
-                    except Exception:
-                        pass
-                    # volume_price_fit / volatility_level / ma_alignment（简单计算）
-                    try:
-                        _add_vp_simple_tags(df, tags)
-                    except Exception:
-                        pass
-                    # 缠论买卖点
-                    try:
-                        from app.engine.framework.chanlun_strategy import ChanlunAnalyzer
-                        cl = ChanlunAnalyzer()
-                        cl_result = cl.analyze(df)
-                        cl_tags = _get_chanlun_tags(cl_result)
-                        if cl_tags:
-                            tags.update(cl_tags)
-                    except Exception:
-                        pass
-                    # 筹码分布
-                    try:
-                        chip_tags = cde.get_tags(df)
-                        if chip_tags:
-                            tags.update(chip_tags)
-                    except Exception:
-                        pass
-
-                    # 2. 阶段判定引擎产出（312号：8 维度加权共识）— 移到缠论/情绪/板块之后，
-                    #    以接入 buy_sell_point / sentiment_phase / sector_heat / capital_nature
-                    # 2026-08-10 修复：capital_nature 生产者接入（MainForceScorer 此前
-                    #    无 precompute 调用 → 100% unknown；lhb 数据充足 3308 行）
-                    try:
-                        from app.engine.framework.chip_strategy import MainForceScorer
-                        _mf_tags = MainForceScorer().get_tags(code)
-                        if _mf_tags.get('capital_nature'):
-                            tags['capital_nature'] = _mf_tags['capital_nature']
-                    except Exception:
-                        pass
-                    df = all_data.get(code)
-                    if df is not None and len(df) >= 30:
-                        try:
-                            # 327阶段4：单只阶段判定超时保护（历史 600218 卡死点——
-                            # compute_tags 死循环拖垮 P4 全量）
-                            def _phase_one(c=code, _df=df, _pd=pd_engine,
-                                           _tags=tags):
-                                return _pd.compute_tags(c, _df, extra_tags={
-                                    'buy_sell_point': _tags.get('buy_sell_point'),
-                                    'sentiment_phase': _tags.get('sentiment_phase'),
-                                    'sector_heat': _tags.get('sector_heat'),
-                                    'capital_nature': _tags.get('capital_nature'),
-                                })
-                            p_tags = _run_with_timeout(
-                                _phase_one, timeout_sec=30.0,
-                                desc=f"阶段判定 {code}")
-                            if p_tags:
-                                tags.update(p_tags)
-                        except Exception:
-                            pass
-
-                    # 5. 机会潜力强度已由 4c2 计算（313号 v4 替代 311 旧评分）
-
-                    # 323号 S0：深度字段落库（缠论结构 + 筹码分布 + 资金风险）
-                    # 367号：统一使用 extract_chip_deep_tags，不再依赖 _last_chip_indicators
-                    try:
-                        from app.opportunity_atlas.tag_extractor import (
-                            extract_chanlun_deep_tags, extract_chip_deep_tags,
-                            extract_fund_risk_tags, DEEP_TAG_GROUPS,
-                        )
-                        _deep = {}
-                        _deep.update(extract_chanlun_deep_tags(code))
-                        _deep.update(extract_fund_risk_tags(code))
-                        _deep.update(extract_chip_deep_tags(code))
-                        # 带 tag_group 写入（dict 格式显式指定 group）
-                        _deep_meta = {}
-                        for _k, _v in _deep.items():
-                            _g = DEEP_TAG_GROUPS.get(_k, 'unknown')
-                            _deep_meta[_k] = {'value': _v, 'group': _g, 'source': 'PrecomputeL2Labels'}
-                        if _deep_meta:
-                            tags.update(_deep_meta)
-                    except Exception:
-                        pass
-
-                # 兜底标签
-                for _mandatory_tag, _default_val in [
-                    ('pattern_signal', 'none'), ('capital_nature', 'unknown'),
-                ]:
-                    if _mandatory_tag not in tags:
-                        tags[_mandatory_tag] = _default_val
-
-                # 4b. 事件监控（P2.1）
-                try:
-                    _update_with_event_tags(code, tags)
-                except Exception:
-                    pass
-
-                # 4c. upward_driver（P2.1 收益分解, 302号§三）
-                if df is not None and len(df) >= 20:
-                    try:
-                        _add_upward_driver(df, tags)
-                    except Exception:
-                        pass
-
-                # 4c2. 机会潜力强度（313号 v4 §四）— 替代旧 signal_strength 主力评分；
-                #     移到事件之后（事件标签已就绪），消费方 opportunity_meta/闸门在其后
-                try:
-                    mf_strength = compute_fund_strength(_ecm, code)
-                    _roe = None
-                    try:
-                        _r = _ecm._query_df(
-                            "SELECT roe FROM fina_indicator_cache WHERE ts_code=? "
-                            "ORDER BY end_date DESC LIMIT 1", [code])
-                        if not _r.empty:
-                            _roe = _r["roe"].iloc[0]
-                    except Exception:
-                        pass
-                    tags["roe"] = _roe if _roe is not None else 0
-                    pot = _potential_engine.compute_potential(tags, mf_strength)
-                    tags.update(pot)
-                except Exception:
-                    pass
-
-                # 4c3. 主力在场判定（313号 §十：行为证据主导——龙虎榜/股东户数/融资异动）
-                try:
-                    mfp = _compute_main_force_presence(code, _ecm)
-                    tags.update(mfp)
-                except Exception:
-                    pass
-
-                # 4d. 机会元信息（307号：七维画像 + 机会类型摘要 + 证据计数，替代306号持有周期）
-                try:
-                    _compute_opportunity_meta(tags)
-                except Exception:
-                    pass
-
-                # 4e. 闸门2右侧确认（309号§7.1：否决/基础/增强三档判定）
-                try:
-                    rc = _check_right_side_confirm(tags.get('opportunity_type', 'default'), tags, df)
-                    tags.update(rc)
-                except Exception:
-                    pass
-
-                # 4f. 跨维仲裁（321号：机会状态机 + 显式仲裁优先级表 P0-P7）
-                #     输入 4 链标签（含 4e 闸门2 结果），输出单一 opportunity_state +
-                #     state_evidence；消费点（颜色/建议/verdict/仓位）从状态派生。
-                try:
-                    from app.opportunity_atlas.arbiter import arbitrate
-                    arb = arbitrate(tags)
-                    if arb.get('opportunity_state'):
-                        tags.update(arb)
-                except Exception:
-                    # 2026-08-10 325档案修复：仲裁异常兜底写 wait（原静默跳过致
-                    # opportunity_state 缺失；停牌/退市股不参与预计算
-                    # 也走此兜底）
-                    tags.setdefault('opportunity_state', 'wait')
-                    tags.setdefault('state_evidence', '仲裁异常，保守等待')
-
-                # 4g. 机会类型 avoid 降级（321号 S3：规则树互斥，修 T2）
-                #     4d 在仲裁前执行（state 未生成），此处按仲裁结果重判机会类型：
-                #     avoid 态 → "回避·仅观察"；非 avoid 保持 4d 原判定。
-                if tags.get('opportunity_state') == 'avoid':
-                    try:
-                        type_result = _classify_opportunity_type(tags)
-                        tags.update(type_result)
-                    except Exception:
-                        pass
-
-                # 6. 写入数据库
-                if len(tags) > 0:
-                    _ecm.write_tags(code, tags)
-                    succeeded += 1
-                    commit_count += 1
-                    if commit_count >= BATCH_SIZE:
-                        _ecm.conn.commit()
-                        commit_count = 0
-
-            except Exception:
-                _engine_fail += 1
-                continue
-
-        if commit_count > 0:
-            _ecm.conn.commit()
-
-        elapsed = time.time() - t0
-        _val_summary = f"，估值引擎失败 {_val_fail} 只"
-        if _val_fail_samples:
-            _val_summary += "（样例: " + "; ".join(_val_fail_samples[:3]) + "）"
-        logger.info(f"L2标签预计算完成: {succeeded}/{len(codes)} 只, 耗时 {elapsed:.1f}s"
-                    f"{_val_summary}，整只失败 {_engine_fail} 只")
-
-
-def _chip_tags_from_indicators(indicators: dict) -> dict:
-    """[已废弃] 从 phase_detector._last_chip_indicators 提取筹码深度字段（323号 S0）
-
-    367号：此函数已废弃，统一使用 extract_chip_deep_tags() 替代。
-    保留供向后兼容使用，待后续版本删除。
-    """
-    import json as _json
-    out = {}
-    if not indicators:
-        return out
-    if isinstance(indicators.get('main_peak'), dict):
-        pk = indicators['main_peak'].get('price')
-        if pk is not None:
-            try:
-                out['chip_peak'] = str(round(float(pk), 2))
-            except (TypeError, ValueError):
-                pass
-    for key in ('asr', 'cyqkl', 'concentration', 'profit_ratio', 'ssrp',
-                'sandwich_zone', 'retail_vs_institutional', 'sentiment_crowding',
-                'sentiment_crowding_label', 'fake_institution',
-                'asr_status', 'concentration_status', 'cyqkl_status',
-                'peak_count', 'peak_type', 'avg_vol_100', 'vol_ratio'):
-        if key in indicators and indicators[key] is not None:
-            v = indicators[key]
-            out[key] = _json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
-    return out
 
 
 def _precompute_raw_features(codes):
@@ -2583,10 +2092,8 @@ def _precompute_raw_features(codes):
             extract_fund_risk_tags,
         )
         # 365号批次A：新增引擎导入（pre_feat_cache扩展字段）
-        # 370号修复：risk_boundary_builder/signal_attribute_classifier已删除，
-        # _calc_volatility_percentile内联实现（从dim6_risk_engine等效逻辑提取）
         def _calc_volatility_percentile(df_local):
-            """波动率历史分位（替代已删除的risk_boundary_builder._calc_volatility_percentile）"""
+            """波动率历史分位"""
             import math as _math
             close = df_local['close'].astype(float)
             returns = close.pct_change().dropna()
@@ -2604,6 +2111,8 @@ def _precompute_raw_features(codes):
         from app.opportunity_atlas.signal_decay_detector import detect_decay
 
         # 各引擎初始化
+        from app.data import DataManager
+        dm = DataManager()
         ve = ValuationEngine()
         ms = MarketSentimentService()
         sr = SectorRotationModel()
@@ -2614,11 +2123,11 @@ def _precompute_raw_features(codes):
 
         # 截面基准构建
         try:
-            ve.build_composite_percentile(_ecm)
+            ve.build_composite_percentile(dm.cache)
         except Exception:
             pass
         try:
-            ve.build_fcf_percentile(_ecm)
+            ve.build_fcf_percentile(dm.cache)
         except Exception:
             pass
 
@@ -3013,6 +2522,7 @@ def _precompute_raw_features(codes):
         elapsed = time.time() - t0
         logger.info(f"RAW-2 原料加工完成: {succeeded}/{len(codes)} 只, 耗时 {elapsed:.1f}s"
                     f", trade_date={trade_date}")
+        _last_step_counts['RAW-2'] = f"{succeeded}/{len(codes)} stocks"
 
 
 def _add_vp_simple_tags(df, tags):
@@ -3400,7 +2910,7 @@ def _compute_opportunity_meta(tags: dict):
     """
     # 七维画像
     profile = _build_opportunity_profile(tags)
-    # 画像为嵌套 dict，序列化为 JSON 字符串以便 write_tags 落库（309号 S3）
+    # 画像为嵌套 dict，序列化为 JSON 字符串以便落库至 opportunity_tags_cache（309号 S3）
     profile['opportunity_profile'] = json.dumps(
         profile['opportunity_profile'], ensure_ascii=False)
     tags.update(profile)
@@ -3868,6 +3378,104 @@ def _compute_snapshot_consensus_rate(t: dict) -> float:
         return 0.0
 
 
+def _jud_enrich_with_meta(codes: list[str]):
+    """371号JUD接入：机会分类+潜力评分+右侧确认（预计算写入缓存供treemap使用）
+
+    在 _build_status_snapshot 之后、_build_treemap_snapshot 之前调用。
+    从 pre_feat_cache 加载原料标签，运行：
+      1. _compute_opportunity_meta → opportunity_type/label/profile/evidence_count/entry/exit
+      2. PotentialEngine.compute_potential → signal_strength/potential_breakdown
+      3. _check_right_side_confirm → right_side_confirm/confirm_evidence
+    结果写入模块级 _jud_meta_cache 供 treemap_snapshot 读取。
+    """
+    global _ecm, _jud_meta_cache
+    if _ecm is None:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        _ecm = get_ecm_instance()
+    t0 = time.time()
+    logger.info(f"JUD机会判定预计算: {len(codes)} 只...")
+
+    _jud_meta_cache = {}  # 清空上轮缓存
+
+    from app import create_app
+    _flask_app = create_app()
+    with _flask_app.app_context():
+        from app.opportunity_atlas.status_engine import StatusEngine
+        from app.data import DataManager
+        dm = DataManager()
+        se = StatusEngine()
+
+        # PotentialEngine初始化（一次性构建截面百分位基准）
+        pe = None
+        try:
+            from app.opportunity_atlas.potential_engine import PotentialEngine
+            pe = PotentialEngine()
+            pe.build_percentile_tables(dm.cache)
+        except Exception as e:
+            logger.warning(f"PotentialEngine初始化失败: {e}")
+
+        enriched = 0
+        for code in codes:
+            try:
+                # 从 pre_feat_cache 加载原料标签并扁平化
+                pre_feat = _ecm.get_pre_feat(code)
+                if not pre_feat:
+                    continue
+                tags = se._flatten_pre_feat(pre_feat)
+                if not tags:
+                    continue
+
+                # 1. opportunity_meta（机会分类 + 七维画像 + 证据计数 + 入场/退出）
+                try:
+                    _compute_opportunity_meta(tags)
+                except Exception:
+                    pass
+
+                # 2. right_side_confirm（右侧确认三档判定）
+                try:
+                    df = _ecm.get_cached_daily(code)
+                    if df is not None and len(df) > 0:
+                        _check_right_side_confirm(
+                            tags.get('opportunity_type', ''), tags, df)
+                except Exception:
+                    pass
+
+                # 3. PotentialEngine signal_strength（潜力评分）
+                if pe:
+                    try:
+                        mf_strength = None
+                        try:
+                            from app.opportunity_atlas.potential_engine import compute_fund_strength
+                            mf_strength = compute_fund_strength(dm.cache, code)
+                        except Exception:
+                            pass
+                        pot = pe.compute_potential(tags, mf_strength)
+                        if pot:
+                            tags.update(pot)
+                    except Exception:
+                        pass
+
+                # 4. 写入模块级缓存供 treemap_snapshot 读取
+                _jud_meta_cache[code] = {
+                    'opportunity_type': tags.get('opportunity_type'),
+                    'opportunity_label': tags.get('opportunity_label'),
+                    'opportunity_profile': tags.get('opportunity_profile'),
+                    'signal_strength': tags.get('signal_strength'),
+                    'potential_breakdown': tags.get('potential_breakdown'),
+                    'right_side_confirm': tags.get('right_side_confirm'),
+                    'confirm_evidence': tags.get('confirm_evidence'),
+                    'evidence_count': tags.get('evidence_count'),
+                    'phase_confidence': tags.get('phase_confidence'),
+                    'entry_signals': tags.get('entry_signals'),
+                    'exit_conditions': tags.get('exit_conditions'),
+                }
+                enriched += 1
+            except Exception:
+                continue
+
+    logger.info(f"  JUD机会判定完成: {enriched}/{len(codes)} 只 ({time.time()-t0:.1f}s)")
+
+
 def _build_treemap_snapshot(codes: list[str]):
     """日终预计算完成后，构建 treemap_snapshot 快照表（S1 管道环节）
 
@@ -3877,6 +3485,10 @@ def _build_treemap_snapshot(codes: list[str]):
     平铺写入 treemap_snapshot 表（4800 行 × ~25 列 ≈ 2-3 MB）。
     使用原子表替换避免读写不一致。
     """
+    global _ecm
+    if _ecm is None:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        _ecm = get_ecm_instance()
     import pandas as pd  # 修复 2026-08-02：函数内 pd.notna 依赖
     t0 = time.time()
     logger.info(f"构建 treemap_snapshot 快照: {len(codes)} 只...")
@@ -3967,6 +3579,21 @@ def _build_treemap_snapshot(codes: list[str]):
     daily_map = {r['ts_code']: r for _, r in daily_df.iterrows()} if not daily_df.empty else {}
     basic_map = {r['ts_code']: r for _, r in basic_df.iterrows()} if not basic_df.empty else {}
     tags_map = {r['ts_code']: r for _, r in tags_df.iterrows()} if not tags_df.empty else {}
+
+    # 5a. 371号JUD接入：用 _jud_meta_cache 覆盖 opportunity_tags_cache 中的富化字段
+    #     （_jud_enrich_with_meta 在 _build_status_snapshot 之后已预计算）
+    _meta_overlaid = 0
+    for _code, _meta in _jud_meta_cache.items():
+        if _code not in tags_map:
+            # 无 tags 基础数据时，创建空 dict 供覆盖
+            tags_map[_code] = {}
+        _t = tags_map[_code]
+        for _k, _v in _meta.items():
+            if _v is not None:
+                _t[_k] = _v
+        _meta_overlaid += 1
+    if _meta_overlaid:
+        logger.info(f"  treemap: 371号JUD预计算覆盖 {_meta_overlaid} 只")
 
     # 5b. 成品仓 status_snapshot（336号 S2.5：快照字段来源切 L1/L2 输出——
     #     consensus_rate/conflict/opportunity_state/state_evidence 读 status_engine 成品，
@@ -4094,6 +3721,10 @@ def _out_transmit_seven_dim(codes: list[str]):
     3. treemap_snapshot → treemap_snapshot_history（47列完整归档）
     4. watchlist_status_diff（自选股状态变更检测）
     """
+    global _ecm
+    if _ecm is None:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        _ecm = get_ecm_instance()
     t0 = time.time()
     logger.info(f"OUT步骤: 七维透传+归档+变更检测: {len(codes)} 只...")
 
@@ -4148,6 +3779,7 @@ def _out_transmit_seven_dim(codes: list[str]):
                    direction, l0, lifecycle, advice_params,
                    summary_text, one_liner_detail, dim_engine_results
             FROM status_snapshot
+            WHERE dim_engine_results IS NOT NULL
         """)
         _ecm.conn.commit()
         logger.info("  归档: status_snapshot → status_snapshot_history")
@@ -4287,6 +3919,10 @@ def _build_status_snapshot(codes: list[str]):
     全市场结构化落库（九维状态/状态条/opportunity_state/conflict/共识），
     与 treemap_snapshot 同管道、原子表替换。
     """
+    global _ecm
+    if _ecm is None:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        _ecm = get_ecm_instance()
     t0 = time.time()
     logger.info(f"构建 status_snapshot 现状成品: {len(codes)} 只...")
     if not codes:
@@ -4319,15 +3955,47 @@ def _build_status_snapshot(codes: list[str]):
             )
         """)
         written = 0
-        from app.opportunity_atlas.status_engine import generate_summary_text
+        # 373号修复：generate_summary_text函数不存在，使用内联替代
+        def _gen_summary(r):
+            try:
+                ds = r.get('dim_states')
+                dims = _json.loads(ds) if isinstance(ds, str) else (ds or {})
+                greens = sum(1 for d in dims.values() if d.get('light') == 'green')
+                reds = sum(1 for d in dims.values() if d.get('light') == 'red')
+                total = greens + reds
+                direction = r.get('direction', 'neutral')
+                if direction == 'bullish':
+                    return f"整体偏多（{greens}维看多/{reds}维看空）"
+                elif direction == 'bearish':
+                    return f"整体偏空（{reds}维看空/{greens}维看多）"
+                else:
+                    return f"多空均衡（{greens}维看多/{reds}维看空）"
+            except Exception:
+                return ''
+        # 370号修正：预取 dim_results_json（SIG预计算），避免JUD重复计算维度引擎
+        _dim_cache = {}
+        try:
+            _placeholders = ','.join(['?' for _ in codes])
+            _cur = _ecm.conn.execute(
+                f"SELECT ts_code, dim_results_json FROM strategy_signal_detail "
+                f"WHERE ts_code IN ({_placeholders}) AND dim_results_json IS NOT NULL",
+                codes
+            )
+            for _r in _cur.fetchall():
+                try:
+                    _dim_cache[_r[0]] = _json.loads(_r[1]) if _r[1] else None
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # 370号S6：build_seven_dim_report已废弃，one_liner_detail由OUT从seven_dim_json透传
         for code in codes:
             try:
-                row = engine.evaluate(code)
+                row = engine.evaluate(code, dim_results=_dim_cache.get(code))
                 if not row:
                     continue
                 # 364a Phase 1：生成summary_text
-                summary_text = generate_summary_text(row)
+                summary_text = _gen_summary(row)
                 # 370号S6：one_liner_detail不再在此生成，由OUT从strategy_signal_detail.seven_dim_json透传
                 _ecm.conn.execute(
                     f"INSERT OR REPLACE INTO {_NEW} (ts_code, snapshot_date, trade_date,"
@@ -4347,6 +4015,7 @@ def _build_status_snapshot(codes: list[str]):
         _ecm.conn.commit()
         # 370号O5：归档逻辑已移至OUT步骤（_out_transmit_seven_dim），此处不再归档
         logger.info(f"  status_snapshot 构建完成: {written}/{len(codes)} 只")
+        _last_step_counts['JUD'] = f"{written}/{len(codes)} stocks"
         # 原子替换
         _ecm.conn.execute("DROP TABLE IF EXISTS status_snapshot")
         _ecm.conn.execute(f"ALTER TABLE {_NEW} RENAME TO status_snapshot")
@@ -4394,11 +4063,11 @@ def _is_pipeline_complete(pipeline_date: str) -> bool:
     try:
         row = _ecm.conn.execute(
             "SELECT COUNT(*) FROM pipeline_status "
-            "WHERE pipeline_date=? AND step_id IN ('COL-1','COL-2','COL-3','COL-4','COL-5','COL-6',"
+            "WHERE pipeline_date=? AND step_id IN ('COL-1','COL-2','COL-3','COL-4','COL-5','COL-6','COL-7',"
             "'RAW-1','RAW-2','RAW-3','SIG','JUD','OUT') AND status='done'",
             [pipeline_date]
         ).fetchone()
-        return row and row[0] >= 12  # 12 个环节全 done（370号：JUD独立步骤）
+        return row and row[0] >= 13  # 13 个环节全 done（373号：增加COL-7财务全量同步）
     except Exception:
         return False
 
@@ -4408,10 +4077,10 @@ def _all_steps_done(status: dict, step_ids: list[str]) -> bool:
 
 
 def _is_precompute_in_progress() -> bool:
-    """P2/P4/S1 重算是否进行中（P2 写锁死锁根治，2026-08-16）
+    """SIG/RAW-2/OUT 重算是否进行中（写锁死锁根治，2026-08-16）
 
     重算期间（pending/running 未完成）跳过完整性检查等批量写操作，
-    避免与 P2 compute_batch 4 worker 的写锁竞争。
+    避免与 compute_batch 4 worker 的写锁竞争。
     基于最新数据日期（与 _drive_pipeline 同口径，327阶段2数据驱动）。
     """
     global _ecm
@@ -4493,7 +4162,7 @@ def _recover_stale_running(timeout_hours: float = 4.0) -> int:
     """清理超时 running 残留，防止管道永久阻塞（327阶段1）
 
     daemon 重启/崩溃后，旧 running 记录无法被 mark_step_running 重置
-    （仅接受 pending/failed→running），导致 P4/S1 永不触发、快照陈旧。
+    （仅接受 pending/failed→running），导致后续环节永不触发、快照陈旧。
     将超过 timeout_hours 未完成的 running 统一重置为 pending，让管道自愈。
 
     Returns: 重置的环节数
@@ -4666,37 +4335,64 @@ def _drive_pipeline():
     if not _all_steps_done(status, COLLECT):
         return
 
-    # ── 原料数据加工阶段 RAW-1(IND) → RAW-2(FEAT) → RAW-3(FAC) ──
     codes = _get_active_codes(today_fmt)
+
+    # 373号Batch2：COL-7 财务全量同步（非阻塞：失败时跳过，不阻塞RAW）
+    if status.get('COL-7', {}).get('status') != 'done':
+        def _col_financial(_codes):
+            global _ecm
+            if _ecm is None:
+                from app.data.enhanced_cache_manager import get_ecm_instance
+                _ecm = get_ecm_instance()
+            batch_size = 500
+            for i in range(0, len(_codes), batch_size):
+                batch = _codes[i:i+batch_size]
+                try: _batch_fina_indicator(batch)
+                except: pass
+                try: _batch_income_recent(batch)
+                except: pass
+                try: _batch_balancesheet(batch)
+                except: pass
+                try: _batch_cashflow(batch)
+                except: pass
+                try: _batch_forecast(batch)
+                except: pass
+            logger.info(f"  财务全量同步完成: {len(_codes)} 只")
+        try:
+            _run_pipeline_step(today, 'COL-7', _col_financial, codes)
+        except Exception as e:
+            logger.warning(f"COL-7 财务同步失败（跳过，不阻塞管道）: {e}")
+            # 标记为done以便管道继续
+            _ecm.conn.execute(
+                "UPDATE pipeline_status SET status='done', detail='部分失败已跳过' "
+                "WHERE pipeline_date=? AND step_id='COL-7'", [today])
+            _ecm.conn.commit()
+        return
+
+    # ── 原料数据加工阶段 RAW-1(IND) → RAW-2(FEAT) → RAW-3(FAC) ──
     if not codes:
         return
 
-    # 353号总纲：RAW-1(IND) → RAW-2(FEAT) → RAW-3(FAC)
-    RAW_STEPS = ['RAW-1', 'RAW-2', 'RAW-3']
-    for sid, func in [
-        ('RAW-1', lambda: _precompute_indicators(codes)),
-        ('RAW-2', lambda: _precompute_raw_features(codes)),
-        ('RAW-3', lambda: _precompute_preset_combos(codes)),
-    ]:
-        if status.get(sid, {}).get('status') in ('done', 'running'):
-            continue
-        _run_pipeline_step(today, sid, func, None)
+    # 373号Batch1：RAW三步真正并行（三步读同一源表写不同表，无数据依赖）
+    RAW_STEPS = {'RAW-1': _precompute_indicators, 'RAW-2': _precompute_raw_features, 'RAW-3': _precompute_preset_combos}
+    unfinished_raw = [s for s in RAW_STEPS if status.get(s, {}).get('status') != 'done']
+    if unfinished_raw:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {s: pool.submit(RAW_STEPS[s], codes) for s in unfinished_raw}
+            for s, fut in futures.items():
+                try:
+                    fut.result(timeout=1800)
+                except Exception as e:
+                    logger.warning(f"{s} 并行执行失败: {e}")
+        # 记录全部完成
+        for s in unfinished_raw:
+            _ecm.mark_step_done(today, s, f"OK parallel ({s})")
+            logger.info(f"  [管道] {s} → done (parallel)")
+        _last_step_counts['RAW'] = f"{len(unfinished_raw)} steps parallel"
         return
 
-    if _has_failed(status, RAW_STEPS):
-        for sid in RAW_STEPS:
-            if status.get(sid, {}).get('status') == 'failed':
-                rc = status[sid].get('retry_count', 0)
-                if rc < 3:
-                    _ecm.conn.execute(
-                        "UPDATE pipeline_status SET status='pending', retry_count=? "
-                        "WHERE pipeline_date=? AND step_id=?",
-                        [rc + 1, today, sid]
-                    )
-                    _ecm.conn.commit()
-                return
-
-    if not _all_steps_done(status, RAW_STEPS):
+    if not _all_steps_done(status, list(RAW_STEPS.keys())):
         return
 
     # ── 策略分析阶段 SIG ──
@@ -4726,6 +4422,8 @@ def _drive_pipeline():
     if status.get('JUD', {}).get('status') != 'done':
         def _jud_build(_codes):
             _build_status_snapshot(_codes)
+            # 371号JUD接入：PotentialEngine + opportunity_meta
+            _jud_enrich_with_meta(_codes)
             _build_treemap_snapshot(_codes)
         _run_pipeline_step(today, 'JUD', _jud_build, codes)
         return
@@ -4753,7 +4451,48 @@ def _drive_pipeline():
         _run_pipeline_step(today, 'OUT', _out_build, codes)
         return
 
+    # 371号P0#2：OUT成品表完整性验证
+    if status.get('OUT', {}).get('status') == 'done':
+        _verify_out_completeness(today)
+
     logger.info(f"  [管道] 今日全链路完成 ✅")
+
+
+def _verify_out_completeness(pipeline_date: str):
+    """371号P0#2：验证OUT成品表数据完整性"""
+    try:
+        # treemap_snapshot行数
+        row = _ecm.conn.execute("SELECT COUNT(*) FROM treemap_snapshot").fetchone()
+        treemap_count = row[0] if row else 0
+
+        # status_snapshot行数和one_liner填充率
+        row = _ecm.conn.execute("SELECT COUNT(*), SUM(CASE WHEN one_liner_detail IS NOT NULL THEN 1 ELSE 0 END) FROM status_snapshot").fetchone()
+        status_count = row[0] if row else 0
+        oneliner_count = row[1] if row and row[1] else 0
+
+        # 活跃股票数
+        row = _ecm.conn.execute(f"SELECT COUNT(DISTINCT ts_code) FROM daily_cache WHERE trade_date='{pipeline_date}'").fetchone()
+        active_count = row[0] if row else 0
+
+        # 记录到pipeline_status
+        if active_count > 0:
+            treemap_pct = treemap_count / active_count * 100
+            oneliner_pct = oneliner_count / status_count * 100 if status_count > 0 else 0
+            detail = f"treemap={treemap_count}({treemap_pct:.0f}%) status={status_count} oneliner={oneliner_count}({oneliner_pct:.0f}%)"
+            _ecm.conn.execute(
+                "INSERT OR REPLACE INTO pipeline_status (pipeline_date, step_id, step_name, status, detail) VALUES (?, 'OUT-CHECK', '成品表完整性', 'done', ?)",
+                [pipeline_date, detail]
+            )
+            _ecm.conn.commit()
+
+            if treemap_pct < 80:
+                logger.warning(f"  [管道] OUT完整性警告: treemap覆盖仅{treemap_pct:.0f}%")
+            if oneliner_pct < 50:
+                logger.warning(f"  [管道] OUT完整性警告: one_liner填充仅{oneliner_pct:.0f}%")
+            else:
+                logger.info(f"  [管道] OUT完整性: {detail}")
+    except Exception as e:
+        logger.warning(f"OUT完整性验证失败: {e}")
 
 
 def _run_pipeline_step(pipeline_date: str, step_id: str, func, arg):
@@ -4767,7 +4506,13 @@ def _run_pipeline_step(pipeline_date: str, step_id: str, func, arg):
             func(arg)
         else:
             func()
-        detail = f"OK ({time.time() - t0:.1f}s)"
+        # 371号P0#3：记录成功/失败计数
+        count_info = _last_step_counts.pop(step_id, None)
+        elapsed = time.time() - t0
+        if count_info:
+            detail = f"OK ({elapsed:.1f}s) {count_info}"
+        else:
+            detail = f"OK ({elapsed:.1f}s)"
         _ecm.mark_step_done(pipeline_date, step_id, detail)
         logger.info(f"  [管道] {step_id} → done ({detail})")
     except Exception as e:
@@ -4815,6 +4560,12 @@ def _precompute_strategy_signals(codes):
         # 一次 commit），写路径从 5571 次短事务收敛为 1 次批量事务。
         import json as _json
         rows = []
+        # 370号修正：预计算dim_results_json（供JUD步骤消费）——单引擎复用
+        try:
+            from app.opportunity_atlas.status_engine import StatusEngine as _SE
+            _se_engine = _SE()
+        except Exception:
+            _se_engine = None
         for ts_code, result in results.items():
             try:
                 rd = result.to_dict()
@@ -4825,14 +4576,27 @@ def _precompute_strategy_signals(codes):
                     seven_dim = generate_seven_dim_from_signals(rd)
                 except Exception:
                     pass
+                # 370号修正：预计算dim_results_json（供JUD步骤消费）
+                dim_results = None
+                if _se_engine:
+                    try:
+                        _tags = _se_engine._load_tags(ts_code)
+                        _signals = _se_engine._load_signals(ts_code)
+                        if _tags or _signals:
+                            _lifecycle = _se_engine._signal_lifecycle(ts_code, _tags, _signals)
+                            dim_results = _se_engine._build_dim_engine_results(_tags, _signals, {}, _lifecycle)
+                    except Exception:
+                        pass
                 rows.append((ts_code, rd.get('trade_date', datetime.now().strftime('%Y-%m-%d')),
                              _json.dumps(rd, ensure_ascii=False, default=str), 1,
-                             _json.dumps(seven_dim, ensure_ascii=False) if seven_dim else None))
+                             _json.dumps(seven_dim, ensure_ascii=False) if seven_dim else None,
+                             _json.dumps(dim_results, ensure_ascii=False, default=str) if dim_results else None))
             except Exception:
                 continue
         _batch_write_signal_detail(rows)
         count = len(rows)
         logger.info(f"策略信号预计算完成: {count}/{len(codes)} 只")
+        _last_step_counts['SIG'] = f"{count}/{len(codes)} stocks"
         if count == 0 and codes:
             logger.info("策略信号全部失败，回退到因子信号写入...")
             _write_factor_signals(codes)
@@ -4847,8 +4611,12 @@ def _batch_write_signal_detail(rows):
     用独立短连接一次性 executemany + commit：与 daemon 主循环的共享写连接解耦，
     单次批量事务替代逐只 INSERT，避免 4 worker × 5571 次短事务在 SQLite 写锁
     上的锁链死锁。短 busy_timeout（10s）防极端长事务阻塞；失败静默降级
-    （P4 完整性检查会兜底补写）。
+    （完整性检查 run_integrity_check 会兜底补写）。
     """
+    global _ecm
+    if _ecm is None:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        _ecm = get_ecm_instance()
     if not rows:
         return
     import sqlite3 as _sqlite3
@@ -4857,8 +4625,8 @@ def _batch_write_signal_detail(rows):
         conn.execute("PRAGMA busy_timeout=10000")
         conn.executemany(
             "INSERT OR REPLACE INTO strategy_signal_detail "
-            "(ts_code, trade_date, signal_json, schema_version, cached_at, seven_dim_json) "
-            "VALUES (?, ?, ?, ?, datetime('now','localtime'), ?)",
+            "(ts_code, trade_date, signal_json, schema_version, cached_at, seven_dim_json, dim_results_json) "
+            "VALUES (?, ?, ?, ?, datetime('now','localtime'), ?, ?)",
             rows
         )
         conn.commit()
@@ -5391,11 +5159,11 @@ def main():
             if ts - _last_patrol > 1800:
                 _last_patrol = ts
                 if _is_market_day():
-                    # 2026-08-16 修复（P2 写锁死锁根治）：P2/P4/S1 重算期间
+                    # 2026-08-16 修复（写锁死锁根治）：SIG/RAW-2/OUT 重算期间
                     # 跳过完整性检查——run_integrity_check 批量补采写库（长事务）
-                    # 与 P2 compute_batch 4 worker 的写锁竞争（lldb 实证 4 线程
+                    # 与 compute_batch 4 worker 的写锁竞争（lldb 实证 4 线程
                     # PyThread_acquire_lock_timed 锁链死锁 + strategy_signal_detail
-                    # 零写入）。重算完成（S1 done）后恢复完整性检查。
+                    # 零写入）。重算完成（OUT done）后恢复完整性检查。
                     if _is_precompute_in_progress():
                         logger.info("定时巡检：预计算进行中，跳过完整性检查（避免写锁竞争）")
                     else:

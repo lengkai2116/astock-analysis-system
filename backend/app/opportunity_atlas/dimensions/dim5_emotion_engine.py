@@ -23,6 +23,8 @@ from typing import Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from app.data.mixins import DataAwareMixin
+
 logger = logging.getLogger(__name__)
 
 
@@ -429,10 +431,11 @@ def _emotion_plain(market: dict, sector: dict, stock: dict,
 
 # === bociasi_quadrant.py 完整版（含DB查询） ===
 
-class BociasiQuadrantAnalyzer:
+class BociasiQuadrantAnalyzer(DataAwareMixin):
     """BOCIASI四象限分析器 — 基于全市场数据的情绪状态判定"""
 
     def __init__(self, ecm=None):
+        self._dm = None
         self._ecm = ecm
         self._cache = {}  # 计算缓存
 
@@ -695,17 +698,17 @@ class BociasiQuadrantAnalyzer:
 
     def _compute_margin_trend(self) -> float:
         """计算融资余额趋势（5日变化率归一化）"""
+        conn = self._get_dm().cache.conn
         try:
-            cutoff = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
-            df = self._ecm._query_df("""
+            recent = conn.execute("""
                 SELECT trade_date, SUM(rzye) as total
                 FROM margin_cache
                 WHERE trade_date >= ?
                 GROUP BY trade_date ORDER BY trade_date DESC LIMIT 5
-            """, [cutoff])
-            if len(df) >= 2:
-                oldest = df.iloc[-1]['total'] or 1
-                newest = df.iloc[0]['total'] or 1
+            """, [(datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')]).fetchall()
+            if len(recent) >= 2:
+                oldest = recent[-1][1] or 1
+                newest = recent[0][1] or 1
                 change_pct = (newest - oldest) / oldest
                 # 融资余额增长→情绪过热→慢线高位
                 # change_pct: -0.05→0(低位), 0→0.5(中性), +0.05→1(高位)
@@ -745,8 +748,7 @@ class BociasiQuadrantAnalyzer:
     def _query_from_shard(self, table: str, sql: str, params=None):
         """356号方案：从分库路由查询，返回 fetchone() 结果"""
         if self._ecm is None:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            self._ecm = get_ecm_instance()
+            self._ecm = self._get_dm().cache
         try:
             from app.data.sharding_manager import sharding_manager
             db_name = sharding_manager.get_db_for_table(table)
@@ -758,7 +760,7 @@ class BociasiQuadrantAnalyzer:
         except Exception as e:
             logger.debug(f"分库查询失败({table}): {e}")
         # 回退到ECM连接
-        conn = self._ecm.conn
+        conn = self._get_dm().cache.conn
         if params:
             return conn.execute(sql, params).fetchone()
         return conn.execute(sql).fetchone()
@@ -766,8 +768,7 @@ class BociasiQuadrantAnalyzer:
     def _query_df_from_shard(self, table: str, sql: str, params=None):
         """356号方案：从分库路由查询，返回 DataFrame"""
         if self._ecm is None:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            self._ecm = get_ecm_instance()
+            self._ecm = self._get_dm().cache
         try:
             from app.data.sharding_manager import sharding_manager
             db_name = sharding_manager.get_db_for_table(table)
@@ -776,7 +777,7 @@ class BociasiQuadrantAnalyzer:
                 return pd.read_sql(sql, conn, params=params)
         except Exception as e:
             logger.debug(f"分库查询失败({table}): {e}")
-        return self._ecm._query_df(sql, params)
+        return self._get_dm().cache._query_df(sql, params)
 
 
 # === sector_rotation_model.py 完整版 ===
@@ -914,8 +915,11 @@ class SectorRotationModel:
         }
 
 
-class Dim5EmotionEngine:
+class Dim5EmotionEngine(DataAwareMixin):
     """第5维 情绪环境引擎 — BOCIASI快慢线 + 四象限 + 温度 + 板块热度 + 时间节奏"""
+
+    def __init__(self):
+        self._dm = None
 
     def evaluate(self, dims: dict, tags: dict, signals: dict = None,
                  lifecycle: dict = None) -> dict:
@@ -927,8 +931,7 @@ class Dim5EmotionEngine:
         quadrant = {'quadrant': 'MM', 'description': '市场情绪中性', 'weight_multiplier': 1.0}
 
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            ecm = get_ecm_instance()
+            ecm = self._get_dm().cache
             ts_code = tags.get('ts_code', '')
 
             # 快线：从日线数据计算4指标

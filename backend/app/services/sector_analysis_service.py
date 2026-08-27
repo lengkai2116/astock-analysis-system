@@ -102,8 +102,7 @@ class SectorAnalysisService:
     def _get_top_stocks_in_sector(self, dm, industry_name: str, top_n: int = 3) -> list[dict]:
         """获取板块内涨幅前 N 的个股"""
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            ecm = get_ecm_instance()
+            ecm = dm.cache
             today = datetime.now().strftime('%Y%m%d')
             rows = ecm._fetchall(
                 """SELECT s.ts_code, s.name, d.pct_chg FROM stocks s

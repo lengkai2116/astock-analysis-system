@@ -79,12 +79,16 @@ def _extract_real_dimensions(dm, ts_code: str) -> dict | None:
     """
     # 365号批次C：优先使用维度引擎结果
     try:
-        row = dm.cache.get_status_snapshot_row(ts_code)
-        if row and row.get('dim_engine_results'):
-            import json
-            der = json.loads(row['dim_engine_results'])
-            if der and any(v is not None for v in der.values()):
-                return _convert_dim_engine_to_legacy(der)
+        row_df = dm.cache._query_df(
+            "SELECT dim_engine_results FROM status_snapshot WHERE ts_code=?", [ts_code]
+        )
+        if row_df is not None and not row_df.empty:
+            val = row_df.iloc[0].get('dim_engine_results')
+            if val:
+                import json
+                der = json.loads(val)
+                if der and any(v is not None for v in der.values()):
+                    return _convert_dim_engine_to_legacy(der)
     except Exception:
         pass  # 回退到旧逻辑
     try:
@@ -448,8 +452,7 @@ class L4CrossValidator(DataAwareMixin):
         # ── 日线数据加载（316号 P4：操作建议的入场/止损/目标点位计算；P3 扩展票源复用） ──
         df = None
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            df = get_ecm_instance().get_cached_daily(ts_code)
+            df = self._get_dm().cache.get_cached_daily(ts_code)
         except Exception:
             pass
 

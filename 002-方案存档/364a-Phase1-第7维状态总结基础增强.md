@@ -4,6 +4,7 @@ type: 实施方案（子方案）
 date: 2026-08-21
 version: v1.0
 parent: 364-七维现状描述系统实施方案（总纲）
+status: 已废弃——369号维度引擎整合后，dim8_summary_engine已替代本方案Phase1功能
 ---
 
 # 364a - Phase 1：第7维状态总结基础增强（8h）

@@ -893,7 +893,7 @@ class EventMonitor(DataAwareMixin):
         }
 
     def compute_tags(self, ts_code: str) -> dict:
-        """事件监控标签（供 ECM write_tags 使用）"""
+        """事件监控标签（供 opportunity_tags_cache 落库使用）"""
         try:
             result = self.detect_all(ts_code)
         except Exception as e:

@@ -127,9 +127,9 @@ def _build_p2_signal_summary(ts_code: str) -> str:
     读取最新 trade_date 记录（P2 日终产物，非当天日期）。
     """
     try:
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
-        detail = ecm.get_latest_signal_detail(ts_code)
+        from app.data import DataManager
+        dm = DataManager()
+        detail = dm.cache.get_latest_signal_detail(ts_code)
         if not detail:
             return ''
         signals = detail.get('signals', {})
@@ -153,9 +153,9 @@ def _build_p2_signal_summary(ts_code: str) -> str:
 def _build_label_baseline(ts_code: str) -> str:
     """320号 F4：从 opportunity_tags_cache 构建标签基线（tags_summary + 七维红绿灯）"""
     try:
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
-        tags = ecm.get_tags(ts_code)
+        from app.data import DataManager
+        dm = DataManager()
+        tags = dm.cache.get_tags(ts_code)
         if not tags:
             return ''
         # 七维红绿灯（opportunity_profile）
@@ -743,6 +743,29 @@ def strategy_analyze():
         # DeepSeek 九层描述改为用户触发，走独立端点 /api/v3/strategy/deepseek
         # NLG 规则生成的 status_text 保留在各维度中
 
+        # ── 373号：预加载status_snapshot供L1共识和后续使用 ──
+        _status_row = None
+        try:
+            from app.data import DataManager as _DMPre
+            _dm_pre = _DMPre()
+            _pre_row = _dm_pre.cache._query_df(
+                "SELECT * FROM status_snapshot WHERE ts_code=? LIMIT 1", [ts_code])
+            if _pre_row is not None and not _pre_row.empty:
+                _pr = _pre_row.iloc[0]
+                _status_row = {
+                    'opportunity_state': _pr.get('opportunity_state'),
+                    'status_bar': _pr.get('status_bar'),
+                    'consensus_rate': _pr.get('consensus_rate'),
+                    'direction': _pr.get('direction'),
+                    'conflict_evidence': _pr.get('conflict_evidence'),
+                    'dim_states': _pr.get('dim_states'),
+                    'summary_text': _pr.get('summary_text'),
+                    'one_liner_detail': _pr.get('one_liner_detail'),
+                    'advice_params': _pr.get('advice_params'),
+                }
+        except Exception:
+            _status_row = None
+
         # ── 322号 S1：操作建议（现状描述化，结论与机会图谱同源）──
         # 实时组装（读缓存信号 + K线几何指标，毫秒级），不落库不入快照
         response_advice = None
@@ -758,30 +781,46 @@ def strategy_analyze():
                 _tags = None
             # 322号 S4：kronos_enabled 且推理成功时传入 Kronos 修正（AI预测仅供参考）
             _kronos_in = kronos_result if (kronos_enabled and kronos_result) else None
-            # 336号统一口径：用 StatusEngine L1 九维共识替代五维推导（弹窗/个股页/快照同源）
+            # 373号：L1九维共识优先从预计算status_snapshot读取，避免实时evaluate
             try:
-                from app.opportunity_atlas.status_engine import StatusEngine
-                _sv = StatusEngine().evaluate(ts_code)
-                _l1_consensus = {
-                    'consensus_rate': _sv.get('consensus_rate', 0),
-                    'bullish_votes': sum(1 for d in json.loads(_sv.get('dim_states', '{}')).values()
-                                         if d.get('light') == 'green'),
-                    'bearish_votes': sum(1 for d in json.loads(_sv.get('dim_states', '{}')).values()
-                                         if d.get('light') == 'red'),
-                    'direction': _sv.get('direction', 'neutral'),
-                    '_source': 'nine_dim',
-                }
+                import json as _json_l1
+                if _status_row and _status_row.get('dim_states'):
+                    _sv = _status_row
+                    _l1_consensus = {
+                        'consensus_rate': _sv.get('consensus_rate', 0),
+                        'bullish_votes': sum(1 for d in _json_l1.loads(_sv.get('dim_states', '{}')).values()
+                                             if d.get('light') == 'green'),
+                        'bearish_votes': sum(1 for d in _json_l1.loads(_sv.get('dim_states', '{}')).values()
+                                             if d.get('light') == 'red'),
+                        'direction': _sv.get('direction', 'neutral'),
+                        '_source': 'nine_dim',
+                    }
+                    _l1_dirs = []
+                    for _d in _json_l1.loads(_sv.get('dim_states', '{}')).values():
+                        _light = _d.get('light', 'yellow')
+                        _l1_dirs.append(1 if _light == 'green' else (-1 if _light == 'red' else 0))
+                else:
+                    # Fallback: 实时计算（快照不可用时）
+                    from app.opportunity_atlas.status_engine import StatusEngine
+                    _sv = StatusEngine().evaluate(ts_code)
+                    _l1_consensus = {
+                        'consensus_rate': _sv.get('consensus_rate', 0),
+                        'bullish_votes': sum(1 for d in _json_l1.loads(_sv.get('dim_states', '{}')).values()
+                                             if d.get('light') == 'green'),
+                        'bearish_votes': sum(1 for d in _json_l1.loads(_sv.get('dim_states', '{}')).values()
+                                             if d.get('light') == 'red'),
+                        'direction': _sv.get('direction', 'neutral'),
+                        '_source': 'nine_dim',
+                    }
+                    _l1_dirs = []
+                    for _d in _json_l1.loads(_sv.get('dim_states', '{}')).values():
+                        _light = _d.get('light', 'yellow')
+                        _l1_dirs.append(1 if _light == 'green' else (-1 if _light == 'red' else 0))
             except Exception as _e:
                 import logging
                 logging.getLogger(__name__).warning(f'L1 九维共识获取失败，回退五维: {_e}')
                 _l1_consensus = None
                 _l1_dirs = None
-            else:
-                # 从 L1 九维 dim_states 构建 dirs（11 维，green=+1/red=-1/yellow=0）
-                _l1_dirs = []
-                for _d in json.loads(_sv.get('dim_states', '{}')).values():
-                    _light = _d.get('light', 'yellow')
-                    _l1_dirs.append(1 if _light == 'green' else (-1 if _light == 'red' else 0))
             response_advice = build_operation_advice(ts_code, dimensions, signals, _df,
                                                      kronos=_kronos_in, tags=_tags,
                                                      consensus=_l1_consensus, dirs=_l1_dirs)
@@ -878,30 +917,26 @@ def strategy_analyze():
                         if not _pg_ok:
                             try:
                                 import json as _json2
-                                import sqlite3 as _sqlite3
                                 from datetime import date as _date
-                                import os as _os2
-                                # strategy_analyze.py 位于 backend/app/routes/，
-                                # 项目根 = 向上 3 层，app.db 在项目根 data/ 下
-                                _db_path = _os2.path.join(
-                                    _os2.path.dirname(_os2.path.dirname(_os2.path.dirname(
-                                        _os2.path.dirname(_os2.path.abspath(__file__))))),
-                                    'data', 'app.db')
-                                _conn = _sqlite3.connect(_db_path)
-                                _conn.execute(
-                                    'INSERT INTO signal_records (ts_code, signal_date, strategy_name, '
-                                    'signal_type, confidence, entry_price, risk_line, target_price, '
-                                    'entry_zone_low, entry_zone_high, verification_status, signal_snapshot, '
-                                    'created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                                    (ts_code, _date.today().isoformat(), 'operation_advice', _src_type,
-                                     _conf, _entry_p, _stop_p, _tgt_p,
-                                     _entry_p * 0.99 if _entry_p else None,
-                                     _entry_p * 1.01 if _entry_p else None,
-                                     'pending',
-                                     _json2.dumps(_snapshot, ensure_ascii=False),
-                                     _date.today().isoformat(), _date.today().isoformat()))
-                                _conn.commit()
-                                _conn.close()
+                                from app.data import DataManager
+                                _dm = DataManager()
+                                _conn = _dm.engine.raw_connection()
+                                try:
+                                    _conn.execute(
+                                        'INSERT INTO signal_records (ts_code, signal_date, strategy_name, '
+                                        'signal_type, confidence, entry_price, risk_line, target_price, '
+                                        'entry_zone_low, entry_zone_high, verification_status, signal_snapshot, '
+                                        'created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                                        (ts_code, _date.today().isoformat(), 'operation_advice', _src_type,
+                                         _conf, _entry_p, _stop_p, _tgt_p,
+                                         _entry_p * 0.99 if _entry_p else None,
+                                         _entry_p * 1.01 if _entry_p else None,
+                                         'pending',
+                                         _json2.dumps(_snapshot, ensure_ascii=False),
+                                         _date.today().isoformat(), _date.today().isoformat()))
+                                    _conn.commit()
+                                finally:
+                                    _conn.close()
                             except Exception as _sl_err:
                                 logger.warning(f"operation_advice SQLite 落库失败 ({ts_code}): {_sl_err}")
                 except Exception as _rec_err:
@@ -909,60 +944,52 @@ def strategy_analyze():
         except Exception as _adv_err:
             logger.warning(f"operation_advice 生成跳过 ({ts_code}): {_adv_err}")
 
-        # ── 337号 S3：成品仓数据透出（status_snapshot 日频现状成品；日终生成前=None） ──
-        _status_row = None
+        # ── 337号 S3：成品仓数据透出（status_snapshot 已在L747预加载） ──
         _seven_dim_report = None
-        _status_verdict = None
         try:
-            from app.data import DataManager as _DM2
-            _dm2 = _DM2()
-            _row = _dm2.cache._query_df(
-                "SELECT * FROM status_snapshot WHERE ts_code=? LIMIT 1", [ts_code])
-            if _row is not None and not _row.empty:
-                _r = _row.iloc[0]
-                _status_row = {
-                    'opportunity_state': _r.get('opportunity_state'),
-                    'status_bar': _r.get('status_bar'),
-                    'consensus_rate': _r.get('consensus_rate'),
-                    'direction': _r.get('direction'),
-                    'conflict_evidence': _r.get('conflict_evidence'),
-                    'dim_states': _r.get('dim_states'),
-                    # 364i Phase 9：新增summary_text和one_liner_detail
-                    'summary_text': _r.get('summary_text'),
-                    'one_liner_detail': _r.get('one_liner_detail'),
-                }
-                # 370号修复：七维描述从strategy_signal_detail.seven_dim_json读取（SIG直出）
-                # 不再调用已废弃的build_seven_dim_report
-                try:
-                    if hasattr(_dm, 'cache'):
-                        _ssd_df = _dm.cache._query_df(
-                            "SELECT seven_dim_json FROM strategy_signal_detail WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
-                            [ts_code])
-                        if not _ssd_df.empty and _ssd_df.iloc[0].get('seven_dim_json'):
-                            import json as _json_ssd
-                            _seven_dim_report = _json_ssd.loads(_ssd_df.iloc[0]['seven_dim_json'])
-                except Exception:
-                    pass
-        except Exception as _ss_err:
-            _status_row = None
-            _seven_dim_report = None
-        # 336号 成品仓切换：status_engine 生产环节权威结论（实时 evaluate，不依赖日终快照）
-        try:
-            from app.opportunity_atlas.status_engine import StatusEngine
-            _verdict = StatusEngine().evaluate(ts_code)
-            if _verdict:
+            _ssd = _dm.cache.get_latest_signal_detail(ts_code)
+            if _ssd and _ssd.get('seven_dim_json'):
+                import json as _json_ssd
+                _seven_dim_report = _json_ssd.loads(_ssd['seven_dim_json'])
+        except Exception:
+            pass
+        # 336号 成品仓切换：优先读取 status_snapshot 预计算数据，避免冗余实时 evaluate
+        # 确保 advice_params 从快照中读取（原实现在 status_row 中遗漏了该字段）
+        if _status_row:
+            try:
                 import json as _json3
+                # 补充 status_row 中未包含的 advice_params（status_snapshot 表有该列）
+                if 'advice_params' not in _status_row:
+                    _status_row['advice_params'] = _r.get('advice_params') if _r is not None else None
                 _status_verdict = {
-                    'opportunity_state': _verdict['opportunity_state'],
-                    'status_bar': _verdict['status_bar'],
-                    'consensus_rate': _verdict['consensus_rate'],
-                    'direction': _verdict['direction'],
-                    'conflict_evidence': _json3.loads(_verdict['conflict_evidence'] or '[]'),
-                    'dim_states': _json3.loads(_verdict['dim_states'] or '{}'),
-                    'advice_params': _json3.loads(_verdict['advice_params'] or '{}'),
+                    'opportunity_state': _status_row.get('opportunity_state'),
+                    'status_bar': _status_row.get('status_bar'),
+                    'consensus_rate': _status_row.get('consensus_rate'),
+                    'direction': _status_row.get('direction'),
+                    'conflict_evidence': _json3.loads(_status_row.get('conflict_evidence') or '[]') if _status_row.get('conflict_evidence') else [],
+                    'dim_states': _json3.loads(_status_row.get('dim_states') or '{}') if _status_row.get('dim_states') else {},
+                    'advice_params': _json3.loads(_status_row.get('advice_params') or '{}') if _status_row.get('advice_params') else {},
                 }
-        except Exception as _vv_err:
-            _status_verdict = None
+            except Exception as _vv_err:
+                _status_verdict = None
+        else:
+            # Fallback: 实时计算（status_snapshot 无数据时）
+            try:
+                from app.opportunity_atlas.status_engine import StatusEngine
+                _verdict = StatusEngine().evaluate(ts_code)
+                if _verdict:
+                    import json as _json3
+                    _status_verdict = {
+                        'opportunity_state': _verdict['opportunity_state'],
+                        'status_bar': _verdict['status_bar'],
+                        'consensus_rate': _verdict['consensus_rate'],
+                        'direction': _verdict['direction'],
+                        'conflict_evidence': _json3.loads(_verdict['conflict_evidence'] or '[]'),
+                        'dim_states': _json3.loads(_verdict['dim_states'] or '{}'),
+                        'advice_params': _json3.loads(_verdict['advice_params'] or '{}'),
+                    }
+            except Exception as _vv_err:
+                _status_verdict = None
 
         response = {
             'code': 0,

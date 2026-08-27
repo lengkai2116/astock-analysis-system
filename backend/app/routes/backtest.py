@@ -591,8 +591,8 @@ def get_status():
     """
     try:
         # 检查 ECM 健康状态
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
+        from app.data import DataManager
+        ecm = DataManager().cache
         success = ecm is not None
         msg = 'ECM 就绪' if success else 'ECM 不可用'
         

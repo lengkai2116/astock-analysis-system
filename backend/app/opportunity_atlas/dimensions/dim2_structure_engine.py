@@ -6,7 +6,7 @@
   - chanlun_multi_level.py — 多级别缠论分析
   - trend_structure_detector.py — 趋势结构检测
   - chanlun_strategy.py — 缠论核心（分型→笔→中枢→背驰→买卖点→评分）
-  - structure_builder 输出格式 + 条件稽核
+  - Dim2StructureEngine 输出格式 + 条件稽核
   - shared_support_resistance 支撑阻力
 
 统一接口：Dim2StructureEngine.evaluate() → {status_description, judgment, audit}
@@ -18,6 +18,8 @@ import logging
 from typing import Optional, List, Dict, Tuple, Any
 import numpy as np
 import pandas as pd
+
+from app.data.mixins import DataAwareMixin
 
 logger = logging.getLogger(__name__)
 
@@ -3783,8 +3785,11 @@ def calc_support_resistance(df=None) -> dict:
 # 第2维 引擎
 # ═══════════════════════════════════════════════════════════
 
-class Dim2StructureEngine:
+class Dim2StructureEngine(DataAwareMixin):
     """第2维 结构位置引擎 — 缠论分析 + 均线排列 + 支撑阻力 + 5子维度"""
+
+    def __init__(self):
+        self._dm = None
 
     def evaluate(self, dims: dict, tags: dict, signals: dict = None,
                  lifecycle: dict = None) -> dict:
@@ -3795,8 +3800,7 @@ class Dim2StructureEngine:
         chanlun_result = None
         try:
             analyzer = ChanlunAnalyzer()
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            ecm = get_ecm_instance()
+            ecm = self._get_dm().cache
             df = ecm.get_cached_daily(ts_code)
             if df is not None and not df.empty and len(df) >= 30:
                 chanlun_result = analyzer.analyze(df)

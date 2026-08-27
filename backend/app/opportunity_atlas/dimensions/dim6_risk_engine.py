@@ -27,22 +27,7 @@ logger = logging.getLogger(__name__)
 
 # === DataAwareMixin (app/data/mixins.py) ===
 
-class DataAwareMixin:
-    """统一 DataManager 延迟注入 Mixin"""
-    _dm = None
-
-    def _get_dm(self):
-        if self._dm is None:
-            from app.data import DataManager
-            self._dm = DataManager()
-        return self._dm
-
-    def _inject_dm(self, dm):
-        self._dm = dm
-
-import pandas as pd
-
-logger = logging.getLogger(__name__)
+from app.data.mixins import DataAwareMixin
 
 
 # ═══════════════════════════════════════════════════════════
@@ -55,6 +40,75 @@ RISK_LEVEL_LIGHT = {
 }
 
 EVENT_RISK_SET = {'fraud_sign', 'regulatory', 'delist_risk', 'goodwill_risk'}
+
+# ── 事件→维度前缀映射（A/B/C/D/E）──
+_EVENT_DIM_MAP = {
+    # A 财务事件
+    'earnings_surprise': 'A', 'earnings_confirm': 'A', 'report_date': 'A',
+    'dividend': 'A', 'fraud_sign': 'A',
+    # B 资本运作
+    'share_float': 'B', 'pledge_risk': 'B', 'holder_reduce': 'B',
+    'underwater_ipo': 'B', 'buyback': 'B', 'incentive': 'B',
+    # C 监管事件
+    'regulatory': 'C', 'delist_risk': 'C', 'st_warning': 'C', 'goodwill_risk': 'C',
+    # D 市场情绪
+    'longhubang': 'D', 'limit_move': 'D', 'holder_concentration': 'D', 'margin_risk': 'D',
+    # E 特殊事件
+    'breakout': 'E', 'concept_heat': 'E',
+}
+
+
+def _event_dim_prefix(event_name: str) -> str:
+    """将事件类型映射到 A/B/C/D/E 维度前缀"""
+    return _EVENT_DIM_MAP.get(event_name, 'E')
+
+
+def _direction_to_sign(direction: int) -> int:
+    """将方向值转为符号（-1/0/+1）"""
+    if direction > 0:
+        return 1
+    elif direction < 0:
+        return -1
+    return 0
+
+
+# ── 催化剂事件映射 ──
+CATALYST_EVENT_MAP = {
+    'earnings_surprise': 'earnings', 'earnings_confirm': 'earnings',
+    'longhubang': 'lhb', 'limit_move': 'lhb',
+    'buyback': 'buyback', 'incentive': 'buyback',
+    'breakout': 'breakout', 'concept_heat': 'concept',
+    'share_float': 'float', 'pledge_risk': 'pledge', 'holder_reduce': 'reduce',
+    'fraud_sign': 'fraud_sign', 'regulatory': 'regulatory',
+    'st_warning': 'regulatory', 'goodwill_risk': 'fraud_sign',
+    'delist_risk': 'decline', 'underwater_ipo': 'decline',
+    'holder_concentration': 'decline', 'margin_risk': 'decline',
+}
+
+# ── 鹰眼大宝剑共振查表 ──
+_RESONANCE_TABLE = {
+    "UP": {
+        "BULLISH":  ("BUY", 0.70),
+        "BEARISH":  ("CONFLICT", 0.40),
+        "NEUTRAL":  ("WATCH_BUY", 0.55),
+    },
+    "DOWN": {
+        "BULLISH":  ("CONFLICT", 0.40),
+        "BEARISH":  ("SELL", 0.70),
+        "NEUTRAL":  ("WATCH_SELL", 0.55),
+    },
+    "RANGING": {
+        "BULLISH":  ("CAUTIOUS_BUY", 0.50),
+        "BEARISH":  ("CAUTIOUS_SELL", 0.50),
+        "NEUTRAL":  ("NEUTRAL", 0.30),
+    },
+    "UNKNOWN": {
+        "BULLISH":  ("CAUTIOUS_BUY", 0.45),
+        "BEARISH":  ("CAUTIOUS_SELL", 0.45),
+        "NEUTRAL":  ("NEUTRAL", 0.25),
+    },
+}
+_FALLBACK_ACTION = ("NEUTRAL", 0.25)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -714,8 +768,7 @@ class EventMonitor(DataAwareMixin):
         result = {"detected": False, "direction": 0, "confidence": 0.0,
                    "source": "balancesheet_cache", "description": "", "event_date": ""}
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            ecm = get_ecm_instance()
+            ecm = self._get_dm().cache
             df_bs = ecm.get_cached_balancesheet(ts_code)
             if df_bs is None or df_bs.empty:
                 return result
@@ -1207,7 +1260,7 @@ class EventMonitor(DataAwareMixin):
         }
 
     def compute_tags(self, ts_code: str) -> dict:
-        """事件监控标签（供 ECM write_tags 使用）"""
+        """事件监控标签（供 opportunity_tags_cache 落库使用）"""
         try:
             result = self.detect_all(ts_code)
         except Exception as e:
@@ -1879,14 +1932,16 @@ def evaluate(
     )
 
 
-class Dim6RiskEngine:
+class Dim6RiskEngine(DataAwareMixin):
     """第6维 风险边界引擎 — 风险分级 + 几何化距离 + 波动率 + 事件监控"""
+
+    def __init__(self):
+        self._dm = None
 
     def evaluate(self, dims: dict, tags: dict, signals: dict = None,
                  lifecycle: dict = None) -> dict:
         """统一评估入口"""
-        from app.data.enhanced_cache_manager import get_ecm_instance
-        ecm = get_ecm_instance()
+        ecm = self._get_dm().cache
         ts_code = tags.get('ts_code', '')
 
         # 加载日线数据
