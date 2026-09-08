@@ -2,9 +2,11 @@
 回放复盘 API 路由 — 151-P3-1
 """
 import logging
+
+from flask import Blueprint, jsonify, request
+
+from app.services.playback_service import PlaybackService
 from app.utils.error_handlers import handle_exceptions
-from flask import Blueprint, request, jsonify
-from app.services.playback_service import PlaybackService, PlaybackSnapshot
 
 logger = logging.getLogger(__name__)
 playback_bp = Blueprint('playback', __name__)

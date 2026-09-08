@@ -1,16 +1,15 @@
 """
 筹码分布服务 - 基于OHLCV估算筹码分布
 """
+import logging
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-import math
-from typing import List, Dict, Optional, Tuple
-from datetime import datetime
+
 from .enhanced_cache_manager import EnhancedCacheManager
 
-
-
-import logging
 logger = logging.getLogger(__name__)
 class ChipDistributionEstimator:
     """
@@ -196,12 +195,12 @@ class ChipDistributionService:
     """
     筹码分布服务
     """
-    
+
     def __init__(self, cache_manager: EnhancedCacheManager = None):
         self.cache_manager = cache_manager or EnhancedCacheManager()
         self.estimator = ChipDistributionEstimator()
-    
-    def calculate_chip_distribution(self, 
+
+    def calculate_chip_distribution(self,
                                      ts_code: str,
                                      df_ohlcv: pd.DataFrame = None,
                                      lookback_days: int = 120,
@@ -209,14 +208,14 @@ class ChipDistributionService:
                                      end_date: str = None) -> Dict:
         """
         计算单只股票的筹码分布
-        
+
         Args:
             ts_code: 股票代码
             df_ohlcv: OHLCV数据（如果None，则从缓存获取）
             lookback_days: 回顾天数（默认120天）
             data_manager: DataManager实例（用于获取数据）
             end_date: 截止日期（可选，YYYY-MM-DD格式，默认最新交易日）
-            
+
         Returns:
             筹码分布数据字典
         """
@@ -228,7 +227,7 @@ class ChipDistributionService:
                 ref_date = datetime.now().strftime('%Y-%m-%d')
             start_date = (datetime.strptime(ref_date, '%Y-%m-%d') - pd.Timedelta(days=lookback_days)).strftime('%Y-%m-%d')
             df_ohlcv = data_manager.get_cached_daily_data(ts_code, start_date, ref_date)
-        
+
         if df_ohlcv is None or df_ohlcv.empty:
             return {
                 'ts_code': ts_code,
@@ -236,7 +235,7 @@ class ChipDistributionService:
                 'chip_bins': [],
                 'indicators': {}
             }
-        
+
         # 2. 获取换手率数据（用于动态衰减率）
         turnover_rates = None
         if data_manager:
@@ -246,48 +245,48 @@ class ChipDistributionService:
                     turnover_rates = df_basic['turnover_rate'].dropna()
             except Exception:
                 pass
-        
+
         # 3. 估算筹码分布（传入换手率）
         chip_dist, min_price, max_price, price_step = self.estimator.estimate(
             df_ohlcv, turnover_rates=turnover_rates
         )
-        
+
         # 4. 处理结果
         result = self._format_chip_result(ts_code, df_ohlcv, chip_dist, min_price, max_price, price_step)
-        
+
         return result
-    
-    def _format_chip_result(self, ts_code: str, df_ohlcv: pd.DataFrame, 
-                           chip_dist: np.ndarray, min_price: float, 
+
+    def _format_chip_result(self, ts_code: str, df_ohlcv: pd.DataFrame,
+                           chip_dist: np.ndarray, min_price: float,
                            max_price: float, price_step: float) -> Dict:
         """
         格式化筹码分布结果
         """
         latest_date = df_ohlcv['trade_date'].max()
         latest_close = df_ohlcv[df_ohlcv['trade_date'] == latest_date]['close'].iloc[0]
-        
+
         # 构建价格区间数据
         chip_bins = []
         accumulated_ratio = 0
-        
+
         for bin_idx in range(self.estimator.num_bins):
             bin_price = min_price + bin_idx * price_step + price_step / 2
             ratio = float(chip_dist[bin_idx])
             accumulated_ratio += ratio
-            
+
             # 检测筹码峰（局部最大值）
             peak_flag = self._is_peak(chip_dist, bin_idx)
-            
+
             chip_bins.append({
                 'price_bin': round(bin_price, 2),
                 'chip_ratio': round(ratio, 4),
                 'accumulated_ratio': round(accumulated_ratio, 4),
                 'peak_flag': peak_flag
             })
-        
+
         # 计算基础指标
         indicators = self._calculate_basic_indicators(chip_bins, latest_close)
-        
+
         return {
             'ts_code': ts_code,
             'trade_date': latest_date.strftime('%Y-%m-%d') if hasattr(latest_date, 'strftime') else str(latest_date),
@@ -299,7 +298,7 @@ class ChipDistributionService:
                 'step': round(price_step, 2)
             }
         }
-    
+
     def _is_peak(self, chip_dist: np.ndarray, bin_idx: int) -> bool:
         """
         检测局部最大值（筹码峰）— 修复 C4
@@ -387,7 +386,7 @@ class ChipDistributionService:
 
         concentration = (high_price - low_price) / (high_price + low_price) if high_price + low_price > 0 else 0
         return {'low': round(low_price, 2), 'high': round(high_price, 2), 'concentration': round(concentration, 4)}
-    
+
     def _calculate_ssrp(self, chip_bins: List[Dict]) -> float:
         """
         计算SSRP - 市场平均成本
@@ -395,10 +394,10 @@ class ChipDistributionService:
         total_chips = sum(bin_data['chip_ratio'] for bin_data in chip_bins)
         if total_chips <= 0:
             return 0
-        
+
         weighted_price = sum(bin_data['price_bin'] * bin_data['chip_ratio'] for bin_data in chip_bins)
         return weighted_price / total_chips
-    
+
     def _calculate_concentration(self, chip_bins: List[Dict], top_pct: float = 0.2) -> float:
         """
         计算筹码集中度 - 前N%价格区间筹码占比
@@ -406,15 +405,15 @@ class ChipDistributionService:
         # 找到最大ratio的top_pct个价格区间
         sorted_bins = sorted(chip_bins, key=lambda x: x['chip_ratio'], reverse=True)
         top_count = max(1, int(len(sorted_bins) * top_pct))
-        
+
         return sum(bin_data['chip_ratio'] for bin_data in sorted_bins[:top_count])
-    
+
     def _calculate_profit_ratio(self, chip_bins: List[Dict], current_price: float) -> float:
         """
         计算筹码获利率 - 当前价格以下筹码比例
         """
         return sum(bin_data['chip_ratio'] for bin_data in chip_bins if bin_data['price_bin'] <= current_price)
-    
+
     def cache_chip_distribution(self, ts_code: str, chip_result: Dict) -> bool:
         """
         缓存筹码分布
@@ -422,20 +421,20 @@ class ChipDistributionService:
         try:
             trade_date = chip_result.get('trade_date')
             chip_bins = chip_result.get('chip_bins', [])
-            
+
             if not trade_date or not chip_bins:
                 return False
-            
+
             # 格式化日期
             if isinstance(trade_date, str):
                 trade_date = pd.to_datetime(trade_date).date()
-            
+
             self.cache_manager.cache_chip_distribution(ts_code, trade_date, chip_bins)
             return True
-        except Exception as e:
+        except Exception:
             logger.warning(r"缓存筹码分布失败: {e}")
             return False
-    
+
     def get_cached_chip_distribution(self, ts_code: str, trade_date: Optional[str] = None) -> pd.DataFrame:
         """
         获取缓存的筹码分布

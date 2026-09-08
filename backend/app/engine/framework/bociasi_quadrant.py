@@ -13,10 +13,10 @@ BOCIASI 四象限聚合器 — 市场情绪状态判定
   慢线高位+快线高位 → 上涨行情尾声 → 高度警惕
 """
 import logging
-import numpy as np
-import pandas as pd
-from typing import Dict, Optional, Tuple
 from datetime import datetime, timedelta
+from typing import Dict, Tuple
+
+import numpy as np
 
 from app.data.mixins import DataAwareMixin
 
@@ -33,10 +33,12 @@ SLOW_LOW_THRESHOLD = 0.30    # 慢线值低于30%分位=低位
 class BociasiQuadrantAnalyzer(DataAwareMixin):
     """BOCIASI四象限分析器 — 基于全市场数据的情绪状态判定"""
 
-    def __init__(self, ecm=None):
+    def __init__(self, ecm=None, market_stats: dict = None):
+        """412号方案B2 v3.0：market_stats由dim1通过data_context传入，不再读daemon内存。"""
         self._dm = None
         self._ecm = ecm
-        self._cache = {}  # 计算缓存
+        self._cache = {}
+        self._market_stats = market_stats or {}  # 计算缓存
 
     def analyze(self) -> Dict:
         """
@@ -74,6 +76,7 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
         """
         计算BOCIASI快线（市场短线情绪）
 
+        411号Phase 10：优先从_market_stats_cache读取预计算值，回退SQL查询。
         4个等权指标:
           1. MA20强势股占比 — 收盘>MA20的股票比例
           2. 换手率分位 — 全市场换手率的历史分位
@@ -84,6 +87,15 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
 
         # 1. MA20强势股占比
         try:
+            # 411号Phase 10：优先读预计算缓存
+            try:
+                if self._market_stats.get('ma20_ratio') is not None:
+                    ratio = self._market_stats['ma20_ratio']
+                    scores.append(self._normalize(ratio, 0.2, 0.8))
+                    self._cache['ma20_ratio'] = round(ratio, 4)
+                    raise StopIteration  # skip fallback
+            except (ImportError, StopIteration):
+                pass
             ratio = self._compute_ma20_ratio()
             scores.append(self._normalize(ratio, 0.2, 0.8))
             self._cache['ma20_ratio'] = round(ratio, 4)
@@ -92,6 +104,15 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
 
         # 2. 换手率分位
         try:
+            # 411号Phase 10：优先读预计算缓存
+            try:
+                if self._market_stats.get('turnover_percentile') is not None:
+                    turnover = self._market_stats['turnover_percentile']
+                    scores.append(turnover)
+                    self._cache['turnover_percentile'] = round(turnover, 4)
+                    raise StopIteration
+            except (ImportError, StopIteration):
+                pass
             turnover = self._compute_turnover_percentile()
             scores.append(turnover)
             self._cache['turnover_percentile'] = round(turnover, 4)
@@ -100,6 +121,15 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
 
         # 3. 涨跌停比
         try:
+            # 411号Phase 10：优先读预计算缓存
+            try:
+                if self._market_stats.get('limit_ratio') is not None:
+                    ld_ratio = self._market_stats['limit_ratio']
+                    scores.append(self._normalize(ld_ratio, 0.3, 3.0))
+                    self._cache['limit_ratio'] = round(ld_ratio, 4)
+                    raise StopIteration
+            except (ImportError, StopIteration):
+                pass
             ld_ratio = self._compute_limit_ratio()
             scores.append(self._normalize(ld_ratio, 0.3, 3.0))
             self._cache['limit_ratio'] = round(ld_ratio, 4)
@@ -108,6 +138,15 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
 
         # 4. RSI中位数分位
         try:
+            # 411号Phase 10：优先读预计算缓存
+            try:
+                if self._market_stats.get('rsi_percentile') is not None:
+                    rsi_pctl = self._market_stats['rsi_percentile']
+                    scores.append(rsi_pctl)
+                    self._cache['rsi_percentile'] = round(rsi_pctl, 4)
+                    raise StopIteration
+            except (ImportError, StopIteration):
+                pass
             rsi_pctl = self._compute_rsi_percentile()
             scores.append(rsi_pctl)
             self._cache['rsi_percentile'] = round(rsi_pctl, 4)
@@ -132,6 +171,15 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
 
         # 1. ERP分位
         try:
+            # 411号Phase 10：优先读预计算缓存
+            try:
+                if self._market_stats.get('erp_percentile') is not None:
+                    erp_percentile = self._market_stats['erp_percentile']
+                    scores.append(1 - erp_percentile)
+                    self._cache['erp_percentile'] = round(erp_percentile, 4)
+                    raise StopIteration
+            except (ImportError, StopIteration):
+                pass
             erp_percentile = self._compute_erp_percentile()
             scores.append(1 - erp_percentile)  # ERP越高→性价比越高→得分越低(慢线高位)
             self._cache['erp_percentile'] = round(erp_percentile, 4)
@@ -140,6 +188,15 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
 
         # 2. 融资余额趋势
         try:
+            # 411号Phase 10：优先读预计算缓存
+            try:
+                if self._market_stats.get('margin_trend') is not None:
+                    margin_trend = self._market_stats['margin_trend']
+                    scores.append(margin_trend)
+                    self._cache['margin_trend'] = round(margin_trend, 4)
+                    raise StopIteration
+            except (ImportError, StopIteration):
+                pass
             margin_trend = self._compute_margin_trend()
             scores.append(margin_trend)
             self._cache['margin_trend'] = round(margin_trend, 4)
@@ -148,6 +205,15 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
 
         # 3. 全市场估值分位
         try:
+            # 411号Phase 10：优先读预计算缓存
+            try:
+                if self._market_stats.get('pe_percentile') is not None:
+                    pe_percentile = self._market_stats['pe_percentile']
+                    scores.append(pe_percentile)
+                    self._cache['pe_percentile'] = round(pe_percentile, 4)
+                    raise StopIteration
+            except (ImportError, StopIteration):
+                pass
             pe_percentile = self._compute_pe_percentile()
             scores.append(pe_percentile)
             self._cache['pe_percentile'] = round(pe_percentile, 4)
@@ -234,7 +300,7 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
         """计算涨跌停比"""
         conn = self._get_dm().cache.conn
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        yesterday = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
+        (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
         row = conn.execute("""
             SELECT
                 SUM(CASE WHEN high_limit = close THEN 1 ELSE 0 END) as up,
@@ -253,15 +319,15 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         try:
             row = conn.execute("""
-                SELECT AVG(RSI_14) FROM indicator_other WHERE trade_date=? AND RSI_14 IS NOT NULL
+                SELECT AVG(rsi14) FROM indicator_other WHERE trade_date=? AND rsi14 IS NOT NULL
             """, [today]).fetchone()
             if row and row[0] is not None:
                 avg_rsi = float(row[0])
                 hist = conn.execute("""
-                    SELECT AVG(RSI_14) FROM indicator_other
-                    WHERE trade_date >= date(?, '-60 days') AND RSI_14 IS NOT NULL
+                    SELECT AVG(rsi14) FROM indicator_other
+                    WHERE trade_date >= date(?, '-60 days') AND rsi14 IS NOT NULL
                 """, [today]).fetchone()
-                hist_avg = float(hist[0]) if hist and hist[0] else 50.0
+                float(hist[0]) if hist and hist[0] else 50.0
                 return max(0, min(1, (avg_rsi - 30) / 40))
         except Exception as e:
             logger.warning(f"RSI分位计算失败，回退0.5: {e}")

@@ -2,8 +2,9 @@
 API 路由集成测试
 覆盖核心业务路由的端点可用性和响应格式
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import pytest
@@ -122,6 +123,7 @@ def test_strategy_analyze_endpoint_exists(client, monkeypatch):
     """
     # Mock 数据访问层，避免真实数据依赖
     import json
+
     from app.engine.unified_core import StandardizedResult
 
     def mock_get_signal_detail(self, ts_code):
@@ -154,6 +156,7 @@ def test_strategy_analyze_endpoint_exists(client, monkeypatch):
 def test_strategy_analyze_returns_valid_structure(client, monkeypatch):
     """测试 E12 返回有效数据结构"""
     import json
+
     from app.engine.unified_core import StandardizedResult
 
     def mock_get_signal_detail(self, ts_code):
@@ -278,6 +281,7 @@ def test_analyze_cache_miss_uses_sync_request_not_direct_write(client, monkeypat
     API 直写策略信号与 daemon 并发写触发 database is locked。
     """
     import json
+
     from app.engine.unified_core import StandardizedResult
 
     def mock_get_signal_detail(self, ts_code):

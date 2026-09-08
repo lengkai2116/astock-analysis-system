@@ -13,7 +13,7 @@ AkshareProvider — 免费的实时/盘中数据提供者
 import logging
 import os
 from datetime import datetime
-from typing import List, Dict, Optional, Any
+from typing import Dict, List, Optional
 
 # ── 代理环境变量免疫 ──────────────────────────────────
 # 清除 shell 中残留的 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY

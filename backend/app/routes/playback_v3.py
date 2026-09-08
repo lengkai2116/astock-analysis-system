@@ -7,9 +7,11 @@ Phase 2 端点(5): P4/P5/P7/P8/P9
 """
 import logging
 from datetime import datetime
-from flask import Blueprint, request, jsonify
-from app.utils.error_handlers import handle_exceptions
+
+from flask import Blueprint, jsonify, request
+
 from app.services.playback_v3_service import PlaybackV3Service
+from app.utils.error_handlers import handle_exceptions
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +190,7 @@ def delete_entry(unit_id):
 def generate_overview():
     """P7: 生成总览报告（池级统计）"""
     data = request.get_json(silent=True) or {}
-    date_range = data.get('date_range', {})
+    data.get('date_range', {})
     stats = _svc.get_statistics()
     account = _svc.get_account()
 
@@ -232,8 +234,9 @@ def download_report(report_id):
         return jsonify({'success': False, 'error': '报告数据未找到',
                         'error_type': 'REPORT_NOT_FOUND'}), 404
 
-    from flask import Response
     import json as json_lib
+
+    from flask import Response
     data = report.to_dict()
     return Response(
         json_lib.dumps(data, ensure_ascii=False, indent=2),
@@ -250,8 +253,9 @@ def download_all_reports():
     reports = PlaybackReport.query.all()
     summaries = [r.to_summary() for r in reports]
 
-    from flask import Response
     import json as json_lib
+
+    from flask import Response
     return Response(
         json_lib.dumps(summaries, ensure_ascii=False, indent=2),
         mimetype='application/json',

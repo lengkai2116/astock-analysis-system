@@ -7,9 +7,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from flask import Blueprint, jsonify, request
-from app.data.qmt_provider import QmtDataProvider
 import threading
+
+from flask import Blueprint, jsonify, request
+
+from app.data.qmt_provider import QmtDataProvider
 
 qmt_bp = Blueprint('qmt', __name__, url_prefix='/api/v3/qmt')
 
@@ -49,13 +51,13 @@ def disconnect_qmt():
 def get_snapshot():
     """获取市场快照"""
     provider = get_qmt_provider()
-    
+
     codes = request.args.get('codes', '')
     if codes:
         stock_codes = [c.strip() for c in codes.split(',')]
     else:
         stock_codes = ['600519.SH', '000001.SZ', '000002.SZ']
-    
+
     snapshot = provider.get_market_snapshot(stock_codes)
     return jsonify({'success': True, 'data': snapshot})
 
@@ -64,13 +66,13 @@ def get_snapshot():
 def get_tick():
     """获取Tick数据"""
     provider = get_qmt_provider()
-    
+
     codes = request.args.get('codes', '')
     if codes:
         stock_codes = [c.strip() for c in codes.split(',')]
     else:
         stock_codes = ['600519.SH']
-    
+
     tick_data = provider.get_tick(stock_codes)
     return jsonify({'success': True, 'data': tick_data})
 
@@ -79,10 +81,10 @@ def get_tick():
 def get_kline(ts_code):
     """获取K线数据"""
     provider = get_qmt_provider()
-    
+
     period = request.args.get('period', '1d')
     count = request.args.get('count', 100, type=int)
-    
+
     kline = provider.get_kline(ts_code, period=period, count=count)
     if kline:
         return jsonify({'success': True, 'data': kline})
@@ -94,14 +96,14 @@ def get_kline(ts_code):
 def subscribe():
     """订阅实时行情"""
     provider = get_qmt_provider()
-    
+
     data = request.get_json()
     stock_codes = data.get('codes', [])
     period = data.get('period', 'tick')
-    
+
     if not stock_codes:
         return jsonify({'success': False, 'message': '请提供股票代码'}), 400
-    
+
     if period == 'tick':
         seq = provider.subscribe_tick(stock_codes, _default_callback)
         return jsonify({'success': seq > 0, 'subscription_id': seq})

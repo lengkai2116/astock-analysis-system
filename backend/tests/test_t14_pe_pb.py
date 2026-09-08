@@ -3,7 +3,9 @@
 背景：treemap_snapshot 无 pe/pb 列 → API 返回 null → 前端 showDetail 在
 data.pe.toFixed(1) 崩溃 → 弹窗不打开（三个地图全部无弹窗）。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)

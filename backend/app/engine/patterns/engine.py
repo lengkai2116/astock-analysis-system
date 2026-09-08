@@ -3,18 +3,18 @@ PatternEngine — 形态评分引擎主入口
 ==================================
 统一调度 50 种形态 + 8 种状态检测器，实现 Wiki 10 分制聚合算法。
 """
-from typing import List, Tuple, Dict, Optional
+from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
 
 from app.engine.patterns import PatternResult
-from app.engine.patterns.registry import PatternRegistry
 from app.engine.patterns.detectors import (
-    BullishPatternDetector,
     BearishPatternDetector,
     BlackHorsePatternDetector,
+    BullishPatternDetector,
     StateDetector,
 )
-
+from app.engine.patterns.registry import PatternRegistry
 
 # 形态权重映射（基于 Wiki 星级）
 WEIGHT_MAP = {

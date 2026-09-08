@@ -1,8 +1,9 @@
 """
 成交量类因子
 """
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from ..base import BaseFactor, FactorParam
 
 
@@ -18,11 +19,11 @@ class VOL_MA(BaseFactor):
     formula = "VOL_MA = MA(Volume, N)"
     source = "QLib"
     source_detail = "QLib158"
-    
+
     params = [
         FactorParam("period", 5, "int", 1, 252, "平均周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data["vol"].rolling(window=period).mean()
@@ -40,25 +41,25 @@ class VR(BaseFactor):
     formula = "VR = (UpVol + 0.5 * FlatVol) / (DownVol + 0.5 * FlatVol)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("period", 26, "int", 2, 252, "计算周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         close = data["close"]
         vol = data["vol"]
-        
+
         up_vol = vol.where(close > close.shift(1), 0)
         down_vol = vol.where(close < close.shift(1), 0)
         flat_vol = vol.where(close == close.shift(1), 0)
-        
+
         up_sum = up_vol.rolling(window=period).sum()
         down_sum = down_vol.rolling(window=period).sum()
         flat_sum = flat_vol.rolling(window=period).sum()
-        
+
         vr = (up_sum + 0.5 * flat_sum) / (down_sum + 0.5 * flat_sum).replace(0, np.nan)
         return vr
 
@@ -75,17 +76,17 @@ class OBV(BaseFactor):
     formula = "OBV = OBV_prev + Volume if Close > Close_prev, OBV_prev - Volume if Close < Close_prev"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         close = data["close"]
         vol = data["vol"]
-        
-        sign = np.where(close > close.shift(1), 1, 
+
+        sign = np.where(close > close.shift(1), 1,
                        np.where(close < close.shift(1), -1, 0))
         obv = (sign * vol).cumsum()
-        
+
         return obv
 
 
@@ -101,9 +102,9 @@ class AMOUNT(BaseFactor):
     formula = "Amount = Close * Volume"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return data["close"] * data["vol"]
 
@@ -120,11 +121,11 @@ class AMOUNT_MA(BaseFactor):
     formula = "AMOUNT_MA = MA(Close * Volume, N)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("period", 5, "int", 1, 252, "平均周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         amount = data["close"] * data["vol"]
@@ -143,11 +144,11 @@ class VOL_RATIO(BaseFactor):
     formula = "VOL_RATIO = Volume / MA(Volume, N)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("period", 5, "int", 1, 252, "平均周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         vol_ma = data["vol"].rolling(window=period).mean()

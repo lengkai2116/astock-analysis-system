@@ -6,18 +6,22 @@
 - 投资组合接口
 - 模拟交易接口
 """
-from app.utils.error_handlers import handle_exceptions
-from flask import Blueprint, request, jsonify
+from datetime import datetime
+
+from flask import Blueprint, jsonify, request
+
 from app import db
-from app.models import (
-    TechnicalIndicator, Signal, Watchlist,
-    Portfolio, PortfolioHolding, PaperTrade, Stock
-)
-from app.indicators import TechnicalIndicatorEngine
-from app.signals import SignalGenerator
 from app.data import DataManager
-from datetime import datetime, date
-import pandas as pd
+from app.indicators import TechnicalIndicatorEngine
+from app.models import (
+    PaperTrade,
+    Portfolio,
+    PortfolioHolding,
+    Signal,
+    TechnicalIndicator,
+)
+from app.signals import SignalGenerator
+from app.utils.error_handlers import handle_exceptions
 
 phase3_bp = Blueprint('phase3', __name__, url_prefix='/api/v3')
 
@@ -42,11 +46,11 @@ def get_data_manager():
 def get_indicators(ts_code):
     """获取技术指标数据"""
     limit = request.args.get('limit', 100, type=int)
-    
+
     indicators = TechnicalIndicator.query.filter_by(
         ts_code=ts_code
     ).order_by(TechnicalIndicator.trade_date.desc()).limit(limit).all()
-    
+
     return jsonify({
         'success': True,
         'data': [i.to_dict() for i in indicators]
@@ -54,56 +58,41 @@ def get_indicators(ts_code):
 @handle_exceptions
 @phase3_bp.route('/indicators/<ts_code>/calculate', methods=['POST'])
 def calculate_indicators(ts_code):
-    """计算技术指标"""
-    start_date = request.json.get('start_date')
-    end_date = request.json.get('end_date')
-    
+    """获取技术指标（414号P2.1: 优先读预计算缓存，移除实时计算+ORM写入）"""
     try:
+        # 414号P2.1: 从预计算宽表读取
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        cached = ecm.get_indicators_wide(ts_code)
+        if cached is not None and not cached.empty:
+            data = []
+            for _, row in cached.iterrows():
+                data.append({
+                    'ts_code': ts_code,
+                    'trade_date': row.get('trade_date'),
+                    'ma5': float(row['ma5']) if pd.notna(row.get('ma5')) else None,
+                    'ma10': float(row['ma10']) if pd.notna(row.get('ma10')) else None,
+                    'ma20': float(row['ma20']) if pd.notna(row.get('ma20')) else None,
+                    'macd_dif': float(row['macd_dif']) if pd.notna(row.get('macd_dif')) else None,
+                    'macd_dea': float(row['macd_dea']) if pd.notna(row.get('macd_dea')) else None,
+                    'macd_hist': float(row['macd_hist']) if pd.notna(row.get('macd_hist')) else None,
+                    'rsi14': float(row['rsi14']) if pd.notna(row.get('rsi14')) else None,
+                    'kdj_k': float(row['kdj_k']) if pd.notna(row.get('kdj_k')) else None,
+                    'kdj_d': float(row['kdj_d']) if pd.notna(row.get('kdj_d')) else None,
+                    'kdj_j': float(row['kdj_j']) if pd.notna(row.get('kdj_j')) else None,
+                    'boll_upper': float(row['boll_upper']) if pd.notna(row.get('boll_upper')) else None,
+                    'boll_mid': float(row['boll_mid']) if pd.notna(row.get('boll_mid')) else None,
+                    'boll_lower': float(row['boll_lower']) if pd.notna(row.get('boll_lower')) else None,
+                })
+            return jsonify({'success': True, 'data': data})
+
+        # 降级：实时计算（无ORM写入）
         data_manager = get_data_manager()
-        daily_data = data_manager.get_cached_daily_data(ts_code, start_date, end_date)
-        
-        if daily_data.empty:
-            return jsonify({
-                'success': False,
-                'message': 'No daily data found'
-            }), 404
-        
-        # 计算技术指标
+        daily_data = data_manager.get_cached_daily_data(ts_code)
+        if daily_data is None or daily_data.empty:
+            return jsonify({'success': False, 'message': 'No data found'}), 404
         result = indicator_engine.calculate_all_indicators(daily_data)
-        
-        # 保存到数据库
-        for _, row in result.iterrows():
-            existing = TechnicalIndicator.query.filter_by(
-                ts_code=ts_code,
-                trade_date=row['trade_date']
-            ).first()
-            
-            if not existing:
-                ind = TechnicalIndicator(
-                    ts_code=ts_code,
-                    trade_date=row['trade_date'],
-                    ma5=row.get('ma5'),
-                    ma10=row.get('ma10'),
-                    ma20=row.get('ma20'),
-                    macd_dif=row.get('macd_dif'),
-                    macd_dea=row.get('macd_dea'),
-                    macd_bar=row.get('macd_bar'),
-                    rsi=row.get('rsi'),
-                    kdj_k=row.get('kdj_k'),
-                    kdj_d=row.get('kdj_d'),
-                    kdj_j=row.get('kdj_j'),
-                    boll_upper=row.get('boll_upper'),
-                    boll_middle=row.get('boll_middle'),
-                    boll_lower=row.get('boll_lower')
-                )
-                db.session.add(ind)
-        
-        db.session.commit()
-        
-        return jsonify({
-            'success': True,
-            'data': result.to_dict('records')
-        })
+        return jsonify({'success': True, 'data': result.to_dict('records')})
     except Exception as e:
         return jsonify({
             'success': False,
@@ -120,13 +109,13 @@ def get_signals():
     """获取信号列表"""
     ts_code = request.args.get('ts_code')
     limit = request.args.get('limit', 50, type=int)
-    
+
     query = Signal.query
     if ts_code:
         query = query.filter_by(ts_code=ts_code)
-    
+
     signals = query.order_by(Signal.created_at.desc()).limit(limit).all()
-    
+
     return jsonify({
         'success': True,
         'data': [s.to_dict() for s in signals]
@@ -136,19 +125,19 @@ def get_signals():
 def generate_signals():
     """生成信号"""
     ts_code = request.json.get('ts_code')
-    
+
     try:
         data_manager = get_data_manager()
         daily_data = data_manager.get_cached_daily_data(ts_code)
-        
+
         if daily_data.empty:
             return jsonify({
                 'success': False,
                 'message': 'No daily data'
             }), 404
-        
+
         signals = signal_generator.generate_all_signals(daily_data)
-        
+
         return jsonify({
             'success': True,
             'data': signals
@@ -183,11 +172,11 @@ def create_portfolio():
     """创建投资组合"""
     name = request.json.get('name', 'My Portfolio')
     initial_capital = request.json.get('initial_capital', 100000.0)
-    
+
     portfolio = Portfolio(name=name, initial_capital=initial_capital)
     db.session.add(portfolio)
     db.session.commit()
-    
+
     return jsonify({
         'success': True,
         'data': portfolio.to_dict()
@@ -202,9 +191,9 @@ def get_portfolio_detail(id):
             'success': False,
             'message': 'Not found'
         }), 404
-    
+
     holdings = PortfolioHolding.query.filter_by(portfolio_id=id).all()
-    
+
     return jsonify({
         'success': True,
         'data': {
@@ -222,12 +211,12 @@ def paper_trade(id):
             'success': False,
             'message': 'Not found'
         }), 404
-    
+
     ts_code = request.json.get('ts_code')
     action = request.json.get('action')
     quantity = request.json.get('quantity')
     price = request.json.get('price')
-    
+
     # 获取当前股价
     data_manager = get_data_manager()
     daily_data = data_manager.get_cached_daily_data(ts_code)
@@ -236,11 +225,11 @@ def paper_trade(id):
             'success': False,
             'message': 'Need price or no data'
         }), 400
-    
+
     if not price and not daily_data.empty:
         latest = daily_data.iloc[-1]
         price = latest.get('close')
-    
+
     # 记录交易
     trade = PaperTrade(
         portfolio_id=id,
@@ -250,10 +239,10 @@ def paper_trade(id):
         price=price
     )
     db.session.add(trade)
-    
+
     # 更新持仓
     existing = PortfolioHolding.query.filter_by(portfolio_id=id, ts_code=ts_code).first()
-    
+
     if action == 'BUY':
         if existing:
             avg_cost = (existing.quantity * existing.avg_cost + quantity * price) / (existing.quantity + quantity)
@@ -277,9 +266,9 @@ def paper_trade(id):
                 'success': False,
                 'message': 'Insufficient shares'
             }), 400
-    
+
     db.session.commit()
-    
+
     return jsonify({
         'success': True,
         'data': trade.to_dict()
@@ -375,8 +364,9 @@ def batch_klines():
 @phase3_bp.route('/market/categories', methods=['GET'])
 def market_categories():
     """获取品种分类树"""
-    from app import models
     from sqlalchemy import func
+
+    from app import models
 
     # 按行业分组统计
     stocks = models.Stock.query.with_entities(
@@ -460,7 +450,7 @@ def place_sim_order():
         if not daily_data.empty:
             price = float(daily_data.iloc[-1]['close'])
 
-    from app.models import PortfolioHolding, PaperTrade
+    from app.models import PaperTrade, PortfolioHolding
 
     trade = PaperTrade(
         portfolio_id=portfolio_id,
@@ -563,7 +553,7 @@ def close_sim_position(position_id):
     data = request.get_json() or {}
     price = data.get('price', type=float)
 
-    from app.models import PortfolioHolding, PaperTrade
+    from app.models import PaperTrade, PortfolioHolding
     position = PortfolioHolding.query.get(position_id)
     if not position:
         return jsonify({'code': 0, 'message': '持仓不存在'}), 404
@@ -593,7 +583,7 @@ def close_sim_position(position_id):
 @phase3_bp.route('/sim/account/reset', methods=['POST'])
 def reset_sim_account():
     """重置模拟账户"""
-    from app.models import PortfolioHolding, PaperTrade
+    from app.models import PaperTrade, PortfolioHolding
 
     PortfolioHolding.query.delete()
     PaperTrade.query.delete()
@@ -606,8 +596,8 @@ def reset_sim_account():
 @phase3_bp.route('/sim/trades/summary', methods=['GET'])
 def get_sim_trades_summary():
     """交易汇总"""
+
     from app.models import PaperTrade
-    import numpy as np
 
     trades = PaperTrade.query.all()
     if not trades:
@@ -682,8 +672,9 @@ def get_alerts():
 def create_alert():
     """创建条件告警"""
     data = request.get_json() or {}
-    from app.models import Alert
     from datetime import datetime
+
+    from app.models import Alert
 
     alert = Alert(
         ts_code=data.get('ts_code'),
@@ -727,8 +718,9 @@ def save_drawings():
     if not symbol:
         return jsonify({'code': 0, 'message': '缺少 symbol'}), 400
 
-    from app.models import Drawing
     import json
+
+    from app.models import Drawing
 
     # 删除旧的画图数据
     Drawing.query.filter_by(ts_code=symbol).delete()
@@ -761,8 +753,9 @@ def load_drawings():
     if not symbol:
         return jsonify({'code': 0, 'message': '缺少 symbol'}), 400
 
-    from app.models import Drawing
     import json
+
+    from app.models import Drawing
 
     drawings = Drawing.query.filter_by(ts_code=symbol).all()
     result = []

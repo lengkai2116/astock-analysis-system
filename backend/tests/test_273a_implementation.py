@@ -5,14 +5,12 @@
 
 运行方式: pytest backend/tests/test_273a_implementation.py -v
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-import pytest
 import pandas as pd
-from datetime import datetime
-
 
 # ════════════════════════════════════════════════════════════════
 # MarketSentimentService — 情绪四阶段映射逻辑
@@ -157,8 +155,8 @@ class TestFinanceReportService:
         assert _safe_float('12.5') == 12.5
 
     def test_safe_float_nan(self):
+
         from app.services.finance_report_service import _safe_float
-        import math
         result = _safe_float(float('nan'))
         assert result is None or result != result  # NaN → None
 
@@ -229,7 +227,6 @@ class TestECMNewTables:
     def test_finance_report_write_and_read(self):
         from app.data.enhanced_cache_manager import get_ecm_instance
         ecm = get_ecm_instance()
-        import pandas as pd
         df = pd.DataFrame([{
             'ts_code': '000001.SZ',
             'end_date': '2026-06-30',
@@ -281,8 +278,8 @@ class Test273aIntegration:
     """273a 方案端到端集成"""
 
     def test_all_modules_importable(self):
-        from app.services.market_sentiment_service import MarketSentimentService
         from app.services.finance_report_service import FinanceReportService, _safe_float
+        from app.services.market_sentiment_service import MarketSentimentService
         MarketSentimentService
         FinanceReportService
         _safe_float

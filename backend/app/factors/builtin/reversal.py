@@ -1,8 +1,9 @@
 """
 反转类因子
 """
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from ..base import BaseFactor, FactorParam
 
 
@@ -18,11 +19,11 @@ class BIAS(BaseFactor):
     formula = "BIAS = (Close - MA) / MA * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("period", 12, "int", 2, 252, "均线周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         ma = data["close"].rolling(window=period).mean()
@@ -42,14 +43,14 @@ class WILLR(BaseFactor):
     formula = "WILLR = (HighestHigh - Close) / (HighestHigh - LowestLow) * (-100)"
     source = "QLib"
     source_detail = "QLib158"
-    
+
     params = [
         FactorParam("period", 14, "int", 2, 252, "计算周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         high_n = data["high"].rolling(window=period).max()
         low_n = data["low"].rolling(window=period).min()
         willr = (high_n - data["close"]) / (high_n - low_n).replace(0, np.nan) * (-100)
@@ -68,14 +69,14 @@ class RSV(BaseFactor):
     formula = "RSV = (Close - LowestLow) / (HighestHigh - LowestLow) * 100"
     source = "QLib"
     source_detail = "QLib158"
-    
+
     params = [
         FactorParam("period", 9, "int", 2, 252, "计算周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         low_n = data["low"].rolling(window=period).min()
         high_n = data["high"].rolling(window=period).max()
         rsv = (data["close"] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
@@ -94,22 +95,22 @@ class CMO(BaseFactor):
     formula = "CMO = (UpSum - DownSum) / (UpSum + DownSum) * 100"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = [
         FactorParam("period", 14, "int", 2, 252, "计算周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         close = data["close"]
         diff = close.diff()
         up = diff.where(diff > 0, 0)
         down = -diff.where(diff < 0, 0)
-        
+
         up_sum = up.rolling(window=period).sum()
         down_sum = down.rolling(window=period).sum()
-        
+
         cmo = (up_sum - down_sum) / (up_sum + down_sum).replace(0, np.nan) * 100
         return cmo
 
@@ -126,11 +127,11 @@ class ROC_R(BaseFactor):
     formula = "ROC_R = Rank(ROC(5))"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("period", 5, "int", 1, 252, "收益率周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         roc = (data["close"] / data["close"].shift(period) - 1) * 100
@@ -149,11 +150,11 @@ class MOM_R(BaseFactor):
     formula = "MOM_R = Rank(MOM(20))"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("period", 20, "int", 1, 252, "动量周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         mom = data["close"] - data["close"].shift(period)

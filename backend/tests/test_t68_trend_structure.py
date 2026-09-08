@@ -7,14 +7,15 @@
   假设3：向上突破前期反弹高点 → 反向推动浪形成
 - 趋势线突破二日原则：当日收盘突破 + 次日仍在外 = 突破确认
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)
 
 import numpy as np
 import pandas as pd
-import pytest
 
 
 def make_df(closes: list[float]) -> pd.DataFrame:

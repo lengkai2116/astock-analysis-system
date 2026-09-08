@@ -2,7 +2,6 @@
 量价/筹码维度 NLG 渲染器 — 成交量、形态、筹码峰 → 中文描述
 """
 
-from .templates import VOLUME_STATE, VOLUME_RELATION
 
 
 def render_volume(volume: dict) -> str:

@@ -13,11 +13,10 @@
   - 支持 SQLite JSON 列存储
   - 线程安全（写操作加锁）
 """
-import json
 import logging
 import threading
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,6 @@ class RuntimeConfigManager:
             self._cache = {}
             try:
                 from app.models.system_config import SystemConfig
-                from app import db
                 rows = SystemConfig.query.all()
                 for row in rows:
                     self._cache[row.key] = row.value
@@ -101,8 +99,8 @@ class RuntimeConfigManager:
         config 的顶级 key 会被 upsert 到 system_config 表。
         例如 {'llm': {...}, 'data_source': {...}, 'notification': {...}}
         """
-        from app.models.system_config import SystemConfig
         from app import db
+        from app.models.system_config import SystemConfig
 
         with self._lock:
             for top_key, top_value in config.items():

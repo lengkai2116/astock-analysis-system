@@ -3,9 +3,11 @@
 
 规则引擎 + 通知推送 + 休眠管理 + 周期报告的全量数据模型
 """
-from app import db
 from datetime import datetime
-from sqlalchemy import JSON, UniqueConstraint
+
+from sqlalchemy import JSON
+
+from app import db
 
 
 class NotificationRule(db.Model):

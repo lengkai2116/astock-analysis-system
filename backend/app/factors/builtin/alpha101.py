@@ -3,9 +3,10 @@ Alpha101因子 - Kakushadze的101个公式因子
 文件路径：backend/app/factors/builtin/alpha101.py
 参考：https://arxiv.org/abs/1901.08916
 """
-import pandas as pd
 import numpy as np
-from ..base import BaseFactor, FactorParam
+import pandas as pd
+
+from ..base import BaseFactor
 
 
 class Alpha001(BaseFactor):
@@ -18,20 +19,20 @@ class Alpha001(BaseFactor):
     formula = "(rank(ts_argmax(signedpower(returns, 2), 5) - 0.5) * -1"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         returns = data['close'].pct_change()
-        
+
         def find_max_day(series):
             if len(series) < 2:
                 return np.nan
             return series.argmax()
-        
+
         max_pos = returns.rolling(window=5).apply(find_max_day, raw=True)
         ranks = max_pos.rank(pct=True)
-        
+
         return (ranks - 0.5) * -1
 
 
@@ -45,9 +46,9 @@ class Alpha002(BaseFactor):
     formula = "-1 * delta(close, 1)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return -1 * data['close'].diff(1)
 
@@ -62,9 +63,9 @@ class Alpha003(BaseFactor):
     formula = "ts_rank(close, 10)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return data['close'].rolling(window=10).rank(pct=True)
 
@@ -79,9 +80,9 @@ class Alpha004(BaseFactor):
     formula = "ts_rank(delta(close, 1), 10)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         delta_close = data['close'].diff(1)
         return delta_close.rolling(window=10).rank(pct=True)
@@ -97,9 +98,9 @@ class Alpha005(BaseFactor):
     formula = "ts_rank(close, 20)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return data['close'].rolling(window=20).rank(pct=True)
 
@@ -114,9 +115,9 @@ class Alpha006(BaseFactor):
     formula = "-1 * correlation(high, volume, 5)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return -1 * data['high'].rolling(window=5).corr(data['vol'])
 
@@ -131,9 +132,9 @@ class Alpha007(BaseFactor):
     formula = "-1 * correlation(open, volume, 10)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return -1 * data['open'].rolling(window=10).corr(data['vol'])
 
@@ -148,9 +149,9 @@ class Alpha008(BaseFactor):
     formula = "-1 * correlation(high, volume, 10)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return -1 * data['high'].rolling(window=10).corr(data['vol'])
 
@@ -165,9 +166,9 @@ class Alpha009(BaseFactor):
     formula = "ts_min(close, 5)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return data['close'].rolling(window=5).min()
 
@@ -182,9 +183,9 @@ class Alpha010(BaseFactor):
     formula = "ts_max(close, 5)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return data['close'].rolling(window=5).max()
 
@@ -199,9 +200,9 @@ class Alpha011(BaseFactor):
     formula = "delta(close, 5) / delay(close, 5)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return data['close'].diff(5) / data['close'].shift(5).replace(0, np.nan)
 
@@ -216,9 +217,9 @@ class Alpha012(BaseFactor):
     formula = "(close - low) / (high - low + 0.001)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return (data['close'] - data['low']) / (data['high'] - data['low'] + 0.001)
 
@@ -233,9 +234,9 @@ class Alpha013(BaseFactor):
     formula = "-1 * (close - open)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return -1 * (data['close'] - data['open'])
 
@@ -250,9 +251,9 @@ class Alpha014(BaseFactor):
     formula = "-1 * (close - open)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return -1 * (data['close'] - data['open'])
 
@@ -267,9 +268,9 @@ class Alpha015(BaseFactor):
     formula = "rank(delta(close, 1), 10)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         delta_close = data['close'].diff(1)
         return delta_close.rolling(window=10).rank(pct=True)
@@ -285,9 +286,9 @@ class Alpha016(BaseFactor):
     formula = "-1 * (close - ts_min(low, 5))"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         min_low = data['low'].rolling(window=5).min()
         return -1 * (data['close'] - min_low)
@@ -303,9 +304,9 @@ class Alpha017(BaseFactor):
     formula = "-1 * (close - ts_max(high, 5))"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         max_high = data['high'].rolling(window=5).max()
         return -1 * (data['close'] - max_high)
@@ -321,9 +322,9 @@ class Alpha018(BaseFactor):
     formula = "rank(ts_rank(close, 10), 10)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         rank1 = data['close'].rolling(window=10).rank(pct=True)
         rank2 = rank1.rolling(window=10).rank(pct=True)
@@ -340,16 +341,16 @@ class Alpha019(BaseFactor):
     formula = "rank(close - open) > rank(high - close)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         close_open = data['close'] - data['open']
         high_close = data['high'] - data['close']
-        
+
         rank_co = close_open.rolling(window=20).rank(pct=True)
         rank_hc = high_close.rolling(window=20).rank(pct=True)
-        
+
         return (rank_co > rank_hc).astype(float)
 
 
@@ -363,9 +364,9 @@ class Alpha020(BaseFactor):
     formula = "rank(delta(close, 1))"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         delta_close = data['close'].diff(1)
         return delta_close.rolling(window=20).rank(pct=True)

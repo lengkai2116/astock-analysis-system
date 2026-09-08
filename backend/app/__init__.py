@@ -1,10 +1,11 @@
 import os
 import sys
+
+from dotenv import load_dotenv
 from flask import Flask, request
-from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_socketio import SocketIO
-from dotenv import load_dotenv
+from flask_sqlalchemy import SQLAlchemy
 
 load_dotenv()
 
@@ -30,7 +31,7 @@ def _setup_logging(app):
     """配置日志轮转"""
     log_dir = os.environ.get('LOG_DIR', os.path.join(os.path.dirname(app.instance_path), 'logs'))
     os.makedirs(log_dir, exist_ok=True)
-    
+
     log_file = os.path.join(log_dir, 'app.log')
     handler = TimedRotatingFileHandler(log_file, when='midnight', backupCount=30)
     handler.setFormatter(logging.Formatter(
@@ -38,12 +39,12 @@ def _setup_logging(app):
         datefmt='%Y-%m-%d %H:%M:%S'
     ))
     handler.setLevel(logging.INFO)
-    
+
     # 替换 root logger 的 handler
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
     root_logger.addHandler(handler)
-    
+
     # 同时保留控制台输出
     console = logging.StreamHandler()
     console.setFormatter(logging.Formatter(
@@ -51,14 +52,14 @@ def _setup_logging(app):
     ))
     console.setLevel(logging.INFO)
     root_logger.addHandler(console)
-    
+
     app.logger.info(f"日志已配置: {log_file}")
 
 
 
 def create_app():
     app = Flask(__name__)
-    
+
     @app.after_request
     def add_cors_headers(response):
         allowed = os.environ.get('CORS_ORIGIN', '*')
@@ -66,15 +67,14 @@ def create_app():
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
         return response
-    
+
     # 全局请求鉴权（如已配置 AUTH_TOKEN）
-    from app.auth import is_auth_enabled, _constant_time_compare, _load_auth_token
-    
+    from app.auth import _constant_time_compare, _load_auth_token, is_auth_enabled
+
     _AUTH_TOKEN = _load_auth_token()
-    
+
     @app.before_request
     def check_auth():
-        from flask import request
         if request.method == 'OPTIONS':
             return
         if not _AUTH_TOKEN:
@@ -90,7 +90,7 @@ def create_app():
         if not _constant_time_compare(token, _AUTH_TOKEN):
 
             return {'success': False, 'error': '认证令牌无效', 'error_type': 'AuthInvalid'}, 403
-    
+
 
     @app.errorhandler(404)
     def not_found(error):
@@ -156,11 +156,16 @@ def create_app():
     # 首次启动时自动创建表（兜底，生产环境应使用 flask db upgrade）
     with app.app_context():
         # 显式导入所有模型以确保 db.create_all() 能创建对应表
-        from app.models.strategy import StrategyTemplateV2  # noqa: F401
-        from app.models.playback import ReviewUnit, PlaybackAccount, PlaybackReport  # noqa: F401
-        from app.models.notification import NotificationRule, Notification, NotificationRuleStats, ReportArchive  # noqa: F401
-        from app.models.verification import SignalRecord, VirtualPosition  # noqa: F401
+        from app.models.notification import (  # noqa: F401
+            Notification,
+            NotificationRule,
+            NotificationRuleStats,
+            ReportArchive,
+        )
         from app.models.opportunity_library import OpportunityLibrary  # noqa: F401
+        from app.models.playback import PlaybackAccount, PlaybackReport, ReviewUnit  # noqa: F401
+        from app.models.strategy import StrategyTemplateV2  # noqa: F401
+        from app.models.verification import SignalRecord, VirtualPosition  # noqa: F401
 
         try:
             db.create_all()
@@ -176,42 +181,40 @@ def create_app():
         except Exception as e:
             app.logger.warning(f"策略模板种子数据初始化失败: {e}")
 
-    from app.routes.market import market_bp
-    from app.routes.health import health_bp
-    from app.routes.phase3 import phase3_bp
+    from app.auth import auth_bp
+    from app.routes.account import account_bp, account_v3_bp
+    from app.routes.ai_analysis import ai_analysis_bp
+    from app.routes.alert_route import alert_bp
+    from app.routes.backtest import backtest_bp
     from app.routes.cache import cache_bp
     from app.routes.chart import chart_bp
-    from app.routes.realtime import realtime_bp
-    from app.routes.ai_analysis import ai_analysis_bp
+    from app.routes.conditions import conditions_bp
+    from app.routes.dashboard import dashboard_bp
     from app.routes.factors import factors_bp
-    from app.routes.strategy import strategy_v3_bp
-    from app.routes.backtest import backtest_bp
-    from app.routes.indicator_ide import indicator_ide_bp
-    from app.routes.indicator_ide import indicator_ide_v3_bp
-    from app.routes.reports import reports_bp
-    from app.routes.strategy_templates import strategy_templates_bp
-    from app.routes.qmt import qmt_bp
-    from app.routes.sandbox import sandbox_bp, sandbox_v3_bp
-    from app.routes.account import account_bp
-    from app.routes.account import account_v3_bp
-    from app.auth import auth_bp
+    from app.routes.health import health_bp
+    from app.routes.indicator_ide import indicator_ide_bp, indicator_ide_v3_bp
+    from app.routes.kline_resampler_api import kline_resampler_bp
+    from app.routes.market import market_bp
     from app.routes.minute_data import minute_data_bp
+    from app.routes.news_route import news_bp
+    from app.routes.notifications import notifications_bp
+    from app.routes.opportunity_atlas import opportunity_bp
+    from app.routes.opportunity_library import library_bp
+    from app.routes.phase3 import phase3_bp
     from app.routes.playback import playback_bp
     from app.routes.playback_v3 import playback_v3_bp
-    from app.routes.resonance import resonance_bp
     from app.routes.prediction import prediction_bp
-    from app.routes.strategy_interpret import strategy_interpret_bp
-    from app.routes.kline_resampler_api import kline_resampler_bp
-    from app.routes.news_route import news_bp
-    from app.routes.alert_route import alert_bp
-    from app.routes.conditions import conditions_bp
-    from app.routes.system_config import system_bp
+    from app.routes.qmt import qmt_bp
+    from app.routes.realtime import realtime_bp
+    from app.routes.reports import reports_bp
+    from app.routes.resonance import resonance_bp
+    from app.routes.sandbox import sandbox_bp, sandbox_v3_bp
+    from app.routes.strategy import strategy_v3_bp
     from app.routes.strategy_analyze import strategy_analyze_bp
+    from app.routes.strategy_interpret import strategy_interpret_bp
+    from app.routes.strategy_templates import strategy_templates_bp
+    from app.routes.system_config import system_bp
     from app.routes.watchlist import watchlist_bp
-    from app.routes.dashboard import dashboard_bp
-    from app.routes.notifications import notifications_bp
-    from app.routes.opportunity_library import library_bp
-    from app.routes.opportunity_atlas import opportunity_bp
 
     app.register_blueprint(market_bp)
     app.register_blueprint(health_bp)
@@ -324,9 +327,9 @@ def create_app():
 
     # 1. 数据源管理器注册
     try:
+        from app.data.akshare_provider import AkshareProvider
         from app.data.data_source_manager import data_source_manager
         from app.data.tushare_provider import TushareProvider
-        from app.data.akshare_provider import AkshareProvider
 
         # 注册 Tushare 作为主数据源
         tushare = TushareProvider()

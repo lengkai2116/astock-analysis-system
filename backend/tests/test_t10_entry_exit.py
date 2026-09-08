@@ -5,13 +5,16 @@
 - exit_conditions：每种机会类型的退出条件列表（结构化 JSON，任一满足即退出）
 - _compute_opportunity_meta 应在证据计数后输出这两个字段
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)
 
 import importlib.util
 import json
+
 import pytest
 
 _MODULE_PATH = os.path.join(os.path.dirname(__file__), '..', 'data_daemon.py')

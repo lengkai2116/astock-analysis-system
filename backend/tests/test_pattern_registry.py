@@ -2,15 +2,16 @@
 测试 pattern registry 注册
 验证 50 种 Wiki 形态 + 8 种状态元数据已正确注册
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
 
 import pytest
 from app.engine.patterns import PatternCategory
-from app.engine.patterns.registry import PatternRegistry, PatternMeta
+from app.engine.patterns.registry import PatternRegistry
 
 
 @pytest.fixture(scope='module')

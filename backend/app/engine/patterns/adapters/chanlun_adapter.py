@@ -8,12 +8,9 @@
   一买/二买/三买/类二买、一卖/二卖/三卖/类二卖
 """
 
-from typing import List, Optional, Dict
-import pandas as pd
+from typing import Dict, List
 
-from app.engine.patterns import (
-    PatternResult, PatternCategory, PatternStage, PatternLevel
-)
+from app.engine.patterns import PatternCategory, PatternLevel, PatternResult, PatternStage
 from app.engine.patterns.registry import PatternRegistry
 
 # 缠论买卖点 → 模式名映射

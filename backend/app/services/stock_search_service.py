@@ -5,12 +5,11 @@
 支持股票代码精确匹配 / 名称模糊查询 / 拼音前缀搜索
 """
 
-import re
 import logging
-from typing import List, Dict, Optional
-from pypinyin import pinyin, Style
+from typing import Dict, List
 
-from app import db
+from pypinyin import Style, pinyin
+
 from app.models import Stock
 
 logger = logging.getLogger(__name__)

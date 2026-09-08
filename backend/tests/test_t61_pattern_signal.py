@@ -4,7 +4,9 @@
 opens 变量未定义 → NameError 被 except 吞掉 → pattern_signal 恒为 none。
 本测试用真实K线数据验证修复后能产出形态。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)

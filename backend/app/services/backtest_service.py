@@ -2,21 +2,19 @@
 横截面回测聚合服务（218号 Phase 1）
 多只股票并行执行统一策略回测 → 中位数/IQR聚合 → 多维度验证
 """
-import pandas as pd
-import numpy as np
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, field
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
 
-from app.engine.backtest_v2 import (
-    AShareBacktestEngine, BacktestConfig,
-    create_default_engine
-)
+import numpy as np
+import pandas as pd
+
 from app.data import DataManager
 from app.data.memory_cache import TieredMemoryCache
+from app.engine.backtest_v2 import AShareBacktestEngine, BacktestConfig, create_default_engine
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +116,7 @@ class CrossSectionalBacktestService:
         )
         # 横截面特有参数
         signal_method = config.get('signal_method', 'sma_cross') if config else 'sma_cross'
-        allocation_per_stock = config.get('allocation_per_stock', 0.2) if config else 0.2
+        config.get('allocation_per_stock', 0.2) if config else 0.2
 
         # ── 阶段1：数据获取 ──
         _update_progress(task_id, 'data_fetch', 0.05, message='正在获取行情数据...')
@@ -352,7 +350,6 @@ class CrossSectionalBacktestService:
         signals_df = signals_df.rename(columns={signals_df.columns[0]: 'date'})
 
         # engine需要 signals 列名为: ts_code, date, signal
-        signal_cols = {'date': 'date', 'signal': 'signal', 'strength': 'strength'}
         signals_for_engine = signals_df[['date', 'signal', 'strength']].copy()
         signals_for_engine['ts_code'] = ts_code
 
@@ -380,7 +377,7 @@ class CrossSectionalBacktestService:
         metrics = result.metrics
         total_return = metrics.get('total_return', 0)
         max_dd = metrics.get('max_drawdown', 0)
-        sharpe = metrics.get('sharpe_ratio', 0)
+        metrics.get('sharpe_ratio', 0)
 
         # 收益风险比
         if abs(max_dd) > 1e-10:
@@ -739,7 +736,7 @@ class ParameterOptimizer:
                 # 根据当前参数生成信号
                 short_window = combo.get('short_window', 5)
                 long_window = combo.get('long_window', 20)
-                rsi_period = combo.get('rsi_period', 14)
+                combo.get('rsi_period', 14)
 
                 close = df['close'].astype(float)
                 sma_short = close.rolling(short_window).mean()

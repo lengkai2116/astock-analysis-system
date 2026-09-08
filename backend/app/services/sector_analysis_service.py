@@ -2,9 +2,9 @@
 板块分析服务（288号方案 v1.1）
 封装行业数据获取、排名计算、轮动判断，供五维卡4和后续所有板块需求共用
 """
+import logging
 from datetime import datetime
 
-import logging
 logger = logging.getLogger(__name__)
 
 
@@ -72,7 +72,7 @@ class SectorAnalysisService:
 
     def _calc_rotation_state(self, ret_20d: float, ret_5d: float) -> str:
         """板块轮动状态判断（内联版）
-        
+
         按极端程度从高到低判断：LAGGING(-10%↓) → LEADING(+10%↑) → WEAKENING → STRENGTHENING → NEUTRAL
         """
         if ret_20d < -10:

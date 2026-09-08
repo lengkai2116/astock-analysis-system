@@ -11,8 +11,8 @@
 每个级别都通过数据库记录休眠历史，用户可随时恢复。
 """
 import logging
-from datetime import datetime, timedelta, date
-from typing import Dict, List, Optional, Any
+from datetime import date, datetime
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class DormancyManager:
         rule_dict = rule if isinstance(rule, dict) else getattr(rule, '__dict__', {})
         rule_id = rule_dict.get('rule_id', '')
         status = rule_dict.get('status', '')
-        paused_at = rule_dict.get('paused_at', rule_dict.get('updated_at', ''))
+        rule_dict.get('paused_at', rule_dict.get('updated_at', ''))
 
         if status != 'paused':
             return False
@@ -228,7 +228,6 @@ class DormancyManager:
     def _get_last_trigger_date(rule_id: str) -> Optional[date]:
         """从数据库查询规则最近触发日期"""
         try:
-            from app import db
             from app.models.notification import NotificationRuleStats
             stats = NotificationRuleStats.query.filter_by(rule_id=rule_id).order_by(
                 NotificationRuleStats.stat_date.desc()
@@ -243,7 +242,6 @@ class DormancyManager:
     def _get_pause_date(rule_id: str) -> Optional[date]:
         """查询暂停日期"""
         try:
-            from app import db
             from app.models.notification import NotificationRule
             rule = NotificationRule.query.filter_by(rule_id=rule_id).first()
             if rule and rule.paused_at:
@@ -258,7 +256,6 @@ class DormancyManager:
     def _get_archive_date(rule_id: str) -> Optional[date]:
         """查询归档日期"""
         try:
-            from app import db
             from app.models.notification import NotificationRule
             rule = NotificationRule.query.filter_by(rule_id=rule_id).first()
             if rule and rule.deleted_at:

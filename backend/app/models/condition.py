@@ -11,9 +11,11 @@ SQLite影响评估：
   - 不影响现有 daily_data(610万行)/signals/holdings 等表的查询
   - Flask-Migrate 自动管理迁移
 """
-from app import db
 from datetime import datetime
-from sqlalchemy import JSON, UniqueConstraint
+
+from sqlalchemy import JSON
+
+from app import db
 
 
 class ConditionRegistry(db.Model):

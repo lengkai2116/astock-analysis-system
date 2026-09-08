@@ -2,7 +2,9 @@
 告警通知 API 路由
 """
 import logging
-from flask import Blueprint, request, jsonify
+
+from flask import Blueprint, jsonify, request
+
 from app.utils.error_handlers import handle_exceptions
 
 logger = logging.getLogger(__name__)

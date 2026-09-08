@@ -8,9 +8,8 @@ PatternRegistry — 模式注册表
   ReversalPatterns / ContinuationPatterns / BreakoutPatterns / ...
 """
 
-from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass, field
-from enum import Enum
+from typing import Dict, List, Optional
 
 from . import PatternCategory
 

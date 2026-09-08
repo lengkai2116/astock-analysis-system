@@ -2,12 +2,12 @@
 服务层集成测试
 覆盖数据源管理器、信号计算服务、策略模板服务
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import pytest
-
 
 # ========== Data Source Manager ==========
 
@@ -31,17 +31,17 @@ def test_data_source_manager_health():
         assert health.name == 'test_source'
         assert health.priority == 0
         assert health.status.value == 'normal'
-        
+
         # 记录成功
         health.record_success(100.0)
         assert health.total_requests == 1
         assert health.consecutive_failures == 0
-        
+
         # 记录失败
         health.record_failure('test error')
         assert health.consecutive_failures == 1
         assert health.last_error == 'test error'
-        
+
     except ImportError as e:
         pytest.skip(f"数据源健康状态不可用: {e}")
 

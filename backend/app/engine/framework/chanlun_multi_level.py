@@ -38,7 +38,7 @@ class MultiLevelChanlunAnalyzer:
 
     def analyze(self, df_dict: Dict[str, 'pd.DataFrame']) -> Dict:
         """对每个级别独立运行缠论分析链。
-        
+
         Args:
             df_dict: {级别名: OHLCV DataFrame} 如
                      {'daily': df_daily, 'hourly': df_hourly}
@@ -72,7 +72,7 @@ class MultiLevelChanlunAnalyzer:
 
     def _cross_level_validate(self) -> Dict:
         """区间套验证 + 方向一致性检查。
-        
+
         参考: 缠中说禅买卖点级别定理，缠论级别的绝对位置定位.md
         """
         levels_data = {}

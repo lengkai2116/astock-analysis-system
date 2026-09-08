@@ -11,9 +11,9 @@ ChanlunLevelValidator — 缠论级别递归验证器
   - 输出级别递归评分调整
 """
 import logging
-import numpy as np
+from typing import Dict, List
+
 import pandas as pd
-from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -154,13 +154,13 @@ class ChanlunLevelValidator:
         weekly = signals.get('weekly', {})
         monthly = signals.get('monthly', {})
 
-        daily_signal = daily.get('signal', 'HOLD')
-        weekly_signal = weekly.get('signal', 'HOLD')
-        monthly_signal = monthly.get('signal', 'HOLD')
+        daily.get('signal', 'HOLD')
+        weekly.get('signal', 'HOLD')
+        monthly.get('signal', 'HOLD')
 
-        daily_score = daily.get('score', 50)
-        weekly_score = weekly.get('score', 50)
-        monthly_score = monthly.get('score', 50)
+        daily.get('score', 50)
+        weekly.get('score', 50)
+        monthly.get('score', 50)
 
         # 判断趋势方向
         monthly_trend = monthly.get('trend', 'unknown')
@@ -176,7 +176,7 @@ class ChanlunLevelValidator:
         # 检查各级别的买卖点数量
         daily_buy = len(daily.get('buy_points', []))
         weekly_buy = len(weekly.get('buy_points', []))
-        monthly_buy = len(monthly.get('buy_points', []))
+        len(monthly.get('buy_points', []))
         daily_sell = len(daily.get('sell_points', []))
         weekly_sell = len(weekly.get('sell_points', []))
 

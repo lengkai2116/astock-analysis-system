@@ -10,13 +10,13 @@
   6. 虚拟验证复盘分区数据
 """
 import logging
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
-from datetime import date, timedelta, datetime
-from decimal import Decimal
+
 import numpy as np
 
 from app import db
-from app.models.trade import Trade, AccountSnapshot, AccountCashFlow
+from app.models.trade import AccountCashFlow, AccountSnapshot, Trade
 from app.models.verification import VirtualPosition
 
 logger = logging.getLogger(__name__)
@@ -276,7 +276,6 @@ class AccountService:
 
         # 最大回撤（从交易记录推算，避免与 get_equity_curve 循环引用）
         max_drawdown = 0.0
-        buy_amount = 0.0
         peak_asset = initial_capital
         running_cash = 0.0
         running_positions = {}

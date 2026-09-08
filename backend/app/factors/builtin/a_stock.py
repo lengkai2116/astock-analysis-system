@@ -3,10 +3,10 @@ A股市场核心因子库
 基于华泰、国泰君安等券商研报及学术研究
 文件路径：backend/app/factors/builtin/a_stock.py
 """
-import pandas as pd
 import numpy as np
-from ..base import BaseFactor, FactorParam
+import pandas as pd
 
+from ..base import BaseFactor, FactorParam
 
 # =============================================
 # 动量因子 (Momentum)
@@ -22,9 +22,9 @@ class MOM_5(BaseFactor):
     formula = "MOM = Close - Close_5"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 5, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'] - data['close'].shift(period)
@@ -40,9 +40,9 @@ class MOM_10(BaseFactor):
     formula = "MOM = Close - Close_10"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 10, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'] - data['close'].shift(period)
@@ -58,9 +58,9 @@ class MOM_20(BaseFactor):
     formula = "MOM = Close - Close_20"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'] - data['close'].shift(period)
@@ -76,9 +76,9 @@ class MOM_60(BaseFactor):
     formula = "MOM = Close - Close_60"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 60, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'] - data['close'].shift(period)
@@ -94,9 +94,9 @@ class ROC_6(BaseFactor):
     formula = "ROC = (Close / Close_6 - 1) * 100"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 6, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return (data['close'] / data['close'].shift(period) - 1) * 100
@@ -112,9 +112,9 @@ class ROC_12(BaseFactor):
     formula = "ROC = (Close / Close_12 - 1) * 100"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 12, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return (data['close'] / data['close'].shift(period) - 1) * 100
@@ -130,9 +130,9 @@ class ROC_24(BaseFactor):
     formula = "ROC = (Close / Close_24 - 1) * 100"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 24, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return (data['close'] / data['close'].shift(period) - 1) * 100
@@ -148,9 +148,9 @@ class RET_5(BaseFactor):
     formula = "RET = (Close / Close_5 - 1) * 100"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 5, "int", 1, 252, "收益周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return (data['close'] / data['close'].shift(period) - 1) * 100
@@ -166,9 +166,9 @@ class RET_10(BaseFactor):
     formula = "RET = (Close / Close_10 - 1) * 100"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 10, "int", 1, 252, "收益周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return (data['close'] / data['close'].shift(period) - 1) * 100
@@ -184,9 +184,9 @@ class RET_20(BaseFactor):
     formula = "RET = (Close / Close_20 - 1) * 100"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 1, 252, "收益周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return (data['close'] / data['close'].shift(period) - 1) * 100
@@ -202,9 +202,9 @@ class RET_60(BaseFactor):
     formula = "RET = (Close / Close_60 - 1) * 100"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 60, "int", 1, 252, "收益周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return (data['close'] / data['close'].shift(period) - 1) * 100
@@ -220,20 +220,20 @@ class RSI_6(BaseFactor):
     formula = "RSI = 100 - 100/(1 + avg_gain/avg_loss)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 6, "int", 2, 50, "RSI周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         close = data['close']
-        
+
         delta = close.diff()
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
-        
+
         avg_gain = gain.rolling(window=period).mean()
         avg_loss = loss.rolling(window=period).mean()
-        
+
         rs = avg_gain / avg_loss.replace(0, np.nan)
         return 100 - (100 / (1 + rs))
 
@@ -248,20 +248,20 @@ class RSI_14(BaseFactor):
     formula = "RSI = 100 - 100/(1 + avg_gain/avg_loss)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 14, "int", 2, 50, "RSI周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         close = data['close']
-        
+
         delta = close.diff()
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
-        
+
         avg_gain = gain.rolling(window=period).mean()
         avg_loss = loss.rolling(window=period).mean()
-        
+
         rs = avg_gain / avg_loss.replace(0, np.nan)
         return 100 - (100 / (1 + rs))
 
@@ -276,20 +276,20 @@ class RSI_24(BaseFactor):
     formula = "RSI = 100 - 100/(1 + avg_gain/avg_loss)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 24, "int", 2, 50, "RSI周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         close = data['close']
-        
+
         delta = close.diff()
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
-        
+
         avg_gain = gain.rolling(window=period).mean()
         avg_loss = loss.rolling(window=period).mean()
-        
+
         rs = avg_gain / avg_loss.replace(0, np.nan)
         return 100 - (100 / (1 + rs))
 
@@ -304,12 +304,12 @@ class MACD_DIF(BaseFactor):
     formula = "DIF = EMA12 - EMA26"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [
         FactorParam("fast", 12, "int", 5, 20, "快线周期"),
         FactorParam("slow", 26, "int", 20, 50, "慢线周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         fast = self.get_param("fast")
         slow = self.get_param("slow")
@@ -328,18 +328,18 @@ class MACD_DEA(BaseFactor):
     formula = "DEA = EMA(DIF, 9)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [
         FactorParam("fast", 12, "int", 5, 20, "快线周期"),
         FactorParam("slow", 26, "int", 20, 50, "慢线周期"),
         FactorParam("signal", 9, "int", 5, 20, "信号周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         fast = self.get_param("fast")
         slow = self.get_param("slow")
         signal = self.get_param("signal")
-        
+
         ema_fast = data['close'].ewm(span=fast, adjust=False).mean()
         ema_slow = data['close'].ewm(span=slow, adjust=False).mean()
         dif = ema_fast - ema_slow
@@ -356,18 +356,18 @@ class MACD_HIST(BaseFactor):
     formula = "HIST = 2 * (DIF - DEA)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [
         FactorParam("fast", 12, "int", 5, 20, "快线周期"),
         FactorParam("slow", 26, "int", 20, 50, "慢线周期"),
         FactorParam("signal", 9, "int", 5, 20, "信号周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         fast = self.get_param("fast")
         slow = self.get_param("slow")
         signal = self.get_param("signal")
-        
+
         ema_fast = data['close'].ewm(span=fast, adjust=False).mean()
         ema_slow = data['close'].ewm(span=slow, adjust=False).mean()
         dif = ema_fast - ema_slow
@@ -389,9 +389,9 @@ class REV_1(BaseFactor):
     formula = "REV = -1 * returns"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         return -1 * data['close'].pct_change(1)
 
@@ -406,9 +406,9 @@ class REV_5(BaseFactor):
     formula = "REV = -1 * (Close / Close_5 - 1)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 5, "int", 1, 20, "反转周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return -1 * (data['close'] / data['close'].shift(period) - 1)
@@ -424,9 +424,9 @@ class REV_10(BaseFactor):
     formula = "REV = -1 * (Close / Close_10 - 1)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 10, "int", 1, 30, "反转周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return -1 * (data['close'] / data['close'].shift(period) - 1)
@@ -442,9 +442,9 @@ class BIAS_5(BaseFactor):
     formula = "BIAS = (Close - MA5) / MA5 * 100"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 5, "int", 2, 50, "均线周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         ma = data['close'].rolling(window=period).mean()
@@ -461,9 +461,9 @@ class BIAS_10(BaseFactor):
     formula = "BIAS = (Close - MA10) / MA10 * 100"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 10, "int", 2, 50, "均线周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         ma = data['close'].rolling(window=period).mean()
@@ -480,9 +480,9 @@ class BIAS_20(BaseFactor):
     formula = "BIAS = (Close - MA20) / MA20 * 100"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 2, 100, "均线周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         ma = data['close'].rolling(window=period).mean()
@@ -499,9 +499,9 @@ class WILLR_14(BaseFactor):
     formula = "WILLR = (High14 - Close) / (High14 - Low14) * -100"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 14, "int", 5, 30, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         high_n = data['high'].rolling(window=period).max()
@@ -519,20 +519,20 @@ class KDJ_K(BaseFactor):
     formula = "K = EMA(RSV, 3)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [
         FactorParam("n", 9, "int", 2, 30, "RSV周期"),
         FactorParam("m1", 3, "int", 2, 10, "K值平滑周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         n = self.get_param("n")
         m1 = self.get_param("m1")
-        
+
         low_n = data['low'].rolling(window=n).min()
         high_n = data['high'].rolling(window=n).max()
         rsv = (data['close'] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-        
+
         return rsv.ewm(com=m1-1, adjust=False).mean()
 
 
@@ -546,22 +546,22 @@ class KDJ_D(BaseFactor):
     formula = "D = EMA(K, 3)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [
         FactorParam("n", 9, "int", 2, 30, "RSV周期"),
         FactorParam("m1", 3, "int", 2, 10, "K值平滑周期"),
         FactorParam("m2", 3, "int", 2, 10, "D值平滑周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         n = self.get_param("n")
         m1 = self.get_param("m1")
         m2 = self.get_param("m2")
-        
+
         low_n = data['low'].rolling(window=n).min()
         high_n = data['high'].rolling(window=n).max()
         rsv = (data['close'] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-        
+
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         return k.ewm(com=m2-1, adjust=False).mean()
 
@@ -576,22 +576,22 @@ class KDJ_J(BaseFactor):
     formula = "J = 3 * K - 2 * D"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [
         FactorParam("n", 9, "int", 2, 30, "RSV周期"),
         FactorParam("m1", 3, "int", 2, 10, "K值平滑周期"),
         FactorParam("m2", 3, "int", 2, 10, "D值平滑周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         n = self.get_param("n")
         m1 = self.get_param("m1")
         m2 = self.get_param("m2")
-        
+
         low_n = data['low'].rolling(window=n).min()
         high_n = data['high'].rolling(window=n).max()
         rsv = (data['close'] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-        
+
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         d = k.ewm(com=m2-1, adjust=False).mean()
         return 3 * k - 2 * d
@@ -611,9 +611,9 @@ class VOLATILITY_10(BaseFactor):
     formula = "VOL = std(returns) * sqrt(252)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 10, "int", 5, 60, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
@@ -630,9 +630,9 @@ class VOLATILITY_20(BaseFactor):
     formula = "VOL = std(returns) * sqrt(252)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 10, 120, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
@@ -649,9 +649,9 @@ class VOLATILITY_60(BaseFactor):
     formula = "VOL = std(returns) * sqrt(252)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 60, "int", 30, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
@@ -668,22 +668,22 @@ class ATR_14(BaseFactor):
     formula = "ATR = MA(TR, 14)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 14, "int", 5, 30, "ATR周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         high = data['high']
         low = data['low']
         close_prev = data['close'].shift(1)
-        
+
         tr1 = high - low
         tr2 = abs(high - close_prev)
         tr3 = abs(low - close_prev)
-        
+
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        
+
         return tr.rolling(window=period).mean()
 
 
@@ -697,22 +697,22 @@ class ATR_20(BaseFactor):
     formula = "ATR = MA(TR, 20)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 10, 50, "ATR周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         high = data['high']
         low = data['low']
         close_prev = data['close'].shift(1)
-        
+
         tr1 = high - low
         tr2 = abs(high - close_prev)
         tr3 = abs(low - close_prev)
-        
+
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        
+
         return tr.rolling(window=period).mean()
 
 
@@ -726,9 +726,9 @@ class STD_5(BaseFactor):
     formula = "STD = std(close, 5)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 5, "int", 2, 30, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).std()
@@ -744,9 +744,9 @@ class STD_20(BaseFactor):
     formula = "STD = std(close, 20)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 10, 60, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).std()
@@ -762,9 +762,9 @@ class HL_10(BaseFactor):
     formula = "HL = High10 / Low10"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 10, "int", 5, 30, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         high_n = data['high'].rolling(window=period).max()
@@ -782,9 +782,9 @@ class HL_20(BaseFactor):
     formula = "HL = High20 / Low20"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 10, 60, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         high_n = data['high'].rolling(window=period).max()
@@ -806,9 +806,9 @@ class VOL_MA5(BaseFactor):
     formula = "VOL_MA = MA(Volume, 5)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 5, "int", 2, 30, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['vol'].rolling(window=period).mean()
@@ -824,9 +824,9 @@ class VOL_MA10(BaseFactor):
     formula = "VOL_MA = MA(Volume, 10)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 10, "int", 5, 50, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['vol'].rolling(window=period).mean()
@@ -842,9 +842,9 @@ class VOL_MA20(BaseFactor):
     formula = "VOL_MA = MA(Volume, 20)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 10, 100, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['vol'].rolling(window=period).mean()
@@ -860,9 +860,9 @@ class VOL_RATIO_5(BaseFactor):
     formula = "VOL_RATIO = Volume / MA(Volume, 5)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 5, "int", 2, 30, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         vol_ma = data['vol'].rolling(window=period).mean()
@@ -879,9 +879,27 @@ class VOL_RATIO_10(BaseFactor):
     formula = "VOL_RATIO = Volume / MA(Volume, 10)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 10, "int", 5, 50, "平均周期")]
-    
+
+    def calculate(self, data: pd.DataFrame) -> pd.Series:
+        period = self.get_param("period")
+        vol_ma = data['vol'].rolling(window=period).mean()
+        return data['vol'] / vol_ma.replace(0, np.nan)
+
+class VOL_RATIO_20(BaseFactor):
+    """20日量比"""
+    name = "VOL_RATIO_20"
+    name_cn = "20日换手率"
+    category = "volume"
+    subcategory = "volume_momentum"
+    description = "当前成交量与20日平均成交量的比值"
+    formula = "VOL_RATIO = Volume / MA(Volume, 20)"
+    source = "A-Stock"
+    source_detail = "A股常用因子"
+
+    params = [FactorParam("period", 20, "int", 10, 60, "平均周期")]
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         vol_ma = data['vol'].rolling(window=period).mean()
@@ -898,23 +916,23 @@ class VR_14(BaseFactor):
     formula = "VR = (UpVol + 0.5*FlatVol) / (DownVol + 0.5*FlatVol)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 14, "int", 5, 30, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         close = data['close']
         vol = data['vol']
-        
+
         up_vol = vol.where(close > close.shift(1), 0)
         down_vol = vol.where(close < close.shift(1), 0)
         flat_vol = vol.where(close == close.shift(1), 0)
-        
+
         up_sum = up_vol.rolling(window=period).sum()
         down_sum = down_vol.rolling(window=period).sum()
         flat_sum = flat_vol.rolling(window=period).sum()
-        
+
         return (up_sum + 0.5 * flat_sum) / (down_sum + 0.5 * flat_sum).replace(0, np.nan)
 
 
@@ -928,23 +946,23 @@ class VR_26(BaseFactor):
     formula = "VR = (UpVol + 0.5*FlatVol) / (DownVol + 0.5*FlatVol)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 26, "int", 10, 60, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         close = data['close']
         vol = data['vol']
-        
+
         up_vol = vol.where(close > close.shift(1), 0)
         down_vol = vol.where(close < close.shift(1), 0)
         flat_vol = vol.where(close == close.shift(1), 0)
-        
+
         up_sum = up_vol.rolling(window=period).sum()
         down_sum = down_vol.rolling(window=period).sum()
         flat_sum = flat_vol.rolling(window=period).sum()
-        
+
         return (up_sum + 0.5 * flat_sum) / (down_sum + 0.5 * flat_sum).replace(0, np.nan)
 
 
@@ -958,13 +976,13 @@ class OBV(BaseFactor):
     formula = "OBV = cumulative(volume * sign(price_change))"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = []
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         close = data['close']
         vol = data['vol']
-        
+
         sign = (close.diff() > 0).astype(int) - (close.diff() < 0).astype(int)
         return (vol * sign).cumsum()
 
@@ -979,9 +997,9 @@ class AMOUNT_5(BaseFactor):
     formula = "AMOUNT = MA(Close * Volume, 5)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 5, "int", 2, 30, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         amount = data['close'] * data['vol']
@@ -998,9 +1016,9 @@ class AMOUNT_20(BaseFactor):
     formula = "AMOUNT = MA(Close * Volume, 20)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 10, 60, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         amount = data['close'] * data['vol']
@@ -1017,9 +1035,9 @@ class AMOUNT_60(BaseFactor):
     formula = "AMOUNT = MA(Close * Volume, 60)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 60, "int", 30, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         amount = data['close'] * data['vol']
@@ -1040,9 +1058,9 @@ class MA_5(BaseFactor):
     formula = "MA = MA(Close, 5)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 5, "int", 2, 30, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).mean()
@@ -1058,9 +1076,9 @@ class MA_10(BaseFactor):
     formula = "MA = MA(Close, 10)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 10, "int", 5, 50, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).mean()
@@ -1076,9 +1094,9 @@ class MA_20(BaseFactor):
     formula = "MA = MA(Close, 20)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 10, 100, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).mean()
@@ -1094,9 +1112,9 @@ class MA_60(BaseFactor):
     formula = "MA = MA(Close, 60)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 60, "int", 30, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).mean()
@@ -1112,9 +1130,9 @@ class EMA_5(BaseFactor):
     formula = "EMA = EMA(Close, 5)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 5, "int", 2, 30, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].ewm(span=period, adjust=False).mean()
@@ -1130,9 +1148,9 @@ class EMA_10(BaseFactor):
     formula = "EMA = EMA(Close, 10)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 10, "int", 5, 50, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].ewm(span=period, adjust=False).mean()
@@ -1148,9 +1166,9 @@ class EMA_20(BaseFactor):
     formula = "EMA = EMA(Close, 20)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 10, 100, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].ewm(span=period, adjust=False).mean()
@@ -1166,19 +1184,19 @@ class BOLL_UPPER(BaseFactor):
     formula = "BOLL_UPPER = MA + 2 * STD"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [
         FactorParam("period", 20, "int", 5, 50, "BB周期"),
         FactorParam("std_dev", 2.0, "float", 0.1, 4.0, "标准差倍数")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         std_dev = self.get_param("std_dev")
-        
+
         ma = data['close'].rolling(window=period).mean()
         std = data['close'].rolling(window=period).std()
-        
+
         return ma + std_dev * std
 
 
@@ -1192,9 +1210,9 @@ class BOLL_MID(BaseFactor):
     formula = "BOLL_MID = MA"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 5, 50, "BB周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).mean()
@@ -1210,19 +1228,19 @@ class BOLL_LOWER(BaseFactor):
     formula = "BOLL_LOWER = MA - 2 * STD"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [
         FactorParam("period", 20, "int", 5, 50, "BB周期"),
         FactorParam("std_dev", 2.0, "float", 0.1, 4.0, "标准差倍数")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         std_dev = self.get_param("std_dev")
-        
+
         ma = data['close'].rolling(window=period).mean()
         std = data['close'].rolling(window=period).std()
-        
+
         return ma - std_dev * std
 
 
@@ -1240,9 +1258,9 @@ class CLOSE_HIGH_RATIO(BaseFactor):
     formula = "(high_max - close) / (high_max - low_min)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 5, 60, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         high_max = data['high'].rolling(window=period).max()
@@ -1260,9 +1278,9 @@ class CLOSE_LOW_RATIO(BaseFactor):
     formula = "(close - low_min) / (high_max - low_min)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [FactorParam("period", 20, "int", 5, 60, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         high_max = data['high'].rolling(window=period).max()
@@ -1280,20 +1298,20 @@ class BOLL_PCT(BaseFactor):
     formula = "(close - lower) / (upper - lower)"
     source = "A-Stock"
     source_detail = "A股常用因子"
-    
+
     params = [
         FactorParam("period", 20, "int", 5, 50, "BB周期"),
         FactorParam("std_dev", 2.0, "float", 0.1, 4.0, "标准差倍数")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         std_dev = self.get_param("std_dev")
-        
+
         close = data['close']
         middle = close.rolling(window=period).mean()
         std = close.rolling(window=period).std()
         upper = middle + std_dev * std
         lower = middle - std_dev * std
-        
+
         return (close - lower) / (upper - lower).replace(0, np.nan)

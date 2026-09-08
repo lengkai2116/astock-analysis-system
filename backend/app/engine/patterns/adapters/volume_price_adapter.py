@@ -12,12 +12,11 @@
 """
 
 from typing import List, Optional
-import pandas as pd
-import numpy as np
 
-from app.engine.patterns import (
-    PatternResult, PatternCategory, PatternStage, PatternLevel
-)
+import numpy as np
+import pandas as pd
+
+from app.engine.patterns import PatternCategory, PatternResult, PatternStage
 from app.engine.patterns.registry import PatternRegistry
 
 
@@ -338,7 +337,7 @@ class VolumePricePatternAdapter:
             return False
         latest = df.iloc[-1]
         closes = df['close'].values
-        highs = df['high'].values
+        df['high'].values
         lows = df['low'].values
         volumes = df.get('vol', df.get('amount', df.get('volume'))).values
         body = abs(latest['close'] - latest['open'])

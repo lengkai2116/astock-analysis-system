@@ -12,10 +12,12 @@
 统一接口：Dim2StructureEngine.evaluate() → {status_description, judgment, audit}
 """
 from __future__ import annotations
+
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-import logging
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 
@@ -217,11 +219,15 @@ class ChanlunLevelValidator:
         elif not isinstance(df.index, pd.DatetimeIndex):
             return df
 
-        # 按周聚合
-        weekly = df.resample('W').agg({
+        # 动态构建聚合字典，amount列可选
+        agg_dict = {
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last',
-            'vol': 'sum', 'amount': 'sum',
-        }).dropna(subset=['close'])
+            'vol': 'sum',
+        }
+        if 'amount' in df.columns:
+            agg_dict['amount'] = 'sum'
+
+        weekly = df.resample('W').agg(agg_dict).dropna(subset=['close'])
         weekly = weekly.reset_index()
         weekly['trade_date'] = weekly['trade_date'].dt.strftime('%Y-%m-%d')
         return weekly
@@ -235,10 +241,15 @@ class ChanlunLevelValidator:
         elif not isinstance(df.index, pd.DatetimeIndex):
             return df
 
-        monthly = df.resample('M').agg({
+        # 动态构建聚合字典，amount列可选
+        agg_dict = {
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last',
-            'vol': 'sum', 'amount': 'sum',
-        }).dropna(subset=['close'])
+            'vol': 'sum',
+        }
+        if 'amount' in df.columns:
+            agg_dict['amount'] = 'sum'
+
+        monthly = df.resample('ME').agg(agg_dict).dropna(subset=['close'])
         monthly = monthly.reset_index()
         monthly['trade_date'] = monthly['trade_date'].dt.strftime('%Y-%m-%d')
         return monthly
@@ -275,13 +286,13 @@ class ChanlunLevelValidator:
         weekly = signals.get('weekly', {})
         monthly = signals.get('monthly', {})
 
-        daily_signal = daily.get('signal', 'HOLD')
-        weekly_signal = weekly.get('signal', 'HOLD')
-        monthly_signal = monthly.get('signal', 'HOLD')
+        daily.get('signal', 'HOLD')
+        weekly.get('signal', 'HOLD')
+        monthly.get('signal', 'HOLD')
 
-        daily_score = daily.get('score', 50)
-        weekly_score = weekly.get('score', 50)
-        monthly_score = monthly.get('score', 50)
+        daily.get('score', 50)
+        weekly.get('score', 50)
+        monthly.get('score', 50)
 
         # 判断趋势方向
         monthly_trend = monthly.get('trend', 'unknown')
@@ -297,7 +308,7 @@ class ChanlunLevelValidator:
         # 检查各级别的买卖点数量
         daily_buy = len(daily.get('buy_points', []))
         weekly_buy = len(weekly.get('buy_points', []))
-        monthly_buy = len(monthly.get('buy_points', []))
+        len(monthly.get('buy_points', []))
         daily_sell = len(daily.get('sell_points', []))
         weekly_sell = len(weekly.get('sell_points', []))
 
@@ -439,7 +450,9 @@ class TrendStructureDetector:
             elif higher_low and breakout_high:
                 signal, strength = 'higher_low', 'basic'
 
-            return {'signal': signal, 'strength': strength, 'detail': detail}
+            return {'signal': signal, 'strength': strength, 'detail': detail,
+                    'assumption1': trend_break, 'assumption2': higher_low,
+                    'assumption3': breakout_high}
         except Exception:
             return None
 
@@ -477,10 +490,54 @@ class TrendStructureDetector:
 
 # === chanlun_strategy.py ===
 
-def calc_macd(closes: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """计算MACD: 返回 (dif, dea, macd_hist)"""
-    if len(closes) < 26:
-        return np.zeros(len(closes)), np.zeros(len(closes)), np.zeros(len(closes))
+# 411号Phase 5：预计算MACD缓存（每次evaluate()调用时刷新）
+_MACD_PRECOMPUTED_CACHE: dict = {}
+
+
+def _load_precomputed_macd(ts_code: str) -> dict:
+    """从indicator_macd预计算表读取MACD数据，返回{macd_dif, macd_dea, macd_hist}数组"""
+    if not ts_code:
+        return {}
+    cache_key = ts_code
+    if cache_key in _MACD_PRECOMPUTED_CACHE:
+        return _MACD_PRECOMPUTED_CACHE[cache_key]
+    try:
+        from app.data import DataManager
+        dm = DataManager()
+        wide = dm.get_cached_indicators(ts_code)
+        if wide is not None and not wide.empty:
+            result = {}
+            for col in ('macd_dif', 'macd_dea', 'macd_hist'):
+                if col in wide.columns:
+                    arr = wide[col].dropna().values.astype(float)
+                    if len(arr) > 0:
+                        result[col] = arr
+            if len(result) == 3:
+                _MACD_PRECOMPUTED_CACHE[cache_key] = result
+                return result
+    except Exception:
+        pass
+    _MACD_PRECOMPUTED_CACHE[cache_key] = {}
+    return {}
+
+
+def calc_macd(closes: np.ndarray, precomputed: dict = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """计算MACD: 返回 (dif, dea, macd_hist)
+
+    411号Phase 5：优先使用预计算数据，回退raw计算。
+    precomputed: {'macd_dif': array, 'macd_dea': array, 'macd_hist': array}
+    """
+    n = len(closes)
+    if precomputed:
+        dif = precomputed.get('macd_dif')
+        dea = precomputed.get('macd_dea')
+        hist = precomputed.get('macd_hist')
+        if dif is not None and dea is not None and hist is not None:
+            if len(dif) == n and len(dea) == n and len(hist) == n:
+                return dif, dea, hist
+    # ponytail: raw计算作为fallback
+    if n < 26:
+        return np.zeros(n), np.zeros(n), np.zeros(n)
     s = pd.Series(closes)
     ema12 = s.ewm(span=12).mean().values
     ema26 = s.ewm(span=26).mean().values
@@ -677,13 +734,13 @@ class KLineMerger:
     def merge(self, klines: List[KLine]) -> List[KLine]:
         """
         处理K线包含关系（根据 merge_depth 递归合并）
-        
+
         规则同 _merge_once，迭代执行直到稳定或达到深度上限。
         merge_depth=0 时只执行一次（czsc 模式）。
         """
         if len(klines) < 2:
             return klines
-        
+
         current = klines
         max_iter = self.max_iter
         if max_iter == 0:
@@ -732,7 +789,7 @@ class KLineMerger:
     @staticmethod
     def filter_limit_klines(klines: List[KLine]) -> List[KLine]:
         """过滤涨跌停K线（无量涨停/跌停不参与笔的生成）
-        
+
         涨停：收盘 = 最高价 且 成交量显著萎缩（<5日均量30%）
         跌停：收盘 = 最低价 且 成交量显著萎缩（<5日均量30%）
         """
@@ -807,16 +864,16 @@ class FractalDetector:
     def detect(self, klines: List[KLine]) -> List[Fractal]:
         """
         识别顶底分型（严格缠论标准 + 确认机制）
-        
+
         步骤：
         1. 用3根K线判定分型（标准缠论定义）
         2. 分型确认：后续K线不再反向突破（顶不再创新高，底不再创新低）
         3. 过滤连续同向分型，只保留最极端的（最高顶/最低底）
         4. 相邻分型必须交替（顶-底-顶-底）
-        
+
         Args:
             klines: 无包含K线列表
-        
+
         Returns:
             过滤后的分型列表
         """
@@ -964,19 +1021,19 @@ class StrokeBuilder:
     def build(self, fractals: List[Fractal], merged_klines: List = None) -> List[Stroke]:
         """
         从分型构建笔（严格缠论标准）
-        
+
         规则：
         1. 笔必须方向交替（向上→向下→向上→...）
         2. 分型必须交替（底-顶或顶-底）
         3. 同向分型出现时保留更极端的作为新起点（回溯机制）
         4. 前后分型之间至少包含min_klines根不含包含关系的K线
         5. 价格方向必须合理（向上笔顶>底，向下笔顶>底）
-        
+
         Args:
             fractals: 过滤后的分型列表（已保证相邻异向）
             merged_klines: 包含处理后的K线列表（用于精确计数不含包含关系的K线数）
                           为None时回退到使用fractal的idx差值
-        
+
         Returns:
             笔列表
         """
@@ -1076,12 +1133,12 @@ class StrokeBuilder:
 
     def _check_fractal_pair(self, f1: Fractal, f2: Fractal, direction: str) -> bool:
         """根据 fx_check 模式检查分型对是否能构成笔。
-        
+
         Args:
             f1: 起始分型
             f2: 结束分型
             direction: 'up'（底→顶）或 'down'（顶→底）
-        
+
         Returns:
             True 表示有效笔
         """
@@ -1096,7 +1153,6 @@ class StrokeBuilder:
             if f1.price <= f2.price:
                 return False
             return True
-        return False
 
 
 class SegmentAnalyzer:
@@ -1164,11 +1220,11 @@ class SegmentAnalyzer:
 
     def _merge_feature_sequence(self, strokes: List[Stroke]) -> List[Stroke]:
         """特征序列元素包含处理（与K线包含处理相同的逻辑）
-        
+
         对特征序列元素按包含关系进行合并，直到不再包含。
         上升段的特征序列（下跌笔）：按下降方向合并（取min高min低）
         下降段的特征序列（上涨笔）：按上升方向合并（取max高max低）
-        
+
         Args:
             strokes: 特征序列元素列表（方向均为特征序列方向）
         Returns:
@@ -1176,25 +1232,25 @@ class SegmentAnalyzer:
         """
         if len(strokes) < 2:
             return strokes
-        
+
         # 确定方向：第一笔方向决定合并规则
         # 特征序列元素与线段方向相反，所以下跌笔特征序列=向下合并
         is_down_seq = strokes[0].direction == 'down'
-        
+
         merged = [strokes[0]]
         for i in range(1, len(strokes)):
             prev = merged[-1]
             curr = strokes[i]
-            
+
             # 判断包含：prev的范围是否包含curr，或curr包含prev
             p_low = min(prev.start_price, prev.end_price, prev.low or prev.start_price)
             p_high = max(prev.start_price, prev.end_price, prev.high or prev.end_price)
             c_low = min(curr.start_price, curr.end_price, curr.low or curr.start_price)
             c_high = max(curr.start_price, curr.end_price, curr.high or curr.end_price)
-            
+
             prev_contains_curr = c_low >= p_low and c_high <= p_high
             curr_contains_prev = p_low >= c_low and p_high <= c_high
-            
+
             if prev_contains_curr or curr_contains_prev:
                 # 包含关系：合并
                 if is_down_seq:
@@ -1215,12 +1271,12 @@ class SegmentAnalyzer:
                 merged[-1] = new_stroke
             else:
                 merged.append(curr)
-        
+
         return merged
 
     def _feature_sequence_fractal_break(self, feature_seq: List[Stroke], seg_direction: str) -> bool:
         """检查合并后的特征序列是否形成分型破坏
-        
+
         Args:
             feature_seq: 合并后的特征序列元素列表
             seg_direction: 线段方向 'up'/'down'
@@ -1229,7 +1285,7 @@ class SegmentAnalyzer:
         """
         if len(feature_seq) < 3:
             return False
-        
+
         # 取最近3个元素检查分型
         f1, f2, f3 = feature_seq[-3], feature_seq[-2], feature_seq[-1]
         f1_high = max(f1.start_price, f1.end_price, f1.high or f1.end_price)
@@ -1238,7 +1294,7 @@ class SegmentAnalyzer:
         f1_low = min(f1.start_price, f1.end_price, f1.low or f1.start_price)
         f2_low = min(f2.start_price, f2.end_price, f2.low or f2.start_price)
         f3_low = min(f3.start_price, f3.end_price, f3.low or f3.start_price)
-        
+
         if seg_direction == 'up':
             # 上升段的特征序列为下跌笔：顶分型 → 线段终结
             # 中间元素 high > 两侧 high，中间 low > 两侧 low
@@ -1253,13 +1309,13 @@ class SegmentAnalyzer:
     def build(self, strokes: List[Stroke]) -> List[Segment]:
         """
         从笔构建线段
-        
+
         基于特征序列的线段生成逻辑：
         - 线段由至少 min_stroke_count 笔构成
         - 三笔之间存在重叠则形成线段
         - 线段延续：后续笔不破坏特征序列关系时，线段延续
         - 线段终结：特征序列经包含处理后形成分型破坏
-        
+
         特征序列定义（与K线包含处理相同）：
           上升段：合并下跌笔（取min高min低），形成顶分型时终结
           下降段：合并上涨笔（取max高max低），形成底分型时终结
@@ -1396,7 +1452,7 @@ class SegmentAnalyzer:
 
 class ZhongshuAnalyzer:
     """中枢分析器 — 支持延伸/新生/扩张 + 最小宽度过滤
-    
+
     核心修正（相对于 v1）：
     - 延伸不再扩展 low/high 边界（对齐 chan.py try_add_to_end）
     - 超出边界的重叠触发扩张检测（保留子中枢）
@@ -1413,9 +1469,9 @@ class ZhongshuAnalyzer:
     def find(self, segments: List[Segment]) -> List[Zhongshu]:
         """
         识别中枢并处理演化
-        
+
         中枢定义：由至少3段构成，三段存在重叠区域
-        
+
         演化规则（对齐缠论定义）：
           1. 延伸：后续线段完全在中枢区间内 → 只更新结束位置，不改变区间
           2. 扩张：后续线段部分重叠但超出 → 保留子中枢+变大区间
@@ -1500,7 +1556,7 @@ class ZhongshuAnalyzer:
 
     def _evolve_pending(self, segments: List[Segment], start_j: int, zs: Zhongshu) -> Zhongshu:
         """处理中枢后续线段的演化（延伸/扩张/新生）。
-        
+
         将 find() 中的 while j 循环抽取为独立方法，
         供 normal 和 over_seg 两种模式共用。
         """
@@ -1707,12 +1763,14 @@ class DivergenceDetector:
         self.macd_algo = macd_algo
         self.divergence_rate = divergence_rate
         self._closes = None  # 外部传入的 close 数组（用于 MACD 计算）
-        self._volumes = None  # 外部传入的 volume 数组（用于量背驰）
+        self._volumes = None
+        self._precomputed = {}  # 411号Phase 5：预计算MACD数据缓存  # 外部传入的 volume 数组（用于量背驰）
 
     def detect(self, strokes: List[Stroke],
               zhongshu_list: List[Zhongshu] = None,
               volume: pd.Series = None,
-              closes: np.ndarray = None) -> Optional[Divergence]:
+              closes: np.ndarray = None,
+              precomputed: dict = None) -> Optional[Divergence]:
         """
         检测背驰（支持多种算法 + 力度法辅助验证）
         """
@@ -1722,37 +1780,7 @@ class DivergenceDetector:
         zhongshu_list = zhongshu_list or []
         self._closes = closes
         self._volumes = volume.values if volume is not None else None
-
-        # 检测趋势背驰
-        trend_div = self._detect_trend_divergence(strokes)
-
-        # [P1-#19] 标准a+A+b+B+c趋势背驰检测
-        trend_bt = self._detect_trend_backtesting(strokes, zhongshu_list, self._closes)
-        if trend_div:
-            if trend_bt:
-                trend_div.details['trend_backtesting'] = trend_bt
-            result = trend_div
-        elif trend_bt:
-            result = Divergence(
-                type='trend',
-                direction=trend_bt['direction'],
-                confidence=trend_bt['confidence'],
-                details={'trend_backtesting': trend_bt}
-            )
-        else:
-            result = self._detect_consolidation_divergence(strokes)
-        if not result and zhongshu_list:
-            result = self._detect_zhongshu_divergence(strokes, zhongshu_list)
-        
-        if result:
-            # 批次4: 力度法辅助验证 + dual_confirmed
-            if closes is not None and len(strokes) >= 4:
-                result.dual_confirmed = self._check_strength_method(strokes[-3], strokes[-1])
-                if result.dual_confirmed:
-                    result.confidence = min(1.0, result.confidence * 1.3)
-            return result
-
-        return None
+        self._precomputed = precomputed or {}  # 411号Phase 5：预计算MACD数据
 
     def _calc_stroke_metric(self, stroke) -> float:
         """根据配置的 macd_algo 计算笔的力度指标。"""
@@ -1776,10 +1804,10 @@ class DivergenceDetector:
             return self._calc_stroke_volume(stroke)
         else:
             return self._calc_stroke_macd_area(stroke)
-    
+
     def _check_strength_method(self, stroke1, stroke2) -> bool:
         """力度比较法辅助验证：比较两段走势DIF高度
-        
+
         前段顶部DIF - 前段底部DIF = 高度H1
         当前段顶部DIF - 当前段底部DIF = 高度H2
         若 H2 < H1 * 0.75 → 背驰确认（力度减弱）
@@ -1792,7 +1820,7 @@ class DivergenceDetector:
         s2_end = min(stroke2.end_idx, len(self._closes) - 1)
         if s1_start >= s1_end or s2_start >= s2_end:
             return False
-        dif, _, _ = calc_macd(self._closes)
+        dif, _, _ = calc_macd(self._closes, self._precomputed)
         h1 = abs(dif[s1_start] - dif[s1_end])
         h2 = abs(dif[s2_start] - dif[s2_end])
         if h1 <= 0:
@@ -1803,7 +1831,7 @@ class DivergenceDetector:
         """MACD 红绿柱绝对高度（峰值法）。"""
         if self._closes is None or stroke.start_idx >= len(self._closes) or stroke.end_idx >= len(self._closes):
             return 0.0
-        _, _, macd_hist = calc_macd(self._closes)
+        _, _, macd_hist = calc_macd(self._closes, self._precomputed)
         seg = macd_hist[stroke.start_idx:stroke.end_idx + 1]
         return float(np.max(np.abs(seg))) if len(seg) > 0 else 0.0
 
@@ -1811,7 +1839,7 @@ class DivergenceDetector:
         """整根笔对应的 MACD 总面积（含红绿柱）。"""
         if self._closes is None or stroke.start_idx >= len(self._closes) or stroke.end_idx >= len(self._closes):
             return 0.0
-        _, _, macd_hist = calc_macd(self._closes)
+        _, _, macd_hist = calc_macd(self._closes, self._precomputed)
         seg = macd_hist[stroke.start_idx:stroke.end_idx + 1]
         return float(np.sum(np.abs(seg))) if len(seg) > 0 else 0.0
 
@@ -1834,7 +1862,7 @@ class DivergenceDetector:
         """首尾 MACD 柱差值。"""
         if self._closes is None or stroke.start_idx >= len(self._closes) or stroke.end_idx >= len(self._closes):
             return 0.0
-        _, _, macd_hist = calc_macd(self._closes)
+        _, _, macd_hist = calc_macd(self._closes, self._precomputed)
         return float(macd_hist[stroke.end_idx] - macd_hist[stroke.start_idx])
 
     def _calc_stroke_volume(self, stroke) -> float:
@@ -1848,7 +1876,7 @@ class DivergenceDetector:
         """计算单根笔范围内的 MACD 柱面积（红绿柱代数累加）"""
         if self._closes is None or stroke.start_idx >= len(self._closes) or stroke.end_idx >= len(self._closes):
             return 0.0
-        _, _, macd_hist = calc_macd(self._closes)
+        _, _, macd_hist = calc_macd(self._closes, self._precomputed)
         # 笔区间内的 MACD 柱面积（代数累加，红柱正绿柱负）
         seg = macd_hist[stroke.start_idx:stroke.end_idx + 1]
         return float(np.sum(seg))
@@ -2038,7 +2066,7 @@ class DivergenceDetector:
             return None
 
         # MACD面积计算
-        _, _, macd_hist = calc_macd(closes)
+        _, _, macd_hist = calc_macd(closes, self._precomputed)
 
         def _stroke_macd_area(stroke, macd_hist):
             start = max(0, stroke.start_idx)
@@ -2085,7 +2113,7 @@ class DivergenceDetector:
     def _detect_consolidation_divergence(self, strokes: List[Stroke]) -> Optional[Divergence]:
         """
         检测盘整背驰
-        
+
         原理：回调力度大于离开力度
         """
         if len(strokes) < 4:
@@ -2142,7 +2170,7 @@ class DivergenceDetector:
                                     zhongshu_list: List[Zhongshu]) -> Optional[Divergence]:
         """
         检测中枢破坏背驰
-        
+
         原理：离开中枢的力度小于返回的力度
         """
         if not zhongshu_list or len(strokes) < 4:
@@ -2201,47 +2229,20 @@ class BuySellPointDetector:
 
     def find(self, strokes: List[Stroke],
              zhongshu_list: List[Zhongshu],
-             divergence: Divergence = None,
-             only_last: bool = False) -> tuple:
+             divergence: Divergence = None) -> tuple:
         """
         识别买卖点
-        
+
         Args:
             strokes: 笔列表
             zhongshu_list: 中枢列表
             divergence: 背驰信息
-            only_last: 快速模式，只计算最后一根K线的买卖点
-        
+
         Returns:
             (buy_points, sell_points)
         """
         buy_points = []
         sell_points = []
-
-        # 快速模式：只计算最后一根K线的买卖点
-        if only_last:
-            # 只保留基于背驰（如果有且落在最后笔）
-            if divergence and strokes:
-                last_stroke = strokes[-1]
-                div_pos = divergence.position or {}
-                div_idx = div_pos.get('idx', -1)
-                if div_idx >= last_stroke.start_idx:
-                    # 342号核查修复（2026-08-16）：趋势背驰 direction=背驰发生的趋势方向
-                    # （顶背驰=up=看空卖点 / 底背驰=down=看多买点），与其他背驰（direction=背驰后
-                    # 方向，up=看多买点）语义相反——原统一按 up→first_buy 映射导致底背驰被标成卖点
-                    if divergence.type == 'trend':
-                        is_buy = divergence.direction == 'down'
-                    else:
-                        is_buy = divergence.direction == 'up'
-                    if is_buy:
-                        buy_points.append(BuySellPoint(type='first_buy',
-                            confidence=divergence.confidence, position=divergence.position,
-                            reason=f'下跌趋势背驰，{divergence.type}类型(快速)'))
-                    else:
-                        sell_points.append(BuySellPoint(type='first_sell',
-                            confidence=divergence.confidence, position=divergence.position,
-                            reason=f'上涨趋势背驰，{divergence.type}类型(快速)'))
-            return buy_points, sell_points
 
         # 第一类买卖点：基于背驰（区分趋势背驰1和盘整背驰1p）
         if divergence and self._has_type('1'):
@@ -2564,12 +2565,10 @@ class ChanlunAnalyzer:
         if hasattr(config, 'bi'):
             _chanlun_cfg = config
             self.trigger_step = getattr(config.multi_level, 'trigger_step', False) if hasattr(config, 'multi_level') else False
-            self.only_judge_last = getattr(config.multi_level, 'only_judge_last', False) if hasattr(config, 'multi_level') else False
             self.bi_zs_mode = getattr(config.multi_level, 'bi_zs_mode', True) if hasattr(config, 'multi_level') else True
         else:
             self.config = config or {}
             self.trigger_step = self.config.get('trigger_step', False)
-            self.only_judge_last = self.config.get('only_judge_last', False)
             self.bi_zs_mode = self.config.get('bi_zs_mode', True)
 
         # 初始化各组件
@@ -2592,7 +2591,7 @@ class ChanlunAnalyzer:
 
         self.fractal_detector = FractalDetector(
             fx_check=bi_cfg.bi_fx_check if bi_cfg else 'strict',
-            threshold_pct=self.config.get('fractal_threshold_pct', 0),
+            threshold_pct=self.config.get('fractal_threshold_pct', 0.5),
         )
         self.stroke_builder = StrokeBuilder(
             min_klines=bi_cfg.min_klines if bi_cfg else self.config.get('min_klines', 6),
@@ -2643,17 +2642,17 @@ class ChanlunAnalyzer:
             'min_segment_count': 3,  # 构成中枢的最少线段数
             'lookback_period': 120,  # 回看周期 (P1-#29: ⬆60→120)
             'min_confidence': 0.6,  # 最小置信度
-            'fractal_threshold_pct': 0,  # 分形确认阈值，0=关闭（对齐 czsc 标准）
+            'fractal_threshold_pct': 0.5,  # 分形确认阈值（F-15规格要求默认0.5）
             'merge_depth': 3,  # 包含处理递归深度，0=czsc单次，3=推荐
         }
 
     def analyze(self, df: pd.DataFrame) -> Dict:
         """
         完整缠论分析流程
-        
+
         Args:
             df: OHLCV数据，列名：open, high, low, close, volume, trade_date
-        
+
         Returns:
             完整分析结果
         """
@@ -2665,7 +2664,7 @@ class ChanlunAnalyzer:
 
         # 2. 包含处理
         klines_no_contain = self.kline_merger.merge(self.klines)
-        
+
         # 2b. 涨跌停K线过滤（批次1b）
         klines_filtered = self.kline_merger.filter_limit_klines(klines_no_contain)
 
@@ -2695,10 +2694,16 @@ class ChanlunAnalyzer:
                 self.zhongshu_list = []
 
         # 7. 背驰判断（支持 MACD 面积确认）
+        # 411号Phase 5：传入预计算MACD数据
+        _ts_code = ''
+        if df is not None and hasattr(df, 'columns') and 'ts_code' in df.columns:
+            _ts_code = str(df['ts_code'].iloc[0])
+        _precomputed_macd = _load_precomputed_macd(_ts_code) if _ts_code else {}
         self.divergence = self.divergence_detector.detect(
             self.strokes,
             self.zhongshu_list,
-            closes=df['close'].values if 'close' in df.columns else None
+            closes=df['close'].values if df is not None and 'close' in df.columns else None,
+            precomputed=_precomputed_macd
         )
 
         # 8. 买卖点识别
@@ -2706,7 +2711,6 @@ class ChanlunAnalyzer:
             self.strokes,
             self.zhongshu_list,
             self.divergence,
-            only_last=self.only_judge_last,  # 快速模式：只算最后K线
         )
 
         # 9. 缠论定理体系校验
@@ -2740,13 +2744,13 @@ class ChanlunAnalyzer:
 
     def process_bars(self, df: pd.DataFrame) -> List[Dict]:
         """逐Bar增量计算模式（trigger_step=True 时使用）。
-        
+
         每次处理一根新K线，返回所有中间状态。
         参考: chan.py trigger_step + CAnimateDriver
-        
+
         Args:
             df: 完整OHLCV数据
-        
+
         Returns:
             [每一步的分析结果快照, ...]
         """
@@ -2764,10 +2768,10 @@ class ChanlunAnalyzer:
 
     def process_bar_single(self, bar: dict) -> Dict:
         """增量更新：处理单根新K线（需先调 analyze 初始化）。
-        
+
         Args:
             bar: {'open': , 'high': , 'low': , 'close': , 'volume': , 'trade_date': }
-        
+
         Returns:
             更新后的分析结果
         """
@@ -2781,7 +2785,7 @@ class ChanlunAnalyzer:
 
     def _preprocess(self, df: pd.DataFrame):
         """数据预处理
-        
+
         从 DataFrame 提取 KLine 列表：
         - idx 始终为顺序整数（自 0 递增），保证减法运算得到 int
         - date 优先取自 trade_date 列，回退到 DataFrame index（统一转为 str）
@@ -2863,11 +2867,11 @@ class ChanlunAnalyzer:
 def analyze_chanlun(df: pd.DataFrame, config: Dict = None) -> Dict:
     """
     缠论分析便捷函数
-    
+
     Args:
         df: OHLCV数据
         config: 配置参数
-    
+
     Returns:
         分析结果
     """
@@ -2910,10 +2914,6 @@ def get_chanlun_tags(result: dict) -> dict:
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
-
-import numpy as np
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 # 导入框架基类
@@ -2951,11 +2951,11 @@ class ChanlunScorer:
               market_context: Optional[Dict] = None) -> Dict:
         """
         根据缠论分析结果评分
-        
+
         Args:
             analysis_result: ChanlunAnalyzer的分析结果
             latest_close: 最新收盘价（可选），用于价格匹配度评估
-        
+
         Returns:
             评分结果
         """
@@ -3146,10 +3146,10 @@ class ChanlunAlphaModel(AlphaModel):
     def generate_insights(self, data: Dict[str, pd.DataFrame]) -> List[Insight]:
         """
         对筛选后的股票进行缠论分析并生成Insight信号
-        
+
         Args:
             data: 股票数据字典 {symbol: DataFrame}
-        
+
         Returns:
             Insight信号列表
         """
@@ -3209,10 +3209,10 @@ class SignalFusion:
     def fuse(self, signals_dict: Dict[str, List[Insight]]) -> Dict:
         """
         融合多策略信号
-        
+
         Args:
             signals_dict: 各策略信号 {strategy_name: [Insight]}
-        
+
         Returns:
             融合结果
         """
@@ -3294,11 +3294,11 @@ class StrategyValidationLayer:
     def validate(self, candidates: List[Dict], stock_data: Dict[str, pd.DataFrame]) -> List[Dict]:
         """
         对候选股票进行多策略验证
-        
+
         Args:
             candidates: 第二层筛选出的股票列表
             stock_data: 完整股票数据
-        
+
         Returns:
             通过验证的股票列表
         """
@@ -3744,8 +3744,12 @@ class ZhongshuFactorSwitch:
 # 支撑阻力计算（共享服务内联）
 # ═══════════════════════════════════════════════════════════
 
-def calc_support_resistance(df=None) -> dict:
-    """支撑阻力计算（shared_support_resistance 内联版本）"""
+def calc_support_resistance(df=None, indicator_ma_df=None) -> dict:
+    """支撑阻力计算（shared_support_resistance 内联版本）
+
+    412号方案B1 v3.0：MA20/MA60优先从data_context中的indicator_ma_df读取，保留raw fallback。
+    不直接调用DataManager——数据由dim1通过data_context提供。
+    """
     if df is None or df.empty or 'close' not in df.columns:
         return {'support_price': None, 'resistance_price': None,
                 'dist_to_support_pct': None, 'dist_to_resistance_pct': None}
@@ -3754,13 +3758,31 @@ def calc_support_resistance(df=None) -> dict:
         price = closes.iloc[-1]
         hi60 = float(df['high'].tail(60).max()) if len(df) >= 60 else None
         lo60 = float(df['low'].tail(60).min()) if len(df) >= 60 else None
-        ma20 = float(closes.tail(20).mean()) if len(df) >= 20 else None
+
+        # MA20/MA60：优先从indicator_ma_df读取，保留raw fallback
+        ma20 = None
+        if indicator_ma_df is not None and not indicator_ma_df.empty and 'ma20' in indicator_ma_df.columns:
+            val = indicator_ma_df['ma20'].iloc[-1]
+            if val is not None:
+                ma20 = float(val)
+        if ma20 is None:
+            ma20 = float(closes.tail(20).mean()) if len(df) >= 20 else None
+
         lo20 = float(df['low'].tail(20).min()) if len(df) >= 20 else None
         resistance = hi60
-        if ma60 := (float(closes.tail(60).mean()) if len(df) >= 60 else None):
+
+        ma60 = None
+        if indicator_ma_df is not None and not indicator_ma_df.empty and 'ma60' in indicator_ma_df.columns:
+            val = indicator_ma_df['ma60'].iloc[-1]
+            if val is not None:
+                ma60 = float(val)
+        if ma60 is None:
+            ma60 = float(closes.tail(60).mean()) if len(df) >= 60 else None
+        if ma60:
             candidates = [x for x in [hi60, ma60] if x and x > price]
             if candidates:
                 resistance = min(candidates)
+
         support = max(ma20, lo20) if ma20 and lo20 else (ma20 or lo20)
         if support and support >= price:
             support = lo60
@@ -3792,23 +3814,32 @@ class Dim2StructureEngine(DataAwareMixin):
         self._dm = None
 
     def evaluate(self, dims: dict, tags: dict, signals: dict = None,
-                 lifecycle: dict = None) -> dict:
-        """统一评估入口"""
+                 lifecycle: dict = None, data_context: dict = None) -> dict:
+        """统一评估入口
+
+        411号Phase 6：优先使用data_context预加载数据，回退独立查询。
+        """
         ts_code = tags.get('ts_code', '')
 
         # 1. 缠论分析
         chanlun_result = None
+        df = None
         try:
             analyzer = ChanlunAnalyzer()
-            ecm = self._get_dm().cache
-            df = ecm.get_cached_daily(ts_code)
+            # 411号Phase 6：优先使用data_context
+            if data_context and 'daily_df' in data_context:
+                df = data_context['daily_df']
+            else:
+                ecm = self._get_dm().cache
+                df = ecm.get_cached_daily(ts_code)
             if df is not None and not df.empty and len(df) >= 30:
                 chanlun_result = analyzer.analyze(df)
         except Exception as e:
             logger.debug(f"缠论分析失败: {e}")
 
         # 2. 支撑阻力
-        geo = calc_support_resistance(df if 'df' in dir() else None)
+        indicator_ma = data_context.get('indicator_ma_df') if data_context else None
+        geo = calc_support_resistance(df if df is not None else None, indicator_ma_df=indicator_ma)
 
         # 3. 5子维度
         vs_zhongshu = _assess_vs_zhongshu(tags, dims, chanlun_result)
@@ -3864,7 +3895,7 @@ class Dim2StructureEngine(DataAwareMixin):
             'structure': struct_state, 'position': dims.get('position', {}).get('state', '中位'),
             'light': light, 'overall_light': light,
             'overall_direction': 1 if struct_state == '上升' else (-1 if struct_state == '下降' else 0),
-            'continuous_value': round(float(strength) if isinstance(strength, (int, float)) else 0.5, 4),  # P2: chanlun_strength [0,1]
+            'continuous_value': round(float(strength) if isinstance(strength, (int, float)) else 0.5, 4),
         }
 
         # 8. audit
@@ -3940,7 +3971,7 @@ def _assess_vs_chip(tags):
 
 def _assess_vs_indicator(tags):
     parts = []
-    for key, label in [('RSI_14', 'RSI'), ('KDJ_J', 'KDJ_J')]:
+    for key, label in [('rsi14', 'RSI'), ('kdj_j', 'KDJ_J')]:
         v = tags.get(key)
         if v is not None:
             try: parts.append(f"{label}={float(v):.0f}")
@@ -3951,7 +3982,7 @@ def _assess_vs_indicator(tags):
 def _structure_plain(vs_z, vs_ma, vs_sr, vs_chip, vs_ind):
     parts = []
     pos = vs_z.get('position', '')
-    if pos == '上方': parts.append(f"价格突破中枢上沿，离开成本区")
+    if pos == '上方': parts.append("价格突破中枢上沿，离开成本区")
     elif pos == '下方': parts.append("价格在中枢下方运行")
     elif pos == '内部': parts.append("价格在中枢箱体内震荡")
     ma = vs_ma.get('alignment', '')

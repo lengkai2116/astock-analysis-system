@@ -3,16 +3,16 @@
 所有因子必须继承此基类
 """
 from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
-import numpy as np
-from typing import Dict, Any, List, Optional
 
 
 class FactorParam:
     """
     因子参数定义
     """
-    def __init__(self, name: str, default: Any, param_type: str = "int", 
+    def __init__(self, name: str, default: Any, param_type: str = "int",
                  min_val: Optional[float] = None, max_val: Optional[float] = None,
                  description: str = ""):
         self.name = name
@@ -21,7 +21,7 @@ class FactorParam:
         self.min_val = min_val
         self.max_val = max_val
         self.description = description
-    
+
     def to_dict(self) -> Dict:
         return {
             "name": self.name,
@@ -60,7 +60,7 @@ class BaseFactor(ABC):
 
     # 依赖的数据列
     required_columns: List[str] = ["open", "high", "low", "close", "vol"]
-    
+
     def __init__(self, **kwargs):
         """
         初始化因子
@@ -69,25 +69,25 @@ class BaseFactor(ABC):
         self.param_values = {}
         for param in self.params:
             self.param_values[param.name] = kwargs.get(param.name, param.default)
-    
+
     def get_param(self, name: str) -> Any:
         """
         获取参数值
         """
         return self.param_values.get(name)
-    
+
     def set_param(self, name: str, value: Any):
         """
         设置参数值
         """
         self.param_values[name] = value
-    
+
     def get_params_dict(self) -> Dict:
         """
         获取所有参数字典
         """
         return self.param_values.copy()
-    
+
     @abstractmethod
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         """
@@ -95,7 +95,7 @@ class BaseFactor(ABC):
         返回因子序列（索引为data的索引）
         """
         pass
-    
+
     def check_data(self, data: pd.DataFrame) -> bool:
         """
         检查数据是否满足要求
@@ -104,7 +104,7 @@ class BaseFactor(ABC):
             if col not in data.columns:
                 return False
         return True
-    
+
     def get_info(self) -> Dict:
         """
         获取因子信息

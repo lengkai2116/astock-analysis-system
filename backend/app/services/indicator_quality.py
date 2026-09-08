@@ -1,26 +1,26 @@
 import ast
 import re
-from typing import Dict, List, Any
+from typing import Any, Dict
 
 
 class IndicatorQualityChecker:
     def __init__(self):
         self.issues = []
         self.warnings = []
-    
+
     def check(self, code: str) -> Dict[str, Any]:
         self.issues = []
         self.warnings = []
-        
+
         self._check_syntax(code)
-        
+
         if not self.issues:
             self._check_df_copy(code)
             self._check_future_functions(code)
             self._check_dangerous_operations(code)
             self._check_missing_return(code)
             self._check_common_pitfalls(code)
-        
+
         return {
             'success': len(self.issues) == 0,
             'issues': self.issues,
@@ -28,7 +28,7 @@ class IndicatorQualityChecker:
             'total_issues': len(self.issues),
             'total_warnings': len(self.warnings)
         }
-    
+
     def _check_syntax(self, code: str):
         try:
             ast.parse(code)
@@ -48,7 +48,7 @@ class IndicatorQualityChecker:
                 'line': None,
                 'column': None
             })
-    
+
     def _check_df_copy(self, code: str):
         if 'df.copy()' not in code and 'df = ' in code:
             self.warnings.append({
@@ -56,7 +56,7 @@ class IndicatorQualityChecker:
                 'severity': 'warning',
                 'message': '建议在修改DataFrame前使用 df.copy() 避免警告'
             })
-    
+
     def _check_future_functions(self, code: str):
         future_patterns = [
             (r'\.shift\(\s*-\s*\d+\s*\)', 'shift(-N)', '使用未来数据 (shift负数) 可能导致过度拟合'),
@@ -64,7 +64,7 @@ class IndicatorQualityChecker:
             (r'\.iloc\[\s*-\s*\d+\s*:\s*\]', 'iloc[-N:]', '切片使用未来数据可能包含未来信息'),
             (r'\.loc\[.*-.*\]', 'loc with future', '使用未来日期索引可能包含未来信息')
         ]
-        
+
         for pattern, name, message in future_patterns:
             matches = re.finditer(pattern, code)
             for match in matches:
@@ -75,7 +75,7 @@ class IndicatorQualityChecker:
                     'message': message,
                     'line': code[:match.start()].count('\n') + 1
                 })
-    
+
     def _check_dangerous_operations(self, code: str):
         dangerous_patterns = [
             (r'import\s+os\b', 'import os', '禁止导入os模块'),
@@ -95,17 +95,17 @@ class IndicatorQualityChecker:
             (r'setattr\s*\(', 'setattr', '谨慎使用setattr'),
             (r'del\s+\w+', 'del statement', '谨慎使用del语句')
         ]
-        
+
         for pattern, name, message in dangerous_patterns:
             matches = re.finditer(pattern, code, re.IGNORECASE)
             for match in matches:
                 line_num = code[:match.start()].count('\n') + 1
-                
+
                 if name in ['getattr', 'setattr']:
                     severity = 'warning'
                 else:
                     severity = 'error'
-                
+
                 self.issues.append({
                     'type': 'dangerous_operation',
                     'severity': severity,
@@ -113,24 +113,24 @@ class IndicatorQualityChecker:
                     'message': message,
                     'line': line_num
                 })
-    
+
     def _check_missing_return(self, code: str):
         try:
             tree = ast.parse(code)
-            
+
             has_output_assign = False
             returns_output = False
-            
+
             for node in ast.walk(tree):
                 if isinstance(node, ast.Assign):
                     for target in node.targets:
                         if isinstance(target, ast.Name) and target.id == 'output':
                             has_output_assign = True
-                
+
                 if isinstance(node, ast.Return):
                     if isinstance(node.value, ast.Name) and node.value.id == 'output':
                         returns_output = True
-            
+
             if has_output_assign and not returns_output:
                 self.warnings.append({
                     'type': 'missing_return',
@@ -139,10 +139,10 @@ class IndicatorQualityChecker:
                 })
         except:
             pass
-    
+
     def _check_common_pitfalls(self, code: str):
         lines = code.split('\n')
-        
+
         for i, line in enumerate(lines, 1):
             if re.search(r'\bfor\s+\w+\s+in\s+range\s*\(\s*\w+\s*,\s*\w+\s*\)', line):
                 if i < len(lines) and 'df.iterrows' in lines[i]:
@@ -152,7 +152,7 @@ class IndicatorQualityChecker:
                         'message': '使用iterrows可能导致性能问题',
                         'line': i
                     })
-            
+
             if 'df[' in line and '.str[' in line:
                 self.warnings.append({
                     'type': 'string_operation',
@@ -160,7 +160,7 @@ class IndicatorQualityChecker:
                     'message': '字符串索引操作可能较慢',
                     'line': i
                 })
-        
+
         if 'df.fillna' not in code:
             self.warnings.append({
                 'type': 'missing_fillna',

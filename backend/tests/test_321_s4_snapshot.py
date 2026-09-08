@@ -111,8 +111,8 @@ def test_l0_low_liquidity_soft_risk():
     对齐 cross_validate._evaluate_gate / 335号 L0b（low_liquidity×0.7 仓位系数）。
     通过 mock dm.get_cached_daily_basic 返回低换手率，验证 soft_risks 与 position_coeff。
     """
-    from app.opportunity_atlas.status_engine import StatusEngine
     import pandas as pd
+    from app.opportunity_atlas.status_engine import StatusEngine
 
     class _FakeDM:
         def get_cached_daily_basic(self, ts_code):

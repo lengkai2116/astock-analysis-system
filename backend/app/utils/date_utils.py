@@ -7,7 +7,7 @@
   - 外部数据源（Tushare / AKShare）需要 %Y%m%d 的，在 provider 层保留
   - dashboard_service.py、screener.py 中混用的地方优先使用本工具
 """
-from datetime import datetime, date
+from datetime import date, datetime
 from typing import Optional
 
 

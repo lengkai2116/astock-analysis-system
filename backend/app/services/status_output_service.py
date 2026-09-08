@@ -5,8 +5,8 @@ StatusOutputService — 多策略现状识别聚合服务
 输出聚合后的统一现状视图，供前端仪表盘 / 监控面板使用。
 """
 
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -288,7 +288,6 @@ class StatusOutputService:
     def _verify_chanlun_factor(self, signals: List[Dict]) -> VerificationChainResult:
         """链 2：缠论 × 因子 — 验证技术结构方向与动量方向是否一致"""
         chanlun_support = 0.0
-        chanlun_resistance = 0.0
         factor_momentum = ''
 
         for sig in signals:
@@ -297,7 +296,7 @@ class StatusOutputService:
             if 'CHANLUN' in name or '缠' in name:
                 sup_res = sr.get('support_resistance', {}) or {}
                 chanlun_support = sup_res.get('support', 0.0) or 0.0
-                chanlun_resistance = sup_res.get('resistance', 0.0) or 0.0
+                sup_res.get('resistance', 0.0) or 0.0
             if 'FACTOR' in name or '因子' in name:
                 mom = sr.get('momentum', {}) or {}
                 factor_momentum = str(mom.get('level', '')).upper()
@@ -313,7 +312,7 @@ class StatusOutputService:
             return VerificationChainResult(
                 chain_id='chanlun_factor', chain_name='缠论×因子',
                 passed=False, confidence_multiplier=1.0,
-                evidence=[f'factor BEARISH — downtrend conflict'],
+                evidence=['factor BEARISH — downtrend conflict'],
                 conflict_detail='因子看空，技术结构下行压力',
             )
 
@@ -327,7 +326,6 @@ class StatusOutputService:
         """链 3：情绪 × 筹码 — 验证市场情绪与筹码分布方向一致性"""
         bociasi_state = None
         chip_state = None
-        chip_name = ''
 
         for sig in signals:
             sr = sig.get('status_recognition', {}) or {}
@@ -336,7 +334,7 @@ class StatusOutputService:
                 bociasi_state = str(sr.get('state', '')).upper()
             if 'CHIP' in name or '筹码' in name:
                 chip_state = str(sr.get('state', '')).upper()
-                chip_name = sig.get('strategy_name', '')
+                sig.get('strategy_name', '')
 
         bociasi_bull = bociasi_state in ('ACCUMULATING', 'BULLISH', 'BUY')
         bociasi_bear = bociasi_state in ('DISTRIBUTING', 'BEARISH', 'SELL')

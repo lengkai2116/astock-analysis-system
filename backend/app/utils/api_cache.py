@@ -9,10 +9,11 @@ API 响应缓存装饰器
     def my_route():
         return jsonify(data)
 """
-from functools import wraps
-from flask import request
-from cachetools import TTLCache
 import logging
+from functools import wraps
+
+from cachetools import TTLCache
+from flask import request
 
 logger = logging.getLogger(__name__)
 

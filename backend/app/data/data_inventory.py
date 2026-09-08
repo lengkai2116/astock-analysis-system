@@ -11,11 +11,11 @@
 5. 索引效率盘点
 """
 
+import logging
 import os
 import sqlite3
-import logging
-from typing import Dict, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +276,7 @@ class DataInventory:
         for table_name, info in timeliness['tables'].items():
             report += f"| {table_name} | {info['latest_date']} | {info['days_lag']} | {info['status']} |\n"
 
-        report += f"""
+        report += """
 ## 三、存储空间
 
 | 数据库 | 大小(MB) |

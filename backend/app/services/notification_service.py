@@ -4,11 +4,16 @@
 规则CRUD业务逻辑 + 条件库查询 + 统计计算 + 休眠管理 + 评估协调
 """
 import logging
-from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional, Any
+from datetime import date, datetime, timedelta
+from typing import Any
 
 from app import db
-from app.models.notification import NotificationRule, Notification, NotificationRuleStats, ReportArchive
+from app.models.notification import (
+    Notification,
+    NotificationRule,
+    NotificationRuleStats,
+    ReportArchive,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -465,10 +470,10 @@ def run_evaluation(mode: str = 'intraday') -> dict:
             'details': [{rule_id, passed, notif_id, ...}]
         }
     """
-    from app.services.rule_scheduler import RuleScheduler
     from app.services.condition_evaluator import ConditionEvaluator
-    from app.services.rule_deduplicator import RuleDeduplicator
     from app.services.notification_pusher import NotificationPusher
+    from app.services.rule_deduplicator import RuleDeduplicator
+    from app.services.rule_scheduler import RuleScheduler
 
     evaluator = ConditionEvaluator()
     result_summary = {

@@ -1,9 +1,9 @@
-from typing import Dict, List, Optional
 from datetime import date
-from app.models.strategy import (
-    StrategyOutput, StrategySignal, StrategyTemplateV2
-)
+from typing import Dict, List, Optional
+
 from app import db
+from app.models.strategy import StrategyOutput, StrategySignal
+
 
 class StrategyOutputService:
     @staticmethod
@@ -50,7 +50,7 @@ class StrategyOutputService:
         db.session.add(output)
         db.session.commit()
         return output
-    
+
     @staticmethod
     def get_strategy_outputs(
         ts_code: Optional[str] = None,
@@ -60,7 +60,7 @@ class StrategyOutputService:
         limit: int = 100
     ) -> List[StrategyOutput]:
         query = StrategyOutput.query
-        
+
         if ts_code:
             query = query.filter_by(ts_code=ts_code)
         if strategy_name:
@@ -69,15 +69,15 @@ class StrategyOutputService:
             query = query.filter(StrategyOutput.signal_date >= start_date)
         if end_date:
             query = query.filter(StrategyOutput.signal_date <= end_date)
-        
+
         return query.order_by(StrategyOutput.signal_date.desc()).limit(limit).all()
-    
+
     @staticmethod
     def get_latest_signal(ts_code: str) -> Optional[StrategyOutput]:
         return StrategyOutput.query.filter_by(ts_code=ts_code).order_by(
             StrategyOutput.signal_date.desc()
         ).first()
-    
+
     @staticmethod
     def delete_strategy_output(output_id: int) -> bool:
         output = StrategyOutput.query.get(output_id)

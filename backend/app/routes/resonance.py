@@ -2,11 +2,13 @@
 共振评分 & ComboCard API 路由 — 152-Phase 3
 """
 import logging
-from app.utils.error_handlers import handle_exceptions
-from flask import Blueprint, request, jsonify
-from app.services.resonance_service import ResonanceService
+
+from flask import Blueprint, jsonify, request
+
+from app.engine.patterns import PatternCategory, PatternLevel, PatternResult
 from app.services.combo_engine import ComboEngine
-from app.engine.patterns import PatternResult, PatternCategory, PatternLevel
+from app.services.resonance_service import ResonanceService
+from app.utils.error_handlers import handle_exceptions
 
 logger = logging.getLogger(__name__)
 resonance_bp = Blueprint('resonance', __name__)
@@ -64,7 +66,7 @@ def resonance_score():
 def combo_cards():
     """仅返回组合卡片"""
     body = request.get_json(silent=True) or {}
-    ts_code = body.get('ts_code', '')
+    body.get('ts_code', '')
     patterns_dicts = body.get('patterns', [])
     resolution = body.get('resolution', '日线')
 
@@ -98,7 +100,6 @@ def pattern_registry():
     try:
         from app.engine.patterns.registry import PatternRegistry
         reg = PatternRegistry()
-        from app.engine.patterns import PatternCategory
         return jsonify({
             'code': 0,
             'data': {

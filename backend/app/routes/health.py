@@ -7,9 +7,9 @@
   - 无 Redis → 使用 TTLCache
   - 无 Nginx → Flask 直接托管
 """
+import logging
 import os
 import time
-import logging
 from datetime import datetime
 
 from flask import Blueprint, jsonify
@@ -76,7 +76,6 @@ def _get_sqlite_cache_status():
 def _get_ws_status():
     """检查 WebSocket 状态"""
     try:
-        from app import socketio
         # SocketIO 已初始化即正常
         return {"status": "connected", "heartbeat": 30}
     except Exception:
@@ -183,7 +182,6 @@ def _get_collector_status():
 @health_bp.route('/api/v1/health', methods=['GET'])  # DEPRECATED: use /api/v3/health
 def health_check():
     """综合健康检查 — 返回服务状态、系统信息、数据源、缓存详情"""
-    from app import db
 
     db_status = _get_db_status()
     cache_status = _get_sqlite_cache_status()

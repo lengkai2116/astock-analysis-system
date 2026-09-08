@@ -12,10 +12,9 @@
 - history_cache.db: 历史数据
 """
 
+import logging
 import os
 import sqlite3
-import logging
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +103,7 @@ def init_sharding_databases(data_dir: str):
         logger.error("找不到有效的源数据库")
         return False
 
-    logger.info(f"开始初始化分库架构...")
+    logger.info("开始初始化分库架构...")
     logger.info(f"源数据库: {source_db}")
     logger.info(f"目标目录: {db_dir}")
 

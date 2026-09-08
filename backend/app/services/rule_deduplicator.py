@@ -12,9 +12,9 @@
   - 确认期: 条件连续 3 次评估通过（每 5 分钟一次）后才推送
 """
 import logging
-from datetime import datetime, timedelta
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 

@@ -14,12 +14,15 @@
 
 检测器消费 PatternDetector 基类接口，产出统一 PatternResult。
 """
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
+
 import pandas as pd
-import numpy as np
 
 from app.engine.patterns import (
-    PatternResult, PatternCategory, PatternStage, PatternLevel,
+    PatternCategory,
+    PatternLevel,
+    PatternResult,
+    PatternStage,
 )
 from app.engine.patterns.detectors.base import PatternDetector
 
@@ -503,7 +506,7 @@ class StateDetector(PatternDetector):
             direction='bullish',
             conditions=[
                 f"收盘价{close.iloc[-1]:.2f}在MA20({ma20_val:.2f})之上",
-                f"最低价回踩MA20附近不破",
+                "最低价回踩MA20附近不破",
                 f"成交量仅为20日均量的{vol_ratio * 100:.0f}%（大幅缩量）",
             ],
             interpretation="缩量回踩关键均线不破，洗盘结束筹码锁定，即将再次拉升",

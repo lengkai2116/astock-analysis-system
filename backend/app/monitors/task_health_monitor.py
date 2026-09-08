@@ -7,11 +7,10 @@
 与 scheduler.py 配合使用，在 register_scheduler_jobs 中挂载监控回调。
 """
 
-import time
 import logging
-from typing import Dict, List, Optional, Callable
-from datetime import datetime, timedelta
 from collections import deque
+from datetime import datetime
+from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 

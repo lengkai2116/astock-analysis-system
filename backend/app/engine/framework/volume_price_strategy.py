@@ -15,12 +15,12 @@ v3+ 优化（145号报告）:
 
 数据依赖: 仅需 OHLCV 日线数据（无需 Level-2）
 """
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass, field
-from datetime import datetime, date
-import pandas as pd
-import numpy as np
 import logging
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -1751,7 +1751,7 @@ class EnhancedPatternDetector:
         if today_amp >= avg_amp * 0.5:
             return False
         # 收盘在中位
-        mid = (highs[-1] + lows[-1]) / 2
+        (highs[-1] + lows[-1]) / 2
         pos = (closes[-1] - lows[-1]) / max(highs[-1] - lows[-1], 1e-9)
         return 0.35 <= pos <= 0.65
 
@@ -2146,8 +2146,8 @@ class StageDetector:
         ma10 = float(np.mean(closes[-10:]))
         ma30 = float(np.mean(closes[-30:]))
         ma60 = float(np.mean(closes[-60:])) if len(closes) >= 60 else None
-        ma120 = float(np.mean(closes[-120:])) if len(closes) >= 120 else None
-        ma250 = float(np.mean(closes[-250:])) if len(closes) >= 250 else None
+        float(np.mean(closes[-120:])) if len(closes) >= 120 else None
+        float(np.mean(closes[-250:])) if len(closes) >= 250 else None
 
         # 三线开花核心判定
         if ma5 > ma10 > ma30:
@@ -2194,8 +2194,11 @@ class StageDetector:
             return "探底+低位区，关注反转信号"
         return f"{STAGE_NAMES.get(stage, stage)}，价格{val.zone_label}"
 
-    def recognize_market_condition(self, df: pd.DataFrame) -> Dict:
-        """识别基础市场状态: TRENDING_BULL/TRENDING_BEAR/RANGING/HIGH_VOL"""
+    def recognize_market_condition(self, df: pd.DataFrame, precomputed_ma: dict = None) -> Dict:
+        """识别基础市场状态: TRENDING_BULL/TRENDING_BEAR/RANGING/HIGH_VOL
+
+        413号§七#5：优先使用precomputed_ma避免重复计算。
+        """
         closes = df['close'].astype(float).values if 'close' in df.columns else df['close'].values
         highs = df['high'].astype(float).values if 'high' in df.columns else np.array([])
         lows = df['low'].astype(float).values if 'low' in df.columns else np.array([])
@@ -2203,22 +2206,22 @@ class StageDetector:
         if len(closes) < 60:
             return {'market_state': 'UNKNOWN', 'confidence': 0.0}
 
-        # 1. 均线排列判断趋势方向
-        ma5 = np.mean(closes[-5:])
-        ma10 = np.mean(closes[-10:])
-        ma20 = np.mean(closes[-20:])
-        ma60 = np.mean(closes[-60:])
-        ma120 = np.mean(closes[-120:]) if len(closes) >= 120 else ma60
+        # 413号§七#5：优先从precomputed_ma读取MA值
+        pm = precomputed_ma or {}
+        ma5_val = pm.get('ma5', np.mean(closes[-5:])) if len(closes) >= 5 else np.mean(closes[-5:])
+        ma10_val = pm.get('ma10', np.mean(closes[-10:])) if len(closes) >= 10 else np.mean(closes[-10:])
+        ma20_val = pm.get('ma20', np.mean(closes[-20:])) if len(closes) >= 20 else np.mean(closes[-20:])
+        ma60_val = pm.get('ma60', np.mean(closes[-60:])) if len(closes) >= 60 else np.mean(closes[-60:])
 
         ma_trend = 'neutral'
-        if ma5 > ma10 > ma20 > ma60:  # 多头排列
+        if ma5_val > ma10_val > ma20_val > ma60_val:
             ma_trend = 'bullish'
-        elif ma5 < ma10 < ma20 < ma60:  # 空头排列
+        elif ma5_val < ma10_val < ma20_val < ma60_val:
             ma_trend = 'bearish'
 
         # 2. 布林带宽度判定波动性
         if len(highs) >= 20 and len(lows) >= 20:
-            bb_width = (np.mean(highs[-20:]) - np.mean(lows[-20:])) / np.mean(closes[-20:]) * 100
+            bb_width = (np.mean(highs[-20:]) - np.mean(lows[-20:])) / ma20_val * 100
         else:
             bb_width = 0
 
@@ -2263,7 +2266,6 @@ class StageDetector:
             ema12 = np.mean(closes[-12:])
             ema26 = np.mean(closes[-26:])
             macd_line = ema12 - ema26
-            # signal: 9-period EMA of MACD line — use SMA as proxy
             macd_values = []
             for i in range(-9, 0):
                 e12 = np.mean(closes[-12 + i:i]) if len(closes[-12 + i:i]) >= 12 else np.mean(closes[-12:])
@@ -2275,12 +2277,11 @@ class StageDetector:
             macd_signal = 0.0
 
         # --- EMA55 (SMA approximation) ---
-        ema55 = np.mean(closes[-55:]) if len(closes) >= 55 else np.mean(closes[-min(55, len(closes)):])
+        ema55 = pm.get('ma55', np.mean(closes[-55:])) if len(closes) >= 55 else np.mean(closes[-min(55, len(closes)):])
 
         # --- Volume means ---
         volume = df['volume'].astype(float).values if 'volume' in df.columns else np.ones(len(closes))
         mean_volume_20 = np.mean(volume[-20:]) if len(volume) >= 20 else np.mean(volume)
-        mean_volume_5 = np.mean(volume[-5:]) if len(volume) >= 5 else np.mean(volume)
 
         # --- Daily return ---
         daily_return_pct = (closes[-1] - closes[-2]) / closes[-2] * 100 if len(closes) >= 2 else 0
@@ -2551,16 +2552,20 @@ class VolumeStateAnalyzer:
         if len(closes) < 4:
             return False
         c = closes[-4:]
-        is_up = lambda i: c[i] > c[i-1]
-        is_down = lambda i: c[i] < c[i-1]
+        def is_up(i):
+            return c[i] > c[i-1]
+        def is_down(i):
+            return c[i] < c[i-1]
         return is_up(1) and is_down(2) and is_up(3) and c[3] > c[1]
 
     def _has_kongfang_pao(self, closes, volumes) -> bool:
         if len(closes) < 4:
             return False
         c = closes[-4:]
-        is_up = lambda i: c[i] > c[i-1]
-        is_down = lambda i: c[i] < c[i-1]
+        def is_up(i):
+            return c[i] > c[i-1]
+        def is_down(i):
+            return c[i] < c[i-1]
         return is_down(1) and is_up(2) and is_down(3) and c[3] < c[1]
 
     # ── [P1-#17] 四种放量+两种缩量模式分类 ──
@@ -3209,7 +3214,7 @@ class VolumePriceSignalGenerator:
         latest_close = float(closes[-1])
         highs = self._safe_col(df, 'high').values if 'high' in df.columns else closes
         volumes = get_best_volume_series(df)
-        opens = self._safe_col(df, 'open').values if 'open' in df.columns else closes
+        self._safe_col(df, 'open').values if 'open' in df.columns else closes
         lows = self._safe_col(df, 'low').values if 'low' in df.columns else closes
 
         # [P1-#18] 真实突破判断
@@ -4056,7 +4061,9 @@ class VolumePriceStrategy:
             # 废弃粗启发式[5日收益+量比阈值]，与 P2 信号共用 compute_volume_price_signal 组件）
             if len(df) >= 20:
                 try:
-                    from app.engine.framework.volume_price_strategy import compute_volume_price_signal as _full_vp
+                    from app.engine.framework.volume_price_strategy import (
+                        compute_volume_price_signal as _full_vp,
+                    )
                     _full = _full_vp('', df)
                     _sig = str((_full or {}).get('signal', '')).lower()
                     _detail = str((_full or {}).get('volume_price_detail') or {})

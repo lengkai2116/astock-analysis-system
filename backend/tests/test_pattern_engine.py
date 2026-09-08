@@ -1,14 +1,14 @@
 """测试 PatternEngine"""
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
 
-import pytest
-import pandas as pd
 import numpy as np
-
+import pandas as pd
+import pytest
 from app.engine.patterns.engine import PatternEngine
 
 
@@ -85,7 +85,7 @@ def test_aggregate_no_patterns():
 
 def test_aggregate_bullish_pattern():
     """测试看涨形态聚合"""
-    from app.engine.patterns import PatternResult, PatternCategory, PatternStage
+    from app.engine.patterns import PatternCategory, PatternResult, PatternStage
 
     engine = PatternEngine()
     patterns = [
@@ -104,7 +104,7 @@ def test_aggregate_bullish_pattern():
 
 def test_aggregate_bearish_pattern():
     """测试看跌形态聚合"""
-    from app.engine.patterns import PatternResult, PatternCategory, PatternStage
+    from app.engine.patterns import PatternCategory, PatternResult, PatternStage
 
     engine = PatternEngine()
     patterns = [
@@ -123,7 +123,7 @@ def test_aggregate_bearish_pattern():
 
 def test_aggregate_multi_resonance():
     """测试多形态共振加分"""
-    from app.engine.patterns import PatternResult, PatternCategory, PatternStage
+    from app.engine.patterns import PatternCategory, PatternResult, PatternStage
 
     engine = PatternEngine()
     patterns = [
@@ -144,7 +144,7 @@ def test_aggregate_multi_resonance():
 
 def test_aggregate_blackhorse_extra_weight():
     """测试黑马型额外加权"""
-    from app.engine.patterns import PatternResult, PatternCategory, PatternStage
+    from app.engine.patterns import PatternCategory, PatternResult, PatternStage
 
     engine = PatternEngine()
     # 黑马型 P-3-1 weight=5.0, 额外 1.5x
@@ -175,7 +175,7 @@ def test_aggregate_blackhorse_extra_weight():
 
 def test_aggregate_score_clamped_to_10():
     """测试得分上限为 10"""
-    from app.engine.patterns import PatternResult, PatternCategory, PatternStage
+    from app.engine.patterns import PatternCategory, PatternResult, PatternStage
 
     engine = PatternEngine()
     # 创建大量强力看涨形态，分数应被限制在 10
@@ -196,7 +196,7 @@ def test_aggregate_score_clamped_to_10():
 
 def test_aggregate_score_clamped_to_0():
     """测试得分下限为 0"""
-    from app.engine.patterns import PatternResult, PatternCategory, PatternStage
+    from app.engine.patterns import PatternCategory, PatternResult, PatternStage
 
     engine = PatternEngine()
     # 创建大量强力看跌形态，分数应被限制在 0
@@ -217,7 +217,7 @@ def test_aggregate_score_clamped_to_0():
 
 def test_aggregate_bearish_resonance():
     """测试看跌共振减分"""
-    from app.engine.patterns import PatternResult, PatternCategory, PatternStage
+    from app.engine.patterns import PatternCategory, PatternResult, PatternStage
 
     engine = PatternEngine()
     patterns = [
@@ -238,7 +238,7 @@ def test_aggregate_bearish_resonance():
 
 def test_aggregate_details_structure():
     """测试聚合详情结构"""
-    from app.engine.patterns import PatternResult, PatternCategory, PatternStage
+    from app.engine.patterns import PatternCategory, PatternResult, PatternStage
 
     engine = PatternEngine()
     patterns = [
@@ -266,7 +266,7 @@ def test_aggregate_details_structure():
 
 def test_aggregate_neutral_direction_ignored():
     """测试中性方向不参与评分"""
-    from app.engine.patterns import PatternResult, PatternCategory, PatternStage
+    from app.engine.patterns import PatternCategory, PatternResult, PatternStage
 
     engine = PatternEngine()
     patterns = [

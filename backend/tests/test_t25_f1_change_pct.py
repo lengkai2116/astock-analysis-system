@@ -4,7 +4,9 @@
 → _merge_snapshot_with_realtime 读 rt['change_pct'] 抛 KeyError → 盘中覆盖从未生效。
 修复后：表含 change_pct 列、写入保留、merge 能读取。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)

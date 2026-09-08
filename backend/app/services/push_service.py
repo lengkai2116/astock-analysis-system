@@ -194,7 +194,6 @@ def push_sector_rankings():
             return
 
         # 从 Stock ORM 构建 ts_code → industry 映射
-        from app import db
         from app.models import Stock
         stocks = Stock.query.with_entities(
             Stock.ts_code, Stock.industry

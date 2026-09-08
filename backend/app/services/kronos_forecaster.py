@@ -13,7 +13,8 @@ Kronos K线预测适配器
 
 import logging
 import time
-from typing import Dict, List, Optional
+from typing import Dict, Optional
+
 import numpy as np
 import pandas as pd
 
@@ -37,7 +38,7 @@ class KronosForecaster:
 
         try:
             import torch  # noqa: F401 — 验证torch已安装
-            from model import Kronos, KronosTokenizer, KronosPredictor  # noqa
+            from model import Kronos, KronosPredictor, KronosTokenizer  # noqa
 
             logger.info("Kronos: 开始加载模型 (Kronos-mini)...")
             t0 = time.time()

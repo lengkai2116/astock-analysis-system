@@ -245,7 +245,7 @@ class RadarService(DataAwareMixin):
                 top_summaries.append(summary)
 
         ts_code = item.ts_code
-        top_summary = top_summaries[0] if top_summaries else ''
+        top_summaries[0] if top_summaries else ''
 
         if top_level == 'urgent':
             return ('urgent',

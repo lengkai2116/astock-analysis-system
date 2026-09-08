@@ -14,7 +14,6 @@ EagleSwordResonance — "鹰眼大宝剑" 双系统共振模型
 
 from typing import Dict, List, Optional
 
-
 # ──────────────────────────────────────────────
 # 共振判定表 (action, base_confidence)
 # ──────────────────────────────────────────────
@@ -104,7 +103,7 @@ class EagleSwordResonance:
         status = volume_price_signal.get("status_recognition", {})
         trend = status.get("trend", {})
         direction = trend.get("direction", "")
-        ma_stage = trend.get("stage", "")
+        trend.get("stage", "")
         strength_label = trend.get("strength", "")
 
         # 趋势方向和力度

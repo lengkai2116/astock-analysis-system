@@ -5,9 +5,9 @@ K线形态识别器 - Phase 2 模块4
 功能：识别6种关键K线形态，输出形态+置信度+方向
 集成：在 SignalGenerator 生成信号前验证当前K线形态，调整信号置信度
 """
-from typing import List, Optional
+from typing import List
+
 import pandas as pd
-import numpy as np
 
 
 class KLinePattern:

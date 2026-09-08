@@ -11,14 +11,12 @@
   7. 综合归因与改进
 """
 import logging
-from typing import Dict, List, Optional, Tuple
-from datetime import date, timedelta
-from decimal import Decimal
+from datetime import date
+from typing import Dict, List
 
-from app import db
 from app.models import Stock
-from app.models.trade import Trade
 from app.models.strategy import StrategyOutput
+from app.models.trade import Trade
 from app.models.verification import SignalRecord
 
 logger = logging.getLogger(__name__)
@@ -147,7 +145,6 @@ class ReviewEngine:
 
     def _get_index_data(self, ts_code: str, start_date: date, end_date: date):
         """从 DuckDB 获取指数区间涨跌幅（244号方案 D2）"""
-        import pandas as pd
         from app.data import DataManager
         try:
             sd = start_date.strftime('%Y%m%d') if hasattr(start_date, 'strftime') else str(start_date)
@@ -719,7 +716,7 @@ class ReviewEngine6D:
             sname = e.get('stock_name', e.get('stock', '?'))
             if e.get('rv_id'):
                 lines.append(f"▸ {sname}·关联策略 {e['rv_id']}")
-                lines.append(f"  策略诊断: 方向判断准确 ✅")
+                lines.append("  策略诊断: 方向判断准确 ✅")
             else:
                 lines.append(f"▸ {sname}")
                 lines.append(f"  {e['detail']}")
@@ -837,7 +834,7 @@ class ReviewEngine6D:
         profit_sources = []
         loss_sources = []
         for code in stocks:
-            buys = [t for t in ctx if t['ts_code'] == code and t['direction'] == '买入']
+            [t for t in ctx if t['ts_code'] == code and t['direction'] == '买入']
             sells = [t for t in ctx if t['ts_code'] == code and t['direction'] == '卖出']
             for s in sells:
                 pnl = s.get('pnl_pct', 0)

@@ -15,7 +15,7 @@ APScheduler 定时任务管理器，负责安排规则的评估和休眠管理�
 """
 import logging
 from datetime import datetime, time
-from typing import Dict, List, Optional, Callable
+from typing import Callable, List
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +189,6 @@ class RuleScheduler:
                 """休眠检查执行体"""
                 try:
                     with scheduler_manager._app.app_context():
-                        from app import db
                         from app.models.notification import NotificationRule
                         from app.services.dormancy_manager import DormancyManager
 

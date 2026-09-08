@@ -8,9 +8,8 @@ AiConsensusEngine — 多角色AI研判共识与辩论引擎
 """
 
 import logging
-import random
-from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -564,7 +563,7 @@ class AiConsensusEngine:
         # 统计看多/看空角色数量
         bullish = sum(1 for r in completed_roles if r['direction'] in ('看多', '偏多', '中性偏多'))
         bearish = sum(1 for r in completed_roles if r['direction'] in ('看空', '偏空', '中性偏空'))
-        neutral = len(completed_roles) - bullish - bearish
+        len(completed_roles) - bullish - bearish
 
         total = len(completed_roles)
         advice_parts = []

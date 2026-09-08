@@ -3,8 +3,6 @@
 验证估值五级分档、位置中枢上沿判定、量价五态评分。
 370号：移除_build_dimensions调用，改为测试_DIM_DIRECTION静态映射和_derive_vp_state。
 """
-import json
-import pytest
 
 
 class TestValuationFiveLevels:
@@ -25,7 +23,7 @@ class TestVolumePriceFiveLevels:
 
     def test_strong_healthy_maps_to_strong_health(self):
         """strong_healthy 应映射为"强健康"（非"健康"）"""
-        from app.opportunity_atlas.status_engine import StatusEngine, _DIM_DIRECTION
+        from app.opportunity_atlas.status_engine import _DIM_DIRECTION
         # 验证 _DIM_DIRECTION 有五态映射
         vp_map = _DIM_DIRECTION.get('vp', {})
         assert '强健康' in vp_map, "_DIM_DIRECTION 缺强健康"
@@ -36,7 +34,7 @@ class TestVolumePriceFiveLevels:
     def test_derive_vp_state_five_levels(self):
         """_derive_vp_state 应支持五态输出"""
         from app.opportunity_atlas.status_engine import StatusEngine
-        se = StatusEngine()
+        StatusEngine()
         # 测试 strong_healthy
         tags = {'volume_price_fit': 'strong_healthy'}
         state, _, _ = StatusEngine._derive_vp_state({}, tags)

@@ -9,11 +9,11 @@ MinuteDataManager — 分钟级数据通道
 """
 
 import logging
-import pandas as pd
-from typing import List, Optional, Dict
 from datetime import datetime, timedelta
-from app.data.tushare_provider import TushareProvider
+from typing import Dict, List, Optional
+
 from app.data.memory_cache import TieredMemoryCache
+from app.data.tushare_provider import TushareProvider
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +170,7 @@ class MinuteDataManager:
         return None
 
     def _resample_minute(self, records: list, from_freq: str, to_freq: str) -> list:
-        """分钟线频率转换（如 1min → 15min）"""
+        """分钟线频率转换（414号P1.3: 与minute_backfill._resample_minute统一，修正60min对齐A股交易时段）"""
         from collections import defaultdict
         if not records:
             return []
@@ -179,23 +179,39 @@ class MinuteDataManager:
         group_size = total_min // base_min
         if group_size <= 1:
             return records
-        # 按日期+时间片分组聚合
+
+        # 414号P1.3: A股交易时段边界（分钟数 from midnight）
+        SESSIONS = [
+            (570, 690),   # 09:30-11:30 上午场
+            (780, 900),   # 13:00-15:00 下午场
+        ]
+
+        def _assign_slot(minute_of_day: int) -> tuple:
+            for sess_idx, (sess_start, sess_end) in enumerate(SESSIONS):
+                if sess_start <= minute_of_day < sess_end:
+                    return (sess_idx, (minute_of_day - sess_start) // total_min)
+            if minute_of_day < 570:
+                return (0, 0)
+            elif minute_of_day < 780:
+                return (0, (690 - 570) // total_min - 1)
+            else:
+                return (1, (900 - 780) // total_min - 1)
+
         groups = defaultdict(list)
         for r in records:
             tt = r.get('trade_time', '')
-            # 取时间部分 "2026-07-07 10:08:00" → 取分钟
             try:
                 ts = tt.split(' ')[1] if ' ' in tt else tt
                 parts = ts.split(':')
                 minute_slot = int(parts[0]) * 60 + int(parts[1])
-                slot = minute_slot // total_min
-                key = (tt[:10] if len(tt) > 10 else tt.split(' ')[0], slot)
+                sess_idx, slot = _assign_slot(minute_slot)
+                key = (tt[:10] if len(tt) > 10 else tt.split(' ')[0], sess_idx, slot)
             except Exception:
-                key = (tt, 0)
+                key = (tt, 0, 0)
             groups[key].append(r)
 
         result = []
-        for (date, slot), bars in sorted(groups.items()):
+        for (date, sess, slot), bars in sorted(groups.items()):
             o = bars[0].get('open', 0)
             c = bars[-1].get('close', 0)
             h = max(b.get('high', 0) for b in bars)

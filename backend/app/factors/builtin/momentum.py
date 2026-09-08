@@ -1,8 +1,9 @@
 """
 动量类因子
 """
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from ..base import BaseFactor, FactorParam
 
 
@@ -18,11 +19,11 @@ class ROC(BaseFactor):
     formula = "ROC = (Close / Close_N - 1) * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("period", 12, "int", 1, 252, "回看周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         close = data["close"]
@@ -42,26 +43,27 @@ class RSI(BaseFactor):
     formula = "RSI = 100 - 100 / (1 + Avg_Gain / Avg_Loss)"
     source = "QLib"
     source_detail = "QLib158"
-    
+
     params = [
         FactorParam("period", 14, "int", 2, 252, "回看周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         close = data["close"]
-        
+
         delta = close.diff()
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
-        
-        avg_gain = gain.rolling(window=period).mean()
-        avg_loss = loss.rolling(window=period).mean()
-        
+
+        # 414号P1.1: Wilder's EMA, alpha=1/period
+        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+
         avg_loss_safe = avg_loss.where(avg_loss != 0, 1e-10)
         rs = avg_gain / avg_loss_safe
         rsi = 100 - (100 / (1 + rs))
-        
+
         return rsi
 
 
@@ -77,18 +79,18 @@ class CCI(BaseFactor):
     formula = "CCI = (Typical_Price - MA_Typical_Price) / (0.015 * Mean_Deviation)"
     source = "Alpha101"
     source_detail = "Alpha101"
-    
+
     params = [
         FactorParam("period", 14, "int", 2, 252, "回看周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         tp = (data["high"] + data["low"] + data["close"]) / 3
         tp_ma = tp.rolling(window=period).mean()
         md = tp.rolling(window=period).apply(lambda x: np.mean(np.abs(x - np.mean(x))))
-        
+
         cci = (tp - tp_ma) / (0.015 * md.replace(0, np.nan))
         return cci
 
@@ -105,11 +107,11 @@ class MOM(BaseFactor):
     formula = "MOM = Close - Close_N"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("period", 10, "int", 1, 252, "回看周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data["close"] - data["close"].shift(period)
@@ -127,19 +129,19 @@ class MACD_DIF(BaseFactor):
     formula = "DIF = EMA(Close, 12) - EMA(Close, 26)"
     source = "QLib"
     source_detail = "QLib158"
-    
+
     params = [
         FactorParam("fast_period", 12, "int", 2, 252, "快线周期"),
         FactorParam("slow_period", 26, "int", 2, 252, "慢线周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         fast = self.get_param("fast_period")
         slow = self.get_param("slow_period")
-        
+
         ema_fast = data["close"].ewm(span=fast, adjust=False).mean()
         ema_slow = data["close"].ewm(span=slow, adjust=False).mean()
-        
+
         return ema_fast - ema_slow
 
 
@@ -155,23 +157,23 @@ class MACD_DEA(BaseFactor):
     formula = "DEA = EMA(DIF, 9)"
     source = "QLib"
     source_detail = "QLib158"
-    
+
     params = [
         FactorParam("fast_period", 12, "int", 2, 252, "快线周期"),
         FactorParam("slow_period", 26, "int", 2, 252, "慢线周期"),
         FactorParam("signal_period", 9, "int", 2, 252, "信号周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         fast = self.get_param("fast_period")
         slow = self.get_param("slow_period")
         signal = self.get_param("signal_period")
-        
+
         ema_fast = data["close"].ewm(span=fast, adjust=False).mean()
         ema_slow = data["close"].ewm(span=slow, adjust=False).mean()
         dif = ema_fast - ema_slow
         dea = dif.ewm(span=signal, adjust=False).mean()
-        
+
         return dea
 
 
@@ -187,20 +189,20 @@ class KDJ_K(BaseFactor):
     formula = "K = EMA(RSV, M1)"
     source = "QLib"
     source_detail = "QLib158"
-    
+
     params = [
         FactorParam("n", 9, "int", 2, 252, "RSV周期"),
         FactorParam("m1", 3, "int", 2, 50, "K值平滑周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         n = self.get_param("n")
         m1 = self.get_param("m1")
-        
+
         low_n = data["low"].rolling(window=n).min()
         high_n = data["high"].rolling(window=n).max()
         rsv = (data["close"] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-        
+
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         return k
 
@@ -217,25 +219,25 @@ class KDJ_D(BaseFactor):
     formula = "D = EMA(K, M2)"
     source = "QLib"
     source_detail = "QLib158"
-    
+
     params = [
         FactorParam("n", 9, "int", 2, 252, "RSV周期"),
         FactorParam("m1", 3, "int", 2, 50, "K值平滑周期"),
         FactorParam("m2", 3, "int", 2, 50, "D值平滑周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         n = self.get_param("n")
         m1 = self.get_param("m1")
         m2 = self.get_param("m2")
-        
+
         low_n = data["low"].rolling(window=n).min()
         high_n = data["high"].rolling(window=n).max()
         rsv = (data["close"] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-        
+
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         d = k.ewm(com=m2-1, adjust=False).mean()
-        
+
         return d
 
 
@@ -251,24 +253,24 @@ class KDJ_J(BaseFactor):
     formula = "J = 3 * K - 2 * D"
     source = "QLib"
     source_detail = "QLib158"
-    
+
     params = [
         FactorParam("n", 9, "int", 2, 252, "RSV周期"),
         FactorParam("m1", 3, "int", 2, 50, "K值平滑周期"),
         FactorParam("m2", 3, "int", 2, 50, "D值平滑周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         n = self.get_param("n")
         m1 = self.get_param("m1")
         m2 = self.get_param("m2")
-        
+
         low_n = data["low"].rolling(window=n).min()
         high_n = data["high"].rolling(window=n).max()
         rsv = (data["close"] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-        
+
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         d = k.ewm(com=m2-1, adjust=False).mean()
         j = 3 * k - 2 * d
-        
+
         return j

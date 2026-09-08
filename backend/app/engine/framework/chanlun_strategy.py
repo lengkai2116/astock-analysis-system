@@ -211,13 +211,13 @@ class KLineMerger:
     def merge(self, klines: List[KLine]) -> List[KLine]:
         """
         处理K线包含关系（根据 merge_depth 递归合并）
-        
+
         规则同 _merge_once，迭代执行直到稳定或达到深度上限。
         merge_depth=0 时只执行一次（czsc 模式）。
         """
         if len(klines) < 2:
             return klines
-        
+
         current = klines
         max_iter = self.max_iter
         if max_iter == 0:
@@ -266,7 +266,7 @@ class KLineMerger:
     @staticmethod
     def filter_limit_klines(klines: List[KLine]) -> List[KLine]:
         """过滤涨跌停K线（无量涨停/跌停不参与笔的生成）
-        
+
         涨停：收盘 = 最高价 且 成交量显著萎缩（<5日均量30%）
         跌停：收盘 = 最低价 且 成交量显著萎缩（<5日均量30%）
         """
@@ -341,16 +341,16 @@ class FractalDetector:
     def detect(self, klines: List[KLine]) -> List[Fractal]:
         """
         识别顶底分型（严格缠论标准 + 确认机制）
-        
+
         步骤：
         1. 用3根K线判定分型（标准缠论定义）
         2. 分型确认：后续K线不再反向突破（顶不再创新高，底不再创新低）
         3. 过滤连续同向分型，只保留最极端的（最高顶/最低底）
         4. 相邻分型必须交替（顶-底-顶-底）
-        
+
         Args:
             klines: 无包含K线列表
-        
+
         Returns:
             过滤后的分型列表
         """
@@ -498,19 +498,19 @@ class StrokeBuilder:
     def build(self, fractals: List[Fractal], merged_klines: List = None) -> List[Stroke]:
         """
         从分型构建笔（严格缠论标准）
-        
+
         规则：
         1. 笔必须方向交替（向上→向下→向上→...）
         2. 分型必须交替（底-顶或顶-底）
         3. 同向分型出现时保留更极端的作为新起点（回溯机制）
         4. 前后分型之间至少包含min_klines根不含包含关系的K线
         5. 价格方向必须合理（向上笔顶>底，向下笔顶>底）
-        
+
         Args:
             fractals: 过滤后的分型列表（已保证相邻异向）
             merged_klines: 包含处理后的K线列表（用于精确计数不含包含关系的K线数）
                           为None时回退到使用fractal的idx差值
-        
+
         Returns:
             笔列表
         """
@@ -610,12 +610,12 @@ class StrokeBuilder:
 
     def _check_fractal_pair(self, f1: Fractal, f2: Fractal, direction: str) -> bool:
         """根据 fx_check 模式检查分型对是否能构成笔。
-        
+
         Args:
             f1: 起始分型
             f2: 结束分型
             direction: 'up'（底→顶）或 'down'（顶→底）
-        
+
         Returns:
             True 表示有效笔
         """
@@ -698,11 +698,11 @@ class SegmentAnalyzer:
 
     def _merge_feature_sequence(self, strokes: List[Stroke]) -> List[Stroke]:
         """特征序列元素包含处理（与K线包含处理相同的逻辑）
-        
+
         对特征序列元素按包含关系进行合并，直到不再包含。
         上升段的特征序列（下跌笔）：按下降方向合并（取min高min低）
         下降段的特征序列（上涨笔）：按上升方向合并（取max高max低）
-        
+
         Args:
             strokes: 特征序列元素列表（方向均为特征序列方向）
         Returns:
@@ -710,25 +710,25 @@ class SegmentAnalyzer:
         """
         if len(strokes) < 2:
             return strokes
-        
+
         # 确定方向：第一笔方向决定合并规则
         # 特征序列元素与线段方向相反，所以下跌笔特征序列=向下合并
         is_down_seq = strokes[0].direction == 'down'
-        
+
         merged = [strokes[0]]
         for i in range(1, len(strokes)):
             prev = merged[-1]
             curr = strokes[i]
-            
+
             # 判断包含：prev的范围是否包含curr，或curr包含prev
             p_low = min(prev.start_price, prev.end_price, prev.low or prev.start_price)
             p_high = max(prev.start_price, prev.end_price, prev.high or prev.end_price)
             c_low = min(curr.start_price, curr.end_price, curr.low or curr.start_price)
             c_high = max(curr.start_price, curr.end_price, curr.high or curr.end_price)
-            
+
             prev_contains_curr = c_low >= p_low and c_high <= p_high
             curr_contains_prev = p_low >= c_low and p_high <= c_high
-            
+
             if prev_contains_curr or curr_contains_prev:
                 # 包含关系：合并
                 if is_down_seq:
@@ -749,12 +749,12 @@ class SegmentAnalyzer:
                 merged[-1] = new_stroke
             else:
                 merged.append(curr)
-        
+
         return merged
 
     def _feature_sequence_fractal_break(self, feature_seq: List[Stroke], seg_direction: str) -> bool:
         """检查合并后的特征序列是否形成分型破坏
-        
+
         Args:
             feature_seq: 合并后的特征序列元素列表
             seg_direction: 线段方向 'up'/'down'
@@ -763,7 +763,7 @@ class SegmentAnalyzer:
         """
         if len(feature_seq) < 3:
             return False
-        
+
         # 取最近3个元素检查分型
         f1, f2, f3 = feature_seq[-3], feature_seq[-2], feature_seq[-1]
         f1_high = max(f1.start_price, f1.end_price, f1.high or f1.end_price)
@@ -772,7 +772,7 @@ class SegmentAnalyzer:
         f1_low = min(f1.start_price, f1.end_price, f1.low or f1.start_price)
         f2_low = min(f2.start_price, f2.end_price, f2.low or f2.start_price)
         f3_low = min(f3.start_price, f3.end_price, f3.low or f3.start_price)
-        
+
         if seg_direction == 'up':
             # 上升段的特征序列为下跌笔：顶分型 → 线段终结
             # 中间元素 high > 两侧 high，中间 low > 两侧 low
@@ -787,13 +787,13 @@ class SegmentAnalyzer:
     def build(self, strokes: List[Stroke]) -> List[Segment]:
         """
         从笔构建线段
-        
+
         基于特征序列的线段生成逻辑：
         - 线段由至少 min_stroke_count 笔构成
         - 三笔之间存在重叠则形成线段
         - 线段延续：后续笔不破坏特征序列关系时，线段延续
         - 线段终结：特征序列经包含处理后形成分型破坏
-        
+
         特征序列定义（与K线包含处理相同）：
           上升段：合并下跌笔（取min高min低），形成顶分型时终结
           下降段：合并上涨笔（取max高max低），形成底分型时终结
@@ -930,7 +930,7 @@ class SegmentAnalyzer:
 
 class ZhongshuAnalyzer:
     """中枢分析器 — 支持延伸/新生/扩张 + 最小宽度过滤
-    
+
     核心修正（相对于 v1）：
     - 延伸不再扩展 low/high 边界（对齐 chan.py try_add_to_end）
     - 超出边界的重叠触发扩张检测（保留子中枢）
@@ -947,9 +947,9 @@ class ZhongshuAnalyzer:
     def find(self, segments: List[Segment]) -> List[Zhongshu]:
         """
         识别中枢并处理演化
-        
+
         中枢定义：由至少3段构成，三段存在重叠区域
-        
+
         演化规则（对齐缠论定义）：
           1. 延伸：后续线段完全在中枢区间内 → 只更新结束位置，不改变区间
           2. 扩张：后续线段部分重叠但超出 → 保留子中枢+变大区间
@@ -1034,7 +1034,7 @@ class ZhongshuAnalyzer:
 
     def _evolve_pending(self, segments: List[Segment], start_j: int, zs: Zhongshu) -> Zhongshu:
         """处理中枢后续线段的演化（延伸/扩张/新生）。
-        
+
         将 find() 中的 while j 循环抽取为独立方法，
         供 normal 和 over_seg 两种模式共用。
         """
@@ -1277,7 +1277,7 @@ class DivergenceDetector:
             result = self._detect_consolidation_divergence(strokes)
         if not result and zhongshu_list:
             result = self._detect_zhongshu_divergence(strokes, zhongshu_list)
-        
+
         if result:
             # 批次4: 力度法辅助验证 + dual_confirmed
             if closes is not None and len(strokes) >= 4:
@@ -1310,10 +1310,10 @@ class DivergenceDetector:
             return self._calc_stroke_volume(stroke)
         else:
             return self._calc_stroke_macd_area(stroke)
-    
+
     def _check_strength_method(self, stroke1, stroke2) -> bool:
         """力度比较法辅助验证：比较两段走势DIF高度
-        
+
         前段顶部DIF - 前段底部DIF = 高度H1
         当前段顶部DIF - 当前段底部DIF = 高度H2
         若 H2 < H1 * 0.75 → 背驰确认（力度减弱）
@@ -1619,7 +1619,7 @@ class DivergenceDetector:
     def _detect_consolidation_divergence(self, strokes: List[Stroke]) -> Optional[Divergence]:
         """
         检测盘整背驰
-        
+
         原理：回调力度大于离开力度
         """
         if len(strokes) < 4:
@@ -1676,7 +1676,7 @@ class DivergenceDetector:
                                     zhongshu_list: List[Zhongshu]) -> Optional[Divergence]:
         """
         检测中枢破坏背驰
-        
+
         原理：离开中枢的力度小于返回的力度
         """
         if not zhongshu_list or len(strokes) < 4:
@@ -1739,13 +1739,13 @@ class BuySellPointDetector:
              only_last: bool = False) -> tuple:
         """
         识别买卖点
-        
+
         Args:
             strokes: 笔列表
             zhongshu_list: 中枢列表
             divergence: 背驰信息
             only_last: 快速模式，只计算最后一根K线的买卖点
-        
+
         Returns:
             (buy_points, sell_points)
         """
@@ -2184,10 +2184,10 @@ class ChanlunAnalyzer:
     def analyze(self, df: pd.DataFrame) -> Dict:
         """
         完整缠论分析流程
-        
+
         Args:
             df: OHLCV数据，列名：open, high, low, close, volume, trade_date
-        
+
         Returns:
             完整分析结果
         """
@@ -2199,7 +2199,7 @@ class ChanlunAnalyzer:
 
         # 2. 包含处理
         klines_no_contain = self.kline_merger.merge(self.klines)
-        
+
         # 2b. 涨跌停K线过滤（批次1b）
         klines_filtered = self.kline_merger.filter_limit_klines(klines_no_contain)
 
@@ -2274,13 +2274,13 @@ class ChanlunAnalyzer:
 
     def process_bars(self, df: pd.DataFrame) -> List[Dict]:
         """逐Bar增量计算模式（trigger_step=True 时使用）。
-        
+
         每次处理一根新K线，返回所有中间状态。
         参考: chan.py trigger_step + CAnimateDriver
-        
+
         Args:
             df: 完整OHLCV数据
-        
+
         Returns:
             [每一步的分析结果快照, ...]
         """
@@ -2298,10 +2298,10 @@ class ChanlunAnalyzer:
 
     def process_bar_single(self, bar: dict) -> Dict:
         """增量更新：处理单根新K线（需先调 analyze 初始化）。
-        
+
         Args:
             bar: {'open': , 'high': , 'low': , 'close': , 'volume': , 'trade_date': }
-        
+
         Returns:
             更新后的分析结果
         """
@@ -2315,7 +2315,7 @@ class ChanlunAnalyzer:
 
     def _preprocess(self, df: pd.DataFrame):
         """数据预处理
-        
+
         从 DataFrame 提取 KLine 列表：
         - idx 始终为顺序整数（自 0 递增），保证减法运算得到 int
         - date 优先取自 trade_date 列，回退到 DataFrame index（统一转为 str）
@@ -2397,11 +2397,11 @@ class ChanlunAnalyzer:
 def analyze_chanlun(df: pd.DataFrame, config: Dict = None) -> Dict:
     """
     缠论分析便捷函数
-    
+
     Args:
         df: OHLCV数据
         config: 配置参数
-    
+
     Returns:
         分析结果
     """
@@ -2485,11 +2485,11 @@ class ChanlunScorer:
               market_context: Optional[Dict] = None) -> Dict:
         """
         根据缠论分析结果评分
-        
+
         Args:
             analysis_result: ChanlunAnalyzer的分析结果
             latest_close: 最新收盘价（可选），用于价格匹配度评估
-        
+
         Returns:
             评分结果
         """
@@ -2680,10 +2680,10 @@ class ChanlunAlphaModel(AlphaModel):
     def generate_insights(self, data: Dict[str, pd.DataFrame]) -> List[Insight]:
         """
         对筛选后的股票进行缠论分析并生成Insight信号
-        
+
         Args:
             data: 股票数据字典 {symbol: DataFrame}
-        
+
         Returns:
             Insight信号列表
         """
@@ -2743,10 +2743,10 @@ class SignalFusion:
     def fuse(self, signals_dict: Dict[str, List[Insight]]) -> Dict:
         """
         融合多策略信号
-        
+
         Args:
             signals_dict: 各策略信号 {strategy_name: [Insight]}
-        
+
         Returns:
             融合结果
         """
@@ -2828,11 +2828,11 @@ class StrategyValidationLayer:
     def validate(self, candidates: List[Dict], stock_data: Dict[str, pd.DataFrame]) -> List[Dict]:
         """
         对候选股票进行多策略验证
-        
+
         Args:
             candidates: 第二层筛选出的股票列表
             stock_data: 完整股票数据
-        
+
         Returns:
             通过验证的股票列表
         """

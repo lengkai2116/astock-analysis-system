@@ -4,13 +4,13 @@ push_service 单元测试（迭代2：API 定时推送）
 测试推服务的纯函数计算逻辑，不依赖真实的 SocketIO / ECManager。
 推送函数通过 mock 验证 emit 行为。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import importlib.util
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 # ══════════════════════════════════════════════════════════════
 # 直接加载 push_service 模块（绕过 app 包完整导入链）

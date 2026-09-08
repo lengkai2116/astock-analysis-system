@@ -6,8 +6,10 @@
 保留：compute_for_stock() 接口签名不变，输出格式不变。
 """
 from __future__ import annotations
+
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List
+
 import pandas as pd
 
 from app.data import DataManager
@@ -79,133 +81,20 @@ class SignalComputationService:
                             lifecycle: dict = None) -> List[Dict]:
         """通过维度引擎计算策略信号
 
-        368号P2修复：每个信号新增 continuous_value（连续强度值）
-        事项3修复：完整引擎结果附加到 _dim_results 供JUD消费
+        411号方案Phase 1：dim1-dim6引擎调用已迁移至status_engine统一调度，
+        此方法不再直接调用维度引擎。保留空signals列表和_dim_results附件
+        以兼容下游_post_processing和JUD消费链路。
+
+        原调用链：signal_computation_service → dim1-dim6 → results
+        新调用链：status_engine → dim1(门禁) → dim2-dim7 → dim8 → JUD
         """
         signals = []
-        dim_results = {}  # 事项3：存储引擎完整结果
+        dim_results = {}
 
-        # dim1: 信号确认
-        try:
-            from app.opportunity_atlas.dimensions.dim1_signal_engine import Dim1SignalEngine
-            r1 = Dim1SignalEngine().evaluate(dims, tags, lifecycle=lifecycle or {})
-            jg1 = r1.get('judgment', {})
-            dim_results['signal'] = r1  # 事项3
-            cv1 = jg1.get('continuous_value', 0.5)
-            if jg1.get('attribute', {}).get('code') not in ('neutral', 'consolidating'):
-                signals.append({
-                    'strategy_name': '信号确认',
-                    'signal': 'bullish' if jg1.get('overall_direction', 0) > 0 else ('bearish' if jg1.get('overall_direction', 0) < 0 else 'neutral'),
-                    'confidence': cv1,  # 事项1：改用连续值
-                    'continuous_value': cv1,  # 事项1：显式输出
-                    'direction': jg1.get('overall_direction', 0),
-                    'evidence': [r1.get('status_description', {}).get('attribute', '')],
-                    'source': 'Dim1SignalEngine',
-                })
-        except Exception as e:
-            logger.debug(f"dim1引擎调用失败: {e}")
+        # 411号Phase 1：dim1-dim6调用已移除，统一走status_engine
+        # dim_results_json由data_daemon的JUD步骤写入strategy_signal_detail
 
-        # dim2: 缠论结构
-        try:
-            from app.opportunity_atlas.dimensions.dim2_structure_engine import Dim2StructureEngine
-            r2 = Dim2StructureEngine().evaluate(dims, tags, lifecycle=lifecycle or {})
-            sd2, jg2 = r2.get('status_description', {}), r2.get('judgment', {})
-            dim_results['structure'] = r2  # 事项3
-            cv2 = jg2.get('continuous_value', 0.5)
-            if sd2.get('chanlun_direction') and sd2['chanlun_direction'] != '未知':
-                signals.append({
-                    'strategy_name': '缠论走势分析',
-                    'signal': 'bullish' if jg2.get('overall_direction', 0) > 0 else ('bearish' if jg2.get('overall_direction', 0) < 0 else 'neutral'),
-                    'confidence': cv2,  # 事项1
-                    'continuous_value': cv2,  # 事项1
-                    'direction': jg2.get('overall_direction', 0),
-                    'evidence': [sd2.get('vs_zhongshu', ''), sd2.get('vs_ma', '')],
-                    'source': 'Dim2StructureEngine',
-                })
-        except Exception as e:
-            logger.debug(f"dim2引擎调用失败: {e}")
-
-        # dim3: 量价健康
-        try:
-            from app.opportunity_atlas.dimensions.dim3_vp_engine import Dim3VPEngine
-            r3 = Dim3VPEngine().evaluate(dims, tags, lifecycle=lifecycle or {})
-            sd3, jg3 = r3.get('status_description', {}), r3.get('judgment', {})
-            dim_results['volume_price'] = r3  # 事项3
-            cv3 = jg3.get('continuous_value', 0.5)
-            if sd3.get('vp_state'):
-                signals.append({
-                    'strategy_name': '量价分析策略',
-                    'signal': 'bullish' if jg3.get('overall_direction', 0) > 0 else ('bearish' if jg3.get('overall_direction', 0) < 0 else 'neutral'),
-                    'confidence': cv3,  # 事项1
-                    'continuous_value': cv3,  # 事项1
-                    'direction': jg3.get('overall_direction', 0),
-                    'evidence': [sd3.get('vp_state', ''), sd3.get('divergence', '')],
-                    'source': 'Dim3VPEngine',
-                })
-        except Exception as e:
-            logger.debug(f"dim3引擎调用失败: {e}")
-
-        # dim4: 资金筹码
-        try:
-            from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import Dim4ChipFundEngine
-            r4 = Dim4ChipFundEngine().evaluate(dims, tags, lifecycle=lifecycle or {})
-            sd4, jg4 = r4.get('status_description', {}), r4.get('judgment', {})
-            dim_results['chip_fund'] = r4  # 事项3
-            cv4 = jg4.get('continuous_value', 0.5)
-            if sd4.get('phase'):
-                signals.append({
-                    'strategy_name': '筹码主力分析',
-                    'signal': 'bullish' if jg4.get('direction') == 'inflow' else ('bearish' if jg4.get('direction') == 'outflow' else 'neutral'),
-                    'confidence': cv4,  # 事项1
-                    'continuous_value': cv4,  # 事项1
-                    'direction': jg4.get('overall_direction', 0),
-                    'evidence': [sd4.get('phase', ''), sd4.get('fund_flow', '')],
-                    'source': 'Dim4ChipFundEngine',
-                })
-        except Exception as e:
-            logger.debug(f"dim4引擎调用失败: {e}")
-
-        # dim5: 情绪环境
-        try:
-            from app.opportunity_atlas.dimensions.dim5_emotion_engine import Dim5EmotionEngine
-            r5 = Dim5EmotionEngine().evaluate(dims, tags, lifecycle=lifecycle or {})
-            sd5, jg5 = r5.get('status_description', {}), r5.get('judgment', {})
-            dim_results['emotion'] = r5  # 事项3
-            cv5 = jg5.get('continuous_value', 0.5)
-            if sd5.get('market'):
-                signals.append({
-                    'strategy_name': 'BOCIASI快线',
-                    'signal': 'bullish' if jg5.get('overall_direction', 0) > 0 else ('bearish' if jg5.get('overall_direction', 0) < 0 else 'neutral'),
-                    'confidence': cv5,  # 事项1
-                    'continuous_value': cv5,  # 事项1
-                    'direction': jg5.get('overall_direction', 0),
-                    'evidence': [sd5.get('market', ''), sd5.get('quadrant', '')],
-                    'source': 'Dim5EmotionEngine',
-                })
-        except Exception as e:
-            logger.debug(f"dim5引擎调用失败: {e}")
-
-        # dim6: 风险边界
-        try:
-            from app.opportunity_atlas.dimensions.dim6_risk_engine import Dim6RiskEngine
-            r6 = Dim6RiskEngine().evaluate(dims, tags, lifecycle=lifecycle or {})
-            jg6 = r6.get('judgment', {})
-            dim_results['risk'] = r6  # 事项3
-            cv6 = jg6.get('continuous_value', 0.5)
-            if jg6.get('level') in ('高', '极高'):
-                signals.append({
-                    'strategy_name': '风险警示',
-                    'signal': 'bearish',
-                    'confidence': 1.0 - cv6,  # 事项1：风险越高confidence越高
-                    'continuous_value': cv6,  # 事项1
-                    'direction': -1,
-                    'evidence': [r6.get('status_description', {}).get('risk_level', '')],
-                    'source': 'Dim6RiskEngine',
-                })
-        except Exception as e:
-            logger.debug(f"dim6引擎调用失败: {e}")
-
-        # 事项3：将完整引擎结果附加到signals列表（通过特殊key传递）
+        # 将空引擎结果附加到signals列表（兼容下游消费）
         if dim_results:
             signals.append({'_dim_results': dim_results, '_source': 'engine_results'})
 
@@ -321,7 +210,18 @@ class SignalComputationService:
         try:
             from app.engine.framework.volume_price_strategy import StageDetector
             sd = StageDetector()
-            market_state = sd.recognize_market_condition(df)
+            # 413号§七#5：优先使用预计算MA
+            _pm = {}
+            try:
+                _ind = self._data_manager.get_cached_indicators(ts_code)
+                if _ind is not None and not _ind.empty:
+                    _latest = _ind.iloc[-1]
+                    for _col in ['ma5', 'ma10', 'ma20', 'ma60', 'ma120']:
+                        if _col in _latest.index and not pd.isna(_latest[_col]):
+                            _pm[_col] = float(_latest[_col])
+            except Exception:
+                pass
+            market_state = sd.recognize_market_condition(df, precomputed_ma=_pm)
             market_context['market_state'] = market_state.get('market_state', 'UNKNOWN')
             market_context['ma_trend'] = market_state.get('ma_trend', 'neutral')
             market_context['market_volatility'] = market_state.get('bb_width', 0)
@@ -524,7 +424,7 @@ class SignalComputationService:
             logger.debug(f"{ts_code}: 信号持久化到数据库跳过 (非关键): {e}")
 
         # 记录数据可用性
-        da = next((s for s in signals if isinstance(s, dict) and s.get('data_availability')), None)
+        next((s for s in signals if isinstance(s, dict) and s.get('data_availability')), None)
         kline_ok = df is not None and len(df) >= 60
         self.last_data_availability = {
             'ts_code': ts_code,

@@ -26,8 +26,8 @@ ChartBuilder — 缠论 K 线结构可视化制图系统
 
 import json
 import logging
-from typing import List, Optional
 from datetime import datetime
+from typing import List
 
 logger = logging.getLogger(__name__)
 

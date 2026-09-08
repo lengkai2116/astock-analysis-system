@@ -132,6 +132,18 @@ data_daemon 启动后先后执行：
   数据缺失时：写入 sync_requests 队列表 → 返回空/503 → daemon 异步补采
   ↓
 前端
+
+**SIG层内部数据流（dim1唯一入口原则）：**
+  status_engine → dim1(唯一数据入口)
+    ├── 加载全部原料数据（ECM表 + indicator预计算表 + pre_feat_cache ext组，共20+项）
+    ├── 质量校验 → _validate() / _notify_missing_data()
+    └── 返回 data_context
+         ↓
+    dim2-dim7.evaluate(data_context=...) → 仅从data_context读取原料数据
+         ↓
+    JUD层(信号分析/判定整合) → OUT层(前端消费)
+
+  ⛔ 禁止：dim2-dim7内部直接调用DataManager.get_cached_*/ecm.get_cached_*/读daemon内存
 ```
 
 **红线规则（违反=必须修复）：**
@@ -146,6 +158,11 @@ data_daemon 启动后先后执行：
 6. **禁止使用 Mock/随机数据作为数据降级方案**（§13规则，参见第六节）
 7. 分钟K线数据必须持久化到 `minute_kline_cache` 表，禁止直调 Tushare 不落缓存
 8. **数据缺失时禁止直调数据源降级**——必须走 sync_requests 异步队列机制（详见下文"数据就绪保障机制"）
+9. **dim1（signal）是SIG层唯一数据入口**——dim2-dim7的evaluate()仅从dim1分发的data_context读取原料数据，**禁止dim引擎内部直接调用DataManager/ECM获取原料数据**
+   - dim1负责：加载全部原料数据（ECM表 + indicator预计算表 + pre_feat_cache ext组）→ 质量校验 → 通过data_context传递给dim2-dim7
+   - dim2-dim7的evaluate()签名必须包含`data_context`参数，从data_context读取所需数据
+   - 降级路径：data_context=None时dim2-dim7可回退到独立查询（保留fallback），但主路径必须走data_context
+   - 违规示例：dim引擎内部`dm.get_cached_indicators()`、`ecm.get_cached_*()`、`from data_daemon import _market_stats_cache`等直接访问存储层的行为
 
 **数据就绪保障机制（sync_requests 异步队列）：**
 

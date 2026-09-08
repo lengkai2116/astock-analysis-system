@@ -4,7 +4,9 @@
 catalyst_event 两个标签，但 treemap_snapshot 表无此列、get_treemap_snapshot_items
 组装时未从 opportunity_tags_cache 补齐，导致前端内存过滤命中数为 0。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)

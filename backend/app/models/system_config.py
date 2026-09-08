@@ -8,9 +8,11 @@
 - 使用通用 SQLAlchemy 数据类型（禁止 ARRAY/TSVECTOR/SERIAL）
 - JSON 列使用 db.Column(JSON) → SQLAlchemy 自动适配 SQLite TEXT 存储
 """
-from app import db
 from datetime import datetime
+
 from sqlalchemy import JSON
+
+from app import db
 
 
 class SystemConfig(db.Model):

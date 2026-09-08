@@ -1,5 +1,4 @@
 import os
-from datetime import datetime
 
 
 def _get_default_data_dir():

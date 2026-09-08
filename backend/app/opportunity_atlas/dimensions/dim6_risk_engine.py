@@ -4,7 +4,7 @@
 
 整合源：
   - risk_boundary_builder.py（382行）：风险等级5级 + 波动率 + 盈亏比 + 失效条件
-  - advice_builder._geometric()：支撑位/阻力位/盈亏比/ATR%/信号天数
+  - advice_engine._geometric()：支撑位/阻力位/盈亏比/ATR%/信号天数
   - event_monitor.py（925行）中的关键事件风险检测
   - cscv_validator.py（307行）：CSCV校验逻辑
   - eagle_sword_resonance.py（399行）：鹰刀共振（含BOCIASI情绪输入）
@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
-import json
+import itertools  # 403号BUG-01: CSCVValidator.compute_pbo依赖
 import logging
 import math
-from datetime import date, datetime
-from typing import Optional, Dict, List, Tuple, Any
+from typing import Any, Callable, Dict, List  # 403号BUG-02: Callable类型注解
+
 import numpy as np
 import pandas as pd
 
@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 # === DataAwareMixin (app/data/mixins.py) ===
 
 from app.data.mixins import DataAwareMixin
-
 
 # ═══════════════════════════════════════════════════════════
 # 风险等级常量
@@ -112,7 +111,7 @@ _FALLBACK_ACTION = ("NEUTRAL", 0.25)
 
 
 # ═══════════════════════════════════════════════════════════
-# 几何化指标（从 advice_builder._geometric() 完整迁移）
+# 几何化指标（从 advice_engine._geometric() 完整迁移）
 # ═══════════════════════════════════════════════════════════
 
 def calc_geometric(df: pd.DataFrame) -> dict:
@@ -214,8 +213,8 @@ def _calc_volatility(df=None, tags: dict = None) -> dict:
                 if len(vol_20d) >= 2:
                     current_vol = vol_20d.iloc[-1]
                     percentile = float((vol_20d < current_vol).sum() / len(vol_20d))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("403号Q-01 _calc_volatility 计算异常: %s", e)
 
     return {'level': level, 'atr_14d': atr_14d, 'atr_pct': atr_pct,
             'percentile': percentile}
@@ -226,13 +225,13 @@ def _calc_volatility(df=None, tags: dict = None) -> dict:
 # ═══════════════════════════════════════════════════════════
 
 def _assess_risk_level(dims: dict, l0: dict, tags: dict) -> dict:
+    """风险等级评估（T42修复：消除dims循环依赖，仅依赖tags和l0）"""
     risk_sources = []
     high_count = 0
 
-    dim_risk = str(dims.get('risk', {}).get('state', ''))
-    dim_risk_light = str(dims.get('risk', {}).get('light', ''))
-    if dim_risk == '高' or dim_risk_light == 'red':
-        return {'level': '高', 'light': 'red', 'detail': f'L1判定风险=高'}
+    # T42修复：移除对dims['risk']的读取（循环依赖）
+    # dims['risk']由StatusEngine从dim6输出生成，读取它会形成循环
+    # 原代码：dim_risk = str(dims.get('risk', {}).get('state', ''))
 
     rl = str(tags.get('risk_level', ''))
     if rl == 'HIGH':
@@ -265,9 +264,13 @@ def _assess_risk_level(dims: dict, l0: dict, tags: dict) -> dict:
             high_count += 1
     except (TypeError, ValueError):
         pass
+    risk_sources.append({'name': '流动性风险', 'level': '高' if tr < 1.0 else '低'})
 
+    # 404号DATA-04: dims['l0']始终为空（T42循环依赖设计限制），hard_veto永远不触发
+    # l0由StatusEngine._apply_l0()在维度引擎运行后才计算，dim6无法读取（已知限制）
     if l0.get('hard_veto'):
-        return {'level': '极高', 'light': 'red', 'detail': f"硬否决：{l0.get('hard_reason', '')}"}
+        return {'level': '极高', 'light': 'red', 'detail': f"硬否决：{l0.get('hard_reason', '')}",
+                'risk_sources': risk_sources}
 
     if high_count >= 2:
         level, light = '高', 'red'
@@ -276,11 +279,23 @@ def _assess_risk_level(dims: dict, l0: dict, tags: dict) -> dict:
     else:
         level, light = '低', 'green'
 
-    return {'level': level, 'light': light, 'detail': f'{high_count}个高风险源' if high_count else '无高风险源'}
+    return {'level': level, 'light': light, 'detail': f'{high_count}个高风险源' if high_count else '无高风险源',
+            'risk_sources': risk_sources}
 
 
 def _list_risk_factors(tags: dict, dims: dict, l0: dict) -> list[dict]:
+    """风险因素枚举（T45修复：与_assess_risk_level风险源完全对齐）"""
     factors = []
+
+    # 与_assess_risk_level完全对齐的6个风险源
+    rl = str(tags.get('risk_level', ''))
+    if rl == 'HIGH':
+        factors.append({'category': '缠论', 'factor': '缠论风险高', 'severity': '高', 'satisfied': True})
+
+    vl = str(tags.get('volatility_level', ''))
+    if vl == 'high':
+        factors.append({'category': '波动率', 'factor': '波动率过高', 'severity': '高', 'satisfied': True})
+
     fh = str(tags.get('fina_health', ''))
     if fh == 'fail':
         factors.append({'category': '财务', 'factor': '财务异常', 'severity': '高', 'satisfied': True})
@@ -288,18 +303,15 @@ def _list_risk_factors(tags: dict, dims: dict, l0: dict) -> list[dict]:
         factors.append({'category': '财务', 'factor': '财务关注', 'severity': '中', 'satisfied': True})
 
     ce = str(tags.get('catalyst_event', ''))
-    event_map = {'regulatory': ('监管问题', '高'), 'fraud_sign': ('造假信号', '极高')}
-    if ce in event_map:
-        name, sev = event_map[ce]
-        factors.append({'category': '事件', 'factor': name, 'severity': sev, 'satisfied': True})
+    if ce in EVENT_RISK_SET:
+        event_names = {'regulatory': '监管问题', 'fraud_sign': '造假信号',
+                       'delist_risk': '退市风险', 'goodwill_risk': '商誉风险'}
+        factors.append({'category': '事件', 'factor': event_names.get(ce, ce),
+                        'severity': '高', 'satisfied': True})
 
     mfp = str(tags.get('main_force_phase', ''))
     if mfp == 'distributing':
         factors.append({'category': '主力', 'factor': '主力出货', 'severity': '中', 'satisfied': True})
-
-    vl = str(tags.get('valuation_level', ''))
-    if vl in ('high', 'extreme_high'):
-        factors.append({'category': '估值', 'factor': '估值过高', 'severity': '中', 'satisfied': True})
 
     try:
         tr = float(tags.get('turnover_rate', 999))
@@ -308,6 +320,16 @@ def _list_risk_factors(tags: dict, dims: dict, l0: dict) -> list[dict]:
     except (TypeError, ValueError):
         pass
 
+    # L0硬否决（404号DATA-04: l0始终为空，此分支为死代码）
+    if l0.get('hard_veto'):
+        factors.append({'category': '否决', 'factor': f"硬否决：{l0.get('hard_reason', '')}",
+                        'severity': '极高', 'satisfied': True})
+
+    # 补充风险源（_assess_risk_level未覆盖但有判定价值）
+    vl2 = str(tags.get('valuation_level', ''))
+    if vl2 in ('high', 'extreme_high'):
+        factors.append({'category': '估值', 'factor': '估值过高', 'severity': '中', 'satisfied': True})
+
     try:
         pr = float(tags.get('profit_ratio', 0))
         if pr >= 0.8:
@@ -315,6 +337,7 @@ def _list_risk_factors(tags: dict, dims: dict, l0: dict) -> list[dict]:
     except (TypeError, ValueError):
         pass
 
+    # 404号DATA-04: l0始终为空（T42循环依赖设计限制），此循环为死代码（已知限制）
     for sr in l0.get('soft_risks', []):
         if sr == 'low_liquidity':
             factors.append({'category': '流动性', 'factor': '流动性不足(L0)', 'severity': '中', 'satisfied': True})
@@ -345,6 +368,8 @@ def _build_invalidation(support, tags, dims) -> list[dict]:
     sp = str(tags.get('sentiment_phase', ''))
     if sp in ('ebb', 'climax'):
         conditions.append({'source': '情绪', 'condition': '大盘进入退潮/高潮期', 'priority': 2})
+    # 404号DATA-03: right_side_confirm在pre_feat_cache管道中只产出strong_confirm/unconfirmed，
+    # '否决'值仅由_check_right_side_confirm()在treemap快照管道中产出，此处为死代码（已知限制）
     if str(tags.get('right_side_confirm', '')) == '否决':
         conditions.append({'source': '右侧', 'condition': '右侧确认转否决', 'priority': 3})
     return conditions
@@ -400,897 +425,8 @@ def _risk_plain(level, factors, geo, rr, vol, invalidation) -> str:
 # ═══════════════════════════════════════════════════════════
 
 
-# === event_monitor.py ===
-class EventMonitor(DataAwareMixin):
-    """事件监控器"""
-
-    def __init__(self, data_manager=None):
-        self._dm = data_manager  # DataAwareMixin 统一注入点
-
-    def _today_str(self) -> str:
-        return datetime.now().strftime('%Y%m%d')
-
-    def _date_from_str(self, s: str) -> date | None:
-        try:
-            s_clean = str(s).replace('-', '')[:8]
-            if len(s_clean) == 8 and s_clean.isdigit():
-                return datetime.strptime(s_clean, '%Y%m%d').date()
-        except Exception:
-            pass
-        return None
-
-    # ══════════════════════════════════════════════════════════
-    # A 财务事件
-    # ══════════════════════════════════════════════════════════
-
-    def _detect_earnings_surprise(self, ts_code: str) -> dict:
-        """A1 业绩预增: forecast_cache 净利润同比增长>50%"""
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "forecast_cache", "description": "", "event_date": ""}
-        try:
-            cache = self._get_cache()
-            df = cache.get_cached_forecast(ts_code)
-            if df is None or df.empty:
-                return result
-
-            # 取最新一条预告
-            latest = df.sort_values('end_date', ascending=False).iloc[0]
-            ftype = str(latest.get('forecast_type', ''))
-            ftype_map = {
-                '预增': ('正向', 1), '扭亏': ('正向', 1), '续盈': ('正向', 0),
-                '略增': ('正向', 0), '减亏': ('正向', 0),
-                '预减': ('负向', -1), '首亏': ('负向', -2), '续亏': ('负向', -2),
-                '略减': ('负向', -1),
-            }
-            mapping = ftype_map.get(ftype)
-            if mapping is None:
-                return result
-
-            label, base_dir = mapping
-            # 检查净利同比增幅是否>50%
-            n_min = latest.get('net_profit_min')
-            n_max = latest.get('net_profit_max')
-            direction = base_dir
-            confidence = 0.5
-            event_date = str(latest.get('ann_date', ''))
-
-            if n_min is not None and n_max is not None and n_min != 0:
-                avg_profit = (float(n_min) + float(n_max)) / 2
-                # 如果有 end_date 可以算同比，但 forecast 表中只有绝对值
-                # 简化为：预告类型正向且净利为正 → direction=+1, 大幅预增→+2
-                if label == '正向' and avg_profit > 0:
-                    direction = 2 if ftype == '预增' else 1
-                    confidence = 0.7
-                    result["detected"] = True
-                elif label == '负向':
-                    direction = base_dir
-                    confidence = 0.6
-                    result["detected"] = True
-
-            result["direction"] = direction
-            result["confidence"] = confidence
-            result["description"] = f"业绩预告: {ftype}"
-            result["event_date"] = event_date
-        except Exception as e:
-            logger.debug("A1 _detect_earnings_surprise(%s): %s", ts_code, e)
-        return result
-
-    def _detect_earnings_confirm(self, ts_code: str) -> dict:
-        """A2 业绩确认: forecast_cache + fina_indicator — 偏差±10%"""
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "forecast_cache+fina_indicator", "description": "", "event_date": ""}
-        try:
-            cache = self._get_cache()
-            df_fc = cache.get_cached_forecast(ts_code)
-            df_fi = cache.get_cached_fina_indicator(ts_code)
-            if df_fc is None or df_fc.empty or df_fi is None or df_fi.empty:
-                return result
-
-            latest_fc = df_fc.sort_values('end_date', ascending=False).iloc[0]
-            # 匹配对应 end_date 的财报
-            fc_end = str(latest_fc.get('end_date', ''))
-            if not fc_end:
-                return result
-            match = df_fi[df_fi['end_date'] == fc_end]
-            if match.empty:
-                return result
-            actual_eps = match.iloc[0].get('eps')
-            if actual_eps is None:
-                return result
-            actual_eps = float(actual_eps)
-
-            fc_eps_min = latest_fc.get('eps_min')
-            fc_eps_max = latest_fc.get('eps_max')
-            if fc_eps_min is None or fc_eps_max is None:
-                return result
-            fc_eps_min, fc_eps_max = float(fc_eps_min), float(fc_eps_max)
-
-            if abs(fc_eps_min) < 1e-9:
-                return result
-
-            # 偏差: 实际值与预告中值比较
-            fc_mid = (fc_eps_min + fc_eps_max) / 2
-            if fc_mid == 0:
-                return result
-            deviation = (actual_eps - fc_mid) / abs(fc_mid)
-            forecast_type = str(latest_fc.get('forecast_type', ''))
-
-            # 正向偏差 = 业绩超预期
-            direction = 0
-            confidence = 0.0
-            if abs(deviation) >= 0.1:
-                result["detected"] = True
-                direction = 1 if deviation > 0 else -1
-                confidence = min(abs(deviation), 1.0)
-                result["description"] = (
-                    f"业绩确认偏差: {deviation:+.1%}, "
-                    f"预告={forecast_type}, "
-                    f"实际EPS={actual_eps:.4f}"
-                )
-                result["event_date"] = str(match.iloc[0].get('ann_date', ''))
-            else:
-                # 偏差<10%，确认符合预期
-                pass
-
-            result["direction"] = direction
-            result["confidence"] = confidence
-        except Exception as e:
-            logger.debug("A2 _detect_earnings_confirm(%s): %s", ts_code, e)
-        return result
-
-    def _detect_report_date(self, ts_code: str) -> dict:
-        """A3 财报预约披露日: 依赖 AKShare 巨潮公告，非采集层不可用
-        第一阶段标记为未检测到。
-        """
-        return {"detected": False, "direction": 0, "confidence": 0.0,
-                "source": "report_date", "description": "财报披露日检测待接入",
-                "event_date": ""}
-
-    def _detect_dividend(self, ts_code: str) -> dict:
-        """A4 分红/送转: 依赖 AKShare 巨潮公告，非采集层不可用
-        第一阶段标记为未检测到。
-        """
-        return {"detected": False, "direction": 0, "confidence": 0.0,
-                "source": "dividend", "description": "分红送转检测待接入",
-                "event_date": ""}
-
-    def _detect_fraud_sign(self, ts_code: str) -> dict:
-        """A5 财务异常: fina_indicator + income + cashflow 多项异常
-
-        检测项（2026-08-05 收紧：原 ROE<3%/现金流<0.5 过宽，致 74.9% 股票误标 fraud_sign——
-        财务质量差 ≠ 财务欺诈；收紧至真实异常阈值）:
-        1) 营收连续2年下降
-        2) 经营现金流为负（原 <0.5 过宽）
-        3) ROE 为负（亏损，原 <3% 过宽；微利由 fina_health 覆盖）
-        4) 资产负债率 > 90%
-        """
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "fina_indicator+income+cashflow", "description": "", "event_date": ""}
-        try:
-            dm = self._get_dm()
-            df_fi = dm.get_cached_fina_indicator(ts_code)
-            df_inc = dm.get_cached_income(ts_code)
-            df_cf = dm.cache.get_cached_cashflow(ts_code)
-            df_bs = dm.get_cached_balancesheet(ts_code)
-
-            anomalies = []
-
-            # 1) 营收连续2年下降
-            if df_inc is not None and len(df_inc) >= 2:
-                inc_sorted = df_inc.sort_values('end_date', ascending=False)
-                revenues = inc_sorted['revenue'].dropna()
-                if len(revenues) >= 2:
-                    if revenues.iloc[0] < revenues.iloc[1] * 0.9:
-                        anomalies.append("营收连续下降")
-
-            # 2) 经营现金流为负（原 <0.5 过宽，收紧为负）
-            if df_cf is not None and df_inc is not None:
-                cf_sorted = df_cf.sort_values('end_date', ascending=False)
-                inc_sorted = df_inc.sort_values('end_date', ascending=False)
-                if not cf_sorted.empty and not inc_sorted.empty:
-                    ocf = cf_sorted.iloc[0].get('cashflow_oper') or 0
-                    has_attr = 'n_income_attr_p' in inc_sorted.columns
-                    n_col = 'n_income_attr_p' if has_attr else 'n_income'
-                    ni = inc_sorted.iloc[0].get(n_col) or 0
-                    if ocf < 0 and abs(ni) > 1e-6:
-                        anomalies.append("经营现金流为负")
-
-            # 3) ROE 为负（亏损；原 <3% 过宽，微利由 fina_health 覆盖）
-            if df_fi is not None and 'roe' in df_fi.columns:
-                roe = df_fi['roe'].dropna()
-                if not roe.empty and roe.iloc[0] < 0:
-                    anomalies.append(f"ROE={roe.iloc[0]:.1f}%<0")
-
-            # 4) 资产负债率 > 90%
-            if df_bs is not None:
-                bs_sorted = df_bs.sort_values('end_date', ascending=False)
-                ta = bs_sorted.iloc[0].get('total_assets') or 0
-                tl = bs_sorted.iloc[0].get('total_liab') or 0
-                if ta > 0 and tl / ta > 0.9:
-                    anomalies.append(f"资产负债率>{tl/ta*100:.0f}%>90%")
-
-            if len(anomalies) >= 2:
-                result["detected"] = True
-                result["direction"] = -2
-                result["confidence"] = min(len(anomalies) / 4, 1.0)
-                result["description"] = "多项财务异常: " + "; ".join(anomalies)
-        except Exception as e:
-            logger.debug("A5 _detect_fraud_sign(%s): %s", ts_code, e)
-        return result
-
-    # ══════════════════════════════════════════════════════════
-    # B 资本运作
-    # ══════════════════════════════════════════════════════════
-
-    def _detect_share_float(self, ts_code: str) -> dict:
-        """B1 限售股解禁>5%: share_float 表未入库，返回未检测到"""
-        return {"detected": False, "direction": 0, "confidence": 0.0,
-                "source": "share_float", "description": "限售股解禁数据未采集",
-                "event_date": ""}
-
-    def _detect_pledge_risk(self, ts_code: str) -> dict:
-        """B2 质押>50%: pledge_stat 表未入库，返回未检测到"""
-        return {"detected": False, "direction": 0, "confidence": 0.0,
-                "source": "pledge_stat", "description": "质押数据未采集",
-                "event_date": ""}
-
-    def _detect_holder_reduce(self, ts_code: str) -> dict:
-        """B3 减持预披露: stk_holdertrade 表未入库，返回未检测到"""
-        return {"detected": False, "direction": 0, "confidence": 0.0,
-                "source": "stk_holdertrade", "description": "股东减持数据未采集",
-                "event_date": ""}
-
-    def _detect_underwater_ipo(self, ts_code: str) -> dict:
-        """B4 定增破发: share_float + adj_factor 表未入库，返回未检测到"""
-        return {"detected": False, "direction": 0, "confidence": 0.0,
-                "source": "share_float+adj_factor", "description": "定增破发检测待接入",
-                "event_date": ""}
-
-    def _detect_buyback(self, ts_code: str) -> dict:
-        """B5 回购>5000万: repurchase 表未入库，返回未检测到"""
-        return {"detected": False, "direction": 0, "confidence": 0.0,
-                "source": "repurchase", "description": "回购数据未采集",
-                "event_date": ""}
-
-    def _detect_incentive(self, ts_code: str) -> dict:
-        """B6 股权激励行权期: stk_rewards 表未入库，返回未检测到"""
-        return {"detected": False, "direction": 0, "confidence": 0.0,
-                "source": "stk_rewards", "description": "股权激励数据未采集",
-                "event_date": ""}
-
-    # ══════════════════════════════════════════════════════════
-    # C 监管事件
-    # ══════════════════════════════════════════════════════════
-
-    def _detect_regulatory(self, ts_code: str) -> dict:
-        """C1 立案调查: 检查 sentiment_pool_cache 异常波动标记"""
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "sentiment_pool_cache", "description": "", "event_date": ""}
-        try:
-            cache = self._get_cache()
-            # 查 sentiment_pool 中是否有本股且 reason_category 含立案/调查
-            df = cache.get_cached_sentiment_pool()
-            if df is None or df.empty:
-                return result
-            df_stock = df[df['ts_code'] == ts_code]
-            if df_stock.empty:
-                return result
-            # 检查 reason_category 是否含调查/监管关键词
-            reason = str(df_stock.iloc[0].get('reason_category', ''))
-            keywords = ['立案', '调查', '监管', '警示', '谴责', '处罚']
-            if any(k in reason for k in keywords):
-                result["detected"] = True
-                result["direction"] = -2
-                result["confidence"] = 0.8
-                result["description"] = f"监管异常: {reason}"
-                result["event_date"] = str(df_stock.iloc[0].get('trade_date', ''))
-        except Exception as e:
-            logger.debug("C1 _detect_regulatory(%s): %s", ts_code, e)
-        return result
-
-    def _detect_delist_risk(self, ts_code: str) -> dict:
-        """C2 退市风险: 连续10日<1元 or 市值<3亿"""
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "daily_cache+daily_basic_cache", "description": "", "event_date": ""}
-        try:
-            dm = self._get_dm()
-            df = dm.get_cached_daily_data(ts_code)
-            if df is None or df.empty or len(df) < 10:
-                return result
-
-            df_sorted = df.sort_values('trade_date', ascending=False)
-            recent = df_sorted.head(10)
-
-            # 检查连续10日收盘<1元
-            closes = recent['close'].dropna()
-            if len(closes) >= 10 and (closes < 1.0).all():
-                result["detected"] = True
-                result["direction"] = -2
-                result["confidence"] = 0.9
-                result["description"] = f"连续10日收盘<1元 (最新{closes.iloc[0]:.2f})"
-                result["event_date"] = str(recent.iloc[0]['trade_date'])
-                return result
-
-            # 检查市值<3亿
-            df_basic = dm.get_cached_daily_basic(ts_code)
-            if df_basic is not None and not df_basic.empty:
-                mv = df_basic.sort_values('trade_date', ascending=False)
-                if 'total_mv' in mv.columns:
-                    latest_mv = mv['total_mv'].dropna()
-                    if not latest_mv.empty and latest_mv.iloc[0] < 3e4:  # 万元
-                        result["detected"] = True
-                        result["direction"] = -2
-                        result["confidence"] = 0.9
-                        result["description"] = f"市值<3亿 (当前{latest_mv.iloc[0]:.0f}万)"
-                        result["event_date"] = str(mv.iloc[0]['trade_date'])
-        except Exception as e:
-            logger.debug("C2 _detect_delist_risk(%s): %s", ts_code, e)
-        return result
-
-    def _detect_st_warning(self, ts_code: str) -> dict:
-        """C3 ST/*ST 预警: 检查股票名称是否含 ST 标记"""
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "Stock ORM", "description": "", "event_date": self._today_str()}
-        try:
-            dm = self._get_dm()
-            info = dm.get_stock_info(ts_code)
-            if info is None:
-                return result
-            name = str(info.get('name', ''))
-            if '*ST' in name:
-                result["detected"] = True
-                result["direction"] = -2
-                result["confidence"] = 1.0
-                result["description"] = f"*ST 预警: {name}"
-            elif '退' in name:
-                # 335号 S2.4：退市整理股（名称含"退"）并入 ST 预警（对齐 chip_pre_filter 检测）
-                result["detected"] = True
-                result["direction"] = -2
-                result["confidence"] = 0.95
-                result["description"] = f"退市整理: {name}"
-            elif 'ST' in name:
-                result["detected"] = True
-                result["direction"] = -1
-                result["confidence"] = 0.8
-                result["description"] = f"ST 预警: {name}"
-        except Exception as e:
-            logger.debug("C3 _detect_st_warning(%s): %s", ts_code, e)
-        return result
-
-    def _detect_goodwill_risk(self, ts_code: str) -> dict:
-        """C4 商誉暴雷风险检测（Wiki PIERS排雷检查项）
-
-        检查逻辑：
-        1. 从 balancesheet_cache 读取 goodwill（商誉）字段
-        2. 商誉占总资产比例 > 30% → 高风险
-        3. 商誉占净资产比例 > 50% → 极高风险
-        """
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "balancesheet_cache", "description": "", "event_date": ""}
-        try:
-            ecm = self._get_dm().cache
-            df_bs = ecm.get_cached_balancesheet(ts_code)
-            if df_bs is None or df_bs.empty:
-                return result
-
-            latest = df_bs.sort_values('end_date', ascending=False).iloc[0]
-            goodwill = float(latest.get('goodwill', 0) or 0)
-            total_assets = float(latest.get('total_assets', 0) or 0)
-            total_equity = float(latest.get('total_equity', 0) or 0)
-            event_date = str(latest.get('end_date', ''))
-
-            if goodwill <= 0:
-                return result
-
-            # 商誉占总资产比例
-            gw_asset_ratio = goodwill / total_assets if total_assets > 0 else 0
-            # 商誉占净资产比例
-            gw_equity_ratio = goodwill / total_equity if total_equity > 0 else 0
-
-            if gw_equity_ratio > 0.5:
-                result["detected"] = True
-                result["direction"] = -3
-                result["confidence"] = min(gw_equity_ratio, 1.0)
-                result["description"] = f"商誉暴雷风险：商誉占净资产{gw_equity_ratio:.0%}（极高风险）"
-                result["event_date"] = event_date
-            elif gw_asset_ratio > 0.3:
-                result["detected"] = True
-                result["direction"] = -2
-                result["confidence"] = min(gw_asset_ratio, 1.0)
-                result["description"] = f"商誉风险：商誉占总资产{gw_asset_ratio:.0%}（高风险）"
-                result["event_date"] = event_date
-        except Exception as e:
-            logger.debug("C4 _detect_goodwill_risk(%s): %s", ts_code, e)
-        return result
-
-    # ══════════════════════════════════════════════════════════
-    # D 市场情绪
-    # ══════════════════════════════════════════════════════════
-
-    def _detect_longhubang(self, ts_code: str) -> dict:
-        """D1 龙虎榜: lhb_cache + lhb_detail — 机构净买>5000万"""
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "lhb_cache", "description": "", "event_date": ""}
-        try:
-            cache = self._get_cache()
-            df_lhb = cache.get_cached_lhb(ts_code=ts_code)
-            if df_lhb is None or df_lhb.empty:
-                return result
-            latest = df_lhb.sort_values('trade_date', ascending=False).iloc[0]
-            net_amount = float(latest.get('net_amount', 0) or 0)
-            event_date = str(latest.get('trade_date', ''))
-
-            # 机构净买 > 5000万 → 正向
-            if net_amount > 5e3:
-                result["detected"] = True
-                result["direction"] = 2
-                result["confidence"] = min(net_amount / 2e4, 1.0)
-                result["description"] = f"龙虎榜机构净买{net_amount/1e4:.0f}万"
-                result["event_date"] = event_date
-
-            # 机构净卖 > 5000万 → 负向
-            elif net_amount < -5e3:
-                result["detected"] = True
-                result["direction"] = -2
-                result["confidence"] = min(abs(net_amount) / 2e4, 1.0)
-                result["description"] = f"龙虎榜机构净卖{abs(net_amount)/1e4:.0f}万"
-                result["event_date"] = event_date
-
-            # 也查 lhb_detail 中是否有机构席位
-            if not result["detected"]:
-                df_detail = cache.get_cached_lhb_detail(ts_code=ts_code)
-                if df_detail is not None and not df_detail.empty:
-                    detail = df_detail.sort_values('trade_date', ascending=False)
-                    latest_detail = detail.iloc[0]
-                    det_net = float(latest_detail.get('net_amount', 0) or 0)
-                    if abs(det_net) > 5e3:
-                        result["detected"] = True
-                        result["direction"] = 2 if det_net > 0 else -2
-                        result["confidence"] = min(abs(det_net) / 2e4, 1.0)
-                        seat = latest_detail.get('seat_name', '')
-                        result["description"] = f"龙虎榜席位净{abs(det_net)/1e4:.0f}万 ({seat})"
-                        result["event_date"] = str(latest_detail.get('trade_date', ''))
-        except Exception as e:
-            logger.debug("D1 _detect_longhubang(%s): %s", ts_code, e)
-        return result
-
-    def _detect_limit_move(self, ts_code: str) -> dict:
-        """D2 涨停/跌停/炸板: daily_cache pct_chg"""
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "daily_cache", "description": "", "event_date": ""}
-        try:
-            dm = self._get_dm()
-            df = dm.get_cached_daily_data(ts_code)
-            if df is None or df.empty or len(df) < 3:
-                return result
-            df_sorted = df.sort_values('trade_date', ascending=False)
-            latest = df_sorted.iloc[0]
-            prev = df_sorted.iloc[1] if len(df_sorted) > 1 else None
-            pct_chg = float(latest.get('pct_chg', 0) or 0)
-            event_date = str(latest.get('trade_date', ''))
-
-            # 涨停
-            if pct_chg >= 9.5:
-                # 检查前一日是否涨停（连板）
-                prev_limit = False
-                if prev is not None:
-                    prev_pct = float(prev.get('pct_chg', 0) or 0)
-                    prev_limit = prev_pct >= 9.5
-
-                direction = 2
-                confidence = 0.8
-                desc = "涨停"
-                if prev_limit:
-                    desc = "连板涨停"
-                    direction = 2
-                    confidence = 0.9
-                result["detected"] = True
-                result["direction"] = direction
-                result["confidence"] = confidence
-                result["description"] = desc
-                result["event_date"] = event_date
-
-            # 跌停
-            elif pct_chg <= -9.5:
-                result["detected"] = True
-                result["direction"] = -2
-                result["confidence"] = 0.8
-                result["description"] = "跌停"
-                result["event_date"] = event_date
-
-            # 炸板（盘中涨停后回落）
-            elif prev is not None:
-                prev_pct = float(prev.get('pct_chg', 0) or 0)
-                high = float(latest.get('high', 0) or 0)
-                close = float(latest.get('close', 0) or 0)
-                prev_close = float(prev.get('close', 0) or 0)
-                if prev_close > 0 and (high / prev_close - 1) >= 0.095:
-                    # 盘中触涨停但收盘回落
-                    if (close / prev_close - 1) < 0.09:
-                        result["detected"] = True
-                        result["direction"] = -1
-                        result["confidence"] = 0.6
-                        result["description"] = "炸板（盘中涨停后回落）"
-                        result["event_date"] = event_date
-        except Exception as e:
-            logger.debug("D2 _detect_limit_move(%s): %s", ts_code, e)
-        return result
-
-    def _detect_holder_concentration(self, ts_code: str) -> dict:
-        """D3 股东户数减少>10%: stk_holder_cache"""
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "stk_holder_cache", "description": "", "event_date": ""}
-        try:
-            cache = self._get_cache()
-            df = cache.get_cached_stk_holder(ts_code)
-            if df is None or df.empty or len(df) < 2:
-                return result
-            df_sorted = df.sort_values('end_date', ascending=False)
-            latest = df_sorted.iloc[0]
-            prev = df_sorted.iloc[1]
-            ln = float(latest.get('holder_number', 0) or 0)
-            pn = float(prev.get('holder_number', 0) or 0)
-            if pn <= 0:
-                return result
-            change = (ln - pn) / pn
-            event_date = str(latest.get('end_date', ''))
-
-            if change <= -0.10:
-                result["detected"] = True
-                result["direction"] = 1
-                result["confidence"] = min(abs(change) * 3, 1.0)
-                result["description"] = f"股东户数减少{abs(change)*100:.0f}% (集中)"
-                result["event_date"] = event_date
-            elif change >= 0.20:
-                result["detected"] = True
-                result["direction"] = -1
-                result["confidence"] = min(change * 2, 1.0)
-                result["description"] = f"股东户数增加{change*100:.0f}% (分散)"
-                result["event_date"] = event_date
-        except Exception as e:
-            logger.debug("D3 _detect_holder_concentration(%s): %s", ts_code, e)
-        return result
-
-    def _detect_margin_risk(self, ts_code: str) -> dict:
-        """D4 融资余额增加>20%: margin_cache"""
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "margin_cache", "description": "", "event_date": ""}
-        try:
-            cache = self._get_cache()
-            df = cache.get_cached_margin(ts_code)
-            if df is None or df.empty or len(df) < 5:
-                return result
-            df_sorted = df.sort_values('trade_date', ascending=False)
-            # 最近5日平均 vs 之前5日平均
-            recent = df_sorted.head(5)
-            older = df_sorted.iloc[5:10]
-            if len(older) < 3:
-                return result
-
-            recent_avg = recent['rzye'].dropna().mean()
-            older_avg = older['rzye'].dropna().mean()
-            if pd.isna(recent_avg) or pd.isna(older_avg) or older_avg <= 0:
-                return result
-
-            change = (recent_avg - older_avg) / older_avg
-            event_date = str(df_sorted.iloc[0].get('trade_date', ''))
-
-            if change >= 0.20:
-                result["detected"] = True
-                result["direction"] = 1
-                result["confidence"] = min(change, 1.0)
-                result["description"] = f"融资余额增加{change*100:.0f}% (>20%)"
-                result["event_date"] = event_date
-            elif change <= -0.15:
-                result["detected"] = True
-                result["direction"] = -1
-                result["confidence"] = min(abs(change), 1.0)
-                result["description"] = f"融资余额减少{abs(change)*100:.0f}% (>15%)"
-                result["event_date"] = event_date
-        except Exception as e:
-            logger.debug("D4 _detect_margin_risk(%s): %s", ts_code, e)
-        return result
-
-    # ══════════════════════════════════════════════════════════
-    # E 特殊事件
-    # ══════════════════════════════════════════════════════════
-
-    def _detect_breakout(self, ts_code: str) -> dict:
-        """E1 突破形态: 量价突破（站上60日线+放量+创20日新高）"""
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "daily_cache", "description": "", "event_date": ""}
-        try:
-            dm = self._get_dm()
-            df = dm.get_cached_daily_data(ts_code)
-            if df is None or df.empty or len(df) < 60:
-                return result
-            df_sorted = df.sort_values('trade_date').reset_index(drop=True)
-            closes = df_sorted['close'].values
-            volumes = df_sorted['vol'].values
-
-            if len(closes) < 60:
-                return result
-
-            cur_close = closes[-1]
-
-            # MA60
-            ma60 = np.mean(closes[-60:])
-
-            # 站上 MA60
-            above_ma60 = cur_close > ma60 * 1.02
-
-            # 量比 >1.5（近5日均量 vs 近20日均量）
-            vol_ma5 = np.mean(volumes[-5:])
-            vol_ma20 = np.mean(volumes[-20:])
-            vol_ratio = vol_ma5 / max(vol_ma20, 1)
-            volume_surge = vol_ratio > 1.5
-
-            # 创20日新高
-            new_high = cur_close >= np.max(closes[-20:-1]) * 0.99
-
-            factors = sum([above_ma60, volume_surge, new_high])
-            if factors >= 2:
-                result["detected"] = True
-                result["direction"] = 1 if cur_close > ma60 else -1
-                result["confidence"] = factors / 3.0
-                parts = []
-                if above_ma60:
-                    parts.append("站上60日线")
-                if volume_surge:
-                    parts.append(f"放量{vol_ratio:.1f}倍")
-                if new_high:
-                    parts.append("20日新高")
-                result["description"] = "突破: " + "+".join(parts)
-                result["event_date"] = str(df_sorted.iloc[-1]['trade_date'])
-        except Exception as e:
-            logger.debug("E1 _detect_breakout(%s): %s", ts_code, e)
-        return result
-
-    def _detect_concept_heat(self, ts_code: str) -> dict:
-        """E2 概念热度: 概念板块热度排名升20位
-        第一阶段简化：检查概念所属板块数 > 3 标记为活跃概念股。
-        """
-        result = {"detected": False, "direction": 0, "confidence": 0.0,
-                   "source": "concept_cache", "description": "", "event_date": ""}
-        try:
-            cache = self._get_cache()
-            df = cache.get_cached_concept(ts_code)
-            if df is None or df.empty:
-                return result
-            # 股票拥有的概念数
-            n_concepts = len(df)
-            # 全市场概念分布 → 找出该股票所属概念中成员最多的
-            all_concepts = cache.get_cached_concept()
-            if all_concepts is None or all_concepts.empty:
-                return result
-            concept_counts = all_concepts['concept_name'].value_counts()
-            # 计算该股票所属概念的平均热度排名
-            stock_concepts = df['concept_name'].unique()
-            ranks = []
-            for i, (cname, cnt) in enumerate(concept_counts.items()):
-                if cname in stock_concepts:
-                    ranks.append(i + 1)
-            if not ranks:
-                return result
-            avg_rank = sum(ranks) / len(ranks)
-            # 概念数量 > 3 且平均排名在前50% → 概念活跃
-            if n_concepts > 3 and avg_rank <= len(concept_counts) / 2:
-                result["detected"] = True
-                result["direction"] = 1
-                result["confidence"] = 0.5
-                result["description"] = f"概念活跃({n_concepts}个概念, 平均排名第{avg_rank:.0f})"
-        except Exception as e:
-            logger.debug("E2 _detect_concept_heat(%s): %s", ts_code, e)
-        return result
-
-    # ══════════════════════════════════════════════════════════
-    # 新闻质量过滤（P2.1 第一阶段简化版）
-    # ══════════════════════════════════════════════════════════
-
-    def _news_quality_filter(self, event_type: str, event: dict) -> float:
-        """新闻质量过滤，返回 0~1 质量分
-        仅 D 类事件（D1/D2）需要过滤：
-
-        Phase 1 简化三因子:
-        1) 来源分级（默认0.7~1.0，当前统一给 0.9）
-        2) 蹭热点检测: 描述含敏感词→折扣
-        3) 旧闻检测: event_date 早于3日→折扣
-        """
-        if event_type not in ('longhubang', 'limit_move'):
-            return 1.0
-
-        score = 0.9  # 基础分
-
-        # 蹭热点检测
-        desc = event.get('description', '')
-        clickbait_keywords = ['突发', '重磅', '紧急', '震惊', '大利好', '大利空',
-                              '抄底', '逃顶', '速看', '涨停板敢死队']
-        for kw in clickbait_keywords:
-            if kw in desc:
-                score *= 0.8
-                break
-
-        # 旧闻检测（event_date 早于3天前）
-        event_date_str = event.get('event_date', '')
-        if event_date_str:
-            try:
-                ed = self._date_from_str(event_date_str)
-                if ed is not None:
-                    delta = (datetime.now().date() - ed).days
-                    if delta > 3:
-                        score *= 0.5
-                    elif delta > 1:
-                        score *= 0.8
-            except Exception:
-                pass
-
-        return max(0.0, min(1.0, score))
-
-    # ══════════════════════════════════════════════════════════
-    # 主入口
-    # ══════════════════════════════════════════════════════════
-
-    def detect_all(self, ts_code: str) -> dict:
-        """全量检测 20 类事件
-
-        Returns:
-            events: 所有检测到的事件列表
-            event_composite_score: -5 ~ +5
-            event_calendar_upcoming: 日历事件（待定）
-            news_quality_score: 0-1
-            catalyst_event: 催化剂事件类型
-            catalyst_impact: 'high'|'medium'|'low'
-            upward_driver: 上涨驱动力类型
-        """
-        # ── 各维度事件检测 ──
-        detectors = [
-            # A 财务
-            ('earnings_surprise', self._detect_earnings_surprise),
-            ('earnings_confirm', self._detect_earnings_confirm),
-            ('report_date', self._detect_report_date),
-            ('dividend', self._detect_dividend),
-            ('fraud_sign', self._detect_fraud_sign),
-            # B 资本运作
-            ('share_float', self._detect_share_float),
-            ('pledge_risk', self._detect_pledge_risk),
-            ('holder_reduce', self._detect_holder_reduce),
-            ('underwater_ipo', self._detect_underwater_ipo),
-            ('buyback', self._detect_buyback),
-            ('incentive', self._detect_incentive),
-            # C 监管
-            ('regulatory', self._detect_regulatory),
-            ('delist_risk', self._detect_delist_risk),
-            ('st_warning', self._detect_st_warning),
-            # D 市场情绪
-            ('longhubang', self._detect_longhubang),
-            ('limit_move', self._detect_limit_move),
-            ('holder_concentration', self._detect_holder_concentration),
-            ('margin_risk', self._detect_margin_risk),
-            # E 特殊
-            ('breakout', self._detect_breakout),
-            ('concept_heat', self._detect_concept_heat),
-        ]
-
-        events: list[dict] = []
-        dim_max: dict[str, int] = {'A': 0, 'B': 0, 'C': 0, 'D': 0, 'E': 0}
-        dim_direction: dict[str, int] = {'A': 0, 'B': 0, 'C': 0, 'D': 0, 'E': 0}
-        quality_scores: list[float] = []
-
-        for event_name, detect_fn in detectors:
-            try:
-                event = detect_fn(ts_code)
-            except Exception as e:
-                logger.warning("事件检测 %s(%s) 异常: %s", event_name, ts_code, e)
-                event = {"detected": False, "direction": 0, "confidence": 0.0,
-                          "source": event_name, "description": "", "event_date": ""}
-
-            if event.get('detected'):
-                # 新闻质量过滤（仅 D1/D2）
-                event_type_key = event_name
-                q = self._news_quality_filter(event_type_key, event)
-                quality_scores.append(q)
-
-                if event_type_key in ('longhubang', 'limit_move'):
-                    if q < 0.3:
-                        # 不进入评分，仅保留展示
-                        event['confidence'] = 0.0
-                    elif q < 0.7:
-                        # 折扣
-                        event['confidence'] *= q
-                        event['description'] += " [质量折扣]"
-
-                events.append({
-                    'event_type': event_name,
-                    **event,
-                })
-
-                # 更新维度极值
-                prefix = _event_dim_prefix(event_name)
-                abs_dir = abs(event['direction'])
-                if abs_dir > abs(dim_max[prefix]):
-                    dim_max[prefix] = abs_dir
-                    dim_direction[prefix] = _direction_to_sign(event['direction'])
-
-        # ── 评分合并 ──
-        max_abs = 0
-        composite_direction = 0
-        for prefix in ['A', 'B', 'C', 'D', 'E']:
-            if dim_max[prefix] > max_abs:
-                max_abs = dim_max[prefix]
-                composite_direction = dim_direction[prefix] if dim_direction[prefix] != 0 else 1
-
-        event_composite_score = composite_direction * max_abs if max_abs > 0 else 0
-
-        # ── 新闻综合质量分 ──
-        news_quality_score = float(np.mean(quality_scores)) if quality_scores else 1.0
-
-        # ── catalyst 判定（取 abs 最大的事件的类型） ──
-        catalyst_event = 'none'
-        catalyst_impact: str = 'low'
-        best_abs = 0
-        for ev in events:
-            if abs(ev.get('direction', 0)) > best_abs:
-                best_abs = abs(ev['direction'])
-                catalyst_event = CATALYST_EVENT_MAP.get(ev.get('event_type', ''), 'none')
-        if best_abs >= 2:
-            catalyst_impact = 'high'
-        elif best_abs >= 1:
-            catalyst_impact = 'medium'
-
-        # ── 上涨驱动力判定（upward_driver, 295号§3.4 标签25） ──
-        if catalyst_event in ('earnings', 'lhb', 'buyback'):
-            upward_driver = 'info_driven'
-        elif catalyst_event in ('breakout',):
-            upward_driver = 'emotion_driven'
-        elif catalyst_event in ('concept',):
-            upward_driver = 'emotion_driven'
-        elif catalyst_event == 'none':
-            upward_driver = 'no_upward'
-        else:
-            upward_driver = 'mixed'
-
-        return {
-            'events': events,
-            'event_composite_score': event_composite_score,
-            'event_calendar_upcoming': [],
-            'news_quality_score': round(news_quality_score, 2),
-            'catalyst_event': catalyst_event,
-            'catalyst_impact': catalyst_impact,
-            'upward_driver': upward_driver,
-        }
-
-    def compute_tags(self, ts_code: str) -> dict:
-        """事件监控标签（供 opportunity_tags_cache 落库使用）"""
-        try:
-            result = self.detect_all(ts_code)
-        except Exception as e:
-            logger.error("EventMonitor.compute_tags(%s) 失败: %s", ts_code, e)
-            return {
-                'catalyst_event': 'none',
-                'catalyst_impact': 'low',
-                'event_composite_score': 0,
-            }
-
-        tags: dict[str, Any] = {
-            'catalyst_event': result['catalyst_event'],
-            'catalyst_impact': result['catalyst_impact'],
-            'event_composite_score': result['event_composite_score'],
-            'upward_driver': result.get('upward_driver', 'no_upward'),
-        }
-
-        # 写事件摘要（最多3条）
-        events = result.get('events', [])
-        if events:
-            event_summaries = []
-            for ev in events[:3]:
-                desc = ev.get('description', '')
-                if desc:
-                    event_summaries.append(desc)
-            if event_summaries:
-                tags['event_summary'] = '; '.join(event_summaries)
-
-        return tags
-
+# === event_monitor.py === 已迁移至独立模块 event_monitor.py（405号建议2+5）
+# dim6 改为从 pre_feat_cache.event 读取 RAW-2 预计算的事件标签
 
 # === cscv_validator.py ===
 def calculate_sharpe(returns: np.ndarray, annual_factor: float = 252.0) -> float:
@@ -1320,6 +456,11 @@ def calculate_sharpe(returns: np.ndarray, annual_factor: float = 252.0) -> float
 
 # ── 主类 ──────────────────────────────────────────────────────────────
 
+
+# ═══════════════════════════════════════════════════════════
+# T48: 独立工具类（不参与dim6 evaluate()路径）
+# CSCVValidator用于策略回测过拟合检测，供backtest模块调用
+# ═══════════════════════════════════════════════════════════
 
 class CSCVValidator:
     """
@@ -1604,15 +745,7 @@ class EagleSwordResonance:
         if trend == "down":
             return "DOWN"
 
-        segments = chanlun_result.get("segments", [])
-        # 平均笔数低 + 无中枢 → RANGING
-        if not segments:
-            return "RANGING"
-
-        zhongshu_list = chanlun_result.get("zhongshu", [])
-        if not zhongshu_list:
-            return "RANGING"
-
+        # 403号Q-03: 非up/down一律返回RANGING
         return "RANGING"
 
     @staticmethod
@@ -1637,7 +770,7 @@ class EagleSwordResonance:
         status = volume_price_signal.get("status_recognition", {})
         trend = status.get("trend", {})
         direction = trend.get("direction", "")
-        ma_stage = trend.get("stage", "")
+        trend.get("stage", "")
         strength_label = trend.get("strength", "")
 
         # 趋势方向和力度
@@ -1939,88 +1072,157 @@ class Dim6RiskEngine(DataAwareMixin):
         self._dm = None
 
     def evaluate(self, dims: dict, tags: dict, signals: dict = None,
-                 lifecycle: dict = None) -> dict:
-        """统一评估入口"""
-        ecm = self._get_dm().cache
+                 lifecycle: dict = None, data_context: dict = None) -> dict:
+        """统一评估入口
+
+        411号Phase 6：优先使用data_context预加载数据，回退独立查询。
+        """
         ts_code = tags.get('ts_code', '')
 
-        # 加载日线数据
-        try:
-            df = ecm.get_cached_daily(ts_code)
-        except Exception:
-            df = None
+        # 411号Phase 6：优先使用data_context
+        if data_context and 'daily_df' in data_context:
+            df = data_context['daily_df']
+        else:
+            ecm = self._get_dm().cache
+            try:
+                df = ecm.get_cached_daily(ts_code)
+            except Exception:
+                df = None
 
         # 1. 风险等级
         l0 = dims.get('l0', {}) if isinstance(dims.get('l0'), dict) else {}
         risk_info = _assess_risk_level(dims, l0, tags)
         risk_factors = _list_risk_factors(tags, dims, l0)
 
-        # 1b. EventMonitor 事件风险检测（28个检测方法 + 商誉暴雷）
+        # 1b. 事件风险检测（405号建议2: 从pre_feat_cache读取RAW-2预计算的事件标签）
         event_risks = []
+        event_results = []
         try:
-            monitor = EventMonitor()
-            em_tags = monitor.compute_tags(ts_code)
-            if em_tags:
-                # 检查事件风险标签
-                for risk_key in EVENT_RISK_SET:
-                    if em_tags.get(risk_key):
-                        event_risks.append({'category': '事件风险', 'factor': risk_key,
-                                            'severity': '高', 'satisfied': True})
-                # 检查商誉暴雷
-                gw = self._detect_goodwill_risk(ts_code)
-                if gw.get('detected'):
-                    event_risks.append({'category': '商誉风险', 'factor': gw.get('description', ''),
+            event_details = tags.get('event_details', [])
+            event_risk_factors_from_tags = tags.get('event_risk_factors', [])
+            event_results = event_details if isinstance(event_details, list) else []
+            if event_risk_factors_from_tags:
+                event_risks.extend(event_risk_factors_from_tags)
+            ce = str(tags.get('catalyst_event', ''))
+            if ce in EVENT_RISK_SET:
+                already = any(r.get('factor') == ce for r in event_risks)
+                if not already:
+                    event_risks.append({'category': '事件风险', 'factor': ce,
                                         'severity': '高', 'satisfied': True})
-                # 如果检测到高风险事件，升级风险等级
-                if event_risks and risk_info['level'] not in ('高', '极高'):
-                    risk_info = {'level': '高', 'light': 'red',
-                                 'detail': f"事件风险：{event_risks[0]['factor']}"}
+            if event_risks and risk_info['level'] not in ('高', '极高'):
+                risk_info = {'level': '高', 'light': 'red',
+                             'detail': f"事件风险：{event_risks[0]['factor']}"}
         except Exception as e:
-            logger.debug(f"EventMonitor检测跳过: {e}")
+            logger.debug("403号Q-05 EventMonitor检测跳过: %s", e)
 
-        # 合并事件风险到风险因素列表
         risk_factors.extend(event_risks)
 
         # 2. 几何化指标
-        geo = calc_geometric(df) if df is not None and not df.empty else {
-            'dist_to_support_pct': None, 'dist_to_resistance_pct': None,
-            'risk_reward': None, 'signal_days': None, 'support_price': None, 'resistance_price': None,
-        }
+        # 411号Phase 9：优先从tags读取预计算risk_ext，回退raw计算
+        _geo_precomputed = all(tags.get(k) is not None for k in ('support_price', 'resistance_price', 'risk_reward'))
+        if _geo_precomputed:
+            geo = {
+                'support_price': tags.get('support_price'),
+                'resistance_price': tags.get('resistance_price'),
+                'dist_to_support_pct': tags.get('dist_to_support_pct'),
+                'dist_to_resistance_pct': tags.get('dist_to_resistance_pct'),
+                'risk_reward': tags.get('risk_reward'),
+                'signal_days': tags.get('signal_days'),
+                'dist_to_prev_high_pct': tags.get('dist_to_prev_high_pct'),
+            }
+        else:
+            geo = calc_geometric(df) if df is not None and not df.empty else {
+                'dist_to_support_pct': None, 'dist_to_resistance_pct': None,
+                'risk_reward': None, 'signal_days': None, 'support_price': None, 'resistance_price': None,
+            }
 
         # 3. 盈亏比
         rr_info = _assess_rr(geo)
 
         # 4. 波动率
-        vol_info = _calc_volatility(df, tags)
+        # 411号Phase 9：优先从tags读取预计算波动率，回退raw计算
+        _vol_precomputed = tags.get('atr_14d') is not None
+        if _vol_precomputed:
+            vol_info = {
+                'atr_14d': float(tags.get('atr_14d', 0)),
+                'atr_pct': float(tags.get('atr_pct', 0)),
+                'level': str(tags.get('volatility_level', 'unknown')),
+                'percentile': float(tags.get('volatility_percentile', 0.5)),
+            }
+        else:
+            vol_info = _calc_volatility(df, tags)
 
         # 5. 失效条件
         invalidation = _build_invalidation(geo.get('support_price'), tags, dims)
 
         # 6. status_description
         plain = _risk_plain(risk_info['level'], risk_factors, geo, rr_info, vol_info, invalidation)
+
+        risk_evidence_parts = []
+        risk_evidence_parts.append(f"风险等级={risk_info['level']}({risk_info['detail']})")
+        if geo.get('support_price'):
+            risk_evidence_parts.append(f"防守位={geo['support_price']}元(距{geo.get('dist_to_support_pct', '无')}%)")
+        if geo.get('resistance_price'):
+            risk_evidence_parts.append(f"压力位={geo['resistance_price']}元(距{geo.get('dist_to_resistance_pct', '无')}%)")
+        if rr_info.get('rr_value'):
+            risk_evidence_parts.append(f"盈亏比={rr_info['rr_value']}({rr_info['rr_level']})")
+        risk_evidence_parts.append(f"波动率={vol_info['level']}(ATR={vol_info['atr_14d']:.2f},分位{vol_info['percentile']:.0%})" if vol_info['atr_14d'] > 0 else f"波动率={vol_info['level']}")
+        active_factors = [f for f in risk_factors if f.get('satisfied') and f.get('severity') in ('高', '极高')]
+        if active_factors:
+            risk_evidence_parts.append(f"高风险因素={'+'.join(f['factor'] for f in active_factors)}")
+        if event_results:
+            event_descs = [e.get('description', '') for e in event_results[:3] if e.get('description')]
+            if event_descs:
+                risk_evidence_parts.append(f"事件={'; '.join(event_descs)}")
+        risk_evidence = '；'.join(risk_evidence_parts)
+
+        event_details_out = []
+        for ev in event_results[:5]:
+            event_details_out.append({
+                'event_type': ev.get('event_type', ''),
+                'description': ev.get('description', ''),
+                'direction': ev.get('direction', 0),
+                'confidence': ev.get('confidence', 0),
+                'event_date': ev.get('event_date', ''),
+            })
+
         status_description = {
-            'risk_level': f"{risk_info['level']}（{risk_info['detail']}）",
+            'risk_level': risk_info['level'],
+            'risk_detail': risk_info['detail'],
+            'risk_light': risk_info['light'],
             'risk_factors': [f"{f['category']}：{f['factor']}（{f['severity']}）"
                              for f in risk_factors if f.get('satisfied')],
-            'support_resistance': f"防守位{geo.get('support_price', '无')}元（距现价{geo.get('dist_to_support_pct', '无')}），压力位{geo.get('resistance_price', '无')}元（距现价{geo.get('dist_to_resistance_pct', '无')}）",
+            'support_price': geo.get('support_price'),
+            'resistance_price': geo.get('resistance_price'),
+            'dist_to_support_pct': geo.get('dist_to_support_pct'),
+            'dist_to_resistance_pct': geo.get('dist_to_resistance_pct'),
             'dist_to_prev_high_pct': geo.get('dist_to_prev_high_pct'),
+            'rr_value': rr_info.get('rr_value'),
+            'rr_level': rr_info['rr_level'],
             'rr_assessment': rr_info['rr_assessment'],
-            'volatility': f"波动率{vol_info['level']}（ATR={vol_info['atr_14d']:.2f}，历史分位{vol_info['percentile']:.0%}）" if vol_info['atr_14d'] > 0 else f"波动率{vol_info['level']}",
+            'volatility_level': vol_info['level'],
+            'atr_14d': vol_info['atr_14d'],
+            'atr_pct': vol_info['atr_pct'],
+            'volatility_percentile': vol_info['percentile'],
             'signal_days': geo.get('signal_days'),
             'invalidation': [item['condition'] for item in invalidation],
+            'event_count': len(event_results),
+            'event_details': event_details_out,
+            'event_summary': [e.get('description', '') for e in event_results[:5] if e.get('description')],
+            'risk_evidence': risk_evidence,
             'plain': plain,
+            'support_resistance': f"防守位{geo.get('support_price', '无')}元（距现价{geo.get('dist_to_support_pct', '无')}），压力位{geo.get('resistance_price', '无')}元（距现价{geo.get('dist_to_resistance_pct', '无')}）",
         }
 
-        # 7. judgment
         judgment = {
             'level': risk_info['level'],
+            'risk_level': risk_info['level'],
             'light': risk_info['light'],
             'overall_light': risk_info['light'],
             'overall_direction': -1 if risk_info['level'] in ('高', '极高') else (1 if risk_info['level'] in ('低',) else 0),
-            'continuous_value': round(min(rr_info.get('rr_value', 0) / 3.0, 1.0), 4) if rr_info.get('rr_value') else 0.5,  # P2: 盈亏比 [0,3+]→[0,1]
+            'continuous_value': round(min(rr_info.get('rr_value', 0) / 3.0, 1.0), 4) if rr_info.get('rr_value') else 0.5,
         }
 
-        # 8. audit
         conditions = [
             {'name': '风险等级', 'satisfied': risk_info['level'] in ('低', '中'),
              'actual': risk_info['level'], 'threshold': '低或中'},

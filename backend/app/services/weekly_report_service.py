@@ -11,12 +11,11 @@
 
 定时任务入口：scheduler.py → run_weekly_report()
 """
-import os
 import logging
+import os
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
-from datetime import date, timedelta, datetime
 
-from app import db
 from app.models.verification import SignalRecord, VirtualPosition
 
 logger = logging.getLogger(__name__)

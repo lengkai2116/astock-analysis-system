@@ -2,9 +2,11 @@
 K线重采样 API 路由 — 151-P3-3
 """
 import logging
-from app.utils.error_handlers import handle_exceptions
-from flask import Blueprint, request, jsonify
+
+from flask import Blueprint, jsonify, request
+
 from app.data.kline_resampler import KlineResampler
+from app.utils.error_handlers import handle_exceptions
 
 logger = logging.getLogger(__name__)
 kline_resampler_bp = Blueprint('kline_resampler', __name__)

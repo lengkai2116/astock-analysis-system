@@ -9,13 +9,14 @@
   4. MarketCapAdapter — 市值适配（不同市值不同参数集）
   5. CircuitBreaker — 熔断规则（大盘单日跌幅>5%触发）
 """
-from typing import Dict, Optional, Tuple
-from datetime import datetime, date
-import pandas as pd
-import numpy as np
+from datetime import date, datetime
+from typing import Dict, Optional
 
-from app.services.benchmark_service import BenchmarkService, BenchmarkIndex
+import numpy as np
+import pandas as pd
+
 from app.data import DataManager
+from app.services.benchmark_service import BenchmarkIndex, BenchmarkService
 
 
 class MarketEnvironmentFilter:
@@ -187,7 +188,7 @@ class CircuitBreaker:
 
         # 最近5日数据
         recent_pct = pct_chg[-5:]
-        recent_closes = closes[-5:]
+        closes[-5:]
 
         # 规则1：单日跌幅>5%
         latest_pct = recent_pct[-1] if not np.isnan(recent_pct[-1]) else 0
@@ -421,7 +422,7 @@ class MarketCapAdapter:
 class ChipPreFilter:
     """
     筹码策略前置过滤器（主入口）
-    
+
     按书本第0层-第9章的过滤逻辑，串联所有前置检查。
     输出一个统一的过滤结果，供后续策略模块使用。
     """
@@ -567,7 +568,7 @@ class ChipPreFilter:
 class FinancialRiskFilter:
     """
     财务风险过滤器 — 覆盖六大禁区
-    
+
     六大禁区：
       1. 业绩雷：净利润连续2年下滑或亏损
       2. 退市雷：ST/*ST/退市预警
@@ -575,7 +576,7 @@ class FinancialRiskFilter:
       4. 监管雷：被证监会立案调查/行政处罚
       5. 行业雷：行业政策风险（如双减/房地产三条红线）
       6. 流动性雷：日均成交额<500万（补充 LiquidityFilter）
-    
+
     注：完整财务数据依赖 Tushare fina_vip 接口（需>=5000积分），
     当前在有限数据下优先使用 daily_basic 已有字段做初步过滤。
     """
@@ -829,10 +830,10 @@ class FinancialRiskFilter:
 class ROCEIndicator:
     """
     ROCE（资本回报率）指标接入
-    
+
     ROCE = EBIT / (总资产 - 流动负债)
     用于评估公司资本使用效率。
-    
+
     数据来源：Tushare fina_vip（需>=5000积分），当前为占位实现。
     可用的替代数据源：akshare 财务指标接口。
     """

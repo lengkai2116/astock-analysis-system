@@ -3,12 +3,15 @@
 根因：data_daemon.py:2010-2012 —— 只要有事件（含负面 fraud_sign）就 🟡，
 无法区分正负向。修复后按 307号§3.1.9 三态：正向🟢/负向🔴/无⚪。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)
 
 import importlib.util
+
 import pytest
 
 _MODULE_PATH = os.path.join(os.path.dirname(__file__), '..', 'data_daemon.py')

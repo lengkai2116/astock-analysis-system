@@ -1,10 +1,13 @@
-from app import db
 from datetime import datetime
-from sqlalchemy import DECIMAL, JSON, UniqueConstraint, CheckConstraint
+
+from sqlalchemy import DECIMAL, JSON, CheckConstraint, UniqueConstraint
+
+from app import db
+
 
 class Stock(db.Model):
     __tablename__ = 'stocks'
-    
+
     ts_code = db.Column(db.String(10), primary_key=True)
     symbol = db.Column(db.String(10), nullable=False, unique=True)
     name = db.Column(db.String(50), nullable=False)
@@ -13,7 +16,7 @@ class Stock(db.Model):
     list_date = db.Column(db.Date)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now)
-    
+
     def to_dict(self):
         return {
             'ts_code': self.ts_code,
@@ -28,7 +31,7 @@ class Stock(db.Model):
 
 class Signal(db.Model):
     __tablename__ = 'signals'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     ts_code = db.Column(db.String(10), nullable=False)
     signal_date = db.Column(db.DateTime, default=datetime.now)
@@ -42,7 +45,7 @@ class Signal(db.Model):
     status = db.Column(db.String(20), default='pending')
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -62,7 +65,7 @@ class Signal(db.Model):
 
 class Holding(db.Model):
     __tablename__ = 'holdings'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     ts_code = db.Column(db.String(10), nullable=False)
     buy_date = db.Column(db.Date)
@@ -73,7 +76,7 @@ class Holding(db.Model):
     status = db.Column(db.String(20), default='holding')
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -94,7 +97,7 @@ class Holding(db.Model):
 
 class TechnicalIndicator(db.Model):
     __tablename__ = 'technical_indicators'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     ts_code = db.Column(db.String(10), nullable=False)
     trade_date = db.Column(db.Date, nullable=False)
@@ -114,11 +117,11 @@ class TechnicalIndicator(db.Model):
     vol_ma5 = db.Column(DECIMAL(20, 4))
     vol_ma10 = db.Column(DECIMAL(20, 4))
     created_at = db.Column(db.DateTime, default=datetime.now)
-    
+
     __table_args__ = (
         db.UniqueConstraint('ts_code', 'trade_date'),
     )
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -143,7 +146,7 @@ class TechnicalIndicator(db.Model):
 
 class Watchlist(db.Model):
     __tablename__ = 'watchlist'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     ts_code = db.Column(db.String(10), nullable=False)
     sort_order = db.Column(db.Integer, default=0)
@@ -151,11 +154,11 @@ class Watchlist(db.Model):
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now)
-    
+
     __table_args__ = (
         db.UniqueConstraint('user_id', 'ts_code'),
     )
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -168,7 +171,7 @@ class Watchlist(db.Model):
 
 class UserMemory(db.Model):
     __tablename__ = 'user_memory'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, default=1)
     memory_type = db.Column(db.String(50))
@@ -176,11 +179,11 @@ class UserMemory(db.Model):
     memory_value = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now)
-    
+
     __table_args__ = (
         db.UniqueConstraint('user_id', 'memory_type', 'memory_key'),
     )
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -194,7 +197,7 @@ class UserMemory(db.Model):
 
 class Portfolio(db.Model):
     __tablename__ = 'portfolio'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100))
     user_id = db.Column(db.Integer, default=1)
@@ -203,7 +206,7 @@ class Portfolio(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -218,7 +221,7 @@ class Portfolio(db.Model):
 
 class PortfolioHolding(db.Model):
     __tablename__ = 'portfolio_holdings'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     portfolio_id = db.Column(db.Integer, db.ForeignKey('portfolio.id'))
     ts_code = db.Column(db.String(10), nullable=False)
@@ -226,11 +229,11 @@ class PortfolioHolding(db.Model):
     avg_cost = db.Column(DECIMAL(10, 4))
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now)
-    
+
     __table_args__ = (
         db.UniqueConstraint('portfolio_id', 'ts_code'),
     )
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -244,7 +247,7 @@ class PortfolioHolding(db.Model):
 
 class PaperTrade(db.Model):
     __tablename__ = 'paper_trades'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     portfolio_id = db.Column(db.Integer, db.ForeignKey('portfolio.id'))
     ts_code = db.Column(db.String(10), nullable=False)
@@ -254,7 +257,7 @@ class PaperTrade(db.Model):
     amount = db.Column(DECIMAL(20, 4))
     reason = db.Column(db.Text)
     trade_date = db.Column(db.DateTime, default=datetime.now)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -270,8 +273,7 @@ class PaperTrade(db.Model):
 
 
 # P3: 账户交易模型
-from app.models.trade import Trade, AccountSnapshot, AccountCashFlow
-
+from app.models.trade import AccountCashFlow, AccountSnapshot, Trade
 
 # ============================================================
 # 观潮对标新增模型（151-系统能力提升方案 §3.1 / §5.2）
@@ -334,17 +336,21 @@ class Drawing(db.Model):
 from app.models.condition import ConditionRegistry
 
 # ============================================================
-# 系统管理 — system_config + sync_log
+# 阶段五：监控通知 — NotificationRule / Notification / NotificationRuleStats / ReportArchive
 # ============================================================
-
-from app.models.system_config import SystemConfig, SyncLog
+from app.models.notification import (
+    Notification,
+    NotificationRule,
+    NotificationRuleStats,
+    ReportArchive,
+)
 
 # ============================================================
 # 阶段四：复盘中心 — ReviewUnit / PlaybackAccount / PlaybackReport
 # ============================================================
-from app.models.playback import ReviewUnit, PlaybackAccount, PlaybackReport, ReviewConfig
+from app.models.playback import PlaybackAccount, PlaybackReport, ReviewConfig, ReviewUnit
 
 # ============================================================
-# 阶段五：监控通知 — NotificationRule / Notification / NotificationRuleStats / ReportArchive
+# 系统管理 — system_config + sync_log
 # ============================================================
-from app.models.notification import NotificationRule, Notification, NotificationRuleStats, ReportArchive
+from app.models.system_config import SyncLog, SystemConfig

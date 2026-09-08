@@ -3,8 +3,8 @@
 364h Phase 8：统一3个支撑阻力来源，修复resistance逻辑bug。
 """
 from __future__ import annotations
+
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

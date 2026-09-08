@@ -31,6 +31,7 @@ for _k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy'
     os.environ.pop(_k, None)
 
 import logging
+from collections import defaultdict
 import threading
 import time
 from datetime import datetime
@@ -213,7 +214,8 @@ def _do_flush_one(code: str, window: dict, now: datetime):
         from app.data.enhanced_cache_manager import get_ecm_instance
         ecm = get_ecm_instance()
         import pandas as pd
-        ecm._insert_from_df('minute_kline_cache', pd.DataFrame([bar]))
+        # 414号P2.4: 使用cache_minute_kline确保走_write_lock
+        ecm.cache_minute_kline(pd.DataFrame([bar]))
     except Exception:
         pass
 
@@ -242,8 +244,9 @@ def _is_trading_time() -> bool:
 def _is_market_day(dt=None) -> bool:
     """是否为交易日（非周末/节假日）。T25-F3：首次采集仅交易日执行。"""
     try:
-        from app.utils.trading_hours import is_holiday
         from datetime import datetime
+
+        from app.utils.trading_hours import is_holiday
         return not is_holiday(dt or datetime.now())
     except ImportError:
         return True
@@ -275,8 +278,8 @@ def _get_a_share_codes() -> List[str]:
     """
     # 首选：app.db stocks 表（权威全市场 A 股列表）
     try:
-        import sqlite3 as _sqlite3
         import os as _os
+        import sqlite3 as _sqlite3
         # mootdx_collector.py → data → app → backend → 项目根
         _project = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
         _db = _os.path.join(_project, 'data', 'app.db')
@@ -411,7 +414,7 @@ class _SnapshotSourceManager:
 
     def fetch(self, codes: list, name_map: dict) -> list:
         """按主备顺序获取行情，返回 records 列表（空列表=双源均失败）
-        
+
         自动恢复策略：
         - 降级到备用源后，每 RECOVERY_PROBE_INTERVAL 次成功采集，
           主动探测东财一次，恢复后自动切回。
@@ -485,8 +488,8 @@ def _fetch_sina(codes: list, name_map: dict) -> list:
     旧版限 `min(len(codes), 2000)` 导致 SH 代码（索引 12000+）永不触达。
     改为并行全量：147 批 × 4 线程 ≈ 3-5s 覆盖全部 A 股。
     """
-    import urllib.request
     import concurrent.futures
+    import urllib.request
     all_records = []
     batch_size = 100
     max_workers = 4
@@ -831,7 +834,7 @@ def collect_minute_full() -> int:
         return 0
 
     today = datetime.now().strftime('%Y-%m-%d')
-    trade_date = datetime.now().strftime('%Y%m%d')
+    datetime.now().strftime('%Y%m%d')
     codes = _get_a_share_codes()
     if not codes:
         return 0
@@ -859,41 +862,40 @@ def collect_minute_full() -> int:
             raw = client.minutes(symbol=code, dest='/tmp/min_backfill')
             if raw is None or raw.empty:
                 continue
-            # minutes 返回 price/vol/volume，构建 1min OHLC
-            rows = []
-            prev_price = None
-            for _, r in raw.iterrows():
+            # minutes 返回 price/vol/tick数据，414号P1.4: 聚合同一分钟内的tick为1min OHLC
+            ticks_by_minute = defaultdict(list)
+            for idx, r in enumerate(raw.iterrows()):
                 price = float(r.get('price', 0))
                 vol_val = int(r.get('vol', 0))
                 if price == 0:
                     continue
                 # 取 trade_time（分钟索引从 9:30 开始）
-                idx = len(rows)
                 hour = 9 + (idx + 30) // 60
                 minute = (idx + 30) % 60
                 trade_time = f"{today} {hour:02d}:{minute:02d}:00"
-                # high/low 近似：从价格变动范围估算 ±0.1%
-                spread = price * 0.001
-                open_price = prev_price if prev_price else price
-                high_price = max(price, open_price) + spread
-                low_price = min(price, open_price) - spread
+                ticks_by_minute[trade_time].append((price, vol_val))
+
+            rows = []
+            for trade_time, ticks in sorted(ticks_by_minute.items()):
+                prices = [t[0] for t in ticks]
+                vols = [t[1] for t in ticks]
                 rows.append({
                     'ts_code': code,
                     'trade_date': today,
                     'trade_time': trade_time,
                     'freq': '1min',
-                    'open': round(open_price, 2),
-                    'high': round(high_price, 2),
-                    'low': round(max(low_price, 0.01), 2),
-                    'close': round(price, 2),
-                    'volume': vol_val,
-                    'amount': round(price * vol_val, 2),
+                    'open': round(prices[0], 2),
+                    'high': round(max(prices), 2),
+                    'low': round(min(prices), 2),
+                    'close': round(prices[-1], 2),
+                    'volume': sum(vols),
+                    'amount': round(sum(p * v for p, v in ticks), 2),
                 })
-                prev_price = price
 
             if rows:
                 import pandas as pd
-                ecm._insert_from_df('minute_kline_cache', pd.DataFrame(rows))
+                # 414号P2.4: 使用cache_minute_kline确保走_write_lock
+                ecm.cache_minute_kline(pd.DataFrame(rows))
                 total_ok += 1
 
         except Exception as e:

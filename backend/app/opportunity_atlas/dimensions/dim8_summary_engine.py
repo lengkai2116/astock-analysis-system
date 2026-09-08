@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +71,7 @@ def _extract_dim_plain(dim_results: dict, dim_name: str) -> str:
 
 def _extract_dim_audit_confidence(dim_results: dict, dim_name: str) -> float:
     """从维度引擎结果中提取 audit.confidence"""
-    result = dim_results.get(dim_results, {})
+    result = dim_results.get(dim_name, {})
     if result and isinstance(result, dict):
         au = result.get('audit', {})
         return au.get('confidence', 0)
@@ -89,7 +88,7 @@ def _build_eight_dim_summary(dim_results: dict) -> dict:
         'signal': '信号确认',
         'structure': '结构位置',
         'volume_price': '量价健康',
-        'fund_chip': '资金筹码',
+        'chip_fund': '资金筹码',
         'emotion': '情绪环境',
         'risk': '风险边界',
         'valuation': '价值估算',
@@ -114,7 +113,7 @@ DIM_WEIGHTS = {
     'signal': 0.15,
     'structure': 0.20,
     'volume_price': 0.15,
-    'fund_chip': 0.20,
+    'chip_fund': 0.20,
     'emotion': 0.10,
     'risk': 0.15,
     'valuation': 0.05,
@@ -153,7 +152,7 @@ def _detect_conflicts(dim_results: dict) -> list[dict]:
 
     # 1. 结构上升 + 资金派发
     struct_dir = _extract_dim_direction(dim_results, 'structure')
-    chip_phase = _extract_dim_judgment(dim_results, 'fund_chip').get('phase', '')
+    chip_phase = _extract_dim_judgment(dim_results, 'chip_fund').get('phase', '')
     if struct_dir == 1 and chip_phase == 'distributing':
         conflicts.append({
             'dim1': '结构位置', 'dim2': '资金筹码',
@@ -210,14 +209,14 @@ def _derive_status_bar(dim_results: dict, consensus_rate: float,
     """从共识率+方向+冲突→8态状态条"""
     # 综合方向
     directions = []
-    for dim in ['signal', 'structure', 'volume_price', 'fund_chip']:
+    for dim in ['signal', 'structure', 'volume_price', 'chip_fund']:
         directions.append(_extract_dim_direction(dim_results, dim))
 
     pos_count = sum(1 for d in directions if d > 0)
     neg_count = sum(1 for d in directions if d < 0)
 
     risk_light = _extract_dim_light(dim_results, 'risk')
-    emotion_light = _extract_dim_light(dim_results, 'emotion')
+    _extract_dim_light(dim_results, 'emotion')
 
     # 高风险 → 风险警示/看空
     if risk_light == 'red':
@@ -253,9 +252,9 @@ def _generate_text(dim_results: dict, status_bar: str,
     bar_cn = STATUS_BAR_STATES.get(status_bar, status_bar)
 
     # 收集各维plain
-    dim_names = ['signal', 'structure', 'volume_price', 'fund_chip', 'emotion', 'risk', 'valuation']
+    dim_names = ['signal', 'structure', 'volume_price', 'chip_fund', 'emotion', 'risk', 'valuation']
     dim_cn = {'signal': '信号', 'structure': '结构', 'volume_price': '量价',
-              'fund_chip': '资金', 'emotion': '情绪', 'risk': '风险', 'valuation': '估值'}
+              'chip_fund': '资金', 'emotion': '情绪', 'risk': '风险', 'valuation': '估值'}
     parts = []
     for dim in dim_names:
         plain = _extract_dim_plain(dim_results, dim)
@@ -331,7 +330,7 @@ class Dim8SummaryEngine:
         }
 
         # 8. audit（纯整理的稽核：各维输出完整性）
-        dim_names = ['signal', 'structure', 'volume_price', 'fund_chip', 'emotion', 'risk', 'valuation']
+        dim_names = ['signal', 'structure', 'volume_price', 'chip_fund', 'emotion', 'risk', 'valuation']
         conditions = []
         for dim in dim_names:
             has_output = bool(dim_results.get(dim))

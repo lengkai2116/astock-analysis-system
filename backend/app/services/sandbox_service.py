@@ -2,16 +2,15 @@
 策略沙箱服务（222号 Phase 1）
 单策略轻量测试 → 参数变体对比 → 简化绩效输出
 """
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import uuid
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 
-from app.engine.backtest_v2 import AShareBacktestEngine, BacktestConfig, create_default_engine
+import pandas as pd
+
 from app.data import DataManager
+from app.engine.backtest_v2 import AShareBacktestEngine, BacktestConfig
 
 logger = logging.getLogger(__name__)
 

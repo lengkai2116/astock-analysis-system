@@ -3,10 +3,11 @@
 提供异常处理装饰器和通用错误响应
 """
 
-from functools import wraps
-from flask import jsonify
-import traceback
 import logging
+import traceback
+from functools import wraps
+
+from flask import jsonify
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ def handle_exceptions(func):
                 'error': f'服务器内部错误: {str(e)}',
                 'error_type': 'InternalError'
             }), 500
-    
+
     return wrapper
 
 
@@ -75,19 +76,19 @@ def safe_db_operation(func):
                 'error': f'数据库操作失败: {str(e)}',
                 'error_type': 'DatabaseError'
             }), 500
-    
+
     return wrapper
 
 
 class APIException(Exception):
     """自定义API异常"""
-    
+
     def __init__(self, message, status_code=400, error_type='APIException'):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.error_type = error_type
-    
+
     def to_response(self):
         return jsonify({
             'success': False,
@@ -99,11 +100,11 @@ class APIException(Exception):
 def validate_required_params(data, required_params):
     """
     验证必需参数
-    
+
     Args:
         data: 请求数据字典
         required_params: 必需参数列表
-    
+
     Raises:
         APIException: 当参数缺失时
     """

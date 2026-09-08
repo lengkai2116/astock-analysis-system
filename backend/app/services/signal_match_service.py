@@ -7,12 +7,12 @@
   3. 返回匹配详情（信号方向、置信度、价格区间）
 """
 import logging
-from typing import Dict, List, Optional
-from datetime import date, timedelta
+from datetime import timedelta
+from typing import Dict, Optional
 
 from app import db
-from app.models.trade import Trade
 from app.models.strategy import StrategyOutput
+from app.models.trade import Trade
 from app.models.verification import SignalRecord
 
 logger = logging.getLogger(__name__)

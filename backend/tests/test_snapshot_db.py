@@ -2,8 +2,8 @@
 实时快照数据库单元测试（迭代1：实时快照入库）
 测试 EnhancedCacheManager 的 market_snapshot.db 读写功能
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 

@@ -6,13 +6,13 @@
   2. L4 诊断路由改用 dm.cache.get_tags（不再直连 ecm.conn）
   3. 防复发静态守卫：routes/ 与 opportunity_atlas 计算引擎禁止 conn.execute 直连模式
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
 
-import re
 
 
 # ══════════════════════════════════════════════════════════

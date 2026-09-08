@@ -105,6 +105,7 @@ def _ensure_ecm():
     return _ecm
 _last_step_counts = {}  # 371号P0#3：管道步骤成功计数
 _jud_meta_cache = {}  # 371号JUD接入：{ts_code: enriched_meta_dict} 供 treemap_snapshot 读取
+_market_stats_cache = {}  # 411号Phase 10：全市场级统计预计算，供BociasiQuadrantAnalyzer消费
 
 
 # ══════════════════════════════════════════════════════════
@@ -1893,12 +1894,12 @@ def run_daily_sync():
     except Exception as e:
         logger.warning(f"  财务数据同步触发失败: {e}")
 
-    # 分钟K线回填（后台低优，补齐盘中未覆盖的股票）
-    try:
-        threading.Thread(target=_run_minute_backfill, daemon=True).start()
-        logger.info("  分钟K线回填已触发（后台）")
-    except Exception as e:
-        logger.warning(f"  分钟K线回填触发失败: {e}")
+    # 414号R20: 移除v1(Tushare)回填，仅保留v2(mootdx)
+    # try:
+    #     threading.Thread(target=_run_minute_backfill, daemon=True).start()
+    #     logger.info("  分钟K线回填已触发（后台）")
+    # except Exception as e:
+    #     logger.warning(f"  分钟K线回填触发失败: {e}")
 
     # 自选股分钟数据闲时补采（后台低优，使用 mootdx 填充历史数据）
     try:
@@ -1967,7 +1968,8 @@ def _write_factor_signals(codes):
                         'raw_detail': sig,
                     }
                 _ecm.cache_signal_detail(ts_code, result_dict)
-            except Exception:
+            except Exception as e:
+                failed += 1
                 continue
         logger.info(f"因子信号兜底写入完成（{len(codes[:200])} 只）")
     except Exception as e:
@@ -2039,10 +2041,12 @@ def _precompute_preset_combos(codes):
     fpm = FactorPrecomputeManager(_ecm)
     precomputed = 0
     timeout_count = 0
+    # 414号R12/13: 增加per-factor失败统计
+    factor_fail_counts = {}  # {factor_name: count}
     for code in codes:
         try:
             # 327阶段4：单只因子计算超时保护（防止单只卡死拖垮全量）
-            def _factor_one(c=code, _fpm=fpm, _mf=mapped_factors):
+            def _factor_one(c=code, _fpm=fpm, _mf=mapped_factors, _ffc=factor_fail_counts):
                 df = _ecm.get_cached_daily(c)
                 if df is None or len(df) < 30:
                     return 'skip'
@@ -2050,7 +2054,7 @@ def _precompute_preset_combos(codes):
                     try:
                         _fpm.precompute_factor(c, df, en_name)
                     except Exception:
-                        pass
+                        _ffc[en_name] = _ffc.get(en_name, 0) + 1
                 return 'ok'
             r = _run_with_timeout(_factor_one, timeout_sec=30.0,
                                   desc=f"因子 {code}")
@@ -2060,9 +2064,159 @@ def _precompute_preset_combos(codes):
                 precomputed += 1
         except Exception:
             continue
+    # 414号R12/13: 日志增加per-factor失败统计
+    fail_detail = ', '.join(f"{k}:{v}" for k, v in sorted(factor_fail_counts.items(), key=lambda x: -x[1])[:5]) if factor_fail_counts else ''
     logger.info(f"因子预计算完成: {precomputed}/{len(codes)} 只" +
-                (f"，超时跳过 {timeout_count} 只" if timeout_count else ""))
+                (f", 超时 {timeout_count}" if timeout_count else '') +
+                (f", 失败因子: {fail_detail}" if fail_detail else ''))
 
+
+
+def _precompute_market_stats():
+    """411号Phase 10：全市场级统计预计算
+
+    计算BociasiQuadrantAnalyzer所需的6个全市场级指标，写入_market_stats_cache。
+    每日盘后执行一次，避免每只股票重复查询。
+    """
+    global _market_stats_cache
+    _ensure_ecm()
+    try:
+        from datetime import datetime, timedelta
+        conn = _ecm.conn
+        today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        stats = {}
+
+        # 1. MA20强势股占比
+        try:
+            row = conn.execute("""
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN close > SMA_20 THEN 1 ELSE 0 END) as above
+                FROM (
+                    SELECT ts_code, trade_date, close,
+                           AVG(close) OVER (PARTITION BY ts_code ORDER BY trade_date
+                                ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) as SMA_20
+                    FROM daily_cache
+                    WHERE trade_date = ?
+                )
+            """, [today]).fetchone()
+            if row and row[0] and row[0] > 0:
+                stats['ma20_ratio'] = (row[1] or 0) / row[0]
+            else:
+                stats['ma20_ratio'] = 0.5
+        except Exception:
+            stats['ma20_ratio'] = 0.5
+
+        # 2. 换手率分位
+        try:
+            row = conn.execute("SELECT AVG(turnover_rate) FROM daily_basic_cache WHERE trade_date=?", [today]).fetchone()
+            if row and row[0] is not None:
+                avg_turnover = float(row[0])
+                hist = conn.execute("SELECT AVG(turnover_rate) FROM daily_basic_cache WHERE trade_date >= date(?, '-60 days')", [today]).fetchone()
+                hist_avg = float(hist[0]) if hist and hist[0] else avg_turnover
+                stats['turnover_percentile'] = max(0, min(1, avg_turnover / hist_avg)) if hist_avg > 0 else 0.5
+            else:
+                stats['turnover_percentile'] = 0.5
+        except Exception:
+            stats['turnover_percentile'] = 0.5
+
+        # 3. 涨跌停比
+        try:
+            row = conn.execute("""
+                SELECT
+                    SUM(CASE WHEN high_limit = close THEN 1 ELSE 0 END) as up,
+                    SUM(CASE WHEN low_limit = close THEN 1 ELSE 0 END) as down
+                FROM daily_cache d
+                JOIN stk_limit_cache l ON d.ts_code=l.ts_code AND d.trade_date=l.trade_date
+                WHERE d.trade_date = ?
+            """, [today]).fetchone()
+            if row:
+                up = float(row[0] or 0)
+                down = float(row[1] or 0)
+                stats['limit_ratio'] = max(0.1, up / max(down, 1))
+            else:
+                stats['limit_ratio'] = 1.0
+        except Exception:
+            stats['limit_ratio'] = 1.0
+
+        # 4. RSI中位数分位
+        try:
+            row = conn.execute("SELECT AVG(rsi14) FROM indicator_other WHERE trade_date=? AND rsi14 IS NOT NULL", [today]).fetchone()
+            if row and row[0] is not None:
+                avg_rsi = float(row[0])
+                hist = conn.execute("SELECT AVG(rsi14) FROM indicator_other WHERE trade_date >= date(?, '-60 days') AND rsi14 IS NOT NULL", [today]).fetchone()
+                hist_avg = float(hist[0]) if hist and hist[0] else 50.0
+                stats['rsi_percentile'] = max(0, min(1, (avg_rsi - 30) / 40))
+            else:
+                stats['rsi_percentile'] = 0.5
+        except Exception:
+            stats['rsi_percentile'] = 0.5
+
+        # 5. ERP分位
+        try:
+            row = conn.execute("SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0", [today]).fetchone()
+            if row and row[0] is not None:
+                avg_pe = float(row[0])
+                erp_today = (1 / avg_pe) if avg_pe > 0 else 0
+                hist = conn.execute("SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0", [today]).fetchone()
+                hist_pe = float(hist[0]) if hist and hist[0] else avg_pe
+                erp_hist = (1 / hist_pe) if hist_pe > 0 else 0
+                if erp_hist > 0:
+                    stats['erp_percentile'] = max(0, min(1, erp_today / erp_hist))
+                else:
+                    stats['erp_percentile'] = 0.5
+            else:
+                stats['erp_percentile'] = 0.5
+        except Exception:
+            stats['erp_percentile'] = 0.5
+
+        # 6. 融资余额趋势
+        try:
+            recent = conn.execute("""
+                SELECT trade_date, SUM(rzye) as total
+                FROM margin_cache
+                WHERE trade_date >= ?
+                GROUP BY trade_date ORDER BY trade_date DESC LIMIT 5
+            """, [(datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')]).fetchall()
+            if len(recent) >= 2:
+                latest = float(recent[0][1])
+                oldest = float(recent[-1][1])
+                if oldest > 0:
+                    change_pct = (latest - oldest) / oldest
+                    stats['margin_trend'] = max(0, min(1, 0.5 + change_pct * 10))
+                else:
+                    stats['margin_trend'] = 0.5
+            else:
+                stats['margin_trend'] = 0.5
+        except Exception:
+            stats['margin_trend'] = 0.5
+
+        # 7. PE分位
+        try:
+            row = conn.execute("SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0", [today]).fetchone()
+            if row and row[0] is not None:
+                avg_pe = float(row[0])
+                hist = conn.execute("SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0", [today]).fetchone()
+                hist_pe = float(hist[0]) if hist and hist[0] else avg_pe
+                if hist_pe > 0:
+                    stats['pe_percentile'] = max(0, min(1, avg_pe / hist_pe))
+                else:
+                    stats['pe_percentile'] = 0.5
+            else:
+                stats['pe_percentile'] = 0.5
+        except Exception:
+            stats['pe_percentile'] = 0.5
+
+        stats['computed_at'] = today
+        _market_stats_cache = stats
+        # 414号R8: 持久化到SQLite，daemon重启后可恢复
+        try:
+            _ecm.cache_market_stats(stats)
+        except Exception as e:
+            logger.warning(f"市场级统计持久化失败: {e}")
+        logger.info(f"市场级统计预计算完成: {len(stats)}个指标")
+
+    except Exception as e:
+        logger.warning(f"市场级统计预计算失败: {e}")
 
 
 def _precompute_raw_features(codes):
@@ -2117,7 +2271,6 @@ def _precompute_raw_features(codes):
         from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
         from app.opportunity_atlas.dimensions.shared_vol_ratio import calc_vol_ratio
         # 370号修复：classify_attribute已删除（dim1_signal_engine中有同名函数），此处未使用，移除import
-        from app.opportunity_atlas.signal_decay_detector import detect_decay
 
         # 各引擎初始化
         from app.data import DataManager
@@ -2151,9 +2304,19 @@ def _precompute_raw_features(codes):
                 pass
         logger.info(f"  日线数据加载完成: {len(all_data)}/{len(codes)} 只")
 
-        # 预计算板块热度
+        # 预计算板块热度（v3.0：传递indicator_ma_dict避免dim引擎直接调用DataManager）
         try:
-            sr.compute_all_heat(all_data)
+            indicator_ma_dict = {}
+            for code in all_data.keys():
+                try:
+                    ind_df = _ecm.get_indicators_wide(code)
+                    if ind_df is not None and not ind_df.empty:
+                        ma_cols = [c for c in ind_df.columns if c.startswith('ma')]
+                        if ma_cols:
+                            indicator_ma_dict[code] = ind_df[ma_cols]
+                except Exception:
+                    pass
+            sr.compute_all_heat(all_data, indicator_ma_dict=indicator_ma_dict)
         except Exception:
             pass
 
@@ -2204,6 +2367,9 @@ def _precompute_raw_features(codes):
 
         t0 = time.time()
         succeeded = 0
+        # 414号R9: RAW-2异常统计
+        failed = 0
+        group_failures = {}  # {group_name: count}
         commit_count = 0
         BATCH_SIZE = 500
         trade_date = None
@@ -2320,7 +2486,7 @@ def _precompute_raw_features(codes):
                             'volume_price_fit': _simple.get('volume_price_fit', 'neutral'),
                             'gap_type': _simple.get('gap_type', 'none'),
                             'breakout_attempts': _simple.get('breakout_attempts', 0),
-                            'vol_price_ratio': _simple.get('vol_price_ratio', 1.0),
+                            'volume_ratio': _simple.get('volume_ratio', 1.0),
                         }
                     except Exception as e:
                         logger.warning(f"RAW量价特征失败 [{code}]: {e}")
@@ -2347,7 +2513,7 @@ def _precompute_raw_features(codes):
                     except Exception as e:
                         logger.warning(f"RAW筹码特征失败 [{code}]: {e}")
 
-                # 9. 事件特征（3字段）
+                # 9. 事件特征（5字段，含dim6消费的event_details/event_risk_factors）
                 try:
                     _evt_tags = {}
                     _update_with_event_tags(code, _evt_tags)
@@ -2355,6 +2521,8 @@ def _precompute_raw_features(codes):
                         'catalyst_event': _evt_tags.get('catalyst_event', 'none'),
                         'catalyst_impact': _evt_tags.get('catalyst_impact', 'neutral'),
                         'event_composite_score': _evt_tags.get('event_composite_score', 0),
+                        'event_details': _evt_tags.get('event_details', []),
+                        'event_risk_factors': _evt_tags.get('event_risk_factors', []),
                     }
                 except Exception as e:
                     logger.warning(f"RAW事件特征失败 [{code}]: {e}")
@@ -2392,7 +2560,7 @@ def _precompute_raw_features(codes):
                     _derived['price_position'] = 'low_zone' if _cl.get('buy_sell_point', '') in ('first_buy', 'second_buy') else ('high_zone' if _cl.get('buy_sell_point', '') in ('first_sell', 'second_sell') else 'mid')
                     _derived['support_resistance'] = _depth_f.get('support_resistance', '{}')
                     # 风险维
-                    _derived['volatility_level'] = _vp_f.get('vol_price_ratio', 1.0) and ('high' if abs(float(_vp_f.get('vol_price_ratio', 1.0) or 1) - 1) > 0.5 else 'low')
+                    _derived['volatility_level'] = _vp_f.get('volume_ratio', 1.0) and ('high' if abs(float(_vp_f.get('volume_ratio', 1.0) or 1) - 1) > 0.5 else 'low')
                     _derived['risk_level'] = 'HIGH' if _depth_f.get('main_force_phase') == 'shipping' else 'LOW'
                     # 信号确认
                     _derived['right_side_confirm'] = 'strong_confirm' if _cl.get('buy_sell_point', '') in ('first_buy', 'second_buy') and _vp_f.get('volume_price_fit') == 'healthy' else 'unconfirmed'
@@ -2416,6 +2584,23 @@ def _precompute_raw_features(codes):
                         _risk_feat['volatility_percentile'] = _calc_volatility_percentile(df)
                     else:
                         _risk_feat['volatility_percentile'] = None
+                    # 411号Phase 9：几何化指标+波动率预计算
+                    try:
+                        from app.opportunity_atlas.dimensions.dim6_risk_engine import calc_geometric, _calc_volatility
+                        geo = calc_geometric(df)
+                        _risk_feat['support_price'] = geo.get('support_price')
+                        _risk_feat['resistance_price'] = geo.get('resistance_price')
+                        _risk_feat['dist_to_support_pct'] = geo.get('dist_to_support_pct')
+                        _risk_feat['dist_to_resistance_pct'] = geo.get('dist_to_resistance_pct')
+                        _risk_feat['risk_reward'] = geo.get('risk_reward')
+                        _risk_feat['signal_days'] = geo.get('signal_days')
+                        _risk_feat['dist_to_prev_high_pct'] = geo.get('dist_to_prev_high_pct')
+                        vol = _calc_volatility(df, {})
+                        _risk_feat['atr_14d'] = vol.get('atr_14d', 0)
+                        _risk_feat['atr_pct'] = vol.get('atr_pct', 0)
+                        _risk_feat['volatility_level'] = vol.get('level', 'unknown')
+                    except Exception:
+                        pass
                     features['risk_ext'] = _risk_feat
                 except Exception as e:
                     logger.warning(f"RAW风险扩展字段失败 [{code}]: {e}")
@@ -2434,9 +2619,117 @@ def _precompute_raw_features(codes):
                     _chip_fund_feat['chip_transfer'] = _depth_f.get('main_force_phase', 'unknown') if _depth_f.get('main_force_phase') in ('accumulating', 'shipping') else 'neutral'
                     # control_degree: 控盘度
                     _chip_fund_feat['control_degree'] = _depth.get('hold_float_ratio')
+                    # 411号Phase 7：筹码指标预计算（SSRP/ASR/concentration/profit_ratio/cyqkl）
+                    try:
+                        chip_bins = cde.estimate(df)
+                        if chip_bins is not None:
+                            from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import ChipIndicators
+                            ci = ChipIndicators()
+                            current_price = float(df['close'].values[-1])
+                            chip_result = ci.calculate_all_indicators(
+                                chip_bins, current_price, kline_data=df, ts_code=code) or {}
+                            _chip_fund_feat['ssrp'] = chip_result.get('ssrp')
+                            _chip_fund_feat['asr'] = chip_result.get('asr')
+                            _chip_fund_feat['concentration'] = chip_result.get('concentration')
+                            _chip_fund_feat['profit_ratio'] = chip_result.get('profit_ratio')
+                            _chip_fund_feat['cyqkl'] = chip_result.get('cyqkl')
+                            _chip_fund_feat['rsi'] = chip_result.get('rsi')
+                    except Exception:
+                        pass
                     features['chip_fund_ext'] = _chip_fund_feat
                 except Exception as e:
                     logger.warning(f"RAW资金筹码扩展字段失败 [{code}]: {e}")
+
+                # 15. 411号Phase 8：5日资金聚合预计算
+                try:
+                    _fund_5d_feat = {}
+                    try:
+                        mf_df = dm.get_cached_moneyflow(code)
+                        if mf_df is not None and not mf_df.empty and len(mf_df) >= 5:
+                            net_lg = mf_df['net_lg_amount'].dropna().astype(float)
+                            if len(net_lg) >= 5:
+                                net_5d = float(net_lg.iloc[-5:].sum())
+                                _fund_5d_feat['net_lg_5d'] = net_5d
+                                pos_count = int((net_lg.iloc[-5:] > 0).sum())
+                                _fund_5d_feat['net_lg_5d_positive_ratio'] = pos_count / 5.0
+                                # 连续流入天数
+                                consecutive = 0
+                                for v in reversed(net_lg.values):
+                                    if v > 0:
+                                        consecutive += 1
+                                    else:
+                                        break
+                                _fund_5d_feat['net_lg_5d_consecutive'] = consecutive
+                    except Exception:
+                        pass
+                    features['fund_5d_ext'] = _fund_5d_feat
+                except Exception as e:
+                    logger.debug(f"RAW 5日资金聚合失败 [{code}]: {e}")
+
+                # 16. 411号Phase 11：估值指标预计算
+                try:
+                    _val_feat = {}
+                    try:
+                        # PE/PB/PS历史分位、FCF收益率、YoY增长率等
+                        # 从daily_basic_cache读取当前PE/PB/PS
+                        db_df = dm.get_cached_daily_basic(code)
+                        if db_df is not None and not db_df.empty:
+                            latest = db_df.iloc[-1]
+                            _val_feat['pe_ttm'] = float(latest.get('pe_ttm', 0) or 0)
+                            _val_feat['pb'] = float(latest.get('pb', 0) or 0)
+                            _val_feat['ps_ttm'] = float(latest.get('ps_ttm', 0) or 0)
+                            _val_feat['total_mv'] = float(latest.get('total_mv', 0) or 0)
+                    except Exception:
+                        pass
+                    # 财务健康指标
+                    try:
+                        fina_df = dm.get_cached_fina_indicator(code)
+                        if fina_df is not None and not fina_df.empty:
+                            latest_fina = fina_df.iloc[-1]
+                            _val_feat['roe'] = float(latest_fina.get('roe', 0) or 0)
+                            _val_feat['roce'] = float(latest_fina.get('roce', 0) or 0)
+                            _val_feat['grossprofit_margin'] = float(latest_fina.get('grossprofit_margin', 0) or 0)
+                    except Exception:
+                        pass
+                    features['valuation_ext'] = _val_feat
+                except Exception as e:
+                    logger.debug(f"RAW估值指标失败 [{code}]: {e}")
+
+                # 17. 411号Phase 12：成本价预计算
+                try:
+                    _cost_feat = {}
+                    try:
+                        from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import MainForceScorer
+                        mfs = MainForceScorer()
+                        _latest_close = float(df['close'].values[-1]) if len(df) > 0 else 0.0
+                        _cost_feat['main_force_cost'] = mfs._calc_main_force_cost(code, _latest_close) if len(df) >= 20 and code else None
+                        _cost_feat['margin_cost_price'] = mfs._calc_margin_cost_price(code, _latest_close) if code and _latest_close > 0 else None
+                    except Exception:
+                        pass
+                    features['cost_ext'] = _cost_feat
+                except Exception as e:
+                    logger.debug(f"RAW成本价失败 [{code}]: {e}")
+
+                # 18. 411号Phase 13：量指标预计算
+                try:
+                    _vol_feat = {}
+                    if len(df) >= 20:
+                        close = df['close'].astype(float)
+                        vol = df['vol'].astype(float) if 'vol' in df.columns else df['amount'].astype(float)
+                        # 量MA
+                        _vol_feat['vol_ma5'] = float(vol.rolling(5).mean().iloc[-1]) if len(vol) >= 5 else None
+                        _vol_feat['vol_ma10'] = float(vol.rolling(10).mean().iloc[-1]) if len(vol) >= 10 else None
+                        _vol_feat['vol_ma20'] = float(vol.rolling(20).mean().iloc[-1]) if len(vol) >= 20 else None
+                        # 波动率
+                        returns = close.pct_change().dropna()
+                        if len(returns) >= 20:
+                            _vol_feat['volatility_20d'] = float(returns.iloc[-20:].std() * (252 ** 0.5))
+                        # ROC
+                        if len(close) >= 20:
+                            _vol_feat['roc_20'] = float((close.iloc[-1] / close.iloc[-20] - 1) * 100)
+                    features['volume_ext'] = _vol_feat
+                except Exception as e:
+                    logger.debug(f"RAW量指标失败 [{code}]: {e}")
 
                 # 14. 情绪环境扩展字段（365号批次A+B / Phase 4）
                 try:
@@ -2473,7 +2766,8 @@ def _precompute_raw_features(codes):
                     _vp_health_feat['vp_state_type'] = 'fast_line' if '突破' in str(_vp_stage) else ('slow_line' if '回踩' in str(_vp_stage) else 'background')
                     # volume_energy: 量能强度
                     if len(df) >= 5:
-                        _vols = df['volume'].values
+                        _vol_col = 'vol' if 'vol' in df.columns else 'volume'
+                        _vols = df[_vol_col].values
                         _avg5 = float(_vols[-5:].mean()) if len(_vols) >= 5 else float(_vols.mean())
                         _vr = calc_vol_ratio(float(_vols[-1]), _avg5)
                         _vp_health_feat['volume_energy'] = min(1.0, max(0.0, (_vr - 0.5) / 2.0)) if _vr else None
@@ -2497,21 +2791,12 @@ def _precompute_raw_features(codes):
                 except Exception as e:
                     logger.warning(f"RAW结构位置扩展字段失败 [{code}]: {e}")
 
-                # 17. 信号确认扩展字段（365号批次A / Phase 7）
+                # 19. market_stats：全市场级统计（供dim5 BociasiQuadrant消费）
+                # ponytail: market_stats是全市场共享数据，所有股票写入相同值
                 try:
-                    _signal_feat = {}
-                    _signal_feat['signal_attribute'] = _derived.get('right_side_confirm', 'unconfirmed')
-                    # decay_score: 衰减检测
-                    try:
-                        _decay_result = detect_decay(_derived)
-                        _signal_feat['decay_score'] = _decay_result.get('overall_score', 0)
-                    except Exception:
-                        _signal_feat['decay_score'] = None
-                    # resonance_score: 共振评分（占位）
-                    _signal_feat['resonance_score'] = None
-                    features['signal_ext'] = _signal_feat
-                except Exception as e:
-                    logger.warning(f"RAW信号确认扩展字段失败 [{code}]: {e}")
+                    features['market_stats'] = _market_stats_cache if _market_stats_cache else {}
+                except Exception:
+                    features['market_stats'] = {}
 
                 # 写入 pre_feat_cache
                 if features:
@@ -2523,15 +2808,17 @@ def _precompute_raw_features(codes):
                         commit_count = 0
 
             except Exception:
+                failed += 1
                 continue
 
         if commit_count > 0:
             _ecm.conn.commit()
 
         elapsed = time.time() - t0
-        logger.info(f"RAW-2 原料加工完成: {succeeded}/{len(codes)} 只, 耗时 {elapsed:.1f}s"
+        # 414号R9: 增加失败统计日志
+        logger.info(f"RAW-2 原料加工完成: {succeeded}/{len(codes)} 只, 失败 {failed}, 耗时 {elapsed:.1f}s"
                     f", trade_date={trade_date}")
-        _last_step_counts['RAW-2'] = f"{succeeded}/{len(codes)} stocks"
+        _last_step_counts['RAW-2'] = f"{succeeded}/{len(codes)} stocks (fail={failed})"
 
 
 def _add_vp_simple_tags(df, tags):
@@ -3444,8 +3731,10 @@ def _jud_enrich_with_meta(codes: list[str]):
                 try:
                     df = _ecm.get_cached_daily(code)
                     if df is not None and len(df) > 0:
-                        _check_right_side_confirm(
+                        _rsc_result = _check_right_side_confirm(
                             tags.get('opportunity_type', ''), tags, df)
+                        if _rsc_result:
+                            tags.update(_rsc_result)
                 except Exception:
                     pass
 
@@ -4382,6 +4671,12 @@ def _drive_pipeline():
     if not codes:
         return
 
+    # 411号Phase 10：市场级统计预计算（在RAW步骤前执行）
+    try:
+        _precompute_market_stats()
+    except Exception as e:
+        logger.warning(f"市场级统计预计算失败: {e}")
+
     # 373号Batch1：RAW三步真正并行（三步读同一源表写不同表，无数据依赖）
     RAW_STEPS = {'RAW-1': _precompute_indicators, 'RAW-2': _precompute_raw_features, 'RAW-3': _precompute_preset_combos}
     unfinished_raw = [s for s in RAW_STEPS if status.get(s, {}).get('status') != 'done']
@@ -4540,7 +4835,8 @@ def _precompute_indicators(codes):
     for code in codes:
         try:
             df = _ecm.get_cached_daily(code)
-            if df is not None and len(df) >= 30 and mgr.precompute_all_indicators(code, df):
+            # 414号R6: 阈值从30提高到60，确保MA60/MACD有效
+            if df is not None and len(df) >= 60 and mgr.precompute_all_indicators(code, df):
                 ok += 1
         except Exception:
             pass
@@ -4740,7 +5036,8 @@ def _batch_backfill_minute_kline(trade_date: str = None):
     _ensure_pd()
     if trade_date is None:
         trade_date = datetime.now().strftime('%Y%m%d')
-    trade_date_fmt = datetime.now().strftime('%Y-%m-%d')
+    # 414号P2.3: 使用传入的trade_date参数而非datetime.now()
+    trade_date_fmt = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
 
     # Step 1: 获取今日有日线数据的股票列表
     try:
@@ -5012,6 +5309,15 @@ def main():
     from app.data.enhanced_cache_manager import get_ecm_instance
     _ecm = get_ecm_instance()
     logger.info("ECM 就绪（全局单例）")
+
+    # 414号R8: 启动时从SQLite恢复市场级统计缓存
+    global _market_stats_cache
+    try:
+        _market_stats_cache = _ecm.get_cached_market_stats() or {}
+        if _market_stats_cache:
+            logger.info(f"从SQLite恢复市场级统计缓存: {len(_market_stats_cache)}个指标")
+    except Exception as e:
+        logger.warning(f"恢复市场级统计缓存失败: {e}")
 
     # 356号方案：初始化分库管理器（指向正确的 data 目录）
     from app.data.sharding_manager import init_sharding

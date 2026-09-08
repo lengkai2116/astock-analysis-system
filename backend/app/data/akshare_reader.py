@@ -17,9 +17,7 @@ AkshareDataReader — AKShare 盘中数据全局读取接口
 import logging
 import threading
 from datetime import datetime
-from typing import List, Dict, Optional, Any
-
-import pandas as pd
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 

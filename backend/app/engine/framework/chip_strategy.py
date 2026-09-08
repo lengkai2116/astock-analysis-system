@@ -1,20 +1,20 @@
 import logging
+
 """
 筹码分布策略 - 模块化实现
 参考 Algorithm Framework 的设计
 """
-from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
-import pandas as pd
+from typing import Any, Dict, List, Optional
+
 import numpy as np
+import pandas as pd
 
 from . import (
-    UniverseSelectionModel,
     AlphaModel,
-    PortfolioConstructionModel,
+    Insight,
     RiskManagementModel,
-    ExecutionModel,
-    Insight
+    UniverseSelectionModel,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class ChipUniverseSelectionModel(UniverseSelectionModel):
     筹码分布股票池选择模型
     筛选出具备主力资金条件的股票
     """
-    
+
     def __init__(self, lookback_period: int = 120, top_n: int = 50):
         """
         Args:
@@ -33,35 +33,35 @@ class ChipUniverseSelectionModel(UniverseSelectionModel):
         self.lookback_period = lookback_period
         self.top_n = top_n
         self.chip_scorer = ChipScorer()
-    
+
     def select(self, date_time: datetime, data: Any) -> List[str]:
         """
         筛选股票池
-        
+
         Args:
             date_time: 时间戳
             data: 市场数据，格式为 {symbol: DataFrame}
-        
+
         Returns:
             股票代码列表，按分数降序排列
         """
         if not isinstance(data, dict):
             return []
-        
+
         results = []
         for symbol, df in data.items():
             try:
                 if len(df) < 60:
                     continue
-                
+
                 # 计算筹码评分
                 score = self.chip_scorer.score(df)
                 if score > 0:
                     results.append((symbol, score))
-            
+
             except Exception as e:
                 logger.error(f"筛选股票 {symbol} 时出错: {e}")
-        
+
         # 按分数排序，返回前N只
         results.sort(key=lambda x: x[1], reverse=True)
         return [item[0] for item in results[:self.top_n]]
@@ -72,38 +72,38 @@ class ChipAlphaModel(AlphaModel):
     筹码分布信号生成模型
     生成交易信号洞察
     """
-    
+
     def __init__(self, lookback_period: int = 120):
         self.lookback_period = lookback_period
         # 简化实现，移除外部依赖
         self.chip_service = None
         self.chip_indicators = None
-    
+
     def generate_insights(self, data: any) -> List[Insight]:
         """
         生成筹码分布交易信号洞察
-        
+
         Args:
             data: 可以是DataFrame或字典格式的OHLCV数据
-        
+
         Returns:
             洞察信号列表
         """
         insights = []
-        
+
         # 处理不同类型的数据输入
         data_dict = data if isinstance(data, dict) else {'data': data}
-        
+
         for symbol, df in data_dict.items():
             try:
                 if isinstance(df, pd.DataFrame):
                     if df.empty or len(df) < 120:
                         continue
-                    
+
                     # 使用评分器分析
                     scorer = ChipScorer()
                     score = scorer.score(df)
-                    
+
                     # 根据评分生成信号
                     if score >= 7.0:
                         # 高分 - 强力买入
@@ -129,7 +129,7 @@ class ChipAlphaModel(AlphaModel):
                         confidence = min(0.6, (10.0 - score) / 10.0)
                         weight = 0.3
                         reason = f"卖出信号: {symbol} (评分: {score:.2f})"
-                    
+
                     insights.append(
                         Insight(
                             symbol=symbol,
@@ -141,7 +141,7 @@ class ChipAlphaModel(AlphaModel):
                     )
             except Exception as e:
                 logger.error(f"处理 {symbol} 时失败: {e}")
-        
+
         return insights
 
 
@@ -150,8 +150,8 @@ class ChipRiskManagementModel(RiskManagementModel):
     筹码分布风险管理模型
     提供止损止盈和风险控制逻辑
     """
-    
-    def __init__(self, 
+
+    def __init__(self,
                  stop_loss_pct: float = 0.08,  # 止损8%
                  take_profit_pct: float = 0.15,  # 止盈15%
                  max_single_position_pct: float = 0.2,  # 单只股票最大20%仓位
@@ -168,43 +168,43 @@ class ChipRiskManagementModel(RiskManagementModel):
         self.max_single_position_pct = max_single_position_pct
         self.max_total_exposure = max_total_exposure
         self.entry_prices: Dict[str, float] = {}  # 记录入场价格
-    
-    def on_data(self, insights: List[Insight], targets: Dict[str, float], 
+
+    def on_data(self, insights: List[Insight], targets: Dict[str, float],
                 current_portfolio: Dict[str, float]) -> Dict[str, float]:
         """
         应用风险管理规则
-        
+
         Args:
             insights: 洞察信号列表
             targets: 目标仓位
             current_portfolio: 当前持仓 {symbol: position_pct}
-        
+
         Returns:
             调整后的目标仓位
         """
         adjusted_targets = targets.copy()
-        
+
         # 1. 检查止损止盈
         for symbol, entry_price in self.entry_prices.items():
             if symbol not in current_portfolio:
                 continue
-            
+
             # 这里简化实现，实际需要获取当前价格
             # 假设通过某种方式获取当前价格，这里简化逻辑
             position = current_portfolio.get(symbol, 0)
-            
+
             if position != 0:
                 # 有持仓的情况下，检查是否需要止损或止盈
                 # 这里需要真实的价格数据，暂时简化逻辑
                 pass
-        
+
         # 2. 控制单只股票最大仓位
         for symbol, target in adjusted_targets.items():
             if target > self.max_single_position_pct:
                 adjusted_targets[symbol] = self.max_single_position_pct
             elif target < -self.max_single_position_pct:
                 adjusted_targets[symbol] = -self.max_single_position_pct
-        
+
         # 3. 控制总仓位风险
         total_exposure = sum(abs(t) for t in adjusted_targets.values())
         if total_exposure > self.max_total_exposure:
@@ -212,13 +212,13 @@ class ChipRiskManagementModel(RiskManagementModel):
             scale_factor = self.max_total_exposure / total_exposure
             for symbol in adjusted_targets:
                 adjusted_targets[symbol] *= scale_factor
-        
+
         return adjusted_targets
-    
+
     def set_entry_price(self, symbol: str, price: float):
         """记录入场价格"""
         self.entry_prices[symbol] = price
-    
+
     def clear_entry_price(self, symbol: str):
         """清仓时移除价格记录"""
         if symbol in self.entry_prices:
@@ -382,7 +382,7 @@ class MainForceScorer:
 
     =================================================================
     设计理念：L2 的目标是识别「市场主力资金正在关注的股票」。
-    
+
     主力资金的典型行为特征：
       1. 大单持续净流入（资金流向）
       2. 低位吸筹（价平量增，窄幅震荡）
@@ -526,7 +526,7 @@ class MainForceScorer:
         try:
             indicators = self._chip_indicators or {}
             asr = indicators.get('asr') or indicators.get('ASR')
-            concentration = indicators.get('concentration')
+            indicators.get('concentration')
             if asr is not None:
                 asr_val = float(asr)
                 if asr_val > 70:
@@ -652,7 +652,6 @@ class MainForceScorer:
         ma_20 = np.mean(closes[-20:])
         ma_60 = np.mean(closes[-60:]) if len(closes) >= 60 else closes[-1]
         bull_market = ma_5 > ma_20 > ma_60
-        bear_market = ma_5 < ma_20 < ma_60
 
         # ── 拉升阶段 (2.5-3分) — 价涨量增 + 多头排列
         if bull_market and vol_ratio_5_20 >= 1.1:
@@ -1012,7 +1011,6 @@ class MainForceScorer:
             #   buy_lg_amount / buy_elg_amount: 万元（需×10000转元）
             has_lg_vol = 'buy_lg_vol' in recent.columns
             has_lg_amt = 'buy_lg_amount' in recent.columns
-            has_elg_amt = 'buy_elg_amount' in recent.columns
 
             if has_lg_vol and has_lg_amt:
                 lg_sum_vol = recent['buy_lg_vol'].sum() * 100  # 手→股

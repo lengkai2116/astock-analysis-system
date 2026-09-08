@@ -4,7 +4,6 @@
 参考: chan.py CChanConfig 设计，本系统4个配置模块的汇总入口
 """
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 
 @dataclass

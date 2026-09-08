@@ -2,8 +2,9 @@
 GTJA191 - 国泰君安191因子框架
 注：完整的GTJA191因子需要获取详细公式，这里为框架
 """
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from ..base import BaseFactor, FactorParam
 
 
@@ -83,11 +84,11 @@ class GTJA_AMOUNT20(GTJA_Base):
     subcategory = "volume_trend"
     description = "20日成交额移动平均"
     formula = "Amount20 = MA(Close * Volume, 20)"
-    
+
     params = [
         FactorParam("period", 20, "int", 1, 252, "平均周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         amount = data["close"] * data["vol"]
@@ -101,11 +102,11 @@ class GTJA_AMOUNT60(GTJA_Base):
     subcategory = "volume_trend"
     description = "60日成交额移动平均"
     formula = "Amount60 = MA(Close * Volume, 60)"
-    
+
     params = [
         FactorParam("period", 60, "int", 1, 252, "平均周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         amount = data["close"] * data["vol"]
@@ -119,11 +120,11 @@ class GTJA_HL20(GTJA_Base):
     subcategory = "price_volatility"
     description = "20日最高价除以最低价"
     formula = "HL20 = HighestHigh(20) / LowestLow(20)"
-    
+
     params = [
         FactorParam("period", 20, "int", 1, 252, "周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         high_n = data["high"].rolling(window=period).max()
@@ -138,11 +139,11 @@ class GTJA_CORR_VOL10(GTJA_Base):
     subcategory = "volume_price"
     description = "过去10日价格与成交量的相关系数"
     formula = "CorrVol10 = Corr(Close, Volume, 10)"
-    
+
     params = [
         FactorParam("period", 10, "int", 2, 252, "周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data["close"].rolling(window=period).corr(data["vol"])

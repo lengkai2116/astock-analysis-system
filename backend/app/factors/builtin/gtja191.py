@@ -4,8 +4,9 @@ GTJA191因子库 - 国泰君安191因子
 基于国泰君安研报《基于短周期价量特征的多因子选股系统》
 注：完整的GTJA191因子需要获取详细公式，这里为已实现的相对明确的因子
 """
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from ..base import BaseFactor, FactorParam
 
 
@@ -19,9 +20,9 @@ class GTJA001(BaseFactor):
     formula = "ROC6 = (Close / Close_6 - 1) * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 6, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].pct_change(period) * 100
@@ -37,9 +38,9 @@ class GTJA002(BaseFactor):
     formula = "ROC12 = (Close / Close_12 - 1) * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 12, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].pct_change(period) * 100
@@ -55,9 +56,9 @@ class GTJA003(BaseFactor):
     formula = "ROC24 = (Close / Close_24 - 1) * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 24, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].pct_change(period) * 100
@@ -73,9 +74,9 @@ class GTJA004(BaseFactor):
     formula = "MOM5 = Close - Close_5"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 5, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'] - data['close'].shift(period)
@@ -91,9 +92,9 @@ class GTJA005(BaseFactor):
     formula = "MOM10 = Close - Close_10"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 10, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'] - data['close'].shift(period)
@@ -109,9 +110,9 @@ class GTJA006(BaseFactor):
     formula = "MOM20 = Close - Close_20"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 20, "int", 1, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'] - data['close'].shift(period)
@@ -127,9 +128,9 @@ class GTJA007(BaseFactor):
     formula = "VOL5 = MA(Volume, 5)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 5, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['vol'].rolling(window=period).mean()
@@ -145,9 +146,9 @@ class GTJA008(BaseFactor):
     formula = "VOL10 = MA(Volume, 10)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 10, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['vol'].rolling(window=period).mean()
@@ -163,9 +164,9 @@ class GTJA009(BaseFactor):
     formula = "VOL20 = MA(Volume, 20)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 20, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['vol'].rolling(window=period).mean()
@@ -181,9 +182,9 @@ class GTJA010(BaseFactor):
     formula = "VOL_RATIO5 = Volume / MA(Volume, 5)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 5, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         vol_ma = data['vol'].rolling(window=period).mean()
@@ -200,9 +201,9 @@ class GTJA011(BaseFactor):
     formula = "VOL_RATIO10 = Volume / MA(Volume, 10)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 10, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         vol_ma = data['vol'].rolling(window=period).mean()
@@ -219,9 +220,9 @@ class GTJA012(BaseFactor):
     formula = "AMOUNT5 = MA(Close * Volume, 5)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 5, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         amount = data['close'] * data['vol']
@@ -238,9 +239,9 @@ class GTJA013(BaseFactor):
     formula = "AMOUNT20 = MA(Close * Volume, 20)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 20, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         amount = data['close'] * data['vol']
@@ -257,9 +258,9 @@ class GTJA014(BaseFactor):
     formula = "AMOUNT60 = MA(Close * Volume, 60)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 60, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         amount = data['close'] * data['vol']
@@ -276,9 +277,9 @@ class GTJA015(BaseFactor):
     formula = "BIAS5 = (Close - MA5) / MA5 * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 5, "int", 2, 252, "均线周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         ma = data['close'].rolling(window=period).mean()
@@ -295,9 +296,9 @@ class GTJA016(BaseFactor):
     formula = "BIAS10 = (Close - MA10) / MA10 * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 10, "int", 2, 252, "均线周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         ma = data['close'].rolling(window=period).mean()
@@ -314,9 +315,9 @@ class GTJA017(BaseFactor):
     formula = "BIAS20 = (Close - MA20) / MA20 * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 20, "int", 2, 252, "均线周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         ma = data['close'].rolling(window=period).mean()
@@ -333,9 +334,9 @@ class GTJA018(BaseFactor):
     formula = "HL20 = HighestHigh(20) / LowestLow(20)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 20, "int", 1, 252, "周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         high_n = data['high'].rolling(window=period).max()
@@ -353,9 +354,9 @@ class GTJA019(BaseFactor):
     formula = "HL10 = HighestHigh(10) / LowestLow(10)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 10, "int", 1, 252, "周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         high_n = data['high'].rolling(window=period).max()
@@ -373,9 +374,9 @@ class GTJA020(BaseFactor):
     formula = "STD5 = STD(Close, 5)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 5, "int", 2, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).std()
@@ -391,9 +392,9 @@ class GTJA021(BaseFactor):
     formula = "STD20 = STD(Close, 20)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 20, "int", 2, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).std()
@@ -409,9 +410,9 @@ class GTJA022(BaseFactor):
     formula = "STD60 = STD(Close, 60)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 60, "int", 2, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).std()
@@ -427,9 +428,9 @@ class GTJA023(BaseFactor):
     formula = "CORR_VOL10 = Corr(Close, Volume, 10)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 10, "int", 2, 252, "周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).corr(data['vol'])
@@ -445,9 +446,9 @@ class GTJA024(BaseFactor):
     formula = "CORR_VOL20 = Corr(Close, Volume, 20)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 20, "int", 2, 252, "周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).corr(data['vol'])
@@ -463,9 +464,9 @@ class GTJA025(BaseFactor):
     formula = "RET5 = (Close / Close_5 - 1) * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 5, "int", 1, 252, "收益周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return (data['close'] / data['close'].shift(period) - 1) * 100
@@ -481,9 +482,9 @@ class GTJA026(BaseFactor):
     formula = "RET10 = (Close / Close_10 - 1) * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 10, "int", 1, 252, "收益周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return (data['close'] / data['close'].shift(period) - 1) * 100
@@ -499,9 +500,9 @@ class GTJA027(BaseFactor):
     formula = "RET20 = (Close / Close_20 - 1) * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 20, "int", 1, 252, "收益周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return (data['close'] / data['close'].shift(period) - 1) * 100
@@ -517,9 +518,9 @@ class GTJA028(BaseFactor):
     formula = "RET60 = (Close / Close_60 - 1) * 100"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 60, "int", 1, 252, "收益周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return (data['close'] / data['close'].shift(period) - 1) * 100
@@ -535,23 +536,23 @@ class GTJA029(BaseFactor):
     formula = "VR14 = (UpVol14 + 0.5*FlatVol14) / (DownVol14 + 0.5*FlatVol14)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 14, "int", 2, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         close = data['close']
         vol = data['vol']
-        
+
         up_vol = vol.where(close > close.shift(1), 0)
         down_vol = vol.where(close < close.shift(1), 0)
         flat_vol = vol.where(close == close.shift(1), 0)
-        
+
         up_sum = up_vol.rolling(window=period).sum()
         down_sum = down_vol.rolling(window=period).sum()
         flat_sum = flat_vol.rolling(window=period).sum()
-        
+
         return (up_sum + 0.5 * flat_sum) / (down_sum + 0.5 * flat_sum).replace(0, np.nan)
 
 
@@ -565,23 +566,23 @@ class GTJA030(BaseFactor):
     formula = "VR26 = (UpVol26 + 0.5*FlatVol26) / (DownVol26 + 0.5*FlatVol26)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 26, "int", 2, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         close = data['close']
         vol = data['vol']
-        
+
         up_vol = vol.where(close > close.shift(1), 0)
         down_vol = vol.where(close < close.shift(1), 0)
         flat_vol = vol.where(close == close.shift(1), 0)
-        
+
         up_sum = up_vol.rolling(window=period).sum()
         down_sum = down_vol.rolling(window=period).sum()
         flat_sum = flat_vol.rolling(window=period).sum()
-        
+
         return (up_sum + 0.5 * flat_sum) / (down_sum + 0.5 * flat_sum).replace(0, np.nan)
 
 
@@ -595,9 +596,9 @@ class GTJA031(BaseFactor):
     formula = "MA5 = MA(Close, 5)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 5, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).mean()
@@ -613,9 +614,9 @@ class GTJA032(BaseFactor):
     formula = "MA10 = MA(Close, 10)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 10, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).mean()
@@ -631,9 +632,9 @@ class GTJA033(BaseFactor):
     formula = "MA20 = MA(Close, 20)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 20, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).mean()
@@ -649,9 +650,9 @@ class GTJA034(BaseFactor):
     formula = "MA60 = MA(Close, 60)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 60, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).mean()
@@ -667,9 +668,9 @@ class GTJA035(BaseFactor):
     formula = "EMA5 = EMA(Close, 5)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 5, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].ewm(span=period, adjust=False).mean()
@@ -685,9 +686,9 @@ class GTJA036(BaseFactor):
     formula = "EMA10 = EMA(Close, 10)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 10, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].ewm(span=period, adjust=False).mean()
@@ -703,9 +704,9 @@ class GTJA037(BaseFactor):
     formula = "EMA20 = EMA(Close, 20)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 20, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].ewm(span=period, adjust=False).mean()
@@ -721,9 +722,9 @@ class GTJA038(BaseFactor):
     formula = "EMA60 = EMA(Close, 60)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 60, "int", 1, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].ewm(span=period, adjust=False).mean()
@@ -739,19 +740,19 @@ class GTJA039(BaseFactor):
     formula = "DIF = EMA(Close, 12) - EMA(Close, 26)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("fast_period", 12, "int", 2, 252, "快线周期"),
         FactorParam("slow_period", 26, "int", 2, 252, "慢线周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         fast = self.get_param("fast_period")
         slow = self.get_param("slow_period")
-        
+
         ema_fast = data['close'].ewm(span=fast, adjust=False).mean()
         ema_slow = data['close'].ewm(span=slow, adjust=False).mean()
-        
+
         return ema_fast - ema_slow
 
 
@@ -765,23 +766,23 @@ class GTJA040(BaseFactor):
     formula = "DEA = EMA(DIF, 9)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("fast_period", 12, "int", 2, 252, "快线周期"),
         FactorParam("slow_period", 26, "int", 2, 252, "慢线周期"),
         FactorParam("signal_period", 9, "int", 2, 252, "信号周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         fast = self.get_param("fast_period")
         slow = self.get_param("slow_period")
         signal = self.get_param("signal_period")
-        
+
         ema_fast = data['close'].ewm(span=fast, adjust=False).mean()
         ema_slow = data['close'].ewm(span=slow, adjust=False).mean()
         dif = ema_fast - ema_slow
         dea = dif.ewm(span=signal, adjust=False).mean()
-        
+
         return dea
 
 
@@ -795,23 +796,23 @@ class GTJA041(BaseFactor):
     formula = "HIST = 2 * (DIF - DEA)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("fast_period", 12, "int", 2, 252, "快线周期"),
         FactorParam("slow_period", 26, "int", 2, 252, "慢线周期"),
         FactorParam("signal_period", 9, "int", 2, 252, "信号周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         fast = self.get_param("fast_period")
         slow = self.get_param("slow_period")
         signal = self.get_param("signal_period")
-        
+
         ema_fast = data['close'].ewm(span=fast, adjust=False).mean()
         ema_slow = data['close'].ewm(span=slow, adjust=False).mean()
         dif = ema_fast - ema_slow
         dea = dif.ewm(span=signal, adjust=False).mean()
-        
+
         return 2 * (dif - dea)
 
 
@@ -825,24 +826,24 @@ class GTJA042(BaseFactor):
     formula = "RSI6 = 100 - 100 / (1 + Avg_Gain6 / Avg_Loss6)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 6, "int", 2, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         close = data['close']
-        
+
         delta = close.diff()
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
-        
+
         avg_gain = gain.rolling(window=period).mean()
         avg_loss = loss.rolling(window=period).mean()
-        
+
         avg_loss_safe = avg_loss.where(avg_loss != 0, 1e-10)
         rs = avg_gain / avg_loss_safe
         rsi = 100 - (100 / (1 + rs))
-        
+
         return rsi
 
 
@@ -856,24 +857,24 @@ class GTJA043(BaseFactor):
     formula = "RSI12 = 100 - 100 / (1 + Avg_Gain12 / Avg_Loss12)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 12, "int", 2, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         close = data['close']
-        
+
         delta = close.diff()
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
-        
+
         avg_gain = gain.rolling(window=period).mean()
         avg_loss = loss.rolling(window=period).mean()
-        
+
         avg_loss_safe = avg_loss.where(avg_loss != 0, 1e-10)
         rs = avg_gain / avg_loss_safe
         rsi = 100 - (100 / (1 + rs))
-        
+
         return rsi
 
 
@@ -887,24 +888,24 @@ class GTJA044(BaseFactor):
     formula = "RSI24 = 100 - 100 / (1 + Avg_Gain24 / Avg_Loss24)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 24, "int", 2, 252, "回看周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         close = data['close']
-        
+
         delta = close.diff()
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
-        
+
         avg_gain = gain.rolling(window=period).mean()
         avg_loss = loss.rolling(window=period).mean()
-        
+
         avg_loss_safe = avg_loss.where(avg_loss != 0, 1e-10)
         rs = avg_gain / avg_loss_safe
         rsi = 100 - (100 / (1 + rs))
-        
+
         return rsi
 
 
@@ -918,20 +919,20 @@ class GTJA045(BaseFactor):
     formula = "K = EMA(RSV, M1)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("n", 9, "int", 2, 252, "RSV周期"),
         FactorParam("m1", 3, "int", 2, 50, "K值平滑周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         n = self.get_param("n")
         m1 = self.get_param("m1")
-        
+
         low_n = data['low'].rolling(window=n).min()
         high_n = data['high'].rolling(window=n).max()
         rsv = (data['close'] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-        
+
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         return k
 
@@ -946,25 +947,25 @@ class GTJA046(BaseFactor):
     formula = "D = EMA(K, M2)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("n", 9, "int", 2, 252, "RSV周期"),
         FactorParam("m1", 3, "int", 2, 50, "K值平滑周期"),
         FactorParam("m2", 3, "int", 2, 50, "D值平滑周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         n = self.get_param("n")
         m1 = self.get_param("m1")
         m2 = self.get_param("m2")
-        
+
         low_n = data['low'].rolling(window=n).min()
         high_n = data['high'].rolling(window=n).max()
         rsv = (data['close'] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-        
+
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         d = k.ewm(com=m2-1, adjust=False).mean()
-        
+
         return d
 
 
@@ -978,26 +979,26 @@ class GTJA047(BaseFactor):
     formula = "J = 3 * K - 2 * D"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("n", 9, "int", 2, 252, "RSV周期"),
         FactorParam("m1", 3, "int", 2, 50, "K值平滑周期"),
         FactorParam("m2", 3, "int", 2, 50, "D值平滑周期")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         n = self.get_param("n")
         m1 = self.get_param("m1")
         m2 = self.get_param("m2")
-        
+
         low_n = data['low'].rolling(window=n).min()
         high_n = data['high'].rolling(window=n).max()
         rsv = (data['close'] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-        
+
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         d = k.ewm(com=m2-1, adjust=False).mean()
         j = 3 * k - 2 * d
-        
+
         return j
 
 
@@ -1011,19 +1012,19 @@ class GTJA048(BaseFactor):
     formula = "BOLL_UPPER = MA(Close, N) + K * STD(Close, N)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("period", 20, "int", 2, 252, "平均周期"),
         FactorParam("std_dev", 2.0, "float", 0.1, 5.0, "标准差倍数")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         std_dev = self.get_param("std_dev")
-        
+
         ma = data['close'].rolling(window=period).mean()
         std = data['close'].rolling(window=period).std()
-        
+
         return ma + std_dev * std
 
 
@@ -1037,9 +1038,9 @@ class GTJA049(BaseFactor):
     formula = "BOLL_MID = MA(Close, N)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [FactorParam("period", 20, "int", 2, 252, "平均周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).mean()
@@ -1055,17 +1056,17 @@ class GTJA050(BaseFactor):
     formula = "BOLL_LOWER = MA(Close, N) - K * STD(Close, N)"
     source = "GTJA"
     source_detail = "GTJA191"
-    
+
     params = [
         FactorParam("period", 20, "int", 2, 252, "平均周期"),
         FactorParam("std_dev", 2.0, "float", 0.1, 5.0, "标准差倍数")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         std_dev = self.get_param("std_dev")
-        
+
         ma = data['close'].rolling(window=period).mean()
         std = data['close'].rolling(window=period).std()
-        
+
         return ma - std_dev * std

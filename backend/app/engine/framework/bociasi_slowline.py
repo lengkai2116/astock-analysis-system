@@ -8,10 +8,11 @@ BOCIASI慢线 — 情绪层第二维度
 依赖：需要指数数据和国债收益率数据（Tushare 5000分）
 """
 
+import logging
+from typing import Dict, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-import logging
-from typing import Dict, Optional, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class BociasiSlowLine:
         if df.empty or len(df) < 60:
             return {'signal': 'NEUTRAL', 'confidence': 0.0, 'details': {'error': '数据不足'}}
 
-        latest_close = float(df['close'].iloc[-1])
+        float(df['close'].iloc[-1])
 
         # --- 获取PE数据 ---
         pe_ttm = self._get_pe(df)

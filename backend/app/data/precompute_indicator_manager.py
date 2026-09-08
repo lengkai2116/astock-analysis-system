@@ -6,58 +6,58 @@
 2. 从缓存快速获取指标数据
 3. 支持预计算触发
 """
+import logging
+
 import pandas as pd
-from datetime import datetime
+
 from app.indicators import TechnicalIndicatorEngine
 
-
-
-import logging
 logger = logging.getLogger(__name__)
 class PrecomputeIndicatorManager:
     """
     预计算指标管理器核心类
     """
-    
+
     def __init__(self, cache_manager):
         """
         初始化预计算管理器
-        
+
         Args:
             cache_manager: EnhancedCacheManager实例
         """
         self.cache_manager = cache_manager
         self.engine = TechnicalIndicatorEngine()
-    
+
     def precompute_all_indicators(self, ts_code: str, df: pd.DataFrame, force: bool = False) -> bool:
         """
         预计算所有指标并批量缓存
-        
+
         Args:
             ts_code: 股票代码
             df: 日线数据DataFrame
             force: 是否强制重新计算（忽略已有缓存）
-            
+
         Returns:
             bool: 是否成功完成预计算
         """
-        if len(df) < 30:
+        # 414号R6: 阈值从30提高到60，确保MA60/MACD有效
+        if len(df) < 60:
             return False
-        
+
         try:
             # 计算所有指标
             result = self.engine.calculate_all_indicators(df)
-            
+
             # 写入宽表格式（替代旧 EAV 格式，93% 行数压缩）
             if 'ts_code' not in result.columns:
                 result['ts_code'] = ts_code
             self.cache_manager.cache_indicators_wide(ts_code, result)
-            
+
             return True
         except Exception as e:
             logger.warning(f"预计算指标失败 [{ts_code}]: {e}")
             return False
-    
+
     def compute_win_rates(self, lookahead: int = 5) -> pd.DataFrame:
         """
         计算策略信号的胜率（基于 strategy_signal_detail + daily_cache）

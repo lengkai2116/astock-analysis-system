@@ -8,7 +8,7 @@
 - 实时行情：ECM.as_market_snapshot（仅 market 模式覆盖 pct_change）
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pandas as pd
 from flask import Blueprint, jsonify, request
@@ -318,8 +318,8 @@ def diagnose_stock():
         return jsonify({'success': False, 'error': 'ts_code 格式错误，需要包含 .SH 或 .SZ'}), 400
 
     # 延迟导入 L4CrossValidator（避免循环导入）
-    from app.opportunity_atlas.cross_validate import L4CrossValidator
     from app.data import DataManager
+    from app.opportunity_atlas.cross_validate import L4CrossValidator
 
     # 2026-08-06 合规整改：经 DataManager 网关读取标签（红线5），
     # 原直连 ecm.conn.execute 读 opportunity_tags_cache 属违规

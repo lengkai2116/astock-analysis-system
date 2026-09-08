@@ -5,16 +5,13 @@ Phase 0: 数据库 CRUD + 基础统计
 Phase 1: 模拟执行引擎 + 九维诊断
 Phase 2: 报告系统 + 跨页通信
 """
-import json
 import logging
-import math
-import random
 import threading
-from datetime import datetime, date, timedelta
+from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
 
 from app import db
-from app.models.playback import ReviewUnit, PlaybackAccount, PlaybackReport, ReviewConfig
+from app.models.playback import PlaybackAccount, PlaybackReport, ReviewUnit
 
 logger = logging.getLogger(__name__)
 

@@ -3,17 +3,16 @@
 用于批量预计算和缓存因子
 文件路径：backend/app/data/factor_precompute.py
 """
-import pandas as pd
-import numpy as np
-from datetime import datetime
-from typing import Optional, List, Dict
-
-from app.factors import FactorCalculator, get_factor_registry
-from app.data.enhanced_cache_manager import EnhancedCacheManager
-
-
-
 import logging
+from datetime import datetime
+from typing import Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+
+from app.data.enhanced_cache_manager import EnhancedCacheManager
+from app.factors import FactorCalculator, get_factor_registry
+
 logger = logging.getLogger(__name__)
 class FactorPrecomputeManager:
     """

@@ -4,9 +4,11 @@
 Trade: 用户实盘交易记录（226号方案扩展）
 AccountSnapshot: 每日账户净值快照（资金曲线用）
 """
+from datetime import datetime
+
+from sqlalchemy import DECIMAL, Boolean, Text
+
 from app import db
-from datetime import datetime, date
-from sqlalchemy import DECIMAL, Text, Boolean
 
 
 class Trade(db.Model):

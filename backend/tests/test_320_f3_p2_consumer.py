@@ -5,7 +5,9 @@ F3：_build_p2_signal_summary 从 strategy_signal_detail（P2 预计算）提取
 F4：_build_label_baseline 从 opportunity_tags_cache 构建标签基线（七维红绿灯+关键标签），
     作为九层解读的权威结论对齐源。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)

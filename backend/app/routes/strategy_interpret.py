@@ -2,11 +2,11 @@
 策略输出 AI 解读 API 路由 — 153-P3-1
 """
 import logging
+
+from flask import Blueprint, jsonify, request
+
+from app.services.strategy_ai_interpretation_service import StrategyAIInterpretationService
 from app.utils.error_handlers import handle_exceptions
-from flask import Blueprint, request, jsonify
-from app.services.strategy_ai_interpretation_service import (
-    StrategyAIInterpretationService
-)
 
 logger = logging.getLogger(__name__)
 strategy_interpret_bp = Blueprint('strategy_interpret', __name__)

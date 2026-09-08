@@ -8,12 +8,16 @@
 
 检测器消费 PatternDetector 基类接口，产出统一 PatternResult。
 """
-from typing import List, Optional, Dict
-import pandas as pd
+from typing import Dict, List, Optional
+
 import numpy as np
+import pandas as pd
 
 from app.engine.patterns import (
-    PatternResult, PatternCategory, PatternStage, PatternLevel,
+    PatternCategory,
+    PatternLevel,
+    PatternResult,
+    PatternStage,
 )
 from app.engine.patterns.detectors.base import PatternDetector
 
@@ -114,7 +118,7 @@ class BullishPatternDetector(PatternDetector):
         invalidation: Optional[List[str]] = None,
     ) -> PatternResult:
         """统一构造 PatternResult"""
-        name = self._NAMES.get(code, code)
+        self._NAMES.get(code, code)
         return PatternResult(
             name=code,
             category=PatternCategory.BULLISH_PATTERNS,
@@ -173,7 +177,7 @@ class BullishPatternDetector(PatternDetector):
             completion=50.0,
             conditions=[
                 "最后一根K线为十字星",
-                f"近5日成交量连续递减",
+                "近5日成交量连续递减",
                 f"当前成交量为20日均量的{vol.iloc[-1]/vol_avg*100:.0f}%",
                 f"价格处于近20日低位{price_pos*100:.0f}%位置",
             ],
@@ -347,7 +351,7 @@ class BullishPatternDetector(PatternDetector):
             conditions=[
                 f"MA20上行({ma20_val:.2f})",
                 "近3日低点回踩MA20不破",
-                f"收盘站稳MA20之上",
+                "收盘站稳MA20之上",
                 "近3日成交量低于20日均量（缩量洗盘）",
             ],
             interpretation="上升趋势中缩量回踩重要均线不破，洗盘结束信号",
@@ -565,7 +569,7 @@ class BullishPatternDetector(PatternDetector):
                 "近5~10日前存在缩量回调阶段",
                 "当日为阳线",
                 f"成交量为前3日均量的{vol_ratio*100:.0f}%",
-                f"成交量超过20日均量",
+                "成交量超过20日均量",
             ],
             interpretation="经历缩量回调后首次出现放量阳线，洗盘结束主力重新发力",
             detail={"vol_ratio_vs_prev3": round(vol_ratio, 2)},
@@ -743,7 +747,7 @@ class BullishPatternDetector(PatternDetector):
         # 在近30~60根K线内搜索
         search_len = min(len(df), 60)
         lows_arr = low.iloc[-search_len:].values
-        closes_arr = close.iloc[-search_len:].values
+        close.iloc[-search_len:].values
 
         # 简化W底检测：找近30日中两个局部最低点
         # 策略：先找全局最低点作为第一底，再在之后找第二个近似低点
@@ -996,7 +1000,7 @@ class BullishPatternDetector(PatternDetector):
             return None
 
         # 条件2: 最近5日成交量 > 前期底部5日成交量的1.5倍（右侧放量）
-        vol_bottom = float(vol.iloc[-search_len:min_idx + (-search_len + len(df)) + 1].mean()) if min_idx > 0 else float(vol.iloc[-search_len:-search_len + 5].mean())
+        float(vol.iloc[-search_len:min_idx + (-search_len + len(df)) + 1].mean()) if min_idx > 0 else float(vol.iloc[-search_len:-search_len + 5].mean())
         # 简化：取前半段均量 vs 后半段均量
         vol_left = float(vol.iloc[-search_len:-search_len + min_idx + 1].mean())
         vol_right = float(vol.iloc[-(search_len - min_idx):].mean())
@@ -1134,10 +1138,10 @@ class BullishPatternDetector(PatternDetector):
             stage=PatternStage.CONFIRMING,
             completion=70.0,
             conditions=[
-                f"旗杆: 5日涨幅>8%",
+                "旗杆: 5日涨幅>8%",
                 f"旗面: 近5日振幅{flag_amp*100:.1f}%，量缩",
                 f"突破旗面高点{flag_high:.2f}",
-                f"成交量放大",
+                "成交量放大",
             ],
             interpretation="旗形形态结束后放量向上突破，趋势延续信号",
             levels=PatternLevel(support=flag_low, resistance=float(close.iloc[-1] * 1.05)),

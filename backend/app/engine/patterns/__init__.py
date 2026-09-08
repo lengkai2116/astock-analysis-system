@@ -7,9 +7,9 @@
 映射为可查询、可组合、可追踪的统一 PatternResult。
 """
 
-from enum import Enum
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from enum import Enum
+from typing import Dict, List, Optional
 
 
 class PatternCategory(Enum):

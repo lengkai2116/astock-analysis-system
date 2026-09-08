@@ -6,14 +6,13 @@
   V1: S_DIVERG_SELL/假突破/筹码流动/金字塔建仓 (4方向)
   V2: 资金流向集成/情绪周期/主力测试识别/7种筹码形态/洗盘结束增强 (5方向)
 """
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Optional, Any, Tuple
 import logging
-from datetime import datetime, date
+from typing import Dict, List, Optional
+
+import numpy as np
+import pandas as pd
 
 from app.data.chip_indicators import ChipIndicators
-from app.data.chip_distribution_service import ChipDistributionService
 
 logger = logging.getLogger(__name__)
 
@@ -764,10 +763,9 @@ class ChipDistributionSignalGenerator:
 
         try:
             peaks = self.chip_indicators.find_peak_positions(chip_bins)
-            levels = self.chip_indicators.find_support_resistance_levels(chip_bins)
+            self.chip_indicators.find_support_resistance_levels(chip_bins)
         except Exception:
             peaks = []
-            levels = []
 
         closes = kline_data['close'].values
         volumes = kline_data['vol'].values if 'vol' in kline_data.columns else \
@@ -928,7 +926,7 @@ class ChipDistributionSignalGenerator:
             else:
                 return 0.3
 
-        ok_ratio = ok_count / max(total_conditions, 1)
+        ok_count / max(total_conditions, 1)
         for min_ok in sorted(tier_map.keys()):
             if ok_count >= min_ok:
                 return tier_map[min_ok]

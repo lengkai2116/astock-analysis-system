@@ -1,14 +1,16 @@
 import logging
+
 """
 策略流水线
 为Darwin选择、筹码分布、缠论策略预留完整框架
 借鉴Qlib和Vibe-Trading的策略组合理念
 """
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Optional, Any
 from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +100,7 @@ class ChipDistributionStrategy(BaseStrategy):
             self.strategy_config = config or {}
         if config is None:
             self.lookback_period = self.strategy_config.get('lookback_period', lookback_period)
-        
+
         from ..data.chip_distribution_service import ChipDistributionService
         from ..data.chip_indicators import ChipIndicators
         self.chip_service = ChipDistributionService()
@@ -175,32 +177,32 @@ class ChipDistributionStrategy(BaseStrategy):
             from app.engine.framework.chip_pre_filter import ChipPreFilter
             if not hasattr(self, '_pre_filter'):
                 self._pre_filter = ChipPreFilter()
-            
+
             # 大盘环境过滤（含熔断）
             market_result = self._pre_filter.filter_market()
             result['market_environment'] = market_result
-            
+
             # 熔断检查：LIQUIDATE_ALL 时阻断所有信号
             if market_result['circuit_breaker']['action'] == 'LIQUIDATE_ALL':
                 result['pre_filter_passed'] = False
                 result['pre_filter_reason'] = '熔断: ' + market_result['circuit_breaker']['reason']
                 return result
-            
+
             # 个股过滤
             stock_result = self._pre_filter.filter_stock(ts_code)
             result['stock_filter'] = stock_result
-            
+
             if not stock_result['passed']:
                 result['pre_filter_passed'] = False
                 result['pre_filter_reason'] = '个股过滤未通过: ' + '; '.join(stock_result['reasons'])
                 return result
-            
+
             result['pre_filter_passed'] = True
-            
+
             # 仓位乘数（环境差时整体减仓）
             position_multiplier = market_result['overall_position_multiplier']
             result['position_multiplier'] = position_multiplier
-            
+
         except Exception as e:
             logger.warning(f"PreFilter 执行异常，跳过: {e}")
             result['pre_filter_passed'] = True
@@ -243,14 +245,14 @@ class ChipDistributionStrategy(BaseStrategy):
 
         # ===== Phase 5: 信号生成（含V2主力测试+筹码形态+洗盘结束增强） =====
         signals = self._generate_complete_signals(data, chip_bins, indicators, phase_info, moneyflow_data=moneyflow_data)
-        
+
         # 仓位乘数调节（大盘环境差时整体降低仓位）
         recom = signals.get('recommendation', {})
         if result.get('position_multiplier', 1.0) < 1.0 and recom.get('target_position'):
             recom['original_position'] = recom['target_position']
             recom['target_position'] = round(recom['target_position'] * result['position_multiplier'], 2)
             recom['position_note'] = f"仓位已按大盘环境调节(x{result['position_multiplier']})"
-        
+
         result['signals'] = signals
         result['recommendation'] = recom
 

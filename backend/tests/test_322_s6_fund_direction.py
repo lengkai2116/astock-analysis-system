@@ -5,8 +5,8 @@
 修复：改为有向强度（净流入正 / 净流出负，范围 -1~1）。
 """
 import os
-import sys
 import sqlite3
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
@@ -19,7 +19,6 @@ from app.opportunity_atlas.potential_engine import compute_fund_strength  # noqa
 def test_fund_strength_directional_outflow_negative():
     """净流出股票 → 强度应为负（修复前 abs 抹掉方向得正高分）"""
     # 用真实数据：找一只 5 日净流出且绝对值强度高的股票（bug 高发区）
-    import pathlib
     from app.data.enhanced_cache_manager import EnhancedCacheManager
     ecm = EnhancedCacheManager()
     conn = sqlite3.connect(ecm.db_path)
@@ -44,7 +43,7 @@ def test_fund_strength_directional_outflow_negative():
 
 def test_fund_strength_directional_inflow_positive():
     """净流入股票 → 强度应为正"""
-    import pathlib
+
     from app.data.enhanced_cache_manager import EnhancedCacheManager
     ecm = EnhancedCacheManager()
     conn = sqlite3.connect(ecm.db_path)

@@ -2,9 +2,11 @@
 消息面上下文 API 路由 — 153-P1-3
 """
 import logging
-from app.utils.error_handlers import handle_exceptions
-from flask import Blueprint, request, jsonify
+
+from flask import Blueprint, jsonify, request
+
 from app.data.news_provider import NewsProvider
+from app.utils.error_handlers import handle_exceptions
 
 logger = logging.getLogger(__name__)
 news_bp = Blueprint('news', __name__)

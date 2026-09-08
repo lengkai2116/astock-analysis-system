@@ -21,6 +21,7 @@ L1 实时行情/涨跌榜/涨跌停池已由 mootdx_collector.py TCP 直连替�
 """
 
 import os
+
 # 免发环境变量代理干扰
 for _k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']:
     os.environ.pop(_k, None)
@@ -32,7 +33,6 @@ import logging
 import threading
 import time
 from datetime import datetime
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,6 @@ def _get_ecm():
 
 # 盘中数据内存状态（与 mootdx 共享）
 from app.data.in_memory_store import store as mem_store
-
 
 # ── 分钟 K 线关注列表 ─────────────────────────────────────
 

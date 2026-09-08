@@ -4,7 +4,9 @@
 根因是 _evaluate_gate 用 PE 分位独立判定估值分级，与 valuation_level 两套口径并存。
 修复：估值分级与风险提示统一由 valuation_level 主导；level 低但 PE 分位高 → 盈利下滑提示。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)
@@ -109,7 +111,7 @@ def test_risk_warnings_level_low_pe_high_eps_pos_pb_low(validator):
     warnings = validator._build_risk_warnings(tags, gate, eps_yoy=0.25, pb_pct=25.0)
     val_warnings = [w['content'] for w in warnings if w['type'] == 'valuation']
     assert val_warnings, "应有估值相关说明"
-    joined = ' '.join(val_warnings)
+    ' '.join(val_warnings)
     assert any('困境反转' in w or '盈利改善' in w or '资产端便宜' in w for w in val_warnings), \
         f"EPS 增长+PB 低应输出机会类描述，实际 {val_warnings}"
     assert all('偏高' not in w for w in val_warnings), f"不应报估值偏高，实际 {val_warnings}"
@@ -129,7 +131,7 @@ def test_risk_warnings_level_low_pe_high_eps_pos_pb_high(validator):
     warnings = validator._build_risk_warnings(tags, gate, eps_yoy=0.25, pb_pct=70.0)
     val_warnings = [w['content'] for w in warnings if w['type'] == 'valuation']
     assert val_warnings, "应有估值相关提示"
-    joined = ' '.join(val_warnings)
+    ' '.join(val_warnings)
     assert any('增长' in w and '收缩' in w for w in val_warnings), \
         f"EPS 增长+PB 高应提示估值收缩风险，实际 {val_warnings}"
 

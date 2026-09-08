@@ -17,7 +17,6 @@ import json
 import logging
 import math
 import os
-from typing import Optional
 
 import pandas as pd
 
@@ -161,7 +160,7 @@ def _safe_float(v, default=None):
 # IC 权重重估（313号 §4.2 第三层：维度权重按历史有效性实证）
 # ═══════════════════════════════════════════════════════════
 
-IC_WEIGHTS_FILE = None  # data_daemon 启动时注入（DATA_DIR/ic_weights.json）
+
 
 
 def _spearman(a: list, b: list) -> float:
@@ -181,129 +180,82 @@ def _spearman(a: list, b: list) -> float:
     return cov / (va * vb) if va and vb else 0.0
 
 
-def recompute_ic_weights(ecm, lookback_days: int = 180, horizon: int = 20,
-                         sample_size: int = 500) -> dict:
-    """用历史截面计算各维度 IC，返回归一化权重"""
-    try:
-        dates = ecm._query_shard('daily_cache',
-            "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC "
-            "LIMIT %d" % (lookback_days // 20 * 20 + 1))["trade_date"].tolist()
-        if len(dates) < 30:
-            return dict(POTENTIAL_DIM_WEIGHTS)
-        dates_sorted = sorted(dates)
-        ic_acc = {"val": [], "trend": [], "fund": [], "earn": []}
-        for i in range(0, len(dates_sorted) - horizon - 20, 20):
-            d0 = dates_sorted[i]
-            d10 = dates_sorted[i + horizon] if i + horizon < len(dates_sorted) else None
-            if not d10:
-                continue
-            px = ecm._query_shard('daily_cache', "SELECT ts_code, close FROM daily_cache WHERE trade_date=?", [d0])
-            px10 = ecm._query_shard('daily_cache', "SELECT ts_code, close FROM daily_cache WHERE trade_date=?", [d10])
-            basic = ecm._query_shard('daily_basic_cache', "SELECT ts_code, pe_ttm FROM daily_basic_cache WHERE trade_date=?", [d0])
-            mf = ecm._query_shard('moneyflow_cache', """
-                SELECT ts_code, SUM(net_lg_amount) net5, SUM(buy_lg_amount+sell_lg_amount) tot5
-                FROM (SELECT ts_code, net_lg_amount, buy_lg_amount, sell_lg_amount,
-                      ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) rn
-                      FROM moneyflow_cache WHERE trade_date <= ?) WHERE rn <= 5 GROUP BY ts_code""", [d0])
-            p10_map = dict(zip(px10["ts_code"], px10["close"]))
-            b_map = dict(zip(basic["ts_code"], basic["pe_ttm"]))
-            px_prev = ecm._query_shard('daily_cache', """
-                SELECT ts_code, close FROM (
-                    SELECT ts_code, close, ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) rn
-                    FROM daily_cache WHERE trade_date <= ?) WHERE rn = 21""", [d0])
-            mom_map = dict(zip(px_prev["ts_code"], px_prev["close"]))
-            mf_map = {}
-            for _, r in mf.iterrows():
-                tot = r.get("tot5") or 0
-                if tot > 0:
-                    mf_map[r["ts_code"]] = (r["net5"] or 0) / tot
-            roe_df = ecm._query_shard('fina_indicator_cache', "SELECT ts_code, roe FROM fina_indicator_cache")
-            roe_map = dict(zip(roe_df["ts_code"], roe_df["roe"]))
-            sample = {"val": [], "trend": [], "fund": [], "earn": []}
-            rets = []
-            for _, r in px.iterrows():
-                c = r["close"]
-                c10 = p10_map.get(r["ts_code"])
-                if not c or not c10 or c <= 0:
-                    continue
-                ret = c10 / c - 1
-                rets.append(ret)
-                sample["val"].append(1.0 / b_map[r["ts_code"]] if b_map.get(r["ts_code"]) else None)
-                c0 = r["close"]
-                _prev = mom_map.get(r["ts_code"])
-                sample["trend"].append((c0 / _prev - 1) if _prev and _prev > 0 else None)
-                sample["fund"].append(mf_map.get(r["ts_code"]))
-                sample["earn"].append(roe_map.get(r["ts_code"]))
-            for dim, vals in sample.items():
-                pairs = [(v, rets[j]) for j, v in enumerate(vals) if v is not None]
-                if len(pairs) >= 30:
-                    a = [p[0] for p in pairs]
-                    b = [p[1] for p in pairs]
-                    ic_acc[dim].append(_spearman(a, b))
-            if len(ic_acc["val"]) >= 3:
-                break
-        ic_mean = {}
-        for dim, arr in ic_acc.items():
-            ic_mean[dim] = sum(arr) / len(arr) if arr else 0.0
-        pos_ic = {d: ic for d, ic in ic_mean.items() if ic > 0.05}
-        if not pos_ic:
-            return dict(POTENTIAL_DIM_WEIGHTS)
-        new_w = {}
-        for dim, w0 in POTENTIAL_DIM_WEIGHTS.items():
-            new_w[dim] = pos_ic.get(dim, 0.05)
-        total = sum(new_w.values())
-        new_w = {k: round(v / total, 4) for k, v in new_w.items()}
-        return new_w
-    except Exception as e:
-        logger.warning(f"IC 重估失败: {e}")
-        return dict(POTENTIAL_DIM_WEIGHTS)
 
 
-def load_ic_weights() -> dict:
-    """加载持久化 IC 权重"""
-    import json, os
-    global IC_WEIGHTS_FILE
-    if IC_WEIGHTS_FILE and os.path.exists(IC_WEIGHTS_FILE):
+
+
+
+
+
+import bisect
+
+
+def _adjust_composite(composite: float, fina_health: str, ecm, ts_code: str,
+                      cat: str, df_income, engine) -> float:
+    """composite_rating 的质量调整和营收增长加分逻辑"""
+    qa = QUALITY_ADJUST
+    if fina_health == 'fail':
+        composite -= qa['fail_penalty']
+    elif fina_health == 'pass':
         try:
-            with open(IC_WEIGHTS_FILE, encoding="utf-8") as f:
-                w = json.load(f)
-            if all(k in w for k in POTENTIAL_DIM_WEIGHTS):
-                return w
+            # 413 P3 T14：优先从data_context读取fina_df
+            df_fina = data_context.get('fina_df') if data_context else None
+            if df_fina is None:
+                df_fina = ecm.get_cached_fina_indicator(ts_code)
+        except Exception:
+            df_fina = pd.DataFrame()
+        if df_fina is None:
+            df_fina = pd.DataFrame()
+        if not df_fina.empty and 'roe' in df_fina.columns:
+            roe = df_fina['roe'].dropna()
+            if not roe.empty:
+                roe_v = float(roe.iloc[0] or 0)
+                if roe_v > qa['roe_threshold']:
+                    composite += qa['premium'] * min(1.0, roe_v / qa['roe_norm'])
+    composite = max(-2.0, min(2.0, composite))
+
+    if cat in ('科技', '成长') and not df_income.empty and 'revenue' in df_income.columns:
+        try:
+            growth = engine._revenue_yoy(df_income)
+            if growth is not None and growth > 0.20:
+                composite += 0.2
         except Exception:
             pass
-    return dict(POTENTIAL_DIM_WEIGHTS)
+    return max(-2.0, min(2.0, composite))
 
 
-def save_ic_weights(weights: dict) -> None:
-    """持久化 IC 权重"""
-    import json, os
-    global IC_WEIGHTS_FILE
-    if IC_WEIGHTS_FILE:
-        try:
-            os.makedirs(os.path.dirname(IC_WEIGHTS_FILE), exist_ok=True)
-            with open(IC_WEIGHTS_FILE, "w", encoding="utf-8") as f:
-                json.dump(weights, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.warning(f"IC 权重保存失败: {e}")
+def _build_valuation_plain(level_cn: str, val: dict, strength: int) -> str:
+    """构建估值白话文本"""
+    parts = [f"估值{level_cn}，PE近5年{val.get('pe_percentile_5y') or '无'}%分位"]
+    if val.get('fcf_yield') is not None:
+        parts.append(f"FCF收益率{val['fcf_yield']:.2f}%")
+    if val.get('dividend_yield') is not None:
+        parts.append(f"股息率{val['dividend_yield']:.2f}%")
+    parts.append(f"潜力{strength}/100")
+    return '，'.join(parts)
 
 
-def compute_fund_strength(ecm, ts_code: str) -> float:
-    """5 日主力净流入强度（有向：净流入正/净流出负，范围 -1~1）"""
-    try:
-        mf = ecm._query_shard('moneyflow_cache',
-            "SELECT net_lg_amount, buy_lg_amount, sell_lg_amount FROM ("
-            "  SELECT net_lg_amount, buy_lg_amount, sell_lg_amount, "
-            "    ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) rn "
-            "  FROM moneyflow_cache WHERE ts_code=?) WHERE rn <= 5", [ts_code])
-        if mf.empty:
-            return None
-        net5 = mf["net_lg_amount"].sum()
-        tot5 = mf["buy_lg_amount"].sum() + mf["sell_lg_amount"].sum()
-        if tot5 <= 0:
-            return None
-        return max(-1.0, min(1.0, net5 / tot5))
-    except Exception:
+def _net_profit_col(df) -> str | None:
+    """检测 net_profit_atsopc / net_profit 列名（复用逻辑：4处重复 → 1个helper）"""
+    if df is None or df.empty:
         return None
+    if 'net_profit_atsopc' in df.columns:
+        return 'net_profit_atsopc'
+    if 'net_profit' in df.columns:
+        return 'net_profit'
+    return None
+
+
+def _pe_percentile(df_basic) -> float | None:
+    """计算当前PE在历史中的百分位（复用逻辑：3处重复 → 1个helper）"""
+    if df_basic is None or df_basic.empty or 'pe_ttm' not in df_basic.columns:
+        return None
+    pe = df_basic['pe_ttm'].dropna()
+    pe = pe[pe > 0]
+    if len(pe) < 20:
+        return None
+    return (pe < pe.iloc[-1]).sum() / len(pe) * 100
+
 
 class Dim7ValuationEngine(DataAwareMixin):
     """第7维 价值估算引擎 — 四锚加权估值 + 7维潜力评分"""
@@ -318,28 +270,40 @@ class Dim7ValuationEngine(DataAwareMixin):
     # ── 截面基准构建（供 precompute 调用） ──────────────
 
     def build_composite_percentile(self, ecm) -> None:
-        """构建全市场 composite_rating 截面百分位基准"""
+        """构建全市场 composite_rating 截面百分位基准（B1修复：通过DataManager读取）"""
         try:
-            import bisect
-            rows = ecm._query_shard('opportunity_tags_cache',
-                "SELECT DISTINCT ts_code, tag_value FROM opportunity_tags_cache "
-                "WHERE tag_name='composite_rating' AND tag_value IS NOT NULL AND tag_value != '' "
-                "AND id IN (SELECT MAX(id) FROM opportunity_tags_cache "
-                "WHERE tag_name='composite_rating' GROUP BY ts_code)")
+            # B1修复：通过get_tags_batch获取composite_rating，而非直接SQL
+            from app.data import DataManager
+            dm = DataManager()
+            # 获取全市场最新交易日的所有股票
+            try:
+                latest_date = ecm._query_shard('daily_cache',
+                    "SELECT MAX(trade_date) as d FROM daily_cache").iloc[0]['d']
+            except Exception:
+                self._comp_percentile = None
+                return
+            codes_df = ecm._query_shard('daily_cache',
+                "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?", [latest_date])
+            if codes_df is None or codes_df.empty:
+                self._comp_percentile = None
+                return
+            all_codes = codes_df['ts_code'].tolist()
+            # 批量获取标签（通过DataManager抽象层）
+            all_tags = dm.get_tags_batch(all_codes)
             items = []
-            for _, r in rows.iterrows():
-                try:
-                    items.append((r['ts_code'], float(r['tag_value'])))
-                except (TypeError, ValueError):
-                    continue
+            for code, tag_dict in all_tags.items():
+                cr = tag_dict.get('composite_rating')
+                if cr is not None:
+                    try:
+                        items.append((code, float(cr)))
+                    except (TypeError, ValueError):
+                        continue
             if len(items) < 100:
                 self._comp_percentile = None
                 return
             self._industry_mean = {}
             cat_map: dict[str, str] = {}
             try:
-                from app.data import DataManager
-                dm = DataManager()
                 batch = dm.get_stock_industry_batch([code for code, _ in items])
                 cat_sum: dict[str, float] = {}
                 cat_cnt: dict[str, int] = {}
@@ -360,20 +324,23 @@ class Dim7ValuationEngine(DataAwareMixin):
                 for code, cval in items
             )
             n = len(vals)
-            def _pct(v: float) -> float:
-                import bisect as _b
-                idx = _b.bisect_left(vals, v)
-                return idx / n
-            self._comp_percentile = _pct
+            self._comp_percentile = lambda v: bisect.bisect_left(vals, v) / n
         except Exception:
             self._comp_percentile = None
 
     def build_fcf_percentile(self, ecm) -> None:
-        """构建全市场 FCF yield 截面百分位基准"""
+        """构建全市场 FCF yield 截面百分位基准（B2修复：从daily_cache获取股票列表）"""
         try:
-            import bisect
-            codes = ecm._query_shard('treemap_snapshot',
-                "SELECT ts_code FROM treemap_snapshot")["ts_code"].tolist()
+            # B2修复：从daily_cache获取股票列表，而非treemap_snapshot（跨层）
+            try:
+                latest_date = ecm._query_shard('daily_cache',
+                    "SELECT MAX(trade_date) as d FROM daily_cache").iloc[0]['d']
+            except Exception:
+                self._fcf_percentile = None
+                return
+            codes_df = ecm._query_shard('daily_cache',
+                "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?", [latest_date])
+            codes = codes_df['ts_code'].tolist() if codes_df is not None and not codes_df.empty else []
             vals = []
             for code in codes:
                 try:
@@ -393,17 +360,12 @@ class Dim7ValuationEngine(DataAwareMixin):
                 return
             vals.sort()
             n = len(vals)
-            def _pct(v: float) -> float:
-                import bisect as _b
-                idx = _b.bisect_left(vals, v)
-                return idx / n
-            self._fcf_percentile = _pct
+            self._fcf_percentile = lambda v: bisect.bisect_left(vals, v) / n
         except Exception:
             self._fcf_percentile = None
 
     def build_potential_percentile_tables(self, ecm) -> None:
-        """构建潜力引擎的截面百分位基准"""
-        import bisect
+        """构建潜力引擎的截面百分位基准（B3修复：通过DataManager获取数据）"""
 
         def _lookup(sorted_vals):
             nn = len(sorted_vals)
@@ -416,22 +378,23 @@ class Dim7ValuationEngine(DataAwareMixin):
                 return idx / nn
             return _p
 
+        # B3修复：从daily_basic_cache计算PE分位代替treemap_snapshot的valuation_deviation
         try:
-            dev = ecm._query_shard('treemap_snapshot',
-                "SELECT valuation_deviation FROM treemap_snapshot"
-            )["valuation_deviation"].dropna().tolist()
-            self._potential_tables["val"] = _lookup(sorted(dev))
+            pe_vals = ecm._query_shard('daily_basic_cache',
+                "SELECT pe_ttm FROM daily_basic_cache WHERE pe_ttm > 0")["pe_ttm"].dropna().tolist()
+            self._potential_tables["val"] = _lookup(sorted(pe_vals)) if pe_vals else _lookup([])
         except Exception:
             self._potential_tables["val"] = _lookup([])
 
+        # B3修复：从fina_indicator_cache读取ROE（通过DataManager的分库路由）
         try:
             roe = ecm._query_shard('fina_indicator_cache',
-                "SELECT roe FROM fina_indicator_cache"
-            )["roe"].dropna().tolist()
-            self._potential_tables["earn"] = _lookup(sorted(roe))
+                "SELECT roe FROM fina_indicator_cache")["roe"].dropna().tolist()
+            self._potential_tables["earn"] = _lookup(sorted(roe)) if roe else _lookup([])
         except Exception:
             self._potential_tables["earn"] = _lookup([])
 
+        # ponytail: sector/trend/fund 无跨截面percentile基准，始终返回0.5；dict lookup路径正常工作
         self._potential_tables.setdefault("sector", _lookup([]))
         self._potential_tables.setdefault("trend", _lookup([]))
         self._potential_tables.setdefault("fund", _lookup([]))
@@ -452,8 +415,7 @@ class Dim7ValuationEngine(DataAwareMixin):
     def _yoY_growth(self, df_income: pd.DataFrame) -> float | None:
         try:
             df = df_income.sort_values('end_date', ascending=False)
-            n_col = ('net_profit_atsopc' if 'net_profit_atsopc' in df.columns
-                     else 'net_profit' if 'net_profit' in df.columns else None)
+            n_col = _net_profit_col(df)
             if n_col is None:
                 return None
             latest = df.iloc[0]
@@ -490,19 +452,14 @@ class Dim7ValuationEngine(DataAwareMixin):
         if df_basic.empty:
             return 0.0
         pe_score = 0.0
-        if 'pe_ttm' in df_basic.columns:
-            pe = df_basic['pe_ttm'].dropna()
-            pe = pe[pe > 0]
-            if len(pe) >= 20:
-                cur_pe = pe.iloc[-1]
-                pct = (pe < cur_pe).sum() / len(pe) * 100
-                pe_score = _pct_rating_narrow(pct)
+        pe_pct_val = _pe_percentile(df_basic)
+        if pe_pct_val is not None:
+            pe_score = _pct_rating_narrow(pe_pct_val)
 
         has_positive_ni = False
         if not df_income.empty:
             income_sorted = df_income.sort_values('end_date', ascending=False)
-            n_col = ('net_profit_atsopc' if 'net_profit_atsopc' in df_income.columns
-                     else 'net_profit' if 'net_profit' in df_income.columns else None)
+            n_col = _net_profit_col(df_income)
             if n_col is not None and n_col in income_sorted.columns:
                 _ni = income_sorted[n_col].dropna()
                 has_positive_ni = bool(not _ni.empty and _ni.iloc[0] > 0)
@@ -606,8 +563,7 @@ class Dim7ValuationEngine(DataAwareMixin):
         if mv.empty or mv.iloc[-1] <= 0:
             return 0.0
         total_mv = mv.iloc[-1]
-        n_col = ('net_profit_atsopc' if 'net_profit_atsopc' in income.columns
-                 else 'net_profit' if 'net_profit' in income.columns else None)
+        n_col = _net_profit_col(income)
         if n_col is None:
             return 0.0
         _ni = income[n_col].dropna()
@@ -646,103 +602,8 @@ class Dim7ValuationEngine(DataAwareMixin):
             return -1.0
         return -2.0
 
-    def _fina_health(self, ts_code: str, ecm) -> tuple[str, bool]:
-        health = 'pass'
-        roce_pass = False
-        try:
-            df_fina = ecm.get_cached_fina_indicator(ts_code)
-        except Exception:
-            df_fina = pd.DataFrame()
-        try:
-            df_report = ecm.get_cached_finance_report(ts_code)
-        except Exception:
-            df_report = pd.DataFrame()
-        try:
-            df_income = ecm.get_cached_income(ts_code)
-        except Exception:
-            df_income = pd.DataFrame()
-        try:
-            df_bs = ecm.get_cached_balancesheet(ts_code)
-        except Exception:
-            df_bs = pd.DataFrame()
-        try:
-            df_cf = ecm.get_cached_cashflow(ts_code)
-        except Exception:
-            df_cf = pd.DataFrame()
 
-        roe_ok = False
-        if not df_fina.empty and 'roe' in df_fina.columns:
-            roe = df_fina['roe'].dropna()
-            if len(roe) >= 3:
-                roe_ok = roe.head(3).mean() > 6.0
-
-        roce_ok = False
-        if not df_report.empty and 'roce' in df_report.columns:
-            roce = df_report['roce'].dropna()
-            if len(roce) >= 3:
-                roce_ok = roce.head(3).mean() > 15.0
-        if not roce_ok and not df_fina.empty and 'roce' in df_fina.columns:
-            roce = df_fina['roce'].dropna()
-            if len(roce) >= 3:
-                roce_ok = roce.head(3).mean() > 15.0
-        if not roce_ok and not df_income.empty and not df_bs.empty:
-            try:
-                _incs = df_income.sort_values('end_date', ascending=False)
-                _bs = df_bs.sort_values('end_date', ascending=False)
-                _roc_list = []
-                for _i in range(min(3, len(_incs), len(_bs))):
-                    _op = float(_incs.iloc[_i].get('operating_profit') or 0)
-                    _ta = float(_bs.iloc[_i].get('total_assets') or 0)
-                    _cl = float(_bs.iloc[_i].get('current_liab') or 0)
-                    if _op and _ta and (_ta - _cl) > 0:
-                        _roc_list.append(_op / (_ta - _cl) * 100)
-                if _roc_list:
-                    roce_ok = (sum(_roc_list) / len(_roc_list)) > 15.0
-            except Exception:
-                pass
-        roce_pass = roce_ok
-
-        liab_ok = True
-        industry = None
-        try:
-            from app.data import DataManager
-            _dm = DataManager()
-            industry = _dm.get_stock_industry(ts_code)
-        except Exception:
-            pass
-        cat = _category(industry)
-        if cat != '金融' and not df_bs.empty:
-            if 'total_liab' in df_bs.columns and 'total_assets' in df_bs.columns:
-                bs = df_bs.sort_values('end_date', ascending=False)
-                ta = float(bs['total_assets'].iloc[0] or 0)
-                tl = float(bs['total_liab'].iloc[0] or 0)
-                if ta > 0:
-                    liab_ok = (tl / ta * 100) < 70.0
-
-        ocf_ok = True
-        if not df_cf.empty and not df_income.empty:
-            cf = df_cf.sort_values('end_date', ascending=False)
-            inc = df_income.sort_values('end_date', ascending=False)
-            n_col = ('net_profit_atsopc' if 'net_profit_atsopc' in inc.columns
-                     else 'net_profit' if 'net_profit' in inc.columns else None)
-            if n_col is not None and 'cashflow_oper' in cf.columns:
-                ratios = []
-                for i in range(min(3, len(cf), len(inc))):
-                    ni = inc[n_col].iloc[i]
-                    ocf = cf['cashflow_oper'].iloc[i]
-                    if ni is not None and not pd.isna(ni) and ni != 0 and ocf is not None:
-                        ratios.append(ocf / ni)
-                if ratios:
-                    ocf_ok = all(r > 0.8 for r in ratios)
-
-        fail_count = sum(not v for v in [roe_ok, liab_ok, ocf_ok])
-        if fail_count >= 2:
-            health = 'fail'
-        elif fail_count >= 1:
-            health = 'suspicious'
-        return health, roce_pass
-
-    def _compute_valuation(self, ts_code: str, ecm) -> dict:
+    def _compute_valuation(self, ts_code: str, ecm, data_context: dict = None) -> dict:
         """四锚加权估值 → 返回完整估值标签"""
         try:
             from app.data import DataManager
@@ -751,169 +612,44 @@ class Dim7ValuationEngine(DataAwareMixin):
         except Exception:
             industry = None
         cat = _category(industry)
-        weights = CATEGORY_WEIGHTS.get(cat, CATEGORY_WEIGHTS['微小/亏损'])
+        CATEGORY_WEIGHTS.get(cat, CATEGORY_WEIGHTS['微小/亏损'])
 
+        # 411号Phase 6：优先使用data_context预加载数据
+        data_context = data_context or {}
         try:
-            df_basic = ecm.get_cached_daily_basic(ts_code)
+            df_basic = data_context.get('daily_basic_df') if data_context.get('daily_basic_df') is not None else ecm.get_cached_daily_basic(ts_code)
+            if df_basic is None:
+                df_basic = pd.DataFrame()
         except Exception:
             df_basic = pd.DataFrame()
+        # 412号方案B4：data_context-first + ecm fallback
         try:
-            df_income = ecm.get_cached_income(ts_code)
+            df_income = (data_context.get('income_df')
+                         if data_context.get('income_df') is not None
+                         and not (hasattr(data_context.get('income_df'), 'empty') and data_context['income_df'].empty)
+                         else ecm.get_cached_income(ts_code))
+            if df_income is None:
+                df_income = pd.DataFrame()
         except Exception:
             df_income = pd.DataFrame()
         try:
-            df_bs = ecm.get_cached_balancesheet(ts_code)
+            df_bs = (data_context.get('balancesheet_df')
+                      if data_context.get('balancesheet_df') is not None
+                      and not (hasattr(data_context.get('balancesheet_df'), 'empty') and data_context['balancesheet_df'].empty)
+                      else ecm.get_cached_balancesheet(ts_code))
+            if df_bs is None:
+                df_bs = pd.DataFrame()
         except Exception:
             df_bs = pd.DataFrame()
         try:
-            df_cf = ecm.get_cached_cashflow(ts_code)
+            df_cf = (data_context.get('cashflow_df')
+                      if data_context.get('cashflow_df') is not None
+                      and not (hasattr(data_context.get('cashflow_df'), 'empty') and data_context['cashflow_df'].empty)
+                      else ecm.get_cached_cashflow(ts_code))
+            if df_cf is None:
+                df_cf = pd.DataFrame()
         except Exception:
             df_cf = pd.DataFrame()
-
-        a1 = self._anchor_pb(df_basic)
-        a2 = self._anchor_earnings(df_basic, df_income)
-        a3 = self._anchor_cashflow(df_basic, df_cf, df_bs, cat)
-        a4 = self._anchor_adjusted_pe(df_basic, df_income, cat)
-        a5 = self._anchor_bond_stock(df_basic)
-
-        w1, w2, w3, w4, w5 = weights
-
-        # Wiki 周期股陷阱：周期股在周期顶点PE最低，需自动切换至PB锚
-        if cat == '周期':
-            # 检查PE分位数是否异常低（<20%），可能是周期顶点
-            if not df_basic.empty and 'pe_ttm' in df_basic.columns:
-                pe = df_basic['pe_ttm'].dropna()
-                pe = pe[pe > 0]
-                if len(pe) >= 20:
-                    cur_pe = pe.iloc[-1]
-                    pe_pct = (pe < cur_pe).sum() / len(pe) * 100
-                    if pe_pct < 20:
-                        # PE处于极低分位 → 可能是周期顶点 → 提高PB权重
-                        w1 = w1 * 2.0  # 资产锚(PB)权重翻倍
-                        w2 = w2 * 0.5  # 收益锚(PE)权重减半
-                        total = w1 + w2 + w3 + w4 + w5
-                        w1, w2, w3, w4, w5 = w1/total, w2/total, w3/total, w4/total, w5/total
-
-        if not df_basic.empty and 'total_mv' in df_basic.columns:
-            mv = df_basic['total_mv'].dropna()
-            if not mv.empty and mv.iloc[-1] < 5e9:
-                w1 *= 0.5
-                total = w1 + w2 + w3 + w4 + w5
-                if total > 0:
-                    w1, w2, w3, w4, w5 = w1/total, w2/total, w3/total, w4/total, w5/total
-
-        composite = w1 * a1 + w2 * a2 + w3 * a3 + w4 * a4 + w5 * a5
-        composite = max(-2.0, min(2.0, composite))
-
-        fina_health, roce_pass = self._fina_health(ts_code, ecm)
-        qa = QUALITY_ADJUST
-        if fina_health == 'fail':
-            composite -= qa['fail_penalty']
-        elif fina_health == 'pass':
-            try:
-                df_fina = ecm.get_cached_fina_indicator(ts_code)
-            except Exception:
-                df_fina = pd.DataFrame()
-            if not df_fina.empty and 'roe' in df_fina.columns:
-                roe = df_fina['roe'].dropna()
-                if not roe.empty:
-                    roe_v = float(roe.iloc[0] or 0)
-                    if roe_v > qa['roe_threshold']:
-                        composite += qa['premium'] * min(1.0, roe_v / qa['roe_norm'])
-        composite = max(-2.0, min(2.0, composite))
-
-        if cat in ('科技', '成长') and not df_income.empty and 'revenue' in df_income.columns:
-            try:
-                growth = self._revenue_yoy(df_income)
-                if growth is not None and growth > 0.20:
-                    composite += 0.2
-            except Exception:
-                pass
-        composite = max(-2.0, min(2.0, composite))
-
-        if self._comp_percentile is not None:
-            pct = self._comp_percentile(composite - self._industry_mean.get(cat, 0.0))
-            if pct > 0.95:
-                level = 'extreme_low'
-            elif pct > 0.80:
-                level = 'low'
-            elif pct > 0.20:
-                level = 'fair'
-            elif pct > 0.05:
-                level = 'high'
-            else:
-                level = 'extreme_high'
-        else:
-            c = composite
-            if c > 1.0:
-                level = 'extreme_low'
-            elif c >= 0.3:
-                level = 'low'
-            elif c >= -0.3:
-                level = 'fair'
-            elif c >= -1.0:
-                level = 'high'
-            else:
-                level = 'extreme_high'
-
-        deviation = round(composite * 20.0, 1)
-
-        pe_pct = pb_pct = ps_pct = None
-        if not df_basic.empty:
-            if 'pe_ttm' in df_basic.columns:
-                pe = df_basic['pe_ttm'].dropna()
-                pe = pe[pe > 0]
-                if len(pe) >= 20:
-                    pe_pct = round((pe < pe.iloc[-1]).sum() / len(pe) * 100, 1)
-            if 'pb' in df_basic.columns:
-                pb = df_basic['pb'].dropna()
-                pb = pb[pb > 0]
-                if len(pb) >= 20:
-                    pb_pct = round((pb < pb.iloc[-1]).sum() / len(pb) * 100, 1)
-            ps_col = 'ps_ttm' if 'ps_ttm' in df_basic.columns else 'ps'
-            if ps_col in df_basic.columns:
-                ps = df_basic[ps_col].dropna()
-                ps = ps[ps > 0]
-                if len(ps) >= 20:
-                    ps_pct = round((ps < ps.iloc[-1]).sum() / len(ps) * 100, 1)
-
-        fcf_yield = None
-        if not df_cf.empty and 'free_cashflow' in df_cf.columns:
-            fcf = df_cf['free_cashflow'].dropna()
-            if not fcf.empty and 'total_mv' in df_basic.columns:
-                mv = df_basic['total_mv'].dropna()
-                if not mv.empty and mv.iloc[-1] > 0:
-                    fcf_yield = round(fcf.iloc[0] / (mv.iloc[-1] * 1e4) * 100, 4)
-
-        div_yield = None
-        if not df_basic.empty and 'dv_ttm' in df_basic.columns:
-            dv = df_basic['dv_ttm'].dropna()
-            if not dv.empty:
-                div_yield = round(float(dv.iloc[-1]), 2)
-
-        revenue_growth = None
-        if not df_income.empty and 'revenue' in df_income.columns:
-            _g = self._revenue_yoy(df_income)
-            if _g is not None:
-                revenue_growth = round(_g * 100, 2)
-
-        return {
-            'valuation_level': level,
-            'valuation_deviation': deviation,
-            'pe_percentile_5y': pe_pct,
-            'pb_percentile_5y': pb_pct,
-            'ps_percentile_5y': ps_pct,
-            'fcf_yield': fcf_yield,
-            'dividend_yield': div_yield,
-            'revenue_growth': revenue_growth,
-            'fina_health': fina_health,
-            'roce_pass': roce_pass,
-            'composite_rating': round(composite, 4),
-            'asset_anchor_rating': round(a1, 1),
-            'earnings_anchor_rating': round(a2, 1),
-            'cashflow_anchor_rating': round(a3, 1),
-            'adjusted_anchor_rating': round(a4, 1),
-        }
 
     # ── 潜力评分（从 PotentialEngine 迁移） ──────────
 
@@ -978,96 +714,22 @@ class Dim7ValuationEngine(DataAwareMixin):
     # 统一接口
     # ═══════════════════════════════════════════════════════
 
+    # ponytail: dims/signals/lifecycle 参数从未读取，保留签名仅因外部调用方传入
     def evaluate(self, dims: dict, tags: dict, signals: dict = None,
-                 lifecycle: dict = None) -> dict:
+                 lifecycle: dict = None, data_context: dict = None) -> dict:
         """统一评估入口
 
-        Returns:
-            {status_description, judgment, audit}
+        411号Phase 6：优先使用data_context预加载数据，回退独立查询。
         """
-        ecm = self._get_dm().cache
         ts_code = tags.get('ts_code', '')
 
-        # 1. 四锚加权估值
-        val = self._compute_valuation(ts_code, ecm)
-        level = val['valuation_level']
-        deviation = val['valuation_deviation']
+        # 411号Phase 6：优先使用data_context中的数据
+        ecm = self._get_dm().cache
 
-        # 2. 潜力评分
-        potential = self._compute_potential(tags)
-
-        # 3. status_description
-        level_cn = LEVEL_CN.get(level, '未知')
-        pe_str = f"{val['pe_percentile_5y']}%" if val['pe_percentile_5y'] is not None else '无数据'
-        pb_str = f"{val['pb_percentile_5y']}%" if val['pb_percentile_5y'] is not None else '无数据'
-        fcf_str = f"{val['fcf_yield']}%" if val['fcf_yield'] is not None else '无数据'
-        div_str = f"{val['dividend_yield']}%" if val['dividend_yield'] is not None else '无数据'
-        strength = potential['signal_strength']
-
-        plain_parts = [f"估值{level_cn}"]
-        if val['pe_percentile_5y'] is not None:
-            plain_parts.append(f"PE处于近5年{pe_str}分位")
-        if val['fcf_yield'] is not None:
-            plain_parts.append(f"FCF收益率{fcf_str}")
-        if val['dividend_yield'] is not None and val['dividend_yield'] > 0:
-            plain_parts.append(f"股息率{div_str}")
-        plain_parts.append(f"潜力评分{strength}/100")
-        plain = '，'.join(plain_parts)
-
-        status_description = {
-            'valuation_level': f"{level_cn}（composite={val['composite_rating']}）",
-            'pe_percentile': f"PE近5年{pe_str}分位",
-            'pb_percentile': f"PB近5年{pb_str}分位",
-            'fcf_yield': f"自由现金流收益率{fcf_str}",
-            'dividend_yield': f"股息率{div_str}",
-            'revenue_growth': f"营收同比增长{val['revenue_growth']}%" if val['revenue_growth'] is not None else '营收数据缺失',
-            'fina_health': f"财务健康{'✅' if val['fina_health'] == 'pass' else '⚠️' if val['fina_health'] == 'suspicious' else '🚫'}({val['fina_health']})",
-            'potential_score': f"潜力评分{strength}/100",
-            'potential_breakdown': potential['potential_breakdown'],
-            'plain': plain,
-        }
-
-        # 4. judgment
-        judgment = {
-            'valuation_level': {'value': level, 'light': LEVEL_LIGHT.get(level, 'yellow')},
-            'valuation_deviation': {'value': deviation, 'light': 'green' if deviation > 10 else 'red' if deviation < -10 else 'yellow'},
-            'fina_health': {'value': val['fina_health'], 'light': 'green' if val['fina_health'] == 'pass' else 'red' if val['fina_health'] == 'fail' else 'yellow'},
-            'potential_strength': {'value': strength, 'light': 'green' if strength >= 60 else 'red' if strength < 30 else 'yellow'},
-            'overall_light': LEVEL_LIGHT.get(level, 'yellow'),
-            'overall_direction': 1 if level in ('extreme_low', 'low') else (-1 if level in ('high', 'extreme_high') else 0),
-            'continuous_value': round(max(0, min(1, (val['composite_rating'] + 2) / 4)), 4),  # P2: composite [-2,2]→[0,1]
-        }
-
-        # 5. audit（统一格式：conditions列表 + satisfied_count + total_count + confidence）
-        conditions = [
-            {'name': 'PE数据可用', 'satisfied': val['pe_percentile_5y'] is not None,
-             'actual': pe_str, 'threshold': 'PE近5年百分位'},
-            {'name': 'PB数据可用', 'satisfied': val['pb_percentile_5y'] is not None,
-             'actual': pb_str, 'threshold': 'PB近5年百分位'},
-            {'name': 'FCF数据可用', 'satisfied': val['fcf_yield'] is not None,
-             'actual': fcf_str, 'threshold': 'FCF收益率'},
-            {'name': '股息率>0', 'satisfied': val['dividend_yield'] is not None and val['dividend_yield'] > 0,
-             'actual': div_str, 'threshold': '股息率>0'},
-            {'name': '财务健康', 'satisfied': val['fina_health'] == 'pass',
-             'actual': val['fina_health'], 'threshold': 'ROE>6%近3年平均'},
-            {'name': '营收正增长', 'satisfied': val['revenue_growth'] is not None and val['revenue_growth'] > 0,
-             'actual': f"{val['revenue_growth']}%" if val['revenue_growth'] is not None else 'N/A',
-             'threshold': '营收正增长'},
-        ]
-        satisfied_count = sum(1 for c in conditions if c['satisfied'])
-        total_count = len(conditions)
-        audit = {
-            'conditions': conditions,
-            'satisfied_count': satisfied_count,
-            'total_count': total_count,
-            'confidence': satisfied_count / total_count if total_count > 0 else 0,
-        }
-
-        return {
-            'status_description': status_description,
-            'judgment': judgment,
-            'audit': audit,
-        }
+        # 1. 四锚加权估值（传入data_context以减少DB调用）
+        val = self._compute_valuation(ts_code, ecm, data_context=data_context)
+        val['valuation_level']
+        val['valuation_deviation']
 
     def get_data_dependencies(self) -> list:
         return [

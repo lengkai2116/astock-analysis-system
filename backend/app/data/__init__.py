@@ -1,14 +1,16 @@
-from .tushare_provider import TushareProvider
-from .enhanced_cache_manager import get_ecm_instance, EnhancedCacheManager
-from app.models import Stock
-from app import db
+import logging
 from datetime import datetime
 from typing import Dict, Optional
+
 import pandas as pd
 from sqlalchemy import or_
 
+from app import db
+from app.models import Stock
 
-import logging
+from .enhanced_cache_manager import EnhancedCacheManager, get_ecm_instance
+from .tushare_provider import TushareProvider
+
 logger = logging.getLogger(__name__)
 class DataManager:
     def __init__(self):
@@ -28,17 +30,17 @@ class DataManager:
             self._sharding_manager = sharding_manager
         except Exception:
             pass
-    
+
     def sync_stock_list(self):
         stocks = self.tushare.get_stock_list()
-        
+
         if not stocks:
             return 0
-        
+
         for stock in stocks:
             existing = Stock.query.get(stock['ts_code'])
             list_date = stock.get('list_date')
-            
+
             if existing:
                 existing.symbol = stock['symbol']
                 existing.name = stock['name']
@@ -56,10 +58,10 @@ class DataManager:
                     list_date=datetime.strptime(list_date, '%Y%m%d').date() if list_date else None
                 )
                 db.session.add(new_stock)
-        
+
         db.session.commit()
         return len(stocks)
-    
+
     def sync_daily_data(self, ts_code, use_cache=True, start_date=None, end_date=None):
         """同步日线数据，优先使用缓存"""
         # 先尝试从缓存获取
@@ -68,7 +70,7 @@ class DataManager:
             if not cached_df.empty:
                 logger.info(f"使用缓存数据: {ts_code}")
                 return len(cached_df)
-        
+
         # 缓存未命中，从活跃数据源获取（Tushare → AKShare 回退）
         data = self.tushare.get_daily_data(ts_code, start_date, end_date)
 
@@ -175,7 +177,7 @@ class DataManager:
         db.session.commit()
         logger.info(f"全量同步完成: {count} 条（跳过 {skipped} 只已有数据）")
         return count
-    
+
     def get_cached_daily_data(self, ts_code, start_date=None, end_date=None, adj=None):
         """从缓存获取日线数据
 
@@ -212,7 +214,7 @@ class DataManager:
         if df.empty or adj is None:
             return df
         return self._apply_adjust_factor(df, adj)
-    
+
     def _apply_adjust_factor(self, df, adj):
         """对日线DataFrame应用复权因子"""
         if df.empty or adj not in ('hfq', 'qfq'):
@@ -261,7 +263,7 @@ class DataManager:
     def get_cache_stats(self):
         """获取缓存统计信息"""
         return self.cache.get_cache_stats()
-    
+
     def get_stock_info(self, ts_code):
         """获取单只股票信息"""
         stock = Stock.query.get(ts_code)
@@ -285,11 +287,11 @@ class DataManager:
         if ts_codes:
             query = query.filter(Stock.ts_code.in_(ts_codes))
         return [r.ts_code for r in query.all()]
-    
+
     def get_stock_list(self, keyword=None, limit=50):
         """
         获取股票列表，支持按代码/名称/行业搜索
-        
+
         Args:
             keyword: 搜索关键词（匹配 ts_code / name / industry）
             limit: 最大返回数量
@@ -305,7 +307,7 @@ class DataManager:
             )
         stocks = query.limit(limit).all()
         return [s.to_dict() for s in stocks]
-    
+
     def get_stock_industry(self, ts_code: str) -> str | None:
         """通过 DataManager 返回股票行业分类（申万一级），符合 Red Line 5"""
         stock = db.session.query(Stock).filter(Stock.ts_code == ts_code).first()
@@ -437,17 +439,17 @@ class DataManager:
             return self._get_minute_data(ts_code, period, start_date, end_date)
         else:
             return self.get_cached_daily_data(ts_code, start_date, end_date)
-    
+
     def _get_mootdx_bars(self, ts_code: str, freq: int = 9,
                          start: int = 0, offset: int = 800):
         """从 mootdx(TDX TCP) 获取K线数据，统一返回标准化 DataFrame
-        
+
         Args:
             ts_code: 股票代码（含市场后缀，如 301042.SZ）
             freq: TDX频率码 9=日线 5=周线 2=5分钟 1=1分钟
             start: 起始偏移（用于分页）
             offset: 返回行数上限（最大800）
-        
+
         Returns:
             标准化 DataFrame，列: ts_code, trade_date/trade_time, open, high, low, close, vol, amount
         """
@@ -482,7 +484,7 @@ class DataManager:
         except Exception as e:
             logger.warning("_get_mootdx_bars(%s) 失败: %s", ts_code, e)
             return pd.DataFrame()
-    
+
     def _get_weekly_data(self, ts_code, start_date=None, end_date=None):
         """获取周线数据，ECM缓存优先"""
         # 查ECM缓存（用 minute_kline_cache freq='W' 存储）
@@ -525,7 +527,7 @@ class DataManager:
         data = self.tushare.get_weekly_data(ts_code, start_date, end_date)
         if not data:
             return pd.DataFrame()
-        
+
         df_data = []
         for item in data:
             trade_date_str = item.get('trade_date')
@@ -546,19 +548,19 @@ class DataManager:
         if not df.empty:
             df = df.sort_values('trade_date').reset_index(drop=True)
         return df
-    
+
     def _get_monthly_data(self, ts_code, start_date=None, end_date=None):
         """获取月线数据，优先从本地日线聚合"""
         # 优先使用本地日线聚合，确保数据新鲜
         daily_data = self.get_cached_daily_data(ts_code, start_date, end_date)
         if not daily_data.empty:
             return self._aggregate_daily_to_monthly(daily_data)
-        
+
         # 日线数据不存在时才从Tushare获取
         data = self.tushare.get_monthly_data(ts_code, start_date, end_date)
         if not data:
             return pd.DataFrame()
-        
+
         df_data = []
         for item in data:
             trade_date_str = item.get('trade_date')
@@ -579,10 +581,10 @@ class DataManager:
         if not df.empty:
             df = df.sort_values('trade_date').reset_index(drop=True)
         return df
-    
+
     def _get_minute_data(self, ts_code, freq, start_date=None, end_date=None):
         """获取分钟线数据 — ECM缓存优先的cache-on-demand
-        
+
         Args:
             ts_code: 股票代码
             freq: 频率，格式 '5m'/'15m'/'30m'/'60m'
@@ -591,7 +593,7 @@ class DataManager:
         """
         freq_map = {'1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '60m': '60min'}
         ecm_freq = freq_map.get(freq, '5min')
-        
+
         # 第一步：查 ECM 缓存
         try:
             from app.data.enhanced_cache_manager import get_ecm_instance
@@ -601,7 +603,7 @@ class DataManager:
                 return df_cache
         except Exception:
             pass
-        
+
         # 第二步：数据缺失 → sync_requests 异步补采（292号架构红线8 / 342号核查修复）
         # 2026-08-16 修复：原实现 miss 时直调 mootdx TCP（_get_mootdx_bars/_get_mootdx_minutes）——
         # 非交易时段 mootdx 服务器不可达，每次连接重试 30-90s；P2 全市场重算时北交所/
@@ -634,7 +636,7 @@ class DataManager:
             ecm.cache_minute_kline(df_copy)
         except Exception as e:
             logger.debug("缓存分钟K线失败 (%s/%s): %s", ts_code, freq, e)
-    
+
     def _get_mootdx_minutes(self, ts_code):
         """从 mootdx minutes() 获取当日1分钟数据"""
         try:
@@ -661,7 +663,7 @@ class DataManager:
         except Exception as e:
             logger.debug("_get_mootdx_minutes(%s) 失败: %s", ts_code, e)
         return pd.DataFrame()
-    
+
     def _get_mootdx_minutes_full(self, ts_code: str, target_date: str = None) -> pd.DataFrame:
         """从 mootdx 获取全天分钟数据（minutes + transactions 合并）
 
@@ -673,6 +675,7 @@ class DataManager:
             DataFrame with columns: trade_time, open, high, low, close, vol
         """
         from collections import defaultdict
+
         from mootdx.quotes import Quotes
 
         if target_date is None:
@@ -742,16 +745,16 @@ class DataManager:
                 'vol': r['vol'],
             })
         return pd.DataFrame(records)
-    
+
     def _aggregate_daily_to_weekly(self, daily_df):
         """将日线数据聚合为周线数据"""
         if daily_df.empty:
             return pd.DataFrame()
-        
+
         df = daily_df.copy()
         df['trade_date'] = pd.to_datetime(df['trade_date'])
         df.set_index('trade_date', inplace=True)
-        
+
         # 按周聚合
         weekly = df.resample('W-FRI').agg({
             'ts_code': 'first',
@@ -762,20 +765,20 @@ class DataManager:
             'vol': 'sum',
             'amount': 'sum'
         }).dropna()
-        
+
         weekly.reset_index(inplace=True)
         weekly['pct_chg'] = weekly['close'].pct_change() * 100
         return weekly
-    
+
     def _aggregate_daily_to_monthly(self, daily_df):
         """将日线数据聚合为月线数据"""
         if daily_df.empty:
             return pd.DataFrame()
-        
+
         df = daily_df.copy()
         df['trade_date'] = pd.to_datetime(df['trade_date'])
         df.set_index('trade_date', inplace=True)
-        
+
         # 按月聚合
         monthly = df.resample('M').agg({
             'ts_code': 'first',
@@ -786,11 +789,11 @@ class DataManager:
             'vol': 'sum',
             'amount': 'sum'
         }).dropna()
-        
+
         monthly.reset_index(inplace=True)
         monthly['pct_chg'] = monthly['close'].pct_change() * 100
         return monthly
-    
+
     def sync_daily_basic_data(self, ts_code=None, start_date=None, end_date=None, trade_date=None):
         """
         同步每日基础数据（换手率、市盈率、市值等）
@@ -808,14 +811,14 @@ class DataManager:
 
         if not data:
             return 0
-        
+
         # 转换为DataFrame并缓存
         df_data = []
         for item in data:
             trade_date_str = item.get('trade_date')
             if not trade_date_str:
                 continue
-            
+
             df_data.append({
                 'ts_code': item['ts_code'],
                 'trade_date': datetime.strptime(trade_date_str, '%Y%m%d').date(),
@@ -836,14 +839,14 @@ class DataManager:
                 'total_mv': item.get('total_mv'),
                 'circ_mv': item.get('circ_mv')
             })
-        
+
         if df_data:
             df = pd.DataFrame(df_data)
             self.cache.cache_daily_basic_data(df)
             return len(df)
-        
+
         return 0
-    
+
     def get_cached_daily_basic(self, ts_code, start_date=None, end_date=None):
         """从缓存获取每日基础数据
 
@@ -872,7 +875,7 @@ class DataManager:
                 logger.debug(f"分库读取失败，降级到ECM: {e}")
 
         return self.cache.get_cached_daily_basic(ts_code, start_date, end_date)
-    
+
     def sync_all_daily_basic_data(self, trade_date=None):
         """同步全部股票每日基础数据"""
         if trade_date is None:
@@ -1084,6 +1087,10 @@ class DataManager:
     def get_cached_balancesheet(self, ts_code):
         """从缓存获取资产负债表"""
         return self.cache.get_cached_balancesheet(ts_code)
+
+    def get_cached_cashflow(self, ts_code):
+        """从缓存获取现金流量表"""
+        return self.cache.get_cached_cashflow(ts_code)
 
     def get_cached_chip_distribution(self, ts_code):
         """从缓存获取筹码分布数据"""

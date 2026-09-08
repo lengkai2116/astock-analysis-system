@@ -3,7 +3,9 @@
 根因：cross_validate.py:437-439 —— bullish == bearish 时 direction='neutral', rate=0，
 前端显示 "0.0%" 误导为"无共识"。修复后应输出 tie=True 标记供前端显示"多空分歧"。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)

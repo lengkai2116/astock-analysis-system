@@ -53,8 +53,8 @@ def test_map_score_603201_not_saturated():
 
 def test_signal_strength_range_0_100():
     """compute_potential 返回 signal_strength 应在 0-100（修复双重缩放 bug）"""
-    from app.opportunity_atlas.potential_engine import PotentialEngine, compute_fund_strength
     from app.data.enhanced_cache_manager import EnhancedCacheManager
+    from app.opportunity_atlas.potential_engine import PotentialEngine, compute_fund_strength
     ecm = EnhancedCacheManager()
     engine = PotentialEngine()
     engine.build_percentile_tables(ecm)

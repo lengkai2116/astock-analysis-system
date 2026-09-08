@@ -8,9 +8,10 @@
   3. 五档盘口不平衡验证（QMT增强，标注可选）
   4. 假突破过滤器 — 量+时间+深度三维确认
 """
-from typing import Dict, Optional
-import pandas as pd
+from typing import Dict
+
 import numpy as np
+import pandas as pd
 
 
 class ConfirmLayer:

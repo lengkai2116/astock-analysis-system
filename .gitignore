@@ -105,3 +105,9 @@ start_daemon.sh
 *.bak.*
 *.bak
 .worktrees
+.aider*
+
+# Agent tool metadata (cached indices, session memory)
+.qwen/
+.serena/
+backend/.serena/

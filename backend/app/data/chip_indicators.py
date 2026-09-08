@@ -2,9 +2,11 @@
 筹码因子计算模块 - 完整实现技术说明书要求
 包含：ASR/CYQKL/SSRP/RSI/成交量/换手率/筹码集中度/筹码峰识别/筹码转移检测
 """
+from typing import Dict, List, Optional
+
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Optional, Tuple
+
 from .chip_distribution_service import ChipDistributionService
 
 
@@ -324,19 +326,12 @@ class ChipIndicators:
         if len(deltas) < period:
             return 50
 
-        gains = []
-        losses = []
+        gain = np.maximum(deltas, 0)
+        loss = -np.minimum(deltas, 0)
 
-        for delta in deltas[-period:]:
-            if delta > 0:
-                gains.append(delta)
-                losses.append(0)
-            else:
-                gains.append(0)
-                losses.append(-delta)
-
-        avg_gain = np.mean(gains)
-        avg_loss = np.mean(losses)
+        # Wilder's RSI: ewm(alpha=1/period, adjust=False)
+        avg_gain = pd.Series(gain).ewm(alpha=1/period, adjust=False).mean().values[-1]
+        avg_loss = pd.Series(loss).ewm(alpha=1/period, adjust=False).mean().values[-1]
 
         if avg_loss == 0:
             return 100

@@ -4,7 +4,9 @@
 导致 breakout_attempts 永远 = min(20,10) = 10。
 修复后应统计"近20日触及20日新高的次数"。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)

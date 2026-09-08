@@ -109,7 +109,7 @@ def _extract_real_dimensions(dm, ts_code: str) -> dict | None:
         vp = _sig('量价')
         chip_s = _sig('筹码')
         emo = _sig('BOCIASI')
-        factor_s = _sig('因子')
+        _sig('因子')
 
         # chanlun：优先 status_recognition.trend.direction，回退信号中文方向
         chan_dir = '待定'
@@ -269,7 +269,7 @@ VOTE_MAP: dict[str, dict[str | int, int]] = {
         '上升三法': 0, '下降三法': 0, '光头光脚': 0, '孕线十字': 0,
         '陀螺线': 0, '收敛三角形': 0,
     },
-    'right_side_confirm': {'强确认': 1, '基础确认': 0, '未确认': 0, '否决': -1},
+    'right_side_confirm': {'强确认': 1, '基础确认': 0, '未确认': 0, '否决': -1},  # 404号DATA-03: pre_feat_cache管道不产出'否决'，该映射值为死代码（已知限制）
     # ── 316号 P3：扩展票源（规模/低波动/流动性）— 默认关闭（L4_EXTRA_VOTES=1 启用），见 _lookup_vote ──
     'small_cap': {},
     'low_vol': {},
@@ -518,12 +518,12 @@ class L4CrossValidator(DataAwareMixin):
         user_checklist = self._build_user_checklist(ts_code, tags, valuation_tracking)
         tags_summary = self._build_tags_summary(tags)
 
-        # 323号 S0.7：执行层统一——operation_advice 改由 advice_builder 生成
+        # 323号 S0.7：执行层统一——operation_advice 改由 advice_engine 生成
         # （唯一仓位/止损/入场来源），用标签构造五维输入，保留旧字段兼容
-        # 旧 _build_operation_advice 仅作 advice_builder 失败时回退（废弃标记）
+        # 旧 _build_operation_advice 仅作 advice_engine 失败时回退（废弃标记）
         operation_advice = None
         try:
-            from app.opportunity_atlas.advice_builder import build_operation_advice
+            from app.opportunity_atlas.advice_engine import build_operation_advice
             _dm = self._get_dm()
             _df = _dm.get_cached_daily_data(ts_code)
             # ── 330号改进3（2026-08-13）：双引擎口径统一 ──
@@ -648,7 +648,10 @@ class L4CrossValidator(DataAwareMixin):
             try:
                 _dims5 = locals().get('_dims') or {}
                 if _dims5:
-                    from app.opportunity_atlas.advice_builder import _dim_directions, _consensus_from_dirs
+                    from app.opportunity_atlas.advice_engine import (
+                        _consensus_from_dirs,
+                        _dim_directions,
+                    )
                     _five_dirs = _dim_directions(_dims5)
                     _five = _consensus_from_dirs(_five_dirs)
                     consensus_display = {
@@ -670,7 +673,7 @@ class L4CrossValidator(DataAwareMixin):
                                       final_state=(operation_advice or {}).get('state'))
         opportunity_summary = self._build_opportunity_summary(tags, consensus_display, risk_warnings)
 
-        # 323号 S8：顶层 opportunity_state 同步为 advice_builder 降级后的 state
+        # 323号 S8：顶层 opportunity_state 同步为 advice_engine 降级后的 state
         # （实时风控：≥2维反向/停牌等降级须在时机行与建议卡间保持一致）
         _final_state = _arb['opportunity_state']
         _final_evidence = _arb['state_evidence']
@@ -740,20 +743,32 @@ class L4CrossValidator(DataAwareMixin):
             return None
 
     def _get_status_dim_states(self, ts_code: str) -> dict | None:
-        """337号 S3.1：读 status_snapshot.dim_states（日频现状成品九维状态，弹窗九维灯）"""
+        """337号 S3.1：读 status_snapshot.dim_states（日频现状成品九维状态，弹窗九维灯）
+
+        367号修复：status_snapshot 在 snapshot_cache.db（sharding_manager 路由），
+        不在 stock_cache.db（ECM read_conn）。使用 sharding_manager 直接读取。
+        """
         try:
-            _dm = self._get_dm()
-            _row = _dm.cache._query_df(
+            import json as _json
+
+            from app.data.sharding_manager import sharding_manager
+
+            db_name = sharding_manager.get_db_for_table('status_snapshot')
+            if not db_name:
+                return None
+            conn = sharding_manager.get_connection(db_name)
+            cursor = conn.cursor()
+            cursor.execute(
                 "SELECT dim_states, status_bar, consensus_rate, opportunity_state "
                 "FROM status_snapshot WHERE ts_code=? LIMIT 1", [ts_code])
-            if _row is None or _row.empty:
+            row = cursor.fetchone()
+            if not row:
                 return None
-            import json as _json
             return {
-                'dim_states': _json.loads(_row.iloc[0].get('dim_states') or '{}'),
-                'status_bar': _row.iloc[0].get('status_bar'),
-                'consensus_rate': _row.iloc[0].get('consensus_rate'),
-                'opportunity_state': _row.iloc[0].get('opportunity_state'),
+                'dim_states': _json.loads(row[0] or '{}'),
+                'status_bar': row[1],
+                'consensus_rate': row[2],
+                'opportunity_state': row[3],
             }
         except Exception as e:
             logger.debug("status_snapshot 读取失败 %s: %s", ts_code, e)
@@ -1214,7 +1229,7 @@ class L4CrossValidator(DataAwareMixin):
     def _build_operation_advice(self, ts_code: str, consensus: dict, tags: dict,
                                 gate: dict = None, df=None) -> dict:
         """⚠️ 废弃（2026-08-10 标记）：323号 S0.7 起 operation_advice 由
-        advice_builder 生成（唯一仓位/止损/入场来源），本函数仅作 S0.7 失败回退
+        advice_engine 生成（唯一仓位/止损/入场来源），本函数仅作 S0.7 失败回退
         （cross_validate.diagnose except 分支）。迁移完成后删除。
 
         309号 决策3：操作建议以 L4 共识率为唯一来源，但叠加闸门2右侧确认覆盖：
@@ -1331,7 +1346,7 @@ class L4CrossValidator(DataAwareMixin):
 
     def _build_trade_plan(self, ts_code: str, tags: dict, df, action: str,
                           max_ratio: float, gate: dict) -> tuple:
-        """⚠️ 废弃（2026-08-10 标记）：323号 S0.7 起交易计划由 advice_builder
+        """⚠️ 废弃（2026-08-10 标记）：323号 S0.7 起交易计划由 advice_engine
         executable 生成（现价入场 + 60日低点止损），本函数仅被已废弃的
         _build_operation_advice 调用。迁移完成后删除。
 
@@ -1628,15 +1643,16 @@ class L4CrossValidator(DataAwareMixin):
         changes: list[dict] = []
 
         # 检查各维度
-        tag_change_detected = lambda old, new: old is not None and new is not None and old != new
-        direction_reversed = lambda old, new: (
-            (old in ('up_aligned', 'down_aligned') and new in ('up_aligned', 'down_aligned')
-             and old != new)
-        )
-        numeric_diff_ge = lambda old, new, threshold: (
-            self._safe_float(new, 0) - self._safe_float(old, 0) >= threshold
-            or self._safe_float(old, 0) - self._safe_float(new, 0) >= threshold
-        )
+        def direction_reversed(old, new):
+            return (
+                    (old in ('up_aligned', 'down_aligned') and new in ('up_aligned', 'down_aligned')
+                     and old != new)
+                )
+        def numeric_diff_ge(old, new, threshold):
+            return (
+                    self._safe_float(new, 0) - self._safe_float(old, 0) >= threshold
+                    or self._safe_float(old, 0) - self._safe_float(new, 0) >= threshold
+                )
 
         # 1. main_force_phase — 任意变化 → important
         old = yesterday_tags.get('main_force_phase')

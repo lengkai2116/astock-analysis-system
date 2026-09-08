@@ -7,8 +7,9 @@
   4. P5 形态映射缺口——Detector 预涨/预跌/黑马形态必须全覆盖
   5. 小缺陷：死代码/非单调分支/首仓公式/未用参数/残留常量
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
@@ -17,7 +18,6 @@ import inspect
 import re
 
 import pytest
-
 
 # ══════════════════════════════════════════════════════════
 # 1. F2 行业中性化基准口径（HIGH）

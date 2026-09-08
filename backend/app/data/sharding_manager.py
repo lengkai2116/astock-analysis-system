@@ -12,12 +12,11 @@
 - history_cache.db: 历史数据
 """
 
+import logging
 import os
 import sqlite3
-import logging
-from typing import Dict, Optional, List
-from datetime import datetime
 import threading
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +31,11 @@ class ShardingManager:
             data_dir = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data')
         self.data_dir = os.path.abspath(data_dir)
         self.db_dir = os.path.join(self.data_dir, 'duckdb')
-        
+
         # 数据库连接缓存
         self._connections: Dict[str, sqlite3.Connection] = {}
         self._write_locks: Dict[str, threading.RLock] = {}
-        
+
         # 表到数据库的映射（356号方案定稿）
         self._table_to_db: Dict[str, str] = {
             # system_cache.db — 系统元数据
@@ -101,7 +100,7 @@ class ShardingManager:
         self._prefix_rules = [
             ('adj_factor_cache_', 'history_cache.db'),
         ]
-        
+
     def get_connection(self, db_name: str) -> sqlite3.Connection:
         """获取数据库连接"""
         if db_name not in self._connections:
@@ -112,15 +111,15 @@ class ShardingManager:
             conn.execute("PRAGMA cache_size=-8192")
             conn.execute("PRAGMA busy_timeout=30000")
             self._connections[db_name] = conn
-            
+
         return self._connections[db_name]
-        
+
     def get_write_lock(self, db_name: str) -> threading.RLock:
         """获取写锁"""
         if db_name not in self._write_locks:
             self._write_locks[db_name] = threading.RLock()
         return self._write_locks[db_name]
-        
+
     def get_db_for_table(self, table_name: str) -> Optional[str]:
         """获取表对应的数据库名
 
@@ -136,7 +135,7 @@ class ShardingManager:
                 return db_name
         # 3. 未匹配 → 返回None，留在总库
         return None
-        
+
     def execute_query(self, table_name: str, sql: str, params: list = None):
         """执行查询"""
         db_name = self.get_db_for_table(table_name)
@@ -149,7 +148,7 @@ class ShardingManager:
         else:
             cursor.execute(sql)
         return cursor.fetchall()
-        
+
     def execute_insert(self, table_name: str, sql: str, params: list = None):
         """执行插入"""
         db_name = self.get_db_for_table(table_name)
@@ -157,7 +156,7 @@ class ShardingManager:
             return  # 表在总库，分库管理器不处理
         conn = self.get_connection(db_name)
         lock = self.get_write_lock(db_name)
-        
+
         with lock:
             cursor = conn.cursor()
             if params:
@@ -165,7 +164,7 @@ class ShardingManager:
             else:
                 cursor.execute(sql)
             conn.commit()
-            
+
     def execute_batch_insert(self, table_name: str, sql: str, params_list: list):
         """执行批量插入"""
         db_name = self.get_db_for_table(table_name)
@@ -173,12 +172,12 @@ class ShardingManager:
             return  # 表在总库，分库管理器不处理
         conn = self.get_connection(db_name)
         lock = self.get_write_lock(db_name)
-        
+
         with lock:
             cursor = conn.cursor()
             cursor.executemany(sql, params_list)
             conn.commit()
-            
+
     def create_table(self, table_name: str, create_sql: str):
         """创建表"""
         db_name = self.get_db_for_table(table_name)
@@ -186,13 +185,13 @@ class ShardingManager:
             return  # 表在总库，分库管理器不处理
         conn = self.get_connection(db_name)
         lock = self.get_write_lock(db_name)
-        
+
         with lock:
             cursor = conn.cursor()
             cursor.execute(create_sql)
             conn.commit()
             logger.info(f"创建表: {table_name} in {db_name}")
-            
+
     def table_exists(self, table_name: str) -> bool:
         """检查表是否存在"""
         db_name = self.get_db_for_table(table_name)
@@ -205,7 +204,7 @@ class ShardingManager:
             [table_name]
         )
         return cursor.fetchone() is not None
-        
+
     def get_table_row_count(self, table_name: str) -> int:
         """获取表行数"""
         db_name = self.get_db_for_table(table_name)
@@ -215,7 +214,7 @@ class ShardingManager:
         cursor = conn.cursor()
         cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
         return cursor.fetchone()[0]
-        
+
     def close_all(self):
         """关闭所有连接"""
         for conn in self._connections.values():

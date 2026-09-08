@@ -38,6 +38,59 @@ def get_ecm_instance() -> 'EnhancedCacheManager':
     return _ecm_instance
 
 
+# ── 417号方案：COL 深度清洗常量 ──────────────────────────
+# 数值列类型统一 + NaN 处理（按表类型差异化，列名与实际表结构对齐）
+_NUMERIC_COLUMNS = {
+    'daily_cache': ['open', 'high', 'low', 'close', 'pre_close', 'vol', 'amount', 'pct_chg'],
+    'minute_kline_cache': ['open', 'high', 'low', 'close', 'volume', 'amount'],
+    'as_minute_kline': ['open', 'high', 'low', 'close', 'volume', 'amount'],
+    'as_market_snapshot': ['price', 'open', 'high', 'low', 'pre_close', 'change', 'change_pct',
+                           'volume', 'amount', 'pe', 'pb', 'amplitude', 'circ_mv', 'total_mv',
+                           'volume_ratio', 'turnover_rate'],
+    'daily_basic_cache': ['turnover_rate', 'volume_ratio', 'pe', 'pb', 'total_mv', 'circ_mv'],
+    'moneyflow_cache': ['buy_lg_amount', 'sell_lg_amount', 'net_lg_amount',
+                        'buy_elg_amount', 'sell_elg_amount', 'net_elg_amount',
+                        'buy_sm_amount', 'sell_sm_amount', 'net_sm_amount'],
+    'stk_limit_cache': ['high_limit', 'low_limit'],
+    'lhb_cache': ['buy_amount', 'sell_amount', 'net_amount', 'buy_rate', 'sell_rate'],
+    'fina_indicator_cache': ['eps', 'eps_diluted', 'eps_ttm', 'bvps', 'roe', 'roce',
+                             'revenue_ps', 'profit_ps', 'cf_ps'],
+    'adj_factor_cache': ['adj_factor'],
+    'margin_cache': ['rzye', 'rzmje', 'rqmcl', 'rzrqye', 'rqyl', 'rqchl'],
+    'income_cache': ['revenue', 'operating_profit', 'net_profit', 'net_profit_atsopc',
+                     'basic_eps', 'total_opcost', 'rd_expense'],
+    'balancesheet_cache': ['total_assets', 'total_liab', 'total_equity', 'current_assets',
+                           'current_liab', 'fixed_assets', 'cash_equivalents', 'money_cap'],
+    'cashflow_cache': ['net_profit', 'cashflow_oper', 'cashflow_inv', 'cashflow_fin', 'free_cashflow'],
+    'forecast_cache': ['net_profit_min', 'net_profit_max', 'eps_min', 'eps_max'],
+    'finance_report_cache': ['roe', 'roce', 'quick_ratio', 'ocfps', 'current_ratio',
+                             'asset_liab_ratio', 'ebit', 'operating_profit',
+                             'total_assets', 'total_liab', 'current_assets', 'current_liab'],
+    'top10_holders_cache': ['hold_amount', 'hold_ratio', 'hold_float_ratio'],
+    'stk_holder_cache': ['holder_number'],
+    'win_rate_cache': ['win_rate_5d', 'win_rate_10d', 'win_rate_20d',
+                       'avg_return_5d', 'avg_return_20d', 'sharpe_5d', 'sharpe_20d'],
+    'conditional_win_rate_cache': ['total_samples', 'with_div_samples', 'with_div_win_rate',
+                                   'without_div_samples', 'without_div_win_rate',
+                                   'market_good_samples', 'market_good_win_rate',
+                                   'market_poor_samples', 'market_poor_win_rate'],
+    'factor_cache': ['value'],
+    'indicator_ma': ['ma5', 'ma10', 'ma20', 'ma30', 'ma60', 'ma120', 'ma250', 'vol_ma5', 'vol_ma10'],
+    'indicator_macd': ['macd_dif', 'macd_dea', 'macd_hist'],
+    'indicator_other': ['rsi14', 'kdj_k', 'kdj_d', 'kdj_j', 'boll_upper', 'boll_mid', 'boll_lower',
+                        'bbi', 'ene_upper', 'ene_lower', 'nine_buy', 'nine_sell'],
+}
+
+# K 线类表：应用 OHLC 一致性校验 + 离群值检测
+_OHLC_TABLES = {'daily_cache', 'minute_kline_cache', 'as_minute_kline', 'as_market_snapshot'}
+
+# 财务/基本面表：数值列 NaN 保留（落库为 NULL，不伪造 0）
+_NULL_NAN_TABLES = {
+    'daily_basic_cache', 'fina_indicator_cache', 'income_cache', 'balancesheet_cache',
+    'cashflow_cache', 'forecast_cache', 'finance_report_cache', 'top10_holders_cache',
+    'stk_holder_cache', 'margin_cache', 'adj_factor_cache',
+}
+
 class EnhancedCacheManager:
     """SQLite WAL 缓存管理器（取代 DuckDB）"""
 
@@ -136,12 +189,24 @@ class EnhancedCacheManager:
         356号方案（重构）：单写直路由
         - 分库表 → 直接写入对应分库（不再双写 stock_cache.db）
         - 非分库表 → 写入总库 stock_cache.db
+
+        417号方案：深度清洗
+        - 规则1-4（_validate_and_fix_data_format）：日期/代码/列名/数值+NaN
+        - 规则5-6（_apply_deep_clean）：OHLC 一致性校验 + 离群值检测（按表类型）
         """
         if df.empty:
             return
 
-        # 数据格式修订（355号方案规则1-3）
+        # 数据格式修订（355号方案规则1-3 + 417号方案规则4）
         df = self._validate_and_fix_data_format(df)
+        # 深度清洗（417号方案规则5-6，按表类型）
+        before = len(df)
+        df = self._apply_deep_clean(table, df)
+        if len(df) < before:
+            logger.warning(f"[COL清洗] {table}: 深度清洗剔除 {before - len(df)} 行 ({before}→{len(df)})")
+
+        if df.empty:
+            return
 
         cols = list(df.columns)
         col_list = ', '.join(f'"{c}"' for c in cols)
@@ -216,6 +281,9 @@ class EnhancedCacheManager:
         规则1：日期格式统一为 YYYY-MM-DD
         规则2：股票代码格式统一为 XXX.SH/SZ/BJ
         规则3：列名规范（小写+下划线）
+
+        注：数值列类型统一 + NaN 处理（417号方案规则4）在 _apply_deep_clean 中
+        按表类型差异化执行（需 table 参数区分 K 线/财务表）。
         """
         if df.empty:
             return df
@@ -245,6 +313,93 @@ class EnhancedCacheManager:
             except Exception:
                 pass  # 保持原格式
 
+        return df
+
+    def _apply_deep_clean(self, table: str, df: pd.DataFrame) -> pd.DataFrame:
+        """417号方案：深度清洗（规则4-6，按表类型差异化）
+
+        规则4：数值列类型统一 + NaN 处理
+        - K 线/行情表：价格/量额列 NaN → 0（与 _safe_float 一致）
+        - 财务/基本面表：数值列 NaN → NULL（保留缺失语义，不伪造 0）
+        - 其余表：数值列 NaN → 0
+        规则5：OHLC 一致性校验（仅 K 线类表）
+        规则6：离群值检测（仅 K 线类表）
+        """
+        if df.empty:
+            return df
+
+        # 规则4：数值列类型统一 + NaN 处理
+        numeric_cols = _NUMERIC_COLUMNS.get(table, [])
+        # 仅处理 DataFrame 中实际存在的数值列（避免 KeyError）
+        present_cols = [c for c in numeric_cols if c in df.columns]
+        if present_cols:
+            for col in present_cols:
+                try:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                except Exception:
+                    pass  # 非数值列，保持原格式
+            # NaN 处理：财务/基本面表保留 NULL，其余表填 0
+            if table not in _NULL_NAN_TABLES:
+                df[present_cols] = df[present_cols].fillna(0)
+
+        # 规则5-6：OHLC 一致性校验 + 离群值检测（仅 K 线类表）
+        if table in _OHLC_TABLES:
+            df = self._fix_ohlc(df)
+            df = self._detect_outliers(df)
+
+        return df
+
+    def _fix_ohlc(self, df: pd.DataFrame) -> pd.DataFrame:
+        """417号方案规则5：OHLC 一致性校验（仅 K 线类表）
+
+        - high < low → 交换
+        - open/close 超出 [low, high] → 夹取到区间
+        - 全部价格 <= 0 → 丢弃该行
+        """
+        if df.empty:
+            return df
+        ohlc_cols = [c for c in ('open', 'high', 'low', 'close') if c in df.columns]
+        if len(ohlc_cols) < 2:
+            return df
+        # 全部价格 <= 0 → 丢弃
+        price_cols = [c for c in ('open', 'high', 'low', 'close') if c in df.columns]
+        mask_valid = (df[price_cols] > 0).all(axis=1)
+        df = df[mask_valid]
+        if df.empty:
+            return df
+        # high < low 交换
+        if 'high' in df.columns and 'low' in df.columns:
+            swap = df['high'] < df['low']
+            if swap.any():
+                df.loc[swap, ['high', 'low']] = df.loc[swap, ['low', 'high']].values
+        # open/close 夹取到 [low, high]
+        if 'low' in df.columns and 'high' in df.columns:
+            for col in ('open', 'close'):
+                if col in df.columns:
+                    df[col] = df[col].clip(lower=df['low'], upper=df['high'])
+        return df
+
+    def _detect_outliers(self, df: pd.DataFrame) -> pd.DataFrame:
+        """417号方案规则6：离群值检测（仅 K 线类表）
+
+        - 单日涨跌幅 |pct_chg| > 50% → 剔除（A股单日涨跌幅上限 20%/30%，>50% 必为脏数据）
+        - 剔除记录时输出告警（ts_code + trade_date），便于审计
+        """
+        if df.empty:
+            return df
+        if 'pct_chg' in df.columns:
+            try:
+                pct = pd.to_numeric(df['pct_chg'], errors='coerce')
+                outlier_mask = pct.abs() > 50
+                if outlier_mask.any():
+                    for _, r in df[outlier_mask].iterrows():
+                        logger.warning(
+                            f"[COL清洗] {r.get('ts_code', '?')} {r.get('trade_date', '?')} "
+                            f"pct_chg={r.get('pct_chg')} 超限(>50%)，剔除"
+                        )
+                    df = df[~outlier_mask]
+            except Exception:
+                pass  # 校验失败则跳过
         return df
 
     def _query_df(self, sql: str, params=None) -> pd.DataFrame:
@@ -349,11 +504,18 @@ class EnhancedCacheManager:
             CREATE TABLE IF NOT EXISTS indicator_ma (
                 ts_code TEXT, trade_date TEXT,
                 ma5 REAL, ma10 REAL, ma20 REAL, ma30 REAL, ma60 REAL,
+                ma120 REAL, ma250 REAL,
                 vol_ma5 REAL, vol_ma10 REAL,
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, trade_date)
             )
         """)
+        # 414号P1.2: 迁移已有indicator_ma表，增加MA120/MA250列
+        for _col in ['ma120', 'ma250']:
+            try:
+                self._execute(f"ALTER TABLE indicator_ma ADD COLUMN {_col} REAL")
+            except Exception:
+                pass  # 列已存在，忽略
         self._execute("""
             CREATE TABLE IF NOT EXISTS indicator_macd (
                 ts_code TEXT, trade_date TEXT,
@@ -368,14 +530,32 @@ class EnhancedCacheManager:
                 rsi14 REAL,
                 kdj_k REAL, kdj_d REAL, kdj_j REAL,
                 boll_upper REAL, boll_mid REAL, boll_lower REAL,
+                bbi REAL, ene_upper REAL, ene_lower REAL,
+                nine_buy REAL, nine_sell REAL,
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, trade_date)
             )
         """)
+        # 414号R5: 迁移已有indicator_other表，增加BBI/ENE/九转列
+        for _col in ['bbi', 'ene_upper', 'ene_lower', 'nine_buy', 'nine_sell']:
+            try:
+                self._execute(f"ALTER TABLE indicator_other ADD COLUMN {_col} REAL")
+            except Exception:
+                pass  # 列已存在，忽略
         self._execute("""
             CREATE TABLE IF NOT EXISTS cache_metadata (
                 key TEXT PRIMARY KEY, value TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # 414号R8: 全市场级统计持久化表
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS market_stats_cache (
+                stat_date TEXT PRIMARY KEY,
+                ma20_ratio REAL, turnover_percentile REAL, limit_ratio REAL,
+                rsi_percentile REAL, erp_percentile REAL, margin_trend REAL,
+                pe_percentile REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         self._execute("""
@@ -522,7 +702,7 @@ class EnhancedCacheManager:
         self._execute("""
             CREATE TABLE IF NOT EXISTS fina_indicator_cache (
                 ts_code TEXT, end_date TEXT, ann_date TEXT,
-                eps REAL, eps_diluted REAL, eps_ttm REAL, bvps REAL, roe REAL,
+                eps REAL, eps_diluted REAL, eps_ttm REAL, bvps REAL, roe REAL, roce REAL,
                 revenue_ps REAL, profit_ps REAL, cf_ps REAL,
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, end_date)
@@ -532,7 +712,7 @@ class EnhancedCacheManager:
             CREATE TABLE IF NOT EXISTS income_cache (
                 ts_code TEXT, end_date TEXT, ann_date TEXT,
                 revenue REAL, operating_profit REAL, net_profit REAL,
-                net_profit_atsopc REAL, basic_eps REAL, total_opcost REAL,
+                net_profit_atsopc REAL, basic_eps REAL, total_opcost REAL, rd_expense REAL,
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, end_date)
             )
@@ -542,6 +722,7 @@ class EnhancedCacheManager:
                 ts_code TEXT, end_date TEXT, ann_date TEXT,
                 total_assets REAL, total_liab REAL, total_equity REAL,
                 current_assets REAL, current_liab REAL, fixed_assets REAL,
+                cash_equivalents REAL, money_cap REAL,
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, end_date)
             )
@@ -559,7 +740,7 @@ class EnhancedCacheManager:
             CREATE TABLE IF NOT EXISTS forecast_cache (
                 ts_code TEXT, end_date TEXT, ann_date TEXT,
                 forecast_type TEXT, change_reason TEXT,
-                net_profit_min REAL, net_profit_max REAL, 
+                net_profit_min REAL, net_profit_max REAL,
                 eps_min REAL, eps_max REAL,
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, end_date, ann_date)
@@ -929,6 +1110,16 @@ class EnhancedCacheManager:
         self._migrate_missing_columns('top10_holders_cache', [
             ('hold_float_ratio', 'REAL'),
         ])
+        # 406号：dim7估值引擎数据管道缺口修复
+        self._migrate_missing_columns('balancesheet_cache', [
+            ('cash_equivalents', 'REAL'), ('money_cap', 'REAL'),
+        ])
+        self._migrate_missing_columns('income_cache', [
+            ('rd_expense', 'REAL'),
+        ])
+        self._migrate_missing_columns('fina_indicator_cache', [
+            ('roce', 'REAL'),
+        ])
 
     # ── 快照数据库建表 ──────────────────────────────────────────
 
@@ -1091,7 +1282,8 @@ class EnhancedCacheManager:
         if df.empty:
             return
         with self._write_lock:
-            ma_cols = {'trade_date', 'ma5', 'ma10', 'ma20', 'ma30', 'ma60', 'vol_ma5', 'vol_ma10'}
+            # 414号P1.2: 增加MA120/MA250列
+            ma_cols = {'trade_date', 'ma5', 'ma10', 'ma20', 'ma30', 'ma60', 'ma120', 'ma250', 'vol_ma5', 'vol_ma10'}
             if ma_cols.issubset(set(df.columns)):
                 ma_df = df[list(ma_cols)].copy()
                 ma_df['ts_code'] = ts_code
@@ -1102,7 +1294,8 @@ class EnhancedCacheManager:
                 macd_df['ts_code'] = ts_code
                 self._insert_from_df('indicator_macd', macd_df)
             other_cols = {'trade_date', 'rsi14', 'kdj_k', 'kdj_d', 'kdj_j',
-                           'boll_upper', 'boll_mid', 'boll_lower'}
+                           'boll_upper', 'boll_mid', 'boll_lower',
+                           'bbi', 'ene_upper', 'ene_lower', 'nine_buy', 'nine_sell'}
             if other_cols.issubset(set(df.columns)):
                 other_df = df[list(other_cols)].copy()
                 other_df['ts_code'] = ts_code
@@ -1112,13 +1305,15 @@ class EnhancedCacheManager:
     def get_indicators_wide(self, ts_code: str) -> 'pd.DataFrame':
         """读取宽表指标数据，合并 3 张表为 1 个 DataFrame"""
         ma = self._query_shard('indicator_ma',
-            "SELECT ts_code, trade_date, ma5, ma10, ma20, ma30, ma60, vol_ma5, vol_ma10 "
+            # 414号P1.2: 增加MA120/MA250列
+            "SELECT ts_code, trade_date, ma5, ma10, ma20, ma30, ma60, ma120, ma250, vol_ma5, vol_ma10 "
             "FROM indicator_ma WHERE ts_code = ? ORDER BY trade_date", [ts_code])
         macd = self._query_shard('indicator_macd',
             "SELECT trade_date, macd_dif, macd_dea, macd_hist "
             "FROM indicator_macd WHERE ts_code = ? ORDER BY trade_date", [ts_code])
         other = self._query_shard('indicator_other',
-            "SELECT trade_date, rsi14, kdj_k, kdj_d, kdj_j, boll_upper, boll_mid, boll_lower "
+            "SELECT trade_date, rsi14, kdj_k, kdj_d, kdj_j, boll_upper, boll_mid, boll_lower, "
+            "bbi, ene_upper, ene_lower, nine_buy, nine_sell "
             "FROM indicator_other WHERE ts_code = ? ORDER BY trade_date", [ts_code])
         result = ma
         for _df in [macd, other]:
@@ -1127,6 +1322,53 @@ class EnhancedCacheManager:
             elif not _df.empty:
                 result = _df
         return result
+
+    # ── 全市场统计缓存 ──────────────────────────────────────
+
+    def cache_market_stats(self, stats: dict):
+        """414号R8: 持久化全市场级统计到SQLite"""
+        stat_date = stats.get('computed_at', '')
+        if not stat_date:
+            return
+        with self._write_lock:
+            self._execute("""
+                INSERT OR REPLACE INTO market_stats_cache
+                (stat_date, ma20_ratio, turnover_percentile, limit_ratio,
+                 rsi_percentile, erp_percentile, margin_trend, pe_percentile)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                stat_date,
+                stats.get('ma20_ratio', 0.5),
+                stats.get('turnover_percentile', 0.5),
+                stats.get('limit_ratio', 1.0),
+                stats.get('rsi_percentile', 0.5),
+                stats.get('erp_percentile', 0.5),
+                stats.get('margin_trend', 0.5),
+                stats.get('pe_percentile', 0.5),
+            ])
+            self.conn.commit()
+
+    def get_cached_market_stats(self, stat_date: str = None) -> dict:
+        """414号R8: 读取全市场级统计缓存"""
+        if stat_date is None:
+            row = self._query_shard('market_stats_cache',
+                "SELECT * FROM market_stats_cache ORDER BY stat_date DESC LIMIT 1", [])
+        else:
+            row = self._query_shard('market_stats_cache',
+                "SELECT * FROM market_stats_cache WHERE stat_date = ?", [stat_date])
+        if row is not None and not row.empty:
+            r = row.iloc[0]
+            return {
+                'ma20_ratio': float(r.get('ma20_ratio', 0.5)),
+                'turnover_percentile': float(r.get('turnover_percentile', 0.5)),
+                'limit_ratio': float(r.get('limit_ratio', 1.0)),
+                'rsi_percentile': float(r.get('rsi_percentile', 0.5)),
+                'erp_percentile': float(r.get('erp_percentile', 0.5)),
+                'margin_trend': float(r.get('margin_trend', 0.5)),
+                'pe_percentile': float(r.get('pe_percentile', 0.5)),
+                'computed_at': str(r.get('stat_date', '')),
+            }
+        return {}
 
     # ── 内存缓存 ────────────────────────────────────────────
 
@@ -3217,8 +3459,8 @@ class EnhancedCacheManager:
     def write_signal_record(self, record: dict):
         """写入信号记录到app.db"""
         try:
-            import sqlite3 as _sqlite3
             import os
+            import sqlite3 as _sqlite3
             app_db = os.path.join(os.getenv('DATA_DIR', 'data'), 'app.db')
             with _sqlite3.connect(app_db) as conn:
                 cols = list(record.keys())
@@ -3232,8 +3474,8 @@ class EnhancedCacheManager:
     def save_factor_combination(self, data: dict):
         """保存因子组合到factor_combinations表"""
         try:
-            import sqlite3 as _sqlite3
             import os
+            import sqlite3 as _sqlite3
             app_db = os.path.join(os.getenv('DATA_DIR', 'data'), 'factor_combos.db')
             with _sqlite3.connect(app_db) as conn:
                 cols = list(data.keys())

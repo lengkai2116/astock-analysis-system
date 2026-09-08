@@ -6,10 +6,11 @@
 
 import logging
 from datetime import datetime
+
 from sqlalchemy import text
 
 from app import db
-from app.models.strategy import StrategyTemplateV2, StrategyTemplateType
+from app.models.strategy import StrategyTemplateType, StrategyTemplateV2
 
 logger = logging.getLogger(__name__)
 

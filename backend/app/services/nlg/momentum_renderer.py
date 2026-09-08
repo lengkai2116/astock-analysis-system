@@ -34,7 +34,7 @@ def render_momentum_with_context(momentum: dict, volume: dict = None, trend: dic
 
     # 基础动量
     level = momentum.get("level", "")
-    score = momentum.get("score", 0.0)
+    momentum.get("score", 0.0)
     if level and level not in ("none", "unknown", ""):
         level_cn = MOMENTUM_LEVEL.get(level, level)
         parts.append(f"短期动能{level_cn}")

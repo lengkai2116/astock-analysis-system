@@ -2,9 +2,10 @@
 基准数据获取服务
 支持沪深300、中证500、中证1000、上证指数等主要A股指数
 """
-import pandas as pd
-from typing import Dict, List, Optional
 from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+
+import pandas as pd
 
 
 class BenchmarkIndex:
@@ -46,11 +47,11 @@ class BenchmarkService:
             from app.data import DataManager
             self._dm = DataManager()
         return self._dm
-    
+
     def get_index_list(self) -> List[Dict]:
         """
         获取支持的指数列表
-        
+
         Returns:
             指数列表，包含ts_code, name, count等信息
         """
@@ -61,34 +62,34 @@ class BenchmarkService:
                 'name': name
             })
         return indices
-    
-    def get_index_daily(self, 
+
+    def get_index_daily(self,
                        ts_code: str = BenchmarkIndex.HS300,
                        start_date: Optional[str] = None,
                        end_date: Optional[str] = None,
                        use_cache: bool = True) -> pd.DataFrame:
         """
         获取指数日线数据
-        
+
         Args:
             ts_code: 指数代码
             start_date: 开始日期 (YYYYMMDD)
             end_date: 结束日期 (YYYYMMDD)
             use_cache: 是否使用缓存
-        
+
         Returns:
             指数日线数据DataFrame
         """
         cache_key = f"{ts_code}_{start_date}_{end_date}"
-        
+
         if use_cache and cache_key in self.cache:
             return self.cache[cache_key].copy()
-        
+
         if start_date is None:
             start_date = (datetime.now() - timedelta(days=365 * 5)).strftime('%Y%m%d')
         if end_date is None:
             end_date = datetime.now().strftime('%Y%m%d')
-        
+
         data = self._data_manager.get_cached_daily_data(ts_code, start_date, end_date)
 
         if data.empty:
@@ -107,26 +108,26 @@ class BenchmarkService:
             return pd.DataFrame()
 
         df = data.copy()
-        
+
         # DuckDB daily_cache 已过滤日期范围，无需再次过滤
         df = df.sort_values('trade_date')
-        
+
         self.cache[cache_key] = df.copy()
-        
+
         return df
-    
+
     def get_multiple_indices(self,
                             ts_codes: List[str],
                             start_date: Optional[str] = None,
                             end_date: Optional[str] = None) -> Dict[str, pd.DataFrame]:
         """
         获取多个指数数据
-        
+
         Args:
             ts_codes: 指数代码列表
             start_date: 开始日期
             end_date: 结束日期
-        
+
         Returns:
             字典，key为指数代码，value为DataFrame
         """
@@ -136,42 +137,42 @@ class BenchmarkService:
             if not df.empty:
                 result[ts_code] = df
         return result
-    
+
     def get_benchmark_with_returns(self,
                                  ts_code: str = BenchmarkIndex.HS300,
                                  start_date: Optional[str] = None,
                                  end_date: Optional[str] = None) -> pd.DataFrame:
         """
         获取指数数据并计算收益率
-        
+
         Args:
             ts_code: 指数代码
             start_date: 开始日期
             end_date: 结束日期
-        
+
         Returns:
             包含价格和收益率的DataFrame
         """
         df = self.get_index_daily(ts_code, start_date, end_date)
-        
+
         if df.empty:
             return pd.DataFrame()
-        
+
         df = df.sort_values('trade_date')
         df['daily_return'] = df['close'].pct_change()
         df['cumulative_return'] = (1 + df['daily_return']).cumprod() - 1
-        
+
         return df
-    
+
     def get_index_constituents(self, ts_code: str) -> List[str]:
         """
         获取指数成分股（模拟实现）
-        
+
         注意：完整实现需要Tushare高级权限
-        
+
         Args:
             ts_code: 指数代码
-        
+
         Returns:
             成分股代码列表
         """
@@ -184,51 +185,51 @@ class BenchmarkService:
             BenchmarkIndex.CYB: [],
             BenchmarkIndex.KCB: []
         }
-        
+
         return constituents_map.get(ts_code, [])
-    
+
     def calculate_benchmark_metrics(self,
                                     ts_code: str = BenchmarkIndex.HS300,
                                     start_date: Optional[str] = None,
                                     end_date: Optional[str] = None) -> Dict:
         """
         计算指数绩效指标
-        
+
         Args:
             ts_code: 指数代码
             start_date: 开始日期
             end_date: 结束日期
-        
+
         Returns:
             绩效指标字典
         """
         df = self.get_benchmark_with_returns(ts_code, start_date, end_date)
-        
+
         if df.empty or len(df) < 2:
             return {}
-        
+
         import numpy as np
-        
+
         daily_returns = df['daily_return'].dropna()
-        
+
         total_return = df['cumulative_return'].iloc[-1]
         trading_days = len(df)
         annual_return = (1 + total_return) ** (252 / trading_days) - 1
-        
+
         volatility = daily_returns.std() * np.sqrt(252)
-        
+
         cummax = df['close'].cummax()
         drawdown = (cummax - df['close']) / cummax
         max_drawdown = drawdown.max()
-        
+
         risk_free_rate = 0.03
         excess_returns = daily_returns - risk_free_rate / 252
         sharke_ratio = np.sqrt(252) * excess_returns.mean() / (daily_returns.std() + 1e-10)
-        
+
         downside_returns = daily_returns[daily_returns < 0]
         downside_std = downside_returns.std() if len(downside_returns) > 0 else 1e-10
         sortino_ratio = np.sqrt(252) * excess_returns.mean() / downside_std
-        
+
         return {
             'ts_code': ts_code,
             'name': BenchmarkIndex.NAMES.get(ts_code, ts_code),
@@ -240,19 +241,19 @@ class BenchmarkService:
             'sortino_ratio': float(sortino_ratio),
             'trading_days': trading_days
         }
-    
+
     def compare_benchmarks(self,
                          ts_codes: List[str],
                          start_date: Optional[str] = None,
                          end_date: Optional[str] = None) -> pd.DataFrame:
         """
         对比多个指数绩效
-        
+
         Args:
             ts_codes: 指数代码列表
             start_date: 开始日期
             end_date: 结束日期
-        
+
         Returns:
             对比结果DataFrame
         """
@@ -261,37 +262,37 @@ class BenchmarkService:
             metrics = self.calculate_benchmark_metrics(ts_code, start_date, end_date)
             if metrics:
                 results.append(metrics)
-        
+
         if not results:
             return pd.DataFrame()
-        
+
         return pd.DataFrame(results)
-    
+
     def clear_cache(self):
         """清空缓存"""
         self.cache.clear()
-    
+
     def get_index_industry_weight(self, ts_code: str) -> pd.DataFrame:
         """
         获取指数行业权重
-        
+
         注意：需要Tushare高级权限
-        
+
         Args:
             ts_code: 指数代码
-        
+
         Returns:
             行业权重DataFrame
         """
         return pd.DataFrame()
-    
+
     def get_index_basic_info(self, ts_code: str) -> Dict:
         """
         获取指数基本信息
-        
+
         Args:
             ts_code: 指数代码
-        
+
         Returns:
             指数基本信息
         """
@@ -304,7 +305,7 @@ class BenchmarkService:
             'base_point': 1000
         }
         return info
-    
+
     def _get_full_name(self, ts_code: str) -> str:
         """获取指数全称"""
         full_names = {
@@ -317,7 +318,7 @@ class BenchmarkService:
             BenchmarkIndex.KCB: "上海证券交易所科创板指数"
         }
         return full_names.get(ts_code, ts_code)
-    
+
     def _get_publish_date(self, ts_code: str) -> str:
         """获取指数发布日期"""
         dates = {
@@ -330,7 +331,7 @@ class BenchmarkService:
             BenchmarkIndex.KCB: "20190613"
         }
         return dates.get(ts_code, "")
-    
+
     def _get_base_date(self, ts_code: str) -> str:
         """获取指数基期"""
         dates = {

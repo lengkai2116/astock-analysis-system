@@ -16,10 +16,12 @@ def _data_response(data):
         }), 503
     return jsonify({'success': True, 'data': data})
 import logging
-from flask import Blueprint, request, jsonify
+
+from flask import Blueprint, jsonify, request
+
 from app.services.dashboard_service import DashboardService
-from app.utils.error_handlers import handle_exceptions
 from app.utils.api_cache import api_cache
+from app.utils.error_handlers import handle_exceptions
 
 logger = logging.getLogger(__name__)
 

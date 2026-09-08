@@ -7,17 +7,17 @@
   3. 条件概率评估
 """
 import logging
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
-from datetime import datetime, date, timedelta
-import pandas as pd
+
 import numpy as np
 
 from app import db
 from app.data import DataManager
-from app.models.verification import SignalRecord, VirtualPosition
 from app.engine.framework.backtest_evidence import (
-    SignalWinRateEvaluator, SignalClassifier,
+    SignalWinRateEvaluator,
 )
+from app.models.verification import SignalRecord, VirtualPosition
 
 logger = logging.getLogger(__name__)
 

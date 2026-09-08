@@ -4,19 +4,20 @@
 （cross_validate._build_trade_plan vs advice_builder）。S0.7 让弹窗 diagnose 的
 operation_advice 改为引用 advice_builder 输出（唯一仓位/止损/入场来源）。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)
 
-import pytest
 
 
 def test_build_advice_from_tags():
     """从标签构造 advice_builder 输入（diagnose 无五维时可用）"""
+    from app.data import DataManager
     from app.opportunity_atlas.advice_builder import build_operation_advice
     from app.opportunity_atlas.cross_validate import L4CrossValidator
-    from app.data import DataManager
 
     dm = DataManager()
     cv = L4CrossValidator(dm)
@@ -37,8 +38,8 @@ def test_build_advice_from_tags():
 
 def test_diagnose_operation_advice_unified_format():
     """弹窗 diagnose 的 operation_advice 应为 advice_builder 新格式（含 state/executable）"""
-    from app.opportunity_atlas.cross_validate import L4CrossValidator
     from app.data import DataManager
+    from app.opportunity_atlas.cross_validate import L4CrossValidator
 
     dm = DataManager()
     cv = L4CrossValidator(dm)
@@ -54,8 +55,8 @@ def test_diagnose_operation_advice_unified_format():
 
 def test_stop_loss_consistent_between_engines():
     """双输出止损一致（S0.7 核心：消除 -15% 止损冲突）"""
-    from app.opportunity_atlas.cross_validate import L4CrossValidator
     from app.data import DataManager
+    from app.opportunity_atlas.cross_validate import L4CrossValidator
 
     dm = DataManager()
     cv = L4CrossValidator(dm)

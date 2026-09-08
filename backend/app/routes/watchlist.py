@@ -3,16 +3,15 @@
 核心：批量行情聚合端点 GET /api/v3/watchlist/quotes
 文件路径：backend/app/routes/watchlist.py
 """
-from flask import Blueprint, request, jsonify, current_app
-from datetime import datetime, timedelta
 import logging
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta
+from typing import Dict, List
+
+from flask import Blueprint, jsonify, request
 
 from app import db
-from app.models import Watchlist, Stock
-from app.data.enhanced_cache_manager import EnhancedCacheManager
-from app.data.memory_cache import TieredMemoryCache
 from app.data import DataManager
+from app.models import Stock, Watchlist
 from app.utils.error_handlers import handle_exceptions
 
 watchlist_bp = Blueprint('watchlist', __name__, url_prefix='/api/v3/watchlist')
@@ -258,7 +257,7 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
             stock['industry_full'] = stock_basic.get('industry_full', stock_basic.get('industry', ''))
             stock['shares_total'] = stock_basic.get('total_share')
             stock['shares_circ'] = stock_basic.get('float_share')
-    except Exception as e:
+    except Exception:
         pass
 
     # 6. 股东户数（stk_holder_cache）
@@ -269,7 +268,7 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
             hn = holder.get('holder_number')
             if hn is not None:
                 stock['shareholder_n'] = int(hn)
-    except Exception as e:
+    except Exception:
         pass
 
     # 7. 大股东持股（top10_holders_cache，取最大比例）
@@ -280,7 +279,7 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
             hr = top.get('hold_ratio')
             if hr is not None:
                 stock['major_holder'] = round(float(hr), 2)
-    except Exception as e:
+    except Exception:
         pass
 
     return stock

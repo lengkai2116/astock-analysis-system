@@ -2,12 +2,14 @@
 "市场数据 API 路由
 提供行情数据、市场概况、板块涨跌等信息"
 """
-from flask import Blueprint, request, jsonify
 import logging
 from datetime import datetime, timedelta
+
 import pandas as pd
-from app.services.market_service import MarketService
+from flask import Blueprint, jsonify, request
+
 from app.services.dashboard_service import DashboardService
+from app.services.market_service import MarketService
 from app.utils.error_handlers import handle_exceptions
 
 market_bp = Blueprint('market', __name__)
@@ -43,7 +45,7 @@ def get_stocks():
     page_size = request.args.get('page_size', 20, type=int)
     industry = request.args.get('industry')
     market = request.args.get('market')
-    
+
     result = market_service.get_stock_list(page, page_size, industry, market)
     return jsonify(result)
 
@@ -62,7 +64,7 @@ def get_stock_detail(ts_code):
 def get_daily_data(ts_code):
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
-    
+
     data = market_service.get_daily_data(ts_code, start_date, end_date)
     return jsonify({'success': True, 'data': data})
 
@@ -161,8 +163,8 @@ def get_stock_quote(ts_code):
     缓存: TieredMemoryCache reaaltime(3s盘中) / analysis(30min盘后)
     错误: 全源失败 → 503 DataUnavailable
     """
-    from app.data.memory_cache import TieredMemoryCache
     from app.data import DataManager
+    from app.data.memory_cache import TieredMemoryCache
 
     cache = TieredMemoryCache()
     cache_key = f'quote:{ts_code}'
@@ -319,8 +321,8 @@ def get_stock_moneyflow(ts_code):
     缓存: TieredMemoryCache analysis(30min)
     错误: 全源失败 → 503 DataUnavailable
     """
-    from app.data.memory_cache import TieredMemoryCache
     from app.data import DataManager
+    from app.data.memory_cache import TieredMemoryCache
 
     cache = TieredMemoryCache()
     cache_key = f'moneyflow:{ts_code}'

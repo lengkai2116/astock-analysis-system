@@ -12,11 +12,12 @@
   4.5 数据缓存 — 持久化到 DuckDB 供重复查询
 """
 import logging
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta, date
-from dataclasses import dataclass, field
-import pandas as pd
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Dict, List, Optional
+
 import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 

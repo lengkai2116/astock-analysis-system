@@ -1,9 +1,11 @@
-import re
 import copy
-from typing import Dict, List, Optional
+import re
 from datetime import datetime
+from typing import Dict, List, Optional
+
 from app import db
-from app.models.strategy import StrategyTemplateV2, StrategyTemplateType
+from app.models.strategy import StrategyTemplateType, StrategyTemplateV2
+
 
 class StrategyTemplateService:
     @staticmethod

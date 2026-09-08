@@ -8,19 +8,18 @@
   - 每种状态的反向测试（不满足条件时不应触发）
   - 多状态并行检测
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
 
-import pytest
-import pandas as pd
 import numpy as np
-
-from app.engine.patterns import PatternCategory, PatternStage, PatternResult
+import pandas as pd
+import pytest
+from app.engine.patterns import PatternCategory, PatternResult
 from app.engine.patterns.detectors.state_detectors import StateDetector
-
 
 # ═══════════════════════════════════════════════════
 # Fixtures & Helpers
@@ -118,7 +117,7 @@ class TestS1_PriceUpVolumeUp:
         """构造价涨量增数据"""
         rows = 60
         dates = pd.date_range(start='2025-01-01', periods=rows, freq='B')
-        rng = np.random.RandomState(10)
+        np.random.RandomState(10)
         # 平稳上涨价格
         close = 100 + np.arange(rows) * 0.3
         open_p = close - 0.5
@@ -171,7 +170,7 @@ class TestS2_PriceDownVolumeDown:
         """构造价跌量缩数据"""
         rows = 60
         dates = pd.date_range(start='2025-01-01', periods=rows, freq='B')
-        rng = np.random.RandomState(11)
+        np.random.RandomState(11)
         close = 100 + np.arange(rows) * 0.3
         open_p = close + 0.5
         high = open_p + 0.5
@@ -512,7 +511,7 @@ class TestS8_VolumePullback:
         """S-8 缩量回踩应被检测到"""
         df = self._make_s8_data()
         results = detector.detect(df)
-        s8_results = [r for r in results if r.name == "S-8"]
+        [r for r in results if r.name == "S-8"]
         # 由于构造数据可能不完全满足所有条件，验证检测器正常运行
         assert isinstance(results, list)
 

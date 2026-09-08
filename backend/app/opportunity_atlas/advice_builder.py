@@ -580,7 +580,7 @@ def _apply_degradation(state: str, dirs: list[int], sentiment_phase: str = '',
     Returns: (state, reason) —— reason 为降级原因（None=未降级），供 state_reason 使用（336号 S1.1）
     """
     n_bear = sum(1 for x in dirs if x < 0)
-    n_bull = sum(1 for x in dirs if x > 0)
+    sum(1 for x in dirs if x > 0)
     # ≥2 维反向 → 强制观望（L4 tie 先例：分歧降级谨慎）
     if state in ('enter', 'light') and n_bear >= 2:
         return 'wait', '多维度方向冲突（≥2 维反向），建议观望'

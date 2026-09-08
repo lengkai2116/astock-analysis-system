@@ -6,21 +6,21 @@
 219 规格书对齐：响应结构遵循 §2.2-§2.7 字段映射
 §13 数据完整性约束：所有数据不可用场景返回 503/4xx，不假造数据
 """
-from flask import Blueprint, request, jsonify, current_app
-import pandas as pd
 import json
-from datetime import datetime
-import os
 import logging
+import os
+from datetime import datetime
+
+import pandas as pd
+from flask import Blueprint, jsonify, request
 from sqlalchemy import create_engine
 
-from app.factors import get_factor_registry, FactorCalculator
-from app.data.factor_precompute import FactorPrecomputeManager
 from app.data.enhanced_cache_manager import EnhancedCacheManager
+from app.data.factor_precompute import FactorPrecomputeManager
+from app.engine import BacktestEngine, get_strategy_pipeline
 from app.evaluation import FactorEvaluator
-from app.engine import BacktestEngine, calculate_performance_metrics, get_strategy_pipeline
-
-from app.utils.error_handlers import handle_exceptions, safe_db_operation
+from app.factors import FactorCalculator, get_factor_registry
+from app.utils.error_handlers import handle_exceptions
 
 factors_bp = Blueprint('factors', __name__, url_prefix='/api/factors')
 
@@ -539,7 +539,7 @@ def get_combinations():
     # 用户自建组合
     user_combos = []
     if filter_type in ('all', 'user'):
-        db_path = get_db_path()
+        get_db_path()
         _ensure_combo_db()
         conn = _get_combo_conn()
         try:
@@ -629,7 +629,7 @@ def save_combination():
         else:
             stored_factors.append({"name": str(f), "weight": 0})
 
-    db_path = get_db_path()
+    get_db_path()
     _ensure_combo_db()
 
     conn = _get_combo_conn()

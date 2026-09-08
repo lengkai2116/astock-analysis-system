@@ -12,17 +12,19 @@ import json
 import logging
 import os
 import traceback
-from typing import Dict, List, Optional
 from datetime import datetime, timedelta
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
 # 观潮对标 §5.4: 定时任务健康监控集成
-from app.monitors.task_health_monitor import task_health_monitor, TaskHealthMonitor
-
 # 月度参数平原校验依赖
-from app.engine.framework.optimizer import run_preset_grid_search, list_preset_grids, create_objective_function
-
+from app.engine.framework.optimizer import (
+    create_objective_function,
+    list_preset_grids,
+    run_preset_grid_search,
+)
+from app.monitors.task_health_monitor import task_health_monitor
 
 
 def run_monthly_backtest():
@@ -33,13 +35,9 @@ def run_monthly_backtest():
     对每类信号运行赢率评估，结果缓存到 DuckDB。
     """
     try:
-        from app import db
-        from app.models.strategy import StrategyOutput
-        from app.models import Signal as SignalModel
         from app.data import DataManager
         from app.engine.framework.backtest_evidence import (
             SignalWinRateEvaluator,
-            SignalClassifier,
         )
 
         data_mgr = DataManager()
@@ -87,9 +85,8 @@ def run_monthly_backtest():
 
 def _load_signals() -> List[Dict]:
     """从数据库加载历史信号"""
-    from app import db
-    from app.models.strategy import StrategyOutput
     from app.models import Signal as SignalModel
+    from app.models.strategy import StrategyOutput
 
     signals = []
 
@@ -132,7 +129,6 @@ def _load_signals() -> List[Dict]:
 
 def _load_price_data(ts_codes: List[str], data_mgr) -> Dict[str, 'pd.DataFrame']:
     """加载信号对应股票的价格数据"""
-    import pandas as pd
     result = {}
     for ts_code in ts_codes[:100]:  # 限制最多100只
         try:

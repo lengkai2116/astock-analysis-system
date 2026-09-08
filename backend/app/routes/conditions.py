@@ -10,7 +10,7 @@
   - 条件库全量管理（系统诊断入口）: 支持 CRUD
 """
 from flask import Blueprint, jsonify, request
-from sqlalchemy import func, case, desc
+from sqlalchemy import desc, func
 
 from app import db
 

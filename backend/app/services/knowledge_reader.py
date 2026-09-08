@@ -276,9 +276,9 @@ class KnowledgeReader:
         if not tags:
             return []
 
-        placeholders = ",".join("?" for _ in tags)
+        ",".join("?" for _ in tags)
         rows = self._db.execute(
-            f"""SELECT km.file_path, km.doc_type, km.file_size
+            """SELECT km.file_path, km.doc_type, km.file_size
                 FROM knowledge_meta km
                 WHERE km.file_path IN (
                     SELECT file_path FROM knowledge_meta

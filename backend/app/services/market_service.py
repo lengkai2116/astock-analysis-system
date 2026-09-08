@@ -1,6 +1,7 @@
-from app.models import Stock
-from datetime import datetime
 import logging
+from datetime import datetime
+
+from app.models import Stock
 
 logger = logging.getLogger(__name__)
 
@@ -16,18 +17,18 @@ class MarketService:
             from app.data import DataManager
             self._data_manager = DataManager()
         return self._data_manager
-    
+
     def get_stock_list(self, page, page_size, industry=None, market=None):
         query = Stock.query
-        
+
         if industry:
             query = query.filter(Stock.industry == industry)
         if market:
             query = query.filter(Stock.market == market)
-        
+
         total = query.count()
         stocks = query.offset((page - 1) * page_size).limit(page_size).all()
-        
+
         return {
             'success': True,
             'data': [s.to_dict() for s in stocks],
@@ -38,11 +39,11 @@ class MarketService:
                 'pages': (total + page_size - 1) // page_size
             }
         }
-    
+
     def get_stock_detail(self, ts_code):
         stock = Stock.query.get(ts_code)
         return stock.to_dict() if stock else None
-    
+
     def get_daily_data(self, ts_code, start_date=None, end_date=None):
         # 通过 DataManager 走 DuckDB
         try:
@@ -58,7 +59,7 @@ class MarketService:
         except Exception:
             pass
         return []
-    
+
     def get_index_data(self):
         indices = [
             {'ts_code': '000001.SH', 'name': '上证指数'},
@@ -100,11 +101,11 @@ class MarketService:
             return results
         except Exception:
             return indices
-    
+
     def get_industries(self):
         industries = Stock.query.with_entities(Stock.industry).distinct().all()
         return [i[0] for i in industries if i[0]]
-    
+
     def get_markets(self):
         markets = Stock.query.with_entities(Stock.market).distinct().all()
         return [m[0] for m in markets if m[0]]

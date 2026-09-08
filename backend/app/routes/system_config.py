@@ -9,7 +9,6 @@
   - 配置存储于 SQLite system_config 表（JSON 列）
   - 定时调度通过 APScheduler 动态管理（reschedule_job）
 """
-import json
 import logging
 import os
 from datetime import datetime
@@ -317,7 +316,6 @@ def get_schedule_logs():
 
     try:
         from app.models.system_config import SyncLog
-        from app import db
 
         query = SyncLog.query.order_by(SyncLog.started_at.desc())
         total = query.count()

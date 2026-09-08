@@ -19,10 +19,9 @@
 from __future__ import annotations
 
 import itertools
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 import numpy as np
-
 
 # ── 辅助函数 ──────────────────────────────────────────────────────────
 

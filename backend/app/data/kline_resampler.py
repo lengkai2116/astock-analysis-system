@@ -8,9 +8,8 @@ KlineResampler — K线重采样管道
 """
 
 import logging
-from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Callable
-from collections import OrderedDict
+from datetime import datetime
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 

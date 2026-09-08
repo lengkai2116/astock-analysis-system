@@ -3,14 +3,15 @@
 为前端 K线图表提供统一格式的数据
 """
 import logging
-from app.utils.error_handlers import handle_exceptions
-from flask import Blueprint, request, jsonify
-from app import db
-from app.indicators import TechnicalIndicatorEngine
-from app.data import DataManager
-from app.services.dashboard_service import DashboardService
+from datetime import datetime, timezone
+
 import pandas as pd
-from datetime import datetime, timedelta, timezone
+from flask import Blueprint, jsonify, request
+
+from app.data import DataManager
+from app.indicators import TechnicalIndicatorEngine
+from app.services.dashboard_service import DashboardService
+from app.utils.error_handlers import handle_exceptions
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ OVERLAY_INDICATORS = {
     'ma10':  {'name': 'MA10',  'color': '#ff9800', 'type': 'overlay'},
     'ma20':  {'name': 'MA20',  'color': '#2196f3', 'type': 'overlay'},
     'boll_upper':  {'name': 'BOLL上轨',  'color': '#e91e63', 'type': 'overlay', 'line_style': 'dashed'},
-    'boll_middle': {'name': 'BOLL中轨',  'color': '#4caf50', 'type': 'overlay', 'line_style': 'solid'},
+    'boll_mid': {'name': 'BOLL中轨',  'color': '#4caf50', 'type': 'overlay', 'line_style': 'solid'},
     'boll_lower':  {'name': 'BOLL下轨',  'color': '#e91e63', 'type': 'overlay', 'line_style': 'dashed'},
     'bbi':   {'name': 'BBI',   'color': '#ec4899', 'type': 'overlay'},
     'ene_upper': {'name': 'ENE上轨', 'color': '#06b6d4', 'type': 'overlay', 'line_style': 'dashed'},
@@ -109,10 +110,10 @@ def _get_kline_data(data_manager, ts_code, limit=200, period='D'):
     else:
         # 使用DataManager的get_kline_data方法获取对应周期的数据
         kline_data = data_manager.get_kline_data(ts_code, period=period, start_date=None, end_date=None)
-    
+
     if kline_data.empty:
         return None, None
-    
+
     # 转换Decimal类型为float类型，避免类型错误
     for col in ['open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg']:
         if col in kline_data.columns:
@@ -120,19 +121,19 @@ def _get_kline_data(data_manager, ts_code, limit=200, period='D'):
                 kline_data[col] = kline_data[col].astype(float)
             except Exception:
                 pass
-    
+
     return kline_data, None
 @handle_exceptions
 @chart_bp.route('/kline/<ts_code>', methods=['GET'])
 def get_kline_chart_data(ts_code):
     """
     获取K线图表数据（主图K线 + 叠加指标 + 副图指标 + 信号）
-    
+
     Query params:
         indicators: 逗号分隔的指标列表，如 ma5,ma20,macd,rsi
         period: 时间周期，支持 D(日线)/W(周线)/M(月线)/1m/5m/15m/30m/60m
         limit: 数据条数，默认200
-    
+
     Response:
     {
         "success": true,
@@ -163,57 +164,57 @@ def get_kline_chart_data(ts_code):
                 'error_type': 'DataUnavailable',
             }), 503
         return jsonify({'success': True, 'data': data})
-    
+
     # 规范化周期参数：数字转换为带m的格式，其他保持原样
     if period in ['1', '5', '15', '30', '60']:
         period = period + 'm'
-    
+
     # 解析指标列表
     requested_indicators = [i.strip() for i in indicators_param.split(',') if i.strip()] if indicators_param else ['ma5', 'ma20', 'macd', 'rsi', 'kdj']
-    
+
     # 处理BOLL特殊情况：请求boll时自动包含boll_upper/middle/lower
     if 'boll' in requested_indicators:
-        for boll_key in ['boll_upper', 'boll_middle', 'boll_lower']:
+        for boll_key in ['boll_upper', 'boll_mid', 'boll_lower']:
             if boll_key not in requested_indicators:
                 requested_indicators.append(boll_key)
-    
+
     # 处理ENE特殊情况：请求ene时自动包含ene_upper/lower
     if 'ene' in requested_indicators:
         for ene_key in ['ene_upper', 'ene_lower']:
             if ene_key not in requested_indicators:
                 requested_indicators.append(ene_key)
-    
+
     # 处理九转特殊情况：请求nine时自动包含nine_buy/nine_sell
     if 'nine' in requested_indicators:
         for nine_key in ['nine_buy', 'nine_sell']:
             if nine_key not in requested_indicators:
                 requested_indicators.append(nine_key)
-    
+
     # 分离主图和副图指标
     overlay_keys = [k for k in requested_indicators if k in OVERLAY_INDICATORS]
     sub_keys = [k for k in requested_indicators if k in SUB_INDICATORS]
-    
+
     # 默认包含VOL
     if 'vol' not in sub_keys and 'volume' in requested_indicators:
         sub_keys.append('vol')
     elif 'vol' not in sub_keys and 'volume' not in requested_indicators:
         sub_keys.insert(0, 'vol')  # 默认加入VOL
-    
+
     # 调试输出
     logger.debug(f"requested_indicators: {requested_indicators}")
     logger.debug(f"overlay_keys: {overlay_keys}")
     logger.debug(f"sub_keys: {sub_keys}")
-    
+
     try:
         data_manager = get_data_manager()
         daily_data, data_source = _get_kline_data(data_manager, ts_code, limit=limit, period=period)
-        
+
         if daily_data is None or daily_data.empty:
             return jsonify({
                 'success': False,
                 'message': f'未找到{period}周期数据'
             }), 404
-        
+
         # 分钟线数据：跳过指标计算，直接返回K线数据
         if data_source == 'minute':
             kline_data = []
@@ -230,7 +231,7 @@ def get_kline_chart_data(ts_code):
                     'volume': float(row.get('vol', 0)) if pd.notna(row.get('vol', 0)) else 0,
                     'pct_chg': 0  # 分钟级无涨跌幅
                 })
-            
+
             stock_info = data_manager.get_stock_info(ts_code)
             last_k = kline_data[-1] if kline_data else {}
             return jsonify({
@@ -248,12 +249,12 @@ def get_kline_chart_data(ts_code):
                     'data_source': 'minute'
                 }
             })
-        
+
         # 指标计算需要足够的数据（至少50条），所以先取足够数据
         min_data_for_indicators = 50
         actual_limit = max(limit, min_data_for_indicators)
         daily_data = daily_data.tail(actual_limit) if len(daily_data) > actual_limit else daily_data
-        
+
         # 优先从 indicator_cache 读取预计算指标（宽表格式，无需 pivot）
         df = None
         try:
@@ -277,11 +278,11 @@ def get_kline_chart_data(ts_code):
         if df is None:
             # 实时计算所有技术指标
             df = indicator_engine.calculate_all_indicators(daily_data)
-        
+
         # 调试输出：查看计算后的DataFrame列
         logger.debug(f"DataFrame columns: {list(df.columns)}")
         logger.debug(f"DataFrame rows: {len(df)}")
-        
+
         # ---- K线数据 ----
         kline_data = []
         for _, row in df.iterrows():
@@ -297,7 +298,7 @@ def get_kline_chart_data(ts_code):
                 'volume': float(row.get('vol', 0)) if pd.notna(row.get('vol')) else 0,
                 'pct_chg': float(row.get('pct_chg', 0)) if pd.notna(row.get('pct_chg')) else 0
             })
-        
+
         # ---- 叠加指标 ----
         overlays = []
         for key in overlay_keys:
@@ -354,10 +355,10 @@ def get_kline_chart_data(ts_code):
                         'line_style': info.get('line_style', 'solid'),
                         'panel': 0
                     })
-        
+
         # ---- 副图指标 ----
         subcharts = []
-        
+
         # VOL
         if 'vol' in sub_keys:
             vol_data = []
@@ -377,7 +378,7 @@ def get_kline_chart_data(ts_code):
                     'panel': 1,
                     'data': vol_data
                 })
-        
+
         # MACD
         if 'macd' in sub_keys:
             macd_data = []
@@ -403,7 +404,7 @@ def get_kline_chart_data(ts_code):
                     'panel': 2,
                     'data': macd_data
                 })
-        
+
         # RSI
         if 'rsi' in sub_keys:
             rsi_data = []
@@ -422,7 +423,7 @@ def get_kline_chart_data(ts_code):
                     'panel': 3,
                     'data': rsi_data
                 })
-        
+
         # KDJ
         if 'kdj' in sub_keys:
             kdj_data = []
@@ -448,7 +449,7 @@ def get_kline_chart_data(ts_code):
                     'panel': 4,
                     'data': kdj_data
                 })
-        
+
         # ---- 股票信息 ----
         stock_info = data_manager.get_stock_info(ts_code)
 
@@ -468,7 +469,7 @@ def get_kline_chart_data(ts_code):
                 }
             }
         })
-    
+
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -485,10 +486,10 @@ def get_chart_signals(ts_code):
     优先读取预计算信号缓存，未命中时回退实时计算
     """
     limit = request.args.get('limit', 100, type=int)
-    
+
     try:
         data_manager = get_data_manager()
-        
+
         # 优先读取预计算信号缓存（由 data_daemon 日终预计算写入）
         try:
             cached = data_manager.get_cached_signals(ts_code)
@@ -513,16 +514,16 @@ def get_chart_signals(ts_code):
                 return jsonify({'success': True, 'data': signal_markers})
         except Exception as e:
             logger.debug(f"预计算信号读取失败，回退实时计算: {e}")
-        
+
         # 缓存未命中，回退实时计算（兼容已有逻辑）
         daily_data = data_manager.get_cached_daily_data(ts_code, start_date=None, end_date=None)
-        
+
         if daily_data.empty:
             return jsonify({
                 'success': False,
                 'message': '未找到日线数据'
             }), 404
-        
+
         # 转换Decimal类型为float类型
         for col in ['open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg']:
             if col in daily_data.columns:
@@ -530,18 +531,41 @@ def get_chart_signals(ts_code):
                     daily_data[col] = daily_data[col].astype(float)
                 except Exception:
                     pass
-        
-        # 取最后N条
-        daily_data = daily_data.tail(limit) if len(daily_data) > limit else daily_data
-        
-        # 计算指标
-        df = indicator_engine.calculate_all_indicators(daily_data)
-        
+
+        # 指标计算需要足够的数据（至少50条），所以先取足够数据
+        min_data_for_indicators = 50
+        actual_limit = max(limit, min_data_for_indicators)
+        daily_data = daily_data.tail(actual_limit) if len(daily_data) > actual_limit else daily_data
+
+        # 优先从 indicator_cache 读取预计算指标（宽表格式，无需 pivot）
+        df = None
+        try:
+            cached = data_manager.get_cached_indicators(ts_code)
+            if cached is not None and not cached.empty:
+                # 宽表预计算数据包含 ma5/ma10/ma20/macd_dif/macd_dea/macd_hist/
+                # rsi14/kdj_k/kdj_d/kdj_j/boll_upper/boll_mid/boll_lower 等列
+                # 检查是否包含至少一个代表性子图表列
+                cached_cols = set(cached.columns) - {'ts_code', 'trade_date'}
+                has_macd = 'macd_dif' in cached_cols
+                has_rsi = 'rsi14' in cached_cols
+                has_kdj = 'kdj_k' in cached_cols
+                if has_macd and has_rsi and has_kdj:
+                    df = daily_data.merge(cached, on='trade_date', how='left')
+                    logger.debug(f"使用宽表预计算指标 ({len(cached)} 行)")
+                else:
+                    logger.debug(f"宽表缺少基本指标列: have={cached_cols}")
+        except Exception as e:
+            logger.debug(f"indicator_cache 读取失败，回退实时计算: {e}")
+
+        if df is None:
+            # 实时计算所有技术指标
+            df = indicator_engine.calculate_all_indicators(daily_data)
+
         # 使用信号生成器
         from app.signals import SignalGenerator
         sg = SignalGenerator()
         signals_list = sg.generate_all_signals(df)
-        
+
         # 转换为图表格式
         signal_markers = []
         for sig in signals_list:
@@ -558,12 +582,12 @@ def get_chart_signals(ts_code):
                 'indicator': sig.get('indicator', ''),
                 'confidence': sig.get('confidence', 0)
             })
-        
+
         return jsonify({
             'success': True,
             'data': signal_markers
         })
-    
+
     except Exception as e:
         return jsonify({
             'success': False,
@@ -582,7 +606,7 @@ def get_indicator_list():
             {'id': 'ma20',  'name': 'MA20',  'category': '均线', 'default': True},
             {'id': 'ma60',  'name': 'MA60',  'category': '均线', 'default': False},
             {'id': 'boll_upper',  'name': 'BOLL上轨', 'category': '布林带', 'default': False},
-            {'id': 'boll_middle', 'name': 'BOLL中轨', 'category': '布林带', 'default': False},
+            {'id': 'boll_mid', 'name': 'BOLL中轨', 'category': '布林带', 'default': False},
             {'id': 'boll_lower',  'name': 'BOLL下轨', 'category': '布林带', 'default': False},
             {'id': 'bbi',   'name': 'BBI',   'category': '多空线', 'default': False},
             {'id': 'ene_upper',  'name': 'ENE上轨', 'category': '轨道', 'default': False},
@@ -609,16 +633,16 @@ def get_stock_list():
     """
     limit = request.args.get('limit', 50, type=int)
     keyword = request.args.get('keyword', '')
-    
+
     try:
         data_manager = get_data_manager()
         stocks = data_manager.get_stock_list(keyword=keyword, limit=limit)
-        
+
         return jsonify({
             'success': True,
             'data': stocks
         })
-    
+
     except Exception as e:
         return jsonify({
             'success': False,

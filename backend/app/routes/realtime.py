@@ -16,6 +16,7 @@ Flask-SocketIO 事件协议：
 import logging
 from datetime import datetime
 
+import pandas as pd
 from flask import Blueprint, request
 from flask_socketio import emit, join_room
 
@@ -308,15 +309,39 @@ def get_watchlist_stream():
 
 @realtime_bp.route('/api/v3/indicator/realtime', methods=['POST'])
 def get_realtime_indicator():
-    """实时计算技术指标"""
+    """获取技术指标（414号P2.1: 优先读预计算缓存）"""
     try:
         req_data = request.get_json()
         ts_code = req_data.get('ts_code')
-        indicators = req_data.get('indicators', [])
 
+        # 414号P2.1: 优先从预计算宽表读取
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        ecm = get_ecm_instance()
+        cached = ecm.get_indicators_wide(ts_code)
+        if cached is not None and not cached.empty:
+            latest = cached.iloc[-1]
+            result = {
+                'ts_code': ts_code,
+                'trade_date': str(latest.get('trade_date', '')),
+                'ma5': float(latest['ma5']) if pd.notna(latest.get('ma5')) else None,
+                'ma10': float(latest['ma10']) if pd.notna(latest.get('ma10')) else None,
+                'ma20': float(latest['ma20']) if pd.notna(latest.get('ma20')) else None,
+                'macd_dif': float(latest['macd_dif']) if pd.notna(latest.get('macd_dif')) else None,
+                'macd_dea': float(latest['macd_dea']) if pd.notna(latest.get('macd_dea')) else None,
+                'macd_hist': float(latest['macd_hist']) if pd.notna(latest.get('macd_hist')) else None,
+                'rsi14': float(latest['rsi14']) if pd.notna(latest.get('rsi14')) else None,
+                'kdj_k': float(latest['kdj_k']) if pd.notna(latest.get('kdj_k')) else None,
+                'kdj_d': float(latest['kdj_d']) if pd.notna(latest.get('kdj_d')) else None,
+                'kdj_j': float(latest['kdj_j']) if pd.notna(latest.get('kdj_j')) else None,
+                'boll_upper': float(latest['boll_upper']) if pd.notna(latest.get('boll_upper')) else None,
+                'boll_mid': float(latest['boll_mid']) if pd.notna(latest.get('boll_mid')) else None,
+                'boll_lower': float(latest['boll_lower']) if pd.notna(latest.get('boll_lower')) else None,
+            }
+            return {'data': result, 'timestamp': datetime.now().isoformat()}, 200
+
+        # 降级：实时计算
         from app.indicators import TechnicalIndicatorEngine
         calculator = TechnicalIndicatorEngine()
-
         from app.data import DataManager
         dm = DataManager()
         daily_data = dm.get_cached_daily_data(ts_code)

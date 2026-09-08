@@ -9,7 +9,8 @@ K线形态适配器 — 重构版
 原有接口保持不变：
   - detect(df) → List[PatternResult]  （新增可选 context 参数）
 """
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
+
 import pandas as pd
 
 from app.engine.patterns import PatternResult

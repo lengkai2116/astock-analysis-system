@@ -11,9 +11,9 @@ PatternTracker — 模式生命周期追踪器
   - 缺口回补
 """
 
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional
+
 import pandas as pd
-import numpy as np
 
 from . import PatternResult, PatternStage
 from .registry import PatternRegistry

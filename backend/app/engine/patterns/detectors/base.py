@@ -3,7 +3,8 @@
 定义统一的检测接口
 """
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
+
 import pandas as pd
 
 from app.engine.patterns import PatternResult

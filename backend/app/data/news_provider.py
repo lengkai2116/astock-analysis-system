@@ -11,8 +11,8 @@ NewsProvider — 消息面上下文数据源
 
 import logging
 import random
-from typing import List, Optional, Dict
 from datetime import datetime, timedelta
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 

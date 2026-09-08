@@ -20,7 +20,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +340,6 @@ class SchedulerManager:
         result = {'status': 'running', 'records_added': 0, 'data_types': []}
 
         try:
-            from app import db
 
             # 记录同步开始
             sync_log_id = self._record_sync_start(sync_type)
@@ -449,13 +448,13 @@ class SchedulerManager:
             logger.warning("启动补采: 无 app 引用，跳过")
             return
         with self._app.app_context():
-            from app.data import DataManager
-            from app.utils.trading_hours import is_holiday
-            from datetime import date, datetime
-
             # ── 检查 daily_basic_cache 历史数据完整性（247号方案 §4） ──
             # 后台线程执行，不阻塞服务器启动
             import threading as _th
+            from datetime import date, datetime
+
+            from app.data import DataManager
+            from app.utils.trading_hours import is_holiday
             _th.Thread(target=self._catch_up_daily_basic, daemon=True).start()
 
             today = date.today()
@@ -512,7 +511,8 @@ class SchedulerManager:
             min_days: 最低所需天数
             max_stocks: 每轮最多补齐的股票数
         """
-        from datetime import date, timedelta
+        from datetime import date
+
         import pandas as pd
 
         today = date.today()
@@ -581,19 +581,19 @@ class SchedulerManager:
     def _run_stock_sync_if_needed(self):
         """启动时检查 Stock 表是否需要月度更新（244号方案 A7）"""
         try:
-            from app.models import Stock
             from datetime import date
+
+            from app.models import Stock
             today = date.today()
             # 检查是否有本月同步的股票数据——用 max(updated_at) 判断
             latest = Stock.query.order_by(Stock.updated_at.desc()).first()
             if latest and latest.updated_at:
-                from datetime import timedelta
                 if latest.updated_at.month == today.month and latest.updated_at.year == today.year:
                     logger.info("Stock 月度同步检查: 本月已同步，跳过")
                     return
             logger.info("=== Stock 月度同步检查: 执行同步 ===")
-            from app.data import DataManager
             from app import db
+            from app.data import DataManager
             count = DataManager().sync_stock_list()
             logger.info(f"Stock 月度同步完成: {count} 只")
         except Exception as e:
@@ -624,7 +624,6 @@ class SchedulerManager:
 
     def _sync_by_type(self, data_type: str, mode: str) -> int:
         """按数据类型执行同步"""
-        from app import db
         from app.data import DataManager
         dm = DataManager()
 
@@ -642,7 +641,6 @@ class SchedulerManager:
                 last_date = date_df['trade_date'].iloc[0] if not date_df.empty else None
                 if last_date:
                     try:
-                        from datetime import datetime
                         last_date_str = last_date.strftime('%Y%m%d') if hasattr(last_date, 'strftime') else str(last_date).replace('-', '')
                     except Exception:
                         last_date_str = str(last_date)
@@ -910,7 +908,7 @@ class SchedulerManager:
             daily_sync_completed.connect(callback)
         else:
             _sync_listeners.append(callback)
-        logger.debug(f"日终同步回调已注册")
+        logger.debug("日终同步回调已注册")
         # 更新 send 方法以包含所有注册的回调
         if not HAS_BLINKER:
 

@@ -5,7 +5,9 @@ P0-P3 共 20+ 个端点 + 批量操作/克隆/睡眠管理/增强功能
 """
 import logging
 from datetime import datetime
-from flask import Blueprint, request, jsonify
+
+from flask import Blueprint, jsonify, request
+
 from app.utils.error_handlers import handle_exceptions
 
 logger = logging.getLogger(__name__)
@@ -263,7 +265,7 @@ def export_history():
         notif_type=notif_type,
     )
 
-    from flask import make_response, Response
+    from flask import Response
     if fmt == 'csv':
         resp = Response(data, mimetype='text/csv; charset=utf-8')
         resp.headers['Content-Disposition'] = f'attachment; filename=notification_history_{datetime.now().strftime("%Y%m%d")}.csv'
@@ -290,7 +292,6 @@ def generate_report():
 def list_reports():
     """列出已生成的健康报告"""
     from app.models.notification import ReportArchive
-    from app import db
 
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)

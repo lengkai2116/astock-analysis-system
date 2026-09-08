@@ -5,7 +5,12 @@
 注意：此文件为配置预留，实际模型导入需在 models/__init__.py 中完成
 """
 
-from app.models.strategy import StrategyOutput, StrategyTemplateV2, StrategySignal, StrategyTemplateType
+from app.models.strategy import (
+    StrategyOutput,
+    StrategySignal,
+    StrategyTemplateType,
+    StrategyTemplateV2,
+)
 
 # 策略模型配置
 STRATEGY_MODEL_CONFIG = {
@@ -14,13 +19,13 @@ STRATEGY_MODEL_CONFIG = {
         'strategy_output': StrategyOutput,
         'strategy_template_v2': StrategyTemplateV2,
     },
-    
+
     # 枚举值配置
     'enums': {
         'strategy_signal': StrategySignal,
         'template_type': StrategyTemplateType,
     },
-    
+
     # 信号类型映射
     'signal_mapping': {
         'BULLISH': {'label': '看多', 'color': 'green', 'icon': 'rise'},
@@ -28,14 +33,14 @@ STRATEGY_MODEL_CONFIG = {
         'NEUTRAL': {'label': '中性', 'color': 'gray', 'icon': 'minus'},
         'WATCH': {'label': '观察', 'color': 'blue', 'icon': 'eye'},
     },
-    
+
     # 模板类型映射
     'template_type_mapping': {
         'INDICATOR': {'label': '指标型', 'icon': 'line-chart'},
         'SELECTION': {'label': '选股型', 'icon': 'filter'},
         'PORTFOLIO': {'label': '组合型', 'icon': 'portfolio'},
     },
-    
+
     # API路径配置
     'api_paths': {
         'strategy_outputs': '/api/v2/strategy/outputs',
@@ -64,12 +69,12 @@ def register_models():
     此函数用于预留配置检查
     """
     from app import db
-    
+
     models_to_check = [
         ('StrategyOutput', StrategyOutput),
         ('StrategyTemplateV2', StrategyTemplateV2),
     ]
-    
+
     registered = []
     for name, model in models_to_check:
         try:
@@ -77,5 +82,5 @@ def register_models():
             registered.append(name)
         except Exception:
             pass
-    
+
     return registered

@@ -2,11 +2,12 @@
 策略模板系统API路由
 提供策略模板的CRUD操作
 """
-from flask import Blueprint, request, jsonify
 import json
-from datetime import datetime
 import logging
+
+from flask import Blueprint, jsonify, request
 from sqlalchemy import create_engine
+
 from app.utils.error_handlers import handle_exceptions
 
 strategy_templates_bp = Blueprint('strategy_templates', __name__, url_prefix='/api/strategy-templates')
@@ -50,7 +51,7 @@ def _get_st_conn():
 def init_db():
     conn = _get_st_conn()
     cursor = conn.cursor()
-    
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS strategy_templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,7 +68,7 @@ def init_db():
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS template_parameters (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,16 +83,16 @@ def init_db():
             FOREIGN KEY (template_id) REFERENCES strategy_templates(id)
         )
     ''')
-    
+
     # 插入预置策略模板
     init_system_templates(cursor)
-    
+
     conn.commit()
     conn.close()
 
 def init_system_templates(cursor):
     """初始化系统预置策略模板"""
-    
+
     templates = [
         {
             "name": "移动平均线策略",
@@ -103,14 +104,14 @@ def initialize(context):
     context.short_ma = {{MA_SHORT}}
     context.long_ma = {{MA_LONG}}
     context.position_size = {{POSITION_SIZE}}
-    
+
 def handle_bar(context, bar):
     """处理每个K线"""
     short_ma = bar.close[-context.short_ma:].mean()
     long_ma = bar.close[-context.long_ma:].mean()
-    
+
     position = context.portfolio.position
-    
+
     if short_ma > long_ma and position == 0:
         context.buy(context.stock, context.position_size)
     elif short_ma < long_ma and position > 0:
@@ -128,6 +129,7 @@ def handle_bar(context, bar):
             "category": "mean_reversion",
             "code_template": '''
 import numpy as np
+import pandas as pd
 
 def initialize(context):
     """初始化策略参数"""
@@ -135,29 +137,32 @@ def initialize(context):
     context.rsi_oversold = {{RSI_OVERSOLD}}
     context.rsi_overbought = {{RSI_OVERBOUGHT}}
     context.position_size = {{POSITION_SIZE}}
-    
+
 def calculate_rsi(prices, period):
-    """计算RSI指标"""
+    """计算RSI指标 — Wilder's EMA (alpha=1/period)"""
+    if len(prices) < period + 1:
+        return 50
+
     deltas = np.diff(prices)
-    gains = np.where(deltas > 0, deltas, 0)
-    losses = np.where(deltas < 0, -deltas, 0)
-    
-    avg_gain = gains[-period:].mean()
-    avg_loss = losses[-period:].mean()
-    
-    if avg_loss == 0:
-        return 100
-    
-    rs = avg_gain / avg_loss
+    gain = np.maximum(deltas, 0)
+    loss = -np.minimum(deltas, 0)
+
+    # Wilder's RSI: ewm(alpha=1/period, adjust=False)
+    avg_gain = pd.Series(gain).ewm(alpha=1/period, adjust=False).mean().values
+    avg_loss = pd.Series(loss).ewm(alpha=1/period, adjust=False).mean().values
+
+    avg_loss = np.where(avg_loss == 0, 1e-10, avg_loss)
+
+    rs = avg_gain[-1] / avg_loss[-1]
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
 def handle_bar(context, bar):
     """处理每个K线"""
     rsi = calculate_rsi(bar.close, context.rsi_period)
-    
+
     position = context.portfolio.position
-    
+
     if rsi < context.rsi_oversold and position == 0:
         context.buy(context.stock, context.position_size)
     elif rsi > context.rsi_overbought and position > 0:
@@ -182,19 +187,19 @@ def initialize(context):
     context.bollinger_period = {{BOLLINGER_PERIOD}}
     context.bollinger_std = {{BOLLINGER_STD}}
     context.position_size = {{POSITION_SIZE}}
-    
+
 def handle_bar(context, bar):
     """处理每个K线"""
     prices = bar.close[-context.bollinger_period:]
     sma = prices.mean()
     std = prices.std()
-    
+
     upper_band = sma + (std * context.bollinger_std)
     lower_band = sma - (std * context.bollinger_std)
-    
+
     current_price = bar.close[-1]
     position = context.portfolio.position
-    
+
     if current_price > upper_band and position == 0:
         context.buy(context.stock, context.position_size)
     elif current_price < lower_band and position > 0:
@@ -219,7 +224,7 @@ def initialize(context):
     context.slow_period = {{SLOW_PERIOD}}
     context.signal_period = {{SIGNAL_PERIOD}}
     context.position_size = {{POSITION_SIZE}}
-    
+
 def calculate_ema(prices, period):
     """计算指数移动平均"""
     weights = np.exp(np.linspace(-1., 0., period))
@@ -232,9 +237,9 @@ def handle_bar(context, bar):
     slow_ema = calculate_ema(bar.close[-context.slow_period-10:], context.slow_period)
     macd = fast_ema - slow_ema
     signal = calculate_ema(np.array([macd] * (context.signal_period + 10)), context.signal_period)
-    
+
     position = context.portfolio.position
-    
+
     if macd > signal and position == 0:
         context.buy(context.stock, context.position_size)
     elif macd < signal and position > 0:
@@ -261,12 +266,12 @@ def initialize(context):
     context.k_oversold = {{K_OVERSOLD}}
     context.k_overbought = {{K_OVERBOUGHT}}
     context.position_size = {{POSITION_SIZE}}
-    
+
 def calculate_kdj(high, low, close, period):
     """计算KDJ指标"""
     lowest_low = np.min(low[-period:])
     highest_high = np.max(high[-period:])
-    
+
     rsv = (close[-1] - lowest_low) / (highest_high - lowest_low) * 100
     return rsv
 
@@ -274,9 +279,9 @@ def handle_bar(context, bar):
     """处理每个K线"""
     rsv = calculate_kdj(bar.high, bar.low, bar.close, context.kdj_period)
     k = 50 if rsv == 0 else rsv
-    
+
     position = context.portfolio.position
-    
+
     if k < context.k_oversold and position == 0:
         context.buy(context.stock, context.position_size)
     elif k > context.k_overbought and position > 0:
@@ -291,10 +296,10 @@ def handle_bar(context, bar):
             ]
         }
     ]
-    
+
     for template in templates:
         cursor.execute('''
-            INSERT OR IGNORE INTO strategy_templates 
+            INSERT OR IGNORE INTO strategy_templates
             (name, description, category, code_template, parameters, is_system)
             VALUES (?, ?, ?, ?, ?, 1)
         ''', (
@@ -316,34 +321,34 @@ def get_templates():
     page_size = request.args.get('page_size', 20, type=int)
     category = request.args.get('category')
     search = request.args.get('search')
-    
+
     conn = _get_st_conn()
     cursor = conn.cursor()
-    
+
     query = "SELECT * FROM strategy_templates WHERE 1=1"
     params = []
-    
+
     if category:
         query += " AND category = ?"
         params.append(category)
-    
+
     if search:
         query += " AND (name LIKE ? OR description LIKE ?)"
         params.extend([f"%{search}%", f"%{search}%"])
-    
+
     # 获取总数
     count_query = query.replace("SELECT *", "SELECT COUNT(*)")
     cursor.execute(count_query, params)
     total = cursor.fetchone()[0]
-    
+
     # 获取分页数据
     offset = (page - 1) * page_size
     query += " ORDER BY usage_count DESC, rating DESC LIMIT ? OFFSET ?"
     params.extend([page_size, offset])
-    
+
     cursor.execute(query, params)
     rows = cursor.fetchall()
-    
+
     templates = []
     for row in rows:
         templates.append({
@@ -360,9 +365,9 @@ def get_templates():
             "created_at": row[10],
             "updated_at": row[11]
         })
-    
+
     conn.close()
-    
+
     return jsonify({
         "success": True,
         "data": templates,
@@ -382,7 +387,7 @@ def get_categories():
         {"id": "event_driven", "name": "事件驱动", "icon": "📰"},
         {"id": "custom", "name": "自定义", "icon": "🎯"}
     ]
-    
+
     return jsonify({
         "success": True,
         "data": categories
@@ -394,17 +399,17 @@ def get_template(template_id):
     """获取单个策略模板详情"""
     conn = _get_st_conn()
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT * FROM strategy_templates WHERE id = ?", (template_id,))
     row = cursor.fetchone()
-    
+
     if not row:
         conn.close()
         return jsonify({
             "success": False,
             "message": "策略模板不存在"
         }), 404
-    
+
     template = {
         "id": row[0],
         "name": row[1],
@@ -419,7 +424,7 @@ def get_template(template_id):
         "created_at": row[10],
         "updated_at": row[11]
     }
-    
+
     # 更新使用次数
     cursor.execute(
         "UPDATE strategy_templates SET usage_count = usage_count + 1 WHERE id = ?",
@@ -427,7 +432,7 @@ def get_template(template_id):
     )
     conn.commit()
     conn.close()
-    
+
     return jsonify({
         "success": True,
         "data": template
@@ -438,32 +443,32 @@ def get_template(template_id):
 def create_template():
     """创建新的策略模板"""
     data = request.json
-    
+
     name = data.get('name')
     description = data.get('description')
     category = data.get('category')
     code_template = data.get('code_template')
     parameters = data.get('parameters', [])
-    
+
     if not name or not category or not code_template:
         return jsonify({
             "success": False,
             "message": "名称、分类和代码模板为必填项"
         }), 400
-    
+
     conn = _get_st_conn()
     cursor = conn.cursor()
-    
+
     cursor.execute('''
-        INSERT INTO strategy_templates 
+        INSERT INTO strategy_templates
         (name, description, category, code_template, parameters, is_system)
         VALUES (?, ?, ?, ?, ?, 0)
     ''', (name, description, category, code_template, json.dumps(parameters)))
-    
+
     template_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    
+
     return jsonify({
         "success": True,
         "data": {"id": template_id},
@@ -475,19 +480,19 @@ def create_template():
 def update_template(template_id):
     """更新策略模板"""
     data = request.json
-    
+
     name = data.get('name')
     description = data.get('description')
     category = data.get('category')
     code_template = data.get('code_template')
     parameters = data.get('parameters')
-    
+
     conn = _get_st_conn()
     cursor = conn.cursor()
-    
+
     update_fields = []
     update_values = []
-    
+
     if name is not None:
         update_fields.append("name = ?")
         update_values.append(name)
@@ -503,19 +508,19 @@ def update_template(template_id):
     if parameters is not None:
         update_fields.append("parameters = ?")
         update_values.append(json.dumps(parameters))
-    
+
     if update_fields:
         update_fields.append("updated_at = CURRENT_TIMESTAMP")
         update_values.append(template_id)
         cursor.execute(f'''
-            UPDATE strategy_templates 
-            SET {', '.join(update_fields)} 
+            UPDATE strategy_templates
+            SET {', '.join(update_fields)}
             WHERE id = ?
         ''', update_values)
         conn.commit()
-    
+
     conn.close()
-    
+
     return jsonify({
         "success": True,
         "message": "策略模板更新成功"
@@ -527,29 +532,29 @@ def delete_template(template_id):
     """删除策略模板"""
     conn = _get_st_conn()
     cursor = conn.cursor()
-    
+
     # 检查是否为系统模板
     cursor.execute("SELECT is_system FROM strategy_templates WHERE id = ?", (template_id,))
     row = cursor.fetchone()
-    
+
     if not row:
         conn.close()
         return jsonify({
             "success": False,
             "message": "策略模板不存在"
         }), 404
-    
+
     if bool(row[0]):
         conn.close()
         return jsonify({
             "success": False,
             "message": "系统预置模板不能删除"
         }), 403
-    
+
     cursor.execute("DELETE FROM strategy_templates WHERE id = ?", (template_id,))
     conn.commit()
     conn.close()
-    
+
     return jsonify({
         "success": True,
         "message": "策略模板删除成功"

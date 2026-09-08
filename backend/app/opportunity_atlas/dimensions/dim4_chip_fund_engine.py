@@ -14,12 +14,13 @@
 统一接口：Dim4ChipFundEngine.evaluate() → {status_description, judgment, audit}
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
-from datetime import datetime, date
+
 import json
 import logging
-import math
-from typing import Optional, List, Dict, Tuple, Any
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 import pandas as pd
 
@@ -111,8 +112,11 @@ class ChipDistributionEstimator:
 class ChipIndicators:
     """筹码因子计算器"""
 
-    def calculate_all_indicators(self, chip_bins, current_price, kline_data=None, turnover_rate=None):
-        """计算所有筹码因子"""
+    def calculate_all_indicators(self, chip_bins, current_price, kline_data=None, turnover_rate=None, ts_code=None, indicator_other_df=None):
+        """计算所有筹码因子
+
+        412号方案C3 v3.0：RSI优先从indicator_other_df参数读取（dim1通过data_context提供）。
+        """
         if not chip_bins:
             return {}
         result = {}
@@ -123,8 +127,25 @@ class ChipIndicators:
         if kline_data is not None and not kline_data.empty:
             result['cyqkl'] = self._calculate_cyqkl(chip_bins, kline_data)
         if kline_data is not None and len(kline_data) >= 15:
-            result['rsi'] = self._calculate_rsi(kline_data)
+            # 411号Phase 5：优先读预计算RSI，回退raw计算
+            rsi_val = self._try_read_precomputed_rsi(ts_code, indicator_other_df=indicator_other_df)
+            if rsi_val is not None:
+                result['rsi'] = rsi_val
+            else:
+                result['rsi'] = self._calculate_rsi(kline_data)
         return result
+
+    def _try_read_precomputed_rsi(self, ts_code, indicator_other_df=None):
+        """411号Phase 5：尝试从indicator_other_df读取预计算RSI14
+
+        412号方案C3 v3.0：优先从indicator_other_df参数读取（dim1通过data_context提供），
+        不再直接调用DataManager。
+        """
+        if indicator_other_df is not None and not indicator_other_df.empty and 'rsi14' in indicator_other_df.columns:
+            rsi_series = indicator_other_df['rsi14'].dropna()
+            if not rsi_series.empty:
+                return float(rsi_series.iloc[-1])
+        return None
 
     def _calculate_ssrp(self, chip_bins):
         """计算SSRP - 市场平均成本"""
@@ -233,13 +254,27 @@ class StageDetector:
     def __init__(self, lookback: int = 120):
         self.lookback = lookback
 
-    def detect(self, df: pd.DataFrame) -> Stage:
+    def detect(self, df: pd.DataFrame, ts_code: str = None,
+               indicator_ma_df=None) -> Stage:
+        """412号方案C3 v3.0：MA60优先从indicator_ma_df读取（dim1通过data_context提供），
+        不再直接调用DataManager。"""
         if df is None or df.empty or len(df) < 30:
             return Stage(name="CONSOLIDATION", confidence=0.0, note="数据不足")
         closes = df['close'].astype(float).values
         highs = df['high'].astype(float).values
         lows = df['low'].astype(float).values
-        ma60 = pd.Series(closes).rolling(60).mean().values
+
+        # MA60：从indicator_ma_df读取，保留raw fallback
+        ma60_val = None
+        if indicator_ma_df is not None and not indicator_ma_df.empty and 'ma60' in indicator_ma_df.columns:
+            v = indicator_ma_df['ma60'].iloc[-1]
+            if v is not None:
+                ma60_val = float(v)
+        if ma60_val is None:
+            ma60 = pd.Series(closes).rolling(60).mean().values
+        else:
+            ma60 = np.full(len(closes), ma60_val)
+
         ma60_dir = self._calc_direction(ma60)
         pos_60 = (closes[-1] - np.min(lows[-60:])) / (np.max(highs[-60:]) - np.min(lows[-60:]) + 1e-9)
         if ma60_dir == "up" and pos_60 > 0.6:
@@ -261,13 +296,11 @@ class StageDetector:
 
 # === DataAwareMixin (app/data/mixins.py) ===
 
+# === engine/framework/__init__.py 基类 ===
+from abc import ABC, abstractmethod
+
 from app.data.mixins import DataAwareMixin
 
-
-
-# === engine/framework/__init__.py 基类 ===
-
-from abc import ABC, abstractmethod
 
 class UniverseSelectionModel(ABC):
     @abstractmethod
@@ -334,14 +367,23 @@ class PhaseDetectionEngine(DataAwareMixin):
 
     # ── 主入口 ──────────────────────────────────────────────
     def compute_tags(self, ts_code: str, df: pd.DataFrame,
-                     extra_tags: Optional[Dict] = None) -> Dict:
+                     extra_tags: Optional[Dict] = None,
+                     chip_fund_ext: Optional[Dict] = None,
+                     moneyflow_df=None,
+                     indicator_ma_df=None,
+                     indicator_other_df=None) -> Dict:
         """计算阶段标签（312号方案：8 维度加权共识，替代原五源等权投票）
+
+        412号方案C1/C3 v3.0：全部数据由dim1通过data_context提供。
 
         Args:
             ts_code: 股票代码
-            df: 日线 OHLCV DataFrame（必须含 trade_date, open, high, low, close, vol）
-            extra_tags: 可选下游标签 {buy_sell_point, sentiment_phase, sector_heat,
-                        capital_nature}（由 data_daemon 在缠论/情绪/板块计算后传入）
+            df: 日线 OHLCV DataFrame
+            extra_tags: 可选下游标签
+            chip_fund_ext: 筹码预计算值，由data_context提供
+            moneyflow_df: 资金流向数据，由data_context提供
+            indicator_ma_df: 预计算MA数据，由data_context提供
+            indicator_other_df: 预计算RSI/KDJ/BOLL数据，由data_context提供
 
         Returns:
             {main_force_phase, phase_confidence, price_position,
@@ -367,7 +409,7 @@ class PhaseDetectionEngine(DataAwareMixin):
             return result
 
         # 基础标签（保持输出契约）
-        price_pos, ma_alignment = self._price_position_analysis(df_sorted)
+        price_pos, ma_alignment = self._price_position_analysis(df_sorted, ts_code=ts_code, indicator_ma_df=indicator_ma_df)
         result["price_position"] = price_pos
         trend_dir = self._detect_trend_direction(df_sorted)
         result["trend_alignment"] = trend_dir
@@ -377,9 +419,9 @@ class PhaseDetectionEngine(DataAwareMixin):
         # ── 8 维度阶段向量（批次1 可计算 7/8，控盘度批次3） ──
         self._last_dim_insufficient = len(df_sorted) < 60   # 数据不足（unknown 细分）
         dims = {
-            "chip":  self._dim_chip(ts_code, df_sorted),   # 1 筹码形态（真实 TradingPhase 评分）
-            "fund":  self._dim_fund(fund_flow, ts_code),   # 2 资金流向（方向+连续强度）
-            "stage": self._dim_stage(df_sorted),           # 3 量价四阶段（CONSOLIDATION 验证）
+            "chip":  self._dim_chip(ts_code, df_sorted, chip_fund_ext=chip_fund_ext, moneyflow_df=moneyflow_df, indicator_other_df=indicator_other_df),   # 1 筹码形态
+            "fund":  self._dim_fund(fund_flow, ts_code, extra_tags),   # 2 资金流向（方向+连续强度）
+            "stage": self._dim_stage(df_sorted, ts_code=ts_code, indicator_ma_df=indicator_ma_df),           # 3 量价四阶段（CONSOLIDATION 验证）
             "asr":   self._dim_asr(ts_code, df_sorted),    # 4 ASR 筹码分布（去兜底）
             "trend": self._dim_trend(df_sorted),           # 5 趋势方向（斜率连续）
             "ssrp":  self._dim_ssrp(df_sorted, extra_tags),# 6 主力成本锚定（真实 SSRP，从pre_feat_cache读取）
@@ -405,20 +447,25 @@ class PhaseDetectionEngine(DataAwareMixin):
     _DIM_WEIGHTS = {"chip": 3.0, "fund": 3.0, "stage": 2.5, "asr": 2.0,
                     "trend": 1.5, "ssrp": 2.5, "chan": 2.0}
 
-    def _dim_chip(self, ts_code: str, df: pd.DataFrame) -> dict:
+    def _dim_chip(self, ts_code: str, df: pd.DataFrame,
+                  chip_fund_ext: dict = None, moneyflow_df=None,
+                  indicator_other_df=None) -> dict:
         """维度1 筹码形态：TradingPhaseDetector 五阶段评分 → 阶段分布向量
 
-        判定条件收紧（2026-08-02 校准：原门槛 2.0 = 单条件(+2.0)即投票，
-        导致"获利盘<40%"单条件大量投 building）：
-          最低门槛 4.0 → 要求 ≥2 个独立条件确认才投票（298号 building 多条件 AND 语义）
+        412号方案C1 v3.0：chip_fund_ext和moneyflow_df由data_context提供。
+
+        判定条件收紧（2026-08-02 校准）：
+          最低门槛 4.0 → 要求 ≥2 个独立条件确认才投票
         """
-        info = self._run_trading_phase_detector_v2(ts_code, df)
+        info = self._run_trading_phase_detector_v2(
+            ts_code, df, chip_fund_ext=chip_fund_ext, moneyflow_df=moneyflow_df,
+            indicator_other_df=indicator_other_df)
         if info is None:
             return {}
         phase, scores = info
         total = sum(scores.values()) or 1.0
         best = max(scores.values())
-        if best < 4.0:            # 要求 ≥2 个条件确认（单条件不投票，312 §3.2 维度1 校准）
+        if best < 4.0:
             return {}
         mapping = {"BUILDING": "building", "WASHING": "washing", "RAISING": "lifting",
                    "SHIPPING": "distributing", "SUPPORT": "washing"}
@@ -429,28 +476,48 @@ class PhaseDetectionEngine(DataAwareMixin):
                 vec[p] = round(v / total, 3)
         return vec
 
-    def _dim_fund(self, fund_flow: str, ts_code: str) -> dict:
-        """维度2 资金流向：方向 + 5日大单净额连续强度（mixed/none 不投票，去 washing 兜底）"""
+    def _dim_fund(self, fund_flow: str, ts_code: str, extra_tags: dict = None) -> dict:
+        """维度2 资金流向：方向 + 5日大单净额连续强度（mixed/none 不投票，去 washing 兜底）
+
+        411号Phase 8：优先从extra_tags读取预计算5日资金聚合，回退raw计算。
+        """
         strength = 0.0
-        try:
-            mf_df = self._get_dm().get_cached_moneyflow(ts_code)
-            if mf_df is not None and not mf_df.empty:
-                mf5 = mf_df.tail(5)
-                net = mf5["net_lg_amount"].sum()
-                tot = mf5["buy_lg_amount"].sum() + mf5["sell_lg_amount"].sum()
-                if tot > 0:
-                    strength = min(1.0, abs(net) / tot)
-        except Exception:
-            pass
+        # 411号Phase 8：优先使用预计算数据
+        extra_tags = extra_tags or {}
+        net_lg_5d = extra_tags.get('net_lg_5d')
+        if net_lg_5d is not None:
+            try:
+                net_lg_5d = float(net_lg_5d)
+                # 用positive_ratio作为strength的近似
+                pos_ratio = extra_tags.get('net_lg_5d_positive_ratio')
+                if pos_ratio is not None:
+                    strength = min(1.0, abs(net_lg_5d) / 1e8)  # 归一化到亿
+                else:
+                    strength = min(1.0, abs(net_lg_5d) / 1e8)
+            except (TypeError, ValueError):
+                pass
+        else:
+            # ponytail: raw计算作为fallback
+            try:
+                mf_df = self._get_dm().get_cached_moneyflow(ts_code)
+                if mf_df is not None and not mf_df.empty:
+                    mf5 = mf_df.tail(5)
+                    net = mf5["net_lg_amount"].sum()
+                    tot = mf5["buy_lg_amount"].sum() + mf5["sell_lg_amount"].sum()
+                    if tot > 0:
+                        strength = min(1.0, abs(net) / tot)
+            except Exception:
+                pass
         if fund_flow == "5d_inflow":
             return {"lifting": round(0.3 + 0.5 * strength, 3), "building": 0.2}
         if fund_flow == "5d_outflow":
             return {"distributing": round(0.3 + 0.5 * strength, 3)}
         return {}   # mixed/none：方向不明不投票（312 §3.2 维度2）
 
-    def _dim_stage(self, df: pd.DataFrame) -> dict:
+    def _dim_stage(self, df: pd.DataFrame, ts_code: str = None,
+                   indicator_ma_df=None) -> dict:
         """维度3 量价四阶段：StageDetector + CONSOLIDATION 证据验证（312 §3.2 维度3）"""
-        stage_info = self._run_stage_detector_v2(df)
+        stage_info = self._run_stage_detector_v2(df, ts_code=ts_code, indicator_ma_df=indicator_ma_df)
         if stage_info is None:
             return {}
         stage_name, stage_conf = stage_info
@@ -635,13 +702,19 @@ class PhaseDetectionEngine(DataAwareMixin):
         vote_ratio["_supporters"] = {top: len(_supporters(top))}
         return top, confidence, conflict, vote_ratio
 
-    def _run_trading_phase_detector_v2(self, ts_code: str, df: pd.DataFrame):
-        """TradingPhaseDetector 阶段评分（返回 phase + scores，供维度1 阶段分布）"""
+    def _run_trading_phase_detector_v2(self, ts_code: str, df: pd.DataFrame,
+                                        chip_fund_ext: dict = None,
+                                        moneyflow_df=None,
+                                        indicator_other_df=None):
+        """TradingPhaseDetector 阶段评分（返回 phase + scores，供维度1 阶段分布）
+
+        412号方案C1 v3.0：chip_fund_ext由dim1通过data_context提供，
+        moneyflow_df由dim1通过data_context提供。不再直接调用DataManager。
+        """
         if len(df) < 60:
             self._last_dim_insufficient = True
             return None
         try:
-            # 使用内部定义的 ChipIndicators（物理合入）
             chip_inds = ChipIndicators()
             detector = TradingPhaseDetector(chip_inds)
 
@@ -657,14 +730,29 @@ class PhaseDetectionEngine(DataAwareMixin):
                 ]
 
             indicators = chip_inds.calculate_all_indicators(
-                chip_bins, df["close"].values[-1], kline_data=df
-            )
+                chip_bins, df["close"].values[-1], kline_data=df, ts_code=ts_code,
+                indicator_other_df=indicator_other_df)
 
-            moneyflow_data = None
-            try:
-                moneyflow_data = self._get_dm().get_cached_moneyflow(ts_code)
-            except Exception:
-                pass
+            # 412号方案C1 v3.0：用data_context中的chip_fund_ext覆盖raw计算结果
+            if chip_fund_ext:
+                precomputed_map = {
+                    'asr': 'asr',
+                    'concentration': 'concentration',
+                    'profit_ratio': 'profit_ratio',
+                    'cyqkl': 'cyqkl',
+                }
+                for tag_key, ind_key in precomputed_map.items():
+                    val = chip_fund_ext.get(tag_key)
+                    if val is not None and ind_key in indicators:
+                        indicators[ind_key] = val
+
+            # moneyflow_data：优先从data_context，保留ecm fallback
+            moneyflow_data = moneyflow_df  # 由调用方从data_context传入
+            if moneyflow_data is None:
+                try:
+                    moneyflow_data = self._get_dm().get_cached_moneyflow(ts_code)
+                except Exception:
+                    pass
 
             phase_info = detector.detect_phase(
                 df, chip_bins, indicators, moneyflow_data=moneyflow_data
@@ -674,12 +762,12 @@ class PhaseDetectionEngine(DataAwareMixin):
         except Exception:
             return None
 
-    def _run_stage_detector_v2(self, df: pd.DataFrame):
+    def _run_stage_detector_v2(self, df: pd.DataFrame, ts_code: str = None,
+                                indicator_ma_df=None):
         """StageDetector 阶段（返回 stage 名 + 置信度，供维度3）"""
         try:
-            # 使用内部定义的 StageDetector（物理合入）
             detector = StageDetector()
-            stage = detector.detect(df)
+            stage = detector.detect(df, ts_code=ts_code, indicator_ma_df=indicator_ma_df)
             return stage.name, float(stage.confidence or 0.0)
         except Exception:
             return None
@@ -687,8 +775,13 @@ class PhaseDetectionEngine(DataAwareMixin):
     # ═══════════════════════════════════════════════════════════
     # Step 1: 价格位置判定
     # ═══════════════════════════════════════════════════════════
-    def _price_position_analysis(self, df: pd.DataFrame) -> tuple:
-        """120日价格分位 + 均线排列 → (price_position, ma_alignment)"""
+    def _price_position_analysis(self, df: pd.DataFrame, ts_code: str = None,
+                                  indicator_ma_df=None) -> tuple:
+        """120日价格分位 + 均线排列 → (price_position, ma_alignment)
+
+        412号方案C3 v3.0：MA5/10/20/60优先从indicator_ma_df读取（dim1通过data_context提供），
+        不再直接调用DataManager。
+        """
         closes = df["close"].values
         if len(closes) < 20:
             return "mid_zone", "mixed"
@@ -710,11 +803,28 @@ class PhaseDetectionEngine(DataAwareMixin):
         else:
             price_pos = "mid_zone"
 
-        # 均线排列
-        ma5 = np.mean(closes[-5:]) if len(closes) >= 5 else closes[-1]
-        ma10 = np.mean(closes[-10:]) if len(closes) >= 10 else closes[-1]
-        ma20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
-        ma60 = np.mean(closes[-60:]) if len(closes) >= 60 else closes[-1]
+        # 均线排列：从indicator_ma_df读取，保留raw fallback
+        def _read_ma(period):
+            if indicator_ma_df is not None and not indicator_ma_df.empty:
+                col = f'ma{period}'
+                if col in indicator_ma_df.columns:
+                    val = indicator_ma_df[col].iloc[-1]
+                    if val is not None:
+                        return float(val)
+            return None
+
+        ma5 = _read_ma(5)
+        if ma5 is None:
+            ma5 = np.mean(closes[-5:]) if len(closes) >= 5 else closes[-1]
+        ma10 = _read_ma(10)
+        if ma10 is None:
+            ma10 = np.mean(closes[-10:]) if len(closes) >= 10 else closes[-1]
+        ma20 = _read_ma(20)
+        if ma20 is None:
+            ma20 = np.mean(closes[-20:]) if len(closes) >= 20 else closes[-1]
+        ma60 = _read_ma(60)
+        if ma60 is None:
+            ma60 = np.mean(closes[-60:]) if len(closes) >= 60 else closes[-1]
 
         if ma5 > ma10 > ma20 > ma60:
             ma_alignment = "bullish"
@@ -902,8 +1012,7 @@ class PhaseDetectionEngine(DataAwareMixin):
                 ]
 
             indicators = chip_inds.calculate_all_indicators(
-                chip_bins, df["close"].values[-1], kline_data=df
-            )
+                chip_bins, df["close"].values[-1], kline_data=df, ts_code=ts_code)
 
             moneyflow_data = None
             try:
@@ -1048,7 +1157,7 @@ class PhaseDetectionEngine(DataAwareMixin):
             if not (pct_chg > 9.5):
                 return current_phase
 
-            closes = df["close"].values
+            df["close"].values
             volumes = df["vol"].values if "vol" in df.columns else None
 
             # 价格位置判定
@@ -1069,7 +1178,6 @@ class PhaseDetectionEngine(DataAwareMixin):
             if len(df) >= 3:
                 # latest 是当天（涨停日），df.iloc[-3] 是前一日
                 # 涨停日在 df.iloc[-2]，检查 df.iloc[-1] 是否为次日
-                limit_up_idx = -2  # 假设涨停在倒数第二天
                 # 检查倒数第二天是否涨停，最后一天是否为次日
                 pc_2 = (df.iloc[-2]["close"] - df.iloc[-3]["close"]) / max(df.iloc[-3]["close"], 1) * 100
                 if pc_2 > 9.5:
@@ -1848,10 +1956,9 @@ class ChipDistributionSignalGenerator:
 
         try:
             peaks = self.chip_indicators.find_peak_positions(chip_bins)
-            levels = self.chip_indicators.find_support_resistance_levels(chip_bins)
+            self.chip_indicators.find_support_resistance_levels(chip_bins)
         except Exception:
             peaks = []
-            levels = []
 
         closes = kline_data['close'].values
         volumes = kline_data['vol'].values if 'vol' in kline_data.columns else \
@@ -2012,7 +2119,7 @@ class ChipDistributionSignalGenerator:
             else:
                 return 0.3
 
-        ok_ratio = ok_count / max(total_conditions, 1)
+        ok_count / max(total_conditions, 1)
         for min_ok in sorted(tier_map.keys()):
             if ok_count >= min_ok:
                 return tier_map[min_ok]
@@ -2262,7 +2369,7 @@ class ChipUniverseSelectionModel(UniverseSelectionModel):
     筹码分布股票池选择模型
     筛选出具备主力资金条件的股票
     """
-    
+
     def __init__(self, lookback_period: int = 120, top_n: int = 50):
         """
         Args:
@@ -2272,35 +2379,35 @@ class ChipUniverseSelectionModel(UniverseSelectionModel):
         self.lookback_period = lookback_period
         self.top_n = top_n
         self.chip_scorer = ChipScorer()
-    
+
     def select(self, date_time: datetime, data: Any) -> List[str]:
         """
         筛选股票池
-        
+
         Args:
             date_time: 时间戳
             data: 市场数据，格式为 {symbol: DataFrame}
-        
+
         Returns:
             股票代码列表，按分数降序排列
         """
         if not isinstance(data, dict):
             return []
-        
+
         results = []
         for symbol, df in data.items():
             try:
                 if len(df) < 60:
                     continue
-                
+
                 # 计算筹码评分
                 score = self.chip_scorer.score(df)
                 if score > 0:
                     results.append((symbol, score))
-            
+
             except Exception as e:
                 logger.error(f"筛选股票 {symbol} 时出错: {e}")
-        
+
         # 按分数排序，返回前N只
         results.sort(key=lambda x: x[1], reverse=True)
         return [item[0] for item in results[:self.top_n]]
@@ -2311,38 +2418,38 @@ class ChipAlphaModel(AlphaModel):
     筹码分布信号生成模型
     生成交易信号洞察
     """
-    
+
     def __init__(self, lookback_period: int = 120):
         self.lookback_period = lookback_period
         # 简化实现，移除外部依赖
         self.chip_service = None
         self.chip_indicators = None
-    
+
     def generate_insights(self, data: any) -> List[Insight]:
         """
         生成筹码分布交易信号洞察
-        
+
         Args:
             data: 可以是DataFrame或字典格式的OHLCV数据
-        
+
         Returns:
             洞察信号列表
         """
         insights = []
-        
+
         # 处理不同类型的数据输入
         data_dict = data if isinstance(data, dict) else {'data': data}
-        
+
         for symbol, df in data_dict.items():
             try:
                 if isinstance(df, pd.DataFrame):
                     if df.empty or len(df) < 120:
                         continue
-                    
+
                     # 使用评分器分析
                     scorer = ChipScorer()
                     score = scorer.score(df)
-                    
+
                     # 根据评分生成信号
                     if score >= 7.0:
                         # 高分 - 强力买入
@@ -2368,7 +2475,7 @@ class ChipAlphaModel(AlphaModel):
                         confidence = min(0.6, (10.0 - score) / 10.0)
                         weight = 0.3
                         reason = f"卖出信号: {symbol} (评分: {score:.2f})"
-                    
+
                     insights.append(
                         Insight(
                             symbol=symbol,
@@ -2380,7 +2487,7 @@ class ChipAlphaModel(AlphaModel):
                     )
             except Exception as e:
                 logger.error(f"处理 {symbol} 时失败: {e}")
-        
+
         return insights
 
 
@@ -2389,8 +2496,8 @@ class ChipRiskManagementModel(RiskManagementModel):
     筹码分布风险管理模型
     提供止损止盈和风险控制逻辑
     """
-    
-    def __init__(self, 
+
+    def __init__(self,
                  stop_loss_pct: float = 0.08,  # 止损8%
                  take_profit_pct: float = 0.15,  # 止盈15%
                  max_single_position_pct: float = 0.2,  # 单只股票最大20%仓位
@@ -2407,43 +2514,43 @@ class ChipRiskManagementModel(RiskManagementModel):
         self.max_single_position_pct = max_single_position_pct
         self.max_total_exposure = max_total_exposure
         self.entry_prices: Dict[str, float] = {}  # 记录入场价格
-    
-    def on_data(self, insights: List[Insight], targets: Dict[str, float], 
+
+    def on_data(self, insights: List[Insight], targets: Dict[str, float],
                 current_portfolio: Dict[str, float]) -> Dict[str, float]:
         """
         应用风险管理规则
-        
+
         Args:
             insights: 洞察信号列表
             targets: 目标仓位
             current_portfolio: 当前持仓 {symbol: position_pct}
-        
+
         Returns:
             调整后的目标仓位
         """
         adjusted_targets = targets.copy()
-        
+
         # 1. 检查止损止盈
         for symbol, entry_price in self.entry_prices.items():
             if symbol not in current_portfolio:
                 continue
-            
+
             # 这里简化实现，实际需要获取当前价格
             # 假设通过某种方式获取当前价格，这里简化逻辑
             position = current_portfolio.get(symbol, 0)
-            
+
             if position != 0:
                 # 有持仓的情况下，检查是否需要止损或止盈
                 # 这里需要真实的价格数据，暂时简化逻辑
                 pass
-        
+
         # 2. 控制单只股票最大仓位
         for symbol, target in adjusted_targets.items():
             if target > self.max_single_position_pct:
                 adjusted_targets[symbol] = self.max_single_position_pct
             elif target < -self.max_single_position_pct:
                 adjusted_targets[symbol] = -self.max_single_position_pct
-        
+
         # 3. 控制总仓位风险
         total_exposure = sum(abs(t) for t in adjusted_targets.values())
         if total_exposure > self.max_total_exposure:
@@ -2451,13 +2558,13 @@ class ChipRiskManagementModel(RiskManagementModel):
             scale_factor = self.max_total_exposure / total_exposure
             for symbol in adjusted_targets:
                 adjusted_targets[symbol] *= scale_factor
-        
+
         return adjusted_targets
-    
+
     def set_entry_price(self, symbol: str, price: float):
         """记录入场价格"""
         self.entry_prices[symbol] = price
-    
+
     def clear_entry_price(self, symbol: str):
         """清仓时移除价格记录"""
         if symbol in self.entry_prices:
@@ -2621,7 +2728,7 @@ class MainForceScorer:
 
     =================================================================
     设计理念：L2 的目标是识别「市场主力资金正在关注的股票」。
-    
+
     主力资金的典型行为特征：
       1. 大单持续净流入（资金流向）
       2. 低位吸筹（价平量增，窄幅震荡）
@@ -2636,8 +2743,9 @@ class MainForceScorer:
     =================================================================
     """
 
-    def __init__(self):
+    def __init__(self, data_context: dict = None):
         self._dm = None
+        self._data_context = data_context or {}
         self._chip_indicators: Optional[dict] = None
         self._chip_bins: Optional[list] = None
 
@@ -2732,7 +2840,9 @@ class MainForceScorer:
         if not symbol:
             return {'level': 'none', 'level_cn': '中性', 'direction': 'neutral', 'detail': '无数据'}
         try:
-            mf_df = self._dm.get_cached_moneyflow(symbol)
+            mf_df = self._data_context.get('moneyflow_df') if self._data_context else None
+            if mf_df is None or (hasattr(mf_df, 'empty') and mf_df.empty):
+                mf_df = self._dm.get_cached_moneyflow(symbol)
             if mf_df is None or mf_df.empty:
                 return {'level': 'none', 'level_cn': '中性', 'direction': 'neutral', 'detail': '无资金数据'}
             mf_5 = mf_df.tail(5)
@@ -2765,7 +2875,7 @@ class MainForceScorer:
         try:
             indicators = self._chip_indicators or {}
             asr = indicators.get('asr') or indicators.get('ASR')
-            concentration = indicators.get('concentration')
+            indicators.get('concentration')
             if asr is not None:
                 asr_val = float(asr)
                 if asr_val > 70:
@@ -2809,21 +2919,26 @@ class MainForceScorer:
           2. 大单成交占比（大单主导程度）
           3. **资金连续性**（Wiki: "连续买超+股价上涨=机构看多"）
 
+        413号§七#3：优先从data_context读取moneyflow_df。
+
         Returns: 0-3 分（无数据时返回 0）
         """
         if not symbol:
             return 0.0
 
         try:
-            end_str = datetime.now().strftime('%Y-%m-%d')
-            start_str = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
-            mf_df = self.dm.get_cached_moneyflow(
-                symbol, start_date=start_str, end_date=end_str
-            )
-            if mf_df.empty:
-                mf_df = self.dm.get_cached_moneyflow(symbol)
+            # 413号§七#3：优先从data_context读取
+            mf_df = self._data_context.get('moneyflow_df') if self._data_context else None
+            if mf_df is None or (hasattr(mf_df, 'empty') and mf_df.empty):
+                end_str = datetime.now().strftime('%Y-%m-%d')
+                start_str = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
+                mf_df = self.dm.get_cached_moneyflow(
+                    symbol, start_date=start_str, end_date=end_str
+                )
                 if mf_df.empty:
-                    return 0.0
+                    mf_df = self.dm.get_cached_moneyflow(symbol)
+                    if mf_df.empty:
+                        return 0.0
             mf_5 = mf_df.tail(5)
 
             # 1. 5日累积大单净额 (0-1.0分)
@@ -2840,14 +2955,13 @@ class MainForceScorer:
                            + mf_5['sell_sm_amount'].abs().sum())
             if abs_big + total_small > 0:
                 lg_ratio = abs_big / (abs_big + total_small)
-                ratio_score = min(0.5, lg_ratio * 1.0)  # 大单占50%得0.5
+                ratio_score = min(0.5, lg_ratio * 1.0)
             else:
                 ratio_score = 0.0
 
             # 3. 资金连续性 (0-1.5分) — Wiki 重点：连续性比绝对量更重要
             pos_days = (mf_5['net_lg_amount'] > 0).sum()
             neg_days = (mf_5['net_lg_amount'] < 0).sum()
-            # 连续净流入加分：连续2天以上净流入+0.5
             streak = 0
             max_streak = 0
             for _, row in mf_5.iterrows():
@@ -2857,7 +2971,6 @@ class MainForceScorer:
                 else:
                     streak = 0
             continuity = min(1.0, max_streak * 0.3)
-            # 净胜天数
             net_days_score = min(0.5, max(0, pos_days - neg_days) * 0.15)
 
             return min(3.0, flow_score + ratio_score + continuity + net_days_score)
@@ -2891,7 +3004,6 @@ class MainForceScorer:
         ma_20 = np.mean(closes[-20:])
         ma_60 = np.mean(closes[-60:]) if len(closes) >= 60 else closes[-1]
         bull_market = ma_5 > ma_20 > ma_60
-        bear_market = ma_5 < ma_20 < ma_60
 
         # ── 拉升阶段 (2.5-3分) — 价涨量增 + 多头排列
         if bull_market and vol_ratio_5_20 >= 1.1:
@@ -2934,7 +3046,9 @@ class MainForceScorer:
         # 1. 优先使用股东户数数据
         if symbol:
             try:
-                holder_df = self.dm.get_cached_stk_holder(symbol)
+                holder_df = self._data_context.get('stk_holder_df') if self._data_context else None
+                if holder_df is None or (hasattr(holder_df, 'empty') and holder_df.empty):
+                    holder_df = self.dm.get_cached_stk_holder(symbol)
                 if not holder_df.empty and 'holder_number' in holder_df.columns:
                     h = holder_df.dropna(subset=['holder_number']).sort_values('end_date')
                     if len(h) >= 2:
@@ -2980,8 +3094,10 @@ class MainForceScorer:
         if not symbol:
             return 1.0
         try:
-            mf_df = self.dm.get_cached_moneyflow(symbol)
-            if mf_df.empty or len(mf_df) < 3:
+            mf_df = self._data_context.get('moneyflow_df') if self._data_context else None
+            if mf_df is None or (hasattr(mf_df, 'empty') and mf_df.empty):
+                mf_df = self.dm.get_cached_moneyflow(symbol)
+            if mf_df is None or mf_df.empty or len(mf_df) < 3:
                 return 1.0
             mf_5 = mf_df.tail(5)
 
@@ -3011,7 +3127,9 @@ class MainForceScorer:
 
             # ── 融资融券反向信号（D1 margin_detail 修复后可用）──
             try:
-                mrg = self.dm.get_cached_margin(symbol)
+                mrg = self._data_context.get('margin_df') if self._data_context else None
+                if mrg is None or (hasattr(mrg, 'empty') and mrg.empty):
+                    mrg = self.dm.get_cached_margin(symbol)
                 if mrg is not None and len(mrg) >= 5:
                     mrg_5 = mrg.tail(5)
                     rzye_series = mrg_5['rzye'].dropna().values
@@ -3047,7 +3165,9 @@ class MainForceScorer:
                 return -fake_result['confidence']  # 假机构扣分
 
             # 真机构加分
-            lhb = self.dm.get_cached_lhb(symbol)
+            lhb = self._data_context.get('lhb_df') if self._data_context else None
+            if lhb is None or (hasattr(lhb, 'empty') and lhb.empty):
+                lhb = self.dm.get_cached_lhb(symbol)
             if lhb is not None and not lhb.empty and len(lhb) > 0:
                 recent = lhb.tail(10)
                 buy_amounts = recent['buy_amount'].dropna()
@@ -3073,7 +3193,9 @@ class MainForceScorer:
         result = {"suspected": False, "reason": "", "confidence": 0.0}
         try:
             # 优先使用股票级 lhb_cache；若为空则回退到席位级 lhb_detail_cache
-            lhb = self.dm.get_cached_lhb(symbol)
+            lhb = self._data_context.get('lhb_df') if self._data_context else None
+            if lhb is None or (hasattr(lhb, 'empty') and lhb.empty):
+                lhb = self.dm.get_cached_lhb(symbol)
             use_detail_only = False
             if lhb is not None and not lhb.empty and len(lhb) > 0:
                 recent = lhb.tail(10)
@@ -3235,7 +3357,9 @@ class MainForceScorer:
             {"cost_price": float, "distance_pct": float, "near_cost": bool}
         """
         try:
-            mf = self.dm.get_cached_moneyflow(symbol)
+            mf = self._data_context.get('moneyflow_df') if self._data_context else None
+            if mf is None or (hasattr(mf, 'empty') and mf.empty):
+                mf = self.dm.get_cached_moneyflow(symbol)
             if mf is None or mf.empty or len(mf) < 3:
                 return {"cost_price": 0, "distance_pct": 0, "near_cost": False}
             recent = mf.tail(20)
@@ -3251,7 +3375,6 @@ class MainForceScorer:
             #   buy_lg_amount / buy_elg_amount: 万元（需×10000转元）
             has_lg_vol = 'buy_lg_vol' in recent.columns
             has_lg_amt = 'buy_lg_amount' in recent.columns
-            has_elg_amt = 'buy_elg_amount' in recent.columns
 
             if has_lg_vol and has_lg_amt:
                 lg_sum_vol = recent['buy_lg_vol'].sum() * 100  # 手→股
@@ -3281,16 +3404,17 @@ class MainForceScorer:
             return {"cost_price": 0, "distance_pct": 0, "near_cost": False}
 
     def identify_phase(self, data: pd.DataFrame, symbol: str = None,
-                       chip_data: dict = None) -> str:
+                       chip_data: dict = None, cost_ext: dict = None) -> str:
         """
         识别主力操盘阶段（Wiki: "建仓→洗盘→拉升→出货" 四阶段）
 
-        当 chip_data 提供 ASR/筹码峰信息时，使用筹码数据增强判断。
+        412号方案C2 v3.0：cost_ext由调用方从data_context/pre_feat_cache传入。
 
         Args:
             data: OHLCV DataFrame
             symbol: 股票代码
-            chip_data: 可选筹码数据字典，包含 asr, chip_peak, concentration 等
+            chip_data: 可选筹码数据字典
+            cost_ext: 可选成本价数据（main_force_cost/margin_cost_price）
         """
         try:
             if data.empty or len(data) < 60:
@@ -3379,6 +3503,14 @@ class MainForceScorer:
                 # CYQKL > 30% + 中高位 → 获利盘丰厚, 出货迹象
                 return 'distributing'
 
+            # 412号方案C2 v3.0：cost_ext增强阶段判断
+            near_cost = False
+            if cost_ext:
+                mfc = cost_ext.get('main_force_cost')
+                if mfc and mfc > 0:
+                    cost_distance = abs(closes[-1] - mfc) / mfc
+                    near_cost = cost_distance < 0.05  # 5%内视为接近主力成本
+
             # 阶段 2: 拉升 — 多头排列 + 放量 + CYQKL达标(>20%) + SSRP穿越
             if ma_5 > ma_20 > ma_60 and vol_ratio_5_20 >= 1.0:
                 if cyqkl is not None and cyqkl >= 0.2:
@@ -3387,9 +3519,11 @@ class MainForceScorer:
                     return 'markup'
                 return 'markup'
 
-            # 阶段 3: 洗盘 — 价跌缩量 + 中低位 + 低位筹码峰稳定
+            # 阶段 3: 洗盘 — 价跌缩量 + 中低位 + 低位筹码峰稳定 + 接近主力成本
             if price_pos < 0.5 and vol_ratio_5_20 < 0.85:
                 return 'washing'
+            if near_cost and price_pos < 0.5 and vol_ratio_5_20 < 1.0:
+                return 'washing'  # 接近主力成本 + 低位缩量 → 洗盘特征增强
             if price_pos < 0.4 and asr is not None and asr > 50 and vol_ratio_5_20 < 1.0:
                 return 'washing'
             if price_pos < 0.4 and cyqkl is not None and cyqkl < -0.1 and vol_ratio_5_20 < 1.0:
@@ -3419,7 +3553,9 @@ class MainForceScorer:
             {"cost_price": float | None, "distance_pct": float | None}
         """
         try:
-            margin_df = self.dm.get_cached_margin(symbol)
+            margin_df = self._data_context.get('margin_df') if self._data_context else None
+            if margin_df is None or (hasattr(margin_df, 'empty') and margin_df.empty):
+                margin_df = self.dm.get_cached_margin(symbol)
             if margin_df is None or margin_df.empty:
                 return {"cost_price": None, "distance_pct": None}
             df = margin_df.tail(60).copy()
@@ -3460,7 +3596,9 @@ class MainForceScorer:
             # 2026-08-10 修复：传入真实 K 线（原传空 DataFrame 致 price_pos=None，
             # 假机构检测的"高位"约束失效 + 连续买入缓解逻辑失效 → capital_nature 全 unknown）
             try:
-                _df = self.dm.get_cached_daily_data(symbol)
+                _df = self._data_context.get('daily_df') if self._data_context else None
+                if _df is None or (hasattr(_df, 'empty') and _df.empty):
+                    _df = self.dm.get_cached_daily_data(symbol)
             except Exception:
                 _df = pd.DataFrame()
             lhb_score = self._score_lhb(symbol, _df)
@@ -3538,13 +3676,16 @@ class MainForceFilter:
         self.top_k = top_k
         self.scorer = MainForceScorer()
 
-    def filter(self, stock_list: list, data_dict: dict) -> list:
+    def filter(self, stock_list: list, data_dict: dict, cost_ext_dict: dict = None) -> list:
         """
         执行主力关注度筛选
+
+        413号P3 T13：新增cost_ext_dict参数，传递到identify_phase增强阶段判断。
 
         Args:
             stock_list: [{ts_code, name}, ...] 或 [ts_code, ...]
             data_dict: {ts_code: DataFrame}
+            cost_ext_dict: {ts_code: cost_ext_dict} 可选成本价数据
 
         Returns:
             [{symbol, name, mf_score, phase}, ...] 按评分降序
@@ -3560,7 +3701,8 @@ class MainForceFilter:
                 continue
             try:
                 score = self.scorer.score(df, symbol=ts_code)
-                phase = self.scorer.identify_phase(df, symbol=ts_code)
+                _cost_ext = cost_ext_dict.get(ts_code) if cost_ext_dict else None
+                phase = self.scorer.identify_phase(df, symbol=ts_code, cost_ext=_cost_ext)
                 if score > 0:
                     # phase → status_recognition 映射
                     sr = _phase_to_status(phase, score)
@@ -3878,8 +4020,9 @@ class ChipPositionManager:
 class MarketEnvironmentFilter:
     """大盘环境判断器 - 书本第7章§7.4"""
 
-    def __init__(self, benchmark_service: Optional[BenchmarkService] = None):
+    def __init__(self, benchmark_service: Optional[BenchmarkService] = None, data_context: dict = None):
         self.benchmark = benchmark_service or BenchmarkService()
+        self._data_context = data_context or {}
 
     def check(self, index_code: str = BenchmarkIndex.HS300) -> Dict:
         """
@@ -4044,7 +4187,7 @@ class CircuitBreaker:
 
         # 最近5日数据
         recent_pct = pct_chg[-5:]
-        recent_closes = closes[-5:]
+        closes[-5:]
 
         # 规则1：单日跌幅>5%
         latest_pct = recent_pct[-1] if not np.isnan(recent_pct[-1]) else 0
@@ -4278,21 +4421,22 @@ class MarketCapAdapter:
 class ChipPreFilter:
     """
     筹码策略前置过滤器（主入口）
-    
+
     按书本第0层-第9章的过滤逻辑，串联所有前置检查。
     输出一个统一的过滤结果，供后续策略模块使用。
     """
 
-    def __init__(self):
-        self.market_filter = MarketEnvironmentFilter()
+    def __init__(self, data_context: dict = None):
+        self._data_context = data_context or {}
+        self.market_filter = MarketEnvironmentFilter(data_context=data_context)
         self.circuit_breaker = CircuitBreaker()
         self.eligibility_filter = EligibilityFilter()
         self.liquidity_filter = LiquidityFilter()
         self.cap_adapter = MarketCapAdapter()
 
         # Phase 2: 财务风险过滤 + ROCE 指标
-        self.financial_risk_filter = FinancialRiskFilter()
-        self.roce_indicator = ROCEIndicator()
+        self.financial_risk_filter = FinancialRiskFilter(data_context=data_context)
+        self.roce_indicator = ROCEIndicator(data_context=data_context)
 
     def filter_market(self) -> Dict:
         """大盘环境过滤"""
@@ -4424,7 +4568,7 @@ class ChipPreFilter:
 class FinancialRiskFilter:
     """
     财务风险过滤器 — 覆盖六大禁区
-    
+
     六大禁区：
       1. 业绩雷：净利润连续2年下滑或亏损
       2. 退市雷：ST/*ST/退市预警
@@ -4432,14 +4576,15 @@ class FinancialRiskFilter:
       4. 监管雷：被证监会立案调查/行政处罚
       5. 行业雷：行业政策风险（如双减/房地产三条红线）
       6. 流动性雷：日均成交额<500万（补充 LiquidityFilter）
-    
+
     注：完整财务数据依赖 Tushare fina_vip 接口（需>=5000积分），
     当前在有限数据下优先使用 daily_basic 已有字段做初步过滤。
     """
 
-    def __init__(self, data_manager=None):
+    def __init__(self, data_manager=None, data_context: dict = None):
         from app.data import DataManager
         self.data_manager = data_manager or DataManager()
+        self._data_context = data_context or {}
 
     def check(self, ts_code: str) -> Dict:
         """
@@ -4500,11 +4645,10 @@ class FinancialRiskFilter:
     def _check_profit_risk(self, ts_code: str) -> Dict:
         """检查业绩雷：基于PE和daily_basic"""
         try:
-            dm = self.data_manager
-            df = dm.get_cached_daily_basic(
-                ts_code,
-                start_date=None
-            )
+            df = self._data_context.get('daily_basic_df') if self._data_context else None
+            if df is None or (hasattr(df, 'empty') and df.empty):
+                dm = self.data_manager
+                df = dm.get_cached_daily_basic(ts_code, start_date=None)
             if df.empty or 'pe' not in df.columns and 'pe_ttm' not in df.columns:
                 return {'passed': True, 'reason': '', 'detail': 'PE数据不足，默认通过'}
 
@@ -4541,11 +4685,10 @@ class FinancialRiskFilter:
     def _check_debt_risk(self, ts_code: str) -> Dict:
         """检查财务雷：基于PE/市值辅助判断"""
         try:
-            dm = self.data_manager
-            df = dm.get_cached_daily_basic(
-                ts_code,
-                start_date=None
-            )
+            df = self._data_context.get('daily_basic_df') if self._data_context else None
+            if df is None or (hasattr(df, 'empty') and df.empty):
+                dm = self.data_manager
+                df = dm.get_cached_daily_basic(ts_code, start_date=None)
             if df.empty:
                 return {'passed': True, 'reason': '', 'detail': '数据不足，默认通过'}
 
@@ -4569,8 +4712,10 @@ class FinancialRiskFilter:
     def _check_liquidity_risk(self, ts_code: str) -> Dict:
         """检查流动性雷：日均成交额<500万"""
         try:
-            dm = self.data_manager
-            df = dm.get_cached_daily_data(ts_code)
+            df = self._data_context.get('daily_df') if self._data_context else None
+            if df is None or (hasattr(df, 'empty') and df.empty):
+                dm = self.data_manager
+                df = dm.get_cached_daily_data(ts_code)
             if df.empty:
                 return {'passed': True, 'reason': '', 'detail': '数据不足，默认通过'}
 
@@ -4620,7 +4765,9 @@ class FinancialRiskFilter:
 
             # 方法1: 从 fina_indicator_cache 获取 ROE（更准确）
             try:
-                fi = dm.get_cached_fina_indicator(ts_code)
+                fi = self._data_context.get('fina_df') if self._data_context else None
+                if fi is None or (hasattr(fi, 'empty') and fi.empty):
+                    fi = dm.get_cached_fina_indicator(ts_code)
                 if fi is not None and not fi.empty and 'roe' in fi.columns:
                     roe_val = float(fi['roe'].dropna().iloc[-1])
                     if roe_val > 0:
@@ -4632,8 +4779,12 @@ class FinancialRiskFilter:
             # 方法2: 从 income_cache + balancesheet_cache 计算
             if roce_val is None:
                 try:
-                    income = dm.get_cached_income(ts_code)
-                    bs = dm.get_cached_balancesheet(ts_code)
+                    income = self._data_context.get('income_df') if self._data_context else None
+                    if income is None or (hasattr(income, 'empty') and income.empty):
+                        income = dm.get_cached_income(ts_code)
+                    bs = self._data_context.get('balancesheet_df') if self._data_context else None
+                    if bs is None or (hasattr(bs, 'empty') and bs.empty):
+                        bs = dm.get_cached_balancesheet(ts_code)
                     if (income is not None and not income.empty
                             and bs is not None and not bs.empty):
                         op_profit = float(income['operating_profit'].dropna().iloc[-1]) \
@@ -4686,17 +4837,18 @@ class FinancialRiskFilter:
 class ROCEIndicator:
     """
     ROCE（资本回报率）指标接入
-    
+
     ROCE = EBIT / (总资产 - 流动负债)
     用于评估公司资本使用效率。
-    
+
     数据来源：Tushare fina_vip（需>=5000积分），当前为占位实现。
     可用的替代数据源：akshare 财务指标接口。
     """
 
-    def __init__(self, data_manager=None):
+    def __init__(self, data_manager=None, data_context: dict = None):
         from app.data import DataManager
         self.data_manager = data_manager or DataManager()
+        self._data_context = data_context or {}
 
     def get_roce(self, ts_code: str) -> Dict:
         """
@@ -4722,8 +4874,10 @@ class ROCEIndicator:
     def _estimate_roce(self, ts_code: str) -> Dict:
         """从daily_basic的PE字段估算ROCE"""
         try:
-            dm = self.data_manager
-            df = dm.get_cached_daily_basic(ts_code)
+            df = self._data_context.get('daily_basic_df') if self._data_context else None
+            if df is None or (hasattr(df, 'empty') and df.empty):
+                dm = self.data_manager
+                df = dm.get_cached_daily_basic(ts_code)
             if df.empty:
                 return {'roce': None, 'available': False,
                         'level': 'UNKNOWN', 'reason': '数据不足', 'detail': {}}
@@ -4786,9 +4940,11 @@ class ROCEIndicator:
         """返回财务风险标签"""
         tags = {}
         try:
-            from app.data import DataManager
-            dm = DataManager()
-            fina_df = dm.get_cached_fina_indicator(symbol)
+            fina_df = self._data_context.get('fina_df') if self._data_context else None
+            if fina_df is None or (hasattr(fina_df, 'empty') and fina_df.empty):
+                from app.data import DataManager
+                dm = DataManager()
+                fina_df = dm.get_cached_fina_indicator(symbol)
             if fina_df is not None and not fina_df.empty:
                 latest = fina_df.iloc[-1]
                 roce = latest.get('roce', 0) or 0
@@ -5524,8 +5680,7 @@ def extract_chip_deep_tags(ts_code: str) -> dict:
         chip_inds = ChipIndicators()
         current_price = float(df["close"].values[-1])
         ind = chip_inds.calculate_all_indicators(
-            chip_bins, current_price, kline_data=df
-        ) or {}
+            chip_bins, current_price, kline_data=df, ts_code=ts_code) or {}
 
         # 4. 提取深度字段
         out = {}
@@ -5737,7 +5892,8 @@ class Dim4ChipFundEngine(DataAwareMixin):
     def __init__(self):
         self._dm = None
 
-    def evaluate(self, dims, tags, signals=None, lifecycle=None):
+    def evaluate(self, dims, tags, signals=None, lifecycle=None, data_context=None):
+        """411号Phase 6：优先使用data_context预加载数据，回退独立查询。"""
         phase_info = _assess_phase(tags, dims)
         fund_flow_info = _assess_fund_flow(tags)
         cost_structure = _assess_cost_structure(tags)
@@ -5748,29 +5904,43 @@ class Dim4ChipFundEngine(DataAwareMixin):
         # PhaseDetectionEngine 真实阶段分析（如果df可用）
         ts_code = tags.get('ts_code', '')
         phase_engine_result = None
+        df = None
         try:
-            ecm = self._get_dm().cache
-            if ts_code:
-                df = ecm.get_cached_daily(ts_code)
-                if df is not None and not df.empty and len(df) >= 30:
-                    pde = PhaseDetectionEngine()
-                    phase_engine_result = pde.compute_tags(ts_code, df)
-                    # 用引擎结果覆盖tags读取的阶段判定
-                    if phase_engine_result and phase_engine_result.get('main_force_phase') != 'unknown':
-                        phase_info = {
-                            'phase': phase_engine_result['main_force_phase'],
-                            'phase_cn': PHASE_MAP.get(phase_engine_result['main_force_phase'], {}).get('name', phase_engine_result['main_force_phase']),
-                            'detail': f"PhaseDetector分析（置信度{phase_engine_result.get('phase_confidence', 0):.2f}）",
-                            'light': 'green' if phase_engine_result['main_force_phase'] in ('building', 'raising') else ('red' if phase_engine_result['main_force_phase'] == 'distributing' else 'yellow'),
-                        }
-                    if phase_engine_result and phase_engine_result.get('fund_flow') != 'none':
-                        ff = phase_engine_result['fund_flow']
-                        fund_flow_info = {
-                            'level': 'strong' if 'inflow' in ff else 'strong_out',
-                            'level_cn': '强流入' if 'inflow' in ff else '强流出',
-                            'direction': 'inflow' if 'inflow' in ff else 'outflow',
-                            'detail': f"PhaseDetector资金流向={ff}",
-                        }
+            # 411号Phase 6：优先使用data_context
+            if data_context and 'daily_df' in data_context:
+                df = data_context['daily_df']
+            else:
+                ecm = self._get_dm().cache
+                if ts_code:
+                    df = ecm.get_cached_daily(ts_code)
+            if ts_code and df is not None and not df.empty and len(df) >= 30:
+                # 412号方案C1 v3.0：从data_context提取chip_fund_ext和moneyflow_df
+                chip_fund_ext = data_context.get('chip_fund_ext') if data_context else None
+                moneyflow_df_val = data_context.get('moneyflow_df') if data_context else None
+                indicator_ma_df_val = data_context.get('indicator_ma_df') if data_context else None
+                indicator_other_df_val = data_context.get('indicator_other_df') if data_context else None
+                pde = PhaseDetectionEngine(data_manager=self._get_dm())
+                phase_engine_result = pde.compute_tags(
+                    ts_code, df, extra_tags=tags,
+                    chip_fund_ext=chip_fund_ext,
+                    moneyflow_df=moneyflow_df_val,
+                    indicator_ma_df=indicator_ma_df_val,
+                    indicator_other_df=indicator_other_df_val)
+                if phase_engine_result and phase_engine_result.get('main_force_phase') != 'unknown':
+                    phase_info = {
+                        'phase': phase_engine_result['main_force_phase'],
+                        'phase_cn': PHASE_MAP.get(phase_engine_result['main_force_phase'], {}).get('name', phase_engine_result['main_force_phase']),
+                        'detail': f"PhaseDetector分析（置信度{phase_engine_result.get('phase_confidence', 0):.2f}）",
+                        'light': 'green' if phase_engine_result['main_force_phase'] in ('building', 'raising') else ('red' if phase_engine_result['main_force_phase'] == 'distributing' else 'yellow'),
+                    }
+                if phase_engine_result and phase_engine_result.get('fund_flow') != 'none':
+                    ff = phase_engine_result['fund_flow']
+                    fund_flow_info = {
+                        'level': 'strong' if 'inflow' in ff else 'strong_out',
+                        'level_cn': '强流入' if 'inflow' in ff else '强流出',
+                        'direction': 'inflow' if 'inflow' in ff else 'outflow',
+                        'detail': f"PhaseDetector资金流向={ff}",
+                    }
 
         except Exception as e:
             logger.debug(f"PhaseDetectionEngine调用跳过: {e}")
@@ -5779,7 +5949,9 @@ class Dim4ChipFundEngine(DataAwareMixin):
         crowding = {'level': 'unknown', 'detail': '拥挤度数据不足', 'score': 0.5}
         try:
             if ts_code:
-                df = ecm.get_cached_daily(ts_code) if not phase_engine_result else df
+                if df is None:
+                    ecm = self._get_dm().cache
+                    df = ecm.get_cached_daily(ts_code)
                 if df is not None and not df.empty:
                     cf = CrowdingFactor()
                     cr = cf.evaluate(ts_code, df)
@@ -5800,7 +5972,7 @@ class Dim4ChipFundEngine(DataAwareMixin):
             'phase': phase_info['phase'], 'direction': fund_flow_info['direction'], 'light': phase_info['light'],
             'overall_light': phase_info['light'],
             'overall_direction': 1 if phase_info['phase'] in ('building', 'raising') else (-1 if phase_info['phase'] == 'distributing' else 0),
-            'continuous_value': round(1.0 - crowding.get('score', 0.5), 4),  # P2: 拥挤度越低越好 [0,1]
+            'continuous_value': round(1.0 - crowding.get('score', 0.5), 4),
         }
         conditions = [
             {'name': '主力阶段', 'satisfied': bool(phase_info['phase']), 'actual': phase_info['phase_cn'], 'threshold': '有明确阶段判定'},

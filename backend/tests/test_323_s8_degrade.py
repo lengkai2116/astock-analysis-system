@@ -6,12 +6,13 @@
 - 低置信度限制：置信度低→禁止重仓买入（S6 已实现，此处验证集成）
 - 交易机制硬约束：T+1/涨跌停/停牌前置过滤（本期评估）
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)
 
-import pytest
 import pandas as pd
 
 

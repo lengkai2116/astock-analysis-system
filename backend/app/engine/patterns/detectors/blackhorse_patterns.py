@@ -8,12 +8,16 @@
 
 检测器消费 PatternDetector 基类接口，产出统一 PatternResult。
 """
-from typing import List, Optional, Dict
-import pandas as pd
+from typing import Dict, List, Optional
+
 import numpy as np
+import pandas as pd
 
 from app.engine.patterns import (
-    PatternResult, PatternCategory, PatternStage, PatternLevel,
+    PatternCategory,
+    PatternLevel,
+    PatternResult,
+    PatternStage,
 )
 from app.engine.patterns.detectors.base import PatternDetector
 
@@ -107,7 +111,7 @@ class BlackHorsePatternDetector(PatternDetector):
         invalidation: Optional[List[str]] = None,
     ) -> PatternResult:
         """统一构造 PatternResult"""
-        name = self._NAMES.get(code, code)
+        self._NAMES.get(code, code)
         return PatternResult(
             name=code,
             category=PatternCategory.BLACKHORSE,
@@ -448,7 +452,7 @@ class BlackHorsePatternDetector(PatternDetector):
             return None
 
         vol = df['volume']
-        close = df['close']
+        df['close']
 
         # 条件1: 近20日成交量均值 < 前20日成交量均值（量能持续萎缩）
         vol_recent20 = float(vol.iloc[-20:].mean())
@@ -531,7 +535,7 @@ class BlackHorsePatternDetector(PatternDetector):
                 return None
 
         # 条件5: 近3日成交量 > 前10日均量（量能配合）
-        vol_avg = self._vol_ma(vol, 20)
+        self._vol_ma(vol, 20)
         vol_3 = float(vol.iloc[-3:].mean())
         vol_10 = float(vol.iloc[-13:-3].mean()) if len(vol) >= 13 else float(vol.iloc[:-3].mean())
         if vol_10 <= 0 or vol_3 < vol_10 * 1.1:
@@ -686,7 +690,7 @@ class BlackHorsePatternDetector(PatternDetector):
             stage=PatternStage.CONFIRMING,
             completion=70.0,
             conditions=[
-                f"老鸭头形态: 第一次金叉→死叉→第二次金叉",
+                "老鸭头形态: 第一次金叉→死叉→第二次金叉",
                 f"当前MA5({float(ma5.iloc[-1]):.2f}) > MA10({float(ma10.iloc[-1]):.2f})",
                 f"成交量为20日均量的{vol_ratio*100:.0f}%",
                 "当日阳线确认，均线同步上行",
@@ -709,7 +713,7 @@ class BlackHorsePatternDetector(PatternDetector):
             return None
 
         close = df['close']
-        high = df['high']
+        df['high']
         vol = df['volume']
 
         # 搜索近30日的N字形态

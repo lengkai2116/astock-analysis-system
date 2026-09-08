@@ -12,22 +12,22 @@
   - 追踪器集成（tracker → engine 联动）
   - 边界条件与容错
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
 
-import pytest
-import pandas as pd
-import numpy as np
 import sqlite3
 import threading
 
-from app.engine.patterns.engine import PatternEngine, WEIGHT_MAP
-from app.engine.patterns import PatternResult, PatternCategory, PatternStage
+import numpy as np
+import pandas as pd
+import pytest
+from app.engine.patterns import PatternCategory, PatternResult, PatternStage
+from app.engine.patterns.engine import WEIGHT_MAP, PatternEngine
 from app.engine.patterns.tracker import PatternTracker
-
 
 # ═══════════════════════════════════════════════════
 # Fixtures — 多种市场场景
@@ -414,7 +414,7 @@ class TestPatternProperties:
         engine = PatternEngine()
         patterns = engine.detect_all(uptrend_df)
         for p in patterns:
-            assert p.name, f"形态名称为空"
+            assert p.name, "形态名称为空"
             assert len(p.name) >= 2
 
     def test_patterns_have_category(self, uptrend_df):

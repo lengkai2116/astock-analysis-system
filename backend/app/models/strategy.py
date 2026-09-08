@@ -1,7 +1,10 @@
-from app import db
-from datetime import datetime
-from sqlalchemy import JSON, Enum
 import enum
+from datetime import datetime
+
+from sqlalchemy import JSON
+
+from app import db
+
 
 class StrategySignal(enum.Enum):
     BULLISH = "bullish"
@@ -16,7 +19,7 @@ class StrategyTemplateType(enum.Enum):
 
 class StrategyOutput(db.Model):
     __tablename__ = 'strategy_outputs'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     ts_code = db.Column(db.String(10), nullable=False)
     strategy_name = db.Column(db.String(100), nullable=False)
@@ -34,7 +37,7 @@ class StrategyOutput(db.Model):
     signal_date = db.Column(db.Date, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.now)
     status_recognition = db.Column(JSON, nullable=True)
-    
+
     def to_dict(self):
         return {
             'id': self.id,

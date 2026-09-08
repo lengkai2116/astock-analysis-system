@@ -15,7 +15,6 @@
     8.7 移动止盈(回撤10%) — 书本§7.3.4
 """
 from typing import Dict, List, Optional
-import numpy as np
 
 
 class ChipRiskExecutor:

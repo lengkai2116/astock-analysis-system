@@ -436,6 +436,44 @@ class EventMonitor(DataAwareMixin):
             logger.debug("C3 _detect_st_warning(%s): %s", ts_code, e)
         return result
 
+    def _detect_goodwill_risk(self, ts_code: str) -> dict:
+        """C4 商誉暴雷风险检测（Wiki PIERS排雷检查项）— 405号建议5从dim6迁移"""
+        result = {"detected": False, "direction": 0, "confidence": 0.0,
+                   "source": "balancesheet_cache", "description": "", "event_date": ""}
+        try:
+            ecm = self._get_cache()  # ponytail: 统一为 _get_cache()，与 _detect_longhubang 保持一致
+            df_bs = ecm.get_cached_balancesheet(ts_code)
+            if df_bs is None or df_bs.empty:
+                return result
+
+            latest = df_bs.sort_values('end_date', ascending=False).iloc[0]
+            goodwill = float(latest.get('goodwill', 0) or 0)
+            total_assets = float(latest.get('total_assets', 0) or 0)
+            total_equity = float(latest.get('total_equity', 0) or 0)
+            event_date = str(latest.get('end_date', ''))
+
+            if goodwill <= 0:
+                return result
+
+            gw_asset_ratio = goodwill / total_assets if total_assets > 0 else 0
+            gw_equity_ratio = goodwill / total_equity if total_equity > 0 else 0
+
+            if gw_equity_ratio > 0.5:
+                result["detected"] = True
+                result["direction"] = -3
+                result["confidence"] = min(gw_equity_ratio, 1.0)
+                result["description"] = f"商誉暴雷风险：商誉占净资产{gw_equity_ratio:.0%}（极高风险）"
+                result["event_date"] = event_date
+            elif gw_asset_ratio > 0.3:
+                result["detected"] = True
+                result["direction"] = -2
+                result["confidence"] = min(gw_asset_ratio, 1.0)
+                result["description"] = f"商誉风险：商誉占总资产{gw_asset_ratio:.0%}（高风险）"
+                result["event_date"] = event_date
+        except Exception as e:
+            logger.debug("C4 _detect_goodwill_risk(%s): %s", ts_code, e)
+        return result
+
     # ══════════════════════════════════════════════════════════
     # D 市场情绪
     # ══════════════════════════════════════════════════════════
@@ -794,6 +832,7 @@ class EventMonitor(DataAwareMixin):
             ('regulatory', self._detect_regulatory),
             ('delist_risk', self._detect_delist_risk),
             ('st_warning', self._detect_st_warning),
+            ('goodwill_risk', self._detect_goodwill_risk),
             # D 市场情绪
             ('longhubang', self._detect_longhubang),
             ('limit_move', self._detect_limit_move),
@@ -909,6 +948,28 @@ class EventMonitor(DataAwareMixin):
             'catalyst_impact': result['catalyst_impact'],
             'event_composite_score': result['event_composite_score'],
             'upward_driver': result.get('upward_driver', 'no_upward'),
+            # 405号建议5: 供dim6消费的完整事件数据
+            'event_count': len(result.get('events', [])),
+            'event_details': [
+                {
+                    'event_type': e.get('event_type', ''),
+                    'description': e.get('description', ''),
+                    'direction': e.get('direction', 0),
+                    'confidence': e.get('confidence', 0),
+                    'event_date': e.get('event_date', ''),
+                }
+                for e in result.get('events', [])[:5]
+            ],
+            'event_risk_factors': [
+                {
+                    'category': '事件风险',
+                    'factor': e.get('event_type', ''),
+                    'severity': '高' if abs(e.get('direction', 0)) >= 2 else '中',
+                    'satisfied': True,
+                }
+                for e in result.get('events', [])
+                if e.get('detected')
+            ],
         }
 
         # 写事件摘要（最多3条）

@@ -7,8 +7,10 @@ PlaybackReport: 诊断报告（RR-xxx）
 ReviewConfig: 复盘配置
 """
 from datetime import datetime
-from app import db
+
 from sqlalchemy import DECIMAL, JSON, Text
+
+from app import db
 
 
 class ReviewUnit(db.Model):

@@ -2,12 +2,12 @@
 预测校准 API 路由 — 153-P1-2
 """
 import logging
-from app.utils.error_handlers import handle_exceptions
-from flask import Blueprint, request, jsonify
 from datetime import date, datetime
-from app.services.prediction_calibration_service import (
-    get_calibration_service, AiPrediction
-)
+
+from flask import Blueprint, jsonify, request
+
+from app.services.prediction_calibration_service import AiPrediction, get_calibration_service
+from app.utils.error_handlers import handle_exceptions
 
 logger = logging.getLogger(__name__)
 prediction_bp = Blueprint('prediction', __name__)

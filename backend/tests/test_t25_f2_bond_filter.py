@@ -4,7 +4,9 @@
 12085 条债券/逆回购（23=沪债/24=深债/20=逆回购）→ 81% 快照为垃圾数据。
 修复后仅保留真实 A 股代码。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)

@@ -16,10 +16,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from typing import Any, Optional
 
-from app.services.status_config import get_status_engine_config, get_signal_registry
+from app.services.status_config import get_signal_registry, get_status_engine_config
 
 logger = logging.getLogger(__name__)
 
@@ -175,9 +174,9 @@ class StatusEngine:
         if div_type in ('top', 'bottom') and div_type != '无':
             # 顶背离=看空（量价不配合）；底背离=看多反转信号（知识库《50种量价形态》）
             if div_type == 'top':
-                return ('背离', [f'顶背离（MACD未创新高）' if macd_ok else f'顶背离（量缩，未MACD确认）'], conf)
+                return ('背离', ['顶背离（MACD未创新高）' if macd_ok else '顶背离（量缩，未MACD确认）'], conf)
             # bottom 底背离：知识库=看多反转，非"背离/看空"
-            return ('健康', [f'底背离（下跌衰竭，反转信号）'], conf)
+            return ('健康', ['底背离（下跌衰竭，反转信号）'], conf)
 
         # ② 阶段×量价结构交叉矩阵（trend.stage × volume.structure）
         stage = str((sr.get('trend') or {}).get('stage', ''))
@@ -209,18 +208,33 @@ class StatusEngine:
 
     def _build_dim_engine_results(self, tags: dict, signals: dict,
                                    dims: dict, lifecycle: Optional[dict] = None) -> dict:
-        """365号批次C：调用6个维度引擎，返回结构化结果
+        """411号方案Phase 4：重构维度引擎调用流程
 
-        与旧 _build_dimensions() 并行运行。结果作为附加字段写入 status_snapshot，
-        不影响旧仲裁路径。
+        新流程：
+        1. dim1数据门禁（独立调用）→ 获取data_context
+        2. dim2-dim7执行（注入data_context）
+        3. signal_analyzer信号分析（依赖dim2-dim7输出）
 
         Returns:
             {'signal': {...}, 'structure': {...}, 'volume_price': {...},
-             'chip_fund': {...}, 'emotion': {...}, 'risk': {...}}
+             'chip_fund': {...}, 'emotion': {...}, 'risk': {...}, 'valuation': {...}}
         """
         results = {}
+
+        # Step 1: dim1数据门禁（独立调用，获取data_context）
+        data_context = None
+        try:
+            from app.opportunity_atlas.dimensions.dim1_signal_engine import Dim1SignalEngine
+            dim1_engine = Dim1SignalEngine()
+            dim1_result = dim1_engine.evaluate(dims, tags, signals, lifecycle)
+            results['signal'] = dim1_result
+            data_context = dim1_result.get('data_context')
+        except Exception as e:
+            logger.warning(f"dim1数据门禁调用失败: {e}")
+            results['signal'] = None
+
+        # Step 2: dim2-dim7执行（注入data_context）
         engine_map = {
-            'signal': ('app.opportunity_atlas.dimensions.dim1_signal_engine', 'Dim1SignalEngine'),
             'structure': ('app.opportunity_atlas.dimensions.dim2_structure_engine', 'Dim2StructureEngine'),
             'volume_price': ('app.opportunity_atlas.dimensions.dim3_vp_engine', 'Dim3VPEngine'),
             'chip_fund': ('app.opportunity_atlas.dimensions.dim4_chip_fund_engine', 'Dim4ChipFundEngine'),
@@ -234,19 +248,50 @@ class StatusEngine:
                 mod = importlib.import_module(module_path)
                 engine_cls = getattr(mod, class_name)
                 engine = engine_cls()
-                # 所有引擎统一接口：evaluate(dims, tags, signals, lifecycle)
-                # 各引擎内部按需取用，多余参数忽略
-                results[dim_name] = engine.evaluate(dims, tags, signals, lifecycle)
+                # 411号Phase 4：注入data_context参数（默认值None，兼容旧调用）
+                results[dim_name] = engine.evaluate(dims, tags, signals, lifecycle,
+                                                    data_context=data_context)
             except Exception as e:
                 logger.warning(f"维度引擎 {dim_name} 调用失败: {e}")
                 results[dim_name] = None
+
+        # Step 3: signal_analyzer信号分析（依赖dim2-dim7输出）
+        # 用classify_attribute等函数替代原dim1的分析功能
+        try:
+            from app.opportunity_atlas.signal_analyzer import analyze_signal
+            # 构建dims格式（从dim2-dim7结果提取）
+            _META_KEYS = {'overall_light', 'overall_direction', 'continuous_value'}
+            dims_for_signal = {}
+            for key in ['structure', 'volume_price', 'chip_fund', 'emotion', 'risk', 'valuation']:
+                r = results.get(key)
+                if r and isinstance(r, dict):
+                    judg = r.get('judgment', {})
+                    # 取第一个非meta key的value作为state
+                    state_val = '中性'
+                    for jk, jv in judg.items():
+                        if jk not in _META_KEYS and isinstance(jv, dict):
+                            state_val = jv.get('value', '中性')
+                            break
+                    dims_for_signal[key] = {
+                        'state': state_val,
+                        'confidence': judg.get('continuous_value', 0.5),
+                    }
+            signal_analysis = analyze_signal(dims_for_signal, tags, lifecycle or {})
+            results['signal_analysis'] = signal_analysis
+        except Exception as e:
+            logger.warning(f"signal_analyzer调用失败: {e}")
+            results['signal_analysis'] = None
+
         return results
 
     def _convert_to_dims_format(self, dim_results: dict, tags: dict) -> dict:
         """366号步骤3：将维度引擎输出转为旧dims格式，保持下游兼容
 
+        411号方案Phase 2：signal_confirm由classify_attribute()分析结果生成，
+        替代原tags.right_side_confirm路径。
+
         Args:
-            dim_results: 6个维度引擎的输出结果
+            dim_results: 维度引擎的输出结果
             tags: 原始标签数据
 
         Returns:
@@ -362,12 +407,28 @@ class StatusEngine:
             'confidence': 0.5,
             'evidence': [],
         }
-        dims['signal_confirm'] = {
-            'state': tags.get('right_side_confirm', '未确认'),
-            'light': 'yellow',
-            'confidence': 0.5,
-            'evidence': [],
-        }
+
+        # 411号Phase 2：signal_confirm由classify_attribute()分析结果生成
+        # 替代原tags.right_side_confirm路径
+        try:
+            from app.opportunity_atlas.signal_analyzer import LIGHT_MAP, classify_attribute
+            lifecycle_data = {}
+            attr_result = classify_attribute(dims, tags, lifecycle_data)
+            attr_code = attr_result.get('code', 'neutral')
+            dims['signal_confirm'] = {
+                'state': attr_result.get('name', '中性观望'),
+                'light': LIGHT_MAP.get(attr_code, 'yellow'),
+                'confidence': 0.6,
+                'evidence': [attr_result.get('detail', '')],
+            }
+        except Exception:
+            # 降级：回退到tags.right_side_confirm
+            dims['signal_confirm'] = {
+                'state': tags.get('right_side_confirm', '未确认'),
+                'light': 'yellow',
+                'confidence': 0.5,
+                'evidence': [],
+            }
 
         return dims
 

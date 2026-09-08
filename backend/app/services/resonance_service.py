@@ -10,11 +10,11 @@ ResonanceService — 多策略信号共振评分系统
   - 信号冲突识别
 """
 
-from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Dict, List, Optional
 
-from app.engine.patterns import PatternResult, PatternCategory, PatternStage
+from app.engine.patterns import PatternResult
 
 
 class ResonanceLevel(Enum):
@@ -195,7 +195,6 @@ class ResonanceService:
             {strategy_name: DimensionSignal}
         """
         # 按 strategy name 分组
-        strategy_to_direction = {}  # strategy -> {bullish, bearish, neutral}
         strategy_to_patterns = {}
 
         for p in patterns:
@@ -218,13 +217,10 @@ class ResonanceService:
 
             if bull > bear and bull > neutral:
                 direction = 'bullish'
-                total = bull
             elif bear > bull and bear > neutral:
                 direction = 'bearish'
-                total = bear
             else:
                 direction = 'neutral'
-                total = neutral
 
             # 平均强度
             avg_strength = sum(p.strength for p in pats) / max(len(pats), 1)

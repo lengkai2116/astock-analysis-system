@@ -7,9 +7,8 @@ PlaybackService — 回放复盘系统
 """
 
 import logging
-from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Callable, Generator
 from dataclasses import dataclass, field
+from typing import Dict, Generator, List, Optional
 
 logger = logging.getLogger(__name__)
 

@@ -3,12 +3,12 @@
 支持多格式输出：Markdown、HTML、Jinja2模板
 """
 
-import os
 import json
-from typing import Dict, List, Optional, Any
+import logging
+import os
 from datetime import datetime
 from pathlib import Path
-import logging
+from typing import Any, Dict, List, Optional
 
 try:
     from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -23,22 +23,22 @@ logger = logging.getLogger(__name__)
 class ReportGenerator:
     """
     报告生成器
-    
+
     支持多种报告类型：
     - 单股票策略报告
     - 回测报告
     - 研究报告
-    
+
     支持多种输出格式：
     - Markdown
     - HTML
     - JSON
     """
-    
+
     def __init__(self, template_dir: Optional[str] = None):
         self.template_dir = template_dir or self._get_default_template_dir()
         self.jinja_env = None
-        
+
         if JINJA2_AVAILABLE and os.path.exists(self.template_dir):
             try:
                 self.jinja_env = Environment(
@@ -47,30 +47,30 @@ class ReportGenerator:
                 )
             except Exception as e:
                 logger.warning(f"Jinja2环境初始化失败: {str(e)}")
-    
+
     def _get_default_template_dir(self) -> str:
         """获取默认模板目录"""
         current_dir = Path(__file__).parent
         template_dir = current_dir.parent.parent / 'templates'
-        
+
         if not template_dir.exists():
             template_dir.mkdir(parents=True, exist_ok=True)
             self._create_default_templates(template_dir)
-        
+
         return str(template_dir)
-    
+
     def _create_default_templates(self, template_dir: Path):
         """创建默认模板"""
         template_dir.mkdir(parents=True, exist_ok=True)
-        
+
         markdown_template = template_dir / 'report.md'
         if not markdown_template.exists():
             markdown_template.write_text(self._get_default_markdown_template(), encoding='utf-8')
-        
+
         html_template = template_dir / 'report.html'
         if not html_template.exists():
             html_template.write_text(self._get_default_html_template(), encoding='utf-8')
-    
+
     def _get_default_markdown_template(self) -> str:
         """获取默认Markdown模板"""
         return """# {{ title }}
@@ -202,7 +202,7 @@ class ReportGenerator:
 
 *本报告由A股分析系统自动生成，仅供参考，不构成投资建议。*
 """
-    
+
     def _get_default_html_template(self) -> str:
         """获取默认HTML模板"""
         return """<!DOCTYPE html>
@@ -313,12 +313,12 @@ class ReportGenerator:
         <div class="header">
             <h1>{{ title }}</h1>
             <div class="meta">
-                生成时间: {{ generated_at }} | 
-                股票代码: {{ ts_code }} | 
+                生成时间: {{ generated_at }} |
+                股票代码: {{ ts_code }} |
                 周期: {{ start_date }} - {{ end_date }}
             </div>
         </div>
-        
+
         <div class="summary-box">
             <div>{{ summary }}</div>
             <div style="margin-top: 16px;">
@@ -326,7 +326,7 @@ class ReportGenerator:
                 <span style="margin-left: 20px;">风险等级: {{ risk_level }}</span>
             </div>
         </div>
-        
+
         <div class="section">
             <h2 class="section-title">策略概述</h2>
             <p><strong>策略类型:</strong> {{ strategy_type }}</p>
@@ -336,7 +336,7 @@ class ReportGenerator:
                 {{ signal_logic }}
             </div>
         </div>
-        
+
         <div class="section">
             <h2 class="section-title">回测结果</h2>
             <div class="metrics-grid">
@@ -366,7 +366,7 @@ class ReportGenerator:
                 </div>
             </div>
         </div>
-        
+
         {% if strengths %}
         <div class="section">
             <h2 class="section-title">优势分析</h2>
@@ -375,7 +375,7 @@ class ReportGenerator:
             {% endfor %}
         </div>
         {% endif %}
-        
+
         {% if weaknesses %}
         <div class="section">
             <h2 class="section-title">劣势分析</h2>
@@ -384,7 +384,7 @@ class ReportGenerator:
             {% endfor %}
         </div>
         {% endif %}
-        
+
         {% if suggestions %}
         <div class="section">
             <h2 class="section-title">改进建议</h2>
@@ -395,7 +395,7 @@ class ReportGenerator:
             </ol>
         </div>
         {% endif %}
-        
+
         <div class="section">
             <h2 class="section-title">交易建议</h2>
             <div class="advice-box">
@@ -405,7 +405,7 @@ class ReportGenerator:
                 <p><strong>下一步:</strong> {{ next_steps }}</p>
             </div>
         </div>
-        
+
         <div class="footer">
             <p>本报告由A股分析系统自动生成，仅供参考，不构成投资建议。</p>
             <p>生成时间: {{ generated_at }}</p>
@@ -414,23 +414,23 @@ class ReportGenerator:
 </body>
 </html>
 """
-    
-    def generate_single_stock_report(self, stock_data: Dict, 
+
+    def generate_single_stock_report(self, stock_data: Dict,
                                     strategy_data: Dict,
                                     format: str = 'markdown') -> str:
         """
         生成单股票策略报告
-        
+
         Args:
             stock_data: 股票数据
             strategy_data: 策略数据
             format: 输出格式 ('markdown', 'html', 'json')
-        
+
         Returns:
             生成的报告内容
         """
         logger.info(f"生成单股票策略报告，格式: {format}")
-        
+
         report_data = {
             'title': f"{stock_data.get('name', '未知股票')} ({stock_data.get('ts_code', '')}) 策略分析报告",
             'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -443,34 +443,34 @@ class ReportGenerator:
             'signal_logic': strategy_data.get('signal', ''),
             'description': strategy_data.get('description', '')
         }
-        
+
         report_data.update(self._format_metrics(strategy_data.get('metrics', {})))
-        
+
         if format == 'json':
             return json.dumps(report_data, ensure_ascii=False, indent=2)
         elif format == 'html':
             return self._render_html_template(report_data)
         else:
             return self._render_markdown_template(report_data)
-    
+
     def generate_backtest_report(self, backtest_result: Dict,
                                 interpretation: Optional[Dict] = None,
                                 format: str = 'markdown') -> str:
         """
         生成回测报告
-        
+
         Args:
             backtest_result: 回测结果
             interpretation: AI解读结果（可选）
             format: 输出格式 ('markdown', 'html', 'json')
-        
+
         Returns:
             生成的报告内容
         """
         logger.info(f"生成回测报告，格式: {format}")
-        
+
         metrics = backtest_result.get('metrics', {})
-        
+
         report_data = {
             'title': '量化策略回测报告',
             'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -482,9 +482,9 @@ class ReportGenerator:
             'trades': backtest_result.get('trades', []),
             'equity_curve': backtest_result.get('daily_equity', [])
         }
-        
+
         report_data.update(self._format_metrics(metrics))
-        
+
         if interpretation:
             report_data.update({
                 'overall_score': interpretation.get('overall_score', 0),
@@ -495,7 +495,7 @@ class ReportGenerator:
                 'suggestions': interpretation.get('suggestions', []),
                 'trading_advice': interpretation.get('trading_advice', {})
             })
-            
+
             advice = interpretation.get('trading_advice', {})
             report_data.update({
                 'suitable_for': advice.get('suitable_for', ''),
@@ -503,41 +503,41 @@ class ReportGenerator:
                 'risk_control': advice.get('risk_control', ''),
                 'next_steps': advice.get('next_steps', '')
             })
-        
+
         if format == 'json':
             return json.dumps(report_data, ensure_ascii=False, indent=2)
         elif format == 'html':
             return self._render_html_template(report_data)
         else:
             return self._render_markdown_template(report_data)
-    
+
     def generate_research_report(self, pipeline_context: Dict,
                                 format: str = 'markdown') -> Dict[str, Any]:
         """
         生成完整的研究报告
-        
+
         Args:
             pipeline_context: 流水线上下文
             format: 输出格式
-        
+
         Returns:
             报告数据字典
         """
         logger.info("生成完整研究报告")
-        
+
         validated_input = pipeline_context.get('validated_input', {})
         generated_strategy = pipeline_context.get('generated_strategy', {})
         backtest_result = pipeline_context.get('backtest_result', {})
         interpretation = pipeline_context.get('interpretation', {})
-        
+
         sections = []
-        
+
         sections.append({
             'title': '研究概述',
             'content': f"本报告基于用户描述「{validated_input.get('description', '')}」生成的分析报告。",
             'level': 1
         })
-        
+
         sections.append({
             'title': '策略详情',
             'content': generated_strategy.get('description', ''),
@@ -548,7 +548,7 @@ class ReportGenerator:
             },
             'level': 2
         })
-        
+
         if backtest_result:
             metrics = backtest_result.get('metrics', {})
             sections.append({
@@ -562,7 +562,7 @@ class ReportGenerator:
                 },
                 'level': 2
             })
-        
+
         if interpretation:
             sections.append({
                 'title': 'AI分析',
@@ -574,7 +574,7 @@ class ReportGenerator:
                 'suggestions': interpretation.get('suggestions', []),
                 'level': 2
             })
-        
+
         report = {
             'title': '量化研究分析报告',
             'generated_at': datetime.now().isoformat(),
@@ -588,14 +588,14 @@ class ReportGenerator:
                 'execution_result': pipeline_context.get('execution_result', {})
             }
         }
-        
+
         if format in ['markdown', 'html']:
             report['content'] = self._generate_markdown_from_sections(sections) if format == 'markdown' else self._generate_html_from_sections(sections)
-        
+
         logger.info(f"研究报告生成完成，包含 {len(sections)} 个章节")
-        
+
         return report
-    
+
     def _format_metrics(self, metrics: Dict) -> Dict:
         """格式化指标数据"""
         return {
@@ -609,7 +609,7 @@ class ReportGenerator:
             'profit_loss_ratio': f"{metrics.get('profit_loss_ratio', 0):.2f}",
             'total_trades': metrics.get('total_trades', 0)
         }
-    
+
     def _render_markdown_template(self, data: Dict) -> str:
         """渲染Markdown模板"""
         if self.jinja_env:
@@ -618,9 +618,9 @@ class ReportGenerator:
                 return template.render(**data)
             except Exception as e:
                 logger.warning(f"模板渲染失败: {str(e)}")
-        
+
         return self._generate_simple_markdown(data)
-    
+
     def _render_html_template(self, data: Dict) -> str:
         """渲染HTML模板"""
         if self.jinja_env:
@@ -629,23 +629,23 @@ class ReportGenerator:
                 return template.render(**data)
             except Exception as e:
                 logger.warning(f"模板渲染失败: {str(e)}")
-        
+
         return self._generate_simple_html(data)
-    
+
     def _generate_simple_markdown(self, data: Dict) -> str:
         """生成简单的Markdown报告"""
         md = f"""# {data.get('title', '分析报告')}
 
-**生成时间**: {data.get('generated_at', '')}  
-**股票代码**: {data.get('ts_code', '')}  
+**生成时间**: {data.get('generated_at', '')}
+**股票代码**: {data.get('ts_code', '')}
 **分析周期**: {data.get('start_date', '')} - {data.get('end_date', '')}
 
 ---
 
 ## 策略概述
 
-**策略类型**: {data.get('strategy_type', '')}  
-**指标公式**: `{data.get('formula', '')}`  
+**策略类型**: {data.get('strategy_type', '')}
+**指标公式**: `{data.get('formula', '')}`
 **信号逻辑**: {data.get('signal_logic', '')}
 
 ---
@@ -660,33 +660,33 @@ class ReportGenerator:
 - **总交易次数**: {data.get('total_trades', '0')}
 
 """
-        
+
         if data.get('strengths'):
             md += "\n## 优势分析\n\n"
             for strength in data['strengths']:
                 md += f"- {strength}\n"
-        
+
         if data.get('weaknesses'):
             md += "\n## 劣势分析\n\n"
             for weakness in data['weaknesses']:
                 md += f"- {weakness}\n"
-        
+
         if data.get('suggestions'):
             md += "\n## 改进建议\n\n"
             for i, suggestion in enumerate(data['suggestions'], 1):
                 md += f"{i}. {suggestion}\n"
-        
+
         if data.get('suitable_for'):
-            md += f"\n## 交易建议\n\n"
+            md += "\n## 交易建议\n\n"
             md += f"- **适用对象**: {data['suitable_for']}\n"
             md += f"- **仓位管理**: {data.get('position_management', '')}\n"
             md += f"- **风险控制**: {data.get('risk_control', '')}\n"
             md += f"- **下一步**: {data.get('next_steps', '')}\n"
-        
+
         md += "\n---\n\n*本报告由A股分析系统自动生成，仅供参考，不构成投资建议。*\n"
-        
+
         return md
-    
+
     def _generate_simple_html(self, data: Dict) -> str:
         """生成简单的HTML报告"""
         html = f"""<!DOCTYPE html>
@@ -712,10 +712,10 @@ class ReportGenerator:
         <h1>{data.get('title', '分析报告')}</h1>
         <div class="meta">生成时间: {data.get('generated_at', '')} | 股票: {data.get('ts_code', '')}</div>
     </div>
-    
+
     <h2>策略概述</h2>
     <p><strong>类型:</strong> {data.get('strategy_type', '')} | <strong>公式:</strong> <code>{data.get('formula', '')}</code></p>
-    
+
     <h2>回测结果</h2>
     <div class="metrics">
         <div class="metric"><div class="metric-title">总收益率</div><div class="metric-value">{data.get('total_return', '0')}%</div></div>
@@ -723,101 +723,101 @@ class ReportGenerator:
         <div class="metric"><div class="metric-title">最大回撤</div><div class="metric-value">{data.get('max_drawdown', '0')}%</div></div>
     </div>
 """
-        
+
         if data.get('strengths'):
             html += "<h2>优势分析</h2>"
             for strength in data['strengths']:
                 html += f'<div class="strength">✓ {strength}</div>\n'
-        
+
         if data.get('weaknesses'):
             html += "<h2>劣势分析</h2>"
             for weakness in data['weaknesses']:
                 html += f'<div class="weakness">✗ {weakness}</div>\n'
-        
+
         html += """
 </body>
 </html>
 """
-        
+
         return html
-    
+
     def _generate_markdown_from_sections(self, sections: List[Dict]) -> str:
         """从章节列表生成Markdown"""
         md = ""
-        
+
         for section in sections:
             level = section.get('level', 1)
             md += f"{'#' * level} {section['title']}\n\n"
-            
+
             if section.get('content'):
                 md += f"{section['content']}\n\n"
-            
+
             if section.get('details'):
                 for key, value in section['details'].items():
                     md += f"- **{key}**: {value}\n"
                 md += "\n"
-            
+
             if section.get('metrics'):
                 for key, value in section['metrics'].items():
                     md += f"- **{key}**: {value}\n"
                 md += "\n"
-            
+
             if section.get('strengths'):
                 md += "**优势:**\n"
                 for item in section['strengths']:
                     md += f"- {item}\n"
                 md += "\n"
-            
+
             if section.get('weaknesses'):
                 md += "**劣势:**\n"
                 for item in section['weaknesses']:
                     md += f"- {item}\n"
                 md += "\n"
-            
+
             if section.get('suggestions'):
                 md += "**建议:**\n"
                 for i, item in enumerate(section['suggestions'], 1):
                     md += f"{i}. {item}\n"
                 md += "\n"
-        
+
         return md
-    
+
     def _generate_html_from_sections(self, sections: List[Dict]) -> str:
         """从章节列表生成HTML"""
         html = '<div class="report-sections">\n'
-        
+
         for section in sections:
             level = section.get('level', 1)
             html += f'<h{level} class="section-title">{section["title"]}</h{level}>\n'
-            
+
             if section.get('content'):
                 html += f'<p>{section["content"]}</p>\n'
-            
+
             if section.get('summary'):
                 html += f'<div class="summary">{section["summary"]}</div>\n'
-            
+
             if section.get('metrics'):
                 html += '<div class="metrics-grid">\n'
                 for key, value in section['metrics'].items():
                     html += f'<div class="metric"><div class="metric-title">{key}</div><div class="metric-value">{value}</div></div>\n'
                 html += '</div>\n'
-            
+
             if section.get('strengths'):
                 html += '<div class="strengths">\n'
                 for item in section['strengths']:
                     html += f'<div class="strength-item">✓ {item}</div>\n'
                 html += '</div>\n'
-            
+
             if section.get('suggestions'):
                 html += '<ol class="suggestions">\n'
                 for item in section['suggestions']:
                     html += f'<li>{item}</li>\n'
                 html += '</ol>\n'
-        
+
         html += '</div>\n'
-        
+
         return html
-    
+
 
     def generate_review_report(self, review_result: Dict,
                                 format: str = 'markdown') -> str:
@@ -904,32 +904,32 @@ class ReportGenerator:
         return content_str
 
 
-    def save_report(self, content: str, filename: str, 
+    def save_report(self, content: str, filename: str,
                    output_dir: Optional[str] = None) -> str:
         """
         保存报告到文件
-        
+
         Args:
             content: 报告内容
             filename: 文件名
             output_dir: 输出目录（可选）
-        
+
         Returns:
             保存的文件路径
         """
         if not output_dir:
             output_dir = Path.home() / 'astock_reports'
-        
+
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
-        
+
         file_path = output_path / filename
-        
+
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
-        
+
         logger.info(f"报告已保存: {file_path}")
-        
+
         return str(file_path)
 
 

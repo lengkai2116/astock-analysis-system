@@ -3,31 +3,24 @@
 提供增强回测引擎的API接口
 文件路径：backend/app/routes/backtest.py
 """
-from flask import Blueprint, request, jsonify, current_app
-import pandas as pd
-import numpy as np
-from datetime import datetime
 import logging
-from typing import Dict, List, Optional
 
-from app.engine.backtest_v2 import (
-    AShareBacktestEngine,
-    BacktestConfig,
-    BacktestResultV2,
-    create_default_engine
-)
-from app.services.benchmark_service import (
-    BenchmarkService,
-    BenchmarkIndex,
-    create_benchmark_service
-)
-from app.utils.error_handlers import handle_exceptions
+import numpy as np
+import pandas as pd
+from flask import Blueprint, jsonify, request
+
+from app.engine.backtest_v2 import AShareBacktestEngine, BacktestConfig, create_default_engine
 from app.services.backtest_service import (
     CrossSectionalBacktestService,
     ParameterOptimizer,
-    _init_task, get_progress, get_result,
-    save_snapshot, list_snapshots,
+    _init_task,
+    get_progress,
+    get_result,
+    list_snapshots,
+    save_snapshot,
 )
+from app.services.benchmark_service import BenchmarkIndex, create_benchmark_service
+from app.utils.error_handlers import handle_exceptions
 
 backtest_bp = Blueprint('backtest', __name__, url_prefix='/api/v3/backtest')
 
@@ -42,7 +35,7 @@ def get_available_indices():
     try:
         service = create_benchmark_service()
         indices = service.get_index_list()
-        
+
         return jsonify({
             'success': True,
             'data': indices
@@ -63,13 +56,13 @@ def get_index_info(ts_code):
     try:
         service = create_benchmark_service()
         info = service.get_index_basic_info(ts_code)
-        
+
         if not info:
             return jsonify({
                 'success': False,
                 'error': f'指数 {ts_code} 不存在'
             }), 404
-        
+
         return jsonify({
             'success': True,
             'data': info
@@ -90,16 +83,16 @@ def get_index_data(ts_code):
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        
+
         service = create_benchmark_service()
         df = service.get_index_daily(ts_code, start_date, end_date)
-        
+
         if df.empty:
             return jsonify({
                 'success': False,
                 'error': '没有获取到数据'
             }), 404
-        
+
         return jsonify({
             'success': True,
             'data': df.to_dict(orient='records')
@@ -120,16 +113,16 @@ def get_index_metrics(ts_code):
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        
+
         service = create_benchmark_service()
         metrics = service.calculate_benchmark_metrics(ts_code, start_date, end_date)
-        
+
         if not metrics:
             return jsonify({
                 'success': False,
                 'error': '计算失败'
             }), 400
-        
+
         return jsonify({
             'success': True,
             'data': metrics
@@ -152,16 +145,16 @@ def compare_indices():
         ts_codes = data.get('ts_codes', [BenchmarkIndex.HS300, BenchmarkIndex.ZZ500])
         start_date = data.get('start_date')
         end_date = data.get('end_date')
-        
+
         service = create_benchmark_service()
         df = service.compare_benchmarks(ts_codes, start_date, end_date)
-        
+
         if df.empty:
             return jsonify({
                 'success': False,
                 'error': '对比失败'
             }), 400
-        
+
         return jsonify({
             'success': True,
             'data': df.to_dict(orient='records')
@@ -182,27 +175,27 @@ def run_backtest():
     """
     try:
         data = request.json
-        
+
         price_data = data.get('price_data', [])
         signals_data = data.get('signals', [])
         benchmark_ts_code = data.get('benchmark', BenchmarkIndex.HS300)
-        
+
         config_data = data.get('config', {})
         start_date = data.get('start_date')
         end_date = data.get('end_date')
-        
+
         if not price_data:
             return jsonify({
                 'success': False,
                 'error': '价格数据不能为空'
             }), 400
-        
+
         price_df = pd.DataFrame(price_data)
         if 'trade_date' not in price_df.columns and 'date' in price_df.columns:
             price_df = price_df.rename(columns={'date': 'trade_date'})
-        
+
         signals_df = pd.DataFrame(signals_data) if signals_data else None
-        
+
         config = BacktestConfig(
             initial_capital=config_data.get('initial_capital', 100000),
             commission_rate=config_data.get('commission_rate', 0.0003),
@@ -212,16 +205,16 @@ def run_backtest():
             max_position=config_data.get('max_position', 10),
             price_limit_check=config_data.get('price_limit_check', True)
         )
-        
+
         engine = AShareBacktestEngine(config)
-        
+
         benchmark_df = None
         if benchmark_ts_code:
             benchmark_service = create_benchmark_service()
             benchmark_df = benchmark_service.get_index_daily(
                 benchmark_ts_code, start_date, end_date
             )
-        
+
         result = engine.run_backtest(
             price_data=price_df,
             signals=signals_df,
@@ -229,12 +222,12 @@ def run_backtest():
             start_date=start_date,
             end_date=end_date
         )
-        
+
         return jsonify({
             'success': True,
             'data': result.to_dict()
         })
-    
+
     except Exception as e:
         logger.error(f"回测运行失败: {str(e)}")
         return jsonify({
@@ -251,41 +244,41 @@ def run_simple_backtest():
     """
     try:
         data = request.json
-        
+
         price_data = data.get('price_data', [])
         trades = data.get('trades', [])
-        initial_capital = data.get('initial_capital', 100000)
-        
+        data.get('initial_capital', 100000)
+
         if not price_data:
             return jsonify({
                 'success': False,
                 'error': '价格数据不能为空'
             }), 400
-        
+
         price_df = pd.DataFrame(price_data)
         if 'trade_date' not in price_df.columns and 'date' in price_df.columns:
             price_df = price_df.rename(columns={'date': 'trade_date'})
-        
+
         engine = create_default_engine()
-        
+
         signals_df = None
         if trades:
             signals_df = pd.DataFrame(trades)
             if 'trade_date' not in signals_df.columns and 'date' in signals_df.columns:
                 signals_df = signals_df.rename(columns={'date': 'trade_date'})
-        
+
         result = engine.run_backtest(
             price_data=price_df,
             signals=signals_df,
             start_date=data.get('start_date'),
             end_date=data.get('end_date')
         )
-        
+
         return jsonify({
             'success': True,
             'data': result.to_dict()
         })
-    
+
     except Exception as e:
         logger.error(f"简单回测失败: {str(e)}")
         return jsonify({
@@ -302,25 +295,25 @@ def get_equity_curve():
     """
     try:
         data = request.json
-        
+
         price_data = data.get('price_data', [])
         signals_data = data.get('signals', [])
-        
+
         if not price_data:
             return jsonify({
                 'success': False,
                 'error': '价格数据不能为空'
             }), 400
-        
+
         price_df = pd.DataFrame(price_data)
         if 'trade_date' not in price_df.columns and 'date' in price_df.columns:
             price_df = price_df.rename(columns={'date': 'trade_date'})
-        
+
         signals_df = pd.DataFrame(signals_data) if signals_data else None
-        
+
         engine = create_default_engine()
         result = engine.run_backtest(price_df, signals_df)
-        
+
         equity_curve = []
         for equity in result.daily_equity:
             equity_curve.append({
@@ -331,12 +324,12 @@ def get_equity_curve():
                 'daily_return': equity.daily_return,
                 'total_pnl': equity.total_pnl
             })
-        
+
         return jsonify({
             'success': True,
             'data': equity_curve
         })
-    
+
     except Exception as e:
         logger.error(f"获取权益曲线失败: {str(e)}")
         return jsonify({
@@ -353,25 +346,25 @@ def get_trades_analysis():
     """
     try:
         data = request.json
-        
+
         price_data = data.get('price_data', [])
         signals_data = data.get('signals', [])
-        
+
         if not price_data:
             return jsonify({
                 'success': False,
                 'error': '价格数据不能为空'
             }), 400
-        
+
         price_df = pd.DataFrame(price_data)
         if 'trade_date' not in price_df.columns and 'date' in price_df.columns:
             price_df = price_df.rename(columns={'date': 'trade_date'})
-        
+
         signals_df = pd.DataFrame(signals_data) if signals_data else None
-        
+
         engine = create_default_engine()
         result = engine.run_backtest(price_df, signals_df)
-        
+
         trades = []
         for trade in result.trades:
             trades.append({
@@ -387,7 +380,7 @@ def get_trades_analysis():
                 'slippage': trade.slippage,
                 'total_cost': trade.total_cost
             })
-        
+
         return jsonify({
             'success': True,
             'data': {
@@ -402,7 +395,7 @@ def get_trades_analysis():
                 }
             }
         })
-    
+
     except Exception as e:
         logger.error(f"获取交易记录失败: {str(e)}")
         return jsonify({
@@ -419,51 +412,51 @@ def calculate_metrics():
     """
     try:
         data = request.json
-        
+
         equity_curve = data.get('equity_curve', [])
         benchmark_data = data.get('benchmark_data', [])
-        
+
         if not equity_curve:
             return jsonify({
                 'success': False,
                 'error': '权益曲线数据不能为空'
             }), 400
-        
+
         equity_df = pd.DataFrame(equity_curve)
         if 'date' in equity_df.columns and 'trade_date' not in equity_df.columns:
             equity_df = equity_df.rename(columns={'date': 'trade_date'})
-        
+
         total_value = equity_df['total_value']
         if len(total_value) < 2:
             return jsonify({
                 'success': False,
                 'error': '数据点不足'
             }), 400
-        
+
         initial_capital = total_value.iloc[0]
         final_value = total_value.iloc[-1]
         total_return = (final_value - initial_capital) / initial_capital
-        
+
         trading_days = len(total_value)
         annual_return = (1 + total_return) ** (252 / trading_days) - 1
-        
+
         daily_returns = total_value.pct_change().dropna()
         volatility = daily_returns.std() * np.sqrt(252)
-        
+
         cummax = total_value.cummax()
         drawdown = (cummax - total_value) / cummax
         max_drawdown = drawdown.max()
-        
+
         risk_free_rate = 0.03
         excess_returns = daily_returns - risk_free_rate / 252
         sharpe_ratio = np.sqrt(252) * excess_returns.mean() / (daily_returns.std() + 1e-10)
-        
+
         downside_returns = daily_returns[daily_returns < 0]
         downside_std = downside_returns.std() if len(downside_returns) > 0 else 1e-10
         sortino_ratio = np.sqrt(252) * excess_returns.mean() / downside_std
-        
+
         win_rate = (daily_returns > 0).mean()
-        
+
         metrics = {
             'initial_capital': float(initial_capital),
             'final_value': float(final_value),
@@ -476,19 +469,19 @@ def calculate_metrics():
             'win_rate': float(win_rate),
             'trading_days': trading_days
         }
-        
+
         if benchmark_data:
             benchmark_df = pd.DataFrame(benchmark_data)
             if 'close' in benchmark_df.columns and len(benchmark_df) > 1:
                 bm_return = (benchmark_df['close'].iloc[-1] / benchmark_df['close'].iloc[0]) - 1
                 metrics['benchmark_return'] = float(bm_return)
                 metrics['excess_return'] = float(total_return - bm_return)
-        
+
         return jsonify({
             'success': True,
             'data': metrics
         })
-    
+
     except Exception as e:
         logger.error(f"计算指标失败: {str(e)}")
         return jsonify({
@@ -505,32 +498,32 @@ def run_with_benchmark():
     """
     try:
         data = request.json
-        
+
         price_data = data.get('price_data', [])
         signals_data = data.get('signals', [])
         benchmark_ts_code = data.get('benchmark', BenchmarkIndex.HS300)
         start_date = data.get('start_date')
         end_date = data.get('end_date')
-        
+
         if not price_data:
             return jsonify({
                 'success': False,
                 'error': '价格数据不能为空'
             }), 400
-        
+
         price_df = pd.DataFrame(price_data)
         if 'trade_date' not in price_df.columns and 'date' in price_df.columns:
             price_df = price_df.rename(columns={'date': 'trade_date'})
-        
+
         signals_df = pd.DataFrame(signals_data) if signals_data else None
-        
+
         engine = create_default_engine()
         benchmark_service = create_benchmark_service()
-        
+
         benchmark_df = benchmark_service.get_index_daily(
             benchmark_ts_code, start_date, end_date
         )
-        
+
         result = engine.run_backtest(
             price_data=price_df,
             signals=signals_df,
@@ -538,18 +531,18 @@ def run_with_benchmark():
             start_date=start_date,
             end_date=end_date
         )
-        
+
         result_dict = result.to_dict()
         result_dict['benchmark_info'] = {
             'ts_code': benchmark_ts_code,
             'name': BenchmarkIndex.NAMES.get(benchmark_ts_code, benchmark_ts_code)
         }
-        
+
         return jsonify({
             'success': True,
             'data': result_dict
         })
-    
+
     except Exception as e:
         logger.error(f"带基准回测失败: {str(e)}")
         return jsonify({
@@ -595,7 +588,7 @@ def get_status():
         ecm = DataManager().cache
         success = ecm is not None
         msg = 'ECM 就绪' if success else 'ECM 不可用'
-        
+
         return jsonify({
             'success': True,
             'data': {

@@ -9,15 +9,16 @@
 统一接口：Dim3VPEngine.evaluate() → {status_description, judgment, audit}
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
-from datetime import datetime
+
 import logging
-from typing import Optional, List, Dict, Tuple, Any
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 
-from app.engine.patterns.engine import PatternEngine
 from app.data.mixins import DataAwareMixin
+from app.engine.patterns.engine import PatternEngine
 
 logger = logging.getLogger(__name__)
 
@@ -320,10 +321,53 @@ def get_best_volume_series(df: pd.DataFrame) -> np.ndarray:
     return np.ones(len(df))
 
 
-def calc_macd(closes: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """计算MACD: 返回 (dif, dea, macd_hist)"""
-    if len(closes) < 26:
-        return np.zeros(len(closes)), np.zeros(len(closes)), np.zeros(len(closes))
+# 411号Phase 5：预计算MACD缓存（每次evaluate()调用时刷新）
+_MACD_PRECOMPUTED_CACHE: dict = {}
+
+
+def _load_precomputed_macd(ts_code: str) -> dict:
+    """从indicator_macd预计算表读取MACD数据"""
+    if not ts_code:
+        return {}
+    cache_key = ts_code
+    if cache_key in _MACD_PRECOMPUTED_CACHE:
+        return _MACD_PRECOMPUTED_CACHE[cache_key]
+    try:
+        from app.data import DataManager
+        dm = DataManager()
+        wide = dm.get_cached_indicators(ts_code)
+        if wide is not None and not wide.empty:
+            result = {}
+            for col in ('macd_dif', 'macd_dea', 'macd_hist'):
+                if col in wide.columns:
+                    arr = wide[col].dropna().values.astype(float)
+                    if len(arr) > 0:
+                        result[col] = arr
+            if len(result) == 3:
+                _MACD_PRECOMPUTED_CACHE[cache_key] = result
+                return result
+    except Exception:
+        pass
+    _MACD_PRECOMPUTED_CACHE[cache_key] = {}
+    return {}
+
+
+def calc_macd(closes: np.ndarray, precomputed: dict = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """计算MACD: 返回 (dif, dea, macd_hist)
+
+    411号Phase 5：优先使用预计算数据，回退raw计算。
+    """
+    n = len(closes)
+    if precomputed:
+        dif = precomputed.get('macd_dif')
+        dea = precomputed.get('macd_dea')
+        hist = precomputed.get('macd_hist')
+        if dif is not None and dea is not None and hist is not None:
+            if len(dif) == n and len(dea) == n and len(hist) == n:
+                return dif, dea, hist
+    # ponytail: raw计算作为fallback
+    if n < 26:
+        return np.zeros(n), np.zeros(n), np.zeros(n)
     s = pd.Series(closes)
     ema12 = s.ewm(span=12).mean().values
     ema26 = s.ewm(span=26).mean().values
@@ -396,10 +440,49 @@ class EnhancedPatternDetector:
 
     def detect_all(self, closes: np.ndarray, opens: np.ndarray,
                    highs: np.ndarray, lows: np.ndarray,
-                   volumes: np.ndarray) -> List[str]:
-        """检测所有OHLCV规则，返回匹配的形态名列表"""
+                   volumes: np.ndarray,
+                   precomputed_ma: dict = None) -> List[str]:
+        """检测所有OHLCV规则，返回匹配的形态名列表
+
+        412号方案D2 v3.0：precomputed_ma由调用方从data_context构建，
+        包含预计算的MA数组，避免85处np.mean重复计算。
+        """
         if len(closes) < 5:
             return []
+
+        # 预计算MA dict：一次性计算全部所需MA周期
+        self._ma = {}
+        periods = [3, 5, 10, 20, 30, 55, 60, 120, 250]
+        for p in periods:
+            if len(closes) >= p:
+                # 优先从precomputed_ma读取标量值，扩展为全长度数组
+                if precomputed_ma and f'ma{p}' in precomputed_ma:
+                    self._ma[f'ma{p}'] = np.full(len(closes), float(precomputed_ma[f'ma{p}']))
+                else:
+                    self._ma[f'ma{p}'] = pd.Series(closes).rolling(p).mean().values
+                # prev_ma = 去掉最新一根的MA
+                prev_key = f'prev_ma{p}'
+                if precomputed_ma and prev_key in precomputed_ma:
+                    self._ma[prev_key] = np.full(len(closes), float(precomputed_ma[prev_key]))
+                elif len(closes) > p:
+                    self._ma[prev_key] = pd.Series(closes).rolling(p).mean().values
+                else:
+                    self._ma[prev_key] = np.full(len(closes), np.nan)
+            else:
+                self._ma[f'ma{p}'] = np.full(len(closes), np.nan)
+                self._ma[f'prev_ma{p}'] = np.full(len(closes), np.nan)
+
+        # Volume MA
+        vol_periods = [3, 5, 10, 20, 21]
+        for p in vol_periods:
+            if len(volumes) >= p:
+                if precomputed_ma and f'vol_ma{p}' in precomputed_ma:
+                    self._ma[f'vol_ma{p}'] = np.full(len(volumes), float(precomputed_ma[f'vol_ma{p}']))
+                else:
+                    self._ma[f'vol_ma{p}'] = pd.Series(volumes).rolling(p).mean().values
+            else:
+                self._ma[f'vol_ma{p}'] = np.full(len(volumes), np.nan)
+
         matched = []
         checks = [
             # [154-批1] 12条纯OHLCV规则
@@ -650,11 +733,13 @@ class EnhancedPatternDetector:
     def _is_fangliang_zhan60(self, closes, opens, highs, lows, volumes) -> bool:
         if not self._safe_len(closes, volumes, min_len=62):
             return False
-        avg_vol = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
+        avg_vol = self._get_vol_ma(21) if not np.isnan(self._get_vol_ma(21)) else (float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else float(np.mean(volumes[:-1])))
         if avg_vol <= 0:
             return False
-        ma60 = float(np.mean(closes[-60:]))
-        prev_ma60 = float(np.mean(closes[-61:-1]))
+        ma60 = self._get_ma(60)
+        prev_ma60 = self._get_prev_ma(60)
+        if np.isnan(ma60) or np.isnan(prev_ma60):
+            return False
         return (closes[-1] > ma60 and
                 volumes[-1] > avg_vol * 1.8 and
                 ma60 >= prev_ma60)
@@ -730,186 +815,218 @@ class EnhancedPatternDetector:
     # ── [154-批2] 均线辅助规则（8条） ──
 
     def _is_ma5_jinchai_ma10(self, closes, opens, highs, lows, volumes) -> bool:
-        """MA5金叉MA10（趋势转折信号）"""
+        """MA5金叉MA10（趋势转折信号）— 412D2: 从self._ma读取"""
         if len(closes) < 11:
             return False
-        ma5_p = float(np.mean(closes[-6:-1]))
-        ma10_p = float(np.mean(closes[-11:-1]))
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
+        ma5_p = self._get_prev_ma(5)
+        ma10_p = self._get_prev_ma(10)
+        ma5 = self._get_ma(5)
+        ma10 = self._get_ma(10)
+        if np.isnan(ma5) or np.isnan(ma10) or np.isnan(ma5_p) or np.isnan(ma10_p):
+            return False
         return ma5 > ma10 and ma5_p <= ma10_p
 
     def _is_ma5_sicha_ma10(self, closes, opens, highs, lows, volumes) -> bool:
-        """MA5死叉MA10（趋势转折预警）"""
+        """MA5死叉MA10（趋势转折预警）— 412D2"""
         if len(closes) < 11:
             return False
-        ma5_p = float(np.mean(closes[-6:-1]))
-        ma10_p = float(np.mean(closes[-11:-1]))
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
+        ma5_p = self._get_prev_ma(5)
+        ma10_p = self._get_prev_ma(10)
+        ma5 = self._get_ma(5)
+        ma10 = self._get_ma(10)
+        if np.isnan(ma5) or np.isnan(ma10) or np.isnan(ma5_p) or np.isnan(ma10_p):
+            return False
         return ma5 < ma10 and ma5_p >= ma10_p
 
     def _is_ma_tuo_pailie(self, closes, opens, highs, lows, volumes) -> bool:
-        """均线多头排列 MA5>MA10>MA20>MA60（中期多头确认）"""
+        """均线多头排列 MA5>MA10>MA20>MA60 — 412D2"""
         if len(closes) < 61:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
-        ma20 = float(np.mean(closes[-20:]))
-        ma60 = float(np.mean(closes[-60:]))
+        ma5, ma10, ma20, ma60 = self._get_ma(5), self._get_ma(10), self._get_ma(20), self._get_ma(60)
+        if any(np.isnan(v) for v in [ma5, ma10, ma20, ma60]):
+            return False
         return ma5 > ma10 > ma20 > ma60
 
     def _is_ma_tuo_pailie_ma30(self, closes, opens, highs, lows, volumes) -> bool:
-        """均线多头排列 MA5>MA10>MA30>MA60（三线开花短线S级）"""
+        """均线多头排列 MA5>MA10>MA30>MA60 — 412D2"""
         if len(closes) < 61:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
-        ma30 = float(np.mean(closes[-30:]))
-        ma60 = float(np.mean(closes[-60:]))
+        ma5, ma10, ma30, ma60 = self._get_ma(5), self._get_ma(10), self._get_ma(30), self._get_ma(60)
+        if any(np.isnan(v) for v in [ma5, ma10, ma30, ma60]):
+            return False
         return ma5 > ma10 > ma30 > ma60
 
     def _is_ma_ya_pailie(self, closes, opens, highs, lows, volumes) -> bool:
-        """均线空头排列 MA5<MA10<MA20<MA60（中期空头确认）"""
+        """均线空头排列 MA5<MA10<MA20<MA60 — 412D2"""
         if len(closes) < 61:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
-        ma20 = float(np.mean(closes[-20:]))
-        ma60 = float(np.mean(closes[-60:]))
+        ma5, ma10, ma20, ma60 = self._get_ma(5), self._get_ma(10), self._get_ma(20), self._get_ma(60)
+        if any(np.isnan(v) for v in [ma5, ma10, ma20, ma60]):
+            return False
         return ma5 < ma10 < ma20 < ma60
 
     def _is_ma_ya_pailie_ma30(self, closes, opens, highs, lows, volumes) -> bool:
-        """均线空头排列 MA5<MA10<MA30<MA60（三线开花空头S级）"""
+        """均线空头排列 MA5<MA10<MA30<MA60 — 412D2"""
         if len(closes) < 61:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
-        ma30 = float(np.mean(closes[-30:]))
-        ma60 = float(np.mean(closes[-60:]))
+        ma5, ma10, ma30, ma60 = self._get_ma(5), self._get_ma(10), self._get_ma(30), self._get_ma(60)
+        if any(np.isnan(v) for v in [ma5, ma10, ma30, ma60]):
+            return False
         return ma5 < ma10 < ma30 < ma60
 
     def _is_closes_above_ma60(self, closes, opens, highs, lows, volumes) -> bool:
-        """连续3日收盘价站上MA60（中期走强确认）"""
+        """连续3日收盘价站上MA60 — 412D2"""
         if len(closes) < 63:
             return False
-        ma60 = float(np.mean(closes[-60:]))
+        ma60 = self._get_ma(60)
+        if np.isnan(ma60):
+            return False
         for i in range(-3, 0):
             if closes[i] <= ma60:
                 return False
         return closes[-3] <= float(np.mean(closes[-62:-2])) * 1.005  # 刚刚站上
 
     def _is_ma5_tol_ma20_up(self, closes, opens, highs, lows, volumes) -> bool:
-        """MA5从下方上穿MA20（短线强化信号）"""
+        """MA5上穿MA20 — 412D2"""
         if len(closes) < 21:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma20 = float(np.mean(closes[-20:]))
-        ma5_prev = float(np.mean(closes[-6:-1]))
-        ma20_prev = float(np.mean(closes[-21:-1]))
+        ma5 = self._get_ma(5)
+        ma20 = self._get_ma(20)
+        ma5_prev = self._get_prev_ma(5)
+        ma20_prev = self._get_prev_ma(20)
+        if any(np.isnan(v) for v in [ma5, ma20, ma5_prev, ma20_prev]):
+            return False
         return ma5 > ma20 and ma5_prev <= ma20_prev
 
     def _is_ma60_zhichi(self, closes, opens, highs, lows, volumes) -> bool:
-        """股价回踩MA60不破并获得支撑（回调低吸信号）"""
+        """股价回踩MA60不破并获得支撑 — 412D2"""
         if len(closes) < 63:
             return False
-        ma60 = float(np.mean(closes[-60:]))
+        ma60 = self._get_ma(60)
+        ma5_prev = self._get_prev_ma(5)
+        if np.isnan(ma60):
+            return False
         lowest_5 = np.min(lows[-5:])
-        return lowest_5 >= ma60 * 0.99 and closes[-1] > ma60 and                closes[-1] > np.mean(closes[-6:-1])  # 开始回升
+        return lowest_5 >= ma60 * 0.99 and closes[-1] > ma60 and                closes[-1] > (ma5_prev if not np.isnan(ma5_prev) else closes[-1])
 
     def _is_ma5_jiaotou_ma60(self, closes, opens, highs, lows, volumes) -> bool:
-        """MA5上穿MA60（中期趋势转折关键信号）"""
+        """MA5上穿MA60 — 412D2"""
         if len(closes) < 61:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma60 = float(np.mean(closes[-60:]))
-        ma5_prev = float(np.mean(closes[-6:-1]))
+        ma5 = self._get_ma(5)
+        ma60 = self._get_ma(60)
+        ma5_prev = self._get_prev_ma(5)
+        if any(np.isnan(v) for v in [ma5, ma60, ma5_prev]):
+            return False
         return ma5 > ma60 and ma5_prev <= ma60
 
     def _is_price_above_ma120(self, closes, opens, highs, lows, volumes) -> bool:
-        """价格站上MA120（长期趋势转多）"""
+        """价格站上MA120 — 412D2"""
         if len(closes) < 121:
             return False
-        ma120 = float(np.mean(closes[-120:]))
+        ma120 = self._get_ma(120)
+        if np.isnan(ma120):
+            return False
         return closes[-1] > ma120 and closes[-2] > ma120
 
     def _is_price_above_ma250(self, closes, opens, highs, lows, volumes) -> bool:
-        """价格站上MA250（牛熊分界线）"""
+        """价格站上MA250 — 412D2"""
         if len(closes) < 251:
             return False
-        ma250 = float(np.mean(closes[-250:]))
+        ma250 = self._get_ma(250)
+        if np.isnan(ma250):
+            return False
         return closes[-1] > ma250
 
     def _is_ma30_above_ma60(self, closes, opens, highs, lows, volumes) -> bool:
-        """MA30 > MA60（中期趋势走多）"""
+        """MA30 > MA60 — 412D2"""
         if len(closes) < 61:
             return False
-        ma30 = float(np.mean(closes[-30:]))
-        ma60 = float(np.mean(closes[-60:]))
+        ma30 = self._get_ma(30)
+        ma60 = self._get_ma(60)
+        if np.isnan(ma30) or np.isnan(ma60):
+            return False
         return ma30 > ma60
 
     # ── [P1-#12] 格兰维尔8法则（位置版） ──
 
     def _is_granville_buy1(self, closes, opens, highs, lows, volumes) -> bool:
-        """格兰维尔买点1: 突破买 — MA走平后价格上穿MA"""
+        """格兰维尔买点1: 突破买 — 412D2"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
-        ma10_prev = np.mean(closes[-11:-1])
+        ma10 = self._get_ma(10)
+        ma10_prev = self._get_prev_ma(10)
+        if np.isnan(ma10) or np.isnan(ma10_prev):
+            return False
         return ma10 > ma10_prev and closes[-1] > ma10 and closes[-2] <= ma10_prev
 
     def _is_granville_buy2(self, closes, opens, highs, lows, volumes) -> bool:
-        """格兰维尔买点2: 回踩买 — 价格上穿后回踩MA不破"""
+        """格兰维尔买点2: 回踩买 — 412D2"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
-        return closes[-1] > ma10 and np.min(lows[-3:]) > ma10 * 0.99 and closes[-1] > np.mean(closes[-4:-1])
+        ma10 = self._get_ma(10)
+        ma3_prev = self._get_prev_ma(3)
+        if np.isnan(ma10):
+            return False
+        return closes[-1] > ma10 and np.min(lows[-3:]) > ma10 * 0.99 and                closes[-1] > (ma3_prev if not np.isnan(ma3_prev) else closes[-1])
 
     def _is_granville_buy3(self, closes, opens, highs, lows, volumes) -> bool:
         """格兰维尔买点3: 偏离买 — 价格在MA下方但远离MA(超卖反弹)"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
+        ma10 = self._get_ma(10)
+        if np.isnan(ma10):
+            return False
         deviation = (ma10 - closes[-1]) / ma10
         return deviation > 0.08 and closes[-1] > closes[-2]  # 偏离>8%且开始反弹
 
     def _is_granville_buy4(self, closes, opens, highs, lows, volumes) -> bool:
-        """格兰维尔买点4: 新低买 — 价格创新低但MA已走平"""
+        """格兰维尔买点4: 新低买 — 412D2"""
         if len(closes) < 21:
             return False
-        ma20 = np.mean(closes[-20:])
-        ma20_prev = np.mean(closes[-21:-1])
+        ma20 = self._get_ma(20)
+        ma20_prev = self._get_prev_ma(20)
+        if np.isnan(ma20) or np.isnan(ma20_prev):
+            return False
         return closes[-1] < np.min(closes[-10:-1]) and ma20 > ma20_prev * 0.998
 
     def _is_granville_sell1(self, closes, opens, highs, lows, volumes) -> bool:
-        """格兰维尔卖点1: 跌破卖 — MA走平后价格下穿MA"""
+        """格兰维尔卖点1: 跌破卖 — 412D2"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
-        ma10_prev = np.mean(closes[-11:-1])
+        ma10 = self._get_ma(10)
+        ma10_prev = self._get_prev_ma(10)
+        if np.isnan(ma10) or np.isnan(ma10_prev):
+            return False
         return ma10 < ma10_prev and closes[-1] < ma10 and closes[-2] >= ma10_prev
 
     def _is_granville_sell2(self, closes, opens, highs, lows, volumes) -> bool:
-        """格兰维尔卖点2: 反抽卖 — 价格下穿后反抽MA不过"""
+        """格兰维尔卖点2: 反抽卖 — 412D2"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
-        return closes[-1] < ma10 and closes[-2] < ma10 and            (closes[-1] > closes[-2] or closes[-2] > closes[-3])  # 正在反抽
+        ma10 = self._get_ma(10)
+        if np.isnan(ma10):
+            return False
+        return closes[-1] < ma10 and closes[-2] < ma10 and            (closes[-1] > closes[-2] or closes[-2] > closes[-3])
 
     def _is_granville_sell3(self, closes, opens, highs, lows, volumes) -> bool:
-        """格兰维尔卖点3: 偏离卖 — 价格在MA上方但远离MA(超买回调)"""
+        """格兰维尔卖点3: 偏离卖 — 412D2"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
+        ma10 = self._get_ma(10)
+        if np.isnan(ma10):
+            return False
         deviation = (closes[-1] - ma10) / ma10
-        return deviation > 0.10 and closes[-1] < closes[-2]  # 偏离>10%且开始回调
+        return deviation > 0.10 and closes[-1] < closes[-2]
 
     def _is_granville_sell4(self, closes, opens, highs, lows, volumes) -> bool:
-        """格兰维尔卖点4: 新高卖 — 价格创新高但MA已走平"""
+        """格兰维尔卖点4: 新高卖 — 412D2"""
         if len(closes) < 21:
             return False
-        ma20 = np.mean(closes[-20:])
-        ma20_prev = np.mean(closes[-21:-1])
+        ma20 = self._get_ma(20)
+        ma20_prev = self._get_prev_ma(20)
+        if np.isnan(ma20) or np.isnan(ma20_prev):
+            return False
         return closes[-1] > np.max(closes[-10:-1]) and ma20 < ma20_prev * 1.002
 
     # ──────────────────────────────────────────────
@@ -1746,7 +1863,7 @@ class EnhancedPatternDetector:
         if today_amp >= avg_amp * 0.5:
             return False
         # 收盘在中位
-        mid = (highs[-1] + lows[-1]) / 2
+        (highs[-1] + lows[-1]) / 2
         pos = (closes[-1] - lows[-1]) / max(highs[-1] - lows[-1], 1e-9)
         return 0.35 <= pos <= 0.65
 
@@ -1971,6 +2088,46 @@ class EnhancedPatternDetector:
         gap_partial_fill = closes[-1] < highs[-1] and closes[-1] < opens[-1] * 0.995
         return gap_partial_fill
 
+    def _get_ma(self, period: int, offset: int = -1) -> float:
+        """从预计算MA dict读取MA值（412号方案D2 v3.0）
+
+        Args:
+            period: MA周期 (3/5/10/20/30/55/60/120/250)
+            offset: 数组偏移（-1=最新值，-2=前一根，以此类推）
+
+        Returns:
+            MA值，无数据时返回NaN
+        """
+        key = f'ma{period}'
+        if hasattr(self, '_ma') and key in self._ma:
+            arr = self._ma[key]
+            idx = len(arr) + offset
+            if 0 <= idx < len(arr):
+                val = arr[idx]
+                if not np.isnan(val):
+                    return float(val)
+        return np.nan
+
+    def _get_prev_ma(self, period: int) -> float:
+        """获取前一根K线的MA值"""
+        key = f'prev_ma{period}'
+        if hasattr(self, '_ma') and key in self._ma:
+            arr = self._ma[key]
+            val = arr[-1]
+            if not np.isnan(val):
+                return float(val)
+        return np.nan
+
+    def _get_vol_ma(self, period: int) -> float:
+        """获取最新一根的成交量MA值"""
+        key = f'vol_ma{period}'
+        if hasattr(self, '_ma') and key in self._ma:
+            arr = self._ma[key]
+            val = arr[-1]
+            if not np.isnan(val):
+                return float(val)
+        return np.nan
+
 # ══════════════════════════════════════════════
 # Phase 1: 阶段判定 + 价格分位
 # ══════════════════════════════════════════════
@@ -1985,7 +2142,8 @@ class StageDetector:
     def __init__(self, lookback: int = 120):
         self.lookback = lookback
 
-    def detect(self, df: pd.DataFrame) -> Stage:
+    def detect(self, df: pd.DataFrame, precomputed_ma: dict = None) -> Stage:
+        """413号§七#5：接受precomputed_ma传递给子方法。"""
         if df.empty or len(df) < 30:
             return Stage(name="CONSOLIDATION", confidence=0.0, note="数据不足")
 
@@ -2009,11 +2167,11 @@ class StageDetector:
 
         # [P1-#11] 三线开花判定
         if len(closes) >= 31:
-            three_bloom = self.recognize_three_bloom(closes)
+            three_bloom = self.recognize_three_bloom(closes, precomputed_ma=precomputed_ma)
         else:
             three_bloom = {'bloom': False, 'cross_state': '数据不足'}
 
-        valuation = self._calc_valuation_zones(closes, highs, lows)
+        valuation = self._calc_valuation_zones(closes, highs, lows, precomputed_ma=precomputed_ma)
         valuation.three_bloom = three_bloom
         note = self._calibrate_note(stage_name, valuation, pos_60)
 
@@ -2098,7 +2256,8 @@ class StageDetector:
             return "DOWNTREND_BOTTOMING", 0.60
         return "CONSOLIDATION", 0.50
 
-    def _calc_valuation_zones(self, closes, highs, lows) -> ValuationZones:
+    def _calc_valuation_zones(self, closes, highs, lows, precomputed_ma: dict = None) -> ValuationZones:
+        """413号§七#5：优先使用precomputed_ma避免重复计算。"""
         def pos_in_range(period: int) -> float:
             start = max(0, len(closes) - period)
             if len(closes) - start < period // 2:
@@ -2110,8 +2269,9 @@ class StageDetector:
         mid = pos_in_range(60)
         long_ = pos_in_range(120)
         # MA120/MA250 辅助参考
-        ma120_val = float(np.mean(closes[-120:])) if len(closes) >= 120 else None
-        ma250_val = float(np.mean(closes[-250:])) if len(closes) >= 250 else None
+        pm = precomputed_ma or {}
+        ma120_val = float(pm.get('ma120', np.mean(closes[-120:]))) if len(closes) >= 120 else None
+        ma250_val = float(pm.get('ma250', np.mean(closes[-250:]))) if len(closes) >= 250 else None
         composite = short * 0.5 + mid * 0.3 + long_ * 0.2
         if composite >= 0.75:
             zone = "HIGH"
@@ -2126,10 +2286,12 @@ class StageDetector:
         return ValuationZones(short_30d=short, mid_60d=mid, long_120d=long_,
                               ma120=ma120_val, ma250=ma250_val, zone=zone)
 
-    def recognize_three_bloom(self, closes: np.ndarray) -> Dict:
+    def recognize_three_bloom(self, closes: np.ndarray, precomputed_ma: dict = None) -> Dict:
         """[P1-#11] 三线开花状态判定
 
         均线多头排列(MA5>MA10>MA30)构成"三线开花"
+
+        413号§七#5：优先使用precomputed_ma避免重复计算。
 
         Returns:
             dict with 'bloom' (bool), 'cross_state', 'ma_values', position info
@@ -2137,12 +2299,13 @@ class StageDetector:
         if len(closes) < 31:
             return {'bloom': False, 'cross_state': '数据不足'}
 
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
-        ma30 = float(np.mean(closes[-30:]))
-        ma60 = float(np.mean(closes[-60:])) if len(closes) >= 60 else None
-        ma120 = float(np.mean(closes[-120:])) if len(closes) >= 120 else None
-        ma250 = float(np.mean(closes[-250:])) if len(closes) >= 250 else None
+        pm = precomputed_ma or {}
+        ma5 = float(pm.get('ma5', np.mean(closes[-5:])))
+        ma10 = float(pm.get('ma10', np.mean(closes[-10:])))
+        ma30 = float(pm.get('ma30', np.mean(closes[-30:])))
+        ma60 = float(pm.get('ma60', np.mean(closes[-60:]))) if len(closes) >= 60 else None
+        pm.get('ma120', float(np.mean(closes[-120:]))) if len(closes) >= 120 else None
+        pm.get('ma250', float(np.mean(closes[-250:]))) if len(closes) >= 250 else None
 
         # 三线开花核心判定
         if ma5 > ma10 > ma30:
@@ -2189,8 +2352,11 @@ class StageDetector:
             return "探底+低位区，关注反转信号"
         return f"{STAGE_NAMES.get(stage, stage)}，价格{val.zone_label}"
 
-    def recognize_market_condition(self, df: pd.DataFrame) -> Dict:
-        """识别基础市场状态: TRENDING_BULL/TRENDING_BEAR/RANGING/HIGH_VOL"""
+    def recognize_market_condition(self, df: pd.DataFrame, precomputed_ma: dict = None) -> Dict:
+        """识别基础市场状态: TRENDING_BULL/TRENDING_BEAR/RANGING/HIGH_VOL
+
+        413号§七#5：优先使用precomputed_ma避免重复计算。
+        """
         closes = df['close'].astype(float).values if 'close' in df.columns else df['close'].values
         highs = df['high'].astype(float).values if 'high' in df.columns else np.array([])
         lows = df['low'].astype(float).values if 'low' in df.columns else np.array([])
@@ -2198,22 +2364,22 @@ class StageDetector:
         if len(closes) < 60:
             return {'market_state': 'UNKNOWN', 'confidence': 0.0}
 
-        # 1. 均线排列判断趋势方向
-        ma5 = np.mean(closes[-5:])
-        ma10 = np.mean(closes[-10:])
-        ma20 = np.mean(closes[-20:])
-        ma60 = np.mean(closes[-60:])
-        ma120 = np.mean(closes[-120:]) if len(closes) >= 120 else ma60
+        # 413号§七#5：优先从precomputed_ma读取MA值
+        pm = precomputed_ma or {}
+        ma5_val = pm.get('ma5', np.mean(closes[-5:])) if len(closes) >= 5 else np.mean(closes[-5:])
+        ma10_val = pm.get('ma10', np.mean(closes[-10:])) if len(closes) >= 10 else np.mean(closes[-10:])
+        ma20_val = pm.get('ma20', np.mean(closes[-20:])) if len(closes) >= 20 else np.mean(closes[-20:])
+        ma60_val = pm.get('ma60', np.mean(closes[-60:])) if len(closes) >= 60 else np.mean(closes[-60:])
 
         ma_trend = 'neutral'
-        if ma5 > ma10 > ma20 > ma60:  # 多头排列
+        if ma5_val > ma10_val > ma20_val > ma60_val:
             ma_trend = 'bullish'
-        elif ma5 < ma10 < ma20 < ma60:  # 空头排列
+        elif ma5_val < ma10_val < ma20_val < ma60_val:
             ma_trend = 'bearish'
 
         # 2. 布林带宽度判定波动性
         if len(highs) >= 20 and len(lows) >= 20:
-            bb_width = (np.mean(highs[-20:]) - np.mean(lows[-20:])) / np.mean(closes[-20:]) * 100
+            bb_width = (np.mean(highs[-20:]) - np.mean(lows[-20:])) / ma20_val * 100
         else:
             bb_width = 0
 
@@ -2258,7 +2424,6 @@ class StageDetector:
             ema12 = np.mean(closes[-12:])
             ema26 = np.mean(closes[-26:])
             macd_line = ema12 - ema26
-            # signal: 9-period EMA of MACD line — use SMA as proxy
             macd_values = []
             for i in range(-9, 0):
                 e12 = np.mean(closes[-12 + i:i]) if len(closes[-12 + i:i]) >= 12 else np.mean(closes[-12:])
@@ -2270,12 +2435,11 @@ class StageDetector:
             macd_signal = 0.0
 
         # --- EMA55 (SMA approximation) ---
-        ema55 = np.mean(closes[-55:]) if len(closes) >= 55 else np.mean(closes[-min(55, len(closes)):])
+        ema55 = pm.get('ma55', np.mean(closes[-55:])) if len(closes) >= 55 else np.mean(closes[-min(55, len(closes)):])
 
         # --- Volume means ---
         volume = df['volume'].astype(float).values if 'volume' in df.columns else np.ones(len(closes))
         mean_volume_20 = np.mean(volume[-20:]) if len(volume) >= 20 else np.mean(volume)
-        mean_volume_5 = np.mean(volume[-5:]) if len(volume) >= 5 else np.mean(volume)
 
         # --- Daily return ---
         daily_return_pct = (closes[-1] - closes[-2]) / closes[-2] * 100 if len(closes) >= 2 else 0
@@ -2407,7 +2571,9 @@ class VolumeStateAnalyzer:
     def __init__(self):
         pass
 
-    def analyze(self, df: pd.DataFrame, stage: Stage) -> VolumeState:
+    def analyze(self, df: pd.DataFrame, stage: Stage, volume_ext: dict = None) -> VolumeState:
+        """412号方案D1 v3.0：vol_ma优先从volume_ext读取（dim1通过data_context提供），
+        不再直接调用DataManager。"""
         if df.empty or len(df) < 20:
             return VolumeState()
 
@@ -2416,9 +2582,22 @@ class VolumeStateAnalyzer:
         volumes = get_best_volume_series(df)
 
         trend = self._calc_volume_trend(volumes)
-        volma5 = self._sma(volumes, 5)
-        volma10 = self._sma(volumes, 10)
-        volma20 = self._sma(volumes, 20)
+        # vol_ma：优先从volume_ext读取最新值，保留raw rolling fallback
+        if volume_ext and 'vol_ma5' in volume_ext:
+            volma5_val = volume_ext['vol_ma5']
+            volma5 = np.full(len(volumes), float(volma5_val)) if volma5_val is not None else self._sma(volumes, 5)
+        else:
+            volma5 = self._sma(volumes, 5)
+        if volume_ext and 'vol_ma10' in volume_ext:
+            volma10_val = volume_ext['vol_ma10']
+            volma10 = np.full(len(volumes), float(volma10_val)) if volma10_val is not None else self._sma(volumes, 10)
+        else:
+            volma10 = self._sma(volumes, 10)
+        if volume_ext and 'vol_ma20' in volume_ext:
+            volma20_val = volume_ext['vol_ma20']
+            volma20 = np.full(len(volumes), float(volma20_val)) if volma20_val is not None else self._sma(volumes, 20)
+        else:
+            volma20 = self._sma(volumes, 20)
         v5, v10, v20 = volma5[-1], volma10[-1], volma20[-1]
         volma_struct = self._calc_volma_structure(v5, v10, v20)
         has_tuo = self._detect_volume_tuo(volma5, volma10, volma20)
@@ -2546,16 +2725,20 @@ class VolumeStateAnalyzer:
         if len(closes) < 4:
             return False
         c = closes[-4:]
-        is_up = lambda i: c[i] > c[i-1]
-        is_down = lambda i: c[i] < c[i-1]
+        def is_up(i):
+            return c[i] > c[i-1]
+        def is_down(i):
+            return c[i] < c[i-1]
         return is_up(1) and is_down(2) and is_up(3) and c[3] > c[1]
 
     def _has_kongfang_pao(self, closes, volumes) -> bool:
         if len(closes) < 4:
             return False
         c = closes[-4:]
-        is_up = lambda i: c[i] > c[i-1]
-        is_down = lambda i: c[i] < c[i-1]
+        def is_up(i):
+            return c[i] > c[i-1]
+        def is_down(i):
+            return c[i] < c[i-1]
         return is_down(1) and is_up(2) and is_down(3) and c[3] < c[1]
 
     # ── [P1-#17] 四种放量+两种缩量模式分类 ──
@@ -2723,7 +2906,12 @@ class VolumePriceRelationAnalyzer:
             return div_type, div_conf, macd_confirmed
 
         # 计算MACD
-        dif, dea, hist = calc_macd(closes)
+        # 411号Phase 5：优先使用预计算MACD数据
+        _ts_code = ''
+        if df is not None and hasattr(df, 'columns') and 'ts_code' in df.columns:
+            _ts_code = str(df['ts_code'].iloc[0])
+        _precomputed_macd = _load_precomputed_macd(_ts_code) if _ts_code else {}
+        dif, dea, hist = calc_macd(closes, _precomputed_macd)
 
         # 顶背离
         if stage in ("UPTREND_ACTIVE", "UPTREND_TOPPING"):
@@ -3204,7 +3392,7 @@ class VolumePriceSignalGenerator:
         latest_close = float(closes[-1])
         highs = self._safe_col(df, 'high').values if 'high' in df.columns else closes
         volumes = get_best_volume_series(df)
-        opens = self._safe_col(df, 'open').values if 'open' in df.columns else closes
+        self._safe_col(df, 'open').values if 'open' in df.columns else closes
         lows = self._safe_col(df, 'low').values if 'low' in df.columns else closes
 
         # [P1-#18] 真实突破判断
@@ -3969,7 +4157,7 @@ class VolumePriceStrategy:
         self.signal_generator = VolumePriceSignalGenerator()
         self.market_env = market_env  # [P0-优化1]
 
-    def analyze(self, df: pd.DataFrame) -> Dict:
+    def analyze(self, df: pd.DataFrame, volume_ext: dict = None) -> Dict:
         if df.empty or len(df) < 30:
             return {"error": "数据不足", "success": False}
 
@@ -3997,7 +4185,7 @@ class VolumePriceStrategy:
                 return {"error": f"阶段判定异常: {e}", "success": False}
 
             try:
-                vol_state = self.volume_analyzer.analyze(df, stage)
+                vol_state = self.volume_analyzer.analyze(df, stage, volume_ext=volume_ext)
             except Exception as e:
                 logger.error(f"成交量分析异常: {e}")
                 vol_state = VolumeState()
@@ -4031,7 +4219,7 @@ class VolumePriceStrategy:
     def _build_detail(self, stage, vol_state, relation):
         return {"阶段判定": stage.to_dict(), "成交量状态": vol_state.to_dict(), "量价关系": relation.to_dict()}
 
-    def _detect_kline_patterns(self, df: pd.DataFrame) -> dict:
+    def _detect_kline_patterns(self, df: pd.DataFrame, volume_ext: dict = None) -> dict:
         """返回量价引擎产出的标签（357号方案：重命名消除与策略层命名混淆）"""
         tags = {}
         try:
@@ -4051,8 +4239,10 @@ class VolumePriceStrategy:
             # 废弃粗启发式[5日收益+量比阈值]，与 P2 信号共用 compute_volume_price_signal 组件）
             if len(df) >= 20:
                 try:
-                    from app.engine.framework.volume_price_strategy import compute_volume_price_signal as _full_vp
-                    _full = _full_vp('', df)
+                    from app.engine.framework.volume_price_strategy import (
+                        compute_volume_price_signal as _full_vp,
+                    )
+                    _full = _full_vp('', df, volume_ext=volume_ext)
                     _sig = str((_full or {}).get('signal', '')).lower()
                     _detail = str((_full or {}).get('volume_price_detail') or {})
                     if _sig in ('bullish', 'up'):
@@ -4105,13 +4295,15 @@ class VolumePriceStrategy:
 # ══════════════════════════════════════════════
 
 def compute_volume_price_signal(ts_code: str, df: pd.DataFrame,
-                                market_env: Optional[Dict] = None) -> Optional[Dict]:
+                                market_env: Optional[Dict] = None,
+                                volume_ext: dict = None) -> Optional[Dict]:
     """
     计算量价信号（供 SignalComputationService 调用）
-    [P0-优化1] 支持大盘环境参数传入
+
+    412号方案D1 v3.0：volume_ext由调用方从data_context传入。
     """
     strategy = VolumePriceStrategy(market_env=market_env)
-    result = strategy.analyze(df)
+    result = strategy.analyze(df, volume_ext=volume_ext)
     if not result.get("success"):
         return None
     signal = result["signal_output"]
@@ -4363,13 +4555,18 @@ class Dim3VPEngine(DataAwareMixin):
         self._dm = None
         self.pattern_engine = PatternEngine()
 
-    def evaluate(self, dims, tags, signals=None, lifecycle=None):
-        ecm = self._get_dm().cache
+    def evaluate(self, dims, tags, signals=None, lifecycle=None, data_context=None):
+        """411号Phase 6：优先使用data_context预加载数据，回退独立查询。"""
         ts_code = tags.get('ts_code', '')
-        try:
-            df = ecm.get_cached_daily(ts_code)
-        except:
-            df = None
+        # 411号Phase 6：优先使用data_context
+        if data_context and 'daily_df' in data_context:
+            df = data_context['daily_df']
+        else:
+            ecm = self._get_dm().cache
+            try:
+                df = ecm.get_cached_daily(ts_code)
+            except:
+                df = None
 
         # 量价状态
         vp_state = dims.get('vp', {}).get('state', '中性')
@@ -4394,7 +4591,7 @@ class Dim3VPEngine(DataAwareMixin):
         ms = 1 if ma in ('多头排列', 'bullish') else (0 if ma in ('空头排列', 'bearish') else 0.5)
         cc = str(tags.get('chip_concentration', ''))
         cs = 1 if cc in ('单峰密集', 'tight') else 0.5
-        try: rsi = float(tags.get('RSI_14', 50))
+        try: rsi = float(tags.get('rsi14', 50))
         except: rsi = 50
         is_ = 0.5
         if 60 < rsi <= 70: is_ = 1
@@ -4412,11 +4609,18 @@ class Dim3VPEngine(DataAwareMixin):
         if not div_no and df is not None and not df.empty and len(df) >= 30:
             try:
                 close = df['close'].astype(float)
-                ema12 = close.ewm(span=12).mean()
-                ema26 = close.ewm(span=26).mean()
-                dif = ema12 - ema26
-                dea = dif.ewm(span=9).mean()
-                macd = (dif - dea) * 2
+                # 411号Phase 5：优先使用预计算MACD
+                _ts_code = str(df['ts_code'].iloc[0]) if 'ts_code' in df.columns else ''
+                _pc = _load_precomputed_macd(_ts_code) if _ts_code else {}
+                if _pc and len(_pc.get('macd_dif', [])) == len(close):
+                    dif = pd.Series(_pc['macd_dif'])
+                    macd = pd.Series(_pc['macd_hist'])
+                else:
+                    ema12 = close.ewm(span=12).mean()
+                    ema26 = close.ewm(span=26).mean()
+                    dif = ema12 - ema26
+                    dea = dif.ewm(span=9).mean()
+                    macd = (dif - dea) * 2
                 if len(close) >= 20:
                     pn = close.iloc[-1] >= close.iloc[-20:].max()
                     mn = macd.iloc[-1] < macd.iloc[-20:].max() * 0.8
@@ -4472,7 +4676,7 @@ class Dim3VPEngine(DataAwareMixin):
             'state': vp_state, 'light': vp_light, 'score': hs,
             'overall_light': vp_light,
             'overall_direction': 1 if vp_state in ('健康', '强健康') else (-1 if vp_state in ('背离', '严重背离') else 0),
-            'continuous_value': round(hs / 10, 4),  # P2: health_score [0,10]→[0,1]
+            'continuous_value': round(hs / 10, 4),
         }
         conditions = [
             {'name': '量价关系', 'satisfied': vp_state in ('强健康', '健康'), 'actual': vp_state, 'threshold': '健康或强健康'},

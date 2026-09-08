@@ -582,24 +582,70 @@ class ConditionEvaluator:
                                 details=f'连续{"递增" if passed else "非递增"}', stock_code=stock_code)
 
     # ── MACD ──
+    # 414号P2.5: 统一调用TechnicalIndicatorEngine，消除独立EMA/MACD/KDJ/RSI/BOLL实现
+
+    def _get_engine(self):
+        """获取共享的技术指标引擎实例"""
+        if not hasattr(self, '_indicator_engine'):
+            from app.indicators import TechnicalIndicatorEngine
+            self._indicator_engine = TechnicalIndicatorEngine()
+        return self._indicator_engine
+
+    def _klines_to_df(self, klines: List[Dict]):
+        """将klines列表转为DataFrame供引擎使用"""
+        import pandas as pd
+        records = []
+        for k in klines:
+            records.append({
+                'close': float(k.get('close', k.get('c', 0))),
+                'high': float(k.get('high', k.get('h', 0))),
+                'low': float(k.get('low', k.get('l', 0))),
+                'open': float(k.get('open', k.get('o', 0))),
+                'vol': float(k.get('vol', k.get('volume', 0))),
+            })
+        return pd.DataFrame(records)
 
     def _calc_macd(self, closes: List[float], fast=12, slow=26, signal=9):
-        """简化MACD计算"""
-        ema_fast = self._ema(closes, fast)
-        ema_slow = self._ema(closes, slow)
-        dif = [e - s for e, s in zip(ema_fast, ema_slow)]
-        dea = self._ema(dif, signal)
-        hist = [d - e for d, e in zip(dif, dea)]
+        """MACD计算（委托TechnicalIndicatorEngine）"""
+        import pandas as pd
+        df = pd.DataFrame({'close': closes, 'high': closes, 'low': closes, 'open': closes, 'vol': [0]*len(closes)})
+        result = self._get_engine().calculate_macd(df)
+        dif = result['macd_dif'].tolist() if 'macd_dif' in result.columns else []
+        dea = result['macd_dea'].tolist() if 'macd_dea' in result.columns else []
+        hist = result['macd_hist'].tolist() if 'macd_hist' in result.columns else []
         return dif, dea, hist
 
+    def _calc_kdj(self, klines: List[Dict], period=9):
+        """KDJ计算（委托TechnicalIndicatorEngine）"""
+        df = self._klines_to_df(klines)
+        result = self._get_engine().calculate_kdj(df, n=period)
+        k = result['kdj_k'].tolist() if 'kdj_k' in result.columns else []
+        d = result['kdj_d'].tolist() if 'kdj_d' in result.columns else []
+        j = result['kdj_j'].tolist() if 'kdj_j' in result.columns else []
+        return k, d, j
+
+    def _calc_rsi(self, closes: List[float], period=14):
+        """RSI计算（委托TechnicalIndicatorEngine，Wilder's EMA）"""
+        import pandas as pd
+        df = pd.DataFrame({'close': closes, 'high': closes, 'low': closes, 'open': closes, 'vol': [0]*len(closes)})
+        result = self._get_engine().calculate_rsi(df, period=period)
+        return result['rsi14'].tolist() if 'rsi14' in result.columns else []
+
+    def _calc_boll(self, klines: List[Dict], period=20, std_dev=2):
+        """BOLL计算（委托TechnicalIndicatorEngine）"""
+        df = self._klines_to_df(klines)
+        result = self._get_engine().calculate_boll(df, period=period, std_dev=std_dev)
+        upper = result['boll_upper'].iloc[-1] if 'boll_upper' in result.columns and len(result) > 0 else None
+        mid = result['boll_mid'].iloc[-1] if 'boll_mid' in result.columns and len(result) > 0 else None
+        lower = result['boll_lower'].iloc[-1] if 'boll_lower' in result.columns and len(result) > 0 else None
+        return upper, mid, lower
+
     def _ema(self, data: List[float], period: int) -> List[float]:
+        """保留_ema供其他地方可能的调用"""
         if len(data) < period:
             return []
-        result = [sum(data[:period]) / period]
-        multiplier = 2 / (period + 1)
-        for i in range(period, len(data)):
-            result.append((data[i] - result[-1]) * multiplier + result[-1])
-        return result
+        import pandas as pd
+        return pd.Series(data).ewm(span=period, adjust=False).mean().tolist()
 
     def _check_macd_golden_cross(self, params: Dict, stock_code: str) -> EvaluationResult:
         klines = self._get_klines(stock_code, 40)
@@ -675,37 +721,7 @@ class ConditionEvaluator:
                                 details=f'{"顶背离" if passed else "未背离"}', stock_code=stock_code)
 
     # ── KDJ ──
-
-    def _calc_kdj(self, klines: List[Dict], period=9):
-        highs = [float(k.get('high', k.get('h', 0))) for k in klines]
-        lows = [float(k.get('low', k.get('l', 0))) for k in klines]
-        closes = [float(k.get('close', k.get('c', 0))) for k in klines]
-        if len(highs) < period:
-            return None, None, None
-        hh = []
-        ll = []
-        for i in range(len(highs)):
-            start = max(0, i - period + 1)
-            window_h = highs[start:i + 1]
-            window_l = lows[start:i + 1]
-            hh.append(max(window_h))
-            ll.append(min(window_l))
-        rsv_n = []
-        for i in range(len(closes)):
-            if hh[i] == ll[i]:
-                rsv_n.append(50)
-            else:
-                rsv_n.append((closes[i] - ll[i]) / (hh[i] - ll[i]) * 100)
-        k_vals = [50]
-        for r in rsv_n:
-            k_vals.append(2 / 3 * k_vals[-1] + 1 / 3 * r)
-        k_vals = k_vals[1:]
-        d_vals = [50]
-        for k in k_vals:
-            d_vals.append(2 / 3 * d_vals[-1] + 1 / 3 * k)
-        d_vals = d_vals[1:]
-        j_vals = [3 * k - 2 * d for k, d in zip(k_vals, d_vals)]
-        return k_vals, d_vals, j_vals
+    # 414号P2.5: _calc_kdj已移至类顶部统一委托TechnicalIndicatorEngine
 
     def _check_kdj_overbought(self, params: Dict, stock_code: str) -> EvaluationResult:
         threshold = float(params.get('threshold', 80))
@@ -744,24 +760,7 @@ class ConditionEvaluator:
                                 details=f'K{k[-1]:.1f} D{d[-1]:.1f} J{j[-1]:.1f} {"已金叉" if passed else "未金叉"}', stock_code=stock_code)
 
     # ── RSI ──
-
-    def _calc_rsi(self, closes: List[float], period=14) -> List[float]:
-        if len(closes) < period + 1:
-            return []
-        gains, losses = 0, 0
-        for i in range(1, period + 1):
-            diff = closes[i] - closes[i - 1]
-            gains += max(diff, 0)
-            losses += max(-diff, 0)
-        rsis = []
-        for i in range(period, len(closes)):
-            if i > period:
-                diff = closes[i] - closes[i - 1]
-                gains = gains * (period - 1) / period + max(diff, 0)
-                losses = losses * (period - 1) / period + max(-diff, 0)
-            rs = gains / max(losses, 0.001)
-            rsis.append(100 - 100 / (1 + rs))
-        return rsis
+    # 414号P2.5: _calc_rsi已移至类顶部统一委托TechnicalIndicatorEngine
 
     def _check_rsi_overbought(self, params: Dict, stock_code: str) -> EvaluationResult:
         threshold = float(params.get('threshold', 70))
@@ -810,17 +809,7 @@ class ConditionEvaluator:
                                 details=f'RSI={rsis[-1]:.1f} {"上穿" if direction=="up" else "下穿"}50 {"已突破" if passed else "未突破"}', stock_code=stock_code)
 
     # ── BOLL ──
-
-    def _calc_boll(self, klines: List[Dict], period=20, multiplier=2):
-        closes = [float(k.get('close', k.get('c', 0))) for k in klines[-period:]]
-        if len(closes) < period:
-            return None, None, None
-        mid = sum(closes) / period
-        variance = sum((c - mid) ** 2 for c in closes) / period
-        std = variance ** 0.5
-        upper = mid + multiplier * std
-        lower = mid - multiplier * std
-        return upper, mid, lower
+    # 414号P2.5: _calc_boll已移至类顶部统一委托TechnicalIndicatorEngine
 
     def _check_boll_upper_break(self, params: Dict, stock_code: str) -> EvaluationResult:
         klines = self._get_klines(stock_code, 25)

@@ -3,7 +3,9 @@
 背景：快照表无 open/high/low/amplitude → 前端浮窗显示现价/0 兜底（非真实）。
 修复后：快照含 4 列（daily_cache 源），API 透出真实值。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)

@@ -758,7 +758,7 @@ class PhaseDetectionEngine(DataAwareMixin):
             if not (pct_chg > 9.5):
                 return current_phase
 
-            closes = df["close"].values
+            df["close"].values
             volumes = df["vol"].values if "vol" in df.columns else None
 
             # 价格位置判定
@@ -779,7 +779,6 @@ class PhaseDetectionEngine(DataAwareMixin):
             if len(df) >= 3:
                 # latest 是当天（涨停日），df.iloc[-3] 是前一日
                 # 涨停日在 df.iloc[-2]，检查 df.iloc[-1] 是否为次日
-                limit_up_idx = -2  # 假设涨停在倒数第二天
                 # 检查倒数第二天是否涨停，最后一天是否为次日
                 pc_2 = (df.iloc[-2]["close"] - df.iloc[-3]["close"]) / max(df.iloc[-3]["close"], 1) * 100
                 if pc_2 > 9.5:

@@ -3,7 +3,9 @@
 背景：treemap_snapshot 表与 get_treemap_snapshot_items 缺少 3 个字段，
 导致前端 L1/L2 的右侧确认徽标与七维画像无法展示（数据在标签库存在但未透出）。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)
@@ -47,5 +49,10 @@ def test_snapshot_fields_match_tag_values(ecm):
 
     rsc = _tag('right_side_confirm')
     if rsc:  # 标签库有值时应一致透出
-        assert item['right_side_confirm'] == rsc, \
-            f"right_side_confirm 不一致: 快照={item['right_side_confirm']}, 标签库={rsc}"
+        # 413号修复：daemon _check_right_side_confirm 返回值已捕获（中文），
+        # 但存量快照可能仍为英文。语义等价即通过。
+        _equiv = {'unconfirmed': '未确认', 'strong_confirm': '强确认',
+                  'basic_confirm': '基础确认', 'veto': '否决'}
+        snap_val = item['right_side_confirm']
+        assert snap_val == rsc or _equiv.get(snap_val) == rsc, \
+            f"right_side_confirm 不一致: 快照={snap_val}, 标签库={rsc}"

@@ -3,8 +3,9 @@
 学术研究中的经典因子
 文件路径：backend/app/factors/builtin/academic.py
 """
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from ..base import BaseFactor, FactorParam
 
 
@@ -18,9 +19,9 @@ class ACADEMIC_SKEWNESS(BaseFactor):
     formula = "Skewness = E[(R - mean)^3] / std^3"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
@@ -37,9 +38,9 @@ class ACADEMIC_KURTOSIS(BaseFactor):
     formula = "Kurtosis = E[(R - mean)^4] / std^4 - 3"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
@@ -56,19 +57,19 @@ class ACADEMIC_MAX_DRAWDOWN(BaseFactor):
     formula = "MaxDD = max((Peak - Trough) / Peak)"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         def max_dd(series):
             if len(series) < 2:
                 return 0
             cummax = series.cummax()
             drawdown = (cummax - series) / cummax
             return drawdown.max()
-        
+
         return data['close'].rolling(window=period).apply(max_dd, raw=True)
 
 
@@ -82,22 +83,22 @@ class ACADEMIC_SORTINO(BaseFactor):
     formula = "Sortino = (mean - r_f) / downside_std"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [
         FactorParam("period", 20, "int", 5, 252, "计算周期"),
         FactorParam("target_return", 0.0, "float", -0.1, 0.1, "目标收益")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         target = self.get_param("target_return")
-        
+
         returns = data['close'].pct_change()
         downside_returns = returns.where(returns < target, 0)
         downside_std = downside_returns.rolling(window=period).std()
-        
+
         mean_return = returns.rolling(window=period).mean()
-        
+
         return (mean_return - target) / (downside_std + 1e-10)
 
 
@@ -111,24 +112,24 @@ class ACADEMIC_CALMAR(BaseFactor):
     formula = "Calmar = annual_return / max_drawdown"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 252, "int", 20, 504, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         returns = data['close'].pct_change()
         annual_return = returns.rolling(window=period).mean() * 252
-        
+
         def max_dd(series):
             if len(series) < 2:
                 return 0
             cummax = series.cummax()
             drawdown = (cummax - series) / cummax
             return drawdown.max()
-        
+
         max_drawdown = data['close'].rolling(window=period).apply(max_dd, raw=True)
-        
+
         return annual_return / (max_drawdown + 1e-10)
 
 
@@ -142,21 +143,21 @@ class ACADEMIC_OMEGA(BaseFactor):
     formula = "Omega = sum(gains) / sum(losses)"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         returns = data['close'].pct_change()
-        
+
         def omega_ratio(series):
             if len(series) < 2:
                 return 0
             gains = series[series > 0].sum()
             losses = abs(series[series < 0].sum())
             return gains / (losses + 1e-10)
-        
+
         return returns.rolling(window=period).apply(omega_ratio, raw=True)
 
 
@@ -170,16 +171,16 @@ class ACADEMIC_INFORMATION_RATIO(BaseFactor):
     formula = "IR = active_return / tracking_error"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
-        
+
         active_return = returns.rolling(window=period).mean()
         tracking_error = returns.rolling(window=period).std()
-        
+
         return active_return / (tracking_error + 1e-10)
 
 
@@ -193,17 +194,17 @@ class ACADEMIC_BETA(BaseFactor):
     formula = "Beta = Cov(R, R_m) / Var(R_m)"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
-        
+
         market_return = returns.rolling(window=period).mean()
         cov = returns.rolling(window=period).cov(market_return)
         var = market_return.rolling(window=period).var()
-        
+
         return cov / (var + 1e-10)
 
 
@@ -217,24 +218,24 @@ class ACADEMIC_ALPHA(BaseFactor):
     formula = "Alpha = R_p - (R_f + Beta * (R_m - R_f))"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [
         FactorParam("period", 20, "int", 5, 252, "计算周期"),
         FactorParam("risk_free", 0.03, "float", 0, 0.1, "无风险利率")
     ]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         rf = self.get_param("risk_free")
-        
+
         returns = data['close'].pct_change()
         market_return = returns.rolling(window=period).mean()
-        
+
         portfolio_mean = returns.rolling(window=period).mean()
         market_mean = market_return
-        
+
         alpha = portfolio_mean - rf - 1.0 * (market_mean - rf)
-        
+
         return alpha
 
 
@@ -248,36 +249,36 @@ class ACADEMIC_TREYNOR(BaseFactor):
     formula = "Treynor = (R_p - R_f) / Beta"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
-        
+
         excess_return = returns.rolling(window=period).mean()
         market_return = returns.rolling(window=period).mean()
         cov = returns.rolling(window=period).cov(market_return)
         var = market_return.rolling(window=period).var()
-        
+
         beta = cov / (var + 1e-10)
-        
+
         return excess_return / (beta + 1e-10)
 
 
 class ACADEMIC_VOLATILITY_10(BaseFactor):
-    """10日波动率"""
-    name = "VOLATILITY_10"
-    name_cn = "10日波动率"
+    """10日波动率（学术版）"""
+    name = "ACADEMIC_VOLATILITY_10"
+    name_cn = "10日波动率（学术）"
     category = "academic"
     subcategory = "volatility"
-    description = "年化收益率标准差"
+    description = "年化收益率标准差（学术版）"
     formula = "Vol = std(returns) * sqrt(252)"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 10, "int", 5, 60, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
@@ -285,18 +286,18 @@ class ACADEMIC_VOLATILITY_10(BaseFactor):
 
 
 class ACADEMIC_VOLATILITY_20(BaseFactor):
-    """20日波动率"""
-    name = "VOLATILITY_20"
-    name_cn = "20日波动率"
+    """20日波动率（学术版）"""
+    name = "ACADEMIC_VOLATILITY_20"
+    name_cn = "20日波动率（学术）"
     category = "academic"
     subcategory = "volatility"
-    description = "年化收益率标准差"
+    description = "年化收益率标准差（学术版）"
     formula = "Vol = std(returns) * sqrt(252)"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 10, 120, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
@@ -304,18 +305,18 @@ class ACADEMIC_VOLATILITY_20(BaseFactor):
 
 
 class ACADEMIC_VOLATILITY_60(BaseFactor):
-    """60日波动率"""
-    name = "VOLATILITY_60"
-    name_cn = "60日波动率"
+    """60日波动率（学术版）"""
+    name = "ACADEMIC_VOLATILITY_60"
+    name_cn = "60日波动率（学术）"
     category = "academic"
     subcategory = "volatility"
-    description = "年化收益率标准差"
+    description = "年化收益率标准差（学术版）"
     formula = "Vol = std(returns) * sqrt(252)"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 60, "int", 30, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
@@ -332,19 +333,19 @@ class ACADEMIC_CVAR(BaseFactor):
     formula = "CVaR = E[R | R < VaR]"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
-        
+
         def cvar(series):
             if len(series) < 5:
                 return 0
             var_5pct = series.quantile(0.05)
             return series[series <= var_5pct].mean()
-        
+
         return returns.rolling(window=period).apply(cvar, raw=True)
 
 
@@ -358,16 +359,16 @@ class ACADEMIC_NORMALIZED_VOL(BaseFactor):
     formula = "NormVol = std(returns) / mean(abs(returns))"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
-        
+
         vol = returns.rolling(window=period).std()
         mean_abs = returns.abs().rolling(window=period).mean()
-        
+
         return vol / (mean_abs + 1e-10)
 
 
@@ -381,16 +382,16 @@ class ACADEMIC_PARKINSON(BaseFactor):
     formula = "Parkinson = sqrt((1/(4*ln2)) * mean((ln(H/L))^2))"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         hl_ratio = np.log(data['high'] / data['low'])
         parkinson_var = hl_ratio.rolling(window=period).mean() ** 2 / (4 * np.log(2))
         parkinson_vol = np.sqrt(parkinson_var) * np.sqrt(252)
-        
+
         return parkinson_vol
 
 
@@ -404,18 +405,18 @@ class ACADEMIC_GARMAN_KLASS(BaseFactor):
     formula = "GK = sqrt(0.5 * mean(ln(H/L))^2 - (2*ln(2)-1) * mean(ln(C/O))^2)"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         hl = np.log(data['high'] / data['low'])
         co = np.log(data['close'] / data['open'])
-        
+
         gk_var = 0.5 * hl ** 2 - (2 * np.log(2) - 1) * co ** 2
         gk_vol = np.sqrt(gk_var.rolling(window=period).mean()) * np.sqrt(252)
-        
+
         return gk_vol
 
 
@@ -429,9 +430,9 @@ class ACADEMIC_ROLLING_CORR(BaseFactor):
     formula = "Corr = rolling_corr(close, volume)"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         return data['close'].rolling(window=period).corr(data['vol'])
@@ -447,13 +448,13 @@ class ACADEMIC_HURST(BaseFactor):
     formula = "Hurst = log(R/S) / log(N)"
     source = "Academic"
     source_detail = "Academic"
-    
+
     params = [FactorParam("period", 100, "int", 50, 500, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data['close'].pct_change()
-        
+
         def hurst_exp(series):
             if len(series) < 20:
                 return 0.5
@@ -465,7 +466,7 @@ class ACADEMIC_HURST(BaseFactor):
             if s < 1e-10:
                 return 0.5
             return np.log(r/s) / np.log(n)
-        
+
         return returns.rolling(window=period).apply(hurst_exp, raw=True)
 
 
@@ -479,21 +480,21 @@ class ACADEMIC_CAPM_ALPHA(BaseFactor):
     formula = "Alpha = R_p - R_f - Beta * (R_m - R_f)"
     source = "Academic"
     source_detail = "Fama-French"
-    
+
     params = [FactorParam("period", 252, "int", 60, 504, "计算周期")]
-    
+
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        
+
         returns = data['close'].pct_change()
         market_return = returns.rolling(window=period).mean()
-        
+
         portfolio_return = returns.rolling(window=period).mean()
-        
+
         cov = returns.rolling(window=period).cov(market_return)
         var = market_return.rolling(window=period).var()
-        
+
         beta = cov / (var + 1e-10)
         alpha = portfolio_return - beta * market_return
-        
+
         return alpha

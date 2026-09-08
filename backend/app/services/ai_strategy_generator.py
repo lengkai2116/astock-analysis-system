@@ -4,12 +4,11 @@ AI策略生成服务
 支持LLM集成：DeepSeek API、LM Studio本地大模型
 """
 
-import os
-import re
 import json
-from typing import Dict, List, Optional, Any
-from datetime import datetime
 import logging
+import re
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -17,27 +16,27 @@ logger = logging.getLogger(__name__)
 class AIStrategyGenerator:
     """
     AI策略生成器
-    
+
     支持从自然语言描述生成量化指标和策略
     支持的LLM提供商：
     - DeepSeek API (配置: LLM_PROVIDER=deepseek)
     - LM Studio本地大模型 (配置: LLM_PROVIDER=lm_studio)
     - Mock模式 (配置: LLM_PROVIDER=mock, 默认)
     """
-    
+
     def __init__(self, llm_config: Optional[Dict] = None):
         if llm_config is None:
             from app.config import Config
             llm_config = Config.get_llm_config()
-        
+
         self.llm_config = llm_config
         self.llm_type = self.llm_config.get('type', 'mock')
         self.llm_endpoint = self.llm_config.get('endpoint', '')
         self.model_name = self.llm_config.get('model', 'mock')
         self.api_key = self.llm_config.get('api_key', '')
-        
+
         logger.info(f"AI策略生成器初始化，LLM类型: {self.llm_type}, 模型: {self.model_name}")
-        
+
         self.indicator_patterns = {
             'moving_average': {
                 'keywords': ['均线', '移动平均', 'MA', 'SMA', 'EMA'],
@@ -68,67 +67,67 @@ class AIStrategyGenerator:
                 'template': '(close - close.shift({period})) / close.shift({period})'
             }
         }
-    
+
     def _call_llm(self, prompt: str, system_prompt: Optional[str] = None) -> Optional[str]:
         """
         调用LLM接口
-        
+
         支持 DeepSeek API 和 LM Studio 格式
         """
         if self.llm_type == 'mock':
             return self._mock_llm_response(prompt)
-        
+
         try:
             import requests
-            
+
             headers = {
                 'Content-Type': 'application/json'
             }
-            
+
             # DeepSeek API 需要 API Key
             if self.llm_type == 'deepseek' and self.api_key:
                 headers['Authorization'] = f'Bearer {self.api_key}'
-            
+
             payload = {
                 'model': self.model_name,
                 'messages': []
             }
-            
+
             if system_prompt:
                 payload['messages'].append({
                     'role': 'system',
                     'content': system_prompt
                 })
-            
+
             payload['messages'].append({
                 'role': 'user',
                 'content': prompt
             })
-            
+
             # 兼容不同API格式
             if self.llm_type == 'deepseek':
                 endpoint = f'{self.llm_endpoint}/chat/completions'
             else:
                 endpoint = f'{self.llm_endpoint}/chat/completions'
-            
+
             response = requests.post(
                 endpoint,
                 headers=headers,
                 json=payload,
                 timeout=60
             )
-            
+
             if response.status_code == 200:
                 result = response.json()
                 return result['choices'][0]['message']['content']
             else:
                 logger.error(f"LLM调用失败: {response.status_code} - {response.text}")
                 return None
-                
+
         except Exception as e:
             logger.error(f"LLM调用异常: {str(e)}")
             return None
-    
+
     def _mock_llm_response(self, prompt: str) -> str:
         """模拟LLM响应（用于测试）"""
         if 'RSI' in prompt or '超买' in prompt or '超卖' in prompt:
@@ -163,16 +162,16 @@ class AIStrategyGenerator:
                 'description': '自定义移动平均指标',
                 'signal': '根据价格与均线的交叉判断买卖时机'
             }, ensure_ascii=False)
-    
-    def generate_indicator_from_description(self, description: str, 
+
+    def generate_indicator_from_description(self, description: str,
                                           context: Optional[Dict] = None) -> Dict[str, Any]:
         """
         从自然语言描述生成指标
-        
+
         Args:
             description: 指标描述，例如："当股票RSI指标低于30时买入"
             context: 上下文信息（可选），包含股票代码、时间范围等
-        
+
         Returns:
             生成结果，包含：
             - indicator_type: 指标类型
@@ -183,7 +182,7 @@ class AIStrategyGenerator:
             - code_template: 可执行的代码模板
         """
         logger.info(f"开始生成指标: {description}")
-        
+
         indicator_type = self._detect_indicator_type(description)
         parameters = self._extract_parameters(description, indicator_type)
         formula = self._build_formula(indicator_type, parameters)
@@ -191,7 +190,7 @@ class AIStrategyGenerator:
         code_template = self._generate_code_template(
             indicator_type, parameters, signal, context
         )
-        
+
         result = {
             'success': True,
             'indicator_type': indicator_type,
@@ -202,19 +201,19 @@ class AIStrategyGenerator:
             'code_template': code_template,
             'generated_at': datetime.now().isoformat()
         }
-        
+
         logger.info(f"指标生成完成: {indicator_type}")
         return result
-    
+
     def _detect_indicator_type(self, description: str) -> str:
         """检测指标类型"""
         description_lower = description.lower()
-        
+
         for ind_type, pattern in self.indicator_patterns.items():
             for keyword in pattern['keywords']:
                 if keyword.lower() in description_lower:
                     return ind_type
-        
+
         if any(word in description_lower for word in ['突破', 'cross']):
             return 'cross_signal'
         elif any(word in description_lower for word in ['背离', 'divergence']):
@@ -223,11 +222,11 @@ class AIStrategyGenerator:
             return 'volume_ratio'
         else:
             return 'moving_average'
-    
+
     def _extract_parameters(self, description: str, indicator_type: str) -> Dict:
         """提取指标参数"""
         params = {}
-        
+
         period_match = re.search(r'(\d+)[日周月]', description)
         if period_match:
             params['period'] = int(period_match.group(1))
@@ -244,7 +243,7 @@ class AIStrategyGenerator:
                 'kdj': (9, 3, 3)
             }
             params['period'] = default_periods.get(indicator_type, 20)
-        
+
         if indicator_type == 'macd':
             params['fast'] = 12
             params['slow'] = 26
@@ -255,17 +254,17 @@ class AIStrategyGenerator:
             params['n'] = 9
             params['m1'] = 3
             params['m2'] = 3
-        
+
         threshold_match = re.search(r'[<>]([\d.]+)', description)
         if threshold_match:
             params['threshold'] = float(threshold_match.group(1))
-        
+
         window_match = re.search(r'([\d]+)天|([\d]+)日', description)
         if window_match:
             params['window'] = int(window_match.group(1) or window_match.group(2))
-        
+
         return params
-    
+
     def _build_formula(self, indicator_type: str, parameters: Dict) -> str:
         """构建计算公式"""
         formulas = {
@@ -279,14 +278,14 @@ class AIStrategyGenerator:
             'cross_signal': f"MA(close, {parameters.get('fast', 5)}) - MA(close, {parameters.get('slow', 20)})",
             'divergence': f"(close - close.shift({parameters.get('period', 20)})) / (close.shift({parameters.get('period', 20)}) - close.shift({parameters.get('period', 40)}))"
         }
-        
+
         return formulas.get(indicator_type, formulas['moving_average'])
-    
-    def _generate_signal_logic(self, description: str, indicator_type: str, 
+
+    def _generate_signal_logic(self, description: str, indicator_type: str,
                               parameters: Dict) -> str:
         """生成信号逻辑"""
         description_lower = description.lower()
-        
+
         if '低于' in description or '< ' in description or '超卖' in description:
             threshold = parameters.get('threshold', 30)
             return f"当指标值 < {threshold}时买入"
@@ -302,11 +301,11 @@ class AIStrategyGenerator:
         else:
             threshold = parameters.get('threshold', 0)
             return f"当指标值从下突破{threshold}时买入，从上跌破{threshold}时卖出"
-    
+
     @staticmethod
     def _threshold_logic(parameters: Dict) -> str:
         """生成阈值信号判断的代码片段"""
-        period = parameters.get('period', 20)
+        parameters.get('period', 20)
         threshold = parameters.get('threshold', 30)
         return (
             '# 信号判断\n'
@@ -340,7 +339,7 @@ class AIStrategyGenerator:
             'return signal'
         )
         return template.strip()
-    
+
     def _generate_description(self, indicator_type: str, parameters: Dict) -> str:
         """生成指标描述"""
         descriptions = {
@@ -354,18 +353,18 @@ class AIStrategyGenerator:
             'cross_signal': f"均线交叉信号(短:{parameters.get('fast', 5)},长:{parameters.get('slow', 20)})",
             'divergence': f"指标背离检测(周期:{parameters.get('period', 20)})"
         }
-        
+
         return descriptions.get(indicator_type, f"自定义{indicator_type}指标")
-    
-    def interpret_backtest_result(self, backtest_result: Dict, 
+
+    def interpret_backtest_result(self, backtest_result: Dict,
                                  strategy_description: Optional[str] = None) -> Dict[str, Any]:
         """
         AI解读回测结果
-        
+
         Args:
             backtest_result: 回测结果数据
             strategy_description: 策略描述（可选）
-        
+
         Returns:
             AI解读结果，包含：
             - summary: 总体评价
@@ -376,24 +375,24 @@ class AIStrategyGenerator:
             - trading_advice: 交易建议
         """
         logger.info("开始AI解读回测结果")
-        
+
         metrics = backtest_result.get('metrics', {})
         trades = backtest_result.get('trades', [])
-        
+
         total_return = metrics.get('total_return', 0)
         sharpe_ratio = metrics.get('sharpe_ratio', 0)
         max_drawdown = metrics.get('max_drawdown', 0)
         win_rate = metrics.get('win_rate', 0)
         total_trades = len(trades)
-        
+
         overall_score = self._calculate_overall_score(
             total_return, sharpe_ratio, max_drawdown, win_rate
         )
-        
+
         strengths = []
         weaknesses = []
         suggestions = []
-        
+
         if total_return > 0.1:
             strengths.append(f"策略盈利能力良好，总收益率为{total_return*100:.2f}%")
         elif total_return > 0:
@@ -401,7 +400,7 @@ class AIStrategyGenerator:
         else:
             weaknesses.append(f"策略收益为负({total_return*100:.2f}%)，需要优化")
             suggestions.append("建议调整入场时机或优化指标参数")
-        
+
         if sharpe_ratio > 1.5:
             strengths.append(f"风险调整后收益优秀，夏普比率达到{sharpe_ratio:.2f}")
         elif sharpe_ratio > 1:
@@ -409,7 +408,7 @@ class AIStrategyGenerator:
         else:
             weaknesses.append(f"夏普比率偏低({sharpe_ratio:.2f})，风险收益比不佳")
             suggestions.append("建议增加选股条件或调整仓位管理")
-        
+
         if abs(max_drawdown) < 0.1:
             strengths.append(f"最大回撤控制良好({max_drawdown*100:.2f}%)")
         elif abs(max_drawdown) < 0.2:
@@ -418,7 +417,7 @@ class AIStrategyGenerator:
         else:
             weaknesses.append(f"最大回撤严重({max_drawdown*100:.2f}%)，风险较高")
             suggestions.append("强烈建议增加风险控制机制，设置硬止损")
-        
+
         if win_rate > 0.6:
             strengths.append(f"胜率较高({win_rate*100:.1f}%)")
         elif win_rate > 0.5:
@@ -426,16 +425,16 @@ class AIStrategyGenerator:
         else:
             weaknesses.append(f"胜率偏低({win_rate*100:.1f}%)")
             suggestions.append("建议优化买卖点位或调整止盈止损设置")
-        
+
         if total_trades < 10:
             suggestions.append(f"交易次数较少({total_trades}次)，统计意义有限，建议增加回测周期")
         elif total_trades > 100:
             suggestions.append(f"交易次数充足({total_trades}次)，统计可靠性高")
-        
+
         summary = self._generate_summary(overall_score, total_return, sharpe_ratio, max_drawdown)
         risk_level = self._assess_risk_level(max_drawdown, sharpe_ratio, win_rate)
         trading_advice = self._generate_trading_advice(overall_score, risk_level, suggestions)
-        
+
         result = {
             'success': True,
             'summary': summary,
@@ -470,10 +469,10 @@ class AIStrategyGenerator:
             'trading_advice': trading_advice,
             'generated_at': datetime.now().isoformat()
         }
-        
+
         logger.info(f"回测结果解读完成，总体评分: {overall_score}")
         return result
-    
+
     def _calculate_overall_score(self, total_return: float, sharpe_ratio: float,
                                 max_drawdown: float, win_rate: float) -> float:
         """计算综合评分"""
@@ -481,9 +480,9 @@ class AIStrategyGenerator:
         risk_score = min(100, max(0, sharpe_ratio * 50)) * 0.3
         drawdown_score = min(100, max(0, 100 - abs(max_drawdown) * 200)) * 0.2
         win_rate_score = win_rate * 100 * 0.2
-        
+
         return round(profit_score + risk_score + drawdown_score + win_rate_score, 2)
-    
+
     def _generate_summary(self, overall_score: float, total_return: float,
                         sharpe_ratio: float, max_drawdown: float) -> str:
         """生成总体评价"""
@@ -495,29 +494,29 @@ class AIStrategyGenerator:
             return f"策略表现一般，综合评分{overall_score}分。总收益率{total_return*100:.2f}%，最大回撤{abs(max_drawdown)*100:.2f}%。策略需要进一步优化才能实盘使用。"
         else:
             return f"策略表现不佳，综合评分{overall_score}分。总收益率{total_return*100:.2f}%，最大回撤{abs(max_drawdown)*100:.2f}%。建议重新设计策略或调整参数。"
-    
+
     def _assess_risk_level(self, max_drawdown: float, sharpe_ratio: float,
                           win_rate: float) -> str:
         """评估风险等级"""
         risk_score = 0
-        
+
         if abs(max_drawdown) > 0.3:
             risk_score += 3
         elif abs(max_drawdown) > 0.2:
             risk_score += 2
         elif abs(max_drawdown) > 0.1:
             risk_score += 1
-        
+
         if sharpe_ratio < 0.5:
             risk_score += 2
         elif sharpe_ratio < 1:
             risk_score += 1
-        
+
         if win_rate < 0.4:
             risk_score += 2
         elif win_rate < 0.5:
             risk_score += 1
-        
+
         if risk_score >= 5:
             return "高风险"
         elif risk_score >= 3:
@@ -526,7 +525,7 @@ class AIStrategyGenerator:
             return "较低风险"
         else:
             return "低风险"
-    
+
     def _generate_trading_advice(self, overall_score: float, risk_level: str,
                                suggestions: List[str]) -> Dict[str, str]:
         """生成交易建议"""
@@ -536,7 +535,7 @@ class AIStrategyGenerator:
             'risk_control': '',
             'next_steps': ''
         }
-        
+
         if overall_score >= 80:
             advice['suitable_for'] = "适合追求稳健收益的投资者，可考虑实盘测试"
             advice['position_management'] = "建议初始仓位30-50%，可根据市场情况适当调整"
@@ -557,7 +556,7 @@ class AIStrategyGenerator:
             advice['position_management'] = "建议使用其他成熟策略"
             advice['risk_control'] = "需要重新设计策略"
             advice['next_steps'] = "建议学习其他有效策略或寻求专业指导"
-        
+
         return advice
 
 

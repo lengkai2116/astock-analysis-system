@@ -6,16 +6,14 @@
   3. ECM 提供 WAL checkpoint 方法（周期收缩，防 86G 膨胀）
   4. run.py 具备 API 单实例端口保护（防 launchctl 双 API）
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
 
 import re
-
-import re
-
 
 # ══════════════════════════════════════════════════════════
 # 1. SocketIO async_mode 根治（连接池泄漏根因）
@@ -35,7 +33,7 @@ def _socketio_async_mode() -> str | None:
 def test_socketio_async_mode_is_threading():
     """async_mode 必须强制 threading——eventlet 自动选用且无 monkey-patch 是连接池泄漏根因
 
-    修复前：SocketIO() 未指定 async_mode → 检测到已安装 eventlet 自动选用 → 
+    修复前：SocketIO() 未指定 async_mode → 检测到已安装 eventlet 自动选用 →
     eventlet 无 monkey.patch_all() 时 greenlet 调度异常 → psycopg2 连接借用不归还 → CPU 99.6%。
     修复后：显式 async_mode='threading'（werkzeug，线程模型，连接池正常）。
     """

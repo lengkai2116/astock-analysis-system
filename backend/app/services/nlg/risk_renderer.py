@@ -2,7 +2,7 @@
 风险维度 NLG 渲染器 — 风险等级、验证链 → 中文描述
 """
 
-from .templates import RISK_LEVEL, CONSENSUS_LEVEL
+from .templates import CONSENSUS_LEVEL, RISK_LEVEL
 
 
 def render_risk(risk_level: str, risk_notes: list = None) -> str:

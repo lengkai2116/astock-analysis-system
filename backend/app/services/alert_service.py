@@ -9,14 +9,13 @@ AlertService — 告警通知服务
 - 日志告警（本地记录）
 """
 
-import os
-import json
 import logging
+import os
 import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from typing import Dict, Optional, List
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 

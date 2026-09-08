@@ -1,7 +1,9 @@
 """简易内存速率限制中间件"""
 import time
 from collections import defaultdict
-from flask import request, jsonify
+
+from flask import jsonify, request
+
 
 class MemoryRateLimiter:
     def __init__(self):

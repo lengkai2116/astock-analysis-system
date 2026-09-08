@@ -5,23 +5,26 @@
 底层复用现有的 SignalComputationService / UPFEngine / StatusOutputService 等组件。
 """
 
-import json
 import logging
 import os
-from flask import Blueprint, request, jsonify
 from typing import Dict, List, Optional
 
-import logging
+from flask import Blueprint, jsonify, request
+
 logger = logging.getLogger(__name__)
 
-from app.services.status_output_service import StatusOutputService
 from app.engine.framework.conflict_arbiter import ConflictArbiter
-from app.engine.framework.unified_practical_framework import UPFEngine
 from app.services.kronos_forecaster import KronosForecaster
+from app.services.status_output_service import StatusOutputService
 
 # NLG 渲染器 + Fallback 描述
 try:
-    from app.services.nlg import render_chanlun_trend, render_volume_price_trend, render_chip_volume, render_emotion
+    from app.services.nlg import (
+        render_chanlun_trend,
+        render_chip_volume,
+        render_emotion,
+        render_volume_price_trend,
+    )
     _HAVE_NLG = True
 except ImportError as _nlg_err:
     logger.warning("NLG 渲染模块导入失败，将使用 evidence 拼接降级: %s", _nlg_err)
@@ -31,6 +34,7 @@ except Exception as _nlg_exc:
     _HAVE_NLG = False
 
 from app.services.fallback_description import fallback_description
+
 logger = logging.getLogger(__name__)
 
 strategy_analyze_bp = Blueprint('strategy_analyze', __name__)
@@ -290,7 +294,8 @@ def _build_chanlun_dimension(sig: Optional[Dict], latest_close: float = None,
         status_text = render_chanlun_trend(sr, latest_close)
     else:
         fb = fallback_description(sr) if sr else ''
-        status_text = fb or ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
+        _ev = sig.get('evidence', []) or []
+        status_text = fb or ('; '.join(str(e)[:80] for e in _ev[:2]) or sig.get('signal_label', ''))
 
     # 从 chanlun_analysis_detail 提取中文趋势方向（'上升'/'下降'/'待定'）
     structure = detail.get('走势结构', {})
@@ -372,11 +377,12 @@ def _build_volume_price_dimension(sig: Optional[Dict]) -> Dict:
     sr = sig.get('status_recognition', {})
     trend = sr.get('trend', {})
     levels = sr.get('support_resistance', {})
-    status_text = render_volume_price_trend(sr) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
+    _ev = sig.get('evidence', []) or []
+    status_text = render_volume_price_trend(sr) if (_HAVE_NLG and sr) else ('; '.join(str(e)[:80] for e in _ev[:2]) or sig.get('signal_label', ''))
     # 读取量价形态命名（P3.2）/ [281号方案 v3] 状态标签优先
     pattern_name = sig.get('pattern_name', '')
     pattern = sig.get('current_pattern', '') or sr.get('volume', {}).get('structure', '')
-    enhance = sig.get('enhance_patterns', [])
+    sig.get('enhance_patterns', [])
     phase_label = pattern_name if pattern_name else (pattern if pattern else trend.get('direction', '横盘'))
     # 从 status_recognition.trend 推导方向（优先于 signal）
     trend_dir = trend.get('direction', '')
@@ -412,7 +418,8 @@ def _build_chip_dimension(sig: Optional[Dict], tags: Optional[Dict] = None) -> D
                 'avg_cost': avg_cost if avg_cost else None,
                 'concentration': f"{deep_chip.get('concentration', 0)*100:.1f}%" if deep_chip.get('concentration') else '--'}
     sr = sig.get('status_recognition', {})
-    status_text = render_chip_volume(sr) if (_HAVE_NLG and sr) else ('; '.join(sig.get('evidence', [])[:2]) or sig.get('signal_label', ''))
+    _ev = sig.get('evidence', []) or []
+    status_text = render_chip_volume(sr) if (_HAVE_NLG and sr) else ('; '.join(str(e)[:80] for e in _ev[:2]) or sig.get('signal_label', ''))
 
     # 从 status_recognition 读取真实计算的筹码指标
     chip_peak = sr.get('chip_peak', 0) or 0
@@ -499,7 +506,7 @@ def _build_emotion_dimension(
             pass
     evidence = sig.get('evidence', []) if sig else []
     # NLG渲染status_text（比evidence拼接更流畅）
-    status_text = render_emotion(sr) if (_HAVE_NLG and sr) else ('; '.join(evidence[:2]) if evidence else (sig.get('signal_label', '行业板块情况正常') if sig else '行业板块情况正常'))
+    status_text = render_emotion(sr) if (_HAVE_NLG and sr) else ('; '.join(str(e)[:80] for e in evidence[:2]) if evidence else (sig.get('signal_label', '行业板块情况正常') if sig else '行业板块情况正常'))
     # 从 status_recognition 推导方向（优先于 signal）
     emotion_state = sr.get('state', '')
     emotion_dir = 'neutral'
@@ -690,7 +697,7 @@ def strategy_analyze():
         vp_sig = _find_signal(signals, '量价')
         chip_sig = _find_signal(signals, '筹码')
         bociasi_sig = _find_signal(signals, 'BOCIASI')
-        factor_sig = _find_signal(signals, '因子')
+        _find_signal(signals, '因子')
 
         # 323号 S0.5：读取深度标签（structure/chip_deep/fund_risk 组），
         # 供五维构建恢复深度字段
@@ -896,7 +903,9 @@ def strategy_analyze():
                             _pg_reachable = False
                         if _pg_reachable:
                             try:
-                                from app.services.backtest_evidence_service import BacktestEvidenceService
+                                from app.services.backtest_evidence_service import (
+                                    BacktestEvidenceService,
+                                )
                                 _rec = BacktestEvidenceService().record_signal(
                                     ts_code=ts_code,
                                     strategy_name='operation_advice',
@@ -918,6 +927,7 @@ def strategy_analyze():
                             try:
                                 import json as _json2
                                 from datetime import date as _date
+
                                 from app.data import DataManager
                                 _dm = DataManager()
                                 _conn = _dm.engine.raw_connection()
@@ -1385,9 +1395,9 @@ def chanlun_chart():
         period = 'long'
 
     try:
+        from app.data import DataManager
         from app.engine.framework.chanlun_strategy import ChanlunAnalyzer
         from app.services.chart_builder import ChartBuilder
-        from app.data import DataManager
 
         dm = DataManager()
 

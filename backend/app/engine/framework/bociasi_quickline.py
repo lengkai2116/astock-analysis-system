@@ -13,10 +13,11 @@ BOCIASI 快线四指标（情绪层）
   ≤1 项通过 + 价格弱势（日均价下） → BEARISH（情绪低迷/看空）
   否则       → NEUTRAL（情绪平淡）
 """
-from typing import Dict, Optional
-import pandas as pd
-import numpy as np
 import logging
+from typing import Dict
+
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class BociasiQuickLine:
             return self._empty_result("数据不足")
 
         closes = df['close'].values
-        opens = df['open'].values
+        df['open'].values
         highs = df['high'].values
         lows = df['low'].values
         volumes = df['vol'].values if 'vol' in df.columns else df['amount'].values

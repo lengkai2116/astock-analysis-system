@@ -1,15 +1,14 @@
 """测试形态评分缓存（353/358号方案）"""
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
 
-import pytest
 import sqlite3
-import json
-import tempfile
 
+import pytest
 from app.data.enhanced_cache_manager import EnhancedCacheManager
 
 

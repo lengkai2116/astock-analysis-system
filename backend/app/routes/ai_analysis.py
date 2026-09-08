@@ -3,26 +3,27 @@ AI 投研路由（V3）
 Phase 1: 6角色并行分析 + 三元组输出 + 综合报告 + 单角色重跑
 """
 from datetime import datetime
-from app.utils.error_handlers import handle_exceptions
-from flask import Blueprint, request, jsonify
 
+from flask import Blueprint, jsonify, request
+
+from app.engine.framework.unified_investment_decision_framework import UIDFEngine
+from app.services.ai_consensus_service import AiConsensusEngine
+from app.services.ai_context_builder import WikiConceptMatcher
 from app.services.deepseek_analysis_service import (
-    start_analysis,
-    get_progress,
+    ANALYST_ROLES,
+    _analysis_store,
+    _lock,
+    explain_signal,
     get_final_report,
     get_health,
-    rerun_role,
-    ANALYST_ROLES,
-    _lock,
-    _analysis_store,
-    explain_signal,
+    get_progress,
     interpret_status,
+    rerun_role,
+    start_analysis,
 )
 from app.services.signal_computation_service import SignalComputationService
 from app.services.status_output_service import StatusOutputService
-from app.services.ai_context_builder import WikiConceptMatcher
-from app.engine.framework.unified_investment_decision_framework import UIDFEngine
-from app.services.ai_consensus_service import AiConsensusEngine
+from app.utils.error_handlers import handle_exceptions
 
 ai_analysis_bp = Blueprint('ai_analysis', __name__)
 

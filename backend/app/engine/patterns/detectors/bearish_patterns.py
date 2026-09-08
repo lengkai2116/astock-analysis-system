@@ -8,12 +8,16 @@
 
 检测器消费 PatternDetector 基类接口，产出统一 PatternResult。
 """
-from typing import List, Optional, Dict
-import pandas as pd
+from typing import Dict, List, Optional
+
 import numpy as np
+import pandas as pd
 
 from app.engine.patterns import (
-    PatternResult, PatternCategory, PatternStage, PatternLevel,
+    PatternCategory,
+    PatternLevel,
+    PatternResult,
+    PatternStage,
 )
 from app.engine.patterns.detectors.base import PatternDetector
 
@@ -119,7 +123,7 @@ class BearishPatternDetector(PatternDetector):
         invalidation: Optional[List[str]] = None,
     ) -> PatternResult:
         """统一构造 PatternResult"""
-        name = self._NAMES.get(code, code)
+        self._NAMES.get(code, code)
         return PatternResult(
             name=code,
             category=PatternCategory.BEARISH_PATTERNS,
@@ -559,7 +563,7 @@ class BearishPatternDetector(PatternDetector):
         search_len = min(60, len(df))
         highs_arr = high.iloc[-search_len:].values
         lows_arr = low.iloc[-search_len:].values
-        closes_arr = close.iloc[-search_len:].values
+        close.iloc[-search_len:].values
 
         # 找两个高点（M顶的两个峰）
         window = min(30, search_len)
@@ -1322,7 +1326,6 @@ class BearishPatternDetector(PatternDetector):
 
         # 查找旗杆（快速下跌）
         flagpole_found = False
-        pole_low = 0.0
         for start in range(-20, -8):
             if start < -len(df) + 5:
                 continue
@@ -1333,7 +1336,7 @@ class BearishPatternDetector(PatternDetector):
                 drop_5d = (close.iloc[end_idx] / close.iloc[start] - 1)
             if drop_5d < -0.08:
                 flagpole_found = True
-                pole_low = float(low.iloc[start:end_idx].min()) if end_idx < 0 else float(low.iloc[start:].min())
+                float(low.iloc[start:end_idx].min()) if end_idx < 0 else float(low.iloc[start:].min())
                 break
 
         if not flagpole_found:

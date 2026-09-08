@@ -12,11 +12,11 @@ ComboCard 数据模型（对应前端 ai-combo-card）：
   sr_tag / vol_tag / interpretation / hint / invalidation / levels
 """
 
-from typing import List, Optional, Dict, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
 
-from app.engine.patterns import PatternResult, PatternCategory, PatternStage, PatternLevel
+from app.engine.patterns import PatternCategory, PatternLevel, PatternResult
 
 
 @dataclass
@@ -174,7 +174,7 @@ class ComboEngine:
         # 3. 模式标签
         tags = []
         for p in patterns:
-            label_map = {m.name: m.description.split(":")[0]
+            {m.name: m.description.split(":")[0]
                         for m in [__import__('app.engine.patterns.registry',
                                              fromlist=['PatternRegistry']).PatternRegistry().get(p.name)]
                         if m}

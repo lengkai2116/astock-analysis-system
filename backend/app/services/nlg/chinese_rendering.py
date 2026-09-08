@@ -8,10 +8,9 @@ ChineseNLRenderer — 中文自然语言渲染器主入口
   层 2（异步·可选）  : LLM 润色（外部调用）
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from .trend_renderer import render_trend, render_chanlun_trend, render_volume_price_trend
-from .momentum_renderer import render_momentum, render_momentum_with_context
+from .trend_renderer import render_chanlun_trend, render_trend, render_volume_price_trend
 
 
 def render_five_dimensions(strategies_detail: List[Dict]) -> Dict[str, str]:

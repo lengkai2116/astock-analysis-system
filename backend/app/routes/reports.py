@@ -4,16 +4,17 @@
 变更日期：2026-07-01
 """
 
-from flask import Blueprint, request, jsonify, current_app
 import json
+import logging
 import os
 from datetime import datetime
-from typing import Dict, List, Optional
-import logging
+from typing import Dict, List
+
+from flask import Blueprint, jsonify, request
 
 from app.services.ai_strategy_generator import AIStrategyGenerator
 from app.services.report_generator import ReportGenerator
-from app.services.research_pipeline import ResearchPipeline, create_research_pipeline
+from app.services.research_pipeline import create_research_pipeline
 from app.utils.error_handlers import handle_exceptions
 
 reports_bp = Blueprint('reports', __name__, url_prefix='/api/v3/reports')
@@ -297,10 +298,10 @@ async def generate_report():
         report_type = _map_type_v3(report_type_v2)
 
         ts_code = data.get('ts_code', '600519.SH')
-        description = data.get('description', '')
-        start_date = data.get('start_date', '20250101')
-        end_date = data.get('end_date', '20250501')
-        output_format = data.get('format', 'markdown')
+        data.get('description', '')
+        data.get('start_date', '20250101')
+        data.get('end_date', '20250501')
+        data.get('format', 'markdown')
 
         logger.info(f"生成报告: type={report_type}, ts_code={ts_code}")
 

@@ -6,16 +6,14 @@ Phase 1: 6角色并行分析 + 三元组输出 + 综合报告
 """
 import json
 import logging
-import os
 import re
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
-from app.services.ai_context_builder import ai_context_builder, ai_structured_parser, ai_signal_bus
+from app.services.ai_context_builder import ai_context_builder
 
 # ────────────────────────────────────────────────────────────
 # 内存存储
@@ -411,14 +409,14 @@ def interpret_status(ts_code: str, stock_name: str, aggregated_status: Dict) -> 
     state_consensus = aggregated_status.get('state_consensus', {})
     risk_aggregation = aggregated_status.get('risk_aggregation', {})
     momentum_consensus = aggregated_status.get('momentum_consensus', {})
-    key_levels = aggregated_status.get('key_levels', {})
+    aggregated_status.get('key_levels', {})
     dimensions = aggregated_status.get('dimensions', [])
     verification_chains = aggregated_status.get('verification_chains', [])
     dimension_relations = aggregated_status.get('dimension_relations', [])
 
     state_label = state_consensus.get('state', 'UNKNOWN')
-    risk_level = risk_aggregation.get('risk_level', 'MEDIUM')
-    momentum_label = momentum_consensus.get('momentum', 'NEUTRAL')
+    risk_aggregation.get('risk_level', 'MEDIUM')
+    momentum_consensus.get('momentum', 'NEUTRAL')
 
     latest_close = None
     for dim in dimensions:

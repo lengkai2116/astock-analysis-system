@@ -14,11 +14,12 @@
 """
 import logging
 import time
-from datetime import datetime, timedelta, date
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 import pandas as pd
-from app.data.enhanced_cache_manager import get_ecm_instance, EnhancedCacheManager
+
+from app.data.enhanced_cache_manager import EnhancedCacheManager, get_ecm_instance
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ FREQ_MAP_REV = {'1min': '1m', '5min': '5m', '15min': '15m', '30min': '30m', '60m
 
 def get_watchlist_stocks() -> List[str]:
     """从 DB Watchlist 表获取自选股列表
-    
+
     优先级：
     1. Flask-SQLAlchemy ORM（APP上下文）
     2. PostgreSQL 直连（data_daemon 环境）
@@ -41,7 +42,7 @@ def get_watchlist_stocks() -> List[str]:
         return [w.ts_code for w in stocks if w.ts_code]
     except Exception:
         pass
-    
+
     # 回退1: PostgreSQL 直连（data_daemon 通过 .env 加载 DATABASE_URL）
     try:
         import os
@@ -54,11 +55,11 @@ def get_watchlist_stocks() -> List[str]:
                 return [r[0] for r in rows]
     except Exception:
         pass
-    
+
     # 回退2: SQLite 直连（开发环境）
     try:
-        import sqlite3
         import os
+        import sqlite3
         data_dir = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data'))
         db_path = os.path.join(data_dir, 'app.db')
         if os.path.isfile(db_path):
@@ -146,7 +147,7 @@ def _cache_to_ecm(df: pd.DataFrame, ts_code: str, freq: str, ecm: EnhancedCacheM
 
 
 def _resample_minute(records: list, from_freq: str, to_freq: str) -> list:
-    """分钟线频率转换（复用 MinuteDataManager._resample_minute 逻辑）"""
+    """分钟线频率转换（414号P1.3: 修正60min对齐A股交易时段边界）"""
     from collections import defaultdict
     if not records:
         return []
@@ -155,6 +156,26 @@ def _resample_minute(records: list, from_freq: str, to_freq: str) -> list:
     group_size = total_min // base_min
     if group_size <= 1:
         return records
+
+    # 414号P1.3: A股交易时段边界（分钟数 from midnight）
+    SESSIONS = [
+        (570, 690),   # 09:30-11:30 上午场
+        (780, 900),   # 13:00-15:00 下午场
+    ]
+
+    def _assign_slot(minute_of_day: int) -> tuple:
+        """按交易时段边界分配(slot_index)，非交易时段归入最近有效slot"""
+        for sess_idx, (sess_start, sess_end) in enumerate(SESSIONS):
+            if sess_start <= minute_of_day < sess_end:
+                return (sess_idx, (minute_of_day - sess_start) // total_min)
+        # 非交易时段：盘前/午休归上午slot0，盘后归下午最后一slot
+        if minute_of_day < 570:
+            return (0, 0)
+        elif minute_of_day < 780:
+            return (0, (690 - 570) // total_min - 1)  # 上午最后slot
+        else:
+            return (1, (900 - 780) // total_min - 1)  # 下午最后slot
+
     groups = defaultdict(list)
     for r in records:
         tt = r.get('trade_time', '')
@@ -162,13 +183,13 @@ def _resample_minute(records: list, from_freq: str, to_freq: str) -> list:
             ts = tt.split(' ')[1] if ' ' in tt else tt
             parts = ts.split(':')
             minute_slot = int(parts[0]) * 60 + int(parts[1])
-            slot = minute_slot // total_min
-            key = (tt[:10] if len(tt) > 10 else tt.split(' ')[0], slot)
+            sess_idx, slot = _assign_slot(minute_slot)
+            key = (tt[:10] if len(tt) > 10 else tt.split(' ')[0], sess_idx, slot)
         except Exception:
-            key = (tt, 0)
+            key = (tt, 0, 0)
         groups[key].append(r)
     result = []
-    for (d, slot), bars in sorted(groups.items()):
+    for (d, sess, slot), bars in sorted(groups.items()):
         o = bars[0].get('open', 0)
         c = bars[-1].get('close', 0)
         h = max(b.get('high', 0) for b in bars)
@@ -186,28 +207,39 @@ def _resample_minute(records: list, from_freq: str, to_freq: str) -> list:
 def backfill_5min(ts_codes: List[str], days_back: int = 90,
                   ecm: Optional[EnhancedCacheManager] = None) -> int:
     """补采5分钟K线历史数据
-    
+
     Args:
         ts_codes: 股票代码列表
         days_back: 回溯天数
         ecm: ECM实例（可选）
-    
+
     Returns:
         成功写入的股票数
     """
     if ecm is None:
         ecm = get_ecm_instance()
-    
+
     ok = 0
     for i, ts_code in enumerate(ts_codes):
         try:
-            # 跳过已有数据的股票
+            # 414号R17: 检查已有数据是否覆盖最近交易日，而非简单跳过有数据的股票
             existing = ecm.get_cached_minute_kline(ts_code, freq='5min')
             if existing is not None and not existing.empty:
-                logger.debug(f"[5min] 跳过已有数据: {ts_code} ({len(existing)} 行)")
-                ok += 1
-                continue
-            
+                # 检查最新数据日期是否为最近3个交易日内
+                if 'trade_date' in existing.columns:
+                    latest = existing['trade_date'].max()
+                    if isinstance(latest, str):
+                        latest_dt = datetime.strptime(latest[:10], '%Y-%m-%d')
+                    else:
+                        latest_dt = pd.to_datetime(latest).to_pydatetime()
+                    days_since = (datetime.now() - latest_dt).days
+                    if days_since <= 5:  # 已有最近数据，跳过
+                        logger.debug(f"[5min] 跳过已有数据: {ts_code} ({len(existing)} 行, 最新 {latest})")
+                        ok += 1
+                        continue
+                    else:
+                        logger.info(f"[5min] 数据过旧({days_since}天), 重新采集: {ts_code}")
+
             df = _get_mootdx_bars_safe(ts_code, freq=2)
             if not df.empty:
                 _cache_to_ecm(df, ts_code, '5min', ecm)
@@ -215,15 +247,15 @@ def backfill_5min(ts_codes: List[str], days_back: int = 90,
                 ok += 1
             else:
                 logger.debug(f"[5min] × {ts_code}: mootdx 无数据")
-            
+
             if (i + 1) % 10 == 0:
                 logger.info(f"[5min] 进度: {i+1}/{len(ts_codes)}, 成功 {ok}")
-            
+
             time.sleep(0.3)  # 避免限流
         except Exception as e:
             logger.warning(f"[5min] 失败 {ts_code}: {e}")
             continue
-    
+
     logger.info(f"[5min] 采集完成: 成功 {ok}/{len(ts_codes)} 只")
     return ok
 
@@ -231,24 +263,24 @@ def backfill_5min(ts_codes: List[str], days_back: int = 90,
 def backfill_1min(ts_codes: List[str], days_back: int = 30,
                   ecm: Optional[EnhancedCacheManager] = None) -> int:
     """补采1分钟K线历史数据（利用 mootdx minutes(YYYYMMDD) 支持任意历史日）
-    
+
     Args:
         ts_codes: 股票代码列表
         days_back: 回溯天数
         ecm: ECM实例（可选）
-    
+
     Returns:
         成功写入的股票数
     """
     if ecm is None:
         ecm = get_ecm_instance()
-    
+
     today = date.today()
     date_list = [(today - timedelta(days=d)).strftime('%Y%m%d')
                  for d in range(days_back + 1)]
     # 过滤周末（粗略判断）
     date_list = [d for d in date_list if datetime.strptime(d, '%Y%m%d').weekday() < 5]
-    
+
     ok = 0
     for ts_code in ts_codes:
         try:
@@ -257,11 +289,11 @@ def backfill_1min(ts_codes: List[str], days_back: int = 30,
                 existing = ecm.get_cached_minute_kline(ts_code, trade_date=target_date, freq='1min')
                 if existing is not None and not existing.empty:
                     continue
-                
+
                 df = _get_mootdx_minutes_safe(ts_code, target_date)
                 if not df.empty:
                     _cache_to_ecm(df, ts_code, '1min', ecm)
-            
+
             # 聚合1min→5min→15m/30m/60m
             df_1min = ecm.get_cached_minute_kline(ts_code, freq='1min')
             if df_1min is not None and not df_1min.empty:
@@ -273,16 +305,16 @@ def backfill_1min(ts_codes: List[str], days_back: int = 30,
                         agg = _resample_minute(agg5, '5min', freq)
                         if agg:
                             _cache_to_ecm(pd.DataFrame(agg), ts_code, freq, ecm)
-            
+
             ok += 1
             if ok % 10 == 0:
                 logger.info(f"[1min] 进度: {ok}/{len(ts_codes)} 只")
-            
+
             time.sleep(0.3)
         except Exception as e:
             logger.warning(f"[1min] 失败 {ts_code}: {e}")
             continue
-    
+
     logger.info(f"[1min] 采集完成: {ok}/{len(ts_codes)} 只")
     return ok
 
@@ -291,12 +323,12 @@ def aggregate_minute(ts_codes: List[str],
                      target_freqs: Optional[List[str]] = None,
                      ecm: Optional[EnhancedCacheManager] = None) -> int:
     """从5min数据聚合为15m/30m/60m
-    
+
     Args:
         ts_codes: 股票代码列表
         target_freqs: 目标频率列表，默认 ['15min', '30min', '60min']
         ecm: ECM实例（可选）
-    
+
     Returns:
         处理的股票数
     """
@@ -304,71 +336,70 @@ def aggregate_minute(ts_codes: List[str],
         target_freqs = ['15min', '30min', '60min']
     if ecm is None:
         ecm = get_ecm_instance()
-    
+
     ok = 0
     for ts_code in ts_codes:
         try:
             df_5min = ecm.get_cached_minute_kline(ts_code, freq='5min')
             if df_5min is None or df_5min.empty:
                 continue
-            
+
             records = df_5min.to_dict('records')
             for freq in target_freqs:
                 # 跳过已有聚合数据
                 existing = ecm.get_cached_minute_kline(ts_code, freq=freq)
                 if existing is not None and not existing.empty:
                     continue
-                
+
                 agg = _resample_minute(records, '5min', freq)
                 if agg:
                     df_agg = pd.DataFrame(agg)
                     _cache_to_ecm(df_agg, ts_code, freq, ecm)
-            
+
             ok += 1
             if ok % 50 == 0:
                 logger.info(f"[聚合] 进度: {ok}/{len(ts_codes)} 只")
         except Exception as e:
             logger.warning(f"[聚合] 失败 {ts_code}: {e}")
             continue
-    
+
     logger.info(f"[聚合] 完成: {ok}/{len(ts_codes)} 只, 目标频率: {target_freqs}")
     return ok
 
 
 def run_backfill_all(ts_codes: Optional[List[str]] = None) -> dict:
     """运行完整分钟数据补采流程
-    
+
     Args:
         ts_codes: 股票代码列表（None则从自选股读取）
-    
+
     Returns:
         执行结果统计
     """
     if ts_codes is None:
         ts_codes = get_watchlist_stocks()
-    
+
     if not ts_codes:
         logger.warning("自选股列表为空，跳过分钟数据补采")
         return {'5min': 0, '1min': 0, 'aggregate': 0}
-    
+
     ecm = get_ecm_instance()
     logger.info(f"分钟数据补采开始: {len(ts_codes)} 只自选股")
-    
+
     n_5min = backfill_5min(ts_codes, ecm=ecm)
     n_1min = backfill_1min(ts_codes, ecm=ecm)
     n_agg = aggregate_minute(ts_codes, ecm=ecm)
-    
+
     logger.info(f"分钟数据补采完成: 5min={n_5min}, 1min={n_1min}, 聚合={n_agg}")
     return {'5min': n_5min, '1min': n_1min, 'aggregate': n_agg}
 
 
 def ensure_minute_data(ts_codes: List[str], days_back: int = 20) -> int:
     """快速确保股票具有分钟数据（供选股系统L3调用）"""
+
     import pandas as pd
-    from collections import defaultdict
-    from datetime import date, timedelta
     ecm_local = get_ecm_instance()
-    
+
     # 只处理缺失5min数据的股票
     missing = []
     for code in ts_codes:
@@ -378,16 +409,16 @@ def ensure_minute_data(ts_codes: List[str], days_back: int = 20) -> int:
         ).fetchone()[0]
         if c == 0:
             missing.append(code)
-    
+
     if not missing:
         return 0
-    
+
     # 真实交易日列表
     trade_dates = [r[0] for r in ecm_local.conn.execute(
         'SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT ?',
         [days_back]
     ).fetchall()]
-    
+
     ok = 0
     for ts_code in missing:
         try:
@@ -402,14 +433,14 @@ def ensure_minute_data(ts_codes: List[str], days_back: int = 20) -> int:
                 if raw is not None and not raw.empty:
                     _cache_to_ecm(raw, ts_code, '1min', ecm_local)
                     all_1min.extend(raw.to_dict('records'))
-            
+
             if not all_1min:
                 exist = ecm_local.get_cached_minute_kline(ts_code, freq='1min')
                 if exist is not None and not exist.empty:
                     all_1min = exist.to_dict('records')
             if not all_1min:
                 continue
-            
+
             agg5 = _resample_minute(all_1min, '1min', '5min')
             if agg5:
                 _cache_to_ecm(pd.DataFrame(agg5), ts_code, '5min', ecm_local)
@@ -422,7 +453,7 @@ def ensure_minute_data(ts_codes: List[str], days_back: int = 20) -> int:
         except Exception as e:
             logger.debug(f"ensure_minute_data 失败 {ts_code}: {e}")
             continue
-    
+
     if ok:
         logger.info(f"分钟数据快速补足: {ok}/{len(missing)} 只 (回溯{days_back}天)")
     return ok

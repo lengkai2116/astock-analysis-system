@@ -3,8 +3,8 @@
 364h Phase 8：收敛vol_ratio从6处计算为1处，统一使用5日均量基准。
 """
 from __future__ import annotations
+
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

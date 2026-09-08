@@ -8,19 +8,18 @@
   - 每种形态的反向测试（不满足条件时不应触发）
   - 多形态并行检测
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
 
-import pytest
-import pandas as pd
 import numpy as np
-
-from app.engine.patterns import PatternCategory, PatternStage, PatternResult
+import pandas as pd
+import pytest
+from app.engine.patterns import PatternCategory, PatternResult, PatternStage
 from app.engine.patterns.detectors.bearish_patterns import BearishPatternDetector
-
 
 # ═══════════════════════════════════════════════════
 # Fixtures

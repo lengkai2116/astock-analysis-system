@@ -8,11 +8,10 @@
 前端联动：配合 150 号方案 DataSourceStatus 状态指示组件使用。
 """
 
-import time
 import logging
+import time
 from enum import Enum
-from typing import Dict, List, Optional, Any, Callable
-from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +23,7 @@ def _get_trading_hours():
     global _trading_hours
     if _trading_hours is None:
         try:
-            from app.utils.trading_hours import is_trading_time, get_current_session
+            from app.utils.trading_hours import get_current_session, is_trading_time
             _trading_hours = (is_trading_time, get_current_session)
         except ImportError:
             _trading_hours = (None, None)

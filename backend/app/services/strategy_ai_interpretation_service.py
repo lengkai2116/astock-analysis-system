@@ -8,9 +8,8 @@ StrategyAIInterpretationService — 策略输出 AI 解读层
 """
 
 import logging
-import json
-from typing import Dict, List, Optional, Any
 from datetime import datetime
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 

@@ -1,14 +1,14 @@
 """测试重构后的 KLinePatternAdapter（委托 PatternEngine）"""
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
 
-import pytest
-import pandas as pd
 import numpy as np
-
+import pandas as pd
+import pytest
 from app.engine.patterns import PatternResult
 from app.engine.patterns.adapters.kline_adapter import KLinePatternAdapter
 from app.engine.patterns.engine import PatternEngine

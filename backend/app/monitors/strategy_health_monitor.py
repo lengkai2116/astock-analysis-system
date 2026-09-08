@@ -8,10 +8,9 @@
   4. 输出周度健度报告摘要
 """
 import logging
-from typing import Dict, List, Optional
 from datetime import date, timedelta
+from typing import Dict
 
-from app import db
 from app.models.verification import SignalRecord
 
 logger = logging.getLogger(__name__)

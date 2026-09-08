@@ -83,7 +83,7 @@ class ConflictArbiter:
                                 s['confidence'] = min(1.0, s.get('confidence', 0.5) + 0.05)
                     elif alignment_ratio < 0.3 and k_conf > 0.7:
                         # Kronos与多数策略冲突 → 标记高风险
-                        log.append(f"Kronos前瞻冲突: 多数策略反向, 置信度降低")
+                        log.append("Kronos前瞻冲突: 多数策略反向, 置信度降低")
                         for s in total_other:
                             s['confidence'] = max(0.0, s.get('confidence', 0.5) - 0.10)
                 # Kronos高波动预警

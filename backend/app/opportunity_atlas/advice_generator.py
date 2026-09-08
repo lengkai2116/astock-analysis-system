@@ -180,7 +180,6 @@ class AdviceGenerator(DataAwareMixin):
         Returns:
             成功更新的股票数量
         """
-        from app import db
 
         stocks = self._get_dm().get_library_active_items()
         if ts_codes:

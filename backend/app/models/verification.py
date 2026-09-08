@@ -4,15 +4,17 @@
 SignalRecord: 轨A·后台自动记录全部策略信号，跟踪 T+5/T+10/T+20 验证状态
 VirtualPosition: 轨B·用户选择的单股虚拟实盘验证
 """
-from app import db
 from datetime import datetime
+
 from sqlalchemy import JSON
+
+from app import db
 
 
 class SignalRecord(db.Model):
     """
     策略信号记录（轨A）
-    
+
     每当方案一或方案二生成策略信号时，自动记录到此表。
     定时任务按 T+5/T+10/T+20 回调检查，更新验证结果。
     """
@@ -97,7 +99,7 @@ class SignalRecord(db.Model):
 class VirtualPosition(db.Model):
     """
     虚拟实盘持仓（轨B）
-    
+
     用户在单股分析页勾选"虚拟实盘验证"后创建。
     记录策略建议快照，定时回调检查实际股价走势。
     """

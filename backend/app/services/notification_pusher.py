@@ -15,10 +15,9 @@
   - 降级策略: 微信推送不可用时 -> 仅桌面推送
 """
 import logging
-import json
-from datetime import datetime, timedelta
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +116,7 @@ class NotificationPusher:
                 "",
                 message,
             ]
-            content = "\n".join(p for p in content_parts if p)
+            "\n".join(p for p in content_parts if p)
 
             # 实际 HTTP 调用（在 WxPusher 启用时执行）
             # import requests
@@ -329,7 +328,6 @@ class NotificationPusher:
         """
         pending = []
         try:
-            from app import db
             from app.models.notification import Notification
 
             now = datetime.now()

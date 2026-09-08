@@ -10,8 +10,7 @@ FinanceReportService — 财务排雷服务
       → snapshot.verification.finance_check
 """
 import logging
-from datetime import datetime, date
-from typing import Dict, Optional
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 

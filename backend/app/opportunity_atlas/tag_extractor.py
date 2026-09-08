@@ -49,11 +49,22 @@ def extract_chanlun_deep_tags(ts_code: str) -> dict:
             return {}
         sr = chanlun.get('status_recognition', {})
         out = {}
+        # 413号修复：status_recognition为空时从pre_feat_cache.derived兜底
+        if not sr:
+            try:
+                pre_feat = dm.get_pre_feat(ts_code)
+                if pre_feat and isinstance(pre_feat, dict):
+                    sr = pre_feat.get('derived', {}) or {}
+            except Exception:
+                pass
         # 缠论结构深度字段（structure 组）
         # 2026-08-10 核查修复：None 值跳过（原 str(None) 产生字面 "None" 假值）
         def _mk(v, is_json=False):
             if v is None:
                 return None
+            if is_json and isinstance(v, str):
+                # 已经是JSON字符串，不再二次编码
+                return v
             return (json.dumps(v, ensure_ascii=False) if is_json else str(v))
         if 'support_resistance' in sr:
             _v = _mk(sr['support_resistance'], is_json=True)

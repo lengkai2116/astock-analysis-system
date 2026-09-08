@@ -28,7 +28,7 @@ def render_trend(trend: dict) -> str:
 
 def render_chanlun_trend(status: dict, latest_close: float = None) -> str:
     """渲染缠论走势中文描述（精简版——仅走势结构三维度）
-    
+
     从 status_recognition 读取 trend + multi_level + buy_sell_point
     生成与 fallback_description 同构的描述文本，但保留了原有函数签名。
     """

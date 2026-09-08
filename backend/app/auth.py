@@ -9,13 +9,13 @@
 - 对 /api/auth/login 和 /api/v1/health 等端点放行
 """
 
+import logging
 import os
 import secrets
-import hashlib
-import logging
 from functools import wraps
 from pathlib import Path
-from flask import request, jsonify, current_app
+
+from flask import jsonify, request
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,7 @@ def _constant_time_compare(a: str, b: str) -> bool:
 
 # ── 登录路由 ──
 from flask import Blueprint
+
 auth_bp = Blueprint('auth', __name__)
 
 

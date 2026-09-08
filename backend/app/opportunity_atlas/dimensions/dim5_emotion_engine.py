@@ -16,14 +16,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 import logging
-from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
 from app.data.mixins import DataAwareMixin
+from app.engine.framework.bociasi_quadrant import BociasiQuadrantAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -239,7 +238,7 @@ def _bociasi_quadrant(quick_result: dict, slow_result: dict) -> dict:
     s_signal = slow_result.get('signal', 'NEUTRAL')
 
     q_conf = quick_result.get('confidence', 0.5)
-    s_conf = slow_result.get('confidence', 0.5)
+    slow_result.get('confidence', 0.5)
 
     q_high = q_signal == 'BUY' or (q_signal == 'WATCH' and q_conf > 0.5)
     s_high = s_signal == 'BULLISH'
@@ -285,15 +284,62 @@ def calc_emotion_temperature(sentiment_phase='neutral', limit_up_count=0,
 # ═══════════════════════════════════════════════════════════
 
 def _time_rhythm(df: pd.DataFrame) -> dict:
-    """BOLL带宽 + 中枢横盘时长 → 变盘窗口判定"""
+    """BOLL带宽 + 中枢横盘时长 → 变盘窗口判定
+
+    411号Phase 5：MA20/BOLL优先读预计算表，回退raw计算。
+    """
     result = {'time_rhythm': 'unknown'}
     try:
         if df is None or len(df) < 30:
             return result
         close = df['close'].values
-        close_series = pd.Series(close)
-        ma20 = close_series.rolling(20).mean().values
-        std20 = close_series.rolling(20).std().values
+
+        # 411号Phase 5：尝试从预计算表读取MA20/BOLL
+        ma20 = None
+        std20 = None
+        try:
+            ts_code = ''
+            if hasattr(df, 'columns') and 'ts_code' in df.columns:
+                ts_code = str(df['ts_code'].iloc[0])
+            if ts_code:
+                from app.data import DataManager
+                dm = DataManager()
+                indicators_df = dm.get_cached_indicators(ts_code)
+                if indicators_df is not None and not indicators_df.empty:
+                    if 'ma20' in indicators_df.columns:
+                        ma20_pre = indicators_df['ma20'].dropna()
+                        if not ma20_pre.empty:
+                            # 构建MA20数组（对齐到close长度）
+                            ma20_vals = ma20_pre.values
+                            if len(ma20_vals) >= len(close):
+                                ma20 = ma20_vals[-len(close):]
+                            else:
+                                # 填充前部为NaN
+                                ma20 = np.full(len(close), np.nan)
+                                ma20[-len(ma20_vals):] = ma20_vals
+                    if 'boll_upper' in indicators_df.columns and 'boll_mid' in indicators_df.columns:
+                        boll_upper_pre = indicators_df['boll_upper'].dropna()
+                        boll_mid_pre = indicators_df['boll_mid'].dropna()
+                        if not boll_upper_pre.empty and not boll_mid_pre.empty:
+                            # std ≈ (upper - mid) / 2
+                            upper_vals = boll_upper_pre.values
+                            mid_vals = boll_mid_pre.values
+                            min_len = min(len(upper_vals), len(mid_vals))
+                            std_approx = (upper_vals[-min_len:] - mid_vals[-min_len:]) / 2
+                            if len(std_approx) >= len(close):
+                                std20 = std_approx[-len(close):]
+                            else:
+                                std20 = np.full(len(close), np.nan)
+                                std20[-len(std_approx):] = std_approx
+        except Exception:
+            pass
+
+        # 回退到raw计算
+        if ma20 is None or std20 is None:
+            close_series = pd.Series(close)
+            ma20 = close_series.rolling(20).mean().values
+            std20 = close_series.rolling(20).std().values
+
         bandwidth = np.where(ma20 > 1e-9, std20 / ma20 * 100, np.zeros_like(ma20))
         high_30 = np.max(df['high'].values[-30:])
         low_30 = np.min(df['low'].values[-30:])
@@ -417,9 +463,9 @@ def _emotion_plain(market: dict, sector: dict, stock: dict,
 
     stock_emo = stock.get('emotion', '')
     if stock_emo == '健康':
-        parts.append(f'个股情绪健康')
+        parts.append('个股情绪健康')
     elif stock_emo == '关注':
-        parts.append(f'个股需关注')
+        parts.append('个股需关注')
 
     return '，'.join(parts)
 
@@ -431,353 +477,7 @@ def _emotion_plain(market: dict, sector: dict, stock: dict,
 
 # === bociasi_quadrant.py 完整版（含DB查询） ===
 
-class BociasiQuadrantAnalyzer(DataAwareMixin):
-    """BOCIASI四象限分析器 — 基于全市场数据的情绪状态判定"""
-
-    def __init__(self, ecm=None):
-        self._dm = None
-        self._ecm = ecm
-        self._cache = {}  # 计算缓存
-
-    def analyze(self) -> Dict:
-        """
-        综合快线+慢线，输出四象限状态
-
-        Returns:
-            {
-                "quadrant": "LL" | "LH" | "HL" | "HH",
-                "fast_label": "低位" | "高位",
-                "slow_label": "低位" | "高位",
-                "fast_score": float,    # 0-1
-                "slow_score": float,    # 0-1
-                "description": str,
-                "weight_multiplier": float,  # 因子权重乘数
-                "details": {...}
-            }
-        """
-        fast_score = self._compute_fast_line()
-        slow_score = self._compute_slow_line()
-        quadrant = self._classify(fast_score, slow_score)
-        desc, mult = self._quadrant_info(quadrant)
-
-        return {
-            "quadrant": quadrant,
-            "fast_label": "高位" if fast_score >= FAST_HIGH_THRESHOLD else "低位",
-            "slow_label": "高位" if slow_score >= SLOW_HIGH_THRESHOLD else "低位",
-            "fast_score": round(fast_score, 4),
-            "slow_score": round(slow_score, 4),
-            "description": desc,
-            "weight_multiplier": mult,
-            "details": {k: v for k, v in self._cache.items()},
-        }
-
-    def _compute_fast_line(self) -> float:
-        """
-        计算BOCIASI快线（市场短线情绪）
-
-        4个等权指标:
-          1. MA20强势股占比 — 收盘>MA20的股票比例
-          2. 换手率分位 — 全市场换手率的历史分位
-          3. 涨跌停比 — 涨停数/跌停数（归一化）
-          4. RSI中位数 — 全市场RSI_14的中位数分位
-        """
-        scores = []
-
-        # 1. MA20强势股占比
-        try:
-            ratio = self._compute_ma20_ratio()
-            scores.append(self._normalize(ratio, 0.2, 0.8))
-            self._cache['ma20_ratio'] = round(ratio, 4)
-        except Exception as e:
-            logger.debug(f"MA20占比失败: {e}")
-
-        # 2. 换手率分位
-        try:
-            turnover = self._compute_turnover_percentile()
-            scores.append(turnover)
-            self._cache['turnover_percentile'] = round(turnover, 4)
-        except Exception as e:
-            logger.debug(f"换手率分位失败: {e}")
-
-        # 3. 涨跌停比
-        try:
-            ld_ratio = self._compute_limit_ratio()
-            scores.append(self._normalize(ld_ratio, 0.3, 3.0))
-            self._cache['limit_ratio'] = round(ld_ratio, 4)
-        except Exception as e:
-            logger.debug(f"涨跌停比失败: {e}")
-
-        # 4. RSI中位数分位
-        try:
-            rsi_pctl = self._compute_rsi_percentile()
-            scores.append(rsi_pctl)
-            self._cache['rsi_percentile'] = round(rsi_pctl, 4)
-        except Exception as e:
-            logger.debug(f"RSI分位失败: {e}")
-
-        if not scores:
-            return 0.5  # 默认中性
-        return np.mean(scores)
-
-    def _compute_slow_line(self) -> float:
-        """
-        计算BOCIASI慢线（市场长线性价比）
-
-        4个等权指标:
-          1. ERP分位 — 全市场股权风险溢价的分位
-          2. 融资余额趋势 — 融资余额的短期趋势
-          3. 股债收益差 — 股息率-国债利率
-          4. 市场估值分位 — PE_TTM中位数的历史分位
-        """
-        scores = []
-
-        # 1. ERP分位
-        try:
-            erp_percentile = self._compute_erp_percentile()
-            scores.append(1 - erp_percentile)  # ERP越高→性价比越高→得分越低(慢线高位)
-            self._cache['erp_percentile'] = round(erp_percentile, 4)
-        except Exception as e:
-            logger.debug(f"ERP分位失败: {e}")
-
-        # 2. 融资余额趋势
-        try:
-            margin_trend = self._compute_margin_trend()
-            scores.append(margin_trend)
-            self._cache['margin_trend'] = round(margin_trend, 4)
-        except Exception as e:
-            logger.debug(f"融资趋势失败: {e}")
-
-        # 3. 全市场估值分位
-        try:
-            pe_percentile = self._compute_pe_percentile()
-            scores.append(pe_percentile)
-            self._cache['pe_percentile'] = round(pe_percentile, 4)
-        except Exception as e:
-            logger.debug(f"PE分位失败: {e}")
-
-        if not scores:
-            return 0.5
-        return np.mean(scores)
-
-    def _classify(self, fast: float, slow: float) -> str:
-        """将快慢线值映射到四象限"""
-        f_high = fast >= FAST_HIGH_THRESHOLD
-        f_low = fast <= FAST_LOW_THRESHOLD
-        s_high = slow >= SLOW_HIGH_THRESHOLD
-        s_low = slow <= SLOW_LOW_THRESHOLD
-
-        if s_low and f_low:
-            return "LL"  # 情绪底部
-        elif s_low and f_high:
-            return "LH"  # 底部反弹
-        elif s_high and f_low:
-            return "HL"  # 高位回调
-        elif s_high and f_high:
-            return "HH"  # 行情尾声
-        else:
-            return "MM"  # 中间区域
-
-    def _quadrant_info(self, q: str) -> Tuple[str, float]:
-        """返回象限描述和因子权重乘数"""
-        info = {
-            "LL": ("情绪底部，高性价比区间，买入价值高", 1.15),
-            "LH": ("底部反弹/反转，短线活跃但长线尚未确认", 1.05),
-            "HL": ("高位震荡/回调，需要警惕风险", 0.90),
-            "HH": ("上涨行情尾声，高度警惕风险", 0.75),
-            "MM": ("市场情绪中性，常规配置", 1.00),
-        }
-        return info.get(q, ("未知象限", 1.00))
-
-    # ── 快线子指标 ──
-
-    def _get_latest_trade_date(self, table: str) -> str:
-        """获取分库中指定表的最新交易日期"""
-        try:
-            row = self._query_from_shard(table, f"SELECT MAX(trade_date) FROM {table}")
-            if row and row[0]:
-                return str(row[0])
-        except Exception:
-            pass
-        return (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-
-    def _compute_ma20_ratio(self) -> float:
-        """计算MA20强势股占比（356号：从market_cache.db分库读取）"""
-        today = self._get_latest_trade_date('daily_cache')
-        row = self._query_from_shard('daily_cache', """
-            SELECT COUNT(*) as total,
-                   SUM(CASE WHEN close > SMA_20 THEN 1 ELSE 0 END) as above
-            FROM (
-                SELECT ts_code, trade_date, close,
-                       AVG(close) OVER (PARTITION BY ts_code ORDER BY trade_date
-                            ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) as SMA_20
-                FROM daily_cache
-                WHERE trade_date = ?
-            )
-        """, [today])
-        if row and row[0] > 0:
-            return row[1] / row[0]
-        return 0.5
-
-    def _compute_turnover_percentile(self) -> float:
-        """全市场换手率分位（356号：从market_cache.db分库读取）"""
-        today = self._get_latest_trade_date('daily_basic_cache')
-        try:
-            row = self._query_from_shard('daily_basic_cache', """
-                SELECT AVG(turnover_rate) FROM daily_basic_cache WHERE trade_date=?
-            """, [today])
-            if row and row[0] is not None:
-                avg_turnover = float(row[0])
-                hist = self._query_from_shard('daily_basic_cache', """
-                    SELECT AVG(turnover_rate) FROM daily_basic_cache
-                    WHERE trade_date >= date(?, '-60 days')
-                """, [today])
-                hist_avg = float(hist[0]) if hist and hist[0] else avg_turnover
-                if hist_avg > 0:
-                    return max(0, min(1, avg_turnover / hist_avg))
-        except Exception as e:
-            logger.warning(f"换手率分位计算失败，回退0.5: {e}")
-        return 0.5
-
-    def _compute_limit_ratio(self) -> float:
-        """计算涨跌停比（356号：从market_cache.db分库读取）"""
-        today = self._get_latest_trade_date('daily_cache')
-        row = self._query_from_shard('daily_cache', """
-            SELECT
-                SUM(CASE WHEN d.close >= l.high_limit THEN 1 ELSE 0 END) as up,
-                SUM(CASE WHEN d.close <= l.low_limit THEN 1 ELSE 0 END) as down
-            FROM daily_cache d
-            JOIN stk_limit_cache l ON d.ts_code=l.ts_code AND d.trade_date=l.trade_date
-            WHERE d.trade_date = ?
-        """, [today])
-        up = (row[0] or 1) if row else 1
-        down = (row[1] or 1) if row else 1
-        return max(0.1, up / max(down, 1))
-
-    def _compute_rsi_percentile(self) -> float:
-        """全市场RSI_14中位数分位（356号：从compute_cache.db分库读取，修正列名rsi14）"""
-        today = self._get_latest_trade_date('indicator_other')
-        try:
-            row = self._query_from_shard('indicator_other', """
-                SELECT AVG(rsi14) FROM indicator_other WHERE trade_date=? AND rsi14 IS NOT NULL
-            """, [today])
-            if row and row[0] is not None:
-                avg_rsi = float(row[0])
-                hist = self._query_from_shard('indicator_other', """
-                    SELECT AVG(rsi14) FROM indicator_other
-                    WHERE trade_date >= date(?, '-60 days') AND rsi14 IS NOT NULL
-                """, [today])
-                hist_avg = float(hist[0]) if hist and hist[0] else 50.0
-                return max(0, min(1, (avg_rsi - 30) / 40))
-        except Exception as e:
-            logger.warning(f"RSI分位计算失败，回退0.5: {e}")
-        return 0.5
-
-    # ── 慢线子指标 ──
-
-    def _compute_erp_percentile(self) -> float:
-        """计算ERP分位（356号：从market_cache.db分库读取）"""
-        today = self._get_latest_trade_date('daily_basic_cache')
-        try:
-            row = self._query_from_shard('daily_basic_cache', """
-                SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0
-            """, [today])
-            if row and row[0] is not None:
-                avg_pe = float(row[0])
-                erp_today = (1 / avg_pe) if avg_pe > 0 else 0
-                hist = self._query_from_shard('daily_basic_cache', """
-                    SELECT AVG(pe_ttm) FROM daily_basic_cache
-                    WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0
-                """, [today])
-                hist_pe = float(hist[0]) if hist and hist[0] else avg_pe
-                erp_hist = (1 / hist_pe) if hist_pe > 0 else 0
-                if erp_hist > 0:
-                    return max(0, min(1, erp_today / erp_hist))
-        except Exception as e:
-            logger.warning(f"ERP分位计算失败，回退0.5: {e}")
-        return 0.5
-
-    def _compute_margin_trend(self) -> float:
-        """计算融资余额趋势（5日变化率归一化）"""
-        conn = self._get_dm().cache.conn
-        try:
-            recent = conn.execute("""
-                SELECT trade_date, SUM(rzye) as total
-                FROM margin_cache
-                WHERE trade_date >= ?
-                GROUP BY trade_date ORDER BY trade_date DESC LIMIT 5
-            """, [(datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')]).fetchall()
-            if len(recent) >= 2:
-                oldest = recent[-1][1] or 1
-                newest = recent[0][1] or 1
-                change_pct = (newest - oldest) / oldest
-                # 融资余额增长→情绪过热→慢线高位
-                # change_pct: -0.05→0(低位), 0→0.5(中性), +0.05→1(高位)
-                return max(0, min(1, 0.5 + change_pct * 10))
-        except Exception as e:
-            logger.warning(f"融资趋势计算失败，回退0.5: {e}")
-        return 0.5
-
-    def _compute_pe_percentile(self) -> float:
-        """全市场PE_TTM中位数分位（356号：从market_cache.db分库读取）"""
-        today = self._get_latest_trade_date('daily_basic_cache')
-        try:
-            row = self._query_from_shard('daily_basic_cache', """
-                SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0
-            """, [today])
-            if row and row[0] is not None:
-                avg_pe = float(row[0])
-                hist = self._query_from_shard('daily_basic_cache', """
-                    SELECT AVG(pe_ttm) FROM daily_basic_cache
-                    WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0
-                """, [today])
-                hist_pe = float(hist[0]) if hist and hist[0] else avg_pe
-                if hist_pe > 0:
-                    return max(0, min(1, avg_pe / hist_pe))
-        except Exception as e:
-            logger.warning(f"PE分位计算失败，回退0.5: {e}")
-        return 0.5
-
-    # ── 工具方法 ──
-
-    def _normalize(self, value: float, low: float, high: float) -> float:
-        """将值映射到0-1区间"""
-        if high <= low:
-            return 0.5
-        return max(0, min(1, (value - low) / (high - low)))
-
-    def _query_from_shard(self, table: str, sql: str, params=None):
-        """356号方案：从分库路由查询，返回 fetchone() 结果"""
-        if self._ecm is None:
-            self._ecm = self._get_dm().cache
-        try:
-            from app.data.sharding_manager import sharding_manager
-            db_name = sharding_manager.get_db_for_table(table)
-            if db_name:
-                conn = sharding_manager.get_connection(db_name)
-                if params:
-                    return conn.execute(sql, params).fetchone()
-                return conn.execute(sql).fetchone()
-        except Exception as e:
-            logger.debug(f"分库查询失败({table}): {e}")
-        # 回退到ECM连接
-        conn = self._get_dm().cache.conn
-        if params:
-            return conn.execute(sql, params).fetchone()
-        return conn.execute(sql).fetchone()
-
-    def _query_df_from_shard(self, table: str, sql: str, params=None):
-        """356号方案：从分库路由查询，返回 DataFrame"""
-        if self._ecm is None:
-            self._ecm = self._get_dm().cache
-        try:
-            from app.data.sharding_manager import sharding_manager
-            db_name = sharding_manager.get_db_for_table(table)
-            if db_name:
-                conn = sharding_manager.get_connection(db_name)
-                return pd.read_sql(sql, conn, params=params)
-        except Exception as e:
-            logger.debug(f"分库查询失败({table}): {e}")
-        return self._get_dm().cache._query_df(sql, params)
+pass  # 412号方案B2：已改为import from app.engine.framework.bociasi_quadrant
 
 
 # === sector_rotation_model.py 完整版 ===
@@ -809,15 +509,33 @@ class SectorRotationModel:
             self._dm = DataManager()
         return self._dm
 
-    def compute_all_heat(self, all_data: dict[str, pd.DataFrame]) -> dict:
+    def _get_ma(self, indicator_ma: pd.DataFrame, period: int):
+        """从indicator_ma读取MA值，失败返回None（412号方案B3 v3.0）
+
+        不再直接调用DataManager——数据由调用方通过参数传入。
+        """
+        if indicator_ma is not None and not indicator_ma.empty:
+            col = f'ma{period}'
+            if col in indicator_ma.columns:
+                val = indicator_ma[col].iloc[-1]
+                if val is not None:
+                    return float(val)
+        return None
+
+    def compute_all_heat(self, all_data: dict[str, pd.DataFrame],
+                         indicator_ma_dict: dict[str, pd.DataFrame] = None) -> dict:
         """全量预计算，返回 {行业: 排序结果}
+
+        412号方案B3 v3.0：MA值从indicator_ma_dict读取，不再直接调用DataManager。
 
         Args:
             all_data: 全市场日线数据 {ts_code: df}
+            indicator_ma_dict: 预计算MA数据 {ts_code: indicator_ma_df}，由调用方提供
 
         Returns:
             {industry_name: {'heat_level': ..., 'strength': ..., 'rank': ..., 'stock_count': ...}}
         """
+        indicator_ma_dict = indicator_ma_dict or {}
         ts_codes = list(all_data.keys())
         industry_map = self.dm.get_stock_industry_batch(ts_codes)
 
@@ -842,8 +560,13 @@ class SectorRotationModel:
                 close = df['close']
                 if len(close) < 20:
                     continue
-                ma5 = close.rolling(window=5).mean().iloc[-1]
-                ma20 = close.rolling(window=20).mean().iloc[-1]
+                # 从indicator_ma_dict读取MA，保留raw fallback
+                ma5 = self._get_ma(indicator_ma_dict.get(code), 5)
+                if ma5 is None:
+                    ma5 = close.rolling(window=5).mean().iloc[-1]
+                ma20 = self._get_ma(indicator_ma_dict.get(code), 20)
+                if ma20 is None:
+                    ma20 = close.rolling(window=20).mean().iloc[-1]
                 if pd.isna(ma5) or pd.isna(ma20):
                     continue
                 if ma5 > ma20:
@@ -922,8 +645,11 @@ class Dim5EmotionEngine(DataAwareMixin):
         self._dm = None
 
     def evaluate(self, dims: dict, tags: dict, signals: dict = None,
-                 lifecycle: dict = None) -> dict:
-        """统一评估入口"""
+                 lifecycle: dict = None, data_context: dict = None) -> dict:
+        """统一评估入口
+
+        411号Phase 6：优先使用data_context预加载数据，回退独立查询。
+        """
 
         # 1. BOCIASI快慢线 + 四象限（先于情绪评估，结果回写market）
         quick_result = {"signal": "NEUTRAL", "confidence": 0.3, "pass_count": 0}
@@ -937,16 +663,22 @@ class Dim5EmotionEngine(DataAwareMixin):
             # 快线：从日线数据计算4指标
             if ts_code:
                 try:
-                    df = ecm.get_cached_daily(ts_code)
+                    # 411号Phase 6：优先使用data_context
+                    if data_context and 'daily_df' in data_context:
+                        df = data_context['daily_df']
+                    else:
+                        df = ecm.get_cached_daily(ts_code)
                     if df is not None and not df.empty and len(df) >= 6:
                         quick_result = _bociasi_quickline(df)
                 except Exception:
                     pass
 
-            # 慢线：从日线数据计算ERP
+            # 慢线：从日线数据计算ERP（413 P2 T7：优先data_context）
             if ts_code:
                 try:
-                    df_basic = ecm.get_cached_daily_basic(ts_code)
+                    df_basic = data_context.get('daily_basic_df') if data_context else None
+                    if df_basic is None:
+                        df_basic = ecm.get_cached_daily_basic(ts_code)
                     if df_basic is not None and not df_basic.empty:
                         slow_result = _bociasi_slowline(df_basic)
                 except Exception:
@@ -954,7 +686,8 @@ class Dim5EmotionEngine(DataAwareMixin):
 
             # 四象限：使用完整 BociasiQuadrantAnalyzer（含全市场DB查询）
             try:
-                analyzer = BociasiQuadrantAnalyzer(ecm=ecm)
+                market_stats = data_context.get('market_stats') if data_context else None
+                analyzer = BociasiQuadrantAnalyzer(ecm=ecm, market_stats=market_stats)
                 full_quadrant = analyzer.analyze()
                 quadrant = {
                     'quadrant': full_quadrant.get('quadrant', 'MM'),
@@ -965,7 +698,7 @@ class Dim5EmotionEngine(DataAwareMixin):
                     'fast_signal': quick_result.get('signal', 'NEUTRAL'),
                     'slow_signal': slow_result.get('signal', 'NEUTRAL'),
                 }
-            except Exception as e:
+            except Exception:
                 quadrant = _bociasi_quadrant(quick_result, slow_result)
 
         except Exception:
@@ -979,28 +712,22 @@ class Dim5EmotionEngine(DataAwareMixin):
         # 2b. BOCIASI四象限修正 market 情绪判定
         q = quadrant.get('quadrant', 'MM')
         if q == 'HH':
-            # 行情尾声：即使tags说"发酵"，BOCIASI显示高位风险 → 降级
             if market['light'] == 'green':
                 market = {'phase': '高位风险', 'detail': f"BOCIASI四象限={q}（{quadrant['description']}）", 'light': 'red'}
         elif q == 'LL':
-            # 情绪底部：即使tags说"退潮"，BOCIASI显示高性价比 → 升级
             if market['light'] == 'red':
                 market = {'phase': '情绪底部', 'detail': f"BOCIASI四象限={q}（{quadrant['description']}）", 'light': 'green'}
         elif q == 'HL':
-            # 高位震荡：需要警惕
             if market['light'] == 'green':
                 market = {'phase': '高位震荡', 'detail': f"BOCIASI四象限={q}（{quadrant['description']}）", 'light': 'yellow'}
         elif q == 'LH':
-            # 底部反弹：温和改善
             if market['light'] == 'red':
                 market = {'phase': '底部反弹', 'detail': f"BOCIASI四象限={q}（{quadrant['description']}）", 'light': 'yellow'}
 
-        # 3. 板块热度（使用完整 SectorRotationModel）
+        # 3. 板块热度（使用完整 SectorRotationModel，复用已有DataManager）
         if tags.get('ts_code'):
             try:
-                from app.data import DataManager
-                dm = DataManager()
-                sr_model = SectorRotationModel(data_manager=dm)
+                sr_model = SectorRotationModel(data_manager=self._get_dm())
                 heat_result = sr_model.evaluate(tags['ts_code'])
                 if heat_result.get('sector_heat') and heat_result['sector_heat'] != 'none':
                     sector['heat'] = heat_result['sector_heat']
@@ -1016,7 +743,10 @@ class Dim5EmotionEngine(DataAwareMixin):
         margin_change_pct = None
         try:
             if ts_code:
-                margin_df = ecm.get_cached_margin(ts_code) if ecm else None
+                # 413 P2 T7：优先从data_context读取margin_df
+                margin_df = data_context.get('margin_df') if data_context else None
+                if margin_df is None:
+                    margin_df = ecm.get_cached_margin(ts_code) if ecm else None
                 if margin_df is not None and not margin_df.empty and len(margin_df) >= 5:
                     rzye = margin_df['rzye'].dropna().astype(float)
                     if len(rzye) >= 5:
@@ -1032,7 +762,6 @@ class Dim5EmotionEngine(DataAwareMixin):
         slow_score = quadrant.get('slow_score', None)
         if fast_score is not None and slow_score is not None:
             bociasi_temp = (float(fast_score) * 0.6 + float(slow_score) * 0.4) * 100
-            # 融合：tags温度占40%，BOCIASI温度占60%
             temperature = round(temperature * 0.4 + bociasi_temp * 0.6, 1)
 
         # 5. 综合灯色
@@ -1058,7 +787,7 @@ class Dim5EmotionEngine(DataAwareMixin):
             'stock_light': stock['light'],
             'overall_light': overall,
             'overall_direction': 1 if overall == 'green' else (-1 if overall == 'red' else 0),
-            'continuous_value': round(temperature / 100, 4),  # P2: temperature [0,100]→[0,1]
+            'continuous_value': round(temperature / 100, 4),
         }
 
         # 8. audit

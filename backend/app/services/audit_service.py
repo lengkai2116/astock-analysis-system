@@ -2,21 +2,22 @@
 审计日志服务
 记录关键操作：登录/登出、策略操作、数据导出等
 """
-from datetime import datetime
-from flask import request
 import json
 import logging
+from datetime import datetime
+
+from flask import request
 
 logger = logging.getLogger(__name__)
 
 class AuditService:
     """审计日志记录器"""
-    
+
     @staticmethod
     def log(action, result, details=None, user=None):
         """
         记录审计事件
-        
+
         Args:
             action: 操作类型 (login/logout/strategy_save/strategy_delete/data_export)
             result: 结果 (success/failure)
@@ -33,7 +34,7 @@ class AuditService:
         }
         if details:
             entry["details"] = details
-        
+
         logger.info(f"AUDIT: {json.dumps(entry, ensure_ascii=False)}")
         return entry
 
@@ -41,16 +42,16 @@ class AuditService:
     def log_login(user, success=True, reason=None):
         return AuditService.log("login", "success" if success else "failure",
                               {"reason": reason} if reason else None, user)
-    
+
     @staticmethod
     def log_logout(user):
         return AuditService.log("logout", "success", None, user)
-    
+
     @staticmethod
     def log_strategy_save(user, strategy_name, strategy_type):
         return AuditService.log("strategy_save", "success",
                               {"name": strategy_name, "type": strategy_type}, user)
-    
+
     @staticmethod
     def log_data_export(user, export_type, count):
         return AuditService.log("data_export", "success",

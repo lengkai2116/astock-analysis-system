@@ -58,9 +58,9 @@ class TimeRhythmEngine:
             # 带宽趋势（最近10日斜率，正值=扩张，负值=收缩）
             bw_recent = bandwidth[-10:] if len(bandwidth) >= 10 else bandwidth
             if len(bw_recent) >= 5:
-                bw_slope = (bw_recent[-1] - bw_recent[0]) / max(bw_recent[0], 1e-9) * 100
+                (bw_recent[-1] - bw_recent[0]) / max(bw_recent[0], 1e-9) * 100
             else:
-                bw_slope = 0
+                pass
 
             current_bw = bandwidth[-1] if len(bandwidth) > 0 else 100
 

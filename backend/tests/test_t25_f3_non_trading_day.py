@@ -4,7 +4,9 @@
 → 写入非交易日的无意义快照（如 08-02 周日 2401 条）。
 修复后：首次采集仅交易日执行（_is_market_day 判断），非交易日跳过。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)

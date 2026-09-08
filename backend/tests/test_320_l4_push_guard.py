@@ -5,12 +5,13 @@ _register_jobs 无条件注册"盘中快照推送"（每 5s）→ 收盘后 APSc
 触发（包装器内部跳过推送），产生大量无意义调度日志（daemon.log 13 万行刷屏）。
 L4 修复：盘中推送/板块推送注册加 DATA_DAEMON_RUNNING 守卫（与日终同步一致）。
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
     os.environ.pop(k, None)
 
-import pytest
 
 
 def test_daemon_mode_skips_intraday_push_registration(monkeypatch):
