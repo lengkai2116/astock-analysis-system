@@ -43,7 +43,6 @@ def get_ecm_instance() -> 'EnhancedCacheManager':
 _NUMERIC_COLUMNS = {
     'daily_cache': ['open', 'high', 'low', 'close', 'pre_close', 'vol', 'amount', 'pct_chg'],
     'minute_kline_cache': ['open', 'high', 'low', 'close', 'volume', 'amount'],
-    'as_minute_kline': ['open', 'high', 'low', 'close', 'volume', 'amount'],
     'as_market_snapshot': ['price', 'open', 'high', 'low', 'pre_close', 'change', 'change_pct',
                            'volume', 'amount', 'pe', 'pb', 'amplitude', 'circ_mv', 'total_mv',
                            'volume_ratio', 'turnover_rate'],
@@ -82,7 +81,7 @@ _NUMERIC_COLUMNS = {
 }
 
 # K 线类表：应用 OHLC 一致性校验 + 离群值检测
-_OHLC_TABLES = {'daily_cache', 'minute_kline_cache', 'as_minute_kline', 'as_market_snapshot'}
+_OHLC_TABLES = {'daily_cache', 'minute_kline_cache', 'as_market_snapshot'}
 
 # 财务/基本面表：数值列 NaN 保留（落库为 NULL，不伪造 0）
 _NULL_NAN_TABLES = {
@@ -584,15 +583,6 @@ class EnhancedCacheManager:
             )
         """)
         self._execute("""
-            CREATE TABLE IF NOT EXISTS chip_distribution_cache (
-                ts_code TEXT, trade_date TEXT,
-                price_bin REAL, chip_ratio REAL, accumulated_ratio REAL,
-                peak_flag INTEGER,  -- SQLite 无 BOOLEAN
-                update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (ts_code, trade_date, price_bin)
-            )
-        """)
-        self._execute("""
             CREATE TABLE IF NOT EXISTS moneyflow_cache (
                 ts_code TEXT, trade_date TEXT,
                 buy_lg_vol REAL, buy_lg_amount REAL,
@@ -635,54 +625,10 @@ class EnhancedCacheManager:
             )
         """)
         self._execute("""
-            CREATE TABLE IF NOT EXISTS as_top_stocks (
-                rank_type TEXT, ts_code TEXT, name TEXT, price REAL, change_pct REAL,
-                volume REAL, amount REAL, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (rank_type, ts_code)
-            )
-        """)
-        self._execute("""
             CREATE TABLE IF NOT EXISTS as_sector_ranking (
                 sector_name TEXT PRIMARY KEY, ts_code TEXT, change_pct REAL,
                 up_count INTEGER, down_count INTEGER,
                 lead_ts_code TEXT, lead_name TEXT, lead_change_pct REAL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        self._execute("""
-            CREATE TABLE IF NOT EXISTS as_concept_ranking (
-                concept_name TEXT PRIMARY KEY, ts_code TEXT, change_pct REAL,
-                up_count INTEGER, down_count INTEGER,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        self._execute("""
-            CREATE TABLE IF NOT EXISTS as_limit_pool (
-                limit_type TEXT, ts_code TEXT, name TEXT, price REAL, change_pct REAL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (limit_type, ts_code)
-            )
-        """)
-        self._execute("""
-            CREATE TABLE IF NOT EXISTS as_minute_kline (
-                ts_code TEXT, trade_date TEXT, trade_time TEXT, freq TEXT DEFAULT '5min',
-                open REAL, high REAL, low REAL, close REAL, volume REAL, amount REAL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (ts_code, trade_date, trade_time, freq)
-            )
-        """)
-        self._execute("""
-            CREATE TABLE IF NOT EXISTS as_lhb_detail (
-                ts_code TEXT, trade_date TEXT, name TEXT, change_pct REAL,
-                buy_amount REAL, sell_amount REAL, net_amount REAL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (ts_code, trade_date)
-            )
-        """)
-        self._execute("""
-            CREATE TABLE IF NOT EXISTS as_news (
-                id TEXT PRIMARY KEY, title TEXT, summary TEXT,
-                source TEXT, publish_time TEXT, url TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -968,15 +914,9 @@ class EnhancedCacheManager:
             "CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_cache(trade_date)",
             "CREATE INDEX IF NOT EXISTS idx_daily_basic_ts_code ON daily_basic_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_daily_basic_date ON daily_basic_cache(trade_date)",
-            "CREATE INDEX IF NOT EXISTS idx_chip_ts_code ON chip_distribution_cache(ts_code)",
-            "CREATE INDEX IF NOT EXISTS idx_chip_date ON chip_distribution_cache(trade_date)",
             "CREATE INDEX IF NOT EXISTS idx_moneyflow_ts_code ON moneyflow_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_moneyflow_date ON moneyflow_cache(trade_date)",
             "CREATE INDEX IF NOT EXISTS idx_as_snapshot_ts ON as_market_snapshot(ts_code)",
-            "CREATE INDEX IF NOT EXISTS idx_as_minute_ts ON as_minute_kline(ts_code)",
-            "CREATE INDEX IF NOT EXISTS idx_as_minute_date ON as_minute_kline(trade_date)",
-            "CREATE INDEX IF NOT EXISTS idx_as_lhb_date ON as_lhb_detail(trade_date)",
-            "CREATE INDEX IF NOT EXISTS idx_as_news_time ON as_news(publish_time)",
             "CREATE INDEX IF NOT EXISTS idx_minute_kline_ts ON minute_kline_cache(ts_code)",
             "CREATE INDEX IF NOT EXISTS idx_minute_kline_date ON minute_kline_cache(trade_date)",
             "CREATE INDEX IF NOT EXISTS idx_minute_kline_ts_freq ON minute_kline_cache(ts_code, freq)",
@@ -1027,15 +967,6 @@ class EnhancedCacheManager:
             )
         """)
         self._execute("CREATE INDEX IF NOT EXISTS idx_sync_req_status ON sync_requests(status)")
-
-        # ── tag_history 标签历史归档表（347号：P4 写标签时同步归档，支撑 L1.5 跨日核查） ──
-        self._execute("""
-            CREATE TABLE IF NOT EXISTS tag_history (
-                ts_code TEXT, tag_name TEXT, tag_group TEXT, tag_value TEXT,
-                confidence REAL, evidence TEXT, source TEXT, updated_at TEXT,
-                PRIMARY KEY (ts_code, tag_name, updated_at)
-            )
-        """)
 
         # ── treemap 快照表（305号§2.2.1）：日终预提取的轻量快照，每日替换 ──
         self._execute("""
@@ -1452,15 +1383,14 @@ class EnhancedCacheManager:
 
     def get_cache_stats(self):
         try:
-            daily_count = self.read_conn.execute("SELECT COUNT(*) FROM daily_cache").fetchone()[0]
+            daily_df = self._query_shard('daily_cache', "SELECT COUNT(*) AS c FROM daily_cache")
+            daily_count = int(daily_df.iloc[0, 0]) if not daily_df.empty else 0
             # 用 indicator_ma 宽表估算指标总量（ma/macd/other 三宽表近似）
             indicator_count = 0
             try:
-                row = self.read_conn.execute(
-                    "SELECT COUNT(*) FROM indicator_ma"
-                ).fetchone()
-                if row:
-                    indicator_count = int(row[0]) * 3  # ma/macd/other 三宽表近似
+                ind_df = self._query_shard('indicator_ma', "SELECT COUNT(*) AS c FROM indicator_ma")
+                if not ind_df.empty:
+                    indicator_count = int(ind_df.iloc[0, 0]) * 3  # ma/macd/other 三宽表近似
             except Exception:
                 pass
             return pd.DataFrame([{
@@ -1588,62 +1518,13 @@ class EnhancedCacheManager:
         if end_date:
             query += " AND trade_date <= ?"
             params.append(end_date)
-        df = self._query_df(query, params)
+        df = self._query_shard('daily_basic_cache', query, params)
         if df.empty:
             return {}
         result = {}
         for ts_code, grp in df.groupby('ts_code'):
             result[ts_code] = grp.sort_values('trade_date').reset_index(drop=True)
         return result
-
-    # ==================== 筹码分布 ====================
-
-    def cache_chip_distribution(self, ts_code, trade_date, chip_data):
-        if not chip_data:
-            return
-        with self._write_lock:
-            try:
-                records = [{
-                    'ts_code': ts_code, 'trade_date': trade_date,
-                    'price_bin': b['price_bin'], 'chip_ratio': b['chip_ratio'],
-                    'accumulated_ratio': b['accumulated_ratio'],
-                    'peak_flag': 1 if b['peak_flag'] else 0,
-                } for b in chip_data]
-                self._insert_from_df('chip_distribution_cache', pd.DataFrame(records))
-            except Exception as e:
-                logger.warning(f"缓存筹码分布失败: {e}")
-
-    def batch_cache_chips(self, records):
-        if not records:
-            return
-        with self._write_lock:
-            try:
-                df = pd.DataFrame(records)
-                if 'peak_flag' in df.columns:
-                    df['peak_flag'] = df['peak_flag'].astype(int)
-                self._insert_from_df('chip_distribution_cache', df)
-            except Exception as e:
-                logger.warning(f"批量缓存筹码分布失败: {e}")
-
-    def get_chip_distribution(self, ts_code, start_date=None, end_date=None):
-        query = "SELECT * FROM chip_distribution_cache WHERE ts_code = ?"
-        params = [ts_code]
-        if start_date:
-            query += " AND trade_date >= ?"
-            params.append(start_date)
-        if end_date:
-            query += " AND trade_date <= ?"
-            params.append(end_date)
-        query += " ORDER BY trade_date, price_bin"
-        return self._query_shard('chip_distribution_cache', query, params)
-
-    def get_latest_chip_distribution(self, ts_code):
-        return self._query_shard('chip_distribution_cache', """
-            SELECT * FROM chip_distribution_cache
-            WHERE ts_code = ?
-            AND trade_date = (SELECT MAX(trade_date) FROM chip_distribution_cache WHERE ts_code = ?)
-            ORDER BY price_bin
-        """, [ts_code, ts_code])
 
     # ==================== 资金流向 ====================
 
@@ -1731,7 +1612,8 @@ class EnhancedCacheManager:
 
     def get_cached_win_rates(self) -> list:
         try:
-            df = self._query_df("SELECT * FROM win_rate_cache ORDER BY signal_type")
+            # 424号P0-3 E1：改走分库权威副本（win_rate_cache → snapshot_cache.db）
+            df = self._query_shard('win_rate_cache', "SELECT * FROM win_rate_cache ORDER BY signal_type")
             return df.to_dict('records') if not df.empty else []
         except Exception as e:
             logger.warning(f"查询赢率数据失败: {e}")
@@ -1773,73 +1655,11 @@ class EnhancedCacheManager:
         except Exception:
             pass
 
-    def write_as_top_stocks(self, rank_type: str, records: list):
-        # 373号§9.3：已废弃，保留兼容（盘中数据已迁移至 InMemoryStateStore）
-        if not records:
-            return
-        try:
-            for r in records:
-                r['rank_type'] = rank_type
-            self._insert_from_df('as_top_stocks', pd.DataFrame(records))
-        except Exception:
-            pass
-
     def write_as_sector_ranking(self, records: list):
         if not records:
             return
         try:
             self._insert_from_df('as_sector_ranking', pd.DataFrame(records))
-        except Exception:
-            pass
-
-    def write_as_concept_ranking(self, records: list):
-        if not records:
-            return
-        try:
-            self._insert_from_df('as_concept_ranking', pd.DataFrame(records))
-        except Exception:
-            pass
-
-    def write_as_limit_pool(self, records: list, limit_type: str):
-        # 373号§9.3：已废弃，保留兼容（盘中数据已迁移至 InMemoryStateStore）
-        if not records:
-            return
-        try:
-            for r in records:
-                r['limit_type'] = limit_type
-            self._insert_from_df('as_limit_pool', pd.DataFrame(records))
-        except Exception:
-            pass
-
-    def append_as_minute_kline(self, records: list):
-        if not records:
-            return
-        try:
-            self._insert_from_df('as_minute_kline', pd.DataFrame(records))
-        except Exception:
-            pass
-
-    def clean_as_minute_kline(self, trade_date: str):
-        """盘后清理当日分钟K线数据"""
-        try:
-            self.conn.execute("DELETE FROM as_minute_kline WHERE trade_date = ?", [trade_date])
-            self.conn.commit()
-        except Exception:
-            pass
-
-    def write_as_lhb_detail(self, records: list):
-        if not records:
-            return
-        try:
-            self._insert_from_df('as_lhb_detail', pd.DataFrame(records))
-        except Exception:
-            pass
-
-    def write_as_news(self, records: list):
-        if not records:
-            return
-        try:
-            self._insert_from_df('as_news', pd.DataFrame(records))
         except Exception:
             pass
 
@@ -1943,7 +1763,7 @@ class EnhancedCacheManager:
             s = str(end_date).replace('-', '')
             params.append(f'{s[:4]}-{s[4:6]}-{s[6:]}' if len(s) == 8 else str(end_date))
         query += " ORDER BY trade_date"
-        return self._query_df(query, params)
+        return self._query_shard('adj_factor_cache', query, params)
 
     # ==================== 252号方案：分钟K线 ====================
 
@@ -1985,7 +1805,7 @@ class EnhancedCacheManager:
         query += " AND freq = ?"
         params.append(freq)
         query += " ORDER BY trade_time"
-        return self._query_df(query, params)
+        return self._query_shard('minute_kline_cache', query, params)
 
     # ==================== 252号方案：财务指标 ====================
 
@@ -2170,7 +1990,8 @@ class EnhancedCacheManager:
                 logger.warning(f"缓存涨跌停失败: {e}")
 
     def get_cached_stk_limit(self, trade_date):
-        return self._query_df(
+        # 424号P0-3 E1：改走分库权威副本（stk_limit_cache → market_cache.db）
+        return self._query_shard('stk_limit_cache',
             "SELECT * FROM stk_limit_cache WHERE trade_date = ?",
             [trade_date]
         )
@@ -2199,7 +2020,8 @@ class EnhancedCacheManager:
             conditions.append("trade_date = ?")
             params.append(trade_date)
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
-        return self._query_df(
+        # 424号P0-3 E1：改走分库权威副本（lhb_cache → system_cache.db）
+        return self._query_shard('lhb_cache',
             f"SELECT * FROM lhb_cache{where} ORDER BY trade_date DESC, net_amount DESC",
             params
         )
@@ -2500,17 +2322,19 @@ class EnhancedCacheManager:
         for r in records:
             features_json = _json.dumps(r.get('features', {}), ensure_ascii=False, default=str)
             rows.append((r['ts_code'], r['trade_date'], features_json))
-        with self._write_lock:
-            try:
-                self._execute(
-                    """INSERT OR REPLACE INTO pre_feat_cache
-                       (ts_code, trade_date, features_json, computed_at)
-                       VALUES (?, ?, ?, datetime('now','localtime'))""",
-                    rows
-                )
-                self.conn.commit()
-            except Exception as e:
-                logger.warning(f"批量缓存pre_feat失败: {e}")
+        # 424号P0-3 E2：与 cache_pre_feat 保持一致，批量写入走分库 compute_cache.db，
+        # 消除 pre_feat_cache 三处写入不一致（单条→分库 / 批量→主库 / 读取→主库）。
+        try:
+            from app.data.sharding_manager import sharding_manager
+            sharding_manager.execute_batch_insert(
+                'pre_feat_cache',
+                "INSERT OR REPLACE INTO pre_feat_cache "
+                "(ts_code, trade_date, features_json, computed_at) "
+                "VALUES (?, ?, ?, datetime('now','localtime'))",
+                rows
+            )
+        except Exception as e:
+            logger.warning(f"批量缓存pre_feat失败: {e}")
 
     def get_pre_feat(self, ts_code: str, trade_date: str = None) -> dict | None:
         """读取原料加工特征缓存
@@ -2521,17 +2345,19 @@ class EnhancedCacheManager:
         import json as _json
         try:
             if trade_date:
-                row = self.read_conn.execute(
+                df = self._query_shard(
+                    'pre_feat_cache',
                     "SELECT features_json FROM pre_feat_cache WHERE ts_code=? AND trade_date=?",
                     [ts_code, trade_date]
-                ).fetchone()
+                )
             else:
-                row = self.read_conn.execute(
+                df = self._query_shard(
+                    'pre_feat_cache',
                     "SELECT features_json FROM pre_feat_cache WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
                     [ts_code]
-                ).fetchone()
-            if row and row[0]:
-                return _json.loads(row[0])
+                )
+            if not df.empty and df.iloc[0, 0]:
+                return _json.loads(df.iloc[0, 0])
             return None
         except Exception as e:
             logger.warning(f"读取pre_feat失败 [{ts_code}]: {e}")
@@ -2546,23 +2372,24 @@ class EnhancedCacheManager:
         import json as _json
         result = {}
         try:
+            placeholders = ','.join(['?'] * len(ts_codes))
             if trade_date:
-                placeholders = ','.join(['?'] * len(ts_codes))
-                rows = self.read_conn.execute(
+                df = self._query_shard(
+                    'pre_feat_cache',
                     f"SELECT ts_code, features_json FROM pre_feat_cache WHERE ts_code IN ({placeholders}) AND trade_date=?",
                     ts_codes + [trade_date]
-                ).fetchall()
+                )
             else:
-                placeholders = ','.join(['?'] * len(ts_codes))
-                rows = self.read_conn.execute(
+                df = self._query_shard(
+                    'pre_feat_cache',
                     f"""SELECT ts_code, features_json FROM pre_feat_cache
                         WHERE ts_code IN ({placeholders})
                         AND trade_date = (SELECT MAX(trade_date) FROM pre_feat_cache)""",
                     ts_codes
-                ).fetchall()
-            for ts_code, features_json in rows:
-                if features_json:
-                    result[ts_code] = _json.loads(features_json)
+                )
+            for _, row in df.iterrows():
+                if row['features_json']:
+                    result[row['ts_code']] = _json.loads(row['features_json'])
         except Exception as e:
             logger.warning(f"批量读取pre_feat失败: {e}")
         return result
@@ -2572,11 +2399,12 @@ class EnhancedCacheManager:
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y-%m-%d')
         try:
-            row = self.read_conn.execute(
+            df = self._query_shard(
+                'pre_feat_cache',
                 "SELECT 1 FROM pre_feat_cache WHERE ts_code=? AND trade_date=?",
                 [ts_code, trade_date]
-            ).fetchone()
-            return row is not None
+            )
+            return not df.empty
         except Exception:
             return False
 
@@ -2645,12 +2473,17 @@ class EnhancedCacheManager:
 
     # ==================== 板块排行归档读取（288号方案 v1.1） ====================
 
-    def read_as_sector_ranking(self) -> list[dict]:
-        """读取归档的行业板块排行"""
+    def read_as_sector_ranking(self, top_n: int = None) -> list[dict]:
+        """读取归档的行业板块排行（424号§10决策①：保留表）
+
+        Args:
+            top_n: 可选，仅返回前 N 条（按 change_pct 降序）
+        """
         try:
-            rows = self.read_conn.execute(
-                "SELECT * FROM as_sector_ranking ORDER BY change_pct DESC"
-            ).fetchall()
+            sql = "SELECT * FROM as_sector_ranking ORDER BY change_pct DESC"
+            if top_n:
+                sql += f" LIMIT {int(top_n)}"
+            rows = self.read_conn.execute(sql).fetchall()
             if rows:
                 cols = ['sector_name', 'ts_code', 'change_pct', 'up_count', 'down_count',
                         'lead_ts_code', 'lead_name', 'lead_change_pct', 'updated_at']
@@ -2659,20 +2492,52 @@ class EnhancedCacheManager:
             pass
         return []
 
-    def read_as_concept_ranking(self) -> list[dict]:
-        """读取归档的概念板块排行"""
-        try:
-            rows = self.read_conn.execute(
-                "SELECT * FROM as_concept_ranking ORDER BY change_pct DESC"
-            ).fetchall()
-            if rows:
-                cols = ['concept_name', 'ts_code', 'change_pct', 'up_count', 'down_count', 'updated_at']
-                return [dict(zip(cols, r)) for r in rows]
-        except Exception:
-            pass
+    def read_as_concept_ranking(self, top_n: int = None) -> list[dict]:
+        """读取归档的概念板块排行（424号§10决策①：废弃表，返回空）"""
+        # 424号§10决策①：as_concept_ranking 废弃，无有效读方，恒返回空
         return []
 
     # ==================== 实时快照数据库 ====================
+
+    def read_as_market_snapshot(self) -> pd.DataFrame:
+        """读取全市场实时快照归档（424号§10决策①：保留表，读 market_snapshot.db）
+
+        供 akshare_reader.get_market_snapshot 归档回退使用。
+        """
+        try:
+            cur = self.snapshot_conn.execute("SELECT * FROM as_market_snapshot")
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchall()
+            if not rows:
+                return pd.DataFrame()
+            return pd.DataFrame(rows, columns=cols)
+        except Exception as e:
+            logger.debug(f"read_as_market_snapshot 失败: {e}")
+            return pd.DataFrame()
+
+    def read_as_market_snapshot_by_codes(self, ts_codes: list) -> pd.DataFrame:
+        """按代码列表读取实时快照归档（424号§10决策①：保留表）"""
+        if not ts_codes:
+            return pd.DataFrame()
+        try:
+            placeholders = ', '.join('?' for _ in ts_codes)
+            cur = self.snapshot_conn.execute(
+                f"SELECT * FROM as_market_snapshot WHERE ts_code IN ({placeholders})",
+                list(ts_codes)
+            )
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchall()
+            if not rows:
+                return pd.DataFrame()
+            return pd.DataFrame(rows, columns=cols)
+        except Exception as e:
+            logger.debug(f"read_as_market_snapshot_by_codes 失败: {e}")
+            return pd.DataFrame()
+
+    def read_as_top_stocks(self, rank_type: str = 'up') -> pd.DataFrame:
+        """读取涨跌榜归档（424号§10决策①：废弃表，返回空）"""
+        # 424号§10决策①：as_top_stocks 废弃，涨跌榜已由 mootdx 自算，恒返回空
+        return pd.DataFrame()
 
     def cache_market_snapshot_data(self, records: list):
         """批量写入快照数据到独立 market_snapshot.db（INSERT OR REPLACE, batch write）"""
@@ -2929,7 +2794,8 @@ class EnhancedCacheManager:
 
     def get_tags(self, ts_code: str) -> dict:
         """读取单只股票的最新标签（323号 S0：上限提至 200，避免深度标签落库后截断丢失）"""
-        df = self._query_df(
+        df = self._query_shard(
+            'opportunity_tags_cache',
             "SELECT tag_name, tag_value, tag_group, confidence, source, updated_at "
             "FROM opportunity_tags_cache WHERE ts_code=? "
             "ORDER BY updated_at DESC LIMIT 200",
@@ -2951,7 +2817,8 @@ class EnhancedCacheManager:
         if not groups:
             return {}
         ph = ','.join('?' for _ in groups)
-        df = self._query_df(
+        df = self._query_shard(
+            'opportunity_tags_cache',
             f"SELECT tag_name, tag_value FROM opportunity_tags_cache "
             f"WHERE ts_code=? AND tag_group IN ({ph}) "
             f"ORDER BY updated_at DESC",
@@ -2974,7 +2841,8 @@ class EnhancedCacheManager:
         if trade_date is None:
             return self.get_tags(ts_code)
         try:
-            df = self._query_df(
+            df = self._query_shard(
+                'opportunity_tags_cache',
                 "SELECT tag_name, tag_value FROM opportunity_tags_cache "
                 "WHERE ts_code=? AND updated_at=?",
                 [ts_code, trade_date]
@@ -3039,50 +2907,25 @@ class EnhancedCacheManager:
                 sql += " AND snapshot_date<=?"
                 params.append(end_date)
             sql += " ORDER BY snapshot_date, ts_code"
-            rows = self.read_conn.execute(sql, params).fetchall()
-            cols = [d[0] for d in self.read_conn.execute(f"SELECT * FROM {table} LIMIT 0").description]
-            return [dict(zip(cols, r)) for r in rows]
+            df = self._query_shard(table, sql, params)
+            if df.empty:
+                return []
+            return df.to_dict('records')
         except Exception as e:
             logger.warning(f"get_snapshot_history 失败: {e}")
-            return []
-
-    def get_tag_history(self, ts_code: str = None, tag_name: str = None,
-                        start_date: str = None, end_date: str = None) -> list[dict]:
-        """读取标签历史（347号：P4 写标签同步归档，支撑 L1.5 跨日标签核查）
-
-        只读网关：调用层经 DataManager 访问，禁止直查。表不存在时返回空列表。
-        """
-        try:
-            sql = "SELECT * FROM tag_history WHERE 1=1"
-            params = []
-            if ts_code:
-                sql += " AND ts_code=?"
-                params.append(ts_code)
-            if tag_name:
-                sql += " AND tag_name=?"
-                params.append(tag_name)
-            if start_date:
-                sql += " AND updated_at>=?"
-                params.append(start_date)
-            if end_date:
-                sql += " AND updated_at<=?"
-                params.append(end_date)
-            sql += " ORDER BY updated_at, ts_code, tag_name"
-            rows = self.read_conn.execute(sql, params).fetchall()
-            cols = [d[0] for d in self.read_conn.execute("SELECT * FROM tag_history LIMIT 0").description]
-            return [dict(zip(cols, r)) for r in rows]
-        except Exception as e:
-            logger.warning(f"get_tag_history 失败: {e}")
             return []
 
     def get_previous_trade_date(self) -> str | None:
         """获取上一交易日（daily_cache 倒数第二日，2026-08-06 合规整改网关）"""
         try:
-            row = self.read_conn.execute(
+            df = self._query_shard(
+                'daily_cache',
                 "SELECT DISTINCT trade_date FROM daily_cache "
                 "ORDER BY trade_date DESC LIMIT 1 OFFSET 1"
-            ).fetchone()
-            return row[0] if row else None
+            )
+            if df.empty:
+                return None
+            return str(df.iloc[0, 0])
         except Exception as e:
             logger.warning(f"get_previous_trade_date 失败: {e}")
             return None
@@ -3124,8 +2967,8 @@ class EnhancedCacheManager:
         sql += f" LIMIT {int(limit)}"
 
         try:
-            rows = self.read_conn.execute(sql, params).fetchall()
-            return [{'ts_code': r[0]} for r in rows]
+            df = self._query_shard('opportunity_tags_cache', sql, params)
+            return [{'ts_code': r['ts_code']} for _, r in df.iterrows()]
         except Exception as e:
             logger.warning(f"query_tags failed: {e}")
             return []
@@ -3141,7 +2984,8 @@ class EnhancedCacheManager:
 
         placeholders = ','.join('?' for _ in ts_codes)
         try:
-            df = self._query_df(
+            df = self._query_shard(
+                'opportunity_tags_cache',
                 f"""SELECT ts_code, tag_name, tag_value, tag_group, source, updated_at
                    FROM opportunity_tags_cache
                    WHERE ts_code IN ({placeholders})
@@ -3290,21 +3134,22 @@ class EnhancedCacheManager:
         try:
             placeholders = ','.join('?' for _ in ts_codes)
             tag_ph = ','.join('?' for _ in tag_names)
-            rows = self.read_conn.execute(
+            df = self._query_shard(
+                'opportunity_tags_cache',
                 f"""SELECT ts_code, tag_name, tag_value, updated_at
                     FROM opportunity_tags_cache
                     WHERE ts_code IN ({placeholders}) AND tag_name IN ({tag_ph})
                     ORDER BY ts_code, tag_name, updated_at DESC""",
                 ts_codes + tag_names
-            ).fetchall()
+            )
             # 行已按 updated_at DESC 排序，首个出现的 (ts_code, tag_name) 即最新值
             seen: set[tuple] = set()
-            for ts, tag, val, _upd in rows:
-                key = (ts, tag)
+            for _, r in df.iterrows():
+                key = (r['ts_code'], r['tag_name'])
                 if key in seen:
                     continue
                 seen.add(key)
-                out.setdefault(ts, {})[tag] = val
+                out.setdefault(r['ts_code'], {})[r['tag_name']] = r['tag_value']
         except Exception as e:
             logger.warning(f"_get_latest_tags_for_codes failed: {e}")
         return out
@@ -3388,23 +3233,36 @@ class EnhancedCacheManager:
     # ════════════════════════════════════════════════════════════
 
     def get_market_ma20_ratio(self) -> float:
-        """全市场MA20比率：收盘价>MA20的股票占比"""
+        """全市场MA20比率：收盘价>MA20的股票占比
+
+        424号P0-3：daily_cache(market_cache.db) 与 indicator_ma(compute_cache.db)
+        分属不同分库，无法单 SQL 跨库 JOIN，改为分库分别读取后 pandas 合并。
+        """
         try:
-            row = self._query_df("""
-                SELECT COUNT(CASE WHEN d.close > m.close THEN 1 END) as above,
-                       COUNT(*) as total
-                FROM daily_cache d
-                JOIN indicator_ma m ON d.ts_code = m.ts_code AND d.trade_date = m.trade_date
-                WHERE d.trade_date = (SELECT MAX(trade_date) FROM daily_cache)
-            """).iloc[0]
-            return row['above'] / row['total'] if row['total'] > 0 else 0.5
+            d = self._query_shard(
+                'daily_cache',
+                "SELECT ts_code, trade_date, close FROM daily_cache "
+                "WHERE trade_date = (SELECT MAX(trade_date) FROM daily_cache)"
+            )
+            m = self._query_shard(
+                'indicator_ma',
+                "SELECT ts_code, trade_date, close FROM indicator_ma "
+                "WHERE trade_date = (SELECT MAX(trade_date) FROM indicator_ma)"
+            )
+            if d.empty or m.empty:
+                return 0.5
+            merged = d.merge(m, on=['ts_code', 'trade_date'], suffixes=('_d', '_m'))
+            if merged.empty:
+                return 0.5
+            above = int((merged['close_d'] > merged['close_m']).sum())
+            return above / len(merged)
         except Exception:
             return 0.5
 
     def get_market_turnover_percentile(self) -> float:
         """全市场换手率百分位（中位数归一化）"""
         try:
-            df = self._query_df("""
+            df = self._query_shard('daily_basic_cache', """
                 SELECT turnover_rate FROM daily_basic_cache
                 WHERE trade_date = (SELECT MAX(trade_date) FROM daily_basic_cache)
                 AND turnover_rate IS NOT NULL
@@ -3419,7 +3277,7 @@ class EnhancedCacheManager:
     def get_market_limit_ratio(self) -> dict:
         """涨跌停比率"""
         try:
-            df = self._query_df("""
+            df = self._query_shard('daily_cache', """
                 SELECT SUM(CASE WHEN change_pct >= 9.9 THEN 1 ELSE 0 END) as up_limit,
                        SUM(CASE WHEN change_pct <= -9.9 THEN 1 ELSE 0 END) as down_limit,
                        COUNT(*) as total
@@ -3436,7 +3294,7 @@ class EnhancedCacheManager:
     def get_market_rsi_percentile(self) -> float:
         """RSI14百分位"""
         try:
-            df = self._query_df("""
+            df = self._query_shard('indicator_other', """
                 SELECT rsi14 FROM indicator_other
                 WHERE trade_date = (SELECT MAX(trade_date) FROM indicator_other)
                 AND rsi14 IS NOT NULL
@@ -3451,7 +3309,7 @@ class EnhancedCacheManager:
     def get_market_erp_percentile(self) -> float:
         """ERP（股权风险溢价）百分位"""
         try:
-            df = self._query_df("""
+            df = self._query_shard('daily_basic_cache', """
                 SELECT pe_ttm FROM daily_basic_cache
                 WHERE trade_date = (SELECT MAX(trade_date) FROM daily_basic_cache)
                 AND pe_ttm > 0
@@ -3467,7 +3325,7 @@ class EnhancedCacheManager:
     def get_market_margin_trend(self) -> dict:
         """融资趋势（5日变化率）"""
         try:
-            df = self._query_df("""
+            df = self._query_shard('margin_cache', """
                 SELECT trade_date, SUM(rzye) as total
                 FROM margin_cache
                 WHERE trade_date >= date('now', '-10 days')
@@ -3486,7 +3344,7 @@ class EnhancedCacheManager:
     def get_market_pe_median_percentile(self) -> float:
         """PE_TTM中位数百分位"""
         try:
-            df = self._query_df("""
+            df = self._query_shard('daily_basic_cache', """
                 SELECT pe_ttm FROM daily_basic_cache
                 WHERE trade_date = (SELECT MAX(trade_date) FROM daily_basic_cache)
                 AND pe_ttm > 0
@@ -3560,7 +3418,8 @@ class EnhancedCacheManager:
     def get_all_active_codes(self) -> list:
         """获取所有活跃股票代码"""
         try:
-            df = self._query_df(
+            df = self._query_shard(
+                'daily_cache',
                 "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date = (SELECT MAX(trade_date) FROM daily_cache)")
             return df['ts_code'].tolist() if not df.empty else []
         except Exception:

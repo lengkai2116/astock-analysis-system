@@ -367,24 +367,6 @@ class DataManager:
         return self.cache.get_snapshot_history(
             ts_code=ts_code, start_date=start_date, end_date=end_date, table=table)
 
-    def get_tag_history(self, ts_code: str = None, tag_name: str = None,
-                        start_date: str = None, end_date: str = None) -> list[dict]:
-        """读取标签历史（347号：P4 写标签同步归档，支撑 L1.5 跨日标签核查）
-
-        调用层只读网关：禁止 routes/services 直查 tag_history 表。
-
-        Args:
-            ts_code: 股票代码（None=全市场）
-            tag_name: 标签名过滤（None=全部标签）
-            start_date / end_date: updated_at 过滤（YYYY-MM-DD）
-
-        Returns:
-            行 dict 列表（按 updated_at, ts_code, tag_name 排序）
-        """
-        return self.cache.get_tag_history(
-            ts_code=ts_code, tag_name=tag_name,
-            start_date=start_date, end_date=end_date)
-
     def get_previous_trade_date(self) -> str | None:
         """获取上一交易日（L4 日变检测用，替代调用层直连 daily_cache）"""
         try:
@@ -900,11 +882,13 @@ class DataManager:
         """
         import time
 
-        # 1. 从 daily_cache 获取可用的交易日列表
+        # 1. 从 daily_cache 获取可用的交易日列表（424号P0-3 E3：daily_cache 归 market_cache.db 分库）
+        from app.data.sharding_manager import sharding_manager as _sm
+        _conn = _sm.get_connection(_sm.get_db_for_table('daily_cache'))
         target_dates = pd.read_sql("""
             SELECT DISTINCT trade_date FROM daily_cache
             ORDER BY trade_date DESC LIMIT ?
-        """, self.cache.conn, params=[max_days])
+        """, _conn, params=[max_days])
 
         if target_dates.empty:
             logger.warning("daily_basic 历史回填: daily_cache 无交易日数据，跳过")
@@ -916,9 +900,10 @@ class DataManager:
         # 2. 查询 daily_basic_cache 中已有的日期
         existing_dates = set()
         try:
+            _conn2 = _sm.get_connection(_sm.get_db_for_table('daily_basic_cache'))
             existing_df = pd.read_sql(
                 "SELECT DISTINCT trade_date FROM daily_basic_cache",
-                self.cache.conn
+                _conn2
             )
             if not existing_df.empty:
                 existing_dates = set(existing_df['trade_date'].tolist())
@@ -1091,10 +1076,6 @@ class DataManager:
     def get_cached_cashflow(self, ts_code):
         """从缓存获取现金流量表"""
         return self.cache.get_cached_cashflow(ts_code)
-
-    def get_cached_chip_distribution(self, ts_code):
-        """从缓存获取筹码分布数据"""
-        return self.cache.get_cached_chip_distribution(ts_code)
 
     # ==========================================
     # 批量数据同步方法（供 scheduler 调用）

@@ -58,7 +58,6 @@ class ShardingManager:
             'indicator_other': 'compute_cache.db',
             'factor_cache': 'compute_cache.db',
             'opportunity_tags_cache': 'compute_cache.db',
-            'chip_distribution_cache': 'compute_cache.db',
             'pre_feat_cache': 'compute_cache.db',
 
             # financial_cache.db — 财务数据
@@ -73,7 +72,6 @@ class ShardingManager:
             'treemap_snapshot': 'snapshot_cache.db',
             'status_snapshot_history': 'snapshot_cache.db',
             'treemap_snapshot_history': 'snapshot_cache.db',
-            'tag_history': 'snapshot_cache.db',
             'strategy_signal_detail': 'snapshot_cache.db',
             'win_rate_cache': 'snapshot_cache.db',
 
@@ -111,8 +109,31 @@ class ShardingManager:
             conn.execute("PRAGMA cache_size=-8192")
             conn.execute("PRAGMA busy_timeout=30000")
             self._connections[db_name] = conn
+            # 424号 P2-1：snapshot_cache.db 补索引（356号 §3.2.5 设计未落地）
+            if db_name == 'snapshot_cache.db':
+                self._ensure_snapshot_indexes(conn)
 
         return self._connections[db_name]
+
+    def _ensure_snapshot_indexes(self, conn: sqlite3.Connection):
+        """424号 P2-1：为 snapshot_cache.db 高频查询表补索引（356号 §3.2.5）
+
+        status_snapshot / strategy_signal_detail / treemap_snapshot /
+        tag_history / *_history 原仅主键自增索引，API 按 ts_code/日期查询全表扫描。
+        """
+        index_sqls = [
+            "CREATE INDEX IF NOT EXISTS idx_status_ts ON status_snapshot(ts_code, snapshot_date)",
+            "CREATE INDEX IF NOT EXISTS idx_signal_ts ON strategy_signal_detail(ts_code, trade_date)",
+            "CREATE INDEX IF NOT EXISTS idx_treemap_ind ON treemap_snapshot(industry)",
+            "CREATE INDEX IF NOT EXISTS idx_status_hist_date ON status_snapshot_history(snapshot_date)",
+            "CREATE INDEX IF NOT EXISTS idx_treemap_hist_date ON treemap_snapshot_history(snapshot_date)",
+        ]
+        for sql in index_sqls:
+            try:
+                conn.execute(sql)
+            except Exception as e:
+                logger.debug(f"snapshot_cache 索引创建失败: {e}")
+        conn.commit()
 
     def get_write_lock(self, db_name: str) -> threading.RLock:
         """获取写锁"""
@@ -214,6 +235,17 @@ class ShardingManager:
         cursor = conn.cursor()
         cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
         return cursor.fetchone()[0]
+
+    def get_all_db_names(self) -> list:
+        """获取全部分库名（去重，不含总库）
+
+        424号P0-2：WAL 治理需遍历所有分库执行 checkpoint 与大小监控。
+        """
+        dbs = set()
+        for db_name in self._table_to_db.values():
+            if db_name:
+                dbs.add(db_name)
+        return sorted(dbs)
 
     def close_all(self):
         """关闭所有连接"""

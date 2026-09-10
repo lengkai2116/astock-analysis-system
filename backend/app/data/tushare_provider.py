@@ -580,6 +580,19 @@ ts_code=ts_code,
             logger.warning(f"获取融资融券失败 ({ts_code}): {e}")
             return []
 
+    def get_margin_detail(self, trade_date):
+        """获取全市场融资融券个股明细（margin_detail，按交易日）
+
+        424号§10决策④：_batch_margin 收敛到 TushareProvider，复用 _ts() 限流。
+        """
+        if not self.pro:
+            return None
+        try:
+            return _ts(self.pro.margin_detail, trade_date=trade_date)
+        except Exception as e:
+            logger.warning(f"获取融资融券明细失败 ({trade_date}): {e}")
+            return None
+
     def get_forecast(self, ts_code, start_date=None, end_date=None):
         """获取业绩预告数据（需5000积分）"""
         if not self.pro:

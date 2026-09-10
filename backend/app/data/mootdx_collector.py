@@ -669,10 +669,14 @@ def _fetch_tencent(codes: list, name_map: dict) -> list:
 
 
 def _fetch_eastmoney(codes: list, name_map: dict) -> list:
-    """从 push2.eastmoney.com 获取实时行情（主源）
+    """从 push2delay.eastmoney.com 获取实时行情（主源）
 
     使用 ulist.np 批量端点，fltt=2 自动缩放，60只/批，
     并行4线程采集，全市场5000只约5s（经289号方案实测验证）。
+
+    424号P2-3：push2.eastmoney.com 对当前网络持续不可达（RemoteDisconnected），
+    实测 push2delay.eastmoney.com 返回实时价（与新浪/腾讯一致）且字段完整，
+    故主源 host 改用 push2delay（同一 ulist.np 端点、同一字段集，解析逻辑不变）。
 
     东财字段 → 内部标准字段:
       f2=price, f3=change_pct, f4=change, f5=volume(手),
@@ -694,7 +698,7 @@ def _fetch_eastmoney(codes: list, name_map: dict) -> list:
             f"1.{c}" if c.startswith(('6', '9')) else f"0.{c}"
             for c in code_batch
         )
-        url = (f"https://push2.eastmoney.com/api/qt/ulist.np/get"
+        url = (f"https://push2delay.eastmoney.com/api/qt/ulist.np/get"
                f"?fltt=2&fields={field_str}&secids={secids}")
         req = urllib.request.Request(url, headers={
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',

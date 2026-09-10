@@ -33,8 +33,9 @@ from pathlib import Path
 # ── 路径（Windows 兼容：pathlib） ──
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get('DATA_DIR', PROJECT_ROOT / 'data'))
-DB_PATH = DATA_DIR / 'duckdb' / 'stock_cache.db'
-WAL_PATH = DATA_DIR / 'duckdb' / 'stock_cache.db-wal'
+DUCKDB_DIR = DATA_DIR / 'duckdb'
+DB_PATH = DUCKDB_DIR / 'stock_cache.db'
+WAL_PATH = DUCKDB_DIR / 'stock_cache.db-wal'
 BACKEND_DIR = PROJECT_ROOT / 'backend'
 VENV_PYTHON = BACKEND_DIR / '.venv' / 'bin' / 'python'
 LOG_PATH = DATA_DIR / 'logs' / 'wal_maintenance.log'
@@ -61,6 +62,36 @@ logger = logging.getLogger('wal_maintenance')
 def wal_size_mb() -> float:
     try:
         return WAL_PATH.stat().st_size / 1024 / 1024
+    except OSError:
+        return 0.0
+
+
+def all_db_paths() -> list:
+    """424号P0-2：枚举全部分库 + 总库 + market_snapshot.db 的 DB 路径
+
+    经 sharding_manager 获取分库名集合（_table_to_db 值域去重），
+    加上总库 stock_cache.db 与 market_snapshot.db，返回存在的 DB 路径列表。
+    """
+    db_names = set()
+    try:
+        from app.data.sharding_manager import sharding_manager
+        db_names.update(sharding_manager.get_all_db_names())
+    except Exception as e:
+        logger.warning(f"获取分库名失败: {e}")
+    db_names.add('stock_cache.db')
+    db_names.add('market_snapshot.db')
+    paths = []
+    for name in sorted(db_names):
+        p = DUCKDB_DIR / name
+        if p.exists():
+            paths.append(p)
+    return paths
+
+
+def wal_size_mb_for(db_path: Path) -> float:
+    """返回指定 DB 的 WAL 大小（MB）"""
+    try:
+        return (Path(str(db_path) + '-wal').stat().st_size) / 1024 / 1024
     except OSError:
         return 0.0
 
@@ -173,36 +204,48 @@ def start_processes() -> None:
 
 
 def shrink_wal() -> bool:
-    """收缩 WAL：PASSIVE 合并 + TRUNCATE 截断（需所有进程连接关闭）"""
-    size_before = wal_size_mb()
-    logger.info(f"收缩前 WAL: {size_before:.1f}MB")
+    """收缩 WAL：PASSIVE 合并 + TRUNCATE 截断（需所有进程连接关闭）
 
-    try:
-        con = sqlite3.connect(str(DB_PATH), timeout=30)
+    424号P0-2：遍历全部分库 + 总库 + market_snapshot.db，逐库收缩。
+    """
+    ok_all = True
+    for db_path in all_db_paths():
+        size_before = wal_size_mb_for(db_path)
+        if size_before < 1:
+            continue
+        logger.info(f"收缩 {db_path.name}: 前 {size_before:.1f}MB")
         try:
-            r = con.execute('PRAGMA wal_checkpoint(PASSIVE)').fetchone()
-            logger.info(f"PASSIVE: busy={r[0]} frames={r[1]} checkpointed={r[2]}")
-            time.sleep(1)
-            # TRUNCATE 有限重试（3 次；仍 busy 说明有未释放连接，放弃本次）
-            for attempt in range(3):
-                r = con.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
-                if r[0] == 0:
-                    break
-                logger.info(f"TRUNCATE 尝试{attempt}: busy={r[0]}")
-                time.sleep(5)
-        finally:
-            con.close()
-    except sqlite3.Error as e:
-        logger.error(f"收缩失败: {e}")
-        return False
+            con = sqlite3.connect(str(db_path), timeout=30)
+            try:
+                r = con.execute('PRAGMA wal_checkpoint(PASSIVE)').fetchone()
+                logger.info(f"  {db_path.name} PASSIVE: busy={r[0]} frames={r[1]} checkpointed={r[2]}")
+                time.sleep(1)
+                # TRUNCATE 有限重试（3 次；仍 busy 说明有未释放连接，放弃本次）
+                for attempt in range(3):
+                    r = con.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+                    if r[0] == 0:
+                        break
+                    logger.info(f"  {db_path.name} TRUNCATE 尝试{attempt}: busy={r[0]}")
+                    time.sleep(5)
+            finally:
+                con.close()
+        except sqlite3.Error as e:
+            logger.error(f"收缩 {db_path.name} 失败: {e}")
+            ok_all = False
+            continue
+        size_after = wal_size_mb_for(db_path)
+        logger.info(f"  {db_path.name} 后 {size_after:.1f}MB")
+        if size_after >= max(1, size_before * 0.5):
+            logger.warning(f"⚠️ {db_path.name} WAL 未充分收缩（可能仍有连接活跃）")
+            ok_all = False
+    if ok_all:
+        logger.info("✅ 全部分库 WAL 收缩成功")
+    return ok_all
 
-    size_after = wal_size_mb()
-    logger.info(f"收缩后 WAL: {size_after:.1f}MB")
-    if size_after < max(1, size_before * 0.5):
-        logger.info("✅ WAL 收缩成功")
-        return True
-    logger.warning("⚠️ WAL 未充分收缩（可能仍有连接活跃）")
-    return False
+
+def max_wal_size_mb() -> float:
+    """全部分库中最大的 WAL 大小（MB）"""
+    return max((wal_size_mb_for(p) for p in all_db_paths()), default=0.0)
 
 
 def maintenance_once() -> bool:
@@ -223,7 +266,7 @@ def daemon_loop() -> None:
     logger.info(f"守护模式启动（检查间隔 {DAEMON_INTERVAL}s, 阈值 {SHRINK_THRESHOLD_MB}MB）")
     while True:
         try:
-            size = wal_size_mb()
+            size = max_wal_size_mb()
             if size < SHRINK_THRESHOLD_MB:
                 logger.debug(f"WAL {size:.0f}MB < 阈值，跳过")
             elif is_market_hours():

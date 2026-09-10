@@ -103,6 +103,16 @@ def _ensure_ecm():
         from app.data.enhanced_cache_manager import get_ecm_instance
         _ecm = get_ecm_instance()
     return _ecm
+
+_tushare_provider = None
+
+def _get_tushare_provider():
+    """惰性获取 TushareProvider 单例（424号§10决策④：_batch_* 收敛到适配层）"""
+    global _tushare_provider
+    if _tushare_provider is None:
+        from app.data.tushare_provider import TushareProvider
+        _tushare_provider = TushareProvider()
+    return _tushare_provider
 _last_step_counts = {}  # 371号P0#3：管道步骤成功计数
 _jud_meta_cache = {}  # 371号JUD接入：{ts_code: enriched_meta_dict} 供 treemap_snapshot 读取
 _market_stats_cache = {}  # 411号Phase 10：全市场级统计预计算，供BociasiQuadrantAnalyzer消费
@@ -208,9 +218,12 @@ def _compute_volume_ratio(trade_date: str) -> int:
     """
     _ensure_pd()
     import pandas as pd
+    from app.data.sharding_manager import sharding_manager
     try:
+        _daily_conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('daily_cache'))
+        _basic_conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('daily_basic_cache'))
         # 获取最近5个交易日
-        dates = _ecm.conn.execute(
+        dates = _daily_conn.execute(
             "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 5"
         ).fetchall()
         if not dates or len(dates) < 5:
@@ -224,7 +237,7 @@ def _compute_volume_ratio(trade_date: str) -> int:
 
         # 获取这5天的 vol 数据
         placeholders = ','.join(['?'] * len(date_list))
-        rows = _ecm.conn.execute(
+        rows = _daily_conn.execute(
             f"SELECT ts_code, trade_date, vol FROM daily_cache WHERE trade_date IN ({placeholders})",
             date_list
         ).fetchall()
@@ -253,12 +266,12 @@ def _compute_volume_ratio(trade_date: str) -> int:
         updated = 0
         for _, r in merged.iterrows():
             if r['volume_ratio'] is not None:
-                _ecm.conn.execute(
+                _basic_conn.execute(
                     "UPDATE daily_basic_cache SET volume_ratio = ? WHERE ts_code = ? AND trade_date = ?",
                     [r['volume_ratio'], r['ts_code'], today]
                 )
                 updated += 1
-        _ecm.conn.commit()
+        _basic_conn.commit()
         if updated > 0:
             logger.info(f"  [量比] 自算回写 {updated} 条")
         return updated
@@ -533,20 +546,18 @@ def _classify_seat_name(seat_name: str) -> str:
 def _batch_margin(trade_date: str) -> int:
     """全市场融资融券个股明细 — 支持非交易日降级到最近交易日"""
     _ensure_pd()
-    import tushare as ts
-    pro = ts.pro_api()
-    raw = _ts(pro.margin_detail, trade_date=trade_date)
+    provider = _get_tushare_provider()
+    raw = provider.get_margin_detail(trade_date)
     if raw is None or raw.empty:
-        # 非交易日降级：使用 daily_cache 中的最新交易日
+        # 非交易日降级：使用 daily_cache 中的最新交易日（424号P0-1：改走分库权威副本）
         try:
-            latest = _ecm.conn.execute(
-                "SELECT MAX(trade_date) FROM daily_cache"
-            ).fetchone()[0]
+            latest = _shard_query_df('daily_cache',
+                "SELECT MAX(trade_date) FROM daily_cache").iloc[0, 0]
             if latest:
                 # 统一格式为 YYYYMMDD（Tushare API 要求）
-                fallback = latest.replace('-', '')
+                fallback = str(latest).replace('-', '')
                 if fallback != trade_date:
-                    raw = _ts(pro.margin_detail, trade_date=fallback)
+                    raw = provider.get_margin_detail(fallback)
         except Exception:
             pass
     if raw is None or raw.empty:
@@ -563,10 +574,15 @@ def _batch_margin(trade_date: str) -> int:
 
 
 def _batch_margin_range(start_date: str, end_date: str) -> int:
-    """363号F55-3修复：支持日期范围的融资融券增量回补"""
+    """363号F55-3修复：支持日期范围的融资融券增量回补
+
+    424号P0-1修复：兼容 YYYYMMDD 与 YYYY-MM-DD 两种日期格式。
+    调用处 run_integrity_check 传 today（YYYYMMDD），原实现 strptime('%Y-%m-%d')
+    抛 ValueError 被外层 except 吞掉 → 范围补采每次触发但永不执行。
+    """
     from datetime import datetime as _dt, timedelta
-    start = _dt.strptime(start_date, '%Y-%m-%d')
-    end = _dt.strptime(end_date, '%Y-%m-%d')
+    start = _dt.strptime(str(start_date).replace('-', ''), '%Y%m%d')
+    end = _dt.strptime(str(end_date).replace('-', ''), '%Y%m%d')
     total = 0
     current = start
     while current <= end:
@@ -851,10 +867,11 @@ def _find_kline_insufficient(threshold: int = 130, limit: int = 5000) -> list:
         from app.data.enhanced_cache_manager import get_ecm_instance
         _ecm = get_ecm_instance()
     try:
-        rows = _ecm.conn.execute(
+        rows = _shard_fetchall(
+            'daily_cache',
             "SELECT ts_code, COUNT(*) cnt FROM daily_cache GROUP BY ts_code HAVING cnt < ? LIMIT ?",
             [threshold, limit]
-        ).fetchall()
+        )
         return [r[0] for r in rows]
     except Exception as e:
         logger.warning(f"_find_kline_insufficient failed: {e}")
@@ -928,9 +945,7 @@ def _batch_adj_factor() -> int:
     except Exception:
         pass
     # 降级：逐只（仅当批量失败时）
-    codes = _ecm.conn.execute(
-        "SELECT DISTINCT ts_code FROM daily_cache"
-    ).fetchall()
+    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
     codes = [r[0] for r in codes[:500]]
     total = 0
     for code in codes:
@@ -970,7 +985,7 @@ def _batch_top10_holders() -> int:
     except Exception:
         pass
     # 降级：逐只
-    codes = _ecm.conn.execute("SELECT DISTINCT ts_code FROM daily_cache").fetchall()
+    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
     codes = [r[0] for r in codes[:500]]
     total = 0
     for code in codes:
@@ -1010,7 +1025,7 @@ def _batch_stk_holder() -> int:
     except Exception:
         pass
     # 降级：逐只
-    codes = _ecm.conn.execute("SELECT DISTINCT ts_code FROM daily_cache").fetchall()
+    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
     codes = [r[0] for r in codes[:500]]
     total = 0
     for code in codes:
@@ -1036,21 +1051,13 @@ def _batch_finance_report() -> int:
     使用 pro.fina_indicator 带 FINA_FIELDS_EXTENDED 字段集。
     """
     _ensure_pd()
-    import tushare as ts
-    pro = ts.pro_api()
-    codes = _ecm.conn.execute(
-        "SELECT DISTINCT ts_code FROM daily_cache"
-    ).fetchall()
+    provider = _get_tushare_provider()
+    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
     codes = [r[0] for r in codes[:500]]
-    FINA_FIELDS_EXTENDED = (
-        'ts_code,end_date,roce,dt_eps,profit_dedt,'
-        'q_sales,q_profit,q_eps,yoy_tr,yoy_profit,'
-        'bps,ocfps,quick_ratio,free_cashflow_ps'
-    )
     total = 0
     for code in codes:
         try:
-            raw = _ts(pro.fina_indicator, ts_code=code, fields=FINA_FIELDS_EXTENDED)
+            raw = provider.get_fina_indicator_extended(code)
             if raw is not None and not raw.empty:
                 df = raw.copy()
                 for col in ['end_date', 'ann_date']:
@@ -1087,21 +1094,16 @@ def _batch_pattern_score(trade_date: str):
 
     # 获取当日有数据的所有股票
     try:
-        rows = _ecm.conn.execute(
-            "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?",
-            [td_fmt]
-        ).fetchall()
+        rows = _shard_fetchall(
+            'daily_cache', "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?", [td_fmt])
         if not rows:
             # 非交易日回退：用最新交易日
-            row = _ecm.conn.execute(
-                "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-            ).fetchone()
+            row = _shard_fetchall(
+                'daily_cache', "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
             if row:
-                td_fmt = row[0]
-                rows = _ecm.conn.execute(
-                    "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?",
-                    [td_fmt]
-                ).fetchall()
+                td_fmt = row[0][0]
+                rows = _shard_fetchall(
+                    'daily_cache', "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?", [td_fmt])
                 logger.info(f"  [形态评分] 今日无数据，回退到最近交易日: {td_fmt}")
     except Exception as e:
         logger.warning(f"  [形态评分] 查询股票列表失败: {e}")
@@ -1180,16 +1182,13 @@ def _batch_stock_list() -> int:
 def _batch_income_recent(limit_days: int = 90) -> int:
     """增量同步最近一期利润表 — 后台低优"""
     _ensure_pd()
-    import tushare as ts
-    pro = ts.pro_api()
+    provider = _get_tushare_provider()
     total = 0
-    codes = _ecm.conn.execute(
-        "SELECT DISTINCT ts_code FROM daily_cache"
-    ).fetchall()
+    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
     codes = [r[0] for r in codes[:500]]  # 限500只，避免过长
     for code in codes:
         try:
-            raw = _ts(pro.income, ts_code=code, start_date=None, end_date=None)
+            raw = provider.get_income(code)
             if raw is not None and not raw.empty:
                 if 'end_date' in raw.columns:
                     raw['end_date'] = pd.to_datetime(raw['end_date']).dt.date
@@ -1206,16 +1205,13 @@ def _batch_income_recent(limit_days: int = 90) -> int:
 def _batch_balancesheet(limit_days: int = 90) -> int:
     """增量同步最近一期资产负债表 — 后台低优"""
     _ensure_pd()
-    import tushare as ts
-    pro = ts.pro_api()
+    provider = _get_tushare_provider()
     total = 0
-    codes = _ecm.conn.execute(
-        "SELECT DISTINCT ts_code FROM daily_cache"
-    ).fetchall()
+    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
     codes = [r[0] for r in codes[:500]]
     for code in codes:
         try:
-            raw = _ts(pro.balancesheet, ts_code=code, start_date=None, end_date=None)
+            raw = provider.get_balancesheet(code)
             if raw is not None and not raw.empty:
                 for col in ['end_date', 'ann_date', 'f_ann_date']:
                     if col in raw.columns:
@@ -1231,16 +1227,13 @@ def _batch_balancesheet(limit_days: int = 90) -> int:
 def _batch_cashflow(limit_days: int = 90) -> int:
     """增量同步最近一期现金流量表 — 后台低优"""
     _ensure_pd()
-    import tushare as ts
-    pro = ts.pro_api()
+    provider = _get_tushare_provider()
     total = 0
-    codes = _ecm.conn.execute(
-        "SELECT DISTINCT ts_code FROM daily_cache"
-    ).fetchall()
+    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
     codes = [r[0] for r in codes[:500]]
     for code in codes:
         try:
-            raw = _ts(pro.cashflow, ts_code=code, start_date=None, end_date=None)
+            raw = provider.get_cashflow(code)
             if raw is not None and not raw.empty:
                 for col in ['end_date', 'ann_date', 'f_ann_date']:
                     if col in raw.columns:
@@ -1256,16 +1249,13 @@ def _batch_cashflow(limit_days: int = 90) -> int:
 def _batch_forecast(limit_days: int = 90) -> int:
     """增量同步最近一期业绩预告 — 后台低优"""
     _ensure_pd()
-    import tushare as ts
-    pro = ts.pro_api()
+    provider = _get_tushare_provider()
     total = 0
-    codes = _ecm.conn.execute(
-        "SELECT DISTINCT ts_code FROM daily_cache"
-    ).fetchall()
+    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
     codes = [r[0] for r in codes[:500]]
     for code in codes:
         try:
-            raw = _ts(pro.forecast, ts_code=code, start_date=None, end_date=None)
+            raw = provider.get_forecast(code)
             if raw is not None and not raw.empty:
                 for col in ['end_date', 'ann_date']:
                     if col in raw.columns:
@@ -1557,9 +1547,8 @@ def run_integrity_check(backfill_days: int = 1):
 
     # 申万行业指数完整性检查（28 个行业，缺失时回填60日）
     try:
-        have_rows = _ecm.conn.execute(
-            "SELECT DISTINCT ts_code FROM daily_cache WHERE ts_code LIKE '801%.SI'"
-        ).fetchall()
+        have_rows = _shard_fetchall(
+            'daily_cache', "SELECT DISTINCT ts_code FROM daily_cache WHERE ts_code LIKE '801%.SI'")
         have_set = {r[0] for r in have_rows}
         # 2026-08-12 修正：用实际 sw_codes 列表对比（原硬编码 31，实际 28，
         # 致 sw_cnt<31 恒真 → 每次完整性检查都回填 60 天 → 死循环阻塞主循环）
@@ -1640,7 +1629,7 @@ def _check_data_timeliness():
 
     for table, label in core_tables:
         try:
-            _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
+            latest = _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
             if latest:
                 latest_date = datetime.strptime(str(latest), '%Y-%m-%d') if isinstance(latest, str) else latest
                 days_lag = (today - latest_date).days
@@ -1659,7 +1648,7 @@ def _check_data_timeliness():
 
     for table, label in supplement_tables:
         try:
-            _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
+            latest = _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
             if latest:
                 latest_date = datetime.strptime(str(latest), '%Y-%m-%d') if isinstance(latest, str) else latest
                 days_lag = (today - latest_date).days
@@ -1680,7 +1669,7 @@ def _check_data_timeliness():
 
     for table, label in background_tables:
         try:
-            _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
+            latest = _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
             if latest:
                 latest_date = datetime.strptime(str(latest), '%Y-%m-%d') if isinstance(latest, str) else latest
                 days_lag = (today - latest_date).days
@@ -1754,14 +1743,10 @@ def _check_data_consistency():
 
     # 检查跨表一致性：daily_cache与daily_basic_cache的ts_code交集
     try:
-        daily_codes = set(row[0] for row in _ecm.conn.execute(
-            "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date = ?",
-            [today_fmt]
-        ).fetchall())
-        basic_codes = set(row[0] for row in _ecm.conn.execute(
-            "SELECT DISTINCT ts_code FROM daily_basic_cache WHERE trade_date = ?",
-            [today_fmt]
-        ).fetchall())
+        daily_codes = set(row[0] for row in _shard_fetchall(
+            'daily_cache', "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date = ?", [today_fmt]))
+        basic_codes = set(row[0] for row in _shard_fetchall(
+            'daily_basic_cache', "SELECT DISTINCT ts_code FROM daily_basic_cache WHERE trade_date = ?", [today_fmt]))
 
         if daily_codes and basic_codes:
             missing_in_basic = daily_codes - basic_codes
@@ -1774,8 +1759,10 @@ def _check_data_consistency():
         logger.debug(f"  跨表一致性检查失败: {e}")
 
     # 363号F55-5修复：检查时间一致性（同一股票在不同表的日期差不超过3天）
+    # 424号P0-3：daily_cache(market_cache.db) 与 daily_basic_cache(market_cache.db) 同库，可单 SQL JOIN
     try:
-        time_check = _ecm.conn.execute("""
+        time_check = _shard_fetchall(
+            'daily_cache', """
             SELECT COUNT(*) FROM (
                 SELECT d.ts_code,
                        MAX(d.trade_date) as daily_date,
@@ -1788,7 +1775,7 @@ def _check_data_consistency():
                 GROUP BY d.ts_code
                 HAVING ABS(date_diff) > 3
             )
-        """, [today_fmt, today_fmt]).fetchone()[0]
+        """, [today_fmt, today_fmt])[0][0]
         if time_check > 0:
             logger.warning(f"  [数据一致性] 时间不一致: {time_check} 只股票跨表日期差>3天")
     except Exception as e:
@@ -1796,10 +1783,11 @@ def _check_data_consistency():
 
     # 检查逻辑一致性：high >= close >= low
     try:
-        logic_anomaly = _ecm.conn.execute("""
+        logic_anomaly = _shard_fetchall(
+            'daily_cache', """
             SELECT COUNT(*) FROM daily_cache
             WHERE trade_date = ? AND (high < close OR close < low)
-        """, [today_fmt]).fetchone()[0]
+        """, [today_fmt])[0][0]
         if logic_anomaly > 0:
             logger.warning(f"  [数据一致性] 逻辑异常记录: {logic_anomaly} 条 (high < close 或 close < low)")
     except Exception as e:
@@ -1819,10 +1807,11 @@ def _check_watchlist_minute():
         # 检查哪些自选股缺失分钟数据
         missing_5min = []
         for code in codes:
-            cnt = _ecm.conn.execute(
+            cnt = _shard_fetchall(
+                'minute_kline_cache',
                 'SELECT COUNT(*) FROM minute_kline_cache WHERE ts_code=? AND freq="5min"',
                 [code]
-            ).fetchone()[0]
+            )[0][0]
             if cnt == 0:
                 missing_5min.append(code)
         
@@ -2146,10 +2135,9 @@ def _precompute_sector_heat(codes):
             logger.warning("板块热度预计算为空，跳过写盘")
             return
         # 取最新交易日
-        _sh_date_row = _ecm.conn.execute(
-            "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-        ).fetchone()
-        _sh_date = _sh_date_row[0] if _sh_date_row else ''
+        _sh_date_row = _shard_fetchall(
+            'daily_cache', "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
+        _sh_date = _sh_date_row[0][0] if _sh_date_row else ''
         if not _sh_date:
             logger.warning("无交易日数据，跳过板块热度写盘")
             return
@@ -2434,26 +2422,23 @@ def _precompute_raw_features(codes):
         # 市场情绪全局值
         _sentiment_phase_global = 'neutral'
         try:
-            last_date_row = _ecm.conn.execute(
-                "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-            ).fetchone()
+            last_date_row = _shard_fetchall(
+                'daily_cache', "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
             if last_date_row:
-                last_date = last_date_row[0]
-                limit_up = _ecm.conn.execute(
-                    "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg > 9.9",
-                    [last_date]
-                ).fetchone()[0]
-                limit_down = _ecm.conn.execute(
-                    "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg < -9.9",
-                    [last_date]
-                ).fetchone()[0]
+                last_date = last_date_row[0][0]
+                limit_up = _shard_fetchall(
+                    'daily_cache', "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg > 9.9",
+                    [last_date])[0][0]
+                limit_down = _shard_fetchall(
+                    'daily_cache', "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND pct_chg < -9.9",
+                    [last_date])[0][0]
                 sealing_rate = 0.0
                 try:
-                    rows = _ecm.conn.execute(
+                    rows = _shard_fetchall(
+                        'daily_cache',
                         "SELECT high, close, pct_chg FROM daily_cache "
                         "WHERE trade_date=? AND pct_chg > 5",
-                        [last_date]
-                    ).fetchall()
+                        [last_date])
                     touched = sealed = 0
                     for high, close, pct in rows:
                         prev_close = close / (1 + pct / 100)
@@ -2719,18 +2704,9 @@ def _precompute_raw_features(codes):
                 # 13. 资金筹码扩展字段（365号批次A / Phase 3）
                 try:
                     _chip_fund_feat = {}
-                    # fund_flow_strength: 大单净流入强度（0-1）
-                    try:
-                        mfs = MainForceScorer()
-                        _sub = mfs.get_sub_scores(df, symbol=code)
-                        _chip_fund_feat['fund_flow_strength'] = min(1.0, max(0.0, (_sub.get('total', 0) or 0) / 10.0))
-                    except Exception:
-                        _chip_fund_feat['fund_flow_strength'] = None
-                    # chip_transfer: 筹码转移方向
-                    _chip_fund_feat['chip_transfer'] = _depth_f.get('main_force_phase', 'unknown') if _depth_f.get('main_force_phase') in ('accumulating', 'shipping') else 'neutral'
-                    # control_degree: 控盘度
-                    _chip_fund_feat['control_degree'] = _depth.get('hold_float_ratio')
                     # 411号Phase 7：筹码指标预计算（SSRP/ASR/concentration/profit_ratio/cyqkl）
+                    # 424号§10决策②：先算 chip_bins（cde.estimate），再算聚合指标，
+                    # 供 get_sub_scores 消费，避免完整分布被重复计算两次。
                     try:
                         chip_bins = cde.estimate(df)
                         if chip_bins is not None:
@@ -2747,6 +2723,18 @@ def _precompute_raw_features(codes):
                             _chip_fund_feat['rsi'] = chip_result.get('rsi')
                     except Exception:
                         pass
+                    # fund_flow_strength: 大单净流入强度（0-1）
+                    # 424号§10决策②：传入已预计算的 chip_fund_ext，避免 _score_chip_distribution 重复计算完整分布
+                    try:
+                        mfs = MainForceScorer()
+                        _sub = mfs.get_sub_scores(df, symbol=code, chip_fund_ext=_chip_fund_feat)
+                        _chip_fund_feat['fund_flow_strength'] = min(1.0, max(0.0, (_sub.get('total', 0) or 0) / 10.0))
+                    except Exception:
+                        _chip_fund_feat['fund_flow_strength'] = None
+                    # chip_transfer: 筹码转移方向
+                    _chip_fund_feat['chip_transfer'] = _depth_f.get('main_force_phase', 'unknown') if _depth_f.get('main_force_phase') in ('accumulating', 'shipping') else 'neutral'
+                    # control_degree: 控盘度
+                    _chip_fund_feat['control_degree'] = _depth.get('hold_float_ratio')
                     features['chip_fund_ext'] = _chip_fund_feat
                 except Exception as e:
                     logger.warning(f"RAW资金筹码扩展字段失败 [{code}]: {e}")
@@ -4683,14 +4671,13 @@ def _get_latest_data_date() -> str:
                 return str(row)
     except Exception:
         pass
-    # 回退：从 stock_cache.db 读取（兼容未迁移场景）
+    # 回退：从分库读取（兼容 _query_table 异常场景）
     try:
-        row = _ecm.conn.execute(
-            "SELECT trade_date FROM daily_cache "
-            "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 1"
-        ).fetchone()
+        row = _shard_fetchall(
+            'daily_cache', "SELECT trade_date FROM daily_cache "
+            "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 1")
         if row:
-            return str(row[0])
+            return str(row[0][0])
     except Exception:
         pass
     return None
@@ -5340,9 +5327,8 @@ def _prewarm_weekly_cache(codes):
     import pandas as _pd
     _ensure_pd()
     # 找出缺周线缓存的股票
-    rows = _ecm.conn.execute(
-        "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE freq='W'"
-    ).fetchall()
+    rows = _shard_fetchall(
+        'minute_kline_cache', "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE freq='W'")
     cached_set = {r[0] for r in rows}
     missing = [c for c in codes if c not in cached_set]
     if not missing:
@@ -5429,10 +5415,8 @@ def _batch_backfill_minute_kline(trade_date: str = None):
 
     # Step 1: 获取今日有日线数据的股票列表
     try:
-        daily_stocks = _ecm.conn.execute(
-            "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?",
-            [trade_date_fmt]
-        ).fetchall()
+        daily_stocks = _shard_fetchall(
+            'daily_cache', "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?", [trade_date_fmt])
         daily_stocks = [r[0] for r in daily_stocks]
     except Exception as e:
         logger.warning(f"[分钟回填] 查询日线股票列表失败: {e}")
@@ -5444,10 +5428,8 @@ def _batch_backfill_minute_kline(trade_date: str = None):
 
     # Step 2: 查询已有分钟数据的股票
     try:
-        minute_stocks = _ecm.conn.execute(
-            "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE trade_date=?",
-            [trade_date_fmt]
-        ).fetchall()
+        minute_stocks = _shard_fetchall(
+            'minute_kline_cache', "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE trade_date=?", [trade_date_fmt])
         minute_stocks = set(r[0] for r in minute_stocks)
     except Exception:
         minute_stocks = set()
@@ -5462,10 +5444,8 @@ def _batch_backfill_minute_kline(trade_date: str = None):
     for round_idx in range(MAX_ROUNDS):
         # 刷新缺失集（每轮结束后重新查已补齐的）
         try:
-            minute_stocks = set(r[0] for r in _ecm.conn.execute(
-                "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE trade_date=?",
-                [trade_date_fmt]
-            ).fetchall())
+            minute_stocks = set(r[0] for r in _shard_fetchall(
+                'minute_kline_cache', "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE trade_date=?", [trade_date_fmt]))
         except Exception:
             minute_stocks = set()
         missing = [s for s in daily_stocks if s not in minute_stocks][:500]
@@ -5657,6 +5637,53 @@ def _is_market_hours() -> bool:
     return 9 <= h <= 15
 
 
+def _wal_maintenance_all_dbs():
+    """424号P0-2：遍历全部分库执行 WAL checkpoint 与大小监控
+
+    原实现只处理总库 stock_cache.db（_ecm.wal_checkpoint + 硬编码
+    stock_cache.db-wal 大小检测），compute_cache.db-wal 达 5.26GB 处于
+    监控盲区。本函数经 sharding_manager 获取全部分库名，对每库执行
+    PASSIVE checkpoint，并返回各分库 WAL 大小供监控告警。
+
+    Returns:
+        dict: {db_name: wal_size_mb}，供调用方记录监控指标
+    """
+    import sqlite3 as _sq
+    from app.data.sharding_manager import sharding_manager
+
+    data_dir = os.environ.get('DATA_DIR', 'data')
+    duckdb_dir = os.path.join(data_dir, 'duckdb')
+    wal_sizes = {}
+
+    # 全部分库名（去重）+ 总库 + market_snapshot.db
+    db_names = set(sharding_manager.get_all_db_names())
+    db_names.add('stock_cache.db')
+    db_names.add('market_snapshot.db')
+
+    for db_name in sorted(db_names):
+        db_path = os.path.join(duckdb_dir, db_name)
+        if not os.path.exists(db_path):
+            continue
+        # 1. PASSIVE checkpoint（轻量非阻塞）
+        try:
+            _con = _sq.connect(db_path, timeout=10)
+            try:
+                _con.execute('PRAGMA wal_checkpoint(PASSIVE)')
+            finally:
+                _con.close()
+        except Exception as e:
+            logger.warning(f"WAL checkpoint 失败 ({db_name}): {e}")
+        # 2. WAL 大小
+        try:
+            wal_path = db_path + '-wal'
+            if os.path.exists(wal_path):
+                wal_sizes[db_name] = os.path.getsize(wal_path) / 1024 / 1024
+        except OSError:
+            pass
+
+    return wal_sizes
+
+
 def _check_daily_sync_backfill():
     """开机兜底：如果当前 >15:35 且今日日终同步未执行，立即触发（Task 2）
 
@@ -5672,9 +5699,8 @@ def _check_daily_sync_backfill():
 
     today_fmt = now.strftime('%Y-%m-%d')
     try:
-        cnt = _ecm.conn.execute(
-            "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [today_fmt]
-        ).fetchone()[0]
+        cnt = _shard_fetchall(
+            'daily_cache', "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [today_fmt])[0][0]
         if cnt >= 5000:
             logger.info(f"  [日终兜底] 今日日终同步已完成（日线{cnt}行），跳过")
             return
@@ -5799,7 +5825,8 @@ def main():
         _ckpt_interval = 300 if not _is_market_hours() else 1800
         if ts - _last_ckpt > _ckpt_interval:
             try:
-                _ecm.wal_checkpoint('PASSIVE')
+                # 424号P0-2：遍历全部分库执行 checkpoint（原只处理总库）
+                _wal_maintenance_all_dbs()
                 _last_ckpt = ts
             except Exception as e:
                 logger.warning(f"WAL checkpoint 失败: {e}")
@@ -5809,48 +5836,37 @@ def main():
         # 非交易时段 + 管道空闲时提示执行收缩（backend/wal_maintenance.py）。
         if not _is_market_hours():
             try:
-                _wal_mb = os.path.getsize(
-                    os.path.join(
-                        os.environ.get('DATA_DIR', 'data'), 'duckdb', 'stock_cache.db-wal'
-                    )
-                ) / 1024 / 1024
+                # 424号P0-2：遍历所有分库 WAL 大小（原只统计总库 stock_cache.db-wal）
+                _wal_sizes = _wal_maintenance_all_dbs()
+                _max_wal_mb = max(_wal_sizes.values()) if _wal_sizes else 0
+                _max_wal_db = max(_wal_sizes, key=_wal_sizes.get) if _wal_sizes else ''
 
                 # 356号方案：集成监控告警
                 try:
                     from app.data.monitor import monitor
-                    monitor.record_metric('wal_size_mb', _wal_mb)
-                    if _wal_mb > 2048:
+                    for _db, _mb in _wal_sizes.items():
+                        monitor.record_metric(f'wal_size_mb_{_db}', _mb)
+                    monitor.record_metric('wal_size_mb', _max_wal_mb)
+                    if _max_wal_mb > 2048:
                         monitor.create_alert(
                             'WARNING',
                             'WAL文件过大',
-                            f'WAL文件大小 {_wal_mb:.0f}MB 超过阈值 2GB',
+                            f'WAL文件大小 {_max_wal_mb:.0f}MB（{_max_wal_db}）超过阈值 2GB',
                             source='wal_monitor',
-                            metrics={'wal_size_mb': _wal_mb}
+                            metrics={'wal_size_mb': _max_wal_mb}
                         )
                 except Exception:
                     pass
 
-                if _wal_mb > 2048:
+                if _max_wal_mb > 2048:
                     logger.warning(
-                        f"WAL 达 {_wal_mb:.0f}MB（>2GB）——建议执行收缩: "
+                        f"WAL 达 {_max_wal_mb:.0f}MB（{_max_wal_db}，>2GB）——建议执行收缩: "
                         f"python backend/wal_maintenance.py --once"
                     )
                 # 423号 B3：WAL 阈值整合（>500MB 触发 checkpoint）——非交易时段且距上次
                 # >1h 时执行 PASSIVE 合并（轻量非阻塞；TRUNCATE 深收缩由 wal_maintenance
-                # 守护在管道空闲时执行，二者互补）。主库 WAL 与分库共用主库连接。
-                if not _is_market_hours() and _wal_mb > 500 and ts - _last_ckpt > 3600:
-                    try:
-                        import sqlite3 as _sq
-                        _last_ckpt = ts
-                        _con = _sq.connect(
-                            os.path.join(os.environ.get('DATA_DIR', 'data'),
-                                         'duckdb', 'stock_cache.db'), timeout=10)
-                        try:
-                            _con.execute('PRAGMA wal_checkpoint(PASSIVE)')
-                        finally:
-                            _con.close()
-                    except Exception as e:
-                        logger.warning(f"WAL checkpoint 失败: {e}")
+                # 守护在管道空闲时执行，二者互补）。_wal_maintenance_all_dbs 已在上方
+                # 周期 checkpoint 中对所有分库执行 PASSIVE，此处仅告警。
             except OSError:
                 pass
 

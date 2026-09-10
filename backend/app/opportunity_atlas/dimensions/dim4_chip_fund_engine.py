@@ -2768,13 +2768,15 @@ class MainForceScorer:
             self._dm = DataManager()
         return self._dm
 
-    def score(self, data: pd.DataFrame, symbol: str = None) -> float:
+    def score(self, data: pd.DataFrame, symbol: str = None,
+              chip_fund_ext: dict = None) -> float:
         """
         综合评分：0-10，越高代表主力关注度越强
 
         Args:
             data: OHLCV DataFrame（120 天以上）
             symbol: 股票代码（传入后可获取资金流向和股东数据）
+            chip_fund_ext: 可选，筹码预计算聚合指标（424号§10决策②，避免重复计算完整分布）
 
         Returns:
             0-10 分
@@ -2801,8 +2803,8 @@ class MainForceScorer:
             # E: 龙虎榜席位加分（包含假机构识别）
             score_e = self._score_lhb(symbol, data)
 
-            # F: 筹码分布维度（新增 — 真实筹码分布计算，与渠道二共享 ChipDistributionService）
-            score_f = self._score_chip_distribution(symbol, data)
+            # F: 筹码分布维度（424号§10决策②：优先消费 chip_fund_ext 预计算聚合指标）
+            score_f = self._score_chip_distribution(symbol, data, chip_fund_ext=chip_fund_ext)
 
             total = score_a + score_b + score_c + score_d + score_e + score_f
             return min(10.0, max(0.0, total))
@@ -2810,7 +2812,8 @@ class MainForceScorer:
             logger.error(f"MainForceScorer 评分失败 {symbol}: {e}")
             return 0.0
 
-    def get_sub_scores(self, data: pd.DataFrame, symbol: str = None) -> dict:
+    def get_sub_scores(self, data: pd.DataFrame, symbol: str = None,
+                       chip_fund_ext: dict = None) -> dict:
         """返回各子维度独立评分（364c Phase 3）"""
         if data.empty or len(data) < 60:
             return {'total': 0.0, 'moneyflow': 0.0, 'volume_price': 0.0,
@@ -2829,7 +2832,7 @@ class MainForceScorer:
             score_c = self._score_concentration(symbol, closes, price_position)
             score_d = self._score_retail_contrarian(symbol, price_position)
             score_e = self._score_lhb(symbol, data)
-            score_f = self._score_chip_distribution(symbol, data)
+            score_f = self._score_chip_distribution(symbol, data, chip_fund_ext=chip_fund_ext)
             total = score_a + score_b + score_c + score_d + score_e + score_f
 
             return {
@@ -3287,28 +3290,39 @@ class MainForceScorer:
         except Exception:
             return result
 
-    def _score_chip_distribution(self, symbol: str, data: pd.DataFrame) -> float:
+    def _score_chip_distribution(self, symbol: str, data: pd.DataFrame,
+                                 chip_fund_ext: dict = None) -> float:
         """
-        筹码分布维度（0-1.5分）：基于真实筹码分布计算的评分
+        筹码分布维度（0-1.5分）
 
-        使用 ChipDistributionService（与渠道二共享）分析筹码集中度：
-          - ASR > 50% → 浮筹比例适中，有利于上涨
-          - SSRP 接近当前价 → 平均成本附近，抛压小
-          - CYQKL 高 → 当前K线实体穿越筹码密集区，突破确认
-          - 筹码单峰密集 → 主力控盘度高
+        424号§10决策②：优先消费 chip_fund_ext 预计算聚合指标（SSRP/ASR/CYQKL/concentration），
+        避免重复计算完整筹码分布（RAW-2 已用 cde.estimate 算过一次 chip_bins）。
+        仅当 chip_fund_ext 缺失时回退实时计算完整分布。
 
         Returns: 0-1.5 分
         """
         if not symbol or data is None or len(data) < 30:
             return 0.0
         try:
-            from app.data.chip_distribution_service import ChipDistributionService
-            cds = ChipDistributionService()
-            result = cds.calculate_chip_distribution(symbol, data)
-            if not result or not result.get('success'):
-                return 0.0
-            indicators = result.get('indicators', {})
-            chip_bins = result.get('chip_bins', [])
+            indicators = None
+            chip_bins = None
+            if chip_fund_ext:
+                # 424号§10决策②：消费预计算聚合指标
+                indicators = {
+                    'asr': chip_fund_ext.get('asr'),
+                    'ssrp': chip_fund_ext.get('ssrp'),
+                    'cyqkl': chip_fund_ext.get('cyqkl'),
+                    'concentration': chip_fund_ext.get('concentration'),
+                }
+            else:
+                # 回退：实时计算完整分布（chart 路由按需触发场景）
+                from app.data.chip_distribution_service import ChipDistributionService
+                cds = ChipDistributionService()
+                result = cds.calculate_chip_distribution(symbol, data)
+                if not result or not result.get('success'):
+                    return 0.0
+                indicators = result.get('indicators', {})
+                chip_bins = result.get('chip_bins', [])
             # 缓存筹码数据供 identify_phase 使用
             self._chip_indicators = indicators
             self._chip_bins = chip_bins
@@ -3688,16 +3702,19 @@ class MainForceFilter:
         self.top_k = top_k
         self.scorer = MainForceScorer()
 
-    def filter(self, stock_list: list, data_dict: dict, cost_ext_dict: dict = None) -> list:
+    def filter(self, stock_list: list, data_dict: dict, cost_ext_dict: dict = None,
+               chip_fund_ext_dict: dict = None) -> list:
         """
         执行主力关注度筛选
 
         413号P3 T13：新增cost_ext_dict参数，传递到identify_phase增强阶段判断。
+        424号§10决策②：新增chip_fund_ext_dict参数，传递到score避免重复计算完整分布。
 
         Args:
             stock_list: [{ts_code, name}, ...] 或 [ts_code, ...]
             data_dict: {ts_code: DataFrame}
             cost_ext_dict: {ts_code: cost_ext_dict} 可选成本价数据
+            chip_fund_ext_dict: {ts_code: chip_fund_ext} 可选筹码预计算聚合指标
 
         Returns:
             [{symbol, name, mf_score, phase}, ...] 按评分降序
@@ -3712,7 +3729,8 @@ class MainForceFilter:
             if df.empty or len(df) < self.min_data_days:
                 continue
             try:
-                score = self.scorer.score(df, symbol=ts_code)
+                _chip_ext = chip_fund_ext_dict.get(ts_code) if chip_fund_ext_dict else None
+                score = self.scorer.score(df, symbol=ts_code, chip_fund_ext=_chip_ext)
                 _cost_ext = cost_ext_dict.get(ts_code) if cost_ext_dict else None
                 phase = self.scorer.identify_phase(df, symbol=ts_code, cost_ext=_cost_ext)
                 if score > 0:

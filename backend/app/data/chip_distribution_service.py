@@ -413,33 +413,3 @@ class ChipDistributionService:
         计算筹码获利率 - 当前价格以下筹码比例
         """
         return sum(bin_data['chip_ratio'] for bin_data in chip_bins if bin_data['price_bin'] <= current_price)
-
-    def cache_chip_distribution(self, ts_code: str, chip_result: Dict) -> bool:
-        """
-        缓存筹码分布
-        """
-        try:
-            trade_date = chip_result.get('trade_date')
-            chip_bins = chip_result.get('chip_bins', [])
-
-            if not trade_date or not chip_bins:
-                return False
-
-            # 格式化日期
-            if isinstance(trade_date, str):
-                trade_date = pd.to_datetime(trade_date).date()
-
-            self.cache_manager.cache_chip_distribution(ts_code, trade_date, chip_bins)
-            return True
-        except Exception:
-            logger.warning(r"缓存筹码分布失败: {e}")
-            return False
-
-    def get_cached_chip_distribution(self, ts_code: str, trade_date: Optional[str] = None) -> pd.DataFrame:
-        """
-        获取缓存的筹码分布
-        """
-        if trade_date:
-            return self.cache_manager.get_chip_distribution(ts_code, trade_date, trade_date)
-        else:
-            return self.cache_manager.get_latest_chip_distribution(ts_code)

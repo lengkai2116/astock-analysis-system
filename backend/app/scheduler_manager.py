@@ -388,15 +388,7 @@ class SchedulerManager:
             # ── 盘后清理链（239/244号方案 §2.2/§5 Phase 2） ───────────
             if result['status'] == 'success' and records_added > 0:
                 today = datetime.now().strftime('%Y-%m-%d')
-                # 1. 清理 DuckDB as_minute_kline（当日分钟K线）
-                try:
-                    from app.data import DataManager
-                    ecm = DataManager().cache
-                    ecm.clean_as_minute_kline(today)
-                except Exception as e:
-                    logger.warning(f"盘后清理 as_minute_kline 失败: {e}")
-
-                # 2. 清理 InMemoryStateStore（盘中内存缓存）
+                # 1. 清理 InMemoryStateStore（盘中内存缓存）
                 try:
                     from app.data.in_memory_store import store as mem_store
                     mem_store.clear_all()

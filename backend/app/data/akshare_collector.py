@@ -230,10 +230,11 @@ def _collect_sector_and_limit():
                     'rank': rank,
                 })
             mem_store.update_concepts(records)
-            try:
-                ecm.write_as_concept_ranking(records)
-            except Exception:
-                pass
+            # 424号§10决策①：as_concept_ranking 废弃，停写（无有效读方）
+            # try:
+            #     ecm.write_as_concept_ranking(records)
+            # except Exception:
+            #     pass
     except Exception as e:
         logger.warning(f"[concept_ranking] 采集失败: {e}")
 
@@ -293,10 +294,11 @@ def _collect_minute_kline():
                     'amount': _safe_float(row.get('成交额', 0)),
                 })
             mem_store.append_minute_kline(records)
-            try:
-                ecm.append_as_minute_kline(records)
-            except Exception:
-                pass
+            # 424号§10决策①：as_minute_kline 废弃，停写（分钟K线已由 mootdx 落 minute_kline_cache）
+            # try:
+            #     ecm.append_as_minute_kline(records)
+            # except Exception:
+            #     pass
             logger.debug(f"[minute_kline] {ts_code}: {len(records)} 条")
             time.sleep(0.1)
         except Exception as e:
@@ -387,10 +389,11 @@ def _collect_lhb_and_news():
                     'sell_amount': _safe_float(row.get('龙虎榜卖出额', 0)),
                 })
             mem_store.update_lhb(records)
-            try:
-                ecm.write_as_lhb_detail(records)
-            except Exception:
-                pass
+            # 424号§10决策①：as_lhb_detail 废弃，停写（龙虎榜已由 Tushare 落 lhb_detail_cache）
+            # try:
+            #     ecm.write_as_lhb_detail(records)
+            # except Exception:
+            #     pass
             logger.info(f"[lhb_detail] {len(records)} 条")
 
             # ── 278号方案：席位级龙虎榜明细 ──
@@ -480,10 +483,11 @@ def _collect_lhb_and_news():
                     'source': str(row.get('文章来源', '') or 'akshare'),
                 })
             mem_store.update_news(records)
-            try:
-                ecm.write_as_news(records)
-            except Exception:
-                pass
+            # 424号§10决策①：as_news 废弃，停写（新闻走内存即可）
+            # try:
+            #     ecm.write_as_news(records)
+            # except Exception:
+            #     pass
             logger.info(f"[news] {len(records)} 条")
     except Exception as e:
         logger.warning(f"[news] 采集失败: {e}")

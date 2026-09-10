@@ -166,30 +166,22 @@ class AkshareDataReader:
     # ── 板块排行 ─────────────────────────────────────────────
 
     def get_sector_rankings(self, top_n: int = 20) -> List[Dict]:
-        """获取行业板块涨跌排行"""
+        """获取行业板块涨跌排行（424号§10决策①：保留表，ECM 归档回退）"""
         store = _get_mem_store()
         records = store.get_sectors()
         if records:
             return records[:top_n]
         try:
-            df = self._ecm.read_as_sector_ranking(top_n)
-            return df.to_dict('records') if not df.empty else []
+            rows = self._ecm.read_as_sector_ranking(top_n)
+            return rows[:top_n] if rows else []
         except Exception as e:
             logger.debug(f"AkshareDataReader.get_sector_rankings 回退失败: {e}")
             return []
 
     def get_concept_rankings(self, top_n: int = 20) -> List[Dict]:
-        """获取概念板块涨跌排行"""
-        store = _get_mem_store()
-        records = store.get_concepts()
-        if records:
-            return records[:top_n]
-        try:
-            df = self._ecm.read_as_concept_ranking(top_n)
-            return df.to_dict('records') if not df.empty else []
-        except Exception as e:
-            logger.debug(f"AkshareDataReader.get_concept_rankings 回退失败: {e}")
-            return []
+        """获取概念板块涨跌排行（424号§10决策①：废弃表，恒返回空）"""
+        # 424号§10决策①：as_concept_ranking 废弃，无有效读方，恒返回空
+        return []
 
     # ── 涨跌停池 ─────────────────────────────────────────────
 
@@ -210,26 +202,8 @@ class AkshareDataReader:
             result['down'] = store.get_limit_pool('down')
         if result['up'] or result['down']:
             return result
-        # 回退 DuckDB
-        try:
-            df = self._ecm.read_as_limit_pool(limit_type)
-            if not df.empty:
-                for _, row in df.iterrows():
-                    record = {
-                        'ts_code': row.get('ts_code'),
-                        'name': row.get('name'),
-                        'price': float(row.get('price', 0)),
-                        'change_pct': float(row.get('change_pct', 0)),
-                    }
-                    lt = row.get('limit_type', '')
-                    if lt == 'up':
-                        result['up'].append(record)
-                    else:
-                        result['down'].append(record)
-            return result
-        except Exception as e:
-            logger.debug(f"AkshareDataReader.get_limit_pool 回退失败: {e}")
-            return result
+        # 424号§10决策①：as_limit_pool 废弃，涨跌停池已由 mootdx 自算，恒返回空
+        return result
 
     # ── 分钟K线 ──────────────────────────────────────────────
 
@@ -251,12 +225,8 @@ class AkshareDataReader:
             records = store.get_minute_kline(ts_code)
             if records:
                 return records
-        try:
-            df = self._ecm.read_as_minute_kline(ts_code, trade_date, freq)
-            return df.to_dict('records') if not df.empty else []
-        except Exception as e:
-            logger.debug(f"AkshareDataReader.get_minute_kline 回退失败: {e}")
-            return []
+        # 424号§10决策①：as_minute_kline 废弃，分钟K线已由 mootdx 落 minute_kline_cache，恒返回空
+        return []
 
     # ── 龙虎榜 ───────────────────────────────────────────────
 
@@ -268,12 +238,8 @@ class AkshareDataReader:
             records = store.get_lhb()
             if records:
                 return records
-        try:
-            df = self._ecm.read_as_lhb_detail(trade_date)
-            return df.to_dict('records') if not df.empty else []
-        except Exception as e:
-            logger.debug(f"AkshareDataReader.get_lhb_detail 回退失败: {e}")
-            return []
+        # 424号§10决策①：as_lhb_detail 废弃，龙虎榜已由 Tushare 落 lhb_detail_cache，恒返回空
+        return []
 
     # ── 新闻 ──────────────────────────────────────────────────
 
@@ -283,12 +249,8 @@ class AkshareDataReader:
         records = store.get_news()
         if records:
             return records[:limit]
-        try:
-            df = self._ecm.read_as_news(limit)
-            return df.to_dict('records') if not df.empty else []
-        except Exception as e:
-            logger.debug(f"AkshareDataReader.get_news 回退失败: {e}")
-            return []
+        # 424号§10决策①：as_news 废弃，新闻走内存即可，恒返回空
+        return []
 
     # ── 个股盘口 ─────────────────────────────────────────────
 

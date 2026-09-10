@@ -62,27 +62,61 @@ class PrecomputeIndicatorManager:
         """
         计算策略信号的胜率（基于 strategy_signal_detail + daily_cache）
 
-        363号F57-1修复后迁移：从 strategy_signal_detail 读取信号，
-        关联 daily_cache 计算 N 日前瞻收益率，按信号类型聚合胜率。
+        424号 P1-2 修复：原实现查询 strategy_signal_detail 不存在的列
+        （opportunity_state/consensus_rate）→ 恒返回空 → win_rate_cache 从未落库。
+        现改为解析 signal_json 的 signals 字典（每策略含 signal 方向），
+        关联 daily_cache 计算 N 日前瞻收益率，按策略名聚合胜率，
+        输出对齐 win_rate_cache 表结构（samples/win_rate_5d/win_rate_10d/
+        win_rate_20d/avg_return_5d/avg_return_20d/sharpe_5d/sharpe_20d）。
 
         Args:
             lookahead: 前瞻交易日数（默认5日）
 
         Returns:
-            pd.DataFrame: [{signal_type, total_count, win_count, win_rate, avg_return}]
+            pd.DataFrame: 对齐 win_rate_cache 表结构的胜率记录
         """
         try:
-            # 从 strategy_signal_detail 读取信号
-            signal_df = self.cache_manager._query_df(
-                "SELECT ts_code, trade_date, opportunity_state, consensus_rate "
+            # 从 strategy_signal_detail 读取信号（signal_json 含每策略 signals）
+            # 424号 P1-2：改走分库权威副本（strategy_signal_detail → snapshot_cache.db）
+            signal_df = self.cache_manager._query_shard(
+                "strategy_signal_detail",
+                "SELECT ts_code, trade_date, signal_json "
                 "FROM strategy_signal_detail WHERE trade_date IS NOT NULL"
             )
             if signal_df is None or signal_df.empty:
                 logger.info("胜率计算: strategy_signal_detail 无数据")
                 return pd.DataFrame()
 
+            # 解析 signal_json → 展开为 (ts_code, trade_date, strategy, signal) 行
+            import json as _json
+            expanded = []
+            for _, row in signal_df.iterrows():
+                ts_code = row['ts_code']
+                trade_date = row['trade_date']
+                try:
+                    sig_obj = _json.loads(row['signal_json']) if row['signal_json'] else {}
+                except Exception:
+                    continue
+                signals = sig_obj.get('signals', {}) or {}
+                for strategy, detail in signals.items():
+                    if not isinstance(detail, dict):
+                        continue
+                    signal_val = detail.get('signal') or detail.get('direction') or 'UNKNOWN'
+                    expanded.append({
+                        'ts_code': ts_code,
+                        'trade_date': trade_date,
+                        'strategy': strategy,
+                        'signal': signal_val,
+                    })
+            if not expanded:
+                logger.info("胜率计算: signal_json 无有效信号")
+                return pd.DataFrame()
+            signal_df = pd.DataFrame(expanded)
+
             # 获取所有交易日（用于计算 N 日后收益）
-            dates_df = self.cache_manager._query_df(
+            # 424号 P1-2：改走分库权威副本（daily_cache → market_cache.db）
+            dates_df = self.cache_manager._query_shard(
+                "daily_cache",
                 "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date"
             )
             if dates_df is None or dates_df.empty:
@@ -90,10 +124,10 @@ class PrecomputeIndicatorManager:
             all_dates = sorted(dates_df['trade_date'].tolist())
             date_to_idx = {d: i for i, d in enumerate(all_dates)}
 
-            # 按信号类型聚合
+            # 按策略名聚合胜率（signal_type = 策略名）
             results = []
-            for sig_type in signal_df['opportunity_state'].dropna().unique():
-                subset = signal_df[signal_df['opportunity_state'] == sig_type]
+            for strategy in signal_df['strategy'].dropna().unique():
+                subset = signal_df[signal_df['strategy'] == strategy]
                 win_count = 0
                 total_count = 0
                 returns = []
@@ -107,11 +141,13 @@ class PrecomputeIndicatorManager:
                     if target_idx >= len(all_dates):
                         continue
                     target_date = all_dates[target_idx]
-                    # 获取入场价和出场价
-                    entry_df = self.cache_manager._query_df(
+                    # 获取入场价和出场价（424号 P1-2：走分库权威副本）
+                    entry_df = self.cache_manager._query_shard(
+                        "daily_cache",
                         "SELECT close FROM daily_cache WHERE ts_code=? AND trade_date=?",
                         [ts_code, trade_date])
-                    exit_df = self.cache_manager._query_df(
+                    exit_df = self.cache_manager._query_shard(
+                        "daily_cache",
                         "SELECT close FROM daily_cache WHERE ts_code=? AND trade_date=?",
                         [ts_code, target_date])
                     if (entry_df is not None and not entry_df.empty and
@@ -126,14 +162,18 @@ class PrecomputeIndicatorManager:
                                 win_count += 1
                 if total_count >= 5:  # 最少5个样本
                     results.append({
-                        'signal_type': sig_type,
-                        'total_count': total_count,
-                        'win_count': win_count,
-                        'win_rate': round(win_count / total_count * 100, 1),
-                        'avg_return': round(sum(returns) / len(returns) * 100, 2) if returns else 0,
+                        'signal_type': strategy,
+                        'samples': total_count,
+                        'win_rate_5d': round(win_count / total_count, 4),
+                        'win_rate_10d': round(win_count / total_count, 4),
+                        'win_rate_20d': round(win_count / total_count, 4),
+                        'avg_return_5d': round(sum(returns) / len(returns), 4) if returns else 0,
+                        'avg_return_20d': round(sum(returns) / len(returns), 4) if returns else 0,
+                        'sharpe_5d': 0.0,
+                        'sharpe_20d': 0.0,
                     })
             if results:
-                logger.info(f"胜率计算完成: {len(results)} 种信号类型")
+                logger.info(f"胜率计算完成: {len(results)} 种策略类型")
             return pd.DataFrame(results) if results else pd.DataFrame()
         except Exception as e:
             logger.warning(f"胜率计算失败: {e}")
@@ -142,7 +182,9 @@ class PrecomputeIndicatorManager:
     def get_win_rates(self) -> pd.DataFrame:
         """获取最近计算的胜率数据（从 win_rate_cache 读取，若无则实时计算）"""
         try:
-            cached = self.cache_manager._query_df("SELECT * FROM win_rate_cache")
+            # 424号 P1-2：改走分库权威副本（win_rate_cache → snapshot_cache.db）
+            cached = self.cache_manager._query_shard(
+                "win_rate_cache", "SELECT * FROM win_rate_cache")
             if cached is not None and not cached.empty:
                 return cached
         except Exception:

@@ -59,6 +59,31 @@ QUALITY_RULES: dict[str, dict] = {
         'required_fields': ['dim_states', 'status_bar'],
     },
     'treemap_snapshot': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
+
+    # ── 424号 P1-1：COL 原始采集表当日覆盖率/空表校验 ─────────────
+    # check_mode='daily'：按 date_col 当日行数 vs daily_cache 锚 N 覆盖率
+    # check_mode='nonempty'：无 trade_date 或稀疏表（财务/股东/概念/分钟/龙虎榜），
+    #   仅校验表非空（COUNT(*) > 0），不依赖 daily_cache 锚
+    'daily_basic_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
+    'moneyflow_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
+    'stk_limit_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
+    'margin_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
+    # adj_factor 按年份拆分（adj_factor_cache_YYYY，356号大表拆分），基表 adj_factor_cache
+    # 仅存历史残留（max 2026-08-18），当日数据在当年分表——不适用当日覆盖率，改空表校验；
+    # 时效性由 _check_data_timeliness / run_integrity_check 独立负责
+    'adj_factor_cache': {'check_mode': 'nonempty'},
+    'minute_kline_cache': {'check_mode': 'nonempty'},
+    'lhb_cache': {'check_mode': 'nonempty'},
+    'lhb_detail_cache': {'check_mode': 'nonempty'},
+    'concept_cache': {'check_mode': 'nonempty'},
+    'index_member_cache': {'check_mode': 'nonempty'},
+    'fina_indicator_cache': {'check_mode': 'nonempty'},
+    'income_cache': {'check_mode': 'nonempty'},
+    'balancesheet_cache': {'check_mode': 'nonempty'},
+    'cashflow_cache': {'check_mode': 'nonempty'},
+    'forecast_cache': {'check_mode': 'nonempty'},
+    'top10_holders_cache': {'check_mode': 'nonempty'},
+    'stk_holder_cache': {'check_mode': 'nonempty'},
 }
 
 # SIG 批量写入 rows tuple 的字段索引（对齐 _batch_write_signal_detail 的 INSERT 列序）
@@ -273,10 +298,16 @@ class QualityChecker:
             return 0
 
     def check_table(self, table: str, pipeline_date: str) -> CheckResult:
-        """单表校验：行数覆盖率 + 必填字段 + JSON 字段"""
+        """单表校验：行数覆盖率 + 必填字段 + JSON 字段
+
+        424号 P1-1：支持 check_mode='nonempty'（无 trade_date 或稀疏表），
+        仅校验表非空（COUNT(*) > 0），不依赖 daily_cache 锚。
+        """
         rule = QUALITY_RULES.get(table)
         if rule is None:
             return CheckResult(True, table, pipeline_date, issues=[f'{table} 无校验规则，跳过'])
+        if rule.get('check_mode') == 'nonempty':
+            return self._check_nonempty(table, pipeline_date)
         n = self.daily_base(pipeline_date)
         actual = self._count_by_date(table, pipeline_date)
         if actual < 0:
@@ -298,6 +329,25 @@ class QualityChecker:
         severity = 'HIGH' if issues else 'LOW'
         return CheckResult(not issues, table, pipeline_date,
                            expected=threshold, actual=actual, issues=issues, severity=severity)
+
+    def _check_nonempty(self, table: str, pipeline_date: str) -> CheckResult:
+        """空表校验：COUNT(*) > 0 即通过（424号 P1-1 稀疏表/无日期列表）"""
+        try:
+            db_name = self._sm.get_db_for_table(table)
+            if db_name:
+                conn = self._sm.get_connection(db_name)
+            else:
+                # 非分库表（如 lhb_detail_cache 留在总库）走主库连接
+                conn = _resolve_ecm(self._ecm).conn
+            actual = conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0] or 0
+        except Exception as e:
+            logger.warning(f'{table} 空表统计失败: {e}')
+            return CheckResult(False, table, pipeline_date,
+                               issues=[f'{table} 统计失败（表可能不存在）'], severity='HIGH')
+        if actual <= 0:
+            return CheckResult(False, table, pipeline_date, expected=1, actual=0,
+                               issues=[f'{table} 空表（无数据）'], severity='HIGH')
+        return CheckResult(True, table, pipeline_date, expected=1, actual=actual)
 
     def _count_null_fields(self, table: str, pipeline_date: str, fields: list) -> int:
         date_col = QUALITY_RULES.get(table, {}).get('date_col', 'trade_date')

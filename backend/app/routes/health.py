@@ -73,6 +73,32 @@ def _get_sqlite_cache_status():
         return {"status": "unhealthy", "latency_ms": 0, "error": str(e)}
 
 
+def _get_shard_wal_sizes():
+    """424号P0-2：聚合各分库 WAL 大小（MB），供 /api/v3/health 暴露
+
+    遍历 sharding_manager 全部分库 + 总库 + market_snapshot.db，
+    返回 {db_name: wal_size_mb}。WAL 文件不存在时记 0。
+    """
+    try:
+        from app.data.sharding_manager import sharding_manager
+        data_dir = os.environ.get('DATA_DIR', 'data')
+        duckdb_dir = os.path.join(data_dir, 'duckdb')
+        db_names = set(sharding_manager.get_all_db_names())
+        db_names.add('stock_cache.db')
+        db_names.add('market_snapshot.db')
+        sizes = {}
+        for db_name in sorted(db_names):
+            wal_path = os.path.join(duckdb_dir, db_name + '-wal')
+            if os.path.exists(wal_path):
+                sizes[db_name] = round(os.path.getsize(wal_path) / 1024 / 1024, 1)
+            else:
+                sizes[db_name] = 0.0
+        return sizes
+    except Exception as e:
+        logger.warning(f"获取分库 WAL 大小失败: {e}")
+        return {}
+
+
 def _get_ws_status():
     """检查 WebSocket 状态"""
     try:
@@ -153,7 +179,8 @@ def _get_cache_status():
             "daily_cached": cs.get('daily_count', 0),
             "indicator_cached": cs.get('indicator_count', 0),
             "storage_type": "sqlite_wal",
-            "last_refresh": datetime.now().strftime("%Y-%m-%d %H:%M")
+            "last_refresh": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "shard_wal_size_mb": _get_shard_wal_sizes()
         }
     except Exception as e:
         return {
