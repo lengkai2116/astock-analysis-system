@@ -279,9 +279,8 @@ def convert_to_dims_format(dim_results: dict, tags: dict) -> dict:
         _val_evidence = []
         if _composite is not None:
             _val_evidence.append(f'composite={float(_composite):.2f}')
-        _ps = sd.get('potential_score')
-        if _ps is not None:
-            _val_evidence.append(f'潜力={int(_ps)}/100')
+        if sd.get('potential_score') is not None or sd.get('potential_strength') is not None:
+            _val_evidence.append(f'潜力={_potential_score_int(sd)}/100')
         dims['valuation'] = {
             'state': _val_cn,
             'light': judg.get('overall_light', 'yellow'),
@@ -289,9 +288,8 @@ def convert_to_dims_format(dim_results: dict, tags: dict) -> dict:
             'evidence': _val_evidence,
         }
         # factor维：从potential_score引擎输出替代固定"中性"
-        _potential = sd.get('potential_score')
-        if _potential is not None:
-            _ps_int = int(_potential)
+        _ps_int = _potential_score_int(sd)
+        if _ps_int != 50 or sd.get('potential_score') is not None or sd.get('potential_strength') is not None:
             if _ps_int >= 70:
                 _factor_state = '看多'
             elif _ps_int <= 30:
@@ -447,6 +445,33 @@ def _safe_float(val, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
 
+
+def _potential_score_int(sd: dict) -> int:
+    """从 dim7 status_description 提取数字潜力评分
+
+    优先读 potential_strength（数字）；回退解析 potential_score 字符串（"潜力评分53/100"）。
+    均不可解析时返回 50（默认中性）。
+    """
+    if not sd:
+        return 50
+    ps = sd.get('potential_strength')
+    if ps is not None:
+        try:
+            return int(round(float(ps)))
+        except (TypeError, ValueError):
+            pass
+    raw = sd.get('potential_score')
+    if raw is not None:
+        s = str(raw)
+        # 匹配 "潜力评分53/100" 或 "53" 或 "53/100"
+        import re
+        m = re.search(r'(\d+)', s)
+        if m:
+            try:
+                return int(m.group(1))
+            except ValueError:
+                pass
+    return 50
 
 def _clamp(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
     """将 value 限制在 [lo, hi] 区间"""
@@ -778,8 +803,8 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
         if _rev_growth > 20:
             _dim7_str += 0.1
             _dim7_evidence.append(f'营收增速={_rev_growth:.1f}%>20→+0.1')
-        # potential_score 加减
-        _potential = _safe_float(_val_sd.get('potential_score'), 50.0)
+        # potential_score 加减（数字优先，字符串防御解析）
+        _potential = float(_potential_score_int(_val_sd))
         if _potential >= 70:
             _dim7_str += 0.1
             _dim7_evidence.append(f'潜力分={int(_potential)}≥70→+0.1')
@@ -837,9 +862,9 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
     _fac_dir = 0
     _fac_str = 0.5
     if _val and isinstance(_val, dict):
-        _ps = (_val.get('status_description') or {}).get('potential_score')
-        if _ps is not None:
-            _ps_int = int(_ps)
+        _val_sd7 = _val.get('status_description') or {}
+        if _val_sd7.get('potential_score') is not None or _val_sd7.get('potential_strength') is not None:
+            _ps_int = _potential_score_int(_val_sd7)
             if _ps_int >= 70:
                 _fac_dir = 1
             elif _ps_int <= 30:

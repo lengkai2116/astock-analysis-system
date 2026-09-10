@@ -66,6 +66,7 @@ class StatusEngine:
         366号步骤3：重构为调用维度引擎，通过兼容层保持下游兼容。
         370号修正：支持传入预计算的 dim_results（从 strategy_signal_detail.dim_results_json），
         跳过重复的维度引擎计算，提升JUD步骤性能。
+        418号方案：jud_engine_version 配置分支（v390 新管线 / legacy 旧管线）。
 
         Args:
             ts_code: 股票代码
@@ -85,7 +86,7 @@ class StatusEngine:
             dim_engine_results = dim_results
         else:
             # 366号步骤3：用维度引擎替代_build_dimensions()
-            dim_engine_results = self._build_dim_engine_results(tags, signals, {}, lifecycle)
+            dim_engine_results = self._build_dim_engine_results(tags, signals, {}, lifecycle, ts_code=ts_code)
 
         # dim8 状态总结：读取 dim1-dim7 输出，组装综合报告
         try:
@@ -100,7 +101,14 @@ class StatusEngine:
         dims = self._convert_to_dims_format(dim_engine_results, tags)
 
         l0 = self._apply_l0(ts_code, tags, dims, lifecycle)
-        l2 = self._aggregate(tags, dims, l0, lifecycle)
+
+        # 418号方案：jud_engine_version 配置分支（v390 新管线 / legacy 旧管线）
+        _jud_ver = str((self.cfg or {}).get('jud_engine_version', 'legacy'))
+        if _jud_ver == 'v390':
+            l2 = self._aggregate_v390(tags, dims, l0, lifecycle, dim_engine_results, ts_code)
+        else:
+            l2 = self._aggregate(tags, dims, l0, lifecycle)
+
         hits = self._detect_registered_signals(tags, signals)
 
         return self._assemble(ts_code, dims, lifecycle, l0, l2, hits, dim_engine_results)
@@ -207,7 +215,8 @@ class StatusEngine:
         return ('中性', evidence or ['量价信号缺失'], conf)
 
     def _build_dim_engine_results(self, tags: dict, signals: dict,
-                                   dims: dict, lifecycle: Optional[dict] = None) -> dict:
+                                   dims: dict, lifecycle: Optional[dict] = None,
+                                   ts_code: str = None) -> dict:
         """411号方案Phase 4：重构维度引擎调用流程
 
         新流程：
@@ -226,7 +235,8 @@ class StatusEngine:
         try:
             from app.opportunity_atlas.dimensions.dim1_signal_engine import Dim1SignalEngine
             dim1_engine = Dim1SignalEngine()
-            dim1_result = dim1_engine.evaluate(dims, tags, signals, lifecycle)
+            # 419号方案：显式传 ts_code（tags 扁平化后无此键）
+            dim1_result = dim1_engine.evaluate(dims, tags, signals, lifecycle, ts_code=ts_code)
             results['signal'] = dim1_result
             data_context = dim1_result.get('data_context')
         except Exception as e:
@@ -257,6 +267,7 @@ class StatusEngine:
 
         # Step 3: signal_analyzer信号分析（依赖dim2-dim7输出）
         # 用classify_attribute等函数替代原dim1的分析功能
+        signal_analysis = None
         try:
             from app.opportunity_atlas.signal_analyzer import analyze_signal
             # 构建dims格式（从dim2-dim7结果提取）
@@ -278,6 +289,17 @@ class StatusEngine:
                     }
             signal_analysis = analyze_signal(dims_for_signal, tags, lifecycle or {})
             results['signal_analysis'] = signal_analysis
+
+            # 418号方案Step 1：signal判定结果并入results['signal']，
+            # 修复JUD消费链键名错位（dim_adapter/reliability_assessor/dim8读取'signal'键）。
+            # results['signal']仍保留dim1门禁结果（data_context/status_quality），
+            # 叠加signal_analysis的status_description/judgment/audit子结构。
+            if signal_analysis and isinstance(signal_analysis, dict):
+                _sig = results.get('signal') or {}
+                if isinstance(_sig, dict):
+                    results['signal'] = {**_sig, **signal_analysis}
+                else:
+                    results['signal'] = signal_analysis
         except Exception as e:
             logger.warning(f"signal_analyzer调用失败: {e}")
             results['signal_analysis'] = None
@@ -646,6 +668,117 @@ class StatusEngine:
             'conflict_evidence': core_conflict[:4] + arb_conflict[:4],
         }
 
+    def _aggregate_v390(self, tags: dict, dims: dict, l0: dict, lifecycle: Optional[dict],
+                        dim_results: dict, ts_code: str) -> dict:
+        """390号方案 v390 多因子决策管线（L1-L6）
+
+        由 evaluate() 在 jud_engine_version == 'v390' 时调用。
+        逐层 try/except 降级，单层失败不中断管道。
+        """
+        from app.opportunity_atlas.advice_engine import compute_advice
+        from app.opportunity_atlas.conflict_matrix import detect as conflict_detect
+        from app.opportunity_atlas.consensus_engine import compute as consensus_compute
+        from app.opportunity_atlas.dim_adapter import convert_to_factors
+        from app.opportunity_atlas.factor_arbiter import arbitrate as factor_arbitrate
+        from app.opportunity_atlas.reliability_assessor import assess
+
+        dim_results = dim_results or {}
+
+        # L1: 维度因子提取
+        try:
+            dims_factor = convert_to_factors(dim_results, tags)
+        except Exception as e:
+            logger.warning(f"v390 L1 convert_to_factors失败: {e}")
+            dims_factor = {}
+
+        # L2: 可靠性评估
+        try:
+            reliability = assess(dims_factor, dim_results)
+        except Exception as e:
+            logger.warning(f"v390 L2 reliability评估失败: {e}")
+            reliability = {}
+
+        # L3: 共识聚合（weights 取 MARKET_REGIME_WEIGHTS[regime]）
+        regime = self._detect_market_regime(tags, dims)
+        weights = self.MARKET_REGIME_WEIGHTS.get(regime, self.MARKET_REGIME_WEIGHTS['ranging'])
+        # emotion_phase 归一化到 STATE_WEIGHTS 有效键（ice/ebb/normal/recovery/positive/climax）
+        emotion_phase = str(tags.get('emotion_phase', 'normal')).lower()
+        _valid_phases = {'ice', 'ebb', 'normal', 'recovery', 'positive', 'climax'}
+        if emotion_phase not in _valid_phases:
+            emotion_phase = 'normal'
+        try:
+            consensus = consensus_compute(dims_factor, reliability, weights, emotion_phase)
+        except Exception as e:
+            logger.warning(f"v390 L3 consensus失败: {e}")
+            consensus = {'consensus_rate': 0.0, 'raw_consensus_rate': 0.0,
+                         'reliability_factor': 0.0, 'direction': 'neutral',
+                         'bull_score': 0.0, 'bear_score': 0.0, 'group_details': {}}
+
+        # L4: 冲突检测
+        try:
+            conflict = conflict_detect(dims_factor, tags, dim_results,
+                                       consensus.get('consensus_rate', 0.0))
+        except Exception as e:
+            logger.warning(f"v390 L4 conflict检测失败: {e}")
+            conflict = {'fatal_to_veto': [], 'warn_for_semantic': [],
+                        'semantic_type': '', 'semantic_adjustment': 1.0, 'all_conflicts': []}
+
+        # ⚡ 硬否决检查（对齐 legacy _aggregate 行为）
+        if l0.get('hard_veto'):
+            return self._v390_result('avoid', [l0.get('hard_reason', 'L0a 硬否决')],
+                                     consensus, conflict, 0.0, reliability)
+
+        # ⚡ L4 致命冲突 → wait
+        if conflict.get('fatal_to_veto'):
+            return self._v390_result('wait', conflict['fatal_to_veto'],
+                                     consensus, conflict, 30.0, reliability)
+
+        # L5: 多因子仲裁
+        try:
+            arb_result = factor_arbitrate(consensus, conflict, tags, dims_factor, reliability)
+        except Exception as e:
+            logger.warning(f"v390 L5 factor仲裁失败: {e}")
+            arb_result = {'opportunity_state': 'wait', 'final_score': 50.0,
+                          'state_evidence': ['L5仲裁不可用'], 'conflict_evidence': []}
+
+        # L6: 操作建议
+        advice = {}
+        try:
+            entry_price = None
+            daily = dim_results.get('daily_df')
+            if hasattr(daily, 'empty') and not daily.empty and 'close' in daily.columns:
+                entry_price = float(daily['close'].iloc[-1])
+            advice = compute_advice(arb_result.get('final_score', 50.0), dims_factor,
+                                    l0, dim_results, ts_code, entry_price)
+        except Exception as e:
+            logger.debug(f"v390 L6 advice失败: {e}")
+
+        return self._v390_result(arb_result.get('opportunity_state', 'wait'),
+                                 arb_result.get('state_evidence', []),
+                                 consensus, conflict,
+                                 arb_result.get('final_score', 50.0), reliability,
+                                 advice=advice)
+
+    @staticmethod
+    def _v390_result(state: str, evidence: list, consensus: dict, conflict: dict,
+                     final_score: float, reliability: dict, advice: dict = None) -> dict:
+        """v390 输出组装（兼容 _assemble 消费的 l2 结构 + 390号新增字段）"""
+        return {
+            'opportunity_state': state,
+            'state_evidence': evidence,
+            'consensus_rate': consensus.get('consensus_rate', 0.0),
+            'direction': consensus.get('direction', 'neutral'),
+            'bullish_dims': consensus.get('bull_score', 0.0),
+            'bearish_dims': consensus.get('bear_score', 0.0),
+            'conflict_evidence': conflict.get('all_conflicts', [])[:8],
+            # 390号新增字段
+            'final_score': final_score,
+            'semantic_type': conflict.get('semantic_type', ''),
+            'reliability_summary': reliability,
+            'consensus_detail': consensus.get('group_details', {}),
+            'advice': advice or {},
+        }
+
     def _detect_registered_signals(self, tags: dict, signals: dict) -> list:
         """334号 §5：信号注册表触发检测（5 类信号 → 触发列表，供七维模板①信号确认）
 
@@ -727,6 +860,23 @@ class StatusEngine:
         # 365号批次C：维度引擎结果附加字段
         if dim_engine_results:
             result['dim_engine_results'] = json.dumps(dim_engine_results, ensure_ascii=False, default=str)
+
+        # 418号方案：v390 路径追加 390号 新字段（仅新增，不改旧键）
+        if 'final_score' in l2:
+            result['final_score'] = l2['final_score']
+            result['semantic_type'] = l2.get('semantic_type', '')
+            result['reliability_summary'] = json.dumps(
+                l2.get('reliability_summary', {}), ensure_ascii=False, default=str)
+            result['consensus_detail'] = json.dumps(
+                l2.get('consensus_detail', {}), ensure_ascii=False, default=str)
+            # L6 advice 参数并入 advice_params（保持 337号 键名兼容）
+            _advice = l2.get('advice') or {}
+            if _advice:
+                _ap = json.loads(result['advice_params']) if result.get('advice_params') else {}
+                _ap.update({k: v for k, v in _advice.items()
+                            if k in ('max_position_ratio', 'stop_loss_price', 'target_price',
+                                     'risk_reward_ratio', 'invalidation_conditions')})
+                result['advice_params'] = json.dumps(_ap, ensure_ascii=False, default=str)
         return result
 
 

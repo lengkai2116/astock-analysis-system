@@ -26,6 +26,18 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# ── 主力阶段常量（369号方案物理合入 phase_detector.py 时遗漏，导致 compute_tags 抛 NameError）──
+PHASE_UNKNOWN = "unknown"
+# 主力阶段中文名映射（供 evaluate 组装 phase_cn；注意与 dim5 情绪阶段 PHASE_MAP 语义不同）
+PHASE_MAP = {
+    'building': {'name': '建仓期', 'desc': '低位吸筹'},
+    'washing': {'name': '洗盘期', 'desc': '清洗浮筹'},
+    'raising': {'name': '拉升期', 'desc': '快速上涨'},
+    'lifting': {'name': '拉升期', 'desc': '快速上涨'},
+    'distributing': {'name': '出货期', 'desc': '高位派发'},
+    'support': {'name': '护盘期', 'desc': '支撑维护'},
+}
+
 
 # === ChipDistributionEstimator (app/data/chip_distribution_service.py) ===
 # 物理合入：避免外部依赖，符合369号方案"独立文件"要求
@@ -5935,12 +5947,18 @@ class Dim4ChipFundEngine(DataAwareMixin):
                     }
                 if phase_engine_result and phase_engine_result.get('fund_flow') != 'none':
                     ff = phase_engine_result['fund_flow']
-                    fund_flow_info = {
-                        'level': 'strong' if 'inflow' in ff else 'strong_out',
-                        'level_cn': '强流入' if 'inflow' in ff else '强流出',
-                        'direction': 'inflow' if 'inflow' in ff else 'outflow',
-                        'detail': f"PhaseDetector资金流向={ff}",
-                    }
+                    if ff == 'mixed':
+                        fund_flow_info = {
+                            'level': 'none', 'level_cn': '中性', 'direction': 'neutral',
+                            'detail': f"PhaseDetector资金流向={ff}",
+                        }
+                    else:
+                        fund_flow_info = {
+                            'level': 'strong' if 'inflow' in ff else 'strong_out',
+                            'level_cn': '强流入' if 'inflow' in ff else '强流出',
+                            'direction': 'inflow' if 'inflow' in ff else 'outflow',
+                            'detail': f"PhaseDetector资金流向={ff}",
+                        }
 
         except Exception as e:
             logger.debug(f"PhaseDetectionEngine调用跳过: {e}")
@@ -5975,8 +5993,10 @@ class Dim4ChipFundEngine(DataAwareMixin):
             'continuous_value': round(1.0 - crowding.get('score', 0.5), 4),
         }
         conditions = [
-            {'name': '主力阶段', 'satisfied': bool(phase_info['phase']), 'actual': phase_info['phase_cn'], 'threshold': '有明确阶段判定'},
-            {'name': '资金流向', 'satisfied': fund_flow_info['level'] != 'none', 'actual': fund_flow_info['level_cn'], 'threshold': '有明确流向'},
+            {'name': '主力阶段', 'satisfied': phase_info['phase'] in ('building', 'raising', 'distributing'),
+             'actual': phase_info['phase_cn'], 'threshold': '有明确阶段判定'},
+            {'name': '资金流向', 'satisfied': fund_flow_info['level'] in ('very_strong', 'strong', 'medium', 'weak'),
+             'actual': fund_flow_info['level_cn'], 'threshold': '有明确流向'},
             {'name': '筹码集中', 'satisfied': bool(cost_structure.get('concentration')), 'actual': cost_structure.get('concentration', '未知') or '未知', 'threshold': '有集中度数据'},
             {'name': '拥挤度合理', 'satisfied': crowding['level'] not in ('HIGH_CROWDING', 'unknown'), 'actual': crowding['level'], 'threshold': '非高拥挤'},
         ]

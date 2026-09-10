@@ -279,109 +279,6 @@ def calc_emotion_temperature(sentiment_phase='neutral', limit_up_count=0,
     return round(min(100, max(0, total)), 1)
 
 
-# ═══════════════════════════════════════════════════════════
-# 时间节奏（从 time_rhythm_engine.py 迁移）
-# ═══════════════════════════════════════════════════════════
-
-def _time_rhythm(df: pd.DataFrame) -> dict:
-    """BOLL带宽 + 中枢横盘时长 → 变盘窗口判定
-
-    411号Phase 5：MA20/BOLL优先读预计算表，回退raw计算。
-    """
-    result = {'time_rhythm': 'unknown'}
-    try:
-        if df is None or len(df) < 30:
-            return result
-        close = df['close'].values
-
-        # 411号Phase 5：尝试从预计算表读取MA20/BOLL
-        ma20 = None
-        std20 = None
-        try:
-            ts_code = ''
-            if hasattr(df, 'columns') and 'ts_code' in df.columns:
-                ts_code = str(df['ts_code'].iloc[0])
-            if ts_code:
-                from app.data import DataManager
-                dm = DataManager()
-                indicators_df = dm.get_cached_indicators(ts_code)
-                if indicators_df is not None and not indicators_df.empty:
-                    if 'ma20' in indicators_df.columns:
-                        ma20_pre = indicators_df['ma20'].dropna()
-                        if not ma20_pre.empty:
-                            # 构建MA20数组（对齐到close长度）
-                            ma20_vals = ma20_pre.values
-                            if len(ma20_vals) >= len(close):
-                                ma20 = ma20_vals[-len(close):]
-                            else:
-                                # 填充前部为NaN
-                                ma20 = np.full(len(close), np.nan)
-                                ma20[-len(ma20_vals):] = ma20_vals
-                    if 'boll_upper' in indicators_df.columns and 'boll_mid' in indicators_df.columns:
-                        boll_upper_pre = indicators_df['boll_upper'].dropna()
-                        boll_mid_pre = indicators_df['boll_mid'].dropna()
-                        if not boll_upper_pre.empty and not boll_mid_pre.empty:
-                            # std ≈ (upper - mid) / 2
-                            upper_vals = boll_upper_pre.values
-                            mid_vals = boll_mid_pre.values
-                            min_len = min(len(upper_vals), len(mid_vals))
-                            std_approx = (upper_vals[-min_len:] - mid_vals[-min_len:]) / 2
-                            if len(std_approx) >= len(close):
-                                std20 = std_approx[-len(close):]
-                            else:
-                                std20 = np.full(len(close), np.nan)
-                                std20[-len(std_approx):] = std_approx
-        except Exception:
-            pass
-
-        # 回退到raw计算
-        if ma20 is None or std20 is None:
-            close_series = pd.Series(close)
-            ma20 = close_series.rolling(20).mean().values
-            std20 = close_series.rolling(20).std().values
-
-        bandwidth = np.where(ma20 > 1e-9, std20 / ma20 * 100, np.zeros_like(ma20))
-        high_30 = np.max(df['high'].values[-30:])
-        low_30 = np.min(df['low'].values[-30:])
-        range_pct = (high_30 - low_30) / low_30 * 100 if low_30 > 0 else 0
-        current_bw = bandwidth[-1] if len(bandwidth) > 0 else 100
-
-        consolidation_days = 0
-        if len(close) >= 30:
-            ref_low = np.min(df['low'].values[-30:])
-            ref_high = np.max(df['high'].values[-30:])
-            ref_mid = (ref_low + ref_high) / 2
-            threshold = ref_mid * 0.05
-            for i in range(min(60, len(close))):
-                price = close[-(i + 1)]
-                if abs(price - ref_mid) < threshold:
-                    consolidation_days += 1
-                else:
-                    break
-
-        if current_bw < BANDWIDTH_TIGHT and range_pct < RANGE_TIGHT:
-            if consolidation_days >= CONSOLIDATION_MIN_DAYS:
-                result['time_rhythm'] = 'approaching_turn'
-            elif consolidation_days >= 5:
-                result['time_rhythm'] = 'mid_consolidation'
-            else:
-                result['time_rhythm'] = 'early_consolidation'
-        elif current_bw < BANDWIDTH_NARROW and range_pct < RANGE_TIGHT * 1.5:
-            if consolidation_days >= CONSOLIDATION_MIN_DAYS:
-                result['time_rhythm'] = 'approaching_turn'
-            elif consolidation_days >= 5:
-                result['time_rhythm'] = 'mid_consolidation'
-            else:
-                result['time_rhythm'] = 'early_consolidation'
-    except Exception:
-        pass
-    return result
-
-
-# ═══════════════════════════════════════════════════════════
-# 情绪三层面评估（从 emotion_builder.py 迁移）
-# ═══════════════════════════════════════════════════════════
-
 def _assess_market_emotion(tags: dict, dims: dict) -> dict:
     dim_emotion = str(dims.get('emotion', {}).get('state', ''))
     dim_light = str(dims.get('emotion', {}).get('light', ''))
@@ -475,169 +372,6 @@ def _emotion_plain(market: dict, sector: dict, stock: dict,
 # ═══════════════════════════════════════════════════════════
 
 
-# === bociasi_quadrant.py 完整版（含DB查询） ===
-
-pass  # 412号方案B2：已改为import from app.engine.framework.bociasi_quadrant
-
-
-# === sector_rotation_model.py 完整版 ===
-
-class SectorRotationModel:
-    """板块轮动模型
-
-    核心算法 —— 缠中说禅板块强弱指标法：
-    1. 对每个申万一级行业，取该行业下全部个股列表
-    2. 统计各股的 MA5 > MA20（女上位=上涨）或 MA5 < MA20（男上位=下跌）
-    3. 板块强弱值 = (女上位数量 - 男上位数量) / 板块总股数
-    4. 对所有板块的强弱值排序
-    5. top_10(前10名) / top_20(11-20名) / normal(21-40名) / none(40名以外)
-    """
-
-    HEAT_TOP10 = 'top_10'
-    HEAT_TOP20 = 'top_20'
-    HEAT_NORMAL = 'normal'
-    HEAT_NONE = 'none'
-
-    def __init__(self, data_manager=None):
-        self._dm = data_manager
-        self._cache = TTLCache(maxsize=1, ttl=1800)  # 30分钟缓存
-
-    @property
-    def dm(self):
-        if self._dm is None:
-            from app.data import DataManager
-            self._dm = DataManager()
-        return self._dm
-
-    def _get_ma(self, indicator_ma: pd.DataFrame, period: int):
-        """从indicator_ma读取MA值，失败返回None（412号方案B3 v3.0）
-
-        不再直接调用DataManager——数据由调用方通过参数传入。
-        """
-        if indicator_ma is not None and not indicator_ma.empty:
-            col = f'ma{period}'
-            if col in indicator_ma.columns:
-                val = indicator_ma[col].iloc[-1]
-                if val is not None:
-                    return float(val)
-        return None
-
-    def compute_all_heat(self, all_data: dict[str, pd.DataFrame],
-                         indicator_ma_dict: dict[str, pd.DataFrame] = None) -> dict:
-        """全量预计算，返回 {行业: 排序结果}
-
-        412号方案B3 v3.0：MA值从indicator_ma_dict读取，不再直接调用DataManager。
-
-        Args:
-            all_data: 全市场日线数据 {ts_code: df}
-            indicator_ma_dict: 预计算MA数据 {ts_code: indicator_ma_df}，由调用方提供
-
-        Returns:
-            {industry_name: {'heat_level': ..., 'strength': ..., 'rank': ..., 'stock_count': ...}}
-        """
-        indicator_ma_dict = indicator_ma_dict or {}
-        ts_codes = list(all_data.keys())
-        industry_map = self.dm.get_stock_industry_batch(ts_codes)
-
-        # 按行业分组
-        industry_stocks: dict[str, list[str]] = {}
-        for ts_code, ind in industry_map.items():
-            if ind:
-                industry_stocks.setdefault(ind, []).append(ts_code)
-
-        industry_strength: dict[str, float] = {}
-        industry_counts: dict[str, int] = {}
-
-        for ind, codes in industry_stocks.items():
-            if len(codes) < 3:
-                continue
-            up_count = 0
-            down_count = 0
-            for code in codes:
-                df = all_data.get(code)
-                if df is None or df.empty or 'close' not in df.columns:
-                    continue
-                close = df['close']
-                if len(close) < 20:
-                    continue
-                # 从indicator_ma_dict读取MA，保留raw fallback
-                ma5 = self._get_ma(indicator_ma_dict.get(code), 5)
-                if ma5 is None:
-                    ma5 = close.rolling(window=5).mean().iloc[-1]
-                ma20 = self._get_ma(indicator_ma_dict.get(code), 20)
-                if ma20 is None:
-                    ma20 = close.rolling(window=20).mean().iloc[-1]
-                if pd.isna(ma5) or pd.isna(ma20):
-                    continue
-                if ma5 > ma20:
-                    up_count += 1
-                else:
-                    down_count += 1
-
-            total = up_count + down_count
-            if total == 0:
-                continue
-            strength = (up_count - down_count) / total
-            industry_strength[ind] = strength
-            industry_counts[ind] = total
-
-        sorted_industries = sorted(industry_strength.items(), key=lambda x: x[1], reverse=True)
-
-        result = {}
-        for rank, (ind, strength) in enumerate(sorted_industries, 1):
-            if rank <= 10:
-                heat = self.HEAT_TOP10
-            elif rank <= 20:
-                heat = self.HEAT_TOP20
-            elif rank <= 40:
-                heat = self.HEAT_NORMAL
-            else:
-                heat = self.HEAT_NONE
-            result[ind] = {
-                'heat_level': heat,
-                'strength': round(strength, 4),
-                'rank': rank,
-                'stock_count': industry_counts.get(ind, 0),
-            }
-
-        self._cache['all_heat'] = result
-        return result
-
-    def evaluate(self, ts_code: str) -> dict:
-        """评估目标股票所在行业的板块热度（需先调用 compute_all_heat 预热缓存）
-
-        Args:
-            ts_code: 目标股票代码
-
-        Returns:
-            {'sector_heat': ..., 'sector_name': ..., 'strength': ..., 'rank': ...}
-        """
-        industry = self.dm.get_stock_industry(ts_code)
-        if not industry:
-            return {'sector_heat': self.HEAT_NONE, 'sector_name': '', 'strength': 0.0, 'rank': -1}
-
-        all_heat = self._cache.get('all_heat')
-        if all_heat is None:
-            return {
-                'sector_heat': self.HEAT_NONE, 'sector_name': industry,
-                'strength': 0.0, 'rank': -1,
-            }
-
-        sector_info = all_heat.get(industry)
-        if sector_info is None:
-            return {
-                'sector_heat': self.HEAT_NONE, 'sector_name': industry,
-                'strength': 0.0, 'rank': -1,
-            }
-
-        return {
-            'sector_heat': sector_info['heat_level'],
-            'sector_name': industry,
-            'strength': sector_info['strength'],
-            'rank': sector_info['rank'],
-        }
-
-
 class Dim5EmotionEngine(DataAwareMixin):
     """第5维 情绪环境引擎 — BOCIASI快慢线 + 四象限 + 温度 + 板块热度 + 时间节奏"""
 
@@ -724,14 +458,16 @@ class Dim5EmotionEngine(DataAwareMixin):
             if market['light'] == 'red':
                 market = {'phase': '底部反弹', 'detail': f"BOCIASI四象限={q}（{quadrant['description']}）", 'light': 'yellow'}
 
-        # 3. 板块热度（使用完整 SectorRotationModel，复用已有DataManager）
+        # 3. 板块热度（419号方案B5：从dim1 data_context分拨，不再直调SectorRotationModel）
         if tags.get('ts_code'):
             try:
-                sr_model = SectorRotationModel(data_manager=self._get_dm())
-                heat_result = sr_model.evaluate(tags['ts_code'])
-                if heat_result.get('sector_heat') and heat_result['sector_heat'] != 'none':
-                    sector['heat'] = heat_result['sector_heat']
-                    sector['detail'] = f"板块{heat_result.get('sector_name', '')}(排名{heat_result.get('rank', '?')})"
+                sector_heat = data_context.get('sector_heat') if data_context else None
+                if sector_heat:
+                    industry = self._get_dm().get_stock_industry(tags['ts_code'])
+                    info = sector_heat.get(industry) if industry else None
+                    if info and info.get('heat_level') and info['heat_level'] != 'none':
+                        sector['heat'] = info['heat_level']
+                        sector['detail'] = f"板块{industry}(排名{info.get('rank', '?')})"
             except Exception:
                 pass
 

@@ -166,7 +166,8 @@ class ValuationEngine(DataAwareMixin):
         try:
             import bisect
             cache = self._get_dm().cache
-            codes = cache._query_df("SELECT ts_code FROM treemap_snapshot")["ts_code"].tolist()
+            # 421号：treemap_snapshot 归 snapshot_cache.db 分库，改走 _query_shard 路由
+            codes = cache._query_shard('treemap_snapshot', "SELECT ts_code FROM treemap_snapshot")["ts_code"].tolist()
             vals = []
             # 2026-08-06 修复：原抽样 3000 与方案"全市场截面基准"不符，
             # 改为全量遍历

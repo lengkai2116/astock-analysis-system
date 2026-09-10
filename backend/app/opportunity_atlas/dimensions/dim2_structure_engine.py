@@ -3842,7 +3842,8 @@ class Dim2StructureEngine(DataAwareMixin):
         geo = calc_support_resistance(df if df is not None else None, indicator_ma_df=indicator_ma)
 
         # 3. 5子维度
-        vs_zhongshu = _assess_vs_zhongshu(tags, dims, chanlun_result)
+        latest_close = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
+        vs_zhongshu = _assess_vs_zhongshu(tags, dims, chanlun_result, latest_close)
         vs_ma = _assess_vs_ma(tags)
         vs_sr = _assess_vs_support_resistance(geo)
         vs_chip = _assess_vs_chip(tags)
@@ -3863,13 +3864,8 @@ class Dim2StructureEngine(DataAwareMixin):
         # 5. 买卖点
         buy_sell_points = []
         if chanlun_result:
-            try:
-                bsp_detector = BuySellPointDetector()
-                bsp_result = bsp_detector.detect(chanlun_result)
-                if isinstance(bsp_result, dict):
-                    buy_sell_points = bsp_result.get('buy_points', []) + bsp_result.get('sell_points', [])
-            except Exception:
-                pass
+            buy_sell_points = (chanlun_result.get('buy_points', []) or []) + \
+                              (chanlun_result.get('sell_points', []) or [])
 
         # 6. 白话文本
         plain = _structure_plain(vs_zhongshu, vs_ma, vs_sr, vs_chip, vs_indicator)
@@ -3881,7 +3877,7 @@ class Dim2StructureEngine(DataAwareMixin):
             'vs_support_resistance': vs_sr['detail'],
             'vs_chip': vs_chip['detail'],
             'vs_indicator': vs_indicator['detail'],
-            'chanlun_direction': chanlun_result.get('trend_direction', '未知') if chanlun_result else '未知',
+            'chanlun_direction': chanlun_result.get('trend', '未知') if chanlun_result else '未知',
             'chanlun_strength': round(strength, 2) if isinstance(strength, (int, float)) else str(strength),
             'buy_sell_points': [str(p) for p in buy_sell_points[:3]],
             'plain': plain,
@@ -3899,6 +3895,7 @@ class Dim2StructureEngine(DataAwareMixin):
         }
 
         # 8. audit
+        trend_val = chanlun_result.get('trend', '未知') if chanlun_result else '无数据'
         conditions = [
             {'name': '价格vs中枢', 'satisfied': bool(vs_zhongshu['position']),
              'actual': vs_zhongshu['position'] or '未知', 'threshold': '有明确位置'},
@@ -3907,9 +3904,8 @@ class Dim2StructureEngine(DataAwareMixin):
             {'name': '支撑阻力', 'satisfied': geo.get('support_price') is not None,
              'actual': f"支撑位{geo.get('support_price', '无')}元" if geo.get('support_price') else '数据不足',
              'threshold': '有支撑位数据'},
-            {'name': '缠论分析', 'satisfied': chanlun_result is not None,
-             'actual': chanlun_result.get('trend_direction', '无') if chanlun_result else '无数据',
-             'threshold': '有缠论分析结果'},
+            {'name': '缠论分析', 'satisfied': trend_val not in ('未知', '无', '无数据', 'unknown'),
+             'actual': trend_val, 'threshold': '有缠论分析结果'},
         ]
         satisfied_count = sum(1 for c in conditions if c['satisfied'])
         total_count = len(conditions)
@@ -3922,13 +3918,13 @@ class Dim2StructureEngine(DataAwareMixin):
         return ['daily_cache (market_cache.db)', 'tags (pre_feat_cache)', 'dims (StatusEngine)']
 
 
-def _assess_vs_zhongshu(tags, dims, chanlun_result=None):
+def _assess_vs_zhongshu(tags, dims, chanlun_result=None, latest_close=0.0):
     if chanlun_result:
-        zs_list = chanlun_result.get('zhongshu_list', [])
+        zs_list = chanlun_result.get('zhongshu', [])
         if zs_list:
             zs = zs_list[-1]
             zs_h, zs_l = getattr(zs, 'high', 0), getattr(zs, 'low', 0)
-            price = chanlun_result.get('latest_close', 0)
+            price = latest_close
             if price > zs_h:
                 return {'position': '上方', 'detail': f"价格位于中枢上方({zs_l:.2f}~{zs_h:.2f})"}
             elif price < zs_l:

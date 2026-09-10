@@ -4581,6 +4581,9 @@ class Dim3VPEngine(DataAwareMixin):
         pattern_details = {}
         if df is not None and not df.empty and len(df) >= 10:
             try:
+                # 形态检测器使用 'volume' 列，daily_df 为 'vol'，做列名适配
+                if 'vol' in df.columns and 'volume' not in df.columns:
+                    df = df.rename(columns={'vol': 'volume'})
                 pattern_score, pattern_details = self.pattern_engine.evaluate(df)
             except Exception as e:
                 logger.warning(f"PatternEngine.evaluate 异常: {e}")

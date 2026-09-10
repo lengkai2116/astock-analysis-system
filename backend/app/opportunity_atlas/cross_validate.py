@@ -79,7 +79,9 @@ def _extract_real_dimensions(dm, ts_code: str) -> dict | None:
     """
     # 365号批次C：优先使用维度引擎结果
     try:
-        row_df = dm.cache._query_df(
+        # 421号：status_snapshot 归 snapshot_cache.db 分库，改走 _query_shard 路由
+        row_df = dm.cache._query_shard(
+            'status_snapshot',
             "SELECT dim_engine_results FROM status_snapshot WHERE ts_code=?", [ts_code]
         )
         if row_df is not None and not row_df.empty:

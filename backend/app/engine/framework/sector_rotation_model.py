@@ -38,15 +38,21 @@ class SectorRotationModel:
             self._dm = DataManager()
         return self._dm
 
-    def compute_all_heat(self, all_data: dict[str, pd.DataFrame]) -> dict:
+    def compute_all_heat(self, all_data: dict[str, pd.DataFrame],
+                         indicator_ma_dict: dict[str, pd.DataFrame] = None) -> dict:
         """全量预计算，返回 {行业: 排序结果}
+
+        419号方案B2：新增 indicator_ma_dict 参数——MA值优先从预计算表读取，
+        缺失时回退 raw 滚动均线（对齐 dim5 副本类行为，消除双实现分叉）。
 
         Args:
             all_data: 全市场日线数据 {ts_code: df}
+            indicator_ma_dict: 预计算MA数据 {ts_code: indicator_ma_df}，由调用方提供
 
         Returns:
             {industry_name: {'heat_level': ..., 'strength': ..., 'rank': ..., 'stock_count': ...}}
         """
+        indicator_ma_dict = indicator_ma_dict or {}
         ts_codes = list(all_data.keys())
         industry_map = self.dm.get_stock_industry_batch(ts_codes)
 
@@ -71,8 +77,13 @@ class SectorRotationModel:
                 close = df['close']
                 if len(close) < 20:
                     continue
-                ma5 = close.rolling(window=5).mean().iloc[-1]
-                ma20 = close.rolling(window=20).mean().iloc[-1]
+                # 419号方案B2：从indicator_ma_dict读取MA，保留raw fallback
+                ma5 = self._get_ma(indicator_ma_dict.get(code), 5)
+                if ma5 is None:
+                    ma5 = close.rolling(window=5).mean().iloc[-1]
+                ma20 = self._get_ma(indicator_ma_dict.get(code), 20)
+                if ma20 is None:
+                    ma20 = close.rolling(window=20).mean().iloc[-1]
                 if pd.isna(ma5) or pd.isna(ma20):
                     continue
                 if ma5 > ma20:
@@ -108,6 +119,17 @@ class SectorRotationModel:
 
         self._cache['all_heat'] = result
         return result
+
+    @staticmethod
+    def _get_ma(indicator_ma, period: int):
+        """从indicator_ma读取MA值，失败返回None（419号方案B2）"""
+        if indicator_ma is not None and not indicator_ma.empty:
+            col = f'ma{period}'
+            if col in indicator_ma.columns:
+                val = indicator_ma[col].iloc[-1]
+                if val is not None and not pd.isna(val):
+                    return float(val)
+        return None
 
     def evaluate(self, ts_code: str) -> dict:
         """评估目标股票所在行业的板块热度（需先调用 compute_all_heat 预热缓存）

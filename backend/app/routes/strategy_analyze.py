@@ -755,7 +755,9 @@ def strategy_analyze():
         try:
             from app.data import DataManager as _DMPre
             _dm_pre = _DMPre()
-            _pre_row = _dm_pre.cache._query_df(
+            # 421号：status_snapshot 归 snapshot_cache.db 分库，改走 _query_shard 路由
+            _pre_row = _dm_pre.cache._query_shard(
+                'status_snapshot',
                 "SELECT * FROM status_snapshot WHERE ts_code=? LIMIT 1", [ts_code])
             if _pre_row is not None and not _pre_row.empty:
                 _pr = _pre_row.iloc[0]

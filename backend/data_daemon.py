@@ -2071,6 +2071,88 @@ def _precompute_preset_combos(codes):
                 (f", 失败因子: {fail_detail}" if fail_detail else ''))
 
 
+def _precompute_sector_heat(codes):
+    """板块热度持久化（B3 根治：独立管道步骤 RAW-2B）
+
+    419号方案B2 原将板块热度写盘嵌在 RAW-2（_precompute_raw_features）内，
+    导致两个问题：
+    1. 触发时机依赖 RAW-2 重跑——当天 RAW-2 已 done 时重启 daemon 会跳过，
+       sector_heat_cache 永不回填。
+    2. 写盘用共享 _ecm.conn + _execute（无 busy_timeout），与 daemon 主循环
+       写锁竞争，实测报 "database is locked"。
+
+    本函数抽离为独立步骤，在 RAW-2 完成后、SIG 前执行；写盘用独立短连接
+    （参考 _batch_write_signal_detail 的写锁根治模式），DELETE + executemany +
+    单次 commit，busy_timeout=10s 防极端长事务阻塞。
+    """
+    _ensure_ecm()
+    _ensure_pd()
+    if not codes:
+        return
+    from app import create_app
+    _flask_app = create_app()
+    with _flask_app.app_context():
+        from app.engine.framework.sector_rotation_model import SectorRotationModel
+        sr = SectorRotationModel()
+        # 批量加载日线
+        all_data: dict[str, pd.DataFrame] = {}
+        for code in codes:
+            try:
+                df = _ecm.get_cached_daily(code)
+                if df is not None and not df.empty:
+                    all_data[code] = df
+            except Exception:
+                pass
+        # 构建 indicator_ma_dict（MA优先从预计算表读取，对齐 dim5 副本类行为）
+        indicator_ma_dict = {}
+        for code in all_data.keys():
+            try:
+                ind_df = _ecm.get_indicators_wide(code)
+                if ind_df is not None and not ind_df.empty:
+                    ma_cols = [c for c in ind_df.columns if c.startswith('ma')]
+                    if ma_cols:
+                        indicator_ma_dict[code] = ind_df[ma_cols]
+            except Exception:
+                pass
+        sr.compute_all_heat(all_data, indicator_ma_dict=indicator_ma_dict)
+        _sh = sr._cache.get('all_heat')
+        if not _sh:
+            logger.warning("板块热度预计算为空，跳过写盘")
+            return
+        # 取最新交易日
+        _sh_date_row = _ecm.conn.execute(
+            "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+        ).fetchone()
+        _sh_date = _sh_date_row[0] if _sh_date_row else ''
+        if not _sh_date:
+            logger.warning("无交易日数据，跳过板块热度写盘")
+            return
+        # 独立短连接写盘（避免与主循环写锁竞争）
+        import sqlite3 as _sqlite3
+        try:
+            conn = _sqlite3.connect(_ecm.db_path, timeout=10)
+            conn.execute("PRAGMA busy_timeout=10000")
+            conn.execute("DELETE FROM sector_heat_cache WHERE stat_date = ?", [_sh_date])
+            rows = [
+                (_sh_date, ind,
+                 str(info.get('heat_level', 'none')),
+                 float(info.get('strength', 0.0)),
+                 int(info.get('rank', -1)),
+                 int(info.get('stock_count', 0)))
+                for ind, info in _sh.items()
+            ]
+            conn.executemany(
+                "INSERT INTO sector_heat_cache "
+                "(stat_date, industry, heat_level, strength, rank, stock_count) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                rows
+            )
+            conn.commit()
+            conn.close()
+            logger.info(f"板块热度持久化完成: {len(rows)} 个行业 (stat_date={_sh_date})")
+        except Exception as e:
+            logger.warning(f"板块热度写盘失败: {e}")
+
 
 def _precompute_market_stats():
     """411号Phase 10：全市场级统计预计算
@@ -2317,6 +2399,9 @@ def _precompute_raw_features(codes):
                 except Exception:
                     pass
             sr.compute_all_heat(all_data, indicator_ma_dict=indicator_ma_dict)
+            # 板块热度持久化已抽离为独立管道步骤 RAW-2B（_precompute_sector_heat），
+            # 在 RAW-2 完成后、SIG 前执行，用独立短连接避免与主循环写锁竞争。
+            # 此处仅保留 compute_all_heat 预热 sr._cache['all_heat'] 供下方 sr.evaluate 消费。
         except Exception:
             pass
 
@@ -3898,19 +3983,26 @@ def _build_treemap_snapshot(codes: list[str]):
     #     消除 tags 轻量投票口径；status_snapshot 由管道 S1 先行构建）
     status_map: dict = {}
     try:
-        _ss_df = _ecm._query_df(
+        # 421号R4a补充修复：status_snapshot 在 snapshot_cache.db 分库，
+        # 改经 sharding_manager 读（_query_df 读主库会 miss 分库新数据）
+        from app.data.sharding_manager import sharding_manager
+        _tm_conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('treemap_snapshot'))
+        _ss_rows = sharding_manager.execute_query(
+            'status_snapshot',
             "SELECT ts_code, consensus_rate, conflict_evidence, opportunity_state, state_evidence"
             " FROM status_snapshot")
-        if _ss_df is not None and not _ss_df.empty:
-            status_map = {r['ts_code']: r.to_dict() for _, r in _ss_df.iterrows()}
+        if _ss_rows:
+            status_map = {r[0]: {'ts_code': r[0], 'consensus_rate': r[1],
+                                  'conflict_evidence': r[2], 'opportunity_state': r[3],
+                                  'state_evidence': r[4]} for r in _ss_rows}
     except Exception as e:
         logger.warning(f"status_snapshot 读取失败（快照字段回退 tags 口径）: {e}")
 
     # 6. 原子表替换写入
     NEW_TABLE = 'treemap_snapshot_new'
     # 建新表（结构与目标表一致）
-    _ecm.conn.execute(f"DROP TABLE IF EXISTS {NEW_TABLE}")
-    _ecm.conn.execute(f"""
+    _tm_conn.execute(f"DROP TABLE IF EXISTS {NEW_TABLE}")
+    _tm_conn.execute(f"""
         CREATE TABLE {NEW_TABLE} (
             ts_code TEXT PRIMARY KEY, name TEXT, industry TEXT,
             close REAL, pct_chg REAL, total_mv REAL, trade_date TEXT,
@@ -3943,7 +4035,7 @@ def _build_treemap_snapshot(codes: list[str]):
         b = basic_map.get(code, {})
         t = tags_map.get(code, {})
         try:
-            _ecm.conn.execute(f"""
+            _tm_conn.execute(f"""
                 INSERT INTO {NEW_TABLE}
                 (ts_code, name, industry, close, pct_chg, total_mv, trade_date,
                  open, high, low, amplitude,
@@ -3997,14 +4089,14 @@ def _build_treemap_snapshot(codes: list[str]):
             written += 1
         except Exception:
             continue
-    _ecm.conn.commit()
+    _tm_conn.commit()
 
     # 370号O5：归档逻辑已移至OUT步骤（_out_transmit_seven_dim），此处不再归档
 
     # 原子切换
-    _ecm.conn.execute("DROP TABLE IF EXISTS treemap_snapshot")
-    _ecm.conn.execute(f"ALTER TABLE {NEW_TABLE} RENAME TO treemap_snapshot")
-    _ecm.conn.commit()
+    _tm_conn.execute("DROP TABLE IF EXISTS treemap_snapshot")
+    _tm_conn.execute(f"ALTER TABLE {NEW_TABLE} RENAME TO treemap_snapshot")
+    _tm_conn.commit()
 
     elapsed = time.time() - t0
     logger.info(f"treemap_snapshot 构建完成: {written}/{len(codes)} 只, 耗时 {elapsed:.1f}s")
@@ -4035,10 +4127,18 @@ def _out_transmit_seven_dim(codes: list[str]):
     except Exception:
         pass
 
+    # 421号R4a补充修复：status_snapshot/history 写读统一走 snapshot_cache.db 分库
+    # （JUD _build_status_snapshot 已切分库；此处 OUT 透传+归档同库，消除读写分叉）
+    from app.data.sharding_manager import sharding_manager
+    _snap_conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('status_snapshot'))
+
     # ── 1. 七维透传：seven_dim_json → one_liner_detail ──
     if trade_date:
         try:
-            _ecm.conn.execute("""
+            # 421号R4a：status_snapshot 与 strategy_signal_detail 同属 snapshot_cache.db
+            # 分库（sharding 路由），整条 UPDATE 在分库连接上执行（此前用主库 _ecm.conn
+            # 跨库子查询静默 0 行——375号问题#6 同源）。
+            _snap_conn.execute("""
                 UPDATE status_snapshot SET one_liner_detail = (
                     SELECT ssd.seven_dim_json
                     FROM strategy_signal_detail ssd
@@ -4048,15 +4148,15 @@ def _out_transmit_seven_dim(codes: list[str]):
                 )
                 WHERE status_snapshot.trade_date = ?
             """, [trade_date, trade_date])
-            _ecm.conn.commit()
-            updated = _ecm.conn.execute("SELECT changes()").fetchone()[0]
+            _snap_conn.commit()
+            updated = _snap_conn.execute("SELECT changes()").fetchone()[0]
             logger.info(f"  七维透传: {updated} 只 one_liner_detail 已更新")
         except Exception as e:
             logger.warning(f"七维透传失败: {e}")
 
     # ── 2. 归档 status_snapshot → status_snapshot_history（16列完整）──
     try:
-        _ecm.conn.execute("""
+        _snap_conn.execute("""
             CREATE TABLE IF NOT EXISTS status_snapshot_history (
                 ts_code TEXT, snapshot_date TEXT, trade_date TEXT,
                 dim_states TEXT, status_bar TEXT, opportunity_state TEXT,
@@ -4066,7 +4166,7 @@ def _out_transmit_seven_dim(codes: list[str]):
                 PRIMARY KEY (ts_code, snapshot_date)
             )
         """)
-        _ecm.conn.execute("""
+        _snap_conn.execute("""
             INSERT OR REPLACE INTO status_snapshot_history
                 (ts_code, snapshot_date, trade_date, dim_states, status_bar,
                  opportunity_state, state_evidence, conflict_evidence, consensus_rate,
@@ -4079,14 +4179,14 @@ def _out_transmit_seven_dim(codes: list[str]):
             FROM status_snapshot
             WHERE dim_engine_results IS NOT NULL
         """)
-        _ecm.conn.commit()
+        _snap_conn.commit()
         logger.info("  归档: status_snapshot → status_snapshot_history")
     except Exception as e:
         logger.warning(f"status_snapshot归档失败: {e}")
 
     # ── 3. 归档 treemap_snapshot → treemap_snapshot_history ──
     try:
-        _ecm.conn.execute("""
+        _snap_conn.execute("""
             CREATE TABLE IF NOT EXISTS treemap_snapshot_history (
                 ts_code TEXT, snapshot_date TEXT, name TEXT, industry TEXT,
                 close REAL, pct_chg REAL, total_mv REAL, trade_date TEXT,
@@ -4105,11 +4205,26 @@ def _out_transmit_seven_dim(codes: list[str]):
                 PRIMARY KEY (ts_code, snapshot_date)
             )
         """)
-        _ecm.conn.execute("""
-            INSERT OR REPLACE INTO treemap_snapshot_history
-            SELECT * FROM treemap_snapshot
-        """)
-        _ecm.conn.commit()
+        # 显式列名归档：历史表残留旧列 seven_dim_report（370号S6 已废弃），
+        # 若用 SELECT * 会因列数不匹配（48 vs 47）失败。此处按显式列对齐，
+        # 废弃列留空。
+        _tm_cols = (
+            "ts_code, name, industry, close, pct_chg, total_mv, trade_date,"
+            " open, high, low, amplitude, pe, pb, amount, turnover_rate, circ_mv,"
+            " signal_strength, valuation_level, valuation_deviation, main_force_phase,"
+            " phase_confidence, sentiment_phase, sector_heat, fina_health, opportunity_type,"
+            " trend_alignment, price_position, fund_flow, capital_nature,"
+            " chip_concentration, volatility_level, dividend_yield, composite_rating,"
+            " opportunity_label, evidence_count, right_side_confirm, confirm_evidence,"
+            " opportunity_profile, entry_signals, exit_conditions, consensus_rate,"
+            " conflict, main_force_presence, presence_evidence, opportunity_state,"
+            " state_evidence, snapshot_date"
+        )
+        _snap_conn.execute(
+            f"INSERT OR REPLACE INTO treemap_snapshot_history ({_tm_cols}) "
+            f"SELECT {_tm_cols} FROM treemap_snapshot"
+        )
+        _snap_conn.commit()
         logger.info("  归档: treemap_snapshot → treemap_snapshot_history")
     except Exception as e:
         logger.warning(f"treemap_snapshot归档失败: {e}")
@@ -4134,7 +4249,7 @@ def _out_transmit_seven_dim(codes: list[str]):
         # 获取上一交易日
         prev_date = ''
         try:
-            prev_row = _ecm.conn.execute(
+            prev_row = _snap_conn.execute(
                 "SELECT DISTINCT trade_date FROM status_snapshot "
                 "WHERE trade_date < ? ORDER BY trade_date DESC LIMIT 1",
                 [trade_date]
@@ -4159,12 +4274,12 @@ def _out_transmit_seven_dim(codes: list[str]):
                 changes = []
                 for code in watchlist_codes:
                     try:
-                        cur = _ecm.conn.execute(
+                        cur = _snap_conn.execute(
                             "SELECT consensus_rate, direction, opportunity_state "
                             "FROM status_snapshot WHERE ts_code=? AND trade_date=?",
                             [code, trade_date]
                         ).fetchone()
-                        prev = _ecm.conn.execute(
+                        prev = _snap_conn.execute(
                             "SELECT consensus_rate, direction, opportunity_state "
                             "FROM status_snapshot WHERE ts_code=? AND trade_date=?",
                             [code, prev_date]
@@ -4241,8 +4356,14 @@ def _build_status_snapshot(codes: list[str]):
             pass
 
         _NEW = 'status_snapshot_new'
-        _ecm.conn.execute(f"DROP TABLE IF EXISTS {_NEW}")
-        _ecm.conn.execute(f"""
+        # 421号R4a补充修复：status_snapshot 写路径切分库（snapshot_cache.db）
+        # 此前用 _ecm.conn（主库）写入，而 OUT 透传读分库 → 读写分叉
+        # （375号T1只切读方，写方遗留主库；JUD 21:30 重跑证实主库有新批次、
+        #   分库仍为旧批次）。与 status_signal_detail/treemap_snapshot 同库对齐。
+        from app.data.sharding_manager import sharding_manager
+        _snap_conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('status_snapshot'))
+        _snap_conn.execute(f"DROP TABLE IF EXISTS {_NEW}")
+        _snap_conn.execute(f"""
             CREATE TABLE {_NEW} (
                 ts_code TEXT PRIMARY KEY, snapshot_date TEXT, trade_date TEXT,
                 dim_states TEXT, status_bar TEXT, opportunity_state TEXT,
@@ -4273,13 +4394,16 @@ def _build_status_snapshot(codes: list[str]):
         # 370号修正：预取 dim_results_json（SIG预计算），避免JUD重复计算维度引擎
         _dim_cache = {}
         try:
+            # 421号R4a：改走 sharding_manager 读 snapshot_cache.db 分库
+            from app.data.sharding_manager import sharding_manager
             _placeholders = ','.join(['?' for _ in codes])
-            _cur = _ecm.conn.execute(
+            _rows = sharding_manager.execute_query(
+                'strategy_signal_detail',
                 f"SELECT ts_code, dim_results_json FROM strategy_signal_detail "
                 f"WHERE ts_code IN ({_placeholders}) AND dim_results_json IS NOT NULL",
                 codes
             )
-            for _r in _cur.fetchall():
+            for _r in _rows:
                 try:
                     _dim_cache[_r[0]] = _json.loads(_r[1]) if _r[1] else None
                 except Exception:
@@ -4295,7 +4419,7 @@ def _build_status_snapshot(codes: list[str]):
                 # 364a Phase 1：生成summary_text
                 summary_text = _gen_summary(row)
                 # 370号S6：one_liner_detail不再在此生成，由OUT从strategy_signal_detail.seven_dim_json透传
-                _ecm.conn.execute(
+                _snap_conn.execute(
                     f"INSERT OR REPLACE INTO {_NEW} (ts_code, snapshot_date, trade_date,"
                     f" dim_states, status_bar, opportunity_state, state_evidence,"
                     f" conflict_evidence, consensus_rate, direction, l0, lifecycle, advice_params,"
@@ -4310,14 +4434,14 @@ def _build_status_snapshot(codes: list[str]):
                 written += 1
             except Exception as e:
                 logger.warning(f"status_snapshot {code} 生成失败: {e}")
-        _ecm.conn.commit()
+        _snap_conn.commit()
         # 370号O5：归档逻辑已移至OUT步骤（_out_transmit_seven_dim），此处不再归档
         logger.info(f"  status_snapshot 构建完成: {written}/{len(codes)} 只")
         _last_step_counts['JUD'] = f"{written}/{len(codes)} stocks"
         # 原子替换
-        _ecm.conn.execute("DROP TABLE IF EXISTS status_snapshot")
-        _ecm.conn.execute(f"ALTER TABLE {_NEW} RENAME TO status_snapshot")
-        _ecm.conn.commit()
+        _snap_conn.execute("DROP TABLE IF EXISTS status_snapshot")
+        _snap_conn.execute(f"ALTER TABLE {_NEW} RENAME TO status_snapshot")
+        _snap_conn.commit()
 
 
 def _safe_float(v):
@@ -4362,10 +4486,10 @@ def _is_pipeline_complete(pipeline_date: str) -> bool:
         row = _ecm.conn.execute(
             "SELECT COUNT(*) FROM pipeline_status "
             "WHERE pipeline_date=? AND step_id IN ('COL-1','COL-2','COL-3','COL-4','COL-5','COL-6','COL-7',"
-            "'RAW-1','RAW-2','RAW-3','SIG','JUD','OUT') AND status='done'",
+            "'RAW-1','RAW-2','RAW-3','RAW-2B','SIG','JUD','OUT') AND status='done'",
             [pipeline_date]
         ).fetchone()
-        return row and row[0] >= 13  # 13 个环节全 done（373号：增加COL-7财务全量同步）
+        return row and row[0] >= 14  # 14 个环节全 done（B3：增加 RAW-2B 板块热度持久化）
     except Exception:
         return False
 
@@ -4699,6 +4823,11 @@ def _drive_pipeline():
     if not _all_steps_done(status, list(RAW_STEPS.keys())):
         return
 
+    # ── 板块热度持久化 RAW-2B（B3 根治：独立于 RAW-2 触发，避免写锁竞争）──
+    if status.get('RAW-2B', {}).get('status') != 'done':
+        _run_pipeline_step(today, 'RAW-2B', _precompute_sector_heat, codes)
+        return
+
     # ── 策略分析阶段 SIG ──
     if status.get('SIG', {}).get('status') != 'done':
         def _sig_build(_codes):
@@ -4765,12 +4894,16 @@ def _drive_pipeline():
 def _verify_out_completeness(pipeline_date: str):
     """371号P0#2：验证OUT成品表数据完整性"""
     try:
+        # 421号R4a补充修复：treemap/status_snapshot 已切 snapshot_cache.db 分库，
+        # 完整性验证改走分库连接（主库不再写入成品表）
+        from app.data.sharding_manager import sharding_manager
+        _v_conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('status_snapshot'))
         # treemap_snapshot行数
-        row = _ecm.conn.execute("SELECT COUNT(*) FROM treemap_snapshot").fetchone()
+        row = _v_conn.execute("SELECT COUNT(*) FROM treemap_snapshot").fetchone()
         treemap_count = row[0] if row else 0
 
         # status_snapshot行数和one_liner填充率
-        row = _ecm.conn.execute("SELECT COUNT(*), SUM(CASE WHEN one_liner_detail IS NOT NULL THEN 1 ELSE 0 END) FROM status_snapshot").fetchone()
+        row = _v_conn.execute("SELECT COUNT(*), SUM(CASE WHEN one_liner_detail IS NOT NULL THEN 1 ELSE 0 END) FROM status_snapshot").fetchone()
         status_count = row[0] if row else 0
         oneliner_count = row[1] if row and row[1] else 0
 
@@ -4865,6 +4998,7 @@ def _precompute_strategy_signals(codes):
         # + 1 线程 _pysqlite_query_execute）；5571 次单独 commit 放大为卡死数小时
         # 且 strategy_signal_detail 零写入。改为单连接批量 INSERT（executemany +
         # 一次 commit），写路径从 5571 次短事务收敛为 1 次批量事务。
+        # 421号R1：批量写改走 sharding_manager 路由 snapshot_cache.db 分库。
         import json as _json
         rows = []
         # 370号修正：预计算dim_results_json（供JUD步骤消费）——单引擎复用
@@ -4891,7 +5025,10 @@ def _precompute_strategy_signals(codes):
                         _signals = _se_engine._load_signals(ts_code)
                         if _tags or _signals:
                             _lifecycle = _se_engine._signal_lifecycle(ts_code, _tags, _signals)
-                            dim_results = _se_engine._build_dim_engine_results(_tags, _signals, {}, _lifecycle)
+                            # 421号补充修复：SIG 预计算路径补传 ts_code——此前遗漏导致
+                            # dim1 门禁 ts_code 为空、跳过数据预加载，data_context 全 null、
+                            # quality_level=failed（与 JUD 主路径 status_engine.py:88 对齐）
+                            dim_results = _se_engine._build_dim_engine_results(_tags, _signals, {}, _lifecycle, ts_code=ts_code)
                     except Exception:
                         pass
                 rows.append((ts_code, rd.get('trade_date', datetime.now().strftime('%Y-%m-%d')),
@@ -4907,18 +5044,33 @@ def _precompute_strategy_signals(codes):
         if count == 0 and codes:
             logger.info("策略信号全部失败，回退到因子信号写入...")
             _write_factor_signals(codes)
+    except SignalWriteError:
+        # 421号R3：写失败透传到 _run_pipeline_step → SIG failed → 管道自动重试
+        # （不落入因子回退，因子回退仅用于计算全失败场景）
+        raise
     except Exception as e:
         logger.warning(f"策略信号预计算整体失败: {e}")
         _write_factor_signals(codes)
 
 
+class SignalWriteError(Exception):
+    """421号R3：SIG 信号批量写失败专用异常
+
+    与计算类失败区分：写失败 → 抛出 → _run_pipeline_step 标记 SIG failed
+    → 管道自动重试（≤3 次）；计算失败 → 回退 _write_factor_signals（392号§2.4）。
+    """
+
 def _batch_write_signal_detail(rows):
     """批量写 strategy_signal_detail（P2 写锁死锁根治，2026-08-16）
 
-    用独立短连接一次性 executemany + commit：与 daemon 主循环的共享写连接解耦，
-    单次批量事务替代逐只 INSERT，避免 4 worker × 5571 次短事务在 SQLite 写锁
-    上的锁链死锁。短 busy_timeout（10s）防极端长事务阻塞；失败静默降级
-    （完整性检查 run_integrity_check 会兜底补写）。
+    421号R1：写库目标对齐 357 号分库标准——改走 sharding_manager 路由到
+    snapshot_cache.db（分库），不再直连主库 _ecm.db_path（消除与主库采集/
+    主循环写者的锁竞争）。execute_batch_insert 带分库级 _write_locks 串行化，
+    且分库连接 busy_timeout=30000（sharding_manager.get_connection 内配置）。
+
+    421号R3：失败不再静默降级——抛出 SignalWriteError 由上层标记 SIG failed
+    触发管道自动重试（此前静默 warning + SIG done 掩盖数据缺失；注释声称的
+    "完整性检查兜底补写"实际不存在）。
     """
     global _ecm
     if _ecm is None:
@@ -4926,20 +5078,18 @@ def _batch_write_signal_detail(rows):
         _ecm = get_ecm_instance()
     if not rows:
         return
-    import sqlite3 as _sqlite3
     try:
-        conn = _sqlite3.connect(_ecm.db_path, timeout=10)
-        conn.execute("PRAGMA busy_timeout=10000")
-        conn.executemany(
+        from app.data.sharding_manager import sharding_manager
+        sharding_manager.execute_batch_insert(
+            'strategy_signal_detail',
             "INSERT OR REPLACE INTO strategy_signal_detail "
             "(ts_code, trade_date, signal_json, schema_version, cached_at, seven_dim_json, dim_results_json) "
             "VALUES (?, ?, ?, ?, datetime('now','localtime'), ?, ?)",
             rows
         )
-        conn.commit()
-        conn.close()
     except Exception as e:
-        logger.warning(f"批量写 strategy_signal_detail 失败: {e}")
+        logger.warning(f"批量写 strategy_signal_detail 失败（将触发 SIG 重试）: {e}")
+        raise SignalWriteError(f"strategy_signal_detail 批量写失败: {e}")
 
 
 def _prewarm_weekly_cache(codes):

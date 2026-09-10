@@ -22,11 +22,13 @@ def ecm():
 
 
 def _sample_with_signals(ecm):
-    """找 strategy_signal_detail 有 signals 的股票"""
-    row = ecm.conn.execute(
+    """找 strategy_signal_detail 有 signals 的股票（421号R4a：读 snapshot_cache.db 分库）"""
+    from app.data.sharding_manager import sharding_manager
+    rows = sharding_manager.execute_query(
+        'strategy_signal_detail',
         "SELECT ts_code FROM strategy_signal_detail WHERE signal_json LIKE '%\"signals\": {\"%' LIMIT 1"
-    ).fetchone()
-    return row[0] if row else None
+    )
+    return rows[0][0] if rows else None
 
 
 def test_signal_detail_has_signals_for_adequate_stocks(ecm):

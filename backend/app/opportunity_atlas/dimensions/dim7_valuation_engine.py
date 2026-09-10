@@ -191,7 +191,7 @@ import bisect
 
 
 def _adjust_composite(composite: float, fina_health: str, ecm, ts_code: str,
-                      cat: str, df_income, engine) -> float:
+                      cat: str, df_income, engine, data_context: dict = None) -> float:
     """composite_rating 的质量调整和营收增长加分逻辑"""
     qa = QUALITY_ADJUST
     if fina_health == 'fail':
@@ -584,6 +584,107 @@ class Dim7ValuationEngine(DataAwareMixin):
             return 0.5
         return 0.0
 
+    def _fina_health(self, ts_code: str, ecm) -> tuple:
+        """财务健康检查（418号修复：从旧版恢复，2a34db1 截断时丢失）
+
+        四维检查：ROE均值>6% / ROCE均值>15% / 负债率<70%（金融除外） / 经营现金流覆盖净利润。
+        任一维度不满足累积：≥2 fail、≥1 suspicious。
+        """
+        health = 'pass'
+        roce_pass = False
+        try:
+            df_fina = ecm.get_cached_fina_indicator(ts_code)
+        except Exception:
+            df_fina = pd.DataFrame()
+        try:
+            df_report = ecm.get_cached_finance_report(ts_code)
+        except Exception:
+            df_report = pd.DataFrame()
+        try:
+            df_income = ecm.get_cached_income(ts_code)
+        except Exception:
+            df_income = pd.DataFrame()
+        try:
+            df_bs = ecm.get_cached_balancesheet(ts_code)
+        except Exception:
+            df_bs = pd.DataFrame()
+        try:
+            df_cf = ecm.get_cached_cashflow(ts_code)
+        except Exception:
+            df_cf = pd.DataFrame()
+
+        roe_ok = False
+        if not df_fina.empty and 'roe' in df_fina.columns:
+            roe = df_fina['roe'].dropna()
+            if len(roe) >= 3:
+                roe_ok = roe.head(3).mean() > 6.0
+
+        roce_ok = False
+        if not df_report.empty and 'roce' in df_report.columns:
+            roce = df_report['roce'].dropna()
+            if len(roce) >= 3:
+                roce_ok = roce.head(3).mean() > 15.0
+        if not roce_ok and not df_fina.empty and 'roce' in df_fina.columns:
+            roce = df_fina['roce'].dropna()
+            if len(roce) >= 3:
+                roce_ok = roce.head(3).mean() > 15.0
+        if not roce_ok and not df_income.empty and not df_bs.empty:
+            try:
+                _incs = df_income.sort_values('end_date', ascending=False)
+                _bs = df_bs.sort_values('end_date', ascending=False)
+                _roc_list = []
+                for _i in range(min(3, len(_incs), len(_bs))):
+                    _op = float(_incs.iloc[_i].get('operating_profit') or 0)
+                    _ta = float(_bs.iloc[_i].get('total_assets') or 0)
+                    _cl = float(_bs.iloc[_i].get('current_liab') or 0)
+                    if _op and _ta and (_ta - _cl) > 0:
+                        _roc_list.append(_op / (_ta - _cl) * 100)
+                if _roc_list:
+                    roce_ok = (sum(_roc_list) / len(_roc_list)) > 15.0
+            except Exception:
+                pass
+        roce_pass = roce_ok
+
+        liab_ok = True
+        industry = None
+        try:
+            from app.data import DataManager
+            _dm = DataManager()
+            industry = _dm.get_stock_industry(ts_code)
+        except Exception:
+            pass
+        cat = _category(industry)
+        if cat != '金融' and not df_bs.empty:
+            if 'total_liab' in df_bs.columns and 'total_assets' in df_bs.columns:
+                bs = df_bs.sort_values('end_date', ascending=False)
+                ta = float(bs['total_assets'].iloc[0] or 0)
+                tl = float(bs['total_liab'].iloc[0] or 0)
+                if ta > 0:
+                    liab_ok = (tl / ta * 100) < 70.0
+
+        ocf_ok = True
+        if not df_cf.empty and not df_income.empty:
+            cf = df_cf.sort_values('end_date', ascending=False)
+            inc = df_income.sort_values('end_date', ascending=False)
+            n_col = ('net_profit_atsopc' if 'net_profit_atsopc' in inc.columns
+                     else 'net_profit' if 'net_profit' in inc.columns else None)
+            if n_col is not None and 'cashflow_oper' in cf.columns:
+                ratios = []
+                for i in range(min(3, len(cf), len(inc))):
+                    ni = inc[n_col].iloc[i]
+                    ocf = cf['cashflow_oper'].iloc[i]
+                    if ni is not None and not pd.isna(ni) and ni != 0 and ocf is not None:
+                        ratios.append(ocf / ni)
+                if ratios:
+                    ocf_ok = all(r > 0.8 for r in ratios)
+
+        fail_count = sum(not v for v in [roe_ok, liab_ok, ocf_ok])
+        if fail_count >= 2:
+            health = 'fail'
+        elif fail_count >= 1:
+            health = 'suspicious'
+        return health, roce_pass
+
     def _anchor_bond_stock(self, df_basic) -> float:
         if df_basic.empty or 'dv_ttm' not in df_basic.columns:
             return 0.0
@@ -604,7 +705,11 @@ class Dim7ValuationEngine(DataAwareMixin):
 
 
     def _compute_valuation(self, ts_code: str, ecm, data_context: dict = None) -> dict:
-        """四锚加权估值 → 返回完整估值标签"""
+        """四锚加权估值 → 返回完整估值标签
+
+        418号修复：恢复 2a34db1 提交中被截断的主体（a1-a5 四锚加权 + 质量调整 +
+        level/deviation + 分位统计 + return），保留 data_context-first 数据加载。
+        """
         try:
             from app.data import DataManager
             _dm = DataManager()
@@ -612,7 +717,7 @@ class Dim7ValuationEngine(DataAwareMixin):
         except Exception:
             industry = None
         cat = _category(industry)
-        CATEGORY_WEIGHTS.get(cat, CATEGORY_WEIGHTS['微小/亏损'])
+        weights = CATEGORY_WEIGHTS.get(cat, CATEGORY_WEIGHTS['微小/亏损'])
 
         # 411号Phase 6：优先使用data_context预加载数据
         data_context = data_context or {}
@@ -650,6 +755,132 @@ class Dim7ValuationEngine(DataAwareMixin):
                 df_cf = pd.DataFrame()
         except Exception:
             df_cf = pd.DataFrame()
+
+        # ── 四锚加权（a1资产/PB、a2收益/PE、a3现金流、a4调整PE、a5股债）──
+        a1 = self._anchor_pb(df_basic)
+        a2 = self._anchor_earnings(df_basic, df_income)
+        a3 = self._anchor_cashflow(df_basic, df_cf, df_bs, cat)
+        a4 = self._anchor_adjusted_pe(df_basic, df_income, cat)
+        a5 = self._anchor_bond_stock(df_basic)
+
+        w1, w2, w3, w4, w5 = weights
+
+        # Wiki 周期股陷阱：周期股在周期顶点PE最低，需自动切换至PB锚
+        if cat == '周期':
+            # 检查PE分位数是否异常低（<20%），可能是周期顶点
+            if not df_basic.empty and 'pe_ttm' in df_basic.columns:
+                pe = df_basic['pe_ttm'].dropna()
+                pe = pe[pe > 0]
+                if len(pe) >= 20:
+                    cur_pe = pe.iloc[-1]
+                    pe_pct = (pe < cur_pe).sum() / len(pe) * 100
+                    if pe_pct < 20:
+                        # PE处于极低分位 → 可能是周期顶点 → 提高PB权重
+                        w1 = w1 * 2.0  # 资产锚(PB)权重翻倍
+                        w2 = w2 * 0.5  # 收益锚(PE)权重减半
+                        total = w1 + w2 + w3 + w4 + w5
+                        w1, w2, w3, w4, w5 = w1/total, w2/total, w3/total, w4/total, w5/total
+
+        if not df_basic.empty and 'total_mv' in df_basic.columns:
+            mv = df_basic['total_mv'].dropna()
+            if not mv.empty and mv.iloc[-1] < 5e9:
+                w1 *= 0.5
+                total = w1 + w2 + w3 + w4 + w5
+                if total > 0:
+                    w1, w2, w3, w4, w5 = w1/total, w2/total, w3/total, w4/total, w5/total
+
+        composite = w1 * a1 + w2 * a2 + w3 * a3 + w4 * a4 + w5 * a5
+        composite = max(-2.0, min(2.0, composite))
+
+        # 财务健康质量调整 + 科技/成长营收增长加分（418号：接线 _adjust_composite）
+        fina_health, roce_pass = self._fina_health(ts_code, ecm)
+        composite = _adjust_composite(composite, fina_health, ecm, ts_code, cat,
+                                      df_income, self, data_context=data_context)
+
+        # level 判定（comp_percentile 优先，缺失时用阈值）
+        if self._comp_percentile is not None:
+            pct = self._comp_percentile(composite - self._industry_mean.get(cat, 0.0))
+            if pct > 0.95:
+                level = 'extreme_low'
+            elif pct > 0.80:
+                level = 'low'
+            elif pct > 0.20:
+                level = 'fair'
+            elif pct > 0.05:
+                level = 'high'
+            else:
+                level = 'extreme_high'
+        else:
+            c = composite
+            if c > 1.0:
+                level = 'extreme_low'
+            elif c >= 0.3:
+                level = 'low'
+            elif c >= -0.3:
+                level = 'fair'
+            elif c >= -1.0:
+                level = 'high'
+            else:
+                level = 'extreme_high'
+
+        deviation = round(composite * 20.0, 1)
+
+        pe_pct = pb_pct = ps_pct = None
+        if not df_basic.empty:
+            if 'pe_ttm' in df_basic.columns:
+                pe = df_basic['pe_ttm'].dropna()
+                pe = pe[pe > 0]
+                if len(pe) >= 20:
+                    pe_pct = round((pe < pe.iloc[-1]).sum() / len(pe) * 100, 1)
+            if 'pb' in df_basic.columns:
+                pb = df_basic['pb'].dropna()
+                pb = pb[pb > 0]
+                if len(pb) >= 20:
+                    pb_pct = round((pb < pb.iloc[-1]).sum() / len(pb) * 100, 1)
+            ps_col = 'ps_ttm' if 'ps_ttm' in df_basic.columns else 'ps'
+            if ps_col in df_basic.columns:
+                ps = df_basic[ps_col].dropna()
+                ps = ps[ps > 0]
+                if len(ps) >= 20:
+                    ps_pct = round((ps < ps.iloc[-1]).sum() / len(ps) * 100, 1)
+
+        fcf_yield = None
+        if not df_cf.empty and 'free_cashflow' in df_cf.columns:
+            fcf = df_cf['free_cashflow'].dropna()
+            if not fcf.empty and 'total_mv' in df_basic.columns:
+                mv = df_basic['total_mv'].dropna()
+                if not mv.empty and mv.iloc[-1] > 0:
+                    fcf_yield = round(fcf.iloc[0] / (mv.iloc[-1] * 1e4) * 100, 4)
+
+        div_yield = None
+        if not df_basic.empty and 'dv_ttm' in df_basic.columns:
+            dv = df_basic['dv_ttm'].dropna()
+            if not dv.empty:
+                div_yield = round(float(dv.iloc[-1]), 2)
+
+        revenue_growth = None
+        if not df_income.empty and 'revenue' in df_income.columns:
+            _g = self._revenue_yoy(df_income)
+            if _g is not None:
+                revenue_growth = round(_g * 100, 2)
+
+        return {
+            'valuation_level': level,
+            'valuation_deviation': deviation,
+            'pe_percentile_5y': pe_pct,
+            'pb_percentile_5y': pb_pct,
+            'ps_percentile_5y': ps_pct,
+            'fcf_yield': fcf_yield,
+            'dividend_yield': div_yield,
+            'revenue_growth': revenue_growth,
+            'fina_health': fina_health,
+            'roce_pass': roce_pass,
+            'composite_rating': round(composite, 4),
+            'asset_anchor_rating': round(a1, 1),
+            'earnings_anchor_rating': round(a2, 1),
+            'cashflow_anchor_rating': round(a3, 1),
+            'adjusted_anchor_rating': round(a4, 1),
+        }
 
     # ── 潜力评分（从 PotentialEngine 迁移） ──────────
 
@@ -720,6 +951,7 @@ class Dim7ValuationEngine(DataAwareMixin):
         """统一评估入口
 
         411号Phase 6：优先使用data_context预加载数据，回退独立查询。
+        418号修复：恢复 2a34db1 提交中被截断的完整输出（status_description/judgment/audit）。
         """
         ts_code = tags.get('ts_code', '')
 
@@ -728,8 +960,85 @@ class Dim7ValuationEngine(DataAwareMixin):
 
         # 1. 四锚加权估值（传入data_context以减少DB调用）
         val = self._compute_valuation(ts_code, ecm, data_context=data_context)
-        val['valuation_level']
-        val['valuation_deviation']
+        level = val['valuation_level']
+        deviation = val['valuation_deviation']
+
+        # 2. 潜力评分
+        potential = self._compute_potential(tags)
+
+        # 3. status_description
+        level_cn = LEVEL_CN.get(level, '未知')
+        pe_str = f"{val['pe_percentile_5y']}%" if val['pe_percentile_5y'] is not None else '无数据'
+        pb_str = f"{val['pb_percentile_5y']}%" if val['pb_percentile_5y'] is not None else '无数据'
+        fcf_str = f"{val['fcf_yield']}%" if val['fcf_yield'] is not None else '无数据'
+        div_str = f"{val['dividend_yield']}%" if val['dividend_yield'] is not None else '无数据'
+        strength = potential['signal_strength']
+
+        plain_parts = [f"估值{level_cn}"]
+        if val['pe_percentile_5y'] is not None:
+            plain_parts.append(f"PE处于近5年{pe_str}分位")
+        if val['fcf_yield'] is not None:
+            plain_parts.append(f"FCF收益率{fcf_str}")
+        if val['dividend_yield'] is not None and val['dividend_yield'] > 0:
+            plain_parts.append(f"股息率{div_str}")
+        plain_parts.append(f"潜力评分{strength}/100")
+        plain = '，'.join(plain_parts)
+
+        status_description = {
+            'valuation_level': f"{level_cn}（composite={val['composite_rating']}）",
+            'pe_percentile': f"PE近5年{pe_str}分位",
+            'pb_percentile': f"PB近5年{pb_str}分位",
+            'fcf_yield': f"自由现金流收益率{fcf_str}",
+            'dividend_yield': f"股息率{div_str}",
+            'revenue_growth': f"营收同比增长{val['revenue_growth']}%" if val['revenue_growth'] is not None else '营收数据缺失',
+            'fina_health': f"财务健康{'✅' if val['fina_health'] == 'pass' else '⚠️' if val['fina_health'] == 'suspicious' else '🚫'}({val['fina_health']})",
+            'potential_score': f"潜力评分{strength}/100",
+            'potential_strength': strength,  # 数字字段（dim_adapter factor/valuation维消费，与judgment.potential_strength同值）
+            'potential_breakdown': potential['potential_breakdown'],
+            'plain': plain,
+        }
+
+        # 4. judgment
+        judgment = {
+            'valuation_level': {'value': level, 'light': LEVEL_LIGHT.get(level, 'yellow')},
+            'valuation_deviation': {'value': deviation, 'light': 'green' if deviation > 10 else 'red' if deviation < -10 else 'yellow'},
+            'fina_health': {'value': val['fina_health'], 'light': 'green' if val['fina_health'] == 'pass' else 'red' if val['fina_health'] == 'fail' else 'yellow'},
+            'potential_strength': {'value': strength, 'light': 'green' if strength >= 60 else 'red' if strength < 30 else 'yellow'},
+            'overall_light': LEVEL_LIGHT.get(level, 'yellow'),
+            'overall_direction': 1 if level in ('extreme_low', 'low') else (-1 if level in ('high', 'extreme_high') else 0),
+            'continuous_value': round(max(0, min(1, (val['composite_rating'] + 2) / 4)), 4),  # P2: composite [-2,2]→[0,1]
+        }
+
+        # 5. audit（统一格式：conditions列表 + satisfied_count + total_count + confidence）
+        conditions = [
+            {'name': 'PE数据可用', 'satisfied': val['pe_percentile_5y'] is not None,
+             'actual': pe_str, 'threshold': 'PE近5年百分位'},
+            {'name': 'PB数据可用', 'satisfied': val['pb_percentile_5y'] is not None,
+             'actual': pb_str, 'threshold': 'PB近5年百分位'},
+            {'name': 'FCF数据可用', 'satisfied': val['fcf_yield'] is not None,
+             'actual': fcf_str, 'threshold': 'FCF收益率'},
+            {'name': '股息率>0', 'satisfied': val['dividend_yield'] is not None and val['dividend_yield'] > 0,
+             'actual': div_str, 'threshold': '股息率>0'},
+            {'name': '财务健康', 'satisfied': val['fina_health'] == 'pass',
+             'actual': val['fina_health'], 'threshold': 'ROE>6%近3年平均'},
+            {'name': '营收正增长', 'satisfied': val['revenue_growth'] is not None and val['revenue_growth'] > 0,
+             'actual': f"{val['revenue_growth']}%" if val['revenue_growth'] is not None else 'N/A',
+             'threshold': '营收正增长'},
+        ]
+        satisfied_count = sum(1 for c in conditions if c['satisfied'])
+        total_count = len(conditions)
+        audit = {
+            'conditions': conditions,
+            'satisfied_count': satisfied_count,
+            'total_count': total_count,
+            'confidence': satisfied_count / total_count if total_count > 0 else 0,
+        }
+
+        return {
+            'status_description': status_description,
+            'judgment': judgment,
+            'audit': audit,
+        }
 
     def get_data_dependencies(self) -> list:
         return [

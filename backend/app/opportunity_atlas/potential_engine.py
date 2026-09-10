@@ -89,8 +89,9 @@ class PotentialEngine:
     def build_percentile_tables(self, ecm) -> None:
         """全市场截面百分位基准（313号 §4.2 第一层）"""
         try:
-            dev = ecm._query_df(
-                "SELECT valuation_deviation FROM treemap_snapshot")["valuation_deviation"].dropna().tolist()
+            # 421号：treemap_snapshot 归 snapshot_cache.db 分库，改走 _query_shard 路由
+            dev = ecm._query_shard(
+                'treemap_snapshot', "SELECT valuation_deviation FROM treemap_snapshot")["valuation_deviation"].dropna().tolist()
             self._tables["val"] = _percentile_lookup(sorted(dev))
         except Exception as e:
             logger.warning(f"估值截面构建失败: {e}")

@@ -80,15 +80,15 @@ class TestDim5BociasiImport:
         assert 'from app.engine.framework.bociasi_quadrant import BociasiQuadrantAnalyzer' in content
 
     def test_sector_rotation_model_has_get_ma(self):
-        """SectorRotationModel有_get_ma辅助方法"""
-        from app.opportunity_atlas.dimensions.dim5_emotion_engine import SectorRotationModel
+        """SectorRotationModel有_get_ma辅助方法（419号：特性已从dim5副本迁至framework版）"""
+        from app.engine.framework.sector_rotation_model import SectorRotationModel
         assert hasattr(SectorRotationModel, '_get_ma')
 
     def test_sector_rotation_model_ma_precomputed_first(self):
-        """SectorRotationModel compute_all_heat接收indicator_ma_dict参数"""
+        """SectorRotationModel compute_all_heat接收indicator_ma_dict参数（419号：framework版）"""
         import inspect
 
-        from app.opportunity_atlas.dimensions.dim5_emotion_engine import SectorRotationModel
+        from app.engine.framework.sector_rotation_model import SectorRotationModel
         sig = inspect.signature(SectorRotationModel.compute_all_heat)
         assert 'indicator_ma_dict' in sig.parameters
 

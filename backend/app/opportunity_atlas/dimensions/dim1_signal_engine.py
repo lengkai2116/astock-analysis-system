@@ -33,11 +33,14 @@ class Dim1SignalEngine:
     """
 
     def evaluate(self, dims: dict, tags: dict, signals: dict = None,
-                 lifecycle: dict = None, data_context: dict = None) -> dict:
+                 lifecycle: dict = None, data_context: dict = None,
+                 ts_code: str = None) -> dict:
         """数据质量门禁层入口
 
         411号方案Phase 3：从分析逻辑改为数据准备+质量校验。
         412号方案A1/A2/A3 v3.0：全量加载（ECM表+indicator预计算表+pre_feat_cache ext组）。
+        419号方案：新增 ts_code 参数——tags 扁平化后不含 ts_code 键（status_engine
+        _load_tags 的 pre_feat 无此字段），门禁层需显式传入股票代码。
 
         Args:
             dims: 其他维度引擎输出（门禁层不使用，保留签名兼容）
@@ -45,6 +48,7 @@ class Dim1SignalEngine:
             signals: 策略信号（门禁层不使用，保留签名兼容）
             lifecycle: 生命周期信息（门禁层不使用，保留签名兼容）
             data_context: 外部传入的data_context（门禁层忽略，自行预加载）
+            ts_code: 股票代码（优先于 tags.ts_code，因扁平化后 tags 无此键）
 
         Returns:
             {data_context: dict, status_quality: dict}
@@ -54,7 +58,7 @@ class Dim1SignalEngine:
         signals = signals or {}
         lifecycle = lifecycle or {}
 
-        ts_code = tags.get('ts_code', '') if isinstance(tags, dict) else ''
+        ts_code = ts_code or (tags.get('ts_code', '') if isinstance(tags, dict) else '')
 
         # 1. 预加载dim2-dim7所需的全部原料数据
         loaded_data = {}
@@ -190,6 +194,14 @@ class Dim1SignalEngine:
 
                 # market_stats 已通过上方 ext_groups 循环从 pre_feat_cache 读取
 
+                # ═══ 类别4: 板块热度（419号方案B4，dim5消费）═══
+                try:
+                    sh = dm.cache.get_cached_sector_heat()
+                    if sh:
+                        loaded_data['sector_heat'] = sh
+                except Exception:
+                    pass
+
             except Exception as e:
                 quality_issues.append(f'DataManager初始化失败: {e}')
 
@@ -289,49 +301,77 @@ class Dim1SignalEngine:
         异步闭环：dim1写sync_requests后立即返回degraded，
         daemon 30s主循环消费sync_requests执行补采，
         下次请求时dim1重新检查数据是否就绪。
+
+        419号方案：整个通知体放入后台线程——request_data 写 sync_requests 在
+        daemon 持写锁时会阻塞 2s×N（342号短超时设计），若在门禁主链路同步执行
+        会拖慢每次 evaluate（实测 2~4s）。通知为尽力而为（丢失由 daemon 完整性
+        检查兜底），后台执行不阻塞调用链。
         """
         import logging
         logger = logging.getLogger(__name__)
         if not missing_tables:
             return
+        import threading
+
+        def _do_notify():
+            try:
+                from app.data import DataManager
+                dm = DataManager()
+                # 映射missing_tables到task_type
+                task_map = {
+                    # ECM原料表
+                    'daily_df': 'full_daily',
+                    'moneyflow_df': 'full_moneyflow',
+                    'daily_basic_df': 'full_basic',
+                    # 财务四表 → finance_report（daemon 财务同步后台采集，独立任务）
+                    'fina_df': 'finance_report',
+                    'income_df': 'finance_report',
+                    'balancesheet_df': 'finance_report',
+                    'cashflow_df': 'finance_report',
+                    # stk_holder 有独立采集任务（daemon _batch_stk_holder）
+                    'stk_holder_df': 'stk_holder',
+                    # lhb 为未来扩展数据，daemon 未纳入 sync_requests 消费映射——
+                    # 419号方案：不触发 request_data（避免无谓的 2s×N 锁等待）
+                    'lhb_df': None,
+                    # indicator预计算表 → 触发预计算重跑
+                    'indicator_ma_df': 'precompute_indicators',
+                    'indicator_macd_df': 'precompute_indicators',
+                    'indicator_other_df': 'precompute_indicators',
+                    # pre_feat_cache ext组 → 触发pre_feat重跑
+                    'chip_fund_ext': 'precompute_raw',
+                    'cost_ext': 'precompute_raw',
+                    'volume_ext': 'precompute_raw',
+                    'risk_ext': 'precompute_raw',
+                    'fund_5d_ext': 'precompute_raw',
+                    'emotion_ext': 'precompute_raw',
+                    'structure_ext': 'precompute_raw',
+                    'market_stats': 'precompute_raw',
+                }
+                # 419号方案：缺失项按 task_type 去重合并，一次请求（避免 daemon 持锁时
+                # 逐项 request_data 串行 2s×N 锁超时，拖慢门禁链路）
+                requested = set()
+                for table in missing_tables:
+                    task_type = task_map.get(table)
+                    if task_type is None:
+                        # 无采集任务映射（未来扩展数据如 lhb）：跳过，不通知
+                        continue
+                    if task_type in requested:
+                        continue
+                    requested.add(task_type)
+                    try:
+                        dm.request_data(task_type=task_type, ts_code=ts_code)
+                        logger.info(f"dim1通知daemon补采: {task_type} {ts_code}")
+                    except Exception as e:
+                        logger.debug(f"dim1通知daemon跳过 {table}: {e}")
+            except Exception as e:
+                logger.warning(f"dim1通知daemon失败: {e}")
+
+        # 后台线程执行，不阻塞门禁主链路
         try:
-            from app.data import DataManager
-            dm = DataManager()
-            # 映射missing_tables到task_type
-            task_map = {
-                # ECM原料表
-                'daily_df': 'full_daily',
-                'moneyflow_df': 'full_moneyflow',
-                'daily_basic_df': 'full_basic',
-                'fina_df': 'full_daily',
-                'income_df': 'full_daily',
-                'balancesheet_df': 'full_daily',
-                'cashflow_df': 'full_daily',
-                'stk_holder_df': 'top10_holders',
-                'lhb_df': 'lhb',
-                # indicator预计算表 → 触发预计算重跑
-                'indicator_ma_df': 'precompute_indicators',
-                'indicator_macd_df': 'precompute_indicators',
-                'indicator_other_df': 'precompute_indicators',
-                # pre_feat_cache ext组 → 触发pre_feat重跑
-                'chip_fund_ext': 'precompute_raw',
-                'cost_ext': 'precompute_raw',
-                'volume_ext': 'precompute_raw',
-                'risk_ext': 'precompute_raw',
-                'fund_5d_ext': 'precompute_raw',
-                'emotion_ext': 'precompute_raw',
-                'structure_ext': 'precompute_raw',
-                'market_stats': 'precompute_raw',
-            }
-            for table in missing_tables:
-                task_type = task_map.get(table, 'full_daily')
-                try:
-                    dm.request_data(task_type=task_type, ts_code=ts_code)
-                    logger.info(f"dim1通知daemon补采: {task_type} {ts_code}")
-                except Exception as e:
-                    logger.debug(f"dim1通知daemon跳过 {table}: {e}")
+            t = threading.Thread(target=_do_notify, daemon=True)
+            t.start()
         except Exception as e:
-            logger.warning(f"dim1通知daemon失败: {e}")
+            logger.warning(f"dim1通知daemon线程启动失败: {e}")
 
     def get_data_dependencies(self) -> list:
         """返回本门禁层预加载的数据依赖清单"""

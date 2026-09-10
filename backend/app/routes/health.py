@@ -323,7 +323,9 @@ def data_freshness():
         from app.data.sharding_manager import sharding_manager
         ecm = DataManager().cache
         # 分库表用 sharding_manager 读取（由 sharding_manager 路由到正确数据库）
-        sharded_tables = {'daily_cache', 'daily_basic_cache', 'moneyflow_cache'}
+        # 421号R4a：strategy_signal_detail 归 snapshot_cache.db 分库，加入分库读取
+        sharded_tables = {'daily_cache', 'daily_basic_cache', 'moneyflow_cache',
+                          'strategy_signal_detail', 'opportunity_tags_cache', 'treemap_snapshot'}
         for name, query in tables.items():
             try:
                 if name in sharded_tables:

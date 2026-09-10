@@ -558,6 +558,19 @@ class EnhancedCacheManager:
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # 419号方案B1: 板块热度持久化表（每行业一行，按日替换）
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS sector_heat_cache (
+                stat_date TEXT NOT NULL,
+                industry TEXT NOT NULL,
+                heat_level TEXT NOT NULL,
+                strength REAL NOT NULL,
+                rank INTEGER NOT NULL,
+                stock_count INTEGER NOT NULL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (stat_date, industry)
+            )
+        """)
         self._execute("""
             CREATE TABLE IF NOT EXISTS daily_basic_cache (
                 ts_code TEXT, trade_date TEXT,
@@ -1368,6 +1381,50 @@ class EnhancedCacheManager:
                 'pe_percentile': float(r.get('pe_percentile', 0.5)),
                 'computed_at': str(r.get('stat_date', '')),
             }
+        return {}
+
+    def cache_sector_heat(self, heat: dict, stat_date: str):
+        """419号方案B3：持久化板块热度全量结果 {industry: {heat_level, strength, rank, stock_count}}"""
+        if not heat or not stat_date:
+            return
+        try:
+            self._execute("DELETE FROM sector_heat_cache WHERE stat_date = ?", [stat_date])
+            for ind, info in heat.items():
+                self._execute(
+                    "INSERT INTO sector_heat_cache "
+                    "(stat_date, industry, heat_level, strength, rank, stock_count) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    [stat_date, ind,
+                     str(info.get('heat_level', 'none')),
+                     float(info.get('strength', 0.0)),
+                     int(info.get('rank', -1)),
+                     int(info.get('stock_count', 0))],
+                )
+            self.conn.commit()
+        except Exception as e:
+            logger.warning(f"cache_sector_heat失败: {e}")
+
+    def get_cached_sector_heat(self, stat_date: str = None) -> dict:
+        """419号方案B3：读取板块热度，返回 {industry: {...}}"""
+        try:
+            if stat_date is None:
+                row = self._query_shard('sector_heat_cache',
+                    "SELECT * FROM sector_heat_cache ORDER BY stat_date DESC LIMIT 1", [])
+            else:
+                row = self._query_shard('sector_heat_cache',
+                    "SELECT * FROM sector_heat_cache WHERE stat_date = ?", [stat_date])
+            if row is not None and not row.empty:
+                result = {}
+                for _, r in row.iterrows():
+                    result[str(r.get('industry', ''))] = {
+                        'heat_level': str(r.get('heat_level', 'none')),
+                        'strength': float(r.get('strength', 0.0)),
+                        'rank': int(r.get('rank', -1)),
+                        'stock_count': int(r.get('stock_count', 0)),
+                    }
+                return result
+        except Exception as e:
+            logger.debug(f"get_cached_sector_heat失败: {e}")
         return {}
 
     # ── 内存缓存 ────────────────────────────────────────────
@@ -2304,37 +2361,44 @@ class EnhancedCacheManager:
     # ==================== 策略信号详情缓存（287号方案 v2.3） ====================
 
     def cache_signal_detail(self, ts_code: str, result_dict: dict):
-        """缓存完整策略信号详情（替代 cache_strategy_signals）"""
+        """缓存完整策略信号详情（替代 cache_strategy_signals）
+
+        421号R4a：改走 sharding_manager 写 snapshot_cache.db 分库
+        （对齐 357 号分库标准，消除主库残留副本双写）。
+        """
         import json as _json
         trade_date = result_dict.get('trade_date', datetime.now().strftime('%Y%m%d'))
         signal_json = _json.dumps(result_dict, ensure_ascii=False, default=str)
-        with self._write_lock:
-            try:
-                self._execute(
-                    """INSERT OR REPLACE INTO strategy_signal_detail
-                       (ts_code, trade_date, signal_json, schema_version, cached_at)
-                       VALUES (?, ?, ?, 1, datetime('now','localtime'))""",
-                    [ts_code, trade_date, signal_json]
-                )
-                # 2026-08-11 修复：_execute 不 commit——若 conn 处于活动读事务
-                # （P2 重算脚本 compute_batch 大量读取后写库），INSERT 不持久化
-                # 导致 strategy_signal_detail 更新丢失（与 ECM 其他 cache_* 方法一致）
-                self.conn.commit()
-            except Exception as e:
-                logger.warning(f"缓存信号详情失败 [{ts_code}]: {e}")
+        try:
+            from app.data.sharding_manager import sharding_manager
+            sharding_manager.execute_batch_insert(
+                'strategy_signal_detail',
+                "INSERT OR REPLACE INTO strategy_signal_detail "
+                "(ts_code, trade_date, signal_json, schema_version, cached_at) "
+                "VALUES (?, ?, ?, 1, datetime('now','localtime'))",
+                [(ts_code, trade_date, signal_json)]
+            )
+        except Exception as e:
+            logger.warning(f"缓存信号详情失败 [{ts_code}]: {e}")
 
     def get_signal_detail(self, ts_code: str, trade_date: str = None) -> dict | None:
-        """读取缓存策略信号详情，返回反序列化的 dict 或 None"""
+        """读取缓存策略信号详情，返回反序列化的 dict 或 None
+
+        421号R4a：改走 sharding_manager 读 snapshot_cache.db 分库
+        （此前直读主库 read_conn 命中残留副本）。
+        """
         import json as _json
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y%m%d')
         try:
-            row = self.read_conn.execute(
+            from app.data.sharding_manager import sharding_manager
+            rows = sharding_manager.execute_query(
+                'strategy_signal_detail',
                 "SELECT signal_json FROM strategy_signal_detail WHERE ts_code=? AND trade_date=?",
                 [ts_code, trade_date]
-            ).fetchone()
-            if row:
-                data = _json.loads(row[0])
+            )
+            if rows:
+                data = _json.loads(rows[0][0])
                 if data.get('schema_version', 1) != 1:
                     return None
                 return data
@@ -2345,17 +2409,24 @@ class EnhancedCacheManager:
     def get_latest_signal_detail(self, ts_code: str) -> dict | None:
         """320号 F3：读取最新 trade_date 的策略信号详情（P2 日终产物）
 
+        421号R4a：改走 sharding_manager 路由读 snapshot_cache.db 分库
+        （对齐 357 号分库标准；此前直读主库 read_conn 命中残留副本）。
+        主库不再作为 fallback——残留副本已清理，避免命中旧数据。
+
         P2 预计算在日终运行（如 08-06），当天请求可能无当日记录，
         故按 ORDER BY trade_date DESC 取最新一条。
         """
         import json as _json
         try:
-            row = self.read_conn.execute(
+            from app.data.sharding_manager import sharding_manager
+            rows = sharding_manager.execute_query(
+                'strategy_signal_detail',
                 "SELECT signal_json FROM strategy_signal_detail "
-                "WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1", [ts_code]
-            ).fetchone()
-            if row:
-                data = _json.loads(row[0])
+                "WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
+                [ts_code]
+            )
+            if rows:
+                data = _json.loads(rows[0][0])
                 if data.get('schema_version', 1) != 1:
                     return None
                 return data
@@ -2364,15 +2435,17 @@ class EnhancedCacheManager:
         return None
 
     def has_signal_detail(self, ts_code: str, trade_date: str = None) -> bool:
-        """检查是否存在缓存"""
+        """检查是否存在缓存（421号R4a：改走 sharding_manager 读 snapshot_cache.db 分库）"""
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y%m%d')
         try:
-            row = self.read_conn.execute(
+            from app.data.sharding_manager import sharding_manager
+            rows = sharding_manager.execute_query(
+                'strategy_signal_detail',
                 "SELECT 1 FROM strategy_signal_detail WHERE ts_code=? AND trade_date=?",
                 [ts_code, trade_date]
-            ).fetchone()
-            return row is not None
+            )
+            return bool(rows)
         except Exception:
             return False
 
@@ -2900,7 +2973,11 @@ class EnhancedCacheManager:
     def get_snapshot_max_date(self) -> str | None:
         """获取 treemap_snapshot 最新构建日期（2026-08-06 合规整改网关）"""
         try:
-            row = self.read_conn.execute(
+            # 421号：treemap_snapshot 归 snapshot_cache.db 分库，改走分库连接
+            from app.data.sharding_manager import sharding_manager
+            _conn = sharding_manager.get_connection(
+                sharding_manager.get_db_for_table('treemap_snapshot'))
+            row = _conn.execute(
                 "SELECT MAX(snapshot_date) FROM treemap_snapshot"
             ).fetchone()
             return str(row[0]) if row and row[0] else None
@@ -2911,7 +2988,11 @@ class EnhancedCacheManager:
     def get_snapshot_data_date(self) -> str | None:
         """获取 treemap_snapshot 数据交易日（327阶段3：区分构建时间 vs 数据时间）"""
         try:
-            row = self.read_conn.execute(
+            # 421号：treemap_snapshot 归 snapshot_cache.db 分库，改走分库连接
+            from app.data.sharding_manager import sharding_manager
+            _conn = sharding_manager.get_connection(
+                sharding_manager.get_db_for_table('treemap_snapshot'))
+            row = _conn.execute(
                 "SELECT MAX(trade_date) FROM treemap_snapshot"
             ).fetchone()
             return str(row[0]) if row and row[0] else None
@@ -3093,9 +3174,10 @@ class EnhancedCacheManager:
         except Exception as e:
             logger.debug(f"分库读取失败，降级到ECM: {e}")
 
-        # 降级到ECM读取
+        # 421号：分库表，降级路径同样走 _query_shard（避免误读主库空表）
         placeholders = ','.join(['?' for _ in ts_codes])
-        return self._query_df(
+        return self._query_shard(
+            'treemap_snapshot',
             f"SELECT * FROM treemap_snapshot WHERE ts_code IN ({placeholders})",
             ts_codes
         )
@@ -3234,6 +3316,7 @@ class EnhancedCacheManager:
             ('COL-4', '涨跌停采集'), ('COL-5', '龙虎榜采集'), ('COL-6', '概念板块采集'),
             ('COL-7', '财务全量同步'),
             ('RAW-1', '技术指标(IND)'), ('RAW-2', '特征提取(FEAT)'), ('RAW-3', '量化因子(FAC)'),
+            ('RAW-2B', '板块热度持久化'),
             ('SIG', '策略分析'), ('JUD', '判定及操作建议'), ('OUT', '成品仓'),
         ]:
             self.conn.execute(
@@ -3401,7 +3484,9 @@ class EnhancedCacheManager:
     def get_status_snapshot_row(self, ts_code: str) -> dict:
         """读取status_snapshot行（含dim_engine_results）"""
         try:
-            df = self._query_df(
+            # 421号：status_snapshot 归 snapshot_cache.db 分库，改走 _query_shard 路由
+            df = self._query_shard(
+                'status_snapshot',
                 "SELECT * FROM status_snapshot WHERE ts_code=? LIMIT 1", [ts_code])
             if df.empty:
                 return {}
@@ -3419,9 +3504,17 @@ class EnhancedCacheManager:
             'treemap_snapshot': 'SELECT MAX(snapshot_date) as latest, COUNT(*) as cnt FROM treemap_snapshot',
         }
         results = {}
+        # 421号R4a：strategy_signal_detail/treemap_snapshot 归 snapshot_cache.db 分库，
+        # 按 sharding 路由读取（此前直读主库 self.conn 查分库表）
         for name, query in tables.items():
             try:
-                row = self.conn.execute(query).fetchone()
+                from app.data.sharding_manager import sharding_manager
+                db_name = sharding_manager.get_db_for_table(name)
+                if db_name is not None:
+                    conn = sharding_manager.get_connection(db_name)
+                else:
+                    conn = self.conn
+                row = conn.execute(query).fetchone()
                 results[name] = {
                     'latest_date': str(row[0]) if row[0] else None,
                     'count': row[1],
