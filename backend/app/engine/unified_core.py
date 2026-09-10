@@ -114,10 +114,15 @@ class UnifiedStrategyCore:
     ) -> StandardizedResult:
         """将 SignalComputationService 的 List[Dict] 输出转为 StandardizedResult"""
         # 374号修正：使用最新交易日而非今日日期（今日可能非交易日）
+        # 423号运行验证：daily_cache 已迁移 market_cache.db 分库（356号），
+        # 主库残留旧表（08-26）致 SIG 产出滞后约10个交易日——改走 sharding_manager 读分库
         try:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            _ecm = get_ecm_instance()
-            today = _ecm.conn.execute("SELECT MAX(trade_date) FROM daily_cache").fetchone()[0]
+            from app.data.sharding_manager import sharding_manager
+            _today_conn = sharding_manager.get_connection(
+                sharding_manager.get_db_for_table('daily_cache'))
+            _td = _today_conn.execute(
+                "SELECT MAX(trade_date) FROM daily_cache").fetchone()
+            today = _td[0] if _td and _td[0] else ''
             if not today:
                 today = datetime.now().strftime('%Y-%m-%d')
         except Exception:

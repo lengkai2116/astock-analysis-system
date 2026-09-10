@@ -1112,6 +1112,19 @@ class EnhancedCacheManager:
             )
         """)
 
+        # ── 423号 §2.2：STG 质量审计日志（WriteGateway 写入，QA 校验留痕）──
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS qa_audit_log (
+                pipeline_date TEXT,
+                table_name    TEXT,
+                row_count     INTEGER DEFAULT 0,
+                status        TEXT,          -- passed | failed
+                detail        TEXT,
+                checked_at    TIMESTAMP,
+                PRIMARY KEY (pipeline_date, table_name)
+            )
+        """)
+
         self.conn.commit()
 
         # ── 320号 L2/L3：存量表补列（CREATE IF NOT EXISTS 不修改已存在表）──
@@ -2461,17 +2474,20 @@ class EnhancedCacheManager:
         """
         import json as _json
         features_json = _json.dumps(features, ensure_ascii=False, default=str)
-        with self._write_lock:
-            try:
-                self._execute(
-                    """INSERT OR REPLACE INTO pre_feat_cache
-                       (ts_code, trade_date, features_json, computed_at)
-                       VALUES (?, ?, ?, datetime('now','localtime'))""",
-                    [ts_code, trade_date, features_json]
-                )
-                self.conn.commit()
-            except Exception as e:
-                logger.warning(f"缓存pre_feat失败 [{ts_code}]: {e}")
+        # 423号运行验证：pre_feat_cache 权威副本在 compute_cache.db 分库（356号），
+        # 原实现写主库残留表（QA-CHECK 检出 09-09 数据落主库、分库无数据）——
+        # 改走 sharding_manager 分库写入（含分库级写锁 + commit）。
+        try:
+            from app.data.sharding_manager import sharding_manager
+            sharding_manager.execute_insert(
+                'pre_feat_cache',
+                "INSERT OR REPLACE INTO pre_feat_cache "
+                "(ts_code, trade_date, features_json, computed_at) "
+                "VALUES (?, ?, ?, datetime('now','localtime'))",
+                [ts_code, trade_date, features_json]
+            )
+        except Exception as e:
+            logger.warning(f"缓存pre_feat失败 [{ts_code}]: {e}")
 
     def cache_pre_feat_batch(self, records: list[dict]):
         """批量缓存原料加工特征（用于日终管道批量写入）
@@ -3318,6 +3334,7 @@ class EnhancedCacheManager:
             ('RAW-1', '技术指标(IND)'), ('RAW-2', '特征提取(FEAT)'), ('RAW-3', '量化因子(FAC)'),
             ('RAW-2B', '板块热度持久化'),
             ('SIG', '策略分析'), ('JUD', '判定及操作建议'), ('OUT', '成品仓'),
+            ('QA-CHECK', '仓储质量校验'),
         ]:
             self.conn.execute(
                 "INSERT OR IGNORE INTO pipeline_status "

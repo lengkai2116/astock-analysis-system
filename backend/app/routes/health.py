@@ -358,6 +358,33 @@ def data_freshness():
                 }
         except Exception as e:
             results['pipeline'] = {'error': str(e)}
+        # 423号：QA 状态聚合（仓储质量校验 L2 可见性）
+        try:
+            qa_row = ecm.read_conn.execute(
+                "SELECT pipeline_date, status, retry_count, detail FROM pipeline_status "
+                "WHERE step_id='QA-CHECK' ORDER BY pipeline_date DESC LIMIT 1"
+            ).fetchone()
+            results['qa'] = {}
+            if qa_row:
+                results['qa'] = {
+                    'pipeline_date': qa_row[0], 'status': qa_row[1],
+                    'retry_count': qa_row[2], 'detail': qa_row[3],
+                }
+            qa_fail = ecm.read_conn.execute(
+                "SELECT COUNT(*) FROM qa_audit_log WHERE status='failed' "
+                "AND checked_at > datetime('now','-7 days')"
+            ).fetchone()
+            results['qa']['failed_7d'] = qa_fail[0] if qa_fail else 0
+        except Exception:
+            results['qa'] = {'error': 'qa 状态不可用'}
+        # 423号 B2：sync_requests 积压监控（app.db 异步补采队列深度）
+        try:
+            from app import db
+            _pend = db.session.execute(text(
+                "SELECT COUNT(*) FROM sync_requests WHERE status='pending'")).scalar()
+            results['sync_requests_pending'] = _pend or 0
+        except Exception:
+            results['sync_requests_pending'] = None
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 

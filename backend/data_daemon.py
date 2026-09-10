@@ -1329,6 +1329,32 @@ def _query_table(table: str, sql: str, params=None):
         return 0
 
 
+def _shard_query_df(table: str, sql: str, params=None):
+    """356号方案：读分库权威副本返回 DataFrame
+
+    423号运行验证：_ecm._query_df 读主库 read_conn，而 daily_cache/
+    daily_basic_cache/opportunity_tags_cache 权威副本已在分库（主库残留
+    旧数据致 treemap 滞后约10个交易日）——统一改走 sharding_manager。
+    """
+    import pandas as _pd
+    from app.data.sharding_manager import sharding_manager
+    db_name = sharding_manager.get_db_for_table(table)
+    if db_name:
+        conn = sharding_manager.get_connection(db_name)
+        return _pd.read_sql(sql, conn, params=params)
+    return _pd.read_sql(sql, _ecm.read_conn, params=params)
+
+
+def _shard_fetchall(table: str, sql: str, params=None):
+    """356号方案：读分库返回多行"""
+    from app.data.sharding_manager import sharding_manager
+    db_name = sharding_manager.get_db_for_table(table)
+    if db_name:
+        conn = sharding_manager.get_connection(db_name)
+        return conn.execute(sql, params or []).fetchall()
+    return _ecm.read_conn.execute(sql, params or []).fetchall()
+
+
 def run_integrity_check(backfill_days: int = 1):
     """启动/巡检时执行：检查缺失数据并用批量 API 补采"""
     _ensure_pd()
@@ -3894,7 +3920,8 @@ def _build_treemap_snapshot(codes: list[str]):
 
     # 2. 最新日线（每只最新一条，用子查询避免全表扫描）
     ph = ','.join('?' for _ in codes)
-    daily_df = _ecm._query_df(f"""
+    # 423号：daily_cache 已分库（356号），改走分库权威副本（主库残留旧数据致滞后）
+    daily_df = _shard_query_df('daily_cache', f"""
         SELECT ts_code, close, pct_chg, trade_date, amount, open, high, low FROM daily_cache
         WHERE (ts_code, trade_date) IN (
             SELECT ts_code, MAX(trade_date) FROM daily_cache
@@ -3902,8 +3929,8 @@ def _build_treemap_snapshot(codes: list[str]):
         )
     """, codes)
 
-    # 3. 最新基本面
-    basic_df = _ecm._query_df(f"""
+    # 3. 最新基本面（423号：daily_basic_cache 分库权威副本）
+    basic_df = _shard_query_df('daily_basic_cache', f"""
         SELECT ts_code, total_mv, pe, pb, turnover_rate, circ_mv FROM daily_basic_cache
         WHERE (ts_code, trade_date) IN (
             SELECT ts_code, MAX(trade_date) FROM daily_basic_cache
@@ -3914,7 +3941,8 @@ def _build_treemap_snapshot(codes: list[str]):
     # 4. L2 标签（平铺：每只一行，每标签一列）
     # 修复 2026-08-04：原 MAX(CASE...) 取历史累积行的最大/字典序最大（如 fina_health 取到旧
     # suspicious、sentiment_phase 取到旧 recovery），改为先取每 (ts_code, tag_name) 最新一行再平铺
-    tags_df = _ecm._query_df(f"""
+    # 423号：opportunity_tags_cache 分库权威副本在 compute_cache.db（主库残留旧数据）
+    tags_df = _shard_query_df('opportunity_tags_cache', f"""
         SELECT ts_code,
                MAX(CASE WHEN tag_name='signal_strength'     THEN CAST(tag_value AS REAL) END) as signal_strength,
                MAX(CASE WHEN tag_name='valuation_level'     THEN tag_value END) as valuation_level,
@@ -4098,6 +4126,20 @@ def _build_treemap_snapshot(codes: list[str]):
     _tm_conn.execute(f"ALTER TABLE {NEW_TABLE} RENAME TO treemap_snapshot")
     _tm_conn.commit()
 
+    # 423号：写后校验（覆盖率）——失败记审计告警，不抛
+    try:
+        _td = str(daily_df['trade_date'].max()) if not daily_df.empty else ''
+        if _td:
+            from app.data.stg_quality import WriteGateway
+            _wg = WriteGateway(_ecm)
+            _r = _wg.validate_after_write('treemap_snapshot', _td,
+                                          expected_count=len(codes))
+            _wg.write_audit('treemap_snapshot', _td, rows=written, result=_r)
+            if not _r.passed:
+                logger.warning(f"[QA] treemap_snapshot 写后校验未通过: {_r.issues}")
+    except Exception as e:
+        logger.debug(f"treemap_snapshot 写后校验异常: {e}")
+
     elapsed = time.time() - t0
     logger.info(f"treemap_snapshot 构建完成: {written}/{len(codes)} 只, 耗时 {elapsed:.1f}s")
 
@@ -4121,9 +4163,8 @@ def _out_transmit_seven_dim(codes: list[str]):
     # 获取最新交易日
     trade_date = ''
     try:
-        _row = _ecm.read_conn.execute(
-            "SELECT MAX(trade_date) FROM daily_cache").fetchone()
-        trade_date = _row[0] if _row else ''
+        _rows = _shard_fetchall('daily_cache', 'SELECT MAX(trade_date) FROM daily_cache')
+        trade_date = str(_rows[0][0]) if _rows and _rows[0][0] else ''
     except Exception:
         pass
 
@@ -4349,9 +4390,8 @@ def _build_status_snapshot(codes: list[str]):
         # 数据交易日（从日线取，独立于 treemap_snapshot——S1 先行构建时序）
         trade_date = ''
         try:
-            _row = _ecm.read_conn.execute(
-                "SELECT MAX(trade_date) FROM daily_cache").fetchone()
-            trade_date = _row[0] if _row else ''
+            _rows = _shard_fetchall('daily_cache', 'SELECT MAX(trade_date) FROM daily_cache')
+            trade_date = str(_rows[0][0]) if _rows and _rows[0][0] else ''
         except Exception:
             pass
 
@@ -4442,6 +4482,18 @@ def _build_status_snapshot(codes: list[str]):
         _snap_conn.execute("DROP TABLE IF EXISTS status_snapshot")
         _snap_conn.execute(f"ALTER TABLE {_NEW} RENAME TO status_snapshot")
         _snap_conn.commit()
+        # 423号：写后校验（覆盖率）——失败记审计告警，不抛（避免原子替换后重试丢数据）
+        if trade_date:
+            try:
+                from app.data.stg_quality import WriteGateway
+                _wg = WriteGateway(_ecm)
+                _r = _wg.validate_after_write('status_snapshot', trade_date,
+                                              expected_count=len(codes))
+                _wg.write_audit('status_snapshot', trade_date, rows=written, result=_r)
+                if not _r.passed:
+                    logger.warning(f"[QA] status_snapshot 写后校验未通过: {_r.issues}")
+            except Exception as e:
+                logger.debug(f"status_snapshot 写后校验异常: {e}")
 
 
 def _safe_float(v):
@@ -4486,10 +4538,10 @@ def _is_pipeline_complete(pipeline_date: str) -> bool:
         row = _ecm.conn.execute(
             "SELECT COUNT(*) FROM pipeline_status "
             "WHERE pipeline_date=? AND step_id IN ('COL-1','COL-2','COL-3','COL-4','COL-5','COL-6','COL-7',"
-            "'RAW-1','RAW-2','RAW-3','RAW-2B','SIG','JUD','OUT') AND status='done'",
+            "'RAW-1','RAW-2','RAW-3','RAW-2B','SIG','JUD','OUT','QA-CHECK') AND status='done'",
             [pipeline_date]
         ).fetchone()
-        return row and row[0] >= 14  # 14 个环节全 done（B3：增加 RAW-2B 板块热度持久化）
+        return row and row[0] >= 15  # 15 个环节全 done（B3 RAW-2B；423号 QA-CHECK）
     except Exception:
         return False
 
@@ -4535,6 +4587,12 @@ def _consume_sync_requests_batch():
     daemon 启动后立即消费，不等主循环首个 tick。
     """
     pending = _ecm.consume_pending_requests()
+    # 423号 B2：sync_requests 积压深度上报 monitor（健康监控）
+    try:
+        from app.data.monitor import monitor
+        monitor.record_metric('sync_requests_pending', len(pending))
+    except Exception:
+        pass
     processed = 0
     MAX_PER_TICK = 50  # 每tick最多处理50条，避免阻塞管道
     for req in pending:
@@ -4888,6 +4946,45 @@ def _drive_pipeline():
     if status.get('OUT', {}).get('status') == 'done':
         _verify_out_completeness(today)
 
+    # ── 423号：仓储质量校验 QA-CHECK（OUT 完成后、管道完成前）──
+    _qa_row = status.get('QA-CHECK', {})
+    _qa_st = _qa_row.get('status')
+    if _qa_st in ('failed', 'pending'):
+        # 等待补算完成：被 QA 调度的步骤（RAW/SIG/JUD/OUT）尚在 pending/running 时
+        # 保持 QA-CHECK pending，不递增 retry（补算 SIG/JUD 需数十分钟，立即重试无意义）
+        _inflight = [s for s in ('RAW-1', 'RAW-2', 'RAW-3', 'RAW-2B', 'SIG', 'JUD', 'OUT')
+                     if status.get(s, {}).get('status') in ('pending', 'running')]
+        if _inflight:
+            if _qa_st != 'pending':
+                _ecm.conn.execute(
+                    "UPDATE pipeline_status SET status='pending', "
+                    "detail='等待补算: '||? WHERE pipeline_date=? AND step_id='QA-CHECK'",
+                    [','.join(_inflight), today])
+                _ecm.conn.commit()
+            return
+    if _qa_row.get('status') == 'failed':
+        _rc = _qa_row.get('retry_count', 0)
+        if _rc >= 3:
+            # 重试超限：告警升级 + 标记 done（detail 留痕），避免死循环；
+            # 数据缺口由次日开盘前 R3 多轮核查与完整性检查兜底
+            _alert_qa_failure(today, _qa_row)
+            _ecm.conn.execute(
+                "UPDATE pipeline_status SET status='done', "
+                "detail='QA重试超限已告警: '||COALESCE(detail,'') "
+                "WHERE pipeline_date=? AND step_id='QA-CHECK'", [today])
+            _ecm.conn.commit()
+        else:
+            _ecm.conn.execute(
+                "UPDATE pipeline_status SET status='pending', retry_count=? "
+                "WHERE pipeline_date=? AND step_id='QA-CHECK'",
+                [_rc + 1, today])
+            _ecm.conn.commit()
+        return
+    if status.get('QA-CHECK', {}).get('status') != 'done':
+        # 传 compact today（_run_qa_check 内部转换为 trade_date 格式做数据校验）
+        _run_pipeline_step(today, 'QA-CHECK', _run_qa_check, today)
+        return
+
     logger.info(f"  [管道] 今日全链路完成 ✅")
 
 
@@ -4907,9 +5004,11 @@ def _verify_out_completeness(pipeline_date: str):
         status_count = row[0] if row else 0
         oneliner_count = row[1] if row and row[1] else 0
 
-        # 活跃股票数
-        row = _ecm.conn.execute(f"SELECT COUNT(DISTINCT ts_code) FROM daily_cache WHERE trade_date='{pipeline_date}'").fetchone()
-        active_count = row[0] if row else 0
+        # 活跃股票数（423号：daily_cache 分库权威副本，主库残留已清理）
+        row = _shard_fetchall('daily_cache',
+            "SELECT COUNT(DISTINCT ts_code) FROM daily_cache WHERE trade_date=?",
+            [pipeline_date])
+        active_count = row[0][0] if row and row[0][0] else 0
 
         # 记录到pipeline_status
         if active_count > 0:
@@ -4931,6 +5030,118 @@ def _verify_out_completeness(pipeline_date: str):
     except Exception as e:
         logger.warning(f"OUT完整性验证失败: {e}")
 
+
+# ══════════════════════════════════════════════════════════
+# 423号：仓储质量校验（QA-CHECK 步骤）
+# ══════════════════════════════════════════════════════════
+
+_stg_checker = None
+_stg_scheduler = None
+
+
+def _get_stg_components():
+    """延迟初始化 STG 质量组件（避免 import 环）"""
+    global _stg_checker, _stg_scheduler
+    if _stg_checker is None:
+        from app.data.stg_quality import QualityChecker, RecomputeScheduler
+        _stg_checker = QualityChecker(_ecm)
+        _stg_scheduler = RecomputeScheduler(_ecm)
+    return _stg_checker, _stg_scheduler
+
+
+class QACheckError(Exception):
+    """423号：仓储质量校验未通过（QA-CHECK failed → 管道重试）"""
+
+
+def _run_qa_check(pipeline_date: str):
+    """423号 QA-CHECK 步骤主体：单轮校验 + 补算调度，失败抛异常触发重试
+
+    事件驱动（非阻塞）：本函数只执行一轮校验与调度，由主循环下一 tick
+    在补算完成后重新触发；重试次数超限由 _drive_pipeline 告警升级。
+    pipeline_date 为 compact 'YYYYMMDD'（pipeline_status 用）；校验数据时
+    转换为 trade_date 格式（'YYYY-MM-DD'，对齐各数据表日期列）。
+    """
+    checker, scheduler = _get_stg_components()
+    from app.data.stg_quality import run_quality_round
+    # compact → trade_date 格式（数据表日期列用 '-' 分隔）
+    check_date = (f'{pipeline_date[:4]}-{pipeline_date[4:6]}-{pipeline_date[6:]}'
+                  if len(pipeline_date) == 8 else pipeline_date)
+    outcome = run_quality_round(check_date, checker, scheduler,
+                                status_date=pipeline_date)
+    # G7：校验失败率 + 写锁冲突计数上报 monitor
+    try:
+        from app.data.monitor import monitor
+        from app.data.stg_quality import get_write_lock_conflicts
+        monitor.record_metric('qa_check_failed', outcome['failed_count'])
+        for _tbl, _cnt in get_write_lock_conflicts().items():
+            monitor.record_metric(f'write_lock_conflict_{_tbl}', _cnt)
+    except Exception:
+        pass
+    # 423号 B5：写锁冲突基线快照持久化（qa_audit_log 特例表名，供收益对比）
+    try:
+        from app.data.stg_quality import WriteGateway, get_write_lock_conflicts
+        _wg = WriteGateway(_ecm)
+        _wg.write_audit('_write_lock_baseline', pipeline_date, rows=0,
+                        extra=json.dumps(get_write_lock_conflicts(), ensure_ascii=False))
+    except Exception:
+        pass
+    if not outcome['passed']:
+        _failed = [r for r in outcome['results'] if not r['passed']]
+        _issues = []
+        for r in _failed:
+            _issues.extend(r.get('issues', []))
+        raise QACheckError(
+            f"仓储质量校验未通过: {outcome['failed_count']}项失败, "
+            f"已调度补算 {len(outcome['scheduled'])} 项, 问题: {'; '.join(_issues[:5])}")
+    logger.info(f"  [QA] 仓储质量校验通过: {len(outcome['results'])} 项全部 passed")
+
+
+def _alert_qa_failure(pipeline_date: str, row: dict):
+    """423号 L2 告警：QA-CHECK 重试超限（>3 次）→ monitor 告警 + AlertNotifier + 日志"""
+    _detail = row.get('detail', '')
+    logger.error(f"[QA] 仓储质量校验连续失败（{pipeline_date}）: {_detail}")
+    try:
+        from app.data.monitor import monitor
+        monitor.create_alert(
+            'ERROR', '仓储质量校验失败',
+            f"{pipeline_date} QA-CHECK 重试超限: {_detail}",
+            source='qa_check',
+        )
+    except Exception as e:
+        logger.warning(f"QA 告警发送失败: {e}")
+    # 423号 B4：接线统一告警通知器（alert_notifier 写 JSONL + logging，预留 webhook/email 扩展）
+    try:
+        from app.services.alert_notifier import AlertNotifier
+        AlertNotifier().send(
+            'QA_CHECK_FAILED', 'qa_check', f"{pipeline_date} QA-CHECK 重试超限: {_detail}",
+            severity='ALERT', metadata={'pipeline_date': pipeline_date})
+    except Exception as e:
+        logger.warning(f"QA AlertNotifier 发送失败: {e}")
+
+def _run_history_qa_patrol(limit: int = 3):
+    """423号 G8：历史日期 QA 巡检——最近 N 个交易日轻量检测（不自动补算历史）
+
+    检测 strategy_signal_detail/status_snapshot/treemap_snapshot 缺失并记日志；
+    历史补算风险大（全市场重跑），仅告警留痕，由完整性检查/人工处置。
+    """
+    checker, _ = _get_stg_components()
+    try:
+        rows = _shard_fetchall('daily_cache',
+            "SELECT DISTINCT trade_date FROM daily_cache "
+            "ORDER BY trade_date DESC LIMIT ?", [limit])
+    except Exception:
+        return
+    for (d,) in rows:
+        d = str(d)
+        if not d:
+            continue
+        for table in ['strategy_signal_detail', 'status_snapshot', 'treemap_snapshot']:
+            try:
+                r = checker.check_table(table, d)
+                if not r.passed:
+                    logger.warning(f"[QA-巡检] 历史日期 {d} {table} 缺失: {r.issues}")
+            except Exception:
+                pass
 
 def _run_pipeline_step(pipeline_date: str, step_id: str, func, arg):
     """执行单个管道环节，记录状态（含幂等锁）"""
@@ -4974,6 +5185,20 @@ def _precompute_indicators(codes):
         except Exception:
             pass
     logger.info(f"指标预计算完成: {ok}/{len(codes)} 只")
+    # 423号 B1：indicator_* 写后校验 + 审计（cache_indicators_wide 直写分库，校验兜底）
+    try:
+        from app.data.stg_quality import WriteGateway
+        _td = _shard_fetchall('daily_cache', 'SELECT MAX(trade_date) FROM daily_cache')
+        _td_s = str(_td[0][0]) if _td and _td[0][0] else ''
+        if _td_s:
+            _wg = WriteGateway(_ecm)
+            for _t in ('indicator_ma', 'indicator_macd', 'indicator_other'):
+                _r = _wg.validate_after_write(_t, _td_s)
+                _wg.write_audit(_t, _td_s, result=_r)
+                if not _r.passed:
+                    logger.warning(f"[QA] {_t} 写后校验未通过: {_r.issues}")
+    except Exception as e:
+        logger.debug(f"indicator 写后校验异常: {e}")
 
 
 def _precompute_strategy_signals(codes):
@@ -5079,14 +5304,28 @@ def _batch_write_signal_detail(rows):
     if not rows:
         return
     try:
-        from app.data.sharding_manager import sharding_manager
-        sharding_manager.execute_batch_insert(
+        # 423号 G3：写前 SIG 结果自检（signal_json/dim_results_json/seven_dim_json）
+        from app.data.stg_quality import QualityChecker, WriteGateway
+        _sig_issues = QualityChecker(_ecm).validate_signal_rows(rows)
+        if _sig_issues:
+            _summary = '; '.join(_sig_issues[:5])
+            logger.warning(f"SIG 结果自检未通过（将触发 SIG 重试）: {_summary}")
+            raise SignalWriteError(f"SIG 结果自检失败: {_summary}")
+        # 423号：统一走 WriteGateway（写前格式校验 → 分库写入 → 写后行数校验 → 审计）
+        _trade_date = rows[0][1]
+        _wg_result = WriteGateway(_ecm).write_batch(
             'strategy_signal_detail',
+            rows,
+            _trade_date,
             "INSERT OR REPLACE INTO strategy_signal_detail "
             "(ts_code, trade_date, signal_json, schema_version, cached_at, seven_dim_json, dim_results_json) "
             "VALUES (?, ?, ?, ?, datetime('now','localtime'), ?, ?)",
-            rows
         )
+        if not _wg_result.passed:
+            raise SignalWriteError(
+                f"strategy_signal_detail 写后校验失败: {'; '.join(_wg_result.issues[:3])}")
+    except SignalWriteError:
+        raise
     except Exception as e:
         logger.warning(f"批量写 strategy_signal_detail 失败（将触发 SIG 重试）: {e}")
         raise SignalWriteError(f"strategy_signal_detail 批量写失败: {e}")
@@ -5098,7 +5337,6 @@ def _prewarm_weekly_cache(codes):
     P2 缠论 long 周期需要周线；日线聚合成本低（~82s/全市场），
     只补缺失股票（已有缓存跳过），增量维护。
     """
-    import sqlite3 as _sqlite3
     import pandas as _pd
     _ensure_pd()
     # 找出缺周线缓存的股票
@@ -5110,17 +5348,17 @@ def _prewarm_weekly_cache(codes):
     if not missing:
         return
     logger.info(f"  周线缓存预热: 缺 {len(missing)} 只，从日线聚合...")
-    db_path = _ecm.db_path
-    con = _sqlite3.connect(db_path)
     try:
         # 分批（每批 500 只）拉日线聚合，避免单次查询过大
         for i in range(0, len(missing), 500):
             batch = missing[i:i+500]
             ph = ','.join('?' for _ in batch)
-            df = _pd.read_sql(
+            # 423号：daily_cache 已分库（356号），改走分库权威副本（主库残留旧数据致周线滞后）
+            df = _shard_query_df(
+                'daily_cache',
                 f"SELECT ts_code, trade_date, open, high, low, close, vol, amount "
                 f"FROM daily_cache WHERE ts_code IN ({ph}) ORDER BY ts_code, trade_date",
-                con, params=batch
+                batch
             )
             if df.empty:
                 continue
@@ -5144,8 +5382,8 @@ def _prewarm_weekly_cache(codes):
                 except Exception:
                     continue
         logger.info(f"  周线缓存预热完成（批次 {i//500+1}）")
-    finally:
-        con.close()
+    except Exception as e:
+        logger.warning(f"周线缓存预热失败: {e}")
 
 
 
@@ -5597,6 +5835,22 @@ def main():
                         f"WAL 达 {_wal_mb:.0f}MB（>2GB）——建议执行收缩: "
                         f"python backend/wal_maintenance.py --once"
                     )
+                # 423号 B3：WAL 阈值整合（>500MB 触发 checkpoint）——非交易时段且距上次
+                # >1h 时执行 PASSIVE 合并（轻量非阻塞；TRUNCATE 深收缩由 wal_maintenance
+                # 守护在管道空闲时执行，二者互补）。主库 WAL 与分库共用主库连接。
+                if not _is_market_hours() and _wal_mb > 500 and ts - _last_ckpt > 3600:
+                    try:
+                        import sqlite3 as _sq
+                        _last_ckpt = ts
+                        _con = _sq.connect(
+                            os.path.join(os.environ.get('DATA_DIR', 'data'),
+                                         'duckdb', 'stock_cache.db'), timeout=10)
+                        try:
+                            _con.execute('PRAGMA wal_checkpoint(PASSIVE)')
+                        finally:
+                            _con.close()
+                    except Exception as e:
+                        logger.warning(f"WAL checkpoint 失败: {e}")
             except OSError:
                 pass
 
@@ -5636,6 +5890,11 @@ def main():
                     else:
                         logger.info("定时巡检...")
                         run_integrity_check(backfill_days=1)
+                        # 423号 G8：历史日期缺口巡检（最近3个交易日 QA 轻量检测）
+                        try:
+                            _run_history_qa_patrol()
+                        except Exception as e:
+                            logger.warning(f"历史 QA 巡检异常: {e}")
 
         time.sleep(30)
 
