@@ -153,10 +153,122 @@ _last_step_counts = {}  # 371号P0#3：管道步骤成功计数
 _jud_meta_cache = {}  # 371号JUD接入：{ts_code: enriched_meta_dict} 供 treemap_snapshot 读取
 _market_stats_cache = {}  # 411号Phase 10：全市场级统计预计算，供BociasiQuadrantAnalyzer消费
 
+# 425号 C-1：写入优先级状态机（HIGH > NORMAL > LOW）
+# - HIGH：补采/补预计算（SIG/JUD 核心分析依赖），mootdx 盘中降频让路
+# - NORMAL：日终同步/巡检（默认）
+# - LOW：盘中采集（前端展示，容忍延迟）
+_collect_priority = 'NORMAL'
+_collect_priority_lock = threading.Lock()
+# 425号 C-3：sync_requests 核心依赖类（SIG/JUD 分析依赖，HIGH 模式下优先消费；
+# 前端展示类 full_* 等在 HIGH 窗口让路）。财务类目标 financial/history 库天然分库隔离，不触发降频。
+_SYNC_CORE_TYPES = frozenset({'finance_report', 'stk_holder', 'margin',
+                              'adj_factor', 'top10_holders'})
+
 
 # ══════════════════════════════════════════════════════════
 # 采集器管理
 # ══════════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════════
+# 425号：写入优先级调度（优先级状态机 / 核心滞后判定 / mootdx 降频 / HIGH 补采包装）
+# ══════════════════════════════════════════════════════════
+
+_PRIORITY_LEVELS = {'HIGH': 3, 'NORMAL': 2, 'LOW': 1}
+
+
+def _set_collect_priority(level: str):
+    """425号 C-1：设置写入优先级（HIGH/NORMAL/LOW），线程安全 + monitor 上报
+
+    HIGH 窗口 = 核心补采进行中（run_integrity_check 回溯补采），mootdx 盘中让路、
+    sync_requests 前端展示类延后；完成后恢复 NORMAL。
+    """
+    global _collect_priority
+    if level not in _PRIORITY_LEVELS:
+        logger.warning(f"未知优先级 {level}，忽略（保持 {_collect_priority}）")
+        return
+    with _collect_priority_lock:
+        _collect_priority = level
+    logger.info(f"[优先级] 采集/补采优先级 → {level}")
+    try:
+        from app.data.monitor import monitor
+        monitor.record_metric('collect_priority_mode', _PRIORITY_LEVELS[level])
+    except Exception as e:
+        logger.debug(f"优先级指标上报失败: {e}")
+
+
+def _get_collect_priority() -> str:
+    """425号 C-1：读取当前写入优先级（线程安全）"""
+    with _collect_priority_lock:
+        return _collect_priority
+
+
+def _core_data_stale() -> bool:
+    """425号 C-1：核心数据（daily/basic/moneyflow/stk_limit）是否滞后 >1 天
+
+    复用 _check_data_timeliness 的核心口径（355号规则4.2），返回判定供启动闭环使用。
+    """
+    today = datetime.now()
+    core_tables = [
+        ('daily_cache', '日线'),
+        ('daily_basic_cache', '基本面'),
+        ('moneyflow_cache', '资金流向'),
+        ('stk_limit_cache', '涨跌停'),
+    ]
+    for table, label in core_tables:
+        try:
+            latest = _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
+            if latest:
+                latest_date = (datetime.strptime(str(latest), '%Y-%m-%d')
+                               if isinstance(latest, str) else latest)
+                lag_days = (today - latest_date).days
+                if lag_days > 1:
+                    logger.warning(f"  [启动补采] {label}({table}) 滞后 {lag_days} 天，需要 HIGH 补采")
+                    return True
+                logger.debug(f"  [启动补采] {label}({table}) 滞后 {lag_days} 天 ✅")
+        except Exception as e:
+            logger.debug(f"  [启动补采] {label}时效性检查失败: {e}")
+    return False
+
+
+def _set_mootdx_backoff(active: bool):
+    """425号 C-2：mootdx 盘中采集降频/恢复（interval 可变属性，不 stop 线程、保留连接）
+
+    active=True：market_snapshot 5s→60s、minute_full 300s→600s（HIGH 补采窗口让路）；
+    active=False：恢复原频率。仅当补采目标含 market_cache.db 时由调用方触发。
+    """
+    try:
+        from app.data.mootdx_collector import mootdx_collector
+        if active:
+            mootdx_collector.set_interval('market_snapshot', 60)
+            mootdx_collector.set_interval('minute_full', 600)
+            logger.info("[优先级] mootdx 高频线程降频（market_snapshot 5s→60s, minute_full 300s→600s）")
+        else:
+            mootdx_collector.set_interval('market_snapshot', 5)
+            mootdx_collector.set_interval('minute_full', 300)
+            logger.info("[优先级] mootdx 高频线程恢复频率")
+    except Exception as e:
+        logger.warning(f"mootdx 降频/恢复失败: {e}")
+
+
+def _run_priority_integrity_check(backfill_days: int = 1):
+    """425号 C-1：数据完整性检查（HIGH 优先级包装，启动/整点巡检复用）
+
+    核心数据滞后 >1 天 → 进入 HIGH 补采模式（mootdx 降频让路，目标含 market_cache.db）
+    → run_integrity_check 补采 → 恢复 NORMAL。补采后的完整 QA 校验由 423 QA-CHECK
+    在管道推进后自然衔接（不重复执行 run_quality_round）。
+    无滞后时按普通模式执行（保持现状行为，无缺口快速返回）。
+    """
+    if _core_data_stale():
+        _set_collect_priority('HIGH')
+        _set_mootdx_backoff(True)
+        try:
+            run_integrity_check(backfill_days=backfill_days)
+        finally:
+            _set_mootdx_backoff(False)
+            _set_collect_priority('NORMAL')
+    else:
+        run_integrity_check(backfill_days=backfill_days)
 
 def _start_collectors():
     """启动 mootdx + AKShare 采集器
@@ -4726,6 +4838,10 @@ def _consume_sync_requests_batch():
         if processed >= MAX_PER_TICK:
             logger.info(f"  sync_requests 本轮处理 {processed} 条，剩余下轮继续")
             break
+        # 425号 C-3：HIGH 补采窗口下，前端展示类请求让路（仅核心依赖类消费，留待下轮）；
+        # NORMAL 模式零影响（保持 429 限流行为）。核心类目标 financial/history 库，天然分库隔离。
+        if _get_collect_priority() == 'HIGH' and req['task_type'] not in _SYNC_CORE_TYPES:
+            continue
         logger.info(f"消费 sync_requests: id={req['id']} type={req['task_type']} ts_code={req.get('ts_code')}")
         try:
             # 跳过已过时的 factor_precompute 请求（P3 管道会统一处理）
@@ -5914,7 +6030,9 @@ def main():
         _audit_data_freshness()
     except Exception as e:
         logger.warning(f"数据审计异常: {e}")
-    run_integrity_check(backfill_days=3)
+    # 425号 C-1：启动补采闭环——核心数据滞后 >1 天 → HIGH 补采（mootdx 降频让路）；
+    # 无滞后则普通模式执行（保持现状行为）。补采后 QA 校验由管道 QA-CHECK 衔接。
+    _run_priority_integrity_check(backfill_days=3)
 
     # 启动回填：指数日线 & 资金流历史数据（25天，供 Dashboard 图表展示）
     try:
@@ -5944,6 +6062,7 @@ def main():
 
     logger.info("data_daemon 进入主循环（管道驱动）")
     while _running:
+        _tick_start = time.time()
         now = datetime.now()
         ts = time.time()
 
@@ -6061,12 +6180,20 @@ def main():
                         logger.info("定时巡检：预计算进行中，跳过完整性检查（避免写锁竞争）")
                     else:
                         logger.info("定时巡检...")
-                        run_integrity_check(backfill_days=1)
+                        # 425号 C-1：整点巡检同样挂 HIGH（核心滞后 → 高优补采 + mootdx 降频）
+                        _run_priority_integrity_check(backfill_days=1)
                         # 423号 G8：历史日期缺口巡检（最近3个交易日 QA 轻量检测）
                         try:
                             _run_history_qa_patrol()
                         except Exception as e:
                             logger.warning(f"历史 QA 巡检异常: {e}")
+
+        # 425号 C-4：主循环 tick 时长上报（验收量化依据——HIGH 补采窗口 vs 基线对照）
+        try:
+            from app.data.monitor import monitor
+            monitor.record_metric('main_loop_tick_ms', (time.time() - _tick_start) * 1000)
+        except Exception as e:
+            logger.debug(f"tick 时长指标上报失败: {e}")
 
         time.sleep(30)
 

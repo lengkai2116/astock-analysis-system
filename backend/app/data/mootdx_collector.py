@@ -1360,6 +1360,22 @@ class MootdxCollector:
         self._threads.clear()
         self._started = False
 
+    def set_interval(self, name: str, interval_sec: int) -> bool:
+        """425号 C-2：动态调整采集线程间隔（HIGH 补采窗口降频让路）
+
+        interval 为运行时可变属性，run 循环每轮读取最新值计算等待周期；
+        不 stop 线程（保留连接），避免重建开销。返回是否找到目标线程。
+        """
+        target = None
+        for t in self._threads:
+            if t.name == name:
+                target = t
+                break
+        if target is None:
+            return False
+        target.interval = max(1, int(interval_sec))
+        return True
+
     def is_running(self) -> bool:
         return any(t.is_alive() for t in self._threads)
 
