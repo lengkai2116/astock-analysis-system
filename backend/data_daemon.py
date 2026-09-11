@@ -68,28 +68,64 @@ logger.addFilter(_DedupLogFilter())
 # ── Tushare 全局速率限制（防止误伤，确保 ≤5次/秒） ──
 _ts_last_call = 0.0
 _TS_MIN_INTERVAL = 0.2  # 5次/秒
+# COL/RAW 卡死根治：Tushare SDK 底层无 socket 超时，若其 TCP 请求挂起不返回，
+# 主循环 30s tick 会被拖死，导致后续采集/预计算停摆。故在统一入口对网络调用
+# 做子线程超时：超时返回 None（上层判空跳过该次），主循环立即继续，不再阻塞。
+_TS_CALL_TIMEOUT = 15.0
 
 def _ts(pro_func, *args, **kwargs):
-    """带速率限制的 Tushare API 调用"""
+    """带速率限制 + 网络超时保护的 Tushare API 调用
+
+    速率限制在主线程做（保持 ≤5次/秒 节奏稳定）；实际网络调用放入子线程，
+    超过 _TS_CALL_TIMEOUT 未返回视为卡死，返回 None 由上层判空跳过。
+    """
     global _ts_last_call
     elapsed = time.time() - _ts_last_call
     if elapsed < _TS_MIN_INTERVAL:
         time.sleep(_TS_MIN_INTERVAL - elapsed)
     _ts_last_call = time.time()
-    return pro_func(*args, **kwargs)
+    import concurrent.futures as _cf
+    _exe = _cf.ThreadPoolExecutor(max_workers=1)
+    try:
+        _fut = _exe.submit(pro_func, *args, **kwargs)
+        return _fut.result(timeout=_TS_CALL_TIMEOUT)
+    except _cf.TimeoutError:
+        logger.warning(f"  [Tushare超时] {getattr(pro_func, '__name__', str(pro_func))} "
+                       f"超过 {_TS_CALL_TIMEOUT}s 未返回，跳过本次（不阻塞主循环）")
+        return None
+    finally:
+        # 不等待超时线程：后台线程继续跑但结果丢弃，主流程立即继续（与 _run_with_timeout 一致）
+        try:
+            _exe.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
 
 # 补充：stk_mins 极严限流（1次/分钟）
 _ts_minute_last_call = 0.0
 _TS_MINUTE_INTERVAL = 60.0
+_TS_MINUTE_CALL_TIMEOUT = 60.0
 
 def _ts_minute(pro_func, *args, **kwargs):
-    """极严限流的分钟数据接口（1次/分钟）"""
+    """极严限流的分钟数据接口（1次/分钟），含网络超时保护"""
     global _ts_minute_last_call
     elapsed = time.time() - _ts_minute_last_call
     if elapsed < _TS_MINUTE_INTERVAL:
         time.sleep(_TS_MINUTE_INTERVAL - elapsed)
     _ts_minute_last_call = time.time()
-    return pro_func(*args, **kwargs)
+    import concurrent.futures as _cf
+    _exe = _cf.ThreadPoolExecutor(max_workers=1)
+    try:
+        _fut = _exe.submit(pro_func, *args, **kwargs)
+        return _fut.result(timeout=_TS_MINUTE_CALL_TIMEOUT)
+    except _cf.TimeoutError:
+        logger.warning(f"  [分钟接口超时] {getattr(pro_func, '__name__', str(pro_func))} "
+                       f"超过 {_TS_MINUTE_CALL_TIMEOUT}s 未返回，跳过本次")
+        return None
+    finally:
+        try:
+            _exe.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
 
 # ── 全局引用 ──
 _running = True
@@ -1044,22 +1080,27 @@ def _batch_stk_holder() -> int:
     return total
 
 
-def _batch_finance_report() -> int:
+def _batch_finance_report(codes: list = None) -> int:
     """全市场扩展财务指标（273a 排雷指标）
 
     后台低优，每次最多处理 500 只。
     使用 pro.fina_indicator 带 FINA_FIELDS_EXTENDED 字段集。
+
+    Args:
+        codes: 指定股票列表（None 则取全市场前 500 只）。
     """
     _ensure_pd()
     provider = _get_tushare_provider()
-    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
-    codes = [r[0] for r in codes[:500]]
+    if codes is None:
+        codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
+        codes = [r[0] for r in codes[:500]]
     total = 0
     for code in codes:
         try:
             raw = provider.get_fina_indicator_extended(code)
-            if raw is not None and not raw.empty:
-                df = raw.copy()
+            # provider 返回 list（to_dict('records')），非 DataFrame
+            if raw:
+                df = pd.DataFrame(raw)
                 for col in ['end_date', 'ann_date']:
                     if col in df.columns:
                         df[col] = pd.to_datetime(df[col]).dt.date
@@ -1179,89 +1220,117 @@ def _batch_stock_list() -> int:
         return 0
 
 
-def _batch_income_recent(limit_days: int = 90) -> int:
-    """增量同步最近一期利润表 — 后台低优"""
+def _batch_income_recent(codes: list = None) -> int:
+    """增量同步最近一期利润表 — 后台低优
+
+    Args:
+        codes: 指定股票列表（None 则取全市场前 500 只）。
+    """
     _ensure_pd()
     provider = _get_tushare_provider()
     total = 0
-    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
-    codes = [r[0] for r in codes[:500]]  # 限500只，避免过长
+    if codes is None:
+        codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
+        codes = [r[0] for r in codes[:500]]  # 限500只，避免过长
     for code in codes:
         try:
             raw = provider.get_income(code)
-            if raw is not None and not raw.empty:
-                if 'end_date' in raw.columns:
-                    raw['end_date'] = pd.to_datetime(raw['end_date']).dt.date
-                if 'ann_date' in raw.columns:
-                    raw['ann_date'] = pd.to_datetime(raw['ann_date']).dt.date
-                _ecm.cache_income_data(raw)
-                total += len(raw)
+            # provider 返回 list（to_dict('records')），非 DataFrame
+            if raw:
+                df = pd.DataFrame(raw)
+                if 'end_date' in df.columns:
+                    df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                if 'ann_date' in df.columns:
+                    df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                _ecm.cache_income_data(df)
+                total += len(df)
         except Exception:
             continue
     logger.info(f"  [利润表] 增量同步 {total} 条 (共 {len(codes)} 只)")
     return total
 
 
-def _batch_balancesheet(limit_days: int = 90) -> int:
-    """增量同步最近一期资产负债表 — 后台低优"""
+def _batch_balancesheet(codes: list = None) -> int:
+    """增量同步最近一期资产负债表 — 后台低优
+
+    Args:
+        codes: 指定股票列表（None 则取全市场前 500 只）。
+    """
     _ensure_pd()
     provider = _get_tushare_provider()
     total = 0
-    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
-    codes = [r[0] for r in codes[:500]]
+    if codes is None:
+        codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
+        codes = [r[0] for r in codes[:500]]
     for code in codes:
         try:
             raw = provider.get_balancesheet(code)
-            if raw is not None and not raw.empty:
+            # provider 返回 list（to_dict('records')），非 DataFrame
+            if raw:
+                df = pd.DataFrame(raw)
                 for col in ['end_date', 'ann_date', 'f_ann_date']:
-                    if col in raw.columns:
-                        raw[col] = pd.to_datetime(raw[col]).dt.date
-                _ecm.cache_balancesheet_data(raw)
-                total += len(raw)
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(df[col]).dt.date
+                _ecm.cache_balancesheet_data(df)
+                total += len(df)
         except Exception:
             continue
     logger.info(f"  [资产负债表] 同步 {total} 条 (共 {len(codes)} 只)")
     return total
 
 
-def _batch_cashflow(limit_days: int = 90) -> int:
-    """增量同步最近一期现金流量表 — 后台低优"""
+def _batch_cashflow(codes: list = None) -> int:
+    """增量同步最近一期现金流量表 — 后台低优
+
+    Args:
+        codes: 指定股票列表（None 则取全市场前 500 只）。
+    """
     _ensure_pd()
     provider = _get_tushare_provider()
     total = 0
-    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
-    codes = [r[0] for r in codes[:500]]
+    if codes is None:
+        codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
+        codes = [r[0] for r in codes[:500]]
     for code in codes:
         try:
             raw = provider.get_cashflow(code)
-            if raw is not None and not raw.empty:
+            # provider 返回 list（to_dict('records')），非 DataFrame
+            if raw:
+                df = pd.DataFrame(raw)
                 for col in ['end_date', 'ann_date', 'f_ann_date']:
-                    if col in raw.columns:
-                        raw[col] = pd.to_datetime(raw[col]).dt.date
-                _ecm.cache_cashflow_data(raw)
-                total += len(raw)
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(df[col]).dt.date
+                _ecm.cache_cashflow_data(df)
+                total += len(df)
         except Exception:
             continue
     logger.info(f"  [现金流量表] 同步 {total} 条 (共 {len(codes)} 只)")
     return total
 
 
-def _batch_forecast(limit_days: int = 90) -> int:
-    """增量同步最近一期业绩预告 — 后台低优"""
+def _batch_forecast(codes: list = None) -> int:
+    """增量同步最近一期业绩预告 — 后台低优
+
+    Args:
+        codes: 指定股票列表（None 则取全市场前 500 只）。
+    """
     _ensure_pd()
     provider = _get_tushare_provider()
     total = 0
-    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
-    codes = [r[0] for r in codes[:500]]
+    if codes is None:
+        codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
+        codes = [r[0] for r in codes[:500]]
     for code in codes:
         try:
             raw = provider.get_forecast(code)
-            if raw is not None and not raw.empty:
+            # provider 返回 list（to_dict('records')），非 DataFrame
+            if raw:
+                df = pd.DataFrame(raw)
                 for col in ['end_date', 'ann_date']:
-                    if col in raw.columns:
-                        raw[col] = pd.to_datetime(raw[col]).dt.date
-                _ecm.cache_forecast_data(raw)
-                total += len(raw)
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(df[col]).dt.date
+                _ecm.cache_forecast_data(df)
+                total += len(df)
         except Exception:
             continue
     logger.info(f"  [业绩预告] 同步 {total} 条 (共 {len(codes)} 只)")
@@ -4583,7 +4652,80 @@ def _consume_sync_requests_batch():
         pass
     processed = 0
     MAX_PER_TICK = 50  # 每tick最多处理50条，避免阻塞管道
+    # 429号修复：finance_report/stk_holder 请求按 ts_code 单只补采（原实现每条都触发
+    # 全量 500 只扫描，1-2 分钟/条 → 积压风暴阻塞主循环）。先按 ts_code 去重合并，
+    # 每只只补采一次，再批量标记所有对应请求 done，避免重复扫描与重复 API 调用。
+    # 注意：去重后仍可能达数千只（finance 4957 + stk_holder 3893），若一次性全补采
+    # 仍会阻塞主循环数小时。故每 tick 只补采 MAX_PER_TICK 只（跨两类合计），
+    # 其余请求保持 pending 留待下轮，避免重蹈积压风暴。
+    _finance_codes = set()
+    _stk_holder_codes = set()
     for req in pending:
+        if req['task_type'] == 'finance_report' and req.get('ts_code'):
+            _finance_codes.add(req['ts_code'])
+        elif req['task_type'] == 'stk_holder' and req.get('ts_code'):
+            _stk_holder_codes.add(req['ts_code'])
+    # 单只补采辅助：provider 返回 list，需转 DataFrame 后写缓存
+    def _sync_finance_single(code):
+        provider = _get_tushare_provider()
+        raw = provider.get_fina_indicator_extended(code)
+        if raw:
+            df = pd.DataFrame(raw)
+            for col in ['end_date', 'ann_date']:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col]).dt.date
+            _ecm.cache_finance_report_data(df)
+            return len(df)
+        return 0
+    def _sync_stk_holder_single(code):
+        provider = _get_tushare_provider()
+        raw = provider.get_stk_holdernumber(code)
+        if raw:
+            df = pd.DataFrame(raw)
+            for col in ['end_date', 'ann_date']:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col]).dt.date
+            _ecm.cache_stk_holder_data(df)
+            return len(df)
+        return 0
+    # 本轮实际补采的代码集合（受 MAX_PER_TICK 上限约束），仅这些请求标记 done
+    _backfilled = set()
+    # 先补采去重后的 finance_report/stk_holder 单只集合（每只一次，跨两类合计 ≤ MAX_PER_TICK）。
+    # 预算对半分配，避免 finance 独占预算导致 stk_holder 永不补采。
+    _half = MAX_PER_TICK // 2
+    _fin_done = 0
+    for code in _finance_codes:
+        if _fin_done >= _half:
+            break
+        try:
+            _sync_finance_single(code)
+            _backfilled.add(code)
+        except Exception as e:
+            logger.warning(f"  finance_report 单只补采失败 {code}: {e}")
+        _fin_done += 1
+    _stk_done = 0
+    for code in _stk_holder_codes:
+        if _stk_done >= _half:
+            break
+        try:
+            _sync_stk_holder_single(code)
+            _backfilled.add(code)
+        except Exception as e:
+            logger.warning(f"  stk_holder 单只补采失败 {code}: {e}")
+        _stk_done += 1
+    processed = _fin_done + _stk_done
+    for req in pending:
+        # finance_report/stk_holder：仅当该代码本轮已补采才标记 done（标记为廉价操作，
+        # 不受 MAX_PER_TICK 限制）；未补采的保持 pending 留待下轮。
+        if req['task_type'] in ('finance_report', 'stk_holder'):
+            if req.get('ts_code') in _backfilled:
+                _ecm.mark_request_done(req['id'])
+                logger.info(f"  sync_request {req['id']} 完成（{req['task_type']} {req.get('ts_code')}）")
+            continue
+        # 其余任务类型受 MAX_PER_TICK 上限约束
+        if processed >= MAX_PER_TICK:
+            logger.info(f"  sync_requests 本轮处理 {processed} 条，剩余下轮继续")
+            break
         logger.info(f"消费 sync_requests: id={req['id']} type={req['task_type']} ts_code={req.get('ts_code')}")
         try:
             # 跳过已过时的 factor_precompute 请求（P3 管道会统一处理）
@@ -4605,10 +4747,6 @@ def _consume_sync_requests_batch():
                 _batch_adj_factor()
             elif req['task_type'] == 'top10_holders':
                 _batch_top10_holders()
-            elif req['task_type'] == 'stk_holder':
-                _batch_stk_holder()
-            elif req['task_type'] == 'finance_report':
-                _batch_finance_report()
             elif req['task_type'] == 'margin':
                 _batch_margin(datetime.now().strftime('%Y%m%d'))
             elif req['task_type'] == 'concept':
@@ -4621,9 +4759,6 @@ def _consume_sync_requests_batch():
             _ecm.mark_request_failed(req['id'])
             logger.warning(f"  sync_request {req['id']} 失败: {e}")
         processed += 1
-        if processed >= MAX_PER_TICK:
-            logger.info(f"  sync_requests 本轮处理 {processed} 条，剩余下轮继续")
-            break
 
 
 def _recover_stale_running(timeout_hours: float = 4.0) -> int:
@@ -4814,7 +4949,9 @@ def _drive_pipeline():
             batch_size = 500
             for i in range(0, len(_codes), batch_size):
                 batch = _codes[i:i+batch_size]
-                try: _batch_fina_indicator(batch)
+                # 424号P0-4：财务函数已收敛 TushareProvider 且接受 codes 参数
+                # （原实现把 codes 列表误当 limit_days/trade_date 传入，致财务同步退化）
+                try: _batch_fina_indicator()
                 except: pass
                 try: _batch_income_recent(batch)
                 except: pass
@@ -4851,13 +4988,26 @@ def _drive_pipeline():
     unfinished_raw = [s for s in RAW_STEPS if status.get(s, {}).get('status') != 'done']
     if unfinished_raw:
         import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            futures = {s: pool.submit(RAW_STEPS[s], codes) for s in unfinished_raw}
+        # 卡死根治：原用 `with ThreadPoolExecutor` —— 其 __exit__ 隐式 shutdown(wait=True)，
+        # 当某 RAW 步骤超过 1800s 仍运行，fut.result(timeout=1800) 抛超时后 with 退出
+        # 会再次阻塞主循环直到该线程结束，超时保护形同虚设。改为显式 shutdown(wait=False)，
+        # 超时的后台线程置 daemon 随进程结束，主循环不被拖住。
+        _raw_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        try:
+            futures = {s: _raw_pool.submit(RAW_STEPS[s], codes) for s in unfinished_raw}
             for s, fut in futures.items():
                 try:
                     fut.result(timeout=1800)
+                except concurrent.futures.TimeoutError:
+                    logger.warning(f"{s} 并行执行超过1800s未完成，后台线程继续但不再阻塞主循环")
                 except Exception as e:
                     logger.warning(f"{s} 并行执行失败: {e}")
+        finally:
+            # 不等待超时线程；后台 daemon 线程随进程结束，主流程立即继续
+            try:
+                _raw_pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
         # 记录全部完成
         for s in unfinished_raw:
             _ecm.mark_step_done(today, s, f"OK parallel ({s})")
@@ -5167,8 +5317,14 @@ def _precompute_indicators(codes):
         try:
             df = _ecm.get_cached_daily(code)
             # 414号R6: 阈值从30提高到60，确保MA60/MACD有效
-            if df is not None and len(df) >= 60 and mgr.precompute_all_indicators(code, df):
-                ok += 1
+            if df is not None and len(df) >= 60:
+                # 卡死根治：单只指标计算包超时（与 RAW-3 因子单只一致）。
+                # 纯本地内存计算，子线程无 Flask context 依赖，可安全包装。
+                def _calc_one(_code=code, _df=df):
+                    return mgr.precompute_all_indicators(_code, _df)
+                r = _run_with_timeout(_calc_one, timeout_sec=60.0, desc=f"RAW-1 指标 {code}")
+                if r:
+                    ok += 1
         except Exception:
             pass
     logger.info(f"指标预计算完成: {ok}/{len(codes)} 只")
