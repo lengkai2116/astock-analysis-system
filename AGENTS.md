@@ -286,6 +286,30 @@ curl http://localhost:5001/api/v3/health/ready   # 就绪检查
   - `git diff` 不引入新的 `TushareProvider()`/`AkshareProvider()`/`sync_*`/`use_cache=False`
   - 数据读取必经 DataManager 只读方法（`get_*`），不走 `sync_*`
 
+### 🔴 开发期数据隔离红线（测试/检查方法论，2026-09-13 强制执行）
+
+> 系统当前处**开发/调优阶段，无真实生产库**。`backend/data/duckdb/`（含 stock_cache.db 及各分库）是 **开发基准数据目录**，应视作**只读基线**，不得被测试/脚本静默写入。
+> ⚠️ **术语校准**：任何"生产库/生产环境"表述在现阶段均指**开发基准数据目录**，禁止误称（见 428 方案 §5.4）。
+
+**分库写路由双机制（隔离必须双切）：**
+- `DATA_DIR` 只决定 ECM（`EnhancedCacheManager`，stock_cache.db 等）指向哪个 `duckdb` 目录；
+- `daily/stk_limit/moneyflow/financial` 等**分库表**经 `sharding_manager.get_db_for_table()` 路由，其**模块级单例默认指向 `backend/data/duckdb`，不读取 `DATA_DIR`**；`init_sharding(隔离路径)` 才能整体切换。
+- 只设 `DATA_DIR` 未 `init_sharding` → 读库隔离、**写库却落默认基准目录**（428 已踩坑污染 fina 行，后还原）。
+
+**测试/检查是否用沙箱——按对象分两类：**
+| 验证类型 | 用哪种隔离 | 说明 |
+|---|---|---|
+| 端到端/全环节重放（如 427） | **沙箱/克隆库** | 可重复 + 可回滚，不污染基线 |
+| 单元/回归（如 428 P0-1） | **自包含临时隔离** | `ShardingManager(tmp_path)` + `(tmp_path/'duckdb').mkdir()` + patch `sm_mod.sharding_manager`，一次用完即弃 |
+| 纯只读核查 | 直接读，不写 | 禁止任何写库 |
+
+**写测试必须三件套（缺一污染默认基准目录）：**
+1. `ShardingManager(tmp_path)` new 临时实例，覆盖全局路由；
+2. `monkeypatch.setattr(app.data.sharding_manager, 'sharding_manager', tmp_sm)` —— 因 `_insert_from_df` 等**动态 import** `from app.data.sharding_manager import sharding_manager`，必须 patch **模块属性**而非 ECM 属性，否则绕过 mock 写真实单例；
+3. 建 `(tmp_path/'duckdb')` 目录。
+
+**红线命令/原则：** 单元测试**禁止**直接对默认 `backend/data/duckdb/*.db` 做 `INSERT/UPDATE/DELETE`（需临时库）；涉写测试一律走临时隔离；只读核查可直连但**不得落写**。
+
 ---
 
 ## 七、测试说明

@@ -5,7 +5,6 @@
 修复：改为有向强度（净流入正 / 净流出负，范围 -1~1）。
 """
 import os
-import sqlite3
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -20,10 +19,10 @@ def test_fund_strength_directional_outflow_negative():
     """净流出股票 → 强度应为负（修复前 abs 抹掉方向得正高分）"""
     # 用真实数据：找一只 5 日净流出且绝对值强度高的股票（bug 高发区）
     from app.data.enhanced_cache_manager import EnhancedCacheManager
+    from app.data.sharding_manager import sharding_manager
     ecm = EnhancedCacheManager()
-    conn = sqlite3.connect(ecm.db_path)
-    # 找 5 日净额 < 0 且 |net|/tot 高的股票
-    rows = conn.execute("""
+    # 421号R4a：moneyflow_cache 属 market_cache.db，走分库路由（原 sqlite3 直连总库恒空）
+    rows = sharding_manager.execute_query('moneyflow_cache', """
         SELECT ts_code, SUM(net_lg_amount) net5, SUM(buy_lg_amount + sell_lg_amount) tot5 FROM (
             SELECT ts_code, net_lg_amount, buy_lg_amount, sell_lg_amount,
                    ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) rn
@@ -31,8 +30,7 @@ def test_fund_strength_directional_outflow_negative():
         HAVING SUM(net_lg_amount) < 0
         ORDER BY ABS(SUM(net_lg_amount)) / SUM(buy_lg_amount + sell_lg_amount) DESC
         LIMIT 1
-    """).fetchall()
-    conn.close()
+    """)
     assert rows, "应能找到净流出股票"
     tc = rows[0][0]
     strength = compute_fund_strength(ecm, tc)
@@ -45,17 +43,16 @@ def test_fund_strength_directional_inflow_positive():
     """净流入股票 → 强度应为正"""
 
     from app.data.enhanced_cache_manager import EnhancedCacheManager
+    from app.data.sharding_manager import sharding_manager
     ecm = EnhancedCacheManager()
-    conn = sqlite3.connect(ecm.db_path)
-    rows = conn.execute("""
+    rows = sharding_manager.execute_query('moneyflow_cache', """
         SELECT ts_code FROM (
             SELECT ts_code, SUM(net_lg_amount) net5, SUM(buy_lg_amount + sell_lg_amount) tot5 FROM (
                 SELECT ts_code, net_lg_amount, buy_lg_amount, sell_lg_amount,
                        ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) rn
                 FROM moneyflow_cache) WHERE rn <= 5 GROUP BY ts_code)
         WHERE net5 > 0 AND tot5 > 0 LIMIT 1
-    """).fetchall()
-    conn.close()
+    """)
     assert rows, "应能找到净流入股票"
     strength = compute_fund_strength(ecm, rows[0][0])
     assert strength is not None and strength > 0, f"净流入股票强度应为正，实际 {strength}"

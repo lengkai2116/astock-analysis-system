@@ -34,6 +34,13 @@ data/duckdb/*.db.wal
 data/duckdb/temp/
 *.parquet
 
+# 运行/测试产物（开发期数据隔离红线，不入版本库）
+data/logs/
+data/alerts/
+data/ic_weights_report.json
+data_virtual_test_*
+data/*.db?mode=ro
+
 # Logs
 *.log
 sync_log.txt

@@ -14,7 +14,7 @@
   python scripts/calibrate_signal_thresholds.py --replay   # 离线重放统计（B，慢）
 
 输出：按 signal_source_type 分群的 dist_pct/days_since 分位点（P50/P80），
-     人工确认后更新 config/signal_registry.yaml（version+1，可回滚）。
+     人工确认后更新 backend/config/signal_registry.yaml（version+1，可回滚）。
 """
 import argparse
 import json
@@ -88,7 +88,7 @@ def main():
         print("\n[B 轨·离线重放] daily_cache 历史重放（未实现——依赖 P2 信号重放，预留）")
         print("  建议：用 daily_cache 5 年历史重放 P2 信号 → 统计 dist_pct/days_since 收益分布")
 
-    print("\n结论：样本≥100 的信号类型按 P50/P80 分位更新 config/signal_registry.yaml（version+1）")
+    print("\n结论：样本≥100 的信号类型按 P50/P80 分位更新 backend/config/signal_registry.yaml（version+1）")
     print("（阈值定标流程详见 334号 §6.2 阈值管理机制）")
 
 

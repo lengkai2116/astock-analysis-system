@@ -110,20 +110,20 @@ def test_fractal_threshold_custom():
 
 
 # ═══════════════════════════════════════════════════════════
-# F-16: only_last 参数已移除
+# F-16: only_last 快速模式（434号方案A恢复：framework 权威含 only_last）
 # ═══════════════════════════════════════════════════════════
 
-def test_bsp_find_no_only_last_param():
-    """find()签名中不含only_last参数"""
+def test_bsp_find_has_only_last_param():
+    """find()签名含only_last参数（framework权威恢复——342号快速模式+方向语义修复）"""
     sig = inspect.signature(BuySellPointDetector.find)
-    assert 'only_last' not in sig.parameters, "only_last should be removed"
+    assert 'only_last' in sig.parameters, "only_last should exist (framework authority)"
 
 
-def test_chanlun_analyzer_no_only_judge_last():
-    """ChanlunAnalyzer不含only_judge_last属性"""
+def test_chanlun_analyzer_has_only_judge_last():
+    """ChanlunAnalyzer含only_judge_last属性（framework权威恢复——快速模式配置）"""
     analyzer = ChanlunAnalyzer()
-    assert not hasattr(analyzer, 'only_judge_last'), \
-        "only_judge_last should be removed"
+    assert hasattr(analyzer, 'only_judge_last'), \
+        "only_judge_last should exist (framework authority)"
 
 
 # ═══════════════════════════════════════════════════════════

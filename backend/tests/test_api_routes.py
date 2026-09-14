@@ -287,7 +287,7 @@ def test_analyze_cache_miss_uses_sync_request_not_direct_write(client, monkeypat
     def mock_get_signal_detail(self, ts_code):
         return None  # 未命中当日缓存
 
-    def mock_get_latest_signal_detail(self, ts_code):
+    def mock_get_latest_signal_detail(self, ts_code, require_payload=False):
         return None  # 也未命中最新缓存 → 完全 miss → 走实时计算+sync通知分支
 
     def mock_compute(self, ts_code, period='long'):

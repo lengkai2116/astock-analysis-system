@@ -20,6 +20,7 @@ from typing import Any
 import pandas as pd
 
 from app.data.mixins import DataAwareMixin
+from app.services.status_config import get_status_engine_config
 
 logger = logging.getLogger(__name__)
 
@@ -1288,6 +1289,10 @@ class L4CrossValidator(DataAwareMixin):
         val_lv = gate.get('valuation', 'none')
         hard = gate.get('hard_risks', [])
         soft = gate.get('soft_risks', [])
+        # 431号 G1（批次13 收敛）：软风险/估值仓位系数权威源 = status_engine.yaml
+        # l0.soft_risk_coeff（与 status_engine.StatusEngine._apply_l0 同源读取）；
+        # 下方字面量仅作配置缺失时的兜底，与 yaml 现值一致。
+        _soft_coeff = (get_status_engine_config().get('l0', {}) or {}).get('soft_risk_coeff', {})
         if 'event_negative' in hard:
             # 负面事件（监管/财务欺诈）：直接不推荐
             action, label = 'not_recommended', '负面事件：监管/财务异常信号，规避'
@@ -1296,21 +1301,21 @@ class L4CrossValidator(DataAwareMixin):
             # 335号 S2.3：deep 从硬否决改"高风险机会强提示 + 仓位压缩"
             # （估值非绝对精准，可能突破——用户决策；潜力侧 dev>30×0.3 已降级）
             action, label = 'hold', '深度高估：价格高位风险，注意追涨（估值非绝对精准）'
-            max_ratio = round(max_ratio * 0.3, 2)   # 仓位压缩（status_engine.yaml l0.deep_position_cap）
+            max_ratio = round(max_ratio * float(_soft_coeff.get('deep_position_cap', 0.3)), 2)
         else:
             # 仓位约束（软风险 + 估值级别）
             if 'fina_weak' in soft:
-                max_ratio = round(max_ratio * 0.5, 2)   # 财务异常（经营恶化）→ 减半
+                max_ratio = round(max_ratio * float(_soft_coeff.get('fina_weak', 0.5)), 2)   # 财务异常（经营恶化）→ 减半
             if 'fina_fail' in soft:
-                max_ratio = round(max_ratio * 0.5, 2)
+                max_ratio = round(max_ratio * float(_soft_coeff.get('fina_fail', 0.5)), 2)
             if 'distributing' in soft:
-                max_ratio = round(max_ratio * 0.7, 2)
+                max_ratio = round(max_ratio * float(_soft_coeff.get('distributing', 0.7)), 2)
             if 'low_liquidity' in soft:
-                max_ratio = round(max_ratio * 0.7, 2)
+                max_ratio = round(max_ratio * float(_soft_coeff.get('low_liquidity', 0.7)), 2)
             if val_lv == 'moderate':
-                max_ratio = round(max_ratio * 0.5, 2)
+                max_ratio = round(max_ratio * float(_soft_coeff.get('valuation_moderate', 0.5)), 2)
             elif val_lv == 'mild':
-                max_ratio = round(max_ratio * 0.8, 2)
+                max_ratio = round(max_ratio * float(_soft_coeff.get('valuation_mild', 0.8)), 2)
 
         # ── 321号 S2：跨维仲裁状态派生（统一结论源，修 T4：否决→仓位归零） ──
         # 与 diagnose 传入的权威 gate + 情绪加权 consensus 同源，避免预计算/诊断偏差

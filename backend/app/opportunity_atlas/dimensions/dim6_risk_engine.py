@@ -224,8 +224,8 @@ def _calc_volatility(df=None, tags: dict = None) -> dict:
 # 风险等级评估（从 risk_boundary_builder 迁移）
 # ═══════════════════════════════════════════════════════════
 
-def _assess_risk_level(dims: dict, l0: dict, tags: dict) -> dict:
-    """风险等级评估（T42修复：消除dims循环依赖，仅依赖tags和l0）"""
+def _assess_risk_level(tags: dict) -> dict:
+    """风险等级评估（T42修复：消除dims循环依赖，仅依赖tags）"""
     risk_sources = []
     high_count = 0
 
@@ -262,16 +262,13 @@ def _assess_risk_level(dims: dict, l0: dict, tags: dict) -> dict:
         tr = float(tags.get('turnover_rate', 999))
         if tr < 1.0:
             high_count += 1
+        # 433号：append 移入 try——脏值（None/''/无法转 float）时跳过该风险源，
+        # 避免 except 后引用未赋值 tr 触发 NameError（与 _list_risk_factors 同构）
+        risk_sources.append({'name': '流动性风险', 'level': '高' if tr < 1.0 else '低'})
     except (TypeError, ValueError):
         pass
-    risk_sources.append({'name': '流动性风险', 'level': '高' if tr < 1.0 else '低'})
 
-    # 404号DATA-04: dims['l0']始终为空（T42循环依赖设计限制），hard_veto永远不触发
-    # l0由StatusEngine._apply_l0()在维度引擎运行后才计算，dim6无法读取（已知限制）
-    if l0.get('hard_veto'):
-        return {'level': '极高', 'light': 'red', 'detail': f"硬否决：{l0.get('hard_reason', '')}",
-                'risk_sources': risk_sources}
-
+    # L0 硬否决由 StatusEngine 统一处置（l0 在 dim 引擎之后由 _apply_l0 生成，T42 时序），本引擎不参与
     if high_count >= 2:
         level, light = '高', 'red'
     elif high_count == 1:
@@ -283,7 +280,7 @@ def _assess_risk_level(dims: dict, l0: dict, tags: dict) -> dict:
             'risk_sources': risk_sources}
 
 
-def _list_risk_factors(tags: dict, dims: dict, l0: dict) -> list[dict]:
+def _list_risk_factors(tags: dict) -> list[dict]:
     """风险因素枚举（T45修复：与_assess_risk_level风险源完全对齐）"""
     factors = []
 
@@ -320,10 +317,7 @@ def _list_risk_factors(tags: dict, dims: dict, l0: dict) -> list[dict]:
     except (TypeError, ValueError):
         pass
 
-    # L0硬否决（404号DATA-04: l0始终为空，此分支为死代码）
-    if l0.get('hard_veto'):
-        factors.append({'category': '否决', 'factor': f"硬否决：{l0.get('hard_reason', '')}",
-                        'severity': '极高', 'satisfied': True})
+    # L0 硬否决由 StatusEngine 统一处置（见 _assess_risk_level），本引擎不参与
 
     # 补充风险源（_assess_risk_level未覆盖但有判定价值）
     vl2 = str(tags.get('valuation_level', ''))
@@ -336,11 +330,6 @@ def _list_risk_factors(tags: dict, dims: dict, l0: dict) -> list[dict]:
             factors.append({'category': '获利盘', 'factor': '获利盘过高', 'severity': '中', 'satisfied': True})
     except (TypeError, ValueError):
         pass
-
-    # 404号DATA-04: l0始终为空（T42循环依赖设计限制），此循环为死代码（已知限制）
-    for sr in l0.get('soft_risks', []):
-        if sr == 'low_liquidity':
-            factors.append({'category': '流动性', 'factor': '流动性不足(L0)', 'severity': '中', 'satisfied': True})
 
     if not factors:
         factors.append({'category': '综合', 'factor': '无显著风险', 'severity': '无', 'satisfied': True})
@@ -1090,9 +1079,8 @@ class Dim6RiskEngine(DataAwareMixin):
                 df = None
 
         # 1. 风险等级
-        l0 = dims.get('l0', {}) if isinstance(dims.get('l0'), dict) else {}
-        risk_info = _assess_risk_level(dims, l0, tags)
-        risk_factors = _list_risk_factors(tags, dims, l0)
+        risk_info = _assess_risk_level(tags)
+        risk_factors = _list_risk_factors(tags)
 
         # 1b. 事件风险检测（405号建议2: 从pre_feat_cache读取RAW-2预计算的事件标签）
         event_risks = []

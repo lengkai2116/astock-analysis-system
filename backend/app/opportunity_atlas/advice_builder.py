@@ -233,6 +233,8 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
                     _ext_threshold = _max_ext_pct * 100 if _max_ext_pct <= 1 else _max_ext_pct
                 except Exception:
                     _ext_threshold = 12  # 兜底默认值
+                if _ext_threshold <= 0:  # 空注册表不抛异常，同走兜底默认值
+                    _ext_threshold = 12
                 if _dist > _ext_threshold and state in ('enter', 'light'):
                     state = 'wait'
                     state_reason = f'信号已延伸（距突破位+{_dist:.0f}%），只可持有、不新开仓（L0c）'

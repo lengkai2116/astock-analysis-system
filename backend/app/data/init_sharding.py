@@ -39,7 +39,9 @@ SHARDING_CONFIG = {
         'tables': [
             'indicator_ma', 'indicator_macd', 'indicator_other',
             'factor_cache', 'opportunity_tags_cache',
-            'chip_distribution_cache', 'pre_feat_cache'
+            'pre_feat_cache',
+            # 426号 P1-2：三表补登 compute 路由（与 sharding_manager._table_to_db 对齐）
+            'market_stats_cache', 'sector_heat_cache', 'pattern_score_cache'
         ]
     },
     'financial_cache.db': {
@@ -54,7 +56,7 @@ SHARDING_CONFIG = {
         'tables': [
             'status_snapshot', 'treemap_snapshot',
             'status_snapshot_history', 'treemap_snapshot_history',
-            'tag_history', 'strategy_signal_detail', 'win_rate_cache'
+            'strategy_signal_detail', 'win_rate_cache'
         ]
     },
     'history_cache.db': {

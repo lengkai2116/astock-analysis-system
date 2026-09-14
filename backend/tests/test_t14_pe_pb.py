@@ -33,11 +33,14 @@ def test_snapshot_items_expose_pe_pb(ecm):
 
 def test_snapshot_pe_matches_source(ecm):
     """透出的 pe/pb 应与 daily_basic_cache 源数据一致"""
-    conn = ecm.conn
-    src = conn.execute(
+    from app.data.sharding_manager import sharding_manager
+    # 421号R4a：daily_basic_cache 属 market_cache.db，走分库路由（原 ecm.conn 读总库恒空）
+    rows = sharding_manager.execute_query(
+        'daily_basic_cache',
         "SELECT pe, pb FROM daily_basic_cache WHERE ts_code='000001.SZ' "
-        "ORDER BY trade_date DESC LIMIT 1").fetchone()
-    assert src, "源数据应有记录"
+        "ORDER BY trade_date DESC LIMIT 1")
+    assert rows, "源数据应有记录"
+    src = rows[0]
     items = ecm.get_treemap_snapshot_items(['000001.SZ'])
     item = items[0]
     assert abs(item['pe'] - src[0]) < 0.01, f"pe 不一致: 快照={item['pe']}, 源={src[0]}"

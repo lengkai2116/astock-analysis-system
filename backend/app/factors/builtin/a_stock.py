@@ -296,7 +296,7 @@ class RSI_24(BaseFactor):
 
 class MACD_DIF(BaseFactor):
     """MACD差离值"""
-    name = "MACD_DIF"
+    name = "ASTOCK_MACD_DIF"
     name_cn = "MACD差离值"
     category = "momentum"
     subcategory = "trend_momentum"
@@ -320,7 +320,7 @@ class MACD_DIF(BaseFactor):
 
 class MACD_DEA(BaseFactor):
     """MACD讯号线"""
-    name = "MACD_DEA"
+    name = "ASTOCK_MACD_DEA"
     name_cn = "MACD讯号线"
     category = "momentum"
     subcategory = "trend_momentum"
@@ -511,7 +511,7 @@ class WILLR_14(BaseFactor):
 
 class KDJ_K(BaseFactor):
     """KDJ-K值"""
-    name = "KDJ_K"
+    name = "ASTOCK_KDJ_K"
     name_cn = "KDJ-K值"
     category = "reversal"
     subcategory = "overbought_oversold"
@@ -538,7 +538,7 @@ class KDJ_K(BaseFactor):
 
 class KDJ_D(BaseFactor):
     """KDJ-D值"""
-    name = "KDJ_D"
+    name = "ASTOCK_KDJ_D"
     name_cn = "KDJ-D值"
     category = "reversal"
     subcategory = "overbought_oversold"
@@ -568,7 +568,7 @@ class KDJ_D(BaseFactor):
 
 class KDJ_J(BaseFactor):
     """KDJ-J值"""
-    name = "KDJ_J"
+    name = "ASTOCK_KDJ_J"
     name_cn = "KDJ-J值"
     category = "reversal"
     subcategory = "overbought_oversold"
@@ -968,7 +968,7 @@ class VR_26(BaseFactor):
 
 class OBV(BaseFactor):
     """能量潮"""
-    name = "OBV"
+    name = "ASTOCK_OBV"
     name_cn = "能量潮"
     category = "volume"
     subcategory = "volume_accumulation"
@@ -1176,7 +1176,7 @@ class EMA_20(BaseFactor):
 
 class BOLL_UPPER(BaseFactor):
     """布林带上轨"""
-    name = "BOLL_UPPER"
+    name = "ASTOCK_BOLL_UPPER"
     name_cn = "布林带上轨"
     category = "trend"
     subcategory = "bollinger_bands"
@@ -1220,7 +1220,7 @@ class BOLL_MID(BaseFactor):
 
 class BOLL_LOWER(BaseFactor):
     """布林带下轨"""
-    name = "BOLL_LOWER"
+    name = "ASTOCK_BOLL_LOWER"
     name_cn = "布林带下轨"
     category = "trend"
     subcategory = "bollinger_bands"

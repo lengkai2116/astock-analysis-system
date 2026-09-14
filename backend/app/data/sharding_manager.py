@@ -20,6 +20,28 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# 未登记路由表告警去重集合（426号 S1/D8：未登记表操作一次性告警，防刷屏）
+_unmapped_warned: set[str] = set()
+
+
+def _warn_unmapped(table: str, op: str):
+    """未登记路由的表执行 {op} 时告警（一次性去重）"""
+    key = f'{table}:{op}'
+    if key in _unmapped_warned:
+        return
+    _unmapped_warned.add(key)
+    logger.warning(f"未登记分库路由的表 {op} 被跳过: {table}（请登记 _table_to_db 或确认归属）")
+
+
+# 每库 PRAGMA（356号 §3 规则14 + 426号 S4/D2：cache_size 与 journal_size_limit 按库设定）
+# 注：busy_timeout 统一保持 30000（2026-08-12 方案B 为修 P4 批量写锁冲突特意提高，
+#     设计值 10s 会回归锁冲突，不采用）。
+_DB_PRAGMAS = {
+    'market_cache.db': {'cache_size': -32768, 'journal_size_limit': 268435456},   # 32MB / 256MB
+    'compute_cache.db': {'cache_size': -16384, 'journal_size_limit': 16777216},   # 16MB / 16MB
+    # 其余分库默认 8MB cache / 8MB journal_size_limit
+}
+
 
 class ShardingManager:
     """分库管理器"""
@@ -36,10 +58,12 @@ class ShardingManager:
         self._connections: Dict[str, sqlite3.Connection] = {}
         self._write_locks: Dict[str, threading.RLock] = {}
 
-        # 表到数据库的映射（356号方案定稿）
-        self._table_to_db: Dict[str, str] = {
+        # 表到数据库的映射（356号方案定稿）；值为 None 表示显式总库表
+        self._table_to_db: Dict[str, Optional[str]] = {
             # system_cache.db — 系统元数据
-            'cache_metadata': 'system_cache.db',
+            # 426号 S2/D4：cache_metadata 实际读写全走总库（ECM conn），
+            # system_cache.db 侧为历史迁移残留（3 行陈旧含 test_key）——
+            # 注销路由改归总库（None），system 侧副本在数据整改时 DROP。
             'concept_cache': 'system_cache.db',
             'lhb_cache': 'system_cache.db',
             'index_member_cache': 'system_cache.db',
@@ -59,6 +83,11 @@ class ShardingManager:
             'factor_cache': 'compute_cache.db',
             'opportunity_tags_cache': 'compute_cache.db',
             'pre_feat_cache': 'compute_cache.db',
+            # 426号 P1-2：三表补登 compute_cache.db 路由（原未登记→读写落总库空壳/
+            # pattern_score 走 compute_conn 硬编码；读方 _query_shard 降级总库读空）
+            'market_stats_cache': 'compute_cache.db',
+            'sector_heat_cache': 'compute_cache.db',
+            'pattern_score_cache': 'compute_cache.db',
 
             # financial_cache.db — 财务数据
             'fina_indicator_cache': 'financial_cache.db',
@@ -75,6 +104,14 @@ class ShardingManager:
             'strategy_signal_detail': 'snapshot_cache.db',
             'win_rate_cache': 'snapshot_cache.db',
 
+            # market_snapshot.db — 盘中实时快照（356号§3.3 独立库，ECM snapshot_conn 直连；
+            # 426号 S7/D5：补登路由消除"未登记"告警，读写仍走 snapshot_conn 单路径）
+            'as_market_snapshot': 'market_snapshot.db',
+            # 426号 落地复核修正：as_sector_ranking 为 akshare_collector 活跃写入的
+            # 盘中板块排名（同 as_market_snapshot 家族）——未登记时 426 S1 会告警跳过
+            # 致静默丢写（总库 0 行）、读取降级总库读空；补登同一实时快照库
+            'as_sector_ranking': 'market_snapshot.db',
+
             # history_cache.db — 历史数据
             'adj_factor_cache': 'history_cache.db',
             'top10_holders_cache': 'history_cache.db',
@@ -82,12 +119,20 @@ class ShardingManager:
             'finance_report_cache': 'history_cache.db',
 
             # 356号方案：总库保留表（不属于任何分库）
+            # 426号 落地复核修正（stocks）：实际表在 data/app.db（SQLAlchemy ORM 管理，
+            # 读写经 app.db 直连/SQLAlchemy，不经 sharding_manager 路由）——此处登记
+            # None 仅为"不属于分库"的语义标记，勿据此在总库查找 stocks 表
             'stocks': None,
             'pipeline_status': None,
             'sync_requests': None,
             'lhb_detail_cache': None,
             'sentiment_pool_cache': None,
             'conditional_win_rate_cache': None,
+            'cache_metadata': None,
+            # 428 P2-1：显式主库表登记（写路径直连 ECM conn/总库，非走分库路由）。
+            # 此前未登记被 list_unmapped_tables 启动自检误报为"未登记表"。
+            'qa_audit_log': None,           # WriteGateway/stg_quality 写总库
+            'watchlist_status_diff': None,  # OUT 阶段写总库
 
             'opportunity_advice_history': None,
             'opportunity_library': None,
@@ -106,8 +151,11 @@ class ShardingManager:
             conn = sqlite3.connect(db_path, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA cache_size=-8192")
-            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA busy_timeout=30000")    # 30s（2026-08-12方案B，见模块注释）
+            # 426号 S4/D2：cache_size 与 journal_size_limit 按库设定（356号 §3 规则14）
+            pr = _DB_PRAGMAS.get(db_name, {'cache_size': -8192, 'journal_size_limit': 8388608})
+            conn.execute(f"PRAGMA cache_size={pr['cache_size']}")
+            conn.execute(f"PRAGMA journal_size_limit={pr['journal_size_limit']}")
             self._connections[db_name] = conn
             # 424号 P2-1：snapshot_cache.db 补索引（356号 §3.2.5 设计未落地）
             if db_name == 'snapshot_cache.db':
@@ -157,6 +205,50 @@ class ShardingManager:
         # 3. 未匹配 → 返回None，留在总库
         return None
 
+    def is_registered(self, table_name: str) -> bool:
+        """表是否已登记路由（精确匹配或前缀规则命中；显式总库表也算已登记）
+
+        426号 S1/D8：解决 get_db_for_table 返回 None 的二义性——显式总库表
+        （_table_to_db 值为 None）与完全未登记表都返回 None，调用方据此区分。
+        """
+        if table_name in self._table_to_db:
+            return True
+        for prefix, _db in self._prefix_rules:
+            if table_name.startswith(prefix):
+                return True
+        return False
+
+    def list_unmapped_tables(self, total_conn=None) -> list:
+        """扫描全部分库 + 总库，返回未登记路由的表清单（启动自检打印用）
+
+        total_conn: 总库（stock_cache.db）连接；None 时跳过总库扫描。
+        含前缀规则动态表（adj_factor_cache_YYYY）判定；system_cache.db 等
+        登记分库表不算未登记。
+        """
+        unmapped = set()
+        for db_name in self.get_all_db_names():
+            try:
+                conn = self.get_connection(db_name)
+                rows = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%'").fetchall()
+                for (t,) in rows:
+                    if not self.is_registered(t):
+                        unmapped.add(t)
+            except Exception as e:
+                logger.warning(f"扫描 {db_name} 未登记表失败: {e}")
+        if total_conn is not None:
+            try:
+                rows = total_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%'").fetchall()
+                for (t,) in rows:
+                    if not self.is_registered(t):
+                        unmapped.add(t)
+            except Exception as e:
+                logger.warning(f"扫描总库未登记表失败: {e}")
+        return sorted(unmapped)
+
     def execute_query(self, table_name: str, sql: str, params: list = None):
         """执行查询"""
         db_name = self.get_db_for_table(table_name)
@@ -174,6 +266,8 @@ class ShardingManager:
         """执行插入"""
         db_name = self.get_db_for_table(table_name)
         if db_name is None:
+            if not self.is_registered(table_name):
+                _warn_unmapped(table_name, 'execute_insert')  # 426号 S1：未登记表不再静默跳过
             return  # 表在总库，分库管理器不处理
         conn = self.get_connection(db_name)
         lock = self.get_write_lock(db_name)
@@ -190,6 +284,8 @@ class ShardingManager:
         """执行批量插入"""
         db_name = self.get_db_for_table(table_name)
         if db_name is None:
+            if not self.is_registered(table_name):
+                _warn_unmapped(table_name, 'execute_batch_insert')  # 426号 S1
             return  # 表在总库，分库管理器不处理
         conn = self.get_connection(db_name)
         lock = self.get_write_lock(db_name)
@@ -203,6 +299,8 @@ class ShardingManager:
         """创建表"""
         db_name = self.get_db_for_table(table_name)
         if db_name is None:
+            if not self.is_registered(table_name):
+                _warn_unmapped(table_name, 'create_table')  # 426号 S1
             return  # 表在总库，分库管理器不处理
         conn = self.get_connection(db_name)
         lock = self.get_write_lock(db_name)

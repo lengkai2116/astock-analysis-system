@@ -40,11 +40,14 @@ def test_snapshot_fields_match_tag_values(ecm):
     item = items[0]
 
     # 从标签库读取该股票真实值对照
-    conn = ecm.conn
+    # 421号R4a：opportunity_tags_cache 属 compute_cache.db，走分库路由（原 ecm.conn 恒空）
+    from app.data.sharding_manager import sharding_manager
+
     def _tag(tag_name):
-        rows = conn.execute(
+        rows = sharding_manager.execute_query(
+            'opportunity_tags_cache',
             "SELECT tag_value FROM opportunity_tags_cache WHERE ts_code='000001.SZ' AND tag_name=? "
-            "ORDER BY updated_at DESC LIMIT 1", [tag_name]).fetchall()
+            "ORDER BY updated_at DESC LIMIT 1", [tag_name])
         return rows[0][0] if rows else None
 
     rsc = _tag('right_side_confirm')

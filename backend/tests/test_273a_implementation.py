@@ -179,13 +179,17 @@ class TestECMNewTables:
 
     def test_tables_exist_in_schema(self):
         from app.data.enhanced_cache_manager import get_ecm_instance
+        from app.data.sharding_manager import sharding_manager
         ecm = get_ecm_instance()
         tables = ecm._query_df(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         )
         all_tables = set(tables['name'].tolist())
         assert 'sentiment_pool_cache' in all_tables, 'sentiment_pool_cache 表未创建'
-        assert 'finance_report_cache' in all_tables, 'finance_report_cache 表未创建'
+        # 356号分库：finance_report_cache 属 history_cache.db，
+        # 经总库连接（_query_df）查恒空 → 须按分库路由核查
+        assert sharding_manager.table_exists('finance_report_cache'), \
+            'finance_report_cache 表未创建（history_cache.db）'
 
     def test_sentiment_pool_write_and_read(self):
         from app.data.enhanced_cache_manager import get_ecm_instance

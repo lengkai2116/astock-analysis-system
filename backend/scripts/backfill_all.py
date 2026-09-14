@@ -4,7 +4,7 @@
 根据系统需求规划全量补采，填充所有为零的数据表。
 
 补采优先级：
-- P0: adj_factor_cache, fina_indicator_cache, chip_distribution_cache, strategy_signal_detail
+- P0: adj_factor_cache, fina_indicator_cache, strategy_signal_detail
 - P1: moneyflow_cache, stk_limit_cache, income_cache, balancesheet_cache, cashflow_cache, forecast_cache
 - P2: minute_kline_cache, margin_cache, top10_holders_cache, stk_holder_cache, win_rate_cache
 """
@@ -45,13 +45,15 @@ def check_database_status():
             'desc': '计算分库',
             'tables': ['indicator_ma', 'indicator_macd', 'indicator_other',
                        'factor_cache', 'opportunity_tags_cache',
-                       'chip_distribution_cache', 'pre_feat_cache']
+                       'pre_feat_cache',
+                       # 426号 P1-2：三表补登（与 sharding_manager._table_to_db 对齐）
+                       'market_stats_cache', 'sector_heat_cache', 'pattern_score_cache']
         },
         'snapshot_cache.db': {
             'desc': '快照分库',
             'tables': ['status_snapshot', 'treemap_snapshot',
                        'status_snapshot_history', 'treemap_snapshot_history',
-                       'tag_history', 'strategy_signal_detail', 'win_rate_cache']
+                       'strategy_signal_detail', 'win_rate_cache']
         },
     }
     

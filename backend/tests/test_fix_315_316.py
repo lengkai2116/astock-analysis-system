@@ -24,13 +24,14 @@ import pytest
 # ══════════════════════════════════════════════════════════
 
 class _FakeECM:
-    """模拟 ECM：只提供 _query_df（返回上一轮 composite_rating 标签行）"""
+    """模拟 ECM：只提供 _query_shard（composite_rating 走 compute_cache.db 分库路由）"""
 
     def __init__(self, rows):
         import pandas as pd
         self._rows = pd.DataFrame(rows)
 
-    def _query_df(self, sql):
+    def _query_shard(self, table, sql, params=None):
+        assert table == 'opportunity_tags_cache', f"意外的分库表: {table}"
         return self._rows
 
 

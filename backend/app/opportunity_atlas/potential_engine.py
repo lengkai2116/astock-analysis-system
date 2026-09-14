@@ -98,15 +98,18 @@ class PotentialEngine:
             self._tables["val"] = _percentile_lookup([])
 
         try:
-            roe = ecm._query_df(
-                "SELECT roe FROM fina_indicator_cache")["roe"].dropna().tolist()
+            # 2026-09-13（356号分库）：fina_indicator_cache 属 financial_cache.db，
+            # 经总库连接（_query_df）读恒空 → earn 基准恒中性 0.5，改走分库路由
+            roe = ecm._query_shard(
+                'fina_indicator_cache', "SELECT roe FROM fina_indicator_cache")["roe"].dropna().tolist()
             self._tables["earn"] = _percentile_lookup(sorted(roe))
         except Exception:
             self._tables["earn"] = _percentile_lookup([])
 
         try:
             # 资金强度：5 日主力净流入占主力成交额比例（周级持续性）
-            mf = ecm._query_df("""
+            # 2026-09-13（356号分库）：moneyflow_cache 属 market_cache.db，同上改分库路由
+            mf = ecm._query_shard('moneyflow_cache', """
                 SELECT ts_code, SUM(net_lg_amount) as net5,
                        SUM(buy_lg_amount + sell_lg_amount) as tot5 FROM (
                     SELECT ts_code, net_lg_amount, buy_lg_amount, sell_lg_amount,
@@ -231,9 +234,13 @@ def compute_fund_strength(ecm, ts_code: str) -> float:
     2026-08-09 修复：原 abs(net5)/tot5 抹掉资金方向——净流出股票强度照样得正高分
     （常润股份 603201.SH：5日净流出却 fund=0.816，导致 signal_strength 满分）。
     修复后净流出 → 负强度 → fund 维低分。
+
+    2026-09-13 修复（356号分库）：moneyflow_cache 属 market_cache.db，
+    经总库连接（_query_df）读取恒失败 → 资金维恒 None。改走 _query_shard 分库路由。
     """
     try:
-        mf = ecm._query_df(
+        mf = ecm._query_shard(
+            'moneyflow_cache',
             "SELECT net_lg_amount, buy_lg_amount, sell_lg_amount FROM ("
             "  SELECT net_lg_amount, buy_lg_amount, sell_lg_amount, "
             "    ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) rn "
@@ -274,107 +281,144 @@ def _spearman(a: list, b: list) -> float:
 
 
 def recompute_ic_weights(ecm, lookback_days: int = 180, horizon: int = 20,
-                         sample_size: int = 500) -> dict:
-    """用历史截面计算各维度 IC，返回归一化权重（313 §4.2 第三层，月度滚动）
+                         sig_t_crit: float = 1.0, smooth_alpha: float = 0.4,
+                         prev_earn: float = None) -> dict:
+    """earn-only IC 重估（433 批次0 口径定稿，2026-09-14；批次3 显著性+平滑）
 
-    可重算维度（历史数据可得）：
-      val   = EP（1/pe_ttm，值越高越便宜）→ 预测未来 10 日收益
-      trend = 20 日动量 → 动量因子 IC
-      fund  = 5 日主力净流入强度 → 资金因子 IC
-      earn  = ROE → 质量因子 IC
-    sector/event 历史截面不可得，保持配置权重（按 IC 中位处理）。
+    仅 earn 维度参与重估：用历史截面计算 ROE 对后续 horizon 收益的 Spearman IC，
+    据此调整 earn 权重；val/trend/fund 因评分信号无历史截面/样本不足暂停重估
+    （433 §二 v1.2 口径定稿 4 条），权重保持配置值；sector/event 同样无历史截面。
 
-    每 20 交易日取一个历史截面，聚合各截面 Spearman 均值 = 维度 IC。
+    返回 dict：{"status", "weights", "ic_report"}
+      status = "ok" | "no_signal" | "insufficient_data" | "error"
+      - ok                : earn IC 为正且统计显著 → weights 为 earn 调整后的 6 键归一化权重
+      - no_signal         : earn IC <= 0 或统计不显著（W1 门槛）→ weights = DIM_WEIGHTS（不劣化原权重）
+      - insufficient_data : 截面 < 3 或窗口日期不足 → weights = DIM_WEIGHTS
+      - error             : 异常 → weights = DIM_WEIGHTS
+      ic_report           : 窗口/截面数/earn IC 均值与标准差/标准误/显著性/样本量
+
+    433 §3.6 落地项：
+      W1 显著性门槛：earn IC 须 > sig_t_crit × ic_std/√n 才视为有效正预测力（默认 1 倍标准误）
+      W4 权重平滑：earn 权重 = smooth_alpha × w_ic + (1-smooth_alpha) × prev_earn（prev_earn 由调用方传当前文件值）
+      W5 截面门槛：已批次1 落地（≥6）；W2 负 IC 告警由门面 run_monthly_ic_recalc 区分；W3 sector/event 等比缩放语义（其余 5 维相对比例不变）
+
+    收益窗口 20 交易日（horizon=20，与采样间隔一致）。每 20 交易日取一个历史截面。
     """
     try:
-        # 历史截面时点：近 lookback_days 天，每 20 交易日一个
-        dates = ecm._query_df(
+        # 窗口内交易日（一次性拉取，F11 优化：避免逐截面 5 次查询）
+        dates = ecm._query_shard(
+            'daily_cache',
             "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC "
             "LIMIT %d" % (lookback_days // 20 * 20 + 1))["trade_date"].tolist()
         if len(dates) < 30:
-            return dict(DIM_WEIGHTS)
-        # 取"截面日 + 10 日后的收益日"配对
+            return {"status": "insufficient_data", "weights": dict(DIM_WEIGHTS),
+                    "ic_report": {"earn": None, "reason": "trading_days < 30"}}
         dates_sorted = sorted(dates)
-        ic_acc = {"val": [], "trend": [], "fund": [], "earn": []}
+        d_start, d_end = dates_sorted[0], dates_sorted[-1]
+
+        # 一次性拉窗口内 daily 收盘（earn 收益计算）
+        px_all = ecm._query_shard(
+            'daily_cache',
+            "SELECT ts_code, trade_date, close FROM daily_cache "
+            "WHERE trade_date >= ? AND trade_date <= ?", [d_start, d_end])
+        px_by_date = {d: g.set_index("ts_code")["close"]
+                      for d, g in px_all.groupby("trade_date")}
+
+        # fina 一次加载：截面日"当时可得"的最新报告期 ROE（披露滞后近似，433 批次0）
+        fina = ecm._query_shard(
+            'fina_indicator_cache', "SELECT ts_code, end_date, roe FROM fina_indicator_cache")
+        if fina.empty or "roe" not in fina.columns or "end_date" not in fina.columns:
+            return {"status": "insufficient_data", "weights": dict(DIM_WEIGHTS),
+                    "ic_report": {"earn": None, "reason": "fina empty"}}
+        fina = fina[fina["roe"].notna() & fina["end_date"].notna()].copy()
+
+        def _avail(end_date: str) -> str:
+            # 披露滞后近似：Q1≤4月底 / 半年≤8月底 / Q3≤10月底 / 年报≤次年4月底
+            y, m, d = end_date.split("-")
+            lag = {"03": 1, "06": 2, "09": 1, "12": 4}.get(m, 2)
+            mm = int(m) + lag
+            yy = int(y) + (mm - 1) // 12
+            mm = (mm - 1) % 12 + 1
+            return f"{yy:04d}-{mm:02d}-{d}"
+
+        fina["avail"] = fina["end_date"].map(_avail)
+
+        # 各截面 earn IC
+        ic_list = []
+        n_samples_list = []
+        n_sections_used = 0
         for i in range(0, len(dates_sorted) - horizon - 20, 20):
             d0 = dates_sorted[i]
             d10 = dates_sorted[i + horizon] if i + horizon < len(dates_sorted) else None
-            if not d10:
+            if not d10 or d0 not in px_by_date or d10 not in px_by_date:
                 continue
-            # 该截面：收盘价 + pe + 10 日后收盘 + 5 日资金 + roe
-            px = ecm._query_df(
-                "SELECT ts_code, close FROM daily_cache WHERE trade_date=?", [d0])
-            px10 = ecm._query_df(
-                "SELECT ts_code, close FROM daily_cache WHERE trade_date=?", [d10])
-            basic = ecm._query_df(
-                "SELECT ts_code, pe_ttm FROM daily_basic_cache WHERE trade_date=?", [d0])
-            mf = ecm._query_df("""
-                SELECT ts_code, SUM(net_lg_amount) net5, SUM(buy_lg_amount+sell_lg_amount) tot5
-                FROM (SELECT ts_code, net_lg_amount, buy_lg_amount, sell_lg_amount,
-                      ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) rn
-                      FROM moneyflow_cache WHERE trade_date <= ?) WHERE rn <= 5 GROUP BY ts_code""",
-                               [d0])
-            p10_map = dict(zip(px10["ts_code"], px10["close"]))
-            b_map = dict(zip(basic["ts_code"], basic["pe_ttm"]))
-            # 动量：d0 前 20 个交易日的收盘（第 21 行）
-            px_prev = ecm._query_df("""
-                SELECT ts_code, close FROM (
-                    SELECT ts_code, close, ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) rn
-                    FROM daily_cache WHERE trade_date <= ?) WHERE rn = 21""", [d0])
-            mom_map = {}
-            for _, rr in px_prev.iterrows():
-                mom_map[rr["ts_code"]] = rr["close"]
-            mf_map = {}
-            for _, r in mf.iterrows():
-                tot = r.get("tot5") or 0
-                if tot > 0:
-                    mf_map[r["ts_code"]] = (r["net5"] or 0) / tot   # 有向（与 compute_fund_strength 一致）
-            # 各股票维度值 + 收益（与 roe 对齐填充，避免索引越界）
-            roe_df = ecm._query_df("SELECT ts_code, roe FROM fina_indicator_cache")
-            roe_map = dict(zip(roe_df["ts_code"], roe_df["roe"]))
-            sample = {"val": [], "trend": [], "fund": [], "earn": []}
-            rets = []
-            for _, r in px.iterrows():
-                c = r["close"]
-                c10 = p10_map.get(r["ts_code"])
-                if not c or not c10 or c <= 0:
-                    continue
-                ret = c10 / c - 1
-                rets.append(ret)
-                sample["val"].append(1.0 / b_map[r["ts_code"]] if b_map.get(r["ts_code"]) else None)
-                c0 = r["close"]
-                _prev = mom_map.get(r["ts_code"])
-                sample["trend"].append((c0 / _prev - 1) if _prev and _prev > 0 else None)
-                sample["fund"].append(mf_map.get(r["ts_code"]))
-                sample["earn"].append(roe_map.get(r["ts_code"]))
-            # 聚合 IC（该截面）
-            for dim, vals in sample.items():
-                pairs = [(v, rets[j]) for j, v in enumerate(vals) if v is not None]
-                if len(pairs) >= 30:
-                    a = [p[0] for p in pairs]
-                    b = [p[1] for p in pairs]
-                    ic_acc[dim].append(_spearman(a, b))
-            if len(ic_acc["val"]) >= 3:
-                break  # 至少 3 个截面即可
-        # 聚合各截面 IC 均值
-        ic_mean = {}
-        for dim, arr in ic_acc.items():
-            ic_mean[dim] = sum(arr) / len(arr) if arr else 0.0
-        # 归一化权重（校准：仅当窗口内存在正 IC 才调整——负/无预测力的因子不劣化原权重）
-        pos_ic = {d: ic for d, ic in ic_mean.items() if ic > 0.05}
-        if not pos_ic:
-            logger.info(f"IC 重估：窗口内无正 IC（{ic_mean}），保留原权重")
-            return dict(DIM_WEIGHTS)
-        new_w = {}
-        for dim, w0 in DIM_WEIGHTS.items():
-            new_w[dim] = pos_ic.get(dim, 0.05)
-        total = sum(new_w.values())
-        new_w = {k: round(v / total, 4) for k, v in new_w.items()}
-        logger.info(f"IC 重估完成: {ic_mean} → {new_w}")
-        return new_w
+            c0, c10 = px_by_date[d0], px_by_date[d10]
+            common = c0.index.intersection(c10.index)
+            if len(common) < 30:
+                continue
+            ret = (c10[common] / c0[common] - 1)
+            # 截面日当时可得：end_date + 披露滞后 <= d0，取每只最新一期
+            avail = fina[fina["avail"] <= d0]
+            if avail.empty:
+                continue
+            avail = avail.sort_values("end_date").drop_duplicates("ts_code", keep="last")
+            roe_map = avail.set_index("ts_code")["roe"]
+            common2 = common.intersection(roe_map.index)
+            if len(common2) < 30:
+                continue
+            a = [roe_map[c] for c in common2]
+            b = [float(ret[c]) for c in common2]
+            ic_list.append(_spearman(a, b))
+            n_samples_list.append(len(common2))
+            n_sections_used += 1
+            if n_sections_used >= 6:   # 433 §3.6 W5：截面门槛提升至 ≥5-6
+                break
+
+        if len(ic_list) < 3:
+            return {"status": "insufficient_data", "weights": dict(DIM_WEIGHTS),
+                    "ic_report": {"earn": {"n_sections": len(ic_list)},
+                                  "reason": "sections < 3"}}
+        ic_mean = sum(ic_list) / len(ic_list)
+        ic_std = (sum((x - ic_mean) ** 2 for x in ic_list) / len(ic_list)) ** 0.5
+        n_samples = sum(n_samples_list)
+
+        ic_report = {
+            "window": {"start": dates_sorted[0], "end": dates_sorted[-1],
+                       "n_sections": n_sections_used, "n_samples": n_samples},
+            "earn": {"ic_mean": round(ic_mean, 4), "ic_std": round(ic_std, 4),
+                     "n_sections": n_sections_used, "n_samples": n_samples},
+        }
+
+        # W1 显著性门槛（433 §3.6）：earn IC 须为正且 > sig_t_crit × ic_std/√n
+        se = ic_std / (len(ic_list) ** 0.5)
+        ic_report["earn"]["se"] = round(se, 4)
+        significant = ic_mean > 0.0 and ic_mean > sig_t_crit * se
+        ic_report["earn"]["significant"] = bool(significant)
+        base = DIM_WEIGHTS["earn"]
+        if not significant:
+            logger.info(f"IC 重估：earn IC={ic_mean:.4f} 非正或统计不显著（se={se:.4f}），保留配置权重")
+            ic_report["status"] = "no_signal"
+            return {"status": "no_signal", "weights": dict(DIM_WEIGHTS),
+                    "ic_report": ic_report}
+
+        # earn 权重映射（earn 生效，其余 5 维按 DIM_WEIGHTS 相对比例缩放补足 1.0）
+        w_e = min(0.35, max(base, base * (1 + 2.0 * ic_mean)))   # [0.15, 0.35]
+        # W4 权重平滑（433 §3.6）：earn_new = α·w_ic + (1-α)·prev_earn
+        if prev_earn is not None:
+            w_e = smooth_alpha * w_e + (1 - smooth_alpha) * prev_earn
+            w_e = min(0.35, max(0.15, w_e))
+        scale = (1.0 - w_e) / (1.0 - base)
+        weights = {k: round(DIM_WEIGHTS[k] * scale, 4) for k in DIM_WEIGHTS if k != "earn"}
+        weights["earn"] = round(w_e, 4)
+        total = sum(weights.values())
+        weights = {k: round(v / total, 4) for k, v in weights.items()}
+        ic_report["status"] = "ok"
+        logger.info(f"IC 重估完成（earn-only）: {ic_mean} → {weights}")
+        return {"status": "ok", "weights": weights, "ic_report": ic_report}
     except Exception as e:
         logger.warning(f"IC 重估失败: {e}")
-        return dict(DIM_WEIGHTS)
+        return {"status": "error", "weights": dict(DIM_WEIGHTS),
+                "ic_report": {"earn": None, "reason": str(e)}}
 
 
 def load_ic_weights() -> dict:
@@ -394,14 +438,112 @@ def load_ic_weights() -> dict:
 
 
 def save_ic_weights(weights: dict) -> None:
-    """持久化 IC 权重"""
+    """持久化 IC 权重（433 批次1：原子写 + last_recalc 幂等标记）
+
+    写入 tmp 文件后 os.replace 原子替换，防止 daemon 双实例/中断写坏文件；
+    json 内附带 last_recalc 时间戳供月度钩子判断「本月已算」（load 侧只要求 6 键齐全，extra 字段无影响）。
+    """
+    import json
+    import os
+    from datetime import datetime
+    global IC_WEIGHTS_FILE
+    if IC_WEIGHTS_FILE:
+        tmp = IC_WEIGHTS_FILE + ".tmp"
+        payload = dict(weights)
+        payload["last_recalc"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            os.makedirs(os.path.dirname(IC_WEIGHTS_FILE), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, IC_WEIGHTS_FILE)
+        except Exception as e:
+            logger.warning(f"IC 权重保存失败: {e}")
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+
+
+def write_ic_report(report: dict) -> None:
+    """写 ic_report.json（433 §3.5 可观测性：窗口/IC/status/新旧权重，与 ic_weights.json 同目录）
+
+    每次重估（含 no_signal）都写；report 带 recalc_at 时间戳，供 daemon 月度钩子做幂等
+    判断（no_signal 不写 ic_weights.json.last_recalc，须以 report.recalc_at 兜底，否则
+    每 30s tick 重复触发——433 批次4 端到端发现）。
+    """
+    import json
+    import os
+    from datetime import datetime
+    global IC_WEIGHTS_FILE
+    if not IC_WEIGHTS_FILE:
+        return
+    report = dict(report)
+    report["recalc_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    report_file = os.path.splitext(IC_WEIGHTS_FILE)[0] + "_report.json"
+    tmp = report_file + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(report_file), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, report_file)
+    except Exception as e:
+        logger.warning(f"IC 报告保存失败: {e}")
+
+
+def run_monthly_ic_recalc(ecm, data_dir: str = None) -> dict:
+    """433 批次1 门面：月度 IC 重估（earn-only）并落盘/写报告，供 daemon 轻钩子调用。
+
+    流程：
+      recompute_ic_weights → 按 status 处置：
+        - ok            : save_ic_weights（原子写 + last_recalc）→ 写 ic_report.json
+        - no_signal     : 不覆盖权重文件（保留旧权重），仅写 ic_report.json（监控证据）
+        - insufficient_data / error : 不落盘，写 ic_report.json + 告警
+    返回 recompute 结果（含 status）。
+    """
+    import os
+    global IC_WEIGHTS_FILE
+    if data_dir:
+        IC_WEIGHTS_FILE = os.path.join(data_dir, "ic_weights.json")
+    if not IC_WEIGHTS_FILE:
+        logger.warning("run_monthly_ic_recalc: IC_WEIGHTS_FILE 未注入，跳过")
+        return {"status": "error", "weights": dict(DIM_WEIGHTS),
+                "ic_report": {"earn": None, "reason": "IC_WEIGHTS_FILE not set"}}
+
+    res = recompute_ic_weights(ecm, prev_earn=_load_current_weights().get("earn"))
+    status = res.get("status")
+    report = dict(res.get("ic_report") or {})
+    report["status"] = status
+    report["old_weights"] = _load_current_weights()
+    report["new_weights"] = res.get("weights") or dict(DIM_WEIGHTS)
+
+    if status == "ok":
+        save_ic_weights(res["weights"])
+        logger.info(f"月度 IC 重估（earn-only）已落盘: {res['weights']}")
+    elif status == "no_signal":
+        # W2（433 §3.6）：负 IC 告警 / 不显著仅记录，均不覆盖权重文件
+        ic = (res.get("ic_report") or {}).get("earn") or {}
+        if (ic.get("ic_mean") or 0) < 0:
+            logger.warning(f"月度 IC 重估：earn IC 为负（{ic.get('ic_mean')}），因子近期反向，保留配置权重（写报告不覆盖）")
+        else:
+            logger.info("月度 IC 重估：earn IC 不显著，保留配置权重（写报告不覆盖）")
+    else:
+        logger.warning(f"月度 IC 重估未落盘（status={status}）: {report.get('reason', '')}")
+    write_ic_report(report)
+    return res
+
+
+def _load_current_weights() -> dict:
+    """读取当前 ic_weights.json 内容（供报告记录旧权重）；无则用 DIM_WEIGHTS"""
     import json
     import os
     global IC_WEIGHTS_FILE
-    if IC_WEIGHTS_FILE:
+    if IC_WEIGHTS_FILE and os.path.exists(IC_WEIGHTS_FILE):
         try:
-            os.makedirs(os.path.dirname(IC_WEIGHTS_FILE), exist_ok=True)
-            with open(IC_WEIGHTS_FILE, "w", encoding="utf-8") as f:
-                json.dump(weights, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.warning(f"IC 权重保存失败: {e}")
+            with open(IC_WEIGHTS_FILE, encoding="utf-8") as f:
+                w = json.load(f)
+            if all(k in w for k in DIM_WEIGHTS):
+                return {k: w[k] for k in DIM_WEIGHTS}
+        except Exception:
+            pass
+    return dict(DIM_WEIGHTS)

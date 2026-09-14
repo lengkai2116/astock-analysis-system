@@ -105,7 +105,8 @@ def test_validate_before_write_non_sequence():
 def test_check_table_pass(monkeypatch):
     checker = QualityChecker()
     monkeypatch.setattr(checker, 'daily_base', lambda d: 5000)
-    monkeypatch.setattr(checker, '_count_by_date', lambda t, d: 4900)
+    # 426号 P0-3：indicator_ma rows_ratio 0.95→0.99，注入计数须 ≥99% 才通过
+    monkeypatch.setattr(checker, '_count_by_date', lambda t, d: 4990)
     r = checker.check_table('indicator_ma', '2026-09-10')
     assert r.passed
     assert r.table == 'indicator_ma'

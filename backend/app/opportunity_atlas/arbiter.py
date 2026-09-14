@@ -20,7 +20,10 @@ gate/consensus 缺省时从 tags 内部推导（P4.5 预计算阶段无 diagnose
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # 状态枚举（321号 §3.1）
 STATE_ENTER = 'enter'    # 可入场 🟦
@@ -62,15 +65,47 @@ _DEEP_HINT = '深度高估：价格高位风险，注意追涨（估值非绝对
 
 
 def _load_thresholds() -> None:
-    """从 config/status_engine.yaml 加载共识阈值（336号 §7，版本化可回滚）"""
+    """从 backend/config/status_engine.yaml 加载共识阈值（336号 §7，版本化可回滚）"""
     global _BEARISH_STRONG, _BULLISH_ENTER
     try:
         from app.services.status_config import get_status_engine_config
         _cons = get_status_engine_config().get('consensus', {})
         _BEARISH_STRONG = float(_cons.get('bearish_strong', 0.67))
         _BULLISH_ENTER = float(_cons.get('enter_threshold', 0.67))
-    except Exception:
-        pass
+    except Exception as e:
+        # 431号 F3：显式告警，不静默吞异常（阈值逻辑不变，仍沿用当前值）
+        logger.warning(
+            f"共识阈值读取失败，沿用当前值 bearish_strong={_BEARISH_STRONG} / "
+            f"enter_threshold={_BULLISH_ENTER}: {e}"
+        )
+
+
+# 336号 §4.2：冲突规则默认全量（yaml conflict_rules 缺失或加载失败时按全量处理）
+_DEFAULT_CONFLICT_RULES = frozenset({
+    'trend_vs_multi', 'high_profit_no_flow', 'distributing_vs_confirm',
+    'risk_high_vs_confirm', 'high_profit_no_presence', 'deep_valuation_confirm',
+})
+
+
+def _load_conflict_rules() -> set:
+    """从 backend/config/status_engine.yaml 读取启用的 conflict_evidence 规则名集合
+
+    enabled=false → 空集（关闭冲突暴露）；rules 缺失 → 全量默认。
+    """
+    try:
+        from app.services.status_config import get_status_engine_config
+        _cr = get_status_engine_config().get('conflict_rules') or {}
+        if not _cr.get('enabled', True):
+            return set()
+        rules = _cr.get('rules')
+        if rules:
+            return {str(r) for r in rules}
+    except Exception as e:
+        # 431号 F3：显式告警，不静默吞异常（回退口径不变，仍为全量默认）
+        logger.warning(
+            f"冲突规则配置读取失败，回退全量默认（{len(_DEFAULT_CONFLICT_RULES)} 条）: {e}"
+        )
+    return set(_DEFAULT_CONFLICT_RULES)
 
 
 def _light_vote(tag_name: str, value: Any) -> float:
@@ -186,6 +221,7 @@ def arbitrate(tags: dict, gate: dict = None, consensus: dict = None,
     # 检测标签间矛盾（如 缠论趋势向下 vs 多周期趋势向上 / 高位获利盘 vs 可入场 /
     # 结构高风险 vs 强确认），供前端风险边界展示——原 arbiter 硬合成掩盖冲突。
     conflict_evidence: list[str] = []
+    _cr = _load_conflict_rules()   # 336号 §4.2：规则名登记于 yaml conflict_rules
     _state_label = str(tags.get('state_label', '') or '')
     _trend_al = str(tags.get('trend_alignment', '') or '')
     _price_pos = str(tags.get('price_position', '') or '')
@@ -197,22 +233,24 @@ def arbitrate(tags: dict, gate: dict = None, consensus: dict = None,
     except (TypeError, ValueError):
         _profit_f = None
     # 缠论方向 vs 多周期趋势 矛盾
-    if ('下降' in _state_label and _trend_al == 'up_aligned'):
-        conflict_evidence.append('缠论趋势下降 vs 多周期趋势向上（方向分歧）')
-    if ('上升' in _state_label and _trend_al == 'down_aligned'):
-        conflict_evidence.append('缠论趋势上升 vs 多周期趋势向下（方向分歧）')
+    if 'trend_vs_multi' in _cr:
+        if ('下降' in _state_label and _trend_al == 'up_aligned'):
+            conflict_evidence.append('缠论趋势下降 vs 多周期趋势向上（方向分歧）')
+        if ('上升' in _state_label and _trend_al == 'down_aligned'):
+            conflict_evidence.append('缠论趋势上升 vs 多周期趋势向下（方向分歧）')
     # 高位获利盘 + 出货 → 风险提示
-    if _profit_f is not None and _profit_f >= 0.8 and '高位' in _price_pos:
+    if 'high_profit_no_flow' in _cr and _profit_f is not None and _profit_f >= 0.8 and '高位' in _price_pos:
         conflict_evidence.append(f'获利盘 {_profit_f:.0%} 高位（追涨风险大）')
-    if _mfp == 'distributing' and rsc in ('强确认', '基础确认'):
+    if 'distributing_vs_confirm' in _cr and _mfp == 'distributing' and rsc in ('强确认', '基础确认'):
         conflict_evidence.append('主力出货阶段 vs 右侧确认看多（资金分歧）')
     # 结构高风险 + 可入场类
-    if _risk == 'HIGH' and rsc in ('强确认', '基础确认'):
+    if 'risk_high_vs_confirm' in _cr and _risk == 'HIGH' and rsc in ('强确认', '基础确认'):
         conflict_evidence.append('结构风险 HIGH vs 右侧确认（风险收益不匹配）')
     # 336号 §4.2 扩展（缺失证据类）：高位无主力在场 / 深度高估+强确认
-    if _profit_f is not None and _profit_f >= 0.8 and str(tags.get('main_force_presence', '')) == 'none':
+    if ('high_profit_no_presence' in _cr and _profit_f is not None and _profit_f >= 0.8
+            and str(tags.get('main_force_presence', '')) == 'none'):
         conflict_evidence.append(f'获利盘 {_profit_f:.0%} 高位且无主力在场证据（接续乏力风险）')
-    if gate.get('valuation') == 'deep' and rsc in ('强确认', '基础确认'):
+    if 'deep_valuation_confirm' in _cr and gate.get('valuation') == 'deep' and rsc in ('强确认', '基础确认'):
         conflict_evidence.append('深度高估 + 右侧确认（价格高位风险，注意追涨）')
 
     # ── P0 硬否决：右侧否决（缠论卖点/量价背离/预跌形态） → avoid ──

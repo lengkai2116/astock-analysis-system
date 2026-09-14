@@ -192,44 +192,52 @@ class FactorPrecomputeManager:
         return result
 
     def get_cache_stats(self) -> Dict:
-        """获取缓存统计信息 — 使用 ECM 连接"""
-        conn = self.cache_manager.conn
-        stock_count = conn.execute("SELECT COUNT(DISTINCT ts_code) FROM factor_cache").fetchone()[0] or 0
-        factor_count = conn.execute("SELECT COUNT(DISTINCT factor_name) FROM factor_cache").fetchone()[0] or 0
-        total_records = conn.execute("SELECT COUNT(*) FROM factor_cache").fetchone()[0] or 0
-        last_update = conn.execute("SELECT MAX(cached_at) FROM factor_cache").fetchone()[0]
+        """获取缓存统计信息 — 426号 P2-3：改走分库读取
 
+        原实现用 self.cache_manager.conn（总库），factor_cache 在 compute_cache.db
+        → 统计恒 0。改走 _query_shard 分库读取。
+        """
+        stats = self.cache_manager._query_shard(
+            'factor_cache',
+            "SELECT COUNT(DISTINCT ts_code) AS stock_count, "
+            "COUNT(DISTINCT factor_name) AS factor_count, "
+            "COUNT(*) AS total_records, MAX(cached_at) AS last_update "
+            "FROM factor_cache"
+        )
+        if stats is None or stats.empty:
+            return {'stock_count': 0, 'factor_count': 0, 'total_records': 0, 'last_update': None}
+        row = stats.iloc[0]
         return {
-            'stock_count': stock_count,
-            'factor_count': factor_count,
-            'total_records': total_records,
-            'last_update': last_update
+            'stock_count': int(row['stock_count'] or 0),
+            'factor_count': int(row['factor_count'] or 0),
+            'total_records': int(row['total_records'] or 0),
+            'last_update': row['last_update'],
         }
 
     def clear_cache(self, ts_code: Optional[str] = None,
                    factor_name: Optional[str] = None):
-        """清除缓存 — 使用 ECM 连接"""
-        conn = self.cache_manager.conn
+        """清除缓存 — 426号 P2-3：改走分库 _exec_shard
 
+        原实现用 self.cache_manager.conn（总库），factor_cache 在 compute_cache.db
+        → DELETE 空操作。改走 _exec_shard 分库执行（内部含提交）。
+        """
         if ts_code and factor_name:
-            conn.execute(
+            self.cache_manager._exec_shard(
+                'factor_cache',
                 "DELETE FROM factor_cache WHERE ts_code = ? AND factor_name = ?",
-                (ts_code, factor_name)
-            )
+                [ts_code, factor_name])
         elif ts_code:
-            conn.execute(
+            self.cache_manager._exec_shard(
+                'factor_cache',
                 "DELETE FROM factor_cache WHERE ts_code = ?",
-                (ts_code,)
-            )
+                [ts_code])
         elif factor_name:
-            conn.execute(
+            self.cache_manager._exec_shard(
+                'factor_cache',
                 "DELETE FROM factor_cache WHERE factor_name = ?",
-                (factor_name,)
-            )
+                [factor_name])
         else:
-            conn.execute("DELETE FROM factor_cache")
-
-        conn.commit()
+            self.cache_manager._exec_shard('factor_cache', "DELETE FROM factor_cache")
 
     def clean_old_data(self, cutoff: str):
         """清理 factor_cache — 委托给 ECM"""

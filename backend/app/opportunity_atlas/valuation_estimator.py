@@ -215,11 +215,15 @@ class ValuationEngine(DataAwareMixin):
         查询侧 `_level_by_composite(composite - industry_mean)` 使用中性化后的值，
         故基准分布也构建为「composite − 行业均值」的中性化分布，
         否则口径错配致分档失真。
+        2026-09-13 修复（356号分库）：opportunity_tags_cache 属 compute_cache.db，
+        经总库连接（_query_df）读取恒空 → 基准恒为 None、分档静默退回绝对阈值。
+        改走 _query_shard 分库路由，并尊重入参 ecm（调用方注入的实例才有正确数据目录）。
         """
         try:
             import bisect
-            cache = self._get_dm().cache
-            rows = cache._query_df(
+            cache = ecm if ecm is not None else self._get_dm().cache
+            rows = cache._query_shard(
+                'opportunity_tags_cache',
                 "SELECT DISTINCT ts_code, tag_value FROM opportunity_tags_cache "
                 "WHERE tag_name='composite_rating' AND tag_value IS NOT NULL AND tag_value != '' "
                 "AND id IN (SELECT MAX(id) FROM opportunity_tags_cache WHERE tag_name='composite_rating' GROUP BY ts_code)"

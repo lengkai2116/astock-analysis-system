@@ -54,13 +54,16 @@ def test_map_score_603201_not_saturated():
 def test_signal_strength_range_0_100():
     """compute_potential 返回 signal_strength 应在 0-100（修复双重缩放 bug）"""
     from app.data.enhanced_cache_manager import EnhancedCacheManager
+    from app.data.sharding_manager import sharding_manager
     from app.opportunity_atlas.potential_engine import PotentialEngine, compute_fund_strength
     ecm = EnhancedCacheManager()
     engine = PotentialEngine()
     engine.build_percentile_tables(ecm)
     tags = {}
-    for r in ecm.conn.execute(
-            "SELECT tag_name, tag_value FROM opportunity_tags_cache WHERE ts_code='603201.SH'").fetchall():
+    # 421号R4a：opportunity_tags_cache 属 compute_cache.db，走分库路由
+    for r in sharding_manager.execute_query(
+            'opportunity_tags_cache',
+            "SELECT tag_name, tag_value FROM opportunity_tags_cache WHERE ts_code='603201.SH'"):
         tags[r[0]] = r[1]
     mf = compute_fund_strength(ecm, '603201.SH')
     tags['roe'] = 1.8512

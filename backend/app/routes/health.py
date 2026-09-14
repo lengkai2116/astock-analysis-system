@@ -351,8 +351,11 @@ def data_freshness():
         ecm = DataManager().cache
         # 分库表用 sharding_manager 读取（由 sharding_manager 路由到正确数据库）
         # 421号R4a：strategy_signal_detail 归 snapshot_cache.db 分库，加入分库读取
+        # 426号 落地复核修正：win_rate_cache 归 snapshot_cache.db 分库，补入分库读取
+        # （原走总库 read_conn，表已被空壳清理 DROP → 健康监控恒报错）
         sharded_tables = {'daily_cache', 'daily_basic_cache', 'moneyflow_cache',
-                          'strategy_signal_detail', 'opportunity_tags_cache', 'treemap_snapshot'}
+                          'strategy_signal_detail', 'opportunity_tags_cache', 'treemap_snapshot',
+                          'win_rate_cache'}
         for name, query in tables.items():
             try:
                 if name in sharded_tables:

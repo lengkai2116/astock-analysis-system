@@ -68,7 +68,9 @@ class TrendStructureDetector:
             elif higher_low and breakout_high:
                 signal, strength = 'higher_low', 'basic'
 
-            return {'signal': signal, 'strength': strength, 'detail': detail}
+            return {'signal': signal, 'strength': strength, 'detail': detail,
+                    'assumption1': trend_break, 'assumption2': higher_low,
+                    'assumption3': breakout_high}
         except Exception:
             return None
 

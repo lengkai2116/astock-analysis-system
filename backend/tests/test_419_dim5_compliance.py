@@ -81,18 +81,22 @@ class TestAnalyzerCacheShortcut:
 class TestSectorHeat:
 
     def test_cache_sector_heat_roundtrip(self):
-        """sector_heat_cache 写入 → 读回一致（mock ECM）"""
+        """sector_heat_cache 写入 → 读回一致（mock ECM）
+
+        426号 P1-2：写路径改走 _exec_shard（分库路由），断言同步更新。
+        """
         from app.data.enhanced_cache_manager import EnhancedCacheManager
         ecm = EnhancedCacheManager.__new__(EnhancedCacheManager)
         ecm._write_lock = mock.Mock()
         ecm.conn = mock.Mock()
         ecm._query_shard = mock.Mock(return_value=None)
-        ecm._execute = mock.Mock()
+        ecm._exec_shard = mock.Mock()
         heat = {'银行': {'heat_level': 'top_10', 'strength': 0.8, 'rank': 1, 'stock_count': 40},
                 '白酒': {'heat_level': 'normal', 'strength': 0.1, 'rank': 25, 'stock_count': 20}}
         ecm.cache_sector_heat(heat, '2026-09-07')
-        ecm._execute.assert_any_call(mock.ANY, ['2026-09-07'])
-        ecm._execute.assert_any_call(mock.ANY, ['2026-09-07', '银行', 'top_10', 0.8, 1, 40])
+        ecm._exec_shard.assert_any_call('sector_heat_cache', mock.ANY, ['2026-09-07'])
+        ecm._exec_shard.assert_any_call(
+            'sector_heat_cache', mock.ANY, ['2026-09-07', '银行', 'top_10', 0.8, 1, 40])
 
     def test_dim1_loads_sector_heat_from_dm_cache(self):
         """dim1 evaluate 通过 dm.cache.get_cached_sector_heat 加载 sector_heat"""

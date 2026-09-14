@@ -16,11 +16,22 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 
 import pandas as pd
 
 from app.data.mixins import DataAwareMixin
+from app.opportunity_atlas.potential_engine import DIM_WEIGHTS as POTENTIAL_DIM_WEIGHTS
+from app.opportunity_atlas.potential_engine import (
+    EVENT_SCORE,
+    SENTIMENT_WEIGHT,
+    TREND_SCORE,
+)
+from app.opportunity_atlas.valuation_estimator import (
+    CATEGORY_WEIGHTS,
+    CN_10Y_BOND_YIELD_PCT,
+    INDUSTRY_CATEGORY,
+    QUALITY_ADJUST,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,71 +40,26 @@ logger = logging.getLogger(__name__)
 # 常量与配置（从 valuation_estimator.py 迁移）
 # ═══════════════════════════════════════════════════════════
 
-CN_10Y_BOND_YIELD_PCT = float(os.getenv('CN_10Y_BOND_YIELD', '1.7'))
+# 431号 G1（批次13 收敛）：以下 8 个常量原为本文件与 valuation_estimator.py /
+# potential_engine.py 的**字节级副本**，现改为单向导入，权威源唯一化——
+#   CN_10Y_BOND_YIELD_PCT / QUALITY_ADJUST / INDUSTRY_CATEGORY / CATEGORY_WEIGHTS
+#       ← app.opportunity_atlas.valuation_estimator
+#   POTENTIAL_DIM_WEIGHTS（← potential_engine.DIM_WEIGHTS）/ SENTIMENT_WEIGHT /
+#   EVENT_SCORE / TREND_SCORE ← app.opportunity_atlas.potential_engine
+# 见文件头 import 块。此处不再保留本地定义，避免双份 live 值漂移。
+# （注：potential_engine.DIM_WEIGHTS 与 dim8_summary_engine.DIM_WEIGHTS 同名异义，
+#   勿混淆；本文件只对潜力维 6 权重别名导入。）
 
-QUALITY_ADJUST = {
-    'roe_threshold': float(os.getenv('QUALITY_ROE_THRESHOLD', '12.0')),
-    'roe_norm': float(os.getenv('QUALITY_ROE_NORM', '20.0')),
-    'premium': float(os.getenv('QUALITY_PREMIUM', '0.25')),
-    'fail_penalty': float(os.getenv('QUALITY_FAIL_PENALTY', '0.5')),
-}
-
-INDUSTRY_CATEGORY: dict[str, str] = {
-    '食品饮料': '蓝筹', '家用电器': '蓝筹', '汽车': '蓝筹', '美容护理': '蓝筹',
-    '传媒': '成长',
-    '钢铁': '周期', '有色金属': '周期', '煤炭': '周期', '石油石化': '周期',
-    '基础化工': '周期', '建筑材料': '周期', '建筑装饰': '周期',
-    '房地产': '周期', '机械设备': '周期', '轻工制造': '周期', '交通运输': '周期',
-    '电子': '科技', '计算机': '科技', '通信': '科技', '电力设备': '科技',
-    '国防军工': '科技', '医药生物': '科技',
-    '银行': '金融', '非银金融': '金融',
-    '公用事业': '稳定收息', '环保': '稳定收息',
-    '农林牧渔': '微小/亏损', '纺织服饰': '微小/亏损', '商贸零售': '微小/亏损',
-    '社会服务': '微小/亏损', '综合': '微小/亏损',
-}
-
-CATEGORY_WEIGHTS: dict[str, tuple[float, float, float, float, float]] = {
-    '蓝筹': (0.15, 0.30, 0.30, 0.15, 0.10),
-    '成长': (0.10, 0.25, 0.20, 0.35, 0.10),
-    '周期': (0.40, 0.15, 0.25, 0.15, 0.05),
-    '科技': (0.10, 0.15, 0.20, 0.50, 0.05),
-    '金融': (0.45, 0.20, 0.10, 0.20, 0.05),
-    '稳定收息': (0.15, 0.25, 0.35, 0.15, 0.10),
-    '微小/亏损': (0.40, 0.05, 0.30, 0.20, 0.05),
-}
-
-# 估值分级 → 中文
+# 估值分级 → 中文（本模块独有，非重复；勿删）
 LEVEL_CN = {
     'extreme_low': '极度低估', 'low': '低估', 'fair': '合理',
     'high': '高估', 'extreme_high': '极度高估',
 }
 
-# 估值分级 → 红绿灯
+# 估值分级 → 红绿灯（本模块独有，非重复；勿删）
 LEVEL_LIGHT = {
     'extreme_low': 'green', 'low': 'green', 'fair': 'yellow',
     'high': 'red', 'extreme_high': 'red',
-}
-
-# 潜力权重（从 potential_engine.py 迁移）
-POTENTIAL_DIM_WEIGHTS = {
-    "val": 0.20, "earn": 0.15, "sector": 0.15,
-    "event": 0.10, "fund": 0.20, "trend": 0.20,
-}
-
-SENTIMENT_WEIGHT = {
-    "recovery": 1.0, "ice": 0.8, "climax": 0.8,
-    "ebb": 0.3, "": 1.0, None: 1.0,
-}
-
-EVENT_SCORE = {
-    "earnings": 0.9, "lhb": 0.7, "breakout": 0.8, "concept": 0.6,
-    "buyback": 0.6, "pledge": 0.3, "float": 0.2, "reduce": 0.2,
-    "fraud_sign": 0.1, "regulatory": 0.1, "none": 0.5, "": 0.5,
-}
-
-TREND_SCORE = {
-    "up_aligned": 0.8, "mixed": 0.5, "no_trend": 0.5,
-    "down_aligned": 0.2, "": 0.5, None: 0.5,
 }
 
 

@@ -22,6 +22,7 @@ stock_cache.db 连接）——运行中无法收缩，历史实测 WAL 膨胀 86
 """
 import argparse
 import logging
+import logging.handlers
 import os
 import signal
 import sqlite3
@@ -52,7 +53,9 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler(LOG_PATH, encoding='utf-8'),
+        # 426号 S4：按日滚动（原 FileHandler 单文件无限增长，运维不可追溯）
+        logging.handlers.TimedRotatingFileHandler(
+            LOG_PATH, when='midnight', backupCount=7, encoding='utf-8'),
         logging.StreamHandler(),
     ],
 )

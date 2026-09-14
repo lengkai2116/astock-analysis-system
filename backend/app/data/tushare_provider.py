@@ -21,14 +21,42 @@ import time as _time
 _ts_last_call = 0.0
 _TS_MIN_INTERVAL = 0.2  # 5次/秒
 
+
+def _to_tushare_date(v):
+    """Tushare 日期归一：YYYY-MM-DD → YYYYMMDD（Tushare 要求紧凑，横杠会静默空返回）
+    428 日期整改 §阶段A：对含 '-' 的 str 剥离横杠；datetime/date/其他类型保持原样。
+    """
+    if isinstance(v, str) and '-' in v:
+        return v.replace('-', '')
+    return v
+
+
 def _ts(pro_func, *args, **kwargs):
-    """带速率限制的 Tushare API 调用"""
+    """带速率限制的 Tushare API 调用（428 日期整改 §阶段A：
+    调用前对 trade_date/start_date/end_date 做紧凑归一，根治横杠日期静默空返回）"""
     global _ts_last_call
+    for _dkey in ('trade_date', 'start_date', 'end_date'):
+        if _dkey in kwargs:
+            kwargs[_dkey] = _to_tushare_date(kwargs[_dkey])
     elapsed = _time.time() - _ts_last_call
     if elapsed < _TS_MIN_INTERVAL:
         _time.sleep(_TS_MIN_INTERVAL - elapsed)
     _ts_last_call = _time.time()
-    return pro_func(*args, **kwargs)
+    result = pro_func(*args, **kwargs)
+    # 428 日期整改 §阶段A：给定显式日期却返回空 → 记录告警，避免再被误判"外部不可用"
+    # （与 data_daemon._ts 同版；此处为同步直调，无子线程超时分支）
+    if result is None:
+        return None
+    _has_explicit_date = any(k in kwargs for k in ('trade_date', 'start_date', 'end_date'))
+    try:
+        if _has_explicit_date and hasattr(result, 'empty') and result.empty:
+            logger.warning(f"  [Tushare空返回] {getattr(pro_func, '__name__', str(pro_func))} "
+                           f"参数显式却返回空（{ {k: kwargs.get(k) for k in ('trade_date', 'start_date', 'end_date') if k in kwargs} }）")
+    except Exception:
+        pass  # 告警为次要，不影响主流程
+    return result
+
+
 class TushareProvider:
     def __init__(self):
         self.token = self._load_token()

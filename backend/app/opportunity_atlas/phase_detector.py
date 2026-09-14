@@ -107,6 +107,10 @@ class PhaseDetectionEngine(DataAwareMixin):
     # 312号：8 维度阶段向量 + 加权共识
     # ═══════════════════════════════════════════════════════════
     # 维度权重（312号 §3.1）
+    # 431号 G1 标注（批次13，2026-09-13）：本 8 维权重与
+    # dimensions/dim4_chip_fund_engine.py 的同名 _DIM_WEIGHTS 逐字节重复，
+    # 且**双方均 live**。收敛需先定权威源并改 import，属行为变更，
+    # 本批**仅标注，不改值**。
     _DIM_WEIGHTS = {"chip": 3.0, "fund": 3.0, "stage": 2.5, "asr": 2.0,
                     "trend": 1.5, "ssrp": 2.5, "chan": 2.0}
 

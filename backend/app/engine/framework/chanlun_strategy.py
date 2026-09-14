@@ -10,11 +10,54 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+# 411号Phase 5：预计算MACD缓存（每次analyze()调用时刷新）
+_MACD_PRECOMPUTED_CACHE: dict = {}
 
-def calc_macd(closes: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """计算MACD: 返回 (dif, dea, macd_hist)"""
-    if len(closes) < 26:
-        return np.zeros(len(closes)), np.zeros(len(closes)), np.zeros(len(closes))
+
+def _load_precomputed_macd(ts_code: str) -> dict:
+    """从indicator_macd预计算表读取MACD数据，返回{macd_dif, macd_dea, macd_hist}数组"""
+    if not ts_code:
+        return {}
+    cache_key = ts_code
+    if cache_key in _MACD_PRECOMPUTED_CACHE:
+        return _MACD_PRECOMPUTED_CACHE[cache_key]
+    try:
+        from app.data import DataManager
+        dm = DataManager()
+        wide = dm.get_cached_indicators(ts_code)
+        if wide is not None and not wide.empty:
+            result = {}
+            for col in ('macd_dif', 'macd_dea', 'macd_hist'):
+                if col in wide.columns:
+                    arr = wide[col].dropna().values.astype(float)
+                    if len(arr) > 0:
+                        result[col] = arr
+            if len(result) == 3:
+                _MACD_PRECOMPUTED_CACHE[cache_key] = result
+                return result
+    except Exception:
+        pass
+    _MACD_PRECOMPUTED_CACHE[cache_key] = {}
+    return {}
+
+
+def calc_macd(closes: np.ndarray, precomputed: dict = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """计算MACD: 返回 (dif, dea, macd_hist)
+
+    411号Phase 5：优先使用预计算数据，回退raw计算。
+    precomputed: {'macd_dif': array, 'macd_dea': array, 'macd_hist': array}
+    """
+    n = len(closes)
+    if precomputed:
+        dif = precomputed.get('macd_dif')
+        dea = precomputed.get('macd_dea')
+        hist = precomputed.get('macd_hist')
+        if dif is not None and dea is not None and hist is not None:
+            if len(dif) == n and len(dea) == n and len(hist) == n:
+                return dif, dea, hist
+    # raw计算作为fallback
+    if n < 26:
+        return np.zeros(n), np.zeros(n), np.zeros(n)
     s = pd.Series(closes)
     ema12 = s.ewm(span=12).mean().values
     ema26 = s.ewm(span=26).mean().values
@@ -630,7 +673,6 @@ class StrokeBuilder:
             if f1.price <= f2.price:
                 return False
             return True
-        return False
 
 
 class SegmentAnalyzer:
@@ -1242,11 +1284,13 @@ class DivergenceDetector:
         self.divergence_rate = divergence_rate
         self._closes = None  # 外部传入的 close 数组（用于 MACD 计算）
         self._volumes = None  # 外部传入的 volume 数组（用于量背驰）
+        self._precomputed = {}  # 411号Phase 5：预计算MACD数据缓存
 
     def detect(self, strokes: List[Stroke],
               zhongshu_list: List[Zhongshu] = None,
               volume: pd.Series = None,
-              closes: np.ndarray = None) -> Optional[Divergence]:
+              closes: np.ndarray = None,
+              precomputed: dict = None) -> Optional[Divergence]:
         """
         检测背驰（支持多种算法 + 力度法辅助验证）
         """
@@ -1256,6 +1300,7 @@ class DivergenceDetector:
         zhongshu_list = zhongshu_list or []
         self._closes = closes
         self._volumes = volume.values if volume is not None else None
+        self._precomputed = precomputed or {}  # 411号Phase 5：预计算MACD数据
 
         # 检测趋势背驰
         trend_div = self._detect_trend_divergence(strokes)
@@ -1326,7 +1371,7 @@ class DivergenceDetector:
         s2_end = min(stroke2.end_idx, len(self._closes) - 1)
         if s1_start >= s1_end or s2_start >= s2_end:
             return False
-        dif, _, _ = calc_macd(self._closes)
+        dif, _, _ = calc_macd(self._closes, self._precomputed)
         h1 = abs(dif[s1_start] - dif[s1_end])
         h2 = abs(dif[s2_start] - dif[s2_end])
         if h1 <= 0:
@@ -1337,7 +1382,7 @@ class DivergenceDetector:
         """MACD 红绿柱绝对高度（峰值法）。"""
         if self._closes is None or stroke.start_idx >= len(self._closes) or stroke.end_idx >= len(self._closes):
             return 0.0
-        _, _, macd_hist = calc_macd(self._closes)
+        _, _, macd_hist = calc_macd(self._closes, self._precomputed)
         seg = macd_hist[stroke.start_idx:stroke.end_idx + 1]
         return float(np.max(np.abs(seg))) if len(seg) > 0 else 0.0
 
@@ -1345,7 +1390,7 @@ class DivergenceDetector:
         """整根笔对应的 MACD 总面积（含红绿柱）。"""
         if self._closes is None or stroke.start_idx >= len(self._closes) or stroke.end_idx >= len(self._closes):
             return 0.0
-        _, _, macd_hist = calc_macd(self._closes)
+        _, _, macd_hist = calc_macd(self._closes, self._precomputed)
         seg = macd_hist[stroke.start_idx:stroke.end_idx + 1]
         return float(np.sum(np.abs(seg))) if len(seg) > 0 else 0.0
 
@@ -1368,7 +1413,7 @@ class DivergenceDetector:
         """首尾 MACD 柱差值。"""
         if self._closes is None or stroke.start_idx >= len(self._closes) or stroke.end_idx >= len(self._closes):
             return 0.0
-        _, _, macd_hist = calc_macd(self._closes)
+        _, _, macd_hist = calc_macd(self._closes, self._precomputed)
         return float(macd_hist[stroke.end_idx] - macd_hist[stroke.start_idx])
 
     def _calc_stroke_volume(self, stroke) -> float:
@@ -1382,7 +1427,7 @@ class DivergenceDetector:
         """计算单根笔范围内的 MACD 柱面积（红绿柱代数累加）"""
         if self._closes is None or stroke.start_idx >= len(self._closes) or stroke.end_idx >= len(self._closes):
             return 0.0
-        _, _, macd_hist = calc_macd(self._closes)
+        _, _, macd_hist = calc_macd(self._closes, self._precomputed)
         # 笔区间内的 MACD 柱面积（代数累加，红柱正绿柱负）
         seg = macd_hist[stroke.start_idx:stroke.end_idx + 1]
         return float(np.sum(seg))
@@ -1572,7 +1617,7 @@ class DivergenceDetector:
             return None
 
         # MACD面积计算
-        _, _, macd_hist = calc_macd(closes)
+        _, _, macd_hist = calc_macd(closes, self._precomputed)
 
         def _stroke_macd_area(stroke, macd_hist):
             start = max(0, stroke.start_idx)
@@ -2126,7 +2171,7 @@ class ChanlunAnalyzer:
 
         self.fractal_detector = FractalDetector(
             fx_check=bi_cfg.bi_fx_check if bi_cfg else 'strict',
-            threshold_pct=self.config.get('fractal_threshold_pct', 0),
+            threshold_pct=self.config.get('fractal_threshold_pct', 0.5),
         )
         self.stroke_builder = StrokeBuilder(
             min_klines=bi_cfg.min_klines if bi_cfg else self.config.get('min_klines', 6),
@@ -2177,7 +2222,7 @@ class ChanlunAnalyzer:
             'min_segment_count': 3,  # 构成中枢的最少线段数
             'lookback_period': 120,  # 回看周期 (P1-#29: ⬆60→120)
             'min_confidence': 0.6,  # 最小置信度
-            'fractal_threshold_pct': 0,  # 分形确认阈值，0=关闭（对齐 czsc 标准）
+            'fractal_threshold_pct': 0.5,  # 分形确认阈值（F-15规格要求默认0.5）
             'merge_depth': 3,  # 包含处理递归深度，0=czsc单次，3=推荐
         }
 
@@ -2229,10 +2274,16 @@ class ChanlunAnalyzer:
                 self.zhongshu_list = []
 
         # 7. 背驰判断（支持 MACD 面积确认）
+        # 411号Phase 5：传入预计算MACD数据
+        _ts_code = ''
+        if df is not None and hasattr(df, 'columns') and 'ts_code' in df.columns:
+            _ts_code = str(df['ts_code'].iloc[0])
+        _precomputed_macd = _load_precomputed_macd(_ts_code) if _ts_code else {}
         self.divergence = self.divergence_detector.detect(
             self.strokes,
             self.zhongshu_list,
-            closes=df['close'].values if 'close' in df.columns else None
+            closes=df['close'].values if df is not None and 'close' in df.columns else None,
+            precomputed=_precomputed_macd
         )
 
         # 8. 买卖点识别

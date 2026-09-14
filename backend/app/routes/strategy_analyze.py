@@ -124,21 +124,58 @@ def _get_deepseek_status_text(ts_code: str) -> Optional[str]:
         return None
 
 
+# 411号 Phase 1：dim_results 维度键 → 中文维度名（对齐 status_engine 维名口径）
+_DIM_CN = {
+    'signal': '信号',
+    'structure': '结构',
+    'volume_price': '量价',
+    'chip_fund': '资金',
+    'emotion': '情绪',
+    'risk': '风险',
+    'valuation': '估值',
+    'signal_analysis': '信号分析',
+}
+
+
+def _build_dim_results_summary(dim_results: dict) -> str:
+    """411号 Phase 1：从 dim_results（八维状态快照）构建摘要
+
+    signal_json.signals 在新架构下设计为空，维状态承载于 dim_results_json：
+    每维 status_description.plain 为中文摘要，judgment.overall_light 为灯色。
+    """
+    lines = []
+    for key, dim in (dim_results or {}).items():
+        if not isinstance(dim, dict):
+            continue
+        sd = dim.get('status_description') or {}
+        jd = dim.get('judgment') or {}
+        text = sd.get('plain') or sd.get('attribute') or ''
+        light = jd.get('overall_light') or ''
+        if not text and not light:
+            continue
+        head = f"{light} " if light else ''
+        lines.append(f"- {_DIM_CN.get(key, key)}: {head}{text}".rstrip())
+    return '\n'.join(lines)
+
+
 def _build_p2_signal_summary(ts_code: str) -> str:
     """320号 F3：从 strategy_signal_detail（P2 预计算产物）构建策略信号摘要
 
     提取各策略的 signal_label / evidence，作为九层解读的权威数据源。
     读取最新 trade_date 记录（P2 日终产物，非当天日期）。
+
+    2026-09-13（411号 Phase 1）：signals 设计上为空 → 改消费 dim_results
+    （八维状态快照）；require_payload=True 跳过无产物的骨架行。
     """
     try:
         from app.data import DataManager
         dm = DataManager()
-        detail = dm.cache.get_latest_signal_detail(ts_code)
+        detail = dm.cache.get_latest_signal_detail(ts_code, require_payload=True)
         if not detail:
             return ''
         signals = detail.get('signals', {})
         if not signals:
-            return ''
+            return _build_dim_results_summary(detail.get('dim_results'))
         lines = []
         for name, sig in signals.items():
             if not isinstance(sig, dict):
@@ -236,15 +273,21 @@ def _read_signal_cached(dm, ts_code: str) -> tuple:
     直接命中最新缓存，毫秒级。
 
     Returns:
-        (signals: list|None, signal_date: str|None)
+        (signals: list|None, signal_date: str|None, dim_results: dict|None)
+
+    2026-09-13（411号 Phase 1）：signals 设计上为空，真实产物为 dim_results
+    （八维状态快照）。per-strategy 消费方（五维卡/聚合）只能用 signals，
+    为空时由调用方回退实时计算；dim_results 供「缓存是否已就绪」判定。
     """
     cached = dm.get_signal_detail(ts_code)
     if cached:
-        return _restore_signals_from_cache(cached), cached.get('trade_date')
-    latest = dm.cache.get_latest_signal_detail(ts_code)
+        return (_restore_signals_from_cache(cached), cached.get('trade_date'),
+                cached.get('dim_results'))
+    latest = dm.cache.get_latest_signal_detail(ts_code, require_payload=True)
     if latest:
-        return _restore_signals_from_cache(latest), latest.get('trade_date')
-    return None, None
+        return (_restore_signals_from_cache(latest), latest.get('trade_date'),
+                latest.get('dim_results'))
+    return None, None, None
 
 
 def _find_signal(signals: List[Dict], keyword: str) -> Optional[Dict]:
@@ -673,7 +716,7 @@ def strategy_analyze():
         from app.data import DataManager
         _dm = DataManager()
         # 322号 S0 对策1：优先当日缓存，miss 回退最新一条（非交易日命中），避免 5s 实时计算
-        signals, signal_date = _read_signal_cached(_dm, ts_code)
+        signals, signal_date, _ = _read_signal_cached(_dm, ts_code)
         data_availability = {'signal_date': signal_date} if signal_date else {}
         if not signals:
             from app.engine.unified_core import UnifiedStrategyCore
@@ -1065,7 +1108,7 @@ def strategy_status_aggregate():
         # Step 1: 获取策略信号（322号 S0 对策1：当日 miss 回退最新缓存，避免实时计算）
         from app.data import DataManager
         _dm = DataManager()
-        signals, _ = _read_signal_cached(_dm, ts_code)
+        signals, _, _ = _read_signal_cached(_dm, ts_code)
         if not signals:
             from app.engine.unified_core import UnifiedStrategyCore
             _core = UnifiedStrategyCore()
@@ -1457,8 +1500,9 @@ def strategy_deepseek():
         # 从缓存读取信号数据（322号 S0 对策1：当日 miss 回退最新缓存）
         from app.data import DataManager
         dm = DataManager()
-        signals, _ = _read_signal_cached(dm, ts_code)
-        if not signals:
+        # 411号 Phase 1：signals 设计上为空，dim_results（八维状态快照）亦为有效产物
+        signals, _, dim_results = _read_signal_cached(dm, ts_code)
+        if not signals and not dim_results:
             return jsonify({
                 'code': -1,
                 'message': '策略信号未就绪，请稍后重试或先调用策略分析',

@@ -96,11 +96,15 @@ class ChanlunLevelValidator:
         elif not isinstance(df.index, pd.DatetimeIndex):
             return df
 
-        # 按周聚合
-        weekly = df.resample('W').agg({
+        # 动态构建聚合字典，amount列可选
+        agg_dict = {
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last',
-            'vol': 'sum', 'amount': 'sum',
-        }).dropna(subset=['close'])
+            'vol': 'sum',
+        }
+        if 'amount' in df.columns:
+            agg_dict['amount'] = 'sum'
+
+        weekly = df.resample('W').agg(agg_dict).dropna(subset=['close'])
         weekly = weekly.reset_index()
         weekly['trade_date'] = weekly['trade_date'].dt.strftime('%Y-%m-%d')
         return weekly
@@ -114,10 +118,15 @@ class ChanlunLevelValidator:
         elif not isinstance(df.index, pd.DatetimeIndex):
             return df
 
-        monthly = df.resample('M').agg({
+        # 动态构建聚合字典，amount列可选
+        agg_dict = {
             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last',
-            'vol': 'sum', 'amount': 'sum',
-        }).dropna(subset=['close'])
+            'vol': 'sum',
+        }
+        if 'amount' in df.columns:
+            agg_dict['amount'] = 'sum'
+
+        monthly = df.resample('ME').agg(agg_dict).dropna(subset=['close'])
         monthly = monthly.reset_index()
         monthly['trade_date'] = monthly['trade_date'].dt.strftime('%Y-%m-%d')
         return monthly

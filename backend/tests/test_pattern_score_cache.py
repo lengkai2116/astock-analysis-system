@@ -72,6 +72,19 @@ def ecm(tmp_path):
     ecm.compute_conn.commit()
 
     ecm.cache_stats = {'hits_duckdb': 0, 'misses': 0, 'total_requests': 0}
+    # 426号 P1-2：写路径已改走 _exec_shard（分库路由），测试注入本地路由实现，
+    # 使写操作落在临时 compute 库（避免触达全局 sharding_manager 生产连接）
+    def _fake_exec_shard(table, sql, params=None):
+        assert table == 'pattern_score_cache', f'意外表 {table}'
+        ecm.compute_conn.execute(sql, params or [])
+        ecm.compute_conn.commit()
+    ecm._exec_shard = _fake_exec_shard
+    # 426号 落地复核修正：读路径改走 _query_shard（路由 API），测试同步注入本地读实现
+    def _fake_query_shard(table, sql, params=None):
+        assert table == 'pattern_score_cache', f'意外表 {table}'
+        import pandas as pd
+        return pd.read_sql(sql, ecm.compute_read_conn, params=params)
+    ecm._query_shard = _fake_query_shard
     yield ecm
     ecm.conn.close()
     ecm.read_conn.close()

@@ -33,10 +33,10 @@
     <key>RunAtLoad</key>
     <true/>
 
-    <!-- 标准输出/错误日志 -->
+    <!-- 标准输出/错误日志（launchd 要求 stdout/stderr 必须指向不同文件，否则 EX_CONFIG 78） -->
     <key>StandardOutPath</key>
     <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/logs/data_daemon.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/logs/data_daemon.log</string>
+    <string>/Users/kalence/Desktop/01-A股股票分析系统/backend/logs/data_daemon_stderr.log</string>
 </dict>
 </plist>

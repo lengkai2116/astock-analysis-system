@@ -9,13 +9,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def calc_support_resistance(df=None) -> dict:
+def calc_support_resistance(df=None, indicator_ma_df=None) -> dict:
     """统一支撑阻力计算
 
     融合3个来源：
     1. advice_builder._geometric()：MA20+近20日低点
     2. VAP（成交量加权价格）
     3. 缠论中枢边界
+
+    indicator_ma_df: 可选，data_context 中的 MA 预计算 DataFrame（含 ma20/ma60 列）。
+    412号方案B1 v3.0 / 434号收敛：MA20/MA60 优先从 indicator_ma_df 读取，保留 raw fallback。
 
     Returns:
         {
@@ -36,8 +39,14 @@ def calc_support_resistance(df=None) -> dict:
     closes = df['close'].values
     price = float(closes[-1])
 
-    # 1. MA20 + 近20日低点 → 支撑位
-    ma20 = float(np.mean(closes[-20:]))
+    # 1. MA20 + 近20日低点 → 支撑位（MA20 优先 indicator_ma_df，raw fallback）
+    ma20 = None
+    if indicator_ma_df is not None and not indicator_ma_df.empty and 'ma20' in indicator_ma_df.columns:
+        val = indicator_ma_df['ma20'].iloc[-1]
+        if val is not None:
+            ma20 = float(val)
+    if ma20 is None:
+        ma20 = float(np.mean(closes[-20:]))
     lo20 = float(df['low'].tail(20).min()) if 'low' in df.columns else None
     support_candidates = [x for x in [ma20, lo20] if x is not None]
     support = max(support_candidates) if support_candidates else None
@@ -54,9 +63,15 @@ def calc_support_resistance(df=None) -> dict:
         if support < min_support:
             support = min_support
 
-    # 2. 压力位：取高于现价的最近位
+    # 2. 压力位：取高于现价的最近位（MA60 优先 indicator_ma_df，raw fallback）
     hi60 = float(df['high'].tail(60).max()) if len(df) >= 60 and 'high' in df.columns else None
-    ma60 = float(np.mean(closes[-60:])) if len(df) >= 60 else None
+    ma60 = None
+    if indicator_ma_df is not None and not indicator_ma_df.empty and 'ma60' in indicator_ma_df.columns:
+        val = indicator_ma_df['ma60'].iloc[-1]
+        if val is not None:
+            ma60 = float(val)
+    if ma60 is None:
+        ma60 = float(np.mean(closes[-60:])) if len(df) >= 60 else None
 
     # 364f修复：取高于现价的最近位，非简单min
     resistance_candidates = [x for x in [hi60, ma60] if x is not None and x > price]

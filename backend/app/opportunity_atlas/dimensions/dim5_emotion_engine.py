@@ -31,6 +31,12 @@ logger = logging.getLogger(__name__)
 # BOCIASI快线常量
 # ═══════════════════════════════════════════════════════════
 
+# 431号 G1 标注（批次13，2026-09-13）——本文件"硬编码常量未收敛"清单：
+#   FAST_HIGH/LOW_THRESHOLD、SLOW_HIGH/LOW_THRESHOLD（BOCIASI 快慢线阈值）
+#   PHASE_BASE_TEMP、TEMP_WEIGHTS（情绪温度基温与分项权重）
+#   BANDWIDTH_TIGHT/NARROW、RANGE_TIGHT、CONSOLIDATION_MIN_DAYS（时间节奏阈值）
+# 以上均**无 status_engine.yaml / signal_registry.yaml 对应物**（属引擎内部算法
+# 常量，非台账配置），故本批**仅标注，不收敛**——收敛＝另行设计配置键，属行为变更。
 FAST_HIGH_THRESHOLD = 0.70
 FAST_LOW_THRESHOLD = 0.30
 SLOW_HIGH_THRESHOLD = 0.70

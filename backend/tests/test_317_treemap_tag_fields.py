@@ -21,16 +21,23 @@ def ecm():
 
 
 def _sample_ts_codes(ecm, n=10):
-    """从快照表取 n 只股票代码（优先选有 style_exposure 标签的）"""
-    rows = ecm.conn.execute(
+    """从快照表取 n 只股票代码（优先选有 style_exposure 标签的）
+
+    421号R4a：opportunity_tags_cache/treemap_snapshot 分属 compute/snapshot 分库，
+    经总库连接（ecm.conn）读必 no such table → 走分库路由。
+    """
+    from app.data.sharding_manager import sharding_manager
+    rows = sharding_manager.execute_query(
+        'opportunity_tags_cache',
         "SELECT DISTINCT ts_code FROM opportunity_tags_cache "
         "WHERE tag_name='style_exposure' AND tag_value='large_growth' LIMIT ?", [n]
-    ).fetchall()
+    )
     codes = [r[0] for r in rows]
     if len(codes) < n:
-        rows2 = ecm.conn.execute(
+        rows2 = sharding_manager.execute_query(
+            'treemap_snapshot',
             "SELECT ts_code FROM treemap_snapshot LIMIT ?", [n - len(codes)]
-        ).fetchall()
+        )
         codes += [r[0] for r in rows2]
     return codes
 
@@ -56,15 +63,17 @@ def test_snapshot_items_expose_catalyst_event(ecm):
 
 def test_snapshot_style_exposure_matches_tag_db(ecm):
     """透出的 style_exposure 值应与标签库一致（数据真实）"""
+    from app.data.sharding_manager import sharding_manager
     codes = _sample_ts_codes(ecm, 3)
     items = ecm.get_treemap_snapshot_items(codes)
     for item in items:
         ts = item['ts_code']
-        rows = ecm.conn.execute(
+        rows = sharding_manager.execute_query(
+            'opportunity_tags_cache',
             "SELECT tag_value FROM opportunity_tags_cache "
             "WHERE ts_code=? AND tag_name='style_exposure' ORDER BY updated_at DESC LIMIT 1",
             [ts]
-        ).fetchall()
+        )
         if rows:
             assert item.get('tags', {}).get('style_exposure') == rows[0][0], \
                 f"{ts} style_exposure 与标签库不一致"
@@ -76,10 +85,12 @@ def test_snapshot_style_exposure_matches_tag_db(ecm):
 
 def test_snapshot_items_expose_pe_pb_percentile(ecm):
     """快照 items 的 tags 字典应包含 pe_percentile_5y/pb_percentile_5y（修复前缺失）"""
-    rows = ecm.conn.execute(
+    from app.data.sharding_manager import sharding_manager
+    rows = sharding_manager.execute_query(
+        'opportunity_tags_cache',
         "SELECT ts_code FROM opportunity_tags_cache "
         "WHERE tag_name='pe_percentile_5y' LIMIT 5"
-    ).fetchall()
+    )
     assert rows, "标签库应有 pe_percentile_5y 数据"
     codes = [r[0] for r in rows]
     items = ecm.get_treemap_snapshot_items(codes)
@@ -92,18 +103,21 @@ def test_snapshot_items_expose_pe_pb_percentile(ecm):
 
 def test_snapshot_pe_percentile_matches_tag_db(ecm):
     """透出的 pe_percentile_5y 值应与标签库一致（数据真实）"""
-    rows = ecm.conn.execute(
+    from app.data.sharding_manager import sharding_manager
+    rows = sharding_manager.execute_query(
+        'opportunity_tags_cache',
         "SELECT ts_code FROM opportunity_tags_cache "
         "WHERE tag_name='pe_percentile_5y' LIMIT 3"
-    ).fetchall()
+    )
     codes = [r[0] for r in rows]
     items = ecm.get_treemap_snapshot_items(codes)
     for item in items:
         ts = item['ts_code']
-        db = ecm.conn.execute(
+        db = sharding_manager.execute_query(
+            'opportunity_tags_cache',
             "SELECT tag_value FROM opportunity_tags_cache WHERE ts_code=? "
             "AND tag_name='pe_percentile_5y' ORDER BY updated_at DESC LIMIT 1", [ts]
-        ).fetchone()
+        )
         if db:
-            assert item.get('tags', {}).get('pe_percentile_5y') == db[0], \
+            assert item.get('tags', {}).get('pe_percentile_5y') == db[0][0], \
                 f"{ts} pe_percentile_5y 与标签库不一致"

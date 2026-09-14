@@ -40,6 +40,34 @@ def get_ecm_instance() -> 'EnhancedCacheManager':
 
 # ── 417号方案：COL 深度清洗常量 ──────────────────────────
 # 数值列类型统一 + NaN 处理（按表类型差异化，列名与实际表结构对齐）
+def _to_scalar(v):
+    """将 DataFrame 单元值归一为 sqlite 可绑定的标量（428 阶段 P0-1 动作①）
+
+    - Series / DataFrame（重复列名 / 嵌套对象列）→ 取首值，空则 None
+    - Timestamp / date / datetime → 字符串（日期类落库统一为可读文本，
+      具体格式由 storage 归一规则决定）
+    - 其余原样返回
+    """
+    if isinstance(v, pd.Series):
+        if len(v):
+            return _to_scalar(v.iloc[0])
+        return None
+    if isinstance(v, pd.DataFrame):
+        if len(v):
+            return _to_scalar(v.iloc[0, 0])
+        return None
+    if isinstance(v, pd.Timestamp):
+        return v.strftime('%Y-%m-%d')
+    if isinstance(v, (date, datetime)):
+        return v.isoformat()
+    # np.datetime64 等带 datetime64 dtype 的对象（不直接依赖 numpy）
+    _dt = getattr(v, 'dtype', None)
+    if _dt is not None and 'datetime64' in str(_dt):
+        try:
+            return pd.Timestamp(v).strftime('%Y-%m-%d')
+        except Exception:
+            return None
+    return v
 _NUMERIC_COLUMNS = {
     'daily_cache': ['open', 'high', 'low', 'close', 'pre_close', 'vol', 'amount', 'pct_chg'],
     'minute_kline_cache': ['open', 'high', 'low', 'close', 'volume', 'amount'],
@@ -126,8 +154,12 @@ class EnhancedCacheManager:
         self.read_conn.execute("PRAGMA cache_size=-8192")
         self.read_conn.execute("PRAGMA temp_store=MEMORY")
         self.read_conn.execute("PRAGMA busy_timeout=30000")
+        self.read_conn.execute("PRAGMA journal_size_limit=8388608")  # 426号 S4：8MB
 
         self._init_tables()
+        # 防御性收尾：_init_tables 内部已 commit；此处确保 __init__ 完成后
+        # 总库主连接无任何残留事务（daemon 空闲期写锁不被本连接独占）。
+        self.conn.commit()
 
         # 独立快照数据库（§3.1 物理存储方案：写入锁竞争、故障隔离、文件大小管理）
         self.snapshot_db_path = os.path.join(db_dir, 'market_snapshot.db')
@@ -137,6 +169,7 @@ class EnhancedCacheManager:
         self.snapshot_conn.execute("PRAGMA cache_size=-8192")
         self.snapshot_conn.execute("PRAGMA temp_store=MEMORY")
         self.snapshot_conn.execute("PRAGMA busy_timeout=30000")
+        self.snapshot_conn.execute("PRAGMA journal_size_limit=8388608")  # 426号 S4：8MB
         self._init_snapshot_tables()
 
         # 356号方案：计算分库（pattern_score_cache 等计算结果表）
@@ -147,12 +180,14 @@ class EnhancedCacheManager:
         self.compute_conn.execute("PRAGMA cache_size=-16384")  # 16MB
         self.compute_conn.execute("PRAGMA temp_store=MEMORY")
         self.compute_conn.execute("PRAGMA busy_timeout=30000")
+        self.compute_conn.execute("PRAGMA journal_size_limit=16777216")  # 426号 S4：16MB
         self.compute_read_conn = sqlite3.connect(self.compute_db_path, check_same_thread=False)
         self.compute_read_conn.execute("PRAGMA journal_mode=WAL")
         self.compute_read_conn.execute("PRAGMA synchronous=NORMAL")
         self.compute_read_conn.execute("PRAGMA cache_size=-16384")
         self.compute_read_conn.execute("PRAGMA temp_store=MEMORY")
         self.compute_read_conn.execute("PRAGMA busy_timeout=30000")
+        self.compute_read_conn.execute("PRAGMA journal_size_limit=16777216")  # 426号 S4：16MB
         self._init_compute_tables()
         self._migrate_pattern_score_to_compute_db()  # 迁移现有数据到 compute_cache.db
 
@@ -182,9 +217,10 @@ class EnhancedCacheManager:
         except Exception as e:
             logger.warning(f"迁移 {table} 补列失败: {e}")
 
-    def _insert_from_df(self, table: str, df: pd.DataFrame):
-        """将 DataFrame 批量写入 SQLite 表（动态列名，兼容列顺序差异）
+    def _insert_from_df(self, table: str, df: pd.DataFrame) -> int:
+        """将 DataFrame 批量写入 SQLite 表，返回实际写入行数（428 阶段 P0-1 动作②③）
 
+        动态列名，兼容列顺序差异。
         356号方案（重构）：单写直路由
         - 分库表 → 直接写入对应分库（不再双写 stock_cache.db）
         - 非分库表 → 写入总库 stock_cache.db
@@ -192,9 +228,13 @@ class EnhancedCacheManager:
         417号方案：深度清洗
         - 规则1-4（_validate_and_fix_data_format）：日期/代码/列名/数值+NaN
         - 规则5-6（_apply_deep_clean）：OHLC 一致性校验 + 离群值检测（按表类型）
+
+        428 阶段 P0-1：返回值从 None 改为实际写入行数（成功>0 / 失败0），
+        并统一值归一化（_to_scalar），根治 Tushare 嵌套对象列/重复列名导致的
+        sqlite 绑参失败；返回行数使调用方可区分真实写入 vs 虚报。
         """
         if df.empty:
-            return
+            return 0
 
         # 数据格式修订（355号方案规则1-3 + 417号方案规则4）
         df = self._validate_and_fix_data_format(df)
@@ -205,26 +245,33 @@ class EnhancedCacheManager:
             logger.warning(f"[COL清洗] {table}: 深度清洗剔除 {before - len(df)} 行 ({before}→{len(df)})")
 
         if df.empty:
-            return
+            return 0
 
         cols = list(df.columns)
         col_list = ', '.join(f'"{c}"' for c in cols)
         placeholders = ', '.join(['?' for _ in cols])
-        rows = [tuple(r[c] for c in cols) for _, r in df.iterrows()]
+        # 428 P0-1：值归一化，防 Series/DataFrame 等非标量类型绑参失败
+        rows = [tuple(_to_scalar(r[c]) for c in cols) for _, r in df.iterrows()]
 
         # 356号方案：路由到正确的数据库
+        # 426号 S1：用独立局部名（sm）持有分库管理器，避免与 import 同名冲突
         try:
             from app.data.sharding_manager import sharding_manager
-            db_name = sharding_manager.get_db_for_table(table)
+            sm = sharding_manager
+            db_name = sm.get_db_for_table(table)
         except Exception:
+            sm = None
             db_name = None
 
         if db_name:
             # 分库表 → 直接写分库
+            if sm is None:
+                logger.warning(f"分库管理器不可用: {table}，跳过写入")
+                return 0
             try:
                 # 检查分库表是否存在，不存在则自动建表
                 try:
-                    shard_col_rows = sharding_manager.execute_query(
+                    shard_col_rows = sm.execute_query(
                         table, f"PRAGMA table_info({table})")
                     shard_cols = {row[1] for row in shard_col_rows} if shard_col_rows else set()
                 except Exception:
@@ -238,9 +285,9 @@ class EnhancedCacheManager:
                         ).fetchone()
                         if main_sql and main_sql[0]:
                             create_sql = main_sql[0].replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS')
-                            sharding_manager.get_connection(db_name).execute(create_sql)
-                            sharding_manager.get_connection(db_name).commit()
-                            shard_col_rows = sharding_manager.execute_query(
+                            sm.get_connection(db_name).execute(create_sql)
+                            sm.get_connection(db_name).commit()
+                            shard_col_rows = sm.execute_query(
                                 table, f"PRAGMA table_info({table})")
                             shard_cols = {row[1] for row in shard_col_rows} if shard_col_rows else set()
                             logger.info(f"分库自动建表: {table} on {db_name}")
@@ -251,28 +298,40 @@ class EnhancedCacheManager:
                     # 分库列是总库列的子集，过滤后写入
                     keep = [c for c in cols if c in shard_cols]
                     if keep:
-                        shard_rows = [tuple(r[c] for c in keep) for _, r in df.iterrows()]
+                        shard_rows = [tuple(_to_scalar(r[c]) for c in keep) for _, r in df.iterrows()]
                         shard_col_list = ', '.join(f'"{c}"' for c in keep)
                         shard_ph = ', '.join(['?' for _ in keep])
-                        sharding_manager.execute_batch_insert(
+                        sm.execute_batch_insert(
                             table, f"INSERT OR REPLACE INTO {table} ({shard_col_list}) VALUES ({shard_ph})", shard_rows)
+                        return len(shard_rows)
+                    return 0
                 elif shard_cols:
-                    sharding_manager.execute_batch_insert(
+                    sm.execute_batch_insert(
                         table, f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})", rows)
+                    return len(rows)
                 else:
                     logger.warning(f"分库表不存在且自动建表失败: {table} on {db_name}，跳过写入")
+                    return 0
             except Exception as e:
                 logger.warning(f"分库写入失败: {table} on {db_name}, {type(e).__name__}: {e}")
+                return 0
         else:
-            # 非分库表 → 写入总库 stock_cache.db
+            # 非分库表 → 写入总库 stock_cache.db（仅限显式登记的总库表）
+            if sm is None or not sm.is_registered(table):
+                # 426号 S1/D8：未登记表不再静默落总库——告警并跳过
+                from app.data.sharding_manager import _warn_unmapped
+                _warn_unmapped(table, '_insert_from_df')
+                return 0
             try:
                 self.conn.executemany(
                     f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})",
                     rows
                 )
                 self.conn.commit()
+                return len(rows)
             except Exception as e:
                 logger.warning(f"总库写入失败: {table}, {type(e).__name__}: {e}")
+                return 0
 
     def _validate_and_fix_data_format(self, df: pd.DataFrame) -> pd.DataFrame:
         """数据格式验证和修订（355号方案规则1-3）
@@ -432,6 +491,10 @@ class EnhancedCacheManager:
                 logger.warning(f"分库查询失败: {table} on {db_name}: {e}")
                 return pd.DataFrame()
         else:
+            if sharding_manager is not None and not sharding_manager.is_registered(table):
+                # 426号 S1/D8：未登记表读路径降级总库为兼容行为，但必须告警暴露
+                from app.data.sharding_manager import _warn_unmapped
+                _warn_unmapped(table, '_query_shard')
             return self._query_df(sql, params)
 
     def _exec_shard(self, table: str, sql: str, params=None):
@@ -451,9 +514,13 @@ class EnhancedCacheManager:
                     conn.commit()
             except Exception as e:
                 logger.warning(f"分库执行失败: {table} on {db_name}: {e}")
-        else:
+        elif sharding_manager is not None and sharding_manager.is_registered(table):
             self.conn.execute(sql, params or [])
             self.conn.commit()
+        else:
+            # 426号 S1/D8：未登记表不再静默写总库——告警并跳过（原行为落总库空壳/落空）
+            from app.data.sharding_manager import _warn_unmapped
+            _warn_unmapped(table, '_exec_shard')
 
     def _execute(self, sql: str, params=None):
         try:
@@ -461,17 +528,19 @@ class EnhancedCacheManager:
         except Exception as e:
             logger.warning(f"SQLite 执行失败: {e}")
 
-    def wal_checkpoint(self, mode: str = 'PASSIVE') -> tuple:
+    def wal_checkpoint(self, mode: str = 'PASSIVE', db_path: str | None = None) -> tuple:
         """执行 SQLite WAL checkpoint，收缩 WAL 文件（2026-08-06 根治③ + 2026-08-20 修复自我锁定）
 
         使用独立连接执行 checkpoint，避免与 self.conn 的写事务互相阻塞。
         mode: 'PASSIVE'（默认，不阻塞）/ 'TRUNCATE'（截断，需无活跃读事务）。
+        db_path: 目标库文件路径；None 时对总库（self.db_path）执行（426号 S4/D2 扩展）。
 
         Returns: (busy, log_frames, checkpointed_frames)
         """
         ckpt_conn = None
         try:
-            ckpt_conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            target = db_path or self.db_path
+            ckpt_conn = sqlite3.connect(target, check_same_thread=False)
             ckpt_conn.execute("PRAGMA journal_mode=WAL")
             result = ckpt_conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
             return result or (1, 0, 0)
@@ -509,12 +578,8 @@ class EnhancedCacheManager:
                 PRIMARY KEY (ts_code, trade_date)
             )
         """)
-        # 414号P1.2: 迁移已有indicator_ma表，增加MA120/MA250列
-        for _col in ['ma120', 'ma250']:
-            try:
-                self._execute(f"ALTER TABLE indicator_ma ADD COLUMN {_col} REAL")
-            except Exception:
-                pass  # 列已存在，忽略
+        # 426号 P1-6：删除 414号P1.2 的盲 ALTER（ma120/ma250 已含于上方 CREATE，
+        # 对分库列由 _insert_from_df 自动维护；总库空壳 ALTER 纯噪声，日志刷 duplicate column name）
         self._execute("""
             CREATE TABLE IF NOT EXISTS indicator_macd (
                 ts_code TEXT, trade_date TEXT,
@@ -535,12 +600,8 @@ class EnhancedCacheManager:
                 PRIMARY KEY (ts_code, trade_date)
             )
         """)
-        # 414号R5: 迁移已有indicator_other表，增加BBI/ENE/九转列
-        for _col in ['bbi', 'ene_upper', 'ene_lower', 'nine_buy', 'nine_sell']:
-            try:
-                self._execute(f"ALTER TABLE indicator_other ADD COLUMN {_col} REAL")
-            except Exception:
-                pass  # 列已存在，忽略
+        # 426号 P1-6：删除 414号R5 的盲 ALTER（bbi/ene/nine 列已含于上方 CREATE，
+        # 与 ma120/ma250 同因删除）
         self._execute("""
             CREATE TABLE IF NOT EXISTS cache_metadata (
                 key TEXT PRIMARY KEY, value TEXT,
@@ -1029,6 +1090,8 @@ class EnhancedCacheManager:
         self._execute("CREATE INDEX IF NOT EXISTS idx_status_snapshot_state ON status_snapshot(opportunity_state)")
 
         # ── 管道状态表（305号§9.2）：链条驱动执行状态 ──
+        # 426号 P0-4：started_at/completed_at 统一存本地时间（datetime('now','localtime')），
+        # 不再用 UTC 的 CURRENT_TIMESTAMP（本地=UTC+8，避免运维误读管道完成时刻）。
         self._execute("""
             CREATE TABLE IF NOT EXISTS pipeline_status (
                 pipeline_date TEXT,
@@ -1077,6 +1140,29 @@ class EnhancedCacheManager:
         self._migrate_missing_columns('fina_indicator_cache', [
             ('roce', 'REAL'),
         ])
+
+        # ── 426号 S2/D4：总库空壳表自清理 ─────────────────────────
+        # 分库路由表（daily_cache/indicator_*/factor_cache 等）在总库的副本
+        # 是历史迁移残留，且被本方法每次启动重建（0 行空壳）；其真实数据在
+        # 分库、读路径全走分库路由（阶段一已逐一核查）。此处对"路由到分库且
+        # 总库副本 0 行"的表 DROP，保证空壳不复活（读路径缺失即报错而非静默
+        # 空结果，符合"先修读路径再清壳"）。
+        try:
+            from app.data.sharding_manager import sharding_manager
+            _shells = []
+            for (t,) in self.conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%'").fetchall():
+                if sharding_manager.get_db_for_table(t) and self.conn.execute(
+                        f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] == 0:
+                    _shells.append(t)
+            for _t in _shells:
+                self.conn.execute(f'DROP TABLE IF EXISTS "{_t}"')
+            if _shells:
+                self.conn.commit()
+                logger.info(f"总库空壳表自清理: DROP {len(_shells)} 张 {sorted(_shells)}")
+        except Exception as e:
+            logger.warning(f"总库空壳表自清理失败: {e}")
 
     # ── 快照数据库建表 ──────────────────────────────────────────
 
@@ -1239,10 +1325,17 @@ class EnhancedCacheManager:
         if df.empty:
             return
         with self._write_lock:
-            # 414号P1.2: 增加MA120/MA250列
-            ma_cols = {'trade_date', 'ma5', 'ma10', 'ma20', 'ma30', 'ma60', 'ma120', 'ma250', 'vol_ma5', 'vol_ma10'}
-            if ma_cols.issubset(set(df.columns)):
-                ma_df = df[list(ma_cols)].copy()
+            # 426号 P0-2：MA 组守卫由"全有全无"改为核心列子集判断——引擎仅
+            # len>=250 才建 ma250 列（len<250 亦无 ma120），原守卫致 [60,249]
+            # 区间股票 MA 整组不写（滞后 4~10 日）。核心列存在即写，缺列由
+            # _insert_from_df 列过滤层处理并落 DEBUG 日志。
+            core_ma_cols = {'trade_date', 'ma5', 'ma10', 'ma20', 'ma60'}
+            if core_ma_cols.issubset(set(df.columns)):
+                ma_cols = {'trade_date', 'ma5', 'ma10', 'ma20', 'ma30', 'ma60', 'ma120', 'ma250', 'vol_ma5', 'vol_ma10'}
+                missing_ma = ma_cols - set(df.columns)
+                if missing_ma:
+                    logger.debug(f"indicator_ma 缺列（由过滤层处理）: {sorted(missing_ma)}")
+                ma_df = df[list(ma_cols & set(df.columns))].copy()
                 ma_df['ts_code'] = ts_code
                 self._insert_from_df('indicator_ma', ma_df)
             macd_cols = {'trade_date', 'macd_dif', 'macd_dea', 'macd_hist'}
@@ -1283,12 +1376,17 @@ class EnhancedCacheManager:
     # ── 全市场统计缓存 ──────────────────────────────────────
 
     def cache_market_stats(self, stats: dict):
-        """414号R8: 持久化全市场级统计到SQLite"""
+        """414号R8: 持久化全市场级统计到SQLite
+
+        426号 P1-2：market_stats_cache 已登记 compute_cache.db 路由，
+        写路径改走 _exec_shard（原 _execute 落总库空壳，读方 _query_shard
+        登记后切分库，读写分离会丢数据）。
+        """
         stat_date = stats.get('computed_at', '')
         if not stat_date:
             return
         with self._write_lock:
-            self._execute("""
+            self._exec_shard('market_stats_cache', """
                 INSERT OR REPLACE INTO market_stats_cache
                 (stat_date, ma20_ratio, turnover_percentile, limit_ratio,
                  rsi_percentile, erp_percentile, margin_trend, pe_percentile)
@@ -1303,7 +1401,6 @@ class EnhancedCacheManager:
                 stats.get('margin_trend', 0.5),
                 stats.get('pe_percentile', 0.5),
             ])
-            self.conn.commit()
 
     def get_cached_market_stats(self, stat_date: str = None) -> dict:
         """414号R8: 读取全市场级统计缓存"""
@@ -1328,13 +1425,18 @@ class EnhancedCacheManager:
         return {}
 
     def cache_sector_heat(self, heat: dict, stat_date: str):
-        """419号方案B3：持久化板块热度全量结果 {industry: {heat_level, strength, rank, stock_count}}"""
+        """419号方案B3：持久化板块热度全量结果 {industry: {heat_level, strength, rank, stock_count}}
+
+        426号 P1-2：sector_heat_cache 已登记 compute_cache.db 路由，写路径改走
+        _exec_shard（原 _execute 落总库空壳，与读方分库路由分离）。
+        """
         if not heat or not stat_date:
             return
         try:
-            self._execute("DELETE FROM sector_heat_cache WHERE stat_date = ?", [stat_date])
+            self._exec_shard('sector_heat_cache',
+                "DELETE FROM sector_heat_cache WHERE stat_date = ?", [stat_date])
             for ind, info in heat.items():
-                self._execute(
+                self._exec_shard('sector_heat_cache',
                     "INSERT INTO sector_heat_cache "
                     "(stat_date, industry, heat_level, strength, rank, stock_count) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
@@ -1344,7 +1446,6 @@ class EnhancedCacheManager:
                      int(info.get('rank', -1)),
                      int(info.get('stock_count', 0))],
                 )
-            self.conn.commit()
         except Exception as e:
             logger.warning(f"cache_sector_heat失败: {e}")
 
@@ -1646,15 +1747,6 @@ class EnhancedCacheManager:
 
     # ==================== as_* 盘中数据（保留兼容） ====================
 
-    def write_as_market_snapshot(self, records: list):
-        # 373号§9.3：已废弃，保留兼容（盘中数据已迁移至 InMemoryStateStore）
-        if not records:
-            return
-        try:
-            self._insert_from_df('as_market_snapshot', pd.DataFrame(records))
-        except Exception:
-            pass
-
     def write_as_sector_ranking(self, records: list):
         if not records:
             return
@@ -1696,16 +1788,27 @@ class EnhancedCacheManager:
                 logger.warning(f"缓存复权因子失败: {e}")
 
     def _ensure_adj_factor_table(self, table_name: str):
-        """确保复权因子表存在（按年份拆分）"""
+        """确保复权因子年表存在（按年份拆分，426号 S5/D3：改在分库建表）
+
+        原实现用 self.conn（总库）建表——阶段二 S2 空壳清理后总库已无年表结构，
+        _insert_from_df 对新年份表（如 adj_factor_cache_2027）会"自动建表失败"
+        并跳过写入（静默丢写）；且旧分库年表无 PK，INSERT OR REPLACE 退化为
+        INSERT 导致 2026 年表 20× 重复。改为经 sharding_manager 直接在分库
+        （history_cache.db）建表，PK(ts_code, trade_date) 保证 REPLACE 去重。
+        """
         try:
-            # 检查表是否存在
-            exists = self.conn.execute(
+            from app.data.sharding_manager import sharding_manager
+            db_name = sharding_manager.get_db_for_table(table_name)
+            if not db_name:
+                logger.warning(f"创建复权因子表失败: {table_name} 无分库路由")
+                return
+            conn = sharding_manager.get_connection(db_name)
+            exists = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
                 [table_name]
             ).fetchone()
             if not exists:
-                # 创建表
-                self.conn.execute(f"""
+                conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS {table_name} (
                         ts_code TEXT,
                         trade_date TEXT,
@@ -1714,13 +1817,12 @@ class EnhancedCacheManager:
                         PRIMARY KEY (ts_code, trade_date)
                     )
                 """)
-                # 创建索引
-                self.conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_date ON {table_name}(trade_date)")
-                self.conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_ts ON {table_name}(ts_code)")
-                self.conn.commit()
-                logger.info(f"创建复权因子表: {table_name}")
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_date ON {table_name}(trade_date)")
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_ts ON {table_name}(ts_code)")
+                conn.commit()
+                logger.info(f"创建复权因子表: {table_name} on {db_name}")
         except Exception as e:
-            logger.warning(f"创建复权因子表失败: {e}")
+            logger.warning(f"创建复权因子表失败: {table_name}: {e}")
 
     def get_cached_adj_factor(self, ts_code=None, start_date=None, end_date=None):
         # 367号方案：优先从分库读取
@@ -1809,9 +1911,14 @@ class EnhancedCacheManager:
 
     # ==================== 252号方案：财务指标 ====================
 
-    def cache_fina_indicator_data(self, df):
+    def cache_fina_indicator_data(self, df) -> bool:
+        """缓存财务指标（426号 P2-2：返回写入成功与否，供调用方区分成功计数）
+
+        原实现吞错无返回值 → _batch_fina_indicator 写失败仍报"完成 N 条"虚报。
+        Series/嵌套对象列在此统一展平为标量，防 sqlite 绑参失败。
+        """
         if df.empty:
-            return
+            return False
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
@@ -1840,9 +1947,12 @@ class EnhancedCacheManager:
                             df[col] = s.apply(lambda x: x.iloc[0] if hasattr(x, 'iloc') else x)
                     except Exception:
                         pass
-                self._insert_from_df('fina_indicator_cache', df)
+                n = self._insert_from_df('fina_indicator_cache', df)
+                # 428 P0-1：_insert_from_df 现返回实际写入行数，写失败(n=0)不再虚报"完成"
+                return n > 0
             except Exception as e:
                 logger.warning(f"缓存财务指标失败: {e}")
+                return False
 
     def get_cached_fina_indicator(self, ts_code):
         return self._query_shard('fina_indicator_cache',
@@ -1990,6 +2100,10 @@ class EnhancedCacheManager:
                 logger.warning(f"缓存涨跌停失败: {e}")
 
     def get_cached_stk_limit(self, trade_date):
+        # 428 日期整改 §阶段B：查询前归一为存储侧横杠格式（与 get_cached_daily 一致）
+        # 存储统一为 YYYY-MM-DD（355号方案规则1）；紧凑 YYYYMMDD 传入查询会静默空返回。
+        _s = str(trade_date).replace('-', '')
+        trade_date = f'{_s[:4]}-{_s[4:6]}-{_s[6:]}' if len(_s) == 8 else str(trade_date)
         # 424号P0-3 E1：改走分库权威副本（stk_limit_cache → market_cache.db）
         return self._query_shard('stk_limit_cache',
             "SELECT * FROM stk_limit_cache WHERE trade_date = ?",
@@ -2082,6 +2196,9 @@ class EnhancedCacheManager:
     def get_cached_sentiment_pool(self, trade_date: str = None) -> pd.DataFrame:
         """查询涨跌停池数据"""
         if trade_date:
+            # 428 日期整改 §阶段B：查询前归一为存储侧横杠格式（存储统一 YYYY-MM-DD）
+            _s = str(trade_date).replace('-', '')
+            trade_date = f'{_s[:4]}-{_s[4:6]}-{_s[6:]}' if len(_s) == 8 else str(trade_date)
             return self._query_df(
                 "SELECT * FROM sentiment_pool_cache WHERE trade_date = ? ORDER BY limit_type, change_pct DESC",
                 [trade_date]
@@ -2221,6 +2338,10 @@ class EnhancedCacheManager:
 
         421号R4a：改走 sharding_manager 读 snapshot_cache.db 分库
         （此前直读主库 read_conn 命中残留副本）。
+
+        2026-09-13：411号 Phase 1 后 signal_json.signals 设计上为空，
+        真实产物在 dim_results_json / seven_dim_json；一并取回并反序列化为
+        dim_results / seven_dim（原样保留 *_json 字符串供既有消费方使用）。
         """
         import json as _json
         if trade_date is None:
@@ -2229,19 +2350,39 @@ class EnhancedCacheManager:
             from app.data.sharding_manager import sharding_manager
             rows = sharding_manager.execute_query(
                 'strategy_signal_detail',
-                "SELECT signal_json FROM strategy_signal_detail WHERE ts_code=? AND trade_date=?",
+                "SELECT signal_json, dim_results_json, seven_dim_json FROM strategy_signal_detail "
+                "WHERE ts_code=? AND trade_date=?",
                 [ts_code, trade_date]
             )
             if rows:
                 data = _json.loads(rows[0][0])
                 if data.get('schema_version', 1) != 1:
                     return None
-                return data
+                return self._attach_dim_products(data, rows[0][1], rows[0][2])
         except Exception:
             pass
         return None
 
-    def get_latest_signal_detail(self, ts_code: str) -> dict | None:
+    @staticmethod
+    def _attach_dim_products(data: dict, dim_results_json, seven_dim_json) -> dict:
+        """411号：把 dim_results_json / seven_dim_json 挂到信号详情上（原串 + 反序列化）"""
+        import json as _json
+
+        def _load(raw):
+            if not raw:
+                return None
+            try:
+                return _json.loads(raw)
+            except Exception:
+                return None
+
+        data['dim_results_json'] = dim_results_json
+        data['seven_dim_json'] = seven_dim_json
+        data['dim_results'] = _load(dim_results_json)
+        data['seven_dim'] = _load(seven_dim_json)
+        return data
+
+    def get_latest_signal_detail(self, ts_code: str, require_payload: bool = False) -> dict | None:
         """320号 F3：读取最新 trade_date 的策略信号详情（P2 日终产物）
 
         421号R4a：改走 sharding_manager 路由读 snapshot_cache.db 分库
@@ -2250,21 +2391,28 @@ class EnhancedCacheManager:
 
         P2 预计算在日终运行（如 08-06），当天请求可能无当日记录，
         故按 ORDER BY trade_date DESC 取最新一条。
+
+        2026-09-13（411号 Phase 1）：signal_json.signals 设计上为空
+        （dim1-dim6 调用移除，统一走 status_engine），真实产物在
+        dim_results_json（八维状态快照）/ seven_dim_json —— 一并取回。
+        require_payload=True 时跳过「signals 与 dim_results 双空」的骨架行，
+        回退到最近一条有产物的记录（骨架行无消费价值）。
         """
         import json as _json
         try:
             from app.data.sharding_manager import sharding_manager
-            rows = sharding_manager.execute_query(
-                'strategy_signal_detail',
-                "SELECT signal_json FROM strategy_signal_detail "
-                "WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
-                [ts_code]
-            )
+            sql = ("SELECT signal_json, dim_results_json, seven_dim_json FROM strategy_signal_detail "
+                   "WHERE ts_code=?")
+            if require_payload:
+                sql += (" AND ((dim_results_json IS NOT NULL AND dim_results_json NOT IN ('null', '', '{}'))"
+                        " OR length(signal_json) > 500)")
+            sql += " ORDER BY trade_date DESC LIMIT 1"
+            rows = sharding_manager.execute_query('strategy_signal_detail', sql, [ts_code])
             if rows:
                 data = _json.loads(rows[0][0])
                 if data.get('schema_version', 1) != 1:
                     return None
-                return data
+                return self._attach_dim_products(data, rows[0][1], rows[0][2])
         except Exception:
             pass
         return None
@@ -2310,31 +2458,6 @@ class EnhancedCacheManager:
             )
         except Exception as e:
             logger.warning(f"缓存pre_feat失败 [{ts_code}]: {e}")
-
-    def cache_pre_feat_batch(self, records: list[dict]):
-        """批量缓存原料加工特征（用于日终管道批量写入）
-
-        Args:
-            records: [{ts_code, trade_date, features: dict}, ...]
-        """
-        import json as _json
-        rows = []
-        for r in records:
-            features_json = _json.dumps(r.get('features', {}), ensure_ascii=False, default=str)
-            rows.append((r['ts_code'], r['trade_date'], features_json))
-        # 424号P0-3 E2：与 cache_pre_feat 保持一致，批量写入走分库 compute_cache.db，
-        # 消除 pre_feat_cache 三处写入不一致（单条→分库 / 批量→主库 / 读取→主库）。
-        try:
-            from app.data.sharding_manager import sharding_manager
-            sharding_manager.execute_batch_insert(
-                'pre_feat_cache',
-                "INSERT OR REPLACE INTO pre_feat_cache "
-                "(ts_code, trade_date, features_json, computed_at) "
-                "VALUES (?, ?, ?, datetime('now','localtime'))",
-                rows
-            )
-        except Exception as e:
-            logger.warning(f"批量缓存pre_feat失败: {e}")
 
     def get_pre_feat(self, ts_code: str, trade_date: str = None) -> dict | None:
         """读取原料加工特征缓存
@@ -2411,30 +2534,30 @@ class EnhancedCacheManager:
     # ==================== 形态评分缓存（353/358号方案，356号分库：compute_cache.db） ====================
 
     def cache_pattern_score(self, ts_code: str, trade_date: str, score: float, details: dict):
-        """缓存形态评分结果（356号方案：写入 compute_cache.db）
+        """缓存形态评分结果（426号 P1-2：去 compute_conn 硬编码，改走路由 API
 
-        Args:
-            ts_code: 股票代码
-            trade_date: 交易日期 YYYY-MM-DD
-            score: 0-10 分
-            details: 详细分解（bull_count, bear_count, patterns 等）
+        pattern_score_cache 已登记 compute_cache.db，_exec_shard 路由命中同一
+        分库连接；原 compute_conn 直写为 356号 硬编码路径，登记后统一收口。
         """
         import json as _json
         details_json = _json.dumps(details, ensure_ascii=False, default=str)
         with self._write_lock:
             try:
-                self.compute_conn.execute(
+                self._exec_shard('pattern_score_cache',
                     """INSERT OR REPLACE INTO pattern_score_cache
                        (ts_code, trade_date, score, details_json, computed_at)
                        VALUES (?, ?, ?, ?, datetime('now','localtime'))""",
                     [ts_code, trade_date, score, details_json]
                 )
-                self.compute_conn.commit()
             except Exception as e:
                 logger.warning(f"缓存形态评分失败 [{ts_code}]: {e}")
 
     def get_pattern_score(self, ts_code: str, trade_date: str = None) -> dict | None:
         """读取形态评分缓存（356号方案：从 compute_cache.db 读取）
+
+        426号 落地复核修正：读路径由 compute_read_conn 硬编码改走 _query_shard
+        路由 API（P1-2 已登记 pattern_score_cache → compute_cache.db，与写路径
+        _exec_shard 统一收口；原硬编码同库功能正确但未走统一路由）。
 
         Returns:
             {'score': float, 'details': dict} 或 None
@@ -2442,17 +2565,16 @@ class EnhancedCacheManager:
         import json as _json
         try:
             if trade_date:
-                row = self.compute_read_conn.execute(
+                df = self._query_shard('pattern_score_cache',
                     "SELECT score, details_json FROM pattern_score_cache WHERE ts_code=? AND trade_date=?",
-                    [ts_code, trade_date]
-                ).fetchone()
+                    [ts_code, trade_date])
             else:
-                row = self.compute_read_conn.execute(
+                df = self._query_shard('pattern_score_cache',
                     "SELECT score, details_json FROM pattern_score_cache WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
-                    [ts_code]
-                ).fetchone()
-            if row:
-                return {'score': row[0], 'details': _json.loads(row[1])}
+                    [ts_code])
+            if df is not None and not df.empty:
+                r = df.iloc[0]
+                return {'score': float(r['score']), 'details': _json.loads(r['details_json'])}
             return None
         except Exception as e:
             logger.warning(f"读取形态评分失败 [{ts_code}]: {e}")
@@ -2463,11 +2585,10 @@ class EnhancedCacheManager:
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y-%m-%d')
         try:
-            row = self.compute_read_conn.execute(
-                "SELECT 1 FROM pattern_score_cache WHERE ts_code=? AND trade_date=?",
-                [ts_code, trade_date]
-            ).fetchone()
-            return row is not None
+            df = self._query_shard('pattern_score_cache',
+                "SELECT 1 AS x FROM pattern_score_cache WHERE ts_code=? AND trade_date=?",
+                [ts_code, trade_date])
+            return df is not None and not df.empty
         except Exception:
             return False
 
@@ -2699,27 +2820,40 @@ class EnhancedCacheManager:
     # ════════════════════════════════════════════════════════════
 
     def clean_stk_limit_cache(self, cutoff: str):
-        """清理 stk_limit_cache 中早于 cutoff 的记录"""
-        sql = "DELETE FROM stk_limit_cache WHERE trade_date < ?"
-        self._execute(sql, [cutoff])
-        self.conn.commit()
+        """清理 stk_limit_cache 中早于 cutoff 的记录
+
+        426号 S3/D1：改走 _exec_shard 分库路由——原 _execute 恒定打主库
+        （stk_limit_cache 在 market_cache.db，主库为空壳）→ 静默 no-op。
+        """
+        self._exec_shard('stk_limit_cache', "DELETE FROM stk_limit_cache WHERE trade_date < ?", [cutoff])
         logger.info(f"清理 stk_limit_cache (cutoff={cutoff})")
 
     def clean_lhb_cache(self, cutoff: str):
-        """清理 lhb_cache 中早于 cutoff 的记录"""
-        self._execute("DELETE FROM lhb_cache WHERE trade_date < ?", [cutoff])
-        self._execute("DELETE FROM lhb_detail_cache WHERE trade_date < ?", [cutoff])
-        self.conn.commit()
+        """清理 lhb_cache（system 分库）与 lhb_detail_cache（总库）早于 cutoff 的记录
+
+        426号 S3/D1：两表均改走 _exec_shard 路由——原 _execute 打主库，
+        lhb_cache 在 system_cache.db（主库为空壳）→ 半失效静默 no-op。
+        """
+        self._exec_shard('lhb_cache', "DELETE FROM lhb_cache WHERE trade_date < ?", [cutoff])
+        self._exec_shard('lhb_detail_cache', "DELETE FROM lhb_detail_cache WHERE trade_date < ?", [cutoff])
 
     def clean_fina_indicator_cache(self, cutoff: str):
-        """清理 fina_indicator_cache 中早于 cutoff 的记录"""
-        self._execute("DELETE FROM fina_indicator_cache WHERE end_date < ?", [cutoff])
-        self.conn.commit()
+        """清理 fina_indicator_cache 中早于 cutoff 的记录
+
+        426号 S3/D1：改走 _exec_shard 分库路由——原 _execute 打主库
+        （fina_indicator_cache 在 financial_cache.db）→ 静默 no-op。
+        """
+        self._exec_shard('fina_indicator_cache', "DELETE FROM fina_indicator_cache WHERE end_date < ?", [cutoff])
 
     def clean_minute_cache(self, cutoff: str):
-        """清理 minute_kline_cache 中早于 cutoff 的记录"""
-        self._execute("DELETE FROM minute_kline_cache WHERE trade_date < ?", [cutoff])
-        self.conn.commit()
+        """清理 minute_kline_cache 中早于 cutoff 的记录
+
+        426号 S3/D1：改走 _exec_shard 分库路由——原 _execute 打主库
+        （minute_kline_cache 在 market_cache.db）→ 静默 no-op。
+        注意：cutoff 由调用方按 356号 规则10 传入（分钟保留 6 个月=180 天），
+        v1.5 发现原调用传 30 天与规则不符（426号 4.1 已校正）。
+        """
+        self._exec_shard('minute_kline_cache', "DELETE FROM minute_kline_cache WHERE trade_date < ?", [cutoff])
 
     def request_data(self, task_type: str, ts_code: str = None) -> int:
         """写 sync_requests 队列表：通知 data_daemon 异步补采
@@ -3197,16 +3331,19 @@ class EnhancedCacheManager:
         2026-08-12 修复（327阶段1）：running 超过 timeout_hours（默认4h，远大于
         最长环节 P2=1.6h）自动重置为 pending——daemon 重启/卡死后旧 running
         记录不再永久阻塞管道（P4/S1 永不触发，快照陈旧）。
+        426号 P0-4：时间统一本地时区（原 CURRENT_TIMESTAMP 为 UTC，本地=UTC+8，
+        运维解读管道时间时差 8 小时；started_at/completed_at 改存本地时间）。
         """
         # 先处理超时的 running（4h 内未完成的环节视为中断，重置为 pending）
         self.conn.execute(
             "UPDATE pipeline_status SET status='pending', detail='timeout 自动重置' "
             "WHERE pipeline_date=? AND step_id=? AND status='running' "
-            "AND started_at < datetime('now', ?)",
+            "AND started_at < datetime('now','localtime', ?)",
             [pipeline_date, step_id, f'-{int(timeout_hours)} hours']
         )
         rc = self.conn.execute(
-            "UPDATE pipeline_status SET status='running', started_at=CURRENT_TIMESTAMP "
+            "UPDATE pipeline_status SET status='running', "
+            "started_at=datetime('now','localtime') "
             "WHERE pipeline_date=? AND step_id=? AND status IN ('pending', 'failed')",
             [pipeline_date, step_id]
         ).rowcount
@@ -3214,7 +3351,8 @@ class EnhancedCacheManager:
 
     def mark_step_done(self, pipeline_date: str, step_id: str, detail: str = ''):
         self.conn.execute(
-            "UPDATE pipeline_status SET status='done', completed_at=CURRENT_TIMESTAMP, detail=? "
+            "UPDATE pipeline_status SET status='done', "
+            "completed_at=datetime('now','localtime'), detail=? "
             "WHERE pipeline_date=? AND step_id=?",
             [detail, pipeline_date, step_id]
         )
@@ -3222,7 +3360,8 @@ class EnhancedCacheManager:
 
     def mark_step_failed(self, pipeline_date: str, step_id: str, detail: str = ''):
         self.conn.execute(
-            "UPDATE pipeline_status SET status='failed', completed_at=CURRENT_TIMESTAMP, detail=? "
+            "UPDATE pipeline_status SET status='failed', "
+            "completed_at=datetime('now','localtime'), detail=? "
             "WHERE pipeline_date=? AND step_id=?",
             [detail, pipeline_date, step_id]
         )

@@ -65,10 +65,11 @@ def test_snapshot_items_expose_state():
 def test_snapshot_items_real_data():
     """真实快照数据：get_treemap_snapshot_items 返回含 opportunity_state 字段"""
     from app.data.enhanced_cache_manager import EnhancedCacheManager
+    from app.data.sharding_manager import sharding_manager
     ecm = EnhancedCacheManager()
-    # 取 3 只真实快照股票
-    rows = ecm.conn.execute(
-        "SELECT ts_code FROM treemap_snapshot LIMIT 3").fetchall()
+    # 取 3 只真实快照股票（421号R4a：treemap_snapshot 属 snapshot_cache.db，走分库路由）
+    rows = sharding_manager.execute_query(
+        'treemap_snapshot', "SELECT ts_code FROM treemap_snapshot LIMIT 3")
     if not rows:
         pytest.skip("treemap_snapshot 无数据")
     codes = [r[0] for r in rows]

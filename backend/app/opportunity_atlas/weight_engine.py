@@ -1,6 +1,15 @@
 """权重计算引擎 — IC动态权重 + 静态矩阵 + 情绪联动（387号方案5.5）
 
 替代status_engine.MARKET_REGIME_WEIGHTS静态矩阵。
+
+431号 G1 标注（批次13，2026-09-13）：
+  本模块当前**全项目零消费方**——无任何 `import weight_engine`，仅
+  dim_adapter.py:368 的 docstring 文字提及 ⇒ 属死代码。
+  - STATIC_WEIGHTS 与 status_engine.StatusEngine.MARKET_REGIME_WEIGHTS
+    （live 权威，消费于 StatusEngine._aggregate 与 _aggregate_v390）逐字节相同；
+  - EMOTION_MULTIPLIERS 无任何对应物（本模块独有，且同样零消费）。
+  本批**仅标注，不删除、不改值**。日后若收敛，应整体删除本模块并统一到
+  status_engine 的矩阵，而非双份维护。
 """
 from __future__ import annotations
 

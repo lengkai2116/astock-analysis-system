@@ -26,8 +26,10 @@ logger = logging.getLogger(__name__)
 # required_fields / json_fields / seven_dim_keys
 QUALITY_RULES: dict[str, dict] = {
     'daily_cache': {'rows_ratio': 1.00, 'date_col': 'trade_date'},
+    # 426号 P0-3：rows_ratio 0.95→0.99——缺口仅 2.1%（实测 97.0% 通过）时
+    # 0.95 阈值漏检；0.99 为辅检，主检查为 check_cross_table 的 ma/macd 当日对齐
     'indicator_ma': {
-        'rows_ratio': 0.95, 'date_col': 'trade_date',
+        'rows_ratio': 0.99, 'date_col': 'trade_date',
         'required_fields': ['ma5', 'ma20'],
     },
     'indicator_macd': {
@@ -84,6 +86,16 @@ QUALITY_RULES: dict[str, dict] = {
     'forecast_cache': {'check_mode': 'nonempty'},
     'top10_holders_cache': {'check_mode': 'nonempty'},
     'stk_holder_cache': {'check_mode': 'nonempty'},
+
+    # ── 426号 P0-1：market_stats_cache 假数据门禁 ─────────────────
+    # 兜底假值格式正确、结果错误（实测 0.5/0.5/0.1/0.5/0.5/0.5/0.5），
+    # 空表校验抓不到；constant_guard 数值断言：最新行 7 项不得全等或落入兜底常量集
+    'market_stats_cache': {
+        'check_mode': 'nonempty',
+        'constant_guard': ['ma20_ratio', 'turnover_percentile', 'limit_ratio',
+                           'rsi_percentile', 'erp_percentile', 'margin_trend',
+                           'pe_percentile'],
+    },
 }
 
 # SIG 批量写入 rows tuple 的字段索引（对齐 _batch_write_signal_detail 的 INSERT 列序）
@@ -331,7 +343,11 @@ class QualityChecker:
                            expected=threshold, actual=actual, issues=issues, severity=severity)
 
     def _check_nonempty(self, table: str, pipeline_date: str) -> CheckResult:
-        """空表校验：COUNT(*) > 0 即通过（424号 P1-1 稀疏表/无日期列表）"""
+        """空表校验：COUNT(*) > 0 即通过（424号 P1-1 稀疏表/无日期列表）
+
+        426号 P0-1：constant_guard 存在时追加数值断言——最新行各统计值不得
+        全等或全部落入兜底常量集（假数据格式正确但结果恒为常量，非空校验抓不到）。
+        """
         try:
             db_name = self._sm.get_db_for_table(table)
             if db_name:
@@ -347,6 +363,21 @@ class QualityChecker:
         if actual <= 0:
             return CheckResult(False, table, pipeline_date, expected=1, actual=0,
                                issues=[f'{table} 空表（无数据）'], severity='HIGH')
+        guard = QUALITY_RULES.get(table, {}).get('constant_guard', [])
+        if guard:
+            cols = ', '.join(guard)
+            try:
+                row = conn.execute(
+                    f'SELECT {cols} FROM {table} ORDER BY stat_date DESC LIMIT 1'
+                ).fetchone()
+            except Exception as e:
+                logger.warning(f'{table} 常量守卫查询失败: {e}')
+                row = None
+            if row is None or len(set(row)) <= 1 or set(row) <= {0.1, 0.5, 1.0}:
+                return CheckResult(
+                    False, table, pipeline_date, expected=1, actual=actual,
+                    issues=[f'{table} 最新行统计值疑似兜底假值（全等或落入常量集）'],
+                    severity='HIGH')
         return CheckResult(True, table, pipeline_date, expected=1, actual=actual)
 
     def _count_null_fields(self, table: str, pipeline_date: str, fields: list) -> int:
@@ -363,7 +394,10 @@ class QualityChecker:
             return 0
 
     def check_cross_table(self, pipeline_date: str) -> list:
-        """跨表对齐校验：indicator_* 与 daily_cache 行数差异 <5%（423号 §2.3）"""
+        """跨表对齐校验：indicator_* 与 daily_cache 行数差异 <5%（423号 §2.3）；
+        426号 P0-3 主检查：indicator_ma 与 indicator_macd 当日行数偏差 ≤0.1%——
+        MA 全有全无守卫曾致 116 支 [60,249] 股票 MA 整组缺失（约 2.1%），
+        5% 阈值无法捕获，须 ma/macd 直接对齐"""
         results: list[CheckResult] = []
         n = self.daily_base(pipeline_date)
         if n <= 0:
@@ -376,6 +410,16 @@ class QualityChecker:
                 results.append(CheckResult(
                     False, table, pipeline_date, expected=int(n * 0.95), actual=actual,
                     issues=[f'{table} 与 daily_cache 日期不对齐: daily={n}, {table}={actual}'],
+                    severity='HIGH', kind='cross'))
+        # 426号 P0-3：MA 组 vs MACD 当日偏差 ≤0.1%（主检查，缺列/整组漏写即检出）
+        ma = self._count_by_date('indicator_ma', pipeline_date)
+        macd = self._count_by_date('indicator_macd', pipeline_date)
+        if ma >= 0 and macd > 0:
+            deviation = abs(ma - macd) / macd
+            if deviation > 0.001:
+                results.append(CheckResult(
+                    False, 'indicator_ma', pipeline_date, expected=macd, actual=ma,
+                    issues=[f'indicator_ma 与 indicator_macd 当日不对齐: ma={ma}, macd={macd}（偏差 {deviation:.2%} > 0.1%）'],
                     severity='HIGH', kind='cross'))
         return results
 

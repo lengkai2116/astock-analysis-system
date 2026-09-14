@@ -73,13 +73,28 @@ _TS_MIN_INTERVAL = 0.2  # 5次/秒
 # 做子线程超时：超时返回 None（上层判空跳过该次），主循环立即继续，不再阻塞。
 _TS_CALL_TIMEOUT = 15.0
 
+def _to_tushare_date(v):
+    """Tushare 日期归一：YYYY-MM-DD → YYYYMMDD（Tushare 要求紧凑，横杠会静默空返回）
+    428 日期整改 §阶段A：对 str/int 均尝试剥离 '-'; datetime/date 对象保持原样由上层处理。
+    """
+    if isinstance(v, str) and '-' in v:
+        return v.replace('-', '')
+    return v
+
+
 def _ts(pro_func, *args, **kwargs):
     """带速率限制 + 网络超时保护的 Tushare API 调用
 
     速率限制在主线程做（保持 ≤5次/秒 节奏稳定）；实际网络调用放入子线程，
     超过 _TS_CALL_TIMEOUT 未返回视为卡死，返回 None 由上层判空跳过。
+    428 日期整改 §阶段A：调用前对 trade_date/start_date/end_date 参数做紧凑归一
+    （YYYY-MM-DD → YYYYMMDD，根治 Tushare 对横杠日期的静默空返回）。
     """
     global _ts_last_call
+    # 日期参数紧凑归一（仅影响 Tushare 调用入口，不改存储/展示侧横杠格式）
+    for _dkey in ('trade_date', 'start_date', 'end_date'):
+        if _dkey in kwargs:
+            kwargs[_dkey] = _to_tushare_date(kwargs[_dkey])
     elapsed = time.time() - _ts_last_call
     if elapsed < _TS_MIN_INTERVAL:
         time.sleep(_TS_MIN_INTERVAL - elapsed)
@@ -88,7 +103,18 @@ def _ts(pro_func, *args, **kwargs):
     _exe = _cf.ThreadPoolExecutor(max_workers=1)
     try:
         _fut = _exe.submit(pro_func, *args, **kwargs)
-        return _fut.result(timeout=_TS_CALL_TIMEOUT)
+        result = _fut.result(timeout=_TS_CALL_TIMEOUT)
+        # 428 日期整改 §阶段A：给定显式日期却返回空 → 记录告警，避免再被误判"外部不可用"
+        if result is None:
+            return None
+        _has_explicit_date = any(k in kwargs for k in ('trade_date', 'start_date', 'end_date'))
+        try:
+            if _has_explicit_date and hasattr(result, 'empty') and result.empty:
+                logger.warning(f"  [Tushare空返回] {getattr(pro_func, '__name__', str(pro_func))} "
+                               f"参数显式却返回空（{ {k: kwargs.get(k) for k in ('trade_date', 'start_date', 'end_date') if k in kwargs} }）")
+        except Exception:
+            pass  # 告警为次要，不影响主流程
+        return result
     except _cf.TimeoutError:
         logger.warning(f"  [Tushare超时] {getattr(pro_func, '__name__', str(pro_func))} "
                        f"超过 {_TS_CALL_TIMEOUT}s 未返回，跳过本次（不阻塞主循环）")
@@ -129,7 +155,7 @@ def _ts_minute(pro_func, *args, **kwargs):
 
 # ── 全局引用 ──
 _running = True
-_cleanup_done = False  # 数据清理一次性标记（日终完成后执行一次；修复 2026-08-04：原挂在 bool _running 上必然失败）
+_retention_checked = False  # 保留期检查一次性标记（日终完成后执行一次；426号 S3/D1 原 _cleanup_done 语义扩展；修复 2026-08-04：原挂在 bool _running 上必然失败）
 _ecm = None
 
 def _ensure_ecm():
@@ -221,11 +247,12 @@ def _core_data_stale() -> bool:
             if latest:
                 latest_date = (datetime.strptime(str(latest), '%Y-%m-%d')
                                if isinstance(latest, str) else latest)
-                lag_days = (today - latest_date).days
+                # 432号 R3：滞后按交易日口径（周末/节假日不计，周五数据周一开机不再误判 HIGH）
+                lag_days = _lag_trading_days(latest_date, today)
                 if lag_days > 1:
-                    logger.warning(f"  [启动补采] {label}({table}) 滞后 {lag_days} 天，需要 HIGH 补采")
+                    logger.warning(f"  [启动补采] {label}({table}) 滞后 {lag_days} 个交易日，需要 HIGH 补采")
                     return True
-                logger.debug(f"  [启动补采] {label}({table}) 滞后 {lag_days} 天 ✅")
+                logger.debug(f"  [启动补采] {label}({table}) 滞后 {lag_days} 个交易日 ✅")
         except Exception as e:
             logger.debug(f"  [启动补采] {label}时效性检查失败: {e}")
     return False
@@ -953,6 +980,8 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
     import tushare as ts
     pro = ts.pro_api()
     total = 0
+    n_skip = 0
+    target = _target_fin_period()  # 428 P1-1：本地已有目标报告期则跳过
     try:
         # 方案1：使用period参数获取最近一期（如果支持）
         if trade_date:
@@ -963,9 +992,11 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
                     for col in ['end_date', 'ann_date']:
                         if col in df.columns:
                             df[col] = pd.to_datetime(df[col]).dt.date
-                    _ecm.cache_fina_indicator_data(df)
-                    total = len(df)
-                    logger.info(f"  [财务指标] 同步 {total} 条")
+                    if _ecm.cache_fina_indicator_data(df):
+                        total = len(df)
+                        logger.info(f"  [财务指标] 同步 {total} 条")
+                    else:
+                        logger.warning("  [财务指标] period 写入失败（不计入完成数）")
                     return total
             except Exception as e:
                 logger.debug(f"  [财务指标] period参数失败，尝试逐只获取: {e}")
@@ -978,7 +1009,12 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
                 stock_codes = stocks['ts_code'].tolist()[:100]  # 限制100只股票
                 logger.info(f"  [财务指标] 逐只获取 {len(stock_codes)} 只股票")
 
+                fail = 0
                 for code in stock_codes:
+                    # 428 P1-1：本地已有目标报告期则跳过（次新股/新披露补采走 API）
+                    if _finance_covers_period('fina_indicator_cache', code, target):
+                        n_skip += 1
+                        continue
                     try:
                         df = _ts(pro.fina_indicator, ts_code=code)
                         if df is not None and not df.empty:
@@ -990,12 +1026,17 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
                                 if col in latest.columns:
                                     latest[col] = pd.to_datetime(latest[col]).dt.date
 
-                            _ecm.cache_fina_indicator_data(latest)
-                            total += 1
-                    except Exception as e:
+                            # 426号 P2-2：按写入结果计数，写失败不再虚报"完成 N 条"
+                            if _ecm.cache_fina_indicator_data(latest):
+                                total += 1
+                            else:
+                                fail += 1
+                    except Exception:
                         pass  # 跳过失败的股票
 
-                logger.info(f"  [财务指标] 逐只同步完成，共 {total} 条")
+                logger.info(f"  [财务指标] 逐只同步完成，共 {total} 条" +
+                            (f"，写入失败 {fail} 条" if fail else "") +
+                            (f"，跳过 {n_skip} 只已有最新期" if n_skip else ""))
         except Exception as e:
             logger.warning(f"  [财务指标] 获取股票列表失败: {e}")
 
@@ -1009,6 +1050,8 @@ def _find_kline_insufficient(threshold: int = 130, limit: int = 5000) -> list:
 
     策略引擎需要 ≥130 根 K 线（缠论/量价门槛），不足则机会图谱标签与
     九层解读的 K 线依赖维度同时失效。
+    432号 R5：排除非个股代码（申万指数 .SI / 测试码 .TEST / 深市指数段 399*.SZ /
+    上证指数 000*.SH / 北证指数 899*.BJ）——pro.daily 对它们必然空返回，白耗配额。
     """
     global _ecm
     if _ecm is None:
@@ -1017,7 +1060,11 @@ def _find_kline_insufficient(threshold: int = 130, limit: int = 5000) -> list:
     try:
         rows = _shard_fetchall(
             'daily_cache',
-            "SELECT ts_code, COUNT(*) cnt FROM daily_cache GROUP BY ts_code HAVING cnt < ? LIMIT ?",
+            "SELECT ts_code, COUNT(*) cnt FROM daily_cache "
+            "WHERE ts_code NOT LIKE '%.SI' AND ts_code NOT LIKE '%.TEST' "
+            "AND ts_code NOT LIKE '399%.SZ' AND ts_code NOT LIKE '000%.SH' "
+            "AND ts_code NOT LIKE '899%.BJ' "
+            "GROUP BY ts_code HAVING cnt < ? LIMIT ?",
             [threshold, limit]
         )
         return [r[0] for r in rows]
@@ -1073,42 +1120,31 @@ def _backfill_all_insufficient_kline(threshold: int = 130, max_codes: int = 200)
 
 
 def _batch_adj_factor() -> int:
-    """全市场复权因子 — 批量按 trade_date（替代逐只500次）
-    实测 pro.adj_factor(trade_date=date) 可返回全市场数据，
-    等价于逐只调用但只需 1 次 API 请求。
+    """全市场复权因子 — 批量按 trade_date（432号 R2：最近交易日多日回退）
+
+    原实现批量查询用"昨天"（周末/节假日必空）→ 恒降级逐只重采前 500 只全历史
+    （约 250 万条/次）。现按最近 N 个交易日逐日试批量，首个有数据的日期即写；
+    不再保留降级逐只路径（批量按日无数据时逐只也必然无数据，降级纯浪费配额）。
     """
     _ensure_pd()
     import tushare as ts
     pro = ts.pro_api()
-    # 用最近交易日
-    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
-    try:
-        raw = _ts(pro.adj_factor, trade_date=yesterday)
-        if raw is not None and not raw.empty:
-            df = raw.copy()
-            if 'trade_date' in df.columns:
-                df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
-            _ecm.cache_adj_factor_data(df)
-            return len(df)
-    except Exception:
-        pass
-    # 降级：逐只（仅当批量失败时）
-    codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
-    codes = [r[0] for r in codes[:500]]
-    total = 0
-    for code in codes:
+    for i in range(10):  # 最近 10 个交易日逐日试（覆盖长假期后多日缺口）
+        trade_d = _recent_trade_date(i)
+        if trade_d is None:
+            break
         try:
-            raw = _ts(pro.adj_factor, ts_code=code)
+            raw = _ts(pro.adj_factor, trade_date=trade_d)
             if raw is not None and not raw.empty:
                 df = raw.copy()
                 if 'trade_date' in df.columns:
                     df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
                 _ecm.cache_adj_factor_data(df)
-                total += len(df)
+                return len(df)
         except Exception:
             continue
-    logger.info(f"  [复权因子] 降级逐只同步 {total} 条 (共 {len(codes)} 只)")
-    return total
+    logger.info("  [复权因子] 最近交易日无数据，跳过本次补采")
+    return 0
 
 
 def _batch_top10_holders() -> int:
@@ -1332,6 +1368,69 @@ def _batch_stock_list() -> int:
         return 0
 
 
+def _target_fin_period() -> str:
+    """推导 COL-7 财务增量目标报告期（428 阶段 P1-1）
+
+    按"披露截止日已过的最新报告期"推导，而非简单的当前季度末：
+    - 1~4月    → 上年 12-31（年报，4-30 截止已过）
+    - 5~8月    → 当年 06-30（半年报，8-31 截止窗口）
+    - 9~12月   → 当年 09-30（三季报，10-31 截止已过 / 或已披露完毕）
+
+    依据：daily_cache 最新交易日所在月份决定当前已披露完成的最新报告期。
+    例：09-11 → 当年 09-30（三季报已披露）；04-15 → 上年 12-31（年报刚过截止）。
+    返回 YYYY-MM-DD 横杠格式（与存储侧 end_date 一致）。
+
+    注：若某股未按时披露，其 MAX(end_date) 停在更早期 → 会被判定需补采，逻辑自洽。
+    """
+    try:
+        latest = _shard_fetchall(
+            'daily_cache',
+            "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
+        if not latest or not latest[0] or not latest[0][0]:
+            return None
+        s = str(latest[0][0]).replace('-', '')
+        year = int(s[:4])
+        month = int(s[4:6])
+        if month <= 4:
+            # 1~4月：当年年报截止(4-30)过后，取上年 12-31 年报
+            return f'{year - 1}-12-31'
+        if month <= 7:
+            # 5~7月：半年报披露窗口（8-31截止），取当年 06-30
+            return f'{year}-06-30'
+        if month <= 10:
+            # 8~10月：三季报披露窗口（10-31截止），取当年 09-30
+            # 注：8月半年报刚截止期，实际最新仍可能是 06-30（三季报未到）——
+            # 但 8月 daily 数据多在半年报披露期内，用 09-30 会过早；改为 06-30。
+            if month == 8:
+                return f'{year}-06-30'
+            return f'{year}-09-30'
+        # 11~12月：三季报已披露完毕，取当年 09-30
+        return f'{year}-09-30'
+    except Exception as e:
+        logger.warning(f"[财务增量] 目标报告期推导失败: {e}")
+        return None
+
+
+def _finance_covers_period(table: str, code: str, target_period: str) -> bool:
+    """本地该股是否已有目标报告期数据（428 阶段 P1-1 增量跳过判定）
+
+    对 income/balancesheet/cashflow 用 MAX(end_date) == 目标报告期 判定已是最新，
+    相等则跳过该股 API 拉取（二次运行 CALL 量减 90%+）。
+    target_period 传 _target_fin_period() 返回值（YYYY-MM-DD 或 YYYYMMDD）。
+    """
+    if not target_period:
+        return False
+    try:
+        rows = _shard_fetchall(
+            table, f"SELECT MAX(end_date) FROM {table} WHERE ts_code=?", [code])
+        if not rows or rows[0][0] is None:
+            return False
+        local = str(rows[0][0]).replace('-', '')
+        target = str(target_period).replace('-', '')
+        return local == target
+    except Exception:
+        return False
+
 def _batch_income_recent(codes: list = None) -> int:
     """增量同步最近一期利润表 — 后台低优
 
@@ -1341,10 +1440,15 @@ def _batch_income_recent(codes: list = None) -> int:
     _ensure_pd()
     provider = _get_tushare_provider()
     total = 0
+    n_skip = 0
+    target = _target_fin_period()  # 428 P1-1：本地已有目标报告期则跳过
     if codes is None:
         codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
         codes = [r[0] for r in codes[:500]]  # 限500只，避免过长
     for code in codes:
+        if _finance_covers_period('income_cache', code, target):
+            n_skip += 1
+            continue
         try:
             raw = provider.get_income(code)
             # provider 返回 list（to_dict('records')），非 DataFrame
@@ -1358,7 +1462,9 @@ def _batch_income_recent(codes: list = None) -> int:
                 total += len(df)
         except Exception:
             continue
-    logger.info(f"  [利润表] 增量同步 {total} 条 (共 {len(codes)} 只)")
+    logger.info(f"  [利润表] 增量同步 {total} 条 (共 {len(codes)} 只"
+                + (f"，跳过 {n_skip} 只已有最新期" if n_skip else ")")
+                + ")")
     return total
 
 
@@ -1371,10 +1477,15 @@ def _batch_balancesheet(codes: list = None) -> int:
     _ensure_pd()
     provider = _get_tushare_provider()
     total = 0
+    n_skip = 0
+    target = _target_fin_period()  # 428 P1-1
     if codes is None:
         codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
         codes = [r[0] for r in codes[:500]]
     for code in codes:
+        if _finance_covers_period('balancesheet_cache', code, target):
+            n_skip += 1
+            continue
         try:
             raw = provider.get_balancesheet(code)
             # provider 返回 list（to_dict('records')），非 DataFrame
@@ -1387,7 +1498,9 @@ def _batch_balancesheet(codes: list = None) -> int:
                 total += len(df)
         except Exception:
             continue
-    logger.info(f"  [资产负债表] 同步 {total} 条 (共 {len(codes)} 只)")
+    logger.info(f"  [资产负债表] 同步 {total} 条 (共 {len(codes)} 只"
+                + (f"，跳过 {n_skip} 只已有最新期" if n_skip else ")")
+                + ")")
     return total
 
 
@@ -1400,10 +1513,15 @@ def _batch_cashflow(codes: list = None) -> int:
     _ensure_pd()
     provider = _get_tushare_provider()
     total = 0
+    n_skip = 0
+    target = _target_fin_period()  # 428 P1-1
     if codes is None:
         codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
         codes = [r[0] for r in codes[:500]]
     for code in codes:
+        if _finance_covers_period('cashflow_cache', code, target):
+            n_skip += 1
+            continue
         try:
             raw = provider.get_cashflow(code)
             # provider 返回 list（to_dict('records')），非 DataFrame
@@ -1416,7 +1534,9 @@ def _batch_cashflow(codes: list = None) -> int:
                 total += len(df)
         except Exception:
             continue
-    logger.info(f"  [现金流量表] 同步 {total} 条 (共 {len(codes)} 只)")
+    logger.info(f"  [现金流量表] 同步 {total} 条 (共 {len(codes)} 只"
+                + (f"，跳过 {n_skip} 只已有最新期" if n_skip else ")")
+                + ")")
     return total
 
 
@@ -1539,7 +1659,10 @@ def run_integrity_check(backfill_days: int = 1):
     for offset in range(0, backfill_days):
         d = (datetime.now() - timedelta(days=offset))
         ds = d.strftime('%Y-%m-%d')
-        if d.weekday() >= 5:
+        if not _is_trading_day(d):  # 跳过周末与法定节假日（432号 R4）
+            continue
+        if offset == 0 and not _is_today_data_ready():
+            # 432号 R4：今日指数数据未发布（<18:00），跳过今日检查（历史日期不受限）
             continue
         try:
             cnt = _query_table('daily_cache',
@@ -1572,14 +1695,18 @@ def run_integrity_check(backfill_days: int = 1):
         logger.warning(f"  概念检查失败: {e}")
 
     # 龙虎榜席位明细（278号方案独立检查：lhb_detail_cache）
+    # 432号 R4：当日数据未发布（盘前/非交易日）不检查——top_inst 盘后才发布，盘前必空
     try:
-        detail_cnt = _check_count('lhb_detail_cache', today_fmt) if today_fmt else 0
-        if detail_cnt == 0:
-            logger.info("  [龙虎榜席位] 今日无数据，补采...")
-            detail_added = _batch_lhb_detail(today)
-            logger.info(f"    → 补采 {detail_added} 条")
+        if not _is_today_data_ready():
+            logger.info("  [龙虎榜席位] 当日数据未发布（<18:00 或非交易日），跳过")
         else:
-            logger.info(f"  [龙虎榜席位] {detail_cnt} 行 ✅")
+            detail_cnt = _check_count('lhb_detail_cache', today_fmt) if today_fmt else 0
+            if detail_cnt == 0:
+                logger.info("  [龙虎榜席位] 今日无数据，补采...")
+                detail_added = _batch_lhb_detail(today)
+                logger.info(f"    → 补采 {detail_added} 条")
+            else:
+                logger.info(f"  [龙虎榜席位] {detail_cnt} 行 ✅")
     except Exception as e:
         logger.warning(f"  龙虎榜席位检查失败: {e}")
 
@@ -1645,31 +1772,31 @@ def run_integrity_check(backfill_days: int = 1):
         except Exception as e:
             logger.warning(f"  [{label}] 检查失败: {e}")
 
-    # adj_factor单独检查：空表或时效性滞后>3天时触发补采（356号：从分库读取）
+    # adj_factor单独检查：空表或时效性滞后>3个交易日时触发补采
+    # 432号 R1：改读分年表 adj_factor_cache_YYYY（356号拆分后写入只落分年表，
+    # 主表 adj_factor_cache 自拆分起停更——读主表 MAX(trade_date) 恒滞后 → 每次
+    # 开机/巡检触发 _batch_adj_factor 全历史重采约 250 万条）
     try:
-        adj_cnt = _query_table('adj_factor_cache', "SELECT COUNT(*) FROM adj_factor_cache")
-        if adj_cnt == 0:
-            logger.info("  [复权因子] 空表，触发补采...")
+        adj_latest = _get_adj_latest_date()
+        if adj_latest is None:
+            logger.info("  [复权因子] 无分年表数据，触发补采...")
             added = _batch_adj_factor()
             logger.info(f"    → 补采 {added} 条")
         else:
-            adj_latest = _query_table('adj_factor_cache', "SELECT MAX(trade_date) FROM adj_factor_cache")
-            if adj_latest:
-                from datetime import datetime as _dt
-                # 兼容 YYYYMMDD 和 YYYY-MM-DD 两种日期格式
-                _date_str = str(adj_latest).replace('-', '')
-                latest_date = _dt.strptime(_date_str, '%Y%m%d')
-                _today_str = today.replace('-', '') if isinstance(today, str) else _dt.now().strftime('%Y%m%d')
-                today_date = _dt.strptime(_today_str, '%Y%m%d')
-                days_lag = (today_date - latest_date).days
-                if days_lag > 3:
-                    logger.info(f"  [复权因子] 滞后 {days_lag} 天（阈值3天），触发补采...")
-                    added = _batch_adj_factor()
-                    logger.info(f"    → 补采 {added} 条")
-                else:
-                    logger.info(f"  [复权因子] {adj_cnt} 行，最新 {adj_latest} ✅")
+            from datetime import datetime as _dt
+            # 兼容 YYYYMMDD 和 YYYY-MM-DD 两种日期格式
+            _date_str = str(adj_latest).replace('-', '')
+            latest_date = _dt.strptime(_date_str, '%Y%m%d')
+            _today_str = today.replace('-', '') if isinstance(today, str) else _dt.now().strftime('%Y%m%d')
+            today_date = _dt.strptime(_today_str, '%Y%m%d')
+            # 432号 R3：滞后按交易日口径（周末/节假日不计）
+            days_lag = _lag_trading_days(latest_date, today_date)
+            if days_lag > 3:
+                logger.info(f"  [复权因子] 滞后 {days_lag} 个交易日（阈值3天），触发补采...")
+                added = _batch_adj_factor()
+                logger.info(f"    → 补采 {added} 条")
             else:
-                logger.info(f"  [复权因子] {adj_cnt} 行 ✅")
+                logger.info(f"  [复权因子] 最新 {adj_latest}，滞后 {days_lag} 个交易日 ✅")
     except Exception as e:
         logger.warning(f"  [复权因子] 检查失败: {e}")
 
@@ -1688,12 +1815,13 @@ def run_integrity_check(backfill_days: int = 1):
         except Exception as e:
             logger.warning(f"  [{label}] 检查失败: {e}")
 
-    # 检查今日数据（非交易日跳过，数据量必然为0）
-    _is_weekday = datetime.now().weekday() < 5
-    if not _is_weekday:
-        logger.info("  今日为非交易日，跳过今日数据检查")
+    # 检查今日数据（432号 R4：仅"交易日且当日数据已发布"后检查——
+    # Tushare 日线一般 17-18 点才发布，盘前/盘中检查当日必然空返回；节假日亦跳过）
+    _today_checkable = _is_today_data_ready()
+    if not _today_checkable:
+        logger.info("  今日数据检查：非交易日或当日数据未发布（<18:00），跳过")
     for table, batch_fn, threshold, label in checks:
-        if not _is_weekday:
+        if not _today_checkable:
             continue
         cnt = _check_count(table, today_fmt)
         if cnt < threshold:
@@ -1712,7 +1840,7 @@ def run_integrity_check(backfill_days: int = 1):
             d = (datetime.now() - timedelta(days=offset))
             ds = d.strftime('%Y%m%d')
             df = d.strftime('%Y-%m-%d')
-            if d.weekday() >= 5:  # 跳过周末
+            if not _is_trading_day(d):  # 跳过周末与法定节假日（432号 R4）
                 continue
             for table, batch_fn, threshold, label in checks:
                 cnt = _check_count(table, df)
@@ -1813,11 +1941,12 @@ def _check_data_timeliness():
             latest = _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
             if latest:
                 latest_date = datetime.strptime(str(latest), '%Y-%m-%d') if isinstance(latest, str) else latest
-                days_lag = (today - latest_date).days
+                # 432号 R3：滞后按交易日口径（周末/节假日不计，周五数据周一不再误告警）
+                days_lag = _lag_trading_days(latest_date, today)
                 if days_lag > 1:
-                    logger.warning(f"  [时效性] {label}({table}) 滞后 {days_lag} 天")
+                    logger.warning(f"  [时效性] {label}({table}) 滞后 {days_lag} 个交易日")
                 else:
-                    logger.debug(f"  [时效性] {label}({table}) 滞后 {days_lag} 天 ✅")
+                    logger.debug(f"  [时效性] {label}({table}) 滞后 {days_lag} 个交易日 ✅")
         except Exception as e:
             logger.debug(f"  {label}时效性检查失败: {e}")
 
@@ -1829,14 +1958,19 @@ def _check_data_timeliness():
 
     for table, label in supplement_tables:
         try:
-            latest = _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
+            # 432号 R1：复权因子读分年表（主表自拆分起停更，读主表恒滞后）
+            if table == 'adj_factor_cache':
+                latest = _get_adj_latest_date()
+            else:
+                latest = _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
             if latest:
                 latest_date = datetime.strptime(str(latest), '%Y-%m-%d') if isinstance(latest, str) else latest
-                days_lag = (today - latest_date).days
+                # 432号 R3：滞后按交易日口径（周末/节假日不计）
+                days_lag = _lag_trading_days(latest_date, today)
                 if days_lag > 7:
-                    logger.warning(f"  [时效性] {label}({table}) 滞后 {days_lag} 天")
+                    logger.warning(f"  [时效性] {label}({table}) 滞后 {days_lag} 个交易日")
                 else:
-                    logger.debug(f"  [时效性] {label}({table}) 滞后 {days_lag} 天 ✅")
+                    logger.debug(f"  [时效性] {label}({table}) 滞后 {days_lag} 个交易日 ✅")
         except Exception as e:
             logger.debug(f"  {label}时效性检查失败: {e}")
 
@@ -2323,49 +2457,89 @@ def _precompute_sector_heat(codes):
             logger.warning("无交易日数据，跳过板块热度写盘")
             return
         # 独立短连接写盘（避免与主循环写锁竞争）
-        import sqlite3 as _sqlite3
+        # 426号 P1-2：sector_heat_cache 已登记 compute_cache.db 路由，
+        # 写盘改走分库连接（原直连 _ecm.db_path 总库空壳，读方已切分库路由）。
+        from app.data.sharding_manager import sharding_manager as _sh_mgr
+        _sh_db = _sh_mgr.get_db_for_table('sector_heat_cache')
         try:
-            conn = _sqlite3.connect(_ecm.db_path, timeout=10)
-            conn.execute("PRAGMA busy_timeout=10000")
-            conn.execute("DELETE FROM sector_heat_cache WHERE stat_date = ?", [_sh_date])
-            rows = [
-                (_sh_date, ind,
-                 str(info.get('heat_level', 'none')),
-                 float(info.get('strength', 0.0)),
-                 int(info.get('rank', -1)),
-                 int(info.get('stock_count', 0)))
-                for ind, info in _sh.items()
-            ]
-            conn.executemany(
-                "INSERT INTO sector_heat_cache "
-                "(stat_date, industry, heat_level, strength, rank, stock_count) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                rows
-            )
-            conn.commit()
-            conn.close()
-            logger.info(f"板块热度持久化完成: {len(rows)} 个行业 (stat_date={_sh_date})")
+            conn = _sh_mgr.get_connection(_sh_db)
+            lock = _sh_mgr.get_write_lock(_sh_db)
+            with lock:
+                conn.execute("DELETE FROM sector_heat_cache WHERE stat_date = ?", [_sh_date])
+                rows = [
+                    (_sh_date, ind,
+                     str(info.get('heat_level', 'none')),
+                     float(info.get('strength', 0.0)),
+                     int(info.get('rank', -1)),
+                     int(info.get('stock_count', 0)))
+                    for ind, info in _sh.items()
+                ]
+                conn.executemany(
+                    "INSERT INTO sector_heat_cache "
+                    "(stat_date, industry, heat_level, strength, rank, stock_count) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    rows
+                )
+                conn.commit()
+            logger.info(f"板块热度持久化完成: {len(rows)} 个行业 (stat_date={_sh_date}, db={_sh_db})")
         except Exception as e:
             logger.warning(f"板块热度写盘失败: {e}")
 
 
-def _precompute_market_stats():
+def _precompute_market_stats(target_date: str | None = None):
     """411号Phase 10：全市场级统计预计算
 
-    计算BociasiQuadrantAnalyzer所需的6个全市场级指标，写入_market_stats_cache。
-    每日盘后执行一次，避免每只股票重复查询。
+    426号 P0-1 修复：7 项源查询改走分库路由（_shard_fetchall），源表空壳/
+    无当日数据时统计项置 None 显式标记——任一统计项无源数据即告警且不落库，
+    不再写入兜底常量（原实现读总库空壳表返回空集 → else 兜底 0.5/0.1，
+    造成格式正确、结果错误的假数据入库并经 RAW-2 污染 pre_feat_cache）。
+
+    target_date：统计目标交易日（'YYYY-MM-DD'），默认昨日（daily 数据锚 T-1）。
     """
     global _market_stats_cache
     _ensure_ecm()
     try:
         from datetime import datetime, timedelta
-        conn = _ecm.conn
-        today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        stats = {}
+        today = target_date or (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        stats: dict[str, object] = {}
+        _row_counts: dict[str, int] = {}
 
-        # 1. MA20强势股占比
-        try:
-            row = conn.execute("""
+        def _missing(table: str) -> bool:
+            """源表空壳/未登记检测（分库口径 0 行 → 告警，防 _shard_fetchall 静默降级总库）"""
+            if table in _row_counts:
+                return _row_counts[table] <= 0
+            from app.data.sharding_manager import sharding_manager
+            try:
+                n = sharding_manager.get_table_row_count(table)
+            except Exception as e:
+                logger.warning(f"426 P0-1 源表行数检测失败 {table}: {e}")
+                n = 0
+            _row_counts[table] = n
+            if n <= 0:
+                logger.warning(f"426 P0-1 源表为空壳或未登记: {table}（分库行数={n}）")
+            return n <= 0
+
+        def _run(name: str, table: str, fn) -> None:
+            """执行单项市场统计；无源数据/异常 → None 显式标记（命中兜底即告警）"""
+            if _missing(table):
+                stats[name] = None
+                return
+            try:
+                val = fn()
+                stats[name] = val
+                if val is None:
+                    logger.warning(f"426 P0-1 {name} 无 {today} 日源数据（置 None，不落库）")
+            except Exception as e:
+                logger.warning(f"426 P0-1 {name} 计算失败: {e}")
+                stats[name] = None
+
+        # 1. MA20强势股占比（daily_cache → market_cache.db 分库）
+        # 426号 阶段三复核：原查询在窗口函数子查询内先 WHERE trade_date=? 过滤，
+        # 每只股票仅剩当日 1 行 → SMA_20=当日 close → close>SMA_20 恒 False →
+        # ma20_ratio 恒 0.0（P0-1 修复的隐藏残留假值）。窗口须在全历史计算后
+        # 再按当日过滤（正确口径 09-11 = 0.252）。
+        def _ma20_ratio():
+            rows = _shard_fetchall('daily_cache', """
                 SELECT COUNT(*) as total,
                        SUM(CASE WHEN close > SMA_20 THEN 1 ELSE 0 END) as above
                 FROM (
@@ -2373,130 +2547,140 @@ def _precompute_market_stats():
                            AVG(close) OVER (PARTITION BY ts_code ORDER BY trade_date
                                 ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) as SMA_20
                     FROM daily_cache
-                    WHERE trade_date = ?
                 )
-            """, [today]).fetchone()
-            if row and row[0] and row[0] > 0:
-                stats['ma20_ratio'] = (row[1] or 0) / row[0]
-            else:
-                stats['ma20_ratio'] = 0.5
-        except Exception:
-            stats['ma20_ratio'] = 0.5
+                WHERE trade_date = ?
+            """, [today])
+            if not rows or not rows[0] or not rows[0][0] or rows[0][0] <= 0:
+                return None
+            return (rows[0][1] or 0) / rows[0][0]
+        _run('ma20_ratio', 'daily_cache', _ma20_ratio)
 
-        # 2. 换手率分位
-        try:
-            row = conn.execute("SELECT AVG(turnover_rate) FROM daily_basic_cache WHERE trade_date=?", [today]).fetchone()
-            if row and row[0] is not None:
-                avg_turnover = float(row[0])
-                hist = conn.execute("SELECT AVG(turnover_rate) FROM daily_basic_cache WHERE trade_date >= date(?, '-60 days')", [today]).fetchone()
-                hist_avg = float(hist[0]) if hist and hist[0] else avg_turnover
-                stats['turnover_percentile'] = max(0, min(1, avg_turnover / hist_avg)) if hist_avg > 0 else 0.5
-            else:
-                stats['turnover_percentile'] = 0.5
-        except Exception:
-            stats['turnover_percentile'] = 0.5
+        # 2. 换手率分位（daily_basic_cache → market_cache.db 分库）
+        def _turnover_percentile():
+            rows = _shard_fetchall('daily_basic_cache',
+                "SELECT AVG(turnover_rate) FROM daily_basic_cache WHERE trade_date=?", [today])
+            if not rows or rows[0][0] is None:
+                return None
+            avg_turnover = float(rows[0][0])
+            hist = _shard_fetchall('daily_basic_cache',
+                "SELECT AVG(turnover_rate) FROM daily_basic_cache WHERE trade_date >= date(?, '-60 days')",
+                [today])
+            hist_avg = float(hist[0][0]) if hist and hist[0][0] else avg_turnover
+            if hist_avg <= 0:
+                return None
+            return max(0, min(1, avg_turnover / hist_avg))
+        _run('turnover_percentile', 'daily_basic_cache', _turnover_percentile)
 
-        # 3. 涨跌停比
-        try:
-            row = conn.execute("""
+        # 3. 涨跌停比（daily_cache JOIN stk_limit_cache → market_cache.db 分库）
+        def _limit_ratio():
+            rows = _shard_fetchall('daily_cache', """
                 SELECT
                     SUM(CASE WHEN high_limit = close THEN 1 ELSE 0 END) as up,
                     SUM(CASE WHEN low_limit = close THEN 1 ELSE 0 END) as down
                 FROM daily_cache d
                 JOIN stk_limit_cache l ON d.ts_code=l.ts_code AND d.trade_date=l.trade_date
                 WHERE d.trade_date = ?
-            """, [today]).fetchone()
-            if row:
-                up = float(row[0] or 0)
-                down = float(row[1] or 0)
-                stats['limit_ratio'] = max(0.1, up / max(down, 1))
-            else:
-                stats['limit_ratio'] = 1.0
-        except Exception:
-            stats['limit_ratio'] = 1.0
+            """, [today])
+            if not rows or not rows[0] or (rows[0][0] is None and rows[0][1] is None):
+                return None
+            up = float(rows[0][0] or 0)
+            down = float(rows[0][1] or 0)
+            return max(0.1, up / max(down, 1))
+        _run('limit_ratio', 'daily_cache', _limit_ratio)
 
-        # 4. RSI中位数分位
-        try:
-            row = conn.execute("SELECT AVG(rsi14) FROM indicator_other WHERE trade_date=? AND rsi14 IS NOT NULL", [today]).fetchone()
-            if row and row[0] is not None:
-                avg_rsi = float(row[0])
-                hist = conn.execute("SELECT AVG(rsi14) FROM indicator_other WHERE trade_date >= date(?, '-60 days') AND rsi14 IS NOT NULL", [today]).fetchone()
-                hist_avg = float(hist[0]) if hist and hist[0] else 50.0
-                stats['rsi_percentile'] = max(0, min(1, (avg_rsi - 30) / 40))
-            else:
-                stats['rsi_percentile'] = 0.5
-        except Exception:
-            stats['rsi_percentile'] = 0.5
+        # 4. RSI中位数分位（indicator_other → compute_cache.db 分库）
+        def _rsi_percentile():
+            rows = _shard_fetchall('indicator_other',
+                "SELECT AVG(rsi14) FROM indicator_other WHERE trade_date=? AND rsi14 IS NOT NULL", [today])
+            if not rows or rows[0][0] is None:
+                return None
+            avg_rsi = float(rows[0][0])
+            hist = _shard_fetchall('indicator_other',
+                "SELECT AVG(rsi14) FROM indicator_other WHERE trade_date >= date(?, '-60 days') AND rsi14 IS NOT NULL",
+                [today])
+            hist_avg = float(hist[0][0]) if hist and hist[0][0] else 50.0
+            if hist_avg <= 0:
+                return None
+            return max(0, min(1, (avg_rsi - 30) / 40))
+        _run('rsi_percentile', 'indicator_other', _rsi_percentile)
 
-        # 5. ERP分位
-        try:
-            row = conn.execute("SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0", [today]).fetchone()
-            if row and row[0] is not None:
-                avg_pe = float(row[0])
-                erp_today = (1 / avg_pe) if avg_pe > 0 else 0
-                hist = conn.execute("SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0", [today]).fetchone()
-                hist_pe = float(hist[0]) if hist and hist[0] else avg_pe
-                erp_hist = (1 / hist_pe) if hist_pe > 0 else 0
-                if erp_hist > 0:
-                    stats['erp_percentile'] = max(0, min(1, erp_today / erp_hist))
-                else:
-                    stats['erp_percentile'] = 0.5
-            else:
-                stats['erp_percentile'] = 0.5
-        except Exception:
-            stats['erp_percentile'] = 0.5
+        # 5. ERP分位（daily_basic_cache → market_cache.db 分库）
+        def _erp_percentile():
+            rows = _shard_fetchall('daily_basic_cache',
+                "SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0", [today])
+            if not rows or rows[0][0] is None:
+                return None
+            avg_pe = float(rows[0][0])
+            erp_today = (1 / avg_pe) if avg_pe > 0 else 0
+            hist = _shard_fetchall('daily_basic_cache',
+                "SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0",
+                [today])
+            hist_pe = float(hist[0][0]) if hist and hist[0][0] else avg_pe
+            erp_hist = (1 / hist_pe) if hist_pe > 0 else 0
+            if erp_hist <= 0:
+                return None
+            return max(0, min(1, erp_today / erp_hist))
+        _run('erp_percentile', 'daily_basic_cache', _erp_percentile)
 
-        # 6. 融资余额趋势
-        try:
-            recent = conn.execute("""
+        # 6. 融资余额趋势（margin_cache → market_cache.db 分库）
+        def _margin_trend():
+            recent = _shard_fetchall('margin_cache', """
                 SELECT trade_date, SUM(rzye) as total
                 FROM margin_cache
-                WHERE trade_date >= ?
+                WHERE trade_date >= date(?, '-10 days')
                 GROUP BY trade_date ORDER BY trade_date DESC LIMIT 5
-            """, [(datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')]).fetchall()
-            if len(recent) >= 2:
-                latest = float(recent[0][1])
-                oldest = float(recent[-1][1])
-                if oldest > 0:
-                    change_pct = (latest - oldest) / oldest
-                    stats['margin_trend'] = max(0, min(1, 0.5 + change_pct * 10))
-                else:
-                    stats['margin_trend'] = 0.5
-            else:
-                stats['margin_trend'] = 0.5
-        except Exception:
-            stats['margin_trend'] = 0.5
+            """, [today])
+            if len(recent) < 2:
+                return None
+            latest = float(recent[0][1])
+            oldest = float(recent[-1][1])
+            if oldest <= 0:
+                return None
+            change_pct = (latest - oldest) / oldest
+            return max(0, min(1, 0.5 + change_pct * 10))
+        _run('margin_trend', 'margin_cache', _margin_trend)
 
-        # 7. PE分位
-        try:
-            row = conn.execute("SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0", [today]).fetchone()
-            if row and row[0] is not None:
-                avg_pe = float(row[0])
-                hist = conn.execute("SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0", [today]).fetchone()
-                hist_pe = float(hist[0]) if hist and hist[0] else avg_pe
-                if hist_pe > 0:
-                    stats['pe_percentile'] = max(0, min(1, avg_pe / hist_pe))
-                else:
-                    stats['pe_percentile'] = 0.5
-            else:
-                stats['pe_percentile'] = 0.5
-        except Exception:
-            stats['pe_percentile'] = 0.5
+        # 7. PE分位（daily_basic_cache → market_cache.db 分库）
+        def _pe_percentile():
+            rows = _shard_fetchall('daily_basic_cache',
+                "SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0", [today])
+            if not rows or rows[0][0] is None:
+                return None
+            avg_pe = float(rows[0][0])
+            hist = _shard_fetchall('daily_basic_cache',
+                "SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0",
+                [today])
+            hist_pe = float(hist[0][0]) if hist and hist[0][0] else avg_pe
+            if hist_pe <= 0:
+                return None
+            return max(0, min(1, avg_pe / hist_pe))
+        _run('pe_percentile', 'daily_basic_cache', _pe_percentile)
 
         stats['computed_at'] = today
+        # 任一统计项无源数据 → 告警且不落库（426号 P0-1：假值禁止入库/注入 RAW-2）
+        _missing_items = [k for k, v in stats.items() if v is None and k != 'computed_at']
+        if _missing_items:
+            logger.warning(f"426 P0-1 市场级统计存在无源数据项: {_missing_items}，本次不落库、不注入RAW-2")
+            _market_stats_cache = {}
+            return
         _market_stats_cache = stats
         # 414号R8: 持久化到SQLite，daemon重启后可恢复
+        # 局部引用并判空窄化（_ecm 全局为 Optional，避免 union-attr 类型告警）
+        _ecm_ref = _ecm
+        if _ecm_ref is None:
+            logger.warning("市场级统计持久化跳过: ECM 未初始化")
+            return
         try:
-            _ecm.cache_market_stats(stats)
+            _ecm_ref.cache_market_stats(stats)
         except Exception as e:
             logger.warning(f"市场级统计持久化失败: {e}")
-        logger.info(f"市场级统计预计算完成: {len(stats)}个指标")
+        logger.info(f"市场级统计预计算完成: {len(stats)}个指标（{today}）")
 
     except Exception as e:
         logger.warning(f"市场级统计预计算失败: {e}")
 
 
-def _precompute_raw_features(codes):
+def _precompute_raw_features(codes, target_date: str | None = None):
     """原料加工环节：特征提取（RAW-2 FEAT）→ 写入 pre_feat_cache
 
     357号方案：从 _precompute_l2_labels 中提取纯原料加工步骤，
@@ -2507,6 +2691,10 @@ def _precompute_raw_features(codes):
 
     Args:
         codes: 股票代码列表
+        target_date: 426号 P1-3 回补参数——限定特征计算的目标交易日
+            （'YYYY-MM-DD'）。提供时每只股票的日线在计算前截断到该日，
+            trade_date 取该日，用于定向回补历史缺口（08-31~09-08 等）。
+            缺省时保持原行为（每只股票取自身最新交易日）。
     """
     _ensure_pd()
     if not codes:
@@ -2650,434 +2838,456 @@ def _precompute_raw_features(codes):
         commit_count = 0
         BATCH_SIZE = 500
         trade_date = None
+        _progress_n = 0  # 428 P1-2 动作②：每 500 只输出一次进度日志（诊断慢股票）
+
+        def _raw2_one(code):
+            nonlocal trade_date
+            df = all_data.get(code)
+            if df is None or df.empty or len(df) < 5:
+                return ({}, trade_date)  # 数据不足，外层静默跳过
+            # 426号 P1-3：回补时按 target_date 截断（特征按当日口径计算，
+            # trade_date 收敛为目标日；正常管道 target_date=None 行为不变）
+            if target_date:
+                df = df[df['trade_date'].astype(str).str[:10] <= target_date]
+                if df.empty or len(df) < 5:
+                    return ({}, trade_date)  # 数据不足，外层静默跳过
+            if trade_date is None:
+                trade_date = str(df['trade_date'].iloc[-1])[:10]
+
+            features = {}
+
+            # 1. 估值特征（17字段）
+            try:
+                v_tags = ve.compute_tags(code)
+                if v_tags:
+                    features['valuation'] = {k: v for k, v in v_tags.items()
+                        if k in ('pe_percentile', 'pb_percentile', 'ps_percentile',
+                                 'pe_percentile_5y', 'pb_percentile_5y', 'ps_percentile_5y',
+                                 'valuation_level', 'valuation_deviation',
+                                 'fcf_yield', 'dividend_yield', 'composite_rating',
+                                 'revenue_growth', 'roe', 'fina_health',
+                                 'asset_anchor_rating', 'earnings_anchor_rating',
+                                 'cashflow_anchor_rating', 'adjusted_anchor_rating')}
+            except Exception as e:
+                logger.warning(f"RAW估值特征失败 [{code}]: {e}")
+
+            # 2. 情绪特征（2字段：sentiment_phase + bociasi_signal）
+            try:
+                _sent = {}
+                # sentiment_phase：始终写入（默认neutral）
+                try:
+                    sentiment = ms.get_sentiment_phase()
+                    if sentiment.get('data_available'):
+                        _sent['sentiment_phase'] = sentiment['phase']
+                    else:
+                        _sent['sentiment_phase'] = _sentiment_phase_global or 'neutral'
+                except Exception:
+                    _sent['sentiment_phase'] = _sentiment_phase_global or 'neutral'
+                # bociasi_signal：跨市场资金情绪（读HS300指数）
+                try:
+                    from app.services.benchmark_service import BenchmarkService
+                    bm = BenchmarkService()
+                    idx_df = bm.get_index_daily('000300.SH')
+                    if idx_df is not None and len(idx_df) >= 20:
+                        idx_close = idx_df['close'].values
+                        fast = float(np.mean(idx_close[-5:]))
+                        slow = float(np.mean(idx_close[-20:]))
+                        _sent['bociasi_signal'] = 'bullish' if fast > slow else 'bearish'
+                    else:
+                        _sent['bociasi_signal'] = 'neutral'
+                except Exception:
+                    _sent['bociasi_signal'] = 'neutral'
+                features['sentiment'] = _sent
+            except Exception as e:
+                logger.warning(f"RAW情绪特征失败 [{code}]: {e}")
+
+            # 3. 板块特征（4字段）
+            try:
+                sector = sr.evaluate(code)
+                features['sector'] = {
+                    'sector_heat': sector.get('sector_heat', 0),
+                    'sector_momentum': sector.get('sector_momentum', 0),
+                    'sector_rank': sector.get('sector_rank', 0),
+                    'is_sector_leader': sector.get('is_sector_leader', False),
+                }
+            except Exception as e:
+                logger.warning(f"RAW板块特征失败 [{code}]: {e}")
+
+            # 4. 风格特征（2字段：style_exposure + size_factor）
+            try:
+                style = _compute_style_exposure(code, {}, df)
+                _sz = 'unknown'
+                try:
+                    _db = _ecm.get_cached_daily_basic(code)
+                    if _db is not None and not _db.empty and 'circ_mv' in _db.columns:
+                        circ = float(_db['circ_mv'].iloc[-1] or 0)
+                        if circ > 5e10:
+                            _sz = 'large_cap'
+                        elif circ > 1e10:
+                            _sz = 'mid_cap'
+                        else:
+                            _sz = 'small_cap'
+                except Exception:
+                    pass
+                features['style'] = {
+                    'style_exposure': style if isinstance(style, str) else 'balanced',
+                    'size_factor': _sz,
+                }
+            except Exception as e:
+                logger.warning(f"RAW风格特征失败 [{code}]: {e}")
+
+            # 5. 时间特征（3字段）
+            if len(df) >= 30:
+                try:
+                    tr_tags = tre.compute_tags(df)
+                    if tr_tags:
+                        features['timing'] = {k: v for k, v in tr_tags.items()
+                            if k in ('time_rhythm', 'cycle_position', 'turnover_signal')}
+                except Exception as e:
+                    logger.warning(f"RAW时间特征失败 [{code}]: {e}")
+
+            # 6. 量价特征（6字段）
+            if len(df) >= 20:
+                try:
+                    vp_tags = vps._detect_kline_patterns(df)
+                    _simple = {}
+                    _add_vp_simple_tags(df, _simple)
+                    features['volume_price'] = {
+                        'kline_pattern': vp_tags.get('pattern_signal', 'none'),
+                        'ma_alignment': _simple.get('ma_alignment', 'neutral'),
+                        'volume_price_fit': _simple.get('volume_price_fit', 'neutral'),
+                        'gap_type': _simple.get('gap_type', 'none'),
+                        'breakout_attempts': _simple.get('breakout_attempts', 0),
+                        'volume_ratio': _simple.get('volume_ratio', 1.0),
+                    }
+                except Exception as e:
+                    logger.warning(f"RAW量价特征失败 [{code}]: {e}")
+
+            # 7. 缠论特征（5字段）
+            if len(df) >= 30:
+                try:
+                    from app.engine.framework.chanlun_strategy import ChanlunAnalyzer
+                    cl = ChanlunAnalyzer()
+                    cl_result = cl.analyze(df)
+                    cl_tags = _get_chanlun_tags(cl_result)
+                    features['chanlun'] = {k: v for k, v in (cl_tags or {}).items()
+                        if k in ('trend_direction', 'zhongshu_count', 'buy_sell_point',
+                                 'bi_count', 'duan_count')}
+                except Exception as e:
+                    logger.warning(f"RAW缠论特征失败 [{code}]: {e}")
+
+            # 8. 筹码特征（4字段）
+            if len(df) >= 30:
+                try:
+                    chip_tags = cde.get_tags(df)
+                    features['chip'] = {k: v for k, v in (chip_tags or {}).items()
+                        if k in ('chip_position', 'chip_concentration', 'asr', 'cyqkl')}
+                except Exception as e:
+                    logger.warning(f"RAW筹码特征失败 [{code}]: {e}")
+
+            # 9. 事件特征（5字段，含dim6消费的event_details/event_risk_factors）
+            try:
+                _evt_tags = {}
+                _update_with_event_tags(code, _evt_tags)
+                features['event'] = {
+                    'catalyst_event': _evt_tags.get('catalyst_event', 'none'),
+                    'catalyst_impact': _evt_tags.get('catalyst_impact', 'neutral'),
+                    'event_composite_score': _evt_tags.get('event_composite_score', 0),
+                    'event_details': _evt_tags.get('event_details', []),
+                    'event_risk_factors': _evt_tags.get('event_risk_factors', []),
+                }
+            except Exception as e:
+                logger.warning(f"RAW事件特征失败 [{code}]: {e}")
+
+            # 10. 深度字段（8字段，独立调用不依赖 phase_detector）
+            try:
+                _depth = {}
+                _depth.update(extract_chanlun_deep_tags(code))
+                _depth.update(extract_chip_deep_tags(code))
+                _depth.update(extract_fund_risk_tags(code))
+                features['depth'] = {
+                    'hold_float_ratio': _depth.get('hold_float_ratio'),
+                    'turnover_rate': _depth.get('turnover_rate'),
+                    'main_force_phase': _depth.get('main_force_phase'),
+                    'phase_confidence': _depth.get('phase_confidence'),
+                    'fund_flow': _depth.get('fund_flow'),
+                    'capital_nature': _depth.get('capital_nature'),
+                    'main_force_presence': _depth.get('main_force_presence'),
+                    'presence_evidence': _depth.get('presence_evidence'),
+                }
+            except Exception as e:
+                logger.warning(f"RAW深度字段失败 [{code}]: {e}")
+
+            # 预提取各特征组引用（供后续扩展字段使用）
+            _cl = features.get('chanlun', {})
+            _vp_f = features.get('volume_price', {})
+            _chip_f = features.get('chip', {})
+            _depth_f = features.get('depth', {})
+
+            # 11. 衍生特征（从已有特征组中提取下游消费方需要的扁平key）
+            try:
+                _derived = {}
+                _val = features.get('valuation', {})
+                # 位置维
+                _derived['price_position'] = 'low_zone' if _cl.get('buy_sell_point', '') in ('first_buy', 'second_buy') else ('high_zone' if _cl.get('buy_sell_point', '') in ('first_sell', 'second_sell') else 'mid')
+                _derived['support_resistance'] = _depth_f.get('support_resistance', '{}')
+                # 风险维
+                _derived['volatility_level'] = _vp_f.get('volume_ratio', 1.0) and ('high' if abs(float(_vp_f.get('volume_ratio', 1.0) or 1) - 1) > 0.5 else 'low')
+                _derived['risk_level'] = 'HIGH' if _depth_f.get('main_force_phase') == 'shipping' else 'LOW'
+                # 信号确认
+                _derived['right_side_confirm'] = 'strong_confirm' if _cl.get('buy_sell_point', '') in ('first_buy', 'second_buy') and _vp_f.get('volume_price_fit') == 'healthy' else 'unconfirmed'
+                _derived['pattern_signal'] = _vp_f.get('kline_pattern', 'none')
+                # 生命信号
+                _derived['active_signal'] = _cl.get('buy_sell_point', '') if _cl.get('buy_sell_point', '') not in ('none',) else None
+                # 状态标签
+                _derived['state_label'] = _cl.get('trend_direction', 'unknown')
+                _derived['trend_alignment'] = 'aligned' if _cl.get('trend_direction') == 'up' and _vp_f.get('ma_alignment') == 'bullish' else 'misaligned'
+                # 利润比
+                _derived['profit_ratio'] = _chip_f.get('chip_position', 0)
+                if _derived:
+                    features['derived'] = _derived
+            except Exception as e:
+                logger.warning(f"RAW衍生特征失败 [{code}]: {e}")
+
+            # 12. 风险边界扩展字段（365号批次A / Phase 2）
+            try:
+                _risk_feat = {}
+                if len(df) >= 20:
+                    _risk_feat['volatility_percentile'] = _calc_volatility_percentile(df)
+                else:
+                    _risk_feat['volatility_percentile'] = None
+                # 411号Phase 9：几何化指标+波动率预计算
+                try:
+                    from app.opportunity_atlas.dimensions.dim6_risk_engine import calc_geometric, _calc_volatility
+                    geo = calc_geometric(df)
+                    _risk_feat['support_price'] = geo.get('support_price')
+                    _risk_feat['resistance_price'] = geo.get('resistance_price')
+                    _risk_feat['dist_to_support_pct'] = geo.get('dist_to_support_pct')
+                    _risk_feat['dist_to_resistance_pct'] = geo.get('dist_to_resistance_pct')
+                    _risk_feat['risk_reward'] = geo.get('risk_reward')
+                    _risk_feat['signal_days'] = geo.get('signal_days')
+                    _risk_feat['dist_to_prev_high_pct'] = geo.get('dist_to_prev_high_pct')
+                    vol = _calc_volatility(df, {})
+                    _risk_feat['atr_14d'] = vol.get('atr_14d', 0)
+                    _risk_feat['atr_pct'] = vol.get('atr_pct', 0)
+                    _risk_feat['volatility_level'] = vol.get('level', 'unknown')
+                except Exception:
+                    pass
+                features['risk_ext'] = _risk_feat
+            except Exception as e:
+                logger.warning(f"RAW风险扩展字段失败 [{code}]: {e}")
+
+            # 13. 资金筹码扩展字段（365号批次A / Phase 3）
+            try:
+                _chip_fund_feat = {}
+                # 411号Phase 7：筹码指标预计算（SSRP/ASR/concentration/profit_ratio/cyqkl）
+                # 424号§10决策②：先算 chip_bins（cde.estimate），再算聚合指标，
+                # 供 get_sub_scores 消费，避免完整分布被重复计算两次。
+                try:
+                    chip_bins = cde.estimate(df)
+                    if chip_bins is not None:
+                        from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import ChipIndicators
+                        ci = ChipIndicators()
+                        current_price = float(df['close'].values[-1])
+                        chip_result = ci.calculate_all_indicators(
+                            chip_bins, current_price, kline_data=df, ts_code=code) or {}
+                        _chip_fund_feat['ssrp'] = chip_result.get('ssrp')
+                        _chip_fund_feat['asr'] = chip_result.get('asr')
+                        _chip_fund_feat['concentration'] = chip_result.get('concentration')
+                        _chip_fund_feat['profit_ratio'] = chip_result.get('profit_ratio')
+                        _chip_fund_feat['cyqkl'] = chip_result.get('cyqkl')
+                        _chip_fund_feat['rsi'] = chip_result.get('rsi')
+                except Exception:
+                    pass
+                # fund_flow_strength: 大单净流入强度（0-1）
+                # 424号§10决策②：传入已预计算的 chip_fund_ext，避免 _score_chip_distribution 重复计算完整分布
+                try:
+                    mfs = MainForceScorer()
+                    _sub = mfs.get_sub_scores(df, symbol=code, chip_fund_ext=_chip_fund_feat)
+                    _chip_fund_feat['fund_flow_strength'] = min(1.0, max(0.0, (_sub.get('total', 0) or 0) / 10.0))
+                except Exception:
+                    _chip_fund_feat['fund_flow_strength'] = None
+                # chip_transfer: 筹码转移方向
+                _chip_fund_feat['chip_transfer'] = _depth_f.get('main_force_phase', 'unknown') if _depth_f.get('main_force_phase') in ('accumulating', 'shipping') else 'neutral'
+                # control_degree: 控盘度
+                _chip_fund_feat['control_degree'] = _depth.get('hold_float_ratio')
+                features['chip_fund_ext'] = _chip_fund_feat
+            except Exception as e:
+                logger.warning(f"RAW资金筹码扩展字段失败 [{code}]: {e}")
+
+            # 15. 411号Phase 8：5日资金聚合预计算
+            try:
+                _fund_5d_feat = {}
+                try:
+                    mf_df = dm.get_cached_moneyflow(code)
+                    if mf_df is not None and not mf_df.empty and len(mf_df) >= 5:
+                        net_lg = mf_df['net_lg_amount'].dropna().astype(float)
+                        if len(net_lg) >= 5:
+                            net_5d = float(net_lg.iloc[-5:].sum())
+                            _fund_5d_feat['net_lg_5d'] = net_5d
+                            pos_count = int((net_lg.iloc[-5:] > 0).sum())
+                            _fund_5d_feat['net_lg_5d_positive_ratio'] = pos_count / 5.0
+                            # 连续流入天数
+                            consecutive = 0
+                            for v in reversed(net_lg.values):
+                                if v > 0:
+                                    consecutive += 1
+                                else:
+                                    break
+                            _fund_5d_feat['net_lg_5d_consecutive'] = consecutive
+                except Exception:
+                    pass
+                features['fund_5d_ext'] = _fund_5d_feat
+            except Exception as e:
+                logger.debug(f"RAW 5日资金聚合失败 [{code}]: {e}")
+
+            # 16. 411号Phase 11：估值指标预计算
+            try:
+                _val_feat = {}
+                try:
+                    # PE/PB/PS历史分位、FCF收益率、YoY增长率等
+                    # 从daily_basic_cache读取当前PE/PB/PS
+                    db_df = dm.get_cached_daily_basic(code)
+                    if db_df is not None and not db_df.empty:
+                        latest = db_df.iloc[-1]
+                        _val_feat['pe_ttm'] = float(latest.get('pe_ttm', 0) or 0)
+                        _val_feat['pb'] = float(latest.get('pb', 0) or 0)
+                        _val_feat['ps_ttm'] = float(latest.get('ps_ttm', 0) or 0)
+                        _val_feat['total_mv'] = float(latest.get('total_mv', 0) or 0)
+                except Exception:
+                    pass
+                # 财务健康指标
+                try:
+                    fina_df = dm.get_cached_fina_indicator(code)
+                    if fina_df is not None and not fina_df.empty:
+                        latest_fina = fina_df.iloc[-1]
+                        _val_feat['roe'] = float(latest_fina.get('roe', 0) or 0)
+                        _val_feat['roce'] = float(latest_fina.get('roce', 0) or 0)
+                        _val_feat['grossprofit_margin'] = float(latest_fina.get('grossprofit_margin', 0) or 0)
+                except Exception:
+                    pass
+                features['valuation_ext'] = _val_feat
+            except Exception as e:
+                logger.debug(f"RAW估值指标失败 [{code}]: {e}")
+
+            # 17. 411号Phase 12：成本价预计算
+            try:
+                _cost_feat = {}
+                try:
+                    from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import MainForceScorer
+                    mfs = MainForceScorer()
+                    _latest_close = float(df['close'].values[-1]) if len(df) > 0 else 0.0
+                    _cost_feat['main_force_cost'] = mfs._calc_main_force_cost(code, _latest_close) if len(df) >= 20 and code else None
+                    _cost_feat['margin_cost_price'] = mfs._calc_margin_cost_price(code, _latest_close) if code and _latest_close > 0 else None
+                except Exception:
+                    pass
+                features['cost_ext'] = _cost_feat
+            except Exception as e:
+                logger.debug(f"RAW成本价失败 [{code}]: {e}")
+
+            # 18. 411号Phase 13：量指标预计算
+            try:
+                _vol_feat = {}
+                if len(df) >= 20:
+                    close = df['close'].astype(float)
+                    vol = df['vol'].astype(float) if 'vol' in df.columns else df['amount'].astype(float)
+                    # 量MA
+                    _vol_feat['vol_ma5'] = float(vol.rolling(5).mean().iloc[-1]) if len(vol) >= 5 else None
+                    _vol_feat['vol_ma10'] = float(vol.rolling(10).mean().iloc[-1]) if len(vol) >= 10 else None
+                    _vol_feat['vol_ma20'] = float(vol.rolling(20).mean().iloc[-1]) if len(vol) >= 20 else None
+                    # 波动率
+                    returns = close.pct_change().dropna()
+                    if len(returns) >= 20:
+                        _vol_feat['volatility_20d'] = float(returns.iloc[-20:].std() * (252 ** 0.5))
+                    # ROC
+                    if len(close) >= 20:
+                        _vol_feat['roc_20'] = float((close.iloc[-1] / close.iloc[-20] - 1) * 100)
+                features['volume_ext'] = _vol_feat
+            except Exception as e:
+                logger.debug(f"RAW量指标失败 [{code}]: {e}")
+
+            # 14. 情绪环境扩展字段（365号批次A+B / Phase 4）
+            try:
+                from app.opportunity_atlas.emotion_temperature import calc_emotion_temperature
+                _emotion_feat = {}
+                # emotion_temperature: 0-100温度值
+                _sent = features.get('sentiment', {})
+                _sect = features.get('sector', {})
+                _vp_f_em = features.get('volume_price', {})
+                _emotion_feat['emotion_temperature'] = calc_emotion_temperature(
+                    sentiment_phase=_sent.get('sentiment_phase', 'neutral'),
+                    limit_up_count=_sent.get('limit_up_count', 0) if isinstance(_sent.get('limit_up_count'), int) else 0,
+                    sealing_rate=_sent.get('sealing_rate', 50.0) if isinstance(_sent.get('sealing_rate'), (int, float)) else 50.0,
+                    sector_rank=_sect.get('sector_rank'),
+                    volume_price_fit=_vp_f_em.get('volume_price_fit', 'neutral'),
+                )
+                # market_emotion: 市场情绪阶段
+                _emotion_feat['market_emotion'] = _sent.get('sentiment_phase', 'neutral')
+                # sector_emotion: 板块情绪
+                _emotion_feat['sector_emotion'] = 'hot' if (_sect.get('sector_rank') or 999) <= 10 else 'normal'
+                # stock_emotion: 个股情绪
+                _emotion_feat['stock_emotion'] = 'positive' if _vp_f_em.get('volume_price_fit') == 'healthy' else ('negative' if _vp_f_em.get('volume_price_fit') == 'diverging' else 'neutral')
+                features['emotion_ext'] = _emotion_feat
+            except Exception as e:
+                logger.warning(f"RAW情绪扩展字段失败 [{code}]: {e}")
+
+            # 15. 量价健康扩展字段（365号批次A / Phase 5）
+            try:
+                _vp_health_feat = {}
+                # vp_score: 10分制评分（占位，使用粗略估算）
+                _vp_health_feat['vp_score'] = None  # 待 vp_health_builder 独立函数就绪后填充
+                # vp_state_type: 量价状态类型
+                _vp_stage = _vp_f.get('kline_pattern', '')
+                _vp_health_feat['vp_state_type'] = 'fast_line' if '突破' in str(_vp_stage) else ('slow_line' if '回踩' in str(_vp_stage) else 'background')
+                # volume_energy: 量能强度
+                if len(df) >= 5:
+                    _vol_col = 'vol' if 'vol' in df.columns else 'volume'
+                    _vols = df[_vol_col].values
+                    _avg5 = float(_vols[-5:].mean()) if len(_vols) >= 5 else float(_vols.mean())
+                    _vr = calc_vol_ratio(float(_vols[-1]), _avg5)
+                    _vp_health_feat['volume_energy'] = min(1.0, max(0.0, (_vr - 0.5) / 2.0)) if _vr else None
+                else:
+                    _vp_health_feat['volume_energy'] = None
+                features['vp_health_ext'] = _vp_health_feat
+            except Exception as e:
+                logger.warning(f"RAW量价健康扩展字段失败 [{code}]: {e}")
+
+            # 16. 结构位置扩展字段（365号批次A / Phase 6）
+            try:
+                _struct_feat = {}
+                _sr_result = calc_support_resistance(df)
+                _struct_feat['support_price'] = _sr_result.get('support_price')
+                _struct_feat['resistance_price'] = _sr_result.get('resistance_price')
+                # indicator_status: 均线排列+趋势方向综合
+                _ma = _vp_f.get('ma_alignment', '')
+                _trend = _cl.get('trend_direction', '')
+                _struct_feat['indicator_status'] = f"ma={_ma},trend={_trend}"
+                features['structure_ext'] = _struct_feat
+            except Exception as e:
+                logger.warning(f"RAW结构位置扩展字段失败 [{code}]: {e}")
+
+            # 19. market_stats：全市场级统计（供dim5 BociasiQuadrant消费）
+            # ponytail: market_stats是全市场共享数据，所有股票写入相同值
+            try:
+                features['market_stats'] = _market_stats_cache if _market_stats_cache else {}
+            except Exception:
+                features['market_stats'] = {}
+
+            return features, trade_date
 
         for code in codes:
+            # 428 P1-2 动作②：进度日志（每 500 只）
+            _progress_n += 1
+            if _progress_n % 500 == 0:
+                logger.info(f"  [RAW-2] 进度: {_progress_n}/{len(codes)} (succeeded={succeeded}, failed={failed}, {time.time()-t0:.1f}s)")
             try:
-                df = all_data.get(code)
-                if df is None or df.empty or len(df) < 5:
+                _res = _run_with_timeout(_raw2_one, timeout_sec=60.0, desc=f"RAW-2 特征 {code}")
+                if _res is None:
+                    failed += 1  # 428 P1-2 动作③：单股超时或特征计算异常
                     continue
-                if trade_date is None:
-                    trade_date = str(df['trade_date'].iloc[-1])[:10]
-
-                features = {}
-
-                # 1. 估值特征（17字段）
-                try:
-                    v_tags = ve.compute_tags(code)
-                    if v_tags:
-                        features['valuation'] = {k: v for k, v in v_tags.items()
-                            if k in ('pe_percentile', 'pb_percentile', 'ps_percentile',
-                                     'pe_percentile_5y', 'pb_percentile_5y', 'ps_percentile_5y',
-                                     'valuation_level', 'valuation_deviation',
-                                     'fcf_yield', 'dividend_yield', 'composite_rating',
-                                     'revenue_growth', 'roe', 'fina_health',
-                                     'asset_anchor_rating', 'earnings_anchor_rating',
-                                     'cashflow_anchor_rating', 'adjusted_anchor_rating')}
-                except Exception as e:
-                    logger.warning(f"RAW估值特征失败 [{code}]: {e}")
-
-                # 2. 情绪特征（2字段：sentiment_phase + bociasi_signal）
-                try:
-                    _sent = {}
-                    # sentiment_phase：始终写入（默认neutral）
-                    try:
-                        sentiment = ms.get_sentiment_phase()
-                        if sentiment.get('data_available'):
-                            _sent['sentiment_phase'] = sentiment['phase']
-                        else:
-                            _sent['sentiment_phase'] = _sentiment_phase_global or 'neutral'
-                    except Exception:
-                        _sent['sentiment_phase'] = _sentiment_phase_global or 'neutral'
-                    # bociasi_signal：跨市场资金情绪（读HS300指数）
-                    try:
-                        from app.services.benchmark_service import BenchmarkService
-                        bm = BenchmarkService()
-                        idx_df = bm.get_index_daily('000300.SH')
-                        if idx_df is not None and len(idx_df) >= 20:
-                            idx_close = idx_df['close'].values
-                            fast = float(np.mean(idx_close[-5:]))
-                            slow = float(np.mean(idx_close[-20:]))
-                            _sent['bociasi_signal'] = 'bullish' if fast > slow else 'bearish'
-                        else:
-                            _sent['bociasi_signal'] = 'neutral'
-                    except Exception:
-                        _sent['bociasi_signal'] = 'neutral'
-                    features['sentiment'] = _sent
-                except Exception as e:
-                    logger.warning(f"RAW情绪特征失败 [{code}]: {e}")
-
-                # 3. 板块特征（4字段）
-                try:
-                    sector = sr.evaluate(code)
-                    features['sector'] = {
-                        'sector_heat': sector.get('sector_heat', 0),
-                        'sector_momentum': sector.get('sector_momentum', 0),
-                        'sector_rank': sector.get('sector_rank', 0),
-                        'is_sector_leader': sector.get('is_sector_leader', False),
-                    }
-                except Exception as e:
-                    logger.warning(f"RAW板块特征失败 [{code}]: {e}")
-
-                # 4. 风格特征（2字段：style_exposure + size_factor）
-                try:
-                    style = _compute_style_exposure(code, {}, df)
-                    _sz = 'unknown'
-                    try:
-                        _db = _ecm.get_cached_daily_basic(code)
-                        if _db is not None and not _db.empty and 'circ_mv' in _db.columns:
-                            circ = float(_db['circ_mv'].iloc[-1] or 0)
-                            if circ > 5e10:
-                                _sz = 'large_cap'
-                            elif circ > 1e10:
-                                _sz = 'mid_cap'
-                            else:
-                                _sz = 'small_cap'
-                    except Exception:
-                        pass
-                    features['style'] = {
-                        'style_exposure': style if isinstance(style, str) else 'balanced',
-                        'size_factor': _sz,
-                    }
-                except Exception as e:
-                    logger.warning(f"RAW风格特征失败 [{code}]: {e}")
-
-                # 5. 时间特征（3字段）
-                if len(df) >= 30:
-                    try:
-                        tr_tags = tre.compute_tags(df)
-                        if tr_tags:
-                            features['timing'] = {k: v for k, v in tr_tags.items()
-                                if k in ('time_rhythm', 'cycle_position', 'turnover_signal')}
-                    except Exception as e:
-                        logger.warning(f"RAW时间特征失败 [{code}]: {e}")
-
-                # 6. 量价特征（6字段）
-                if len(df) >= 20:
-                    try:
-                        vp_tags = vps._detect_kline_patterns(df)
-                        _simple = {}
-                        _add_vp_simple_tags(df, _simple)
-                        features['volume_price'] = {
-                            'kline_pattern': vp_tags.get('pattern_signal', 'none'),
-                            'ma_alignment': _simple.get('ma_alignment', 'neutral'),
-                            'volume_price_fit': _simple.get('volume_price_fit', 'neutral'),
-                            'gap_type': _simple.get('gap_type', 'none'),
-                            'breakout_attempts': _simple.get('breakout_attempts', 0),
-                            'volume_ratio': _simple.get('volume_ratio', 1.0),
-                        }
-                    except Exception as e:
-                        logger.warning(f"RAW量价特征失败 [{code}]: {e}")
-
-                # 7. 缠论特征（5字段）
-                if len(df) >= 30:
-                    try:
-                        from app.engine.framework.chanlun_strategy import ChanlunAnalyzer
-                        cl = ChanlunAnalyzer()
-                        cl_result = cl.analyze(df)
-                        cl_tags = _get_chanlun_tags(cl_result)
-                        features['chanlun'] = {k: v for k, v in (cl_tags or {}).items()
-                            if k in ('trend_direction', 'zhongshu_count', 'buy_sell_point',
-                                     'bi_count', 'duan_count')}
-                    except Exception as e:
-                        logger.warning(f"RAW缠论特征失败 [{code}]: {e}")
-
-                # 8. 筹码特征（4字段）
-                if len(df) >= 30:
-                    try:
-                        chip_tags = cde.get_tags(df)
-                        features['chip'] = {k: v for k, v in (chip_tags or {}).items()
-                            if k in ('chip_position', 'chip_concentration', 'asr', 'cyqkl')}
-                    except Exception as e:
-                        logger.warning(f"RAW筹码特征失败 [{code}]: {e}")
-
-                # 9. 事件特征（5字段，含dim6消费的event_details/event_risk_factors）
-                try:
-                    _evt_tags = {}
-                    _update_with_event_tags(code, _evt_tags)
-                    features['event'] = {
-                        'catalyst_event': _evt_tags.get('catalyst_event', 'none'),
-                        'catalyst_impact': _evt_tags.get('catalyst_impact', 'neutral'),
-                        'event_composite_score': _evt_tags.get('event_composite_score', 0),
-                        'event_details': _evt_tags.get('event_details', []),
-                        'event_risk_factors': _evt_tags.get('event_risk_factors', []),
-                    }
-                except Exception as e:
-                    logger.warning(f"RAW事件特征失败 [{code}]: {e}")
-
-                # 10. 深度字段（8字段，独立调用不依赖 phase_detector）
-                try:
-                    _depth = {}
-                    _depth.update(extract_chanlun_deep_tags(code))
-                    _depth.update(extract_chip_deep_tags(code))
-                    _depth.update(extract_fund_risk_tags(code))
-                    features['depth'] = {
-                        'hold_float_ratio': _depth.get('hold_float_ratio'),
-                        'turnover_rate': _depth.get('turnover_rate'),
-                        'main_force_phase': _depth.get('main_force_phase'),
-                        'phase_confidence': _depth.get('phase_confidence'),
-                        'fund_flow': _depth.get('fund_flow'),
-                        'capital_nature': _depth.get('capital_nature'),
-                        'main_force_presence': _depth.get('main_force_presence'),
-                        'presence_evidence': _depth.get('presence_evidence'),
-                    }
-                except Exception as e:
-                    logger.warning(f"RAW深度字段失败 [{code}]: {e}")
-
-                # 预提取各特征组引用（供后续扩展字段使用）
-                _cl = features.get('chanlun', {})
-                _vp_f = features.get('volume_price', {})
-                _chip_f = features.get('chip', {})
-                _depth_f = features.get('depth', {})
-
-                # 11. 衍生特征（从已有特征组中提取下游消费方需要的扁平key）
-                try:
-                    _derived = {}
-                    _val = features.get('valuation', {})
-                    # 位置维
-                    _derived['price_position'] = 'low_zone' if _cl.get('buy_sell_point', '') in ('first_buy', 'second_buy') else ('high_zone' if _cl.get('buy_sell_point', '') in ('first_sell', 'second_sell') else 'mid')
-                    _derived['support_resistance'] = _depth_f.get('support_resistance', '{}')
-                    # 风险维
-                    _derived['volatility_level'] = _vp_f.get('volume_ratio', 1.0) and ('high' if abs(float(_vp_f.get('volume_ratio', 1.0) or 1) - 1) > 0.5 else 'low')
-                    _derived['risk_level'] = 'HIGH' if _depth_f.get('main_force_phase') == 'shipping' else 'LOW'
-                    # 信号确认
-                    _derived['right_side_confirm'] = 'strong_confirm' if _cl.get('buy_sell_point', '') in ('first_buy', 'second_buy') and _vp_f.get('volume_price_fit') == 'healthy' else 'unconfirmed'
-                    _derived['pattern_signal'] = _vp_f.get('kline_pattern', 'none')
-                    # 生命信号
-                    _derived['active_signal'] = _cl.get('buy_sell_point', '') if _cl.get('buy_sell_point', '') not in ('none',) else None
-                    # 状态标签
-                    _derived['state_label'] = _cl.get('trend_direction', 'unknown')
-                    _derived['trend_alignment'] = 'aligned' if _cl.get('trend_direction') == 'up' and _vp_f.get('ma_alignment') == 'bullish' else 'misaligned'
-                    # 利润比
-                    _derived['profit_ratio'] = _chip_f.get('chip_position', 0)
-                    if _derived:
-                        features['derived'] = _derived
-                except Exception as e:
-                    logger.warning(f"RAW衍生特征失败 [{code}]: {e}")
-
-                # 12. 风险边界扩展字段（365号批次A / Phase 2）
-                try:
-                    _risk_feat = {}
-                    if len(df) >= 20:
-                        _risk_feat['volatility_percentile'] = _calc_volatility_percentile(df)
-                    else:
-                        _risk_feat['volatility_percentile'] = None
-                    # 411号Phase 9：几何化指标+波动率预计算
-                    try:
-                        from app.opportunity_atlas.dimensions.dim6_risk_engine import calc_geometric, _calc_volatility
-                        geo = calc_geometric(df)
-                        _risk_feat['support_price'] = geo.get('support_price')
-                        _risk_feat['resistance_price'] = geo.get('resistance_price')
-                        _risk_feat['dist_to_support_pct'] = geo.get('dist_to_support_pct')
-                        _risk_feat['dist_to_resistance_pct'] = geo.get('dist_to_resistance_pct')
-                        _risk_feat['risk_reward'] = geo.get('risk_reward')
-                        _risk_feat['signal_days'] = geo.get('signal_days')
-                        _risk_feat['dist_to_prev_high_pct'] = geo.get('dist_to_prev_high_pct')
-                        vol = _calc_volatility(df, {})
-                        _risk_feat['atr_14d'] = vol.get('atr_14d', 0)
-                        _risk_feat['atr_pct'] = vol.get('atr_pct', 0)
-                        _risk_feat['volatility_level'] = vol.get('level', 'unknown')
-                    except Exception:
-                        pass
-                    features['risk_ext'] = _risk_feat
-                except Exception as e:
-                    logger.warning(f"RAW风险扩展字段失败 [{code}]: {e}")
-
-                # 13. 资金筹码扩展字段（365号批次A / Phase 3）
-                try:
-                    _chip_fund_feat = {}
-                    # 411号Phase 7：筹码指标预计算（SSRP/ASR/concentration/profit_ratio/cyqkl）
-                    # 424号§10决策②：先算 chip_bins（cde.estimate），再算聚合指标，
-                    # 供 get_sub_scores 消费，避免完整分布被重复计算两次。
-                    try:
-                        chip_bins = cde.estimate(df)
-                        if chip_bins is not None:
-                            from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import ChipIndicators
-                            ci = ChipIndicators()
-                            current_price = float(df['close'].values[-1])
-                            chip_result = ci.calculate_all_indicators(
-                                chip_bins, current_price, kline_data=df, ts_code=code) or {}
-                            _chip_fund_feat['ssrp'] = chip_result.get('ssrp')
-                            _chip_fund_feat['asr'] = chip_result.get('asr')
-                            _chip_fund_feat['concentration'] = chip_result.get('concentration')
-                            _chip_fund_feat['profit_ratio'] = chip_result.get('profit_ratio')
-                            _chip_fund_feat['cyqkl'] = chip_result.get('cyqkl')
-                            _chip_fund_feat['rsi'] = chip_result.get('rsi')
-                    except Exception:
-                        pass
-                    # fund_flow_strength: 大单净流入强度（0-1）
-                    # 424号§10决策②：传入已预计算的 chip_fund_ext，避免 _score_chip_distribution 重复计算完整分布
-                    try:
-                        mfs = MainForceScorer()
-                        _sub = mfs.get_sub_scores(df, symbol=code, chip_fund_ext=_chip_fund_feat)
-                        _chip_fund_feat['fund_flow_strength'] = min(1.0, max(0.0, (_sub.get('total', 0) or 0) / 10.0))
-                    except Exception:
-                        _chip_fund_feat['fund_flow_strength'] = None
-                    # chip_transfer: 筹码转移方向
-                    _chip_fund_feat['chip_transfer'] = _depth_f.get('main_force_phase', 'unknown') if _depth_f.get('main_force_phase') in ('accumulating', 'shipping') else 'neutral'
-                    # control_degree: 控盘度
-                    _chip_fund_feat['control_degree'] = _depth.get('hold_float_ratio')
-                    features['chip_fund_ext'] = _chip_fund_feat
-                except Exception as e:
-                    logger.warning(f"RAW资金筹码扩展字段失败 [{code}]: {e}")
-
-                # 15. 411号Phase 8：5日资金聚合预计算
-                try:
-                    _fund_5d_feat = {}
-                    try:
-                        mf_df = dm.get_cached_moneyflow(code)
-                        if mf_df is not None and not mf_df.empty and len(mf_df) >= 5:
-                            net_lg = mf_df['net_lg_amount'].dropna().astype(float)
-                            if len(net_lg) >= 5:
-                                net_5d = float(net_lg.iloc[-5:].sum())
-                                _fund_5d_feat['net_lg_5d'] = net_5d
-                                pos_count = int((net_lg.iloc[-5:] > 0).sum())
-                                _fund_5d_feat['net_lg_5d_positive_ratio'] = pos_count / 5.0
-                                # 连续流入天数
-                                consecutive = 0
-                                for v in reversed(net_lg.values):
-                                    if v > 0:
-                                        consecutive += 1
-                                    else:
-                                        break
-                                _fund_5d_feat['net_lg_5d_consecutive'] = consecutive
-                    except Exception:
-                        pass
-                    features['fund_5d_ext'] = _fund_5d_feat
-                except Exception as e:
-                    logger.debug(f"RAW 5日资金聚合失败 [{code}]: {e}")
-
-                # 16. 411号Phase 11：估值指标预计算
-                try:
-                    _val_feat = {}
-                    try:
-                        # PE/PB/PS历史分位、FCF收益率、YoY增长率等
-                        # 从daily_basic_cache读取当前PE/PB/PS
-                        db_df = dm.get_cached_daily_basic(code)
-                        if db_df is not None and not db_df.empty:
-                            latest = db_df.iloc[-1]
-                            _val_feat['pe_ttm'] = float(latest.get('pe_ttm', 0) or 0)
-                            _val_feat['pb'] = float(latest.get('pb', 0) or 0)
-                            _val_feat['ps_ttm'] = float(latest.get('ps_ttm', 0) or 0)
-                            _val_feat['total_mv'] = float(latest.get('total_mv', 0) or 0)
-                    except Exception:
-                        pass
-                    # 财务健康指标
-                    try:
-                        fina_df = dm.get_cached_fina_indicator(code)
-                        if fina_df is not None and not fina_df.empty:
-                            latest_fina = fina_df.iloc[-1]
-                            _val_feat['roe'] = float(latest_fina.get('roe', 0) or 0)
-                            _val_feat['roce'] = float(latest_fina.get('roce', 0) or 0)
-                            _val_feat['grossprofit_margin'] = float(latest_fina.get('grossprofit_margin', 0) or 0)
-                    except Exception:
-                        pass
-                    features['valuation_ext'] = _val_feat
-                except Exception as e:
-                    logger.debug(f"RAW估值指标失败 [{code}]: {e}")
-
-                # 17. 411号Phase 12：成本价预计算
-                try:
-                    _cost_feat = {}
-                    try:
-                        from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import MainForceScorer
-                        mfs = MainForceScorer()
-                        _latest_close = float(df['close'].values[-1]) if len(df) > 0 else 0.0
-                        _cost_feat['main_force_cost'] = mfs._calc_main_force_cost(code, _latest_close) if len(df) >= 20 and code else None
-                        _cost_feat['margin_cost_price'] = mfs._calc_margin_cost_price(code, _latest_close) if code and _latest_close > 0 else None
-                    except Exception:
-                        pass
-                    features['cost_ext'] = _cost_feat
-                except Exception as e:
-                    logger.debug(f"RAW成本价失败 [{code}]: {e}")
-
-                # 18. 411号Phase 13：量指标预计算
-                try:
-                    _vol_feat = {}
-                    if len(df) >= 20:
-                        close = df['close'].astype(float)
-                        vol = df['vol'].astype(float) if 'vol' in df.columns else df['amount'].astype(float)
-                        # 量MA
-                        _vol_feat['vol_ma5'] = float(vol.rolling(5).mean().iloc[-1]) if len(vol) >= 5 else None
-                        _vol_feat['vol_ma10'] = float(vol.rolling(10).mean().iloc[-1]) if len(vol) >= 10 else None
-                        _vol_feat['vol_ma20'] = float(vol.rolling(20).mean().iloc[-1]) if len(vol) >= 20 else None
-                        # 波动率
-                        returns = close.pct_change().dropna()
-                        if len(returns) >= 20:
-                            _vol_feat['volatility_20d'] = float(returns.iloc[-20:].std() * (252 ** 0.5))
-                        # ROC
-                        if len(close) >= 20:
-                            _vol_feat['roc_20'] = float((close.iloc[-1] / close.iloc[-20] - 1) * 100)
-                    features['volume_ext'] = _vol_feat
-                except Exception as e:
-                    logger.debug(f"RAW量指标失败 [{code}]: {e}")
-
-                # 14. 情绪环境扩展字段（365号批次A+B / Phase 4）
-                try:
-                    from app.opportunity_atlas.emotion_temperature import calc_emotion_temperature
-                    _emotion_feat = {}
-                    # emotion_temperature: 0-100温度值
-                    _sent = features.get('sentiment', {})
-                    _sect = features.get('sector', {})
-                    _vp_f_em = features.get('volume_price', {})
-                    _emotion_feat['emotion_temperature'] = calc_emotion_temperature(
-                        sentiment_phase=_sent.get('sentiment_phase', 'neutral'),
-                        limit_up_count=_sent.get('limit_up_count', 0) if isinstance(_sent.get('limit_up_count'), int) else 0,
-                        sealing_rate=_sent.get('sealing_rate', 50.0) if isinstance(_sent.get('sealing_rate'), (int, float)) else 50.0,
-                        sector_rank=_sect.get('sector_rank'),
-                        volume_price_fit=_vp_f_em.get('volume_price_fit', 'neutral'),
-                    )
-                    # market_emotion: 市场情绪阶段
-                    _emotion_feat['market_emotion'] = _sent.get('sentiment_phase', 'neutral')
-                    # sector_emotion: 板块情绪
-                    _emotion_feat['sector_emotion'] = 'hot' if (_sect.get('sector_rank') or 999) <= 10 else 'normal'
-                    # stock_emotion: 个股情绪
-                    _emotion_feat['stock_emotion'] = 'positive' if _vp_f_em.get('volume_price_fit') == 'healthy' else ('negative' if _vp_f_em.get('volume_price_fit') == 'diverging' else 'neutral')
-                    features['emotion_ext'] = _emotion_feat
-                except Exception as e:
-                    logger.warning(f"RAW情绪扩展字段失败 [{code}]: {e}")
-
-                # 15. 量价健康扩展字段（365号批次A / Phase 5）
-                try:
-                    _vp_health_feat = {}
-                    # vp_score: 10分制评分（占位，使用粗略估算）
-                    _vp_health_feat['vp_score'] = None  # 待 vp_health_builder 独立函数就绪后填充
-                    # vp_state_type: 量价状态类型
-                    _vp_stage = _vp_f.get('kline_pattern', '')
-                    _vp_health_feat['vp_state_type'] = 'fast_line' if '突破' in str(_vp_stage) else ('slow_line' if '回踩' in str(_vp_stage) else 'background')
-                    # volume_energy: 量能强度
-                    if len(df) >= 5:
-                        _vol_col = 'vol' if 'vol' in df.columns else 'volume'
-                        _vols = df[_vol_col].values
-                        _avg5 = float(_vols[-5:].mean()) if len(_vols) >= 5 else float(_vols.mean())
-                        _vr = calc_vol_ratio(float(_vols[-1]), _avg5)
-                        _vp_health_feat['volume_energy'] = min(1.0, max(0.0, (_vr - 0.5) / 2.0)) if _vr else None
-                    else:
-                        _vp_health_feat['volume_energy'] = None
-                    features['vp_health_ext'] = _vp_health_feat
-                except Exception as e:
-                    logger.warning(f"RAW量价健康扩展字段失败 [{code}]: {e}")
-
-                # 16. 结构位置扩展字段（365号批次A / Phase 6）
-                try:
-                    _struct_feat = {}
-                    _sr_result = calc_support_resistance(df)
-                    _struct_feat['support_price'] = _sr_result.get('support_price')
-                    _struct_feat['resistance_price'] = _sr_result.get('resistance_price')
-                    # indicator_status: 均线排列+趋势方向综合
-                    _ma = _vp_f.get('ma_alignment', '')
-                    _trend = _cl.get('trend_direction', '')
-                    _struct_feat['indicator_status'] = f"ma={_ma},trend={_trend}"
-                    features['structure_ext'] = _struct_feat
-                except Exception as e:
-                    logger.warning(f"RAW结构位置扩展字段失败 [{code}]: {e}")
-
-                # 19. market_stats：全市场级统计（供dim5 BociasiQuadrant消费）
-                # ponytail: market_stats是全市场共享数据，所有股票写入相同值
-                try:
-                    features['market_stats'] = _market_stats_cache if _market_stats_cache else {}
-                except Exception:
-                    features['market_stats'] = {}
-
+                features, trade_date = _res
+                if not features:
+                    continue  # 数据不足静默跳过（不计数 failed）
                 # 写入 pre_feat_cache
                 if features:
                     _ecm.cache_pre_feat(code, trade_date, features)
@@ -3090,7 +3300,6 @@ def _precompute_raw_features(codes):
             except Exception:
                 failed += 1
                 continue
-
         if commit_count > 0:
             _ecm.conn.commit()
 
@@ -4687,6 +4896,74 @@ def _safe_int(v):
 # 管道驱动（305号§9，取代定时窗口）
 # ══════════════════════════════════════════════════════════
 
+def _is_trading_day(d: datetime) -> bool:
+    """432号 R3/R4：是否为交易日（跳过周末与法定节假日）"""
+    try:
+        from app.utils.trading_hours import is_holiday
+        return not is_holiday(d)
+    except ImportError:
+        return d.weekday() < 5
+
+
+def _lag_trading_days(latest_date, today) -> int:
+    """432号 R3：latest 之后到今天之间的交易日缺口数（周末/节假日不计）
+
+    原自然日口径把周末计入滞后（周五数据周一开机恒判"滞后3天"→ HIGH 补采）。
+    """
+    if hasattr(latest_date, 'date'):
+        latest_date = latest_date.date()
+    if hasattr(today, 'date'):
+        today = today.date()
+    lag = 0
+    d = latest_date + timedelta(days=1)
+    while d <= today:
+        if _is_trading_day(d):
+            lag += 1
+        d += timedelta(days=1)
+    return lag
+
+
+def _recent_trade_date(offset: int = 0) -> str:
+    """432号 R2：返回最近第 offset+1 个交易日的 YYYYMMDD（跳过周末/节假日）
+
+    用于复权因子批量补采的"最近交易日"（原实现用昨天，周末/节假日必空）。
+    """
+    d = datetime.now()
+    n = offset
+    for _ in range(45):  # 最多回溯 45 个自然日（覆盖国庆/春节长假）
+        if _is_trading_day(d):
+            if n == 0:
+                return d.strftime('%Y%m%d')
+            n -= 1
+        d -= timedelta(days=1)
+    return None
+
+
+def _is_today_data_ready() -> bool:
+    """432号 R4：今日数据是否已可检查/补采（交易日且 Tushare 当日数据已发布）
+
+    Tushare 日线系列（daily/daily_basic/moneyflow/stk_limit/top_list 等）一般在
+    收盘后 17-18 点才发布，盘前/盘中检查当日数据必然空返回。
+    """
+    return _is_market_day() and datetime.now().hour >= 18
+
+
+def _get_adj_latest_date():
+    """432号 R1：分年表最新复权因子日期（356号拆分后写入只落分年表，
+    主表 adj_factor_cache 自拆分起停更——读主表 MAX(trade_date) 恒滞后）"""
+    for _yr in range(datetime.now().year, 2000, -1):
+        _tbl = f'adj_factor_cache_{_yr}'
+        try:
+            from app.data.sharding_manager import sharding_manager as _sm
+            if _sm.table_exists(_tbl):
+                _cand = _query_table(_tbl, f"SELECT MAX(trade_date) FROM {_tbl}")
+                if _cand:
+                    return _cand
+        except Exception:
+            continue
+    return None
+
+
 def _is_market_day() -> bool:
     """判断是否为交易日（考虑法定节假日）
 
@@ -4889,7 +5166,7 @@ def _recover_stale_running(timeout_hours: float = 4.0) -> int:
     try:
         rc = _ecm.conn.execute(
             "UPDATE pipeline_status SET status='pending', detail='stale running 重置' "
-            "WHERE status='running' AND started_at < datetime('now', ?)",
+            "WHERE status='running' AND started_at < datetime('now','localtime', ?)",
             [f'-{int(timeout_hours)} hours']
         ).rowcount
         if rc > 0:
@@ -5026,7 +5303,8 @@ def _drive_pipeline():
         # 数据日期已完整 → 采集环节直接标记 done（数据已存在，无需重采）
         if sid != 'COL-6':  # COL-6 概念板块需独立采集（无日期）
             _ecm.conn.execute(
-                "UPDATE pipeline_status SET status='done', completed_at=CURRENT_TIMESTAMP, "
+                "UPDATE pipeline_status SET status='done', "
+                "completed_at=datetime('now','localtime'), "
                 "detail='数据已完整，采集跳过' WHERE pipeline_date=? AND step_id=?",
                 [today, sid]
             )
@@ -5051,9 +5329,16 @@ def _drive_pipeline():
 
     # 进入 RAW 阶段：需要 COL-1~COL-6 全部 done
     if not _all_steps_done(status, COLLECT):
+        # 426号 P0-4-⑤：RAW 触发条件日志——记录为何 RAW 未启动（COL 待完成清单）
+        _raw_wait = [s for s in COLLECT if status.get(s, {}).get('status') != 'done']
+        logger.debug(f"[管道] RAW 等待采集完成: {_raw_wait}（下一 tick 再检查）")
         return
 
     codes = _get_active_codes(today_fmt)
+    if not codes:
+        # 426号 P0-4-⑤：无活跃代码时说明 RAW 暂停原因
+        logger.debug(f"[管道] {today} 无活跃股票代码，RAW 步骤暂停")
+        return
 
     # 373号Batch2：COL-7 财务全量同步（非阻塞：失败时跳过，不阻塞RAW）
     if status.get('COL-7', {}).get('status') != 'done':
@@ -5103,32 +5388,47 @@ def _drive_pipeline():
     RAW_STEPS = {'RAW-1': _precompute_indicators, 'RAW-2': _precompute_raw_features, 'RAW-3': _precompute_preset_combos}
     unfinished_raw = [s for s in RAW_STEPS if status.get(s, {}).get('status') != 'done']
     if unfinished_raw:
+        # 426号 P0-4-⑤：RAW 触发条件日志——记录待执行/续算步骤及上一状态
+        # （pending=首次或重试、running=重启续算、failed=上轮失败重试）
+        _raw_state = {s: status.get(s, {}).get('status') for s in unfinished_raw}
+        logger.info(f"[管道] RAW 并行提交: {_raw_state}（可被打断但可续：未完成步骤保 pending，"
+                    f"重启后从断点续算，写路径 INSERT OR REPLACE 幂等）")
         import concurrent.futures
         # 卡死根治：原用 `with ThreadPoolExecutor` —— 其 __exit__ 隐式 shutdown(wait=True)，
         # 当某 RAW 步骤超过 1800s 仍运行，fut.result(timeout=1800) 抛超时后 with 退出
         # 会再次阻塞主循环直到该线程结束，超时保护形同虚设。改为显式 shutdown(wait=False)，
         # 超时的后台线程置 daemon 随进程结束，主循环不被拖住。
         _raw_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        # 428 P1-2：跟踪每步结果——仅成功步骤标 done；超时/失败步骤保持非 done，
+        # 交由下 tick 426 续算机制重跑（不静默标记不完整数据为完成）。
+        _raw_done = {}
         try:
             futures = {s: _raw_pool.submit(RAW_STEPS[s], codes) for s in unfinished_raw}
             for s, fut in futures.items():
                 try:
                     fut.result(timeout=1800)
+                    _raw_done[s] = True
                 except concurrent.futures.TimeoutError:
-                    logger.warning(f"{s} 并行执行超过1800s未完成，后台线程继续但不再阻塞主循环")
+                    logger.warning(f"{s} 并行执行超过1800s未完成，后台线程继续但不再阻塞主循环；"
+                                   f"步骤保持未完成，下 tick 续算（428 P1-2）")
+                    _raw_done[s] = False
                 except Exception as e:
-                    logger.warning(f"{s} 并行执行失败: {e}")
+                    logger.warning(f"{s} 并行执行失败: {e}；步骤保持未完成，下 tick 续算（428 P1-2）")
+                    _raw_done[s] = False
         finally:
             # 不等待超时线程；后台 daemon 线程随进程结束，主流程立即继续
             try:
                 _raw_pool.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 pass
-        # 记录全部完成
-        for s in unfinished_raw:
-            _ecm.mark_step_done(today, s, f"OK parallel ({s})")
-            logger.info(f"  [管道] {s} → done (parallel)")
-        _last_step_counts['RAW'] = f"{len(unfinished_raw)} steps parallel"
+        # 仅对成功步骤记录完成；超时/失败步骤不标 done，保持待续算
+        for s, ok in _raw_done.items():
+            if ok:
+                _ecm.mark_step_done(today, s, f"OK parallel ({s})")
+                logger.info(f"  [管道] {s} → done (parallel)")
+            else:
+                logger.warning(f"  [管道] {s} 未完成，保留待办，下 tick 续算（428 P1-2）")
+        _last_step_counts['RAW'] = f"{len(_raw_done)} steps parallel"
         return
 
     if not _all_steps_done(status, list(RAW_STEPS.keys())):
@@ -5850,50 +6150,59 @@ def _run_signal_checkpoint():
         logger.warning(f"  信号验证回算失败: {e}")
 
 
-def _run_data_cleanup():
-    """执行数据清理（迭代5：日期格式统一 + 存储清理）"""
-    today = datetime.now().strftime('%Y%m%d')
+# 426号 S3/D1：保留期下限（356号 规则10 时效为最低标准——超期不删、不足告警）。
+# pre_feat_cache 不纳入：功能 2026-08-19 才启用，1 年下限必然误报，其覆盖
+# 由阶段三回补专项保障（每日 ≥5000 行验证）。
+_RETENTION_MIN_DAYS = {
+    'daily_cache': 1095,           # 日线 3 年
+    'minute_kline_cache': 180,     # 分钟 6 个月（v1.5：原清理调用传 30 天，与 356 规则不符，已校正）
+    'factor_cache': 365,           # 预计算 1 年
+}
+_RETENTION_DATE_COLS = {
+    'daily_cache': 'trade_date',
+    'minute_kline_cache': 'trade_date',
+    'factor_cache': 'trade_date',
+}
 
-    # 计算各表的清理截止日期
-    one_year_ago = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
-    three_years_ago = (datetime.now() - timedelta(days=1095)).strftime('%Y%m%d')
-    thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
 
-    try:
-        _ecm.clean_stk_limit_cache(one_year_ago)
-    except Exception as e:
-        logger.warning(f"清理 stk_limit_cache 失败: {e}")
+def _check_data_retention():
+    """保留期下限保障检查（426号 S3/D1 改造，替代原删除语义的 _run_data_cleanup）
 
-    try:
-        _ecm.clean_lhb_cache(one_year_ago)
-    except Exception as e:
-        logger.warning(f"清理 lhb_cache 失败: {e}")
+    356号 规则10 时效为最低标准：各表覆盖不得低于下限（日线 3 年/分钟 6 月/预计算 1 年），
+    超过下限的数据一律保留、不删除；覆盖不足（数据缺失）记录告警，交由回补机制处理。
+    每月 1 日顺带执行一次 VACUUM（存储维护，不删数据）。
+    """
+    today = datetime.now().date()
+    gaps = []
+    for table, min_days in _RETENTION_MIN_DAYS.items():
+        col = _RETENTION_DATE_COLS[table]
+        cutoff = (today - timedelta(days=min_days)).strftime('%Y-%m-%d')
+        try:
+            df = _ecm._query_shard(table, f"SELECT MIN({col}) AS min_d FROM {table}")
+        except Exception as e:
+            logger.warning(f"保留期检查 {table} 失败: {e}")
+            continue
+        if df is None or df.empty or df.iloc[0]['min_d'] is None:
+            logger.warning(f"保留期检查 {table}: 无数据（低于最低保留期 {min_days} 天），需确认是否回补")
+            gaps.append(table)
+            continue
+        min_d = str(df.iloc[0]['min_d'])
+        if min_d > cutoff:
+            logger.warning(f"保留期检查 {table}: 最早数据 {min_d} 晚于最低保留期截止 {cutoff}（{min_days} 天），覆盖不足，需确认是否回补")
+            gaps.append(table)
+        else:
+            logger.info(f"保留期检查 {table}: 覆盖至 {min_d}，满足最低保留期 {min_days} 天（超期数据保留，未删除）")
+    if gaps:
+        logger.warning(f"保留期检查完成：{len(gaps)} 张表覆盖不足 {gaps}（规则时效为最低标准，未删除任何数据）")
+    else:
+        logger.info("保留期检查完成：全部表满足最低保留期（未删除任何数据）")
 
-    try:
-        _ecm.clean_fina_indicator_cache(three_years_ago)
-    except Exception as e:
-        logger.warning(f"清理 fina_indicator_cache 失败: {e}")
-
-    try:
-        _ecm.clean_minute_cache(thirty_days_ago)
-    except Exception as e:
-        logger.warning(f"清理 minute_cache 失败: {e}")
-
-    # D1: 旧 indicator_cache EAV 表已于 2026-07-19 停止写入，清理逻辑已移除
-
-    try:
-        _ecm.clean_factor_cache(one_year_ago)
-    except Exception as e:
-        logger.warning(f"清理 factor_cache 失败: {e}")
-
-    # 每月执行一次 VACUUM
+    # 每月执行一次 VACUUM（原逻辑保留）
     if datetime.now().day == 1:
         try:
             _ecm.vacuum_db()
         except Exception as e:
             logger.warning(f"VACUUM 失败: {e}")
-
-    logger.info("数据清理完成")
 
 
 # ══════════════════════════════════════════════════════════
@@ -5956,6 +6265,47 @@ def _wal_maintenance_all_dbs():
     return wal_sizes
 
 
+def _wal_truncate_all_dbs():
+    """426号 S4/D2：非交易时段对全部分库执行 TRUNCATE 深收缩（PASSIVE 的补充）
+
+    PASSIVE 无法截断存在读标记的 WAL（compute_cache.db-wal 曾达 5.66 GiB）；
+    TRUNCATE 需无活跃读事务，失败自动降级 PASSIVE（与 wal_maintenance.py 同法，
+    独立连接 + busy_timeout）。返回各库收缩前后大小供日志核对。
+    """
+    import sqlite3 as _sq
+
+    from app.data.sharding_manager import sharding_manager
+
+    data_dir = os.environ.get('DATA_DIR', 'data')
+    duckdb_dir = os.path.join(data_dir, 'duckdb')
+    db_names = set(sharding_manager.get_all_db_names())
+    db_names.add('stock_cache.db')
+    db_names.add('market_snapshot.db')
+    shrunk = []
+    for db_name in sorted(db_names):
+        db_path = os.path.join(duckdb_dir, db_name)
+        wal_path = db_path + '-wal'
+        if not os.path.exists(db_path):
+            continue
+        before = os.path.getsize(wal_path) / 1024 / 1024 if os.path.exists(wal_path) else 0
+        try:
+            _con = _sq.connect(db_path, timeout=30)
+            try:
+                _r = _con.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+                if _r and _r[0] != 0:
+                    _con.execute('PRAGMA wal_checkpoint(PASSIVE)')  # busy → 降级合并
+            finally:
+                _con.close()
+        except Exception as e:
+            logger.warning(f"WAL TRUNCATE 失败 ({db_name}): {e}")
+        after = os.path.getsize(wal_path) / 1024 / 1024 if os.path.exists(wal_path) else 0
+        if before > 1 or after > 1:
+            shrunk.append(f"{db_name}: {before:.1f}→{after:.1f}MB")
+    if shrunk:
+        logger.info(f"WAL TRUNCATE 维护完成: {' '.join(shrunk)}")
+    return shrunk
+
+
 def _check_daily_sync_backfill():
     """开机兜底：如果当前 >15:35 且今日日终同步未执行，立即触发（Task 2）
 
@@ -5982,8 +6332,49 @@ def _check_daily_sync_backfill():
         logger.warning(f"  [日终兜底] 自检失败: {e}")
 
 
+def _maybe_monthly_ic_recalc(data_dir: str) -> None:
+    """433 批次1：月度 IC 重估轻钩子（earn-only；幂等靠 ic_weights.json last_recalc 月份）
+
+    触发条件：本月未算（last_recalc 月份 != 当前自然月）。每月第一次满足即触发一次
+    重算（重算实测 ~3.4s，_run_with_timeout 保护，不阻塞主循环）；daemon 若整月未运行，
+    下月启动后因 last_recalc 仍是更早月份而自动补跑。失败不阻塞主循环（try/except 包裹）。
+    """
+    import json as _json
+    from datetime import datetime as _dt
+    try:
+        state_file = os.path.join(data_dir, 'ic_weights.json')
+        report_file = os.path.join(data_dir, 'ic_weights_report.json')
+        now_m = _dt.now().strftime('%Y-%m')
+        # 幂等：ic_weights.json.last_recalc（ok 落盘）或 ic_weights_report.json.recalc_at
+        #（每次重估含 no_signal 都写）任一命中本月 → 跳过。433 批次4：no_signal 不写
+        # last_recalc，必须用 report.recalc_at 兜底，否则每 30s tick 重复触发。
+        last_m = None
+        for f in (state_file, report_file):
+            if os.path.exists(f):
+                try:
+                    with open(f, encoding='utf-8') as fh:
+                        _payload = _json.load(fh)
+                    last_m = _payload.get('last_recalc') or _payload.get('recalc_at')
+                except Exception:
+                    last_m = None
+                if last_m:
+                    break
+        if last_m and str(last_m).startswith(now_m):
+            return  # 本月已算
+
+        # 数据齐备：daily_cache 近 30 交易日（recompute 内部二次校验，不满足返回 insufficient_data）
+        from app.opportunity_atlas import potential_engine as _pe
+        from app.opportunity_atlas.potential_engine import run_monthly_ic_recalc
+        _pe.IC_WEIGHTS_FILE = os.path.join(data_dir, 'ic_weights.json')
+        _run_with_timeout(lambda: run_monthly_ic_recalc(_ecm, data_dir),
+                          timeout_sec=300, desc='月度 IC 重估（earn-only）')
+        logger.info("月度 IC 重估（earn-only）钩子完成")
+    except Exception as e:
+        logger.warning(f"月度 IC 重估异常: {e}")
+
+
 def main():
-    global _ecm, _running, _cleanup_done
+    global _ecm, _running, _retention_checked
 
     logger.info("data_daemon 启动")
     logger.info(f"DATA_DIR={os.environ.get('DATA_DIR')}")
@@ -6011,6 +6402,25 @@ def main():
     data_dir = os.environ.get('DATA_DIR') or os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data')
     init_sharding(data_dir)
     logger.info(f"分库管理器就绪 (data_dir: {data_dir})")
+
+    # 430号§9-6：注入 IC 权重文件路径（potential_engine 读侧生效）
+    try:
+        from app.opportunity_atlas import potential_engine as _pe
+        _pe.IC_WEIGHTS_FILE = os.path.join(data_dir, 'ic_weights.json')
+        logger.info(f"IC 权重文件已注入: {_pe.IC_WEIGHTS_FILE}")
+    except Exception as e:
+        logger.warning(f"IC 权重注入失败: {e}")
+
+    # 426号 S1/D8：启动自检——打印未登记分库路由的表清单（静默丢写风险面）
+    try:
+        from app.data.sharding_manager import sharding_manager as _sm
+        _unmapped = _sm.list_unmapped_tables(total_conn=_ecm.conn)
+        if _unmapped:
+            logger.warning(f"未登记分库路由的表清单（{len(_unmapped)}）: {_unmapped}")
+        else:
+            logger.info("未登记分库路由的表: 无")
+    except Exception as e:
+        logger.warning(f"未登记表自检失败: {e}")
 
     # 启动采集器
     collectors = _start_collectors()
@@ -6058,6 +6468,7 @@ def main():
     # 主循环（每 30 秒检查一次）
     _last_patrol = 0
     _last_ckpt = 0
+    _last_truncate = 0
     _last_session = None  # 355号方案规则11：时段切换跟踪
 
     logger.info("data_daemon 进入主循环（管道驱动）")
@@ -6105,6 +6516,16 @@ def main():
                 _last_ckpt = ts
             except Exception as e:
                 logger.warning(f"WAL checkpoint 失败: {e}")
+
+        # ── 426号 S4/D2：非交易时段每小时间隔执行 TRUNCATE 深收缩 ──
+        # PASSIVE 无法截断有读标记的 WAL；TRUNCATE 需无活跃读事务，失败自动
+        # 降级 PASSIVE。非交易时段（周末/盘后）读竞争低，深收缩可靠执行。
+        if not _is_market_hours() and ts - _last_truncate > 3600:
+            _last_truncate = ts
+            try:
+                _wal_truncate_all_dbs()
+            except Exception as e:
+                logger.warning(f"WAL TRUNCATE 维护失败: {e}")
 
         # ── WAL 阈值告警（2026-08-12 328号 L3）──
         # WAL 超过 2GB 提示膨胀（自动 checkpoint 被读阻塞时只增不减）；
@@ -6157,14 +6578,21 @@ def main():
         except Exception as e:
             logger.warning(f"管道驱动异常: {e}")
 
-        # ── 数据清理（日终完成后触发一次，305号§9兼容） ──
+        # ── 433批次1：月度 IC 重估轻钩子（earn-only；幂等、~3.4s、不阻塞主循环） ──
+        try:
+            _maybe_monthly_ic_recalc(data_dir)
+        except Exception as e:
+            logger.warning(f"月度 IC 重估钩子异常: {e}")
+
+        # ── 保留期检查（日终完成后触发一次，305号§9兼容；426号 S3/D1：原数据清理
+        #    改为下限保障检查——不删除超期数据，仅告警覆盖不足） ──
         if _is_pipeline_complete(datetime.now().strftime('%Y%m%d')):
-            if not _cleanup_done:
+            if not _retention_checked:
                 try:
-                    _run_data_cleanup()
-                    _cleanup_done = True
+                    _check_data_retention()
+                    _retention_checked = True
                 except Exception as e:
-                    logger.warning(f"数据清理异常: {e}")
+                    logger.warning(f"保留期检查异常: {e}")
 
         # ── 定时巡检（每整点，非交易时段，不变） ──
         if now.minute == 0 and (now.hour < 9 or now.hour >= 16):

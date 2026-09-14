@@ -517,13 +517,14 @@ class StatusEngine:
             'soft_risks': [], 'position_coeff': 1.0,
             'hold_only': False,
         }
-        # L0a 硬否决（不可逆：监管立案 / ST·退市）
+        _l0_cfg = self.cfg.get('l0', {}) or {}
+        # L0a 硬否决（不可逆：命中 yaml l0.hard_risks 登记项，如监管立案）
         ce = str(tags.get('catalyst_event', ''))
-        if ce == 'regulatory':
+        if ce in (_l0_cfg.get('hard_risks') or ['regulatory']):
             l0['hard_veto'] = True
-            l0['hard_reason'] = '监管立案（L0a 硬否决）'
+            l0['hard_reason'] = '监管立案（L0a 硬否决）' if ce == 'regulatory' else f'L0a 硬否决：{ce}'
         # L0b 软约束（可逆：仓位系数，对齐 cross_validate._evaluate_gate）
-        coeff = self.cfg.get('l0', {}).get('soft_risk_coeff', {})
+        coeff = _l0_cfg.get('soft_risk_coeff', {})
         if str(tags.get('fina_health', '')) == 'fail':
             l0['soft_risks'].append('fina_fail')
             l0['position_coeff'] *= float(coeff.get('fina_fail', 0.5))
@@ -546,8 +547,14 @@ class StatusEngine:
                     l0['position_coeff'] *= float(coeff.get('low_liquidity', 0.7))
         except Exception:
             pass
-        # L0c 持有期（信号已延伸 → 只可持有、不新开仓）
-        if lifecycle and lifecycle['stage'] == '已延伸':
+        # L0b2 情绪周期总仓位上限（387号§5.4；消费方 advice_engine Step 3）
+        _caps = _l0_cfg.get('emotion_position_cap', {})
+        if _caps:
+            _phase = str(tags.get('emotion_phase', 'normal')).lower()
+            l0['emotion_position_cap'] = float(_caps.get(_phase, _caps.get('normal', 0.6)))
+        # L0c 持有期（阶段登记于 yaml l0.hold_only_stages → 只可持有、不新开仓）
+        _hold_stages = _l0_cfg.get('hold_only_stages') or ['已延伸']
+        if lifecycle and lifecycle['stage'] in _hold_stages:
             l0['hold_only'] = True
         return l0
 
@@ -557,6 +564,11 @@ class StatusEngine:
     # ══════════════════════════════════════════════════════════
 
     # 358号§5.1 市场状态×维度权重矩阵
+    # 431号 G1 标注（批次13，2026-09-13）：本矩阵为**唯一 live 权威**——
+    # 消费于 StatusEngine._aggregate 与 _aggregate_v390
+    # （`weights = self.MARKET_REGIME_WEIGHTS.get(regime, ...)`）。
+    # weight_engine.py 的 STATIC_WEIGHTS 是其逐字节相同的死码孪生（该模块零消费方）
+    # ——调整权重时只改此处。本批不改值。
     MARKET_REGIME_WEIGHTS = {
         'trending_up':    {'signal': 0.15, 'structure': 0.20, 'vp': 0.15, 'chip_fund': 0.10, 'emotion': 0.10, 'risk': 0.15, 'valuation': 0.15},
         'ranging':        {'signal': 0.10, 'structure': 0.15, 'vp': 0.20, 'chip_fund': 0.10, 'emotion': 0.10, 'risk': 0.20, 'valuation': 0.15},

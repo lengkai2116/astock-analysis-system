@@ -23,10 +23,17 @@ class FactorRegistry:
     def register(self, factor_class: Type[BaseFactor]):
         """
         注册因子
+
+        426号 P1-5：重名改**报错拒绝覆盖**（原仅 warning 后静默覆盖，
+        后加载模块胜出、取值随 os.listdir 文件顺序漂移，因子缓存不可复现）。
+        重名因子须先经 builtin 模块内改名唯一化（如 ASTOCK_*/GTJA_PLACEHOLDER_*）。
         """
         name = factor_class.name
         if name in self._factors:
-            logger.warning(f"因子 {name} 已存在，将被覆盖")
+            _old = self._factors[name]
+            raise ValueError(
+                f"因子名冲突拒绝注册: {name}（{factor_class.__module__} 与 "
+                f"{_old.__module__} 重名；426号 P1-5 要求来源前缀唯一化）")
 
         self._factors[name] = factor_class
 
@@ -150,8 +157,9 @@ def _load_builtin_factors(registry: FactorRegistry):
     if not os.path.exists(builtin_dir):
         return
 
-    # 遍历builtin目录下的所有模块
-    for filename in os.listdir(builtin_dir):
+    # 遍历builtin目录下的所有模块（426号 P1-5：sorted 字典序，消除 os.listdir
+    # 文件系统顺序漂移——重名时代哪个定义胜出不再依赖部署机文件系统）
+    for filename in sorted(os.listdir(builtin_dir)):
         if filename.endswith('.py') and filename != '__init__.py':
             module_name = filename[:-3]
             try:
@@ -166,4 +174,4 @@ def _load_builtin_factors(registry: FactorRegistry):
                         not getattr(attr, '_is_abstract', False)):
                         registry.register(attr)
             except Exception as e:
-                logger.warning(f"加载因子模块 {module_name} 失败: {e}")
+                logger.error(f"加载因子模块 {module_name} 失败: {e}")

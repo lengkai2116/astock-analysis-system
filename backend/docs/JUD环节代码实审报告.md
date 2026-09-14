@@ -436,7 +436,7 @@ def compute_advice(final_score, dims_factor, l0, dim_results, ts_code, entry_pri
 
 ### 3.1 status_engine.yaml 完整内容
 
-**文件**: `backend/config/status_engine.yaml` (56行)
+**文件**: `backend/config/status_engine.yaml` (41行)
 
 ```yaml
 version: 1
@@ -467,6 +467,8 @@ l0:
     ice: 0.10, ebb: 0.30, normal: 0.60, recovery: 0.60, positive: 0.80
   hold_only_stages: ["已延伸"]
 ```
+
+> **⚠️ 订正注记（2026-09-13，430 号 §9 第 5 条落地后实测）**：以上快照为审计时原样留存，**勿照抄**。现行 `backend/config/status_engine.yaml` 已升至 **v2**、实际 **41 行**，与快照有 4 处不一致：① `version: 1` → **`2`**；② 整个 `dimension_weights` 块**已移除**；③ `consensus.color_high` / `color_low` / `neutral_is_zero` **已移除**（现行 `consensus` 仅保留 `enter_threshold` / `bearish_strong`）；④ `l0.hard_risks: [regulatory, st, delist]` → **`[regulatory]`**（L0a 仅监管类硬否决，对齐 `_apply_l0` 实际语义）。另：下文 §3.2 所述"`load_yaml()` 带缓存机制（`invalidate_config_cache()` 可清缓存）"中的 **`invalidate_config_cache()` 在代码中并不存在**（全仓库 0 处实现），该文档文件缓存实际由 `lru_cache` 承载。
 
 ### 3.2 配置读取逻辑
 
@@ -706,5 +708,5 @@ if _has_failed(status, ['JUD']):
 | `app/opportunity_atlas/advice_engine.py` | ~600 | compute_advice, _geometric, build_operation_advice |
 | `app/opportunity_atlas/arbiter.py` | ~200 | arbitrate (旧版规则优先级，321号) |
 | `app/services/status_config.py` | ~50 | get_status_engine_config, load_yaml |
-| `config/status_engine.yaml` | 56 | 全量配置 |
+| `backend/config/status_engine.yaml` | 41 | 全量配置 |
 | `data_daemon.py` | 5349 | _build_status_snapshot, _jud_enrich_with_meta, _build_treemap_snapshot |

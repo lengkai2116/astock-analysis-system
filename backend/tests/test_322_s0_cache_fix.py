@@ -20,17 +20,18 @@ def test_read_signal_cached_falls_back_to_latest():
     from app.routes import strategy_analyze as sa
 
     dm = DataManager()
-    signals, signal_date = sa._read_signal_cached(dm, '600519.SH')
-    assert signals, "非交易日应命中最新缓存（600519 有 08-07 缓存）"
+    signals, signal_date, dim_results = sa._read_signal_cached(dm, '600519.SH')
     assert signal_date, "应返回实际数据日期"
+    # 411号 Phase 1 后 signals 恒为空骨架，真实产物为 dim_results（八维状态快照）
+    assert signals or dim_results, "非交易日应命中最新缓存（600519 有 09-11 产物）"
     # 关键：不应触发实时计算（有缓存即为通过）
 
 
 def test_read_signal_cached_unknown_stock_returns_none():
-    """完全无缓存股票应返回 (None, None)（允许回退实时计算）"""
+    """完全无缓存股票应返回 (None, None, None)（允许回退实时计算）"""
     from app.data import DataManager
     from app.routes import strategy_analyze as sa
 
     dm = DataManager()
-    signals, signal_date = sa._read_signal_cached(dm, '000000.SZ')
-    assert signals is None and signal_date is None
+    signals, signal_date, dim_results = sa._read_signal_cached(dm, '000000.SZ')
+    assert signals is None and signal_date is None and dim_results is None

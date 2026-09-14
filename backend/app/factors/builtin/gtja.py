@@ -32,7 +32,7 @@ class GTJA_Base(BaseFactor):
 
 # 以下为GTJA191因子占位符，需要补充实现
 class GTJA_FACTOR_001(GTJA_Base):
-    name = "GTJA001"
+    name = "GTJA_PLACEHOLDER_001"
     name_cn = "GTJA001因子"
     category = "trend"
     subcategory = "price_trend"
@@ -41,7 +41,7 @@ class GTJA_FACTOR_001(GTJA_Base):
 
 
 class GTJA_FACTOR_002(GTJA_Base):
-    name = "GTJA002"
+    name = "GTJA_PLACEHOLDER_002"
     name_cn = "GTJA002因子"
     category = "momentum"
     subcategory = "price_momentum"
@@ -50,7 +50,7 @@ class GTJA_FACTOR_002(GTJA_Base):
 
 
 class GTJA_FACTOR_003(GTJA_Base):
-    name = "GTJA003"
+    name = "GTJA_PLACEHOLDER_003"
     name_cn = "GTJA003因子"
     category = "volatility"
     subcategory = "price_volatility"
@@ -59,7 +59,7 @@ class GTJA_FACTOR_003(GTJA_Base):
 
 
 class GTJA_FACTOR_004(GTJA_Base):
-    name = "GTJA004"
+    name = "GTJA_PLACEHOLDER_004"
     name_cn = "GTJA004因子"
     category = "volume"
     subcategory = "volume_trend"
@@ -68,7 +68,7 @@ class GTJA_FACTOR_004(GTJA_Base):
 
 
 class GTJA_FACTOR_005(GTJA_Base):
-    name = "GTJA005"
+    name = "GTJA_PLACEHOLDER_005"
     name_cn = "GTJA005因子"
     category = "reversal"
     subcategory = "price_reversal"

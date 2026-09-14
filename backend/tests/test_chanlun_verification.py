@@ -95,6 +95,21 @@ def make_trend_data(trend_type='up_down', rows=200):
 
 
 # ============================================================
+# 434号：framework analyze() 预计算 MACD 读取（411 Phase 5）在
+# daemon 运行中会跨进程持库挂起——本文件为合成数据验证缠论逻辑，
+# mock 预计算读取为「无预计算表」的 raw fallback 场景，保持 DB-free。
+# ============================================================
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_precomputed_macd(monkeypatch):
+    import app.engine.framework.chanlun_strategy as _cs
+    monkeypatch.setattr(_cs, '_load_precomputed_macd', lambda ts_code: {})
+
+
+# ============================================================
 # 第1组：代码逻辑正确性检测
 # ============================================================
 

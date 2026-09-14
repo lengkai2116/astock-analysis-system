@@ -24,7 +24,8 @@ class Config:
     DATA_DIR = os.getenv('DATA_DIR', _get_default_data_dir())
     CACHE_EXPIRE_TIME = 3600
 
-    # Redis（Gunicorn 多 Worker SocketIO 广播）
+    # REDIS_URL 为残留键：当前全仓无任何消费方（旧 Gunicorn 多 Worker SocketIO 广播设计，
+    # 现已改为单进程直接广播 + TTLCache 内存缓存）
     REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 
     # LLM配置 - DeepSeek API (预留)

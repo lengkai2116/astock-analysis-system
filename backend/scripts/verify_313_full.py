@@ -11,7 +11,7 @@ import json
 import statistics
 from collections import Counter
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))  # backend/
 
 from app.data import DataManager
 from app.data.enhanced_cache_manager import EnhancedCacheManager

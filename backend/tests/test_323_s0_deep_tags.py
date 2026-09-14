@@ -53,25 +53,19 @@ def test_extract_chip_deep_tags_independent():
 
 def test_tag_group_columns_exist():
     """opportunity_tags_cache 已有 tag_group 列（S0 复用，不新增列）"""
-    import sqlite3
-
-    from app.data.enhanced_cache_manager import EnhancedCacheManager
-    ecm = EnhancedCacheManager()
-    conn = sqlite3.connect(ecm.db_path)
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(opportunity_tags_cache)").fetchall()]
-    conn.close()
+    from app.data.sharding_manager import sharding_manager
+    # 421号R4a：opportunity_tags_cache 属 compute_cache.db，走分库路由（原直连总库恒空）
+    rows = sharding_manager.execute_query(
+        'opportunity_tags_cache', "PRAGMA table_info(opportunity_tags_cache)")
+    cols = [r[1] for r in rows]
     assert 'tag_group' in cols, "tag_group 列应已存在"
 
 
 def test_existing_tag_groups_preserved():
     """现有 tag_group（derived/direction/position 等）不受 S0 影响"""
-    import sqlite3
-
-    from app.data.enhanced_cache_manager import EnhancedCacheManager
-    ecm = EnhancedCacheManager()
-    conn = sqlite3.connect(ecm.db_path)
-    rows = conn.execute("SELECT DISTINCT tag_group FROM opportunity_tags_cache").fetchall()
-    conn.close()
+    from app.data.sharding_manager import sharding_manager
+    rows = sharding_manager.execute_query(
+        'opportunity_tags_cache', "SELECT DISTINCT tag_group FROM opportunity_tags_cache")
     groups = {r[0] for r in rows}
     assert 'derived' in groups and 'direction' in groups, "现有 tag_group 应保留"
     assert 'screen' not in groups, "不应存在方案早期设想的 screen 组（用现有组）"
