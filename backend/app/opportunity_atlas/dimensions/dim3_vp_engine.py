@@ -19,6 +19,7 @@ import pandas as pd
 
 from app.data.mixins import DataAwareMixin
 from app.engine.patterns.engine import PatternEngine
+from app.opportunity_atlas.dimensions.enum_cn_map import pattern_code_cn
 
 logger = logging.getLogger(__name__)
 
@@ -4568,8 +4569,9 @@ class Dim3VPEngine(DataAwareMixin):
             except:
                 df = None
 
-        # 量价状态
-        vp_state = dims.get('vp', {}).get('state', '中性')
+        # 量价状态（440号：自产，不再读空 dims['vp']——vp 由 volume_price_fit 映射）
+        vp_pattern_tag = str(tags.get('volume_price_fit', ''))
+        vp_state = {'healthy': '强健康', 'diverging': '背离', 'neutral': '中性'}.get(vp_pattern_tag, '中性')
         light_map = {'强健康': 'green', '健康': 'green', '中性': 'yellow', '背离': 'red', '严重背离': 'red'}
         vp_light = light_map.get(vp_state, 'yellow')
 
@@ -4600,7 +4602,7 @@ class Dim3VPEngine(DataAwareMixin):
         if 60 < rsi <= 70: is_ = 1
         elif 30 <= rsi < 40: is_ = 0.8
         elif rsi > 70 or rsi < 30: is_ = 0.2
-        dp = -1.5 if any('背离' in str(e) for e in dims.get('vp', {}).get('evidence', [])) else 0
+        dp = -1.5 if vp_state in ('背离', '严重背离') else 0
         raw = vp_score + ve + ms + cs + is_ + dp
         # 形态评分纳入健康度计算（权重15%）— 10分制映射
         pattern_deviation = (pattern_score - 5) / 5 * 1.5
@@ -4641,7 +4643,7 @@ class Dim3VPEngine(DataAwareMixin):
         # 形态（使用 PatternEngine 评分 — 10分制）
         pat_names = []
         if pattern_details and pattern_details.get('pattern_count', 0) > 0:
-            pat_names = [p['name'] for p in pattern_details.get('patterns', [])[:3]]
+            pat_names = [pattern_code_cn(p['name']) for p in pattern_details.get('patterns', [])[:3]]
         pat_det = ', '.join(pat_names) if pat_names else '无明确形态'
 
         # 格兰威尔量价关系八准则分类（Wiki知识库）

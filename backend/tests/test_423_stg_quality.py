@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 
+from app.data import stg_quality as stg_quality_mod
 from app.data.stg_quality import (
     CheckResult,
     QualityChecker,
@@ -25,9 +26,22 @@ def _make_signal_row(ts_code='000001.SZ', trade_date='2026-09-10', good=True):
     if good:
         signal = json.dumps({'direction': 'up', 'score': 0.8})
         dim_results = json.dumps({'dim2': {'judgment': {'state': '盘整'}}})
-        # seven_dim_json 条件性产出（仅 summary 恒有，其余维按引擎信号存在与否）
+        # 436号B2+B4 门禁终态：good 行为合规 7 键（段数≥6 + 无旧键 + 每段含 title/light/text）
         seven_dim = json.dumps({
-            'structure': {'light': 'green', 'text': '结构: up'}, 'summary': {'light': 'green', 'text': '整体偏多'},
+            'signal': {'title': '缠论信号', 'light': '🟢', 'text': '信号: 强确认',
+                       'judgment': {}, 'audit': {}},
+            'structure': {'title': '结构位置状态', 'light': '🟢', 'text': '结构: up',
+                          'judgment': {}, 'audit': {}},
+            'volume_price': {'title': '量价配合', 'light': '🟢', 'text': '量价: up',
+                             'judgment': {}, 'audit': {}},
+            'fund_chip': {'title': '资金筹码', 'light': '🟢', 'text': '资金: 温和',
+                          'judgment': {}, 'audit': {}},
+            'emotion': {'title': '情绪温度', 'light': '🟡', 'text': '情绪: 中性',
+                        'judgment': {}, 'audit': {}},
+            'risk': {'title': '风险警示', 'light': '🟢', 'text': '风险: 低',
+                     'judgment': {}, 'audit': {}},
+            'summary': {'title': '状态总结', 'light': '🟢', 'text': '整体偏多',
+                        'judgment': {}, 'audit': {}},
         })
     else:
         signal = '{bad json'
@@ -36,7 +50,7 @@ def _make_signal_row(ts_code='000001.SZ', trade_date='2026-09-10', good=True):
     return (ts_code, trade_date, signal, 1, seven_dim, dim_results)
 
 
-# ── G3：SIG 结果自检（423号 §2.3 专项）─────────────────────────
+# ── G3：SIG 结果自检（423号 §2.3 专项 / 436号B2 分级门禁）────────
 
 def test_validate_signal_rows_good():
     checker = QualityChecker()
@@ -53,19 +67,36 @@ def test_validate_signal_rows_bad_json():
 
 
 def test_validate_signal_rows_seven_dim_missing_summary():
-    """故障注入：seven_dim_json 缺恒产出的 summary 键 → 检出"""
+    """故障注入：seven_dim_json 缺恒产出的 summary 键 → 硬拦检出"""
     checker = QualityChecker()
     row = list(_make_signal_row())
-    row[4] = json.dumps({'structure': {'light': 'green'}})
+    row[4] = json.dumps({'structure': {'title': '结构', 'light': '🟢', 'text': 'x'}})
     issues = checker.validate_signal_rows([tuple(row)])
     assert any('缺 summary 键' in i for i in issues)
 
 
-def test_validate_signal_rows_seven_dim_ok_conditional():
-    """seven_dim_json 条件性产出（2 键，含 summary）应通过"""
+def test_validate_signal_rows_seven_dim_missing_seg_text():
+    """436号B2：seven_dim_json 段内缺 text → 硬拦（每段必含 title/light/text）"""
     checker = QualityChecker()
     row = list(_make_signal_row())
-    row[4] = json.dumps({'emotion': {'light': 'yellow'}, 'summary': {'light': 'yellow'}})
+    row[4] = json.dumps({'structure': {'title': '结构', 'light': '🟢'},
+                         'summary': {'title': '总结', 'light': '🟡', 'text': 'x'}})
+    issues = checker.validate_signal_rows([tuple(row)])
+    assert any('段 structure 缺字段 text' in i for i in issues)
+
+
+def test_validate_signal_rows_seven_dim_ok_conditional():
+    """436号B2+B4：条件性产出（6 键、每段三字段齐备、含 summary）段数≥6 通过段数与旧键硬层"""
+    checker = QualityChecker()
+    row = list(_make_signal_row())
+    row[4] = json.dumps({
+        'emotion': {'title': '情绪', 'light': '🟡', 'text': 'x'},
+        'risk': {'title': '风险', 'light': '🟡', 'text': 'x'},
+        'structure': {'title': '结构', 'light': '🟡', 'text': 'x'},
+        'volume_price': {'title': '量价', 'light': '🟡', 'text': 'x'},
+        'fund_chip': {'title': '资金', 'light': '🟡', 'text': 'x'},
+        'summary': {'title': '总结', 'light': '🟡', 'text': 'x'},
+    })
     assert checker.validate_signal_rows([tuple(row)]) == []
 
 
@@ -261,3 +292,68 @@ def test_quality_round_continuous_failure_for_escalation(monkeypatch):
         assert out['passed'] is False
     # 3 轮失败 = 上层可递增 retry_count 至 3 → 触发 _alert_qa_failure（L2 告警升级）
     assert len(calls) == 3, '连续失败必须持续触发补算调度（供上层计数升级告警）'
+
+
+# ── 436号B2+B4 门禁：B4 段数/旧键升硬 + 软项（缺富字段/light）仍不拦 ──
+
+def _six_key_seven_dim(extra_key=None, light='🟢'):
+    """构造 6 段（≥6 过段数硬层）+ 可选第 7 键（用于旧键用例）的 seven_dim dict"""
+    base = {
+        'emotion': {'title': '情绪', 'light': light, 'text': 'x'},
+        'risk': {'title': '风险', 'light': light, 'text': 'x'},
+        'structure': {'title': '结构', 'light': light, 'text': 'x'},
+        'volume_price': {'title': '量价', 'light': light, 'text': 'x'},
+        'signal': {'title': '信号', 'light': light, 'text': 'x'},
+        'summary': {'title': '总结', 'light': light, 'text': 'x'},
+    }
+    if extra_key:
+        base[extra_key] = {'title': '资金', 'light': light, 'text': 'x'}
+    return base
+
+
+def test_validate_legacy_key_hard_blocked():
+    """B4：旧键 chip_fund 出现 → 硬拦（门禁终态）——即使段数≥6 也拦"""
+    checker = QualityChecker()
+    row = list(_make_signal_row())
+    # 6 段正常 + 第 7 键为旧键 chip_fund → 段数≥6 过，但旧键必硬拦
+    row[4] = json.dumps(_six_key_seven_dim(extra_key='chip_fund'))
+    issues = checker.validate_signal_rows([tuple(row)])
+    assert any('旧键' in i and 'chip_fund' in i for i in issues)
+
+
+def test_validate_segment_count_hard_blocked():
+    """B4：段数 < 6 → 硬拦（门禁终态）"""
+    checker = QualityChecker()
+    row = list(_make_signal_row())
+    row[4] = json.dumps(_six_key_seven_dim())
+    row[4] = json.dumps({'emotion': {'title': '情绪', 'light': '🟡', 'text': 'x'},
+                         'summary': {'title': '总结', 'light': '🟡', 'text': 'x'}})
+    issues = checker.validate_signal_rows([tuple(row)])
+    assert any('段数不足' in i and '2<6' in i for i in issues)
+
+
+def test_validate_soft_missing_rich_field_not_blocking(monkeypatch):
+    """段缺 judgment/audit 富字段 → 仍软告警（QA-CHECK warning），不入 issues 硬拦（非 B4 升项）"""
+    checker = QualityChecker()
+    row = list(_make_signal_row())
+    # 6 段全缺 judgment/audit（无富字段）→ 段数≥6 过硬层，仅软记缺富字段
+    row[4] = json.dumps(_six_key_seven_dim())
+    captured = {}
+    monkeypatch.setattr(stg_quality_mod.logger, 'warning',
+                        lambda msg, *a, **k: captured.setdefault('log', msg))
+    issues = checker.validate_signal_rows([tuple(row)])
+    assert issues == []
+    assert captured and 'QA-CHECK' in captured['log']
+
+
+def test_validate_soft_bad_light_not_blocking(monkeypatch):
+    """light 越界（非 emoji）→ 仍软告警，不入 issues 硬拦（非 B4 升项）"""
+    checker = QualityChecker()
+    row = list(_make_signal_row())
+    row[4] = json.dumps(_six_key_seven_dim(light='green'))
+    captured = {}
+    monkeypatch.setattr(stg_quality_mod.logger, 'warning',
+                        lambda msg, *a, **k: captured.setdefault('log', msg))
+    issues = checker.validate_signal_rows([tuple(row)])
+    assert issues == []
+    assert captured and 'light越界' in captured['log']

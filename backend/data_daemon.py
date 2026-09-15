@@ -455,6 +455,103 @@ def _compute_volume_ratio(trade_date: str) -> int:
         return 0
 
 
+def _compute_relative_strength(trade_date: str = None) -> int:
+    """438号缺口③：全市场个股相对强弱（双基准超额收益）批量计算
+
+    对全市场活跃股票，按最新可用交易日计算 20d/60d 个股收益率，
+    分别相对上证指数(000001.SH)/沪深300(000300.SH)求出超额收益，
+    写入 relative_strength_cache（compute_cache.db），供 dim8/前端查询。
+
+    收益率口径：N日收益率 = 最新收盘 / N交易日前收盘 - 1。
+    """
+    _ensure_pd()
+    import pandas as pd
+    from app.data.sharding_manager import sharding_manager
+    try:
+        conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('daily_cache'))
+
+        # 1) 定位最新交易日
+        latest = conn.execute(
+            "SELECT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
+        ).fetchone()
+        if not latest:
+            return 0
+        asof_date = latest[0]
+
+        # 2) 取最近至多61个交易日，作为20d/60d收益率窗口
+        dates = [r[0] for r in conn.execute(
+            "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 61"
+        ).fetchall()][::-1]
+        if len(dates) < 61:
+            logger.info(f"  [相对强弱] 交易日不足({len(dates)}<61)，跳过")
+            return 0
+        placeholders = ','.join('?' * len(dates))
+
+        # 3) 股票池：全市场日线代码，剔除指数代码（宽基 BROAD_INDEX_CODES + 申万 .SI）
+        pool_rows = conn.execute(
+            f"SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date IN ({placeholders})",
+            dates
+        ).fetchall()
+        exclude = set(BROAD_INDEX_CODES)
+        exclude |= set(SW_INDEX_CODES)
+        stock_codes = [r[0] for r in pool_rows
+                       if r[0] not in exclude and not r[0].endswith('.SI')]
+
+        # 4) 加载窗口内全部收盘价（股票池 + 双基准）
+        load_codes = stock_codes + ['000001.SH', '000300.SH']
+        code_ph = ','.join('?' * len(load_codes))
+        rows = conn.execute(
+            f"SELECT ts_code, trade_date, close FROM daily_cache "
+            f"WHERE trade_date IN ({placeholders}) AND ts_code IN ({code_ph}) "
+            f"ORDER BY ts_code, trade_date",
+            dates + load_codes
+        ).fetchall()
+        if not rows:
+            return 0
+        df = pd.DataFrame(rows, columns=['ts_code', 'trade_date', 'close'])
+
+        def _n_day_ret(series: pd.Series, n: int) -> float:
+            """series 为按时间升序的收盘价序列，返回 n 交易日收益（需 n+1 个观测）"""
+            s = series.dropna()
+            if len(s) < n + 1:
+                return None
+            return float(s.iloc[-1] / s.iloc[-1 - n] - 1)
+
+        # 5) 双基准窗口内收益（000001.SH 上证 / 000300.SH 沪深300）
+        bench_rows = df[df['ts_code'].isin(['000001.SH', '000300.SH'])]
+        bench_closes = {}
+        for code in ['000001.SH', '000300.SH']:
+            sub = bench_rows.loc[bench_rows['ts_code'] == code, 'close']
+            bench_closes[code] = {
+                'ret_20d': _n_day_ret(sub, 20),
+                'ret_60d': _n_day_ret(sub, 60),
+            }
+
+        # 6) 每股 × 每基准 → 写出多行（20d/60d 各独立计算：深度不足时该档为 None，
+        #    不因缺 60d 历史而整行丢弃——新上市/长期停牌股仍产出 20d 超额）
+        out = []
+        for code in stock_codes:
+            sub = df.loc[df['ts_code'] == code, 'close'].dropna()
+            if len(sub) < 21:
+                continue
+            ret_20d = _n_day_ret(sub, 20)
+            ret_60d = _n_day_ret(sub, 60)
+            for bench, br in bench_closes.items():
+                b20 = br.get('ret_20d'); b60 = br.get('ret_60d')
+                ex20 = ret_20d - b20 if (ret_20d is not None and b20 is not None) else None
+                ex60 = ret_60d - b60 if (ret_60d is not None and b60 is not None) else None
+                out.append((asof_date, code, bench,
+                            ret_20d, ret_60d, b20, b60, ex20, ex60))
+        if out:
+            written_stocks = len(set(r[1] for r in out))
+            _ecm.cache_relative_strength(out)
+            logger.info(f"  [相对强弱] asof={asof_date} 写入 {len(out)} 条 ({written_stocks} 股 × 2 基准)")
+        return len(out)
+    except Exception as e:
+        logger.warning(f"  [相对强弱] 计算失败: {e}")
+        return 0
+
+
 def _batch_moneyflow(trade_date: str) -> int:
     """全市场资金流向 — 1 次 API 调用"""
     import tushare as ts
@@ -524,15 +621,31 @@ def _backfill_moneyflow(days: int = 25) -> int:
     return total
 
 
-# 申万一级行业指数代码（28 个，2026-08-12 修正：原注释误写 31，且完整性检查用错阈值致回填死循环）
-SW_INDEX_CODES = [
-    '801010.SI', '801020.SI', '801030.SI', '801040.SI', '801050.SI',
-    '801080.SI', '801110.SI', '801120.SI', '801130.SI', '801140.SI',
-    '801150.SI', '801160.SI', '801170.SI', '801180.SI', '801200.SI',
-    '801210.SI', '801230.SI', '801710.SI', '801720.SI', '801730.SI',
-    '801740.SI', '801750.SI', '801760.SI', '801770.SI', '801780.SI',
-    '801790.SI', '801880.SI', '801890.SI',
+# 四大宽基指数代码（438号缺口①修复：HS300/000300.SH 为全系统相对强弱基准，读方 BenchmarkService 在用、此前写方遗漏未落日线）
+BROAD_INDEX_CODES = [
+    '000001.SH', '000300.SH', '399001.SZ', '399006.SZ', '899050.BJ',
 ]
+
+# 申万一级行业指数代码（31 个，SW2021 全量）
+# 438号缺口②修复：①接口改用 sw_daily（index_daily 不含 801*，致从源头取空）
+# ②补齐 SW2021 一级行业：移除废弃 801020（子行业，数据源无），新增 801950/801960/801970/801980
+SW_INDEX_CODES = [
+    '801010.SI', '801030.SI', '801040.SI', '801050.SI', '801080.SI',
+    '801110.SI', '801120.SI', '801130.SI', '801140.SI', '801150.SI',
+    '801160.SI', '801170.SI', '801180.SI', '801200.SI', '801210.SI',
+    '801230.SI', '801710.SI', '801720.SI', '801730.SI', '801740.SI',
+    '801750.SI', '801760.SI', '801770.SI', '801780.SI', '801790.SI',
+    '801880.SI', '801890.SI', '801950.SI', '801960.SI', '801970.SI',
+    '801980.SI',
+]
+
+# 申万行业指数 Tushare 接口：sw_daily（index_daily 不含 801*）
+# sw_daily 返回列 -> daily_cache 需要的 daily_cols 映射：
+#   pct_change -> pct_chg；change/name/pe/pb/float_mv/total_mv 丢弃；vol->vol(万手? 由源定)、amount->amount
+_SW_DAILY_COL_MAP = {
+    'pct_change': 'pct_chg',
+}
+_SW_DAILY_KEEP = {'ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg'}
 
 
 def _batch_index_daily(trade_date: str) -> int:
@@ -542,8 +655,8 @@ def _batch_index_daily(trade_date: str) -> int:
     pro = ts.pro_api()
     total = 0
 
-    # 四大宽基指数
-    for code in ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']:
+    # 四大宽基指数（含 HS300/000300.SH，438号缺口①）
+    for code in BROAD_INDEX_CODES:
         try:
             raw = _ts(pro.index_daily, ts_code=code, trade_date=trade_date)
             if raw is None or raw.empty:
@@ -560,19 +673,19 @@ def _batch_index_daily(trade_date: str) -> int:
         except Exception as e:
             logger.warning(f"指数 {code} 同步失败: {e}")
 
-    # 申万一级行业指数（28 个，模块级常量 SW_INDEX_CODES）
+    # 申万一级行业指数（31 个，模块级常量 SW_INDEX_CODES）
+    # 438号缺口②：接口改用 sw_daily（index_daily 不含 801*，从源头取空）
     sw_codes = SW_INDEX_CODES
     sw_count = 0
     for code in sw_codes:
         try:
-            raw = _ts(pro.index_daily, ts_code=code, trade_date=trade_date)
+            raw = _ts(pro.sw_daily, ts_code=code, trade_date=trade_date)
             if raw is None or raw.empty:
                 continue
-            df = raw.copy()
+            df = raw.rename(columns=_SW_DAILY_COL_MAP)
             if 'trade_date' in df.columns:
                 df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
-            daily_cols = {'ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg'}
-            extra = [c for c in df.columns if c not in daily_cols]
+            extra = [c for c in df.columns if c not in _SW_DAILY_KEEP]
             if extra:
                 df = df.drop(columns=extra)
             _ecm.cache_daily_data(df)
@@ -595,22 +708,25 @@ def _backfill_index_daily(days: int = 25) -> int:
     end_date = datetime.now().strftime('%Y%m%d')
     start_date = (datetime.now() - timedelta(days=days + 10)).strftime('%Y%m%d')  # 多取10天覆盖周末
 
-    # 检查已有数据量
+    # 检查已有数据量（按各宽基最少天数判定：任一指数（如 000300）缺失即触发回填，438号缺口①）
     try:
         from app.data.sharding_manager import sharding_manager
         conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('daily_cache'))
+        placeholders = ','.join('?' * len(BROAD_INDEX_CODES))
         existing = conn.execute(
-            "SELECT COUNT(DISTINCT trade_date) FROM daily_cache WHERE ts_code='000001.SH'"
-        ).fetchone()[0]
+            "SELECT MIN(cnt) FROM (SELECT COUNT(DISTINCT trade_date) AS cnt FROM daily_cache "
+            f"WHERE ts_code IN ({placeholders}) GROUP BY ts_code)",
+            BROAD_INDEX_CODES,
+        ).fetchone()[0] or 0
     except Exception:
         existing = 0
 
     if existing >= days:
-        logger.info(f"指数日线回填: 已有{existing}天数据，跳过")
+        logger.info(f"指数日线回填: 已有至少{existing}天数据（各宽基覆盖），跳过")
         return 0
 
     logger.info(f"指数日线回填: 从{start_date}到{end_date}")
-    for code in ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']:
+    for code in BROAD_INDEX_CODES:
         try:
             raw = _ts(pro.index_daily, ts_code=code, start_date=start_date, end_date=end_date)
             if raw is None or raw.empty:
@@ -1260,6 +1376,115 @@ def _batch_finance_report(codes: list = None) -> int:
     return total
 
 
+# ── 441号D·通道②增强：个股级素材覆盖巡检 ─────────────────────
+# run_integrity_check 的 batch_background 原实现仅空表触发批量补采，
+# 抓不到「非空表 + 个股缺失」（如 stk_holder 曾缺 456 只深市个股）。
+# 现将单只补采辅助提取为模块级，供「按 active_code 覆盖核对」复用。
+
+def _sync_single_finance(code: int = 0) -> int:
+    """单只扩展财务指标补采（复用 429号 单只路径）"""
+    _ensure_ecm()
+    provider = _get_tushare_provider()
+    raw = provider.get_fina_indicator_extended(code)
+    if raw:
+        import pandas as _pd
+        df = _pd.DataFrame(raw)
+        for col in ['end_date', 'ann_date']:
+            if col in df.columns:
+                df[col] = _pd.to_datetime(df[col]).dt.date
+        _ecm.cache_finance_report_data(df)
+        return len(df)
+    return 0
+
+
+def _sync_single_stk_holder(code: int = 0) -> int:
+    """单只股东人数补采（复用 429号 单只路径）"""
+    _ensure_ecm()
+    provider = _get_tushare_provider()
+    raw = provider.get_stk_holdernumber(code)
+    if raw:
+        import pandas as _pd
+        df = _pd.DataFrame(raw)
+        for col in ['end_date', 'ann_date']:
+            if col in df.columns:
+                df[col] = _pd.to_datetime(df[col]).dt.date
+        _ecm.cache_stk_holder_data(df)
+        return len(df)
+    return 0
+
+
+def _sync_single_top10_holders(code: int = 0) -> int:
+    """单只前十大股东补采（复用 429号 单只路径）"""
+    _ensure_ecm()
+    provider = _get_tushare_provider()
+    raw = provider.get_top10_holders(code)
+    if raw:
+        import pandas as _pd
+        df = _pd.DataFrame(raw)
+        for col in ['end_date', 'ann_date']:
+            if col in df.columns:
+                df[col] = _pd.to_datetime(df[col]).dt.date
+        _ecm.cache_top10_holders(df)
+        return len(df)
+    return 0
+
+
+# 覆盖巡检表 → (cache表, 单只补采函数)
+# 与 batch_background 保持一致的三张表：非空表时逐 active_code 核对缺失并单只补采。
+_COVERAGE_RECONCILE = [
+    ('top10_holders_cache',  _sync_single_top10_holders,  '前十大股东'),
+    ('stk_holder_cache',     _sync_single_stk_holder,     '股东人数'),
+    ('finance_report_cache', _sync_single_finance,        '扩展财务'),
+]
+
+
+def _reconcile_cache_coverage(max_codes: int = 40) -> dict:
+    """按 active_code 覆盖核对三张富字段素材表，缺失的个股单只补采。
+
+    441号D·通道②增强：原 batch_background 仅空表触发批量补采（抓不到「非空表+个股缺失」）。
+    本函数取全管道股票池（_get_active_codes，441号A 已剔指数），对照各 cache 表的
+    DISTINCT ts_code 集合求差集，对缺失个股按 MAX 上限逐只单只补采，避免单 tick 打爆
+    Tushare 积分（上限受 max_codes 限流，剩余缺口留待下轮巡检）。
+
+    Returns:
+        {表标签: 补采只数}
+    """
+    _ensure_ecm()
+    results = {}
+    try:
+        active = _get_active_codes()
+    except Exception as e:
+        logger.warning(f"覆盖巡检：获取 active 股票池失败: {e}")
+        return results
+    if not active:
+        logger.info("覆盖巡检：active 池为空，跳过")
+        return results
+    for table, sync_fn, label in _COVERAGE_RECONCILE:
+        try:
+            # 读分库该 cache 表已覆盖股票集合（非空表才做个股覆盖核对）
+            covered_rows = _shard_fetchall(
+                table, f"SELECT DISTINCT ts_code FROM \"{table}\"")
+            covered = {r[0] for r in covered_rows}
+            missing = [c for c in active if c not in covered]
+            if not missing:
+                logger.info(f"  [{label}] 覆盖完整（{len(covered)} 只）")
+                results[label] = 0
+                continue
+            # 单只补采缺失个股，受 max_codes 限流
+            _done = 0
+            for code in missing[:max_codes]:
+                try:
+                    sync_fn(code)
+                    _done += 1
+                except Exception as e:
+                    logger.warning(f"  [{label}] 单只覆盖补采失败 {code}: {e}")
+            logger.info(f"  [{label}] 缺失 {len(missing)} 只，本轮单只补采 {_done} 只（上限 {max_codes}）")
+            results[label] = _done
+        except Exception as e:
+            logger.warning(f"  [{label}] 覆盖巡检失败: {e}")
+    return results
+
+
 def _batch_pattern_score(trade_date: str):
     """日终批量计算形态评分（353/358号方案）
 
@@ -1654,7 +1879,7 @@ def run_integrity_check(backfill_days: int = 1):
     logger.info("开始完整性检查...")
 
     # 指数日线检查：4只指数代码在 daily_cache 中的记录数（356号：从分库读取）
-    idx_codes = ['000001.SH', '399001.SZ', '899050.BJ', '399006.SZ']
+    idx_codes = BROAD_INDEX_CODES  # 438号缺口①：含 HS300/000300.SH，动态占位
     idx_checks = []
     for offset in range(0, backfill_days):
         d = (datetime.now() - timedelta(days=offset))
@@ -1665,12 +1890,13 @@ def run_integrity_check(backfill_days: int = 1):
             # 432号 R4：今日指数数据未发布（<18:00），跳过今日检查（历史日期不受限）
             continue
         try:
+            placeholders = ','.join('?' * len(idx_codes))
             cnt = _query_table('daily_cache',
-                "SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND ts_code IN (?,?,?,?)",
+                f"SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND ts_code IN ({placeholders})",
                 [ds] + idx_codes)
         except Exception:
             cnt = 0
-        if cnt < 4:
+        if cnt < len(idx_codes):
             idx_checks.append(ds)
 
     checks = [
@@ -1755,22 +1981,41 @@ def run_integrity_check(backfill_days: int = 1):
 
     # ── 4 类后台低优数据检查（空表时触发补采，非每日必须，356号：从分库读取）──
     # 363号F55-2修复：adj_factor增加时效性检查（滞后>3天触发补采）
+    # 441号D·通道②增强：非空表也做「个股级覆盖核对」——原实现仅空表触发批量补采，
+    # 抓不到「非空表+个股缺失」（如 stk_holder 曾缺 456 只深市个股）。三表空表→
+    # 批量补采；非空表→ _reconcile_cache_coverage 逐 active_code 核对缺失单只补采。
     batch_background = [
         ('top10_holders_cache', _batch_top10_holders, '前十大股东'),
         ('stk_holder_cache',    _batch_stk_holder,    '股东人数'),
         ('finance_report_cache', _batch_finance_report, '扩展财务'),
     ]
+    empty_tables = []
     for table, batch_fn, label in batch_background:
         try:
             cnt = _query_table(table, f"SELECT COUNT(*) FROM {table}")
             if cnt == 0:
                 logger.info(f"  [{label}] 空表，触发补采...")
+                empty_tables.append(table)
                 added = batch_fn()
                 logger.info(f"    → 补采 {added} 条")
             else:
-                logger.info(f"  [{label}] {cnt} 行 ✅")
+                logger.info(f"  [{label}] {cnt} 行，进入个股覆盖核对")
         except Exception as e:
             logger.warning(f"  [{label}] 检查失败: {e}")
+    # 441号D·通道②增强：非空表（含本轮刚批量补采的表）按 active_code 核对个股级缺失
+    # 并单只补采（_reconcile_cache_coverage 内部逐一处理三表）。空表本轮已批量补采，
+    # 其覆盖由下一轮巡检收敛；三表全空时跳过覆盖核对避免重复全市场单只补采。
+    if len(empty_tables) < len(batch_background):
+        for table, _batch_fn, label in batch_background:
+            if table in empty_tables:
+                continue
+            try:
+                _reconcile_cache_coverage()
+                break  # 单次覆盖巡检即覆盖三表，避免重复取 active 池
+            except Exception as e:
+                logger.warning(f"  [{label}] 覆盖核对失败: {e}")
+    else:
+        logger.info("  三张富字段素材表均空，本轮已批量补采，跳过覆盖核对（下轮收敛）")
 
     # adj_factor单独检查：空表或时效性滞后>3个交易日时触发补采
     # 432号 R1：改读分年表 adj_factor_cache_YYYY（356号拆分后写入只落分年表，
@@ -1854,39 +2099,63 @@ def run_integrity_check(backfill_days: int = 1):
         logger.info(f"  [指数日线] {idx_date} 4只指数数据不足，补采...")
         _batch_index_daily(ds_api)
 
-    # 申万行业指数完整性检查（28 个行业，缺失时回填60日）
+    # 申万行业指数完整性检查（31 个行业，缺失/陈旧时 sw_daily 区间回填）
+    import tushare as _ts_sw, pandas as _pd_sw
+    pro = _ts_sw.pro_api()
     try:
         have_rows = _shard_fetchall(
-            'daily_cache', "SELECT DISTINCT ts_code FROM daily_cache WHERE ts_code LIKE '801%.SI'")
-        have_set = {r[0] for r in have_rows}
-        # 2026-08-12 修正：用实际 sw_codes 列表对比（原硬编码 31，实际 28，
-        # 致 sw_cnt<31 恒真 → 每次完整性检查都回填 60 天 → 死循环阻塞主循环）
-        missing = [c for c in SW_INDEX_CODES if c not in have_set]
-        if missing:
-            # 2026-08-12 修正2：回填后仍缺（如 801020 数据源永久缺失）不应每 tick 重试
-            # 60 天回填（死循环阻塞主循环）——检查当日是否已尝试过回填，是则跳过
+            'daily_cache', "SELECT MAX(trade_date) AS d, ts_code FROM daily_cache "
+                           "WHERE ts_code LIKE '801%.SI' GROUP BY ts_code")
+        latest_by_code = {r[1]: r[0] for r in have_rows}
+        missing = [c for c in SW_INDEX_CODES if c not in latest_by_code]
+        stale = []
+        for c in SW_INDEX_CODES:
+            d = latest_by_code.get(c)
+            if d is not None and _lag_trading_days(
+                    _pd_sw.to_datetime(d), datetime.now()) > 1:
+                stale.append(c)
+        if missing or stale:
             today_key = f'sw_index_backfilled:{datetime.now().strftime("%Y%m%d")}'
             try:
                 done_row = _ecm.conn.execute(
                     "SELECT value FROM cache_metadata WHERE key=?", [today_key]
                 ).fetchone()
                 if done_row:
-                    logger.info(f"  [申万行业指数] 当日已回填尝试过（缺 {len(missing)} 个，跳过）")
+                    logger.info(f"  [申万行业指数] 当日已回填尝试过（缺 {len(missing)} 缺/存 {len(stale)} 陈旧，跳过）")
                     # 不return——继续执行后续完整性检查和管道驱动
             except Exception:
                 pass
-            logger.info(f"  [申万行业指数] 缺 {len(missing)}/{len(SW_INDEX_CODES)} 个（{missing[:3]}...），跳过（数据源缺失）")
-            # 记录当日已尝试（避免死循环；次日数据源恢复时自动重试）
+            # 区间回填：全量（缺失）或 60 日（陈旧）——sw_daily 一次可取整段
+            backfill_days = 90 if missing else 60
+            start = (datetime.now() - timedelta(days=backfill_days + 10)).strftime('%Y%m%d')
+            end = datetime.now().strftime('%Y%m%d')
+            ok = 0
+            for code in (missing + stale):
+                try:
+                    raw = _ts(pro.sw_daily, ts_code=code, start_date=start, end_date=end)
+                    if raw is None or raw.empty:
+                        continue
+                    df = raw.rename(columns=_SW_DAILY_COL_MAP)
+                    if 'trade_date' in df.columns:
+                        df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+                    extra = [c for c in df.columns if c not in _SW_DAILY_KEEP]
+                    if extra:
+                        df = df.drop(columns=extra)
+                    _ecm.cache_daily_data(df)
+                    ok += 1
+                except Exception as e:
+                    logger.debug(f"行业指数 {code} 回填失败: {e}")
+            logger.info(f"  [申万行业指数] 回填 {ok}/{len(missing + stale)} 个（缺 {len(missing)}，陈旧 {len(stale)}）")
             try:
                 _ecm.conn.execute(
                     "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)",
-                    [today_key, str(len(missing))]
+                    [today_key, str(len(missing) + len(stale))]
                 )
                 _ecm.conn.commit()
             except Exception:
                 pass
         else:
-            logger.info(f"  [申万行业指数] 完整（{len(SW_INDEX_CODES)} 个）✅")
+            logger.info(f"  [申万行业指数] 完整且时效正常（{len(SW_INDEX_CODES)} 个）✅")
     except Exception as e:
         logger.warning(f"  申万行业指数检查失败: {e}")
 
@@ -2176,6 +2445,12 @@ def run_daily_sync():
 
     # 量比自算（Tushare 免费 API 不提供 volume_ratio，计算层自算）
     _compute_volume_ratio(today)
+
+    # 相对强弱批量计算（438号缺口③：全市场双基准超额收益持久化）
+    try:
+        _compute_relative_strength(today)
+    except Exception as e:
+        logger.warning(f"  相对强弱批量计算失败: {e}")
 
     # 形态评分批量计算（353/358号方案：日终批量 + 缓存）
     try:
@@ -4036,7 +4311,13 @@ def _precompute_single(ts_code: str):
 # ══════════════════════════════════════════════════════════
 
 def _get_active_codes(today_fmt: str = None) -> list[str]:
-    """获取当日活跃股票代码列表（356号：从分库读取）"""
+    """获取当日活跃股票代码列表（356号：从分库读取）
+
+    441号A根治：剔除指数代码——本函数是全管道（RAW/SIG/JUD）统一股票池入口，
+    原实现直取 daily_cache 全部 ts_code 未剔指数，致 SIG 目标混入指数（.SI/399.SZ/宽基），
+    引发 dim1 对指数类的 stk_holder 误报补采。剔除集 = BROAD_INDEX_CODES + SW_INDEX_CODES
+    + 通用段规则（.SI 后缀 / 399 开头深市指数段），不误伤个股。
+    """
     if today_fmt is None:
         today_fmt = datetime.now().strftime('%Y-%m-%d')
     try:
@@ -4056,7 +4337,14 @@ def _get_active_codes(today_fmt: str = None) -> list[str]:
                     "SELECT ts_code FROM daily_cache WHERE trade_date=? GROUP BY ts_code ORDER BY ts_code",
                     [today_fmt]
                 ).fetchall()
-        return [r[0] for r in rows] if rows else []
+        _index_exclude = set(BROAD_INDEX_CODES) | set(SW_INDEX_CODES)
+        codes = [
+            r[0] for r in rows
+            if r[0] not in _index_exclude
+            and not r[0].endswith('.SI')
+            and not r[0].startswith('399')
+        ]
+        return codes if codes else []
     except Exception as e:
         logger.warning(f"_get_active_codes 分库查询失败: {e}")
         return []
@@ -5054,30 +5342,8 @@ def _consume_sync_requests_batch():
             _finance_codes.add(req['ts_code'])
         elif req['task_type'] == 'stk_holder' and req.get('ts_code'):
             _stk_holder_codes.add(req['ts_code'])
-    # 单只补采辅助：provider 返回 list，需转 DataFrame 后写缓存
-    def _sync_finance_single(code):
-        provider = _get_tushare_provider()
-        raw = provider.get_fina_indicator_extended(code)
-        if raw:
-            df = pd.DataFrame(raw)
-            for col in ['end_date', 'ann_date']:
-                if col in df.columns:
-                    df[col] = pd.to_datetime(df[col]).dt.date
-            _ecm.cache_finance_report_data(df)
-            return len(df)
-        return 0
-    def _sync_stk_holder_single(code):
-        provider = _get_tushare_provider()
-        raw = provider.get_stk_holdernumber(code)
-        if raw:
-            df = pd.DataFrame(raw)
-            for col in ['end_date', 'ann_date']:
-                if col in df.columns:
-                    df[col] = pd.to_datetime(df[col]).dt.date
-            _ecm.cache_stk_holder_data(df)
-            return len(df)
-        return 0
     # 本轮实际补采的代码集合（受 MAX_PER_TICK 上限约束），仅这些请求标记 done
+    # 单只补采复用模块级辅助（441号D：429号单只路径统一收口）
     _backfilled = set()
     # 先补采去重后的 finance_report/stk_holder 单只集合（每只一次，跨两类合计 ≤ MAX_PER_TICK）。
     # 预算对半分配，避免 finance 独占预算导致 stk_holder 永不补采。
@@ -5087,7 +5353,7 @@ def _consume_sync_requests_batch():
         if _fin_done >= _half:
             break
         try:
-            _sync_finance_single(code)
+            _sync_single_finance(code)
             _backfilled.add(code)
         except Exception as e:
             logger.warning(f"  finance_report 单只补采失败 {code}: {e}")
@@ -5097,7 +5363,7 @@ def _consume_sync_requests_batch():
         if _stk_done >= _half:
             break
         try:
-            _sync_stk_holder_single(code)
+            _sync_single_stk_holder(code)
             _backfilled.add(code)
         except Exception as e:
             logger.warning(f"  stk_holder 单只补采失败 {code}: {e}")
@@ -5794,15 +6060,10 @@ def _precompute_strategy_signals(codes):
         for ts_code, result in results.items():
             try:
                 rd = result.to_dict()
-                # 370号S5：生成seven_dim_json
-                seven_dim = {}
-                try:
-                    from app.opportunity_atlas.status_engine import generate_seven_dim_from_signals
-                    seven_dim = generate_seven_dim_from_signals(rd)
-                except Exception:
-                    pass
-                # 370号修正：预计算dim_results_json（供JUD步骤消费）
+                # 370号修正：预计算dim_results_json（供JUD步骤消费）——436号B2 提前到
+                # seven_dim 之前，因 seven_dim 改由同循环的 dim_results 派生（dim8 整体归集）
                 dim_results = None
+                _tags = {}
                 if _se_engine:
                     try:
                         _tags = _se_engine._load_tags(ts_code)
@@ -5814,7 +6075,17 @@ def _precompute_strategy_signals(codes):
                             # quality_level=failed（与 JUD 主路径 status_engine.py:88 对齐）
                             dim_results = _se_engine._build_dim_engine_results(_tags, _signals, {}, _lifecycle, ts_code=ts_code)
                     except Exception:
-                        pass
+                        dim_results = None
+                # 436号S5：七维现状描述由 dim8 整体归集器从 dim_results 组装（替代
+                # 废弃的 generate_seven_dim_from_signals 空壳路径）；dim_results 缺失 →
+                # seven_dim 写 NULL（前端回退 opportunity_profile，保持降级语义）
+                seven_dim = None
+                if dim_results:
+                    try:
+                        from app.opportunity_atlas.status_engine import build_seven_dim_from_dim_results
+                        seven_dim = build_seven_dim_from_dim_results(dim_results, tags=_tags)
+                    except Exception:
+                        seven_dim = None
                 rows.append((ts_code, rd.get('trade_date', datetime.now().strftime('%Y-%m-%d')),
                              _json.dumps(rd, ensure_ascii=False, default=str), 1,
                              _json.dumps(seven_dim, ensure_ascii=False) if seven_dim else None,

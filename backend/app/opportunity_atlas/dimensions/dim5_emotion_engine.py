@@ -23,6 +23,7 @@ import pandas as pd
 
 from app.data.mixins import DataAwareMixin
 from app.engine.framework.bociasi_quadrant import BociasiQuadrantAnalyzer
+from app.opportunity_atlas.dimensions.enum_cn_map import bociasi_signal_cn, quadrant_cn
 
 logger = logging.getLogger(__name__)
 
@@ -286,12 +287,7 @@ def calc_emotion_temperature(sentiment_phase='neutral', limit_up_count=0,
 
 
 def _assess_market_emotion(tags: dict, dims: dict) -> dict:
-    dim_emotion = str(dims.get('emotion', {}).get('state', ''))
-    dim_light = str(dims.get('emotion', {}).get('light', ''))
-    if dim_emotion:
-        light = 'red' if dim_light == 'red' else ('green' if dim_light == 'green' else 'yellow')
-        return {'phase': dim_emotion, 'detail': f'L1判定情绪={dim_emotion}', 'light': light}
-
+    # 440号：市场情绪自产（读 sentiment_phase），不再依赖空 dims['emotion'].state
     sp = str(tags.get('sentiment_phase', ''))
     if sp in PHASE_MAP:
         name, desc, light = PHASE_MAP[sp]
@@ -314,11 +310,15 @@ def _assess_sector_emotion(tags: dict, dims: dict) -> dict:
 
 
 def _assess_stock_emotion(tags: dict, dims: dict) -> dict:
-    vp = str(dims.get('vp', {}).get('state', ''))
+    # 440号：个股情绪自产（读 volume_price_fit，不再依赖空 dims['vp'].state 的跨维联动）
+    _vpf = str(tags.get('volume_price_fit', ''))
+    vp = {'healthy': '强健康', 'diverging': '背离', 'neutral': '中性'}.get(_vpf, '')
     if vp in ('强健康', '健康'):
         return {'emotion': '健康', 'detail': f"量价状态{vp}，趋势确认强势", 'light': 'green'}
     elif vp in ('背离', '严重背离'):
         return {'emotion': '关注', 'detail': f"量价状态{vp}，需警惕", 'light': 'yellow'}
+    elif vp == '中性':
+        return {'emotion': '中性', 'detail': '量价状态中性', 'light': 'yellow'}
     return {'emotion': '中性', 'detail': '量价数据不足', 'light': 'yellow'}
 
 
@@ -513,11 +513,11 @@ class Dim5EmotionEngine(DataAwareMixin):
         plain = _emotion_plain(market, sector, stock, quadrant, temperature)
         status_description = {
             'market': f"市场处于{market['phase']}（{market['detail']}）",
-            'sector': f"板块{sector['heat']}（{sector['detail']}）",
+            'sector': sector['detail'],
             'stock': f"个股{stock['emotion']}（{stock['detail']}）",
-            'bociasi_quick': f"快线={quick_result.get('signal','N/A')}（{quick_result.get('confidence',0)}）",
-            'bociasi_slow': f"慢线={slow_result.get('signal','N/A')}（{slow_result.get('confidence',0)}）",
-            'quadrant': f"{quadrant.get('quadrant','')} — {quadrant.get('description','')}",
+            'bociasi_quick': f"快线={bociasi_signal_cn(quick_result.get('signal'))}（{quick_result.get('confidence',0)}）",
+            'bociasi_slow': f"慢线={bociasi_signal_cn(slow_result.get('signal'))}（{slow_result.get('confidence',0)}）",
+            'quadrant': f"{quadrant_cn(quadrant.get('quadrant',''))}—{quadrant.get('description','')}",
             'temperature': f"{temperature}/100",
             'plain': plain,
         }

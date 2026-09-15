@@ -631,6 +631,8 @@ class EnhancedCacheManager:
                 PRIMARY KEY (stat_date, industry)
             )
         """)
+        # 438号缺口③: 个股相对强弱持久化（双基准超额收益，按日替换）
+        #   建在 compute_cache.db 分库（_init_compute_tables，见 relative_strength_cache）
         self._execute("""
             CREATE TABLE IF NOT EXISTS daily_basic_cache (
                 ts_code TEXT, trade_date TEXT,
@@ -1204,6 +1206,22 @@ class EnhancedCacheManager:
         self.compute_conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_pattern_score_date ON pattern_score_cache(trade_date)
         """)
+        # 438号缺口③: 个股相对强弱持久化（双基准超额收益，按日替换）
+        #   benchmark: 000001.SH(上证) / 000300.SH(沪深300)
+        #   ret_20d/ret_60d: 个股20/60日收益率; bench_ret_20d/60d: 基准对应
+        #   ex_ret_20d/60d: 超额收益(个股-基准)
+        self.compute_conn.execute("""
+            CREATE TABLE IF NOT EXISTS relative_strength_cache (
+                asof_date TEXT NOT NULL,
+                ts_code TEXT NOT NULL,
+                benchmark TEXT NOT NULL,
+                ret_20d REAL, ret_60d REAL,
+                bench_ret_20d REAL, bench_ret_60d REAL,
+                ex_ret_20d REAL, ex_ret_60d REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (asof_date, ts_code, benchmark)
+            )
+        """)
         self.compute_conn.commit()
 
     def _migrate_pattern_score_to_compute_db(self):
@@ -1471,6 +1489,58 @@ class EnhancedCacheManager:
         except Exception as e:
             logger.debug(f"get_cached_sector_heat失败: {e}")
         return {}
+
+    # 438号缺口③: 个股相对强弱持久化（双基准超额收益）
+    def cache_relative_strength(self, rows: list):
+        """按 asof_date 全量替换相对强弱（每日全市场覆盖，双基准）
+
+        rows: [(asof_date, ts_code, benchmark, ret_20d, ret_60d,
+                bench_ret_20d, bench_ret_60d, ex_ret_20d, ex_ret_60d), ...]
+        """
+        if not rows:
+            return
+        asof_date = rows[0][0]
+        try:
+            from app.data.sharding_manager import sharding_manager as _sm
+            db = _sm.get_db_for_table('relative_strength_cache')
+            conn = _sm.get_connection(db) if db else None
+            if conn is None:
+                logger.warning(f"cache_relative_strength: 未路由到分库 ({db})")
+                return
+            lock = _sm.get_write_lock(db)
+            with lock:
+                conn.execute("DELETE FROM relative_strength_cache WHERE asof_date = ?",
+                             [asof_date])
+                conn.executemany(
+                    "INSERT INTO relative_strength_cache "
+                    "(asof_date, ts_code, benchmark, ret_20d, ret_60d, "
+                    " bench_ret_20d, bench_ret_60d, ex_ret_20d, ex_ret_60d) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"cache_relative_strength失败: {e}")
+
+    def get_relative_strength(self, ts_code=None, asof_date=None,
+                              benchmark=None) -> list:
+        """读取相对强弱，返回 list[dict]。按 ts_code 精确查（dim8/前端用），
+        或按日全量取。benchmark 缺省返回全部基准。"""
+        try:
+            sql = "SELECT * FROM relative_strength_cache WHERE 1=1"
+            params = []
+            if asof_date:
+                sql += " AND asof_date = ?"; params.append(asof_date)
+            if ts_code:
+                sql += " AND ts_code = ?"; params.append(ts_code)
+            if benchmark:
+                sql += " AND benchmark = ?"; params.append(benchmark)
+            sql += " ORDER BY ts_code, benchmark"
+            df = self._query_shard('relative_strength_cache', sql, params)
+            if df is None or df.empty:
+                return []
+            return df.to_dict('records')
+        except Exception as e:
+            logger.debug(f"get_relative_strength失败: {e}")
+            return []
 
     # ── 内存缓存 ────────────────────────────────────────────
 

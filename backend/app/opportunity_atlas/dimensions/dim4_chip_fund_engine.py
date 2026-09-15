@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from app.opportunity_atlas.dimensions.enum_cn_map import chip_concentration_cn
+
 logger = logging.getLogger(__name__)
 
 # ── 主力阶段常量（369号方案物理合入 phase_detector.py 时遗漏，导致 compute_tags 抛 NameError）──
@@ -5844,7 +5846,7 @@ def _assess_cost_structure(tags):
     """
     parts = []
     c = str(tags.get('chip_concentration', ''))
-    if c: parts.append(f"筹码{c}")
+    if c: parts.append(f"筹码{chip_concentration_cn(c)}")
 
     # ASR（活跃筹码比率）：Wiki定义 - 衡量筹码活跃程度
     asr = tags.get('asr')
@@ -5914,7 +5916,7 @@ def _fund_chip_plain(phase, fund_flow, cost, signal, retail_inst, margin):
     if fd == 'inflow': parts.append(f'资金净流入（{fund_flow.get("detail", "")}）')
     elif fd == 'outflow': parts.append(f'资金净流出（{fund_flow.get("detail", "")}）')
     cd = cost.get('detail', '')
-    if cd and '数据不足' not in cd: parts.append(f'筹码{cost.get("concentration", "")}（{cd}）')
+    if cd and '数据不足' not in cd: parts.append(cd)
     md = margin.get('detail', '')
     if md and '数据不足' not in md: parts.append(md)
     return '，'.join(parts) if parts else '资金筹码数据不足，无法判断主力动向'

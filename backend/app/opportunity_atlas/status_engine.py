@@ -925,15 +925,40 @@ def apply_advice_params(params: dict, price: Optional[float],
             'reason': '可入场' if state == 'enter' else '观望'}
 
 
-def generate_seven_dim_from_signals(signal_json: dict) -> dict:
-    """370号方案S5：SIG环节直接产出七维现状描述（替代旧build_seven_dim_report）
+def build_seven_dim_from_dim_results(dim_results: dict | None,
+                                     tags: dict | None = None,
+                                     lifecycle: dict | None = None) -> dict | None:
+    """SIG 文字类产出（seven_dim_json）整体归集入口（436号 B1）
 
-    从strategy_signal_detail.signal_json中的5引擎信号提取七维描述。
-    产出直接透传到OUT写入one_liner_detail，不经过JUD。
-
-    Returns: {dim_key: {title, light, text, evidence}} 的七维字典
+    委派 dim8（Dim8SummaryEngine.build_seven_dim_report）组装前端契约的七维现状描述：
+      7 键 signal/structure/volume_price/fund_chip/emotion/risk/summary，
+      顶层 light emoji、每段 judgment/audit/plain（align 两端 dimOrder/segOrder）。
+    dim_results 为空/非 dict → 返回 None（data_daemon 写 NULL，门禁跳过）。
     """
-    signals = signal_json.get('signals', {}) or {}
+    if not dim_results or not isinstance(dim_results, dict):
+        return None
+    try:
+        from app.opportunity_atlas.dimensions.dim8_summary_engine import Dim8SummaryEngine
+        return Dim8SummaryEngine().build_seven_dim_report(dim_results, tags=tags)
+    except Exception as e:
+        logger.warning(f"build_seven_dim_from_dim_results 失败: {e}")
+        return None
+
+
+def generate_seven_dim_from_signals(signal_json: dict) -> dict:
+    """【历史兼容】七维现状描述生成（436号 B1 改为仅兼容包装）
+
+    ⚠️ 411号 Phase 1 后 signal_json.signals 恒空，本路径已废弃——
+    新链路一律用 build_seven_dim_from_dim_results（委派 dim8）。
+    仅当 signal_json 内含 dim_results 时转用 dim8 归集，否则保留旧 signals 路径。
+    """
+    # 若调用方已传入 dim_results（data_daemon 新链路），直接委派 dim8
+    dim_results = (signal_json or {}).get('dim_results')
+    if dim_results:
+        return build_seven_dim_from_dim_results(dim_results,
+                                                tags=(signal_json or {}).get('tags'))
+
+    signals = signal_json.get('signals', {}) if signal_json else {}
 
     def _extract(engine_name, dim_key, title):
         sig = signals.get(engine_name, {})
@@ -1030,24 +1055,6 @@ def generate_seven_dim_from_signals(signal_json: dict) -> dict:
         'confidence': 0.5,
     }
     return result
-    """364a Phase 1 / 365号修订：生成一句话总结"""
-    import json as _json
-    try:
-        dims = _json.loads(snapshot_row.get('dim_states') or '{}')
-    except Exception:
-        dims = {}
-    st = snapshot_row.get('status_bar', '')
-    cr = snapshot_row.get('consensus_rate', 0) or 0
-    dim_parts = []
-    for dim_key, name in [('structure', '结构'), ('vp', '量价'), ('chip_fund', '资金'), ('emotion', '情绪')]:
-        s = dims.get(dim_key, {}).get('state', '')
-        if s:
-            dim_parts.append(f'{name}{s}')
-    risk = dims.get('risk', {}).get('state', '')
-    if risk:
-        dim_parts.append(f'风险{risk}')
-    dims_text = '，'.join(dim_parts) if dim_parts else '各维数据不足'
-    return f'{st}（共识{cr:.0%}）——{dims_text}'
 
 
 def build_status_engine() -> StatusEngine:

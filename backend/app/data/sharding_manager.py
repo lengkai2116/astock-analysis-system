@@ -88,6 +88,8 @@ class ShardingManager:
             'market_stats_cache': 'compute_cache.db',
             'sector_heat_cache': 'compute_cache.db',
             'pattern_score_cache': 'compute_cache.db',
+            # 438号缺口③：个股相对强弱持久化（双基准超额收益）→ compute_cache.db 计算结果
+            'relative_strength_cache': 'compute_cache.db',
 
             # financial_cache.db — 财务数据
             'fina_indicator_cache': 'financial_cache.db',

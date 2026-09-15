@@ -146,13 +146,13 @@ class TestPhase4_StatusEngine:
         assert 'data_context=data_context' in source
 
     def test_dim8_key_alignment(self):
-        """dim8应使用chip_fund而非fund_chip"""
+        """dim8 JUD 侧源键读取用 chip_fund；SIG 归集输出键用 fund_chip（436 B1）"""
         import inspect
 
         from app.opportunity_atlas.dimensions.dim8_summary_engine import Dim8SummaryEngine
         source = inspect.getsource(Dim8SummaryEngine)
-        assert 'fund_chip' not in source, "dim8仍使用旧键名fund_chip"
-        # 应使用chip_fund
+        # JUD 侧 _extract_* 读源键 chip_fund（保持）；SIG output 键 fund_chip 仅为前端契约键名转换
+        assert "'chip_fund'" in source, "dim8源键读取应使用chip_fund"
         from app.opportunity_atlas.dimensions import dim8_summary_engine
         mod_source = open(dim8_summary_engine.__file__).read()
         assert 'chip_fund' in mod_source

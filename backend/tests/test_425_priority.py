@@ -202,3 +202,55 @@ def test_sync_core_types_cover_finance_dependencies():
     # 前端展示类不在核心集合内（HIGH 下让路）
     assert 'full_daily' not in dd._SYNC_CORE_TYPES
     assert 'per_stock' not in dd._SYNC_CORE_TYPES
+
+
+# ── C-5：441号D·通道②增强——个股级覆盖巡检 ──────────────────
+
+def test_reconcile_cache_coverage_backfills_missing(monkeypatch):
+    """非空表但个股级缺失 → 覆盖核对补采缺失个股（441号D）"""
+    # active 池 5 只；三表分别缺 2 / 3 / 1 只
+    active = [f'{i:06d}.SZ' for i in range(1, 6)]
+    monkeypatch.setattr(dd, '_get_active_codes', lambda: active)
+    # 按表返回已覆盖集合（模拟 _shard_fetchall 的 DISTINCT ts_code 行）
+    covered_map = {
+        'top10_holders_cache': ['000001.SZ', '000002.SZ', '000003.SZ'],  # 缺 2
+        'stk_holder_cache':    ['000001.SZ', '000002.SZ'],              # 缺 3
+        'finance_report_cache': ['000001.SZ', '000002.SZ', '000003.SZ', '000004.SZ'],  # 缺 1
+    }
+    called = []
+    def _fake_fetchall(table, sql):
+        return [[c] for c in covered_map[table]]
+    monkeypatch.setattr(dd, '_shard_fetchall', _fake_fetchall)
+    # _COVERAGE_RECONCILE 持有函数引用（模块加载时固化），须整体替换为 mock 单只补采
+    monkeypatch.setattr(dd, '_COVERAGE_RECONCILE', [
+        ('top10_holders_cache',  lambda c: called.append(('top10', c)) or 1, '前十大股东'),
+        ('stk_holder_cache',     lambda c: called.append(('stk', c)) or 1, '股东人数'),
+        ('finance_report_cache', lambda c: called.append(('fin', c)) or 1, '扩展财务'),
+    ])
+
+    res = dd._reconcile_cache_coverage(max_codes=40)
+    # 三表均缺，且均在上限内全补
+    assert res == {'前十大股东': 2, '股东人数': 3, '扩展财务': 1}
+    # 补采的代码应为缺失集
+    assert ('top10', '000004.SZ') in called and ('top10', '000005.SZ') in called
+    assert ('stk', '000003.SZ') in called and ('stk', '000004.SZ') in called and ('stk', '000005.SZ') in called
+    assert ('fin', '000005.SZ') in called
+    assert not any(c[0] == 'fin' and c[1] == '000004.SZ' for c in called)  # 已覆盖不补
+
+
+def test_reconcile_cache_coverage_respects_max_codes(monkeypatch):
+    """覆盖巡检受 max_codes 限流（防单 tick 打爆 Tushare 积分）"""
+    active = [f'{i:06d}.SZ' for i in range(1, 11)]  # 10 只
+    monkeypatch.setattr(dd, '_get_active_codes', lambda: active)
+    monkeypatch.setattr(dd, '_shard_fetchall',
+        lambda table, sql: [['000001.SZ']])   # 每表仅 1 只已覆盖 → 缺 9
+    called = []
+    monkeypatch.setattr(dd, '_COVERAGE_RECONCILE', [
+        ('top10_holders_cache',  lambda c: called.append(c) or 1, '前十大股东'),
+        ('stk_holder_cache',     lambda c: 1, '股东人数'),
+        ('finance_report_cache', lambda c: 1, '扩展财务'),
+    ])
+
+    res = dd._reconcile_cache_coverage(max_codes=5)
+    assert res['前十大股东'] == 5
+    assert len(called) == 5  # 限流生效

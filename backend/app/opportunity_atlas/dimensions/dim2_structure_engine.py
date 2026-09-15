@@ -69,6 +69,7 @@ from app.engine.framework.chanlun_strategy import (
     get_chanlun_tags,
 )
 from app.engine.framework.trend_structure_detector import TrendStructureDetector
+from app.opportunity_atlas.dimensions.enum_cn_map import chip_concentration_cn, ma_alignment_cn
 from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
 
 # ═══════════════════════════════════════════════════════════
@@ -137,7 +138,13 @@ class Dim2StructureEngine(DataAwareMixin):
 
         # 6. 白话文本
         plain = _structure_plain(vs_zhongshu, vs_ma, vs_sr, vs_chip, vs_indicator)
-        struct_state = dims.get('structure', {}).get('state', '盘整')
+        # 440号：结构态改为引擎自产（缠论 trend 映射），不再读空 dims['structure']
+        _t = (chanlun_result.get('trend', '') if chanlun_result else '') or str(tags.get('state_label', ''))
+        if _t in ('up', 'down', '上升', '下降'):
+            struct_state = '上升' if _t in ('up', '上升') else '下降'
+        else:
+            struct_state = '盘整'
+        pos_state = str(tags.get('price_position', '') or '中位')
 
         status_description = {
             'vs_zhongshu': vs_zhongshu['detail'],
@@ -152,11 +159,11 @@ class Dim2StructureEngine(DataAwareMixin):
         }
 
         # 7. judgment
-        light = dims.get('structure', {}).get('light', 'yellow')
+        light = 'yellow'
         if struct_state == '上升': light = 'green'
         elif struct_state == '下降': light = 'red'
         judgment = {
-            'structure': struct_state, 'position': dims.get('position', {}).get('state', '中位'),
+            'structure': struct_state, 'position': pos_state,
             'light': light, 'overall_light': light,
             'overall_direction': 1 if struct_state == '上升' else (-1 if struct_state == '下降' else 0),
             'continuous_value': round(float(strength) if isinstance(strength, (int, float)) else 0.5, 4),
@@ -208,7 +215,7 @@ def _assess_vs_zhongshu(tags, dims, chanlun_result=None, latest_close=0.0):
 def _assess_vs_ma(tags):
     alignment = str(tags.get('ma_alignment', ''))
     if alignment:
-        return {'alignment': alignment, 'detail': f"均线{alignment}"}
+        return {'alignment': alignment, 'detail': f"均线{ma_alignment_cn(alignment)}"}
     return {'alignment': '', 'detail': '均线数据不足'}
 
 
@@ -225,7 +232,7 @@ def _assess_vs_support_resistance(geo):
 def _assess_vs_chip(tags):
     parts = []
     c = str(tags.get('chip_concentration', ''))
-    if c: parts.append(f"筹码{c}")
+    if c: parts.append(f"筹码{chip_concentration_cn(c)}")
     pr = tags.get('profit_ratio')
     if pr is not None:
         try: parts.append(f"获利盘{float(pr):.0%}")
@@ -250,7 +257,7 @@ def _structure_plain(vs_z, vs_ma, vs_sr, vs_chip, vs_ind):
     elif pos == '下方': parts.append("价格在中枢下方运行")
     elif pos == '内部': parts.append("价格在中枢箱体内震荡")
     ma = vs_ma.get('alignment', '')
-    if ma: parts.append(f"均线{ma}")
+    if ma: parts.append(f"均线{ma_alignment_cn(ma)}")
     sr = vs_sr.get('detail', '')
     if sr and '数据不足' not in sr: parts.append(sr)
     chip = vs_chip.get('detail', '')

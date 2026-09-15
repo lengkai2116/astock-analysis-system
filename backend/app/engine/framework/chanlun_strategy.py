@@ -229,7 +229,8 @@ class BuySellPoint:
     zhongshu: Zhongshu = None  # 相关的中枢
 
     def __repr__(self):
-        return f"BuySellPoint({self.type}, confidence={self.confidence:.2f}, price={self.position.get('price', 0):.2f})"
+        _price = (self.position or {}).get('price', 0)
+        return f"BuySellPoint({self.type}, confidence={self.confidence:.2f}, price={_price:.2f})"
 
 
 class KLineMerger:

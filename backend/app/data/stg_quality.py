@@ -51,10 +51,21 @@ QUALITY_RULES: dict[str, dict] = {
         'rows_ratio': 0.95, 'date_col': 'trade_date',
         'required_fields': ['signal_json', 'dim_results_json'],
         'json_fields': ['signal_json', 'dim_results_json', 'seven_dim_json'],
-        # seven_dim_json 为条件性产出（status_engine.generate_seven_dim_from_signals：
-        # 仅 risk/summary 恒产出，其余维需对应引擎有信号），故不要求固定 7 键，
-        # 只要求可解析且含恒产出的 summary 键
+        # 436号 B2+B4 门禁（423号§风险#9 迁就让路 → 分级收紧 → B4 软升硬）：
+        #   硬（写入门槛 raise，→ SIG failed → 管道重试）：
+        #     非空 dict + 必含 summary + 每段含 title/light/text（B2）
+        #     + 段数 ≥ 6 + 无旧键 signal_confirm/chip_fund（B4 升硬，门禁终态）
+        #   软（warning + 计数，不拦）：段内缺 judgment/audit、light 越界
         'seven_dim_required': ['summary'],
+        # 每段硬性必含字段（436 §3.6 硬层规则③）
+        'seven_dim_seg_required_fields': ['title', 'light', 'text'],
+        # 期望键集（B4 升硬：缺失 expected 任一键 → 硬拦；段数以实际键数计）
+        'seven_dim_expected_keys': ['signal', 'structure', 'volume_price',
+                                    'fund_chip', 'emotion', 'risk', 'summary'],
+        # B4 升硬：出现旧键 signal_confirm/chip_fund → 硬拦（门禁终态）
+        'seven_dim_legacy_keys': ['signal_confirm', 'chip_fund'],
+        # 软校验：段内可选富字段（缺 judgment/audit 记日志，不硬拦）
+        'seven_dim_seg_rich_fields': ['judgment', 'audit'],
     },
     'status_snapshot': {
         'rows_ratio': 0.95, 'date_col': 'trade_date',
@@ -435,10 +446,20 @@ class QualityChecker:
     def validate_signal_rows(self, rows: list) -> list:
         """G3 专项：校验 SIG 批量写入行（索引 2/4/5），返回问题列表（空 = 通过）
 
-        - signal_json / dim_results_json：可 json.loads 且非空
-        - seven_dim_json：非空时须含 7 个 dim 键
+        - signal_json / dim_results_json：可 json.loads 且非空（硬拦）
+        - seven_dim_json：436号 B2+B4 门禁——
+            硬（写入必过，raise → SIG failed → 重试）：非空 dict + 必含 summary
+              + 每段含 title/light/text（B2）+ 段数 ≥ 6 + 无旧键
+              signal_confirm/chip_fund（B4 升硬，门禁终态）；
+            软（warning 记日志，不入 issues）：段内缺 judgment/audit、light 越界。
         """
         issues = []
+        # 分级软校验：按日聚合计数，避免逐行刷日志（436 §3.6 R6）
+        soft_violations: dict[str, int] = {}
+        _sd_rules = QUALITY_RULES['strategy_signal_detail']
+        _seg_required = _sd_rules.get('seven_dim_seg_required_fields', ['title', 'light', 'text'])
+        _legacy = _sd_rules.get('seven_dim_legacy_keys', [])
+        _rich = _sd_rules.get('seven_dim_seg_rich_fields', ['judgment', 'audit'])
         for i, row in enumerate(rows):
             try:
                 signal = json.loads(row[_SIG_ROW_IDX['signal_json']])
@@ -459,16 +480,47 @@ class QualityChecker:
                     if not sd_obj:
                         issues.append(f'第{i}行 seven_dim_json 为空 dict（ts_code={row[0]}）')
                     else:
-                        # seven_dim_json 条件性产出（仅 summary 恒有），校验必含 summary
-                        for _req in QUALITY_RULES['strategy_signal_detail'].get('seven_dim_required', []):
+                        # ── 硬层：必含 summary + 每段必含 title/light/text ──
+                        for _req in _sd_rules.get('seven_dim_required', []):
                             if _req not in sd_obj:
                                 issues.append(
                                     f'第{i}行 seven_dim_json 缺 {_req} 键（ts_code={row[0]}，实际键={list(sd_obj.keys())}）')
+                        for _seg_key, _seg_body in sd_obj.items():
+                            if not isinstance(_seg_body, dict):
+                                issues.append(
+                                    f'第{i}行 seven_dim_json 段 {_seg_key} 非 dict（ts_code={row[0]}）')
+                                continue
+                            for _sf in _seg_required:
+                                if _sf not in _seg_body:
+                                    issues.append(
+                                        f'第{i}行 seven_dim_json 段 {_seg_key} 缺字段 {_sf}（ts_code={row[0]}）')
+                            # ── 软层：段内富字段缺失 → 计数（不硬拦）──
+                            for _rf in _rich:
+                                if _rf not in _seg_body:
+                                    soft_violations[f'段缺{_rf}'] = soft_violations.get(f'段缺{_rf}', 0) + 1
+                        # ── B4 升硬：段数 < 6 → 硬拦（门禁终态）──
+                        if len(sd_obj) < 6:
+                            issues.append(
+                                f'第{i}行 seven_dim_json 段数不足（{len(sd_obj)}<6，ts_code={row[0]}，实际键={list(sd_obj.keys())}）')
+                    # ── B4 升硬：旧键名 signal_confirm/chip_fund → 硬拦（门禁终态）──
+                    if _legacy and not set(sd_obj).isdisjoint(_legacy):
+                        legacy_hit = list(set(sd_obj) & set(_legacy))
+                        issues.append(
+                            f'第{i}行 seven_dim_json 含旧键 {legacy_hit}（ts_code={row[0]}，应改 {_sd_rules.get("seven_dim_expected_keys", [])}）')
+                    # ── 软层：light 越界 → 计数（不硬拦）──
+                    _valid_lights = {'🟢', '🔴', '🟡'}
+                    for _seg_key, _seg_body in sd_obj.items():
+                        if isinstance(_seg_body, dict) and _seg_body.get('light', '🟡') not in _valid_lights:
+                            soft_violations['light越界'] = soft_violations.get('light越界', 0) + 1
                 except Exception:
                     issues.append(f'第{i}行 seven_dim_json 非法（ts_code={row[0]}）')
             if len(issues) > 20:
                 issues.append(f'问题行数过多，停止扫描（共{i+1}行）')
                 break
+        # 软校验汇总：按日聚合 warning（436 §3.6 R6，不逐行刷）
+        if soft_violations:
+            _detail = '; '.join(f'{k}×{v}' for k, v in sorted(soft_violations.items()))
+            logger.warning(f"[QA-CHECK] seven_dim 软校验未通过（告警不拦截）: {_detail}")
         return issues
 
 

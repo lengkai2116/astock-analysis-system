@@ -37,6 +37,30 @@ STATUS_BAR_STATES = {
 
 
 # ═══════════════════════════════════════════════════════════
+# 前端文字类契约常量（436号 B1，dim8 整体归集器使用）
+# ═══════════════════════════════════════════════════════════
+
+# 顶层 light：颜色名 → emoji（前端展示约定，见 436 §3.2 D1）
+_LIGHT_EMOJI = {'green': '🟢', 'red': '🔴', 'yellow': '🟡'}
+
+# 七段键契约（产出键 → 对应 dim_results 数据源键；summary 由 dim8 自行组装）
+# 与两前端 dimOrder/segOrder 逐一对齐：treemap/indicator-ide 均读
+#   signal/structure/volume_price/fund_chip/emotion/risk/summary
+# 不含 valuation（436 D5：前端 dimOrder 无此键，不产出）
+SEVEN_DIM_SPEC = [
+    ('signal',       'signal',       '信号确认状态'),
+    ('structure',    'structure',    '结构位置状态'),
+    ('volume_price', 'volume_price', '量价健康度'),
+    ('fund_chip',    'chip_fund',    '资金与筹码状态'),
+    ('emotion',      'emotion',      '情绪环境状态'),
+    ('risk',         'risk',         '风险边界状态'),
+]
+
+# 段标题映射（summary 段标题）
+SUMMARY_TITLE = '状态总结'
+
+
+# ═══════════════════════════════════════════════════════════
 # 辅助函数
 # ═══════════════════════════════════════════════════════════
 
@@ -406,6 +430,112 @@ def _generate_text(dim_results: dict, status_bar: str,
 
 
 # ═══════════════════════════════════════════════════════════
+# 单段整形（436号 B1 整体归集器使用）
+# ═══════════════════════════════════════════════════════════
+
+def _flatten_value(v) -> str:
+    """把 judgment 内嵌套 value/label 统一成字符串（避免输出 dict/None 进前端文本）"""
+    if isinstance(v, dict):
+        # 形如 {'value': '上升'} 或 {'label': '集中'} 取子字段，否则取首个非空值
+        for k in ('value', 'label', 'state'):
+            if k in v and v[k] is not None:
+                return str(v[k])
+        for sub in v.values():
+            if sub is not None and sub != '':
+                return str(sub)
+        return ''
+    return '' if v is None else str(v)
+
+
+def _brief_text(key_in: str, jg: dict, sd: dict) -> str:
+    """生成该维短结论文本（「标题: 状态 (置信度)」语感，沿用现 generator）"""
+    # 取非 meta 的 judgment 值作为状态
+    meta = {'overall_light', 'overall_direction', 'continuous_value', 'status_bar',
+            'consensus_rate', 'direction', 'status_bar_cn'}
+    state = ''
+    for jk, jv in jg.items():
+        if jk in meta:
+            continue
+        s = _flatten_value(jv)
+        if s:
+            state = s
+            break
+    if not state:
+        sd_plain = (sd or {}).get('plain', '')
+        if sd_plain:
+            state = sd_plain
+    try:
+        conf = float(jg.get('continuous_value') or 0.5)
+    except (TypeError, ValueError):
+        conf = 0.5
+    return f'{state}（置信{conf:.0%}）' if state else ''
+
+
+def _yield_evidence(sd: dict) -> list:
+    """从 status_description 提取证据字段（控制体积，上限由调用方截断）"""
+    if not sd or not isinstance(sd, dict):
+        return []
+    ev = []
+    for key in ('plain', 'text', 'conclusion'):
+        v = sd.get(key)
+        if isinstance(v, str) and v and v not in ev:
+            ev.append(v)
+    return ev
+
+
+def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | None:
+    """按前端契约把单个 dim_results 维整形为报告段；缺维返回 None"""
+    seg = (dim_results or {}).get(src_key)
+    if not isinstance(seg, dict) or not seg:
+        return None
+    jg = seg.get('judgment', {}) or {}
+    sd = seg.get('status_description', {}) or {}
+    au = seg.get('audit', {}) or {}
+    overall = jg.get('overall_light', jg.get('light', 'yellow'))
+    return {
+        'title': title,
+        'light': _LIGHT_EMOJI.get(str(overall), '🟡'),
+        'text': _brief_text(src_key, jg, sd),
+        'evidence': _yield_evidence(sd)[:5],
+        'confidence': round(float(jg.get('continuous_value') or au.get('confidence') or 0.5), 2),
+        'judgment': {
+            'overall_light': jg.get('overall_light', 'yellow'),
+            'overall_direction': jg.get('overall_direction', 0),
+            'continuous_value': jg.get('continuous_value'),
+        },
+        'audit': {
+            'conditions': [{'name': c.get('name'), 'satisfied': bool(c.get('satisfied'))}
+                           for c in (au.get('conditions') or []) if isinstance(c, dict)][:8],
+            'satisfied_count': au.get('satisfied_count', 0),
+            'total_count': au.get('total_count', 0),
+            'confidence': au.get('confidence', 0),
+        },
+        'plain': sd.get('plain', ''),
+    }
+
+
+def _dim1_fallback_segment(tags: dict) -> dict | None:
+    """dim1 特例：dim_results 无 signal 维时从 tags.right_side_confirm 造最小段；空则 None"""
+    if not tags or isinstance(tags, dict) is False:
+        return None
+    rsc = tags.get('right_side_confirm')
+    if not rsc:
+        return None
+    light = ('green' if rsc in ('强确认', '基础确认') else ('red' if rsc == '否决' else 'yellow'))
+    return {
+        'title': '信号确认状态',
+        'light': _LIGHT_EMOJI.get(light, '🟡'),
+        'text': f'信号确认: {rsc}',
+        'evidence': [],
+        'confidence': 0.8 if rsc == '强确认' else 0.5,
+        'judgment': {'overall_light': light, 'overall_direction': 1 if light == 'green' else 0,
+                     'continuous_value': None},
+        'audit': {'conditions': [], 'satisfied_count': 0, 'total_count': 0, 'confidence': 0},
+        'plain': rsc,
+    }
+
+
+# ═══════════════════════════════════════════════════════════
 # 第8维 引擎
 # ═══════════════════════════════════════════════════════════
 
@@ -494,6 +624,75 @@ class Dim8SummaryEngine:
             'judgment': judgment,
             'audit': audit,
         }
+
+    def build_seven_dim_report(self, dim_results: dict | None,
+                                tags: dict | None = None) -> dict | None:
+        """SIG 文字类输出整体归集器（436号 B1，dim8 按新共识承担）
+
+        读取 dim_results（dim2-dim7 富数据）组装前端契约的七维现状描述 seven_dim_json：
+          - 7 键：signal/structure/volume_price/fund_chip/emotion/risk/summary
+          - 每段 {title, light(emoji), text, evidence, confidence, judgment, audit, plain}
+          - 顶层无 light（各段自带）；summary 段含 dim8 综合状态条/共识/冲突
+        dim_results 为空/非 dict → 返回 None（由门禁/NULL 语义承接）。
+        """
+        if not dim_results or not isinstance(dim_results, dict):
+            return None
+
+        segments: dict = {}
+
+        # 六维（signal→structure→volume_price→fund_chip→emotion→risk）
+        for out_key, src_key, title in SEVEN_DIM_SPEC:
+            seg = _segment_from_dim(dim_results, src_key, title)
+            if seg is not None:
+                segments[out_key] = seg
+
+        # dim1 特例：dim_results 无 signal 维时回退 tags.right_side_confirm
+        if 'signal' not in segments:
+            fb = _dim1_fallback_segment(tags)
+            if fb is not None:
+                segments['signal'] = fb
+
+        # summary 段：复用本引擎 evaluate 的综合组装（状态条+共识率+冲突+文字）
+        # 兼容 dim_results 可能缺失 summary 维（dim8 产物本就在 JUD 路径才落），自行组装。
+        try:
+            self_ = self.__class__()
+            summary_d8 = self_.evaluate(dims={}, tags=tags or {},
+                                        lifecycle={'dim_results': dim_results})
+            sd = summary_d8.get('status_description', {}) or {}
+            jg = summary_d8.get('judgment', {}) or {}
+            au = summary_d8.get('audit', {}) or {}
+            text = sd.get('plain', '') or sd.get('text', '')
+            segments['summary'] = {
+                'title': SUMMARY_TITLE,
+                'light': _LIGHT_EMOJI.get(jg.get('overall_light', 'yellow'), '🟡'),
+                'text': text,
+                'evidence': [c['description'] for c in sd.get('conflicts', [])][:3],
+                'confidence': round(float(jg.get('consensus_rate', 0.5)), 2),
+                'judgment': {'overall_light': jg.get('overall_light', 'yellow'),
+                             'overall_direction': jg.get('overall_direction', 0),
+                             'consensus_rate': jg.get('consensus_rate', 0.0)},
+                'audit': {'conditions': au.get('conditions', [])[:8],
+                          'satisfied_count': au.get('satisfied_count', 0),
+                          'total_count': au.get('total_count', 0),
+                          'confidence': au.get('confidence', 0)},
+                'plain': text,
+            }
+        except Exception:
+            # summary 组装失败：退化为最小段，保证门禁「必含 summary」不误拦
+            segments['summary'] = {
+                'title': SUMMARY_TITLE,
+                'light': '🟡',
+                'text': '状态总结：数据不足',
+                'evidence': [],
+                'confidence': 0.5,
+                'judgment': {'overall_light': 'yellow', 'overall_direction': 0,
+                             'consensus_rate': 0.5},
+                'audit': {'conditions': [], 'satisfied_count': 0, 'total_count': 0,
+                          'confidence': 0},
+                'plain': '状态总结：数据不足',
+            }
+
+        return segments
 
     def get_data_dependencies(self) -> list:
         return [
