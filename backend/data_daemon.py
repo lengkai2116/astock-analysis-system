@@ -478,9 +478,11 @@ def _compute_relative_strength(trade_date: str = None) -> int:
             return 0
         asof_date = latest[0]
 
-        # 2) 取最近至多61个交易日，作为20d/60d收益率窗口
+        # 2) 取最近至多90个交易日作为20d/60d收益率窗口（442号缺陷⑤：原LIMIT 61 无容错，
+        #    窗口内任何缺失日（如 08-19~21 全市场空洞）→ _n_day_ret 观测不足 → 60d 恒 None；
+        #    扩至 90 日，dropna 后仍有 ≥61 观测，容忍零星缺失）
         dates = [r[0] for r in conn.execute(
-            "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 61"
+            "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 90"
         ).fetchall()][::-1]
         if len(dates) < 61:
             logger.info(f"  [相对强弱] 交易日不足({len(dates)}<61)，跳过")
@@ -2769,13 +2771,29 @@ def _precompute_market_stats(target_date: str | None = None):
     不再写入兜底常量（原实现读总库空壳表返回空集 → else 兜底 0.5/0.1，
     造成格式正确、结果错误的假数据入库并经 RAW-2 污染 pre_feat_cache）。
 
-    target_date：统计目标交易日（'YYYY-MM-DD'），默认昨日（daily 数据锚 T-1）。
+    target_date：统计目标交易日（'YYYY-MM-DD'）。缺省时锚定 daily_cache 最大交易日
+      （443号R6：原 now-1 硬算在周一/假期后落在非交易日 → 统计项全 None 不落库 → RAW-2 落空）。
     """
     global _market_stats_cache
     _ensure_ecm()
     try:
         from datetime import datetime, timedelta
-        today = target_date or (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        if target_date:
+            today = target_date
+        else:
+            # 锚定 daily_basic_cache 最新交易日（统计项公共依赖表；daily 常领先 1 日，
+            # 若锚 daily 会在 daily_basic/stk_limit 滞后时置空——443号R6 实测）
+            try:
+                from app.data.sharding_manager import sharding_manager
+                _ms_conn = sharding_manager.get_connection(
+                    sharding_manager.get_db_for_table('daily_basic_cache'))
+                _ms_row = _ms_conn.execute(
+                    "SELECT trade_date FROM daily_basic_cache ORDER BY trade_date DESC LIMIT 1"
+                ).fetchone()
+                today = str(_ms_row[0]) if _ms_row and _ms_row[0] else \
+                    (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            except Exception:
+                today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         stats: dict[str, object] = {}
         _row_counts: dict[str, int] = {}
 
@@ -2881,21 +2899,74 @@ def _precompute_market_stats(target_date: str | None = None):
 
         # 5. ERP分位（daily_basic_cache → market_cache.db 分库）
         def _erp_percentile():
+            # 447号 T3a-2：ERP = 1/PE_TTM - 10年国债利率（对齐知识库 research-bociasicscv190a:58，
+            # 复用 dim7 CN_10Y_BOND_YIELD_PCT；原实现 1/PE 未减国债）。
+            # 归一化口径（447号 用户拍板）：A股盈利收益率普遍低于国债，ERP 绝对值恒为负，
+            # 比值归一化对负值失效 → 改为「当日 ERP 绝对值在近252日历史中的分位(rank%)」，
+            # 负值自然落入低分位，保持 0~1 语义。
+            from app.opportunity_atlas.valuation_estimator import CN_10Y_BOND_YIELD_PCT
+            bond_yield = float(CN_10Y_BOND_YIELD_PCT)
             rows = _shard_fetchall('daily_basic_cache',
-                "SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0", [today])
-            if not rows or rows[0][0] is None:
+                """SELECT d.trade_date, AVG(c.pe_ttm) AS pe FROM (
+                    SELECT DISTINCT trade_date
+                    FROM daily_basic_cache
+                    WHERE trade_date <= ? AND pe_ttm > 0
+                    ORDER BY trade_date DESC LIMIT 252
+                ) d JOIN daily_basic_cache c ON c.trade_date = d.trade_date AND c.pe_ttm > 0
+                GROUP BY d.trade_date ORDER BY d.trade_date""", [today])
+            if not rows:
                 return None
-            avg_pe = float(rows[0][0])
-            erp_today = (1 / avg_pe) if avg_pe > 0 else 0
-            hist = _shard_fetchall('daily_basic_cache',
-                "SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0",
-                [today])
-            hist_pe = float(hist[0][0]) if hist and hist[0][0] else avg_pe
-            erp_hist = (1 / hist_pe) if hist_pe > 0 else 0
-            if erp_hist <= 0:
+            erp_series = []
+            for _, pe in rows:
+                if pe is not None and float(pe) > 0:
+                    erp_series.append(1 / float(pe) * 100 - bond_yield)
+            if not erp_series:
                 return None
-            return max(0, min(1, erp_today / erp_hist))
+            erp_today = erp_series[-1]  # 按 trade_date 升序，最后一条即当日
+            # 历史绝对分位：当日值在「当日+历史」序列中小于它的占比
+            count_less = sum(1 for v in erp_series if v < erp_today)
+            return max(0, min(1, count_less / len(erp_series)))
         _run('erp_percentile', 'daily_basic_cache', _erp_percentile)
+
+        # 5b. 股债收益差分位（daily_basic_cache → market_cache.db 分库）——447号 T3a-2
+        #     股债收益差 = 全市场中位股息率(dv_ttm) - 10年国债利率（知识库 research-bociasicscv190a:60）
+        #     归一化口径（447号 用户拍板）：股息率普遍低于国债，收益差绝对值恒为负，
+        #     比值归一化对负值失效 → 改为「当日中位股息率-国债 在近252日历史差分位(rank%)」。
+        def _median_dv_by_day():
+            """近252交易日按日分组的中位股息率（ROW_NUMBER 窗口：奇数取中位、偶数取中间两均）"""
+            return """SELECT d.trade_date, AVG(m.dv_median) FROM (
+                SELECT DISTINCT trade_date FROM daily_basic_cache
+                WHERE trade_date <= ? AND dv_ttm > 0
+                ORDER BY trade_date DESC LIMIT 252
+            ) d JOIN (
+                SELECT trade_date, AVG(dv_ttm) AS dv_median FROM (
+                    SELECT trade_date, dv_ttm,
+                           ROW_NUMBER() OVER (PARTITION BY trade_date ORDER BY dv_ttm) rn,
+                           COUNT(*) OVER (PARTITION BY trade_date) cnt
+                    FROM daily_basic_cache WHERE dv_ttm > 0
+                ) WHERE rn BETWEEN cnt * 0.5 AND cnt * 0.5 + 1
+                GROUP BY trade_date
+            ) m ON m.trade_date = d.trade_date
+            GROUP BY d.trade_date ORDER BY d.trade_date"""
+
+        def _dv_bond_diff():
+            from app.opportunity_atlas.valuation_estimator import CN_10Y_BOND_YIELD_PCT
+            bond_yield = float(CN_10Y_BOND_YIELD_PCT)
+            rows = _shard_fetchall('daily_basic_cache',
+                _median_dv_by_day(), [today])
+            if not rows:
+                return None
+            diff_series = []
+            for _, dv in rows:
+                if dv is not None and float(dv) > 0:
+                    diff_series.append(float(dv) - bond_yield)
+            if not diff_series:
+                return None
+            diff_today = diff_series[-1]  # 按 trade_date 升序，最后一条即当日
+            # 历史绝对分位：当日值在「当日+历史」序列中小于它的占比
+            count_less = sum(1 for v in diff_series if v < diff_today)
+            return max(0, min(1, count_less / len(diff_series)))
+        _run('dv_bond_diff', 'daily_basic_cache', _dv_bond_diff)
 
         # 6. 融资余额趋势（margin_cache → market_cache.db 分库）
         def _margin_trend():
@@ -2933,7 +3004,10 @@ def _precompute_market_stats(target_date: str | None = None):
 
         stats['computed_at'] = today
         # 任一统计项无源数据 → 告警且不落库（426号 P0-1：假值禁止入库/注入 RAW-2）
-        _missing_items = [k for k, v in stats.items() if v is None and k != 'computed_at']
+        # 447号 T3a-2：dv_bond_diff 为新增可选增强项（股债收益差），当日股息率缺源时
+        # 仅自身 None（framework 慢线回退 _compute_dv_bond_diff），不拖垮核心 7 项落库
+        _missing_items = [k for k, v in stats.items() if v is None and k != 'computed_at'
+                          and k != 'dv_bond_diff']
         if _missing_items:
             logger.warning(f"426 P0-1 市场级统计存在无源数据项: {_missing_items}，本次不落库、不注入RAW-2")
             _market_stats_cache = {}
@@ -3009,8 +3083,8 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             return 0.5
         from app.engine.framework.chip_strategy import MainForceScorer
         from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
-        from app.opportunity_atlas.dimensions.shared_vol_ratio import calc_vol_ratio
         # 370号修复：classify_attribute已删除（dim1_signal_engine中有同名函数），此处未使用，移除import
+        # 443号R5：calc_vol_ratio 原仅供 vp_health_ext 段（已删），import 一并移除
 
         # 各引擎初始化
         from app.data import DataManager
@@ -3056,7 +3130,14 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                             indicator_ma_dict[code] = ind_df[ma_cols]
                 except Exception:
                     pass
-            sr.compute_all_heat(all_data, indicator_ma_dict=indicator_ma_dict)
+            # 442号缺陷④：RAW-2 经 _raw_pool.submit 线程池执行，线程内无 Flask app_context，
+            # compute_all_heat 内部 get_stock_industry_batch 依赖 db.session → RuntimeError 被静默吞
+            # → sr._cache['all_heat'] 恒空 → sector_heat 全 none（84% 板块数据不足）。
+            # 参照 RAW-2B _precompute_sector_heat 的 app_context 先例，包一层应用上下文。
+            from app import create_app as _create_app
+            _raw_app = _create_app()
+            with _raw_app.app_context():
+                sr.compute_all_heat(all_data, indicator_ma_dict=indicator_ma_dict)
             # 板块热度持久化已抽离为独立管道步骤 RAW-2B（_precompute_sector_heat），
             # 在 RAW-2 完成后、SIG 前执行，用独立短连接避免与主循环写锁竞争。
             # 此处仅保留 compute_all_heat 预热 sr._cache['all_heat'] 供下方 sr.evaluate 消费。
@@ -3094,14 +3175,17 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         sealing_rate = round(sealed / touched * 100, 1)
                 except Exception:
                     pass
-                if limit_up > 50 and sealing_rate > 75:
+                # 447号 T2a：fallback 枚举对齐源 A 六段论（ice/ferment/climax/ebb），删 recovery；
+                # climax 门槛对齐源 A（limit_up>80 且 sealing>75），无 max_board_height 时可辨识档归
+                # sprout/regression 兜底→ferment（同源 A else 默认语义）
+                if limit_up > 80 and sealing_rate > 75:
                     _sentiment_phase_global = 'climax'
                 elif (limit_up < 40 and sealing_rate < 40) or limit_down > 20:
                     _sentiment_phase_global = 'ebb'
                 elif limit_up < 20 and sealing_rate < 40:
                     _sentiment_phase_global = 'ice'
                 else:
-                    _sentiment_phase_global = 'recovery'
+                    _sentiment_phase_global = 'ferment'
         except Exception:
             pass
 
@@ -3154,6 +3238,13 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     sentiment = ms.get_sentiment_phase()
                     if sentiment.get('data_available'):
                         _sent['sentiment_phase'] = sentiment['phase']
+                        _sent_metrics = sentiment.get('metrics') or {}
+                        # 447号 T1a：补写涨停家数/封板率（源自 sentiment_pool_cache，
+                        # 供 daemon RAW 温度与 dim5 实时温度消费，消灭 7 输入仅传 3）
+                        if isinstance(_sent_metrics.get('limit_up_count'), int):
+                            _sent['limit_up_count'] = _sent_metrics['limit_up_count']
+                        if isinstance(_sent_metrics.get('sealing_rate'), (int, float)):
+                            _sent['sealing_rate'] = float(_sent_metrics['sealing_rate'])
                     else:
                         _sent['sentiment_phase'] = _sentiment_phase_global or 'neutral'
                 except Exception:
@@ -3178,11 +3269,16 @@ def _precompute_raw_features(codes, target_date: str | None = None):
 
             # 3. 板块特征（4字段）
             try:
-                sector = sr.evaluate(code)
+                # 442号缺陷④：_raw2_one 经 _run_with_timeout 在子线程执行（无 app_context），
+                # sr.evaluate 的 get_stock_industry 依赖 db.session → 调用处包应用上下文
+                with _raw_app.app_context():
+                    sector = sr.evaluate(code)
                 features['sector'] = {
                     'sector_heat': sector.get('sector_heat', 0),
-                    'sector_momentum': sector.get('sector_momentum', 0),
-                    'sector_rank': sector.get('sector_rank', 0),
+                    # 442号缺陷④：evaluate 返回键为 'rank'/'strength'（sector_rank/sector_momentum 为写入层旧键名，
+                    # 键名错位致恒 0）——对齐返回键
+                    'sector_rank': sector.get('rank', 0),
+                    'sector_momentum': sector.get('strength', 0),
                     'is_sector_leader': sector.get('is_sector_leader', False),
                 }
             except Exception as e:
@@ -3359,11 +3455,22 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 # 424号§10决策②：先算 chip_bins（cde.estimate），再算聚合指标，
                 # 供 get_sub_scores 消费，避免完整分布被重复计算两次。
                 try:
-                    chip_bins = cde.estimate(df)
-                    if chip_bins is not None:
+                    # 443号R1：cde.estimate() 返回 4 元组 (chip_dist, min_price, max_price, price_step)，
+                    # 须解包并把 numpy 分布数组转成 ChipIndicators.calculate_all_indicators 期望的
+                    # dict 列表（price_bin/chip_ratio）；此前单变量接收元组→迭代 numpy 数组抛
+                    # TypeError→被 except: pass 静默吞→ssrp/asr/concentration/profit_ratio/cyqkl/rsi 全市场 0%。
+                    chip_dist, min_price, max_price, price_step = cde.estimate(df)
+                    if chip_dist is not None and len(chip_dist) > 0 and price_step > 0:
                         from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import ChipIndicators
                         ci = ChipIndicators()
                         current_price = float(df['close'].values[-1])
+                        chip_bins = [
+                            {
+                                'price_bin': round(min_price + bin_idx * price_step + price_step / 2, 2),
+                                'chip_ratio': round(float(chip_dist[bin_idx]), 4),
+                            }
+                            for bin_idx in range(len(chip_dist))
+                        ]
                         chip_result = ci.calculate_all_indicators(
                             chip_bins, current_price, kline_data=df, ts_code=code) or {}
                         _chip_fund_feat['ssrp'] = chip_result.get('ssrp')
@@ -3372,8 +3479,8 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         _chip_fund_feat['profit_ratio'] = chip_result.get('profit_ratio')
                         _chip_fund_feat['cyqkl'] = chip_result.get('cyqkl')
                         _chip_fund_feat['rsi'] = chip_result.get('rsi')
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"RAW筹码指标计算失败 [{code}]: {e}")
                 # fund_flow_strength: 大单净流入强度（0-1）
                 # 424号§10决策②：传入已预计算的 chip_fund_ext，避免 _score_chip_distribution 重复计算完整分布
                 try:
@@ -3495,6 +3602,10 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     sealing_rate=_sent.get('sealing_rate', 50.0) if isinstance(_sent.get('sealing_rate'), (int, float)) else 50.0,
                     sector_rank=_sect.get('sector_rank'),
                     volume_price_fit=_vp_f_em.get('volume_price_fit', 'neutral'),
+                    # 447号 T1a：breadth 用全市场 MA20 强势股占比（market_stats），
+                    # margin_change_pct RAW 预计算无逐股融资余额可靠源，保留默认（中性 50）
+                    breadth=(_market_stats_cache.get('ma20_ratio') if _market_stats_cache
+                             and isinstance(_market_stats_cache.get('ma20_ratio'), (int, float)) else None),
                 )
                 # market_emotion: 市场情绪阶段
                 _emotion_feat['market_emotion'] = _sent.get('sentiment_phase', 'neutral')
@@ -3502,30 +3613,17 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 _emotion_feat['sector_emotion'] = 'hot' if (_sect.get('sector_rank') or 999) <= 10 else 'normal'
                 # stock_emotion: 个股情绪
                 _emotion_feat['stock_emotion'] = 'positive' if _vp_f_em.get('volume_price_fit') == 'healthy' else ('negative' if _vp_f_em.get('volume_price_fit') == 'diverging' else 'neutral')
+                # 447号 T1a：涨停家数/封板率 透传 emotion_ext，供 dim5 实时温度（data_context['emotion_ext']）
+                if isinstance(_sent.get('limit_up_count'), int):
+                    _emotion_feat['limit_up_count'] = _sent['limit_up_count']
+                if isinstance(_sent.get('sealing_rate'), (int, float)):
+                    _emotion_feat['sealing_rate'] = float(_sent['sealing_rate'])
                 features['emotion_ext'] = _emotion_feat
             except Exception as e:
                 logger.warning(f"RAW情绪扩展字段失败 [{code}]: {e}")
 
-            # 15. 量价健康扩展字段（365号批次A / Phase 5）
-            try:
-                _vp_health_feat = {}
-                # vp_score: 10分制评分（占位，使用粗略估算）
-                _vp_health_feat['vp_score'] = None  # 待 vp_health_builder 独立函数就绪后填充
-                # vp_state_type: 量价状态类型
-                _vp_stage = _vp_f.get('kline_pattern', '')
-                _vp_health_feat['vp_state_type'] = 'fast_line' if '突破' in str(_vp_stage) else ('slow_line' if '回踩' in str(_vp_stage) else 'background')
-                # volume_energy: 量能强度
-                if len(df) >= 5:
-                    _vol_col = 'vol' if 'vol' in df.columns else 'volume'
-                    _vols = df[_vol_col].values
-                    _avg5 = float(_vols[-5:].mean()) if len(_vols) >= 5 else float(_vols.mean())
-                    _vr = calc_vol_ratio(float(_vols[-1]), _avg5)
-                    _vp_health_feat['volume_energy'] = min(1.0, max(0.0, (_vr - 0.5) / 2.0)) if _vr else None
-                else:
-                    _vp_health_feat['volume_energy'] = None
-                features['vp_health_ext'] = _vp_health_feat
-            except Exception as e:
-                logger.warning(f"RAW量价健康扩展字段失败 [{code}]: {e}")
+            # 15. 量价健康扩展字段（365号批次A / Phase 5）——443号R5 删除：
+            # vp_score 恒 None 占位、vp_state_type/volume_energy 无消费者（412 §8.4 删无消费者预计算）
 
             # 16. 结构位置扩展字段（365号批次A / Phase 6）
             try:
@@ -3556,7 +3654,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             if _progress_n % 500 == 0:
                 logger.info(f"  [RAW-2] 进度: {_progress_n}/{len(codes)} (succeeded={succeeded}, failed={failed}, {time.time()-t0:.1f}s)")
             try:
-                _res = _run_with_timeout(_raw2_one, timeout_sec=60.0, desc=f"RAW-2 特征 {code}")
+                _res = _run_with_timeout(lambda: _raw2_one(code), timeout_sec=60.0, desc=f"RAW-2 特征 {code}")
                 if _res is None:
                     failed += 1  # 428 P1-2 动作③：单股超时或特征计算异常
                     continue
@@ -3875,8 +3973,8 @@ def _build_opportunity_profile(tags: dict) -> dict:
     ff_status = '流入' if ff == '5d_inflow' else ('流出' if ff == '5d_outflow' else '中性')
     ff_light = '🟢' if ff_status == '流入' else ('🔴' if ff_status == '流出' else '🟡')
 
-    # 情绪：市场情绪 + 板块热度
-    sp_status = {'ice': '冰点', 'recovery': '复苏', 'climax': '高潮', 'ebb': '退潮'}.get(sp, '中性')
+    # 情绪：市场情绪 + 板块热度（447号 T2a：六段论 ice/sprout/ferment/climax/ebb/regression，去 recovery）
+    sp_status = {'ice': '冰点', 'sprout': '萌芽', 'ferment': '发酵', 'climax': '高潮', 'ebb': '退潮', 'regression': '回归'}.get(sp, '中性')
     sp_light = '🟡' if sp_status == '冰点' else ('🔴' if sp_status in ('高潮', '退潮') else '🟢')
 
     # 事件：催化剂（L3修复：三态 正向🟢/负向🔴/无⚪，307号§3.1.9）

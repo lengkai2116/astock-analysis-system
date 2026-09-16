@@ -185,10 +185,10 @@ class TestPhase5_MACDPrecomputed:
         assert 'precomputed' in sig.parameters
 
     def test_dim3_calc_macd_accepts_precomputed(self):
-        """dim3的calc_macd应接受precomputed参数"""
+        """dim3的calc_macd应接受precomputed参数（443号R7收敛后指framework版）"""
         import inspect
 
-        from app.opportunity_atlas.dimensions.dim3_vp_engine import calc_macd
+        from app.engine.framework.volume_price_strategy import calc_macd
         sig = inspect.signature(calc_macd)
         assert 'precomputed' in sig.parameters
 

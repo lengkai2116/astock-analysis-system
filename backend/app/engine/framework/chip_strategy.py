@@ -949,18 +949,18 @@ class MainForceScorer:
                     return 0.0
                 indicators = result.get('indicators', {})
                 chip_bins = result.get('chip_bins', [])
-            # 缓存筹码数据供 identify_phase 使用
+            # 缓存筹码数据供本类筹码评估后续消费（framework 实时路径）
             self._chip_indicators = indicators
             self._chip_bins = chip_bins
 
             score = 0.5  # 基础分
 
-            # ASR 评估（浮筹比例）
+            # ASR 评估（浮筹比例）——451号统一：高 ASR=筹码集中/突破前蓄势（wiki《ASR指标》），
+            # 不再判抛压减分（孤立高 ASR 与「浮筹高企=出货」相悖，出货须组合高位+放量）；
+            # 低 ASR=筹码锁定良好。语义与 dim4 _dim_asr 一致。
             asr = indicators.get('asr', indicators.get('ASR', 50))
-            if 30 <= asr <= 70:
-                score += 0.2  # 适中的浮筹比例
-            elif asr > 80:
-                score -= 0.2  # 浮筹过多，抛压大
+            if asr > 90:
+                score += 0.2  # 筹码高度集中，突破前蓄势
             elif asr < 20:
                 score += 0.1  # 浮筹极低，筹码锁定良好
 
@@ -1053,138 +1053,6 @@ class MainForceScorer:
         except Exception:
             return {"cost_price": 0, "distance_pct": 0, "near_cost": False}
 
-    def identify_phase(self, data: pd.DataFrame, symbol: str = None,
-                       chip_data: dict = None) -> str:
-        """
-        识别主力操盘阶段（Wiki: "建仓→洗盘→拉升→出货" 四阶段）
-
-        当 chip_data 提供 ASR/筹码峰信息时，使用筹码数据增强判断。
-
-        Args:
-            data: OHLCV DataFrame
-            symbol: 股票代码
-            chip_data: 可选筹码数据字典，包含 asr, chip_peak, concentration 等
-        """
-        try:
-            if data.empty or len(data) < 60:
-                return 'unknown'
-            closes = data['close'].values
-            volumes = data['vol'].values if 'vol' in data.columns else data.get('amount', closes)
-            price_high = np.max(closes[-120:])
-            price_low = np.min(closes[-120:])
-            price_range = price_high - price_low if price_high > price_low else 1.0
-            price_pos = (closes[-1] - price_low) / price_range
-
-            vol_5 = np.mean(volumes[-5:]) if len(volumes) >= 5 else 0
-            vol_20 = np.mean(volumes[-20:]) if len(volumes) >= 20 else 0
-            vol_ratio_5_20 = vol_5 / max(vol_20, 1)
-
-            ma_5 = np.mean(closes[-5:])
-            ma_20 = np.mean(closes[-20:])
-            ma_60 = np.mean(closes[-60:]) if len(closes) >= 60 else closes[-1]
-
-            # ASR 数据（从 chip_data 或上次筹码评分缓存中获取）
-            asr = None
-            chip_peak = None
-            concentration = None
-            if chip_data:
-                asr = chip_data.get('asr')
-                chip_peak = chip_data.get('chip_peak')
-                concentration = chip_data.get('concentration')
-            elif self._chip_indicators:
-                asr = self._chip_indicators.get('asr') or self._chip_indicators.get('ASR')
-                concentration = self._chip_indicators.get('concentration')
-                # 从 chip_bins 中提取 chip_peak（最大峰值对应的价格）
-                if self._chip_bins:
-                    peaks = sorted(self._chip_bins, key=lambda b: b.get('chip_ratio', 0), reverse=True)
-                    chip_peak = peaks[0].get('price', 0) if peaks else None
-
-            # CYQKL（筹码盈亏比例）：(现价 - 筹码峰) / 筹码峰
-            cyqkl = None
-            if chip_peak and chip_peak > 0:
-                cyqkl = (closes[-1] - chip_peak) / chip_peak
-
-            # RSI 背离检测（用于出货/建仓阶段识别）
-            rsi_bearish_div = False  # 价格新高但RSI未新高 → 顶背离
-            rsi_bullish_div = False  # 价格新低但RSI未新低 → 底背离
-            if len(closes) >= 30:
-                try:
-                    # 计算 RSI(14)
-                    deltas = np.diff(closes)
-                    gains = np.where(deltas > 0, deltas, 0)
-                    losses = np.where(deltas < 0, -deltas, 0)
-                    avg_gain = np.mean(gains[-14:]) if len(gains) >= 14 else np.mean(gains)
-                    avg_loss = np.mean(losses[-14:]) if len(losses) >= 14 else np.mean(losses)
-                    rsi = 100 - (100 / (1 + avg_gain / max(avg_loss, 1e-10))) if avg_loss > 0 else 100
-
-                    # 前一段 RSI
-                    avg_gain_prev = np.mean(gains[-28:-14]) if len(gains) >= 28 else avg_gain
-                    avg_loss_prev = np.mean(losses[-28:-14]) if len(losses) >= 28 else avg_loss
-                    rsi_prev = 100 - (100 / (1 + avg_gain_prev / max(avg_loss_prev, 1e-10))) if avg_loss_prev > 0 else 100
-
-                    # 价格两段高点
-                    high_recent = np.max(closes[-14:])
-                    high_prev = np.max(closes[-28:-14]) if len(closes) >= 28 else high_recent
-                    low_recent = np.min(closes[-14:])
-                    low_prev = np.min(closes[-28:-14]) if len(closes) >= 28 else low_recent
-
-                    # 顶背离：价格新高但RSI未新高
-                    if high_recent >= high_prev and rsi < rsi_prev - 5:
-                        rsi_bearish_div = True
-
-                    # 底背离：价格新低但RSI未新低
-                    if low_recent <= low_prev and rsi > rsi_prev + 5:
-                        rsi_bullish_div = True
-                except Exception:
-                    pass
-
-            # 阶段 1: 出货 — 高位 + 放量/量缩 + RSI顶背离 + 浮筹高企
-            if rsi_bearish_div and price_pos >= 0.5:
-                # RSI顶背离是最强的出货信号
-                return 'distributing'
-            if price_pos >= 0.7 and vol_ratio_5_20 >= 1.5:
-                return 'distributing'
-            if price_pos >= 0.8 and vol_ratio_5_20 < 0.7:
-                return 'distributing'
-            if price_pos >= 0.6 and asr is not None and asr > 60:
-                return 'distributing'
-            if price_pos >= 0.6 and cyqkl is not None and cyqkl > 0.3:
-                # CYQKL > 30% + 中高位 → 获利盘丰厚, 出货迹象
-                return 'distributing'
-
-            # 阶段 2: 拉升 — 多头排列 + 放量 + CYQKL达标(>20%) + SSRP穿越
-            if ma_5 > ma_20 > ma_60 and vol_ratio_5_20 >= 1.0:
-                if cyqkl is not None and cyqkl >= 0.2:
-                    return 'markup'  # CYQKL达标确认拉升
-                if asr is None or asr < 50:
-                    return 'markup'
-                return 'markup'
-
-            # 阶段 3: 洗盘 — 价跌缩量 + 中低位 + 低位筹码峰稳定
-            if price_pos < 0.5 and vol_ratio_5_20 < 0.85:
-                return 'washing'
-            if price_pos < 0.4 and asr is not None and asr > 50 and vol_ratio_5_20 < 1.0:
-                return 'washing'
-            if price_pos < 0.4 and cyqkl is not None and cyqkl < -0.1 and vol_ratio_5_20 < 1.0:
-                # CYQKL < -10% (深度亏损) + 低位缩量 → 洗盘特征
-                return 'washing'
-
-            # 阶段 4: 建仓 — 低位 + 温和放量 + 浮筹锁定的迹象
-            if rsi_bullish_div and price_pos <= 0.5:
-                # RSI底背离是最强的建仓/见底信号
-                return 'accumulating'
-            if price_pos < 0.5 and 1.1 <= vol_ratio_5_20 <= 2.0:
-                return 'accumulating'
-            if price_pos < 0.4 and asr is not None and asr < 40 and vol_ratio_5_20 >= 0.8:
-                return 'accumulating'
-            if price_pos < 0.3 and cyqkl is not None and cyqkl < -0.15 and concentration is not None and concentration > 0.1:
-                # 低位 + 深度亏损 + 筹码集中 → 建仓尾声
-                return 'accumulating'
-
-            return 'neutral'
-        except Exception:
-            return 'unknown'
-
     def _calc_margin_cost_price(self, symbol: str, latest_close: float) -> dict:
         """计算融资成本价（散户融资买入的平均成本）
         基于 margin_cache 的 rzmje(融资买入额) 和当日均价估算。
@@ -1252,114 +1120,3 @@ class MainForceScorer:
         return tags
 
 
-def _phase_to_status(phase: str, score: float) -> dict:
-    """将 MainForceScorer 的操盘阶段 phase 映射为标准 status_recognition 格式。
-
-    Args:
-        phase: 操盘阶段（accumulating/markup/washing/distributing/neutral/unknown）
-        score: MainForceScorer 评分（0-10）
-
-    Returns:
-        status_recognition 结构化字典（7 字段统一格式）
-    """
-    state_map = {
-        "accumulating": "ACCUMULATING",
-        "markup": "ACCUMULATING",
-        "washing": "RANGING",
-        "distributing": "DISTRIBUTING",
-        "neutral": "RANGING",
-        "unknown": "RANGING",
-    }
-    state_label_map = {
-        "ACCUMULATING": "主力建仓",
-        "DISTRIBUTING": "主力出货",
-        "RANGING": "筹码换手",
-    }
-    state = state_map.get(phase, "RANGING")
-    state_label = state_label_map.get(state, "中性")
-
-    # 用评分映射动量和趋势强度
-    if score >= 7:
-        momentum_level, strength = "bullish", "strong"
-    elif score >= 4:
-        momentum_level, strength = "neutral", "moderate"
-    else:
-        momentum_level, strength = "bearish", "weak"
-
-    return {
-        "state": state,
-        "state_label": state_label,
-        "trend": {"direction": "", "strength": strength, "stage": phase},
-        "momentum": {"level": momentum_level, "score": round(score / 10, 2)},
-        "volume": {"state": "", "structure": ""},
-        "support_resistance": {"support": 0.0, "resistance": 0.0},
-        "risk_level": "MEDIUM",
-    }
-
-
-class MainForceFilter:
-    """
-    主力关注度过滤器 — 用于 L2 筛选
-
-    对股票列表使用 MainForceScorer 评分，
-    返回评分 ≥ min_score 的股票（若无达到阈值则取 top_k 兜底）。
-    """
-
-    def __init__(self, min_score: float = 6.0, min_data_days: int = 60, top_k: int = 20):
-        self.min_score = min_score
-        self.min_data_days = min_data_days
-        self.top_k = top_k
-        self.scorer = MainForceScorer()
-
-    def filter(self, stock_list: list, data_dict: dict,
-               chip_fund_ext_dict: dict = None) -> list:
-        """
-        执行主力关注度筛选
-
-        Args:
-            stock_list: [{ts_code, name}, ...] 或 [ts_code, ...]
-            data_dict: {ts_code: DataFrame}
-            chip_fund_ext_dict: {ts_code: chip_fund_ext} 可选筹码预计算聚合指标
-
-        Returns:
-            [{symbol, name, mf_score, phase}, ...] 按评分降序
-        """
-        results = []
-        for item in stock_list:
-            ts_code = item if isinstance(item, str) else item.get('ts_code', '')
-            name = '' if isinstance(item, str) else item.get('name', '')
-            if not ts_code or ts_code not in data_dict:
-                continue
-            df = data_dict[ts_code]
-            if df.empty or len(df) < self.min_data_days:
-                continue
-            try:
-                _chip_ext = chip_fund_ext_dict.get(ts_code) if chip_fund_ext_dict else None
-                score = self.scorer.score(df, symbol=ts_code, chip_fund_ext=_chip_ext)
-                phase = self.scorer.identify_phase(df, symbol=ts_code)
-                if score > 0:
-                    # phase → status_recognition 映射
-                    sr = _phase_to_status(phase, score)
-                    results.append({
-                        'symbol': ts_code,
-                        'name': name,
-                        'mf_score': round(score, 2),
-                        'phase': phase,
-                        'status_recognition': sr,
-                    })
-            except Exception:
-                continue
-
-        results.sort(key=lambda x: x['mf_score'], reverse=True)
-
-        # 阈值筛选：≥ min_score 通过，若无则取 top_k 兜底
-        passed = [r for r in results if r['mf_score'] >= self.min_score]
-        if not passed:
-            top_score = results[0]["mf_score"] if results else 0
-            passed = results[:self.top_k]
-            logger.warning(
-                f"无股票达到阈值 {self.min_score}，取 top {self.top_k} 兜底 "
-                f"(最高分 {top_score})"
-            )
-
-        return passed

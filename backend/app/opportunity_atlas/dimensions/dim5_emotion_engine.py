@@ -23,6 +23,8 @@ import pandas as pd
 
 from app.data.mixins import DataAwareMixin
 from app.engine.framework.bociasi_quadrant import BociasiQuadrantAnalyzer
+# 447号 T5：温度唯一代码源（emotion_temperature.py，SSOT），dim5 不再内嵌副本
+from app.opportunity_atlas.emotion_temperature import calc_emotion_temperature
 from app.opportunity_atlas.dimensions.enum_cn_map import bociasi_signal_cn, quadrant_cn
 
 logger = logging.getLogger(__name__)
@@ -74,7 +76,7 @@ HEAT_TOP20 = 'top_20'
 HEAT_NORMAL = 'normal'
 HEAT_NONE = 'none'
 
-# 六段论阶段映射
+# 六段论阶段映射（447号 T2a：去 recovery，recovery 属 daemon 兜底自造词，六段论=ice/sprout/ferment/climax/ebb/regression）
 PHASE_MAP = {
     'ice': ('冰点', '市场极度低迷', 'red'),
     'sprout': ('萌芽', '市场情绪开始萌芽，出现连板龙头', 'yellow'),
@@ -82,7 +84,6 @@ PHASE_MAP = {
     'climax': ('高潮', '市场情绪过热', 'red'),
     'ebb': ('退潮', '市场情绪开始降温', 'yellow'),
     'regression': ('回归', '市场情绪回归常态', 'yellow'),
-    'recovery': ('复苏', '市场情绪开始回暖', 'green'),
 }
 
 
@@ -266,25 +267,9 @@ def _bociasi_quadrant(quick_result: dict, slow_result: dict) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════
-# 情绪温度（从 emotion_temperature.py 迁移）
+# 情绪温度 — 447号 T5：唯一代码源 emotion_temperature.py（SSOT），
+# 顶部 import calc_emotion_temperature，本文件不再内嵌副本（去双副本断链）
 # ═══════════════════════════════════════════════════════════
-
-def calc_emotion_temperature(sentiment_phase='neutral', limit_up_count=0,
-                             sealing_rate=50.0, sector_rank=None,
-                             volume_price_fit='neutral',
-                             margin_change_pct=None, breadth=None) -> float:
-    scores = {}
-    scores['market_phase'] = PHASE_BASE_TEMP.get(sentiment_phase, 50)
-    scores['limit_up'] = min(100, max(0, limit_up_count))
-    scores['blast_rate'] = min(100, max(0, sealing_rate))
-    scores['sector_heat'] = max(0, min(100, 100 - sector_rank * 2)) if sector_rank else 50
-    vp_map = {'healthy': 80, 'diverging': 20, 'neutral': 50}
-    scores['volume_price'] = vp_map.get(volume_price_fit, 50)
-    scores['margin'] = min(100, max(0, 50 + margin_change_pct * 600)) if margin_change_pct is not None else 50
-    scores['breadth'] = min(100, max(0, breadth * 100)) if breadth is not None else 50
-    total = sum(scores[k] * TEMP_WEIGHTS[k] for k in TEMP_WEIGHTS)
-    return round(min(100, max(0, total)), 1)
-
 
 def _assess_market_emotion(tags: dict, dims: dict) -> dict:
     # 440号：市场情绪自产（读 sentiment_phase），不再依赖空 dims['emotion'].state
@@ -300,8 +285,8 @@ def _assess_sector_emotion(tags: dict, dims: dict) -> dict:
     heat_map = {
         'top_10': ('top_10', '板块排名前10（强势板块）', 'green'),
         'top_20': ('top_20', '板块排名11-20（活跃板块）', 'green'),
-        'normal': ('normal', '板块排名20以外', 'yellow'),
-        'none': ('none', '板块数据不足', 'yellow'),
+        'normal': ('normal', '板块排名21-40', 'yellow'),
+        'none': ('none', '板块排名40以外（冷门板块）', 'yellow'),  # 442号缺陷④：'none' 是真实冷门等级，非数据缺失
     }
     if heat in heat_map:
         name, desc, light = heat_map[heat]
@@ -313,9 +298,18 @@ def _assess_stock_emotion(tags: dict, dims: dict) -> dict:
     # 440号：个股情绪自产（读 volume_price_fit，不再依赖空 dims['vp'].state 的跨维联动）
     _vpf = str(tags.get('volume_price_fit', ''))
     vp = {'healthy': '强健康', 'diverging': '背离', 'neutral': '中性'}.get(_vpf, '')
+    # 447号 T4a：dim3 已产 judgment.state（含 '严重背离'，health_score<2 触发），
+    # 据此补"极度消极"分支，使 audit'个股情绪非极度消极'条件真实可触发（不再是恒真）
+    _vp_state = None
+    try:
+        _vp_state = (dims.get('vp') or {}).get('judgment', {}).get('state')
+    except Exception:
+        _vp_state = None
+    if _vp_state == '严重背离' or vp == '严重背离':
+        return {'emotion': '极度消极', 'detail': f"量价严重背离（{_vp_state or '严重背离'}）", 'light': 'red'}
     if vp in ('强健康', '健康'):
         return {'emotion': '健康', 'detail': f"量价状态{vp}，趋势确认强势", 'light': 'green'}
-    elif vp in ('背离', '严重背离'):
+    elif vp in ('背离',):
         return {'emotion': '关注', 'detail': f"量价状态{vp}，需警惕", 'light': 'yellow'}
     elif vp == '中性':
         return {'emotion': '中性', 'detail': '量价状态中性', 'light': 'yellow'}
@@ -465,6 +459,7 @@ class Dim5EmotionEngine(DataAwareMixin):
                 market = {'phase': '底部反弹', 'detail': f"BOCIASI四象限={q}（{quadrant['description']}）", 'light': 'yellow'}
 
         # 3. 板块热度（419号方案B5：从dim1 data_context分拨，不再直调SectorRotationModel）
+        _sector_rank = None  # 447号 T1a：供温度复用（sector_heat 权重 15% 复活）
         if tags.get('ts_code'):
             try:
                 sector_heat = data_context.get('sector_heat') if data_context else None
@@ -474,12 +469,31 @@ class Dim5EmotionEngine(DataAwareMixin):
                     if info and info.get('heat_level') and info['heat_level'] != 'none':
                         sector['heat'] = info['heat_level']
                         sector['detail'] = f"板块{industry}(排名{info.get('rank', '?')})"
+                        _sector_rank = info.get('rank')
             except Exception:
                 pass
 
         # 4. 情绪温度（融合BOCIASI真实计算分数 + P10融资余额变化率）
         sp = tags.get('sentiment_phase', 'neutral')
         vp_fit = tags.get('volume_price_fit', 'neutral')
+
+        # 447号 T1a：涨停家数/封板率 从 data_context['emotion_ext']（daemon RAW 预计算已透传）
+        _limit_up = 0
+        _sealing = None
+        _breadth = None
+        try:
+            _emotion_ext = data_context.get('emotion_ext') if data_context else None
+            if _emotion_ext:
+                if isinstance(_emotion_ext.get('limit_up_count'), int):
+                    _limit_up = _emotion_ext['limit_up_count']
+                if isinstance(_emotion_ext.get('sealing_rate'), (int, float)):
+                    _sealing = float(_emotion_ext['sealing_rate'])
+            # breadth：全市场 MA20 强势股占比（market_stats，daemon 预计算）
+            _mstats = data_context.get('market_stats') if data_context else None
+            if _mstats and isinstance(_mstats.get('ma20_ratio'), (int, float)):
+                _breadth = float(_mstats['ma20_ratio'])
+        except Exception:
+            pass
 
         # P10: 获取融资余额变化率
         margin_change_pct = None
@@ -496,8 +510,11 @@ class Dim5EmotionEngine(DataAwareMixin):
         except Exception:
             pass
 
-        temperature = calc_emotion_temperature(sentiment_phase=sp, volume_price_fit=vp_fit,
-                                               margin_change_pct=margin_change_pct)
+        temperature = calc_emotion_temperature(
+            sentiment_phase=sp, limit_up_count=_limit_up,
+            sealing_rate=_sealing if _sealing is not None else 50.0,
+            sector_rank=_sector_rank, volume_price_fit=vp_fit,
+            margin_change_pct=margin_change_pct, breadth=_breadth)
 
         # BOCIASI修正：用快慢线分数加权修正温度
         fast_score = quadrant.get('fast_score', None)

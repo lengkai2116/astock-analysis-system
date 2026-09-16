@@ -100,7 +100,7 @@ class Dim1SignalEngine:
                     if margin_df is not None and not margin_df.empty:
                         loaded_data['margin_df'] = margin_df
                 except Exception:
-                    pass
+                    quality_issues.append('margin_cache不可用')
 
                 # fina_indicator_cache（dim7需要）
                 try:
@@ -108,7 +108,7 @@ class Dim1SignalEngine:
                     if fina_df is not None and not fina_df.empty:
                         loaded_data['fina_df'] = fina_df
                 except Exception:
-                    pass
+                    quality_issues.append('fina_indicator_cache不可用')
 
                 # income_cache（dim7需要）
                 try:
@@ -116,7 +116,7 @@ class Dim1SignalEngine:
                     if income_df is not None and not income_df.empty:
                         loaded_data['income_df'] = income_df
                 except Exception:
-                    pass
+                    quality_issues.append('income_cache不可用')
 
                 # balancesheet_cache（dim7需要）
                 try:
@@ -124,7 +124,7 @@ class Dim1SignalEngine:
                     if bs_df is not None and not bs_df.empty:
                         loaded_data['balancesheet_df'] = bs_df
                 except Exception:
-                    pass
+                    quality_issues.append('balancesheet_cache不可用')
 
                 # cashflow_cache（dim7需要）
                 try:
@@ -132,7 +132,7 @@ class Dim1SignalEngine:
                     if cf_df is not None and not cf_df.empty:
                         loaded_data['cashflow_df'] = cf_df
                 except Exception:
-                    pass
+                    quality_issues.append('cashflow_cache不可用')
 
                 # stk_holder_cache（未来扩展）
                 try:
@@ -140,7 +140,7 @@ class Dim1SignalEngine:
                     if sh_df is not None and not sh_df.empty:
                         loaded_data['stk_holder_df'] = sh_df
                 except Exception:
-                    pass
+                    quality_issues.append('stk_holder_cache不可用')
 
                 # lhb_cache（未来扩展）
                 try:
@@ -148,7 +148,7 @@ class Dim1SignalEngine:
                     if lhb_df is not None and not lhb_df.empty:
                         loaded_data['lhb_df'] = lhb_df
                 except Exception:
-                    pass
+                    quality_issues.append('lhb_cache不可用')
 
                 # ═══ 类别2: indicator预计算表（3项）═══
                 # 通过dm.get_cached_indicators()一次性读取宽表，按列名拆分
@@ -172,7 +172,7 @@ class Dim1SignalEngine:
                         if other_cols:
                             loaded_data['indicator_other_df'] = indicators_df[other_cols].copy()
                 except Exception:
-                    pass
+                    quality_issues.append('indicator预计算表不可用')
 
                 # ═══ 类别3: pre_feat_cache ext组（9项）═══
                 # 通过dm.get_pre_feat()读取嵌套JSON，按组名提取
@@ -190,7 +190,7 @@ class Dim1SignalEngine:
                             if group_data and isinstance(group_data, dict):
                                 loaded_data[group] = group_data
                 except Exception:
-                    pass
+                    quality_issues.append('pre_feat_cache不可用')
 
                 # market_stats 已通过上方 ext_groups 循环从 pre_feat_cache 读取
 
@@ -200,7 +200,7 @@ class Dim1SignalEngine:
                     if sh:
                         loaded_data['sector_heat'] = sh
                 except Exception:
-                    pass
+                    quality_issues.append('sector_heat不可用')
 
             except Exception as e:
                 quality_issues.append(f'DataManager初始化失败: {e}')
@@ -252,9 +252,11 @@ class Dim1SignalEngine:
             'indicator_ma_df', 'indicator_macd_df', 'indicator_other_df',
             # pre_feat_cache ext组
             'chip_fund_ext', 'cost_ext', 'volume_ext', 'risk_ext',
-            'fund_5d_ext', 'emotion_ext', 'structure_ext',
+            'fund_5d_ext', 'emotion_ext', 'structure_ext', 'valuation_ext',
             # 市场级统计
             'market_stats',
+            # 板块热度（442号配置完善：纳入校验，市场级无逐票补采映射）
+            'sector_heat',
         ]
 
         def _is_valid(v):
@@ -345,6 +347,7 @@ class Dim1SignalEngine:
                     'fund_5d_ext': 'precompute_raw',
                     'emotion_ext': 'precompute_raw',
                     'structure_ext': 'precompute_raw',
+                    'valuation_ext': 'precompute_raw',
                     'market_stats': 'precompute_raw',
                 }
                 # 419号方案：缺失项按 task_type 去重合并，一次请求（避免 daemon 持锁时

@@ -94,7 +94,8 @@ class Dim2StructureEngine(DataAwareMixin):
         chanlun_result = None
         df = None
         try:
-            analyzer = ChanlunAnalyzer()
+            # 446号：日线=长线，走线段中枢（知识库"中长线强制线段中枢"）；段不足自动回退笔中枢
+            analyzer = ChanlunAnalyzer({'bi_zs_mode': False})
             # 411号Phase 6：优先使用data_context
             if data_context and 'daily_df' in data_context:
                 df = data_context['daily_df']
@@ -153,6 +154,7 @@ class Dim2StructureEngine(DataAwareMixin):
             'vs_chip': vs_chip['detail'],
             'vs_indicator': vs_indicator['detail'],
             'chanlun_direction': chanlun_result.get('trend', '未知') if chanlun_result else '未知',
+            'trend_basis': chanlun_result.get('trend_basis', '') if chanlun_result else '',
             'chanlun_strength': round(strength, 2) if isinstance(strength, (int, float)) else str(strength),
             'buy_sell_points': [str(p) for p in buy_sell_points[:3]],
             'plain': plain,
@@ -242,11 +244,23 @@ def _assess_vs_chip(tags):
 
 def _assess_vs_indicator(tags):
     parts = []
-    for key, label in [('rsi14', 'RSI'), ('kdj_j', 'KDJ_J')]:
-        v = tags.get(key)
-        if v is not None:
-            try: parts.append(f"{label}={float(v):.0f}")
-            except: pass
+    # 442号缺陷③：rsi14/kdj_j 键 pre_feat 不产出（derived 组无此键），改读 indicator_status（99.7%覆盖）
+    ind = str(tags.get('indicator_status', ''))
+    if ind:
+        ma_map = {'bullish': '均线多头排列', 'bearish': '均线空头排列', 'mixed': '均线纠缠'}
+        for seg in ind.split(','):
+            if seg.startswith('ma='):
+                mv = seg[3:]
+                if mv in ma_map:
+                    parts.append(ma_map[mv])
+                break
+    # rsi_percentile 补充（derived 组产出，RSI 历史分位，0-1 归一化）
+    rp = tags.get('rsi_percentile')
+    if rp is not None:
+        try:
+            parts.append(f'RSI分位{float(rp) * 100:.0f}')
+        except Exception:
+            pass
     return {'detail': '，'.join(parts) if parts else '指标数据不足'}
 
 

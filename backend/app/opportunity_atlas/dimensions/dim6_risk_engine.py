@@ -337,6 +337,51 @@ def _list_risk_factors(tags: dict) -> list[dict]:
     return factors
 
 
+# ── PIERS 硬性否决事件（448号）：event_details.event_type 命中即应升 L0a 硬否决（JUD 侧 _apply_l0 处置）
+# SIG 侧只产「触发条件」，不下否决判定（SIG/JUD 边界共识）
+PIERS_HARD_EVENTS = ('fraud_sign', 'delist_risk')
+
+
+def _assess_piers_leverage(tags: dict, dm=None, ts_code: str = '') -> dict:
+    """PIERS-E 高杠杆维度评估（SIG 现状条件，非否决）
+
+    数据基础（445/448 核查）：debt_to_assets/roce 已落库（fina_indicator_cache），
+    dim7/dim4 已消费。对齐《PIERS框架.md》E 高杠杆「资产负债率过高 + 现金流不足」。
+
+    读取优先级：tags 预计算 valuation_ext → 回退独立查询 fina_indicator。
+    """
+    result = {'triggered': False, 'factors': [], 'metrics': {}}
+    debt_to_assets = tags.get('debt_to_assets')
+    roce = tags.get('roce')
+    if debt_to_assets is None and roce is None and dm is not None and ts_code:
+        try:
+            dfi = dm.get_cached_fina_indicator(ts_code)
+            if dfi is not None and not dfi.empty:
+                latest = dfi.iloc[-1]
+                debt_to_assets = latest.get('debt_to_assets')
+                roce = latest.get('roce')
+        except Exception:
+            pass
+    try:
+        dta = float(debt_to_assets) if debt_to_assets is not None else None
+    except (TypeError, ValueError):
+        dta = None
+    try:
+        rce = float(roce) if roce is not None else None
+    except (TypeError, ValueError):
+        rce = None
+    result['metrics'] = {'debt_to_assets': dta, 'roce': rce}
+    if dta is not None and dta > 70:
+        result['triggered'] = True
+        result['factors'].append({'category': 'PIERS-E', 'factor': f'高杠杆（资产负债率{dta:.0f}%>70%）',
+                                  'severity': '中', 'satisfied': True})
+    if rce is not None and rce < 15:
+        result['triggered'] = True
+        result['factors'].append({'category': 'PIERS-E', 'factor': f'资本回报率偏低（ROCE {rce:.1f}%<15%）',
+                                  'severity': '中', 'satisfied': True})
+    return result
+
+
 def _assess_rr(geo: dict) -> dict:
     rr = geo.get('risk_reward')
     if rr is None:
@@ -1097,13 +1142,32 @@ class Dim6RiskEngine(DataAwareMixin):
                 if not already:
                     event_risks.append({'category': '事件风险', 'factor': ce,
                                         'severity': '高', 'satisfied': True})
+            # 448号 PIERS 硬性否决事件：severity 升「极高」（消除 audit「无高风险事件」恒真 + 供 JUD 判定）
+            for ev in event_results:
+                if isinstance(ev, dict) and str(ev.get('event_type', '')) in PIERS_HARD_EVENTS:
+                    already = any(r.get('factor') == str(ev.get('event_type')) for r in event_risks)
+                    if not already:
+                        event_risks.append({'category': '事件风险', 'factor': str(ev.get('event_type')),
+                                            'severity': '极高', 'satisfied': True})
+                    else:
+                        for r in event_risks:
+                            if r.get('factor') == str(ev.get('event_type')):
+                                r['severity'] = '极高'
             if event_risks and risk_info['level'] not in ('高', '极高'):
                 risk_info = {'level': '高', 'light': 'red',
                              'detail': f"事件风险：{event_risks[0]['factor']}"}
+            if any(r.get('severity') == '极高' for r in event_risks) and risk_info['level'] != '极高':
+                risk_info = {'level': '极高', 'light': 'red', 'detail': '存在 PIERS 硬性否决事件（造假/退市）'}
         except Exception as e:
             logger.debug("403号Q-05 EventMonitor检测跳过: %s", e)
 
         risk_factors.extend(event_risks)
+
+        # 1c. PIERS-E 高杠杆维度（448号；SIG 现状条件，非否决）
+        _leverage = _assess_piers_leverage(tags, self._get_dm(), ts_code)
+        if _leverage['triggered']:
+            risk_factors.extend(_leverage['factors'])
+            _leverage_metrics = _leverage['metrics']
 
         # 2. 几何化指标
         # 411号Phase 9：优先从tags读取预计算risk_ext，回退raw计算
@@ -1180,6 +1244,7 @@ class Dim6RiskEngine(DataAwareMixin):
             'risk_light': risk_info['light'],
             'risk_factors': [f"{f['category']}：{f['factor']}（{f['severity']}）"
                              for f in risk_factors if f.get('satisfied')],
+            'piers_leverage': {k: v for k, v in _leverage['metrics'].items() if v is not None} if _leverage['triggered'] else {},
             'support_price': geo.get('support_price'),
             'resistance_price': geo.get('resistance_price'),
             'dist_to_support_pct': geo.get('dist_to_support_pct'),

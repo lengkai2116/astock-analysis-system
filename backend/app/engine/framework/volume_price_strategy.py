@@ -325,10 +325,22 @@ def get_best_volume_series(df: pd.DataFrame) -> np.ndarray:
     return np.ones(len(df))
 
 
-def calc_macd(closes: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """计算MACD: 返回 (dif, dea, macd_hist)"""
-    if len(closes) < 26:
-        return np.zeros(len(closes)), np.zeros(len(closes)), np.zeros(len(closes))
+def calc_macd(closes: np.ndarray, precomputed: dict = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """计算MACD: 返回 (dif, dea, macd_hist)
+
+    411号Phase 5：优先使用预计算数据，回退raw计算（443号R7 回迁）。
+    """
+    n = len(closes)
+    if precomputed:
+        dif = precomputed.get('macd_dif')
+        dea = precomputed.get('macd_dea')
+        hist = precomputed.get('macd_hist')
+        if dif is not None and dea is not None and hist is not None:
+            if len(dif) == n and len(dea) == n and len(hist) == n:
+                return dif, dea, hist
+    # raw计算作为fallback
+    if n < 26:
+        return np.zeros(n), np.zeros(n), np.zeros(n)
     s = pd.Series(closes)
     ema12 = s.ewm(span=12).mean().values
     ema26 = s.ewm(span=26).mean().values
@@ -399,12 +411,71 @@ class EnhancedPatternDetector:
     def _safe_len(self, *arrays, min_len=5) -> bool:
         return all(len(a) >= min_len for a in arrays)
 
+    # ── 443号R7：MA 读取 helper（412 D2/D3 回迁）──
+    # raw 路径与原内联 np.mean(...) 逐值等价；precomputed_ma 提供标量时用标量。
+    def _get_ma(self, period: int, offset: int = -1) -> float:
+        """MA 最新值（等价 np.mean(closes[-period:])）"""
+        pm = getattr(self, '_precomputed_ma', None)
+        key = f'ma{period}'
+        if pm and key in pm and pm[key] is not None:
+            return float(pm[key])
+        closes = getattr(self, '_last_closes', None)
+        if closes is None or len(closes) < period:
+            return np.nan
+        window = closes[-period:] if offset == -1 else closes[-period + offset + 1:offset + 1]
+        val = float(np.mean(window))
+        return val if not np.isnan(val) else np.nan
+
+    def _get_prev_ma(self, period: int) -> float:
+        """前一根 MA（等价 np.mean(closes[-period-1:-1])）"""
+        pm = getattr(self, '_precomputed_ma', None)
+        key = f'prev_ma{period}'
+        if pm and key in pm and pm[key] is not None:
+            return float(pm[key])
+        closes = getattr(self, '_last_closes', None)
+        if closes is None or len(closes) < period + 1:
+            return np.nan
+        val = float(np.mean(closes[-period - 1:-1]))
+        return val if not np.isnan(val) else np.nan
+
+    def _get_vol_ma(self, period: int) -> float:
+        """量 MA 最新值（等价 np.mean(volumes[-period:])）"""
+        pm = getattr(self, '_precomputed_ma', None)
+        key = f'vol_ma{period}'
+        if pm and key in pm and pm[key] is not None:
+            return float(pm[key])
+        volumes = getattr(self, '_last_volumes', None)
+        if volumes is None or len(volumes) < period:
+            return np.nan
+        val = float(np.mean(volumes[-period:]))
+        return val if not np.isnan(val) else np.nan
+
+    def _get_prev_vol_ma(self, period: int) -> float:
+        """前一根量 MA（等价 np.mean(volumes[-period-1:-1])）"""
+        pm = getattr(self, '_precomputed_ma', None)
+        key = f'prev_vol_ma{period}'
+        if pm and key in pm and pm[key] is not None:
+            return float(pm[key])
+        volumes = getattr(self, '_last_volumes', None)
+        if volumes is None or len(volumes) < period + 1:
+            return np.nan
+        val = float(np.mean(volumes[-period - 1:-1]))
+        return val if not np.isnan(val) else np.nan
+
     def detect_all(self, closes: np.ndarray, opens: np.ndarray,
                    highs: np.ndarray, lows: np.ndarray,
-                   volumes: np.ndarray) -> List[str]:
-        """检测所有OHLCV规则，返回匹配的形态名列表"""
+                   volumes: np.ndarray,
+                   precomputed_ma: dict = None) -> List[str]:
+        """检测所有OHLCV规则，返回匹配的形态名列表
+
+        443号R7（412 D2/D3 回迁）：precomputed_ma 可选，含 ma{p}/prev_ma{p}/vol_ma{p}/prev_vol_ma{p}
+        标量值；未提供时按 raw 计算，与原内联 np.mean 语义一致。
+        """
         if len(closes) < 5:
             return []
+        self._precomputed_ma = precomputed_ma or {}
+        self._last_closes = closes
+        self._last_volumes = volumes
         matched = []
         checks = [
             # [154-批1] 12条纯OHLCV规则
@@ -510,7 +581,7 @@ class EnhancedPatternDetector:
     def _is_fangliang_chonggao_huiluo(self, closes, opens, highs, lows, volumes) -> bool:
         if not self._safe_len(closes, highs, volumes, min_len=5):
             return False
-        avg_vol = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
+        avg_vol = self._get_prev_vol_ma(20) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
         if avg_vol <= 0:
             return False
         upper_shadow = highs[-1] - max(closes[-1], opens[-1])
@@ -533,7 +604,7 @@ class EnhancedPatternDetector:
     def _is_fangliang_zhizhang(self, closes, opens, highs, lows, volumes) -> bool:
         if not self._safe_len(closes, volumes, min_len=5):
             return False
-        avg_vol = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
+        avg_vol = self._get_prev_vol_ma(20) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
         if avg_vol <= 0:
             return False
         recent3_vol = volumes[-4:-1]
@@ -546,7 +617,7 @@ class EnhancedPatternDetector:
     def _is_tiaokong_goodbye(self, closes, opens, highs, lows, volumes) -> bool:
         if not self._safe_len(closes, opens, volumes, min_len=3):
             return False
-        avg_vol = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
+        avg_vol = self._get_prev_vol_ma(20) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
         if avg_vol <= 0:
             return False
         gap_up = opens[-1] > highs[-2]
@@ -558,7 +629,7 @@ class EnhancedPatternDetector:
     def _is_konghuang_chutao(self, closes, opens, highs, lows, volumes) -> bool:
         if not self._safe_len(closes, lows, volumes, min_len=5):
             return False
-        avg_vol = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
+        avg_vol = self._get_prev_vol_ma(20) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
         if avg_vol <= 0:
             return False
         drop_pct = (closes[-2] - closes[-1]) / closes[-2]
@@ -574,7 +645,7 @@ class EnhancedPatternDetector:
         amplitude = (box_high - box_low) / box_low
         if amplitude > 0.20:
             return False
-        avg_vol = float(np.mean(volumes[-21:-1]))
+        avg_vol = self._get_prev_vol_ma(20)
         if avg_vol <= 0:
             return False
         if closes[-1] < box_low:
@@ -593,7 +664,7 @@ class EnhancedPatternDetector:
                 body_pct = (closes[i] - opens[i]) / opens[i]
                 if body_pct < 0.03:
                     small_yangs += 1
-        avg_vol = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
+        avg_vol = self._get_prev_vol_ma(20) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
         if avg_vol <= 0:
             return False
         return small_yangs >= 7 and volumes[-1] < avg_vol * 0.5
@@ -602,7 +673,7 @@ class EnhancedPatternDetector:
     def _is_diliang_beiliang(self, closes, opens, highs, lows, volumes) -> bool:
         if not self._safe_len(closes, volumes, min_len=122):
             return False
-        avg_vol = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
+        avg_vol = self._get_prev_vol_ma(20) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
         if avg_vol <= 0:
             return False
         min_120 = np.min(volumes[-120:])
@@ -615,7 +686,7 @@ class EnhancedPatternDetector:
     def _is_dibu_fangliang_changyang(self, closes, opens, highs, lows, volumes) -> bool:
         if not self._safe_len(closes, opens, lows, volumes, min_len=32):
             return False
-        avg_vol = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
+        avg_vol = self._get_prev_vol_ma(20) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
         if avg_vol <= 0:
             return False
         body_pct = abs(closes[-1] - opens[-1]) / opens[-1]
@@ -629,7 +700,7 @@ class EnhancedPatternDetector:
     def _is_diliang_beiliang_yuzhang(self, closes, opens, highs, lows, volumes) -> bool:
         if not self._safe_len(closes, volumes, min_len=22):
             return False
-        avg_vol = float(np.mean(volumes[-21:-1]))
+        avg_vol = self._get_prev_vol_ma(20)
         if avg_vol <= 0:
             return False
         min_20 = np.min(volumes[-20:-1])
@@ -642,7 +713,7 @@ class EnhancedPatternDetector:
     def _is_pingtai_fangliang_tupo(self, closes, opens, highs, lows, volumes) -> bool:
         if not self._safe_len(closes, highs, volumes, min_len=22):
             return False
-        avg_vol = float(np.mean(volumes[-21:-1]))
+        avg_vol = self._get_prev_vol_ma(20)
         if avg_vol <= 0:
             return False
         platform_high = np.max(highs[-21:-1])
@@ -655,11 +726,11 @@ class EnhancedPatternDetector:
     def _is_fangliang_zhan60(self, closes, opens, highs, lows, volumes) -> bool:
         if not self._safe_len(closes, volumes, min_len=62):
             return False
-        avg_vol = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
+        avg_vol = self._get_prev_vol_ma(20) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
         if avg_vol <= 0:
             return False
-        ma60 = float(np.mean(closes[-60:]))
-        prev_ma60 = float(np.mean(closes[-61:-1]))
+        ma60 = self._get_ma(60)
+        prev_ma60 = self._get_prev_ma(60)
         return (closes[-1] > ma60 and
                 volumes[-1] > avg_vol * 1.8 and
                 ma60 >= prev_ma60)
@@ -698,7 +769,7 @@ class EnhancedPatternDetector:
         current = closes[-1]
         if current < base * 1.02:  # 接近启动点
             vol_peak = np.max(volumes[-10:])
-            vol_last = np.mean(volumes[-3:])
+            vol_last = self._get_vol_ma(3)
             if vol_last < vol_peak * 0.3:
                 return True
         return False
@@ -738,67 +809,67 @@ class EnhancedPatternDetector:
         """MA5金叉MA10（趋势转折信号）"""
         if len(closes) < 11:
             return False
-        ma5_p = float(np.mean(closes[-6:-1]))
-        ma10_p = float(np.mean(closes[-11:-1]))
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
+        ma5_p = self._get_prev_ma(5)
+        ma10_p = self._get_prev_ma(10)
+        ma5 = self._get_ma(5)
+        ma10 = self._get_ma(10)
         return ma5 > ma10 and ma5_p <= ma10_p
 
     def _is_ma5_sicha_ma10(self, closes, opens, highs, lows, volumes) -> bool:
         """MA5死叉MA10（趋势转折预警）"""
         if len(closes) < 11:
             return False
-        ma5_p = float(np.mean(closes[-6:-1]))
-        ma10_p = float(np.mean(closes[-11:-1]))
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
+        ma5_p = self._get_prev_ma(5)
+        ma10_p = self._get_prev_ma(10)
+        ma5 = self._get_ma(5)
+        ma10 = self._get_ma(10)
         return ma5 < ma10 and ma5_p >= ma10_p
 
     def _is_ma_tuo_pailie(self, closes, opens, highs, lows, volumes) -> bool:
         """均线多头排列 MA5>MA10>MA20>MA60（中期多头确认）"""
         if len(closes) < 61:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
-        ma20 = float(np.mean(closes[-20:]))
-        ma60 = float(np.mean(closes[-60:]))
+        ma5 = self._get_ma(5)
+        ma10 = self._get_ma(10)
+        ma20 = self._get_ma(20)
+        ma60 = self._get_ma(60)
         return ma5 > ma10 > ma20 > ma60
 
     def _is_ma_tuo_pailie_ma30(self, closes, opens, highs, lows, volumes) -> bool:
         """均线多头排列 MA5>MA10>MA30>MA60（三线开花短线S级）"""
         if len(closes) < 61:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
-        ma30 = float(np.mean(closes[-30:]))
-        ma60 = float(np.mean(closes[-60:]))
+        ma5 = self._get_ma(5)
+        ma10 = self._get_ma(10)
+        ma30 = self._get_ma(30)
+        ma60 = self._get_ma(60)
         return ma5 > ma10 > ma30 > ma60
 
     def _is_ma_ya_pailie(self, closes, opens, highs, lows, volumes) -> bool:
         """均线空头排列 MA5<MA10<MA20<MA60（中期空头确认）"""
         if len(closes) < 61:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
-        ma20 = float(np.mean(closes[-20:]))
-        ma60 = float(np.mean(closes[-60:]))
+        ma5 = self._get_ma(5)
+        ma10 = self._get_ma(10)
+        ma20 = self._get_ma(20)
+        ma60 = self._get_ma(60)
         return ma5 < ma10 < ma20 < ma60
 
     def _is_ma_ya_pailie_ma30(self, closes, opens, highs, lows, volumes) -> bool:
         """均线空头排列 MA5<MA10<MA30<MA60（三线开花空头S级）"""
         if len(closes) < 61:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma10 = float(np.mean(closes[-10:]))
-        ma30 = float(np.mean(closes[-30:]))
-        ma60 = float(np.mean(closes[-60:]))
+        ma5 = self._get_ma(5)
+        ma10 = self._get_ma(10)
+        ma30 = self._get_ma(30)
+        ma60 = self._get_ma(60)
         return ma5 < ma10 < ma30 < ma60
 
     def _is_closes_above_ma60(self, closes, opens, highs, lows, volumes) -> bool:
         """连续3日收盘价站上MA60（中期走强确认）"""
         if len(closes) < 63:
             return False
-        ma60 = float(np.mean(closes[-60:]))
+        ma60 = self._get_ma(60)
         for i in range(-3, 0):
             if closes[i] <= ma60:
                 return False
@@ -808,49 +879,49 @@ class EnhancedPatternDetector:
         """MA5从下方上穿MA20（短线强化信号）"""
         if len(closes) < 21:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma20 = float(np.mean(closes[-20:]))
-        ma5_prev = float(np.mean(closes[-6:-1]))
-        ma20_prev = float(np.mean(closes[-21:-1]))
+        ma5 = self._get_ma(5)
+        ma20 = self._get_ma(20)
+        ma5_prev = self._get_prev_ma(5)
+        ma20_prev = self._get_prev_ma(20)
         return ma5 > ma20 and ma5_prev <= ma20_prev
 
     def _is_ma60_zhichi(self, closes, opens, highs, lows, volumes) -> bool:
         """股价回踩MA60不破并获得支撑（回调低吸信号）"""
         if len(closes) < 63:
             return False
-        ma60 = float(np.mean(closes[-60:]))
+        ma60 = self._get_ma(60)
         lowest_5 = np.min(lows[-5:])
-        return lowest_5 >= ma60 * 0.99 and closes[-1] > ma60 and                closes[-1] > np.mean(closes[-6:-1])  # 开始回升
+        return lowest_5 >= ma60 * 0.99 and closes[-1] > ma60 and                closes[-1] > self._get_prev_ma(5)  # 开始回升
 
     def _is_ma5_jiaotou_ma60(self, closes, opens, highs, lows, volumes) -> bool:
         """MA5上穿MA60（中期趋势转折关键信号）"""
         if len(closes) < 61:
             return False
-        ma5 = float(np.mean(closes[-5:]))
-        ma60 = float(np.mean(closes[-60:]))
-        ma5_prev = float(np.mean(closes[-6:-1]))
+        ma5 = self._get_ma(5)
+        ma60 = self._get_ma(60)
+        ma5_prev = self._get_prev_ma(5)
         return ma5 > ma60 and ma5_prev <= ma60
 
     def _is_price_above_ma120(self, closes, opens, highs, lows, volumes) -> bool:
         """价格站上MA120（长期趋势转多）"""
         if len(closes) < 121:
             return False
-        ma120 = float(np.mean(closes[-120:]))
+        ma120 = self._get_ma(120)
         return closes[-1] > ma120 and closes[-2] > ma120
 
     def _is_price_above_ma250(self, closes, opens, highs, lows, volumes) -> bool:
         """价格站上MA250（牛熊分界线）"""
         if len(closes) < 251:
             return False
-        ma250 = float(np.mean(closes[-250:]))
+        ma250 = self._get_ma(250)
         return closes[-1] > ma250
 
     def _is_ma30_above_ma60(self, closes, opens, highs, lows, volumes) -> bool:
         """MA30 > MA60（中期趋势走多）"""
         if len(closes) < 61:
             return False
-        ma30 = float(np.mean(closes[-30:]))
-        ma60 = float(np.mean(closes[-60:]))
+        ma30 = self._get_ma(30)
+        ma60 = self._get_ma(60)
         return ma30 > ma60
 
     # ── [P1-#12] 格兰维尔8法则（位置版） ──
@@ -859,22 +930,22 @@ class EnhancedPatternDetector:
         """格兰维尔买点1: 突破买 — MA走平后价格上穿MA"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
-        ma10_prev = np.mean(closes[-11:-1])
+        ma10 = self._get_ma(10)
+        ma10_prev = self._get_prev_ma(10)
         return ma10 > ma10_prev and closes[-1] > ma10 and closes[-2] <= ma10_prev
 
     def _is_granville_buy2(self, closes, opens, highs, lows, volumes) -> bool:
         """格兰维尔买点2: 回踩买 — 价格上穿后回踩MA不破"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
-        return closes[-1] > ma10 and np.min(lows[-3:]) > ma10 * 0.99 and closes[-1] > np.mean(closes[-4:-1])
+        ma10 = self._get_ma(10)
+        return closes[-1] > ma10 and np.min(lows[-3:]) > ma10 * 0.99 and closes[-1] > self._get_prev_ma(3)
 
     def _is_granville_buy3(self, closes, opens, highs, lows, volumes) -> bool:
         """格兰维尔买点3: 偏离买 — 价格在MA下方但远离MA(超卖反弹)"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
+        ma10 = self._get_ma(10)
         deviation = (ma10 - closes[-1]) / ma10
         return deviation > 0.08 and closes[-1] > closes[-2]  # 偏离>8%且开始反弹
 
@@ -882,30 +953,30 @@ class EnhancedPatternDetector:
         """格兰维尔买点4: 新低买 — 价格创新低但MA已走平"""
         if len(closes) < 21:
             return False
-        ma20 = np.mean(closes[-20:])
-        ma20_prev = np.mean(closes[-21:-1])
+        ma20 = self._get_ma(20)
+        ma20_prev = self._get_prev_ma(20)
         return closes[-1] < np.min(closes[-10:-1]) and ma20 > ma20_prev * 0.998
 
     def _is_granville_sell1(self, closes, opens, highs, lows, volumes) -> bool:
         """格兰维尔卖点1: 跌破卖 — MA走平后价格下穿MA"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
-        ma10_prev = np.mean(closes[-11:-1])
+        ma10 = self._get_ma(10)
+        ma10_prev = self._get_prev_ma(10)
         return ma10 < ma10_prev and closes[-1] < ma10 and closes[-2] >= ma10_prev
 
     def _is_granville_sell2(self, closes, opens, highs, lows, volumes) -> bool:
         """格兰维尔卖点2: 反抽卖 — 价格下穿后反抽MA不过"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
+        ma10 = self._get_ma(10)
         return closes[-1] < ma10 and closes[-2] < ma10 and            (closes[-1] > closes[-2] or closes[-2] > closes[-3])  # 正在反抽
 
     def _is_granville_sell3(self, closes, opens, highs, lows, volumes) -> bool:
         """格兰维尔卖点3: 偏离卖 — 价格在MA上方但远离MA(超买回调)"""
         if len(closes) < 11:
             return False
-        ma10 = np.mean(closes[-10:])
+        ma10 = self._get_ma(10)
         deviation = (closes[-1] - ma10) / ma10
         return deviation > 0.10 and closes[-1] < closes[-2]  # 偏离>10%且开始回调
 
@@ -913,8 +984,8 @@ class EnhancedPatternDetector:
         """格兰维尔卖点4: 新高卖 — 价格创新高但MA已走平"""
         if len(closes) < 21:
             return False
-        ma20 = np.mean(closes[-20:])
-        ma20_prev = np.mean(closes[-21:-1])
+        ma20 = self._get_ma(20)
+        ma20_prev = self._get_prev_ma(20)
         return closes[-1] > np.max(closes[-10:-1]) and ma20 < ma20_prev * 1.002
 
     # ──────────────────────────────────────────────
@@ -1522,7 +1593,7 @@ class EnhancedPatternDetector:
         body_pct = (closes[-1] - opens[-1]) / opens[-1]
         if body_pct <= 0.05:
             return False
-        vol_ma5 = float(np.mean(volumes[-6:-1]))
+        vol_ma5 = float(self._get_prev_vol_ma(5))
         if vol_ma5 <= 0:
             return False
         return volumes[-1] > vol_ma5 * 2
@@ -1564,7 +1635,7 @@ class EnhancedPatternDetector:
             return False
         if closes[-1] <= np.max(highs[-21:-1]):
             return False
-        vol_ma20 = float(np.mean(volumes[-21:-1]))
+        vol_ma20 = self._get_prev_vol_ma(20)
         if vol_ma20 <= 0:
             return False
         return volumes[-1] > vol_ma20 * 2
@@ -1608,7 +1679,7 @@ class EnhancedPatternDetector:
         body_pct = (closes[-1] - opens[-1]) / opens[-1]
         if body_pct <= 0.05:
             return False
-        vol_ma5 = float(np.mean(volumes[-6:-1]))
+        vol_ma5 = float(self._get_prev_vol_ma(5))
         if vol_ma5 <= 0:
             return False
         return volumes[-1] > vol_ma5 * 3
@@ -1670,7 +1741,7 @@ class EnhancedPatternDetector:
             return False
         if lows[-1] < closes[-2]:
             return False
-        vol_ma5 = float(np.mean(volumes[-6:-1]))
+        vol_ma5 = float(self._get_prev_vol_ma(5))
         if vol_ma5 <= 0:
             return False
         return volumes[-1] > vol_ma5
@@ -1690,7 +1761,7 @@ class EnhancedPatternDetector:
         today_gain = (closes[-1] - opens[-1]) / opens[-1]
         if today_gain <= abs(prev_drop):
             return False
-        vol_ma5 = float(np.mean(volumes[-6:-1]))
+        vol_ma5 = float(self._get_prev_vol_ma(5))
         if vol_ma5 <= 0:
             return False
         return volumes[-1] > vol_ma5
@@ -1727,7 +1798,7 @@ class EnhancedPatternDetector:
         gap_down = opens[-1] < lows[-2]
         if not gap_up and not gap_down:
             return False
-        vol_ma10 = float(np.mean(volumes[-11:-1]))
+        vol_ma10 = float(self._get_prev_vol_ma(10))
         if vol_ma10 <= 0:
             return False
         return volumes[-1] > vol_ma10 * 2
@@ -1775,7 +1846,7 @@ class EnhancedPatternDetector:
             return False
         if closes[-1] <= opens[-1]:
             return False
-        vol_ma5 = float(np.mean(volumes[-6:-1]))
+        vol_ma5 = float(self._get_prev_vol_ma(5))
         if vol_ma5 <= 0:
             return False
         return volumes[-1] > vol_ma5 * 1.5
@@ -1810,7 +1881,7 @@ class EnhancedPatternDetector:
                 break
         if not vol_decreasing:
             return False
-        return volumes[-1] > np.mean(volumes[-6:-1]) * 1.5
+        return volumes[-1] > self._get_prev_vol_ma(5) * 1.5
 
     # ── [#31] 新10种量价形态 ──
 
@@ -1966,7 +2037,7 @@ class EnhancedPatternDetector:
         if not gap_up:
             return False
         # 当日成交量小于5日均量
-        vol_ma5 = float(np.mean(volumes[-6:-1])) if len(volumes) > 6 else float(np.mean(volumes[:-1]))
+        vol_ma5 = float(self._get_prev_vol_ma(5)) if len(volumes) > 6 else float(np.mean(volumes[:-1]))
         if vol_ma5 <= 0:
             return False
         vol_shrink = volumes[-1] < vol_ma5 * 0.85
@@ -2413,7 +2484,8 @@ class VolumeStateAnalyzer:
     def __init__(self):
         pass
 
-    def analyze(self, df: pd.DataFrame, stage: Stage) -> VolumeState:
+    def analyze(self, df: pd.DataFrame, stage: Stage, volume_ext: dict = None) -> VolumeState:
+        """412号方案D1 v3.0：vol_ma优先从volume_ext读取（443号R7 回迁），保留raw fallback"""
         if df.empty or len(df) < 20:
             return VolumeState()
 
@@ -2422,9 +2494,22 @@ class VolumeStateAnalyzer:
         volumes = get_best_volume_series(df)
 
         trend = self._calc_volume_trend(volumes)
-        volma5 = self._sma(volumes, 5)
-        volma10 = self._sma(volumes, 10)
-        volma20 = self._sma(volumes, 20)
+        # vol_ma：优先从volume_ext读取最新值，保留raw rolling fallback
+        if volume_ext and 'vol_ma5' in volume_ext:
+            volma5_val = volume_ext['vol_ma5']
+            volma5 = np.full(len(volumes), float(volma5_val)) if volma5_val is not None else self._sma(volumes, 5)
+        else:
+            volma5 = self._sma(volumes, 5)
+        if volume_ext and 'vol_ma10' in volume_ext:
+            volma10_val = volume_ext['vol_ma10']
+            volma10 = np.full(len(volumes), float(volma10_val)) if volma10_val is not None else self._sma(volumes, 10)
+        else:
+            volma10 = self._sma(volumes, 10)
+        if volume_ext and 'vol_ma20' in volume_ext:
+            volma20_val = volume_ext['vol_ma20']
+            volma20 = np.full(len(volumes), float(volma20_val)) if volma20_val is not None else self._sma(volumes, 20)
+        else:
+            volma20 = self._sma(volumes, 20)
         v5, v10, v20 = volma5[-1], volma10[-1], volma20[-1]
         volma_struct = self._calc_volma_structure(v5, v10, v20)
         has_tuo = self._detect_volume_tuo(volma5, volma10, volma20)
@@ -3979,7 +4064,7 @@ class VolumePriceStrategy:
         self.signal_generator = VolumePriceSignalGenerator()
         self.market_env = market_env  # [P0-优化1]
 
-    def analyze(self, df: pd.DataFrame) -> Dict:
+    def analyze(self, df: pd.DataFrame, volume_ext: dict = None) -> Dict:
         if df.empty or len(df) < 30:
             return {"error": "数据不足", "success": False}
 
@@ -4007,7 +4092,7 @@ class VolumePriceStrategy:
                 return {"error": f"阶段判定异常: {e}", "success": False}
 
             try:
-                vol_state = self.volume_analyzer.analyze(df, stage)
+                vol_state = self.volume_analyzer.analyze(df, stage, volume_ext=volume_ext)
             except Exception as e:
                 logger.error(f"成交量分析异常: {e}")
                 vol_state = VolumeState()
@@ -4041,7 +4126,7 @@ class VolumePriceStrategy:
     def _build_detail(self, stage, vol_state, relation):
         return {"阶段判定": stage.to_dict(), "成交量状态": vol_state.to_dict(), "量价关系": relation.to_dict()}
 
-    def _detect_kline_patterns(self, df: pd.DataFrame) -> dict:
+    def _detect_kline_patterns(self, df: pd.DataFrame, volume_ext: dict = None) -> dict:
         """返回量价引擎产出的标签（357号方案：重命名消除与策略层命名混淆）"""
         tags = {}
         try:
@@ -4064,7 +4149,7 @@ class VolumePriceStrategy:
                     from app.engine.framework.volume_price_strategy import (
                         compute_volume_price_signal as _full_vp,
                     )
-                    _full = _full_vp('', df)
+                    _full = _full_vp('', df, volume_ext=volume_ext)
                     _sig = str((_full or {}).get('signal', '')).lower()
                     _detail = str((_full or {}).get('volume_price_detail') or {})
                     if _sig in ('bullish', 'up'):
@@ -4117,13 +4202,15 @@ class VolumePriceStrategy:
 # ══════════════════════════════════════════════
 
 def compute_volume_price_signal(ts_code: str, df: pd.DataFrame,
-                                market_env: Optional[Dict] = None) -> Optional[Dict]:
+                                market_env: Optional[Dict] = None,
+                                volume_ext: dict = None) -> Optional[Dict]:
     """
     计算量价信号（供 SignalComputationService 调用）
     [P0-优化1] 支持大盘环境参数传入
+    412号方案D1 v3.0：volume_ext由调用方从data_context传入（443号R7 回迁）。
     """
     strategy = VolumePriceStrategy(market_env=market_env)
-    result = strategy.analyze(df)
+    result = strategy.analyze(df, volume_ext=volume_ext)
     if not result.get("success"):
         return None
     signal = result["signal_output"]

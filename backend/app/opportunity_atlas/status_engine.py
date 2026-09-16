@@ -259,7 +259,12 @@ class StatusEngine:
                 engine_cls = getattr(mod, class_name)
                 engine = engine_cls()
                 # 411号Phase 4：注入data_context参数（默认值None，兼容旧调用）
-                results[dim_name] = engine.evaluate(dims, tags, signals, lifecycle,
+                # 442号缺陷①：tags（pre_feat扁平化）无 ts_code 键，dim2-dim7 内部均 tags.get('ts_code')
+                #   → 显式注入，对齐 dim1 的 419号 ts_code 传递（否则 ts_code 相关分支全部跳过）
+                _tags_for_dims = dict(tags)
+                if ts_code:
+                    _tags_for_dims['ts_code'] = ts_code
+                results[dim_name] = engine.evaluate(dims, _tags_for_dims, signals, lifecycle,
                                                     data_context=data_context)
             except Exception as e:
                 logger.warning(f"维度引擎 {dim_name} 调用失败: {e}")
@@ -523,6 +528,20 @@ class StatusEngine:
         if ce in (_l0_cfg.get('hard_risks') or ['regulatory']):
             l0['hard_veto'] = True
             l0['hard_reason'] = '监管立案（L0a 硬否决）' if ce == 'regulatory' else f'L0a 硬否决：{ce}'
+        # L0a 硬否决（448号 PIERS 永久黑名单）：直读 event_details.event_type，不依赖 catalyst_event 单值
+        # （catalyst_event 取 |direction| 最大事件，fraud_sign=-2 常被 breakout/regulatory 等覆盖 → 单值标签不可靠）
+        _hard_labels = {
+            'fraud_sign': '财务造假/重大财务异常（L0a 硬否决）',
+            'delist_risk': '退市风险（L0a 硬否决）',
+        }
+        if not l0['hard_veto']:
+            _ev_details = tags.get('event_details')
+            if isinstance(_ev_details, list):
+                _hit = next((e for e in _ev_details if isinstance(e, dict)
+                             and str(e.get('event_type', '')) in _hard_labels), None)
+                if _hit:
+                    l0['hard_veto'] = True
+                    l0['hard_reason'] = _hard_labels[str(_hit.get('event_type'))]
         # L0b 软约束（可逆：仓位系数，对齐 cross_validate._evaluate_gate）
         coeff = _l0_cfg.get('soft_risk_coeff', {})
         if str(tags.get('fina_health', '')) == 'fail':

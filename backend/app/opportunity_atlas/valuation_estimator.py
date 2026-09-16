@@ -338,7 +338,7 @@ class ValuationEngine(DataAwareMixin):
             latest = df.iloc[0]
             latest_end = pd.Timestamp(latest['end_date'])
             target = latest_end - pd.DateOffset(years=1)
-            match = df[df['end_date'] == target]
+            match = df[df['end_date'].apply(lambda d: pd.Timestamp(d) == target)]
             if match.empty:
                 return None
             prev = match.iloc[0]
@@ -373,10 +373,13 @@ class ValuationEngine(DataAwareMixin):
             return None
 
     def _anchor_earnings(self, df_basic: pd.DataFrame,
-                         df_income: pd.DataFrame) -> float:
-        """收益锚评级，返回 [-2, +2]"""
+                         df_income: pd.DataFrame) -> tuple:
+        """收益锚评级 → (score [-2,+2], peg_gt2)
+
+        449：返回 PEG>2 标记供 composite 级降级（成长陷阱）。
+        """
         if df_basic.empty:
-            return 0.0
+            return 0.0, False
 
         # 1) PE百分位评分 [-1, +1]
         pe_score = 0.0
@@ -401,6 +404,7 @@ class ValuationEngine(DataAwareMixin):
 
         # 2) PEG评分 [-1, +1]
         peg_score = 0.0
+        peg_gt2 = False
         if has_positive_ni:
             growth = self._yoY_growth(df_income)
             if growth is not None and growth > 0 and 'pe_ttm' in df_basic.columns:
@@ -419,6 +423,8 @@ class ValuationEngine(DataAwareMixin):
                         peg_score = -0.5
                     else:
                         peg_score = -1.0
+                    if peg > 2.0:
+                        peg_gt2 = True
             elif growth is not None and growth <= 0:
                 peg_score = -0.5
 
@@ -440,7 +446,7 @@ class ValuationEngine(DataAwareMixin):
                     div_score = -0.5
 
         total = pe_score + peg_score + div_score
-        return _sum3_to_2(total)
+        return _sum3_to_2(total), peg_gt2
 
     # ═══════════════════════════════════════════════
     # 锚3: 现金流锚（FCF/EV法）
@@ -655,6 +661,21 @@ class ValuationEngine(DataAwareMixin):
             except Exception:
                 pass
         roce_pass = roce_ok
+        # 449：roce_na = 无 ROCE 数据（仅「有数据且<15%」才触发价值陷阱惩罚）
+        roce_na = True
+        for _src in (df_report, df_fina):
+            if not _src.empty and 'roce' in _src.columns and len(_src['roce'].dropna()) >= 3:
+                roce_na = False
+                break
+        if roce_na and not df_income.empty and not df_bs.empty:
+            try:
+                _incs = df_income['operating_profit'].dropna()
+                _tas = df_bs['total_assets'].dropna()
+                _cls = df_bs['current_liab'].dropna()
+                if not _incs.empty and not _tas.empty and (_tas.iloc[0] - _cls.iloc[0]) > 0:
+                    roce_na = False
+            except Exception:
+                pass
 
         # 资产负债率 < 70%（金融除外）
         liab_ok = True
@@ -694,7 +715,7 @@ class ValuationEngine(DataAwareMixin):
         elif fail_count >= 1:
             health = 'suspicious'
 
-        return health, roce_pass, df_fina
+        return health, roce_pass, roce_na, df_fina
 
     # ═══════════════════════════════════════════════
     # 主入口
@@ -733,16 +754,32 @@ class ValuationEngine(DataAwareMixin):
 
         # ── 各锚评级 ──
         a1 = self._anchor_pb(df_basic)
-        a2 = self._anchor_earnings(df_basic, df_income)
         a3 = self._anchor_cashflow(df_basic, df_cf, df_bs, cat)
         a4 = self._anchor_adjusted_pe(df_basic, df_income, cat)
         a5 = self._anchor_bond_stock(df_basic)  # 315号 F4：股债收益差锚
+        a2, peg_gt2 = self._anchor_earnings(df_basic, df_income)
 
         # ── 市值微调 + 综合评级（297号§3.1：<50亿资产锚×0.5后归一化） ──
         w1, w2, w3, w4, w5 = weights
+
+        # 449 周期股陷阱：周期股在周期顶点PE最低，需自动切换至PB锚（纯PB归一，对齐dim7）
+        if cat == '周期':
+            # 检查PE分位数是否异常低（<20%），可能是周期顶点
+            if not df_basic.empty and 'pe_ttm' in df_basic.columns:
+                pe = df_basic['pe_ttm'].dropna()
+                pe = pe[pe > 0]
+                if len(pe) >= 20:
+                    cur_pe = pe.iloc[-1]
+                    pe_pct = (pe < cur_pe).sum() / len(pe) * 100
+                    if pe_pct < 20:
+                        # PE处于极低分位 → 疑似周期顶点 → 权重归一为纯资产锚(PB)，其余锚清零
+                        w1, w2, w3, w4, w5 = 1.0, 0.0, 0.0, 0.0, 0.0
+
         if not df_basic.empty and 'total_mv' in df_basic.columns:
             mv = df_basic['total_mv'].dropna()
-            if not mv.empty and mv.iloc[-1] < 5e9:
+            # 445-A2 修复：total_mv 单位为万元（见 :495 换算注释），<50亿元=5e5 万元；
+            # 原 5e9 万元=50万亿元 → 全市场恒触发资产锚权重×0.5（系统性权重失真）
+            if not mv.empty and mv.iloc[-1] < 5e5:
                 w1 *= 0.5
                 total = w1 + w2 + w3 + w4 + w5
                 if total > 0:
@@ -751,8 +788,18 @@ class ValuationEngine(DataAwareMixin):
         composite = w1 * a1 + w2 * a2 + w3 * a3 + w4 * a4 + w5 * a5
         composite = max(-2.0, min(2.0, composite))
 
-        # ── 315号阶段2：PB-ROE 质量修正（高 ROE 支撑高估值，主流框架；财务风险惩罚） ──
-        fina_health, roce_pass, df_fina = self._fina_health(ts_code)
+        # ── 315号阶段2：PB-ROE 质量修正（高 ROE 支撑高估值；财务风险惩罚） ──
+        # 449：_fina_health 提前调用，供 ROCE（价值陷阱）惩罚复用
+        fina_health, roce_pass, roce_na, df_fina = self._fina_health(ts_code)
+
+        # 449 估值陷阱惩罚（对齐外部 wiki：价值陷阱结合 ROCE、成长陷阱 PEG>2 自动降级）
+        # ROCE 惩罚仅在有数据且<15%时触发（无数据默认通过，对齐 dim4 _check_roce）
+        if not roce_pass and not roce_na:
+            composite -= 0.3  # 价值陷阱：ROCE<15% 惩罚
+        if peg_gt2:
+            composite -= 0.5  # 成长陷阱：PEG>2 自动降级
+        composite = max(-2.0, min(2.0, composite))
+
         qa = QUALITY_ADJUST
         if fina_health == 'fail':
             composite -= qa['fail_penalty']  # 财务风险：估值惩罚
@@ -842,6 +889,8 @@ class ValuationEngine(DataAwareMixin):
             'revenue_growth': revenue_growth,
             'fina_health': fina_health,
             'roce_pass': roce_pass,
+            'value_trap': (not roce_pass and not roce_na),
+            'growth_trap': peg_gt2,
             'composite_rating': round(composite, 4),  # 315号：精度 4 位（原 2 位致大量重复值，百分位分档边界失真）
             'asset_anchor_rating': round(a1, 1),
             'earnings_anchor_rating': round(a2, 1),

@@ -23,6 +23,7 @@ conflict_rules:                # conflict_evidence 规则登记（336号 §4；�
 
 l0:
   hard_risks: [regulatory]               # L0a 硬否决（335号）：catalyst_event 命中即否决
+  event_hard_risks: [fraud_sign, delist_risk]   # L0a 硬否决（448号 PIERS 永久黑名单）：直读 event_details.event_type 命中即否决（对齐 PIERS「永久性/不可覆盖」，不依赖 catalyst_event 单值）
   soft_risk_coeff:                       # L0b 仓位系数（对齐 cross_validate._evaluate_gate）
     fina_weak: 0.5
     fina_fail: 0.5

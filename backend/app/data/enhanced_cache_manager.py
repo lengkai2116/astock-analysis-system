@@ -1393,6 +1393,27 @@ class EnhancedCacheManager:
 
     # ── 全市场统计缓存 ──────────────────────────────────────
 
+    def _ensure_market_stats_cache_column(self):
+        """447号 T3a-2：market_stats_cache 补 dv_bond_diff 列（幂等，compute_cache.db 分库）
+
+        存量库（426号前建表）缺该列时 ALTER 补列，已有则跳过。写入前调用，
+        避免重复 ALTER 报错（SQLite 同列 ADD 会异常，用 try/PRAGMA 幂等判断）。
+        """
+        try:
+            from app.data.sharding_manager import sharding_manager
+            db_name = sharding_manager.get_db_for_table('market_stats_cache')
+            conn = sharding_manager.get_connection(db_name)
+            cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(market_stats_cache)").fetchall()}
+            if 'dv_bond_diff' not in cols:
+                lock = sharding_manager.get_write_lock(db_name)
+                with lock:
+                    conn.execute("ALTER TABLE market_stats_cache "
+                                 "ADD COLUMN dv_bond_diff REAL")
+                    conn.commit()
+        except Exception as e:
+            logger.warning(f"market_stats_cache 补列 dv_bond_diff 失败: {e}")
+
     def cache_market_stats(self, stats: dict):
         """414号R8: 持久化全市场级统计到SQLite
 
@@ -1403,12 +1424,15 @@ class EnhancedCacheManager:
         stat_date = stats.get('computed_at', '')
         if not stat_date:
             return
+        # 447号 T3a-2：写前确保 dv_bond_diff 列存在（存量库幂等补列）
+        self._ensure_market_stats_cache_column()
         with self._write_lock:
             self._exec_shard('market_stats_cache', """
                 INSERT OR REPLACE INTO market_stats_cache
                 (stat_date, ma20_ratio, turnover_percentile, limit_ratio,
-                 rsi_percentile, erp_percentile, margin_trend, pe_percentile)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 rsi_percentile, erp_percentile, margin_trend, pe_percentile,
+                 dv_bond_diff)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 stat_date,
                 stats.get('ma20_ratio', 0.5),
@@ -1418,6 +1442,7 @@ class EnhancedCacheManager:
                 stats.get('erp_percentile', 0.5),
                 stats.get('margin_trend', 0.5),
                 stats.get('pe_percentile', 0.5),
+                stats.get('dv_bond_diff'),
             ])
 
     def get_cached_market_stats(self, stat_date: str = None) -> dict:
@@ -1438,6 +1463,7 @@ class EnhancedCacheManager:
                 'erp_percentile': float(r.get('erp_percentile', 0.5)),
                 'margin_trend': float(r.get('margin_trend', 0.5)),
                 'pe_percentile': float(r.get('pe_percentile', 0.5)),
+                'dv_bond_diff': r.get('dv_bond_diff'),
                 'computed_at': str(r.get('stat_date', '')),
             }
         return {}

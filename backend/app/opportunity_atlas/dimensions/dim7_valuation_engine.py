@@ -386,7 +386,7 @@ class Dim7ValuationEngine(DataAwareMixin):
                 return None
             latest = df.iloc[0]
             target = pd.Timestamp(latest['end_date']) - pd.DateOffset(years=1)
-            match = df[df['end_date'] == target]
+            match = df[df['end_date'].apply(lambda d: pd.Timestamp(d) == target)]
             if match.empty:
                 return None
             prev = match.iloc[0]
@@ -414,9 +414,13 @@ class Dim7ValuationEngine(DataAwareMixin):
         except Exception:
             return None
 
-    def _anchor_earnings(self, df_basic, df_income) -> float:
+    def _anchor_earnings(self, df_basic, df_income) -> tuple:
+        """收益锚（PE分位+PEG+股息率）→ (score, peg_gt2)
+
+        449：返回 PEG>2 标记供 composite 级降级（成长陷阱）。
+        """
         if df_basic.empty:
-            return 0.0
+            return 0.0, False
         pe_score = 0.0
         pe_pct_val = _pe_percentile(df_basic)
         if pe_pct_val is not None:
@@ -431,6 +435,7 @@ class Dim7ValuationEngine(DataAwareMixin):
                 has_positive_ni = bool(not _ni.empty and _ni.iloc[0] > 0)
 
         peg_score = 0.0
+        peg_gt2 = False
         if has_positive_ni:
             growth = self._yoY_growth(df_income)
             if growth is not None and growth > 0 and 'pe_ttm' in df_basic.columns:
@@ -449,6 +454,8 @@ class Dim7ValuationEngine(DataAwareMixin):
                         peg_score = -0.5
                     else:
                         peg_score = -1.0
+                    if peg > 2.0:
+                        peg_gt2 = True
             elif growth is not None and growth <= 0:
                 peg_score = -0.5
 
@@ -466,7 +473,7 @@ class Dim7ValuationEngine(DataAwareMixin):
                 else:
                     div_score = -0.5
 
-        return _sum3_to_2(pe_score + peg_score + div_score)
+        return _sum3_to_2(pe_score + peg_score + div_score), peg_gt2
 
     def _anchor_cashflow(self, df_basic, df_cashflow, df_balancesheet, cat) -> float:
         if cat == '金融' or df_basic.empty:
@@ -555,9 +562,13 @@ class Dim7ValuationEngine(DataAwareMixin):
 
         四维检查：ROE均值>6% / ROCE均值>15% / 负债率<70%（金融除外） / 经营现金流覆盖净利润。
         任一维度不满足累积：≥2 fail、≥1 suspicious。
+
+        449：返回 (health, roce_pass, roce_na)——roce_na 表示「无 ROCE 数据」
+        （价值陷阱惩罚须仅在有数据且<15%时触发，dim4 _check_roce 对齐：无数据默认通过）。
         """
         health = 'pass'
         roce_pass = False
+        roce_na = True
         try:
             df_fina = ecm.get_cached_fina_indicator(ts_code)
         except Exception:
@@ -610,6 +621,21 @@ class Dim7ValuationEngine(DataAwareMixin):
             except Exception:
                 pass
         roce_pass = roce_ok
+        # 449：roce_na = 任何 ROCE 源都没有可用数据（区分「无数据」与「不达标」）
+        roce_na = True
+        for _src in (df_report, df_fina):
+            if not _src.empty and 'roce' in _src.columns and len(_src['roce'].dropna()) >= 3:
+                roce_na = False
+                break
+        if roce_na and not df_income.empty and not df_bs.empty:
+            try:
+                _incs = df_income['operating_profit'].dropna()
+                _tas = df_bs['total_assets'].dropna()
+                _cls = df_bs['current_liab'].dropna()
+                if not _incs.empty and not _tas.empty and (_tas.iloc[0] - _cls.iloc[0]) > 0:
+                    roce_na = False
+            except Exception:
+                pass
 
         liab_ok = True
         industry = None
@@ -649,7 +675,7 @@ class Dim7ValuationEngine(DataAwareMixin):
             health = 'fail'
         elif fail_count >= 1:
             health = 'suspicious'
-        return health, roce_pass
+        return health, roce_pass, roce_na
 
     def _anchor_bond_stock(self, df_basic) -> float:
         if df_basic.empty or 'dv_ttm' not in df_basic.columns:
@@ -724,14 +750,14 @@ class Dim7ValuationEngine(DataAwareMixin):
 
         # ── 四锚加权（a1资产/PB、a2收益/PE、a3现金流、a4调整PE、a5股债）──
         a1 = self._anchor_pb(df_basic)
-        a2 = self._anchor_earnings(df_basic, df_income)
+        a2, peg_gt2 = self._anchor_earnings(df_basic, df_income)
         a3 = self._anchor_cashflow(df_basic, df_cf, df_bs, cat)
         a4 = self._anchor_adjusted_pe(df_basic, df_income, cat)
         a5 = self._anchor_bond_stock(df_basic)
 
         w1, w2, w3, w4, w5 = weights
 
-        # Wiki 周期股陷阱：周期股在周期顶点PE最低，需自动切换至PB锚
+        # Wiki 周期股陷阱：周期股在周期顶点PE最低，需自动切换至PB锚（449 改为纯PB归一）
         if cat == '周期':
             # 检查PE分位数是否异常低（<20%），可能是周期顶点
             if not df_basic.empty and 'pe_ttm' in df_basic.columns:
@@ -741,15 +767,14 @@ class Dim7ValuationEngine(DataAwareMixin):
                     cur_pe = pe.iloc[-1]
                     pe_pct = (pe < cur_pe).sum() / len(pe) * 100
                     if pe_pct < 20:
-                        # PE处于极低分位 → 可能是周期顶点 → 提高PB权重
-                        w1 = w1 * 2.0  # 资产锚(PB)权重翻倍
-                        w2 = w2 * 0.5  # 收益锚(PE)权重减半
-                        total = w1 + w2 + w3 + w4 + w5
-                        w1, w2, w3, w4, w5 = w1/total, w2/total, w3/total, w4/total, w5/total
+                        # PE处于极低分位 → 疑似周期顶点 → 权重归一为纯资产锚(PB)，其余锚清零
+                        w1, w2, w3, w4, w5 = 1.0, 0.0, 0.0, 0.0, 0.0
 
         if not df_basic.empty and 'total_mv' in df_basic.columns:
             mv = df_basic['total_mv'].dropna()
-            if not mv.empty and mv.iloc[-1] < 5e9:
+            # 445-A2 修复：total_mv 单位为万元（见 _anchor_cashflow fcf/1e4 换算），
+            # <50亿元 应为 5e5 万元；原 5e9 万元=50万亿元 → 全市场恒触发资产锚权重减半
+            if not mv.empty and mv.iloc[-1] < 5e5:
                 w1 *= 0.5
                 total = w1 + w2 + w3 + w4 + w5
                 if total > 0:
@@ -759,7 +784,16 @@ class Dim7ValuationEngine(DataAwareMixin):
         composite = max(-2.0, min(2.0, composite))
 
         # 财务健康质量调整 + 科技/成长营收增长加分（418号：接线 _adjust_composite）
-        fina_health, roce_pass = self._fina_health(ts_code, ecm)
+        fina_health, roce_pass, roce_na = self._fina_health(ts_code, ecm)
+
+        # 449 估值陷阱惩罚（对齐外部 wiki：价值陷阱结合 ROCE、成长陷阱 PEG>2 自动降级）
+        # ROCE 惩罚仅在有数据且<15%时触发（无数据默认通过，对齐 dim4 _check_roce）
+        if not roce_pass and not roce_na:
+            composite -= 0.3  # 价值陷阱：ROCE<15% 惩罚
+        if peg_gt2:
+            composite -= 0.5  # 成长陷阱：PEG>2 自动降级
+        composite = max(-2.0, min(2.0, composite))
+
         composite = _adjust_composite(composite, fina_health, ecm, ts_code, cat,
                                       df_income, self, data_context=data_context)
 
@@ -841,6 +875,8 @@ class Dim7ValuationEngine(DataAwareMixin):
             'revenue_growth': revenue_growth,
             'fina_health': fina_health,
             'roce_pass': roce_pass,
+            'value_trap': (not roce_pass and not roce_na),
+            'growth_trap': peg_gt2,
             'composite_rating': round(composite, 4),
             'asset_anchor_rating': round(a1, 1),
             'earnings_anchor_rating': round(a2, 1),
@@ -958,6 +994,9 @@ class Dim7ValuationEngine(DataAwareMixin):
             'dividend_yield': f"股息率{div_str}",
             'revenue_growth': f"营收同比增长{val['revenue_growth']}%" if val['revenue_growth'] is not None else '营收数据缺失',
             'fina_health': f"财务健康{'✅' if val['fina_health'] == 'pass' else '⚠️' if val['fina_health'] == 'suspicious' else '🚫'}({val['fina_health']})",
+            # 449 估值陷阱标注（对齐 wiki：成长陷阱 PEG>2 / 价值陷阱 ROCE<15%）
+            'value_trap': 'ROCE低于15%，存在价值陷阱风险' if val.get('value_trap', False) else None,
+            'growth_trap': 'PEG>2，存在成长陷阱风险' if val.get('growth_trap', False) else None,
             'potential_score': f"潜力评分{strength}/100",
             'potential_strength': strength,  # 数字字段（dim_adapter factor/valuation维消费，与judgment.potential_strength同值）
             'potential_breakdown': potential['potential_breakdown'],
@@ -990,6 +1029,10 @@ class Dim7ValuationEngine(DataAwareMixin):
             {'name': '营收正增长', 'satisfied': val['revenue_growth'] is not None and val['revenue_growth'] > 0,
              'actual': f"{val['revenue_growth']}%" if val['revenue_growth'] is not None else 'N/A',
              'threshold': '营收正增长'},
+            {'name': 'ROCE达标', 'satisfied': val['roce_pass'],
+             'actual': '通过' if val['roce_pass'] else 'ROCE<15%', 'threshold': 'ROCE近3年均值>15%'},
+            {'name': '无成长陷阱', 'satisfied': not val['growth_trap'],
+             'actual': 'PEG>2' if val['growth_trap'] else 'PEG<=2', 'threshold': 'PEG<=2'},
         ]
         satisfied_count = sum(1 for c in conditions if c['satisfied'])
         total_count = len(conditions)

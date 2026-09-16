@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 
 # ── 主力阶段常量（369号方案物理合入 phase_detector.py 时遗漏，导致 compute_tags 抛 NameError）──
 PHASE_UNKNOWN = "unknown"
+# 445-A1 修复：补齐物理合入时遗漏的 4 个阶段常量（对齐 phase_detector.py:20-23 值），
+# 否则 _limit_up_cross_check/_fund_flow_to_phase/_volume_signal_to_phase/_chip_distribution_analysis
+# 引用 PHASE_* 抛 NameError（被 try 吞）→ 涨停交叉校验 4 规则从未生效
+PHASE_BUILDING = "building"
+PHASE_WASHING = "washing"
+PHASE_LIFTING = "lifting"
+PHASE_DISTRIBUTING = "distributing"
 # 主力阶段中文名映射（供 evaluate 组装 phase_cn；注意与 dim5 情绪阶段 PHASE_MAP 语义不同）
 PHASE_MAP = {
     'building': {'name': '建仓期', 'desc': '低位吸筹'},
@@ -385,10 +392,12 @@ class PhaseDetectionEngine(DataAwareMixin):
                      chip_fund_ext: Optional[Dict] = None,
                      moneyflow_df=None,
                      indicator_ma_df=None,
-                     indicator_other_df=None) -> Dict:
+                     indicator_other_df=None,
+                     cost_ext: Optional[Dict] = None) -> Dict:
         """计算阶段标签（312号方案：8 维度加权共识，替代原五源等权投票）
 
         412号方案C1/C3 v3.0：全部数据由dim1通过data_context提供。
+        443号R2：新增cost_ext（main_force_cost/margin_cost_price），透传_ssrp维度做洗盘增强。
 
         Args:
             ts_code: 股票代码
@@ -398,6 +407,7 @@ class PhaseDetectionEngine(DataAwareMixin):
             moneyflow_df: 资金流向数据，由data_context提供
             indicator_ma_df: 预计算MA数据，由data_context提供
             indicator_other_df: 预计算RSI/KDJ/BOLL数据，由data_context提供
+            cost_ext: 成本价预计算值（main_force_cost/margin_cost_price），由data_context提供
 
         Returns:
             {main_force_phase, phase_confidence, price_position,
@@ -438,7 +448,7 @@ class PhaseDetectionEngine(DataAwareMixin):
             "stage": self._dim_stage(df_sorted, ts_code=ts_code, indicator_ma_df=indicator_ma_df),           # 3 量价四阶段（CONSOLIDATION 验证）
             "asr":   self._dim_asr(ts_code, df_sorted),    # 4 ASR 筹码分布（去兜底）
             "trend": self._dim_trend(df_sorted),           # 5 趋势方向（斜率连续）
-            "ssrp":  self._dim_ssrp(df_sorted, extra_tags),# 6 主力成本锚定（真实 SSRP，从pre_feat_cache读取）
+            "ssrp":  self._dim_ssrp(df_sorted, extra_tags, cost_ext=cost_ext),# 6 主力成本锚定（真实 SSRP，从pre_feat_cache读取）
             "chan":  self._dim_chan(extra_tags),           # 8 缠论买点（标签接入）
         }
 
@@ -563,23 +573,31 @@ class PhaseDetectionEngine(DataAwareMixin):
         return {}
 
     def _dim_asr(self, ts_code: str, df: pd.DataFrame) -> dict:
-        """维度4 ASR 筹码分布：298 号 4 条规则，else → 全 0（去 washing 兜底）
-        2026-08-13 知识库对齐：ASR 0-100 量级（原 0-1，阈值×100）
+        """维度4 ASR 筹码分布：统一高 ASR=筹码集中蓄势语义（451 号）
+
+        wiki《ASR指标》权威：ASR 高=筹码集中/突破前蓄势状态，价格脱离
+        高浮筹区/ASR 高位滑落才是拉升信号；出货须「高位+放量+浮筹高企」
+        组合，孤立高 ASR 不直接判出货。据此：
+          - asr>90（高浮筹集中）=筹码集中蓄势 → building（不再直接 lifting）
+          - 剔除孤立 'asr>30 高于峰值→distributing'（445「三处三义」相悖分支）
+          - asr<15 近峰值=筹码锁定在建仓范围 → building
+          - asr<15 大幅高于峰值=脱离密集区、筹码锁定充分 → lifting
         """
         chip = self._chip_distribution_analysis(ts_code, df)
         asr = chip.get("asr", 0.0)
         peak_price = chip.get("peak_position", 0.0)
         current = df["close"].values[-1]
         rel = current / peak_price if peak_price > 0 else 1.0
-        if asr > 90 and rel < 0.95:
-            return {"lifting": 0.5}
+        # 高浮筹集中 = 筹码集中/突破前蓄势（不直接判拉升）
+        if asr > 90:
+            return {"building": 0.6}
+        # 低浮筹 + 价格锁定在密集峰值附近：主力仍处建仓锁仓蓄势
         if asr < 15 and abs(rel - 1.0) < 0.10:
             return {"building": 0.6}
+        # 低浮筹 + 大幅高于峰值：筹码锁定充分、脱离密集区 → 拉升
         if asr < 15 and rel > 1.2:
             return {"lifting": 0.5}
-        if asr > 30 and rel > 1.05:
-            return {"distributing": 0.5}
-        return {}   # 去 else→washing 兜底（312 §3.2 维度4）
+        return {}
 
     def _dim_trend(self, df: pd.DataFrame) -> dict:
         """维度5 趋势方向：三周期斜率连续强度"""
@@ -602,10 +620,11 @@ class PhaseDetectionEngine(DataAwareMixin):
             return {"distributing": round(0.3 + 0.4 * strength, 3)}
         return {}
 
-    def _dim_ssrp(self, df: pd.DataFrame, extra_tags: Dict = None) -> dict:
+    def _dim_ssrp(self, df: pd.DataFrame, extra_tags: Dict = None, cost_ext: Dict = None) -> dict:
         """维度6 主力成本锚定：现价 vs SSRP（真实主力成本，312 §3.2 维度6）
 
         367号：改为从 extra_tags（pre_feat_cache）读取 SSRP，不再依赖 _last_chip_indicators。
+        443号R2：新增 cost_ext 主力成本近距增强（对齐 MainForceScorer.identify_phase 洗盘判定）。
 
         规则（2026-08-02 抽样校准：原 rel<0.95→building 触发面过宽 77%，收紧）：
           rel < 0.85          → building（深度成本下方，安全边际大）
@@ -624,6 +643,15 @@ class PhaseDetectionEngine(DataAwareMixin):
         current = df["close"].values[-1]
         if current <= 0 or ssrp <= 0:
             return {}
+        # 443号R2：现价距主力成本 5% 内 → 洗盘特征增强（成本区蓄势待变）
+        near_cost = False
+        if cost_ext:
+            mfc = cost_ext.get("main_force_cost")
+            if mfc and mfc > 0:
+                cost_distance = abs(current - mfc) / mfc
+                near_cost = cost_distance < 0.05
+        if near_cost:
+            return {"washing": 0.5, "building": 0.2}
         rel = current / ssrp
         dev = abs(rel - 1.0)
         if rel < 0.85:
@@ -1335,8 +1363,11 @@ class TradingPhaseDetector:
         # 2026-08-13 知识库对齐：ASR 0-100 量级（原 0.7）
         if indicators.get('asr', 0) >= 70:
             score += 2.0
-        conc_status = indicators.get('concentration_status', '')
-        if conc_status == '高度集中' or conc_status == '较集中':
+        conc = indicators.get('concentration')
+        # 集中度数值（前 20% 价位筹码占比，高=集中）。该键由 chip_fund_ext/实时分布产出，
+        # concentration_status 中文枚举从未被生产（445「集中度一词两义」惰性分支）→ 接真实数值。
+        # wiki《筹码分布分析-主力视角》：筹码从分散到集中=建仓蓄势。
+        if conc is not None and float(conc) > 0.3:
             score += 2.0
         if len(kline_data) >= 60:
             closes = kline_data['close'].values
@@ -3329,7 +3360,7 @@ class MainForceScorer:
                     return 0.0
                 indicators = result.get('indicators', {})
                 chip_bins = result.get('chip_bins', [])
-            # 缓存筹码数据供 identify_phase 使用
+            # 缓存筹码数据供本类筹码评估后续消费（_score_volume_price 等实时路径）
             self._chip_indicators = indicators
             self._chip_bins = chip_bins
 
@@ -3435,149 +3466,6 @@ class MainForceScorer:
         except Exception:
             return {"cost_price": 0, "distance_pct": 0, "near_cost": False}
 
-    def identify_phase(self, data: pd.DataFrame, symbol: str = None,
-                       chip_data: dict = None, cost_ext: dict = None) -> str:
-        """
-        识别主力操盘阶段（Wiki: "建仓→洗盘→拉升→出货" 四阶段）
-
-        412号方案C2 v3.0：cost_ext由调用方从data_context/pre_feat_cache传入。
-
-        Args:
-            data: OHLCV DataFrame
-            symbol: 股票代码
-            chip_data: 可选筹码数据字典
-            cost_ext: 可选成本价数据（main_force_cost/margin_cost_price）
-        """
-        try:
-            if data.empty or len(data) < 60:
-                return 'unknown'
-            closes = data['close'].values
-            volumes = data['vol'].values if 'vol' in data.columns else data.get('amount', closes)
-            price_high = np.max(closes[-120:])
-            price_low = np.min(closes[-120:])
-            price_range = price_high - price_low if price_high > price_low else 1.0
-            price_pos = (closes[-1] - price_low) / price_range
-
-            vol_5 = np.mean(volumes[-5:]) if len(volumes) >= 5 else 0
-            vol_20 = np.mean(volumes[-20:]) if len(volumes) >= 20 else 0
-            vol_ratio_5_20 = vol_5 / max(vol_20, 1)
-
-            ma_5 = np.mean(closes[-5:])
-            ma_20 = np.mean(closes[-20:])
-            ma_60 = np.mean(closes[-60:]) if len(closes) >= 60 else closes[-1]
-
-            # ASR 数据（从 chip_data 或上次筹码评分缓存中获取）
-            asr = None
-            chip_peak = None
-            concentration = None
-            if chip_data:
-                asr = chip_data.get('asr')
-                chip_peak = chip_data.get('chip_peak')
-                concentration = chip_data.get('concentration')
-            elif self._chip_indicators:
-                asr = self._chip_indicators.get('asr') or self._chip_indicators.get('ASR')
-                concentration = self._chip_indicators.get('concentration')
-                # 从 chip_bins 中提取 chip_peak（最大峰值对应的价格）
-                if self._chip_bins:
-                    peaks = sorted(self._chip_bins, key=lambda b: b.get('chip_ratio', 0), reverse=True)
-                    chip_peak = peaks[0].get('price', 0) if peaks else None
-
-            # CYQKL（筹码盈亏比例）：(现价 - 筹码峰) / 筹码峰
-            cyqkl = None
-            if chip_peak and chip_peak > 0:
-                cyqkl = (closes[-1] - chip_peak) / chip_peak
-
-            # RSI 背离检测（用于出货/建仓阶段识别）
-            rsi_bearish_div = False  # 价格新高但RSI未新高 → 顶背离
-            rsi_bullish_div = False  # 价格新低但RSI未新低 → 底背离
-            if len(closes) >= 30:
-                try:
-                    # 计算 RSI(14)
-                    deltas = np.diff(closes)
-                    gains = np.where(deltas > 0, deltas, 0)
-                    losses = np.where(deltas < 0, -deltas, 0)
-                    avg_gain = np.mean(gains[-14:]) if len(gains) >= 14 else np.mean(gains)
-                    avg_loss = np.mean(losses[-14:]) if len(losses) >= 14 else np.mean(losses)
-                    rsi = 100 - (100 / (1 + avg_gain / max(avg_loss, 1e-10))) if avg_loss > 0 else 100
-
-                    # 前一段 RSI
-                    avg_gain_prev = np.mean(gains[-28:-14]) if len(gains) >= 28 else avg_gain
-                    avg_loss_prev = np.mean(losses[-28:-14]) if len(losses) >= 28 else avg_loss
-                    rsi_prev = 100 - (100 / (1 + avg_gain_prev / max(avg_loss_prev, 1e-10))) if avg_loss_prev > 0 else 100
-
-                    # 价格两段高点
-                    high_recent = np.max(closes[-14:])
-                    high_prev = np.max(closes[-28:-14]) if len(closes) >= 28 else high_recent
-                    low_recent = np.min(closes[-14:])
-                    low_prev = np.min(closes[-28:-14]) if len(closes) >= 28 else low_recent
-
-                    # 顶背离：价格新高但RSI未新高
-                    if high_recent >= high_prev and rsi < rsi_prev - 5:
-                        rsi_bearish_div = True
-
-                    # 底背离：价格新低但RSI未新低
-                    if low_recent <= low_prev and rsi > rsi_prev + 5:
-                        rsi_bullish_div = True
-                except Exception:
-                    pass
-
-            # 阶段 1: 出货 — 高位 + 放量/量缩 + RSI顶背离 + 浮筹高企
-            if rsi_bearish_div and price_pos >= 0.5:
-                # RSI顶背离是最强的出货信号
-                return 'distributing'
-            if price_pos >= 0.7 and vol_ratio_5_20 >= 1.5:
-                return 'distributing'
-            if price_pos >= 0.8 and vol_ratio_5_20 < 0.7:
-                return 'distributing'
-            if price_pos >= 0.6 and asr is not None and asr > 60:
-                return 'distributing'
-            if price_pos >= 0.6 and cyqkl is not None and cyqkl > 0.3:
-                # CYQKL > 30% + 中高位 → 获利盘丰厚, 出货迹象
-                return 'distributing'
-
-            # 412号方案C2 v3.0：cost_ext增强阶段判断
-            near_cost = False
-            if cost_ext:
-                mfc = cost_ext.get('main_force_cost')
-                if mfc and mfc > 0:
-                    cost_distance = abs(closes[-1] - mfc) / mfc
-                    near_cost = cost_distance < 0.05  # 5%内视为接近主力成本
-
-            # 阶段 2: 拉升 — 多头排列 + 放量 + CYQKL达标(>20%) + SSRP穿越
-            if ma_5 > ma_20 > ma_60 and vol_ratio_5_20 >= 1.0:
-                if cyqkl is not None and cyqkl >= 0.2:
-                    return 'markup'  # CYQKL达标确认拉升
-                if asr is None or asr < 50:
-                    return 'markup'
-                return 'markup'
-
-            # 阶段 3: 洗盘 — 价跌缩量 + 中低位 + 低位筹码峰稳定 + 接近主力成本
-            if price_pos < 0.5 and vol_ratio_5_20 < 0.85:
-                return 'washing'
-            if near_cost and price_pos < 0.5 and vol_ratio_5_20 < 1.0:
-                return 'washing'  # 接近主力成本 + 低位缩量 → 洗盘特征增强
-            if price_pos < 0.4 and asr is not None and asr > 50 and vol_ratio_5_20 < 1.0:
-                return 'washing'
-            if price_pos < 0.4 and cyqkl is not None and cyqkl < -0.1 and vol_ratio_5_20 < 1.0:
-                # CYQKL < -10% (深度亏损) + 低位缩量 → 洗盘特征
-                return 'washing'
-
-            # 阶段 4: 建仓 — 低位 + 温和放量 + 浮筹锁定的迹象
-            if rsi_bullish_div and price_pos <= 0.5:
-                # RSI底背离是最强的建仓/见底信号
-                return 'accumulating'
-            if price_pos < 0.5 and 1.1 <= vol_ratio_5_20 <= 2.0:
-                return 'accumulating'
-            if price_pos < 0.4 and asr is not None and asr < 40 and vol_ratio_5_20 >= 0.8:
-                return 'accumulating'
-            if price_pos < 0.3 and cyqkl is not None and cyqkl < -0.15 and concentration is not None and concentration > 0.1:
-                # 低位 + 深度亏损 + 筹码集中 → 建仓尾声
-                return 'accumulating'
-
-            return 'neutral'
-        except Exception:
-            return 'unknown'
-
     def _calc_margin_cost_price(self, symbol: str, latest_close: float) -> dict:
         """计算融资成本价（散户融资买入的平均成本）
         基于 margin_cache 的 rzmje(融资买入额) 和当日均价估算。
@@ -3647,124 +3535,6 @@ class MainForceScorer:
         except Exception:
             pass
         return tags
-
-
-def _phase_to_status(phase: str, score: float) -> dict:
-    """将 MainForceScorer 的操盘阶段 phase 映射为标准 status_recognition 格式。
-
-    Args:
-        phase: 操盘阶段（accumulating/markup/washing/distributing/neutral/unknown）
-        score: MainForceScorer 评分（0-10）
-
-    Returns:
-        status_recognition 结构化字典（7 字段统一格式）
-    """
-    state_map = {
-        "accumulating": "ACCUMULATING",
-        "markup": "ACCUMULATING",
-        "washing": "RANGING",
-        "distributing": "DISTRIBUTING",
-        "neutral": "RANGING",
-        "unknown": "RANGING",
-    }
-    state_label_map = {
-        "ACCUMULATING": "主力建仓",
-        "DISTRIBUTING": "主力出货",
-        "RANGING": "筹码换手",
-    }
-    state = state_map.get(phase, "RANGING")
-    state_label = state_label_map.get(state, "中性")
-
-    # 用评分映射动量和趋势强度
-    if score >= 7:
-        momentum_level, strength = "bullish", "strong"
-    elif score >= 4:
-        momentum_level, strength = "neutral", "moderate"
-    else:
-        momentum_level, strength = "bearish", "weak"
-
-    return {
-        "state": state,
-        "state_label": state_label,
-        "trend": {"direction": "", "strength": strength, "stage": phase},
-        "momentum": {"level": momentum_level, "score": round(score / 10, 2)},
-        "volume": {"state": "", "structure": ""},
-        "support_resistance": {"support": 0.0, "resistance": 0.0},
-        "risk_level": "MEDIUM",
-    }
-
-
-class MainForceFilter:
-    """
-    主力关注度过滤器 — 用于 L2 筛选
-
-    对股票列表使用 MainForceScorer 评分，
-    返回评分 ≥ min_score 的股票（若无达到阈值则取 top_k 兜底）。
-    """
-
-    def __init__(self, min_score: float = 6.0, min_data_days: int = 60, top_k: int = 20):
-        self.min_score = min_score
-        self.min_data_days = min_data_days
-        self.top_k = top_k
-        self.scorer = MainForceScorer()
-
-    def filter(self, stock_list: list, data_dict: dict, cost_ext_dict: dict = None,
-               chip_fund_ext_dict: dict = None) -> list:
-        """
-        执行主力关注度筛选
-
-        413号P3 T13：新增cost_ext_dict参数，传递到identify_phase增强阶段判断。
-        424号§10决策②：新增chip_fund_ext_dict参数，传递到score避免重复计算完整分布。
-
-        Args:
-            stock_list: [{ts_code, name}, ...] 或 [ts_code, ...]
-            data_dict: {ts_code: DataFrame}
-            cost_ext_dict: {ts_code: cost_ext_dict} 可选成本价数据
-            chip_fund_ext_dict: {ts_code: chip_fund_ext} 可选筹码预计算聚合指标
-
-        Returns:
-            [{symbol, name, mf_score, phase}, ...] 按评分降序
-        """
-        results = []
-        for item in stock_list:
-            ts_code = item if isinstance(item, str) else item.get('ts_code', '')
-            name = '' if isinstance(item, str) else item.get('name', '')
-            if not ts_code or ts_code not in data_dict:
-                continue
-            df = data_dict[ts_code]
-            if df.empty or len(df) < self.min_data_days:
-                continue
-            try:
-                _chip_ext = chip_fund_ext_dict.get(ts_code) if chip_fund_ext_dict else None
-                score = self.scorer.score(df, symbol=ts_code, chip_fund_ext=_chip_ext)
-                _cost_ext = cost_ext_dict.get(ts_code) if cost_ext_dict else None
-                phase = self.scorer.identify_phase(df, symbol=ts_code, cost_ext=_cost_ext)
-                if score > 0:
-                    # phase → status_recognition 映射
-                    sr = _phase_to_status(phase, score)
-                    results.append({
-                        'symbol': ts_code,
-                        'name': name,
-                        'mf_score': round(score, 2),
-                        'phase': phase,
-                        'status_recognition': sr,
-                    })
-            except Exception:
-                continue
-
-        results.sort(key=lambda x: x['mf_score'], reverse=True)
-
-        # 阈值筛选：≥ min_score 通过，若无则取 top_k 兜底
-        passed = [r for r in results if r['mf_score'] >= self.min_score]
-        if not passed:
-            top_score = results[0]["mf_score"] if results else 0
-            passed = results[:self.top_k]
-            logger.warning(
-                f"无股票达到阈值 {self.min_score}，取 top {self.top_k} 兜底 "
-                f"(最高分 {top_score})"
-            )
-
-        return passed
 
 
 # === chip_position_manager.py ===
@@ -5894,8 +5664,21 @@ def _assess_retail_institution(tags):
     elif mfp == 'distributing': return {'detail': '主力出货（抛压风险）'}
     return {'detail': '散户与机构博弈中性'}
 
-def _assess_margin(tags):
+def _assess_margin(tags, margin_df=None):
     mc = tags.get('margin_change_5d')
+    # 442号缺陷②：margin_change_5d 无产出点——改读 data_context.margin_df 计算5日融资余额变化
+    if mc is None and margin_df is not None and hasattr(margin_df, 'empty') and not margin_df.empty:
+        try:
+            if 'rzye' in margin_df.columns and 'trade_date' in margin_df.columns:
+                mdf = margin_df[['trade_date', 'rzye']].dropna(subset=['rzye']).copy()
+                mdf = mdf.sort_values('trade_date')
+                if len(mdf) >= 2:
+                    latest = mdf.iloc[-1]['rzye']
+                    base = mdf.iloc[-min(6, len(mdf))]['rzye']  # 5个交易日前（不足6行取最早）
+                    if base:
+                        mc = (latest / base - 1) * 100
+        except Exception:
+            mc = None
     if mc is not None:
         try:
             mc = float(mc)
@@ -5935,7 +5718,7 @@ class Dim4ChipFundEngine(DataAwareMixin):
         cost_structure = _assess_cost_structure(tags)
         signal_info = _assess_signal(tags)
         retail_inst = _assess_retail_institution(tags)
-        margin_info = _assess_margin(tags)
+        margin_info = _assess_margin(tags, margin_df=data_context.get('margin_df') if data_context else None)
 
         # PhaseDetectionEngine 真实阶段分析（如果df可用）
         ts_code = tags.get('ts_code', '')
@@ -5955,13 +5738,16 @@ class Dim4ChipFundEngine(DataAwareMixin):
                 moneyflow_df_val = data_context.get('moneyflow_df') if data_context else None
                 indicator_ma_df_val = data_context.get('indicator_ma_df') if data_context else None
                 indicator_other_df_val = data_context.get('indicator_other_df') if data_context else None
+                # 443号R2：补传 cost_ext（main_force_cost/margin_cost_price），此前仅批量 identify_phase 路径消费
+                cost_ext_val = data_context.get('cost_ext') if data_context else None
                 pde = PhaseDetectionEngine(data_manager=self._get_dm())
                 phase_engine_result = pde.compute_tags(
                     ts_code, df, extra_tags=tags,
                     chip_fund_ext=chip_fund_ext,
                     moneyflow_df=moneyflow_df_val,
                     indicator_ma_df=indicator_ma_df_val,
-                    indicator_other_df=indicator_other_df_val)
+                    indicator_other_df=indicator_other_df_val,
+                    cost_ext=cost_ext_val)
                 if phase_engine_result and phase_engine_result.get('main_force_phase') != 'unknown':
                     phase_info = {
                         'phase': phase_engine_result['main_force_phase'],

@@ -1,0 +1,28 @@
+"""442号缺陷③：_assess_vs_indicator 改读 indicator_status（rsi14/kdj_j 不产出）"""
+
+import pytest
+
+from app.opportunity_atlas.dimensions.dim2_structure_engine import _assess_vs_indicator
+
+
+class TestAssessVsIndicator:
+    def test_ma_bullish(self):
+        r = _assess_vs_indicator({'indicator_status': 'ma=bullish,trend='})
+        assert r['detail'] == '均线多头排列'
+
+    def test_ma_bearish(self):
+        r = _assess_vs_indicator({'indicator_status': 'ma=bearish,trend='})
+        assert r['detail'] == '均线空头排列'
+
+    def test_ma_mixed_with_rsi(self):
+        """rsi_percentile 0-1 归一化 → 百分位显示"""
+        r = _assess_vs_indicator({'indicator_status': 'ma=mixed,trend=', 'rsi_percentile': 0.68})
+        assert r['detail'] == '均线纠缠，RSI分位68'
+
+    def test_unknown_ma_value(self):
+        """indicator_status 有值但 ma 值不在映射 → 忽略，仅 RSI"""
+        r = _assess_vs_indicator({'indicator_status': 'ma=weird', 'rsi_percentile': 0.30})
+        assert r['detail'] == 'RSI分位30'
+
+    def test_no_data(self):
+        assert _assess_vs_indicator({})['detail'] == '指标数据不足'

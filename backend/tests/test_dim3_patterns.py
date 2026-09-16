@@ -1,6 +1,8 @@
 """412号方案D3：dim3 pattern一致性测试
 
 验证precomputed MA与raw MA输出一致性。
+443号R7：双份收敛后 EnhancedPatternDetector/VolumeStateAnalyzer/compute_volume_price_signal
+  以 framework 版为权威，import 改指 app.engine.framework.volume_price_strategy。
 """
 import numpy as np
 
@@ -12,13 +14,13 @@ class TestEnhancedPatternDetectorPrecomputed:
         """detect_all()接受precomputed_ma参数"""
         import inspect
 
-        from app.opportunity_atlas.dimensions.dim3_vp_engine import EnhancedPatternDetector
+        from app.engine.framework.volume_price_strategy import EnhancedPatternDetector
         sig = inspect.signature(EnhancedPatternDetector.detect_all)
         assert 'precomputed_ma' in sig.parameters
 
     def test_detect_all_works_without_precomputed(self):
         """无precomputed_ma时回退raw计算"""
-        from app.opportunity_atlas.dimensions.dim3_vp_engine import EnhancedPatternDetector
+        from app.engine.framework.volume_price_strategy import EnhancedPatternDetector
         det = EnhancedPatternDetector()
         closes = np.random.uniform(10, 20, 65)
         opens = closes * 0.99
@@ -30,7 +32,7 @@ class TestEnhancedPatternDetectorPrecomputed:
 
     def test_detect_all_with_precomputed_ma(self):
         """有precomputed_ma时使用预计算值"""
-        from app.opportunity_atlas.dimensions.dim3_vp_engine import EnhancedPatternDetector
+        from app.engine.framework.volume_price_strategy import EnhancedPatternDetector
         det = EnhancedPatternDetector()
         closes = np.random.uniform(10, 20, 65)
         opens = closes * 0.99
@@ -48,7 +50,7 @@ class TestEnhancedPatternDetectorPrecomputed:
 
     def test_precomputed_ma_matches_raw(self):
         """precomputed MA与raw MA输出一致"""
-        from app.opportunity_atlas.dimensions.dim3_vp_engine import EnhancedPatternDetector
+        from app.engine.framework.volume_price_strategy import EnhancedPatternDetector
         rng = np.random.RandomState(42)  # 固定种子，消除浮点精度差异导致的模式漂移
         closes = rng.uniform(10, 20, 65)
         opens = closes * 0.99
@@ -78,7 +80,7 @@ class TestVolumeStateAnalyzerVolumeExt:
         """analyze()接受volume_ext参数"""
         import inspect
 
-        from app.opportunity_atlas.dimensions.dim3_vp_engine import VolumeStateAnalyzer
+        from app.engine.framework.volume_price_strategy import VolumeStateAnalyzer
         sig = inspect.signature(VolumeStateAnalyzer.analyze)
         assert 'volume_ext' in sig.parameters
 
@@ -86,6 +88,6 @@ class TestVolumeStateAnalyzerVolumeExt:
         """compute_volume_price_signal()接受volume_ext参数"""
         import inspect
 
-        from app.opportunity_atlas.dimensions.dim3_vp_engine import compute_volume_price_signal
+        from app.engine.framework.volume_price_strategy import compute_volume_price_signal
         sig = inspect.signature(compute_volume_price_signal)
         assert 'volume_ext' in sig.parameters

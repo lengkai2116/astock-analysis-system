@@ -285,17 +285,25 @@ class KLineMerger:
             current = klines[i]
             prev = result[-1]
             if KLineMerger.is_contained(prev, current):
-                if direction is not None:
-                    if direction == 'up':
-                        new_high = max(prev.high, current.high)
-                        new_low = max(prev.low, current.low)
+                if direction is None:
+                    # 446号D4：起始两根包含且方向未定——先确定方向再合并，禁止静默丢弃
+                    # （知识库"不跳过前两根"，且方向锚定规则与 else 分支一致）
+                    if current.high > prev.high:
+                        direction = 'up'
+                    elif current.high < prev.high:
+                        direction = 'down'
                     else:
-                        new_high = min(prev.high, current.high)
-                        new_low = min(prev.low, current.low)
-                    merged = KLine(idx=prev.idx, open=prev.open, high=new_high,
-                                  low=new_low, close=current.close, date=current.date,
-                                  volume=prev.volume + current.volume)
-                    result[-1] = merged
+                        direction = 'up' if current.low >= prev.low else 'down'
+                if direction == 'up':
+                    new_high = max(prev.high, current.high)
+                    new_low = max(prev.low, current.low)
+                else:
+                    new_high = min(prev.high, current.high)
+                    new_low = min(prev.low, current.low)
+                merged = KLine(idx=prev.idx, open=prev.open, high=new_high,
+                              low=new_low, close=current.close, date=current.date,
+                              volume=prev.volume + current.volume)
+                result[-1] = merged
             else:
                 if direction is None:
                     if current.high > prev.high:
@@ -1320,7 +1328,8 @@ class DivergenceDetector:
                 details={'trend_backtesting': trend_bt}
             )
         else:
-            result = self._detect_consolidation_divergence(strokes)
+            # 446号D6：传 zhongshu_list 做"离开中枢段"约束（知识库L92 假背驰过滤）
+            result = self._detect_consolidation_divergence(strokes, zhongshu_list)
         if not result and zhongshu_list:
             result = self._detect_zhongshu_divergence(strokes, zhongshu_list)
 
@@ -1662,11 +1671,16 @@ class DivergenceDetector:
             'reason': reason,
         }
 
-    def _detect_consolidation_divergence(self, strokes: List[Stroke]) -> Optional[Divergence]:
+    def _detect_consolidation_divergence(self, strokes: List[Stroke],
+                                     zhongshu_list: List[Zhongshu] = None) -> Optional[Divergence]:
         """
         检测盘整背驰
 
         原理：回调力度大于离开力度
+        446号D6（445知识库L92）：盘整中假背驰——只有在离开中枢的段中出现的
+        背驰才计入信号。当存在最近中枢时，产生背驰的段终点必须已离开中枢
+        （顶背驰须突破上沿、底背驰须跌破下沿）；仍在盘整区间内震荡的幅度放大
+        不判背驰。无中枢时无约束，兜底保留幅度逻辑。
         """
         if len(strokes) < 4:
             return None
@@ -1674,6 +1688,10 @@ class DivergenceDetector:
         # 获取最后两笔
         last_stroke = strokes[-1]
         prev_stroke = strokes[-2]
+
+        # ── D6 离开中枢段约束（知识库L92）──
+        # 返回: (是否允许, 离开中枢的中枢, 离开方向 up/down)
+        exited_zs, exit_dir = self._consolidation_exited_zhongshu(strokes, zhongshu_list)
 
         # 检查方向
         if last_stroke.direction != prev_stroke.direction:
@@ -1684,8 +1702,8 @@ class DivergenceDetector:
                 # 上一笔上涨幅度
                 up_amp = abs(prev_stroke.end_price - prev_stroke.start_price)
 
-                # 回调幅度大于离开幅度 = 背驰
-                if down_amp > up_amp * 1.1:
+                # 回调幅度大于离开幅度 = 背驰；底背驰须已跌破中枢下沿（离开中枢下方）
+                if down_amp > up_amp * 1.1 and (not zhongshu_list or exit_dir == 'down'):
                     return Divergence(
                         type='consolidation',
                         direction='up',  # 底背驰，准备上涨
@@ -1694,7 +1712,9 @@ class DivergenceDetector:
                         details={
                             'down_amplitude': down_amp,
                             'prev_up_amplitude': up_amp,
-                            'ratio': down_amp / up_amp
+                            'ratio': down_amp / up_amp,
+                            'exited_zhongshu': bool(exited_zs),
+                            'zhongshu': str(exited_zs) if exited_zs else None,
                         }
                     )
 
@@ -1703,7 +1723,8 @@ class DivergenceDetector:
                 up_amp = abs(last_stroke.end_price - last_stroke.start_price)
                 down_amp = abs(prev_stroke.end_price - prev_stroke.start_price)
 
-                if up_amp > down_amp * 1.1:
+                # 反弹幅度大于回调幅度 = 背驰；顶背驰须已突破中枢上沿（离开中枢上方）
+                if up_amp > down_amp * 1.1 and (not zhongshu_list or exit_dir == 'up'):
                     return Divergence(
                         type='consolidation',
                         direction='down',  # 顶背驰，准备下跌
@@ -1712,11 +1733,33 @@ class DivergenceDetector:
                         details={
                             'up_amplitude': up_amp,
                             'prev_down_amplitude': down_amp,
-                            'ratio': up_amp / down_amp
+                            'ratio': up_amp / down_amp,
+                            'exited_zhongshu': bool(exited_zs),
+                            'zhongshu': str(exited_zs) if exited_zs else None,
                         }
                     )
 
         return None
+
+    def _consolidation_exited_zhongshu(self, strokes: List[Stroke],
+                                       zhongshu_list: List[Zhongshu]) -> tuple:
+        """D6：判断盘整背驰的最后笔是否已离开最近中枢。
+
+        知识库L92：只有在离开中枢的段中出现的背驰才计入信号。
+        - 最后笔 up（顶背驰候选）→ 终点须突破中枢上沿 → exit_dir='up'
+        - 最后笔 down（底背驰候选）→ 终点须跌破中枢下沿 → exit_dir='down'
+        - 终点仍在中枢内的幅度放大 = 盘整内假背驰，返回 (None, None)
+        - 无中枢 → (None, None)，调用方据此兜底不约束
+        """
+        if not strokes or not zhongshu_list:
+            return None, None
+        zs = zhongshu_list[-1]
+        last = strokes[-1]
+        if last.direction == 'up' and last.end_price > zs.high:
+            return zs, 'up'
+        if last.direction == 'down' and last.end_price < zs.low:
+            return zs, 'down'
+        return None, None
 
     def _detect_zhongshu_divergence(self, strokes: List[Stroke],
                                     zhongshu_list: List[Zhongshu]) -> Optional[Divergence]:
@@ -1774,15 +1817,42 @@ class BuySellPointDetector:
         self.bsp2_follow_1 = bsp2_follow_1
         self.bsp3_follow_1 = bsp3_follow_1
         self.sell_plan = []
+        self._precomputed = {}  # 446号 D9：0轴校验用预计算MACD数据
 
     def _has_type(self, t: str) -> bool:
         """检查 bs_type 配置中是否包含指定类型"""
         return t in self.bs_type
 
+    def _diff_at_idx(self, div_idx, closes) -> Optional[float]:
+        """取背驰点 position.idx 处 DIF 值（相对0轴判断用）。无 closes/DIF 数据返回 None。"""
+        if closes is None or div_idx is None:
+            return None
+        dif, _, _ = calc_macd(np.asarray(closes, dtype=float) if closes is not None else closes,
+                              self._precomputed)
+        if dif is None or len(dif) == 0 or div_idx < 0 or div_idx >= len(dif):
+            return None
+        return float(dif[div_idx])
+
+    def _check_first_0axis(self, is_buy: bool, divergence: Divergence, closes) -> bool:
+        """
+        446号 D9：缠中说禅MACD定律——"第一类买点都在0轴之下背驰形成，第一类卖点
+        都在0轴之上背驰形成"。
+        用背驰点 DIF 相对0轴的绝对位置做闸门：一买须 DIF<0（水下）、一卖须 DIF>0（水上）。
+        无 closes/DIF 数据时不做0轴约束（兼容向后），返回 True 放行。
+        """
+        div_idx = (divergence.position or {}).get('idx', -1)
+        dif_val = self._diff_at_idx(div_idx, closes)
+        if dif_val is None:
+            return True
+        if is_buy:
+            return dif_val < 0
+        return dif_val > 0
+
     def find(self, strokes: List[Stroke],
              zhongshu_list: List[Zhongshu],
              divergence: Divergence = None,
-             only_last: bool = False) -> tuple:
+             only_last: bool = False,
+             closes=None) -> tuple:
         """
         识别买卖点
 
@@ -1791,6 +1861,7 @@ class BuySellPointDetector:
             zhongshu_list: 中枢列表
             divergence: 背驰信息
             only_last: 快速模式，只计算最后一根K线的买卖点
+            closes: close 价格序列（用于446号 D9：一买/一卖 0轴绝对位置校验）
 
         Returns:
             (buy_points, sell_points)
@@ -1813,6 +1884,9 @@ class BuySellPointDetector:
                         is_buy = divergence.direction == 'down'
                     else:
                         is_buy = divergence.direction == 'up'
+                    # 446号D9：一买/一卖 0轴绝对位置校验（缠中说禅MACD定律）
+                    if not self._check_first_0axis(is_buy, divergence, closes):
+                        return buy_points, sell_points
                     if is_buy:
                         buy_points.append(BuySellPoint(type='first_buy',
                             confidence=divergence.confidence, position=divergence.position,
@@ -1831,22 +1905,24 @@ class BuySellPointDetector:
                 is_first_buy = divergence.direction == 'down'
             else:
                 is_first_buy = divergence.direction == 'up'
-            if is_first_buy:
-                bp_type = 'first_buy_p' if divergence.type == 'consolidation' else 'first_buy'
-                buy_points.append(BuySellPoint(
-                    type=bp_type,
-                    confidence=divergence.confidence,
-                    position=divergence.position,
-                    reason=f'下跌趋势背驰，{divergence.type}类型'
-                ))
-            else:
-                sp_type = 'first_sell_p' if divergence.type == 'consolidation' else 'first_sell'
-                sell_points.append(BuySellPoint(
-                    type=sp_type,
-                    confidence=divergence.confidence,
-                    position=divergence.position,
-                    reason=f'上涨趋势背驰，{divergence.type}类型'
-                ))
+            # 446号D9：一买/一卖 0轴绝对位置校验（缠中说禅MACD定律）
+            if self._check_first_0axis(is_first_buy, divergence, closes):
+                if is_first_buy:
+                    bp_type = 'first_buy_p' if divergence.type == 'consolidation' else 'first_buy'
+                    buy_points.append(BuySellPoint(
+                        type=bp_type,
+                        confidence=divergence.confidence,
+                        position=divergence.position,
+                        reason=f'下跌趋势背驰，{divergence.type}类型'
+                    ))
+                else:
+                    sp_type = 'first_sell_p' if divergence.type == 'consolidation' else 'first_sell'
+                    sell_points.append(BuySellPoint(
+                        type=sp_type,
+                        confidence=divergence.confidence,
+                        position=divergence.position,
+                        reason=f'上涨趋势背驰，{divergence.type}类型'
+                    ))
 
         # 第二类买卖点：回调不创新低/高
         if self._has_type('2') or self._has_type('2s'):
@@ -2261,18 +2337,19 @@ class ChanlunAnalyzer:
         if len(self.strokes) < 3:
             return {'error': '数据不足，无法构建中枢'}
 
-        # 5-6. 中枢识别（根据 bi_zs_mode 选择路径）
+        # 5-6. 中枢识别（根据 bi_zs_mode 选择路径；446号 D2：线段中枢优先+段不足回退笔中枢）
         if self.bi_zs_mode:
-            # ── 笔中枢模式（日线默认，对标 czsc）──
+            # ── 笔中枢模式（短线 T+1/T+2 或数据不足时回退）──
             self.segments = []
             self.zhongshu_list = self.bi_zs_finder.find(self.strokes)
         else:
-            # ── 线段中枢模式（保留原实现）──
+            # ── 线段中枢模式（中长线主路径，对齐知识库"中长线强制线段中枢"）──
             self.segments = self.segment_analyzer.build(self.strokes)
             if len(self.segments) >= 3:
                 self.zhongshu_list = self.zhongshu_analyzer.find(self.segments)
             else:
-                self.zhongshu_list = []
+                # 线段不足（数据/结构不够）→ 自动回退笔中枢，保证不退化
+                self.zhongshu_list = self.bi_zs_finder.find(self.strokes)
 
         # 7. 背驰判断（支持 MACD 面积确认）
         # 411号Phase 5：传入预计算MACD数据
@@ -2287,12 +2364,14 @@ class ChanlunAnalyzer:
             precomputed=_precomputed_macd
         )
 
-        # 8. 买卖点识别
+        # 8. 买卖点识别（446号 D9：一买/一卖 0轴校验，复用预计算MACD数据）
+        self.buy_sell_detector._precomputed = _precomputed_macd
         self.buy_points, self.sell_points = self.buy_sell_detector.find(
             self.strokes,
             self.zhongshu_list,
             self.divergence,
             only_last=self.only_judge_last,  # 快速模式：只算最后K线
+            closes=df['close'].values if df is not None and 'close' in df.columns else None,
         )
 
         # 9. 缠论定理体系校验
@@ -2404,6 +2483,7 @@ class ChanlunAnalyzer:
             'buy_points': self.buy_points,
             'sell_points': self.sell_points,
             'trend': self._determine_trend(),
+            'trend_basis': self._determine_trend_basis(),
             'summary': self._generate_summary(),
             'theorem_check': self.theorem_check,
             'factor_switch': {
@@ -2416,16 +2496,67 @@ class ChanlunAnalyzer:
         }
 
     def _determine_trend(self) -> str:
-        """判断当前趋势"""
+        """判断当前趋势（446号：价格vs中枢为主判据，中枢序列为内部时的辅助，最后笔/段仅无中枢兜底）
+
+        知识库（缠论走势结构量化系统配置指南）："价格高于中枢上沿"为上升；
+        趋势=中枢关系，单笔回调不应翻转趋势。
+        """
+        zs_list = self.zhongshu_list
+        if zs_list:
+            latest_close = self.klines[-1].close if self.klines else 0.0
+            zs = zs_list[-1]
+            # 主判据：价格 vs 最后中枢上下沿（知识库原文语义）
+            if latest_close > zs.high:
+                return 'up'
+            if latest_close < zs.low:
+                return 'down'
+            # 价格在中枢内部 → 中枢序列方向辅助（≥2 中枢比较上移/下移）
+            if len(zs_list) >= 2:
+                zs_prev = zs_list[-2]
+                if zs.low > zs_prev.high:
+                    return 'up'
+                if zs.high < zs_prev.low:
+                    return 'down'
+                c_cur = (zs.high + zs.low) / 2.0
+                c_prev = (zs_prev.high + zs_prev.low) / 2.0
+                return 'up' if c_cur > c_prev else ('down' if c_cur < c_prev else 'unknown')
+            return 'unknown'
+        # 无中枢：兜底用最后笔/段方向（保留原逻辑）
         if self.bi_zs_mode:
-            # 笔中枢模式：用最后一笔的方向判断趋势
             if self.strokes:
                 return self.strokes[-1].direction
             return 'unknown'
-        # 线段中枢模式：用最后一段的方向
         if not self.segments:
             return 'unknown'
         return self.segments[-1].direction
+
+    def _determine_trend_basis(self) -> str:
+        """趋势判定依据说明（446号：可回溯，对齐 444 现状=因果链的因）"""
+        zs_list = self.zhongshu_list
+        if zs_list:
+            latest_close = self.klines[-1].close if self.klines else 0.0
+            zs = zs_list[-1]
+            if latest_close > zs.high:
+                return '价格突破中枢上沿'
+            if latest_close < zs.low:
+                return '价格跌破中枢下沿'
+            if len(zs_list) >= 2:
+                zs_prev = zs_list[-2]
+                if zs.low > zs_prev.high:
+                    return '价格在中枢内部-中枢上移'
+                if zs.high < zs_prev.low:
+                    return '价格在中枢内部-中枢下移'
+                c_cur = (zs.high + zs.low) / 2.0
+                c_prev = (zs_prev.high + zs_prev.low) / 2.0
+                if c_cur > c_prev:
+                    return '价格在中枢内部-中枢中心上移'
+                if c_cur < c_prev:
+                    return '价格在中枢内部-中枢中心下移'
+                return '价格在中枢内部-中枢中心持平'
+            return '价格在中枢内部'
+        if self.bi_zs_mode:
+            return '无中枢-最后笔方向'
+        return '无中枢-最后段方向'
 
     def _generate_summary(self) -> Dict:
         """生成分析摘要"""

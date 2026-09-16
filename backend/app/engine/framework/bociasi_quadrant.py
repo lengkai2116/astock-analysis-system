@@ -145,15 +145,16 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
         """
         计算BOCIASI慢线（市场长线性价比）
 
-        4个等权指标:
-          1. ERP分位 — 全市场股权风险溢价的分位
+        4个等权指标（知识库 research-bociasicscv190a:58-60）:
+          1. ERP分位 — 全市场股权风险溢价分位（= 1/PE - 10年国债）
           2. 融资余额趋势 — 融资余额的短期趋势
-          3. 股债收益差 — 股息率-国债利率
-          4. 市场估值分位 — PE_TTM中位数的历史分位
+          3. 股债收益差 — 全市场中位股息率 - 10年国债利率
+          4. 股债位置差 — 混合基金指数净值缩放后的趋势线（知识库定义；
+             系统暂无混合基金净值数据源，T3a-2 降级声明未落地）
         """
         scores = []
 
-        # 1. ERP分位
+        # 1. ERP分位（= 1/PE - 国债；daemon 预计算已减国债）
         try:
             erp_percentile = self._market_stats.get('erp_percentile')
             if erp_percentile is not None:
@@ -179,18 +180,23 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
         except Exception as e:
             logger.debug(f"融资趋势失败: {e}")
 
-        # 3. 全市场估值分位
+        # 3. 股债收益差分位（= 中位股息率 - 国债；收益差越高→性价比越高→得分越低=慢线高位，
+        #    与 ERP 同方向处理用 1-x；daemon 预计算键 dv_bond_diff）
         try:
-            pe_percentile = self._market_stats.get('pe_percentile')
-            if pe_percentile is not None:
-                scores.append(pe_percentile)
-                self._cache['pe_percentile'] = round(pe_percentile, 4)
+            dv_bond = self._market_stats.get('dv_bond_diff')
+            if dv_bond is not None:
+                scores.append(1 - dv_bond)
+                self._cache['dv_bond_diff'] = round(dv_bond, 4)
             else:
-                pe_percentile = self._compute_pe_percentile()
-                scores.append(pe_percentile)
-                self._cache['pe_percentile'] = round(pe_percentile, 4)
+                dv_bond = self._compute_dv_bond_diff()
+                scores.append(1 - dv_bond)   # 股债收益差越高→性价比越高→得分越低（慢线高位）
+                self._cache['dv_bond_diff'] = round(dv_bond, 4)
         except Exception as e:
-            logger.debug(f"PE分位失败: {e}")
+            logger.debug(f"股债收益差失败: {e}")
+
+        # 4. 股债位置差（知识库=混合基金指数净值缩放后的趋势线）。
+        #    447号 T3a-2：系统无混合基金净值数据源，降级声明——不落地该项，
+        #    慢线实际 3 项（ERP/融资/股债收益差），与知识库 4 项构成存在已知缺口。
 
         if not scores:
             return 0.5
@@ -308,26 +314,80 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
     # ── 慢线子指标 ──
 
     def _compute_erp_percentile(self) -> float:
-        """计算ERP分位（364d修复：1/PE_TTM - 国债收益率的历史分位）"""
+        """计算ERP分位（447号 T3a-2/归一化：ERP=1/PE_TTM-10年国债利率的历史绝对分位）
+
+        归一化口径（447号 用户拍板）：A股盈利收益率普遍低于国债，ERP 绝对值恒为负，
+        比值归一化对负值失效 → 改为「当日 ERP 绝对值在近252交易日历史中的分位(rank%)」。
+        daemon 预计算（market_stats['erp_percentile']）缺省时回退本方法。
+        """
+        from app.opportunity_atlas.valuation_estimator import CN_10Y_BOND_YIELD_PCT
+        bond_yield = float(CN_10Y_BOND_YIELD_PCT)
         conn = self._get_dm().cache.conn
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         try:
-            row = conn.execute("""
-                SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0
-            """, [today]).fetchone()
-            if row and row[0] is not None:
-                avg_pe = float(row[0])
-                erp_today = (1 / avg_pe) if avg_pe > 0 else 0
-                hist = conn.execute("""
-                    SELECT AVG(pe_ttm) FROM daily_basic_cache
-                    WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0
-                """, [today]).fetchone()
-                hist_pe = float(hist[0]) if hist and hist[0] else avg_pe
-                erp_hist = (1 / hist_pe) if hist_pe > 0 else 0
-                if erp_hist > 0:
-                    return max(0, min(1, erp_today / erp_hist))
+            rows = conn.execute("""
+                SELECT d.trade_date, AVG(c.pe_ttm) FROM (
+                    SELECT DISTINCT trade_date FROM daily_basic_cache
+                    WHERE trade_date <= ? AND pe_ttm > 0
+                    ORDER BY trade_date DESC LIMIT 252
+                ) d JOIN daily_basic_cache c ON c.trade_date = d.trade_date AND c.pe_ttm > 0
+                GROUP BY d.trade_date ORDER BY d.trade_date
+            """, [today]).fetchall()
+            erp_series = []
+            for _, pe in rows:
+                if pe is not None and float(pe) > 0:
+                    erp_series.append(1 / float(pe) * 100 - bond_yield)
+            if not erp_series:
+                return 0.5
+            erp_today = erp_series[-1]  # trade_date 升序，最后一条即当日
+            # 历史绝对分位：当日值在「当日+历史」序列中小于它的占比
+            count_less = sum(1 for v in erp_series if v < erp_today)
+            return max(0, min(1, count_less / len(erp_series)))
         except Exception as e:
             logger.warning(f"ERP分位计算失败，回退0.5: {e}")
+        return 0.5
+
+    def _compute_dv_bond_diff(self) -> float:
+        """计算股债收益差分位（447号：中位股息率-10年国债利率的历史绝对分位）
+
+        归一化口径（447号 用户拍板）：股息率普遍低于国债，收益差绝对值恒为负，
+        比值归一化对负值失效 → 改为「当日中位股息率-国债 在近252交易日历史中的分位(rank%)」。
+        daemon 预计算（market_stats['dv_bond_diff']）缺省时回退本方法。
+        """
+        from app.opportunity_atlas.valuation_estimator import CN_10Y_BOND_YIELD_PCT
+        bond_yield = float(CN_10Y_BOND_YIELD_PCT)
+        conn = self._get_dm().cache.conn
+        today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        try:
+            rows = conn.execute("""
+                SELECT d.trade_date, AVG(m.dv_median) FROM (
+                    SELECT DISTINCT trade_date FROM daily_basic_cache
+                    WHERE trade_date <= ? AND dv_ttm > 0
+                    ORDER BY trade_date DESC LIMIT 252
+                ) d JOIN (
+                    SELECT trade_date, AVG(dv_ttm) AS dv_median FROM (
+                        SELECT trade_date, dv_ttm,
+                               ROW_NUMBER() OVER (PARTITION BY trade_date
+                                                  ORDER BY dv_ttm) rn,
+                               COUNT(*) OVER (PARTITION BY trade_date) cnt
+                        FROM daily_basic_cache WHERE dv_ttm > 0
+                    ) WHERE rn BETWEEN cnt * 0.5 AND cnt * 0.5 + 1
+                    GROUP BY trade_date
+                ) m ON m.trade_date = d.trade_date
+                GROUP BY d.trade_date ORDER BY d.trade_date
+            """, [today]).fetchall()
+            diff_series = []
+            for _, dv in rows:
+                if dv is not None and float(dv) > 0:
+                    diff_series.append(float(dv) - bond_yield)
+            if not diff_series:
+                return 0.5
+            diff_today = diff_series[-1]  # trade_date 升序，最后一条即当日
+            # 历史绝对分位：当日值在「当日+历史」序列中小于它的占比
+            count_less = sum(1 for v in diff_series if v < diff_today)
+            return max(0, min(1, count_less / len(diff_series)))
+        except Exception as e:
+            logger.warning(f"股债收益差计算失败，回退0.5: {e}")
         return 0.5
 
     def _compute_margin_trend(self) -> float:
@@ -349,27 +409,6 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
                 return max(0, min(1, 0.5 + change_pct * 10))
         except Exception as e:
             logger.warning(f"融资趋势计算失败，回退0.5: {e}")
-        return 0.5
-
-    def _compute_pe_percentile(self) -> float:
-        """全市场PE_TTM中位数分位（364d修复）"""
-        conn = self._get_dm().cache.conn
-        today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        try:
-            row = conn.execute("""
-                SELECT AVG(pe_ttm) FROM daily_basic_cache WHERE trade_date=? AND pe_ttm > 0
-            """, [today]).fetchone()
-            if row and row[0] is not None:
-                avg_pe = float(row[0])
-                hist = conn.execute("""
-                    SELECT AVG(pe_ttm) FROM daily_basic_cache
-                    WHERE trade_date >= date(?, '-252 days') AND pe_ttm > 0
-                """, [today]).fetchone()
-                hist_pe = float(hist[0]) if hist and hist[0] else avg_pe
-                if hist_pe > 0:
-                    return max(0, min(1, avg_pe / hist_pe))
-        except Exception as e:
-            logger.warning(f"PE分位计算失败，回退0.5: {e}")
         return 0.5
 
     # ── 工具方法 ──

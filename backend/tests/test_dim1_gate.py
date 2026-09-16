@@ -43,6 +43,9 @@ class TestDim1Validate:
             'emotion_ext': {'emotion_temperature': 50},
             'structure_ext': {'support_price': 9.0},
             'market_stats': {'ma20_ratio': 0.5},
+            # 442号配置完善：optional 新增两项
+            'valuation_ext': {'valuation_level': '合理'},
+            'sector_heat': {'全国地产': {'heat_level': 'none', 'strength': 0.0, 'rank': 42, 'stock_count': 100}},
         }
         result = engine._validate(data_context, '000001.SZ')
         assert result['quality_level'] == 'good'
