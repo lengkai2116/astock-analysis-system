@@ -39,6 +39,9 @@ from app.engine.framework.chanlun_config import (
     ZhongshuConfig,
 )
 from app.engine.framework.chanlun_level_validator import ChanlunLevelValidator
+
+# 457号：多级别联立分析器（周/日/60min 区间套 + 方向一致性 + 关键价位）
+from app.engine.framework.chanlun_multi_level import MultiLevelChanlunAnalyzer
 from app.engine.framework.chanlun_strategy import (
     _MACD_PRECOMPUTED_CACHE,
     BiZhongshuFinder,
@@ -106,6 +109,28 @@ class Dim2StructureEngine(DataAwareMixin):
                 chanlun_result = analyzer.analyze(df)
         except Exception as e:
             logger.debug(f"缠论分析失败: {e}")
+
+        # 1b. 多级别联立（457号：周/日/60min 区间套，445 §6.1「级别定理/多周期联立」接线）
+        #    周线/60min 数据由 dim1 loader 注入 data_context['weekly_df']/['hourly_df']；
+        #    缺省时自动降级只有日线（框架 _build_direction_text 可处理），绝不阻塞主链。
+        multi_level = None
+        if data_context:
+            try:
+                _ml_dict = {}
+                if 'daily_df' in data_context:
+                    _ml_dict['daily'] = data_context['daily_df']
+                if 'weekly_df' in data_context:
+                    _ml_dict['weekly'] = data_context['weekly_df']
+                if 'hourly_df' in data_context:
+                    _ml_dict['hourly'] = data_context['hourly_df']
+                if _ml_dict:
+                    # 对齐 bi_zs_mode（各级别统一线段中枢）+ enabled 开关（ChanlunConfig multi_level）
+                    _ml_config = ChanlunConfig.default()
+                    _ml_analyzer = MultiLevelChanlunAnalyzer(config=_ml_config)
+                    multi_level = _ml_analyzer.analyze(_ml_dict)
+            except Exception as e:
+                logger.debug(f"多级别联立分析失败: {e}")
+                multi_level = None
 
         # 2. 支撑阻力
         indicator_ma = data_context.get('indicator_ma_df') if data_context else None
@@ -227,6 +252,11 @@ class Dim2StructureEngine(DataAwareMixin):
             'chanlun_strength': round(strength, 2) if isinstance(strength, (int, float)) else str(strength),
             'buy_sell_points': [str(p) for p in buy_sell_points[:3]],
             'plain': plain,
+            # ── 457号：多级别联立（周/日/60min 区间套 + 方向一致性 + 关键价位）──
+            #   multi_level 键与 strategy_analyze/dim4/tag_extractor/fallback_description 契约一致
+            #   （direction_text/direction_map/near_levels/levels/enabled）；数据不足时不产键（保持原空壳语义）。
+            'multi_level': multi_level if isinstance(multi_level, dict) and multi_level else None,
+            'multi_level_direction_text': (multi_level or {}).get('direction_text', '仅单级别分析，无跨级别验证数据') if isinstance(multi_level, dict) else '仅单级别分析，无跨级别验证数据',
             # ── 445 §6.1 7 契约键（补产出，消解 dim_adapter/conflict_matrix/reliability 增强静默失效） ──
             'level_cross_score': level_cross_score,
             'chanlun_phase': chanlun_phase,
@@ -284,7 +314,8 @@ class Dim2StructureEngine(DataAwareMixin):
         return {'status_description': status_description, 'judgment': judgment, 'audit': audit}
 
     def get_data_dependencies(self) -> list:
-        return ['daily_cache (market_cache.db)', 'tags (pre_feat_cache)', 'dims (StatusEngine)']
+        return ['daily_cache (market_cache.db)', 'weekly_df/hourly_df (dim1 注入数据上下文, 457号)',
+                'tags (pre_feat_cache)', 'dims (StatusEngine)']
 
 
 def _assess_vs_zhongshu(tags, dims, chanlun_result=None, latest_close=0.0):

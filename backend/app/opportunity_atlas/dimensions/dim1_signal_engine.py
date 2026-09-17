@@ -78,6 +78,23 @@ class Dim1SignalEngine:
                 else:
                     quality_issues.append('daily_cache缺失')
 
+                # 457号：周线/60分钟线（dim2 多周期级联需要；ECM 缓存优先，缺失不阻塞主链）
+                #   周线走 dm.get_kline_data(period='W')（内部 _get_weekly_data：minute_kline_cache freq='W' 缓存优先→日线聚合→Tushare）
+                #   60min 走 dm.get_kline_data(period='60m')（内部 _get_minute_data：minute_kline_cache freq='60min' 缓存优先）
+                try:
+                    weekly_df = dm.get_kline_data(ts_code, 'W')
+                    if weekly_df is not None and not weekly_df.empty:
+                        loaded_data['weekly_df'] = weekly_df
+                    # 周线缺失不 append quality_issues（可降级单级别，445 已定降级兜底）
+                except Exception:
+                    pass
+                try:
+                    hourly_df = dm.get_kline_data(ts_code, '60m')
+                    if hourly_df is not None and not hourly_df.empty:
+                        loaded_data['hourly_df'] = hourly_df
+                except Exception:
+                    pass
+
                 # moneyflow_cache（dim4需要）
                 try:
                     mf_df = dm.get_cached_moneyflow(ts_code)

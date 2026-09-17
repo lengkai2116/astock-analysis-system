@@ -11,6 +11,8 @@ import logging
 from collections import OrderedDict
 from typing import Dict, List, Optional
 
+import pandas as pd
+
 from app.data.memory_cache import TieredMemoryCache
 from app.engine.framework.chanlun_config import ChanlunConfig
 from app.engine.framework.chanlun_strategy import (
@@ -46,6 +48,17 @@ class MultiLevelChanlunAnalyzer:
         Returns:
             多级别联立分析结果
         """
+        # 457号：尊重 MultiLevelConfig.enabled 开关（生产接线后仍可整体关闭）。
+        if not self.config.multi_level.enabled:
+            logger.debug("多级别联立未启用（config.multi_level.enabled=False），跳过")
+            return {
+                'enabled': False,
+                'levels': {},
+                'direction_map': {},
+                'direction_text': '多级别联立未启用',
+                'near_levels': [],
+            }
+
         levels = self.config.multi_level.levels
         results = {}
 
@@ -55,12 +68,24 @@ class MultiLevelChanlunAnalyzer:
                 logger.debug(f"{level} 级别数据不可用，跳过")
                 continue
 
-            # 使用缓存的级别分析结果（TieredMemoryCache，TTL=3600s）
-            cache_key = f"chanlun:{level}:{len(df)}"
+            # 457号：缓存键加入 ts_code + 最新交易日，消除「仅按行数」的跨股票/跨日期串味。
+            #    原键 f"chanlun:{level}:{len(df)}" 只含行数——不同股票/不同日期但行数相同会串。
+            _ts = ''
+            if 'ts_code' in df.columns and not df.empty:
+                _ts = str(df['ts_code'].iloc[0])
+            _last_date = ''
+            if not df.empty:
+                _dc = df['trade_date'] if 'trade_date' in df.columns else (
+                    df.index if isinstance(df.index, pd.DatetimeIndex) else None)
+                if _dc is not None:
+                    _last_date = str(_dc.iloc[-1] if hasattr(_dc, 'iloc') else _dc[-1])
+            cache_key = f"chanlun:{_ts}:{_last_date}:{level}:{len(df)}"
             cached = self._cache.get(cache_key, 'analysis')
             if cached is not None:
                 results[level] = cached
             else:
+                # 457号：每级分析器统一走线段中枢（config.multi_level.bi_zs_mode=False，
+                #   对齐 dim2 日线 446 号意图），并透传 ts_code 以复用预计算 MACD（411 Phase 5）。
                 analyzer = ChanlunAnalyzer(config=self.config)
                 result = analyzer.analyze(df)
                 if 'error' not in result:

@@ -65,6 +65,9 @@ class MultiLevelConfig:
     """多级别联立配置"""
     enabled: bool = True
     levels: tuple = ('weekly', 'daily', 'hourly')
+    # 457号：多级别联立各级别统一线段中枢（对齐 dim2 日线 446 号「中长线强制线段中枢」意图），
+    # 与 ChanlunAnalyzer.__init__ 读取 config.multi_level.bi_zs_mode 对齐，消除字段错配。
+    bi_zs_mode: bool = False
     lookback: dict = field(default_factory=lambda: {
         'weekly': 260, 'daily': 130, 'hourly': 60,
     })
