@@ -977,6 +977,14 @@ class MainForceScorer:
                 if current_price > ssrp and ssrp_deviation < 0.15:
                     score += 0.1
 
+            # 456号：融资成本价（margin_cost_price）进主力评分——wiki《融资成本价》解套压力位。
+            # 现价站上融资成本价 → 上方融资盘抛压释放、阻力锐减 → 做多加 0.2（双份同步 dim4 _apply_margin_signal）。
+            margin_cost = self._calc_margin_cost_price(symbol, current_price)
+            mcp = margin_cost.get('cost_price') if margin_cost else None
+            if mcp and mcp > 0:
+                if current_price > mcp * 1.05:
+                    score += 0.2
+
             # CYQKL 评估：高CYQKL = 突破确认信号
             cyqkl = indicators.get('cyqkl', indicators.get('CYQKL', 0))
             if cyqkl >= 0.5:

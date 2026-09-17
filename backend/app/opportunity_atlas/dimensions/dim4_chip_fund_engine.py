@@ -625,6 +625,9 @@ class PhaseDetectionEngine(DataAwareMixin):
 
         367号：改为从 extra_tags（pre_feat_cache）读取 SSRP，不再依赖 _last_chip_indicators。
         443号R2：新增 cost_ext 主力成本近距增强（对齐 MainForceScorer.identify_phase 洗盘判定）。
+        456号：新增 margin_cost_price（融资成本价）进阶段投票——wiki《融资成本价》：
+          融资成本价 = 散户融资平均成本 = 解套压力位；现价在下方→反弹至该位受解套抛压（承压蓄势）；
+          站上/突破→上方抛压释放、阻力锐减（做多）。作弱补充投票叠加，不覆盖主规则。
 
         规则（2026-08-02 抽样校准：原 rel<0.95→building 触发面过宽 77%，收紧）：
           rel < 0.85          → building（深度成本下方，安全边际大）
@@ -646,22 +649,63 @@ class PhaseDetectionEngine(DataAwareMixin):
         # 443号R2：现价距主力成本 5% 内 → 洗盘特征增强（成本区蓄势待变）
         near_cost = False
         if cost_ext:
-            mfc = cost_ext.get("main_force_cost")
+            mfc = self._cost_value(cost_ext.get("main_force_cost"))
             if mfc and mfc > 0:
                 cost_distance = abs(current - mfc) / mfc
                 near_cost = cost_distance < 0.05
         if near_cost:
-            return {"washing": 0.5, "building": 0.2}
+            vec = {"washing": 0.5, "building": 0.2}
+            return self._apply_margin_signal(vec, current, cost_ext) if cost_ext else vec
         rel = current / ssrp
         dev = abs(rel - 1.0)
         if rel < 0.85:
             # 成本下方 ≠ 建仓（主力可能被套/阴跌），降级为弱支持（校准：原 0.5+ 过宽）
-            return {"building": 0.3, "washing": 0.2}
-        if rel < 1.10:
-            return {"washing": 0.4, "building": 0.2}                        # 成本区/浅套
-        if rel >= 1.20:
-            return {"lifting": round(0.5 + 0.2 * min(1.0, dev), 3)}         # 浮盈
-        return {}                                                           # 1.10-1.20 模糊带
+            vec = {"building": 0.3, "washing": 0.2}
+        elif rel < 1.10:
+            vec = {"washing": 0.4, "building": 0.2}                         # 成本区/浅套
+        elif rel >= 1.20:
+            vec = {"lifting": round(0.5 + 0.2 * min(1.0, dev), 3)}          # 浮盈
+        else:
+            return {}                                                       # 1.10-1.20 模糊带
+        return self._apply_margin_signal(vec, current, cost_ext) if cost_ext else vec
+
+    def _cost_value(self, cost_raw) -> float:
+        """456号：归一化 cost_ext 成本值。真实库 precompute_raw 存完整返回 dict
+        （main_force_cost={'cost_price','distance_pct','near_cost'}，
+          margin_cost_price={'cost_price','distance_pct'}），单测用标量。二者取数值。
+        """
+        if cost_raw is None:
+            return 0.0
+        if isinstance(cost_raw, dict):
+            v = cost_raw.get("cost_price")
+            return float(v) if v else 0.0
+        try:
+            return float(cost_raw)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _apply_margin_signal(self, vec: dict, current: float, cost_ext: dict) -> dict:
+        """456号：融资成本价（margin_cost_price）进阶段投票——弱补充信号
+
+        wiki《融资成本价》：融资成本价 = 散户融资平均成本价 = 解套压力位。
+          - 现价 ≥ 融资成本价×1.05（站上/突破）→ 上方抛压基本释放、阻力锐减 → lifting +
+          - 现价 ≤ 融资成本价×0.85（融资盘深套）→ 安全边际大/远期机会 → building +
+          - 中间区（成本位下方/附近承压）→ 反弹将遇散户解套抛压 → washing +
+        融资方向（暴增+滞涨=危险）属余额方向信号，framework _score_retail_contrarian /
+        _assess_margin 已消费，本方法只做成本锚定的压力位弱投票。
+        """
+        mcp = self._cost_value((cost_ext or {}).get("margin_cost_price"))
+        if not mcp or mcp <= 0 or current <= 0:
+            return vec
+        vec = dict(vec)
+        rel_m = current / mcp
+        if rel_m >= 1.05:
+            vec["lifting"] = vec.get("lifting", 0) + 0.2
+        elif rel_m <= 0.85:
+            vec["building"] = vec.get("building", 0) + 0.1
+        else:
+            vec["washing"] = vec.get("washing", 0) + 0.2
+        return vec
 
     def _dim_chan(self, extra_tags: Dict) -> dict:
         """维度8 缠论买点：buy_sell_point 标签（312 §3.2 维度8）
