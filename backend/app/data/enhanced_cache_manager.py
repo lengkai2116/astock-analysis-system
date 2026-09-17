@@ -1210,6 +1210,8 @@ class EnhancedCacheManager:
         #   benchmark: 000001.SH(上证) / 000300.SH(沪深300)
         #   ret_20d/ret_60d: 个股20/60日收益率; bench_ret_20d/60d: 基准对应
         #   ex_ret_20d/60d: 超额收益(个股-基准)
+        #   rps_20d/rps_60d: 跨截面 RPS 百分位（445 §6.1 dim3 补产出，个股涨幅全市场排名百分位，
+        #                     rank(pct=True)*100 口径：最高=100、最低趋近 0；双基准行同值）
         self.compute_conn.execute("""
             CREATE TABLE IF NOT EXISTS relative_strength_cache (
                 asof_date TEXT NOT NULL,
@@ -1218,6 +1220,7 @@ class EnhancedCacheManager:
                 ret_20d REAL, ret_60d REAL,
                 bench_ret_20d REAL, bench_ret_60d REAL,
                 ex_ret_20d REAL, ex_ret_60d REAL,
+                rps_20d REAL, rps_60d REAL,
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (asof_date, ts_code, benchmark)
             )
@@ -1517,16 +1520,41 @@ class EnhancedCacheManager:
         return {}
 
     # 438号缺口③: 个股相对强弱持久化（双基准超额收益）
+    def _ensure_relative_strength_rps_columns(self):
+        """445 §6.1 dim3：relative_strength_cache 存量库补 rps_20d/rps_60d 列（幂等，compute_cache.db 分库）
+
+        存量库（445号前建表）缺这两列时 ALTER 补列，已有则跳过。写入前调用，
+        避免重复 ALTER 报错（SQLite 同列 ADD 会异常，用 try/PRAGMA 幂等判断）。
+        """
+        try:
+            from app.data.sharding_manager import sharding_manager
+            db_name = sharding_manager.get_db_for_table('relative_strength_cache')
+            conn = sharding_manager.get_connection(db_name)
+            cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(relative_strength_cache)").fetchall()}
+            lock = sharding_manager.get_write_lock(db_name)
+            for col in ('rps_20d', 'rps_60d'):
+                if col not in cols:
+                    with lock:
+                        conn.execute(f"ALTER TABLE relative_strength_cache "
+                                     f"ADD COLUMN {col} REAL")
+                        conn.commit()
+        except Exception as e:
+            logger.warning(f"relative_strength_cache 补 rps 列失败: {e}")
+
     def cache_relative_strength(self, rows: list):
         """按 asof_date 全量替换相对强弱（每日全市场覆盖，双基准）
 
         rows: [(asof_date, ts_code, benchmark, ret_20d, ret_60d,
-                bench_ret_20d, bench_ret_60d, ex_ret_20d, ex_ret_60d), ...]
+                bench_ret_20d, bench_ret_60d, ex_ret_20d, ex_ret_60d,
+                rps_20d, rps_60d), ...]  (11 元组；rps_20d/rps_60d 由跨截面 RPS 计算产出)
         """
         if not rows:
             return
         asof_date = rows[0][0]
         try:
+            # 445号：写前确保 rps_20d/rps_60d 列存在（存量库幂等补列）
+            self._ensure_relative_strength_rps_columns()
             from app.data.sharding_manager import sharding_manager as _sm
             db = _sm.get_db_for_table('relative_strength_cache')
             conn = _sm.get_connection(db) if db else None
@@ -1540,8 +1568,9 @@ class EnhancedCacheManager:
                 conn.executemany(
                     "INSERT INTO relative_strength_cache "
                     "(asof_date, ts_code, benchmark, ret_20d, ret_60d, "
-                    " bench_ret_20d, bench_ret_60d, ex_ret_20d, ex_ret_60d) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+                    " bench_ret_20d, bench_ret_60d, ex_ret_20d, ex_ret_60d, "
+                    " rps_20d, rps_60d) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
                 conn.commit()
         except Exception as e:
             logger.warning(f"cache_relative_strength失败: {e}")

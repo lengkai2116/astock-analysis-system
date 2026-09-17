@@ -129,8 +129,40 @@ class Dim3VPEngine(DataAwareMixin):
         if 60 < rsi <= 70: is_ = 1
         elif 30 <= rsi < 40: is_ = 0.8
         elif rsi > 70 or rsi < 30: is_ = 0.2
+        # 445号：RPS 相对强弱因子补产出（原 RPS 被 RSI 顶替——强弱只读 rsi14，RPS 从不参与评分）
+        # 知识库权威（量价形态打分系统/《RPS相对强弱指标》）：RPS>85 → +1 分；欧奈尔狂飙前平均 87、A股 80+。
+        # data_context 由 dim1 预加载 relative_strength（rps_20d/rps_60d）；缺省回退独立查询。
+        rps_eff = None  # 取 20d 优先，缺则 60d
+        if data_context:
+            _rsc = data_context.get('relative_strength') or {}
+        else:
+            _rsc = {}
+        if _rsc:
+            rps_eff = _rsc.get('rps_20d')
+            if rps_eff is None:
+                rps_eff = _rsc.get('rps_60d')
+        else:
+            # 未从 data_context 读到（直接 evaluate / 旧调用）→ 独立查询 relative_strength_cache
+            try:
+                _ecm_rs = self._get_dm().cache
+                _rs_rows = _ecm_rs.get_relative_strength(ts_code=ts_code)
+                if _rs_rows:
+                    _rr = _rs_rows[0]
+                    rps_eff = _rr.get('rps_20d')
+                    if rps_eff is None:
+                        rps_eff = _rr.get('rps_60d')
+            except Exception:
+                rps_eff = None
+        rps = None
+        try:
+            if rps_eff is not None:
+                rps = float(rps_eff)
+        except (TypeError, ValueError):
+            rps = None
+        # RPS>85 → +1 分（对齐知识库量价形态打分系统加分项）；无 RPS 数据时不给分不扣分（保守）
+        rps_factor = 1 if (rps is not None and rps > 85) else 0
         dp = -1.5 if vp_state in ('背离', '严重背离') else 0
-        raw = vp_score + ve + ms + cs + is_ + dp
+        raw = vp_score + ve + ms + cs + is_ + rps_factor + dp
         # 形态评分纳入健康度计算（权重15%）— 10分制映射
         pattern_deviation = (pattern_score - 5) / 5 * 1.5
         raw += pattern_deviation
@@ -176,6 +208,9 @@ class Dim3VPEngine(DataAwareMixin):
         else:
             core = f'量价关系中性，量比{vol_ratio:.1f}'
         if pat_det != '无明确形态': core += f'，{pat_det}'
+        # 445号：强势 RPS 在 plain 中体现（RPS>85 加分证据）
+        if rps is not None and rps > 85:
+            core += f'，RPS={rps:.0f}强势（全市场涨幅居前）'
         core += f'（健康度{hs}/10，{sl}）'
 
         status_description = {
@@ -183,6 +218,7 @@ class Dim3VPEngine(DataAwareMixin):
             'divergence': div_txt, 'volume_energy': ve_d,
             'pattern': pat_det, 'vol_ratio': f'量比{vol_ratio:.1f}',
             'pattern_score': f'{pattern_score:.1f}/10',
+            'rps': (f'{rps:.1f}/100' if rps is not None else '数据不足'),
             'granville': f"{granville['name']}（{granville['description']}）",
             'plain': core,
         }
@@ -197,6 +233,10 @@ class Dim3VPEngine(DataAwareMixin):
             {'name': '健康度评分', 'satisfied': hs >= 5, 'actual': f'{hs}/10', 'threshold': '≥5分'},
             {'name': '背离检测', 'satisfied': not div_det, 'actual': '有背离' if div_det else '无背离', 'threshold': '无背离信号'},
             {'name': '量能强度', 'satisfied': ve_l in ('温和放量', '显著放量'), 'actual': ve_l, 'threshold': '放量或温和放量'},
+            # 445号：RPS 强弱因子（补产出，不再被 RSI 顶替）
+            {'name': '相对强弱RPS', 'satisfied': rps is None or rps > 85,
+             'actual': (f'RPS={rps:.1f}' if rps is not None else '数据不足'),
+             'threshold': 'RPS>85（数据不足时中性放行）'},
         ]
         sc = sum(1 for c in conditions if c['satisfied'])
         audit = {'conditions': conditions, 'satisfied_count': sc, 'total_count': len(conditions), 'confidence': sc / len(conditions) if conditions else 0}

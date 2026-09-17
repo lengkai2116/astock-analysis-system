@@ -529,21 +529,40 @@ def _compute_relative_strength(trade_date: str = None) -> int:
                 'ret_60d': _n_day_ret(sub, 60),
             }
 
-        # 6) 每股 × 每基准 → 写出多行（20d/60d 各独立计算：深度不足时该档为 None，
-        #    不因缺 60d 历史而整行丢弃——新上市/长期停牌股仍产出 20d 超额）
-        out = []
+        # 6) 每股 20d/60d 收益率 → 每股映射
+        ret_map = {}
         for code in stock_codes:
             sub = df.loc[df['ts_code'] == code, 'close'].dropna()
             if len(sub) < 21:
                 continue
-            ret_20d = _n_day_ret(sub, 20)
-            ret_60d = _n_day_ret(sub, 60)
+            ret_map[code] = (_n_day_ret(sub, 20), _n_day_ret(sub, 60))
+
+        # 6.5) 跨截面 RPS 百分位（445 §6.1 dim3：RPS 被 RSI 顶替 → 补产出）
+        #   知识库权威：RPS = 个股涨幅在全部股票涨幅排名中的位次值 (1-rank/n)*100，
+        #   欧奈尔强势股狂飙前平均 RPS=87，A股 80 以上；RPS>85 → +1 分。
+        #   pandas rank(pct=True) 取上涨排名百分位（涨幅越高 RPS 越高）：最高=100，最低趋近 0。
+        ret20_series = pd.Series({c: r[0] for c, r in ret_map.items() if r[0] is not None})
+        ret60_series = pd.Series({c: r[1] for c, r in ret_map.items() if r[1] is not None})
+        # 无对比基准（无其它股票/全部缺数据）时 RPS 恒 None，由消费侧兜底不产结论
+        rps20_by_code = None
+        rps60_by_code = None
+        if len(ret20_series) >= 2:
+            rps20_by_code = (ret20_series.rank(pct=True) * 100).to_dict()
+        if len(ret60_series) >= 2:
+            rps60_by_code = (ret60_series.rank(pct=True) * 100).to_dict()
+
+        # 7) 每股 × 每基准 → 写出多行（20d/60d 各独立计算：深度不足时该档为 None，
+        #    不因缺 60d 历史而整行丢弃——新上市/长期停牌股仍产出 20d 超额；RPS 为市场截面，双基准行同值）
+        out = []
+        for code, (ret_20d, ret_60d) in ret_map.items():
             for bench, br in bench_closes.items():
                 b20 = br.get('ret_20d'); b60 = br.get('ret_60d')
                 ex20 = ret_20d - b20 if (ret_20d is not None and b20 is not None) else None
                 ex60 = ret_60d - b60 if (ret_60d is not None and b60 is not None) else None
+                rps20 = round(rps20_by_code[code], 2) if (rps20_by_code and code in rps20_by_code) else None
+                rps60 = round(rps60_by_code[code], 2) if (rps60_by_code and code in rps60_by_code) else None
                 out.append((asof_date, code, bench,
-                            ret_20d, ret_60d, b20, b60, ex20, ex60))
+                            ret_20d, ret_60d, b20, b60, ex20, ex60, rps20, rps60))
         if out:
             written_stocks = len(set(r[1] for r in out))
             _ecm.cache_relative_strength(out)

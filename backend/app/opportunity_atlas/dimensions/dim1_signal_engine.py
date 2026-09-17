@@ -202,6 +202,21 @@ class Dim1SignalEngine:
                 except Exception:
                     quality_issues.append('sector_heat不可用')
 
+                # ═══ 类别5: 个股相对强弱/RPS（445 §6.1 dim3 补产出，dim3 消费）═══
+                # 读取 relative_strength_cache（compute_cache.db），取个股最新的 20d/60d RPS 百分位。
+                # 双基准（000001.SH/000300.SH）行同值，取任一基准即可；数据不足时读方返回空 list → 不产结论。
+                try:
+                    _rs = dm.cache.get_relative_strength(ts_code=ts_code)
+                    if _rs:
+                        _rps_row = _rs[0]  # ORDER BY ts_code, benchmark → 任一基准行
+                        loaded_data['relative_strength'] = {
+                            'rps_20d': _rps_row.get('rps_20d'),
+                            'rps_60d': _rps_row.get('rps_60d'),
+                            'asof_date': _rps_row.get('asof_date'),
+                        }
+                except Exception:
+                    quality_issues.append('relative_strength不可用')
+
             except Exception as e:
                 quality_issues.append(f'DataManager初始化失败: {e}')
 
