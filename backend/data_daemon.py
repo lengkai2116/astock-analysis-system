@@ -3342,13 +3342,25 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     vp_tags = vps._detect_kline_patterns(df)
                     _simple = {}
                     _add_vp_simple_tags(df, _simple)
+                    # 459号 R4-b：量比接真实生产点 —— _compute_volume_ratio 已回写
+                    # daily_basic_cache.volume_ratio，此处读真值而非《_add_vp_simple_tags》恒默认 1.0
+                    #（此前恒 1.0 致 dim3 量能维度、derived.volatility_level 全失真）。
+                    _vr = 1.0
+                    try:
+                        _db = _ecm.get_cached_daily_basic(code)
+                        if _db is not None and not _db.empty and 'volume_ratio' in _db.columns:
+                            _last = _db['volume_ratio'].dropna()
+                            if not _last.empty:
+                                _vr = float(_last.iloc[-1])
+                    except Exception:
+                        pass
                     features['volume_price'] = {
                         'kline_pattern': vp_tags.get('pattern_signal', 'none'),
                         'ma_alignment': _simple.get('ma_alignment', 'neutral'),
                         'volume_price_fit': _simple.get('volume_price_fit', 'neutral'),
                         'gap_type': _simple.get('gap_type', 'none'),
                         'breakout_attempts': _simple.get('breakout_attempts', 0),
-                        'volume_ratio': _simple.get('volume_ratio', 1.0),
+                        'volume_ratio': _vr,
                     }
                 except Exception as e:
                     logger.warning(f"RAW量价特征失败 [{code}]: {e}")

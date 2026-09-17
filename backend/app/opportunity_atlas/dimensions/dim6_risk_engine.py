@@ -1217,7 +1217,10 @@ class Dim6RiskEngine(DataAwareMixin):
                                         'severity': _sev, 'satisfied': True})
                 elif _sev == '极高' and _st.get('severity') != '极高':
                     _st['severity'] = '极高'  # 只升不降
-            if event_risks and risk_info['level'] not in ('高', '极高'):
+            # 459号：升格口径与审计「无高风险事件」同源——仅当存在「高」严重度事件才升「高」，
+            # 中档事件（财务关注/估值过高/主力出货等 severity='中'）不再误顶高风险（444-C1 残余）。
+            _high_evt = any(r.get('severity') in ('高', '极高') for r in event_risks)
+            if _high_evt and risk_info['level'] not in ('高', '极高'):
                 risk_info = {'level': '高', 'light': 'red',
                              'detail': f"事件风险：{event_risks[0]['factor']}"}
             if any(r.get('severity') == '极高' for r in event_risks) and risk_info['level'] != '极高':
