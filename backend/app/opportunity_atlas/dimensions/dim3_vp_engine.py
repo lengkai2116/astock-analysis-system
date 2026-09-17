@@ -237,6 +237,13 @@ class Dim3VPEngine(DataAwareMixin):
             {'name': '相对强弱RPS', 'satisfied': rps is None or rps > 85,
              'actual': (f'RPS={rps:.1f}' if rps is not None else '数据不足'),
              'threshold': 'RPS>85（数据不足时中性放行）'},
+            # 455号：量价八准则形态接入判定（消除「装饰性」）
+            # 格兰威尔八准则负面形态（放量滞涨/价升量减/放量下跌/量价背离/放量破均线）→ 不满足，
+            # 中性/健康类（量价齐升/井喷/回探缩量）→ 满足。granville 由纯文案升为 audit 证据项，
+            # 参与 confidence，使八准则分类真正影响 SIG 结论（判定/灯色仍归 JUD，不越边界）。
+            {'name': '量价八准则', 'satisfied': granville['rule'] not in (
+                'heavy_pressure', 'weakening', 'selling_pressure', 'breakdown', 'diverging'),
+             'actual': granville['name'], 'threshold': '非负面量价形态（放量滞涨/量减/放量跌/背离/破均线）'},
         ]
         sc = sum(1 for c in conditions if c['satisfied'])
         audit = {'conditions': conditions, 'satisfied_count': sc, 'total_count': len(conditions), 'confidence': sc / len(conditions) if conditions else 0}
@@ -266,6 +273,13 @@ def _classify_granville(df, vol_ratio: float, tags: dict) -> dict:
     判别粒度（450修正）：原实现用 iloc[-1]/iloc[-2] 单日涨幅 + 单日量比（vol_ratio），
     单日随机噪声大、易误判。改为 **5日区间涨幅** + **5日/20日均量比率**，对齐 Wiki 量价分析
     「以量能趋势佐证价格趋势」的多日观测口径；vol_ratio 入参仅为兜底（df 缺 volume 时）。
+
+    455号（本条与 heavy_pressure 判据）：
+      - 修正「放量滞涨」判据：原 `abs(price_chg)<1.5 and vr>20` 用 5日/20日均量**平滑均值**（单日放量
+        即可触发，不保证连续）、且 abs() 允许实质下跌入选。改为对齐 framework 权威 `_is_fangliang_zhizhang`
+        + wiki——近3日**每根**量 >前20日均量×1.5 且 3日涨幅和<1%（连续明显放大+价格无法加速）。
+      - 八准则接入 audit：granville 分类由纯文案升为 audit 证据项（负面形态不满足 confidence），消除
+        「装饰性输出」；判定/灯色仍归 JUD，不越 SIG/JUD 边界。
     """
     result = {'rule': 'unknown', 'name': '未知', 'description': ''}
 
@@ -296,6 +310,23 @@ def _classify_granville(df, vol_ratio: float, tags: dict) -> dict:
         # MA20
         ma20 = close.rolling(20).mean().iloc[-1] if len(close) >= 20 else close.mean()
 
+        # 放量滞涨（455号缺陷修正）：对齐 framework 权威 `_is_fangliang_zhizhang` + wiki。
+        # wiki「放量滞涨」=「成交量**连续数日明显放大** + 价格**横向振荡/整理、无法加速**」。
+        # 原判据 `abs(price_chg)<1.5 and vr>20` 两处缺陷：①vr 用 5日/20日均量**平滑均值**(>1.2×)，
+        #   单日放量即可拉高均值、不保证「连续数日放大」；②abs() 允许 −1.5%~0 实质下跌入选。
+        # 改为：近3日**每根**量 > 前20日均量×1.5（连续明显放大，对齐 framework 1.5× 逐日口径）
+        #   + 近3日价格涨幅和 < 1%（价格无法加速，含微涨/微跌/横盘，对齐 framework `<0.01`）。
+        avg20 = vs.iloc[-20:].mean() if len(vs) >= 20 else None
+        recent3_vol = vs.iloc[-4:-1] if len(vs) >= 4 else None
+        consec_expand = (
+            avg20 is not None and recent3_vol is not None and avg20 > 0
+            and all(v > avg20 * 1.5 for v in recent3_vol)
+        )
+        _n = len(close)
+        gains3 = [(close.iloc[i] - close.iloc[i - 1]) / close.iloc[i - 1]
+                  for i in range(_n - 3, _n)]
+        stall_sum = sum(gains3)
+
         # 规则判定（5日区间 + 量能趋势）
         if price_chg > 2.0 and vr > 10:
             if vr > 40:
@@ -306,8 +337,8 @@ def _classify_granville(df, vol_ratio: float, tags: dict) -> dict:
         elif price_chg > 1.5 and vr < -10:
             result = {'rule': 'weakening', 'name': '价升量减', 'description': '买盘力度趋弱，上涨动力减弱'}
 
-        elif abs(price_chg) < 1.5 and vr > 20:
-            result = {'rule': 'heavy_pressure', 'name': '放量滞涨', 'description': '多空交锋激烈，上方压力沉重'}
+        elif consec_expand and stall_sum < 0.01:
+            result = {'rule': 'heavy_pressure', 'name': '放量滞涨', 'description': '连续数日量能显著放大但价格无法加速，上方压力沉重'}
 
         elif price_chg < -2.0 and vr > 10:
             result = {'rule': 'selling_pressure', 'name': '放量下跌', 'description': '抛盘涌出，卖压释放'}

@@ -23,12 +23,13 @@ conflict_rules:                # conflict_evidence 规则登记（336号 §4；�
 
 l0:
   hard_risks: [regulatory]               # L0a 硬否决（335号）：catalyst_event 命中即否决
-  event_hard_risks: [fraud_sign, delist_risk]   # L0a 硬否决（448号 PIERS 永久黑名单）：直读 event_details.event_type 命中即否决（对齐 PIERS「永久性/不可覆盖」，不依赖 catalyst_event 单值）
+  event_hard_risks: [fraud_sign, delist_risk]   # L0a 硬否决（448号 PIERS 永久黑名单）：直读 event_details.event_type 命中即否决（对齐 PIERS「永久性/不可覆盖」，不依赖 catalyst_event 单值）。453号：st_warning 亦直读，但仅 direction<=-2（*ST/退市整理）硬否决，普通 ST（=-1）走 L0b 软风险
   soft_risk_coeff:                       # L0b 仓位系数（对齐 cross_validate._evaluate_gate）
     fina_weak: 0.5
     fina_fail: 0.5
     distributing: 0.7
     low_liquidity: 0.7
+    st_warning: 0.8                       # 453号：普通 ST（direction=-1）软风险 → 仓位×0.8
     valuation_moderate: 0.5
     valuation_mild: 0.8
     deep_position_cap: 0.3               # deep 强提示 + 仓位压缩（335号 §3）

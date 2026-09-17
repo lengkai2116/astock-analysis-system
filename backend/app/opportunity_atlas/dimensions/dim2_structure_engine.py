@@ -252,17 +252,29 @@ class Dim2StructureEngine(DataAwareMixin):
         }
 
         # 8. audit
+        # 454号：消除「全为有数据级门槛」恒真。对齐 dim3 先例——
+        #   保留 2 条数据完整门槛（趋势方向/价格vs中枢），新增 3 条判读结论条件
+        #   （结构健康 chanlun_phase / 无背驰 / 有确认买点）。
         trend_val = chanlun_result.get('trend', '未知') if chanlun_result else '无数据'
+        # 判读：结构健康度（11定理 overall_score≥0.6 → 健康，D10 产出）
+        _phase_ok = chanlun_phase == '健康'
+        # 判读：无背驰（顶背驰是结构性警示；无背驰才满足）
+        _no_div = not divergence  # '' 为无背驰
+        # 判读：有确认买点（buy_sell_points_detail 含 type='buy' 且 confirmed）
+        _buy_confirmed = any(
+            p.get('type') == 'buy' and p.get('confirmed') for p in buy_sell_points_detail)
         conditions = [
+            {'name': '趋势方向', 'satisfied': trend_val not in ('未知', '无', '无数据', 'unknown'),
+             'actual': trend_val, 'threshold': '有明确缠论方向'},
             {'name': '价格vs中枢', 'satisfied': bool(vs_zhongshu['position']),
              'actual': vs_zhongshu['position'] or '未知', 'threshold': '有明确位置'},
-            {'name': '均线排列', 'satisfied': bool(vs_ma['alignment']),
-             'actual': vs_ma['alignment'] or '未知', 'threshold': '有明确排列'},
-            {'name': '支撑阻力', 'satisfied': geo.get('support_price') is not None,
-             'actual': f"支撑位{geo.get('support_price', '无')}元" if geo.get('support_price') else '数据不足',
-             'threshold': '有支撑位数据'},
-            {'name': '缠论分析', 'satisfied': trend_val not in ('未知', '无', '无数据', 'unknown'),
-             'actual': trend_val, 'threshold': '有缠论分析结果'},
+            {'name': '结构健康度', 'satisfied': _phase_ok,
+             'actual': chanlun_phase, 'threshold': '11定理评分≥0.6（健康）'},
+            {'name': '背驰检测', 'satisfied': _no_div,
+             'actual': divergence if divergence else '无背驰', 'threshold': '无背驰信号'},
+            {'name': '有确认买点', 'satisfied': _buy_confirmed,
+             'actual': '有确认买点' if _buy_confirmed else '无确认买点',
+             'threshold': '存在 confirmed 买点'},
         ]
         satisfied_count = sum(1 for c in conditions if c['satisfied'])
         total_count = len(conditions)

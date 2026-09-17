@@ -38,7 +38,12 @@ RISK_LEVEL_LIGHT = {
     '高': 'red', '极高': 'red',
 }
 
-EVENT_RISK_SET = {'fraud_sign', 'regulatory', 'delist_risk', 'goodwill_risk'}
+EVENT_RISK_SET = {'fraud_sign', 'regulatory', 'delist_risk', 'goodwill_risk', 'st_warning'}
+
+# 453号 st_warning 分档：*ST/退市整理（direction<=-2）同退市风险升「极高」（SIG 供 JUD 硬否决），
+# 普通 ST（direction=-1）作「高」事件风险源。检测器在 event_monitor._detect_st_warning（C3）。
+ST_WARNING_EVENT = 'st_warning'
+ST_WARNING_EXTREME_DIR = -2  # *ST / 退市整理
 
 # ── 事件→维度前缀映射（A/B/C/D/E）──
 _EVENT_DIM_MAP = {
@@ -224,7 +229,60 @@ def _calc_volatility(df=None, tags: dict = None) -> dict:
 # 风险等级评估（从 risk_boundary_builder 迁移）
 # ═══════════════════════════════════════════════════════════
 
-def _assess_risk_level(tags: dict) -> dict:
+# 452号 流动性口径（445 §6.3 dim6 偏差）：
+# KB 权威《量化财务门槛/风险剔除逻辑体系》流动性门槛 = 日均成交额>5000万 + 流通市值>30亿。
+# 原实现用「换手率<1%」当流动性风险源，口径不符（换手率低≠成交枯竭，蓝筹也可低换手）。
+# 单位（332号 P0 教训）：daily_df.amount 为千元，daily_basic.circ_mv 为万元。
+_LIQUIDITY_MIN_AVG_AMOUNT_WAN = 5000.0   # 日均成交额 5000 万元
+_LIQUIDITY_MIN_CIRC_MV_WAN = 300000.0   # 流通市值 30 亿元 = 30*10000 万元
+
+
+def _assess_liquidity(df=None, basic_df=None, tags: dict = None) -> dict:
+    """流动性风险判定（KB 双门槛：日均成交额<5000万 或 流通市值<30亿 → 触发）
+
+    数据不足任一来源时默认不触发（保守，对齐 443「无数据不惩罚」；不误伤正常股）。
+    Returns: {'triggered': bool, 'avg_amount_wan': float|None, 'circ_mv_wan': float|None, 'detail': str}
+    """
+    tags = tags or {}
+    avg_amount_wan = None
+    circ_mv_wan = None
+    triggered = False
+    reasons = []
+
+    # 1) 日均成交额（daily_df.amount，单位千元 → 万元 = /10）
+    if df is not None and not df.empty and 'amount' in df.columns:
+        try:
+            amt = df['amount'].astype(float).dropna()
+            if not amt.empty:
+                avg = float(amt.tail(20).mean())  # 千元
+                avg_amount_wan = round(avg / 10.0, 1)  # 万元
+                if avg_amount_wan < _LIQUIDITY_MIN_AVG_AMOUNT_WAN:
+                    reasons.append(f'日均成交额{avg_amount_wan:.0f}万<5000万')
+        except Exception:
+            pass
+
+    # 2) 流通市值（daily_basic.circ_mv，单位：万元）
+    if basic_df is not None and hasattr(basic_df, 'columns') and 'circ_mv' in basic_df.columns:
+        try:
+            cm = basic_df['circ_mv'].astype(float).dropna()
+            if not cm.empty:
+                circ_mv_wan = float(cm.iloc[-1])
+                if circ_mv_wan < _LIQUIDITY_MIN_CIRC_MV_WAN:
+                    reasons.append(f'流通市值{circ_mv_wan/10000:.1f}亿<30亿')
+        except Exception:
+            pass
+
+    if reasons:
+        triggered = True
+    return {
+        'triggered': triggered,
+        'avg_amount_wan': avg_amount_wan,
+        'circ_mv_wan': circ_mv_wan,
+        'detail': '；'.join(reasons) if reasons else '流动性达标',
+    }
+
+
+def _assess_risk_level(tags: dict, liquidity_info: dict = None) -> dict:
     """风险等级评估（T42修复：消除dims循环依赖，仅依赖tags）"""
     risk_sources = []
     high_count = 0
@@ -237,11 +295,6 @@ def _assess_risk_level(tags: dict) -> dict:
     if rl == 'HIGH':
         high_count += 1
     risk_sources.append({'name': '缠论风险', 'level': '高' if rl == 'HIGH' else '低'})
-
-    vl = str(tags.get('volatility_level', ''))
-    if vl == 'high':
-        high_count += 1
-    risk_sources.append({'name': '波动率风险', 'level': '高' if vl == 'high' else '低'})
 
     fh = str(tags.get('fina_health', ''))
     if fh == 'fail':
@@ -258,15 +311,13 @@ def _assess_risk_level(tags: dict) -> dict:
         high_count += 1
     risk_sources.append({'name': '主力风险', 'level': '高' if mfp == 'distributing' else '低'})
 
-    try:
-        tr = float(tags.get('turnover_rate', 999))
-        if tr < 1.0:
-            high_count += 1
-        # 433号：append 移入 try——脏值（None/''/无法转 float）时跳过该风险源，
-        # 避免 except 后引用未赋值 tr 触发 NameError（与 _list_risk_factors 同构）
-        risk_sources.append({'name': '流动性风险', 'level': '高' if tr < 1.0 else '低'})
-    except (TypeError, ValueError):
-        pass
+    # 452号 波动率从风险源摘除：KB《风险定义（纳兰达版）》「波动是机会而非风险」——
+    # 高波动不再计入 high_count，ATR 分位仅作参考信息输出（见 status_description.volatility_*）。
+    # 452号 流动性改 KB 双门槛（成交额<5000万 / 流通市值<30亿），由 evaluate 预计算 liquidity_info 传入。
+    liq_high = bool(liquidity_info and liquidity_info.get('triggered'))
+    if liq_high:
+        high_count += 1
+    risk_sources.append({'name': '流动性风险', 'level': '高' if liq_high else '低'})
 
     # L0 硬否决由 StatusEngine 统一处置（l0 在 dim 引擎之后由 _apply_l0 生成，T42 时序），本引擎不参与
     if high_count >= 2:
@@ -280,18 +331,14 @@ def _assess_risk_level(tags: dict) -> dict:
             'risk_sources': risk_sources}
 
 
-def _list_risk_factors(tags: dict) -> list[dict]:
+def _list_risk_factors(tags: dict, liquidity_info: dict = None) -> list[dict]:
     """风险因素枚举（T45修复：与_assess_risk_level风险源完全对齐）"""
     factors = []
 
-    # 与_assess_risk_level完全对齐的6个风险源
+    # 与_assess_risk_level完全对齐的风险源
     rl = str(tags.get('risk_level', ''))
     if rl == 'HIGH':
         factors.append({'category': '缠论', 'factor': '缠论风险高', 'severity': '高', 'satisfied': True})
-
-    vl = str(tags.get('volatility_level', ''))
-    if vl == 'high':
-        factors.append({'category': '波动率', 'factor': '波动率过高', 'severity': '高', 'satisfied': True})
 
     fh = str(tags.get('fina_health', ''))
     if fh == 'fail':
@@ -302,7 +349,8 @@ def _list_risk_factors(tags: dict) -> list[dict]:
     ce = str(tags.get('catalyst_event', ''))
     if ce in EVENT_RISK_SET:
         event_names = {'regulatory': '监管问题', 'fraud_sign': '造假信号',
-                       'delist_risk': '退市风险', 'goodwill_risk': '商誉风险'}
+                       'delist_risk': '退市风险', 'goodwill_risk': '商誉风险',
+                       'st_warning': 'ST预警'}
         factors.append({'category': '事件', 'factor': event_names.get(ce, ce),
                         'severity': '高', 'satisfied': True})
 
@@ -310,12 +358,11 @@ def _list_risk_factors(tags: dict) -> list[dict]:
     if mfp == 'distributing':
         factors.append({'category': '主力', 'factor': '主力出货', 'severity': '中', 'satisfied': True})
 
-    try:
-        tr = float(tags.get('turnover_rate', 999))
-        if tr < 1.0:
-            factors.append({'category': '流动性', 'factor': '流动性不足', 'severity': '高', 'satisfied': True})
-    except (TypeError, ValueError):
-        pass
+    # 452号 波动率不再作为风险因子（KB《风险定义（纳兰达版）》：波动是机会而非风险）
+    # 452号 流动性改 KB 双门槛（成交额<5000万 / 流通市值<30亿），由 evaluate 预计算 liquidity_info 传入
+    if liquidity_info and liquidity_info.get('triggered'):
+        factors.append({'category': '流动性', 'factor': f"流动性不足（{liquidity_info['detail']}）",
+                        'severity': '高', 'satisfied': True})
 
     # L0 硬否决由 StatusEngine 统一处置（见 _assess_risk_level），本引擎不参与
 
@@ -1123,9 +1170,14 @@ class Dim6RiskEngine(DataAwareMixin):
             except Exception:
                 df = None
 
+        # 452号 流动性（KB 双门槛：日均成交额<5000万 或 流通市值<30亿）
+        # 数据来源：daily_df.amount（千元）+ daily_basic.circ_mv（万元，dim1 预加载 daily_basic_df）。
+        basic_df = (data_context or {}).get('daily_basic_df')
+        _liquidity = _assess_liquidity(df, basic_df, tags)
+
         # 1. 风险等级
-        risk_info = _assess_risk_level(tags)
-        risk_factors = _list_risk_factors(tags)
+        risk_info = _assess_risk_level(tags, liquidity_info=_liquidity)
+        risk_factors = _list_risk_factors(tags, liquidity_info=_liquidity)
 
         # 1b. 事件风险检测（405号建议2: 从pre_feat_cache读取RAW-2预计算的事件标签）
         event_risks = []
@@ -1153,11 +1205,23 @@ class Dim6RiskEngine(DataAwareMixin):
                         for r in event_risks:
                             if r.get('factor') == str(ev.get('event_type')):
                                 r['severity'] = '极高'
+            # 453号 st_warning 分档：*ST/退市整理（direction<=-2）→ 「极高」（供 JUD 硬否决），
+            # 普通 ST（direction=-1）→ 「高」（事件风险源）。同 448 直读 event_details，不依赖 catalyst_event 单值。
+            for ev in event_results:
+                if not (isinstance(ev, dict) and str(ev.get('event_type', '')) == ST_WARNING_EVENT):
+                    continue
+                _sev = '极高' if int(ev.get('direction', 0)) <= ST_WARNING_EXTREME_DIR else '高'
+                _st = next((r for r in event_risks if r.get('factor') == 'ST预警'), None)
+                if _st is None:
+                    event_risks.append({'category': '事件风险', 'factor': 'ST预警',
+                                        'severity': _sev, 'satisfied': True})
+                elif _sev == '极高' and _st.get('severity') != '极高':
+                    _st['severity'] = '极高'  # 只升不降
             if event_risks and risk_info['level'] not in ('高', '极高'):
                 risk_info = {'level': '高', 'light': 'red',
                              'detail': f"事件风险：{event_risks[0]['factor']}"}
             if any(r.get('severity') == '极高' for r in event_risks) and risk_info['level'] != '极高':
-                risk_info = {'level': '极高', 'light': 'red', 'detail': '存在 PIERS 硬性否决事件（造假/退市）'}
+                risk_info = {'level': '极高', 'light': 'red', 'detail': '存在 PIERS 硬性否决事件（造假/退市/ST退市）'}
         except Exception as e:
             logger.debug("403号Q-05 EventMonitor检测跳过: %s", e)
 
@@ -1257,6 +1321,10 @@ class Dim6RiskEngine(DataAwareMixin):
             'atr_14d': vol_info['atr_14d'],
             'atr_pct': vol_info['atr_pct'],
             'volatility_percentile': vol_info['percentile'],
+            'liquidity_risk': _liquidity.get('triggered', False),
+            'liquidity_detail': _liquidity.get('detail', '流动性达标'),
+            'liquidity_avg_amount_wan': _liquidity.get('avg_amount_wan'),
+            'liquidity_circ_mv_wan': _liquidity.get('circ_mv_wan'),
             'signal_days': geo.get('signal_days'),
             'invalidation': [item['condition'] for item in invalidation],
             'event_count': len(event_results),
@@ -1282,8 +1350,8 @@ class Dim6RiskEngine(DataAwareMixin):
             {'name': '盈亏比', 'satisfied': rr_info.get('rr_value', 0) >= 2.0 if rr_info.get('rr_value') else False,
              'actual': f"{rr_info.get('rr_value', '无')}" if rr_info.get('rr_value') else '数据不足',
              'threshold': '≥2R'},
-            {'name': '波动率', 'satisfied': vol_info['level'] != 'high',
-             'actual': vol_info['level'], 'threshold': '非high'},
+            {'name': '流动性', 'satisfied': not _liquidity.get('triggered', False),
+             'actual': _liquidity.get('detail', '数据不足'), 'threshold': '日均成交额>5000万且流通市值>30亿'},
             {'name': '无高风险事件', 'satisfied': not any(f.get('severity') in ('极高',) for f in risk_factors),
              'actual': str([f['factor'] for f in risk_factors if f.get('severity') == '极高']),
              'threshold': '无极高风险'},

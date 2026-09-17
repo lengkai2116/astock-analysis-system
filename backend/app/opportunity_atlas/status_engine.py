@@ -533,12 +533,24 @@ class StatusEngine:
         _hard_labels = {
             'fraud_sign': '财务造假/重大财务异常（L0a 硬否决）',
             'delist_risk': '退市风险（L0a 硬否决）',
+            # 453号：st_warning 仅在 direction<=-2（*ST/退市整理）时硬否决，普通 ST（=-1）走 L0b 软风险
+            'st_warning': 'ST/退市整理（L0a 硬否决）',
         }
+        _st_extreme_dir = -2
         if not l0['hard_veto']:
             _ev_details = tags.get('event_details')
             if isinstance(_ev_details, list):
-                _hit = next((e for e in _ev_details if isinstance(e, dict)
-                             and str(e.get('event_type', '')) in _hard_labels), None)
+                _hit = None
+                for e in _ev_details:
+                    if not isinstance(e, dict):
+                        continue
+                    _et = str(e.get('event_type', ''))
+                    if _et not in _hard_labels:
+                        continue
+                    if _et == 'st_warning' and int(e.get('direction', 0)) > _st_extreme_dir:
+                        continue  # 普通 ST 不进硬否决
+                    _hit = e
+                    break
                 if _hit:
                     l0['hard_veto'] = True
                     l0['hard_reason'] = _hard_labels[str(_hit.get('event_type'))]
@@ -566,6 +578,16 @@ class StatusEngine:
                     l0['position_coeff'] *= float(coeff.get('low_liquidity', 0.7))
         except Exception:
             pass
+        # 453号：普通 ST（direction=-1）未硬否决者 → L0b 软风险（仓位压制；*ST/退市整理已硬否决，不过此分支）
+        if not l0['hard_veto']:
+            try:
+                _st = next((e for e in (tags.get('event_details') or []) if isinstance(e, dict)
+                            and str(e.get('event_type', '')) == 'st_warning'), None)
+                if _st is not None and int(_st.get('direction', 0)) == -1:
+                    l0['soft_risks'].append('st_warning')
+                    l0['position_coeff'] *= float(coeff.get('st_warning', 0.8))
+            except (TypeError, ValueError):
+                pass
         # L0b2 情绪周期总仓位上限（387号§5.4；消费方 advice_engine Step 3）
         _caps = _l0_cfg.get('emotion_position_cap', {})
         if _caps:
