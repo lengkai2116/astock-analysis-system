@@ -148,7 +148,8 @@ class ChanlunLevelValidator:
             "buy_points": result.get('buy_points', []),
             "sell_points": result.get('sell_points', []),
             "zhongshu_count": len(result.get('zhongshu_list', [])),
-            "trend": result.get('trend', {}).get('direction', 'unknown'),
+            # 445 §6.1：trend 为标量字符串（'up'/'down'/'unknown'），原 .get('direction') 在字符串上调用直接抛异常 → 各级别 level 静默失效
+            "trend": result.get('trend', 'unknown'),
         }
 
     def _cross_validate(self, signals: Dict) -> Dict:

@@ -137,6 +137,74 @@ class Dim2StructureEngine(DataAwareMixin):
             buy_sell_points = (chanlun_result.get('buy_points', []) or []) + \
                               (chanlun_result.get('sell_points', []) or [])
 
+        # ── 445 §6.1：7 契约键真实接线（补产出，消解 dim_adapter/conflict_matrix 增强静默失效） ──
+        # ① divergence（背驰）
+        divergence_obj = chanlun_result.get('divergence') if chanlun_result else None
+        divergence = ''
+        divergence_type = ''
+        divergence_strength = 0.0
+        if divergence_obj is not None:
+            divergence = '底背驰' if divergence_obj.direction == 'up' else '顶背驰'
+            # 契约键：类型映射 to 中文（conflict_matrix C6/C10 读 '趋势背驰'）
+            _div_type_cn = {
+                'trend': '趋势背驰', 'consolidation': '盘整背驰', 'zhongshu': '中枢背驰',
+            }
+            divergence_type = _div_type_cn.get(divergence_obj.type, divergence_obj.type)
+            divergence_strength = round(float(divergence_obj.confidence), 4)
+
+        # ② buy_sell_points_detail（序列化；consumer 读 type='buy'/'sell' + confirmed）
+        buy_sell_points_detail = []
+        for _ptype, _pts in (('buy', chanlun_result.get('buy_points', []) if chanlun_result else []),
+                             ('sell', chanlun_result.get('sell_points', []) if chanlun_result else [])):
+            for _p in (_pts or []):
+                _pos = getattr(_p, 'position', None) or {}
+                buy_sell_points_detail.append({
+                    'type': _ptype,
+                    'point_type': getattr(_p, 'type', ''),
+                    'confirmed': float(getattr(_p, 'confidence', 0) or 0) >= 0.6,
+                    'confidence': round(float(getattr(_p, 'confidence', 0) or 0), 4),
+                    'price': float(_pos.get('price', 0) or 0),
+                    'date': str(_pos.get('date', '') or ''),
+                    'index': _pos.get('idx'),
+                    'reason': str(getattr(_p, 'reason', '') or ''),
+                })
+
+        # ③ chanlun_phase（健康/欲病，取自 11 定理 overall_score）
+        chanlun_phase = '欲病'
+        if chanlun_result:
+            _tc = chanlun_result.get('theorem_check') or {}
+            _tc_sum = _tc.get('summary') or {}
+            _overall = float(_tc_sum.get('overall_score', 0.0) or 0.0)
+            chanlun_phase = '健康' if _overall >= 0.6 else '欲病'
+
+        # ④ stage_name（结构态，见 step 6 计算后赋值）
+
+        # ⑤ level_cross_score（真实接线 ChanlunLevelValidator，死 import 复活）
+        level_cross_score = 0.5
+        try:
+            if df is not None and not df.empty and len(df) >= 30:
+                _validator = ChanlunLevelValidator()
+                _vf = _validator.validate(df)
+                level_cross_score = float(_vf.get('cross_score', 0.5) or 0.5)
+        except Exception as e:
+            logger.debug(f"级别校验失败: {e}")
+
+        # ⑥⑦ trend_structure_signal + ts_strength（真实接线 TrendStructureDetector；strength 字符串→float）
+        trend_structure_signal = ''
+        ts_strength = 0.0
+        try:
+            if df is not None and not df.empty and len(df) >= 30:
+                _tsd = TrendStructureDetector()
+                _ts = _tsd.detect(df)
+                if _ts:
+                    trend_structure_signal = str(_ts.get('signal') or '')
+                    # consumer dim_adapter 读 ts_strength 为 float；detector 返回 'strong'/'basic' 字符串 → 映射
+                    _ts_strength_map = {'strong': 0.3, 'basic': 0.1}
+                    _ts_strength_raw = str(_ts.get('strength') or '')
+                    ts_strength = _ts_strength_map.get(_ts_strength_raw, 0.0)
+        except Exception as e:
+            logger.debug(f"趋势结构检测失败: {e}")
+
         # 6. 白话文本
         plain = _structure_plain(vs_zhongshu, vs_ma, vs_sr, vs_chip, vs_indicator)
         # 440号：结构态改为引擎自产（缠论 trend 映射），不再读空 dims['structure']
@@ -145,6 +213,7 @@ class Dim2StructureEngine(DataAwareMixin):
             struct_state = '上升' if _t in ('up', '上升') else '下降'
         else:
             struct_state = '盘整'
+        stage_name = struct_state
         pos_state = str(tags.get('price_position', '') or '中位')
 
         status_description = {
@@ -158,6 +227,17 @@ class Dim2StructureEngine(DataAwareMixin):
             'chanlun_strength': round(strength, 2) if isinstance(strength, (int, float)) else str(strength),
             'buy_sell_points': [str(p) for p in buy_sell_points[:3]],
             'plain': plain,
+            # ── 445 §6.1 7 契约键（补产出，消解 dim_adapter/conflict_matrix/reliability 增强静默失效） ──
+            'level_cross_score': level_cross_score,
+            'chanlun_phase': chanlun_phase,
+            'trend_structure_signal': trend_structure_signal,
+            'ts_strength': ts_strength,
+            'buy_sell_points_detail': buy_sell_points_detail,
+            'stage_name': stage_name,
+            'divergence': divergence,
+            # 补充 conflict_matrix C6/C10 契约键（类型/强度）
+            'divergence_type': divergence_type,
+            'divergence_strength': divergence_strength,
         }
 
         # 7. judgment
