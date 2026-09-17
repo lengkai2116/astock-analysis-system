@@ -231,11 +231,22 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
         }
         return info.get(q, ("未知象限", 1.00))
 
+    # ── 分库连接（458号 R1）：回退查询目标表已分库（daily_basic_cache/daily_cache/
+    #    stk_limit_cache/margin_cache→market_cache.db；indicator_other→compute_cache.db），
+    #    主库 conn（stock_cache.db 总库）无此类表 → 经 sharding_manager 取分库 conn。
+    #    458号前用 self._get_dm().cache.conn（主库）查分库表，恒抛 no such table → 静默 0.5。
+    #    变更仅修复数据读取路由，不改变判定逻辑/阈值/输出契约（445 §6.2 dim5 慢线冻结项）。
+    @staticmethod
+    def _shard_conn(table_name: str):
+        from app.data.sharding_manager import sharding_manager
+        db_name = sharding_manager.get_db_for_table(table_name)
+        return sharding_manager.get_connection(db_name)
+
     # ── 快线子指标 ──
 
     def _compute_ma20_ratio(self) -> float:
         """计算MA20强势股占比"""
-        conn = self._get_dm().cache.conn
+        conn = self._shard_conn('daily_cache')
         # 获取昨日有日线数据的股票
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         row = conn.execute("""
@@ -255,7 +266,7 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
 
     def _compute_turnover_percentile(self) -> float:
         """全市场换手率分位（364d修复）"""
-        conn = self._get_dm().cache.conn
+        conn = self._shard_conn('daily_basic_cache')
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         try:
             row = conn.execute("""
@@ -275,8 +286,8 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
         return 0.5
 
     def _compute_limit_ratio(self) -> float:
-        """计算涨跌停比"""
-        conn = self._get_dm().cache.conn
+        """计算涨跌停比（daily_cache JOIN stk_limit_cache 同库 market_cache.db）"""
+        conn = self._shard_conn('daily_cache')
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
         row = conn.execute("""
@@ -293,7 +304,7 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
 
     def _compute_rsi_percentile(self) -> float:
         """全市场RSI_14中位数分位（364d修复）"""
-        conn = self._get_dm().cache.conn
+        conn = self._shard_conn('indicator_other')
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         try:
             row = conn.execute("""
@@ -322,7 +333,7 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
         """
         from app.opportunity_atlas.valuation_estimator import CN_10Y_BOND_YIELD_PCT
         bond_yield = float(CN_10Y_BOND_YIELD_PCT)
-        conn = self._get_dm().cache.conn
+        conn = self._shard_conn('daily_basic_cache')
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         try:
             rows = conn.execute("""
@@ -356,7 +367,7 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
         """
         from app.opportunity_atlas.valuation_estimator import CN_10Y_BOND_YIELD_PCT
         bond_yield = float(CN_10Y_BOND_YIELD_PCT)
-        conn = self._get_dm().cache.conn
+        conn = self._shard_conn('daily_basic_cache')
         today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         try:
             rows = conn.execute("""
@@ -392,7 +403,7 @@ class BociasiQuadrantAnalyzer(DataAwareMixin):
 
     def _compute_margin_trend(self) -> float:
         """计算融资余额趋势（5日变化率归一化）"""
-        conn = self._get_dm().cache.conn
+        conn = self._shard_conn('margin_cache')
         try:
             recent = conn.execute("""
                 SELECT trade_date, SUM(rzye) as total

@@ -23,7 +23,7 @@ import pytest
 FULL_MARKET_STATS = {
     'ma20_ratio': 0.5, 'turnover_percentile': 0.5, 'limit_ratio': 0.1,
     'rsi_percentile': 0.5, 'erp_percentile': 0.5, 'margin_trend': 0.5,
-    'pe_percentile': 0.5,
+    'pe_percentile': 0.5, 'dv_bond_diff': 0.5,   # 447号 T3a-2 慢线第3项
 }
 
 
@@ -39,7 +39,7 @@ class TestAnalyzerCacheShortcut:
         for fn in ['_compute_ma20_ratio', '_compute_turnover_percentile',
                    '_compute_limit_ratio', '_compute_rsi_percentile',
                    '_compute_erp_percentile', '_compute_margin_trend',
-                   '_compute_pe_percentile']:
+                   '_compute_pe_percentile', '_compute_dv_bond_diff']:
             setattr(a, fn, mock.Mock(side_effect=AssertionError(f'{fn} 不应被调用')))
         result = a.analyze()
         assert result['quadrant'] in ('LL', 'LH', 'HL', 'HH', 'MM')
