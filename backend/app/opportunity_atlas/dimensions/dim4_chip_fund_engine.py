@@ -5657,6 +5657,50 @@ def _assess_signal(tags):
     if bsp in sm: return {'detail': sm[bsp], 'signal': bsp}
     return {'detail': '无明确筹码信号', 'signal': 'none'}
 
+
+def _assess_fund_price_divergence(fund_flow, price_direction):
+    """资金×价格方向背离判定（445 §6.1 dim4「资金×价格背离缺失」补产出）
+
+    wiki《筹码分布分析-主力视角》权威：
+      - 连续买超+股价上涨 / 连续卖超+股价下跌 → 同向，无背离。
+      - 连续卖超（资金流出）+ 股价上涨 → **拉抬出货/散户接盘**（危险信号，回避）。
+      - 连续买超（资金流入）+ 股价下跌 → **底部吸筹/逆势建仓**（看多信号）。
+
+    Args:
+        fund_flow: _assess_fund_flow 结果（direction: inflow/outflow/neutral）
+        price_direction: 价格方向（'up'/'down'/'mixed'/'no_trend'，取自
+            PhaseDetectionEngine trend_alignment，缺失时由调用方兜底）
+
+    Returns:
+        {status, label, direction, risk}
+          status: 'aligned'（同向）/ 'divergence'（背离）/ 'none'（数据不足）
+          label: 中文结论（供 plain / 前端现状描述）
+          direction: 'bearish'（背离偏空-出货）/ 'bullish'（背离偏多-吸筹）/ 'neutral'
+          risk: '危险' 供 audit 标记
+    """
+    fd = str(fund_flow.get('direction', 'neutral'))
+    pd = str(price_direction or '')
+    # 数据不足：资金方向中性 或 价格方向未知 → 无法交叉，不产背离结论
+    if fd == 'neutral' or pd not in ('up', 'down'):
+        return {'status': 'none', 'label': '资金与价格方向数据不足',
+                'direction': 'neutral', 'risk': '无'}
+    # 同向
+    if (fd == 'inflow' and pd == 'up') or (fd == 'outflow' and pd == 'down'):
+        return {'status': 'aligned', 'label': '资金与价格同向（一致性确认）',
+                'direction': 'neutral', 'risk': '无'}
+    # 背离
+    if fd == 'outflow' and pd == 'up':
+        return {'status': 'divergence',
+                'label': '资金流出+股价上涨（拉抬出货，散户接盘危险信号）',
+                'direction': 'bearish', 'risk': '危险'}
+    if fd == 'inflow' and pd == 'down':
+        return {'status': 'divergence',
+                'label': '资金流入+股价下跌（底部吸筹/逆势建仓）',
+                'direction': 'bullish', 'risk': '提示'}
+    # 理论不可达（inflow+up / outflow+down 已在上方返回），防御性兜底
+    return {'status': 'none', 'label': '资金与价格方向数据不足',
+            'direction': 'neutral', 'risk': '无'}
+
 def _assess_retail_institution(tags):
     mfp = str(tags.get('main_force_phase', ''))
     ff = str(tags.get('fund_flow', ''))
@@ -5787,13 +5831,35 @@ class Dim4ChipFundEngine(DataAwareMixin):
                                  'score': cr.get('crowding_score', 0.5)}
         except: pass
 
+        # ── 445 §6.1 dim4「资金×价格背离缺失」补产出：资金方向 vs 价格方向交叉判定 ──
+        # 价格方向优先取 PhaseDetectionEngine trend_alignment（已算，'*_aligned'/'mixed'/'no_trend'），
+        # 归一化为 up/down/mixed/no_trend；无引擎结果时用 df 斜率兜底
+        price_direction = 'no_trend'
+        if phase_engine_result:
+            _ta = str(phase_engine_result.get('trend_alignment', 'no_trend') or 'no_trend')
+            price_direction = (_ta.replace('_aligned', '') if _ta.endswith('_aligned') else _ta)
+        elif df is not None and not df.empty and len(df) >= 5:
+            try:
+                _c = df['close'].astype(float).values
+                _s5 = (_c[-1] / _c[-6] - 1) if len(_c) >= 6 else 0.0
+                price_direction = 'up' if _s5 > 0.01 else 'down'
+            except Exception:
+                price_direction = 'no_trend'
+        fund_price_div = _assess_fund_price_divergence(fund_flow_info, price_direction)
+        _fp_suffix = f"，{fund_price_div['label']}" if fund_price_div['risk'] != '无' else ''
+
         plain = _fund_chip_plain(phase_info, fund_flow_info, cost_structure, signal_info, retail_inst, margin_info)
+        plain = plain + _fp_suffix if _fp_suffix else plain
         status_description = {
             'phase': f"{phase_info['phase_cn']}（{phase_info['detail']}）",
             'fund_flow': f"{fund_flow_info['level_cn']}（{fund_flow_info['detail']}）",
             'cost_structure': cost_structure['detail'], 'signal': signal_info['detail'],
             'retail_institution': retail_inst['detail'], 'margin': margin_info['detail'],
             'crowding': f"拥挤度={crowding['level']}（{crowding['detail']}）",
+            # 445 §6.1：资金×价格背离结论
+            'fund_price_divergence': fund_price_div['label'],
+            'fund_price_divergence_status': fund_price_div['status'],
+            'fund_price_divergence_risk': fund_price_div['risk'],
             'plain': plain,
         }
         judgment = {
@@ -5809,6 +5875,7 @@ class Dim4ChipFundEngine(DataAwareMixin):
              'actual': fund_flow_info['level_cn'], 'threshold': '有明确流向'},
             {'name': '筹码集中', 'satisfied': bool(cost_structure.get('concentration')), 'actual': cost_structure.get('concentration', '未知') or '未知', 'threshold': '有集中度数据'},
             {'name': '拥挤度合理', 'satisfied': crowding['level'] not in ('HIGH_CROWDING', 'unknown'), 'actual': crowding['level'], 'threshold': '非高拥挤'},
+            {'name': '资金×价格无危险背离', 'satisfied': fund_price_div['risk'] not in ('危险',), 'actual': fund_price_div['label'], 'threshold': '无拉抬出货/顶背离'},
         ]
         sc = sum(1 for c in conditions if c['satisfied'])
         audit = {'conditions': conditions, 'satisfied_count': sc, 'total_count': len(conditions), 'confidence': sc / len(conditions) if conditions else 0}
