@@ -17,7 +17,7 @@ from __future__ import annotations
 MA_ALIGNMENT_CN = {
     'bullish': '多头排列',
     'bearish': '空头排列',
-    'mixed': '均线交织',
+    'mixed': '交织',  # dim2 调用侧拼 f"均线{ma_alignment_cn(...)}"，此处不可再含 '均线'
     '': '无明确排列',
 }
 # 兼容既有中文写法（dim3_vp_engine.py:4657 曾硬编码 '多头排列'/'空头排列'）

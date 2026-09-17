@@ -288,10 +288,15 @@ class StatusEngine:
                         if jk not in _META_KEYS and isinstance(jv, dict):
                             state_val = jv.get('value', '中性')
                             break
-                    dims_for_signal[key] = {
+                    # 键契约对齐：signal_analyzer（411迁移自 dim1）期望旧键 vp，
+                    # dim3 现产 volume_price——映射回 vp，避免共振键错位（vp 恒缺→共振恒 25 分）。
+                    _sig_key = 'vp' if key == 'volume_price' else key
+                    dims_for_signal[_sig_key] = {
                         'state': state_val,
                         'confidence': judg.get('continuous_value', 0.5),
                     }
+            # factor 维无独立引擎（359 §1.4 四维共振之一），沿用旧契约中性常量兜底
+            dims_for_signal.setdefault('factor', {'state': '中性', 'confidence': 0.5})
             signal_analysis = analyze_signal(dims_for_signal, tags, lifecycle or {})
             results['signal_analysis'] = signal_analysis
 
