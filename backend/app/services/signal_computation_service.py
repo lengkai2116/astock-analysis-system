@@ -49,7 +49,7 @@ class SignalComputationService:
         369号方案：调用维度引擎替代内联计算。
         返回信号列表，格式与旧接口兼容。
         """
-        df = self.data_manager.get_cached_daily_data(ts_code, adj='hfq')
+        df = self.data_manager.get_cached_daily_data(ts_code, adj='qfq')
         if df.empty or len(df) < 60:
             mf_available = False
             try:

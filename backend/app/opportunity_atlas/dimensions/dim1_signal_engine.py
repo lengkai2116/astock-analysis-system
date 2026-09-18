@@ -72,7 +72,11 @@ class Dim1SignalEngine:
                 # ═══ 类别1: ECM原料表（10项）═══
 
                 # daily_cache（dim2/dim3/dim4/dim6需要）
-                daily_df = dm.get_cached_daily_data(ts_code)
+                # 463号：前复权加载（消除除权除息跳空被误判为走势结构；最新价=实际价，免展示换算。
+                #   知识库《缠论走势结构量化系统配置指南》分析口径为后复权——本号取前复权：
+                #   ①同样消除除权跳空；②最新价=实际价，中枢/支撑等绝对价无需换算（后复权需 scale 全链路换算、易错）；
+                #   ③日线级短窗口（中枢 1~3月）下前复权历史漂移影响可忽略。后复权方案记录于 463 文档。
+                daily_df = dm.get_cached_daily_data(ts_code, adj='qfq')
                 if daily_df is not None and not daily_df.empty:
                     loaded_data['daily_df'] = daily_df
                 else:

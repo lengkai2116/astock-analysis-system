@@ -224,15 +224,24 @@ class DataManager:
             df_adj = self.cache.get_cached_adj_factor(ts_code)
             if df_adj is None or df_adj.empty:
                 return df
-            df_merged = df.merge(df_adj[['trade_date', 'adj_factor']], on='trade_date', how='left')
+            # 463号：复权因子覆盖不足（缺失严重，如 601318/600519 仅 2026 近期有 factor）
+            # → 回退未复权，避免 fillna(1.0) 起步导致前/后复权灾难性缩放失真
+            #   （ffill 从无值起步后历史价被缩到 1/因子，中枢严重偏离实际价）。
+            # 根治：补采 adj_factor 历史（463 遗留待办）。
+            _merged = df.merge(df_adj[['trade_date', 'adj_factor']], on='trade_date', how='left')
+            _valid_ratio = float(_merged['adj_factor'].notna().sum()) / max(len(_merged), 1)
+            if _valid_ratio < 0.5:
+                return df
+            df_merged = _merged
             df_merged['adj_factor'] = df_merged['adj_factor'].ffill().fillna(1.0)
             if adj == 'hfq':
-                # 后复权：以最新复权因子为基准
-                base_adj = df_merged['adj_factor'].iloc[-1]
+                # 后复权（知识库《缠论走势结构量化系统配置指南》分析口径）：以最早复权因子为基准，
+                # 历史结构连续、除权除息跳空消除；最新价≠实际价（展示时按 scale 换算回实际价）。
+                base_adj = df_merged['adj_factor'].iloc[0]
                 df_merged['adj_factor'] = df_merged['adj_factor'] / base_adj
             else:
-                # 前复权：以最早复权因子为基准
-                base_adj = df_merged['adj_factor'].iloc[0]
+                # 前复权（实际交易口径）：以最新复权因子为基准，最新价=实际价。
+                base_adj = df_merged['adj_factor'].iloc[-1]
                 df_merged['adj_factor'] = df_merged['adj_factor'] / base_adj
             for col in ['open', 'high', 'low', 'close']:
                 if col in df_merged.columns:

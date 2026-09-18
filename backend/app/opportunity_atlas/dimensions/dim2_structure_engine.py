@@ -138,7 +138,10 @@ class Dim2StructureEngine(DataAwareMixin):
 
         # 3. 5子维度
         latest_close = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
-        vs_zhongshu = _assess_vs_zhongshu(tags, dims, chanlun_result, latest_close)
+        _last_date = str(df['trade_date'].iloc[-1])[:10] if (df is not None and not df.empty
+                                                             and 'trade_date' in df.columns) else None
+        vs_zhongshu = _assess_vs_zhongshu(tags, dims, chanlun_result, latest_close,
+                                          last_date=_last_date)
         vs_ma = _assess_vs_ma(tags)
         vs_sr = _assess_vs_support_resistance(geo)
         vs_chip = _assess_vs_chip(tags)
@@ -318,19 +321,30 @@ class Dim2StructureEngine(DataAwareMixin):
                 'tags (pre_feat_cache)', 'dims (StatusEngine)']
 
 
-def _assess_vs_zhongshu(tags, dims, chanlun_result=None, latest_close=0.0):
+def _assess_vs_zhongshu(tags, dims, chanlun_result=None, latest_close=0.0, last_date=None):
+    """价格 vs 当前有效中枢（463号：不再盲取 zs_list[-1] 多年旧中枢；
+    daily_df 前复权口径，展示价=实际价；last_date=最后交易日（做中枢时效过滤）"""
     if chanlun_result:
         zs_list = chanlun_result.get('zhongshu', [])
-        if zs_list:
-            zs = zs_list[-1]
-            zs_h, zs_l = getattr(zs, 'high', 0), getattr(zs, 'low', 0)
+        from app.engine.framework.chanlun_strategy import _select_current_zhongshu
+        zs = _select_current_zhongshu(zs_list, last_date=last_date)
+        if zs is not None:
+            zs_h = float(getattr(zs, 'high', 0))
+            zs_l = float(getattr(zs, 'low', 0))
+            _span = ''
+            try:
+                _span = f"，中枢{str(zs.start_date)[:10]}~{str(zs.end_date)[:10]}"
+            except Exception:
+                pass
             price = latest_close
             if price > zs_h:
-                return {'position': '上方', 'detail': f"价格位于中枢上方({zs_l:.2f}~{zs_h:.2f})"}
+                return {'position': '上方', 'detail': f"价格位于中枢上方({zs_l:.2f}~{zs_h:.2f}{_span})"}
             elif price < zs_l:
-                return {'position': '下方', 'detail': f"价格位于中枢下方({zs_l:.2f}~{zs_h:.2f})"}
+                return {'position': '下方', 'detail': f"价格位于中枢下方({zs_l:.2f}~{zs_h:.2f}{_span})"}
             else:
-                return {'position': '内部', 'detail': f"价格在中枢内部({zs_l:.2f}~{zs_h:.2f})"}
+                return {'position': '内部', 'detail': f"价格在中枢内部({zs_l:.2f}~{zs_h:.2f}{_span})"}
+        # 无有效中枢（多年无新中枢/中枢已失效）→ 明确状态，不再拿旧中枢伪对比
+        return {'position': '无有效中枢', 'detail': '当前无有效日线中枢（趋势延续或中枢已失效）'}
     pos = str(tags.get('position_vs_zs', ''))
     if pos:
         return {'position': pos, 'detail': f"价格位于中枢{pos}"}
@@ -345,12 +359,13 @@ def _assess_vs_ma(tags):
 
 
 def _assess_vs_support_resistance(geo):
+    """支撑/压力展示（daily_df 前复权口径，展示价=实际价）"""
     s, r = geo.get('support_price'), geo.get('resistance_price')
     ds, dr = geo.get('dist_to_support_pct'), geo.get('dist_to_resistance_pct')
     if s and r and ds is not None and dr is not None:
-        return {'detail': f"距支撑位{s}元({ds:+.1f}%)，距压力位{r}元({dr:+.1f}%)"}
+        return {'detail': f"距支撑位{s:.2f}元({ds:+.1f}%)，距压力位{r:.2f}元({dr:+.1f}%)"}
     elif s and ds is not None:
-        return {'detail': f"距支撑位{s}元({ds:+.1f}%)"}
+        return {'detail': f"距支撑位{s:.2f}元({ds:+.1f}%)"}
     return {'detail': '支撑阻力数据不足'}
 
 

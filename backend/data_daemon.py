@@ -3176,10 +3176,13 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             logger.warning(f"RAW 截面 fcf_percentile 构建失败: {_e}")
 
         # 批量加载日线数据
+        # 463号：前复权加载（与 SIG dim1 同源，消除除权除息跳空；最新价=实际价，免展示换算）
+        from app.data import DataManager as _DM463
+        _dm_hfq = _DM463()
         all_data: dict[str, pd.DataFrame] = {}
         for code in codes:
             try:
-                df = _ecm.get_cached_daily(code)
+                df = _dm_hfq.get_cached_daily_data(code, adj='qfq')
                 if df is not None and not df.empty:
                     all_data[code] = df
             except Exception as _e:

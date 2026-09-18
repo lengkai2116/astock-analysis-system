@@ -2196,6 +2196,45 @@ class BuySellPointDetector:
         return steps
 
 
+def _select_current_zhongshu(zs_list, klines=None, last_date=None):
+    """463号：从后向前选"当前有效中枢"（知识库：保留最新中枢状态、日线级跨度 1周~3月、超6月升级周线）
+
+    原实现盲取 zs_list[-1]（最后识别的中枢）——对长期下跌无新中枢的股票，该中枢是多年前旧中枢
+    （如 000002 中枢=2021 年价位 vs 现价 3 元）→ 恒判"价格中枢下方/下降"（假结论）。
+
+    选用规则（从 zs_list 尾部向前）：
+      - 时效/失效（核心）：中枢 end_date 距"当前日期"（klines 最后根 或 last_date）> 6 个月（180天）
+        → 期间走势已离开且无新中枢 → 失效（跳过）。这是消除"旧中枢恒判下降"的关键。
+      - 跨度（识别层保留巨型延伸中枢）：跨度 > 6 个月的中枢不跳过，返回时其 level 已为
+        'weekly'（_evolve 未改，用 duration 展示标注；它代表当前价位水平的横盘区间，
+        作为"当前中枢"参考是现实的——见 000001 三年横盘）。
+    返回第一个通过过滤的中枢；全部过滤 → None（调用方走"无中枢"兜底 = 最后笔/段方向）。
+    无当前日期时仅返回最后一个（保守）；日期解析失败保守放行。
+    """
+    from datetime import datetime
+    if not zs_list:
+        return None
+    cur_date = None
+    if last_date:
+        cur_date = str(last_date)[:10]
+    elif klines:
+        try:
+            cur_date = str(klines[-1].date)[:10]
+        except Exception:
+            cur_date = None
+    for zs in reversed(zs_list):
+        if cur_date:
+            try:
+                _gap = (datetime.strptime(cur_date, '%Y-%m-%d')
+                        - datetime.strptime(str(zs.end_date)[:10], '%Y-%m-%d')).days
+                if _gap > 180:  # 时效过滤：结束距今>6个月 → 失效（走势已离开且无新中枢）
+                    continue
+            except Exception:
+                pass
+        return zs
+    return None
+
+
 class ChanlunAnalyzer:
     """
     完整缠论分析器
@@ -2500,19 +2539,22 @@ class ChanlunAnalyzer:
 
         知识库（缠论走势结构量化系统配置指南）："价格高于中枢上沿"为上升；
         趋势=中枢关系，单笔回调不应翻转趋势。
+        463号：用"当前有效中枢"（_select_current_zhongshu：级别≤日线6个月 + 未失效），
+        不再盲取 zs_list[-1]（多年旧中枢 → 恒判下降的假结论）。
         """
         zs_list = self.zhongshu_list
-        if zs_list:
+        zs = _select_current_zhongshu(zs_list, self.klines)
+        if zs is not None:
             latest_close = self.klines[-1].close if self.klines else 0.0
-            zs = zs_list[-1]
-            # 主判据：价格 vs 最后中枢上下沿（知识库原文语义）
+            # 主判据：价格 vs 当前有效中枢上下沿（知识库原文语义）
             if latest_close > zs.high:
                 return 'up'
             if latest_close < zs.low:
                 return 'down'
-            # 价格在中枢内部 → 中枢序列方向辅助（≥2 中枢比较上移/下移）
-            if len(zs_list) >= 2:
-                zs_prev = zs_list[-2]
+            # 价格在中枢内部 → 中枢序列方向辅助（与前一中枢比较上移/下移）
+            _idx = next((i for i, _z in enumerate(zs_list) if _z is zs), None)
+            if _idx is not None and _idx >= 1:
+                zs_prev = zs_list[_idx - 1]
                 if zs.low > zs_prev.high:
                     return 'up'
                 if zs.high < zs_prev.low:
@@ -2521,7 +2563,7 @@ class ChanlunAnalyzer:
                 c_prev = (zs_prev.high + zs_prev.low) / 2.0
                 return 'up' if c_cur > c_prev else ('down' if c_cur < c_prev else 'unknown')
             return 'unknown'
-        # 无中枢：兜底用最后笔/段方向（保留原逻辑）
+        # 无有效中枢（多年无新中枢 / 中枢已失效）：兜底用最后笔/段方向（保留原逻辑）
         if self.bi_zs_mode:
             if self.strokes:
                 return self.strokes[-1].direction
@@ -2531,17 +2573,19 @@ class ChanlunAnalyzer:
         return self.segments[-1].direction
 
     def _determine_trend_basis(self) -> str:
-        """趋势判定依据说明（446号：可回溯，对齐 444 现状=因果链的因）"""
+        """趋势判定依据说明（446号：可回溯，对齐 444 现状=因果链的因；463号：有效中枢。
+        文案保持 446 契约（无时间后缀——时间信息由 dim2 vs_zhongshu 现状描述标注）"""
         zs_list = self.zhongshu_list
-        if zs_list:
+        zs = _select_current_zhongshu(zs_list, self.klines)
+        if zs is not None:
             latest_close = self.klines[-1].close if self.klines else 0.0
-            zs = zs_list[-1]
             if latest_close > zs.high:
                 return '价格突破中枢上沿'
             if latest_close < zs.low:
                 return '价格跌破中枢下沿'
-            if len(zs_list) >= 2:
-                zs_prev = zs_list[-2]
+            _idx = next((i for i, _z in enumerate(zs_list) if _z is zs), None)
+            if _idx is not None and _idx >= 1:
+                zs_prev = zs_list[_idx - 1]
                 if zs.low > zs_prev.high:
                     return '价格在中枢内部-中枢上移'
                 if zs.high < zs_prev.low:
