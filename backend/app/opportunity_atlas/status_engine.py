@@ -981,19 +981,21 @@ def apply_advice_params(params: dict, price: Optional[float],
 
 def build_seven_dim_from_dim_results(dim_results: dict | None,
                                      tags: dict | None = None,
-                                     lifecycle: dict | None = None) -> dict | None:
+                                     lifecycle: dict | None = None,
+                                     ts_code: str | None = None) -> dict | None:
     """SIG 文字类产出（seven_dim_json）整体归集入口（436号 B1）
 
     委派 dim8（Dim8SummaryEngine.build_seven_dim_report）组装前端契约的七维现状描述：
       7 键 signal/structure/volume_price/fund_chip/emotion/risk/summary，
       顶层 light emoji、每段 judgment/audit/plain（align 两端 dimOrder/segOrder）。
+    ts_code：462-3 相对强弱环境定位句（summary 前置）用；不传则跳过。
     dim_results 为空/非 dict → 返回 None（data_daemon 写 NULL，门禁跳过）。
     """
     if not dim_results or not isinstance(dim_results, dict):
         return None
     try:
         from app.opportunity_atlas.dimensions.dim8_summary_engine import Dim8SummaryEngine
-        return Dim8SummaryEngine().build_seven_dim_report(dim_results, tags=tags)
+        return Dim8SummaryEngine().build_seven_dim_report(dim_results, tags=tags, ts_code=ts_code)
     except Exception as e:
         logger.warning(f"build_seven_dim_from_dim_results 失败: {e}")
         return None

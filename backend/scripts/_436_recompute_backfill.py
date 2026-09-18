@@ -85,7 +85,7 @@ def backfill():
                             continue
                     except Exception:
                         pass
-                rebuilt = eng.build_seven_dim_report(obj, tags={})
+                rebuilt = eng.build_seven_dim_report(obj, tags={}, ts_code=ts)
                 if not rebuilt:
                     skip_empty += 1
                     continue

@@ -3070,6 +3070,31 @@ def _pick_volume_ratio(_db, trade_date):
     return 1.0
 
 
+def _build_active_signal(cl_result: dict, buy_sell_point: str):
+    """462-2：组装 active_signal（供信号生命周期 334号 §5.3，纯函数便于单测）。
+
+    SSOT=缠论买卖点详情（BuySellPoint.position 含 date/price）：
+    - 无买点（none/空）→ None；
+    - 匹配到买卖点且 position.price 可用 → JSON {'type','date','price'}；
+    - 无匹配/无价格（数据退化）→ 回退原枚举字符串（保持兼容，生命周期降级）。
+    """
+    if not buy_sell_point or buy_sell_point in ('none', ''):
+        return None
+    matched = None
+    for _plist in (cl_result.get('buy_points') or [], cl_result.get('sell_points') or []):
+        for _p in _plist:
+            if getattr(_p, 'type', '') == buy_sell_point:
+                matched = _p
+                break
+        if matched is not None:
+            break
+    _pos = getattr(matched, 'position', None) if matched is not None else None
+    if _pos and _pos.get('price') is not None:
+        return json.dumps({'type': buy_sell_point, 'date': _pos.get('date', ''),
+                           'price': _pos.get('price')}, ensure_ascii=False)
+    return buy_sell_point
+
+
 def _precompute_raw_features(codes, target_date: str | None = None):
     """原料加工环节：特征提取（RAW-2 FEAT）→ 写入 pre_feat_cache
 
@@ -3264,8 +3289,14 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             features = {}
 
             # 1. 估值特征（17字段）
+            # 462-4：ve.compute_tags 内部 DataManager.get_stock_industry 依赖 db.session
+            #   （Flask SQLAlchemy，app_context 为线程局部）——_raw2_one 经 _run_with_timeout 在
+            #   子线程执行，池线程的 _flask_app.app_context() 不覆盖子线程 → 无 context 恒抛
+            #   "Working outside of application context" → 估值组自 09-14 重算起恒空（461-2 白名单
+            #   补产 roce_pass/value_trap 落库悬空）。包 _raw_app.app_context()（同 sector 块先例）。
             try:
-                v_tags = ve.compute_tags(code)
+                with _raw_app.app_context():
+                    v_tags = ve.compute_tags(code)
                 if v_tags:
                     # 461-9：裸 pe/pb/ps_percentile + roe 白名单空键——ve.compute_tags return
                     # 只产 _5y 变体（pe_percentile_5y 等）与 composite_rating 等，无裸三键、无 roe；
@@ -3527,11 +3558,29 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 # 461-7：risk_level 保持现状单源（用户拍板）——HIGH iff 主力出货(distributing)，
                 #         作 dim6 缠论风险输入的真实来源，偏"判定"语义，符合 445 冻结不越界。
                 _derived['risk_level'] = 'HIGH' if _depth_f.get('main_force_phase') == 'distributing' else 'LOW'
-                # 信号确认
-                _derived['right_side_confirm'] = 'strong_confirm' if _cl.get('buy_sell_point', '') in ('first_buy', 'second_buy') and _vp_f.get('volume_price_fit') == 'healthy' else 'unconfirmed'
+                # 信号确认（462-1：值域统一到 _check_right_side_confirm 四档中文——原简化代理
+                #   恒 strong_confirm/unconfirmed 两值，与 SIG 消费方（arbiter P0-P6 / factor_arbiter
+                #   门控 / conflict_matrix / signal_analyzer / dim6:403）判定的中文四档（否决/
+                #   强确认/基础确认/未确认）值域错位 → 全部恒不触发。接 treemap 管道同源判定器，
+                #   判定条件集不变，仅统一生产点与值域。
+                _rsc_tags = {
+                    'buy_sell_point': _cl.get('buy_sell_point', 'none'),
+                    'volume_price_fit': _vp_f.get('volume_price_fit', 'neutral'),
+                    'pattern_signal': _vp_f.get('kline_pattern', 'none'),
+                }
+                try:
+                    _rsc = _check_right_side_confirm('', _rsc_tags, df)
+                    _derived['right_side_confirm'] = _rsc.get('right_side_confirm', '未确认')
+                except Exception as _e:
+                    logger.debug(f"RAW衍生 right_side_confirm 判定失败 [{code}]: {_e}")
+                    _derived['right_side_confirm'] = 'unconfirmed'
                 _derived['pattern_signal'] = _vp_f.get('kline_pattern', 'none')
-                # 生命信号
-                _derived['active_signal'] = _cl.get('buy_sell_point', '') if _cl.get('buy_sell_point', '') not in ('none',) else None
+                # 生命信号（462-2：active_signal 由 buy_sell_point 枚举升级为缠论买卖点详情
+                #   {type,date,price} JSON——status_engine._signal_lifecycle（334号 §5.3）需信号
+                #   日期+价格算生命周期（初期/中期/已延伸/回撤），原纯枚举无日期价格 →
+                #   生命周期恒 None。BuySellPoint.position 已含 date/price，直接组装。
+                _derived['active_signal'] = _build_active_signal(
+                    cl_result if 'cl_result' in dir() else {}, _cl.get('buy_sell_point', ''))
                 # 状态标签（461-7：state_label 接 chanlun 缠论 trend 真值（up/down/unknown），
                 #   替代原 trend_direction（chanlun get_chanlun_tags 从不产该键 → 恒 'unknown' 假值）；
                 #   trend_alignment 接 PhaseDetectionEngine trend_alignment（up_aligned/down_aligned/

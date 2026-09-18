@@ -535,6 +535,47 @@ def _dim1_fallback_segment(tags: dict) -> dict | None:
     }
 
 
+def _relative_strength_sentence(ts_code: str) -> str:
+    """462-3：环境定位——近20/60日相对沪深300/上证强弱句（437-A D3「第一层并入 summary 前置」）。
+
+    数据源 relative_strength_cache（438 已闭环，双基准 asof 最新交易日）。
+    无数据/异常返回 ''（437 标准「有数据则显、缺则降级」，绝不输出 NULL/空句）。
+    """
+    if not ts_code:
+        return ''
+    try:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        rows = get_ecm_instance().get_relative_strength(ts_code=ts_code)
+        if not rows:
+            return ''
+        asof = max((r.get('asof_date') or '') for r in rows if r.get('asof_date'))
+        by_bench = {}
+        for r in rows:
+            if r.get('asof_date') == asof:
+                by_bench.setdefault(r.get('benchmark'), r)
+
+        def _phrase(benchmark, label):
+            r = by_bench.get(benchmark)
+            if not r:
+                return ''
+            parts = []
+            for key, win in (('ex_ret_20d', '近20日'), ('ex_ret_60d', '近60日')):
+                v = r.get(key)
+                if v is None:
+                    continue
+                v = float(v) * 100
+                verb = '跑赢' if v >= 0 else '跑输'
+                parts.append(f'{win}{verb}{label}{abs(v):.1f}%')
+            return '、'.join(parts)
+
+        core = [p for p in (_phrase('000300.SH', '沪深300'), _phrase('000001.SH', '上证')) if p]
+        if not core:
+            return ''
+        return '相对强弱：' + '；'.join(core)
+    except Exception:
+        return ''
+
+
 # ═══════════════════════════════════════════════════════════
 # 第8维 引擎
 # ═══════════════════════════════════════════════════════════
@@ -626,13 +667,16 @@ class Dim8SummaryEngine:
         }
 
     def build_seven_dim_report(self, dim_results: dict | None,
-                                tags: dict | None = None) -> dict | None:
+                                tags: dict | None = None,
+                                ts_code: str | None = None) -> dict | None:
         """SIG 文字类输出整体归集器（436号 B1，dim8 按新共识承担）
 
         读取 dim_results（dim2-dim7 富数据）组装前端契约的七维现状描述 seven_dim_json：
           - 7 键：signal/structure/volume_price/fund_chip/emotion/risk/summary
           - 每段 {title, light(emoji), text, evidence, confidence, judgment, audit, plain}
           - 顶层无 light（各段自带）；summary 段含 dim8 综合状态条/共识/冲突
+        ts_code：可选，供 462-3 相对强弱环境定位句（summary 前置，437-A D3）；
+                 不传/无数据则跳过（437 缺则降级）。
         dim_results 为空/非 dict → 返回 None（由门禁/NULL 语义承接）。
         """
         if not dim_results or not isinstance(dim_results, dict):
@@ -691,6 +735,15 @@ class Dim8SummaryEngine:
                           'confidence': 0},
                 'plain': '状态总结：数据不足',
             }
+
+        # 462-3：环境定位——相对强弱句并入 summary 前置（437-A D3「第一层并入 summary」）。
+        # 不传 ts_code / 无数据 → 跳过（437 缺则降级，不改前端契约键）。
+        if ts_code and 'summary' in segments:
+            rs = _relative_strength_sentence(ts_code)
+            if rs:
+                _seg = segments['summary']
+                _seg['text'] = f'{rs}；{_seg.get("text", "")}'
+                _seg['plain'] = f'{rs}；{_seg.get("plain", "")}' if _seg.get('plain') else rs
 
         return segments
 
