@@ -38,7 +38,7 @@ def _mk_df(n=70):
 
 
 _P_BASE = {'volume_price_fit': 'healthy', 'volume_ratio': 2.5,
-           'ma_alignment': 'bullish', 'chip_concentration': 'concentrating', 'rsi14': 65}
+           'ma_alignment': 'bullish', 'chip_concentration': 'concentrating', 'rsi': 65}
 
 
 class TestRpsScoring:
@@ -48,7 +48,7 @@ class TestRpsScoring:
         """RPS>85 时健康度 >= 无 RPS 时（加分证据）"""
         df = _mk_df()
         _base = {'volume_price_fit': 'healthy', 'volume_ratio': 2.5,
-                 'ma_alignment': 'bullish', 'chip_concentration': 'concentrating', 'rsi14': 65}
+                 'ma_alignment': 'bullish', 'chip_concentration': 'concentrating', 'rsi': 65}
         eng = Dim3VPEngine()
         hi = eng.evaluate({}, dict(_base, ts_code='TEST'), data_context={'daily_df': df, 'relative_strength': {'rps_20d': 99}})
         no = eng.evaluate({}, dict(_base, ts_code='TEST'), data_context={'daily_df': df, 'relative_strength': None})

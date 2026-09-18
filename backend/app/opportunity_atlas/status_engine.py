@@ -137,10 +137,18 @@ class StatusEngine:
 
         pre_feat 结构: {valuation: {...}, sentiment: {...}, ..., depth: {...}}
         输出: {valuation_level: 'fair', sentiment_phase: 'cautious', ...}
+
+        461-8：market_stats 组（全市场共享，非个股属性）不摊进 flat tags——
+        它的真正消费方（dim5/bociasi）均经 dim1 data_context 子 dict 读取嵌套 pre_feat，
+        扁平层无任何市场级键消费者，摊进会污染个股 flat 命名空间
+        （如 `pe_percentile`/`rsi_percentile` 唯一来源是 market_stats 组，非个股级估值分位）。
         """
         flat = {}
         for group_name, group_data in pre_feat.items():
             if not isinstance(group_data, dict):
+                continue
+            # 461-8：market_stats 组跳过扁平化（全市场共享，保留在 data_context 子 dict 供 dim1/dim5/bociasi 读）
+            if group_name == 'market_stats':
                 continue
             for key, value in group_data.items():
                 if value is not None:

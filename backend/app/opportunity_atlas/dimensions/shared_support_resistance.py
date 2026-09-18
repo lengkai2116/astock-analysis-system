@@ -1,6 +1,8 @@
-"""shared_support_resistance.py — 支撑阻力统一计算服务
+"""shared_support_resistance.py — 支撑阻力统一计算服务（461-11 唯一 SSOT）
 
 364h Phase 8：统一3个支撑阻力来源，修复resistance逻辑bug。
+461-11：收敛 dim6.calc_geometric / advice_builder._geometric / advice_engine._geometric
+    三份逐字副本为唯一源；signal_days、dist_to_prev_high_pct 自 calc_geometric 并入。
 """
 from __future__ import annotations
 
@@ -27,13 +29,16 @@ def calc_support_resistance(df=None, indicator_ma_df=None) -> dict:
             'dist_to_support_pct': float | None,
             'dist_to_resistance_pct': float | None,
             'risk_reward': float | None,
-            'source': str
+            'source': str,
+            'signal_days': int | None,
+            'dist_to_prev_high_pct': float | None,
         }
     """
     if df is None or df.empty or 'close' not in df.columns or len(df) < 20:
         return {'support_price': None, 'resistance_price': None,
                 'dist_to_support_pct': None, 'dist_to_resistance_pct': None,
-                'risk_reward': None, 'source': '数据不足'}
+                'risk_reward': None, 'source': '数据不足',
+                'signal_days': None, 'dist_to_prev_high_pct': None}
 
     import numpy as np
     closes = df['close'].values
@@ -81,6 +86,26 @@ def calc_support_resistance(df=None, indicator_ma_df=None) -> dict:
     dist_res = (resistance / price - 1) * 100 if resistance else None
     rr = abs(dist_res / dist_sup) if dist_sup and dist_res else None
 
+    # 信号天数：突破前60日高点后持续天数（收盘 > 前60日高点 = 突破成立日）
+    signal_days = None
+    if len(closes) >= 62:
+        prior_hi = float(df['high'].iloc[-61:-1].max())
+        if prior_hi > 0 and closes[-1] > prior_hi:
+            days = 0
+            for i in range(len(closes) - 1, -1, -1):
+                if closes[i] > prior_hi:
+                    days += 1
+                else:
+                    break
+            signal_days = days if days > 0 else None
+
+    # 距前高%（20日内最高价）——461-11 收敛自 calc_geometric 输出
+    dist_prev_high = None
+    if len(df) >= 20 and 'high' in df.columns:
+        prev_high = float(df['high'].tail(20).max())
+        if prev_high > 0 and price is not None:
+            dist_prev_high = round((price / prev_high - 1) * 100, 2)
+
     return {
         'support_price': round(support, 2) if support else None,
         'resistance_price': round(resistance, 2) if resistance else None,
@@ -88,4 +113,6 @@ def calc_support_resistance(df=None, indicator_ma_df=None) -> dict:
         'dist_to_resistance_pct': round(dist_res, 2) if dist_res is not None else None,
         'risk_reward': round(rr, 2) if rr is not None else None,
         'source': '统一计算',
+        'signal_days': signal_days,
+        'dist_to_prev_high_pct': dist_prev_high,
     }

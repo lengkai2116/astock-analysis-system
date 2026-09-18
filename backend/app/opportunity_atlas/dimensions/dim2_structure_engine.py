@@ -377,12 +377,21 @@ def _assess_vs_indicator(tags):
                 if mv in ma_map:
                     parts.append(ma_map[mv])
                 break
-    # rsi_percentile 补充（derived 组产出，RSI 历史分位，0-1 归一化）
-    rp = tags.get('rsi_percentile')
-    if rp is not None:
+    # rsi（461-1：RSI 三键统一——SSOT=rsi，chip_fund_ext.rsi, 443 R1 全市场真实化, Wilder ewm14）。
+    # 原读 rsi_percentile（market_stats 组：全市场 AVG(rsi14) 归一化，市场级当个股级展示——概念错位）。
+    # 现改读个股 RSI 真值（0-100），并按强弱分档描述，不再以市场级冒充个股。
+    rs = tags.get('rsi')
+    if rs is not None:
         try:
-            parts.append(f'RSI分位{float(rp) * 100:.0f}')
-        except Exception:
+            rsi_v = float(rs)
+            if rsi_v >= 70:
+                _rsi_desc = '偏强'
+            elif rsi_v <= 30:
+                _rsi_desc = '偏弱'
+            else:
+                _rsi_desc = '中性'
+            parts.append(f'RSI {rsi_v:.0f} {_rsi_desc}')
+        except (TypeError, ValueError, ZeroDivisionError):
             pass
     return {'detail': '，'.join(parts) if parts else '指标数据不足'}
 

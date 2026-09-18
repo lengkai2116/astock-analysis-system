@@ -307,10 +307,24 @@ class Dim1SignalEngine:
         # 日期对齐检查（仅对有trade_date列的DataFrame检查）
         date_alignment_ok = True
         if 'daily_df' in loaded_keys and hasattr(data_context['daily_df'], 'columns') and 'trade_date' in data_context['daily_df'].columns:
-            latest_date = data_context['daily_df']['trade_date'].max()
-            for key in ['moneyflow_df', 'daily_basic_df']:
+            latest_date = str(data_context['daily_df']['trade_date'].max()).replace('-', '')[:8]
+            for key in ['moneyflow_df', 'daily_basic_df', 'margin_df']:
                 if key in loaded_keys and hasattr(data_context[key], 'columns') and 'trade_date' in data_context[key].columns:
-                    if data_context[key]['trade_date'].max() != latest_date:
+                    _key_date = str(data_context[key]['trade_date'].max()).replace('-', '')[:8]
+                    # 461-10：补入 margin_df 对齐检查。margin 采集设计允许 ≤7 天滞后
+                    # （data_daemon :1968-1990 以滞后 >7 天才触发范围补采），故带 7 天容差，
+                    # 避免正常滞后被误判降级；moneyflow/daily_basic 仍要求严格同日。
+                    if key == 'margin_df':
+                        from datetime import datetime
+                        _lag_days = 0
+                        try:
+                            if _key_date:
+                                _lag_days = (datetime.strptime(latest_date, '%Y%m%d') - datetime.strptime(_key_date, '%Y%m%d')).days
+                        except ValueError:
+                            _lag_days = 0
+                        if _lag_days > 7:
+                            date_alignment_ok = False
+                    elif _key_date != latest_date:
                         date_alignment_ok = False
 
         completeness_score = len(loaded_keys) / (len(required) + len(optional))

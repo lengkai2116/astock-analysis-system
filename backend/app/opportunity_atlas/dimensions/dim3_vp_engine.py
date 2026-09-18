@@ -123,7 +123,9 @@ class Dim3VPEngine(DataAwareMixin):
         # 445-A3 修复：chip_concentration 实际枚举为 concentrating/dispersing/stable
         # （chip_distribution_service.py:184-188 英文存储），原查'单峰密集'/'tight' 恒失配 → cs 恒 0.5
         cs = 1 if cc in ('concentrating', '单峰密集', 'tight') else 0.5
-        try: rsi = float(tags.get('rsi14', 50))
+        # 461-1：RSI 三键统一——SSOT=rsi（chip_fund_ext.rsi, 443 R1 全市场真实化, Wilder ewm14）。
+        # 原读 rsi14（pre_feat 无此键 → tags.get 恒 50 断链, 强弱因子永不生效）。
+        try: rsi = float(tags.get('rsi', 50))
         except: rsi = 50
         is_ = 0.5
         if 60 < rsi <= 70: is_ = 1

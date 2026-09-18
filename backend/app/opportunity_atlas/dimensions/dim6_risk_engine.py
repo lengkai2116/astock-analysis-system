@@ -120,74 +120,17 @@ _FALLBACK_ACTION = ("NEUTRAL", 0.25)
 # ═══════════════════════════════════════════════════════════
 
 def calc_geometric(df: pd.DataFrame) -> dict:
-    """几何化指标：支撑/阻力位、盈亏比、信号天数、防守位"""
-    if df is None or df.empty or 'close' not in df.columns or len(df) < 20:
-        return {'dist_to_support_pct': None, 'dist_to_resistance_pct': None,
-                'risk_reward': None, 'signal_days': None,
-                'support_price': None, 'resistance_price': None}
+    """几何化指标：支撑/阻力位、盈亏比、信号天数、防守位
 
-    closes = df['close'].values
-    price = float(closes[-1])
-    hi60 = float(df['high'].tail(60).max()) if len(df) >= 60 and 'high' in df.columns else None
-    lo60 = float(df['low'].tail(60).min()) if len(df) >= 60 and 'low' in df.columns else None
-
-    ma60 = float(df['close'].tail(60).mean()) if len(df) >= 60 else None
-    resistance = hi60
-    resistance_candidates = [x for x in [hi60, ma60] if x is not None and x > price]
-    if resistance_candidates:
-        resistance = min(resistance_candidates)
-
-    ma20 = float(df['close'].tail(20).mean()) if len(df) >= 20 else None
-    lo20 = float(df['low'].tail(20).min()) if len(df) >= 20 and 'low' in df.columns else None
-    near = None
-    if ma20 is not None and lo20 is not None:
-        near = max(ma20, lo20)
-    elif ma20 is not None:
-        near = ma20
-    elif lo20 is not None:
-        near = lo20
-    support = near
-
-    if support is not None and price is not None and support >= price:
-        support = lo60
-    if support is not None and price is not None:
-        max_stop_pct = 0.15
-        min_support = price * (1 - max_stop_pct)
-        if support < min_support:
-            support = min_support
-
-    dist_sup = (support / price - 1) * 100 if support else None
-    dist_res = (resistance / price - 1) * 100 if resistance else None
-    rr = abs(dist_res / dist_sup) if dist_sup and dist_res else None
-
-    signal_days = None
-    if len(closes) >= 62:
-        prior_hi = float(df['high'].iloc[-61:-1].max())
-        if prior_hi > 0 and closes[-1] > prior_hi:
-            days = 0
-            for i in range(len(closes) - 1, -1, -1):
-                if closes[i] > prior_hi:
-                    days += 1
-                else:
-                    break
-            signal_days = days if days > 0 else None
-
-    # P8: 距前高%（20日内最高价）
-    dist_prev_high = None
-    if len(df) >= 20 and 'high' in df.columns:
-        prev_high = float(df['high'].tail(20).max())
-        if prev_high > 0 and price is not None:
-            dist_prev_high = round((price / prev_high - 1) * 100, 2)
-
-    return {
-        'dist_to_support_pct': round(dist_sup, 2) if dist_sup is not None else None,
-        'dist_to_resistance_pct': round(dist_res, 2) if dist_res is not None else None,
-        'dist_to_prev_high_pct': dist_prev_high,  # P8新增
-        'risk_reward': round(rr, 2) if rr is not None else None,
-        'signal_days': signal_days,
-        'support_price': round(support, 2) if support is not None else None,
-        'resistance_price': round(resistance, 2) if resistance is not None else None,
-    }
+    461-11：统一到 shared.calc_support_resistance（唯一 SSOT），本函数为兼容委托层，
+             补 dist_to_prev_high_pct（shared 已并入）；输出键契约保持不变。
+    """
+    from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
+    geo = calc_support_resistance(df)
+    return {k: geo.get(k) for k in (
+        'support_price', 'resistance_price', 'dist_to_support_pct',
+        'dist_to_resistance_pct', 'risk_reward', 'signal_days',
+        'dist_to_prev_high_pct')}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -213,6 +156,14 @@ def _calc_volatility(df=None, tags: dict = None) -> dict:
             atr_pct = (atr_14d / current_price * 100) if current_price > 0 else 0
             returns = close.pct_change().dropna()
             if len(returns) >= 20:
+                # 461-4：档位判据与框架 `volume_price_strategy:4177` 逐字对齐——
+                # 未年化 20 日滚动 std × 100（high>4 / medium>2 / low）。原实现算出场率
+                # atr_pct/percentile 却依赖外部 tags 判档（空 tags → 恒 medium，见 460 P2）。
+                vol20 = returns.rolling(20).std().iloc[-1]
+                if pd.notna(vol20):
+                    _vp = float(vol20) * 100.0
+                    level = 'high' if _vp > 4.0 else ('medium' if _vp > 2.0 else 'low')
+                # 历史分位仍用年化波动率（rank 不受 ×sqrt(252) 常数影响）
                 vol_20d = returns.rolling(20).std() * math.sqrt(252)
                 vol_20d = vol_20d.dropna()
                 if len(vol_20d) >= 2:

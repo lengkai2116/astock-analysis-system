@@ -203,70 +203,15 @@ def _consensus_from_dirs(dirs: list[int]) -> dict:
 def _geometric(df) -> dict:
     """几何化指标：距支撑/压力%、盈亏比、信号天数、防守位（K线不足返回空）
 
-    - support_price：近端防守位 = max(MA20, 近20日低点)（2026-08-13 知识库修正：
-      60日低点对右侧拉升股过宽，如 301119 现价22.35/止损16.69=-25.3% 不合理；
-      知识库《短线风险控制/交易计划制订》止损锚定突破大阳线实体近端结构位，
-      《短线高手的交易语言》止损≤1/2止盈即盈亏比≥2。取近端结构位 max(MA20,
-      lo20)，距现价不超过 15% 上限）。止损必须低于现价（322号 H3 教训：
-      600519 中枢下沿 1367 > 现价 1309 致止损立即触发，近端位高于现价时
-      回退 60日低点）。
+    461-11：统一到 shared.calc_support_resistance（唯一 SSOT），本函数为兼容委托层。
+    - support_price：近端防守位 = max(MA20, 近20日低点)，止损低于现价、距现价≤15%。
     - signal_days：突破信号后已持续交易日数（收盘价站上前60日高点后至今）
     """
-    if df is None or df.empty or 'close' not in df.columns or len(df) < 20:
-        return {'dist_to_support_pct': None, 'dist_to_resistance_pct': None,
-                'risk_reward': None, 'signal_days': None, 'support_price': None,
-                'resistance_price': None}
-    closes = df['close'].values
-    price = float(closes[-1])
-    hi60 = float(df['high'].tail(60).max()) if len(df) >= 60 and 'high' in df.columns else None
-    lo60 = float(df['low'].tail(60).min()) if len(df) >= 60 and 'low' in df.columns else None
-    # 压力位：取高于现价的最近位（364f修复：原逻辑min(hi60,ma60)在ma60<现价时返回低于现价的阻力位）
-    ma60 = float(df['close'].tail(60).mean()) if len(df) >= 60 else None
-    resistance = hi60
-    resistance_candidates = [x for x in [hi60, ma60] if x is not None and x > price]
-    if resistance_candidates:
-        resistance = min(resistance_candidates)
-    ma20 = float(df['close'].tail(20).mean()) if len(df) >= 20 else None
-    lo20 = float(df['low'].tail(20).min()) if len(df) >= 20 and 'low' in df.columns else None
-    # 近端结构位：MA20 与 近20日低点取高者（更贴近现价的支撑）
-    near = None
-    if ma20 is not None and lo20 is not None:
-        near = max(ma20, lo20)
-    elif ma20 is not None:
-        near = ma20
-    elif lo20 is not None:
-        near = lo20
-    support = near
-    # 止损必须低于现价（H3 教训）：近端位高于现价时回退 60日低点
-    if support is not None and price is not None and support >= price:
-        support = lo60
-    # 止损距离上限 15%：近端结构位过远时压缩（知识库：止损不宜过宽）
-    if support is not None and price is not None:
-        max_stop_pct = 0.15
-        min_support = price * (1 - max_stop_pct)
-        if support < min_support:
-            support = min_support
-    dist_sup = (support / price - 1) * 100 if support else None
-    dist_res = (resistance / price - 1) * 100 if resistance else None
-    rr = abs(dist_res / dist_sup) if dist_sup and dist_res else None
-    # 信号天数：突破前60日高点后持续天数（收盘 > 前60日高点 = 突破成立日）
-    signal_days = None
-    if len(closes) >= 62:
-        prior_hi = float(df['high'].iloc[-61:-1].max())
-        if prior_hi > 0 and closes[-1] > prior_hi:
-            days = 0
-            for i in range(len(closes) - 1, -1, -1):
-                if closes[i] > prior_hi:
-                    days += 1
-                else:
-                    break
-            signal_days = days if days > 0 else None
-    return {'dist_to_support_pct': round(dist_sup, 2) if dist_sup is not None else None,
-            'dist_to_resistance_pct': round(dist_res, 2) if dist_res is not None else None,
-            'risk_reward': round(rr, 2) if rr is not None else None,
-            'signal_days': signal_days,
-            'support_price': round(support, 2) if support is not None else None,
-            'resistance_price': round(resistance, 2) if resistance is not None else None}
+    from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
+    geo = calc_support_resistance(df)
+    return {k: geo.get(k) for k in (
+        'dist_to_support_pct', 'dist_to_resistance_pct', 'risk_reward',
+        'signal_days', 'support_price', 'resistance_price')}
 
 
 # ── 从 advice_builder.py 完整迁移（391号方案最终清理）──

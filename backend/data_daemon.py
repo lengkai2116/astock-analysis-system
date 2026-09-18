@@ -3048,6 +3048,28 @@ def _precompute_market_stats(target_date: str | None = None):
         logger.warning(f"市场级统计预计算失败: {e}")
 
 
+def _pick_volume_ratio(_db, trade_date):
+    """461-10：跨表日期对齐挑选量比真值（供 _raw2_one volume_price 组调用，纯函数便于单测）。
+
+    - 优先取与 trade_date 同日的 volume_ratio（回补/target_date 截断时避免取到更新日期错日）。
+    - 缺当日数据时回退 latest 非空量比（容忍采集滞后，维持 459 R4-b 兜底语义）。
+    - 无可用量比返回 1.0 兜底。
+    """
+    try:
+        if _db is None or getattr(_db, 'empty', True) or not hasattr(_db, 'columns') or 'volume_ratio' not in _db.columns:
+            return 1.0
+        _td = str(trade_date).replace('-', '')[:8]
+        _db_d = _db.copy()
+        _tds = _db_d['trade_date'].astype(str).str.replace('-', '').str[:8]
+        _m = _tds == _td
+        _sub = _db_d[_m]['volume_ratio'].dropna() if _m.any() else _db_d['volume_ratio'].dropna()
+        if not _sub.empty:
+            return float(_sub.iloc[-1])
+    except Exception:
+        pass
+    return 1.0
+
+
 def _precompute_raw_features(codes, target_date: str | None = None):
     """原料加工环节：特征提取（RAW-2 FEAT）→ 写入 pre_feat_cache
 
@@ -3119,12 +3141,14 @@ def _precompute_raw_features(codes, target_date: str | None = None):
         # 截面基准构建
         try:
             ve.build_composite_percentile(dm.cache)
-        except Exception:
-            pass
+        except Exception as _e:
+            # 461-12：截面复合分位构建失败（降级不影响主流程），记日志防静默吞
+            logger.warning(f"RAW 截面 composite_percentile 构建失败: {_e}")
         try:
             ve.build_fcf_percentile(dm.cache)
-        except Exception:
-            pass
+        except Exception as _e:
+            # 461-12：截面 FCF 分位构建失败（降级），记日志防静默吞
+            logger.warning(f"RAW 截面 fcf_percentile 构建失败: {_e}")
 
         # 批量加载日线数据
         all_data: dict[str, pd.DataFrame] = {}
@@ -3133,8 +3157,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 df = _ecm.get_cached_daily(code)
                 if df is not None and not df.empty:
                     all_data[code] = df
-            except Exception:
-                pass
+            except Exception as _e:
+                # 461-12：单只日线加载失败（降级），记日志防静默吞
+                logger.debug(f"RAW 日线加载失败 [{code}]: {_e}")
         logger.info(f"  日线数据加载完成: {len(all_data)}/{len(codes)} 只")
 
         # 预计算板块热度（v3.0：传递indicator_ma_dict避免dim引擎直接调用DataManager）
@@ -3147,8 +3172,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         ma_cols = [c for c in ind_df.columns if c.startswith('ma')]
                         if ma_cols:
                             indicator_ma_dict[code] = ind_df[ma_cols]
-                except Exception:
-                    pass
+                except Exception as _e:
+                    # 461-12：单只均线预计算失败（降级），记日志防静默吞
+                    logger.debug(f"RAW 均线预计算失败 [{code}]: {_e}")
             # 442号缺陷④：RAW-2 经 _raw_pool.submit 线程池执行，线程内无 Flask app_context，
             # compute_all_heat 内部 get_stock_industry_batch 依赖 db.session → RuntimeError 被静默吞
             # → sr._cache['all_heat'] 恒空 → sector_heat 全 none（84% 板块数据不足）。
@@ -3160,8 +3186,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             # 板块热度持久化已抽离为独立管道步骤 RAW-2B（_precompute_sector_heat），
             # 在 RAW-2 完成后、SIG 前执行，用独立短连接避免与主循环写锁竞争。
             # 此处仅保留 compute_all_heat 预热 sr._cache['all_heat'] 供下方 sr.evaluate 消费。
-        except Exception:
-            pass
+        except Exception as _e:
+            # 461-12：板块热度预热失败（442 已修复 app_context，此处降级），记日志防静默吞
+            logger.warning(f"RAW 板块热度预热失败: {_e}")
 
         # 市场情绪全局值
         _sentiment_phase_global = 'neutral'
@@ -3192,8 +3219,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                                 sealed += 1
                     if touched > 0:
                         sealing_rate = round(sealed / touched * 100, 1)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    # 461-12：封板率统计失败（降级用默认 0.0），记日志防静默吞
+                    logger.debug(f"RAW 封板率统计失败: {_e}")
                 # 447号 T2a：fallback 枚举对齐源 A 六段论（ice/ferment/climax/ebb），删 recovery；
                 # climax 门槛对齐源 A（limit_up>80 且 sealing>75），无 max_board_height 时可辨识档归
                 # sprout/regression 兜底→ferment（同源 A else 默认语义）
@@ -3205,8 +3233,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     _sentiment_phase_global = 'ice'
                 else:
                     _sentiment_phase_global = 'ferment'
-        except Exception:
-            pass
+        except Exception as _e:
+            # 461-12：市场情绪全局值构建失败（降级 neutral），记日志防静默吞
+            logger.warning(f"RAW 市场情绪全局值构建失败: {_e}")
 
         t0 = time.time()
         succeeded = 0
@@ -3238,18 +3267,21 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             try:
                 v_tags = ve.compute_tags(code)
                 if v_tags:
+                    # 461-9：裸 pe/pb/ps_percentile + roe 白名单空键——ve.compute_tags return
+                    # 只产 _5y 变体（pe_percentile_5y 等）与 composite_rating 等，无裸三键、无 roe；
+                    # 裸 pe_percentile 仅市场级(market_stats, 461-8 已隔离)。移除死白名单，_5y 保留。
                     features['valuation'] = {k: v for k, v in v_tags.items()
-                        if k in ('pe_percentile', 'pb_percentile', 'ps_percentile',
-                                 'pe_percentile_5y', 'pb_percentile_5y', 'ps_percentile_5y',
+                        if k in ('pe_percentile_5y', 'pb_percentile_5y', 'ps_percentile_5y',
                                  'valuation_level', 'valuation_deviation',
                                  'fcf_yield', 'dividend_yield', 'composite_rating',
-                                 'revenue_growth', 'roe', 'fina_health',
+                                 'revenue_growth', 'fina_health',
                                  'asset_anchor_rating', 'earnings_anchor_rating',
-                                 'cashflow_anchor_rating', 'adjusted_anchor_rating')}
+                                 'cashflow_anchor_rating', 'adjusted_anchor_rating',
+                                 'roce_pass', 'value_trap')}
             except Exception as e:
                 logger.warning(f"RAW估值特征失败 [{code}]: {e}")
 
-            # 2. 情绪特征（2字段：sentiment_phase + bociasi_signal）
+            # 2. 情绪特征（1字段：sentiment_phase；461-13 删 bociasi_signal 死键）
             try:
                 _sent = {}
                 # sentiment_phase：始终写入（默认neutral）
@@ -3268,25 +3300,11 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         _sent['sentiment_phase'] = _sentiment_phase_global or 'neutral'
                 except Exception:
                     _sent['sentiment_phase'] = _sentiment_phase_global or 'neutral'
-                # bociasi_signal：跨市场资金情绪（读HS300指数）
-                try:
-                    from app.services.benchmark_service import BenchmarkService
-                    bm = BenchmarkService()
-                    idx_df = bm.get_index_daily('000300.SH')
-                    if idx_df is not None and len(idx_df) >= 20:
-                        idx_close = idx_df['close'].values
-                        fast = float(np.mean(idx_close[-5:]))
-                        slow = float(np.mean(idx_close[-20:]))
-                        _sent['bociasi_signal'] = 'bullish' if fast > slow else 'bearish'
-                    else:
-                        _sent['bociasi_signal'] = 'neutral'
-                except Exception:
-                    _sent['bociasi_signal'] = 'neutral'
                 features['sentiment'] = _sent
             except Exception as e:
                 logger.warning(f"RAW情绪特征失败 [{code}]: {e}")
 
-            # 3. 板块特征（4字段）
+            # 3. 板块特征（2字段：sector_heat + sector_rank；461-13 删 sector_momentum/is_sector_leader 死键）
             try:
                 # 442号缺陷④：_raw2_one 经 _run_with_timeout 在子线程执行（无 app_context），
                 # sr.evaluate 的 get_stock_industry 依赖 db.session → 调用处包应用上下文
@@ -3294,34 +3312,18 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     sector = sr.evaluate(code)
                 features['sector'] = {
                     'sector_heat': sector.get('sector_heat', 0),
-                    # 442号缺陷④：evaluate 返回键为 'rank'/'strength'（sector_rank/sector_momentum 为写入层旧键名，
+                    # 442号缺陷④：evaluate 返回键为 'rank'/'strength'
                     # 键名错位致恒 0）——对齐返回键
                     'sector_rank': sector.get('rank', 0),
-                    'sector_momentum': sector.get('strength', 0),
-                    'is_sector_leader': sector.get('is_sector_leader', False),
                 }
             except Exception as e:
                 logger.warning(f"RAW板块特征失败 [{code}]: {e}")
 
-            # 4. 风格特征（2字段：style_exposure + size_factor）
+            # 4. 风格特征（1字段：style_exposure；461-13 删 size_factor 死键）
             try:
                 style = _compute_style_exposure(code, {}, df)
-                _sz = 'unknown'
-                try:
-                    _db = _ecm.get_cached_daily_basic(code)
-                    if _db is not None and not _db.empty and 'circ_mv' in _db.columns:
-                        circ = float(_db['circ_mv'].iloc[-1] or 0)
-                        if circ > 5e10:
-                            _sz = 'large_cap'
-                        elif circ > 1e10:
-                            _sz = 'mid_cap'
-                        else:
-                            _sz = 'small_cap'
-                except Exception:
-                    pass
                 features['style'] = {
                     'style_exposure': style if isinstance(style, str) else 'balanced',
-                    'size_factor': _sz,
                 }
             except Exception as e:
                 logger.warning(f"RAW风格特征失败 [{code}]: {e}")
@@ -3331,8 +3333,10 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 try:
                     tr_tags = tre.compute_tags(df)
                     if tr_tags:
+                        # 461-9：cycle_position/turnover_signal 白名单空键——
+                        # TimeRhythmEngine.compute_tags 只产 time_rhythm，另两键从不产，移除死白名单
                         features['timing'] = {k: v for k, v in tr_tags.items()
-                            if k in ('time_rhythm', 'cycle_position', 'turnover_signal')}
+                            if k in ('time_rhythm',)}
                 except Exception as e:
                     logger.warning(f"RAW时间特征失败 [{code}]: {e}")
 
@@ -3342,24 +3346,21 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     vp_tags = vps._detect_kline_patterns(df)
                     _simple = {}
                     _add_vp_simple_tags(df, _simple)
-                    # 459号 R4-b：量比接真实生产点 —— _compute_volume_ratio 已回写
-                    # daily_basic_cache.volume_ratio，此处读真值而非《_add_vp_simple_tags》恒默认 1.0
-                    #（此前恒 1.0 致 dim3 量能维度、derived.volatility_level 全失真）。
-                    _vr = 1.0
+                    # 459号 R4-b + 461-10：量比接真实生产点 _compute_volume_ratio 已回写
+                    # daily_basic_cache.volume_ratio，此处读真值（不再恒 1.0），并按特征
+                    # trade_date 跨表日期对齐（回补避免错日），见 _pick_volume_ratio。
+                    _db = None
                     try:
                         _db = _ecm.get_cached_daily_basic(code)
-                        if _db is not None and not _db.empty and 'volume_ratio' in _db.columns:
-                            _last = _db['volume_ratio'].dropna()
-                            if not _last.empty:
-                                _vr = float(_last.iloc[-1])
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        # 461-12：daily_basic 读取失败，量比回退，记日志防静默吞
+                        logger.debug(f"RAW量价 daily_basic 读取失败 [{code}]: {_e}")
+                        _db = None
+                    _vr = _pick_volume_ratio(_db, trade_date)
                     features['volume_price'] = {
                         'kline_pattern': vp_tags.get('pattern_signal', 'none'),
                         'ma_alignment': _simple.get('ma_alignment', 'neutral'),
                         'volume_price_fit': _simple.get('volume_price_fit', 'neutral'),
-                        'gap_type': _simple.get('gap_type', 'none'),
-                        'breakout_attempts': _simple.get('breakout_attempts', 0),
                         'volume_ratio': _vr,
                     }
                 except Exception as e:
@@ -3372,9 +3373,11 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     cl = ChanlunAnalyzer()
                     cl_result = cl.analyze(df)
                     cl_tags = _get_chanlun_tags(cl_result)
+                    # 461-9：trend_direction/zhongshu_count/bi_count/duan_count 白名单空键——
+                    # get_chanlun_tags 只产 buy_sell_point，另 4 键从不产（461-7 已改直读 cl_result['trend']），
+                    # 移除死白名单
                     features['chanlun'] = {k: v for k, v in (cl_tags or {}).items()
-                        if k in ('trend_direction', 'zhongshu_count', 'buy_sell_point',
-                                 'bi_count', 'duan_count')}
+                        if k in ('buy_sell_point',)}
                 except Exception as e:
                     logger.warning(f"RAW缠论特征失败 [{code}]: {e}")
 
@@ -3382,18 +3385,20 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             if len(df) >= 30:
                 try:
                     chip_tags = cde.get_tags(df)
+                    # 461-9：asr/cyqkl 白名单空键——ChipDistributionEstimator.get_tags 只产
+                    # chip_position/chip_concentration，另两键从不产（dim4:5676/5685 读但恒 None，
+                    # 移除后行为不变），清理死白名单
                     features['chip'] = {k: v for k, v in (chip_tags or {}).items()
-                        if k in ('chip_position', 'chip_concentration', 'asr', 'cyqkl')}
+                        if k in ('chip_position', 'chip_concentration')}
                 except Exception as e:
                     logger.warning(f"RAW筹码特征失败 [{code}]: {e}")
 
-            # 9. 事件特征（5字段，含dim6消费的event_details/event_risk_factors）
+            # 9. 事件特征（4字段，含dim6消费的event_details/event_risk_factors；461-13 删 catalyst_impact 死键）
             try:
                 _evt_tags = {}
                 _update_with_event_tags(code, _evt_tags)
                 features['event'] = {
                     'catalyst_event': _evt_tags.get('catalyst_event', 'none'),
-                    'catalyst_impact': _evt_tags.get('catalyst_impact', 'neutral'),
                     'event_composite_score': _evt_tags.get('event_composite_score', 0),
                     'event_details': _evt_tags.get('event_details', []),
                     'event_risk_factors': _evt_tags.get('event_risk_factors', []),
@@ -3401,12 +3406,79 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             except Exception as e:
                 logger.warning(f"RAW事件特征失败 [{code}]: {e}")
 
-            # 10. 深度字段（8字段，独立调用不依赖 phase_detector）
+            # 10. 深度字段（8字段）——461-6：接线真生产者，替代 460 死键
+            #     原实现从 extract_*_deep_tags 取键名（缠论/chip_deep/fund_risk 组），
+            #     与本组 8 键（hold_float_ratio/.../presence_evidence）错位 → 恒 None → 扁平化整组丢弃，
+            #     导致 dim6/status_engine 的 main_force_phase/main_force_presence 缺省。
+            #     现改接真实生产者：PhaseDetectionEngine（main_force_phase/phase_confidence）、
+            #     MainForceScorer（fund_flow/capital_nature）、_compute_main_force_presence（主在场）、
+            #     及 hold_float_ratio/turnover_rate 补生产。
             try:
                 _depth = {}
-                _depth.update(extract_chanlun_deep_tags(code))
-                _depth.update(extract_chip_deep_tags(code))
-                _depth.update(extract_fund_risk_tags(code))
+                # ① 主力阶段（PhaseDetectionEngine：main_force_phase/phase_confidence）
+                try:
+                    from app.opportunity_atlas.phase_detector import PhaseDetectionEngine
+                    _extra = {}
+                    _cl_tags = features.get('chanlun', {})
+                    if _cl_tags.get('buy_sell_point'):
+                        _extra['buy_sell_point'] = _cl_tags['buy_sell_point']
+                    _phase = PhaseDetectionEngine().compute_tags(code, df, extra_tags=_extra) or {}
+                    _depth['main_force_phase'] = _phase.get('main_force_phase')
+                    _depth['phase_confidence'] = _phase.get('phase_confidence')
+                    # 461-7：PhaseDetectionEngine 已产出 price_position（120日分位，真实 SSOT）/
+                    # trend_alignment（up/down/mixed/no_trend），原先被丢弃——补进 depth 供 derived 消费。
+                    _depth['price_position'] = _phase.get('price_position')
+                    _depth['trend_alignment'] = _phase.get('trend_alignment')
+                except Exception as _e:
+                    logger.debug(f"RAW深度主力阶段失败 [{code}]: {_e}")
+                # ② 资金流向/资金属性（MainForceScorer：fund_flow/capital_nature）
+                try:
+                    from app.engine.framework.chip_strategy import MainForceScorer
+                    _mfs = MainForceScorer().get_tags(code) or {}
+                    _depth['fund_flow'] = _mfs.get('fund_flow')
+                    _depth['capital_nature'] = _mfs.get('capital_nature')
+                except Exception as _e:
+                    logger.debug(f"RAW深度资金标签失败 [{code}]: {_e}")
+                # ③ 主力在场证据（_compute_main_force_presence：main_force_presence/presence_evidence）
+                try:
+                    _pres = _compute_main_force_presence(code, _ecm)
+                    _depth['main_force_presence'] = _pres.get('main_force_presence')
+                    _depth['presence_evidence'] = _pres.get('presence_evidence')
+                except Exception as _e:
+                    logger.debug(f"RAW深度主力在场失败 [{code}]: {_e}")
+                # ④ hold_float_ratio/turnover_rate 补生产（461-6：控盘度/换手率
+                #    ——hold_float_ratio 从 top10_holders_cache 前十大股东合计/均值；
+                #    turnover_rate 接 daily_basic.turnover_rate 实时列）
+                try:
+                    _hf_n = 0
+                    _hf_sum = 0.0
+                    try:
+                        for _r in (_ecm.get_cached_top10_holders(code) or []):
+                            _hr = _r.get('hold_float_ratio') if isinstance(_r, dict) else None
+                            if _hr is None:
+                                continue
+                            try:
+                                _hf_sum += float(_hr)
+                                _hf_n += 1
+                            except (TypeError, ValueError):
+                                # 461-12：单条持仓比例非法，跳过该项，记日志防静默吞
+                                logger.debug(f"RAW控盘度持仓比例非数值 [{code}]: {_hr!r}")
+                    except Exception as _e:
+                        # 461-12：前十大股东读取失败，hold_float_ratio 不产，记日志防静默吞
+                        logger.debug(f"RAW控盘度 top10 股东读取失败 [{code}]: {_e}")
+                    if _hf_n:
+                        _depth['hold_float_ratio'] = str(round(_hf_sum / _hf_n, 4))
+                    try:
+                        _tb = _ecm.get_cached_daily_basic(code)
+                        if _tb is not None and not _tb.empty and 'turnover_rate' in _tb.columns:
+                            _tr = _tb['turnover_rate'].dropna()
+                            if not _tr.empty:
+                                _depth['turnover_rate'] = str(round(float(_tr.iloc[-1]), 2))
+                    except Exception as _e:
+                        # 461-12：换手率读取失败，turnover_rate 不产，记日志防静默吞
+                        logger.debug(f"RAW换手率读取失败 [{code}]: {_e}")
+                except Exception as _e:
+                    logger.debug(f"RAW深度控盘/换手失败 [{code}]: {_e}")
                 features['depth'] = {
                     'hold_float_ratio': _depth.get('hold_float_ratio'),
                     'turnover_rate': _depth.get('turnover_rate'),
@@ -3416,6 +3488,8 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     'capital_nature': _depth.get('capital_nature'),
                     'main_force_presence': _depth.get('main_force_presence'),
                     'presence_evidence': _depth.get('presence_evidence'),
+                    'price_position': _depth.get('price_position'),
+                    'trend_alignment': _depth.get('trend_alignment'),
                 }
             except Exception as e:
                 logger.warning(f"RAW深度字段失败 [{code}]: {e}")
@@ -3430,22 +3504,48 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             try:
                 _derived = {}
                 _val = features.get('valuation', {})
-                # 位置维
-                _derived['price_position'] = 'low_zone' if _cl.get('buy_sell_point', '') in ('first_buy', 'second_buy') else ('high_zone' if _cl.get('buy_sell_point', '') in ('first_sell', 'second_sell') else 'mid')
-                _derived['support_resistance'] = _depth_f.get('support_resistance', '{}')
+                # 461-7：位置维统一接真实 SSOT——
+                #   price_position 来自 PhaseDetectionEngine（120日价格分位 120 日分位，low/mid/high_zone，
+                #     已在 depth 组接线），不再用 buy_sell_point 代理；support_resistance 接
+                #     shared_support_resistance.calc_support_resistance（唯一源，460 §四 ✅ 一致项），
+                #     替代原 `_depth_f.get('support_resistance','{}')`（depth 组从无此键 → 恒 '{}' 假值）。
+                _derived['price_position'] = _depth_f.get('price_position', 'mid_zone')
+                try:
+                    import json as _json
+                    _sr = calc_support_resistance(df)
+                    _derived['support_resistance'] = _json.dumps({
+                        'support': _sr.get('support_price'),
+                        'resistance': _sr.get('resistance_price'),
+                    }, ensure_ascii=False)
+                except Exception as _e:
+                    # 461-12：support_resistance JSON 化失败，兜底 '{}'，记日志防静默吞
+                    logger.debug(f"RAW衍生 support_resistance 计算失败 [{code}]: {_e}")
+                    _derived['support_resistance'] = '{}'
                 # 风险维
-                _derived['volatility_level'] = _vp_f.get('volume_ratio', 1.0) and ('high' if abs(float(_vp_f.get('volume_ratio', 1.0) or 1) - 1) > 0.5 else 'low')
-                _derived['risk_level'] = 'HIGH' if _depth_f.get('main_force_phase') == 'shipping' else 'LOW'
+                # 461-4：volatility_level 移除 derived 量比代理（量比≠波动率，语义错误），
+                # 统一由 risk_ext `_calc_volatility(df,...)`（未年化 20 日 std 档位）SSOT 产出。
+                # 461-7：risk_level 保持现状单源（用户拍板）——HIGH iff 主力出货(distributing)，
+                #         作 dim6 缠论风险输入的真实来源，偏"判定"语义，符合 445 冻结不越界。
+                _derived['risk_level'] = 'HIGH' if _depth_f.get('main_force_phase') == 'distributing' else 'LOW'
                 # 信号确认
                 _derived['right_side_confirm'] = 'strong_confirm' if _cl.get('buy_sell_point', '') in ('first_buy', 'second_buy') and _vp_f.get('volume_price_fit') == 'healthy' else 'unconfirmed'
                 _derived['pattern_signal'] = _vp_f.get('kline_pattern', 'none')
                 # 生命信号
                 _derived['active_signal'] = _cl.get('buy_sell_point', '') if _cl.get('buy_sell_point', '') not in ('none',) else None
-                # 状态标签
-                _derived['state_label'] = _cl.get('trend_direction', 'unknown')
-                _derived['trend_alignment'] = 'aligned' if _cl.get('trend_direction') == 'up' and _vp_f.get('ma_alignment') == 'bullish' else 'misaligned'
-                # 利润比
-                _derived['profit_ratio'] = _chip_f.get('chip_position', 0)
+                # 状态标签（461-7：state_label 接 chanlun 缠论 trend 真值（up/down/unknown），
+                #   替代原 trend_direction（chanlun get_chanlun_tags 从不产该键 → 恒 'unknown' 假值）；
+                #   trend_alignment 接 PhaseDetectionEngine trend_alignment（up_aligned/down_aligned/
+                #   mixed/no_trend 原始值域，多周期斜率一致），替代原 trend_direction×ma_alignment 代理
+                #   （trend_direction 无生产 → 恒 'misaligned' 假值）。透传原值，与 status_engine:676 /
+                #   arbiter:226 的 `== 'up_aligned'/'down_aligned'` 冲突检测判读一致。
+                _cl_trend = _cl.get('trend_direction', '')
+                if _cl_trend not in ('up', 'down', '上升', '下降'):
+                    _cl_trend = (cl_result.get('trend', 'unknown') if 'cl_result' in dir() else 'unknown')
+                _derived['state_label'] = '上升' if _cl_trend in ('up', '上升') else ('下降' if _cl_trend in ('down', '下降') else '盘整')
+                _derived['trend_alignment'] = _depth_f.get('trend_alignment', 'no_trend')
+                # 利润比（461-7：profit_ratio 由 chip_fund_ext 单源生产，derived 不再从 chip_position
+                #   （字符串枚举，非数值）代理——derived 组序在 chip_fund_ext(13) 之前，此键会被其后写
+                #   覆盖，removed 该假生产，避免 chip_fund_ext 缺失时以错误类型泄漏）。
                 if _derived:
                     features['derived'] = _derived
             except Exception as e:
@@ -3459,9 +3559,12 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 else:
                     _risk_feat['volatility_percentile'] = None
                 # 411号Phase 9：几何化指标+波动率预计算
+                # 461-11：几何化指标统一由 shared.calc_support_resistance（唯一 SSOT）产出，
+                #         替代原 dim6.calc_geometric 副本；signal_days/dist_to_prev_high_pct 已并入 shared。
                 try:
-                    from app.opportunity_atlas.dimensions.dim6_risk_engine import calc_geometric, _calc_volatility
-                    geo = calc_geometric(df)
+                    from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
+                    from app.opportunity_atlas.dimensions.dim6_risk_engine import _calc_volatility
+                    geo = calc_support_resistance(df)
                     _risk_feat['support_price'] = geo.get('support_price')
                     _risk_feat['resistance_price'] = geo.get('resistance_price')
                     _risk_feat['dist_to_support_pct'] = geo.get('dist_to_support_pct')
@@ -3473,8 +3576,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     _risk_feat['atr_14d'] = vol.get('atr_14d', 0)
                     _risk_feat['atr_pct'] = vol.get('atr_pct', 0)
                     _risk_feat['volatility_level'] = vol.get('level', 'unknown')
-                except Exception:
-                    pass
+                except Exception as _e:
+                    # 461-12：几何/波动率预计算失败，risk_ext 留空，记日志防静默吞
+                    logger.debug(f"RAW风险几何/波动率计算失败 [{code}]: {_e}")
                 features['risk_ext'] = _risk_feat
             except Exception as e:
                 logger.warning(f"RAW风险扩展字段失败 [{code}]: {e}")
@@ -3518,10 +3622,12 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     mfs = MainForceScorer()
                     _sub = mfs.get_sub_scores(df, symbol=code, chip_fund_ext=_chip_fund_feat)
                     _chip_fund_feat['fund_flow_strength'] = min(1.0, max(0.0, (_sub.get('total', 0) or 0) / 10.0))
-                except Exception:
+                except Exception as _e:
+                    # 461-12：fund_flow_strength 计算失败，兜底 None，记日志防静默吞
+                    logger.debug(f"RAW筹码 fund_flow_strength 计算失败 [{code}]: {_e}")
                     _chip_fund_feat['fund_flow_strength'] = None
                 # chip_transfer: 筹码转移方向
-                _chip_fund_feat['chip_transfer'] = _depth_f.get('main_force_phase', 'unknown') if _depth_f.get('main_force_phase') in ('accumulating', 'shipping') else 'neutral'
+                _chip_fund_feat['chip_transfer'] = _depth_f.get('main_force_phase', 'unknown') if _depth_f.get('main_force_phase') in ('lifting', 'distributing') else 'neutral'
                 # control_degree: 控盘度
                 _chip_fund_feat['control_degree'] = _depth.get('hold_float_ratio')
                 features['chip_fund_ext'] = _chip_fund_feat
@@ -3540,16 +3646,10 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                             _fund_5d_feat['net_lg_5d'] = net_5d
                             pos_count = int((net_lg.iloc[-5:] > 0).sum())
                             _fund_5d_feat['net_lg_5d_positive_ratio'] = pos_count / 5.0
-                            # 连续流入天数
-                            consecutive = 0
-                            for v in reversed(net_lg.values):
-                                if v > 0:
-                                    consecutive += 1
-                                else:
-                                    break
-                            _fund_5d_feat['net_lg_5d_consecutive'] = consecutive
-                except Exception:
-                    pass
+                            # 461-13 删 net_lg_5d_consecutive 死键（app 层零消费者）
+                except Exception as _e:
+                    # 461-12：5日资金聚合失败，fund_5d_ext 留空，记日志防静默吞
+                    logger.debug(f"RAW 5日资金聚合内层失败 [{code}]: {_e}")
                 features['fund_5d_ext'] = _fund_5d_feat
             except Exception as e:
                 logger.debug(f"RAW 5日资金聚合失败 [{code}]: {e}")
@@ -3567,8 +3667,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         _val_feat['pb'] = float(latest.get('pb', 0) or 0)
                         _val_feat['ps_ttm'] = float(latest.get('ps_ttm', 0) or 0)
                         _val_feat['total_mv'] = float(latest.get('total_mv', 0) or 0)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    # 461-12：daily_basic 估值读取失败，估值字段留空，记日志防静默吞
+                    logger.debug(f"RAW估值指标 PE/PB 读取失败 [{code}]: {_e}")
                 # 财务健康指标
                 try:
                     fina_df = dm.get_cached_fina_indicator(code)
@@ -3577,8 +3678,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         _val_feat['roe'] = float(latest_fina.get('roe', 0) or 0)
                         _val_feat['roce'] = float(latest_fina.get('roce', 0) or 0)
                         _val_feat['grossprofit_margin'] = float(latest_fina.get('grossprofit_margin', 0) or 0)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    # 461-12：财务健康读取失败，财务字段留空，记日志防静默吞
+                    logger.debug(f"RAW估值指标财务读取失败 [{code}]: {_e}")
                 features['valuation_ext'] = _val_feat
             except Exception as e:
                 logger.debug(f"RAW估值指标失败 [{code}]: {e}")
@@ -3592,13 +3694,14 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     _latest_close = float(df['close'].values[-1]) if len(df) > 0 else 0.0
                     _cost_feat['main_force_cost'] = mfs._calc_main_force_cost(code, _latest_close) if len(df) >= 20 and code else None
                     _cost_feat['margin_cost_price'] = mfs._calc_margin_cost_price(code, _latest_close) if code and _latest_close > 0 else None
-                except Exception:
-                    pass
+                except Exception as _e:
+                    # 461-12：成本价预计算失败，cost_ext 留空，记日志防静默吞
+                    logger.debug(f"RAW成本价计算失败 [{code}]: {_e}")
                 features['cost_ext'] = _cost_feat
             except Exception as e:
                 logger.debug(f"RAW成本价失败 [{code}]: {e}")
 
-            # 18. 411号Phase 13：量指标预计算
+            # 18. 411号Phase 13：量指标预计算（461-13 删 volatility_20d/roc_20 死键，vol_ma 被 volume_price_strategy 消费）
             try:
                 _vol_feat = {}
                 if len(df) >= 20:
@@ -3608,13 +3711,6 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     _vol_feat['vol_ma5'] = float(vol.rolling(5).mean().iloc[-1]) if len(vol) >= 5 else None
                     _vol_feat['vol_ma10'] = float(vol.rolling(10).mean().iloc[-1]) if len(vol) >= 10 else None
                     _vol_feat['vol_ma20'] = float(vol.rolling(20).mean().iloc[-1]) if len(vol) >= 20 else None
-                    # 波动率
-                    returns = close.pct_change().dropna()
-                    if len(returns) >= 20:
-                        _vol_feat['volatility_20d'] = float(returns.iloc[-20:].std() * (252 ** 0.5))
-                    # ROC
-                    if len(close) >= 20:
-                        _vol_feat['roc_20'] = float((close.iloc[-1] / close.iloc[-20] - 1) * 100)
                 features['volume_ext'] = _vol_feat
             except Exception as e:
                 logger.debug(f"RAW量指标失败 [{code}]: {e}")
@@ -3715,7 +3811,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
 
 
 def _add_vp_simple_tags(df, tags):
-    """计算简单量价标签：ma_alignment / volume_price_fit / volatility_level / gap_type / breakout_attempts"""
+    """计算简单量价标签：ma_alignment / volume_price_fit / volatility_level（461-13 删 gap_type/breakout_attempts 死算）"""
     closes = df['close'].values
     opens = df['open'].values if 'open' in df.columns else closes
     highs = df['high'].values if 'high' in df.columns else closes
@@ -3761,30 +3857,6 @@ def _add_vp_simple_tags(df, tags):
                 tags['volatility_level'] = 'medium'
             else:
                 tags['volatility_level'] = 'low'
-
-        # gap_type: 最近5日跳空
-        gap_found = False
-        for i in range(-min(5, len(closes)), 0):
-            if i < -1:
-                prev_high = highs[i-1] if abs(i-1) < len(highs) else highs[i]
-                cur_low = lows[i]
-                if cur_low > prev_high * 1.005:
-                    tags['gap_type'] = 'common' if abs(i) > 2 else 'breakaway'
-                    gap_found = True
-                    break
-        if not gap_found:
-            tags['gap_type'] = 'none'
-
-        # breakout_attempts: 近60日突破尝试次数
-        if len(closes) >= 60:
-            current = closes[-1]
-            nearby_mask = np.abs(closes[-60:] - current) / max(current, 1) < 0.03
-            vol_avg = np.mean(vols[-60:])
-            attempts = 0
-            for j in range(len(closes) - 60, len(closes)):
-                if nearby_mask[j - (len(closes) - 60)] and vols[j] > vol_avg * 1.5:
-                    attempts += 1
-            tags['breakout_attempts'] = min(attempts, 4)
 
         # pattern_signal: EnhancedPatternDetector 完整形态检测（308号/309号 S1）
         # 45+ 种规则（预涨/预跌/黑马/K线反转），预跌型优先（否决语义：风险信号比确认信号更重要）
@@ -5747,16 +5819,16 @@ def _drive_pipeline():
                 batch = _codes[i:i+batch_size]
                 # 424号P0-4：财务函数已收敛 TushareProvider 且接受 codes 参数
                 # （原实现把 codes 列表误当 limit_days/trade_date 传入，致财务同步退化）
-                try: _batch_fina_indicator()
-                except: pass
+                try: _batch_fina_indicator(batch)
+                except Exception as _e: logger.debug(f"COL-7 财务指标同步失败跳过: {_e}")
                 try: _batch_income_recent(batch)
-                except: pass
+                except Exception as _e: logger.debug(f"COL-7 收入同步失败跳过: {_e}")
                 try: _batch_balancesheet(batch)
-                except: pass
+                except Exception as _e: logger.debug(f"COL-7 资产负债同步失败跳过: {_e}")
                 try: _batch_cashflow(batch)
-                except: pass
+                except Exception as _e: logger.debug(f"COL-7 现金流同步失败跳过: {_e}")
                 try: _batch_forecast(batch)
-                except: pass
+                except Exception as _e: logger.debug(f"COL-7 业绩预告同步失败跳过: {_e}")
             logger.info(f"  财务全量同步完成: {len(_codes)} 只")
         try:
             _run_pipeline_step(today, 'COL-7', _col_financial, codes)
@@ -6212,7 +6284,7 @@ def _precompute_strategy_signals(codes):
                 if dim_results:
                     try:
                         from app.opportunity_atlas.status_engine import build_seven_dim_from_dim_results
-                        seven_dim = build_seven_dim_from_dim_results(dim_results, tags=_tags)
+                        seven_dim = build_seven_dim_from_dim_results(dim_results, tags=_tags, ts_code=ts_code)
                     except Exception:
                         seven_dim = None
                 rows.append((ts_code, rd.get('trade_date', datetime.now().strftime('%Y-%m-%d')),

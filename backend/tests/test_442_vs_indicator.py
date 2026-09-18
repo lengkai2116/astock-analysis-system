@@ -15,14 +15,14 @@ class TestAssessVsIndicator:
         assert r['detail'] == '均线空头排列'
 
     def test_ma_mixed_with_rsi(self):
-        """rsi_percentile 0-1 归一化 → 百分位显示"""
-        r = _assess_vs_indicator({'indicator_status': 'ma=mixed,trend=', 'rsi_percentile': 0.68})
-        assert r['detail'] == '均线纠缠，RSI分位68'
+        """461-1：rsi 个股真值（0-100）→ 强弱分档描述"""
+        r = _assess_vs_indicator({'indicator_status': 'ma=mixed,trend=', 'rsi': 68})
+        assert r['detail'] == '均线纠缠，RSI 68 中性'
 
     def test_unknown_ma_value(self):
         """indicator_status 有值但 ma 值不在映射 → 忽略，仅 RSI"""
-        r = _assess_vs_indicator({'indicator_status': 'ma=weird', 'rsi_percentile': 0.30})
-        assert r['detail'] == 'RSI分位30'
+        r = _assess_vs_indicator({'indicator_status': 'ma=weird', 'rsi': 30})
+        assert r['detail'] == 'RSI 30 偏弱'
 
     def test_no_data(self):
         assert _assess_vs_indicator({})['detail'] == '指标数据不足'

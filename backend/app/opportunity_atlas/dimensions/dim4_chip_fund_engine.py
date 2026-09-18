@@ -5112,23 +5112,33 @@ class CrowdingFactor:
     def name(self) -> str:
         return self._name
 
-    def calc_margin_ratio(self, ts_code: str) -> Optional[float]:
+    def calc_margin_ratio(self, ts_code: str, market_context: Optional[Dict] = None) -> Optional[float]:
         """
         计算融资余额占比。
         融资余额占比 = 融资余额 / 流通市值。
 
         Args:
             ts_code: 股票代码
+            market_context: 市场上下文（可选），含 margin_df（461-5：dim1 data_context 缓存）
 
         Returns:
             Optional[float]: 融资余额占比，数据不可用时返回 None
         """
+        # 461-5：优先读 dim1 预载缓存的 margin_df（data_context, market_context），
+        # 回退缓存读取 get_cached_margin，最后才 Tushare 实时 API get_margin
+        # （原 calc_margin_ratio 恒 API 直查，绕过 dim1 且每次 evaluate 打接口——460 偏差2）。
         try:
-            from app.data import DataManager
-            dm = DataManager()
-            margin_df = dm.get_margin(ts_code)
+            margin_df = market_context.get('margin_df') if market_context else None
+            if margin_df is None or (hasattr(margin_df, 'empty') and margin_df.empty):
+                from app.data import DataManager
+                dm = DataManager()
+                margin_df = dm.get_cached_margin(ts_code)
+            if margin_df is None or (hasattr(margin_df, 'empty') and margin_df.empty):
+                from app.data import DataManager
+                dm = DataManager()
+                margin_df = dm.get_margin(ts_code)
 
-            if margin_df is None or margin_df.empty:
+            if margin_df is None or (hasattr(margin_df, 'empty') and margin_df.empty):
                 return None
 
             # 取最新一条融资数据
@@ -5309,7 +5319,7 @@ class CrowdingFactor:
         # 1. 融资余额占比
         margin_ratio = None
         try:
-            margin_ratio = self.calc_margin_ratio(ts_code)
+            margin_ratio = self.calc_margin_ratio(ts_code, market_context=market_context)
         except Exception:
             pass
 
@@ -5870,7 +5880,8 @@ class Dim4ChipFundEngine(DataAwareMixin):
                     df = ecm.get_cached_daily(ts_code)
                 if df is not None and not df.empty:
                     cf = CrowdingFactor()
-                    cr = cf.evaluate(ts_code, df)
+                    _mc = {'margin_df': data_context.get('margin_df')} if data_context else {}
+                    cr = cf.evaluate(ts_code, df, market_context=_mc)
                     crowding = {'level': cr.get('crowding_level', 'MODERATE_CROWDING'), 'detail': cr.get('risk_advice', ''),
                                  'score': cr.get('crowding_score', 0.5)}
         except: pass

@@ -696,7 +696,7 @@ class Dim7ValuationEngine(DataAwareMixin):
         return -2.0
 
 
-    def _compute_valuation(self, ts_code: str, ecm, data_context: dict = None) -> dict:
+    def _compute_valuation(self, ts_code: str, ecm, data_context: dict = None, tags: dict = None) -> dict:
         """四锚加权估值 → 返回完整估值标签
 
         418号修复：恢复 2a34db1 提交中被截断的主体（a1-a5 四锚加权 + 质量调整 +
@@ -783,12 +783,28 @@ class Dim7ValuationEngine(DataAwareMixin):
         composite = w1 * a1 + w2 * a2 + w3 * a3 + w4 * a4 + w5 * a5
         composite = max(-2.0, min(2.0, composite))
 
-        # 财务健康质量调整 + 科技/成长营收增长加分（418号：接线 _adjust_composite）
-        fina_health, roce_pass, roce_na = self._fina_health(ts_code, ecm)
+        # ── 461-2：fina_health 双生产统一——SSOT = RAW 侧 tags（ve.compute_tags 预计算，daemon 白名单取）。
+        #    原 dim7 运行时 `self._fina_health(ts_code, ecm)` 独立重算五表，绕过 dim1 且与 RAW 打架。
+        #    现改为优先读 tags.fina_health/roce_pass/value_trap（ve 已产；roce_pass/value_trap 461-2 补进白名单）。
+        #    兜底：tags 缺 fina_health（直接 evaluate / 旧调用）时保留运行时重算，保持兼容。 ──
+        if tags:
+            fina_health = str(tags.get('fina_health', '') or '')
+            _rcp = tags.get('roce_pass')
+            _vt = tags.get('value_trap')
+            if not fina_health:
+                fina_health, _rcp_u, _rna_u = self._fina_health(ts_code, ecm)
+                if _rcp is None: _rcp = _rcp_u
+                if _vt is None: _vt = (not _rcp_u and not _rna_u)
+            roce_pass = bool(_rcp) if _rcp is not None else (fina_health and fina_health not in ('',))
+            try: value_trap = bool(_vt) if _vt is not None else False
+            except Exception: value_trap = False
+        else:
+            fina_health, roce_pass, roce_na = self._fina_health(ts_code, ecm)
+            value_trap = (not roce_pass and not roce_na)
 
         # 449 估值陷阱惩罚（对齐外部 wiki：价值陷阱结合 ROCE、成长陷阱 PEG>2 自动降级）
         # ROCE 惩罚仅在有数据且<15%时触发（无数据默认通过，对齐 dim4 _check_roce）
-        if not roce_pass and not roce_na:
+        if value_trap:
             composite -= 0.3  # 价值陷阱：ROCE<15% 惩罚
         if peg_gt2:
             composite -= 0.5  # 成长陷阱：PEG>2 自动降级
@@ -875,7 +891,7 @@ class Dim7ValuationEngine(DataAwareMixin):
             'revenue_growth': revenue_growth,
             'fina_health': fina_health,
             'roce_pass': roce_pass,
-            'value_trap': (not roce_pass and not roce_na),
+            'value_trap': value_trap,
             'growth_trap': peg_gt2,
             'composite_rating': round(composite, 4),
             'asset_anchor_rating': round(a1, 1),
@@ -961,7 +977,7 @@ class Dim7ValuationEngine(DataAwareMixin):
         ecm = self._get_dm().cache
 
         # 1. 四锚加权估值（传入data_context以减少DB调用）
-        val = self._compute_valuation(ts_code, ecm, data_context=data_context)
+        val = self._compute_valuation(ts_code, ecm, data_context=data_context, tags=tags)
         level = val['valuation_level']
         deviation = val['valuation_deviation']
 
