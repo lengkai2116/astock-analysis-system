@@ -93,14 +93,14 @@ def test_trend_structure_returns_assumptions():
 
 
 # ═══════════════════════════════════════════════════════════
-# F-15: fractal_threshold_pct 默认值为0.5
+# F-15: fractal_threshold_pct 默认值为0.3（463号：0.5→0.3，用户拍板平衡档）
 # ═══════════════════════════════════════════════════════════
 
 def test_fractal_threshold_default():
-    """ChanlunAnalyzer默认fractal_threshold_pct=0.5"""
+    """ChanlunAnalyzer默认fractal_threshold_pct=0.3"""
     analyzer = ChanlunAnalyzer()
-    assert analyzer.fractal_detector.threshold_pct == 0.5, \
-        f"Expected 0.5, got {analyzer.fractal_detector.threshold_pct}"
+    assert analyzer.fractal_detector.threshold_pct == 0.3, \
+        f"Expected 0.3, got {analyzer.fractal_detector.threshold_pct}"
 
 
 def test_fractal_threshold_custom():

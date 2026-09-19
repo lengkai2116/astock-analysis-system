@@ -89,15 +89,15 @@ class TestTrendZhongshu:
         a.strokes = [_mk_stroke('up')]
         a.klines = [_mk_kline(close=1.05)]
         assert a._determine_trend() == 'up'
-        assert a._determine_trend_basis() == '无中枢-最后笔方向'
+        assert a._determine_trend_basis() == '无中枢-最近3笔方向'
 
     def test_no_zs_fallback_segment(self):
-        """场景4b：线段模式无中枢 → 兜底最后段方向"""
+        """场景4b：线段模式无中枢 → 兜底最近3段方向"""
         a = _mk_analyzer(bi_zs_mode=False)
         a.zhongshu_list = []
         a.segments = [_mk_segment('up')]
         assert a._determine_trend() == 'up'
-        assert a._determine_trend_basis() == '无中枢-最后段方向'
+        assert a._determine_trend_basis() == '无中枢-最近3段方向'
 
     def test_trend_basis_in_result(self):
         """场景5：analyze 结果含 trend_basis 输出"""

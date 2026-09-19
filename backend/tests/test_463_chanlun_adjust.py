@@ -133,13 +133,51 @@ class TestDetermineTrendEffectiveZs:
         return a
 
     def test_stale_zs_falls_back_to_segment(self):
-        # 旧中枢失效 → 走最后段方向兜底
+        # 旧中枢失效 + 价格不在中枢区间内 → 近3段方向多数兜底
         stale = _mk_zs('2025-01-01', '2025-03-01', 19.0, 23.0)
         klines = [KLine(idx=0, open=1, high=1, low=1, close=3.0, date='2026-09-17')]
         seg = type('_S', (), {'direction': 'down'})()
         a = self._analyzer([stale], klines, segments=[seg])
         assert a._determine_trend() == 'down'
-        assert a._determine_trend_basis() == '无中枢-最后段方向'
+        assert a._determine_trend_basis() == '无中枢-最近3段方向'
+
+    def test_long_term_sideways_consolidation(self):
+        # 463优化2：长期横盘——旧中枢失效但价格仍在其区间内 → 判盘整（非趋势化）
+        stale = _mk_zs('2025-01-01', '2025-03-01', 10.0, 15.0)  # 000001 场景
+        klines = [KLine(idx=0, open=1, high=1, low=1, close=12.0, date='2026-09-17')]
+        seg = type('_S', (), {'direction': 'down'})()  # 段方向向下（横盘内波动）
+        a = self._analyzer([stale], klines, segments=[seg])
+        assert a._determine_trend() == 'unknown'  # 价格仍在历史中枢区间 → 盘整
+        assert a._determine_trend_basis() == '价格仍在历史中枢区间（长期横盘）'
+
+    def test_price_range_sideways(self):
+        # 463优化2强化：无中枢且中枢不含现价，但价格近3年区间中部震荡（000001 0.3% 场景）
+        # 构造 100 根 KLine：价格在 10~15 震荡（近3年区间），近1年 11~13 未突破，现价 12
+        klines = []
+        import math
+        for i in range(100):
+            close = 12.0 + 2.0 * math.sin(i / 8.0)  # 10~14 震荡
+            klines.append(KLine(idx=i, open=close, high=close + 0.5, low=close - 0.5,
+                                close=close, date='2026-01-01'))
+        klines[-1] = KLine(idx=99, open=12.0, high=12.2, low=11.8, close=12.0, date='2026-09-17')
+        # 中枢不含现价（区间 5~8）
+        zs_away = _mk_zs('2025-01-01', '2025-03-01', 5.0, 8.0)
+        a = self._analyzer([zs_away], klines, segments=[])
+        assert a._determine_trend() == 'unknown'  # 价格区间横盘 → 盘整
+        assert '近3年区间中部震荡' in a._determine_trend_basis()
+
+    def test_price_range_not_sideways(self):
+        # 价格在近3年区间底部（持续新低）→ 非横盘 → 近3段方向兜底
+        klines = []
+        import math
+        for i in range(100):
+            close = 10.0 - i * 0.06  # 10 → 4 持续下跌（创新低）
+            klines.append(KLine(idx=i, open=close, high=close + 0.3, low=close - 0.3,
+                                close=close, date='2026-01-01'))
+        zs_away = _mk_zs('2025-01-01', '2025-03-01', 15.0, 18.0)
+        seg = type('_S', (), {'direction': 'down'})()
+        a = self._analyzer([zs_away], klines, segments=[seg])
+        assert a._determine_trend() == 'down'  # 价格在区间底部（非横盘）→ 段方向
 
     def test_valid_zs_above_up(self):
         zs = _mk_zs('2026-07-01', '2026-08-20', 5.0, 8.0)

@@ -342,7 +342,7 @@ class FractalDetector:
     """分型识别器（含严格确认机制 + 弱势分形过滤）"""
 
     def __init__(self, confirm_bars: int = 1, fx_check: str = 'strict',
-                 threshold_pct: float = 0.5):
+                 threshold_pct: float = 0.3):
         """
         Args:
             confirm_bars: 分型确认所需的后续K线数（默认1根）
@@ -2287,7 +2287,7 @@ class ChanlunAnalyzer:
 
         self.fractal_detector = FractalDetector(
             fx_check=bi_cfg.bi_fx_check if bi_cfg else 'strict',
-            threshold_pct=self.config.get('fractal_threshold_pct', 0.5),
+            threshold_pct=self.config.get('fractal_threshold_pct', 0.3),
         )
         self.stroke_builder = StrokeBuilder(
             min_klines=bi_cfg.min_klines if bi_cfg else self.config.get('min_klines', 6),
@@ -2338,7 +2338,8 @@ class ChanlunAnalyzer:
             'min_segment_count': 3,  # 构成中枢的最少线段数
             'lookback_period': 120,  # 回看周期 (P1-#29: ⬆60→120)
             'min_confidence': 0.6,  # 最小置信度
-            'fractal_threshold_pct': 0.5,  # 分形确认阈值（F-15规格要求默认0.5）
+            'fractal_threshold_pct': 0.3,  # 分形确认阈值（463号：0.5→0.3，用户拍板平衡档；
+            #   czsc 无阈值、知识库建议 0.2/0.5/1 测试；0.3% 笔更充分且判定与 0.5% 更接近）
             'merge_depth': 3,  # 包含处理递归深度，0=czsc单次，3=推荐
         }
 
@@ -2563,14 +2564,50 @@ class ChanlunAnalyzer:
                 c_prev = (zs_prev.high + zs_prev.low) / 2.0
                 return 'up' if c_cur > c_prev else ('down' if c_cur < c_prev else 'unknown')
             return 'unknown'
-        # 无有效中枢（多年无新中枢 / 中枢已失效）：兜底用最后笔/段方向（保留原逻辑）
+        # 无有效中枢（多年无新中枢 / 中枢已失效）：
+        # 463优化2：长期横盘倾向盘整——强化判据（不依赖中枢识别，修复阈值敏感性：
+        #   0.3% 下 000001 横盘中枢未识别致误判"下降"）：
+        #   A. 价格区间判据（鲁棒）：近3年(≤750根)价格区间，现价在区间中部(30%~70%)且
+        #      近1年未显著突破（hi≤3年hi×1.05、lo≥3年lo×0.95）→ 长期横盘 → 盘整
+        #   B. 最近历史中枢区间判据（中枢可用时辅助，保留）
+        latest_close = self.klines[-1].close if self.klines else 0.0
+        try:
+            _n = min(len(self.klines), 750)
+            if _n >= 60:
+                _hi3 = max(k.high for k in self.klines[-_n:])
+                _lo3 = min(k.low for k in self.klines[-_n:])
+                _range = _hi3 - _lo3
+                if _range > 0:
+                    _pos = (latest_close - _lo3) / _range
+                    _n1 = min(len(self.klines), 250)
+                    _hi1 = max(k.high for k in self.klines[-_n1:])
+                    _lo1 = min(k.low for k in self.klines[-_n1:])
+                    if 0.3 <= _pos <= 0.7 and _hi1 <= _hi3 * 1.05 and _lo1 >= _lo3 * 0.95:
+                        return 'unknown'  # 价格近3年区间中部横盘 → 盘整
+        except Exception:
+            pass
+        if zs_list:
+            try:
+                _last_zs = zs_list[-1]
+                if _last_zs.low <= latest_close <= _last_zs.high:
+                    return 'unknown'  # 价格仍在历史中枢区间 → 长期横盘 → 盘整
+            except Exception:
+                pass
+        # 463优化1：否则用最近 3 段（笔中枢模式 3 笔）方向多数派，
+        # 避免单段方向波动主导结构判定（横盘特征=段方向交替 → 多数不成立 → unknown/盘整）
         if self.bi_zs_mode:
-            if self.strokes:
-                return self.strokes[-1].direction
+            _seq = [s.direction for s in (self.strokes or [])[-3:]]
+        else:
+            _seq = [s.direction for s in (self.segments or [])[-3:]]
+        if not _seq:
             return 'unknown'
-        if not self.segments:
-            return 'unknown'
-        return self.segments[-1].direction
+        _up = _seq.count('up')
+        _down = _seq.count('down')
+        if _up > _down:
+            return 'up'
+        if _down > _up:
+            return 'down'
+        return 'unknown'  # 段方向交替（横盘特征）→ 盘整/待定
 
     def _determine_trend_basis(self) -> str:
         """趋势判定依据说明（446号：可回溯，对齐 444 现状=因果链的因；463号：有效中枢。
@@ -2598,9 +2635,33 @@ class ChanlunAnalyzer:
                     return '价格在中枢内部-中枢中心下移'
                 return '价格在中枢内部-中枢中心持平'
             return '价格在中枢内部'
+        # 无有效中枢：长期横盘判据（与 _determine_trend 一致）→ 盘整依据
+        latest_close = self.klines[-1].close if self.klines else 0.0
+        try:
+            _n = min(len(self.klines), 750)
+            if _n >= 60:
+                _hi3 = max(k.high for k in self.klines[-_n:])
+                _lo3 = min(k.low for k in self.klines[-_n:])
+                _range = _hi3 - _lo3
+                if _range > 0:
+                    _pos = (latest_close - _lo3) / _range
+                    _n1 = min(len(self.klines), 250)
+                    _hi1 = max(k.high for k in self.klines[-_n1:])
+                    _lo1 = min(k.low for k in self.klines[-_n1:])
+                    if 0.3 <= _pos <= 0.7 and _hi1 <= _hi3 * 1.05 and _lo1 >= _lo3 * 0.95:
+                        return '价格近3年区间中部震荡（长期横盘）'
+        except Exception:
+            pass
+        if zs_list:
+            try:
+                _last_zs = zs_list[-1]
+                if _last_zs.low <= latest_close <= _last_zs.high:
+                    return '价格仍在历史中枢区间（长期横盘）'
+            except Exception:
+                pass
         if self.bi_zs_mode:
-            return '无中枢-最后笔方向'
-        return '无中枢-最后段方向'
+            return '无中枢-最近3笔方向'
+        return '无中枢-最近3段方向'
 
     def _generate_summary(self) -> Dict:
         """生成分析摘要"""
