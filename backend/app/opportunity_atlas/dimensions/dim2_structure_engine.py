@@ -147,17 +147,22 @@ class Dim2StructureEngine(DataAwareMixin):
         vs_chip = _assess_vs_chip(tags)
         vs_indicator = _assess_vs_indicator(tags)
 
-        # 4. 结构强度
-        strength = 0.5
+        # 4. 结构强度（0-100 域；ChanlunScorer.score 返回 {'score': 0-100, 'details', 'recommendation'}）
+        strength = 50  # 无缠论结果/评分异常时中性分（0-100 域，对应 continuous_value=0.5）
         if chanlun_result:
             try:
                 scorer = ChanlunScorer()
-                score_result = scorer.score(chanlun_result)
-                strength = score_result.get('strength', 0.5) if isinstance(score_result, dict) else 0.5
+                # 464-5C：补传 latest_close + market_context——原只传 analysis_result，
+                #   价格匹配度（买点跌破/追高惩罚、卖点反弹加分）与换手/大单市场调整全部被跳过。
+                score_result = scorer.score(chanlun_result, latest_close=latest_close,
+                                            market_context=_build_market_context(data_context))
+                # 464号修复：原取 'strength' 键恒回退 0.5（返回值无此键）→ 真实结构强度从未接入；
+                #   正确键 'score'（0-100，score() 内部 +50 归一 clamp [0,100]）。
+                strength = float(score_result.get('score', 50)) if isinstance(score_result, dict) else 50
             except Exception:
                 pass
         if isinstance(strength, dict):
-            strength = strength.get('score', 0.5)
+            strength = strength.get('score', 50)
 
         # 5. 买卖点
         buy_sell_points = []
@@ -281,7 +286,8 @@ class Dim2StructureEngine(DataAwareMixin):
             'structure': struct_state, 'position': pos_state,
             'light': light, 'overall_light': light,
             'overall_direction': 1 if struct_state == '上升' else (-1 if struct_state == '下降' else 0),
-            'continuous_value': round(float(strength) if isinstance(strength, (int, float)) else 0.5, 4),
+            # continuous_value 统一 0-1 置信语义（chanlun_strength 为 0-100 域，归一 /100）
+            'continuous_value': round(strength / 100.0, 4) if isinstance(strength, (int, float)) else 0.5,
         }
 
         # 8. audit
@@ -319,6 +325,35 @@ class Dim2StructureEngine(DataAwareMixin):
     def get_data_dependencies(self) -> list:
         return ['daily_cache (market_cache.db)', 'weekly_df/hourly_df (dim1 注入数据上下文, 457号)',
                 'tags (pre_feat_cache)', 'dims (StatusEngine)']
+
+
+def _build_market_context(data_context):
+    """从 data_context 提取 ChanlunScorer 消费的市场上下文键（464-5C：事实接线，缺键不产）
+
+    - turnover_rate ← daily_basic_df（最新交易日）
+    - net_lg_amount ← moneyflow_df（最新交易日）
+    - index_condition 无独立数据源（data_context 无指数环境键）→ 不产，scorer .get 缺省不调整
+    """
+    if not data_context:
+        return None
+    mc = {}
+    try:
+        _dbb = data_context.get('daily_basic_df')
+        if _dbb is not None and not _dbb.empty and 'turnover_rate' in _dbb.columns:
+            _tr = pd.to_numeric(_dbb['turnover_rate'], errors='coerce').dropna()
+            if not _tr.empty:
+                mc['turnover_rate'] = float(_tr.iloc[-1])
+    except Exception:
+        pass
+    try:
+        _mf = data_context.get('moneyflow_df')
+        if _mf is not None and not _mf.empty and 'net_lg_amount' in _mf.columns:
+            _nl = pd.to_numeric(_mf['net_lg_amount'], errors='coerce').dropna()
+            if not _nl.empty:
+                mc['net_lg_amount'] = float(_nl.iloc[-1])
+    except Exception:
+        pass
+    return mc if mc else None
 
 
 def _assess_vs_zhongshu(tags, dims, chanlun_result=None, latest_close=0.0, last_date=None):

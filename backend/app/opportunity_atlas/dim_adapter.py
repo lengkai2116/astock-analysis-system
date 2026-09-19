@@ -524,7 +524,10 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
             else:
                 _dim2_dir = 0
         # strength: 0.4*chanlun_strength + 0.4*level_cross_score + 0.2*continuous_value
-        _chanlun_str = _safe_float(_str_sd.get('chanlun_strength'), 0.5)
+        # 464号修复：chanlun_strength 契约 0-100（score 域），与 cross/cont 的 0-1 混单位加权
+        #   在恒 0.5 取键 bug 时被掩盖；现真实 0-100 → 归一为 0-1（>1 判 0-100 域，兼容旧恒 0.5 数据）
+        _chanlun_str_raw = _safe_float(_str_sd.get('chanlun_strength'), 0.5)
+        _chanlun_str = _chanlun_str_raw / 100.0 if _chanlun_str_raw > 1 else _chanlun_str_raw
         _cross_score = _safe_float(_str_sd.get('level_cross_score'), 0.5)
         _cont_val = _safe_float(_str_judg.get('continuous_value'), 0.5)
         _dim2_str = 0.4 * _chanlun_str + 0.4 * _cross_score + 0.2 * _cont_val
