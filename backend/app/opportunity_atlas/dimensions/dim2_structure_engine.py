@@ -197,7 +197,7 @@ class Dim2StructureEngine(DataAwareMixin):
                     'confirmed': float(getattr(_p, 'confidence', 0) or 0) >= 0.6,
                     'confidence': round(float(getattr(_p, 'confidence', 0) or 0), 4),
                     'price': float(_pos.get('price', 0) or 0),
-                    'date': str(_pos.get('date', '') or ''),
+                    'date': _resolve_bsp_date(_pos, df),
                     'index': _pos.get('idx'),
                     'reason': str(getattr(_p, 'reason', '') or ''),
                 })
@@ -325,6 +325,24 @@ class Dim2StructureEngine(DataAwareMixin):
     def get_data_dependencies(self) -> list:
         return ['daily_cache (market_cache.db)', 'weekly_df/hourly_df (dim1 注入数据上下文, 457号)',
                 'tags (pre_feat_cache)', 'dims (StatusEngine)']
+
+
+def _resolve_bsp_date(position, df):
+    """465-2：买卖点 position.date 回填——一买/一卖 position=divergence.position 仅含 idx 无 date，
+    从 daily_df 反查交易日；二三买 date 已由 detector 显式带，原样返回。"""
+    _date = str(position.get('date', '') or '')
+    if _date:
+        return _date
+    if df is not None and not df.empty and 'trade_date' in df.columns:
+        try:
+            _idx = position.get('idx')
+            if _idx is not None:
+                _i = int(_idx)
+                if 0 <= _i < len(df):
+                    return str(df['trade_date'].iloc[_i])[:10]
+        except Exception:
+            pass
+    return ''
 
 
 def _build_market_context(data_context):

@@ -2765,6 +2765,31 @@ except ImportError:
         def select(self, date_time: datetime, data: Any) -> List[str]:
             pass
 
+_RECENT_POINT_WINDOW = 3  # 465-1A：计分限每类型最近 K 个买卖点（见 _recent_by_type）
+
+
+def _recent_by_type(points, k: int = _RECENT_POINT_WINDOW) -> list:
+    """465-1A：按 type 分组，每 type 取 position.idx 最大的前 k 个参与计分。
+
+    背景：_find_third_points 对最新中枢后每次「上涨-回调/下跌-反弹」产一个三买/三卖，
+    无数量/窗口限制 → 长期股票历史卖点累计主导 score（万科 24 三卖 -192 分压到 0）。
+    这里仅收缩**计分口径**（产出 analysis_result 不变，buy_sell_points_detail 仍全量展示），
+    对齐"当前结构强度"语义。idx 缺失的点视为最新保留（防丢分）；按 type 分组保证
+    各类型（一/二/三买卖）都保留最近 k 个，不被单一类型淹没。
+    """
+    if not points:
+        return []
+    by_type = {}
+    for p in points:
+        idx = (p.position or {}).get('idx')
+        by_type.setdefault(p.type, []).append((idx if idx is not None else 10 ** 9, p))
+    out = []
+    for lst in by_type.values():
+        lst.sort(key=lambda x: -x[0])
+        out.extend(p for _, p in lst[:k])
+    return out
+
+
 class ChanlunScorer:
     """缠论评分系统"""
 
@@ -2786,19 +2811,27 @@ class ChanlunScorer:
 
         buy_points = analysis_result.get('buy_points', [])
         sell_points = analysis_result.get('sell_points', [])
+        # 465-1A：计分限最近窗口内买卖点（每 type 取 idx 最近 K 个）——原全历史累计
+        #   （最新中枢后每次回调/反弹产一个三买/三卖）→ 万科 24 三卖 -192 分压到 0，
+        #   历史卖点是长期走势特征、非当前结构强度。产出 analysis_result 不变。
+        buy_points = _recent_by_type(buy_points)
+        sell_points = _recent_by_type(sell_points)
 
         # 买卖点评分
         if buy_points:
             score += 30
             details.append(f"发现{len(buy_points)}个买点")
             for bp in buy_points:
-                if bp.type == 'first_buy':
+                # 465-1B：补 type 变体匹配（first_buy_p/third_buy_a/third_buy_b 等）——
+                #   原只认 first_buy/second_buy/third_buy，盘整背驰一买/三买 a/b 每点加分被跳过，
+                #   卖点 third_sell 却照扣 → 评分不对称。
+                if bp.type in ('first_buy', 'first_buy_p'):
                     score += 20
                     details.append(f"第一类买点(+20), 置信度: {bp.confidence:.2f}")
-                elif bp.type == 'second_buy':
+                elif bp.type in ('second_buy', 'second_buy_b'):
                     score += 15
                     details.append(f"第二类买点(+15), 置信度: {bp.confidence:.2f}")
-                elif bp.type == 'third_buy':
+                elif bp.type in ('third_buy', 'third_buy_a', 'third_buy_b'):
                     score += 10
                     details.append(f"第三类买点(+10), 置信度: {bp.confidence:.2f}")
 
@@ -2806,13 +2839,13 @@ class ChanlunScorer:
             score -= 20
             details.append(f"发现{len(sell_points)}个卖点")
             for sp in sell_points:
-                if sp.type == 'first_sell':
+                if sp.type in ('first_sell', 'first_sell_p'):
                     score -= 15
                     details.append(f"第一类卖点(-15), 置信度: {sp.confidence:.2f}")
-                elif sp.type == 'second_sell':
+                elif sp.type in ('second_sell', 'second_sell_b'):
                     score -= 10
                     details.append(f"第二类卖点(-10), 置信度: {sp.confidence:.2f}")
-                elif sp.type == 'third_sell':
+                elif sp.type in ('third_sell', 'third_sell_a'):
                     score -= 8
                     details.append(f"第三类卖点(-8), 置信度: {sp.confidence:.2f}")
 
