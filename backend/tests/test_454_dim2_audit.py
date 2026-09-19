@@ -42,11 +42,18 @@ def _mk_buy(conf, pos=None):
         reason='一买确认')
 
 
+def _mk_zs(high=15.0, low=10.0):
+    """有效中枢（463/465-3 适配：价格vs中枢判定需真实中枢对象；_mk_df 无 trade_date 列
+    → _select_current_zhongshu 无 last_date 保守返回最后一个，latest_close≈20 > high → 上方）"""
+    return SimpleNamespace(high=high, low=low,
+                           start_date='2025-02-01', end_date='2025-04-30')
+
+
 def _mk_analyzer_result(**kw):
     """构造 chanlun_result 字典，默认覆盖一条路径（趋势方向False/价格未知/欲病/无背驰/无买点）。"""
     base = {
         'trend': 'unknown',  # 数据完整门槛「趋势方向」→ False
-        'zhongshu': [],      # 走 tags.position_vs_zs 兜底
+        'zhongshu': [],      # 无有效中枢 → 465-3：价格vs中枢条件不满足
         'divergence': None,  # 判读「背驰检测」→ True（无背驰）
         'buy_points': [],    # 判读「有确认买点」→ False
         'sell_points': [],
@@ -114,17 +121,17 @@ class TestDataCompletenessGates:
         # 无 data_context 无法跑；此处验证「无数据」语义由 evaluate 缺 chanlun 时为 False
         assert _cond(au, '趋势方向')['satisfied'] is False
 
-    def test_price_vs_zhongshu_satisfied_via_tags(self):
-        au = _evaluate(_mk_analyzer_result(), tags_override={'position_vs_zs': '上方'})
+    def test_price_vs_zhongshu_satisfied_with_valid_zhongshu(self):
+        au = _evaluate(_mk_analyzer_result(zhongshu=[_mk_zs()]))
         c = _cond(au, '价格vs中枢')
         assert c['satisfied'] is True
         assert c['actual'] == '上方'
 
-    def test_price_vs_zhongshu_unsatisfied_no_position(self):
+    def test_price_vs_zhongshu_unsatisfied_no_valid_zhongshu(self):
         au = _evaluate(_mk_analyzer_result())
         c = _cond(au, '价格vs中枢')
         assert c['satisfied'] is False
-        assert c['actual'] == '未知'
+        assert c['actual'] == '无有效中枢'
 
 
 class TestJudgmentConditions:
@@ -187,7 +194,8 @@ class TestAllSatisfied:
             theorem_check={'summary': {'overall_score': 0.7}},
             divergence=None,
             buy_points=[_mk_buy(conf=0.8)],
-        ), tags_override={'position_vs_zs': '上方'})
+            zhongshu=[_mk_zs()],
+        ))
         assert au['satisfied_count'] == 5
         assert au['confidence'] == 1.0
 

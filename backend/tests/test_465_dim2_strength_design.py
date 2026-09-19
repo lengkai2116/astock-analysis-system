@@ -177,3 +177,54 @@ class TestDim2BspDateIntegration:
             out = eng.evaluate({}, {'ts_code': 'T.XSHG'}, data_context={'daily_df': df})
         detail = out['status_description']['buy_sell_points_detail'][0]
         assert detail['date'] == '2024-03-01'
+
+
+class TestAuditZhongshuPosition:
+    """465-3：audit「价格vs中枢」无有效中枢不再误判满足（原 bool(position) 恒真）。"""
+
+    @staticmethod
+    def _cond(out):
+        return next(c for c in out['audit']['conditions'] if c['name'] == '价格vs中枢')
+
+    def test_no_valid_zhongshu_not_satisfied(self):
+        df = _mk_df()
+        eng = Dim2StructureEngine()
+        with mock.patch.object(ChanlunAnalyzer, 'analyze', return_value=_mk_result()):
+            out = eng.evaluate({}, {'ts_code': 'T.XSHG'}, data_context={'daily_df': df})
+        c = self._cond(out)
+        assert c['satisfied'] is False
+        assert c['actual'] == '无有效中枢'
+
+    def test_valid_zhongshu_above_satisfied(self):
+        from types import SimpleNamespace
+        df = _mk_df()
+        eng = Dim2StructureEngine()
+        zs = SimpleNamespace(high=15.0, low=10.0,
+                             start_date=pd.Timestamp('2025-02-01'),
+                             end_date=pd.Timestamp('2025-04-30'))
+        result = _mk_result()
+        result['zhongshu'] = [zs]
+        with mock.patch.object(ChanlunAnalyzer, 'analyze', return_value=result):
+            out = eng.evaluate({}, {'ts_code': 'T.XSHG'}, data_context={'daily_df': df})
+        c = self._cond(out)
+        assert c['satisfied'] is True
+        assert c['actual'] == '上方'
+
+    def test_tags_fallback_satisfied(self):
+        df = _mk_df()
+        eng = Dim2StructureEngine()
+        with mock.patch.object(ChanlunAnalyzer, 'analyze', return_value=None):
+            out = eng.evaluate({}, {'ts_code': 'T.XSHG', 'position_vs_zs': '上方'},
+                               data_context={'daily_df': df})
+        c = self._cond(out)
+        assert c['satisfied'] is True
+        assert c['actual'] == '上方'
+
+    def test_confidence_no_longer_inflated(self):
+        """万科场景（trend=up + 无有效中枢 + 健康 + 无背驰 + 无买点）：3/5=0.6（原 4/5=0.8）。"""
+        df = _mk_df()
+        eng = Dim2StructureEngine()
+        with mock.patch.object(ChanlunAnalyzer, 'analyze', return_value=_mk_result(trend='up')):
+            out = eng.evaluate({}, {'ts_code': 'T.XSHG'}, data_context={'daily_df': df})
+        assert out['audit']['satisfied_count'] == 3
+        assert out['audit']['confidence'] == 0.6

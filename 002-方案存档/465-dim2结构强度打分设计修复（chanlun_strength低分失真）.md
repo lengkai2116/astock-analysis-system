@@ -2,8 +2,8 @@
 title: dim2 数据层与话术修复（464 核查后续：chanlun_strength 打分设计 + 8 项数据层问题）
 type: 方案（判定逻辑为主；445 §6.2 冻结合规——确证有错 + 独立号 + 全链路验证；含事实接线/话术层项）
 date: 2026-09-19
-version: v0.3（465-1 打分设计 A+B 已实施、465-2 date 回填已实施；465-3~465-8 待拍板）
-status: 🔄 实施中（465-1/465-2 已完成验证；465-3~465-8 登记待拍板）
+version: v0.4（465-1 打分设计、465-2 date 回填、465-3 audit 误判已实施；465-4~465-8 待拍板）
+status: 🔄 实施中（465-1/465-2/465-3 已完成验证；465-4~465-8 登记待拍板）
 related:
   - 464-dim2-dim7分析输出项全量梳理（SIG现状层）——§10.4 为 464-5 取键修复（事实层已落地）；§10.2 话术缺口 2/3 并入本号 465-4/465-5
   - 445-dim2-dim7引擎正确性知识库核查——引擎冻结边界（§6.2）；本号判定逻辑项属确证有错才动
@@ -90,11 +90,16 @@ dim2 调用方式 `ChanlunScorer.score(chanlun_result)`（464-5 修复前恒 0.5
 - **处置（已实施，2026-09-19）**：dim2 新增 `_resolve_bsp_date(position, df)`——position.date 非空原样返回；空则从 `position.idx` 反查 `daily_df['trade_date']`（`str(...)[:10]`，越界/无 trade_date 列/异常 → ''）。仅 dim2 序列化层回填，framework 判定零改动。
 - **验证**：`tests/test_465_dim2_strength_design.py` `TestBspDateBackfill`（5 用例：idx 回填/原样保留/越界/无 df/无 trade_date 列）+ `TestDim2BspDateIntegration`（2 用例：evaluate 输出一买 date 回填、二买 date 保留）。
 
-### 465-3｜audit「价格vs中枢」把「无有效中枢」当满足（判定逻辑）
+### 465-3｜audit「价格vs中枢」把「无有效中枢」当满足（判定逻辑）✅ 已实施
 
-- **现象（实证）**：万科/茅台 audit `cond[价格vs中枢] satisfied=True actual=无有效中枢`——"无明确位置"被判满足，两股 audit confidence 因此抬到 0.8。
+- **现象（实证）**：万科/茅台 audit `cond[价格vs中枢] satisfied=True actual=无有效中枢`——"无明确位置"被判满足，两股 audit confidence 因此抬到 0.8。**全市场：5550 只中 4491 只（81%）为「无有效中枢」（463 时效过滤后为常态），旧逻辑 `bool(position)` 全部误判满足。**
 - **根因**：454 号 audit 条件 `'satisfied': bool(vs_zhongshu['position'])`，`_assess_vs_zhongshu` 无有效中枢时返回 `{'position': '无有效中枢', ...}`——非空字符串 → satisfied=True。
-- **处置方向**：条件判定改为 `position not in ('', '无有效中枢')`（无有效中枢视为不满足数据门槛）；需评估对 454 门禁/audit confidence 分布的影响（判定逻辑，独立验证）。
+- **处置（已实施，2026-09-19）**：条件判定改为 `vs_zhongshu['position'] not in ('', '无有效中枢')`（有效值域=上方/下方/内部；无有效中枢视为该条件未达成），threshold 改「有明确位置（有效中枢上/下/内）」。audit confidence 回归真实达成度。
+- **影响评估（真实库 5550 只，2026-09-18）**：
+  - audit confidence 分布：旧 0.8/1.0 占 57%（3173 只）→ 新 0.6/0.4 占 77%（4272 只），不再虚高。
+  - dim8 `data_warning`（7 维 audit 均值 <0.7）：旧 90.1%（4998 只）→ 新 95.0%（5275 只），仅新增 277 只（+4.9pp）；**90.1% 本就是既有状态**（454 判读条件后各维 confidence 普遍偏低所致，非 465-3 引入）。
+- **验证**：`tests/test_465_dim2_strength_design.py` `TestAuditZhongshuPosition`（4 用例：无有效中枢不满足/有效中枢上方满足/tags 兜底满足/万科场景 3/5=0.6）；`tests/test_454_dim2_audit.py` 适配 463+465-3 现状（`_mk_zs` 有效中枢构造替代 tags 兜底，3 个既有失败全部修复）；framework+dim2 回归 130 passed + dim8/dim_adapter 链 83 passed。
+- **注**：`data_warning` 本身 90% 大面积触发是既有状态（420 增强6 语义 vs 各维 confidence 普遍偏低的现状），不在本子项范围，可另议。
 
 ### 465-4｜`plain` 缺趋势方向结论句（话术层；464 §10.2-1 最严重缺口）
 

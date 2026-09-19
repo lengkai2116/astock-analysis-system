@@ -305,8 +305,8 @@ class Dim2StructureEngine(DataAwareMixin):
         conditions = [
             {'name': '趋势方向', 'satisfied': trend_val not in ('未知', '无', '无数据', 'unknown'),
              'actual': trend_val, 'threshold': '有明确缠论方向'},
-            {'name': '价格vs中枢', 'satisfied': bool(vs_zhongshu['position']),
-             'actual': vs_zhongshu['position'] or '未知', 'threshold': '有明确位置'},
+            {'name': '价格vs中枢', 'satisfied': vs_zhongshu['position'] not in ('', '无有效中枢'),
+             'actual': vs_zhongshu['position'] or '未知', 'threshold': '有明确位置（有效中枢上/下/内）'},
             {'name': '结构健康度', 'satisfied': _phase_ok,
              'actual': chanlun_phase, 'threshold': '11定理评分≥0.6（健康）'},
             {'name': '背驰检测', 'satisfied': _no_div,
