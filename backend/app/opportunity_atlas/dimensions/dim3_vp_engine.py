@@ -146,26 +146,12 @@ class Dim3VPEngine(DataAwareMixin):
                 return None
 
         rps_eff = None  # 取 20d 优先，缺则 60d
-        if data_context:
-            _rsc = data_context.get('relative_strength') or {}
-        else:
-            _rsc = {}
-        if _rsc:
-            rps_eff = _safe_rps(_rsc.get('rps_20d'))
-            if rps_eff is None:
-                rps_eff = _safe_rps(_rsc.get('rps_60d'))
-        else:
-            # 未从 data_context 读到（直接 evaluate / 旧调用）→ 独立查询 relative_strength_cache
-            try:
-                _ecm_rs = self._get_dm().cache
-                _rs_rows = _ecm_rs.get_relative_strength(ts_code=ts_code)
-                if _rs_rows:
-                    _rr = _rs_rows[0]
-                    rps_eff = _safe_rps(_rr.get('rps_20d'))
-                    if rps_eff is None:
-                        rps_eff = _safe_rps(_rr.get('rps_60d'))
-            except Exception:
-                rps_eff = None
+        # 460 号统一供给：RPS 一律由 dim1 注入 data_context['relative_strength']，不再允许
+        # 本维独立连库自取（消除重复取数口径 + 依赖 get_relative_strength 排序的隐忧）。
+        _rsc = (data_context or {}).get('relative_strength') or {}
+        rps_eff = _safe_rps(_rsc.get('rps_20d'))
+        if rps_eff is None:
+            rps_eff = _safe_rps(_rsc.get('rps_60d'))
         rps = rps_eff
         # RPS>85 → +1 分（对齐知识库量价形态打分系统加分项）；无 RPS 数据时不给分不扣分（保守）
         rps_factor = 1 if (rps is not None and rps > 85) else 0
