@@ -181,3 +181,103 @@ class TestSegmentContract:
         # 其余维缺失 → 段不产出
         assert 'structure' not in r
         assert 'risk' not in r
+
+
+# ── F10: D1 subsections（fund_chip 内分两小节） ────────────
+
+class TestSubsections:
+
+    def test_chip_fund_subsections(self):
+        """fund_chip 段含 subsections（筹码成本/资金博弈两小节）"""
+        dr = _mk_dim('chip_fund', sd={
+            'phase': '建仓期', 'cost_structure': '筹码集中', 'crowding': '拥挤度=MODERATE',
+            'fund_flow': '强流入', 'margin': '融资正常',
+        })
+        seg = _segment_from_dim(dr, 'chip_fund', '资金与筹码状态')
+        assert seg is not None
+        assert 'subsections' in seg
+        titles = [s['title'] for s in seg['subsections']]
+        assert '筹码成本' in titles and '资金博弈' in titles
+        # 小节内 items 非空
+        all_items = [item for s in seg['subsections'] for item in s['items']]
+        assert any('主力阶段' in i for i in all_items)
+        assert any('资金流' in i for i in all_items)
+
+    def test_no_subsections_for_other_dims(self):
+        """非 fund_chip 维无 subsections 键"""
+        dr = _mk_dim('volume_price', sd={'vp_state': '强健康'})
+        seg = _segment_from_dim(dr, 'volume_price', '量价健康度')
+        assert seg is not None
+        assert 'subsections' not in seg
+
+
+# ── F11: D4 emotion T 去重（stock 主源 dim3） ──────────────
+
+class TestEmotionDedup:
+
+    def test_emotion_t_excludes_stock(self):
+        """emotion 段 T 不含 stock（个股情绪主源 dim3 vp_state，437-A §三-1）"""
+        sd = {'market': '市场处于发酵', 'sector': '板块排名前10', 'stock': '个股健康',
+              'quadrant': '中性', 'temperature': '55/100'}
+        text = _compose_dim_text('emotion', {}, sd)
+        assert '个股情绪' not in text  # stock 已移出 T
+        assert '市场情绪' in text
+
+
+# ── F12: signal 移出（2026-09-15 裁决） ────────────────────
+
+class TestSignalExcluded:
+
+    def test_build_report_no_signal_key(self):
+        """build_seven_dim_report 不再产出 signal 段"""
+        from app.opportunity_atlas.dimensions.dim8_summary_engine import SEVEN_DIM_SPEC
+        dr = _mk_dim('volume_price', sd={'vp_state': '中性'})
+        dr['signal'] = {'judgment': {'overall_light': 'green'},
+                        'status_description': {'attribute': '强确认'}}
+        r = Dim8SummaryEngine().build_seven_dim_report(dr, tags={'right_side_confirm': '强确认'},
+                                                       ts_code=None)
+        assert 'signal' not in r
+        # SEVEN_DIM_SPEC 不含 signal
+        assert 'signal' not in [s[0] for s in SEVEN_DIM_SPEC]
+
+
+# ── F13: audit satisfied 项入 evidence（437 §一-5） ────────
+
+class TestAuditEvidence:
+
+    def test_satisfied_conditions_in_evidence(self):
+        """audit.conditions 中 satisfied 项作 evidence 底料"""
+        au = {'conditions': [{'name': '量价关系', 'satisfied': True},
+                             {'name': '背离检测', 'satisfied': False}],
+              'satisfied_count': 1, 'total_count': 2, 'confidence': 0.5}
+        dr = _mk_dim('volume_price', sd={'vp_state': '强健康'}, au=au)
+        seg = _segment_from_dim(dr, 'volume_price', '量价健康度')
+        assert '量价关系' in seg['evidence']      # satisfied 项入 evidence
+        assert '背离检测' not in seg['evidence']  # 未满足项不入
+
+
+# ── F14: D3 环境定位（大盘/板块） ──────────────────────────
+
+class TestEnvironmentSentences:
+
+    def test_market_state_sentence(self):
+        """大盘状态句：ma20_ratio/涨停/封板率转自然语言"""
+        from app.opportunity_atlas.dimensions.dim8_summary_engine import _market_state_sentence
+        sig = {'data_context': {'market_stats': {'ma20_ratio': 0.62, 'limit_up_count': 85,
+                                                 'sealing_rate': 0.7}}}
+        s = _market_state_sentence({'signal': sig})
+        assert '全市场MA20强势占比62%（偏强）' in s
+        assert '涨停85家' in s
+        assert '封板率70%' in s
+
+    def test_market_state_no_data_returns_empty(self):
+        """无 market_stats → ''（437 缺则降级）"""
+        from app.opportunity_atlas.dimensions.dim8_summary_engine import _market_state_sentence
+        assert _market_state_sentence({}) == ''
+        assert _market_state_sentence({'signal': {'data_context': {}}}) == ''
+
+    def test_sector_position_no_data_returns_empty(self):
+        """无 sector_heat / 无行业映射 → ''（437 缺则降级）"""
+        from app.opportunity_atlas.dimensions.dim8_summary_engine import _sector_position_sentence
+        assert _sector_position_sentence({}, 'TEST') == ''
+        assert _sector_position_sentence({'signal': {'data_context': {'sector_heat': {}}}}, 'TEST') == ''

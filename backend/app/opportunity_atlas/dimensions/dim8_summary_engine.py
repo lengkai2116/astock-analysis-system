@@ -43,12 +43,11 @@ STATUS_BAR_STATES = {
 # 顶层 light：颜色名 → emoji（前端展示约定，见 436 §3.2 D1）
 _LIGHT_EMOJI = {'green': '🟢', 'red': '🔴', 'yellow': '🟡'}
 
-# 七段键契约（产出键 → 对应 dim_results 数据源键；summary 由 dim8 自行组装）
-# 与两前端 dimOrder/segOrder 逐一对齐：treemap/indicator-ide 均读
-#   signal/structure/volume_price/fund_chip/emotion/risk/summary
-# 不含 valuation（436 D5：前端 dimOrder 无此键，不产出）
+# 段键契约（产出键 → 对应 dim_results 数据源键；summary 由 dim8 自行组装）
+# 与前端 dimOrder/segOrder 对齐（不含 signal——2026-09-15 裁决：signal 由 JUD 单独
+#   路径产出、前端 UI 组合，dim8 现状说明归集不再产出 signal 段；不含 valuation
+#   ——436 D5：前端 dimOrder 无此键，不产出）
 SEVEN_DIM_SPEC = [
-    ('signal',       'signal',       '信号确认状态'),
     ('structure',    'structure',    '结构位置状态'),
     ('volume_price', 'volume_price', '量价健康度'),
     ('fund_chip',    'chip_fund',    '资金与筹码状态'),
@@ -487,16 +486,40 @@ def _brief_text(key_in: str, jg: dict, sd: dict) -> str:
     return f'{state}（置信{conf:.0%}）' if state else ''
 
 
+def _compose_dim_subsections(src_key: str, sd: dict) -> list[dict] | None:
+    """437-A D1：段内小节（subsections）——按 _DIM8_SUBSECTIONS 分组取字段非空值。
+
+    返回 [{title, items: [「字段名:值」...]}], ...]；无小节配置/全空 → None。
+    """
+    groups = _DIM8_SUBSECTIONS.get(src_key)
+    if not groups:
+        return None
+    out = []
+    for title, fields in groups:
+        items = []
+        for f in fields:
+            v = (sd or {}).get(f)
+            if v is None or v == '' or v == 'none' or v == '无':
+                continue
+            val = _flatten_value(v)
+            if val:
+                items.append(f'{_DIM8_FIELD_CN.get(f, f)}:{val}')
+        if items:
+            out.append({'title': title, 'items': items})
+    return out or None
+
+
 def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | None:
     """按前端契约把单个 dim_results 维整形为报告段；缺维返回 None
 
     437-A 字段级编排（2026-09-20 拍板后实施）：
       - text：按 _DIM8_T_SUBJECTS[src_key] 字段清单，从 status_description 取「字段名:值」子句
         （字段级「分析逻辑实例→话术」，464 §十二 原料定义）；无映射字段时回退 _brief_text。
-      - evidence：按 _DIM8_E_FIELDS[src_key] 字段清单收集佐证（原 _yield_evidence 只取
-        plain/text/conclusion 字符串，改为字段级编排）。
+      - evidence：按 _DIM8_E_FIELDS[src_key] 字段清单收集佐证 + audit.conditions 中
+        satisfied 项（437 §一-5：现状=达成状态，由 audit 印证）。
+      - subsections（D1）：fund_chip 段内分「筹码成本/资金博弈」两小节（前端可读该键渲染）。
       - 缺维（src_key 无输出）→ None（437-A D7：缺维不产段，仅 summary 恒在）。
-    数据驱动：加字段 = 在 _DIM8_T_SUBJECTS/_DIM8_E_FIELDS 加一行，不动本函数。
+    数据驱动：加字段 = 在 _DIM8_T_SUBJECTS/_DIM8_E_FIELDS/_DIM8_SUBSECTIONS 加一行，不动本函数。
     """
     seg = (dim_results or {}).get(src_key)
     if not isinstance(seg, dict) or not seg:
@@ -507,6 +530,13 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
     overall = jg.get('overall_light', jg.get('light', 'yellow'))
     text = _compose_dim_text(src_key, jg, sd)
     evidence = _compose_dim_evidence(src_key, sd)
+    # 437 §一-5：audit.conditions 中 satisfied 项作 evidence 底料（现状=达成状态印证）
+    for c in (au.get('conditions') or []):
+        if isinstance(c, dict) and c.get('satisfied'):
+            name = c.get('name')
+            if name and name not in evidence:
+                evidence.append(name)
+    subsections = _compose_dim_subsections(src_key, sd)
     return {
         'title': title,
         'light': _LIGHT_EMOJI.get(str(overall), '🟡'),
@@ -528,6 +558,8 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
         # plain 键保留（前端 seven_dim 契约段结构含该字段），值与 text 同（各维 plain 已删除，
         # dim8 为唯一叙事口径，段内 plain 不再读各维引擎自产文字）
         'plain': text,
+        # 437-A D1：fund_chip 段内小节（subsections），前端可读该键渲染小节标题
+        **({'subsections': subsections} if subsections else {}),
     }
 
 
@@ -536,6 +568,7 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
 # 各维 text 主述字段（T）：按序取 status_description 非空值拼「字段名:值」子句。
 # 键名以《437-A字段级归集核对报告》3 处修正为准（dim4 direction→fund_flow、
 # dim6 volatility_atr→atr_pct、dim2 优先 buy_sell_points_detail）。
+# signal 已按 2026-09-15 裁决移出 dim8（由 JUD 单独产出），不在此表。
 _DIM8_T_SUBJECTS: dict[str, list[str]] = {
     'structure': ['chanlun_direction', 'chanlun_strength', 'stage_name', 'trend_basis',
                   'buy_sell_points_detail', 'multi_level_direction_text'],
@@ -543,12 +576,21 @@ _DIM8_T_SUBJECTS: dict[str, list[str]] = {
                      'pattern', 'pattern_score', 'rps'],
     'chip_fund': ['phase', 'fund_flow', 'fund_price_divergence', 'cost_structure',
                   'crowding', 'signal', 'margin'],
-    'emotion': ['market', 'sector', 'stock', 'quadrant', 'temperature'],
+    # D4 去重：emotion.stock 由 dim3 vp_state 派生，主源 dim3（437-A §三-1）→ 不在此表
+    'emotion': ['market', 'sector', 'quadrant', 'temperature'],
     'risk': ['risk_level', 'support_price', 'resistance_price', 'rr_value', 'rr_level',
              'volatility_level', 'risk_factors'],
     'valuation': ['valuation_level', 'potential_score', 'potential_strength',
                   'fina_health', 'value_trap', 'growth_trap'],
-    'signal': ['attribute', 'strength', 'lifecycle_stage', 'verified', 'maintenance'],
+}
+
+# D1：fund_chip 段内分两小节（437-A D1 拍板 A=合一段内分两小节；段结构加 subsections 键）。
+# 小节名 → 该小节字段（取 status_description 非空值）；text 主述字段仍由 _DIM8_T_SUBJECTS 平铺。
+_DIM8_SUBSECTIONS: dict[str, list[tuple[str, list[str]]]] = {
+    'chip_fund': [
+        ('筹码成本', ['phase', 'cost_structure', 'crowding']),
+        ('资金博弈', ['fund_flow', 'fund_price_divergence', 'signal', 'margin']),
+    ],
 }
 
 # 各维 evidence 佐证字段（E）：按序取 status_description 非空值入 evidence 列表。
@@ -567,7 +609,6 @@ _DIM8_E_FIELDS: dict[str, list[str]] = {
              'event_summary', 'liquidity_detail', 'invalidation'],
     'valuation': ['pe_percentile', 'pb_percentile', 'fcf_yield', 'dividend_yield',
                   'revenue_growth', 'potential_breakdown'],
-    'signal': ['decay_detail', 'risk_interaction'],
 }
 
 # evidence 数值字段表述模板（437 §七-6：数值转自然语言，不裸放）。{v} 为原值。
@@ -595,8 +636,6 @@ _DIM8_FIELD_CN: dict[str, str] = {
     'risk_factors': '风险因素',
     'valuation_level': '估值水平', 'potential_score': '潜力评分', 'potential_strength': '潜力强度',
     'fina_health': '财务健康', 'value_trap': '估值陷阱', 'growth_trap': '成长陷阱',
-    'attribute': '信号属性', 'strength': '信号强度', 'lifecycle_stage': '生命周期',
-    'verified': '验证状态', 'maintenance': '维护状态',
 }
 
 
@@ -657,27 +696,6 @@ def _compose_dim_evidence(src_key: str, sd: dict) -> list:
     return ev
 
 
-def _dim1_fallback_segment(tags: dict) -> dict | None:
-    """dim1 特例：dim_results 无 signal 维时从 tags.right_side_confirm 造最小段；空则 None"""
-    if not tags or isinstance(tags, dict) is False:
-        return None
-    rsc = tags.get('right_side_confirm')
-    if not rsc:
-        return None
-    light = ('green' if rsc in ('强确认', '基础确认') else ('red' if rsc == '否决' else 'yellow'))
-    return {
-        'title': '信号确认状态',
-        'light': _LIGHT_EMOJI.get(light, '🟡'),
-        'text': f'信号确认: {rsc}',
-        'evidence': [],
-        'confidence': 0.8 if rsc == '强确认' else 0.5,
-        'judgment': {'overall_light': light, 'overall_direction': 1 if light == 'green' else 0,
-                     'continuous_value': None},
-        'audit': {'conditions': [], 'satisfied_count': 0, 'total_count': 0, 'confidence': 0},
-        'plain': rsc,
-    }
-
-
 def _relative_strength_sentence(ts_code: str) -> str:
     """462-3：环境定位——近20/60日相对沪深300/上证强弱句（437-A D3「第一层并入 summary 前置」）。
 
@@ -715,6 +733,69 @@ def _relative_strength_sentence(ts_code: str) -> str:
         if not core:
             return ''
         return '相对强弱：' + '；'.join(core)
+    except Exception:
+        return ''
+
+
+def _market_state_sentence(dim_results: dict) -> str:
+    """437-A D3：第一层环境定位——大盘状态句（市场广度/情绪温度）。
+
+    数据源 dim1 data_context['market_stats']（daemon RAW 预计算，全市场共享）。
+    无数据/异常返回 ''（437 标准「有数据则显、缺则降级」）。
+    """
+    try:
+        sig = (dim_results or {}).get('signal') or {}
+        dc = sig.get('data_context') or {}
+        ms = dc.get('market_stats') or {}
+        if not ms:
+            return ''
+        parts = []
+        ma20 = ms.get('ma20_ratio')
+        if isinstance(ma20, (int, float)):
+            pct = ma20 * 100
+            tone = '偏强' if pct >= 60 else ('中性' if pct >= 40 else '偏弱')
+            parts.append(f'全市场MA20强势占比{pct:.0f}%（{tone}）')
+        lim = ms.get('limit_up_count')
+        if isinstance(lim, int) and lim > 0:
+            parts.append(f'涨停{lim}家')
+        sealing = ms.get('sealing_rate')
+        if isinstance(sealing, (int, float)) and sealing > 0:
+            parts.append(f'封板率{sealing * 100:.0f}%')
+        if not parts:
+            return ''
+        return '大盘状态：' + '；'.join(parts)
+    except Exception:
+        return ''
+
+
+def _sector_position_sentence(dim_results: dict, ts_code: str) -> str:
+    """437-A D3：第一层环境定位——板块定位句（所属行业热度/排名）。
+
+    数据源 dim1 data_context['sector_heat']（当日 109 行业）+ get_stock_industry。
+    无行业映射 / 无热度 → ''（437 缺则降级，不产该段）。
+    """
+    if not ts_code:
+        return ''
+    try:
+        from app.data import DataManager
+        sig = (dim_results or {}).get('signal') or {}
+        dc = sig.get('data_context') or {}
+        sector_heat = dc.get('sector_heat') or {}
+        if not sector_heat:
+            return ''
+        industry = DataManager().get_stock_industry(ts_code)
+        if not industry:
+            return ''
+        info = sector_heat.get(industry)
+        if not info or not isinstance(info, dict):
+            return ''
+        level = info.get('heat_level', '')
+        if level in ('none', '', None):
+            return ''
+        rank = info.get('rank')
+        level_cn = {'top_10': '主线热点', 'top_20': '较活跃', 'top_40': '中等'}.get(level, level)
+        rank_txt = f'（行业排名第{rank}）' if isinstance(rank, (int, float)) else ''
+        return f'板块定位：{industry}板块{level_cn}{rank_txt}'
     except Exception:
         return ''
 
@@ -852,17 +933,12 @@ class Dim8SummaryEngine:
 
         segments: dict = {}
 
-        # 六维（signal→structure→volume_price→fund_chip→emotion→risk）
+        # 五维（structure→volume_price→fund_chip→emotion→risk；signal 已按 2026-09-15
+        # 裁决移出 dim8，由 JUD 单独路径产出）
         for out_key, src_key, title in SEVEN_DIM_SPEC:
             seg = _segment_from_dim(dim_results, src_key, title)
             if seg is not None:
                 segments[out_key] = seg
-
-        # dim1 特例：dim_results 无 signal 维时回退 tags.right_side_confirm
-        if 'signal' not in segments:
-            fb = _dim1_fallback_segment(tags)
-            if fb is not None:
-                segments['signal'] = fb
 
         # summary 段：复用本引擎 evaluate 的综合组装（状态条+共识率+冲突+文字）
         # 兼容 dim_results 可能缺失 summary 维（dim8 产物本就在 JUD 路径才落），自行组装。
@@ -906,14 +982,24 @@ class Dim8SummaryEngine:
                 'plain': '状态总结：数据不足',
             }
 
-        # 462-3：环境定位——相对强弱句并入 summary 前置（437-A D3「第一层并入 summary」）。
-        # 不传 ts_code / 无数据 → 跳过（437 缺则降级，不改前端契约键）。
+        # 437-A D3：第一层环境定位三段（大盘状态→板块定位→相对强弱）并入 summary 前置。
+        # 有数据则显、缺则降级（437 §七-2），不改前端契约键。
         if ts_code and 'summary' in segments:
+            env_parts = []
+            ms = _market_state_sentence(dim_results)
+            if ms:
+                env_parts.append(ms)
+            sp = _sector_position_sentence(dim_results, ts_code)
+            if sp:
+                env_parts.append(sp)
             rs = _relative_strength_sentence(ts_code)
             if rs:
+                env_parts.append(rs)
+            if env_parts:
                 _seg = segments['summary']
-                _seg['text'] = f'{rs}；{_seg.get("text", "")}'
-                _seg['plain'] = f'{rs}；{_seg.get("plain", "")}' if _seg.get('plain') else rs
+                _env = '；'.join(env_parts)
+                _seg['text'] = f'{_env}；{_seg.get("text", "")}'
+                _seg['plain'] = f'{_env}；{_seg.get("plain", "")}' if _seg.get('plain') else _env
 
         # 437-A D2：收益驱动（dim7 估值/财务）并入 summary 尾置（素材不丢、不扩契约键）。
         # 无 valuation 维 / 全字段空 → 跳过（437 缺则降级）。

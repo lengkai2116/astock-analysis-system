@@ -1,13 +1,13 @@
 """436号 B1 契约单测：dim8 整体归集器产出 seven_dim_json 对齐前端契约
 
 覆盖 §5.1 T1-T10：
-  - T1 全维齐备 → 恰 7 键 {signal,structure,volume_price,fund_chip,emotion,risk,summary}
-        不含 signal_confirm/chip_fund/valuation
+  - T1 全维齐备 → 恰 6 键 {structure,volume_price,fund_chip,emotion,risk,summary}
+        不含 signal（2026-09-15 裁决：signal 由 JUD 单独产出）/signal_confirm/chip_fund/valuation
   - T2 灯色双轨：顶层 light=emoji，judgment.overall_light 保持颜色名
-  - T3 段内字段齐备：title/light/text/evidence/confidence/judgment/audit/plain
+  - T3 段内字段齐备：title/light/text/evidence/confidence/judgment/audit/plain（fund_chip 含 subsections）
   - T4 部分维缺失 → 该键不产出，summary 恒存在
   - T5 dim_results 为 None/{}/非法类型 → 返回 None 不抛异常
-  - T6 dim1 回退：无 signal 维但 tags.right_side_confirm 有值 → 产 signal 段；tags 空跳过
+  - T6 signal 移出：dim8 不再产出 signal 段（由 JUD 单独路径产出）
   - T7 summary 由 dim8 组装（含状态条/共识率）
   - T8 幂等稳定 + json 往返 emoji 可解析
   - T9 兼容包装 generate_seven_dim_from_signals 不抛异常
@@ -34,7 +34,7 @@ from app.opportunity_atlas.status_engine import (
 
 _SEG_FIELDS = ['title', 'light', 'text', 'evidence', 'confidence',
                'judgment', 'audit', 'plain']
-_EXPECTED_KEYS = {'signal', 'structure', 'volume_price', 'fund_chip',
+_EXPECTED_KEYS = {'structure', 'volume_price', 'fund_chip',
                   'emotion', 'risk', 'summary'}
 
 
@@ -152,26 +152,27 @@ class TestNoneHandling:
         assert build_seven_dim_from_dim_results(bad) is None
 
 
-# ── T6: dim1 回退（tags.right_side_confirm） ───────────────
+# ── T6: signal 移出（2026-09-15 裁决：dim8 不产 signal 段，由 JUD 单独产出） ──
 
-class TestDim1Fallback:
+class TestSignalExcluded:
 
-    def test_fallback_when_no_signal_dim(self):
+    def test_signal_never_produced_even_with_tags_confirm(self):
+        """即使 tags.right_side_confirm 有值，dim8 也不再产出 signal 段"""
         dr = _mk_dim_results()
-        del dr['signal']  # 无 signal 维
         tags = {'right_side_confirm': '强确认'}
         report = Dim8SummaryEngine().build_seven_dim_report(dr, tags=tags)
-        assert 'signal' in report
-        assert report['signal']['light'] == '🟢'
+        assert 'signal' not in report
+        assert 'summary' in report  # 门禁恒含
 
-    def test_no_fallback_when_tags_empty(self):
+    def test_no_signal_without_signal_dim(self):
+        """无 signal 维 → 不产出 signal 段（不回退 tags）"""
         dr = _mk_dim_results()
         del dr['signal']
         report = Dim8SummaryEngine().build_seven_dim_report(dr, tags={})
         assert 'signal' not in report
-        assert 'summary' in report  # 门禁恒含
+        assert 'summary' in report
 
-    def test_no_fallback_when_tags_none(self):
+    def test_no_signal_when_tags_none(self):
         dr = _mk_dim_results()
         del dr['signal']
         report = Dim8SummaryEngine().build_seven_dim_report(dr, tags=None)
