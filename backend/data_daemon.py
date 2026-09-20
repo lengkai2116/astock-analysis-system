@@ -3392,7 +3392,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         _db = None
                     _vr = _pick_volume_ratio(_db, trade_date)
                     features['volume_price'] = {
-                        'kline_pattern': vp_tags.get('pattern_signal', 'none'),
+                        # 形态仅由 _add_vp_simple_tags 的 pattern_signal（EnhancedPatternDetector）
+                        # 产出；_detect_kline_patterns 无该键，取 vp_tags 恒 'none'（接线缺陷）
+                        'kline_pattern': _simple.get('pattern_signal', 'none'),
                         'ma_alignment': _simple.get('ma_alignment', 'neutral'),
                         'volume_price_fit': _simple.get('volume_price_fit', 'neutral'),
                         'volume_ratio': _vr,
