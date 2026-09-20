@@ -1588,7 +1588,10 @@ class EnhancedCacheManager:
                 sql += " AND ts_code = ?"; params.append(ts_code)
             if benchmark:
                 sql += " AND benchmark = ?"; params.append(benchmark)
-            sql += " ORDER BY ts_code, benchmark"
+            # 438号：相对强弱按日全量写、多 asof 并存（旧行 rps 为 None/空）。按 ts_code 精确取时
+            # 必须取最新交易日行，故 asof_date DESC 优先；否则消费方取 [0] 会命中间隙期 None 行
+            # （446 D12 的 RPS 补算从未被读到）。
+            sql += " ORDER BY ts_code, asof_date DESC, benchmark"
             df = self._query_shard('relative_strength_cache', sql, params)
             if df is None or df.empty:
                 return []

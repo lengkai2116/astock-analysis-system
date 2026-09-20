@@ -134,15 +134,26 @@ class Dim3VPEngine(DataAwareMixin):
         # 445号：RPS 相对强弱因子补产出（原 RPS 被 RSI 顶替——强弱只读 rsi14，RPS 从不参与评分）
         # 知识库权威（量价形态打分系统/《RPS相对强弱指标》）：RPS>85 → +1 分；欧奈尔狂飙前平均 87、A股 80+。
         # data_context 由 dim1 预加载 relative_strength（rps_20d/rps_60d）；缺省回退独立查询。
+        # 注意：relative_strength 行里空缺的 rps 会以 None/NaN 形式存在（旧 asof 行），
+        # 必须把 NaN 一并视作"无数据"（取 20d 优先，NaN/None 均回退 60d），否则 float(NaN)>85 恒假
+        # → audit「相对强弱RPS」恒定不满足。
+        def _safe_rps(v):
+            try:
+                if v is None: return None
+                f = float(v)
+                return None if f != f else f  # NaN 自不等 → 视为 None
+            except (TypeError, ValueError):
+                return None
+
         rps_eff = None  # 取 20d 优先，缺则 60d
         if data_context:
             _rsc = data_context.get('relative_strength') or {}
         else:
             _rsc = {}
         if _rsc:
-            rps_eff = _rsc.get('rps_20d')
+            rps_eff = _safe_rps(_rsc.get('rps_20d'))
             if rps_eff is None:
-                rps_eff = _rsc.get('rps_60d')
+                rps_eff = _safe_rps(_rsc.get('rps_60d'))
         else:
             # 未从 data_context 读到（直接 evaluate / 旧调用）→ 独立查询 relative_strength_cache
             try:
@@ -150,17 +161,12 @@ class Dim3VPEngine(DataAwareMixin):
                 _rs_rows = _ecm_rs.get_relative_strength(ts_code=ts_code)
                 if _rs_rows:
                     _rr = _rs_rows[0]
-                    rps_eff = _rr.get('rps_20d')
+                    rps_eff = _safe_rps(_rr.get('rps_20d'))
                     if rps_eff is None:
-                        rps_eff = _rr.get('rps_60d')
+                        rps_eff = _safe_rps(_rr.get('rps_60d'))
             except Exception:
                 rps_eff = None
-        rps = None
-        try:
-            if rps_eff is not None:
-                rps = float(rps_eff)
-        except (TypeError, ValueError):
-            rps = None
+        rps = rps_eff
         # RPS>85 → +1 分（对齐知识库量价形态打分系统加分项）；无 RPS 数据时不给分不扣分（保守）
         rps_factor = 1 if (rps is not None and rps > 85) else 0
         dp = -1.5 if vp_state in ('背离', '严重背离') else 0
