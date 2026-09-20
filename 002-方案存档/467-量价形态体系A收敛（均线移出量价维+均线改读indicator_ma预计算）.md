@@ -124,12 +124,42 @@ detect_all 里带"预跌"后缀的 label 共21条，其中**均线类预跌4条*
 - 单测（已跑通 234 passed）：A——indicator_ma 传入优先 / 缺列回退 / 空表回退 / 上下行判定；B——消费点过滤生效 / 仅均线→none / detect_all+VOTE_MAP 保留 / 316守卫延续
 - 回归（已跑通）：test_467、test_kline_pattern_wiring、test_fix_315_316、test_dim3_patterns、test_450/455_dim3_granville、test_446_dim3/dim2、test_462、test_418、test_390、test_411、test_t61/66、test_t10、test_461_dim13/dim8、test_442_vs_indicator、test_466
 - 全链路：`sig_full_test` 待有 SIG 真实全量环境时执行（涉及 pattern_signal 实际产出与 dim3 判定接线）
+- ✅ **真实数据实测 + 全量重算（2026-09-20）**：见 §六下「kline_pattern 恒 none 根因诊断闭环」
 
 > **§二 变更记录**：v0.1 曾拟议 delete-detect_all 方案（§2.2/§2.3 原表述），实施核查确认其违反 445 后由用户拍板改为**消费点过滤**（v1.0）。
 
 ---
 
-## 六、445 冻结边界核查结论（本次实施的关键决策点）
+## 六、kline_pattern 恒 none 根因诊断闭环（2026-09-20 实测）
+
+**结论：恒 none 是"存量 pre_feat 未按修复代码重算"的假象，非真实 bug；688981 类纯均线股 `none` 是 467 消费点过滤的预期语义。**
+
+### 证据链
+1. **接线修复 commit `38db949`（"kline_pattern 接线缺陷——接 _add_vp_simple_tags 真值"）落地于 2026-09-20 11:00**；而 pre_feat_cache 存量行生成于 **2026-09-18 21:43**（`trade_date=2026-09-18`）。**修复代码在存量数据之后才进仓库** → 08-31~09-18 全部 pre_feat 的 `kline_pattern` 走的是修复前路径（`_simple` 为空 → 恒 `'none'`）。
+2. **链路核查**（data_daemon）：`features['volume_price']['kline_pattern']` = `_simple.get('pattern_signal','none')`（L3404，`_add_vp_simple_tags` 填真值）→ `_vp_f=features.get('volume_price')`（L3556）→ `_derived['pattern_signal']`（L3589）与 `_rsc_tags['pattern_signal']`（L3581，供 right_side_confirm）同源。
+3. **定向重跑 RAW-2**（`_precompute_raw_features` 8 只）后，7/8 产出真实形态，与探针 `detect_all` 预期逐只吻合：
+
+| 代码 | kline_pattern（重跑后） | derived.pattern_signal | 说明 |
+|---|---|---|---|
+| 600519.SH | M顶 | M顶 | 存量 `none` → 真值 |
+| 000001.SZ | 看涨吞没 | 看涨吞没 | ✅ |
+| 300750.SZ | 看跌捉腰带 | 看跌捉腰带 | ✅ |
+| 000002.SZ | 地量后倍量启动 | 地量后倍量启动 | ✅ |
+| 601318.SH | 镊子底 | 镊子底 | ✅ |
+| 600036.SH | 上升楔形 | 上升楔形 | ✅ |
+| 002594.SZ | 头肩顶 | 头肩顶 | ✅ |
+| 688981.SH | none | none | **467 消费点过滤预期**（其 detect_all 全形态均均线类被剔） |
+
+4. **688981 语义归因**（非缺陷）：`detect_all` 返回全为均线形态（如 MA30>MA60、格兰维尔买点4）→ 被 `_MA_PATTERN_NAMES` 剔除 → `pattern_signal='none'`。这正是 467"均线形态移出 pattern_signal、改读 dim1 indicator_ma 链路"的设计意图；真实非均线形态（看涨吞没/镊子底/头肩顶等）均正常保留。
+
+### 全量重算
+- 定向 8 只已重写；**全量 pre_feat 已于 2026-09-20 14:47 调用 `_precompute_raw_features(全量 codes)` 重算完成：5550/5552 只成功、失败 0、耗时 820s、trade_date=2026-09-18**（股票池口径 `_get_active_codes()` 统一入口，剔指数），消除 09-18 存量"接线修复前"数据。
+- 重算后抽样 8 只：7 只非 none（M顶/看涨吞没/看跌捉腰带/地量后倍量启动/镊子底/上升楔形/头肩顶）+ 688981 语义性 none（467 均线过滤预期），与定向验证逐只一致。
+- 本次为纯数据回填 + 验证，无代码改动、无 commit。
+
+---
+
+## 七、445 冻结边界核查结论（本次实施的关键决策点）
 `EnhancedPatternDetector.detect_all` **不只有 data_daemon 这一个消费方**：
 - `framework/VolumeStateAnalyzer.analyze`（L2747）调用 detect_all，用返回的"预涨/预跌"形态算 `_calc_resonance_score`（L2848-2888，每形态 ±2 + ≥2/≥3 追加共振分）
 - → `resonance_score` 进入 dim3 判定强度（dim_adapter.py:593 `0.7*sm_conf+0.3*resonance_norm`）+ L3360 `resonance_score>=3 and direction=="BUY"` 方向门控 + L3512 结论文案

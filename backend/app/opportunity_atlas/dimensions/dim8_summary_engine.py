@@ -435,16 +435,35 @@ def _generate_text(dim_results: dict, status_bar: str,
 
 def _flatten_value(v) -> str:
     """把 judgment 内嵌套 value/label 统一成字符串（避免输出 dict/None 进前端文本）"""
+    if isinstance(v, list):
+        # 列表字段：dict 项取中文表述（买卖点/风险因素），否则原样转字符串
+        items = [_flatten_value(item) for item in v]
+        items = [s for s in items if s]
+        return '、'.join(items) if items else ''
     if isinstance(v, dict):
-        # 形如 {'value': '上升'} 或 {'label': '集中'} 取子字段，否则取首个非空值
+        # 形如 {'value': '上升'} / {'label': '集中'} / {'type','point_type','price'}（买卖点）
         for k in ('value', 'label', 'state'):
             if k in v and v[k] is not None:
                 return str(v[k])
+        # 买卖点 dict：{'type':'buy','point_type':'first_buy','price':2.98}
+        pt = v.get('point_type') or v.get('type')
+        if pt:
+            cn = _POINT_TYPE_CN.get(pt, pt)
+            price = v.get('price')
+            return f'{cn}({price})' if price is not None else cn
         for sub in v.values():
             if sub is not None and sub != '':
                 return str(sub)
         return ''
     return '' if v is None else str(v)
+
+
+# 买卖点/阶段枚举 → 中文（供 _flatten_value 转述 list[dict] 字段）
+_POINT_TYPE_CN: dict[str, str] = {
+    'first_buy': '一买', 'second_buy': '二买', 'third_buy': '三买',
+    'first_sell': '一卖', 'second_sell': '二卖', 'third_sell': '三卖',
+    'buy': '买入', 'sell': '卖出',
+}
 
 
 def _brief_text(key_in: str, jg: dict, sd: dict) -> str:
@@ -490,7 +509,16 @@ def _yield_evidence(sd: dict) -> list:
 
 
 def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | None:
-    """按前端契约把单个 dim_results 维整形为报告段；缺维返回 None"""
+    """按前端契约把单个 dim_results 维整形为报告段；缺维返回 None
+
+    437-A 字段级编排（2026-09-20 拍板后实施）：
+      - text：按 _DIM8_T_SUBJECTS[src_key] 字段清单，从 status_description 取「字段名:值」子句
+        （字段级「分析逻辑实例→话术」，464 §十二 原料定义）；无映射字段时回退 _brief_text。
+      - evidence：按 _DIM8_E_FIELDS[src_key] 字段清单收集佐证（原 _yield_evidence 只取
+        plain/text/conclusion 字符串，改为字段级编排）。
+      - 缺维（src_key 无输出）→ None（437-A D7：缺维不产段，仅 summary 恒在）。
+    数据驱动：加字段 = 在 _DIM8_T_SUBJECTS/_DIM8_E_FIELDS 加一行，不动本函数。
+    """
     seg = (dim_results or {}).get(src_key)
     if not isinstance(seg, dict) or not seg:
         return None
@@ -498,11 +526,13 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
     sd = seg.get('status_description', {}) or {}
     au = seg.get('audit', {}) or {}
     overall = jg.get('overall_light', jg.get('light', 'yellow'))
+    text = _compose_dim_text(src_key, jg, sd)
+    evidence = _compose_dim_evidence(src_key, sd)
     return {
         'title': title,
         'light': _LIGHT_EMOJI.get(str(overall), '🟡'),
-        'text': _brief_text(src_key, jg, sd),
-        'evidence': _yield_evidence(sd)[:5],
+        'text': text,
+        'evidence': evidence[:5],
         'confidence': round(float(jg.get('continuous_value') or au.get('confidence') or 0.5), 2),
         'judgment': {
             'overall_light': jg.get('overall_light', 'yellow'),
@@ -518,6 +548,132 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
         },
         'plain': sd.get('plain', ''),
     }
+
+
+# ── 437-A 字段级编排映射表（2026-09-20 拍板；数据驱动，加字段=加行）──
+
+# 各维 text 主述字段（T）：按序取 status_description 非空值拼「字段名:值」子句。
+# 键名以《437-A字段级归集核对报告》3 处修正为准（dim4 direction→fund_flow、
+# dim6 volatility_atr→atr_pct、dim2 优先 buy_sell_points_detail）。
+_DIM8_T_SUBJECTS: dict[str, list[str]] = {
+    'structure': ['chanlun_direction', 'chanlun_strength', 'stage_name', 'trend_basis',
+                  'buy_sell_points_detail', 'multi_level_direction_text'],
+    'volume_price': ['vp_state', 'health_score', 'volume_energy', 'vol_ratio',
+                     'pattern', 'pattern_score', 'rps'],
+    'chip_fund': ['phase', 'fund_flow', 'fund_price_divergence', 'cost_structure',
+                  'crowding', 'signal', 'margin'],
+    'emotion': ['market', 'sector', 'stock', 'quadrant', 'temperature'],
+    'risk': ['risk_level', 'support_price', 'resistance_price', 'rr_value', 'rr_level',
+             'volatility_level', 'risk_factors'],
+    'valuation': ['valuation_level', 'potential_score', 'potential_strength',
+                  'fina_health', 'value_trap', 'growth_trap'],
+    'signal': ['attribute', 'strength', 'lifecycle_stage', 'verified', 'maintenance'],
+}
+
+# 各维 evidence 佐证字段（E）：按序取 status_description 非空值入 evidence 列表。
+# 对齐 437-A §三 跨维去重主源（dim3 主源个股情绪 → emotion 不再重复 stock 至 evidence 主位；
+# dim4 主源资金流 → valuation 不重复 fund_flow；dim2↔dim6 支撑阻力同源 → risk 主源）。
+_DIM8_E_FIELDS: dict[str, list[str]] = {
+    'structure': ['vs_zhongshu', 'vs_ma', 'vs_chip', 'vs_support_resistance', 'vs_indicator',
+                  'divergence', 'divergence_type', 'level_cross_score', 'ts_strength',
+                  'trend_structure_signal', 'chanlun_phase'],
+    'volume_price': ['divergence', 'granville'],
+    'chip_fund': ['retail_institution', 'fund_price_divergence_risk',
+                  'fund_price_divergence_status'],
+    'emotion': ['bociasi_quick', 'bociasi_slow'],
+    'risk': ['atr_pct', 'volatility_percentile', 'dist_to_support_pct',
+             'dist_to_resistance_pct', 'dist_to_prev_high_pct', 'rr_assessment',
+             'event_summary', 'liquidity_detail', 'invalidation'],
+    'valuation': ['pe_percentile', 'pb_percentile', 'fcf_yield', 'dividend_yield',
+                  'revenue_growth', 'potential_breakdown'],
+    'signal': ['decay_detail', 'risk_interaction'],
+}
+
+# evidence 数值字段表述模板（437 §七-6：数值转自然语言，不裸放）。{v} 为原值。
+_DIM8_E_FORMAT: dict[str, str] = {
+    'atr_pct': 'ATR占比{v:.2f}%',
+    'volatility_percentile': '波动率历史分位{v:.0%}',
+    'dist_to_support_pct': '距防守位{v:.1f}%',
+    'dist_to_resistance_pct': '距压力位{v:.1f}%',
+    'dist_to_prev_high_pct': '距前高{v:.1f}%',
+    'rr_value': '盈亏比{v:.2f}',
+}
+
+# 各维 text 主述字段的「字段名」中文标签（供「字段名:值」子句）
+_DIM8_FIELD_CN: dict[str, str] = {
+    'chanlun_direction': '缠论方向', 'chanlun_strength': '结构强度', 'stage_name': '阶段',
+    'trend_basis': '趋势依据', 'buy_sell_points_detail': '买卖点', 'multi_level_direction_text': '多级别',
+    'vp_state': '量价状态', 'health_score': '健康度', 'volume_energy': '量能',
+    'vol_ratio': '量比', 'pattern': '形态', 'pattern_score': '形态评分', 'rps': 'RPS',
+    'phase': '主力阶段', 'fund_flow': '资金流', 'fund_price_divergence': '资金价格背离',
+    'cost_structure': '筹码结构', 'crowding': '拥挤度', 'signal': '筹码信号', 'margin': '融资',
+    'market': '市场情绪', 'sector': '板块情绪', 'stock': '个股情绪', 'quadrant': '情绪象限',
+    'temperature': '情绪温度',
+    'risk_level': '风险等级', 'support_price': '防守位', 'resistance_price': '压力位',
+    'rr_value': '盈亏比', 'rr_level': '盈亏比评级', 'volatility_level': '波动率',
+    'risk_factors': '风险因素',
+    'valuation_level': '估值水平', 'potential_score': '潜力评分', 'potential_strength': '潜力强度',
+    'fina_health': '财务健康', 'value_trap': '估值陷阱', 'growth_trap': '成长陷阱',
+    'attribute': '信号属性', 'strength': '信号强度', 'lifecycle_stage': '生命周期',
+    'verified': '验证状态', 'maintenance': '维护状态',
+}
+
+
+def _compose_dim_text(src_key: str, jg: dict, sd: dict) -> str:
+    """437-A 字段级 text 编排：按 _DIM8_T_SUBJECTS 从 status_description 取 T 字段拼子句。
+
+    规则（对齐 437-A §一）：缺字段不占位（子句跳过）；数值字段转表述由各维引擎
+    status_description 已自产文字承载（本层只拼装不重算）；无 T 字段产出时回退 _brief_text。
+    """
+    fields = _DIM8_T_SUBJECTS.get(src_key, [])
+    parts = []
+    for f in fields:
+        v = (sd or {}).get(f)
+        if v is None or v == '' or v == 'none' or v == '无':
+            continue
+        label = _DIM8_FIELD_CN.get(f, f)
+        val = _flatten_value(v)
+        if not val:
+            continue
+        # 引擎自产字段多为完整句子（如 '强流出（5d_outflow）'），直接拼接不加冒号
+        parts.append(f'{label}:{val}')
+    if parts:
+        return '；'.join(parts)
+    return _brief_text(src_key, jg, sd)
+
+
+def _compose_dim_evidence(src_key: str, sd: dict) -> list:
+    """437-A 字段级 evidence 编排：按 _DIM8_E_FIELDS 收集 E 字段佐证。
+
+    缺失/空值/占位（'无'/'none'）字段跳过（437 §七-2 有数据则显）；列表字段
+    （risk_factors/event_summary/buy_sell_points_detail）展开为多条；数值字段
+    按 _DIM8_E_FORMAT 转表述（437 §七-6 不裸放数值）。
+    """
+    fields = _DIM8_E_FIELDS.get(src_key, [])
+    ev = []
+    for f in fields:
+        v = (sd or {}).get(f)
+        if v is None or v == '' or v == 'none' or v == '无':
+            continue
+        fmt = _DIM8_E_FORMAT.get(f)
+        if isinstance(v, list):
+            for item in v:
+                if item is None or item == '' or item == 'none':
+                    continue
+                s = fmt.format(v=item) if fmt else _flatten_value(item)
+                if s and s not in ev:
+                    ev.append(s)
+        else:
+            if fmt:
+                try:
+                    s = fmt.format(v=v)
+                except (TypeError, ValueError):
+                    s = _flatten_value(v)
+            else:
+                s = _flatten_value(v)
+            if s and s not in ev:
+                ev.append(s)
+    return ev
 
 
 def _dim1_fallback_segment(tags: dict) -> dict | None:
@@ -580,6 +736,31 @@ def _relative_strength_sentence(ts_code: str) -> str:
         return '相对强弱：' + '；'.join(core)
     except Exception:
         return ''
+
+
+def _valuation_sentence(dim_results: dict) -> str:
+    """437-A D2：收益驱动（dim7 估值/财务）并入 summary 素材句。
+
+    从 valuation 维 status_description 取估值水平/潜力/陷阱等 T 字段拼句；
+    无 valuation 维 / 全字段空 → 返回 ''（437 缺则降级，不占位）。
+    """
+    val = (dim_results or {}).get('valuation') or {}
+    sd = val.get('status_description', {}) or {}
+    if not sd:
+        return ''
+    parts = []
+    for f in ('valuation_level', 'potential_score', 'potential_strength', 'fina_health',
+              'value_trap', 'growth_trap'):
+        v = sd.get(f)
+        if v is None or v == '' or v == 'none' or v == '无':
+            continue
+        s = _flatten_value(v)
+        if s:
+            parts.append(f'{_DIM8_FIELD_CN.get(f, f)}:{s}')
+    if not parts:
+        return ''
+    return '；'.join(parts)
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -716,7 +897,9 @@ class Dim8SummaryEngine:
                 'title': SUMMARY_TITLE,
                 'light': _LIGHT_EMOJI.get(jg.get('overall_light', 'yellow'), '🟡'),
                 'text': text,
-                'evidence': [c['description'] for c in sd.get('conflicts', [])][:3],
+                # conflicts 已是字符串列表（evaluate 已转 description）；兼容 dict 兜底
+                'evidence': [c['description'] if isinstance(c, dict) else str(c)
+                             for c in sd.get('conflicts', [])][:3],
                 'confidence': round(float(jg.get('consensus_rate', 0.5)), 2),
                 'judgment': {'overall_light': jg.get('overall_light', 'yellow'),
                              'overall_direction': jg.get('overall_direction', 0),
@@ -750,6 +933,19 @@ class Dim8SummaryEngine:
                 _seg = segments['summary']
                 _seg['text'] = f'{rs}；{_seg.get("text", "")}'
                 _seg['plain'] = f'{rs}；{_seg.get("plain", "")}' if _seg.get('plain') else rs
+
+        # 437-A D2：收益驱动（dim7 估值/财务）并入 summary 尾置（素材不丢、不扩契约键）。
+        # 无 valuation 维 / 全字段空 → 跳过（437 缺则降级）。
+        # 注：_generate_text 的 dim_names 已含 valuation（plain 拼装会带"估值：…"），
+        # 若已含则本句去重跳过，避免估值双段。
+        if 'summary' in segments:
+            vs = _valuation_sentence(dim_results)
+            if vs:
+                _seg = segments['summary']
+                _cur = _seg.get('text', '') or ''
+                if '估值：' not in _cur:
+                    _seg['text'] = f'{_cur}；估值：{vs}'
+                    _seg['plain'] = f'{_seg.get("plain", "")}；估值：{vs}' if _seg.get('plain') else f'估值：{vs}'
 
         return segments
 
