@@ -97,8 +97,10 @@ class Dim2StructureEngine(DataAwareMixin):
         chanlun_result = None
         df = None
         try:
-            # 446号：日线=长线，走线段中枢（知识库"中长线强制线段中枢"）；段不足自动回退笔中枢
-            analyzer = ChanlunAnalyzer({'bi_zs_mode': False})
+            # 466号：日线切笔中枢（用户拍板——笔中枢缓解"无有效中枢"：实测 有效中枢
+            #   线段13%→笔87%、与均值排列参照一致率 线段30%→笔80%）；延展判定已对齐
+            #   czsc ZS.is_valid 整笔区间交集语义。多级别联立的日线同步笔中枢。
+            analyzer = ChanlunAnalyzer({'bi_zs_mode': True})
             # 411号Phase 6：优先使用data_context
             if data_context and 'daily_df' in data_context:
                 df = data_context['daily_df']
@@ -147,17 +149,20 @@ class Dim2StructureEngine(DataAwareMixin):
         vs_chip = _assess_vs_chip(tags)
         vs_indicator = _assess_vs_indicator(tags)
 
-        # 4. 结构强度（0-100 域；ChanlunScorer.score 返回 {'score': 0-100, 'details', 'recommendation'}）
-        strength = 50  # 无缠论结果/评分异常时中性分（0-100 域，对应 continuous_value=0.5）
+        # 4. 结构健康度（0-100 域；466号 ③④：chanlun_strength 语义从"信号强度/置信度"
+        #    重规划为"结构健康度"——以 11 定理 overall_score 为基底，中枢/趋势/背驰/买卖点
+        #    降为轻信号项。消解"健康+上升+无背驰却 8%/0%"（旧 score() 纯买卖点加减分，
+        #    茅台 15 三卖 -192 压到 8）。产出 analysis_result 的 theorem_check 已在 step 9
+        #    由 ChanlunAnalyzer 生成（与 chanlun_phase 同源）。
+        strength = 50  # 无缠论结果/评分异常时中性分（0-100，健康度域，对应 continuous_value=0.5）
         if chanlun_result:
             try:
                 scorer = ChanlunScorer()
-                # 464-5C：补传 latest_close + market_context——原只传 analysis_result，
-                #   价格匹配度（买点跌破/追高惩罚、卖点反弹加分）与换手/大单市场调整全部被跳过。
-                score_result = scorer.score(chanlun_result, latest_close=latest_close,
-                                            market_context=_build_market_context(data_context))
-                # 464号修复：原取 'strength' 键恒回退 0.5（返回值无此键）→ 真实结构强度从未接入；
-                #   正确键 'score'（0-100，score() 内部 +50 归一 clamp [0,100]）。
+                # 健康度：传 market_context（换手/大盘环境微调）；不传 latest_close——
+                #   价格匹配惩罚是买卖点信号语义（score() 用），与结构健康度无关。
+                score_result = scorer.structure_health_score(
+                    chanlun_result,
+                    market_context=_build_market_context(data_context))
                 strength = float(score_result.get('score', 50)) if isinstance(score_result, dict) else 50
             except Exception:
                 pass
@@ -257,7 +262,10 @@ class Dim2StructureEngine(DataAwareMixin):
             'vs_indicator': vs_indicator['detail'],
             'chanlun_direction': chanlun_result.get('trend', '未知') if chanlun_result else '未知',
             'trend_basis': chanlun_result.get('trend_basis', '') if chanlun_result else '',
+            # 466号 ③：chanlun_strength 保留别名（0-100，现语义=结构健康度；consumer 双读，
+            #   避免一次性 break 契约），新增显式 structure_health_score 键（同值）。
             'chanlun_strength': round(strength, 2) if isinstance(strength, (int, float)) else str(strength),
+            'structure_health_score': round(strength, 2) if isinstance(strength, (int, float)) else 0.0,
             'buy_sell_points': [str(p) for p in buy_sell_points[:3]],
             'plain': plain,
             # ── 457号：多级别联立（周/日/60min 区间套 + 方向一致性 + 关键价位）──
@@ -286,7 +294,8 @@ class Dim2StructureEngine(DataAwareMixin):
             'structure': struct_state, 'position': pos_state,
             'light': light, 'overall_light': light,
             'overall_direction': 1 if struct_state == '上升' else (-1 if struct_state == '下降' else 0),
-            # continuous_value 统一 0-1 置信语义（chanlun_strength 为 0-100 域，归一 /100）
+            # 466号 ③：continuous_value 语义从"置信度"改为"结构健康度归一"（0-1，strength/100）。
+            #   供 JUD/dim8 作结构健康置信，不再冒充信号可信度。
             'continuous_value': round(strength / 100.0, 4) if isinstance(strength, (int, float)) else 0.5,
         }
 
@@ -295,8 +304,10 @@ class Dim2StructureEngine(DataAwareMixin):
         #   保留 2 条数据完整门槛（趋势方向/价格vs中枢），新增 3 条判读结论条件
         #   （结构健康 chanlun_phase / 无背驰 / 有确认买点）。
         trend_val = chanlun_result.get('trend', '未知') if chanlun_result else '无数据'
-        # 判读：结构健康度（11定理 overall_score≥0.6 → 健康，D10 产出）
-        _phase_ok = chanlun_phase == '健康'
+        # 判读：结构健康度（466号 ③ 拍板：audit 与前端 structure_health_score 同源，
+        #   ≥60 即健康，不再用 chanlun_phase 纯定理口径，消解"audit=健康但前端54/100"打架）
+        _health_f = float(strength) if isinstance(strength, (int, float)) else 0.0
+        _phase_ok = _health_f >= 60
         # 判读：无背驰（顶背驰是结构性警示；无背驰才满足）
         _no_div = not divergence  # '' 为无背驰
         # 判读：有确认买点（buy_sell_points_detail 含 type='buy' 且 confirmed）
@@ -308,7 +319,7 @@ class Dim2StructureEngine(DataAwareMixin):
             {'name': '价格vs中枢', 'satisfied': vs_zhongshu['position'] not in ('', '无有效中枢'),
              'actual': vs_zhongshu['position'] or '未知', 'threshold': '有明确位置（有效中枢上/下/内）'},
             {'name': '结构健康度', 'satisfied': _phase_ok,
-             'actual': chanlun_phase, 'threshold': '11定理评分≥0.6（健康）'},
+             'actual': f"{_phase_ok and '健康' or '不足'}（{_health_f:.0f}/100）", 'threshold': '结构健康度≥60（前端同源分值）'},
             {'name': '背驰检测', 'satisfied': _no_div,
              'actual': divergence if divergence else '无背驰', 'threshold': '无背驰信号'},
             {'name': '有确认买点', 'satisfied': _buy_confirmed,

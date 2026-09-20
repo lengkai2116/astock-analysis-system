@@ -143,8 +143,32 @@ class TestBiZsModeAlignment:
     def test_multi_level_analyzer_passes_config_to_each_level(self):
         """MultiLevelChanlunAnalyzer 内部用同一 ChanlunConfig 实例分析各级别（对齐 bi_zs_mode）。"""
         analyzer = MultiLevelChanlunAnalyzer()
-        # 验证 config.multi_level.bi_zs_mode=False（各级别统一线段中枢，dim2 意图）
+        # 验证 config.multi_level.bi_zs_mode=False（各级别默认线段中枢）
         assert analyzer.config.multi_level.bi_zs_mode is False
+
+    def test_daily_level_uses_bi_zs_mode_true(self):
+        """466号：多级别联立的 daily 级别覆盖为笔中枢，weekly/hourly 保持线段中枢。"""
+        captured = {}
+
+        def _spy_config(config=None, **kw):
+            captured['bi_zs_mode'] = config.multi_level.bi_zs_mode
+            from app.engine.framework.chanlun_strategy import ChanlunAnalyzer as _CA
+            _real = _CA(config=config)
+            # 记录该分析器生效的 bi_zs_mode
+            captured['analyzer_bi_zs_mode'] = _real.bi_zs_mode
+            return _real
+
+        with mock.patch.object(
+                __import__('app.engine.framework', fromlist=['chanlun_multi_level'])
+                .chanlun_multi_level, 'ChanlunAnalyzer', _spy_config), \
+                _patch_precompute:
+            analyzer = MultiLevelChanlunAnalyzer()
+            analyzer.analyze({
+                'daily': make_klines(rows=130, seed=1),
+                'weekly': make_klines(rows=130, seed=2),
+            })
+        # 最后一次构造（daily，按 levels 顺序 weekly→daily）应生效 bi_zs_mode=True
+        assert captured.get('analyzer_bi_zs_mode') is True
 
 
 class TestDim1LoaderInjection:

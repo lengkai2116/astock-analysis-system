@@ -38,10 +38,11 @@ PHASE_WASHING = "washing"
 PHASE_LIFTING = "lifting"
 PHASE_DISTRIBUTING = "distributing"
 # 主力阶段中文名映射（供 evaluate 组装 phase_cn；注意与 dim5 情绪阶段 PHASE_MAP 语义不同）
+# 464号：统一拉升期枚举为 lifting（生产链 PhaseDetectionEngine 唯一产出 lifting，无 raising 存量），
+# 删除 raising 冗余键，避免历史双枚举并存再次掩盖口径不一致。
 PHASE_MAP = {
     'building': {'name': '建仓期', 'desc': '低位吸筹'},
     'washing': {'name': '洗盘期', 'desc': '清洗浮筹'},
-    'raising': {'name': '拉升期', 'desc': '快速上涨'},
     'lifting': {'name': '拉升期', 'desc': '快速上涨'},
     'distributing': {'name': '出货期', 'desc': '高位派发'},
     'support': {'name': '护盘期', 'desc': '支撑维护'},
@@ -5650,10 +5651,10 @@ def extract_fund_risk_tags(ts_code: str) -> dict:
 def _assess_phase(tags, dims):
     mfp = str(tags.get('main_force_phase', ''))
     pm = {'building': ('建仓期', '低位吸筹'), 'washing': ('洗盘期', '清洗浮筹'),
-          'raising': ('拉升期', '快速上涨'), 'distributing': ('出货期', '高位派发'), 'support': ('护盘期', '支撑维护')}
+          'lifting': ('拉升期', '快速上涨'), 'distributing': ('出货期', '高位派发'), 'support': ('护盘期', '支撑维护')}
     if mfp in pm:
         cn, desc = pm[mfp]
-        light = 'green' if mfp in ('building', 'raising') else ('red' if mfp == 'distributing' else 'yellow')
+        light = 'green' if mfp in ('building', 'lifting') else ('red' if mfp == 'distributing' else 'yellow')
         return {'phase': mfp, 'phase_cn': cn, 'detail': desc, 'light': light}
     return {'phase': 'unknown', 'phase_cn': '未知', 'detail': '主力阶段数据缺失', 'light': 'yellow'}
 
@@ -5790,7 +5791,7 @@ def _fund_chip_plain(phase, fund_flow, cost, signal, retail_inst, margin):
     parts = []
     pn = phase.get('phase', 'unknown')
     if pn == 'building': parts.append(f'大资金在逐步建仓（{phase.get("detail", "")}）')
-    elif pn == 'raising': parts.append(f'主力正在拉升（{phase.get("detail", "")}）')
+    elif pn == 'lifting': parts.append(f'主力正在拉升（{phase.get("detail", "")}）')
     elif pn == 'washing': parts.append('主力在洗盘（清洗浮筹）')
     elif pn == 'distributing': parts.append('主力在高位派发（出货风险）')
     fd = fund_flow.get('direction', '')
@@ -5851,7 +5852,7 @@ class Dim4ChipFundEngine(DataAwareMixin):
                         'phase': phase_engine_result['main_force_phase'],
                         'phase_cn': PHASE_MAP.get(phase_engine_result['main_force_phase'], {}).get('name', phase_engine_result['main_force_phase']),
                         'detail': f"PhaseDetector分析（置信度{phase_engine_result.get('phase_confidence', 0):.2f}）",
-                        'light': 'green' if phase_engine_result['main_force_phase'] in ('building', 'raising') else ('red' if phase_engine_result['main_force_phase'] == 'distributing' else 'yellow'),
+                        'light': 'green' if phase_engine_result['main_force_phase'] in ('building', 'lifting') else ('red' if phase_engine_result['main_force_phase'] == 'distributing' else 'yellow'),
                     }
                 if phase_engine_result and phase_engine_result.get('fund_flow') != 'none':
                     ff = phase_engine_result['fund_flow']
@@ -5881,6 +5882,16 @@ class Dim4ChipFundEngine(DataAwareMixin):
                 if df is not None and not df.empty:
                     cf = CrowdingFactor()
                     _mc = {'margin_df': data_context.get('margin_df')} if data_context else {}
+                    # 464-3：换手分项接线——从 data_context.daily_basic_df 提取 turnover_rate 序列传 turnover_data。
+                    # 此前恒 NORMAL_TURNOVER：daily_df（前复权 OHLCV）无 turnover 列且 evaluate 未传
+                    # turnover_data，拥挤度实际仅融资+波动两维；daily_basic_cache.turnover_rate 为真实生产列
+                    # （461-6 已确认），此处接通使换手分项真实参与 2/3 拥挤判定。
+                    if data_context:
+                        _db = data_context.get('daily_basic_df')
+                        if _db is not None and hasattr(_db, 'columns') and 'turnover_rate' in _db.columns:
+                            _tr = _db['turnover_rate'].dropna()
+                            if not _tr.empty:
+                                _mc['turnover_data'] = _tr
                     cr = cf.evaluate(ts_code, df, market_context=_mc)
                     crowding = {'level': cr.get('crowding_level', 'MODERATE_CROWDING'), 'detail': cr.get('risk_advice', ''),
                                  'score': cr.get('crowding_score', 0.5)}
@@ -5920,11 +5931,11 @@ class Dim4ChipFundEngine(DataAwareMixin):
         judgment = {
             'phase': phase_info['phase'], 'direction': fund_flow_info['direction'], 'light': phase_info['light'],
             'overall_light': phase_info['light'],
-            'overall_direction': 1 if phase_info['phase'] in ('building', 'raising') else (-1 if phase_info['phase'] == 'distributing' else 0),
+            'overall_direction': 1 if phase_info['phase'] in ('building', 'lifting') else (-1 if phase_info['phase'] == 'distributing' else 0),
             'continuous_value': round(1.0 - crowding.get('score', 0.5), 4),
         }
         conditions = [
-            {'name': '主力阶段', 'satisfied': phase_info['phase'] in ('building', 'raising', 'distributing'),
+            {'name': '主力阶段', 'satisfied': phase_info['phase'] in ('building', 'lifting', 'distributing'),
              'actual': phase_info['phase_cn'], 'threshold': '有明确阶段判定'},
             {'name': '资金流向', 'satisfied': fund_flow_info['level'] in ('very_strong', 'strong', 'medium', 'weak'),
              'actual': fund_flow_info['level_cn'], 'threshold': '有明确流向'},

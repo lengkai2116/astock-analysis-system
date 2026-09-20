@@ -1041,7 +1041,7 @@ class Dim7ValuationEngine(DataAwareMixin):
             {'name': '股息率>0', 'satisfied': val['dividend_yield'] is not None and val['dividend_yield'] > 0,
              'actual': div_str, 'threshold': '股息率>0'},
             {'name': '财务健康', 'satisfied': val['fina_health'] == 'pass',
-             'actual': val['fina_health'], 'threshold': 'ROE>6%近3年平均'},
+             'actual': val['fina_health'], 'threshold': 'ROE近3年均值>6%且负债率<70%(金融除外)且现金流覆盖净利>0.8'},
             {'name': '营收正增长', 'satisfied': val['revenue_growth'] is not None and val['revenue_growth'] > 0,
              'actual': f"{val['revenue_growth']}%" if val['revenue_growth'] is not None else 'N/A',
              'threshold': '营收正增长'},

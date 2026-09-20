@@ -1258,13 +1258,17 @@ class BiZhongshuFinder:
                 type='bi_zhongshu',
             )
 
-            # 延伸：后续笔不离开中枢区间
+            # 延伸：后续笔与中枢区间有交集则延伸，整笔完全离开中枢区间才闭合
+            # （对齐 czsc ZS.is_valid：每笔区间与中枢上/下沿有交集即视为仍在中枢内延伸，
+            #   而非原实现仅用笔终点 end_price 单点判定——单点判定会把"冲高中枢上沿后回落"
+            #   的笔误判离开/把"假突破后拉回"的笔误判延伸，造成中枢提前闭合或过度延伸）
             j = i + 3
             while j < len(strokes):
                 seg = strokes[j]
-                end_p = seg.end_price
-                if end_p > high or end_p < low:
-                    # 笔离开中枢 → 闭合
+                s_lo = min(seg.start_price, seg.end_price)
+                s_hi = max(seg.start_price, seg.end_price)
+                if s_hi < low or s_lo > high:
+                    # 整笔区间完全位于中枢下沿之下或上沿之上 → 离开中枢 → 闭合
                     break
                 zs.end_idx = seg.end_idx
                 zs.end_date = seg.end_date
@@ -2970,6 +2974,91 @@ class ChanlunScorer:
             'score': score,
             'details': details,
             'recommendation': ChanlunScorer._get_recommendation(score)
+        }
+
+    @staticmethod
+    def structure_health_score(analysis_result: Dict,
+                               market_context: Optional[Dict] = None) -> Dict:
+        """③④(466号)：结构健康度（0-100，语义=走势健康而非信号可信/置信度）。
+
+        以 11 定理 overall_score（ChanlunTheoremValidator.validate，与 chanlun_phase
+        同源，dim2 已用其产 chanlun_phase）为基底——权威健康来源；中枢质量、趋势延续、
+        背驰、买卖点降为轻信号项小幅加权。
+        消解"健康结构却 8%"：健康+上升+无背驰即使近期有三卖，也回落健康区间、
+        不被历史卖点压底（对比 score()：纯买卖点加减分，茅台 15 三卖 -192 压到 8）。
+        基底采用 100*theorem，任何通过健康阈（0.6）的股至少 60，区分度靠信号项微调。
+
+        Returns:
+            {'score': 0-100, 'details': [...], 'recommendation': ...}（与 score() 同构，
+            供 dim_adapter/前端复用）
+        """
+        details = []
+        tc = analysis_result.get('theorem_check') or {}
+        tc_sum = tc.get('summary') or {}
+        theorem = float(tc_sum.get('overall_score', 0.0) or 0.0)
+        base = theorem if theorem > 0 else 0.6  # 无定理数据按"欲病"中性，不塌底
+        score = 100.0 * base
+        details.append(f"11定理健康{base:.2f}（基底{score:.0f}）")
+
+        zhongshu_list = analysis_result.get('zhongshu', [])
+        if zhongshu_list:
+            score += 6
+            details.append(f"有效中枢({len(zhongshu_list)}个)(+6)")
+        if len(zhongshu_list) >= 2:
+            dirs = {zs.direction for zs in zhongshu_list
+                    if hasattr(zs, 'direction') and zs.direction}
+            if len(dirs) > 1:
+                score -= 8
+                details.append(f"多中枢方向矛盾({dirs})(-8)")
+
+        trend = analysis_result.get('trend', 'unknown')
+        if trend == 'up':
+            score += 10
+            details.append("上升趋势(+10)")
+        elif trend == 'down':
+            score -= 6
+            details.append("下降趋势(-6)")
+
+        divergence = analysis_result.get('divergence')
+        if divergence:
+            if divergence.direction == 'up':
+                score += 6
+                details.append("底背驰(+6)")
+            else:
+                score -= 12
+                details.append(f"顶背驰(-12): {divergence.type}")
+
+        # 买卖点降为轻信号项（健康度不因历史卖点塌底，只做小幅修正）
+        buy_points = _recent_by_type(analysis_result.get('buy_points', []))
+        sell_points = _recent_by_type(analysis_result.get('sell_points', []))
+        if buy_points:
+            score += min(6, 2 * len(buy_points))
+            details.append(f"近期买点{len(buy_points)}个(+轻)")
+        if sell_points:
+            score -= min(8, 3 * len(sell_points))
+            details.append(f"近期卖点{len(sell_points)}个(-轻)")
+
+        if market_context:
+            turnover = market_context.get('turnover_rate')
+            if turnover is not None and turnover > 10:
+                score += 3
+                details.append("高换手活跃(+3)")
+            elif turnover is not None and turnover > 5:
+                score += 2
+                details.append("换手活跃(+2)")
+            idx_condition = market_context.get('index_condition')
+            if idx_condition == 'POOR':
+                score -= 4
+                details.append("大盘偏弱(-4)")
+            elif idx_condition == 'GOOD':
+                score += 2
+                details.append("大盘偏强(+2)")
+
+        score = max(0, min(100, round(score)))
+        return {
+            'score': score,
+            'details': details,
+            'recommendation': ChanlunScorer._get_recommendation(score),
         }
 
     @staticmethod

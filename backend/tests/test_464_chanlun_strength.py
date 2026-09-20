@@ -44,9 +44,9 @@ _DEFAULT = object()
 
 
 def _evaluate(score_result=None, analyze=_DEFAULT):
-    """在 patch analyze + patch ChanlunScorer.score 下跑 evaluate。
+    """在 patch analyze + patch ChanlunScorer.structure_health_score 下跑 evaluate。
 
-    score_result=None → score mock 返回 {'score': 72}（正常值）；
+    score_result=None → 健康度 mock 返回 {'score': 72}（正常值）；
     analyze=_DEFAULT → analyze mock 返回 _mk_analyzer_result()；analyze=None → 无缠论。
     """
     df = _mk_df()
@@ -58,8 +58,8 @@ def _evaluate(score_result=None, analyze=_DEFAULT):
     _score_val = {'score': 72, 'details': [], 'recommendation': 'BUY'} \
         if score_result is None else score_result
     with mock.patch.object(ChanlunAnalyzer, 'analyze', return_value=_analyze_val):
-        with mock.patch.object(dim2_structure_engine.ChanlunScorer, 'score',
-                               return_value=_score_val):
+        with mock.patch.object(dim2_structure_engine.ChanlunScorer,
+                               'structure_health_score', return_value=_score_val):
             return eng.evaluate({}, tags, data_context={'daily_df': df})
 
 
@@ -95,7 +95,10 @@ class TestDim2StrengthRealtime:
 
 
 class TestDim2MarketContextWired:
-    """464-5C：score 补传 latest_close + market_context（价格匹配度/市场调整生效）。"""
+    """466号 ③④：structure_health_score 传 market_context（换手/大盘环境微调生效）。
+
+    注：健康度不传 latest_close（价格匹配惩罚是 score() 买卖点信号语义，与结构健康度无关）。
+    """
 
     @staticmethod
     def _capture_evaluate(data_context):
@@ -104,8 +107,6 @@ class TestDim2MarketContextWired:
         captured = {'calls': []}
 
         def _fake_score(*args, **kwargs):
-            # ChanlunScorer.score 同时被 LevelValidator（位置参数）调用 → 记录全部，
-            # 断言取第一次（dim2 evaluate 第 4 步的调用）。
             captured['calls'].append((args, kwargs))
             return {'score': 66, 'details': [], 'recommendation': 'BUY'}
 
@@ -113,12 +114,12 @@ class TestDim2MarketContextWired:
         dc = {'daily_df': df}
         dc.update(data_context or {})
         with mock.patch.object(ChanlunAnalyzer, 'analyze', return_value=_mk_analyzer_result()):
-            with mock.patch.object(dim2_structure_engine.ChanlunScorer, 'score',
-                                   side_effect=_fake_score):
+            with mock.patch.object(dim2_structure_engine.ChanlunScorer,
+                                   'structure_health_score', side_effect=_fake_score):
                 out = eng.evaluate({}, tags, data_context=dc)
         return out, captured
 
-    def test_latest_close_and_market_context_passed(self):
+    def test_market_context_passed(self):
         dbb = pd.DataFrame({
             'trade_date': pd.date_range('2025-01-01', periods=3, freq='B'),
             'turnover_rate': [1.0, 5.0, 12.0],
@@ -130,21 +131,20 @@ class TestDim2MarketContextWired:
         df = _mk_df()
         out, captured = self._capture_evaluate({'daily_basic_df': dbb, 'moneyflow_df': mf})
         _args, _kwargs = captured['calls'][0]       # 第一次 = dim2 evaluate 第 4 步
-        assert _kwargs['latest_close'] == float(df['close'].iloc[-1])
+        assert 'latest_close' not in _kwargs          # 健康度不传价格匹配（score 语义）
         mc = _kwargs['market_context']
-        assert mc['turnover_rate'] == 12.0          # 最新交易日换手率
-        assert mc['net_lg_amount'] == 8e7           # 最新交易日大单净流入
+        assert mc['turnover_rate'] == 12.0          # 最新交易日换手率（健康度微调用）
         assert out['status_description']['chanlun_strength'] == 66.0
+        assert out['status_description']['structure_health_score'] == 66.0
         assert out['judgment']['continuous_value'] == 0.66
 
     def test_missing_market_sources_ok(self):
-        """data_context 无 daily_basic/moneyflow → market_context 缺省不炸，score 正常。"""
+        """data_context 无 daily_basic/moneyflow → market_context 缺省不炸，健康度正常。"""
         df = _mk_df()
         out, captured = self._capture_evaluate(None)
         _args, _kwargs = captured['calls'][0]
-        assert _kwargs['latest_close'] == float(df['close'].iloc[-1])
         mc = _kwargs.get('market_context')
-        assert mc is None or mc == {}
+        assert mc is None or mc == {} or 'turnover_rate' not in mc
         assert out['status_description']['chanlun_strength'] == 66.0
 
     def test_dirty_market_values_skipped(self):
@@ -186,7 +186,8 @@ class TestDim2StrengthFallback:
         eng = Dim2StructureEngine()
         with mock.patch.object(ChanlunAnalyzer, 'analyze',
                                return_value=_mk_analyzer_result()):
-            with mock.patch.object(dim2_structure_engine.ChanlunScorer, 'score',
+            with mock.patch.object(dim2_structure_engine.ChanlunScorer,
+                                   'structure_health_score',
                                    side_effect=RuntimeError('boom')):
                 out = eng.evaluate({}, {'ts_code': 'T.XSHG'},
                                    data_context={'daily_df': df})

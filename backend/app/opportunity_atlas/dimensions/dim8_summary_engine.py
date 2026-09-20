@@ -468,6 +468,10 @@ def _brief_text(key_in: str, jg: dict, sd: dict) -> str:
         conf = float(jg.get('continuous_value') or 0.5)
     except (TypeError, ValueError):
         conf = 0.5
+    # 466号 ⑤：structure 维 continuous_value 语义为"结构健康度"，文案改为"结构健康xx/100"，
+    #   不再冒充信号"置信xx%"。其余维保持原置信文案。
+    if key_in == 'structure':
+        return f'{state}（结构健康{conf * 100:.0f}/100）' if state else ''
     return f'{state}（置信{conf:.0%}）' if state else ''
 
 

@@ -142,14 +142,14 @@ class TestJudgmentConditions:
             theorem_check={'summary': {'overall_score': 0.7}}))
         c = _cond(au, '结构健康度')
         assert c['satisfied'] is True
-        assert c['actual'] == '健康'
+        assert c['actual'] == '健康（70/100）'
 
     def test_phase_ill_false(self):
         au = _evaluate(_mk_analyzer_result(
             theorem_check={'summary': {'overall_score': 0.5}}))
         c = _cond(au, '结构健康度')
         assert c['satisfied'] is False
-        assert c['actual'] == '欲病'
+        assert c['actual'] == '不足（50/100）'
 
     def test_no_divergence_true(self):
         au = _evaluate(_mk_analyzer_result(divergence=None))

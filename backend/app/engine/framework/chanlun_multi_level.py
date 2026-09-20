@@ -7,6 +7,7 @@
 参考: chan.py CChan.lv_list 参数机制
 知识库: 缠中说禅买卖点级别定理 — 大级别买卖点必然是次级别以下某一级别买卖点
 """
+import dataclasses
 import logging
 from collections import OrderedDict
 from typing import Dict, List, Optional
@@ -84,9 +85,16 @@ class MultiLevelChanlunAnalyzer:
             if cached is not None:
                 results[level] = cached
             else:
-                # 457号：每级分析器统一走线段中枢（config.multi_level.bi_zs_mode=False，
-                #   对齐 dim2 日线 446 号意图），并透传 ts_code 以复用预计算 MACD（411 Phase 5）。
-                analyzer = ChanlunAnalyzer(config=self.config)
+                # 466号：日线切笔中枢（对齐 dim2 主链），周/时线保持线段中枢
+                #   （知识库：中长线用线段中枢、短线用笔中枢；日线笔中枢缓解"无有效中枢"）。
+                # 每级各自实例化分析器，daily 覆盖 bi_zs_mode=True，其余沿用 config 默认。
+                if level == 'daily':
+                    _lv_cfg = dataclasses.replace(
+                        self.config, multi_level=dataclasses.replace(
+                            self.config.multi_level, bi_zs_mode=True))
+                    analyzer = ChanlunAnalyzer(config=_lv_cfg)
+                else:
+                    analyzer = ChanlunAnalyzer(config=self.config)
                 result = analyzer.analyze(df)
                 if 'error' not in result:
                     self._cache.set(cache_key, result, 'analysis')
