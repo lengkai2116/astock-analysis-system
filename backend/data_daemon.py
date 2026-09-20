@@ -3379,7 +3379,14 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 try:
                     vp_tags = vps._detect_kline_patterns(df)
                     _simple = {}
-                    _add_vp_simple_tags(df, _simple)
+                    # 467号 A：ma_alignment 改读 indicator_ma 预计算宽表（412/460 统一供给，
+                    # 与 dim1 data_context['indicator_ma_df'] 同源）；失败回退 raw np.mean。
+                    _ind_ma = None
+                    try:
+                        _ind_ma = _ecm.get_indicators_wide(code)
+                    except Exception as _e:
+                        logger.debug(f"RAW量价 indicator_ma 读取失败，回退raw均线 [{code}]: {_e}")
+                    _add_vp_simple_tags(df, _simple, indicator_ma=_ind_ma)
                     # 459号 R4-b + 461-10：量比接真实生产点 _compute_volume_ratio 已回写
                     # daily_basic_cache.volume_ratio，此处读真值（不再恒 1.0），并按特征
                     # trade_date 跨表日期对齐（回补避免错日），见 _pick_volume_ratio。
@@ -3864,19 +3871,55 @@ def _precompute_raw_features(codes, target_date: str | None = None):
         _last_step_counts['RAW-2'] = f"{succeeded}/{len(codes)} stocks (fail={failed})"
 
 
-def _add_vp_simple_tags(df, tags):
-    """计算简单量价标签：ma_alignment / volume_price_fit / volatility_level（461-13 删 gap_type/breakout_attempts 死算）"""
+# 467号 B：均线类形态名集合——在 pattern_signal 消费点过滤（wiki 归入【均线系统/格兰威尔均线八法则】，
+# 由 ma_alignment 独立供给，避免与量价形态票源双计票）。
+# 来源对齐 EnhancedPatternDetector.detect_all 中被移出的 批2(8)/Batch-C(5)/格兰维尔8法则(8)/放量站上60日线(1)。
+_MA_PATTERN_NAMES = frozenset({
+    # 批2（8）——MA5金叉/死叉MA10、均线多/空头排列、连续站上60日线、MA5上穿MA20/60、回踩MA60
+    '放量站上60日线', 'MA5金叉MA10', 'MA5死叉MA10', '均线多头排列', '均线空头排列',
+    '连续站上60日线', 'MA5上穿MA20', '回踩MA60获支撑', 'MA5上穿MA60',
+    # Batch-C（5）——三线开花多/空头、MA30>MA60、站上MA120/250
+    '三线开花多头', '三线开花空头', 'MA30>MA60', '站上MA120', '站上MA250',
+    # P1-#12（8）——格兰维尔8法则位置版
+    '格兰维尔买点1-突破买', '格兰维尔买点2-回踩买', '格兰维尔买点3-偏离买', '格兰维尔买点4-新低买',
+    '格兰维尔卖点1-跌破卖', '格兰维尔卖点2-反抽卖', '格兰维尔卖点3-偏离卖', '格兰维尔卖点4-新高卖',
+})
+
+
+def _add_vp_simple_tags(df, tags, indicator_ma=None):
+    """计算简单量价标签：ma_alignment / volume_price_fit / volatility_level（461-13 删 gap_type/breakout_attempts 死算）
+
+    467号 A：ma_alignment 的 ma5/10/20/60 优先从 indicator_ma 预计算宽表读取
+    （412/460 统一供给，dim1 同源），缺失列/空表回退 raw np.mean（461 先例）。
+    indicator_ma 为 `_ecm.get_indicators_wide` 返回的 DataFrame（含 ma5/10/20/30/60/120/250 列）或 None。
+    """
     closes = df['close'].values
     opens = df['open'].values if 'open' in df.columns else closes
     highs = df['high'].values if 'high' in df.columns else closes
     lows = df['low'].values if 'low' in df.columns else closes
     vols = df['vol'].values if 'vol' in df.columns else np.ones(len(closes))
 
+    def _read_ma(period):
+        """优先读 indicator_ma 预计算最新行，缺失回退 raw np.mean"""
+        if indicator_ma is not None and not indicator_ma.empty:
+            col = f'ma{period}'
+            if col in indicator_ma.columns:
+                v = indicator_ma[col].iloc[-1]
+                if v is not None:
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        pass
+        if len(closes) >= period:
+            return float(np.mean(closes[-period:]))
+        return 0.0
+
     if len(closes) >= 20:
-        ma5 = np.mean(closes[-5:])
-        ma10 = np.mean(closes[-10:])
-        ma20 = np.mean(closes[-20:])
-        ma60 = np.mean(closes[-60:]) if len(closes) >= 60 else 0
+        ma5 = _read_ma(5)
+        ma10 = _read_ma(10)
+        ma20 = _read_ma(20)
+        ma60 = _read_ma(60)
+        # 全部读取失败（<60 且无预计算）时 ma60=0 → mixed（与原行为一致）
         # ma_alignment
         if ma5 > ma10 > ma20 > ma60 and ma60 > 0:
             tags['ma_alignment'] = 'bullish'
@@ -3913,12 +3956,18 @@ def _add_vp_simple_tags(df, tags):
                 tags['volatility_level'] = 'low'
 
         # pattern_signal: EnhancedPatternDetector 完整形态检测（308号/309号 S1）
-        # 45+ 种规则（预涨/预跌/黑马/K线反转），预跌型优先（否决语义：风险信号比确认信号更重要）
+        # 45+ 种规则（预涨/预跌/黑马/K线反转），预跌型优先（否决语义：风险信号比确认信号更重要）。
+        # 467号 B：均线类形态（批2/Batch-C/格兰维尔8法则/放量站上60日线）在**消费点**过滤——
+        # 不进入 pattern_signal（wiki 归入【均线系统/格兰威尔均线八法则】，由 ma_alignment 独立供给，避免双计票）。
+        # detect_all 规则保持原样（framework VolumeStateAnalyzer 复用其共振评分，属 445 冻结判定逻辑，不触碰），
+        # 仅在本消费点剔除均线形态。
         if len(closes) >= 5:
             try:
                 from app.engine.framework.volume_price_strategy import EnhancedPatternDetector
                 detector = EnhancedPatternDetector()
                 pats = detector.detect_all(closes, opens, highs, lows, vols)
+                # 过滤均线形态——仅从 pattern_signal 票源剔除，framework 共振路径不受影响
+                pats = [p for p in pats if p.split('(')[0] not in _MA_PATTERN_NAMES]
                 if pats:
                     # 预跌型优先：若同时存在预涨/预跌形态，取预跌（保守，供闸门2否决）
                     bearish = [p for p in pats if '预跌' in p]

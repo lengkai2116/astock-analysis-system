@@ -61,10 +61,13 @@ class TestKlinePatternWiring:
             "_detect_kline_patterns 返回 dict 无 pattern_signal 键，原写法恒 'none'"
 
     def test_simple_pattern_signal_still_computed(self):
-        """_add_vp_simple_tags 仍在量价段内被调用并以 _simple 承接（形态真值来源保留）"""
+        """_add_vp_simple_tags 仍在量价段内被调用并以 _simple 承接（形态真值来源保留）
+
+        467号：新增 indicator_ma 预计算入参（A 改造），但形态产出与 _simple 承接关系不变。
+        """
         src = _precompute_src()
-        assert "_add_vp_simple_tags(df, _simple)" in src, \
-            "形态真值由 _add_vp_simple_tags 产出，必须保留"
+        assert "_add_vp_simple_tags(df, _simple, indicator_ma=" in src, \
+            "形态真值由 _add_vp_simple_tags 产出，必须保留且接收 indicator_ma"
 
     def test_simple_pattern_signal_never_dropped(self):
         """_simple 字典必须被消费（不再"算出来又丢"）：kline_pattern 引用了它"""
