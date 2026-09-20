@@ -407,56 +407,6 @@ def _build_invalidation(support, tags, dims) -> list[dict]:
     return conditions
 
 
-# ═══════════════════════════════════════════════════════════
-# 白话文本
-# ═══════════════════════════════════════════════════════════
-
-def _risk_plain(level, factors, geo, rr, vol, invalidation) -> str:
-    parts = []
-    level_cn = {'低': '低风险', '中': '中等风险', '高': '高风险'}.get(level, f'{level}风险')
-    parts.append(level_cn)
-
-    support = geo.get('support_price')
-    dist_sup = geo.get('dist_to_support_pct')
-    if support and dist_sup is not None:
-        parts.append(f'防守位{support}元（距现价{dist_sup:+.1f}%）')
-
-    resistance = geo.get('resistance_price')
-    dist_res = geo.get('dist_to_resistance_pct')
-    if resistance and dist_res is not None:
-        parts.append(f'压力位{resistance}元（距现价{dist_res:+.1f}%）')
-
-    rr_val = rr.get('rr_value')
-    if rr_val:
-        if rr_val >= 3:
-            parts.append(f'盈亏比{rr_val}（优质）')
-        elif rr_val >= 2:
-            parts.append(f'盈亏比{rr_val}（较好）')
-        elif rr_val >= 1:
-            parts.append(f'盈亏比{rr_val}（一般）')
-        else:
-            parts.append(f'盈亏比{rr_val}（不划算）')
-
-    vol_level = vol.get('level', '')
-    vol_cn = {'low': '低波动', 'medium': '中等波动', 'high': '高波动'}.get(vol_level, '')
-    if vol_cn:
-        parts.append(vol_cn)
-
-    key_factors = [f['factor'] for f in factors if f.get('satisfied') and f.get('severity') in ('高', '极高')]
-    if key_factors:
-        parts.append(f'需关注：{"、".join(key_factors)}')
-
-    if invalidation:
-        parts.append(f'止损条件：{invalidation[0].get("condition", "")}')
-
-    return '，'.join(parts) if parts else '风险数据不足'
-
-
-# ═══════════════════════════════════════════════════════════
-# 第6维 引擎
-# ═══════════════════════════════════════════════════════════
-
-
 # === event_monitor.py === 已迁移至独立模块 event_monitor.py（405号建议2+5）
 # dim6 改为从 pre_feat_cache.event 读取 RAW-2 预计算的事件标签
 
@@ -1226,8 +1176,6 @@ class Dim6RiskEngine(DataAwareMixin):
         invalidation = _build_invalidation(geo.get('support_price'), tags, dims)
 
         # 6. status_description
-        plain = _risk_plain(risk_info['level'], risk_factors, geo, rr_info, vol_info, invalidation)
-
         risk_evidence_parts = []
         risk_evidence_parts.append(f"风险等级={risk_info['level']}({risk_info['detail']})")
         if geo.get('support_price'):
@@ -1285,7 +1233,6 @@ class Dim6RiskEngine(DataAwareMixin):
             'event_details': event_details_out,
             'event_summary': [e.get('description', '') for e in event_results[:5] if e.get('description')],
             'risk_evidence': risk_evidence,
-            'plain': plain,
             'support_resistance': f"防守位{geo.get('support_price', '无')}元（距现价{geo.get('dist_to_support_pct', '无')}），压力位{geo.get('resistance_price', '无')}元（距现价{geo.get('dist_to_resistance_pct', '无')}）",
         }
 

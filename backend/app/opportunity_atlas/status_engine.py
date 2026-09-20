@@ -343,11 +343,14 @@ class StatusEngine:
         s = dim_results.get('structure')
         if s and isinstance(s, dict):
             judg = s.get('judgment', {})
+            _sd = s.get('status_description', {}) or {}
+            # plain 已删除（dim8 唯一叙事口径）：evidence 改取结构维结构化详情
+            _ev = _sd.get('vs_ma') or _sd.get('vs_zhongshu') or _sd.get('vs_support_resistance') or ''
             dims['structure'] = {
                 'state': judg.get('structure', tags.get('state_label', '盘整')),
                 'light': judg.get('light', 'yellow'),
                 'confidence': 0.7,
-                'evidence': [s.get('status_description', {}).get('plain', '')],
+                'evidence': [_ev] if _ev else [],
             }
         else:
             # 回退到tags推断

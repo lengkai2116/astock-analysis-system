@@ -635,9 +635,6 @@ def analyze_signal(dims: dict, tags: dict, lifecycle: dict = None) -> dict:
     # 6. 风险交互
     risk_level = dims.get('risk', {}).get('state', '中')
 
-    # 7. 白话文本
-    plain = signal_plain(attr, strength, maintenance, lifecycle_info)
-
     # 8. status_description
     status_description = {
         'attribute': f"{attr['name']}（{attr['detail']}）",
@@ -648,7 +645,6 @@ def analyze_signal(dims: dict, tags: dict, lifecycle: dict = None) -> dict:
         'lifecycle_stage': lifecycle_info['lifecycle_stage'],
         'verified': lifecycle_info['verified'],
         'decay_detail': decay['detail'],
-        'plain': plain,
     }
 
     # 9. judgment

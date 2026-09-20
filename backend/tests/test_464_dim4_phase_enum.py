@@ -105,9 +105,11 @@ class TestEvaluateEngine:
         assert cond['satisfied'] is True
         assert cond['actual'] == '拉升期'
 
-    def test_lifting_plain_includes_raising_text(self, monkeypatch):
+    def test_lifting_phase_field_has_lifting(self, monkeypatch):
+        # plain 已删除（dim8 唯一叙事口径）：断言 phase 结构化字段
         res = self._run_evaluate(monkeypatch, 'lifting')
-        assert '主力正在拉升' in res['status_description']['plain']
+        assert '拉升期' in res['status_description']['phase']
+        assert res['judgment']['phase'] == 'lifting'
 
     def test_distributing_still_red(self, monkeypatch):
         res = self._run_evaluate(monkeypatch, 'distributing')

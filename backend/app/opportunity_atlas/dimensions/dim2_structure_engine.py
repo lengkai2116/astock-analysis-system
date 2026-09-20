@@ -243,9 +243,7 @@ class Dim2StructureEngine(DataAwareMixin):
         except Exception as e:
             logger.debug(f"趋势结构检测失败: {e}")
 
-        # 6. 白话文本
-        plain = _structure_plain(vs_zhongshu, vs_ma, vs_sr, vs_chip, vs_indicator)
-        # 440号：结构态改为引擎自产（缠论 trend 映射），不再读空 dims['structure']
+        # 6. 结构态（440号：结构态改为引擎自产（缠论 trend 映射），不再读空 dims['structure']）
         _t = (chanlun_result.get('trend', '') if chanlun_result else '') or str(tags.get('state_label', ''))
         if _t in ('up', 'down', '上升', '下降'):
             struct_state = '上升' if _t in ('up', '上升') else '下降'
@@ -267,7 +265,6 @@ class Dim2StructureEngine(DataAwareMixin):
             'chanlun_strength': round(strength, 2) if isinstance(strength, (int, float)) else str(strength),
             'structure_health_score': round(strength, 2) if isinstance(strength, (int, float)) else 0.0,
             'buy_sell_points': [str(p) for p in buy_sell_points[:3]],
-            'plain': plain,
             # ── 457号：多级别联立（周/日/60min 区间套 + 方向一致性 + 关键价位）──
             #   multi_level 键与 strategy_analyze/dim4/tag_extractor/fallback_description 契约一致
             #   （direction_text/direction_map/near_levels/levels/enabled）；数据不足时不产键（保持原空壳语义）。
@@ -474,17 +471,3 @@ def _assess_vs_indicator(tags):
             pass
     return {'detail': '，'.join(parts) if parts else '指标数据不足'}
 
-
-def _structure_plain(vs_z, vs_ma, vs_sr, vs_chip, vs_ind):
-    parts = []
-    pos = vs_z.get('position', '')
-    if pos == '上方': parts.append("价格突破中枢上沿，离开成本区")
-    elif pos == '下方': parts.append("价格在中枢下方运行")
-    elif pos == '内部': parts.append("价格在中枢箱体内震荡")
-    ma = vs_ma.get('alignment', '')
-    if ma: parts.append(f"均线{ma_alignment_cn(ma)}")
-    sr = vs_sr.get('detail', '')
-    if sr and '数据不足' not in sr: parts.append(sr)
-    chip = vs_chip.get('detail', '')
-    if chip and '数据不足' not in chip: parts.append(chip)
-    return '，'.join(parts) if parts else '结构数据不足'

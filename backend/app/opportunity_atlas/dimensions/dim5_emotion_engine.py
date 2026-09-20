@@ -325,52 +325,9 @@ def _overall_light(market_light: str, sector_light: str, stock_light: str) -> st
     return 'yellow'
 
 
-def _emotion_plain(market: dict, sector: dict, stock: dict,
-                   quadrant: dict = None, temperature: float = None) -> str:
-    parts = []
-    phase = market.get('phase', '')
-    if phase in ('冰点',):
-        parts.append(f'市场极度低迷（{market.get("detail", "")}）')
-    elif phase in ('萌芽',):
-        parts.append(f'市场开始回暖（{market.get("detail", "")}）')
-    elif phase in ('发酵',):
-        parts.append(f'市场氛围偏暖（{market.get("detail", "")}）')
-    elif phase in ('高潮',):
-        parts.append(f'市场情绪过热（{market.get("detail", "")}）')
-    elif phase in ('退潮',):
-        parts.append(f'市场情绪降温（{market.get("detail", "")}）')
-    elif phase in ('回归', '复苏'):
-        parts.append(f'市场情绪{phase}（{market.get("detail", "")}）')
-    elif phase:
-        parts.append(f'市场情绪{phase}')
-    else:
-        parts.append('市场情绪数据不足')
-
-    if quadrant:
-        parts.append(f'四象限={quadrant.get("quadrant","")}({quadrant.get("description","")})')
-
-    if temperature is not None:
-        parts.append(f'情绪温度{temperature}/100')
-
-    heat = sector.get('heat', '')
-    if heat == 'top_10':
-        parts.append(f'所在板块在风口（{sector.get("detail", "")}）')
-    elif heat == 'top_20':
-        parts.append(f'所在板块较活跃（{sector.get("detail", "")}）')
-
-    stock_emo = stock.get('emotion', '')
-    if stock_emo == '健康':
-        parts.append('个股情绪健康')
-    elif stock_emo == '关注':
-        parts.append('个股需关注')
-
-    return '，'.join(parts)
-
-
 # ═══════════════════════════════════════════════════════════
 # 第5维 引擎
 # ═══════════════════════════════════════════════════════════
-
 
 class Dim5EmotionEngine(DataAwareMixin):
     """第5维 情绪环境引擎 — BOCIASI快慢线 + 四象限 + 温度 + 板块热度 + 时间节奏"""
@@ -527,7 +484,6 @@ class Dim5EmotionEngine(DataAwareMixin):
         overall = _overall_light(market['light'], sector['light'], stock['light'])
 
         # 6. status_description
-        plain = _emotion_plain(market, sector, stock, quadrant, temperature)
         status_description = {
             'market': f"市场处于{market['phase']}（{market['detail']}）",
             'sector': sector['detail'],
@@ -536,7 +492,6 @@ class Dim5EmotionEngine(DataAwareMixin):
             'bociasi_slow': f"慢线={bociasi_signal_cn(slow_result.get('signal'))}（{slow_result.get('confidence',0)}）",
             'quadrant': f"{quadrant_cn(quadrant.get('quadrant',''))}—{quadrant.get('description','')}",
             'temperature': f"{temperature}/100",
-            'plain': plain,
         }
 
         # 7. judgment

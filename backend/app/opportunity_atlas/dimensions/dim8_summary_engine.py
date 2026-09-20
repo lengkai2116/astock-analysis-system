@@ -84,15 +84,6 @@ def _extract_dim_direction(dim_results: dict, dim_name: str) -> int:
     return jg.get('overall_direction', 0)
 
 
-def _extract_dim_plain(dim_results: dict, dim_name: str) -> str:
-    """从维度引擎结果中提取 plain 文本"""
-    result = dim_results.get(dim_name, {})
-    if result and isinstance(result, dict):
-        sd = result.get('status_description', {})
-        return sd.get('plain', '')
-    return ''
-
-
 def _extract_dim_audit_confidence(dim_results: dict, dim_name: str) -> float:
     """从维度引擎结果中提取 audit.confidence"""
     result = dim_results.get(dim_name, {})
@@ -379,15 +370,19 @@ def _generate_text(dim_results: dict, status_bar: str,
     """综合文字摘要"""
     bar_cn = STATUS_BAR_STATES.get(status_bar, status_bar)
 
-    # 收集各维plain
+    # 收集各维现状短句（437-A 字段级编排替代各维 plain——plain 已删除，dim8 不再依赖引擎自产文字）
     dim_names = ['signal', 'structure', 'volume_price', 'chip_fund', 'emotion', 'risk', 'valuation']
     dim_cn = {'signal': '信号', 'structure': '结构', 'volume_price': '量价',
               'chip_fund': '资金', 'emotion': '情绪', 'risk': '风险', 'valuation': '估值'}
     parts = []
     for dim in dim_names:
-        plain = _extract_dim_plain(dim_results, dim)
-        if plain:
-            parts.append(f'{dim_cn.get(dim, dim)}：{plain}')
+        seg = (dim_results or {}).get(dim) or {}
+        seg_jg = seg.get('judgment', {}) or {}
+        seg_sd = seg.get('status_description', {}) or {}
+        # 字段级编排短句（T 字段拼「字段名:值」；全空回退 _brief_text 的 judgment state）
+        sentence = _compose_dim_text(dim, seg_jg, seg_sd)
+        if sentence:
+            parts.append(f'{dim_cn.get(dim, dim)}：{sentence}')
 
     # 420号增强3：信号老化提示（对齐因子衰减概念）
     if _is_signal_decaying(dim_results):
@@ -479,10 +474,6 @@ def _brief_text(key_in: str, jg: dict, sd: dict) -> str:
         if s:
             state = s
             break
-    if not state:
-        sd_plain = (sd or {}).get('plain', '')
-        if sd_plain:
-            state = sd_plain
     try:
         conf = float(jg.get('continuous_value') or 0.5)
     except (TypeError, ValueError):
@@ -494,18 +485,6 @@ def _brief_text(key_in: str, jg: dict, sd: dict) -> str:
     if key_in == 'structure':
         return f'{state}（结构健康{conf * 100:.0f}/100）' if state else ''
     return f'{state}（置信{conf:.0%}）' if state else ''
-
-
-def _yield_evidence(sd: dict) -> list:
-    """从 status_description 提取证据字段（控制体积，上限由调用方截断）"""
-    if not sd or not isinstance(sd, dict):
-        return []
-    ev = []
-    for key in ('plain', 'text', 'conclusion'):
-        v = sd.get(key)
-        if isinstance(v, str) and v and v not in ev:
-            ev.append(v)
-    return ev
 
 
 def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | None:
@@ -546,7 +525,9 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
             'total_count': au.get('total_count', 0),
             'confidence': au.get('confidence', 0),
         },
-        'plain': sd.get('plain', ''),
+        # plain 键保留（前端 seven_dim 契约段结构含该字段），值与 text 同（各维 plain 已删除，
+        # dim8 为唯一叙事口径，段内 plain 不再读各维引擎自产文字）
+        'plain': text,
     }
 
 

@@ -141,15 +141,18 @@ def _build_dim_results_summary(dim_results: dict) -> str:
     """411号 Phase 1：从 dim_results（八维状态快照）构建摘要
 
     signal_json.signals 在新架构下设计为空，维状态承载于 dim_results_json：
-    每维 status_description.plain 为中文摘要，judgment.overall_light 为灯色。
+    每维中文摘要由 dim8 字段级编排（_compose_dim_text，437-A；各维 plain 已删除），
+    judgment.overall_light 为灯色。
     """
+    # 延迟 import：复用 dim8 字段级编排（T 字段拼「字段名:值」），避免与各维 plain 耦合
+    from app.opportunity_atlas.dimensions.dim8_summary_engine import _compose_dim_text
     lines = []
     for key, dim in (dim_results or {}).items():
         if not isinstance(dim, dict):
             continue
         sd = dim.get('status_description') or {}
         jd = dim.get('judgment') or {}
-        text = sd.get('plain') or sd.get('attribute') or ''
+        text = _compose_dim_text(key, jd, sd) or sd.get('attribute') or ''
         light = jd.get('overall_light') or ''
         if not text and not light:
             continue

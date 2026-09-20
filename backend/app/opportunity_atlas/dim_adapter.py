@@ -114,11 +114,13 @@ def convert_to_dims_format(dim_results: dict, tags: dict) -> dict:
         _cross = sd.get('level_cross_score')
         if _cross is not None:
             _confidence = min(0.9, max(0.3, float(_cross)))
+        # plain 已删除（dim8 唯一叙事口径）：evidence 改取结构维结构化详情
+        _ev = sd.get('vs_ma') or sd.get('vs_zhongshu') or sd.get('vs_support_resistance') or ''
         dims['structure'] = {
             'state': judg.get('structure', tags.get('state_label', '盘整')),
             'light': judg.get('light', 'yellow'),
             'confidence': _confidence,
-            'evidence': [sd.get('plain', '')],
+            'evidence': [_ev] if _ev else [],
         }
     else:
         _ind_status = tags.get('indicator_status', '')

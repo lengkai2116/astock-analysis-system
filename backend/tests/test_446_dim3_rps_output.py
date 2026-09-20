@@ -87,22 +87,22 @@ class TestRpsScoring:
         cond = next(c for c in out['audit']['conditions'] if c['name'] == '相对强弱RPS')
         assert cond['satisfied'] is True and cond['actual'] == '数据不足'
 
-    def test_plain_includes_rps_when_strong(self):
-        """RPS>85 时 plain 含 RPS 强势证据"""
+    def test_rps_field_when_strong(self):
+        """RPS>85 时 rps 字段为高分（plain 已删除，改断言结构化字段）"""
         df = _mk_df()
         eng = Dim3VPEngine()
         out = eng.evaluate({}, dict(_P_BASE, ts_code='TEST'),
                            data_context={'daily_df': df, 'relative_strength': {'rps_20d': 90}})
-        assert 'RPS=' in out['status_description']['plain']
-        assert '强势' in out['status_description']['plain']
+        assert out['status_description']['rps'] == '90.0/100'
+        assert out['judgment']['score'] > 0
 
-    def test_plain_no_rps_when_not_strong(self):
-        """RPS<=85 时 plain 不含 RPS 弱/平平描述"""
+    def test_rps_field_when_not_strong(self):
+        """RPS<=85 时 rps 字段为低分"""
         df = _mk_df()
         eng = Dim3VPEngine()
         out = eng.evaluate({}, dict(_P_BASE, ts_code='TEST'),
                            data_context={'daily_df': df, 'relative_strength': {'rps_20d': 60}})
-        assert 'RPS=' not in out['status_description']['plain']
+        assert out['status_description']['rps'] == '60.0/100'
 
 
 class TestRpsSourceWiring:

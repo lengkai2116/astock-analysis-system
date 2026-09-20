@@ -191,22 +191,6 @@ class Dim3VPEngine(DataAwareMixin):
         elif hs >= 2: sl = '弱'
         else: sl = '严重背离'
 
-        # plain
-        if vp_state in ('健康', '强健康'):
-            core = '上涨时有量配合'
-            if ve_l == '量能萎缩': core += '，近期回调缩量（整理蓄势中）'
-            elif ve_l == '温和放量': core += '，量能温和释放'
-            elif ve_l == '显著放量': core += '，量能显著放大（关注持续性）'
-        elif vp_state in ('背离', '严重背离'):
-            core = '价量出现背离信号——价格创新高但量能未跟上，需警惕回调'
-        else:
-            core = f'量价关系中性，量比{vol_ratio:.1f}'
-        if pat_det != '无明确形态': core += f'，{pat_det}'
-        # 445号：强势 RPS 在 plain 中体现（RPS>85 加分证据）
-        if rps is not None and rps > 85:
-            core += f'，RPS={rps:.0f}强势（全市场涨幅居前）'
-        core += f'（健康度{hs}/10，{sl}）'
-
         status_description = {
             'vp_state': vp_state, 'health_score': f'{hs}/10（{sl}）',
             'divergence': div_txt, 'volume_energy': ve_d,
@@ -214,7 +198,6 @@ class Dim3VPEngine(DataAwareMixin):
             'pattern_score': f'{pattern_score:.1f}/10',
             'rps': (f'{rps:.1f}/100' if rps is not None else '数据不足'),
             'granville': f"{granville['name']}（{granville['description']}）",
-            'plain': core,
         }
         judgment = {
             'state': vp_state, 'light': vp_light, 'score': hs,

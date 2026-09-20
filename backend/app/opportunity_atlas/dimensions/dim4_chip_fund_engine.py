@@ -5787,22 +5787,6 @@ def _assess_margin(tags, margin_df=None):
         except: pass
     return {'detail': '融资数据不足'}
 
-def _fund_chip_plain(phase, fund_flow, cost, signal, retail_inst, margin):
-    parts = []
-    pn = phase.get('phase', 'unknown')
-    if pn == 'building': parts.append(f'大资金在逐步建仓（{phase.get("detail", "")}）')
-    elif pn == 'lifting': parts.append(f'主力正在拉升（{phase.get("detail", "")}）')
-    elif pn == 'washing': parts.append('主力在洗盘（清洗浮筹）')
-    elif pn == 'distributing': parts.append('主力在高位派发（出货风险）')
-    fd = fund_flow.get('direction', '')
-    if fd == 'inflow': parts.append(f'资金净流入（{fund_flow.get("detail", "")}）')
-    elif fd == 'outflow': parts.append(f'资金净流出（{fund_flow.get("detail", "")}）')
-    cd = cost.get('detail', '')
-    if cd and '数据不足' not in cd: parts.append(cd)
-    md = margin.get('detail', '')
-    if md and '数据不足' not in md: parts.append(md)
-    return '，'.join(parts) if parts else '资金筹码数据不足，无法判断主力动向'
-
 
 class Dim4ChipFundEngine(DataAwareMixin):
     """第4维 资金筹码引擎 — 阶段判定 + 6信号 + 拥挤度 + 标签提取"""
@@ -5912,10 +5896,7 @@ class Dim4ChipFundEngine(DataAwareMixin):
             except Exception:
                 price_direction = 'no_trend'
         fund_price_div = _assess_fund_price_divergence(fund_flow_info, price_direction)
-        _fp_suffix = f"，{fund_price_div['label']}" if fund_price_div['risk'] != '无' else ''
 
-        plain = _fund_chip_plain(phase_info, fund_flow_info, cost_structure, signal_info, retail_inst, margin_info)
-        plain = plain + _fp_suffix if _fp_suffix else plain
         status_description = {
             'phase': f"{phase_info['phase_cn']}（{phase_info['detail']}）",
             'fund_flow': f"{fund_flow_info['level_cn']}（{fund_flow_info['detail']}）",
@@ -5926,7 +5907,6 @@ class Dim4ChipFundEngine(DataAwareMixin):
             'fund_price_divergence': fund_price_div['label'],
             'fund_price_divergence_status': fund_price_div['status'],
             'fund_price_divergence_risk': fund_price_div['risk'],
-            'plain': plain,
         }
         judgment = {
             'phase': phase_info['phase'], 'direction': fund_flow_info['direction'], 'light': phase_info['light'],

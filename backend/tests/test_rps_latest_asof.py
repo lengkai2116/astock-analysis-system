@@ -150,4 +150,3 @@ class TestDim3RpsNaNHandling:
         cond = next(c for c in out['audit']['conditions'] if c['name'] == '相对强弱RPS')
         assert cond['satisfied'] is False
         assert cond['actual'] == 'RPS=64.5'
-        assert 'RPS=' not in out['status_description']['plain']

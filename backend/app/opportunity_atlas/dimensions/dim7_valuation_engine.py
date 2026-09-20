@@ -190,17 +190,6 @@ def _adjust_composite(composite: float, fina_health: str, ecm, ts_code: str,
     return max(-2.0, min(2.0, composite))
 
 
-def _build_valuation_plain(level_cn: str, val: dict, strength: int) -> str:
-    """构建估值白话文本"""
-    parts = [f"估值{level_cn}，PE近5年{val.get('pe_percentile_5y') or '无'}%分位"]
-    if val.get('fcf_yield') is not None:
-        parts.append(f"FCF收益率{val['fcf_yield']:.2f}%")
-    if val.get('dividend_yield') is not None:
-        parts.append(f"股息率{val['dividend_yield']:.2f}%")
-    parts.append(f"潜力{strength}/100")
-    return '，'.join(parts)
-
-
 def _net_profit_col(df) -> str | None:
     """检测 net_profit_atsopc / net_profit 列名（复用逻辑：4处重复 → 1个helper）"""
     if df is None or df.empty:
@@ -992,16 +981,6 @@ class Dim7ValuationEngine(DataAwareMixin):
         div_str = f"{val['dividend_yield']}%" if val['dividend_yield'] is not None else '无数据'
         strength = potential['signal_strength']
 
-        plain_parts = [f"估值{level_cn}"]
-        if val['pe_percentile_5y'] is not None:
-            plain_parts.append(f"PE处于近5年{pe_str}分位")
-        if val['fcf_yield'] is not None:
-            plain_parts.append(f"FCF收益率{fcf_str}")
-        if val['dividend_yield'] is not None and val['dividend_yield'] > 0:
-            plain_parts.append(f"股息率{div_str}")
-        plain_parts.append(f"潜力评分{strength}/100")
-        plain = '，'.join(plain_parts)
-
         status_description = {
             'valuation_level': f"{level_cn}（composite={val['composite_rating']}）",
             'pe_percentile': f"PE近5年{pe_str}分位",
@@ -1016,7 +995,6 @@ class Dim7ValuationEngine(DataAwareMixin):
             'potential_score': f"潜力评分{strength}/100",
             'potential_strength': strength,  # 数字字段（dim_adapter factor/valuation维消费，与judgment.potential_strength同值）
             'potential_breakdown': potential['potential_breakdown'],
-            'plain': plain,
         }
 
         # 4. judgment
