@@ -20,11 +20,14 @@ for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
 import numpy as np
 import pandas as pd
 import pytest
-
 from app.opportunity_atlas.dimensions import dim4_chip_fund_engine as dim4_mod
 from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
-    PHASE_MAP, Dim4ChipFundEngine, PhaseDetectionEngine, CrowdingFactor,
-    _assess_phase, _assess_cost_structure,
+    PHASE_MAP,
+    CrowdingFactor,
+    Dim4ChipFundEngine,
+    PhaseDetectionEngine,
+    _assess_cost_structure,
+    _assess_phase,
 )
 
 
@@ -152,20 +155,13 @@ class TestAssessCostStructureAsrCyqkl:
         assert flat['cyqkl'] == 7.41
 
     def test_cost_structure_outputs_asr_cyqkl(self):
-        """_assess_cost_structure 从 flat tags 正常产出 ASR/CYQKL 文案与 quality"""
+        """_assess_cost_structure 从 flat tags 正常产出 ASR/CYQKL 文案"""
         flat = {'chip_concentration': 'concentrating', 'asr': 54.66, 'cyqkl': 7.41, 'profit_ratio': 0.778}
         out = _assess_cost_structure(flat)
         assert 'ASR=55' in out['detail']
         assert 'CYQKL=7.4' in out['detail']
         assert '获利盘78%' in out['detail']
         assert out['concentration'] == 'concentrating'
-
-    def test_quality_tiers_from_asr(self):
-        """quality 分档真实触发：ASR>80 活跃 / ASR<30 沉寂 / 中间中性"""
-        from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import _assess_cost_structure as _acs
-        assert _acs({'asr': 95.0})['quality'] == '活跃'
-        assert _acs({'asr': 18.0})['quality'] == '沉寂'
-        assert _acs({'asr': 55.0})['quality'] == '中性'
 
 
 class TestCrowdingTurnoverWiring:

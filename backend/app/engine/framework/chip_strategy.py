@@ -542,26 +542,6 @@ class MainForceScorer:
             pass
         return {'direction': 'unknown', 'speed': 'unknown', 'detail': '筹码数据不足'}
 
-    def get_control_degree(self, symbol: str) -> dict:
-        """控盘度计算（364c Phase 3：三维度加权）"""
-        if not symbol:
-            return {'level': 'unknown', 'score': 0, 'detail': '无数据'}
-        try:
-            indicators = self._chip_indicators or {}
-            asr = float(indicators.get('asr') or indicators.get('ASR') or 0)
-            concentration = float(indicators.get('concentration') or 0)
-            main_flow = 1.0 if str(tags.get('fund_flow', '')) == '5d_inflow' else 0.5
-            score = (asr / 100 * 0.4) + (concentration * 0.3 if concentration else 0.5 * 0.3) + (main_flow * 0.3)
-            if score > 0.7:
-                level = '高控盘'
-            elif score > 0.4:
-                level = '中等控盘'
-            else:
-                level = '低控盘'
-            return {'level': level, 'score': round(score, 2), 'detail': f'{level}（{score:.2f}）'}
-        except Exception:
-            return {'level': 'unknown', 'score': 0, 'detail': '计算异常'}
-
     # ─── A: 资金流向维度 (0-3分) ───────────────────────────────
     # Wiki 核心思想：大单连续性 > 单日强度；融资暴增+股价不动=危险信号
     def _score_moneyflow(self, symbol: str) -> float:

@@ -2990,26 +2990,6 @@ class MainForceScorer:
             pass
         return {'direction': 'unknown', 'speed': 'unknown', 'detail': '筹码数据不足'}
 
-    def get_control_degree(self, symbol: str) -> dict:
-        """控盘度计算（364c Phase 3：三维度加权）"""
-        if not symbol:
-            return {'level': 'unknown', 'score': 0, 'detail': '无数据'}
-        try:
-            indicators = self._chip_indicators or {}
-            asr = float(indicators.get('asr') or indicators.get('ASR') or 0)
-            concentration = float(indicators.get('concentration') or 0)
-            main_flow = 1.0 if str(tags.get('fund_flow', '')) == '5d_inflow' else 0.5
-            score = (asr / 100 * 0.4) + (concentration * 0.3 if concentration else 0.5 * 0.3) + (main_flow * 0.3)
-            if score > 0.7:
-                level = '高控盘'
-            elif score > 0.4:
-                level = '中等控盘'
-            else:
-                level = '低控盘'
-            return {'level': level, 'score': round(score, 2), 'detail': f'{level}（{score:.2f}）'}
-        except Exception:
-            return {'level': 'unknown', 'score': 0, 'detail': '计算异常'}
-
     # ─── A: 资金流向维度 (0-3分) ───────────────────────────────
     # Wiki 核心思想：大单连续性 > 单日强度；融资暴增+股价不动=危险信号
     def _score_moneyflow(self, symbol: str) -> float:
@@ -5793,16 +5773,12 @@ def _assess_cost_structure(tags):
         try: parts.append(f"获利盘{float(pr):.0%}")
         except: pass
 
-    # 资金筹码质量评估（综合ASR+CYQKL）
-    quality = '中性'
-    if asr_val is not None:
-        if asr_val > 80:
-            quality = '活跃'  # 高ASR → 筹码活跃度高
-        elif asr_val < 30:
-            quality = '沉寂'  # 低ASR → 筹码沉寂
-
+    # 464-11：删除 quality 死计算（ASR>80 活跃/<30 沉寂 分档）——
+    # 实证 2026-09-18 全市场 5550 只：>80 仅 2 只(0%)、<30 占 91%，区分度极低；
+    # evaluate 零消费（死计算），ASR 数值已在 detail（如 ASR=29）。
+    # 378/383 cost_quality 契约键为早期设计，从未透传；dim8 叙事直读 ASR 数值。
     return {'detail': '，'.join(parts) if parts else '筹码数据不足',
-            'concentration': c, 'quality': quality}
+            'concentration': c}
 
 def _assess_signal(tags):
     bsp = str(tags.get('buy_sell_point', ''))

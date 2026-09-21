@@ -375,3 +375,41 @@ class TestAuditPhaseConfidenceGate:
         src = inspect.getsource(Dim4ChipFundEngine.evaluate)
         assert '_phase_conf >= 0.3' in src
 
+
+class TestBatch3QualityControlCleanup:
+    """⑤ 批次3：464-11 quality 死计算删除 + 控盘度 get_control_degree 死代码清理
+
+    拍板依据（2026-09-21）：
+      quality：ASR>80 活跃仅 2 只(0%)、<30 沉寂 5048 只(91%)——区分度极低，evaluate 零消费；
+               ASR 数值已在 detail，dim8 叙事直读数值。
+      控盘度：312 号已作废（形态代理过多）；presence 已承载主力在场；get_control_degree
+              双份零调用且含 tags 未定义 bug（恒 NameError→unknown）。
+    """
+
+    def test_quality_key_removed(self):
+        """_assess_cost_structure 不再产 quality 键（死计算删除）"""
+        from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
+            _assess_cost_structure,
+        )
+        out = _assess_cost_structure({'asr': 95.0})
+        assert 'quality' not in out
+        assert out == {'detail': 'ASR=95', 'concentration': ''}
+
+    def test_asr_detail_kept(self):
+        """ASR 数值仍在 detail（dim8 叙事直读）"""
+        from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
+            _assess_cost_structure,
+        )
+        out = _assess_cost_structure({'asr': 18.0})
+        assert 'ASR=18' in out['detail']
+
+    def test_get_control_degree_removed_dual(self):
+        """双份 get_control_degree 死代码已删（dim4 + framework 源码均不含）"""
+        import inspect
+
+        import app.engine.framework.chip_strategy as fw
+        from app.opportunity_atlas.dimensions import dim4_chip_fund_engine as d4
+        assert 'def get_control_degree' not in inspect.getsource(fw)
+        assert 'def get_control_degree' not in inspect.getsource(d4)
+
+
