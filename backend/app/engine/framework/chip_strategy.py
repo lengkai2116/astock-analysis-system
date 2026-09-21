@@ -628,6 +628,25 @@ class MainForceScorer:
         except Exception:
             return 0.0
 
+    def _moneyflow_outflow_5d(self, symbol: str) -> bool:
+        """464-8：5日资金净流出判定（对称补足打分单向）
+
+        _score_moneyflow 只产强度（净流出与无数据同落 0 分，无法区分方向）；
+        此处按 PhaseDetectionEngine._analyze_fund_flow 同口径：净额<0 且 5 日内≥3 天净流出 → 强流出。
+        """
+        try:
+            mf_df = self.dm.get_cached_moneyflow(symbol)
+            if mf_df is None or mf_df.empty:
+                return False
+            mf_5 = mf_df.tail(5)
+            if mf_5.empty:
+                return False
+            net_sum = mf_5['net_lg_amount'].sum()
+            neg_days = (mf_5['net_lg_amount'] < 0).sum()
+            return net_sum < 0 and neg_days >= 3
+        except Exception:
+            return False
+
     # ─── B: 价量主力信号 (0-3分) ───────────────────────────────
     # Wiki 核心思想：主力四阶段（建仓/洗盘/拉升/出货）各有专属价量特征
     def _score_volume_price(self, closes, volumes, price_position) -> float:
@@ -1104,7 +1123,9 @@ class MainForceScorer:
             elif mf_score >= 1.0:
                 tags['fund_flow'] = 'mixed'
             else:
-                tags['fund_flow'] = 'none'
+                # 464-8：_score_moneyflow 打分单向（净流出与无数据同落低分），
+                # 对称补 5d_outflow 判定——否则覆盖路径失效时全市场无"强流出"输出
+                tags['fund_flow'] = '5d_outflow' if self._moneyflow_outflow_5d(symbol) else 'none'
 
             # 2026-08-10 修复：传入真实 K 线（原传空 DataFrame 致 price_pos=None，
             # 假机构检测的"高位"约束失效 + 连续买入缓解逻辑失效 → capital_nature 全 unknown）

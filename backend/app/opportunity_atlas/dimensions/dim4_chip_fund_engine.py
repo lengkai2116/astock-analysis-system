@@ -438,7 +438,7 @@ class PhaseDetectionEngine(DataAwareMixin):
         result["price_position"] = price_pos
         trend_dir = self._detect_trend_direction(df_sorted)
         result["trend_alignment"] = trend_dir
-        fund_flow = self._analyze_fund_flow(ts_code)
+        fund_flow = self._analyze_fund_flow(ts_code, moneyflow_df)
         result["fund_flow"] = fund_flow
 
         # ── 8 维度阶段向量（批次1 可计算 7/8，控盘度批次3） ──
@@ -517,12 +517,9 @@ class PhaseDetectionEngine(DataAwareMixin):
         if net_lg_5d is not None:
             try:
                 net_lg_5d = float(net_lg_5d)
-                # 用positive_ratio作为strength的近似
-                pos_ratio = extra_tags.get('net_lg_5d_positive_ratio')
-                if pos_ratio is not None:
-                    strength = min(1.0, abs(net_lg_5d) / 1e8)  # 归一化到亿
-                else:
-                    strength = min(1.0, abs(net_lg_5d) / 1e8)
+                # 464-15：net_lg_5d 单位为万元（moneyflow net_lg_amount 万元列聚合），
+                # ÷1e4 归一化到亿；原 /1e8 按"元"算 → strength≈0（茅台 -16037万→0.0002）
+                strength = min(1.0, abs(net_lg_5d) / 1e4)
             except (TypeError, ValueError):
                 pass
         else:
@@ -979,11 +976,15 @@ class PhaseDetectionEngine(DataAwareMixin):
     # ═══════════════════════════════════════════════════════════
     # Step 3: 资金流向
     # ═══════════════════════════════════════════════════════════
-    def _analyze_fund_flow(self, ts_code: str) -> str:
+    def _analyze_fund_flow(self, ts_code: str, moneyflow_df=None) -> str:
         """5日资金流向 → fund_flow 标签"""
         try:
-            mf_df = self._get_dm().get_cached_moneyflow(ts_code)
-            if mf_df is None or mf_df.empty:
+            # 464-9：优先用 dim1 已注入的 moneyflow_df（与 443/dim2 同构接线），
+            # 避免 ECM 直读 get_cached_moneyflow 在 daemon 写锁时失败导致整体降级。
+            mf_df = moneyflow_df
+            if mf_df is None or (hasattr(mf_df, 'empty') and mf_df.empty):
+                mf_df = self._get_dm().get_cached_moneyflow(ts_code)
+            if mf_df is None or (hasattr(mf_df, 'empty') and mf_df.empty):
                 return "none"
             mf_5 = mf_df.tail(5)
             if mf_5.empty:
@@ -3074,6 +3075,27 @@ class MainForceScorer:
         except Exception:
             return 0.0
 
+    def _moneyflow_outflow_5d(self, symbol: str) -> bool:
+        """464-8：5日资金净流出判定（对称补足打分单向，与 framework 版同口径）
+
+        _score_moneyflow 只产强度（净流出与无数据同落 0 分，无法区分方向）；
+        此处按 PhaseDetectionEngine._analyze_fund_flow 同口径：净额<0 且 5 日内≥3 天净流出 → 强流出。
+        """
+        try:
+            mf_df = self._data_context.get('moneyflow_df') if self._data_context else None
+            if mf_df is None or (hasattr(mf_df, 'empty') and mf_df.empty):
+                mf_df = self.dm.get_cached_moneyflow(symbol)
+            if mf_df is None or (hasattr(mf_df, 'empty') and mf_df.empty):
+                return False
+            mf_5 = mf_df.tail(5)
+            if mf_5.empty:
+                return False
+            net_sum = mf_5['net_lg_amount'].sum()
+            neg_days = (mf_5['net_lg_amount'] < 0).sum()
+            return net_sum < 0 and neg_days >= 3
+        except Exception:
+            return False
+
     # ─── B: 价量主力信号 (0-3分) ───────────────────────────────
     # Wiki 核心思想：主力四阶段（建仓/洗盘/拉升/出货）各有专属价量特征
     def _score_volume_price(self, closes, volumes, price_position) -> float:
@@ -3556,7 +3578,8 @@ class MainForceScorer:
             elif mf_score >= 1.0:
                 tags['fund_flow'] = 'mixed'
             else:
-                tags['fund_flow'] = 'none'
+                # 464-8：与 framework 版同步——_score_moneyflow 打分单向，对称补 5d_outflow
+                tags['fund_flow'] = '5d_outflow' if self._moneyflow_outflow_5d(symbol) else 'none'
 
             # 2026-08-10 修复：传入真实 K 线（原传空 DataFrame 致 price_pos=None，
             # 假机构检测的"高位"约束失效 + 连续买入缓解逻辑失效 → capital_nature 全 unknown）
@@ -5121,6 +5144,7 @@ class CrowdingFactor:
         Args:
             ts_code: 股票代码
             market_context: 市场上下文（可选），含 margin_df（461-5：dim1 data_context 缓存）
+                + daily_basic_df（464-6：流通市值 circ_mv 来源）
 
         Returns:
             Optional[float]: 融资余额占比，数据不可用时返回 None
@@ -5150,7 +5174,10 @@ class CrowdingFactor:
             circ_mv = None
 
             if isinstance(latest, (dict, pd.Series)):
-                for col in ('marge_balance', '融资余额', 'marge', 'balance'):
+                # 464-6：margin_cache 实际列为 Tushare margin_detail 原样——融资余额列是
+                # rzye（单位元）；原白名单（marge_balance/融资余额/marge/balance）恒不命中
+                # → 融资分项恒 None，crowding 三态退化为恒 MODERATE(0.5)。
+                for col in ('rzye', 'marge_balance', '融资余额', 'marge', 'balance'):
                     if col in latest:
                         try:
                             val = float(latest[col])
@@ -5170,8 +5197,44 @@ class CrowdingFactor:
                         except (ValueError, TypeError, KeyError):
                             continue
 
+            # 464-6：margin_cache 无流通市值列（流通市值在 daily_basic_cache）——
+            # 从 market_context.daily_basic_df（dim1 预载，单位万元）按最新融资日期的
+            # trade_date 对齐取 circ_mv，无精确匹配回退最新一行；daily_basic 兜底读缓存。
+            circ_mv_from_daily_basic = False
+            if circ_mv is None:
+                try:
+                    db_df = market_context.get('daily_basic_df') if market_context else None
+                    if db_df is None or (hasattr(db_df, 'empty') and db_df.empty):
+                        from app.data import DataManager
+                        db_df = DataManager().get_cached_daily_basic(ts_code)
+                    if db_df is not None and not (hasattr(db_df, 'empty') and db_df.empty) \
+                            and 'circ_mv' in db_df.columns:
+                        _date = None
+                        try:
+                            _date = latest.get('trade_date')
+                        except Exception:
+                            _date = None
+                        if _date is not None:
+                            _row = db_df[db_df['trade_date'] == _date]
+                            if not _row.empty:
+                                _circ = float(_row.iloc[-1]['circ_mv'])
+                            else:
+                                _circ = float(db_df['circ_mv'].dropna().iloc[-1])
+                        else:
+                            _circ = float(db_df['circ_mv'].dropna().iloc[-1])
+                        if pd.notna(_circ) and _circ > 0:
+                            circ_mv = _circ
+                            circ_mv_from_daily_basic = True
+                except Exception:
+                    circ_mv = None
+
             if margin_balance is not None and circ_mv is not None and circ_mv > 0:
-                ratio = margin_balance / circ_mv
+                # 464-6：rzye 单位元、daily_basic circ_mv 单位万元 → 统一为元后再比
+                # （1.71e10 / (1.5715e8万 * 1e4) ≈ 0.0109，茅台融资占比~1%）
+                if circ_mv_from_daily_basic:
+                    ratio = margin_balance / (circ_mv * 1e4)
+                else:
+                    ratio = margin_balance / circ_mv
                 return min(1.0, max(0.0, ratio))
 
             return None
@@ -5384,11 +5447,23 @@ class CrowdingFactor:
         high_count = sum([margin_signals['high'], turnover_signals['high'], vol_signals['high']])
         low_count = sum([margin_signals['low'], turnover_signals['low'], vol_signals['low']])
 
-        # 有效信号计数（排除数据不可用的维度）
+        # 464-6：订正为 3 维制——每维仅在实际取得有效信号时计数。
+        # 此前换手/波动恒计 1（"总有结果"），融资维死后退化为 2/2 制而非注释的 2/3 制。
+        # turnover_data 缺省且 daily_df 无换手列 → 换手维无有效信号；df 不足 60 根 → 波动维无法计算。
+        turnover_valid = (
+            turnover_data is not None and not turnover_data.empty
+        ) or (
+            df is not None and not df.empty
+            and any(c in df.columns for c in ('turnover_rate', 'turn', 'turnover', '换手率'))
+        )
+        vol_valid = (
+            df is not None and not df.empty and 'close' in df.columns
+            and len(pd.Series(df['close']).dropna()) >= 60
+        )
         valid_signals = sum([
             1 if margin_ratio is not None else 0,
-            1,  # 换手率总有结果
-            1,  # 波动率总有结果
+            1 if turnover_valid else 0,
+            1 if vol_valid else 0,
         ])
 
         if valid_signals < 3:
@@ -5708,7 +5783,10 @@ def _assess_cost_structure(tags):
 
 def _assess_signal(tags):
     bsp = str(tags.get('buy_sell_point', ''))
-    sm = {'first_buy': '一买信号', 'second_buy': '二买信号', 'third_buy': '三买信号', 'first_sell': '一卖信号', 'second_sell': '二卖信号'}
+    # 464-16：值域含 third_sell（chanlun_strategy get_chanlun_tags 卖点优先级 second_sell>third_sell>first_sell），
+    # 此前缺该键 → 三卖信号被吞为"无明确筹码信号"
+    sm = {'first_buy': '一买信号', 'second_buy': '二买信号', 'third_buy': '三买信号',
+          'first_sell': '一卖信号', 'second_sell': '二卖信号', 'third_sell': '三卖信号'}
     if bsp in sm: return {'detail': sm[bsp], 'signal': bsp}
     return {'detail': '无明确筹码信号', 'signal': 'none'}
 
@@ -5854,7 +5932,8 @@ class Dim4ChipFundEngine(DataAwareMixin):
                         }
 
         except Exception as e:
-            logger.debug(f"PhaseDetectionEngine调用跳过: {e}")
+            # 464-7：静默降级改显式告警——阶段分析失败时输出落 tags 兜底，需在日志可见
+            logger.warning(f"PhaseDetectionEngine调用异常，阶段/资金流向降级为tags兜底: {e}")
 
         # 拥挤度（真实计算）
         crowding = {'level': 'unknown', 'detail': '拥挤度数据不足', 'score': 0.5}
@@ -5865,7 +5944,10 @@ class Dim4ChipFundEngine(DataAwareMixin):
                     df = ecm.get_cached_daily(ts_code)
                 if df is not None and not df.empty:
                     cf = CrowdingFactor()
-                    _mc = {'margin_df': data_context.get('margin_df')} if data_context else {}
+                    # 464-6：daily_basic_df 一并传入——calc_margin_ratio 需 circ_mv（流通市值，
+                    # 单位万元；margin_cache 无此列，此前恒 None → 融资分项恒死）
+                    _mc = {'margin_df': data_context.get('margin_df'),
+                           'daily_basic_df': data_context.get('daily_basic_df')} if data_context else {}
                     # 464-3：换手分项接线——从 data_context.daily_basic_df 提取 turnover_rate 序列传 turnover_data。
                     # 此前恒 NORMAL_TURNOVER：daily_df（前复权 OHLCV）无 turnover 列且 evaluate 未传
                     # turnover_data，拥挤度实际仅融资+波动两维；daily_basic_cache.turnover_rate 为真实生产列
@@ -5879,7 +5961,9 @@ class Dim4ChipFundEngine(DataAwareMixin):
                     cr = cf.evaluate(ts_code, df, market_context=_mc)
                     crowding = {'level': cr.get('crowding_level', 'MODERATE_CROWDING'), 'detail': cr.get('risk_advice', ''),
                                  'score': cr.get('crowding_score', 0.5)}
-        except: pass
+        except Exception as e:
+            # 464-7：静默降级改显式告警——拥挤度失败时输出落 unknown 兜底
+            logger.warning(f"CrowdingFactor计算异常，拥挤度降级为unknown: {e}")
 
         # ── 445 §6.1 dim4「资金×价格背离缺失」补产出：资金方向 vs 价格方向交叉判定 ──
         # 价格方向优先取 PhaseDetectionEngine trend_alignment（已算，'*_aligned'/'mixed'/'no_trend'），
