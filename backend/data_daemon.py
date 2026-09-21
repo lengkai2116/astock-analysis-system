@@ -879,6 +879,13 @@ def _batch_margin(trade_date: str) -> int:
     for col in ['name', 'rqchl']:
         if col in df.columns:
             df = df.drop(columns=[col])
+    # 464-10：Tushare margin_detail 返回标准列名 rzmre（融资买入额，实测 2026-09-18 4448 行有值），
+    # 而 margin_cache 表结构列为 rzmje（margin 汇总接口命名）→ 映射后入库。
+    # 否则 rzmre 被列过滤丢弃、rzmje 恒 NULL → 依赖 rzmje 的 margin_cost_price
+    # （dim4 _calc_margin_cost_price / extract_fund_risk_tags / tag_extractor）全市场死路，
+    # 456 融资成本价投票永不触发（464-10）。
+    if 'rzmre' in df.columns:
+        df['rzmje'] = df['rzmre']
     if 'trade_date' in df.columns:
         df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
     _ecm.cache_margin_data(df)

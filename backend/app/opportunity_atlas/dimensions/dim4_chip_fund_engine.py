@@ -1234,8 +1234,11 @@ class PhaseDetectionEngine(DataAwareMixin):
                               price_position: str) -> str:
         """涨停时校验阶段合理性（298号§三Step5 四种规则）
 
-        基于 price_position + 量价关系对五源投票的初判结果做二次校验。
-        '次日低开'检查仅在盘后次日数据可用时生效（非当日第一笔）。
+        规则1/2/4：当日(T)涨停触发，用当日位置/量。
+        规则3（464-12 改窗口）：前一日(T-1)高位涨停巨量 + 当日(T)低开≥3% → 当日初判
+        lifting 修正为 distributing。忠实 298「放量涨停次日低开=诱多出货」在日终日频
+        节奏下的近似——T 结论形成时 T+1 数据尚不存在，故"次日"取 T、涨停日取 T-1，
+        **当日无需涨停**（单涨停+次日低开场景不再漏检；双涨停低开高走被本规则覆盖）。
         """
         try:
             if len(df) < 2:
@@ -1246,11 +1249,23 @@ class PhaseDetectionEngine(DataAwareMixin):
             if pct_chg is None:
                 pct_chg = (latest["close"] - prev_close) / max(prev_close, 1) * 100
 
+            volumes = df["vol"].values if "vol" in df.columns else None
+
+            # ── 规则3（464-12）：前一日(T-1)高位涨停巨量 + 当日(T)低开≥3% ──
+            # 独立于当日涨停（T 无需涨停）；T 涨停时同样适用（双涨停+第二日低开被覆盖）。
+            if current_phase == PHASE_LIFTING and len(df) >= 3 and volumes is not None and len(volumes) >= 61:
+                pc_prev = (df.iloc[-2]["close"] - df.iloc[-3]["close"]) / max(df.iloc[-3]["close"], 1) * 100
+                prev_limit_up = pc_prev > 9.5
+                vol_60_avg_prev = np.mean(volumes[-61:-1])  # T-1 之前的 60 日均量
+                prev_huge_vol = volumes[-2] > vol_60_avg_prev * 2
+                low_open_today = float(latest.get("open", latest["close"])) < prev_close * 0.97
+                # 高位以当日 price_position 近似前一日涨停日位置（两日间隔位置变化小）
+                if prev_limit_up and prev_huge_vol and price_position == "high_zone" and low_open_today:
+                    return PHASE_DISTRIBUTING
+
+            # 以下规则1/2/4：当日(T)涨停才触发
             if not (pct_chg > 9.5):
                 return current_phase
-
-            df["close"].values
-            volumes = df["vol"].values if "vol" in df.columns else None
 
             # 价格位置判定
             low_zone = price_position == "low_zone"
@@ -1265,30 +1280,12 @@ class PhaseDetectionEngine(DataAwareMixin):
                 huge_vol = today_vol > vol_60_avg * 2
                 shrink_vol = today_vol < vol_60_avg * 0.6
 
-            # 次日低开（仅在 df 含次日数据时可用）
-            next_day_low_open = False
-            if len(df) >= 3:
-                # latest 是当天（涨停日），df.iloc[-3] 是前一日
-                # 涨停日在 df.iloc[-2]，检查 df.iloc[-1] 是否为次日
-                # 检查倒数第二天是否涨停，最后一天是否为次日
-                pc_2 = (df.iloc[-2]["close"] - df.iloc[-3]["close"]) / max(df.iloc[-3]["close"], 1) * 100
-                if pc_2 > 9.5:
-                    # 倒数第二天是涨停日
-                    next_open = df.iloc[-1].get("open",
-                                                df.iloc[-1]["close"])
-                    limit_close = df.iloc[-2]["close"]
-                    next_day_low_open = next_open < limit_close * 0.97
-
             # ── 规则1: building + 低位涨停 + not 巨量 → 确认 building
             if current_phase == PHASE_BUILDING and low_zone and not huge_vol:
                 return PHASE_BUILDING
 
             # ── 规则2: building + 高位涨停 → 修正为 distributing
             if current_phase == PHASE_BUILDING and high_zone:
-                return PHASE_DISTRIBUTING
-
-            # ── 规则3: lifting + 高位涨停 + 巨量 + 次日低开 → 修正为 distributing
-            if current_phase == PHASE_LIFTING and high_zone and huge_vol and next_day_low_open:
                 return PHASE_DISTRIBUTING
 
             # ── 规则4: distributing + 低位涨停 + 缩量 → 修正为 building/washing
@@ -3552,10 +3549,30 @@ class MainForceScorer:
             if buy_mask is None or buy_mask.sum() < 3:
                 return {"cost_price": None, "distance_pct": None}
             df_buy = df[buy_mask].copy()
-            avg_prices = (df_buy['open'].fillna(latest_close)
-                         + df_buy['high'].fillna(latest_close)
-                         + df_buy['low'].fillna(latest_close)
-                         + df_buy['close'].fillna(latest_close)) / 4
+            # 464-10：margin_cache 无 OHLC 列（仅 rzye/rzmje/rqmcl/rzrqye/rqyl/rqchl），
+            # 原实现读 df_buy['open'/'high'/'low'/'close'] → KeyError 被吞恒 None。
+            # 改为：有 OHLC 则用四价均值，否则用 daily 收盘价近似当日均价（与
+            # extract_fund_risk_tags 同构）。
+            if all(c in df_buy.columns for c in ('open', 'high', 'low', 'close')):
+                avg_prices = (df_buy['open'].fillna(latest_close)
+                             + df_buy['high'].fillna(latest_close)
+                             + df_buy['low'].fillna(latest_close)
+                             + df_buy['close'].fillna(latest_close)) / 4
+            else:
+                try:
+                    _k = self._data_context.get('daily_df') if self._data_context else None
+                    if _k is None or (hasattr(_k, 'empty') and _k.empty):
+                        _k = self.dm.get_cached_daily_data(symbol)
+                    _close_map = {}
+                    if _k is not None and not _k.empty and 'trade_date' in _k.columns \
+                            and 'close' in _k.columns:
+                        _close_map = dict(zip(_k['trade_date'].astype(str), _k['close']))
+                    avg_prices = pd.Series([
+                        float(_close_map.get(str(d))) if _close_map.get(str(d)) is not None else latest_close
+                        for d in df_buy['trade_date']
+                    ], index=df_buy.index)
+                except Exception:
+                    return {"cost_price": None, "distance_pct": None}
             weights = df_buy['rzmje'].fillna(0)
             if weights.sum() <= 0:
                 return {"cost_price": None, "distance_pct": None}
@@ -6001,7 +6018,10 @@ class Dim4ChipFundEngine(DataAwareMixin):
         conditions = [
             {'name': '主力阶段', 'satisfied': phase_info['phase'] in ('building', 'lifting', 'distributing'),
              'actual': phase_info['phase_cn'], 'threshold': '有明确阶段判定'},
-            {'name': '资金流向', 'satisfied': fund_flow_info['level'] in ('very_strong', 'strong', 'medium', 'weak'),
+            # 464-14：判定集与实现产出对齐——实现只产 strong(强流入)/strong_out(强流出)/none；
+            # 原集含 very_strong/medium/weak 死枚举（从不产生）且漏 strong_out →
+            # 资金强流出时 audit 恒 False（与强流入不对称，失真）。
+            {'name': '资金流向', 'satisfied': fund_flow_info['level'] in ('strong', 'strong_out'),
              'actual': fund_flow_info['level_cn'], 'threshold': '有明确流向'},
             {'name': '筹码集中', 'satisfied': bool(cost_structure.get('concentration')), 'actual': cost_structure.get('concentration', '未知') or '未知', 'threshold': '有集中度数据'},
             {'name': '拥挤度合理', 'satisfied': crowding['level'] not in ('HIGH_CROWDING', 'unknown'), 'actual': crowding['level'], 'threshold': '非高拥挤'},

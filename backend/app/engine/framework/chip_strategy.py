@@ -1097,10 +1097,26 @@ class MainForceScorer:
             if buy_mask is None or buy_mask.sum() < 3:
                 return {"cost_price": None, "distance_pct": None}
             df_buy = df[buy_mask].copy()
-            avg_prices = (df_buy['open'].fillna(latest_close)
-                         + df_buy['high'].fillna(latest_close)
-                         + df_buy['low'].fillna(latest_close)
-                         + df_buy['close'].fillna(latest_close)) / 4
+            # 464-10：margin_cache 无 OHLC 列——有则四价均值，否则用 daily 收盘价近似
+            # 当日均价（与 dim4 extract_fund_risk_tags / 内嵌 MainForceScorer 同构）。
+            if all(c in df_buy.columns for c in ('open', 'high', 'low', 'close')):
+                avg_prices = (df_buy['open'].fillna(latest_close)
+                             + df_buy['high'].fillna(latest_close)
+                             + df_buy['low'].fillna(latest_close)
+                             + df_buy['close'].fillna(latest_close)) / 4
+            else:
+                try:
+                    _k = self.dm.get_cached_daily_data(symbol)
+                    _close_map = {}
+                    if _k is not None and not _k.empty and 'trade_date' in _k.columns \
+                            and 'close' in _k.columns:
+                        _close_map = dict(zip(_k['trade_date'].astype(str), _k['close']))
+                    avg_prices = pd.Series([
+                        float(_close_map.get(str(d))) if _close_map.get(str(d)) is not None else latest_close
+                        for d in df_buy['trade_date']
+                    ], index=df_buy.index)
+                except Exception:
+                    return {"cost_price": None, "distance_pct": None}
             weights = df_buy['rzmje'].fillna(0)
             if weights.sum() <= 0:
                 return {"cost_price": None, "distance_pct": None}
