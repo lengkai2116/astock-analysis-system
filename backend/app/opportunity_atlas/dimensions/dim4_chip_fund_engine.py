@@ -5938,6 +5938,8 @@ class Dim4ChipFundEngine(DataAwareMixin):
                         'phase_cn': PHASE_MAP.get(phase_engine_result['main_force_phase'], {}).get('name', phase_engine_result['main_force_phase']),
                         'detail': f"PhaseDetector分析（置信度{phase_engine_result.get('phase_confidence', 0):.2f}）",
                         'light': 'green' if phase_engine_result['main_force_phase'] in ('building', 'lifting') else ('red' if phase_engine_result['main_force_phase'] == 'distributing' else 'yellow'),
+                        # 464-13：透传阶段置信度供 audit 条件 1 门槛（tags 兜底路径无此键 → 仅看 phase）
+                        'confidence': phase_engine_result.get('phase_confidence'),
                     }
                 if phase_engine_result and phase_engine_result.get('fund_flow') != 'none':
                     ff = phase_engine_result['fund_flow']
@@ -6021,9 +6023,14 @@ class Dim4ChipFundEngine(DataAwareMixin):
             'overall_direction': 1 if phase_info['phase'] in ('building', 'lifting') else (-1 if phase_info['phase'] == 'distributing' else 0),
             'continuous_value': round(1.0 - crowding.get('score', 0.5), 4),
         }
+        # 464-13：audit「主力阶段」置信门槛 ≥0.3（随 464-17 核查结论拍板）——
+        # PhaseEngine 重算路径有 phase_confidence 时应用门槛（低置信不满足 audit）；
+        # tags 兜底路径无置信键 → 仅看 phase（保持现状不额外拦截）。
+        _phase_conf = phase_info.get('confidence')
         conditions = [
-            {'name': '主力阶段', 'satisfied': phase_info['phase'] in ('building', 'lifting', 'distributing'),
-             'actual': phase_info['phase_cn'], 'threshold': '有明确阶段判定'},
+            {'name': '主力阶段', 'satisfied': phase_info['phase'] in ('building', 'lifting', 'distributing')
+             and (_phase_conf is None or _phase_conf >= 0.3),
+             'actual': phase_info['phase_cn'], 'threshold': '有明确阶段判定且置信≥0.3'},
             # 464-14：判定集与实现产出对齐——实现只产 strong(强流入)/strong_out(强流出)/none；
             # 原集含 very_strong/medium/weak 死枚举（从不产生）且漏 strong_out →
             # 资金强流出时 audit 恒 False（与强流入不对称，失真）。

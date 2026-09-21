@@ -28,6 +28,10 @@ import pandas as pd
 import pytest
 from app.engine.framework.chip_strategy import MainForceScorer as FrameworkScorer
 from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
+    CrowdingFactor,
+    Dim4ChipFundEngine,
+)
+from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
     MainForceScorer as D4Scorer,
 )
 from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
@@ -281,3 +285,93 @@ class TestConsensusPresenceSoft:
         _, c_absent, _, _ = pde._consensus(_mk_dims(), {'capital_nature': 'hot_money'})
         # 只有 capital_nature 时 presence 修正不参与
         assert c_absent == pytest.approx(c_base * 0.8)  # hot_money ×0.8（既有行为）
+
+
+class TestAuditPhaseConfidenceGate:
+    """④ 464-13：audit「主力阶段」置信门槛 ≥0.3（随 464-17 结论拍板）
+
+    重估依据（2026-09-18 旧 pre_feat + 修复后逻辑模拟）：
+      修复后 phase_confidence 均值 0.444→0.525；<0.3 拦截从 30%→16%；
+      presence 有证据组均值 0.587 vs none 组 0.439（置信可区分主力在场）。
+    """
+
+    def _run_evaluate(self, monkeypatch, phase_result, tags=None):
+        df = _mk_kline(60)
+
+        class _FakeDM:
+            cache = None
+
+        monkeypatch.setattr(Dim4ChipFundEngine, '_get_dm', lambda self: _FakeDM())
+        # 注意：evaluate 内部实例化的是 dim4 模块的 PhaseDetectionEngine（D4PhaseEngine），
+        # 非 phase_detector.py 的——须 monkeypatch D4PhaseEngine
+        monkeypatch.setattr(
+            D4PhaseEngine, 'compute_tags',
+            staticmethod(lambda *a, **k: phase_result))
+        monkeypatch.setattr(
+            CrowdingFactor, 'evaluate',
+            lambda self, *a, **k: {
+                'crowding_level': 'MODERATE_CROWDING', 'crowding_score': 0.5,
+                'risk_advice': '拥挤度适中',
+            })
+        engine = Dim4ChipFundEngine()
+        _tags = {'ts_code': '000001.SZ', 'fund_flow': ''}
+        _tags.update(tags or {})
+        return engine.evaluate({}, _tags, data_context={'daily_df': df})
+
+    def _cond(self, res):
+        return next(c for c in res['audit']['conditions'] if c['name'] == '主力阶段')
+
+    def test_low_confidence_not_satisfied(self, monkeypatch):
+        """PhaseEngine 重算 phase='building' 但置信 0.2 <0.3 → audit 条件 1 不满足"""
+        res = self._run_evaluate(monkeypatch, {
+            'main_force_phase': 'building', 'phase_confidence': 0.2,
+            'fund_flow': 'none', 'trend_alignment': 'up_aligned',
+            'price_position': 'mid_zone',
+        })
+        cond = self._cond(res)
+        assert cond['satisfied'] is False, cond
+        assert cond['actual'] == '建仓期'
+
+    def test_high_confidence_satisfied(self, monkeypatch):
+        """PhaseEngine 重算 phase='building' 且置信 0.5 ≥0.3 → audit 条件 1 满足"""
+        res = self._run_evaluate(monkeypatch, {
+            'main_force_phase': 'building', 'phase_confidence': 0.5,
+            'fund_flow': 'none', 'trend_alignment': 'up_aligned',
+            'price_position': 'mid_zone',
+        })
+        assert self._cond(res)['satisfied'] is True
+
+    def test_boundary_0_3_satisfied(self, monkeypatch):
+        """置信恰为 0.3（≥0.3 边界）→ 满足"""
+        res = self._run_evaluate(monkeypatch, {
+            'main_force_phase': 'lifting', 'phase_confidence': 0.3,
+            'fund_flow': 'none', 'trend_alignment': 'up_aligned',
+            'price_position': 'mid_zone',
+        })
+        assert self._cond(res)['satisfied'] is True
+
+    def test_fallback_path_no_confidence_only_phase(self, monkeypatch):
+        """兜底路径：PhaseEngine 返回 unknown（不覆盖）→ phase_info 无 confidence 键 →
+        仅看 phase（tags main_force_phase='building' 仍满足，不额外拦截）"""
+        res = self._run_evaluate(monkeypatch, {
+            'main_force_phase': 'unknown', 'phase_confidence': 0.0,
+            'fund_flow': 'none', 'trend_alignment': 'no_trend',
+            'price_position': 'mid_zone',
+        }, tags={'main_force_phase': 'building'})
+        assert self._cond(res)['satisfied'] is True
+
+    def test_unknown_phase_not_satisfied(self, monkeypatch):
+        """阶段 unknown（tags 也无明确阶段）→ 不满足（原行为保持）"""
+        res = self._run_evaluate(monkeypatch, {
+            'main_force_phase': 'unknown', 'phase_confidence': 0.0,
+            'fund_flow': 'none', 'trend_alignment': 'no_trend',
+            'price_position': 'mid_zone',
+        })
+        assert self._cond(res)['satisfied'] is False
+
+    def test_confidence_key_in_source(self):
+        """audit 条件 1 已含置信门槛表达式（防回归）"""
+        import inspect
+        src = inspect.getsource(Dim4ChipFundEngine.evaluate)
+        assert '_phase_conf >= 0.3' in src
+
