@@ -1152,11 +1152,11 @@ class MainForceScorer:
             lhb_score = self._score_lhb(symbol, _df)
             if lhb_score >= 0.5:
                 tags['capital_nature'] = 'institutional'
-            elif lhb_score >= 0.2:
-                tags['capital_nature'] = 'hot_money'
-            elif lhb_score > -0.5:
-                # 2026-08-10 修复：轻微怀疑（-0.5~0.2）给 hot_money（营业部/游资特征），
-                # 不再一律 unknown——保留区分度（原 suspected 扣分后全落 unknown）
+            elif lhb_score != 0.0:
+                # 2026-08-10 修复保留：lhb_score>0 真机构/席位买入、<0 假机构嫌疑
+                # （营业部/游资特征）均给 hot_money——保留区分度；
+                # 464-17：lhb_score==0（无龙虎榜证据）改回 unknown，不再误标游资
+                # （原实现 0.0>-0.5 致 96% 全市场落 hot_money，区分度基本失效）
                 tags['capital_nature'] = 'hot_money'
             else:
                 tags['capital_nature'] = 'unknown'

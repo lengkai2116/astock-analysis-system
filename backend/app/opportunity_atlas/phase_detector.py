@@ -339,6 +339,13 @@ class PhaseDetectionEngine(DataAwareMixin):
             confidence = min(1.0, confidence + 0.05)
         elif cap_nature == "hot_money":
             confidence *= 0.8
+        # 464-17：主力在场软修正（对齐 capital_nature 先例）——有在场证据提信、
+        # 无在场证据（none）降信，使"主力锁定"前提反映到阶段置信度
+        presence = extra_tags.get("main_force_presence")
+        if presence in ("strong", "moderate"):
+            confidence = min(1.0, confidence + 0.05)
+        elif presence == "none":
+            confidence *= 0.8
         vote_ratio["_conflict"] = bool(conflict)
         vote_ratio["_confidence"] = round(float(confidence), 4)
         vote_ratio["_supporters"] = {top: len(_supporters(top))}

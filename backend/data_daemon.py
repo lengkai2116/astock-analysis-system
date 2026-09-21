@@ -3465,6 +3465,15 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             #     及 hold_float_ratio/turnover_rate 补生产。
             try:
                 _depth = {}
+                # ③ 主力在场证据（_compute_main_force_presence：main_force_presence/presence_evidence）
+                #   464-17：提前到 ① 阶段之前计算，供阶段引擎 extra_tags 做主力在场软修正
+                _pres = None
+                try:
+                    _pres = _compute_main_force_presence(code, _ecm)
+                    _depth['main_force_presence'] = _pres.get('main_force_presence')
+                    _depth['presence_evidence'] = _pres.get('presence_evidence')
+                except Exception as _e:
+                    logger.debug(f"RAW深度主力在场失败 [{code}]: {_e}")
                 # ① 主力阶段（PhaseDetectionEngine：main_force_phase/phase_confidence）
                 try:
                     from app.opportunity_atlas.phase_detector import PhaseDetectionEngine
@@ -3472,6 +3481,8 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     _cl_tags = features.get('chanlun', {})
                     if _cl_tags.get('buy_sell_point'):
                         _extra['buy_sell_point'] = _cl_tags['buy_sell_point']
+                    if _pres and _pres.get('main_force_presence'):
+                        _extra['main_force_presence'] = _pres.get('main_force_presence')
                     _phase = PhaseDetectionEngine().compute_tags(code, df, extra_tags=_extra) or {}
                     _depth['main_force_phase'] = _phase.get('main_force_phase')
                     _depth['phase_confidence'] = _phase.get('phase_confidence')
@@ -3489,13 +3500,6 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     _depth['capital_nature'] = _mfs.get('capital_nature')
                 except Exception as _e:
                     logger.debug(f"RAW深度资金标签失败 [{code}]: {_e}")
-                # ③ 主力在场证据（_compute_main_force_presence：main_force_presence/presence_evidence）
-                try:
-                    _pres = _compute_main_force_presence(code, _ecm)
-                    _depth['main_force_presence'] = _pres.get('main_force_presence')
-                    _depth['presence_evidence'] = _pres.get('presence_evidence')
-                except Exception as _e:
-                    logger.debug(f"RAW深度主力在场失败 [{code}]: {_e}")
                 # ④ hold_float_ratio/turnover_rate 补生产（461-6：控盘度/换手率
                 #    ——hold_float_ratio 从 top10_holders_cache 前十大股东合计/均值；
                 #    turnover_rate 接 daily_basic.turnover_rate 实时列）
@@ -4668,7 +4672,14 @@ def _compute_main_force_presence(code: str, ecm) -> dict:
       1. 龙虎榜近 30 日有席位记录 → strong（游资/机构席位证据）
       2. 股东户数环比减少 ≥5% → moderate（筹码集中吸筹证据）
       3. 融资余额 30 日增幅 >50% → risk（散户杠杆接盘/出货风险，知识库反向指标）
+      4. 筹码集中度：前十大股东流通占比合计 ≥60% → moderate（温和证据，
+         464-17 补充——股东户数证据因 stk_holder_cache 数据质量暂不可达）
       无任何证据 → none
+
+    464-17：原实现用 ecm.conn（总库 stock_cache.db）直查 lhb_cache/stk_holder_cache/
+    margin_cache——三表全在分库（system/history/market_cache.db），总库无表 →
+    三个查询全部静默抛异常 → 全市场恒 none。现改走 ECM 分库读方法（_query_shard）；
+    且融资窗口对齐注释语义（30 自然日内最早记录，原实现取历史最早）。
 
     Returns:
         {'main_force_presence': 'strong'|'moderate'|'risk'|'none',
@@ -4676,44 +4687,68 @@ def _compute_main_force_presence(code: str, ecm) -> dict:
     """
     evidence = []
     presence = 'none'
+    cutoff = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
     try:
-        n_lhb = ecm.conn.execute(
-            "SELECT COUNT(*) FROM lhb_cache WHERE ts_code=? "
-            "AND trade_date >= date('now','-30 day')", [code]).fetchone()[0]
-        if n_lhb and n_lhb > 0:
-            evidence.append(f"龙虎榜 {min(n_lhb, 5)} 次")
-            presence = 'strong'
+        _lhb = ecm.get_cached_lhb(code)
+        if _lhb is not None and not _lhb.empty and 'trade_date' in _lhb.columns:
+            _lhb = _lhb[_lhb['trade_date'].astype(str) >= cutoff]
+            n_lhb = len(_lhb)
+            if n_lhb > 0:
+                evidence.append(f"龙虎榜 {min(n_lhb, 5)} 次")
+                presence = 'strong'
     except Exception:
         pass
     try:
-        rows = ecm.conn.execute(
-            "SELECT end_date, holder_number FROM stk_holder_cache "
-            "WHERE ts_code=? ORDER BY end_date DESC LIMIT 2", [code]).fetchall()
-        if len(rows) >= 2 and rows[0][1] and rows[1][1]:
-            prev, cur = float(rows[1][1]), float(rows[0][1])
-            if prev > 0 and (prev - cur) / prev >= 0.05:
-                evidence.append(f"股东户数减少 {(prev - cur) / prev * 100:.0f}%")
-                if presence == 'none':
-                    presence = 'moderate'
+        _holder = ecm.get_cached_stk_holder(code)
+        if _holder is not None and not _holder.empty and len(_holder) >= 2 \
+                and 'end_date' in _holder.columns and 'holder_number' in _holder.columns:
+            _h = _holder.sort_values('end_date', ascending=False)
+            _cur, _prev = _h.iloc[0]['holder_number'], _h.iloc[1]['holder_number']
+            if _cur is not None and _prev is not None:
+                _prev_f, _cur_f = float(_prev), float(_cur)
+                if _prev_f > 0 and (_prev_f - _cur_f) / _prev_f >= 0.05:
+                    evidence.append(f"股东户数减少 {(_prev_f - _cur_f) / _prev_f * 100:.0f}%")
+                    if presence == 'none':
+                        presence = 'moderate'
     except Exception:
         pass
     try:
-        rows = ecm.conn.execute(
-            "SELECT trade_date, rzye FROM margin_cache WHERE ts_code=? "
-            "ORDER BY trade_date DESC LIMIT 1", [code]).fetchall()
-        if rows and rows[0][1]:
-            cur_f = float(rows[0][1])
-            # 融资余额最早记录（30 日窗口内）：字符串日期直接比较（修复：原 date() 截断 bug）
-            oldest = ecm.conn.execute(
-                "SELECT rzye FROM margin_cache WHERE ts_code=? AND trade_date <= ? "
-                "ORDER BY trade_date ASC LIMIT 1", [code, str(rows[0][0])]).fetchall()
-            if oldest and oldest[0][0]:
-                old_f = float(oldest[0][0])
-                if old_f > 0 and (cur_f - old_f) / old_f > 0.5:
-                    evidence.append("融资余额暴增 >50%")
-                    presence = 'risk'
+        _margin = ecm.get_cached_margin(code)
+        if _margin is not None and not _margin.empty and 'trade_date' in _margin.columns \
+                and 'rzye' in _margin.columns:
+            _m = _margin.sort_values('trade_date')
+            _cur_v = _m.iloc[-1]['rzye']
+            if _cur_v is not None:
+                _cur_f = float(_cur_v)
+                # 464-17：窗口对齐注释——30 自然日内最早记录（原实现取历史最早一条）
+                _window = _m[_m['trade_date'].astype(str) >= cutoff]
+                if not _window.empty and _window.iloc[0]['rzye'] is not None:
+                    _old_f = float(_window.iloc[0]['rzye'])
+                    if _old_f > 0 and (_cur_f - _old_f) / _old_f > 0.5:
+                        evidence.append("融资余额暴增 >50%")
+                        presence = 'risk'
     except Exception:
         pass
+    # 464-17：温和证据档——筹码集中度（前十大股东流通占比合计 ≥60%）
+    if presence == 'none':
+        try:
+            _t10 = ecm.get_cached_top10_holders(code)
+            if _t10 is not None and not _t10.empty and 'hold_float_ratio' in _t10.columns \
+                    and 'end_date' in _t10.columns:
+                _t10 = _t10[_t10['hold_float_ratio'].notna()]
+                if not _t10.empty:
+                    _t10 = _t10.sort_values('end_date', ascending=False)
+                    _latest_ed = _t10.iloc[0]['end_date']
+                    try:
+                        _conc = float(_t10[_t10['end_date'] == _latest_ed]
+                                      ['hold_float_ratio'].astype(float).sum())
+                    except (TypeError, ValueError):
+                        _conc = 0.0
+                    if _conc >= 60.0:
+                        evidence.append(f"筹码集中 前十大股东流通占比 {_conc:.0f}%")
+                        presence = 'moderate'
+        except Exception:
+            pass
     return {
         'main_force_presence': presence,
         'presence_evidence': json.dumps(evidence, ensure_ascii=False),

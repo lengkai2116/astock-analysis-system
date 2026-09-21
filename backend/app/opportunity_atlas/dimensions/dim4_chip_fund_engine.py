@@ -785,6 +785,13 @@ class PhaseDetectionEngine(DataAwareMixin):
             confidence = min(1.0, confidence + 0.05)
         elif cap_nature == "hot_money":
             confidence *= 0.8
+        # 464-17：主力在场软修正（与 phase_detector.py 同步）——有在场证据提信、
+        # 无在场证据（none）降信
+        presence = extra_tags.get("main_force_presence")
+        if presence in ("strong", "moderate"):
+            confidence = min(1.0, confidence + 0.05)
+        elif presence == "none":
+            confidence *= 0.8
         vote_ratio["_conflict"] = bool(conflict)
         vote_ratio["_confidence"] = round(float(confidence), 4)
         vote_ratio["_supporters"] = {top: len(_supporters(top))}
@@ -3609,11 +3616,10 @@ class MainForceScorer:
             lhb_score = self._score_lhb(symbol, _df)
             if lhb_score >= 0.5:
                 tags['capital_nature'] = 'institutional'
-            elif lhb_score >= 0.2:
-                tags['capital_nature'] = 'hot_money'
-            elif lhb_score > -0.5:
-                # 2026-08-10 修复：轻微怀疑（-0.5~0.2）给 hot_money（营业部/游资特征），
-                # 不再一律 unknown——保留区分度（原 suspected 扣分后全落 unknown）
+            elif lhb_score != 0.0:
+                # 464-17：与 framework 版同步——lhb_score>0 真机构/席位买入、<0 假机构嫌疑
+                # 均给 hot_money（保留 2026-08-10 区分度）；lhb_score==0（无龙虎榜证据）
+                # 改回 unknown，不再误标游资（原 0.0>-0.5 致 96% 全标 hot_money）
                 tags['capital_nature'] = 'hot_money'
             else:
                 tags['capital_nature'] = 'unknown'
