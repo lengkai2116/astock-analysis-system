@@ -28,4 +28,8 @@
 - 切换点：`data_daemon.py` RAW 预计算 `valuation_ext['roce']`（此前唯一仍用净资产口径处；dim4/dim7/finance_report_service 消费侧早已用流动负债口径）。
 - 逻辑：优先 current_liab → EBIT/(总资产-流动负债)；current_liab 缺失回退 total_liab → EBIT/(总资产-总负债)；再缺回退 fina.roe×1.2。
 - 回归：52 项（273a/449/448/473）通过。
+- **存量对齐全量回算（2026-09-22，脚本 `probe_474_roce_recompute.py`，用后已删）**：重跑全市场 RAW-2 `_precompute_raw_features`（5550/5552 只，失败 0，耗时 819.9s，trade_date=2026-09-22），每只 INSERT OR REPLACE 覆盖最新行 pre_feat_cache → `valuation_ext.roce` 存量更新为新口径。
+  - 验证：最新期 5550 只中 `roce有值 5533`、`roce缺 17`（17 只 roe 亦为 None，无资产负债表也无可回退 ROE，属数据缺失边界，非回归）。
+  - 抽样核对新口径生效：600036.SH roce=12.56（roe=10.47），600000.SH roce=6.8（roe=5.67），均非净资产口径。
+  - 重算期间 daemon+看守已停，回算完成后经 Terminal 恢复。
 
