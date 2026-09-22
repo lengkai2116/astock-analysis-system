@@ -147,8 +147,8 @@ class EagleSwordResonance:
         聚合快慢线情绪信号
 
         Args:
-            bociasi_quick:  BociasiQuickLine.evaluate() 返回
-            bociasi_slow:   BociasiSlowLine.evaluate() 返回
+            bociasi_quick:  dim5 _bociasi_quickline() 返回
+            bociasi_slow:   dim5 _bociasi_slowline() 返回
 
         Returns:
             'BULLISH' | 'BEARISH' | 'NEUTRAL'

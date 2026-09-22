@@ -4,8 +4,7 @@
 
 整合源：
   - emotion_builder.py（182行）：三层面输出（市场/板块/个股）+ 条件稽核
-  - bociasi_quickline.py（131行）：BOCIASI快线4指标
-  - bociasi_slowline.py（171行）：BOCIASI慢线ERP
+  - bociasi_quickline.py / bociasi_slowline.py：BOCIASI快慢线（470号 A1 已内嵌 + framework 双类死代码清理）
   - bociasi_quadrant.py（347行）：四象限市场情绪判定
   - emotion_temperature.py（103行）：情绪温度0-100
   - sector_rotation_model.py（144行）：板块热度 top_10/top_20/normal/none
@@ -159,11 +158,20 @@ def _bociasi_quickline(df: pd.DataFrame) -> dict:
 # BOCIASI慢线（从 bociasi_slowline.py 迁移）
 # ═══════════════════════════════════════════════════════════
 
-def _bociasi_slowline(df: pd.DataFrame, bond_yield: float = 2.85,
+def _bociasi_slowline(df: pd.DataFrame, bond_yield: float = None,
                       index_df: pd.DataFrame = None) -> dict:
-    """BOCIASI慢线ERP评估"""
+    """BOCIASI慢线ERP评估
+
+    国债利率默认取全系统统一 CN_10Y_BOND_YIELD_PCT（env 可配，1.7），
+    与四象限慢线/data_daemon/dim7 同源（470号 B1 统一，修复原硬编码 2.85
+    导致"同 ERP 两套国债利率"）。
+    """
     if df is None or df.empty or len(df) < 60:
         return {'signal': 'NEUTRAL', 'confidence': 0.0, 'details': {'error': '数据不足'}}
+
+    if bond_yield is None:
+        from app.opportunity_atlas.valuation_estimator import CN_10Y_BOND_YIELD_PCT
+        bond_yield = float(CN_10Y_BOND_YIELD_PCT)
 
     pe_ttm = None
     for col in ['pe_ttm', 'pe']:
