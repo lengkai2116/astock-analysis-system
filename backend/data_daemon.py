@@ -3267,6 +3267,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 # 447号 T2a：fallback 枚举对齐源 A 六段论（ice/ferment/climax/ebb），删 recovery；
                 # climax 门槛对齐源 A（limit_up>80 且 sealing>75），无 max_board_height 时可辨识档归
                 # sprout/regression 兜底→ferment（同源 A else 默认语义）
+                # 471号 C1：主源（MarketSentimentService 六段论，含 max_board_height）不可用时本条
+                # fallback 为四档兜底（climax/ebb/ice/ferment），ice 判定无连板数、粒度低于主源；
+                # 经用户拍板接受此降级（仅主源不可用时才走 fallback，正常六段论不受影响）。
                 if limit_up > 80 and sealing_rate > 75:
                     _sentiment_phase_global = 'climax'
                 elif (limit_up < 40 and sealing_rate < 40) or limit_down > 20:

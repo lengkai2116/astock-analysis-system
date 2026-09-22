@@ -160,11 +160,16 @@ def _bociasi_quickline(df: pd.DataFrame) -> dict:
 
 def _bociasi_slowline(df: pd.DataFrame, bond_yield: float = None,
                       index_df: pd.DataFrame = None) -> dict:
-    """BOCIASI慢线ERP评估
+    """BOCIASI慢线ERP评估（个股级，纯股权风险溢价）
 
     国债利率默认取全系统统一 CN_10Y_BOND_YIELD_PCT（env 可配，1.7），
     与四象限慢线/data_daemon/dim7 同源（470号 B1 统一，修复原硬编码 2.85
     导致"同 ERP 两套国债利率"）。
+
+    471号 B2：慢线定位为**个股纯 ERP 信号**，移除从未执行的"股债位置差"
+    （index_df 从不传入）死分支——个股级慢线不再混入相对强弱；全市场级
+    股债维度由 BociasiQuadrantAnalyzer 慢线历史分位承担（B3 双语义分层）。
+    index_df 参数保留（置 None）为向后兼容占位，不再使用。
     """
     if df is None or df.empty or len(df) < 60:
         return {'signal': 'NEUTRAL', 'confidence': 0.0, 'details': {'error': '数据不足'}}
@@ -197,29 +202,13 @@ def _bociasi_slowline(df: pd.DataFrame, bond_yield: float = None,
         erp = None
         erp_signal, erp_conf = 'NEUTRAL', 0.0
 
-    sb_signal, sb_conf = 'NEUTRAL', 0.0
-    if index_df is not None and not index_df.empty:
-        idx_close = index_df['close'].astype(float)
-        stock_close = df['close'].astype(float)
-        if len(idx_close) >= 20 and len(stock_close) >= 21:
-            idx_ret = idx_close.iloc[-1] / idx_close.iloc[-20] - 1
-            stock_ret = stock_close.iloc[-1] / stock_close.iloc[-21] - 1
-            rel_strength = stock_ret - idx_ret
-            if rel_strength > 0.05:
-                sb_signal = 'BULLISH'
-                sb_conf = min(0.7, 0.5 + abs(rel_strength))
-            elif rel_strength < -0.05:
-                sb_signal = 'BEARISH'
-                sb_conf = min(0.7, 0.5 + abs(rel_strength))
-
+    # 471号 B2：原股债位置差（sb）死分支已删——index_df 从不传入，其窗口
+    # 亦错 1 日（iloc[-20] 19日 vs iloc[-21] 20日），无保留价值。
     signals = []
     confs = []
     if erp_signal != 'NEUTRAL':
         signals.append(erp_signal)
         confs.append(erp_conf)
-    if sb_signal != 'NEUTRAL':
-        signals.append(sb_signal)
-        confs.append(sb_conf)
 
     if not signals:
         final_signal, final_conf = 'NEUTRAL', 0.3
@@ -240,7 +229,7 @@ def _bociasi_slowline(df: pd.DataFrame, bond_yield: float = None,
     return {
         'signal': final_signal, 'confidence': round(final_conf, 2),
         'details': {'erp': round(erp, 4) if erp is not None else None,
-                     'erp_signal': erp_signal, 'sb_signal': sb_signal},
+                     'erp_signal': erp_signal},
     }
 
 
@@ -496,9 +485,9 @@ class Dim5EmotionEngine(DataAwareMixin):
             'market': f"市场处于{market['phase']}（{market['detail']}）",
             'sector': sector['detail'],
             'stock': f"个股{stock['emotion']}（{stock['detail']}）",
-            'bociasi_quick': f"快线={bociasi_signal_cn(quick_result.get('signal'))}（{quick_result.get('confidence',0)}）",
-            'bociasi_slow': f"慢线={bociasi_signal_cn(slow_result.get('signal'))}（{slow_result.get('confidence',0)}）",
-            'quadrant': f"{quadrant_cn(quadrant.get('quadrant',''))}—{quadrant.get('description','')}",
+            'bociasi_quick': f"个股快线={bociasi_signal_cn(quick_result.get('signal'))}（{quick_result.get('confidence',0)}）",
+            'bociasi_slow': f"个股慢线ERP={bociasi_signal_cn(slow_result.get('signal'))}（{slow_result.get('confidence',0)}）",
+            'quadrant': f"大市四象限({quadrant_cn(quadrant.get('quadrant',''))}·全市场分位)—{quadrant.get('description','')}",
             'temperature': f"{temperature}/100",
         }
 
