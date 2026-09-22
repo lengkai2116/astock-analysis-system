@@ -10,11 +10,15 @@ related:
   - 461-dim1取数一致性合并实施号——461-1~13 已全部落地，本号引用其修复结果
   - 444-SIG股票现状描述的事实层仲裁与叙事框架方案——SIG 现状=因，本号梳理的是因的产出项
   - 437-A-dim8归集映射设计——dim8 归集对象即本号输出项
+  - 464-dim8现状描述输出定稿基准索引——**各维定稿基准的权威引用入口**（本号为定稿原料，勿当作定稿基准）
+  - 464-dim4资金筹码引擎输出项全量梳理与核查（464方法续）——**dim4 完整版独立文档**（本号 §三 为其简要版 + 核查发现另载）
 ---
 
 # 464 — dim2-dim7 分析输出项全量梳理
 
 > **定位**：把 SIG 侧 dim2-dim7 六引擎 `evaluate()` 产出的**每个分析输出项**逐一列出「输出结论 + 对应分析逻辑（规则/阈值/窗口/枚举/数据源）」，作为 445 §6 输出项评估的完整落地清单、dim8 归集与 JUD 消费的字段级依据。
+>
+> **⚠️ 与定稿基准区分**：本号为**输出项梳理清单（原料）**，**不是** dim8 输出定稿基准。各维已定稿标准见《464-dim8现状描述输出定稿基准索引》（dim2/dim3 ✅，dim4~dim7 ⏳）。
 >
 > **方法**：逐文件读 `evaluate()` + 全部 `_assess_*`/子引擎函数，与 461 号各子项落地状态交叉核对；本轮发现的疑点记入 §八（不改代码、不拍板）。
 >
@@ -112,6 +116,8 @@ related:
 
 ## 三、dim4 资金筹码引擎（Dim4ChipFundEngine）
 
+> **📌 完整版独立文档**：本节约为 dim4 输出项简要梳理；**逐键实证 + 2026-09-21 全面核查发现（十项，实施号 464-6~464-15）见《464-dim4资金筹码引擎输出项全量梳理与核查（464方法续）.md》**。
+
 **数据源**：tags + data_context（chip_fund_ext/moneyflow_df/indicator_ma_df/indicator_other_df/cost_ext/margin_df）+ `PhaseDetectionEngine.compute_tags`（df≥30 根时真实阶段分析，覆盖基础标签）。
 
 ### 3.1 status_description 输出项
@@ -120,11 +126,11 @@ related:
 |---|---|---|---|
 | 1 | `phase` | 主力阶段：建仓/洗盘/拉升/出货/护盘（未知） | `_assess_phase` 读 tags `main_force_phase`（461-6 后由 PhaseDetectionEngine 生产）映射；**df 可用时被 compute_tags 覆盖**。⚠️ 见 §八-1 枚举口径疑点 |
 | 2 | `fund_flow` | 资金流向：强流入/强流出/中性 | `_assess_fund_flow`：tags `fund_flow` 5d_inflow→强流入/5d_outflow→强流出；被 PhaseDetector fund_flow 覆盖（inflow/outflow/mixed） |
-| 3 | `cost_structure` | 筹码结构：集中度+ASR+CYQKL+获利盘+质量 | `_assess_cost_structure`：chip_concentration + ASR（活跃筹码比率）+ CYQKL（筹码穿透力）+ profit_ratio；quality 按 ASR 分档（>80 活跃/<30 沉寂）。⚠️ **461-9 后 chip 白名单已删 asr/cyqkl → 该两段数据源恒缺（死路径，quality 恒"中性"）**，见 §八-2 |
-| 4 | `signal` | 筹码买卖点信号 | tags `buy_sell_point`（461-9 后 chanlun 白名单唯一保留键）→ 一买/二买/三买/一卖/二卖 |
+| 3 | `cost_structure` | 筹码结构：集中度+ASR+CYQKL+获利盘+质量 | `_assess_cost_structure`：chip_concentration + ASR（活跃筹码比率）+ CYQKL（筹码穿透力）+ profit_ratio；quality 按 ASR 分档（>80 活跃/<30 沉寂）。~~⚠️ 461-9 后 chip 白名单已删 asr/cyqkl → 该两段数据源恒缺（死路径，quality 恒"中性"）~~ **已澄清（八-2）：asr/cyqkl 真生产者在 chip_fund_ext 组（443 R1），链路完整非死路径**；⚠️ quality 死输出见独立文档 §四-6 |
+| 4 | `signal` | 筹码买卖点信号 | tags `buy_sell_point`（461-9 后 chanlun 白名单唯一保留键）→ 一买/二买/三买/一卖/二卖。⚠️ **映射缺 third_sell（三卖被吞）**，见独立文档 §四-11（464-16） |
 | 5 | `retail_institution` | 散户与机构博弈 | building+5d_inflow→机构买入；distributing→主力出货；否则中性 |
 | 6 | `margin` | 融资余额 5 日变化 | tags `margin_change_5d`，缺失时 margin_df 的 rzye 算 5 日变化（442 缺陷②修复）；>10% 杠杆上升 / <-10% 去杠杆 / 否则正常 |
-| 7 | `crowding` | 拥挤度等级+建议+分数 | `CrowdingFactor.evaluate`：三信号（融资余额占比>流通市值 5% 高/<1% 低；换手率 vs 20 日均值 >1.5× 高/<0.5× 低；布林带宽度 p20 分位以下=高拥挤/p80 以上=低拥挤）→ ≥2 高信号→HIGH（score 0.7-1.0）/≥2 低信号→LOW（0.1-0.3）/否则 MODERATE（0.5）。⚠️ **换手分项实际恒 NORMAL**（daily_df 无 turnover 列且 evaluate 未传 turnover_data），见 §八-3 |
+| 7 | `crowding` | 拥挤度等级+建议+分数 | `CrowdingFactor.evaluate`：三信号（融资余额占比>流通市值 5% 高/<1% 低；换手率 vs 20 日均值 >1.5× 高/<0.5× 低；布林带宽度 p20 分位以下=高拥挤/p80 以上=低拥挤）→ ≥2 高信号→HIGH（score 0.7-1.0）/≥2 低信号→LOW（0.1-0.3）/否则 MODERATE（0.5）。~~⚠️ 换手分项实际恒 NORMAL~~ **已修复（464-3）：从 daily_basic_df.turnover_rate 提取传 turnover_data**；⚠️ **融资分项恒死（calc_margin_ratio 列名错位）→ 三态退化恒 MODERATE(0.5)、continuous_value 恒 0.5**，见独立文档 §四-1（464-6） |
 | 8 | `fund_price_divergence` / `_status` / `_risk` | 资金×价格背离（445 补产出） | 资金方向 × 价格方向（PhaseDetector trend_alignment 归一，无引擎时 df 5 日斜率>1% 兜底）：同向→"一致性确认"（无风险）；流出+涨→"拉抬出货，散户接盘危险信号"（danger/bearish）；流入+跌→"底部吸筹/逆势建仓"（提示/bullish）；数据不足→none |
 | 9 | `plain` | 白话总结 | `_fund_chip_plain` 拼接阶段/资金流/筹码结构/融资 + 背离后缀（risk≠无时） |
 
@@ -137,14 +143,14 @@ related:
 - **涨停交叉校验 `_limit_up_cross_check`**（298 号）：pct_chg>9.5% 时——building+低位+非巨量→确认 building；building+高位→distributing；lifting+高位+巨量+次日低开→distributing；distributing+低位+缩量→building。
 
 ### 3.3 judgment
-`phase`、`direction`（fund_flow）、`light`（=phase light）、`overall_light`、`overall_direction`（building/raising→+1、distributing→-1）、`continuous_value`（1-crowding_score）。
+`phase`、`direction`（fund_flow）、`light`（=phase light）、`overall_light`、`overall_direction`（building/**lifting**→+1、distributing→-1，~~raising~~ 464-1 已统一为 lifting）、`continuous_value`（1-crowding_score，⚠️ 融资维死后恒 0.5，见独立文档 §四-1）。
 
 ### 3.4 audit 条件（5 条）
-1. 主力阶段：building/raising/distributing
-2. 资金流向：有明确流向（very_strong~weak）
-3. 筹码集中：有集中度数据
-4. 拥挤度合理：非 HIGH_CROWDING/unknown
-5. 资金×价格无危险背离：risk≠危险
+1. 主力阶段：building/**lifting**/distributing（~~raising~~ 464-1 已统一）⚠️ 不看置信度，见独立文档 §四-8
+2. 资金流向：有明确流向（very_strong~weak）⚠️ 判定集漏 strong_out + 死枚举，见独立文档 §四-9
+3. 筹码集中：有集中度数据 ⚠️ 'stable' 也满足（独立文档观察项）
+4. 拥挤度合理：非 HIGH_CROWDING/unknown ⚠️ 融资维死后恒满足，见独立文档 §四-1
+5. 资金×价格无危险背离：risk≠危险 ⚠️ 数据不足时恒"无"（独立文档 §四-2）
 
 ---
 
@@ -307,6 +313,8 @@ related:
 ### 八-5（观察）dim6 EagleSwordResonance 非 evaluate 输出
 - dim6 文件内 `EagleSwordResonance` + 模块级便捷函数 `evaluate(...)`（chanlun_result/volume_price_signal/bociasi_quick/bociasi_slow/crowding/market_state 入参）供外部信号共振调用，**不在 Dim6RiskEngine.evaluate 输出中**——本号不列入输出项，仅备注防混淆。
 
+> **📌 dim4 核查发现（2026-09-21）已独立成档**：见《464-dim4资金筹码引擎输出项全量梳理与核查（464方法续）.md》——§四 十项发现（实施号 464-6~464-15 已登记，判定类待拍板）。本号不再重复载入，避免与 dim2-dim7 汇总混淆。
+
 ---
 
 ## 九、待确认清单（逐项沟通用）
@@ -318,6 +326,7 @@ related:
 | 3 | ~~八-3 crowding 换手分项~~ | ✅ 已处置（464-3） | 从 daily_basic_df.turnover_rate 提取序列传 turnover_data（已完成并验证） |
 | 4 | ~~八-4 audit 文案对齐~~ | ✅ 已处置（464-4） | threshold 对齐三维判定文案（ROE+负债率+现金流覆盖）（已完成并验证） |
 | 5 | 各维 status_description 键是否全部进入 dim8 归集范围 | 437-A 字段级映射 | 逐键核对 437-A T/E/S/D 去向 |
+| 6 | **dim4 核查发现（十项，464-6~464-15）** | 见独立文档 | 《464-dim4资金筹码引擎输出项全量梳理与核查（464方法续）.md》§四/§五 |
 
 ---
 

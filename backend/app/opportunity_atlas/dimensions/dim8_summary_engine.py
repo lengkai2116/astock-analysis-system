@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -509,6 +510,76 @@ def _compose_dim_subsections(src_key: str, sd: dict) -> list[dict] | None:
     return out or None
 
 
+# ═══════════════════════════════════════════════════════════
+# dim4 现状描述中文标注网关（464 中文名映射）
+#
+# 背景：dim4 status_description 部分取值带英文——指标缩写（ASR/CYQKL）、引擎名
+#   （PhaseDetector）、拥挤度档位（MODERATE/HIGH_CROWDING）、资金价格背离状态
+#   （divergence/aligned）。这些英文分两类：
+#     - 结构化键（crowding level、fund_price_divergence_status 等）仍被
+#       audit / JUD 消费，原值必须保留（439 SIG-JUD 边界）。
+#     - 展示文案（dim8 text / evidence / subsections）是 dim8 唯一叙事出口
+#       （436 共识：前端唯一直读 dim8），可中文化。
+# 本网关只作用于 dim8 的 fund_chip 段展示输出，不动任何结构化键。
+#
+# 口径（用户拍板 2026-09-22）：
+#   - 指标缩写保留 + 中文释义：ASR（活跃筹码比率）=42。
+#   - 拥挤度档位中文：MODERATE→适中 / HIGH_CROWDING→高 / LOW_CROWDING→低。
+#   - PhaseDetector 全中文化：阶段引擎分析 / 阶段引擎判定5日净流出。
+#   - 背离状态 status：divergence→背离 / aligned→同向 / none→无。
+# ═══════════════════════════════════════════════════════════
+_INDICATOR_CN = {
+    'ASR': '活跃筹码比率',
+    'CYQKL': '筹码穿透力',
+    'RPS': '相对强弱因子',
+}
+# 缠论方向等英文值 → 中文（chanlun_direction 等结构化值原样保留，仅展示中文化）
+_ZONE_DIRECTION_CN = {
+    'up': '上升', 'down': '下降', 'mixed': '中性',
+}
+_CROWDING_CN = {
+    'MODERATE': '适中', 'MODERATE_CROWDING': '适中',
+    'HIGH_CROWDING': '高', 'LOW_CROWDING': '低',
+}
+_DIVERGE_STATUS_CN = {
+    'divergence': '背离', 'aligned': '同向', 'none': '无',
+}
+
+
+def _to_display_text(s: str) -> str:
+    """dim8 展示文案中文化（指标缩写+释义 / 引擎名 / 拥挤档位 / 背离状态 / 缠论方向）。
+
+    仅做有确切映射的替换，无匹配子串原样保留，其余内容不受影响。
+    结构化键原值（audit/judgment/status_description 的英文枚举）不进本层。
+    """
+    if not isinstance(s, str) or not s:
+        return s
+    t = s
+    # 1. 拥挤度档位 → 中文（'拥挤度=MODERATE' / '拥挤度=HIGH_CROWDING' 等）
+    for en, cn in _CROWDING_CN.items():
+        t = t.replace(f'拥挤度={en}', f'拥挤度={cn}')
+    # 2. 指标缩写补释义：ASR=42 → ASR（活跃筹码比率）=42；RPS=72.4 → RPS（相对强弱因子）=72.4
+    #    （缩写在 '=' 或 ':' 后跟数字才替换，避免误伤字段名）
+    for abbr, cn in _INDICATOR_CN.items():
+        t = re.sub(rf'{re.escape(abbr)}(?==|:)', rf'{abbr}（{cn}）', t)
+    # 3. 缠论方向值中文化（独立成词才替换，防 'down' 误中 'd_outflow' 等子串）
+    for zone, cn in _ZONE_DIRECTION_CN.items():
+        t = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(zone)}(?![A-Za-z0-9_])', cn, t)
+    # 4. PhaseDetector 全中文化
+    t = t.replace('PhaseDetector分析', '阶段引擎分析')
+    t = re.sub(
+        r'PhaseDetector资金流向=(5d_inflow|5d_outflow|mixed)',
+        lambda m: '阶段引擎判定' + {'5d_inflow': '5日净流入',
+                            '5d_outflow': '5日净流出', 'mixed': '中性'}[m.group(1)],
+        t,
+    )
+    t = t.replace('PhaseDetector资金流向', '阶段引擎资金流向')
+    # 5. 资金价格背离状态 → 中文（evidence 的 status 值）
+    for en, cn in _DIVERGE_STATUS_CN.items():
+        t = re.sub(rf'\b{re.escape(en)}\b', cn, t)
+    return t
+
+
 def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | None:
     """按前端契约把单个 dim_results 维整形为报告段；缺维返回 None
 
@@ -537,6 +608,12 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
             if name and name not in evidence:
                 evidence.append(name)
     subsections = _compose_dim_subsections(src_key, sd)
+    # 464 中文标注网关：对各维展示输出统一中文化（结构化键/audit 原值不动）
+    text = _to_display_text(text)
+    evidence = [_to_display_text(e) for e in evidence]
+    if subsections:
+        for grp in subsections:
+            grp['items'] = [_to_display_text(it) for it in grp.get('items', [])]
     return {
         'title': title,
         'light': _LIGHT_EMOJI.get(str(overall), '🟡'),
@@ -950,6 +1027,9 @@ class Dim8SummaryEngine:
             jg = summary_d8.get('judgment', {}) or {}
             au = summary_d8.get('audit', {}) or {}
             text = sd.get('plain', '') or sd.get('text', '')
+            # 464 中文标注网关：summary 走独立拼接通路（_generate_text 读原始 dim_results），
+            # 需单独应用中文化，否则各段已中文而 summary 平铺仍残留原始英文
+            text = _to_display_text(text)
             segments['summary'] = {
                 'title': SUMMARY_TITLE,
                 'light': _LIGHT_EMOJI.get(jg.get('overall_light', 'yellow'), '🟡'),

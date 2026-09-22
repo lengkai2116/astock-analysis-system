@@ -3080,9 +3080,11 @@ def _pick_volume_ratio(_db, trade_date):
 def _build_active_signal(cl_result: dict, buy_sell_point: str):
     """462-2：组装 active_signal（供信号生命周期 334号 §5.3，纯函数便于单测）。
 
-    SSOT=缠论买卖点详情（BuySellPoint.position 含 date/price）：
+    SSOT=缠论买卖点详情（BuySellPoint 含 position{date,price} + confidence + reason）：
     - 无买点（none/空）→ None；
-    - 匹配到买卖点且 position.price 可用 → JSON {'type','date','price'}；
+    - 匹配到买卖点且 position.price 可用 → JSON {'type','date','price','confidence','reason'}；
+      （468-④：补 confidence/reason——dim4 `_assess_signal` 需 price/confidence/reason 增强，
+        同源不重算；两字段 BuySellPoint 已含。）
     - 无匹配/无价格（数据退化）→ 回退原枚举字符串（保持兼容，生命周期降级）。
     """
     if not buy_sell_point or buy_sell_point in ('none', ''):
@@ -3097,8 +3099,13 @@ def _build_active_signal(cl_result: dict, buy_sell_point: str):
             break
     _pos = getattr(matched, 'position', None) if matched is not None else None
     if _pos and _pos.get('price') is not None:
-        return json.dumps({'type': buy_sell_point, 'date': _pos.get('date', ''),
-                           'price': _pos.get('price')}, ensure_ascii=False)
+        return json.dumps({
+            'type': buy_sell_point,
+            'date': _pos.get('date', ''),
+            'price': _pos.get('price'),
+            'confidence': round(float(getattr(matched, 'confidence', 0) or 0), 4),
+            'reason': str(getattr(matched, 'reason', '') or ''),
+        }, ensure_ascii=False)
     return buy_sell_point
 
 

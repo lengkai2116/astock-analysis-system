@@ -5786,6 +5786,46 @@ def _assess_signal(tags):
     # 此前缺该键 → 三卖信号被吞为"无明确筹码信号"
     sm = {'first_buy': '一买信号', 'second_buy': '二买信号', 'third_buy': '三买信号',
           'first_sell': '一卖信号', 'second_sell': '二卖信号', 'third_sell': '三卖信号'}
+    # 468-④：优先读 tags['active_signal']（462-2 缠论买卖点详情 JSON {type,date,price,confidence,reason}，
+    # 同源明细不重算）——补 price/confidence/reason 增强；无 active_signal（数据退化回退枚举）时落单词枚举。
+    asig = tags.get('active_signal')
+    if asig:
+        detail_dict = None
+        try:
+            if isinstance(asig, str):
+                _v = asig.strip()
+                try:
+                    detail_dict = json.loads(_v)
+                except Exception:
+                    import ast
+                    try:
+                        detail_dict = ast.literal_eval(_v)
+                    except Exception:
+                        detail_dict = None
+            elif isinstance(asig, dict):
+                detail_dict = asig
+        except Exception:
+            detail_dict = None
+        if isinstance(detail_dict, dict):
+            _type = str(detail_dict.get('type', bsp))
+            _price = detail_dict.get('price')
+            _conf = detail_dict.get('confidence')
+            _reason = str(detail_dict.get('reason', '') or '')
+            if _type in sm:
+                parts = [sm[_type]]
+                _price = float(_price) if isinstance(_price, (int, float)) or (isinstance(_price, str) and _price.strip().replace('.', '', 1).isdigit()) else _price
+                if isinstance(_price, float):
+                    parts.append(f"@{_price:g}元")
+                if isinstance(_conf, (int, float)):
+                    parts.append(f"置信{_conf:.2f}")
+                elif isinstance(_conf, str) and _conf.strip().replace('.', '', 1).isdigit():
+                    parts.append(f"置信{float(_conf):.2f}")
+                if _reason:
+                    parts.append(f"({_reason})")
+                return {'detail': ''.join(parts), 'signal': _type,
+                        'price': _price if isinstance(_price, (int, float)) else None,
+                        'confidence': float(_conf) if isinstance(_conf, (int, float)) or (isinstance(_conf, str) and _conf.strip().replace('.', '', 1).isdigit()) else None,
+                        'reason': _reason}
     if bsp in sm: return {'detail': sm[bsp], 'signal': bsp}
     return {'detail': '无明确筹码信号', 'signal': 'none'}
 
@@ -5961,7 +6001,9 @@ class Dim4ChipFundEngine(DataAwareMixin):
                                 _mc['turnover_data'] = _tr
                     cr = cf.evaluate(ts_code, df, market_context=_mc)
                     crowding = {'level': cr.get('crowding_level', 'MODERATE_CROWDING'), 'detail': cr.get('risk_advice', ''),
-                                 'score': cr.get('crowding_score', 0.5)}
+                                 'score': cr.get('crowding_score', 0.5),
+                                 # 468-③：透传 CrowdingFactor.details（三信号明细：margin_ratio/turnover_state/volatility_state/valid_signals）
+                                 'details': cr.get('details', {}) if isinstance(cr, dict) else {}}
         except Exception as e:
             # 464-7：静默降级改显式告警——拥挤度失败时输出落 unknown 兜底
             logger.warning(f"CrowdingFactor计算异常，拥挤度降级为unknown: {e}")
@@ -5982,9 +6024,49 @@ class Dim4ChipFundEngine(DataAwareMixin):
                 price_direction = 'no_trend'
         fund_price_div = _assess_fund_price_divergence(fund_flow_info, price_direction)
 
+        # ── 468-①：透传 phase_vote_ratio（各维投票明细，compute_tags 已算且仅 phase_engine_result 携带）──
+        # 取各维强度>0 的主导阶段 + 投票支持者数，生成「维度:阶段(强度)」精简话术供 dim8 叙事。
+        phase_vote_detail = ''
+        if phase_engine_result:
+            try:
+                _vr = phase_engine_result.get('phase_vote_ratio')
+                if _vr:
+                    if isinstance(_vr, str):
+                        _vr = json.loads(_vr)
+                    if isinstance(_vr, dict):
+                        _phase_cn_sh = {'building': '建仓', 'washing': '洗盘', 'lifting': '拉升', 'distributing': '出货'}
+                        _votes = []
+                        for _name, _vec in _vr.items():
+                            if str(_name).startswith('_'):
+                                continue
+                            if isinstance(_vec, dict):
+                                _top_p = max(_vec, key=_vec.get) if _vec else None
+                                if _top_p and _vec.get(_top_p, 0) > 0:
+                                    _votes.append(f"{_name}={_phase_cn_sh.get(_top_p, _top_p)}({_vec[_top_p]:.2f})")
+                        _supp = _vr.get('_supporters') or {}
+                        _supp_txt = f"，{len(_supp)}维支持" if _supp else ''
+                        if _votes:
+                            phase_vote_detail = '投票:' + '、'.join(_votes) + _supp_txt
+            except Exception:
+                phase_vote_detail = ''
+
+        # ── 468-②：透传 net_lg_5d/strength（5日大单净额数值，万元÷1e4归一化亿，464-15口径）──
+        # net_lg_5d 来自 tags['net_lg_5d']（fund_5d_ext 预计算）；fund_flow 文本补净额数值。
+        _net_txt = ''
+        try:
+            _nl5 = tags.get('net_lg_5d')
+            if _nl5 is not None:
+                _nl5 = float(_nl5)
+                _yi = _nl5 / 1e4  # 万元 → 亿
+                _dir_cn5 = '净流入' if _yi > 0 else '净流出'
+                _net_txt = f"，大单5日{_dir_cn5}{abs(_yi):.1f}亿"
+        except Exception:
+            _net_txt = ''
+
         status_description = {
-            'phase': f"{phase_info['phase_cn']}（{phase_info['detail']}）",
-            'fund_flow': f"{fund_flow_info['level_cn']}（{fund_flow_info['detail']}）",
+            'phase': f"{phase_info['phase_cn']}（{phase_info['detail']}"
+                     + (f"，{phase_vote_detail}" if phase_vote_detail else '') + "）",
+            'fund_flow': f"{fund_flow_info['level_cn']}（{fund_flow_info['detail']}{_net_txt}）",
             'cost_structure': cost_structure['detail'], 'signal': signal_info['detail'],
             'retail_institution': retail_inst['detail'], 'margin': margin_info['detail'],
             'crowding': f"拥挤度={crowding['level']}（{crowding['detail']}）",
@@ -5993,6 +6075,26 @@ class Dim4ChipFundEngine(DataAwareMixin):
             'fund_price_divergence_status': fund_price_div['status'],
             'fund_price_divergence_risk': fund_price_div['risk'],
         }
+        # 拥挤度三信号明细并入 crowding 文本（468-③；details 缺失则保持原样）
+        try:
+            _cd = crowding.get('details') or {}
+            if _cd:
+                _bits = []
+                _mr = _cd.get('margin_ratio')
+                if _mr is not None:
+                    _bits.append(f"融资占比{_mr:.2%}")
+                _ts = _cd.get('turnover_state')
+                if _ts:
+                    _bits.append('换手' + ('高' if _ts == 'HIGH_TURNOVER' else ('低' if _ts == 'LOW_TURNOVER' else '正常')))
+                _vs = _cd.get('volatility_state')
+                if _vs:
+                    _bits.append('波动' + ('压缩' if _vs == 'HIGH_CROWDING' else ('扩张' if _vs == 'LOW_CROWDING' else '正常')))
+                _vsig = _cd.get('valid_signals')
+                if _bits:
+                    _sig_txt = f"，{_vsig}/3信号可用" if isinstance(_vsig, (int, float)) else ''
+                    status_description['crowding'] = f"{status_description['crowding']}（{'、'.join(_bits)}{_sig_txt}）"
+        except Exception:
+            pass
         judgment = {
             'phase': phase_info['phase'], 'direction': fund_flow_info['direction'], 'light': phase_info['light'],
             'overall_light': phase_info['light'],
@@ -6012,7 +6114,7 @@ class Dim4ChipFundEngine(DataAwareMixin):
             # 资金强流出时 audit 恒 False（与强流入不对称，失真）。
             {'name': '资金流向', 'satisfied': fund_flow_info['level'] in ('strong', 'strong_out'),
              'actual': fund_flow_info['level_cn'], 'threshold': '有明确流向'},
-            {'name': '筹码集中', 'satisfied': bool(cost_structure.get('concentration')), 'actual': cost_structure.get('concentration', '未知') or '未知', 'threshold': '有集中度数据'},
+            {'name': '筹码集中', 'satisfied': cost_structure.get('concentration') == 'concentrating', 'actual': cost_structure.get('concentration', '未知') or '未知', 'threshold': '集中度=concentrating'},
             {'name': '拥挤度合理', 'satisfied': crowding['level'] not in ('HIGH_CROWDING', 'unknown'), 'actual': crowding['level'], 'threshold': '非高拥挤'},
             {'name': '资金×价格无危险背离', 'satisfied': fund_price_div['risk'] not in ('危险',), 'actual': fund_price_div['label'], 'threshold': '无拉抬出货/顶背离'},
         ]

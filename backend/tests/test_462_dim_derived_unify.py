@@ -156,7 +156,9 @@ class TestActiveSignalDict:
         cl = {'buy_points': [_Pt('second_buy', {'idx': 5, 'price': 10.2, 'date': '2026-09-10'})]}
         out = _build_active_signal(cl, 'second_buy')
         d = json.loads(out)
-        assert d == {'type': 'second_buy', 'date': '2026-09-10', 'price': 10.2}
+        # 468-④：active_signal 扩 confidence/reason（同源不重算；_Pt 无该属性→默认 0/'')
+        assert d == {'type': 'second_buy', 'date': '2026-09-10', 'price': 10.2,
+                     'confidence': 0.0, 'reason': ''}
 
     def test_buy_priority_over_sell(self):
         from data_daemon import _build_active_signal
@@ -323,5 +325,6 @@ class TestSummaryInjection:
         monkeypatch.setattr(ecm, 'get_ecm_instance', lambda: _fake_ecm(_RS_ROWS))
         dr = _mk_dim_results()
         report = Dim8SummaryEngine().build_seven_dim_report(dr, tags={}, ts_code='000001.SZ')
-        assert set(report.keys()) == {'signal', 'structure', 'volume_price', 'fund_chip',
+        # signal 段已按 2026-09-15 裁决移出 dim8（JUD 单独路径），现行契约 = 5 维 + summary
+        assert set(report.keys()) == {'structure', 'volume_price', 'fund_chip',
                                       'emotion', 'risk', 'summary'}
