@@ -120,6 +120,44 @@ def test_piers_leverage_no_trigger():
 
 
 # ─────────────────────────────────────────────
+# 472号：ROCE 禁假值防御（0 占位/缺失不触发）
+# ─────────────────────────────────────────────
+
+def test_piers_leverage_roce_zero_placeholder_no_trigger():
+    """ROCE=0.0（旧 daemon 缺失列占位假值）→ 不触发「资本回报偏低」
+
+    472号根因：fina_indicator_cache 无 roce 列，daemon get('roce',0) 写 0.0 假值，
+    dim6 误判 ROCE 0%<15% 触发（含茅台等高质股本）。0 视为「无数据」，不应触发。
+    """
+    result = _assess_piers_leverage({'debt_to_assets': 40.0, 'roce': 0.0}, None, '')
+    assert result['triggered'] is False, f"roce=0 占位不应触发, 实际: {result['factors']}"
+    assert not any('ROCE' in (f.get('factor') or '') for f in result['factors']), \
+        f"不应含 ROCE 偏低因子, 实际: {result['factors']}"
+
+
+def test_piers_leverage_roce_none_no_trigger():
+    """ROCE=None（无数据）→ 不触发（其余财务判定仍按真实列）"""
+    result = _assess_piers_leverage({'debt_to_assets': 40.0}, None, '')
+    assert result['triggered'] is False, f"roce=None 不应触发, 实际: {result['factors']}"
+
+
+def test_piers_leverage_roce_negative_trigger():
+    """ROCE 负值（真实亏损）且无负债问题 → 触发（负回报是真实低回报，非占位）"""
+    result = _assess_piers_leverage({'debt_to_assets': 40.0, 'roce': -5.0}, None, '')
+    assert result['triggered'] is True
+    factors = [f['factor'] for f in result['factors']]
+    assert any('ROCE' in f for f in factors), f"ROCE 负值应触发, 实际: {factors}"
+
+
+def test_piers_leverage_debt_high_still_triggers_with_zero_roce():
+    """ROCE=0 占位时，若负债率真实偏高仍触发（高杠杆走真实列 debt_to_assets，不受防空影响）"""
+    result = _assess_piers_leverage({'debt_to_assets': 85.0, 'roce': 0.0}, None, '')
+    assert result['triggered'] is True
+    factors = [f['factor'] for f in result['factors']]
+    assert any('高杠杆' in f for f in factors), f"负债率高应仍触发高杠杆, 实际: {factors}"
+
+
+# ─────────────────────────────────────────────
 # PIERS 硬性事件 severity 升「极高」 + audit 假检查修复
 # ─────────────────────────────────────────────
 

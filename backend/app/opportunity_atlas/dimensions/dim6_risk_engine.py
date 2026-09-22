@@ -297,7 +297,7 @@ def _assess_piers_leverage(tags: dict, dm=None, ts_code: str = '') -> dict:
         result['triggered'] = True
         result['factors'].append({'category': 'PIERS-E', 'factor': f'高杠杆（资产负债率{dta:.0f}%>70%）',
                                   'severity': '中', 'satisfied': True})
-    if rce is not None and rce < 15:
+    if rce is not None and rce != 0 and rce < 15:
         result['triggered'] = True
         result['factors'].append({'category': 'PIERS-E', 'factor': f'资本回报率偏低（ROCE {rce:.1f}%<15%）',
                                   'severity': '中', 'satisfied': True})
