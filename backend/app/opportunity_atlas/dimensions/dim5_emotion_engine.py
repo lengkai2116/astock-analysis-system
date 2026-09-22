@@ -76,6 +76,8 @@ HEAT_NORMAL = 'normal'
 HEAT_NONE = 'none'
 
 # 六段论阶段映射（447号 T2a：去 recovery，recovery 属 daemon 兜底自造词，六段论=ice/sprout/ferment/climax/ebb/regression）
+# 472号 C2：补 neutral 键（daemon 数据不足产 sentiment_phase='neutral'），对齐温度 SSOT PHASE_BASE_TEMP neutral:50，
+# 不再落兜底"正常/数据不足"——市场层 neutral 语义=情绪数据不足时的中性档。
 PHASE_MAP = {
     'ice': ('冰点', '市场极度低迷', 'red'),
     'sprout': ('萌芽', '市场情绪开始萌芽，出现连板龙头', 'yellow'),
@@ -83,6 +85,7 @@ PHASE_MAP = {
     'climax': ('高潮', '市场情绪过热', 'red'),
     'ebb': ('退潮', '市场情绪开始降温', 'yellow'),
     'regression': ('回归', '市场情绪回归常态', 'yellow'),
+    'neutral': ('正常', '情绪数据不足，市场中性', 'yellow'),
 }
 
 
@@ -172,7 +175,9 @@ def _bociasi_slowline(df: pd.DataFrame, bond_yield: float = None,
     index_df 参数保留（置 None）为向后兼容占位，不再使用。
     """
     if df is None or df.empty or len(df) < 60:
-        return {'signal': 'NEUTRAL', 'confidence': 0.0, 'details': {'error': '数据不足'}}
+        # 471/472号 B4：len<60 是"个股 pe_ttm 日频积累不足（次新）"，与"无数据"区分
+        return {'signal': 'NEUTRAL', 'confidence': 0.0,
+                'details': {'error': '数据不足（个股 pe_ttm 序列<60日）'}}
 
     if bond_yield is None:
         from app.opportunity_atlas.valuation_estimator import CN_10Y_BOND_YIELD_PCT

@@ -93,11 +93,13 @@ class TestTemperatureInputs:
 class TestPhaseSixStage:
 
     def test_phase_map_no_recovery(self):
-        """dim5 PHASE_MAP 不得含 recovery（对齐六段论）"""
+        """dim5 PHASE_MAP 不得含 recovery（对齐六段论）；472 C2 补 neutral（daemon 数据不足）"""
         import importlib
         mod = importlib.import_module('app.opportunity_atlas.dimensions.dim5_emotion_engine')
         assert 'recovery' not in mod.PHASE_MAP
-        assert set(mod.PHASE_MAP) == {'ice', 'sprout', 'ferment', 'climax', 'ebb', 'regression'}
+        # 六段论 + neutral（472号 C2：对齐温度 SSOT neutral:50，取消 neutral 兜底）
+        assert set(mod.PHASE_MAP) == {'ice', 'sprout', 'ferment', 'climax', 'ebb',
+                                      'regression', 'neutral'}
 
     def test_ssot_phase_base_no_recovery(self):
         from app.opportunity_atlas import emotion_temperature as et

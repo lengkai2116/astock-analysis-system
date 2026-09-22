@@ -59,7 +59,9 @@ def calc_emotion_temperature(
         sector_rank: 板块排名（越小越热，None=无数据）
         volume_price_fit: 个股量价状态 ('healthy'/'diverging'/'neutral')
         margin_change_pct: 融资余额5日变化率（如0.08=+8%）
-        breadth: 市场广度（上涨家数/总家数，0-1）
+        breadth: 市场广度（上涨家数/总家数，0-1）。472号 D1 订正：当前上游
+                data_daemon/dim5 用 `market_stats.ma20_ratio`（收盘>MA20 股票占比）
+                作近似，非严格"上涨家数占比"——属已知近似，语义以实际数据源为准。
 
     Returns:
         float: 0-100 温度值
