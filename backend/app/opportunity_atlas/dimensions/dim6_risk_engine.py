@@ -264,26 +264,36 @@ def _list_risk_factors(tags: dict, liquidity_info: dict = None) -> list[dict]:
 PIERS_HARD_EVENTS = ('fraud_sign', 'delist_risk')
 
 
-def _assess_piers_leverage(tags: dict, dm=None, ts_code: str = '') -> dict:
+def _assess_piers_leverage(tags: dict, dm=None, ts_code: str = '', fina_df=None) -> dict:
     """PIERS-E 高杠杆维度评估（SIG 现状条件，非否决）
 
     数据基础（445/448 核查）：debt_to_assets/roce 已落库（fina_indicator_cache），
     dim7/dim4 已消费。对齐《PIERS框架.md》E 高杠杆「资产负债率过高 + 现金流不足」。
 
-    读取优先级：tags 预计算 valuation_ext → 回退独立查询 fina_indicator。
+    读取优先级（411号 Phase 6 data_context 优先 + 473号 tags 预计算短路）：
+      tags 预计算（valuation_ext 已产 debt_to_assets/roce）→ data_context.fina_df
+      （dim1 预加载）→ 独立查询 fina_indicator（兜底，异常记日志防静默失效）。
     """
     result = {'triggered': False, 'factors': [], 'metrics': {}}
     debt_to_assets = tags.get('debt_to_assets')
     roce = tags.get('roce')
-    if debt_to_assets is None and roce is None and dm is not None and ts_code:
+    if (debt_to_assets is None or roce is None) and fina_df is not None and not fina_df.empty:
+        try:
+            latest = fina_df.iloc[-1]
+            debt_to_assets = debt_to_assets if debt_to_assets is not None else latest.get('debt_to_assets')
+            roce = roce if roce is not None else latest.get('roce')
+        except Exception as _e:
+            logger.debug("_assess_piers_leverage fina_df 读取异常: %s", _e)
+    if (debt_to_assets is None or roce is None) and dm is not None and ts_code:
         try:
             dfi = dm.get_cached_fina_indicator(ts_code)
             if dfi is not None and not dfi.empty:
                 latest = dfi.iloc[-1]
-                debt_to_assets = latest.get('debt_to_assets')
-                roce = latest.get('roce')
-        except Exception:
-            pass
+                debt_to_assets = debt_to_assets if debt_to_assets is not None else latest.get('debt_to_assets')
+                roce = roce if roce is not None else latest.get('roce')
+        except Exception as _e:
+            # 473号 B：兜底查询异常不再静默吞（此前导致高杠杆/ROCE 判据可静默失效）
+            logger.warning("_assess_piers_leverage 独立查询 fina_indicator 失败 [%s]: %s", ts_code, _e)
     try:
         dta = float(debt_to_assets) if debt_to_assets is not None else None
     except (TypeError, ValueError):
@@ -421,7 +431,9 @@ class Dim6RiskEngine(DataAwareMixin):
         risk_factors.extend(event_risks)
 
         # 1c. PIERS-E 高杠杆维度（448号；SIG 现状条件，非否决）
-        _leverage = _assess_piers_leverage(tags, self._get_dm(), ts_code)
+        # 473号 B：优先用 data_context.fina_df（dim1 预加载），避免独立 DB 查询；tags 短路已覆盖大部分
+        _leverage = _assess_piers_leverage(tags, self._get_dm(), ts_code,
+                                           fina_df=(data_context or {}).get('fina_df'))
         if _leverage['triggered']:
             risk_factors.extend(_leverage['factors'])
 

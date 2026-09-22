@@ -42,3 +42,16 @@ if _dta is not None:
 ## 待办
 - 标准 ROCE 补采 current_liab（472 已记录，本号不涉）。
 - dim6 `_assess_piers_leverage` docstring 描述「debt_to_assets 已落库…读取优先级 tags 预计算」现与真实一致（修复后 tags 确含）。
+
+## 追加 B：消除 DB 兜底隐患（2026-09-22）
+A 方案后仍留的隐患：`_assess_piers_leverage` 的 DB 兜底查询异常被 `except: pass` **静默吞**（高杠杆/ROCE 判据依赖兜底时若查询失败则判据静默失效）。B 方案修复（dim6_risk_engine.py）：
+
+1. **数据源优先级显式化**（411号 Phase 6 + 473号 tags 短路）：`tags 预计算 → data_context.fina_df（dim1 预加载）→ 独立查询 fina_indicator（兜底）`。`_assess_piers_leverage` 新增 `fina_df` 参数（默认 None，向后兼容）。
+2. **兜底异常记日志**：独立查询的 `except: pass` 改为 `logger.warning`（不再静默）。
+3. **evaluate 接入**：调用 `_assess_piers_leverage(..., fina_df=data_context.get('fina_df'))`，优先用 dim1 已加载数据，进一步减少独立 DB 查询。
+
+验证：
+- `_assess_piers_leverage` 向后兼容（默认 fina_df=None，test_448 原调用不受影响）。
+- dim6 回归 47 passed（448/452/453/459）。
+- 新增 `tests/test_473_dim6_fina_df_fallback.py`（5 例：fina_df 补缺负债率/roce、tags 短路、tags 优先、全缺不触发）。
+- commit：并入 473 后续提交。
