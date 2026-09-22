@@ -5873,9 +5873,11 @@ def _assess_fund_price_divergence(fund_flow, price_direction):
     return {'status': 'none', 'label': '资金与价格方向数据不足',
             'direction': 'neutral', 'risk': '无'}
 
-def _assess_retail_institution(tags):
-    mfp = str(tags.get('main_force_phase', ''))
-    ff = str(tags.get('fund_flow', ''))
+def _assess_retail_institution(phase, fund_flow):
+    """散户机构博弈话术。469-1 同源化：由 evaluate 传「当前生效的」phase/fund_flow
+    （引擎覆盖后取覆盖值、否则取 tags 值），不再自读 tags——消除与 phase 的潜在不一致。"""
+    mfp = str(phase or '')
+    ff = str(fund_flow or '')
     if mfp == 'building' and ff == '5d_inflow': return {'detail': '主力建仓+资金流入（机构买入）'}
     elif mfp == 'distributing': return {'detail': '主力出货（抛压风险）'}
     return {'detail': '散户与机构博弈中性'}
@@ -5917,8 +5919,11 @@ class Dim4ChipFundEngine(DataAwareMixin):
         fund_flow_info = _assess_fund_flow(tags)
         cost_structure = _assess_cost_structure(tags)
         signal_info = _assess_signal(tags)
-        retail_inst = _assess_retail_institution(tags)
         margin_info = _assess_margin(tags, margin_df=data_context.get('margin_df') if data_context else None)
+        # 469-1 同源：retail_institution 用「当前生效的」phase/fund_flow 原枚举
+        # （随 PhaseDetectionEngine 覆盖而更新，否则与 phase 潜在不一致）。初始取 tags 兜底值。
+        _retail_phase = str(tags.get('main_force_phase', ''))
+        _retail_flow = str(tags.get('fund_flow', ''))
 
         # PhaseDetectionEngine 真实阶段分析（如果df可用）
         ts_code = tags.get('ts_code', '')
@@ -5957,8 +5962,10 @@ class Dim4ChipFundEngine(DataAwareMixin):
                         # 464-13：透传阶段置信度供 audit 条件 1 门槛（tags 兜底路径无此键 → 仅看 phase）
                         'confidence': phase_engine_result.get('phase_confidence'),
                     }
+                    _retail_phase = str(phase_engine_result['main_force_phase'])
                 if phase_engine_result and phase_engine_result.get('fund_flow') != 'none':
                     ff = phase_engine_result['fund_flow']
+                    _retail_flow = str(ff)
                     if ff == 'mixed':
                         fund_flow_info = {
                             'level': 'none', 'level_cn': '中性', 'direction': 'neutral',
@@ -5975,6 +5982,9 @@ class Dim4ChipFundEngine(DataAwareMixin):
         except Exception as e:
             # 464-7：静默降级改显式告警——阶段分析失败时输出落 tags 兜底，需在日志可见
             logger.warning(f"PhaseDetectionEngine调用异常，阶段/资金流向降级为tags兜底: {e}")
+
+        # 469-1：retail_institution 用覆盖后（或 tags 兜底）的 phase/fund_flow——与 phase 同源
+        retail_inst = _assess_retail_institution(_retail_phase, _retail_flow)
 
         # 拥挤度（真实计算）
         crowding = {'level': 'unknown', 'detail': '拥挤度数据不足', 'score': 0.5}
@@ -6019,7 +6029,9 @@ class Dim4ChipFundEngine(DataAwareMixin):
             try:
                 _c = df['close'].astype(float).values
                 _s5 = (_c[-1] / _c[-6] - 1) if len(_c) >= 6 else 0.0
-                price_direction = 'up' if _s5 > 0.01 else 'down'
+                # 469-2：兜底路径加中性态——|变化|≤1%（平盘/微涨/微跌）判 no_trend，
+                # 与 PhaseEngine 的 up/down/mixed/no_trend 对称，避免一律判 down
+                price_direction = 'up' if _s5 > 0.01 else ('down' if _s5 < -0.01 else 'no_trend')
             except Exception:
                 price_direction = 'no_trend'
         fund_price_div = _assess_fund_price_divergence(fund_flow_info, price_direction)
