@@ -1,6 +1,6 @@
 """474号：cache_balancesheet_data 的 Tushare 字段名→表列名映射
 
-验证写入层映射：Tushare 返回 total_current_liab/total_current_assets，
+验证写入层映射：Tushare 返回 total_cur_liab/total_cur_assets，
 入库前须 rename 为缓存表列 current_liab/current_assets（否则被 _insert_from_df
 动态列过滤丢弃 → 流动负债/流动资产列恒 NULL）。
 
@@ -39,13 +39,13 @@ def _make_detached_ecm(captured):
 
 
 def test_balancesheet_total_current_liab_mapped_to_current_liab(captured):
-    """total_current_liab/total_current_assets 入库前被重命名 → current_liab/current_assets"""
+    """total_cur_liab/total_cur_assets 入库前被重命名 → current_liab/current_assets（Tushare 真实字段名）"""
     ecm = _make_detached_ecm(captured)
 
     df = pd.DataFrame([{
         'ts_code': '000001.SZ', 'end_date': '2026-06-30', 'ann_date': '2026-08-30',
         'total_assets': 1000000000.0, 'total_liab': 450000000.0,
-        'total_current_liab': 400000000.0, 'total_current_assets': 600000000.0,
+        'total_cur_liab': 400000000.0, 'total_cur_assets': 600000000.0,
         'money_cap': 500000000.0,
     }])
     ecm.cache_balancesheet_data(df)
@@ -53,7 +53,7 @@ def test_balancesheet_total_current_liab_mapped_to_current_liab(captured):
     assert captured['table'] == 'balancesheet_cache'
     assert 'current_liab' in captured['df'].columns, 'current_liab 列应存在'
     assert 'current_assets' in captured['df'].columns, 'current_assets 列应存在'
-    assert 'total_current_liab' not in captured['df'].columns, 'Tushare 原名不应透传'
+    assert 'total_cur_liab' not in captured['df'].columns, 'Tushare 原名不应透传'
     assert captured['df'].iloc[0]['current_liab'] == 400000000.0
     assert captured['df'].iloc[0]['current_assets'] == 600000000.0
 
