@@ -4668,8 +4668,8 @@ class FinancialRiskFilter:
                             if 'operating_profit' in income.columns else 0
                         total_assets = float(bs['total_assets'].dropna().iloc[-1]) \
                             if 'total_assets' in bs.columns else 0
-                        current_liab = float(bs['current_liabilities'].dropna().iloc[-1]) \
-                            if 'current_liabilities' in bs.columns else 0
+                        current_liab = float(bs['current_liab'].dropna().iloc[-1]) \
+                            if 'current_liab' in bs.columns else 0
                         capital_employed = total_assets - current_liab
                         if capital_employed > 0 and op_profit > 0:
                             roce_val = (op_profit / capital_employed) * 100

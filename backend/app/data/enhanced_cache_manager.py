@@ -2124,6 +2124,14 @@ class EnhancedCacheManager:
     def cache_balancesheet_data(self, df):
         if df.empty:
             return
+        # 474号：Tushare balancesheet 字段名→表列名映射（同 income _COL_MAP）。
+        #   Tushare 返回 total_current_liab/total_current_assets，缓存列为 current_liab/current_assets；
+        #   不映射则 _insert_from_df 动态列过滤丢弃(列名不匹配) → 流动负债/流动资产列恒 NULL。
+        _BS_COL_MAP = {
+            'total_current_liab': 'current_liab',
+            'total_current_assets': 'current_assets',
+        }
+        df = df.rename(columns=_BS_COL_MAP)
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
