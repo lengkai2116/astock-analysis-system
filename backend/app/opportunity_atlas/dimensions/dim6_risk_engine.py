@@ -225,12 +225,9 @@ def _list_risk_factors(tags: dict, liquidity_info: dict = None) -> list[dict]:
         factors.append({'category': '财务', 'factor': '财务关注', 'severity': '中', 'satisfied': True})
 
     ce = str(tags.get('catalyst_event', ''))
-    if ce in EVENT_RISK_SET:
-        event_names = {'regulatory': '监管问题', 'fraud_sign': '造假信号',
-                       'delist_risk': '退市风险', 'goodwill_risk': '商誉风险',
-                       'st_warning': 'ST预警'}
-        factors.append({'category': '事件', 'factor': event_names.get(ce, ce),
-                        'severity': '高', 'satisfied': True})
+    # 471号 去重：catalyst 命中事件时的事件因子不再在此产出，
+    # 改由 evaluate 的 event_risks 统一装配（含 448 PIERS severity 升极高 + 事件因子去重 + 分档），
+    # 否则产生「事件:造假信号(高)」与「事件风险:fraud_sign(极高)」同源双条（探针实证）。
 
     mfp = str(tags.get('main_force_phase', ''))
     if mfp == 'distributing':
@@ -320,7 +317,7 @@ def _assess_rr(geo: dict) -> dict:
     return {'rr_value': rr, 'rr_level': '优质', 'rr_assessment': f'盈亏比{rr:.2f}（>3R）', 'light': 'green'}
 
 
-def _build_invalidation(support, tags, dims) -> list[dict]:
+def _build_invalidation(support, tags) -> list[dict]:
     conditions = []
     if support is not None:
         conditions.append({'source': '防守位', 'condition': f'收盘跌破{support}元', 'priority': 1})
@@ -416,13 +413,17 @@ class Dim6RiskEngine(DataAwareMixin):
         except Exception as e:
             logger.debug("403号Q-05 EventMonitor检测跳过: %s", e)
 
+        # 471号：事件因子装配完成后 extend。若本股实际存在事件风险，
+        # 移除 _list_risk_factors 的空兜底「综合：无显著风险」，避免与真实事件因子并存自相矛盾
+        if event_risks:
+            risk_factors = [f for f in risk_factors
+                            if not (f.get('category') == '综合' and f.get('factor') == '无显著风险')]
         risk_factors.extend(event_risks)
 
         # 1c. PIERS-E 高杠杆维度（448号；SIG 现状条件，非否决）
         _leverage = _assess_piers_leverage(tags, self._get_dm(), ts_code)
         if _leverage['triggered']:
             risk_factors.extend(_leverage['factors'])
-            _leverage_metrics = _leverage['metrics']
 
         # 2. 几何化指标
         # 411号Phase 9：优先从tags读取预计算risk_ext，回退raw计算
@@ -460,7 +461,7 @@ class Dim6RiskEngine(DataAwareMixin):
             vol_info = _calc_volatility(df, tags)
 
         # 5. 失效条件
-        invalidation = _build_invalidation(geo.get('support_price'), tags, dims)
+        invalidation = _build_invalidation(geo.get('support_price'), tags)
 
         # 6. status_description
         risk_evidence_parts = []
@@ -565,5 +566,4 @@ class Dim6RiskEngine(DataAwareMixin):
         return [
             'daily_cache (market_cache.db) — OHLCV用于几何化指标和波动率',
             'tags (pre_feat_cache) — risk_level / volatility_level / fina_health / catalyst_event / main_force_phase / valuation_level / turnover_rate',
-            'dims (StatusEngine) — risk',
         ]
