@@ -3753,9 +3753,10 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     # 461-12：daily_basic 估值读取失败，估值字段留空，记日志防静默吞
                     logger.debug(f"RAW估值指标 PE/PB 读取失败 [{code}]: {_e}")
                 # 财务健康指标
-                # 472号：ROCE 禁假值 + EBIT/净资产回填（Tushare fina_indicator 不返回 roce 字段；
-                #   finance_report_cache 已有真实 ebit，balancesheet 有 total_assets/total_liab）。
-                #   口径优先级：EBIT/(总资产-总负债) → fina.roe×1.2（经验系数，ROCE 略高于 ROE）→ 缺数据不产键。
+                # 472号：ROCE 禁假值 + EBIT 回填（Tushare fina_indicator 不返回 roce 字段；
+                #   finance_report_cache 已有真实 ebit，balancesheet 有 total_assets/total_liab/current_liab）。
+                # 474号：口径切换为主定义 EBIT/(总资产-流动负债)（对齐 dim4/dim7/finance_report_service 消费侧）；
+                #   current_liab 缺失时回退 EBIT/(总资产-总负债) → fina.roe×1.2（经验系数，ROCE 略高于 ROE）→ 缺数据不产键。
                 try:
                     fina_df = dm.get_cached_fina_indicator(code)
                     if fina_df is not None and not fina_df.empty:
@@ -3787,16 +3788,24 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         except (TypeError, ValueError):
                             _ebit = None
                     _bs_df = dm.get_cached_balancesheet(code)
+                    # 474号：口径切换为主定义 EBIT/(总资产-流动负债)；current_liab 缺失回退 EBIT/(总资产-总负债)
+                    _capital = None
                     if _bs_df is not None and not _bs_df.empty:
                         _bs0 = _bs_df.iloc[-1]
                         try:
-                            _ta = _bs0.get('total_assets'); _tl = _bs0.get('total_liab')
-                            _equity = (float(_ta) - float(_tl)) if _ta is not None and _tl is not None and _ta == _ta and _tl == _tl else None
+                            _ta = _bs0.get('total_assets')
+                            _cl = _bs0.get('current_liab')
+                            if _ta is not None and _cl is not None and _ta == _ta and _cl == _cl:
+                                _capital = float(_ta) - float(_cl)
+                            else:
+                                _tl = _bs0.get('total_liab')
+                                if _ta is not None and _tl is not None and _ta == _ta and _tl == _tl:
+                                    _capital = float(_ta) - float(_tl)
                         except (TypeError, ValueError):
-                            _equity = None
+                            _capital = None
                     _roce = None
-                    if _ebit is not None and _equity is not None and _equity > 0:
-                        _roce = round(_ebit / _equity * 100, 2)
+                    if _ebit is not None and _capital is not None and _capital > 0:
+                        _roce = round(_ebit / _capital * 100, 2)
                     elif _roe is not None and _roe != 0:
                         # 兑底：ROCE ≈ ROE×1.2（dim4 _check_roce 既有经验系数，ROE 可为负表示亏损真实低回报）
                         _roce = round(_roe * 1.2, 2)

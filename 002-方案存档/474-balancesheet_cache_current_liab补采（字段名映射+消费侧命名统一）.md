@@ -23,5 +23,9 @@
   - 消费侧标准 ROCE 分支（`dim7_valuation_engine.py:605/623`、`finance_report_service.py:60/77`、`valuation_estimator.py:656/674`）此前因 current_liab=NULL 走净资产近似，现激活「EBIT/(总资产-流动负债)」。
 - probe 脚本 `probe_474_recompute.py` 为临时探针，用后已删除；daemon 已恢复。
 
-## 待办/记录
-- 标准 ROCE 主口径从「EBIT/净资产(总资产-总负债)」升级为「EBIT/(总资产-流动负债)」——待补采后 472 口径是否需要切换为独立决策项。
+## 主口径切换（已实施）
+- 标准 ROCE 主口径已从「EBIT/净资产(总资产-总负债)」切换为「EBIT/(总资产-流动负债)」。
+- 切换点：`data_daemon.py` RAW 预计算 `valuation_ext['roce']`（此前唯一仍用净资产口径处；dim4/dim7/finance_report_service 消费侧早已用流动负债口径）。
+- 逻辑：优先 current_liab → EBIT/(总资产-流动负债)；current_liab 缺失回退 total_liab → EBIT/(总资产-总负债)；再缺回退 fina.roe×1.2。
+- 回归：52 项（273a/449/448/473）通过。
+
