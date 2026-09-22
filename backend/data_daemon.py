@@ -3766,6 +3766,16 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         except (TypeError, ValueError):
                             _roe = None
                         _val_feat['roe'] = _roe
+                        # 473号：补产负债率（真实列，缺数据不产键）——dim6 PIERS-E 高杠杆判据
+                        #   依赖 tags.debt_to_assets，此前 RAW 从不产该键导致每次 evaluate 走独立 DB 兜底
+                        #   查询（异常被静默吞=高杠杆判据可静默失效）。补入 valuation_ext 走正常扁平化。
+                        _dta = latest_fina.get('debt_to_assets')
+                        try:
+                            _dta = None if _dta is None or _dta != _dta else float(_dta)
+                        except (TypeError, ValueError):
+                            _dta = None
+                        if _dta is not None:
+                            _val_feat['debt_to_assets'] = _dta
                     # 472号：ebit 从 finance_report_cache 最新期取（真实 Tushare 扩展字段）
                     _fr_df = dm.cache.get_cached_finance_report(code)
                     _ebit = None
