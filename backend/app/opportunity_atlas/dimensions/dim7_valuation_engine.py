@@ -29,6 +29,7 @@ from app.opportunity_atlas.potential_engine import (
 from app.opportunity_atlas.valuation_estimator import (
     CATEGORY_WEIGHTS,
     CN_10Y_BOND_YIELD_PCT,
+    EASTMONEY_CATEGORY,
     INDUSTRY_CATEGORY,
     QUALITY_ADJUST,
 )
@@ -98,6 +99,9 @@ def _sum3_to_2(value: float) -> float:
 def _category(industry: str | None) -> str:
     if not industry:
         return '微小/亏损'
+    # 477号：优先东财行业映射（Stock.industry 实际口径），其次申万，最后兜底
+    if industry in EASTMONEY_CATEGORY:
+        return EASTMONEY_CATEGORY[industry]
     return INDUSTRY_CATEGORY.get(industry, '微小/亏损')
 
 
