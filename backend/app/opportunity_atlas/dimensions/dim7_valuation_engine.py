@@ -212,6 +212,46 @@ def _pe_percentile(df_basic) -> float | None:
     return (pe < pe.iloc[-1]).sum() / len(pe) * 100
 
 
+# ═══════════════════════════════════════════════════════
+# 476号（D2）：截面基准进程级缓存（模块级惰性单例）
+#   StatusEngine 每请求新建 Dim7ValuationEngine 实例（strategy_analyze/cross_validate），
+#   分位表全市场构建成本高（5000+ 只遍历）——进程内构建一次、各实例共享闭包。
+# ═══════════════════════════════════════════════════════
+
+_BENCHMARKS = None  # {'comp': fn, 'fcf': fn, 'industry_mean': dict, 'potential': dict}
+
+
+def _ensure_benchmarks(engine: 'Dim7ValuationEngine', ecm) -> None:
+    """惰性构建截面基准一次并注入引擎实例（进程级缓存；evaluate 入口调用）"""
+    global _BENCHMARKS
+    if _BENCHMARKS is None:
+        engine.build_composite_percentile(ecm)
+        engine.build_fcf_percentile(ecm)
+        engine.build_potential_percentile_tables(ecm)
+        bench = {
+            'comp': engine._comp_percentile,
+            'fcf': engine._fcf_percentile,
+            'industry_mean': engine._industry_mean,
+            'potential': engine._potential_tables,
+        }
+        # 全部构建失败（如 ecm 不可用/库空）不缓存，下次 evaluate 重试；
+        # 部分成功也缓存（避免重复全市场遍历）。
+        if (bench['comp'] is not None or bench['fcf'] is not None
+                or bench['potential']):
+            _BENCHMARKS = bench
+    if _BENCHMARKS is not None:
+        engine._comp_percentile = _BENCHMARKS['comp']
+        engine._fcf_percentile = _BENCHMARKS['fcf']
+        engine._industry_mean = _BENCHMARKS['industry_mean']
+        engine._potential_tables = _BENCHMARKS['potential']
+
+
+def _reset_benchmarks() -> None:
+    """清空进程级基准缓存（测试隔离用）"""
+    global _BENCHMARKS
+    _BENCHMARKS = None
+
+
 class Dim7ValuationEngine(DataAwareMixin):
     """第7维 价值估算引擎 — 四锚加权估值 + 7维潜力评分"""
 
@@ -225,40 +265,34 @@ class Dim7ValuationEngine(DataAwareMixin):
     # ── 截面基准构建（供 precompute 调用） ──────────────
 
     def build_composite_percentile(self, ecm) -> None:
-        """构建全市场 composite_rating 截面百分位基准（B1修复：通过DataManager读取）"""
+        """构建全市场 composite_rating 截面百分位基准
+
+        476号：对齐 RAW 侧（valuation_estimator 同法）——从 opportunity_tags_cache
+        分库 SQL 直读 composite_rating（每只取最新 id）；原 dm.get_tags_batch 不存在
+        （DataManager 仅 get_tags_by_date/get_tags_by_group）→ AttributeError 恒失败。
+        """
         try:
-            # B1修复：通过get_tags_batch获取composite_rating，而非直接SQL
-            from app.data import DataManager
-            dm = DataManager()
-            # 获取全市场最新交易日的所有股票
-            try:
-                latest_date = ecm._query_shard('daily_cache',
-                    "SELECT MAX(trade_date) as d FROM daily_cache").iloc[0]['d']
-            except Exception:
-                self._comp_percentile = None
-                return
-            codes_df = ecm._query_shard('daily_cache',
-                "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?", [latest_date])
-            if codes_df is None or codes_df.empty:
-                self._comp_percentile = None
-                return
-            all_codes = codes_df['ts_code'].tolist()
-            # 批量获取标签（通过DataManager抽象层）
-            all_tags = dm.get_tags_batch(all_codes)
+            rows = ecm._query_shard(
+                'opportunity_tags_cache',
+                "SELECT DISTINCT ts_code, tag_value FROM opportunity_tags_cache "
+                "WHERE tag_name='composite_rating' AND tag_value IS NOT NULL AND tag_value != '' "
+                "AND id IN (SELECT MAX(id) FROM opportunity_tags_cache "
+                "WHERE tag_name='composite_rating' GROUP BY ts_code)"
+            )
             items = []
-            for code, tag_dict in all_tags.items():
-                cr = tag_dict.get('composite_rating')
-                if cr is not None:
-                    try:
-                        items.append((code, float(cr)))
-                    except (TypeError, ValueError):
-                        continue
+            for _, r in rows.iterrows():
+                try:
+                    items.append((r['ts_code'], float(r['tag_value'])))
+                except (TypeError, ValueError):
+                    continue
             if len(items) < 100:
                 self._comp_percentile = None
                 return
             self._industry_mean = {}
             cat_map: dict[str, str] = {}
             try:
+                from app.data import DataManager
+                dm = DataManager()
                 batch = dm.get_stock_industry_batch([code for code, _ in items])
                 cat_sum: dict[str, float] = {}
                 cat_cnt: dict[str, int] = {}
@@ -307,7 +341,9 @@ class Dim7ValuationEngine(DataAwareMixin):
                             mv = df_b['total_mv'].dropna()
                             fcf = df_cf['free_cashflow'].dropna()
                             if not mv.empty and not fcf.empty and mv.iloc[-1] > 0:
-                                vals.append(float(fcf.iloc[0]) / float(mv.iloc[-1]) * 100)
+                                # 476号：与消费口径对齐（_anchor_cashflow/compute_tags 均 fcf/(mv*1e4)*100）；
+                                # 原 fcf/mv*100 差 1e4 倍 → 查询值落在分布低端，现金流锚系统性偏低
+                                vals.append(float(fcf.iloc[0]) / (float(mv.iloc[-1]) * 1e4) * 100)
                 except Exception:
                     continue
             if len(vals) < 200:
@@ -333,26 +369,34 @@ class Dim7ValuationEngine(DataAwareMixin):
                 return idx / nn
             return _p
 
-        # B3修复：从daily_basic_cache计算PE分位代替treemap_snapshot的valuation_deviation
+        # 476号（D4）：val 表改 valuation_deviation 截面分布（与 _compute_potential 查询同口径）。
+        # 原用 pe_ttm 分位 → 查询传 dev（-40~40）塞进 PE 分布（0~数百）→ val 维系统性失真。
+        # 失败时不设键（缺键 → _compute_potential 默认 0.5；_ensure_benchmarks 判空不缓存）。
         try:
-            pe_vals = ecm._query_shard('daily_basic_cache',
-                "SELECT pe_ttm FROM daily_basic_cache WHERE pe_ttm > 0")["pe_ttm"].dropna().tolist()
-            self._potential_tables["val"] = _lookup(sorted(pe_vals)) if pe_vals else _lookup([])
+            dev_rows = ecm._query_shard(
+                'opportunity_tags_cache',
+                "SELECT tag_value FROM opportunity_tags_cache "
+                "WHERE tag_name='valuation_deviation' AND tag_value IS NOT NULL AND tag_value != '' "
+                "AND id IN (SELECT MAX(id) FROM opportunity_tags_cache "
+                "WHERE tag_name='valuation_deviation' GROUP BY ts_code)"
+            )
+            dev_vals = dev_rows["tag_value"].dropna().astype(float).tolist()
+            if dev_vals:
+                self._potential_tables["val"] = _lookup(sorted(dev_vals))
         except Exception:
-            self._potential_tables["val"] = _lookup([])
+            pass
 
         # B3修复：从fina_indicator_cache读取ROE（通过DataManager的分库路由）
         try:
             roe = ecm._query_shard('fina_indicator_cache',
                 "SELECT roe FROM fina_indicator_cache")["roe"].dropna().tolist()
-            self._potential_tables["earn"] = _lookup(sorted(roe)) if roe else _lookup([])
+            if roe:
+                self._potential_tables["earn"] = _lookup(sorted(roe))
         except Exception:
-            self._potential_tables["earn"] = _lookup([])
+            pass
 
-        # ponytail: sector/trend/fund 无跨截面percentile基准，始终返回0.5；dict lookup路径正常工作
-        self._potential_tables.setdefault("sector", _lookup([]))
-        self._potential_tables.setdefault("trend", _lookup([]))
-        self._potential_tables.setdefault("fund", _lookup([]))
+        # 476号：不再 setdefault 空表（sector/trend/fund）——_compute_potential 仅 val/earn
+        # 查表（缺键走默认 0.5），空表占位会让 _ensure_benchmarks 误判构建成功。
 
     # ── 四锚估值计算（从 ValuationEngine 迁移） ──────────
 
@@ -491,10 +535,13 @@ class Dim7ValuationEngine(DataAwareMixin):
                 cash_eq = float(bs['cash_equivalents'].iloc[0] or 0)
             elif 'money_cap' in bs.columns:
                 cash_eq = float(bs['money_cap'].iloc[0] or 0)
-        ev = total_mv + total_liab - cash_eq
+        # 476号（D3 扩展）：EV 全元统一——total_mv 为万元、total_liab/cash 为报表元，
+        # 原 ev = total_mv(万)+负债(元)-现金(元) 混合单位 → fcf_yield 量级错、现金流锚系统性偏低。
+        # fcf 元 / ev 元 → FCF/EV 收益率（wiki 现金流锚定义），与修正后分布（FCF/市值）同量级。
+        ev = total_mv * 1e4 + total_liab - cash_eq
         if ev <= 0:
             return 0.0
-        fcf_yield = fcf / 1e4 / ev * 100
+        fcf_yield = fcf / ev * 100
         if self._fcf_percentile is not None:
             pct = self._fcf_percentile(fcf_yield)
             return round(pct * 4 - 2, 2)
@@ -802,8 +849,23 @@ class Dim7ValuationEngine(DataAwareMixin):
         composite = _adjust_composite(composite, fina_health, ecm, ts_code, cat,
                                       df_income, self, data_context=data_context)
 
-        # level 判定（comp_percentile 优先，缺失时用阈值）
-        if self._comp_percentile is not None:
+        # ── 476号（D1）：SSOT = RAW 预计算最终值优先（461-2 fina_health 同构）──
+        #    tags.composite_rating/valuation_level/valuation_deviation 为 daemon RAW 预计算
+        #    （截面分位 + 行业中性化口径，已含全部陷阱/质量/成长修正）；SIG 实算仅兜底。
+        #    tags 缺失时保留下方实算判定路径。
+        _ssot = False
+        if tags:
+            try:
+                if tags.get('composite_rating') is not None:
+                    composite = max(-2.0, min(2.0, float(tags['composite_rating'])))
+                    _ssot = True
+            except (TypeError, ValueError):
+                pass
+
+        # level 判定（comp_percentile 优先，缺失时用阈值；476号：tags.valuation_level SSOT 优先）
+        if _ssot and tags.get('valuation_level'):
+            level = str(tags['valuation_level'])
+        elif self._comp_percentile is not None:
             pct = self._comp_percentile(composite - self._industry_mean.get(cat, 0.0))
             if pct > 0.95:
                 level = 'extreme_low'
@@ -828,7 +890,13 @@ class Dim7ValuationEngine(DataAwareMixin):
             else:
                 level = 'extreme_high'
 
-        deviation = round(composite * 20.0, 1)
+        if _ssot and tags.get('valuation_deviation') is not None:
+            try:
+                deviation = round(float(tags['valuation_deviation']), 1)
+            except (TypeError, ValueError):
+                deviation = round(composite * 20.0, 1)
+        else:
+            deviation = round(composite * 20.0, 1)
 
         pe_pct = pb_pct = ps_pct = None
         if not df_basic.empty:
@@ -964,6 +1032,9 @@ class Dim7ValuationEngine(DataAwareMixin):
 
         # 411号Phase 6：优先使用data_context中的数据
         ecm = self._get_dm().cache
+
+        # 476号（D2）：进程级惰性构建截面基准（首次 evaluate 构建一次，各实例共享）
+        _ensure_benchmarks(self, ecm)
 
         # 1. 四锚加权估值（传入data_context以减少DB调用）
         val = self._compute_valuation(ts_code, ecm, data_context=data_context, tags=tags)

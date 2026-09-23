@@ -180,7 +180,9 @@ class ValuationEngine(DataAwareMixin):
                             mv = df_b['total_mv'].dropna()
                             fcf = df_cf['free_cashflow'].dropna()
                             if not mv.empty and not fcf.empty and mv.iloc[-1] > 0:
-                                vals.append(float(fcf.iloc[0]) / float(mv.iloc[-1]) * 100)
+                                # 476号：与消费口径对齐（_anchor_cashflow/compute_tags 均 fcf/(mv*1e4)*100）；
+                                # 原 fcf/mv*100 差 1e4 倍 → 查询值落在分布低端，现金流锚系统性偏低
+                                vals.append(float(fcf.iloc[0]) / (float(mv.iloc[-1]) * 1e4) * 100)
                 except Exception:
                     continue
             if len(vals) < 200:
@@ -494,13 +496,14 @@ class ValuationEngine(DataAwareMixin):
             elif 'money_cap' in bs.columns:
                 cash_eq = float(bs['money_cap'].iloc[0] or 0)
 
-        ev = total_mv + total_liab - cash_eq
+        # 476号（D3 扩展）：EV 全元统一——total_mv 为万元、total_liab/cash 为报表元，
+        # 原 ev = total_mv(万)+负债(元)-现金(元) 混合单位 → fcf_yield 量级错、现金流锚系统性偏低；
+        # 原 fcf/1e4/ev 双重换算（2026-08-10 注释误判 ev 为万元）。
+        # fcf 元 / ev 元 → FCF/EV 收益率（wiki 现金流锚定义），与修正后分布（FCF/市值）同量级。
+        ev = total_mv * 1e4 + total_liab - cash_eq
         if ev <= 0:
             return 0.0
-
-        # 2026-08-10 核查修复：fcf 单位为元、ev(total_mv/负债/现金)为万元——
-        # fcf 统一转万元再除，消除 1e4 量级错
-        fcf_yield = fcf / 1e4 / ev * 100  # 转为百分比
+        fcf_yield = fcf / ev * 100  # 转为百分比
 
         # 315号 F5：锚3 相对化——FCF yield 截面分位（高分位=现金流强=低估方向），
         # 无基准回退原绝对比较（vs 国债收益率）
