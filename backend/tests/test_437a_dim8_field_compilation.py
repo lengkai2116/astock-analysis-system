@@ -50,14 +50,19 @@ def _mk_dim(src_key='volume_price', sd=None, jg=None, au=None):
 class TestComposeText:
 
     def test_t_fields_joined_in_order(self):
-        """volume_price T 字段按序拼「字段名:值」子句"""
+        """volume_price T 字段按序拼「字段名:值」子句（479号：评分键移出 T 表、rps 转表述）"""
         sd = {'vp_state': '强健康', 'health_score': '8/10（强健康）',
               'volume_energy': '量比1.3，温和放量', 'vol_ratio': '量比1.3',
               'pattern': '无明确形态', 'pattern_score': '5.0/10', 'rps': '64.5/100'}
         text = _compose_dim_text('volume_price', {}, sd)
         assert '量价状态:强健康' in text
-        assert '健康度:8/10（强健康）' in text
-        assert 'RPS:64.5/100' in text
+        # 479号：评分键（health_score/pattern_score）归 JUD、vol_ratio 去重并入 volume_energy
+        assert '健康度' not in text
+        assert '形态评分' not in text
+        assert '量比:' not in text  # vol_ratio 独立子句不产（值内的"量比1.3"不受影响）
+        # 479号：rps 转表述（dim3 细项6：RPS=61.5（近20日涨幅全市场前 38% 分位））
+        assert 'RPS=64.5（近20日涨幅全市场前36%分位）' in text
+        assert 'RPS:64.5/100' not in text
         # 顺序：vp_state 在 rps 之前
         assert text.index('量价状态') < text.index('RPS')
 
@@ -102,10 +107,12 @@ class TestComposeEvidence:
         assert not any(e in ('2.9475', '0.778', '-5.71') for e in ev)  # 无裸数值
 
     def test_list_field_expanded(self):
-        """列表字段展开为多条（risk E 字段里的列表：event_summary/invalidation）"""
-        sd = {'event_summary': ['龙虎榜机构净买52525万', '涨停', '突破: 站上60日线+20日新高']}
+        """列表字段展开为多条（479号 P13：event_summary 移出 E 表，事件佐证主源改 event_details）"""
+        sd = {'event_details': [{'event_type': 'longhubang', 'description': '龙虎榜机构净买52525万'},
+                                {'event_type': 'breakout', 'description': '突破: 站上60日线+20日新高'}]}
         ev = _compose_dim_evidence('risk', sd)
-        assert len(ev) == 3
+        assert len(ev) == 2
+        assert any('龙虎榜机构净买52525万' in e for e in ev)
 
 
 # ── F4: list[dict] 转中文 ──────────────────────────────────
@@ -144,13 +151,38 @@ class TestSegmentMissingDim:
 class TestValuationDedup:
 
     def test_valuation_sentence(self):
-        """_valuation_sentence 从 valuation 维取 T 字段拼句"""
-        val = {'status_description': {'valuation_level': '合理（composite=0.026）',
-                                      'potential_score': '71/100',
-                                      'fina_health': '财务健康✅(pass)'}}
+        """_valuation_sentence 按 dim7 定稿话术模板（479号）：主结论+因+陷阱+潜力+验证；
+        评分（potential_score/strength）仅 JUD、fina_health 去重归 dim6 → 不再拼入"""
+        val = {'status_description': {
+                   'valuation_level': '极度低估（composite=1.2134）',
+                   'pe_percentile': 'PE近5年3.1%分位',
+                   'pb_percentile': 'PB近5年5.1%分位',
+                   'fcf_yield': '自由现金流收益率1.8786%',
+                   'dividend_yield': '股息率4.15%',
+                   'revenue_growth': '营收同比增长1.47%',
+                   'value_trap': 'ROCE低于15%，存在价值陷阱风险',
+                   'potential_score': '潜力评分89/100',
+                   'potential_strength': '潜力强度89/100',
+                   'fina_health': '财务健康✅(pass)',
+                   'potential_breakdown': '{"val":1.0,"earn":0.986,"sector":0.5,"event":0.6,"fund":0.3,"trend":0.5}'},
+               'audit': {'satisfied_count': 8, 'total_count': 8, 'confidence': 1.0}}
         s = _valuation_sentence({'valuation': val})
-        assert '估值水平:合理' in s
-        assert '财务健康:财务健康✅(pass)' in s
+        # 主结论 + 因（分位/现金流/股息/营收）
+        assert '极度低估（composite=1.2134）' in s
+        assert 'PE近5年3.1%分位' in s and 'PB近5年5.1%分位' in s
+        assert '自由现金流收益率1.8786%' in s and '股息率4.15%' in s
+        # 陷阱现状句
+        assert 'ROCE低于15%，存在价值陷阱风险' in s
+        # 潜力六维解析（B 方案来源标注）
+        assert '潜力六维：估值分位 1.00' in s
+        assert '资金 0.30（资金→dim4）' in s
+        assert '板块 0.50（板块→第一层）' in s
+        # 验证句（动态读 audit）
+        assert '估值条件 8/8 满足' in s
+        # 评分/fina_health 不拼入（仅 JUD / 去重归 dim6）
+        assert '潜力评分' not in s
+        assert '潜力强度' not in s
+        assert '财务健康' not in s
 
     def test_valuation_empty_returns_empty(self):
         """无 valuation / 全空 → ''（D2 降级不占位）"""

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 
@@ -371,9 +372,12 @@ def _generate_text(dim_results: dict, status_bar: str,
     bar_cn = STATUS_BAR_STATES.get(status_bar, status_bar)
 
     # 收集各维现状短句（437-A 字段级编排替代各维 plain——plain 已删除，dim8 不再依赖引擎自产文字）
-    dim_names = ['signal', 'structure', 'volume_price', 'chip_fund', 'emotion', 'risk', 'valuation']
+    # 479号：dim_names 移除 'valuation'——收益驱动按 dim7 定稿 D2=A 统一并入 summary 尾置
+    #   （build_seven_dim_report 的 _valuation_sentence），此处拼接会与尾置重复，且
+    #   potential_breakdown 原始 JSON 会泄漏进综合文字
+    dim_names = ['signal', 'structure', 'volume_price', 'chip_fund', 'emotion', 'risk']
     dim_cn = {'signal': '信号', 'structure': '结构', 'volume_price': '量价',
-              'chip_fund': '资金', 'emotion': '情绪', 'risk': '风险', 'valuation': '估值'}
+              'chip_fund': '资金', 'emotion': '情绪', 'risk': '风险'}
     parts = []
     for dim in dim_names:
         seg = (dim_results or {}).get(dim) or {}
@@ -440,10 +444,22 @@ def _flatten_value(v) -> str:
         for k in ('value', 'label', 'state'):
             if k in v and v[k] is not None:
                 return str(v[k])
+        # 479号 P14：数值型指标 dict（piers_leverage {'debt_to_assets','roce'}）渲染中文指标，
+        #   避免兜底只取第一个非空子值丢 roce
+        if {'debt_to_assets', 'roce'} <= set(v):
+            parts = []
+            dta = v.get('debt_to_assets')
+            if dta is not None:
+                parts.append(f'负债率{dta:.1f}%')
+            roce = v.get('roce')
+            if roce is not None:
+                parts.append(f'ROCE {roce:.1f}%')
+            if parts:
+                return '、'.join(parts)
         # 买卖点 dict：{'type':'buy','point_type':'first_buy','price':2.98}
         pt = v.get('point_type') or v.get('type')
         if pt:
-            cn = _POINT_TYPE_CN.get(pt, pt)
+            cn = _point_type_cn(pt)
             price = v.get('price')
             return f'{cn}({price})' if price is not None else cn
         for sub in v.values():
@@ -459,6 +475,15 @@ _POINT_TYPE_CN: dict[str, str] = {
     'first_sell': '一卖', 'second_sell': '二卖', 'third_sell': '三卖',
     'buy': '买入', 'sell': '卖出',
 }
+
+
+def _point_type_cn(pt: str) -> str:
+    """买卖点类型 → 中文（含 465-1B 变体：盘整背驰 first_buy_p/first_sell_p、
+    类型 a/b 变体 third_buy_a/third_buy_b/second_buy_b 等，统一归基础买卖点中文）"""
+    if pt in _POINT_TYPE_CN:
+        return _POINT_TYPE_CN[pt]
+    base = re.sub(r'_(?:p|a|b)$', '', pt)
+    return _POINT_TYPE_CN.get(base, pt)
 
 
 def _brief_text(key_in: str, jg: dict, sd: dict) -> str:
@@ -502,6 +527,10 @@ def _compose_dim_subsections(src_key: str, sd: dict) -> list[dict] | None:
             v = (sd or {}).get(f)
             if v is None or v == '' or v == 'none' or v == '无':
                 continue
+            # 479号 P12：risk_factors 剥离事件条目（主源 event_details）
+            v = _strip_event_factors(src_key, f, v)
+            if not v:
+                continue
             val = _flatten_value(v)
             if val:
                 items.append(f'{_DIM8_FIELD_CN.get(f, f)}:{val}')
@@ -544,6 +573,11 @@ _CROWDING_CN = {
 _DIVERGE_STATUS_CN = {
     'divergence': '背离', 'aligned': '同向', 'none': '无',
 }
+# 479号 P11：dim6 波动率档位值 → 中文（volatility_level low/medium/high；
+#   结构化键原值保留，仅展示层替换）
+_VOLATILITY_CN = {
+    'low': '低', 'medium': '中', 'high': '高',
+}
 
 
 def _to_display_text(s: str) -> str:
@@ -577,6 +611,10 @@ def _to_display_text(s: str) -> str:
     # 5. 资金价格背离状态 → 中文（evidence 的 status 值）
     for en, cn in _DIVERGE_STATUS_CN.items():
         t = re.sub(rf'\b{re.escape(en)}\b', cn, t)
+    # 6. 479号 P11：波动率档位值 → 中文（'波动率:low' → '波动率:低'；
+    #    独立成词防误中 'low_level' 等拼接键）
+    for en, cn in _VOLATILITY_CN.items():
+        t = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(en)}(?![A-Za-z0-9_])', cn, t)
     return t
 
 
@@ -618,15 +656,20 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
         'title': title,
         'light': _LIGHT_EMOJI.get(str(overall), '🟡'),
         'text': text,
-        'evidence': evidence[:5],
+        # 479号 P10：evidence 硬截断 5→12（dim6 定稿：5 条截断致「因」丢失，
+        #   茅台 13 条候选只显 5 条；放宽防爆上限，仍控体积）
+        'evidence': evidence[:12],
         'confidence': round(float(jg.get('continuous_value') or au.get('confidence') or 0.5), 2),
         'judgment': {
             'overall_light': jg.get('overall_light', 'yellow'),
             'overall_direction': jg.get('overall_direction', 0),
             'continuous_value': jg.get('continuous_value'),
         },
+        # 479号 P9：audit.conditions 透传 actual/threshold（dim6 定稿：现被裁成
+        #   name+satisfied，现状本体丢失；结构化键原值保留，不中文化——439 边界）
         'audit': {
-            'conditions': [{'name': c.get('name'), 'satisfied': bool(c.get('satisfied'))}
+            'conditions': [{'name': c.get('name'), 'satisfied': bool(c.get('satisfied')),
+                            'actual': c.get('actual'), 'threshold': c.get('threshold')}
                            for c in (au.get('conditions') or []) if isinstance(c, dict)][:8],
             'satisfied_count': au.get('satisfied_count', 0),
             'total_count': au.get('total_count', 0),
@@ -647,18 +690,24 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
 # dim6 volatility_atr→atr_pct、dim2 优先 buy_sell_points_detail）。
 # signal 已按 2026-09-15 裁决移出 dim8（由 JUD 单独产出），不在此表。
 _DIM8_T_SUBJECTS: dict[str, list[str]] = {
-    'structure': ['chanlun_direction', 'chanlun_strength', 'stage_name', 'trend_basis',
+    # 479号：删 chanlun_strength（dim2 定稿 §七①：结构健康度/评分归 JUD，dim8 不产句；
+    #   健康度"因"= 11 定理明细，由补产出 A4（theorem_check.details）经 evidence 承载）
+    'structure': ['chanlun_direction', 'stage_name', 'trend_basis',
                   'buy_sell_points_detail', 'multi_level_direction_text'],
-    'volume_price': ['vp_state', 'health_score', 'volume_energy', 'vol_ratio',
-                     'pattern', 'pattern_score', 'rps'],
+    # 479号：删 health_score/pattern_score（dim3 定稿：评分归 JUD）、vol_ratio（去重并入
+    #   volume_energy，引擎仍产供 JUD）；rps 由本层转表述（细项6：RPS=61.5（前 38% 分位））
+    'volume_price': ['vp_state', 'volume_energy', 'pattern', 'rps'],
     'chip_fund': ['phase', 'fund_flow', 'fund_price_divergence', 'cost_structure',
                   'crowding', 'signal', 'margin'],
     # D4 去重：emotion.stock 由 dim3 vp_state 派生，主源 dim3（437-A §三-1）→ 不在此表
     'emotion': ['market', 'sector', 'quadrant', 'temperature'],
     'risk': ['risk_level', 'support_price', 'resistance_price', 'rr_value', 'rr_level',
              'volatility_level', 'risk_factors'],
-    'valuation': ['valuation_level', 'potential_score', 'potential_strength',
-                  'fina_health', 'value_trap', 'growth_trap'],
+    # 479号：valuation 不产独立段（436 D5），本表仅供 _valuation_sentence（summary 尾置）
+    #   消费；按 dim7 定稿：评分（potential_score/strength）仅 JUD、fina_health 去重归 dim6
+    'valuation': ['valuation_level', 'pe_percentile', 'pb_percentile', 'fcf_yield',
+                  'dividend_yield', 'revenue_growth', 'value_trap', 'growth_trap',
+                  'potential_breakdown'],
 }
 
 # D1：fund_chip 段内分两小节（437-A D1 拍板 A=合一段内分两小节；段结构加 subsections 键）。
@@ -668,22 +717,38 @@ _DIM8_SUBSECTIONS: dict[str, list[tuple[str, list[str]]]] = {
         ('筹码成本', ['phase', 'cost_structure', 'crowding']),
         ('资金博弈', ['fund_flow', 'fund_price_divergence', 'signal', 'margin']),
     ],
+    # 479号 P15：risk 段内分「价格位置 / 风险状态」两小节（dim6 定稿 §4.2，
+    #   对齐 dim4 subsections 先例；dist_*/signal_days 等 E 字段随小节呈现）
+    'risk': [
+        ('价格位置', ['support_price', 'resistance_price', 'dist_to_support_pct',
+                   'dist_to_resistance_pct', 'dist_to_prev_high_pct', 'signal_days',
+                   'rr_value', 'rr_level', 'rr_assessment']),
+        ('风险状态', ['risk_level', 'risk_detail', 'risk_factors', 'piers_leverage',
+                   'volatility_level', 'atr_pct', 'volatility_percentile',
+                   'liquidity_detail', 'event_details', 'invalidation']),
+    ],
 }
 
 # 各维 evidence 佐证字段（E）：按序取 status_description 非空值入 evidence 列表。
 # 对齐 437-A §三 跨维去重主源（dim3 主源个股情绪 → emotion 不再重复 stock 至 evidence 主位；
 # dim4 主源资金流 → valuation 不重复 fund_flow；dim2↔dim6 支撑阻力同源 → risk 主源）。
 _DIM8_E_FIELDS: dict[str, list[str]] = {
-    'structure': ['vs_zhongshu', 'vs_ma', 'vs_chip', 'vs_support_resistance', 'vs_indicator',
-                  'divergence', 'divergence_type', 'level_cross_score', 'ts_strength',
-                  'trend_structure_signal', 'chanlun_phase'],
+    # 479号：删 vs_chip（筹码主源 dim4，dim2 定稿 §三-1 不产话术）/vs_support_resistance
+    #   （支撑阻力主源 dim6，dim2 仅交叉印证不重复产句）/chanlun_phase（保留键不产话术）
+    #   /level_cross_score/ts_strength（归 JUD）；trend_structure_signal 条件采用——
+    #   值='none' 时 _compose_dim_evidence 自动跳过，仅非 none 产句（dim2 定稿 §四）
+    'structure': ['vs_zhongshu', 'vs_ma', 'vs_indicator', 'divergence', 'divergence_type',
+                  'trend_structure_signal'],
     'volume_price': ['divergence', 'granville'],
     'chip_fund': ['retail_institution', 'fund_price_divergence_risk',
                   'fund_price_divergence_status'],
     'emotion': ['bociasi_quick', 'bociasi_slow'],
+    # 479号 P13/P14：-event_summary（去重，事件佐证主源改 event_details）+event_details
+    #   +piers_leverage +dist_to_prev_high_pct +liquidity_detail +signal_days
+    #   （dim6 定稿 §4.3；event_details 为 dict-list、piers_leverage 为 dict，均新增渲染）
     'risk': ['atr_pct', 'volatility_percentile', 'dist_to_support_pct',
              'dist_to_resistance_pct', 'dist_to_prev_high_pct', 'rr_assessment',
-             'event_summary', 'liquidity_detail', 'invalidation'],
+             'liquidity_detail', 'invalidation', 'event_details', 'piers_leverage'],
     'valuation': ['pe_percentile', 'pb_percentile', 'fcf_yield', 'dividend_yield',
                   'revenue_growth', 'potential_breakdown'],
 }
@@ -711,8 +776,15 @@ _DIM8_FIELD_CN: dict[str, str] = {
     'risk_level': '风险等级', 'support_price': '防守位', 'resistance_price': '压力位',
     'rr_value': '盈亏比', 'rr_level': '盈亏比评级', 'volatility_level': '波动率',
     'risk_factors': '风险因素',
+    # 479号：risk 两小节/P14 新键标签（dim6 定稿 §4.2/§4.3）
+    'risk_detail': '风险明细', 'dist_to_support_pct': '距防守位', 'dist_to_resistance_pct': '距压力位',
+    'dist_to_prev_high_pct': '距前高', 'signal_days': '站上60日线天数', 'rr_assessment': '盈亏比评估',
+    'atr_pct': 'ATR占比', 'volatility_percentile': '波动率分位', 'liquidity_detail': '流动性',
+    'event_details': '事件', 'piers_leverage': '杠杆/资本回报', 'invalidation': '失效条件',
     'valuation_level': '估值水平', 'potential_score': '潜力评分', 'potential_strength': '潜力强度',
     'fina_health': '财务健康', 'value_trap': '估值陷阱', 'growth_trap': '成长陷阱',
+    'pe_percentile': 'PE分位', 'pb_percentile': 'PB分位', 'fcf_yield': 'FCF收益率',
+    'dividend_yield': '股息率', 'revenue_growth': '营收同比', 'potential_breakdown': '潜力六维',
 }
 
 
@@ -728,6 +800,25 @@ def _compose_dim_text(src_key: str, jg: dict, sd: dict) -> str:
         v = (sd or {}).get(f)
         if v is None or v == '' or v == 'none' or v == '无':
             continue
+        # 479号 P12：risk_factors 呈现时剥离事件条目（dim6 定稿 3A：事件话术主源=event_details；
+        #   risk_factors 在 T 表（text 主述），text 不重复展示事件）
+        v = _strip_event_factors(src_key, f, v)
+        if not v:
+            continue
+        # 479号：dim3 细项6 rps 转表述——"61.5/100" → "RPS=61.5（近20日涨幅全市场前38%分位）"
+        #   （排名事实作现状；RPS>85 强势判定归 JUD，dim8 不产评分句）
+        if src_key == 'volume_price' and f == 'rps' and isinstance(v, str):
+            if '数据不足' in v or '无' in v:
+                continue  # 437 缺则降级：数据缺失不产 rps 子句
+            m = re.search(r'([\d.]+)/100', v)
+            if m:
+                try:
+                    rps_num = float(m.group(1))
+                    pct = max(1, min(99, int(round(100 - rps_num))))
+                    parts.append(f'RPS={rps_num:.1f}（近20日涨幅全市场前{pct}%分位）')
+                    continue
+                except (TypeError, ValueError):
+                    pass
         label = _DIM8_FIELD_CN.get(f, f)
         val = _flatten_value(v)
         if not val:
@@ -737,6 +828,14 @@ def _compose_dim_text(src_key: str, jg: dict, sd: dict) -> str:
     if parts:
         return '；'.join(parts)
     return _brief_text(src_key, jg, sd)
+
+
+def _strip_event_factors(src_key: str, f: str, v):
+    """479号 P12：risk_factors 呈现时剥离事件条目（dim6 定稿 3A：事件话术主源=event_details，
+    risk_factors 只保留 5 源因子，避免与 event_details 重复展示）。"""
+    if src_key == 'risk' and f == 'risk_factors' and isinstance(v, list):
+        return [x for x in v if not (isinstance(x, str) and ('事件风险' in x or x.startswith('事件')))]
+    return v
 
 
 def _compose_dim_evidence(src_key: str, sd: dict) -> list:
@@ -751,6 +850,27 @@ def _compose_dim_evidence(src_key: str, sd: dict) -> list:
     for f in fields:
         v = (sd or {}).get(f)
         if v is None or v == '' or v == 'none' or v == '无':
+            continue
+        # 479号 P12：risk_factors 剥离事件条目（主源 event_details）
+        v = _strip_event_factors(src_key, f, v)
+        if not v:
+            continue
+        # 479号 P13/P14：event_details dict-list 渲染（事件话术主源）——
+        #   '龙虎榜机构净买 12449 万（2026-06-30，置信 80%）'；非 dict 项走通用展开
+        if src_key == 'risk' and f == 'event_details' and isinstance(v, list):
+            for item in v:
+                if not isinstance(item, dict):
+                    s = _flatten_value(item)
+                    if s and s not in ev:
+                        ev.append(s)
+                    continue
+                desc = item.get('description') or item.get('event_type') or ''
+                _date = item.get('event_date') or ''
+                _conf = item.get('confidence')
+                _conf_txt = f'，置信{_conf:.0%}' if isinstance(_conf, (int, float)) else ''
+                s = f'{desc}（{_date}{_conf_txt}）' if _date else f'{desc}{_conf_txt}'
+                if s and s not in ev:
+                    ev.append(s)
             continue
         fmt = _DIM8_E_FORMAT.get(f)
         if isinstance(v, list):
@@ -878,27 +998,90 @@ def _sector_position_sentence(dim_results: dict, ts_code: str) -> str:
 
 
 def _valuation_sentence(dim_results: dict) -> str:
-    """437-A D2：收益驱动（dim7 估值/财务）并入 summary 素材句。
+    """479号：收益驱动（dim7 估值/财务）并入 summary 尾置句（437-A D2，dim7 定稿 §4.2）。
 
-    从 valuation 维 status_description 取估值水平/潜力/陷阱等 T 字段拼句；
-    无 valuation 维 / 全字段空 → 返回 ''（437 缺则降级，不占位）。
+    按 dim7 定稿话术模板（因果链）：
+      估值{水平}（主结论）→ PE/PB 近5年分位 + FCF/股息/营收（因）→ 陷阱现状句 →
+      潜力六维明细（potential_breakdown 展示层解析 + B 方案标注来源）→ 验证（audit N/8 动态读）。
+    评分键（potential_score/potential_strength）仅 JUD、fina_health 去重归 dim6——本句不再拼入
+    （dim7 定稿 §二：评分归 JUD/§三：fina_health 去重）。
+    无 valuation 维 / 全字段空 → ''（437 缺则降级，不占位）。
     """
     val = (dim_results or {}).get('valuation') or {}
     sd = val.get('status_description', {}) or {}
     if not sd:
         return ''
     parts = []
-    for f in ('valuation_level', 'potential_score', 'potential_strength', 'fina_health',
-              'value_trap', 'growth_trap'):
-        v = sd.get(f)
-        if v is None or v == '' or v == 'none' or v == '无':
-            continue
-        s = _flatten_value(v)
-        if s:
-            parts.append(f'{_DIM8_FIELD_CN.get(f, f)}:{s}')
+
+    def _get(k):
+        v = sd.get(k)
+        return None if (v is None or v == '' or v == 'none' or v == '无') else v
+
+    # 【所以】估值水平（主结论，中文已自产含 composite）
+    lvl = _get('valuation_level')
+    if lvl is not None:
+        parts.append(_flatten_value(lvl))
+    # 【因为】PE/PB 近5年分位 + FCF/股息/营收（因透传）
+    seg_factors = [s for s in (_get('pe_percentile'), _get('pb_percentile')) if s]
+    if seg_factors:
+        parts.append('、'.join(seg_factors))
+    cash_factors = [s for s in (_get('fcf_yield'), _get('dividend_yield'), _get('revenue_growth')) if s]
+    if cash_factors:
+        parts.append('、'.join(cash_factors))
+    # 【附加现状句】陷阱（条件输出）
+    for t in (_get('value_trap'), _get('growth_trap')):
+        if t:
+            parts.append(t)
+    # 【潜力因明细】potential_breakdown 六维（JSON 展示层解析 + B 方案来源标注）
+    bd = _get('potential_breakdown')
+    if bd is not None:
+        six = _parse_potential_breakdown(bd)
+        if six:
+            parts.append('潜力六维：' + '；'.join(six))
+    # 【验证】估值条件 N/8 满足（dim8 动态读 audit）
+    au = val.get('audit', {}) or {}
+    _sat, _tot = au.get('satisfied_count'), au.get('total_count')
+    if _sat is not None and _tot:
+        parts.append(f'估值条件 {_sat}/{_tot} 满足')
     if not parts:
         return ''
     return '；'.join(parts)
+
+
+_POTENTIAL_DIM_CN = {
+    'val': '估值分位', 'earn': 'ROE分位', 'sector': '板块', 'event': '事件',
+    'fund': '资金', 'trend': '趋势',
+}
+# dim7 定稿 4B：潜力六维 B 方案标注来源（板块→第一层、资金→dim4、趋势→dim2/3）
+_POTENTIAL_DIM_SRC = {
+    'sector': '（板块→第一层）', 'fund': '（资金→dim4）', 'trend': '（趋势→dim2/3）',
+}
+
+
+def _parse_potential_breakdown(v) -> list:
+    """dim7 定稿 §4.3：potential_breakdown JSON → 潜力六维明细句（B 方案标注来源）。
+
+    status_description 中为 json.dumps 字符串（dim7_valuation_engine:1020）；
+    dict 兜底兼容；解析失败/空 → []（437 缺则降级）。
+    """
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except Exception:
+            return []
+    if not isinstance(v, dict) or not v:
+        return []
+    out = []
+    for k in ('val', 'earn', 'sector', 'event', 'fund', 'trend'):
+        if k not in v or v[k] is None:
+            continue
+        val = v[k]
+        try:
+            val_txt = f'{val:.2f}' if isinstance(val, (int, float)) else str(val)
+        except (TypeError, ValueError):
+            val_txt = str(val)
+        out.append(f"{_POTENTIAL_DIM_CN.get(k, k)} {val_txt}{_POTENTIAL_DIM_SRC.get(k, '')}")
+    return out
 
 
 
@@ -1083,16 +1266,15 @@ class Dim8SummaryEngine:
 
         # 437-A D2：收益驱动（dim7 估值/财务）并入 summary 尾置（素材不丢、不扩契约键）。
         # 无 valuation 维 / 全字段空 → 跳过（437 缺则降级）。
-        # 注：_generate_text 的 dim_names 已含 valuation（plain 拼装会带"估值：…"），
-        # 若已含则本句去重跳过，避免估值双段。
+        # 479号：_generate_text 的 dim_names 已移除 valuation（避免与尾置重复/JSON 泄漏），
+        #   收益驱动句统一由 _valuation_sentence 尾置承载（dim7 定稿 D2=A）。
         if 'summary' in segments:
             vs = _valuation_sentence(dim_results)
             if vs:
                 _seg = segments['summary']
                 _cur = _seg.get('text', '') or ''
-                if '估值：' not in _cur:
-                    _seg['text'] = f'{_cur}；估值：{vs}'
-                    _seg['plain'] = f'{_seg.get("plain", "")}；估值：{vs}' if _seg.get('plain') else f'估值：{vs}'
+                _seg['text'] = f'{_cur}；估值：{vs}'
+                _seg['plain'] = f'{_seg.get("plain", "")}；估值：{vs}' if _seg.get('plain') else f'估值：{vs}'
 
         return segments
 

@@ -82,9 +82,11 @@ def test_dim8_report_passes_gate_and_has_seven_keys():
     row = _build_sig_row('000001.SZ', '2026-09-15', dr)
     checker = QualityChecker()
     issues = checker.validate_signal_rows([row])
-    assert issues == [], f'全维 7 键报告应通过硬门禁，实际: {issues}'
+    assert issues == [], f'全维报告应通过硬门禁，实际: {issues}'
     sd = json.loads(row[4])
-    assert set(sd.keys()) == {'signal', 'structure', 'volume_price',
+    # 479号：signal 段按 2026-09-15 裁决由 JUD 单独路径产出（dim8 SEVEN_DIM_SPEC 无 signal，
+    #   436 B1 契约 7 键 → dim8 实产 6 键；门禁段数≥6 即过）
+    assert set(sd.keys()) == {'structure', 'volume_price',
                               'fund_chip', 'emotion', 'risk', 'summary'}
     # 灯色 emoji + judgment 颜色名双轨
     for seg in sd.values():
@@ -92,7 +94,7 @@ def test_dim8_report_passes_gate_and_has_seven_keys():
         assert seg['judgment']['overall_light'] in ('green', 'red', 'yellow')
 
 
-# ── 2. 缺维：门禁仍过（软不硬拦）且 summary 恒有 ───────────
+# ── 2. 缺维：段不产但 summary 恒有；B4 门禁段数<6 硬拦 ─────
 
 def test_partial_dims_pass_gate_summary_present():
     from app.data.stg_quality import QualityChecker
@@ -100,9 +102,12 @@ def test_partial_dims_pass_gate_summary_present():
     dr.pop('structure', None)   # 模拟引擎偶发缺维
     row = _build_sig_row('000002.SZ', '2026-09-15', dr)
     checker = QualityChecker()
-    assert checker.validate_signal_rows([row]) == []
     sd = json.loads(row[4])
+    # 437-A D7：缺维不产段，summary 恒在
     assert 'summary' in sd and 'structure' not in sd
+    # 479号：B4 门禁终态（段数≥6 硬拦）——缺维致 5 键 → 硬拦 → daemon SIG failed → 管道重试
+    issues = checker.validate_signal_rows([row])
+    assert any('段数不足' in i for i in issues), f'缺维 5 键应被 B4 硬拦，实际: {issues}'
 
 
 # ── 3. OUT 七维透传（真实 _out_transmit_seven_dim）─────────
@@ -136,12 +141,13 @@ def test_out_transmit_flows_seven_dim_to_one_liner(monkeypatch, tmp_path):
 
     dd._out_transmit_seven_dim(['000001.SZ'])
 
-    # 断言 one_liner_detail 已透传 7 键富数据
+    # 断言 one_liner_detail 已透传富数据
     out = sc.execute(
         "SELECT one_liner_detail FROM status_snapshot WHERE ts_code='000001.SZ'").fetchone()
-    assert out and out[0], 'one_liner_detail 应为非空（7 键透传）'
+    assert out and out[0], 'one_liner_detail 应为非空（dim8 6 键透传）'
     sd = json.loads(out[0])
-    assert set(sd.keys()) >= {'signal', 'structure', 'volume_price',
+    # 479号：signal 段由 JUD 单独产出（2026-09-15 裁决），dim8 契约 6 键
+    assert set(sd.keys()) >= {'structure', 'volume_price',
                               'fund_chip', 'emotion', 'risk', 'summary'}
     sc.close()
 
