@@ -1708,7 +1708,10 @@ function showDetail(data) {
   if (typeof _sdr === 'string' && _sdr) {
     try { _sdr = JSON.parse(_sdr); } catch (e) { _sdr = null; }
   }
-  if (_sdr && _sdr.signal) {
+  // 479号：门禁适配——dim8 按 2026-09-15 裁决不产 signal 段（由 JUD 单独路径产出），
+  //   原 `_sdr.signal` 判据会使七维体检永不渲染（双保险断线）；改为「任一非空段即渲染」，
+  //   dimOrder.filter(_sdr[k]) 天然跳过缺失段（signal 缺失 → 渲染其余 5 段 + summary 摘要）
+  if (_sdr && Object.keys(_sdr).length > 0) {
     const dimOrder = ['signal','structure','volume_price','fund_chip','emotion','risk'];
     const dimCN = {signal:'信号确认',structure:'结构位置',volume_price:'量价健康',fund_chip:'资金筹码',emotion:'情绪环境',risk:'风险边界'};
     document.getElementById('d-profile-row').innerHTML =

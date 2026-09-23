@@ -3324,6 +3324,9 @@ class EnhancedCacheManager:
             ts_codes,
             ['style_exposure', 'catalyst_event', 'pe_percentile_5y', 'pb_percentile_5y'],
         )
+        # 479号：批量补齐七维现状描述（status_snapshot.one_liner_detail，436 OUT 透传的
+        #   seven_dim 副本；无 → 缺省，前端回退旧画像，437 缺则降级）
+        one_liner_map = self.get_one_liner_detail_batch(ts_codes)
         for _, r in df.iterrows():
             dy = float(r['dividend_yield']) if pd.notna(r.get('dividend_yield')) else None
 
@@ -3337,6 +3340,9 @@ class EnhancedCacheManager:
             items.append({
                 'ts_code': _ts,
                 'name': r['name'],
+                # 479号：七维现状描述（status_snapshot.one_liner_detail；缺 → None，
+                #   前端 opportunity-treemap.html 读 s.one_liner_detail 回退旧画像）
+                'one_liner_detail': one_liner_map.get(_ts),
                 'industry': _sv('industry') or '',
                 'price': round(float(r['close']), 2) if pd.notna(r.get('close')) else 0,
                 'pct_change': round(float(r['pct_chg']), 2) if pd.notna(r.get('pct_chg')) else 0,
@@ -3643,6 +3649,30 @@ class EnhancedCacheManager:
             return df.iloc[0].to_dict()
         except Exception:
             return {}
+
+    def get_one_liner_detail_batch(self, ts_codes: list[str]) -> dict[str, str]:
+        """批量取多只股票的 one_liner_detail（479号，436 OUT 透传的 seven_dim 副本）。
+
+        status_snapshot.one_liner_detail 由 daemon _out_transmit_seven_dim 从
+        strategy_signal_detail.seven_dim_json 透传；无（seven_dim 为 NULL）→ 该股不在返回
+        中（调用方缺省 None → 前端回退旧画像，437 缺则降级）。
+        """
+        if not ts_codes:
+            return {}
+        out: dict[str, str] = {}
+        try:
+            placeholders = ','.join('?' for _ in ts_codes)
+            df = self._query_shard(
+                'status_snapshot',
+                f"SELECT ts_code, one_liner_detail FROM status_snapshot "
+                f"WHERE ts_code IN ({placeholders}) AND one_liner_detail IS NOT NULL "
+                f"AND one_liner_detail != ''",
+                ts_codes)
+            if not df.empty:
+                out = {str(k): v for k, v in zip(df['ts_code'], df['one_liner_detail'])}
+        except Exception:
+            pass
+        return out
 
     def get_cache_freshness_stats(self) -> dict:
         """多表新鲜度统计"""
