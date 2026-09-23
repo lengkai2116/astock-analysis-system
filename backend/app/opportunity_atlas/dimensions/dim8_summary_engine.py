@@ -701,7 +701,8 @@ _DIM8_T_SUBJECTS: dict[str, list[str]] = {
                   'buy_sell_points_detail', 'multi_level_direction_text'],
     # 479号：删 health_score/pattern_score（dim3 定稿：评分归 JUD）、vol_ratio（去重并入
     #   volume_energy，引擎仍产供 JUD）；rps 由本层转表述（细项6：RPS=61.5（前 38% 分位））
-    'volume_price': ['vp_state', 'volume_energy', 'pattern', 'rps'],
+    # 479号 A5：vp_state_label/vp_rule（量价状态机"因"，先因后果——定稿细项1）
+    'volume_price': ['vp_state_label', 'vp_rule', 'vp_state', 'volume_energy', 'pattern', 'rps'],
     'chip_fund': ['phase', 'fund_flow', 'fund_price_divergence', 'cost_structure',
                   'crowding', 'signal', 'margin'],
     # D4 去重：emotion.stock 由 dim3 vp_state 派生，主源 dim3（437-A §三-1）→ 不在此表
@@ -750,7 +751,9 @@ _DIM8_E_FIELDS: dict[str, list[str]] = {
                   'divergence', 'divergence_type', 'divergence_details',
                   'divergence_dual_confirmed',
                   'trend_structure_signal'],
-    'volume_price': ['divergence', 'granville'],
+    'volume_price': ['divergence', 'granville',
+                     # 479号 A8：背离检测条件结构化键（定稿细项5；divergence 已含置信表述）
+                     'divergence_type', 'divergence_confidence', 'divergence_macd_confirmed'],
     'chip_fund': ['retail_institution', 'fund_price_divergence_risk',
                   'fund_price_divergence_status'],
     'emotion': ['bociasi_quick', 'bociasi_slow'],
@@ -782,6 +785,8 @@ _DIM8_FIELD_CN: dict[str, str] = {
     'trend_basis': '趋势依据', 'buy_sell_points_detail': '买卖点', 'multi_level_direction_text': '多级别',
     'vp_state': '量价状态', 'health_score': '健康度', 'volume_energy': '量能',
     'vol_ratio': '量比', 'pattern': '形态', 'pattern_score': '形态评分', 'rps': 'RPS',
+    # 479号 A5：量价状态机"因"标签（先因后果）
+    'vp_state_label': '量价状态机', 'vp_rule': '状态规则',
     'phase': '主力阶段', 'fund_flow': '资金流', 'fund_price_divergence': '资金价格背离',
     'cost_structure': '筹码结构', 'crowding': '拥挤度', 'signal': '筹码信号', 'margin': '融资',
     'market': '市场情绪', 'sector': '板块情绪', 'stock': '个股情绪', 'quadrant': '情绪象限',

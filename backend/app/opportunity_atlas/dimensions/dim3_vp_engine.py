@@ -175,14 +175,37 @@ class Dim3VPEngine(DataAwareMixin):
         elif vol_ratio > 0.8: ve_l, ve_d = '正常', f'量比{vol_ratio:.1f}，正常'
         else: ve_l, ve_d = '量能萎缩', f'量比{vol_ratio:.1f}，量能萎缩'
 
-        # 形态（使用 PatternEngine 评分 — 10分制）
-        pat_names = []
-        if pattern_details and pattern_details.get('pattern_count', 0) > 0:
-            pat_names = [pattern_code_cn(p['name']) for p in pattern_details.get('patterns', [])[:3]]
-        pat_det = ', '.join(pat_names) if pat_names else '无明确形态'
+        # 形态（479号 A7：PatternEngine 评分 + conditions 透传在下方 _fmt_pattern_detail）
 
         # 格兰威尔量价关系八准则分类（Wiki知识库）
         granville = _classify_granville(df, vol_ratio, tags)
+
+        # 479号 A6：量能多日连续性（定稿细项2：连续 N 日放量/缩量=因；当日放量已由 vol_ratio 表达）
+        _consec_txt = _calc_volume_consec(df)
+        if _consec_txt:
+            ve_d = f'{ve_d}，{_consec_txt}'
+
+        # 479号 A7：形态透传 conditions（每条判定条件=因，PatternEngine 已补透传）
+        pat_det = _fmt_pattern_detail(pattern_details)
+
+        # 479号 A8：背离检测条件三字段（RAW pre_feat 透传，定稿细项5）——
+        #   "顶背离（置信0.60，MACD确认）"；无背离不占位
+        _div_type = str(tags.get('divergence_type', '') or '')
+        _div_conf = tags.get('divergence_confidence')
+        _div_macd = bool(tags.get('divergence_macd_confirmed', False))
+        if _div_type and _div_type != '无':
+            _div_txt = _div_type
+            if isinstance(_div_conf, (int, float)):
+                _div_txt += f'（置信{_div_conf:.2f}'
+                _div_txt += '，MACD确认）' if _div_macd else '）'
+            div_txt = _div_txt
+
+        # 479号 A9：granville 附命中规则原始值（price_chg/vr，定稿细项8）
+        _g_name = granville.get('name', '')
+        _g_desc = granville.get('description', '')
+        _g_pc, _g_vr = granville.get('price_chg'), granville.get('vr')
+        if _g_pc is not None and _g_vr is not None:
+            _g_desc = f'{_g_desc}（5日涨跌{_g_pc:+.1f}%，量能{_g_vr:+.0f}%）'
 
         # 评分等级
         if hs >= 8: sl = '强健康'
@@ -197,7 +220,13 @@ class Dim3VPEngine(DataAwareMixin):
             'pattern': pat_det, 'vol_ratio': f'量比{vol_ratio:.1f}',
             'pattern_score': f'{pattern_score:.1f}/10',
             'rps': (f'{rps:.1f}/100' if rps is not None else '数据不足'),
-            'granville': f"{granville['name']}（{granville['description']}）",
+            'granville': f"{_g_name}（{_g_desc}）",
+            # 479号 A5/A8：状态机与背离检测条件透传（dim8 消费"因"）
+            'vp_state_label': str(tags.get('vp_state_label', '') or ''),
+            'vp_rule': str(tags.get('vp_rule', '') or ''),
+            'divergence_type': _div_type,
+            'divergence_confidence': _div_conf,
+            'divergence_macd_confirmed': _div_macd,
         }
         judgment = {
             'state': vp_state, 'light': vp_light, 'score': hs,
@@ -334,4 +363,68 @@ def _classify_granville(df, vol_ratio: float, tags: dict) -> dict:
     except Exception:
         pass
 
+    # 479号 A9：附命中规则原始值（定稿细项8）——price_chg（5日涨幅%）/vr（量能比%）供 dim8 呈现"因"
+    if 'price_chg' in locals():
+        result['price_chg'] = round(price_chg, 2)
+    if 'vr' in locals():
+        result['vr'] = round(vr, 2)
+
     return result
+
+
+def _calc_volume_consec(df, expand_mult=1.5, shrink_mult=0.8, window=20):
+    """479号 A6：量能多日连续性（定稿细项2）——从最近一日起向前数：
+    连续 N 日量 > 基准均量×1.5 = 连续放量；< ×0.8 = 连续缩量（N≥2 才产）。
+    基准 = 最近 window 日（不含当日，当日由 vol_ratio 表达）前 window-1 日均量。
+    无数据/不足 → ''（437 缺则降级，不占位）。"""
+    if df is None or df.empty:
+        return ''
+    if 'vol' in df.columns:
+        vol = df['vol']
+    elif 'volume' in df.columns:
+        vol = df['volume']
+    else:
+        return ''
+    try:
+        vol = vol.astype(float).dropna()
+    except Exception:
+        return ''
+    if len(vol) < window + 2:
+        return ''
+    hist = vol.iloc[-(window + 1):-1]        # 最近 window 日（不含当日）
+    base = hist.iloc[:-1].mean()             # 前 window-1 日均量作基准
+    if not base or base <= 0:
+        return ''
+    n_expand = 0
+    for v in reversed(hist.values):
+        if v > base * expand_mult:
+            n_expand += 1
+        else:
+            break
+    if n_expand >= 2:
+        return f'连续{n_expand}日放量'
+    n_shrink = 0
+    for v in reversed(hist.values):
+        if v < base * shrink_mult:
+            n_shrink += 1
+        else:
+            break
+    if n_shrink >= 2:
+        return f'连续{n_shrink}日缩量'
+    return ''
+
+
+def _fmt_pattern_detail(pattern_details) -> str:
+    """479号 A7：形态话术补 conditions（每条判定条件=因）——"W底放量突破（预涨）"→
+    "W底放量突破（两次探底、放量突破颈线）"；无 conditions 回退形态名。"""
+    if not pattern_details or pattern_details.get('pattern_count', 0) <= 0:
+        return '无明确形态'
+    parts = []
+    for p in pattern_details.get('patterns', [])[:3]:
+        _cn = pattern_code_cn(p['name'])
+        _conds = p.get('conditions') or []
+        if _conds:
+            parts.append(f"{_cn}（{'、'.join(str(c) for c in _conds[:3])}）")
+        else:
+            parts.append(_cn)
+    return ', '.join(parts) if parts else '无明确形态'

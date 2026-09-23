@@ -109,7 +109,10 @@ class PatternEngine:
             'bull_strength_avg': bull_strength_sum / max(bull_count, 1),
             'bear_strength_avg': bear_strength_sum / max(bear_count, 1),
             'pattern_count': len(patterns),
-            'patterns': [{'name': p.name, 'direction': p.direction, 'strength': p.strength} for p in patterns],
+            # 479号 A7：patterns 补透传 conditions（每条判定条件=因；PatternResult 已有，
+            #   dim3 原只取 name/direction/strength）；只增不改，消费方不受影响
+            'patterns': [{'name': p.name, 'direction': p.direction, 'strength': p.strength,
+                          'conditions': list(getattr(p, 'conditions', None) or [])} for p in patterns],
         }
 
         return final_score, details

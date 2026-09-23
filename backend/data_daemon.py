@@ -3415,6 +3415,32 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         logger.debug(f"RAW量价 daily_basic 读取失败 [{code}]: {_e}")
                         _db = None
                     _vr = _pick_volume_ratio(_db, trade_date)
+                    # 479号 A5/A8：完整状态机透传 pre_feat（定稿细项1/5）——
+                    #   compute_volume_price_signal 的 state_label（VP 状态中文名）+ rule（规则陈述，
+                    #   SIG-JUD 边界：逗号后为操作建议"加仓/减仓"剥离只留陈述）+ 背离检测条件三字段
+                    #   （divergence_type/divergence_confidence/divergence_macd_confirmed）
+                    _vp_state_label, _vp_rule = '', ''
+                    _vp_div_type, _vp_div_conf, _vp_div_macd = '', None, False
+                    try:
+                        from app.engine.framework.volume_price_strategy import (
+                            STATE_SIGNAL_MAP, compute_volume_price_signal)
+                        _vps = compute_volume_price_signal(code, df)
+                        if _vps:
+                            _sr = _vps.get('status_recognition') or {}
+                            _pattern = str(_vps.get('current_pattern', '') or '')
+                            # current_pattern = "VP-x 状态中文名"；无则兜底 status.state_label
+                            _vps_state = _pattern.split(' ', 1)[1] if ' ' in _pattern \
+                                else (_sr.get('state_label') or '')
+                            if _vps_state:
+                                _vp_state_label = _vps_state
+                                _rule_raw = str((STATE_SIGNAL_MAP.get(_vps_state) or {}).get('rule', '') or '')
+                                _vp_rule = _rule_raw.split('，')[0]
+                            _rel = (_vps.get('volume_price_detail') or {}).get('量价关系') or {}
+                            _vp_div_type = str(_rel.get('divergence', '') or '')
+                            _vp_div_conf = _rel.get('divergence_confidence')
+                            _vp_div_macd = bool(_rel.get('divergence_macd_confirmed', False))
+                    except Exception as _e:
+                        logger.debug(f"RAW量价状态机透传失败 [{code}]: {_e}")
                     features['volume_price'] = {
                         # 形态仅由 _add_vp_simple_tags 的 pattern_signal（EnhancedPatternDetector）
                         # 产出；_detect_kline_patterns 无该键，取 vp_tags 恒 'none'（接线缺陷）
@@ -3422,6 +3448,12 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         'ma_alignment': _simple.get('ma_alignment', 'neutral'),
                         'volume_price_fit': _simple.get('volume_price_fit', 'neutral'),
                         'volume_ratio': _vr,
+                        # 479号 A5/A8：状态机与背离检测条件透传（dim3 读取）
+                        'vp_state_label': _vp_state_label,
+                        'vp_rule': _vp_rule,
+                        'divergence_type': _vp_div_type,
+                        'divergence_confidence': _vp_div_conf,
+                        'divergence_macd_confirmed': _vp_div_macd,
                     }
                 except Exception as e:
                     logger.warning(f"RAW量价特征失败 [{code}]: {e}")

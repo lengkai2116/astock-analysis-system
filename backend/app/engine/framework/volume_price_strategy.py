@@ -165,6 +165,7 @@ class RelationResult:
             "current_pattern": f"{self.pattern_id} {self.pattern_name}" if self.pattern_id else "",
             "enhance_patterns": self.enhance_patterns,
             "divergence": self.divergence_type if self.divergence_type != "none" else "无",
+            "divergence_confidence": self.divergence_confidence,  # 479号 A8：背离置信度透传（只增不改）
             "divergence_macd_confirmed": self.divergence_macd_confirmed,
             "resonance_score": self.resonance_score,
             "aux_momentum": self.momentum.to_dict() if self.momentum else {},
