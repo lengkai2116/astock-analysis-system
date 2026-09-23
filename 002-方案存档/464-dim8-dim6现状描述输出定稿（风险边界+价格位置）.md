@@ -121,10 +121,17 @@
 3. **③兜底「无显著风险」与 PIERS-E 因子并存矛盾**：300750 宁德 `risk_factors=['综合：无显著风险（无）','PIERS-E：资本回报率偏低（ROCE 9.1%<15%）（中）']`——`if not factors` 兜底发生在 PIERS-E extend **之前**（471 只修了 event_risks 场景）（P3）。
 4. **④`risk_detail` 被事件升格覆写丢失源计数**：万科原「中（1 源：财务 fail）」升「高」后 detail 变「事件风险：longhubang」，财务异常这个高风险源在 detail 中消失（P4）。
 5. **⑤audit④名实不符**：键名「无高风险事件」／threshold「无极高风险」，实现仅查 `severity=='极高'`——万科有 `longhubang(高)` 仍判 ✓（445 遗留，470/471 亦登记）（P5）。
-6. **⑥`signal_days` 供给缺失**：8 股 7 只 null（仅万科=1），tags 预计算未产值（P6）。
+6. **⑥ ~~`signal_days` 供给缺失~~ → 已修正（2026-09-23 补充核查）**：null **非供给缺口**——`shared.calc_support_resistance` 语义为「突破前 60 日高点后的持续交易日数」（`advice_engine.py:208` 文档同），未突破即 None；7 只 null 股 `dist_to_prev_high_pct` 均为负（低于近期高点）语义正确，万科已突破故 `signal_days=1`；daemon `risk_ext` 已正常写入（`data_daemon.py:3655`）。**撤销 P6**。
 7. **⑦`right_side_confirm='否决'` 实际可产，与代码注释「死代码」矛盾**：茅台、招行 tags 实测为 `'否决'`，其 `invalidation` 实际命中 priority-3「右侧确认转否决」（`_build_invalidation` 注释称"预计算管道只产 strong_confirm/unconfirmed，此处为死代码"与实测不符）（P7）。
 8. **⑧`judgment` 冗余 + 文案重复**：`judgment.risk_level` 与 status 重复、`light`/`overall_light` 同值；`risk_evidence`/`support_resistance` 与各键重复（P8）。
 9. **⑨银行 PIERS-E 语义观察**：招行 dta=89.92、平安 89.94、平安银行 91.02 均触发「高杠杆（中）」——银行高负债率属行业常态，KB 口径是否应豁免属 445 域问题（**仅登记，不在本维拍板**）。
+
+### 2.4 补充核查新增发现（2026-09-23 实施前复核）
+
+10. **⑩静默吞异常**：`_assess_liquidity` **两处 bare `except Exception: pass`**（:139/:150，流动性判据可静默失效、退化为"不触发"）；`evaluate` ECM 日线读取失败静默 `df=None`（:365-366）；event 块异常仅 `logger.debug`（:423-424）。对照 **464-7（dim4）已改 `logger.warning` 的先例**（P16）。
+11. **⑪geo fallback dict 缺键**：`evaluate` 中 `df` 缺失时的兜底 geo dict 未含 `dist_to_prev_high_pct`（仅 `df` 缺失路径，`.get` 返回 None 无害）；随本批实施顺手补齐。
+12. **⑫P1 实施约束（非缺陷）**：事件升格路径 `risk_info = {'level','light','detail'}` **整体替换** → 丢 `risk_sources`；P1 透传须一并改造（保留/合并源明细），否则升格股仍无源明细。
+13. **⑬`continuous_value` 边界**：`round(min(rr/3,1),4) if rr_info.get('rr_value') else 0.5` —— `rr==0` 时 falsy 回落 0.5（极端边界，登记不改）。
 
 ---
 
@@ -143,7 +150,7 @@
 | `piers_leverage` | **采用 + P2** | 未触发时也透传 metrics |
 | `support_price`／`resistance_price` | **采用（主源归一）** | 绝对价主源=dim6 |
 | `dist_to_support_pct`／`dist_to_resistance_pct`／`dist_to_prev_high_pct` | **采用** | 价格位置「因」 |
-| `signal_days` | **采用 + P6** | 待供给修复；无值不出话术 |
+| `signal_days` | **采用** | 按设计：未突破前 60 日高点则无值（**非缺口**），dim8 在 null 时不产「连续站上高点」句 |
 | `rr_value`／`rr_level`／`rr_assessment` | **采用** | `rr_assessment` 承载文案，`rr_value` 供数值表述 |
 | `volatility_level`／`atr_14d`／`atr_pct`／`volatility_percentile` | **采用** | 仅参考信息（452 已非风险源） |
 | `liquidity_risk`／`liquidity_detail`／`liquidity_avg_amount_wan`／`liquidity_circ_mv_wan` | **采用（合并为一组话术）** | 话术由 detail 承载 + 数值表述 |
@@ -257,9 +264,10 @@
 | P3 | 兜底「无显著风险」与 PIERS-E 因子并存矛盾（兜底判定后移） | 一致性缺陷 | ③ |
 | P4 | `risk_detail` 三路文案统一 + 保留源计数 | 话术失真 | ④ |
 | P5 | audit④ 文案与实现对齐（**不改判据**） | 名实不符（445 遗留） | ⑤ |
-| P6 | `signal_days` RAW 预计算供给修复 | 供给侧缺口 | ⑥ |
+| ~~P6~~ | ~~`signal_days` RAW 预计算供给修复~~ → **撤销**（补充核查：null 为语义正确，非缺口） | — | ⑥（已修正） |
 | P7 | `right_side_confirm='否决'` 注释订正 / 供给核实 | 文档失真 | ⑦ |
 | P8 | judgment 冗余键（`risk_level`/`overall_light`）归 JUD 时统一 | 冗余清理 | ⑧ |
+| P16 | `_assess_liquidity` 两处 bare `except: pass` + ECM 读失败静默 → 改 `logger.warning` | 静默吞异常 | ⑩ |
 
 ### 6.2 dim8 归集层（7 项，跨维共性）
 
