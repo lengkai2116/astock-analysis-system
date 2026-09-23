@@ -136,8 +136,9 @@ def _assess_liquidity(df=None, basic_df=None, tags: dict = None) -> dict:
                 avg_amount_wan = round(avg / 10.0, 1)  # 万元
                 if avg_amount_wan < _LIQUIDITY_MIN_AVG_AMOUNT_WAN:
                     reasons.append(f'日均成交额{avg_amount_wan:.0f}万<5000万')
-        except Exception:
-            pass
+        except Exception as _e:
+            # 475号 P16：不再静默吞（对照 464-7 dim4 先例），防流动性判据静默退化
+            logger.warning("_assess_liquidity 成交额计算异常: %s", _e)
 
     # 2) 流通市值（daily_basic.circ_mv，单位：万元）
     if basic_df is not None and hasattr(basic_df, 'columns') and 'circ_mv' in basic_df.columns:
@@ -147,8 +148,9 @@ def _assess_liquidity(df=None, basic_df=None, tags: dict = None) -> dict:
                 circ_mv_wan = float(cm.iloc[-1])
                 if circ_mv_wan < _LIQUIDITY_MIN_CIRC_MV_WAN:
                     reasons.append(f'流通市值{circ_mv_wan/10000:.1f}亿<30亿')
-        except Exception:
-            pass
+        except Exception as _e:
+            # 475号 P16：同上，不再静默吞
+            logger.warning("_assess_liquidity 流通市值计算异常: %s", _e)
 
     if reasons:
         triggered = True
@@ -205,7 +207,11 @@ def _assess_risk_level(tags: dict, liquidity_info: dict = None) -> dict:
     else:
         level, light = '低', 'green'
 
-    return {'level': level, 'light': light, 'detail': f'{high_count}个高风险源' if high_count else '无高风险源',
+    # 475号 P4：detail 保留源计数与源名（供 dim8「因为X、Y为高，所以…」因果链）
+    high_names = [s['name'] for s in risk_sources if s['level'] == '高']
+    detail = (f"{high_count}个高风险源：{'、'.join(high_names)}" if high_count else '无高风险源')
+
+    return {'level': level, 'light': light, 'detail': detail,
             'risk_sources': risk_sources}
 
 
@@ -253,9 +259,8 @@ def _list_risk_factors(tags: dict, liquidity_info: dict = None) -> list[dict]:
     except (TypeError, ValueError):
         pass
 
-    if not factors:
-        factors.append({'category': '综合', 'factor': '无显著风险', 'severity': '无', 'satisfied': True})
-
+    # 475号 P3：兜底「无显著风险」移出至 evaluate（在 event_risks/PIERS-E 全部装配之后判空），
+    # 避免兜底与 PIERS-E 因子并存自相矛盾（300750 实例：'综合：无显著风险' + 'PIERS-E：资本回报率偏低'）。
     return factors
 
 
@@ -334,8 +339,8 @@ def _build_invalidation(support, tags) -> list[dict]:
     sp = str(tags.get('sentiment_phase', ''))
     if sp in ('ebb', 'climax'):
         conditions.append({'source': '情绪', 'condition': '大盘进入退潮/高潮期', 'priority': 2})
-    # 404号DATA-03: right_side_confirm在pre_feat_cache管道中只产出strong_confirm/unconfirmed，
-    # '否决'值仅由_check_right_side_confirm()在treemap快照管道中产出，此处为死代码（已知限制）
+    # 475号 P7：原 404 DATA-03 注释称「pre_feat 管道只产 strong_confirm/unconfirmed，此分支为死代码」——
+    # 实测不成立：RAW pre_feat_cache 实产 '否决'（茅台 600519.SH / 招行 600036.SH 命中 priority-3）。
     if str(tags.get('right_side_confirm', '')) == '否决':
         conditions.append({'source': '右侧', 'condition': '右侧确认转否决', 'priority': 3})
     return conditions
@@ -362,7 +367,9 @@ class Dim6RiskEngine(DataAwareMixin):
             ecm = self._get_dm().cache
             try:
                 df = ecm.get_cached_daily(ts_code)
-            except Exception:
+            except Exception as _e:
+                # 475号 P16：ECM 日线读取失败不再静默（对照 464-7 dim4 先例）
+                logger.warning("dim6 ECM 日线读取失败 [%s]: %s", ts_code, _e)
                 df = None
 
         # 452号 流动性（KB 双门槛：日均成交额<5000万 或 流通市值<30亿）
@@ -377,6 +384,7 @@ class Dim6RiskEngine(DataAwareMixin):
         # 1b. 事件风险检测（405号建议2: 从pre_feat_cache读取RAW-2预计算的事件标签）
         event_risks = []
         event_results = []
+        _level_note = ''  # 475号 P4：升格后缀（与 level 同源，统一并入 risk_detail）
         try:
             event_details = tags.get('event_details', [])
             event_risk_factors_from_tags = tags.get('event_risk_factors', [])
@@ -415,19 +423,21 @@ class Dim6RiskEngine(DataAwareMixin):
             # 459号：升格口径与审计「无高风险事件」同源——仅当存在「高」严重度事件才升「高」，
             # 中档事件（财务关注/估值过高/主力出货等 severity='中'）不再误顶高风险（444-C1 残余）。
             _high_evt = any(r.get('severity') in ('高', '极高') for r in event_risks)
+            # 475号 P4：升格仅改 level/light 并记后缀（原为整体替换 → 会丢 risk_sources 源计数，⑫约束）
             if _high_evt and risk_info['level'] not in ('高', '极高'):
-                risk_info = {'level': '高', 'light': 'red',
-                             'detail': f"事件风险：{event_risks[0]['factor']}"}
+                risk_info = {**risk_info, 'level': '高', 'light': 'red'}
+                _up = next((r.get('factor') for r in event_risks
+                            if r.get('severity') in ('高', '极高')), '')
+                _level_note = f'（事件升格：{_up}）' if _up else '（事件升格）'
             if any(r.get('severity') == '极高' for r in event_risks) and risk_info['level'] != '极高':
-                risk_info = {'level': '极高', 'light': 'red', 'detail': '存在 PIERS 硬性否决事件（造假/退市/ST退市）'}
+                risk_info = {**risk_info, 'level': '极高', 'light': 'red'}
+                _level_note = '（PIERS 硬性否决事件：造假/退市/ST退市）'
         except Exception as e:
             logger.debug("403号Q-05 EventMonitor检测跳过: %s", e)
 
-        # 471号：事件因子装配完成后 extend。若本股实际存在事件风险，
-        # 移除 _list_risk_factors 的空兜底「综合：无显著风险」，避免与真实事件因子并存自相矛盾
-        if event_risks:
-            risk_factors = [f for f in risk_factors
-                            if not (f.get('category') == '综合' and f.get('factor') == '无显著风险')]
+        # 475号 P4：升格后缀统一并入 risk_detail（保留源计数文案）
+        risk_info['detail'] = f"{risk_info['detail']}{_level_note}"
+
         risk_factors.extend(event_risks)
 
         # 1c. PIERS-E 高杠杆维度（448号；SIG 现状条件，非否决）
@@ -436,6 +446,12 @@ class Dim6RiskEngine(DataAwareMixin):
                                            fina_df=(data_context or {}).get('fina_df'))
         if _leverage['triggered']:
             risk_factors.extend(_leverage['factors'])
+
+        # 475号 P3：兜底判空移至全部装配之后（event_risks + PIERS-E），
+        # 消除「无显著风险」与真实因子并存矛盾（471 号仅覆盖 event_risks，未覆盖 PIERS-E）。
+        if not risk_factors:
+            risk_factors.append({'category': '综合', 'factor': '无显著风险',
+                                 'severity': '无', 'satisfied': True})
 
         # 2. 几何化指标
         # 411号Phase 9：优先从tags读取预计算risk_ext，回退raw计算
@@ -454,6 +470,7 @@ class Dim6RiskEngine(DataAwareMixin):
             geo = calc_geometric(df) if df is not None and not df.empty else {
                 'dist_to_support_pct': None, 'dist_to_resistance_pct': None,
                 'risk_reward': None, 'signal_days': None, 'support_price': None, 'resistance_price': None,
+                'dist_to_prev_high_pct': None,  # 475号 ⑪：补齐兜底键（原缺）
             }
 
         # 3. 盈亏比
@@ -510,7 +527,11 @@ class Dim6RiskEngine(DataAwareMixin):
             'risk_light': risk_info['light'],
             'risk_factors': [f"{f['category']}：{f['factor']}（{f['severity']}）"
                              for f in risk_factors if f.get('satisfied')],
-            'piers_leverage': {k: v for k, v in _leverage['metrics'].items() if v is not None} if _leverage['triggered'] else {},
+            # 475号 P1：5 源 name/level 明细透传（因已算未透传；供 dim8「因为X、Y为高」因果链）
+            'risk_sources': [f"{s['name']}：{s['level']}" for s in (risk_info.get('risk_sources') or [])],
+            # 475号 P2：未触发也透传 metrics（达标状态可见）+ triggered 消歧
+            'piers_leverage': {k: v for k, v in _leverage['metrics'].items() if v is not None},
+            'piers_leverage_triggered': bool(_leverage['triggered']),
             'support_price': geo.get('support_price'),
             'resistance_price': geo.get('resistance_price'),
             'dist_to_support_pct': geo.get('dist_to_support_pct'),
@@ -553,7 +574,8 @@ class Dim6RiskEngine(DataAwareMixin):
              'threshold': '≥2R'},
             {'name': '流动性', 'satisfied': not _liquidity.get('triggered', False),
              'actual': _liquidity.get('detail', '数据不足'), 'threshold': '日均成交额>5000万且流通市值>30亿'},
-            {'name': '无高风险事件', 'satisfied': not any(f.get('severity') in ('极高',) for f in risk_factors),
+            # 475号 P5：键名与实现（无 severity=='极高'）对齐——原「无高风险事件」名实不符
+            {'name': '无极高风险事件', 'satisfied': not any(f.get('severity') in ('极高',) for f in risk_factors),
              'actual': str([f['factor'] for f in risk_factors if f.get('severity') == '极高']),
              'threshold': '无极高风险'},
             {'name': '防守位有效', 'satisfied': geo.get('support_price') is not None,

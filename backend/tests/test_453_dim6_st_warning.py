@@ -105,7 +105,7 @@ def test_evaluate_st_normal_raises_high_level():
     # 因子含 ST预警
     assert any('ST预警' in f for f in out['status_description']['risk_factors'])
     # audit「无高风险事件」在普通 ST 下应满足（ST 是「高」非「极高」）
-    cond = next(c for c in out['audit']['conditions'] if c['name'] == '无高风险事件')
+    cond = next(c for c in out['audit']['conditions'] if c['name'] == '无极高风险事件')
     assert cond['satisfied'] is True, f"普通ST不应计极高, audit: {cond}"
 
 
@@ -114,7 +114,7 @@ def test_evaluate_st_extreme_audit_not_satisfied():
     tags = dict(_P_BASE, event_details=[_ev('st_warning', -2)])
     eng = Dim6RiskEngine()
     out = eng.evaluate({}, tags, data_context=_ctx())
-    cond = next(c for c in out['audit']['conditions'] if c['name'] == '无高风险事件')
+    cond = next(c for c in out['audit']['conditions'] if c['name'] == '无极高风险事件')
     assert cond['satisfied'] is False
     assert cond['actual'] == "['ST预警']"
 

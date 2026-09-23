@@ -49,7 +49,7 @@ def _evaluate(tags):
 
 
 def _audit(out):
-    return next(c for c in out['audit']['conditions'] if c['name'] == '无高风险事件')
+    return next(c for c in out['audit']['conditions'] if c['name'] == '无极高风险事件')
 
 
 # ══════════════════════════════════════════════════════════
