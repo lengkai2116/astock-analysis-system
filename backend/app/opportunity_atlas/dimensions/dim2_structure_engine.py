@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -67,6 +68,7 @@ from app.engine.framework.chanlun_strategy import (
     ZhongshuAnalyzer,
     ZhongshuFactorSwitch,
     _load_precomputed_macd,
+    _recent_by_type,
     analyze_chanlun,
     calc_macd,
     get_chanlun_tags,
@@ -181,6 +183,8 @@ class Dim2StructureEngine(DataAwareMixin):
         divergence = ''
         divergence_type = ''
         divergence_strength = 0.0
+        divergence_details = []          # 479号 A3：检测条件=因（数值明细；无背驰空）
+        divergence_dual_confirmed = False  # 479号 A3：面积法+力度法双确认
         if divergence_obj is not None:
             divergence = '底背驰' if divergence_obj.direction == 'up' else '顶背驰'
             # 契约键：类型映射 to 中文（conflict_matrix C6/C10 读 '趋势背驰'）
@@ -189,12 +193,19 @@ class Dim2StructureEngine(DataAwareMixin):
             }
             divergence_type = _div_type_cn.get(divergence_obj.type, divergence_obj.type)
             divergence_strength = round(float(divergence_obj.confidence), 4)
+            # 479号 A3：透传检测条件=因（details 数值 + dual_confirmed 面积法+力度法双确认）；
+            #   中枢背驰 details 仅中枢 repr（framework 侧缺口，定稿④登记，先透传现状跳过 repr）
+            #   getattr 容错：旧对象/mock 可能无 details 属性（454 测试先例），缺则降级空
+            divergence_details = _fmt_divergence_details(getattr(divergence_obj, 'details', None))
+            divergence_dual_confirmed = bool(getattr(divergence_obj, 'dual_confirmed', False))
 
         # ② buy_sell_points_detail（序列化；consumer 读 type='buy'/'sell' + confirmed）
+        # 479号 A2：窗口截取（465-1A _recent_by_type 对齐：每 type 取 idx 最近 K=3，
+        #   防全历史序列化——万科 4 个历史三卖）+ reason 内 type 转中文（'zhongshu类型'→'中枢背驰'）
         buy_sell_points_detail = []
         for _ptype, _pts in (('buy', chanlun_result.get('buy_points', []) if chanlun_result else []),
                              ('sell', chanlun_result.get('sell_points', []) if chanlun_result else [])):
-            for _p in (_pts or []):
+            for _p in _recent_by_type(_pts or []):
                 _pos = getattr(_p, 'position', None) or {}
                 buy_sell_points_detail.append({
                     'type': _ptype,
@@ -204,7 +215,7 @@ class Dim2StructureEngine(DataAwareMixin):
                     'price': float(_pos.get('price', 0) or 0),
                     'date': _resolve_bsp_date(_pos, df),
                     'index': _pos.get('idx'),
-                    'reason': str(getattr(_p, 'reason', '') or ''),
+                    'reason': _cn_reason(str(getattr(_p, 'reason', '') or '')),
                 })
 
         # ③ chanlun_phase（健康/欲病，取自 11 定理 overall_score）
@@ -252,6 +263,10 @@ class Dim2StructureEngine(DataAwareMixin):
         stage_name = struct_state
         pos_state = str(tags.get('price_position', '') or '中位')
 
+        # 479号 A4：11 定理逐条明细透传（theorem_check.details 已算未透传；description 已含
+        #   "数据不足，跳过/无中枢，自动通过"等标注，呈现时与真实 FAIL 区分——定稿⑤）
+        theorem_check_details = _fmt_theorem_details((chanlun_result or {}).get('theorem_check'))
+
         status_description = {
             'vs_zhongshu': vs_zhongshu['detail'],
             'vs_ma': vs_ma['detail'],
@@ -281,6 +296,11 @@ class Dim2StructureEngine(DataAwareMixin):
             # 补充 conflict_matrix C6/C10 契约键（类型/强度）
             'divergence_type': divergence_type,
             'divergence_strength': divergence_strength,
+            # ── 479号 A1/A3/A4：补产出透传（检测条件=因，dim8 E 表消费）──
+            'zhongshu_location_ratio': (vs_zhongshu or {}).get('ratio'),
+            'divergence_details': divergence_details,
+            'divergence_dual_confirmed': divergence_dual_confirmed,
+            'theorem_check_details': theorem_check_details,
         }
 
         # 7. judgment
@@ -353,6 +373,101 @@ def _resolve_bsp_date(position, df):
     return ''
 
 
+# ── 479号 A2：买卖点 reason 内背驰 type 转中文（'zhongshu类型'→'中枢背驰'）──
+_DIVERGENCE_TYPE_CN_REASON = {
+    'trend': '趋势背驰', 'consolidation': '盘整背驰', 'zhongshu': '中枢背驰',
+}
+
+
+def _cn_reason(reason: str) -> str:
+    """reason 话术中文化：framework 生成 'xx趋势背驰，{type}类型' → type 转中文。"""
+    if not reason:
+        return reason
+    for en, cn in _DIVERGENCE_TYPE_CN_REASON.items():
+        reason = reason.replace(f'{en}类型', cn)
+    return reason
+
+
+# ── 479号 A3：Divergence.details（检测条件=因）→ 中文短句列表（透传展示）──
+_DIVERGENCE_DETAIL_CN = {
+    'strength_ratio': '力度比', 'current_amplitude': '当前笔幅', 'prev_amplitude': '前笔幅',
+    'macd_area_ratio': 'MACD面积比', 'macd_confirmed': 'MACD确认',
+    # 446-D6：盘整/中枢背驰"离开中枢段"数值（framework 已补——定稿④观察项解除）
+    'down_amplitude': '离开段幅', 'prev_up_amplitude': '前段幅', 'ratio': '幅比',
+    'exited_zhongshu': '离开中枢', 'metric_ratio': '指标比', 'metric_confirmed': '指标确认',
+}
+_DIRECTION_CN = {'up': '上升', 'down': '下降'}
+
+
+def _fmt_num(v):
+    """数值/布尔 → 简洁文本（float 去尾零；bool 转 确认/未确认）"""
+    if isinstance(v, bool):
+        return '确认' if v else '未确认'
+    if isinstance(v, float):
+        return f'{v:.4f}'.rstrip('0').rstrip('.')
+    return str(v)
+
+
+def _fmt_divergence_details(details) -> list:
+    """Divergence.details 透传（趋势背驰数值齐全；中枢背驰 details 仅 repr 跳过——framework
+    侧缺"离开/回中枢"数值，定稿④登记观察项，先透传现状；446-D6 后盘整背驰已含
+    down_amplitude/exited_zhongshu 等数值）。"""
+    if not details or not isinstance(details, dict):
+        return []
+    out = []
+    for k, v in details.items():
+        if k == 'zhongshu':
+            continue  # 仅中枢 repr，无展示价值
+        if k == 'trend_backtesting' and isinstance(v, dict):
+            parts = []
+            for kk, vv in v.items():
+                if isinstance(vv, (dict, list)) or vv is None:
+                    continue
+                if kk == 'type':
+                    continue  # 冗余（外层 divergence_type 已展示）
+                if kk == 'direction':
+                    vv = _DIRECTION_CN.get(str(vv), vv)
+                parts.append(f'{kk}:{_fmt_num(vv)}')
+            if parts:
+                out.append(f"标准a+A+b+B+c（{'，'.join(parts)}）")
+            continue
+        if k == 'macd_confirmed' or k == 'metric_confirmed':
+            out.append(f"{_DIVERGENCE_DETAIL_CN.get(k, k)}:{'确认' if v else '未确认'}")
+            continue
+        out.append(f'{_DIVERGENCE_DETAIL_CN.get(k, k)}:{_fmt_num(v)}')
+    return out
+
+
+# ── 479号 A4：theorem_check.details（11 定理逐条）→ 中文短句列表（透传展示）──
+def _fmt_theorem_details(theorem_check) -> list:
+    """11 定理逐条 passed/score/issues/description 透传；description 已含"数据不足，跳过/
+    无中枢，自动通过/无中枢后数据"等标注（framework 侧），呈现时与真实 FAIL 区分（定稿⑤）。"""
+    if not theorem_check or not isinstance(theorem_check, dict):
+        return []
+    details = theorem_check.get('details') or {}
+    if not isinstance(details, dict):
+        return []
+
+    def _nat_key(k):
+        m = re.match(r'(\D*)(\d+)', k)
+        return (m.group(1), int(m.group(2))) if m else (k, 0)
+
+    out = []
+    for name in sorted(details.keys(), key=_nat_key):
+        item = details[name]
+        if not isinstance(item, dict):
+            continue
+        passed = bool(item.get('passed'))
+        score = item.get('score')
+        desc = str(item.get('description') or '')
+        issues = item.get('issues') or []
+        _status = '通过' if passed else '未通过'
+        _score_txt = f'({score:.2f})' if isinstance(score, (int, float)) else ''
+        _issue_txt = f'：{"、".join(str(i) for i in issues)}' if issues else ''
+        out.append(f'{name} {_status}{_score_txt} {desc}{_issue_txt}'.strip())
+    return out
+
+
 def _build_market_context(data_context):
     """从 data_context 提取 ChanlunScorer 消费的市场上下文键（464-5C：事实接线，缺键不产）
 
@@ -384,7 +499,9 @@ def _build_market_context(data_context):
 
 def _assess_vs_zhongshu(tags, dims, chanlun_result=None, latest_close=0.0, last_date=None):
     """价格 vs 当前有效中枢（463号：不再盲取 zs_list[-1] 多年旧中枢；
-    daily_df 前复权口径，展示价=实际价；last_date=最后交易日（做中枢时效过滤）"""
+    daily_df 前复权口径，展示价=实际价；last_date=最后交易日（做中枢时效过滤）
+    479号 A1：返回补 ratio=区位比例 (price-zs_l)/(zs_h-zs_l)（区间内 0~1、
+    上方>1、下方<0；无有效中枢 None）——定量"因"，定性 position 维持为果"""
     if chanlun_result:
         zs_list = chanlun_result.get('zhongshu', [])
         from app.engine.framework.chanlun_strategy import _select_current_zhongshu
@@ -398,18 +515,25 @@ def _assess_vs_zhongshu(tags, dims, chanlun_result=None, latest_close=0.0, last_
             except Exception:
                 pass
             price = latest_close
+            ratio = None
+            if zs_h > zs_l:
+                ratio = round((price - zs_l) / (zs_h - zs_l), 4)
             if price > zs_h:
-                return {'position': '上方', 'detail': f"价格位于中枢上方({zs_l:.2f}~{zs_h:.2f}{_span})"}
+                return {'position': '上方', 'ratio': ratio,
+                        'detail': f"价格位于中枢上方({zs_l:.2f}~{zs_h:.2f}{_span})"}
             elif price < zs_l:
-                return {'position': '下方', 'detail': f"价格位于中枢下方({zs_l:.2f}~{zs_h:.2f}{_span})"}
+                return {'position': '下方', 'ratio': ratio,
+                        'detail': f"价格位于中枢下方({zs_l:.2f}~{zs_h:.2f}{_span})"}
             else:
-                return {'position': '内部', 'detail': f"价格在中枢内部({zs_l:.2f}~{zs_h:.2f}{_span})"}
+                return {'position': '内部', 'ratio': ratio,
+                        'detail': f"价格在中枢内部({zs_l:.2f}~{zs_h:.2f}{_span})"}
         # 无有效中枢（多年无新中枢/中枢已失效）→ 明确状态，不再拿旧中枢伪对比
-        return {'position': '无有效中枢', 'detail': '当前无有效日线中枢（趋势延续或中枢已失效）'}
+        return {'position': '无有效中枢', 'ratio': None,
+                'detail': '当前无有效日线中枢（趋势延续或中枢已失效）'}
     pos = str(tags.get('position_vs_zs', ''))
     if pos:
-        return {'position': pos, 'detail': f"价格位于中枢{pos}"}
-    return {'position': '', 'detail': '中枢位置数据不足'}
+        return {'position': pos, 'ratio': None, 'detail': f"价格位于中枢{pos}"}
+    return {'position': '', 'ratio': None, 'detail': '中枢位置数据不足'}
 
 
 def _assess_vs_ma(tags):

@@ -456,12 +456,17 @@ def _flatten_value(v) -> str:
                 parts.append(f'ROCE {roce:.1f}%')
             if parts:
                 return '、'.join(parts)
-        # 买卖点 dict：{'type':'buy','point_type':'first_buy','price':2.98}
+        # 买卖点 dict：{'type':'buy','point_type':'first_buy','price':2.98,'reason':'...'}
+        # 479号 A2：补 reason（判定条件=因）——'一卖(1323.0)：上涨趋势背驰，中枢背驰'
         pt = v.get('point_type') or v.get('type')
         if pt:
             cn = _point_type_cn(pt)
             price = v.get('price')
-            return f'{cn}({price})' if price is not None else cn
+            base = f'{cn}({price})' if price is not None else cn
+            reason = v.get('reason')
+            if reason:
+                return f'{base}：{reason}'
+            return base
         for sub in v.values():
             if sub is not None and sub != '':
                 return str(sub)
@@ -656,9 +661,9 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
         'title': title,
         'light': _LIGHT_EMOJI.get(str(overall), '🟡'),
         'text': text,
-        # 479号 P10：evidence 硬截断 5→12（dim6 定稿：5 条截断致「因」丢失，
-        #   茅台 13 条候选只显 5 条；放宽防爆上限，仍控体积）
-        'evidence': evidence[:12],
+        # 479号 P10：evidence 硬截断 5→16（dim6 定稿：5 条截断致「因」丢失；479-2 后
+        #   11 定理逐条 + 背驰细节 + 基础字段总量 ~20 条，16 保核心"因"优先展示）
+        'evidence': evidence[:16],
         'confidence': round(float(jg.get('continuous_value') or au.get('confidence') or 0.5), 2),
         'judgment': {
             'overall_light': jg.get('overall_light', 'yellow'),
@@ -737,7 +742,13 @@ _DIM8_E_FIELDS: dict[str, list[str]] = {
     #   （支撑阻力主源 dim6，dim2 仅交叉印证不重复产句）/chanlun_phase（保留键不产话术）
     #   /level_cross_score/ts_strength（归 JUD）；trend_structure_signal 条件采用——
     #   值='none' 时 _compose_dim_evidence 自动跳过，仅非 none 产句（dim2 定稿 §四）
-    'structure': ['vs_zhongshu', 'vs_ma', 'vs_indicator', 'divergence', 'divergence_type',
+    # 479号：structure E 字段序即 evidence 展示序——theorem_check_details（11 定理，健康度
+    #   叙事主素材）优先于背驰细节，防 evidence 截断挤掉核心"因"
+    'structure': ['vs_zhongshu', 'vs_ma', 'vs_indicator',
+                  # 479号 A1/A3/A4：中枢区位比例/背驰检测条件/11定理明细（dim2 补产出透传）
+                  'theorem_check_details', 'zhongshu_location_ratio',
+                  'divergence', 'divergence_type', 'divergence_details',
+                  'divergence_dual_confirmed',
                   'trend_structure_signal'],
     'volume_price': ['divergence', 'granville'],
     'chip_fund': ['retail_institution', 'fund_price_divergence_risk',
@@ -761,6 +772,8 @@ _DIM8_E_FORMAT: dict[str, str] = {
     'dist_to_resistance_pct': '距压力位{v:.1f}%',
     'dist_to_prev_high_pct': '距前高{v:.1f}%',
     'rr_value': '盈亏比{v:.2f}',
+    # 479号 A1：中枢区位比例（区间内 0~1、上方>1、下方<0）
+    'zhongshu_location_ratio': '中枢区位比{v:.2f}',
 }
 
 # 各维 text 主述字段的「字段名」中文标签（供「字段名:值」子句）
@@ -781,6 +794,9 @@ _DIM8_FIELD_CN: dict[str, str] = {
     'dist_to_prev_high_pct': '距前高', 'signal_days': '站上60日线天数', 'rr_assessment': '盈亏比评估',
     'atr_pct': 'ATR占比', 'volatility_percentile': '波动率分位', 'liquidity_detail': '流动性',
     'event_details': '事件', 'piers_leverage': '杠杆/资本回报', 'invalidation': '失效条件',
+    # 479号 A1/A3/A4：dim2 补产出透传字段标签
+    'zhongshu_location_ratio': '中枢区位比', 'divergence_details': '背驰检测条件',
+    'divergence_dual_confirmed': '背驰双确认', 'theorem_check_details': '11定理明细',
     'valuation_level': '估值水平', 'potential_score': '潜力评分', 'potential_strength': '潜力强度',
     'fina_health': '财务健康', 'value_trap': '估值陷阱', 'growth_trap': '成长陷阱',
     'pe_percentile': 'PE分位', 'pb_percentile': 'PB分位', 'fcf_yield': 'FCF收益率',

@@ -140,22 +140,22 @@ class TestAuditActualThreshold:
         assert c['actual'] is None and c['threshold'] is None
 
 
-# ── T4: P10 evidence 截断 5→12 ─────────────────────────────
+# ── T4: P10 evidence 截断 5→16 ─────────────────────────────
 
 class TestEvidenceCapacity:
 
-    def test_evidence_cap_12(self):
-        """evidence 上限放宽至 12（原 5 条截断致「因」丢失）"""
+    def test_evidence_cap_16(self):
+        """evidence 上限放宽至 16（原 5 条截断致「因」丢失；479-2 后 11 定理+背驰细节总量大）"""
         sd = {'vs_zhongshu': '中枢内部', 'vs_ma': '站上均线', 'vs_indicator': 'RSI 62',
               'divergence': '无背驰', 'divergence_type': '无',
               'trend_structure_signal': 'none'}
-        au = {'conditions': [{'name': f'条件{i}', 'satisfied': True} for i in range(12)],
-              'satisfied_count': 12, 'total_count': 12, 'confidence': 1.0}
+        au = {'conditions': [{'name': f'条件{i}', 'satisfied': True} for i in range(16)],
+              'satisfied_count': 16, 'total_count': 16, 'confidence': 1.0}
         dr = _mk_dim('structure', sd=sd, au=au)
         seg = _segment_from_dim(dr, 'structure', '结构位置状态')
-        # 5 条 E 字段 + 12 条 satisfied 条件（去重后）> 5 → 验证截断已放宽
+        # 5 条 E 字段 + 16 条 satisfied 条件（去重后）> 5 → 验证截断已放宽
         assert len(seg['evidence']) > 5
-        assert len(seg['evidence']) <= 12
+        assert len(seg['evidence']) <= 16
 
 
 # ── T5: P11 中文化网关扩展 ────────────────────────────────
