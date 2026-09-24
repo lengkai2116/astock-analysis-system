@@ -2789,6 +2789,127 @@ def _precompute_sector_heat(codes):
             logger.warning(f"板块热度写盘失败: {e}")
 
 
+def _n20_ret(series, n: int = 20) -> float | None:
+    """series 按时间升序收盘序列，返回近 n 交易日收益（需 ≥n+1 观测）"""
+    if series is None:
+        return None
+    try:
+        s = series.dropna()
+        if len(s) < n + 1:
+            return None
+        return float(s.iloc[-1] / s.iloc[-1 - n] - 1)
+    except Exception:
+        return None
+
+
+def _classify_position(pct: float) -> str:
+    """481号 ③ 五档：percentile（(rank-1)/total，越小越强）→ top25%/中上/中下/bottom25%"""
+    if pct <= 0.25:
+        return 'top25%'
+    if pct <= 0.5:
+        return '中上'
+    if pct <= 0.75:
+        return '中下'
+    return 'bottom25%'
+
+
+def _rank_industry_position(codes, ind_map, all_data, asof_date):
+    """481号 ③ 纯计算：行业成分股近20日收益排名/percentile/五档。
+
+    Args:
+        codes: 目标股票代码列表
+        ind_map: {ts_code: industry}（已过滤有行业者由其自身循环处理 None）
+        all_data: {ts_code: DataFrame}（含 close）
+        asof_date: 落盘 stat_date
+
+    Returns:
+        rows: [(asof_date, ts_code, industry, ret_20d,
+                rank, total, percentile, position), ...]
+    """
+    industry_groups: dict[str, list[str]] = {}
+    stock_ret: dict[str, float] = {}
+    for code in codes:
+        _df = all_data.get(code) if all_data else None
+        if _df is None or _df.empty or 'close' not in _df.columns:
+            continue
+        r = _n20_ret(_df['close'])
+        if r is None:
+            continue
+        ind = (ind_map or {}).get(code)
+        if not ind:
+            continue
+        industry_groups.setdefault(ind, []).append(code)
+        stock_ret[code] = r
+
+    rows = []
+    for ind, mem in industry_groups.items():
+        total = len(mem)
+        if total < 2:
+            # 行业仅 1 只有效成分股 → 无对比基准，percentile 降级 None、position 空
+            for code in mem:
+                rows.append((asof_date, code, ind, stock_ret[code],
+                             1, total, None, ''))
+            continue
+        # 按收益降序排名：涨幅最高 rank=1（percentile 越小越强）
+        ranked = sorted(mem, key=lambda c: stock_ret[c], reverse=True)
+        pos_map = {c: i + 1 for i, c in enumerate(ranked)}
+        for code in mem:
+            rank = pos_map[code]
+            pct = round((rank - 1) / total, 4)   # (rank-1)/total，最小=前1%
+            rows.append((asof_date, code, ind,
+                         round(stock_ret[code], 6), rank, total, pct,
+                         _classify_position(pct)))
+    return rows
+
+
+def _precompute_industry_position(codes):
+    """481号 ③：个股在所属行业的近20日收益排名/百分位（独立管道步骤 RAW-2C）
+
+    能力缺口补全：对全市场活跃股票，取各自所属申万一级行业（Stock.industry）成分股集合，
+    算每股近20日收益，在行业成分股内排名得 rank_in_industry / total_in_industry /
+    percentile（涨幅越高百分比越小，前1%最强）与五档 position，写 industry_position_cache
+    （compute_cache.db），供 dim8 第一层环境定位「个股行业位置」句读取。
+
+    参照 _precompute_sector_heat 骨架：独立 app_context（内部走 ORM db.session 取行业）+
+    独立短连接写盘 DELETE+executemany+commit（规避与 daemon 主循环写锁竞争）。
+    收益口径与 _compute_relative_strength/② 一致：最新收盘 / 20交易日前收盘 - 1。
+    """
+    _ensure_ecm()
+    _ensure_pd()
+    if not codes:
+        return
+    from app import create_app
+    _flask_app = create_app()
+    with _flask_app.app_context():
+        from app.data import DataManager
+        dm = DataManager()
+        # 1) 目标股行业映射（Stock.industry 申万一级）
+        ind_map = dm.get_stock_industry_batch(codes)
+
+        # 2) 每日线（复用 preload_all 全量预加载再过滤，行业成分股全量扫描场景高效）
+        all_data = _ecm.get_cached_daily_batch(codes)
+
+        asof = _today_fmt()
+        rows = _rank_industry_position(codes, ind_map, all_data, asof)
+        if not rows:
+            logger.warning("个股行业位置预计算为空，跳过写盘")
+            return
+        _ecm.cache_industry_position(rows)
+
+
+def _today_fmt() -> str:
+    """返回本地 YYYY-MM-DD（_precompute_industry_position 计算锚定交易日）"""
+    from datetime import datetime
+    try:
+        row = _shard_fetchall('daily_cache',
+                              "SELECT MAX(trade_date) FROM daily_cache")
+        if row and row[0] and row[0][0]:
+            return str(row[0][0])
+    except Exception:
+        pass
+    return datetime.now().strftime('%Y-%m-%d')
+
+
 def _precompute_market_stats(target_date: str | None = None):
     """411号Phase 10：全市场级统计预计算
 
@@ -5712,10 +5833,10 @@ def _is_pipeline_complete(pipeline_date: str) -> bool:
         row = _ecm.conn.execute(
             "SELECT COUNT(*) FROM pipeline_status "
             "WHERE pipeline_date=? AND step_id IN ('COL-1','COL-2','COL-3','COL-4','COL-5','COL-6','COL-7',"
-            "'RAW-1','RAW-2','RAW-3','RAW-2B','SIG','JUD','OUT','QA-CHECK') AND status='done'",
+            "'RAW-1','RAW-2','RAW-3','RAW-2B','RAW-2C','SIG','JUD','OUT','QA-CHECK') AND status='done'",
             [pipeline_date]
         ).fetchone()
-        return row and row[0] >= 15  # 15 个环节全 done（B3 RAW-2B；423号 QA-CHECK）
+        return row and row[0] >= 16  # 16 个环节全 done（B3 RAW-2B；481③ RAW-2C；423号 QA-CHECK）
     except Exception:
         return False
 
@@ -6145,6 +6266,11 @@ def _drive_pipeline():
         _run_pipeline_step(today, 'RAW-2B', _precompute_sector_heat, codes)
         return
 
+    # ── 个股行业位置持久化 RAW-2C（481号 ③：行业成分股近20日收益排名/百分位）──
+    if status.get('RAW-2C', {}).get('status') != 'done':
+        _run_pipeline_step(today, 'RAW-2C', _precompute_industry_position, codes)
+        return
+
     # ── 策略分析阶段 SIG ──
     if status.get('SIG', {}).get('status') != 'done':
         def _sig_build(_codes):
@@ -6211,7 +6337,7 @@ def _drive_pipeline():
     if _qa_st in ('failed', 'pending'):
         # 等待补算完成：被 QA 调度的步骤（RAW/SIG/JUD/OUT）尚在 pending/running 时
         # 保持 QA-CHECK pending，不递增 retry（补算 SIG/JUD 需数十分钟，立即重试无意义）
-        _inflight = [s for s in ('RAW-1', 'RAW-2', 'RAW-3', 'RAW-2B', 'SIG', 'JUD', 'OUT')
+        _inflight = [s for s in ('RAW-1', 'RAW-2', 'RAW-3', 'RAW-2B', 'RAW-2C', 'SIG', 'JUD', 'OUT')
                      if status.get(s, {}).get('status') in ('pending', 'running')]
         if _inflight:
             if _qa_st != 'pending':

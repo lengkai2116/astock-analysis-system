@@ -1226,6 +1226,37 @@ def _sector_full_sentence(dim_results: dict, ts_code: str) -> str:
         return ''
 
 
+def _industry_position_sentence(ts_code: str) -> str:
+    """481号 ③：第一层环境定位——个股行业位置句。
+
+    读 industry_position_cache（daemon RAW-2C 预计算）：目标股近20日收益在其
+    所属行业全部有效成分股中的排名/总数/百分位/五档。独立查询，不依赖 daemon
+    内存缓存。无数据/异常 → ''（437「有数据则显、缺则降级」）。
+    """
+    if not ts_code:
+        return ''
+    try:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        p = get_ecm_instance().get_industry_position(ts_code)
+        if not p:
+            return ''
+        ind = p.get('industry')
+        rank = p.get('rank_in_industry')
+        total = p.get('total_in_industry')
+        pct = p.get('percentile')
+        if not ind or rank is None or not total or total < 2 or pct is None:
+            return ''          # 单成分行业/缺基准 → 不产误导位次句
+        pos_cn = {'top25%': '前列', '中上': '中上', '中下': '中下', 'bottom25%': '靠后'}.get(p.get('position'))
+        piece = f'{ind}板块内近20日涨幅第{rank}/{total}'
+        if pct is not None:
+            piece += f'（前{max(1, int(round(pct * 100))):d}%）'
+        if pos_cn:
+            piece += f'，位置{pos_cn}'
+        return f'个股行业位置：{piece}'
+    except Exception:
+        return ''
+
+
 def _valuation_sentence(dim_results: dict) -> str:
     """479号：收益驱动（dim7 估值/财务）并入 summary 尾置句（437-A D2，dim7 定稿 §4.2）。
 
@@ -1475,8 +1506,9 @@ class Dim8SummaryEngine:
             }
 
         # 437-A D3：第一层环境定位并入 summary 前置。
-        #   顺序：大盘趋势(①) → 大盘广度 → 板块定位 → 行业完整(②) → 相对强弱。
-        # 481号：新增 ①_index_trend_sentence（指数趋势）、②_sector_full_sentence（行业完整）。
+        #   顺序：大盘趋势(①) → 大盘广度 → 板块定位 → 行业完整(②) → 个股行业位置(③) → 相对强弱。
+        # 481号：新增 ①_index_trend_sentence（指数趋势）、②_sector_full_sentence（行业完整）、
+        #   ③_industry_position_sentence（个股行业位置）。
         # 有数据则显、缺则降级（437 §七-2），不改前端契约键。
         if ts_code and 'summary' in segments:
             env_parts = []
@@ -1492,6 +1524,9 @@ class Dim8SummaryEngine:
             sf = _sector_full_sentence(dim_results, ts_code)
             if sf:
                 env_parts.append(sf)
+            ip = _industry_position_sentence(ts_code)
+            if ip:
+                env_parts.append(ip)
             rs = _relative_strength_sentence(ts_code)
             if rs:
                 env_parts.append(rs)

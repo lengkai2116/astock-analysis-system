@@ -1225,6 +1225,25 @@ class EnhancedCacheManager:
                 PRIMARY KEY (asof_date, ts_code, benchmark)
             )
         """)
+        # 481号 ③：个股行业位置持久化（每日最新 stat_date 全市场替换）
+        #   ——daemon 独立预计算步骤，产「个股近20日收益在所属行业成分股中的排名/百分位/五档」，
+        #   供 dim8 第一层环境定位「个股行业位置」句读取。按日替换（asof_date×ts_code 唯一）。
+        self.compute_conn.execute("""
+            CREATE TABLE IF NOT EXISTS industry_position_cache (
+                asof_date TEXT NOT NULL,
+                ts_code TEXT NOT NULL,
+                industry TEXT,
+                ret_20d REAL,
+                rank_in_industry INTEGER,
+                total_in_industry INTEGER,
+                percentile REAL,
+                position TEXT,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (asof_date, ts_code)
+            )
+        """)
+        self.compute_conn.execute('CREATE INDEX IF NOT EXISTS idx_industry_pos_industry '
+                                  'ON industry_position_cache(industry, asof_date)')
         self.compute_conn.commit()
 
     def _migrate_pattern_score_to_compute_db(self):
@@ -1606,6 +1625,67 @@ class EnhancedCacheManager:
         except Exception as e:
             logger.debug(f"get_relative_strength失败: {e}")
             return []
+
+    # ── 481号 ③：个股行业位置（industry_position_cache） ────────────────
+
+    def cache_industry_position(self, rows: list) -> None:
+        """按 asof_date 全量替换个股行业位置（daily 全市场，独立短连接写 compute_cache.db）。
+
+        rows: [(asof_date, ts_code, industry, ret_20d,
+                rank_in_industry, total_in_industry, percentile, position), ...]
+        """
+        if not rows:
+            return
+        asof_date = rows[0][0]
+        try:
+            from app.data.sharding_manager import sharding_manager as _sm
+            db = _sm.get_db_for_table('industry_position_cache')
+            conn = _sm.get_connection(db) if db else None
+            if conn is None:
+                logger.warning(f"cache_industry_position: 未路由到分库 ({db})")
+                return
+            lock = _sm.get_write_lock(db)
+            with lock:
+                conn.execute("DELETE FROM industry_position_cache WHERE asof_date = ?",
+                             [asof_date])
+                conn.executemany(
+                    "INSERT INTO industry_position_cache "
+                    "(asof_date, ts_code, industry, ret_20d, "
+                    " rank_in_industry, total_in_industry, percentile, position) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+                conn.commit()
+            logger.info(f"行业位置持久化完成: {len(rows)} 股 (asof_date={asof_date})")
+        except Exception as e:
+            logger.warning(f"cache_industry_position失败: {e}")
+
+    def get_industry_position(self, ts_code: str) -> dict | None:
+        """读取目标股最新行业位置，返回 dict（asof 最新行）。
+
+        无数据/异常 → None（437「缺则降级」，调用方空句处理）。
+        """
+        if not ts_code:
+            return None
+        try:
+            df = self._query_shard(
+                'industry_position_cache',
+                "SELECT * FROM industry_position_cache WHERE ts_code = ? "
+                "ORDER BY asof_date DESC LIMIT 1",
+                [ts_code])
+            if df is None or df.empty:
+                return None
+            r = df.iloc[0].to_dict()
+            return {
+                'asof_date': r.get('asof_date'),
+                'industry': r.get('industry'),
+                'ret_20d': r.get('ret_20d'),
+                'rank_in_industry': r.get('rank_in_industry'),
+                'total_in_industry': r.get('total_in_industry'),
+                'percentile': r.get('percentile'),
+                'position': r.get('position'),
+            }
+        except Exception as e:
+            logger.debug(f"get_industry_position失败: {e}")
+            return None
 
     # ── 内存缓存 ────────────────────────────────────────────
 
@@ -3460,7 +3540,7 @@ class EnhancedCacheManager:
             ('COL-4', '涨跌停采集'), ('COL-5', '龙虎榜采集'), ('COL-6', '概念板块采集'),
             ('COL-7', '财务全量同步'),
             ('RAW-1', '技术指标(IND)'), ('RAW-2', '特征提取(FEAT)'), ('RAW-3', '量化因子(FAC)'),
-            ('RAW-2B', '板块热度持久化'),
+            ('RAW-2B', '板块热度持久化'), ('RAW-2C', '个股行业位置持久化'),
             ('SIG', '策略分析'), ('JUD', '判定及操作建议'), ('OUT', '成品仓'),
             ('QA-CHECK', '仓储质量校验'),
         ]:
