@@ -66,10 +66,13 @@ class TestSlowQuadrantSemantics:
         return src
 
     def test_slow_label_individual_erp(self):
-        """bociasi_slow 话术前缀'个股慢线ERP'（个股纯 ERP 语义）"""
+        """bociasi_slow 话术前缀'个股慢线ERP'（个股纯 ERP 语义）；
+        479号 A11：构造移至 _fmt_slowline（details 透传），前缀断言改查该函数"""
         src = self._evaluate_description()
-        assert "'bociasi_slow': f\"个股慢线ERP=" in src
-        assert "'bociasi_quick': f\"个股快线=" in src
+        assert "'bociasi_slow': _fmt_slowline(slow_result)" in src
+        assert 'def _fmt_slowline' in src
+        assert '个股慢线ERP=' in src
+        assert "'bociasi_quick': _fmt_quickline(quick_result)" in src
 
     def test_quadrant_label_market_percentile(self):
         """quadrant 话术前缀'大市四象限·全市场分位'（与个股慢线区分）"""

@@ -327,6 +327,93 @@ def _overall_light(market_light: str, sector_light: str, stock_light: str) -> st
     return 'yellow'
 
 
+# ── 479号 A10-A13：快慢线/四象限"因"透传 + 温度五档话术（定稿 §六 ①-④，纯表述不改判定）──
+
+def _temp_level_cn(t) -> str:
+    """479号 A13：情绪温度五档话术（定稿④：冰冷<20/偏冷20-40/中性40-60/偏热60-80/过热≥80）"""
+    try:
+        t = float(t)
+    except (TypeError, ValueError):
+        return '中性'
+    if t < 20:
+        return '冰冷'
+    if t < 40:
+        return '偏冷'
+    if t < 60:
+        return '中性'
+    if t < 80:
+        return '偏热'
+    return '过热'
+
+
+# 快线 indicators 布尔 → 中文（479号 A10）
+_QUICK_IND_CN = {
+    'fast_vol': '量能放大', 'fast_price': '站上均线',
+    'fast_mom': '动量>3%', 'fast_breadth': '振幅>3%',
+}
+
+
+def _fmt_quickline(qr: dict) -> str:
+    """479号 A10：快线透传 details（量比/价格偏离/5日动量/振幅）+ indicators（4 布尔达标）——
+    "个股快线=中性（0.35）：量比1.26、价格偏离-1.1%、5日动量-1.99%、振幅0.73%，动量>3%达标1/4" """
+    _sig = bociasi_signal_cn(qr.get('signal'))
+    _conf = qr.get('confidence', 0)
+    _d = qr.get('details') or {}
+    _ind = qr.get('indicators') or {}
+    parts = []
+    if _d.get('vol_ratio') is not None:
+        parts.append(f"量比{_d['vol_ratio']:.2f}")
+    if _d.get('price_offset_pct') is not None:
+        parts.append(f"价格偏离{_d['price_offset_pct']:+.1f}%")
+    if _d.get('mom_5d_pct') is not None:
+        parts.append(f"5日动量{_d['mom_5d_pct']:+.1f}%")
+    if _d.get('amplitude_pct') is not None:
+        parts.append(f"振幅{_d['amplitude_pct']:.2f}%")
+    _passed = [cn for k, cn in _QUICK_IND_CN.items() if _ind.get(k)]
+    _pc = qr.get('pass_count')
+    if _passed and isinstance(_pc, int):
+        parts.append(f"{'、'.join(_passed)}达标{_pc}/4")
+    return f"个股快线={_sig}（{_conf}）" + (f"：{'、'.join(parts)}" if parts else '')
+
+
+def _fmt_slowline(sr: dict) -> str:
+    """479号 A11：慢线透传 ERP 数值（因）——"个股慢线ERP=看多（0.66），ERP 3.50%";
+    数据不足（erp None）不占位"""
+    _sig = bociasi_signal_cn(sr.get('signal'))
+    _conf = sr.get('confidence', 0)
+    _d = sr.get('details') or {}
+    _erp = _d.get('erp')
+    _erp_txt = f"，ERP {_erp:.2f}%" if isinstance(_erp, (int, float)) else ''
+    return f"个股慢线ERP={_sig}（{_conf}）{_erp_txt}"
+
+
+# 四象限 _cache 7 指标 → 中文（479号 A12）
+_QUADRANT_DETAIL_CN = {
+    'ma20_ratio': 'MA20强势占比', 'turnover_percentile': '换手分位', 'limit_ratio': '涨跌停比',
+    'rsi_percentile': 'RSI分位', 'erp_percentile': 'ERP分位', 'margin_trend': '融资趋势',
+    'dv_bond': '股债差',
+}
+
+
+def _fmt_quadrant(qd: dict) -> str:
+    """479号 A12：四象限透传 fast_score/slow_score + _cache 7 指标（因）——
+    "大市四象限(中性·全市场分位)—市场情绪中性（快线0.52/慢线0.64、MA20强势占比56%、…）" """
+    _q = qd.get('quadrant', '')
+    _desc = qd.get('description', '')
+    _fs, _ss = qd.get('fast_score'), qd.get('slow_score')
+    _det = qd.get('details') or {}
+    parts = []
+    if isinstance(_fs, (int, float)) and isinstance(_ss, (int, float)):
+        parts.append(f"快线{_fs:.2f}/慢线{_ss:.2f}")
+    for k, cn in _QUADRANT_DETAIL_CN.items():
+        if k in _det and _det[k] is not None:
+            try:
+                parts.append(f"{cn}{_det[k]:.0%}")
+            except (TypeError, ValueError):
+                parts.append(f"{cn}{_det[k]}")
+    return f"大市四象限({quadrant_cn(_q)}·全市场分位)—{_desc}" + (f"（{'、'.join(parts)}）" if parts else '')
+
+
 # ═══════════════════════════════════════════════════════════
 # 第5维 引擎
 # ═══════════════════════════════════════════════════════════
@@ -388,6 +475,8 @@ class Dim5EmotionEngine(DataAwareMixin):
                     'weight_multiplier': full_quadrant.get('weight_multiplier', 1.0),
                     'fast_score': full_quadrant.get('fast_score', 0.5),
                     'slow_score': full_quadrant.get('slow_score', 0.5),
+                    # 479号 A12：_cache 7 指标明细（ma20_ratio/turnover/limit/rsi/erp/margin/dv_bond）
+                    'details': full_quadrant.get('details') or {},
                     'fast_signal': quick_result.get('signal', 'NEUTRAL'),
                     'slow_signal': slow_result.get('signal', 'NEUTRAL'),
                 }
@@ -485,15 +574,15 @@ class Dim5EmotionEngine(DataAwareMixin):
         # 5. 综合灯色
         overall = _overall_light(market['light'], sector['light'], stock['light'])
 
-        # 6. status_description
+        # 6. status_description（479号 A10-A13：快慢线/四象限透传"因" + 温度五档话术）
         status_description = {
             'market': f"市场处于{market['phase']}（{market['detail']}）",
             'sector': sector['detail'],
             'stock': f"个股{stock['emotion']}（{stock['detail']}）",
-            'bociasi_quick': f"个股快线={bociasi_signal_cn(quick_result.get('signal'))}（{quick_result.get('confidence',0)}）",
-            'bociasi_slow': f"个股慢线ERP={bociasi_signal_cn(slow_result.get('signal'))}（{slow_result.get('confidence',0)}）",
-            'quadrant': f"大市四象限({quadrant_cn(quadrant.get('quadrant',''))}·全市场分位)—{quadrant.get('description','')}",
-            'temperature': f"{temperature}/100",
+            'bociasi_quick': _fmt_quickline(quick_result),
+            'bociasi_slow': _fmt_slowline(slow_result),
+            'quadrant': _fmt_quadrant(quadrant),
+            'temperature': f"{_temp_level_cn(temperature)}{temperature}/100",
         }
 
         # 7. judgment
