@@ -323,5 +323,7 @@ class TestValuationSentence479:
         r = Dim8SummaryEngine().build_seven_dim_report(dr, tags={}, ts_code=None)
         text = r['summary']['text']
         assert text.count('估值：') == 1  # 尾置前缀唯一（_generate_text 不再产"估值："）
-        assert '合理（composite=0.026）' in text
+        # 480号 后续：尾置收益驱动句先过中文网关——composite→综合评分、PE近5年→市盈率近5年
+        assert '合理（综合评分=0.026）' in text
+        assert '市盈率近5年50%分位' in text
         assert '估值条件 5/8 满足' in text

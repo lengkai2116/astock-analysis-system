@@ -584,9 +584,55 @@ _VOLATILITY_CN = {
     'low': '低', 'medium': '中', 'high': '高',
 }
 
+# ─────────────────────────────────────────────────────────────
+# 480号 后续（dim5/dim7 中文网关全量扩展）：甲类+乙类全部 → 中文
+#
+# 464 网关（_to_display_text）已统一接入 emotion(段)/summary(尾置)，本扩展覆盖
+# dim5/dim7 残余英文 token（用户拍板「甲类+乙类全部」）：
+#   - 指标缩写：ERP/RSI/PE/PB/ROE/ROCE/PEG/composite；MA5/MA10/MA20（N日均线）
+#   - 品牌名：BOCIASI（情绪周期）
+#   - 阶段投票维度：chip/fund/stage/trend/ssrp/chan/asr（468-① phase_vote_detail）
+#   - 来源标注：dim2/dim4（→ 第N维）
+#   - 信号枚举：neutral/risk_warning/right_emerging（对齐 signal_analyzer 名）
+# 仅作用于展示层 text/evidence/subsections（网关已统一应用），audit/judgment/
+# status_description 结构化键原值不动（439 SIG-JUD 边界）。
+# ─────────────────────────────────────────────────────────────
+
+# 指标缩写 → 全中文（数值锚点处保留原语感，无歧义）
+_METRIC_CN = {
+    'ERP': '股权风险溢价',
+    'RSI': '相对强弱指标',
+    'ROE': '净资产收益率',
+    'ROCE': '资本回报率',
+    'PEG': '市盈增长比',
+    'composite': '综合评分',
+    'PIERS-E': '财务高杠杆',
+}
+# 均线 N日 → 中文（MA5/MA10/MA20，独立成词）
+_MA_CN = {'MA5': '5日均线', 'MA10': '10日均线', 'MA20': '20日均线'}
+# PE/PB 近5年分位 → 中文（只替换该固定词组，防 PE/PB 误伤别处）
+_PE_PB_CN = {'PE近5年': '市盈率近5年', 'PB近5年': '市净率近5年'}
+# BOCIASI 品牌 → 情绪周期（先修复合词组，再裸品牌名）
+_BOCIASI_CN = {'BOCIASI四象限': '情绪四象限', 'BOCIASI快': '情绪周期快',
+               'BOCIASI慢': '情绪周期慢', 'BOCIASI': '情绪周期'}
+# 阶段投票维度（468-① phase_vote_detail：「投票:chip=建仓(0.80)、…」）→ 中文维度名
+_VOTE_DIM_CN = {
+    'chip': '筹码形态', 'fund': '资金流向', 'stage': '量价阶段', 'asr': '活跃浮筹',
+    'trend': '趋势方向', 'ssrp': '主力成本', 'chan': '缠论买点',
+}
+# 来源标注 dimN → 第N维（potential_breakdown B 方案「（资金→dim4）」）
+_DIM_SRC_RE = re.compile(r'(?<![A-Za-z0-9_])dim([234])(?![A-Za-z0-9_])')
+# 信号枚举 → 中文（对齐 signal_analyzer.SIGNAL_ATTRIBUTES / STATUS_BAR_STATES 命名）
+_SIGNAL_STATE_CN = {
+    'neutral': '中性观望', 'risk_warning': '风险警示', 'right_emerging': '右侧初现',
+    'right_confirmed': '右侧确认', 'left_probing': '左侧试探',
+    'trend_running': '趋势运行中', 'consolidating': '盘整待变',
+}
+
 
 def _to_display_text(s: str) -> str:
-    """dim8 展示文案中文化（指标缩写+释义 / 引擎名 / 拥挤档位 / 背离状态 / 缠论方向）。
+    """dim8 展示文案中文化（指标缩写+释义 / 引擎名 / 拥挤档位 / 背离状态 / 缠论方向
+    + dim5/dim7 残余指标/BOCIASI/投票维度/来源标注/信号枚举）。
 
     仅做有确切映射的替换，无匹配子串原样保留，其余内容不受影响。
     结构化键原值（audit/judgment/status_description 的英文枚举）不进本层。
@@ -594,6 +640,30 @@ def _to_display_text(s: str) -> str:
     if not isinstance(s, str) or not s:
         return s
     t = s
+    # 0. 480号：dim5/dim7 全量中文化（置于后续通用替换前，防与 ASR 等释义叠加误伤）
+    # 0a. 均线 N日 → 中文（独立成词，防 'MA200' 等拼接误中）
+    for ma, cn in _MA_CN.items():
+        t = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(ma)}(?![A-Za-z0-9_])', cn, t)
+    # 0b. PE/PB 近5年分位词组 → 中文
+    for en, cn in _PE_PB_CN.items():
+        t = t.replace(en, cn)
+    # 0c. 指标缩写/评分 → 全中文（独立成词）
+    for en, cn in _METRIC_CN.items():
+        t = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(en)}(?![A-Za-z0-9_])', cn, t)
+    # 0d. BOCIASI → 情绪周期（先复合，后裸名）
+    for k, v in _BOCIASI_CN.items():
+        t = t.replace(k, v)
+    # 0e. 阶段投票维度名 → 中文（仅 '维度名=' 形式，防 'fund_flow' 等拼接键误中）
+    t = re.sub(
+        r'(?<![A-Za-z0-9_])(chip|fund|stage|asr|trend|ssrp|chan)=',
+        lambda m: _VOTE_DIM_CN[m.group(1)] + '=',
+        t,
+    )
+    # 0f. 来源标注 dimN → 第N维（potential_breakdown B 方案）
+    t = _DIM_SRC_RE.sub(lambda m: f'第{m.group(1)}维', t)
+    # 0g. 信号枚举 → 中文（summary「信号：neutral（…）」）
+    for en, cn in _SIGNAL_STATE_CN.items():
+        t = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(en)}(?![A-Za-z0-9_])', cn, t)
     # 1. 拥挤度档位 → 中文（'拥挤度=MODERATE' / '拥挤度=HIGH_CROWDING' 等）
     for en, cn in _CROWDING_CN.items():
         t = t.replace(f'拥挤度={en}', f'拥挤度={cn}')
@@ -1329,6 +1399,9 @@ class Dim8SummaryEngine:
         if 'summary' in segments:
             vs = _valuation_sentence(dim_results)
             if vs:
+                # 480号 后续：收益驱动句在尾置拼入前先过中文网关（此前尾置于网关后拼接，
+                #   composite/PE/PB/ROE/ROCE/PEG/dim来源标注 的英文 token 残留，绕开 _to_display_text）
+                vs = _to_display_text(vs)
                 _seg = segments['summary']
                 _cur = _seg.get('text', '') or ''
                 _seg['text'] = f'{_cur}；估值：{vs}'
