@@ -628,6 +628,12 @@ _SIGNAL_STATE_CN = {
     'right_confirmed': '右侧确认', 'left_probing': '左侧试探',
     'trend_running': '趋势运行中', 'consolidating': '盘整待变',
 }
+# 背驰 type 枚举 → 中文（dim4 signal reason 直读 active_signal JSON，'xx趋势背驰，trend类型'
+#   reason 内 type 为英文；dim2 侧 479-A2 已有 _cn_reason 同语义映射，此处网关兜底覆盖
+#   dim4/dim8 展示链，避免英文残留）
+_DIVERGENCE_TYPE_CN = {
+    'trend': '趋势背驰', 'consolidation': '盘整背驰', 'zhongshu': '中枢背驰',
+}
 
 
 def _to_display_text(s: str) -> str:
@@ -674,6 +680,10 @@ def _to_display_text(s: str) -> str:
     # 3. 缠论方向值中文化（独立成词才替换，防 'down' 误中 'd_outflow' 等子串）
     for zone, cn in _ZONE_DIRECTION_CN.items():
         t = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(zone)}(?![A-Za-z0-9_])', cn, t)
+    # 3a. 背驰 type 枚举中文（'…，trend类型' → '…，趋势背驰'；仅 'xx类型' 形式，
+    #     防 'trend' 单词在别处误中；对齐 dim2 479-A2 _cn_reason 语义）
+    for en, cn in _DIVERGENCE_TYPE_CN.items():
+        t = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(en)}类型(?![A-Za-z0-9_])', cn, t)
     # 4. PhaseDetector 全中文化
     t = t.replace('PhaseDetector分析', '阶段引擎分析')
     t = re.sub(
