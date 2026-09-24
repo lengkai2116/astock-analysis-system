@@ -126,32 +126,6 @@ def _safe_float(v, default=None):
 # ═══════════════════════════════════════════════════════════
 
 
-# ═══════════════════════════════════════════════════════════
-# IC 权重重估（313号 §4.2 第三层：维度权重按历史有效性实证）
-# ═══════════════════════════════════════════════════════════
-
-
-
-
-def _spearman(a: list, b: list) -> float:
-    """Spearman 秩相关"""
-    n = len(a)
-    if n < 10:
-        return 0.0
-    import statistics
-    ra = {v: i for i, v in enumerate(sorted(set(a)))}
-    rb = {v: i for i, v in enumerate(sorted(set(b)))}
-    pa = [ra[x] for x in a]
-    pb = [rb[x] for x in b]
-    ma, mb = statistics.mean(pa), statistics.mean(pb)
-    cov = sum((x - ma) * (y - mb) for x, y in zip(pa, pb))
-    va = sum((x - ma) ** 2 for x in pa) ** 0.5
-    vb = sum((y - mb) ** 2 for y in pb) ** 0.5
-    return cov / (va * vb) if va and vb else 0.0
-
-
-
-
 
 
 
@@ -609,24 +583,31 @@ class Dim7ValuationEngine(DataAwareMixin):
         health = 'pass'
         roce_pass = False
         roce_na = True
+        # 479-9-④：ecm 入参可能为 None（直接 evaluate 场景），加固避免 AttributeError 被吞为全空表 → 全维度 fail
+        if ecm is None:
+            try:
+                from app.data import DataManager
+                ecm = DataManager().cache
+            except Exception:
+                ecm = None
         try:
-            df_fina = ecm.get_cached_fina_indicator(ts_code)
+            df_fina = ecm.get_cached_fina_indicator(ts_code) if ecm is not None else pd.DataFrame()
         except Exception:
             df_fina = pd.DataFrame()
         try:
-            df_report = ecm.get_cached_finance_report(ts_code)
+            df_report = ecm.get_cached_finance_report(ts_code) if ecm is not None else pd.DataFrame()
         except Exception:
             df_report = pd.DataFrame()
         try:
-            df_income = ecm.get_cached_income(ts_code)
+            df_income = ecm.get_cached_income(ts_code) if ecm is not None else pd.DataFrame()
         except Exception:
             df_income = pd.DataFrame()
         try:
-            df_bs = ecm.get_cached_balancesheet(ts_code)
+            df_bs = ecm.get_cached_balancesheet(ts_code) if ecm is not None else pd.DataFrame()
         except Exception:
             df_bs = pd.DataFrame()
         try:
-            df_cf = ecm.get_cached_cashflow(ts_code)
+            df_cf = ecm.get_cached_cashflow(ts_code) if ecm is not None else pd.DataFrame()
         except Exception:
             df_cf = pd.DataFrame()
 
@@ -902,7 +883,26 @@ class Dim7ValuationEngine(DataAwareMixin):
         else:
             deviation = round(composite * 20.0, 1)
 
+        # 476号（D3）：pe/pb/ps 5年分位 SSOT = RAW 预计算（tags.pe_percentile_5y 等，与 composite/level 同构），
+        #   本地 df_basic 实算降为纯兜底（直接 evaluate / tags 缺失时），消除双份方法与 RAW 输出漂移（479-9-①）。
         pe_pct = pb_pct = ps_pct = None
+        if tags is not None:
+            try:
+                if tags.get('pe_percentile_5y') is not None:
+                    pe_pct = round(float(tags['pe_percentile_5y']), 1)
+            except (TypeError, ValueError):
+                pass
+            try:
+                if tags.get('pb_percentile_5y') is not None:
+                    pb_pct = round(float(tags['pb_percentile_5y']), 1)
+            except (TypeError, ValueError):
+                pass
+            try:
+                if tags.get('ps_percentile_5y') is not None:
+                    ps_pct = round(float(tags['ps_percentile_5y']), 1)
+            except (TypeError, ValueError):
+                pass
+        # 兜底：tags 缺失时本地 df_basic 实算
         if not df_basic.empty:
             if 'pe_ttm' in df_basic.columns:
                 pe = df_basic['pe_ttm'].dropna()
@@ -1060,6 +1060,10 @@ class Dim7ValuationEngine(DataAwareMixin):
             'valuation_level': f"{level_cn}（composite={val['composite_rating']}）",
             'pe_percentile': f"PE近5年{pe_str}分位",
             'pb_percentile': f"PB近5年{pb_str}分位",
+            # 479-9-③：补 _5y 数字键（SIG 展示层仍用中文串键；reliability_assessor L2 读 _5y 数字键做 PE存在性/PB+PS极端加成，此前缺失致 dim7 可靠性恒 0.3）
+            'pe_percentile_5y': val['pe_percentile_5y'],
+            'pb_percentile_5y': val['pb_percentile_5y'],
+            'ps_percentile_5y': val['ps_percentile_5y'],
             'fcf_yield': f"自由现金流收益率{fcf_str}",
             'dividend_yield': f"股息率{div_str}",
             'revenue_growth': f"营收同比增长{val['revenue_growth']}%" if val['revenue_growth'] is not None else '营收数据缺失',
@@ -1084,6 +1088,15 @@ class Dim7ValuationEngine(DataAwareMixin):
         }
 
         # 5. audit（统一格式：conditions列表 + satisfied_count + total_count + confidence）
+        # 479-9-⑤：ROCE actual 对齐 tags.roce 真实数值展示（判定仍用 val['roce_pass']，阈值不动——仅展示口径统一）
+        roce_actual = None
+        if tags is not None:
+            _roce_v = tags.get('roce')
+            if _roce_v is not None and not isinstance(_roce_v, str):
+                try:
+                    roce_actual = float(_roce_v)
+                except (TypeError, ValueError):
+                    roce_actual = None
         conditions = [
             {'name': 'PE数据可用', 'satisfied': val['pe_percentile_5y'] is not None,
              'actual': pe_str, 'threshold': 'PE近5年百分位'},
@@ -1099,7 +1112,8 @@ class Dim7ValuationEngine(DataAwareMixin):
              'actual': f"{val['revenue_growth']}%" if val['revenue_growth'] is not None else 'N/A',
              'threshold': '营收正增长'},
             {'name': 'ROCE达标', 'satisfied': val['roce_pass'],
-             'actual': '通过' if val['roce_pass'] else 'ROCE<15%', 'threshold': 'ROCE近3年均值>15%'},
+             'actual': f"{roce_actual:.2f}%" if isinstance(roce_actual, (int, float)) else ('通过' if val['roce_pass'] else 'ROCE<15%'),
+             'threshold': 'ROCE近3年均值>15%'},
             {'name': '无成长陷阱', 'satisfied': not val['growth_trap'],
              'actual': 'PEG>2' if val['growth_trap'] else 'PEG<=2', 'threshold': 'PEG<=2'},
         ]
