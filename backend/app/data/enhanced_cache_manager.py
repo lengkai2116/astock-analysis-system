@@ -1497,11 +1497,18 @@ class EnhancedCacheManager:
             logger.warning(f"cache_sector_heat失败: {e}")
 
     def get_cached_sector_heat(self, stat_date: str = None) -> dict:
-        """419号方案B3：读取板块热度，返回 {industry: {...}}"""
+        """419号方案B3：读取板块热度，返回 {industry: {...}}
+
+        481号 B1：sector_heat_cache 为 long 格式（stat_date×每个行业一行），
+        原 `ORDER BY stat_date DESC LIMIT 1` 只取最新一天的 1 个行业 → dim1 装配
+        仅得单行业 → 目标股行业查不到 → 板块定位句降级缺失。改为取最新
+        stat_date 的全部行业（每行业一行）。
+        """
         try:
             if stat_date is None:
                 row = self._query_shard('sector_heat_cache',
-                    "SELECT * FROM sector_heat_cache ORDER BY stat_date DESC LIMIT 1", [])
+                    "SELECT * FROM sector_heat_cache WHERE stat_date = "
+                    "(SELECT MAX(stat_date) FROM sector_heat_cache)", [])
             else:
                 row = self._query_shard('sector_heat_cache',
                     "SELECT * FROM sector_heat_cache WHERE stat_date = ?", [stat_date])

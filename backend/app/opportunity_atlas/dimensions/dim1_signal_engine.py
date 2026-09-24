@@ -213,7 +213,18 @@ class Dim1SignalEngine:
                 except Exception:
                     quality_issues.append('pre_feat_cache不可用')
 
-                # market_stats 已通过上方 ext_groups 循环从 pre_feat_cache 读取
+                # market_stats 已在 ext_groups 循环尝试从 pre_feat_cache 读取；但 pre_feat 由
+                # daemon 的全局 _market_stats_cache 写入（data_daemon.py:3935），daemon 停态/重启后
+                # 该缓存为空 → pre_feat['market_stats']={} → 市场状态句缺数据而降级。
+                # 481号 B2：表兜底——pre_feat 空时直读 market_stats_cache 表（daemon 持久化，
+                #   实测含历史多日），daemon 停态也可稳定输出。
+                if 'market_stats' not in loaded_data or not loaded_data.get('market_stats'):
+                    try:
+                        _ms_tbl = dm.cache.get_cached_market_stats()
+                        if _ms_tbl:
+                            loaded_data['market_stats'] = _ms_tbl
+                    except Exception:
+                        pass
 
                 # ═══ 类别4: 板块热度（419号方案B4，dim5消费）═══
                 try:

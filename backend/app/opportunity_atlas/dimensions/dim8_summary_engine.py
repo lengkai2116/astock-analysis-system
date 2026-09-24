@@ -1135,6 +1135,97 @@ def _sector_position_sentence(dim_results: dict, ts_code: str) -> str:
         return ''
 
 
+def _index_trend_sentence(dim_results: dict) -> str:
+    """481号 ①：第一层环境定位——大盘指数趋势句。
+
+    读 BenchmarkService 沪深300/上证近 1/5/20/60 日指数 K 线，给出指数当下点位、
+    当日涨跌、近期趋势（60 日涨跌 + 60 日线上下方）。独立查询，不依赖 daemon 内存缓存。
+    无数据/异常返回 ''（437 标准「有数据则显、缺则降级」）。
+    """
+    try:
+        from app.services.benchmark_service import BenchmarkService
+        bs = BenchmarkService()
+        parts = []
+        for idx, label in (('000300.SH', '沪深300'), ('000001.SH', '上证')):
+            try:
+                df = bs.get_index_daily(idx)
+            except Exception:
+                continue
+            if df is None or df.empty or 'close' not in df.columns:
+                continue
+            closes = df['close'].astype(float)
+            last = float(closes.iloc[-1])
+            pct_1d = 0.0
+            if 'pct_chg' in df.columns:
+                v = df.iloc[-1].get('pct_chg')
+                if v is not None:
+                    try:
+                        pct_1d = float(v)
+                    except (TypeError, ValueError):
+                        pct_1d = 0.0
+            piece = f'{label}{last:.0f}(当日{pct_1d:+.1f}%)'
+            # 近20/60日涨跌幅 + 60日线上下方
+            if len(closes) >= 61:
+                ret20 = (last / float(closes.iloc[-21]) - 1) * 100
+                ret60 = (last / float(closes.iloc[-61]) - 1) * 100
+                ma60 = float(closes.iloc[-60:].mean())
+                pos = '60日线上方' if last >= ma60 else '60日线下方'
+                tone = '偏强' if ret60 >= 0 and last >= ma60 else ('偏弱' if ret60 <= -5 else '中性')
+                piece += f'，近20日{ret20:+.1f}%/近60日{ret60:+.1f}%，{pos}（{tone}）'
+            elif len(closes) >= 21:
+                ret20 = (last / float(closes.iloc[-21]) - 1) * 100
+                piece += f'，近20日{ret20:+.1f}%'
+            parts.append(piece)
+        if not parts:
+            return ''
+        return '大盘趋势：' + '；'.join(parts)
+    except Exception:
+        return ''
+
+
+def _sector_full_sentence(dim_results: dict, ts_code: str) -> str:
+    """481号 ②：第一层环境定位——行业完整情况句。
+
+    复用 SectorAnalysisService.get_sector_context（已具备行业 1/5/20 日收益、排名、
+    轮动状态、资金流向，仅 strategy_analyze 消费过）。此处接进 dim8 环境定位段。
+    无行业映射 / 服务不可用 → ''（437 缺则降级）。
+    """
+    if not ts_code:
+        return ''
+    try:
+        from app.services.sector_analysis_service import SectorAnalysisService
+        sctx = SectorAnalysisService().get_sector_context(ts_code)
+        if not sctx.get('available'):
+            return ''
+        parts = []
+        name = sctx.get('sector_name', '')
+        ret20 = sctx.get('sector_20d_return')
+        if ret20 is not None:
+            parts.append(f'近20日{ret20:+.2f}%')
+        ret5 = sctx.get('sector_5d_return')
+        if ret5 is not None:
+            parts.append(f'近5日{ret5:+.2f}%')
+        rotation = sctx.get('rotation_state')
+        rot_cn = {'LEADING': '领涨', 'LAGGING': '落后', 'STRENGTHENING': '增强',
+                  'WEAKENING': '转弱', 'NEUTRAL': '中性'}.get(rotation, rotation)
+        if rot_cn:
+            parts.append(f'轮动{rot_cn}')
+        mfrank = sctx.get('sector_moneyflow_rank')
+        if isinstance(mfrank, (int, float)) and mfrank > 0:
+            parts.append(f'资金流向第{mfrank}名')
+        mfnet = sctx.get('sector_moneyflow_net')
+        # 仅当净流向非 0 才产（SectorAnalysisService 无资金数据时兜底返回 0，
+        #   '净流入0.0亿' 属误导，437 缺则降级）
+        if isinstance(mfnet, (int, float)) and mfnet != 0:
+            verb = '净流入' if mfnet >= 0 else '净流出'
+            parts.append(f'{verb}{abs(mfnet) / 1e4:.1f}亿')
+        if not parts:
+            return ''
+        return f'行业：{name}（' + '、'.join(parts) + '）'
+    except Exception:
+        return ''
+
+
 def _valuation_sentence(dim_results: dict) -> str:
     """479号：收益驱动（dim7 估值/财务）并入 summary 尾置句（437-A D2，dim7 定稿 §4.2）。
 
@@ -1383,16 +1474,24 @@ class Dim8SummaryEngine:
                 'plain': '状态总结：数据不足',
             }
 
-        # 437-A D3：第一层环境定位三段（大盘状态→板块定位→相对强弱）并入 summary 前置。
+        # 437-A D3：第一层环境定位并入 summary 前置。
+        #   顺序：大盘趋势(①) → 大盘广度 → 板块定位 → 行业完整(②) → 相对强弱。
+        # 481号：新增 ①_index_trend_sentence（指数趋势）、②_sector_full_sentence（行业完整）。
         # 有数据则显、缺则降级（437 §七-2），不改前端契约键。
         if ts_code and 'summary' in segments:
             env_parts = []
+            it = _index_trend_sentence(dim_results)
+            if it:
+                env_parts.append(it)
             ms = _market_state_sentence(dim_results)
             if ms:
                 env_parts.append(ms)
             sp = _sector_position_sentence(dim_results, ts_code)
             if sp:
                 env_parts.append(sp)
+            sf = _sector_full_sentence(dim_results, ts_code)
+            if sf:
+                env_parts.append(sf)
             rs = _relative_strength_sentence(ts_code)
             if rs:
                 env_parts.append(rs)
