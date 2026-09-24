@@ -580,14 +580,21 @@ def _assess_vs_indicator(tags):
     # rsi（461-1：RSI 三键统一——SSOT=rsi，chip_fund_ext.rsi, 443 R1 全市场真实化, Wilder ewm14）。
     # 原读 rsi_percentile（market_stats 组：全市场 AVG(rsi14) 归一化，市场级当个股级展示——概念错位）。
     # 现改读个股 RSI 真值（0-100），并按强弱分档描述，不再以市场级冒充个股。
+    # 465-8（479-10 拍板）：加中位参考档——旧三档（≥70偏强/≤30偏弱/else中性）把 30-40/60-70
+    #   偏侧信息全吞为中性（实证 600519 RSI34、601318 RSI38 偏弱侧丢失）。新五档弱侧/强侧
+    #   不再归中性，中位参考档保留"偏强-中性/偏弱-中性"过渡语。
     rs = tags.get('rsi')
     if rs is not None:
         try:
             rsi_v = float(rs)
             if rsi_v >= 70:
                 _rsi_desc = '偏强'
+            elif rsi_v >= 60:
+                _rsi_desc = '偏强-中性'
             elif rsi_v <= 30:
                 _rsi_desc = '偏弱'
+            elif rsi_v <= 40:
+                _rsi_desc = '偏弱-中性'
             else:
                 _rsi_desc = '中性'
             parts.append(f'RSI {rsi_v:.0f} {_rsi_desc}')
