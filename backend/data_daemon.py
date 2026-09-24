@@ -3826,9 +3826,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         _bs0 = _bs_df.iloc[-1]
                         try:
                             _ta = _bs0.get('total_assets')
-                            _cl = _bs0.get('current_liab')
-                            if _ta is not None and _cl is not None and _ta == _ta and _cl == _cl:
-                                _capital = float(_ta) - float(_cl)
+                            _cur_liab = _bs0.get('current_liab')  # 480号：改名防遮蔽 chanlun dict _cl（:3594，structure_ext 段 :3929 复用）
+                            if _ta is not None and _cur_liab is not None and _ta == _ta and _cur_liab == _cur_liab:
+                                _capital = float(_ta) - float(_cur_liab)
                             else:
                                 _tl = _bs0.get('total_liab')
                                 if _ta is not None and _tl is not None and _ta == _ta and _tl == _tl:
