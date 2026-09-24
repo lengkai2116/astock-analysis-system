@@ -200,7 +200,9 @@ class TestSegmentContract:
         seg = _segment_from_dim(dr, 'volume_price', '量价健康度')
         assert seg is not None
         assert all(f in seg for f in _SEG_FIELDS)
-        assert seg['text'] == '量价状态:强健康'
+        # 479号 479-5：段级 text 升级因果链——缺 audit 满足项/验证计数时退化为
+        #   「所以：{字段话术}」（因/验证节省略）；证据仍含 E 字段
+        assert seg['text'] == '所以：量价状态:强健康'
         assert '无背离信号' in seg['evidence']
 
     def test_segment_d7_absent_dim_skipped(self):

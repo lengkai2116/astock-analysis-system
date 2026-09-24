@@ -642,7 +642,8 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
     sd = seg.get('status_description', {}) or {}
     au = seg.get('audit', {}) or {}
     overall = jg.get('overall_light', jg.get('light', 'yellow'))
-    text = _compose_dim_text(src_key, jg, sd)
+    # 479号 479-5：段级 text 传入 au，升级「所以→因为→验证」因果链话术（段是 dim8 唯一叙事出口）。
+    text = _compose_dim_text(src_key, jg, sd, au)
     evidence = _compose_dim_evidence(src_key, sd)
     # 437 §一-5：audit.conditions 中 satisfied 项作 evidence 底料（现状=达成状态印证）
     for c in (au.get('conditions') or []):
@@ -809,11 +810,17 @@ _DIM8_FIELD_CN: dict[str, str] = {
 }
 
 
-def _compose_dim_text(src_key: str, jg: dict, sd: dict) -> str:
+def _compose_dim_text(src_key: str, jg: dict, sd: dict,
+                      au: dict | None = None) -> str:
     """437-A 字段级 text 编排：按 _DIM8_T_SUBJECTS 从 status_description 取 T 字段拼子句。
 
     规则（对齐 437-A §一）：缺字段不占位（子句跳过）；数值字段转表述由各维引擎
     status_description 已自产文字承载（本层只拼装不重算）；无 T 字段产出时回退 _brief_text。
+
+    479号 479-5（实例→话术收官）：段级调用传入 au 时，把纯字段子句升级为因果链话术——
+      「所以（现状结论=字段话术）」→「因为（被满足的条件=audit.conditions 中 satisfied 项
+       的 name，现状=达成状态由 audit 印证）」→「验证（条件稽核 N/M 动态读）」。
+      summary 平铺（_generate_text）与 strategy_analyze 不传 au → 保持纯字段话术（不回归）。
     """
     fields = _DIM8_T_SUBJECTS.get(src_key, [])
     parts = []
@@ -846,9 +853,39 @@ def _compose_dim_text(src_key: str, jg: dict, sd: dict) -> str:
             continue
         # 引擎自产字段多为完整句子（如 '强流出（5d_outflow）'），直接拼接不加冒号
         parts.append(f'{label}:{val}')
-    if parts:
-        return '；'.join(parts)
-    return _brief_text(src_key, jg, sd)
+    if not parts:
+        return _brief_text(src_key, jg, sd)
+    body = '；'.join(parts)
+    # 479号 479-5（实例→话术收官，B1）：段级调用传入 au 时升级因果链话术。
+    # 纯展示/话术层——不动审计判定逻辑，只把"因"（satisfied 条件名）显性化于 text。
+    if au is not None:
+        return _narrative_so_so_yz(body, src_key, jg, sd, au)
+    return body
+
+
+def _narrative_so_so_yz(body: str, src_key: str, jg: dict, sd: dict,
+                        au: dict) -> str:
+    """479号 479-5：把段 text 升级为「所以 → 因为 → 验证」因果链话术。
+
+    各维定稿话术模板统一口径（dim2-dim7 定稿 §话术模板 + dim6 §5.1）：
+      【所以】{现状结论 = 字段话术 body}（主结论，客观陈述非判定）
+      【因为】{被满足条件 = audit.conditions 中 satisfied 项 name}（现状=达成状态由 audit 印证；
+             缺失/无满足项 → 该节省略，防空"因"占位）
+      【验证】条件稽核 N/M（audit.satisfied_count/total_count 动态读，436 §5.5 audit 展示）
+      —— 评分键（structure_health_score 等）已被 479-1 清理出 T 表，不产句；此处不改任何判定。
+    """
+    conds = (au.get('conditions') or []) if isinstance(au, dict) else []
+    satisfied = [str(c.get('name')) for c in conds if isinstance(c, dict) and c.get('satisfied')
+                 and c.get('name')]
+    total = au.get('total_count')
+    got = au.get('satisfied_count')
+    chain = f'所以：{body}'
+    if satisfied:
+        chain += f'；因为：{"、".join(satisfied)}'
+    if isinstance(total, int) and total > 0:
+        got = got if isinstance(got, int) else len(satisfied)
+        chain += f'；验证：条件稽核 {got}/{total}'
+    return chain
 
 
 def _strip_event_factors(src_key: str, f: str, v):
