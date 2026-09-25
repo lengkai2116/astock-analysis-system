@@ -55,7 +55,7 @@ class TestComposeText:
               'volume_energy': '量比1.3，温和放量', 'vol_ratio': '量比1.3',
               'pattern': '无明确形态', 'pattern_score': '5.0/10', 'rps': '64.5/100'}
         text = _compose_dim_text('volume_price', {}, sd)
-        assert '量价状态:强健康' in text
+        assert '量价状态：强健康' in text
         # 479号：评分键（health_score/pattern_score）归 JUD、vol_ratio 去重并入 volume_energy
         assert '健康度' not in text
         assert '形态评分' not in text
@@ -70,7 +70,7 @@ class TestComposeText:
         """缺字段不占位：仅有的字段拼句，段仍产出"""
         sd = {'vp_state': '中性'}
         text = _compose_dim_text('volume_price', {}, sd)
-        assert text == '量价状态:中性'
+        assert text == '量价状态：中性'
 
     def test_none_field_skipped(self):
         """none/None/空值字段全部跳过 → 回退 _brief_text"""
@@ -133,7 +133,7 @@ class TestListDictFlatten:
         sd = {'chanlun_direction': 'up', 'buy_sell_points_detail': []}
         text = _compose_dim_text('structure', {}, sd)
         assert '买卖点' not in text
-        assert '缠论方向:up' in text
+        assert '缠论方向：up' in text
 
 
 # ── F7: 缺维 → None ───────────────────────────────────────
@@ -202,7 +202,7 @@ class TestSegmentContract:
         assert all(f in seg for f in _SEG_FIELDS)
         # 479号 479-5：段级 text 升级因果链——缺 audit 满足项/验证计数时退化为
         #   「所以：{字段话术}」（因/验证节省略）；证据仍含 E 字段
-        assert seg['text'] == '所以：量价状态:强健康'
+        assert seg['text'] == '所以：量价状态：强健康'
         assert '无背离信号' in seg['evidence']
 
     def test_segment_d7_absent_dim_skipped(self):

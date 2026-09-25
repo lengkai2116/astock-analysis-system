@@ -467,6 +467,15 @@ def _flatten_value(v) -> str:
             if reason:
                 return f'{base}：{reason}'
             return base
+        # 482-2：事件 dict（event_details 项，{'event_type','description','direction',
+        #   'confidence','event_date'}）——优先 description（与 evidence 同口径），
+        #   缺失则用事件类型中文映射兜底；避免兜底 for sub 取到裸 event_type 英文。
+        if 'event_type' in v:
+            _desc = v.get('description')
+            if _desc:
+                return str(_desc)
+            _et = v.get('event_type')
+            return _event_type_cn(str(_et)) if _et else ''
         for sub in v.values():
             if sub is not None and sub != '':
                 return str(sub)
@@ -489,6 +498,26 @@ def _point_type_cn(pt: str) -> str:
         return _POINT_TYPE_CN[pt]
     base = re.sub(r'_(?:p|a|b)$', '', pt)
     return _POINT_TYPE_CN.get(base, pt)
+
+
+# 482-2：事件类型枚举 → 中文事件名（源：event_monitor.py 检测器名全集）。
+#   仅展示层使用（结构化 event_details/risk_factors 原值保留，439 边界）。
+_EVENT_TYPE_CN: dict[str, str] = {
+    'longhubang': '龙虎榜', 'holder_concentration': '股东集中', 'holder_reduce': '股东减持',
+    'breakout': '突破', 'limit_move': '涨跌停', 'margin_risk': '融资风险',
+    'concept_heat': '概念热度', 'regulatory': '监管', 'delist_risk': '退市风险',
+    'st_warning': 'ST预警', 'goodwill_risk': '商誉风险', 'fraud_sign': '造假嫌疑',
+    'pledge': '质押', 'underwater_ipo': '定增破发', 'buyback': '回购', 'incentive': '股权激励',
+}
+# 482-3：dim3 量价背离类型枚举 → 中文（展示串层；divergence_type 结构化原值保留）
+_DIM3_DIVERGENCE_TYPE_CN: dict[str, str] = {
+    'top': '顶背离', 'bottom': '底背离', 'none': '无',
+}
+
+
+def _event_type_cn(et: str) -> str:
+    """事件类型 → 中文（未命中 / 已含中文 → 原样返回）"""
+    return _EVENT_TYPE_CN.get(et, et)
 
 
 def _brief_text(key_in: str, jg: dict, sd: dict) -> str:
@@ -536,9 +565,20 @@ def _compose_dim_subsections(src_key: str, sd: dict) -> list[dict] | None:
             v = _strip_event_factors(src_key, f, v)
             if not v:
                 continue
+            # 482-1：套 _DIM8_E_FORMAT 数值模板（与 evidence 同形，防裸小数）。
+            #   注意模板已内含字段名（'ATR占比{v:.2f}%'），故命中模板时不再加中文标签前缀。
+            fmt = _DIM8_E_FORMAT.get(f)
+            if fmt and not isinstance(v, (list, dict)):
+                try:
+                    val = fmt.format(v=v)
+                    if val:
+                        items.append(val)
+                    continue
+                except (TypeError, ValueError):
+                    pass
             val = _flatten_value(v)
             if val:
-                items.append(f'{_DIM8_FIELD_CN.get(f, f)}:{val}')
+                items.append(f'{_DIM8_FIELD_CN.get(f, f)}：{val}')
         if items:
             out.append({'title': title, 'items': items})
     return out or None
@@ -676,7 +716,7 @@ def _to_display_text(s: str) -> str:
     # 2. 指标缩写补释义：ASR=42 → ASR（活跃筹码比率）=42；RPS=72.4 → RPS（相对强弱因子）=72.4
     #    （缩写在 '=' 或 ':' 后跟数字才替换，避免误伤字段名）
     for abbr, cn in _INDICATOR_CN.items():
-        t = re.sub(rf'{re.escape(abbr)}(?==|:)', rf'{abbr}（{cn}）', t)
+        t = re.sub(rf'{re.escape(abbr)}(?==|[:：])', rf'{abbr}（{cn}）', t)
     # 3. 缠论方向值中文化（独立成词才替换，防 'down' 误中 'd_outflow' 等子串）
     for zone, cn in _ZONE_DIRECTION_CN.items():
         t = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(zone)}(?![A-Za-z0-9_])', cn, t)
@@ -700,6 +740,29 @@ def _to_display_text(s: str) -> str:
     #    独立成词防误中 'low_level' 等拼接键）
     for en, cn in _VOLATILITY_CN.items():
         t = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(en)}(?![A-Za-z0-9_])', cn, t)
+    # 7. 482-2：事件枚举 → 中文事件名（仅命中事件类型全词；未命中保持原样）
+    for en, cn in _EVENT_TYPE_CN.items():
+        t = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(en)}(?![A-Za-z0-9_])', cn, t)
+    # 8. 482-3：dim3 背离类型（display 'bottom（置信…）' / 裸 'bottom'）→ 顶/底背离
+    for en, cn in _DIM3_DIVERGENCE_TYPE_CN.items():
+        t = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(en)}(?![A-Za-z0-9_])', cn, t)
+    # 9. 482-5：structure evidence 调试性标记清洗（仅展示层，结构化键不动）
+    #   9a. 定理键前缀去重：'t1 未通过(0.00) T1 走势必完美…' → '未通过(0.00) T1 走势必完美…'
+    #       （行首 tN 冗余前缀，同行稍后出现对应 TN 时移除）
+    t = re.sub(r'^t(\d+) (?=[^\n]{0,60}?T\1 )', '', t)
+    #   9b. 缠论笔类名 → 中文
+    t = t.replace('Stroke(', '笔(')
+    #   9c. 变异系数缩写补释义
+    t = t.replace('(CV<', '（变异系数<')
+    #   9d. 阶段编号残留 'P1-#8'（'关联P1-#8特征序列缺口处理' → '关联特征序列缺口处理'）
+    t = t.replace('P1-#8', '')
+    #   9e. 中文语境内的 'vs' → '相对'（如 '价格vs中枢'；仅 CJK 两侧命中，防误伤英文键）
+    t = re.sub(r'(?<=[\u4e00-\u9fa5])vs(?=[\u4e00-\u9fa5])', '相对', t)
+    #   9f. 走势类型标注 '（trend）' → '（趋势）'
+    t = t.replace('（trend）', '（趋势）')
+    # 10. 482-4 收尾：中文后的半角冒号 → 全角（覆盖引擎自产串，如 dim4 '投票:'、
+    #     dim3 pattern 条件 '低点: …'；仅 CJK 紧跟半角冒号时替换，不影响时间/比值）
+    t = re.sub(r'(?<=[\u4e00-\u9fa5]):', '：', t)
     return t
 
 
@@ -932,7 +995,8 @@ def _compose_dim_text(src_key: str, jg: dict, sd: dict,
         if not val:
             continue
         # 引擎自产字段多为完整句子（如 '强流出（5d_outflow）'），直接拼接不加冒号
-        parts.append(f'{label}:{val}')
+        # 482-4：字段名后统一全角冒号（与段级「所以：/因为：/验证：」一致）
+        parts.append(f'{label}：{val}')
     if not parts:
         return _brief_text(src_key, jg, sd)
     body = '；'.join(parts)
@@ -1532,7 +1596,8 @@ class Dim8SummaryEngine:
                 env_parts.append(rs)
             if env_parts:
                 _seg = segments['summary']
-                _env = '；'.join(env_parts)
+                # 482 追加：环境定位句在网关之后拼接，需补过网关（MA20→20日均线 等）
+                _env = _to_display_text('；'.join(env_parts))
                 _seg['text'] = f'{_env}；{_seg.get("text", "")}'
                 _seg['plain'] = f'{_env}；{_seg.get("plain", "")}' if _seg.get('plain') else _env
 

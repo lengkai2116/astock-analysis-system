@@ -60,7 +60,7 @@ class TestNarrativeChain:
         sd = {'vp_state': '强健康', 'volume_energy': '量比6.7，连续3日放量'}
         au = _mk_audit(['量价关系', '健康度'], total=6, got=4)
         text = _compose_dim_text('volume_price', {}, sd, au)
-        assert '所以：量价状态:强健康' in text
+        assert '所以：量价状态：强健康' in text
         assert '；因为：量价关系、健康度' in text
         assert '；验证：条件稽核 4/6' in text
 
@@ -79,7 +79,7 @@ class TestNarrativeChain:
                               'threshold': '低或中'}],
               'satisfied_count': 0, 'total_count': 1, 'confidence': 0.5}
         text = _compose_dim_text('risk', {}, sd, au)
-        assert '所以：风险等级:高' in text
+        assert '所以：风险等级：高' in text
         assert '因为' not in text
 
     def test_no_total_yz_clause_skipped(self):
@@ -88,7 +88,7 @@ class TestNarrativeChain:
         au = {'conditions': [{'name': '量价关系', 'satisfied': True}],
               'satisfied_count': 1, 'total_count': 0, 'confidence': 1.0}
         text = _compose_dim_text('volume_price', {}, sd, au)
-        assert '所以：量价状态:中性' in text
+        assert '所以：量价状态：中性' in text
         assert '因为：量价关系' in text
         assert '条件稽核' not in text
 
@@ -96,7 +96,7 @@ class TestNarrativeChain:
         """不传 au → 保持纯字段话术（summary 平铺 _generate_text / strategy_analyze 不回归）"""
         sd = {'vp_state': '强健康', 'volume_energy': '量比6.7'}
         text = _compose_dim_text('volume_price', {}, sd)
-        assert text == '量价状态:强健康；量能:量比6.7'
+        assert text == '量价状态：强健康；量能：量比6.7'
         assert '所以' not in text and '因为' not in text and '验证' not in text
 
     def test_chain_direct_function(self):
@@ -147,7 +147,7 @@ class TestNoScoreKeysInChain:
               'structure_health_score': '38/100（不足）'}
         au = _mk_audit(['趋势方向'], total=5, got=1)
         text = _compose_dim_text('structure', {}, sd, au)
-        assert '所以：缠论方向:下降；阶段:走势结构下降' in text
+        assert '所以：缠论方向：下降；阶段：走势结构下降' in text
         assert '结构健康' not in text
         assert '38/100' not in text
 
@@ -156,7 +156,7 @@ class TestNoScoreKeysInChain:
         sd = {'vp_state': '强健康', 'health_score': '9/10', 'pattern_score': '10/10'}
         au = _mk_audit(['量价关系'], total=6, got=2)
         text = _compose_dim_text('volume_price', {}, sd, au)
-        assert '所以：量价状态:强健康' in text
+        assert '所以：量价状态：强健康' in text
         assert '健康度' not in text and '形态评分' not in text
 
 

@@ -204,7 +204,8 @@ def convert_to_dims_format(dim_results: dict, tags: dict) -> dict:
         sd = emo.get('status_description', {})
         _temp = sd.get('temperature')
         if _temp is not None:
-            _t_val = float(_temp)
+            # 482-6：dim5 temperature 现为展示串（'中性58.1/100'），须安全转换
+            _t_val = _safe_float(_temp, 50.0)
             _emo_confidence = min(0.8, max(0.3, 0.3 + _t_val / 200))
         # 388号升级D：bociasi_fast_signal增强方向
         _fast = str(sd.get('bociasi_fast_signal', ''))

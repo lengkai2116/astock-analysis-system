@@ -194,7 +194,9 @@ class Dim3VPEngine(DataAwareMixin):
         _div_conf = tags.get('divergence_confidence')
         _div_macd = bool(tags.get('divergence_macd_confirmed', False))
         if _div_type and _div_type != '无':
-            _div_txt = _div_type
+            # 482-3：展示串中文化（top/bottom→顶/底背离，对齐 dim3 定稿细项5
+            #   「顶背离（置信0.60，MACD确认）」）；divergence_type 结构化键保留原值
+            _div_txt = {'top': '顶背离', 'bottom': '底背离'}.get(_div_type, _div_type)
             if isinstance(_div_conf, (int, float)):
                 _div_txt += f'（置信{_div_conf:.2f}'
                 _div_txt += '，MACD确认）' if _div_macd else '）'

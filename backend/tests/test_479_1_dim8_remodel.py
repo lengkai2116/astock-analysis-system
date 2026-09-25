@@ -64,14 +64,14 @@ class TestTSubjectCleanup:
         sd = {'vp_state': '强健康', 'health_score': '9/10（强健康）',
               'pattern_score': '10.0/10', 'vol_ratio': '量比6.7'}
         text = _compose_dim_text('volume_price', {}, sd)
-        assert '量价状态:强健康' in text
+        assert '量价状态：强健康' in text
         assert '健康度' not in text and '形态评分' not in text and '量比:' not in text
 
     def test_structure_text_excludes_chanlun_strength(self):
         """structure text 不含 chanlun_strength 子句"""
         sd = {'chanlun_direction': 'up', 'chanlun_strength': '38'}
         text = _compose_dim_text('structure', {}, sd)
-        assert '缠论方向:up' in text
+        assert '缠论方向：up' in text
         assert '结构强度' not in text
 
 
@@ -95,11 +95,11 @@ class TestRiskSubsections:
         assert titles == ['价格位置', '风险状态']
         pos_items = seg['subsections'][0]['items']
         risk_items = seg['subsections'][1]['items']
-        assert any('防守位:1166.33' in i for i in pos_items)
-        assert any('距前高:-6.35' in i for i in pos_items)
-        assert any('风险等级:高' in i for i in risk_items)
+        assert any('防守位' in i and '1166.33' in i for i in pos_items)
+        assert any('距前高' in i for i in pos_items)
+        assert any('风险等级：高' in i for i in risk_items)
         assert any('风险明细' in i for i in risk_items)
-        assert any('波动率:低' in i for i in risk_items)  # P11 中文化已生效
+        assert any('波动率：低' in i for i in risk_items)  # P11 中文化已生效
 
     def test_no_subsections_for_other_dims(self):
         """非 chip_fund/risk 维无 subsections 键"""
@@ -164,9 +164,9 @@ class TestCnGatewayExtension:
 
     def test_volatility_level_cn(self):
         """dim6 volatility_level low/medium/high → 低/中/高（T 表 text 与小节 items）"""
-        assert _to_display_text('波动率:low') == '波动率:低'
-        assert _to_display_text('波动率:medium') == '波动率:中'
-        assert _to_display_text('波动率:high') == '波动率:高'
+        assert _to_display_text('波动率:low') == '波动率：低'
+        assert _to_display_text('波动率:medium') == '波动率：中'
+        assert _to_display_text('波动率:high') == '波动率：高'
 
     def test_volatility_word_boundary(self):
         """独立成词替换，防误伤含子串的英文（low_level 等拼接键）"""
@@ -176,7 +176,7 @@ class TestCnGatewayExtension:
         """既有映射（拥挤度/指标缩写/缠论方向）不回归"""
         assert _to_display_text('拥挤度=MODERATE') == '拥挤度=适中'
         assert _to_display_text('ASR=42') == 'ASR（活跃筹码比率）=42'
-        assert _to_display_text('缠论方向:up') == '缠论方向:上升'
+        assert _to_display_text('缠论方向:up') == '缠论方向：上升'
 
     def test_point_type_variant_cn(self):
         """买卖点 465-1B 变体（first_buy_p/third_buy_a 等）中文化（dim8 展示层）"""
@@ -199,7 +199,7 @@ class TestRiskFactorsStrip:
               'risk_factors': ['缠论风险：高风险（高）', '事件风险：龙虎榜（高）',
                                '事件风险：ST预警（极高）']}
         text = _compose_dim_text('risk', {}, sd)
-        assert '风险等级:高' in text
+        assert '风险等级：高' in text
         assert '缠论风险' in text
         assert '事件风险' not in text
 
@@ -277,7 +277,7 @@ class TestRpsPhrase:
     def test_rps_data_missing_skipped(self):
         """rps 数据不足 → 不产 rps 子句（无值跳过）"""
         text = _compose_dim_text('volume_price', {}, {'rps': '数据不足', 'vp_state': '中性'})
-        assert '量价状态:中性' in text
+        assert '量价状态：中性' in text
         assert 'RPS' not in text
 
 

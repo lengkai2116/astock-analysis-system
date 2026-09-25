@@ -204,6 +204,6 @@ class TestDim8Side:
         sd = {'vp_state_label': '放量突破(筹码转换)', 'vp_rule': '放量突破关键位',
               'vp_state': '强健康', 'volume_energy': '量比1.5，温和放量'}
         text = _compose_dim_text('volume_price', {}, sd)
-        assert '量价状态机:放量突破(筹码转换)' in text
-        assert '状态规则:放量突破关键位' in text
-        assert '量价状态:强健康' in text
+        assert '量价状态机：放量突破(筹码转换)' in text
+        assert '状态规则：放量突破关键位' in text
+        assert '量价状态：强健康' in text
