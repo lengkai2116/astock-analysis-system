@@ -3576,6 +3576,12 @@ class EnhancedCacheManager:
             "WHERE pipeline_date=? AND step_id=? AND status IN ('pending', 'failed')",
             [pipeline_date, step_id]
         ).rowcount
+        # 482号 §9.4：补 commit（与 mark_step_done/mark_step_failed 对称）。
+        #   原实现缺 commit → UPDATE 成为未提交写事务，在 stock_cache.db 持 RESERVED
+        #   写锁直到下一次 commit；管道步骤内其它连接（如 dim1 sync_requests 通知写）
+        #   与主连接在该锁上互等 → SIG 长跑自查自锁停滞（2026-09-25 实测 2 次复现：
+        #   lldb/sample 证 busy-wait，线程数 2 无 worker 池，stock_cache.db locked）。
+        self.conn.commit()
         return rc > 0
 
     def mark_step_done(self, pipeline_date: str, step_id: str, detail: str = ''):
