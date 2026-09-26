@@ -218,11 +218,11 @@ class TestMarginCompletenessGate:
     """③ 后续：交易日闸门 + 发布机制感知（排除最新交易日）+ 日历不可用回退"""
 
     def test_recent_trading_days_skips_holidays(self):
-        """交易日历：中秋 9/25-27 与周末剔除，调休上班日 9/20 计入"""
+        """交易日历：中秋 9/25-27 与周末剔除（含 09-20，483 校正后非交易日）"""
         import data_daemon as dd
         from datetime import datetime as _dt
         days = dd._recent_trading_days(6, end=_dt(2026, 9, 28))
-        assert days == ['2026-09-20', '2026-09-21', '2026-09-22',
+        assert days == ['2026-09-18', '2026-09-21', '2026-09-22',
                         '2026-09-23', '2026-09-24', '2026-09-28']
 
     def test_margin_is_short(self):
