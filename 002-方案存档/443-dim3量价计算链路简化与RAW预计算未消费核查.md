@@ -3,7 +3,7 @@ title: dim3 量价计算链路简化与 RAW 预计算未消费核查 + SIG→RAW
 type: 核查记录 + 实施方案
 date: 2026-09-16
 version: v1.0
-status: ✅ R1-R7 已实施、R8 待 437-A 拍板（2026-09-16 全量完成：R1 bug 修复 / R2 cost_ext / R3 无缺口关闭 / R4 维持现状关闭 / R5 删除 / R6 修复 / R7 双份收敛；R8 依赖 437-A D1-D7 未拍板）；**三问全部关闭（2026-09-26：问题3 已由 R7 收敛；问题1/2 维持现状——464 dim3 定稿+479-3 后已无实施动机）**
+status: ✅ R1-R7 已实施、**R8 已关闭**（2026-09-16 全量完成：R1 bug 修复 / R2 cost_ext / R3 无缺口关闭 / R4 维持现状关闭 / R5 删除 / R6 修复 / R7 双份收敛；**R8 于 2026-09-26 关闭**——437-A D1-D7 已于 09-20 拍板+实施，D1-D7 重审实证归集完整落地，R8 本体与问题2 同源已关闭）；**三问全部关闭（2026-09-26：问题3 已由 R7 收敛；问题1/2 维持现状——464 dim3 定稿+479-3 后已无实施动机）**
 related:
   - 410-dim2-dim7层数据分层审计与RAW前置计算迁移方案
   - 411-维度引擎统一实施计划（407-410整合）
@@ -371,9 +371,9 @@ dim4 同型：399 号 35 字段中的 cost_asr/cost_cyqkl/cost_profit_ratio/phas
 - 验证：①EPD 回迁等价预验证 900 组（60 种子×15 边界长度：5/6/10/11/20/21/25/30/55/60/61/65/120/250/300）新 raw==旧 raw **PASS**、precomputed==raw **PASS**；②VolumePriceStrategy.analyze 链 60 组（10 种子×6 长度）signal_output/volume_price_detail/stage 全一致 **PASS**；③pytest 10 套件 **93 passed**；④data_daemon + framework + dim3 import 面冒烟 OK；⑤RAW-2 冒烟 3/3（R1 chip_fund 无回归）。附：dim3 内联 `_detect_kline_patterns` 调 framework `compute_volume_price_signal` 却传 `volume_ext=` 恒 TypeError→恒兜底的潜伏 bug 随内联块删除而消失（该链是死代码）。
 
 ### R8：RAW-2 量价持久化扩字段（可选）
-- 状态：⏳ 待实施（依赖 437-A D1-D7 拍板——2026-09-16 复核 437-A 仍为 📋 草案，仅 signal 移出已拍板，D1-D7 待拍板，依赖未满足，本次不实施）
+- 状态：✅ **已关闭（2026-09-26）**——①依赖条件（437-A D1-D7 拍板）已于 2026-09-20 满足并实施（机制层字段级编排 + 核查修正 5 项闭环）；②R8 本体（RAW-2 量价扩字段）与问题2 同源，问题2 已拍板维持现状关闭（479-3 已扩至 9 字段、464 dim3 定稿素材已齐）；③D1-D7 重审（2026-09-26 真实数据 4 股实证）确认 dim8 归集完整落地（见文末 R8 关闭登记）。
 - 改动：无
-- 验证：—
+- 验证：D1-D7 重审探针 `scripts/_443r8_d1d7_probe.py` 4/4 通过（subsections/summary 前置尾置/去重主源/缺维不产段全实证）
 
 ### 总回归
 - pytest 相关套件：**93 passed**（2026-09-16 最终全量：test_411_pipeline / test_396_dim2_engine / test_419_dim5_compliance / test_dim3_patterns / test_436_b3_sandbox / test_442_vs_indicator / test_442_margin / test_443_r2_cost_ext / test_t63_breakout / test_426_phase2_structure；含 R1-R7 全部改动后重跑）
@@ -391,4 +391,22 @@ dim4 同型：399 号 35 字段中的 cost_asr/cost_cyqkl/cost_profit_ratio/phas
 | **问题3** dim3 内联 vendored 双份 | **已由 R7 收敛关闭** | R7（2026-09-16）434 式审计收敛：dim3 删 4508 行 vendored 块（4760→252 行，现 432 行含 479-3 增量），framework 权威；§二问题3 原「方向待决策」为陈旧标注（R7 已选收敛方向）；附带消除 dim3 版 EPD `prev_ma` bug 与 `volume_ext=` 恒 TypeError 潜伏 bug |
 
 **复核实证**：`dim3_vp_engine.py` 现 432 行（无 `VolumePriceStrategy` 类/vendored 代码，仅留 dim3 独有 `_classify_granville` 等）；`features['volume_price']`（data_daemon:3806）9 字段；framework `AnalysisResult.to_dict` 仍含 momentum/resonance/three_laws（算完即弃确认）。
-**登记**：本节为三问关闭权威记录；R8 仍待 437-A D1-D7 拍板（另号），不属三问范围。
+**登记**：本节为三问关闭权威记录；R8 已另于下方关闭。
+
+## R8 关闭登记（2026-09-26，437-A D1-D7 重审 + 用户拍板）
+
+R8 依赖条件（437-A D1-D7）已于 2026-09-20 拍板并实施，本日对 D1-D7 做**当前落地重审**（8 股真实数据构建 seven_dim，探针 `scripts/_443r8_d1d7_probe.py` 4/4 通过）：
+
+| 决策项 | 拍板（09-20） | 当前落地证据（2026-09-26 实证） | 状态 |
+|---|---|---|---|
+| D1 fund_chip 合一段内分两小节 | A | `fund_chip.subsections=['筹码成本','资金博弈']`；risk 段同构 `['价格位置','风险状态']` | ✅ |
+| D2 收益驱动并入 summary 尾置 | A | summary 尾置：PE/PB 分位→FCF/股息/营收→陷阱→潜力六维（标注来源→第4维/第2维/3/第一层）→「估值条件 N/8 满足」；无独立 valuation 段 | ✅ |
+| D3 第一层三段并入 summary 前置 | A | summary 前置：大盘趋势（沪深300/上证 481①）→大盘状态→板块定位/行业（481②）→个股行业位置（481③）→相对强弱 | ✅ |
+| D4 跨维去重主源 | 按建议值 | emotion 无 stock 子句（主源 dim3）；筹码=dim4；支撑阻力绝对价=dim6；fina_health=dim6 | ✅ |
+| D5 支撑阻力一致性 | 另议开号 | **461-11 已统一** `shared.calc_support_resistance`；核对报告实证 dim2/dim6 数值一致（000002 3.13/3.40）——无缺口，另议取消 | ✅ 实质闭环 |
+| D6 B 路径持续字段 | 维持后续项 | 未纳入（437 §九 后续项单独开号） | ➖ 维持 |
+| D7 缺维不产段 | A | 段键=6 键（无 signal/valuation 独立段）；缺维段不产 | ✅ |
+
+**R8 关闭理由**：①D1-D7 依赖已满足并实证落地；②R8 本体（RAW-2 量价扩字段）与三问问题2 同源——已拍板维持现状（479-3 扩至 9 字段、464 dim3 定稿素材已齐、momentum/共振不在定稿输出键）；③future「分位序列预计算」（412 P6）已登记另开号，与 437-A R8 联动。**443 号全项（R1-R7 + 三问 + R8）至此全部关闭。**
+
+**附带发现（探针维护项）**：`scripts/_479_seven_dim_probe.py` 断言过时——479-5 因果链升级后 text「因为」部分引用 audit 条件名「健康度评分」，触发旧断言"评分键不应产句"误报（8/8 股）。已改断言为检查评分键**值**模式（`健康度 N/10`/`形态评分`），非条件名。

@@ -3,7 +3,8 @@
 覆盖（479-1/479-6 实施验证）：
   1. 段键集合 = 6 键（无 signal/valuation——2026-09-15 裁决 + 436 D5）
   2. structure text 无「结构强度」（chanlun_strength 归 JUD）
-  3. volume_price text 无「健康度/形态评分/量比:」，rps 已转表述
+  3. volume_price text 无「健康度：8/10 / 形态评分 / 量比:」评分键值，rps 已转表述
+     （2026-09-26 修正：因果链「因为」引 audit 条件名含「健康度评分」属正常，不再禁裸词）
   4. risk 段 subsections = 价格位置/风险状态两小节（P15）
   5. audit.conditions 透传 actual/threshold（P9）
   6. summary 尾置收益驱动句（估值条件 N/M 满足）且无重复「估值：」（D2=A）
@@ -50,7 +51,11 @@ def probe(code):
     if seg:
         t = seg.get('text', '')
         print(f'-- volume_price.text: {t}')
-        assert '健康度' not in t and '形态评分' not in t, '评分键不应产句'
+        # 443 R8 重审修正（2026-09-26）：479-5 因果链升级后 text「因为」部分引用 audit
+        # 条件名（如「健康度评分、背离检测」）——条件名含「健康度」字样属正常，非评分键产句。
+        # 故只禁评分键**值**模式（`健康度：8/10` / `形态评分`），不再禁裸「健康度」。
+        assert '形态评分' not in t, '形态评分键不应产句'
+        assert '健康度：' not in t and '健康度:' not in t, 'health_score 值不应产句'
         assert '量比:' not in t, 'vol_ratio 不应独立产句'
     # 3. risk subsections
     seg = report.get('risk') or {}
