@@ -30,44 +30,16 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════
-# BOCIASI快线常量
+# BOCIASI 快线/温度/时间节奏常量（485号：死副本已删，live 在 framework 三模块）
 # ═══════════════════════════════════════════════════════════
 
-# 431号 G1 标注（批次13，2026-09-13）——本文件"硬编码常量未收敛"清单：
-#   FAST_HIGH/LOW_THRESHOLD、SLOW_HIGH/LOW_THRESHOLD（BOCIASI 快慢线阈值）
-#   PHASE_BASE_TEMP、TEMP_WEIGHTS（情绪温度基温与分项权重）
-#   BANDWIDTH_TIGHT/NARROW、RANGE_TIGHT、CONSOLIDATION_MIN_DAYS（时间节奏阈值）
-# 以上均**无 status_engine.yaml / signal_registry.yaml 对应物**（属引擎内部算法
-# 常量，非台账配置），故本批**仅标注，不收敛**——收敛＝另行设计配置键，属行为变更。
-FAST_HIGH_THRESHOLD = 0.70
-FAST_LOW_THRESHOLD = 0.30
-SLOW_HIGH_THRESHOLD = 0.70
-SLOW_LOW_THRESHOLD = 0.30
-
-
-# ═══════════════════════════════════════════════════════════
-# 情绪温度常量
-# ═══════════════════════════════════════════════════════════
-
-PHASE_BASE_TEMP = {
-    'ice': 10, 'sprout': 30, 'regression': 40, 'ferment': 60,
-    'climax': 85, 'ebb': 25, 'neutral': 50,
-}
-
-TEMP_WEIGHTS = {
-    'market_phase': 0.25, 'limit_up': 0.15, 'blast_rate': 0.10,
-    'sector_heat': 0.15, 'volume_price': 0.15, 'margin': 0.10, 'breadth': 0.10,
-}
-
-
-# ═══════════════════════════════════════════════════════════
-# 时间节奏常量
-# ═══════════════════════════════════════════════════════════
-
-BANDWIDTH_TIGHT = 5
-BANDWIDTH_NARROW = 10
-RANGE_TIGHT = 10
-CONSOLIDATION_MIN_DAYS = 15
+# 485号（431 G1 收口，2026-09-26）：本文件原 5 组硬编码常量（FAST/SLOW_*、PHASE_BASE_TEMP、
+# TEMP_WEIGHTS、BANDWIDTH_*、RANGE_TIGHT、CONSOLIDATION_MIN_DAYS）为**死副本**——本文件内
+# 零使用点，live 对应物在 framework 三模块且逐字节相同：
+#   bociasi_quadrant.py:27-30（快慢线阈值）、emotion_temperature.py（PHASE_BASE_TEMP/WEIGHTS）、
+#   time_rhythm_engine.py:19-22（时间节奏阈值）
+# 已全部删除（431 §018 原判「无 yaml 对应物，仅标注」精确化为「死副本清理」，同 ChanlunLevelValidator 先例）。
+# framework live 常量维持代码常量（引擎内部算法常量，非台账配置，不迁 yaml）。
 
 # 板块热度枚举
 HEAT_TOP10 = 'top_10'

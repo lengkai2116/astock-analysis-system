@@ -55,6 +55,11 @@ class StatusEngine:
         self.dm = dm
         self.cfg = get_status_engine_config()
         self.registry = get_signal_registry().get('signals', {})
+        # 485号（431 G1 收口）：权重矩阵迁 yaml——yaml 有值即覆盖实例属性（值不变，零行为变更）；
+        # yaml 缺失/非 dict 时保留类属性兜底（与 yaml 同值）。类属性同时兼容 test_418 覆盖逻辑。
+        _mrw = self.cfg.get('market_regime_weights')
+        if isinstance(_mrw, dict) and _mrw:
+            self.MARKET_REGIME_WEIGHTS = _mrw
 
     # ══════════════════════════════════════════════════════════
     # 主入口
@@ -621,11 +626,13 @@ class StatusEngine:
     # ══════════════════════════════════════════════════════════
 
     # 358号§5.1 市场状态×维度权重矩阵
-    # 431号 G1 标注（批次13，2026-09-13）：本矩阵为**唯一 live 权威**——
+    # 431号 G1 标注（批次13，2026-09-13）+ 485号收口（2026-09-26）：本矩阵已迁入
+    # status_engine.yaml `market_regime_weights` 段（值逐字节不变）——此处为**类属性兜底**，
+    # 仅当 yaml 缺失/非 dict 时生效（__init__ 有 cfg 则覆盖实例属性）。
     # 消费于 StatusEngine._aggregate 与 _aggregate_v390
     # （`weights = self.MARKET_REGIME_WEIGHTS.get(regime, ...)`）。
-    # weight_engine.py 的 STATIC_WEIGHTS 是其逐字节相同的死码孪生（该模块零消费方）
-    # ——调整权重时只改此处。本批不改值。
+    # weight_engine.py 的 STATIC_WEIGHTS 死码孪生已随 485-1 删除（该模块零消费方）。
+    # 调整权重取值属「果」侧判定，445 冻结，留待 JUD 阶段（485-5）。
     MARKET_REGIME_WEIGHTS = {
         'trending_up':    {'signal': 0.15, 'structure': 0.20, 'vp': 0.15, 'chip_fund': 0.10, 'emotion': 0.10, 'risk': 0.15, 'valuation': 0.15},
         'ranging':        {'signal': 0.10, 'structure': 0.15, 'vp': 0.20, 'chip_fund': 0.10, 'emotion': 0.10, 'risk': 0.20, 'valuation': 0.15},

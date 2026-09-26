@@ -368,7 +368,7 @@ def extract_direction_score(dims: dict, weights: dict) -> dict:
 
     Args:
         dims: convert_to_dims_format输出（{dim: {state, ...}}）
-        weights: 权重dict（{dim: weight}），来自weight_engine
+        weights: 权重dict（{dim: weight}），来自 StatusEngine.MARKET_REGIME_WEIGHTS（485号：weight_engine 死模块已删）
 
     Returns:
         {

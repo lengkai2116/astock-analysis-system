@@ -41,3 +41,13 @@ l0:
     positive: 0.80                       # 积极期：总仓位上限80%
   hold_only_stages:                      # 387号§5.1：持有期阶段（信号已延伸→不新开仓）
     - "已延伸"
+
+# 358号§5.1 市场状态×维度权重矩阵（370号S7 P3动态权重）
+# 485号（431 G1 收口）：由 status_engine.py 类内嵌矩阵迁入本 yaml——值逐字节不变（零行为变更）。
+# 消费方 StatusEngine._aggregate / _aggregate_v390（`weights = regime_weights.get(regime, ...)`）；
+# yaml 缺失/非 dict 时回落类属性兜底（与 yaml 同值）。调整取值属「果」侧判定，445 冻结，JUD 阶段再做。
+market_regime_weights:
+  trending_up:    {signal: 0.15, structure: 0.20, vp: 0.15, chip_fund: 0.10, emotion: 0.10, risk: 0.15, valuation: 0.15}
+  ranging:        {signal: 0.10, structure: 0.15, vp: 0.20, chip_fund: 0.10, emotion: 0.10, risk: 0.20, valuation: 0.15}
+  trending_down:  {signal: 0.10, structure: 0.10, vp: 0.10, chip_fund: 0.10, emotion: 0.10, risk: 0.30, valuation: 0.20}
+  extreme_panic:  {signal: 0.05, structure: 0.05, vp: 0.05, chip_fund: 0.10, emotion: 0.10, risk: 0.40, valuation: 0.25}
