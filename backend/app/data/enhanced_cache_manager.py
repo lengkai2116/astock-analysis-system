@@ -88,13 +88,17 @@ _NUMERIC_COLUMNS = {
                      'basic_eps', 'total_opcost', 'rd_expense'],
     'balancesheet_cache': ['total_assets', 'total_liab', 'total_equity', 'current_assets',
                            'current_liab', 'fixed_assets', 'cash_equivalents', 'money_cap'],
-    'cashflow_cache': ['net_profit', 'cashflow_oper', 'cashflow_inv', 'cashflow_fin', 'free_cashflow'],
+    'cashflow_cache': ['net_profit', 'cashflow_oper', 'cashflow_inv', 'cashflow_fin', 'free_cashflow',
+                       'depr_fa_coga_dpba', 'c_pay_acq_const_fiolta'],
     'forecast_cache': ['net_profit_min', 'net_profit_max', 'eps_min', 'eps_max'],
     'finance_report_cache': ['roe', 'roce', 'quick_ratio', 'ocfps', 'current_ratio',
                              'asset_liab_ratio', 'ebit', 'operating_profit',
                              'total_assets', 'total_liab', 'current_assets', 'current_liab'],
     'top10_holders_cache': ['hold_amount', 'hold_ratio', 'hold_float_ratio'],
     'stk_holder_cache': ['holder_number'],
+    'pledge_stat_cache': ['pledge_count', 'unrest_pledge', 'rest_pledge', 'total_share', 'pledge_ratio'],
+    'stk_holdertrade_cache': ['change_vol', 'change_ratio', 'after_share', 'after_ratio',
+                              'avg_price', 'total_share'],
     'win_rate_cache': ['win_rate_5d', 'win_rate_10d', 'win_rate_20d',
                        'avg_return_5d', 'avg_return_20d', 'sharpe_5d', 'sharpe_20d'],
     'conditional_win_rate_cache': ['total_samples', 'with_div_samples', 'with_div_win_rate',
@@ -115,7 +119,8 @@ _OHLC_TABLES = {'daily_cache', 'minute_kline_cache', 'as_market_snapshot'}
 _NULL_NAN_TABLES = {
     'daily_basic_cache', 'fina_indicator_cache', 'income_cache', 'balancesheet_cache',
     'cashflow_cache', 'forecast_cache', 'finance_report_cache', 'top10_holders_cache',
-    'stk_holder_cache', 'margin_cache', 'adj_factor_cache',
+    'stk_holder_cache', 'pledge_stat_cache', 'stk_holdertrade_cache',
+    'margin_cache', 'adj_factor_cache',
 }
 
 class EnhancedCacheManager:
@@ -216,6 +221,41 @@ class EnhancedCacheManager:
             self.conn.commit()
         except Exception as e:
             logger.warning(f"迁移 {table} 补列失败: {e}")
+
+    def _migrate_shard_missing_columns(self, table: str, db_name: str, columns: list) -> None:
+        """484号：分库幂等补列（总库 _migrate_missing_columns 的 shard 版）
+
+        分库表（如 financial_cache.db 的 cashflow_cache）由 356 分库迁移建立，
+        _init_tables 的 CREATE IF NOT EXISTS 只作用于总库，存量分库表需显式 ALTER。
+        """
+        try:
+            from app.data.sharding_manager import sharding_manager
+            conn = sharding_manager.get_connection(db_name)
+            exist = {r[1] for r in conn.execute(
+                f"PRAGMA table_info({table})").fetchall()}
+            for col, ctype in columns:
+                if col not in exist:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ctype}")
+                    logger.info(f"分库 {db_name} 表 {table} 补列 {col} {ctype}")
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"迁移分库 {db_name} 表 {table} 补列失败: {e}")
+
+    def _ensure_shard_table(self, table: str, db_name: str, ddl: str) -> None:
+        """484号：分库建表（_init_tables 的 CREATE 只作用于总库，且总库分库路由表
+        会被「空壳表自清理」DROP → 分库新表须在建总库表时同步建在分库，
+        否则 _insert_from_df 分库自动建表（从总库复制 DDL）因总库表已 DROP 而失败）"""
+        try:
+            from app.data.sharding_manager import sharding_manager
+            conn = sharding_manager.get_connection(db_name)
+            exists = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [table]).fetchone()
+            if not exists:
+                conn.execute(ddl)
+                conn.commit()
+                logger.info(f"分库 {db_name} 建表 {table}")
+        except Exception as e:
+            logger.warning(f"分库 {db_name} 建表 {table} 失败: {e}")
 
     def _insert_from_df(self, table: str, df: pd.DataFrame) -> int:
         """将 DataFrame 批量写入 SQLite 表，返回实际写入行数（428 阶段 P0-1 动作②③）
@@ -754,10 +794,19 @@ class EnhancedCacheManager:
                 ts_code TEXT, end_date TEXT, ann_date TEXT,
                 net_profit REAL, cashflow_oper REAL, cashflow_inv REAL,
                 cashflow_fin REAL, free_cashflow REAL,
+                depr_fa_coga_dpba REAL, c_pay_acq_const_fiolta REAL,
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, end_date)
             )
         """)
+        # 484号：cashflow 折旧列幂等补列（CREATE IF NOT EXISTS 不修改已存在表；
+        #   总库 DROP 后重建带新列，分库 financial_cache.db 需显式 ALTER）
+        self._migrate_missing_columns('cashflow_cache', [
+            ('depr_fa_coga_dpba', 'REAL'), ('c_pay_acq_const_fiolta', 'REAL'),
+        ])
+        self._migrate_shard_missing_columns('cashflow_cache', 'financial_cache.db', [
+            ('depr_fa_coga_dpba', 'REAL'), ('c_pay_acq_const_fiolta', 'REAL'),
+        ])
         self._execute("""
             CREATE TABLE IF NOT EXISTS forecast_cache (
                 ts_code TEXT, end_date TEXT, ann_date TEXT,
@@ -824,6 +873,48 @@ class EnhancedCacheManager:
                 holder_number INTEGER,
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (ts_code, end_date)
+            )
+        """)
+        # 484号（448 R）：股权质押统计（周频）+ 股东增减持——event_monitor 质押/减持
+        #   检测器数据源（原占位"表未入库"）。分库 history_cache.db（与 top10/stk_holder 同族）。
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS pledge_stat_cache (
+                ts_code TEXT, end_date TEXT,
+                pledge_count REAL, unrest_pledge REAL, rest_pledge REAL,
+                total_share REAL, pledge_ratio REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, end_date)
+            )
+        """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS stk_holdertrade_cache (
+                ts_code TEXT, ann_date TEXT,
+                holder_name TEXT, holder_type TEXT, in_de TEXT,
+                change_vol REAL, change_ratio REAL, after_share REAL,
+                after_ratio REAL, avg_price REAL, total_share REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, ann_date, holder_name)
+            )
+        """)
+        # 484号：新表同步建到分库 history_cache.db（总库副本会被空壳自清理 DROP，
+        #   _insert_from_df 无法再从总库复制 DDL）
+        self._ensure_shard_table('pledge_stat_cache', 'history_cache.db', """
+            CREATE TABLE IF NOT EXISTS pledge_stat_cache (
+                ts_code TEXT, end_date TEXT,
+                pledge_count REAL, unrest_pledge REAL, rest_pledge REAL,
+                total_share REAL, pledge_ratio REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, end_date)
+            )
+        """)
+        self._ensure_shard_table('stk_holdertrade_cache', 'history_cache.db', """
+            CREATE TABLE IF NOT EXISTS stk_holdertrade_cache (
+                ts_code TEXT, ann_date TEXT,
+                holder_name TEXT, holder_type TEXT, in_de TEXT,
+                change_vol REAL, change_ratio REAL, after_share REAL,
+                after_ratio REAL, avg_price REAL, total_share REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, ann_date, holder_name)
             )
         """)
         self._execute("""
@@ -2241,6 +2332,18 @@ class EnhancedCacheManager:
     def cache_cashflow_data(self, df):
         if df.empty:
             return
+        # 484号：Tushare cashflow 列名 → 表列名映射（根因修复）。
+        #   Tushare 返回 n_cashflow_act/n_cashflow_inv_act/n_cash_flows_fnc_act，
+        #   缓存列为 cashflow_oper/cashflow_inv/cashflow_fin；原无映射 →
+        #   经营/投资/筹资现金流三列恒 NULL，消费端（估值 OCF、fraud 经营现金流负、
+        #   FCF 口径）读 cashflow_oper 的逻辑从未真正生效（与 473 roce=0 同型静默退化）。
+        #   折旧摊销列 depr_fa_coga_dpba/c_pay_acq_const_fiolta 同名直写（484 加列）。
+        _CF_COL_MAP = {
+            'n_cashflow_act': 'cashflow_oper',
+            'n_cashflow_inv_act': 'cashflow_inv',
+            'n_cash_flows_fnc_act': 'cashflow_fin',
+        }
+        df = df.rename(columns=_CF_COL_MAP)
         with self._write_lock:
             try:
                 if 'end_date' in df.columns:
@@ -2496,6 +2599,42 @@ class EnhancedCacheManager:
     def get_cached_stk_holder(self, ts_code):
         return self._query_shard('stk_holder_cache',
             "SELECT * FROM stk_holder_cache WHERE ts_code = ? ORDER BY end_date DESC",
+            [ts_code]
+        )
+
+    # ==================== 484号（448 R）：股权质押 / 股东增减持 ====================
+
+    def cache_pledge_stat_data(self, df):
+        if df.empty:
+            return
+        with self._write_lock:
+            try:
+                if 'end_date' in df.columns:
+                    df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                self._insert_from_df('pledge_stat_cache', df)
+            except Exception as e:
+                logger.warning(f"缓存股权质押统计失败: {e}")
+
+    def get_cached_pledge_stat(self, ts_code):
+        return self._query_shard('pledge_stat_cache',
+            "SELECT * FROM pledge_stat_cache WHERE ts_code = ? ORDER BY end_date DESC",
+            [ts_code]
+        )
+
+    def cache_stk_holdertrade_data(self, df):
+        if df.empty:
+            return
+        with self._write_lock:
+            try:
+                if 'ann_date' in df.columns:
+                    df['ann_date'] = pd.to_datetime(df['ann_date']).dt.date
+                self._insert_from_df('stk_holdertrade_cache', df)
+            except Exception as e:
+                logger.warning(f"缓存股东增减持失败: {e}")
+
+    def get_cached_stk_holdertrade(self, ts_code):
+        return self._query_shard('stk_holdertrade_cache',
+            "SELECT * FROM stk_holdertrade_cache WHERE ts_code = ? ORDER BY ann_date DESC",
             [ts_code]
         )
 

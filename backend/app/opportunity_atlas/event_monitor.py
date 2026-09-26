@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -308,16 +308,68 @@ class EventMonitor(DataAwareMixin):
                 "event_date": ""}
 
     def _detect_pledge_risk(self, ts_code: str) -> dict:
-        """B2 质押>50%: pledge_stat 表未入库，返回未检测到"""
-        return {"detected": False, "direction": 0, "confidence": 0.0,
-                "source": "pledge_stat", "description": "质押数据未采集",
-                "event_date": ""}
+        """B2 质押>50%: 读 pledge_stat_cache 最新期质押比例（484号落地，原占位）
+
+        质押比例（%）>50 → 检出（direction=-1 资金面风险；非造假级硬否决）。
+        """
+        result = {"detected": False, "direction": 0, "confidence": 0.0,
+                  "source": "pledge_stat", "description": "", "event_date": ""}
+        try:
+            dm = self._get_dm()
+            df = dm.cache.get_cached_pledge_stat(ts_code)
+            if df is not None and not df.empty:
+                row = df.sort_values('end_date', ascending=False).iloc[0]
+                ratio = row.get('pledge_ratio')
+                if ratio is not None:
+                    try:
+                        ratio = float(ratio)
+                    except (TypeError, ValueError):
+                        ratio = None
+                if ratio is not None and ratio == ratio:
+                    result['confidence'] = min(1.0, ratio / 100.0)
+                    result['event_date'] = str(row.get('end_date') or '')
+                    if ratio > 50:
+                        result['detected'] = True
+                        result['direction'] = -1
+                        result['description'] = f"股权质押比例{ratio:.1f}%>50%"
+        except Exception as e:
+            logger.warning(f"质押风险检测失败 ({ts_code}): {e}")
+        return result
 
     def _detect_holder_reduce(self, ts_code: str) -> dict:
-        """B3 减持预披露: stk_holdertrade 表未入库，返回未检测到"""
-        return {"detected": False, "direction": 0, "confidence": 0.0,
-                "source": "stk_holdertrade", "description": "股东减持数据未采集",
-                "event_date": ""}
+        """B3 减持预披露: 读 stk_holdertrade_cache 近 90 日 in_de='DE'（484号落地，原占位）
+
+        股东减持（in_de='DE'）ann_date 落在近 90 日窗口 → 检出。
+        """
+        result = {"detected": False, "direction": 0, "confidence": 0.0,
+                  "source": "stk_holdertrade", "description": "", "event_date": ""}
+        try:
+            dm = self._get_dm()
+            df = dm.cache.get_cached_stk_holdertrade(ts_code)
+            if df is not None and not df.empty and 'in_de' in df.columns:
+                cutoff = (datetime.now() - timedelta(days=90)).date()
+                recent = df[df['in_de'] == 'DE'].copy()
+                if not recent.empty and 'ann_date' in recent.columns:
+                    recent['_ad'] = pd.to_datetime(recent['ann_date']).dt.date
+                    recent = recent[recent['_ad'] >= cutoff]
+                if not recent.empty:
+                    row = recent.sort_values('ann_date', ascending=False).iloc[0]
+                    result['detected'] = True
+                    result['direction'] = -1
+                    result['confidence'] = 0.6
+                    result['event_date'] = str(row.get('ann_date') or '')
+                    holder = str(row.get('holder_name') or '')
+                    desc = "股东减持" + (f"（{holder}）" if holder else "")
+                    ratio = row.get('change_ratio')
+                    if ratio is not None:
+                        try:
+                            desc += f"，变动比例{float(ratio):.2f}%"
+                        except (TypeError, ValueError):
+                            pass
+                    result['description'] = desc
+        except Exception as e:
+            logger.warning(f"减持检测失败 ({ts_code}): {e}")
+        return result
 
     def _detect_underwater_ipo(self, ts_code: str) -> dict:
         """B4 定增破发: share_float + adj_factor 表未入库，返回未检测到"""

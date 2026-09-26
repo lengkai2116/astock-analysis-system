@@ -519,12 +519,24 @@ class ValuationEngine(DataAwareMixin):
         if total_mv is None or total_mv <= 0:
             return 0.0
 
-        # 自由现金流（万元）
+        # 484号：经营资产FCF = 经营现金流 − 折旧摊销（保全性资本支出近似，449 口径）；
+        #   折旧列缺失/无值 → 回退教科书 free_cashflow（不阻塞）。单位与 EV（元）一致。
         fcf = None
-        if not df_cashflow.empty and 'free_cashflow' in df_cashflow.columns:
-            cf = df_cashflow['free_cashflow'].dropna()
-            if not cf.empty:
-                fcf = cf.iloc[0]
+        if not df_cashflow.empty:
+            cf_sorted = df_cashflow.sort_values('end_date', ascending=False)
+            if 'cashflow_oper' in cf_sorted.columns and 'depr_fa_coga_dpba' in cf_sorted.columns:
+                _r0 = cf_sorted.iloc[0]
+                _op = _r0.get('cashflow_oper')
+                _depr = _r0.get('depr_fa_coga_dpba')
+                try:
+                    if _op is not None and _depr is not None and _op == _op and _depr == _depr:
+                        fcf = float(_op) - float(_depr)
+                except (TypeError, ValueError):
+                    fcf = None
+            if fcf is None and 'free_cashflow' in cf_sorted.columns:
+                _cf = cf_sorted['free_cashflow'].dropna()
+                if not _cf.empty:
+                    fcf = _cf.iloc[0]
         if fcf is None:
             return 0.0
 

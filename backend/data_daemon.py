@@ -1136,15 +1136,21 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
         try:
             stocks = pro.stock_basic(exchange='', list_status='L')
             if stocks is not None and not stocks.empty:
-                stock_codes = stocks['ts_code'].tolist()[:100]  # 限制100只股票
-                logger.info(f"  [财务指标] 逐只获取 {len(stock_codes)} 只股票")
+                # 484号：修复方案2进展 bug——原 [:100] 恒取前 100 只 + 428 P1-1 跳过
+                # 已有目标期者 → 每季度只有前 100 只拿到新报告期（fina 覆盖停滞实证）。
+                # 改全量遍历：已覆盖跳过、未覆盖累计至 100 只上限（防单轮打爆配额）。
+                stock_codes = stocks['ts_code'].tolist()
+                logger.info("  [财务指标] 逐只获取（全量遍历，未覆盖累计上限 100 只）")
 
                 fail = 0
+                _done = 0
                 for code in stock_codes:
                     # 428 P1-1：本地已有目标报告期则跳过（次新股/新披露补采走 API）
                     if _finance_covers_period('fina_indicator_cache', code, target):
                         n_skip += 1
                         continue
+                    if _done >= 100:
+                        break
                     try:
                         df = _ts(pro.fina_indicator, ts_code=code)
                         if df is not None and not df.empty:
@@ -1159,6 +1165,7 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
                             # 426号 P2-2：按写入结果计数，写失败不再虚报"完成 N 条"
                             if _ecm.cache_fina_indicator_data(latest):
                                 total += 1
+                                _done += 1
                             else:
                                 fail += 1
                     except Exception:
@@ -1443,12 +1450,107 @@ def _sync_single_top10_holders(code: int = 0) -> int:
     return 0
 
 
+# ── 484号（448 R）：股权质押 / 股东增减持 采集 ──────────────────────────
+# 质押：周频全市场统计，支持按 end_date 批量（全市场一期）或按股（全历史）。
+#   回填策略=批量最近 N 期 + 覆盖巡检按股兜底（441 D 通道②模式，防批量漏采）。
+# 减持：ann_date 维度，仅支持按股拉取（近 2 年窗口），走覆盖巡检按股补采。
+
+def _batch_pledge_stat(end_date: str = None) -> int:
+    """全市场股权质押统计回填（484-1）——按 end_date 批量（全市场该期）
+
+    end_date 为空时从今天回推最近 4 个周五逐个尝试（质押统计按周发布，有滞后）。
+    """
+    _ensure_pd()
+    provider = _get_tushare_provider()
+    total = 0
+    if end_date is None:
+        today = datetime.now()
+        fridays = []
+        d = today - timedelta(days=1)
+        while len(fridays) < 4:
+            if d.weekday() == 4:
+                fridays.append(d.strftime('%Y%m%d'))
+            d -= timedelta(days=1)
+    else:
+        fridays = [end_date]
+    for ed in fridays:
+        try:
+            raw = provider.get_pledge_stat(ts_code=None, end_date=ed)
+            if raw:
+                df = pd.DataFrame(raw)
+                if 'end_date' in df.columns:
+                    df['end_date'] = pd.to_datetime(df['end_date']).dt.date
+                _ecm.cache_pledge_stat_data(df)
+                total = len(df)
+                logger.info(f"  [股权质押] end_date={ed} 同步 {total} 条")
+                break  # 成功即止
+        except Exception as e:
+            logger.warning(f"  [股权质押] end_date={ed} 同步失败: {e}")
+    return total
+
+
+def _sync_single_pledge_stat(code: int = 0) -> int:
+    """单只股权质押补采（覆盖巡检用，按股拉全历史）"""
+    _ensure_ecm()
+    provider = _get_tushare_provider()
+    raw = provider.get_pledge_stat(ts_code=code)
+    if raw:
+        import pandas as _pd
+        df = _pd.DataFrame(raw)
+        if 'end_date' in df.columns:
+            df['end_date'] = _pd.to_datetime(df['end_date']).dt.date
+        _ecm.cache_pledge_stat_data(df)
+        return len(df)
+    return 0
+
+
+def _batch_stk_holdertrade(codes: list = None) -> int:
+    """股东增减持批量补采（484-2）——按股拉近 2 年，限 500 只/次"""
+    _ensure_pd()
+    provider = _get_tushare_provider()
+    if codes is None:
+        codes = _shard_fetchall('daily_cache', "SELECT DISTINCT ts_code FROM daily_cache")
+        codes = [r[0] for r in codes[:500]]
+    total = 0
+    for code in codes:
+        try:
+            raw = provider.get_stk_holdertrade(code)
+            if raw:
+                import pandas as _pd
+                df = _pd.DataFrame(raw)
+                if 'ann_date' in df.columns:
+                    df['ann_date'] = _pd.to_datetime(df['ann_date']).dt.date
+                _ecm.cache_stk_holdertrade_data(df)
+                total += len(df)
+        except Exception:
+            continue
+    logger.info(f"  [股东增减持] 批量同步 {total} 条 (共 {len(codes)} 只)")
+    return total
+
+
+def _sync_single_stk_holdertrade(code: int = 0) -> int:
+    """单只股东增减持补采（覆盖巡检用）"""
+    _ensure_ecm()
+    provider = _get_tushare_provider()
+    raw = provider.get_stk_holdertrade(code)
+    if raw:
+        import pandas as _pd
+        df = _pd.DataFrame(raw)
+        if 'ann_date' in df.columns:
+            df['ann_date'] = _pd.to_datetime(df['ann_date']).dt.date
+        _ecm.cache_stk_holdertrade_data(df)
+        return len(df)
+    return 0
+
+
 # 覆盖巡检表 → (cache表, 单只补采函数)
-# 与 batch_background 保持一致的三张表：非空表时逐 active_code 核对缺失并单只补采。
+# 与 batch_background 保持一致的表：非空表时逐 active_code 核对缺失并单只补采。
 _COVERAGE_RECONCILE = [
-    ('top10_holders_cache',  _sync_single_top10_holders,  '前十大股东'),
-    ('stk_holder_cache',     _sync_single_stk_holder,     '股东人数'),
-    ('finance_report_cache', _sync_single_finance,        '扩展财务'),
+    ('top10_holders_cache',     _sync_single_top10_holders,     '前十大股东'),
+    ('stk_holder_cache',        _sync_single_stk_holder,        '股东人数'),
+    ('finance_report_cache',    _sync_single_finance,           '扩展财务'),
+    ('pledge_stat_cache',       _sync_single_pledge_stat,       '股权质押'),
+    ('stk_holdertrade_cache',   _sync_single_stk_holdertrade,   '股东增减持'),
 ]
 
 
@@ -6941,6 +7043,14 @@ def _run_financial_sync():
         _batch_forecast()
     except Exception as e:
         logger.warning(f"业绩预告同步异常: {e}")
+    try:
+        _batch_pledge_stat()
+    except Exception as e:
+        logger.warning(f"股权质押同步异常: {e}")
+    try:
+        _batch_stk_holdertrade()
+    except Exception as e:
+        logger.warning(f"股东增减持同步异常: {e}")
     logger.info("财务数据同步完成")
 
 

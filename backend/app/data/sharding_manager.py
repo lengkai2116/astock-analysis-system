@@ -121,6 +121,9 @@ class ShardingManager:
             'top10_holders_cache': 'history_cache.db',
             'stk_holder_cache': 'history_cache.db',
             'finance_report_cache': 'history_cache.db',
+            # 484号（448 R）：股权质押/股东增减持（股东行为参考数据，与 top10/stk_holder 同族）
+            'pledge_stat_cache': 'history_cache.db',
+            'stk_holdertrade_cache': 'history_cache.db',
 
             # 356号方案：总库保留表（不属于任何分库）
             # 426号 落地复核修正（stocks）：实际表在 data/app.db（SQLAlchemy ORM 管理，

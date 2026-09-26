@@ -478,12 +478,16 @@ ts_code=ts_code,
     FINA_FIELDS_ORIGINAL = (
         'ts_code,end_date,ann_date,eps,eps_diluted,eps_ttm,bvps,roe,revenue_ps,profit_ps,cf_ps'
     )
+    # 484号：字段集订正（探针实证 2026-09-26）——移除 6 个非 fina_indicator 字段
+    #   （roce/operating_profit/total_assets/total_liab/current_assets/current_liab，请求即空/NULL，
+    #   原致 finance_report_cache 对应列恒 NULL）；补 roic/roa（真实可取的排雷指标）。
+    #   注：gross_margin 为「毛利额(元)」非「毛利率%」（茅台 2026H1=8.12e10≈收入×91.4%），
+    #   消费方若按比率展示须先换算，勿直接回填 fina_indicator_cache.gross_margin。
     FINA_FIELDS_EXTENDED = (
         'ts_code,end_date,ann_date,'
         'eps,eps_diluted,eps_ttm,bvps,roe,revenue_ps,profit_ps,cf_ps,'
-        'roce,quick_ratio,ocfps,current_ratio,'
-        'ebit,operating_profit,total_assets,total_liab,'
-        'current_assets,current_liab'
+        'quick_ratio,ocfps,current_ratio,asset_liab_ratio,'
+        'ebit,roic,roa,debt_to_assets'
     )
 
     def get_fina_indicator(self, ts_code, start_date=None, end_date=None):
@@ -591,6 +595,41 @@ ts_code=ts_code,
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取股东人数失败 ({ts_code}): {e}")
+            return []
+
+    def get_pledge_stat(self, ts_code, end_date=None):
+        """获取股权质押统计（参考数据，需3000积分；现 token 5000 已含）
+
+        按 ts_code 返回全历史周频质押统计；或传 end_date 取全市场该期。
+        """
+        if not self.pro:
+            return []
+        try:
+            kwargs = {'ts_code': ts_code} if ts_code else {}
+            if end_date:
+                kwargs['end_date'] = end_date
+            data = _ts(self.pro.pledge_stat, **kwargs)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取股权质押统计失败 ({ts_code or end_date}): {e}")
+            return []
+
+    def get_stk_holdertrade(self, ts_code, start_date=None, end_date=None):
+        """获取股东增减持（参考数据，需3000积分；现 token 5000 已含）
+
+        按 ts_code + ann_date 窗口（默认近 2 年）。
+        """
+        if not self.pro:
+            return []
+        try:
+            if start_date is None:
+                start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
+            if end_date is None:
+                end_date = datetime.now().strftime('%Y%m%d')
+            data = _ts(self.pro.stk_holdertrade, ts_code=ts_code, start_date=start_date, end_date=end_date)
+            return data.to_dict('records') if data is not None and not data.empty else []
+        except Exception as e:
+            logger.warning(f"获取股东增减持失败 ({ts_code}): {e}")
             return []
 
     def get_margin(self, ts_code, start_date=None, end_date=None):

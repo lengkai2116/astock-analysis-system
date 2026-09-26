@@ -4442,6 +4442,28 @@ class ChipPreFilter:
 # Phase 2: 六大禁区过滤器 + ROCE 指标接入
 # ═══════════════════════════════════════════════
 
+# 484号（448 I/S）：东财行业黑名单（政策限制/强监管——448 原文"房地产三条红线"）。
+#   口径=仅东财行业黑名单（用户拍板 2026-09-26，最小实现，可后续微调）；
+#   与 chip_pre_filter.py FinancialRiskFilter 双份同步（改需双侧同改）。
+INDUSTRY_RISK_BLACKLIST: frozenset = frozenset({
+    '全国地产', '区域地产', '房产服务', '园区开发', '装修装饰',
+})
+
+# 484号：行业 memo 缓存（ts_code→industry）——SIG 全市场逐只调用避免每只 ORM 查询风暴
+_INDUSTRY_MEMO: dict = {}
+
+
+def _get_stock_industry(data_manager, ts_code: str) -> str:
+    """按 ts_code 取东财行业（app.db stocks.industry），模块级 memo 缓存"""
+    if ts_code not in _INDUSTRY_MEMO:
+        try:
+            info = data_manager.get_stock_info(ts_code) if data_manager else None
+            _INDUSTRY_MEMO[ts_code] = (info or {}).get('industry') if info else None
+        except Exception:
+            _INDUSTRY_MEMO[ts_code] = None
+    return _INDUSTRY_MEMO[ts_code]
+
+
 class FinancialRiskFilter:
     """
     财务风险过滤器 — 覆盖六大禁区
@@ -4702,13 +4724,21 @@ class FinancialRiskFilter:
             return {'passed': True, 'reason': '', 'detail': f'检测异常: {e}'}
 
     def _check_industry_risk(self, ts_code: str) -> Dict:
-        """检查行业雷：基于行业分类"""
-        # 当前无行业分类数据API
-        # TODO: 接入行业分类数据后，检查:
-        #   - 政策限制行业（如房地产三条红线）
-        #   - 产能过剩行业
-        #   - 衰退期行业
-        return {'passed': True, 'reason': '', 'detail': '行业分类数据未接入，默认通过'}
+        """检查行业雷：仅东财行业黑名单（484号，448 I/S 落地）
+
+        stocks.industry（东财二级行业名）命中黑名单 → 行业雷；无行业/未命中 → 通过。
+        行业查询走 get_stock_info + 模块级 memo（全市场 SIG 逐只调用避免 ORM 风暴）。
+        """
+        try:
+            industry = _get_stock_industry(self.data_manager, ts_code)
+            if not industry:
+                return {'passed': True, 'reason': '', 'detail': '无行业分类数据，默认通过'}
+            if industry in INDUSTRY_RISK_BLACKLIST:
+                return {'passed': False, 'reason': f'行业雷：{industry}（政策限制/强监管）',
+                        'detail': f'行业分类={industry}，命中东财行业黑名单'}
+            return {'passed': True, 'reason': '', 'detail': f'行业分类={industry}，未命中黑名单'}
+        except Exception as e:
+            return {'passed': True, 'reason': '', 'detail': f'行业检测异常: {e}'}
 
 
 class ROCEIndicator:
