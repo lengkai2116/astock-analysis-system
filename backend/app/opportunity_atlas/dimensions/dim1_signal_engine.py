@@ -316,8 +316,9 @@ class Dim1SignalEngine:
                 return False
             return True
 
+        expected = required + optional
         loaded_keys = [k for k, v in data_context.items() if _is_valid(v)]
-        missing = [k for k in required + optional if k not in loaded_keys]
+        missing = [k for k in expected if k not in loaded_keys]
 
         # 日期对齐检查（仅对有trade_date列的DataFrame检查）
         date_alignment_ok = True
@@ -342,7 +343,11 @@ class Dim1SignalEngine:
                     elif _key_date != latest_date:
                         date_alignment_ok = False
 
-        completeness_score = len(loaded_keys) / (len(required) + len(optional))
+        # 461-14：完整度 = 期望清单(required+optional)中已载占比。分子只计期望键，
+        # 以免 data_context 另载的辅助键（weekly_df/hourly_df/relative_strength，均设计内
+        # 可降级/尽力而为）抬高分子致完整度 >1.0 不自洽。
+        _expected_set = set(expected)
+        completeness_score = len([k for k in loaded_keys if k in _expected_set]) / len(expected)
         quality_level = 'good' if not missing and date_alignment_ok else 'degraded'
         if not all(k in loaded_keys for k in required):
             quality_level = 'failed'
