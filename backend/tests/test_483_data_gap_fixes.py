@@ -212,3 +212,112 @@ class TestMinuteAggregate60min:
         ecm = _FakeECM(pd.DataFrame())
         assert aggregate_1min_to_60min(['000001.SZ'], ecm=ecm) == 0
         assert ecm.written is None
+
+
+class TestMarginCompletenessGate:
+    """③ 后续：交易日闸门 + 发布机制感知（排除最新交易日）+ 日历不可用回退"""
+
+    def test_recent_trading_days_skips_holidays(self):
+        """交易日历：中秋 9/25-27 与周末剔除，调休上班日 9/20 计入"""
+        import data_daemon as dd
+        from datetime import datetime as _dt
+        days = dd._recent_trading_days(6, end=_dt(2026, 9, 28))
+        assert days == ['2026-09-20', '2026-09-21', '2026-09-22',
+                        '2026-09-23', '2026-09-24', '2026-09-28']
+
+    def test_margin_is_short(self):
+        import data_daemon as dd
+        assert dd._margin_is_short(2002, 4451) is True      # 45% → 不足
+        assert dd._margin_is_short(4451, 4451) is False
+        assert dd._margin_is_short(4005, 4451) is False     # 恰在 90% 线上
+        assert dd._margin_is_short(100, 0) is False         # 无基准不判
+
+    def test_gate_skips_non_trading_day(self, monkeypatch):
+        """非交易日（如假期）→ 跳过且不触发任何回补"""
+        import data_daemon as dd
+        monkeypatch.setattr(dd, '_is_trading_day', lambda d: False)
+        monkeypatch.setattr(dd, '_margin_rows_on',
+                            lambda d: (_ for _ in ()).throw(AssertionError('不应查库')))
+        monkeypatch.setattr(dd, '_batch_margin',
+                            lambda d: (_ for _ in ()).throw(AssertionError('不应回补')))
+        assert dd._check_margin_completeness() == []
+
+    def test_window_excludes_latest_and_backfills_short_day(self, monkeypatch):
+        """交易日：排除最新交易日；仅回补不足的历史日（09-24）"""
+        import data_daemon as dd
+        calls = []
+        rows = {'2026-09-21': 4451, '2026-09-22': 4451,
+                '2026-09-23': 4451, '2026-09-24': 2002, '2026-09-28': 2002}
+        monkeypatch.setattr(dd, '_is_trading_day', lambda d: True)
+        monkeypatch.setattr(dd, '_recent_trading_days',
+                            lambda n, end=None: ['2026-09-21', '2026-09-22', '2026-09-23',
+                                                 '2026-09-24', '2026-09-28'])
+        monkeypatch.setattr(dd, '_shard_fetchall',
+                            lambda t, sql, params=None: [(d,) for d in rows])
+        monkeypatch.setattr(dd, '_margin_rows_on', lambda d: rows[d])
+        monkeypatch.setattr(dd, '_margin_base_before', lambda d: 4451)
+        monkeypatch.setattr(dd, '_batch_margin', lambda d: calls.append(d) or 2002)
+        fixed = dd._check_margin_completeness(window=4)
+        assert fixed == ['2026-09-24']
+        assert calls == ['20260924']          # 最新日 09-28 未被核对（发布窗口内）
+
+    def test_calendar_false_positive_filtered_by_market_data(self, monkeypatch):
+        """日历误标休市日（无行情）→ 被数据侧过滤，不回补"""
+        import data_daemon as dd
+        calls = []
+        monkeypatch.setattr(dd, '_is_trading_day', lambda d: True)
+        # 日历把 2026-09-20（实际休市）也列为交易日
+        monkeypatch.setattr(dd, '_recent_trading_days',
+                            lambda n, end=None: ['2026-09-20', '2026-09-21', '2026-09-23',
+                                                 '2026-09-24', '2026-09-28'])
+        # daily_cache 无 09-20、无 09-28（尚未采集）
+        monkeypatch.setattr(dd, '_shard_fetchall',
+                            lambda t, sql, params=None: [('2026-09-24',), ('2026-09-23',),
+                                                         ('2026-09-21',)])
+        monkeypatch.setattr(dd, '_margin_rows_on', lambda d: 4451)
+        monkeypatch.setattr(dd, '_margin_base_before', lambda d: 4451)
+        monkeypatch.setattr(dd, '_batch_margin', lambda d: calls.append(d) or 0)
+        fixed = dd._check_margin_completeness(window=4)
+        assert fixed == [] and calls == []    # 09-20 被过滤，09-23/24 完整
+
+    def test_simulated_post_holiday_checks_prev_trading_day(self, monkeypatch):
+        """模拟节后首日 2026-09-28：应复查 09-24（其发布窗口已过），当日仍排除"""
+        import data_daemon as dd
+        from datetime import datetime as _dt
+
+        class _FakeDT(_dt):
+            @classmethod
+            def now(cls, tz=None):
+                return _dt(2026, 9, 28, 10, 0)
+
+        calls = []
+        monkeypatch.setattr(dd, 'datetime', _FakeDT)
+        monkeypatch.setattr(dd, '_recent_trading_days',
+                            lambda n, end=None: ['2026-09-20', '2026-09-21', '2026-09-22',
+                                                 '2026-09-23', '2026-09-24', '2026-09-28'])
+        monkeypatch.setattr(dd, '_shard_fetchall',
+                            lambda t, sql, params=None: [('2026-09-24',), ('2026-09-23',),
+                                                         ('2026-09-22',), ('2026-09-21',)])
+        monkeypatch.setattr(dd, '_margin_rows_on',
+                            lambda d: 2002 if d == '2026-09-24' else 4451)
+        monkeypatch.setattr(dd, '_margin_base_before', lambda d: 4451)
+        monkeypatch.setattr(dd, '_batch_margin', lambda d: calls.append(d) or 4451)
+        fixed = dd._check_margin_completeness()
+        assert fixed == ['2026-09-24']
+        assert calls == ['20260924']      # 09-20（无行情）被过滤；09-28（当日）被排除
+
+    def test_calendar_unavailable_falls_back_to_db(self, monkeypatch):
+        """日历不可用 → 回退 DB 推导日期，仍执行核对（不静默跳过）"""
+        import data_daemon as dd
+        calls = []
+        monkeypatch.setattr(dd, '_is_trading_day', lambda d: True)
+        monkeypatch.setattr(dd, '_recent_trading_days', lambda n, end=None: [])
+        monkeypatch.setattr(dd, '_shard_fetchall',
+                            lambda t, sql, params=None: [('2026-09-24',), ('2026-09-23',),
+                                                         ('2026-09-22',)])
+        monkeypatch.setattr(dd, '_margin_rows_on',
+                            lambda d: 2002 if d == '2026-09-22' else 4451)
+        monkeypatch.setattr(dd, '_margin_base_before', lambda d: 4451)
+        monkeypatch.setattr(dd, '_batch_margin', lambda d: calls.append(d) or 2002)
+        fixed = dd._check_margin_completeness(window=2)
+        assert fixed == ['2026-09-22'] and calls == ['20260922']

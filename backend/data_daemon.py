@@ -1885,6 +1885,116 @@ def _shard_fetchall(table: str, sql: str, params=None):
     return _ecm.read_conn.execute(sql, params or []).fetchall()
 
 
+# ══════════════════════════════════════════════════════════
+# 483号 ③：融资融券行数完整性核对（发布机制感知 + 交易日闸门）
+# ══════════════════════════════════════════════════════════
+# 发布机制：上交所**当日**发布；深/北交所**次一交易日**发布 → 最新交易日按设计必然不足
+# （实例：2026-09-24 仅沪市 2002/常态 4451，其发布窗口 09-25 遇中秋假期顺延至 09-28）。
+# 故核对窗口**排除最新交易日**，只复查更早的交易日——既避免每日误报与重复回补，
+# 又保证「历史某日缺口」在日期推进后仍能被复查（只查最新日的实现会在日期推进后永久漏掉缺口）。
+# 交易日口径与全管道一致（app.utils.trading_hours.is_holiday，含周末/法定节假日/调休上班周末）；
+# 日历不可用时**回退 DB 推导日期**，绝不静默跳过核对。
+_MARGIN_SHORT_RATIO = 0.9      # 行数低于自基准该比例即判不足
+_MARGIN_CHECK_WINDOW = 5       # 复查最近 N 个交易日（不含最新交易日）
+_MARGIN_BASE_DAYS = 20         # 自基准：该日前 N 个交易日的当日行数峰值
+
+
+def _recent_trading_days(n: int, end=None) -> list:
+    """近 n 个交易日（升序，YYYY-MM-DD；含 end 当日，若为交易日）。
+
+    日历不可用（导入失败/缺当年配置）时返回 []，调用方须回退 DB 推导 —— 保证
+    日历异常时不会让核对被静默跳过（宁可多查，不可漏查）。
+    """
+    try:
+        from app.utils.trading_hours import is_holiday
+    except Exception as e:
+        logger.warning(f"  [融资融券] 交易日历不可用({e})，回退 DB 日期推导")
+        return []
+    end = end or datetime.now()
+    days = []
+    d = end
+    guard, limit = 0, n * 4 + 40      # 长假时最多回溯 4n+40 个自然日，防死循环
+    while len(days) < n and guard < limit:
+        if not is_holiday(d):
+            days.append(d.strftime('%Y-%m-%d'))
+        d = d - timedelta(days=1)
+        guard += 1
+    return list(reversed(days))
+
+
+def _margin_rows_on(date_fmt: str) -> int:
+    """某交易日 margin_cache 覆盖股票数"""
+    return _query_table('margin_cache',
+        "SELECT COUNT(DISTINCT ts_code) FROM margin_cache WHERE trade_date=?", [date_fmt])
+
+
+def _margin_base_before(date_fmt: str) -> int:
+    """自基准：该日之前 N 个交易日的当日覆盖峰值（0=无历史可比）"""
+    return _query_table('margin_cache',
+        "SELECT MAX(c) FROM (SELECT COUNT(DISTINCT ts_code) AS c FROM margin_cache "
+        "WHERE trade_date<? GROUP BY trade_date ORDER BY trade_date DESC LIMIT ?)",
+        [date_fmt, _MARGIN_BASE_DAYS])
+
+
+def _margin_is_short(actual: int, base: int) -> bool:
+    """行数是否不足（自基准的 _MARGIN_SHORT_RATIO 以下）—— 纯判定，便于单测"""
+    return bool(base) and actual < int(base * _MARGIN_SHORT_RATIO)
+
+
+def _check_margin_completeness(window: int = _MARGIN_CHECK_WINDOW) -> list:
+    """复查近期交易日 margin 行数完整性，返回被回补的日期列表（YYYY-MM-DD）。
+
+    - **交易日闸门**：非交易日直接跳过（此时最新交易日的深/北交所数据仍在发布窗口内，
+      核对无意义；同时避免假期/周末空跑巡检）。
+    - **窗口排除最新交易日**：复查其前的 window 个交易日。
+    """
+    if not _is_trading_day(datetime.now()):
+        logger.info("  [融资融券] 非交易日，跳过行数完整性核对")
+        return []
+    cal_days = _recent_trading_days(window + 1)
+    # 数据侧交叉校验：只核对「日历判为交易日 **且** daily_cache 确有行情」的日期 ——
+    # 防日历误标（把休市日列为调休上班日等）导致对无行情日期反复回补。
+    try:
+        _rows = _shard_fetchall('daily_cache',
+            "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT ?",
+            [window * 3 + 10])
+        db_days = sorted(str(r[0]) for r in _rows)
+    except Exception as e:
+        logger.warning(f"  [融资融券] 行情日期读取失败({e})，仅用日历日期")
+        db_days = None
+    if cal_days and db_days is not None:
+        _have = set(db_days)
+        days = [d for d in cal_days if d in _have]
+    elif cal_days:
+        days = cal_days                      # 行情表不可用 → 仅用日历（不静默跳过）
+    elif db_days is not None:
+        days = db_days[-(window + 1):]       # 日历不可用 → 用行情表推导
+    else:
+        logger.warning("  [融资融券] 日历与行情日期均不可用，跳过行数核对")
+        return []
+    if not days:
+        return []
+    # 排除「最新交易日」——**按日历**取（而非库里最新在场日）：最新交易日的深/北交所数据
+    # 处于发布窗口内（次一交易日发布），核对无意义；用日历口径可保证「节后首个交易日
+    # 复查上一个交易日（如 09-24）」，不会被库内数据的新旧程度影响。
+    _latest = cal_days[-1] if cal_days else days[-1]
+    targets = [d for d in days if d != _latest]
+    if not targets:
+        return []
+    fixed = []
+    for d in targets:
+        base = _margin_base_before(d)
+        actual = _margin_rows_on(d)
+        if _margin_is_short(actual, base):
+            logger.info(f"  [融资融券] {d} 行数不足 {actual}/{base}（<{int(_MARGIN_SHORT_RATIO*100)}%），回补...")
+            added = _batch_margin(str(d).replace('-', ''))
+            logger.info(f"    → 回补 {added} 条")
+            fixed.append(d)
+    if not fixed:
+        logger.info(f"  [融资融券] 近 {len(targets)} 个交易日行数完整 ✅")
+    return fixed
+
+
 def run_integrity_check(backfill_days: int = 1):
     """启动/巡检时执行：检查缺失数据并用批量 API 补采"""
     _ensure_pd()
@@ -1981,19 +2091,8 @@ def run_integrity_check(backfill_days: int = 1):
                 logger.info(f"    → 范围补采 {added} 条 ({start_date} ~ {today})")
             else:
                 logger.info(f"  [融资融券] 最新 {margin_latest}，滞后 {days_lag} 天 ✅")
-                # 483号 ③a：滞后未超阈值时仍核对「最新交易日行数」完整性——原实现只看
-                # MAX(trade_date) 滞后，部分入库（如 2026-09-24 仅 2002/常态4451）永不回补。
-                _cnt = _query_table('margin_cache',
-                    "SELECT COUNT(DISTINCT ts_code) FROM margin_cache WHERE trade_date=?",
-                    [margin_latest])
-                _base = _query_table('margin_cache',
-                    "SELECT MAX(c) FROM (SELECT COUNT(DISTINCT ts_code) AS c FROM margin_cache "
-                    "WHERE trade_date<? GROUP BY trade_date ORDER BY trade_date DESC LIMIT 20)",
-                    [margin_latest])
-                if _base and _cnt < int(_base * 0.9):
-                    logger.info(f"  [融资融券] 最新 {margin_latest} 行数不足 {_cnt}/{_base}（<90%），回补...")
-                    added = _batch_margin(_date_str)
-                    logger.info(f"    → 回补 {added} 条")
+        # 483号 ③a：近期交易日行数完整性核对（交易日闸门 + 发布机制感知，详见函数注释）
+        _check_margin_completeness()
     except Exception as e:
         logger.warning(f"  融资融券检查失败: {e}")
 
