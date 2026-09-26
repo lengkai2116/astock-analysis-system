@@ -3,7 +3,7 @@ title: dim3 量价计算链路简化与 RAW 预计算未消费核查 + SIG→RAW
 type: 核查记录 + 实施方案
 date: 2026-09-16
 version: v1.0
-status: ✅ R1-R7 已实施、R8 待 437-A 拍板（2026-09-16 全量完成：R1 bug 修复 / R2 cost_ext / R3 无缺口关闭 / R4 维持现状关闭 / R5 删除 / R6 修复 / R7 双份收敛；R8 依赖 437-A D1-D7 未拍板）
+status: ✅ R1-R7 已实施、R8 待 437-A 拍板（2026-09-16 全量完成：R1 bug 修复 / R2 cost_ext / R3 无缺口关闭 / R4 维持现状关闭 / R5 删除 / R6 修复 / R7 双份收敛；R8 依赖 437-A D1-D7 未拍板）；**三问全部关闭（2026-09-26：问题3 已由 R7 收敛；问题1/2 维持现状——464 dim3 定稿+479-3 后已无实施动机）**
 related:
   - 410-dim2-dim7层数据分层审计与RAW前置计算迁移方案
   - 411-维度引擎统一实施计划（407-410整合）
@@ -55,26 +55,31 @@ RAW-2 预计算（data_daemon.py:3227）         SIG evaluate（dim3_vp_engine.p
 
 ## 二、三个待跟进问题
 
+> **✅ 三问全部关闭（2026-09-26 只读复核 + 用户拍板）**：
+> - **问题1** → **维持现状关闭**：health_score 已由 464 dim3 定稿判「迁 JUD（439 同批）」且 479-1 清出 dim8 T 表——不再是 dim8 素材；改其成分属判定逻辑（445 冻结边界）+ 439-A 推迟范围，JUD 定型前不宜动。
+> - **问题2** → **维持现状关闭**：RAW-2 量价已由 479-3 A5/A8 从 6 扩至 **9 字段**（+vp_state_label/vp_rule/divergence 三字段）；464 dim3 定稿补产出已全实现，momentum/共振**不在定稿输出键**（dim8 不消费）；「分位序列预计算」（412 P6 完整落地）443 附录已登记建议另开号、与 437-A R8 联动。
+> - **问题3** → **已由 R7 收敛关闭**（2026-09-16）：dim3 删 4508 行 vendored 块（4760→252 行，现 432 行含 479-3 增量），framework 权威；§二问题3 原「方向待决策」为陈旧标注。
+
 ### 问题 1：health_score 精度降级（440 号简化改动的隐性代价）
 
 - dim3 evaluate 用**粗拼公式**：`hs = (vp_score + ve + ms + cs + is_ + dp + pattern_deviation + 4)/12*10`（dim3:4600-4630）
 - 只用了量比/均线/筹码/RSI/形态 6 个标签；**完整 analyze 里的动量(momentum)、共振评分(resonance_score)、三定律、供需、假突破等维度全部未进入该分**
 - 影响：`health_score`（健康度 8/10）从完整量价分析降级为标签近似
-- **方向待决策**：a) 把完整 analyze 的 momentum/resonance 等接回 hs 计算；b) 维持现状并在现状描述中说明口径
+- ~~**方向待决策**~~ **✅ 关闭（2026-09-26）：维持现状**——①hs 属判定逻辑（445 冻结边界），且 464 定稿「health_score/pattern_score 迁 JUD（439 同批）」+ 479-1 已清出 dim8 T 表 → 不再是 dim8 素材；②JUD 定型前改成分必返工；③接回 momentum 需联动问题2（RAW-2 扩字段），应一并放 JUD 阶段。现状公式已含 446 RPS 加分/450 背离扣分/形态偏差，非失真。
 
 ### 问题 2：RAW-2 量价持久化仅 6 字段，30+ 字段算完即弃
 
 - 完整 analyze 的 stage/momentum/entry_zone/target_zone/three_laws/fake_breakout/supply_demand/state_machine_* 均已算出但**未持久化**（data_daemon.py:3237-3246 只存 6 字段）
 - 这是 399 号 P1「22 个核心字段未消费」在 440 后的延续形态：从"evaluate 不输出"变成"RAW 不持久化"
 - **影响**：dim8 现状描述要恢复完整量价素材（stage/动量/入场区间等），需先改 RAW-2 持久化契约
-- **方向待决策**：a) RAW-2 扩持久化字段；b) 维持 6 字段，dim8 不追求完整量价素材
+- ~~**方向待决策**~~ **✅ 关闭（2026-09-26）：维持现状**——①现状已 9 字段（479-3 A5/A8 补 vp_state_label/vp_rule/divergence_type/confidence/macd_confirmed）；②464 dim3 定稿补产出已全实现，momentum/共振不在定稿输出键，dim8 素材按定稿已齐；③「分位序列预计算」（412 P6 完整落地，省 SIG 实时分位 CPU）443 附录已登记建议另开号，与 437-A R8 联动。
 
 ### 问题 3：dim3 内联 vendored 双份（与 434 号收敛的 dim2 缠论双份同模式）
 
 - `dim3_vp_engine.py:4147` 内联了整份 `VolumePriceStrategy` + `:4298` `compute_volume_price_signal`（vendored 副本）
 - 当前 evaluate **不调用**内联版；`compute_volume_price_signal` 仅测试引用（test_dim3_patterns.py）
 - 与 `app/engine/framework/volume_price_strategy.py` 形成**双份**（类似 dim2 缠论双份，434 号已收敛 dim2，dim3 量价双份未收敛）
-- **方向待决策**：参照 434 号流程审计差异 → 收敛（framework 权威 + dim3 回归 import）
+- ~~**方向待决策**~~ **✅ 已由 R7 收敛关闭（2026-09-16）**：434 式差异审计（双份远超方案假设：vendored 整份 volume_price_strategy ~4300 行 + kline_pattern）→ framework 回迁 412 增强（权威，零行为变更）→ dim3 删 4508 行 vendored 块（4760→252 行，现 432 行含 479-3 增量）。详见 §九 R7。附带消除 dim3 版 EPD `prev_ma` bug 与 `volume_ext=` 恒 TypeError 潜伏 bug。
 
 ---
 
@@ -85,11 +90,11 @@ RAW-2 预计算（data_daemon.py:3227）         SIG evaluate（dim3_vp_engine.p
 
 ---
 
-## 四、建议后续动作（待拍板）
+## 四、建议后续动作（✅ 2026-09-26 三问全部关闭，本节作废）
 
-1. 确认问题 1 方向（hs 精度恢复 or 口径说明）
-2. 确认问题 2 方向（RAW-2 扩字段 or 维持）——若扩字段，为 437-A dim8 完整量价素材前置
-3. 确认问题 3 方向（434 式收敛审计）——建议纳入后续"维度引擎双份收敛"批次
+1. ~~确认问题 1 方向~~ → **维持现状关闭**（hs 迁 JUD 属 439-A/445 冻结，JUD 定型前不动）
+2. ~~确认问题 2 方向~~ → **维持现状关闭**（479-3 已扩 9 字段满足 dim3 定稿；分位序列预计算另开号）
+3. ~~确认问题 3 方向~~ → **已由 R7 收敛关闭**（2026-09-16）
 
 ---
 
@@ -374,3 +379,16 @@ dim4 同型：399 号 35 字段中的 cost_asr/cost_cyqkl/cost_profit_ratio/phas
 - pytest 相关套件：**93 passed**（2026-09-16 最终全量：test_411_pipeline / test_396_dim2_engine / test_419_dim5_compliance / test_dim3_patterns / test_436_b3_sandbox / test_442_vs_indicator / test_442_margin / test_443_r2_cost_ext / test_t63_breakout / test_426_phase2_structure；含 R1-R7 全部改动后重跑）
 - make check：backend 无 Makefile（方案泛指），以 pytest 全量为准
 - 文档头部 status 更新：✅ R1-R7 已实施、R8 待 437-A 拍板（v1.0）
+
+## 三问关闭登记（2026-09-26，只读复核 + 用户拍板）
+
+对 §二 三个待跟进问题做现状只读复核（443 后经历 446/450/455/464/467/479-3 等 dim3 改造），结论**全部关闭**：
+
+| 问题 | 关闭结论 | 依据 |
+|---|---|---|
+| **问题1** health_score 精度降级 | **维持现状关闭** | ①health_score 已由 464 dim3 定稿判「迁 JUD（439 同批）」+ 479-1 清出 dim8 T 表 → 不再是 dim8 素材；②改其成分属判定逻辑（445 冻结边界）+ 439-A 推迟，JUD 定型前动必返工；③接回 momentum 需联动问题2（RAW-2 扩字段），应一并放 JUD 阶段。现状公式含 446 RPS 加分/450 背离扣分/形态偏差，非失真 |
+| **问题2** RAW-2 量价持久化仅 6 字段 | **维持现状关闭** | ①479-3 A5/A8 已从 6 扩至 **9 字段**（+vp_state_label/vp_rule/divergence 三字段，实测 data_daemon features['volume_price'] 9 键）；②464 dim3 定稿补产出已全实现，momentum/共振不在定稿输出键 → dim8 素材按定稿已齐、不消费；③「分位序列预计算」（412 P6 完整落地）443 §五附录已登记建议另开号，与 437-A R8 联动 |
+| **问题3** dim3 内联 vendored 双份 | **已由 R7 收敛关闭** | R7（2026-09-16）434 式审计收敛：dim3 删 4508 行 vendored 块（4760→252 行，现 432 行含 479-3 增量），framework 权威；§二问题3 原「方向待决策」为陈旧标注（R7 已选收敛方向）；附带消除 dim3 版 EPD `prev_ma` bug 与 `volume_ext=` 恒 TypeError 潜伏 bug |
+
+**复核实证**：`dim3_vp_engine.py` 现 432 行（无 `VolumePriceStrategy` 类/vendored 代码，仅留 dim3 独有 `_classify_granville` 等）；`features['volume_price']`（data_daemon:3806）9 字段；framework `AnalysisResult.to_dict` 仍含 momentum/resonance/three_laws（算完即弃确认）。
+**登记**：本节为三问关闭权威记录；R8 仍待 437-A D1-D7 拍板（另号），不属三问范围。
