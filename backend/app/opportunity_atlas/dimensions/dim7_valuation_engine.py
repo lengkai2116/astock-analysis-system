@@ -551,12 +551,29 @@ class Dim7ValuationEngine(DataAwareMixin):
                     ps_pct = round((ps < ps.iloc[-1]).sum() / len(ps) * 100, 1)
 
         fcf_yield = None
-        if not df_cf.empty and 'free_cashflow' in df_cf.columns:
-            fcf = df_cf['free_cashflow'].dropna()
-            if not fcf.empty and 'total_mv' in df_basic.columns:
+        # 487号（P2-3）：与 VE.compute_tags 同口径——金融类 FCF 不适用（四锚恒 0）→ None 降级跳过；
+        # 非金融优先「经营资产FCF=经营现金流−折旧摊销」（449 口径），缺则回退教科书 free_cashflow。
+        if cat != '金融':
+            _fcf = None
+            if not df_cf.empty:
+                _cfs = df_cf.sort_values('end_date', ascending=False)
+                if 'cashflow_oper' in _cfs.columns and 'depr_fa_coga_dpba' in _cfs.columns:
+                    _r0 = _cfs.iloc[0]
+                    _op, _depr = _r0.get('cashflow_oper'), _r0.get('depr_fa_coga_dpba')
+                    try:
+                        if _op is not None and _depr is not None and _op == _op and _depr == _depr:
+                            _fcf = float(_op) - float(_depr)
+                    except (TypeError, ValueError):
+                        _fcf = None
+                if _fcf is None and 'free_cashflow' in _cfs.columns:
+                    _cf = _cfs['free_cashflow'].dropna()
+                    if not _cf.empty:
+                        _fcf = float(_cf.iloc[0])
+            if _fcf is not None and not df_basic.empty and 'total_mv' in df_basic.columns:
                 mv = df_basic['total_mv'].dropna()
                 if not mv.empty and mv.iloc[-1] > 0:
-                    fcf_yield = round(fcf.iloc[0] / (mv.iloc[-1] * 1e4) * 100, 4)
+                    # total_mv 单位为万元、现金流单位为元——换算对齐（476 D3 口径）
+                    fcf_yield = round(_fcf / (mv.iloc[-1] * 1e4) * 100, 4)
 
         div_yield = None
         if not df_basic.empty and 'dv_ttm' in df_basic.columns:
@@ -680,7 +697,9 @@ class Dim7ValuationEngine(DataAwareMixin):
         level_cn = LEVEL_CN.get(level, '未知')
         pe_str = f"{val['pe_percentile_5y']}%" if val['pe_percentile_5y'] is not None else '无数据'
         pb_str = f"{val['pb_percentile_5y']}%" if val['pb_percentile_5y'] is not None else '无数据'
-        fcf_str = f"{val['fcf_yield']}%" if val['fcf_yield'] is not None else '无数据'
+        # 487号（P2-3）：fcf 不适用（金融类/无数据）时整键置 None——dim8 `_get` 判空跳过，
+        #   不再输出"自由现金流收益率无数据"（437 缺则降级；与四锚金融=0 口径一致）
+        fcf_str = f"{val['fcf_yield']}%" if val['fcf_yield'] is not None else None
         div_str = f"{val['dividend_yield']}%" if val['dividend_yield'] is not None else '无数据'
         strength = potential['signal_strength']
 
@@ -692,7 +711,7 @@ class Dim7ValuationEngine(DataAwareMixin):
             'pe_percentile_5y': val['pe_percentile_5y'],
             'pb_percentile_5y': val['pb_percentile_5y'],
             'ps_percentile_5y': val['ps_percentile_5y'],
-            'fcf_yield': f"自由现金流收益率{fcf_str}",
+            'fcf_yield': f"自由现金流收益率{fcf_str}" if fcf_str is not None else None,
             'dividend_yield': f"股息率{div_str}",
             'revenue_growth': f"营收同比增长{val['revenue_growth']}%" if val['revenue_growth'] is not None else '营收数据缺失',
             'fina_health': f"财务健康{'✅' if val['fina_health'] == 'pass' else '⚠️' if val['fina_health'] == 'suspicious' else '🚫'}({val['fina_health']})",

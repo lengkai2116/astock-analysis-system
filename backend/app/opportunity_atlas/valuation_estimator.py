@@ -912,15 +912,31 @@ class ValuationEngine(DataAwareMixin):
                     ps_pct = round((ps < ps.iloc[-1]).sum() / len(ps) * 100, 1)
 
         # ── FCF收益率 / 股息率 ──
+        # 487号（P2-3）：展示段与四锚 `_anchor_cashflow` 同口径——金融类 FCF 不适用（锚恒 0）
+        #   → 展示 None（dim8 缺则降级跳过，不再显示"无数据"）；非金融优先「经营资产FCF=
+        #   经营现金流−折旧摊销」（449 口径），缺则回退教科书 free_cashflow。
         fcf_yield = None
-        if not df_cf.empty and 'free_cashflow' in df_cf.columns:
-            fcf = df_cf['free_cashflow'].dropna()
-            if not fcf.empty and 'total_mv' in df_basic.columns:
+        if cat != '金融':
+            _fcf = None
+            if not df_cf.empty:
+                _cfs = df_cf.sort_values('end_date', ascending=False)
+                if 'cashflow_oper' in _cfs.columns and 'depr_fa_coga_dpba' in _cfs.columns:
+                    _r0 = _cfs.iloc[0]
+                    _op, _depr = _r0.get('cashflow_oper'), _r0.get('depr_fa_coga_dpba')
+                    try:
+                        if _op is not None and _depr is not None and _op == _op and _depr == _depr:
+                            _fcf = float(_op) - float(_depr)
+                    except (TypeError, ValueError):
+                        _fcf = None
+                if _fcf is None and 'free_cashflow' in _cfs.columns:
+                    _cf = _cfs['free_cashflow'].dropna()
+                    if not _cf.empty:
+                        _fcf = float(_cf.iloc[0])
+            if _fcf is not None and not df_basic.empty and 'total_mv' in df_basic.columns:
                 mv = df_basic['total_mv'].dropna()
                 if not mv.empty and mv.iloc[-1] > 0:
-                    # 2026-08-10 核查修复：daily_basic.total_mv 单位为万元，
-                    # free_cashflow 单位为元——换算对齐再除，消除 1e4 放大
-                    fcf_yield = round(fcf.iloc[0] / (mv.iloc[-1] * 1e4) * 100, 4)
+                    # daily_basic.total_mv 单位为万元、free_cashflow/oper 单位为元——换算对齐
+                    fcf_yield = round(_fcf / (mv.iloc[-1] * 1e4) * 100, 4)
 
         div_yield = None
         if not df_basic.empty and 'dv_ttm' in df_basic.columns:

@@ -147,15 +147,23 @@ class TestBiZsModeAlignment:
         assert analyzer.config.multi_level.bi_zs_mode is False
 
     def test_daily_level_uses_bi_zs_mode_true(self):
-        """466号：多级别联立的 daily 级别覆盖为笔中枢，weekly/hourly 保持线段中枢。"""
-        captured = {}
+        """466号+487号：多级别联立的 daily 级别覆盖为笔中枢，weekly/hourly 保持线段中枢。
+
+        487号（P2-1）：daily 与 dim2 主链同构——主链用 `ChanlunAnalyzer({'bi_zs_mode': True})`
+        字典构造（min_klines=6 默认），multi_level daily 原用 ChanlunConfig 对象（min_klines=4）
+        → 笔/中枢识别分叉（000001 实证 5 vs 10、方向相反）。现 daily 同用字典（bi_zs_mode=True），
+        weekly/hourly 仍用 ChanlunConfig（线段中枢）。
+        """
+        captured = []
 
         def _spy_config(config=None, **kw):
-            captured['bi_zs_mode'] = config.multi_level.bi_zs_mode
             from app.engine.framework.chanlun_strategy import ChanlunAnalyzer as _CA
             _real = _CA(config=config)
-            # 记录该分析器生效的 bi_zs_mode
-            captured['analyzer_bi_zs_mode'] = _real.bi_zs_mode
+            # 记录该分析器生效的 bi_zs_mode + 配置形态（dict=主链同构 / ChanlunConfig=线段中枢）
+            captured.append({
+                'analyzer_bi_zs_mode': _real.bi_zs_mode,
+                'config_is_dict': isinstance(config, dict),
+            })
             return _real
 
         with mock.patch.object(
@@ -167,8 +175,12 @@ class TestBiZsModeAlignment:
                 'daily': make_klines(rows=130, seed=1),
                 'weekly': make_klines(rows=130, seed=2),
             })
-        # 最后一次构造（daily，按 levels 顺序 weekly→daily）应生效 bi_zs_mode=True
-        assert captured.get('analyzer_bi_zs_mode') is True
+        # daily 构造（最后一次）应生效 bi_zs_mode=True 且与主链同构（字典配置）
+        assert captured[-1].get('analyzer_bi_zs_mode') is True
+        assert captured[-1].get('config_is_dict') is True
+        # weekly（非 daily）保持线段中枢（ChanlunConfig，bi_zs_mode=False）
+        assert captured[0].get('analyzer_bi_zs_mode') is False
+        assert captured[0].get('config_is_dict') is False
 
 
 class TestDim1LoaderInjection:

@@ -88,11 +88,12 @@ class MultiLevelChanlunAnalyzer:
                 # 466号：日线切笔中枢（对齐 dim2 主链），周/时线保持线段中枢
                 #   （知识库：中长线用线段中枢、短线用笔中枢；日线笔中枢缓解"无有效中枢"）。
                 # 每级各自实例化分析器，daily 覆盖 bi_zs_mode=True，其余沿用 config 默认。
+                # 487号（P2-1）：daily 必须与 dim2 主链同构——主链用 `ChanlunAnalyzer({'bi_zs_mode': True})`
+                #   字典构造（min_klines=6 默认）；原 ChanlunConfig 对象构造走 bi 分支 min_klines=4
+                #   → 笔/中枢识别分叉（000001 实证：中枢 5 vs 10、有效中枢不同、日线方向相反）。
+                #   此处与主链同用字典配置，消除"多级别：日线下降趋势"vs"缠论方向：上升"段内矛盾。
                 if level == 'daily':
-                    _lv_cfg = dataclasses.replace(
-                        self.config, multi_level=dataclasses.replace(
-                            self.config.multi_level, bi_zs_mode=True))
-                    analyzer = ChanlunAnalyzer(config=_lv_cfg)
+                    analyzer = ChanlunAnalyzer({'bi_zs_mode': True})
                 else:
                     analyzer = ChanlunAnalyzer(config=self.config)
                 result = analyzer.analyze(df)
