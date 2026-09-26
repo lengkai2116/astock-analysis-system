@@ -205,6 +205,7 @@ class TestEnsureBenchmarks:
 class TestSsotOverrides:
     def _mk(self, monkeypatch, tags):
         from app.opportunity_atlas.dimensions import dim7_valuation_engine as mod
+        from app.opportunity_atlas.valuation_estimator import ValuationEngine
 
         ecm = _FakeECM({}, basic={}, cf={})
 
@@ -212,6 +213,9 @@ class TestSsotOverrides:
             cache = ecm
 
         monkeypatch.setattr(mod.Dim7ValuationEngine, '_get_dm', lambda self: FakeDM())
+        # 476号收敛：_compute_valuation 内部委托 ValuationEngine——mock 其 _fina_health 免真实库
+        monkeypatch.setattr(ValuationEngine, '_fina_health',
+                            lambda self, ts_code: ('pass', True, False, pd.DataFrame()))
         # 数据加载全空 → 实算 composite=0；行业查询不炸
         monkeypatch.setattr('app.data.DataManager.get_stock_industry', lambda self, c: None)
         return mod.Dim7ValuationEngine()

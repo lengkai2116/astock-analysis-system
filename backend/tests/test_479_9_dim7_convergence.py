@@ -59,14 +59,15 @@ class _FakeECMForCompute:
 
 def _mk_engine(monkeypatch):
     from app.opportunity_atlas.dimensions import dim7_valuation_engine as mod
+    from app.opportunity_atlas.valuation_estimator import ValuationEngine
 
     ecm = _FakeECMForCompute()
     monkeypatch.setattr(mod.Dim7ValuationEngine, '_get_dm', lambda self: type('DM', (), {'cache': ecm})())
     monkeypatch.setattr('app.data.DataManager.get_stock_industry', lambda self, c: None)
-    # 锚方法返回 0
-    for m in ('_anchor_pb', '_anchor_earnings', '_anchor_cashflow',
-              '_anchor_adjusted_pe', '_anchor_bond_stock', '_adjust_composite'):
-        pass
+    # 476号收敛：_compute_valuation 内部委托 ValuationEngine 实例——mock 其 _fina_health
+    # （否则 fallback 走真实 DataManager 查询，测试变真实库依赖）
+    monkeypatch.setattr(ValuationEngine, '_fina_health',
+                        lambda self, ts_code: ('pass', True, False, pd.DataFrame()))
     return mod.Dim7ValuationEngine()
 
 
@@ -158,25 +159,31 @@ class TestStatusDescription5yKeys:
 # ══════════════════════════════════════════════════════════
 
 class TestFinaHealthNoneGuard:
-    def test_ecm_none_does_not_raise(self, monkeypatch):
-        """ecm=None → _fina_health 不抛 AttributeError，返回 (health,roce_pass,roce_na) 缺省值"""
-        from app.opportunity_atlas.dimensions import dim7_valuation_engine as mod
+    """476号收敛后：dim7 无 _fina_health，权威实现在 ValuationEngine（_get_dm 内部兜底 None）"""
 
-        eng = mod.Dim7ValuationEngine()
-        # tags 缺失路径触发 _fina_health(ts_code, None)
+    def test_valuation_engine_fina_health_none_guard(self, monkeypatch):
+        """VE._fina_health 不抛异常，返回 4 元组 (health,roce_pass,roce_na,df_fina)"""
+        from app.opportunity_atlas.valuation_estimator import ValuationEngine
+
         monkeypatch.setattr('app.data.DataManager.get_stock_industry', lambda self, c: None)
-        health, roce_pass, roce_na = eng._fina_health('600519.SH', None)
+        health, roce_pass, roce_na, df_fina = ValuationEngine()._fina_health('600519.SH')
         assert health in ('pass', 'suspicious', 'fail')
         assert isinstance(roce_pass, bool) and isinstance(roce_na, bool)
 
-    def test_ecm_valid_none_still_works(self, monkeypatch):
-        """正常 ecm 传入 → 逻辑不变（回归防护）"""
+    def test_dim7_fallback_via_delegation(self, monkeypatch):
+        """dim7 _compute_valuation tags 缺失 → 委托 VE._fina_health（4 元组解包），不抛"""
         from app.opportunity_atlas.dimensions import dim7_valuation_engine as mod
+        from app.opportunity_atlas.valuation_estimator import ValuationEngine
 
-        eng = mod.Dim7ValuationEngine()
-        monkeypatch.setattr('app.data.DataManager.get_stock_industry', lambda self, c: None)
-        health, roce_pass, roce_na = eng._fina_health('600519.SH', _FakeECMForCompute())
-        assert health in ('pass', 'suspicious', 'fail')
+        monkeypatch.setattr(ValuationEngine, '_fina_health',
+                            lambda self, ts_code: ('pass', True, False, pd.DataFrame()))
+        eng = _mk_engine(monkeypatch)
+        ecm = eng._get_dm().cache
+        val = eng._compute_valuation('600519.SH', ecm, tags={})
+        # 空表兜底路径应正常返回（不含 _5y 分位）
+        assert val['pe_percentile_5y'] is None
+        assert val['pb_percentile_5y'] is None
+        assert val['ps_percentile_5y'] is None
 
 
 # ══════════════════════════════════════════════════════════

@@ -18,7 +18,7 @@ import pandas as pd
 import pytest
 
 from app.opportunity_atlas.dimensions.dim7_valuation_engine import (
-    Dim7ValuationEngine, _category, _pe_percentile,
+    Dim7ValuationEngine, _category,
 )
 from app.opportunity_atlas.valuation_estimator import ValuationEngine as VAL_Engine
 
@@ -91,53 +91,12 @@ class _FakeECM_FULL:
 
 # ─────────────────────────────────────────────
 # 2. 成长陷阱：_anchor_earnings 返回 peg_gt2
+#    （476 收敛后 dim7 委托 valuation_estimator——dim7 版测试删除，
+#      权威实现见下方 test_val_estimator_anchor_earnings_tuple）
 # ─────────────────────────────────────────────
 
-def test_anchor_earnings_peg_gt2_flag():
-    """PEG>2 → 返回 (score, peg_gt2=True)"""
-    eng = Dim7ValuationEngine()
-    # PE 60x、净利润同比 25% → PEG=60/(0.25*100)=2.4 > 2
-    df_basic = _basic([60.0]*25)
-    df_income = _income([200, 160, 140], [10, 8, 7])  # 2026/2025 净利 10 vs 8 → +25%
-    score, peg_gt2 = eng._anchor_earnings(df_basic, df_income)
-    assert peg_gt2 is True, f"PEG>2 应标记 peg_gt2=True, 实际 {peg_gt2}"
-
-
-def test_anchor_earnings_peg_within_flag_false():
-    """PEG<=2 → peg_gt2=False"""
-    eng = Dim7ValuationEngine()
-    # PE 20x、净利润同比 80% → PEG=20/(0.8*100)=0.25 <= 2
-    df_basic = _basic([20.0]*25)
-    df_income = _income([200, 120, 100], [10, 5.5, 5.0])  # 10 vs 5.5 → +82%
-    score, peg_gt2 = eng._anchor_earnings(df_basic, df_income)
-    assert peg_gt2 is False, f"PEG<=2 不应标记, 实际 peg_gt2={peg_gt2}"
-
-
-# ─────────────────────────────────────────────
-# 4. _fina_health 三态（roce_na）
-# ─────────────────────────────────────────────
-
-def test_fina_health_roce_na_no_data():
-    """无任何 ROCE 数据 → roce_na=True（不触发价值陷阱惩罚）"""
-    eng = Dim7ValuationEngine()
-    health, roce_pass, roce_na = eng._fina_health('000001.SZ', _FakeECM())
-    assert roce_na is True, f"无数据 roce_na 应为 True, 实际 {roce_na}"
-
-
-def test_fina_health_roce_na_data_low():
-    """有 ROCE 数据且 <15% → roce_na=False, roce_pass=False（触发惩罚）"""
-    eng = Dim7ValuationEngine()
-    health, roce_pass, roce_na = eng._fina_health('000001.SZ', _FakeECM_FULL([8.0, 9.0, 10.0]))
-    assert roce_na is False, f"有数据 roce_na 应为 False, 实际 {roce_na}"
-    assert bool(roce_pass) is False, f"ROCE<15% roce_pass 应为 False"
-
-
-def test_fina_health_roce_na_data_pass():
-    """有 ROCE 数据且 ≥15% → roce_pass=True"""
-    eng = Dim7ValuationEngine()
-    health, roce_pass, roce_na = eng._fina_health('000001.SZ', _FakeECM_FULL([18.0, 19.0, 20.0]))
-    assert bool(roce_pass) is True, f"ROCE>15% roce_pass 应为 True"
-    assert roce_na is False
+# 4. _fina_health 三态（roce_na）——权威实现见下方 test_val_estimator_fina_health_roce_na
+#    （dim7 旧版测试删除，dim7 无独立 _fina_health）
 
 
 # ─────────────────────────────────────────────
@@ -147,6 +106,10 @@ def test_fina_health_roce_na_data_pass():
 def test_compute_valuation_growth_trap_penalty(monkeypatch):
     """PEG>2 → composite 降级（成长陷阱 -0.5），growth_trap 标注"""
     monkeypatch.setattr('app.data.DataManager.get_stock_industry', staticmethod(lambda ts: '电子'))
+    # 476号收敛：_compute_valuation 内部委托 ValuationEngine——mock 其 _fina_health
+    # 免真实库（roce_na=True=无数据 → value_trap 不触发，复现原「无 ROCE 数据不惩罚」语义）
+    monkeypatch.setattr(VAL_Engine, '_fina_health',
+                        lambda self, ts_code: ('pass', False, True, pd.DataFrame()))
     eng = Dim7ValuationEngine()
     df_basic = _basic([60.0]*25)                  # PE 60 → PEG>2
     df_income = _income([200, 160, 140], [10, 8, 7])  # +25% → PEG=2.4>2
