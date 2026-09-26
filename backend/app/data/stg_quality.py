@@ -17,6 +17,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from app.data.market_universe import stock_only_sql
+
 logger = logging.getLogger(__name__)
 
 # ── 校验规则注册表（423号 §2.3 QUALITY_RULES）────────────────────
@@ -80,7 +82,7 @@ QUALITY_RULES: dict[str, dict] = {
     'daily_basic_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
     'moneyflow_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
     'stk_limit_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
-    'margin_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
+    'margin_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date', 'baseline': 'self'},
     # adj_factor 按年份拆分（adj_factor_cache_YYYY，356号大表拆分），基表 adj_factor_cache
     # 仅存历史残留（max 2026-08-18），当日数据在当年分表——不适用当日覆盖率，改空表校验；
     # 时效性由 _check_data_timeliness / run_integrity_check 独立负责
@@ -272,10 +274,13 @@ class WriteGateway:
 
     def _daily_base(self, pipeline_date: str) -> int:
         # daily_cache 在 market_cache.db 分库（356号），必须走 sharding_manager
+        # 483号 A1：基准取「个股」行数（剔除指数），与 QualityChecker.daily_base 同源
         try:
             conn = self._sm.get_connection(self._sm.get_db_for_table('daily_cache'))
+            pred, params = stock_only_sql()
             row = conn.execute(
-                'SELECT COUNT(*) FROM daily_cache WHERE trade_date=?', [pipeline_date]
+                f'SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND {pred}',
+                [pipeline_date] + params
             ).fetchone()
             return row[0] if row else 0
         except Exception:
@@ -310,14 +315,43 @@ class QualityChecker:
             return -1
 
     def daily_base(self, pipeline_date: str) -> int:
-        """基准 N：daily_cache 目标日期行数（356号分库——daily_cache 在 market_cache.db）"""
+        """基准 N：daily_cache 目标日期的**个股**行数（483号 A1：剔除指数/申万行业指数）
+
+        原实现取 daily_cache 全部行（含 82 个指数代码），致分母被抬高 →
+        indicator_ma 报「5510/5536」假失败、margin_cache 阈值 5312 结构性恒失败。
+        改走 app.data.market_universe 的「仅个股」谓词，与管道股票池同源。
+        """
         try:
             conn = self._sm.get_connection(self._sm.get_db_for_table('daily_cache'))
+            pred, params = stock_only_sql()
             row = conn.execute(
-                'SELECT COUNT(*) FROM daily_cache WHERE trade_date=?', [pipeline_date]
+                f'SELECT COUNT(*) FROM daily_cache WHERE trade_date=? AND {pred}',
+                [pipeline_date] + params
             ).fetchone()
             return row[0] if row else 0
         except Exception:
+            return 0
+
+    def _baseline_rows(self, table: str, pipeline_date: str, days: int = 20) -> int:
+        """自基准 N：表自身近 N 个交易日的最大当日行数（483号 ③b）
+
+        适用于「只覆盖子集」的表（如 margin_cache 仅融资融券标的≈全市场 80%），
+        以 daily_cache 全量为基准会结构性恒失败；用自身历史峰值作基准自校准。
+        """
+        rule = QUALITY_RULES.get(table, {})
+        date_col = rule.get('date_col', 'trade_date')
+        distinct = rule.get('distinct_ts', False)
+        count_expr = 'COUNT(DISTINCT ts_code)' if distinct else 'COUNT(*)'
+        try:
+            conn = self._sm.get_connection(self._sm.get_db_for_table(table))
+            rows = conn.execute(
+                f'SELECT {count_expr} AS c FROM {table} WHERE {date_col} < ? '
+                f'GROUP BY {date_col} ORDER BY {date_col} DESC LIMIT ?',
+                [pipeline_date, days]
+            ).fetchall()
+            return max((r[0] or 0) for r in rows) if rows else 0
+        except Exception as e:
+            logger.warning(f'{table} 自基准行数统计失败: {e}')
             return 0
 
     def check_table(self, table: str, pipeline_date: str) -> CheckResult:
@@ -331,7 +365,11 @@ class QualityChecker:
             return CheckResult(True, table, pipeline_date, issues=[f'{table} 无校验规则，跳过'])
         if rule.get('check_mode') == 'nonempty':
             return self._check_nonempty(table, pipeline_date)
-        n = self.daily_base(pipeline_date)
+        _self_baseline = rule.get('baseline') == 'self'
+        if _self_baseline:
+            n = self._baseline_rows(table, pipeline_date)
+        else:
+            n = self.daily_base(pipeline_date)
         actual = self._count_by_date(table, pipeline_date)
         if actual < 0:
             return CheckResult(False, table, pipeline_date,
@@ -339,7 +377,10 @@ class QualityChecker:
         threshold = int(n * rule.get('rows_ratio', 0.95))
         issues = []
         if n <= 0:
-            issues.append('daily_cache 基准行数=0（数据未就绪）')
+            if _self_baseline:
+                logger.info(f'{table} 无自基准历史行数，跳过覆盖判定（483号 ③b）')
+            else:
+                issues.append('daily_cache 基准行数=0（数据未就绪）')
         elif actual < threshold:
             issues.append(f'{table} 覆盖率不足: {actual}/{threshold}（{actual/max(n,1):.0%} < {rule.get("rows_ratio", 0.95):.0%}）')
 

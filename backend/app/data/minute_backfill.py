@@ -139,6 +139,11 @@ def _cache_to_ecm(df: pd.DataFrame, ts_code: str, freq: str, ecm: EnhancedCacheM
                 df_copy['trade_time'] = df_copy['trade_date'].astype(str)
             else:
                 df_copy['trade_time'] = ''
+        if 'trade_date' not in df_copy.columns:
+            # 483号 ②：聚合结果（_resample_minute）只带 trade_time，须补 trade_date ——
+            # minute_kline_cache PK 含 trade_date，缺失会落 NULL（既有 5/15/30min 即此问题）
+            # 致按日检索/完整性核对失效；从 trade_time 前 10 位取日期。
+            df_copy['trade_date'] = df_copy['trade_time'].astype(str).str[:10]
         if 'vol' in df_copy.columns and 'volume' not in df_copy.columns:
             df_copy = df_copy.rename(columns={'vol': 'volume'})
         ecm.cache_minute_kline(df_copy)
@@ -364,6 +369,37 @@ def aggregate_minute(ts_codes: List[str],
             continue
 
     logger.info(f"[聚合] 完成: {ok}/{len(ts_codes)} 只, 目标频率: {target_freqs}")
+    return ok
+
+
+def aggregate_1min_to_60min(ts_codes: List[str],
+                            ecm: Optional[EnhancedCacheManager] = None,
+                            target_freq: str = '60min') -> int:
+    """483号 ②：把 minute_kline_cache 的 1min 本地聚合为目标频率（默认 60min）落库。
+
+    全市场维度、**零 API**（CPU-only）、幂等（PK = ts_code+trade_date+trade_time+freq，
+    INSERT OR REPLACE）。原「5/15/30/60min 聚合」只在 run_backfill_all（自选股补采）内，
+    watchlist 实测仅 1 只 → 全市场 60min 无生产链路，dim2 457 多周期级联退化为 W+D。
+
+    Returns:
+        成功聚合写库的股票数
+    """
+    if ecm is None:
+        ecm = get_ecm_instance()
+    ok = 0
+    for ts_code in ts_codes:
+        try:
+            df_1min = ecm.get_cached_minute_kline(ts_code, freq='1min')
+            if df_1min is None or df_1min.empty:
+                continue
+            agg = _resample_minute(df_1min.to_dict('records'), '1min', target_freq)
+            if agg:
+                _cache_to_ecm(pd.DataFrame(agg), ts_code, target_freq, ecm)
+                ok += 1
+        except Exception as e:
+            logger.debug(f"[1min聚合{target_freq}] {ts_code} 失败: {e}")
+            continue
+    logger.info(f"[1min聚合{target_freq}] 完成 {ok}/{len(ts_codes)} 只")
     return ok
 
 

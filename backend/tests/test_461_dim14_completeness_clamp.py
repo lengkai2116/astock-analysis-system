@@ -15,7 +15,11 @@ from app.opportunity_atlas.dimensions.dim1_signal_engine import Dim1SignalEngine
 
 
 def _full_expected_context() -> dict:
-    """构造 required+optional 全 23 键的 data_context（对齐 test_dim1_gate 全量断言）。"""
+    """构造全量 data_context。
+
+    契约键（required+optional）= 22：'lhb_df' 已由 483号 ① 移出契约（稀疏事件表），
+    故此处含 23 键但契约内仅 22 键（lhb_df 视为非契约的辅助键）。
+    """
     return {
         # ECM原料表（10项）
         'daily_df': pd.DataFrame({'trade_date': ['20260101'], 'close': [10.0]}),
@@ -87,12 +91,12 @@ class TestCompletenessClamp:
         assert result['completeness_score'] == 1.0
 
     def test_missing_expected_key_lowers_score(self):
-        """缺 1 个期望键 → 22/23，且出现在 missing_tables"""
+        """缺 1 个契约键 → 21/22（483号 ① 后 lhb_df 已非契约键，契约基数 22）"""
         engine = Dim1SignalEngine()
         ctx = _full_expected_context()
         ctx.pop('cashflow_df')
         result = engine._validate(ctx, '000001.SZ')
-        assert result['completeness_score'] == round(22 / 23, 4)
+        assert result['completeness_score'] == round(21 / 22, 4)
         assert 'cashflow_df' in result['missing_tables']
         assert result['quality_level'] == 'degraded'
 

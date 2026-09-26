@@ -489,15 +489,13 @@ def _compute_relative_strength(trade_date: str = None) -> int:
             return 0
         placeholders = ','.join('?' * len(dates))
 
-        # 3) 股票池：全市场日线代码，剔除指数代码（宽基 BROAD_INDEX_CODES + 申万 .SI）
+        # 3) 股票池：全市场日线代码，剔除指数代码（483号 A1：收敛为 SSOT is_index_code，
+        #    原内联条件漏 399 段，致 399001.SZ/399006.SZ 宽基被误纳入 RPS 股票池）
         pool_rows = conn.execute(
             f"SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date IN ({placeholders})",
             dates
         ).fetchall()
-        exclude = set(BROAD_INDEX_CODES)
-        exclude |= set(SW_INDEX_CODES)
-        stock_codes = [r[0] for r in pool_rows
-                       if r[0] not in exclude and not r[0].endswith('.SI')]
+        stock_codes = [r[0] for r in pool_rows if not is_index_code(r[0])]
 
         # 4) 加载窗口内全部收盘价（股票池 + 双基准）
         load_codes = stock_codes + ['000001.SH', '000300.SH']
@@ -642,23 +640,11 @@ def _backfill_moneyflow(days: int = 25) -> int:
     return total
 
 
-# 四大宽基指数代码（438号缺口①修复：HS300/000300.SH 为全系统相对强弱基准，读方 BenchmarkService 在用、此前写方遗漏未落日线）
-BROAD_INDEX_CODES = [
-    '000001.SH', '000300.SH', '399001.SZ', '399006.SZ', '899050.BJ',
-]
-
-# 申万一级行业指数代码（31 个，SW2021 全量）
-# 438号缺口②修复：①接口改用 sw_daily（index_daily 不含 801*，致从源头取空）
-# ②补齐 SW2021 一级行业：移除废弃 801020（子行业，数据源无），新增 801950/801960/801970/801980
-SW_INDEX_CODES = [
-    '801010.SI', '801030.SI', '801040.SI', '801050.SI', '801080.SI',
-    '801110.SI', '801120.SI', '801130.SI', '801140.SI', '801150.SI',
-    '801160.SI', '801170.SI', '801180.SI', '801200.SI', '801210.SI',
-    '801230.SI', '801710.SI', '801720.SI', '801730.SI', '801740.SI',
-    '801750.SI', '801760.SI', '801770.SI', '801780.SI', '801790.SI',
-    '801880.SI', '801890.SI', '801950.SI', '801960.SI', '801970.SI',
-    '801980.SI',
-]
+# 483号 A1：个股宇宙（指数剔除规则）SSOT 唯一定义在 app.data.market_universe
+#   （宽基 BROAD_INDEX_CODES + 申万 SW_INDEX_CODES + is_index_code / stock_only_sql）。
+#   438号缺口①② 的常量原定义迁移至该模块；此处保留同名导入以兼容既有引用
+#   （如 scripts/_441_backfill_stk_holder.py 用 dd.BROAD_INDEX_CODES）。
+from app.data.market_universe import BROAD_INDEX_CODES, SW_INDEX_CODES, is_index_code
 
 # 申万行业指数 Tushare 接口：sw_daily（index_daily 不含 801*）
 # sw_daily 返回列 -> daily_cache 需要的 daily_cols 映射：
@@ -1995,6 +1981,19 @@ def run_integrity_check(backfill_days: int = 1):
                 logger.info(f"    → 范围补采 {added} 条 ({start_date} ~ {today})")
             else:
                 logger.info(f"  [融资融券] 最新 {margin_latest}，滞后 {days_lag} 天 ✅")
+                # 483号 ③a：滞后未超阈值时仍核对「最新交易日行数」完整性——原实现只看
+                # MAX(trade_date) 滞后，部分入库（如 2026-09-24 仅 2002/常态4451）永不回补。
+                _cnt = _query_table('margin_cache',
+                    "SELECT COUNT(DISTINCT ts_code) FROM margin_cache WHERE trade_date=?",
+                    [margin_latest])
+                _base = _query_table('margin_cache',
+                    "SELECT MAX(c) FROM (SELECT COUNT(DISTINCT ts_code) AS c FROM margin_cache "
+                    "WHERE trade_date<? GROUP BY trade_date ORDER BY trade_date DESC LIMIT 20)",
+                    [margin_latest])
+                if _base and _cnt < int(_base * 0.9):
+                    logger.info(f"  [融资融券] 最新 {margin_latest} 行数不足 {_cnt}/{_base}（<90%），回补...")
+                    added = _batch_margin(_date_str)
+                    logger.info(f"    → 回补 {added} 条")
     except Exception as e:
         logger.warning(f"  融资融券检查失败: {e}")
 
@@ -2438,6 +2437,40 @@ def _check_watchlist_minute():
         logger.warning(f"  [自选股分钟] 检查失败: {e}")
 
 
+def _check_minute_60min():
+    """483号 ②：全市场 60min 分钟线完整性——1min 已在库时本地聚合补 60min（零 API）。
+
+    原状：5/15/30/60min 聚合只在 run_backfill_all（自选股补采）内，watchlist 实测仅 1 只
+    → 全市场 60min 无生产链路，dim2 457 多周期级联退化为「周线+日线」。
+    本函数以「最新 1min 交易日的 60min 覆盖」为闸门，只聚合缺失的股票（幂等）。
+    """
+    try:
+        from app.data.minute_backfill import aggregate_1min_to_60min
+        latest = _query_table('minute_kline_cache',
+            "SELECT MAX(trade_date) FROM minute_kline_cache WHERE freq='1min'")
+        if not latest:
+            logger.info("  [60min聚合] 无 1min 数据，跳过")
+            return
+        have_1min = {r[0] for r in _shard_fetchall('minute_kline_cache',
+            "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE freq='1min' AND trade_date=?",
+            [latest])}
+        if not have_1min:
+            logger.info(f"  [60min聚合] {latest} 无 1min，跳过")
+            return
+        have_60min = {r[0] for r in _shard_fetchall('minute_kline_cache',
+            "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE freq='60min' AND trade_date=?",
+            [latest])}
+        missing = sorted(have_1min - have_60min)
+        if not missing:
+            logger.info(f"  [60min聚合] {latest} 已完整（{len(have_1min)} 只）✅")
+            return
+        logger.info(f"  [60min聚合] {latest} 缺 {len(missing)}/{len(have_1min)} 只，本地聚合...")
+        n = aggregate_1min_to_60min(missing)
+        logger.info(f"  [60min聚合] 完成 {n} 只")
+    except Exception as e:
+        logger.warning(f"  [60min聚合] 检查失败: {e}")
+
+
 # ══════════════════════════════════════════════════════════
 # 日终同步
 # ══════════════════════════════════════════════════════════
@@ -2540,6 +2573,13 @@ def run_daily_sync():
         logger.info("  分钟数据闲时补采已触发（后台）")
     except Exception as e:
         logger.warning(f"  分钟数据闲时补采触发失败: {e}")
+
+    # 483号 ②：全市场 60min 本地聚合（1min→60min，零 API，后台低优，覆盖闸门幂等）
+    try:
+        threading.Thread(target=_run_minute_aggregate_60min, daemon=True).start()
+        logger.info("  60min 分钟聚合已触发（后台）")
+    except Exception as e:
+        logger.warning(f"  60min 分钟聚合触发失败: {e}")
 
     # 信号验证回算 T+5/T+10/T+20（345号第③层核查激活，后台低优）
     # 2026-08-16 新增：scheduler_manager 仅 API 进程注册回算；daemon 模式
@@ -4867,13 +4907,8 @@ def _get_active_codes(today_fmt: str = None) -> list[str]:
                     "SELECT ts_code FROM daily_cache WHERE trade_date=? GROUP BY ts_code ORDER BY ts_code",
                     [today_fmt]
                 ).fetchall()
-        _index_exclude = set(BROAD_INDEX_CODES) | set(SW_INDEX_CODES)
-        codes = [
-            r[0] for r in rows
-            if r[0] not in _index_exclude
-            and not r[0].endswith('.SI')
-            and not r[0].startswith('399')
-        ]
+        # 483号 A1：指数剔除收敛为 SSOT is_index_code（原为内联三条件）
+        codes = [r[0] for r in rows if not is_index_code(r[0])]
         return codes if codes else []
     except Exception as e:
         logger.warning(f"_get_active_codes 分库查询失败: {e}")
@@ -6911,6 +6946,11 @@ def _run_minute_backfill_v2():
                     f"1min={result.get('1min', 0)}, 聚合={result.get('aggregate', 0)}")
     except Exception as e:
         logger.warning(f"  分钟数据闲时补采失败: {e}")
+
+
+def _run_minute_aggregate_60min():
+    """483号 ②：全市场 60min 本地聚合（后台低优包装）"""
+    _check_minute_60min()
 
 
 def _run_signal_checkpoint():

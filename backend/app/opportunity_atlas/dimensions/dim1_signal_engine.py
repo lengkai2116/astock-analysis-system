@@ -290,11 +290,15 @@ class Dim1SignalEngine:
             {validation_result, completeness_score, missing_tables, quality_level}
         """
         required = ['daily_df']
+        # 483号 ①：lhb_df 不列入契约——龙虎榜为稀疏事件表（全市场约 680 只/月上榜），
+        # 「某股无上榜记录」是正常现象而非素材缺失；列入会让 ~99% 股票 quality_level
+        # 恒 degraded（假失真）。与 QA 侧 `lhb_cache: check_mode='nonempty'` 口径一致；
+        # 表级完整性由 daemon 采集 + QA 空表校验负责。仍加载进 data_context 供 dim4/dim6 消费。
         optional = [
             # ECM原料表
             'moneyflow_df', 'daily_basic_df', 'margin_df', 'fina_df',
             'income_df', 'balancesheet_df', 'cashflow_df',
-            'stk_holder_df', 'lhb_df',
+            'stk_holder_df',
             # indicator预计算表
             'indicator_ma_df', 'indicator_macd_df', 'indicator_other_df',
             # pre_feat_cache ext组
