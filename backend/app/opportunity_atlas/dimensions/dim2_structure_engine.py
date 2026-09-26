@@ -212,7 +212,7 @@ class Dim2StructureEngine(DataAwareMixin):
                     'point_type': getattr(_p, 'type', ''),
                     'confirmed': float(getattr(_p, 'confidence', 0) or 0) >= 0.6,
                     'confidence': round(float(getattr(_p, 'confidence', 0) or 0), 4),
-                    'price': float(_pos.get('price', 0) or 0),
+                    'price': _resolve_bsp_price(_pos, df),
                     'date': _resolve_bsp_date(_pos, df),
                     'index': _pos.get('idx'),
                     'reason': _cn_reason(str(getattr(_p, 'reason', '') or '')),
@@ -371,6 +371,23 @@ def _resolve_bsp_date(position, df):
         except Exception:
             pass
     return ''
+
+
+def _resolve_bsp_price(position, df):
+    """486号：买卖点价格回填——一买/一卖 position=divergence.position 仅含 idx 无 price，
+    从 daily_df 按 idx 反查 close（对齐 465-2 date 回填）；有显式 price 或查不到时原样/0 返回。"""
+    try:
+        _price = float(position.get('price', 0) or 0)
+        if _price > 0:
+            return _price
+        _idx = position.get('idx')
+        if df is not None and not df.empty and 'close' in df.columns and _idx is not None:
+            _i = int(_idx)
+            if 0 <= _i < len(df):
+                return float(df['close'].iloc[_i])
+    except Exception:
+        pass
+    return 0.0
 
 
 # ── 479号 A2：买卖点 reason 内背驰 type 转中文（'zhongshu类型'→'中枢背驰'）──

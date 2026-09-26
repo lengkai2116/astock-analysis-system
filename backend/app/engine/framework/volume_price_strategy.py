@@ -3885,7 +3885,9 @@ class VPStateMachine:
             return VP_DIVERGE_BULL
 
         price_low_condition = closes[-1] <= min(closes[-10:-1]) if len(closes) >= 10 else False
-        vol_high_3d = all(volumes[-i] > vol_ma5 * 1.3 for i in range(1, 4)) if len(volumes) >= 4 else False
+        # 486号：vol_high_3d 阈值 1.3×→1.0×——「量增」对齐 VP 语义（量比>1 即量增），
+        # 修复价跌量增但因量比未达 1.3× 而漏判底背离、落入默认"价涨量增"的方向退化（600519 实证）。
+        vol_high_3d = all(volumes[-i] > vol_ma5 * 1.0 for i in range(1, 4)) if len(volumes) >= 4 else False
         if price_low_condition and vol_high_3d:
             return VP_DIVERGE_BEAR
 
@@ -3905,7 +3907,13 @@ class VPStateMachine:
         if price_chg_1d < 0 and vol_ratio < 0.8:
             return VP_HEALTHY_BEAR
 
-        # 5) 无明确信号时，取前一天状态（如有）
+        # 5) 无明确信号时（486号修复默认值方向退化）：
+        #    当日价跌量增→底背离、价跌→健康回调，不再一律默认"价涨量增(强势)"（600519 创20日新低
+        #    却报强势的方向矛盾实证）；仅无历史且数据不足才默认 VP_HEALTHY_BULL。
+        if price_chg_1d < 0 and vol_ratio >= 1.0:
+            return VP_DIVERGE_BEAR
+        if price_chg_1d < 0:
+            return VP_HEALTHY_BEAR
         if self._fast_history:
             return self._fast_history[-1]
         return VP_HEALTHY_BULL

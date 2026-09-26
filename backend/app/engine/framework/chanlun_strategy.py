@@ -1325,10 +1325,14 @@ class DivergenceDetector:
                 trend_div.details['trend_backtesting'] = trend_bt
             result = trend_div
         elif trend_bt:
+            # 486号：P1-#19 趋势背驰回测分支补 position——原构造缺 position（None）导致
+            # 一买/一卖点价格恒 0（601318 first_buy 实证）；c_stroke.end_idx/end_price 即背驰点。
+            _c = trend_bt.get('c_stroke') or {}
             result = Divergence(
                 type='trend',
                 direction=trend_bt['direction'],
                 confidence=trend_bt['confidence'],
+                position={'idx': _c.get('end_idx'), 'price': _c.get('end_price')},
                 details={'trend_backtesting': trend_bt}
             )
         else:

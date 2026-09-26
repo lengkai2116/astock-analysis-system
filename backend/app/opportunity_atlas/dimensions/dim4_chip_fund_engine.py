@@ -6086,7 +6086,10 @@ class Dim4ChipFundEngine(DataAwareMixin):
                                 if _top_p and _vec.get(_top_p, 0) > 0:
                                     _votes.append(f"{_name}={_phase_cn_sh.get(_top_p, _top_p)}({_vec[_top_p]:.2f})")
                         _supp = _vr.get('_supporters') or {}
-                        _supp_txt = f"，{len(_supp)}维支持" if _supp else ''
+                        # 486号：_supporters 为 {主导阶段: 支持维度数} 单键 dict——取**值**（支持主导阶段的
+                        # 维度数），非 len(dict) 键数（恒 1）。对齐 phase_detector:351 / 本引擎 :797 生产口径。
+                        _supp_cnt = next(iter(_supp.values()), 0) if isinstance(_supp, dict) else 0
+                        _supp_txt = f"，{int(_supp_cnt)}维支持" if _supp_cnt else ''
                         if _votes:
                             phase_vote_detail = '投票:' + '、'.join(_votes) + _supp_txt
             except Exception:
