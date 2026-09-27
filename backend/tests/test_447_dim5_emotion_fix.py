@@ -24,11 +24,16 @@ import pytest
 class TestTempSSOT:
 
     def test_dim5_imports_not_embeds(self):
-        """dim5 通过 import 用温度 SSOT，文件内不得再定义 calc_emotion_temperature"""
+        """dim5 通过 import 用温度 SSOT，文件内不得再定义 calc_emotion_temperature
+
+        488号 A1：SSOT 导入改为多行括号形式（calc_emotion_temperature + PHASE_BASE_TEMP），
+        断言由「字面整行」改为「模块 + 符号」级——原意（import SSOT、不内嵌副本）不变。
+        """
         import importlib
         mod = importlib.import_module('app.opportunity_atlas.dimensions.dim5_emotion_engine')
         src = open(mod.__file__).read()
-        assert 'from app.opportunity_atlas.emotion_temperature import calc_emotion_temperature' in src
+        assert 'from app.opportunity_atlas.emotion_temperature import' in src
+        assert 'calc_emotion_temperature' in src
         assert 'def calc_emotion_temperature(' not in src
 
     def test_ssot_function_exists(self):

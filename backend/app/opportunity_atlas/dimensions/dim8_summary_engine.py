@@ -934,7 +934,7 @@ _DIM8_FIELD_CN: dict[str, str] = {
     'phase': '主力阶段', 'fund_flow': '资金流', 'fund_price_divergence': '资金价格背离',
     'cost_structure': '筹码结构', 'crowding': '拥挤度', 'signal': '筹码信号', 'margin': '融资',
     'market': '市场情绪', 'sector': '板块情绪', 'stock': '个股情绪', 'quadrant': '情绪象限',
-    'temperature': '情绪温度',
+    'temperature': '情绪温度', 'temperature_basis': '温度入参',
     'risk_level': '风险等级', 'support_price': '防守位', 'resistance_price': '压力位',
     'rr_value': '盈亏比', 'rr_level': '盈亏比评级', 'volatility_level': '波动率',
     'risk_factors': '风险因素',
@@ -994,6 +994,12 @@ def _compose_dim_text(src_key: str, jg: dict, sd: dict,
         val = _flatten_value(v)
         if not val:
             continue
+        # 488号 A1：情绪温度「果」后带 7 入参「因」（dim5 定稿 §三-7 话术形态
+        #   「情绪偏热 57.9（阶段发酵(基温60)+涨停N家+…）」）；basis 缺则不产括号（437 缺则降级）
+        if src_key == 'emotion' and f == 'temperature':
+            _basis = _flatten_value((sd or {}).get('temperature_basis'))
+            if _basis:
+                val = f'{val}（{_basis}）'
         # 引擎自产字段多为完整句子（如 '强流出（5d_outflow）'），直接拼接不加冒号
         # 482-4：字段名后统一全角冒号（与段级「所以：/因为：/验证：」一致）
         parts.append(f'{label}：{val}')

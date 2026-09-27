@@ -23,7 +23,11 @@ import pandas as pd
 from app.data.mixins import DataAwareMixin
 from app.engine.framework.bociasi_quadrant import BociasiQuadrantAnalyzer
 # 447号 T5：温度唯一代码源（emotion_temperature.py，SSOT），dim5 不再内嵌副本
-from app.opportunity_atlas.emotion_temperature import calc_emotion_temperature
+# 488号 A1：并 import PHASE_BASE_TEMP（阶段基温，温度 7 入参"因"透传需展示）
+from app.opportunity_atlas.emotion_temperature import (
+    PHASE_BASE_TEMP,
+    calc_emotion_temperature,
+)
 from app.opportunity_atlas.dimensions.enum_cn_map import bociasi_signal_cn, quadrant_cn
 
 logger = logging.getLogger(__name__)
@@ -318,6 +322,43 @@ def _temp_level_cn(t) -> str:
     return '过热'
 
 
+# ── 488号 A1：情绪温度 7 入参"因"透传（dim5 定稿 §七观察项③拍板「以 7 入参明细作因透传」）──
+
+_VP_FIT_CN = {'healthy': '健康', 'diverging': '背离', 'neutral': '中性'}
+
+
+def _fmt_temperature_basis(sentiment_phase: str, phase_cn: str,
+                           limit_up_count: int, has_limit_up: bool,
+                           sealing_rate, sector_rank, vp_fit: str,
+                           margin_change_pct, breadth,
+                           fast_score=None, slow_score=None) -> str:
+    """488号 A1：温度 7 入参明细（因）——话术形态对齐 dim5 定稿 §三-7：
+
+    「阶段发酵(基温60)+涨停42家+封板率63%+板块排名15+量价健康+融资5日+3.0%+广度39%(MA20占比近似)」
+
+    缺数据项显式标「无数据」（437 缺则降级，不臆造）；末段附情绪周期(BOCIASI)修正的实际权重式。
+    纯「因」侧表述，不参与温度计算（445 冻结合规）。
+    """
+    parts = [f"阶段{phase_cn}(基温{PHASE_BASE_TEMP.get(sentiment_phase, 50)})"]
+    parts.append(f"涨停{limit_up_count}家" if has_limit_up else "涨停无数据")
+    parts.append(f"封板率{sealing_rate:.0f}%" if sealing_rate is not None else "封板率无数据")
+    parts.append(f"板块排名{sector_rank}" if sector_rank is not None else "板块排名无数据")
+    parts.append(f"量价{_VP_FIT_CN.get(vp_fit, vp_fit)}")
+    if margin_change_pct is not None:
+        parts.append(f"融资5日{margin_change_pct * 100:+.1f}%")
+    else:
+        parts.append("融资无数据")
+    if breadth is not None:
+        parts.append(f"广度{breadth * 100:.0f}%(MA20占比近似)")
+    else:
+        parts.append("广度无数据")
+    body = '+'.join(parts)
+    if fast_score is not None and slow_score is not None:
+        body += (f"，情绪周期修正(快{float(fast_score):.2f}×0.6"
+                 f"+慢{float(slow_score):.2f}×0.4)")
+    return body
+
+
 # 快线 indicators 布尔 → 中文（479号 A10）
 _QUICK_IND_CN = {
     'fast_vol': '量能放大', 'fast_price': '站上均线',
@@ -499,6 +540,7 @@ class Dim5EmotionEngine(DataAwareMixin):
 
         # 447号 T1a：涨停家数/封板率 从 data_context['emotion_ext']（daemon RAW 预计算已透传）
         _limit_up = 0
+        _has_limit_up = False  # 488号 A1：区分「涨停 0 家」与「无数据」（因透传不臆造）
         _sealing = None
         _breadth = None
         try:
@@ -506,6 +548,7 @@ class Dim5EmotionEngine(DataAwareMixin):
             if _emotion_ext:
                 if isinstance(_emotion_ext.get('limit_up_count'), int):
                     _limit_up = _emotion_ext['limit_up_count']
+                    _has_limit_up = True
                 if isinstance(_emotion_ext.get('sealing_rate'), (int, float)):
                     _sealing = float(_emotion_ext['sealing_rate'])
             # breadth：全市场 MA20 强势股占比（market_stats，daemon 预计算）
@@ -554,6 +597,10 @@ class Dim5EmotionEngine(DataAwareMixin):
             'bociasi_quick': _fmt_quickline(quick_result),
             'bociasi_slow': _fmt_slowline(slow_result),
             'quadrant': _fmt_quadrant(quadrant),
+            # 488号 A1：温度 7 入参明细（因）——dim8 以「情绪温度：{果}（{因}）」形态呈现
+            'temperature_basis': _fmt_temperature_basis(
+                sp, market['phase'], _limit_up, _has_limit_up, _sealing, _sector_rank,
+                vp_fit, margin_change_pct, _breadth, fast_score, slow_score),
             'temperature': f"{_temp_level_cn(temperature)}{temperature}/100",
         }
 
