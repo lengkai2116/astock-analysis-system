@@ -1027,6 +1027,8 @@ def strategy_analyze():
                     'conflict_evidence': _json3.loads(_status_row.get('conflict_evidence') or '[]') if _status_row.get('conflict_evidence') else [],
                     'dim_states': _json3.loads(_status_row.get('dim_states') or '{}') if _status_row.get('dim_states') else {},
                     'advice_params': _json3.loads(_status_row.get('advice_params') or '{}') if _status_row.get('advice_params') else {},
+                    # 492号（P1-3）：注册表触发列表接前端（原仅落库、无消费方）
+                    'signals': _json3.loads(_status_row.get('signals') or '[]') if _status_row.get('signals') else [],
                 }
             except Exception as _vv_err:
                 _status_verdict = None
@@ -1045,6 +1047,8 @@ def strategy_analyze():
                         'conflict_evidence': _json3.loads(_verdict['conflict_evidence'] or '[]'),
                         'dim_states': _json3.loads(_verdict['dim_states'] or '{}'),
                         'advice_params': _json3.loads(_verdict['advice_params'] or '{}'),
+                        # 492号（P1-3）：注册表触发列表（与成品路径同契约）
+                        'signals': _json3.loads(_verdict.get('signals') or '[]'),
                     }
             except Exception as _vv_err:
                 _status_verdict = None

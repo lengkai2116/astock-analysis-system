@@ -85,8 +85,8 @@ def test_k2_l0_emotion_cap_uses_sentiment_phase():
             return None
     eng.dm = _DM()
     eng.registry = {}
-    ice = eng._apply_l0('000001.SZ', {'sentiment_phase': 'ice'}, {}, None)
-    normal = eng._apply_l0('000001.SZ', {'sentiment_phase': 'neutral'}, {}, None)
+    ice = eng._apply_l0('000001.SZ', {'sentiment_phase': 'ice'}, None)
+    normal = eng._apply_l0('000001.SZ', {'sentiment_phase': 'neutral'}, None)
     assert ice['emotion_position_cap'] == 0.10
     assert normal['emotion_position_cap'] == 0.60
 

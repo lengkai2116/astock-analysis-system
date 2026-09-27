@@ -1528,6 +1528,15 @@ class Dim8SummaryEngine:
             status_description['data_warning'] = f'数据完整度偏低（{data_confidence:.0%}），部分维度判断受限'
 
         # 7. judgment
+        # 492号（P1-1）：dim8 定位 = SIG 侧「现状描述归集/叙事」层，非判定层。
+        #   下方三值（status_bar / consensus_rate / direction）为**展示派生**——
+        #   由本模块按「灯色×置信度 / 简单多数」自成口径算出，与 v390 判定链
+        #   （L1-L6，族可靠性×状态权重）**口径不同**（全市场实测 Δconsensus 均值 +0.51、
+        #   |Δ|>0.2 占 70.6%）。它们**不参与任何判定**，唯一消费方是 seven_dim_json
+        #   展示契约（test_436 断言其存在）与 sig_full_test 完整性检查；前端只读
+        #   summary.text 与各维 overall_light（light_derive SSOT）。判定权威 = v390
+        #   （status_snapshot.status_bar / opportunity_state）。此处保留键以维持展示契约，
+        #   并显式标注派生来源，避免被误当作判定第二口径。
         direction = 1 if consensus_rate >= 0.5 else (-1 if consensus_rate < 0.3 else 0)
         # 491-J6：summary 灯统一到派生 SSOT（原按 consensus_rate 阈值 0.6/0.3 独立派生，
         #   与 light_derive.aggregate_lights 规则不一致）→ 改聚合 7 维派生灯
@@ -1538,6 +1547,8 @@ class Dim8SummaryEngine:
             'direction': direction,
             'overall_light': _summary_light_value(dim_results),
             'overall_direction': direction,
+            # 492-P1-1：展示派生态标记（判定口径权威见 status_snapshot 的 v390 产出）
+            'caliber': 'display_derived',
         }
 
         # 8. audit（纯整理的稽核：各维输出完整性）

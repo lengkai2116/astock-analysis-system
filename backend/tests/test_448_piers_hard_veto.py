@@ -40,7 +40,7 @@ def test_l0a_hard_veto_from_event_details_fraud_sign():
         ],
     }
     se = StatusEngine(dm=_FakeDM())
-    l0 = se._apply_l0('000001.SZ', tags, {}, None)
+    l0 = se._apply_l0('000001.SZ', tags, None)
     assert l0['hard_veto'] is True, f"fraud_sign 应硬否决, 实际: {l0}"
     assert '造假' in l0['hard_reason'] or '财务' in l0['hard_reason'], \
         f"hard_reason 应含造假/财务, 实际: {l0['hard_reason']}"
@@ -55,7 +55,7 @@ def test_l0a_hard_veto_from_event_details_delist():
         ],
     }
     se = StatusEngine(dm=_FakeDM())
-    l0 = se._apply_l0('000601.SH', tags, {}, None)
+    l0 = se._apply_l0('000601.SH', tags, None)
     assert l0['hard_veto'] is True, f"delist_risk 应硬否决, 实际: {l0}"
     assert '退市' in l0['hard_reason'], f"hard_reason 应含退市, 实际: {l0['hard_reason']}"
 
@@ -70,7 +70,7 @@ def test_l0a_hard_veto_no_false_positive():
         ],
     }
     se = StatusEngine(dm=_FakeDM())
-    l0 = se._apply_l0('000002.SZ', tags, {}, None)
+    l0 = se._apply_l0('000002.SZ', tags, None)
     assert l0['hard_veto'] is False, f"非造假/退市事件不应硬否决, 实际: {l0}"
     # catalyst_event=concept 不在 yaml hard_risks → 不触发 regulatory 分支
     assert l0['hard_reason'] == ''
@@ -80,7 +80,7 @@ def test_l0a_hard_veto_still_regulatory():
     """回归：catalyst_event=regulatory 仍触发 L0a（原有监管硬否决不变）"""
     tags = {'catalyst_event': 'regulatory', 'event_details': []}
     se = StatusEngine(dm=_FakeDM())
-    l0 = se._apply_l0('000003.SZ', tags, {}, None)
+    l0 = se._apply_l0('000003.SZ', tags, None)
     assert l0['hard_veto'] is True
     assert '监管' in l0['hard_reason'], f"regulatory 应监管立案文案, 实际: {l0['hard_reason']}"
 
@@ -89,7 +89,7 @@ def test_l0a_hard_veto_no_event():
     """无任何事件 → 不硬否决"""
     tags = {'catalyst_event': 'none', 'event_details': []}
     se = StatusEngine(dm=_FakeDM())
-    l0 = se._apply_l0('000004.SZ', tags, {}, None)
+    l0 = se._apply_l0('000004.SZ', tags, None)
     assert l0['hard_veto'] is False
 
 

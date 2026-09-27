@@ -137,7 +137,7 @@ def test_l0_st_extreme_hard_veto():
     tags = {'catalyst_event': 'none',
             'event_details': [_ev('st_warning', -2, '退市整理期')]}
     se = StatusEngine(dm=_NoTurnoverDM())
-    l0 = se._apply_l0('TEST.XSHG', tags, {}, None)
+    l0 = se._apply_l0('TEST.XSHG', tags, None)
     assert l0['hard_veto'] is True, f"*ST/退应硬否决, 实际: {l0}"
     assert 'ST' in l0['hard_reason'] or '退市' in l0['hard_reason'], \
         f"hard_reason 应含 ST/退市, 实际: {l0['hard_reason']}"
@@ -148,7 +148,7 @@ def test_l0_st_normal_soft_risk():
     tags = {'catalyst_event': 'none',
             'event_details': [_ev('st_warning', -1, 'ST 预警')]}
     se = StatusEngine(dm=_NoTurnoverDM())
-    l0 = se._apply_l0('TEST.XSHG', tags, {}, None)
+    l0 = se._apply_l0('TEST.XSHG', tags, None)
     assert l0['hard_veto'] is False
     assert 'st_warning' in l0['soft_risks'], f"普通ST应入软风险, 实际: {l0['soft_risks']}"
     assert abs(l0['position_coeff'] - 0.8) < 1e-6, \
@@ -159,7 +159,7 @@ def test_l0_no_st_no_soft_risk():
     """无 st_warning 事件 → 不触发 ST 软风险"""
     tags = {'catalyst_event': 'none', 'event_details': []}
     se = StatusEngine(dm=_NoTurnoverDM())
-    l0 = se._apply_l0('TEST.XSHG', tags, {}, None)
+    l0 = se._apply_l0('TEST.XSHG', tags, None)
     assert 'st_warning' not in l0['soft_risks']
 
 
@@ -168,7 +168,7 @@ def test_l0_st_still_allows_fraud_extreme():
     tags = {'catalyst_event': 'none',
             'event_details': [_ev('st_warning', -1, 'ST'), _ev('fraud_sign', -2)]}
     se = StatusEngine(dm=_NoTurnoverDM())
-    l0 = se._apply_l0('TEST.XSHG', tags, {}, None)
+    l0 = se._apply_l0('TEST.XSHG', tags, None)
     assert l0['hard_veto'] is True
     assert '造假' in l0['hard_reason'] or '财务' in l0['hard_reason']
 
@@ -178,7 +178,7 @@ def test_l0_st_normal_direction_gt_minus2_no_effect():
     tags = {'catalyst_event': 'regulatory',
             'event_details': [_ev('st_warning', -1, 'ST')]}
     se = StatusEngine(dm=_NoTurnoverDM())
-    l0 = se._apply_l0('TEST.XSHG', tags, {}, None)
+    l0 = se._apply_l0('TEST.XSHG', tags, None)
     # catalyst_event=regulatory → L0a 硬否决（原有监管路径），ST 软风险不叠加
     assert l0['hard_veto'] is True
     assert '监管' in l0['hard_reason']

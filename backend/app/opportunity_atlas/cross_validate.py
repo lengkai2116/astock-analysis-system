@@ -730,14 +730,41 @@ class L4CrossValidator(DataAwareMixin):
     def _get_status_verdict(self, ts_code: str) -> dict | None:
         """336号 成品仓切换：status_engine 生产环节权威结论（双模块唯一消费源）
 
-        实时 evaluate（读缓存毫秒级，不依赖日终 status_snapshot）；前端优先展示。
+        492号（P1-2）：原实现**实时重算** `StatusEngine().evaluate(ts_code)`，与日终
+        status_snapshot 产出重复计算（违背 373号「优先读快照」意图，且判定结果可能因
+        实时 tags 与日终批次不一致而漂移）。改为**优先读 status_snapshot 成品**（与
+        `_get_status_dim_states` 同源、同库），仅在无成品行时回退实时 evaluate。
         """
+        import json as _json
+        try:
+            from app.data.sharding_manager import sharding_manager
+            db_name = sharding_manager.get_db_for_table('status_snapshot')
+            if db_name:
+                conn = sharding_manager.get_connection(db_name)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT opportunity_state, status_bar, consensus_rate, direction, "
+                    "conflict_evidence, dim_states, advice_params "
+                    "FROM status_snapshot WHERE ts_code=? LIMIT 1", [ts_code])
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        'opportunity_state': row[0],
+                        'status_bar': row[1],
+                        'consensus_rate': row[2],
+                        'direction': row[3],
+                        'conflict_evidence': _json.loads(row[4] or '[]'),
+                        'dim_states': _json.loads(row[5] or '{}'),
+                        'advice_params': _json.loads(row[6] or '{}'),
+                    }
+        except Exception as e:
+            logger.debug("status_snapshot 读 verdict 失败 %s: %s", ts_code, e)
+        # 回退：无成品行时实时 evaluate
         try:
             from app.opportunity_atlas.status_engine import StatusEngine
             r = StatusEngine().evaluate(ts_code)
             if not r:
                 return None
-            import json as _json
             return {
                 'opportunity_state': r['opportunity_state'],
                 'status_bar': r['status_bar'],
@@ -746,6 +773,8 @@ class L4CrossValidator(DataAwareMixin):
                 'conflict_evidence': _json.loads(r['conflict_evidence'] or '[]'),
                 'dim_states': _json.loads(r['dim_states'] or '{}'),
                 'advice_params': _json.loads(r['advice_params'] or '{}'),
+                # 492号（P1-3）：与成品路径同契约
+                'signals': _json.loads(r.get('signals') or '[]'),
             }
         except Exception as e:
             logger.debug("status_verdict 生成失败 %s: %s", ts_code, e)

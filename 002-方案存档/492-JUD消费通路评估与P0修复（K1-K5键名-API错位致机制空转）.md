@@ -123,11 +123,32 @@ dim_results_json ──► StatusEngine.evaluate(ts_code, dim_results)
 
 ---
 
-## 七、待办（P1 结构）
+## 七、P1 结构机械收敛（✅ 2026-09-27 实施）
 
-1. **消除双判定口径（P1）**：dim8 自算共识/冲突/状态条 vs v390——选定单一权威，或让 ②/dim8 消费 ③ 结果。
-2. **通路定位收敛（P4）**：④ `status_snapshot.signals` 或接前端或停落库；⑤ `_get_status_verdict` 改读 `status_snapshot` 成品（不实时重算）；`_apply_l0(dims)` 未用形参清理。
-3. **K3 后须全链路复跑**：权重与情绪阶段语义已变，按 445 保留口径须补真实数据端到端验证。
+**用户拍板范围**：机械收敛 4 项（不做双口径单源化改造）；P2-g 入 P2 阈值号。
+
+**先做的量化核查**（`scripts/_492_p1_dual_caliber_probe.py` + 存量 status_snapshot 对比，全市场 5552 只）：
+- dim8（①）与 v390（③）`status_bar` 语义域**完全不同**（8 态 `strong_confirm/risk_warning/…` vs 5 态 `强趋势/趋势确认/…`），几乎无字面一致；`Δconsensus` 均值 **+0.511**、\|Δ\|>0.2 占 **70.6%**；直接矛盾（v390 avoid 而 dim8 判强/趋势确认）仅 **1.1%**。
+- **关键定性**：dim8 的三个判定号（`status_bar`/`consensus_rate`/`direction`）**无生产消费方**——⑤ `_convert_dim_engine_to_legacy` 只读各维（structure/volume_price/chip_fund/…）**不读 summary**；前端原型只读 `summary.text`（叙事）+ `overall_light`（`light_derive` SSOT）；后端唯一读点是 `test_436` 契约断言与 `sig_full_test` 完整性检查。故「双口径」实为**内部冗余 + 误读风险**，非用户可见矛盾（439-A 已把「灯=环境风险 / 操作含义=方向」分离）。
+
+| 项 | 实施 |
+|---|---|
+| **P1-1** | `dim8_summary_engine.evaluate` 的 `judgment` 标注 `caliber='display_derived'` + 显式注释「展示派生、非判定、判定权威=v390」；保留展示契约键（`test_436` 不变） |
+| **P1-2** | `cross_validate._get_status_verdict` 由**实时 `StatusEngine().evaluate`** 改**优先读 `status_snapshot` 成品**（与 `_get_status_dim_states` 同源同库），无成品行才回退实时 |
+| **P1-3** | `status_snapshot.signals`（注册表触发，原无消费方）接入 `status_verdict` 只读字段（`strategy_analyze`，同一 `status_row` 不额外查询）；`_get_status_verdict` 回退分支同契约补齐 |
+| **P1-4** | `_apply_l0` 移除实测未用的 `dims` 形参（判定全读 tags + daily_basic；L0 在 dim 引擎之后生成，T42 时序） |
+
+**未做（登记 P2-g / P1 后续）**：双口径**单源化**（让 dim8 消费 ③ 结果）未实施——用户选保守方案；`trending_up` regime 分支不可达（`tags.status_bar` 无生产者）→ 入 P2 阈值号。
+
+**验证**：新增 `tests/test_492_p1_structure.py`（5 用例）；受影响集 **201 passed / 0 failed**（P1 + `_apply_l0` 三个调用方测试 + dim8/390/418/490 回归）；ruff 新增代码零告警（2 处 I001 系 HEAD 既有）。
+
+---
+
+## 七bis、待办（原 P1 剩余）
+
+1. **双口径单源化**（未做）：若后续要把 dim8 判定号改为消费 ③，须评估展示层依赖（`test_436`/`sig_full_test`/前端 summary 契约）。
+2. **P2-g**：`_detect_market_regime` 的 `trending_up` 不可达 → 入 P2 阈值号（见 §八）。
+3. **K3 后全链路复跑**：✅ 已完成（见 §九）。
 
 ---
 

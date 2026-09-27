@@ -176,7 +176,7 @@ class StatusEngine:
         # 兼容层：将维度引擎输出转为旧dims格式
         dims = self._convert_to_dims_format(dim_engine_results, tags)
 
-        l0 = self._apply_l0(ts_code, tags, dims, lifecycle)
+        l0 = self._apply_l0(ts_code, tags, lifecycle)
 
         # 418号方案：jud_engine_version 配置分支（v390 新管线 / legacy 旧管线）
         _jud_ver = str((self.cfg or {}).get('jud_engine_version', 'legacy'))
@@ -417,6 +417,7 @@ class StatusEngine:
         # phase），而 dim3/dim4/dim5 的真实键分别是 judgment.state / judgment.direction（phase 为英文
         # 枚举）、sd.market_phase → 量价/筹码/情绪三维 state 恒默认值。此处对齐真实键 + 英文转中文。
         from app.opportunity_atlas.dim_adapter import ENGINE_STATE_TO_CN as _T
+
         # 439-A-1：灯色改由派生 SSOT 计算（不再读各维自产 judgment.light/overall_light）
         from app.opportunity_atlas.light_derive import dim_light as _dl
 
@@ -550,9 +551,9 @@ class StatusEngine:
         # 411号Phase 2：signal_confirm由classify_attribute()分析结果生成
         # 替代原tags.right_side_confirm路径
         try:
-            from app.opportunity_atlas.signal_analyzer import classify_attribute
             # 439-A-1：灯色由派生 SSOT 计算（原 signal_analyzer.LIGHT_MAP 已随灯色迁出 SIG）
             from app.opportunity_atlas.light_derive import derive_light as _pl
+            from app.opportunity_atlas.signal_analyzer import classify_attribute
             lifecycle_data = {}
             attr_result = classify_attribute(dims, tags, lifecycle_data)
             attr_code = attr_result.get('code', 'neutral')
@@ -630,7 +631,13 @@ class StatusEngine:
     # L0 风险分级（335号：L0a 硬否决 / L0b 软约束 / L0c 持有期）
     # ══════════════════════════════════════════════════════════
 
-    def _apply_l0(self, ts_code: str, tags: dict, dims: dict, lifecycle: Optional[dict]) -> dict:
+    def _apply_l0(self, ts_code: str, tags: dict, lifecycle: Optional[dict]) -> dict:
+        """L0 风险分级（335号：L0a 硬否决 / L0b 软约束 / L0c 持有期）。
+
+        492号（P1-4）：原第 3 形参 `dims` 实测**从未被使用**（判定全部读 tags +
+        daily_basic）——L0 在 dim 引擎之后生成（T42 时序，见 dim6_risk_engine:202），
+        与 dims 无因果关系。移除该形参，消除「L0 依赖维度判定」的误导。
+        """
         l0: dict[str, Any] = {
             'hard_veto': False, 'hard_reason': '',
             'soft_risks': [], 'position_coeff': 1.0,
@@ -1044,6 +1051,8 @@ class StatusEngine:
             'l0': json.dumps(l0, ensure_ascii=False),
             'lifecycle': json.dumps(lifecycle, ensure_ascii=False) if lifecycle else None,
             'advice_params': json.dumps(advice_params, ensure_ascii=False),
+            # 492号（P1-3）：注册表触发列表。此前仅落库、无任何消费方（P4）；
+            #   现作为 status_verdict 只读字段接前端（同一 status_row，不再额外查询）。
             'signals': json.dumps(hits or [], ensure_ascii=False),  # 334号 §5：注册表触发列表
         }
         # 365号批次C：维度引擎结果附加字段
