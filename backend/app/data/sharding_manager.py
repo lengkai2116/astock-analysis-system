@@ -188,6 +188,14 @@ class ShardingManager:
                 conn.execute(sql)
             except Exception as e:
                 logger.debug(f"snapshot_cache 索引创建失败: {e}")
+        # 491号（R4-①）：signals 列迁移（status_snapshot 属本分库，ECM 总库无此表）
+        for tbl in ('status_snapshot', 'status_snapshot_history'):
+            try:
+                cols = {r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                if cols and 'signals' not in cols:
+                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN signals TEXT DEFAULT NULL")
+            except Exception as e:
+                logger.debug(f"{tbl} signals 列迁移失败: {e}")
         conn.commit()
 
     def get_write_lock(self, db_name: str) -> threading.RLock:

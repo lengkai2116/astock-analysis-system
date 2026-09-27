@@ -1180,12 +1180,9 @@ class EnhancedCacheManager:
                 created_at          TEXT DEFAULT (datetime('now', 'localtime'))
             )
         """)
-        # 491号（R4-①）：signals 列迁移——334号 §5 注册信号触发列表（status_engine._assemble
-        # 已产出 hits，但原建表无该列 → 落库层丢弃）。对齐 strategy_signal_detail 迁移先例。
-        _ss_cols = {r[1] for r in self.conn.execute(
-            "PRAGMA table_info(status_snapshot)").fetchall()}
-        if 'signals' not in _ss_cols:
-            self._execute("ALTER TABLE status_snapshot ADD COLUMN signals TEXT DEFAULT NULL")
+        # 491号（R4-①）注：status_snapshot 实属分库 snapshot_cache.db（见 sharding_manager
+        #   _TABLE_TO_DB 路由），本总库 DDL 仅为兼容占位；signals 列迁移在 sharding_manager
+        #   _ensure_snapshot_indexes（分库连接）执行，此处不加列（总库无该表，ALTER 无效）。
         self._execute("CREATE INDEX IF NOT EXISTS idx_status_snapshot_state ON status_snapshot(opportunity_state)")
 
         # ── 管道状态表（305号§9.2）：链条驱动执行状态 ──

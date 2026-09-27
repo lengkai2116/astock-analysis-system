@@ -98,7 +98,10 @@ class TestSignalsColumnChain:
         assert 'signals TEXT' in src
         assert 'ALTER TABLE status_snapshot_history ADD COLUMN signals' in src, 'history 缺自愈迁移'
 
-    def test_ecm_status_snapshot_migration(self):
-        import app.data.enhanced_cache_manager as ecm_mod
-        src = inspect.getsource(ecm_mod)
-        assert 'ALTER TABLE status_snapshot ADD COLUMN signals' in src, 'ECM 缺 signals 列迁移'
+    def test_sharding_manager_migration(self):
+        """status_snapshot 属分库 snapshot_cache.db → 迁移须在 sharding_manager 分库连接执行
+        （ECM 总库 DDL 无此表，ALTER 无效——491-5 复核修正）"""
+        import app.data.sharding_manager as sm
+        src = inspect.getsource(sm)
+        assert 'ALTER TABLE {tbl} ADD COLUMN signals' in src, '分库缺 signals 列迁移'
+        assert "('status_snapshot', 'status_snapshot_history')" in src
