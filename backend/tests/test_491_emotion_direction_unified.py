@@ -79,12 +79,20 @@ def test_c3_requires_low_valuation_and_top_divergence():
 
 
 def test_r9_extreme_panic_weights_kept():
-    """R9 决策①：退潮/高潮 → extreme_panic 权重档保持现状（值可经 yaml 调，属 485-5）"""
+    """R9 决策①：extreme_panic 权重档保持现状（值可经 yaml 调，属 485-5）。
+
+    493号 P2-g 修正触发面（原「退潮/高潮→extreme_panic」为粗糙近似）：
+    以**市场级 market_emotion** 为准——冰点→extreme_panic、退潮→trending_down、
+    高潮→trending_up（依据 Wiki《情绪周期-仓位联动》五阶段表）。extreme_panic 权重值不变。
+    """
     regimes = se_mod.StatusEngine.MARKET_REGIME_WEIGHTS
     assert 'extreme_panic' in regimes
     assert regimes['extreme_panic']['risk'] == 0.40
     assert regimes['extreme_panic']['valuation'] == 0.25
-    # 触发面：仅「退潮/高潮」（冰点不切档）
-    assert se_mod.StatusEngine._detect_market_regime({}, {'emotion': {'state': '退潮'}}) == 'extreme_panic'
-    assert se_mod.StatusEngine._detect_market_regime({}, {'emotion': {'state': '高潮'}}) == 'extreme_panic'
-    assert se_mod.StatusEngine._detect_market_regime({}, {'emotion': {'state': '冰点'}}) == 'ranging'
+    # 触发面（P2-g 修正）：冰点→extreme_panic；退潮→trending_down；高潮→trending_up
+    assert se_mod.StatusEngine._detect_market_regime(
+        {}, {'emotion': {'state': '冰点'}}) == 'extreme_panic'
+    assert se_mod.StatusEngine._detect_market_regime(
+        {}, {'emotion': {'state': '退潮'}}) == 'trending_down'
+    assert se_mod.StatusEngine._detect_market_regime(
+        {}, {'emotion': {'state': '高潮'}}) == 'trending_up'

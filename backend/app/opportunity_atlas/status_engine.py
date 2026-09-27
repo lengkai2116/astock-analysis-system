@@ -743,20 +743,42 @@ class StatusEngine:
 
     @staticmethod
     def _detect_market_regime(tags: dict, dims: dict) -> str:
-        """从tags/dims推导当前市场状态（370号S7）"""
-        # 优先从status_bar推导
-        status_bar = str(tags.get('status_bar', ''))
-        if '强确认' in status_bar or '趋势确认' in status_bar:
+        """市场状态推导（370号 S7；493号 P2-g 基准修正）。
+
+        493号 P2-g 实测：原实现的 `tags['status_bar']` 分支**恒不可达**（RAW 扁平层
+        无该键 = 0/300 样本；`status_bar` 是 status_snapshot 成品列，不回灌 tags）；
+        300 只实测 regime 仅 ranging 65.3% / trending_down 34.7%，**trending_up 与
+        extreme_panic 恒 0** → MARKET_REGIME_WEIGHTS 实为 2 档。
+
+        修正基准（用户拍板，依据 Wiki《市场状态感知因子》：个股信号与**市场级状态信号**
+        耦合；《情绪周期-仓位联动》五阶段表：萌芽 30%/发酵 60%/高潮 80% 属上升参与期、
+        退潮 ≤30% 防守、冰点 10%/空仓）：
+          市场级 `market_emotion`（情绪周期六段论）→ regime
+            萌芽/发酵/高潮 → trending_up（做多参与期，结构/量价权重高）
+            退潮          → trending_down（防守，风险权重高）
+            冰点          → extreme_panic（极端恐慌，风险权重最高）
+            回归/正常/未知 → 个股/维度回退
+        注意：须用**市场级** `market_emotion`，非个股 `stock_emotion`（后者恒 neutral）。
+        缺失时回退原「dim5 引擎结论 → risk 维度 → 默认震荡」链（对齐「不额外引入
+        大盘级数据源」约束：只用已存在的 tags 键）。
+        """
+        # 1) 市场级情绪阶段（真实生产者；旧 status_bar 分支已废弃移除）
+        _mkt = str(tags.get('market_emotion', '') or '').lower()
+        if _mkt in ('sprout', 'ferment', 'climax', '萌芽', '发酵', '高潮'):
             return 'trending_up'
-        if '谨慎' in status_bar or '观望' in status_bar:
-            return 'ranging'
-        if '风险' in status_bar or '看空' in status_bar:
+        if _mkt in ('ebb', '退潮'):
             return 'trending_down'
-        # 回退：从emotion维度推导
-        emotion_state = str(dims.get('emotion', {}).get('state', ''))
-        if '退潮' in emotion_state or '高潮' in emotion_state:
+        if _mkt in ('ice', '冰点'):
             return 'extreme_panic'
-        # 回退：从risk维度推导
+        # 2) 回退：dim5 引擎结论（实时可达；存量 dim_results 缺 market_phase 时为空）
+        emotion_state = str(dims.get('emotion', {}).get('state', ''))
+        if '高潮' in emotion_state:
+            return 'trending_up'
+        if '退潮' in emotion_state:
+            return 'trending_down'
+        if '冰点' in emotion_state:
+            return 'extreme_panic'
+        # 3) 回退：从risk维度推导
         risk_state = str(dims.get('risk', {}).get('state', ''))
         if risk_state == '高':
             return 'trending_down'
