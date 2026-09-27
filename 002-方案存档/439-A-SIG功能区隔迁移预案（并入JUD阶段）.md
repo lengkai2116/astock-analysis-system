@@ -63,3 +63,76 @@ related:
 ---
 
 > **本预案性质**：决策记录 + 待办。无任何代码改动。执行入口 = JUD 盘查修正阶段。
+
+---
+
+# 五、灯色全量点位取证（2026-09-27，491 号批次3；产灯侧 12 处）
+
+> 取证基线 HEAD＝`d464403`；行号为当前代码。**本表只取证，不含处置结论**（处置见 §六~§九）。
+
+| # | 产出位置 | 键 | 值域 | 真实派生规则 |
+|---|---|---|---|---|
+| P1 | `dim2_structure_engine:352-357` | `judgment.light` + `judgment.overall_light`（同值） | green/yellow/red | 缠论方向：上升→green、下降→red、否则 yellow |
+| P2 | `dim3_vp_engine:100-101,253-254` | `judgment.light`/`overall_light` | 同上 | vp_state 五态：强健康/健康→green、中性→yellow、背离/严重背离→red |
+| P3 | `dim4_chip_fund_engine:5766,6178-6179` | `judgment.light`/`overall_light` | 同上 | main_force_phase：building/lifting→green、distributing→red、其余（washing/support/unknown）→yellow |
+| P4 | `dim5_emotion_engine:57-65` | `judgment.market_light` | 同上 | PHASE_MAP 第 3 元素：ice→**red**、sprout→yellow、ferment→green、climax→**red**、ebb/regression/neutral→yellow |
+| P5 | `dim5_emotion_engine:265-272` | `judgment.sector_light` | 同上 | sector_heat：top_10/top_20→green、normal/none/缺失→yellow |
+| P6 | `dim5_emotion_engine:283-294` | `judgment.stock_light` | 同上 | 由**量价状态**派生：严重背离→red、健康→green、关注/中性/缺失→yellow |
+| P7 | `dim5_emotion_engine:297-303` + `:510-514` | `judgment.overall_light` | 同上 | `_overall_light`：任一 red→red、≥2 green→green、否则 yellow；**另受 BOCIASI 四象限反向覆盖**（高点象限→market 改 red「高位风险」、低点象限→改 green「情绪底部」） |
+| P8 | `dim6_risk_engine:206-214,527,563-564` | `judgment.light`/`overall_light` + `status_description.risk_light` | 同上 | 高风险源计数：≥2→red、=1→yellow、0→green |
+| P9 | `dim7_valuation_engine:740-744` | `judgment.overall_light` + 4 个嵌套子项 light | 同上 | LEVEL_LIGHT：extreme_low/low→green、fair→yellow、high/extreme_high→red；子项：deviation>10→green/<-10→red、fina pass→green/fail→red、potential≥60→green/<30→red |
+| P10 | `signal_analyzer:46-52,652-657` | `judgment.attribute.light`/`strength.light`/`maintenance.light`/`overall_light` | 同上 | LIGHT_MAP（属性码）+ 强度/衰减分档派生 |
+| P11 | `dim8_summary_engine:46,161-162,806,1559` | 段 `light`（emoji）+ 顶层 `light` | 🟢🟡🔴 | `_extract_dim_light`（读各维 overall_light）+ `_LIGHT_EMOJI` |
+| P12 | 各维（数据不足分支） | `'light': 'yellow'` 兜底 | yellow | 兜底默认 |
+
+**关键观察（本次新发现）**：
+- **P4 与 491 拍板的逆势方向自上不一致**：`market_light` 为**顺势语义**（ice→red 环境风险），而 `_EMOTION_DIRECTION` 为**逆势语义**（冰点→+1 操作机会）→ 同一状态「冰点」在 dim5 内部 direction=+1 而 light=red。
+- P6 `stock_light` 的主源实为 **dim3 量价状态**（跨维），与 437-A D4「个股情绪主源=dim3」重复。
+
+# 六、JUD 派生规则映射表（迁移后目标态）
+
+**原则**：灯色＝**分析结论（status/state）的纯函数映射**（无判定、无干预）；由**单一规则表 SSOT** 派生，SIG 各维引擎**不再自产灯**；派生表同时供 JUD 判定层（dim8 共识/冲突、cross_validate、status_engine dims）与展示层（seven_dim_json 段灯色）调用。
+
+| 维 | 迁移后输入（SIG 分析结论） | 派生规则（建议，与现状等价） | 等价性 |
+|---|---|---|---|
+| structure | `judgment.structure`（上升/盘整/下降） | 上升→green、盘整→yellow、下降→red | ✅（P1 同源） |
+| volume_price | `judgment.state`（强健康/健康/中性/背离/严重背离） | 强健康/健康→green、中性→yellow、背离/严重背离→red | ✅（P2） |
+| chip_fund | `judgment.phase`（building/washing/lifting/distributing/support/unknown） | building/lifting→green、distributing→red、其余→yellow | ✅（P3）；备选口径见 Q-439A-5 |
+| emotion（市场） | `status_description.market_phase`（ice/sprout/ferment/climax/ebb/regression/neutral） | **见 Q-439A-1**：环境口径（现状）ice/climax→red、ferment→green、其余→yellow；操作口径（逆势）ice→green | ⚠️ 待拍板 |
+| emotion（板块） | `status_description.sector_heat` | top_10/top_20→green、normal/none→yellow | ✅（P5） |
+| emotion（个股） | **主源改 dim3 `vp_state`**（跨维去重） | 严重背离→red、健康→green、其余→yellow | ✅（P6）但主源归一 |
+| risk | `risk_sources` 中 level=高 的计数 | ≥2→red、=1→yellow、0→green | ✅（P8） |
+| valuation | `judgment.valuation_level.value` | extreme_low/low→green、fair→yellow、high/extreme_high→red | ✅（P9） |
+| signal | `judgment.attribute.code` | LIGHT_MAP：right_confirmed/right_emerging/trend_running→green、left_probing/consolidating/neutral→yellow、risk_warning→red | ✅（P10） |
+| 无数据 | — | yellow（**语义改为「数据缺失」**） | 见 Q-439A-2 |
+| 顶层/段（展示） | 各维派生灯聚合 | 沿用 `_overall_light` 聚合（任一 red→red、≥2 green→green）+ `_LIGHT_EMOJI` | ✅（P7/P11） |
+
+# 七、消费方清单与迁移动作（10 处）
+
+| # | 消费方 | 现读 | 迁移动作 |
+|---|---|---|---|
+| C1 | `dim8._extract_dim_light:76-79` | 各维 `judgment.overall_light` | 改调派生表（state→light） |
+| C2 | `dim8._calc_consensus_rate:189-194` | light→(±1) 参与共识 | 同上（等价） |
+| C3 | `dim8._detect_conflicts:227-256`（4 条规则） | vp/emotion/risk/valuation light | 同上 |
+| C4 | `dim8._derive_status_bar:320-321` | risk light | 同上 |
+| C5 | `dim8` 段 light + 顶层 emoji（`:806`/`:1559`） | light→`_LIGHT_EMOJI` | 同上（**前端契约字段名/值域不变**） |
+| C6 | `cross_validate._convert_dim_engine_to_legacy:54` | emotion `overall_light` → 方向 | 改用 `judgment.overall_direction`（更直接）或派生灯 |
+| C7 | `cross_validate` L4 diagnose `:585-587` | dims light → L1 方向计票 | 改用派生灯（等价） |
+| C8 | `status_engine._convert_to_dims_format:393-488` | 各维 `judgment.light`/`overall_light` → `dims[dim].light` | 改派生；`dim_states` 落库契约不变 |
+| C9 | `routes/strategy_analyze:156/217-218/847-872/923` | dim_states/seven_dim 的 light | 契约不变（读派生灯） |
+| C10 | `data/stg_quality:554` | 段 light emoji 合法性校验 | 契约不变 |
+
+# 八、迁移批次建议
+
+1. **439-A-1（落地批次①）**：新增派生表 SSOT（建议 `backend/app/opportunity_atlas/light_derive.py`，接口 `derive_light(dim, state) -> str`）；SIG 6 维 + `signal_analyzer` 删自产灯（P1~P10）；消费方 C1~C8 改调 SSOT。
+2. **439-A-2（落地批次②）**：展示层 C5 + 前端契约回归（C9/C10）。
+3. **验证**：8 股 + 全市场抽样，逐股对比「迁移前灯色 vs 派生灯色」应**完全一致**（除非 Q-439A-1 改口径）。
+4. **风险**：①`seven_dim_json` 段 light/emoji 字段名与值域须不变（前端直读）；②`status_snapshot.dim_states` 值域不变；③STG 质检门禁（C10）；④若 Q-439A-1 改口径 → C1~C5 结果变化，须前端同步。
+
+# 九、待拍板项（Q-439A）
+
+- **Q-439A-1（核心）**：**灯色语义**——「市场/环境风险」（现状：冰点=red、高潮=red）vs「操作含义」（与 491 逆势方向一致：冰点=机会=green）。**建议**：**明确分工**「灯＝环境风险、方向＝操作含义」，并在派生表注释中写明（这样 P4 保留红、不破坏现有前端观感；同时 direction 逆势表达机会）。
+- **Q-439A-2**：`'yellow'` 兜底 → **删除** 还是 **保留为「数据缺失」色**？建议保留（dim8/前端需要无数据可视化），仅改语义标注。
+- **Q-439A-3**：dim5 `stock_light`（主源实为 dim3 量价状态）是否随 437-A D4 跨维去重删除、由 dim3 侧统一派生？
+- **Q-439A-4**：`signal_analyzer` 的灯（signal 维判定）→ 迁 JUD 由 JUD 派生，还是随 signal 段（437-A 已移出 dim8）交前端组合？
+- **Q-439A-5**：派生细则口径——chip_fund 用 `phase` 还是 `direction`；emotion 板块 light 是否区分 top_10/top_20。
