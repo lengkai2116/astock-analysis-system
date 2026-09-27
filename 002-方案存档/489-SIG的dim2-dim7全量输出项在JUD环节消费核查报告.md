@@ -341,3 +341,31 @@ sed -n '5916,5930p' backend/data_daemon.py
 ```
 
 **核查时点代码基线**：HEAD `b126cec`（2026-09-27）。
+
+---
+
+## 八、复核更正（2026-09-27，J-5 逐键复核，HEAD `c0877a9`/`624c3e4`）
+
+> **复核口径（用户 2026-09-27 拍板）**：判定「未消费项」的**标准不是「有没有被消费」，而是「该数据是否有用且准确」**——若有用且准确却未被 JUD 消费，应记为 **JUD 能力缺口（应接线）**，而非删除项；仅当**同事实 + 同准确度 + 已由其他键覆盖**时，才归「语义冗余」。
+
+**§四 清单逐键复核结论**：
+
+| 维 | 键 | §四 原判 | 复核结论（HEAD `c0877a9`） |
+|---|---|---|---|
+| dim2 | `multi_level` | ⛔ | ✅ **已接线**（490）——`reliability_assessor:156` 周线方向修正、`dim_adapter:178` 多级别一致性、`conflict_matrix:161` C2b。**§四 判定作废** |
+| dim2 | `divergence_strength` | ⛔ | ✅ **已接线**（490）——`conflict_matrix:95/208/210/319` C6 趋势背驰规则。**§四 判定作废** |
+| dim2 | `vs_chip` | ⛔ | **B 类语义冗余**——同读 `chip_concentration`/`profit_ratio`，主源 dim4（437-A D4 主动去重） |
+| dim2 | `buy_sell_points` | ⛔ | **B 类语义冗余**——`buy_sell_points_detail` 为同源结构化超集（已双消费），本键为 `[str(p)]` 展示副本 |
+| dim2 | judgment.`position` | ⛔ | **B 类同源冗余**——与 JUD 已消费的同一 tag `price_position` 同源（`dim_adapter:602-608` 直接由 tag 推 `factors['position']` → L3 `structure_trend` 族 / L2 reliability）。dim2 键为该 tag 的**回声副本** |
+| dim3 | `health_score` | ⛔ | **B 类同值冗余**——`state_machine_confidence = hs/10` 已进 L1 `vp` strength（0.7 权重）；sd 文本 `'8/10（…）'` 为同值展示副本 |
+| dim3 | `pattern_score` | ⛔ | **B 类间接已消费**——`dim3_vp_engine:158-161` `pattern_deviation=(pattern_score-5)/5*1.5 → raw +=` → 已按约 15% 权重折入 `hs` → 经 `state_machine_confidence` 进 L1。**JUD 已消费其数值，sd 文本为展示副本** |
+| dim5 | `stock` | ⛔ | **B 类派生冗余**——`_assess_stock_emotion`（dim5:275-294）读 `volume_price_fit` + `dims['vp'].judgment.state` 派生，主源 dim3 vp_state（437-A D4）→ 纯派生渲染 |
+| dim7 | judgment 嵌套 `valuation_deviation.{value}` | ⛔ | **B 类同值双写**——与 sd 平铺 `valuation_deviation`（L1 已消费）同变量 `deviation` 双写（dim7:725/735） |
+| dim7 | judgment 嵌套 `potential_strength.{value}` | ⛔ | **B 类同值双写**——与 sd 平铺 `potential_strength`（L1 factor 已消费）同变量 `strength` 双写（dim7:716/737） |
+
+**更正后定性**：§四 的「其余未消费键」经复核**无 A 类（应消费未消费）缺口**——**10 项中 2 项已于 490 接线（判定作废），8 项为语义冗余（B 类）**（详见 `491-…md` §九 复核备注）。真正的「判定输入失真」缺口集中在 §五（A/B/C 三类消费悬空），490 已修。
+
+**处置**：按用户拍板，B 类冗余**仅更正分类、不动代码**（保留为展示/契约层副本，零风险）；A 类无项，故本批无代码接线。
+
+**注**（dim6 部分，见 491 §九）：`risk_sources`/`piers_leverage_triggered`/`liquidity_risk` 属「该消费未消费」已于 491 批次4 接线入 dim8 E 表；`event_summary`/`support_resistance`/`event_count` 经复核为同源冗余（`event_details`/`support_price` 系列已覆盖）；`atr_14d`/`liquidity_avg_amount_wan`/`liquidity_circ_mv_wan` 为**低优先 JUD 增强候选**（L6 按 ATR 止损/仓位、L4 流动性硬规则——当前无规则）。
+
