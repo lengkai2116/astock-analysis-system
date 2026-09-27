@@ -1,9 +1,9 @@
 ---
-title: dim5 情绪温度 7 入参"因"透传（A1）+ 复跑暴露的 emotion_ext 涨停/封板率供给缺口（488-2）
-type: 实施号（A1 已实施；488-2 缺口已实证定位、待拍板）
+title: dim5 情绪温度 7 入参"因"透传（A1）+ emotion_ext 涨停/封板率供给缺口修复（488-2）
+type: 实施号（A1 + 488-2 均已实施并验证）
 date: 2026-09-27
-version: v1.0
-status: ✅ A1 已实施并验证；🔄 488-2（数据供给缺口）登记待拍板
+version: v1.1（A1 实施 + 488-2 由缺口登记转为本号内实施）
+status: ✅ 全部实施并验证（A1 透传；488-2 采集修复+回补+重算+dim8 接线）
 related:
   - 464-dim8-dim5现状描述输出定稿（情绪环境）（§七观察项③ 拍板「以 7 入参明细作因透传」，§三-7 话术形态）
   - 479-dim8现状描述改造与全链路收口总方案（§七遗留③ 登记「7 入参明细未透传」）
@@ -57,15 +57,31 @@ related:
 ### 性质与边界
 属**数据采集缺口**（「因」侧，445 允许修复）；与 488 A1 的透传改动相互独立——A1 让缺口**可见**（此前静默取默认）。
 
-### 修复方向（待拍板，未实施）
-1. **采集端**：补 `sentiment_pool_cache`（涨停池/炸板池：`limit_type` / `first_seal_time` / `consecutive_days`）的采集与日终同步（akshare/Tushare 涨停池）——消费方 `MarketSentimentService.get_sentiment_phase()` 已就绪，仅缺数据；
-2. **回补**：近 N 交易日回补 + `pre_feat` 重算（8 股定向 + 全市场随 daemon 日终）；
-3. **验证**：温度因句出现真实「涨停N家/封板率X%」；`data_available=True`；dim8 大盘状态句恢复。
+### 修复（✅ 2026-09-27 本号内实施，5 处）
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | `akshare_collector._collect_sentiment_pool` | 改官方**三接口** `date=`：`stock_zt_pool_em`（涨停）/ `stock_zt_pool_dtgc_em`（跌停）/ `stock_zt_pool_zbgc_em`（炸板）；新增 `_pool_ts_code`（6→SH / 0,3→SZ / 4,8→BJ / 9→SH）、`_pool_int`；连续板数字段分流（连板数 / 连续跌停 / 炸板池缺列默认 1）；失败改 **warning** 级（不再静默）；新增 `backfill_sentiment_pool(dates)` 覆盖式回补（`INSERT OR REPLACE` 幂等） |
+| 2 | `market_sentiment_service` 封板率**口径** | 改「涨停 /(涨停+炸板)」——AKShare 涨停池本身即已封板股，原按池内 `first_seal_time` 比 **恒 100%、无区分度**；炸板池缺数据回退原口径 |
+| 3 | `data_daemon` RAW-2 情绪块 | 按本行特征 `trade_date` 取市情绪池（原 `ms.get_sentiment_phase()` 缺省 today → 非交易日/回补重算取今日池必空） |
+| 4 | `data_daemon.run_integrity_check` | 增「覆盖式补采近 N 交易日」（交易日历 ∩ 数据面；日历不可用回退今日单日） |
+| 5 | `dim8._market_state_sentence` | 涨停家数/封板率**双源**：`market_stats`（封板率分数 0-1，437-A 契约）优先 → `emotion_ext`（百分数 0-100）兜底 |
 
-> **注**：488-2 涉及采集端（daemon 采集任务 + 数据源），工作量与风险高于 A1，建议**另开数据采集号**或经用户拍板后在本号追加子项。
+### 回补与重算（2026-09-27，daemon 停态）
+- **回补 3 交易日**：`2026-09-22/23/24` → 写入 **249 条**；涨停 **63/51/52** 家、封板率 **77.8/67.1/83.9%**、`data_available=True`（phase=ferment）。
+- **pre_feat 定向重算 8 股**（`target_date=2026-09-24`，脚本 `_488_backfill_and_recompute.py`）：`emotion_ext` 落 `limit_up_count=52` / `sealing_rate=83.9`；**温度 43.8 → 63.7**（25% 权重首次真实生效）。
+
+### 验证
+- **探针复跑 8 股**：段 text 全 OK（无 EMPTY/FATAL）；温度句 `偏热61.7/100（阶段发酵(基温60)+涨停52家+封板率84%+板块排名无数据+量价中性+融资5日-12.5%+广度39%(20日均线占比近似)，情绪周期修正(快0.68×0.6+慢0.72×0.4)）`；大盘状态句 `全市场20日均线强势占比39%（偏弱）；涨停52家；封板率84%`。
+- **单测**：`tests/test_488_sentiment_pool_collector.py` **9 passed**（ts_code 归一 / 整数化 / 三接口映射与调用 / 缺接口降级 / 多日回补 / 封板率口径与回退 / dim8 句含涨停封板率 / 缺数据降级）。
+- **回归**：dim5/dim8 系 **167 passed**。
+- **ruff/py_compile**：改动文件无**新增**问题（`dim5`/`test_447` 既有 I001、`akshare_collector:270` 既有 F841 均经对 HEAD 版本复核确认为改动前存在）。
+
+### 遗留（登记，非本号缺口）
+- `market_stats` 未落 `limit_up_count`/`sealing_rate`（需 `market_stats_cache` DDL + 持久化 + 列迁移）→ dim8 走 `emotion_ext` 兜底；若未来要求 market_stats 直读，另立小号。
+- **全市场** `emotion_ext` 的该两键将随 daemon 下次日终 RAW-2 自然刷新（本次仅 8 股定向重算）；建议交易日重启 daemon 后回收验。
 
 ## 三、产物清单
-- 代码：`dim5_emotion_engine.py`、`dim8_summary_engine.py`
-- 测试：`tests/test_488_dim5_temperature_basis.py`（新增 8）、`tests/test_447_dim5_emotion_fix.py`（断言放宽 1 处）
-- 探针：`backend/scripts/_488_emotion_ext_probe.py`、`backend/scripts/_488_sentiment_pool_probe.py`
+- 代码：`dim5_emotion_engine.py`、`dim8_summary_engine.py`、`app/data/akshare_collector.py`、`app/services/market_sentiment_service.py`、`data_daemon.py`
+- 测试：`tests/test_488_dim5_temperature_basis.py`（新增 8）、`tests/test_488_sentiment_pool_collector.py`（新增 9）、`tests/test_447_dim5_emotion_fix.py`（断言放宽 1 处）
+- 脚本/探针：`backend/scripts/_488_emotion_ext_probe.py`、`_488_sentiment_pool_probe.py`、`_488_backfill_and_recompute.py`
 - 登记：本档；`464-dim8-dim5现状描述输出定稿` §七观察项③、`479` §七遗留③ 回填关闭

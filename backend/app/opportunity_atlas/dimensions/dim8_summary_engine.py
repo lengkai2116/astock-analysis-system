@@ -1146,13 +1146,16 @@ def _market_state_sentence(dim_results: dict) -> str:
     """437-A D3：第一层环境定位——大盘状态句（市场广度/情绪温度）。
 
     数据源 dim1 data_context['market_stats']（daemon RAW 预计算，全市场共享）。
+    488-2：涨停家数/封板率改读 data_context['emotion_ext']（RAW-2 由
+      sentiment_pool_cache 聚合，口径 0-100）——market_stats 未落该两键（原读法恒不出句）。
     无数据/异常返回 ''（437 标准「有数据则显、缺则降级」）。
     """
     try:
         sig = (dim_results or {}).get('signal') or {}
         dc = sig.get('data_context') or {}
         ms = dc.get('market_stats') or {}
-        if not ms:
+        ee = dc.get('emotion_ext') or {}
+        if not ms and not ee:
             return ''
         parts = []
         ma20 = ms.get('ma20_ratio')
@@ -1160,12 +1163,20 @@ def _market_state_sentence(dim_results: dict) -> str:
             pct = ma20 * 100
             tone = '偏强' if pct >= 60 else ('中性' if pct >= 40 else '偏弱')
             parts.append(f'全市场MA20强势占比{pct:.0f}%（{tone}）')
+        # 488-2：涨停家数/封板率双源——market_stats 优先（封板率为分数 0-1，437-A 契约），
+        #   emotion_ext 兜底（RAW-2 由 sentiment_pool_cache 聚合，封板率为百分数 0-100）
         lim = ms.get('limit_up_count')
+        if not (isinstance(lim, int) and lim > 0):
+            lim = ee.get('limit_up_count')
         if isinstance(lim, int) and lim > 0:
             parts.append(f'涨停{lim}家')
         sealing = ms.get('sealing_rate')
         if isinstance(sealing, (int, float)) and sealing > 0:
             parts.append(f'封板率{sealing * 100:.0f}%')
+        else:
+            sealing = ee.get('sealing_rate')
+            if isinstance(sealing, (int, float)) and sealing > 0:
+                parts.append(f'封板率{sealing:.0f}%')
         if not parts:
             return ''
         return '大盘状态：' + '；'.join(parts)

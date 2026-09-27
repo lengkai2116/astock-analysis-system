@@ -305,62 +305,116 @@ def _collect_minute_kline():
             logger.debug(f"[minute_kline] {ts_code} 跳过: {e}")
 
 
-def _collect_sentiment_pool():
-    """Thread 6: 涨跌停情绪池（覆盖式，30min，通过 AKShare stock_zt_pool_em）"""
+def _pool_ts_code(raw_code: str) -> str:
+    """488-2：AKShare 6 位代码 → 标准 ts_code（6→SH / 0,3→SZ / 4,8→BJ / 9→SH(B股)）"""
+    c = str(raw_code or '').replace(')配股', '').strip()
+    if not c:
+        return ''
+    if c[0] == '6' or c[0] == '9':
+        return f'{c}.SH'
+    if c[0] in ('4', '8'):
+        return f'{c}.BJ'
+    return f'{c}.SZ'
+
+
+def _pool_int(val, default: int = 1) -> int:
+    """488-2：池字段整数化（''/None/nan/0 → default）"""
+    s = str(val).strip()
+    if s in ('', 'None', 'nan', 'NaN', '0', '0.0'):
+        return default
+    try:
+        return int(float(s))
+    except (ValueError, TypeError):
+        return default
+
+
+def _collect_sentiment_pool(trade_date: str = None) -> int:
+    """Thread 6: 涨跌停情绪池（覆盖式，30min；AKShare 涨停池 + 跌停池）
+
+    488-2 修复（2026-09-27）：原实现误传 `market=`/`type=` 参数，而 AKShare
+    `stock_zt_pool_em` **只接受 `date`** → TypeError 被 `logger.debug` 级 except
+    吞掉 → 恒「共 0 条」，`sentiment_pool_cache` 全表为空；连带 dim5 情绪温度
+    「涨停家数(15%)/封板率(10%)」恒取默认、`MarketSentimentService.data_available=False`。
+    改为官方接口：`stock_zt_pool_em(date)` 涨停 / `stock_zt_pool_dtgc_em(date)` 跌停；
+    失败/空数据改 **warning/info 级**日志（不再静默）。
+
+    Args:
+        trade_date: 交易日 YYYYMMDD 或 YYYY-MM-DD；缺省=今日（426 P1-3 回补口径）
+
+    Returns:
+        int: 实际收集条数
+    """
     ak = _get_ak()
     if ak is None:
-        return
+        return 0
     ecm = _get_ecm()
-    today = datetime.now().strftime('%Y%m%d')
+    date = (trade_date or datetime.now().strftime('%Y%m%d')).replace('-', '')
     records = []
 
-    # AKShare 代码→标准 ts_code 格式映射
-    _exchange_code = {'SH': '.SH', 'SZ': '.SZ'}
-
-    for market in ('SH', 'SZ'):
-        suffix = _exchange_code.get(market, f'.{market}')
-        for limit_type in ('up', 'down'):
-            try:
-                params = {'market': market}
-                if limit_type == 'down':
-                    params['type'] = 'down'
-                df = ak.stock_zt_pool_em(**params)
-                if df is None or df.empty:
-                    continue
-                for _, row in df.iterrows():
-                    raw_code = str(row.get('代码', '') or '').replace(')配股', '').strip()
-                    # 统一为 ts_code 格式: 600000.SH / 000001.SZ
-                    if raw_code and not raw_code.endswith(suffix):
-                        full_ts_code = raw_code + suffix
-                    else:
-                        full_ts_code = raw_code
-                    try:
-                        consecutive = int(row.get('连板数', 1)) if str(row.get('连板数', '1')).strip() not in ('', 'None', 'nan', '0') else 1
-                    except (ValueError, TypeError):
-                        consecutive = 1
-                    rec = {
-                        'trade_date': today,
-                        'ts_code': full_ts_code,
-                        'name': str(row.get('名称', '') or ''),
-                        'change_pct': _safe_float(row.get('涨跌幅', 0)),
-                        'price': _safe_float(row.get('最新价', 0)),
-                        'limit_type': limit_type,
-                        'consecutive_days': consecutive,
-                        'reason_category': str(row.get('涨停原因', row.get('跌停原因', '')) or ''),
-                        'first_seal_time': str(row.get('首次封板时间', '') or ''),
-                        'data_source': 'akshare',
-                    }
-                    records.append(rec)
-                logger.info(f"[sentiment_pool] {market} {limit_type}: {len(df)} 只")
-            except Exception as e:
-                logger.debug(f"[sentiment_pool] {market} {limit_type} 跳过: {e}")
+    # 488-2：官方接口（涨停池/跌停池/炸板池各一），不再按市场循环传参。
+    # 炸板池供 MarketSentimentService 计算「封板率 = 涨停/(涨停+炸板)」——
+    # 仅凭涨停池（本身即已封板股）算封板率恒 100%，无区分度。
+    _specs = (('up', 'stock_zt_pool_em'), ('down', 'stock_zt_pool_dtgc_em'),
+              ('zha', 'stock_zt_pool_zbgc_em'))
+    for limit_type, fn_name in _specs:
+        fn = getattr(ak, fn_name, None)
+        if fn is None:
+            logger.warning(f"[sentiment_pool] AKShare 缺少接口 {fn_name}，跳过")
+            continue
+        try:
+            df = fn(date=date)
+        except Exception as e:
+            logger.warning(f"[sentiment_pool] {limit_type} 拉取失败(date={date}): {e}")
+            continue
+        if df is None or df.empty:
+            logger.info(f"[sentiment_pool] {limit_type} 无数据(date={date})")
+            continue
+        for _, row in df.iterrows():
+            ts_code = _pool_ts_code(row.get('代码', ''))
+            if not ts_code:
+                continue
+            # 连续板数：涨停池用「连板数」、跌停池用「连续跌停」、炸板池无此列（默认 1）
+            if limit_type == 'up':
+                _board = row.get('连板数')
+            elif limit_type == 'down':
+                _board = row.get('连续跌停')
+            else:
+                _board = None
+            consecutive = _pool_int(_board, 1)
+            # 跌停池无「首次封板时间」（仅涨停池/炸板池有，供封板率口径参考）
+            records.append({
+                'trade_date': date,
+                'ts_code': ts_code,
+                'name': str(row.get('名称', '') or ''),
+                'change_pct': _safe_float(row.get('涨跌幅', 0)),
+                'price': _safe_float(row.get('最新价', 0)),
+                'limit_type': limit_type,
+                'consecutive_days': consecutive,
+                'reason_category': str(row.get('涨停原因', row.get('所属行业', '')) or ''),
+                'first_seal_time': str(row.get('首次封板时间', '') or ''),
+                'data_source': 'akshare',
+            })
+        logger.info(f"[sentiment_pool] {limit_type} {len(df)} 只(date={date})")
 
     if records:
         try:
-            ecm.write_sentiment_pool(records)
+            ecm.write_sentiment_pool(records)   # INSERT OR REPLACE（幂等覆盖）
         except Exception as e:
             logger.warning(f"[sentiment_pool] 写入缓存失败: {e}")
-    logger.info(f"[sentiment_pool] 共 {len(records)} 条")
+    logger.info(f"[sentiment_pool] 共 {len(records)} 条(date={date})")
+    return len(records)
+
+
+def backfill_sentiment_pool(dates) -> int:
+    """488-2：按交易日列表覆盖式回补涨跌停池（供 daemon 巡检 / 手工回补）
+
+    Args:
+        dates: 交易日序列（YYYYMMDD 或 YYYY-MM-DD）
+    """
+    total = 0
+    for d in dates or []:
+        total += _collect_sentiment_pool(d)
+    return total
 
 
 def _collect_lhb_and_news():

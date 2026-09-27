@@ -2198,6 +2198,22 @@ def run_integrity_check(backfill_days: int = 1):
     except Exception as e:
         logger.warning(f"  融资融券检查失败: {e}")
 
+    # 488-2：涨跌停情绪池（sentiment_pool_cache）——覆盖式补采近 N 交易日。
+    # 消费方：dim5 情绪温度（涨停家数 15% / 封板率 10%）+ MarketSentimentService 六段论。
+    # 采集器原为签名误用恒 0 条（见 akshare_collector._collect_sentiment_pool 注释），此处按
+    # 交易日历 ∩ 数据面覆盖式回补，日期不可得时不静默跳过。
+    try:
+        from app.data.akshare_collector import backfill_sentiment_pool
+        _sp_days = _recent_trading_days(max(backfill_days, 3))
+        if _sp_days:
+            _sp_n = backfill_sentiment_pool(_sp_days)
+            logger.info(f"  [情绪池] 覆盖式补采 {len(_sp_days)} 个交易日 → {_sp_n} 条")
+        else:
+            logger.warning("  [情绪池] 交易日历不可用，回退今日单日补采")
+            backfill_sentiment_pool([datetime.now().strftime('%Y%m%d')])
+    except Exception as e:
+        logger.warning(f"  情绪池检查失败: {e}")
+
     # 财务指标补充检查（非每日判断，仅检查有无数据，356号：从分库读取）
     try:
         fina_cnt = _query_table('fina_indicator_cache', "SELECT COUNT(*) FROM fina_indicator_cache")
@@ -3699,7 +3715,10 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 _sent = {}
                 # sentiment_phase：始终写入（默认neutral）
                 try:
-                    sentiment = ms.get_sentiment_phase()
+                    # 488-2：按本行特征的 trade_date 取市情绪池（原为 datetime.now()——
+                    # 非交易日/回补重算时取今日池必空 → 涨停家数/封板率永不落库）
+                    sentiment = ms.get_sentiment_phase(
+                        (trade_date or '').replace('-', '') or None)
                     if sentiment.get('data_available'):
                         _sent['sentiment_phase'] = sentiment['phase']
                         _sent_metrics = sentiment.get('metrics') or {}

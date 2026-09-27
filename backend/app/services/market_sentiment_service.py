@@ -74,12 +74,17 @@ class MarketSentimentService:
         # 最高连板数
         max_board_height = int(up_df['consecutive_days'].max()) if not up_df.empty else 0
 
-        # 封板率（涨停池中标记了首次封板时间的比例 ≈ 已封板 / 全部涨停）
-        sealed = up_df['first_seal_time'].notna() & (up_df['first_seal_time'] != '')
-        sealing_rate = (
-            round(int(sealed.sum()) / max(limit_up_count, 1) * 100, 1)
-            if limit_up_count > 0 else 0.0
-        )
+        # 封板率（488-2：优先「涨停 / (涨停+炸板)」——AKShare 涨停池本身即已封板股，
+        #   仅按池内「首次封板时间」算恒 100%、无区分度；炸板池缺数据时回退原口径）
+        zha_df = df[df['limit_type'] == 'zha']
+        if limit_up_count > 0 and len(zha_df) > 0:
+            sealing_rate = round(limit_up_count / (limit_up_count + len(zha_df)) * 100, 1)
+        else:
+            sealed = up_df['first_seal_time'].notna() & (up_df['first_seal_time'] != '')
+            sealing_rate = (
+                round(int(sealed.sum()) / max(limit_up_count, 1) * 100, 1)
+                if limit_up_count > 0 else 0.0
+            )
 
         metrics = {
             'limit_up_count': limit_up_count,
