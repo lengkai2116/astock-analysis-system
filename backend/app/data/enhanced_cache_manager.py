@@ -1180,6 +1180,12 @@ class EnhancedCacheManager:
                 created_at          TEXT DEFAULT (datetime('now', 'localtime'))
             )
         """)
+        # 491号（R4-①）：signals 列迁移——334号 §5 注册信号触发列表（status_engine._assemble
+        # 已产出 hits，但原建表无该列 → 落库层丢弃）。对齐 strategy_signal_detail 迁移先例。
+        _ss_cols = {r[1] for r in self.conn.execute(
+            "PRAGMA table_info(status_snapshot)").fetchall()}
+        if 'signals' not in _ss_cols:
+            self._execute("ALTER TABLE status_snapshot ADD COLUMN signals TEXT DEFAULT NULL")
         self._execute("CREATE INDEX IF NOT EXISTS idx_status_snapshot_state ON status_snapshot(opportunity_state)")
 
         # ── 管道状态表（305号§9.2）：链条驱动执行状态 ──

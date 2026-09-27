@@ -5696,7 +5696,7 @@ def _out_transmit_seven_dim(codes: list[str]):
         except Exception as e:
             logger.warning(f"七维透传失败: {e}")
 
-    # ── 2. 归档 status_snapshot → status_snapshot_history（16列完整）──
+    # ── 2. 归档 status_snapshot → status_snapshot_history（17列完整）──
     try:
         _snap_conn.execute("""
             CREATE TABLE IF NOT EXISTS status_snapshot_history (
@@ -5705,19 +5705,25 @@ def _out_transmit_seven_dim(codes: list[str]):
                 state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
                 direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
                 summary_text TEXT, one_liner_detail TEXT, dim_engine_results TEXT,
+                signals TEXT,
                 PRIMARY KEY (ts_code, snapshot_date)
             )
         """)
+        # 491号（R4-①）：history 表为 CREATE-IF-NOT-EXISTS，已存在的旧表缺 signals 列 → 自愈补列
+        _hist_cols = {r[1] for r in _snap_conn.execute(
+            "PRAGMA table_info(status_snapshot_history)").fetchall()}
+        if 'signals' not in _hist_cols:
+            _snap_conn.execute("ALTER TABLE status_snapshot_history ADD COLUMN signals TEXT DEFAULT NULL")
         _snap_conn.execute("""
             INSERT OR REPLACE INTO status_snapshot_history
                 (ts_code, snapshot_date, trade_date, dim_states, status_bar,
                  opportunity_state, state_evidence, conflict_evidence, consensus_rate,
                  direction, l0, lifecycle, advice_params,
-                 summary_text, one_liner_detail, dim_engine_results)
+                 summary_text, one_liner_detail, dim_engine_results, signals)
             SELECT ts_code, snapshot_date, trade_date, dim_states, status_bar,
                    opportunity_state, state_evidence, conflict_evidence, consensus_rate,
                    direction, l0, lifecycle, advice_params,
-                   summary_text, one_liner_detail, dim_engine_results
+                   summary_text, one_liner_detail, dim_engine_results, signals
             FROM status_snapshot
             WHERE dim_engine_results IS NOT NULL
         """)
@@ -5911,7 +5917,7 @@ def _build_status_snapshot(codes: list[str]):
                 state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
                 direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
                 summary_text TEXT, one_liner_detail TEXT, dim_engine_results TEXT,
-                created_at TEXT
+                signals TEXT, created_at TEXT
             )
         """)
         written = 0
@@ -5970,14 +5976,16 @@ def _build_status_snapshot(codes: list[str]):
                     f"INSERT OR REPLACE INTO {_NEW} (ts_code, snapshot_date, trade_date,"
                     f" dim_states, status_bar, opportunity_state, state_evidence,"
                     f" conflict_evidence, consensus_rate, direction, l0, lifecycle, advice_params,"
-                    f" summary_text, one_liner_detail, dim_engine_results)"
-                    f" VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    f" summary_text, one_liner_detail, dim_engine_results, signals)"
+                    f" VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [code, trade_date, row['dim_states'], row['status_bar'],
                      row['opportunity_state'], row['state_evidence'],
                      row['conflict_evidence'], row['consensus_rate'],
                      row['direction'], row['l0'], row['lifecycle'], row['advice_params'],
                      summary_text, None,
-                     row.get('dim_engine_results')])
+                     row.get('dim_engine_results'),
+                     # 491号（R4-①）：334号 §5 注册信号触发列表落库（原被丢弃）
+                     row.get('signals')])
                 written += 1
             except Exception as e:
                 logger.warning(f"status_snapshot {code} 生成失败: {e}")

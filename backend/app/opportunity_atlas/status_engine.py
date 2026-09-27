@@ -916,14 +916,29 @@ class StatusEngine:
 
         signal_registry.yaml 登记触发条件（此处为判定实现；验证条件=N 日站稳由
         signal_records 回算分群验证——334 §6 校准机制）。
+
+        491号（R4-②/B）：411号 Phase 1 后 signal_json.signals 恒空（设计），原 vp 分支读
+        signals['量价分析策略'].signal_label → 恒失效。改读活 tags（334 §5.2「引用现有标签」）：
+        pattern_signal 含突破=已突破且为「预涨型」（EnhancedPatternDetector 预跌型优先）；
+        突破前60日高点用 shared_support_resistance.signal_days（站上前60日高点后天数）；
+        量比用 volume_price.volume_ratio。仅 volume_breakout 原走废弃容器，其余 4 类本就读 tags。
         """
         hits: list[dict] = []
         bsp = str(tags.get('buy_sell_point', ''))
         if '三买' in bsp or 'third_buy' in bsp:
             hits.append({'type': 'chan_third_buy', 'name': '缠论三买', 'source': 'buy_sell_point'})
-        vp = signals.get('量价分析策略') or {}
-        if '突破' in str(vp.get('signal_label', '')):
-            hits.append({'type': 'volume_breakout', 'name': '放量突破', 'source': '量价信号'})
+        # volume_breakout：放量突破（334 §5.2：pattern_signal=突破 + 量比≥1.5 + 突破前高）
+        if '突破' in str(tags.get('pattern_signal', '')):
+            try:
+                _vr = float(tags.get('volume_ratio') or 0)
+            except (TypeError, ValueError):
+                _vr = 0.0
+            try:
+                _sd = int(tags.get('signal_days') or 0)
+            except (TypeError, ValueError):
+                _sd = 0
+            if _vr >= 1.5 and _sd > 0:
+                hits.append({'type': 'volume_breakout', 'name': '放量突破', 'source': '量价信号'})
         if '多头' in str(tags.get('ma_alignment', '')):
             hits.append({'type': 'ma_bullish', 'name': '均线多头', 'source': 'ma_alignment'})
         ps = str(tags.get('pattern_signal', ''))
