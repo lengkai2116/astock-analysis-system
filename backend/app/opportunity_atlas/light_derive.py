@@ -114,6 +114,29 @@ def aggregate_lights(lights: Iterable[str]) -> str:
     return DATA_MISSING
 
 
+# 汇总灯阈值（491-J6：口径 SSOT——原内联于 dim8_summary_engine.evaluate）
+SUMMARY_LIGHT_GREEN = 0.6
+SUMMARY_LIGHT_RED = 0.3
+
+
+def summary_light(consensus_rate) -> str:
+    """汇总（summary 段）灯——SSOT 阈值规则：加权共识率 → 灯。
+
+    ≥0.6 → green；<0.3 → red；否则 yellow（＝迁移前 `dim8_summary_engine.evaluate`
+    的内联口径，逐值等价）。共识率由 dim8 聚合（各维派生灯 × DIM_WEIGHTS × 置信度）后传入，
+    阈值规则本身归本模块，使「灯」的判定口径集中一处（491-J6）。
+    """
+    try:
+        cr = float(consensus_rate)
+    except (TypeError, ValueError):
+        return DATA_MISSING
+    if cr >= SUMMARY_LIGHT_GREEN:
+        return 'green'
+    if cr < SUMMARY_LIGHT_RED:
+        return 'red'
+    return 'yellow'
+
+
 def _risk_source_is_high(s) -> bool:
     """风险 5 源条目是否「高」——兼容 dim6 引擎产出（475 P1：'名称：等级' 字符串列表）
     与 dict 形态（{'name','level'}，历史/测试构造）。"""

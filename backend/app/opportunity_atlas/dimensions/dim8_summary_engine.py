@@ -85,6 +85,17 @@ def _extract_dim_light(dim_results: dict, dim_name: str) -> str:
         return jg.get('overall_light', jg.get('light', 'yellow'))
 
 
+def _summary_light_value(dim_results: dict) -> str:
+    """491-J6：summary 灯口径归 SSOT（`light_derive.summary_light`，共识率阈值 → 灯）。
+    dim8 侧只负责聚合共识率，阈值规则不再内联；派生失败回退同口径内联（保证不抛）。"""
+    cr = _calc_consensus_rate(dim_results)
+    try:
+        from app.opportunity_atlas.light_derive import summary_light
+        return summary_light(cr)
+    except Exception:
+        return 'green' if cr >= 0.6 else ('red' if cr < 0.3 else 'yellow')
+
+
 def _extract_dim_direction(dim_results: dict, dim_name: str) -> int:
     """从维度引擎结果中提取 overall_direction"""
     jg = _extract_dim_judgment(dim_results, dim_name)
@@ -161,10 +172,9 @@ def _build_eight_dim_summary(dim_results: dict) -> dict:
     }
     summary = {}
     for key, name in dim_map.items():
-        if key == 'summary':
-            summary[key] = {'name': name, 'light': 'yellow'}
-            continue
-        light = _extract_dim_light(dim_results, key)
+        # 491-J6：summary 行由 7 维派生灯聚合（原硬编码 'yellow' 占位）；其余维走 SSOT
+        light = _extract_dim_light(dim_results, key) if key != 'summary' \
+            else _summary_light_value(dim_results)
         summary[key] = {'name': name, 'light': light}
     return summary
 
@@ -1519,12 +1529,14 @@ class Dim8SummaryEngine:
 
         # 7. judgment
         direction = 1 if consensus_rate >= 0.5 else (-1 if consensus_rate < 0.3 else 0)
+        # 491-J6：summary 灯统一到派生 SSOT（原按 consensus_rate 阈值 0.6/0.3 独立派生，
+        #   与 light_derive.aggregate_lights 规则不一致）→ 改聚合 7 维派生灯
         judgment = {
             'status_bar': status_bar,
             'status_bar_cn': status_bar_cn,
             'consensus_rate': consensus_rate,
             'direction': direction,
-            'overall_light': 'green' if consensus_rate >= 0.6 else ('red' if consensus_rate < 0.3 else 'yellow'),
+            'overall_light': _summary_light_value(dim_results),
             'overall_direction': direction,
         }
 
