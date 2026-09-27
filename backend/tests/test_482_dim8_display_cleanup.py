@@ -156,13 +156,18 @@ class TestT482_5StructureEvidenceCleanup:
 
 
 class TestT482_6TemperatureSafeFloat:
-    """482-6：dim_adapter temperature 展示串安全转换（不再崩溃）"""
+    """482-6：temperature 展示串安全转换（不再崩溃）
+
+    491号（R5）：原用例调用 `dim_adapter.convert_to_dims_format`（死副本，已随 R5 删除）——
+    改为断言**活副本** `StatusEngine._convert_to_dims_format` 在同一展示串输入下不抛异常，
+    保留原回归意图（展示串不得导致维度转换崩溃）。
+    """
 
     def test_convert_to_dims_format_no_crash_on_display_string(self):
-        from app.opportunity_atlas import dim_adapter
+        from app.opportunity_atlas.status_engine import StatusEngine
         dr = {'emotion': {'status_description': {'temperature': '中性58.1/100'},
                           'judgment': {}, 'audit': {}}}
-        out = dim_adapter.convert_to_dims_format(dr, {})  # 不应抛 ValueError
+        out = StatusEngine.__new__(StatusEngine)._convert_to_dims_format(dr, {})
         assert isinstance(out, dict)
 
     def test_safe_float_on_display_string(self):

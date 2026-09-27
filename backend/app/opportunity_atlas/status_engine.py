@@ -36,11 +36,7 @@ _DIM_DIRECTION: dict[str, dict[str, int]] = {
     'risk': {'低': 1, '中': 0, '高': -1},
     'factor': {'看多': 1, '中性': 0, '看空': -1},
 }
-_DIM_LIGHT: dict[str, dict[str, str]] = {
-    dim: {s: ('green' if v > 0 else ('yellow' if v == 0 else 'red'))
-          for s, v in mapping.items()}
-    for dim, mapping in _DIM_DIRECTION.items()
-}
+# 491号（R5）：_DIM_LIGHT 定义后全仓无任何消费点（灯色由各维 judgment.overall_light 提供），已删。
 _DIM_ORDER = ['valuation', 'structure', 'vp', 'position', 'chip_fund', 'emotion',
               'finance', 'event', 'time', 'risk', 'factor']
 

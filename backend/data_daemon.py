@@ -5933,6 +5933,8 @@ def _build_status_snapshot(codes: list[str]):
             except Exception:
                 return ''
         # 370号修正：预取 dim_results_json（SIG预计算），避免JUD重复计算维度引擎
+        # 491号（R4-③）：strategy_signal_detail 主键为 (ts_code, trade_date) → 同一 ts_code 有多行，
+        #   原 SQL 未限定 trade_date，迭代时后写覆盖 → 可能取到旧交易日批次。改为每股取最新交易日一行。
         _dim_cache = {}
         try:
             # 421号R4a：改走 sharding_manager 读 snapshot_cache.db 分库
@@ -5940,8 +5942,12 @@ def _build_status_snapshot(codes: list[str]):
             _placeholders = ','.join(['?' for _ in codes])
             _rows = sharding_manager.execute_query(
                 'strategy_signal_detail',
-                f"SELECT ts_code, dim_results_json FROM strategy_signal_detail "
-                f"WHERE ts_code IN ({_placeholders}) AND dim_results_json IS NOT NULL",
+                f"SELECT ts_code, dim_results_json FROM ("
+                f"  SELECT ts_code, dim_results_json,"
+                f"         ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) AS _rn"
+                f"  FROM strategy_signal_detail"
+                f"  WHERE ts_code IN ({_placeholders}) AND dim_results_json IS NOT NULL"
+                f") WHERE _rn = 1",
                 codes
             )
             for _r in _rows:

@@ -88,7 +88,7 @@ related:
 - **`advice_engine` 的 `entry_zone`/`target_zone`**：本号**不改消费端**——490-2 已使 dim3 真实产出该两键（391 P1 消费链随之激活）；其生效需 pre_feat 重算（见 §五）。
 - **未消费键（489 §四）**：`vs_chip`/`buy_sell_points`/`multi_level`/`health_score`/`pattern_score`/`stock`/dim6 十一键/audit.actual|threshold 等——多为 437-A 有意去重或 OUT 侧承载，本号不动；其中 **dim6 `risk_sources`/`piers_leverage_triggered`/`liquidity_*`** 登记为「因已算未消费」待裁。
 - **`status_snapshot` 无 signals 列 / `volume_breakout` 恒失效 / `_build_status_snapshot` SELECT 未限 trade_date**（435 附加发现）：属 411/370 管线设计议题，**不在 A/B/C 三类**，登记待裁不动。
-- **死代码**（`dim_adapter.convert_to_dims_format`/`extract_direction_score`/`advice_generator`/v390 下的 `arbiter`）：本号不删（登记）。
+- **死代码**（`dim_adapter.convert_to_dims_format`/`extract_direction_score`/`advice_generator` 共 3 处）：本号不删（登记 490-R5，由 491 号批次1 处置）。⚠️ **491 号更正**：`arbiter` **不是死代码**（v390 主管线内不调用它，但 OUT 操作建议通路 `advice_engine/advice_builder.build_operation_advice`、`cross_validate.L4CrossValidator`、legacy `_aggregate` 仍在用）。
 
 ## 四、验证
 
@@ -158,7 +158,7 @@ related:
 | 490-R2 | **C2 规则删除** | 原判据 `stage_name=='DOWNTREND_ACTIVE'` 无任何产出源；如需恢复须由 dim3 定义量价趋势阶段枚举 |
 | 490-R3 | dim6 `risk_sources` / `piers_leverage_triggered` / `liquidity_avg_amount_wan` / `liquidity_circ_mv_wan` 等「因已算未消费」 | 489 §四 未消费清单子集，本号不动，待裁定去向（dim8 采用 / 保留契约 / 删除） |
 | 490-R4 | 435 附加发现三项（`status_snapshot` 无 signals 列 / `volume_breakout` 恒失效 / `_build_status_snapshot` SELECT 未限 trade_date） | 属 411/370 管线设计议题，不在 A/B/C 三类，本号不动 |
-| 490-R5 | 死代码（`dim_adapter.convert_to_dims_format`/`extract_direction_score`/`advice_generator`/v390 下 `arbiter`） | 不删；注意 `dim_adapter.convert_to_dims_format` 副本**仍读旧键**（`judgment.vp_state`/`flow_direction`/`phase`）——若将来复用须先对齐 490-6/7/8 |
+| 490-R5 | 死代码（`dim_adapter.convert_to_dims_format`/`extract_direction_score`/`advice_generator`——**不含 `arbiter`**，见 491 更正） | 491 号批次1 已删除该 3 处并重定向 `test_482`；注意 `dim_adapter.convert_to_dims_format` 副本**曾读旧键**（`judgment.vp_state`/`flow_direction`/`phase`）——删除即消除该复用陷阱 |
 | 490-R6 | `_DIM_DIRECTION['emotion']`（`status_engine`：冰点→**-1**）与 v390 `_EMOTION_DIRECTION`（冰点→**+1**，均值回归）方向语义**相反** | 本号仅修取值路径（490-8），未统一语义；属 485-6「调 dim5/framework 阈值取值」JUD 阶段主题 |
 | 490-R7 | `reliability` 输出仍含冗余键 `volume_price=0.5`（`_KNOWN_DIMS` 历史键名） | 只新增 `vp` 别名，未删旧键（避免影响未知消费方）；如确认无消费方可清理 |
 | 490-R8 | SIG 灯色类输出（`overall_light`/`risk_light`/`market_light`…） | 属 **439-A** 迁移 JUD 主题，本号不动 |

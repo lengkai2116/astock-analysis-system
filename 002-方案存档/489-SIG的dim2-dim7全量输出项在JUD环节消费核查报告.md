@@ -302,7 +302,8 @@ StatusEngine.evaluate
 4. **legacy dims 层 dim3 `vp_state` 键名错位**（435 仅列 dim4 `flow_direction`/dim5 `phase`）。
 5. **`cross_validate._convert_dim_engine_to_legacy` 的 `fund_chip` 键名错位**（365 号批次 C 引入）及被掩盖的潜在 AttributeError。
 6. **JUD 内 signal 维桥接 `dims_for_signal` state 恒「中性」**（§5.6）。
-7. **死代码确认**：`dim_adapter.convert_to_dims_format`、`dim_adapter.extract_direction_score`、`advice_generator`、`arbiter`（v390 下）无调用方——435 未评估。
+7. **死代码确认**：`dim_adapter.convert_to_dims_format`、`dim_adapter.extract_direction_score`、`advice_generator`（3 处，全仓无调用方）——435 未评估。
+   ⚠️ **491 号更正（2026-09-27）**：本条初稿曾把 `arbiter` 一并列为「死代码」——**有误，已更正**。`arbiter.arbitrate` 在 **v390 主管线之外仍被 3 条通路使用**：① OUT 操作建议 `advice_engine.build_operation_advice:485` / `advice_builder.build_operation_advice:123`（→ `routes/strategy_analyze.py`）；② 弹窗诊断 `cross_validate.L4CrossValidator`（`:510`/`:1070`/`:1327`）；③ legacy `status_engine._aggregate:776`。准确表述应为「v390 主管线内不调用 `arbiter`（改由 `factor_arbiter` 承担）」，**它不是死代码**。
 
 ---
 

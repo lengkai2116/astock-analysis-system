@@ -29,7 +29,10 @@ _DEFAULT_RELIABILITY = 0.5
 
 # 所有已知维度 → 若未命中任何专属规则则归入默认
 _KNOWN_DIMS = {
-    'signal', 'structure', 'volume_price', 'chip_fund',
+    # 491号（R7 清理）：量价维的 L1 因子键是 'vp'（390 沿用旧维度名）。原值 'volume_price'
+    #   不在 dims_factor 中 → assess() 每次多补一个**恒 0.5 的误导值** volume_price。
+    #   已核实无消费方（consensus_engine 家族表为 {'volume_price': ['vp']}，只读 'vp'；前端不消费）。
+    'signal', 'structure', 'vp', 'chip_fund',
     'emotion', 'risk', 'valuation',
 }
 

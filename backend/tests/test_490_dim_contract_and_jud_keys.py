@@ -253,8 +253,10 @@ def test_reliability_uses_real_sources():
     dr = _dim_results_full()
     f = convert_to_factors(dr, {})
     rel = assess(f, dr)
-    assert set(rel.keys()) >= {'structure', 'volume_price', 'chip_fund', 'emotion',
+    # 491号（R7）：量价维可靠性键为 'vp'（L1 因子键）；冗余历史键 'volume_price' 已清理
+    assert set(rel.keys()) >= {'structure', 'vp', 'chip_fund', 'emotion',
                                'risk', 'valuation'}
+    assert 'volume_price' not in rel
     # dim2 三源：level_cross 0.5 + consistency 1.0 + chanlun 0.8 → 0.25+0.3+0.16=0.71，
     # 多算法 3 项全同意 +0.1 → 0.81
     assert abs(rel['structure'] - 0.81) < 0.02
