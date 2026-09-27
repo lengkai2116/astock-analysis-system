@@ -610,7 +610,26 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
     # 411号Phase 2：signal_confirm由classify_attribute()分析结果生成
     try:
         from app.opportunity_atlas.signal_analyzer import classify_attribute as _classify_attr
-        _sc_attr = _classify_attr(dims, tags, {})
+
+        # 492号（K5）：原实现传未定义变量 dims → 恒 NameError → 该 except 兜底永久生效
+        #   （signal_confirm 的 evidence 恒空，direction 仅由 tags.right_side_confirm 决定，
+        #    classify_attribute 的 7 类信号属性判定从未参与）。此处按各维真实契约键构造
+        #    dims，与 status_engine._dim_state_for_signal（SSOT）同源、与 dim_adapter 的
+        #    vp 键契约一致（volume_price → vp）。
+        from app.opportunity_atlas.status_engine import _dim_state_for_signal as _state_of
+        _dims_for_attr: dict = {}
+        for _k in ('structure', 'volume_price', 'chip_fund', 'emotion', 'risk', 'valuation'):
+            _r = dim_results.get(_k)
+            if isinstance(_r, dict):
+                _st = _state_of(_k, _r.get('judgment', {}) or {},
+                                _r.get('status_description', {}) or {})
+                if _st:
+                    _dims_for_attr['vp' if _k == 'volume_price' else _k] = {
+                        'state': _st,
+                        'confidence': (_r.get('judgment', {}) or {}).get('continuous_value', 0.5),
+                    }
+        _dims_for_attr.setdefault('factor', {'state': '中性', 'confidence': 0.5})
+        _sc_attr = _classify_attr(_dims_for_attr, tags, {})
         _sc_code = _sc_attr.get('code', 'neutral')
         # ponytail: 使用模块级_SIGNAL_CODE_DIRECTION，避免局部变量遮蔽导致UnboundLocalError
         _rsc_dir = _SIGNAL_CODE_DIRECTION.get(_sc_code, 0)

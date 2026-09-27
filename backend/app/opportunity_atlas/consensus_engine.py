@@ -15,8 +15,9 @@ Family structure (6 families):
     - risk           : risk (independent)
 
 Each family's contribution is weighted by:
-    1. Emotion-phase-dependent STATE_WEIGHTS (shifts emphasis across market regimes)
-    2. Family-level reliability (aggregate of individual dimension reliabilities)
+    1. Emotion-phase-dependent STATE_WEIGHTS (情绪周期阶段权重)
+    2. Market-regime weights MARKET_REGIME_WEIGHTS (大盘状态权重；492号 K3 接线)
+    3. Family-level reliability (aggregate of individual dimension reliabilities)
 """
 
 from __future__ import annotations
@@ -89,6 +90,34 @@ STATE_WEIGHTS: Dict[str, Dict[str, float]] = {
 
 # All valid emotion phases for validation
 _VALID_PHASES: set = set(STATE_WEIGHTS.keys())
+
+# 492号（K3 接线）：MARKET_REGIME_WEIGHTS 是「大盘状态×维度」权重表（键为
+#   status_engine._DIM_ORDER 的维度名），本引擎按「族」聚合 → 需归并：
+#   structure_trend 族取 signal+structure 均值，environment 族取 emotion+factor 均值。
+#   缺失族/维度一律按等权 0.1 兜底（与 status_engine 消费侧默认一致）。
+_REGIME_DIM_ALIASES: Dict[str, tuple] = {
+    'main_behavior': ('chip_fund',),
+    'structure_trend': ('signal', 'structure'),
+    'volume_price': ('vp',),
+    'valuation_quality': ('valuation',),
+    'environment': ('emotion', 'factor'),
+    'risk': ('risk',),
+}
+
+
+def _family_regime_weight(regime_weights: Dict[str, float], family: str) -> float:
+    """MARKET_REGIME_WEIGHTS（维度权重）→ 族权重（族内维度均值）。
+
+    regime_weights 为 None/空 → 返回 0.1（等权兜底）。
+    """
+    dims = _REGIME_DIM_ALIASES.get(family, ())
+    if not isinstance(regime_weights, dict) or not dims:
+        return 0.1
+    vals = [float(regime_weights.get(d, 0.1)) for d in dims if regime_weights.get(d) is not None]
+    if not vals:
+        return 0.1
+    return sum(vals) / len(vals)
+
 
 # ---------------------------------------------------------------------------
 # Intra-family merge
@@ -216,6 +245,9 @@ def compute(
         Dimension name -> reliability weight in [0, 1].
     weights : dict
         Dimension name -> base importance weight in [0, 1].
+        （492号 K3 接线）实际为状态引擎传入的 MARKET_REGIME_WEIGHTS 单档
+        （维度键），族权重由 ``_family_regime_weight`` 归并后与 STATE_WEIGHTS 相乘；
+        传 None/{} 时退化为仅用 STATE_WEIGHTS（等价旧行为）。
     emotion_phase : str
         Current emotion phase key. Must be one of the keys in
         ``STATE_WEIGHTS``. Defaults to ``'normal'``.
@@ -239,7 +271,12 @@ def compute(
         )
 
     state_weights = STATE_WEIGHTS[emotion_phase]
-    max_possible_weight = sum(state_weights.values())  # Should be ~1.0
+    # 492号（K3）：族级有效权重 = 情绪阶段权重 × 大盘状态族权重（regime_weights 缺失→0.1 等权）
+    family_weights: Dict[str, float] = {
+        fam: state_weights[fam] * _family_regime_weight(weights, fam)
+        for fam in STATE_WEIGHTS[emotion_phase]
+    }
+    max_possible_weight = sum(family_weights.values())  # 归一化基准（随 regime 缩放）
 
     total_effective_weight = 0.0
     bull_score = 0.0
@@ -284,8 +321,9 @@ def compute(
         if valid_rels:
             family_reliability = sum(valid_rels) / len(valid_rels)
 
-        # --- Effective weight ---
-        effective_weight = state_weights[group_name] * family_reliability
+        # --- Effective weight（492号 K3：族权重 × 大盘状态权重 → 状态引擎传入的 weights 生效）---
+        _fam_w = family_weights.get(group_name, state_weights[group_name] * 0.1)
+        effective_weight = _fam_w * family_reliability
         total_effective_weight += effective_weight
 
         # --- Accumulate scores ---
@@ -312,7 +350,7 @@ def compute(
             'strength': round(family_strength, 4),
             'has_conflict': has_conflict,
             'family_reliability': round(family_reliability, 4),
-            'state_weight': state_weights[group_name],
+            'state_weight': round(_fam_w, 4),
             'effective_weight': round(effective_weight, 4),
         }
 

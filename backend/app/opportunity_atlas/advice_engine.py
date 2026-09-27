@@ -58,21 +58,16 @@ def compute_advice(
         position = min(position, emotion_cap)
 
     # ── 风险预算约束（§8.2 Step 4）──
+    # 492号（K1）：2% 风险预算仓位（朗德里公式）依赖 entry_price（最新收盘）。
+    #   本函数为纯计算层、不触发任何数据访问——原实现回退 `_dm.cache.get_latest_daily`
+    #   （ECM 无此方法，全仓零定义）→ risk_budget_position 恒 None；且该回退会让单测
+    #   真连分库并被 daemon 写锁阻塞。entry_price 改由调用方 status_engine._aggregate_v390
+    #   经 self.dm 取好后传入（与 status_engine:560 同源）。
     risk_budget_pos = None
     if dim_results:
         risk_sd = (dim_results.get('risk') or {}).get('status_description') or {}
         _stop_loss = risk_sd.get('support_price')
         _entry = entry_price
-        # 若调用方未传入entry_price，尝试从daily_cache获取最新收盘价
-        if _entry is None and ts_code:
-            try:
-                from app.data import DataManager
-                _dm = DataManager()
-                _latest = _dm.cache.get_latest_daily(ts_code)
-                if _latest and 'close' in _latest:
-                    _entry = float(_latest['close'])
-            except Exception:
-                pass
         if _stop_loss and _entry and _entry > _stop_loss:
             _risk_per_share = _entry - _stop_loss
             _max_loss = 1000000.0 * 0.02  # 100万账户，2%规则

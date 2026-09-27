@@ -43,6 +43,43 @@ _DIM_ORDER = ['valuation', 'structure', 'vp', 'position', 'chip_fund', 'emotion'
               'finance', 'event', 'time', 'risk', 'factor']
 
 
+# ══════════════════════════════════════════════════════════
+# 492号（K2/K3）：市场情绪阶段归一化 SSOT
+#   背景：L0b2 情绪仓位上限与 L3 STATE_WEIGHTS 原均读 tags['emotion_phase']，
+#   而 RAW 真实生产键为 flatten(pre_feat['sentiment']) → tags['sentiment_phase']
+#   （值域 = get_sentiment_phase 的 ice/sprout/ferment/climax/ebb/regression/neutral），
+#   emotion_phase 全仓无生产者 → 两处情绪耦合机制恒取 normal、永不生效。
+#   口径（用户 2026-09-27 拍板「就近归并」）：sprout→recovery、ferment→positive、
+#   regression/neutral→normal；其余同名。不新增键、不改既有权重值。
+# ══════════════════════════════════════════════════════════
+_SENTIMENT_TO_STATE_PHASE: dict[str, str] = {
+    'ice': 'ice',
+    'ebb': 'ebb',
+    'climax': 'climax',
+    'recovery': 'recovery',
+    'positive': 'positive',
+    'sprout': 'recovery',      # 萌芽 ≈ 复苏（情绪初起）
+    'ferment': 'positive',     # 发酵 ≈ 积极（赚钱效应扩散）
+    'regression': 'normal',    # 回归 ≈ 正常
+    'neutral': 'normal',       # 数据不足 ≈ 正常
+    '正常': 'normal', '中性': 'normal', '萌芽': 'recovery',
+    '发酵': 'positive', '复苏': 'recovery', '积极': 'positive',
+    '冰点': 'ice', '退潮': 'ebb', '高潮': 'climax', '回归': 'normal',
+}
+
+
+def _normalize_emotion_phase(tags: dict) -> str:
+    """情绪阶段 → STATE_WEIGHTS / emotion_position_cap 键（492号 K2/K3 共用）。
+
+    优先读生效生产键 `sentiment_phase`，兼容已废弃键 `emotion_phase`（若上游补产）。
+    未命中一律回落 'normal'（旧行为兜底）。
+    """
+    _raw = tags.get('sentiment_phase', tags.get('emotion_phase', 'normal'))
+    _raw = str(_raw or 'normal').lower().strip()
+    return _SENTIMENT_TO_STATE_PHASE.get(_raw, 'normal')
+
+
+
 def _dim_state_for_signal(key: str, judg: dict, sd: dict) -> str:
     """490号：dim2-dim7 引擎输出 → signal_analyzer 期望的 state（中文，契约键对齐）。
 
@@ -666,9 +703,10 @@ class StatusEngine:
             except (TypeError, ValueError):
                 pass
         # L0b2 情绪周期总仓位上限（387号§5.4；消费方 advice_engine Step 3）
+        # 492号（K2）：改读归一化情绪阶段——原读 tags['emotion_phase']（无生产者）恒 normal
         _caps = _l0_cfg.get('emotion_position_cap', {})
         if _caps:
-            _phase = str(tags.get('emotion_phase', 'normal')).lower()
+            _phase = _normalize_emotion_phase(tags)
             l0['emotion_position_cap'] = float(_caps.get(_phase, _caps.get('normal', 0.6)))
         # L0c 持有期（阶段登记于 yaml l0.hold_only_stages → 只可持有、不新开仓）
         _hold_stages = _l0_cfg.get('hold_only_stages') or ['已延伸']
@@ -833,11 +871,8 @@ class StatusEngine:
         # L3: 共识聚合（weights 取 MARKET_REGIME_WEIGHTS[regime]）
         regime = self._detect_market_regime(tags, dims)
         weights = self.MARKET_REGIME_WEIGHTS.get(regime, self.MARKET_REGIME_WEIGHTS['ranging'])
-        # emotion_phase 归一化到 STATE_WEIGHTS 有效键（ice/ebb/normal/recovery/positive/climax）
-        emotion_phase = str(tags.get('emotion_phase', 'normal')).lower()
-        _valid_phases = {'ice', 'ebb', 'normal', 'recovery', 'positive', 'climax'}
-        if emotion_phase not in _valid_phases:
-            emotion_phase = 'normal'
+        # 492号（K3）：情绪阶段经归一化 SSOT（读 sentiment_phase，sprout/ferment 就近归并）
+        emotion_phase = _normalize_emotion_phase(tags)
         try:
             consensus = consensus_compute(dims_factor, reliability, weights, emotion_phase)
         except Exception as e:
@@ -876,8 +911,15 @@ class StatusEngine:
         # L6: 操作建议
         advice = {}
         try:
+            # 492号（K1）：entry_price 供 2% 风险预算仓位使用。优先 dim_results['daily_df']，
+            #   回退 self.dm 日线缓存（与 :560 同源；不读分库表，避免被 daemon 写锁阻塞）。
             entry_price = None
             daily = dim_results.get('daily_df')
+            if not (hasattr(daily, 'empty') and not daily.empty and 'close' in daily.columns):
+                try:
+                    daily = self.dm.get_cached_daily_data(ts_code)
+                except Exception:
+                    daily = None
             if hasattr(daily, 'empty') and not daily.empty and 'close' in daily.columns:
                 entry_price = float(daily['close'].iloc[-1])
             advice = compute_advice(arb_result.get('final_score', 50.0), dims_factor,
@@ -1022,7 +1064,10 @@ class StatusEngine:
                 _ap = json.loads(result['advice_params']) if result.get('advice_params') else {}
                 _ap.update({k: v for k, v in _advice.items()
                             if k in ('max_position_ratio', 'stop_loss_price', 'target_price',
-                                     'risk_reward_ratio', 'invalidation_conditions')})
+                                     'risk_reward_ratio', 'invalidation_conditions',
+                                     # 492号（K4/K1）：L6 已产出的入场/目标区间与 2% 风险预算
+                                     #   仓位，原白名单漏收 → advice_params 落库缺失
+                                     'entry_zone', 'target_zone', 'risk_budget_position')})
                 result['advice_params'] = json.dumps(_ap, ensure_ascii=False, default=str)
         return result
 
