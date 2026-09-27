@@ -136,3 +136,36 @@ related:
 - **Q-439A-3**：dim5 `stock_light`（主源实为 dim3 量价状态）是否随 437-A D4 跨维去重删除、由 dim3 侧统一派生？
 - **Q-439A-4**：`signal_analyzer` 的灯（signal 维判定）→ 迁 JUD 由 JUD 派生，还是随 signal 段（437-A 已移出 dim8）交前端组合？
 - **Q-439A-5**：派生细则口径——chip_fund 用 `phase` 还是 `direction`；emotion 板块 light 是否区分 top_10/top_20。
+
+# 十、用户拍板（2026-09-27）与最终派生表
+
+| 问题 | 决策 | 落地要点 |
+|---|---|---|
+| **Q-439A-1** 灯色语义 | **① 分工：灯＝环境风险，方向＝操作含义** | 派生表**保留现状（环境口径）**：ice/climax→🔴、ferment→🟢、sprout/ebb/regression/neutral→🟡；同时在派生表注释写明「灯＝环境风险；操作含义由 `judgment.overall_direction`（逆势：冰点+1）表达」→ 前端观感不变 |
+| **Q-439A-2** 兜底黄灯 | **① 保留为「数据缺失」色** | `'yellow'` 兜底保留，语义标注为「数据缺失」（不再是判定）；`stg_quality` 合法性校验口径不变 |
+| **Q-439A-3** dim5 `stock_light` | **① 删除、归 dim3** | dim5 不再产 `stock_light`；展示/JUD 侧的「个股情绪灯」由 dim3 `vp_state` 派生（对齐 437-A D4 跨维去重） |
+| Q-439A-4 signal 维灯 | **建议＝随 439-A-1 一并迁移**（删 SIG 自产，由派生 SSOT 计算） | signal 段已移出 dim8（437-A）；其灯属 SIG 判定类输出，按 439 原则迁移。**待你确认/否决** |
+| Q-439A-5 派生细则 | **建议＝保持现状等价** | chip_fund 用 `judgment.phase`（非 `direction`）；emotion 板块 light 不区分 top_10/top_20（均 🟢）。**待你确认/否决** |
+
+## 10.1 最终派生表（SSOT 蓝图，供 439-A-1 实现）
+
+```python
+# backend/app/opportunity_atlas/light_derive.py（建议）
+# 约定：灯＝环境风险（Q-439A-1 ①）；操作含义见 dim_adapter._EMOTION_DIRECTION / judgment.overall_direction
+_STRUCTURE   = {'上升': 'green', '盘整': 'yellow', '下降': 'red'}
+_VP          = {'强健康': 'green', '健康': 'green', '中性': 'yellow', '背离': 'red', '严重背离': 'red'}
+_CHIP_FUND   = {'building': 'green', 'lifting': 'green', 'distributing': 'red'}   # 其余（washing/support/unknown）→ yellow
+_EMOTION     = {'ferment': 'green', 'ice': 'red', 'climax': 'red'}               # 其余（sprout/ebb/regression/neutral）→ yellow
+_SECTOR_HEAT = {'top_10': 'green', 'top_20': 'green'}                            # 其余→ yellow
+_VALUATION   = {'extreme_low': 'green', 'low': 'green', 'fair': 'yellow',
+                'high': 'red', 'extreme_high': 'red'}
+_SIGNAL      = {'right_confirmed': 'green', 'right_emerging': 'green', 'trend_running': 'green',
+                'left_probing': 'yellow', 'consolidating': 'yellow', 'neutral': 'yellow',
+                'risk_warning': 'red'}
+# risk：由 risk_sources 中 level=='高' 的计数派生（≥2→red、==1→yellow、0→green）
+# 兜底：yellow ＝「数据缺失」语义（Q-439A-2）
+# 聚合：任一 red→red；≥2 green→green；否则 yellow（沿用 _overall_light，P7）
+```
+
+**439-A-1 落地清单**：①新增 `light_derive.py`；②删自产灯：dim2/dim3/dim4/dim6/dim7 的 `judgment.light`+`overall_light`、dim6 `sd.risk_light`、dim5 `market_light`/`sector_light`/**`stock_light`（Q-439A-3）**/`overall_light`、dim7 4 个子项 light（保留 `valuation_level` 等嵌套结构但去 light，或保留灯改由 SSOT 计算）、signal_analyzer 灯（Q-439A-4 待确认）；③消费方 C1~C8 改调 `light_derive`；④C9/C10 契约字段不变。
+**验证**：8 股 + 全市场抽样，逐股对比「迁移前灯色 vs 派生灯色」应**完全一致**（Q-439A-1 取分工方案 ⇒ 应 100% 相等）。
