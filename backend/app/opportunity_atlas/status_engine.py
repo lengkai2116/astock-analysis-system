@@ -45,6 +45,42 @@ _DIM_ORDER = ['valuation', 'structure', 'vp', 'position', 'chip_fund', 'emotion'
               'finance', 'event', 'time', 'risk', 'factor']
 
 
+def _dim_state_for_signal(key: str, judg: dict, sd: dict) -> str:
+    """490号：dim2-dim7 引擎输出 → signal_analyzer 期望的 state（中文，契约键对齐）。
+
+    classify_attribute 读 dims[structure/vp/chip_fund/valuation].state，判定信号属性
+    （右侧确认/趋势运行/左侧试探/盘整待变）。各维 state 的真实位置与词表不同：
+      structure  → judgment.structure（中文 上升/盘整/下降）
+      volume_price → judgment.state（中文 五态 强健康/健康/中性/背离/严重背离）
+      chip_fund  → judgment.direction（inflow/outflow/neutral → 流入/流出/中性）
+      emotion    → status_description.market_phase（英文枚举 → 中文）
+      risk       → judgment.risk_level / level
+      valuation  → judgment.valuation_level.value（英文枚举 → 中文）
+    取不到返回 ''（调用方回退「中性」）。
+    """
+    try:
+        from app.opportunity_atlas.dim_adapter import ENGINE_STATE_TO_CN as _T
+    except Exception:
+        return ''
+    judg = judg or {}
+    sd = sd or {}
+    if key == 'structure':
+        return str(judg.get('structure', ''))
+    if key == 'volume_price':
+        return str(judg.get('state', ''))
+    if key == 'chip_fund':
+        return _T.get('chip_fund', {}).get(str(judg.get('direction', '')), '')
+    if key == 'emotion':
+        return _T.get('emotion', {}).get(str(sd.get('market_phase', '')), '')
+    if key == 'risk':
+        return str(judg.get('risk_level', judg.get('level', '')))
+    if key == 'valuation':
+        _lv = judg.get('valuation_level') or {}
+        _val = _lv.get('value', '') if isinstance(_lv, dict) else ''
+        return _T.get('valuation', {}).get(str(_val), '')
+    return ''
+
+
 class StatusEngine:
     """现状判定生产环节引擎（单只股票 evaluate，全市场由日终批量驱动）"""
 
@@ -289,18 +325,17 @@ class StatusEngine:
         try:
             from app.opportunity_atlas.signal_analyzer import analyze_signal
             # 构建dims格式（从dim2-dim7结果提取）
-            _META_KEYS = {'overall_light', 'overall_direction', 'continuous_value'}
+            # 490号（B 类修正：形态错位）：原实现取「judgment 中第一个 dict 型值的 value」作 state，
+            #   而 dim2/3/5/6 的 judgment 全为标量（仅 dim7 是嵌套 dict）→ 除 valuation 外 state
+            #   恒「中性」，classify_attribute 收到的 structure/chip_fund/risk 全为中性 → 信号属性
+            #   恒 neutral（signal_confirm 恒"中性观望"）。改为按各维真实契约键显式取 state。
             dims_for_signal = {}
             for key in ['structure', 'volume_price', 'chip_fund', 'emotion', 'risk', 'valuation']:
                 r = results.get(key)
                 if r and isinstance(r, dict):
-                    judg = r.get('judgment', {})
-                    # 取第一个非meta key的value作为state
-                    state_val = '中性'
-                    for jk, jv in judg.items():
-                        if jk not in _META_KEYS and isinstance(jv, dict):
-                            state_val = jv.get('value', '中性')
-                            break
+                    judg = r.get('judgment', {}) or {}
+                    sd = r.get('status_description', {}) or {}
+                    state_val = _dim_state_for_signal(key, judg, sd) or '中性'
                     # 键契约对齐：signal_analyzer（411迁移自 dim1）期望旧键 vp，
                     # dim3 现产 volume_price——映射回 vp，避免共振键错位（vp 恒缺→共振恒 25 分）。
                     _sig_key = 'vp' if key == 'volume_price' else key
@@ -343,6 +378,10 @@ class StatusEngine:
             与旧_build_dimensions()输出格式兼容的dims字典
         """
         dims = {}
+        # 490号（B 类修正：键名/形态错位）：本方法此前按旧键读 judgment（vp_state/flow_direction/
+        # phase），而 dim3/dim4/dim5 的真实键分别是 judgment.state / judgment.direction（phase 为英文
+        # 枚举）、sd.market_phase → 量价/筹码/情绪三维 state 恒默认值。此处对齐真实键 + 英文转中文。
+        from app.opportunity_atlas.dim_adapter import ENGINE_STATE_TO_CN as _T
 
         # 结构维：从dim2_structure_engine输出提取
         s = dim_results.get('structure')
@@ -370,8 +409,10 @@ class StatusEngine:
         vp = dim_results.get('volume_price')
         if vp and isinstance(vp, dict):
             judg = vp.get('judgment', {})
+            _vp_sd = vp.get('status_description', {}) or {}
             dims['vp'] = {
-                'state': judg.get('vp_state', '中性'),
+                # 490号：dim3 五态在 judgment.state（原读 judgment.vp_state 恒缺 → 恒"中性"）
+                'state': judg.get('state') or _vp_sd.get('vp_state') or '中性',
                 'light': judg.get('light', 'yellow'),
                 'confidence': 0.6,
                 'evidence': [],
@@ -383,8 +424,12 @@ class StatusEngine:
         cf = dim_results.get('chip_fund')
         if cf and isinstance(cf, dict):
             judg = cf.get('judgment', {})
+            # 490号：资金方向枚举在 judgment.direction（inflow/outflow/neutral）；
+            # 原读 judgment.flow_direction（不存在）→ 恒"中性"。此处取 direction 以对齐
+            # 本模块 _DIM_DIRECTION['chip_fund']（流入/中性/流出）与 classify_attribute 的口径。
+            _cf_dir = str(judg.get('direction', ''))
             dims['chip_fund'] = {
-                'state': judg.get('flow_direction', '中性'),
+                'state': _T.get('chip_fund', {}).get(_cf_dir, _cf_dir or '中性'),
                 'light': judg.get('light', 'yellow'),
                 'confidence': 0.5,
                 'evidence': [],
@@ -396,8 +441,12 @@ class StatusEngine:
         em = dim_results.get('emotion')
         if em and isinstance(em, dict):
             judg = em.get('judgment', {})
+            _emo_sd = em.get('status_description', {}) or {}
+            # 490号：情绪阶段枚举在 sd.market_phase（ice/sprout/ferment/climax/ebb/regression/neutral）；
+            # 原读 judgment.phase（不存在）→ 恒"正常"
+            _emo_phase = str(_emo_sd.get('market_phase', ''))
             dims['emotion'] = {
-                'state': judg.get('phase', '正常'),
+                'state': _T.get('emotion', {}).get(_emo_phase, _emo_phase or '正常'),
                 'light': judg.get('overall_light', 'yellow'),
                 'confidence': 0.6,
                 'evidence': [],
@@ -418,15 +467,20 @@ class StatusEngine:
         else:
             dims['risk'] = {'state': '中', 'light': 'yellow', 'confidence': 0.5, 'evidence': []}
 
-        # 补充旧体系需要的其他维度（从tags直接推断）
+        # 补充旧体系需要的其他维度（490号：优先取 dim7 引擎结论，缺失回退 tags）
+        _val_judg = (dim_results.get('valuation') or {}).get('judgment', {}) or {}
+        _val_lv = _val_judg.get('valuation_level') or {}
+        _val_en = str(_val_lv.get('value', '')) if isinstance(_val_lv, dict) else ''
+        _fh = _val_judg.get('fina_health') or {}
+        _fh_en = str(_fh.get('value', '')) if isinstance(_fh, dict) else ''
         dims['valuation'] = {
-            'state': tags.get('valuation_level', '合理'),
+            'state': _T.get('valuation', {}).get(_val_en) or tags.get('valuation_level', '合理'),
             'light': 'yellow',
             'confidence': 0.5,
             'evidence': [],
         }
         dims['finance'] = {
-            'state': tags.get('fina_health', '关注'),
+            'state': _T.get('finance', {}).get(_fh_en) or tags.get('fina_health', '关注'),
             'light': 'yellow',
             'confidence': 0.5,
             'evidence': [],

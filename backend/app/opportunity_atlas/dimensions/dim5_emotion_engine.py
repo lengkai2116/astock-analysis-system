@@ -602,6 +602,18 @@ class Dim5EmotionEngine(DataAwareMixin):
                 sp, market['phase'], _limit_up, _has_limit_up, _sealing, _sector_rank,
                 vp_fit, margin_change_pct, _breadth, fast_score, slow_score),
             'temperature': f"{_temp_level_cn(temperature)}{temperature}/100",
+            # ── 490号（A 类/B 类补产出）：390 L1/L2 情绪契约键（此前仅存在于消费侧，JUD 取默认）──
+            #  market_phase：情绪阶段原始枚举（PHASE_MAP 键，消费端按 v390 均值回归口径映射方向）
+            #  sector_heat：板块热度真实等级（top_10/top_20/normal/none）
+            #  bociasi_*：快慢线信号/慢线置信度/四象限（quadrant 真实产出）
+            #  temperature_value：温度数值（temperature 为展示文本，L1 强度需数值口径）
+            'market_phase': str(sp) if sp in PHASE_MAP else 'neutral',
+            'sector_heat': sector.get('heat'),
+            'bociasi_fast_signal': quadrant.get('fast_signal'),
+            'bociasi_slow_signal': quadrant.get('slow_signal'),
+            'bociasi_slow_confidence': (slow_result or {}).get('confidence'),
+            'bociasi_quadrant': quadrant.get('quadrant'),
+            'temperature_value': round(float(temperature), 1),
         }
 
         # 7. judgment

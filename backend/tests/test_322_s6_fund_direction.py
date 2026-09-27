@@ -59,9 +59,26 @@ def test_fund_strength_directional_inflow_positive():
 
 
 def test_fund_strength_603201_negative():
-    """常润股份（原满分 bug 样本，5日净流出）→ 有向强度应为负"""
+    """常润股份（原满分 bug 样本）→ 有向强度符号须与 5 日净额一致
+
+    490号：原断言硬编码「603201 必为 5 日净流出」，但该样本的行情数据已随时间漂移
+    （2026-09-27 实测 5 日净额 +345.99 → 已转为净流入），断言与数据脱钩而恒失败。
+    改为「有向强度符号 == 数据净额符号」——仍精确验证 313 号「方向不被 abs 抹掉」的原意，
+    且不依赖某一时点的个股资金方向。
+    """
     from app.data.enhanced_cache_manager import EnhancedCacheManager
+    from app.data.sharding_manager import sharding_manager
     ecm = EnhancedCacheManager()
+    rows = sharding_manager.execute_query('moneyflow_cache', """
+        SELECT SUM(net_lg_amount) FROM (
+            SELECT net_lg_amount,
+                   ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) rn
+            FROM moneyflow_cache WHERE ts_code = '603201.SH') WHERE rn <= 5
+    """)
+    net5 = float(rows[0][0]) if rows and rows[0] and rows[0][0] is not None else None
+    assert net5 is not None, "应有 603201 近 5 日资金数据"
     strength = compute_fund_strength(ecm, '603201.SH')
     assert strength is not None
-    assert strength < 0, f"603201 5日净流出应有向为负，实际 {strength}"
+    assert (strength > 0) == (net5 > 0), (
+        f'603201 有向强度符号应与 5 日净额一致（净额={net5:.2f}，强度={strength}）'
+    )

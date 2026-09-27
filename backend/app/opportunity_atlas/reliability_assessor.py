@@ -123,7 +123,15 @@ def _assess_volume_price(dim_results: dict) -> float:
     sd = vp.get('status_description') or {}
 
     # 基础分
+    # 490号：dim3 无多周期产出源 → 优先引擎自产键，缺则取 dim2 多级别联立真实方向（跨维主源，
+    #   与 dim_adapter.multi_level_consistency 同一口径，不重复计算多周期）
     consistency = str(sd.get('multi_timeframe_consistency', ''))
+    if not consistency:
+        try:
+            from app.opportunity_atlas.dim_adapter import multi_level_consistency
+            consistency, _ = multi_level_consistency(dim_results)
+        except Exception:
+            consistency = ''
     if '一致' in consistency:
         base = 0.9
     elif '冲突' in consistency:
@@ -137,9 +145,17 @@ def _assess_volume_price(dim_results: dict) -> float:
         if stage_conf is not None:
             base = _safe_float(stage_conf, _DEFAULT_RELIABILITY)
 
-    # 周线方向修正
+    # 周线方向修正（490号：源改为 dim2 多级别联立 direction_map['weekly']——系统唯一权威周线方向；
+    #   原 phantom 键 weekly_direction 无产出源）
     weekly_dir = str(sd.get('weekly_direction', '')).upper()
-    if weekly_dir == 'SELL':
+    if not weekly_dir:
+        try:
+            _ml = ((dim_results.get('structure') or {}).get('status_description') or {}).get('multi_level') or {}
+            weekly_dir = str((_ml.get('direction_map') or {}).get('weekly', '')).upper() \
+                if isinstance(_ml, dict) else ''
+        except Exception:
+            weekly_dir = ''
+    if weekly_dir in ('SELL', 'DOWN'):
         base *= 0.5
 
     # 量价三律修正
@@ -285,6 +301,10 @@ _DIM_ASSESSORS = {
     'signal': _assess_signal,
     'structure': _assess_structure,
     'volume_price': _assess_volume_price,
+    # 490号（B 类修正：键名错位）：L1（dim_adapter）量价维的因子键是 'vp'（390 沿用旧维度名），
+    #   而本注册表此前只有 'volume_price' → L1 传入的 'vp' 取不到评估器，量价可靠性**从未执行**
+    #   （恒 0.5 默认，见 assess() 末尾 _KNOWN_DIMS 补默认分支）。此处补 'vp' 别名。
+    'vp': _assess_volume_price,
     'chip_fund': _assess_chip_fund,
     'emotion': _assess_emotion,
     'risk': _assess_risk,

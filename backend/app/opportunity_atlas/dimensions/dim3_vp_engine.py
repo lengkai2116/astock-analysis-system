@@ -220,12 +220,31 @@ class Dim3VPEngine(DataAwareMixin):
             'vp_state': vp_state, 'health_score': f'{hs}/10（{sl}）',
             'divergence': div_txt, 'volume_energy': ve_d,
             'pattern': pat_det, 'vol_ratio': f'量比{vol_ratio:.1f}',
+            # 490号（A 类/B 类补产出）：量比数值键（vol_ratio 为展示文本，JUD L1/L4 需数值口径）
+            'vol_ratio_value': round(float(vol_ratio), 2),
             'pattern_score': f'{pattern_score:.1f}/10',
             'rps': (f'{rps:.1f}/100' if rps is not None else '数据不足'),
             'granville': f"{_g_name}（{_g_desc}）",
             # 479号 A5/A8：状态机与背离检测条件透传（dim8 消费"因"）
             'vp_state_label': str(tags.get('vp_state_label', '') or ''),
             'vp_rule': str(tags.get('vp_rule', '') or ''),
+            # ── 490号（A 类补产出）：390 L1 量价契约键（此前仅存在于消费侧，JUD 取默认静默退化）──
+            #  ①状态机方向/置信度＝以引擎自产 vp_state/健康度映射（引擎不再有独立状态机实现，
+            #    BUY/SELL/HOLD 语义等同 vp_state 方向，置信度＝hs/10）
+            #  ②阶段（stage_name/stage_confidence）＝RAW 透传 VP 状态中文名 + 健康度
+            #  ③共振分/量价三律/风险提示/入场上区间/目标区间＝RAW 已算的 compute_volume_price_signal
+            #    产出透传（vp_* 前缀落 pre_feat，dim3 免重算）
+            'state_machine_direction': (
+                'BUY' if vp_state in ('健康', '强健康')
+                else ('SELL' if vp_state in ('背离', '严重背离') else 'HOLD')),
+            'state_machine_confidence': round(hs / 10.0, 4),
+            'stage_name': str(tags.get('vp_state_label', '') or ''),
+            'stage_confidence': round(hs / 10.0, 4),
+            'resonance_score': tags.get('vp_resonance_score'),
+            'three_laws': tags.get('vp_three_laws') or {},
+            'risk_notes': tags.get('vp_risk_notes') or [],
+            'entry_zone': tags.get('vp_entry_zone'),
+            'target_zone': tags.get('vp_target_zone'),
             'divergence_type': _div_type,
             'divergence_confidence': _div_conf,
             'divergence_macd_confirmed': _div_macd,

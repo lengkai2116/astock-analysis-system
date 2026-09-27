@@ -721,6 +721,18 @@ class Dim7ValuationEngine(DataAwareMixin):
             'potential_score': f"潜力评分{strength}/100",
             'potential_strength': strength,  # 数字字段（dim_adapter factor/valuation维消费，与judgment.potential_strength同值）
             'potential_breakdown': potential['potential_breakdown'],
+            # ── 490号（A 类/B 类补产出）：390 L1/L4 估值契约键（_compute_valuation 已算未透传）──
+            #  composite_rating/valuation_deviation：L1 direction/strength 的判定输入（此前仅在
+            #  展示文本内 → _safe_float 失败 → dim7 direction 恒 0、strength 偏移项恒 0）
+            #  asset/earnings_anchor_rating：conflict C14 锚定矛盾判定输入
+            #  dividend_yield_value/revenue_growth_value：数值口径（dividend_yield/revenue_growth
+            #  为展示文本，L1 的 >4% / >20% 加成此前恒不触发）
+            'composite_rating': val.get('composite_rating'),
+            'valuation_deviation': val.get('valuation_deviation'),
+            'asset_anchor_rating': val.get('asset_anchor_rating'),
+            'earnings_anchor_rating': val.get('earnings_anchor_rating'),
+            'dividend_yield_value': val.get('dividend_yield'),
+            'revenue_growth_value': val.get('revenue_growth'),
         }
 
         # 4. judgment

@@ -82,85 +82,90 @@ def detect(
     warn: List[str] = []
 
     # ── 从各维度引擎结果中安全提取字段 ──
-    # dim2: 信号维度（缠论/背驰）
-    dim2 = dim_results.get('dim2') or dim_results.get('signal') or {}
-    dim2_sd = dim2.get('status_description') or {}
-    chanlun_phase = _safe_str(_safe_get(dim2_sd, 'chanlun_phase'))
-    divergence_type = _safe_str(_safe_get(dim2_sd, 'divergence_type'))
-    divergence_strength = _safe_float(_safe_get(dim2_sd, 'divergence_strength'))
-    trend_structure_signal = _safe_str(_safe_get(dim2_sd, 'trend_structure_signal'))
+    # 490号（C 类修正：跨维取错）：dim_results 的真实键为
+    #   structure / volume_price / chip_fund / emotion / risk / valuation，
+    #   此前按 'dim2'~'dim7' 查询（无生产者）后回退到 signal/structure → 取到错误的维
+    #   （chanlun_phase/divergence_type/level_trends 落到 dim1 signal、stage_name 落到 dim2
+    #    结构），致 C1/C2/C2b/C3/C6/C10/C11 判定输入恒空。
+    # 结构维（dim2 引擎）
+    structure = dim_results.get('structure') or {}
+    structure_sd = structure.get('status_description') or {}
+    chanlun_phase = _safe_str(_safe_get(structure_sd, 'chanlun_phase'))
+    divergence_type = _safe_str(_safe_get(structure_sd, 'divergence_type'))
+    divergence_strength = _safe_float(_safe_get(structure_sd, 'divergence_strength'))
+    trend_structure_signal = _safe_str(_safe_get(structure_sd, 'trend_structure_signal'))
+    _multi_level = structure_sd.get('multi_level') or {}
 
-    # dim3: 结构维度（缠论阶段）
-    dim3 = dim_results.get('dim3') or dim_results.get('structure') or {}
-    dim3_sd = dim3.get('status_description') or {}
-    stage_name = _safe_str(_safe_get(dim3_sd, 'stage_name'))
-    dim3_divergence = _safe_str(_safe_get(dim3_sd, 'divergence'))
-    risk_notes = dim3.get('risk_notes') or []
+    # 量价维（dim3 引擎）
+    volume_price = dim_results.get('volume_price') or {}
+    volume_price_sd = volume_price.get('status_description') or {}
+    # 量价背离：取结构化 divergence_type（'top'/'bottom'/''），非展示文本 divergence
+    vp_divergence = _safe_str(_safe_get(volume_price_sd, 'divergence_type'))
+    # 量比：取数值键 vol_ratio_value（490号补产出）；缺则回退入参
+    vp_vol_ratio = _safe_float(_safe_get(volume_price_sd, 'vol_ratio_value'), vol_ratio)
+    risk_notes = volume_price_sd.get('risk_notes') or []
 
-    # dim4: 筹码维度
-    dim4 = dim_results.get('dim4') or dim_results.get('chip_fund') or {}
-    dim4_sd = dim4.get('status_description') or {}
-    chip_fund_phase = _safe_str(_safe_get(dim4_sd, 'phase'))
-    dim4.get('chip_fund') or {}
-    _safe_str(_safe_get(dim4_sd, 'chip_fund_phase', default=chip_fund_phase))
-    crowding_level = _safe_str(_safe_get(dim4_sd, 'crowding_level'))
-    retail_institution = _safe_str(dim4.get('retail_institution', ''))
-    dim4_phase = _safe_str(dim4.get('phase') or chip_fund_phase)
-    cost_concentration = _safe_str(_safe_get(dim4_sd, 'cost_concentration'))
-    cost_profit_ratio = _safe_float(_safe_get(dim4_sd, 'cost_profit_ratio'))
+    # 筹码维（dim4 引擎）
+    chip_fund = dim_results.get('chip_fund') or {}
+    chip_fund_sd = chip_fund.get('status_description') or {}
+    # 阶段取 judgment.phase（英文枚举 building/washing/lifting/distributing）；
+    # sd['phase'] 为展示文本（"建仓（…）"）不可直接比对
+    dim4_phase = _safe_str(_safe_get(chip_fund.get('judgment') or {}, 'phase'))
+    chip_fund_phase = dim4_phase
+    crowding_level = _safe_str(_safe_get(chip_fund_sd, 'crowding_level'))
+    # 散户/机构倾向在 sd 内（此前读容器顶层 → 恒空）
+    retail_institution = _safe_str(_safe_get(chip_fund_sd, 'retail_institution'))
+    cost_concentration = _safe_str(_safe_get(chip_fund_sd, 'cost_concentration'))
+    cost_profit_ratio = _safe_float(_safe_get(chip_fund_sd, 'cost_profit_ratio'))
 
     # dim5: 情绪维度 — 从 dims_factor 读取
     emotion_factor = dims_factor.get('emotion') or {}
     emotion_direction = int(_safe_float(emotion_factor.get('direction')))
 
     # dim6: 风险维度
-    dim6 = dim_results.get('dim6') or dim_results.get('risk') or {}
-    dim6_sd = dim6.get('status_description') or {}
-    atr_pct = _safe_float(_safe_get(dim6_sd, 'atr_pct'))
-    rr_value = _safe_float(_safe_get(dim6_sd, 'rr_value'))
-    risk_level = _safe_str(_safe_get(dim6_sd, 'risk_level', default=dim6.get('risk_level', '')))
-    dist_to_support_pct = _safe_float(_safe_get(dim6_sd, 'dist_to_support_pct'))
-    dist_to_resistance_pct = _safe_float(_safe_get(dim6_sd, 'dist_to_resistance_pct'))
+    risk = dim_results.get('risk') or {}
+    risk_sd = risk.get('status_description') or {}
+    atr_pct = _safe_float(_safe_get(risk_sd, 'atr_pct'))
+    rr_value = _safe_float(_safe_get(risk_sd, 'rr_value'))
+    risk_level = _safe_str(_safe_get(risk_sd, 'risk_level', default=risk.get('risk_level', '')))
+    dist_to_support_pct = _safe_float(_safe_get(risk_sd, 'dist_to_support_pct'))
+    dist_to_resistance_pct = _safe_float(_safe_get(risk_sd, 'dist_to_resistance_pct'))
 
     # dim7: 估值维度 — 从 dims_factor 读取
     valuation_factor = dims_factor.get('valuation') or {}
     valuation_direction = int(_safe_float(valuation_factor.get('direction')))
-    # dim7 anchor ratings
-    dim7 = dim_results.get('dim7') or dim_results.get('valuation') or {}
-    dim7_sd = dim7.get('status_description') or {}
-    asset_anchor_rating = _safe_float(_safe_get(dim7_sd, 'asset_anchor_rating', default=0))
-    earnings_anchor_rating = _safe_float(_safe_get(dim7_sd, 'earnings_anchor_rating', default=0))
+    # dim7 anchor ratings（490号补产出：此前未落 sd → C14 恒不触发）
+    valuation = dim_results.get('valuation') or {}
+    valuation_sd = valuation.get('status_description') or {}
+    asset_anchor_rating = _safe_float(_safe_get(valuation_sd, 'asset_anchor_rating', default=0))
+    earnings_anchor_rating = _safe_float(_safe_get(valuation_sd, 'earnings_anchor_rating', default=0))
 
     # dims_factor 结构方向
     structure_factor = dims_factor.get('structure') or {}
     structure_direction = int(_safe_float(structure_factor.get('direction')))
-
-    # 量价背离
-    vp = dim_results.get('volume_price') or dim_results.get('vp') or {}
-    vp_sd = vp.get('status_description') or {}
-    vp_divergence = _safe_str(_safe_get(vp_sd, 'divergence'))
 
     # ── C1: 欲病阶段 + 强确认 → warn ──
     right_side_confirm = _safe_str(tags.get('right_side_confirm'))
     if '欲病' in chanlun_phase and right_side_confirm == '强确认':
         warn.append('C1: 缠论欲病阶段+强确认（方向未定，过度追入风险）')
 
-    # ── C2: DOWNTREND_ACTIVE + 结构看多 → warn ──
-    if stage_name == 'DOWNTREND_ACTIVE' and structure_direction == 1:
-        warn.append('C2: 活跃下跌阶段+结构看多（趋势矛盾）')
+    # ── C2（490号删除）：原比对 dim3 的 stage_name == 'DOWNTREND_ACTIVE' ──
+    #   dim3 量价引擎无趋势阶段产出（其真实状态词表为 vp_state_label，如"放量突破(筹码转换)"），
+    #   'DOWNTREND_ACTIVE' 无任何产出源 → 规则恒不触发且与 C11（背离+结构看多）语义重叠。
+    #   如需恢复，须先由引擎定义量价趋势阶段枚举（登记 490 §登记项）。
 
     # ── C2b: 多时间框架趋势分歧 → warn ──
-    level_trends = _safe_str(dim2_sd.get('level_trends', ''))
-    if '/周' in level_trends:
-        _daily_part = level_trends.split('/')[0].strip() if '/' in level_trends else ''
-        _weekly_part = level_trends.split('/周')[1].split('/')[0].strip() if '/周' in level_trends else ''
-        if _daily_part and _weekly_part:
-            _daily_bull = _daily_part in ('up', '上升', '多')
-            _weekly_bear = _weekly_part in ('down', '下降', '空')
-            _daily_bear = _daily_part in ('down', '下降', '空')
-            _weekly_bull = _weekly_part in ('up', '上升', '多')
-            if (_daily_bull and _weekly_bear) or (_daily_bear and _weekly_bull):
-                warn.append(f'C2b: 日线{_daily_part}+周线{_weekly_part}（多时间框架趋势分歧）')
+    # 490号：源改为 dim2 多级别联立（457号 MultiLevelChanlunAnalyzer）的 direction_map，
+    #   取代原 phantom 键 level_trends（无生产者）
+    _dm = _multi_level.get('direction_map') if isinstance(_multi_level, dict) else {}
+    if isinstance(_dm, dict):
+        _daily_dir = _safe_str(_dm.get('daily'))
+        _weekly_dir = _safe_str(_dm.get('weekly'))
+        _bull = ('up', '上升', '多')
+        _bear = ('down', '下降', '空')
+        if ((_daily_dir in _bull and _weekly_dir in _bear)
+                or (_daily_dir in _bear and _weekly_dir in _bull)):
+            warn.append(f'C2b: 日线{_daily_dir}+周线{_weekly_dir}（多时间框架趋势分歧）')
 
     # ── C3: 冰点+低估值+顶部背离 → warn ──
     if (emotion_direction == -1
@@ -179,8 +184,10 @@ def detect(
         fatal.append('C4+: 主力出货+筹码吸筹/拉升阶段（严重矛盾，资金出逃）')
 
     # ── C4++: 单峰密集+高拥挤+高获利 → fatal ──
-    if (cost_concentration == '单峰密集'
-            and crowding_level == 'HIGH'
+    # 490号：值域对齐引擎真实枚举（cost_concentration 为 concentrating/dispersing/stable；
+    #   crowding_level 为 CrowdingFactor 分档 HIGH_CROWDING/MEDIUM_CROWDING/LOW_CROWDING）
+    if (cost_concentration in ('单峰密集', 'concentrating', 'tight')
+            and crowding_level in ('HIGH', 'HIGH_CROWDING')
             and cost_profit_ratio > 0.7):
         fatal.append(
             f'C4++: 单峰密集+高拥挤+获利盘{cost_profit_ratio:.0%}（集中兑现风险极高）'
@@ -237,14 +244,15 @@ def detect(
         )
 
     # ── C11: 量价顶部背离 + 结构看多 → warn/fatal ──
-    if dim3_divergence == 'top' and structure_direction == 1:
-        if vol_ratio < 0.5:
+    # 490号：背离取结构化 divergence_type（'top'）；量比取 dim3 vol_ratio_value（真实数值）
+    if vp_divergence == 'top' and structure_direction == 1:
+        if vp_vol_ratio < 0.5:
             fatal.append(
-                f'C11+: 结构顶部背离+结构看多+量比{vol_ratio:.2f}<0.5'
+                f'C11+: 量价顶部背离+结构看多+量比{vp_vol_ratio:.2f}<0.5'
                 '（缩量顶部背离，反转概率极高）'
             )
         else:
-            warn.append('C11: 结构顶部背离+结构看多（量价背离风险）')
+            warn.append('C11: 量价顶部背离+结构看多（量价背离风险）')
 
     # ── C12: 结构风险提示 + 结构看多 → warn ──
     if isinstance(risk_notes, list) and len(risk_notes) > 0 and structure_direction == 1:
@@ -288,7 +296,7 @@ def detect(
     max(len(_directions), 1)
 
     dist_to_prev_high_pct = _safe_float(
-        _safe_get(dim6_sd, 'dist_to_prev_high_pct'), default=-10.0
+        _safe_get(risk_sd, 'dist_to_prev_high_pct'), default=-10.0
     )
 
     semantic_type = '初现型'

@@ -3802,6 +3802,11 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     #   （divergence_type/divergence_confidence/divergence_macd_confirmed）
                     _vp_state_label, _vp_rule = '', ''
                     _vp_div_type, _vp_div_conf, _vp_div_macd = '', None, False
+                    # 490号：390 L1 量价契约键透传（RAW 已算 compute_volume_price_signal 产出，
+                    #   dim3 免重算）——共振分/量价三律取自量价关系；风险提示/入场区间/目标区间/
+                    #   止损线取自 signal_output。vp_* 前缀落 pre_feat，避免与通用键同名冲突。
+                    _vp_resonance, _vp_three_laws, _vp_risk_notes = None, {}, []
+                    _vp_entry_zone, _vp_target_zone, _vp_risk_line = None, None, None
                     try:
                         from app.engine.framework.volume_price_strategy import (
                             STATE_SIGNAL_MAP, compute_volume_price_signal)
@@ -3820,6 +3825,13 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                             _vp_div_type = str(_rel.get('divergence', '') or '')
                             _vp_div_conf = _rel.get('divergence_confidence')
                             _vp_div_macd = bool(_rel.get('divergence_macd_confirmed', False))
+                            # 490号：390 L1 量价契约键真实源透传（dim3 status_description 消费）
+                            _vp_resonance = _rel.get('resonance_score')
+                            _vp_three_laws = _rel.get('three_laws') or {}
+                            _vp_risk_notes = list(_vps.get('risk_notes') or [])
+                            _vp_entry_zone = _vps.get('entry_zone')
+                            _vp_target_zone = _vps.get('target_zone')
+                            _vp_risk_line = _vps.get('risk_line')
                     except Exception as _e:
                         logger.debug(f"RAW量价状态机透传失败 [{code}]: {_e}")
                     features['volume_price'] = {
@@ -3835,6 +3847,13 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         'divergence_type': _vp_div_type,
                         'divergence_confidence': _vp_div_conf,
                         'divergence_macd_confirmed': _vp_div_macd,
+                        # 490号：390 L1 量价契约键（dim3 status_description 透传消费）
+                        'vp_resonance_score': _vp_resonance,
+                        'vp_three_laws': _vp_three_laws,
+                        'vp_risk_notes': _vp_risk_notes,
+                        'vp_entry_zone': _vp_entry_zone,
+                        'vp_target_zone': _vp_target_zone,
+                        'vp_risk_line': _vp_risk_line,
                     }
                 except Exception as e:
                     logger.warning(f"RAW量价特征失败 [{code}]: {e}")

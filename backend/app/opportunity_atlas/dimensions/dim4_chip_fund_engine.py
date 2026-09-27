@@ -6108,6 +6108,28 @@ class Dim4ChipFundEngine(DataAwareMixin):
         except Exception:
             _net_txt = ''
 
+        # ── 490号（A 类补产出）：390 L1/L2 筹码契约键的取值准备 ──
+        #  pde_* 取自 PhaseDetectionEngine 真实产出（compute_tags）：phase_conflict/phase_vote_ratio/
+        #  price_position；vote_ratio 为嵌套 {维度: 向量}，_supporters 为 {主导阶段: 支持维度数}——
+        #  390 契约语义为「票差」，故优先透传 _supporters（扁平 {阶段: 票数}），缺则透传原始 dict。
+        _pde = phase_engine_result or {}
+        _pde_vote = None
+        _vr_raw = _pde.get('phase_vote_ratio')
+        if _vr_raw:
+            try:
+                _vr = json.loads(_vr_raw) if isinstance(_vr_raw, str) else _vr_raw
+                if isinstance(_vr, dict):
+                    _pde_vote = _vr.get('_supporters') or _vr
+            except Exception:
+                _pde_vote = None
+        _cost_profit_ratio = None
+        try:
+            _pr = tags.get('profit_ratio')
+            if _pr is not None:
+                _cost_profit_ratio = float(_pr)
+        except (TypeError, ValueError):
+            _cost_profit_ratio = None
+
         status_description = {
             'phase': f"{phase_info['phase_cn']}（{phase_info['detail']}"
                      + (f"，{phase_vote_detail}" if phase_vote_detail else '') + "）",
@@ -6119,6 +6141,18 @@ class Dim4ChipFundEngine(DataAwareMixin):
             'fund_price_divergence': fund_price_div['label'],
             'fund_price_divergence_status': fund_price_div['status'],
             'fund_price_divergence_risk': fund_price_div['risk'],
+            # ── 490号（A 类补产出）：390 L1/L2 筹码契约键（引擎已算未透传，此前 JUD 取默认）──
+            #  phase_confidence：PhaseDetector 阶段置信度（tags 兜底路径无 → None）
+            #  pde_conflict / pde_vote_ratio / pde_price_position：PDE 八维共识的真实产出
+            #  crowding_level：CrowdingFactor 三信号分档；cost_concentration：筹码集中度枚举；
+            #  cost_profit_ratio：获利盘比例（tags.profit_ratio，与 conflict C4++/C8 同源）
+            'phase_confidence': phase_info.get('confidence'),
+            'pde_conflict': _pde.get('phase_conflict'),
+            'pde_vote_ratio': _pde_vote,
+            'pde_price_position': _pde.get('price_position'),
+            'crowding_level': crowding.get('level'),
+            'cost_concentration': cost_structure.get('concentration'),
+            'cost_profit_ratio': _cost_profit_ratio,
         }
         # 拥挤度三信号明细并入 crowding 文本（468-③；details 缺失则保持原样）
         try:

@@ -38,11 +38,14 @@ def _convert_dim_engine_to_legacy(der: dict) -> dict:
     if vp:
         judg = vp.get('judgment', {})
         dims['volume_price'] = {'direction': 'up' if judg.get('overall_direction', 0) > 0 else 'down'}
-    # 筹码维
-    cf = der.get('fund_chip') or {}
+    # 筹码维（490号：键名错位修正 fund_chip→chip_fund；dim_results 真实键为 chip_fund。
+    #   同时修正取值形态——dim4 judgment.phase 是字符串枚举（'building'），
+    #   原 `judg.get('phase', {}).get('direction')` 会在 str 上调 .get 抛 AttributeError，
+    #   此前因 fund_chip 取空而未触发；方向统一取 judgment.overall_direction）
+    cf = der.get('chip_fund') or {}
     if cf:
         judg = cf.get('judgment', {})
-        phase_dir = judg.get('phase', {}).get('direction', 0)
+        phase_dir = int(judg.get('overall_direction', 0) or 0)
         dims['chip'] = {'direction': 'up' if phase_dir > 0 else ('down' if phase_dir < 0 else 'neutral')}
     # 情绪维
     em = der.get('emotion') or {}

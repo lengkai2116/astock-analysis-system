@@ -157,6 +157,7 @@ class Dim2StructureEngine(DataAwareMixin):
         #    茅台 15 三卖 -192 压到 8）。产出 analysis_result 的 theorem_check 已在 step 9
         #    由 ChanlunAnalyzer 生成（与 chanlun_phase 同源）。
         strength = 50  # 无缠论结果/评分异常时中性分（0-100，健康度域，对应 continuous_value=0.5）
+        strength_details = []  # 490号：健康度分项明细（供 chanlun_strength_components 透传）
         if chanlun_result:
             try:
                 scorer = ChanlunScorer()
@@ -165,7 +166,11 @@ class Dim2StructureEngine(DataAwareMixin):
                 score_result = scorer.structure_health_score(
                     chanlun_result,
                     market_context=_build_market_context(data_context))
-                strength = float(score_result.get('score', 50)) if isinstance(score_result, dict) else 50
+                if isinstance(score_result, dict):
+                    strength = float(score_result.get('score', 50))
+                    strength_details = list(score_result.get('details') or [])
+                else:
+                    strength = 50
             except Exception:
                 pass
         if isinstance(strength, dict):
@@ -267,6 +272,38 @@ class Dim2StructureEngine(DataAwareMixin):
         #   "数据不足，跳过/无中枢，自动通过"等标注，呈现时与真实 FAIL 区分——定稿⑤）
         theorem_check_details = _fmt_theorem_details((chanlun_result or {}).get('theorem_check'))
 
+        # 490号：L2（reliability_assessor._assess_structure）三源融合契约键补产出。
+        #  ①consistency_component＝多周期方向一致性（457 多级别联立 direction_map，以日线为基准，
+        #    各级别方向一致占比）；无多级别数据 → None（消费端取 0.5 中性默认）。
+        #  ②divergence_multi_algo＝背驰多算法一致性（各确证方法一条 agree），取自
+        #    Divergence.details 的真实方法标记 + dual_confirmed（面积法+力度法双确认）；无背驰 → {}。
+        consistency_component = None
+        if isinstance(multi_level, dict):
+            _dm = multi_level.get('direction_map') or {}
+            _base_dir = str(_dm.get('daily', '') or '')
+            if _base_dir in ('up', 'down'):
+                _other = [v for k, v in _dm.items()
+                          if k != 'daily' and v in ('up', 'down')]
+                if _other:
+                    consistency_component = round(
+                        sum(1 for v in _other if v == _base_dir) / len(_other), 4)
+
+        divergence_multi_algo = {}
+        if divergence_obj is not None:
+            _dd = getattr(divergence_obj, 'details', None)
+            if isinstance(_dd, dict):
+                if 'macd_confirmed' in _dd:
+                    divergence_multi_algo['macd'] = {'agree': bool(_dd.get('macd_confirmed'))}
+                if 'metric_confirmed' in _dd:
+                    divergence_multi_algo['strength'] = {'agree': bool(_dd.get('metric_confirmed'))}
+                _bt = _dd.get('trend_backtesting')
+                if isinstance(_bt, dict):
+                    divergence_multi_algo['trend_backtesting'] = {
+                        'agree': bool(_bt.get('confirmed', _bt.get('direction') is not None))}
+                if 'exited_zhongshu' in _dd:
+                    divergence_multi_algo['zhongshu'] = {'agree': bool(_dd.get('exited_zhongshu'))}
+            divergence_multi_algo['dual_confirmed'] = {'agree': bool(divergence_dual_confirmed)}
+
         status_description = {
             'vs_zhongshu': vs_zhongshu['detail'],
             'vs_ma': vs_ma['detail'],
@@ -279,6 +316,14 @@ class Dim2StructureEngine(DataAwareMixin):
             #   避免一次性 break 契约），新增显式 structure_health_score 键（同值）。
             'chanlun_strength': round(strength, 2) if isinstance(strength, (int, float)) else str(strength),
             'structure_health_score': round(strength, 2) if isinstance(strength, (int, float)) else 0.0,
+            # ── 490号（A 类补产出）：L2 三源融合契约键（引擎已算未透传，此前 JUD 取默认静默退化）──
+            'chanlun_strength_components': {
+                'strength': round(strength / 100.0, 4) if isinstance(strength, (int, float)) else 0.5,
+                'score': round(strength, 2) if isinstance(strength, (int, float)) else 50,
+                'details': strength_details,
+            },
+            'consistency_component': consistency_component,
+            'divergence_multi_algo': divergence_multi_algo,
             'buy_sell_points': [str(p) for p in buy_sell_points[:3]],
             # ── 457号：多级别联立（周/日/60min 区间套 + 方向一致性 + 关键价位）──
             #   multi_level 键与 strategy_analyze/dim4/tag_extractor/fallback_description 契约一致

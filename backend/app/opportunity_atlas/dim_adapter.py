@@ -64,6 +64,10 @@ ENGINE_STATE_TO_CN = {
     'emotion': {
         'positive': '积极', 'neutral': '中性', 'negative': '消极',
         'recovery': '复苏', 'climax': '高潮', 'ebb': '退潮', 'ice': '冰点',
+        # 490号：补 dim5 PHASE_MAP 全量枚举（此前仅 ice/ebb/climax 命中，
+        #   sprout/ferment/regression 无映射 → 方向恒 0）
+        'sprout': '萌芽', 'ferment': '发酵', 'regression': '回归',
+        '萌芽': '萌芽', '发酵': '发酵', '回归': '回归',
         '正常': '正常',
     },
     'chip_fund': {
@@ -427,6 +431,11 @@ _EMOTION_DIRECTION: dict[str, int] = {
     'normal': 0,
     'recovery': 1,
     'positive': -1,
+    # 490号：补 dim5 PHASE_MAP 全量枚举（萌芽/发酵=上行期→看多；高潮=过热→看空；回归=常态→中性）
+    'sprout': 1,
+    'ferment': 1,
+    'climax': -1,
+    'regression': 0,
     # 中文键兼容
     '冰点': 1,
     '退潮': 0,
@@ -436,6 +445,10 @@ _EMOTION_DIRECTION: dict[str, int] = {
     '复苏': 1,
     '积极': -1,
     '消极': 0,
+    '萌芽': 1,
+    '发酵': 1,
+    '高潮': -1,
+    '回归': 0,
 }
 
 
@@ -479,6 +492,36 @@ def _potential_score_int(sd: dict) -> int:
 def _clamp(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
     """将 value 限制在 [lo, hi] 区间"""
     return max(lo, min(hi, value))
+
+
+def multi_level_consistency(dim_results: dict) -> tuple[str, str]:
+    """490号：多周期（日/周）方向一致性 — 源为 dim2 多级别联立（457号 direction_map）。
+
+    系统唯一权威多级别方向产出在 dim2（MultiLevelChanlunAnalyzer）；dim3 量价维不做多周期，
+    其契约键 multi_timeframe_consistency/sub_states 无产出源 → 统一由此跨维取真实数据，
+    避免消费侧取默认值静默退化（不再由 dim3 伪造/重算多周期）。
+
+    Returns:
+        (consistency, sub_states)：consistency ∈ {'一致（BUY）','一致（SELL）','冲突（BUY+SELL）',''}；
+        sub_states 为方向子态串（冲突时为 'BUY+SELL'，供消费侧判买卖点冲突）。
+    """
+    try:
+        _ml = (((dim_results or {}).get('structure') or {})
+               .get('status_description') or {}).get('multi_level') or {}
+        _dm = _ml.get('direction_map') if isinstance(_ml, dict) else {}
+        if not isinstance(_dm, dict):
+            return '', ''
+        _dirs = {k: str(v) for k, v in _dm.items()
+                 if k in ('daily', 'weekly', 'hourly') and v in ('up', 'down')}
+        if len(_dirs) < 2:
+            return '', ''
+        _ups = [k for k, v in _dirs.items() if v == 'up']
+        _downs = [k for k, v in _dirs.items() if v == 'down']
+        if not _ups or not _downs:
+            return ('一致（BUY）' if _ups else '一致（SELL）'), ''
+        return '冲突（BUY+SELL）', 'BUY+SELL'
+    except Exception:
+        return '', ''
 
 
 def convert_to_factors(dim_results: dict, tags: dict) -> dict:
@@ -597,11 +640,15 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
         _resonance_norm = max(0.0, min(1.0, (_resonance_raw + 5.0) / 10.0))  # [-5,5] → [0,1]
         _dim3_str = 0.7 * _sm_conf + 0.3 * _resonance_norm
         # step 3: multi_timeframe_consistency 冲突/分歧修正（方向 + 强度）
+        # 490号：dim3 无多周期产出源 → 统一取 dim2 多级别联立真实方向（跨维主源，见
+        #   multi_level_consistency）；引擎自产的 multi_timeframe_* 若有则优先（向前兼容）
         _mtf = str(_vp_sd.get('multi_timeframe_consistency', ''))
+        _mtf_sub = str(_vp_sd.get('multi_timeframe_sub_states', ''))
+        if not _mtf:
+            _mtf, _mtf_sub = multi_level_consistency(dim_results)
         _has_conflict = '冲突' in _mtf
         _has_divergence = '分歧' in _mtf
         if _has_conflict or _has_divergence:
-            _mtf_sub = str(_vp_sd.get('multi_timeframe_sub_states', ''))
             _buy_sell_clash = (
                 ('BUY' in _mtf_sub and 'SELL' in _mtf_sub)
                 or ('BULLISH' in _mtf_sub and 'BEARISH' in _mtf_sub)
@@ -620,7 +667,8 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
         # L4 提取
         _dim3_extras['stage_name'] = str(_vp_sd.get('stage_name', ''))
         _dim3_extras['divergence'] = str(_vp_sd.get('divergence', ''))
-        _dim3_extras['vol_ratio'] = _safe_float(_vp_sd.get('vol_ratio'), 0.0)
+        _dim3_extras['vol_ratio'] = _safe_float(
+            _vp_sd.get('vol_ratio_value', _vp_sd.get('vol_ratio')), 0.0)
     else:
         _dim3_str = 0.3
 
@@ -690,8 +738,9 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
         # 中文键兼容
         _emo_state_cn = ENGINE_STATE_TO_CN.get('emotion', {}).get(_emo_state_raw, _emo_state_raw)
         _dim5_dir = _EMOTION_DIRECTION.get(_emo_state_cn, _EMOTION_DIRECTION.get(_emo_state_raw, 0))
-        # temperature
-        _temperature = _safe_float(_emo_sd.get('temperature'), 50.0)
+        # temperature（490号：优先数值键 temperature_value；回退旧展示文本键解析）
+        _temperature = _safe_float(
+            _emo_sd.get('temperature_value', _emo_sd.get('temperature')), 50.0)
         _dim5_str = abs(_temperature - 50.0) / 50.0
         # bociasi fast/slow 共振加成
         _bociasi_fast = str(_emo_sd.get('bociasi_fast_signal', ''))
@@ -801,13 +850,15 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
         _deviation = _safe_float(_val_sd.get('valuation_deviation', _val_sd.get('deviation')), 0.0)
         _deviation_norm = min(1.0, abs(_deviation) / 2.0)
         _dim7_str = 0.6 * _cr_str + 0.4 * _deviation_norm
-        # dividend_yield > 4 加成
-        _div_yield = _safe_float(_val_sd.get('dividend_yield'), 0.0)
+        # dividend_yield > 4 加成（490号：优先数值键 dividend_yield_value）
+        _div_yield = _safe_float(
+            _val_sd.get('dividend_yield_value', _val_sd.get('dividend_yield')), 0.0)
         if _div_yield > 4:
             _dim7_str += 0.1
             _dim7_evidence.append(f'股息率={_div_yield:.1f}%>4→+0.1')
-        # revenue_growth > 20 加成
-        _rev_growth = _safe_float(_val_sd.get('revenue_growth'), 0.0)
+        # revenue_growth > 20 加成（490号：优先数值键 revenue_growth_value）
+        _rev_growth = _safe_float(
+            _val_sd.get('revenue_growth_value', _val_sd.get('revenue_growth')), 0.0)
         if _rev_growth > 20:
             _dim7_str += 0.1
             _dim7_evidence.append(f'营收增速={_rev_growth:.1f}%>20→+0.1')
