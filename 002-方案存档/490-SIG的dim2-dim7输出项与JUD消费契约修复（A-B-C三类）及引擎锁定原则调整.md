@@ -132,6 +132,18 @@ related:
 
 **新增发现（本号内一并修复）**：`reliability_assessor._DIM_ASSESSORS` 注册键为 `volume_price`，而 L1（`dim_adapter`）量价因子键是 `vp` → **量价可靠性评估从未被调用**（`assess()` 末尾 `_KNOWN_DIMS` 分支补 0.5 默认）。已补 `'vp': _assess_volume_price` 别名（490-20 附带）。
 
+### 4.2.1 ⚠️ 连带行为变更（须用户知悉，登记 490-R9）
+
+**490-8（legacy dims 情绪 state 真实化）会激活 `_detect_market_regime` 的情绪分支**：
+
+- 链路：`StatusEngine._aggregate_v390:832` → `_detect_market_regime(tags, dims)` → 读 `dims['emotion']['state']`；命中 `'退潮'`/`'高潮'` → 返回 `extreme_panic` → `weights = MARKET_REGIME_WEIGHTS['extreme_panic']`（risk **0.40** / valuation **0.25**，其余维 0.05~0.10）。
+- 变更前：`dims['emotion']['state']` 读 `judgment['phase']`（不存在）→ **恒「正常」** → 该分支**不可达**（`status_bar` 并非 tags 键，故 extreme_panic 实际不可达）。
+- 变更后：state 为真实情绪阶段（冰点/萌芽/发酵/高潮/退潮/回归/正常）→ **市场阶段处于「退潮」或「高潮」时，全市场个股进入 `extreme_panic` 权重档**。
+- 影响面：`sentiment_phase` 是**市场级**（全市场同值，per-stock 落库）→ 影响是**全市场同时切换**，非个股个例。
+- 8 股实测（2026-09-27）：`emotion_state='发酵'` → 情绪分支未命中，regime 由 `status_bar`/`risk` 决定（600519/000002=trending_down，其余=ranging）→ **当前样本无变化**；退潮/高潮日会生效。
+- 性质判定：**判定权重（果）的选取被激活**——权重值本身未改、设计意图即如此（370 S7 动态权重），但属「果侧行为变更」，按 §一 边界**须用户知悉/追认**。
+- 可选处置：①**接受**（恢复 370 设计意图）；②若认为情绪极端档不应直接覆盖全市场权重，则须调整 `_detect_market_regime` 的情绪判据（属判定语义，独立号）。临时回退手段：把 `_convert_to_dims_format` 的 emotion state 改回常量（**不建议**，等于退回 B 类缺陷）。
+
 ### 4.3 生效条件与数据侧
 
 - dim3 的 5 个 RAW 透传键来自 daemon **RAW-2 预计算**：按 486-3 先例执行 8 股 **pre_feat 定向重算**（`scripts/_486_3_prefeat_recompute.py`，含 DB 备份，结论 `ALL_OK`）后全部落库。**全市场存量 pre_feat 待 daemon 下次日终自然刷新**。
@@ -150,3 +162,4 @@ related:
 | 490-R6 | `_DIM_DIRECTION['emotion']`（`status_engine`：冰点→**-1**）与 v390 `_EMOTION_DIRECTION`（冰点→**+1**，均值回归）方向语义**相反** | 本号仅修取值路径（490-8），未统一语义；属 485-6「调 dim5/framework 阈值取值」JUD 阶段主题 |
 | 490-R7 | `reliability` 输出仍含冗余键 `volume_price=0.5`（`_KNOWN_DIMS` 历史键名） | 只新增 `vp` 别名，未删旧键（避免影响未知消费方）；如确认无消费方可清理 |
 | 490-R8 | SIG 灯色类输出（`overall_light`/`risk_light`/`market_light`…） | 属 **439-A** 迁移 JUD 主题，本号不动 |
+| 490-R9 | **490-8 连带激活 `_detect_market_regime` 情绪分支**（退潮/高潮 → 全市场 `extreme_panic` 权重档：risk 0.40/valuation 0.25） | 属「判定权重选取被激活」的**果侧行为变更**，须用户**追认或改判据**；详见 §4.2.1 |
