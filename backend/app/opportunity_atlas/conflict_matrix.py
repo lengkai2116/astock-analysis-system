@@ -118,9 +118,10 @@ def detect(
     cost_concentration = _safe_str(_safe_get(chip_fund_sd, 'cost_concentration'))
     cost_profit_ratio = _safe_float(_safe_get(chip_fund_sd, 'cost_profit_ratio'))
 
-    # dim5: 情绪维度 — 从 dims_factor 读取
-    emotion_factor = dims_factor.get('emotion') or {}
-    emotion_direction = int(_safe_float(emotion_factor.get('direction')))
+    # dim5: 情绪维度 — 491号起按**阶段**取（C3 判据改口径后不再需要 emotion direction；
+    #   原 `emotion_direction == -1` 属顺势口径，与 v390 生效的逆势表矛盾且使 C3 不可达）
+    emotion_sd = (dim_results.get('emotion') or {}).get('status_description') or {}
+    emotion_phase = _safe_str(_safe_get(emotion_sd, 'market_phase'))
 
     # dim6: 风险维度
     risk = dim_results.get('risk') or {}
@@ -167,11 +168,12 @@ def detect(
                 or (_daily_dir in _bear and _weekly_dir in _bull)):
             warn.append(f'C2b: 日线{_daily_dir}+周线{_weekly_dir}（多时间框架趋势分歧）')
 
-    # ── C3: 冰点+低估值+顶部背离 → warn ──
-    if (emotion_direction == -1
+    # ── C3: 情绪冷区（冰点/退潮）+ 低估值 + 顶部背离 → warn ──
+    # 491号：判据由 `emotion_direction == -1`（顺势口径）改为按阶段显式取值（与原「冰点」文案自洽）
+    if (emotion_phase in ('ice', 'ebb')
             and valuation_direction == 1
             and vp_divergence == 'top'):
-        warn.append('C3: 情绪冰点+估值低估+量价顶部背离（ice+low_valuation+top_divergence）')
+        warn.append('C3: 情绪冷区(冰点/退潮)+估值低估+量价顶部背离（ice/ebb+low_valuation+top_divergence）')
 
     # ── C4: 筹码吸筹/拉升 + 拥挤度高 → warn ──
     if (chip_fund_phase in ('building', 'lifting')
