@@ -12,6 +12,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# 493号（P2-b）：盈亏比硬性门禁阈值（知识库《R-R筛选规则》「R:R < 2:1 直接放弃」）。
+# 原实现为 1.0（且注释自身引用「盈亏比≥2」却写成 <1.0，自我不一致），与 dim6 稽核
+# 门槛（rr_value ≥ 2.0）及知识库均不符。用户拍板：<2.0 且当前 enter/light → 降 wait。
+RR_GATE = 2.0
+
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
     if val is None:
@@ -487,12 +492,13 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         state, dirs,
         sentiment_phase=str(dimensions.get('emotion', {}).get('rotation_state') or ''),
         df=df)
-    # 盈亏比门禁
+    # 盈亏比硬性门禁（493号 P2-b：知识库《R-R筛选规则》R:R<2:1 直接放弃）
     geo = _geometric(df)
     _rr = geo.get('risk_reward')
-    if _rr is not None and _rr < 1.0 and state in ('enter', 'light'):
+    if _rr is not None and _rr < RR_GATE and state in ('enter', 'light'):
         state = 'wait'
-        state_reason = f'盈亏比不足（目标收益/止损风险≈{_rr}，止损过宽），建议观望'
+        state_reason = (f'盈亏比不足（目标收益/止损风险≈{_rr}<{RR_GATE:.0f}，'
+                        f'止损过宽），建议观望')
     elif state != _pre_state:
         state_reason = _degrade_reason or '多维度方向冲突/市场情绪过激，建议观望'
     # L0c 持有期限制

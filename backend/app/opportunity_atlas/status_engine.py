@@ -1082,11 +1082,14 @@ class StatusEngine:
 
 
 def apply_advice_params(params: dict, price: Optional[float],
-                        df=None, rr_gate: float = 1.0) -> dict:
+                        df=None, rr_gate: float = 2.0) -> dict:
     """337号 §6.3：实时操作建议轻量套算（日频成品 advice_params + 现价）
 
     套算 = 盈亏比门禁 + L0 软风险仓位（不含完整 K 线重算）；
     止损位（结构位）由调用方从 K 线提供（advice_builder._geometric 同源）。
+
+    493号（P2-b）：rr_gate 默认 1.0 → 2.0（知识库《R-R筛选规则》「R:R<2:1 直接放弃」，
+    与 dim6 稽核门槛「盈亏比≥2R」及 advice_engine.RR_GATE 对齐）。
     """
     if not params:
         return {'state': 'wait', 'max_position_ratio': 0.0, 'reason': '无建议参数'}
@@ -1095,7 +1098,7 @@ def apply_advice_params(params: dict, price: Optional[float],
         return {'state': 'avoid', 'max_position_ratio': 0.0, 'reason': 'L0a 硬否决'}
     if params.get('hold_only'):
         return {'state': 'wait', 'max_position_ratio': 0.0, 'reason': '信号已延伸：只可持有、不新开仓（L0c）'}
-    # 盈亏比门禁（知识库：rr<1 降级观望）
+    # 盈亏比门禁（493号 P2-b：《R-R筛选规则》rr<2:1 放弃 → 降级观望 + 仓位减半）
     if df is not None and not df.empty and price:
         try:
             from app.opportunity_atlas.advice_builder import _geometric
