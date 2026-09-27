@@ -114,6 +114,14 @@ def aggregate_lights(lights: Iterable[str]) -> str:
     return DATA_MISSING
 
 
+def _risk_source_is_high(s) -> bool:
+    """风险 5 源条目是否「高」——兼容 dim6 引擎产出（475 P1：'名称：等级' 字符串列表）
+    与 dict 形态（{'name','level'}，历史/测试构造）。"""
+    if isinstance(s, dict):
+        return str(s.get('level')) == '高'
+    return str(s).rsplit('：', 1)[-1].strip() == '高'
+
+
 def risk_light(dim_results: dict) -> str:
     """风险灯：优先 judgment.level（高/极高🔴 中🟡 低🟢）；
     缺失时按 risk_sources 中 level=='高' 的计数（≥2🔴 ==1🟡 0🟢）派生。"""
@@ -125,8 +133,7 @@ def risk_light(dim_results: dict) -> str:
         return RISK_LEVEL[level]
     sources = sd.get('risk_sources')
     if isinstance(sources, list):
-        high = sum(1 for s in sources
-                   if isinstance(s, dict) and str(s.get('level')) == '高')
+        high = sum(1 for s in sources if _risk_source_is_high(s))
         return 'red' if high >= 2 else ('yellow' if high == 1 else 'green')
     return DATA_MISSING
 

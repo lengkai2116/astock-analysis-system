@@ -493,24 +493,6 @@ class Dim6RiskEngine(DataAwareMixin):
         invalidation = _build_invalidation(geo.get('support_price'), tags)
 
         # 6. status_description
-        risk_evidence_parts = []
-        risk_evidence_parts.append(f"风险等级={risk_info['level']}({risk_info['detail']})")
-        if geo.get('support_price'):
-            risk_evidence_parts.append(f"防守位={geo['support_price']}元(距{geo.get('dist_to_support_pct', '无')}%)")
-        if geo.get('resistance_price'):
-            risk_evidence_parts.append(f"压力位={geo['resistance_price']}元(距{geo.get('dist_to_resistance_pct', '无')}%)")
-        if rr_info.get('rr_value'):
-            risk_evidence_parts.append(f"盈亏比={rr_info['rr_value']}({rr_info['rr_level']})")
-        risk_evidence_parts.append(f"波动率={vol_info['level']}(ATR={vol_info['atr_14d']:.2f},分位{vol_info['percentile']:.0%})" if vol_info['atr_14d'] > 0 else f"波动率={vol_info['level']}")
-        active_factors = [f for f in risk_factors if f.get('satisfied') and f.get('severity') in ('高', '极高')]
-        if active_factors:
-            risk_evidence_parts.append(f"高风险因素={'+'.join(f['factor'] for f in active_factors)}")
-        if event_results:
-            event_descs = [e.get('description', '') for e in event_results[:3] if e.get('description')]
-            if event_descs:
-                risk_evidence_parts.append(f"事件={'; '.join(event_descs)}")
-        risk_evidence = '；'.join(risk_evidence_parts)
-
         event_details_out = []
         for ev in event_results[:5]:
             event_details_out.append({
@@ -552,7 +534,6 @@ class Dim6RiskEngine(DataAwareMixin):
             'event_count': len(event_results),
             'event_details': event_details_out,
             'event_summary': [e.get('description', '') for e in event_results[:5] if e.get('description')],
-            'risk_evidence': risk_evidence,
             'support_resistance': f"防守位{geo.get('support_price', '无')}元（距现价{geo.get('dist_to_support_pct', '无')}），压力位{geo.get('resistance_price', '无')}元（距现价{geo.get('dist_to_resistance_pct', '无')}）",
         }
 

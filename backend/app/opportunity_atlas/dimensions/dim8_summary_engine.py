@@ -567,6 +567,12 @@ def _compose_dim_subsections(src_key: str, sd: dict) -> list[dict] | None:
             v = (sd or {}).get(f)
             if v is None or v == '' or v == 'none' or v == '无':
                 continue
+            # 491-4（R3）：bool 达标状态字段可读化（不裸放 True/False）——置于 `if not v`
+            #   前，避免 False 被 truthiness 丢弃
+            _bcn = _field_value_cn(f, v)
+            if _bcn:
+                items.append(_bcn)
+                continue
             # 479号 P12：risk_factors 剥离事件条目（主源 event_details）
             v = _strip_event_factors(src_key, f, v)
             if not v:
@@ -880,9 +886,10 @@ _DIM8_SUBSECTIONS: dict[str, list[tuple[str, list[str]]]] = {
         ('价格位置', ['support_price', 'resistance_price', 'dist_to_support_pct',
                    'dist_to_resistance_pct', 'dist_to_prev_high_pct', 'signal_days',
                    'rr_value', 'rr_level', 'rr_assessment']),
-        ('风险状态', ['risk_level', 'risk_detail', 'risk_factors', 'piers_leverage',
+        ('风险状态', ['risk_level', 'risk_detail', 'risk_factors', 'risk_sources',
+                   'piers_leverage', 'piers_leverage_triggered',
                    'volatility_level', 'atr_pct', 'volatility_percentile',
-                   'liquidity_detail', 'event_details', 'invalidation']),
+                   'liquidity_detail', 'liquidity_risk', 'event_details', 'invalidation']),
     ],
 }
 
@@ -911,9 +918,12 @@ _DIM8_E_FIELDS: dict[str, list[str]] = {
     # 479号 P13/P14：-event_summary（去重，事件佐证主源改 event_details）+event_details
     #   +piers_leverage +dist_to_prev_high_pct +liquidity_detail +signal_days
     #   （dim6 定稿 §4.3；event_details 为 dict-list、piers_leverage 为 dict，均新增渲染）
+    # 491-4（R3）：+risk_sources（5 源「因」因果链）/liquidity_risk/piers_leverage_triggered
+    #   （bool 达标状态消歧；dim6 定稿 §4.3 因已算未采用）
     'risk': ['atr_pct', 'volatility_percentile', 'dist_to_support_pct',
              'dist_to_resistance_pct', 'dist_to_prev_high_pct', 'rr_assessment',
-             'liquidity_detail', 'invalidation', 'event_details', 'piers_leverage'],
+             'liquidity_detail', 'liquidity_risk', 'invalidation', 'event_details',
+             'piers_leverage', 'piers_leverage_triggered', 'risk_sources'],
     'valuation': ['pe_percentile', 'pb_percentile', 'fcf_yield', 'dividend_yield',
                   'revenue_growth', 'potential_breakdown'],
 }
@@ -950,6 +960,9 @@ _DIM8_FIELD_CN: dict[str, str] = {
     'dist_to_prev_high_pct': '距前高', 'signal_days': '站上60日线天数', 'rr_assessment': '盈亏比评估',
     'atr_pct': 'ATR占比', 'volatility_percentile': '波动率分位', 'liquidity_detail': '流动性',
     'event_details': '事件', 'piers_leverage': '杠杆/资本回报', 'invalidation': '失效条件',
+    # 491-4（R3）：风险 5 源「因」+ 两处达标状态 bool（dim6 定稿 §4.3）
+    'risk_sources': '风险来源', 'liquidity_risk': '流动性风险触发',
+    'piers_leverage_triggered': '杠杆/资本回报触发',
     # 479号 A1/A3/A4：dim2 补产出透传字段标签
     'zhongshu_location_ratio': '中枢区位比', 'divergence_details': '背驰检测条件',
     'divergence_dual_confirmed': '背驰双确认', 'theorem_check_details': '11定理明细',
@@ -1053,6 +1066,17 @@ def _strip_event_factors(src_key: str, f: str, v):
     return v
 
 
+# 491-4（R3）：bool 达标状态字段（dim6 定稿 §4.3）——渲染「标签：是/否」，不裸放 True/False
+_BOOL_FIELDS = {'liquidity_risk', 'piers_leverage_triggered'}
+
+
+def _field_value_cn(f: str, v):
+    """bool 达标状态字段可读化（返回「标签：是/否」）；非 bool 字段返回 None 走通用渲染。"""
+    if f in _BOOL_FIELDS and isinstance(v, bool):
+        return f'{_DIM8_FIELD_CN.get(f, f)}：{"是" if v else "否"}'
+    return None
+
+
 def _compose_dim_evidence(src_key: str, sd: dict) -> list:
     """437-A 字段级 evidence 编排：按 _DIM8_E_FIELDS 收集 E 字段佐证。
 
@@ -1065,6 +1089,13 @@ def _compose_dim_evidence(src_key: str, sd: dict) -> list:
     for f in fields:
         v = (sd or {}).get(f)
         if v is None or v == '' or v == 'none' or v == '无':
+            continue
+        # 491-4（R3）：bool 达标状态字段可读化（不裸放 True/False）——置于空值判定后、
+        #   `if not v` 前，避免 False 被 truthiness 丢弃
+        _bcn = _field_value_cn(f, v)
+        if _bcn:
+            if _bcn not in ev:
+                ev.append(_bcn)
             continue
         # 479号 P12：risk_factors 剥离事件条目（主源 event_details）
         v = _strip_event_factors(src_key, f, v)
