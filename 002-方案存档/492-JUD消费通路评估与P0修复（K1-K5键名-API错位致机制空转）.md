@@ -141,6 +141,8 @@ dim_results_json ──► StatusEngine.evaluate(ts_code, dim_results)
 | **P2-d** | 月度风险预算 6% 与连续亏损停机（W6） |
 | **P2-e** | 分批止盈 50/30/20、结构/ATR 止损取较高值（W13） |
 | **P2-f** | 多周期「大级别优先」过滤（W11） |
+| **P2-g** | **K3 副作用复评（§9.4 实测）**：`_detect_market_regime` 的 `trending_up` 分支因 `tags.status_bar` 无生产者而不可达 → 市场状态权重实际仅 3 档生效；与 P1 ②③ 无因果同源，须一并裁定 |
+| **数据刷新** | **K4 覆盖回升**：`pre_feat.volume_price.vp_*` 键全市场未落（存量旧 daemon 所写），framework 侧实测 100% 可产；待日终 RAW-2 重算后自然回升——**非代码缺陷** |
 | **P3** | L6 补齐操作建议卡缺项（②灯/⑤第二目标/⑦预期持有/⑧触发条件/⑩依据与置信度） |
 | **P3** | dim3 `health_score`/judgment.`score`、dim6 流动性明细接 L2 |
 
@@ -148,8 +150,48 @@ dim_results_json ──► StatusEngine.evaluate(ts_code, dim_results)
 
 ---
 
-## 九、影响面与回滚
+## 九、真实数据全链路复跑（2026-09-27，P0 后）
 
-- **影响**：JUD v390 判定输出（L3 权重、L0b2 情绪仓位上限）实际生效；`advice_params` 新增 `entry_zone`/`target_zone`/`risk_budget_position`；`signal_confirm` 因子不再恒走兜底。
+**目的**：K3 改变了 L3 权重语义（`STATE_WEIGHTS × 族regime权重`），按 445 保留口径须补真实数据全链路基准。
+
+### 9.1 全市场 JUD 复跑（存量输入）
+脚本 `scripts/_492_jud_full_market_baseline.py`；输入 = `strategy_signal_detail.dim_results_json`（trade_date=2026-09-24，5552 只）→ `StatusEngine.evaluate`（v390 全链路）。**5552 只 / 0 失败 / 55s**。
+
+| 指标 | 新基准（P0 后, 09-24） | 旧基准（K1-K5 前 status_snapshot） |
+|---|---|---|
+| opportunity_state | avoid 61.5% / wait 26.7% / enter 6.9% / light 4.9% | avoid 59.2% / wait 28.4% / enter 7.4% / light 5.1% |
+| direction | bear 53.2% / bull 46.6% / neutral 0.2% | bear 47.7% / bull 52.1% / neutral 0.2% |
+| status_bar | 不可交易 61.5% / 趋势不明 30.9% / 趋势确认 6.2% / 持有观望 1.0% / 趋势转弱 0.4% | 同族（不可交易 59.2% / 趋势不明 30.8% / 趋势确认 8.4%） |
+| consensus_rate | min −1.0 / med −0.539 / max 1.0 / mean −0.0637 | — |
+| final_score | min 0 / med 0 / max 100 / mean 21.14 | — |
+| **K1 `risk_budget_position` 落地** | **5043/5552 = 90.8%** | **0%**（DB 字面 0 行）✅ |
+| K4 `entry_zone` | 0/5552（**输入陈旧**，见 9.2） | 0% |
+| P4 `signals` 触发 | 4602/5552 = 82.9% | 0%（全空） |
+
+> 结论：**K1 在全市场真实数据上从 0% → 90.8%**；`direction` 由 bear 47.7% → 53.2% 的偏移即 K3 权重生效的外在表现。K1 剩余 9.2% 为无止损位/入场价的个股（正常）。
+
+### 9.2 K4 覆盖率归因（**输入陈旧，非代码缺陷**）——已闭环实证
+全市场 `entry_zone` = 0%，初判「数据陈旧」，但**活数据抽样（实时重建 dim_results，120 只）仍仅 1%**，故继续定位：
+1. `tags['vp_entry_zone']` 对 600519/600036/000001 有值、对多数股票为 `None`；
+2. 抽样 400 只：`vp_entry_zone` 非空仅 **2 只（0.5%）**；
+3. 查原始 `pre_feat.volume_price` 组键：`000088/000507` 组键 **缺** `vp_entry_zone`/`vp_target_zone`/`vp_resonance_score`（旧 daemon 所写），`600036/000001` 有 → **pre_feat 存量版本混杂**；
+4. **决定性验证**：直接调 `compute_volume_price_signal`（framework）→ **30/30 = 100% 产出非零 `entry_zone`/`target_zone`**。
+
+**定论**：K4 的代码路径（dim3 透传 → L6 消费 → `_assemble` 落库）**完全正确**；覆盖率低**唯一原因**是 `pre_feat.volume_price.vp_*` 键**未落**——490 的 dim3 `vp_*` 透传于今日（2026-09-27）方由 P0 批次上线，存量 pre_feat 写于 09-24 旧 daemon。8 股探针 7/8 恰因该 8 股在 488-2 期间被定向重算过（最新批）。
+
+**待办**：待 daemon 下次日终 RAW-2 重算（或做一次定向 `_479_3` 式 pre_feat 重算）后，全市场 K4 覆盖率自然回升；**非本号缺陷，登记为数据刷新项**（§八）。
+
+### 9.3 活数据抽样（120 只 · 实时重建）
+K1 96% / K2 100% / K3 67% / K5 100%；情绪阶段归一化 `ebb 99.2% / positive 0.8%`（→ K2 输入真实生效；`ebb` 档位 `emotion_position_cap=0.30`，原恒 0.60）。
+
+### 9.4 附：K3 副作用观察（登记 P2 复评）
+存量输入下 `avoid` 占比 59.2% → 61.5%、`trending_up` regime 分支在 `_detect_market_regime` 中因 `tags.status_bar` 无生产者而不可达（`tags` 扁平层无 `status_bar`；`status_snapshot.status_bar` 是成品列，不回灌 tags）——即实际只跑 `ranging/trending_down/extreme_panic` 三档。此与 K3「市场状态权重」的设计意图有偏差，**登记 P1/P2 复评**（与 P1 的 ②③ 无因果同源）。
+
+---
+
+## 十、影响面与回滚
+
+- **影响**：JUD v390 判定输出（L3 权重、L0b2 情绪仓位上限）实际生效（全市场 K1 0%→90.8%、direction 分布偏移）；`advice_params` 新增 `entry_zone`/`target_zone`/`risk_budget_position`；`signal_confirm` 因子不再恒走兜底。
 - **回滚**：`git revert a599779`；K3 `weights=None` 分支保留旧行为等价路径。
-- **daemon 运行态**：核查期间曾按研发阶段规则停 daemon（跑真实探针），完成后已恢复（看守 + 单实例）。
+- **daemon 运行态**：复跑期间按研发阶段规则停 daemon（全市场基准 + 抽样共两次），完成后已恢复（看守 + 单实例）。
+- **复跑脚本**：`scripts/_492_jud_full_market_baseline.py`、`scripts/_492_jud_live_sample.py`。
