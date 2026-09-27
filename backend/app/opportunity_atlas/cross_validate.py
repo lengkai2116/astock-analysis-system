@@ -744,7 +744,7 @@ class L4CrossValidator(DataAwareMixin):
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT opportunity_state, status_bar, consensus_rate, direction, "
-                    "conflict_evidence, dim_states, advice_params "
+                    "conflict_evidence, dim_states, advice_params, signals "
                     "FROM status_snapshot WHERE ts_code=? LIMIT 1", [ts_code])
                 row = cursor.fetchone()
                 if row:
@@ -756,6 +756,8 @@ class L4CrossValidator(DataAwareMixin):
                         'conflict_evidence': _json.loads(row[4] or '[]'),
                         'dim_states': _json.loads(row[5] or '{}'),
                         'advice_params': _json.loads(row[6] or '{}'),
+                        # 492号（P1-3）：注册表触发列表（与实时回退路径同契约）
+                        'signals': _json.loads(row[7] or '[]'),
                     }
         except Exception as e:
             logger.debug("status_snapshot 读 verdict 失败 %s: %s", ts_code, e)

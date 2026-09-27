@@ -68,7 +68,10 @@ def test_p1_2_status_verdict_prefers_snapshot(monkeypatch):
             return None
 
         def fetchone(self):
-            return ('enter', '趋势确认', 0.82, 'bull', '[]', '{}', '{"s":1}')
+            # 顺序：opportunity_state, status_bar, consensus_rate, direction,
+            #       conflict_evidence, dim_states, advice_params, signals
+            return ('enter', '趋势确认', 0.82, 'bull', '[]', '{}', '{"s":1}',
+                    '[{"type": "ma_bullish"}]')
 
     class _FakeConn:
         def cursor(self):
@@ -97,6 +100,7 @@ def test_p1_2_status_verdict_prefers_snapshot(monkeypatch):
     assert v['opportunity_state'] == 'enter'
     assert v['consensus_rate'] == 0.82
     assert v['advice_params'] == {'s': 1}
+    assert v['signals'] == [{'type': 'ma_bullish'}]
     assert called['eval'] == 0
 
 
