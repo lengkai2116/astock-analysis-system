@@ -28,6 +28,53 @@ from app.opportunity_atlas.dimensions.dim8_summary_engine import (
 
 # ── 基础 mock dim_results（对齐 000001.SZ 实测结构）─────────
 
+# 439-A-1：灯色改由 light_derive（state→light）派生 → mock 里给出的「期望灯色」
+# 需规范化为对应的**分析结论键**，否则派生结果为「数据缺失」黄。
+_LIGHT_TO_STATE = {
+    'structure':    {'green': ('structure', '上升'), 'red': ('structure', '下降'),
+                     'yellow': ('structure', '盘整')},
+    'volume_price': {'green': ('state', '健康'), 'red': ('state', '背离'),
+                     'yellow': ('state', '中性')},
+    'chip_fund':    {'green': ('phase', 'lifting'), 'red': ('phase', 'distributing'),
+                     'yellow': ('phase', 'washing')},
+    'valuation':    {'green': ('valuation_level', {'value': 'low'}),
+                     'red': ('valuation_level', {'value': 'high'}),
+                     'yellow': ('valuation_level', {'value': 'fair'})},
+    'risk':         {'green': ('risk_level', '低'), 'red': ('risk_level', '高'),
+                     'yellow': ('risk_level', '中')},
+}
+_SIGNAL_LIGHT_STATE = {
+    'green':  ('right_confirmed', '强', 'healthy'),
+    'red':    ('risk_warning', '弱', 'decaying'),
+    # yellow：属性/强度两项黄 + 衰减健康（聚合仍为黄，且不误触 _is_signal_decaying）
+    'yellow': ('neutral', '中等', 'healthy'),
+}
+
+
+def _normalize_light_to_state(dr):
+    """把 mock 的 judgment.overall_light 规范化为对应的分析结论键（439-A-1 派生口径）"""
+    for dim, entry in dr.items():
+        judg = entry.setdefault('judgment', {})
+        light = judg.get('overall_light')
+        if not light:
+            continue
+        if dim == 'emotion':
+            sd = entry.setdefault('status_description', {})
+            sd.setdefault('market_phase',
+                          {'green': 'ferment', 'red': 'ice', 'yellow': 'ebb'}[light])
+            sd.setdefault('sector_heat', 'top_10' if light == 'green' else 'normal')
+            sd.setdefault('bociasi_quadrant', 'MM')
+        elif dim == 'signal':
+            code, level, decay = _SIGNAL_LIGHT_STATE[light]
+            judg.setdefault('attribute', {'code': code})
+            judg.setdefault('strength', {'level': level})
+            judg.setdefault('maintenance', {'status': decay})
+        elif dim in _LIGHT_TO_STATE:
+            key, val = _LIGHT_TO_STATE[dim][light]
+            judg.setdefault(key, val)
+    return dr
+
+
 def _mk_dim_results(overrides=None):
     """构造 dim_results：全部灯色 yellow + continuous_value 0.5 基准"""
     base = {}
@@ -48,7 +95,8 @@ def _mk_dim_results(overrides=None):
             if 'audit' in patch:
                 d.setdefault('audit', {}).update(patch['audit'])
             base[dim] = d
-    return base
+    # 439-A-1：把 mock 的期望灯色规范化为分析结论键（派生灯与用例意图一致）
+    return _normalize_light_to_state(base)
 
 
 # ── 增强1: 共识率置信度加权 ────────────────────────────────

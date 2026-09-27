@@ -97,8 +97,6 @@ class Dim3VPEngine(DataAwareMixin):
         # 量价状态（440号：自产，不再读空 dims['vp']——vp 由 volume_price_fit 映射）
         vp_pattern_tag = str(tags.get('volume_price_fit', ''))
         vp_state = {'healthy': '强健康', 'diverging': '背离', 'neutral': '中性'}.get(vp_pattern_tag, '中性')
-        light_map = {'强健康': 'green', '健康': 'green', '中性': 'yellow', '背离': 'red', '严重背离': 'red'}
-        vp_light = light_map.get(vp_state, 'yellow')
 
         # 10分制评分
         vp_pattern = str(tags.get('volume_price_fit', ''))
@@ -250,8 +248,7 @@ class Dim3VPEngine(DataAwareMixin):
             'divergence_macd_confirmed': _div_macd,
         }
         judgment = {
-            'state': vp_state, 'light': vp_light, 'score': hs,
-            'overall_light': vp_light,
+            'state': vp_state, 'score': hs,
             'overall_direction': 1 if vp_state in ('健康', '强健康') else (-1 if vp_state in ('背离', '严重背离') else 0),
             'continuous_value': round(hs / 10, 4),
         }

@@ -42,13 +42,6 @@ RESONANCE_WEIGHTS = {
     'factor': 0.20,
 }
 
-# light映射
-LIGHT_MAP = {
-    'right_confirmed': 'green', 'right_emerging': 'green',
-    'risk_warning': 'red', 'left_probing': 'yellow',
-    'trend_running': 'green', 'consolidating': 'yellow', 'neutral': 'yellow',
-}
-
 # 5维度衰减权重（359号§1.5）
 DECAY_WEIGHTS = {
     'price_trend': 0.30,
@@ -103,17 +96,6 @@ def _count_resonance(dims: dict) -> int:
         if _safe_float(dims.get(dim, {}).get('confidence', 0)) > 0.5:
             count += 1
     return count
-
-
-def _overall_light(attr_light: str, strength_level: str, decay_status: str) -> str:
-    lights = [attr_light]
-    lights.append('green' if strength_level in ('极强', '强') else ('yellow' if strength_level == '中等' else 'red'))
-    lights.append('green' if decay_status == 'healthy' else ('yellow' if decay_status == 'fading' else 'red'))
-    if 'red' in lights:
-        return 'red'
-    if lights.count('green') >= 2:
-        return 'green'
-    return 'yellow'
 
 
 def _score_status_name(score: int) -> str:
@@ -649,13 +631,10 @@ def analyze_signal(dims: dict, tags: dict, lifecycle: dict = None) -> dict:
 
     # 9. judgment
     judgment = {
-        'attribute': {'code': attr['code'], 'light': LIGHT_MAP.get(attr['code'], 'yellow')},
-        'strength': {'level': strength['level'],
-                     'light': 'green' if strength['score'] >= 60 else ('yellow' if strength['score'] >= 40 else 'red')},
-        'maintenance': {'status': maintenance['decay_status'],
-                        'light': 'green' if maintenance['decay_status'] == 'healthy' else ('yellow' if maintenance['decay_status'] == 'fading' else 'red')},
-        'overall_light': _overall_light(LIGHT_MAP.get(attr['code'], 'yellow'),
-                                        strength['level'], maintenance['decay_status']),
+        # 439-A-1：灯色（判定类输出）已迁出 SIG —— 由 opportunity_atlas.light_derive 统一派生
+        'attribute': {'code': attr['code']},
+        'strength': {'level': strength['level']},
+        'maintenance': {'status': maintenance['decay_status']},
         'overall_direction': 1 if attr['code'] in ('right_confirmed', 'right_emerging', 'trend_running') else (-1 if attr['code'] == 'risk_warning' else 0),
         'continuous_value': round(strength['score'] / 100, 4),
     }

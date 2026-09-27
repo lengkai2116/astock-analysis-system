@@ -380,6 +380,8 @@ class StatusEngine:
         # phase），而 dim3/dim4/dim5 的真实键分别是 judgment.state / judgment.direction（phase 为英文
         # 枚举）、sd.market_phase → 量价/筹码/情绪三维 state 恒默认值。此处对齐真实键 + 英文转中文。
         from app.opportunity_atlas.dim_adapter import ENGINE_STATE_TO_CN as _T
+        # 439-A-1：灯色改由派生 SSOT 计算（不再读各维自产 judgment.light/overall_light）
+        from app.opportunity_atlas.light_derive import dim_light as _dl
 
         # 结构维：从dim2_structure_engine输出提取
         s = dim_results.get('structure')
@@ -390,7 +392,7 @@ class StatusEngine:
             _ev = _sd.get('vs_ma') or _sd.get('vs_zhongshu') or _sd.get('vs_support_resistance') or ''
             dims['structure'] = {
                 'state': judg.get('structure', tags.get('state_label', '盘整')),
-                'light': judg.get('light', 'yellow'),
+                'light': _dl(dim_results, 'structure'),
                 'confidence': 0.7,
                 'evidence': [_ev] if _ev else [],
             }
@@ -411,7 +413,7 @@ class StatusEngine:
             dims['vp'] = {
                 # 490号：dim3 五态在 judgment.state（原读 judgment.vp_state 恒缺 → 恒"中性"）
                 'state': judg.get('state') or _vp_sd.get('vp_state') or '中性',
-                'light': judg.get('light', 'yellow'),
+                'light': _dl(dim_results, 'volume_price'),
                 'confidence': 0.6,
                 'evidence': [],
             }
@@ -428,7 +430,7 @@ class StatusEngine:
             _cf_dir = str(judg.get('direction', ''))
             dims['chip_fund'] = {
                 'state': _T.get('chip_fund', {}).get(_cf_dir, _cf_dir or '中性'),
-                'light': judg.get('light', 'yellow'),
+                'light': _dl(dim_results, 'chip_fund'),
                 'confidence': 0.5,
                 'evidence': [],
             }
@@ -445,7 +447,7 @@ class StatusEngine:
             _emo_phase = str(_emo_sd.get('market_phase', ''))
             dims['emotion'] = {
                 'state': _T.get('emotion', {}).get(_emo_phase, _emo_phase or '正常'),
-                'light': judg.get('overall_light', 'yellow'),
+                'light': _dl(dim_results, 'emotion'),
                 'confidence': 0.6,
                 'evidence': [],
             }
@@ -458,7 +460,7 @@ class StatusEngine:
             judg = r.get('judgment', {})
             dims['risk'] = {
                 'state': judg.get('risk_level', '中'),
-                'light': judg.get('light', 'yellow'),
+                'light': _dl(dim_results, 'risk'),
                 'confidence': 0.6,
                 'evidence': [],
             }
@@ -511,13 +513,15 @@ class StatusEngine:
         # 411号Phase 2：signal_confirm由classify_attribute()分析结果生成
         # 替代原tags.right_side_confirm路径
         try:
-            from app.opportunity_atlas.signal_analyzer import LIGHT_MAP, classify_attribute
+            from app.opportunity_atlas.signal_analyzer import classify_attribute
+            # 439-A-1：灯色由派生 SSOT 计算（原 signal_analyzer.LIGHT_MAP 已随灯色迁出 SIG）
+            from app.opportunity_atlas.light_derive import derive_light as _pl
             lifecycle_data = {}
             attr_result = classify_attribute(dims, tags, lifecycle_data)
             attr_code = attr_result.get('code', 'neutral')
             dims['signal_confirm'] = {
                 'state': attr_result.get('name', '中性观望'),
-                'light': LIGHT_MAP.get(attr_code, 'yellow'),
+                'light': _pl('signal', attr_code),
                 'confidence': 0.6,
                 'evidence': [attr_result.get('detail', '')],
             }

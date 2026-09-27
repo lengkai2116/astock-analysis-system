@@ -74,9 +74,15 @@ def _extract_dim_judgment(dim_results: dict, dim_name: str) -> dict:
 
 
 def _extract_dim_light(dim_results: dict, dim_name: str) -> str:
-    """从维度引擎结果中提取 overall_light"""
-    jg = _extract_dim_judgment(dim_results, dim_name)
-    return jg.get('overall_light', jg.get('light', 'yellow'))
+    """439-A-1：灯色改由**派生 SSOT**（`light_derive`）计算——不再读 SIG 各维自产的
+    `judgment.overall_light`（判定类输出已按 439-A 迁移）。灯＝环境风险；操作含义见 overall_direction。
+    """
+    try:
+        from app.opportunity_atlas.light_derive import dim_light
+        return dim_light(dim_results, dim_name)
+    except Exception:
+        jg = _extract_dim_judgment(dim_results, dim_name)
+        return jg.get('overall_light', jg.get('light', 'yellow'))
 
 
 def _extract_dim_direction(dim_results: dict, dim_name: str) -> int:
@@ -784,7 +790,8 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
     jg = seg.get('judgment', {}) or {}
     sd = seg.get('status_description', {}) or {}
     au = seg.get('audit', {}) or {}
-    overall = jg.get('overall_light', jg.get('light', 'yellow'))
+    # 439-A-1：段级灯色改由派生 SSOT 计算（不再读源维自产 overall_light）
+    overall = _extract_dim_light(dim_results, src_key)
     # 479号 479-5：段级 text 传入 au，升级「所以→因为→验证」因果链话术（段是 dim8 唯一叙事出口）。
     text = _compose_dim_text(src_key, jg, sd, au)
     evidence = _compose_dim_evidence(src_key, sd)
@@ -810,7 +817,7 @@ def _segment_from_dim(dim_results: dict, src_key: str, title: str) -> dict | Non
         'evidence': evidence[:16],
         'confidence': round(float(jg.get('continuous_value') or au.get('confidence') or 0.5), 2),
         'judgment': {
-            'overall_light': jg.get('overall_light', 'yellow'),
+            'overall_light': overall,
             'overall_direction': jg.get('overall_direction', 0),
             'continuous_value': jg.get('continuous_value'),
         },

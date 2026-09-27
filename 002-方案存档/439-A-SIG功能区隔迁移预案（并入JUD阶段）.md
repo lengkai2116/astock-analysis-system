@@ -169,3 +169,27 @@ _SIGNAL      = {'right_confirmed': 'green', 'right_emerging': 'green', 'trend_ru
 
 **439-A-1 落地清单**：①新增 `light_derive.py`；②删自产灯：dim2/dim3/dim4/dim6/dim7 的 `judgment.light`+`overall_light`、dim6 `sd.risk_light`、dim5 `market_light`/`sector_light`/**`stock_light`（Q-439A-3）**/`overall_light`、dim7 4 个子项 light（保留 `valuation_level` 等嵌套结构但去 light，或保留灯改由 SSOT 计算）、signal_analyzer 灯（Q-439A-4 待确认）；③消费方 C1~C8 改调 `light_derive`；④C9/C10 契约字段不变。
 **验证**：8 股 + 全市场抽样，逐股对比「迁移前灯色 vs 派生灯色」应**完全一致**（Q-439A-1 取分工方案 ⇒ 应 100% 相等）。
+
+## 10.2 ✅ 439-A-1 实施记录（2026-09-27）
+
+**新增 SSOT**：`backend/app/opportunity_atlas/light_derive.py`（6 组 state→light 映射 + `emotion_market_light`（含四象限覆盖）+ `emotion_stock_light`（跨维取 dim3）+ `signal_light`（三源聚合）+ `risk_light`（level 优先/高源计数兜底）+ `aggregate_lights` + `dim_light(dim_results, dim_name)` 主入口 + 别名 `fund_chip`/`vp`）。
+
+**已删除的 SIG 自产灯（输出层）**：
+| 位置 | 删除内容 |
+|---|---|
+| dim2 | `judgment.light` / `overall_light`（含本地 light 计算） |
+| dim3 | 同上（含 light_map/vp_light） |
+| dim4 | `_assess_phase` 的 `light`；`judgment.light`/`overall_light`；PDE 分支 phase_info 的 light |
+| dim5 | `judgment.market_light`/`sector_light`/**`stock_light`（Q-439A-3 删除）**/`overall_light`（内部仍算整体灯供 `overall_direction` 派生，保证等价） |
+| dim6 | `judgment.light`/`overall_light`、`status_description.risk_light` |
+| dim7 | `judgment.overall_light` + 4 个子项 `light`（嵌套只留 `value`）+ 常量 `LEVEL_LIGHT` |
+| signal_analyzer | `judgment.attribute/strength/maintenance.light`、`overall_light`、`LIGHT_MAP`、`_overall_light`（Q-439A-4 迁移） |
+
+**消费方改调 SSOT（C1~C8）**：`dim8._extract_dim_light`（C1~C5 全部随之）、`dim8._segment_from_dim` 段灯与段 `judgment.overall_light`、`cross_validate._convert_dim_engine_to_legacy`（情绪维）、`status_engine._convert_to_dims_format`（五维 light → `_dl(...)`）、`status_engine` 的 `signal_confirm.light`（原读 `signal_analyzer.LIGHT_MAP`）、`status_engine` 内 `LIGHT_MAP` 引用。C9/C10（routes/stg_quality）契约字段未变。
+
+**未改动（登记）**：①`dim8` summary 段灯（`judgment.overall_light` 由 `consensus_rate` 派生，属**归集层聚合**，非 SIG 判定，本批不动）；②前端 `seven_dim_json` 段 `light` emoji 与 `judgment.overall_light` **双轨契约保持不变**（值＝派生灯）。
+
+**验证**：
+- **等价性探针** `scripts/_439a_light_equivalence_probe.py`：迁移**前**（引擎仍产灯）逐股比对 8 股 × 11 项 → 首次跑出 **signal 维 5 处不一致**（派生误读 `strength.score`/`maintenance.decay_status`，应为 `strength.level`/`maintenance.status`）→ 修正派生后 **0 处不一致**；迁移后复跑为「派生灯自检」全绿。
+- **回归**：dim/JUD 相关 94 文件 1121 用例 → **1117 passed / 4 failed**（4 项均为既有失败）→ 本批零新增失败。测试适配 9 处（test_420 mock 规范化 6 项、test_436_seven_dim mock 规范化、test_411 `LIGHT_MAP`→`SIGNAL_ATTR`、test_464_dim4/chanlun_strength 灯断言改派生、test_488 judgment 键集基线去掉 4 灯键）。
+- **新增单测**：`tests/test_439a_light_derive.py`（7 用例，含「dim_results 不含任何灯键仍能正确派生」的关键回归）。

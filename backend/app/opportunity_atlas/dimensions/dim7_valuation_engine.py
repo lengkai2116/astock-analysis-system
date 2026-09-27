@@ -65,12 +65,6 @@ LEVEL_CN = {
 }
 
 # 估值分级 → 红绿灯（本模块独有，非重复；勿删）
-LEVEL_LIGHT = {
-    'extreme_low': 'green', 'low': 'green', 'fair': 'yellow',
-    'high': 'red', 'extreme_high': 'red',
-}
-
-
 # ═══════════════════════════════════════════════════════════
 # 辅助函数
 # ═══════════════════════════════════════════════════════════
@@ -737,11 +731,10 @@ class Dim7ValuationEngine(DataAwareMixin):
 
         # 4. judgment
         judgment = {
-            'valuation_level': {'value': level, 'light': LEVEL_LIGHT.get(level, 'yellow')},
-            'valuation_deviation': {'value': deviation, 'light': 'green' if deviation > 10 else 'red' if deviation < -10 else 'yellow'},
-            'fina_health': {'value': val['fina_health'], 'light': 'green' if val['fina_health'] == 'pass' else 'red' if val['fina_health'] == 'fail' else 'yellow'},
-            'potential_strength': {'value': strength, 'light': 'green' if strength >= 60 else 'red' if strength < 30 else 'yellow'},
-            'overall_light': LEVEL_LIGHT.get(level, 'yellow'),
+            'valuation_level': {'value': level},
+            'valuation_deviation': {'value': deviation},
+            'fina_health': {'value': val['fina_health']},
+            'potential_strength': {'value': strength},
             'overall_direction': 1 if level in ('extreme_low', 'low') else (-1 if level in ('high', 'extreme_high') else 0),
             'continuous_value': round(max(0, min(1, (val['composite_rating'] + 2) / 4)), 4),  # P2: composite [-2,2]→[0,1]
         }

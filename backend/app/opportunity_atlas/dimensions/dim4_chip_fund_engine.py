@@ -5762,9 +5762,8 @@ def _assess_phase(tags, dims):
           'lifting': ('拉升期', '快速上涨'), 'distributing': ('出货期', '高位派发'), 'support': ('护盘期', '支撑维护')}
     if mfp in pm:
         cn, desc = pm[mfp]
-        light = 'green' if mfp in ('building', 'lifting') else ('red' if mfp == 'distributing' else 'yellow')
-        return {'phase': mfp, 'phase_cn': cn, 'detail': desc, 'light': light}
-    return {'phase': 'unknown', 'phase_cn': '未知', 'detail': '主力阶段数据缺失', 'light': 'yellow'}
+        return {'phase': mfp, 'phase_cn': cn, 'detail': desc}
+    return {'phase': 'unknown', 'phase_cn': '未知', 'detail': '主力阶段数据缺失'}
 
 def _assess_fund_flow(tags):
     ff = str(tags.get('fund_flow', ''))
@@ -5988,7 +5987,6 @@ class Dim4ChipFundEngine(DataAwareMixin):
                         'phase': phase_engine_result['main_force_phase'],
                         'phase_cn': PHASE_MAP.get(phase_engine_result['main_force_phase'], {}).get('name', phase_engine_result['main_force_phase']),
                         'detail': f"PhaseDetector分析（置信度{phase_engine_result.get('phase_confidence', 0):.2f}）",
-                        'light': 'green' if phase_engine_result['main_force_phase'] in ('building', 'lifting') else ('red' if phase_engine_result['main_force_phase'] == 'distributing' else 'yellow'),
                         # 464-13：透传阶段置信度供 audit 条件 1 门槛（tags 兜底路径无此键 → 仅看 phase）
                         'confidence': phase_engine_result.get('phase_confidence'),
                     }
@@ -6175,8 +6173,7 @@ class Dim4ChipFundEngine(DataAwareMixin):
         except Exception:
             pass
         judgment = {
-            'phase': phase_info['phase'], 'direction': fund_flow_info['direction'], 'light': phase_info['light'],
-            'overall_light': phase_info['light'],
+            'phase': phase_info['phase'], 'direction': fund_flow_info['direction'],
             'overall_direction': 1 if phase_info['phase'] in ('building', 'lifting') else (-1 if phase_info['phase'] == 'distributing' else 0),
             'continuous_value': round(1.0 - crowding.get('score', 0.5), 4),
         }

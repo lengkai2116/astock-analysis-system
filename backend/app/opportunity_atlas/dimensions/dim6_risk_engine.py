@@ -524,7 +524,6 @@ class Dim6RiskEngine(DataAwareMixin):
         status_description = {
             'risk_level': risk_info['level'],
             'risk_detail': risk_info['detail'],
-            'risk_light': risk_info['light'],
             'risk_factors': [f"{f['category']}：{f['factor']}（{f['severity']}）"
                              for f in risk_factors if f.get('satisfied')],
             # 475号 P1：5 源 name/level 明细透传（因已算未透传；供 dim8「因为X、Y为高」因果链）
@@ -560,8 +559,6 @@ class Dim6RiskEngine(DataAwareMixin):
         judgment = {
             'level': risk_info['level'],
             'risk_level': risk_info['level'],
-            'light': risk_info['light'],
-            'overall_light': risk_info['light'],
             'overall_direction': -1 if risk_info['level'] in ('高', '极高') else (1 if risk_info['level'] in ('低',) else 0),
             'continuous_value': round(min(rr_info.get('rr_value', 0) / 3.0, 1.0), 4) if rr_info.get('rr_value') else 0.5,
         }

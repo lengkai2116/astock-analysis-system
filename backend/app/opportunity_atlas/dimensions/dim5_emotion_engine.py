@@ -587,7 +587,6 @@ class Dim5EmotionEngine(DataAwareMixin):
             temperature = round(temperature * 0.4 + bociasi_temp * 0.6, 1)
 
         # 5. 综合灯色
-        overall = _overall_light(market['light'], sector['light'], stock['light'])
 
         # 6. status_description（479号 A10-A13：快慢线/四象限透传"因" + 温度五档话术）
         status_description = {
@@ -617,12 +616,12 @@ class Dim5EmotionEngine(DataAwareMixin):
         }
 
         # 7. judgment
+        # 439-A-1：灯色（market/sector/stock/overall）已从输出移除（判定类输出迁出 SIG）；
+        # 内部仍算整体灯——overall_direction（操作含义）由其派生，须与迁移前逐股等价。
+        _overall_light_internal = _overall_light(market['light'], sector['light'], stock['light'])
         judgment = {
-            'market_light': market['light'],
-            'sector_light': sector['light'],
-            'stock_light': stock['light'],
-            'overall_light': overall,
-            'overall_direction': 1 if overall == 'green' else (-1 if overall == 'red' else 0),
+            'overall_direction': 1 if _overall_light_internal == 'green'
+            else (-1 if _overall_light_internal == 'red' else 0),
             'continuous_value': round(temperature / 100, 4),
         }
 

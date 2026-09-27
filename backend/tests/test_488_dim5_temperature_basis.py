@@ -130,8 +130,8 @@ class TestEvaluateTemperatureBasis:
     def test_judgment_keys_unchanged(self):
         """445 冻结边界：只加「因」，judgment（果）键集与值域不变"""
         res = self._run()
+        # 439-A-1：四个灯色键（判定类输出）已迁出 SIG，不再出现在 judgment
         assert set(res['judgment'].keys()) == {
-            'market_light', 'sector_light', 'stock_light', 'overall_light',
             'overall_direction', 'continuous_value'}
         assert 0 <= res['judgment']['continuous_value'] <= 1
 

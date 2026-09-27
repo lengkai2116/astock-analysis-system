@@ -90,7 +90,9 @@ class TestDim2StrengthRealtime:
     def test_judgment_structure_unaffected(self):
         out = _evaluate({'score': 72, 'details': [], 'recommendation': 'BUY'})
         assert out['judgment']['structure'] == '上升'
-        assert out['judgment']['light'] == 'green'
+        # 439-A-1：灯色由派生 SSOT 计算
+        from app.opportunity_atlas.light_derive import derive_light
+        assert derive_light('structure', out['judgment']['structure']) == 'green'
         assert out['judgment']['overall_direction'] == 1
 
 

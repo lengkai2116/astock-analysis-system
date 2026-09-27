@@ -349,12 +349,8 @@ class Dim2StructureEngine(DataAwareMixin):
         }
 
         # 7. judgment
-        light = 'yellow'
-        if struct_state == '上升': light = 'green'
-        elif struct_state == '下降': light = 'red'
         judgment = {
             'structure': struct_state, 'position': pos_state,
-            'light': light, 'overall_light': light,
             'overall_direction': 1 if struct_state == '上升' else (-1 if struct_state == '下降' else 0),
             # 466号 ③：continuous_value 语义从"置信度"改为"结构健康度归一"（0-1，strength/100）。
             #   供 JUD/dim8 作结构健康置信，不再冒充信号可信度。

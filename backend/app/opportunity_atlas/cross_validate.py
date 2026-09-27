@@ -47,11 +47,14 @@ def _convert_dim_engine_to_legacy(der: dict) -> dict:
         judg = cf.get('judgment', {})
         phase_dir = int(judg.get('overall_direction', 0) or 0)
         dims['chip'] = {'direction': 'up' if phase_dir > 0 else ('down' if phase_dir < 0 else 'neutral')}
-    # 情绪维
+    # 情绪维（439-A-1：灯色已由 light_derive 派生，不再读 SIG 自产 overall_light）
     em = der.get('emotion') or {}
     if em:
-        judg = em.get('judgment', {})
-        ol = judg.get('overall_light', 'yellow')
+        try:
+            from app.opportunity_atlas.light_derive import dim_light
+            ol = dim_light(der, 'emotion')
+        except Exception:
+            ol = (em.get('judgment') or {}).get('overall_light', 'yellow')
         dims['emotion'] = {'direction': 'up' if ol == 'green' else ('down' if ol == 'red' else 'neutral')}
     # 因子维（从 signal 维度派生）
     sig = der.get('signal') or {}

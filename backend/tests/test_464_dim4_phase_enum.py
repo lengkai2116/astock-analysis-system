@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from app.opportunity_atlas.dimensions import dim4_chip_fund_engine as dim4_mod
+from app.opportunity_atlas.light_derive import derive_light, dim_light
 from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
     PHASE_MAP,
     CrowdingFactor,
@@ -47,13 +48,15 @@ class TestAssessPhase:
         out = _assess_phase({'main_force_phase': 'lifting'}, {})
         assert out['phase'] == 'lifting'
         assert out['phase_cn'] == '拉升期'
-        assert out['light'] == 'green'
+        # 439-A-1：引擎不再产灯 → 由派生 SSOT 计算
+        assert derive_light('chip_fund', out['phase']) == 'green'
 
     def test_other_phases_unchanged(self):
-        assert _assess_phase({'main_force_phase': 'building'}, {})['light'] == 'green'
-        assert _assess_phase({'main_force_phase': 'washing'}, {})['light'] == 'yellow'
-        assert _assess_phase({'main_force_phase': 'distributing'}, {})['light'] == 'red'
-        assert _assess_phase({'main_force_phase': 'support'}, {})['light'] == 'yellow'
+        # 439-A-1：灯色由派生 SSOT 计算（引擎输出不再含 light）
+        assert derive_light('chip_fund', _assess_phase({'main_force_phase': 'building'}, {})['phase']) == 'green'
+        assert derive_light('chip_fund', _assess_phase({'main_force_phase': 'washing'}, {})['phase']) == 'yellow'
+        assert derive_light('chip_fund', _assess_phase({'main_force_phase': 'distributing'}, {})['phase']) == 'red'
+        assert derive_light('chip_fund', _assess_phase({'main_force_phase': 'support'}, {})['phase']) == 'yellow'
 
     def test_unknown_fallback(self):
         out = _assess_phase({}, {})
@@ -98,8 +101,8 @@ class TestEvaluateEngine:
     def test_lifting_light_green(self, monkeypatch):
         res = self._run_evaluate(monkeypatch, 'lifting')
         assert res['judgment']['phase'] == 'lifting'
-        assert res['judgment']['light'] == 'green'
-        assert res['judgment']['overall_light'] == 'green'
+        # 439-A-1：灯色由派生 SSOT 计算
+        assert dim_light({'chip_fund': res}, 'chip_fund') == 'green'
         assert res['judgment']['overall_direction'] == 1
 
     def test_lifting_audit_satisfied(self, monkeypatch):
@@ -116,7 +119,7 @@ class TestEvaluateEngine:
 
     def test_distributing_still_red(self, monkeypatch):
         res = self._run_evaluate(monkeypatch, 'distributing')
-        assert res['judgment']['light'] == 'red'
+        assert dim_light({'chip_fund': res}, 'chip_fund') == 'red'
         assert res['judgment']['overall_direction'] == -1
         cond = next(c for c in res['audit']['conditions'] if c['name'] == '主力阶段')
         assert cond['satisfied'] is True

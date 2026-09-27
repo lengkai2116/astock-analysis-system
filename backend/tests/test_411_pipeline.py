@@ -75,14 +75,15 @@ class TestPhase2_SignalAnalyzer:
     def test_constants_defined(self):
         from app.opportunity_atlas.signal_analyzer import (
             DECAY_WEIGHTS,
-            LIGHT_MAP,
             RESONANCE_WEIGHTS,
             SIGNAL_ATTRIBUTES,
         )
+        # 439-A-1：灯色映射已迁至派生 SSOT（light_derive.SIGNAL_ATTR）
+        from app.opportunity_atlas.light_derive import SIGNAL_ATTR
         assert len(SIGNAL_ATTRIBUTES) == 7
         assert len(RESONANCE_WEIGHTS) == 4
         assert len(DECAY_WEIGHTS) == 5
-        assert len(LIGHT_MAP) == 7
+        assert len(SIGNAL_ATTR) == 7
 
 
 # ═══════════════════════════════════════════════════════════

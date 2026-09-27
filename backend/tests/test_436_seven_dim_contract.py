@@ -38,6 +38,42 @@ _EXPECTED_KEYS = {'structure', 'volume_price', 'fund_chip',
                   'emotion', 'risk', 'summary'}
 
 
+# 439-A-1：灯色改由 light_derive（state→light）派生 → mock 的「期望灯色」需规范化为分析结论键
+_LIGHT_TO_STATE = {
+    'structure':    {'green': '上升', 'red': '下降', 'yellow': '盘整'},
+    'volume_price': {'green': '健康', 'red': '背离', 'yellow': '中性'},
+    'chip_fund':    {'green': 'lifting', 'red': 'distributing', 'yellow': 'washing'},
+    'risk':         {'green': '低', 'red': '高', 'yellow': '中'},
+}
+_SIGNAL_LIGHT_STATE = {'green': ('right_confirmed', '强', 'healthy'),
+                       'red': ('risk_warning', '弱', 'decaying'),
+                       'yellow': ('neutral', '中等', 'healthy')}
+
+
+def _normalize_light_to_state(dr):
+    for dim, entry in dr.items():
+        judg = entry.setdefault('judgment', {})
+        light = judg.get('overall_light')
+        if not light:
+            continue
+        if dim == 'emotion':
+            sd = entry.setdefault('status_description', {})
+            sd.setdefault('market_phase',
+                          {'green': 'ferment', 'red': 'ice', 'yellow': 'ebb'}[light])
+            sd.setdefault('sector_heat', 'top_10' if light == 'green' else 'normal')
+            sd.setdefault('bociasi_quadrant', 'MM')
+        elif dim == 'signal':
+            code, level, decay = _SIGNAL_LIGHT_STATE[light]
+            judg.setdefault('attribute', {'code': code})
+            judg.setdefault('strength', {'level': level})
+            judg.setdefault('maintenance', {'status': decay})
+        elif dim in _LIGHT_TO_STATE:
+            judg.setdefault({'structure': 'structure', 'volume_price': 'state',
+                             'chip_fund': 'phase', 'risk': 'risk_level'}[dim],
+                            _LIGHT_TO_STATE[dim][light])
+    return dr
+
+
 def _mk_dim_results(overrides=None):
     """构造基准 dim_results：全维 yellow + continuous_value 0.5"""
     base = {}
@@ -60,7 +96,7 @@ def _mk_dim_results(overrides=None):
             if 'audit' in patch:
                 d.setdefault('audit', {}).update(patch['audit'])
             base[dim] = d
-    return base
+    return _normalize_light_to_state(base)
 
 
 # ── T1: 全维齐备 → 恰 7 键、键名契约对齐 ──────────────────
