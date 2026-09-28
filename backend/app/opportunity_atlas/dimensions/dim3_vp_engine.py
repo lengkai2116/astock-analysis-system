@@ -154,6 +154,20 @@ class Dim3VPEngine(DataAwareMixin):
         # RPS>85 → +1 分（对齐知识库量价形态打分系统加分项）；无 RPS 数据时不给分不扣分（保守）
         rps_factor = 1 if (rps is not None and rps > 85) else 0
         dp = -1.5 if vp_state in ('背离', '严重背离') else 0
+        # ── 495号（B2）：量价健康度（HS）合成公式定标（2026-09-28 用户拍板 A「补依据定标」）──
+        # 依据《464-dim3-health_score判定标准来源核查与归属建议》§二 因子表；公式与档位
+        # 保留现状（分布不变），在此登记为 JUD 量价强度权威口径。7 因子构成（均有方案背书）：
+        #   1. 量价关系 vp_score（healthy=2/diverging=-1/else=1）— framework 281/333
+        #   2. 量能 ve（量比>2→2/>1.2→1.5/>0.8→1/else 0）— 461-10
+        #   3. 均线 ms（多头1/空头0/混0.5）
+        #   4. 筹码 cs（concentrating/单峰密集/tight=1/else 0.5）— 445-A3
+        #   5. RSI is_（60-70→1/30-40→0.8/极端→0.2）— 461-1
+        #   6. RPS rps_factor（>85→+1）— 445/460（446 补产出）
+        #   7. 背离 dp（背离/严重背离→-1.5）— 450
+        #   形态偏差 pattern_deviation=(pattern_score-5)/5×1.5（形态评分权重 15%）
+        # 合成式：hs = clamp( (raw + 4) / 12 × 10, 0, 10 )；档位 ≥8 强健康/≥6 健康/≥4 中性/≥2 弱/else 严重背离
+        # 口径登记：state_machine_confidence = hs/10（JUD L1 vp 强度主通道）、
+        #   stage_confidence = hs/10（L2 可靠性回退）；pattern_score 维持 JUD 零消费（不纳入）。
         raw = vp_score + ve + ms + cs + is_ + rps_factor + dp
         # 形态评分纳入健康度计算（权重15%）— 10分制映射
         pattern_deviation = (pattern_score - 5) / 5 * 1.5
