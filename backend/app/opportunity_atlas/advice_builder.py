@@ -16,6 +16,43 @@ _STATE_CN = {'enter': '可入场', 'light': '可轻仓', 'wait': '等待',
 _BULLISH_VALUES = {'up', 'bullish', '上升', '看多'}
 _BEARISH_VALUES = {'down', 'bearish', '下降', '看空'}
 
+# 493号（P2-e）：止损/分批止盈参数（知识库《结构止损》/《ATR止损》/《分批止盈法》）
+RR_GATE = 2.0             # 《R-R筛选规则》：R:R < 2:1 直接放弃
+ATR_MULT = 2.0            # 《ATR止损》：止损价 = 入场价 − 2 × N值
+TARGET_TIERS = [(0.5, 2.0), (0.3, 3.0), (0.2, None)]  # 50%@2R / 30%@3R / 20%移动止盈
+
+
+def _safe_float(val, default: float = 0.0) -> float:
+    try:
+        return default if val is None else float(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _stop_and_tiers(entry: float, struct_stop, rr, atr_pct: float) -> tuple:
+    """493号 P2-e：结构止损 vs ATR止损取较高 + 50/30/20 分批止盈。
+
+    Returns: (stop_loss_price|None, profit_tiers|None)
+    """
+    if not entry or entry <= 0:
+        return None, None
+    entry = float(entry)
+    _ss = _safe_float(struct_stop, 0.0) or None
+    _as = (entry - ATR_MULT * entry * (atr_pct / 100.0)) if atr_pct > 0 else None
+    _cands = [s for s in (_ss, _as) if s and 0 < s < entry]
+    if not _cands:
+        return None, None
+    final_stop = max(_cands)
+    tiers = None
+    r = entry - final_stop
+    if r > 0 and _safe_float(rr, 0.0) >= RR_GATE:
+        tiers = [{'weight': w, 'target_r': m,
+                  'price': round(entry + m * r, 2) if m is not None else None,
+                  'action': (f'卖出{int(w * 100)}%仓位' if m is not None
+                             else '剩余20%用移动止盈跟踪')}
+                 for w, m in TARGET_TIERS]
+    return round(final_stop, 2), tiers
+
 
 def _dir_is_bullish(v) -> bool:
     return str(v or '') in _BULLISH_VALUES
@@ -23,6 +60,34 @@ def _dir_is_bullish(v) -> bool:
 
 def _dir_is_bearish(v) -> bool:
     return str(v or '') in _BEARISH_VALUES
+
+
+def _weekly_direction(tags: dict, dimensions: dict = None) -> str:
+    """493号 P2-f：取背景周期（周线）方向。
+
+    源优先 tags['multi_level']；其次 dimensions['chanlun']['multi_level']。
+    返回 'up'/'down'/''。
+    """
+    _cands = []
+    if tags:
+        _cands.append(tags.get('multi_level'))
+    if dimensions:
+        _cands.append((dimensions.get('chanlun') or {}).get('multi_level'))
+    import json as _j
+    for _ml in _cands:
+        if isinstance(_ml, str) and _ml:
+            try:
+                _ml = _j.loads(_ml)
+            except Exception:
+                continue
+        if not isinstance(_ml, dict):
+            continue
+        _w = str((_ml.get('direction_map') or {}).get('weekly', '')).strip()
+        if _w in ('up', '上升', '多', 'BUY', 'bullish'):
+            return 'up'
+        if _w in ('down', '下降', '空', 'SELL', 'bearish'):
+            return 'down'
+    return ''
 
 
 def _dim_directions(dimensions: dict) -> list[int]:
@@ -192,6 +257,15 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
     if _hard.get('reason'):
         state_reason = _hard['reason']
 
+    # ── 493号 P2-f：大级别（周线/背景周期）方向否决（知识库《分层决策框架》：
+    #    背景周期与决策周期方向须一致，不一致则丢弃买点——降 wait，不判空）──
+    _ml_weekly = _weekly_direction(tags, dimensions)
+    _daily_bull = _dir_is_bullish(trend) or any(x > 0 for x in dirs)
+    if _ml_weekly == 'down' and _daily_bull and state in ('enter', 'light'):
+        state = 'wait'
+        state_reason = ('大级别背离：周线方向向下，与日线买点矛盾，'
+                        '按《分层决策框架》丢弃买点、建议观望')
+
     # 七维红绿灯（源自 LLM Wiki 框架，数据来自五维）
     vp = dimensions.get('volume_price') or {}
     chip = dimensions.get('chip') or {}
@@ -341,6 +415,13 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
                        if support else []),
         'position': {'max_pct': max_pct, 'initial_pct': 0.3 if max_pct > 0 else 0.0},
     }
+    # 493号 P2-e：止损取较高（结构/ATR）+ 50/30/20 分批止盈（知识库《结构止损》/《分批止盈法》）
+    _stop_loss, _tiers = _stop_and_tiers(
+        price, support, geo.get('risk_reward'),
+        _safe_float((tags or {}).get('atr_pct'), 0.0))
+    if _stop_loss:
+        executable['exit_rules'] = [{'trigger': f'close < {_stop_loss}',
+                                     'action': 'SELL', 'size_pct': 100}]
 
     _state_cn = _STATE_CN.get(state, state)
     result = {
@@ -357,6 +438,7 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         consensus_rate=consensus['consensus_rate']))
     # action 快照须在降级后（低置信度降级会改 executable.position.max_pct）
     result['action'] = {'max_position_ratio': executable['position']['max_pct']}
+    result['profit_tiers'] = _tiers   # 493号 P2-e：50/30/20 分批止盈（无 R:R 门禁通过时为 None）
     if kronos and kronos.get('direction'):
         result['kronos_note'] = '🔬 Kronos AI 模型预测，仅供参考，非实证结论'
     return result

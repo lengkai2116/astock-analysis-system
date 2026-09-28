@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json as _json
 import logging
 from typing import Any
 
@@ -25,6 +26,55 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
         return float(val)
     except (TypeError, ValueError):
         return default
+
+
+# 493号（P2-e）：止损/分批止盈参数（依据知识库《结构止损》/《ATR止损》/《分批止盈法》）
+ATR_MULT = 2.0            # 《ATR止损》：止损价 = 入场价 − 2 × N值（N=20日ATR均值）
+TARGET_TIERS = [(0.5, 2.0), (0.3, 3.0), (0.2, None)]  # 《分批止盈法》50%@2R / 30%@3R / 20%移动止盈
+
+
+def _apply_stop_and_tiers(advice: dict, entry_price: float, risk_sd: dict,
+                          dim_results: dict) -> None:
+    """493号 P2-e：结构止损 vs ATR止损取较高 + 50/30/20 分批止盈（原地写 advice）。
+
+    - 止损（知识库《结构止损》：「结构止损与 ATR 止损同时可用时，取两者中较高值」）：
+        结构止损 = risk_sd.support_price（已由 dim6 产出）；ATR 止损 = 入场价 − 2×ATR（ATR=atr_pct%×价）。
+        两者可用时取较高（更紧、降低风险暴露）；仅 ATR 可用（无结构位或结构位高于入场价）时用 ATR。
+    - 分批止盈（《分批止盈法》50/30/20）：R = 入场价 − 最终止损；目标 Tn = 入场价 + nR。
+        仅当 风险回报比 ≥ 2:1（与 RR_GATE 一致）时给出分批计划。
+    """
+    if not entry_price or entry_price <= 0:
+        return
+    entry = float(entry_price)
+    struct_stop = _safe_float(risk_sd.get('support_price'), 0.0) or None
+    atr_pct = _safe_float(risk_sd.get('atr_pct'), 0.0)
+    atr_stop = None
+    if atr_pct > 0:
+        atr_stop = entry - ATR_MULT * entry * (atr_pct / 100.0)
+    _cands = [s for s in (struct_stop, atr_stop) if s and 0 < s < entry]
+    if not _cands:
+        return
+    final_stop = max(_cands)
+    advice['stop_loss_price'] = round(final_stop, 2)
+    advice['stop_loss_basis'] = ('结构止损与ATR止损取较高' if len(_cands) == 2
+                                 else ('结构止损' if struct_stop in _cands else 'ATR止损'))
+    # 分批止盈：R = 入场 − 止损；目标 = 入场 + nR
+    r = entry - final_stop
+    if r <= 0:
+        return
+    _rr = _safe_float(risk_sd.get('rr_value'), 0.0)
+    if _rr < RR_GATE:
+        return
+    tiers = []
+    for weight, mult in TARGET_TIERS:
+        tiers.append({
+            'weight': weight,
+            'target_r': mult,
+            'price': round(entry + mult * r, 2) if mult is not None else None,
+            'action': (f'卖出{int(weight * 100)}%仓位' if mult is not None
+                       else '剩余20%用移动止盈跟踪'),
+        })
+    advice['profit_tiers'] = tiers
 
 
 def compute_advice(
@@ -141,6 +191,8 @@ def compute_advice(
             advice['invalidation_conditions'] = risk_sd['invalidation']
         if risk_sd.get('atr_pct') is not None:
             advice['atr_pct'] = risk_sd['atr_pct']
+        # 493号（P2-e）：止损取较高仲裁 + 分批止盈（依据知识库《结构止损》/《ATR止损》/《分批止盈法》）
+        _apply_stop_and_tiers(advice, entry_price, risk_sd, dim_results)
         emo_sd = (dim_results.get('emotion') or {}).get('status_description') or {}
         if emo_sd.get('temperature') is not None:
             advice['temperature'] = emo_sd['temperature']
@@ -170,6 +222,33 @@ def _dir_is_bullish(v) -> bool:
 
 def _dir_is_bearish(v) -> bool:
     return str(v or '') in _BEARISH_VALUES
+
+
+def _weekly_direction(tags: dict, dimensions: dict = None) -> str:
+    """493号 P2-f：取背景周期（周线）方向。
+
+    源优先 tags['multi_level']（dim2 多级别联立，490号已定为系统唯一权威多级别方向产出）；
+    其次 dimensions['chanlun']['multi_level']（analyze 路径已组装）。返回 'up'/'down'/''。
+    """
+    _cands = []
+    if tags:
+        _cands.append(tags.get('multi_level'))
+    if dimensions:
+        _cands.append((dimensions.get('chanlun') or {}).get('multi_level'))
+    for _ml in _cands:
+        if isinstance(_ml, str) and _ml:
+            try:
+                _ml = _json.loads(_ml)
+            except Exception:
+                continue
+        if not isinstance(_ml, dict):
+            continue
+        _w = str((_ml.get('direction_map') or {}).get('weekly', '')).strip()
+        if _w in ('up', '上升', '多', 'BUY', 'bullish'):
+            return 'up'
+        if _w in ('down', '下降', '空', 'SELL', 'bearish'):
+            return 'down'
+    return ''
 
 
 def _dim_directions(dimensions: dict) -> list[int]:
@@ -218,7 +297,6 @@ def _geometric(df) -> dict:
 
 # ── 从 advice_builder.py 完整迁移（391号方案最终清理）──
 import ast as _ast
-import json as _json
 
 from app.opportunity_atlas.arbiter import arbitrate
 
@@ -552,6 +630,16 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
     state = _hard['state']
     if _hard.get('reason'):
         state_reason = _hard['reason']
+
+    # ── 493号 P2-f：大级别（周线/背景周期）方向否决（知识库《分层决策框架》：
+    #    背景周期与决策周期方向须一致，不一致则丢弃买点——降 wait，不判空）──
+    _ml_weekly = _weekly_direction(tags, dimensions)
+    if _ml_weekly and state in ('enter', 'light'):
+        _daily_bull = _dir_is_bullish(trend) or any(x > 0 for x in dirs)
+        if _ml_weekly == 'down' and _daily_bull:
+            state = 'wait'
+            state_reason = ('大级别背离：周线方向向下，与日线买点矛盾，'
+                            '按《分层决策框架》丢弃买点、建议观望')
 
     # 七维红绿灯
     vp = dimensions.get('volume_price') or {}

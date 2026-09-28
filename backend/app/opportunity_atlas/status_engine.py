@@ -79,6 +79,25 @@ def _normalize_emotion_phase(tags: dict) -> str:
     return _SENTIMENT_TO_STATE_PHASE.get(_raw, 'normal')
 
 
+# ══════════════════════════════════════════════════════════
+# 493号（P2-c）：冰点末期（反转入场窗）识别
+#   依据：知识库《华泰A股情绪指数》「触及10%恐慌区间不买，**回归10%之上再买入（右侧确认）**」；
+#   《共振冰点策略》冰点确认后「复苏确认」渐进加仓。市场仍处 ice、但个股已出现**右侧确认**
+#   （强确认/基础确认）时，视为「冰点末期」——解除冰点 10% 仓位上限，放开至正常档。
+#   仅用已存在键（derived.right_side_confirm 扁平为 tags['right_side_confirm']），不新增数据源。
+# ══════════════════════════════════════════════════════════
+_EMOTION_RECOVERING_RSC = {'强确认', '基础确认'}
+
+
+def _emotion_is_recovering(tags: dict) -> bool:
+    """冰点末期判定：市场情绪仍处冰点（ice）时，是否已出现右侧确认（回升信号）。
+
+    右侧确认 = tags['right_side_confirm'] ∈ {强确认, 基础确认}——对齐《华泰A股情绪指数》
+    「回归10%之上再买入」。未确认/否决/缺失 → False（维持冰点 10% 上限）。
+    """
+    _rsc = str((tags or {}).get('right_side_confirm', '') or '').strip()
+    return _rsc in _EMOTION_RECOVERING_RSC
+
 
 def _dim_state_for_signal(key: str, judg: dict, sd: dict) -> str:
     """490号：dim2-dim7 引擎输出 → signal_analyzer 期望的 state（中文，契约键对齐）。
@@ -711,10 +730,18 @@ class StatusEngine:
                 pass
         # L0b2 情绪周期总仓位上限（387号§5.4；消费方 advice_engine Step 3）
         # 492号（K2）：改读归一化情绪阶段——原读 tags['emotion_phase']（无生产者）恒 normal
+        # 493号（P2-c）：新增「冰点末期」——冰点期（ice）仓位上限 0.10 仅在**情绪未回升**时生效；
+        #   若市场级情绪已转出冰点（回升信号）→ 放开至正常档，对齐知识库《华泰A股情绪指数》
+        #   「回归10%之上再买入（右侧确认）」。详见 _emotion_is_recovering。
         _caps = _l0_cfg.get('emotion_position_cap', {})
         if _caps:
             _phase = _normalize_emotion_phase(tags)
-            l0['emotion_position_cap'] = float(_caps.get(_phase, _caps.get('normal', 0.6)))
+            if _phase == 'ice' and _emotion_is_recovering(tags):
+                l0['emotion_phase'] = 'ice_recovering'      # 冰点末期（区分标记）
+                l0['emotion_position_cap'] = float(
+                    _caps.get('recovery', _caps.get('normal', 0.6)))
+            else:
+                l0['emotion_position_cap'] = float(_caps.get(_phase, _caps.get('normal', 0.6)))
         # L0c 持有期（阶段登记于 yaml l0.hold_only_stages → 只可持有、不新开仓）
         _hold_stages = _l0_cfg.get('hold_only_stages') or ['已延伸']
         if lifecycle and lifecycle['stage'] in _hold_stages:
