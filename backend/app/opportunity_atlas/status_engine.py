@@ -18,6 +18,7 @@ import json
 import logging
 from typing import Any, Optional
 
+from app.services.account_risk_status import get_account_risk_status
 from app.services.status_config import get_signal_registry, get_status_engine_config
 
 logger = logging.getLogger(__name__)
@@ -1089,6 +1090,13 @@ class StatusEngine:
             'soft_risks': l0['soft_risks'],
             'hard_veto': l0['hard_veto'],
         }
+        # 493号（P2-d）：账户级月度风险预算状态（月度 6% / 连亏 3 笔）——**只读** daemon 预计算
+        #   快照（<DATA_DIR>/account_risk_status.json），仅产出标记字段供前端/消费方，
+        #   **本批不改 opportunity_state/仓位**（用户 2026-09-28 拍板「仅产出标记字段」）。
+        _mrs = get_account_risk_status(cfg=getattr(self, 'cfg', None))
+        advice_params['monthly_halt'] = _mrs.get('monthly_halt', False)
+        advice_params['monthly_loss_pct'] = _mrs.get('monthly_loss_pct', 0.0)
+        advice_params['consecutive_losses'] = _mrs.get('consecutive_losses', 0)
         result = {
             'ts_code': ts_code,
             'dim_states': json.dumps(dims, ensure_ascii=False),
@@ -1101,6 +1109,10 @@ class StatusEngine:
             'l0': json.dumps(l0, ensure_ascii=False),
             'lifecycle': json.dumps(lifecycle, ensure_ascii=False) if lifecycle else None,
             'advice_params': json.dumps(advice_params, ensure_ascii=False),
+            # 493号（P2-d）：账户月度风险标记（顶层便捷字段；同 advice_params 同源）
+            'monthly_halt': _mrs.get('monthly_halt', False),
+            'monthly_loss_pct': _mrs.get('monthly_loss_pct', 0.0),
+            'consecutive_losses': _mrs.get('consecutive_losses', 0),
             # 492号（P1-3）：注册表触发列表。此前仅落库、无任何消费方（P4）；
             #   现作为 status_verdict 只读字段接前端（同一 status_row，不再额外查询）。
             'signals': json.dumps(hits or [], ensure_ascii=False),  # 334号 §5：注册表触发列表

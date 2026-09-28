@@ -5917,7 +5917,7 @@ def _build_status_snapshot(codes: list[str]):
                 state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
                 direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
                 summary_text TEXT, one_liner_detail TEXT, dim_engine_results TEXT,
-                signals TEXT, created_at TEXT
+                signals TEXT, monthly_halt INTEGER, created_at TEXT
             )
         """)
         written = 0
@@ -5976,8 +5976,8 @@ def _build_status_snapshot(codes: list[str]):
                     f"INSERT OR REPLACE INTO {_NEW} (ts_code, snapshot_date, trade_date,"
                     f" dim_states, status_bar, opportunity_state, state_evidence,"
                     f" conflict_evidence, consensus_rate, direction, l0, lifecycle, advice_params,"
-                    f" summary_text, one_liner_detail, dim_engine_results, signals)"
-                    f" VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    f" summary_text, one_liner_detail, dim_engine_results, signals, monthly_halt)"
+                    f" VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [code, trade_date, row['dim_states'], row['status_bar'],
                      row['opportunity_state'], row['state_evidence'],
                      row['conflict_evidence'], row['consensus_rate'],
@@ -5985,7 +5985,9 @@ def _build_status_snapshot(codes: list[str]):
                      summary_text, None,
                      row.get('dim_engine_results'),
                      # 491号（R4-①）：334号 §5 注册信号触发列表落库（原被丢弃）
-                     row.get('signals')])
+                     row.get('signals'),
+                     # 493号（P2-d）：账户月度风险停机标记（1=停机；None=中性）
+                     1 if row.get('monthly_halt') else None])
                 written += 1
             except Exception as e:
                 logger.warning(f"status_snapshot {code} 生成失败: {e}")
@@ -7470,6 +7472,23 @@ def _check_daily_sync_backfill():
         logger.warning(f"  [日终兜底] 自检失败: {e}")
 
 
+def _update_account_risk_status(data_dir: str) -> None:
+    """493号 P2-d：账户级月度风险预算状态预计算钩子（日终/节流触发）。
+
+    在 app_context 内按账户交易记录算一次「月度 P&L% + 连亏笔数」→ 原子写
+    <DATA_DIR>/account_risk_status.json；JUD `_assemble` 只读该快照（避免 JUD 侧
+    实时访问 app.db）。账户为空/异常 → 中性降级，不阻塞主循环。
+    """
+    try:
+        from app import create_app
+        from app.services.account_risk_status import write_account_risk_status
+        _flask_app = create_app()
+        with _flask_app.app_context():
+            write_account_risk_status(data_dir)
+    except Exception as e:
+        logger.warning(f"账户月度风险状态预计算异常: {e}")
+
+
 def _maybe_monthly_ic_recalc(data_dir: str) -> None:
     """433 批次1：月度 IC 重估轻钩子（earn-only；幂等靠 ic_weights.json last_recalc 月份）
 
@@ -7607,6 +7626,7 @@ def main():
     _last_patrol = 0
     _last_ckpt = 0
     _last_truncate = 0
+    _last_account_risk = 0            # 493号 P2-d：账户月度风险状态节流
     _last_session = None  # 355号方案规则11：时段切换跟踪
 
     logger.info("data_daemon 进入主循环（管道驱动）")
@@ -7721,6 +7741,15 @@ def main():
             _maybe_monthly_ic_recalc(data_dir)
         except Exception as e:
             logger.warning(f"月度 IC 重估钩子异常: {e}")
+
+        # ── 493号 P2-d：账户月度风险预算状态预计算（日终/节流；写快照，JUD 只读） ──
+        #   账户数据变动低频（交易记录），非交易时段每 10 分钟算一次即可（账户为空→中性）。
+        if not _is_market_hours() and ts - _last_account_risk > 600:
+            _last_account_risk = ts
+            try:
+                _update_account_risk_status(data_dir)
+            except Exception as e:
+                logger.warning(f"账户月度风险状态钩子异常: {e}")
 
         # ── 保留期检查（日终完成后触发一次，305号§9兼容；426号 S3/D1：原数据清理
         #    改为下限保障检查——不删除超期数据，仅告警覆盖不足） ──

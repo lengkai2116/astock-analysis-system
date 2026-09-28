@@ -42,6 +42,14 @@ l0:
   hold_only_stages:                      # 387号§5.1：持有期阶段（信号已延伸→不新开仓）
     - "已延伸"
 
+# 493号（P2-d）：账户级月度风险预算（知识库《月度风险预算》：6% + 连亏3笔）
+# 消费方：app/services/account_risk_status.py（纯函数 evaluate_monthly_risk_status）。
+# 本批按用户拍板「仅产出标记字段」（monthly_halt/monthly_loss_pct/consecutive_losses
+# 落 advice_params + status_snapshot 顶层），**不改 opportunity_state/仓位**。
+monthly_risk_budget:
+  monthly_loss_limit_pct: 0.06           # 月度最大允许亏损 = 账户总资金 × 6%
+  consecutive_loss_limit: 3              # 连亏 3 笔（6%÷2%）→ 本月停止交易（标记）
+
 # 358号§5.1 市场状态×维度权重矩阵（370号S7 P3动态权重）
 # 485号（431 G1 收口）：由 status_engine.py 类内嵌矩阵迁入本 yaml——值逐字节不变（零行为变更）。
 # 消费方 StatusEngine._aggregate / _aggregate_v390（`weights = regime_weights.get(regime, ...)`）；
