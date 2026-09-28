@@ -1133,7 +1133,7 @@ class L4CrossValidator(DataAwareMixin):
                 desc += ' ' + '；'.join(reasons[:4])
 
             if rate >= 0.65:
-                if final_state in ('wait', 'avoid'):
+                if final_state in ('wait', 'reduce', 'avoid'):
                     desc += ' 但实时风控（盈亏比/纪律约束）已降级，建议观望。'
                 else:
                     desc += ' 综合判断为优质机会，建议关注。'
@@ -1367,6 +1367,10 @@ class L4CrossValidator(DataAwareMixin):
                 if action in ('build_position', 'add_position'):
                     action, label = 'hold', '等待：右侧信号未确认或共识不足'
                 max_ratio = min(max_ratio, 0.2)   # 等待态仓位上限 0.2（保守）
+            elif _state == 'reduce':
+                # 493号 P2-a：减仓档 → 建议减仓离场，不新开仓
+                action, label = 'reduce_position', '减仓：评分处于减仓区（30-44），建议降至30%以下'
+                max_ratio = min(max_ratio * 0.5, 0.3)
             elif _state == 'light':
                 max_ratio = round(max_ratio * 0.5, 2)   # 可轻仓 → 仓位减半
             # enter：保持上方闸门2/门禁计算的仓位

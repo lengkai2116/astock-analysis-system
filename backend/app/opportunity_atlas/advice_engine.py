@@ -44,12 +44,13 @@ def compute_advice(
               risk_budget_position / final_score / semantic_type /
               consensus_detail / conflict_summary / reliability_summary
     """
-    # ── 基础仓位（§8.2 Step 1）──
-    if final_score >= 70:
+    # ── 基础仓位（§8.2 Step 1；493号 P2-a：档位对齐知识库《操作归一化》，
+    #     reduce（30-44 减仓）新开仓 0、wait（45-64 持有观望）维持 0.1 建仓级别）──
+    if final_score >= 80:
         base = 0.6
-    elif final_score >= 55:
+    elif final_score >= 65:
         base = 0.4
-    elif final_score >= 30:
+    elif final_score >= 45:
         base = 0.1
     else:
         base = 0.0
@@ -157,7 +158,8 @@ def compute_advice(
 
 # ── 从 advice_builder.py 迁移的辅助函数（391号方案清理）──
 
-_STATE_CN = {'enter': '可入场', 'light': '可轻仓', 'wait': '等待', 'avoid': '回避'}
+_STATE_CN = {'enter': '可入场', 'light': '可轻仓', 'wait': '等待',
+             'reduce': '建议减仓', 'avoid': '回避'}
 _BULLISH_VALUES = {'up', 'bullish', '上升', '看多'}
 _BEARISH_VALUES = {'down', 'bearish', '下降', '看空'}
 
@@ -302,7 +304,11 @@ def _apply_hard_constraints(df, state: str) -> dict:
 
 
 def _map_action_label(state: str, signal_strength: float) -> str:
-    """状态→5档操作动作（§3.2：给人看；executable.action_type 保留机器 3 态）"""
+    """状态→5档操作动作（§3.2：给人看；executable.action_type 保留机器 3 态）
+
+    493号 P2-a：新增 reduce（减仓）档——知识库《操作归一化》5 档动作
+    （重仓买入/买入建仓/持有观望/减仓/清仓回避）。
+    """
     if state == 'enter' and signal_strength >= 80:
         return '重仓买入'
     if state == 'enter':
@@ -311,6 +317,8 @@ def _map_action_label(state: str, signal_strength: float) -> str:
         return '轻仓试探'
     if state == 'wait':
         return '持有/观望'
+    if state == 'reduce':
+        return '减仓'
     return '清仓回避'   # avoid
 
 
@@ -395,7 +403,9 @@ def _build_advice_card_fields(state, tags, dims, geo, support, signal_light,
                               consensus_rate=None) -> dict:
     """组装 S6 建议卡字段（§3.1：全部现有数据派生）"""
     # signal_light：state 映射（与七维 signal 灯独立，顶层信号灯）
-    _light_map = {'enter': '🟢', 'light': '🟢', 'wait': '🟡', 'avoid': '🔴'}
+    #   493号 P2-a：reduce 档（30-44 减仓）→ 黄红（知识库《操作归一化》「黄/红」）
+    _light_map = {'enter': '🟢', 'light': '🟢', 'wait': '🟡',
+                  'reduce': '🟠', 'avoid': '🔴'}
     # action_label：5档映射
     try:
         _ss = float((tags or {}).get('signal_strength') or 0)
@@ -652,7 +662,7 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
                    '等待次级别底背驰出现后再入场']},
     ])
 
-    # 机器可执行
+    # 机器可执行（493号 P2-a：reduce → SELL（建议减仓离场），新开仓 0）
     enter_like = state in ('enter', 'light')
     action_type = 'BUY' if enter_like else ('HOLD' if state == 'wait' else 'SELL')
     max_pct = 0.6 if enter_like else (0.2 if state == 'wait' else 0.0)

@@ -3,7 +3,7 @@ from app.opportunity_atlas.advice_engine import compute_advice
 
 
 def test_enter_high_score():
-    """综合分>=70 → enter，基础仓位0.6"""
+    """综合分>=80 → enter，基础仓位0.6（493号 P2-a 档位边界，原 >=70）"""
     result = compute_advice(
         final_score=75.0,
         dims_factor={'emotion': {'direction': 0, 'strength': 0.5}},
@@ -17,7 +17,7 @@ def test_enter_high_score():
 
 
 def test_avoid_low_score():
-    """综合分<30 → avoid，仓位0"""
+    """综合分<30 → avoid，仓位0（493号 P2-a 档位边界，原 <30 不变）"""
     result = compute_advice(
         final_score=20.0,
         dims_factor={},
@@ -85,9 +85,13 @@ def test_risk_fields_present():
 
 
 def test_light_medium_score():
-    """综合分55-69 → light，基础仓位0.4（rr=1.0时再×0.5=0.2）"""
+    """综合分65-79 → light，基础仓位0.4（rr=1.0时再×0.5=0.2）
+
+    493号 P2-a：档位边界对齐知识库《操作归一化》——light 由「55-69」改为「65-79」，
+    故本用例取 70.0（原 60.0 现落入 wait 持有观望档）。
+    """
     result = compute_advice(
-        final_score=60.0,
+        final_score=70.0,
         dims_factor={},
         l0={'position_coeff': 1.0, 'hold_only': False, 'soft_risks': [],
             'hard_veto': False, 'emotion_position_cap': None},

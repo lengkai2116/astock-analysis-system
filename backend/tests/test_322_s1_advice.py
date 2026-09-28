@@ -51,7 +51,7 @@ def test_build_operation_advice_state_from_arbitrate():
     """state 应来自 321 仲裁（与机会图谱同源）"""
     dimensions = {'factor': {'trend': 'down'}}
     advice = build_operation_advice('TEST.SZ', dimensions, [], None)
-    assert advice['state'] in ('enter', 'light', 'wait', 'avoid')
+    assert advice['state'] in ('enter', 'light', 'wait', 'reduce', 'avoid')
     assert 'state_reason' in advice
 
 

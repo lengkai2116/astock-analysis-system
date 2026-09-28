@@ -90,7 +90,7 @@ class MinimalBacktester:
                 logger.debug(f"回测{ts_code}@{trade_date}失败: {e}")
 
         # 统计
-        state_counts = {'enter': 0, 'light': 0, 'wait': 0, 'avoid': 0}
+        state_counts = {'enter': 0, 'light': 0, 'wait': 0, 'reduce': 0, 'avoid': 0}
         total_consensus = 0.0
         for s in states:
             st = s['state']
@@ -165,6 +165,7 @@ class MinimalBacktester:
                 'enter_count': state_counts['enter'],
                 'light_count': state_counts['light'],
                 'wait_count': state_counts['wait'],
+                'reduce_count': state_counts['reduce'],
                 'avoid_count': state_counts['avoid'],
                 'win_rate': win_rate,
                 'profit_factor': profit_factor,
@@ -181,13 +182,13 @@ class MinimalBacktester:
         Returns:
             {
                 'total_stocks': int,
-                'state_distribution': {'enter': %, 'light': %, 'wait': %, 'avoid': %},
+                'state_distribution': {'enter': %, 'light': %, 'wait': %, 'reduce': %, 'avoid': %},
                 'avg_consensus': float,
                 'per_stock': {ts_code: summary_dict},
             }
         """
         results = {}
-        state_totals = {'enter': 0, 'light': 0, 'wait': 0, 'avoid': 0}
+        state_totals = {'enter': 0, 'light': 0, 'wait': 0, 'reduce': 0, 'avoid': 0}
         total_consensus = 0.0
         total_days = 0
 

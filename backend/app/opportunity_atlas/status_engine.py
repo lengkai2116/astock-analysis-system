@@ -1024,15 +1024,15 @@ class StatusEngine:
     # ══════════════════════════════════════════════════════════
 
     def _status_bar(self, dims: dict, state: str, l0: dict = None) -> str:
-        """364a Phase 1：status_bar 5态扩展"""
+        """364a Phase 1：status_bar 5态扩展（493号 P2-a：reduce 档归入「风险区」）"""
         green = sum(1 for d in dims.values() if d.get('light') == 'green')
         red = sum(1 for d in dims.values() if d.get('light') == 'red')
         l0 = l0 or {}
         # 优先级1：不可交易
         if state == 'avoid':
             return '不可交易'
-        # 优先级2：风险区（硬否决或红灯>=6）
-        if l0.get('hard_veto') or red >= 6:
+        # 优先级2：风险区（硬否决 / 红灯>=6 / 减仓档）
+        if l0.get('hard_veto') or red >= 6 or state == 'reduce':
             return '风险区'
         # 优先级3：持有观望
         if l0.get('hold_only'):
@@ -1053,6 +1053,7 @@ class StatusEngine:
                   l0: dict, l2: dict, hits: Optional[list] = None,
                   dim_engine_results: Optional[dict] = None) -> dict:
         # 337号 §6.2：建议规则参数（套算输入——仓位上限经 L0 系数、持有期限制、软风险）
+        # 493号 P2-a：wait（45-64 持有观望）维持 0.2；reduce（30-44 减仓）新开仓 0
         _state = l2['opportunity_state']
         _base = 0.6 if _state in ('enter', 'light') else (0.2 if _state == 'wait' else 0.0)
         advice_params = {

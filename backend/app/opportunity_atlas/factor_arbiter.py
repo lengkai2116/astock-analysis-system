@@ -10,7 +10,8 @@
   Step 3: 语义调整 = base × conflict.semantic_adjustment
   Step 4: right_side_confirm 门控（强确认1.0 / 基础确认0.8 / 未确认0.5）
   Step 5: 情绪极端修正（冰点+看多 或 正向+看空 → ×0.85 警示）
-  Step 6: 映射 → opportunity_state（≥70 enter / 55-69 light / 30-54 wait / <30 avoid）
+  Step 6: 映射 → opportunity_state（5 档，493号 P2-a 对齐知识库《操作归一化》：
+          ≥80 enter / 65-79 light / 45-64 wait / 30-44 reduce / <30 avoid）
 
 与 arbiter.py 的区别：
   - arbiter.py（321号）：纯规则优先级表（P0-P7），无评分
@@ -25,6 +26,7 @@ from __future__ import annotations
 STATE_ENTER = 'enter'    # 可入场 🟦
 STATE_LIGHT = 'light'    # 可轻仓 🟨
 STATE_WAIT = 'wait'      # 等待 ⬜
+STATE_REDUCE = 'reduce'  # 减仓 🟧（493号 P2-a：知识库《操作归一化》30-44 减仓）
 STATE_AVOID = 'avoid'    # 回避 🟫
 
 # right_side_confirm 乘数映射（390 §7.3 Step 4）
@@ -39,11 +41,14 @@ _RSC_DEFAULT = 0.5  # 未知或缺失时的保守默认值
 _EMOTION_EXTREME_THRESHOLD = 0.6
 _EMOTION_PENALTY = 0.85  # 极端情绪 × 冷静折扣
 
-# 评分 → 状态映射阈值（390 §7.3 Step 6）
+# 评分 → 状态映射阈值（390 §7.3 Step 6；493号 P2-a 档位边界对齐知识库《操作归一化》：
+#   80-100 重仓买入 / 65-79 买入建仓 / 45-64 持有观望 / 30-44 减仓 / 0-29 清仓回避）。
+#   原 70/55/30 三阈值 → 80/65/45/30 四阈值（新增 reduce 档）。
 _THRESHOLDS = [
-    (70, STATE_ENTER),
-    (55, STATE_LIGHT),
-    (30, STATE_WAIT),
+    (80, STATE_ENTER),
+    (65, STATE_LIGHT),
+    (45, STATE_WAIT),
+    (30, STATE_REDUCE),
 ]
 
 
@@ -85,7 +90,7 @@ def arbitrate(
 
     Returns:
         {
-            'opportunity_state': 'enter'|'light'|'wait'|'avoid',
+            'opportunity_state': 'enter'|'light'|'wait'|'reduce'|'avoid',
             'final_score': float,          # 0-100 评分
             'state_evidence': list[str],   # 状态判定依据
             'conflict_evidence': list[str], # 冲突暴露

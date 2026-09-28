@@ -182,7 +182,7 @@ class TestStep2_AggregateV390:
               'hard_veto': False, 'hard_reason': '', 'emotion_position_cap': None}
         result = engine._aggregate_v390(MOCK_TAGS, {}, l0, {}, merged, '000001.SZ')
         assert 'opportunity_state' in result
-        assert result['opportunity_state'] in ('enter', 'light', 'wait', 'avoid')
+        assert result['opportunity_state'] in ('enter', 'light', 'wait', 'reduce', 'avoid')
         assert 'final_score' in result
         assert 'semantic_type' in result
         assert 'reliability_summary' in result

@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from app.opportunity_atlas.arbiter import arbitrate
 
-_STATE_CN = {'enter': '可入场', 'light': '可轻仓', 'wait': '等待', 'avoid': '回避'}
+_STATE_CN = {'enter': '可入场', 'light': '可轻仓', 'wait': '等待',
+             'reduce': '建议减仓', 'avoid': '回避'}
 
 # 看多/看空方向值域归一化（真实五维 direction 值域不统一：
 # chanlun='上升'/'下降'、volume_price='up'/'down'、chip/emotion='bullish'/'bearish'、
@@ -366,7 +367,11 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
 # ─────────────────────────────────────────────
 
 def _map_action_label(state: str, signal_strength: float) -> str:
-    """状态→5档操作动作（§3.2：给人看；executable.action_type 保留机器 3 态）"""
+    """状态→5档操作动作（§3.2：给人看；executable.action_type 保留机器 3 态）
+
+    493号 P2-a：新增 reduce（减仓）档——知识库《操作归一化》5 档动作。
+    注意：本模块为死副本（生效副本见 advice_engine.py），仅同步保持一致。
+    """
     if state == 'enter' and signal_strength >= 80:
         return '重仓买入'
     if state == 'enter':
@@ -375,6 +380,8 @@ def _map_action_label(state: str, signal_strength: float) -> str:
         return '轻仓试探'
     if state == 'wait':
         return '持有/观望'
+    if state == 'reduce':
+        return '减仓'
     return '清仓回避'   # avoid
 
 
@@ -460,7 +467,9 @@ def _build_advice_card_fields(state, tags, dims, geo, support, signal_light,
                               consensus_rate=None) -> dict:
     """组装 S6 建议卡字段（§3.1：全部现有数据派生）"""
     # signal_light：state 映射（与七维 signal 灯独立，顶层信号灯）
-    _light_map = {'enter': '🟢', 'light': '🟢', 'wait': '🟡', 'avoid': '🔴'}
+    #   493号 P2-a：reduce 档（30-44 减仓）→ 黄红（知识库《操作归一化》「黄/红」）
+    _light_map = {'enter': '🟢', 'light': '🟢', 'wait': '🟡',
+                  'reduce': '🟠', 'avoid': '🔴'}
     # action_label：5档映射
     try:
         _ss = float((tags or {}).get('signal_strength') or 0)

@@ -573,9 +573,10 @@ const STATE_COLORS = {
   'enter': { high: '#2563eb', low: '#60a5fa' },   // 可入场：深蓝=共识≥70% / 浅蓝=67-70%（336号 C1）
   'light': '#eab308',                             // 可轻仓：黄
   'wait': '#6b7280',                              // 等待：灰
+  'reduce': '#f97316',                            // 减仓：橙（493号 P2-a：知识库《操作归一化》30-44 黄/红）
   'avoid': '#8b5a2b',                             // 回避：棕
 };
-const STATE_CN = { 'enter': '可入场', 'light': '可轻仓', 'wait': '等待', 'avoid': '回避' };
+const STATE_CN = { 'enter': '可入场', 'light': '可轻仓', 'wait': '等待', 'reduce': '减仓', 'avoid': '回避' };
 
 // 321号：状态机颜色（唯一结论源）——优先 opportunity_state，旧快照缺字段时回退 timingColor
 function stateColor(state, consensus) {
@@ -583,6 +584,7 @@ function stateColor(state, consensus) {
     return (consensus || 0) >= 0.7 ? STATE_COLORS.enter.high : STATE_COLORS.enter.low;
   }
   if (state === 'light') return STATE_COLORS.light;
+  if (state === 'reduce') return STATE_COLORS.reduce;
   if (state === 'avoid') return STATE_COLORS.avoid;
   return STATE_COLORS.wait;
 }
@@ -1814,6 +1816,7 @@ function showDetail(data) {
   const _st = data.opportunityState || '';
   const advice = _st === 'avoid' ? '🚫 回避：时机/风险信号否决，暂不操作' :
                  _st === 'wait' ? '⏳ 等待：右侧信号未确认，仅观察' :
+                 _st === 'reduce' ? '🟠 减仓：评分处于减仓区（30-44），建议持有者降至30%以下、不新开仓' :
                  _st === 'light' ? '🟡 可轻仓：右侧基础确认，控制仓位' :
                  _st === 'enter' ? '🟦 可入场：右侧确认+共识支持' :
                  data.rightSideConfirm === '否决' ? '🚫 右侧否决：出现卖出/背离信号，暂不操作' :

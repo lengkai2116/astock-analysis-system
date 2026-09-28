@@ -140,7 +140,7 @@ def test_full_pipeline_produces_all_outputs():
     arb_result = factor_arbitrate(consensus, conflict, MOCK_TAGS, dims_factor, reliability)
     assert 'final_score' in arb_result
     assert 'opportunity_state' in arb_result
-    assert arb_result['opportunity_state'] in ('enter', 'light', 'wait', 'avoid')
+    assert arb_result['opportunity_state'] in ('enter', 'light', 'wait', 'reduce', 'avoid')
 
     # L6
     l0 = {'position_coeff': 1.0, 'hold_only': False, 'soft_risks': [],
