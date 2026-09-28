@@ -270,15 +270,6 @@ class StatusEngine:
             # 366号步骤3：用维度引擎替代_build_dimensions()
             dim_engine_results = self._build_dim_engine_results(tags, signals, {}, lifecycle, ts_code=ts_code)
 
-        # dim8 状态总结：读取 dim1-dim7 输出，组装综合报告
-        try:
-            from app.opportunity_atlas.dimensions.dim8_summary_engine import Dim8SummaryEngine
-            dim8 = Dim8SummaryEngine()
-            dim_engine_results['summary'] = dim8.evaluate(dims={}, tags=tags, lifecycle={'dim_results': dim_engine_results})
-        except Exception as e:
-            logger.warning(f"dim8 状态总结失败: {e}")
-            dim_engine_results['summary'] = None
-
         # 兼容层：将维度引擎输出转为旧dims格式
         dims = self._convert_to_dims_format(dim_engine_results, tags)
 
@@ -296,6 +287,20 @@ class StatusEngine:
             l2 = self._aggregate_v390(tags, dims, l0, lifecycle, dim_engine_results, ts_code)
         else:
             l2 = self._aggregate(tags, dims, l0, lifecycle)
+
+        # dim8 状态总结：读取 dim1-dim7 输出，组装综合报告。
+        # 495号（A1/A2）：在判定（l2）**之后**调用，经 lifecycle['jud_result'] 注入判定层
+        #   结果——dim8 展示层**单向消费判定权威**（v390=判定、dim8=展示派生），
+        #   共识率/状态条/方向不再自算第二口径（单源化，消除矛盾组合）。
+        try:
+            from app.opportunity_atlas.dimensions.dim8_summary_engine import Dim8SummaryEngine
+            dim8 = Dim8SummaryEngine()
+            dim_engine_results['summary'] = dim8.evaluate(
+                dims={}, tags=tags,
+                lifecycle={'dim_results': dim_engine_results, 'jud_result': l2})
+        except Exception as e:
+            logger.warning(f"dim8 状态总结失败: {e}")
+            dim_engine_results['summary'] = None
 
         hits = self._detect_registered_signals(tags, signals)
 
@@ -1308,20 +1313,24 @@ def apply_advice_params(params: dict, price: Optional[float],
 def build_seven_dim_from_dim_results(dim_results: dict | None,
                                      tags: dict | None = None,
                                      lifecycle: dict | None = None,
-                                     ts_code: str | None = None) -> dict | None:
+                                     ts_code: str | None = None,
+                                     jud_result: dict | None = None) -> dict | None:
     """SIG 文字类产出（seven_dim_json）整体归集入口（436号 B1）
 
     委派 dim8（Dim8SummaryEngine.build_seven_dim_report）组装前端契约的七维现状描述：
       7 键 signal/structure/volume_price/fund_chip/emotion/risk/summary，
       顶层 light emoji、每段 judgment/audit/plain（align 两端 dimOrder/segOrder）。
     ts_code：462-3 相对强弱环境定位句（summary 前置）用；不传则跳过。
+    jud_result：可选（495号 A1）——判定层结果，传入时 summary 段由判定层派生（单源化）。
     dim_results 为空/非 dict → 返回 None（data_daemon 写 NULL，门禁跳过）。
     """
     if not dim_results or not isinstance(dim_results, dict):
         return None
     try:
         from app.opportunity_atlas.dimensions.dim8_summary_engine import Dim8SummaryEngine
-        return Dim8SummaryEngine().build_seven_dim_report(dim_results, tags=tags, ts_code=ts_code)
+        return Dim8SummaryEngine().build_seven_dim_report(dim_results, tags=tags,
+                                                          ts_code=ts_code,
+                                                          jud_result=jud_result)
     except Exception as e:
         logger.warning(f"build_seven_dim_from_dim_results 失败: {e}")
         return None

@@ -85,10 +85,11 @@ def _extract_dim_light(dim_results: dict, dim_name: str) -> str:
         return jg.get('overall_light', jg.get('light', 'yellow'))
 
 
-def _summary_light_value(dim_results: dict) -> str:
+def _summary_light_value(dim_results: dict, consensus_rate: float | None = None) -> str:
     """491-J6：summary 灯口径归 SSOT（`light_derive.summary_light`，共识率阈值 → 灯）。
-    dim8 侧只负责聚合共识率，阈值规则不再内联；派生失败回退同口径内联（保证不抛）。"""
-    cr = _calc_consensus_rate(dim_results)
+    495号（A1）：传入判定层映射后的展示共识率时优先使用（单源化）；否则自算聚合。
+    派生失败回退同口径内联（保证不抛）。"""
+    cr = consensus_rate if consensus_rate is not None else _calc_consensus_rate(dim_results)
     try:
         from app.opportunity_atlas.light_derive import summary_light
         return summary_light(cr)
@@ -158,7 +159,7 @@ def _is_signal_decaying(dim_results: dict) -> bool:
 # 八维红绿灯映射
 # ═══════════════════════════════════════════════════════════
 
-def _build_eight_dim_summary(dim_results: dict) -> dict:
+def _build_eight_dim_summary(dim_results: dict, consensus_rate: float | None = None) -> dict:
     """构建八维红绿灯映射"""
     dim_map = {
         'signal': '信号确认',
@@ -174,7 +175,7 @@ def _build_eight_dim_summary(dim_results: dict) -> dict:
     for key, name in dim_map.items():
         # 491-J6：summary 行由 7 维派生灯聚合（原硬编码 'yellow' 占位）；其余维走 SSOT
         light = _extract_dim_light(dim_results, key) if key != 'summary' \
-            else _summary_light_value(dim_results)
+            else _summary_light_value(dim_results, consensus_rate)
         summary[key] = {'name': name, 'light': light}
     return summary
 
@@ -219,6 +220,63 @@ def _calc_consensus_rate(dim_results: dict) -> float:
         # 映射到0-1: -1→0, 0→0.5, +1→1.0
         return round(max(0, min(1, (avg + 1) / 2)), 2)
     return 0.5
+
+# ═══════════════════════════════════════════════════════════
+# 495号 A1/A2：JUD 判定单源权威化（v390=判定，dim8=展示派生）
+# ═══════════════════════════════════════════════════════════
+
+# v390/legacy opportunity_state（判定层五态）→ dim8 展示态（8 态枚举）映射。
+# 495号（A1）：消除「v390=avoid 而 dim8=strong_confirm」矛盾组合——
+# 展示层状态条由判定层结果派生，不再独立自算。
+_OPPORTUNITY_STATE_TO_BAR = {
+    'avoid': 'risk_warning',   # 不可交易/硬否决 → 风险警示
+    'reduce': 'cautious',      # 减仓档 → 谨慎观望
+    'wait': 'neutral',         # 观望 → 中性观望
+    'light': 'light_confirm',  # 轻仓 → 轻仓确认
+    'enter': 'strong_confirm', # 可入场 → 强势确认
+}
+
+# 判定层 direction 枚举两版并存（v390: bull/bear；legacy: bullish/bearish）→ 展示方向整数
+_JUD_DIRECTION_TO_INT = {
+    'bull': 1, 'bullish': 1,
+    'bear': -1, 'bearish': -1,
+    'neutral': 0,
+}
+
+
+def _jud_consensus_rate(jud_result: dict) -> float | None:
+    """从判定层结果取权威共识率并映射为展示口径 [0,1]。
+
+    495号（A1）：v390 判定链 consensus_rate ∈ [-1,1]（带方向），映射 (cr+1)/2
+    以保持 seven_dim 展示契约数值范围不变；legacy（无 final_score 键）已是 [0,1]
+    归一值，直接透传。判定层缺失/异常 → None（调用方回退自算）。
+    """
+    if not jud_result:
+        return None
+    try:
+        cr = float(jud_result.get('consensus_rate'))
+    except (TypeError, ValueError):
+        return None
+    if 'final_score' in jud_result:  # v390 特有键（_v390_result）
+        cr = (cr + 1) / 2
+    return round(max(0.0, min(1.0, cr)), 2)
+
+
+def _derive_status_bar_v390(jud_result: dict) -> str | None:
+    """由判定层结果派生展示状态条（495号 A1 单源化）。
+
+    opportunity_state 为主判据（enter→strong_confirm … avoid→risk_warning）；
+    direction=bear 且非 avoid/reduce 时降为看空回避。判定层缺失 → None。
+    """
+    if not jud_result:
+        return None
+    state = jud_result.get('opportunity_state')
+    if not state:
+        return None
+    direction = jud_result.get('direction', 'neutral')
+    if direction in ('bear', 'bearish') and state not in ('avoid', 'reduce'):
+        return 'bearish'
+    return _OPPORTUNITY_STATE_TO_BAR.get(state, 'neutral')
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1485,25 +1543,34 @@ class Dim8SummaryEngine:
                  lifecycle: dict | None = None) -> dict:
         """统一评估入口
 
-        注意：dim_results 通过 lifecycle['dim_results'] 传入（StatusEngine 调用时注入）
+        注意：dim_results 通过 lifecycle['dim_results'] 传入（StatusEngine 调用时注入）；
+        495号（A1）：判定层结果经 lifecycle['jud_result'] 传入（StatusEngine 在判定后
+        注入）——展示层共识率/状态条/方向**单向消费判定层**，判定层缺失时回退自算。
         """
         dim_results = {}
+        jud_result = {}
         if lifecycle and isinstance(lifecycle, dict):
             dim_results = lifecycle.get('dim_results', {})
+            jud_result = lifecycle.get('jud_result') or {}
         elif signals and isinstance(signals, dict):
             dim_results = signals.get('dim_results', {})
 
         # 1. 八维红绿灯映射
-        eight_dim_summary = _build_eight_dim_summary(dim_results)
+        # 495号（A1）：consensus_rate 优先取判定层映射值（单源化），None → 回退自算
+        consensus_rate = _jud_consensus_rate(jud_result)
+        if consensus_rate is None:
+            consensus_rate = _calc_consensus_rate(dim_results)
+        eight_dim_summary = _build_eight_dim_summary(dim_results, consensus_rate)
 
-        # 2. 共识率
-        consensus_rate = _calc_consensus_rate(dim_results)
-
-        # 3. 冲突检测
+        # 2. 冲突检测
         conflicts = _detect_conflicts(dim_results)
 
-        # 4. 状态条推导
-        status_bar = _derive_status_bar(dim_results, consensus_rate, conflicts)
+        # 3. 状态条推导：判定层派生优先（消除矛盾组合），缺失回退原自算逻辑
+        if jud_result:
+            status_bar = _derive_status_bar_v390(jud_result) or \
+                _derive_status_bar(dim_results, consensus_rate, conflicts)
+        else:
+            status_bar = _derive_status_bar(dim_results, consensus_rate, conflicts)
         status_bar_cn = STATUS_BAR_STATES.get(status_bar, status_bar)
 
         # 5. 综合文字
@@ -1528,24 +1595,27 @@ class Dim8SummaryEngine:
             status_description['data_warning'] = f'数据完整度偏低（{data_confidence:.0%}），部分维度判断受限'
 
         # 7. judgment
-        # 492号（P1-1）：dim8 定位 = SIG 侧「现状描述归集/叙事」层，非判定层。
+        # 495号（A1）：dim8 定位 = SIG 侧「现状描述归集/叙事」层，非判定层。
         #   下方三值（status_bar / consensus_rate / direction）为**展示派生**——
-        #   由本模块按「灯色×置信度 / 简单多数」自成口径算出，与 v390 判定链
-        #   （L1-L6，族可靠性×状态权重）**口径不同**（全市场实测 Δconsensus 均值 +0.51、
-        #   |Δ|>0.2 占 70.6%）。它们**不参与任何判定**，唯一消费方是 seven_dim_json
-        #   展示契约（test_436 断言其存在）与 sig_full_test 完整性检查；前端只读
-        #   summary.text 与各维 overall_light（light_derive SSOT）。判定权威 = v390
-        #   （status_snapshot.status_bar / opportunity_state）。此处保留键以维持展示契约，
-        #   并显式标注派生来源，避免被误当作判定第二口径。
-        direction = 1 if consensus_rate >= 0.5 else (-1 if consensus_rate < 0.3 else 0)
+        #   由判定层结果（v390 L1-L6 或 legacy 聚合）经映射派生（单源化），
+        #   判定层缺失时回退本模块自算（灯色×置信度 / 简单多数）。展示值**不参与
+        #   任何判定**，唯一消费方是 seven_dim_json 展示契约（test_436 断言其存在）
+        #   与 sig_full_test 完整性检查；前端只读 summary.text 与各维 overall_light
+        #   （light_derive SSOT）。判定权威 = v390（status_snapshot.status_bar /
+        #   opportunity_state）。此处保留键以维持展示契约，并显式标注派生来源。
+        if jud_result:
+            direction = _JUD_DIRECTION_TO_INT.get(jud_result.get('direction'), 0)
+        else:
+            direction = 1 if consensus_rate >= 0.5 else (-1 if consensus_rate < 0.3 else 0)
         # 491-J6：summary 灯统一到派生 SSOT（原按 consensus_rate 阈值 0.6/0.3 独立派生，
-        #   与 light_derive.aggregate_lights 规则不一致）→ 改聚合 7 维派生灯
+        #   与 light_derive.aggregate_lights 规则不一致）→ 改聚合 7 维派生灯；
+        #   495号（A1）：灯由判定层映射后的展示共识率驱动
         judgment = {
             'status_bar': status_bar,
             'status_bar_cn': status_bar_cn,
             'consensus_rate': consensus_rate,
             'direction': direction,
-            'overall_light': _summary_light_value(dim_results),
+            'overall_light': _summary_light_value(dim_results, consensus_rate),
             'overall_direction': direction,
             # 492-P1-1：展示派生态标记（判定口径权威见 status_snapshot 的 v390 产出）
             'caliber': 'display_derived',
@@ -1578,8 +1648,9 @@ class Dim8SummaryEngine:
         }
 
     def build_seven_dim_report(self, dim_results: dict | None,
-                                tags: dict | None = None,
-                                ts_code: str | None = None) -> dict | None:
+                               tags: dict | None = None,
+                               ts_code: str | None = None,
+                               jud_result: dict | None = None) -> dict | None:
         """SIG 文字类输出整体归集器（436号 B1，dim8 按新共识承担）
 
         读取 dim_results（dim2-dim7 富数据）组装前端契约的七维现状描述 seven_dim_json：
@@ -1588,6 +1659,8 @@ class Dim8SummaryEngine:
           - 顶层无 light（各段自带）；summary 段含 dim8 综合状态条/共识/冲突
         ts_code：可选，供 462-3 相对强弱环境定位句（summary 前置，437-A D3）；
                  不传/无数据则跳过（437 缺则降级）。
+        jud_result：可选（495号 A1）——判定层结果（v390/legacy l2），传入时 summary
+                 段由判定层派生（单源化）；None → 回退 dim8 自算（独立调用/降级）。
         dim_results 为空/非 dict → 返回 None（由门禁/NULL 语义承接）。
         """
         if not dim_results or not isinstance(dim_results, dict):
@@ -1607,7 +1680,8 @@ class Dim8SummaryEngine:
         try:
             self_ = self.__class__()
             summary_d8 = self_.evaluate(dims={}, tags=tags or {},
-                                        lifecycle={'dim_results': dim_results})
+                                        lifecycle={'dim_results': dim_results,
+                                                   'jud_result': jud_result or {}})
             sd = summary_d8.get('status_description', {}) or {}
             jg = summary_d8.get('judgment', {}) or {}
             au = summary_d8.get('audit', {}) or {}

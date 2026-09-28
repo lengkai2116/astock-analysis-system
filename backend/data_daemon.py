@@ -5877,6 +5877,43 @@ def _out_transmit_seven_dim(codes: list[str]):
     logger.info(f"OUT完成: {time.time() - t0:.1f}s")
 
 
+def _backfill_seven_dim_jud(ts_code: str, trade_date: str, dim_results,
+                            row: dict, conn):
+    """495号（A1）：seven_dim_json 单源化回填（JUD 步骤）
+
+    SIG 步骤（_precompute_strategy_signals）生成 seven_dim 时判定未跑，summary 为
+    dim8 自算口径；JUD 步骤 evaluate 已产出判定结果（opportunity_state/consensus_rate/
+    direction 落 status_snapshot 行），此处用其重建 seven_dim（dim8 展示层消费判定层），
+    保证前端 narrative（seven_dim_report/one_liner_detail）与判定权威同口径，
+    OUT 步骤透传的 one_liner_detail 亦随之单源化。失败静默（保持原自算口径，不阻断管道）。
+    """
+    if not dim_results or not row:
+        return
+    try:
+        import json as _json
+
+        from app.opportunity_atlas.status_engine import build_seven_dim_from_dim_results
+        _jud = {
+            'opportunity_state': row.get('opportunity_state'),
+            'consensus_rate': row.get('consensus_rate'),
+            'direction': row.get('direction'),
+        }
+        # v390 标记：status_snapshot 行含 final_score（v390 特有键）→ 判定层按 [-1,1]
+        # 映射；legacy 行无此键 → _jud_consensus_rate 按 [0,1] 直接透传。
+        if 'final_score' in row:
+            _jud['final_score'] = row.get('final_score', 0.0)
+        rebuilt = build_seven_dim_from_dim_results(dim_results, tags=None,
+                                                   ts_code=ts_code, jud_result=_jud)
+        if not rebuilt:
+            return
+        conn.execute(
+            "UPDATE strategy_signal_detail SET seven_dim_json=? "
+            "WHERE ts_code=? AND trade_date=?",
+            [_json.dumps(rebuilt, ensure_ascii=False), ts_code, trade_date])
+    except Exception as e:
+        logger.debug(f"seven_dim 单源化回填失败 {ts_code}: {e}")
+
+
 def _build_status_snapshot(codes: list[str]):
     """337号 §3/§4：日频现状成品生成（S2 status_engine → status_snapshot 表）
 
@@ -5992,6 +6029,9 @@ def _build_status_snapshot(codes: list[str]):
                      # 493号（P2-d）：账户月度风险停机标记（1=停机；None=中性）
                      1 if row.get('monthly_halt') else None])
                 written += 1
+                # 495号（A1）：seven_dim_json 单源化回填——用判定结果重建 summary 段
+                #   （SIG 生成时判定未跑为自算口径；此处消费判定层，前端 narrative 同源）
+                _backfill_seven_dim_jud(code, trade_date, _dim_cache.get(code), row, _snap_conn)
             except Exception as e:
                 logger.warning(f"status_snapshot {code} 生成失败: {e}")
         _snap_conn.commit()
