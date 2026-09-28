@@ -1892,7 +1892,7 @@ function showDetail(data) {
       if (svd && verdictEl) {
         const dir2 = svd.direction === 'bullish' ? '看多' : svd.direction === 'bearish' ? '看空' : '中性';
         verdictEl.innerHTML = `★ 维度共识 ${(svd.consensus_rate * 100).toFixed(0)}%（${dir2}）` +
-          ` &nbsp; <span style="font-weight:600;">${svd.opportunity_state === 'enter' ? '可入场' : svd.opportunity_state === 'light' ? '可轻仓' : svd.opportunity_state === 'avoid' ? '回避' : '观望'}</span>` +
+          ` &nbsp; <span style="font-weight:600;">${svd.opportunity_state === 'enter' ? '可入场' : svd.opportunity_state === 'light' ? '可轻仓' : svd.opportunity_state === 'reduce' ? '建议减仓' : svd.opportunity_state === 'avoid' ? '回避' : '观望'}</span>` +
           (cv.verdict ? `<br/><span style="font-size:12px;color:var(--text-muted);margin-top:4px;display:block;">${cv.verdict}</span>` : '');
       }
       // 318号 S4：标签摘要升级为 diagnose.tags_summary 组合维度（每维度 2-3 项）

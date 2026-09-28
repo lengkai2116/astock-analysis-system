@@ -21,8 +21,14 @@ for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
 import pandas as pd
 
 
-def _mk_df(n=70, last_close=30.0, hi=38.0):
-    """构造测试 K线（>=60 行，60日高点 hi）"""
+def _mk_df(n=70, last_close=30.0, hi=40.0):
+    """构造测试 K线（>=60 行，60日高点 hi）
+
+    494号（R-8）：默认 hi 38→40 —— 493 批次1 把 R:R 门禁 1.0→2.0 后，hi=38 时
+    几何 rr≈1.78<2.0 会把 enter 降级 wait，掩盖 signal_light/action_label 档位映射
+    （enter 用例被降级）。hi=40 → rr≈2.22≥2.0，使 enter 用例真实反映档位映射。
+    需断言目标位（=hi）的用例显式传 hi。
+    """
     dates = pd.date_range('2026-05-01', periods=n, freq='D')
     return pd.DataFrame({
         'date': dates, 'open': 25.0, 'close': last_close,
@@ -149,7 +155,8 @@ def test_low_confidence_downgrade():
     from app.opportunity_atlas.advice_builder import build_operation_advice
     df = _mk_df()
     # enter + ss 高，但 conflict>=3 → 低置信度 → 降级轻仓试探
-    a = build_operation_advice('TEST.SZ', _mk_dims('enter', conflict=3), [], df,
+    # 低置信度降级（conflict>=3 → '低'）；K线用 hi=40 保 R:R≥2 避免被盈亏比门禁掩盖
+    a = build_operation_advice('TEST.SZ', _mk_dims('enter', conflict=3), [], _mk_df(hi=40),
                                tags={'opportunity_state': 'enter',
                                      'signal_strength': 85, 'evidence_count': 2})
     assert a['confidence'] == '低', f"冲突3应低置信度，实际 {a['confidence']}"

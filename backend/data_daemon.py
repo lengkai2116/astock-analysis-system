@@ -5696,7 +5696,7 @@ def _out_transmit_seven_dim(codes: list[str]):
         except Exception as e:
             logger.warning(f"七维透传失败: {e}")
 
-    # ── 2. 归档 status_snapshot → status_snapshot_history（17列完整）──
+    # ── 2. 归档 status_snapshot → status_snapshot_history（18列完整）──
     try:
         _snap_conn.execute("""
             CREATE TABLE IF NOT EXISTS status_snapshot_history (
@@ -5705,25 +5705,28 @@ def _out_transmit_seven_dim(codes: list[str]):
                 state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
                 direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
                 summary_text TEXT, one_liner_detail TEXT, dim_engine_results TEXT,
-                signals TEXT,
+                signals TEXT, monthly_halt INTEGER,
                 PRIMARY KEY (ts_code, snapshot_date)
             )
         """)
         # 491号（R4-①）：history 表为 CREATE-IF-NOT-EXISTS，已存在的旧表缺 signals 列 → 自愈补列
+        # 494号（R-5）：同上补 monthly_halt 列（对齐 signals 先例）
         _hist_cols = {r[1] for r in _snap_conn.execute(
             "PRAGMA table_info(status_snapshot_history)").fetchall()}
         if 'signals' not in _hist_cols:
             _snap_conn.execute("ALTER TABLE status_snapshot_history ADD COLUMN signals TEXT DEFAULT NULL")
+        if 'monthly_halt' not in _hist_cols:
+            _snap_conn.execute("ALTER TABLE status_snapshot_history ADD COLUMN monthly_halt INTEGER DEFAULT NULL")
         _snap_conn.execute("""
             INSERT OR REPLACE INTO status_snapshot_history
                 (ts_code, snapshot_date, trade_date, dim_states, status_bar,
                  opportunity_state, state_evidence, conflict_evidence, consensus_rate,
                  direction, l0, lifecycle, advice_params,
-                 summary_text, one_liner_detail, dim_engine_results, signals)
+                 summary_text, one_liner_detail, dim_engine_results, signals, monthly_halt)
             SELECT ts_code, snapshot_date, trade_date, dim_states, status_bar,
                    opportunity_state, state_evidence, conflict_evidence, consensus_rate,
                    direction, l0, lifecycle, advice_params,
-                   summary_text, one_liner_detail, dim_engine_results, signals
+                   summary_text, one_liner_detail, dim_engine_results, signals, monthly_halt
             FROM status_snapshot
             WHERE dim_engine_results IS NOT NULL
         """)
