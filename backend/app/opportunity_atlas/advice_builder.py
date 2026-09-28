@@ -423,7 +423,7 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
     # consensus（五维推导）已算，供 confidence 使用（consensus_rate 标签未落库）
     result.update(_build_advice_card_fields(
         state, tags, dimensions, geo, support, signal_light, executable, df, dims,
-        consensus_rate=consensus['consensus_rate']))
+        consensus_rate=consensus['consensus_rate'], state_reason=state_reason))
     # action 快照须在降级后（低置信度降级会改 executable.position.max_pct）
     result['action'] = {'max_position_ratio': executable['position']['max_pct']}
     # 494号（R-3）：三键进 result（与 advice_engine 图谱路径同结构）
@@ -535,9 +535,35 @@ def _build_expected_holding(tags: dict) -> str:
     return holding_map.get(tr, '日线波段 20-30 个交易日')
 
 
+def _fmt_trigger_conditions(executable: dict) -> list:
+    """495号（A3）：executable 规则 → 建议卡⑧触发条件（人读文本，Wiki《操作建议卡》）
+
+    知识库⑧：触发条件 = 建议的"自带生命期"（如"站上13.00并放量→可加仓至60%"）。
+    由机器规则 entry_rules/exit_rules 转人读（内容以系统现有规则为准，结构对齐 Wiki）。
+    """
+    conds: list = []
+    for r in ((executable or {}).get('entry_rules') or []):
+        _t = str(r.get('trigger') or '').replace('close', '收盘价')
+        if not _t:
+            continue
+        _pct = r.get('size_pct')
+        _pct_txt = f' {int(_pct)}% 仓位' if isinstance(_pct, (int, float)) else ''
+        _act = '买入' if r.get('action') == 'BUY' else str(r.get('action') or '执行')
+        conds.append(f'{_t} → {_act}{_pct_txt}')
+    for r in ((executable or {}).get('exit_rules') or []):
+        _t = str(r.get('trigger') or '').replace('close', '收盘价')
+        if not _t:
+            continue
+        _pct = r.get('size_pct')
+        _pct_txt = f'（{int(_pct)}%）' if isinstance(_pct, (int, float)) else ''
+        _act = '清仓离场' if r.get('action') == 'SELL' else str(r.get('action') or '执行')
+        conds.append(f'{_t} → {_act}{_pct_txt}')
+    return conds
+
+
 def _build_advice_card_fields(state, tags, dims, geo, support, signal_light,
                               executable, df, light_dims=None,
-                              consensus_rate=None) -> dict:
+                              consensus_rate=None, state_reason: str = '') -> dict:
     """组装 S6 建议卡字段（§3.1：全部现有数据派生）"""
     # signal_light：state 映射（与七维 signal 灯独立，顶层信号灯）
     #   493号 P2-a：reduce 档（30-44 减仓）→ 黄红（知识库《操作归一化》「黄/红」）
@@ -593,6 +619,10 @@ def _build_advice_card_fields(state, tags, dims, geo, support, signal_light,
         'invalidation': invalidation,
         'confidence': confidence,
         'evidence_top3': evidence_top3,
+        # 495号（A3）：⑧ 触发条件独立字段（executable 规则转人读，对齐 Wiki ⑧）
+        'trigger_conditions': _fmt_trigger_conditions(executable),
+        # 495号（A3）：⑩ 决策依据（判定理由，与 evidence_top3 证据互补，对齐 Wiki ⑩）
+        'decision_basis': state_reason or '',
     }
 
 
