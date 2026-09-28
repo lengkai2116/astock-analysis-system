@@ -179,7 +179,7 @@ def test_raw2_uses_run_with_timeout():
     # 超时调用在 for 循环内
     assert 'def _raw2_one' in src and 'for code in codes:' in src
     # cache_pre_feat 写必须在 _run_with_timeout 调用之后、同一循环层（超时线程之外）
-    t_idx = src.find('_run_with_timeout(_raw2_one')
+    t_idx = src.find('_run_with_timeout(lambda: _raw2_one(code)')
     w_idx = src.find('_ecm.cache_pre_feat')
     assert t_idx != -1 and w_idx != -1 and t_idx < w_idx, \
         'cache_pre_feat 应位于超时调用之后（写不在超时线程内）'

@@ -5920,6 +5920,7 @@ def _build_status_snapshot(codes: list[str]):
     全市场结构化落库（九维状态/状态条/opportunity_state/conflict/共识），
     与 treemap_snapshot 同管道、原子表替换。
     """
+    import json as _json  # 495 遗留核查：_gen_summary/_dim_cache 引用 _json，本函数此前无局部导入会 NameError
     global _ecm
     if _ecm is None:
         from app.data.enhanced_cache_manager import get_ecm_instance

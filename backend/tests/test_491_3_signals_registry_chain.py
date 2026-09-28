@@ -105,3 +105,11 @@ class TestSignalsColumnChain:
         src = inspect.getsource(sm)
         assert 'ALTER TABLE {tbl} ADD COLUMN signals' in src, '分库缺 signals 列迁移'
         assert "('status_snapshot', 'status_snapshot_history')" in src
+
+    def test_build_status_snapshot_local_json_import(self):
+        """495 遗留核查：_build_status_snapshot 体内引用 _json（_gen_summary/_dim_cache），
+        须有局部 import json as _json 且先于使用（此前缺失 → 日终 JUD 步骤 NameError 静默降级）"""
+        src = inspect.getsource(data_daemon._build_status_snapshot)
+        assert 'import json as _json' in src, '_build_status_snapshot 缺局部 _json 导入'
+        assert src.index('import json as _json') < src.index('_json.loads'), \
+            '_json 导入须在使用之前'
