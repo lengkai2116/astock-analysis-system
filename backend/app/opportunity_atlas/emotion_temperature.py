@@ -104,3 +104,39 @@ def calc_emotion_temperature(
     temperature = round(min(100, max(0, total)), 1)
 
     return temperature
+
+
+def market_level_temperature(
+    sentiment_phase: str = 'neutral',
+    limit_up_count: Optional[int] = None,
+    sealing_rate: Optional[float] = None,
+    breadth: Optional[float] = None,
+    margin_change_pct: Optional[float] = None,
+) -> float:
+    """494号（R-1/R-9）：**市场级**情绪温度 —— 仅由市场级输入构成（个股/板块置中性）。
+
+    与 `calc_emotion_temperature` 的区别，仅在把**个股/板块级**输入固定为中性
+    （`sector_rank=None` → 板块热度 50、`volume_price_fit='neutral'` → 量价 50），
+    消除「同市场不同股得出不同温度」的个股成分（约 40% 权重）。
+
+    依据《华泰A股情绪指数》「触及 10% 恐慌区间不买，**回归 10% 之上再买入（右侧确认）**」
+    与《情绪周期-仓位联动》冰点 10%/空仓——均属**市场级**回升口径。
+
+    Args:
+        sentiment_phase: 市场情绪阶段（ice/sprout/regress/ferment/climax/ebb/neutral）
+        limit_up_count: 全市场涨停家数；None → 该项中性（50）
+        sealing_rate: 全市场封板率 0-100；None → 中性（50）
+        breadth: 市场广度 0-1（`market_stats.ma20_ratio` 近似，见 calc_emotion_temperature）；
+                 None → 中性（50）
+        margin_change_pct: 融资 5 日变化率；None → 中性（50）
+    """
+    return calc_emotion_temperature(
+        sentiment_phase=sentiment_phase,
+        limit_up_count=limit_up_count if isinstance(limit_up_count, int) else 0,
+        sealing_rate=sealing_rate if isinstance(sealing_rate, (int, float)) else 50.0,
+        sector_rank=None,                 # 个股/板块输入置中性
+        volume_price_fit='neutral',       # 个股/板块输入置中性
+        margin_change_pct=margin_change_pct,
+        breadth=breadth if isinstance(breadth, (int, float)) else None,
+    )
+

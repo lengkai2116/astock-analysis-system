@@ -20,10 +20,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.opportunity_atlas import advice_engine as ae  # noqa: E402
 from app.opportunity_atlas.advice_engine import (  # noqa: E402
-    _apply_stop_and_tiers, _weekly_direction,
+    _apply_stop_and_tiers,
+    _weekly_direction,
 )
 from app.opportunity_atlas.status_engine import (  # noqa: E402
-    _emotion_is_recovering, StatusEngine,
+    StatusEngine,
+    _emotion_is_recovering,
 )
 
 
@@ -36,20 +38,23 @@ def _mk_df(n=70, last_close=10.0, hi=12.0, lo=9.0):
 
 
 # ══ P2-c 冰点末期 ══════════════════════════════════════════════════════
+# 494号批次2 已改口径：回升 gate 由「个股级 right_side_confirm」改为「市场级温度回升」
+# （`sentiment_phase=='ice' AND mkt_temp ≥ ICE_RECOVERY_TEMP`）。以下 493 用例按新口径更新。
 
-def test_ice_phase_normal_is_not_recovering():
-    """ice + 未确认 → 非回升，维持冰点 10% 上限"""
-    assert _emotion_is_recovering({'sentiment_phase': 'ice',
-                                   'right_side_confirm': '未确认'}) is False
+def test_ice_phase_low_temp_is_not_recovering():
+    """ice + 市场级温度未达阈值 → 非回升，维持冰点 10% 上限"""
+    # 默认中性输入 → 冰点温度 32.5 < 35（真冰点）
+    assert _emotion_is_recovering({'sentiment_phase': 'ice', 'right_side_confirm': '强确认'}) is False
     assert _emotion_is_recovering({'sentiment_phase': 'ice'}) is False
 
 
-def test_ice_phase_confirmed_is_recovering():
-    """ice + 强确认/基础确认 → 冰点末期（回升）"""
-    assert _emotion_is_recovering({'sentiment_phase': 'ice',
-                                   'right_side_confirm': '强确认'}) is True
-    assert _emotion_is_recovering({'sentiment_phase': 'ice',
-                                   'right_side_confirm': '基础确认'}) is True
+def test_ice_phase_high_temp_is_recovering():
+    """ice + 市场级温度回升（涨停/封板/广度已起）→ 冰点末期（回升）"""
+    tags = {'sentiment_phase': 'ice', 'limit_up_count': 52, 'sealing_rate': 83.9, 'breadth': 0.392}
+    assert _emotion_is_recovering(tags) is True
+    # 非 ice → 不判回升（gate 前提）
+    assert _emotion_is_recovering({'sentiment_phase': 'ebb', 'limit_up_count': 90,
+                                   'sealing_rate': 90.0, 'breadth': 0.9}) is False
 
 
 def _se():
@@ -58,15 +63,18 @@ def _se():
 
 
 def test_ice_recovering_cap_raised():
-    """冰点末期：emotion_position_cap 由 0.10 放开至 recovery 档 0.60"""
-    l0 = _se()._apply_l0('T.SZ', {'sentiment_phase': 'ice', 'right_side_confirm': '强确认'}, {})
+    """冰点末期：市场级温度回升 → emotion_position_cap 由 0.10 放开至 recovery 档 0.60"""
+    tags = {'sentiment_phase': 'ice', 'limit_up_count': 52, 'sealing_rate': 83.9, 'breadth': 0.392,
+            'right_side_confirm': '未确认'}
+    l0 = _se()._apply_l0('T.SZ', tags, {})
     assert l0['emotion_position_cap'] == 0.60, f"冰点末期应放开至 0.60，实际 {l0['emotion_position_cap']}"
     assert l0.get('emotion_phase') == 'ice_recovering'
+    assert '市场级温度回升' in (l0.get('emotion_recovering_basis') or '')
 
 
 def test_ice_not_recovering_cap_kept():
-    """冰点未回升：维持 0.10 上限（原行为不变）"""
-    l0 = _se()._apply_l0('T.SZ', {'sentiment_phase': 'ice', 'right_side_confirm': '未确认'}, {})
+    """冰点未回升（温度未达阈值）→ 维持 0.10 上限；个股右侧确认不再进 gate"""
+    l0 = _se()._apply_l0('T.SZ', {'sentiment_phase': 'ice', 'right_side_confirm': '强确认'}, {})
     assert l0['emotion_position_cap'] == 0.10
     assert l0.get('emotion_phase') is None
 

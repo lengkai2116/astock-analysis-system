@@ -173,5 +173,9 @@ def test_p1_3_signals_in_snapshot_row_and_verdict_contract():
 
 def test_p1_4_apply_l0_signature_drops_dims():
     sig = inspect.signature(StatusEngine._apply_l0)
-    assert list(sig.parameters) == ['self', 'ts_code', 'tags', 'lifecycle']
+    params = list(sig.parameters)
+    # 492号 P1-4 原意：清理未使用的 dims 形参（判定全部读 tags + daily_basic）
+    assert params[:4] == ['self', 'ts_code', 'tags', 'lifecycle']
     assert 'dims' not in sig.parameters
+    # 494号批次2：新增 raw_pre_feat=...（L0 市场级温度回升取数，R-1/R-9）——非 dims 回归
+    assert params[4:] == ['raw_pre_feat']

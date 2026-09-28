@@ -89,15 +89,101 @@ def _normalize_emotion_phase(tags: dict) -> str:
 # ══════════════════════════════════════════════════════════
 _EMOTION_RECOVERING_RSC = {'强确认', '基础确认'}
 
+# 494号（R-1）：冰点末期回升阈值（市场级温度）
+#   依据《华泰A股情绪指数》「回归 10% 之上再买入」+《情绪周期-仓位联动》冰点 10%/空仓；
+#   阈值口径 = 温度五档「冰冷<20 / 偏冷20-40 / 中性40-60」的偏冷区中值。
+#   校准（全市场市场级温度，09-24 真值）：ice 真冰点（涨停 0/封板低/广度低）≈27.5 不触发；
+#   ice 但热度已起（涨停52/封板84%/广度39%）≈42.6 触发。
+ICE_RECOVERY_TEMP = 35.0
 
-def _emotion_is_recovering(tags: dict) -> bool:
-    """冰点末期判定：市场情绪仍处冰点（ice）时，是否已出现右侧确认（回升信号）。
 
-    右侧确认 = tags['right_side_confirm'] ∈ {强确认, 基础确认}——对齐《华泰A股情绪指数》
-    「回归10%之上再买入」。未确认/否决/缺失 → False（维持冰点 10% 上限）。
+def _market_level_temperature(tags: dict, raw_pre_feat: dict = None) -> float:
+    """494号（R-1/R-9）：市场级情绪温度 —— gate 用「市场级」而非个股级回升。
+
+    R-9 取数口径（用户 2026-09-28 拍板「直读市场级源 + R-9 兜底」）：
+      1. `raw_pre_feat['sentiment']` 的 `limit_up_count`/`sealing_rate`（R-9 兜底；实测仅
+         488-2 定向重算的少数股有，全市场覆盖低）；
+      2. `raw_pre_feat['market_stats']['ma20_ratio']` 作 `breadth`（5544/5552，主源）；
+      3. flat tags 的 `limit_up_count`/`sealing_rate`/`breadth`（若上游补产）。
+    个股/板块级输入（sector_rank / volume_price_fit）统一置中性——见 `market_level_temperature`。
+    直读 `sentiment_pool_cache`/`market_stats_cache` 兜底由 `_apply_l0` 完成（无 raw 场景）。
     """
-    _rsc = str((tags or {}).get('right_side_confirm', '') or '').strip()
-    return _rsc in _EMOTION_RECOVERING_RSC
+    from app.opportunity_atlas.emotion_temperature import market_level_temperature
+    tags = tags or {}
+    raw = raw_pre_feat if isinstance(raw_pre_feat, dict) else {}
+    _sent = raw.get('sentiment') if isinstance(raw.get('sentiment'), dict) else {}
+    _ms = raw.get('market_stats') if isinstance(raw.get('market_stats'), dict) else {}
+    _lu = _sent.get('limit_up_count', tags.get('limit_up_count'))
+    _sr = _sent.get('sealing_rate', tags.get('sealing_rate'))
+    _br = _ms.get('ma20_ratio', tags.get('breadth'))
+    return market_level_temperature(
+        sentiment_phase=_normalize_emotion_phase(tags),
+        limit_up_count=_lu if isinstance(_lu, int) else None,
+        sealing_rate=_sr if isinstance(_sr, (int, float)) else None,
+        breadth=_br if isinstance(_br, (int, float)) else None,
+        margin_change_pct=None,
+    )
+
+
+def _emotion_is_recovering(tags: dict, raw_pre_feat: dict = None) -> bool:
+    """494号（R-1）：冰点末期判定 = **市场级**情绪仍处冰点（ice）且市场级温度已回升。
+
+    口径（对齐《华泰A股情绪指数》「触及10%恐慌不买，回归10%之上再买入」）：
+      `sentiment_phase == 'ice'` 且 `mkt_temp ≥ ICE_RECOVERY_TEMP`。
+    市场级温度经 `market_level_temperature`（个股/板块输入置中性后重算）。
+
+    ⚠️ 493 原实现读**个股级** `right_side_confirm`，与市场级 ice gate 维度错位（全市场 ice
+    样本 0 → 组合 0 可达）。个股 `right_side_confirm` 降级为 **evidence 附注**（另产
+    `emotion_recovering_basis`），不进 gate。
+    """
+    _phase = _normalize_emotion_phase(tags or {})
+    if _phase != 'ice':
+        return False
+    try:
+        return _market_level_temperature(tags, raw_pre_feat) >= ICE_RECOVERY_TEMP
+    except Exception:
+        return False
+
+
+def _market_level_inputs_via_dm(dm) -> dict:
+    """494号（R-1）：无 raw pre_feat 时，JUD 侧直读市场级源（封板率 / 涨停家数 / 广度）。
+
+    源：`sentiment_pool_cache`（`stock_cache.db`；涨停 up / 炸板 zha）+ `market_stats_cache`
+    （`compute_cache.db`；`ma20_ratio` 作 breadth）。任一取不到 → 对应项置 None（中性兜底）。
+    失败静默（返回可用项），不阻塞 L0。
+    """
+    out: dict = {}
+    try:
+        ecm = getattr(dm, 'cache', None)
+        if ecm is None:
+            return out
+        _pool = None
+        for meth in ('get_cached_sentiment_pool', 'get_sentiment_pool'):
+            fn = getattr(ecm, meth, None)
+            if not callable(fn):
+                continue
+            try:
+                _pool = fn()
+            except TypeError:
+                continue
+            if _pool is not None and hasattr(_pool, 'empty') and not _pool.empty:
+                break
+        if _pool is not None and hasattr(_pool, 'columns') and 'limit_type' in _pool.columns:
+            _up = int((_pool['limit_type'] == 'up').sum())
+            _zha = int((_pool['limit_type'] == 'zha').sum()) if 'zha' in set(_pool['limit_type']) else 0
+            if _up > 0:
+                out['limit_up_count'] = _up
+                if _up + _zha > 0:
+                    out['sealing_rate'] = round(_up / (_up + _zha) * 100, 1)
+        _fn = getattr(ecm, 'get_market_ma20_ratio', None)
+        if callable(_fn):
+            _r = _fn()
+            if isinstance(_r, (int, float)):
+                out['breadth'] = float(_r)
+    except Exception:
+        pass
+    return out
+
 
 
 def _dim_state_for_signal(key: str, judg: dict, sd: dict) -> str:
@@ -196,7 +282,13 @@ class StatusEngine:
         # 兼容层：将维度引擎输出转为旧dims格式
         dims = self._convert_to_dims_format(dim_engine_results, tags)
 
-        l0 = self._apply_l0(ts_code, tags, lifecycle)
+        # 494号（R-1/R-9）：L0 市场级温度回升需 raw pre_feat 子组（sentiment/market_stats），
+        #   由 _load_tags 同源读取并透传（`_apply_l0` 缺省时自取，此处传递避免重复读）。
+        try:
+            _raw_pre_feat = self.dm.cache.get_pre_feat(ts_code)
+        except Exception:
+            _raw_pre_feat = None
+        l0 = self._apply_l0(ts_code, tags, lifecycle, raw_pre_feat=_raw_pre_feat)
 
         # 418号方案：jud_engine_version 配置分支（v390 新管线 / legacy 旧管线）
         _jud_ver = str((self.cfg or {}).get('jud_engine_version', 'legacy'))
@@ -651,7 +743,8 @@ class StatusEngine:
     # L0 风险分级（335号：L0a 硬否决 / L0b 软约束 / L0c 持有期）
     # ══════════════════════════════════════════════════════════
 
-    def _apply_l0(self, ts_code: str, tags: dict, lifecycle: Optional[dict]) -> dict:
+    def _apply_l0(self, ts_code: str, tags: dict, lifecycle: Optional[dict],
+                  raw_pre_feat: dict = None) -> dict:
         """L0 风险分级（335号：L0a 硬否决 / L0b 软约束 / L0c 持有期）。
 
         492号（P1-4）：原第 3 形参 `dims` 实测**从未被使用**（判定全部读 tags +
@@ -737,10 +830,32 @@ class StatusEngine:
         _caps = _l0_cfg.get('emotion_position_cap', {})
         if _caps:
             _phase = _normalize_emotion_phase(tags)
-            if _phase == 'ice' and _emotion_is_recovering(tags):
+            _rec = False
+            if _phase == 'ice':
+                # 494号（R-1）：gate 用**市场级**温度回升；raw pre_feat 无市场级输入时，
+                #   直读 sentiment_pool_cache/market_stats_cache（封板率/涨停家数/广度）兜底。
+                if not isinstance(raw_pre_feat, dict):
+                    try:
+                        _raw = self.dm.cache.get_pre_feat(ts_code)
+                        raw_pre_feat = _raw if isinstance(_raw, dict) else None
+                    except Exception:
+                        raw_pre_feat = None
+                _rec = _emotion_is_recovering(tags, raw_pre_feat)
+                if not _rec:
+                    _mi = _market_level_inputs_via_dm(getattr(self, 'dm', None))
+                    if _mi.get('limit_up_count') is not None or _mi.get('breadth') is not None:
+                        _t = tags if not isinstance(tags, dict) else dict(tags)
+                        for _k in ('limit_up_count', 'sealing_rate', 'breadth'):
+                            if _mi.get(_k) is not None:
+                                _t[_k] = _mi[_k]
+                        _rec = _emotion_is_recovering(_t, raw_pre_feat)
+            if _phase == 'ice' and _rec:
                 l0['emotion_phase'] = 'ice_recovering'      # 冰点末期（区分标记）
                 l0['emotion_position_cap'] = float(
                     _caps.get('recovery', _caps.get('normal', 0.6)))
+                l0['emotion_recovering_basis'] = (
+                    f"市场级温度回升≥{ICE_RECOVERY_TEMP:.0f}"
+                    f"（个股右侧确认={tags.get('right_side_confirm', '') or '无'}，仅附注）")
             else:
                 l0['emotion_position_cap'] = float(_caps.get(_phase, _caps.get('normal', 0.6)))
         # L0c 持有期（阶段登记于 yaml l0.hold_only_stages → 只可持有、不新开仓）
