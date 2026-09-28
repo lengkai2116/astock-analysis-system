@@ -38,7 +38,9 @@ from app.data.sharding_manager import sharding_manager  # noqa: E402
 from app.opportunity_atlas.status_engine import StatusEngine  # noqa: E402
 
 # 五档分布基线（2026-09-28 全市场 5552 只实测，百分比）+ 容差 ±5pt
-STATE_BASELINE = {'avoid': 58.1, 'wait': 25.9, 'reduce': 10.3, 'enter': 3.8, 'light': 1.9}
+# 495号（B3，2026-09-28）：atr_pct 单位修复后重定基线（light 1.9→2.4 / wait 25.9→26.2 /
+#   reduce 10.3→10.2 / avoid 58.1→57.4——L2 risk reliability 与 L1 strength 不再全市场恒折减）
+STATE_BASELINE = {'avoid': 57.4, 'wait': 26.2, 'reduce': 10.2, 'enter': 3.8, 'light': 2.4}
 STATE_TOL = 5.0
 _POSITIVE_BARS = {'strong_confirm', 'trend_confirm', 'light_confirm'}
 

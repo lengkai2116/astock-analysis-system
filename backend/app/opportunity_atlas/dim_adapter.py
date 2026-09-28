@@ -575,11 +575,12 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
             _dim6_str = min(1.0, _rr / 3.0)
         else:
             _dim6_str = 0.3
-        # atr_pct > 0.8 折减
+        # 495号（B3）：atr_pct 单位修复——dim6 产出百分数（3.98=3.98%），390 方案阈值 0.8 按
+        #   小数语义致全市场恒触发折减；改百分数阈值 8.0（Wiki《ATR止损》高波动 8-12% 下限）。
         _atr_pct = _safe_float(_risk_sd.get('atr_pct'), 0.0)
-        if _atr_pct > 0.8:
+        if _atr_pct > 8.0:
             _dim6_str *= 0.6
-            _dim6_evidence.append(f'atr_pct={_atr_pct:.2f}>0.8→×0.6')
+            _dim6_evidence.append(f'atr_pct={_atr_pct:.2f}>8.0→×0.6')
         # L2/L4/L6 提取
         _dim6_extras['volatility_percentile'] = _safe_float(_risk_sd.get('volatility_percentile'), 0.0)
         _dim6_extras['dist_to_support_pct'] = _safe_float(_risk_sd.get('dist_to_support_pct'), 0.0)

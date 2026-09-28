@@ -106,12 +106,14 @@ def compute_advice(
             position = min(position, risk_budget_pos)
 
     # ── 波动率调整（§8.2 Step 5）──
+    # 495号（B3）：atr_pct 单位修复——dim6 产出百分数（3.98=3.98%），390 方案阈值 0.8 按小数
+    #   语义致全市场恒触发折减；改百分数阈值 8.0（Wiki《ATR止损》高波动 8-12% 下限）。
     _atr_pct = 0.0
     if dim_results:
         _atr_pct = _safe_float(
             (dim_results.get('risk') or {}).get('status_description', {}).get('atr_pct', 0.0)
         )
-    if _atr_pct > 0.8:
+    if _atr_pct > 8.0:
         position *= 0.6
 
     # ── 盈亏比调整（§8.2 Step 6）──
