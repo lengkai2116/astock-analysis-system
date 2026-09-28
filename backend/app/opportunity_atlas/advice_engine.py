@@ -229,25 +229,21 @@ def _weekly_direction(tags: dict, dimensions: dict = None) -> str:
 
     源优先 tags['multi_level']（dim2 多级别联立，490号已定为系统唯一权威多级别方向产出）；
     其次 dimensions['chanlun']['multi_level']（analyze 路径已组装）。返回 'up'/'down'/''。
+
+    494号（R-2）：方向解析收敛至 SSOT `dim_adapter._weekly_dir_from_multi_level`（本模块
+    与 advice_builder 及主链 factor_arbiter 共用同一词表/取值口径）；本函数仅保留本模块特有
+    的取值来源顺序（tags → dimensions）。
     """
+    from app.opportunity_atlas.dim_adapter import _weekly_dir_from_multi_level
     _cands = []
     if tags:
         _cands.append(tags.get('multi_level'))
     if dimensions:
         _cands.append((dimensions.get('chanlun') or {}).get('multi_level'))
     for _ml in _cands:
-        if isinstance(_ml, str) and _ml:
-            try:
-                _ml = _json.loads(_ml)
-            except Exception:
-                continue
-        if not isinstance(_ml, dict):
-            continue
-        _w = str((_ml.get('direction_map') or {}).get('weekly', '')).strip()
-        if _w in ('up', '上升', '多', 'BUY', 'bullish'):
-            return 'up'
-        if _w in ('down', '下降', '空', 'SELL', 'bearish'):
-            return 'down'
+        _w = _weekly_dir_from_multi_level(_ml)
+        if _w:
+            return _w
     return ''
 
 

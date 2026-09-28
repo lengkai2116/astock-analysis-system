@@ -958,8 +958,16 @@ class StatusEngine:
                                      consensus, conflict, 30.0, reliability)
 
         # L5: 多因子仲裁
+        # 494号（R-2/R-10）：周线（背景周期）方向须从 dim_results（dim2 多级别联立）取——
+        #   主链 tags 来自 pre_feat、不含 multi_level（实证命中 0/600），故不能读 tags。
         try:
-            arb_result = factor_arbitrate(consensus, conflict, tags, dims_factor, reliability)
+            from app.opportunity_atlas.dim_adapter import weekly_direction_from_dim_results
+            _weekly_dir = weekly_direction_from_dim_results(dim_results)
+        except Exception:
+            _weekly_dir = ''
+        try:
+            arb_result = factor_arbitrate(consensus, conflict, tags, dims_factor,
+                                          reliability, weekly_direction=_weekly_dir)
         except Exception as e:
             logger.warning(f"v390 L5 factor仲裁失败: {e}")
             arb_result = {'opportunity_state': 'wait', 'final_score': 50.0,

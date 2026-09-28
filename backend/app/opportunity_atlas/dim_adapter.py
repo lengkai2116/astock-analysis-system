@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,46 @@ def _potential_score_int(sd: dict) -> int:
 def _clamp(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
     """将 value 限制在 [lo, hi] 区间"""
     return max(lo, min(hi, value))
+
+
+def _weekly_dir_from_multi_level(multi_level) -> str:
+    """494号（R-2）：多级别联立（direction_map.weekly）→ 背景周期方向 'up'/'down'/''。
+
+    方向词表与取值口径的**唯一 SSOT**——供主链 `weekly_direction_from_dim_results` 与两处
+    `build_operation_advice`（advice_engine / advice_builder）共用；接受 dict 或 JSON 串。
+    """
+    _ml = multi_level
+    if isinstance(_ml, str) and _ml:
+        try:
+            _ml = json.loads(_ml)
+        except Exception:
+            return ''
+    if not isinstance(_ml, dict):
+        return ''
+    _w = str((_ml.get('direction_map') or {}).get('weekly', '')).strip()
+    if _w in ('up', '上升', '多', 'BUY', 'bullish'):
+        return 'up'
+    if _w in ('down', '下降', '空', 'SELL', 'bearish'):
+        return 'down'
+    return ''
+
+
+def weekly_direction_from_dim_results(dim_results: dict) -> str:
+    """494号（R-2/R-10）：取背景周期（周线）方向 — 主链多级别方向 SSOT 读取器。
+
+    源为 dim2 多级别联立（457号 direction_map，与 multi_level_consistency 同源）。
+    **主链（status_engine._aggregate_v390）的 tags 来自 pre_feat、不含 multi_level**（494 R-10
+    实证：multi_level 在 pre_feat JSON 命中 0/600，仅 opportunity_tags_cache 有而主链不消费），
+    故周线方向只能从 dim_results 取，勿改读 tags。
+
+    Returns: 'up'/'down'/''（缺失不产）。
+    """
+    try:
+        _ml = (((dim_results or {}).get('structure') or {})
+               .get('status_description') or {}).get('multi_level') or {}
+        return _weekly_dir_from_multi_level(_ml)
+    except Exception:
+        return ''
 
 
 def multi_level_consistency(dim_results: dict) -> tuple[str, str]:

@@ -66,12 +66,23 @@ def _append_evidence(evidence: list[str], text: str) -> None:
         evidence.append(text)
 
 
+def _daily_is_bullish(dims_factor: dict) -> bool:
+    """494号（R-2）：日线（决策周期）是否看多 —— 结构/量价两个主维方向票为正。"""
+    _df = dims_factor or {}
+    if int((_df.get('structure') or {}).get('direction', 0) or 0) > 0:
+        return True
+    if int((_df.get('vp') or {}).get('direction', 0) or 0) > 0:
+        return True
+    return False
+
+
 def arbitrate(
     consensus: dict,
     conflict: dict,
     tags: dict,
     dims_factor: dict,
     reliability: dict,
+    weekly_direction: str = '',
 ) -> dict:
     """L5 多因子仲裁（390号方案 §7.3）
 
@@ -87,6 +98,9 @@ def arbitrate(
               ... 其他维度
             }
         reliability: 可靠性指标（预留，当前未使用）
+        weekly_direction: 背景周期（周线）方向 'up'/'down'/''；494号（R-2）大级别否决用。
+            主链 tags 无 multi_level（R-10），须由调用方经
+            `dim_adapter.weekly_direction_from_dim_results(dim_results)` 取自 dim2 后传入。
 
     Returns:
         {
@@ -203,6 +217,19 @@ def arbitrate(
 
     _append_evidence(state_evidence,
                      f'状态映射: final_score={final_score:.1f} → {opportunity_state}')
+
+    # ════════════════════════════════════════════════════════════════
+    # Step 7: 大级别否决（494号 R-2；493号 P2-f 主链补正）
+    #   知识库《分层决策框架》：主决策周期唯一、他周期不能否决；周线（背景周期）明确
+    #   向下而日线（决策周期）看多 → 矛盾，丢弃买点、降 wait（不判 avoid/空）。
+    #   与两处 build_operation_advice 建议卡同判据、同语义；周线方向由调用方传入（R-10）。
+    # ════════════════════════════════════════════════════════════════
+    if str(weekly_direction or '').strip().lower() == 'down' \
+            and opportunity_state in ('enter', 'light') and _daily_is_bullish(dims_factor):
+        opportunity_state = STATE_WAIT
+        _append_evidence(state_evidence,
+                         '大级别否决：周线下行与日线买点矛盾，'
+                         '按《分层决策框架》丢弃买点 → wait')
 
     # 收集非致命冲突描述（冲突暴露，供前端展示）
     warn_list = conflict.get('warn_for_semantic', []) or conflict.get('warn', [])
