@@ -48,12 +48,14 @@ def _build_sig_row(ts_code, trade_date, dim_results: dict):
 
 def _setup_tmp_sharding(tmp_path, trade_date='2026-09-15'):
     """建隔离 ShardingManager + 分库表，patch 全局单例"""
-    from app.data import sharding_manager as sm_mod
     from app.data.sharding_manager import ShardingManager
 
     tmp_sm = ShardingManager(tmp_path)
     (tmp_path / 'duckdb').mkdir(exist_ok=True)
-    sm_mod.sharding_manager = tmp_sm  # 直接覆盖模块单例（_out_transmit 局部 import 此)
+    # 495-B2：不再在此直接覆盖模块单例（原 `sm_mod.sharding_manager = tmp_sm` 不还原，
+    #   污染后续所有读真实 data/ 库的测试——函数内 `from ... import sharding_manager`
+    #   在 test_436 之后拿到 tmp 实例 → pre_feat_cache 等查询 no such table）。
+    #   改由调用方 monkeypatch.setattr 注入（测试结束自动还原）。
 
     # daily_cache（market_cache.db）——_out_transmit 用 MAX(trade_date) 定位交易日
     mc = tmp_sm.get_connection('market_cache.db')
@@ -116,6 +118,8 @@ def test_out_transmit_flows_seven_dim_to_one_liner(monkeypatch, tmp_path):
     dr = _mk_dim_results()
     row = _build_sig_row('000001.SZ', '2026-09-15', dr)
     tmp_sm = _setup_tmp_sharding(tmp_path)
+    # 495-B2：单例经 monkeypatch 注入（自动还原），不再直接覆盖模块属性
+    monkeypatch.setattr('app.data.sharding_manager.sharding_manager', tmp_sm)
     sc = tmp_sm.get_connection('snapshot_cache.db')
     # 落 strategy_signal_detail（7 键）
     sc.execute("INSERT OR REPLACE INTO strategy_signal_detail VALUES (?,?,?,?,datetime('now','localtime'),?,?)",
@@ -127,6 +131,7 @@ def test_out_transmit_flows_seven_dim_to_one_liner(monkeypatch, tmp_path):
 
     # 隔离 ECM：避免 get_ecm_instance 指向真实库
     import sqlite3
+
     from app.data.enhanced_cache_manager import EnhancedCacheManager
     fake_ecm = EnhancedCacheManager.__new__(EnhancedCacheManager)
     fake_ecm.conn = sqlite3.connect(str(tmp_path / 'stock_cache.db'))
@@ -135,7 +140,9 @@ def test_out_transmit_flows_seven_dim_to_one_liner(monkeypatch, tmp_path):
     fake_ecm.conn.commit()
 
     # import data_daemon 前确保 DATA_DIR 指向 tmp（模块顶部 setdefault 才不覆盖）
-    os.environ['DATA_DIR'] = str(tmp_path)
+    # 495-B2：改用 monkeypatch.setenv 自动恢复——原 os.environ 直赋不还原，
+    # 污染后续所有读真实 data/ 库的测试（全量下 t8/t14/t25/api_routes/b2 均被波及）。
+    monkeypatch.setenv('DATA_DIR', str(tmp_path))
     import data_daemon as dd
     monkeypatch.setattr(dd, '_ecm', fake_ecm)
 
