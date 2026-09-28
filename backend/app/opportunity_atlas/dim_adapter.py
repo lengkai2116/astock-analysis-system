@@ -131,6 +131,66 @@ def _safe_float(val, default: float = 0.0) -> float:
         return default
 
 
+# 494号（R-3）：止损/分批止盈参数 —— 全仓唯一 SSOT（advice_engine / advice_builder 共用）
+ATR_MULT = 2.0            # 《ATR止损》：止损价 = 入场价 − 2 × N值（N=20日ATR均值）
+TARGET_TIERS = [(0.5, 2.0), (0.3, 3.0), (0.2, None)]  # 《分批止盈法》50%@2R / 30%@3R / 20%移动止盈
+RR_GATE = 2.0             # 《R-R筛选规则》：R:R < 2:1 直接放弃
+
+
+def _normalize_risk_sd(risk_sd: dict) -> dict:
+    """494号（R-3）：统一止损/止盈取数口径（两份建议卡共用唯一源）。
+
+    优先 `dim_results.risk.status_description`（dim6 权威产出，全市场 900/900 覆盖）：
+      `support_price` / `rr_value` / `atr_pct`；`support_price`/`rr_value` 与几何
+      `risk_reward`/`support_price` 经 461-11 已同源同值（实测 400/400 完全一致），
+      `atr_pct` 为结构外新增。
+    """
+    rs = risk_sd or {}
+    return {
+        'support_price': _safe_float(rs.get('support_price'), 0.0) or None,
+        'rr_value': _safe_float(rs.get('rr_value'), 0.0) or None,
+        'atr_pct': _safe_float(rs.get('atr_pct'), 0.0) or None,
+        'resistance_price': _safe_float(rs.get('resistance_price'), 0.0) or None,
+    }
+
+
+def calc_stop_and_tiers(entry_price, risk_sd: dict = None, geo: dict = None,
+                        atr_pct_fallback=None) -> tuple:
+    """494号（R-3）：结构止损 vs ATR 止损取较高 + 50/30/20 分批止盈 —— **唯一实现**。
+
+    知识库《结构止损》「结构止损与 ATR 止损同时可用时取较高」/《ATR止损》/
+    《分批止盈法》50@2R / 30@3R / 20@移动止盈。
+
+    Returns: (stop_loss, stop_loss_basis, profit_tiers) —— 均可能为 None。
+    """
+    _e = _safe_float(entry_price, 0.0)
+    if _e <= 0:
+        return None, None, None
+    _n = _normalize_risk_sd(risk_sd)
+    _g = geo or {}
+    # 结构止损：dim6 优先，几何回退（461-11 同值）
+    struct_stop = _n['support_price'] or _safe_float(_g.get('support_price'), 0.0) or None
+    # ATR 止损：dim6 atr_pct 优先，tags/几何回退
+    _atr = _n['atr_pct'] if _n['atr_pct'] is not None else _safe_float(atr_pct_fallback, 0.0)
+    atr_stop = (_e - ATR_MULT * _e * (_atr / 100.0)) if _atr and _atr > 0 else None
+    _cands = [s for s in (struct_stop, atr_stop) if s and 0 < s < _e]
+    if not _cands:
+        return None, None, None
+    final_stop = round(max(_cands), 2)
+    _basis = ('结构止损与ATR止损取较高' if len(_cands) == 2
+              else ('结构止损' if struct_stop in _cands else 'ATR止损'))
+    tiers = None
+    r = _e - final_stop
+    _rr = _n['rr_value'] or _safe_float(_g.get('risk_reward'), 0.0)
+    if r > 0 and _rr and _rr >= RR_GATE:
+        tiers = [{'weight': w, 'target_r': m,
+                  'price': round(_e + m * r, 2) if m is not None else None,
+                  'action': (f'卖出{int(w * 100)}%仓位' if m is not None
+                             else '剩余20%用移动止盈跟踪')}
+                 for w, m in TARGET_TIERS]
+    return final_stop, _basis, tiers
+
+
 def _potential_score_int(sd: dict) -> int:
     """从 dim7 status_description 提取数字潜力评分
 

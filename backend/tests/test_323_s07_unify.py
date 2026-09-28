@@ -54,9 +54,17 @@ def test_diagnose_operation_advice_unified_format():
 
 
 def test_stop_loss_consistent_between_engines():
-    """双输出止损一致（S0.7 核心：消除 -15% 止损冲突）"""
+    """双输出止损一致（S0.7 核心：消除 -15% 止损冲突）
+
+    494号（R-3）：两引擎取数源统一为 dim6 `risk.status_description`（dim_results）；
+    实际调用方（cross_validate / strategy_analyze）均传入 dim_results——本用例据此
+    对两引擎传同一 dim_results 做同源比对（原用例未传 dim_results，属 494 前的旧口径）。
+    """
     from app.data import DataManager
-    from app.opportunity_atlas.cross_validate import L4CrossValidator
+    from app.opportunity_atlas.cross_validate import (
+        L4CrossValidator,
+        _load_dim_engine_results,
+    )
 
     dm = DataManager()
     cv = L4CrossValidator(dm)
@@ -66,13 +74,15 @@ def test_stop_loss_consistent_between_engines():
     # 新格式 executable.exit_rules 的止损价
     exit_rules = oa.get('executable', {}).get('exit_rules', [])
     assert exit_rules, "executable 应含 exit_rules（止损）"
-    # 与 advice_builder 独立计算一致（同源）
+    # 与 advice_builder 独立计算一致（494 后：同一 dim6 取数源）
     from app.opportunity_atlas.advice_builder import build_operation_advice
     df = dm.get_cached_daily_data('000426.SZ')
     dims = {'factor': {'trend': 'neutral'}, 'chanlun': {'direction': '上升'},
             'volume_price': {'direction': 'up'}, 'chip': {'direction': 'neutral'},
             'emotion': {'direction': 'bullish'}}
-    advice = build_operation_advice('000426.SZ', dims, [], df, tags=tags)
+    _dim_results = _load_dim_engine_results(dm, '000426.SZ')
+    advice = build_operation_advice('000426.SZ', dims, [], df, tags=tags,
+                                    dim_results=_dim_results)
     if advice['executable']['exit_rules'] and exit_rules:
         assert exit_rules == advice['executable']['exit_rules'], \
             f"双输出止损应一致: {exit_rules} vs {advice['executable']['exit_rules']}"

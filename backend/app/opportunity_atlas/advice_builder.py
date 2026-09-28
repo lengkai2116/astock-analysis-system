@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from app.opportunity_atlas.arbiter import arbitrate
+from app.opportunity_atlas.dim_adapter import calc_stop_and_tiers as _ssot_stop_and_tiers
 
 _STATE_CN = {'enter': '可入场', 'light': '可轻仓', 'wait': '等待',
              'reduce': '建议减仓', 'avoid': '回避'}
@@ -32,26 +33,13 @@ def _safe_float(val, default: float = 0.0) -> float:
 def _stop_and_tiers(entry: float, struct_stop, rr, atr_pct: float) -> tuple:
     """493号 P2-e：结构止损 vs ATR止损取较高 + 50/30/20 分批止盈。
 
+    494号（R-3）：实现收敛至 SSOT `dim_adapter.calc_stop_and_tiers`（与 advice_engine
+    共用唯一取数口径与唯一算法）；本包装保留旧签名（geo 三元 + atr_pct）供既有调用/测试。
     Returns: (stop_loss_price|None, profit_tiers|None)
     """
-    if not entry or entry <= 0:
-        return None, None
-    entry = float(entry)
-    _ss = _safe_float(struct_stop, 0.0) or None
-    _as = (entry - ATR_MULT * entry * (atr_pct / 100.0)) if atr_pct > 0 else None
-    _cands = [s for s in (_ss, _as) if s and 0 < s < entry]
-    if not _cands:
-        return None, None
-    final_stop = max(_cands)
-    tiers = None
-    r = entry - final_stop
-    if r > 0 and _safe_float(rr, 0.0) >= RR_GATE:
-        tiers = [{'weight': w, 'target_r': m,
-                  'price': round(entry + m * r, 2) if m is not None else None,
-                  'action': (f'卖出{int(w * 100)}%仓位' if m is not None
-                             else '剩余20%用移动止盈跟踪')}
-                 for w, m in TARGET_TIERS]
-    return round(final_stop, 2), tiers
+    _stop, _basis, _tiers = _ssot_stop_and_tiers(
+        entry, {'support_price': struct_stop, 'rr_value': rr, 'atr_pct': atr_pct})
+    return _stop, _tiers
 
 
 def _dir_is_bullish(v) -> bool:
@@ -150,7 +138,8 @@ def _geometric(df) -> dict:
 
 def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
                            kronos: dict = None, tags: dict = None,
-                           consensus: dict = None, dirs: list = None) -> dict:
+                           consensus: dict = None, dirs: list = None,
+                           dim_results: dict = None) -> dict:
     """构建 operation_advice（analyze 响应时调用，毫秒级）
 
     Args:
@@ -162,7 +151,11 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         tags: （2026-08-09 统一两路径）机会图谱真实标签字典（opportunity_tags_cache），
               含 right_side_confirm/opportunity_state 等；优先采信真实标签，
               缺失时才用五维近似——保证个股页与机会图谱弹窗结论同源。
+        dim_results: （494号 R-3）维度引擎结果 dict（dim6 risk.status_description）；
+              提供时止损/止盈取数优先 dim6（结构/ATR/rr），缺失回退几何。
     """
+    # 494号（R-3）：统一止损/止盈取数源（dim6 优先，几何回退）
+    _risk_sd = ((dim_results or {}).get('risk') or {}).get('status_description') or {}
     # 结论层：优先真实标签（与机会图谱 321 仲裁同源），缺失才用五维近似
     real_state = (tags or {}).get('opportunity_state')
     real_rsc = (tags or {}).get('right_side_confirm')
@@ -411,9 +404,9 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         'position': {'max_pct': max_pct, 'initial_pct': 0.3 if max_pct > 0 else 0.0},
     }
     # 493号 P2-e：止损取较高（结构/ATR）+ 50/30/20 分批止盈（知识库《结构止损》/《分批止盈法》）
-    _stop_loss, _tiers = _stop_and_tiers(
-        price, support, geo.get('risk_reward'),
-        _safe_float((tags or {}).get('atr_pct'), 0.0))
+    # 494号（R-3）：取数源统一（dim6 risk_sd 优先，几何回退）+ 唯一实现 SSOT
+    _stop_loss, _stop_basis, _tiers = _ssot_stop_and_tiers(
+        price, _risk_sd, geo, _safe_float((tags or {}).get('atr_pct'), 0.0))
     if _stop_loss:
         executable['exit_rules'] = [{'trigger': f'close < {_stop_loss}',
                                      'action': 'SELL', 'size_pct': 100}]
@@ -433,6 +426,9 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         consensus_rate=consensus['consensus_rate']))
     # action 快照须在降级后（低置信度降级会改 executable.position.max_pct）
     result['action'] = {'max_position_ratio': executable['position']['max_pct']}
+    # 494号（R-3）：三键进 result（与 advice_engine 图谱路径同结构）
+    result['stop_loss_price'] = _stop_loss
+    result['stop_loss_basis'] = _stop_basis
     result['profit_tiers'] = _tiers   # 493号 P2-e：50/30/20 分批止盈（无 R:R 门禁通过时为 None）
     if kronos and kronos.get('direction'):
         result['kronos_note'] = '🔬 Kronos AI 模型预测，仅供参考，非实证结论'

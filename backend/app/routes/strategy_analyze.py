@@ -817,6 +817,8 @@ def strategy_analyze():
                     'summary_text': _pr.get('summary_text'),
                     'one_liner_detail': _pr.get('one_liner_detail'),
                     'advice_params': _pr.get('advice_params'),
+                    # 494号（R-3）：dim6 risk.status_description（止损/ATR/盈亏比）取数源
+                    'dim_engine_results': _pr.get('dim_engine_results'),
                 }
         except Exception:
             _status_row = None
@@ -876,9 +878,18 @@ def strategy_analyze():
                 logging.getLogger(__name__).warning(f'L1 九维共识获取失败，回退五维: {_e}')
                 _l1_consensus = None
                 _l1_dirs = None
+            # 494号（R-3）：dim_engine_results（dim6 risk.status_description）统一止损/止盈取数源
+            _dim_engine_for_advice = None
+            try:
+                _der = (_status_row or {}).get('dim_engine_results')
+                if _der:
+                    _dim_engine_for_advice = _json_l1.loads(_der) if isinstance(_der, str) else _der
+            except Exception:
+                _dim_engine_for_advice = None
             response_advice = build_operation_advice(ts_code, dimensions, signals, _df,
                                                      kronos=_kronos_in, tags=_tags,
-                                                     consensus=_l1_consensus, dirs=_l1_dirs)
+                                                     consensus=_l1_consensus, dirs=_l1_dirs,
+                                                     dim_results=_dim_engine_for_advice)
             # ── 336号 S1.4：顶层字段结构对齐（与 diagnose 同构）──
             # diagnose 侧在 operation_advice 上补旧字段（action/label/max_position_ratio/
             # entry_plan/stop_loss/target_price）供旧消费方过渡；analyze 侧补齐同字段，

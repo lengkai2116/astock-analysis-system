@@ -65,6 +65,26 @@ def _convert_dim_engine_to_legacy(der: dict) -> dict:
     return dims if dims else None
 
 
+def _load_dim_engine_results(dm, ts_code: str) -> dict | None:
+    """494号（R-3）：读取 dim_engine_results（status_snapshot，分库路由）。
+
+    供 `advice_engine.build_operation_advice` 取 dim6 `risk.status_description`
+    （support_price/atr_pct/rr_value），统一止损/止盈取数口径。
+    """
+    try:
+        row_df = dm.cache._query_shard(
+            'status_snapshot',
+            "SELECT dim_engine_results FROM status_snapshot WHERE ts_code=?", [ts_code])
+        if row_df is not None and not row_df.empty:
+            val = row_df.iloc[0].get('dim_engine_results')
+            if val:
+                import json
+                return json.loads(val)
+    except Exception:
+        pass
+    return None
+
+
 def _extract_real_dimensions(dm, ts_code: str) -> dict | None:
     """330号改进3（2026-08-13）：从 strategy_signal_detail（P2 预计算）提取真实五维方向
 
@@ -591,7 +611,8 @@ class L4CrossValidator(DataAwareMixin):
             except Exception:
                 pass
             unified = build_operation_advice(ts_code, _dims, [], _df, tags=tags,
-                                              consensus=_l1_consensus, dirs=_l1_dirs)
+                                              consensus=_l1_consensus, dirs=_l1_dirs,
+                                              dim_results=_load_dim_engine_results(_dm, ts_code))
             # 保留旧字段兼容（action/label/max_position_ratio/entry_plan/
             # stop_loss/target_price），供机会库等旧消费方过渡
             _ex = unified['executable']

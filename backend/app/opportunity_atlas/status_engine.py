@@ -1261,7 +1261,10 @@ class StatusEngine:
                                      'risk_reward_ratio', 'invalidation_conditions',
                                      # 492号（K4/K1）：L6 已产出的入场/目标区间与 2% 风险预算
                                      #   仓位，原白名单漏收 → advice_params 落库缺失
-                                     'entry_zone', 'target_zone', 'risk_budget_position')})
+                                     'entry_zone', 'target_zone', 'risk_budget_position',
+                                     # 494号（R-4）：L6 已产出的止损来源与 50/30/20 分批止盈
+                                     #   原白名单漏收 → advice_params 落库缺失
+                                     'profit_tiers', 'stop_loss_basis')})
                 result['advice_params'] = json.dumps(_ap, ensure_ascii=False, default=str)
         return result
 

@@ -11,6 +11,9 @@ import json as _json
 import logging
 from typing import Any
 
+# 494号（R-3）：止损/止盈唯一实现 SSOT（dim_adapter.calc_stop_and_tiers）
+from app.opportunity_atlas.dim_adapter import calc_stop_and_tiers as _ssot_stop_and_tiers
+
 logger = logging.getLogger(__name__)
 
 # 493号（P2-b）：盈亏比硬性门禁阈值（知识库《R-R筛选规则》「R:R < 2:1 直接放弃」）。
@@ -29,52 +32,24 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
 
 
 # 493号（P2-e）：止损/分批止盈参数（依据知识库《结构止损》/《ATR止损》/《分批止盈法》）
-ATR_MULT = 2.0            # 《ATR止损》：止损价 = 入场价 − 2 × N值（N=20日ATR均值）
-TARGET_TIERS = [(0.5, 2.0), (0.3, 3.0), (0.2, None)]  # 《分批止盈法》50%@2R / 30%@3R / 20%移动止盈
+# 494号（R-3）：常量为 `dim_adapter` 派生的兼容别名（值不变），实例化口径见 _apply_stop_and_tiers
+ATR_MULT = 2.0
+TARGET_TIERS = [(0.5, 2.0), (0.3, 3.0), (0.2, None)]  # 50%@2R / 30%@3R / 20%移动止盈
 
 
 def _apply_stop_and_tiers(advice: dict, entry_price: float, risk_sd: dict,
                           dim_results: dict) -> None:
     """493号 P2-e：结构止损 vs ATR止损取较高 + 50/30/20 分批止盈（原地写 advice）。
 
-    - 止损（知识库《结构止损》：「结构止损与 ATR 止损同时可用时，取两者中较高值」）：
-        结构止损 = risk_sd.support_price（已由 dim6 产出）；ATR 止损 = 入场价 − 2×ATR（ATR=atr_pct%×价）。
-        两者可用时取较高（更紧、降低风险暴露）；仅 ATR 可用（无结构位或结构位高于入场价）时用 ATR。
-    - 分批止盈（《分批止盈法》50/30/20）：R = 入场价 − 最终止损；目标 Tn = 入场价 + nR。
-        仅当 风险回报比 ≥ 2:1（与 RR_GATE 一致）时给出分批计划。
+    494号（R-3）：实现收敛至 SSOT `dim_adapter.calc_stop_and_tiers`（与 advice_builder
+    共用唯一取数口径与唯一算法）。
     """
-    if not entry_price or entry_price <= 0:
-        return
-    entry = float(entry_price)
-    struct_stop = _safe_float(risk_sd.get('support_price'), 0.0) or None
-    atr_pct = _safe_float(risk_sd.get('atr_pct'), 0.0)
-    atr_stop = None
-    if atr_pct > 0:
-        atr_stop = entry - ATR_MULT * entry * (atr_pct / 100.0)
-    _cands = [s for s in (struct_stop, atr_stop) if s and 0 < s < entry]
-    if not _cands:
-        return
-    final_stop = max(_cands)
-    advice['stop_loss_price'] = round(final_stop, 2)
-    advice['stop_loss_basis'] = ('结构止损与ATR止损取较高' if len(_cands) == 2
-                                 else ('结构止损' if struct_stop in _cands else 'ATR止损'))
-    # 分批止盈：R = 入场 − 止损；目标 = 入场 + nR
-    r = entry - final_stop
-    if r <= 0:
-        return
-    _rr = _safe_float(risk_sd.get('rr_value'), 0.0)
-    if _rr < RR_GATE:
-        return
-    tiers = []
-    for weight, mult in TARGET_TIERS:
-        tiers.append({
-            'weight': weight,
-            'target_r': mult,
-            'price': round(entry + mult * r, 2) if mult is not None else None,
-            'action': (f'卖出{int(weight * 100)}%仓位' if mult is not None
-                       else '剩余20%用移动止盈跟踪'),
-        })
-    advice['profit_tiers'] = tiers
+    _stop, _basis, _tiers = _ssot_stop_and_tiers(entry_price, risk_sd)
+    if _stop:
+        advice['stop_loss_price'] = _stop
+        advice['stop_loss_basis'] = _basis
+    if _tiers:
+        advice['profit_tiers'] = _tiers
 
 
 def compute_advice(
@@ -535,7 +510,8 @@ def _build_advice_card_fields(state, tags, dims, geo, support, signal_light,
 
 def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
                            kronos: dict = None, tags: dict = None,
-                           consensus: dict = None, dirs: list = None) -> dict:
+                           consensus: dict = None, dirs: list = None,
+                           dim_results: dict = None) -> dict:
     """构建 operation_advice（analyze 响应时调用，毫秒级）
 
     Args:
@@ -547,7 +523,11 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         tags: （2026-08-09 统一两路径）机会图谱真实标签字典（opportunity_tags_cache），
               含 right_side_confirm/opportunity_state 等；优先采信真实标签，
               缺失时才用五维近似——保证个股页与机会图谱弹窗结论同源。
+        dim_results: （494号 R-3）维度引擎结果 dict（dim6 risk.status_description）；
+              提供时止损/止盈取数优先 dim6（结构/ATR/rr），缺失回退几何。
     """
+    # 494号（R-3）：统一止损/止盈取数源（dim6 优先，几何回退）
+    _risk_sd = ((dim_results or {}).get('risk') or {}).get('status_description') or {}
     # 结论层：优先真实标签（与机会图谱 321 仲裁同源），缺失才用五维近似
     real_state = (tags or {}).get('opportunity_state')
     real_rsc = (tags or {}).get('right_side_confirm')
@@ -774,6 +754,14 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
                        if support else []),
         'position': {'max_pct': max_pct, 'initial_pct': 0.3 if max_pct > 0 else 0.0},
     }
+    # 494号（R-3）：图谱路径 result 补 stop_loss_price/stop_loss_basis/profit_tiers（此前仅
+    #   建议卡内部有、未进 result）；并让 exit_rules 与「取较高止损」同源（结构/ATR 择高）。
+    _stop_loss, _stop_basis, _tiers = _ssot_stop_and_tiers(
+        price, _risk_sd, geo,
+        _safe_float((tags or {}).get('atr_pct'), 0.0))
+    if _stop_loss:
+        executable['exit_rules'] = [{'trigger': f'close < {_stop_loss}',
+                                     'action': 'SELL', 'size_pct': 100}]
 
     _state_cn = _STATE_CN.get(state, state)
     result = {
@@ -786,6 +774,10 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         state, tags, dimensions, geo, support, signal_light, executable, df, dims,
         consensus_rate=consensus['consensus_rate']))
     result['action'] = {'max_position_ratio': executable['position']['max_pct']}
+    # 494号（R-3）：三键进 result（图谱与个股页同结构）
+    result['stop_loss_price'] = _stop_loss
+    result['stop_loss_basis'] = _stop_basis
+    result['profit_tiers'] = _tiers
     if kronos and kronos.get('direction'):
         result['kronos_note'] = '🔬 Kronos AI 模型预测，仅供参考，非实证结论'
     return result
