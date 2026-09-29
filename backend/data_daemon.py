@@ -4337,31 +4337,46 @@ def _precompute_raw_features(codes, target_date: str | None = None):
 
             return features, trade_date
 
-        for code in codes:
-            # 428 P1-2 动作②：进度日志（每 500 只）
-            _progress_n += 1
-            if _progress_n % 500 == 0:
-                logger.info(f"  [RAW-2] 进度: {_progress_n}/{len(codes)} (succeeded={succeeded}, failed={failed}, {time.time()-t0:.1f}s)")
-            try:
-                _res = _run_with_timeout(lambda: _raw2_one(code), timeout_sec=60.0, desc=f"RAW-2 特征 {code}")
-                if _res is None:
-                    failed += 1  # 428 P1-2 动作③：单股超时或特征计算异常
-                    continue
-                features, trade_date = _res
-                if not features:
-                    continue  # 数据不足静默跳过（不计数 failed）
-                # 写入 pre_feat_cache
-                if features:
-                    _ecm.cache_pre_feat(code, trade_date, features)
-                    succeeded += 1
-                    commit_count += 1
-                    if commit_count >= BATCH_SIZE:
-                        _ecm.conn.commit()
-                        commit_count = 0
+        # 2026-09-29 效率修复：RAW-2 单线程顺序 → 线程池并行（5557 只 ×~0.34s/只 ≈ 31min →
+        # 4 并发 ≈ 8min）。计算在 worker 线程（_run_with_timeout 超时保护不变），
+        # 写库（cache_pre_feat / commit）保持在主线程（SQLite 非线程安全写，428 P1-2 动作③）。
+        def _run_raw2_one(code):
+            return _run_with_timeout(lambda: _raw2_one(code), timeout_sec=60.0,
+                                     desc=f"RAW-2 特征 {code}")
 
-            except Exception:
-                failed += 1
-                continue
+        _RAW2_WORKERS = 4
+        import concurrent.futures as _cf
+        _raw2_pool = _cf.ThreadPoolExecutor(max_workers=_RAW2_WORKERS)
+        _fut_map = {}
+        try:
+            for code in codes:
+                _fut_map[_raw2_pool.submit(_run_raw2_one, code)] = code
+            for fut in _cf.as_completed(_fut_map):
+                code = _fut_map[fut]
+                # 428 P1-2 动作②：进度日志（每 500 只，按完成顺序）
+                _progress_n += 1
+                if _progress_n % 500 == 0:
+                    logger.info(f"  [RAW-2] 进度: {_progress_n}/{len(codes)} (succeeded={succeeded}, failed={failed}, {time.time()-t0:.1f}s)")
+                try:
+                    _res = fut.result()
+                    if _res is None:
+                        failed += 1  # 428 P1-2 动作③：单股超时或特征计算异常
+                        continue
+                    features, trade_date = _res
+                    if not features:
+                        continue  # 数据不足静默跳过（不计数 failed）
+                    # 写入 pre_feat_cache（主线程）
+                    if features:
+                        _ecm.cache_pre_feat(code, trade_date, features)
+                        succeeded += 1
+                        commit_count += 1
+                        if commit_count >= BATCH_SIZE:
+                            _ecm.conn.commit()
+                            commit_count = 0
+                except Exception:
+                    failed += 1
+        finally:
+            _raw2_pool.shutdown(wait=True)
         if commit_count > 0:
             _ecm.conn.commit()
 
@@ -7570,11 +7585,59 @@ def _maybe_monthly_ic_recalc(data_dir: str) -> None:
         logger.warning(f"月度 IC 重估异常: {e}")
 
 
+def _wait_db_unlock(data_dir: str, max_wait: float = 300.0) -> None:
+    """启动前置：等待核心 SQLite 分库写锁释放（2026-09-29 问题5 效率修复）
+
+    研发期反复停 daemon/跑测试，残留进程可能短暂持有写锁。ECM 连接 busy_timeout=30s，
+    锁定时每次 DDL 迁移失败要干等 30s，启动被『database is locked』风暴拖慢 10 分钟+
+    （09-28 实证：18:00~18:10 循环）。此处用独立短超时连接探测核心分库写锁，
+    锁定时每 5s 重试直至释放或超时，避免迁移在锁下空转。
+    """
+    import sqlite3 as _sqlite3
+    _targets = ['stock_cache.db', 'market_cache.db', 'compute_cache.db',
+                'snapshot_cache.db', 'financial_cache.db', 'history_cache.db']
+    _waited = 0.0
+    while True:
+        _locked = []
+        for _db in _targets:
+            _p = os.path.join(data_dir, 'duckdb', _db)
+            if not os.path.exists(_p):
+                continue
+            try:
+                _c = _sqlite3.connect(_p, timeout=2.0)
+                try:
+                    _c.execute('BEGIN IMMEDIATE')
+                    _c.execute('ROLLBACK')
+                finally:
+                    _c.close()
+            except _sqlite3.OperationalError:
+                _locked.append(_db)
+        if not _locked:
+            if _waited > 0:
+                logger.info(f"数据库写锁已释放（等待 {_waited:.0f}s）")
+            return
+        if _waited >= max_wait:
+            logger.warning(f"等待数据库写锁超时（{max_wait:.0f}s）: {_locked} 仍被锁，继续启动（后续重试机制兜底）")
+            return
+        if _waited == 0:
+            logger.warning(f"检测到数据库写锁: {_locked}，等待释放（残留 daemon/测试进程？）...")
+        time.sleep(5)
+        _waited += 5.0
+
+
 def main():
     global _ecm, _running, _retention_checked
 
     logger.info("data_daemon 启动")
     logger.info(f"DATA_DIR={os.environ.get('DATA_DIR')}")
+
+    # 2026-09-29 问题5：启动前等待核心分库写锁释放（残留进程/测试持锁时避免迁移空转）
+    try:
+        _boot_data_dir = os.environ.get('DATA_DIR') or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), '..', 'data')
+        _wait_db_unlock(_boot_data_dir)
+    except Exception as e:
+        logger.warning(f"数据库锁等待异常: {e}")
 
     # 初始化 ECM——统一走全局单例（get_ecm_instance）
     # 修复 2026-08-15：原 main 直接构造 EnhancedCacheManager() 与采集器/其他模块的

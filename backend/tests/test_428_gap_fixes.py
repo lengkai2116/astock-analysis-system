@@ -271,3 +271,57 @@ def test_get_fina_indicator_extended_no_date_params():
     out = tp_inst.get_fina_indicator_extended('000001.SZ')
     assert len(out) == 1
     assert 'start_date' not in seen and 'end_date' not in seen
+
+
+# ── 2026-09-29 效率修复：RAW-2 并行化 + 启动锁等待（问题4/5）──────
+
+def test_raw2_uses_thread_pool():
+    """RAW-2 循环改为线程池并行提交（问题4：5557 只单线程 → 4 并发）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._precompute_raw_features)
+    assert 'ThreadPoolExecutor' in src and 'as_completed' in src, 'RAW-2 应并行提交'
+    assert 'shutdown(wait=True)' in src, '并行池应显式关闭'
+    assert '_RAW2_WORKERS' in src, '应有并发度常量'
+    # 写库仍位于主线程收集循环（SQLite 非线程安全写约束保持，428 P1-2 动作③）
+    assert '_ecm.cache_pre_feat' in src
+    # 单股超时保护形态保持（_run_with_timeout 包裹 _raw2_one）
+    assert '_run_with_timeout(lambda: _raw2_one(code)' in src
+
+
+def test_wait_db_unlock_immediate(tmp_path):
+    """无锁（目录无库文件）时 _wait_db_unlock 立即返回"""
+    import data_daemon as dd
+    import time
+    t0 = time.time()
+    dd._wait_db_unlock(str(tmp_path), max_wait=5.0)
+    assert time.time() - t0 < 3.0, '无锁应立即返回'
+
+
+def test_wait_db_unlock_waits_until_release(tmp_path):
+    """核心分库被写锁持有时等待至释放（独立连接 BEGIN IMMEDIATE 探测）"""
+    import data_daemon as dd
+    import sqlite3
+    import threading
+    import time
+    db_dir = tmp_path / 'duckdb'
+    db_dir.mkdir()
+    path = str(db_dir / 'stock_cache.db')
+    conn = sqlite3.connect(path)
+    conn.execute('PRAGMA journal_mode=WAL')
+    lock_conn = sqlite3.connect(path, timeout=0.1, check_same_thread=False)
+    lock_conn.execute('BEGIN IMMEDIATE')
+
+    def _release():
+        time.sleep(1.5)
+        lock_conn.execute('ROLLBACK')
+        lock_conn.close()
+
+    t = threading.Thread(target=_release)
+    t.start()
+    t0 = time.time()
+    dd._wait_db_unlock(str(tmp_path), max_wait=15.0)
+    elapsed = time.time() - t0
+    assert 1.0 <= elapsed < 12.0, f'应等待锁释放后返回，实际 {elapsed:.1f}s'
+    t.join()
+    conn.close()
