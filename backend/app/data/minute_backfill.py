@@ -405,24 +405,42 @@ def aggregate_minute(ts_codes: List[str],
 
 def aggregate_1min_to_60min(ts_codes: List[str],
                             ecm: Optional[EnhancedCacheManager] = None,
-                            target_freq: str = '60min') -> int:
+                            target_freq: str = '60min',
+                            days_back: int = 5) -> int:
     """483号 ②：把 minute_kline_cache 的 1min 本地聚合为目标频率（默认 60min）落库。
 
     全市场维度、**零 API**（CPU-only）、幂等（PK = ts_code+trade_date+trade_time+freq，
     INSERT OR REPLACE）。原「5/15/30/60min 聚合」只在 run_backfill_all（自选股补采）内，
     watchlist 实测仅 1 只 → 全市场 60min 无生产链路，dim2 457 多周期级联退化为 W+D。
 
+    498号#41：按最近 `days_back` 个交易日**窗口**读 1min（原读全量历史 → O(history) 内存/
+    耗时随历史线性增长）。默认 5 日窗口足够覆盖 60min 日终聚合的日更需求。
+
     Returns:
         成功聚合写库的股票数
     """
     if ecm is None:
         ecm = get_ecm_instance()
+    # 最近 N 个 1min 交易日（升序），限定读取窗口（内存可控）
+    try:
+        _td_df = ecm._query_shard(
+            'minute_kline_cache',
+            "SELECT DISTINCT trade_date FROM minute_kline_cache "
+            "WHERE freq='1min' ORDER BY trade_date DESC LIMIT ?", [days_back])
+        trade_dates = set(_td_df['trade_date'].tolist()) if _td_df is not None and not _td_df.empty else set()
+    except Exception:
+        trade_dates = set()
     ok = 0
     for ts_code in ts_codes:
         try:
             df_1min = ecm.get_cached_minute_kline(ts_code, freq='1min')
             if df_1min is None or df_1min.empty:
                 continue
+            # 498号#41：仅保留窗口内交易日（无 trade_date 列时不裁剪，保守全量）
+            if trade_dates and 'trade_date' in df_1min.columns:
+                df_1min = df_1min[df_1min['trade_date'].isin(trade_dates)]
+                if df_1min.empty:
+                    continue
             agg = _resample_minute(df_1min.to_dict('records'), '1min', target_freq)
             if agg:
                 _cache_to_ecm(pd.DataFrame(agg), ts_code, target_freq, ecm)

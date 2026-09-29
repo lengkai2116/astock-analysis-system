@@ -1,6 +1,7 @@
 # 498号｜COL 采集层 OCR 核查与处置
 
-**版本**：v1.9（2026-09-29；**批次1~7 已实施**，代码已改、未推送，详见 §十一~§十七。余延后项见下）
+**版本**：v1.10（2026-09-29；**批次1~8 已实施**，代码已改、未推送，详见 §十一~§十八。余延后项见下）
+**v1.10 批次8 实施（2026-09-29）**：用户「继续 #41/#52/#31」→ 三项全做 → **#31** `get_market_snapshot` provider 内 3s TTL 缓存（根因=docstring 声称上层缓存但路由层未包裹）；**#52** `_get_stock_name` 三级兜底（map→mem_store 快照名→码）；**#41** `aggregate_1min_to_60min` 按 `days_back=5` 日期窗口读（原全量历史 O(history)）。改动 2 文件；探针全绿、回归 59 passed、#41 功能实证（60min 4bar/日）。
 **v1.9 批次7 实施（2026-09-29）**：范围拍板＝**§六-2+#53+#42+§六-3剩余** → **§六-2** `load_dotenv` 移到 `DATA_DIR` 兜底前（`.env` 现生效，消除分叉）；**#53** AKShare 分钟日期不再传空串覆盖默认 + `period` 归一；**#42** `backfill_1min` 加 `got_data` 门控（`ok` 不再虚增）；**§六-3剩余** `collection_params` 段（priority_levels/retention_min_days/margin_check）集中到 yaml。改动 4 文件；回归 64 passed、ruff 零新增。**未做**：#41（性能）/ #52（名称映射）/ #7（偏果）。
 **v1.8 批次6 实施（2026-09-29）**：范围拍板＝**死代码+配置集中** → **#8/#13** 删 `tushare_provider` 逐字重复死段（101 行）+ 修 `as e`；**Q3** 删 `MinuteDataManager`（零引用，连带清 #1/#9/#36~#39/#54）；**§六-3** Tushare 限流/超时参数集中到 `data_sources.yaml`（值不变=零行为变更）。改动 3 文件；定向回归 52 passed、ruff 零新增、探针全绿。**未做**：§六-2 DATA_DIR / #7 / #31/#41/#42/#52/#53（留待后续）。
 **v1.7 批次5 实施（2026-09-29）**：用户指示「开始实施批次5」→ 低危/死代码清理 **#46**（日志括号）/ **#47**（死状态 `_SYNCED_TODAY`）/ **#48**（死函数 `_check_daily_sync_backfill`）/ **#49**（`_seen` 加 20000 上限）/ **#50**（重复 logger）/ **#55**（死常量 `_FLUSH_BATCH_SIZE`）/ **#56**（无效 global `_last_sector_ts`）；**延后 #8/#13**（tushare_provider 重复段，独立 refactor）/**#52/#53**（功能扩展/低危）。改动 3 文件；定向回归 52 passed、ruff 零新增。
@@ -430,6 +431,30 @@
 - `data_sources.yaml` 新增 `collection_params` 段：`priority_levels`（HIGH3/NORMAL2/LOW1）、`retention_min_days`（daily 1095/minute 180/factor 365）、`margin_check`（short_ratio 0.9/check_window 5/base_days 20）。
 - `data_daemon._load_collection_params()` 读之 → `_PRIORITY_LEVELS`/`_RETENTION_MIN_DAYS`/`_MARGIN_SHORT_RATIO`/`_MARGIN_CHECK_WINDOW`/`_MARGIN_BASE_DAYS`（缺失回退原值）。
 - **零行为变更核验**：5 组常量与改前逐值一致。
+
+### 运行态
+- 验证期停 daemon+看守 → 跑 → **已重启看守**。改动**未推送**。
+
+---
+
+## 十八、批次8 实施记录（2026-09-29，#31 + #52 + #41）
+
+> 范围（用户拍板）＝**三项全做**。改动 2 文件；验证：`py_compile` OK、ruff **零新增**、探针 `_498_batch8_probe.py` 全绿、定向回归 **59 passed**、#41 功能实证。
+
+### #31 `akshare_provider.get_market_snapshot` 3s TTL 缓存 ✅
+- **根因**：docstring 称「上层 TieredMemoryCache realtime 3s 负责」，但 `_route_provider` 路由层**实际未包裹** → `get_realtime_spot`/`get_batch_quotes` 每次调 `get_market_snapshot()` 都重建全市场快照（逐码调用 = 重复下载全市场）。
+- **修复**：`AkshareProvider.__init__` 加 `_snapshot_cache/_ts/_lock`；`get_market_snapshot` 命中 3s 缓存直接返回，实际拉取移入新 `_fetch_market_snapshot`。
+- 探针：桩函数 3 次连续调用 → **真实拉取 1 次**（后两次命中缓存）。
+
+### #52 `_get_stock_name` 名称兜底 ✅
+- **根因**：仅 20 码硬编码映射，其余返回 `ts_code`（`get_realtime_quote` 的 `name` 字段）。
+- **修复**：`_STOCK_NAME_MAP` → `in_memory_store` 盘中快照 `name`（AKShare/Tushare 快照携带真实名称）→ `ts_code` 三级兜底。
+- 探针：已注册码返回中文名、快照有名取快照、无快照回退码。
+
+### #41 `aggregate_1min_to_60min` 按日期窗口读 ✅
+- **根因**：原 `get_cached_minute_kline(ts_code, freq='1min')` 读**全量历史** → O(history) 内存/耗时。
+- **修复**：新增 `days_back=5`，先取最近 N 个 1min 交易日窗口，每股读取后 `isin(trade_dates)` 裁剪（无 `trade_date` 列时不裁剪，保守全量）。
+- 实证：`000001.SZ` 1min 6097 行 → 聚合返回 1、60min 98 行（幂等 REPLACE 无重复）；最近交易日 60min = **4 bar**（08:45/10:30/13:01/14:00，符合 A 股 4×60min）。
 
 ### 运行态
 - 验证期停 daemon+看守 → 跑 → **已重启看守**。改动**未推送**。

@@ -12,6 +12,8 @@ AkshareProvider — 免费的实时/盘中数据提供者
 
 import logging
 import os
+import threading
+import time
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -101,8 +103,23 @@ _INDEX_NAME_MAP = {
 
 
 def _get_stock_name(ts_code: str) -> str:
-    """获取股票中文名称（内置映射+代码回退）"""
-    return _STOCK_NAME_MAP.get(ts_code, ts_code)
+    """获取股票中文名称（内置映射 → 盘中内存快照名称 → 代码回退）
+
+    498号#52：原仅 20 码硬编码映射（其余返回 ts_code）。改为优先内置映射（已知大盘股
+    中文名），未命中则取 in_memory_store 盘中快照的真实「名称」（AKShare/Tushare 快照
+    携带），最后才回退 ts_code。
+    """
+    name = _STOCK_NAME_MAP.get(ts_code)
+    if name:
+        return name
+    try:
+        from app.data.in_memory_store import store
+        rec = store.get_by_code(ts_code)
+        if rec and rec.get('name'):
+            return str(rec['name'])
+    except Exception:
+        pass
+    return ts_code
 
 
 def _get_index_name(ts_code: str) -> str:
@@ -124,6 +141,13 @@ class AkshareProvider:
     def __init__(self):
         self.name = "Akshare"
         self.source = "东方财富"
+        # 498号#31：全市场快照 provider 内 TTL 缓存（3s）——get_realtime_spot/
+        # get_batch_quotes 经它按代码过滤，原每次都重建全市场快照（逐码调用=重复
+        # 下载全市场）；docstring 声称的「上层 TieredMemoryCache realtime 3s」在
+        # _route_provider 路由层实际未包裹，故在此兜底。
+        self._snapshot_cache: Optional[List[Dict]] = None
+        self._snapshot_ts: float = 0.0
+        self._snapshot_lock = threading.Lock()
 
     # ── 1. 实时盘口（stock_bid_ask_em）──
 
@@ -192,8 +216,22 @@ class AkshareProvider:
         """获取全市场股票实时行情快照
 
         单次调用返回约 5000 只 A 股的实时数据（最新价/涨跌幅/成交量/PE/PB 等）。
-        缓存策略：上层 TieredMemoryCache — realtime 级别 3s TTL。
+        # 498号#31：provider 内 3s TTL 缓存（原声称上层缓存但路由层未包裹）。
         """
+        # 缓存命中（3s 内）直接返回，避免逐码调用重复下载全市场
+        with self._snapshot_lock:
+            if (self._snapshot_cache is not None
+                    and (time.time() - self._snapshot_ts) < 3.0):
+                return self._snapshot_cache
+        data = self._fetch_market_snapshot()
+        with self._snapshot_lock:
+            if data:
+                self._snapshot_cache = data
+                self._snapshot_ts = time.time()
+        return data
+
+    def _fetch_market_snapshot(self) -> List[Dict]:
+        """真正拉取全市场快照（无缓存；失败返回 []）"""
         ak = _get_ak()
         if ak is None:
             return []
