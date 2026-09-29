@@ -289,6 +289,21 @@ def test_raw2_uses_thread_pool():
     assert '_run_with_timeout(lambda: _raw2_one(code)' in src
 
 
+def test_raw2_no_shared_trade_date_cell():
+    """2026-09-29 OCR 发现修复：_raw2_one 不得再写外层 nonlocal trade_date
+
+    并行 worker 共享 nonlocal cell 会造成特征计算日期不一致（high 级并发竞态）。
+    防回归：闭包内应使用局部 td，且不声明 nonlocal trade_date。
+    """
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._precompute_raw_features)
+    raw2_src = src[src.find('def _raw2_one'):src.find('def _run_raw2_one')]
+    assert 'nonlocal trade_date' not in raw2_src, '_raw2_one 不得写外层 trade_date（并行竞态）'
+    assert 'td = trade_date' in raw2_src, '_raw2_one 应以局部 td 读外层初始值'
+    assert 'return features, td' in raw2_src, '_raw2_one 应返回局部 td'
+
+
 def test_wait_db_unlock_immediate(tmp_path):
     """无锁（目录无库文件）时 _wait_db_unlock 立即返回"""
     import data_daemon as dd

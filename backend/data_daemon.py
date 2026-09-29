@@ -3667,18 +3667,21 @@ def _precompute_raw_features(codes, target_date: str | None = None):
         _progress_n = 0  # 428 P1-2 动作②：每 500 只输出一次进度日志（诊断慢股票）
 
         def _raw2_one(code):
-            nonlocal trade_date
+            # 2026-09-29 OCR 发现修复：不再写外层共享日期 cell（并行竞态，4 worker
+            # 共享写会造成特征计算日期不一致）。改为函数局部 td（读外层初始值，
+            # 仅作回退基准；主线程负责收集后更新外层供日志）。
+            td = trade_date
             df = all_data.get(code)
             if df is None or df.empty or len(df) < 5:
-                return ({}, trade_date)  # 数据不足，外层静默跳过
+                return ({}, td)  # 数据不足，外层静默跳过
             # 426号 P1-3：回补时按 target_date 截断（特征按当日口径计算，
             # trade_date 收敛为目标日；正常管道 target_date=None 行为不变）
             if target_date:
                 df = df[df['trade_date'].astype(str).str[:10] <= target_date]
                 if df.empty or len(df) < 5:
-                    return ({}, trade_date)  # 数据不足，外层静默跳过
-            if trade_date is None:
-                trade_date = str(df['trade_date'].iloc[-1])[:10]
+                    return ({}, td)  # 数据不足，外层静默跳过
+            if td is None:
+                td = str(df['trade_date'].iloc[-1])[:10]
 
             features = {}
 
@@ -3714,7 +3717,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     # 488-2：按本行特征的 trade_date 取市情绪池（原为 datetime.now()——
                     # 非交易日/回补重算时取今日池必空 → 涨停家数/封板率永不落库）
                     sentiment = ms.get_sentiment_phase(
-                        (trade_date or '').replace('-', '') or None)
+                        (td or '').replace('-', '') or None)
                     if sentiment.get('data_available'):
                         _sent['sentiment_phase'] = sentiment['phase']
                         _sent_metrics = sentiment.get('metrics') or {}
@@ -3791,7 +3794,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         # 461-12：daily_basic 读取失败，量比回退，记日志防静默吞
                         logger.debug(f"RAW量价 daily_basic 读取失败 [{code}]: {_e}")
                         _db = None
-                    _vr = _pick_volume_ratio(_db, trade_date)
+                    _vr = _pick_volume_ratio(_db, td)
                     # 479号 A5/A8：完整状态机透传 pre_feat（定稿细项1/5）——
                     #   compute_volume_price_signal 的 state_label（VP 状态中文名）+ rule（规则陈述，
                     #   SIG-JUD 边界：逗号后为操作建议"加仓/减仓"剥离只留陈述）+ 背离检测条件三字段
@@ -4335,7 +4338,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             except Exception:
                 features['market_stats'] = {}
 
-            return features, trade_date
+            return features, td
 
         # 2026-09-29 效率修复：RAW-2 单线程顺序 → 线程池并行（5557 只 ×~0.34s/只 ≈ 31min →
         # 4 并发 ≈ 8min）。计算在 worker 线程（_run_with_timeout 超时保护不变），
@@ -4359,22 +4362,26 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     logger.info(f"  [RAW-2] 进度: {_progress_n}/{len(codes)} (succeeded={succeeded}, failed={failed}, {time.time()-t0:.1f}s)")
                 try:
                     _res = fut.result()
-                    if _res is None:
-                        failed += 1  # 428 P1-2 动作③：单股超时或特征计算异常
-                        continue
-                    features, trade_date = _res
-                    if not features:
-                        continue  # 数据不足静默跳过（不计数 failed）
-                    # 写入 pre_feat_cache（主线程）
-                    if features:
-                        _ecm.cache_pre_feat(code, trade_date, features)
-                        succeeded += 1
-                        commit_count += 1
-                        if commit_count >= BATCH_SIZE:
-                            _ecm.conn.commit()
-                            commit_count = 0
                 except Exception:
+                    failed += 1  # 428 P1-2 动作③：单股超时或特征计算异常
+                    continue
+                if _res is None:
                     failed += 1
+                    continue
+                features, _td = _res
+                if not features:
+                    continue  # 数据不足静默跳过（不计数 failed）
+                trade_date = _td  # 主线程更新（并行下最后一个完成者的日期，仅日志口径）
+                # 写入 pre_feat_cache（主线程；2026-09-29 OCR：DB 写失败与特征计算失败分开统计）
+                try:
+                    _ecm.cache_pre_feat(code, trade_date, features)
+                    succeeded += 1
+                    commit_count += 1
+                    if commit_count >= BATCH_SIZE:
+                        _ecm.conn.commit()
+                        commit_count = 0
+                except Exception as e:
+                    logger.warning(f"RAW-2 写库失败 [{code}]: {e}")
         finally:
             _raw2_pool.shutdown(wait=True)
         if commit_count > 0:
@@ -7595,7 +7602,8 @@ def _wait_db_unlock(data_dir: str, max_wait: float = 300.0) -> None:
     """
     import sqlite3 as _sqlite3
     _targets = ['stock_cache.db', 'market_cache.db', 'compute_cache.db',
-                'snapshot_cache.db', 'financial_cache.db', 'history_cache.db']
+                'snapshot_cache.db', 'financial_cache.db', 'history_cache.db',
+                'system_cache.db', 'market_snapshot.db']  # 2026-09-29 OCR：补 sharding 注册分库
     _waited = 0.0
     while True:
         _locked = []
