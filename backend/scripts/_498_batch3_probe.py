@@ -58,16 +58,8 @@ got = mc._source_stats['sina']['ok']
 print(f"  sina.ok = {got}（期望 20000=无丢失更新）")
 
 print()
-print("=== #18 fallback_manager 并发（4 线程 × 3000 次 update_health_status）===")
-from app.data.fallback_manager import FallbackManager
-fm = FallbackManager()
-def hammer_fb():
-    for i in range(3000):
-        fm.update_health_status('sina', is_healthy=(i % 2 == 0), response_time=10.0)
-ts = [threading.Thread(target=hammer_fb) for _ in range(4)]
-[t.start() for t in ts]; [t.join() for t in ts]
-rep = fm.get_health_report()
-print(f"  fail 总数 = {rep['sources']['sina']['total_failures']}（期望 6000=4×3000/2 无丢失）")
+print("=== #18 fallback_manager 并发 — 模块已于 #7 删除（2026-09-29）===")
+print("  fallback_manager.py 已删除（读取侧零消费 vestigial 模块）；跳过 #18 检查")
 
 print()
 print("=== #19 tushare_provider 限流器串行（5 次调用 / 间隔 0.2s）===")

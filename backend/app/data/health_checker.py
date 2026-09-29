@@ -45,11 +45,9 @@ class HealthChecker:
             score = self._calculate_health_score(is_healthy, elapsed, error_msg)
             self._health_scores[source_name] = score
 
-            # 更新降级管理器状态
-            from app.data.fallback_manager import fallback_manager
-            fallback_manager.update_health_status(
-                source_name, is_healthy, elapsed, error_msg
-            )
+            # 498号#7：原调用已删除的 fallback_manager.update_health_status —— 该写入
+            # 从无读取方（fallback_manager 的 get_healthy_source 零调用；真实降级由
+            # data_source_manager / mootdx_collector 各自实现），属 vestigial 写入。
 
             logger.debug(f"数据源 {source_name} 健康评分: {score:.2f}")
             return score

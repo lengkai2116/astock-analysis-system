@@ -1,6 +1,7 @@
 # 498号｜COL 采集层 OCR 核查与处置
 
-**版本**：v1.10（2026-09-29；**批次1~8 已实施**，代码已改、未推送，详见 §十一~§十八。余延后项见下）
+**版本**：v1.11（2026-09-29；**批次1~9 已实施**，代码已改、未推送，详见 §十一~§十九。延后项已清空）
+**v1.11 批次9 实施（2026-09-29）**：用户「对 #7 拍板」→ 复核发现 **`fallback_manager` 为 vestigial 模块**（`get_healthy_source` 零调用、`register_fallback_chain` 零调用、`update_health_status` 只写不读）→ 拍板**删除**：`git rm fallback_manager.py` + `health_checker.py` 移除只写调用。连带消解 §四 #18/#27/#28/#29。改动 2 文件；probe 重跑全绿、回归 35 passed。**498 全部项至此收口（无剩余延后项）。**
 **v1.10 批次8 实施（2026-09-29）**：用户「继续 #41/#52/#31」→ 三项全做 → **#31** `get_market_snapshot` provider 内 3s TTL 缓存（根因=docstring 声称上层缓存但路由层未包裹）；**#52** `_get_stock_name` 三级兜底（map→mem_store 快照名→码）；**#41** `aggregate_1min_to_60min` 按 `days_back=5` 日期窗口读（原全量历史 O(history)）。改动 2 文件；探针全绿、回归 59 passed、#41 功能实证（60min 4bar/日）。
 **v1.9 批次7 实施（2026-09-29）**：范围拍板＝**§六-2+#53+#42+§六-3剩余** → **§六-2** `load_dotenv` 移到 `DATA_DIR` 兜底前（`.env` 现生效，消除分叉）；**#53** AKShare 分钟日期不再传空串覆盖默认 + `period` 归一；**#42** `backfill_1min` 加 `got_data` 门控（`ok` 不再虚增）；**§六-3剩余** `collection_params` 段（priority_levels/retention_min_days/margin_check）集中到 yaml。改动 4 文件；回归 64 passed、ruff 零新增。**未做**：#41（性能）/ #52（名称映射）/ #7（偏果）。
 **v1.8 批次6 实施（2026-09-29）**：范围拍板＝**死代码+配置集中** → **#8/#13** 删 `tushare_provider` 逐字重复死段（101 行）+ 修 `as e`；**Q3** 删 `MinuteDataManager`（零引用，连带清 #1/#9/#36~#39/#54）；**§六-3** Tushare 限流/超时参数集中到 `data_sources.yaml`（值不变=零行为变更）。改动 3 文件；定向回归 52 passed、ruff 零新增、探针全绿。**未做**：§六-2 DATA_DIR / #7 / #31/#41/#42/#52/#53（留待后续）。
@@ -455,6 +456,28 @@
 - **根因**：原 `get_cached_minute_kline(ts_code, freq='1min')` 读**全量历史** → O(history) 内存/耗时。
 - **修复**：新增 `days_back=5`，先取最近 N 个 1min 交易日窗口，每股读取后 `isin(trade_dates)` 裁剪（无 `trade_date` 列时不裁剪，保守全量）。
 - 实证：`000001.SZ` 1min 6097 行 → 聚合返回 1、60min 98 行（幂等 REPLACE 无重复）；最近交易日 60min = **4 bar**（08:45/10:30/13:01/14:00，符合 A 股 4×60min）。
+
+### 运行态
+- 验证期停 daemon+看守 → 跑 → **已重启看守**。改动**未推送**。
+
+---
+
+## 十九、批次9 实施记录（2026-09-29，#7 拍板 → 删除 vestigial 模块）
+
+> 范围（用户拍板）＝**删除 vestigial 模块**。改动 2 文件（删 1 模块 + 改 1）；验证：`py_compile` OK、ruff **零新增**、import smoke OK、`_498_batch3_probe.py` 重跑全绿、定向回归 **35 passed**。
+
+### #7 复核更正：`fallback_manager` 为 vestigial 模块（读取侧零消费）
+- **原登记**（§三 #7）称「未注册源默认 healthy → 坏源被选中、降级机制被静默绕过」——**复核后前提不成立**：
+  - `get_healthy_source`（唯一读 `_health_status`/`_is_source_healthy` 的入口）**全仓无调用方**；
+  - `register_fallback_chain`/`init_fallback_chains` **无调用方**（498 批次2 已确认死配置）；
+  - 唯一消费方 `health_checker.py:50` **只调用** `update_health_status`（写入，从不读回）。
+  - ⇒ `_health_status` 是**只写不读**的 vestigial 状态，**#7 描述的「降级机制」本身从未被调用**，无运行时效果。真实降级由 `data_source_manager`（`get_data`+`_retry`）与 `mootdx_collector`（三源切换）各自实现。
+- 性质＝死代码（同 Q3 `MinuteDataManager`），**非活缺陷**。
+
+### 实施
+- `git rm backend/app/data/fallback_manager.py`（整模块删除，连带消解 §四 #18/#27/#28/#29 及 §七 弱推理项——因模块删除而消解）。
+- `health_checker.py`：移除 `from app.data.fallback_manager import fallback_manager` + `update_health_status(...)` 调用（该写入从无读取方），留注释说明。
+- `backend/scripts/_498_batch3_probe.py`：`#18 fallback_manager 并发` 段改为「模块已删除、跳过」（该模块已不在，避免 probe 导入失败）。
 
 ### 运行态
 - 验证期停 daemon+看守 → 跑 → **已重启看守**。改动**未推送**。
