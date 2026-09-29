@@ -178,6 +178,7 @@ def _get_tushare_provider():
 _last_step_counts = {}  # 371号P0#3：管道步骤成功计数
 _jud_meta_cache = {}  # 371号JUD接入：{ts_code: enriched_meta_dict} 供 treemap_snapshot 读取
 _market_stats_cache = {}  # 411号Phase 10：全市场级统计预计算，供BociasiQuadrantAnalyzer消费
+_account_risk_app = None  # 2026-09-29 OCR #3：账户风险钩子复用 Flask app（原每 10 分钟重建）
 
 # 425号 C-1：写入优先级状态机（HIGH > NORMAL > LOW）
 # - HIGH：补采/补预计算（SIG/JUD 核心分析依赖），mootdx 盘中降频让路
@@ -2814,6 +2815,7 @@ def _write_factor_signals(codes):
     try:
         from app.data.factor_precompute import FactorPrecomputeManager
         fpm = FactorPrecomputeManager(_ecm)
+        failed = 0  # 2026-09-29 OCR #9：初始化失败计数（原未初始化 → 首个异常 NameError 被吞，整段中止）
         for ts_code in codes[:200]:  # 限200只避免过长
             try:
                 df = _ecm.get_cached_daily(ts_code)
@@ -2857,7 +2859,7 @@ def _write_factor_signals(codes):
             except Exception as e:
                 failed += 1
                 continue
-        logger.info(f"因子信号兜底写入完成（{len(codes[:200])} 只）")
+        logger.info(f"因子信号兜底写入完成（{len(codes[:200])} 只，失败 {failed}）")
     except Exception as e:
         logger.warning(f"因子信号兜底写入失败: {e}")
 
@@ -3685,6 +3687,14 @@ def _precompute_raw_features(codes, target_date: str | None = None):
 
             features = {}
 
+            # 2026-09-29 OCR #1：支撑阻力每只股票只算一次（原衍生/risk_ext/structure_ext
+            # 三处重复计算同源函数，全市场 ×3 无谓 CPU）。失败置 None，各处既有
+            # try/except 兜底语义不变。
+            try:
+                _sr_once = calc_support_resistance(df)
+            except Exception:
+                _sr_once = None
+
             # 1. 估值特征（17字段）
             # 462-4：ve.compute_tags 内部 DataManager.get_stock_industry 依赖 db.session
             #   （Flask SQLAlchemy，app_context 为线程局部）——_raw2_one 经 _run_with_timeout 在
@@ -3778,11 +3788,14 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     _simple = {}
                     # 467号 A：ma_alignment 改读 indicator_ma 预计算宽表（412/460 统一供给，
                     # 与 dim1 data_context['indicator_ma_df'] 同源）；失败回退 raw np.mean。
-                    _ind_ma = None
-                    try:
-                        _ind_ma = _ecm.get_indicators_wide(code)
-                    except Exception as _e:
-                        logger.debug(f"RAW量价 indicator_ma 读取失败，回退raw均线 [{code}]: {_e}")
+                    # 2026-09-29 OCR #2：优先复用预热 indicator_ma_dict（compute_all_heat 已
+                    # 全市场查过一次），miss 才查库（原每只重复查库）。
+                    _ind_ma = indicator_ma_dict.get(code)
+                    if _ind_ma is None:
+                        try:
+                            _ind_ma = _ecm.get_indicators_wide(code)
+                        except Exception as _e:
+                            logger.debug(f"RAW量价 indicator_ma 读取失败，回退raw均线 [{code}]: {_e}")
                     _add_vp_simple_tags(df, _simple, indicator_ma=_ind_ma)
                     # 459号 R4-b + 461-10：量比接真实生产点 _compute_volume_ratio 已回写
                     # daily_basic_cache.volume_ratio，此处读真值（不再恒 1.0），并按特征
@@ -4007,7 +4020,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 _derived['price_position'] = _depth_f.get('price_position', 'mid_zone')
                 try:
                     import json as _json
-                    _sr = calc_support_resistance(df)
+                    _sr = _sr_once  # 2026-09-29 OCR #1：复用单次计算结果
                     _derived['support_resistance'] = _json.dumps({
                         'support': _sr.get('support_price'),
                         'resistance': _sr.get('resistance_price'),
@@ -4077,7 +4090,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 try:
                     from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
                     from app.opportunity_atlas.dimensions.dim6_risk_engine import _calc_volatility
-                    geo = calc_support_resistance(df)
+                    geo = _sr_once  # 2026-09-29 OCR #1：复用单次计算结果
                     _risk_feat['support_price'] = geo.get('support_price')
                     _risk_feat['resistance_price'] = geo.get('resistance_price')
                     _risk_feat['dist_to_support_pct'] = geo.get('dist_to_support_pct')
@@ -4320,7 +4333,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             # 16. 结构位置扩展字段（365号批次A / Phase 6）
             try:
                 _struct_feat = {}
-                _sr_result = calc_support_resistance(df)
+                _sr_result = _sr_once  # 2026-09-29 OCR #1：复用单次计算结果
                 _struct_feat['support_price'] = _sr_result.get('support_price')
                 _struct_feat['resistance_price'] = _sr_result.get('resistance_price')
                 # indicator_status: 均线排列+趋势方向综合
@@ -5529,6 +5542,7 @@ def _build_treemap_snapshot(codes: list[str]):
     #     consensus_rate/conflict/opportunity_state/state_evidence 读 status_engine 成品，
     #     消除 tags 轻量投票口径；status_snapshot 由管道 S1 先行构建）
     status_map: dict = {}
+    _tm_conn = None  # 2026-09-29 OCR #10：连接获取失败时避免后续 NameError（原异常路径 UnboundLocalError）
     try:
         # 421号R4a补充修复：status_snapshot 在 snapshot_cache.db 分库，
         # 改经 sharding_manager 读（_query_df 读主库会 miss 分库新数据）
@@ -5544,6 +5558,9 @@ def _build_treemap_snapshot(codes: list[str]):
                                   'state_evidence': r[4]} for r in _ss_rows}
     except Exception as e:
         logger.warning(f"status_snapshot 读取失败（快照字段回退 tags 口径）: {e}")
+    if _tm_conn is None:
+        logger.warning("treemap 分库连接不可用，跳过 treemap 快照写入")
+        return
 
     # 6. 原子表替换写入
     NEW_TABLE = 'treemap_snapshot_new'
@@ -7541,11 +7558,15 @@ def _update_account_risk_status(data_dir: str) -> None:
     <DATA_DIR>/account_risk_status.json；JUD `_assemble` 只读该快照（避免 JUD 侧
     实时访问 app.db）。账户为空/异常 → 中性降级，不阻塞主循环。
     """
+    global _account_risk_app
     try:
-        from app import create_app
         from app.services.account_risk_status import write_account_risk_status
-        _flask_app = create_app()
-        with _flask_app.app_context():
+        # 2026-09-29 OCR #3：复用模块级 Flask app（原每次 create_app 重建蓝图/扩展，
+        # 主循环每 10 分钟调用时持续浪费）。首次构建后缓存。
+        if _account_risk_app is None:
+            from app import create_app
+            _account_risk_app = create_app()
+        with _account_risk_app.app_context():
             write_account_risk_status(data_dir)
     except Exception as e:
         logger.warning(f"账户月度风险状态预计算异常: {e}")

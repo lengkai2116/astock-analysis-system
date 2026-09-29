@@ -340,3 +340,52 @@ def test_wait_db_unlock_waits_until_release(tmp_path):
     assert 1.0 <= elapsed < 12.0, f'应等待锁释放后返回，实际 {elapsed:.1f}s'
     t.join()
     conn.close()
+
+
+# ── 2026-09-29 OCR 效率审查第二批修复（#1/#2/#3/#9/#10）防回归 ──
+
+def test_raw2_support_resistance_computed_once():
+    """OCR #1：calc_support_resistance 每只股票只算一次（_sr_once 复用三处）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._precompute_raw_features)
+    assert src.count('calc_support_resistance(df)') == 1, \
+        f'应仅计算一次，实际 {src.count("calc_support_resistance(df)")} 次'
+    assert '_sr_once = calc_support_resistance(df)' in src
+    assert '_sr = _sr_once' in src and 'geo = _sr_once' in src and '_sr_result = _sr_once' in src
+
+
+def test_raw2_reuses_indicator_ma_cache():
+    """OCR #2：_raw2_one 优先复用预热 indicator_ma_dict（miss 才查库）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._precompute_raw_features)
+    assert 'indicator_ma_dict.get(code)' in src, '应优先复用预热缓存'
+    assert src.count('get_indicators_wide') == 2, '预热循环 + miss 兜底各一次'
+
+
+def test_write_factor_signals_failed_init():
+    """OCR #9：_write_factor_signals 的 failed 已初始化（原 NameError 吞兜底）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._write_factor_signals)
+    assert 'failed = 0' in src, 'failed 应在循环前初始化'
+
+
+def test_treemap_conn_guarded():
+    """OCR #10：_build_treemap_snapshot 连接失败时跳过写入（不再 NameError）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._build_treemap_snapshot)
+    assert '_tm_conn = None' in src, '连接应预先初始化'
+    assert '跳过 treemap 快照写入' in src, '连接不可用时应提前 return'
+
+
+def test_account_risk_app_cached():
+    """OCR #3：_update_account_risk_status 复用模块级 Flask app（不再每次 create_app）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._update_account_risk_status)
+    assert '_account_risk_app' in src and 'create_app' in src
+    assert 'if _account_risk_app is None:' in src, '应仅首次构建 Flask app'
+    assert 'with _account_risk_app.app_context()' in src
