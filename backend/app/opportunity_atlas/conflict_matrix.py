@@ -62,7 +62,8 @@ def detect(
         dims_factor:  因子聚合层输出，含 emotion/valuation/structure 等子结构
         tags:         预计算标签集（right_side_confirm, main_force_presence 等）
         dim_results:  维度引擎原始输出（dim2~dim7），键名为引擎标识
-        consensus_rate: 市场共识度 [0, 1]
+        consensus_rate: 市场共识度 [-1, 1]（带符号：正=多头主导、负=空头主导；
+                        幅值=共识强度，由 consensus_engine 的 主导分/总分 得出，恒 ≥ 0.5）
         vol_ratio:    成交量比率（当前量 / 均量）
 
     Returns:
@@ -196,11 +197,12 @@ def detect(
         )
 
     # ── C5: ATR高+盈亏比差+低共识 → warn ──
-    # 497号（批次1）：atr_pct 阈值 0.7→8.0——dim6 产出百分数（3.98=3.98%），
-    #   原 0.7 小数语义致全市场恒真；8.0 对齐 Wiki《ATR止损》高波动 8-12% 与 495-b6 advice/dim_adapter 折减下限
-    if atr_pct > 8.0 and rr_value < 1.0 and consensus_rate < 0.5:
+    # 497号（批次2）：consensus_rate 实为带符号 [-1,1]（幅值恒 ≥0.5），原 `<0.5`
+    #   对全部空头恒真（退化「ATR高+RR差+空头」，实测 1967 次全为 bear）、对多头恒不可达。
+    #   改按幅值判「低共识/分歧」：|共识| < 0.6（共识强度接近 0.5 下界 = 多空分歧最大）。
+    if atr_pct > 8.0 and rr_value < 1.0 and abs(consensus_rate) < 0.6:
         warn.append(
-            f'C5: ATR{atr_pct:.2f}%>8.0+盈亏比{rr_value:.2f}<1.0+共识{consensus_rate:.2f}<0.5'
+            f'C5: ATR{atr_pct:.2f}%>8.0+盈亏比{rr_value:.2f}<1.0+|共识{consensus_rate:.2f}|<0.6'
             '（高波动低收益+市场分歧）'
         )
 
@@ -241,6 +243,8 @@ def detect(
         fatal.append('C9: 监管事件催化（强制回避）')
 
     # ── C10: 趋势背驰 + 高共识 → warn ──
+    # 497号（批次2）：consensus_rate 为带符号 [-1,1]，`>0.7` 在正区间语义自洽
+    #   （强多头共识）→ 数字保持，不再按 [0,1] 折算。
     if divergence_type == '趋势背驰' and consensus_rate > 0.7:
         warn.append(
             f'C10: 趋势背驰+共识{consensus_rate:.2f}>0.7'
@@ -311,11 +315,11 @@ def detect(
         semantic_type = '矛盾型'
         semantic_adjustment = 0.5
     elif consensus_rate >= 0.8 and dist_to_prev_high_pct > -3:
-        # 追高警示型：高共识+接近前高
+        # 追高警示型：高共识（带符号 [0,1] 正区间强多头共识；497号批次2 口径确认）+接近前高
         semantic_type = '追高警示型'
         semantic_adjustment = 0.7
     elif aligned_count >= 4 and consensus_rate >= 0.7:
-        # 确认型：多数维度看多+高共识
+        # 确认型：多数维度看多+高共识（带符号正区间；497号批次2 口径确认）
         semantic_type = '确认型'
         semantic_adjustment = 1.15
     elif aligned_count == 2 and divergence_strength <= 0.7:

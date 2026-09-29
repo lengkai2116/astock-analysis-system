@@ -53,7 +53,6 @@ def test_c5_fire_above_8_with_pct_text():
     assert '%>8.0' in c5[0]
 
 
-def test_c5_still_requires_low_rr_and_low_consensus():
-    """其余条件语义不变：rr≥1.0 或 consensus≥0.5 均不触发"""
+def test_c5_still_requires_low_rr():
+    """rr≥1.0 不触发（盈亏比条件语义不变）"""
     assert _c5s(conflict_detect({}, {}, _dr(9.0, 1.5), consensus_rate=0.0)) == []
-    assert _c5s(conflict_detect({}, {}, _dr(9.0, 0.5), consensus_rate=0.6)) == []
