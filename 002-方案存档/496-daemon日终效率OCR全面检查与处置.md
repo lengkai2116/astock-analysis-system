@@ -78,8 +78,11 @@
 - ✅ `_run_signal_checkpoint` 连接 try/finally 关闭（原异常路径泄漏）
 - ⚪ **OCR 误报不采**：pd 绑定（`_ensure_pd` globals 注入已保障）、f-string 日志括号（本正确）
 
-### 批次 C（观察/低优先）
-- #7 分钟回填增量、±20% 阈值按板块、`_backfill_moneyflow` 吞异常、`_compute_relative_strength` 增量
+### 批次 C（观察/低优先，**已全部实施**）
+- ✅ **#7** 分钟回填缺失集内存增量（原每轮重查 SELECT DISTINCT 全表扫）
+- ✅ **涨跌幅质量检查按板块**（实证误报源=北交所 .BJ ±30% + 创业板边缘精度；主板 10%/创业板科创板 20%/北交所排除）
+- ✅ `_backfill_moneyflow` 已有量查询失败记日志（OCR「查错库恒 0」**误报**——同库正常，仅补日志）
+- ✅ `_compute_relative_strength` **asof 幂等跳过**（日终重复调用避免 5557×90 日全量重算）
 
 ---
 

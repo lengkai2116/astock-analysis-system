@@ -480,6 +480,17 @@ def _compute_relative_strength(trade_date: str = None) -> int:
             return 0
         asof_date = latest[0]
 
+        # 2026-09-29 OCR 批次C：asof 幂等跳过——该交易日已算过则跳过（日终重复调用
+        # 避免 5557 只 × 90 日全量重算；正常只在新交易日首次触发计算）
+        try:
+            _rs_existing = _query_table('relative_strength_cache',
+                "SELECT COUNT(*) FROM relative_strength_cache WHERE asof_date=?", [asof_date])
+            if _rs_existing and int(_rs_existing) > 0:
+                logger.info(f"  [相对强弱] asof={asof_date} 已有 {_rs_existing} 条，跳过")
+                return int(_rs_existing)
+        except Exception as _e:
+            logger.debug(f"  [相对强弱] asof 幂等检查失败（继续计算）: {_e}")
+
         # 2) 取最近至多90个交易日作为20d/60d收益率窗口（442号缺陷⑤：原LIMIT 61 无容错，
         #    窗口内任何缺失日（如 08-19~21 全市场空洞）→ _n_day_ret 观测不足 → 60d 恒 None；
         #    扩至 90 日，dropna 后仍有 ≥61 观测，容忍零星缺失）
@@ -611,7 +622,9 @@ def _backfill_moneyflow(days: int = 25) -> int:
         existing = conn.execute(
             "SELECT COUNT(DISTINCT trade_date) FROM moneyflow_cache"
         ).fetchone()[0]
-    except Exception:
+    except Exception as e:
+        # 2026-09-29 OCR 批次C：查询失败记日志（原静默置 0 → 误触发全量回填）
+        logger.warning(f"资金流回填已有数据量查询失败: {e}")
         existing = 0
 
     if existing >= days:
@@ -2546,11 +2559,20 @@ def _check_data_quality():
     except Exception as e:
         logger.debug(f"  成交量异常检查失败: {e}")
 
-    # 检查涨跌幅异常（排除新股上市首日）— 363号F55-1修复：AND改为OR
+    # 检查涨跌幅异常 — 363号F55-1修复：AND改为OR
+    # 2026-09-29 OCR 批次C：按板块涨跌幅限制区分（实证误报源=北交所 .BJ ±30% 常态、创业板边缘精度）：
+    #   北交所排除；创业板(3%)/科创板(688%) ±20%（容 1pt）；其余主板 ±10%（容 0.5pt）。
+    #   新股上市首日无限制为已知边界（告警仅提示，不阻塞管道）。
     try:
         pct_anomaly = _query_table('daily_cache', """
             SELECT COUNT(*) FROM daily_cache
-            WHERE trade_date = ? AND (pct_chg > 20 OR pct_chg < -20)
+            WHERE trade_date = ?
+              AND ts_code NOT LIKE '%.BJ'
+              AND (
+                    (pct_chg > 21 OR pct_chg < -21)
+                 OR (ts_code NOT LIKE '3%' AND ts_code NOT LIKE '688%'
+                     AND (pct_chg > 10.5 OR pct_chg < -10.5))
+              )
         """, [today_fmt])
         if pct_anomaly > 0:
             logger.warning(f"  [数据质量] 涨跌幅异常记录: {pct_anomaly} 条")
@@ -7243,12 +7265,8 @@ def _batch_backfill_minute_kline(trade_date: str = None):
     MAX_ROUNDS = 8   # 每轮 500 只，最多 8 轮 = 4000 只（覆盖全市场）
     total_ok = 0
     for round_idx in range(MAX_ROUNDS):
-        # 刷新缺失集（每轮结束后重新查已补齐的）
-        try:
-            minute_stocks = set(r[0] for r in _shard_fetchall(
-                'minute_kline_cache', "SELECT DISTINCT ts_code FROM minute_kline_cache WHERE trade_date=?", [trade_date_fmt]))
-        except Exception:
-            minute_stocks = set()
+        # 2026-09-29 OCR 批次C：缺失集内存增量维护（原每轮重查 SELECT DISTINCT 全表扫；
+        # 补成功的 code 加入 minute_stocks，下轮直接算缺失，避免重复全扫）
         missing = [s for s in daily_stocks if s not in minute_stocks][:500]
         if not missing:
             logger.info(f"[分钟回填] 今日分钟数据已完整 ({len(daily_stocks)} 只, 共{round_idx}轮)")
@@ -7273,6 +7291,7 @@ def _batch_backfill_minute_kline(trade_date: str = None):
                         raw = raw.drop(columns=['vol'])
                     _ecm.cache_minute_kline(raw)
                     ok += 1
+                    minute_stocks.add(code)  # 2026-09-29 OCR 批次C：内存增量（避免下轮重查库）
                 if (i + 1) % 100 == 0:
                     logger.info(f"[分钟回填] 进度: {i+1}/{len(missing)}, 成功 {ok}")
             except Exception as e:

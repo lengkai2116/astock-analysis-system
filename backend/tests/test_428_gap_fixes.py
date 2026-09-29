@@ -480,3 +480,43 @@ def test_signal_checkpoint_closes_conns():
     src = inspect.getsource(dd._run_signal_checkpoint)
     assert 'finally:' in src and '_c.close()' in src, '应 try/finally 关闭连接'
     assert 'conn = None' in src and 'ec = None' in src, '连接应预初始化'
+
+
+# ── 2026-09-29 OCR 批次C（涨跌幅按板块/分钟回填增量/相对强弱幂等）防回归 ──
+
+def test_pct_chg_quality_by_board():
+    """OCR 批次C：涨跌幅质量检查按板块（北交所排除/创业板20%/主板10%）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._check_data_quality)
+    assert "NOT LIKE '%.BJ'" in src, '北交所 ±30% 应排除'
+    assert 'pct_chg > 21' in src and 'pct_chg < -21' in src, '创业板/科创板 ±20% 容差'
+    assert 'pct_chg > 10.5' in src and 'pct_chg < -10.5' in src, '主板 ±10% 容差'
+
+
+def test_minute_backfill_incremental():
+    """OCR 批次C：分钟回填缺失集内存增量（原每轮重查 SELECT DISTINCT）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._batch_backfill_minute_kline)
+    assert 'minute_stocks.add(code)' in src, '补成功后应内存加入'
+    # 循环内不再重查库（Step2 初始一次 + 内存维护）
+    seg = src[src.find('for round_idx'):src.find('total_ok += ok')]
+    assert 'SELECT DISTINCT ts_code FROM minute_kline_cache' not in seg, '循环内不得重查全表'
+
+
+def test_relative_strength_asof_idempotent():
+    """OCR 批次C：相对强弱 asof 幂等跳过（避免 5557×90 日重复全量重算）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._compute_relative_strength)
+    assert 'asof 幂等' in src and 'asof_date=?' in src, '应 asof 幂等检查'
+    assert '已有' in src and '跳过' in src
+
+
+def test_backfill_moneyflow_logs_failure():
+    """OCR 批次C：_backfill_moneyflow 已有量查询失败记日志（原静默置 0 触发全量回填）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._backfill_moneyflow)
+    assert '查询失败' in src and 'logger.warning' in src, '失败应记日志'
