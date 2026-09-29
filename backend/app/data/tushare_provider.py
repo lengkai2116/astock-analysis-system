@@ -493,34 +493,33 @@ ts_code=ts_code,
     def get_fina_indicator(self, ts_code, start_date=None, end_date=None):
         """获取财务指标数据（需5000积分）
         默认返回原始字段集（向后兼容 fina_indicator_cache）。
+
+        2026-09-29 诊断：fina_indicator 接口**不支持 start_date/end_date 参数**
+        （仅接受 ts_code/period/ann_date），传入日期参数恒空返回（曾致启动风暴
+        浪费配额，日志『参数显式却返回空』）。故仅按 ts_code 拉取全量、签名保留
+        日期参数仅为调用方兼容（不再下传）。
         """
         if not self.pro:
             return []
         try:
-            if start_date is None:
-                start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
-            if end_date is None:
-                end_date = datetime.now().strftime('%Y%m%d')
             data = _ts(self.pro.fina_indicator, ts_code=ts_code,
-                fields=self.FINA_FIELDS_ORIGINAL,
-                start_date=start_date, end_date=end_date)
+                fields=self.FINA_FIELDS_ORIGINAL)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取财务指标失败 ({ts_code}): {e}")
             return []
 
     def get_fina_indicator_extended(self, ts_code, start_date=None, end_date=None):
-        """获取扩展财务指标（含 roce/quick_ratio/ocfps 等，供 273a 排雷使用）"""
+        """获取扩展财务指标（含 roce/quick_ratio/ocfps 等，供 273a 排雷使用）
+
+        同 get_fina_indicator：fina_indicator 不支持 start_date/end_date，
+        不再下传日期参数（2026-09-29 诊断）。
+        """
         if not self.pro:
             return []
         try:
-            if start_date is None:
-                start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
-            if end_date is None:
-                end_date = datetime.now().strftime('%Y%m%d')
             data = _ts(self.pro.fina_indicator, ts_code=ts_code,
-                fields=self.FINA_FIELDS_EXTENDED,
-                start_date=start_date, end_date=end_date)
+                fields=self.FINA_FIELDS_EXTENDED)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取扩展财务指标失败 ({ts_code}): {e}")

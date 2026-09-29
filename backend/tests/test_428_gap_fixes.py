@@ -183,3 +183,91 @@ def test_raw2_uses_run_with_timeout():
     w_idx = src.find('_ecm.cache_pre_feat')
     assert t_idx != -1 and w_idx != -1 and t_idx < w_idx, \
         'cache_pre_feat 应位于超时调用之后（写不在超时线程内）'
+
+
+# ── 2026-09-29 效率诊断修复：_target_fin_period 披露日历口径 ──────
+# 原 9 月误推 09-30（三季报 10-31 才截止、库中普遍最新 06-30）→ 覆盖判定恒 False
+# → COL-7 每次全量重拉 4 表财务 ~90 分钟。修复：5~10 月统一目标 06-30。
+
+def _make_target_env(monkeypatch, latest_date):
+    """注入 _shard_fetchall 返回 daily_cache 最新交易日，驱动 _target_fin_period"""
+    import data_daemon as dd
+    monkeypatch.setattr(
+        dd, '_shard_fetchall',
+        lambda table, query, params=None: [(latest_date,)]
+    )
+
+
+def test_target_fin_period_sep_returns_h1(monkeypatch):
+    """9 月（三季报未披露完）→ 目标 06-30（2026-09-29 修复核心）"""
+    import data_daemon as dd
+    _make_target_env(monkeypatch, '2026-09-28')
+    assert dd._target_fin_period() == '2026-06-30'
+
+
+def test_target_fin_period_oct_returns_h1(monkeypatch):
+    """10 月（三季报披露窗口期）→ 保守目标 06-30，避免全量重拉"""
+    import data_daemon as dd
+    _make_target_env(monkeypatch, '2026-10-15')
+    assert dd._target_fin_period() == '2026-06-30'
+
+
+def test_target_fin_period_nov_returns_q3(monkeypatch):
+    """11 月（三季报已披露完毕）→ 目标 09-30"""
+    import data_daemon as dd
+    _make_target_env(monkeypatch, '2026-11-03')
+    assert dd._target_fin_period() == '2026-09-30'
+
+
+def test_target_fin_period_may_returns_h1(monkeypatch):
+    """5 月（半年报披露窗口）→ 目标 06-30"""
+    import data_daemon as dd
+    _make_target_env(monkeypatch, '2026-05-20')
+    assert dd._target_fin_period() == '2026-06-30'
+
+
+def test_target_fin_period_jan_returns_prev_annual(monkeypatch):
+    """1 月 → 目标上年 12-31（年报期）"""
+    import data_daemon as dd
+    _make_target_env(monkeypatch, '2026-01-10')
+    assert dd._target_fin_period() == '2025-12-31'
+
+
+# ── 2026-09-29 效率诊断修复：fina_indicator 不下传不支持的日期参数 ──
+# get_fina_indicator/get_fina_indicator_extended 原传 start_date/end_date
+# （接口不支持）→ 恒空返回风暴。修复后仅传 ts_code+fields。
+
+def test_get_fina_indicator_no_date_params():
+    """get_fina_indicator 不再把 start_date/end_date 下传给 pro.fina_indicator"""
+    from app.data import tushare_provider as tp
+    seen = {}
+
+    class _FakePro:
+        def fina_indicator(self, **kwargs):
+            seen.update(kwargs)
+            return pd.DataFrame({'ts_code': ['000001.SZ']})
+
+    tp_inst = tp.TushareProvider()
+    tp_inst.pro = _FakePro()
+    out = tp_inst.get_fina_indicator('000001.SZ')
+    assert len(out) == 1
+    assert 'start_date' not in seen and 'end_date' not in seen, \
+        'fina_indicator 不支持 start_date/end_date，不得下传'
+    assert seen.get('ts_code') == '000001.SZ'
+
+
+def test_get_fina_indicator_extended_no_date_params():
+    """get_fina_indicator_extended 同样不下传日期参数"""
+    from app.data import tushare_provider as tp
+    seen = {}
+
+    class _FakePro:
+        def fina_indicator(self, **kwargs):
+            seen.update(kwargs)
+            return pd.DataFrame({'ts_code': ['000001.SZ']})
+
+    tp_inst = tp.TushareProvider()
+    tp_inst.pro = _FakePro()
+    out = tp_inst.get_fina_indicator_extended('000001.SZ')
+    assert len(out) == 1
+    assert 'start_date' not in seen and 'end_date' not in seen
