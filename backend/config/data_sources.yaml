@@ -136,6 +136,9 @@ rate_limits:
   tushare:
     requests_per_second: 5
     requests_per_minute: 300
+    call_timeout: 15                  # 498号 §六-3：普通接口子线程超时（秒）
+    minute_call_timeout: 60           # 498号 §六-3：stk_mins 分钟接口超时（秒）
+    stk_mins_requests_per_minute: 1   # 498号 §六-3：stk_mins 极严限流（1次/分钟）
   akshare:
     requests_per_second: 2
     requests_per_minute: 120

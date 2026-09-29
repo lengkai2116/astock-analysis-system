@@ -311,107 +311,6 @@ class TushareProvider:
 
         try:
             if trade_date:
-                data = _ts(self.pro.daily_basic, trade_date=trade_date)
-            else:
-                if start_date is None:
-                    start_date = (datetime.now() - pd.Timedelta(days=5*365)).strftime('%Y%m%d')
-                if end_date is None:
-                    end_date = datetime.now().strftime('%Y%m%d')
-
-                data = _ts(self.pro.daily_basic,
-ts_code=ts_code,
-                    start_date=start_date,
-                    end_date=end_date
-                )
-
-            return data.to_dict('records') if not data.empty else []
-        except Exception as e:
-            logger.warning(f"获取每日基础数据失败: {e}")
-            return []
-
-        try:
-            data = _ts(self.pro.daily, trade_date=trade_date)
-            return data.to_dict('records')
-        except Exception:
-            return []
-
-    def get_index_daily(self, ts_code='000001.SH'):
-        if not self.pro:
-            return []
-
-        try:
-            data = _ts(self.pro.index_daily, ts_code=ts_code)
-            return data.to_dict('records')
-        except Exception:
-            return []
-
-    def get_stk_limit(self, trade_date):
-        """获取涨跌停数据"""
-        if not self.pro:
-            return []
-
-        try:
-            data = _ts(self.pro.stk_limit, trade_date=trade_date)
-            return data.to_dict('records')
-        except Exception:
-            return []
-
-    def get_moneyflow(self, trade_date):
-        """获取资金流向数据"""
-        if not self.pro:
-            return []
-
-        try:
-            data = _ts(self.pro.moneyflow, trade_date=trade_date)
-            return data.to_dict('records')
-        except Exception:
-            return []
-
-    def get_top_list(self, trade_date):
-        """获取龙虎榜数据"""
-        if not self.pro:
-            return []
-
-        try:
-            data = _ts(self.pro.top_list, trade_date=trade_date)
-            return data.to_dict('records')
-        except Exception:
-            return []
-
-    def get_top_inst(self, trade_date):
-        """获取龙虎榜席位明细（278号方案：席位级数据用于假机构识别）"""
-        if not self.pro:
-            return []
-        try:
-            data = _ts(self.pro.top_inst, trade_date=trade_date)
-            if data is None:
-                return []
-            records = data.to_dict('records')
-            for r in records:
-                if r.get('side') in ('0', 0, '1', 1):
-                    r['side_label'] = 'buy' if str(r['side']) == '0' else 'sell'
-            return records
-        except Exception:
-            return []
-
-    def get_daily_basic(self, ts_code=None, start_date=None, end_date=None, trade_date=None):
-        """
-        获取每日基础数据（换手率、市盈率、市值等）
-
-        Args:
-            ts_code: 股票代码（可选，如果None则获取当日全部股票）
-            start_date: 开始日期（格式YYYYMMDD）
-            end_date: 结束日期（格式YYYYMMDD）
-            trade_date: 指定交易日期（格式YYYYMMDD，与ts_code二选一）
-
-        Returns:
-            数据列表
-        """
-        if not self.pro:
-            return []
-
-        try:
-            if trade_date:
                 # 获取指定日期全部股票
                 data = _ts(self.pro.daily_basic, trade_date=trade_date)
             else:
@@ -428,8 +327,9 @@ ts_code=ts_code,
                 )
 
             return data.to_dict('records') if not data.empty else []
-        except Exception:
-            logger.warning(r"获取每日基础数据失败: {e}")
+        except Exception as e:
+            # 498号#8：原 except 无 as e 却用 {e} → 潜在 NameError（修复）
+            logger.warning(f"获取每日基础数据失败: {e}")
             return []
 
     def get_adj_factor(self, ts_code, start_date=None, end_date=None):

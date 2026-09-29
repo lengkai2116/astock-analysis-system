@@ -75,29 +75,40 @@ logger.addFilter(_DedupLogFilter())
 _ts_last_call = 0.0
 
 
-def _load_ts_min_interval() -> float:
-    """498号#11/Q2：Tushare 限流值由 backend/config/data_sources.yaml 驱动
-    （rate_limits.tushare.requests_per_second）；缺失/异常时回退 5 次/秒（=0.2s，
-    与接线前硬编码一致，零行为变更）。"""
+def _load_ts_rate_config() -> dict:
+    """498号#11/Q2 + §六-3：Tushare 限流/超时参数由 backend/config/data_sources.yaml 驱动
+    （rate_limits.tushare.*）。缺失/异常时回退原硬编码值（**零行为变更**）。
+
+    键：requests_per_second（次/秒）、call_timeout（普通接口子线程超时秒）、
+    minute_call_timeout（分钟接口超时秒）、stk_mins_requests_per_minute（stk_mins 极严限流次/分）。
+    """
+    cfg = {'rps': 5, 'call_timeout': 15.0, 'minute_call_timeout': 60.0, 'stk_mins_rpm': 1}
     try:
         from config import load_yaml
-        rps = ((load_yaml('data_sources.yaml').get('rate_limits') or {})
-               .get('tushare') or {}).get('requests_per_second')
-        if rps and float(rps) > 0:
-            return 1.0 / float(rps)
+        ts = ((load_yaml('data_sources.yaml').get('rate_limits') or {})
+              .get('tushare') or {})
+        if ts.get('requests_per_second') and float(ts['requests_per_second']) > 0:
+            cfg['rps'] = float(ts['requests_per_second'])
+        if ts.get('call_timeout') and float(ts['call_timeout']) > 0:
+            cfg['call_timeout'] = float(ts['call_timeout'])
+        if ts.get('minute_call_timeout') and float(ts['minute_call_timeout']) > 0:
+            cfg['minute_call_timeout'] = float(ts['minute_call_timeout'])
+        if ts.get('stk_mins_requests_per_minute') and float(ts['stk_mins_requests_per_minute']) > 0:
+            cfg['stk_mins_rpm'] = float(ts['stk_mins_requests_per_minute'])
     except Exception:
         pass
-    return 0.2
+    return cfg
 
 
-_TS_MIN_INTERVAL = _load_ts_min_interval()  # 默认 5次/秒（yaml 可覆盖）
+_ts_rate_cfg = _load_ts_rate_config()
+_TS_MIN_INTERVAL = 1.0 / _ts_rate_cfg['rps']      # 默认 5次/秒 → 0.2s
 # 498号#19：Tushare 限流器 check-sleep-set 加锁（原无锁，多线程并发可突破 5次/秒；
 # 与 tushare_provider._ts_last_call 各自独立，此处仅保护 daemon 侧调用节奏）
 _ts_lock = threading.Lock()
 # COL/RAW 卡死根治：Tushare SDK 底层无 socket 超时，若其 TCP 请求挂起不返回，
 # 主循环 30s tick 会被拖死，导致后续采集/预计算停摆。故在统一入口对网络调用
 # 做子线程超时：超时返回 None（上层判空跳过该次），主循环立即继续，不再阻塞。
-_TS_CALL_TIMEOUT = 15.0
+_TS_CALL_TIMEOUT = _ts_rate_cfg['call_timeout']
 
 def _to_tushare_date(v):
     """Tushare 日期归一：YYYY-MM-DD → YYYYMMDD（Tushare 要求紧凑，横杠会静默空返回）
@@ -154,10 +165,10 @@ def _ts(pro_func, *args, **kwargs):
         except Exception:
             pass
 
-# 补充：stk_mins 极严限流（1次/分钟）
+# 补充：stk_mins 极严限流（1次/分钟）——498号 §六-3：由 yaml rate_limits.tushare.stk_mins_requests_per_minute 驱动
 _ts_minute_last_call = 0.0
-_TS_MINUTE_INTERVAL = 60.0
-_TS_MINUTE_CALL_TIMEOUT = 60.0
+_TS_MINUTE_INTERVAL = 60.0 / _ts_rate_cfg['stk_mins_rpm']      # 默认 1次/分 → 60s
+_TS_MINUTE_CALL_TIMEOUT = _ts_rate_cfg['minute_call_timeout']
 
 def _ts_minute(pro_func, *args, **kwargs):
     """极严限流的分钟数据接口（1次/分钟），含网络超时保护"""
