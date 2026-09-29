@@ -31,8 +31,10 @@ SAMPLE = int(os.environ.get('JUD_GATE_SAMPLE', '500'))
 _POSITIVE_BARS = {'strong_confirm', 'trend_confirm', 'light_confirm'}
 
 # 五档分布合理性宽范围（%）
-RANGE = {'avoid': (40.0, 75.0), 'wait': (10.0, 45.0), 'reduce': (2.0, 25.0),
-         'enter_light': (1.0, 15.0)}
+# 497号（批次3/P1，2026-09-29）：随门禁基线重定（avoid 78.5 / wait 13.5）同步校准宽范围，
+#   覆盖数据真实化后的新分布（归因见 scripts/_495_b2_jud_market_gate.py STATE_BASELINE 注释）。
+RANGE = {'avoid': (60.0, 92.0), 'wait': (5.0, 30.0), 'reduce': (2.0, 20.0),
+         'enter_light': (0.0, 10.0)}
 
 
 def _load_sample():

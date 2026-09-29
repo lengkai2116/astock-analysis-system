@@ -11,8 +11,8 @@
       - 矛盾组合：v390 opportunity_state=avoid 且 dim8 summary.status_bar ∈ 正向确认
   H3  consensus_rate ∈ [-1, 1]（判定权威）且 final_score ∈ [0, 100]（全部样本）
 
-【范围断言】（基准 ±5pt 容差，基准=2026-09-28 全市场实测）
-  R1  opportunity_state 五档占比：avoid 58.1 / wait 25.9 / reduce 10.3 / enter 3.8 / light 1.9
+【范围断言】（基准 ±5pt 容差，基准=2026-09-28 全市场实测；497号批次3 重定）
+  R1  opportunity_state 五档占比：avoid 78.5 / wait 13.5 / reduce 6.9 / enter 0.6 / light 0.4
 
 【观察项】（打印不阻断）
   K1 risk_budget_position / K4 entry_zone/target_zone（C1 待 daemon 日终 RAW-2 刷新，0% 属已知）
@@ -37,10 +37,15 @@ for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
 from app.data.sharding_manager import sharding_manager  # noqa: E402
 from app.opportunity_atlas.status_engine import StatusEngine  # noqa: E402
 
-# 五档分布基线（2026-09-28 全市场 5552 只实测，百分比）+ 容差 ±5pt
-# 495号（B3，2026-09-28）：atr_pct 单位修复后重定基线（light 1.9→2.4 / wait 25.9→26.2 /
-#   reduce 10.3→10.2 / avoid 58.1→57.4——L2 risk reliability 与 L1 strength 不再全市场恒折减）
-STATE_BASELINE = {'avoid': 57.4, 'wait': 26.2, 'reduce': 10.2, 'enter': 3.8, 'light': 2.4}
+# 五档分布基线 + 容差 ±5pt
+# 497号（批次3/P1，2026-09-29）：分布基线重定——经归因确认（09-28 vs 09-24 探针，
+#   `scripts/_497_b3_attribution_probe.py`）偏移为「行情真实反映 + 数据真实化」而非误判：
+#   09-24 旧基线定于数据退化期（valuation/vp 维恒 100% 中性、factor 恒 -1、finance 9.2%，
+#   均无真实产出）；09-28 经 484 数据补采 + 496 RAW-2 全量重算后各维真实化（valuation 63.4%、
+#   finance 64.2%、signal 66.6% 看空），叠加当日大跌（均值 -2.24%/跌 82%）→ 看空占比真实抬升。
+#   L2 reliability 两日基本一致（risk 0.670/0.685）→ 排除单维权重异常放大。
+#   2026-09-28 全市场 5552 只实测：enter 0.6 / light 0.4 / wait 13.5 / reduce 6.9 / avoid 78.5
+STATE_BASELINE = {'avoid': 78.5, 'wait': 13.5, 'reduce': 6.9, 'enter': 0.6, 'light': 0.4}
 STATE_TOL = 5.0
 _POSITIVE_BARS = {'strong_confirm', 'trend_confirm', 'light_confirm'}
 
