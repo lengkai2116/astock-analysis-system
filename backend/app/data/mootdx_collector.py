@@ -115,8 +115,10 @@ def _calc_commission(row) -> float:
 def _calc_speed(code: str, price: float) -> float:
     """计算涨速 (%) — 基于相邻两次采集的价格变化"""
     global _prev_prices
-    prev = _prev_prices.get(code, 0.0)
-    _prev_prices[code] = price
+    # 498号#16：字典读改写加锁（_fetch_eastmoney 4 线程并发调用；原无锁读改写有竞态）
+    with _prev_prices_lock:
+        prev = _prev_prices.get(code, 0.0)
+        _prev_prices[code] = price
     if prev == 0 or price == 0:
         return 0.0
     return round((price - prev) / prev * 100, 2)
@@ -134,9 +136,9 @@ from app.data.in_memory_store import store as mem_store
 _minute_window: dict = {}
 _minute_window_lock = threading.Lock()
 _MINUTE_AGG_FREQ = '1min'  # 聚合频率
-_FLUSH_BATCH_SIZE = 200    # 每批写入ECM的股票数
 # D3: 上一轮采集价格，用于计算涨速（盘后重置）
 _prev_prices: Dict[str, float] = {}
+_prev_prices_lock = threading.Lock()  # 498号#16
 
 
 def _feed_minute_aggregator(records: List[Dict]):
@@ -146,7 +148,10 @@ def _feed_minute_aggregator(records: List[Dict]):
     在分钟切换时自动 flush 已完成窗口到存储层。
     """
     global _minute_window
-    now = datetime.now()
+    # 498号#14：用北京时间基准（utcnow+8h）而非进程本地时间——部署机时区非 UTC+8
+    # （Docker 常见 UTC）时，原 datetime.now() 会让 minute_key/trade_date 按 UTC 落库错位
+    from app.utils.trading_hours import _now as _cn_now
+    now = _cn_now()
     minute_key = now.strftime('%Y-%m-%d %H:%M')  # 精确到分
 
     with _minute_window_lock:
@@ -206,8 +211,9 @@ def _do_flush_one(code: str, window: dict, now: datetime):
     # 写入 InMemoryStateStore（盘中推送用）
     try:
         mem_store.append_minute_kline([bar])
-    except Exception:
-        pass
+    except Exception as e:
+        # 498号#44：原静默 pass 致已完成分钟K线无声丢失且事后无法察觉
+        logger.debug(f"[分钟K线] 写入内存存储失败 {code}: {e}")
 
     # 写入 ECM minute_kline_cache（持久化）
     try:
@@ -216,8 +222,9 @@ def _do_flush_one(code: str, window: dict, now: datetime):
         import pandas as pd
         # 414号P2.4: 使用cache_minute_kline确保走_write_lock
         ecm.cache_minute_kline(pd.DataFrame([bar]))
-    except Exception:
-        pass
+    except Exception as e:
+        # 498号#44：原静默 pass 致持久化失败无声丢失
+        logger.debug(f"[分钟K线] 写入ECM失败 {code}: {e}")
 
 
 def _flush_all_pending():
@@ -365,19 +372,23 @@ _source_stats = {
 _active_source = 'eastmoney'  # 当前活跃源
 
 
+_source_stats_lock = threading.Lock()  # 498号#17：_source_stats 读改写加锁
+
+
 def get_source_stats() -> dict:
     """返回采集源健康统计（供健康检查端点使用）"""
-    global _active_source
-    rates = {}
-    for name, st in _source_stats.items():
-        total = st['ok'] + st['fail']
-        rates[name] = {
-            'ok': st['ok'],
-            'fail': st['fail'],
-            'rate': f'{st["ok"] / total * 100:.1f}%' if total > 0 else 'N/A',
-        }
+    with _source_stats_lock:
+        rates = {}
+        for name, st in _source_stats.items():
+            total = st['ok'] + st['fail']
+            rates[name] = {
+                'ok': st['ok'],
+                'fail': st['fail'],
+                'rate': f'{st["ok"] / total * 100:.1f}%' if total > 0 else 'N/A',
+            }
+        active = _active_source
     return {
-        'active_source': _active_source,
+        'active_source': active,
         'sources': rates,
     }
 
@@ -385,11 +396,20 @@ def get_source_stats() -> dict:
 def _record_source_result(source: str, success: bool):
     """记录单次采集结果到统计"""
     global _source_stats
-    _source_stats.setdefault(source, {'ok': 0, 'fail': 0})
-    if success:
-        _source_stats[source]['ok'] += 1
-    else:
-        _source_stats[source]['fail'] += 1
+    # 498号#17：采集线程写、API 线程读，加锁防竞态
+    with _source_stats_lock:
+        _source_stats.setdefault(source, {'ok': 0, 'fail': 0})
+        if success:
+            _source_stats[source]['ok'] += 1
+        else:
+            _source_stats[source]['fail'] += 1
+
+
+def _set_active_source(src: str):
+    """498号#17：_active_source 由采集线程写、get_source_stats 读，加锁写"""
+    global _active_source
+    with _source_stats_lock:
+        _active_source = src
 
 
 # ── 双源热备管理器 ─────────────────────────────────────
@@ -419,8 +439,6 @@ class _SnapshotSourceManager:
         - 降级到备用源后，每 RECOVERY_PROBE_INTERVAL 次成功采集，
           主动探测东财一次，恢复后自动切回。
         """
-        global _active_source
-
         # Phase 1: 主源（降级后周期探测东财恢复）
         probe_source = self._primary
         if self._primary != 'eastmoney':
@@ -437,15 +455,15 @@ class _SnapshotSourceManager:
                 # 东财已恢复，切回主源
                 self._primary = 'eastmoney'
                 self._backup_streak = 0
-                _active_source = 'eastmoney'
+                _set_active_source('eastmoney')
                 return result
             if probe_source == self._primary:
                 self._backup_streak = 0
-                _active_source = self._primary
+                _set_active_source(self._primary)
                 return result
             # 探测到东财恢复 → 上面已处理；探测但东财非当前主源且返回了数据→继续用当前主源
             self._backup_streak = 0
-            _active_source = self._primary
+            _set_active_source(self._primary)
             return result
 
         _record_source_result(probe_source, False)
@@ -457,7 +475,7 @@ class _SnapshotSourceManager:
         if result:
             _record_source_result(backup, True)
             self._recovery_successes += 1
-            _active_source = backup
+            _set_active_source(backup)
 
             # 备用源连续成功后切换主源（更稳定者上位）
             if self._recovery_successes >= self.RECOVERY_THRESHOLD:
@@ -535,7 +553,9 @@ def _fetch_sina(codes: list, name_map: dict) -> list:
                     'price': price, 'change': change, 'change_pct': change_pct,
                     'open': open_p, 'high': _safe_float(values[4]),
                     'low': _safe_float(values[5]), 'prev_close': close_p,
-                    'volume': int(_safe_float(values[8]) * 100) if _safe_float(values[8]) else 0,
+                    # 498号#3：新浪字段 8 为「成交量(股)」，÷100 归「手」（对齐日线 vol / AKShare 总手；
+                    # 原 ×100 实为 ×10000 手，致三源切换量能跳变）
+                    'volume': int(_safe_float(values[8]) / 100),
                     'amount': _safe_float(values[9]),
                     'bid1': 0.0, 'ask1': 0.0, 'bid_vol1': 0, 'ask_vol1': 0,
                     'bid2': 0.0, 'ask2': 0.0, 'bid_vol2': 0, 'ask_vol2': 0,
@@ -583,7 +603,9 @@ def _fetch_tencent(codes: list, name_map: dict) -> list:
     all_records = []
     batch_size = 100
 
-    for batch_start in range(0, min(len(codes), 2000), batch_size):
+    # 498号#43：去掉 `min(len(codes), 2000)` 截断——codes 升序（000/001/…/600…），
+    # 限 2000 会使沪市（索引 12000+）永不触达（新浪段已修全量，腾讯段遗留同缺陷）。
+    for batch_start in range(0, len(codes), batch_size):
         batch = codes[batch_start:batch_start + batch_size]
         tencent_codes = []
         for c in batch:
@@ -630,7 +652,8 @@ def _fetch_tencent(codes: list, name_map: dict) -> list:
                     'high': _safe_float(values[33]),
                     'low': _safe_float(values[34]),
                     'prev_close': close_p,
-                    'volume': int(_safe_float(values[6]) * 100),
+                    # 498号#3：腾讯字段 6 为「成交量(手)」，去掉原 ×100（原致手→股放大 100 倍）
+                    'volume': int(_safe_float(values[6])),
                     'amount': _safe_float(values[7]),
                     # 五档盘口：(量,价) 交替
                     'bid1': _safe_float(values[9]),
@@ -738,6 +761,7 @@ def _fetch_eastmoney(codes: list, name_map: dict) -> list:
                 'high': _safe_float(s.get('f15')),
                 'low': _safe_float(s.get('f16')),
                 'prev_close': prev_close,
+                # 498号#3：东财 f5 为「成交量(手)」，与日线 vol 同口径（无需换算）
                 'volume': int(_safe_float(s.get('f5', 0))),
                 'amount': _safe_float(s.get('f6')),
                 'bid1': 0.0, 'ask1': 0.0,
@@ -1018,7 +1042,8 @@ def _compute_sector_rankings():
     按行业聚合计算平均涨跌幅，替代不可用的 AKShare stock_board_industry_name_em()。
     刷新频率跟随快照（~5s），但每 30s 才实际更新 store。
     """
-    global _last_sector_ts
+    # 498号#56：原 `global _last_sector_ts` 声明了从未定义的模块变量（无效）；节流实际
+    # 用函数属性 _compute_sector_rankings._last_ts（下面），故删除该无效 global。
     now = time.time()
     # 每 30s 刷新一次板块排行
     if now - getattr(_compute_sector_rankings, '_last_ts', 0) < 30:

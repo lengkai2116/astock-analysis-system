@@ -337,20 +337,19 @@ class DashboardService:
 
             ecm = self.data_manager.cache
             # 查询 daily_cache 最新日期
-            date_df = pd.read_sql(
-                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1",
-                ecm.read_conn
-            )
+            date_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
             if date_df.empty:
                 logger.error("涨跌幅榜: DuckDB 无任何历史数据")
                 raise ValueError("DuckDB daily_cache 无日期记录，走 Tushare 降级")
             last_date = date_df['trade_date'].iloc[0]
 
             # 取该日全市场数据
-            all_df = pd.read_sql(
+            all_df = ecm._query_shard(
+                'daily_cache',
                 "SELECT * FROM daily_cache WHERE trade_date = ? ORDER BY pct_chg DESC",
-                ecm.read_conn, params=[last_date]
-            )
+                [last_date])
             if all_df.empty:
                 logger.error("涨跌幅榜: DuckDB 查询为空")
                 raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
@@ -455,10 +454,10 @@ class DashboardService:
             date_label = str(last_date)
 
             # 取该日全市场 pct_chg + ts_code
-            all_df = pd.read_sql(
+            all_df = ecm._query_shard(
+                'daily_cache',
                 "SELECT ts_code, pct_chg FROM daily_cache WHERE trade_date = ?",
-                ecm.read_conn, params=[last_date]
-            )
+                [last_date])
             if all_df.empty:
                 logger.error("板块涨跌幅 DuckDB: 当日无数据")
                 raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
@@ -545,10 +544,10 @@ class DashboardService:
             date_label = str(last_date)
 
             # 取该日全市场数据
-            all_df = pd.read_sql(
+            all_df = ecm._query_shard(
+                'daily_cache',
                 "SELECT ts_code, close, pct_chg FROM daily_cache WHERE trade_date = ?",
-                ecm.read_conn, params=[last_date]
-            )
+                [last_date])
             if all_df.empty:
                 logger.error("dashboard/summary DuckDB: 当日无数据")
                 raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
@@ -806,9 +805,9 @@ class DashboardService:
         """获取最近可用的交易日（YYYYMMDD），优先 DuckDB daily_cache → 推算"""
         try:
             ecm = self.data_manager.cache
-            date_df = pd.read_sql(
-                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1"
-            , ecm.read_conn)
+            date_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
             if not date_df.empty:
                 return str(date_df['trade_date'].iloc[0]).replace('-', '')
         except Exception:
@@ -828,11 +827,11 @@ class DashboardService:
             import pandas as pd
 
             ecm = self.data_manager.cache
-            df = pd.read_sql(
+            df = ecm._query_shard(
+                'daily_cache',
                 "SELECT trade_date, COUNT(*) as cnt FROM daily_cache "
                 "GROUP BY trade_date HAVING cnt >= ? ORDER BY trade_date DESC LIMIT 1",
-                ecm.read_conn, params=[min_stocks]
-            )
+                [min_stocks])
             if not df.empty:
                 return str(df['trade_date'].iloc[0])
         except Exception:

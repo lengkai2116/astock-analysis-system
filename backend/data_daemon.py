@@ -49,6 +49,9 @@ logger = logging.getLogger('data_daemon')
 # ── 重复日志去重过滤器（Task 3：预计算异常刷爆日志时，同内容只警告一次） ──
 class _DedupLogFilter(logging.Filter):
     """按消息前缀去重，同内容只放行第一条 WARNING，后续降为 DEBUG"""
+    # 498号#49：去重集合加上限——键含逐码内容（如 [000001.SZ]），长驻进程原会无界增长
+    _MAX_SEEN = 20000
+
     def __init__(self):
         super().__init__()
         self._seen = set()
@@ -60,6 +63,9 @@ class _DedupLogFilter(logging.Filter):
             record.levelno = logging.DEBUG
             record.levelname = 'DEBUG'
             return True
+        if len(self._seen) >= self._MAX_SEEN:
+            # 达上限即整体清空重来（去重失效代价远低于无界内存增长）
+            self._seen.clear()
         self._seen.add(key)
         return True
 
@@ -67,7 +73,27 @@ logger.addFilter(_DedupLogFilter())
 
 # ── Tushare 全局速率限制（防止误伤，确保 ≤5次/秒） ──
 _ts_last_call = 0.0
-_TS_MIN_INTERVAL = 0.2  # 5次/秒
+
+
+def _load_ts_min_interval() -> float:
+    """498号#11/Q2：Tushare 限流值由 backend/config/data_sources.yaml 驱动
+    （rate_limits.tushare.requests_per_second）；缺失/异常时回退 5 次/秒（=0.2s，
+    与接线前硬编码一致，零行为变更）。"""
+    try:
+        from config import load_yaml
+        rps = ((load_yaml('data_sources.yaml').get('rate_limits') or {})
+               .get('tushare') or {}).get('requests_per_second')
+        if rps and float(rps) > 0:
+            return 1.0 / float(rps)
+    except Exception:
+        pass
+    return 0.2
+
+
+_TS_MIN_INTERVAL = _load_ts_min_interval()  # 默认 5次/秒（yaml 可覆盖）
+# 498号#19：Tushare 限流器 check-sleep-set 加锁（原无锁，多线程并发可突破 5次/秒；
+# 与 tushare_provider._ts_last_call 各自独立，此处仅保护 daemon 侧调用节奏）
+_ts_lock = threading.Lock()
 # COL/RAW 卡死根治：Tushare SDK 底层无 socket 超时，若其 TCP 请求挂起不返回，
 # 主循环 30s tick 会被拖死，导致后续采集/预计算停摆。故在统一入口对网络调用
 # 做子线程超时：超时返回 None（上层判空跳过该次），主循环立即继续，不再阻塞。
@@ -95,10 +121,12 @@ def _ts(pro_func, *args, **kwargs):
     for _dkey in ('trade_date', 'start_date', 'end_date'):
         if _dkey in kwargs:
             kwargs[_dkey] = _to_tushare_date(kwargs[_dkey])
-    elapsed = time.time() - _ts_last_call
-    if elapsed < _TS_MIN_INTERVAL:
-        time.sleep(_TS_MIN_INTERVAL - elapsed)
-    _ts_last_call = time.time()
+    # 498号#19：限流 check-sleep-set 原子化（否则并发可同时通过间隔检查）
+    with _ts_lock:
+        elapsed = time.time() - _ts_last_call
+        if elapsed < _TS_MIN_INTERVAL:
+            time.sleep(_TS_MIN_INTERVAL - elapsed)
+        _ts_last_call = time.time()
     import concurrent.futures as _cf
     _exe = _cf.ThreadPoolExecutor(max_workers=1)
     try:
@@ -1815,8 +1843,7 @@ def _batch_income_recent(codes: list = None) -> int:
         except Exception:
             continue
     logger.info(f"  [利润表] 增量同步 {total} 条 (共 {len(codes)} 只"
-                + (f"，跳过 {n_skip} 只已有最新期" if n_skip else ")")
-                + ")")
+                + (f"，跳过 {n_skip} 只已有最新期)" if n_skip else ")"))
     return total
 
 
@@ -1851,8 +1878,7 @@ def _batch_balancesheet(codes: list = None) -> int:
         except Exception:
             continue
     logger.info(f"  [资产负债表] 同步 {total} 条 (共 {len(codes)} 只"
-                + (f"，跳过 {n_skip} 只已有最新期" if n_skip else ")")
-                + ")")
+                + (f"，跳过 {n_skip} 只已有最新期)" if n_skip else ")"))
     return total
 
 
@@ -1887,8 +1913,7 @@ def _batch_cashflow(codes: list = None) -> int:
         except Exception:
             continue
     logger.info(f"  [现金流量表] 同步 {total} 条 (共 {len(codes)} 只"
-                + (f"，跳过 {n_skip} 只已有最新期" if n_skip else ")")
-                + ")")
+                + (f"，跳过 {n_skip} 只已有最新期)" if n_skip else ")"))
     return total
 
 
@@ -2715,7 +2740,7 @@ def _check_minute_60min():
 # 日终同步
 # ══════════════════════════════════════════════════════════
 
-_SYNCED_TODAY = False
+# 498号#47：删除只写不读的 _SYNCED_TODAY（死状态）
 
 
 def run_daily_sync():
@@ -2727,7 +2752,6 @@ def run_daily_sync():
     373号方案§五决策点#1：合并 run_daily_sync 与 _drive_pipeline 重叠的
     COL 采集调用，消除交易日重复工作。
     """
-    global _SYNCED_TODAY
     today = datetime.now().strftime('%Y%m%d')
     logger.info("=== 日终同步开始 ===")
 
@@ -2830,7 +2854,8 @@ def run_daily_sync():
     except Exception as e:
         logger.warning(f"  信号验证回算触发失败: {e}")
 
-    _SYNCED_TODAY = True
+    # 498号#47：原 `_SYNCED_TODAY = True` 为只写不读的死状态（暗示"当日幂等"但无消费方，
+    # 误导）；日终幂等实际由 _drive_pipeline 的 step 标记保证，故删除该状态写入。
     logger.info("=== 日终同步完成 ===")
 
 
@@ -6313,6 +6338,9 @@ def _consume_sync_requests_batch():
         monitor.record_metric('sync_requests_pending', len(pending))
     except Exception:
         pass
+    # 498号#12：通用请求预算——与下方 fin/stk 单只补采预算（_half 各半）独立。
+    # 原实现此处 = _fin_done + _stk_done，可预置至 MAX_PER_TICK，致积压时首条非
+    # fin/stk 请求即被 `processed >= MAX_PER_TICK` 饿死、永不推进。
     processed = 0
     MAX_PER_TICK = 50  # 每tick最多处理50条，避免阻塞管道
     # 429号修复：finance_report/stk_holder 请求按 ts_code 单只补采（原实现每条都触发
@@ -6354,7 +6382,6 @@ def _consume_sync_requests_batch():
         except Exception as e:
             logger.warning(f"  stk_holder 单只补采失败 {code}: {e}")
         _stk_done += 1
-    processed = _fin_done + _stk_done
     for req in pending:
         # finance_report/stk_holder：仅当该代码本轮已补采才标记 done（标记为廉价操作，
         # 不受 MAX_PER_TICK 限制）；未补采的保持 pending 留待下轮。
@@ -7379,8 +7406,14 @@ def _run_signal_checkpoint():
             "target_price, risk_line, signal_snapshot, verification_status "
             "FROM signal_records WHERE verification_status != 'completed'"
         ).fetchall()
-        # 用 daily_cache 回算（只读 stock_cache.db）
-        ec = _sq.connect(f"file:{_ecm_local.db_path}?mode=ro", uri=True, timeout=15)
+        # 用 daily_cache 回算（499号#5：daily_cache 属 market_cache.db 分库，原连总库
+        # _ecm_local.db_path → no such table → 信号验证回算长期静默失效。改走分库连接；
+        # ec 保持 None——不得把共享分库连接交给下方 finally close()）
+        from app.data.sharding_manager import sharding_manager as _sm
+        def _ec_fetch(sql, params):
+            _db = _sm.get_db_for_table('daily_cache')
+            _conn = _sm.get_connection(_db) if _db else _ecm_local.read_conn
+            return _conn.execute(sql, params).fetchall()
         updated = 0
         for rid, ts_code, sdate, stype, conf, entry, target, risk, snap, status in rows:
             sdate_dt = _dt.date.fromisoformat(str(sdate)) if isinstance(sdate, str) else sdate
@@ -7394,10 +7427,9 @@ def _run_signal_checkpoint():
                 if sdate_dt > cutoff:
                     continue  # T+N 未到
                 # 取信号日后第 N 个交易日
-                rows2 = ec.execute(
+                rows2 = _ec_fetch(
                     "SELECT close FROM daily_cache WHERE ts_code=? AND trade_date >= ? "
-                    "ORDER BY trade_date LIMIT ?", (ts_code, sdate_dt.strftime('%Y-%m-%d'), off + 1)
-                ).fetchall()
+                    "ORDER BY trade_date LIMIT ?", (ts_code, sdate_dt.strftime('%Y-%m-%d'), off + 1))
                 if len(rows2) < off + 1:
                     continue
                 sig_price = rows2[0][0]
@@ -7412,8 +7444,10 @@ def _run_signal_checkpoint():
                 # 更新检查点
                 new_status = 't5_checked' if off == 5 else ('t10_checked' if off == 10 else 'completed')
                 cur.execute(
+                    # 499号附：列名 is_win_{5|10|20}d（无 t）——原 f"is_win_{field}d"（field='t5'）
+                    # 拼成 is_win_t5d，与实际 schema 不符 → no such column（修复 #5 分库读后暴露的第二处潜伏缺陷）
                     f"UPDATE signal_records SET price_{field}=?, return_{field}=?, "
-                    f"is_win_{field}d=?, verification_status=? WHERE id=?",
+                    f"is_win_{field[1:]}d=?, verification_status=? WHERE id=?",
                     (chk_price, ret, is_win, new_status, rid)
                 )
                 status = new_status
@@ -7586,32 +7620,6 @@ def _wal_truncate_all_dbs():
     if shrunk:
         logger.info(f"WAL TRUNCATE 维护完成: {' '.join(shrunk)}")
     return shrunk
-
-
-def _check_daily_sync_backfill():
-    """开机兜底：如果当前 >15:35 且今日日终同步未执行，立即触发（Task 2）
-
-    daemon 可能在 15:30-15:35 窗口期不在运行（崩溃/重启），
-    用日线数据量判断日终同步是否已被执行。
-    """
-    now = datetime.now()
-    if now.weekday() >= 5:
-        logger.info("  [日终兜底] 非交易日，跳过")
-        return
-    if now.hour < 15 or (now.hour == 15 and now.minute <= 35):
-        return  # 还没到窗口，等主循环正常触发
-
-    today_fmt = now.strftime('%Y-%m-%d')
-    try:
-        cnt = _shard_fetchall(
-            'daily_cache', "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [today_fmt])[0][0]
-        if cnt >= 5000:
-            logger.info(f"  [日终兜底] 今日日终同步已完成（日线{cnt}行），跳过")
-            return
-        logger.info(f"  [日终兜底] 检测到今日日终同步未执行（日线{cnt}行），触发补采...")
-        run_daily_sync()
-    except Exception as e:
-        logger.warning(f"  [日终兜底] 自检失败: {e}")
 
 
 def _update_account_risk_status(data_dir: str) -> None:

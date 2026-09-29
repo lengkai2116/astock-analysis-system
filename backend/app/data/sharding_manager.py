@@ -21,15 +21,18 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 # 未登记路由表告警去重集合（426号 S1/D8：未登记表操作一次性告警，防刷屏）
+# 498号#26：加锁——采集线程/API 线程并发读写该集合
 _unmapped_warned: set[str] = set()
+_unmapped_warned_lock = threading.Lock()
 
 
 def _warn_unmapped(table: str, op: str):
     """未登记路由的表执行 {op} 时告警（一次性去重）"""
     key = f'{table}:{op}'
-    if key in _unmapped_warned:
-        return
-    _unmapped_warned.add(key)
+    with _unmapped_warned_lock:
+        if key in _unmapped_warned:
+            return
+        _unmapped_warned.add(key)
     logger.warning(f"未登记分库路由的表 {op} 被跳过: {table}（请登记 _table_to_db 或确认归属）")
 
 
@@ -57,6 +60,9 @@ class ShardingManager:
         # 数据库连接缓存
         self._connections: Dict[str, sqlite3.Connection] = {}
         self._write_locks: Dict[str, threading.RLock] = {}
+        # 498号#20：连接缓存「检查-建连-入缓存」加锁（原非原子，两线程首次并发
+        # 各建一条 sqlite 连接、后者覆盖前者致句柄泄漏）
+        self._conn_lock = threading.Lock()
 
         # 表到数据库的映射（356号方案定稿）；值为 None 表示显式总库表
         self._table_to_db: Dict[str, Optional[str]] = {
@@ -152,21 +158,23 @@ class ShardingManager:
         ]
 
     def get_connection(self, db_name: str) -> sqlite3.Connection:
-        """获取数据库连接"""
+        """获取数据库连接（498号#20：缓存检查+建连原子化，防并发重复建连泄漏）"""
         if db_name not in self._connections:
-            db_path = os.path.join(self.db_dir, db_name)
-            conn = sqlite3.connect(db_path, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=30000")    # 30s（2026-08-12方案B，见模块注释）
-            # 426号 S4/D2：cache_size 与 journal_size_limit 按库设定（356号 §3 规则14）
-            pr = _DB_PRAGMAS.get(db_name, {'cache_size': -8192, 'journal_size_limit': 8388608})
-            conn.execute(f"PRAGMA cache_size={pr['cache_size']}")
-            conn.execute(f"PRAGMA journal_size_limit={pr['journal_size_limit']}")
-            self._connections[db_name] = conn
-            # 424号 P2-1：snapshot_cache.db 补索引（356号 §3.2.5 设计未落地）
-            if db_name == 'snapshot_cache.db':
-                self._ensure_snapshot_indexes(conn)
+            with self._conn_lock:
+                if db_name not in self._connections:
+                    db_path = os.path.join(self.db_dir, db_name)
+                    conn = sqlite3.connect(db_path, check_same_thread=False)
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute("PRAGMA busy_timeout=30000")    # 30s（2026-08-12方案B，见模块注释）
+                    # 426号 S4/D2：cache_size 与 journal_size_limit 按库设定（356号 §3 规则14）
+                    pr = _DB_PRAGMAS.get(db_name, {'cache_size': -8192, 'journal_size_limit': 8388608})
+                    conn.execute(f"PRAGMA cache_size={pr['cache_size']}")
+                    conn.execute(f"PRAGMA journal_size_limit={pr['journal_size_limit']}")
+                    self._connections[db_name] = conn
+                    # 424号 P2-1：snapshot_cache.db 补索引（356号 §3.2.5 设计未落地）
+                    if db_name == 'snapshot_cache.db':
+                        self._ensure_snapshot_indexes(conn)
 
         return self._connections[db_name]
 
@@ -187,7 +195,8 @@ class ShardingManager:
             try:
                 conn.execute(sql)
             except Exception as e:
-                logger.debug(f"snapshot_cache 索引创建失败: {e}")
+                # 498号#23：原 logger.debug（易被静默）→ warning，迁移失败须可见
+                logger.warning(f"snapshot_cache 索引创建失败: {e}")
         # 491号（R4-①）：signals 列迁移（status_snapshot 属本分库，ECM 总库无此表）
         for tbl in ('status_snapshot', 'status_snapshot_history'):
             try:
@@ -195,7 +204,8 @@ class ShardingManager:
                 if cols and 'signals' not in cols:
                     conn.execute(f"ALTER TABLE {tbl} ADD COLUMN signals TEXT DEFAULT NULL")
             except Exception as e:
-                logger.debug(f"{tbl} signals 列迁移失败: {e}")
+                # 498号#23：迁移失败原 debug 静默 → warning
+                logger.warning(f"{tbl} signals 列迁移失败: {e}")
         conn.commit()
 
     def get_write_lock(self, db_name: str) -> threading.RLock:
@@ -268,6 +278,9 @@ class ShardingManager:
         """执行查询"""
         db_name = self.get_db_for_table(table_name)
         if db_name is None:
+            # 498号#21：读路径亦告警（原静默返回空，与写路径 _warn_unmapped 口径不一致）
+            if not self.is_registered(table_name):
+                _warn_unmapped(table_name, 'execute_query')
             return []  # 表在总库，分库管理器不处理
         conn = self.get_connection(db_name)
         cursor = conn.cursor()
@@ -330,6 +343,9 @@ class ShardingManager:
         """检查表是否存在"""
         db_name = self.get_db_for_table(table_name)
         if db_name is None:
+            # 498号#21：未登记表读路径告警（原静默返回 False，与写路径口径不一致）
+            if not self.is_registered(table_name):
+                _warn_unmapped(table_name, 'table_exists')
             return False  # 表在总库，分库管理器不处理
         conn = self.get_connection(db_name)
         cursor = conn.cursor()
@@ -383,5 +399,13 @@ def init_sharding(data_dir: str = None):
     """初始化分库管理器"""
     global sharding_manager
     if data_dir:
+        _old = sharding_manager
         sharding_manager = ShardingManager(data_dir)
+        # 498号#24：替换全局单例时关闭旧实例连接（daemon 启动 + 测试切沙盒均走此路径，
+        # 原实现只重绑不关闭，被替换实例的连接句柄泄漏）
+        if _old is not None:
+            try:
+                _old.close_all()
+            except Exception as e:
+                logger.debug(f"关闭旧分库实例连接失败: {e}")
     logger.info("分库管理器初始化完成")

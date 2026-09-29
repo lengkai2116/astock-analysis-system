@@ -10,6 +10,7 @@
 """
 
 import logging
+import threading
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -26,6 +27,9 @@ class FallbackManager:
         self._fallback_chains: Dict[str, List[str]] = {}
         # 降级历史
         self._fallback_history: List[Dict] = []
+        # 498号#18：单例状态可被多线程访问，加锁保护读改写序列（RLock：get_healthy_source
+        # 内部再调用 _is_source_healthy/_record_fallback，需可重入）
+        self._lock = threading.RLock()
 
     def register_fallback_chain(self, source_name: str, fallback_chain: List[str]):
         """注册数据源降级链
@@ -34,7 +38,8 @@ class FallbackManager:
             source_name: 主数据源名称
             fallback_chain: 降级数据源列表（按优先级排序）
         """
-        self._fallback_chains[source_name] = fallback_chain
+        with self._lock:
+            self._fallback_chains[source_name] = fallback_chain
         logger.info(f"注册降级链: {source_name} → {fallback_chain}")
 
     def update_health_status(self, source_name: str, is_healthy: bool,
@@ -47,32 +52,38 @@ class FallbackManager:
             response_time: 响应时间（毫秒）
             error_msg: 错误信息
         """
-        if source_name not in self._health_status:
-            self._health_status[source_name] = {
-                'healthy': True,
-                'last_check': datetime.now(),
-                'consecutive_failures': 0,
-                'total_failures': 0,
-                'avg_response_time': 0
-            }
+        _unhealthy = False
+        with self._lock:
+            if source_name not in self._health_status:
+                self._health_status[source_name] = {
+                    'healthy': True,
+                    'last_check': datetime.now(),
+                    'consecutive_failures': 0,
+                    'total_failures': 0,
+                    'avg_response_time': 0
+                }
 
-        status = self._health_status[source_name]
-        status['last_check'] = datetime.now()
+            status = self._health_status[source_name]
+            status['last_check'] = datetime.now()
 
-        if is_healthy:
-            status['healthy'] = True
-            status['consecutive_failures'] = 0
-            # 更新平均响应时间
-            if status['avg_response_time'] == 0:
-                status['avg_response_time'] = response_time
+            if is_healthy:
+                status['healthy'] = True
+                status['consecutive_failures'] = 0
+                # 更新平均响应时间
+                if status['avg_response_time'] == 0:
+                    status['avg_response_time'] = response_time
+                else:
+                    status['avg_response_time'] = (status['avg_response_time'] + response_time) / 2
             else:
-                status['avg_response_time'] = (status['avg_response_time'] + response_time) / 2
-        else:
-            status['consecutive_failures'] += 1
-            status['total_failures'] += 1
-            if status['consecutive_failures'] >= 3:
-                status['healthy'] = False
-                logger.warning(f"数据源 {source_name} 连续失败 {status['consecutive_failures']} 次，标记为不健康")
+                status['consecutive_failures'] += 1
+                status['total_failures'] += 1
+                if status['consecutive_failures'] >= 3:
+                    status['healthy'] = False
+                    _unhealthy = True
+                else:
+                    _unhealthy = False
+        if _unhealthy:
+            logger.warning(f"数据源 {source_name} 连续失败 3 次，标记为不健康")
 
     def get_healthy_source(self, source_name: str) -> Optional[str]:
         """获取可用的数据源（考虑健康状态）
@@ -84,54 +95,58 @@ class FallbackManager:
             可用的数据源名称，如果没有可用的则返回None
         """
         # 首先检查主数据源
-        if self._is_source_healthy(source_name):
-            return source_name
+        with self._lock:
+            if self._is_source_healthy(source_name):
+                return source_name
 
-        # 主数据源不健康，查找降级链
-        fallback_chain = self._fallback_chains.get(source_name, [])
-        for fallback_source in fallback_chain:
-            if self._is_source_healthy(fallback_source):
-                logger.info(f"数据源 {source_name} 不健康，降级到 {fallback_source}")
-                self._record_fallback(source_name, fallback_source)
-                return fallback_source
+            # 主数据源不健康，查找降级链
+            fallback_chain = self._fallback_chains.get(source_name, [])
+            for fallback_source in fallback_chain:
+                if self._is_source_healthy(fallback_source):
+                    logger.info(f"数据源 {source_name} 不健康，降级到 {fallback_source}")
+                    self._record_fallback(source_name, fallback_source)
+                    return fallback_source
 
         logger.warning(f"数据源 {source_name} 及其降级链均不可用")
         return None
 
     def _is_source_healthy(self, source_name: str) -> bool:
         """检查数据源是否健康"""
-        if source_name not in self._health_status:
-            # 未注册的数据源，默认健康
-            return True
-        return self._health_status[source_name]['healthy']
+        with self._lock:
+            if source_name not in self._health_status:
+                # 未注册的数据源，默认健康
+                return True
+            return self._health_status[source_name]['healthy']
 
     def _record_fallback(self, from_source: str, to_source: str):
         """记录降级事件"""
-        self._fallback_history.append({
-            'from': from_source,
-            'to': to_source,
-            'timestamp': datetime.now()
-        })
-        # 保留最近100条记录
-        if len(self._fallback_history) > 100:
-            self._fallback_history = self._fallback_history[-100:]
+        with self._lock:
+            self._fallback_history.append({
+                'from': from_source,
+                'to': to_source,
+                'timestamp': datetime.now()
+            })
+            # 保留最近100条记录
+            if len(self._fallback_history) > 100:
+                self._fallback_history = self._fallback_history[-100:]
 
     def get_health_report(self) -> Dict:
         """获取数据源健康状态报告"""
-        report = {
-            'timestamp': datetime.now().isoformat(),
-            'sources': {},
-            'fallback_count': len(self._fallback_history)
-        }
-
-        for source_name, status in self._health_status.items():
-            report['sources'][source_name] = {
-                'healthy': status['healthy'],
-                'consecutive_failures': status['consecutive_failures'],
-                'total_failures': status['total_failures'],
-                'avg_response_time': round(status['avg_response_time'], 2),
-                'last_check': status['last_check'].isoformat()
+        with self._lock:
+            report = {
+                'timestamp': datetime.now().isoformat(),
+                'sources': {},
+                'fallback_count': len(self._fallback_history)
             }
+
+            for source_name, status in self._health_status.items():
+                report['sources'][source_name] = {
+                    'healthy': status['healthy'],
+                    'consecutive_failures': status['consecutive_failures'],
+                    'total_failures': status['total_failures'],
+                    'avg_response_time': round(status['avg_response_time'], 2),
+                    'last_check': status['last_check'].isoformat()
+                }
 
         return report
 

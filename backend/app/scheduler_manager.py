@@ -455,11 +455,10 @@ class SchedulerManager:
                 return
 
             ecm = DataManager().cache
-            import pandas as pd
-            date_df = pd.read_sql(
-                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1",
-                ecm.read_conn
-            )
+            # 499号#1：daily_cache 属 market_cache.db 分库，改分库读（原 ecm.read_conn 读总库 → no such table）
+            date_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
             max_date = date_df['trade_date'].iloc[0] if not date_df.empty else None
             if max_date is None:
                 logger.info("=== 启动补采: 无数据, 后台线程开始全量同步（不影响服务器启动）===")
@@ -515,7 +514,8 @@ class SchedulerManager:
             return
 
         # 查询数据不足的股票，同时取最早和最晚交易日
-        sparse_df = pd.read_sql("""
+        # 499号#2：改分库读（daily_cache 属 market_cache.db，原 ecm.read_conn 读总库 → 崩溃）
+        sparse_df = ecm._query_shard('daily_cache', """
             SELECT ts_code, COUNT(*) as cnt,
                    MAX(trade_date) as last_date,
                    MIN(trade_date) as first_date
@@ -524,7 +524,7 @@ class SchedulerManager:
             HAVING cnt < ?
             ORDER BY cnt ASC
             LIMIT ?
-        """, ecm.read_conn, params=[min_days, max_stocks])
+        """, [min_days, max_stocks])
 
         if sparse_df.empty:
             logger.info(f"启动补采: 所有股票数据均 >= {min_days} 天，无需补齐")
@@ -532,6 +532,9 @@ class SchedulerManager:
             return
 
         # 过滤新股/次新股（上市不足 min_days 天，不可能有足够数据）
+        # 499号附：first_date 由 SQL 返回为 str，与 Timestamp 比较会抛
+        # "Invalid comparison between dtype=str and Timestamp"（修复分库读后暴露）→ 先转 datetime
+        sparse_df['first_date'] = pd.to_datetime(sparse_df['first_date'], errors='coerce')
         cutoff_date = pd.Timestamp(today) - pd.Timedelta(days=min_days)
         pre_filter = len(sparse_df)
         sparse_df = sparse_df[sparse_df['first_date'] <= cutoff_date].copy()
@@ -598,9 +601,11 @@ class SchedulerManager:
         from app.data import DataManager
         ecm = DataManager().cache
         try:
-            date_count = ecm.read_conn.execute(
-                "SELECT COUNT(DISTINCT trade_date) FROM daily_basic_cache"
-            ).fetchone()[0]
+            # 499号#3：daily_basic_cache 属 market_cache.db 分库，改分库读（原总库连接恒 no such table → date_count=0 恒触发回填）
+            _dc_df = ecm._query_shard(
+                'daily_basic_cache',
+                "SELECT COUNT(DISTINCT trade_date) AS n FROM daily_basic_cache")
+            date_count = int(_dc_df['n'].iloc[0]) if not _dc_df.empty else 0
         except Exception:
             date_count = 0
 
@@ -625,11 +630,10 @@ class SchedulerManager:
             else:
                 # 增量：从 DuckDB 获取最后交易日
                 ecm = dm.cache
-                import pandas as pd
-                date_df = pd.read_sql(
-                    "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1",
-                    ecm.read_conn
-                )
+                # 499号#4：daily_cache 属 market_cache.db 分库，改分库读（原总库连接异常 → 降级全量同步）
+                date_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
                 last_date = date_df['trade_date'].iloc[0] if not date_df.empty else None
                 if last_date:
                     try:

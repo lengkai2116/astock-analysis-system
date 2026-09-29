@@ -75,9 +75,10 @@ def get_cache_stats():
         stock_count = Stock.query.count()
         try:
             ecm = data_manager.cache
-            count_df = pd.read_sql(
-                "SELECT COUNT(*) AS cnt FROM daily_cache"
-            , ecm.read_conn)
+            # 499号#6：daily_cache 属 market_cache.db 分库，改分库读（原 ecm.read_conn 读总库）
+            count_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT COUNT(*) AS cnt FROM daily_cache")
             daily_count = int(count_df['cnt'].iloc[0]) if not count_df.empty else 0
         except Exception:
             daily_count = 0

@@ -108,10 +108,20 @@ def _get_mootdx_minutes_safe(ts_code: str, target_date: str) -> pd.DataFrame:
         raw = client.minutes(symbol=symbol, date=target_date)
         if raw is not None and not raw.empty:
             rows = []
+            # 498号#4：A 股交易时段为 09:30-11:30 + 13:00-15:00（各 120 根），原
+            # `hour = 9 + (idx+30)//60` 未跳午休 ⇒ 第 120+ 根穿过 11:30-13:00 不存在的
+            # 区间、下午时间/日期全错位。按 idx 分段映射（上午/下午各 120 根）。
+            def _bar_time(i: int) -> str:
+                if i < 120:          # 上午 09:30-11:29
+                    h, m = 9 + (30 + i) // 60, (30 + i) % 60
+                else:                # 下午 13:00-14:59（跳过 11:30-13:00）
+                    j = i - 120
+                    h, m = 13 + j // 60, j % 60
+                return (f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]} "
+                        f"{h:02d}:{m:02d}:00")
             for idx, r in raw.iterrows():
-                hour = 9 + (idx + 30) // 60
-                minute = (idx + 30) % 60
-                trade_time = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]} {hour:02d}:{minute:02d}:00"
+                i = int(idx) if not isinstance(idx, int) else idx
+                trade_time = _bar_time(i)
                 price = float(r.get('price', 0))
                 if price == 0:
                     continue
@@ -230,20 +240,35 @@ def backfill_5min(ts_codes: List[str], days_back: int = 90,
             # 414号R17: 检查已有数据是否覆盖最近交易日，而非简单跳过有数据的股票
             existing = ecm.get_cached_minute_kline(ts_code, freq='5min')
             if existing is not None and not existing.empty:
-                # 检查最新数据日期是否为最近3个交易日内
+                # 498号#40：原按日历日 `days_since<=5` 判「最近」，长假前后会误判过旧/过新；
+                # 改按**交易日**（交易日历）判：latest 距今超过 3 个交易日才认为过旧。
+                # 交易日历不可用时回退原日历日阈值（保证不因日历缺失而过度重采）。
                 if 'trade_date' in existing.columns:
                     latest = existing['trade_date'].max()
                     if isinstance(latest, str):
                         latest_dt = datetime.strptime(latest[:10], '%Y-%m-%d')
                     else:
                         latest_dt = pd.to_datetime(latest).to_pydatetime()
-                    days_since = (datetime.now() - latest_dt).days
-                    if days_since <= 5:  # 已有最近数据，跳过
+                    stale = None
+                    try:
+                        from datetime import timedelta as _td
+                        from app.utils.trading_hours import is_holiday
+                        cur = datetime.now().date()
+                        probe, days = latest_dt.date() + _td(days=1), 0
+                        # 自 latest 次日起数「经过的交易日」（跳过周末与节假日）
+                        while probe <= cur and days < 30:
+                            if probe.weekday() < 5 and not is_holiday(datetime(probe.year, probe.month, probe.day)):
+                                days += 1
+                            probe += _td(days=1)
+                        stale = days > 3
+                    except Exception:
+                        stale = (datetime.now() - latest_dt).days > 5
+                    if not stale:  # 已有最近交易日数据，跳过
                         logger.debug(f"[5min] 跳过已有数据: {ts_code} ({len(existing)} 行, 最新 {latest})")
                         ok += 1
                         continue
                     else:
-                        logger.info(f"[5min] 数据过旧({days_since}天), 重新采集: {ts_code}")
+                        logger.info(f"[5min] 数据过旧, 重新采集: {ts_code}")
 
             df = _get_mootdx_bars_safe(ts_code, freq=2)
             if not df.empty:
@@ -437,23 +462,29 @@ def ensure_minute_data(ts_codes: List[str], days_back: int = 20) -> int:
     ecm_local = get_ecm_instance()
 
     # 只处理缺失5min数据的股票
+    # 498号#2：minute_kline_cache 属 market_cache.db 分库，原直读 ecm_local.conn（总库，
+    # 该库无此表）致 COUNT 恒 0/抛错；改分库读（_query_shard）。
     missing = []
     for code in ts_codes:
-        c = ecm_local.conn.execute(
-            'SELECT COUNT(*) FROM minute_kline_cache WHERE ts_code=? AND freq="5min"',
+        _cnt_df = ecm_local._query_shard(
+            'minute_kline_cache',
+            'SELECT COUNT(*) AS n FROM minute_kline_cache WHERE ts_code=? AND freq="5min"',
             [code]
-        ).fetchone()[0]
+        )
+        c = int(_cnt_df.iloc[0]['n']) if _cnt_df is not None and not _cnt_df.empty else 0
         if c == 0:
             missing.append(code)
 
     if not missing:
         return 0
 
-    # 真实交易日列表
-    trade_dates = [r[0] for r in ecm_local.conn.execute(
+    # 真实交易日列表（498号#2：daily_cache 同属 market_cache.db 分库）
+    _td_df = ecm_local._query_shard(
+        'daily_cache',
         'SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT ?',
         [days_back]
-    ).fetchall()]
+    )
+    trade_dates = _td_df['trade_date'].tolist() if _td_df is not None and not _td_df.empty else []
 
     ok = 0
     for ts_code in missing:

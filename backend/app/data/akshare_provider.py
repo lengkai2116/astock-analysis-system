@@ -528,30 +528,37 @@ class AkshareProvider:
         try:
             result = {'up': [], 'down': []}
             # 涨停
-            df_up = ak.stock_zt_pool_em(symbol='涨停')
-            if df_up is not None and not df_up.empty:
-                for _, row in df_up.iterrows():
-                    result['up'].append({
-                        'ts_code': str(row.get('代码', '')),
-                        'name': str(row.get('名称', '')),
-                        'price': _safe_float(row.get('最新价', 0)),
-                        'change_pct': _safe_float(row.get('涨跌幅', 0)),
-                        'turnover_rate': _safe_float(row.get('换手率', 0)),
-                        'amount': _safe_float(row.get('成交额', 0)),
-                        'limit_up_times': int(row.get('连板', 1)),
-                    })
+            # 498号#30：两腿各自独立 try——原单腿失败即整体返回空，丢弃已取到的另一腿。
+            try:
+                df_up = ak.stock_zt_pool_em(symbol='涨停')
+                if df_up is not None and not df_up.empty:
+                    for _, row in df_up.iterrows():
+                        result['up'].append({
+                            'ts_code': str(row.get('代码', '')),
+                            'name': str(row.get('名称', '')),
+                            'price': _safe_float(row.get('最新价', 0)),
+                            'change_pct': _safe_float(row.get('涨跌幅', 0)),
+                            'turnover_rate': _safe_float(row.get('换手率', 0)),
+                            'amount': _safe_float(row.get('成交额', 0)),
+                            'limit_up_times': int(row.get('连板', 1)),
+                        })
+            except Exception as e:
+                logger.warning(f"Akshare get_limit_pool() 涨停腿失败（保留跌停结果）: {e}")
             # 跌停
-            df_down = ak.stock_zt_pool_em(symbol='跌停')
-            if df_down is not None and not df_down.empty:
-                for _, row in df_down.iterrows():
-                    result['down'].append({
-                        'ts_code': str(row.get('代码', '')),
-                        'name': str(row.get('名称', '')),
-                        'price': _safe_float(row.get('最新价', 0)),
-                        'change_pct': _safe_float(row.get('涨跌幅', 0)),
-                        'turnover_rate': _safe_float(row.get('换手率', 0)),
-                        'amount': _safe_float(row.get('成交额', 0)),
-                    })
+            try:
+                df_down = ak.stock_zt_pool_em(symbol='跌停')
+                if df_down is not None and not df_down.empty:
+                    for _, row in df_down.iterrows():
+                        result['down'].append({
+                            'ts_code': str(row.get('代码', '')),
+                            'name': str(row.get('名称', '')),
+                            'price': _safe_float(row.get('最新价', 0)),
+                            'change_pct': _safe_float(row.get('涨跌幅', 0)),
+                            'turnover_rate': _safe_float(row.get('换手率', 0)),
+                            'amount': _safe_float(row.get('成交额', 0)),
+                        })
+            except Exception as e:
+                logger.warning(f"Akshare get_limit_pool() 跌停腿失败（保留涨停结果）: {e}")
             return result
         except Exception as e:
             logger.error(f"Akshare get_limit_pool() 失败: {e}")

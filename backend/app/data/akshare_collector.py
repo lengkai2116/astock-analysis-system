@@ -200,8 +200,8 @@ def _collect_sector_and_limit():
                     'price': _safe_float(row.get('最新价', 0)),
                     'volume': _safe_float(row.get('成交量', 0)),
                     'amount': _safe_float(row.get('成交额', 0)),
-                    'up_count': int(row.get('上涨家数', 0)),
-                    'down_count': int(row.get('下跌家数', 0)),
+                    'up_count': _safe_int(row.get('上涨家数', 0)),
+                    'down_count': _safe_int(row.get('下跌家数', 0)),
                     'rank': rank,
                 })
             mem_store.update_sectors(records)
@@ -225,8 +225,8 @@ def _collect_sector_and_limit():
                     'price': _safe_float(row.get('最新价', 0)),
                     'volume': _safe_float(row.get('成交量', 0)),
                     'amount': _safe_float(row.get('成交额', 0)),
-                    'up_count': int(row.get('上涨家数', 0)),
-                    'down_count': int(row.get('下跌家数', 0)),
+                    'up_count': _safe_int(row.get('上涨家数', 0)),
+                    'down_count': _safe_int(row.get('下跌家数', 0)),
                     'rank': rank,
                 })
             mem_store.update_concepts(records)
@@ -254,8 +254,10 @@ def _collect_minute_kline():
             # mootdx 可用，跳过 AKShare 分钟线采集
             logger.debug("[minute_kline] mootdx 可用，跳过 AKShare 采集")
             return
-    except Exception:
-        pass  # mootdx 不可用，继续使用 AKShare
+    except Exception as e:
+        # 498号#51：原 `except Exception: pass` 静默吞（含 import/程序缺陷）→ 永久回退
+        # AKShare 且无诊断；改为告警暴露（仍继续走 AKShare，语义不变）
+        logger.warning(f"[minute_kline] mootdx 可用性探测失败，回退 AKShare: {e}")
 
     ak = _get_ak()
     if ak is None:
@@ -356,15 +358,18 @@ def _collect_sentiment_pool(trade_date: str = None) -> int:
     # 仅凭涨停池（本身即已封板股）算封板率恒 100%，无区分度。
     _specs = (('up', 'stock_zt_pool_em'), ('down', 'stock_zt_pool_dtgc_em'),
               ('zha', 'stock_zt_pool_zbgc_em'))
+    _err_count = 0   # 498号#33：区分「接口全失败」与「空交易日」
     for limit_type, fn_name in _specs:
         fn = getattr(ak, fn_name, None)
         if fn is None:
             logger.warning(f"[sentiment_pool] AKShare 缺少接口 {fn_name}，跳过")
+            _err_count += 1
             continue
         try:
             df = fn(date=date)
         except Exception as e:
             logger.warning(f"[sentiment_pool] {limit_type} 拉取失败(date={date}): {e}")
+            _err_count += 1
             continue
         if df is None or df.empty:
             logger.info(f"[sentiment_pool] {limit_type} 无数据(date={date})")
@@ -401,6 +406,9 @@ def _collect_sentiment_pool(trade_date: str = None) -> int:
             ecm.write_sentiment_pool(records)   # INSERT OR REPLACE（幂等覆盖）
         except Exception as e:
             logger.warning(f"[sentiment_pool] 写入缓存失败: {e}")
+    # 498号#33：全接口失败（非空交易日）与「空交易日」区分——原仅返回 0 条无法分辨
+    if not records and _err_count >= len(_specs):
+        logger.warning(f"[sentiment_pool] 全部接口失败(date={date})，非空交易日，需排查")
     logger.info(f"[sentiment_pool] 共 {len(records)} 条(date={date})")
     return len(records)
 
@@ -619,6 +627,20 @@ def _safe_float(val) -> float:
         return float(val)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _safe_int(val, default: int = 0) -> int:
+    """498号#32：容错取整——原文 `int(row.get(...))` 对 ''/NaN/None 抛错，
+    经外层 except 归零会「一个坏单元格毁掉整轮」。空串/NaN/None 一律回退 default。"""
+    try:
+        if val is None or val == '':
+            return default
+        f = float(val)
+        if f != f:  # NaN
+            return default
+        return int(f)
+    except (TypeError, ValueError):
+        return default
 
 
 def _classify_seat(seat_name: str) -> str:

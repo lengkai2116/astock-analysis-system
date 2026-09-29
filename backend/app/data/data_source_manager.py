@@ -29,7 +29,8 @@ def _get_trading_hours():
             _trading_hours = (None, None)
     return _trading_hours
 
-logger = logging.getLogger(__name__)
+
+# 498号#50：模块级 logger 已在文件顶部定义，此处不再重复
 
 
 class DataSourceStatus(Enum):
@@ -50,18 +51,22 @@ class DataSourceHealth:
         self.last_check = time.time()
         self.failures = 0
         self.consecutive_failures = 0
+        self.consecutive_successes = 0   # 498号#15：连续成功计数（自动恢复判据）
         self.successes = 0
         self.avg_latency_ms = 0.0
         self.last_error: Optional[str] = None
         self.last_error_time: Optional[float] = None
         self.total_requests = 0
         self._latency_samples: List[float] = []
+        # 498号#15：自动恢复阈值由 DataSourceManager 注入（读 auto_recovery_successes 配置）
+        self.auto_recovery_successes = 3
 
     def record_success(self, latency_ms: float):
         """记录一次成功请求"""
         self.successes += 1
         self.total_requests += 1
         self.consecutive_failures = 0
+        self.consecutive_successes += 1   # 498号#15
         self.last_check = time.time()
 
         # 加权移动平均延迟
@@ -70,9 +75,10 @@ class DataSourceHealth:
         else:
             self.avg_latency_ms = self.avg_latency_ms * 0.7 + latency_ms * 0.3
 
-        # 自动恢复
+        # 自动恢复：498号#15——改用「连续成功数」判据（原用累计 self.successes，致历史
+        # 有 3 次成功的源单次成功即翻回 normal，与注释「连续 3 次」不符），阈值读配置项
         if self.status in (DataSourceStatus.DEGRADED, DataSourceStatus.FALLBACK):
-            if self.successes >= 3:  # 连续 3 次成功自动恢复
+            if self.consecutive_successes >= self.auto_recovery_successes:
                 old = self.status
                 self.status = DataSourceStatus.NORMAL
                 logger.info(f"数据源 {self.name} 状态恢复: {old.value} → normal")
@@ -82,6 +88,7 @@ class DataSourceHealth:
         self.failures += 1
         self.total_requests += 1
         self.consecutive_failures += 1
+        self.consecutive_successes = 0    # 498号#15：失败清零连续成功
         self.last_error = error
         self.last_error_time = time.time()
         self.last_check = time.time()
@@ -145,6 +152,8 @@ class DataSourceManager:
         """
         if name not in self.sources:
             self.sources[name] = DataSourceHealth(name, priority)
+            # 498号#15：向数据源注入自动恢复阈值（读本管理器的 auto_recovery_successes 配置）
+            self.sources[name].auto_recovery_successes = self.auto_recovery_successes
             self.providers[name] = provider
             logger.info(f"数据源 {name} 已注册 (priority={priority})")
 
@@ -245,13 +254,14 @@ class DataSourceManager:
 
     # ==================== 数据获取 ====================
 
-    def get_data(self, endpoint: str, params: Dict = None) -> Any:
+    def get_data(self, endpoint: str, params: Dict = None, _retry: int = 0) -> Any:
         """
         获取数据 — 自动降级与回退
 
         Args:
             endpoint: API 端点标识
             params: 请求参数
+            _retry: 内部回退深度计数（498号#6：防降级链全失败时无界递归）
 
         Returns:
             数据结果
@@ -291,10 +301,15 @@ class DataSourceManager:
 
             # 触发回退
             if health.status in (DataSourceStatus.FALLBACK, DataSourceStatus.UNAVAILABLE):
+                # 498号#6：降级链全失败时原会无界递归（RecursionError）；限制回退深度，
+                # 超过上限直接抛出受控异常交由上层处理。
+                if _retry >= len(self.sources) + 1:
+                    logger.error(f"数据源回退深度超限（{_retry}），放弃: {endpoint}")
+                    raise
                 self._update_active_source()
                 if self.active_source:
                     logger.info(f"自动切换至备用数据源: {self.active_source}")
-                    return self.get_data(endpoint, params)
+                    return self.get_data(endpoint, params, _retry=_retry + 1)
 
             raise
 
@@ -341,11 +356,20 @@ class DataSourceManager:
                 provider = self.providers.get(name)
                 if provider is None:
                     continue
+                health = self.sources[name]
                 try:
+                    t0 = time.time()
                     result = provider(endpoint, params or {})
                     if result is not None and not (isinstance(result, (list, dict)) and len(result) == 0):
+                        # 498号#5：快路径命中须记账（原直接 return，首选源成功/延迟/失败全不可见）
+                        health.record_success((time.time() - t0) * 1000)
+                        self._evaluate_status(name, health)
                         return result
-                except Exception:
+                    # 空结果记为失败，避免静默降级且不反映健康度
+                    health.record_failure("empty result")
+                except Exception as e:
+                    health.record_failure(str(e))
+                    self._evaluate_status(name, health)
                     continue
 
         # 盘后/降级 → 走默认路由（Tushare priority=0）

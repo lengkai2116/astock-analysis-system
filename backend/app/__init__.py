@@ -331,9 +331,27 @@ def create_app():
         from app.data.data_source_manager import data_source_manager
         from app.data.tushare_provider import TushareProvider
 
+        # 498号#11/Q2：数据源优先级由 backend/config/data_sources.yaml 驱动
+        # （data_sources.<table>.priority 的 P0/P1/P2/P3 → 注册优先级）。
+        # 口径：P0=核心行情/基础 → 0（与接线前一致，零行为变更）；数值越小越优先；
+        # AKShare(盘中最优先, priority=-1)、QMT(最高, priority=-2) 为运行期策略，不在 yaml 内。
+        def _source_priority(source_name: str, default: int) -> int:
+            _rank = {'P0': 0, 'P1': 1, 'P2': 2, 'P3': 3}
+            try:
+                from config import load_yaml
+                _ds = load_yaml('data_sources.yaml').get('data_sources') or {}
+                _ps = {v.get('priority') for v in _ds.values()
+                       if isinstance(v, dict) and v.get('primary') == source_name}
+                if _ps:
+                    return min(_rank.get(p, default) for p in _ps)
+            except Exception:
+                pass
+            return default
+
         # 注册 Tushare 作为主数据源
         tushare = TushareProvider()
-        data_source_manager.register_source('tushare', lambda ep, p: _route_provider(ep, p, tushare), priority=0)
+        data_source_manager.register_source('tushare', lambda ep, p: _route_provider(ep, p, tushare),
+                                            priority=_source_priority('tushare', 0))
 
         # 注册 AKShare 作为盘中数据源（priority=-1 最高，盘中优先）
         try:

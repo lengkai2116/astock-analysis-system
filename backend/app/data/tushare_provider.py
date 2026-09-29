@@ -1,4 +1,5 @@
 import os
+import threading as _threading
 from datetime import datetime
 
 import pandas as pd
@@ -20,6 +21,8 @@ import time as _time
 
 _ts_last_call = 0.0
 _TS_MIN_INTERVAL = 0.2  # 5次/秒
+# 498号#19：限流器 check-sleep-set 加锁（原无锁，多线程并发可突破 5次/秒）
+_ts_lock = _threading.Lock()
 
 
 def _to_tushare_date(v):
@@ -38,10 +41,12 @@ def _ts(pro_func, *args, **kwargs):
     for _dkey in ('trade_date', 'start_date', 'end_date'):
         if _dkey in kwargs:
             kwargs[_dkey] = _to_tushare_date(kwargs[_dkey])
-    elapsed = _time.time() - _ts_last_call
-    if elapsed < _TS_MIN_INTERVAL:
-        _time.sleep(_TS_MIN_INTERVAL - elapsed)
-    _ts_last_call = _time.time()
+    # 498号#19：限流 check-sleep-set 原子化（否则并发可同时通过间隔检查）
+    with _ts_lock:
+        elapsed = _time.time() - _ts_last_call
+        if elapsed < _TS_MIN_INTERVAL:
+            _time.sleep(_TS_MIN_INTERVAL - elapsed)
+        _ts_last_call = _time.time()
     result = pro_func(*args, **kwargs)
     # 428 日期整改 §阶段A：给定显式日期却返回空 → 记录告警，避免再被误判"外部不可用"
     # （与 data_daemon._ts 同版；此处为同步直调，无子线程超时分支）
@@ -63,25 +68,28 @@ class TushareProvider:
         self.pro = self._init_api()
 
     def _load_token(self):
-        """加载Tushare Token，支持多种来源"""
+        """加载 Tushare Token：环境变量优先，其次项目根 .env 兜底。
+
+        498号#34/#35：删除原写死的个人绝对路径（`/Users/kalence/Desktop/测试/...`——
+        换机即失效且泄漏本地路径），改为**项目根 .env 相对路径**兜底；
+        读取加异常保护（权限/编码错误不再冒泡阻断 provider 构造）。
+        """
         token = os.getenv('TUSHARE_TOKEN', '')
+        if token:
+            return token
 
-        if not token:
-            env_paths = [
-                '/Users/kalence/Desktop/测试/01-A股股票分析系统/.env',
-                '/Users/kalence/Desktop/测试/stock_analyzer_desktop/.env',
-                '/Users/kalence/Desktop/测试/.env'
-            ]
-            for env_path in env_paths:
-                if os.path.exists(env_path):
-                    with open(env_path, 'r') as f:
-                        for line in f:
-                            if line.startswith('TUSHARE_TOKEN='):
-                                token = line.split('=', 1)[1].strip()
-                                break
-                    if token:
-                        break
-
+        # backend/app/data/tushare_provider.py → 上溯三级至项目根
+        env_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            '.env')
+        try:
+            if os.path.exists(env_path):
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.startswith('TUSHARE_TOKEN='):
+                            return line.split('=', 1)[1].strip()
+        except Exception as e:
+            logger.warning(f"读取 .env 兜底 TUSHARE_TOKEN 失败: {e}")
         return token
 
     def _init_api(self):
