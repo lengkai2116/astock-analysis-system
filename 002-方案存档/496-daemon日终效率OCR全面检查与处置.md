@@ -61,13 +61,13 @@
 
 ## §三 剩余待办（未实施，待拍板）
 
-### 批次 A（聚焦，建议下轮）
-| 项 | 改动 | 影响面 |
+### 批次 A（聚焦，**已全部实施 2c2890d**）
+| 项 | 改动 | 状态 |
 |---|---|---|
-| #6 treemap 逐行 INSERT → executemany + 单事务 | `_build_treemap_snapshot` 写路径 | 低风险 |
-| #5 IC 重估日粒度节流 | 主循环 `_maybe_monthly_ic_recalc` | 低风险 |
-| 段 C 删死调用 `vps._detect_kline_patterns(df)` | `_raw2_one` | 需确认无隐性消费 |
-| #13 chk_price guard | 信号验证循环 | 一行级 |
+| #6 treemap 逐行 INSERT → executemany + 单事务 | `_build_treemap_snapshot` 写路径 | ✅ |
+| #5 IC 重估日粒度节流 | 主循环 `_maybe_monthly_ic_recalc`（模块级 `_ic_recalc_check_date`） | ✅ |
+| 段 C 删死调用 `vps._detect_kline_patterns(df)` | `_raw2_one`（结果从不消费，3850 注释自证） | ✅ |
+| #13 chk_price guard | 信号验证循环 | ✅ |
 
 ### 批次 B（正确性，建议独立核查）
 - #8 `_query_table` 区分失败/空（涉及全链路补采触发语义，需谨慎）
