@@ -184,6 +184,7 @@ def test_monthly_hook_skips_when_current_month_done(tmp_path, monkeypatch):
     from datetime import datetime
 
     import data_daemon
+    monkeypatch.setattr(data_daemon, "_ic_recalc_check_date", None)  # 496号 OCR #5：日粒度节流按测试隔离
     # 构造「本月已算」状态：last_recalc 月份 == 当前月
     now_m = datetime.now().strftime("%Y-%m")
     wfile = tmp_path / "ic_weights.json"
@@ -201,6 +202,7 @@ def test_monthly_hook_skips_when_report_recalc_at_current_month(tmp_path, monkey
     from datetime import datetime
 
     import data_daemon
+    monkeypatch.setattr(data_daemon, "_ic_recalc_check_date", None)  # 496号 OCR #5
     now_m = datetime.now().strftime("%Y-%m")
     # ic_weights.json 无 last_recalc（no_signal 未落盘），仅 report 带本月 recalc_at
     report_file = tmp_path / "ic_weights_report.json"
@@ -217,6 +219,7 @@ def test_monthly_hook_triggers_when_last_month(tmp_path, monkeypatch):
     from datetime import datetime, timedelta
 
     import data_daemon
+    monkeypatch.setattr(data_daemon, "_ic_recalc_check_date", None)  # 496号 OCR #5
     # 构造「上月已算」状态：last_recalc 月份 == 上月
     last_m = (datetime.now().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
     wfile = tmp_path / "ic_weights.json"

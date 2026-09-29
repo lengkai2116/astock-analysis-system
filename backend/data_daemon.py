@@ -179,6 +179,7 @@ _last_step_counts = {}  # 371号P0#3：管道步骤成功计数
 _jud_meta_cache = {}  # 371号JUD接入：{ts_code: enriched_meta_dict} 供 treemap_snapshot 读取
 _market_stats_cache = {}  # 411号Phase 10：全市场级统计预计算，供BociasiQuadrantAnalyzer消费
 _account_risk_app = None  # 2026-09-29 OCR #3：账户风险钩子复用 Flask app（原每 10 分钟重建）
+_ic_recalc_check_date = None  # 2026-09-29 OCR #5：IC 重估检查按日节流（原每 30s tick 读 2 个 JSON）
 
 # 425号 C-1：写入优先级状态机（HIGH > NORMAL > LOW）
 # - HIGH：补采/补预计算（SIG/JUD 核心分析依赖），mootdx 盘中降频让路
@@ -3784,7 +3785,6 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             # 6. 量价特征（6字段）
             if len(df) >= 20:
                 try:
-                    vp_tags = vps._detect_kline_patterns(df)
                     _simple = {}
                     # 467号 A：ma_alignment 改读 indicator_ma 预计算宽表（412/460 统一供给，
                     # 与 dim1 data_context['indicator_ma_df'] 同源）；失败回退 raw np.mean。
@@ -5593,29 +5593,32 @@ def _build_treemap_snapshot(codes: list[str]):
     """)
 
     written = 0
+    # 2026-09-29 OCR #6：逐行 execute → executemany 批量（全市场 ~5557 行单事务）
+    _insert_sql = f"""
+        INSERT INTO {NEW_TABLE}
+        (ts_code, name, industry, close, pct_chg, total_mv, trade_date,
+         open, high, low, amplitude,
+         pe, pb,
+         amount, turnover_rate, circ_mv,
+         signal_strength, valuation_level, valuation_deviation, main_force_phase,
+         phase_confidence, sentiment_phase, sector_heat, fina_health, opportunity_type,
+         trend_alignment, price_position, fund_flow, capital_nature,
+         chip_concentration, volatility_level, dividend_yield, composite_rating,
+         opportunity_label, evidence_count,
+         right_side_confirm, confirm_evidence, opportunity_profile,
+         entry_signals, exit_conditions, consensus_rate, conflict, main_force_presence,
+         presence_evidence, opportunity_state, state_evidence)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """
+    _rows = []
     for code in codes:
         m = meta.get(code, {})
         d = daily_map.get(code, {})
         b = basic_map.get(code, {})
         t = tags_map.get(code, {})
         try:
-            _tm_conn.execute(f"""
-                INSERT INTO {NEW_TABLE}
-                (ts_code, name, industry, close, pct_chg, total_mv, trade_date,
-                 open, high, low, amplitude,
-                 pe, pb,
-                 amount, turnover_rate, circ_mv,
-                 signal_strength, valuation_level, valuation_deviation, main_force_phase,
-                 phase_confidence, sentiment_phase, sector_heat, fina_health, opportunity_type,
-                 trend_alignment, price_position, fund_flow, capital_nature,
-                 chip_concentration, volatility_level, dividend_yield, composite_rating,
-                 opportunity_label, evidence_count,
-                 right_side_confirm, confirm_evidence, opportunity_profile,
-                 entry_signals, exit_conditions, consensus_rate, conflict, main_force_presence,
-                 presence_evidence, opportunity_state, state_evidence)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (
+            _rows.append((
                 code, m.get('name', ''), m.get('industry', ''),
                 float(d['close']) if pd.notna(d.get('close')) else None,
                 float(d['pct_chg']) if pd.notna(d.get('pct_chg')) else None,
@@ -5653,6 +5656,8 @@ def _build_treemap_snapshot(codes: list[str]):
             written += 1
         except Exception:
             continue
+    if _rows:
+        _tm_conn.executemany(_insert_sql, _rows)
     _tm_conn.commit()
 
     # 370号O5：归档逻辑已移至OUT步骤（_out_transmit_seven_dim），此处不再归档
@@ -7349,6 +7354,8 @@ def _run_signal_checkpoint():
                 chk_price = rows2[off][0]
                 if not sig_price:
                     continue
+                if not chk_price:  # 2026-09-29 OCR #13：对称防护（原 None → TypeError 中止循环）
+                    continue
                 ret = round((chk_price - sig_price) / sig_price, 4)
                 bullish = stype in ('BULLISH', 'WATCH')
                 is_win = ret > 0 if bullish else ret < 0
@@ -7581,6 +7588,12 @@ def _maybe_monthly_ic_recalc(data_dir: str) -> None:
     """
     import json as _json
     from datetime import datetime as _dt
+    global _ic_recalc_check_date
+    # 2026-09-29 OCR #5：按日节流——当日已检查过（含幂等判定）不再每 30s tick 读文件
+    _check_day = _dt.now().strftime('%Y-%m-%d')
+    if _ic_recalc_check_date == _check_day:
+        return
+    _ic_recalc_check_date = _check_day
     try:
         state_file = os.path.join(data_dir, 'ic_weights.json')
         report_file = os.path.join(data_dir, 'ic_weights_report.json')

@@ -389,3 +389,40 @@ def test_account_risk_app_cached():
     assert '_account_risk_app' in src and 'create_app' in src
     assert 'if _account_risk_app is None:' in src, '应仅首次构建 Flask app'
     assert 'with _account_risk_app.app_context()' in src
+
+
+# ── 2026-09-29 OCR 批次A（#5/#6/#13 + 死调用清理）防回归 ──
+
+def test_treemap_uses_executemany():
+    """OCR #6：treemap 快照批量写入（executemany 单事务，原逐行 INSERT ~5557 次）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._build_treemap_snapshot)
+    assert 'executemany(_insert_sql, _rows)' in src, '应批量 executemany 写入'
+    assert '_rows.append' in src, '应先收集行再批量写'
+
+
+def test_ic_recalc_daily_throttle():
+    """OCR #5：_maybe_monthly_ic_recalc 按日节流（原每 30s tick 读 2 个 JSON）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._maybe_monthly_ic_recalc)
+    assert '_ic_recalc_check_date' in src and 'global _ic_recalc_check_date' in src
+    assert '当日已检查' in src or '按日节流' in src, '应有日粒度 gate'
+
+
+def test_raw2_no_dead_kline_pattern_call():
+    """OCR 批次A：RAW-2 死调用 _detect_kline_patterns 已删除（结果从不消费）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._precompute_raw_features)
+    assert '_detect_kline_patterns(df)' not in src, '死调用应删除'
+
+
+def test_signal_verify_chk_price_guard():
+    """OCR #13：信号验证 chk_price 对称防护（原 None → TypeError 中止循环）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd)
+    assert 'if not chk_price:' in src, 'chk_price 应有 guard'
+    assert 'if not sig_price:' in src
