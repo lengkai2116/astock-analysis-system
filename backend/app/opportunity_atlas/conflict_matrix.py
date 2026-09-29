@@ -196,9 +196,11 @@ def detect(
         )
 
     # ── C5: ATR高+盈亏比差+低共识 → warn ──
-    if atr_pct > 0.7 and rr_value < 1.0 and consensus_rate < 0.5:
+    # 497号（批次1）：atr_pct 阈值 0.7→8.0——dim6 产出百分数（3.98=3.98%），
+    #   原 0.7 小数语义致全市场恒真；8.0 对齐 Wiki《ATR止损》高波动 8-12% 与 495-b6 advice/dim_adapter 折减下限
+    if atr_pct > 8.0 and rr_value < 1.0 and consensus_rate < 0.5:
         warn.append(
-            f'C5: ATR{atr_pct:.2f}>0.7+盈亏比{rr_value:.2f}<1.0+共识{consensus_rate:.2f}<0.5'
+            f'C5: ATR{atr_pct:.2f}%>8.0+盈亏比{rr_value:.2f}<1.0+共识{consensus_rate:.2f}<0.5'
             '（高波动低收益+市场分歧）'
         )
 

@@ -5778,27 +5778,40 @@ def _out_transmit_seven_dim(codes: list[str]):
                 direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
                 summary_text TEXT, one_liner_detail TEXT, dim_engine_results TEXT,
                 signals TEXT, monthly_halt INTEGER,
+                final_score REAL, semantic_type TEXT,
+                reliability_summary TEXT, consensus_detail TEXT,
                 PRIMARY KEY (ts_code, snapshot_date)
             )
         """)
         # 491号（R4-①）：history 表为 CREATE-IF-NOT-EXISTS，已存在的旧表缺 signals 列 → 自愈补列
         # 494号（R-5）：同上补 monthly_halt 列（对齐 signals 先例）
+        # 497号（批次1）：同上补 final_score/semantic_type/reliability_summary/consensus_detail 列
         _hist_cols = {r[1] for r in _snap_conn.execute(
             "PRAGMA table_info(status_snapshot_history)").fetchall()}
         if 'signals' not in _hist_cols:
             _snap_conn.execute("ALTER TABLE status_snapshot_history ADD COLUMN signals TEXT DEFAULT NULL")
         if 'monthly_halt' not in _hist_cols:
             _snap_conn.execute("ALTER TABLE status_snapshot_history ADD COLUMN monthly_halt INTEGER DEFAULT NULL")
+        if 'final_score' not in _hist_cols:
+            _snap_conn.execute("ALTER TABLE status_snapshot_history ADD COLUMN final_score REAL DEFAULT NULL")
+        if 'semantic_type' not in _hist_cols:
+            _snap_conn.execute("ALTER TABLE status_snapshot_history ADD COLUMN semantic_type TEXT DEFAULT NULL")
+        if 'reliability_summary' not in _hist_cols:
+            _snap_conn.execute("ALTER TABLE status_snapshot_history ADD COLUMN reliability_summary TEXT DEFAULT NULL")
+        if 'consensus_detail' not in _hist_cols:
+            _snap_conn.execute("ALTER TABLE status_snapshot_history ADD COLUMN consensus_detail TEXT DEFAULT NULL")
         _snap_conn.execute("""
             INSERT OR REPLACE INTO status_snapshot_history
                 (ts_code, snapshot_date, trade_date, dim_states, status_bar,
                  opportunity_state, state_evidence, conflict_evidence, consensus_rate,
                  direction, l0, lifecycle, advice_params,
-                 summary_text, one_liner_detail, dim_engine_results, signals, monthly_halt)
+                 summary_text, one_liner_detail, dim_engine_results, signals, monthly_halt,
+                 final_score, semantic_type, reliability_summary, consensus_detail)
             SELECT ts_code, snapshot_date, trade_date, dim_states, status_bar,
                    opportunity_state, state_evidence, conflict_evidence, consensus_rate,
                    direction, l0, lifecycle, advice_params,
-                   summary_text, one_liner_detail, dim_engine_results, signals, monthly_halt
+                   summary_text, one_liner_detail, dim_engine_results, signals, monthly_halt,
+                   final_score, semantic_type, reliability_summary, consensus_detail
             FROM status_snapshot
             WHERE dim_engine_results IS NOT NULL
         """)
@@ -6030,7 +6043,9 @@ def _build_status_snapshot(codes: list[str]):
                 state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
                 direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
                 summary_text TEXT, one_liner_detail TEXT, dim_engine_results TEXT,
-                signals TEXT, monthly_halt INTEGER, created_at TEXT
+                signals TEXT, monthly_halt INTEGER, created_at TEXT,
+                final_score REAL, semantic_type TEXT,
+                reliability_summary TEXT, consensus_detail TEXT
             )
         """)
         written = 0
@@ -6089,8 +6104,9 @@ def _build_status_snapshot(codes: list[str]):
                     f"INSERT OR REPLACE INTO {_NEW} (ts_code, snapshot_date, trade_date,"
                     f" dim_states, status_bar, opportunity_state, state_evidence,"
                     f" conflict_evidence, consensus_rate, direction, l0, lifecycle, advice_params,"
-                    f" summary_text, one_liner_detail, dim_engine_results, signals, monthly_halt)"
-                    f" VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    f" summary_text, one_liner_detail, dim_engine_results, signals, monthly_halt,"
+                    f" final_score, semantic_type, reliability_summary, consensus_detail)"
+                    f" VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [code, trade_date, row['dim_states'], row['status_bar'],
                      row['opportunity_state'], row['state_evidence'],
                      row['conflict_evidence'], row['consensus_rate'],
@@ -6100,7 +6116,10 @@ def _build_status_snapshot(codes: list[str]):
                      # 491号（R4-①）：334号 §5 注册信号触发列表落库（原被丢弃）
                      row.get('signals'),
                      # 493号（P2-d）：账户月度风险停机标记（1=停机；None=中性）
-                     1 if row.get('monthly_halt') else None])
+                     1 if row.get('monthly_halt') else None,
+                     # 497号（批次1）：v390 判定新字段落库（legacy 无键 → None）
+                     row.get('final_score'), row.get('semantic_type'),
+                     row.get('reliability_summary'), row.get('consensus_detail')])
                 written += 1
                 # 495号（A1）：seven_dim_json 单源化回填——用判定结果重建 summary 段
                 #   （SIG 生成时判定未跑为自算口径；此处消费判定层，前端 narrative 同源）

@@ -38,8 +38,9 @@ def test_daemon_history_self_heal_adds_monthly_halt():
 
 def test_daemon_history_insert_select_include_monthly_halt():
     # INSERT 列表与 SELECT 列表均含 monthly_halt
-    assert 'dim_engine_results, signals, monthly_halt)' in _DAEMON
-    assert 'dim_engine_results, signals, monthly_halt\n            FROM status_snapshot' in _DAEMON
+    # （497号 批次1 在 monthly_halt 后追加 final_score 等 4 列：INSERT 缩进 17、SELECT 缩进 19）
+    assert 'dim_engine_results, signals, monthly_halt,\n                 final_score' in _DAEMON
+    assert 'dim_engine_results, signals, monthly_halt,\n                   final_score' in _DAEMON
 
 
 def test_history_self_heal_behavior():

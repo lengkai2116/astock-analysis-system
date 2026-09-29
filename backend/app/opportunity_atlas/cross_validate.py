@@ -765,7 +765,8 @@ class L4CrossValidator(DataAwareMixin):
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT opportunity_state, status_bar, consensus_rate, direction, "
-                    "conflict_evidence, dim_states, advice_params, signals "
+                    "conflict_evidence, dim_states, advice_params, signals, "
+                    "final_score, semantic_type, reliability_summary "
                     "FROM status_snapshot WHERE ts_code=? LIMIT 1", [ts_code])
                 row = cursor.fetchone()
                 if row:
@@ -779,6 +780,10 @@ class L4CrossValidator(DataAwareMixin):
                         'advice_params': _json.loads(row[6] or '{}'),
                         # 492号（P1-3）：注册表触发列表（与实时回退路径同契约）
                         'signals': _json.loads(row[7] or '[]'),
+                        # 497号（批次1）：v390 判定新字段透出（consensus_detail 仅落库不透；与 analyze 路由同契约）
+                        'final_score': row[8],
+                        'semantic_type': row[9],
+                        'reliability_summary': _json.loads(row[10] or '{}'),
                     }
         except Exception as e:
             logger.debug("status_snapshot 读 verdict 失败 %s: %s", ts_code, e)
@@ -798,6 +803,10 @@ class L4CrossValidator(DataAwareMixin):
                 'advice_params': _json.loads(r['advice_params'] or '{}'),
                 # 492号（P1-3）：与成品路径同契约
                 'signals': _json.loads(r.get('signals') or '[]'),
+                # 497号（批次1）：v390 判定新字段（与成品路径同契约）
+                'final_score': r.get('final_score'),
+                'semantic_type': r.get('semantic_type'),
+                'reliability_summary': _json.loads(r.get('reliability_summary') or '{}'),
             }
         except Exception as e:
             logger.debug("status_verdict 生成失败 %s: %s", ts_code, e)

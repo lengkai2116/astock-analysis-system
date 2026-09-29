@@ -819,6 +819,10 @@ def strategy_analyze():
                     'advice_params': _pr.get('advice_params'),
                     # 494号（R-3）：dim6 risk.status_description（止损/ATR/盈亏比）取数源
                     'dim_engine_results': _pr.get('dim_engine_results'),
+                    # 497号（批次1）：v390 判定新字段透出（consensus_detail 仅落库不透）
+                    'final_score': _pr.get('final_score'),
+                    'semantic_type': _pr.get('semantic_type'),
+                    'reliability_summary': _pr.get('reliability_summary'),
                 }
         except Exception:
             _status_row = None
@@ -1040,6 +1044,10 @@ def strategy_analyze():
                     'advice_params': _json3.loads(_status_row.get('advice_params') or '{}') if _status_row.get('advice_params') else {},
                     # 492号（P1-3）：注册表触发列表接前端（原仅落库、无消费方）
                     'signals': _json3.loads(_status_row.get('signals') or '[]') if _status_row.get('signals') else [],
+                    # 497号（批次1）：v390 判定新字段透出（consensus_detail 仅落库不透）
+                    'final_score': _status_row.get('final_score'),
+                    'semantic_type': _status_row.get('semantic_type'),
+                    'reliability_summary': _json3.loads(_status_row.get('reliability_summary') or '{}') if _status_row.get('reliability_summary') else {},
                 }
             except Exception as _vv_err:
                 _status_verdict = None
@@ -1060,6 +1068,10 @@ def strategy_analyze():
                         'advice_params': _json3.loads(_verdict['advice_params'] or '{}'),
                         # 492号（P1-3）：注册表触发列表（与成品路径同契约）
                         'signals': _json3.loads(_verdict.get('signals') or '[]'),
+                        # 497号（批次1）：v390 判定新字段（与成品路径同契约）
+                        'final_score': _verdict.get('final_score'),
+                        'semantic_type': _verdict.get('semantic_type'),
+                        'reliability_summary': _json3.loads(_verdict.get('reliability_summary') or '{}'),
                     }
             except Exception as _vv_err:
                 _status_verdict = None
