@@ -341,6 +341,10 @@ class ShardingManager:
 
     def get_table_row_count(self, table_name: str) -> int:
         """获取表行数"""
+        # 2026-09-29 OCR #14：表名白名单加固——拼接进 SQL 的表名必须来自受控路由
+        # （纵深防御；正常调用方均为内部常量表名，get_db_for_table 已隐式校验）
+        if table_name not in self._table_to_db:
+            return 0
         db_name = self.get_db_for_table(table_name)
         if db_name is None:
             return 0  # 表在总库，分库管理器不处理

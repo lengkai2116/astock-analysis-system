@@ -69,12 +69,14 @@
 | 段 C 删死调用 `vps._detect_kline_patterns(df)` | `_raw2_one`（结果从不消费，3850 注释自证） | ✅ |
 | #13 chk_price guard | 信号验证循环 | ✅ |
 
-### 批次 B（正确性，建议独立核查）
-- #8 `_query_table` 区分失败/空（涉及全链路补采触发语义，需谨慎）
-- #14 sharding 表名白名单（安全，涉契约）
-- #11/#12 无锁共享状态原子化（`_market_stats_cache`/`_jud_meta_cache`）
-- 段 A `_fina_indicator` 方案2 回归 `_ts` 包装
-- 段 E 连接泄漏 try/finally、pd 绑定、日志括号
+### 批次 B（正确性，**已全部实施**）
+- ✅ **#8** `_query_table` 失败记日志（保持返回 0 兼容；DB 故障与空数据可区分）
+- ✅ **#14** sharding `get_table_row_count` 表名白名单（纵深防御；路由已隐式校验）
+- ✅ **#11** `_market_stats_cache` 缺源保留上轮缓存（原清空致并发读者见空）
+- ✅ **#12** `_jud_meta_cache` 局部构建后原子替换（原 clear-then-fill 无锁）
+- ✅ `_fina_indicator` 方案2 `pro.stock_basic` 回归 `_ts` 包装
+- ✅ `_run_signal_checkpoint` 连接 try/finally 关闭（原异常路径泄漏）
+- ⚪ **OCR 误报不采**：pd 绑定（`_ensure_pd` globals 注入已保障）、f-string 日志括号（本正确）
 
 ### 批次 C（观察/低优先）
 - #7 分钟回填增量、±20% 阈值按板块、`_backfill_moneyflow` 吞异常、`_compute_relative_strength` 增量

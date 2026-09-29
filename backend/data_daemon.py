@@ -1136,7 +1136,7 @@ def _batch_fina_indicator(trade_date: str = None) -> int:
         # 方案2：逐只获取（降级方案）
         # 获取股票列表
         try:
-            stocks = pro.stock_basic(exchange='', list_status='L')
+            stocks = _ts(pro.stock_basic, exchange='', list_status='L')  # 2026-09-29 OCR 批次B：回归 _ts 限流/超时保护
             if stocks is not None and not stocks.empty:
                 # 484号：修复方案2进展 bug——原 [:100] 恒取前 100 只 + 428 P1-1 跳过
                 # 已有目标期者 → 每季度只有前 100 只拿到新报告期（fina 覆盖停滞实证）。
@@ -1955,7 +1955,10 @@ def _query_table(table: str, sql: str, params=None):
                 return _ecm.conn.execute(sql, params).fetchone()[0]
             else:
                 return _ecm.conn.execute(sql).fetchone()[0]
-    except Exception:
+    except Exception as e:
+        # 2026-09-29 OCR #8：查询失败记日志（原静默返回 0 → DB 故障与空数据不可区分，
+        # 下游 cnt==0 会误触发全量补采放大负载）。返回 0 保持调用方语义（全链路兼容）。
+        logger.warning(f"  [_query_table] 查询失败（返回0）table={table}: {e}")
         return 0
 
 
@@ -3412,8 +3415,11 @@ def _precompute_market_stats(target_date: str | None = None):
         _missing_items = [k for k, v in stats.items() if v is None and k != 'computed_at'
                           and k != 'dv_bond_diff']
         if _missing_items:
-            logger.warning(f"426 P0-1 市场级统计存在无源数据项: {_missing_items}，本次不落库、不注入RAW-2")
-            _market_stats_cache = {}
+            # 2026-09-29 OCR #11：缺源时保留上一轮有效缓存（原清空致并发读者临时见空、
+            # RAW-2 注入空 dict 使 dim5 BociasiQuadrant 退化）。旧值为日频重算结果，
+            # 过期一天影响极小；仍不落库（426 P0-1 假值禁入不变）。
+            logger.warning(f"426 P0-1 市场级统计存在无源数据项: {_missing_items}，"
+                           f"本次不落库（保留上轮缓存 {len(_market_stats_cache)} 项）")
             return
         _market_stats_cache = stats
         # 414号R8: 持久化到SQLite，daemon重启后可恢复
@@ -5334,7 +5340,9 @@ def _jud_enrich_with_meta(codes: list[str]):
     t0 = time.time()
     logger.info(f"JUD机会判定预计算: {len(codes)} 只...")
 
-    _jud_meta_cache = {}  # 清空上轮缓存
+    # 2026-09-29 OCR #12：局部构建后原子赋值（原 `_jud_meta_cache = {}` 清空后逐只填，
+    # clear-then-fill 无锁——并发读可能见半填/交错）
+    _jud_meta_new = {}
 
     from app import create_app
     _flask_app = create_app()
@@ -5396,8 +5404,8 @@ def _jud_enrich_with_meta(codes: list[str]):
                     except Exception:
                         pass
 
-                # 4. 写入模块级缓存供 treemap_snapshot 读取
-                _jud_meta_cache[code] = {
+                # 4. 写入本地缓存（循环后原子替换 _jud_meta_cache，OCR #12）
+                _jud_meta_new[code] = {
                     'opportunity_type': tags.get('opportunity_type'),
                     'opportunity_label': tags.get('opportunity_label'),
                     'opportunity_profile': tags.get('opportunity_profile'),
@@ -5414,6 +5422,8 @@ def _jud_enrich_with_meta(codes: list[str]):
             except Exception:
                 continue
 
+    # 2026-09-29 OCR #12：局部构建完成后原子替换（读者不再可能见半填状态）
+    _jud_meta_cache = _jud_meta_new
     logger.info(f"  JUD机会判定完成: {enriched}/{len(codes)} 只 ({time.time()-t0:.1f}s)")
 
 
@@ -7307,6 +7317,8 @@ def _run_signal_checkpoint():
     日终同步后触发）。回算写 app.db（API 业务库），daemon 只写 stock_cache.db，
     无锁冲突；DataManager 读 stock_cache.db 在日终同步后数据完整。
     """
+    conn = None
+    ec = None
     try:
         import os as _os
         from app.data.enhanced_cache_manager import get_ecm_instance
@@ -7369,11 +7381,17 @@ def _run_signal_checkpoint():
                 status = new_status
                 updated += 1
         conn.commit()
-        conn.close()
-        ec.close()
         logger.info(f"  信号验证回算完成: 更新 {updated} 条检查点")
     except Exception as e:
         logger.warning(f"  信号验证回算失败: {e}")
+    finally:
+        # 2026-09-29 OCR 批次B：异常路径也关闭连接（原异常跳过 close 泄漏）
+        for _c in (conn, ec):
+            if _c is not None:
+                try:
+                    _c.close()
+                except Exception:
+                    pass
 
 
 # 426号 S3/D1：保留期下限（356号 规则10 时效为最低标准——超期不删、不足告警）。

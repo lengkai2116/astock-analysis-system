@@ -426,3 +426,57 @@ def test_signal_verify_chk_price_guard():
     src = inspect.getsource(dd)
     assert 'if not chk_price:' in src, 'chk_price 应有 guard'
     assert 'if not sig_price:' in src
+
+
+# ── 2026-09-29 OCR 批次B（#8/#11/#12/#14 + 连接/包装）防回归 ──
+
+def test_query_table_failure_logged():
+    """OCR #8：_query_table 查询失败记日志（原静默返回 0 不可区分故障/空）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._query_table)
+    assert '查询失败' in src and 'logger.warning' in src, '失败应记日志'
+    assert 'return 0' in src, '返回 0 保持调用方语义'
+
+
+def test_market_stats_keeps_old_on_missing():
+    """OCR #11：市场统计缺源时保留上轮缓存（原清空致并发读者见空）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._precompute_market_stats)
+    assert '保留上轮缓存' in src, '缺源应保留旧缓存'
+    assert '_market_stats_cache = {}' not in src, '缺源不再清空'
+
+
+def test_jud_meta_cache_atomic_replace():
+    """OCR #12：_jud_meta_cache 局部构建后原子替换（原 clear-then-fill 无锁）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._jud_enrich_with_meta)
+    assert '_jud_meta_new' in src, '应局部构建'
+    assert '_jud_meta_cache = _jud_meta_new' in src, '循环后原子赋值'
+
+
+def test_sharding_row_count_whitelist():
+    """OCR #14：get_table_row_count 表名白名单（纵深防御）"""
+    import inspect
+    from app.data import sharding_manager as sm
+    src = inspect.getsource(sm.ShardingManager.get_table_row_count)
+    assert 'not in self._table_to_db' in src, '应校验表名在受控路由内'
+
+
+def test_fina_indicator_uses_ts_wrapper():
+    """OCR 批次B：_batch_fina_indicator 方案2 回归 _ts 限流/超时保护"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._batch_fina_indicator)
+    assert '_ts(pro.stock_basic' in src, 'stock_basic 应经 _ts 包装'
+
+
+def test_signal_checkpoint_closes_conns():
+    """OCR 批次B：_run_signal_checkpoint 异常路径关闭连接（原泄漏）"""
+    import data_daemon as dd
+    import inspect
+    src = inspect.getsource(dd._run_signal_checkpoint)
+    assert 'finally:' in src and '_c.close()' in src, '应 try/finally 关闭连接'
+    assert 'conn = None' in src and 'ec = None' in src, '连接应预初始化'
