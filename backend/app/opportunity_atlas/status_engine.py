@@ -1205,6 +1205,26 @@ class StatusEngine:
         # 默认：趋势不明
         return '趋势不明'
 
+    def _status_bar_v390_or_legacy(self, l2: dict, dims: dict, l0: dict) -> str:
+        """497号（批次4，P5）：status_bar 单源化——优先由判定层（v390）派生中文展示态。
+
+        与 dim8 展示层同源（`_derive_status_bar_v390` + `STATUS_BAR_STATES` 中文映射），
+        消除「快照 legacy 5 态」与「dim8 派生 8 态」双口径并存（492 P2 的最后一处残留）。
+        legacy 路径（l2 无 final_score 键）或派生失败 → 回退 legacy `_status_bar` 自算。
+        """
+        try:
+            if 'final_score' in l2:  # v390 特有键（_v390_result）
+                from app.opportunity_atlas.dimensions.dim8_summary_engine import (
+                    STATUS_BAR_STATES,
+                    _derive_status_bar_v390,
+                )
+                _bar = _derive_status_bar_v390(l2)
+                if _bar:
+                    return STATUS_BAR_STATES.get(_bar, _bar)
+        except Exception:
+            pass
+        return self._status_bar(dims, l2['opportunity_state'], l0)
+
     def _assemble(self, ts_code: str, dims: dict, lifecycle: Optional[dict],
                   l0: dict, l2: dict, hits: Optional[list] = None,
                   dim_engine_results: Optional[dict] = None) -> dict:
@@ -1228,7 +1248,7 @@ class StatusEngine:
         result = {
             'ts_code': ts_code,
             'dim_states': json.dumps(dims, ensure_ascii=False),
-            'status_bar': self._status_bar(dims, l2['opportunity_state'], l0),
+            'status_bar': self._status_bar_v390_or_legacy(l2, dims, l0),
             'opportunity_state': l2['opportunity_state'],
             'state_evidence': json.dumps(l2['state_evidence'], ensure_ascii=False),
             'conflict_evidence': json.dumps(l2['conflict_evidence'], ensure_ascii=False),
