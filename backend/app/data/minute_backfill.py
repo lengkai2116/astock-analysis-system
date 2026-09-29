@@ -326,7 +326,8 @@ def backfill_1min(ts_codes: List[str], days_back: int = 30,
 
             # 聚合1min→5min→15m/30m/60m
             df_1min = ecm.get_cached_minute_kline(ts_code, freq='1min')
-            if df_1min is not None and not df_1min.empty:
+            got_data = df_1min is not None and not df_1min.empty
+            if got_data:
                 records = df_1min.to_dict('records')
                 agg5 = _resample_minute(records, '1min', '5min')
                 if agg5:
@@ -336,9 +337,14 @@ def backfill_1min(ts_codes: List[str], days_back: int = 30,
                         if agg:
                             _cache_to_ecm(pd.DataFrame(agg), ts_code, freq, ecm)
 
-            ok += 1
-            if ok % 10 == 0:
-                logger.info(f"[1min] 进度: {ok}/{len(ts_codes)} 只")
+            # 498号#42：原无条件 `ok += 1`（取到 0 行亦计成功）→ ok 虚增、系统性故障与
+            # 「该股无数据」不可区分；改为仅在有 1min 数据时计成功。
+            if got_data:
+                ok += 1
+                if ok % 10 == 0:
+                    logger.info(f"[1min] 进度: {ok}/{len(ts_codes)} 只")
+            else:
+                logger.debug(f"[1min] 无数据: {ts_code}")
 
             time.sleep(0.3)
         except Exception as e:

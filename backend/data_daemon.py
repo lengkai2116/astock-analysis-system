@@ -19,15 +19,22 @@ from datetime import datetime, timedelta
 for k in list(os.environ.keys()):
     if 'proxy' in k.lower(): del os.environ[k]
 os.environ['DATA_DAEMON_RUNNING'] = '1'
-os.environ.setdefault('DATA_DIR', '/Users/kalence/Desktop/01-A股股票分析系统/data')
 
-# 加载 .env 文件（确保 DATABASE_URL 等配置就绪）
+# 加载 .env 文件（确保 DATABASE_URL/DATA_DIR 等配置就绪）
+# 498号 §六-2：load_dotenv 必须**先于** DATA_DIR 兜底——原 `setdefault('DATA_DIR', …)`
+# 在 load_dotenv 之前执行，因 setdefault 不覆盖已存在键，导致 .env 里的 DATA_DIR
+# 永远不生效、daemon 静默沿用硬编码路径（而 ECM/sharding 走 os.getenv 读 .env → 分叉）。
 try:
     from dotenv import load_dotenv
     dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
     load_dotenv(dotenv_path)
 except Exception:
     pass
+
+# .env 未提供 DATA_DIR 时，兜底为项目根 data/（与 .env/start_daemon.sh 同值）
+os.environ.setdefault(
+    'DATA_DIR',
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data'))
 
 log_handler = TimedRotatingFileHandler(
     os.path.join(os.path.dirname(__file__), 'logs', 'data_daemon.log'),
@@ -101,6 +108,36 @@ def _load_ts_rate_config() -> dict:
 
 
 _ts_rate_cfg = _load_ts_rate_config()
+
+
+def _load_collection_params() -> dict:
+    """498号 §六-3：采集/保留/核对参数由 data_sources.yaml `collection_params` 驱动，
+    缺失回退原硬编码值（**零行为变更**）。"""
+    cfg = {
+        'priority_levels': {'HIGH': 3, 'NORMAL': 2, 'LOW': 1},
+        'retention_min_days': {'daily_cache': 1095, 'minute_kline_cache': 180, 'factor_cache': 365},
+        'margin_short_ratio': 0.9, 'margin_check_window': 5, 'margin_base_days': 20,
+    }
+    try:
+        from config import load_yaml
+        cp = load_yaml('data_sources.yaml').get('collection_params') or {}
+        if isinstance(cp.get('priority_levels'), dict) and cp['priority_levels']:
+            cfg['priority_levels'] = {str(k).upper(): int(v) for k, v in cp['priority_levels'].items()}
+        if isinstance(cp.get('retention_min_days'), dict) and cp['retention_min_days']:
+            cfg['retention_min_days'] = {str(k): int(v) for k, v in cp['retention_min_days'].items()}
+        mc = cp.get('margin_check') or {}
+        if mc.get('short_ratio'):
+            cfg['margin_short_ratio'] = float(mc['short_ratio'])
+        if mc.get('check_window'):
+            cfg['margin_check_window'] = int(mc['check_window'])
+        if mc.get('base_days'):
+            cfg['margin_base_days'] = int(mc['base_days'])
+    except Exception:
+        pass
+    return cfg
+
+
+_collection_cfg = _load_collection_params()
 _TS_MIN_INTERVAL = 1.0 / _ts_rate_cfg['rps']      # 默认 5次/秒 → 0.2s
 # 498号#19：Tushare 限流器 check-sleep-set 加锁（原无锁，多线程并发可突破 5次/秒；
 # 与 tushare_provider._ts_last_call 各自独立，此处仅保护 daemon 侧调用节奏）
@@ -241,7 +278,8 @@ _SYNC_CORE_TYPES = frozenset({'finance_report', 'stk_holder', 'margin',
 # 425号：写入优先级调度（优先级状态机 / 核心滞后判定 / mootdx 降频 / HIGH 补采包装）
 # ══════════════════════════════════════════════════════════
 
-_PRIORITY_LEVELS = {'HIGH': 3, 'NORMAL': 2, 'LOW': 1}
+# 498号 §六-3：由 data_sources.yaml collection_params.priority_levels 驱动
+_PRIORITY_LEVELS = dict(_collection_cfg['priority_levels'])
 
 
 def _set_collect_priority(level: str):
@@ -2046,9 +2084,10 @@ def _shard_fetchall(table: str, sql: str, params=None):
 # 又保证「历史某日缺口」在日期推进后仍能被复查（只查最新日的实现会在日期推进后永久漏掉缺口）。
 # 交易日口径与全管道一致（app.utils.trading_hours.is_holiday，含周末/法定节假日/调休上班周末）；
 # 日历不可用时**回退 DB 推导日期**，绝不静默跳过核对。
-_MARGIN_SHORT_RATIO = 0.9      # 行数低于自基准该比例即判不足
-_MARGIN_CHECK_WINDOW = 5       # 复查最近 N 个交易日（不含最新交易日）
-_MARGIN_BASE_DAYS = 20         # 自基准：该日前 N 个交易日的当日行数峰值
+# 498号 §六-3：由 data_sources.yaml collection_params.margin_check 驱动
+_MARGIN_SHORT_RATIO = _collection_cfg['margin_short_ratio']   # 行数低于自基准该比例即判不足
+_MARGIN_CHECK_WINDOW = _collection_cfg['margin_check_window']  # 复查最近 N 个交易日（不含最新交易日）
+_MARGIN_BASE_DAYS = _collection_cfg['margin_base_days']        # 自基准：该日前 N 个交易日的当日行数峰值
 
 
 def _recent_trading_days(n: int, end=None) -> list:
@@ -7480,11 +7519,8 @@ def _run_signal_checkpoint():
 # 426号 S3/D1：保留期下限（356号 规则10 时效为最低标准——超期不删、不足告警）。
 # pre_feat_cache 不纳入：功能 2026-08-19 才启用，1 年下限必然误报，其覆盖
 # 由阶段三回补专项保障（每日 ≥5000 行验证）。
-_RETENTION_MIN_DAYS = {
-    'daily_cache': 1095,           # 日线 3 年
-    'minute_kline_cache': 180,     # 分钟 6 个月（v1.5：原清理调用传 30 天，与 356 规则不符，已校正）
-    'factor_cache': 365,           # 预计算 1 年
-}
+# 498号 §六-3：由 data_sources.yaml collection_params.retention_min_days 驱动
+_RETENTION_MIN_DAYS = dict(_collection_cfg['retention_min_days'])
 _RETENTION_DATE_COLS = {
     'daily_cache': 'trade_date',
     'minute_kline_cache': 'trade_date',

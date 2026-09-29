@@ -176,3 +176,18 @@ health_check:
   max_retries: 3
   healthy_threshold: 0.9  # 健康评分阈值
   degraded_threshold: 0.6  # 降级评分阈值
+
+# 采集/保留/核对参数（498号 §六-3：原硬编码于 data_daemon，集中于此；值不变=零行为变更）
+collection_params:
+  priority_levels:        # sync_requests 消费优先级（数值越大越先消费）
+    HIGH: 3
+    NORMAL: 2
+    LOW: 1
+  retention_min_days:     # 保留期下限（356号 规则10；超期不删、不足告警）
+    daily_cache: 1095
+    minute_kline_cache: 180
+    factor_cache: 365
+  margin_check:           # 483号 ③ 融资融券行数完整性核对
+    short_ratio: 0.9      # 行数低于自基准该比例即判不足
+    check_window: 5       # 复查最近 N 个交易日（不含最新交易日）
+    base_days: 20         # 自基准：该日前 N 个交易日的当日行数峰值

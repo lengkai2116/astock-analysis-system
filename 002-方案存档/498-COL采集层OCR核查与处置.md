@@ -1,6 +1,7 @@
 # 498号｜COL 采集层 OCR 核查与处置
 
-**版本**：v1.8（2026-09-29；**批次1~6 已实施**，代码已改、未推送，详见 §十一~§十六。余延后项见下）
+**版本**：v1.9（2026-09-29；**批次1~7 已实施**，代码已改、未推送，详见 §十一~§十七。余延后项见下）
+**v1.9 批次7 实施（2026-09-29）**：范围拍板＝**§六-2+#53+#42+§六-3剩余** → **§六-2** `load_dotenv` 移到 `DATA_DIR` 兜底前（`.env` 现生效，消除分叉）；**#53** AKShare 分钟日期不再传空串覆盖默认 + `period` 归一；**#42** `backfill_1min` 加 `got_data` 门控（`ok` 不再虚增）；**§六-3剩余** `collection_params` 段（priority_levels/retention_min_days/margin_check）集中到 yaml。改动 4 文件；回归 64 passed、ruff 零新增。**未做**：#41（性能）/ #52（名称映射）/ #7（偏果）。
 **v1.8 批次6 实施（2026-09-29）**：范围拍板＝**死代码+配置集中** → **#8/#13** 删 `tushare_provider` 逐字重复死段（101 行）+ 修 `as e`；**Q3** 删 `MinuteDataManager`（零引用，连带清 #1/#9/#36~#39/#54）；**§六-3** Tushare 限流/超时参数集中到 `data_sources.yaml`（值不变=零行为变更）。改动 3 文件；定向回归 52 passed、ruff 零新增、探针全绿。**未做**：§六-2 DATA_DIR / #7 / #31/#41/#42/#52/#53（留待后续）。
 **v1.7 批次5 实施（2026-09-29）**：用户指示「开始实施批次5」→ 低危/死代码清理 **#46**（日志括号）/ **#47**（死状态 `_SYNCED_TODAY`）/ **#48**（死函数 `_check_daily_sync_backfill`）/ **#49**（`_seen` 加 20000 上限）/ **#50**（重复 logger）/ **#55**（死常量 `_FLUSH_BATCH_SIZE`）/ **#56**（无效 global `_last_sector_ts`）；**延后 #8/#13**（tushare_provider 重复段，独立 refactor）/**#52/#53**（功能扩展/低危）。改动 3 文件；定向回归 52 passed、ruff 零新增。
 **v1.6 批次4 实施（2026-09-29）**：用户指示「开始实施批次4」→ 范围拍板＝**事实子集** → 分钟时间基准 **#4**（午休映射）/**#14**（北京时间）/**#40**（交易日陈旧判定）、降级/静默吞 **#43/#30/#33/#51/#44/#32**、分库读告警 **#21/#23**、源健康事实侧 **#15/#5/#6**；**#7 未做**（偏「果」留拍板），#31/#41/#42 延后。改动 6 文件；探针全绿、定向回归 50 passed、ruff 零新增。
@@ -404,6 +405,31 @@
 - `data_sources.yaml` `rate_limits.tushare` 增 3 键：`call_timeout: 15`、`minute_call_timeout: 60`、`stk_mins_requests_per_minute: 1`（**注**：`requests_per_minute: 300` 是 Tushare 通用配额，**不是** stk_mins 的 1/分，故用独立键，避免误绑）。
 - `data_daemon._load_ts_rate_config()` 统一读 4 项 → `_TS_MIN_INTERVAL`/`_TS_CALL_TIMEOUT`/`_TS_MINUTE_INTERVAL`/`_TS_MINUTE_CALL_TIMEOUT`（缺失回退原硬编码值）。
 - **零行为变更核验**：`_TS_MIN_INTERVAL=0.2`、`_TS_CALL_TIMEOUT=15.0`、`_TS_MINUTE_INTERVAL=60.0`、`_TS_MINUTE_CALL_TIMEOUT=60.0`（与改前完全一致）。
+
+### 运行态
+- 验证期停 daemon+看守 → 跑 → **已重启看守**。改动**未推送**。
+
+---
+
+## 十七、批次7 实施记录（2026-09-29，§六-2 + #53 + #42 + §六-3 剩余）
+
+> 范围（用户拍板）＝**§六-2+#53+#42+§六-3剩余**（#41 性能 / #52 名称映射 / #7 偏果 留待后续）。改动 4 文件；验证：`py_compile` OK、ruff **零新增**、探针 `_498_batch7_probe.py` 全绿、定向回归 **64 passed**。
+
+### §六-2 `DATA_DIR` 解析顺序 ✅
+- `data_daemon.py`：**`load_dotenv` 移到 `DATA_DIR` 兜底之前**；兜底改相对路径 `../data`（不再硬编码绝对路径）。
+- 核验（模拟分叉）：**改 `.env` 的 `DATA_DIR` 现能生效**（原 `setdefault` 先于 `load_dotenv` → `.env` 值永不生效、daemon 静默沿用硬编码；而 ECM/sharding 走 `os.getenv` 读 `.env` → 分叉）。
+- （ECM/sharding/minute_backfill 其余 `os.getenv('DATA_DIR') or <project-root>/data` 默认值已为相对兜底，无分叉，未动。）
+
+### #53 `akshare_provider.get_minute_data` AKShare 分钟日期 ✅
+- 原 `start_date=start_date or ''` 以空串覆盖 AKShare 默认（`'1979-09-01 09:32:00'`）→ 结果空/不可预期；改**仅在显式提供时才传**，并用 `**_kw` 调用；`period` 归一去 `min/m` 后缀（兼容 `'5m'`/`'5min'`/`'5'`）。
+
+### #42 `minute_backfill.backfill_1min` `ok` 计数 ✅
+- 原无条件 `ok += 1`（取到 0 行亦计成功）→ 加 `got_data` 门控：仅在有 1min 数据时计成功，无数据记 debug（`ok` 不再虚增、与「该股无数据」可区分）。
+
+### §六-3 剩余参数集中 ✅
+- `data_sources.yaml` 新增 `collection_params` 段：`priority_levels`（HIGH3/NORMAL2/LOW1）、`retention_min_days`（daily 1095/minute 180/factor 365）、`margin_check`（short_ratio 0.9/check_window 5/base_days 20）。
+- `data_daemon._load_collection_params()` 读之 → `_PRIORITY_LEVELS`/`_RETENTION_MIN_DAYS`/`_MARGIN_SHORT_RATIO`/`_MARGIN_CHECK_WINDOW`/`_MARGIN_BASE_DAYS`（缺失回退原值）。
+- **零行为变更核验**：5 组常量与改前逐值一致。
 
 ### 运行态
 - 验证期停 daemon+看守 → 跑 → **已重启看守**。改动**未推送**。

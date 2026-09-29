@@ -365,9 +365,21 @@ class AkshareProvider:
             return []
         try:
             symbol, _, _ = _parse_ts_code(ts_code)
-            df = ak.stock_zh_a_hist_min_em(symbol=symbol, period=freq,
-                                            start_date=start_date or '',
-                                            end_date=end_date or '')
+            # 498号#53：AKShare stock_zh_a_hist_min_em 的日期参数有合法默认值
+            # （1979-09-01 09:32:00 / 2222-01-01 09:32:00）；原传 `start_date or ''`
+            # 会以空串覆盖默认 → 结果空/不可预期。改为仅在显式提供时才传入。
+            # period 需为纯数字（{'1','5','15','30','60'}），兼容 '5m'/'5min'/'5' 三种写法。
+            _p = str(freq).strip().lower()
+            if _p.endswith('min'):
+                _p = _p[:-3]
+            elif _p.endswith('m'):
+                _p = _p[:-1]
+            _kw = {'symbol': symbol, 'period': _p}
+            if start_date:
+                _kw['start_date'] = start_date
+            if end_date:
+                _kw['end_date'] = end_date
+            df = ak.stock_zh_a_hist_min_em(**_kw)
             if df is None or df.empty:
                 return []
             results = []
