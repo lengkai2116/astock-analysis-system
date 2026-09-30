@@ -97,7 +97,7 @@ def arbitrate(
               'emotion': {'direction': 1/-1/0, 'strength': 0.0-1.0, ...},
               ... 其他维度
             }
-        reliability: 可靠性指标（预留，当前未使用）
+        reliability: 可靠性指标（当前仅并入 state_evidence 文本供前端展示，不参与 final_score/opportunity_state 判定）
         weekly_direction: 背景周期（周线）方向 'up'/'down'/''；494号（R-2）大级别否决用。
             主链 tags 无 multi_level（R-10），须由调用方经
             `dim_adapter.weekly_direction_from_dim_results(dim_results)` 取自 dim2 后传入。

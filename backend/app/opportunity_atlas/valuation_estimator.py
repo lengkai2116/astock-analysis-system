@@ -252,22 +252,40 @@ class ValuationEngine(DataAwareMixin):
     # 315号方案B：composite 截面百分位分档（对齐 416 设计 5/20/80/95）
     # ═══════════════════════════════════════════════
 
-    def build_composite_percentile(self, ecm=None) -> None:
-        """构建全市场 composite_rating 截面百分位基准（precompute 前调用一次）
-
-        从标签表最近一次 composite_rating 排序（跨轮滞后一天，百分位相对语义可接受）。
-        无基准时 compute_tags 回退绝对阈值分档。
-        2026-08-06 修复（315号 F2 口径）：基准值须与查询侧同口径——
-        查询侧 `_level_by_composite(composite - industry_mean)` 使用中性化后的值，
-        故基准分布也构建为「composite − 行业均值」的中性化分布，
-        否则口径错配致分档失真。
-        2026-09-13 修复（356号分库）：opportunity_tags_cache 属 compute_cache.db，
-        经总库连接（_query_df）读取恒空 → 基准恒为 None、分档静默退回绝对阈值。
-        改走 _query_shard 分库路由，并尊重入参 ecm（调用方注入的实例才有正确数据目录）。
-        """
+    def _composite_items_from_pre_feat(self, cache) -> list:
+        """497号遗留登记-4：从 pre_feat_cache（live，RAW-2 每日刷新）取最新交易日的
+        valuation.composite_rating。返回 [(ts_code, composite)]；失败/空返回 []。"""
         try:
-            import bisect
-            cache = ecm if ecm is not None else self._get_dm().cache
+            import json as _json
+            _td = cache._query_shard('pre_feat_cache',
+                                     "SELECT MAX(trade_date) AS d FROM pre_feat_cache")
+            if _td is None or _td.empty:
+                return []
+            trade_date = _td.iloc[0]['d']
+            if not trade_date:
+                return []
+            df = cache._query_shard(
+                'pre_feat_cache',
+                "SELECT ts_code, features_json FROM pre_feat_cache WHERE trade_date = ?",
+                [trade_date])
+            items = []
+            for _, r in df.iterrows():
+                try:
+                    v = _json.loads(r['features_json']).get('valuation') or {}
+                    cv = v.get('composite_rating')
+                    if cv is None or cv == '':
+                        continue
+                    items.append((r['ts_code'], float(cv)))
+                except (TypeError, ValueError, _json.JSONDecodeError):
+                    continue
+            return items
+        except Exception:
+            return []
+
+    def _composite_items_from_legacy(self, cache) -> list:
+        """legacy 兜底：从 opportunity_tags_cache 取每只最新 composite_rating
+        （497号登记-4：该表已陈旧，仅在 pre_feat 不可用时兜底）。"""
+        try:
             rows = cache._query_shard(
                 'opportunity_tags_cache',
                 "SELECT DISTINCT ts_code, tag_value FROM opportunity_tags_cache "
@@ -280,9 +298,39 @@ class ValuationEngine(DataAwareMixin):
                     items.append((r['ts_code'], float(r['tag_value'])))
                 except (TypeError, ValueError):
                     continue
+            return items
+        except Exception:
+            return []
+
+    def build_composite_percentile(self, ecm=None) -> None:
+        """构建全市场 composite_rating 截面百分位基准（precompute 前调用一次）
+
+        497号遗留登记-4：源＝pre_feat_cache 最新交易日 valuation.composite_rating（live，
+        RAW-2 每日刷新）；pre_feat 不足时兜底 legacy opportunity_tags_cache（该表已陈旧）。
+        无基准时 compute_tags 回退绝对阈值分档。
+        2026-08-06 修复（315号 F2 口径）：基准值须与查询侧同口径——
+        查询侧 `_level_by_composite(composite - industry_mean)` 使用中性化后的值，
+        故基准分布也构建为「composite − 行业均值」的中性化分布，
+        否则口径错配致分档失真。
+        2026-09-13 修复（356号分库）：opportunity_tags_cache 属 compute_cache.db，
+        经总库连接（_query_df）读取恒空 → 基准恒为 None、分档静默退回绝对阈值。
+        改走 _query_shard 分库路由，并尊重入参 ecm（调用方注入的实例才有正确数据目录）。
+        """
+        try:
+            import bisect
+            cache = ecm if ecm is not None else self._get_dm().cache
+            # 497号遗留登记-4：legacy opportunity_tags_cache 已陈旧（实测 updated_at 停在
+            # 2026-08-19），live 源＝pre_feat_cache.valuation.composite_rating（RAW-2 每日刷新）。
+            # 优先取 pre_feat（最新交易日），legacy 表作为兜底。
+            items = self._composite_items_from_pre_feat(cache)
+            _src = 'pre_feat'
+            if len(items) < 100:
+                items = self._composite_items_from_legacy(cache)
+                _src = 'legacy_tags_cache'
             if len(items) < 100:
                 self._comp_percentile = None
                 return
+            logger.info(f"composite 基准源: {_src}（{len(items)} 只）")
             # 315号 F2：行业中性化——按 7 大行业分类统计 composite 均值
             # （行业内相对估值：个股 composite 减行业均值后再做截面分档，
             #   避免"行业整体贵→行业内股票全判高估"的系统偏差）

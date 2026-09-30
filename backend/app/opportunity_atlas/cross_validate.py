@@ -298,7 +298,7 @@ VOTE_MAP: dict[str, dict[str | int, int]] = {
         '上升三法': 0, '下降三法': 0, '光头光脚': 0, '孕线十字': 0,
         '陀螺线': 0, '收敛三角形': 0,
     },
-    'right_side_confirm': {'强确认': 1, '基础确认': 0, '未确认': 0, '否决': -1},  # 404号DATA-03: pre_feat_cache管道不产出'否决'，该映射值为死代码（已知限制）
+    'right_side_confirm': {'强确认': 1, '基础确认': 0, '未确认': 0, '否决': -1},  # 404号DATA-03 原注「pre_feat 不产否决、该映射值为死代码」——**已过时**：462-1 起 derived 经 _check_right_side_confirm 产四档中文（含「否决」，仅强卖点 first_sell/first_sell_p/量价背离/预跌形态触发），该映射实际可达
     # ── 316号 P3：扩展票源（规模/低波动/流动性）— 默认关闭（L4_EXTRA_VOTES=1 启用），见 _lookup_vote ──
     'small_cap': {},
     'low_vol': {},

@@ -6118,7 +6118,8 @@ def _build_status_snapshot(codes: list[str]):
                 state_evidence TEXT, conflict_evidence TEXT, consensus_rate REAL,
                 direction TEXT, l0 TEXT, lifecycle TEXT, advice_params TEXT,
                 summary_text TEXT, one_liner_detail TEXT, dim_engine_results TEXT,
-                signals TEXT, monthly_halt INTEGER, created_at TEXT,
+                signals TEXT, monthly_halt INTEGER,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 final_score REAL, semantic_type TEXT,
                 reliability_summary TEXT, consensus_detail TEXT
             )
