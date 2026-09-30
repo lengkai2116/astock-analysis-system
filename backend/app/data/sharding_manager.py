@@ -14,11 +14,21 @@
 
 import logging
 import os
+import re
 import sqlite3
 import threading
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# 合法 SQL 标识符（500号#6：拼接进 SQL 的表名须过此闸，纵深防御）
+_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def _is_valid_identifier(name: str) -> bool:
+    """表名/列名是否可安全拼接进 SQL（仅字母/数字/下划线，非数字开头）"""
+    return bool(name) and _IDENTIFIER_RE.match(name) is not None
+
 
 # 未登记路由表告警去重集合（426号 S1/D8：未登记表操作一次性告警，防刷屏）
 # 498号#26：加锁——采集线程/API 线程并发读写该集合
@@ -63,6 +73,9 @@ class ShardingManager:
         # 498号#20：连接缓存「检查-建连-入缓存」加锁（原非原子，两线程首次并发
         # 各建一条 sqlite 连接、后者覆盖前者致句柄泄漏）
         self._conn_lock = threading.Lock()
+        # 500号#4：写锁缓存「检查-建锁」加锁（原非原子，两线程首次并发各建一把 RLock、
+        # 后者覆盖前者 → 同一分库的写不再互斥）
+        self._write_locks_lock = threading.Lock()
 
         # 表到数据库的映射（356号方案定稿）；值为 None 表示显式总库表
         self._table_to_db: Dict[str, Optional[str]] = {
@@ -164,17 +177,27 @@ class ShardingManager:
                 if db_name not in self._connections:
                     db_path = os.path.join(self.db_dir, db_name)
                     conn = sqlite3.connect(db_path, check_same_thread=False)
-                    conn.execute("PRAGMA journal_mode=WAL")
-                    conn.execute("PRAGMA synchronous=NORMAL")
-                    conn.execute("PRAGMA busy_timeout=30000")    # 30s（2026-08-12方案B，见模块注释）
-                    # 426号 S4/D2：cache_size 与 journal_size_limit 按库设定（356号 §3 规则14）
-                    pr = _DB_PRAGMAS.get(db_name, {'cache_size': -8192, 'journal_size_limit': 8388608})
-                    conn.execute(f"PRAGMA cache_size={pr['cache_size']}")
-                    conn.execute(f"PRAGMA journal_size_limit={pr['journal_size_limit']}")
+                    try:
+                        conn.execute("PRAGMA journal_mode=WAL")
+                        conn.execute("PRAGMA synchronous=NORMAL")
+                        conn.execute("PRAGMA busy_timeout=30000")    # 30s（2026-08-12方案B，见模块注释）
+                        # 426号 S4/D2：cache_size 与 journal_size_limit 按库设定（356号 §3 规则14）
+                        pr = _DB_PRAGMAS.get(db_name, {'cache_size': -8192, 'journal_size_limit': 8388608})
+                        conn.execute(f"PRAGMA cache_size={pr['cache_size']}")
+                        conn.execute(f"PRAGMA journal_size_limit={pr['journal_size_limit']}")
+                        # 424号 P2-1：snapshot_cache.db 补索引（356号 §3.2.5 设计未落地）
+                        if db_name == 'snapshot_cache.db':
+                            self._ensure_snapshot_indexes(conn)
+                    except Exception:
+                        # 500号#5：PRAGMA/索引初始化失败时关闭连接并释放句柄（原先连接已入
+                        # 缓存、异常后既不关闭也不回滚 → 句柄泄漏 + 半初始化连接被复用）；
+                        # 不入缓存，下次访问重建。
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        raise
                     self._connections[db_name] = conn
-                    # 424号 P2-1：snapshot_cache.db 补索引（356号 §3.2.5 设计未落地）
-                    if db_name == 'snapshot_cache.db':
-                        self._ensure_snapshot_indexes(conn)
 
         return self._connections[db_name]
 
@@ -209,10 +232,15 @@ class ShardingManager:
         conn.commit()
 
     def get_write_lock(self, db_name: str) -> threading.RLock:
-        """获取写锁"""
-        if db_name not in self._write_locks:
-            self._write_locks[db_name] = threading.RLock()
-        return self._write_locks[db_name]
+        """获取写锁（500号#4：检查-建锁原子化，防并发首次各建一把锁致写不互斥）"""
+        lock = self._write_locks.get(db_name)
+        if lock is None:
+            with self._write_locks_lock:
+                lock = self._write_locks.get(db_name)
+                if lock is None:
+                    lock = threading.RLock()
+                    self._write_locks[db_name] = lock
+        return lock
 
     def get_db_for_table(self, table_name: str) -> Optional[str]:
         """获取表对应的数据库名
@@ -357,9 +385,14 @@ class ShardingManager:
 
     def get_table_row_count(self, table_name: str) -> int:
         """获取表行数"""
-        # 2026-09-29 OCR #14：表名白名单加固——拼接进 SQL 的表名必须来自受控路由
-        # （纵深防御；正常调用方均为内部常量表名，get_db_for_table 已隐式校验）
-        if table_name not in self._table_to_db:
+        # 500号#6：白名单改用 is_registered（含前缀规则），与 get_db_for_table 契约一致
+        # ——原 `not in self._table_to_db` 绕过前缀规则，动态表 adj_factor_cache_2026 走
+        # get_db_for_table 命中 history_cache.db，但此处返回 0（与路由二义性修复 D8 同源残留）。
+        # 同时保留表名标识符纵深防御（拼接进 SQL 前须为合法标识符）。
+        if not self.is_registered(table_name):
+            return 0
+        if not _is_valid_identifier(table_name):
+            logger.warning(f"get_table_row_count 拒绝非法表名: {table_name!r}")
             return 0
         db_name = self.get_db_for_table(table_name)
         if db_name is None:

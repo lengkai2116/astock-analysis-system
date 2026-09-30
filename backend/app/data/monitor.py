@@ -37,6 +37,9 @@ class Monitor:
         self._alerts: List[Dict] = []
         self._alert_callbacks: List[callable] = []
         self._lock = threading.Lock()
+        # 500号#28：告警 ID 单调计数器（原 len(_alerts)+1，裁剪至 100 条后新 ID 与存活
+        # 告警碰撞 → acknowledge_alert(id) 可能确认无关告警）
+        self._alert_seq = 0
 
     def record_metric(self, metric_name: str, value: float, tags: Dict = None):
         """记录监控指标
@@ -77,44 +80,53 @@ class Monitor:
             source: 告警来源
             metrics: 相关指标
         """
-        alert = {
-            'id': len(self._alerts) + 1,
-            'level': level,
-            'title': title,
-            'message': message,
-            'source': source,
-            'metrics': metrics or {},
-            'timestamp': datetime.now(),
-            'acknowledged': False
-        }
-
         with self._lock:
+            self._alert_seq += 1
+            alert = {
+                'id': self._alert_seq,
+                'level': level,
+                'title': title,
+                'message': message,
+                'source': source,
+                'metrics': metrics or {},
+                'timestamp': datetime.now(),
+                'acknowledged': False
+            }
             self._alerts.append(alert)
             # 保留最近100条告警
             if len(self._alerts) > 100:
                 self._alerts = self._alerts[-100:]
 
-        # 记录日志
-        log_func = getattr(logger, level.lower(), logger.info)
+        # 记录日志（500号#30：未知/None 级别不再静默降为 INFO，回退 warning）
+        _lvl = (level or '').lower()
+        log_func = getattr(logger, _lvl, None)
+        if not callable(log_func):
+            logger.warning(f"未知告警级别 {level!r}，按 warning 记录")
+            log_func = logger.warning
         log_func(f"[{level}] {title}: {message}")
 
-        # 触发回调
-        for callback in self._alert_callbacks:
+        # 触发回调（500号#29：持锁快照回调列表，避免并发 register 改动列表时迭代异常）
+        with self._lock:
+            _callbacks = list(self._alert_callbacks)
+        for callback in _callbacks:
             try:
                 callback(alert)
             except Exception as e:
                 logger.warning(f"告警回调执行失败: {e}")
 
     def register_alert_callback(self, callback: callable):
-        """注册告警回调函数"""
-        self._alert_callbacks.append(callback)
+        """注册告警回调函数（500号#29：持锁）"""
+        with self._lock:
+            self._alert_callbacks.append(callback)
 
     def get_metric_stats(self, metric_name: str) -> Dict:
-        """获取指标统计信息"""
-        if metric_name not in self._metrics:
-            return {}
-
-        values = [v['value'] for v in self._metrics[metric_name]['values']]
+        """获取指标统计信息（500号#29：持锁读取快照）"""
+        with self._lock:
+            _metric = self._metrics.get(metric_name)
+            if _metric is None:
+                return {}
+            values = [v['value'] for v in _metric['values']]
+            last_update = _metric['last_update']
         if not values:
             return {}
 
@@ -124,22 +136,24 @@ class Monitor:
             'max': max(values),
             'avg': sum(values) / len(values),
             'last': values[-1],
-            'last_update': self._metrics[metric_name]['last_update'].isoformat()
+            'last_update': last_update.isoformat()
         }
 
     def get_alerts(self, level: str = None, limit: int = 50) -> List[Dict]:
-        """获取告警列表"""
-        alerts = self._alerts
+        """获取告警列表（500号#29：持锁快照，避免读到整体替换中的列表）"""
+        with self._lock:
+            alerts = list(self._alerts)
         if level:
             alerts = [a for a in alerts if a['level'] == level]
         return alerts[-limit:]
 
     def acknowledge_alert(self, alert_id: int):
-        """确认告警"""
-        for alert in self._alerts:
-            if alert['id'] == alert_id:
-                alert['acknowledged'] = True
-                break
+        """确认告警（500号#29：持锁）"""
+        with self._lock:
+            for alert in self._alerts:
+                if alert['id'] == alert_id:
+                    alert['acknowledged'] = True
+                    break
 
     def check_wal_size(self, db_path: str, threshold_mb: int = 2048):
         """检查WAL文件大小（355号方案规则16）"""

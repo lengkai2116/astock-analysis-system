@@ -458,11 +458,16 @@ def test_jud_meta_cache_atomic_replace():
 
 
 def test_sharding_row_count_whitelist():
-    """OCR #14：get_table_row_count 表名白名单（纵深防御）"""
+    """OCR #14 / 500号#6：get_table_row_count 表名白名单（纵深防御）+ 前缀路由一致
+
+    500号#6 更正：白名单判据由 `not in self._table_to_db` 改为 `is_registered`
+    （含前缀规则，与 get_db_for_table 契约一致），并加标识符纵深防御。
+    """
     import inspect
     from app.data import sharding_manager as sm
     src = inspect.getsource(sm.ShardingManager.get_table_row_count)
-    assert 'not in self._table_to_db' in src, '应校验表名在受控路由内'
+    assert 'is_registered(table_name)' in src, '白名单应走 is_registered（含前缀规则）'
+    assert '_is_valid_identifier' in src, '应保留表名标识符纵深防御'
 
 
 def test_fina_indicator_uses_ts_wrapper():

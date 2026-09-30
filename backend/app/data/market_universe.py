@@ -31,9 +31,22 @@ SW_INDEX_CODES = (
 
 _INDEX_CODE_SET = frozenset(BROAD_INDEX_CODES) | frozenset(SW_INDEX_CODES)
 
+# 500号#49：模块级预计算「NOT IN」占位符与有序参数（原每次调用重建串、且无长度断言）。
+# 参数顺序必须与占位符一致，长度不等会导致参数错位——由断言守卫。
+_INDEX_CODES_SORTED = tuple(sorted(_INDEX_CODE_SET))
+_NOT_IN_PLACEHOLDERS = ', '.join('?' * len(_INDEX_CODES_SORTED))
+assert len(_NOT_IN_PLACEHOLDERS.split(',')) == len(_INDEX_CODES_SORTED), \
+    "stock_only_sql 占位符数与指数码集长度不一致（参数将错位）"
+
 
 def is_index_code(code: str) -> bool:
-    """判断是否为指数代码（宽基 / 申万行业 / .SI 后缀 / 399 深市指数段）"""
+    """判断是否为指数代码（宽基 / 申万行业 / .SI 后缀 / 深市指数段）
+
+    500号#48（OCR D4 更正）：`399` 段规则**方向正确**——深市个股段为
+    000/001/002/003/300/301，`399` 开头仅用于深市指数（如 399001.SZ 深证成指），
+    现实不存在 399 开头的非深市个股，故无需按交易所后缀收窄；此处仅加注释说明
+    （OCR 原判「与别所 399 开头正股混淆」不成立，见 500 号 §六 D4）。
+    """
     if not code:
         return False
     return (code in _INDEX_CODE_SET
@@ -48,7 +61,6 @@ def stock_only_sql(alias: str = '') -> tuple:
         alias: 表别名（如 'd'），为空则用裸列名 ts_code
     """
     col = f'{alias}.ts_code' if alias else 'ts_code'
-    placeholders = ', '.join('?' * len(_INDEX_CODE_SET))
     sql = (f"{col} NOT LIKE '%.SI' AND {col} NOT LIKE '399%' "
-           f"AND {col} NOT IN ({placeholders})")
-    return sql, sorted(_INDEX_CODE_SET)
+           f"AND {col} NOT IN ({_NOT_IN_PLACEHOLDERS})")
+    return sql, list(_INDEX_CODES_SORTED)

@@ -11,10 +11,12 @@ InMemoryStateStore — 盘中数据线程安全内存状态存储器
 设计原则：
   - 单进程多线程环境，threading.RLock 保护批量操作
   - 单字段赋值（dict.__setitem__）由 Python GIL 保证原子性
-  - 所有读方法返回浅拷贝副本，防止外部引用污染内部状态
+  - 所有读方法返回深拷贝副本，防止外部引用污染内部状态（500号#14：原 `dict(r)` 仅拷
+    顶层，嵌套 dict/list 仍别名内部状态）
   - 数据不存在时返回 None / []，绝不抛异常
 """
 
+import copy
 import logging
 import threading
 from datetime import datetime
@@ -25,6 +27,10 @@ logger = logging.getLogger(__name__)
 
 class InMemoryStateStore:
     """线程安全盘中数据内存存储器"""
+
+    # 500号#15：分钟K线内存上限（追加式无界增长防护）。全市场 1min 单日约 5000×240
+    # ≈120 万根，取 200 万根上限（≈2 日）兼顾盘中读取与内存可控；超限按 FIFO 裁剪。
+    _MINUTE_MAX_BARS = 2_000_000
 
     def __init__(self):
         self._lock = threading.RLock()
@@ -40,6 +46,8 @@ class InMemoryStateStore:
         self._limit_pools: Dict[str, List[Dict]] = {'up': [], 'down': []}
         # 分钟K线（追加式）：[record, ...]，盘后清理
         self._minute_kline: List[Dict] = []
+        # 500号#15：分钟K线按 ts_code 索引（读单只 O(k)，免全量扫描 + 全局锁长持有）
+        self._minute_index: Dict[str, List[Dict]] = {}
         # 龙虎榜（覆盖式）
         self._lhb: List[Dict] = []
         # 席位级龙虎榜详情（覆盖式）：{ts_code: [seat_records]}
@@ -83,7 +91,7 @@ class InMemoryStateStore:
             for r in records:
                 code = r.get('ts_code', r.get('code', ''))
                 if code:
-                    self._snapshot[code] = dict(r)
+                    self._snapshot[code] = copy.deepcopy(r)
             self._touch('snapshot')
 
     def get_snapshot(self) -> List[Dict]:
@@ -95,7 +103,7 @@ class InMemoryStateStore:
         """按代码查询单只股票"""
         with self._lock:
             r = self._snapshot.get(ts_code)
-            return dict(r) if r else None
+            return copy.deepcopy(r) if r else None
 
     def batch_get(self, ts_codes: List[str]) -> List[Dict]:
         """批量查询指定股票列表"""
@@ -104,7 +112,7 @@ class InMemoryStateStore:
             for code in ts_codes:
                 r = self._snapshot.get(code)
                 if r:
-                    result.append(dict(r))
+                    result.append(copy.deepcopy(r))
             return result
 
     # ── 板块排行（覆盖式，5min 刷新）────────────────────────
@@ -112,50 +120,50 @@ class InMemoryStateStore:
     def update_sectors(self, records: List[Dict]):
         """全量更新行业板块排行"""
         with self._lock:
-            self._sectors = [dict(r) for r in records]
+            self._sectors = [copy.deepcopy(r) for r in records]
             self._touch('sectors')
 
     def get_sectors(self) -> List[Dict]:
         """获取行业板块排行"""
         with self._lock:
-            return [dict(r) for r in self._sectors]
+            return [copy.deepcopy(r) for r in self._sectors]
 
     def update_concepts(self, records: List[Dict]):
         """全量更新概念板块排行"""
         with self._lock:
-            self._concepts = [dict(r) for r in records]
+            self._concepts = [copy.deepcopy(r) for r in records]
             self._touch('concepts')
 
     def get_concepts(self) -> List[Dict]:
         """获取概念板块排行"""
         with self._lock:
-            return [dict(r) for r in self._concepts]
+            return [copy.deepcopy(r) for r in self._concepts]
 
     # ── 涨跌榜（覆盖式，30s 刷新）───────────────────────────
 
     def update_top_stocks(self, rank_type: str, records: List[Dict]):
         """全量更新涨跌榜（'up' 或 'down'）"""
         with self._lock:
-            self._top_stocks[rank_type] = [dict(r) for r in records]
+            self._top_stocks[rank_type] = [copy.deepcopy(r) for r in records]
             self._touch(f'top_stocks:{rank_type}')
 
     def get_top_stocks(self, rank_type: str) -> List[Dict]:
         """获取涨跌榜"""
         with self._lock:
-            return [dict(r) for r in self._top_stocks.get(rank_type, [])]
+            return [copy.deepcopy(r) for r in self._top_stocks.get(rank_type, [])]
 
     # ── 涨跌停池（覆盖式，5min 刷新）────────────────────────
 
     def update_limit_pool(self, limit_type: str, records: List[Dict]):
         """全量更新涨跌停池（'up' 或 'down'）"""
         with self._lock:
-            self._limit_pools[limit_type] = [dict(r) for r in records]
+            self._limit_pools[limit_type] = [copy.deepcopy(r) for r in records]
             self._touch(f'limit_pool:{limit_type}')
 
     def get_limit_pool(self, limit_type: str) -> List[Dict]:
         """获取涨跌停池"""
         with self._lock:
-            return [dict(r) for r in self._limit_pools.get(limit_type, [])]
+            return [copy.deepcopy(r) for r in self._limit_pools.get(limit_type, [])]
 
     # ── 分钟K线（追加式，5min 采集，盘后清理）─────────────
 
@@ -164,20 +172,52 @@ class InMemoryStateStore:
         if not records:
             return
         with self._lock:
-            self._minute_kline.extend(dict(r) for r in records)
+            for r in records:
+                d = copy.deepcopy(r)
+                self._minute_kline.append(d)
+                # 500号#15：同步维护按 ts_code 索引
+                code = d.get('ts_code')
+                if code:
+                    self._minute_index.setdefault(code, []).append(d)
+            self._trim_minute_kline()
             self._touch('minute_kline')
 
     def get_minute_kline(self, ts_code: str = None) -> List[Dict]:
-        """获取分钟K线，可过滤指定股票"""
+        """获取分钟K线，可过滤指定股票
+
+        500号#15：过滤分支改读按 ts_code 索引（O(k)），不再全量扫描（原 O(n) 并在全局
+        锁内做深拷贝，读写互相阻塞）。
+        """
         with self._lock:
             if ts_code:
-                return [dict(r) for r in self._minute_kline if r.get('ts_code') == ts_code]
-            return [dict(r) for r in self._minute_kline]
+                return [copy.deepcopy(r) for r in self._minute_index.get(ts_code, [])]
+            return [copy.deepcopy(r) for r in self._minute_kline]
+
+    def _trim_minute_kline(self, max_bars: Optional[int] = None):
+        """500号#15：按上限裁剪分钟K线（防止追加式无界增长；仅保留最近 max_bars 根）。
+
+        须在持锁状态下调用。
+        """
+        if max_bars is None:
+            max_bars = self._MINUTE_MAX_BARS
+        if max_bars <= 0 or len(self._minute_kline) <= max_bars:
+            return
+        # 保留最近 max_bars 根（列表尾部为最新）
+        dropped = self._minute_kline[:-max_bars]
+        self._minute_kline = self._minute_kline[-max_bars:]
+        # 索引同量裁剪：重建为裁剪后集合（保持 ts_code 分组）
+        self._minute_index = {}
+        for r in self._minute_kline:
+            code = r.get('ts_code')
+            if code:
+                self._minute_index.setdefault(code, []).append(r)
+        logger.debug(f"[InMemory] 分钟K线裁剪 {len(dropped)} 根（上限 {max_bars}）")
 
     def clear_minute_kline(self):
         """盘后清理分钟K线（由 scheduler 日终调用）"""
         with self._lock:
             self._minute_kline.clear()
+            self._minute_index.clear()
             self._meta.pop('minute_kline', None)
 
     def clear_lhb_detail(self):
@@ -190,12 +230,12 @@ class InMemoryStateStore:
 
     def update_lhb(self, records: List[Dict]):
         with self._lock:
-            self._lhb = [dict(r) for r in records]
+            self._lhb = [copy.deepcopy(r) for r in records]
             self._touch('lhb')
 
     def get_lhb(self) -> List[Dict]:
         with self._lock:
-            return [dict(r) for r in self._lhb]
+            return [copy.deepcopy(r) for r in self._lhb]
 
     # ── 龙虎榜席位级详情（覆盖式，30min 刷新）────────────────
 
@@ -206,30 +246,30 @@ class InMemoryStateStore:
             for r in records:
                 ts = r.get('ts_code', '')
                 if ts:
-                    self._lhb_detail.setdefault(ts, []).append(dict(r))
+                    self._lhb_detail.setdefault(ts, []).append(copy.deepcopy(r))
             self._touch('lhb_detail')
 
     def get_lhb_detail(self, ts_code: str = None) -> List[Dict]:
         """获取席位级龙虎榜数据"""
         with self._lock:
             if ts_code:
-                return [dict(r) for r in self._lhb_detail.get(ts_code, [])]
+                return [copy.deepcopy(r) for r in self._lhb_detail.get(ts_code, [])]
             # 全量展平
             result = []
             for records in self._lhb_detail.values():
-                result.extend(dict(r) for r in records)
+                result.extend(copy.deepcopy(r) for r in records)
             return result
 
     # ── 新闻（按需缓存，30min 刷新）─────────────────────────
 
     def update_news(self, records: List[Dict]):
         with self._lock:
-            self._news = [dict(r) for r in records]
+            self._news = [copy.deepcopy(r) for r in records]
             self._touch('news')
 
     def get_news(self) -> List[Dict]:
         with self._lock:
-            return [dict(r) for r in self._news]
+            return [copy.deepcopy(r) for r in self._news]
 
     # ── 维护 ───────────────────────────────────────────────
 
@@ -244,7 +284,11 @@ class InMemoryStateStore:
             self._limit_pools['up'].clear()
             self._limit_pools['down'].clear()
             self._minute_kline.clear()
+            self._minute_index.clear()
             self._lhb.clear()
+            # 500号#13：补清席位级龙虎榜（原遗漏 → 跨交易日残留，读路径内存优先于缓存
+            # 时可能被当「当日」数据；与独立方法 clear_lhb_detail 一致）
+            self._lhb_detail.clear()
             self._news.clear()
             self._meta.clear()
 
@@ -261,6 +305,7 @@ class InMemoryStateStore:
                 'limit_pool_down': len(self._limit_pools.get('down', [])),
                 'minute_kline': len(self._minute_kline),
                 'lhb': len(self._lhb),
+                'lhb_detail_codes': len(self._lhb_detail),
                 'news': len(self._news),
                 'meta': {k: v.isoformat() for k, v in self._meta.items()},
             }

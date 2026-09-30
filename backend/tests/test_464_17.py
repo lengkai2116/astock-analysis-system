@@ -23,6 +23,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
 
+from datetime import datetime, timedelta
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -173,17 +175,24 @@ class TestMainForcePresenceShard:
 
     def test_lhb_strong(self):
         """LHB 近 30 日有席位 → strong"""
+        _d = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
         ecm = _FakeECM(lhb=pd.DataFrame({
-            'trade_date': ['2026-09-18'], 'buy_amount': [1e8], 'sell_amount': [1e7],
+            'trade_date': [_d], 'buy_amount': [1e8], 'sell_amount': [1e7],
         }))
         r = self._run(ecm)
         assert r['main_force_presence'] == 'strong'
         assert '龙虎榜' in r['presence_evidence']
 
     def test_margin_risk_30d_window(self):
-        """融资 30 日窗口内增幅>50% → risk（窗口对齐注释：30 日内最早记录）"""
+        """融资 30 日窗口内增幅>50% → risk（窗口对齐注释：30 日内最早记录）
+
+        500号批次3：日期改为**相对今天**（原硬编码 2026-08-25，会随真实时间滑出 30 日
+        窗口致测试恒失败；生产逻辑本身正确）。
+        """
+        _old = (datetime.now() - timedelta(days=20)).strftime('%Y-%m-%d')
+        _new = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
         ecm = _FakeECM(margin=pd.DataFrame({
-            'trade_date': ['2026-08-25', '2026-09-18'],
+            'trade_date': [_old, _new],
             'rzye': [100.0, 200.0],
         }))
         r = self._run(ecm)
@@ -192,9 +201,11 @@ class TestMainForcePresenceShard:
 
     def test_margin_oldest_outside_window_no_risk(self):
         """融资最早记录在 30 日窗口外 → 不以历史最低点计算（窗口语义）→ 不触发"""
+        _far = (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d')
+        _new = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
         ecm = _FakeECM(margin=pd.DataFrame({
-            # 历史最早（4 个月前）100 → 最新 200（窗口内仅 9 月数据 200）
-            'trade_date': ['2026-05-20', '2026-09-18'],
+            # 历史最早（窗口外）100 → 最新 200（窗口内仅新数据 200）
+            'trade_date': [_far, _new],
             'rzye': [100.0, 200.0],
         }))
         r = self._run(ecm)

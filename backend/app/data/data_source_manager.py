@@ -9,6 +9,7 @@
 """
 
 import logging
+import threading
 import time
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
@@ -138,6 +139,9 @@ class DataSourceManager:
         self.health_check_interval = 60       # 健康检查间隔（秒）
 
         self._last_health_check = 0.0
+        # 500号#20：守护可变共享态（active_source 检查-赋值 / *_failures+= / avg_latency RMW）
+        # —— 单例被多 Flask 请求共享，原非原子 RMW 会丢计数/竞态
+        self._lock = threading.RLock()
 
     # ==================== 注册 ====================
 
@@ -165,26 +169,27 @@ class DataSourceManager:
         self._update_active_source()
 
     def _update_active_source(self):
-        """按优先级 + 健康状态选择活跃数据源"""
-        available = [
-            (name, health)
-            for name, health in self.sources.items()
-            if health.status != DataSourceStatus.UNAVAILABLE
-        ]
+        """按优先级 + 健康状态选择活跃数据源（500号#20：持锁，避免 active_source 竞态）"""
+        with self._lock:
+            available = [
+                (name, health)
+                for name, health in self.sources.items()
+                if health.status != DataSourceStatus.UNAVAILABLE
+            ]
 
-        if not available:
-            self.active_source = None
-            logger.warning("无可用数据源")
-            return
+            if not available:
+                self.active_source = None
+                logger.warning("无可用数据源")
+                return
 
-        # 按优先级排序，同优先级按可用率排序
-        available.sort(key=lambda x: (x[1].priority, -x[1].get_availability()))
+            # 按优先级排序，同优先级按可用率排序
+            available.sort(key=lambda x: (x[1].priority, -x[1].get_availability()))
 
-        new_active = available[0][0]
-        if new_active != self.active_source:
-            old = self.active_source
-            self.active_source = new_active
-            logger.info(f"活跃数据源切换: {old} → {new_active}")
+            new_active = available[0][0]
+            if new_active != self.active_source:
+                old = self.active_source
+                self.active_source = new_active
+                logger.info(f"活跃数据源切换: {old} → {new_active}")
 
     # ==================== 健康检查 ====================
 
@@ -196,10 +201,11 @@ class DataSourceManager:
             force: 是否强制检查（忽略间隔）
         """
         now = time.time()
-        if not force and (now - self._last_health_check) < self.health_check_interval:
-            return
-
-        self._last_health_check = now
+        with self._lock:
+            # 500号#20：`_last_health_check` 检查-赋值原子化（防并发重复全量健康检查）
+            if not force and (now - self._last_health_check) < self.health_check_interval:
+                return
+            self._last_health_check = now
 
         for name, health in self.sources.items():
             provider = self.providers.get(name)
@@ -271,33 +277,41 @@ class DataSourceManager:
         """
         self.check_health()
 
-        if self.active_source is None:
-            # 尝试任何可用源
-            for name in self.sources:
-                if self.sources[name].status != DataSourceStatus.UNAVAILABLE:
-                    self.active_source = name
-                    break
+        with self._lock:
+            if self.active_source is None:
+                # 尝试任何可用源
+                for name in self.sources:
+                    if self.sources[name].status != DataSourceStatus.UNAVAILABLE:
+                        self.active_source = name
+                        break
 
-        if self.active_source is None:
-            raise RuntimeError("无可用数据源")
+            if self.active_source is None:
+                raise RuntimeError("无可用数据源")
 
-        provider = self.providers.get(self.active_source)
+            provider = self.providers.get(self.active_source)
+            active = self.active_source
         if provider is None:
-            raise RuntimeError(f"数据源 {self.active_source} 无 provider")
+            raise RuntimeError(f"数据源 {active} 无 provider")
 
-        health = self.sources[self.active_source]
+        health = self.sources[active]
 
         try:
             t0 = time.time()
             result = provider(endpoint, params or {})
             latency = (time.time() - t0) * 1000
-            health.record_success(latency)
-            self._evaluate_status(self.active_source, health)
+            # 500号#22：空结果（含空 DataFrame/Series/set）应记失败——原判据仅识 list/dict，
+            # 空 DataFrame 被记为 success 并当有效数据返回
+            if _is_empty_result(result):
+                health.record_failure("empty result")
+                self._evaluate_status(active, health)
+            else:
+                health.record_success(latency)
+                self._evaluate_status(active, health)
             return result
 
         except Exception as e:
             health.record_failure(str(e))
-            self._evaluate_status(self.active_source, health)
+            self._evaluate_status(active, health)
 
             # 触发回退
             if health.status in (DataSourceStatus.FALLBACK, DataSourceStatus.UNAVAILABLE):
@@ -360,12 +374,12 @@ class DataSourceManager:
                 try:
                     t0 = time.time()
                     result = provider(endpoint, params or {})
-                    if result is not None and not (isinstance(result, (list, dict)) and len(result) == 0):
+                    if not _is_empty_result(result):
                         # 498号#5：快路径命中须记账（原直接 return，首选源成功/延迟/失败全不可见）
                         health.record_success((time.time() - t0) * 1000)
                         self._evaluate_status(name, health)
                         return result
-                    # 空结果记为失败，避免静默降级且不反映健康度
+                    # 空结果记为失败，避免静默降级且不反映健康度（500号#22：判据含 pandas 空对象）
                     health.record_failure("empty result")
                 except Exception as e:
                     health.record_failure(str(e))
@@ -393,14 +407,15 @@ class DataSourceManager:
         """
         self.check_health()
 
-        return {
-            'active': self.active_source,
-            'timestamp': time.time(),
-            'sources': {
-                name: health.to_dict()
-                for name, health in self.sources.items()
-            },
-        }
+        with self._lock:
+            return {
+                'active': self.active_source,
+                'timestamp': time.time(),
+                'sources': {
+                    name: health.to_dict()
+                    for name, health in self.sources.items()
+                },
+            }
 
     def get_source_status(self, name: str) -> Optional[str]:
         """获取指定数据源的状态"""
@@ -412,15 +427,23 @@ class DataSourceManager:
         return self.active_source
 
     def reset_source(self, name: str):
-        """重置数据源状态"""
-        health = self.sources.get(name)
-        if health:
-            health.status = DataSourceStatus.NORMAL
-            health.consecutive_failures = 0
-            health.failures = 0
-            health.last_error = None
-            logger.info(f"数据源 {name} 已重置")
-            self._update_active_source()
+        """重置数据源状态（500号#21：一并复位延迟量与连续成功数）
+
+        原重置仅复位 status/consecutive_failures/failures，**未复位 `avg_latency_ms`/
+        `consecutive_successes`** → 因延迟降级的源重置后立即被 `_evaluate_status`
+        重新判 DEGRADED（重置无效）。
+        """
+        with self._lock:
+            health = self.sources.get(name)
+            if health:
+                health.status = DataSourceStatus.NORMAL
+                health.consecutive_failures = 0
+                health.failures = 0
+                health.consecutive_successes = 0
+                health.avg_latency_ms = 0.0
+                health.last_error = None
+                logger.info(f"数据源 {name} 已重置")
+        self._update_active_source()
 
     def reset_all(self):
         """重置所有数据源"""
@@ -441,6 +464,24 @@ class DataSourceManager:
             'source_count': len(self.sources),
             'active_source': self.active_source,
         }
+
+
+def _is_empty_result(result) -> bool:
+    """500号#22：统一「空结果」判据（含 list/dict/DataFrame/Series/set/tuple 及其空长度）
+
+    原判据 `isinstance(result, (list, dict)) and len(result) == 0` 漏判 pandas 空对象
+    → 空 DataFrame/Series 被记为 success 并当有效数据返回。
+    """
+    if result is None:
+        return True
+    if hasattr(result, 'empty'):            # pandas DataFrame/Series
+        try:
+            return bool(result.empty)
+        except Exception:
+            return False
+    if isinstance(result, (list, dict, set, tuple, str)):
+        return len(result) == 0
+    return False
 
 
 # 全局单例

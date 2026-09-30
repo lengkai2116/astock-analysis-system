@@ -25,9 +25,14 @@ class KlineResampler:
     - 自定义频率: 任意时间窗口聚合
     """
 
+    # 500号#53：分钟频率共享常量（原多处硬编码易漂移；60min 此前仅现于分支元组）
+    MINUTE_FREQS = ('1min', '5min', '15min', '30min', '60min')
+
     FREQ_AGG_MAP = {
         'daily':   {'unit': 'day',  'format': '%Y%m%d'},
-        'weekly':  {'unit': 'week', 'format': '%Y-W%W'},
+        # 500号#19：统一为 ISO 周键（与 `isocalendar()` 实际分组一致；原文档写 `%Y-W%W`
+        # 系周一起算/C 周编号，与实际不符）
+        'weekly':  {'unit': 'week', 'format': '%G-W%V'},
         'monthly': {'unit': 'month','format': '%Y-%m'},
     }
 
@@ -48,13 +53,22 @@ class KlineResampler:
         if not data:
             return []
 
+        # 500号#54：逐 bar 类型校验（data 直取请求 body；非 mapping 元素 `bar.get` 抛
+        # AttributeError）。过滤非 dict 元素，保持对外可用性。
+        if not all(isinstance(b, dict) for b in data):
+            _n_bad = sum(1 for b in data if not isinstance(b, dict))
+            logger.warning(f"resample 输入含 {_n_bad} 个非 dict 元素，已过滤")
+            data = [b for b in data if isinstance(b, dict)]
+            if not data:
+                return []
+
         # 判断是否需要聚合
         if target_freq == 'daily' and source_freq in ('daily', 'weekly', 'monthly'):
-            return data  # 已经是日线或更高
+            return self._normalize_bars(data, time_key)  # 500号#19：仍归一后返回
         if target_freq == 'weekly' and source_freq in ('weekly', 'monthly'):
-            return data
+            return self._normalize_bars(data, time_key)
 
-        if source_freq in ('1min', '5min', '15min', '30min', '60min'):
+        if source_freq in self.MINUTE_FREQS:
             if target_freq == 'daily':
                 return self._minute_to_daily(data, time_key)
             elif target_freq in ('weekly', 'monthly'):
@@ -70,6 +84,10 @@ class KlineResampler:
         logger.warning(f"不支持的重采样: {source_freq} → {target_freq}")
         return data
 
+    def _normalize_bars(self, data: List[Dict], time_key: str = 'trade_time') -> List[Dict]:
+        """500号#19：同/粗频直返时按 time_key 排序并归一（不静默跳过）。"""
+        return sorted(data, key=lambda b: str(b.get(time_key, b.get('trade_date', ''))))
+
     def _minute_to_daily(self, data: List[Dict], time_key: str = 'trade_time') -> List[Dict]:
         """分钟→日线"""
         from collections import defaultdict
@@ -78,11 +96,12 @@ class KlineResampler:
         for bar in data:
             ts = self._parse_time(bar.get(time_key, ''))
             day_key = ts.strftime('%Y%m%d')
-            groups[day_key].append(bar)
+            groups[day_key].append((ts, bar))
 
         result = []
         for day_key in sorted(groups.keys()):
-            bars = groups[day_key]
+            # 500号#18：组内按时间排序（原取 bars[0]/bars[-1] 从不排序 → Open/Close 可能颠倒）
+            bars = [b for _, b in sorted(groups[day_key], key=lambda x: x[0])]
             result.append({
                 'trade_date': day_key,
                 'open': float(bars[0].get('open', 0)),
@@ -103,11 +122,12 @@ class KlineResampler:
             d = self._parse_date(bar.get('trade_date', ''))
             iso = d.isocalendar()
             week_key = f"{iso[0]}-W{iso[1]:02d}"
-            groups[week_key].append(bar)
+            groups[week_key].append((d, bar))
 
         result = []
         for week_key in sorted(groups.keys()):
-            bars = groups[week_key]
+            # 500号#18：组内按日期排序
+            bars = [b for _, b in sorted(groups[week_key], key=lambda x: x[0])]
             result.append({
                 'trade_date': week_key,
                 'open': float(bars[0].get('open', 0)),
@@ -127,11 +147,12 @@ class KlineResampler:
         for bar in daily_data:
             d = self._parse_date(bar.get('trade_date', ''))
             month_key = d.strftime('%Y-%m')
-            groups[month_key].append(bar)
+            groups[month_key].append((d, bar))
 
         result = []
         for month_key in sorted(groups.keys()):
-            bars = groups[month_key]
+            # 500号#18：组内按日期排序
+            bars = [b for _, b in sorted(groups[month_key], key=lambda x: x[0])]
             result.append({
                 'trade_date': month_key,
                 'open': float(bars[0].get('open', 0)),
@@ -145,21 +166,27 @@ class KlineResampler:
 
     # ── 辅助 ──
 
+    # 500号#18：可接受的日期/时间格式（解析失败时告警，不再静默回退 now()）
+    _TIME_FORMATS = ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y%m%d %H%M%S', '%Y%m%d')
+    _DATE_FORMATS = ('%Y%m%d', '%Y-%m-%d')
+
     def _parse_time(self, s: str) -> datetime:
-        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S',
-                     '%Y%m%d %H%M%S', '%Y%m%d'):
+        for fmt in self._TIME_FORMATS:
             try:
                 return datetime.strptime(s, fmt)
-            except ValueError:
+            except (ValueError, TypeError):
                 continue
+        # 500号#18：原静默 `return datetime.now()` → 错分桶且无感知；改告警 + 保持可运行
+        logger.warning(f"resample 时间解析失败，回退当前时间分桶: {s!r}")
         return datetime.now()
 
     def _parse_date(self, s: str) -> datetime:
-        for fmt in ('%Y%m%d', '%Y-%m-%d'):
+        for fmt in self._DATE_FORMATS:
             try:
                 return datetime.strptime(s, fmt)
-            except ValueError:
+            except (ValueError, TypeError):
                 continue
+        logger.warning(f"resample 日期解析失败，回退当前时间分桶: {s!r}")
         return datetime.now()
 
 

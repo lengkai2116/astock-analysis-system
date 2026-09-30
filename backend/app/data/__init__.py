@@ -127,14 +127,15 @@ class DataManager:
         中途失败后可通过 resume_from 参数（ts_code）断点续传。
 
         Args:
-            max_stocks: 最大同步数量（None = 全部）
+            max_stocks: 最大同步**股票数**（None = 全部）；500号#12 起按股票数计
             resume_from: 从指定 ts_code 开始续传（None = 从头开始）
 
         Returns:
             同步的记录总数
         """
         stocks = Stock.query.order_by(Stock.ts_code).all()
-        count = 0
+        count = 0            # 累计记录数（返回值语义不变）
+        stock_done = 0       # 500号#12：已完成同步的**股票数**（max_stocks/进度按股票计）
         skipped = 0
         started = resume_from is None  # resume_from=None 直接开始
 
@@ -168,15 +169,33 @@ class DataManager:
                 )
 
             count += cnt
-            if count % 100 == 0:
-                logger.info(f"全量同步进度: {count} 条（跳过 {skipped} 只已有数据）")
+            stock_done += 1
+            # 500号#12：边界/进度改按**股票数**判定（原按记录数，单只股票可贡献 >100
+            # 记录 → max_stocks 边界非确定、resume_from 仅能在股票边界续传）
+            if stock_done % 100 == 0:
+                logger.info(f"全量同步进度: {stock_done} 只 / {count} 条（跳过 {skipped} 只已有数据）")
                 db.session.commit()
-            if max_stocks and count >= max_stocks:
+            if max_stocks and stock_done >= max_stocks:
                 break
 
         db.session.commit()
         logger.info(f"全量同步完成: {count} 条（跳过 {skipped} 只已有数据）")
         return count
+
+    @staticmethod
+    def _normalize_date(value):
+        """交易日入参归一到 YYYY-MM-DD（500号#2）
+
+        `daily_cache.trade_date` 统一存 `YYYY-MM-DD`；调用方可能传紧凑 `YYYYMMDD`
+        （如 `chip_distribution_service` 的上游）。ECM 回退路径 `get_cached_daily` 已归一，
+        分库路径此前**原样绑定** → 紧凑格式静默不命中。此处统一口径，两路径一致。
+        """
+        if value is None:
+            return None
+        s = str(value).replace('-', '').strip()
+        if len(s) == 8 and s.isdigit():
+            return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+        return str(value)
 
     def get_cached_daily_data(self, ts_code, start_date=None, end_date=None, adj=None):
         """从缓存获取日线数据
@@ -185,11 +204,18 @@ class DataManager:
         Args:
             adj: 复权方式 None=不复权 'hfq'=后复权 'qfq'=前复权
         """
-        # 356号方案：优先从分库读取
+        # 500号#2：入参日期归一（分库与 ECM 回退口径一致）
+        start_date = self._normalize_date(start_date)
+        end_date = self._normalize_date(end_date)
+        # 356号方案：优先从分库读取（500号#8：统一走 self._sharding_manager 实例，
+        # 避免裸 import 的另一次实例导致分支判定与实际读路径不一致）
         try:
-            from app.data.sharding_manager import sharding_manager
-            if sharding_manager.table_exists('daily_cache'):
-                # 从分库读取
+            sm = self._sharding_manager
+            if sm is None:
+                from .sharding_manager import sharding_manager as sm
+            if sm.table_exists('daily_cache'):
+                # 从分库读取（500号#57：走 ECM `_query_shard` 权威分库读——`pd.read_sql`
+                # 携带游标列名，避免 execute_query 返回元组后无列名的硬编码列序假设）
                 query = "SELECT * FROM daily_cache WHERE ts_code = ?"
                 params = [ts_code]
                 if start_date:
@@ -199,15 +225,15 @@ class DataManager:
                     query += " AND trade_date <= ?"
                     params.append(end_date)
                 query += " ORDER BY trade_date"
-                df = sharding_manager.execute_query('daily_cache', query, params)
+                df = self.cache._query_shard('daily_cache', query, params)
                 if df is not None and not df.empty:
-                    import pandas as pd
-                    df = pd.DataFrame(df, columns=['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'vol', 'amount', 'pct_chg', 'cached_at'])
                     if adj is None:
                         return df
                     return self._apply_adjust_factor(df, adj)
         except Exception as e:
-            logger.debug(f"分库读取失败，降级到ECM: {e}")
+            # 500号#9：主读路径降级原因须可见（原 logger.debug 静默，schema/口径回归
+            # 与「真无数据」不可区分）
+            logger.warning(f"分库读取 daily_cache 失败，降级到 ECM: {e}")
 
         # 降级到ECM读取
         df = self.cache.get_cached_daily(ts_code, start_date, end_date)
@@ -233,20 +259,27 @@ class DataManager:
             if _valid_ratio < 0.5:
                 return df
             df_merged = _merged
+            # 500号#10：零值/负值因子视为缺失（原仅 ffill().fillna(1.0)，0 会被保留并在
+            # 除法中产生 inf；且 _valid_ratio 只数非空、抓不到零因子）
+            df_merged['adj_factor'] = pd.to_numeric(df_merged['adj_factor'], errors='coerce')
+            df_merged['adj_factor'] = df_merged['adj_factor'].where(df_merged['adj_factor'] > 0)
             df_merged['adj_factor'] = df_merged['adj_factor'].ffill().fillna(1.0)
+            # 500号#10：基准因子非零/非 NaN 守卫（原 base_adj=0 时全列 inf/NaN）
+            _base_pos = df_merged['adj_factor'].iloc[0] if adj == 'hfq' else df_merged['adj_factor'].iloc[-1]
+            if not _base_pos or _base_pos <= 0 or pd.isna(_base_pos):
+                return df
             if adj == 'hfq':
                 # 后复权（知识库《缠论走势结构量化系统配置指南》分析口径）：以最早复权因子为基准，
                 # 历史结构连续、除权除息跳空消除；最新价≠实际价（展示时按 scale 换算回实际价）。
-                base_adj = df_merged['adj_factor'].iloc[0]
-                df_merged['adj_factor'] = df_merged['adj_factor'] / base_adj
+                df_merged['adj_factor'] = df_merged['adj_factor'] / _base_pos
             else:
                 # 前复权（实际交易口径）：以最新复权因子为基准，最新价=实际价。
-                base_adj = df_merged['adj_factor'].iloc[-1]
-                df_merged['adj_factor'] = df_merged['adj_factor'] / base_adj
+                df_merged['adj_factor'] = df_merged['adj_factor'] / _base_pos
             for col in ['open', 'high', 'low', 'close']:
                 if col in df_merged.columns:
                     df_merged[col] = df_merged[col] * df_merged['adj_factor']
             if 'vol' in df_merged.columns:
+                # 500号#10：与价格同源——因子已保证 >0（此处保留 replace 兜底防御）
                 df_merged['vol'] = df_merged['vol'] / df_merged['adj_factor'].replace(0, 1)
             df_merged.drop(columns=['adj_factor'], inplace=True)
             return df_merged
@@ -928,6 +961,12 @@ class DataManager:
             return 0
 
         # 4. 逐日调用 Tushare 补全
+        # 500号#58：daily_basic_cache 仅接受固定列（ECM `_DAILY_BASIC_COLUMNS` 白名单），
+        # 与 `sync_daily_basic_data` 同口径——trade_date 归一到 YYYY-MM-DD、只取白名单列，
+        # 避免直传原始 DataFrame 混入未知列/紧凑日期破坏分库读的字符串范围比较。
+        _basic_cols = ['ts_code', 'trade_date', 'close', 'turnover_rate', 'turnover_rate_f',
+                       'volume_ratio', 'pe', 'pe_ttm', 'pb', 'ps', 'ps_ttm', 'dv_ratio',
+                       'dv_ttm', 'total_share', 'float_share', 'free_share', 'total_mv', 'circ_mv']
         total_inserted = 0
         for i, trade_date in enumerate(missing):
             try:
@@ -935,8 +974,19 @@ class DataManager:
                 data = self.tushare.get_daily_basic(trade_date=date_str)
                 if data:
                     df = pd.DataFrame(data)
-                    self.cache.cache_daily_basic_data(df)
-                    total_inserted += len(df)
+                    # 归一 trade_date（YYYYMMDD → YYYY-MM-DD）
+                    if 'trade_date' in df.columns:
+                        ds = df['trade_date'].astype(str).str.replace('-', '')
+                        df['trade_date'] = pd.to_datetime(ds, format='%Y%m%d', errors='coerce').dt.strftime('%Y-%m-%d')
+                        df = df[df['trade_date'].notna()]
+                    # 仅保留白名单列（缺失列补 NaN，未知列剔除）
+                    for c in _basic_cols:
+                        if c not in df.columns:
+                            df[c] = None
+                    df = df[_basic_cols]
+                    if not df.empty:
+                        self.cache.cache_daily_basic_data(df)
+                        total_inserted += len(df)
                 if (i + 1) % 10 == 0:
                     logger.info(f"daily_basic 回填进度: {i+1}/{len(missing)} 天, 已插入 {total_inserted} 条")
                 time.sleep(sleep_sec)
@@ -1781,20 +1831,30 @@ class DataManager:
         return self.get_cached_daily_data(code)
 
     def get_all_industry_rankings(self) -> list[dict]:
-        """获取所有行业当日涨跌幅排名"""
-        rankings = []
+        """获取所有行业当日涨跌幅排名
+
+        500号#11：原实现 `seen[r['code']] = r` 迭代插入有序 dict，「后覆盖」保留的是
+        **最后插入**的项（`SUB_INDUSTRY_TO_CODE` 中靠后的子行业名），而非**数据日期最新**
+        的项——同一申万一级对应多个行业名时，排名取的 `pct` 实际是任意一个。现显式按
+        指数代码聚合，取**最新交易日**的记录。
+        """
+        best: dict[str, dict] = {}
         for ind_name, code in self.SUB_INDUSTRY_TO_CODE.items():
             df = self.get_industry_index_data(ind_name)
-            if df is not None and not df.empty:
-                pct = float(df.iloc[-1].get('pct_chg', 0))
-                rankings.append({'name': ind_name, 'code': code, 'pct': pct})
-        # 按行业代码去重（只保留每个申万一级行业的最新数据）
-        seen = {}
-        for r in rankings:
-            seen[r['code']] = r  # 后覆盖，保留同一行业的最新子行业结果
-        unique = sorted(seen.values(), key=lambda x: x['pct'], reverse=True)
+            if df is None or df.empty or 'trade_date' not in df.columns:
+                continue
+            df = df.sort_values('trade_date')
+            last = df.iloc[-1]
+            td = str(last.get('trade_date'))
+            pct = float(last.get('pct_chg', 0))
+            cur = best.get(code)
+            # 同一指数码取交易日最新者（并列时保留先出现者，稳定）
+            if cur is None or td > cur['_td']:
+                best[code] = {'name': ind_name, 'code': code, 'pct': pct, '_td': td}
+        unique = sorted(best.values(), key=lambda x: x['pct'], reverse=True)
         for i, r in enumerate(unique, 1):
             r['rank'] = i
+            r.pop('_td', None)
         return unique
 
     # ── 机会库网关（Red Line 5 封装，ORM 直读统一收口） ──

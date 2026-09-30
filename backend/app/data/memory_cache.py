@@ -71,7 +71,7 @@ class TieredMemoryCache:
 
         Args:
             key: 缓存键
-            value: 缓存值（必须可 pickle 序列化，TTLCache 无此限制）
+            value: 缓存值（TTLCache 为纯内存容器，无 pickle 限制）
             level: 缓存级别
         """
         if level not in VALID_LEVELS:
@@ -108,6 +108,10 @@ class TieredMemoryCache:
         """
         with self._lock:
             if level:
+                # 500号#23：非法 level 不再 KeyError（与 get/set 一致容错）
+                if level not in VALID_LEVELS:
+                    logger.warning(f"无效缓存级别: {level}，忽略驱逐")
+                    return
                 self._caches[level].pop(key, None)
             else:
                 for cache in self._caches.values():
@@ -125,6 +129,11 @@ class TieredMemoryCache:
         with self._lock:
             stats = {}
             for level, cache in self._caches.items():
+                # 500号#24：读前 expire()，避免 len(cache) 计入已过期未清理项（虚高）
+                try:
+                    cache.expire()
+                except Exception:
+                    pass
                 hits = self._hits[level]
                 misses = self._misses[level]
                 total = hits + misses

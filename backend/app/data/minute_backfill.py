@@ -63,10 +63,10 @@ def get_watchlist_stocks() -> List[str]:
         data_dir = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data'))
         db_path = os.path.join(data_dir, 'app.db')
         if os.path.isfile(db_path):
-            conn = sqlite3.connect(db_path)
-            cur = conn.execute('SELECT ts_code FROM watchlist ORDER BY sort_order')
-            codes = [r[0] for r in cur.fetchall()]
-            conn.close()
+            # 500号#51：改 with 上下文管理（原正常路径 close，但 fetchall 抛错即泄漏）
+            with sqlite3.connect(db_path) as conn:
+                cur = conn.execute('SELECT ts_code FROM watchlist ORDER BY sort_order')
+                codes = [r[0] for r in cur.fetchall()]
             return codes
     except Exception as e:
         logger.warning(f"读取自选股列表全部失败: {e}")
@@ -119,9 +119,14 @@ def _get_mootdx_minutes_safe(ts_code: str, target_date: str) -> pd.DataFrame:
                     h, m = 13 + j // 60, j % 60
                 return (f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]} "
                         f"{h:02d}:{m:02d}:00")
-            for idx, r in raw.iterrows():
-                i = int(idx) if not isinstance(idx, int) else idx
-                trade_time = _bar_time(i)
+            # 500号#16：(a) 用 enumerate 取**位置索引**，不假设 DataFrame 索引为 0 基连续
+            # 整数（mootdx 若返回字符串/非 0 基索引 → `int(idx)` 抛错或时间整体错位）。
+            for pos, r in enumerate(raw.to_dict('records')):
+                # 500号#16：(b) 单日有效 bar 上限 240（上午/下午各 120）——超出则跳过，
+                # 避免对非交易日/超长序列生成 15:00 以后不存在的时间。
+                if pos >= 240:
+                    break
+                trade_time = _bar_time(pos)
                 price = float(r.get('price', 0))
                 if price == 0:
                     continue
@@ -153,7 +158,14 @@ def _cache_to_ecm(df: pd.DataFrame, ts_code: str, freq: str, ecm: EnhancedCacheM
             # 483号 ②：聚合结果（_resample_minute）只带 trade_time，须补 trade_date ——
             # minute_kline_cache PK 含 trade_date，缺失会落 NULL（既有 5/15/30min 即此问题）
             # 致按日检索/完整性核对失效；从 trade_time 前 10 位取日期。
-            df_copy['trade_date'] = df_copy['trade_time'].astype(str).str[:10]
+            # 500号#16(c)：归一为 YYYY-MM-DD——原 `str[:10]` 对紧凑 `'20260929'` 会原样截成
+            # `'20260929'`（分库读的字符串范围比较失配）。先转 datetime 再格式化，失败留空。
+            _tt = df_copy['trade_time'].astype(str)
+            _dt = pd.to_datetime(_tt, errors='coerce')
+            df_copy['trade_date'] = _dt.dt.strftime('%Y-%m-%d')
+            _bad = df_copy['trade_date'].isna().sum()
+            if _bad:
+                logger.warning(f"分钟K线 trade_date 解析失败 {_bad} 行（{ts_code}/{freq}），已置空")
         if 'vol' in df_copy.columns and 'volume' not in df_copy.columns:
             df_copy = df_copy.rename(columns={'vol': 'volume'})
         ecm.cache_minute_kline(df_copy)
@@ -208,7 +220,10 @@ def _resample_minute(records: list, from_freq: str, to_freq: str) -> list:
         o = bars[0].get('open', 0)
         c = bars[-1].get('close', 0)
         h = max(b.get('high', 0) for b in bars)
-        lv = min(b.get('low', float('inf')) for b in bars)
+        # 500号#50：low 过滤 None/缺失后再取 min（原 `min(b.get('low', float('inf')) …)`：
+        # 任一 bar 缺 low 键即整组得 inf，且 inf 会流入缓存 low）。全缺失时回退 0。
+        _lows = [b.get('low') for b in bars if b.get('low') is not None]
+        lv = min(_lows) if _lows else 0
         v = sum(b.get('volume', 0) or b.get('vol', 0) for b in bars)
         a = sum(b.get('amount', 0) for b in bars)
         result.append({
@@ -312,24 +327,28 @@ def backfill_1min(ts_codes: List[str], days_back: int = 30,
     date_list = [d for d in date_list if datetime.strptime(d, '%Y%m%d').weekday() < 5]
 
     ok = 0
+    # 500号#17：改为读 `date_list` 窗口内的 1min 记录用于聚合（原 `ts_code` 全量读 →
+    # O(history) 内存/耗时随历史线性增长，且可能用旧全量覆盖新聚合）。窗口内已落库的
+    # 更早日期聚合结果保持不动（幂等 REPLACE 只更新窗口内日期）。
     for ts_code in ts_codes:
         try:
+            window_records = []
             for target_date in date_list:
-                # 跳过已有数据的日期
+                # 跳过已有数据的日期（但窗口内已有记录仍需纳入聚合）
                 existing = ecm.get_cached_minute_kline(ts_code, trade_date=target_date, freq='1min')
                 if existing is not None and not existing.empty:
+                    window_records.extend(existing.to_dict('records'))
                     continue
 
                 df = _get_mootdx_minutes_safe(ts_code, target_date)
                 if not df.empty:
                     _cache_to_ecm(df, ts_code, '1min', ecm)
+                    window_records.extend(df.to_dict('records'))
 
-            # 聚合1min→5min→15m/30m/60m
-            df_1min = ecm.get_cached_minute_kline(ts_code, freq='1min')
-            got_data = df_1min is not None and not df_1min.empty
+            # 聚合1min→5min→15m/30m/60m（仅窗口内记录）
+            got_data = bool(window_records)
             if got_data:
-                records = df_1min.to_dict('records')
-                agg5 = _resample_minute(records, '1min', '5min')
+                agg5 = _resample_minute(window_records, '1min', '5min')
                 if agg5:
                     _cache_to_ecm(pd.DataFrame(agg5), ts_code, '5min', ecm)
                     for freq in ['15min', '30min', '60min']:
@@ -428,7 +447,9 @@ def aggregate_1min_to_60min(ts_codes: List[str],
             "SELECT DISTINCT trade_date FROM minute_kline_cache "
             "WHERE freq='1min' ORDER BY trade_date DESC LIMIT ?", [days_back])
         trade_dates = set(_td_df['trade_date'].tolist()) if _td_df is not None and not _td_df.empty else set()
-    except Exception:
+    except Exception as e:
+        # 500号#52：原宽 except 静默置空 → 分库映射/表位变化时下游静默 no-op（不可区分）
+        logger.warning(f"[1min聚合{target_freq}] 读取交易日窗失败，退化为全量读取: {e}")
         trade_dates = set()
     ok = 0
     for ts_code in ts_codes:
@@ -490,12 +511,17 @@ def ensure_minute_data(ts_codes: List[str], days_back: int = 20) -> int:
     # 该库无此表）致 COUNT 恒 0/抛错；改分库读（_query_shard）。
     missing = []
     for code in ts_codes:
-        _cnt_df = ecm_local._query_shard(
-            'minute_kline_cache',
-            'SELECT COUNT(*) AS n FROM minute_kline_cache WHERE ts_code=? AND freq="5min"',
-            [code]
-        )
-        c = int(_cnt_df.iloc[0]['n']) if _cnt_df is not None and not _cnt_df.empty else 0
+        try:
+            _cnt_df = ecm_local._query_shard(
+                'minute_kline_cache',
+                'SELECT COUNT(*) AS n FROM minute_kline_cache WHERE ts_code=? AND freq="5min"',
+                [code]
+            )
+            c = int(_cnt_df.iloc[0]['n']) if _cnt_df is not None and not _cnt_df.empty else 0
+        except Exception as e:
+            # 500号#52：原无包裹 → 分库读失败致整函数抛错被上层吞（不可区分）；按缺失处理并告警
+            logger.warning(f"ensure_minute_data: 查询分钟覆盖失败({code})，按缺失处理: {e}")
+            c = 0
         if c == 0:
             missing.append(code)
 
@@ -503,12 +529,17 @@ def ensure_minute_data(ts_codes: List[str], days_back: int = 20) -> int:
         return 0
 
     # 真实交易日列表（498号#2：daily_cache 同属 market_cache.db 分库）
-    _td_df = ecm_local._query_shard(
-        'daily_cache',
-        'SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT ?',
-        [days_back]
-    )
-    trade_dates = _td_df['trade_date'].tolist() if _td_df is not None and not _td_df.empty else []
+    try:
+        _td_df = ecm_local._query_shard(
+            'daily_cache',
+            'SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT ?',
+            [days_back]
+        )
+        trade_dates = _td_df['trade_date'].tolist() if _td_df is not None and not _td_df.empty else []
+    except Exception as e:
+        # 500号#52：交易日窗读取失败 → 无目标日，直接返回（可见告警，不静默 no-op）
+        logger.warning(f"ensure_minute_data: 读取交易日窗失败，跳过补采: {e}")
+        return 0
 
     ok = 0
     for ts_code in missing:

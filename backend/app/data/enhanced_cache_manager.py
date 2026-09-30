@@ -517,6 +517,8 @@ class EnhancedCacheManager:
 
         如果表在分库中，从分库读取；否则从总库读取（兼容未迁移的表）。
         """
+        # 500号#26：预先初始化，避免 try 内导入失败后 else 分支引用未绑定名（NameError）
+        sharding_manager = None
         try:
             from app.data.sharding_manager import sharding_manager
             db_name = sharding_manager.get_db_for_table(table)
@@ -539,6 +541,8 @@ class EnhancedCacheManager:
 
     def _exec_shard(self, table: str, sql: str, params=None):
         """356号方案：在分库上执行写操作（UPDATE/DELETE等）。"""
+        # 500号#26：预初始化（同 _query_shard），避免 else 分支引用未绑定名
+        sharding_manager = None
         try:
             from app.data.sharding_manager import sharding_manager
             db_name = sharding_manager.get_db_for_table(table)
@@ -1484,7 +1488,8 @@ class EnhancedCacheManager:
                 other_df = df[list(other_cols)].copy()
                 other_df['ts_code'] = ts_code
                 self._insert_from_df('indicator_other', other_df)
-            self.conn.commit()
+            # 500号#27：移除末尾 `self.conn.commit()`——三张 indicator_* 表均属 compute_cache.db
+            # 分库，`_insert_from_df` 内部已各自提交；对总库连接 commit 是 no-op（假原子性 + 噪声）。
 
     def get_indicators_wide(self, ts_code: str) -> 'pd.DataFrame':
         """读取宽表指标数据，合并 3 张表为 1 个 DataFrame"""
@@ -1853,15 +1858,16 @@ class EnhancedCacheManager:
     # ── 连接管理 ─────────────────────────────────────────────
 
     def close(self):
-        try:
-            self.conn.close()
-        except Exception:
-            pass
-        try:
-            if hasattr(self, 'snapshot_conn'):
-                self.snapshot_conn.close()
-        except Exception:
-            pass
+        # 500号#25：关闭全部连接（原仅 conn/snapshot_conn，漏 read_conn/compute_conn/
+        # compute_read_conn —— 均在 __init__ 打开 → 进程内句柄泄漏）
+        for attr in ('conn', 'read_conn', 'snapshot_conn', 'compute_conn', 'compute_read_conn'):
+            c = getattr(self, attr, None)
+            if c is None:
+                continue
+            try:
+                c.close()
+            except Exception:
+                pass
 
     def __del__(self):
         self.close()

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -118,16 +120,20 @@ _SIG_ROW_IDX = {
 }
 
 # 写锁冲突计数（G7：进程内聚合，供 monitor/health 消费）
+# 500号#31：get-then-set 非原子（daemon 多线程写）→ 计数丢失；用 Lock 守护
 _write_lock_conflicts: dict[str, int] = {}
+_write_lock_conflicts_lock = threading.Lock()
 
 
 def get_write_lock_conflicts() -> dict:
     """返回写锁冲突计数（按表聚合）"""
-    return dict(_write_lock_conflicts)
+    with _write_lock_conflicts_lock:
+        return dict(_write_lock_conflicts)
 
 
 def _record_write_lock(table: str):
-    _write_lock_conflicts[table] = _write_lock_conflicts.get(table, 0) + 1
+    with _write_lock_conflicts_lock:
+        _write_lock_conflicts[table] = _write_lock_conflicts.get(table, 0) + 1
 
 
 # ── 校验结果类型 ────────────────────────────────────────────────
@@ -181,15 +187,23 @@ class WriteGateway:
         self._sm = _resolve_sharding()
 
     # ── 写前校验 ──
-    def validate_before_write(self, table: str, rows: list) -> list:
-        """写前格式校验：返回问题列表（空列表 = 通过）"""
+    def validate_before_write(self, table: str, rows: list, expected_cols: int = None) -> list:
+        """写前格式校验：返回问题列表（空列表 = 通过）
+
+        500号#35：补列数校验（原仅校验行是 list/tuple，不校验列数——列数不符会在
+        executemany 阶段报错或被静默截断）。expected_cols 由 insert_sql 占位符数推导后传入。
+        """
         issues: list = []
         if not rows:
             return [f'{table}: 空写入（rows=0），已拒绝']
-        # rows 为位置元组时无法按列名校验；此处仅校验基本结构
         for i, row in enumerate(rows):
             if not isinstance(row, (list, tuple)):
                 issues.append(f'{table}: 第{i}行不是序列类型')
+                if len(issues) > 10:
+                    break
+                continue
+            if expected_cols is not None and len(row) != expected_cols:
+                issues.append(f'{table}: 第{i}行列数 {len(row)} ≠ 期望 {expected_cols}')
                 if len(issues) > 10:
                     break
         return issues
@@ -231,13 +245,29 @@ class WriteGateway:
         insert_sql 必填（sharding_manager.execute_batch_insert 需完整 SQL）。
         返回写后校验 CheckResult；fail_on_validate=True 且写前校验失败时
         抛出 raise_exc（默认 ValueError），用于 G3/SIG 场景。
+
+        500号#35：`expected_ratio` 原为死参数（声明却从未使用）——现**接线**：作为写后
+        校验「写前预判」的宽严开关，写前校验不通过时按该比例决定是否告警升级。
         """
-        pre_issues = self.validate_before_write(table, rows)
+        # 500号#35：从 insert_sql 的 VALUES 占位符数推导期望列数（供列数校验）
+        expected_cols = None
+        try:
+            _values_part = insert_sql[insert_sql.upper().rindex('VALUES'):]
+            _n_ph = _values_part.count('?')
+            if _n_ph > 0:
+                expected_cols = _n_ph
+        except Exception:
+            expected_cols = None
+        pre_issues = self.validate_before_write(table, rows, expected_cols=expected_cols)
         if pre_issues and fail_on_validate:
             exc = raise_exc or ValueError
             raise exc(f'{table} 写前校验失败: {"; ".join(pre_issues[:5])}')
         if pre_issues:
-            logger.warning(f'{table} 写前校验告警（继续写入）: {pre_issues[:3]}')
+            # 500号#35：expected_ratio 接线——比率越低越严格（<0.95 时升为 error 级告警提示）
+            if expected_ratio < 0.95:
+                logger.error(f'{table} 写前校验异常（严格模式 ratio={expected_ratio}）: {pre_issues[:3]}')
+            else:
+                logger.warning(f'{table} 写前校验告警（继续写入）: {pre_issues[:3]}')
 
         try:
             self._sm.execute_batch_insert(table, insert_sql, rows)
@@ -329,7 +359,9 @@ class QualityChecker:
                 [pipeline_date] + params
             ).fetchone()
             return row[0] if row else 0
-        except Exception:
+        except Exception as e:
+            # 500号#34：原静默 return 0 → 持久 DB 故障与「数据未就绪」不可区分
+            logger.warning(f'daily_base 统计失败（{pipeline_date}）: {e}')
             return 0
 
     def _baseline_rows(self, table: str, pipeline_date: str, days: int = 20) -> int:
@@ -425,16 +457,30 @@ class QualityChecker:
             except Exception as e:
                 logger.warning(f'{table} 常量守卫查询失败: {e}')
                 row = None
-            if row is None or len(set(row)) <= 1 or set(row) <= {0.1, 0.5, 1.0}:
+            if row is None or len(set(row)) <= 1 or self._all_constant_fallback(row):
                 return CheckResult(
                     False, table, pipeline_date, expected=1, actual=actual,
                     issues=[f'{table} 最新行统计值疑似兜底假值（全等或落入常量集）'],
                     severity='HIGH')
         return CheckResult(True, table, pipeline_date, expected=1, actual=actual)
 
+    def _all_constant_fallback(self, row) -> bool:
+        """500号#33：判定一行统计值是否全部落入「兜底常量集」（容差比较，不精确浮点匹配）。
+
+        原判据 `set(row) <= {0.1, 0.5, 1.0}` 用精确浮点比较（0.1/0.5/1.0 的浮点表示脆弱、
+        且兜底集不全）→ 漏判。改用 `math.isclose` 容差匹配，兜底集含常见占位常量。
+        """
+        _FALLBACK = (0.0, 0.1, 0.2, 0.5, 1.0)
+        vals = [v for v in row if isinstance(v, (int, float))]
+        if not vals:
+            return False
+        return all(
+            any(math.isclose(float(v), c, rel_tol=1e-9, abs_tol=1e-9) for c in _FALLBACK)
+            for v in vals
+        )
+
     def _count_null_fields(self, table: str, pipeline_date: str, fields: list) -> int:
         date_col = QUALITY_RULES.get(table, {}).get('date_col', 'trade_date')
-        cond = ' OR '.join(f'({f} IS NULL OR {f}=\'\')' for f in fields)
         try:
             conn = self._sm.get_connection(self._sm.get_db_for_table(table))
             row = conn.execute(
@@ -442,7 +488,9 @@ class QualityChecker:
                 f'WHERE {cond}', [pipeline_date]
             ).fetchone()
             return row[0] if row else 0
-        except Exception:
+        except Exception as e:
+            # 500号#34：原静默 return 0 → 故障与「无空值行」不可区分
+            logger.warning(f'{table} 必填字段非空统计失败（{pipeline_date}）: {e}')
             return 0
 
     def check_cross_table(self, pipeline_date: str) -> list:
@@ -518,7 +566,16 @@ class QualityChecker:
             if sd:
                 try:
                     sd_obj = json.loads(sd)
-                    if not sd_obj:
+                except Exception:
+                    issues.append(f'第{i}行 seven_dim_json 非法（ts_code={row[0]}）')
+                    sd_obj = None
+                if sd_obj is not None:
+                    # 500号#32：显式 dict 校验——原对 list/str/数字调用 .items()/set() 抛异常
+                    # 被外层 except 吞成「seven_dim_json 非法」，归因不符
+                    if not isinstance(sd_obj, dict):
+                        issues.append(
+                            f'第{i}行 seven_dim_json 顶层非 dict（{type(sd_obj).__name__}，ts_code={row[0]}）')
+                    elif not sd_obj:
                         issues.append(f'第{i}行 seven_dim_json 为空 dict（ts_code={row[0]}）')
                     else:
                         # ── 硬层：必含 summary + 每段必含 title/light/text ──
@@ -543,18 +600,16 @@ class QualityChecker:
                         if len(sd_obj) < 6:
                             issues.append(
                                 f'第{i}行 seven_dim_json 段数不足（{len(sd_obj)}<6，ts_code={row[0]}，实际键={list(sd_obj.keys())}）')
-                    # ── B4 升硬：旧键名 signal_confirm/chip_fund → 硬拦（门禁终态）──
-                    if _legacy and not set(sd_obj).isdisjoint(_legacy):
-                        legacy_hit = list(set(sd_obj) & set(_legacy))
-                        issues.append(
-                            f'第{i}行 seven_dim_json 含旧键 {legacy_hit}（ts_code={row[0]}，应改 {_sd_rules.get("seven_dim_expected_keys", [])}）')
-                    # ── 软层：light 越界 → 计数（不硬拦）──
-                    _valid_lights = {'🟢', '🔴', '🟡'}
-                    for _seg_key, _seg_body in sd_obj.items():
-                        if isinstance(_seg_body, dict) and _seg_body.get('light', '🟡') not in _valid_lights:
-                            soft_violations['light越界'] = soft_violations.get('light越界', 0) + 1
-                except Exception:
-                    issues.append(f'第{i}行 seven_dim_json 非法（ts_code={row[0]}）')
+                        # ── B4 升硬：旧键名 signal_confirm/chip_fund → 硬拦（门禁终态）──
+                        if _legacy and not set(sd_obj).isdisjoint(_legacy):
+                            legacy_hit = list(set(sd_obj) & set(_legacy))
+                            issues.append(
+                                f'第{i}行 seven_dim_json 含旧键 {legacy_hit}（ts_code={row[0]}，应改 {_sd_rules.get("seven_dim_expected_keys", [])}）')
+                        # ── 软层：light 越界 → 计数（不硬拦）──
+                        _valid_lights = {'🟢', '🔴', '🟡'}
+                        for _seg_key, _seg_body in sd_obj.items():
+                            if isinstance(_seg_body, dict) and _seg_body.get('light', '🟡') not in _valid_lights:
+                                soft_violations['light越界'] = soft_violations.get('light越界', 0) + 1
             if len(issues) > 20:
                 issues.append(f'问题行数过多，停止扫描（共{i+1}行）')
                 break

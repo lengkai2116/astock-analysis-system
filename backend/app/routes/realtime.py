@@ -2,7 +2,8 @@
 实时行情 API 路由 — 推拉结合数据管道
 ======================================
 架构（240号方案 §4）：
-  推送：AkshareCollector 5线程 → InMemoryStateStore → WsBridge → SocketIO → 前端
+  推送：API 进程 APScheduler → services/push_service → SocketIO → 前端
+        （500号#1：原「采集线程 → WsBridge」链路已废止，改用 push_service）
   拉取：REST API 降级（前端 WS 断连时自动轮询）
 
 Flask-SocketIO 事件协议：
@@ -72,7 +73,7 @@ def handle_subscribe_watchlist(data):
     join_room('watchlist')
     logger.info(f"客户端订阅自选股: {len(watchlist)} 只")
 
-    # 注册到 WsBridge，后续采集循环自动推送
+    # 注册自选股代码到 ws_bridge 注册表（供 push_service.push_watchlist_quotes 读取后推送）
     try:
         from app.data.ws_bridge import ws_bridge
         ws_bridge.update_watchlist_codes(watchlist)
@@ -355,16 +356,10 @@ def get_realtime_indicator():
         return {'error': str(e)}, 500
 
 
-@socketio.on('trigger_publish')
-def handle_trigger_publish():
-    """手动触发 WsBridge 推送（用于测试 — 替代旧 Redis publish）"""
-    logger.info("手动触发 WsBridge 推送")
-    try:
-        from app.data.ws_bridge import ws_bridge
-        ws_bridge.on_collect_complete('market_snapshot')
-    except Exception as e:
-        logger.warning(f"WsBridge 触发失败: {e}")
-    return {'status': 'published'}
+# 500号#1（Q2=A，2026-09-30）：原 `trigger_publish` SocketIO 端点已删除——它调用
+# `ws_bridge.on_collect_complete('market_snapshot')`，而采集侧推送链路（`_api_push_active`
+# 恒真短路）早已废止，端点静默无效果。真实实时推送由 **API 进程** `services/push_service.py`
+# （APScheduler 每 5s）承担；如需手动触发，直接调用 push_service 对应函数即可。
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -379,7 +374,7 @@ def initialize_realtime_service():
       采集器启动由 __init__.py 负责（或通过 /start 端点控制）
       本模块仅负责 SocketIO 事件注册 + REST API 端点
     """
-    logger.info("实时数据服务已就绪（推拉模式: collector → store → ws_bridge → socketio）")
+    logger.info("实时数据服务已就绪（推拉模式: push_service → socketio → 前端）")
 
 
 initialize_realtime_service()

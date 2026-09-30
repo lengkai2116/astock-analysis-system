@@ -25,9 +25,14 @@ class FactorCalculator:
         """
         计算单个因子
         优先读取 factor_cache（需提供 ts_code），无缓存时实时计算
+
+        500号批次1（#44）：缓存命中路径**仅在无参数时使用**——`factor_cache` 主键
+        为 (ts_code, trade_date, factor_name)，不含计算参数（period 等）。若调用方传入
+        `**kwargs`（非默认参数），缓存值可能是**另一套参数**的结果，直接命中会返回错误
+        序列；故有 kwargs 时**跳过缓存直算**，保证语义正确。
         """
-        # 缓存优先
-        if ts_code is not None:
+        # 缓存优先（仅默认参数；带 kwargs 的调用不可复用无参数缓存）
+        if ts_code is not None and not kwargs:
             try:
                 from app.data import get_data_manager
                 dm = get_data_manager()

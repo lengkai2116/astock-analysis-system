@@ -29,12 +29,12 @@ DEAD_TABLES = ('chip_distribution_cache', 'tag_history')
 # ── 5.1 S8/P2-1：死表引用已清除 ────────────────────────────
 
 def test_dead_table_refs_removed_from_config():
-    """init_sharding / backfill_all 无死表引用（注释除外）"""
-    from app.data import init_sharding
-    src = inspect.getsource(init_sharding)
-    assert 'chip_distribution_cache' not in src, 'init_sharding 残留 chip_distribution_cache'
-    assert 'tag_history' not in src, 'init_sharding 残留 tag_history'
+    """backfill_all 无死表引用（注释除外）
 
+    500号批次6：`app/data/init_sharding.py`（模块）已删除（生产全仓零引用，且与
+    `sharding_manager.init_sharding` 同名不同物），故移除对本模块的断言，仅保留
+    对 scripts/backfill_all.py 的断言。
+    """
     with open(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'backfill_all.py')) as f:
         src2 = f.read()
     assert 'chip_distribution_cache' not in src2, 'backfill_all 残留 chip_distribution_cache'

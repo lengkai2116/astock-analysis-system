@@ -28,17 +28,19 @@ class PrecomputeIndicatorManager:
         self.cache_manager = cache_manager
         self.engine = TechnicalIndicatorEngine()
 
-    def precompute_all_indicators(self, ts_code: str, df: pd.DataFrame, force: bool = False) -> bool:
+    def precompute_all_indicators(self, ts_code: str, df: pd.DataFrame) -> bool:
         """
         预计算所有指标并批量缓存
 
         Args:
             ts_code: 股票代码
             df: 日线数据DataFrame
-            force: 是否强制重新计算（忽略已有缓存）
 
         Returns:
             bool: 是否成功完成预计算
+
+        500号批次1（#40）：移除原死参数 `force`（声明「忽略已有缓存」但函数体
+        既无缓存查询也无 force 分支，参数从未被使用、docstring 失真）。
         """
         # 414号R6: 阈值从30提高到60，确保MA60/MACD有效
         if len(df) < 60:
@@ -58,26 +60,54 @@ class PrecomputeIndicatorManager:
             logger.warning(f"预计算指标失败 [{ts_code}]: {e}")
             return False
 
-    def compute_win_rates(self, lookahead: int = 5) -> pd.DataFrame:
+    # 前瞻收益窗口（交易日）：与 win_rate_cache 表列对齐（5d/10d/20d）
+    _WIN_HORIZONS = (5, 10, 20)
+    _MIN_SAMPLES = 5      # 行级最少样本（5d），与既有口径一致
+    _MIN_SHARPE_N = 5     # sharpe 最少样本数（对齐 strategy_health_monitor）
+
+    @staticmethod
+    def _period_stats(returns):
+        """单窗口收益统计 → (win_rate, avg_return, sharpe, n)
+
+        sharpe = mean/std(ddof=1) * sqrt(252)（年化，对齐 strategy_health_monitor），
+        样本 < _MIN_SHARPE_N 或 std 为 0 时置 0.0。
         """
-        计算策略信号的胜率（基于 strategy_signal_detail + daily_cache）
+        n = len(returns)
+        if n == 0:
+            return 0.0, 0.0, 0.0, 0
+        wins = sum(1 for r in returns if r > 0)
+        win_rate = wins / n
+        avg = sum(returns) / n
+        sharpe = 0.0
+        if n >= PrecomputeIndicatorManager._MIN_SHARPE_N:
+            std = float(pd.Series(returns).std(ddof=1))
+            if std > 0:
+                sharpe = avg / std * (252 ** 0.5)
+        return win_rate, avg, sharpe, n
 
-        424号 P1-2 修复：原实现查询 strategy_signal_detail 不存在的列
-        （opportunity_state/consensus_rate）→ 恒返回空 → win_rate_cache 从未落库。
-        现改为解析 signal_json 的 signals 字典（每策略含 signal 方向），
-        关联 daily_cache 计算 N 日前瞻收益率，按策略名聚合胜率，
-        输出对齐 win_rate_cache 表结构（samples/win_rate_5d/win_rate_10d/
-        win_rate_20d/avg_return_5d/avg_return_20d/sharpe_5d/sharpe_20d）。
+    def compute_win_rates(self) -> pd.DataFrame:
+        """计算策略信号的胜率（基于 strategy_signal_detail + daily_cache）
 
-        Args:
-            lookahead: 前瞻交易日数（默认5日）
+        424号 P1-2：改解析 signal_json 的 signals 字典，关联 daily_cache 计算前瞻
+        收益率，按策略名聚合，输出对齐 win_rate_cache 表结构
+        （samples/win_rate_5d/win_rate_10d/win_rate_20d/avg_return_5d/avg_return_20d/
+        sharpe_5d/sharpe_20d）。
+
+        500号批次1 修复（A#3 + #36~#39）：
+          - **A#3**：原 win_rate_5d/10d/20d、avg_return_5d/20d 均由同一 lookahead=5
+            的 returns 计算（10d/20d 与 5d 完全相同）＝假多周期；现**按各自窗口实算**。
+          - **#36**：原循环内每信号行 2 次 `_query_shard`（入场/出场价）＝N+1 往返；
+            现一次性载入所需窗口的 (ts_code, trade_date)->close 映射后内存索引。
+          - **#37**：原仅守 entry_price，exit_price 为 NULL/NaN 时参与减法抛 TypeError；
+            现双侧数值/非空校验。
+          - **#38**：原 sharpe_5d/20d 硬编码 0.0；现按 mean/std 年化实算。
+          - **#39**：原 except 仅 warning 无上下文；现 warning + exc_info，区分故障与合法空。
 
         Returns:
             pd.DataFrame: 对齐 win_rate_cache 表结构的胜率记录
         """
         try:
-            # 从 strategy_signal_detail 读取信号（signal_json 含每策略 signals）
-            # 424号 P1-2：改走分库权威副本（strategy_signal_detail → snapshot_cache.db）
+            # 1) 读取并展开策略信号（signal_json.signals）
             signal_df = self.cache_manager._query_shard(
                 "strategy_signal_detail",
                 "SELECT ts_code, trade_date, signal_json "
@@ -87,9 +117,9 @@ class PrecomputeIndicatorManager:
                 logger.info("胜率计算: strategy_signal_detail 无数据")
                 return pd.DataFrame()
 
-            # 解析 signal_json → 展开为 (ts_code, trade_date, strategy, signal) 行
             import json as _json
-            expanded = []
+            sig_rows = []
+            sig_dates = set()
             for _, row in signal_df.iterrows():
                 ts_code = row['ts_code']
                 trade_date = row['trade_date']
@@ -101,82 +131,99 @@ class PrecomputeIndicatorManager:
                 for strategy, detail in signals.items():
                     if not isinstance(detail, dict):
                         continue
-                    signal_val = detail.get('signal') or detail.get('direction') or 'UNKNOWN'
-                    expanded.append({
-                        'ts_code': ts_code,
-                        'trade_date': trade_date,
-                        'strategy': strategy,
-                        'signal': signal_val,
-                    })
-            if not expanded:
+                    sig_rows.append((ts_code, trade_date, strategy))
+                if isinstance(signals, dict) and signals:
+                    sig_dates.add(trade_date)
+            if not sig_rows:
                 logger.info("胜率计算: signal_json 无有效信号")
                 return pd.DataFrame()
-            signal_df = pd.DataFrame(expanded)
 
-            # 获取所有交易日（用于计算 N 日后收益）
-            # 424号 P1-2：改走分库权威副本（daily_cache → market_cache.db）
+            # 2) 交易日历（用于 idx + horizon 定位前瞻日）
             dates_df = self.cache_manager._query_shard(
                 "daily_cache",
                 "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date"
             )
             if dates_df is None or dates_df.empty:
+                logger.warning("胜率计算: daily_cache 无交易日，跳过")
                 return pd.DataFrame()
-            all_dates = sorted(dates_df['trade_date'].tolist())
+            all_dates = sorted(str(d) for d in dates_df['trade_date'].tolist())
             date_to_idx = {d: i for i, d in enumerate(all_dates)}
 
-            # 按策略名聚合胜率（signal_type = 策略名）
+            # 3) 批量载入收盘价（#36）：仅需 [最早信号日, 最新交易日] 区间，避免 N+1 与全表载入
+            min_sig_date = min(sig_dates) if sig_dates else all_dates[0]
+            close_df = self.cache_manager._query_shard(
+                "daily_cache",
+                "SELECT ts_code, trade_date, close FROM daily_cache WHERE trade_date >= ?",
+                [min_sig_date]
+            )
+            if close_df is None or close_df.empty:
+                logger.warning("胜率计算: daily_cache 无收盘价，跳过")
+                return pd.DataFrame()
+            close_map = {
+                (r.ts_code, str(r.trade_date)): r.close
+                for r in close_df.itertuples(index=False)
+                if r.close is not None
+            }
+
+            # 4) 按策略聚合（每窗口独立实算）
+            by_strategy = {}
+            for ts_code, trade_date, strategy in sig_rows:
+                by_strategy.setdefault(strategy, []).append((ts_code, trade_date))
+
             results = []
-            for strategy in signal_df['strategy'].dropna().unique():
-                subset = signal_df[signal_df['strategy'] == strategy]
-                win_count = 0
-                total_count = 0
-                returns = []
-                for _, row in subset.iterrows():
-                    ts_code = row['ts_code']
-                    trade_date = row['trade_date']
-                    if trade_date not in date_to_idx:
+            for strategy, rows in by_strategy.items():
+                rets = {h: [] for h in self._WIN_HORIZONS}
+                for ts_code, trade_date in rows:
+                    idx = date_to_idx.get(str(trade_date))
+                    if idx is None:
                         continue
-                    idx = date_to_idx[trade_date]
-                    target_idx = idx + lookahead
-                    if target_idx >= len(all_dates):
+                    entry = close_map.get((ts_code, str(trade_date)))
+                    if entry is None:
                         continue
-                    target_date = all_dates[target_idx]
-                    # 获取入场价和出场价（424号 P1-2：走分库权威副本）
-                    entry_df = self.cache_manager._query_shard(
-                        "daily_cache",
-                        "SELECT close FROM daily_cache WHERE ts_code=? AND trade_date=?",
-                        [ts_code, trade_date])
-                    exit_df = self.cache_manager._query_shard(
-                        "daily_cache",
-                        "SELECT close FROM daily_cache WHERE ts_code=? AND trade_date=?",
-                        [ts_code, target_date])
-                    if (entry_df is not None and not entry_df.empty and
-                        exit_df is not None and not exit_df.empty):
-                        entry_price = entry_df.iloc[0]['close']
-                        exit_price = exit_df.iloc[0]['close']
-                        if entry_price and entry_price > 0:
-                            ret = (exit_price - entry_price) / entry_price
-                            returns.append(ret)
-                            total_count += 1
-                            if ret > 0:
-                                win_count += 1
-                if total_count >= 5:  # 最少5个样本
-                    results.append({
-                        'signal_type': strategy,
-                        'samples': total_count,
-                        'win_rate_5d': round(win_count / total_count, 4),
-                        'win_rate_10d': round(win_count / total_count, 4),
-                        'win_rate_20d': round(win_count / total_count, 4),
-                        'avg_return_5d': round(sum(returns) / len(returns), 4) if returns else 0,
-                        'avg_return_20d': round(sum(returns) / len(returns), 4) if returns else 0,
-                        'sharpe_5d': 0.0,
-                        'sharpe_20d': 0.0,
-                    })
+                    try:
+                        entry = float(entry)
+                    except (TypeError, ValueError):
+                        continue
+                    if not (entry > 0):
+                        continue
+                    for h in self._WIN_HORIZONS:
+                        ti = idx + h
+                        if ti >= len(all_dates):
+                            continue
+                        exit_price = close_map.get((ts_code, all_dates[ti]))
+                        if exit_price is None:
+                            continue
+                        try:
+                            exit_price = float(exit_price)
+                        except (TypeError, ValueError):
+                            continue
+                        if pd.isna(exit_price):
+                            continue
+                        rets[h].append((exit_price - entry) / entry)
+
+                n5 = len(rets[5])
+                if n5 < self._MIN_SAMPLES:
+                    continue
+                wr5, avg5, sh5, _ = self._period_stats(rets[5])
+                wr10, _, _, _ = self._period_stats(rets[10])
+                wr20, avg20, sh20, _ = self._period_stats(rets[20])
+                results.append({
+                    'signal_type': strategy,
+                    'samples': n5,
+                    'win_rate_5d': round(wr5, 4),
+                    'win_rate_10d': round(wr10, 4),
+                    'win_rate_20d': round(wr20, 4),
+                    'avg_return_5d': round(avg5, 4),
+                    'avg_return_20d': round(avg20, 4),
+                    'sharpe_5d': round(sh5, 4),
+                    'sharpe_20d': round(sh20, 4),
+                })
             if results:
-                logger.info(f"胜率计算完成: {len(results)} 种策略类型")
+                logger.info(f"胜率计算完成: {len(results)} 种策略类型（窗口 {self._WIN_HORIZONS}）")
             return pd.DataFrame(results) if results else pd.DataFrame()
         except Exception as e:
-            logger.warning(f"胜率计算失败: {e}")
+            # #39：区分「DB/schema 故障」与「合法空」——保留上下文便于定位
+            logger.warning(f"胜率计算失败: {e}", exc_info=True)
             return pd.DataFrame()
 
     def get_win_rates(self) -> pd.DataFrame:

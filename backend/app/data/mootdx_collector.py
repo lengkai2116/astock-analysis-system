@@ -1280,13 +1280,8 @@ class _MootdxThread(threading.Thread):
                 self._collect_count += 1
                 self._consecutive_failures = 0
 
-                try:
-                    from app.data.ws_bridge import ws_bridge
-                    ws_bridge.on_collect_complete(self.name)
-                    # 板块排行也被 mootdx 计算，触发推送
-                    ws_bridge.on_collect_complete('sector_and_limit')
-                except Exception:
-                    pass
+                # 500号#1：采集侧推送链路已废止（真实推送由 API 进程 push_service 承担），
+                # 原 ws_bridge.on_collect_complete(self.name / 'sector_and_limit') 死调用已移除。
 
                 wait = max(1, self.interval - elapsed)
                 self._stop_event.wait(wait)

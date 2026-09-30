@@ -133,11 +133,8 @@ class _CollectThread(threading.Thread):
                 self._consecutive_failures = 0
                 logger.debug(f"[{self.name}] 采集完成 ({elapsed:.1f}s)")
 
-                try:
-                    from app.data.ws_bridge import ws_bridge
-                    ws_bridge.on_collect_complete(self.name)
-                except Exception:
-                    pass
+                # 500号#1：采集侧推送链路已废止（真实推送由 API 进程 push_service 承担），
+                # 原 ws_bridge.on_collect_complete(self.name) 死调用已移除。
 
                 wait = max(1, self.interval - elapsed)
                 self._stop_event.wait(wait)
