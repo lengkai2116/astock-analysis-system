@@ -104,12 +104,17 @@ def _bs_df(ta=2e12, cl=5e11):
 
 
 class TestAnchorCashflowFCF:
-    """484-4：_anchor_cashflow 双侧经营资产FCF 口径（449 已拍板）"""
+    """484-4：_anchor_cashflow 双侧经营资产FCF 口径（449 已拍板）
+
+    476号（双份方法体收敛）：dim7 现金流锚已委托 ValuationEngine 单实现
+    （dim7_valuation_engine 四锚实算 _ve=ValuationEngine()，不再保留副本）——
+    本类全部测试统一调 ValuationEngine，覆盖 dim7 的实际委托路径。
+    """
 
     def test_dim7_oper_minus_depr(self):
-        """dim7：cashflow_oper - depr_fa_coga_dpba 为经营资产FCF"""
-        from app.opportunity_atlas.dimensions.dim7_valuation_engine import Dim7ValuationEngine
-        eng = object.__new__(Dim7ValuationEngine)
+        """经营资产FCF：cashflow_oper - depr_fa_coga_dpba（dim7 委托 ValuationEngine）"""
+        from app.opportunity_atlas.valuation_estimator import ValuationEngine
+        eng = object.__new__(ValuationEngine)
         eng._fcf_percentile = None
         basic = pd.DataFrame([{'ts_code': '600519.SH', 'total_mv': 2000000.0}])
         cf = _cf_df(oper=7e10, depr=1e9)
@@ -118,9 +123,9 @@ class TestAnchorCashflowFCF:
         assert score > 0, '经营资产FCF 收益为正应给正分'
 
     def test_dim7_fallback_free_cashflow(self):
-        """dim7：缺折旧列/值 → 回退教科书 free_cashflow（不阻塞）"""
-        from app.opportunity_atlas.dimensions.dim7_valuation_engine import Dim7ValuationEngine
-        eng = object.__new__(Dim7ValuationEngine)
+        """经营资产FCF 回退：缺折旧列/值 → 回退教科书 free_cashflow（不阻塞）"""
+        from app.opportunity_atlas.valuation_estimator import ValuationEngine
+        eng = object.__new__(ValuationEngine)
         eng._fcf_percentile = None
         basic = pd.DataFrame([{'ts_code': '600519.SH', 'total_mv': 2000000.0}])
         # fcf=1e11 → yield≈7.6% > 国债+3% → 正分（证明回退值被使用而非返回 0 兜底）
