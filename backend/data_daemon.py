@@ -326,6 +326,22 @@ def _core_data_stale() -> bool:
             if latest:
                 latest_date = (datetime.strptime(str(latest), '%Y-%m-%d')
                                if isinstance(latest, str) else latest)
+                # 503号 B：行数完整性——最新交易日行数不足（如盘中残留 96 行）视为滞后。
+                # 仅 daily_cache（死锁链主角）判断；旧逻辑只看 MAX(trade_date) 判不滞后
+                # → 启动/整点 HIGH 补采永不触发 → 日终卡死（2026-09-28 实证）。
+                if table == 'daily_cache':
+                    try:
+                        cnt = _query_table(
+                            'daily_cache',
+                            "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?",
+                            [str(latest)])
+                        if cnt is not None and cnt < DAILY_THRESHOLD:
+                            logger.warning(
+                                f"  [启动补采] 日线(daily_cache) 最新日 {latest} 仅 {cnt} 行"
+                                f"（需≥{DAILY_THRESHOLD}），视为滞后 → HIGH 补采")
+                            return True
+                    except Exception as e:
+                        logger.debug(f"  [启动补采] 日线行数检查失败: {e}")
                 # 432号 R3：滞后按交易日口径（周末/节假日不计，周五数据周一开机不再误判 HIGH）
                 lag_days = _lag_trading_days(latest_date, today)
                 if lag_days > 1:
@@ -6570,6 +6586,44 @@ def _audit_data_freshness() -> str:
     return 'stale'
 
 
+# 503号 A：管道自愈补采状态（data_date -> (最近触发时间戳, 最近补采条数)）
+_DAILY_BACKFILL_STATE: dict = {}
+_DAILY_BACKFILL_COOLDOWN = 600       # 常规冷却 10min（避免每 30s tick 重复全市场补采）
+_DAILY_BACKFILL_EMPTY_COOLDOWN = 1800  # 空返回/失败冷却 30min（Tushare 当日未发布时防空转）
+
+
+def _maybe_backfill_daily(data_date: str):
+    """503号 A：日线不足时的管道自愈补采（_drive_pipeline has_data=False 调用）
+
+    死锁防护（2026-09-28 实证）：<18:00 重启错过盘中采集 → 当日仅残留少量行
+    （如 96 只）→ has_data<4000 静默 return + 无任何补采触发 → 日终永不推进。
+    本函数在数据日期行数不足时主动 _batch_daily 补采当日/历史日：
+    - 今日仅当 _is_today_data_ready()（交易日且≥18:00，Tushare 已发布）触发；
+      <18:00 记录状态长冷却等发布，避免空 API 调用。
+    - 历史日期直接补（历史缺漏）。
+    - 防抖：同日期 10min 内不重复；空返回/失败冷却 30min。
+    """
+    now = time.time()
+    state = _DAILY_BACKFILL_STATE.get(data_date)
+    cooldown = (_DAILY_BACKFILL_EMPTY_COOLDOWN
+                if state and state[1] == 0 else _DAILY_BACKFILL_COOLDOWN)
+    if state and now - state[0] < cooldown:
+        return
+    today_fmt = datetime.now().strftime('%Y-%m-%d')
+    if data_date == today_fmt and not _is_today_data_ready():
+        # 当日 Tushare 日线未发布（<18:00），等发布（30min 冷却）
+        _DAILY_BACKFILL_STATE[data_date] = (now, 0)
+        return
+    _DAILY_BACKFILL_STATE[data_date] = (now, 0)  # 先占位防重入
+    try:
+        n = _batch_daily(data_date.replace('-', ''))
+        _DAILY_BACKFILL_STATE[data_date] = (now, n)
+        logger.info(f"  [管道自愈] {data_date} 日线不足，触发补采 {n} 条")
+    except Exception as e:
+        _DAILY_BACKFILL_STATE[data_date] = (now, 0)
+        logger.warning(f"  [管道自愈] {data_date} 补采失败: {e}")
+
+
 def _drive_pipeline():
     """管道驱动：检查当前状态，推进到下一个可执行的环节
 
@@ -6613,7 +6667,10 @@ def _drive_pipeline():
     has_data = _query_table('daily_cache',
         "SELECT COUNT(*) FROM daily_cache WHERE trade_date=?", [data_date]) >= 4000
     if not has_data:
-        logger.debug(f"管道数据未就绪: {data_date} 行数不足4000，等待下一tick")
+        # 503号 A：死锁自愈——数据日期行数不足（如盘中残留 96 行）时主动补采，
+        # 而非静默 return 等独立巡检（最长 1h+ 才可能补 → 日终卡死，2026-09-28 实证）
+        logger.debug(f"管道数据未就绪: {data_date} 行数不足4000，尝试自愈补采")
+        _maybe_backfill_daily(data_date)
         return  # 数据未完整到达，下一 tick 再检查
 
     today_fmt = data_date
