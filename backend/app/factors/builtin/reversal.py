@@ -39,7 +39,7 @@ class WILLR(BaseFactor):
     name_cn = "威廉指标"
     category = "reversal"
     subcategory = "price_reversal"
-    description = "衡量超买超卖，0-100，越高越超卖"
+    description = "衡量超买超卖，-100..0，越接近 -100 越超卖（502批次1：修正文档与实现一致——Williams %R 标准定义）"
     formula = "WILLR = (HighestHigh - Close) / (HighestHigh - LowestLow) * (-100)"
     source = "QLib"
     source_detail = "QLib158"
@@ -53,8 +53,10 @@ class WILLR(BaseFactor):
 
         high_n = data["high"].rolling(window=period).max()
         low_n = data["low"].rolling(window=period).min()
-        willr = (high_n - data["close"]) / (high_n - low_n).replace(0, np.nan) * (-100)
-        return willr
+        # 502批次5 #R13 同型（登记-3 拍板）：平盘窗口（high==low）WILLR=-50 中性
+        denom = high_n - low_n
+        willr = (high_n - data["close"]) * (-100) / denom
+        return willr.mask(denom == 0, -50.0)
 
 
 class RSV(BaseFactor):
@@ -79,8 +81,10 @@ class RSV(BaseFactor):
 
         low_n = data["low"].rolling(window=period).min()
         high_n = data["high"].rolling(window=period).max()
-        rsv = (data["close"] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-        return rsv
+        # 502批次5 #R13 同型：平盘窗口（high==low）RSV=50 中性
+        denom = high_n - low_n
+        rsv = (data["close"] - low_n) * 100 / denom
+        return rsv.mask(denom == 0, 50.0)
 
 
 class CMO(BaseFactor):
@@ -125,8 +129,8 @@ class ROC_R(BaseFactor):
     name_cn = "收益率排序因子"
     category = "reversal"
     subcategory = "cross_section"
-    description = "横截面收益率排序（用于选股）"
-    formula = "ROC_R = Rank(ROC(5))"
+    description = "收益率时序分位（502批次2 #R8：单标的数据流下横截面 Rank 不可实现——与 QLIB_*_RANK 同构，实现为滚动窗口时序分位）"
+    formula = "ROC_R = RollingRank(ROC(period))"
     source = "GTJA"
     source_detail = "GTJA191"
 
@@ -137,7 +141,8 @@ class ROC_R(BaseFactor):
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         roc = (data["close"] / data["close"].shift(period) - 1) * 100
-        return roc
+        # 502批次2 #R8：rolling rank（时序分位），原返回原始 ROC 与声明不符
+        return roc.rolling(window=period).rank(pct=True)
 
 
 class MOM_R(BaseFactor):
@@ -148,8 +153,8 @@ class MOM_R(BaseFactor):
     name_cn = "动量排序因子"
     category = "reversal"
     subcategory = "cross_section"
-    description = "横截面动量排序（用于选股）"
-    formula = "MOM_R = Rank(MOM(20))"
+    description = "动量时序分位（502批次2 #R8：单标的数据流下横截面 Rank 不可实现——与 QLIB_*_RANK 同构，实现为滚动窗口时序分位）"
+    formula = "MOM_R = RollingRank(MOM(period))"
     source = "GTJA"
     source_detail = "GTJA191"
 
@@ -160,4 +165,5 @@ class MOM_R(BaseFactor):
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         mom = data["close"] - data["close"].shift(period)
-        return mom
+        # 502批次2 #R8：rolling rank（时序分位），原返回原始 MOM 与声明不符
+        return mom.rolling(window=period).rank(pct=True)

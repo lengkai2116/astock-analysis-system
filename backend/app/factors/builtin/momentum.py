@@ -60,11 +60,10 @@ class RSI(BaseFactor):
         avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
         avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
 
-        avg_loss_safe = avg_loss.where(avg_loss != 0, 1e-10)
-        rs = avg_gain / avg_loss_safe
-        rsi = 100 - (100 / (1 + rs))
-
-        return rsi
+        # 502批次4 #R12：RSI 零除数统一——100*gain/(gain+loss)，全平盘→50 中性
+        denom = avg_gain + avg_loss
+        rsi = 100 * avg_gain / denom
+        return rsi.mask(denom == 0, 50.0)
 
 
 class CCI(BaseFactor):
@@ -201,7 +200,10 @@ class KDJ_K(BaseFactor):
 
         low_n = data["low"].rolling(window=n).min()
         high_n = data["high"].rolling(window=n).max()
-        rsv = (data["close"] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
+        # 502批次5 #R13：KDJ 平盘统一——平盘窗口（high==low）RSV=50 中性（原 replace(0,nan) 断链）
+        denom = high_n - low_n
+        rsv = (data["close"] - low_n) * 100 / denom
+        rsv = rsv.mask(denom == 0, 50.0)
 
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         return k
@@ -233,7 +235,10 @@ class KDJ_D(BaseFactor):
 
         low_n = data["low"].rolling(window=n).min()
         high_n = data["high"].rolling(window=n).max()
-        rsv = (data["close"] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
+        # 502批次5 #R13：KDJ 平盘统一——平盘窗口（high==low）RSV=50 中性（原 replace(0,nan) 断链）
+        denom = high_n - low_n
+        rsv = (data["close"] - low_n) * 100 / denom
+        rsv = rsv.mask(denom == 0, 50.0)
 
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         d = k.ewm(com=m2-1, adjust=False).mean()
@@ -267,7 +272,10 @@ class KDJ_J(BaseFactor):
 
         low_n = data["low"].rolling(window=n).min()
         high_n = data["high"].rolling(window=n).max()
-        rsv = (data["close"] - low_n) / (high_n - low_n).replace(0, np.nan) * 100
+        # 502批次5 #R13：KDJ 平盘统一——平盘窗口（high==low）RSV=50 中性（原 replace(0,nan) 断链）
+        denom = high_n - low_n
+        rsv = (data["close"] - low_n) * 100 / denom
+        rsv = rsv.mask(denom == 0, 50.0)
 
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         d = k.ewm(com=m2-1, adjust=False).mean()

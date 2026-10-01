@@ -844,11 +844,10 @@ class GTJA042(BaseFactor):
         avg_gain = gain.rolling(window=period).mean()
         avg_loss = loss.rolling(window=period).mean()
 
-        avg_loss_safe = avg_loss.where(avg_loss != 0, 1e-10)
-        rs = avg_gain / avg_loss_safe
-        rsi = 100 - (100 / (1 + rs))
-
-        return rsi
+        # 502批次4 #R11：RSI 零除数统一——100*gain/(gain+loss)，全平盘→50 中性
+        denom = avg_gain + avg_loss
+        rsi = 100 * avg_gain / denom
+        return rsi.mask(denom == 0, 50.0)
 
 
 class GTJA043(BaseFactor):
@@ -875,11 +874,10 @@ class GTJA043(BaseFactor):
         avg_gain = gain.rolling(window=period).mean()
         avg_loss = loss.rolling(window=period).mean()
 
-        avg_loss_safe = avg_loss.where(avg_loss != 0, 1e-10)
-        rs = avg_gain / avg_loss_safe
-        rsi = 100 - (100 / (1 + rs))
-
-        return rsi
+        # 502批次4 #R11：RSI 零除数统一——100*gain/(gain+loss)，全平盘→50 中性
+        denom = avg_gain + avg_loss
+        rsi = 100 * avg_gain / denom
+        return rsi.mask(denom == 0, 50.0)
 
 
 class GTJA044(BaseFactor):
@@ -906,11 +904,10 @@ class GTJA044(BaseFactor):
         avg_gain = gain.rolling(window=period).mean()
         avg_loss = loss.rolling(window=period).mean()
 
-        avg_loss_safe = avg_loss.where(avg_loss != 0, 1e-10)
-        rs = avg_gain / avg_loss_safe
-        rsi = 100 - (100 / (1 + rs))
-
-        return rsi
+        # 502批次4 #R11：RSI 零除数统一——100*gain/(gain+loss)，全平盘→50 中性
+        denom = avg_gain + avg_loss
+        rsi = 100 * avg_gain / denom
+        return rsi.mask(denom == 0, 50.0)
 
 
 class GTJA045(BaseFactor):

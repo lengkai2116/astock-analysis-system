@@ -18,7 +18,7 @@ class PE_PERCENTILE_5Y(BaseFactor):
     name_cn = "PE历史百分位"
     category = "valuation"
     subcategory = "pe"
-    description = "PE在近5年历史中的百分位"
+    description = "PE历史百分位（502批次2 #R7：当前为全输入区间分位，非严格 5Y 窗口——数据深度受限登记；随传入区间漂移）"
     source = "Opportunity"
     source_detail = "机会图谱估值因子"
     required_columns = ["pe_ttm"]
@@ -33,7 +33,7 @@ class PB_PERCENTILE_5Y(BaseFactor):
     name_cn = "PB历史百分位"
     category = "valuation"
     subcategory = "pb"
-    description = "PB在近5年历史中的百分位"
+    description = "PB历史百分位（502批次2 #R7：当前为全输入区间分位，非严格 5Y 窗口——数据深度受限登记；随传入区间漂移）"
     source = "Opportunity"
     source_detail = "机会图谱估值因子"
     required_columns = ["pb"]
@@ -48,7 +48,7 @@ class PS_PERCENTILE_5Y(BaseFactor):
     name_cn = "PS历史百分位"
     category = "valuation"
     subcategory = "ps"
-    description = "PS在近5年历史中的百分位"
+    description = "PS历史百分位（502批次2 #R7：当前为全输入区间分位，非严格 5Y 窗口——数据深度受限登记；随传入区间漂移）"
     source = "Opportunity"
     source_detail = "机会图谱估值因子"
     required_columns = ["ps"]

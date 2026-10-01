@@ -1331,8 +1331,10 @@ class QLIB_RSI(BaseFactor):
         avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
         avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
 
-        rs = avg_gain / avg_loss.replace(0, np.nan)
-        return 100 - (100 / (1 + rs))
+        # 502批次4 #R10：RSI 零除数统一——100*gain/(gain+loss)，全平盘→50 中性
+        denom = avg_gain + avg_loss
+        rsi = 100 * avg_gain / denom
+        return rsi.mask(denom == 0, 50.0)
 
 
 class QLIB_RSI_6(BaseFactor):
@@ -1359,8 +1361,10 @@ class QLIB_RSI_6(BaseFactor):
         avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
         avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
 
-        rs = avg_gain / avg_loss.replace(0, np.nan)
-        return 100 - (100 / (1 + rs))
+        # 502批次4 #R10：RSI 零除数统一——100*gain/(gain+loss)，全平盘→50 中性
+        denom = avg_gain + avg_loss
+        rsi = 100 * avg_gain / denom
+        return rsi.mask(denom == 0, 50.0)
 
 
 class QLIB_RSI_14(BaseFactor):
@@ -1387,8 +1391,10 @@ class QLIB_RSI_14(BaseFactor):
         avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
         avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
 
-        rs = avg_gain / avg_loss.replace(0, np.nan)
-        return 100 - (100 / (1 + rs))
+        # 502批次4 #R10：RSI 零除数统一——100*gain/(gain+loss)，全平盘→50 中性
+        denom = avg_gain + avg_loss
+        rsi = 100 * avg_gain / denom
+        return rsi.mask(denom == 0, 50.0)
 
 
 class QLIB_RSI_28(BaseFactor):
@@ -1415,8 +1421,10 @@ class QLIB_RSI_28(BaseFactor):
         avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
         avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
 
-        rs = avg_gain / avg_loss.replace(0, np.nan)
-        return 100 - (100 / (1 + rs))
+        # 502批次4 #R10：RSI 零除数统一——100*gain/(gain+loss)，全平盘→50 中性
+        denom = avg_gain + avg_loss
+        rsi = 100 * avg_gain / denom
+        return rsi.mask(denom == 0, 50.0)
 
 
 # ==================== 成交量累积类因子 ====================

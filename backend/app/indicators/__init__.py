@@ -75,19 +75,20 @@ class TechnicalIndicatorEngine:
             avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
             avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
 
-            # 避免除零
-            avg_loss_safe = avg_loss.where(avg_loss != 0, 1e-10)
-
-            rs = avg_gain / avg_loss_safe
-            result['rsi14'] = 100 - (100 / (1 + rs))
+            # 502批次4 #R10：RSI 零除数统一（每日 RAW-1）——100*gain/(gain+loss)，全平盘→50 中性
+            denom = avg_gain + avg_loss
+            rsi14 = 100 * avg_gain / denom
+            result['rsi14'] = rsi14.mask(denom == 0, 50.0)
 
         # 4. 计算KDJ
         if len(result) >= 9:
             low_min = result['low'].rolling(window=9).min()
             high_max = result['high'].rolling(window=9).max()
 
-            # 414号R4: KDJ除零防护
-            rsv = (result['close'] - low_min) / (high_max - low_min).replace(0, 1e-10) * 100
+            # 502批次5 #R13：KDJ 平盘统一（每日 RAW-1）——平盘窗口（high==low）RSV=50 中性
+            denom = high_max - low_min
+            rsv = (result['close'] - low_min) * 100 / denom
+            rsv = rsv.mask(denom == 0, 50.0)
             k = rsv.ewm(com=2, adjust=False).mean()
             d = k.ewm(com=2, adjust=False).mean()
             j = 3 * k - 2 * d
@@ -216,10 +217,11 @@ class TechnicalIndicatorEngine:
         avg_gain = pd.Series(gain).ewm(alpha=1/period, adjust=False).mean().values
         avg_loss = pd.Series(loss).ewm(alpha=1/period, adjust=False).mean().values
 
-        avg_loss = np.where(avg_loss == 0, 1e-10, avg_loss)
-
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
+        # 502批次4 #R10：RSI 零除数统一（每日 RAW-1）——100*gain/(gain+loss)，全平盘→50 中性
+        denom = avg_gain + avg_loss
+        with np.errstate(divide='ignore', invalid='ignore'):
+            rsi = 100 * avg_gain / denom
+        rsi = np.where(denom == 0, 50.0, rsi)
 
         result['rsi14'] = rsi
 
@@ -237,9 +239,11 @@ class TechnicalIndicatorEngine:
         low_min = result['low'].rolling(window=n).min()
         high_max = result['high'].rolling(window=n).max()
 
-        # 501 #R50：零分母守卫对齐主路径 calculate_all_indicators（.replace(0, 1e-10)）——
-        # 平盘窗口（high==low）原实现 rsv 产生 inf/NaN，两条 KDJ 路径结果不一致
-        rsv = (result['close'] - low_min) / (high_max - low_min).replace(0, 1e-10) * 100
+        # 502批次5 #R13：KDJ 平盘统一（每日 RAW-1）——平盘窗口（high==low）RSV=50 中性
+        # （原 .replace(0,1e-10) 平盘给 0；与因子库 a_stock/momentum KDJ 统一）
+        denom = high_max - low_min
+        rsv = (result['close'] - low_min) * 100 / denom
+        rsv = rsv.mask(denom == 0, 50.0)
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         d = k.ewm(com=m2-1, adjust=False).mean()
         j = 3 * k - 2 * d

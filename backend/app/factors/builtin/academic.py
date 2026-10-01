@@ -3,10 +3,66 @@
 学术研究中的经典因子
 文件路径：backend/app/factors/builtin/academic.py
 """
+import logging
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 
 from ..base import BaseFactor, FactorParam
+
+logger = logging.getLogger(__name__)
+
+# ── 502批次3 #R2：BETA 系真实市场基准（HS300）＋R_f（国债）──
+# 原实现用个股自身收益当市场基准（market 代理自引用）→ BETA/TREYNOR/CAPM_ALPHA
+# 非真实现、ALPHA 恒 0。此处接 438 号已闭环的 HS300 日线（benchmark_service），
+# 模块级按日缓存避免重复读库；基准缺失/异常 → None（调用方返回 NaN，426 无源守卫）。
+_MKT_RET_CACHE: dict = {'day': None, 'ret': None}
+
+
+def _get_market_return():
+    """HS300 日线收益率序列（索引 trade_date 字符串）；失败/缺失返回 None"""
+    today = datetime.now().date()
+    if _MKT_RET_CACHE['day'] == today and _MKT_RET_CACHE['ret'] is not None:
+        return _MKT_RET_CACHE['ret']
+    try:
+        from app.services.benchmark_service import BenchmarkIndex, BenchmarkService
+        df = BenchmarkService().get_index_daily(BenchmarkIndex.HS300)
+        if df is None or df.empty or 'close' not in df.columns:
+            return None
+        ret = df.set_index(df['trade_date'].astype(str))['close'].astype(float).pct_change()
+        _MKT_RET_CACHE['day'] = today
+        _MKT_RET_CACHE['ret'] = ret
+        return ret
+    except Exception as e:  # 基准缺失不假造（426 P0-1 语义）
+        logger.warning("BETA 系市场基准获取失败，返回 None: %s", e)
+        return None
+
+
+def _resolve_rf(risk_free):
+    """R_f：参数未传（None）→ 取系统统一国债收益率 CN_10Y_BOND_YIELD_PCT（百分数→小数）"""
+    if risk_free is None:
+        from app.opportunity_atlas.valuation_estimator import CN_10Y_BOND_YIELD_PCT
+        return float(CN_10Y_BOND_YIELD_PCT) / 100.0
+    return float(risk_free)
+
+
+def _align_market(data, period):
+    """对齐个股与 HS300 收益率 → (stock_ret, mkt_ret, dates, 原索引)
+
+    返回 None 表示市场基准不可用（调用方应输出 NaN 序列，不假造）。
+    """
+    mkt = _get_market_return()
+    if mkt is None:
+        return None
+    if 'trade_date' in data.columns:
+        dates = pd.Series(data['trade_date'].astype(str), index=data.index)
+    else:
+        dates = pd.Series(data.index.astype(str), index=data.index)
+    stock = pd.Series(data['close'].astype(float).pct_change().values, index=dates.values)
+    aligned = pd.concat([stock.rename('stock'), mkt.rename('mkt')], axis=1, join='inner')
+    aligned = aligned.dropna()
+    return aligned, dates, data.index
 
 
 class ACADEMIC_SKEWNESS(BaseFactor):
@@ -94,8 +150,10 @@ class ACADEMIC_SORTINO(BaseFactor):
         target = self.get_param("target_return")
 
         returns = data['close'].pct_change()
-        downside_returns = returns.where(returns < target, 0)
-        downside_std = downside_returns.rolling(window=period).std()
+        # 502批次2 #R3：下行偏差修复——原 `returns.where(<target, 0).std()` 把 0 值计入散布
+        # 系统性低估；正确为负超额收益 RMS：sqrt(mean(clip(r-target, upper=0)²))
+        downside = (returns - target).clip(upper=0)
+        downside_std = np.sqrt((downside ** 2).rolling(window=period).mean())
 
         mean_return = returns.rolling(window=period).mean()
 
@@ -199,13 +257,17 @@ class ACADEMIC_BETA(BaseFactor):
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        returns = data['close'].pct_change()
-
-        market_return = returns.rolling(window=period).mean()
-        cov = returns.rolling(window=period).cov(market_return)
-        var = market_return.rolling(window=period).var()
-
-        return cov / (var + 1e-10)
+        # 502批次3 #R2：真实市场基准 Beta = Cov(R_i, R_m)/Var(R_m)（HS300）
+        aligned = _align_market(data, period)
+        if aligned is None:
+            return pd.Series(np.nan, index=data.index)
+        aligned_df, dates, data_index = aligned
+        if len(aligned_df) < period + 1:
+            return pd.Series(np.nan, index=data.index)
+        cov = aligned_df['stock'].rolling(window=period).cov(aligned_df['mkt'])
+        var = aligned_df['mkt'].rolling(window=period).var()
+        beta = cov / (var + 1e-10)
+        return pd.Series(beta.values, index=aligned_df.index).reindex(dates).set_axis(data_index)
 
 
 class ACADEMIC_ALPHA(BaseFactor):
@@ -214,29 +276,32 @@ class ACADEMIC_ALPHA(BaseFactor):
     name_cn = "Alpha值"
     category = "academic"
     subcategory = "excess_return"
-    description = "超额收益"
+    description = "超额收益（502批次3 #R2：接真实市场基准 HS300 + R_f；原自引用恒 0）"
     formula = "Alpha = R_p - (R_f + Beta * (R_m - R_f))"
     source = "Academic"
     source_detail = "Academic"
 
     params = [
         FactorParam("period", 20, "int", 5, 252, "计算周期"),
-        FactorParam("risk_free", 0.03, "float", 0, 0.1, "无风险利率")
+        FactorParam("risk_free", None, "float", 0, 0.1, "无风险利率（None=取系统国债收益率）")
     ]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        rf = self.get_param("risk_free")
-
-        returns = data['close'].pct_change()
-        market_return = returns.rolling(window=period).mean()
-
-        portfolio_mean = returns.rolling(window=period).mean()
-        market_mean = market_return
-
-        alpha = portfolio_mean - rf - 1.0 * (market_mean - rf)
-
-        return alpha
+        rf = _resolve_rf(self.get_param("risk_free"))
+        aligned = _align_market(data, period)
+        if aligned is None:
+            return pd.Series(np.nan, index=data.index)
+        aligned_df, dates, data_index = aligned
+        if len(aligned_df) < period + 1:
+            return pd.Series(np.nan, index=data.index)
+        cov = aligned_df['stock'].rolling(window=period).cov(aligned_df['mkt'])
+        var = aligned_df['mkt'].rolling(window=period).var()
+        beta = cov / (var + 1e-10)
+        rp = aligned_df['stock'].rolling(window=period).mean()
+        rm = aligned_df['mkt'].rolling(window=period).mean()
+        alpha = rp - rf - beta * (rm - rf)
+        return pd.Series(alpha.values, index=aligned_df.index).reindex(dates).set_axis(data_index)
 
 
 class ACADEMIC_TREYNOR(BaseFactor):
@@ -250,20 +315,27 @@ class ACADEMIC_TREYNOR(BaseFactor):
     source = "Academic"
     source_detail = "Academic"
 
-    params = [FactorParam("period", 20, "int", 5, 252, "计算周期")]
+    params = [
+        FactorParam("period", 20, "int", 5, 252, "计算周期"),
+        FactorParam("risk_free", None, "float", 0, 0.1, "无风险利率（None=取系统国债收益率）")
+    ]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-        returns = data['close'].pct_change()
-
-        excess_return = returns.rolling(window=period).mean()
-        market_return = returns.rolling(window=period).mean()
-        cov = returns.rolling(window=period).cov(market_return)
-        var = market_return.rolling(window=period).var()
-
+        rf = _resolve_rf(self.get_param("risk_free"))
+        # 502批次3 #R2：真实市场基准 Treynor = (R_p - R_f)/Beta（原自引用近似 + 缺 R_f）
+        aligned = _align_market(data, period)
+        if aligned is None:
+            return pd.Series(np.nan, index=data.index)
+        aligned_df, dates, data_index = aligned
+        if len(aligned_df) < period + 1:
+            return pd.Series(np.nan, index=data.index)
+        cov = aligned_df['stock'].rolling(window=period).cov(aligned_df['mkt'])
+        var = aligned_df['mkt'].rolling(window=period).var()
         beta = cov / (var + 1e-10)
-
-        return excess_return / (beta + 1e-10)
+        excess = aligned_df['stock'].rolling(window=period).mean() - rf
+        treynor = excess / (beta + 1e-10)
+        return pd.Series(treynor.values, index=aligned_df.index).reindex(dates).set_axis(data_index)
 
 
 class ACADEMIC_VOLATILITY_10(BaseFactor):
@@ -392,7 +464,8 @@ class ACADEMIC_PARKINSON(BaseFactor):
         period = self.get_param("period")
 
         hl_ratio = np.log(data['high'] / data['low'])
-        parkinson_var = hl_ratio.rolling(window=period).mean() ** 2 / (4 * np.log(2))
+        # 502批次2 #R45：括号位修复——先平方再 rolling mean（原 `mean**2` 在 Jensen 不等式下低估）
+        parkinson_var = (hl_ratio ** 2).rolling(window=period).mean() / (4 * np.log(2))
         parkinson_vol = np.sqrt(parkinson_var) * np.sqrt(252)
 
         return parkinson_vol
@@ -488,20 +561,25 @@ class ACADEMIC_CAPM_ALPHA(BaseFactor):
     source = "Academic"
     source_detail = "Fama-French"
 
-    params = [FactorParam("period", 252, "int", 60, 504, "计算周期")]
+    params = [
+        FactorParam("period", 252, "int", 60, 504, "计算周期"),
+        FactorParam("risk_free", None, "float", 0, 0.1, "无风险利率（None=取系统国债收益率）")
+    ]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
-
-        returns = data['close'].pct_change()
-        market_return = returns.rolling(window=period).mean()
-
-        portfolio_return = returns.rolling(window=period).mean()
-
-        cov = returns.rolling(window=period).cov(market_return)
-        var = market_return.rolling(window=period).var()
-
+        rf = _resolve_rf(self.get_param("risk_free"))
+        # 502批次3 #R2：真实市场基准 CAPM Alpha = R_p - R_f - Beta*(R_m - R_f)
+        aligned = _align_market(data, period)
+        if aligned is None:
+            return pd.Series(np.nan, index=data.index)
+        aligned_df, dates, data_index = aligned
+        if len(aligned_df) < period + 1:
+            return pd.Series(np.nan, index=data.index)
+        cov = aligned_df['stock'].rolling(window=period).cov(aligned_df['mkt'])
+        var = aligned_df['mkt'].rolling(window=period).var()
         beta = cov / (var + 1e-10)
-        alpha = portfolio_return - beta * market_return
-
-        return alpha
+        rp = aligned_df['stock'].rolling(window=period).mean()
+        rm = aligned_df['mkt'].rolling(window=period).mean()
+        alpha = rp - rf - beta * (rm - rf)
+        return pd.Series(alpha.values, index=aligned_df.index).reindex(dates).set_axis(data_index)
