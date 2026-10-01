@@ -6591,6 +6591,10 @@ _DAILY_BACKFILL_STATE: dict = {}
 _DAILY_BACKFILL_COOLDOWN = 600       # 常规冷却 10min（避免每 30s tick 重复全市场补采）
 _DAILY_BACKFILL_EMPTY_COOLDOWN = 1800  # 空返回/失败冷却 30min（Tushare 当日未发布时防空转）
 
+# 505号：RAW 并行轮次状态（{'futures': {step: Future}, 'pool': ThreadPoolExecutor}）——
+# fut.done 等待制：提交一轮后完成前不重复提交（防 428 P1-2 慢场景线程累积）
+_RAW_ROUND = None
+
 
 def _maybe_backfill_daily(data_date: str):
     """503号 A：日线不足时的管道自愈补采（_drive_pipeline has_data=False 调用）
@@ -6784,47 +6788,46 @@ def _drive_pipeline():
     RAW_STEPS = {'RAW-1': _precompute_indicators, 'RAW-2': _precompute_raw_features, 'RAW-3': _precompute_preset_combos}
     unfinished_raw = [s for s in RAW_STEPS if status.get(s, {}).get('status') != 'done']
     if unfinished_raw:
-        # 426号 P0-4-⑤：RAW 触发条件日志——记录待执行/续算步骤及上一状态
-        # （pending=首次或重试、running=重启续算、failed=上轮失败重试）
-        _raw_state = {s: status.get(s, {}).get('status') for s in unfinished_raw}
-        logger.info(f"[管道] RAW 并行提交: {_raw_state}（可被打断但可续：未完成步骤保 pending，"
-                    f"重启后从断点续算，写路径 INSERT OR REPLACE 幂等）")
-        import concurrent.futures
-        # 卡死根治：原用 `with ThreadPoolExecutor` —— 其 __exit__ 隐式 shutdown(wait=True)，
-        # 当某 RAW 步骤超过 1800s 仍运行，fut.result(timeout=1800) 抛超时后 with 退出
-        # 会再次阻塞主循环直到该线程结束，超时保护形同虚设。改为显式 shutdown(wait=False)，
-        # 超时的后台线程置 daemon 随进程结束，主循环不被拖住。
-        _raw_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
-        # 428 P1-2：跟踪每步结果——仅成功步骤标 done；超时/失败步骤保持非 done，
-        # 交由下 tick 426 续算机制重跑（不静默标记不完整数据为完成）。
-        _raw_done = {}
-        try:
-            futures = {s: _raw_pool.submit(RAW_STEPS[s], codes) for s in unfinished_raw}
-            for s, fut in futures.items():
-                try:
-                    fut.result(timeout=1800)
-                    _raw_done[s] = True
-                except concurrent.futures.TimeoutError:
-                    logger.warning(f"{s} 并行执行超过1800s未完成，后台线程继续但不再阻塞主循环；"
-                                   f"步骤保持未完成，下 tick 续算（428 P1-2）")
-                    _raw_done[s] = False
-                except Exception as e:
-                    logger.warning(f"{s} 并行执行失败: {e}；步骤保持未完成，下 tick 续算（428 P1-2）")
-                    _raw_done[s] = False
-        finally:
-            # 不等待超时线程；后台 daemon 线程随进程结束，主流程立即继续
+        # 505号：428 P1-2 线程累积缺陷修复——改 fut.done 等待制。
+        # 旧实现：fut.result(timeout=1800) 超时后线程不杀（shutdown(wait=False)）+ 每 tick
+        # 对 pending 步骤重提交新线程 + RAW-2/RAW-3 无断点续算每轮从头跑 → 慢场景（单轮
+        # >1800s）下多轮线程累积（2026-10-01 实测 6 轮 73 线程）→ 资源争抢 → 因子全超时
+        # → 管道永不完成。新实现：提交一轮记 future，完成前不重复提交；单股 60s/30s 超时
+        # （_run_with_timeout）已保证整轮必完成，无需步骤级 1800s 重提交。
+        global _RAW_ROUND
+        if _RAW_ROUND:
+            for s in list(_RAW_ROUND['futures']):
+                fut = _RAW_ROUND['futures'][s]
+                if fut.done():
+                    try:
+                        fut.result()
+                        _ecm.mark_step_done(today, s, f"OK parallel ({s})")
+                        logger.info(f"  [管道] {s} → done (parallel, 505)")
+                    except Exception as e:
+                        logger.warning(f"  [管道] {s} 执行失败: {e}；保持待办，下轮重试（505）")
+                    del _RAW_ROUND['futures'][s]
+            if _RAW_ROUND['futures']:
+                logger.debug(f"[管道] RAW 后台线程运行中: {list(_RAW_ROUND['futures'])}"
+                             f"（505号：完成前不重复提交）")
+                _last_step_counts['RAW'] = f"{len(_RAW_ROUND['futures'])} steps running"
+                return
+            # 本轮全部完成 → 关闭线程池，下 tick 检查是否需要新轮
             try:
-                _raw_pool.shutdown(wait=False, cancel_futures=True)
+                _RAW_ROUND['pool'].shutdown(wait=False)
             except Exception:
                 pass
-        # 仅对成功步骤记录完成；超时/失败步骤不标 done，保持待续算
-        for s, ok in _raw_done.items():
-            if ok:
-                _ecm.mark_step_done(today, s, f"OK parallel ({s})")
-                logger.info(f"  [管道] {s} → done (parallel)")
-            else:
-                logger.warning(f"  [管道] {s} 未完成，保留待办，下 tick 续算（428 P1-2）")
-        _last_step_counts['RAW'] = f"{len(_raw_done)} steps parallel"
+            _RAW_ROUND = None
+            return
+        # 新提交一轮（无运行中步骤时）
+        _raw_state = {s: status.get(s, {}).get('status') for s in unfinished_raw}
+        logger.info(f"[管道] RAW 并行提交: {_raw_state}（505号：完成前不重复提交，单股超时内部保障）")
+        import concurrent.futures
+        _raw_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        _RAW_ROUND = {
+            'futures': {s: _raw_pool.submit(RAW_STEPS[s], codes) for s in unfinished_raw},
+            'pool': _raw_pool,
+        }
+        _last_step_counts['RAW'] = f"{len(_RAW_ROUND['futures'])} steps running"
         return
 
     if not _all_steps_done(status, list(RAW_STEPS.keys())):
