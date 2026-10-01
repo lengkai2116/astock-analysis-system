@@ -393,7 +393,9 @@ class REV_1(BaseFactor):
     params = []
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
-        return -1 * data['close'].pct_change(1)
+        # 501 #R20：pct_change 零前收 → inf/NaN；替换非有限值为 NaN，不传播进下游排名/归一化
+        ret = data['close'].pct_change(1).replace([np.inf, -np.inf], np.nan)
+        return -1 * ret
 
 
 class REV_5(BaseFactor):
@@ -890,7 +892,7 @@ class VOL_RATIO_10(BaseFactor):
 class VOL_RATIO_20(BaseFactor):
     """20日量比"""
     name = "VOL_RATIO_20"
-    name_cn = "20日换手率"
+    name_cn = "20日量比"
     category = "volume"
     subcategory = "volume_momentum"
     description = "当前成交量与20日平均成交量的比值"

@@ -341,10 +341,13 @@ class ACADEMIC_CVAR(BaseFactor):
         returns = data['close'].pct_change()
 
         def cvar(series):
-            if len(series) < 5:
-                return 0
-            var_5pct = series.quantile(0.05)
-            return series[series <= var_5pct].mean()
+            # 501 #R43：raw=True 传 numpy 数组——原 `series.quantile` 在 ndarray 上
+            # 不存在（AttributeError，因子从未跑通）；改 np.percentile + 空/退化显式 NaN
+            if len(series) == 0:
+                return np.nan
+            var_5pct = np.percentile(series, 5)
+            tail = series[series <= var_5pct]
+            return float(tail.mean()) if len(tail) > 0 else np.nan
 
         return returns.rolling(window=period).apply(cvar, raw=True)
 
@@ -415,7 +418,9 @@ class ACADEMIC_GARMAN_KLASS(BaseFactor):
         co = np.log(data['close'] / data['open'])
 
         gk_var = 0.5 * hl ** 2 - (2 * np.log(2) - 1) * co ** 2
-        gk_vol = np.sqrt(gk_var.rolling(window=period).mean()) * np.sqrt(252)
+        # 501 #R22：GK 方差可负（co² 项无下界）→ sqrt 负值静默 NaN；clamp 至 0 后再开方
+        gk_mean = gk_var.rolling(window=period).mean().clip(lower=0)
+        gk_vol = np.sqrt(gk_mean) * np.sqrt(252)
 
         return gk_vol
 
@@ -456,7 +461,9 @@ class ACADEMIC_HURST(BaseFactor):
         returns = data['close'].pct_change()
 
         def hurst_exp(series):
-            if len(series) < 20:
+            # 501 #R44：守卫基准对齐 period（原硬编码 20 与 period min=50 脱节——
+            # rolling 满窗口 series 长度恒=period，硬编码 20 永不触发、语义失真）
+            if len(series) < period:
                 return 0.5
             n = len(series)
             mean_val = series.mean()

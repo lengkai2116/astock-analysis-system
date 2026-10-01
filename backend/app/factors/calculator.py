@@ -16,7 +16,15 @@ class FactorCalculator:
     """
 
     def __init__(self):
-        self.registry = get_factor_registry()
+        # 501 #R29：注册表改为惰性获取——原 __init__ 急切 get_factor_registry()，
+        # 若注册表尚未填充（并发首调）会缓存空/半成品实例于实例生命周期。
+        self.registry = None
+
+    def _get_registry(self):
+        """501 #R29：方法内取全局注册表（每次调用现取，注册表双检锁保证完整）"""
+        if self.registry is None:
+            self.registry = get_factor_registry()
+        return self.registry
 
     def calculate_single_factor(self, data: pd.DataFrame,
                                 factor_name: str,
@@ -42,18 +50,21 @@ class FactorCalculator:
                     if not cached.empty:
                         cached = cached.sort_values('trade_date')
                         result = cached.set_index('trade_date')['value']
-                        logger.debug(f"factor_cache 命中: {factor_name}")
+                        logger.debug("factor_cache 命中: %s", factor_name)
                         return result
             except Exception as e:
-                logger.debug(f"factor_cache 读取失败({factor_name}): {e}")
+                # 501 #R63：惰性日志——参数化避免 f-string 无条件格式化
+                logger.debug("factor_cache 读取失败(%s): %s", factor_name, e)
 
+        # 501 #R37：入口统一 copy——原仅归一化分支 copy，缓存未命中路径/无归一化
+        # 路径共用调用方原对象，check_data/calculate 就地 mutate 会污染调用方数据
+        data = data.copy()
         # 414号P2.6: 列名标准化 — 因子引用 'vol'，分钟数据用 'volume'
         if 'volume' in data.columns and 'vol' not in data.columns:
-            data = data.copy()
             data['vol'] = data['volume']
 
-        # 实时计算
-        factor = self.registry.get_factor(factor_name, **kwargs)
+        # 实时计算（#R29：惰性取注册表）
+        factor = self._get_registry().get_factor(factor_name, **kwargs)
         if factor is None:
             logger.error(f"未找到因子: {factor_name}")
             return None
@@ -72,6 +83,12 @@ class FactorCalculator:
         """
         批量计算多个因子
         factor_configs 格式: [{"name": "MA", "params": {"period": 20}}]
+
+        501号批次3：
+          - #R35：重复因子名（同名不同参）静默覆盖后值 → 记 warning 提示消费方
+            使用烘焙参数的唯一因子名（MA_5/MA_20）。
+          - #R36：因子返回序列与 data.index 异索引时，pandas 按标签对齐会静默填 NaN；
+            此处显式 reindex 并对齐校验，错位可见而非静默。
         """
         result_df = pd.DataFrame(index=data.index)
 
@@ -79,8 +96,18 @@ class FactorCalculator:
             factor_name = config.get("name")
             params = config.get("params", {})
 
+            if factor_name in result_df.columns:
+                logger.warning(
+                    f"因子名重复，后值将覆盖前值: {factor_name} (params={params})")
             factor_series = self.calculate_single_factor(data, factor_name, **params)
             if factor_series is not None:
+                # #R36：按 data.index 对齐——异索引时 reindex 产生 NaN 行并告警
+                if not factor_series.index.equals(data.index):
+                    missing = factor_series.index.difference(data.index)
+                    logger.warning(
+                        f"因子 {factor_name} 索引与 data 不一致（{len(missing)} 个标签对齐为 NaN），"
+                        f"已 reindex 对齐")
+                    factor_series = factor_series.reindex(data.index)
                 result_df[factor_name] = factor_series
 
         return result_df
@@ -90,21 +117,28 @@ class FactorCalculator:
         """
         计算因子加权组合
         factor_configs 格式: [{"name": "MA", "params": {}, "weight": 0.3}]
+
+        501 #R53：本方法**全仓无调用方（死代码路径）**——登记待接线时修复；
+        已顺手修权重分母错（仅统计实际参与因子）与全失败返回空。
         """
         factors_df = self.calculate_multiple_factors(data, factor_configs)
 
         if factors_df.empty:
-            return pd.Series([], index=data.index)
+            return pd.Series(dtype=float, index=data.index)
 
-        # 计算权重和
-        total_weight = sum(c.get("weight", 1.0) for c in factor_configs)
+        # 501 #R53：权重分母仅统计实际参与计算的因子（原含失败/缺名因子 → 分母偏大）
+        contributing = [c for c in factor_configs
+                        if c.get("name") in factors_df.columns]
+        total_weight = sum(c.get("weight", 1.0) for c in contributing)
+        if not contributing or total_weight == 0:
+            logger.warning("无可用因子或权重和为0，返回空序列")
+            return pd.Series(dtype=float, index=data.index)
 
         # 加权平均
         result = pd.Series(0.0, index=data.index)
-        for config in factor_configs:
+        for config in contributing:
             name = config.get("name")
             weight = config.get("weight", 1.0)
-            if name in factors_df.columns:
-                result += factors_df[name] * (weight / total_weight)
+            result += factors_df[name] * (weight / total_weight)
 
         return result

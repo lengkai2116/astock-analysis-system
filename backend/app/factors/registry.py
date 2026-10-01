@@ -5,6 +5,7 @@
 import importlib
 import logging
 import os
+import threading
 from typing import Dict, List, Optional, Type
 
 from .base import BaseFactor
@@ -107,25 +108,30 @@ class FactorRegistry:
 
     def get_all_factors_info(self) -> List[Dict]:
         """
-        获取所有因子的信息
+        获取所有因子的信息（501 #R30：单个坏因子 try/except 跳过，不中断整表）
         """
         result = []
         for name in self._factors:
             factor_class = self._factors[name]
-            factor = factor_class()
-            result.append(factor.get_info())
+            try:
+                factor = factor_class()
+                result.append(factor.get_info())
+            except Exception as e:
+                logger.error(f"获取因子信息失败 {name}: {e}")
         return result
 
     def search_factors(self, keyword: str) -> List[str]:
         """
-        搜索因子
+        搜索因子（501 #R39：name_cn/description 为 None 时守卫，不抛 AttributeError）
         """
         keyword = keyword.lower()
         result = []
         for name, factor_class in self._factors.items():
+            name_cn = factor_class.name_cn or ""
+            description = factor_class.description or ""
             if (keyword in name.lower() or
-                keyword in factor_class.name_cn.lower() or
-                keyword in factor_class.description.lower()):
+                keyword in name_cn.lower() or
+                keyword in description.lower()):
                 result.append(name)
         return result
 
@@ -134,15 +140,24 @@ class FactorRegistry:
 _global_registry: Optional[FactorRegistry] = None
 
 
+# 全局注册表实例
+_global_registry: Optional[FactorRegistry] = None
+# 501 #R28：注册表初始化双检锁——并发首调（daemon 线程池 + routes import）不会拿到半成品
+_registry_lock = threading.Lock()
+
+
 def get_factor_registry() -> FactorRegistry:
     """
-    获取全局因子注册表
+    获取全局因子注册表（501 #R28：双检锁，_load_builtin_factors 完成后才发布）
     """
     global _global_registry
     if _global_registry is None:
-        _global_registry = FactorRegistry()
-        # 自动加载内置因子
-        _load_builtin_factors(_global_registry)
+        with _registry_lock:
+            if _global_registry is None:
+                registry = FactorRegistry()
+                # 自动加载内置因子（加载完成后再发布，避免读到半成品）
+                _load_builtin_factors(registry)
+                _global_registry = registry
     return _global_registry
 
 

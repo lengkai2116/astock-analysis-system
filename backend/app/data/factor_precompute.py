@@ -76,6 +76,12 @@ class FactorPrecomputeManager:
             索引写成 "0"/"1"… 无意义键，永不匹配日期有序读且与他处位置键碰撞）。
           - #42：删除永不可达的重复 `pd.Timestamp` 分支。
           - #43：日期归一改用 `_normalize_trade_date`（`pd.to_datetime` 严格解析）。
+
+        501号批次3：
+          - #R31：`float(value)` 守卫——因子返回非数值（str/None 哨兵）时跳过该行，
+            原单值异常被 `precompute_factor` 吞掉导致**整批静默丢弃**。
+          - #R34：位置索引映射防御——`factor_series` 与 `data` 行数不一致时告警
+            （提示可能的重排/截断，避免位置错配静默写库）。
         """
         if factor_series.empty:
             return
@@ -85,8 +91,22 @@ class FactorPrecomputeManager:
         # 获取原始trade_date列表用于映射
         dates = data['trade_date'].tolist() if data is not None and 'trade_date' in data.columns else None
 
+        # #R34：位置映射防御——位置索引依赖 factor_series 与 data 行序一致；
+        # 长度不一致说明因子内部可能重排/截断，告警以便定位（不阻断，位置映射仍尽力）
+        if dates is not None and len(dates) != len(factor_series):
+            logger.warning(
+                f"因子 {factor_name} 序列长度 {len(factor_series)} ≠ data 行数 {len(dates)}，"
+                f"位置索引映射可能错配")
+
         for idx, value in factor_series.items():
             if not pd.notna(value):
+                continue
+            # #R31：非数值（str/None 哨兵）跳过该行，避免 float() 抛异常毁整批
+            try:
+                num_value = float(value)
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"因子 {factor_name} [{ts_code}] 值 {value!r} 非数值，跳过该行")
                 continue
             # 映射日期：优先从原始 DataFrame 按位置索引取，其次按索引/值解析为日期
             trade_date = None
@@ -105,7 +125,7 @@ class FactorPrecomputeManager:
                 'ts_code': ts_code,
                 'trade_date': trade_date,
                 'factor_name': factor_name,
-                'value': float(value),
+                'value': num_value,
                 'cached_at': now
             })
 
@@ -239,24 +259,31 @@ class FactorPrecomputeManager:
 
         原实现用 self.cache_manager.conn（总库），factor_cache 在 compute_cache.db
         → DELETE 空操作。改走 _exec_shard 分库执行（内部含提交）。
+
+        501号批次3（#R33）：`_exec_shard` 吞写失败、无返回值 → 此处补结果日志，
+        部分删除/静默失败在日志可见。
         """
         if ts_code and factor_name:
             self.cache_manager._exec_shard(
                 'factor_cache',
                 "DELETE FROM factor_cache WHERE ts_code = ? AND factor_name = ?",
                 [ts_code, factor_name])
+            logger.info(f"清除 factor_cache: ts_code={ts_code}, factor_name={factor_name}")
         elif ts_code:
             self.cache_manager._exec_shard(
                 'factor_cache',
                 "DELETE FROM factor_cache WHERE ts_code = ?",
                 [ts_code])
+            logger.info(f"清除 factor_cache: ts_code={ts_code}")
         elif factor_name:
             self.cache_manager._exec_shard(
                 'factor_cache',
                 "DELETE FROM factor_cache WHERE factor_name = ?",
                 [factor_name])
+            logger.info(f"清除 factor_cache: factor_name={factor_name}")
         else:
             self.cache_manager._exec_shard('factor_cache', "DELETE FROM factor_cache")
+            logger.info("清除 factor_cache: 全部")
 
     def clean_old_data(self, cutoff: str):
         """清理 factor_cache — 委托给 ECM"""

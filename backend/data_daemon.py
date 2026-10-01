@@ -3425,6 +3425,10 @@ def _precompute_market_stats(target_date: str | None = None):
                     erp_series.append(1 / float(pe) * 100 - bond_yield)
             if not erp_series:
                 return None
+            # 501 #R62：单观察不可排名（count_less/len 恒 0 误导为「最低分位」）——
+            # 返回 0.5 中性分位（非 None：None 触发 426 P0-1「无源数据」→ 整批 market_stats 不落库）
+            if len(erp_series) < 2:
+                return 0.5
             erp_today = erp_series[-1]  # 按 trade_date 升序，最后一条即当日
             # 历史绝对分位：当日值在「当日+历史」序列中小于它的占比
             count_less = sum(1 for v in erp_series if v < erp_today)
@@ -3791,6 +3795,11 @@ def _precompute_raw_features(codes, target_date: str | None = None):
 
             features = {}
 
+            # 501 #R25：cl_result 显式初始化——原依赖缠论块（len(df)>=30 且 cl.analyze
+            # 成功）后才绑定局部名，消费点用 `'cl_result' in dir()` 作用域内省判断；
+            # 现顶部置 None，消费点改判 `cl_result is not None`，降级路径显式可控
+            cl_result = None
+
             # 2026-09-29 OCR #1：支撑阻力每只股票只算一次（原衍生/risk_ext/structure_ext
             # 三处重复计算同源函数，全市场 ×3 无谓 CPU）。失败置 None，各处既有
             # try/except 兜底语义不变。
@@ -4123,7 +4132,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 _derived['price_position'] = _depth_f.get('price_position', 'mid_zone')
                 try:
                     import json as _json
-                    _sr = _sr_once  # 2026-09-29 OCR #1：复用单次计算结果
+                    _sr = _sr_once or {}  # 2026-09-29 OCR #1：复用单次计算结果（501 #R1：失败置 None 时兜底空字典）
                     _derived['support_resistance'] = _json.dumps({
                         'support': _sr.get('support_price'),
                         'resistance': _sr.get('resistance_price'),
@@ -4160,7 +4169,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 #   日期+价格算生命周期（初期/中期/已延伸/回撤），原纯枚举无日期价格 →
                 #   生命周期恒 None。BuySellPoint.position 已含 date/price，直接组装。
                 _derived['active_signal'] = _build_active_signal(
-                    cl_result if 'cl_result' in dir() else {}, _cl.get('buy_sell_point', ''))
+                    cl_result if cl_result is not None else {}, _cl.get('buy_sell_point', ''))
                 # 状态标签（461-7：state_label 接 chanlun 缠论 trend 真值（up/down/unknown），
                 #   替代原 trend_direction（chanlun get_chanlun_tags 从不产该键 → 恒 'unknown' 假值）；
                 #   trend_alignment 接 PhaseDetectionEngine trend_alignment（up_aligned/down_aligned/
@@ -4169,7 +4178,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 #   arbiter:226 的 `== 'up_aligned'/'down_aligned'` 冲突检测判读一致。
                 _cl_trend = _cl.get('trend_direction', '')
                 if _cl_trend not in ('up', 'down', '上升', '下降'):
-                    _cl_trend = (cl_result.get('trend', 'unknown') if 'cl_result' in dir() else 'unknown')
+                    _cl_trend = (cl_result.get('trend', 'unknown') if cl_result is not None else 'unknown')
                 _derived['state_label'] = '上升' if _cl_trend in ('up', '上升') else ('下降' if _cl_trend in ('down', '下降') else '盘整')
                 _derived['trend_alignment'] = _depth_f.get('trend_alignment', 'no_trend')
                 # 利润比（461-7：profit_ratio 由 chip_fund_ext 单源生产，derived 不再从 chip_position
@@ -4193,7 +4202,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 try:
                     from app.opportunity_atlas.dimensions.shared_support_resistance import calc_support_resistance
                     from app.opportunity_atlas.dimensions.dim6_risk_engine import _calc_volatility
-                    geo = _sr_once  # 2026-09-29 OCR #1：复用单次计算结果
+                    geo = _sr_once or {}  # 2026-09-29 OCR #1：复用单次计算结果（501 #R1：失败置 None 时兜底空字典）
                     _risk_feat['support_price'] = geo.get('support_price')
                     _risk_feat['resistance_price'] = geo.get('resistance_price')
                     _risk_feat['dist_to_support_pct'] = geo.get('dist_to_support_pct')
@@ -4436,7 +4445,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             # 16. 结构位置扩展字段（365号批次A / Phase 6）
             try:
                 _struct_feat = {}
-                _sr_result = _sr_once  # 2026-09-29 OCR #1：复用单次计算结果
+                _sr_result = _sr_once or {}  # 2026-09-29 OCR #1：复用单次计算结果（501 #R1：失败置 None 时兜底空字典）
                 _struct_feat['support_price'] = _sr_result.get('support_price')
                 _struct_feat['resistance_price'] = _sr_result.get('resistance_price')
                 # indicator_status: 均线排列+趋势方向综合

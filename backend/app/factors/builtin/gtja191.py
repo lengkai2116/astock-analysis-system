@@ -254,8 +254,8 @@ class GTJA014(BaseFactor):
     name_cn = "60日成交额均线"
     category = "volume"
     subcategory = "volume_trend"
-    description = "60日成交额移动平均"
-    formula = "AMOUNT60 = MA(Close * Volume, 60)"
+    description = "N日成交额移动平均（501 #R56：原硬编码60日与可配置 period 脱节）"
+    formula = "AMOUNT_N = MA(Close * Volume, N)"
     source = "GTJA"
     source_detail = "GTJA191"
 
@@ -388,8 +388,8 @@ class GTJA021(BaseFactor):
     name_cn = "20日标准差"
     category = "volatility"
     subcategory = "price_volatility"
-    description = "20日收盘价的标准差"
-    formula = "STD20 = STD(Close, 20)"
+    description = "N日收盘价的标准差（501 #R56：原硬编码20日与可配置 period 脱节）"
+    formula = "STD_N = STD(Close, N)"
     source = "GTJA"
     source_detail = "GTJA191"
 
@@ -406,8 +406,8 @@ class GTJA022(BaseFactor):
     name_cn = "60日标准差"
     category = "volatility"
     subcategory = "price_volatility"
-    description = "60日收盘价的标准差"
-    formula = "STD60 = STD(Close, 60)"
+    description = "N日收盘价的标准差（501 #R56：原硬编码60日与可配置 period 脱节）"
+    formula = "STD_N = STD(Close, N)"
     source = "GTJA"
     source_detail = "GTJA191"
 
@@ -514,8 +514,8 @@ class GTJA028(BaseFactor):
     name_cn = "60日收益率"
     category = "trend"
     subcategory = "price_trend"
-    description = "60日收益率"
-    formula = "RET60 = (Close / Close_60 - 1) * 100"
+    description = "N日收益率（501 #R56：原硬编码60日与可配置 period 脱节）"
+    formula = "RET_N = (Close / Close_N - 1) * 100"
     source = "GTJA"
     source_detail = "GTJA191"
 
@@ -547,7 +547,9 @@ class GTJA029(BaseFactor):
 
         up_vol = vol.where(close > close.shift(1), 0)
         down_vol = vol.where(close < close.shift(1), 0)
-        flat_vol = vol.where(close == close.shift(1), 0)
+        # 501 #R57：平盘判定用 np.isclose——前复权浮点噪声下 `close == close.shift(1)`
+        # 会漏判真平盘（GTJA030 同型）
+        flat_vol = vol.where(np.isclose(close, close.shift(1)), 0)
 
         up_sum = up_vol.rolling(window=period).sum()
         down_sum = down_vol.rolling(window=period).sum()
@@ -577,7 +579,9 @@ class GTJA030(BaseFactor):
 
         up_vol = vol.where(close > close.shift(1), 0)
         down_vol = vol.where(close < close.shift(1), 0)
-        flat_vol = vol.where(close == close.shift(1), 0)
+        # 501 #R57：平盘判定用 np.isclose——前复权浮点噪声下 `close == close.shift(1)`
+        # 会漏判真平盘（GTJA030 同型）
+        flat_vol = vol.where(np.isclose(close, close.shift(1)), 0)
 
         up_sum = up_vol.rolling(window=period).sum()
         down_sum = down_vol.rolling(window=period).sum()
@@ -646,8 +650,8 @@ class GTJA034(BaseFactor):
     name_cn = "60日均线"
     category = "trend"
     subcategory = "price_trend"
-    description = "60日简单移动平均线"
-    formula = "MA60 = MA(Close, 60)"
+    description = "N日简单移动平均线（501 #R56：原硬编码60日与可配置 period 脱节）"
+    formula = "MA_N = MA(Close, N)"
     source = "GTJA"
     source_detail = "GTJA191"
 
@@ -718,8 +722,8 @@ class GTJA038(BaseFactor):
     name_cn = "60日指数均线"
     category = "trend"
     subcategory = "price_trend"
-    description = "60日指数移动平均线"
-    formula = "EMA60 = EMA(Close, 60)"
+    description = "N日指数移动平均线（501 #R56：原硬编码60日与可配置 period 脱节）"
+    formula = "EMA_N = EMA(Close, N)"
     source = "GTJA"
     source_detail = "GTJA191"
 

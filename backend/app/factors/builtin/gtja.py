@@ -90,7 +90,13 @@ class GTJA_AMOUNT20(GTJA_Base):
     ]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
+        # 501 #R24：走基类 check_data 契约（缺失列报契约错误而非裸 KeyError）
+        if not self.check_data(data):
+            raise ValueError(f"{self.name} 数据缺少必需列（required_columns={self._required_columns}）")
         period = self.get_param("period")
+        # 501 #R55：短输入显式报错（原 rolling 满窗口前全 NaN 静默）
+        if len(data) < period:
+            raise ValueError(f"{self.name} 数据长度 {len(data)} < period {period}")
         amount = data["close"] * data["vol"]
         return amount.rolling(window=period).mean()
 
@@ -108,7 +114,13 @@ class GTJA_AMOUNT60(GTJA_Base):
     ]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
+        # 501 #R24：走基类 check_data 契约
+        if not self.check_data(data):
+            raise ValueError(f"{self.name} 数据缺少必需列（required_columns={self._required_columns}）")
         period = self.get_param("period")
+        # 501 #R55：短输入显式报错
+        if len(data) < period:
+            raise ValueError(f"{self.name} 数据长度 {len(data)} < period {period}")
         amount = data["close"] * data["vol"]
         return amount.rolling(window=period).mean()
 
@@ -126,10 +138,17 @@ class GTJA_HL20(GTJA_Base):
     ]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
+        # 501 #R24：走基类 check_data 契约
+        if not self.check_data(data):
+            raise ValueError(f"{self.name} 数据缺少必需列（required_columns={self._required_columns}）")
         period = self.get_param("period")
+        # 501 #R55：短输入显式报错
+        if len(data) < period:
+            raise ValueError(f"{self.name} 数据长度 {len(data)} < period {period}")
         high_n = data["high"].rolling(window=period).max()
         low_n = data["low"].rolling(window=period).min()
-        return high_n / low_n.replace(0, np.nan)
+        # 501 #R21：分母仅接受正值——replace(0) 无法拦截负/NaN 低值，会透传 inf/NaN
+        return high_n / low_n.where(low_n > 0)
 
 
 class GTJA_CORR_VOL10(GTJA_Base):
@@ -145,5 +164,11 @@ class GTJA_CORR_VOL10(GTJA_Base):
     ]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
+        # 501 #R24：走基类 check_data 契约
+        if not self.check_data(data):
+            raise ValueError(f"{self.name} 数据缺少必需列（required_columns={self._required_columns}）")
         period = self.get_param("period")
+        # 501 #R55：短输入显式报错
+        if len(data) < period:
+            raise ValueError(f"{self.name} 数据长度 {len(data)} < period {period}")
         return data["close"].rolling(window=period).corr(data["vol"])

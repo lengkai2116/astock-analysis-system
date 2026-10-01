@@ -3156,7 +3156,8 @@ class EnhancedCacheManager:
                     logger.warning(f"factor_cache 总库写入失败: {e}")
 
     def get_cached_factor(self, ts_code: str, factor_name: str):
-        """获取单个因子序列"""
+        """获取单个因子序列（501 #R32：空结果=真空缓存；查询失败由 _query_shard 记 warning 后
+        返回空 DataFrame——此处无法二次区分，失败至少在日志可见，不静默）"""
         df = self._query_shard('factor_cache',
             "SELECT trade_date, value FROM factor_cache "
             "WHERE ts_code = ? AND factor_name = ? ORDER BY trade_date",

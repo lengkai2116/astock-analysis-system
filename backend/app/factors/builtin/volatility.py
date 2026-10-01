@@ -135,6 +135,8 @@ class VOLATILITY(BaseFactor):
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         returns = data["close"].pct_change()
+        # 501 #R18：pct_change 零前收 → inf/NaN；替换非有限值为 NaN，不传播进 *sqrt(252)
+        returns = returns.replace([np.inf, -np.inf], np.nan)
         vol = returns.rolling(window=period).std() * np.sqrt(252)
         return vol
 
@@ -159,5 +161,7 @@ class HV(BaseFactor):
     def calculate(self, data: pd.DataFrame) -> pd.Series:
         period = self.get_param("period")
         log_returns = np.log(data["close"] / data["close"].shift(1))
+        # 501 #R19：非正值 → -inf/NaN（log 无定义）；替换非有限值为 NaN，不传播进 .std()
+        log_returns = log_returns.replace([np.inf, -np.inf], np.nan)
         hv = log_returns.rolling(window=period).std() * np.sqrt(252)
         return hv

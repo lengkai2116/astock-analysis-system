@@ -46,7 +46,7 @@ class TechnicalIndicatorEngine:
 
         # 2. 计算MACD
         if len(result) >= 26:
-            close = result['close'].values
+            # 501 #R46：删死赋值 `close = result['close'].values`（下方用 result['close'].ewm）
 
             # 直接用Series的ewm，避免额外拷贝
             ema12 = result['close'].ewm(span=12, adjust=False).mean()
@@ -63,9 +63,10 @@ class TechnicalIndicatorEngine:
         if len(result) >= 15:
             close = result['close']
             delta = close.diff()
-            # 更安全的方式处理第一个元素
-            if len(delta) > 0 and pd.isna(delta.iloc[0]):
-                delta.iloc[0] = 0
+            # 501 #R49：首元素 NaN 置 0 用 fillna——原 `delta.iloc[0] = 0` 是链式赋值
+            # （对 .diff() 返回的新 Series 操作，可能 SettingWithCopyWarning/no-op），
+            # 与 calculate_rsi 的 np.diff+insert 平滑锚点保持一致
+            delta = delta.fillna(0)
 
             gain = delta.clip(lower=0)
             loss = -delta.clip(upper=0)
@@ -128,28 +129,29 @@ class TechnicalIndicatorEngine:
             result['ene_upper'] = ma25 * (1 + ene_m / 100)
             result['ene_lower'] = ma25 * (1 - ene_m / 100)
 
-        # 9. 计算九转序列 (Nine Turner)
+        # 9. 计算九转序列 (Nine Turner) —— 501 #R48：向量化替代逐行 .iloc 循环
+        # 语义等价：close[i] < close[i-4] 记买入计数（连续段 1..9 截断），反向记卖出；
+        # 原实现用有状态 cnt_buy/cnt_sell，现用 shift(4) 比较 + 段内 cumcount 等价实现
         if len(result) >= 8:
-            nine_buy_arr = np.zeros(len(result), dtype=int)
-            nine_sell_arr = np.zeros(len(result), dtype=int)
-            cnt_buy = 0
-            cnt_sell = 0
-            for i in range(4, len(result)):
-                if result['close'].iloc[i] < result['close'].iloc[i-4]:
-                    cnt_buy = min(cnt_buy + 1, 9)
-                    cnt_sell = 0
-                elif result['close'].iloc[i] > result['close'].iloc[i-4]:
-                    cnt_sell = min(cnt_sell + 1, 9)
-                    cnt_buy = 0
-                else:
-                    cnt_buy = 0
-                    cnt_sell = 0
-                if cnt_buy > 0:
-                    nine_buy_arr[i] = cnt_buy
-                if cnt_sell > 0:
-                    nine_sell_arr[i] = cnt_sell
-            result['nine_buy'] = nine_buy_arr
-            result['nine_sell'] = nine_sell_arr
+            close = result['close']
+            lower4 = close < close.shift(4)      # 买入触发
+            higher4 = close > close.shift(4)     # 卖出触发
+            # 买卖互斥：买入段（lower4 True 且非 higher4）与卖出段（higher4 True 且非 lower4）
+            buy_seg = lower4 & ~higher4
+            sell_seg = higher4 & ~lower4
+            # 段编号：触发状态翻转处开始新段（含首行 NaN→非 NaN 的边界）
+            buy_grp = (buy_seg != buy_seg.shift()).cumsum()
+            sell_grp = (sell_seg != sell_seg.shift()).cumsum()
+            nine_buy = buy_seg.groupby(buy_grp).cumcount() + 1
+            nine_sell = sell_seg.groupby(sell_grp).cumcount() + 1
+            # 截断 9
+            nine_buy = nine_buy.where(nine_buy <= 9, 9)
+            nine_sell = nine_sell.where(nine_sell <= 9, 9)
+            # 非触发日置 0
+            nine_buy = nine_buy.where(buy_seg, 0)
+            nine_sell = nine_sell.where(sell_seg, 0)
+            result['nine_buy'] = nine_buy.fillna(0).astype(int)
+            result['nine_sell'] = nine_sell.fillna(0).astype(int)
 
         return result
 
@@ -235,7 +237,9 @@ class TechnicalIndicatorEngine:
         low_min = result['low'].rolling(window=n).min()
         high_max = result['high'].rolling(window=n).max()
 
-        rsv = (result['close'] - low_min) / (high_max - low_min) * 100
+        # 501 #R50：零分母守卫对齐主路径 calculate_all_indicators（.replace(0, 1e-10)）——
+        # 平盘窗口（high==low）原实现 rsv 产生 inf/NaN，两条 KDJ 路径结果不一致
+        rsv = (result['close'] - low_min) / (high_max - low_min).replace(0, 1e-10) * 100
         k = rsv.ewm(com=m1-1, adjust=False).mean()
         d = k.ewm(com=m2-1, adjust=False).mean()
         j = 3 * k - 2 * d
@@ -296,6 +300,10 @@ class TechnicalIndicatorEngine:
             'ma5': float(latest['ma5']) if pd.notna(latest.get('ma5')) else None,
             'ma10': float(latest['ma10']) if pd.notna(latest.get('ma10')) else None,
             'ma20': float(latest['ma20']) if pd.notna(latest.get('ma20')) else None,
+            'ma30': float(latest['ma30']) if pd.notna(latest.get('ma30')) else None,
+            'ma60': float(latest['ma60']) if pd.notna(latest.get('ma60')) else None,
+            'ma120': float(latest['ma120']) if pd.notna(latest.get('ma120')) else None,
+            'ma250': float(latest['ma250']) if pd.notna(latest.get('ma250')) else None,
             'macd_dif': float(latest['macd_dif']) if pd.notna(latest.get('macd_dif')) else None,
             'macd_dea': float(latest['macd_dea']) if pd.notna(latest.get('macd_dea')) else None,
             'macd_hist': float(latest['macd_hist']) if pd.notna(latest.get('macd_hist')) else None,
@@ -306,6 +314,9 @@ class TechnicalIndicatorEngine:
             'boll_upper': float(latest['boll_upper']) if pd.notna(latest.get('boll_upper')) else None,
             'boll_mid': float(latest['boll_mid']) if pd.notna(latest.get('boll_mid')) else None,
             'boll_lower': float(latest['boll_lower']) if pd.notna(latest.get('boll_lower')) else None,
+            'bbi': float(latest['bbi']) if pd.notna(latest.get('bbi')) else None,
+            'ene_upper': float(latest['ene_upper']) if pd.notna(latest.get('ene_upper')) else None,
+            'ene_lower': float(latest['ene_lower']) if pd.notna(latest.get('ene_lower')) else None,
             'vol_ma5': float(latest['vol_ma5']) if pd.notna(latest.get('vol_ma5')) else None,
             'vol_ma10': float(latest['vol_ma10']) if pd.notna(latest.get('vol_ma10')) else None
         }

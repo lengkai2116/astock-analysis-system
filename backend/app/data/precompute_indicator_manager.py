@@ -103,6 +103,9 @@ class PrecomputeIndicatorManager:
           - **#38**：原 sharpe_5d/20d 硬编码 0.0；现按 mean/std 年化实算。
           - **#39**：原 except 仅 warning 无上下文；现 warning + exc_info，区分故障与合法空。
 
+        501号批次1（#R4）：10d/20d 各周期独立样本门槛——原仅 n5 有 _MIN_SAMPLES 检查，
+        少样本（如仅 1-2 个 10d/20d 可观测收益）静默产出误导性胜率；样本不足置 NaN。
+
         Returns:
             pd.DataFrame: 对齐 win_rate_cache 表结构的胜率记录
         """
@@ -205,8 +208,14 @@ class PrecomputeIndicatorManager:
                 if n5 < self._MIN_SAMPLES:
                     continue
                 wr5, avg5, sh5, _ = self._period_stats(rets[5])
-                wr10, _, _, _ = self._period_stats(rets[10])
-                wr20, avg20, sh20, _ = self._period_stats(rets[20])
+                # 501 #R4：10d/20d 各周期独立样本门槛——原仅 n5 有 _MIN_SAMPLES 检查，
+                # 少样本（如仅 1-2 个 10d/20d 可观测收益）静默产出误导性胜率；样本不足置 NaN
+                wr10, _, _, n10 = self._period_stats(rets[10])
+                wr20, avg20, sh20, n20 = self._period_stats(rets[20])
+                if n10 < self._MIN_SAMPLES:
+                    wr10 = float('nan')
+                if n20 < self._MIN_SAMPLES:
+                    wr20 = avg20 = sh20 = float('nan')
                 results.append({
                     'signal_type': strategy,
                     'samples': n5,
@@ -219,7 +228,9 @@ class PrecomputeIndicatorManager:
                     'sharpe_20d': round(sh20, 4),
                 })
             if results:
-                logger.info(f"胜率计算完成: {len(results)} 种策略类型（窗口 {self._WIN_HORIZONS}）")
+                # 501 #R51：惰性日志——参数化避免 f-string 无条件格式化
+                logger.info("胜率计算完成: %d 种策略类型（窗口 %s）",
+                            len(results), self._WIN_HORIZONS)
             return pd.DataFrame(results) if results else pd.DataFrame()
         except Exception as e:
             # #39：区分「DB/schema 故障」与「合法空」——保留上下文便于定位
@@ -234,7 +245,8 @@ class PrecomputeIndicatorManager:
                 "win_rate_cache", "SELECT * FROM win_rate_cache")
             if cached is not None and not cached.empty:
                 return cached
-        except Exception:
-            pass
+        except Exception as e:
+            # 501 #R26：区分「查询失败」与「无缓存」——失败记日志，不再静默吞掉
+            logger.warning(f"win_rate_cache 查询失败，回退实时计算: {e}", exc_info=True)
         # 无缓存 → 实时计算
         return self.compute_win_rates()

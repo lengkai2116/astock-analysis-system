@@ -17,8 +17,8 @@ class QLIB_RANK(BaseFactor):
     name_cn = "价格排名"
     category = "qlib"
     subcategory = "technical"
-    description = "过去N日价格在横截面中的排名"
-    formula = "Rank = rank(close)"
+    description = "过去N日价格在自身时序中的百分位排名（501 #R40：非横截面——calculate 只收单标的）"
+    formula = "Rank = rolling(close, N).rank(pct=True)"
     source = "QLib"
     source_detail = "QLib158"
 
@@ -35,8 +35,8 @@ class QLIB_LOW_RANK(BaseFactor):
     name_cn = "低价排名"
     category = "qlib"
     subcategory = "technical"
-    description = "过去N日最低价排名"
-    formula = "LowRank = rank(low)"
+    description = "过去N日最低价在自身时序中的百分位排名（501 #R40）"
+    formula = "LowRank = rolling(low, N).rank(pct=True)"
     source = "QLib"
     source_detail = "QLib158"
 
@@ -53,8 +53,8 @@ class QLIB_HIGH_RANK(BaseFactor):
     name_cn = "高价排名"
     category = "qlib"
     subcategory = "technical"
-    description = "过去N日最高价排名"
-    formula = "HighRank = rank(high)"
+    description = "过去N日最高价在自身时序中的百分位排名（501 #R40）"
+    formula = "HighRank = rolling(high, N).rank(pct=True)"
     source = "QLib"
     source_detail = "QLib158"
 
@@ -71,8 +71,8 @@ class QLIB_VOLUME_RANK(BaseFactor):
     name_cn = "成交量排名"
     category = "qlib"
     subcategory = "volume"
-    description = "过去N日成交量排名"
-    formula = "VolRank = rank(volume)"
+    description = "过去N日成交量在自身时序中的百分位排名（501 #R40）"
+    formula = "VolRank = rolling(volume, N).rank(pct=True)"
     source = "QLib"
     source_detail = "QLib158"
 

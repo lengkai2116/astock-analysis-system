@@ -10,7 +10,7 @@ from ..base import BaseFactor
 
 
 class Alpha001(BaseFactor):
-    """Alpha1: (-1"""
+    """Alpha1: (rank(ts_argmax(signedpower(returns, 2), 5)) - 0.5) * -1"""
     name = "Alpha001"
     name_cn = "Alpha1"
     category = "alpha101"
@@ -119,6 +119,9 @@ class Alpha006(BaseFactor):
     params = []
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
+        # 501 #R24：走基类 check_data 契约（vol 缺失时报契约错误而非裸 KeyError）
+        if not self.check_data(data):
+            raise ValueError(f"{self.name} 数据缺少必需列（required_columns={self._required_columns}）")
         return -1 * data['high'].rolling(window=5).corr(data['vol'])
 
 
@@ -136,6 +139,9 @@ class Alpha007(BaseFactor):
     params = []
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
+        # 501 #R24：走基类 check_data 契约（vol 缺失时报契约错误而非裸 KeyError）
+        if not self.check_data(data):
+            raise ValueError(f"{self.name} 数据缺少必需列（required_columns={self._required_columns}）")
         return -1 * data['open'].rolling(window=10).corr(data['vol'])
 
 
@@ -153,6 +159,9 @@ class Alpha008(BaseFactor):
     params = []
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
+        # 501 #R24：走基类 check_data 契约（vol 缺失时报契约错误而非裸 KeyError）
+        if not self.check_data(data):
+            raise ValueError(f"{self.name} 数据缺少必需列（required_columns={self._required_columns}）")
         return -1 * data['high'].rolling(window=10).corr(data['vol'])
 
 

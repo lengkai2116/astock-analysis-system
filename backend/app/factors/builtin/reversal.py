@@ -105,8 +105,10 @@ class CMO(BaseFactor):
 
         close = data["close"]
         diff = close.diff()
-        up = diff.where(diff > 0, 0)
-        down = -diff.where(diff < 0, 0)
+        # 501 #R42：保留 NaN（.where(diff>0) 不带 fill）——原 fill=0 把首行/NaN 缺口
+        # 当零动量计入滚动和，偏置 up/down；NaN 应传播（滚动和默认 skipna）
+        up = diff.where(diff > 0)
+        down = -diff.where(diff < 0)
 
         up_sum = up.rolling(window=period).sum()
         down_sum = down.rolling(window=period).sum()

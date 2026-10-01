@@ -103,7 +103,7 @@ class MOM(BaseFactor):
     name_cn = "动量"
     category = "momentum"
     subcategory = "price_momentum"
-    description = "计算价格绝对变化"
+    description = "计算价格绝对变化（501 #R60：裸价格差，量纲随价格水平；跨截面比较需先归一/用 ROC 等相对度量）"
     formula = "MOM = Close - Close_N"
     source = "GTJA"
     source_detail = "GTJA191"
@@ -131,13 +131,13 @@ class MACD_DIF(BaseFactor):
     source_detail = "QLib158"
 
     params = [
-        FactorParam("fast_period", 12, "int", 2, 252, "快线周期"),
-        FactorParam("slow_period", 26, "int", 2, 252, "慢线周期")
+        FactorParam("fast", 12, "int", 2, 252, "快线周期"),
+        FactorParam("slow", 26, "int", 2, 252, "慢线周期")
     ]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
-        fast = self.get_param("fast_period")
-        slow = self.get_param("slow_period")
+        fast = self.get_param("fast")
+        slow = self.get_param("slow")
 
         ema_fast = data["close"].ewm(span=fast, adjust=False).mean()
         ema_slow = data["close"].ewm(span=slow, adjust=False).mean()
@@ -159,15 +159,15 @@ class MACD_DEA(BaseFactor):
     source_detail = "QLib158"
 
     params = [
-        FactorParam("fast_period", 12, "int", 2, 252, "快线周期"),
-        FactorParam("slow_period", 26, "int", 2, 252, "慢线周期"),
-        FactorParam("signal_period", 9, "int", 2, 252, "信号周期")
+        FactorParam("fast", 12, "int", 2, 252, "快线周期"),
+        FactorParam("slow", 26, "int", 2, 252, "慢线周期"),
+        FactorParam("signal", 9, "int", 2, 252, "信号周期")
     ]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
-        fast = self.get_param("fast_period")
-        slow = self.get_param("slow_period")
-        signal = self.get_param("signal_period")
+        fast = self.get_param("fast")
+        slow = self.get_param("slow")
+        signal = self.get_param("signal")
 
         ema_fast = data["close"].ewm(span=fast, adjust=False).mean()
         ema_slow = data["close"].ewm(span=slow, adjust=False).mean()

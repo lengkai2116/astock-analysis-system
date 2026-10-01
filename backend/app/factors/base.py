@@ -65,10 +65,23 @@ class BaseFactor(ABC):
         """
         初始化因子
         """
-        # 设置参数默认值
+        # 501 #R5：类级可变属性（params/tags/related_factors/required_columns）每实例拷贝，
+        # 避免子类/调用方就地 mutate 污染全局因子定义。
+        # required_columns 字符串先归一为列表（#R38）；tags 内层 list 需深拷贝（浅拷贝仍共享）
         self.param_values = {}
-        for param in self.params:
-            self.param_values[param.name] = kwargs.get(param.name, param.default)
+        self._params = list(self.params)
+        self._tags = {k: list(v) if isinstance(v, (list, tuple)) else v
+                      for k, v in (self.tags or {}).items()}
+        self._related_factors = list(self.related_factors)
+        _req_cols = self.required_columns
+        if isinstance(_req_cols, str):
+            _req_cols = [_req_cols]
+        self._required_columns = list(_req_cols)
+        # 501 #R6：默认值按声明类型/范围校验（越界/非法抛 ValueError，不静默透传）
+        for param in self._params:
+            value = kwargs.get(param.name, param.default)
+            self._validate_param_value(param, value)
+            self.param_values[param.name] = value
 
     def get_param(self, name: str) -> Any:
         """
@@ -78,9 +91,55 @@ class BaseFactor(ABC):
 
     def set_param(self, name: str, value: Any):
         """
-        设置参数值
+        设置参数值（501 #R6：按声明类型/范围校验，非法抛 ValueError）
         """
+        for param in self._params:
+            if param.name == name:
+                self._validate_param_value(param, value)
+                self.param_values[name] = value
+                return
         self.param_values[name] = value
+
+    def _validate_param_value(self, param: FactorParam, value: Any):
+        """501 #R6：按 FactorParam 声明做类型/范围校验（int/float/list/str + min/max）
+
+        None 视为「未传」不校验（沿用默认值路径）；非法值抛 ValueError 而非静默透传
+        （原实现 period=0/负数直达 rolling(0)/ewm(com=-1)，产出异常或静默错值）。
+        """
+        if value is None:
+            return
+        if param.param_type == "int":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"因子 {self.name} 参数 {param.name} 需要 int，收到 {value!r}")
+            if param.min_val is not None and value < param.min_val:
+                raise ValueError(
+                    f"因子 {self.name} 参数 {param.name}={value} 低于下限 {param.min_val}")
+            if param.max_val is not None and value > param.max_val:
+                raise ValueError(
+                    f"因子 {self.name} 参数 {param.name}={value} 超过上限 {param.max_val}")
+        elif param.param_type == "float":
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"因子 {self.name} 参数 {param.name} 需要 float，收到 {value!r}")
+            if param.min_val is not None and value < param.min_val:
+                raise ValueError(
+                    f"因子 {self.name} 参数 {param.name}={value} 低于下限 {param.min_val}")
+            if param.max_val is not None and value > param.max_val:
+                raise ValueError(
+                    f"因子 {self.name} 参数 {param.name}={value} 超过上限 {param.max_val}")
+        elif param.param_type == "list":
+            if not isinstance(value, (list, tuple)):
+                raise ValueError(
+                    f"因子 {self.name} 参数 {param.name} 需要 list，收到 {type(value).__name__}")
+        elif param.param_type == "str":
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"因子 {self.name} 参数 {param.name} 需要 str，收到 {type(value).__name__}")
 
     def get_params_dict(self) -> Dict:
         """
@@ -98,16 +157,23 @@ class BaseFactor(ABC):
 
     def check_data(self, data: pd.DataFrame) -> bool:
         """
-        检查数据是否满足要求
+        检查数据是否满足要求（501 #R38：required_columns 字符串归一为列表；
+        #R27：空表/零行直接判 False，避免空序列被当成功结果）
         """
-        for col in self.required_columns:
+        cols = self._required_columns
+        if isinstance(cols, str):
+            cols = [cols]
+        if data is None or data.empty:
+            return False
+        for col in cols:
             if col not in data.columns:
                 return False
         return True
 
     def get_info(self) -> Dict:
         """
-        获取因子信息
+        获取因子信息（501 #R5：tags/relate/required_columns/params 均返回拷贝，
+        调用方 mutate 不再污染类级共享容器）
         """
         return {
             "name": self.name,
@@ -119,8 +185,9 @@ class BaseFactor(ABC):
             "source": self.source,
             "source_detail": self.source_detail,
             "examples": self.examples,
-            "tags": self.tags,
-            "relate": self.related_factors,
-            "params": [p.to_dict() for p in self.params],
-            "required_columns": self.required_columns
+            "tags": {k: list(v) if isinstance(v, (list, tuple)) else v
+                     for k, v in self._tags.items()},
+            "relate": list(self._related_factors),
+            "params": [p.to_dict() for p in self._params],
+            "required_columns": list(self._required_columns)
         }

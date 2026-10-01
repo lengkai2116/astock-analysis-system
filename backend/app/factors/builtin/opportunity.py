@@ -58,7 +58,8 @@ class PS_PERCENTILE_5Y(BaseFactor):
 
 
 class DIVIDEND_YIELD(BaseFactor):
-    """股息率（近12个月）"""
+    """股息率（近12个月）——501 #R54 登记：设计态因子（required_columns=[] 恒 NaN），
+    非缺陷；待分红数据就绪后实现（见 source_detail TODO）"""
     name = "DIVIDEND_YIELD"
     name_cn = "股息率"
     category = "valuation"
