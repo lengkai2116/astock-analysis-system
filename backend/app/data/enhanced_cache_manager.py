@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 _ecm_instance = None
 _ecm_lock = threading.Lock()
 
+# 506号 F1：建表/补列迁移/空壳自清理在**每个库文件上只须执行一次**。
+# 非单例 ECM 构造（chip_distribution_service / factor_precompute / 脚本）
+# 会重复触发 _init_tables 的数百条 DDL + 补列迁移 + 34 表空壳 count/DROP；
+# 全市场逐股构造场景实测 8000+ 次/日（2026-10-01）→ RAW-2 单只耗时从
+# 0.34s 恶化到 2.4~9s。按 db_path 记录已初始化库，后续构造直接跳过。
+# （按 db_path 而非全局布尔：测试常以不同 DATA_DIR 临时库构造 ECM，须各自建表。）
+_tables_initialized_paths: set = set()
+
 
 def get_ecm_instance() -> 'EnhancedCacheManager':
     global _ecm_instance
@@ -161,7 +169,12 @@ class EnhancedCacheManager:
         self.read_conn.execute("PRAGMA busy_timeout=30000")
         self.read_conn.execute("PRAGMA journal_size_limit=8388608")  # 426号 S4：8MB
 
-        self._init_tables()
+        global _tables_initialized_paths
+        if self.db_path not in _tables_initialized_paths:
+            self._init_tables()
+            # 506号 F1：仅首次构造时对该库执行建表/迁移/空壳自清理，避免逐股
+            # 重建 ECM 时重复全量 DDL（RAW-2 逐股路径实测 8000+ 次/日）。
+            _tables_initialized_paths.add(self.db_path)
         # 防御性收尾：_init_tables 内部已 commit；此处确保 __init__ 完成后
         # 总库主连接无任何残留事务（daemon 空闲期写锁不被本连接独占）。
         self.conn.commit()

@@ -15,7 +15,7 @@ import pandas as pd
 from flask import Blueprint, jsonify, request
 from sqlalchemy import create_engine
 
-from app.data.enhanced_cache_manager import EnhancedCacheManager
+from app.data.enhanced_cache_manager import EnhancedCacheManager, get_ecm_instance
 from app.data.factor_precompute import FactorPrecomputeManager
 from app.engine import BacktestEngine, get_strategy_pipeline
 from app.evaluation import FactorEvaluator
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 registry = get_factor_registry()
 calculator = FactorCalculator()
-cache_manager = EnhancedCacheManager()
+cache_manager = get_ecm_instance()
 precompute_manager = FactorPrecomputeManager(cache_manager)
 evaluator = FactorEvaluator()
 

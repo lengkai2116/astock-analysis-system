@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from app.data.enhanced_cache_manager import EnhancedCacheManager
+from app.data.enhanced_cache_manager import EnhancedCacheManager, get_ecm_instance
 from app.factors import FactorCalculator, get_factor_registry
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,8 @@ class FactorPrecomputeManager:
     """
 
     def __init__(self, cache_manager: Optional[EnhancedCacheManager] = None):
-        self.cache_manager = cache_manager or EnhancedCacheManager()
+        # 506号 F2：默认改用全局单例，避免无意构造非单例 ECM（与 chip 服务同因）
+        self.cache_manager = cache_manager or get_ecm_instance()
         self.calculator = FactorCalculator()
         self.registry = get_factor_registry()
         # 表由 ECM 统一管理，不再使用独立连接

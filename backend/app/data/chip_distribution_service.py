@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from .enhanced_cache_manager import EnhancedCacheManager
+from .enhanced_cache_manager import EnhancedCacheManager, get_ecm_instance
 
 logger = logging.getLogger(__name__)
 class ChipDistributionEstimator:
@@ -197,7 +197,10 @@ class ChipDistributionService:
     """
 
     def __init__(self, cache_manager: EnhancedCacheManager = None):
-        self.cache_manager = cache_manager or EnhancedCacheManager()
+        # 506号 F2：默认改用全局单例。本类在 RAW-2 逐股路径（ChipIndicators→
+        # ChipDistributionService）被构造，原 `EnhancedCacheManager()` 每次新建
+        # 非单例实例（5 连接 + 建表），实测拖慢单只 0.34s→2.4~9s。
+        self.cache_manager = cache_manager or get_ecm_instance()
         self.estimator = ChipDistributionEstimator()
 
     def calculate_chip_distribution(self,

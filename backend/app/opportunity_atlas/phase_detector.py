@@ -594,57 +594,10 @@ class PhaseDetectionEngine(DataAwareMixin):
         """ASR 信号 → 阶段"""
         return chip_signal.get("signal", PHASE_UNKNOWN)
 
-    # ═══════════════════════════════════════════════════════════
-    # 源1: TradingPhaseDetector
-    # ═══════════════════════════════════════════════════════════
-    def _run_trading_phase_detector(self, ts_code: str, df: pd.DataFrame) -> str:
-        """调用 TradingPhaseDetector 获取操盘阶段"""
-        if len(df) < 60:
-            return PHASE_UNKNOWN
-        try:
-            from app.data.chip_indicators import ChipIndicators
-            from app.engine.chip_strategy_impl import TradingPhaseDetector
-
-            chip_inds = ChipIndicators()
-            detector = TradingPhaseDetector(chip_inds)
-
-            # 构造简化的 chip_bins
-            self._chip_distribution_analysis(ts_code, df)
-            estimator = self._get_chip_estimator()
-            chip_dist, min_p, max_p, step = estimator.estimate(df)
-            chip_bins = []
-            if step > 0:
-                total = chip_dist.sum() or 1
-                chip_bins = [
-                    {"price_bin": round(min_p + i * step, 2),
-                     "chip_ratio": float(chip_dist[i] / total)}
-                    for i in range(len(chip_dist))
-                ]
-
-            indicators = chip_inds.calculate_all_indicators(
-                chip_bins, df["close"].values[-1], kline_data=df
-            )
-
-            moneyflow_data = None
-            try:
-                moneyflow_data = self._get_dm().get_cached_moneyflow(ts_code)
-            except Exception:
-                pass
-
-            phase_info = detector.detect_phase(
-                df, chip_bins, indicators, moneyflow_data=moneyflow_data
-            )
-            phase_raw = phase_info.get("phase", "")
-            mapping = {
-                "BUILDING": PHASE_BUILDING,
-                "WASHING": PHASE_WASHING,
-                "RAISING": PHASE_LIFTING,
-                "SHIPPING": PHASE_DISTRIBUTING,
-                "SUPPORT": PHASE_WASHING,
-            }
-            return mapping.get(phase_raw, PHASE_UNKNOWN)
-        except Exception:
-            return PHASE_UNKNOWN
+    # 506号 F4：删除死代码 `_run_trading_phase_detector`（"源1"路径）。
+    # compute_tags 走 _run_trading_phase_detector_v2（:354）；本方法零调用方，
+    # 且内部 `ChipIndicators()→ChipDistributionService()→EnhancedCacheManager()`
+    # 会构造非单例 ECM（F2 同因），属历史死路径 + 性能陷阱。
 
     # ═══════════════════════════════════════════════════════════
     # 源2: StageDetector

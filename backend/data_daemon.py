@@ -254,6 +254,7 @@ def _get_tushare_provider():
 _last_step_counts = {}  # 371号P0#3：管道步骤成功计数
 _jud_meta_cache = {}  # 371号JUD接入：{ts_code: enriched_meta_dict} 供 treemap_snapshot 读取
 _market_stats_cache = {}  # 411号Phase 10：全市场级统计预计算，供BociasiQuadrantAnalyzer消费
+_market_stats_last_done_date = None  # 506号 F3：market_stats 当日节流（成功落库的目标交易日）
 _account_risk_app = None  # 2026-09-29 OCR #3：账户风险钩子复用 Flask app（原每 10 分钟重建）
 _ic_recalc_check_date = None  # 2026-09-29 OCR #5：IC 重估检查按日节流（原每 30s tick 读 2 个 JSON）
 
@@ -3043,6 +3044,22 @@ def _precompute_preset_combos(codes):
         return
 
     logger.info(f"因子预计算: {len(mapped_factors)} 个因子, {len(codes)} 只股票")
+    # 506号 F5：断点续算——跳过 factor_cache 已有当日因子的股票。原实现每轮从
+    # codes[0] 顺序重跑，慢场景/多轮下已算股票反复重算、缺口股票永远排不到
+    # （2026-10-02 实测 factor_cache 09-30 distinct 恒 4126、完整参照 5532）。
+    try:
+        _td_rows = _shard_fetchall('daily_cache', 'SELECT MAX(trade_date) FROM daily_cache')
+        _td_f = str(_td_rows[0][0]) if _td_rows and _td_rows[0][0] else None
+        if _td_f:
+            _done = {r[0] for r in _shard_fetchall(
+                'factor_cache', "SELECT DISTINCT ts_code FROM factor_cache WHERE trade_date=?",
+                [_td_f])}
+            if _done:
+                _before = len(codes)
+                codes = [c for c in codes if c not in _done]
+                logger.info(f"  [RAW-3] 断点续算: 跳过已完成 {_before - len(codes)} 只，待算 {len(codes)} 只")
+    except Exception as _e:
+        logger.debug(f"RAW-3 断点续算检测失败，全量重跑: {_e}")
     fpm = FactorPrecomputeManager(_ecm)
     precomputed = 0
     timeout_count = 0
@@ -3282,7 +3299,7 @@ def _today_fmt() -> str:
     return datetime.now().strftime('%Y-%m-%d')
 
 
-def _precompute_market_stats(target_date: str | None = None):
+def _precompute_market_stats(target_date: str | None = None, force: bool = False):
     """411号Phase 10：全市场级统计预计算
 
     426号 P0-1 修复：7 项源查询改走分库路由（_shard_fetchall），源表空壳/
@@ -3294,7 +3311,33 @@ def _precompute_market_stats(target_date: str | None = None):
       （443号R6：原 now-1 硬算在周一/假期后落在非交易日 → 统计项全 None 不落库 → RAW-2 落空）。
     """
     global _market_stats_cache
+    global _market_stats_last_done_date
     _ensure_ecm()
+    # 506号 F3：当日节流。本函数位于 _drive_pipeline RAW 段，RAW 每 tick 都进入，
+    # 原实现每 tick 重跑一次（含分库统计读 + cache_market_stats 落库）——2026-10-01
+    # 实测 218 次、10-02 单轮 45+ 次，主循环 tick 由 30s 膨胀到 47~95s。
+    # 统计为日频，同一目标交易日成功落库一次即跳过（force=True 供脚本回补调用）。
+    global _market_stats_last_done_date
+    try:
+        from datetime import datetime, timedelta
+        _probe_today = target_date
+        if not _probe_today:
+            try:
+                from app.data.sharding_manager import sharding_manager
+                _ms_c = sharding_manager.get_connection(
+                    sharding_manager.get_db_for_table('daily_basic_cache'))
+                _ms_r = _ms_c.execute(
+                    "SELECT trade_date FROM daily_basic_cache ORDER BY trade_date DESC LIMIT 1"
+                ).fetchone()
+                _probe_today = str(_ms_r[0]) if _ms_r and _ms_r[0] else None
+            except Exception:
+                _probe_today = None
+        if (not force and _probe_today
+                and _market_stats_last_done_date == _probe_today
+                and _market_stats_cache):
+            return
+    except Exception:
+        pass
     try:
         from datetime import datetime, timedelta
         if target_date:
@@ -3549,6 +3592,8 @@ def _precompute_market_stats(target_date: str | None = None):
             _ecm_ref.cache_market_stats(stats)
         except Exception as e:
             logger.warning(f"市场级统计持久化失败: {e}")
+        # 506号 F3：记录已完成的目标交易日，供本函数入口当日节流
+        _market_stats_last_done_date = today
         logger.info(f"市场级统计预计算完成: {len(stats)}个指标（{today}）")
 
     except Exception as e:
@@ -3629,6 +3674,21 @@ def _precompute_raw_features(codes, target_date: str | None = None):
     if not codes:
         return
     logger.info(f"RAW-2 原料加工开始: {len(codes)} 只...")
+    # 506号 F5：断点续算——跳过 pre_feat_cache 已有当日特征的股票（同 RAW-3）。
+    # 原实现每轮从 codes[0] 重跑，慢场景下已算股票反复重算、缺口永远排不到。
+    try:
+        _td_rows2 = _shard_fetchall('daily_cache', 'SELECT MAX(trade_date) FROM daily_cache')
+        _td_2 = str(_td_rows2[0][0]) if _td_rows2 and _td_rows2[0][0] else None
+        if _td_2:
+            _done2 = {r[0] for r in _shard_fetchall(
+                'pre_feat_cache', "SELECT DISTINCT ts_code FROM pre_feat_cache WHERE trade_date=?",
+                [_td_2])}
+            if _done2:
+                _before2 = len(codes)
+                codes = [c for c in codes if c not in _done2]
+                logger.info(f"  [RAW-2] 断点续算: 跳过已完成 {_before2 - len(codes)} 只，待算 {len(codes)} 只")
+    except Exception as _e:
+        logger.debug(f"RAW-2 断点续算检测失败，全量重跑: {_e}")
 
     _ensure_ecm()
     from app import create_app
