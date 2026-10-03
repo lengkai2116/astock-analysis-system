@@ -321,8 +321,9 @@ class Dim7ValuationEngine(DataAwareMixin):
             dev_vals = dev_rows["tag_value"].dropna().astype(float).tolist()
             if dev_vals:
                 self._potential_tables["val"] = _lookup(sorted(dev_vals))
-        except Exception:
-            pass
+        except Exception as _e:
+            # 507批次2：val 分位基准构建失败→不设键（_compute_potential 默认 0.5）
+            logger.debug("dim7 val 分位基准构建失败: %s", _e)
 
         # B3修复：从fina_indicator_cache读取ROE（通过DataManager的分库路由）
         try:
@@ -330,8 +331,9 @@ class Dim7ValuationEngine(DataAwareMixin):
                 "SELECT roe FROM fina_indicator_cache")["roe"].dropna().tolist()
             if roe:
                 self._potential_tables["earn"] = _lookup(sorted(roe))
-        except Exception:
-            pass
+        except Exception as _e:
+            # 507批次2：earn 分位基准构建失败→不设键（走默认 0.5）
+            logger.debug("dim7 earn 分位基准构建失败: %s", _e)
 
         # 476号：不再 setdefault 空表（sector/trend/fund）——_compute_potential 仅 val/earn
         # 查表（缺键走默认 0.5），空表占位会让 _ensure_benchmarks 误判构建成功。

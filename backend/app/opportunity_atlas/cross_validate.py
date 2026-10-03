@@ -53,7 +53,9 @@ def _convert_dim_engine_to_legacy(der: dict) -> dict:
         try:
             from app.opportunity_atlas.light_derive import dim_light
             ol = dim_light(der, 'emotion')
-        except Exception:
+        except Exception as _e:
+            # 507批次2：light_derive 派生失败→回退 SIG 自产 overall_light
+            logger.debug("cross_validate light_derive(emotion) 失败，回退 overall_light: %s", _e)
             ol = (em.get('judgment') or {}).get('overall_light', 'yellow')
         dims['emotion'] = {'direction': 'up' if ol == 'green' else ('down' if ol == 'red' else 'neutral')}
     # 因子维（从 signal 维度派生）
@@ -80,8 +82,9 @@ def _load_dim_engine_results(dm, ts_code: str) -> dict | None:
             if val:
                 import json
                 return json.loads(val)
-    except Exception:
-        pass
+    except Exception as _e:
+        # 507批次2：dim_engine_results 读取失败→返回 None（调用方降级）
+        logger.debug("_load_dim_engine_results 失败 (%s): %s", ts_code, _e)
     return None
 
 

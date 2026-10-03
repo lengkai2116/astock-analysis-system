@@ -35,7 +35,9 @@ class RadarService(DataAwareMixin):
         try:
             info = self._get_dm().get_stock_info(ts_code)
             return info.get('name', '') if info else ''
-        except Exception:
+        except Exception as _e:
+            # 507批次2：股票名称查询失败→空名（雷达逐只调用，debug 级）
+            logger.debug("radar _get_stock_name 失败 (%s): %s", ts_code, _e)
             return ''
 
     # ══════════════════════════════════════════════════════

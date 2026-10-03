@@ -463,8 +463,9 @@ class Dim5EmotionEngine(DataAwareMixin):
                         df = ecm.get_cached_daily(ts_code)
                     if df is not None and not df.empty and len(df) >= 6:
                         quick_result = _bociasi_quickline(df)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    # 507批次2：静默降级改 debug（快线计算失败→保持默认 NEUTRAL）
+                    logger.debug("dim5 BOCIASI快线计算失败 [%s]: %s", ts_code, _e)
 
             # 慢线：从日线数据计算ERP（413 P2 T7：优先data_context）
             if ts_code:
@@ -474,8 +475,9 @@ class Dim5EmotionEngine(DataAwareMixin):
                         df_basic = ecm.get_cached_daily_basic(ts_code)
                     if df_basic is not None and not df_basic.empty:
                         slow_result = _bociasi_slowline(df_basic)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    # 507批次2：静默降级改 debug（慢线计算失败→保持默认 NEUTRAL）
+                    logger.debug("dim5 BOCIASI慢线计算失败 [%s]: %s", ts_code, _e)
 
             # 四象限：使用完整 BociasiQuadrantAnalyzer（含全市场DB查询）
             try:
@@ -493,11 +495,14 @@ class Dim5EmotionEngine(DataAwareMixin):
                     'fast_signal': quick_result.get('signal', 'NEUTRAL'),
                     'slow_signal': slow_result.get('signal', 'NEUTRAL'),
                 }
-            except Exception:
+            except Exception as _e:
+                # 507批次2：四象限分析失败→降级为快慢线简化四象限
+                logger.debug("dim5 四象限分析失败，降级简化口径 [%s]: %s", ts_code, _e)
                 quadrant = _bociasi_quadrant(quick_result, slow_result)
 
-        except Exception:
-            pass
+        except Exception as _e:
+            # 507批次2：BOCIASI 整体块失败→保持默认（快慢线/四象限初值）
+            logger.debug("dim5 BOCIASI整体计算失败，保持默认 [%s]: %s", tags.get('ts_code', ''), _e)
 
         # 2. 三层面情绪评估（BOCIASI quadrant 结果回写 market）
         market = _assess_market_emotion(tags, dims)
@@ -531,8 +536,9 @@ class Dim5EmotionEngine(DataAwareMixin):
                         sector['heat'] = info['heat_level']
                         sector['detail'] = f"板块{industry}(排名{info.get('rank', '?')})"
                         _sector_rank = info.get('rank')
-            except Exception:
-                pass
+            except Exception as _e:
+                # 507批次2：板块热度定位失败→保持默认（不产该段）
+                logger.debug("dim5 板块热度定位失败 [%s]: %s", tags.get('ts_code', ''), _e)
 
         # 4. 情绪温度（融合BOCIASI真实计算分数 + P10融资余额变化率）
         sp = tags.get('sentiment_phase', 'neutral')
@@ -555,8 +561,9 @@ class Dim5EmotionEngine(DataAwareMixin):
             _mstats = data_context.get('market_stats') if data_context else None
             if _mstats and isinstance(_mstats.get('ma20_ratio'), (int, float)):
                 _breadth = float(_mstats['ma20_ratio'])
-        except Exception:
-            pass
+        except Exception as _e:
+            # 507批次2：涨停/封板/广度入参读取失败→保持默认（温度缺项）
+            logger.debug("dim5 温度市场级入参读取失败 [%s]: %s", tags.get('ts_code', ''), _e)
 
         # P10: 获取融资余额变化率
         margin_change_pct = None
@@ -570,8 +577,9 @@ class Dim5EmotionEngine(DataAwareMixin):
                     rzye = margin_df['rzye'].dropna().astype(float)
                     if len(rzye) >= 5:
                         margin_change_pct = (rzye.iloc[-1] / rzye.iloc[0] - 1) if rzye.iloc[0] > 0 else None
-        except Exception:
-            pass
+        except Exception as _e:
+            # 507批次2：融资余额变化率读取失败→None（温度融资项中性）
+            logger.debug("dim5 融资余额变化率读取失败 [%s]: %s", tags.get('ts_code', ''), _e)
 
         temperature = calc_emotion_temperature(
             sentiment_phase=sp, limit_up_count=_limit_up,

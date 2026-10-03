@@ -1244,7 +1244,9 @@ def _relative_strength_sentence(ts_code: str) -> str:
         if not core:
             return ''
         return '相对强弱：' + '；'.join(core)
-    except Exception:
+    except Exception as _e:
+        # 507批次2：环境定位 helper 静默降级改 warning（数据源故障不应不可见）
+        logger.warning("dim8 相对强弱句构建失败 [%s]: %s", ts_code, _e)
         return ''
 
 
@@ -1286,7 +1288,9 @@ def _market_state_sentence(dim_results: dict) -> str:
         if not parts:
             return ''
         return '大盘状态：' + '；'.join(parts)
-    except Exception:
+    except Exception as _e:
+        # 507批次2：环境定位 helper 静默降级改 warning
+        logger.warning("dim8 大盘状态句构建失败: %s", _e)
         return ''
 
 
@@ -1318,7 +1322,9 @@ def _sector_position_sentence(dim_results: dict, ts_code: str) -> str:
         level_cn = {'top_10': '主线热点', 'top_20': '较活跃', 'top_40': '中等'}.get(level, level)
         rank_txt = f'（行业排名第{rank}）' if isinstance(rank, (int, float)) else ''
         return f'板块定位：{industry}板块{level_cn}{rank_txt}'
-    except Exception:
+    except Exception as _e:
+        # 507批次2：环境定位 helper 静默降级改 warning
+        logger.warning("dim8 板块定位句构建失败 [%s]: %s", ts_code, _e)
         return ''
 
 
@@ -1366,7 +1372,9 @@ def _index_trend_sentence(dim_results: dict) -> str:
         if not parts:
             return ''
         return '大盘趋势：' + '；'.join(parts)
-    except Exception:
+    except Exception as _e:
+        # 507批次2：环境定位 helper 静默降级改 warning
+        logger.warning("dim8 大盘趋势句构建失败: %s", _e)
         return ''
 
 
@@ -1409,7 +1417,9 @@ def _sector_full_sentence(dim_results: dict, ts_code: str) -> str:
         if not parts:
             return ''
         return f'行业：{name}（' + '、'.join(parts) + '）'
-    except Exception:
+    except Exception as _e:
+        # 507批次2：环境定位 helper 静默降级改 warning
+        logger.warning("dim8 行业句构建失败 [%s]: %s", ts_code, _e)
         return ''
 
 
@@ -1440,7 +1450,9 @@ def _industry_position_sentence(ts_code: str) -> str:
         if pos_cn:
             piece += f'，位置{pos_cn}'
         return f'个股行业位置：{piece}'
-    except Exception:
+    except Exception as _e:
+        # 507批次2：环境定位 helper 静默降级改 warning
+        logger.warning("dim8 个股行业位置句构建失败 [%s]: %s", ts_code, _e)
         return ''
 
 

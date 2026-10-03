@@ -737,7 +737,9 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
         _rsc_dir = _SIGNAL_CODE_DIRECTION.get(_sc_code, 0)
         _rsc_str = 0.6
         factors['signal_confirm'] = {'direction': _rsc_dir, 'strength': _rsc_str, 'evidence': [_sc_attr.get('detail', '')]}
-    except Exception:
+    except Exception as _e:
+        # 507批次2：signal_confirm 精细分类失败→回退 tags 粗判（K5 曾长期掩盖 NameError）
+        logger.debug("dim_adapter signal_confirm 精细分类失败，回退 tags 粗判: %s", _e)
         _rsc_dir = 0
         _rsc_str = 0.5
         _rsc_raw = tags.get('right_side_confirm', '未确认')

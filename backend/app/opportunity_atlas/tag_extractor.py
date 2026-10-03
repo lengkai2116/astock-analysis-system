@@ -220,8 +220,9 @@ def extract_fund_risk_tags(ts_code: str) -> dict:
                 net5 = mf['net_lg_amount'].dropna().tail(5).sum()
                 if abs(net5) > 0:
                     out['net_lg_amount_5d'] = str(round(float(net5), 2))
-        except Exception:
-            pass
+        except Exception as _e:
+            # 507批次2：moneyflow 近5日大单净额读取失败→跳过该键
+            logger.debug("extract moneyflow net_lg_amount_5d 失败 (%s): %s", ts_code, _e)
         # margin_cost_price：margin_cache rzmje 加权均价（近60日融资买入日）
         try:
             margin_df = dm.get_cached_margin(ts_code)
@@ -248,8 +249,9 @@ def extract_fund_risk_tags(ts_code: str) -> dict:
                     if len(_weights) >= 3 and sum(_weights) > 0:
                         out['margin_cost_price'] = str(round(
                             sum(w * p for w, p in zip(_weights, _prices)) / sum(_weights), 2))
-        except Exception:
-            pass
+        except Exception as _e:
+            # 507批次2：融资成本价加权均价计算失败→跳过该键
+            logger.debug("margin_cost_price 计算失败 (%s): %s", ts_code, _e)
         return out
     except Exception as e:
         logger.debug(f"extract_fund_risk_tags 失败 ({ts_code}): {e}")

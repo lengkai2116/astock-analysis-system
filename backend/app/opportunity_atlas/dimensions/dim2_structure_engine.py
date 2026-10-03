@@ -171,8 +171,9 @@ class Dim2StructureEngine(DataAwareMixin):
                     strength_details = list(score_result.get('details') or [])
                 else:
                     strength = 50
-            except Exception:
-                pass
+            except Exception as _e:
+                # 507批次2：结构健康度计算失败→strength 保持初值（不中断 dim2）
+                logger.debug("dim2 结构健康度计算失败: %s", _e)
         if isinstance(strength, dict):
             strength = strength.get('score', 50)
 
