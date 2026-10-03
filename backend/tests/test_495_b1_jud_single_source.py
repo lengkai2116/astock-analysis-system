@@ -183,9 +183,9 @@ class TestStatusEngineInjection:
         eng.registry = {}
         eng.dm = None
 
-        monkeypatch.setattr(eng, '_load_tags', lambda code: {'state_label': '上升'})
-        monkeypatch.setattr(eng, '_load_signals', lambda code: {})
-        monkeypatch.setattr(eng, '_signal_lifecycle', lambda code, t, s: {})
+        monkeypatch.setattr(eng, '_load_tags', lambda code, **k: {'state_label': '上升'})
+        monkeypatch.setattr(eng, '_load_signals', lambda code, **k: {})
+        monkeypatch.setattr(eng, '_signal_lifecycle', lambda code, t, s, **k: {})
         monkeypatch.setattr(eng, '_build_dim_engine_results',
                             lambda t, s, x, lc, ts_code=None: {'risk': {'judgment': {}}})
         monkeypatch.setattr(eng, '_convert_to_dims_format', lambda de, t: {})
