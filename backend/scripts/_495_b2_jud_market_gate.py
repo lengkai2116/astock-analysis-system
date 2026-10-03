@@ -45,7 +45,13 @@ from app.opportunity_atlas.status_engine import StatusEngine  # noqa: E402
 #   finance 64.2%、signal 66.6% 看空），叠加当日大跌（均值 -2.24%/跌 82%）→ 看空占比真实抬升。
 #   L2 reliability 两日基本一致（risk 0.670/0.685）→ 排除单维权重异常放大。
 #   2026-09-28 全市场 5552 只实测：enter 0.6 / light 0.4 / wait 13.5 / reduce 6.9 / avoid 78.5
-STATE_BASELINE = {'avoid': 78.5, 'wait': 13.5, 'reduce': 6.9, 'enter': 0.6, 'light': 0.4}
+# 507号（批次1/#S4，2026-10-03）：分布基线重定——`consensus_engine` 中性维计数修复
+#   （dict 值 float() 失败致「中性占比 >0.6」上限从未生效；修复后上限复活）。
+#   同日对照（09-30 全市场 5554 只，仅 S4 开关）：
+#     旧 enter0.4/light0.5/wait12.7/reduce6.7/avoid79.8 → 新 enter0.2/light0.3/wait10.5/reduce5.6/avoid83.3
+#   即 ≈195 只（3.5pt）由 wait/reduce/enter 下移 avoid（去「虚假高置信」）；direction 分布不变。
+#   2026-09-30 全市场 5554 只实测：enter 0.2 / light 0.3 / wait 10.5 / reduce 5.6 / avoid 83.3
+STATE_BASELINE = {'avoid': 83.3, 'wait': 10.5, 'reduce': 5.6, 'enter': 0.2, 'light': 0.3}
 STATE_TOL = 5.0
 _POSITIVE_BARS = {'strong_confirm', 'trend_confirm', 'light_confirm'}
 

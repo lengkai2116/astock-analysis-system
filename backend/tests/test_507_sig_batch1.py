@@ -103,3 +103,22 @@ def test_s5_event_block_log_warning_not_debug():
 
     src = inspect.getsource(m)
     assert '403号Q-05 EventMonitor检测跳过 [%s]' in src
+
+
+# ── #S4：consensus 中性维 dict 计数（补做） ──────────────────
+
+def test_s4_neutral_dict_counts_and_caps():
+    """dims_factor 值为 dict(direction=0) → 计入中性 → 中性占比>0.6 → consensus_rate 被 cap 0.5
+
+    修复前：dict 值 float(dict) 抛错被吞 → 中性=0 → 不 cap → consensus_rate=1.0。
+    """
+    from app.opportunity_atlas.consensus_engine import compute
+
+    zero = {'direction': 0, 'strength': 0.0}
+    dims_factor = {'chip_fund': 1.0}
+    for d in ('structure', 'signal', 'time', 'position', 'signal_confirm', 'vp',
+              'valuation', 'finance', 'emotion', 'event', 'factor', 'risk'):
+        dims_factor[d] = dict(zero)
+    out = compute(dims_factor, {'chip_fund': 1.0}, {}, 'normal')
+    assert out['consensus_rate'] == 0.5, (
+        f"中性维 dict 计数失效: consensus_rate={out['consensus_rate']}")

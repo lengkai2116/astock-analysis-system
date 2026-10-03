@@ -154,27 +154,47 @@ def _run_main_line(dim_results: dict) -> dict:
     return eng._aggregate_v390(t418.MOCK_TAGS, {}, l0, {}, merged, '000001.SZ')
 
 
-def test_main_line_baseline_is_enter():
-    """无 multi_level（fixture 原样）→ 维持 enter（回归：不误否决）"""
+def _bullish_dim_results(t418) -> dict:
+    """构造「真看多」fixture（507 #S4 校准）。
+
+    418 号 MOCK_DIM_RESULTS 本意是「强确认看多股」，但其实测 dims_factor 有 9/13 维中性
+    （chip_fund/emotion/risk 等的 direction 因字段位置/取值口径未命中 → 0），旧行为仅因
+    「中性占比 >0.6」上限**恒失效**（dict 计数 bug）才得 enter。507 修复该 bug 后，上限复活 →
+    该 fixture 正确落入 wait（9/13=0.69>0.6）。
+
+    本测试意图是验证「强确认看多 → enter；周线向下 → wait」的**大级别否决**链，需要一个
+    信息量达标（中性占比 <0.6）的看多样本，故局部补足 3 个方向票（不动共享 t418 fixture）：
+      chip_fund.judgment.phase='lifting'（拉升→+2）、emotion.market_phase='ferment'（发酵→+1）、
+      risk.低+rr≥1（→+1）→ 中性 6/13=0.46 <0.6，上限不触发。
+    """
+    dr = json.loads(json.dumps(t418.MOCK_DIM_RESULTS))  # 深拷贝，避免污染共享 fixture
+    dr['chip_fund']['judgment']['phase'] = 'lifting'
+    dr['emotion']['status_description']['market_phase'] = 'ferment'
+    dr['risk']['judgment']['risk_level'] = '低'
+    dr['risk']['status_description']['rr_value'] = 2.0
+    return dr
+
+
+def _load_t418(tag: str):
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        't418b', os.path.join(os.path.dirname(__file__), 'test_418_jud_v390.py'))
+        tag, os.path.join(os.path.dirname(__file__), 'test_418_jud_v390.py'))
     t418 = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(t418)
-    r = _run_main_line(dict(t418.MOCK_DIM_RESULTS))
+    return t418
+
+
+def test_main_line_baseline_is_enter():
+    """无 multi_level（看多 fixture 原样）→ 维持 enter（回归：不误否决）"""
+    t418 = _load_t418('t418b')
+    r = _run_main_line(_bullish_dim_results(t418))
     assert r['opportunity_state'] == 'enter', f"基线应 enter，实际 {r['opportunity_state']}"
 
 
 def test_main_line_weekly_down_vetoes():
     """主链：dim_results 注入 weekly=down → opportunity_state 降 wait（R-2 生效）"""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        't418c', os.path.join(os.path.dirname(__file__), 'test_418_jud_v390.py'))
-    t418 = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(t418)
-    dr = dict(t418.MOCK_DIM_RESULTS)
-    dr['structure'] = dict(dr['structure'])
-    dr['structure']['status_description'] = dict(dr['structure']['status_description'])
+    t418 = _load_t418('t418c')
+    dr = _bullish_dim_results(t418)
     dr['structure']['status_description']['multi_level'] = {
         'direction_map': {'weekly': 'down', 'daily': 'up'}}
     r = _run_main_line(dr)
