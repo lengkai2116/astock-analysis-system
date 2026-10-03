@@ -2,7 +2,7 @@
 
 # 507号｜SIG 板块 OCR 核查与处置
 
-**版本**：v1.5（2026-10-03；批次1 全部已决（#S1~#S5）+ 批次2 静默 except + 批次3 键错位（#S15）+ **批次4 数值安全（#S16~#S23）**，见 §十~§十四）
+**版本**：v1.6（2026-10-03；批次1 #S1~#S5 + 批次2 静默 except + 批次3 键错位 + 批次4 数值安全 + **批次5 契约/文档漂移**，见 §十~§十五）
 **v1.1 批次1 实施（2026-10-03）**：用户「开507号批次1实施」。按 §七 批次1（原定 #S1/#S2/#S3/#S4/#S5）开工，**实施中发现两项与既有拍板冲突**：
 - **已实施（零回归，全量 2019 passed）**：**#S1** `dim3_vp_engine` 补模块级 `logger` + 惰性日志；**#S3** daemon RAW-2 筹码指标（SSRP 等）**前移**至 `compute_tags` 之前并注入 `extra_tags['ssrp']`（step13 复用 `_chip_pre`，避免逐股重复 estimate）；**#S5** `dim6_risk_engine` ST 升格 `int(float(...))` 守卫 + 事件块日志 debug→warning。
 - **暂缓（触及 494 号用户 2026-09-28 拍板标定，须单独决策）**：**#S2** `emotion_temperature` `None→0`——docstring 承诺中性 50，但 494 故意依赖 `None→0`（冰点真冰点 32.5 < `ICE_RECOVERY_TEMP=35`）；改 50 会越门误判「冰点回升」并放宽仓位上限（连带 6 项测试失败）。**#S4** `consensus_engine` 中性维 dict 计数——修复会让「中性占比 >0.6」上限**复活**，改变 JUD `_aggregate_v390` 输出（494 fixture 由 enter→wait，连带 2 项测试失败）。两者均为**行为变更**，非无副作用修复。
@@ -417,6 +417,28 @@
 **§4.4 排除项**：`conflict_matrix:272` C13 除零——守卫 `dist_to_support_pct < 0` 已隐含非 0，**非缺陷**。
 
 **验证**：`py_compile` OK；ruff **零新增**（dim6 1 = HEAD 基线 F841 `ce`，其余 0）；探针 `tests/test_507_batch4_numeric_safety.py`（11 断言）；**全量 `tests/` 2046 passed 2 skipped 9 xfailed 零失败**（基线 2012 + 探针 34）。daemon 跑完已重启。
+
+---
+
+## 十五、批次5 实施记录（契约/签名/文档漂移，2026-10-03，v1.6）
+
+**用户输入**：「开批次5」→ 只读核对 §4.6 各站点（多为文档/契约失真，零行为变更）。
+
+**实施（4 项）**：
+
+| # | 站点 | 处置 |
+|---|---|---|
+| #S24 | `valuation_estimator._fina_health` docstring | 3 元组 → **4 元组**（实返含 `roce_na`，:825 `return health, roce_pass, roce_na, df_fina`） |
+| #S26 | `arbiter.py` docstring P2 | 「deep→avoid 硬否决」→ **强提示**（335号 S2.3 已改实现） |
+| #S27 | `enum_cn_map.ma_alignment_cn` docstring | 删「未知名返回哨兵」错述（实回落原值，调用方兜底） |
+| #S29 | `status_engine._apply_l0` | yaml 缺 `emotion_position_cap` 时补默认 `l0['emotion_position_cap']=0.6`（原不产键 → 下游 `advice_engine.get()` None） |
+
+**核实非缺陷/登记**：
+- #S25 `build_fcf_percentile(ecm)` 参数忽略 + **全仓无调用方（死方法）** → 批次6（死代码）。
+- #S28 `pattern_code_cn` `description.split(':')` 无冒号返整段 → 弱（实际描述恒含冒号），低。
+- #S30 `advice_builder` R:R 门 → **死副本**（文件自注「生效副本见 advice_engine」）；生效版 `advice_engine:591-594` R:R 门**正确**（`<RR_GATE=2.0`）。
+
+**验证**：`py_compile` OK；ruff 零新增（4 文件全 0）；探针 `tests/test_507_batch5_contract_drift.py`（4 断言）；**全量 `tests/` 2050 passed 2 skipped 9 xfailed 零失败**（基线 2012 + 探针 38）。daemon 跑完已重启。
 
 ---
 
