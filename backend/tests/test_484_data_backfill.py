@@ -228,30 +228,14 @@ class TestHolderReduceDetector:
 
 
 class TestIndustryBlacklist:
-    """484-3：东财行业黑名单（仅黑名单最小口径，用户拍板）"""
+    """484-3：东财行业黑名单（仅黑名单最小口径，用户拍板）
 
-    def _risk_filter(self, industry):
-        dm = SimpleNamespace(get_stock_info=lambda code: {'industry': industry})
-        from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import FinancialRiskFilter
-        f = object.__new__(FinancialRiskFilter)
-        f.data_manager = dm
-        return f
-
-    def test_real_estate_blacklisted(self):
-        r = self._risk_filter('全国地产')._check_industry_risk('000002.SZ')
-        assert r['passed'] is False
-        assert '行业雷' in r['reason']
-
-    def test_normal_industry_passes(self):
-        r = self._risk_filter('白酒')._check_industry_risk('600519.SH')
-        assert r['passed'] is True
-
-    def test_no_industry_passes(self):
-        r = self._risk_filter(None)._check_industry_risk('000001.SZ')
-        assert r['passed'] is True
+    507批次6：dim4 内 FinancialRiskFilter 死副本已删（生产零实例化），
+    本类仅验证生效副本 framework/chip_pre_filter 的黑名单。
+    """
 
     def test_chip_pre_filter_synced(self):
-        """chip_pre_filter 双份同黑名单"""
+        """chip_pre_filter 生效副本行业黑名单"""
         from app.engine.framework.chip_pre_filter import FinancialRiskFilter as FRF
         from app.engine.framework.chip_pre_filter import INDUSTRY_RISK_BLACKLIST
         assert '全国地产' in INDUSTRY_RISK_BLACKLIST
@@ -259,9 +243,6 @@ class TestIndustryBlacklist:
         f = object.__new__(FRF)
         f.data_manager = dm
         assert f._check_industry_risk('000002.SZ')['passed'] is False
-
-    def test_blacklist_contains_core_real_estate(self):
-        from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import INDUSTRY_RISK_BLACKLIST
         for ind in ['全国地产', '区域地产', '房产服务', '园区开发', '装修装饰']:
             assert ind in INDUSTRY_RISK_BLACKLIST, ind
 

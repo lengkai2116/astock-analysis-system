@@ -202,7 +202,7 @@ class TestAssessVsZhongshu:
     def test_valid_zhongshu_above_with_time_label(self):
         # 有效中枢（end_date 距今 <6 个月）→ 判定 + 中枢时间标注（前复权口径展示=实际价）
         recent = _mk_zs('2026-08-01', '2026-09-01', 19.0, 23.0)
-        r = _assess_vs_zhongshu({}, {}, {'zhongshu': [recent]}, latest_close=30.0,
+        r = _assess_vs_zhongshu({}, {'zhongshu': [recent]}, latest_close=30.0,
                                 last_date='2026-09-17')
         assert r['position'] == '上方'
         assert '2.30' not in r['detail']  # 无 scale 换算，直接展示实际价
@@ -212,7 +212,7 @@ class TestAssessVsZhongshu:
     def test_no_valid_zhongshu(self):
         # 旧中枢失效（end_date 距今 >6 个月）→ 无有效中枢文案（不再拿旧中枢伪对比）
         stale = _mk_zs('2025-01-01', '2025-03-01', 19.0, 23.0)
-        r = _assess_vs_zhongshu({}, {}, {'zhongshu': [stale]}, latest_close=3.0,
+        r = _assess_vs_zhongshu({}, {'zhongshu': [stale]}, latest_close=3.0,
                                 last_date='2026-09-17')
         assert r['position'] == '无有效中枢'
         assert '趋势延续' in r['detail']

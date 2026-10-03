@@ -60,28 +60,28 @@ class TestZhongshuLocationRatio:
 
     def test_ratio_inside(self):
         """价格在中枢内部 → 0<ratio<1"""
-        r = _assess_vs_zhongshu({}, {}, chanlun_result={'zhongshu': [_mk_zs(15, 10)]},
+        r = _assess_vs_zhongshu({}, chanlun_result={'zhongshu': [_mk_zs(15, 10)]},
                                 latest_close=12.5)
         assert r['position'] == '内部'
         assert r['ratio'] == pytest.approx(0.5, abs=0.01)
 
     def test_ratio_above(self):
         """价格在中枢上方 → ratio>1"""
-        r = _assess_vs_zhongshu({}, {}, chanlun_result={'zhongshu': [_mk_zs(15, 10)]},
+        r = _assess_vs_zhongshu({}, chanlun_result={'zhongshu': [_mk_zs(15, 10)]},
                                 latest_close=20.0)
         assert r['position'] == '上方'
         assert r['ratio'] > 1.0
 
     def test_ratio_below(self):
         """价格在中枢下方 → ratio<0"""
-        r = _assess_vs_zhongshu({}, {}, chanlun_result={'zhongshu': [_mk_zs(15, 10)]},
+        r = _assess_vs_zhongshu({}, chanlun_result={'zhongshu': [_mk_zs(15, 10)]},
                                 latest_close=5.0)
         assert r['position'] == '下方'
         assert r['ratio'] < 0.0
 
     def test_ratio_none_when_no_zs(self):
         """无有效中枢 → ratio=None（降级，不占位）"""
-        r = _assess_vs_zhongshu({}, {}, chanlun_result={'zhongshu': []}, latest_close=12.5)
+        r = _assess_vs_zhongshu({}, chanlun_result={'zhongshu': []}, latest_close=12.5)
         assert r['position'] == '无有效中枢'
         assert r['ratio'] is None
 
