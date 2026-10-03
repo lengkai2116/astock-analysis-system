@@ -25,7 +25,7 @@ MA_ALIGNMENT_CN_EXT = {**MA_ALIGNMENT_CN, '多头排列': '多头排列', '空�
 
 
 def ma_alignment_cn(value) -> str:
-    """ma_alignment → 中文现状描述，未知名返回 '均线数据不足' 交由调用方兜底"""
+    """ma_alignment → 中文现状描述；未知名回落原值（507批次5 #S27：非哨兵，调用方自行兜底）"""
     return MA_ALIGNMENT_CN.get(str(value or '').strip().lower(), str(value or ''))
 
 

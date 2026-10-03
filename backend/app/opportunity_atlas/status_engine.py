@@ -863,6 +863,10 @@ class StatusEngine:
                     f"（个股右侧确认={tags.get('right_side_confirm', '') or '无'}，仅附注）")
             else:
                 l0['emotion_position_cap'] = float(_caps.get(_phase, _caps.get('normal', 0.6)))
+        else:
+            # 507批次5 #S29：yaml 缺 emotion_position_cap 时原不产 l0 键 → 下游 advice_engine
+            #   `l0.get('emotion_position_cap')` 得 None（非默认 0.6）；补显式默认键防缺口
+            l0['emotion_position_cap'] = 0.6
         # L0c 持有期（阶段登记于 yaml l0.hold_only_stages → 只可持有、不新开仓）
         _hold_stages = _l0_cfg.get('hold_only_stages') or ['已延伸']
         if lifecycle and lifecycle['stage'] in _hold_stages:

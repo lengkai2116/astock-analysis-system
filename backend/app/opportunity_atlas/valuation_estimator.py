@@ -692,11 +692,12 @@ class ValuationEngine(DataAwareMixin):
     # 财务质量评分
     # ═══════════════════════════════════════════════
 
-    def _fina_health(self, ts_code: str) -> tuple[str, bool, pd.DataFrame]:
-        """返回 (fina_health, roce_pass, df_fina)
+    def _fina_health(self, ts_code: str) -> tuple[str, bool, bool, pd.DataFrame]:
+        """返回 (fina_health, roce_pass, roce_na, df_fina)
 
         fina_health: 'pass' | 'suspicious' | 'fail'
         roce_pass: bool
+        roce_na: bool（无 ROCE 数据；仅「有数据且<15%」才触发价值陷阱惩罚，449号）
         df_fina: 财务指标表（315号阶段2 质量修正复用，避免二次查询）
         """
         dm = self._get_dm()

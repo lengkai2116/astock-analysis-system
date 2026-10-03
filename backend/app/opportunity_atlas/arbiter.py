@@ -9,7 +9,7 @@
 仲裁优先级（321号 §3.2，从上到下逐级判定，命中即止）：
   P0 硬否决    right_side_confirm=否决 → avoid（覆盖一切）
   P1 硬风险    gate.hard_risks 含 event_negative（监管立案）→ avoid
-  P2 深度高估  gate.valuation=deep → avoid
+  P2 深度高估  gate.valuation=deep → 强提示（335号 S2.3：不再硬否决，改 evidence 提示）
   P3 强看空    L4 direction=bearish 且 consensus_rate≥0.65 → avoid
   P4 未确认    right_side_confirm=未确认 → wait
   P5 可轻仓    right_side_confirm=基础确认 且 非强看空 → light
