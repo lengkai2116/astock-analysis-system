@@ -2,7 +2,7 @@
 
 # 507号｜SIG 板块 OCR 核查与处置
 
-**版本**：v1.8（2026-10-03；批次1 #S1~#S5 + 批次2 静默 except + 批次3 键错位 + 批次4 数值安全 + 批次5 契约/文档漂移 + 批次6 死代码/防御/性能 + dim4 死副本 + **批次7 潜伏/非管道（#S6 backtest asof_date/#S10 radar Top-N）**，见 §十~§十七）
+**版本**：v1.9（2026-10-03；批次1 #S1~#S5 + 批次2 静默 except + 批次3 键错位 + 批次4 数值安全 + 批次5 契约/文档漂移 + 批次6 死代码/防御/性能 + dim4 死副本 + 批次7 潜伏/非管道 + **批次8 Q1/Q2/Q4 处置**，见 §十~§十八）
 **v1.1 批次1 实施（2026-10-03）**：用户「开507号批次1实施」。按 §七 批次1（原定 #S1/#S2/#S3/#S4/#S5）开工，**实施中发现两项与既有拍板冲突**：
 - **已实施（零回归，全量 2019 passed）**：**#S1** `dim3_vp_engine` 补模块级 `logger` + 惰性日志；**#S3** daemon RAW-2 筹码指标（SSRP 等）**前移**至 `compute_tags` 之前并注入 `extra_tags['ssrp']`（step13 复用 `_chip_pre`，避免逐股重复 estimate）；**#S5** `dim6_risk_engine` ST 升格 `int(float(...))` 守卫 + 事件块日志 debug→warning。
 - **暂缓（触及 494 号用户 2026-09-28 拍板标定，须单独决策）**：**#S2** `emotion_temperature` `None→0`——docstring 承诺中性 50，但 494 故意依赖 `None→0`（冰点真冰点 32.5 < `ICE_RECOVERY_TEMP=35`）；改 50 会越门误判「冰点回升」并放宽仓位上限（连带 6 项测试失败）。**#S4** `consensus_engine` 中性维 dict 计数——修复会让「中性占比 >0.6」上限**复活**，改变 JUD `_aggregate_v390` 输出（494 fixture 由 enter→wait，连带 2 项测试失败）。两者均为**行为变更**，非无副作用修复。
@@ -515,6 +515,32 @@
 **同步测试**：`test_495_b1_jud_single_source.py` 三处 monkeypatch lambda 接受 `asof_date`（新签名对齐）。
 
 **验证**：`py_compile` OK；ruff 零新增（3 文件全 0）；探针 `tests/test_507_batch7_backtest_radar.py`（**11 断言**：#S6 asof_date 数据源选择×4/历史收盘价/evaluate 签名/backtest 逐日传参/param_stability 报错、#S8/#S9 关闭、#S10 排序后截断+Top-N 取名）；**全量 `tests/` 2090 passed 2 skipped 9 xfailed 零失败**（基线 2079 + 探针 11）；全市场 JUD 门禁 **H1/H2/H3+R1 全 PASS**（5554 只，五档分布不变＝evaluate 签名向后兼容）。daemon 跑完已重启。
+
+---
+
+## 十八、批次8 实施记录（剩余拍板项 Q1/Q2/Q4 + 死方法，2026-10-03，v1.9）
+
+**用户输入**：「开批次8」→ 只读核查 Q1~Q4 + 登记-10/11 + 批次6 登记 → 三项拍板（**范围＝死代码+Q1+Q4 / Q1 删死方法+死分支 / Q4 补 risk_level 回退**）+ **Q2 本批确认并修**。
+
+### 核查结论
+
+| 项 | 状态 | 处置 |
+|---|---|---|
+| **Q1**（#S7 dim4 ASR 单位 bug） | `_chip_distribution_analysis`(:1097) 信号分支用 **0~1 `asr` 比 0~100 阈值**；`result['signal']` 唯一消费者 `_asr_to_phase`(:1122) 死方法（零调用）→ 生产无影响（死分支） | **删死方法+死分支**（拍板） |
+| **Q2**（dim7 `dev>30` 符号） | **符号事实查清**：`composite` 大=低估（dim7 `_compute_valuation` level 判定）、`deviation=composite*20` → **`valuation_deviation` 正=低估**（与 potential:144 注释一致）；但 potential:214 `dev>30` 惩罚注释「极端泡沫（正偏离过大）」与正=低估**矛盾**（正偏离=深度低估被罚 0.3） | **价值陷阱防御→改注释**（拍板，零行为） |
+| **Q3**（SIGNAL_ADJUSTMENT） | 已随批次6 `ChipPositionManager` 死副本删除 | ✅ 关闭 |
+| **Q4**（light_derive） | `_risk_source_is_high` dict 分支只读 `level`（`risk_light` 读 `judgment.risk_level or level`）；dict 形态仅历史/测试构造 | **补 risk_level 回退**（拍板，零行为） |
+| **登记-10**（dim3 breakdown） | 确认不可达（-4.0 子集被 -2.0 selling_pressure 先吞）——修则变 granville 标签 | **登记**（行为变更，另批拍板） |
+| **登记-11**（dim5 严重背离） | **已关闭**：447号 T4a 已让 dim3 产 `judgment.state='严重背离'`，`_vp_state` 分支可达（批次3 核查未注意 447 号） | ✅ 关闭 |
+| 批次6 登记（event_monitor/potential_engine 行为增强） | 行为变更 | **登记**（另批拍板） |
+
+### 实施
+
+- **Q1**：删 `_asr_to_phase` 死方法 + `_chip_distribution_analysis` 内 ASR 信号 5 分支（`result['signal']` 无消费者；`PHASE_LIFTING/BUILDING/DISTRIBUTING/WASHING` 赋值随删）；保留 `result['asr']`/`result['peak_position']`（被 `_dim_chip` 消费）。**零行为**。
+- **Q4**：`light_derive._risk_source_is_high` dict 分支 `s.get('level')` → `s.get('risk_level') or s.get('level')`（对齐 `risk_light` 读法）。**零行为**（live 字符串列表路径不变）。
+- **Q2**：`potential_engine` :213 注释「风险否决：极端泡沫（正偏离过大）」→「价值陷阱防御」（deviation 正=低估 → dev>30=深度低估=价值陷阱，配合 fina_health 质量降权双重防御）。**惩罚条件保留，零行为**。
+
+**验证**：`py_compile` OK；ruff 零新增（3 文件全 0）；探针 `tests/test_507_batch8_remaining.py`（**11 断言**：Q1 死方法/死分支删除、Q2 注释订正+条件保留+符号口径、Q4 dict risk_level 回退×6、登记-11 可达性确认）；**全量 `tests/` 2101 passed 2 skipped 9 xfailed 零失败**（基线 2090 + 探针 11）；全市场 JUD 门禁 **H1/H2/H3+R1 全 PASS**（5554 只，分布不变＝Q1/Q2/Q4 均零行为）。daemon 跑完已重启。
 
 ---
 
