@@ -404,7 +404,10 @@ def _fmt_slowline(sr: dict) -> str:
 _QUADRANT_DETAIL_CN = {
     'ma20_ratio': 'MA20强势占比', 'turnover_percentile': '换手分位', 'limit_ratio': '涨跌停比',
     'rsi_percentile': 'RSI分位', 'erp_percentile': 'ERP分位', 'margin_trend': '融资趋势',
-    'dv_bond': '股债差',
+    # 507号批次3 #S15：生产者 BociasiQuadrantAnalyzer._cache 实键为 'dv_bond_diff'
+    #   （见 app/engine/framework/bociasi_quadrant.py:189/193），原键 'dv_bond' 无生产者
+    #   → 股债差明细被静默丢弃（_fmt_quadrant 遍历本表时命中不到）。
+    'dv_bond_diff': '股债差',
 }
 
 
