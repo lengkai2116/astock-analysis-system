@@ -2,7 +2,7 @@
 
 # 507号｜SIG 板块 OCR 核查与处置
 
-**版本**：v1.7（2026-10-03；批次1 #S1~#S5 + 批次2 静默 except + 批次3 键错位 + 批次4 数值安全 + 批次5 契约/文档漂移 + **批次6 死代码/防御/性能 + dim4 死副本**，见 §十~§十六）
+**版本**：v1.8（2026-10-03；批次1 #S1~#S5 + 批次2 静默 except + 批次3 键错位 + 批次4 数值安全 + 批次5 契约/文档漂移 + 批次6 死代码/防御/性能 + dim4 死副本 + **批次7 潜伏/非管道（#S6 backtest asof_date/#S10 radar Top-N）**，见 §十~§十七）
 **v1.1 批次1 实施（2026-10-03）**：用户「开507号批次1实施」。按 §七 批次1（原定 #S1/#S2/#S3/#S4/#S5）开工，**实施中发现两项与既有拍板冲突**：
 - **已实施（零回归，全量 2019 passed）**：**#S1** `dim3_vp_engine` 补模块级 `logger` + 惰性日志；**#S3** daemon RAW-2 筹码指标（SSRP 等）**前移**至 `compute_tags` 之前并注入 `extra_tags['ssrp']`（step13 复用 `_chip_pre`，避免逐股重复 estimate）；**#S5** `dim6_risk_engine` ST 升格 `int(float(...))` 守卫 + 事件块日志 debug→warning。
 - **暂缓（触及 494 号用户 2026-09-28 拍板标定，须单独决策）**：**#S2** `emotion_temperature` `None→0`——docstring 承诺中性 50，但 494 故意依赖 `None→0`（冰点真冰点 32.5 < `ICE_RECOVERY_TEMP=35`）；改 50 会越门误判「冰点回升」并放宽仓位上限（连带 6 项测试失败）。**#S4** `consensus_engine` 中性维 dict 计数——修复会让「中性占比 >0.6」上限**复活**，改变 JUD `_aggregate_v390` 输出（494 fixture 由 enter→wait，连带 2 项测试失败）。两者均为**行为变更**，非无副作用修复。
@@ -481,6 +481,40 @@
 - dim1 通知 daemon 补采 f-string 日志（低频非热路径）。
 
 **验证**：`py_compile` OK；ruff **零新增**（opportunity_atlas 仅 HEAD 基线 2 处：dim5 I001/dim6 F841 `ce`）；探针 `tests/test_507_batch6_deadcode_perf.py`（**33 断言**：#S14 补产/分档阈值/评分恢复、#S25 ecm 优先/回退、死副本删除+保留、死参数签名、dim3 macd、shared_vol_ratio logger）；**全量 `tests/` 2079 passed 2 skipped 9 xfailed 零失败**（基线 2050 + 探针 33 − 死副本测试 4）；全市场 JUD 门禁 `_495_b2_jud_market_gate.py` **H1/H2/H3+R1 全 PASS**（5554 只 43s，五档分布不变＝#S14 补产未破坏判定）。daemon 跑完已重启。
+
+---
+
+## 十七、批次7 实施记录（潜伏 + 非管道，2026-10-03，v1.8）
+
+**用户输入**：「开批次7」→ 只读核查 #S6/#S8/#S10（+ #S9）→ 两项拍板（**#S6 完整修复＝evaluate 加 asof_date / #S10 排序后截断 + Top-N 取名**）。
+
+### 核查结论（#S8/#S9 已随批次6 自动关闭）
+
+| 项 | 现状 | 处置 |
+|---|---|---|
+| **#S8**（dim4 缺 `BenchmarkService` 导入） | 原在死副本 `MarketEnvironmentFilter`/`CircuitBreaker`(:3901/:4104)——**批次6 已删**，dim4 无残留引用；framework 生效副本 :19 有正确导入 | ✅ **自动关闭** |
+| **#S9**（`get_risk_tags` 读不存在的 `roce` 键） | dim4 死副本已删；framework 版 :959 存在但**全仓无调用方**（死方法） | ✅ **自动关闭** |
+| **#S6**（backtest 前视偏差） | 确认：`run()` 逐日调 `evaluate(ts_code)` 返回同一「当前」状态；`param_stability_check` 的 `JUD_PARAM_*` 环境变量**全仓无任何消费方**（引擎不读→静默无效）；模块零调用方（387 调优备用） | **完整修复**（拍板） |
+| **#S10**（radar 排序前截断） | 确认：`:78` `candidates[:200]` 排序前截断 → Top-N 失效（高信号强度但排位 200 后股票被静默排除）；循环全量 N+1 取名 | **修复**（拍板） |
+
+### 实施
+
+**#S6 完整修复（StatusEngine.evaluate 支持历史求值）**：
+- `StatusEngine.evaluate(ts_code, dim_results=None, asof_date=None)`——新增 `asof_date`（YYYY-MM-DD/YYYYMMDD 兼容，`_norm_date` 归一化）：
+  - `_load_tags(ts_code, asof_date)` → `get_pre_feat(trade_date=YYYY-MM-DD)`（pre_feat_cache 按日历史行）
+  - `_load_signals(ts_code, asof_date)` → `get_signal_detail(trade_date=YYYYMMDD)`（strategy_signal_detail 按日历史行）
+  - `_signal_lifecycle(..., asof_date)` → 用截至该日收盘价算 dist_pct（原恒用最新收盘）
+  - `raw_pre_feat`（L0 温度回升）同步按 asof_date 读
+  - **缺省 asof_date 行为不变**（日终管道/门禁零影响，向后兼容）
+- `backtest_minimal.run()`：逐日 `get_signal_detail(ts_code, trade_date=YYYYMMDD)` 取该日历史 `dim_results` + `evaluate(ts_code, dim_results=..., asof_date=...)`——完整历史求值（tags/signals/dim_results/收盘价全按日）；无历史快照日期如实降级（dim_results=None，注释注明仍含前视）
+- `backtest_minimal.param_stability_check()`：**诚实降级**——`JUD_PARAM_*` 无消费方 → 明确 `raise ValueError`（原静默无效产出相同结果；387 Walk-Forward 待引擎参数化后恢复）；删不可达 CV 计算死代码
+
+**#S10 修复（radar_service.get_radar_signals）**：
+- `get_tags_batch(candidates)` 全量取标签（单 SQL IN 查询，可控）→ 评分排序 → `scored[:limit]` 截断 → **仅对 Top-N 补取名**（消除原全量 N+1）；Top-N 语义恢复（排位 200 之后的高强度股票不再被静默排除）
+
+**同步测试**：`test_495_b1_jud_single_source.py` 三处 monkeypatch lambda 接受 `asof_date`（新签名对齐）。
+
+**验证**：`py_compile` OK；ruff 零新增（3 文件全 0）；探针 `tests/test_507_batch7_backtest_radar.py`（**11 断言**：#S6 asof_date 数据源选择×4/历史收盘价/evaluate 签名/backtest 逐日传参/param_stability 报错、#S8/#S9 关闭、#S10 排序后截断+Top-N 取名）；**全量 `tests/` 2090 passed 2 skipped 9 xfailed 零失败**（基线 2079 + 探针 11）；全市场 JUD 门禁 **H1/H2/H3+R1 全 PASS**（5554 只，五档分布不变＝evaluate 签名向后兼容）。daemon 跑完已重启。
 
 ---
 
