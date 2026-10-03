@@ -2,7 +2,7 @@
 
 # 507号｜SIG 板块 OCR 核查与处置
 
-**版本**：v1.4（2026-10-03；批次1 全部已决（#S1~#S5）+ 批次2 静默 except 补日志 + **批次3 键错位（#S15）**，见 §十~§十三）
+**版本**：v1.5（2026-10-03；批次1 全部已决（#S1~#S5）+ 批次2 静默 except + 批次3 键错位（#S15）+ **批次4 数值安全（#S16~#S23）**，见 §十~§十四）
 **v1.1 批次1 实施（2026-10-03）**：用户「开507号批次1实施」。按 §七 批次1（原定 #S1/#S2/#S3/#S4/#S5）开工，**实施中发现两项与既有拍板冲突**：
 - **已实施（零回归，全量 2019 passed）**：**#S1** `dim3_vp_engine` 补模块级 `logger` + 惰性日志；**#S3** daemon RAW-2 筹码指标（SSRP 等）**前移**至 `compute_tags` 之前并注入 `extra_tags['ssrp']`（step13 复用 `_chip_pre`，避免逐股重复 estimate）；**#S5** `dim6_risk_engine` ST 升格 `int(float(...))` 守卫 + 事件块日志 debug→warning。
 - **暂缓（触及 494 号用户 2026-09-28 拍板标定，须单独决策）**：**#S2** `emotion_temperature` `None→0`——docstring 承诺中性 50，但 494 故意依赖 `None→0`（冰点真冰点 32.5 < `ICE_RECOVERY_TEMP=35`）；改 50 会越门误判「冰点回升」并放宽仓位上限（连带 6 项测试失败）。**#S4** `consensus_engine` 中性维 dict 计数——修复会让「中性占比 >0.6」上限**复活**，改变 JUD `_aggregate_v390` 输出（494 fixture 由 enter→wait，连带 2 项测试失败）。两者均为**行为变更**，非无副作用修复。
@@ -390,6 +390,33 @@
 - **登记-10**：`dim3 _classify_granville` `breakdown` 不可达（前序 `selling_pressure` 吞）——**待拍板**（修则变 granville 标签）。
 - **登记-11**：`dim5 _assess_stock_emotion` `严重背离` 分支不可达（生产者无该 state）——**待拍板**（修则触发"极度消极"新分支）。
 - **登记-12**：`#S13`/`#S14` 死副本（dim4 `ChipPositionManager`/`TradingPhaseDetector`/`ChipDistributionSignalGenerator`）→ **批次6 处置**。
+
+---
+
+## 十四、批次4 实施记录（数值安全 0/NaN/None 混同，2026-10-03，v1.5）
+
+**用户输入**：「开批次4」→ 只读核对 §4.4 各站点（活性全 LIVE）+ 两项口径拍板（#S23 fail-open、#S20 clamp）。
+
+**实施（7 文件，#S16~#S23，均为数值守卫——只拦非法值、不改正常值行为）**：
+
+| # | 文件 | 改动 |
+|---|---|---|
+| #S16 | `shared_vol_ratio.calc_vol_ratio` | `current_vol` None/NaN → 中性 1.0（原除抛错/产 NaN） |
+| #S17 | `shared_vol_ratio.classify_vol_ratio` | NaN → 中性「正常」（原误标「极度缩量」） |
+| #S18① | `shared_support_resistance` | 新增 `_non_nan` 过滤（`is not None` 不拦 NaN → 污染 MA20/MA60） |
+| #S18② | 同上 | 无高于现价的压力候选 → `resistance=None`（原回退 `hi60` 可低于现价 → dist_res 负/R:R 失真） |
+| #S18③ | 同上 | `if support is not None` 保留恰好 0.0（原 `if support else None` 丢弃） |
+| #S19 | `dim8_summary_engine` 指数涨跌 | `_ret(n_back)` 守卫除 0/NaN → `n/a` 展示 |
+| #S20 | `dim6_risk_engine` `continuous_value` | `rr<0` clamp 到 0（原负值下传）；`rr==0` 仍 0.5 中性兜底 |
+| #S21 | `reliability_assessor._assess_risk` | 守卫改 `atr is None`（原查 `atr_raw is None` 但 `_safe_float` 结果可 None → TypeError 被吞 → 整维 0.5） |
+| #S22 | `time_rhythm_engine` | 带宽 NaN → 中性 100（原 `rolling(20).std()` 前窗 NaN → 判定全 False 落 early_consolidation） |
+| #S23 | `signal_analyzer._false_breakout_check` | **fail-open**：context 缺字段 → 不拦截（原默认 0 fail-closed 拦信号，与「可选字段」语义相反） |
+
+**口径拍板**：#S23（缺数据）＝fail-open 不拦截；#S20（负值）＝clamp 到 0。
+
+**§4.4 排除项**：`conflict_matrix:272` C13 除零——守卫 `dist_to_support_pct < 0` 已隐含非 0，**非缺陷**。
+
+**验证**：`py_compile` OK；ruff **零新增**（dim6 1 = HEAD 基线 F841 `ce`，其余 0）；探针 `tests/test_507_batch4_numeric_safety.py`（11 断言）；**全量 `tests/` 2046 passed 2 skipped 9 xfailed 零失败**（基线 2012 + 探针 34）。daemon 跑完已重启。
 
 ---
 
