@@ -63,28 +63,28 @@ def test_s14_calculate_all_indicators_produces_status_keys():
 
 
 def test_s14_vol_status_classify_thresholds():
-    """_classify_vol_status 对齐生效副本 get_volume_status 阈值"""
+    """vol_status 分档阈值（508批次2：dim4 ChipIndicators 收敛外部权威，用公开 get_volume_status）"""
     from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import ChipIndicators
 
     c = ChipIndicators()
-    assert c._classify_vol_status(3.0) == '天量'
-    assert c._classify_vol_status(2.0) == '显著放量'
-    assert c._classify_vol_status(1.5) == '放量'
-    assert c._classify_vol_status(0.3) == '地量'
-    assert c._classify_vol_status(0.7) == '缩量'
-    assert c._classify_vol_status(1.0) == '正常'
+    assert c.get_volume_status(3.0) == '天量'
+    assert c.get_volume_status(2.0) == '显著放量'
+    assert c.get_volume_status(1.5) == '放量'
+    assert c.get_volume_status(0.3) == '地量'
+    assert c.get_volume_status(0.7) == '缩量'
+    assert c.get_volume_status(1.0) == '正常'
 
 
 def test_s14_cyqkl_status_classify_thresholds():
-    """_classify_cyqkl_status 对齐生效副本 get_cyqkl_status 阈值"""
+    """cyqkl_status 分档阈值（508批次2：dim4 ChipIndicators 收敛外部权威，用公开 get_cyqkl_status）"""
     from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import ChipIndicators
 
     c = ChipIndicators()
-    assert c._classify_cyqkl_status(5) == '弱'
-    assert c._classify_cyqkl_status(20) == '中等'
-    assert c._classify_cyqkl_status(45) == '强'
-    assert c._classify_cyqkl_status(70) == '很强'
-    assert c._classify_cyqkl_status(90) == '极强'
+    assert c.get_cyqkl_status(5) == '弱'
+    assert c.get_cyqkl_status(20) == '中等'
+    assert c.get_cyqkl_status(45) == '强'
+    assert c.get_cyqkl_status(70) == '很强'
+    assert c.get_cyqkl_status(90) == '极强'
 
 
 def test_s14_washing_score_recovers_on_vol_status():

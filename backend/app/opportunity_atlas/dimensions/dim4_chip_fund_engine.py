@@ -129,44 +129,15 @@ class ChipDistributionEstimator:
         return chip_dist, min_price, max_price, price_step
 
 
-# === ChipIndicators (app/data/chip_indicators.py) ===
-# 物理合入：避免外部依赖
+# === ChipIndicators (508批次2 收敛：外部 app/data/chip_indicators.py 为权威) ===
+# 369号物理合入副本已删；dim4 特化仅保留 412 C3 v3.0 RSI 预计算（外部无此能力），
+# concentration 自动切外部 P95-P5 口径（508 Q2 拍板，行为变更见方案档）
 
-class ChipIndicators:
-    """筹码因子计算器"""
+from app.data.chip_indicators import ChipIndicators as _ExternalChipIndicators
 
-    def calculate_all_indicators(self, chip_bins, current_price, kline_data=None, turnover_rate=None, ts_code=None, indicator_other_df=None):
-        """计算所有筹码因子
 
-        412号方案C3 v3.0：RSI优先从indicator_other_df参数读取（dim1通过data_context提供）。
-        """
-        if not chip_bins:
-            return {}
-        result = {}
-        result['ssrp'] = self._calculate_ssrp(chip_bins)
-        result['asr'] = self._calculate_asr(chip_bins, current_price)
-        result['concentration'] = self._calculate_concentration(chip_bins)
-        result['profit_ratio'] = self._calculate_profit_ratio(chip_bins, current_price)
-        if kline_data is not None and not kline_data.empty:
-            result['cyqkl'] = self._calculate_cyqkl(chip_bins, kline_data)
-            # 507批次6 #S14：补产 cyqkl_status（消费点 TradingPhaseDetector._score_raising），
-            # 对齐生效副本 app/data/chip_indicators.py get_cyqkl_status 分档（原无生产者→分支恒不加分）
-            result['cyqkl_status'] = self._classify_cyqkl_status(result['cyqkl'])
-        # 507批次6 #S14：补产 vol_status（消费点 _score_washing/_score_raising/_score_shipping），
-        # 对齐生效副本 calculate_volume_indicators/get_volume_status 口径（当前量/100日均量）
-        if kline_data is not None and len(kline_data) >= 100:
-            avg_vol_100 = float(kline_data['vol'].iloc[-100:].mean())
-            current_vol = float(kline_data['vol'].iloc[-1])
-            vol_ratio = current_vol / avg_vol_100 if avg_vol_100 > 0 else 0.0
-            result['vol_status'] = self._classify_vol_status(vol_ratio)
-        if kline_data is not None and len(kline_data) >= 15:
-            # 411号Phase 5：优先读预计算RSI，回退raw计算
-            rsi_val = self._try_read_precomputed_rsi(ts_code, indicator_other_df=indicator_other_df)
-            if rsi_val is not None:
-                result['rsi'] = rsi_val
-            else:
-                result['rsi'] = self._calculate_rsi(kline_data)
-        return result
+class ChipIndicators(_ExternalChipIndicators):
+    """dim4 特化子类：外部权威计算 + 412 C3 v3.0 RSI 预计算优先"""
 
     def _try_read_precomputed_rsi(self, ts_code, indicator_other_df=None):
         """411号Phase 5：尝试从indicator_other_df读取预计算RSI14
@@ -180,103 +151,16 @@ class ChipIndicators:
                 return float(rsi_series.iloc[-1])
         return None
 
-    def _calculate_ssrp(self, chip_bins):
-        """计算SSRP - 市场平均成本"""
-        total = sum(b['chip_ratio'] for b in chip_bins)
-        if total <= 0:
-            return 0
-        weighted = sum(b['price_bin'] * b['chip_ratio'] for b in chip_bins)
-        return round(weighted / total, 2)
-
-    def _calculate_asr(self, chip_bins, current_price, band_pct=0.05):
-        """计算ASR - 活跃浮筹比例"""
-        price_low = current_price * (1 - band_pct)
-        price_high = current_price * (1 + band_pct)
-        ratio = sum(b['chip_ratio'] for b in chip_bins if price_low <= b['price_bin'] <= price_high)
-        return round(ratio * 100, 2)
-
-    def _calculate_concentration(self, chip_bins):
-        """计算筹码集中度"""
-        if not chip_bins:
-            return 0
-        sorted_bins = sorted(chip_bins, key=lambda x: x['price_bin'])
-        total = sum(b['chip_ratio'] for b in sorted_bins)
-        if total <= 0:
-            return 0
-        top_20 = sorted_bins[int(len(sorted_bins) * 0.8):]
-        top_ratio = sum(b['chip_ratio'] for b in top_20)
-        return round(top_ratio / total, 4) if total > 0 else 0
-
-    def _calculate_profit_ratio(self, chip_bins, current_price):
-        """计算筹码获利率"""
-        return sum(b['chip_ratio'] for b in chip_bins if b['price_bin'] <= current_price)
-
-    def _calculate_cyqkl(self, chip_bins, kline_data):
-        """计算CYQKL - K线实体穿越筹码强度"""
-        if kline_data is None or kline_data.empty:
-            return 0
-        latest = kline_data.iloc[-1]
-        entity_min = min(latest['open'], latest['close'])
-        entity_max = max(latest['open'], latest['close'])
-        if entity_max <= entity_min:
-            return 0
-        sorted_bins = sorted(chip_bins, key=lambda x: x['price_bin'])
-        if not sorted_bins:
-            return 0
-        step = sorted_bins[1]['price_bin'] - sorted_bins[0]['price_bin'] if len(sorted_bins) > 1 else 0.1
-        crossed = 0.0
-        for b in sorted_bins:
-            bin_min = b['price_bin'] - step / 2
-            bin_max = b['price_bin'] + step / 2
-            overlap = min(entity_max, bin_max) - max(entity_min, bin_min)
-            if overlap > 0:
-                crossed += b['chip_ratio'] * (overlap / step)
-        return round(crossed * 100, 2)
-
-    def _classify_cyqkl_status(self, cyqkl: float) -> str:
-        """CYQKL 强弱分档（507批次6 #S14，对齐生效副本 get_cyqkl_status 阈值）"""
-        if cyqkl < 10:
-            return '弱'
-        elif cyqkl < 30:
-            return '中等'
-        elif cyqkl < 60:
-            return '强'
-        elif cyqkl < 80:
-            return '很强'
-        else:
-            return '极强'
-
-    def _classify_vol_status(self, vol_ratio: float) -> str:
-        """量比分档（507批次6 #S14，对齐生效副本 get_volume_status 阈值）"""
-        if vol_ratio >= 3.0:
-            return '天量'
-        elif vol_ratio >= 2.0:
-            return '显著放量'
-        elif vol_ratio >= 1.5:
-            return '放量'
-        elif vol_ratio <= 0.3:
-            return '地量'
-        elif vol_ratio <= 0.7:
-            return '缩量'
-        else:
-            return '正常'
-
-    def _calculate_rsi(self, kline_data, period=14):
-        """计算RSI"""
-        if len(kline_data) < period + 1:
-            return 50
-        closes = kline_data['close'].values
-        deltas = np.diff(closes)
-        if len(deltas) < period:
-            return 50
-        gains = [d if d > 0 else 0 for d in deltas[-period:]]
-        losses = [-d if d < 0 else 0 for d in deltas[-period:]]
-        avg_gain = np.mean(gains)
-        avg_loss = np.mean(losses)
-        if avg_loss == 0:
-            return 100
-        rs = avg_gain / avg_loss
-        return round(100 - (100 / (1 + rs)), 2)
+    def calculate_all_indicators(self, chip_bins, current_price, kline_data=None,
+                                 turnover_rate=None, ts_code=None, indicator_other_df=None):
+        """覆写：外部基础计算 + RSI 预计算优先（412 C3 v3.0，dim4 特化）"""
+        result = super().calculate_all_indicators(
+            chip_bins, current_price, kline_data=kline_data, turnover_rate=turnover_rate)
+        if kline_data is not None and len(kline_data) >= 15:
+            rsi_val = self._try_read_precomputed_rsi(ts_code, indicator_other_df=indicator_other_df)
+            if rsi_val is not None:
+                result['rsi'] = rsi_val
+        return result
 
 
 # === StageDetector (app/engine/framework/volume_price_strategy.py) ===
