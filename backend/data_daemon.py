@@ -4098,6 +4098,29 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             except Exception as e:
                 logger.warning(f"RAW事件特征失败 [{code}]: {e}")
 
+            # 9.5 筹码指标前移（507号 #S3）：SSRP/ASR/concentration/profit_ratio/cyqkl/rsi
+            #     原在 step13 计算，但 step10 的 PhaseDetectionEngine 需 extra_tags['ssrp'] 供
+            #     维度6 SSRP 投票（权重 2.5）——`_extra` 构造时 ssrp 尚未产出 → 该维恒不投票。
+            #     此处前移计算，step13 复用 _chip_pre，避免重复计算。
+            _chip_pre = {}
+            try:
+                _cp_dist, _cp_min, _cp_max, _cp_step = cde.estimate(df)
+                if _cp_dist is not None and len(_cp_dist) > 0 and _cp_step > 0:
+                    from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import ChipIndicators
+                    _cp_ci = ChipIndicators()
+                    _cp_cur = float(df['close'].values[-1])
+                    _cp_bins = [
+                        {
+                            'price_bin': round(_cp_min + _i * _cp_step + _cp_step / 2, 2),
+                            'chip_ratio': round(float(_cp_dist[_i]), 4),
+                        }
+                        for _i in range(len(_cp_dist))
+                    ]
+                    _chip_pre = _cp_ci.calculate_all_indicators(
+                        _cp_bins, _cp_cur, kline_data=df, ts_code=code) or {}
+            except Exception as _e:
+                logger.warning(f"RAW筹码指标前移计算失败 [{code}]: {_e}")
+
             # 10. 深度字段（8字段）——461-6：接线真生产者，替代 460 死键
             #     原实现从 extract_*_deep_tags 取键名（缠论/chip_deep/fund_risk 组），
             #     与本组 8 键（hold_float_ratio/.../presence_evidence）错位 → 恒 None → 扁平化整组丢弃，
@@ -4125,6 +4148,9 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                         _extra['buy_sell_point'] = _cl_tags['buy_sell_point']
                     if _pres and _pres.get('main_force_presence'):
                         _extra['main_force_presence'] = _pres.get('main_force_presence')
+                    # 507号 #S3：注入 SSRP（step9.5 前移计算）供维度6 SSRP 投票（权重 2.5）
+                    if _chip_pre.get('ssrp'):
+                        _extra['ssrp'] = _chip_pre.get('ssrp')
                     _phase = PhaseDetectionEngine().compute_tags(code, df, extra_tags=_extra) or {}
                     _depth['main_force_phase'] = _phase.get('main_force_phase')
                     _depth['phase_confidence'] = _phase.get('phase_confidence')
@@ -4303,31 +4329,10 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                 # 411号Phase 7：筹码指标预计算（SSRP/ASR/concentration/profit_ratio/cyqkl）
                 # 424号§10决策②：先算 chip_bins（cde.estimate），再算聚合指标，
                 # 供 get_sub_scores 消费，避免完整分布被重复计算两次。
+                # 507号 #S3：step9.5 已前移计算（_chip_pre），此处直接复用，避免逐股重复 estimate。
                 try:
-                    # 443号R1：cde.estimate() 返回 4 元组 (chip_dist, min_price, max_price, price_step)，
-                    # 须解包并把 numpy 分布数组转成 ChipIndicators.calculate_all_indicators 期望的
-                    # dict 列表（price_bin/chip_ratio）；此前单变量接收元组→迭代 numpy 数组抛
-                    # TypeError→被 except: pass 静默吞→ssrp/asr/concentration/profit_ratio/cyqkl/rsi 全市场 0%。
-                    chip_dist, min_price, max_price, price_step = cde.estimate(df)
-                    if chip_dist is not None and len(chip_dist) > 0 and price_step > 0:
-                        from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import ChipIndicators
-                        ci = ChipIndicators()
-                        current_price = float(df['close'].values[-1])
-                        chip_bins = [
-                            {
-                                'price_bin': round(min_price + bin_idx * price_step + price_step / 2, 2),
-                                'chip_ratio': round(float(chip_dist[bin_idx]), 4),
-                            }
-                            for bin_idx in range(len(chip_dist))
-                        ]
-                        chip_result = ci.calculate_all_indicators(
-                            chip_bins, current_price, kline_data=df, ts_code=code) or {}
-                        _chip_fund_feat['ssrp'] = chip_result.get('ssrp')
-                        _chip_fund_feat['asr'] = chip_result.get('asr')
-                        _chip_fund_feat['concentration'] = chip_result.get('concentration')
-                        _chip_fund_feat['profit_ratio'] = chip_result.get('profit_ratio')
-                        _chip_fund_feat['cyqkl'] = chip_result.get('cyqkl')
-                        _chip_fund_feat['rsi'] = chip_result.get('rsi')
+                    for _k in ('ssrp', 'asr', 'concentration', 'profit_ratio', 'cyqkl', 'rsi'):
+                        _chip_fund_feat[_k] = _chip_pre.get(_k)
                 except Exception as e:
                     logger.warning(f"RAW筹码指标计算失败 [{code}]: {e}")
                 # fund_flow_strength: 大单净流入强度（0-1）

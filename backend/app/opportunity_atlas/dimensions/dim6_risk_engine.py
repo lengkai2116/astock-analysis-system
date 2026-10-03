@@ -413,7 +413,13 @@ class Dim6RiskEngine(DataAwareMixin):
             for ev in event_results:
                 if not (isinstance(ev, dict) and str(ev.get('event_type', '')) == ST_WARNING_EVENT):
                     continue
-                _sev = '极高' if int(ev.get('direction', 0)) <= ST_WARNING_EXTREME_DIR else '高'
+                # 507号 #S5：direction 为 None/非数字串时 int() 抛错 → 被外层 except 吞 →
+                #   整块事件风险/PIERS 升格（极高）丢失（JUD 硬否决依赖此升格）。显式守卫。
+                try:
+                    _dir = int(float(ev.get('direction', 0)))
+                except (TypeError, ValueError):
+                    _dir = 0
+                _sev = '极高' if _dir <= ST_WARNING_EXTREME_DIR else '高'
                 _st = next((r for r in event_risks if r.get('factor') == 'ST预警'), None)
                 if _st is None:
                     event_risks.append({'category': '事件风险', 'factor': 'ST预警',
@@ -433,7 +439,8 @@ class Dim6RiskEngine(DataAwareMixin):
                 risk_info = {**risk_info, 'level': '极高', 'light': 'red'}
                 _level_note = '（PIERS 硬性否决事件：造假/退市/ST退市）'
         except Exception as e:
-            logger.debug("403号Q-05 EventMonitor检测跳过: %s", e)
+            # 507号 #S5：原 debug 静默吞 → 事件升格丢失不可观测；升 warning（含 ts_code）。
+            logger.warning("403号Q-05 EventMonitor检测跳过 [%s]: %s", ts_code, e)
 
         # 475号 P4：升格后缀统一并入 risk_detail（保留源计数文案）
         risk_info['detail'] = f"{risk_info['detail']}{_level_note}"

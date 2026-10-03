@@ -21,6 +21,8 @@ from app.data.mixins import DataAwareMixin
 from app.engine.patterns.engine import PatternEngine
 from app.opportunity_atlas.dimensions.enum_cn_map import pattern_code_cn
 
+logger = logging.getLogger(__name__)
+
 # ═══════════════════════════════════════════════════════════
 # 量比统一（shared_vol_ratio 内联）
 # ═══════════════════════════════════════════════════════════
@@ -111,7 +113,7 @@ class Dim3VPEngine(DataAwareMixin):
                     df = df.rename(columns={'vol': 'volume'})
                 pattern_score, pattern_details = self.pattern_engine.evaluate(df)
             except Exception as e:
-                logger.warning(f"PatternEngine.evaluate 异常: {e}")
+                logger.warning("PatternEngine.evaluate 异常: %s", e)
         try: vol_ratio = float(tags.get('volume_ratio', 1.0))
         except: vol_ratio = 1.0
         ve = 2 if vol_ratio > 2 else (1.5 if vol_ratio > 1.2 else (1 if vol_ratio > 0.8 else 0))
