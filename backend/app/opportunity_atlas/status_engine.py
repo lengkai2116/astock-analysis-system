@@ -23,6 +23,21 @@ from app.services.status_config import get_signal_registry, get_status_engine_co
 
 logger = logging.getLogger(__name__)
 
+
+def _norm_date(d: Optional[str], compact: bool) -> Optional[str]:
+    """归一化日期为统一格式（pre_feat_cache 用 YYYY-MM-DD、strategy_signal_detail 用 YYYYMMDD）
+
+    507批次7 #S6：evaluate(asof_date) 跨表读历史快照时格式对齐。
+    """
+    if not d:
+        return None
+    s = str(d).strip().replace('-', '').replace('/', '')
+    if len(s) < 8:
+        return None
+    if compact:
+        return f'{s[0:4]}{s[4:6]}{s[6:8]}'
+    return f'{s[0:4]}-{s[4:6]}-{s[6:8]}'
+
 # ── 维度方向映射（336号 §2.2：L1 十维状态 → +1/0/-1 计票） ──
 _DIM_DIRECTION: dict[str, dict[str, int]] = {
     'valuation': {'极度低估': 2, '低估': 1, '合理': 0, '高估': -1, '极度高估': -2},
@@ -242,26 +257,31 @@ class StatusEngine:
     # 主入口
     # ══════════════════════════════════════════════════════════
 
-    def evaluate(self, ts_code: str, dim_results: Optional[dict] = None) -> Optional[dict]:
+    def evaluate(self, ts_code: str, dim_results: Optional[dict] = None,
+                 asof_date: Optional[str] = None) -> Optional[dict]:
         """生产环节主流程：原料 → L1 → L0 → L2 → 成品仓行
 
         366号步骤3：重构为调用维度引擎，通过兼容层保持下游兼容。
         370号修正：支持传入预计算的 dim_results（从 strategy_signal_detail.dim_results_json），
         跳过重复的维度引擎计算，提升JUD步骤性能。
         418号方案：jud_engine_version 配置分支（v390 新管线 / legacy 旧管线）。
+        507批次7（#S6）：新增 asof_date——回测历史求值，按该日期读 pre_feat/
+            signal_detail 历史快照（消除逐日调用返回同一「当前」状态的前视偏差）；
+            缺省读最新（日终管道行为不变）。
 
         Args:
             ts_code: 股票代码
             dim_results: 预计算的维度引擎结果（可选），跳过 _build_dim_engine_results
+            asof_date: 历史求值日期（YYYY-MM-DD/YYYYMMDD 兼容；可选）
 
         Returns: status_snapshot 行 dict（或 None 数据缺失）
         """
-        tags = self._load_tags(ts_code)
-        signals = self._load_signals(ts_code)
+        tags = self._load_tags(ts_code, asof_date=asof_date)
+        signals = self._load_signals(ts_code, asof_date=asof_date)
         if not tags and not signals:
             return None
 
-        lifecycle = self._signal_lifecycle(ts_code, tags, signals)
+        lifecycle = self._signal_lifecycle(ts_code, tags, signals, asof_date=asof_date)
 
         # 370号修正：优先使用预计算的维度引擎结果，避免重复计算
         if dim_results:
@@ -276,7 +296,8 @@ class StatusEngine:
         # 494号（R-1/R-9）：L0 市场级温度回升需 raw pre_feat 子组（sentiment/market_stats），
         #   由 _load_tags 同源读取并透传（`_apply_l0` 缺省时自取，此处传递避免重复读）。
         try:
-            _raw_pre_feat = self.dm.cache.get_pre_feat(ts_code)
+            _raw_pre_feat = self.dm.cache.get_pre_feat(
+                ts_code, trade_date=_norm_date(asof_date, compact=False) if asof_date else None)
         except Exception:
             _raw_pre_feat = None
         l0 = self._apply_l0(ts_code, tags, lifecycle, raw_pre_feat=_raw_pre_feat)
@@ -310,14 +331,16 @@ class StatusEngine:
     # 原料加载（存储层只读）
     # ══════════════════════════════════════════════════════════
 
-    def _load_tags(self, ts_code: str) -> dict:
+    def _load_tags(self, ts_code: str, asof_date: Optional[str] = None) -> dict:
         """加载原料标签（357号方案：读pre_feat_cache）
 
         pre_feat_cache 是嵌套JSON（11组特征），需扁平化为下游期望的flat dict格式。
         P4已废弃，不再回退opportunity_tags_cache。
+        507批次7（#S6）：asof_date 提供时按该日期读历史 pre_feat（回测消除前视）。
         """
         try:
-            pre_feat = self.dm.cache.get_pre_feat(ts_code)
+            pre_feat = self.dm.cache.get_pre_feat(
+                ts_code, trade_date=_norm_date(asof_date, compact=False) if asof_date else None)
             if pre_feat:
                 return self._flatten_pre_feat(pre_feat)
         except Exception as e:
@@ -348,9 +371,14 @@ class StatusEngine:
                     flat[key] = value
         return flat
 
-    def _load_signals(self, ts_code: str) -> dict:
+    def _load_signals(self, ts_code: str, asof_date: Optional[str] = None) -> dict:
         try:
-            cached = self.dm.cache.get_latest_signal_detail(ts_code)
+            if asof_date:
+                # 507批次7（#S6）：读该日期 strategy_signal_detail 历史快照
+                cached = self.dm.cache.get_signal_detail(
+                    ts_code, trade_date=_norm_date(asof_date, compact=True))
+            else:
+                cached = self.dm.cache.get_latest_signal_detail(ts_code)
             return (cached or {}).get('signals', {}) or {}
         except Exception as e:
             logger.debug("signals 读取失败 %s: %s", ts_code, e)
@@ -694,7 +722,8 @@ class StatusEngine:
     # 信号生命周期（334号 §5.3：active_signal + 当前价 → 初期/中期/已延伸）
     # ══════════════════════════════════════════════════════════
 
-    def _signal_lifecycle(self, ts_code: str, tags: dict, signals: dict) -> Optional[dict]:
+    def _signal_lifecycle(self, ts_code: str, tags: dict, signals: dict,
+                          asof_date: Optional[str] = None) -> Optional[dict]:
         try:
             active = tags.get('active_signal') or {}
             if isinstance(active, str) and active:
@@ -715,7 +744,16 @@ class StatusEngine:
             df = self.dm.get_cached_daily_data(ts_code)
             if df is None or df.empty:
                 return None
-            price = float(df['close'].iloc[-1])
+            if asof_date:
+                # 507批次7（#S6）：历史求值用截至该日的收盘价（回测消除前视）
+                if 'trade_date' not in df.columns:
+                    return None
+                _sub = df[df['trade_date'].astype(str).str[:10] <= str(asof_date)[:10]]
+                if _sub.empty:
+                    return None
+                price = float(_sub['close'].iloc[-1])
+            else:
+                price = float(df['close'].iloc[-1])
             dist_pct = (price - sig_price) / sig_price * 100
             # 阶段阈值（signal_registry.yaml 生命周期；统一模板，334号 §5.3）
             _lc = self.registry.get('chan_third_buy', {}).get('lifecycle', {})

@@ -78,15 +78,15 @@ class RadarService(DataAwareMixin):
         if not candidates:
             return []
 
-        # 3. 批量获取标签（最多取 200 只候选避免过大开销）
-        batch = cache.get_tags_batch(candidates[:200])
+        # 3. 全量获取标签（单 SQL IN 查询；507批次7 #S10：原 candidates[:200]
+        #    排序前截断致 Top-N 承诺失效——高信号强度但排位 200 之后的股票被静默排除）
+        batch = cache.get_tags_batch(candidates)
 
-        # 4. 按 signal_strength 降序排列
+        # 4. 评分排序（先不带名，避免全量 N+1 取名）
         scored: list[dict] = []
         for ts_code, tags in batch.items():
             scored.append({
                 'ts_code': ts_code,
-                'name': self._get_stock_name(ts_code),
                 'signal_strength': self._safe_float(tags.get('signal_strength'), 0),
                 'main_force_phase': tags.get('main_force_phase', ''),
                 'catalyst_event': tags.get('catalyst_event', ''),
@@ -95,7 +95,11 @@ class RadarService(DataAwareMixin):
             })
 
         scored.sort(key=lambda x: x['signal_strength'], reverse=True)
-        return scored[:limit]
+        top = scored[:limit]
+        # 5. 仅对 Top-N 补取名（消除原循环全量 N+1 取股名）
+        for item in top:
+            item['name'] = self._get_stock_name(item['ts_code'])
+        return top
 
     # ══════════════════════════════════════════════════════
     # 自选看板

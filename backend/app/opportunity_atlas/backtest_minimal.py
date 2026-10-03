@@ -73,12 +73,20 @@ class MinimalBacktester:
                     daily_returns[str(sorted_dates[i])[:10]] = (prices[sorted_dates[i]] - prev) / prev
 
         states = []
+        cache = self.dm.cache
         for _, row in df.iterrows():
             trade_date = str(row.get('trade_date', ''))[:10]
             if not trade_date:
                 continue
             try:
-                result = engine.evaluate(ts_code)
+                # 507批次7（#S6）：逐日读 strategy_signal_detail 历史快照的 dim_results
+                #   （日终产物），evaluate 以 asof_date 读该日 pre_feat/signal_detail——
+                #   消除原「逐日调 evaluate(ts_code) 返回同一当前状态」的前视偏差。
+                #   早期无快照的日期：dim_results=None → evaluate 内部跑引擎读当前数据，
+                #   该日结果仍含前视（如实保留，历史快照缺失所致）。
+                hist = cache.get_signal_detail(ts_code, trade_date=trade_date.replace('-', ''))
+                dim_results = (hist or {}).get('dim_results') or None
+                result = engine.evaluate(ts_code, dim_results=dim_results, asof_date=trade_date)
                 if result:
                     states.append({
                         'date': trade_date,
@@ -220,48 +228,17 @@ class MinimalBacktester:
                                end_date: Optional[str] = None) -> dict:
         """387号5.9：参数稳定性验证（Walk-Forward简化版）
 
-        对比不同参数值下的回测结果，计算变异系数（CV）判断稳定性。
+        507批次7（#S6）：**当前不可用**——原实现通过 JUD_PARAM_* 环境变量传参，
+        但全仓无任何消费方（StatusEngine 不读），不同参数值产出相同结果（静默无效）。
+        参数扫描需引擎先提供参数注入通道（引擎参数化），恢复前明确抛错防误用。
 
         Args:
             param_name: 参数名（如'bearish_strong'）
             values: 参数值列表（如[0.60, 0.67, 0.75]）
 
-        Returns:
-            {'param_name': str, 'results': {value: summary_dict},
-             'cv': float, 'stable': bool}
+        Raises:
+            ValueError: 引擎无 JUD_PARAM_* 消费通道
         """
-        results = {}
-        for val in values:
-            # 简化：用当前系统回测，参数通过环境变量传递
-            import os
-            os.environ[f'JUD_PARAM_{param_name.upper()}'] = str(val)
-            try:
-                r = self.run(ts_code, start_date, end_date)
-                results[val] = {
-                    'enter_count': r['summary']['enter_count'],
-                    'wait_count': r['summary']['wait_count'],
-                    'avoid_count': r['summary']['avoid_count'],
-                    'avg_consensus': r['summary']['avg_consensus'],
-                }
-            except Exception as e:
-                results[val] = {'error': str(e)}
-            finally:
-                os.environ.pop(f'JUD_PARAM_{param_name.upper()}', None)
-
-        # 计算变异系数（enter_count的CV）
-        enter_counts = [r.get('enter_count', 0) for r in results.values() if 'error' not in r]
-        if len(enter_counts) >= 2:
-            mean = sum(enter_counts) / len(enter_counts)
-            variance = sum((x - mean) ** 2 for x in enter_counts) / len(enter_counts)
-            std = variance ** 0.5
-            cv = round(std / mean, 3) if mean > 0 else 0
-        else:
-            cv = 0
-
-        return {
-            'param_name': param_name,
-            'results': results,
-            'cv': cv,
-            'stable': cv < 0.30,  # CV<30%视为稳定
-            'interpretation': '稳定' if cv < 0.30 else ('中等波动' if cv < 0.60 else '不稳定'),
-        }
+        raise ValueError(
+            f'参数稳定性扫描不可用：引擎无 JUD_PARAM_{param_name.upper()} 消费通道'
+            '（参数注入需先实现 StatusEngine 参数化）')
