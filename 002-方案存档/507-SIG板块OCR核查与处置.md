@@ -2,7 +2,7 @@
 
 # 507号｜SIG 板块 OCR 核查与处置
 
-**版本**：v1.3（2026-10-03；批次1 全部已决（#S1~#S5）+ **批次2 静默 except 补日志已实施**，见 §十~§十二）
+**版本**：v1.4（2026-10-03；批次1 全部已决（#S1~#S5）+ 批次2 静默 except 补日志 + **批次3 键错位（#S15）**，见 §十~§十三）
 **v1.1 批次1 实施（2026-10-03）**：用户「开507号批次1实施」。按 §七 批次1（原定 #S1/#S2/#S3/#S4/#S5）开工，**实施中发现两项与既有拍板冲突**：
 - **已实施（零回归，全量 2019 passed）**：**#S1** `dim3_vp_engine` 补模块级 `logger` + 惰性日志；**#S3** daemon RAW-2 筹码指标（SSRP 等）**前移**至 `compute_tags` 之前并注入 `extra_tags['ssrp']`（step13 复用 `_chip_pre`，避免逐股重复 estimate）；**#S5** `dim6_risk_engine` ST 升格 `int(float(...))` 守卫 + 事件块日志 debug→warning。
 - **暂缓（触及 494 号用户 2026-09-28 拍板标定，须单独决策）**：**#S2** `emotion_temperature` `None→0`——docstring 承诺中性 50，但 494 故意依赖 `None→0`（冰点真冰点 32.5 < `ICE_RECOVERY_TEMP=35`）；改 50 会越门误判「冰点回升」并放宽仓位上限（连带 6 项测试失败）。**#S4** `consensus_engine` 中性维 dict 计数——修复会让「中性占比 >0.6」上限**复活**，改变 JUD `_aggregate_v390` 输出（494 fixture 由 enter→wait，连带 2 项测试失败）。两者均为**行为变更**，非无副作用修复。
@@ -345,6 +345,51 @@
 > **已合规、未改**：`dim6_risk_engine.py:435`（批次1 已 debug→warning）、`time_rhythm_engine.py:100`、`radar_service.py:62`（原已有 logger 记录）。
 
 **验证**：`py_compile` OK；ruff **零新增**（dim5 1 / dim7 2 = HEAD 基线；其余 0）；探针 `tests/test_507_batch2_silent_except.py`（12 断言，AST 校验目标 except 不再裸 pass + 日志文案存在）；**全量 `tests/` 2032 passed 2 skipped 9 xfailed 零失败**（基线 2012 + 批次1/2 探针 20）。daemon 跑完已重启。
+
+---
+
+## 十三、批次3 实施记录（键/字符串匹配失效 + 不可达分支，2026-10-03，v1.4）
+
+**用户输入**：「开批次3」→ 只读核对各站点现状 + **逐一追踪「生产者实际枚举 / 活性（LIVE vs 死副本）」** → 范围二次定夺。
+
+### 核查结论（活性追踪是本批关键）
+
+**生效路径**（daemon `status_engine._build_dim_engine_results` → `Dim4ChipFundEngine.evaluate` → **`phase_detector.PhaseDetectionEngine`** + **`app/data/chip_indicators.py`**）：
+
+| # | 站点 | 活性 | 判定 |
+|---|---|---|---|
+| **#S15** | `dim5` 四象限 `_QUADRANT_DETAIL_CN['dv_bond']` | **LIVE** | 生产者 `BociasiQuadrantAnalyzer._cache` 实键＝`dv_bond_diff`（`bociasi_quadrant.py:189/193`），原键 `dv_bond` 无生产者 → 股债差明细被 `_fmt_quadrant` **静默丢弃**。**须修** |
+| **#S13** | dim4 `SIGNAL_ADJUSTMENT` 键错位（`S_BUY` vs `BUY`） | **死副本** | 所在 `ChipPositionManager`（dim4:3613）**零实例化**；framework 版 `chip_position_manager.py` 零 import → 改之零运行影响 |
+| **#S14** | dim4 `vol_status`/`cyqkl_status` 分支恒不触发 | **死副本** | 所在 dim4 内嵌 `TradingPhaseDetector`（:1309）/`ChipDistributionSignalGenerator`（:1552）仅死链引用；**生效侧 `app/data/chip_indicators.py:510` 正常产 `vol_status`** → 该键在生效路径**反有生产者** |
+
+**§4.2 另两条**（原判为失效，经核实**非缺陷**）：
+- `conflict_matrix` C6 `divergence_type == '趋势背驰'`——dim2 由 `Divergence.type`（trend/consolidation/zhongshu，`chanlun_strategy.py`）映射中文（`dim2:198`），**值域吻合、可触发**；
+- `conflict_matrix` `_daily_dir/_weekly_dir` `up/down`——`direction_map` 值即 `up/down`（`chanlun_multi_level.py:137`），**值域吻合**。
+
+**§4.3 不可达分支**（经核实）：
+- `dim3 _classify_granville` `breakdown`（`<-4.0 & vr>10`）确被前序 `selling_pressure`（`<-2.0 & vr>10`）完全包含 → 不可达；**改则变 granville 标签（行为变更）**，须拍板，本批未擅改；
+- `dim5 _assess_stock_emotion` 的 `严重背离` 分支——`vp` 由 flat `volume_price_fit` 映射仅取 `{强健康/背离/中性}`、`dims['vp'].state` 亦只含此 3 值（`dim3 judgment.state` 不含 `严重背离`，其仅进 `health_score` 文本）→ 不可达；**修则触发"极度消极"新分支（行为变更）**，须拍板，本批未擅改。
+
+### 用户拍板（因活性追踪而收窄范围）
+
+- **#S13/#S14 → 改判批次6（死代码）**：二者位在平行死副本、改之零运行影响；随批次6 死代码清理一并处置。
+- **批次3 实收窄为「生效路径项」**：仅 **#S15** 落地。
+
+### 实施
+
+- **#S15** `dimensions/dim5_emotion_engine.py`：`_QUADRANT_DETAIL_CN` 的 `'dv_bond'` → **`'dv_bond_diff'`**（对齐生产者实键），股债差明细恢复渲染。**展示层修复，不影响判定**。
+
+### 验证与运行态
+
+- `py_compile` OK；ruff **零新增**（dim5 1 = HEAD 基线 I001 import 排序，非本批引入）。
+- 探针 `tests/test_507_batch3_key_match.py`（3 断言：键对齐 / `_fmt_quadrant` 渲染股债差 / 7 键全覆盖）。
+- **全量 `tests/` 2035 passed 2 skipped 9 xfailed 零失败**（基线 2012 + 探针 23）。daemon 跑完已重启。
+
+### 登记（本批新增）
+
+- **登记-10**：`dim3 _classify_granville` `breakdown` 不可达（前序 `selling_pressure` 吞）——**待拍板**（修则变 granville 标签）。
+- **登记-11**：`dim5 _assess_stock_emotion` `严重背离` 分支不可达（生产者无该 state）——**待拍板**（修则触发"极度消极"新分支）。
+- **登记-12**：`#S13`/`#S14` 死副本（dim4 `ChipPositionManager`/`TradingPhaseDetector`/`ChipDistributionSignalGenerator`）→ **批次6 处置**。
 
 ---
 
