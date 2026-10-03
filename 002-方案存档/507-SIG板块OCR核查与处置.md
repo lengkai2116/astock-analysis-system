@@ -255,8 +255,8 @@
 | 登记-5 | #S3 SSRP 注入 `extra_tags` 的接线方式 | ✅ 批次1 已实施（前移 + 注入） |
 | 登记-6 | §4.2 `divergence_type` / `_daily_dir` 实际枚举确认 | 批次3 |
 | 登记-7 | 与 489/490/491/492/464 重叠项，不重复计入 | 已标注 |
-| **登记-8（新）** | **#S2 `emotion_temperature` `None→0` vs docstring 中性 50** | **暂缓**（触及 494 冰点回升标定，见 §十） |
-| **登记-9（新）** | **#S4 `consensus_engine` 中性维 dict 计数** | **暂缓**（修复会改变 JUD `_aggregate_v390` 输出，见 §十） |
+| **登记-8（新）** | **#S2 `emotion_temperature` `None→0` vs docstring 中性 50** | ✅ 已决：**维持 None→0 + 订正 docstring**（见 §十一） |
+| **登记-9（新）** | **#S4 `consensus_engine` 中性维 dict 计数** | ✅ 已决：**修复 + 全市场重跑重定基线**（见 §十一） |
 
 ---
 
@@ -287,6 +287,39 @@
 ### 与 §九 的差异
 
 原 §七 批次1 含 #S2/#S4；**实际批次1 = #S1/#S3/#S5**。#S2 → 登记-8、#S4 → 登记-9，**待用户决策**（可选：① 按 docstring/修复实施并同步修订 494 标定+测试；② 维持现状、修订 docstring 说明 None→0 为既定口径）。
+
+---
+
+## 十一、批次1 续（#S2/#S4 决策与实施，2026-10-03，v1.2）
+
+**用户输入**：「详细说明并思考在提升系统能力和输出有效性的维度，评估 #S2/#S4 应该如何操作更优」→ 只读取证 + 量化 → 用户拍板 **#S2＝(b) 维持行为+订正 docstring**、**#S4＝修复+全市场重跑重定基线**。
+
+### 取证（只读，2026-10-03）
+
+- **#S2 关键事实**：`ice` 相位**生产不可达**（`pre_feat_cache` 09-01~09-30 各日全为 ebb/ferment/climax/recovery/neutral；最新日 5555 只全 `ferment`），仅当主源 `MarketSentimentService` 不可用时经 daemon fallback（`limit_up<20 且 sealing_rate<40`）产出，**可达但罕见**；`market_level_temperature` **唯一消费方**＝冰点回升风控门 `_emotion_is_recovering`；ice+缺数据时 `None→0` 得 27.5（<35 不回升）、`None→50` 得 ≈35（≥35 回升）。
+- **#S4 量化**（800 只抽样 + 全市场门禁）：`dims_factor` 值 **100% 为 dict**（10400=800×13）；「中性占比 >0.6」上限修复前 **0/800 触发**、修复后 **173/800=21.6% 触发**；同日全市场对照（09-30，n=5554）：
+
+| 状态 | 无 S4（旧口径） | 有 S4（新口径） | Δ |
+|---|---|---|---|
+| enter | 0.4% | 0.2% | −0.2 |
+| light | 0.5% | 0.3% | −0.2 |
+| wait | 12.7% | 10.5% | −2.2 |
+| reduce | 6.7% | 5.6% | −1.1 |
+| avoid | 79.8% | 83.3% | +3.5 |
+
+即 ≈195 只（3.5pt）由 wait/reduce/enter 下移 avoid（去「虚假高置信」）；`direction` 分布不变。
+
+### 决策与实施
+
+- **#S2（维持行为 + 订正 docstring）** ✅：`emotion_temperature.market_level_temperature` 的 `limit_up_count` 参数文档由「None → 中性（50）」改为如实描述「**None/非 int → 0（保守兜底）**」并注明理由（唯一消费方为风控门，缺数据不宣布回升＝fail-safe；494 标定依赖 None→0）。**零行为变更**。
+- **#S4（修复 + 重定基线）** ✅：`consensus_engine` 中性计数对 dict 值先取 `direction` 再判中性（「中性占比 >0.6」上限**恢复生效**）；按 497 P1 先例**重定** `scripts/_495_b2_jud_market_gate.py` 的 `STATE_BASELINE` 为 `{avoid 83.3, wait 10.5, reduce 5.6, enter 0.2, light 0.3}`（同日 09-30 全市场 5554 实测）；`tests/test_494_batch1_weekly_veto.py` 的 2 项主链测试 fixture 按测试意图（真看多股）**局部补足 3 个方向票**（原 fixture 实为 9/13 中性，旧值仅因 cap 恒失效才 enter）。
+
+### 验证与运行态
+
+- **全量 `tests/`**：**2020 passed 2 skipped 9 xfailed 零失败**（基线 2012 + 507 探针 8）；定向 `test_494_batch1_weekly_veto` 13 passed。
+- **全市场门禁**（`_495_b2_jud_market_gate.py`，n=5554）：**H1/H2/H3 + R1 五档全 PASS**（enter 0.2/light 0.3/wait 10.5/reduce 5.6/avoid 83.3），**结论 ✅ 门禁通过**（exit 0）。
+- **改动**：`emotion_temperature.py`（docstring）/ `consensus_engine.py`（中性计数）/ `scripts/_495_b2_jud_market_gate.py`（基线）/ `tests/test_494_batch1_weekly_veto.py`（fixture）/ `tests/test_507_sig_batch1.py`（+#S4 断言）；`py_compile` OK、ruff 零新增。
+- **运行态**：门禁/回归前停 daemon + 看守，**跑完已重启**。
 
 ---
 
