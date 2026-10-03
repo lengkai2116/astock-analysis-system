@@ -338,6 +338,11 @@ def compute(
             score = dims_factor.get(dim)
             if score is None:
                 continue
+            # 507号 #S4：dims_factor 值为嵌套 dict（{direction,strength,...}，见上方抽取块），
+            #   直接 float(dict) 抛 TypeError 被吞 → dict 形态维永不计中性 → neutral_ratio
+            #   恒偏低 → 「中性占比 >0.6」上限从未触发（实测量化：修复前 0/800，修复后 173/800）。
+            if isinstance(score, dict):
+                score = score.get('direction', 0)
             try:
                 if abs(float(score)) < 1e-9:
                     neutral_dim_count += 1

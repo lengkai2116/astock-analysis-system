@@ -124,7 +124,12 @@ def market_level_temperature(
 
     Args:
         sentiment_phase: 市场情绪阶段（ice/sprout/regress/ferment/climax/ebb/neutral）
-        limit_up_count: 全市场涨停家数；None → 该项中性（50）
+        limit_up_count: 全市场涨停家数。**None/非 int → 0（保守兜底）**，非中性 50：
+            该函数唯一消费方为 `status_engine._emotion_is_recovering`（冰点回升风控门），
+            缺数据时保守地「不宣布回升、维持冰点 10% 仓位上限」是 fail-safe 取向
+            （494 号 2026-09-28 拍板 `ICE_RECOVERY_TEMP=35`，其「真冰点 ≈32.5 不触发」
+            标定正依赖 None→0；若改 50 则 ice+缺数据温度 ≈35 越门、会在无数据时放开上限）。
+            507号 (#S2)：维持 0 不变，仅订正本 docstring（原误写「中性 50」）。
         sealing_rate: 全市场封板率 0-100；None → 中性（50）
         breadth: 市场广度 0-1（`market_stats.ma20_ratio` 近似，见 calc_emotion_temperature）；
                  None → 中性（50）
