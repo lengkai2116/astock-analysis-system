@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +42,6 @@ def calc_support_resistance(df=None, indicator_ma_df=None) -> dict:
                 'risk_reward': None, 'source': '数据不足',
                 'signal_days': None, 'dist_to_prev_high_pct': None}
 
-    import numpy as np
     closes = df['close'].values
     price = float(closes[-1])
 

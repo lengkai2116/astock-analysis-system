@@ -55,13 +55,7 @@ class TimeRhythmEngine:
             low_30 = np.min(df['low'].values[-30:])
             range_pct = (high_30 - low_30) / low_30 * 100 if low_30 > 0 else 0
 
-            # 带宽趋势（最近10日斜率，正值=扩张，负值=收缩）
-            bw_recent = bandwidth[-10:] if len(bandwidth) >= 10 else bandwidth
-            if len(bw_recent) >= 5:
-                (bw_recent[-1] - bw_recent[0]) / max(bw_recent[0], 1e-9) * 100
-            else:
-                pass
-
+            # 带宽趋势（最近10日斜率）——仅诊断用，不落输出，不参与判定
             current_bw = bandwidth[-1] if len(bandwidth) > 0 else 100
             # 507批次4 #S22：rolling(20).std() 前窗 NaN → bandwidth NaN → 判定全 False
             #   落 early_consolidation；NaN 时按中性大带宽（100，不触发收缩）

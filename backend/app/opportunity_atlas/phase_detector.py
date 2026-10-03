@@ -722,9 +722,7 @@ class PhaseDetectionEngine(DataAwareMixin):
             if not (pct_chg > 9.5):
                 return current_phase
 
-            df["close"].values
             volumes = df["vol"].values if "vol" in df.columns else None
-
             # 价格位置判定
             low_zone = price_position == "low_zone"
             high_zone = price_position == "high_zone"

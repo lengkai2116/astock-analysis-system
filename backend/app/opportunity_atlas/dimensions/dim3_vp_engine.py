@@ -27,38 +27,6 @@ logger = logging.getLogger(__name__)
 # 量比统一（shared_vol_ratio 内联）
 # ═══════════════════════════════════════════════════════════
 
-
-
-# 411号Phase 5：预计算MACD缓存（每次evaluate()调用时刷新）
-# 411号Phase 5：预计算MACD缓存（每次evaluate()调用时刷新）
-_MACD_PRECOMPUTED_CACHE: dict = {}
-
-def _load_precomputed_macd(ts_code: str) -> dict:
-    """从indicator_macd预计算表读取MACD数据"""
-    if not ts_code:
-        return {}
-    cache_key = ts_code
-    if cache_key in _MACD_PRECOMPUTED_CACHE:
-        return _MACD_PRECOMPUTED_CACHE[cache_key]
-    try:
-        from app.data import DataManager
-        dm = DataManager()
-        wide = dm.get_cached_indicators(ts_code)
-        if wide is not None and not wide.empty:
-            result = {}
-            for col in ('macd_dif', 'macd_dea', 'macd_hist'):
-                if col in wide.columns:
-                    arr = wide[col].dropna().values.astype(float)
-                    if len(arr) > 0:
-                        result[col] = arr
-            if len(result) == 3:
-                _MACD_PRECOMPUTED_CACHE[cache_key] = result
-                return result
-    except Exception:
-        pass
-    _MACD_PRECOMPUTED_CACHE[cache_key] = {}
-    return {}
-
 def calc_vol_ratio(current_vol, avg_vol_5d):
     if avg_vol_5d is None or avg_vol_5d <= 0:
         return 1.0

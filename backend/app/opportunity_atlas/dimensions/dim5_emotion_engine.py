@@ -224,7 +224,6 @@ def _bociasi_quadrant(quick_result: dict, slow_result: dict) -> dict:
     s_signal = slow_result.get('signal', 'NEUTRAL')
 
     q_conf = quick_result.get('confidence', 0.5)
-    slow_result.get('confidence', 0.5)
 
     q_high = q_signal == 'BUY' or (q_signal == 'WATCH' and q_conf > 0.5)
     s_high = s_signal == 'BULLISH'

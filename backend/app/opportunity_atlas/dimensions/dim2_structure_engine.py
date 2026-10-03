@@ -15,11 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 
 from app.data.mixins import DataAwareMixin
@@ -31,47 +27,22 @@ logger = logging.getLogger(__name__)
 # 434号 批次2（2026-09-14）：删除内联 vendored 缠论 4 区块，改 import framework 权威 + shared 共享服务。
 # 缠论能力全局单一代码源（framework）；支撑阻力统一走 shared_support_resistance。
 from app.engine.framework.chanlun_config import (
-    BiConfig,
-    BuySellConfig,
     ChanlunConfig,
-    DivergenceConfig,
-    MultiLevelConfig,
-    SegmentConfig,
-    ZhongshuConfig,
 )
 from app.engine.framework.chanlun_level_validator import ChanlunLevelValidator
 
 # 457号：多级别联立分析器（周/日/60min 区间套 + 方向一致性 + 关键价位）
 from app.engine.framework.chanlun_multi_level import MultiLevelChanlunAnalyzer
 from app.engine.framework.chanlun_strategy import (
-    _MACD_PRECOMPUTED_CACHE,
-    BiZhongshuFinder,
-    BuySellPoint,
-    BuySellPointDetector,
-    ChanlunAlphaModel,
+    BuySellPointDetector,  # noqa: F401  re-export（test_396 依赖）
     ChanlunAnalyzer,
     ChanlunScorer,
-    ChanlunTheoremValidator,
-    Divergence,
-    DivergenceDetector,
-    Fractal,
-    FractalDetector,
-    KLine,
-    KLineMerger,
-    Segment,
-    SegmentAnalyzer,
-    SignalFusion,
-    StrategyValidationLayer,
-    Stroke,
-    StrokeBuilder,
-    Zhongshu,
-    ZhongshuAnalyzer,
-    ZhongshuFactorSwitch,
-    _load_precomputed_macd,
+    Divergence,  # noqa: F401  re-export（test_396 依赖）
+    Stroke,  # noqa: F401  re-export（test_396 依赖）
+    StrokeBuilder,  # noqa: F401  re-export（test_396 依赖）
+    Zhongshu,  # noqa: F401  re-export（test_396 依赖）
     _recent_by_type,
-    analyze_chanlun,
-    calc_macd,
-    get_chanlun_tags,
+    calc_macd,  # noqa: F401  re-export（test_411 依赖）
 )
 from app.engine.framework.trend_structure_detector import TrendStructureDetector
 from app.opportunity_atlas.dimensions.enum_cn_map import chip_concentration_cn, ma_alignment_cn
@@ -144,7 +115,7 @@ class Dim2StructureEngine(DataAwareMixin):
         latest_close = float(df['close'].iloc[-1]) if df is not None and not df.empty else 0.0
         _last_date = str(df['trade_date'].iloc[-1])[:10] if (df is not None and not df.empty
                                                              and 'trade_date' in df.columns) else None
-        vs_zhongshu = _assess_vs_zhongshu(tags, dims, chanlun_result, latest_close,
+        vs_zhongshu = _assess_vs_zhongshu(tags, chanlun_result, latest_close,
                                           last_date=_last_date)
         vs_ma = _assess_vs_ma(tags)
         vs_sr = _assess_vs_support_resistance(geo)
@@ -556,7 +527,7 @@ def _build_market_context(data_context):
     return mc if mc else None
 
 
-def _assess_vs_zhongshu(tags, dims, chanlun_result=None, latest_close=0.0, last_date=None):
+def _assess_vs_zhongshu(tags, chanlun_result=None, latest_close=0.0, last_date=None):
     """价格 vs 当前有效中枢（463号：不再盲取 zs_list[-1] 多年旧中枢；
     daily_df 前复权口径，展示价=实际价；last_date=最后交易日（做中枢时效过滤）
     479号 A1：返回补 ratio=区位比例 (price-zs_l)/(zs_h-zs_l)（区间内 0~1、

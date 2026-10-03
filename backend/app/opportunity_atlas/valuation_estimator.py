@@ -206,7 +206,9 @@ class ValuationEngine(DataAwareMixin):
         """构建全市场 FCF yield 截面百分位基准（锚3 相对化用，precompute 前调用）"""
         try:
             import bisect
-            cache = self._get_dm().cache
+            # 507批次6 #S25：ecm 优先（对齐 dim7_valuation_engine 版语义），
+            # 原恒读 self._get_dm().cache——调用方传不同路由实例时静默用错源
+            cache = ecm if ecm is not None else self._get_dm().cache
             # 421号：treemap_snapshot 归 snapshot_cache.db 分库，改走 _query_shard 路由
             codes = cache._query_shard('treemap_snapshot', "SELECT ts_code FROM treemap_snapshot")["ts_code"].tolist()
             vals = []

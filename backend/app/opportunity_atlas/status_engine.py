@@ -1039,14 +1039,14 @@ class StatusEngine:
         try:
             dims_factor = convert_to_factors(dim_results, tags)
         except Exception as e:
-            logger.warning(f"v390 L1 convert_to_factors失败: {e}")
+            logger.warning("v390 L1 convert_to_factors失败: %s", e)
             dims_factor = {}
 
         # L2: 可靠性评估
         try:
             reliability = assess(dims_factor, dim_results)
         except Exception as e:
-            logger.warning(f"v390 L2 reliability评估失败: {e}")
+            logger.warning("v390 L2 reliability评估失败: %s", e)
             reliability = {}
 
         # L3: 共识聚合（weights 取 MARKET_REGIME_WEIGHTS[regime]）
@@ -1057,7 +1057,7 @@ class StatusEngine:
         try:
             consensus = consensus_compute(dims_factor, reliability, weights, emotion_phase)
         except Exception as e:
-            logger.warning(f"v390 L3 consensus失败: {e}")
+            logger.warning("v390 L3 consensus失败: %s", e)
             consensus = {'consensus_rate': 0.0, 'raw_consensus_rate': 0.0,
                          'reliability_factor': 0.0, 'direction': 'neutral',
                          'bull_score': 0.0, 'bear_score': 0.0, 'group_details': {}}
@@ -1067,7 +1067,7 @@ class StatusEngine:
             conflict = conflict_detect(dims_factor, tags, dim_results,
                                        consensus.get('consensus_rate', 0.0))
         except Exception as e:
-            logger.warning(f"v390 L4 conflict检测失败: {e}")
+            logger.warning("v390 L4 conflict检测失败: %s", e)
             conflict = {'fatal_to_veto': [], 'warn_for_semantic': [],
                         'semantic_type': '', 'semantic_adjustment': 1.0, 'all_conflicts': []}
 
@@ -1093,7 +1093,7 @@ class StatusEngine:
             arb_result = factor_arbitrate(consensus, conflict, tags, dims_factor,
                                           reliability, weekly_direction=_weekly_dir)
         except Exception as e:
-            logger.warning(f"v390 L5 factor仲裁失败: {e}")
+            logger.warning("v390 L5 factor仲裁失败: %s", e)
             arb_result = {'opportunity_state': 'wait', 'final_score': 50.0,
                           'state_evidence': ['L5仲裁不可用'], 'conflict_evidence': []}
 
@@ -1114,7 +1114,7 @@ class StatusEngine:
             advice = compute_advice(arb_result.get('final_score', 50.0), dims_factor,
                                     l0, dim_results, ts_code, entry_price)
         except Exception as e:
-            logger.debug(f"v390 L6 advice失败: {e}")
+            logger.debug("v390 L6 advice失败: %s", e)
 
         return self._v390_result(arb_result.get('opportunity_state', 'wait'),
                                  arb_result.get('state_evidence', []),
@@ -1365,7 +1365,8 @@ def generate_seven_dim_from_signals(signal_json: dict) -> dict:
 
     ⚠️ 411号 Phase 1 后 signal_json.signals 恒空，本路径已废弃——
     新链路一律用 build_seven_dim_from_dim_results（委派 dim8）。
-    仅当 signal_json 内含 dim_results 时转用 dim8 归集，否则保留旧 signals 路径。
+    dim_results 分支委派 dim8；旧 signals 分支生产不可达，仅 test_436 兼容
+    引用保留（signals 恒空时返回空 dict，不抛异常）。
     """
     # 若调用方已传入 dim_results（data_daemon 新链路），直接委派 dim8
     dim_results = (signal_json or {}).get('dim_results')

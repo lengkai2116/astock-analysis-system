@@ -344,7 +344,7 @@ def calc_lifecycle_stage(lifecycle: dict) -> dict:
 # 白话文本生成（从dim1_signal_engine.py L353-386迁移）
 # ═══════════════════════════════════════════════════════════
 
-def signal_plain(attr: dict, strength: dict, maintenance: dict, lifecycle_info: dict) -> str:
+def signal_plain(attr: dict, strength: dict, lifecycle_info: dict) -> str:
     """信号分析白话文本"""
     code = attr.get('code', 'neutral')
     count = strength.get('count', 0)
@@ -385,7 +385,7 @@ def signal_plain(attr: dict, strength: dict, maintenance: dict, lifecycle_info: 
 # ═══════════════════════════════════════════════════════════
 
 def build_audit(attr: dict, dims: dict, tags: dict, lifecycle: dict,
-                strength: dict, maintenance: dict) -> dict:
+                strength: dict) -> dict:
     """条件稽核（359号§1.7）"""
     code = attr['code']
     conditions = []
@@ -649,7 +649,7 @@ def analyze_signal(dims: dict, tags: dict, lifecycle: dict = None) -> dict:
     }
 
     # 10. audit
-    audit = build_audit(attr, dims, tags, lifecycle, strength, maintenance)
+    audit = build_audit(attr, dims, tags, lifecycle, strength)
 
     return {
         'status_description': status_description,

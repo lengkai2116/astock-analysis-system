@@ -240,7 +240,7 @@ class Dim1SignalEngine:
                 try:
                     _rs = dm.cache.get_relative_strength(ts_code=ts_code)
                     if _rs:
-                        _rps_row = _rs[0]  # ORDER BY ts_code, benchmark → 任一基准行
+                        _rps_row = _rs[0]  # ORDER BY ts_code, asof_date DESC, benchmark → 最新日期任一基准行
                         loaded_data['relative_strength'] = {
                             'rps_20d': _rps_row.get('rps_20d'),
                             'rps_60d': _rps_row.get('rps_60d'),

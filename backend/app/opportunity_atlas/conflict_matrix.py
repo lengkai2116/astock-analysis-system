@@ -301,7 +301,6 @@ def detect(
         _directions.append(int(_safe_float(_dr_j.get('overall_direction', 0))))
 
     aligned_count = sum(1 for d in _directions if d == 1)
-    max(len(_directions), 1)
 
     dist_to_prev_high_pct = _safe_float(
         _safe_get(risk_sd, 'dist_to_prev_high_pct'), default=-10.0

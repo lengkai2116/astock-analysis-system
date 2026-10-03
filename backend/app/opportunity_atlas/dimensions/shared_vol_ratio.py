@@ -4,10 +4,7 @@
 """
 from __future__ import annotations
 
-import logging
 import math
-
-logger = logging.getLogger(__name__)
 
 
 def calc_vol_ratio(current_vol: float, avg_vol_5d: float) -> float:

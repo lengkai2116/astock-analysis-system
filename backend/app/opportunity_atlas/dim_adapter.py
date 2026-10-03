@@ -498,7 +498,6 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
     _emo_state_raw = '中性'
     _temperature = 50.0
     if _emo and isinstance(_emo, dict):
-        _emo_judg = _emo.get('judgment', {})
         _emo_sd = _emo.get('status_description', {})
         # 优先从status_description.market_phase读取（390方案§3.2 dim5）
         _emo_state_raw = str(_emo_sd.get('market_phase', ''))
@@ -603,7 +602,6 @@ def convert_to_factors(dim_results: dict, tags: dict) -> dict:
     _dim7_evidence: list[str] = []
     _dim7_extras: dict = {}
     if _val and isinstance(_val, dict):
-        _val_judg = _val.get('judgment', {})
         _val_sd = _val.get('status_description', {})
         # direction: composite_rating
         _composite = _safe_float(_val_sd.get('composite_rating'), 0.0)
