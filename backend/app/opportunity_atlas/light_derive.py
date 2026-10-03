@@ -130,6 +130,10 @@ def summary_light(consensus_rate) -> str:
         cr = float(consensus_rate)
     except (TypeError, ValueError):
         return DATA_MISSING
+    # 507批次8：NaN/inf 视为数据异常 → 缺失灯（原 NaN→yellow 落中性、inf→green 误判）
+    import math
+    if math.isnan(cr) or math.isinf(cr):
+        return DATA_MISSING
     if cr >= SUMMARY_LIGHT_GREEN:
         return 'green'
     if cr < SUMMARY_LIGHT_RED:

@@ -37,6 +37,11 @@ DIM_WEIGHTS = {
 # 0.8 保留"高潮打折"语义且保持分布（80+ 1.4% / 40-60 22.4% / 唯一值 98）。
 SENTIMENT_WEIGHT = {"recovery": 1.0, "ice": 0.8, "climax": 0.8, "ebb": 0.3, "": 1.0, None: 1.0}
 
+# 507批次8：earn 权重 clamp 边界（433 §3.6 W5——earn 权重映射上下限，与 DIM_WEIGHTS['earn']
+#   base 相对缩放后夹逼；原硬编码 0.35/0.15 与配置脱钩，提为命名常量便于随调）
+EARN_WEIGHT_MAX = 0.35
+EARN_WEIGHT_MIN = 0.15
+
 # 事件强度映射（catalyst_event 类型 → 0-1；业绩/政策/突破强于题材）
 EVENT_SCORE = {
     "earnings": 0.9, "lhb": 0.7, "breakout": 0.8, "concept": 0.6, "buyback": 0.6,
@@ -347,7 +352,8 @@ def recompute_ic_weights(ecm, lookback_days: int = 180, horizon: int = 20,
 
         fina["avail"] = fina["end_date"].map(_avail)
 
-        # 各截面 earn IC
+        # 各截面 earn IC（507批次8：-20 为保守缓冲——最新 20 日截面可能披露不全，
+        #   避免用未充分披露的近期数据参与 IC 重估；数据不足时 range 空→insufficient_data）
         ic_list = []
         n_samples_list = []
         n_sections_used = 0
@@ -406,11 +412,11 @@ def recompute_ic_weights(ecm, lookback_days: int = 180, horizon: int = 20,
                     "ic_report": ic_report}
 
         # earn 权重映射（earn 生效，其余 5 维按 DIM_WEIGHTS 相对比例缩放补足 1.0）
-        w_e = min(0.35, max(base, base * (1 + 2.0 * ic_mean)))   # [0.15, 0.35]
+        w_e = min(EARN_WEIGHT_MAX, max(base, base * (1 + 2.0 * ic_mean)))   # [MIN, MAX]
         # W4 权重平滑（433 §3.6）：earn_new = α·w_ic + (1-α)·prev_earn
         if prev_earn is not None:
             w_e = smooth_alpha * w_e + (1 - smooth_alpha) * prev_earn
-            w_e = min(0.35, max(0.15, w_e))
+            w_e = min(EARN_WEIGHT_MAX, max(EARN_WEIGHT_MIN, w_e))
         scale = (1.0 - w_e) / (1.0 - base)
         weights = {k: round(DIM_WEIGHTS[k] * scale, 4) for k in DIM_WEIGHTS if k != "earn"}
         weights["earn"] = round(w_e, 4)

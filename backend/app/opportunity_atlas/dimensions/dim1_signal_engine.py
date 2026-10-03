@@ -433,18 +433,18 @@ class Dim1SignalEngine:
                     requested.add(task_type)
                     try:
                         dm.request_data(task_type=task_type, ts_code=ts_code)
-                        logger.info(f"dim1通知daemon补采: {task_type} {ts_code}")
+                        logger.info("dim1通知daemon补采: %s %s", task_type, ts_code)
                     except Exception as e:
-                        logger.debug(f"dim1通知daemon跳过 {table}: {e}")
+                        logger.debug("dim1通知daemon跳过 %s: %s", table, e)
             except Exception as e:
-                logger.warning(f"dim1通知daemon失败: {e}")
+                logger.warning("dim1通知daemon失败: %s", e)
 
         # 后台线程执行，不阻塞门禁主链路
         try:
             t = threading.Thread(target=_do_notify, daemon=True)
             t.start()
         except Exception as e:
-            logger.warning(f"dim1通知daemon线程启动失败: {e}")
+            logger.warning("dim1通知daemon线程启动失败: %s", e)
 
     def get_data_dependencies(self) -> list:
         """返回本门禁层预加载的数据依赖清单"""

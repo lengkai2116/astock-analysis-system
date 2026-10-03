@@ -2,7 +2,7 @@
 
 # 507号｜SIG 板块 OCR 核查与处置
 
-**版本**：v2.0（2026-10-03；批次1 #S1~#S5 + 批次2 静默 except + 批次3 键错位 + 批次4 数值安全 + 批次5 契约/文档漂移 + 批次6 死代码/防御/性能 + dim4 死副本 + 批次7 潜伏/非管道 + 批次8 Q1/Q2/Q4 + **登记-10 breakdown 重排**，见 §十~§十九；**Q1~Q4 + 登记-10/11 全部已决，收官**）
+**版本**：v2.1（2026-10-03；批次1 #S1~#S5 + 批次2 静默 except + 批次3 键错位 + 批次4 数值安全 + 批次5 契约/文档漂移 + 批次6 死代码/防御/性能 + dim4 死副本 + 批次7 潜伏/非管道 + 批次8 Q1/Q2/Q4 + 登记-10 breakdown 重排 + **行为增强登记项处置**，见 §十~§二十；**#S1~#S29 + Q1~Q4 + 登记-10/11 + 行为增强项全部已决，收官**）
 **v1.1 批次1 实施（2026-10-03）**：用户「开507号批次1实施」。按 §七 批次1（原定 #S1/#S2/#S3/#S4/#S5）开工，**实施中发现两项与既有拍板冲突**：
 - **已实施（零回归，全量 2019 passed）**：**#S1** `dim3_vp_engine` 补模块级 `logger` + 惰性日志；**#S3** daemon RAW-2 筹码指标（SSRP 等）**前移**至 `compute_tags` 之前并注入 `extra_tags['ssrp']`（step13 复用 `_chip_pre`，避免逐股重复 estimate）；**#S5** `dim6_risk_engine` ST 升格 `int(float(...))` 守卫 + 事件块日志 debug→warning。
 - **暂缓（触及 494 号用户 2026-09-28 拍板标定，须单独决策）**：**#S2** `emotion_temperature` `None→0`——docstring 承诺中性 50，但 494 故意依赖 `None→0`（冰点真冰点 32.5 < `ICE_RECOVERY_TEMP=35`）；改 50 会越门误判「冰点回升」并放宽仓位上限（连带 6 项测试失败）。**#S4** `consensus_engine` 中性维 dict 计数——修复会让「中性占比 >0.6」上限**复活**，改变 JUD `_aggregate_v390` 输出（494 fixture 由 enter→wait，连带 2 项测试失败）。两者均为**行为变更**，非无副作用修复。
@@ -563,6 +563,33 @@
 **验证**：`py_compile` OK；ruff 零新增；探针 `tests/test_507_batch8_reg10_granville.py`（**3 断言**：breakdown 可达/中幅跌仍 selling_pressure/负面列表含两标签）；**全量 `tests/` 2104 passed 2 skipped 9 xfailed 零失败**（基线 2101 + 探针 3）；全市场 JUD 门禁 **H1/H2/H3+R1 全 PASS**（五档分布不变＝判定零影响）。daemon 跑完已重启。
 
 **507 号收官（Q1~Q4 + 登记-10/11 全部已决）**：剩余仅批次6/8 行为增强登记项（event_monitor value_counts、potential_engine:350/405、light_derive NaN 拦截、dim1 惰性日志）+ `generate_seven_dim_from_signals` 旧 signals 体（测试兼容引用）——均**行为变更/结构优化，另批拍板**。
+
+---
+
+## 二十、行为增强登记项处置记录（2026-10-03，v2.1）
+
+**用户输入**：「批次6/8 行为增强登记项拍板」→ 只读核查 5 项 → **拍板＝全取推荐项**（概念计数缓存 / 提常量+注释 / 拦 NaN/inf / 改 dim1 日志+旧体保持）。
+
+### 核查结论
+| 项 | 现状 | 处置 |
+|---|---|---|
+| event_monitor `_detect_concept_heat` | 逐股 `get_cached_concept()` 全表 + `value_counts()`——O(股票×概念) | **按日缓存全市场概念计数**（拍板） |
+| potential_engine :405 clamp | `min(0.35, max(0.15, w_e))` 硬编码与 `DIM_WEIGHTS['earn']` 脱钩 | **提为命名常量 EARN_WEIGHT_MIN/MAX**（拍板，零行为） |
+| potential_engine :350 边界 | `-horizon-20` 最后 20 日不作 d0 | **保持 + 注释说明**（保守缓冲有意；拍板不修边界） |
+| light_derive `summary_light` | NaN→yellow、**inf→green**（未拦截） | **拦 NaN/inf→DATA_MISSING**（拍板；inf 行为变更） |
+| light_derive `DATA_MISSING='yellow'` | 缺失灯=黄（Q-439A-2 拍板设计，docstring 已注明「语义＝数据缺失」） | **保持**（非缺陷） |
+| dim1 补采 f-string 日志 | 低频（补采触发） | **改 %s 惰性**（拍板） |
+| `generate_seven_dim_from_signals` 旧体 | test_436 兼容引用（docstring 已标注） | **保持**（拍板） |
+
+### 实施
+- **event_monitor**：`__init__` 增 `_concept_counts_cache`（(日期, counts)）；新增 `_get_concept_counts(cache)` 按日缓存（`_today_str` 键失效）；`_detect_concept_heat` 改走缓存。零行为。
+- **potential_engine**：模块级 `EARN_WEIGHT_MAX=0.35`/`EARN_WEIGHT_MIN=0.15`；两处 clamp 改用常量；:350 加保守缓冲注释。零行为。
+- **light_derive**：`summary_light` 加 `math.isnan/isinf → DATA_MISSING`（原 NaN→yellow 落中性、inf→green 误判）。**inf 行为变更**（green→缺失黄，防御性；门禁验证分布不变）。
+- **dim1**：补采通知 info/debug/warning 4 处 f-string → `%s` 惰性。零行为。
+
+**验证**：`py_compile` OK；ruff 零新增（4 文件全 0）；探针 `tests/test_507_batch8_enhancements.py`（**12 断言**：概念计数缓存×2、EARN 常量×3、NaN/inf 拦截×3+正常值×4、dim1 惰性日志）；**全量 `tests/` 2116 passed 2 skipped 9 xfailed 零失败**（基线 2104 + 探针 12）；全市场 JUD 门禁 **H1/H2/H3+R1 全 PASS**（五档分布不变）。daemon 跑完已重启。
+
+**507 号全部处置完成**（#S1~#S29 + 死副本 + 批次6/7/8 + Q1~Q4 + 登记-10/11 + 行为增强项）——**仅剩 `generate_seven_dim_from_signals` 旧 signals 体（test_436 兼容引用保留，docstring 已标注）与 dim4 双副本收敛候选（`app/data/chip_indicators.py` vs dim4 内 ChipIndicators）**。
 
 ---
 

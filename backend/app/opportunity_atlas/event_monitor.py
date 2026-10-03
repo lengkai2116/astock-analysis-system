@@ -85,6 +85,9 @@ class EventMonitor(DataAwareMixin):
 
     def __init__(self, data_manager=None):
         self._dm = data_manager  # DataAwareMixin 统一注入点
+        # 507批次8：全市场概念计数缓存（(日期, counts)——逐股 _detect_concept_heat
+        #   原每股全表 value_counts O(股票×概念)；按日失效防跨日陈旧）
+        self._concept_counts_cache: tuple = (None, None)
 
     def _today_str(self) -> str:
         return datetime.now().strftime('%Y%m%d')
@@ -769,6 +772,24 @@ class EventMonitor(DataAwareMixin):
             logger.debug("E1 _detect_breakout(%s): %s", ts_code, e)
         return result
 
+    def _get_concept_counts(self, cache):
+        """全市场概念成员计数（507批次8：按日缓存，消除逐股全表 value_counts）"""
+        day = self._today_str()
+        cached_day, counts = self._concept_counts_cache
+        if cached_day == day and counts is not None:
+            return counts
+        try:
+            all_concepts = cache.get_cached_concept()
+            if all_concepts is None or all_concepts.empty:
+                self._concept_counts_cache = (day, None)
+                return None
+            counts = all_concepts['concept_name'].value_counts()
+            self._concept_counts_cache = (day, counts)
+            return counts
+        except Exception as e:
+            logger.debug("E2 概念计数缓存失败: %s", e)
+            return None
+
     def _detect_concept_heat(self, ts_code: str) -> dict:
         """E2 概念热度: 概念板块热度排名升20位
         第一阶段简化：检查概念所属板块数 > 3 标记为活跃概念股。
@@ -782,11 +803,11 @@ class EventMonitor(DataAwareMixin):
                 return result
             # 股票拥有的概念数
             n_concepts = len(df)
-            # 全市场概念分布 → 找出该股票所属概念中成员最多的
-            all_concepts = cache.get_cached_concept()
-            if all_concepts is None or all_concepts.empty:
+            # 全市场概念分布 → 找出该股票所属概念中成员最多的（507批次8：按日缓存，
+            #   消除原每股全表 value_counts）
+            concept_counts = self._get_concept_counts(cache)
+            if concept_counts is None:
                 return result
-            concept_counts = all_concepts['concept_name'].value_counts()
             # 计算该股票所属概念的平均热度排名
             stock_concepts = df['concept_name'].unique()
             ranks = []
