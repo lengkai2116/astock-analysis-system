@@ -2,7 +2,7 @@
 
 # 507号｜SIG 板块 OCR 核查与处置
 
-**版本**：v1.1（2026-10-03；**批次1 部分实施** —— #S1/#S3/#S5 已落地；**#S2/#S4 因与既有用户拍板冲突暂缓**，见 §十）
+**版本**：v1.3（2026-10-03；批次1 全部已决（#S1~#S5）+ **批次2 静默 except 补日志已实施**，见 §十~§十二）
 **v1.1 批次1 实施（2026-10-03）**：用户「开507号批次1实施」。按 §七 批次1（原定 #S1/#S2/#S3/#S4/#S5）开工，**实施中发现两项与既有拍板冲突**：
 - **已实施（零回归，全量 2019 passed）**：**#S1** `dim3_vp_engine` 补模块级 `logger` + 惰性日志；**#S3** daemon RAW-2 筹码指标（SSRP 等）**前移**至 `compute_tags` 之前并注入 `extra_tags['ssrp']`（step13 复用 `_chip_pre`，避免逐股重复 estimate）；**#S5** `dim6_risk_engine` ST 升格 `int(float(...))` 守卫 + 事件块日志 debug→warning。
 - **暂缓（触及 494 号用户 2026-09-28 拍板标定，须单独决策）**：**#S2** `emotion_temperature` `None→0`——docstring 承诺中性 50，但 494 故意依赖 `None→0`（冰点真冰点 32.5 < `ICE_RECOVERY_TEMP=35`）；改 50 会越门误判「冰点回升」并放宽仓位上限（连带 6 项测试失败）。**#S4** `consensus_engine` 中性维 dict 计数——修复会让「中性占比 >0.6」上限**复活**，改变 JUD `_aggregate_v390` 输出（494 fixture 由 enter→wait，连带 2 项测试失败）。两者均为**行为变更**，非无副作用修复。
@@ -320,6 +320,31 @@
 - **全市场门禁**（`_495_b2_jud_market_gate.py`，n=5554）：**H1/H2/H3 + R1 五档全 PASS**（enter 0.2/light 0.3/wait 10.5/reduce 5.6/avoid 83.3），**结论 ✅ 门禁通过**（exit 0）。
 - **改动**：`emotion_temperature.py`（docstring）/ `consensus_engine.py`（中性计数）/ `scripts/_495_b2_jud_market_gate.py`（基线）/ `tests/test_494_batch1_weekly_veto.py`（fixture）/ `tests/test_507_sig_batch1.py`（+#S4 断言）；`py_compile` OK、ruff 零新增。
 - **运行态**：门禁/回归前停 daemon + 看守，**跑完已重启**。
+
+---
+
+## 十二、批次2 实施记录（静默 except 补日志，2026-10-03，v1.3）
+
+**用户输入**：「开批次2」→ 只读核对 §4.1 站点现状 + 确认口径（范围：§4.1 点名核心站点；级别：逐股热路径 `debug`、批/关键降级 `warning`）。
+
+**范围**：§4.1 点名的「核心逻辑降级」站点（**非**全层 ~391 处裸 `except`——多数为刻意静默的缓存读/可选字段，不动）。**先决校验**：10 个目标文件**均已有模块级 `logger`**（不会重蹈批次1 #S1 的 logger 未定义）。
+
+**实施（8 文件，逐股热路径 `debug` / 批·关键降级 `warning`，不改变任何降级行为）**：
+
+| 文件 | 站点 | 级别 |
+|---|---|---|
+| `dimensions/dim2_structure_engine.py` | 结构健康度计算失败 | debug |
+| `dimensions/dim5_emotion_engine.py` | BOCIASI 快线 / 慢线 / 四象限 / 整体块 / 板块热度 / 温度市场级入参 / 融资余额变化率（**7 处**） | debug |
+| `dimensions/dim7_valuation_engine.py` | val / earn 分位基准构建失败（**2 处**） | debug |
+| `dimensions/dim8_summary_engine.py` | 六个环境定位 helper（相对强弱 / 大盘状态 / 板块定位 / 大盘趋势 / 行业 / 个股行业位置） | **warning** |
+| `dim_adapter.py` | signal_confirm 精细分类失败→回退 tags 粗判（K5 曾长期掩盖 NameError） | debug |
+| `tag_extractor.py` | net_lg_amount_5d / margin_cost_price 计算失败 | debug |
+| `cross_validate.py` | light_derive(emotion) 派生失败 / `_load_dim_engine_results` 读取失败 | debug |
+| `radar_service.py` | `_get_stock_name` 查询失败 | debug |
+
+> **已合规、未改**：`dim6_risk_engine.py:435`（批次1 已 debug→warning）、`time_rhythm_engine.py:100`、`radar_service.py:62`（原已有 logger 记录）。
+
+**验证**：`py_compile` OK；ruff **零新增**（dim5 1 / dim7 2 = HEAD 基线；其余 0）；探针 `tests/test_507_batch2_silent_except.py`（12 断言，AST 校验目标 except 不再裸 pass + 日志文案存在）；**全量 `tests/` 2032 passed 2 skipped 9 xfailed 零失败**（基线 2012 + 批次1/2 探针 20）。daemon 跑完已重启。
 
 ---
 
