@@ -180,11 +180,12 @@ _DEAD_CLASSES = [
     'ChipScorer', 'MarketEnvironmentFilter', 'CircuitBreaker',
     'EligibilityFilter', 'LiquidityFilter', 'MarketCapAdapter',
     'ChipPreFilter', 'FinancialRiskFilter', 'ROCEIndicator', 'ChipRiskExecutor',
+    'MainForceScorer',  # 508批次1：dim4 内嵌死副本已删（daemon 用 framework 版）
 ]
 
 _LIVE_CLASSES = [
     'Dim4ChipFundEngine', 'PhaseDetectionEngine', 'TradingPhaseDetector',
-    'MainForceScorer', 'CrowdingFactor', 'ChipIndicators',
+    'CrowdingFactor', 'ChipIndicators',
 ]
 
 

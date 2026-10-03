@@ -151,10 +151,14 @@ class TestDeadCodeRemoved:
     """④ identify_phase / MainForceFilter / _phase_to_status 已从双份代码移除；MainForceScorer live 方法保留"""
 
     def test_dim4_dead_code_absent(self):
-        import app.opportunity_atlas.dimensions.dim4_chip_fund_engine as m
+        """508批次1：dim4 内嵌 MainForceScorer 死副本已删（framework 权威）；
+        死方法 identify_phase/MainForceFilter/_phase_to_status 全仓不残留"""
+        import app.engine.framework.chip_strategy as m
         assert not hasattr(m, 'MainForceFilter')
         assert not hasattr(m, '_phase_to_status')
         assert not hasattr(m.MainForceScorer, 'identify_phase')
+        import app.opportunity_atlas.dimensions.dim4_chip_fund_engine as dm
+        assert not hasattr(dm, 'MainForceScorer'), 'dim4 内嵌 MainForceScorer 应已删（508批次1）'
         # 模块级不残留 def identify_phase（已从 MainForceScorer 移除）
         src = open(m.__file__, encoding='utf-8').read()
         assert 'def identify_phase' not in src

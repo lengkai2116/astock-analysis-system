@@ -34,9 +34,6 @@ from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
     Dim4ChipFundEngine,
 )
 from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
-    MainForceScorer as D4Scorer,
-)
-from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
     PhaseDetectionEngine as D4PhaseEngine,
 )
 from app.opportunity_atlas.phase_detector import PhaseDetectionEngine
@@ -129,19 +126,16 @@ class TestCapitalNatureNoEvidence:
         tags = scorer.get_tags('000001.SZ')
         assert tags.get('capital_nature') == 'hot_money'
 
-    def test_d4_no_lhb_unknown(self):
-        """dim4 副本与 framework 同步：无证据→unknown"""
-        scorer = D4Scorer()
-        scorer._dm = _FakeDM(lhb=pd.DataFrame(), daily=_mk_kline())
+    def test_framework_fake_inst_hot_money(self):
+        """假机构嫌疑（高位+买入占比高→负分）→ hot_money（保留 2026-08-10 区分度）"""
+        scorer = FrameworkScorer()
+        # 高位 K 线（last_close=19 → price_pos≈0.9）；买入占比 8e7/(8e7+2e7)=0.8>0.4 → suspected
+        scorer._dm = _FakeDM(
+            lhb=_mk_lhb(buy_amount=8e7, sell_amount=2e7),
+            daily=_mk_kline(last_close=19.0),
+        )
         tags = scorer.get_tags('000001.SZ')
-        assert tags.get('capital_nature') == 'unknown'
-
-    def test_d4_institutional(self):
-        """dim4 副本：真机构大额买入→institutional"""
-        scorer = D4Scorer()
-        scorer._dm = _FakeDM(lhb=_mk_lhb(buy_amount=3e8), daily=_mk_kline())
-        tags = scorer.get_tags('000001.SZ')
-        assert tags.get('capital_nature') == 'institutional'
+        assert tags.get('capital_nature') == 'hot_money'
 
 
 class _FakeECM:

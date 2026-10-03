@@ -360,20 +360,6 @@ class TestFundFlowDualSource:
         tags = scorer.get_tags('000001.SZ')
         assert tags.get('fund_flow') == '5d_inflow', tags
 
-    def test_dim4_tags_produce_outflow(self, monkeypatch, outflow_dm):
-        """dim4 内嵌 MainForceScorer（双份同步）：同样补 5d_outflow"""
-        from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
-            MainForceScorer as D4Scorer,
-        )
-        scorer = object.__new__(D4Scorer)
-        scorer._data_context = {'moneyflow_df': _mk_outflow_moneyflow(),
-                                'daily_df': _mk_df(30)}
-        scorer._dm = outflow_dm
-        monkeypatch.setattr(D4Scorer, '_score_moneyflow', lambda self, symbol: 0.5)
-        monkeypatch.setattr(D4Scorer, '_score_lhb', lambda self, symbol, df: 0.0)
-        tags = scorer.get_tags('000001.SZ')
-        assert tags.get('fund_flow') == '5d_outflow', tags
-
     def test_outflow_requires_3_neg_days(self, outflow_dm):
         """净额<0 但 5 日中仅 2 日净流出 → 不算强流出（同 _analyze_fund_flow 口径）"""
         from app.engine.framework.chip_strategy import MainForceScorer as FWScorer

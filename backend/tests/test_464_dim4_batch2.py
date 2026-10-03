@@ -34,9 +34,6 @@ from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
     Dim4ChipFundEngine,
     PhaseDetectionEngine,
 )
-from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
-    MainForceScorer as D4Scorer,
-)
 
 
 def _mk_df(n: int = 60) -> pd.DataFrame:
@@ -202,18 +199,8 @@ def _mk_daily_close():
 class TestMarginCostPriceCalc:
     """464-10：_calc_margin_cost_price OHLC 兜底——margin_df 无 K 线列改用 daily 收盘价近似"""
 
-    def test_dim4_copy_computes_with_close_fallback(self):
-        """dim4 内嵌版：margin_df 无 OHLC → daily 收盘价加权 → cost_price=(100*10+200*11+300*12)/600=11.33"""
-        scorer = object.__new__(D4Scorer)
-        scorer._data_context = {'margin_df': _mk_margin_df(), 'daily_df': _mk_daily_close()}
-        scorer._dm = None
-        out = scorer._calc_margin_cost_price('600519.SH', latest_close=12.0)
-        assert out['cost_price'] == 11.33, out
-        # distance 用未舍入 cost_price(11.3333)：(12-11.3333)/11.3333*100 = 5.88
-        assert out['distance_pct'] == pytest.approx(5.88, abs=0.01)
-
     def test_framework_copy_computes_with_close_fallback(self):
-        """framework 版（双份同步）：同样以 daily 收盘价兜底计算"""
+        """framework 版：margin_df 无 OHLC → daily 收盘价加权 → cost_price=(100*10+200*11+300*12)/600=11.33"""
         from app.engine.framework.chip_strategy import MainForceScorer as FWScorer
 
         class _FakeDM:
@@ -227,28 +214,46 @@ class TestMarginCostPriceCalc:
         scorer._dm = _FakeDM()
         out = scorer._calc_margin_cost_price('600519.SH', latest_close=12.0)
         assert out['cost_price'] == 11.33, out
+        # distance 用未舍入 cost_price(11.3333)：(12-11.3333)/11.3333*100 = 5.88
+        assert out['distance_pct'] == pytest.approx(5.88, abs=0.01)
 
     def test_ohlc_columns_use_four_price_avg(self):
         """margin_df 若含 OHLC（兼容旧路径）→ 仍用四价均值（原行为保持）"""
-        scorer = object.__new__(D4Scorer)
-        mdf = _mk_margin_df()
-        mdf['open'] = [9.8, 10.8, 11.8]
-        mdf['high'] = [10.2, 11.2, 12.2]
-        mdf['low'] = [9.6, 10.6, 11.6]
-        mdf['close'] = [10.0, 11.0, 12.0]
-        scorer._data_context = {'margin_df': mdf}
-        scorer._dm = None
+        from app.engine.framework.chip_strategy import MainForceScorer as FWScorer
+
+        class _FakeDM:
+            def get_cached_margin(self, *a, **k):
+                mdf = _mk_margin_df()
+                mdf['open'] = [9.8, 10.8, 11.8]
+                mdf['high'] = [10.2, 11.2, 12.2]
+                mdf['low'] = [9.6, 10.6, 11.6]
+                mdf['close'] = [10.0, 11.0, 12.0]
+                return mdf
+
+            def get_cached_daily_data(self, *a, **k):
+                return _mk_daily_close()
+
+        scorer = object.__new__(FWScorer)
+        scorer._dm = _FakeDM()
         out = scorer._calc_margin_cost_price('600519.SH', latest_close=12.0)
         # 四价均值：9.9/10.9/11.9 加权（100/200/300）→ 11.233 → 11.23
         assert out['cost_price'] == pytest.approx(11.23, abs=0.01), out
 
     def test_insufficient_buy_days_returns_none(self):
         """融资买入日 <3 → None（数据不足，不产伪值）"""
-        scorer = object.__new__(D4Scorer)
-        mdf = _mk_margin_df()
-        mdf['rzmje'] = [0.0, 0.0, 100.0]  # 仅 1 日买入
-        scorer._data_context = {'margin_df': mdf}
-        scorer._dm = None
+        from app.engine.framework.chip_strategy import MainForceScorer as FWScorer
+
+        class _FakeDM:
+            def get_cached_margin(self, *a, **k):
+                mdf = _mk_margin_df()
+                mdf['rzmje'] = [0.0, 0.0, 100.0]  # 仅 1 日买入
+                return mdf
+
+            def get_cached_daily_data(self, *a, **k):
+                return _mk_daily_close()
+
+        scorer = object.__new__(FWScorer)
+        scorer._dm = _FakeDM()
         assert scorer._calc_margin_cost_price('600519.SH', 12.0)['cost_price'] is None
 
 
