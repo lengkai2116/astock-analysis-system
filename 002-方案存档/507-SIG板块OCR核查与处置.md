@@ -2,7 +2,7 @@
 
 # 507号｜SIG 板块 OCR 核查与处置
 
-**版本**：v1.9（2026-10-03；批次1 #S1~#S5 + 批次2 静默 except + 批次3 键错位 + 批次4 数值安全 + 批次5 契约/文档漂移 + 批次6 死代码/防御/性能 + dim4 死副本 + 批次7 潜伏/非管道 + **批次8 Q1/Q2/Q4 处置**，见 §十~§十八）
+**版本**：v2.0（2026-10-03；批次1 #S1~#S5 + 批次2 静默 except + 批次3 键错位 + 批次4 数值安全 + 批次5 契约/文档漂移 + 批次6 死代码/防御/性能 + dim4 死副本 + 批次7 潜伏/非管道 + 批次8 Q1/Q2/Q4 + **登记-10 breakdown 重排**，见 §十~§十九；**Q1~Q4 + 登记-10/11 全部已决，收官**）
 **v1.1 批次1 实施（2026-10-03）**：用户「开507号批次1实施」。按 §七 批次1（原定 #S1/#S2/#S3/#S4/#S5）开工，**实施中发现两项与既有拍板冲突**：
 - **已实施（零回归，全量 2019 passed）**：**#S1** `dim3_vp_engine` 补模块级 `logger` + 惰性日志；**#S3** daemon RAW-2 筹码指标（SSRP 等）**前移**至 `compute_tags` 之前并注入 `extra_tags['ssrp']`（step13 复用 `_chip_pre`，避免逐股重复 estimate）；**#S5** `dim6_risk_engine` ST 升格 `int(float(...))` 守卫 + 事件块日志 debug→warning。
 - **暂缓（触及 494 号用户 2026-09-28 拍板标定，须单独决策）**：**#S2** `emotion_temperature` `None→0`——docstring 承诺中性 50，但 494 故意依赖 `None→0`（冰点真冰点 32.5 < `ICE_RECOVERY_TEMP=35`）；改 50 会越门误判「冰点回升」并放宽仓位上限（连带 6 项测试失败）。**#S4** `consensus_engine` 中性维 dict 计数——修复会让「中性占比 >0.6」上限**复活**，改变 JUD `_aggregate_v390` 输出（494 fixture 由 enter→wait，连带 2 项测试失败）。两者均为**行为变更**，非无副作用修复。
@@ -541,6 +541,28 @@
 - **Q2**：`potential_engine` :213 注释「风险否决：极端泡沫（正偏离过大）」→「价值陷阱防御」（deviation 正=低估 → dev>30=深度低估=价值陷阱，配合 fina_health 质量降权双重防御）。**惩罚条件保留，零行为**。
 
 **验证**：`py_compile` OK；ruff 零新增（3 文件全 0）；探针 `tests/test_507_batch8_remaining.py`（**11 断言**：Q1 死方法/死分支删除、Q2 注释订正+条件保留+符号口径、Q4 dict risk_level 回退×6、登记-11 可达性确认）；**全量 `tests/` 2101 passed 2 skipped 9 xfailed 零失败**（基线 2090 + 探针 11）；全市场 JUD 门禁 **H1/H2/H3+R1 全 PASS**（5554 只，分布不变＝Q1/Q2/Q4 均零行为）。daemon 跑完已重启。
+
+---
+
+## 十九、登记-10 处置记录（dim3 breakdown 分支重排，2026-10-03，v2.0）
+
+**用户输入**：「登记-10 拍板」→ 只读核查（分支可达性 + 消费方 + ma20 定义位置）→ **拍板＝重排分支**（更严条件优先）。
+
+### 核查结论
+- **不可达确认**：`_classify_granville` 中 `breakdown`（:358，`price_chg < -4.0 and vr > 10 and close < ma20`）是前序 `selling_pressure`（:352，`price_chg < -2.0 and vr > 10`）的**子集**——`-4.0` 阈值必先命中 `-2.0` 分支，breakdown **恒不可达**。
+- **影响面**：`granville['rule']` 唯一消费＝dim3 audit「量价八准则」（:253 负面列表 `heavy_pressure/weakening/selling_pressure/breakdown/diverging`）——**breakdown 与 selling_pressure 同列负面列表，satisfied 判定等价**；差异仅在 `status_description` 展示文案（深跌破位股显示「放量下跌」而非「放量破均线」）。**判定零影响**。
+- `ma20` 在 :320 前置定义（`close.rolling(20).mean()`）→ 重排无 NameError 风险。
+
+### 实施
+- `_classify_granville` 分支**重排**：`breakdown`（更严条件）移到 `selling_pressure` 之前。重排后：
+  - 深跌破位（5日跌<-4% + 放量 + 破 MA20）→ **breakdown「放量破均线」**（原恒被吞，现可达）
+  - 一般放量下跌（-2~-4%）→ **selling_pressure「放量下跌」**（保留）
+  - audit「量价八准则」负面判定**不变**（两标签同列表）
+- 附重排注释（说明原不可达原因 + 判定等价性）。
+
+**验证**：`py_compile` OK；ruff 零新增；探针 `tests/test_507_batch8_reg10_granville.py`（**3 断言**：breakdown 可达/中幅跌仍 selling_pressure/负面列表含两标签）；**全量 `tests/` 2104 passed 2 skipped 9 xfailed 零失败**（基线 2101 + 探针 3）；全市场 JUD 门禁 **H1/H2/H3+R1 全 PASS**（五档分布不变＝判定零影响）。daemon 跑完已重启。
+
+**507 号收官（Q1~Q4 + 登记-10/11 全部已决）**：剩余仅批次6/8 行为增强登记项（event_monitor value_counts、potential_engine:350/405、light_derive NaN 拦截、dim1 惰性日志）+ `generate_seven_dim_from_signals` 旧 signals 体（测试兼容引用）——均**行为变更/结构优化，另批拍板**。
 
 ---
 

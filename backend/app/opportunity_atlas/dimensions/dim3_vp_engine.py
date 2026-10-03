@@ -348,14 +348,18 @@ def _classify_granville(df, vol_ratio: float, tags: dict) -> dict:
         elif consec_expand and stall_sum < 0.01:
             result = {'rule': 'heavy_pressure', 'name': '放量滞涨', 'description': '连续数日量能显著放大但价格无法加速，上方压力沉重'}
 
+        elif price_chg < -4.0 and vr > 10 and close.iloc[-1] < ma20:
+            # 507批次8（登记-10 重排）：深跌破位（5日跌<-4% + 放量 + 跌破 MA20）优先判定——
+            #   原位于 selling_pressure（<-2.0 且 vr>10）之后，条件为其子集被先吞、恒不可达。
+            #   audit「量价八准则」负面判定等价（两标签同列负面列表），重排仅使展示文案精确
+            #   （深跌破位显示「放量破均线」而非「放量下跌」）。
+            result = {'rule': 'breakdown', 'name': '放量破均线', 'description': '放量跌破MA20，多空格局转变'}
+
         elif price_chg < -2.0 and vr > 10:
             result = {'rule': 'selling_pressure', 'name': '放量下跌', 'description': '抛盘涌出，卖压释放'}
 
         elif price_chg < -1.0 and vr < -10:
             result = {'rule': 'pullback_shrinking', 'name': '回探缩量', 'description': '回调缩量，卖压减轻，反弹可期'}
-
-        elif price_chg < -4.0 and vr > 10 and close.iloc[-1] < ma20:
-            result = {'rule': 'breakdown', 'name': '放量破均线', 'description': '放量跌破MA20，多空格局转变'}
 
         elif str(tags.get('volume_price_fit', '')) == 'diverging':
             result = {'rule': 'diverging', 'name': '量价背离', 'description': '价格创新高但量能未跟上，买盘减弱'}
