@@ -256,9 +256,9 @@ def _assess_risk(dim_results: dict) -> float:
 
     atr_raw = sd.get('atr_pct')
     atr = _safe_float(atr_raw, None)  # sentinel: None means missing
-    # 495号（B3）：atr_pct 单位修复——dim6 产出百分数（3.98=3.98%），390 方案 0.3/0.7 按小数
-    #   语义致全市场恒走 >0.7→0.4；改百分数分档 3.0/7.0（Wiki《ATR止损》：低波动 3-5%、高 8-12%）。
-    if atr_raw is None:
+    # 507批次4 #S21：守卫查 `atr_raw is None` 但 `atr`（_safe_float 结果）非数值串时为 None
+    #   → `atr < 3.0` 抛 TypeError 被外层吞 → 整维静默 0.5。改按 `atr is None` 判断。
+    if atr is None:
         base = _DEFAULT_RELIABILITY
     elif atr < 3.0:
         base = 0.9

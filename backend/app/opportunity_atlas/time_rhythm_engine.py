@@ -63,6 +63,10 @@ class TimeRhythmEngine:
                 pass
 
             current_bw = bandwidth[-1] if len(bandwidth) > 0 else 100
+            # 507批次4 #S22：rolling(20).std() 前窗 NaN → bandwidth NaN → 判定全 False
+            #   落 early_consolidation；NaN 时按中性大带宽（100，不触发收缩）
+            if isinstance(current_bw, float) and current_bw != current_bw:
+                current_bw = 100.0
 
             # 中枢横盘时长：连续多少日价格在窄幅区间内
             consolidation_days = 0

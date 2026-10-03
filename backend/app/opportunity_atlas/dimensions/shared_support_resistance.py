@@ -44,16 +44,20 @@ def calc_support_resistance(df=None, indicator_ma_df=None) -> dict:
     closes = df['close'].values
     price = float(closes[-1])
 
+    def _non_nan(v):
+        # 507批次4 #S18①：`is not None` 不拦 NaN → NaN MA/极值污染支撑压力位
+        return v is not None and not (isinstance(v, float) and np.isnan(v))
+
     # 1. MA20 + 近20日低点 → 支撑位（MA20 优先 indicator_ma_df，raw fallback）
     ma20 = None
     if indicator_ma_df is not None and not indicator_ma_df.empty and 'ma20' in indicator_ma_df.columns:
         val = indicator_ma_df['ma20'].iloc[-1]
-        if val is not None:
+        if _non_nan(val):
             ma20 = float(val)
     if ma20 is None:
         ma20 = float(np.mean(closes[-20:]))
     lo20 = float(df['low'].tail(20).min()) if 'low' in df.columns else None
-    support_candidates = [x for x in [ma20, lo20] if x is not None]
+    support_candidates = [x for x in [ma20, lo20] if _non_nan(x)]
     support = max(support_candidates) if support_candidates else None
 
     # 止损必须低于现价
@@ -73,14 +77,15 @@ def calc_support_resistance(df=None, indicator_ma_df=None) -> dict:
     ma60 = None
     if indicator_ma_df is not None and not indicator_ma_df.empty and 'ma60' in indicator_ma_df.columns:
         val = indicator_ma_df['ma60'].iloc[-1]
-        if val is not None:
+        if _non_nan(val):
             ma60 = float(val)
     if ma60 is None:
         ma60 = float(np.mean(closes[-60:])) if len(df) >= 60 else None
 
     # 364f修复：取高于现价的最近位，非简单min
-    resistance_candidates = [x for x in [hi60, ma60] if x is not None and x > price]
-    resistance = min(resistance_candidates) if resistance_candidates else hi60
+    resistance_candidates = [x for x in [hi60, ma60] if _non_nan(x) and x > price]
+    # 507批次4 #S18②：无上方压力时原回退 hi60 可低于现价 → dist_res 负/R:R 失真，改 None
+    resistance = min(resistance_candidates) if resistance_candidates else None
 
     dist_sup = (support / price - 1) * 100 if support else None
     dist_res = (resistance / price - 1) * 100 if resistance else None
@@ -107,8 +112,9 @@ def calc_support_resistance(df=None, indicator_ma_df=None) -> dict:
             dist_prev_high = round((price / prev_high - 1) * 100, 2)
 
     return {
-        'support_price': round(support, 2) if support else None,
-        'resistance_price': round(resistance, 2) if resistance else None,
+        # 507批次4 #S18③：原 `if support else None` 丢弃恰好 0.0 的合法值 → 改用 is not None
+        'support_price': round(support, 2) if support is not None else None,
+        'resistance_price': round(resistance, 2) if resistance is not None else None,
         'dist_to_support_pct': round(dist_sup, 2) if dist_sup is not None else None,
         'dist_to_resistance_pct': round(dist_res, 2) if dist_res is not None else None,
         'risk_reward': round(rr, 2) if rr is not None else None,

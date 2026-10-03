@@ -548,7 +548,8 @@ class Dim6RiskEngine(DataAwareMixin):
             'level': risk_info['level'],
             'risk_level': risk_info['level'],
             'overall_direction': -1 if risk_info['level'] in ('高', '极高') else (1 if risk_info['level'] in ('低',) else 0),
-            'continuous_value': round(min(rr_info.get('rr_value', 0) / 3.0, 1.0), 4) if rr_info.get('rr_value') else 0.5,
+            # 507批次4 #S20：rr_value<0 时原 `min(rr/3,1)` 负值下传；clamp 到 [0,1]（==0 仍走 0.5 中性兜底）
+            'continuous_value': round(min(max(rr_info.get('rr_value', 0), 0.0) / 3.0, 1.0), 4) if rr_info.get('rr_value') else 0.5,
         }
 
         conditions = [

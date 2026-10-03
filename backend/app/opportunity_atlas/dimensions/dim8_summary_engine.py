@@ -1357,17 +1357,27 @@ def _index_trend_sentence(dim_results: dict) -> str:
                     except (TypeError, ValueError):
                         pct_1d = 0.0
             piece = f'{label}{last:.0f}(当日{pct_1d:+.1f}%)'
+            # 507批次4 #S19：除以 21/61 日前的收盘价可能为 0/NaN → 除零/NaN 污染展示；守卫
+            def _ret(n_back: int):
+                v = float(closes.iloc[-n_back])
+                if v <= 0 or (isinstance(v, float) and v != v):
+                    return None
+                return (last / v - 1) * 100
             # 近20/60日涨跌幅 + 60日线上下方
             if len(closes) >= 61:
-                ret20 = (last / float(closes.iloc[-21]) - 1) * 100
-                ret60 = (last / float(closes.iloc[-61]) - 1) * 100
+                ret20 = _ret(21)
+                ret60 = _ret(61)
                 ma60 = float(closes.iloc[-60:].mean())
                 pos = '60日线上方' if last >= ma60 else '60日线下方'
-                tone = '偏强' if ret60 >= 0 and last >= ma60 else ('偏弱' if ret60 <= -5 else '中性')
-                piece += f'，近20日{ret20:+.1f}%/近60日{ret60:+.1f}%，{pos}（{tone}）'
+                tone = '偏强' if ret60 is not None and ret60 >= 0 and last >= ma60 \
+                    else ('偏弱' if ret60 is not None and ret60 <= -5 else '中性')
+                _r20 = f'{ret20:+.1f}%' if ret20 is not None else 'n/a'
+                _r60 = f'{ret60:+.1f}%' if ret60 is not None else 'n/a'
+                piece += f'，近20日{_r20}/近60日{_r60}，{pos}（{tone}）'
             elif len(closes) >= 21:
-                ret20 = (last / float(closes.iloc[-21]) - 1) * 100
-                piece += f'，近20日{ret20:+.1f}%'
+                ret20 = _ret(21)
+                _r20 = f'{ret20:+.1f}%' if ret20 is not None else 'n/a'
+                piece += f'，近20日{_r20}'
             parts.append(piece)
         if not parts:
             return ''

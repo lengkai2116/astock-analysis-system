@@ -548,21 +548,30 @@ class ConfirmLayer:
         return {'confidence_mult': 1.0, 'reason': ''}
 
     def _false_breakout_check(self, context: dict) -> dict:
-        vol_ratio = context.get('vol_ratio', 0)
+        # 507批次4 #S23：context 缺字段时原默认 0 → fail-closed 拦信号（量能不足/突破不足/
+        #   穿透不足），与「可选字段」语义相反（缺数据不应用假 HOLD 拦掉信号）。
+        #   改 fail-open：缺字段 → 不拦截（passed=True）。
+        vol_ratio = context.get('vol_ratio')
+        if vol_ratio is None:
+            return {'passed': True, 'reason': ''}
         if vol_ratio < 1.5:
             return {
                 'passed': False,
                 'reason': "量能不足(vol_ratio={:.2f}<1.5)".format(vol_ratio)
             }
 
-        breakout_days = context.get('breakout_days', 0)
+        breakout_days = context.get('breakout_days')
+        if breakout_days is None:
+            return {'passed': True, 'reason': ''}
         if breakout_days < 3:
             return {
                 'passed': False,
                 'reason': "突破时间不足(breakout_days={}<3)".format(breakout_days)
             }
 
-        cyqkl = context.get('cyqkl', 0)
+        cyqkl = context.get('cyqkl')
+        if cyqkl is None:
+            return {'passed': True, 'reason': ''}
         if cyqkl < 0.2:
             return {
                 'passed': False,
