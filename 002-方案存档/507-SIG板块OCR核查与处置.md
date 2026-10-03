@@ -2,7 +2,12 @@
 
 # 507号｜SIG 板块 OCR 核查与处置
 
-**版本**：v1.0（2026-10-03；**只读核查档，未改任何代码/配置**）
+**版本**：v1.1（2026-10-03；**批次1 部分实施** —— #S1/#S3/#S5 已落地；**#S2/#S4 因与既有用户拍板冲突暂缓**，见 §十）
+**v1.1 批次1 实施（2026-10-03）**：用户「开507号批次1实施」。按 §七 批次1（原定 #S1/#S2/#S3/#S4/#S5）开工，**实施中发现两项与既有拍板冲突**：
+- **已实施（零回归，全量 2019 passed）**：**#S1** `dim3_vp_engine` 补模块级 `logger` + 惰性日志；**#S3** daemon RAW-2 筹码指标（SSRP 等）**前移**至 `compute_tags` 之前并注入 `extra_tags['ssrp']`（step13 复用 `_chip_pre`，避免逐股重复 estimate）；**#S5** `dim6_risk_engine` ST 升格 `int(float(...))` 守卫 + 事件块日志 debug→warning。
+- **暂缓（触及 494 号用户 2026-09-28 拍板标定，须单独决策）**：**#S2** `emotion_temperature` `None→0`——docstring 承诺中性 50，但 494 故意依赖 `None→0`（冰点真冰点 32.5 < `ICE_RECOVERY_TEMP=35`）；改 50 会越门误判「冰点回升」并放宽仓位上限（连带 6 项测试失败）。**#S4** `consensus_engine` 中性维 dict 计数——修复会让「中性占比 >0.6」上限**复活**，改变 JUD `_aggregate_v390` 输出（494 fixture 由 enter→wait，连带 2 项测试失败）。两者均为**行为变更**，非无副作用修复。
+- **改动**：`data_daemon.py` / `dimensions/dim3_vp_engine.py` / `dimensions/dim6_risk_engine.py` 3 文件 + 探针 `tests/test_507_sig_batch1.py`（7 断言）；`py_compile` OK、ruff 零新增（data_daemon 38 基线、dim6 1 基线 F841 `ce`）、**全量回归 2019 passed 2 skipped 9 xfailed 零失败**（daemon 停后跑，跑完已重启）。
+**版本（原始 v1.0）**：只读核查档（2026-10-03；未改任何代码/配置）
 **来源**：2026-10-03 用户要求「调用 OCR 对系统中的 SIG 板块的实际代码进行扫描检查，发现的问题进行核查并在对话框内进行说明，不要修改方案和代码」→ 对话框内核查报告出具后，用户要求「开 507 号，先落核查档」。
 **方法**：`ocr scan`（alibaba/open-code-review，DeepSeek `deepseek-chat`，`--max-tokens 200000`）全量扫描 SIG 层，**逐条人工核实**（OCR 存在上下文/伪影误报，全部对照真实代码/调用图核对，误报/设计意图/待确认单列 §六）。
 **范围（SIG＝第 5 层，COL→RAW→SIG→JUD→OUT）**：代码根 `backend/app/opportunity_atlas/`，共 **33 文件 / 24.5k 行**：
@@ -247,9 +252,41 @@
 | 登记-2 | Q2 `valuation_deviation` 符号口径（决定 `dev>30` 方向） | **待业务确认** |
 | 登记-3 | Q3 `SIGNAL_ADJUSTMENT` 键对齐方式 | **待拍板** |
 | 登记-4 | Q4 `light_derive._risk_source_is_high` dict 分支补键 | **待拍板**（低影响） |
-| 登记-5 | #S3 SSRP 注入 `extra_tags` 的接线方式 | 批次1 |
+| 登记-5 | #S3 SSRP 注入 `extra_tags` 的接线方式 | ✅ 批次1 已实施（前移 + 注入） |
 | 登记-6 | §4.2 `divergence_type` / `_daily_dir` 实际枚举确认 | 批次3 |
 | 登记-7 | 与 489/490/491/492/464 重叠项，不重复计入 | 已标注 |
+| **登记-8（新）** | **#S2 `emotion_temperature` `None→0` vs docstring 中性 50** | **暂缓**（触及 494 冰点回升标定，见 §十） |
+| **登记-9（新）** | **#S4 `consensus_engine` 中性维 dict 计数** | **暂缓**（修复会改变 JUD `_aggregate_v390` 输出，见 §十） |
+
+---
+
+## 十、批次1 实施记录（2026-10-03，v1.1）
+
+**用户输入**：「开507号批次1实施」。
+
+**实施范围**：§七 批次1 原定 5 项（#S1/#S2/#S3/#S4/#S5）。**实施中发现 #S2/#S4 与既有用户拍板冲突**，故实际落地 **3 项**（#S1/#S3/#S5），#S2/#S4 暂缓待决策。
+
+### 已实施（3 项，零回归）
+
+- **#S1 `dimensions/dim3_vp_engine.py`** ✅ ——补模块级 `logger = logging.getLogger(__name__)`（原仅 `import logging`，:114 except 分支 `logger.warning` 会抛 `NameError`）；该行改惰性 `%s`。**实证**：原文件 `grep logger =` 无定义。
+- **#S3 `data_daemon.py` + 消费链** ✅ ——RAW-2 新增 **step9.5 筹码指标前移**：在 `compute_tags`（step10）之前用 `cde.estimate(df)` + `ChipIndicators.calculate_all_indicators` 预计算 `_chip_pre`（ssrp/asr/concentration/profit_ratio/cyqkl/rsi）；step10 的 `_extra` 注入 `_extra['ssrp'] = _chip_pre.get('ssrp')`（原 `_extra` 只有 buy_sell_point/main_force_presence）；step13 **复用 `_chip_pre`**（原块整体替换为 6 键赋值），避免逐股重复 estimate。**根因**：`_extra` 在 step10 构造、ssrp 原在 step13 才产出 → `phase_detector._dim_ssrp`（权重 2.5）恒收不到 ssrp → 该维恒不投票；`main_force_phase` 输出随之变化（更符合设计）。**回归**：`test_464_17`（phase_detector 7 维）、`test_451_dim4_asr_semantics` 等全过。
+- **#S5 `dimensions/dim6_risk_engine.py`** ✅ ——ST 升格 `_sev = '极高' if int(ev.get('direction',0)) <= ...` 改为 `int(float(...))` + try/except 守卫（原 `direction=None`/非数字串时 `int()` 抛错被外层 except 吞 → 整块事件风险/PIERS 升格「极高」丢失，JUD 硬否决依赖此升格）；同块 except 日志 `debug`→`warning`（含 `ts_code`）。
+
+### 暂缓（2 项，触及既有拍板，非无副作用修复）
+
+- **#S2 `emotion_temperature.market_level_temperature` —— docstring 与 494 标定冲突**：docstring 承诺 `limit_up_count=None → 中性（50）`、`calc_emotion_temperature` 里 `limit_up_score = min(100,max(0,count))`（50 分确为中性）；但 **494 号（用户 2026-09-28 拍板 `ICE_RECOVERY_TEMP=35`）** 明确以「ice 真冰点（中性输入）≈**32.5** 不触发回升」为标定——32.5 正来自 `None→0`。改 50 后 `market_level_temperature('ice')=40.0 ≥ 35`，**冰点缺数据时误判「回升」→ 放宽仓位上限（0.10→0.60）**。连带 6 项失败（`test_492_jud_k1_k5` ×1 / `test_493_p2c_e_f` ×2 / `test_494_batch2_market_temp` ×3）。**处置**：暂缓，建议**同时修订 docstring（None→0 属既定口径）或重定 494 冰点标定**后单独实施。
+- **#S4 `consensus_engine.compute` 中性维计数 —— 会改变 JUD 输出**：`dims_factor` 值为嵌套 dict（`{direction,strength,...}`），中性计数块直接 `float(score)` 抛 `TypeError` 被吞 → dict 形态维**永不计中性** → `neutral_ratio` 恒低 → 「中性占比 >0.6」上限**从未触发**。修复后上限**复活**：494 fixture（13 维全中性、仅一个标量 bull）由 `consensus_rate=1.0` → cap `0.5` → `_aggregate_v390` **enter→wait**。连带 2 项失败（`test_494_batch1_weekly_veto`×2）。**处置**：暂缓，属**行为变更**，须先确认「中性上限是否应当生效、对全市场 opportunity_state 分布的影响」后单独实施。
+
+### 验证与运行态
+
+- **改动**：3 代码文件 + 探针 `tests/test_507_sig_batch1.py`（7 断言）。
+- **验证**：`py_compile` OK；ruff 零新增（`data_daemon` 38 = 基线、`dim6` 1 = 基线既有 F841 `ce`、`dim3` clean）；定向回归（dim3/dim5/dim6/consensus/phase_detector 27 文件）**275 passed**；**全量 `tests/` 2019 passed 2 skipped 9 xfailed 零失败**（基线 2012 + 探针 7）。
+- **运行态**：全量回归前停 `data_daemon` + `start_daemon.sh` 看守（否则卡 ECM 建表写锁）；**跑完已重启**（看守 PID 10277 + daemon 10292）。
+- **未推送**（工作树）。
+
+### 与 §九 的差异
+
+原 §七 批次1 含 #S2/#S4；**实际批次1 = #S1/#S3/#S5**。#S2 → 登记-8、#S4 → 登记-9，**待用户决策**（可选：① 按 docstring/修复实施并同步修订 494 标定+测试；② 维持现状、修订 docstring 说明 None→0 为既定口径）。
 
 ---
 
