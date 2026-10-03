@@ -209,7 +209,11 @@ class PotentialEngine:
         weighted = sum(self._weights.get(k, 0.1) * v for k, v in dims.items())
         score = weighted / max(w_sum, 0.01) * env_w * quality
 
-        # 风险否决：极端泡沫（正偏离过大）
+        # 价值陷阱防御（507批次8 Q2 订正）：valuation_deviation 正=低估（composite 大=低估、
+        #   deviation=composite*20，见 dim7 _compute_valuation），dev>30=深度低估——
+        #   惩罚深度低估股（价值陷阱：基本面恶化被误判为低估），配合 fina_health 质量降权
+        #   （suspicious ×0.7 / fail 封顶 0.2）双重防御。原注释「极端泡沫（正偏离过大）」
+        #   与正=低估口径矛盾，已订正。
         if dev_f is not None and dev_f > 30:
             score *= 0.3
 

@@ -139,9 +139,11 @@ def summary_light(consensus_rate) -> str:
 
 def _risk_source_is_high(s) -> bool:
     """风险 5 源条目是否「高」——兼容 dim6 引擎产出（475 P1：'名称：等级' 字符串列表）
-    与 dict 形态（{'name','level'}，历史/测试构造）。"""
+    与 dict 形态（{'name','level'}，历史/测试构造）。
+    507批次8（Q4）：dict 分支补 'risk_level' 键回退——对齐 risk_light 的
+    `judgment.risk_level or level` 读法（live 字符串列表路径不变）。"""
     if isinstance(s, dict):
-        return str(s.get('level')) == '高'
+        return str(s.get('risk_level') or s.get('level')) == '高'
     return str(s).rsplit('：', 1)[-1].strip() == '高'
 
 

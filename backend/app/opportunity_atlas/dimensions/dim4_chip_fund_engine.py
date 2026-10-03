@@ -1071,8 +1071,8 @@ class PhaseDetectionEngine(DataAwareMixin):
         return self._chip_estimator
 
     def _chip_distribution_analysis(self, ts_code: str, df: pd.DataFrame) -> Dict:
-        """筹码分布分析 → {asr, peak_positions, signal}"""
-        result = {"asr": 0.0, "peak_position": 0.0, "signal": "neutral"}
+        """筹码分布分析 → {asr, peak_position}"""
+        result = {"asr": 0.0, "peak_position": 0.0}
 
         estimator = self._get_chip_estimator()
         try:
@@ -1103,25 +1103,10 @@ class PhaseDetectionEngine(DataAwareMixin):
             peak_price = min_p + peak_idx * step
             result["peak_position"] = peak_price
 
-            # ASR 信号（298号§三Step4 ASR量化阈值规则，2026-08-13 阈值×100 对齐 0-100 量级）
-            if asr > 90 and current_price < peak_price * 0.95:
-                result["signal"] = PHASE_LIFTING  # ASR极高 + 价格低于峰值
-            elif asr < 15 and abs(current_price - peak_price) / max(peak_price, 1) < 0.1:
-                result["signal"] = PHASE_BUILDING  # ASR极低 + 近峰值（筹码锁定在建仓范围）
-            elif asr < 15 and current_price > peak_price * 1.2:
-                result["signal"] = PHASE_LIFTING  # ASR极低 + 有浮盈（拉升途中）
-            elif asr > 30 and current_price > peak_price * 1.05:
-                result["signal"] = PHASE_DISTRIBUTING  # ASR上升 + 高于峰值（筹码扩散）
-            else:
-                result["signal"] = PHASE_WASHING
         except Exception:
             pass
 
         return result
-
-    def _asr_to_phase(self, chip_signal: Dict, df: pd.DataFrame) -> str:
-        """ASR 信号 → 阶段"""
-        return chip_signal.get("signal", PHASE_UNKNOWN)
 
     # ═══════════════════════════════════════════════════════════
     # 源1: TradingPhaseDetector
