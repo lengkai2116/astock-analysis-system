@@ -2,7 +2,7 @@
 
 # 507号｜SIG 板块 OCR 核查与处置
 
-**版本**：v1.6（2026-10-03；批次1 #S1~#S5 + 批次2 静默 except + 批次3 键错位 + 批次4 数值安全 + **批次5 契约/文档漂移**，见 §十~§十五）
+**版本**：v1.7（2026-10-03；批次1 #S1~#S5 + 批次2 静默 except + 批次3 键错位 + 批次4 数值安全 + 批次5 契约/文档漂移 + **批次6 死代码/防御/性能 + dim4 死副本**，见 §十~§十六）
 **v1.1 批次1 实施（2026-10-03）**：用户「开507号批次1实施」。按 §七 批次1（原定 #S1/#S2/#S3/#S4/#S5）开工，**实施中发现两项与既有拍板冲突**：
 - **已实施（零回归，全量 2019 passed）**：**#S1** `dim3_vp_engine` 补模块级 `logger` + 惰性日志；**#S3** daemon RAW-2 筹码指标（SSRP 等）**前移**至 `compute_tags` 之前并注入 `extra_tags['ssrp']`（step13 复用 `_chip_pre`，避免逐股重复 estimate）；**#S5** `dim6_risk_engine` ST 升格 `int(float(...))` 守卫 + 事件块日志 debug→warning。
 - **暂缓（触及 494 号用户 2026-09-28 拍板标定，须单独决策）**：**#S2** `emotion_temperature` `None→0`——docstring 承诺中性 50，但 494 故意依赖 `None→0`（冰点真冰点 32.5 < `ICE_RECOVERY_TEMP=35`）；改 50 会越门误判「冰点回升」并放宽仓位上限（连带 6 项测试失败）。**#S4** `consensus_engine` 中性维 dict 计数——修复会让「中性占比 >0.6」上限**复活**，改变 JUD `_aggregate_v390` 输出（494 fixture 由 enter→wait，连带 2 项测试失败）。两者均为**行为变更**，非无副作用修复。
@@ -439,6 +439,48 @@
 - #S30 `advice_builder` R:R 门 → **死副本**（文件自注「生效副本见 advice_engine」）；生效版 `advice_engine:591-594` R:R 门**正确**（`<RR_GATE=2.0`）。
 
 **验证**：`py_compile` OK；ruff 零新增（4 文件全 0）；探针 `tests/test_507_batch5_contract_drift.py`（4 断言）；**全量 `tests/` 2050 passed 2 skipped 9 xfailed 零失败**（基线 2012 + 探针 38）。daemon 跑完已重启。
+
+---
+
+## 十六、批次6 实施记录（死代码/防御/性能 + dim4 死副本，2026-10-03，v1.7）
+
+**用户输入**：「按 resume-20261003 接续，开批次6」→ 只读核查 §五/§4.5/dim4 死副本活性 → 四项拍板（**#S14 补产键修复 / #S25 ecm 优先 / 删除已确认死副本 / 范围仅 §五 死代码·防御·性能 + 死副本，不含 §4.5**）。
+
+### 核查修正（活性追踪推翻/纠正批次3/5 的 3 处结论）
+
+| 项 | 批次3/5 结论 | 本批活性追踪 | 处置 |
+|---|---|---|---|
+| **#S14**（`vol_status`/`cyqkl_status`） | 归「死副本→批次6」 | **LIVE 静默失效**：`Dim4ChipFundEngine.evaluate`(:5977) → 本模块 `PhaseDetectionEngine`(:379) `compute_tags` → `_dim_chip` → `_run_trading_phase_detector_v2` → **`TradingPhaseDetector`(:1309) 实为 LIVE**（被 v2 实例化）；`ChipIndicators.calculate_all_indicators` 不产两键 → 洗盘/拉升/出货评分分支恒不加分 | **补产键修复**（对齐生效副本分档阈值） |
+| **#S25**（`build_fcf_percentile`） | 「全仓无调用方（死方法）」 | **LIVE**：`valuation_estimator.ValuationEngine.build_fcf_percentile`(:205) 被 **data_daemon.py:3747** 调用（RAW-2 截面基准）；真实缺陷＝接收 `ecm` 却忽略（恒用 `self._get_dm().cache`）；dim7 版(:258) 用 `ecm`，两处独立 LIVE | **ecm 优先**（`ecm if ecm is not None else self._get_dm().cache`） |
+| `:379 PhaseDetectionEngine`（dim4 副本） | 未明示 | **LIVE**（被 `Dim4ChipFundEngine.evaluate` 实例化）；类内死方法 `_run_trading_phase_detector`/`_run_stage_detector`/`_asr_to_phase` 零调用 | 保留类；死方法（含 #S7 载体）**登记**（Q1 待拍板，不随本批删） |
+
+**死副本边界**（零外部实例化，本批删除）：`ChipDistributionSignalGenerator`(:1552)/`ChipUniverseSelectionModel`/`ChipAlphaModel`/`ChipRiskManagementModel`/`ChipScorer`(:2466-:2823)/`ChipPositionManager`(:3613，含 **#S13** SIGNAL_ADJUSTMENT 键错位)/`MarketEnvironmentFilter`/`CircuitBreaker`/`EligibilityFilter`/`LiquidityFilter`/`MarketCapAdapter`/`ChipPreFilter`(:4298，含 `_INDUSTRY_MEMO`)/`FinancialRiskFilter`(:4467，含 `_check_roce` fail-open+ROCE 双阈值)/`ROCEIndicator`/`ChipRiskExecutor`(:4889)。**保留 LIVE**：`PhaseDetectionEngine`/`TradingPhaseDetector`/`MainForceScorer`/`CrowdingFactor`/`Dim4ChipFundEngine`。§4.5 的 `_INDUSTRY_MEMO` 无锁、ROCE fail-open/双阈值 均随死副本处置（非 LIVE 缺陷）。
+
+### 实施
+
+| # | 文件 | 改动 |
+|---|---|---|
+| #S14 | `dim4_chip_fund_engine.ChipIndicators` | `calculate_all_indicators` 补产 `cyqkl_status`/`vol_status`（对齐生效副本 `app/data/chip_indicators.py` 阈值：vol_ratio≥3 天量/≥2 显著放量/≥1.5 放量/≤0.3 地量/≤0.7 缩量；cyqkl<10 弱/<30 中等/<60 强/<80 很强/≥80 极强）；新增 `_classify_vol_status`/`_classify_cyqkl_status` |
+| #S25 | `valuation_estimator.build_fcf_percentile` | `cache = ecm if ecm is not None else self._get_dm().cache`（daemon 传 dm.cache 同源零行为；对齐 dim7 版语义，防分库错读） |
+| 死副本 | `dim4_chip_fund_engine.py` | 删除上述 15 个零实例化类 + `_get_stock_industry` 模块函数（**-2808 行**，6202→3394 行）；#S13 随 `ChipPositionManager` 删除自动处置 |
+| §五 裸表达式 | 7 文件 | 删「计算即丢弃」7 处（conflict_matrix `max(len(_directions),1)`/advice_engine+advice_builder `sum(1...)`/radar_service `top_summaries[0]`/phase_detector `df["close"].values`/dim5 `slow_result.get`/time_rhythm 带宽趋势） |
+| §五 死导入/死参数 | 6 处 | dim2 未用 chanlun 导入（ruff F401 40 处）+`_assess_vs_zhongshu` 删 `dims` 形参（含测试调用同步）；dim7 删 4 个未用 rating 导入；shared_vol_ratio 删未用 logger；dim3 删 `_load_precomputed_macd`/`_MACD_PRECOMPUTED_CACHE` 死代码；dim_adapter 删 `_emo_judg`/`_val_judg` 死局部；signal_analyzer 删 `maintenance` 死参数（signal_plain/build_audit） |
+| §五 惰性日志 | `status_engine` | v390 L1~L6 六处 f-string → `%s` 惰性 |
+| §五 注释失真 | 2 处 | dim1 relative_strength SQL 注释对齐实为 `ORDER BY ts_code, asof_date DESC, benchmark`；`generate_seven_dim_from_signals` docstring 注明旧 signals 分支生产不可达（仅 test_436 兼容引用） |
+| §五 性能 | `shared_support_resistance` | 函数内 `import numpy` → 模块级 |
+| 回归清理 | dim4 | 删死副本后遗留未用导入 `date`/`Any`；time_rhythm 遗留 `bw_recent` |
+
+**同步测试**：`_assess_vs_zhongshu` 调用删 dims 实参（test_463/test_479_2）；`TestIndustryBlacklist` 删 dim4 死副本段（:235 引用已删 `FinancialRiskFilter`）、保留 framework 生效副本断言。
+
+**登记（行为增强/结构优化，与 §4.5 同类延后，未随手改）**：
+- `event_monitor:786` `_detect_concept_heat` 逐股全表 `value_counts`（O(股票×概念)）——需跨调用缓存设计；
+- `radar_service:129` 取股名 N+1——需批量接口；
+- 其它防御：`light_derive:109/129`（DATA_MISSING/yellow 区分、summary_light NaN 拦截）、`potential_engine:350/405`（截面边界/常量脱钩）、`backtest_minimal:86/113/237`（consensus_rate None/日期键/os.environ）——**行为增强**，单独拍板；
+- `generate_seven_dim_from_signals` 旧 signals 体（生产不可达，test_436 兼容引用保留）；
+- dim4 类内死方法 `_run_trading_phase_detector`/`_run_stage_detector`/`_asr_to_phase`（=Q1/#S7 载体，随 Q1 拍板）；
+- dim1 通知 daemon 补采 f-string 日志（低频非热路径）。
+
+**验证**：`py_compile` OK；ruff **零新增**（opportunity_atlas 仅 HEAD 基线 2 处：dim5 I001/dim6 F841 `ce`）；探针 `tests/test_507_batch6_deadcode_perf.py`（**33 断言**：#S14 补产/分档阈值/评分恢复、#S25 ecm 优先/回退、死副本删除+保留、死参数签名、dim3 macd、shared_vol_ratio logger）；**全量 `tests/` 2079 passed 2 skipped 9 xfailed 零失败**（基线 2050 + 探针 33 − 死副本测试 4）；全市场 JUD 门禁 `_495_b2_jud_market_gate.py` **H1/H2/H3+R1 全 PASS**（5554 只 43s，五档分布不变＝#S14 补产未破坏判定）。daemon 跑完已重启。
 
 ---
 
