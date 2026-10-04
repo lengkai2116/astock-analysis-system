@@ -9,6 +9,8 @@
   - chip_pre_filter.py — 筹码预筛选（507 批次6 已删死副本）
   - chip_risk_executor.py — 筹码风险执行（507 批次6 已删死副本）
   - crowding_factor.py — 拥挤度评估（508 批次1 删 framework 死副本，本文件内嵌为权威）
+  - volume_price_strategy.py — StageDetector/ValuationZones/Stage（508 批次3 已删内嵌，外部完整版权威）
+  - chip_distribution_service.py — ChipDistributionEstimator（508 批次3 已删内嵌，外部权威）
   - tag_extractor.py — 筹码深度标签提取
   - fund_chip_builder 输出格式 + 条件稽核
 
@@ -18,13 +20,17 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
+# 508批次3：三个物理合入副本收敛为外部权威（ChipDistributionEstimator 算法等价；
+# StageDetector/ValuationZones/Stage 外部为完整版超集，dim4 特化 indicator_ma_df 注入
+# 按拍板移除，与 phase_detector.py 权威用法对齐）
+from app.data.chip_distribution_service import ChipDistributionEstimator
+from app.engine.framework.volume_price_strategy import Stage, StageDetector, ValuationZones
 from app.opportunity_atlas.dimensions.enum_cn_map import chip_concentration_cn
 
 logger = logging.getLogger(__name__)
@@ -48,85 +54,6 @@ PHASE_MAP = {
     'distributing': {'name': '出货期', 'desc': '高位派发'},
     'support': {'name': '护盘期', 'desc': '支撑维护'},
 }
-
-
-# === ChipDistributionEstimator (app/data/chip_distribution_service.py) ===
-# 物理合入：避免外部依赖，符合369号方案"独立文件"要求
-
-class ChipDistributionEstimator:
-    """基于OHLCV的筹码估算器"""
-
-    def __init__(self, num_bins=150, decay_rate=0.005):
-        self.num_bins = num_bins
-        self.decay_rate = decay_rate
-
-    def adjust_decay_rate(self, turnover_rates):
-        """根据换手率调整衰减率"""
-        if turnover_rates is None or turnover_rates.empty:
-            return
-        avg_tr = turnover_rates.mean() / 100.0
-        if avg_tr > 0:
-            self.decay_rate = max(min(avg_tr * 0.3, 0.02), 0.003)
-
-    def _allocate_volume_triangular(self, chip_dist, vol, price_low, price_high,
-                                    price_close, min_price, price_step):
-        """三角分布分配当日成交量"""
-        import math as _math
-        start_bin = max(0, int((price_low - min_price) / price_step))
-        end_bin = min(self.num_bins - 1, _math.ceil((price_high - min_price) / price_step) - 1)
-        if start_bin > end_bin:
-            chip_dist[start_bin] += vol
-            return
-        n = end_bin - start_bin + 1
-        if n <= 1:
-            chip_dist[start_bin] += vol
-            return
-        peak_pos = (price_close - price_low) / (price_high - price_low)
-        peak_pos = max(0.0, min(1.0, peak_pos))
-        peak_idx = int(peak_pos * (n - 1))
-        weights = np.zeros(n)
-        for i in range(n):
-            if i <= peak_idx:
-                weights[i] = (i + 1) / (peak_idx + 1) if peak_idx >= 0 else 1.0
-            else:
-                weights[i] = (n - i) / (n - peak_idx) if peak_idx < n - 1 else 1.0
-        total_w = weights.sum()
-        if total_w > 0:
-            weights /= total_w
-            for i in range(n):
-                chip_dist[start_bin + i] += weights[i] * vol
-
-    def estimate(self, df_ohlcv, turnover_rates=None):
-        """估算筹码分布"""
-        if df_ohlcv is None or df_ohlcv.empty:
-            return np.zeros(self.num_bins), 0, 0, 0
-        if turnover_rates is not None and not turnover_rates.empty:
-            self.adjust_decay_rate(turnover_rates)
-        df_sorted = df_ohlcv.sort_values('trade_date').reset_index(drop=True)
-        min_price = df_sorted['low'].min()
-        max_price = df_sorted['high'].max()
-        if max_price <= min_price:
-            max_price = min_price * 1.1
-            min_price = min_price * 0.9
-        price_step = (max_price - min_price) / self.num_bins
-        chip_dist = np.zeros(self.num_bins)
-        for _, row in df_sorted.iterrows():
-            vol = row.get('vol', 0)
-            if vol <= 0:
-                continue
-            chip_dist *= (1 - self.decay_rate)
-            price_high = row['high']
-            price_low = row['low']
-            if np.isnan(price_high) or np.isnan(price_low) or price_high <= price_low:
-                continue
-            close = row.get('close')
-            if close is None or np.isnan(close):
-                close = (price_high + price_low) / 2
-            self._allocate_volume_triangular(chip_dist, vol, price_low, price_high, close, min_price, price_step)
-        total = chip_dist.sum()
-        if total > 0:
-            chip_dist = chip_dist / total
-        return chip_dist, min_price, max_price, price_step
 
 
 # === ChipIndicators (508批次2 收敛：外部 app/data/chip_indicators.py 为权威) ===
@@ -161,82 +88,6 @@ class ChipIndicators(_ExternalChipIndicators):
             if rsi_val is not None:
                 result['rsi'] = rsi_val
         return result
-
-
-# === StageDetector (app/engine/framework/volume_price_strategy.py) ===
-# 物理合入：避免外部依赖
-
-@dataclass
-class ValuationZones:
-    """三周期价格分位"""
-    short_30d: float = 0.5
-    mid_60d: float = 0.5
-    long_120d: float = 0.5
-    ma120: Optional[float] = None
-    ma250: Optional[float] = None
-    zone: str = "MID"
-    three_bloom: Dict = field(default_factory=dict)
-
-    @property
-    def composite(self) -> float:
-        return self.short_30d * 0.5 + self.mid_60d * 0.3 + self.long_120d * 0.2
-
-
-@dataclass
-class Stage:
-    """阶段状态"""
-    name: str = "CONSOLIDATION"
-    confidence: float = 0.0
-    valuation: Optional[ValuationZones] = None
-    trend_structure: str = ""
-    ma_alignment: str = ""
-    note: str = ""
-
-
-class StageDetector:
-    """波段四阶段判定"""
-
-    def __init__(self, lookback: int = 120):
-        self.lookback = lookback
-
-    def detect(self, df: pd.DataFrame, ts_code: str = None,
-               indicator_ma_df=None) -> Stage:
-        """412号方案C3 v3.0：MA60优先从indicator_ma_df读取（dim1通过data_context提供），
-        不再直接调用DataManager。"""
-        if df is None or df.empty or len(df) < 30:
-            return Stage(name="CONSOLIDATION", confidence=0.0, note="数据不足")
-        closes = df['close'].astype(float).values
-        highs = df['high'].astype(float).values
-        lows = df['low'].astype(float).values
-
-        # MA60：从indicator_ma_df读取，保留raw fallback
-        ma60_val = None
-        if indicator_ma_df is not None and not indicator_ma_df.empty and 'ma60' in indicator_ma_df.columns:
-            v = indicator_ma_df['ma60'].iloc[-1]
-            if v is not None:
-                ma60_val = float(v)
-        if ma60_val is None:
-            ma60 = pd.Series(closes).rolling(60).mean().values
-        else:
-            ma60 = np.full(len(closes), ma60_val)
-
-        ma60_dir = self._calc_direction(ma60)
-        pos_60 = (closes[-1] - np.min(lows[-60:])) / (np.max(highs[-60:]) - np.min(lows[-60:]) + 1e-9)
-        if ma60_dir == "up" and pos_60 > 0.6:
-            return Stage(name="UPTREND_ACTIVE", confidence=0.7)
-        if ma60_dir == "down" and pos_60 < 0.4:
-            return Stage(name="DOWNTREND_ACTIVE", confidence=0.7)
-        return Stage(name="CONSOLIDATION", confidence=0.5)
-
-    def _calc_direction(self, ma: np.ndarray, lookback: int = 5) -> str:
-        if len(ma) < lookback + 1:
-            return "flat"
-        recent = ma[-(lookback + 1):]
-        if recent[-1] > recent[0] * 1.005:
-            return "up"
-        elif recent[-1] < recent[0] * 0.995:
-            return "down"
-        return "flat"
 
 
 # === DataAwareMixin (app/data/mixins.py) ===
@@ -369,7 +220,7 @@ class PhaseDetectionEngine(DataAwareMixin):
         dims = {
             "chip":  self._dim_chip(ts_code, df_sorted, chip_fund_ext=chip_fund_ext, moneyflow_df=moneyflow_df, indicator_other_df=indicator_other_df),   # 1 筹码形态
             "fund":  self._dim_fund(fund_flow, ts_code, extra_tags),   # 2 资金流向（方向+连续强度）
-            "stage": self._dim_stage(df_sorted, ts_code=ts_code, indicator_ma_df=indicator_ma_df),           # 3 量价四阶段（CONSOLIDATION 验证）
+            "stage": self._dim_stage(df_sorted),           # 3 量价四阶段（CONSOLIDATION 验证）
             "asr":   self._dim_asr(ts_code, df_sorted),    # 4 ASR 筹码分布（去兜底）
             "trend": self._dim_trend(df_sorted),           # 5 趋势方向（斜率连续）
             "ssrp":  self._dim_ssrp(df_sorted, extra_tags, cost_ext=cost_ext),# 6 主力成本锚定（真实 SSRP，从pre_feat_cache读取）
@@ -463,10 +314,9 @@ class PhaseDetectionEngine(DataAwareMixin):
             return {"distributing": round(0.3 + 0.5 * strength, 3)}
         return {}   # mixed/none：方向不明不投票（312 §3.2 维度2）
 
-    def _dim_stage(self, df: pd.DataFrame, ts_code: str = None,
-                   indicator_ma_df=None) -> dict:
+    def _dim_stage(self, df: pd.DataFrame) -> dict:
         """维度3 量价四阶段：StageDetector + CONSOLIDATION 证据验证（312 §3.2 维度3）"""
-        stage_info = self._run_stage_detector_v2(df, ts_code=ts_code, indicator_ma_df=indicator_ma_df)
+        stage_info = self._run_stage_detector_v2(df)
         if stage_info is None:
             return {}
         stage_name, stage_conf = stage_info
@@ -780,12 +630,11 @@ class PhaseDetectionEngine(DataAwareMixin):
         except Exception:
             return None
 
-    def _run_stage_detector_v2(self, df: pd.DataFrame, ts_code: str = None,
-                                indicator_ma_df=None):
-        """StageDetector 阶段（返回 stage 名 + 置信度，供维度3）"""
+    def _run_stage_detector_v2(self, df: pd.DataFrame):
+        """StageDetector 阶段（返回 stage 名 + 置信度，供维度3；508批次3 收敛外部完整版）"""
         try:
             detector = StageDetector()
-            stage = detector.detect(df, ts_code=ts_code, indicator_ma_df=indicator_ma_df)
+            stage = detector.detect(df)
             return stage.name, float(stage.confidence or 0.0)
         except Exception:
             return None
@@ -951,7 +800,7 @@ class PhaseDetectionEngine(DataAwareMixin):
     # ═══════════════════════════════════════════════════════════
     def _get_chip_estimator(self):
         if self._chip_estimator is None:
-            # 使用内部定义的 ChipDistributionEstimator（物理合入）
+            # 508批次3：外部权威 ChipDistributionEstimator（算法等价收敛）
             self._chip_estimator = ChipDistributionEstimator()
         return self._chip_estimator
 
@@ -1048,7 +897,7 @@ class PhaseDetectionEngine(DataAwareMixin):
     def _run_stage_detector(self, df: pd.DataFrame) -> str:
         """调用 StageDetector 获取四阶段"""
         try:
-            # 使用内部定义的 StageDetector（物理合入）
+            # 508批次3：外部权威 StageDetector（完整版四阶段）
             detector = StageDetector()
             stage = detector.detect(df)
             name = stage.name
@@ -1942,7 +1791,7 @@ def extract_chip_deep_tags(ts_code: str) -> dict:
         if df is None or df.empty or len(df) < 30:
             return {}
 
-        # 1. 估算筹码分布（使用内部定义的 ChipDistributionEstimator）
+        # 1. 估算筹码分布（508批次3：外部权威 ChipDistributionEstimator）
         estimator = ChipDistributionEstimator()
         chip_dist, min_p, max_p, step = estimator.estimate(df)
         if step <= 0:
