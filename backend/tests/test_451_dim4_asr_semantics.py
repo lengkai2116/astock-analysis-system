@@ -9,9 +9,11 @@
 import numpy as np
 import pandas as pd
 import pytest
-
-from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import PhaseDetectionEngine, TradingPhaseDetector
 from app.engine.framework.chip_strategy import MainForceScorer
+from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import (
+    PhaseDetectionEngine,
+    TradingPhaseDetector,
+)
 
 
 def _mk_df(closes, vols=None):
@@ -19,7 +21,6 @@ def _mk_df(closes, vols=None):
     closes = np.asarray(closes, dtype=float)
     if vols is None:
         vols = np.full_like(closes, 10000.0)
-    n = len(closes)
     return pd.DataFrame({
         'open': closes,
         'high': closes,
@@ -100,26 +101,41 @@ class TestDimAsrSemantics:
 
 
 class TestScoreBuildingLive:
-    """② _score_building 集中度分支接入真实数值（concentration），不再依赖从未生产的 concentration_status"""
+    """② _score_building 集中度分支（508批次4 收敛外部权威：concentration_status P95-P5 枚举）
 
-    def test_building_concentration_high_score(self):
-        """concentration>0.3（前 20% 价位筹码占比高=集中）→ 建仓加 2 分（原惰性分支现生效）"""
+    508批次2 切 P95-P5 后 concentration 数值语义为「价格区间跨度/现价」：高=分散、低=集中。
+    dim4 内嵌原 `concentration>0.3`（451 号按简单法「高=集中」接入）语义反转——收敛外部版
+    用 concentration_status 枚举（<0.1 高度集中 / <0.2 较集中 / <0.4 分散 / ≥0.4 高度发散）。
+    """
+
+    def test_building_concentration_status_high_score(self):
+        """concentration_status 高度集中（P95-P5 <0.1=集中）→ 建仓加 2 分"""
         det = object.__new__(TradingPhaseDetector)
         df = _mk_df([10.0] * 120)
-        indicators = {'concentration': 0.45}
+        indicators = {'concentration_status': '高度集中'}
         score_with = det._score_building(df, [], indicators, None, None)
-        score_without = det._score_building(df, [], {'concentration': 0.0}, None, None)
+        score_without = det._score_building(df, [], {}, None, None)
         assert score_with - score_without == pytest.approx(2.0)
 
-    def test_building_concentration_low_no_bonus(self):
-        """concentration 低（筹码分散）→ 不额外加分（<2 仅可能由 asr/profit 触发，此处均不触发）"""
+    def test_building_concentration_status_ji_zhong_high_score(self):
+        """concentration_status 较集中（P95-P5 <0.2=集中）→ 建仓加 2 分"""
         det = object.__new__(TradingPhaseDetector)
         df = _mk_df([10.0] * 120)
-        score = det._score_building(df, [], {'concentration': 0.1, 'asr': 50.0, 'profit_ratio': 0.5}, None, None)
+        indicators = {'concentration_status': '较集中'}
+        score_with = det._score_building(df, [], indicators, None, None)
+        score_without = det._score_building(df, [], {}, None, None)
+        assert score_with - score_without == pytest.approx(2.0)
+
+    def test_building_concentration_status_dispersed_no_bonus(self):
+        """concentration_status 分散（P95-P5 高=分散）→ 不额外加分（修复 508批次2 语义反转回归）"""
+        det = object.__new__(TradingPhaseDetector)
+        df = _mk_df([10.0] * 120)
+        score = det._score_building(
+            df, [], {'concentration_status': '分散', 'asr': 50.0, 'profit_ratio': 0.5}, None, None)
         assert score <= 2.0  # 无集中度加分（asr<70、profit>=0.4 不触发）
 
-    def test_building_concentration_missing_no_crash(self):
-        """concentration 缺失（None）→ 不报错、不加分"""
+    def test_building_concentration_status_missing_no_crash(self):
+        """concentration_status 缺失 → 不报错、不加分"""
         det = object.__new__(TradingPhaseDetector)
         df = _mk_df([10.0] * 120)
         score = det._score_building(df, [], {'asr': 50.0, 'profit_ratio': 0.5}, None, None)
