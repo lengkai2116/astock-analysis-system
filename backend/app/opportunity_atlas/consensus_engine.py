@@ -37,6 +37,15 @@ GROUP_MAPPING: Dict[str, List[str]] = {
     'risk': ['risk'],  # 风险族（独立）
 }
 
+# 509号 #J14（方案 B，用户拍板「修复钝化」）：辅助维度（time/position/signal_confirm/
+#   finance/event/factor）在 convert_to_factors 中恒有产出但**多数 direction=0（中性）**，
+#   若计入 neutral_ratio 分母会系统性抬高中性占比 → 「>0.6 cap 到 0.5」闸门过度触发、
+#   共识幅值被压扁（量化实证：排除辅助维后 >0.6 触发 786→236 只，约 550 只幅值恢复）。
+#   → neutral_ratio 只统计 7 个主判定维（signal/structure/vp/chip_fund/emotion/risk/
+#   valuation）；辅助维仍参与族方向归并（merge_family），仅不计入中性占比分母。
+_AUX_DIMS: frozenset = frozenset({'time', 'position', 'signal_confirm',
+                                  'finance', 'event', 'factor'})
+
 STATE_WEIGHTS: Dict[str, Dict[str, float]] = {
     'ice': {
         'main_behavior': 0.15,
@@ -332,12 +341,16 @@ def compute(
         elif family_dir == 'bear':
             bear_score += family_strength * effective_weight
 
-        # --- Count neutrals ---
+        # --- Count neutrals（509号 #J14 方案 B）---
+        # 只统计 7 个主判定维（辅助维恒中性不稀释中性占比）；
+        # total_dim_count 移到 None 检查后（语义正确：缺失维不计分母）。
         for dim in family_dims:
-            total_dim_count += 1
+            if dim in _AUX_DIMS:
+                continue
             score = dims_factor.get(dim)
             if score is None:
                 continue
+            total_dim_count += 1
             # 507号 #S4：dims_factor 值为嵌套 dict（{direction,strength,...}，见上方抽取块），
             #   直接 float(dict) 抛 TypeError 被吞 → dict 形态维永不计中性 → neutral_ratio
             #   恒偏低 → 「中性占比 >0.6」上限从未触发（实测量化：修复前 0/800，修复后 173/800）。
