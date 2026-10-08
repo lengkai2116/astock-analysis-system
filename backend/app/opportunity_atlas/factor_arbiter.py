@@ -66,16 +66,6 @@ def _append_evidence(evidence: list[str], text: str) -> None:
         evidence.append(text)
 
 
-def _daily_is_bullish(dims_factor: dict) -> bool:
-    """494号（R-2）：日线（决策周期）是否看多 —— 结构/量价两个主维方向票为正。"""
-    _df = dims_factor or {}
-    if int((_df.get('structure') or {}).get('direction', 0) or 0) > 0:
-        return True
-    if int((_df.get('vp') or {}).get('direction', 0) or 0) > 0:
-        return True
-    return False
-
-
 def arbitrate(
     consensus: dict,
     conflict: dict,
@@ -147,9 +137,11 @@ def arbitrate(
                          f'强制降级（wait）：致命冲突 [{", ".join(str(f) for f in fatal_list)}]')
         for fatal_item in fatal_list:
             _append_evidence(conflict_evidence, f'致命冲突: {fatal_item}')
+        # 509号 #J17：wait 档语义对应 45-64 分（493号 P2-a 归一化档位），原返回 0.0
+        #   （avoid 档）与 wait 状态内部矛盾，误导前端分数解读。强制降级用 wait 下界 45.0。
         return {
             'opportunity_state': STATE_WAIT,
-            'final_score': 0.0,
+            'final_score': 45.0,
             'state_evidence': state_evidence,
             'conflict_evidence': conflict_evidence,
         }
@@ -228,11 +220,15 @@ def arbitrate(
     #   向下而日线（决策周期）看多 → 矛盾，丢弃买点、降 wait（不判 avoid/空）。
     #   与两处 build_operation_advice 建议卡同判据、同语义；周线方向由调用方传入（R-10）。
     # ════════════════════════════════════════════════════════════════
+    # 509号 #J16（Q3 拍板「无条件降 wait」）：原条件带 `_daily_is_bullish` 门——
+    #   日线结构/量价不看多时（方向为平/负）周线 down 的 enter/light 得以保留，
+    #   与「周线向下即丢弃买点」语义不符（日线不看多时本就不应 enter/light）。
+    #   去门：周线 down 且状态 ∈ enter/light → 无条件降 wait。
     if str(weekly_direction or '').strip().lower() == 'down' \
-            and opportunity_state in ('enter', 'light') and _daily_is_bullish(dims_factor):
+            and opportunity_state in ('enter', 'light'):
         opportunity_state = STATE_WAIT
         _append_evidence(state_evidence,
-                         '大级别否决：周线下行与日线买点矛盾，'
+                         '大级别否决：周线下行与买点矛盾，'
                          '按《分层决策框架》丢弃买点 → wait')
 
     # 收集非致命冲突描述（冲突暴露，供前端展示）

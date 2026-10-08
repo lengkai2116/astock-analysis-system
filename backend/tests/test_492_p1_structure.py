@@ -183,4 +183,5 @@ def test_p1_4_apply_l0_signature_drops_dims():
     assert params[:4] == ['self', 'ts_code', 'tags', 'lifecycle']
     assert 'dims' not in sig.parameters
     # 494号批次2：新增 raw_pre_feat=...（L0 市场级温度回升取数，R-1/R-9）——非 dims 回归
-    assert params[4:] == ['raw_pre_feat']
+    # 509号批次2（#J11）：新增 asof_date=...（回测历史求值 L0 回退读无前视）——非 dims 回归
+    assert params[4:] == ['raw_pre_feat', 'asof_date']

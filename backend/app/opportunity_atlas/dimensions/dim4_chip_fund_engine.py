@@ -1023,6 +1023,22 @@ class Dim4ChipFundEngine(DataAwareMixin):
         # 469-1：retail_institution 用覆盖后（或 tags 兜底）的 phase/fund_flow——与 phase 同源
         retail_inst = _assess_retail_institution(_retail_phase, _retail_flow)
 
+        # 509号 #J6（Q1 拍板「换独立信号源」）：补产独立枚举 retail_tendency——
+        #   与 phase 同源问题是 conflict C4+（主力出货 vs 筹码拉升跨源矛盾）不可达的根因，
+        #   需**独立机器可读字段**表达「散户/机构倾向」，供 JUD conflict 消费，
+        #   不再从展示文本 retail_institution 反推（文本由 phase 单源驱动，两条件互斥）。
+        #   组合判据：building+流入=机构吸筹；distributing=主力派发；其余=博弈中性。
+        _retail_phase_s = str(_retail_phase or '')
+        _retail_flow_s = str(_retail_flow or '')
+        if _retail_phase_s == 'distributing':
+            retail_tendency = 'distribution'      # 主力派发（资金出逃）
+        elif _retail_phase_s == 'building' and 'inflow' in _retail_flow_s:
+            retail_tendency = 'institutional'     # 机构吸筹
+        elif _retail_phase_s == 'lifting' and 'inflow' in _retail_flow_s:
+            retail_tendency = 'institutional'     # 主力拉升+资金流入
+        else:
+            retail_tendency = 'neutral'           # 博弈中性/数据不足
+
         # 拥挤度（真实计算）
         crowding = {'level': 'unknown', 'detail': '拥挤度数据不足', 'score': 0.5}
         try:
@@ -1143,6 +1159,8 @@ class Dim4ChipFundEngine(DataAwareMixin):
             'fund_flow': f"{fund_flow_info['level_cn']}（{fund_flow_info['detail']}{_net_txt}）",
             'cost_structure': cost_structure['detail'], 'signal': signal_info['detail'],
             'retail_institution': retail_inst['detail'], 'margin': margin_info['detail'],
+            # 509号 #J6：独立枚举零售/机构倾向（机器可读，JUD conflict 消费，非展示文本）
+            'retail_tendency': retail_tendency,
             'crowding': f"拥挤度={crowding['level']}（{crowding['detail']}）",
             # 445 §6.1：资金×价格背离结论
             'fund_price_divergence': fund_price_div['label'],

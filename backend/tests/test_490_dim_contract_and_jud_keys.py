@@ -70,6 +70,8 @@ def _dim_results_full():
                 'pde_price_position': 'mid_zone',
                 'crowding_level': 'HIGH_CROWDING',
                 'retail_institution': '主力出货（散户追入）',
+                # 509号 #J6：C4+ 改读独立枚举 retail_tendency（非展示文本）
+                'retail_tendency': 'distribution',
                 'cost_concentration': 'concentrating',
                 'cost_profit_ratio': 0.85,
             },

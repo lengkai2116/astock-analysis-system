@@ -117,14 +117,16 @@ _REGIME_DIM_ALIASES: Dict[str, tuple] = {
 def _family_regime_weight(regime_weights: Dict[str, float], family: str) -> float:
     """MARKET_REGIME_WEIGHTS（维度权重）→ 族权重（族内维度均值）。
 
-    regime_weights 为 None/空 → 返回 0.1（等权兜底）。
+    regime_weights 为 None/空 → 返回 1.0（纯 STATE_WEIGHTS，等价旧行为——
+    509号 #J15 修正：原 0.1 兜底使 bull/bear_score 被 ×0.1 缩放，与 docstring
+    「退化为纯 STATE_WEIGHTS」承诺不符）。
     """
     dims = _REGIME_DIM_ALIASES.get(family, ())
     if not isinstance(regime_weights, dict) or not dims:
-        return 0.1
+        return 1.0
     vals = [float(regime_weights.get(d, 0.1)) for d in dims if regime_weights.get(d) is not None]
     if not vals:
-        return 0.1
+        return 1.0
     return sum(vals) / len(vals)
 
 
@@ -213,9 +215,14 @@ def merge_family(
         majority_dir = 'bull'
     elif len(bear_entries) > len(bull_entries):
         majority_dir = 'bear'
-    else:
-        # Equal count -- pick the one with higher weighted strength
+    elif bull_entries:
+        # 等票数（有实际方向票）→ 按加权强度取高
         majority_dir = 'bull' if bull_strength >= bear_strength else 'bear'
+    else:
+        # 509号 #J13：全中性族（无 bull/bear 票，仅 neutral 条目）→ 显式 neutral
+        #   （原 tie-break `bull_strength(0.0) >= bear_strength(0.0)` 恒真 → 误标 bull，
+        #    使 group_details.direction 把中性族标为多头）
+        majority_dir = 'neutral'
 
     if has_conflict:
         # Conflict penalty: scale majority strength by 0.6

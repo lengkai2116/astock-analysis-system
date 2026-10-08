@@ -114,8 +114,10 @@ def detect(
     dim4_phase = _safe_str(_safe_get(chip_fund.get('judgment') or {}, 'phase'))
     chip_fund_phase = dim4_phase
     crowding_level = _safe_str(_safe_get(chip_fund_sd, 'crowding_level'))
-    # 散户/机构倾向在 sd 内（此前读容器顶层 → 恒空）
-    retail_institution = _safe_str(_safe_get(chip_fund_sd, 'retail_institution'))
+    # 509号 #J6（Q1 拍板）：独立枚举 retail_tendency（dim4 补产，非展示文本）——
+    #   C4+ 改读此字段，避免「主力出货 vs 筹码拉升」两条件同源互斥致规则不可达。
+    #   （retail_institution 展示文本已无 C 规则消费，保留在 dim4 sd 供 dim8 展示）
+    retail_tendency = _safe_str(_safe_get(chip_fund_sd, 'retail_tendency'))
     cost_concentration = _safe_str(_safe_get(chip_fund_sd, 'cost_concentration'))
     cost_profit_ratio = _safe_float(_safe_get(chip_fund_sd, 'cost_profit_ratio'))
 
@@ -182,9 +184,16 @@ def detect(
         warn.append('C4: 筹码吸筹/拉升阶段+拥挤度高（跟风过热风险）')
 
     # ── C4+: 主力出货 + 吸筹/拉升 → fatal ──
-    if ('主力出货' in retail_institution
+    # 509号 #J6（Q1 拍板「换独立信号源」）：原判据 `'主力出货' in retail_institution` 与
+    #   `dim4_phase in (building,lifting)` **同源互斥**（retail_institution 文本由 phase
+    #   单源驱动，distributing 时 text=主力出货 但 phase=distributing 不在 building/lifting，
+    #   building/lifting 时 text=博弈中性 不含「主力出货」）→ 规则恒不可达。
+    #   改读 dim4 补产的**独立枚举** retail_tendency（'distribution'/'institutional'/'neutral'，
+    #   由 phase×fund_flow 组合判定，与 phase 判断解耦）——'distribution' 与 building/lifting
+    #   同时出现即真矛盾。
+    if (retail_tendency == 'distribution'
             and dim4_phase in ('building', 'lifting')):
-        fatal.append('C4+: 主力出货+筹码吸筹/拉升阶段（严重矛盾，资金出逃）')
+        fatal.append('C4+: 主力派发(独立信号)+筹码吸筹/拉升阶段（严重矛盾，资金出逃）')
 
     # ── C4++: 单峰密集+高拥挤+高获利 → fatal ──
     # 490号：值域对齐引擎真实枚举（cost_concentration 为 concentrating/dispersing/stable；

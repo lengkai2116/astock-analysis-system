@@ -301,7 +301,8 @@ class StatusEngine:
                 ts_code, trade_date=_norm_date(asof_date, compact=False) if asof_date else None)
         except Exception:
             _raw_pre_feat = None
-        l0 = self._apply_l0(ts_code, tags, lifecycle, raw_pre_feat=_raw_pre_feat)
+        l0 = self._apply_l0(ts_code, tags, lifecycle, raw_pre_feat=_raw_pre_feat,
+                            asof_date=asof_date)
 
         # 418号方案：jud_engine_version 配置分支（v390 新管线 / legacy 旧管线）
         _jud_ver = str((self.cfg or {}).get('jud_engine_version', 'legacy'))
@@ -788,12 +789,16 @@ class StatusEngine:
     # ══════════════════════════════════════════════════════════
 
     def _apply_l0(self, ts_code: str, tags: dict, lifecycle: Optional[dict],
-                  raw_pre_feat: dict = None) -> dict:
+                  raw_pre_feat: dict = None, asof_date: Optional[str] = None) -> dict:
         """L0 风险分级（335号：L0a 硬否决 / L0b 软约束 / L0c 持有期）。
 
         492号（P1-4）：原第 3 形参 `dims` 实测**从未被使用**（判定全部读 tags +
         daily_basic）——L0 在 dim 引擎之后生成（T42 时序，见 dim6_risk_engine:202），
         与 dims 无因果关系。移除该形参，消除「L0 依赖维度判定」的误导。
+
+        509号 #J11：新增 asof_date——回测历史求值（507批次7 #S6 引入 asof_date 后，
+        L0 内部回退读 get_pre_feat/get_cached_daily_basic 仍读最新，致情绪上限/流动性
+        L0b 引入前视偏差）；asof_date 提供时按该日期读历史快照。
         """
         l0: dict[str, Any] = {
             'hard_veto': False, 'hard_reason': '',
@@ -825,7 +830,14 @@ class StatusEngine:
                     _et = str(e.get('event_type', ''))
                     if _et not in _hard_labels:
                         continue
-                    if _et == 'st_warning' and int(e.get('direction', 0)) > _st_extreme_dir:
+                    # 509号 #J10：direction 非数值（'st'/'' 等）时 int() 抛 ValueError 会
+                    #   中断整个 _apply_l0（硬否决/软风险/仓位上限全失）；对齐下方 ST 块
+                    #   的 try 守卫——非数值按 0 处理（不触发 ST 特判）。
+                    try:
+                        _e_dir = int(e.get('direction', 0))
+                    except (TypeError, ValueError):
+                        _e_dir = 0
+                    if _et == 'st_warning' and _e_dir > _st_extreme_dir:
                         continue  # 普通 ST 不进硬否决
                     _hit = e
                     break
@@ -848,7 +860,11 @@ class StatusEngine:
             l0['position_coeff'] *= float(coeff.get('deep_position_cap', 0.3))
         # 流动性：换手率 <1%（daily_basic 最新，对齐 cross_validate._evaluate_gate / 335号 L0b）
         try:
-            df = self.dm.get_cached_daily_basic(ts_code)
+            # 509号 #J11：asof_date 提供时按该日期读（回测无前视）
+            _basic_kw = {}
+            if asof_date:
+                _basic_kw['end_date'] = _norm_date(asof_date, compact=False)
+            df = self.dm.get_cached_daily_basic(ts_code, **_basic_kw)
             if df is not None and not df.empty and 'turnover_rate' in df.columns:
                 tr = df['turnover_rate'].dropna()
                 if not tr.empty and float(tr.iloc[-1]) < 1.0:
@@ -880,7 +896,10 @@ class StatusEngine:
                 #   直读 sentiment_pool_cache/market_stats_cache（封板率/涨停家数/广度）兜底。
                 if not isinstance(raw_pre_feat, dict):
                     try:
-                        _raw = self.dm.cache.get_pre_feat(ts_code)
+                        # 509号 #J11：asof_date 提供时按该日期读历史 pre_feat（无前视）
+                        _raw = self.dm.cache.get_pre_feat(
+                            ts_code,
+                            trade_date=_norm_date(asof_date, compact=False) if asof_date else None)
                         raw_pre_feat = _raw if isinstance(_raw, dict) else None
                     except Exception:
                         raw_pre_feat = None
@@ -994,10 +1013,10 @@ class StatusEngine:
         total_w = bull + bear
         if total_w > 0:
             consensus_rate = round(max(bull, bear) / total_w, 3)
-            direction = 'bullish' if bull > bear else 'bearish'
-        elif bull == bear and bull > 0:
-            consensus_rate = 0.0
-            direction = 'neutral'
+            # 509号 #J9：平票（bull==bear>0）判 neutral 而非 bearish
+            #   （原首分支 `'bearish' if bull > bear else 'bearish'` 平票恒判空头；
+            #   且下方 `elif bull == bear and bull > 0` 因前序 total_w>0 恒先命中而不可达）
+            direction = 'bullish' if bull > bear else ('bearish' if bear > bull else 'neutral')
         else:
             consensus_rate = 0.0
             direction = 'neutral'
@@ -1323,7 +1342,13 @@ class StatusEngine:
             # L6 advice 参数并入 advice_params（保持 337号 键名兼容）
             _advice = l2.get('advice') or {}
             if _advice:
-                _ap = json.loads(result['advice_params']) if result.get('advice_params') else {}
+                # 509号 #J12：advice_params 落库内容异常（非 JSON）时 json.loads 抛错
+                #   会中断整个 _assemble（丢 status_snapshot 行）；防御解析失败则重建空 dict。
+                try:
+                    _ap = json.loads(result['advice_params']) if result.get('advice_params') else {}
+                except (TypeError, ValueError):
+                    _ap = {}
+                    logger.warning("advice_params 非 JSON（ts_code=%s），已重建", ts_code)
                 _ap.update({k: v for k, v in _advice.items()
                             if k in ('max_position_ratio', 'stop_loss_price', 'target_price',
                                      'risk_reward_ratio', 'invalidation_conditions',

@@ -108,9 +108,11 @@ def test_weekly_up_or_missing_keeps_state():
 
 
 def test_no_veto_when_daily_not_bullish():
-    """日线不看多（结构/量价方向票均 ≤0）→ 不触发（避免对纯空头重复判）"""
+    """509号 #J16（Q3 拍板「无条件降 wait」）：周线 down 时日线不看多**同样降** wait
+    （原 `_daily_is_bullish` 门让日线平/负的 enter/light 存活——日线不看多时本就不应
+    enter/light，保留门使错误状态存活；去门后无条件降）"""
     r = _arb('down', dims_factor={'structure': {'direction': 0}, 'vp': {'direction': -1}})
-    assert r['opportunity_state'] == 'enter'
+    assert r['opportunity_state'] == 'wait'
 
 
 def test_no_veto_when_already_not_enter_light():
