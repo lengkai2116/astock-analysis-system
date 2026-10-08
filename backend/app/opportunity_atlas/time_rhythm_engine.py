@@ -68,13 +68,17 @@ class TimeRhythmEngine:
                 ref_low = np.min(df['low'].values[-30:])
                 ref_high = np.max(df['high'].values[-30:])
                 ref_mid = (ref_low + ref_high) / 2
-                threshold = ref_mid * 0.05  # ±5% 作为横盘判定
-                for i in range(min(60, len(close))):
-                    price = close[-(i + 1)]
-                    if abs(price - ref_mid) < threshold:
-                        consolidation_days += 1
-                    else:
-                        break
+                # 509号 #J26：参考区间与比对窗口统一为近 30 根（原循环 60 根会把
+                #   第 31-60 根与陈旧 ±5% 带比对，过/欠计横盘时长）
+                # 509号 #J27：ref_mid<=0（非正价格序列）时阈值无意义 → 不计数
+                if ref_mid > 0:
+                    threshold = ref_mid * 0.05  # ±5% 作为横盘判定
+                    for i in range(min(30, len(close))):
+                        price = close[-(i + 1)]
+                        if abs(price - ref_mid) < threshold:
+                            consolidation_days += 1
+                        else:
+                            break
 
             # 判定逻辑
             if current_bw < BANDWIDTH_TIGHT and range_pct < RANGE_TIGHT:

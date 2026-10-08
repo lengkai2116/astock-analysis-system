@@ -135,16 +135,21 @@ def detect_decay(tags: dict, lifecycle: dict = None) -> dict:
     else:
         scores['volume_price'] = 30
 
-    try:
-        vol_ratio = float(tags.get('volume_ratio', 1.0))
-        if vol_ratio < 0.5:
-            scores['volume_energy'] = 50
-        elif vol_ratio < 0.8:
-            scores['volume_energy'] = 30
-        else:
-            scores['volume_energy'] = 10
-    except (TypeError, ValueError):
+    # 509号 #J19：量比缺失/为空 → 显式未知（20），不误报「健康」（原默认 1.0 落健康分支）
+    _vol_ratio_raw = tags.get('volume_ratio')
+    if _vol_ratio_raw is None or _vol_ratio_raw == '':
         scores['volume_energy'] = 20
+    else:
+        try:
+            vol_ratio = float(_vol_ratio_raw)
+            if vol_ratio < 0.5:
+                scores['volume_energy'] = 50
+            elif vol_ratio < 0.8:
+                scores['volume_energy'] = 30
+            else:
+                scores['volume_energy'] = 10
+        except (TypeError, ValueError):
+            scores['volume_energy'] = 20
 
     phase = str(tags.get('main_force_phase', ''))
     if phase == 'distributing':
@@ -320,12 +325,17 @@ def calc_lifecycle_stage(lifecycle: dict) -> dict:
             lc_stage = '已延伸'
 
     # 3日不破验证（Wiki信号注册表定义）
+    # 509号 #J18：自动验证（day>=3 且价格仍在突破位上方）与调用方显式确认分离——
+    #   verified 保持最终结果（兼容既有消费方），auto_verified 标注是否由自动路径产生，
+    #   避免「自动验证」被误当作外部确认来源。
+    auto_verified = False
     verify_status = '无信号'
     if verified:
         verify_status = '已验证（3日不破）'
     elif day >= 3 and distance_pct is not None and distance_pct > 0:
         # 信号已持续3天+且价格仍在突破位上方 → 自动验证
         verified = True
+        auto_verified = True
         verify_status = '已验证（3日不破）'
     elif day > 0:
         verify_status = '待验证（未满3日）'
@@ -334,6 +344,7 @@ def calc_lifecycle_stage(lifecycle: dict) -> dict:
         'lifecycle_days': day,
         'lifecycle_stage': lc_stage,
         'verified': verified,
+        'auto_verified': auto_verified,
         'verify_status': verify_status,
         'distance_pct': distance_pct,
         'stage_detail': stage,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import math
 from typing import Any
 
 # 494号（R-3）：止损/止盈唯一实现 SSOT（dim_adapter.calc_stop_and_tiers）
@@ -26,9 +27,11 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
     if val is None:
         return default
     try:
-        return float(val)
+        f = float(val)
     except (TypeError, ValueError):
         return default
+    # 509号 #J20：拦 NaN/inf（float('nan')/float('inf') 可成功解析，会污染仓位计算）
+    return f if math.isfinite(f) else default
 
 
 # 493号（P2-e）：止损/分批止盈参数（依据知识库《结构止损》/《ATR止损》/《分批止盈法》）
@@ -494,7 +497,8 @@ def _build_advice_card_fields(state, tags, dims, geo, support, signal_light,
         _ev_cnt = int((tags or {}).get('evidence_count') or 0)
     except (TypeError, ValueError):
         _ev_cnt = 0
-    _conflicts = dims.get('factor', {}).get('conflict_items') or []
+    # 509号 #J22：factor 键存在但为 None 时 .get 抛 AttributeError → (x or {}) 兜底
+    _conflicts = (dims.get('factor') or {}).get('conflict_items') or []
     confidence = _calc_confidence(_consensus, _ev_cnt, len(_conflicts))
     # 低置信度降级（§3.4）：强制'轻仓试探' + max_pct<=0.3
     if confidence == '低' and state in ('enter', 'light'):
@@ -630,8 +634,9 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
                 if _dist > _ext_threshold and state in ('enter', 'light'):
                     state = 'wait'
                     state_reason = f'信号已延伸（距突破位+{_dist:.0f}%），只可持有、不新开仓（L0c）'
-    except Exception:
-        pass
+    except Exception as _l0c_err:
+        # 509号 #J21：L0c 持有期门失败不可静默——显式告警（语义仍不降级，供诊断）
+        logger.warning("L0c 信号延伸判定失败（不降级）: %s", _l0c_err)
     # 交易机制硬约束
     _hard = _apply_hard_constraints(df, state)
     state = _hard['state']
@@ -775,8 +780,9 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         _vl = (tags or {}).get('valuation_level', '')
         _val_lv = 'moderate' if _vl in ('high', 'extreme_high') else ('mild' if _vl == 'fair' else 'none')
         max_pct = apply_soft_risk_position(max_pct, _soft_risks, _val_lv)
-    except Exception:
-        pass
+    except Exception as _soft_err:
+        # 509号 #J21：软风险仓位调整失败不可静默（语义仍保持未降级，但须显式告警）
+        logger.warning("软风险仓位调整失败（保持未降级 max_pct=%.2f）: %s", max_pct, _soft_err)
     executable = {
         'action_type': action_type,
         'entry_rules': ([{'trigger': f'close <= {price}', 'action': 'BUY', 'size_pct': 30}]

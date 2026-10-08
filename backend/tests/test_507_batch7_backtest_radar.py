@@ -19,7 +19,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 
-
 # ── #S6 evaluate asof_date 数据源选择 ─────────────────────
 
 def _mk_status_engine(monkeypatch, cache):
@@ -188,11 +187,10 @@ def test_s6_backtest_passes_asof_and_dim_results(monkeypatch):
 
 def test_s6_param_stability_check_raises():
     """param_stability_check 明确报错（JUD_PARAM_* 无消费方，防静默无效）"""
-    from app.opportunity_atlas.backtest_minimal import MinimalBacktester
-
-    b = MinimalBacktester(dm=None) if hasattr(MinimalBacktester, '__init__') else None
     # 仅验证方法本身抛 ValueError（不跑真实回测）
     import inspect
+
+    from app.opportunity_atlas.backtest_minimal import MinimalBacktester
     src = inspect.getsource(MinimalBacktester.param_stability_check)
     assert 'raise ValueError' in src, '应明确抛错而非静默无效'
     assert 'JUD_PARAM_' in src
@@ -236,10 +234,13 @@ def test_s10_radar_top_n_after_sort(monkeypatch):
             return pd.DataFrame({'ts_code': codes})
 
         def get_tags_batch(self, ts_codes):
+            # 509号 #J23：get_tags_batch 分块调用后，强度须与分批无关（股票固有属性），
+            #   故按 ts_code 序号（非批内索引）赋强度——最强股票恒定 = 末位（249）
             tags = {}
-            for i, c in enumerate(ts_codes):
+            for c in ts_codes:
+                idx = int(c.split('.')[0])
                 # 第 250 只（原排序前截断会漏掉）信号最强
-                tags[c] = {'signal_strength': str(i + 1)}
+                tags[c] = {'signal_strength': str(idx + 1)}
             return tags
 
     class _FakeDM:

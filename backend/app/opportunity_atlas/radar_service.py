@@ -78,9 +78,19 @@ class RadarService(DataAwareMixin):
         if not candidates:
             return []
 
-        # 3. 全量获取标签（单 SQL IN 查询；507批次7 #S10：原 candidates[:200]
-        #    排序前截断致 Top-N 承诺失效——高信号强度但排位 200 之后的股票被静默排除）
-        batch = cache.get_tags_batch(candidates)
+        # 3. 全量获取标签（507批次7 #S10：原 candidates[:200] 排序前截断致 Top-N 承诺失效）
+        # 509号 #J23：单条 IN 查询候选上千时占位符超限会被 SQLite 拒/慢 → 分块合并
+        _TAG_CHUNK = 200
+        batch: dict = {}
+        for _i in range(0, len(candidates), _TAG_CHUNK):
+            _part = candidates[_i:_i + _TAG_CHUNK]
+            try:
+                _b = cache.get_tags_batch(_part)
+                if _b:
+                    batch.update(_b)
+            except Exception as _e:
+                logger.warning("radar get_tags_batch 分块失败（%d/%d）: %s",
+                               _i, len(candidates), _e)
 
         # 4. 评分排序（先不带名，避免全量 N+1 取名）
         scored: list[dict] = []
@@ -132,7 +142,16 @@ class RadarService(DataAwareMixin):
         # 批量获取标签和名称
         ecm = self._get_ecm()
         batch_tags = ecm.get_tags_batch(ts_codes)
-        name_map = {tc: self._get_stock_name(tc) for tc in ts_codes}
+        # 509号 #J25：批量取名（get_stock_meta_batch 单查询），消除逐只 N+1
+        _meta_map: dict = {}
+        try:
+            _meta_map = self._get_dm().get_stock_meta_batch(ts_codes)
+        except Exception as _e:
+            logger.warning("radar get_watchboard 批量取名失败（回退逐只）: %s", _e)
+        name_map = {
+            tc: ((_meta_map.get(tc) or {}).get('name', '') or self._get_stock_name(tc))
+            for tc in ts_codes
+        }
 
         stats = {'total_count': len(ts_codes), 'building_count': 0,
                  'alert_count': 0, 'high_signal_count': 0}
@@ -245,7 +264,11 @@ class RadarService(DataAwareMixin):
         for c in changes:
             cl = c.get('level', 'normal')
             summary = c.get('summary', '')
-            if level_order.get(cl, 99) < level_order.get(top_level, 99):
+            if cl not in level_order:
+                # 509号 #J24：未知 level 不静默落 99（永不升顶）——显式告警，保守按 normal 参与
+                logger.warning("radar _evaluate_push_level: 未知 change.level=%r，按 normal 处理", cl)
+                cl = 'normal'
+            if level_order[cl] < level_order.get(top_level, level_order['normal']):
                 top_level = cl
             if summary:
                 top_summaries.append(summary)
