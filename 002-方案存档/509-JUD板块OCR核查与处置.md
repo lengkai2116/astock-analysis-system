@@ -2,9 +2,10 @@
 
 # 509号｜JUD 板块 OCR 核查与处置
 
-**版本**：v1.1（2026-10-06；只读核查档 + **执行计划**；**拍板 Q1~Q4 已决、Q5 默认登记**，见 §七）
+**版本**：v1.2（2026-10-08；只读核查档 + 执行计划 + **批次3 已实施**；拍板 Q1~Q4 已决、Q5 默认登记）
 **v1.0（2026-10-06）**：只读核查档落档。OCR 4 段扫 ≈105 条 → 人工实证归并；未改任何代码/配置/方案。
 **v1.1（2026-10-06）**：用户「结合 509 制定详细执行计划」→ 拍板 **Q1=修（换独立信号源）/ Q2=保留符号语义 / Q3=无条件降 wait / Q4=先量化再修**（Q5 按推荐默认登记，批次4 前再确认）→ 落 §九 详细执行计划（7 批 + 依赖 + 验证 + 提交）。仍**未改任何代码**。
+**v1.2（2026-10-08）**：**批次3 已实施**（#J18~#J27 建议/展示层，commit `63b20d8`）：4 文件改动 + 探针 `tests/test_509_jud_batch3.py`（12 断言）+ 适配 `test_507_batch7`（fake 强度按代码号与分批无关）；全量回归 **2158 passed / 2 skipped / 9 xfailed 零失败**；ruff 零新增；daemon 已停跑后重启。**批次0 文档提交** `2bdc05b`。
 **来源**：2026-10-06 用户要求「调用 OCR 对系统中 **JUD 板块** 的所有实际代码进行检查，问题在对话框内详细说明，不要修改方案和代码」→ 对话框报告出具后，用户「开号落档，展开核查档草稿」→ 落本档。
 **方法**：`ocr scan`（alibaba/open-code-review，DeepSeek `deepseek-chat`，`--max-tokens 200000`）按功能分 **4 段** 扫描 JUD 板块，共 **≈105 条原始发现**，**逐条人工核实**（对照真实代码/调用图；OCR 存在上下文/伪影误报，误报/设计意图/待确认单列 §六）。
 **基线**：HEAD `e35b722`（= origin/main）；工作树仅 `data/account_risk_status.json` 未跟踪＝daemon 运行产物。生效配置 `status_engine.yaml`：`jud_engine_version="v390"`。
@@ -332,4 +333,17 @@ Step 2：`consensus_rate = max(0.0, min(1.0, consensus_rate))`。
 
 - **v1.0（2026-10-06）**：只读核查档落档。OCR 4 段扫 ≈105 条 → 人工实证归并；未改任何代码/配置/方案。
 - **v1.1（2026-10-06）**：用户「结合 509 制定详细执行计划」→ 拍板 Q1~Q4（Q5 默认登记）→ 落 §九 详细执行计划（9.1~9.11）+ §七 拍板记录。仍**未改任何代码/配置/方案**。
-- **下一接续**：批次0 文档提交（509 v1.1 + 索引）→ 按 §九 逐批开工（批次3/5/7 无拍板依赖可先开；批次1 依 Q2/Q4、批次2 依 Q1/Q3 已决）。
+- **v1.2（2026-10-08）批次3 实施**（commit `63b20d8`）：
+  - **批次0**：文档提交 `2bdc05b`（509 v1.1 + 索引）。
+  - **#J18** `signal_analyzer.calc_lifecycle_stage` 自动验证 → 新增 `auto_verified` 来源标记（verified 语义不变）；
+  - **#J19** `detect_decay` volume_ratio 缺失/为空 → 显式未知 20（原默认 1.0 误报健康）；
+  - **#J20** `advice_engine._safe_float` 拦 NaN/inf（`math.isfinite`）；
+  - **#J21** L0c 门 + 软风险仓位 静默 `except: pass` → `warning` 日志（语义不降级）；
+  - **#J22** `_build_advice_card_fields` factor=None 兜底 `(dims.get('factor') or {})`；
+  - **#J23** `radar_service.get_radar_signals` get_tags_batch 分块 200 合并（候选上千占位符超限）；
+  - **#J24** `_evaluate_push_level` 未知 level → 显式告警按 normal 参与（原静默 99 永不升顶）；
+  - **#J25** `get_watchboard` 批量取名 `get_stock_meta_batch`（消逐只 N+1，失败回退逐只）；
+  - **#J26/#J27** `time_rhythm_engine` 参考区间与比对窗口统一近 30 根 + `ref_mid<=0` 守卫；
+  - **探针** `tests/test_509_jud_batch3.py`（12 断言）；**适配** `test_507_batch7`（#J23 分块后 fake 强度须按股票代码而非批内索引）；
+  - **验证**：`py_compile` OK、ruff 零新增（含 507 遗留 F841/I001 顺手清理）、定向 23 passed、**全量 2158 passed / 2 skipped / 9 xfailed 零失败**（daemon 停后跑，已重启）。
+- **下一接续**：按 §九 逐批开工——**批次5（回测）/ 批次7（低危清理）**无拍板依赖可继续；批次1 依 Q2/Q4、批次2 依 Q1/Q3 已决（含行为变更项，须全市场重跑重定基线）；批次4 前确认 **Q5**。
