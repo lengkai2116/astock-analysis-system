@@ -26,6 +26,7 @@ status_engine dims）与展示层（`seven_dim_json` 段色/emoji）调用。
 """
 from __future__ import annotations
 
+import math
 from typing import Iterable, Optional
 
 # 无数据色（Q-439A-2：保留，语义为「数据缺失」而非判定）
@@ -131,7 +132,6 @@ def summary_light(consensus_rate) -> str:
     except (TypeError, ValueError):
         return DATA_MISSING
     # 507批次8：NaN/inf 视为数据异常 → 缺失灯（原 NaN→yellow 落中性、inf→green 误判）
-    import math
     if math.isnan(cr) or math.isinf(cr):
         return DATA_MISSING
     if cr >= SUMMARY_LIGHT_GREEN:

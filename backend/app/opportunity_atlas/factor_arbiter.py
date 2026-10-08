@@ -142,7 +142,7 @@ def arbitrate(
 
     # 1c: fatal_to_veto 非空 → 强制降级为 wait
     fatal_list = conflict.get('fatal_to_veto', [])
-    if fatal_list and len(fatal_list) > 0:
+    if fatal_list:
         _append_evidence(state_evidence,
                          f'强制降级（wait）：致命冲突 [{", ".join(str(f) for f in fatal_list)}]')
         for fatal_item in fatal_list:

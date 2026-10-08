@@ -108,7 +108,9 @@ class PotentialEngine:
             roe = ecm._query_shard(
                 'fina_indicator_cache', "SELECT roe FROM fina_indicator_cache")["roe"].dropna().tolist()
             self._tables["earn"] = _percentile_lookup(sorted(roe))
-        except Exception:
+        except Exception as e:
+            # 509号：静默 except 加日志（earn 截面构建失败 → 0.5 中性基准，可诊断）
+            logger.warning(f"earn 截面构建失败（降 0.5 中性）: {e}")
             self._tables["earn"] = _percentile_lookup([])
 
         try:
@@ -128,7 +130,9 @@ class PotentialEngine:
                 if tot > 0:
                     strengths.append(net / tot)   # 有向（净流入正/流出负），与 compute_fund_strength 一致
             self._tables["fund"] = _percentile_lookup(sorted(strengths))
-        except Exception:
+        except Exception as e:
+            # 509号：静默 except 加日志（fund 截面构建失败 → 0.5 中性基准，可诊断）
+            logger.warning(f"fund 截面构建失败（降 0.5 中性）: {e}")
             self._tables["fund"] = _percentile_lookup([])
 
         # 板块/趋势为离散映射，无需截面表
@@ -153,6 +157,9 @@ class PotentialEngine:
             dev_f = float(dev)
         except (TypeError, ValueError):
             dev_f = None
+        # 509号：float('nan')/('inf') 可成功解析 → 显式拦，避免 NaN 污染 percent lookup
+        if dev_f is not None and not math.isfinite(dev_f):
+            dev_f = None
         val_pct = self._tables["val"](dev_f) if dev_f is not None else 0.5
         fina = tags.get("fina_health")
         if fina == "suspicious":
@@ -164,6 +171,9 @@ class PotentialEngine:
         try:
             roe_f = float(roe)
         except (TypeError, ValueError):
+            roe_f = None
+        # 509号：同 val 的 NaN/inf 守卫
+        if roe_f is not None and not math.isfinite(roe_f):
             roe_f = None
         dims["earn"] = round(self._tables["earn"](roe_f), 3)
 
@@ -318,7 +328,7 @@ def recompute_ic_weights(ecm, lookback_days: int = 180, horizon: int = 20,
         dates = ecm._query_shard(
             'daily_cache',
             "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC "
-            "LIMIT %d" % (lookback_days // 20 * 20 + 1))["trade_date"].tolist()
+            "LIMIT ?", [lookback_days // 20 * 20 + 1])["trade_date"].tolist()
         if len(dates) < 30:
             return {"status": "insufficient_data", "weights": dict(DIM_WEIGHTS),
                     "ic_report": {"earn": None, "reason": "trading_days < 30"}}

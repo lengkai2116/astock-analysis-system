@@ -248,7 +248,7 @@ def _assess_emotion(dim_results: dict) -> float:
 def _assess_risk(dim_results: dict) -> float:
     """dim6 风险可靠 — ATR占比分档 + 波动分位修正。
 
-    ATR：<0.3→0.9, >0.7→0.4, else 0.6
+    ATR（dim6 产百分数语义，495-B3 已对齐）：<3.0→0.9, >7.0→0.4, else 0.6
     修正：volatility_percentile>0.85 → ×0.7
     """
     risk = _safe_get(dim_results, 'risk')

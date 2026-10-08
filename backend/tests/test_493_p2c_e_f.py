@@ -84,7 +84,7 @@ def test_ice_not_recovering_cap_kept():
 def test_stop_takes_higher_of_struct_and_atr():
     """取较高：结构位 9.0 vs ATR位 9.6（atr_pct=2%）→ 9.6"""
     advice = {}
-    _apply_stop_and_tiers(advice, 10.0, {'support_price': 9.0, 'atr_pct': 2.0}, {})
+    _apply_stop_and_tiers(advice, 10.0, {'support_price': 9.0, 'atr_pct': 2.0})
     # ATR 止损 = 10 - 2×10×0.02 = 9.6 > 结构 9.0 → 取 9.6
     assert advice['stop_loss_price'] == 9.6
     assert advice['stop_loss_basis'] == '结构止损与ATR止损取较高'
@@ -93,14 +93,14 @@ def test_stop_takes_higher_of_struct_and_atr():
 def test_stop_struct_higher_used():
     """结构位 8.0 vs ATR位 9.6（atr_pct=2%）→ 9.6（较高者）"""
     advice = {}
-    _apply_stop_and_tiers(advice, 10.0, {'support_price': 8.0, 'atr_pct': 2.0}, {})
+    _apply_stop_and_tiers(advice, 10.0, {'support_price': 8.0, 'atr_pct': 2.0})
     assert advice['stop_loss_price'] == 9.6
 
 
 def test_stop_atr_only_when_no_struct():
     """无结构位 → 用 ATR 止损"""
     advice = {}
-    _apply_stop_and_tiers(advice, 10.0, {'atr_pct': 5.0}, {})
+    _apply_stop_and_tiers(advice, 10.0, {'atr_pct': 5.0})
     # 10 - 2×10×0.05 = 9.0
     assert advice['stop_loss_price'] == 9.0
     assert advice['stop_loss_basis'] == 'ATR止损'
@@ -109,7 +109,8 @@ def test_stop_atr_only_when_no_struct():
 def test_stop_skips_struct_above_entry():
     """结构位高于入场价（无效）→ 仅 ATR"""
     advice = {}
-    _apply_stop_and_tiers(advice, 10.0, {'support_price': 10.5, 'atr_pct': 2.0}, {})
+    # 509号批次7：_apply_stop_and_tiers 死参 dim_results 已移除
+    _apply_stop_and_tiers(advice, 10.0, {'support_price': 10.5, 'atr_pct': 2.0})
     assert advice['stop_loss_price'] == 9.6
     assert advice['stop_loss_basis'] == 'ATR止损'
 
@@ -117,8 +118,9 @@ def test_stop_skips_struct_above_entry():
 def test_tiers_50_30_20_with_rr_pass():
     """R:R≥2 → 50%@2R / 30%@3R / 20%@None；R=10-9=1 → 目标 12/13"""
     advice = {}
+    # 509号批次7：_apply_stop_and_tiers 死参 dim_results 已移除
     _apply_stop_and_tiers(advice, 10.0, {'support_price': 9.0, 'atr_pct': 0.0,
-                                         'rr_value': 2.5}, {})
+                                         'rr_value': 2.5})
     tiers = advice['profit_tiers']
     assert len(tiers) == 3
     assert tiers[0]['weight'] == 0.5 and tiers[0]['price'] == 12.0
@@ -130,8 +132,9 @@ def test_tiers_50_30_20_with_rr_pass():
 def test_tiers_absent_when_rr_below_gate():
     """R:R<2 → 不给分批止盈计划（与 RR_GATE 一致）"""
     advice = {}
+    # 509号批次7：_apply_stop_and_tiers 死参 dim_results 已移除
     _apply_stop_and_tiers(advice, 10.0, {'support_price': 9.0, 'atr_pct': 0.0,
-                                         'rr_value': 1.5}, {})
+                                         'rr_value': 1.5})
     assert advice.get('profit_tiers') is None
 
 

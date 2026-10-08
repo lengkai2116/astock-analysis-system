@@ -194,7 +194,8 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
     # 注意：本模块同名函数为死副本（生效副本见 advice_engine），保留以同步口径。
     geo = _geometric(df)
     _rr = geo.get('risk_reward')
-    if _rr is not None and _rr < 2.0 and state in ('enter', 'light'):
+    # 509号：字面量 2.0 → RR_GATE 常量（单一口径，与模块顶部定义一致）
+    if _rr is not None and _rr < RR_GATE and state in ('enter', 'light'):
         state = 'wait'
         state_reason = f'盈亏比不足（目标收益/止损风险≈{_rr}，止损过宽），建议观望'
     elif state != _pre_state:

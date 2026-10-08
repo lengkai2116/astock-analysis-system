@@ -12,7 +12,10 @@ import logging
 import math
 from typing import Any
 
+from app.opportunity_atlas.dim_adapter import _weekly_dir_from_multi_level
+
 # 494号（R-3）：止损/止盈唯一实现 SSOT（dim_adapter.calc_stop_and_tiers）
+# 494号（R-2）：周线方向解析 SSOT（dim_adapter._weekly_dir_from_multi_level）
 from app.opportunity_atlas.dim_adapter import calc_stop_and_tiers as _ssot_stop_and_tiers
 
 logger = logging.getLogger(__name__)
@@ -40,8 +43,7 @@ ATR_MULT = 2.0
 TARGET_TIERS = [(0.5, 2.0), (0.3, 3.0), (0.2, None)]  # 50%@2R / 30%@3R / 20%移动止盈
 
 
-def _apply_stop_and_tiers(advice: dict, entry_price: float, risk_sd: dict,
-                          dim_results: dict) -> None:
+def _apply_stop_and_tiers(advice: dict, entry_price: float, risk_sd: dict) -> None:
     """493号 P2-e：结构止损 vs ATR止损取较高 + 50/30/20 分批止盈（原地写 advice）。
 
     494号（R-3）：实现收敛至 SSOT `dim_adapter.calc_stop_and_tiers`（与 advice_builder
@@ -172,7 +174,7 @@ def compute_advice(
         if risk_sd.get('atr_pct') is not None:
             advice['atr_pct'] = risk_sd['atr_pct']
         # 493号（P2-e）：止损取较高仲裁 + 分批止盈（依据知识库《结构止损》/《ATR止损》/《分批止盈法》）
-        _apply_stop_and_tiers(advice, entry_price, risk_sd, dim_results)
+        _apply_stop_and_tiers(advice, entry_price, risk_sd)
         emo_sd = (dim_results.get('emotion') or {}).get('status_description') or {}
         if emo_sd.get('temperature') is not None:
             advice['temperature'] = emo_sd['temperature']
@@ -214,7 +216,6 @@ def _weekly_direction(tags: dict, dimensions: dict = None) -> str:
     与 advice_builder 及主链 factor_arbiter 共用同一词表/取值口径）；本函数仅保留本模块特有
     的取值来源顺序（tags → dimensions）。
     """
-    from app.opportunity_atlas.dim_adapter import _weekly_dir_from_multi_level
     _cands = []
     if tags:
         _cands.append(tags.get('multi_level'))

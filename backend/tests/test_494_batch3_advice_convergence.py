@@ -111,7 +111,8 @@ def test_ssot_zero_entry_returns_none():
 def test_both_builders_delegate_to_ssot():
     """advice_engine/_apply_stop_and_tiers 与 advice_builder/_stop_and_tiers 同结果"""
     adv = {}
-    _apply_stop_and_tiers(adv, 10.0, {'support_price': 9.0, 'atr_pct': 2.0, 'rr_value': 2.5}, {})
+    # 509号批次7：_apply_stop_and_tiers 死参 dim_results 已移除
+    _apply_stop_and_tiers(adv, 10.0, {'support_price': 9.0, 'atr_pct': 2.0, 'rr_value': 2.5})
     b_stop, b_tiers = _stop_and_tiers(10.0, 9.0, 2.5, 2.0)
     assert adv['stop_loss_price'] == b_stop == 9.6
     assert adv['stop_loss_basis'] == '结构止损与ATR止损取较高'

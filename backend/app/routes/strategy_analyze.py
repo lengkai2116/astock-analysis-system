@@ -35,8 +35,6 @@ except Exception as _nlg_exc:
 
 from app.services.fallback_description import fallback_description
 
-logger = logging.getLogger(__name__)
-
 strategy_analyze_bp = Blueprint('strategy_analyze', __name__)
 
 
@@ -460,9 +458,16 @@ def _build_chip_dimension(sig: Optional[Dict], tags: Optional[Dict] = None) -> D
                     deep_chip[k] = tags[k]
     if not sig:
         avg_cost = deep_chip.get('chip_peak')
+        # 509号 #J41：concentration 可能为 str（无法 float 的原始值）→ 统一数值化，
+        #   避免 str*100 抛 TypeError
+        _conc = deep_chip.get('concentration')
+        try:
+            _conc_f = float(_conc) if _conc is not None else None
+        except (TypeError, ValueError):
+            _conc_f = None
         return {'direction': 'neutral', 'status_text': '筹码数据不足，无法分析主力动向',
                 'avg_cost': avg_cost if avg_cost else None,
-                'concentration': f"{deep_chip.get('concentration', 0)*100:.1f}%" if deep_chip.get('concentration') else '--'}
+                'concentration': f"{_conc_f*100:.1f}%" if _conc_f is not None else '--'}
     sr = sig.get('status_recognition', {})
     _ev = sig.get('evidence', []) or []
     status_text = render_chip_volume(sr) if (_HAVE_NLG and sr) else ('; '.join(str(e)[:80] for e in _ev[:2]) or sig.get('signal_label', ''))
@@ -743,7 +748,6 @@ def strategy_analyze():
         vp_sig = _find_signal(signals, '量价')
         chip_sig = _find_signal(signals, '筹码')
         bociasi_sig = _find_signal(signals, 'BOCIASI')
-        _find_signal(signals, '因子')
 
         # 323号 S0.5：读取深度标签（structure/chip_deep/fund_risk 组），
         # 供五维构建恢复深度字段
@@ -847,17 +851,19 @@ def strategy_analyze():
                 import json as _json_l1
                 if _status_row and _status_row.get('dim_states'):
                     _sv = _status_row
+                    # 509号：dim_states 仅解析一次（原同段重复 loads 3 次）
+                    _dim_states = _json_l1.loads(_sv.get('dim_states', '{}')) or {}
                     _l1_consensus = {
                         'consensus_rate': _sv.get('consensus_rate', 0),
-                        'bullish_votes': sum(1 for d in _json_l1.loads(_sv.get('dim_states', '{}')).values()
+                        'bullish_votes': sum(1 for d in _dim_states.values()
                                              if d.get('light') == 'green'),
-                        'bearish_votes': sum(1 for d in _json_l1.loads(_sv.get('dim_states', '{}')).values()
+                        'bearish_votes': sum(1 for d in _dim_states.values()
                                              if d.get('light') == 'red'),
                         'direction': _sv.get('direction', 'neutral'),
                         '_source': 'nine_dim',
                     }
                     _l1_dirs = []
-                    for _d in _json_l1.loads(_sv.get('dim_states', '{}')).values():
+                    for _d in _dim_states.values():
                         _light = _d.get('light', 'yellow')
                         _l1_dirs.append(1 if _light == 'green' else (-1 if _light == 'red' else 0))
                 else:
@@ -1011,11 +1017,13 @@ def strategy_analyze():
                                 finally:
                                     _conn.close()
                             except Exception as _sl_err:
-                                logger.warning(f"operation_advice SQLite 落库失败 ({ts_code}): {_sl_err}")
+                                # 509号：f-string → 惰性 %s（仅触发时格式化）
+                                logger.warning("operation_advice SQLite 落库失败 (%s): %s",
+                                               ts_code, _sl_err)
                 except Exception as _rec_err:
-                    logger.warning(f"operation_advice 落库跳过 ({ts_code}): {_rec_err}")
+                    logger.warning("operation_advice 落库跳过 (%s): %s", ts_code, _rec_err)
         except Exception as _adv_err:
-            logger.warning(f"operation_advice 生成跳过 ({ts_code}): {_adv_err}")
+            logger.warning("operation_advice 生成跳过 (%s): %s", ts_code, _adv_err)
 
         # ── 337号 S3：成品仓数据透出（status_snapshot 已在L747预加载） ──
         _seven_dim_report = None
@@ -1031,9 +1039,8 @@ def strategy_analyze():
         if _status_row:
             try:
                 import json as _json3
-                # 补充 status_row 中未包含的 advice_params（status_snapshot 表有该列）
-                if 'advice_params' not in _status_row:
-                    _status_row['advice_params'] = _r.get('advice_params') if _r is not None else None
+                # 509号 #J1：`_r` 从未定义（死分支残留 NameError）——
+                #   _status_row 由 :810 构建恒定含 advice_params 键，此分支实际不可达，删除
                 _status_verdict = {
                     'opportunity_state': _status_row.get('opportunity_state'),
                     'status_bar': _status_row.get('status_bar'),

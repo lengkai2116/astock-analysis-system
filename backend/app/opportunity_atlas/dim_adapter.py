@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +210,6 @@ def _potential_score_int(sd: dict) -> int:
     if raw is not None:
         s = str(raw)
         # 匹配 "潜力评分53/100" 或 "53" 或 "53/100"
-        import re
         m = re.search(r'(\d+)', s)
         if m:
             try:
@@ -259,7 +259,9 @@ def weekly_direction_from_dim_results(dim_results: dict) -> str:
         _ml = (((dim_results or {}).get('structure') or {})
                .get('status_description') or {}).get('multi_level') or {}
         return _weekly_dir_from_multi_level(_ml)
-    except Exception:
+    except Exception as _e:
+        # 509号：周线方向读取失败 → 显式 debug 日志（原静默返回 ''）
+        logger.debug("_weekly_dir_from_multi_level 读取失败: %s", _e)
         return ''
 
 

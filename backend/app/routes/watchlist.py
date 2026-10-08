@@ -150,7 +150,11 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
             stock['low'] = latest.get('low')
             cp = latest.get('close')
             pct = latest.get('pct_chg')
-            stock['pre_close'] = round(cp / (1 + pct/100), 2) if cp and pct else None
+            # 509号：pct_chg==-100 时 1+pct/100=0 → 除零；无 pct/close 时不产 pre_close
+            if cp and pct is not None and (1 + float(pct) / 100) != 0:
+                stock['pre_close'] = round(cp / (1 + float(pct) / 100), 2)
+            else:
+                stock['pre_close'] = None
             stock['volume'] = latest.get('vol')
             stock['amount'] = latest.get('amount')
             stock['change_pct'] = pct
@@ -353,8 +357,16 @@ def add_to_watchlist():
         return jsonify({'success': True, 'data': existing.to_dict(), 'message': '已在自选列表中'})
 
     item = Watchlist(ts_code=ts_code, notes=notes)
-    db.session.add(item)
-    db.session.commit()
+    try:
+        db.session.add(item)
+        db.session.commit()
+    except Exception:
+        # 509号：并发双插（check-then-act 竞态）→ 唯一约束冲突时回滚并按已存在返回
+        db.session.rollback()
+        existing = Watchlist.query.filter_by(ts_code=ts_code).first()
+        if existing:
+            return jsonify({'success': True, 'data': existing.to_dict(), 'message': '已在自选列表中'})
+        raise
 
     # 触发 daemon 增量预计算（P6）
     try:
@@ -371,7 +383,8 @@ def add_to_watchlist():
 @handle_exceptions
 def remove_from_watchlist(id):
     """从自选移除"""
-    item = Watchlist.query.get(id)
+    # 509号：query.get 弃用（SQLAlchemy 2.0）→ db.session.get
+    item = db.session.get(Watchlist, id)
     if not item:
         return jsonify({'success': False, 'error': '自选股不存在'}), 404
 
@@ -389,7 +402,8 @@ def reorder_watchlist():
     order = data.get('order', []) if data else []
 
     for i, item_id in enumerate(order):
-        wl = Watchlist.query.get(item_id)
+        # 509号：query.get 弃用（SQLAlchemy 2.0）→ db.session.get
+        wl = db.session.get(Watchlist, item_id)
         if wl:
             wl.sort_order = i
     db.session.commit()
@@ -422,6 +436,13 @@ def get_watchlist_dashboard():
     items = Watchlist.query.order_by(Watchlist.created_at.desc()).all()
     dm = DataManager()
 
+    # 509号：批量取名（daily df 无 name 列，原 latest.get('name') 恒空）
+    _meta = {}
+    try:
+        _meta = dm.get_stock_meta_batch([it.ts_code for it in items])
+    except Exception:
+        _meta = {}
+
     stocks_data = []
     up_count = 0
     down_count = 0
@@ -436,7 +457,7 @@ def get_watchlist_dashboard():
                 amount = float(latest.get('amount', 0)) or 0.0
                 stocks_data.append({
                     'ts_code': item.ts_code,
-                    'name': latest.get('name', ''),
+                    'name': ((_meta.get(item.ts_code) or {}).get('name') or ''),
                     'price': float(latest.get('close', 0)),
                     'changePercent': pct_chg,
                     'pct_chg': pct_chg,

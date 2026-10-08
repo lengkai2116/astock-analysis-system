@@ -195,8 +195,9 @@ def _market_level_inputs_via_dm(dm) -> dict:
             _r = _fn()
             if isinstance(_r, (int, float)):
                 out['breadth'] = float(_r)
-    except Exception:
-        pass
+    except Exception as _mk_err:
+        # 509号：市场情绪池读取失败 → debug 日志（原静默空 dict）
+        logger.debug("市场情绪池读取失败（返回空）: %s", _mk_err)
     return out
 
 

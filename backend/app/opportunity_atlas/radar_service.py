@@ -24,6 +24,7 @@ class RadarService(DataAwareMixin):
     def __init__(self, data_manager=None):
         self._dm = data_manager  # DataAwareMixin 统一注入点
         self._ecm = None
+        self._l4 = None
 
     def _get_ecm(self):
         """缓存友好的 ECM 访问（减少重复链式调用）"""
@@ -235,11 +236,12 @@ class RadarService(DataAwareMixin):
 
     # ── 推送级别评估 ──────────────────────────────────────
 
-    @staticmethod
-    def _get_l4():
-        """延迟导入 L4CrossValidator"""
-        from app.opportunity_atlas.cross_validate import L4CrossValidator
-        return L4CrossValidator()
+    def _get_l4(self):
+        """延迟导入 L4CrossValidator（实例级缓存，509号：原每次调用新建实例）"""
+        if self._l4 is None:
+            from app.opportunity_atlas.cross_validate import L4CrossValidator
+            self._l4 = L4CrossValidator()
+        return self._l4
 
     @staticmethod
     def _evaluate_push_level(item: Any, daily_change: dict

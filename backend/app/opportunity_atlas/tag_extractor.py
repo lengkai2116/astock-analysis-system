@@ -55,8 +55,9 @@ def extract_chanlun_deep_tags(ts_code: str) -> dict:
                 pre_feat = dm.get_pre_feat(ts_code)
                 if pre_feat and isinstance(pre_feat, dict):
                     sr = pre_feat.get('derived', {}) or {}
-            except Exception:
-                pass
+            except Exception as _pf_err:
+                # 509号：413 兜底静默 except → debug 日志（可诊断）
+                logger.debug("pre_feat derived 兜底读取失败 (%s): %s", ts_code, _pf_err)
         # 缠论结构深度字段（structure 组）
         # 2026-08-10 核查修复：None 值跳过（原 str(None) 产生字面 "None" 假值）
         def _mk(v, is_json=False):
@@ -217,7 +218,12 @@ def extract_fund_risk_tags(ts_code: str) -> dict:
         try:
             mf = dm.cache.get_cached_moneyflow(ts_code)
             if mf is not None and not mf.empty and 'net_lg_amount' in mf.columns:
-                net5 = mf['net_lg_amount'].dropna().tail(5).sum()
+                # 509号：按 trade_date 排序取最近 5 个交易日（原 dropna().tail(5) 在停牌/
+                #   缺数日时会混入更早数据，但更稳健：先按日期倒序再取前 5 行求和）
+                _mf = mf
+                if 'trade_date' in mf.columns:
+                    _mf = mf.sort_values('trade_date')
+                net5 = _mf['net_lg_amount'].fillna(0).tail(5).sum()
                 if abs(net5) > 0:
                     out['net_lg_amount_5d'] = str(round(float(net5), 2))
         except Exception as _e:
@@ -234,14 +240,17 @@ def extract_fund_risk_tags(ts_code: str) -> dict:
                     _k = dm.get_cached_daily_data(ts_code)
                     _close_map = {}
                     if _k is not None and not _k.empty and 'trade_date' in _k.columns:
-                        _close_map = dict(zip(_k['trade_date'].astype(str), _k['close']))
+                        # 509号：日期键两侧统一归一（原两侧裸 str 等值比较，若 margin/daily
+                        #   trade_date 格式不同（'2026-08-01' vs '20260801'）会全部 miss）
+                        _close_map = {str(d)[:10]: c for d, c in
+                                      zip(_k['trade_date'], _k['close'])}
                     _weights = []
                     _prices = []
                     for _i, _row in _buy.iterrows():
                         _w = float(_row.get('rzmje') or 0)
                         if _w <= 0:
                             continue
-                        _p = _close_map.get(str(_row.get('trade_date')))
+                        _p = _close_map.get(str(_row.get('trade_date'))[:10])
                         if _p is None:
                             continue
                         _weights.append(_w)
