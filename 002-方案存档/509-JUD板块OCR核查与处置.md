@@ -2,12 +2,13 @@
 
 # 509号｜JUD 板块 OCR 核查与处置
 
-**版本**：v1.4（2026-10-08；只读核查档 + 执行计划 + **批次3/5/7 已实施**；拍板 Q1~Q4 已决、Q5 默认登记）
+**版本**：v1.5（2026-10-08；只读核查档 + 执行计划 + **批次3/5/6/7 已实施**；拍板 Q1~Q4 已决、Q5 默认登记）
 **v1.0（2026-10-06）**：只读核查档落档。OCR 4 段扫 ≈105 条 → 人工实证归并；未改任何代码/配置/方案。
 **v1.1（2026-10-06）**：用户「结合 509 制定详细执行计划」→ 拍板 **Q1=修（换独立信号源）/ Q2=保留符号语义 / Q3=无条件降 wait / Q4=先量化再修**（Q5 按推荐默认登记，批次4 前再确认）→ 落 §九 详细执行计划（7 批 + 依赖 + 验证 + 提交）。仍**未改任何代码**。
 **v1.2（2026-10-08）**：**批次3 已实施**（#J18~#J27 建议/展示层，commit `63b20d8`）：4 文件改动 + 探针 `tests/test_509_jud_batch3.py`（12 断言）+ 适配 `test_507_batch7`（fake 强度按代码号与分批无关）；全量回归 **2158 passed / 2 skipped / 9 xfailed 零失败**；ruff 零新增；daemon 已停跑后重启。**批次0 文档提交** `2bdc05b`。
 **v1.3（2026-10-08）**：**批次5 已实施**（#J28~#J31 回测，commit `70f79db`）：`backtest_minimal.py` 4 项（全胜 profit_factor=None / equity 仅持仓日复利 / 前向窗口真实日历+索引 / close_prices 键归一）+ 探针 `tests/test_509_jud_batch5.py`（5 断言）；全量回归 **2163 passed / 2 skipped / 9 xfailed 零失败**；ruff 零新增。
 **v1.4（2026-10-08）**：**批次7 已实施**（§五 低危清理，commit `ee12746`）：12 文件改动（#J1 `_r` 死分支删 / RR_GATE 常量化 / 死参移除 / 函数内 import 上移 / 静默 except 加日志 / NaN 守卫 / SQL 绑定参 / watchlist 除零·竞态·批量取名 / strategy_analyze 单次解析·数值化·惰性日志 / radar L4 缓存 / docstring 语义）+ 探针 `tests/test_509_jud_batch7.py`（13 断言）+ 适配 test_493/test_494 旧签名；全量回归 **2176 passed / 2 skipped / 9 xfailed 零失败**；ruff 零新增。
+**v1.5（2026-10-08）**：**批次6 已实施**（daemon JUD 工序段 #J43~#J46，commit `9ca793f`）：`data_daemon.py` 4 项（#J43 原子切换 RENAME 备份→live→删备份 / #J44 treemap close 缺失守卫 / #J45 富化循环定位日志 / #J46 OUT-CHECK once-guard）+ 探针 `tests/test_509_jud_batch6.py`（5 断言，AST/源码级）；全量回归 **2181 passed / 2 skipped / 9 xfailed 零失败**；ruff data_daemon 零新增（40 均基线既有）。
 **来源**：2026-10-06 用户要求「调用 OCR 对系统中 **JUD 板块** 的所有实际代码进行检查，问题在对话框内详细说明，不要修改方案和代码」→ 对话框报告出具后，用户「开号落档，展开核查档草稿」→ 落本档。
 **方法**：`ocr scan`（alibaba/open-code-review，DeepSeek `deepseek-chat`，`--max-tokens 200000`）按功能分 **4 段** 扫描 JUD 板块，共 **≈105 条原始发现**，**逐条人工核实**（对照真实代码/调用图；OCR 存在上下文/伪影误报，误报/设计意图/待确认单列 §六）。
 **基线**：HEAD `e35b722`（= origin/main）；工作树仅 `data/account_risk_status.json` 未跟踪＝daemon 运行产物。生效配置 `status_engine.yaml`：`jud_engine_version="v390"`。
@@ -363,4 +364,11 @@ Step 2：`consensus_rate = max(0.0, min(1.0, consensus_rate))`。
   - **NaN/SQL/其它**：`potential_engine` val/roe NaN·inf 守卫 + `LIMIT` 绑定参、`watchlist` pre_close 除零守卫 + `query.get→db.session.get` + add 并发竞态回滚 + dashboard 批量取名（daily df 无 name 列）、`strategy_analyze` dim_states 单次解析 + deep_chip concentration 数值化 + 惰性日志、`radar_service` L4 实例缓存、`reliability_assessor` docstring ATR 阈值语义修正；
   - **探针** `tests/test_509_jud_batch7.py`（13 断言）；
   - **验证**：ruff 零新增、定向 67 passed、**全量 2176 passed / 2 skipped / 9 xfailed 零失败**（daemon 停后跑，已重启）。
-- **下一接续**：按 §九 逐批开工——批次1 依 Q2/Q4、批次2 依 Q1/Q3 已决（含行为变更项，须全市场重跑重定基线）；批次4 前确认 **Q5**；批次6（daemon 工序段）无拍板依赖可继续。
+- **v1.5（2026-10-08）批次6 实施**（commit `9ca793f`）——daemon JUD 工序段：
+  - **#J43** `_build_treemap_snapshot`/`_build_status_snapshot` 原子切换：`DROP+RENAME` 两条独立 DDL（DROP 成功而 RENAME 失败会丢 live 表）→ **RENAME 备份 → RENAME live → 删备份**（任一步失败旧表仍可恢复，首次无旧表 try 兜底）；
+  - **#J44** treemap `close` 缺失（停牌等）时 daemon `_safe_float` 返回 None → `max(None, 1e-9)` 抛 TypeError 被吞 → 该股**静默丢出 treemap**；改为先取 `_close_f`、None 时 amplitude 落 None（保留该股行）；
+  - **#J45** `_jud_enrich_with_meta` 逐股富化 3 处内层静默 `except`（opportunity_meta/right_side_confirm/potential）+ 外层 `continue` 加**带 ts_code 的 warning/debug 定位日志**；
+  - **#J46** `_verify_out_completeness` once-guard：pipeline_status 本日已 `OUT-CHECK done` 则跳过（原每次驱动重跑全表 COUNT）；
+  - **探针** `tests/test_509_jud_batch6.py`（5 断言，AST/源码级——daemon 运行期不做全量回归）；
+  - **验证**：py_compile OK、ruff data_daemon 零新增（40 均基线既有）、**全量 2181 passed / 2 skipped / 9 xfailed 零失败**（daemon 停后跑，已重启）。
+- **下一接续**：按 §九 逐批开工——**批次1（#J2~#J8，依 Q2/Q4 已拍板）与批次2（#J6~#J17，依 Q1/Q3 已拍板）**为最后两组判定链核心，均含行为变更项须先探针量化 + 全市场重跑重定基线（最高风险 #J14 中性闸门复活，可能连带 494 fixture）；批次4 前确认 **Q5**。
