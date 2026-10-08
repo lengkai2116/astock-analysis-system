@@ -2,10 +2,11 @@
 
 # 509号｜JUD 板块 OCR 核查与处置
 
-**版本**：v1.2（2026-10-08；只读核查档 + 执行计划 + **批次3 已实施**；拍板 Q1~Q4 已决、Q5 默认登记）
+**版本**：v1.3（2026-10-08；只读核查档 + 执行计划 + **批次3/批次5 已实施**；拍板 Q1~Q4 已决、Q5 默认登记）
 **v1.0（2026-10-06）**：只读核查档落档。OCR 4 段扫 ≈105 条 → 人工实证归并；未改任何代码/配置/方案。
 **v1.1（2026-10-06）**：用户「结合 509 制定详细执行计划」→ 拍板 **Q1=修（换独立信号源）/ Q2=保留符号语义 / Q3=无条件降 wait / Q4=先量化再修**（Q5 按推荐默认登记，批次4 前再确认）→ 落 §九 详细执行计划（7 批 + 依赖 + 验证 + 提交）。仍**未改任何代码**。
 **v1.2（2026-10-08）**：**批次3 已实施**（#J18~#J27 建议/展示层，commit `63b20d8`）：4 文件改动 + 探针 `tests/test_509_jud_batch3.py`（12 断言）+ 适配 `test_507_batch7`（fake 强度按代码号与分批无关）；全量回归 **2158 passed / 2 skipped / 9 xfailed 零失败**；ruff 零新增；daemon 已停跑后重启。**批次0 文档提交** `2bdc05b`。
+**v1.3（2026-10-08）**：**批次5 已实施**（#J28~#J31 回测，commit `70f79db`）：`backtest_minimal.py` 4 项（全胜 profit_factor=None / equity 仅持仓日复利 / 前向窗口真实日历+索引 / close_prices 键归一）+ 探针 `tests/test_509_jud_batch5.py`（5 断言）；全量回归 **2163 passed / 2 skipped / 9 xfailed 零失败**；ruff 零新增。
 **来源**：2026-10-06 用户要求「调用 OCR 对系统中 **JUD 板块** 的所有实际代码进行检查，问题在对话框内详细说明，不要修改方案和代码」→ 对话框报告出具后，用户「开号落档，展开核查档草稿」→ 落本档。
 **方法**：`ocr scan`（alibaba/open-code-review，DeepSeek `deepseek-chat`，`--max-tokens 200000`）按功能分 **4 段** 扫描 JUD 板块，共 **≈105 条原始发现**，**逐条人工核实**（对照真实代码/调用图；OCR 存在上下文/伪影误报，误报/设计意图/待确认单列 §六）。
 **基线**：HEAD `e35b722`（= origin/main）；工作树仅 `data/account_risk_status.json` 未跟踪＝daemon 运行产物。生效配置 `status_engine.yaml`：`jud_engine_version="v390"`。
@@ -346,4 +347,11 @@ Step 2：`consensus_rate = max(0.0, min(1.0, consensus_rate))`。
   - **#J26/#J27** `time_rhythm_engine` 参考区间与比对窗口统一近 30 根 + `ref_mid<=0` 守卫；
   - **探针** `tests/test_509_jud_batch3.py`（12 断言）；**适配** `test_507_batch7`（#J23 分块后 fake 强度须按股票代码而非批内索引）；
   - **验证**：`py_compile` OK、ruff 零新增（含 507 遗留 F841/I001 顺手清理）、定向 23 passed、**全量 2158 passed / 2 skipped / 9 xfailed 零失败**（daemon 停后跑，已重启）。
-- **下一接续**：按 §九 逐批开工——**批次5（回测）/ 批次7（低危清理）**无拍板依赖可继续；批次1 依 Q2/Q4、批次2 依 Q1/Q3 已决（含行为变更项，须全市场重跑重定基线）；批次4 前确认 **Q5**。
+- **v1.3（2026-10-08）批次5 实施**（commit `70f79db`）：
+  - **#J28** 全胜（无亏损）`profit_factor=None`（理想无穷），区分「无交易 0.0」（原恒 0.0 误示最差）；
+  - **#J29** equity curve 只在持仓日（enter/light）复利，空仓（wait/avoid/reduce）日净值不变——消除 buy&hold 全窗口回撤失真；
+  - **#J30** 前向窗口按**真实交易日历**（全量 df，含 evaluate 失败日）取第 5 个交易日，不再依赖 state_dates（evaluate 成功日）；预计算索引消 O(n²)；
+  - **#J31** `close_prices` 键与 `daily_returns`/`entry_date` 同归一（`str(...)[:10]`）——trade_date 为 Timestamp/int 时不再全部交易被跳过；
+  - **探针** `tests/test_509_jud_batch5.py`（5 断言，mock StatusEngine）；
+  - **验证**：ruff 零新增、定向 18 passed + 4 xfailed（既有）、**全量 2163 passed / 2 skipped / 9 xfailed 零失败**（daemon 停后跑，已重启）。
+- **下一接续**：按 §九 逐批开工——**批次7（低危清理）**无拍板依赖可继续；批次1 依 Q2/Q4、批次2 依 Q1/Q3 已决（含行为变更项，须全市场重跑重定基线）；批次4 前确认 **Q5**。
