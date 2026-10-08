@@ -2,7 +2,7 @@
 
 # 509号｜JUD 板块 OCR 核查与处置
 
-**版本**：v1.7（2026-10-08；只读核查档 + 执行计划 + **批次1/2/3/5/6/7 已实施**；拍板 Q1~Q4 已决、Q5 默认登记）
+**版本**：v1.8（2026-10-08；只读核查档 + 执行计划 + **批次1~7 已实施**；拍板 Q1~Q5 全决）
 **v1.0（2026-10-06）**：只读核查档落档。OCR 4 段扫 ≈105 条 → 人工实证归并；未改任何代码/配置/方案。
 **v1.1（2026-10-06）**：用户「结合 509 制定详细执行计划」→ 拍板 **Q1=修（换独立信号源）/ Q2=保留符号语义 / Q3=无条件降 wait / Q4=先量化再修**（Q5 按推荐默认登记，批次4 前再确认）→ 落 §九 详细执行计划（7 批 + 依赖 + 验证 + 提交）。仍**未改任何代码**。
 **v1.2（2026-10-08）**：**批次3 已实施**（#J18~#J27 建议/展示层，commit `63b20d8`）：4 文件改动 + 探针 `tests/test_509_jud_batch3.py`（12 断言）+ 适配 `test_507_batch7`（fake 强度按代码号与分批无关）；全量回归 **2158 passed / 2 skipped / 9 xfailed 零失败**；ruff 零新增；daemon 已停跑后重启。**批次0 文档提交** `2bdc05b`。
@@ -11,6 +11,7 @@
 **v1.5（2026-10-08）**：**批次6 已实施**（daemon JUD 工序段 #J43~#J46，commit `9ca793f`）：`data_daemon.py` 4 项（#J43 原子切换 RENAME 备份→live→删备份 / #J44 treemap close 缺失守卫 / #J45 富化循环定位日志 / #J46 OUT-CHECK once-guard）+ 探针 `tests/test_509_jud_batch6.py`（5 断言，AST/源码级）；全量回归 **2181 passed / 2 skipped / 9 xfailed 零失败**；ruff data_daemon 零新增（40 均基线既有）。
 **v1.6（2026-10-08）**：**批次1 已实施**（判定链语义/量纲 #J2/#J3/#J4/#J5/#J7/#J8，commit `8e65e61`）：**探针量化先行**（`scripts/_509_b1_probe.py`：signal_strength 0-100 域实证 min0/max92 / 空头共识 75.12%（4173/5555）/ decay 实测 max=22 全 healthy / maintenance 100% healthy）→ 4 文件改动（#J2 分级 80/60/40/20 / #J3 日环比 ±10 / #J4 键 `decayed→broken` / #J5 情绪方向冲突比较 / #J7 去 clamp 保留符号、负分落 avoid / #J8 评分标定 0-100 全域）+ 探针 `tests/test_509_jud_batch1.py`（10 断言）+ 适配 `test_495_b2` 门禁 H3 域（[-100,100]）+ 适配 `test_509_jud_batch3` #J19 分值；**全市场重跑 5554 只门禁全 PASS、五档分布零漂移**（avoid 83.3 同基线，enter 0.2/light 0.3/wait 10.5/reduce 5.6）；全量回归 **2191 passed / 2 skipped / 9 xfailed 零失败**。
 **v1.7（2026-10-08）**：**批次2 已实施**（判定链健壮性 #J6/#J9/#J10/#J11/#J12/#J13/#J14/#J15/#J16/#J17，commit `33cb9f1`）：**#J14 探针量化先行 + 用户拍板方案 B**（OCR 原判「total_dim_count 缺失维弱化闸门」与数据流不符——convert_to_factors 恒返回 13 键；真缺陷=辅助维恒中性抬高 neutral_ratio → 闸门过度触发压扁幅值，786→236、约 550 只恢复）→ 5 文件改动（#J6 dim4 补产 `retail_tendency` 枚举+C4+ 改读 / #J9 legacy 平票判 neutral / #J10 L0a int 守卫 / #J11 _apply_l0 asof_date 透传 / #J12 json 守卫 / #J13 全中性族判 neutral / #J14 neutral_ratio 只计 7 主维 / #J15 weights=None→1.0 / #J16 周线无条件降 wait+删死函数 / #J17 wait 强制降级 45.0）+ 探针 24 断言（j6/j14/j16/misc）+ 适配 test_490/test_492/test_494 旧行为断言；**全市场重跑 5554 只门禁全 PASS**（avoid 83.3→80.6 容差内，#J14 幅值恢复所致）；全量回归 **2215 passed / 2 skipped / 9 xfailed 零失败**。
+**v1.8（2026-10-08）**：**批次4 已实施**（接口/写路径/单例 #J32~#J42，**Q5 拍板=严格月份边界 + 6% 未舍入比较**）：5 文件改动（opportunity_library #J34 先校验后 setattr（lib_level 域校验前置）/ #J35 数值列强制 cast·拒 null / #J36 commit 包 try/except+rollback / #J37 search 转义 %·_ + 分页硬上限 100；watchlist #J38 mf_sorted 无条件先初始化 / #J39 `_get_cache()` 模块级单例；opportunity_atlas #J40 惰性单例加双检锁；strategy_analyze #J41 deep_chip 统一仅存 float / #J42 `_detect_market_state` 改读真实 `market_state` 字段（原个股状态冒充）；account_risk_status #J32 连亏严格月份边界+零盈亏跳过不 break / #J33 6% 未舍入比较（`math.isclose` 容差）舍入仅留展示）+ 探针 `tests/test_509_jud_batch4.py`（17 断言）+ 适配 test_493（纯函数行为不变回归）；全量回归 **2232 passed / 2 skipped / 9 xfailed 零失败**；ruff 零新增；daemon 停后跑已重启。
 **来源**：2026-10-06 用户要求「调用 OCR 对系统中 **JUD 板块** 的所有实际代码进行检查，问题在对话框内详细说明，不要修改方案和代码」→ 对话框报告出具后，用户「开号落档，展开核查档草稿」→ 落本档。
 **方法**：`ocr scan`（alibaba/open-code-review，DeepSeek `deepseek-chat`，`--max-tokens 200000`）按功能分 **4 段** 扫描 JUD 板块，共 **≈105 条原始发现**，**逐条人工核实**（对照真实代码/调用图；OCR 存在上下文/伪影误报，误报/设计意图/待确认单列 §六）。
 **基线**：HEAD `e35b722`（= origin/main）；工作树仅 `data/account_risk_status.json` 未跟踪＝daemon 运行产物。生效配置 `status_engine.yaml`：`jud_engine_version="v390"`。
@@ -400,4 +401,18 @@ Step 2：`consensus_rate = max(0.0, min(1.0, consensus_rate))`。
   - **探针** `tests/test_509_jud_batch2_{j6,j14,j16,misc}.py`（24 断言）；**适配** test_490（C4+ 加 retail_tendency）/test_492（_apply_l0 签名）/test_494（周线无条件降）旧行为断言；
   - **全市场重跑** 5554 只门禁全 PASS（avoid 83.3→80.6 容差内，#J14 幅值恢复：约 550 只从 avoid 回升 wait/reduce/enter）；
   - **验证**：ruff 零新增、全量 **2215 passed / 2 skipped / 9 xfailed 零失败**（daemon 停后跑，已重启）。
-- **下一接续**：剩 **批次4（接口/写路径/单例 #J34~#J42 + account_risk_status）**——开工前确认 **Q5**（月度风险：严格月份边界 + 未舍入比较，默认推荐）。
+- **v1.8（2026-10-08）批次4 实施**（commit `7acf6b5`，接口/写路径/单例）——**Q5 已拍板**（2026-10-08 用户「按默认推荐开工批次4」= 严格月份边界 + 6% 未舍入比较）：
+  - **#J34** `opportunity_library` update **先校验后 setattr**：`_coerce_field` 将 lib_level **域校验前置**（null/非法档位在 setattr 前拦截，非法值不入 ORM；原 setattr 后校验→400 时 ORM 已 dirty，下一次任意请求 commit 会持久化非法值）；
+  - **#J35** `opportunity_library` 白名单字段**类型/None 校验**：数值列（Integer/Float 共 13 列）强制 cast、拒 null/bool/dict/list；字符串列非 None 统一转 str；lib_level null 拒（原 `{"lib_level": null}` falsy 绕过守卫清空列）；
+  - **#J36** `opportunity_library` 三写端点（create/update/delete）commit 包 **try/except + rollback**（防 PendingRollbackError 级联污染同 worker 后续请求）；
+  - **#J37** `opportunity_library` list search **转义 `%`/`_`**（`ilike(..., escape='\\')`）+ **分页**（page/page_size，page_size 硬上限 100，返回 total 为过滤后总数）；
+  - **#J38** `watchlist` `mf_sorted` **无条件先初始化**（`df_mf` 非空即 `sort_values`；原仅 len>1 分支定义，恰 1 行且 circ_mv>0 时 `len(mf_sorted)` 抛 NameError 被吞→该股资金流全量静默丢失）；
+  - **#J39** `watchlist` `_get_cache()` 改**模块级单例**（原每次 `TieredMemoryCache()` 新建空缓存→报价缓存永不生效）；
+  - **#J40** `opportunity_atlas` 惰性单例（`get_data_manager`/`_get_memory_cache`）加 **`threading.Lock` 双检锁**（原 check-then-set 无锁，多线程 WSGI 下可双构造）；
+  - **#J41** `strategy_analyze` deep_chip **统一仅存 float**（无法数值化不混存原值；原 except 存原始串→下游 `*100` str*float TypeError；批次7 消费端守卫保留）；
+  - **#J42** `strategy_analyze` `_detect_market_state` **改读真实 `market_state` 字段**（信号顶层，SignalComputationService 由大盘指数识别；多数投票，与 ai_analysis 一致）；无真实源 → 诚实 `UNKNOWN`（原取 `status_recognition.state` 个股策略态冒充市场上下文）；
+  - **#J32**（Q5）`account_risk_status` 连亏序列 **严格月份边界**（`_sells` 加 `trade_date >= month_start` 过滤）+ **零盈亏跳过不 break**（原 `pnl>=0` 即 break 错误中断连亏计数）；
+  - **#J33**（Q5）`account_risk_status` **6% 未舍入比较**（`raw_loss_pct = -month_pnl/asset` 直接与上限比较 + `math.isclose` 容差兜浮点误差；舍入仅留展示——原先 `round(...,6)` 再比较，边界值可翻转假停/漏停）；
+  - **探针** `tests/test_509_jud_batch4.py`（17 断言：#J33 未舍入不误停·精确6%回归·isclose 边界 / #J32 零盈亏不 break（mock Trade）+ 月份边界源码断言 / #J35/#J34 `_coerce_field` 数值·字符串·lib_level 域校验 / #J36 rollback 源码断言 / #J37 转义+分页源码断言 / #J39 单例 / #J38 单行 moneyflow 资金流不丢 / #J40 双检锁单例+源码 / #J41 deep_chip float-only / #J42 多数投票+诚实降级）；**适配** test_493（纯函数行为不变回归，13 断言全绿）；
+  - **验证**：ruff 零新增、全量 **2232 passed / 2 skipped / 9 xfailed 零失败**（daemon 停后跑，已重启）。
+- **🏁 509 号全面收官**：批次0~7 全部实施（本号核查范围所有确凿缺陷已闭环），v1.8 落档 + 索引登记 + 已推送。**遗留候选（非本号范围）**：`generate_seven_dim_from_signals` 旧体（删需同步改 test_436）、前端阶段 479-7 / 439-A-2、508 后续。
