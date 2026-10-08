@@ -29,22 +29,22 @@ import pytest  # noqa: E402
 # ── #J19：detect_decay volume_ratio 缺失 → 显式未知 20 ─────────────
 
 def test_j19_volume_ratio_missing_not_healthy():
-    """volume_ratio 缺失 → volume_energy=20（显式未知），不落健康 10"""
+    """volume_ratio 缺失 → volume_energy=35（显式未知），不落健康 15（#J8 标定后）"""
     from app.opportunity_atlas import signal_analyzer as sa
 
     r = sa.detect_decay(tags={}, lifecycle={'day': 3})
-    assert r['breakdown']['volume_energy']['score'] == 20, (
-        '缺失量比应显式未知(20)，而非健康(10)')
+    assert r['breakdown']['volume_energy']['score'] == 35, (
+        '缺失量比应显式未知(35)，而非健康(15)')
 
 
 def test_j19_volume_ratio_present_scoring():
-    """volume_ratio 有值 → 按 <0.5/<0.8 分档正常"""
+    """volume_ratio 有值 → 按 <0.5/<0.8 分档正常（#J8 标定后 85/55/15）"""
     from app.opportunity_atlas import signal_analyzer as sa
 
     r_low = sa.detect_decay(tags={'volume_ratio': 0.4}, lifecycle={'day': 3})
     r_hi = sa.detect_decay(tags={'volume_ratio': 1.5}, lifecycle={'day': 3})
-    assert r_low['breakdown']['volume_energy']['score'] == 50
-    assert r_hi['breakdown']['volume_energy']['score'] == 10
+    assert r_low['breakdown']['volume_energy']['score'] == 85
+    assert r_hi['breakdown']['volume_energy']['score'] == 15
 
 
 # ── #J18：calc_lifecycle_stage auto_verified 来源分离 ─────────────

@@ -155,11 +155,12 @@ def arbitrate(
         }
 
     # ════════════════════════════════════════════════════════════════
-    # Step 2: 基础分 = consensus_rate × 100
+    # Step 2: 基础分 = consensus_rate × 100（509号 #J7：保留符号语义）
     # ════════════════════════════════════════════════════════════════
+    # Q2 拍板：consensus_rate 为 L3 带符号 [-1,1]（负=空头共识，497号批次2 已确认），
+    #   原 clamp [0,1] 把 75% 空头共识方向抹除为 0。保留符号：负分在 Step 6 落
+    #   `<30 → avoid` 档（_map_score_to_state 首个满足阈值，负分恒 avoid）。
     consensus_rate = float(consensus.get('consensus_rate', 0) or 0)
-    # clamp to [0, 1] 安全范围
-    consensus_rate = max(0.0, min(1.0, consensus_rate))
     base_score = consensus_rate * 100.0
 
     _append_evidence(state_evidence,
@@ -187,28 +188,31 @@ def arbitrate(
                      f'右侧确认门控: right_side_confirm={rsc} → ×{rsc_multiplier} → {final_score:.1f}')
 
     # ════════════════════════════════════════════════════════════════
-    # Step 5: 情绪极端修正（390 §7.3）
+    # Step 5: 情绪极端修正（390 §7.3）——509号 #J5：方向冲突才修正
     # ════════════════════════════════════════════════════════════════
+    # 原实现两个 direction 分支执行同一 ×0.85（等价分支死代码），且情绪方向未与
+    # 共识方向比较。Q2 拍板：显式冲突比较——「情绪极端 × 建议方向」反向时才降分：
+    #   direction=+1（冰点=逆势看多机会）而共识为空头 → 冰点与空头共识冲突 → 谨慎；
+    #   direction=-1（正向=逆势看空机会）而共识为多头 → 正向与多头共识冲突 → 谨慎；
+    #   方向一致（冰点+多头 / 正向+空头）→ 情绪与共识共振，不额外修正。
     emotion_data = dims_factor.get('emotion', {})
     emotion_direction = int(emotion_data.get('direction', 0) or 0)
     emotion_strength = float(emotion_data.get('strength', 0.5) or 0.5)
 
-    if emotion_strength > _EMOTION_EXTREME_THRESHOLD:
-        if emotion_direction == 1:
-            # direction=1 代表 ice（冰点），冰点+看多 = 反转看多但极端冷 → 谨慎
+    if emotion_strength > _EMOTION_EXTREME_THRESHOLD and emotion_direction != 0:
+        # 共识方向由带符号 consensus_rate 表达（#J7 保留符号后可用）
+        _consensus_bearish = consensus_rate < 0
+        if (emotion_direction == 1 and _consensus_bearish) or (
+                emotion_direction == -1 and not _consensus_bearish):
             final_score *= _EMOTION_PENALTY
-            _append_evidence(state_evidence,
-                             f'情绪极端修正: 冰点(方向=+1) 看多但极端冷(strength={emotion_strength:.3f})'
-                             f' → ×{_EMOTION_PENALTY} → {final_score:.1f}')
-        elif emotion_direction == -1:
-            # direction=-1 代表 positive（正向），正向+看空 = 反转看空但极端热 → 谨慎
-            final_score *= _EMOTION_PENALTY
-            _append_evidence(state_evidence,
-                             f'情绪极端修正: 正向(方向=-1) 看空但极端热(strength={emotion_strength:.3f})'
-                             f' → ×{_EMOTION_PENALTY} → {final_score:.1f}')
+            _append_evidence(
+                state_evidence,
+                f'情绪极端修正: 方向={emotion_direction} vs 共识'
+                f'{"空头" if _consensus_bearish else "多头"} 冲突'
+                f'（strength={emotion_strength:.3f}） → ×{_EMOTION_PENALTY} → {final_score:.1f}')
 
-    # 确保分数在 [0, 100] 范围
-    final_score = max(0.0, min(100.0, final_score))
+    # 确保分数 ≤ 100（509号 #J7：保留符号语义——负分不钳回 0，Step 6 恒落 avoid 档）
+    final_score = min(100.0, final_score)
 
     # ════════════════════════════════════════════════════════════════
     # Step 6: 映射 → opportunity_state

@@ -9,7 +9,8 @@
   H2  单源化不变量 = 0（495 批次1）：
       - 映射不一致：|(v390_consensus_rate+1)/2 - dim8_summary.consensus_rate| > 0.01 的样本
       - 矛盾组合：v390 opportunity_state=avoid 且 dim8 summary.status_bar ∈ 正向确认
-  H3  consensus_rate ∈ [-1, 1]（判定权威）且 final_score ∈ [0, 100]（全部样本）
+  H3  consensus_rate ∈ [-1, 1]（判定权威）且 final_score ∈ [-100, 100]
+      （509号批次1 #J7：保留符号语义，空头共识 final_score 为负、落 avoid 档）
 
 【范围断言】（基准 ±5pt 容差，基准=2026-09-28 全市场实测；497号批次3 重定）
   R1  opportunity_state 五档占比：avoid 78.5 / wait 13.5 / reduce 6.9 / enter 0.6 / light 0.4
@@ -119,7 +120,8 @@ def main():
             cons_bad += 1
         try:
             fs = float(row.get('final_score') or 0)
-            if not (0.0 <= fs <= 100.0):
+            # 509号批次1（#J7）：保留符号语义 → 合法域 [-100, 100]（空头为负，落 avoid）
+            if not (-100.0 <= fs <= 100.0):
                 fscore_bad += 1
         except (TypeError, ValueError):
             fscore_bad += 1
@@ -195,7 +197,7 @@ def main():
     checks.append(('H2 映射不一致 = 0', mismap == 0, f'mismap={mismap}'))
     checks.append(('H2 矛盾组合 = 0', contradict == 0, f'contradict={contradict}'))
     checks.append(('H3 consensus ∈ [-1,1]', cons_bad == 0, f'bad={cons_bad}'))
-    checks.append(('H3 final_score ∈ [0,100]', fscore_bad == 0, f'bad={fscore_bad}'))
+    checks.append(('H3 final_score ∈ [-100,100]', fscore_bad == 0, f'bad={fscore_bad}'))
     all_ok = True
     print('\n=== 门禁结果 ===')
     for name, ok, detail in checks:

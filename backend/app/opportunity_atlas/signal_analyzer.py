@@ -123,49 +123,49 @@ def detect_decay(tags: dict, lifecycle: dict = None) -> dict:
     if day <= 5:
         scores['price_trend'] = 0
     elif day <= 12:
-        scores['price_trend'] = 20
+        scores['price_trend'] = 35
     else:
-        scores['price_trend'] = 50
+        scores['price_trend'] = 80
 
     vp = str(tags.get('volume_price_fit', ''))
     if vp == 'diverging':
-        scores['volume_price'] = 60
+        scores['volume_price'] = 100
     elif vp == 'healthy':
-        scores['volume_price'] = 10
+        scores['volume_price'] = 20
     else:
-        scores['volume_price'] = 30
+        scores['volume_price'] = 50
 
-    # 509号 #J19：量比缺失/为空 → 显式未知（20），不误报「健康」（原默认 1.0 落健康分支）
+    # 509号 #J19：量比缺失/为空 → 显式未知（35），不误报「健康」（原默认 1.0 落健康分支）
     _vol_ratio_raw = tags.get('volume_ratio')
     if _vol_ratio_raw is None or _vol_ratio_raw == '':
-        scores['volume_energy'] = 20
+        scores['volume_energy'] = 35
     else:
         try:
             vol_ratio = float(_vol_ratio_raw)
             if vol_ratio < 0.5:
-                scores['volume_energy'] = 50
+                scores['volume_energy'] = 85
             elif vol_ratio < 0.8:
-                scores['volume_energy'] = 30
+                scores['volume_energy'] = 55
             else:
-                scores['volume_energy'] = 10
+                scores['volume_energy'] = 15
         except (TypeError, ValueError):
-            scores['volume_energy'] = 20
+            scores['volume_energy'] = 35
 
     phase = str(tags.get('main_force_phase', ''))
     if phase == 'distributing':
-        scores['chip_change'] = 60
+        scores['chip_change'] = 100
     elif phase == 'building':
-        scores['chip_change'] = 5
+        scores['chip_change'] = 10
     else:
-        scores['chip_change'] = 20
+        scores['chip_change'] = 35
 
     ff = str(tags.get('fund_flow', ''))
     if ff == '5d_outflow':
-        scores['main_force'] = 50
+        scores['main_force'] = 90
     elif ff == '5d_inflow':
-        scores['main_force'] = 5
+        scores['main_force'] = 10
     else:
-        scores['main_force'] = 20
+        scores['main_force'] = 40
 
     overall_score = sum(scores[dim] * DECAY_WEIGHTS[dim] for dim in scores)
     overall_score = int(round(overall_score))

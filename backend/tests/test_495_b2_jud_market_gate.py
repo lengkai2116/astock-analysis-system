@@ -137,6 +137,8 @@ class TestValueRanges:
         assert bad == 0, f'consensus_rate 越界样本 {bad}'
 
     def test_final_score_in_range(self, market_sample):
+        # 509号批次1（#J7，Q2 拍板）：consensus_rate 保留符号语义后，空头共识
+        #   final_score 为负（落 avoid 档）→ 合法域 [-100, 100]（原 [0,100]）
         bad = 0
         for code, row in market_sample['rows']:
             try:
@@ -144,7 +146,7 @@ class TestValueRanges:
             except (TypeError, ValueError):
                 bad += 1
                 continue
-            if not (0.0 <= fs <= 100.0):
+            if not (-100.0 <= fs <= 100.0):
                 bad += 1
         assert bad == 0, f'final_score 越界样本 {bad}'
 

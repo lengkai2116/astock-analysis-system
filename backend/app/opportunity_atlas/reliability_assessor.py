@@ -66,7 +66,9 @@ def _assess_signal(dim_results: dict) -> float:
     mapping = {
         'healthy': 0.8,
         'fading': 0.5,
-        'decayed': 0.2,
+        # 509号 #J4：生产者（signal_analyzer.detect_decay）值域为 healthy/fading/broken，
+        #   原 'decayed' 键永不匹配 → 完全失效信号静默落 0.5 默认。
+        'broken': 0.2,
     }
     return mapping.get(status, _DEFAULT_RELIABILITY)
 

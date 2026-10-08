@@ -1192,14 +1192,15 @@ class L4CrossValidator(DataAwareMixin):
         """构建机会概览"""
         signal_strength = self._safe_float(tags.get('signal_strength'), 0)
         score = signal_strength
-
-        if score >= 8:
+        # 509号 #J2：signal_strength 为 0-100 域（313号迁移，potential_engine 实产），
+        #   原 8/6/4/2 按 0-10 量纲分级 → 全市场恒 A+（量化实证 52.4%）。对齐 80/60/40/20。
+        if score >= 80:
             grade = 'A+'
-        elif score >= 6:
+        elif score >= 60:
             grade = 'A'
-        elif score >= 4:
+        elif score >= 40:
             grade = 'B'
-        elif score >= 2:
+        elif score >= 20:
             grade = 'C'
         else:
             grade = 'D'
@@ -1817,12 +1818,13 @@ class L4CrossValidator(DataAwareMixin):
                 'summary': f'财务健康 {old} → {new}',
             })
 
-        # 8. signal_strength — ±1.0 → normal
+        # 8. signal_strength — ±10.0 → normal（509号 #J3：0-100 域对齐，原 ±1.0 为
+        #    0-10 量纲残留，日环比 1pt 属噪声会刷屏）
         old = yesterday_tags.get('signal_strength')
         new = today_tags.get('signal_strength')
         if old is not None and new is not None:
             delta = self._safe_float(new, 0) - self._safe_float(old, 0)
-            if abs(delta) >= 1.0:
+            if abs(delta) >= 10.0:
                 direction = '上升' if delta > 0 else '下降'
                 changes.append({
                     'tag': 'signal_strength', 'label': '综合信号',
