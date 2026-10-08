@@ -5562,8 +5562,9 @@ def _jud_enrich_with_meta(codes: list[str]):
                 # 1. opportunity_meta（机会分类 + 七维画像 + 证据计数 + 入场/退出）
                 try:
                     _compute_opportunity_meta(tags)
-                except Exception:
-                    pass
+                except Exception as _meta_err:
+                    # 509号 #J45：带 code 定位日志（原静默吞错无法诊断）
+                    logger.warning(f"JUD 富化 {code} opportunity_meta 失败: {_meta_err}")
 
                 # 2. right_side_confirm（右侧确认三档判定）
                 try:
@@ -5573,8 +5574,9 @@ def _jud_enrich_with_meta(codes: list[str]):
                             tags.get('opportunity_type', ''), tags, df)
                         if _rsc_result:
                             tags.update(_rsc_result)
-                except Exception:
-                    pass
+                except Exception as _rsc_err:
+                    # 509号 #J45：带 code 定位日志（原静默吞错无法诊断）
+                    logger.warning(f"JUD 富化 {code} right_side_confirm 失败: {_rsc_err}")
 
                 # 3. PotentialEngine signal_strength（潜力评分）
                 if pe:
@@ -5583,13 +5585,15 @@ def _jud_enrich_with_meta(codes: list[str]):
                         try:
                             from app.opportunity_atlas.potential_engine import compute_fund_strength
                             mf_strength = compute_fund_strength(dm.cache, code)
-                        except Exception:
-                            pass
+                        except Exception as _mf_err:
+                            # 509号 #J45：fund_strength 缺失 → debug（可接受降级）
+                            logger.debug(f"JUD 富化 {code} fund_strength 失败: {_mf_err}")
                         pot = pe.compute_potential(tags, mf_strength)
                         if pot:
                             tags.update(pot)
-                    except Exception:
-                        pass
+                    except Exception as _pot_err:
+                        # 509号 #J45：潜力评分失败 → warning 定位
+                        logger.warning(f"JUD 富化 {code} potential 失败: {_pot_err}")
 
                 # 4. 写入本地缓存（循环后原子替换 _jud_meta_cache，OCR #12）
                 _jud_meta_new[code] = {
@@ -5606,7 +5610,9 @@ def _jud_enrich_with_meta(codes: list[str]):
                     'exit_conditions': tags.get('exit_conditions'),
                 }
                 enriched += 1
-            except Exception:
+            except Exception as _enrich_err:
+                # 509号 #J45：外层 continue 加定位日志（原静默吞错无法诊断）
+                logger.warning(f"JUD 富化 {code} 失败（跳过该股）: {_enrich_err}")
                 continue
 
     # 2026-09-29 OCR #12：局部构建完成后原子替换（读者不再可能见半填状态）
@@ -5815,6 +5821,12 @@ def _build_treemap_snapshot(codes: list[str]):
         b = basic_map.get(code, {})
         t = tags_map.get(code, {})
         try:
+            # 509号 #J44：close 缺失（停牌等）时 _safe_float 返回 None →
+            #   max(None, 1e-9) 抛 TypeError 被吞 → 该股静默丢出 treemap。
+            #   缺 close 时 amplitude 落 None（保留该股行，不丢）。
+            _close_f = _safe_float(d.get('close'))
+            _amp = ((_safe_float(d.get('high')) - _safe_float(d.get('low')))
+                    / max(_close_f, 1e-9) * 100) if _close_f is not None else None
             _rows.append((
                 code, m.get('name', ''), m.get('industry', ''),
                 float(d['close']) if pd.notna(d.get('close')) else None,
@@ -5822,7 +5834,7 @@ def _build_treemap_snapshot(codes: list[str]):
                 float(b['total_mv']) if pd.notna(b.get('total_mv')) else None,
                 str(d['trade_date']) if pd.notna(d.get('trade_date')) else None,
                 _safe_float(d.get('open')), _safe_float(d.get('high')), _safe_float(d.get('low')),
-                (_safe_float(d.get('high')) - _safe_float(d.get('low'))) / max(_safe_float(d.get('close')), 1e-9) * 100,
+                _amp,
                 _safe_float(b.get('pe')), _safe_float(b.get('pb')),
                 _safe_float(d.get('amount')), _safe_float(b.get('turnover_rate')),
                 _safe_float(b.get('circ_mv')),
@@ -5859,9 +5871,24 @@ def _build_treemap_snapshot(codes: list[str]):
 
     # 370号O5：归档逻辑已移至OUT步骤（_out_transmit_seven_dim），此处不再归档
 
-    # 原子切换
-    _tm_conn.execute("DROP TABLE IF EXISTS treemap_snapshot")
-    _tm_conn.execute(f"ALTER TABLE {NEW_TABLE} RENAME TO treemap_snapshot")
+    # 原子切换（509号 #J43：DROP+RENAME 两条独立 DDL 非事务，DROP 成功而 RENAME 失败
+    #   会丢 live 表 → 先 RENAME 旧表为备份、再 RENAME 新表为 live、最后删备份；
+    #   首次无旧表时 DROP IF EXISTS 兜底）
+    try:
+        _tm_conn.execute(f"ALTER TABLE treemap_snapshot RENAME TO treemap_snapshot_bak")
+    except Exception:
+        # 无旧 live 表（首次构建）→ 直接建新表
+        pass
+    try:
+        _tm_conn.execute(f"ALTER TABLE {NEW_TABLE} RENAME TO treemap_snapshot")
+    except Exception as _swap_err:
+        # RENAME 失败：回滚备份名，保留旧表可用
+        try:
+            _tm_conn.execute(f"ALTER TABLE treemap_snapshot_bak RENAME TO treemap_snapshot")
+        except Exception:
+            pass
+        raise
+    _tm_conn.execute("DROP TABLE IF EXISTS treemap_snapshot_bak")
     _tm_conn.commit()
 
     # 423号：写后校验（覆盖率）——失败记审计告警，不抛
@@ -6296,9 +6323,21 @@ def _build_status_snapshot(codes: list[str]):
         # 370号O5：归档逻辑已移至OUT步骤（_out_transmit_seven_dim），此处不再归档
         logger.info(f"  status_snapshot 构建完成: {written}/{len(codes)} 只")
         _last_step_counts['JUD'] = f"{written}/{len(codes)} stocks"
-        # 原子替换
-        _snap_conn.execute("DROP TABLE IF EXISTS status_snapshot")
-        _snap_conn.execute(f"ALTER TABLE {_NEW} RENAME TO status_snapshot")
+        # 原子替换（509号 #J43：同 treemap——RENAME 备份→RENAME live→删备份，防
+        #   DROP 成功而 RENAME 失败丢 live 表）
+        try:
+            _snap_conn.execute("ALTER TABLE status_snapshot RENAME TO status_snapshot_bak")
+        except Exception:
+            pass  # 首次无旧表
+        try:
+            _snap_conn.execute(f"ALTER TABLE {_NEW} RENAME TO status_snapshot")
+        except Exception as _swap_err:
+            try:
+                _snap_conn.execute("ALTER TABLE status_snapshot_bak RENAME TO status_snapshot")
+            except Exception:
+                pass
+            raise
+        _snap_conn.execute("DROP TABLE IF EXISTS status_snapshot_bak")
         _snap_conn.commit()
         # 423号：写后校验（覆盖率）——失败记审计告警，不抛（避免原子替换后重试丢数据）
         if trade_date:
@@ -7011,12 +7050,22 @@ def _drive_pipeline():
 
 
 def _verify_out_completeness(pipeline_date: str):
-    """371号P0#2：验证OUT成品表数据完整性"""
+    """371号P0#2：验证OUT成品表数据完整性
+
+    509号 #J46：once-guard——本日已跑过 OUT-CHECK 且状态 done 时跳过
+    （原每次驱动到 OUT done 都重复全表 COUNT，幂等但无谓）。
+    """
     try:
-        # 421号R4a补充修复：treemap/status_snapshot 已切 snapshot_cache.db 分库，
-        # 完整性验证改走分库连接（主库不再写入成品表）
+        # 分库连接（421号 R4a）：treemap/status_snapshot 已切 snapshot_cache.db
         from app.data.sharding_manager import sharding_manager
         _v_conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('status_snapshot'))
+        # 幂等：pipeline_status 已有本日 OUT-CHECK done → 跳过
+        _prev = _ecm.conn.execute(
+            "SELECT status FROM pipeline_status WHERE pipeline_date=? AND step_id='OUT-CHECK'",
+            [pipeline_date]).fetchone()
+        if _prev and _prev[0] == 'done':
+            logger.debug(f"  [管道] OUT完整性校验已执行过（{pipeline_date}），跳过")
+            return
         # treemap_snapshot行数
         row = _v_conn.execute("SELECT COUNT(*) FROM treemap_snapshot").fetchone()
         treemap_count = row[0] if row else 0
