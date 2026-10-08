@@ -455,11 +455,12 @@ def _build_chip_dimension(sig: Optional[Dict], tags: Optional[Dict] = None) -> D
                 try:
                     deep_chip[k] = float(tags[k])
                 except (TypeError, ValueError):
-                    deep_chip[k] = tags[k]
+                    # 509号 #J41：无法数值化的值不混存（统一仅存 float，
+                    #   避免下游 deep_chip.get('concentration',0)*100 str*float TypeError）
+                    continue
     if not sig:
         avg_cost = deep_chip.get('chip_peak')
-        # 509号 #J41：concentration 可能为 str（无法 float 的原始值）→ 统一数值化，
-        #   避免 str*100 抛 TypeError
+        # 509号 #J41：消费端数值守卫（产生端已统一仅存 float，此处兜底 None/非数值）
         _conc = deep_chip.get('concentration')
         try:
             _conc_f = float(_conc) if _conc is not None else None
@@ -1291,13 +1292,18 @@ def _build_signal_context(ts_code: str) -> Dict:
 
 
 def _detect_market_state(signals: List[Dict]) -> str:
-    """从信号中推断市场状态"""
-    for s in signals:
-        sr = s.get('status_recognition', {})
-        state = sr.get('state', '')
-        if state:
-            return state
-    return 'UNKNOWN'
+    """推断市场状态（真实大盘源）。
+
+    509号 #J42：原取 status_recognition.state（个股策略态冒充市场上下文）→ 改读信号
+    market_state 字段（SignalComputationService 由大盘指数识别，与 ai_analysis 多数投票一致）；
+    缓存恢复信号无 market_state 时诚实返回 UNKNOWN（降级），不再用个股状态冒充。
+    """
+    states = [s.get('market_state') for s in signals
+              if s.get('market_state') and s['market_state'] != 'UNKNOWN']
+    if not states:
+        return 'UNKNOWN'
+    from collections import Counter
+    return Counter(states).most_common(1)[0][0]
 
 
 def _build_dimension_relations(dimensions: Dict) -> List[Dict]:

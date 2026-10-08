@@ -8,6 +8,7 @@
 - 实时行情：ECM.as_market_snapshot（仅 market 模式覆盖 pct_change）
 """
 import logging
+import threading
 from datetime import datetime
 
 import pandas as pd
@@ -21,22 +22,29 @@ opportunity_bp = Blueprint('opportunity_atlas', __name__, url_prefix='/api/v3/op
 
 _data_manager = None
 _tm_cache = None
+_singleton_lock = threading.Lock()
 
 
 def get_data_manager():
+    # 509号 #J40：惰性单例加双检锁（原 check-then-set 无锁，多线程 WSGI 下可双构造
+    #   DataManager → 双开 SQLite / 缓存状态丢失）
     global _data_manager
     if _data_manager is None:
-        from app.data import DataManager
-        _data_manager = DataManager()
+        with _singleton_lock:
+            if _data_manager is None:
+                from app.data import DataManager
+                _data_manager = DataManager()
     return _data_manager
 
 
 def _get_memory_cache():
-    """延迟获取 TieredMemoryCache 实例"""
+    """延迟获取 TieredMemoryCache 实例（509号 #J40：双检锁单例）"""
     global _tm_cache
     if _tm_cache is None:
-        from app.data.memory_cache import TieredMemoryCache
-        _tm_cache = TieredMemoryCache()
+        with _singleton_lock:
+            if _tm_cache is None:
+                from app.data.memory_cache import TieredMemoryCache
+                _tm_cache = TieredMemoryCache()
     return _tm_cache
 
 

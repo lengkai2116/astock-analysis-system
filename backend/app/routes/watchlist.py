@@ -19,10 +19,16 @@ watchlist_bp = Blueprint('watchlist', __name__, url_prefix='/api/v3/watchlist')
 logger = logging.getLogger(__name__)
 
 
+_cache_instance = None
+
+
 def _get_cache():
-    """获取内存缓存实例"""
-    import app.data.memory_cache as mc
-    return mc.TieredMemoryCache()
+    """获取内存缓存实例（模块级单例，509号 #J39：原每次新建空缓存→报价缓存永不生效）"""
+    global _cache_instance
+    if _cache_instance is None:
+        import app.data.memory_cache as mc
+        _cache_instance = mc.TieredMemoryCache()
+    return _cache_instance
 
 
 def _get_dm() -> DataManager:
@@ -190,6 +196,9 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
     try:
         df_mf = dm.get_cached_moneyflow(ts_code=ts_code)
         if not df_mf.empty:
+            # 509号 #J38：无条件先按日期排序（原仅 len>1 分支内定义 mf_sorted，
+            #   恰 1 行且 circ_mv>0 时 len(mf_sorted) 抛 NameError → 资金流全量静默丢失）
+            mf_sorted = df_mf.sort_values('trade_date')
             mf = df_mf.iloc[-1]
             # 净额 — 从真实列名读取
             blg = mf.get('buy_lg_amount') or 0
@@ -211,8 +220,7 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
             stock['mid_net'] = round(-lg_net, 2)
 
             # 多日累计大单净额
-            if len(df_mf) > 1:
-                mf_sorted = df_mf.sort_values('trade_date')
+            if len(mf_sorted) > 1:
                 _big_net_5 = (mf_sorted['buy_lg_amount'].fillna(0) - mf_sorted['sell_lg_amount'].fillna(0) +
                               mf_sorted['buy_elg_amount'].fillna(0) - mf_sorted['sell_elg_amount'].fillna(0)).tail(5).sum()
                 stock['big_5d'] = round(_big_net_5, 2)
@@ -226,8 +234,7 @@ def _fetch_stock_quotes(ts_code: str, dm: DataManager) -> Dict:
             if circ_mv and circ_mv > 0:
                 net_main = (blg + belg) - (slg + selg)
                 stock['fund_add_td'] = round(net_main / circ_mv * 100, 3)
-                if len(df_mf) > 1:
-                    mf_sorted = df_mf.sort_values('trade_date')
+                if len(mf_sorted) >= 2:
                     _net_2d_main = (mf_sorted['buy_lg_amount'].fillna(0) + mf_sorted['buy_elg_amount'].fillna(0) -
                                     mf_sorted['sell_lg_amount'].fillna(0) - mf_sorted['sell_elg_amount'].fillna(0)).tail(2).sum()
                     stock['fund_add_2d'] = round(_net_2d_main / circ_mv * 100, 3)

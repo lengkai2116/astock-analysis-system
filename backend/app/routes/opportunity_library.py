@@ -33,15 +33,61 @@ CREATABLE_FIELDS = {
 # 更新时允许的字段（ts_code 不可改）
 UPDATABLE_FIELDS = CREATABLE_FIELDS - {'ts_code'}
 
+# 509号 #J35：数值列（Integer/Float）——dict/list/str 灌入会静默损坏或 flush 报错
+_INT_FIELDS = {'days_in_status', 'total_days', 'manual_keep', 'is_active',
+               'park_trigger_count'}
+_FLOAT_FIELDS = {'park_entered_signal', 'base_value_score', 'base_trend_score',
+                 'base_event_score', 'base_technical_score', 'factor_bonus_score',
+                 'vibe_bonus_score', 'total_score'}
+_NUMERIC_FIELDS = _INT_FIELDS | _FLOAT_FIELDS
+
+
+def _coerce_field(field: str, value):
+    """白名单字段类型/None 校验：数值列强制 cast，非法值返回错误（509号 #J35）。
+
+    Returns:
+        (coerced_value, None) 或 (None, error_str)
+    """
+    if field == 'lib_level':
+        # 509号 #J34：lib_level 域校验在 setattr 前完成（原 setattr 后校验→非法值已 dirty ORM）
+        if value is None:
+            return None, 'lib_level 不能为 null'
+        value = str(value)
+        if value not in VALID_LEVELS:
+            levels_str = ','.join(sorted(VALID_LEVELS))
+            return None, f'无效的 level 值，可选: {levels_str}'
+        return value, None
+    if field in _NUMERIC_FIELDS:
+        if value is None:
+            return None, f'{field} 不能为 null'
+        if isinstance(value, bool) or isinstance(value, (dict, list)):
+            return None, f'{field} 须为数值'
+        try:
+            if field in _FLOAT_FIELDS:
+                return float(value), None
+            return int(value), None
+        except (TypeError, ValueError):
+            return None, f'{field} 须为数值'
+    # 字符串/文本列：非 None 时统一转 str，避免 dict/list 静默灌入
+    if value is None:
+        return None, None
+    if isinstance(value, (dict, list)):
+        return None, f'{field} 须为字符串'
+    return str(value), None
+
 
 @library_bp.route('', methods=['GET'])
 @handle_exceptions
 def list_library():
-    """获取标的库列表，支持 level 筛选和 search 模糊搜索"""
+    """获取标的库列表，支持 level 筛选和 search 模糊搜索（509号 #J37：通配符转义 + 分页）"""
     level = request.args.get('level')
     search = request.args.get('search', '').strip()
+    page = request.args.get('page', 1, type=int)
+    page_size = request.args.get('page_size', 50, type=int)
+    page = max(1, page)
+    page_size = max(1, min(100, page_size))
 
-    query = OpportunityLibrary.query.order_by(OpportunityLibrary.updated_at.desc())
+    query = OpportunityLibrary.query
 
     if level:
         if level not in VALID_LEVELS:
@@ -50,19 +96,27 @@ def list_library():
         query = query.filter_by(lib_level=level)
 
     if search:
-        pattern = f'%{search}%'
+        # 509号 #J37：转义 SQL 通配符，避免 %/_ 被当作模式 → 搜索静默全表返回
+        escaped = (search.replace('\\', '\\\\')
+                   .replace('%', '\\%')
+                   .replace('_', '\\_'))
+        pattern = f'%{escaped}%'
         query = query.filter(
             db.or_(
-                OpportunityLibrary.ts_code.ilike(pattern),
-                OpportunityLibrary.name.ilike(pattern),
+                OpportunityLibrary.ts_code.ilike(pattern, escape='\\'),
+                OpportunityLibrary.name.ilike(pattern, escape='\\'),
             )
         )
 
-    items = query.all()
+    total = query.count()
+    items = (query.order_by(OpportunityLibrary.updated_at.desc())
+             .offset((page - 1) * page_size).limit(page_size).all())
     return jsonify({
         'success': True,
         'data': [item.to_dict() for item in items],
-        'total': len(items),
+        'total': total,
+        'page': page,
+        'page_size': page_size,
     })
 
 
@@ -95,9 +149,14 @@ def create_library_item():
     item = OpportunityLibrary(ts_code=ts_code)
     for field in CREATABLE_FIELDS:
         if field in data:
-            setattr(item, field, data[field])
+            # 509号 #J35：先做类型/None 校验再 setattr，非法值不入 ORM
+            value, err = _coerce_field(field, data[field])
+            if err:
+                return jsonify({'success': False, 'error': err}), 400
+            setattr(item, field, value)
 
-    if not item.lib_level or item.lib_level not in VALID_LEVELS:
+    if not item.lib_level:
+        # 未显式提供 lib_level（或未传）时取默认档位（域校验已由 _coerce_field 保证）
         item.lib_level = 'scan'
     if not item.added_date:
         item.added_date = datetime.now().strftime('%Y-%m-%d')
@@ -105,7 +164,12 @@ def create_library_item():
         item.last_update = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     db.session.add(item)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception:
+        # 509号 #J36：commit 失败回滚，防 PendingRollbackError 级联污染同 worker 后续请求
+        db.session.rollback()
+        raise
 
     return jsonify({'success': True, 'data': item.to_dict()}), 201
 
@@ -124,15 +188,21 @@ def update_library_item(ts_code):
 
     for field in UPDATABLE_FIELDS:
         if field in data:
-            setattr(item, field, data[field])
-
-    if item.lib_level and item.lib_level not in VALID_LEVELS:
-        levels_str = ','.join(sorted(VALID_LEVELS))
-        return jsonify({'success': False, 'error': f'无效的 level 值，可选: {levels_str}'}), 400
+            # 509号 #J34：先校验后 setattr——非法值不入 ORM（原 setattr 后再校验，
+            #   返回 400 时 ORM 已 dirty，下一次任意请求 commit 会持久化非法值）
+            value, err = _coerce_field(field, data[field])
+            if err:
+                return jsonify({'success': False, 'error': err}), 400
+            setattr(item, field, value)
 
     item.last_update = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     item.updated_at = datetime.utcnow()
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception:
+        # 509号 #J36：commit 失败回滚，防 PendingRollbackError 级联
+        db.session.rollback()
+        raise
 
     return jsonify({'success': True, 'data': item.to_dict()})
 
@@ -146,7 +216,12 @@ def delete_library_item(ts_code):
         return jsonify({'success': False, 'error': '标的不存在'}), 404
 
     db.session.delete(item)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception:
+        # 509号 #J36：commit 失败回滚，防 PendingRollbackError 级联
+        db.session.rollback()
+        raise
 
     return jsonify({'success': True, 'message': f'标的 {ts_code} 已删除'})
 

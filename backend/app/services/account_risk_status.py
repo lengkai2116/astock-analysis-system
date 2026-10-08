@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from datetime import date
 from typing import Optional
@@ -73,12 +74,15 @@ def evaluate_monthly_risk_status(month_pnl: float = 0.0,
         consecutive_losses = 0
 
     if asset <= 0:
-        loss_pct = 0.0
+        raw_loss_pct = 0.0
     else:
-        loss_pct = round(-month_pnl / asset, 6)      # 正数=亏损比例（0.063=亏6.3%）
+        raw_loss_pct = -month_pnl / asset          # 未舍入（正数=亏损比例，0.063=亏6.3%）
+    # 509号 #J33（Q5 拍板）：比较用未舍入比值 + isclose 容差兜浮点误差，舍入仅留展示
+    loss_pct = round(raw_loss_pct, 6)
 
     reasons = []
-    if loss_pct >= limit_pct:
+    if raw_loss_pct >= limit_pct or math.isclose(raw_loss_pct, limit_pct,
+                                                 rel_tol=0.0, abs_tol=1e-9):
         reasons.append(f'月度亏损 {loss_pct * 100:.1f}% ≥ {limit_pct * 100:.0f}% 上限')
     if consecutive_losses >= consec_limit:
         reasons.append(f'连续亏损 {consecutive_losses} 笔 ≥ {consec_limit} 笔')
@@ -124,12 +128,16 @@ def compute_from_account(today: Optional[date] = None,
             if _buys > 0:
                 month_start_asset = _buys
         # ③ 连续亏损笔数（按日期倒序，从最近卖出往前数 realized_pnl<0）
-        _sells = (Trade.query.filter(Trade.direction == '卖出')
+        # 509号 #J32（Q5 拍板）：严格月份边界——只计本月卖出；零盈亏卖出不中断连亏
+        _sells = (Trade.query.filter(Trade.direction == '卖出',
+                                     Trade.trade_date >= month_start)
                   .order_by(Trade.trade_date.desc(), Trade.id.desc()).all())
         for t in _sells:
             _pnl = float(t.realized_pnl or 0)
             if _pnl < 0:
                 consecutive_losses += 1
+            elif _pnl == 0:
+                continue
             else:
                 break
     except Exception as e:
