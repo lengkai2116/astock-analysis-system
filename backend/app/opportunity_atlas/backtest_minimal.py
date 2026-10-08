@@ -112,18 +112,26 @@ class MinimalBacktester:
         # 387号§P0：胜率/盈亏比/最大回撤/夏普比率
         forward_days = 5  # 未来5日收益
         trade_returns = []
-        state_dates = [s['date'] for s in states]
-        close_prices = df.set_index('trade_date')['close'].to_dict() if close_col else {}
+        # 509号 #J31：close_prices 键与 daily_returns/entry_date 同归一（str[:10]），
+        #   否则 trade_date 为 Timestamp/int 时 close_prices.get(entry_date) 恒 None → 全部交易被跳过
+        close_prices = (
+            {str(k)[:10]: v for k, v in df.set_index('trade_date')[close_col].to_dict().items()}
+            if close_col else {}
+        )
+        # 509号 #J30：前向窗口按真实交易日历（全量 df，含 evaluate 失败日）取第 forward_days 个
+        #   交易日，不依赖 state_dates（evaluate 成功日）——避免某日 evaluate 失败被丢弃导致
+        #   窗口跨越不一致；预计算索引消 O(n²)。
+        _all_dates = sorted({str(d)[:10] for d in df['trade_date'] if str(d)[:10]})
+        _date_idx = {d: i for i, d in enumerate(_all_dates)}
 
-        for i, s in enumerate(states):
+        for s in states:
             if s['state'] != 'enter':
                 continue
             entry_date = s['date']
-            # 找entry_date之后第forward_days个交易日
-            future_dates = [d for d in state_dates if d > entry_date][:forward_days]
-            if not future_dates:
+            _ei = _date_idx.get(entry_date)
+            if _ei is None or _ei + forward_days >= len(_all_dates):
                 continue
-            exit_date = future_dates[-1]
+            exit_date = _all_dates[_ei + forward_days]
             entry_price = close_prices.get(entry_date)
             exit_price = close_prices.get(exit_date)
             if entry_price and exit_price and entry_price > 0:
@@ -136,15 +144,21 @@ class MinimalBacktester:
         win_rate = round(wins / total_trades, 4) if total_trades > 0 else 0.0
 
         # 盈亏比（平均盈利/平均亏损的绝对值）
+        # 509号 #J28：全胜（无亏损）→ None（理想无穷收益比），区别于「无交易 0.0」
         profit_trades = [r for r in trade_returns if r > 0]
         loss_trades = [r for r in trade_returns if r <= 0]
         avg_profit = sum(profit_trades) / len(profit_trades) if profit_trades else 0
         avg_loss = abs(sum(loss_trades) / len(loss_trades)) if loss_trades else 0
-        profit_factor = round(avg_profit / avg_loss, 4) if avg_loss > 0 else 0.0
+        if avg_loss > 0:
+            profit_factor = round(avg_profit / avg_loss, 4)
+        else:
+            profit_factor = None if avg_profit > 0 else 0.0  # 全胜=理想无穷；无盈亏=0
 
-        # 最大回撤（基于equity curve）
+        # 最大回撤（基于策略 equity curve —— 509号 #J29：只在持仓日（enter/light）复利，
+        #   空仓（wait/avoid/reduce）日净值不变，避免 buy&hold 全窗口回撤失真）
         equity = [1.0]
-        for r in (daily_returns.get(s['date'], 0) for s in states):
+        for s in states:
+            r = daily_returns.get(s['date'], 0) if s['state'] in ('enter', 'light') else 0
             equity.append(equity[-1] * (1 + r))
         peak = equity[0]
         max_drawdown = 0.0
