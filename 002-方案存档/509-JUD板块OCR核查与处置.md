@@ -2,7 +2,7 @@
 
 # 509号｜JUD 板块 OCR 核查与处置
 
-**版本**：v1.6（2026-10-08；只读核查档 + 执行计划 + **批次1/3/5/6/7 已实施**；拍板 Q1~Q4 已决、Q5 默认登记）
+**版本**：v1.7（2026-10-08；只读核查档 + 执行计划 + **批次1/2/3/5/6/7 已实施**；拍板 Q1~Q4 已决、Q5 默认登记）
 **v1.0（2026-10-06）**：只读核查档落档。OCR 4 段扫 ≈105 条 → 人工实证归并；未改任何代码/配置/方案。
 **v1.1（2026-10-06）**：用户「结合 509 制定详细执行计划」→ 拍板 **Q1=修（换独立信号源）/ Q2=保留符号语义 / Q3=无条件降 wait / Q4=先量化再修**（Q5 按推荐默认登记，批次4 前再确认）→ 落 §九 详细执行计划（7 批 + 依赖 + 验证 + 提交）。仍**未改任何代码**。
 **v1.2（2026-10-08）**：**批次3 已实施**（#J18~#J27 建议/展示层，commit `63b20d8`）：4 文件改动 + 探针 `tests/test_509_jud_batch3.py`（12 断言）+ 适配 `test_507_batch7`（fake 强度按代码号与分批无关）；全量回归 **2158 passed / 2 skipped / 9 xfailed 零失败**；ruff 零新增；daemon 已停跑后重启。**批次0 文档提交** `2bdc05b`。
@@ -10,6 +10,7 @@
 **v1.4（2026-10-08）**：**批次7 已实施**（§五 低危清理，commit `ee12746`）：12 文件改动（#J1 `_r` 死分支删 / RR_GATE 常量化 / 死参移除 / 函数内 import 上移 / 静默 except 加日志 / NaN 守卫 / SQL 绑定参 / watchlist 除零·竞态·批量取名 / strategy_analyze 单次解析·数值化·惰性日志 / radar L4 缓存 / docstring 语义）+ 探针 `tests/test_509_jud_batch7.py`（13 断言）+ 适配 test_493/test_494 旧签名；全量回归 **2176 passed / 2 skipped / 9 xfailed 零失败**；ruff 零新增。
 **v1.5（2026-10-08）**：**批次6 已实施**（daemon JUD 工序段 #J43~#J46，commit `9ca793f`）：`data_daemon.py` 4 项（#J43 原子切换 RENAME 备份→live→删备份 / #J44 treemap close 缺失守卫 / #J45 富化循环定位日志 / #J46 OUT-CHECK once-guard）+ 探针 `tests/test_509_jud_batch6.py`（5 断言，AST/源码级）；全量回归 **2181 passed / 2 skipped / 9 xfailed 零失败**；ruff data_daemon 零新增（40 均基线既有）。
 **v1.6（2026-10-08）**：**批次1 已实施**（判定链语义/量纲 #J2/#J3/#J4/#J5/#J7/#J8，commit `8e65e61`）：**探针量化先行**（`scripts/_509_b1_probe.py`：signal_strength 0-100 域实证 min0/max92 / 空头共识 75.12%（4173/5555）/ decay 实测 max=22 全 healthy / maintenance 100% healthy）→ 4 文件改动（#J2 分级 80/60/40/20 / #J3 日环比 ±10 / #J4 键 `decayed→broken` / #J5 情绪方向冲突比较 / #J7 去 clamp 保留符号、负分落 avoid / #J8 评分标定 0-100 全域）+ 探针 `tests/test_509_jud_batch1.py`（10 断言）+ 适配 `test_495_b2` 门禁 H3 域（[-100,100]）+ 适配 `test_509_jud_batch3` #J19 分值；**全市场重跑 5554 只门禁全 PASS、五档分布零漂移**（avoid 83.3 同基线，enter 0.2/light 0.3/wait 10.5/reduce 5.6）；全量回归 **2191 passed / 2 skipped / 9 xfailed 零失败**。
+**v1.7（2026-10-08）**：**批次2 已实施**（判定链健壮性 #J6/#J9/#J10/#J11/#J12/#J13/#J14/#J15/#J16/#J17，commit `33cb9f1`）：**#J14 探针量化先行 + 用户拍板方案 B**（OCR 原判「total_dim_count 缺失维弱化闸门」与数据流不符——convert_to_factors 恒返回 13 键；真缺陷=辅助维恒中性抬高 neutral_ratio → 闸门过度触发压扁幅值，786→236、约 550 只恢复）→ 5 文件改动（#J6 dim4 补产 `retail_tendency` 枚举+C4+ 改读 / #J9 legacy 平票判 neutral / #J10 L0a int 守卫 / #J11 _apply_l0 asof_date 透传 / #J12 json 守卫 / #J13 全中性族判 neutral / #J14 neutral_ratio 只计 7 主维 / #J15 weights=None→1.0 / #J16 周线无条件降 wait+删死函数 / #J17 wait 强制降级 45.0）+ 探针 24 断言（j6/j14/j16/misc）+ 适配 test_490/test_492/test_494 旧行为断言；**全市场重跑 5554 只门禁全 PASS**（avoid 83.3→80.6 容差内，#J14 幅值恢复所致）；全量回归 **2215 passed / 2 skipped / 9 xfailed 零失败**。
 **来源**：2026-10-06 用户要求「调用 OCR 对系统中 **JUD 板块** 的所有实际代码进行检查，问题在对话框内详细说明，不要修改方案和代码」→ 对话框报告出具后，用户「开号落档，展开核查档草稿」→ 落本档。
 **方法**：`ocr scan`（alibaba/open-code-review，DeepSeek `deepseek-chat`，`--max-tokens 200000`）按功能分 **4 段** 扫描 JUD 板块，共 **≈105 条原始发现**，**逐条人工核实**（对照真实代码/调用图；OCR 存在上下文/伪影误报，误报/设计意图/待确认单列 §六）。
 **基线**：HEAD `e35b722`（= origin/main）；工作树仅 `data/account_risk_status.json` 未跟踪＝daemon 运行产物。生效配置 `status_engine.yaml`：`jud_engine_version="v390"`。
@@ -384,4 +385,19 @@ Step 2：`consensus_rate = max(0.0, min(1.0, consensus_rate))`。
   - **全市场重跑**（495-B2 门禁，5554 只）：**门禁全 PASS**；**五档分布零漂移**（avoid 83.3 同基线，enter 0.2/light 0.3/wait 10.5/reduce 5.6）——#J7 语义修正未改状态分布（空头本就在 avoid），仅 final_score 由 0 变负（前端语义正确化）；
   - **探针** `tests/test_509_jud_batch1.py`（10 断言：#J2 档位边界 / #J3 源码阈值 / #J4 broken=0.2 / #J7 负分 avoid·正分 enter / #J5 冲突罚·一致不罚·弱情绪不罚 / #J8 broken 可达·healthy 低分）；
   - **验证**：ruff 零新增、全量 **2191 passed / 2 skipped / 9 xfailed 零失败**（daemon 停后跑，已重启）。
-- **下一接续**：剩 **批次2（判定链健壮性 #J6~#J17，依 Q1/Q3 已拍板）**——含最高风险 **#J14 中性闸门复活**（同 507 #S4 性质，可能连带 494 fixture，须先探针量化中性占比现状再决定）；**批次4（接口/写路径/单例）**——开工前确认 **Q5**。
+- **v1.7（2026-10-08）批次2 实施**（commit `33cb9f1`）——判定链健壮性（10 项）：
+  - **#J14 探针量化先行**（`scripts/_509_j14_probe.py`，全市场 5554 只）：**OCR 原判与数据流不符**——`convert_to_factors` 恒返回 13 键（辅助维恒有产出 direction=0），`score is None` 永不触发，「total_dim_count 缺失维弱化闸门」不成立；**真缺陷**=6 辅助维（time/position/signal_confirm/finance/event/factor）恒中性计入 neutral_ratio 分母 → 闸门（>0.6 cap 0.5）过度触发、共识幅值被压扁（>0.6 触发 786 只，排除辅助维后 236 只，约 550 只 consensus_rate 被压到 ±0.5）；**用户拍板方案 B**；
+  - **#J6**（Q1 拍板）：dim4 补产**独立枚举 `retail_tendency`**（distribution/institutional/neutral，phase×fund_flow 组合判定），conflict **C4+ 改读该字段**（原 retail_institution 展示文本与 phase 同源互斥致规则恒不可达）——跨 SIG 补产出（同 490 先例）；
+  - **#J9**：legacy `_aggregate` 平票（bull==bear>0）判 **neutral**（原恒 'bearish' + `elif bull==bear and bull>0` 死分支合并）；
+  - **#J10**：`_apply_l0` L0a `int(e.get('direction'))` 加 try 守卫（非数值不再中断整个 L0）；
+  - **#J11**：`_apply_l0` 新增 **asof_date** 透传，回退读 get_pre_feat/get_cached_daily_basic 按日期（回测消除前视）；
+  - **#J12**：`_assemble` `json.loads(advice_params)` 加守卫（非 JSON 重建空 dict 不中断）；
+  - **#J13**：`merge_family` 全中性族判 **neutral**（原 tie-break `bull_strength>=bear_strength` 恒真误标 bull）；
+  - **#J14**：neutral_ratio **只统计 7 主判定维**（signal/structure/vp/chip_fund/emotion/risk/valuation）；辅助维仍参与族方向归并、不计中性占比；`total_dim_count` 同步移到 None 检查后；
+  - **#J15**：`_family_regime_weight` weights=None/空 → **1.0**（原 0.1 使 bull/bear_score ×0.1 缩放，docstring「退化纯 STATE_WEIGHTS」不符；仅影响回退路径）；
+  - **#J16**（Q3 拍板）：周线 down 且 enter/light → **无条件降 wait**（去 `_daily_is_bullish` 门 + 删死函数）；
+  - **#J17**：fatal_to_veto 强制降级 wait 用 **45.0**（wait 档下界；原 0.0=avoid 档内部矛盾）；
+  - **探针** `tests/test_509_jud_batch2_{j6,j14,j16,misc}.py`（24 断言）；**适配** test_490（C4+ 加 retail_tendency）/test_492（_apply_l0 签名）/test_494（周线无条件降）旧行为断言；
+  - **全市场重跑** 5554 只门禁全 PASS（avoid 83.3→80.6 容差内，#J14 幅值恢复：约 550 只从 avoid 回升 wait/reduce/enter）；
+  - **验证**：ruff 零新增、全量 **2215 passed / 2 skipped / 9 xfailed 零失败**（daemon 停后跑，已重启）。
+- **下一接续**：剩 **批次4（接口/写路径/单例 #J34~#J42 + account_risk_status）**——开工前确认 **Q5**（月度风险：严格月份边界 + 未舍入比较，默认推荐）。
