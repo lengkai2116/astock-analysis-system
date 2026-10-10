@@ -1022,6 +1022,9 @@ def _batch_concept(trade_date: str = None) -> int:
         logger.info(f"Tushare concept() 异常({e})，切换 AKShare 降级...")
         concept_list = None
     if concept_list is not None and not concept_list.empty:
+        # 健壮性：Tushare concept() 偶发返回重复列名（如两个 'name'）→ row.get('name')
+        # 返回 Series 非标量，`or` 短路触发 bool(Series) ValueError（2026-10-09 COL-6 卡死根因）。
+        concept_list = concept_list.loc[:, ~concept_list.columns.duplicated()]
         # Tushare 成功路径
         detail_records = []
         for _, row in concept_list.iterrows():
@@ -7329,7 +7332,7 @@ def _precompute_strategy_signals(codes):
                     except Exception:
                         dim_results = None
                 # 436号S5：七维现状描述由 dim8 整体归集器从 dim_results 组装（替代
-                # 废弃的 generate_seven_dim_from_signals 空壳路径）；dim_results 缺失 →
+                # 已删除的 generate_seven_dim_from_signals 旧 signals 空壳路径）；dim_results 缺失 →
                 # seven_dim 写 NULL（前端回退 opportunity_profile，保持降级语义）
                 seven_dim = None
                 if dim_results:

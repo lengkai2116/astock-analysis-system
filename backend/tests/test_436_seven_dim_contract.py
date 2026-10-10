@@ -10,8 +10,7 @@
   - T6 signal 移出：dim8 不再产出 signal 段（由 JUD 单独路径产出）
   - T7 summary 由 dim8 组装（含状态条/共识率）
   - T8 幂等稳定 + json 往返 emoji 可解析
-  - T9 兼容包装 generate_seven_dim_from_signals 不抛异常
-  - T10 死代码清除：status_engine 中 snapshot_row 不再出现
+  - T9 死代码清除：status_engine 中 snapshot_row 不再出现
 """
 import json
 import os
@@ -22,15 +21,11 @@ for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
     os.environ.pop(k, None)
 
 import pytest
-
 from app.opportunity_atlas.dimensions.dim8_summary_engine import (
     Dim8SummaryEngine,
     _segment_from_dim,
 )
-from app.opportunity_atlas.status_engine import (
-    build_seven_dim_from_dim_results,
-    generate_seven_dim_from_signals,
-)
+from app.opportunity_atlas.status_engine import build_seven_dim_from_dim_results
 
 _SEG_FIELDS = ['title', 'light', 'text', 'evidence', 'confidence',
                'judgment', 'audit', 'plain']
@@ -251,22 +246,7 @@ class TestStability:
         assert rt['structure']['light'] == '🟢' or rt['structure']['light'] == '🟡'
 
 
-# ── T9: 兼容包装不抛异常 ──────────────────────────────────
-
-class TestCompatWrapper:
-
-    def test_empty_signals_no_raise(self):
-        # signals 恒空场景：兼容包装应返回可处理结果（本实现为空 dict，无 dim_results）
-        result = generate_seven_dim_from_signals({'signals': {}})
-        assert isinstance(result, dict)
-
-    def test_compat_wrapper_with_dim_results_delegates(self):
-        dr = _mk_dim_results()
-        result = generate_seven_dim_from_signals({'dim_results': dr, 'tags': {}})
-        assert set(result.keys()) == _EXPECTED_KEYS  # 委派 dim8 → 7 键
-
-
-# ── T10: 死代码清除 ───────────────────────────────────────
+# ── T9: 死代码清除 ───────────────────────────────────────
 
 class TestDeadCodeRemoval:
 
