@@ -481,6 +481,8 @@ class QualityChecker:
 
     def _count_null_fields(self, table: str, pipeline_date: str, fields: list) -> int:
         date_col = QUALITY_RULES.get(table, {}).get('date_col', 'trade_date')
+        # 必填字段非空判定：当日（前 200 行）中任一必填字段为 NULL 的行数
+        cond = ' OR '.join(f'"{f}" IS NULL' for f in fields) if fields else '1=0'
         try:
             conn = self._sm.get_connection(self._sm.get_db_for_table(table))
             row = conn.execute(

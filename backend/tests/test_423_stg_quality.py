@@ -169,6 +169,51 @@ def test_check_table_no_base(monkeypatch):
     assert any('基准行数=0' in i for i in r.issues)
 
 
+# ── _count_null_fields：必填字段非空 SQL 构造（510号 cond 修复）──
+
+class _FakeNullConn:
+    """记录 SQL/参数，返回 0 坏行，不碰真实库。"""
+    def __init__(self):
+        self.captured = {}
+    def execute(self, sql, params):
+        self.captured['sql'] = sql
+        self.captured['params'] = params
+        class _R:
+            def fetchone(self):
+                return (0,)
+        return _R()
+
+
+class _FakeNullSM:
+    def __init__(self, conn):
+        self._conn = conn
+    def get_db_for_table(self, table):
+        return 'compute_cache.db'
+    def get_connection(self, db):
+        return self._conn
+
+
+def test_count_null_fields_builds_cond(monkeypatch):
+    """510号修复：cond 由必填字段构造「任一 IS NULL」（原 NameError: cond 未定义）"""
+    checker = QualityChecker()
+    conn = _FakeNullConn()
+    monkeypatch.setattr(checker, '_sm', _FakeNullSM(conn))
+    n = checker._count_null_fields('indicator_ma', '2026-09-10', ['ma5', 'ma20'])
+    assert n == 0
+    assert '"ma5" IS NULL OR "ma20" IS NULL' in conn.captured['sql']
+    assert conn.captured['params'] == ['2026-09-10']
+
+
+def test_count_null_fields_empty_fields(monkeypatch):
+    """510号：空必填字段列表不抛异常（cond=1=0）"""
+    checker = QualityChecker()
+    conn = _FakeNullConn()
+    monkeypatch.setattr(checker, '_sm', _FakeNullSM(conn))
+    n = checker._count_null_fields('indicator_ma', '2026-09-10', [])
+    assert n == 0
+    assert '1=0' in conn.captured['sql']
+
+
 # ── 跨表对齐校验（423号 §2.3 check_cross_table）────────────────
 
 def test_check_cross_table_alignment_fail(monkeypatch):
