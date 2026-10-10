@@ -3973,7 +3973,8 @@ function renderActionPlan(analysisData, verificationData){
     // 365号批次D：增加audit条件稽核+judgment判定标签渲染
     const sdr = (analysisData && analysisData.seven_dim_report) || null;
     if (sdr && adviceWrap) {
-      const segOrder = ['signal','structure','volume_price','fund_chip','emotion','risk','summary'];
+      // 437-A：signal 段已移出 dim8（由 JUD 单独输出）——segOrder 对齐后端 SEVEN_DIM_SPEC 5 段 + summary
+      const segOrder = ['structure','volume_price','fund_chip','emotion','risk','summary'];
       const segHtml = segOrder.map(k => {
         const s = sdr[k];
         if (!s) return '';
@@ -3986,21 +3987,41 @@ function renderActionPlan(analysisData, verificationData){
           judgHtml = '<span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:11px;background:'+jBg+';color:'+jColor+';margin-left:4px;">' +
             (s.judgment.overall_direction > 0 ? '↑看多' : (s.judgment.overall_direction < 0 ? '↓看空' : '→中性')) + '</span>';
         }
-        // audit条件列表
+        // subsections 段内小节（437-A D1：fund_chip/risk 段内小节，前端可读该键渲染）
+        let subHtml = '';
+        if (s.subsections && s.subsections.length) {
+          subHtml = '<div style="margin:2px 0 2px 16px;font-size:11px;">' +
+            s.subsections.map(g =>
+              '<div style="margin-top:2px;"><b style="color:var(--text-secondary);">' + g.title + '</b>：' +
+              ((g.items || []).join('；') || '—') + '</div>'
+            ).join('') + '</div>';
+        }
+        // evidence 明细（479-7 C2：三层模型「细节读 evidence」，≤16 条折叠展示）
+        let evidenceHtml = '';
+        if (s.evidence && s.evidence.length) {
+          evidenceHtml = '<details class="sdr-evidence" style="margin:2px 0 2px 16px;font-size:11px;color:var(--text-muted);">' +
+            '<summary style="cursor:pointer;opacity:0.7;">明细 ' + s.evidence.length + ' 条</summary>' +
+            s.evidence.map(e => '<div style="margin-top:1px;">· ' + e + '</div>').join('') +
+            '</details>';
+        }
+        // audit条件列表（479 P9：actual/threshold 已透传，前端展示「实际 / 门槛」）
         let auditHtml = '';
         if (s.audit && s.audit.conditions && s.audit.conditions.length) {
           const pct = s.audit.confidence != null ? Math.round(s.audit.confidence * 100) : '?';
           auditHtml = '<div style="margin:4px 0 4px 16px;font-size:11px;color:var(--text-muted);">' +
             '<span style="opacity:0.7;">条件稽核 ' + s.audit.satisfied_count + '/' + s.audit.total_count + ' (置信' + pct + '%)</span><br>' +
-            s.audit.conditions.map(c =>
-              '<span style="color:' + (c.satisfied ? '#0a7a0a' : '#a70000') + ';">' +
-              (c.satisfied ? '✓' : '✗') + '</span> ' + (c.detail || c.name || '')
-            ).join('<br>') + '</div>';
+            s.audit.conditions.map(c => {
+              const condTxt = (c.detail || c.name || '');
+              const vs = (c.actual != null && c.threshold != null && c.actual !== '' && c.threshold !== '')
+                ? ' <span style="opacity:0.7;">(' + c.actual + ' / ' + c.threshold + ')</span>' : '';
+              return '<span style="color:' + (c.satisfied ? '#0a7a0a' : '#a70000') + ';">' +
+                (c.satisfied ? '✓' : '✗') + '</span> ' + condTxt + vs;
+            }).join('<br>') + '</div>';
         }
         return '<div class="sdr-seg" style="margin-bottom:6px;"><span class="sdr-light">' + s.light + '</span>' +
           '<b>' + s.title + '</b>：' + s.text + judgHtml +
           (s.plain ? ' <span style="color:var(--text-muted);font-size:11px;">（' + s.plain + '）</span>' : '') +
-          auditHtml + '</div>';
+          subHtml + evidenceHtml + auditHtml + '</div>';
       }).join('');
       // summary_text 一句话总结
       const summaryLine = (sdr.summary && sdr.summary.text) ? '<div style="margin-top:8px;padding:6px 8px;background:var(--surface,#1a1a2e);border-radius:4px;font-size:12px;font-weight:600;">' + sdr.summary.text + '</div>' : '';
