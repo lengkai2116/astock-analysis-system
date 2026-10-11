@@ -9,7 +9,8 @@
 背景（二）483号（2026-09-26）：对「调休上班周末」用行情源交叉审计，原 6 条中已过的 5 条
 （1/4、2/14、2/28、5/9、9/20）当日行情均为 0 行（实际休市），且 daily_cache 全历史
 1268 个交易日内无任何周末有行情 → 用户拍板删除该 5 条（按周末规则回归非交易日）；
-仅保留未来 2026-10-10 待验证（脚本 scripts/_483_trading_calendar_audit.py）。
+2026-10-10 当时为未来日期暂留，**2026-10-11 复核行情同样 0 行，用户拍板一并删除**。
+复核脚本 scripts/_483_trading_calendar_audit.py。
 """
 import os
 import sys
@@ -78,17 +79,13 @@ class Test2026WrongEntriesRemoved:
 
 
 class TestWorkdayWeekends:
-    """调休上班的周末 = 交易日（非节假日），股市照常开市"""
-
-    def test_adjusted_workday_weekends_not_holiday(self):
-        # 483号（2026-09-26）：原 6 条经行情源交叉审计删 5 条（当日均 0 行=实际休市），
-        # 仅保留未来 2026-10-10（待其过后用 scripts/_483_trading_calendar_audit.py 复核）
-        assert is_holiday(_d('2026-10-10')) is False, '2026-10-10 为调休上班日，不应是节假日'
+    """调休上班的周末 = 交易日（非节假日）；误标条目应回归非交易日"""
 
     def test_removed_false_workdays_now_holiday(self):
-        """483号删除的 5 个误标「调休上班」日 → 按周末规则回归非交易日"""
+        """483号删除的 5 条 + 2026-10-11 复核删除的 10-10（6 个误标「调休上班」日）
+        → 按周末规则回归非交易日"""
         for s in ('2026-01-04', '2026-02-14', '2026-02-28',
-                  '2026-05-09', '2026-09-20'):
+                  '2026-05-09', '2026-09-20', '2026-10-10'):
             assert is_holiday(_d(s)) is True, f'{s} 实际无行情（休市），应为非交易日'
 
     def test_normal_weekend_still_holiday(self):
