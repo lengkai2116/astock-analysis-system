@@ -30,3 +30,17 @@ dim6:
   risk_level_medium_count: 1           # 高风险源计数 ==1 → 等级中
   # PIERS 硬否决事件集不在此重复——直接读 status_engine.yaml l0.event_hard_risks
   # （[fraud_sign, delist_risk]，448 号，JUD/SIG 同源统一）
+
+# shared_vol_ratio（shared_vol_ratio.py 量比分级，364h 收敛）
+shared_vol_ratio:
+  extreme_expand: 3.0        # 量比 >=3.0 极度放量
+  significant_expand: 2.0    # 量比 >=2.0 显著放量
+  moderate_expand: 1.2       # 量比 >=1.2 温和放量
+  normal_min: 0.8            # 量比 >=0.8 正常
+  shrink_min: 0.5            # 量比 >=0.5 缩量（<0.5 极度缩量）
+
+# dim2 走势结构引擎（dim2_structure_engine.py）
+dim2:
+  confirmed_threshold: 0.6       # 买卖点 confidence >= 即 confirmed（audit「有确认买点」+ conflict_matrix）
+  chanlun_phase_threshold: 0.6   # 11 定理 overall_score >= 即「健康」（chanlun_phase）
+  health_score_threshold: 60     # 结构健康度 audit >=60 即健康（466 号：与前端 structure_health_score 同源）

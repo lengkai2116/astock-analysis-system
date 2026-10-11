@@ -20,6 +20,15 @@ import pandas as pd
 
 from app.data.mixins import DataAwareMixin
 
+# 431号 F2/485-7：判定阈值收敛到 backend/config/dim_engine.yaml（值不变，零行为变更；
+# yaml 缺失回退代码默认值）。取值属「果」侧（445 冻结），调整须独立号+全链路验证。
+from app.services.status_config import get_dim_engine_config
+
+_DIM2_CFG = get_dim_engine_config().get('dim2', {})
+_CONFIRMED_THRESHOLD = float(_DIM2_CFG.get('confirmed_threshold', 0.6))
+_CHANLUN_PHASE_THRESHOLD = float(_DIM2_CFG.get('chanlun_phase_threshold', 0.6))
+_HEALTH_SCORE_THRESHOLD = float(_DIM2_CFG.get('health_score_threshold', 60))
+
 logger = logging.getLogger(__name__)
 
 
@@ -187,7 +196,7 @@ class Dim2StructureEngine(DataAwareMixin):
                 buy_sell_points_detail.append({
                     'type': _ptype,
                     'point_type': getattr(_p, 'type', ''),
-                    'confirmed': float(getattr(_p, 'confidence', 0) or 0) >= 0.6,
+                    'confirmed': float(getattr(_p, 'confidence', 0) or 0) >= _CONFIRMED_THRESHOLD,
                     'confidence': round(float(getattr(_p, 'confidence', 0) or 0), 4),
                     'price': _resolve_bsp_price(_pos, df),
                     'date': _resolve_bsp_date(_pos, df),
@@ -201,7 +210,7 @@ class Dim2StructureEngine(DataAwareMixin):
             _tc = chanlun_result.get('theorem_check') or {}
             _tc_sum = _tc.get('summary') or {}
             _overall = float(_tc_sum.get('overall_score', 0.0) or 0.0)
-            chanlun_phase = '健康' if _overall >= 0.6 else '欲病'
+            chanlun_phase = '健康' if _overall >= _CHANLUN_PHASE_THRESHOLD else '欲病'
 
         # ④ stage_name（结构态，见 step 6 计算后赋值）
 
@@ -337,7 +346,7 @@ class Dim2StructureEngine(DataAwareMixin):
         # 判读：结构健康度（466号 ③ 拍板：audit 与前端 structure_health_score 同源，
         #   ≥60 即健康，不再用 chanlun_phase 纯定理口径，消解"audit=健康但前端54/100"打架）
         _health_f = float(strength) if isinstance(strength, (int, float)) else 0.0
-        _phase_ok = _health_f >= 60
+        _phase_ok = _health_f >= _HEALTH_SCORE_THRESHOLD
         # 判读：无背驰（顶背驰是结构性警示；无背驰才满足）
         _no_div = not divergence  # '' 为无背驰
         # 判读：有确认买点（buy_sell_points_detail 含 type='buy' 且 confirmed）
