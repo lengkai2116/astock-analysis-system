@@ -28,9 +28,44 @@ from app.opportunity_atlas.emotion_temperature import (
     PHASE_BASE_TEMP,
     calc_emotion_temperature,
 )
+# 431号 F2/485-7：快慢线/四象限/温度合成判定阈值收敛到 backend/config/dim_engine.yaml
+# （值逐字节不变，零行为变更；yaml 缺失回退代码默认值）。取值属「果」侧（445 冻结）。
+from app.services.status_config import get_dim_engine_config
 from app.opportunity_atlas.dimensions.enum_cn_map import bociasi_signal_cn, quadrant_cn
 
 logger = logging.getLogger(__name__)
+
+_DIM5_CFG = get_dim_engine_config().get('dim5', {})
+_FAST_VOL_MULT = float(_DIM5_CFG.get('fast_vol_mult', 1.5))
+_FAST_MOM_THRESHOLD = float(_DIM5_CFG.get('fast_mom_threshold', 3.0))
+_FAST_AMPLITUDE_THRESHOLD = float(_DIM5_CFG.get('fast_amplitude_threshold', 3.0))
+_FAST_BEAR_MOM = float(_DIM5_CFG.get('fast_bear_mom', -3.0))
+_FAST_PASS_BUY = int(_DIM5_CFG.get('fast_pass_buy', 3))
+_FAST_PASS_WATCH = int(_DIM5_CFG.get('fast_pass_watch', 2))
+_FAST_CONF_BUY = float(_DIM5_CFG.get('fast_conf_buy', 0.65))
+_FAST_CONF_WATCH = float(_DIM5_CFG.get('fast_conf_watch', 0.50))
+_FAST_CONF_BEARISH = float(_DIM5_CFG.get('fast_conf_bearish', 0.35))
+_FAST_CONF_ADJ = float(_DIM5_CFG.get('fast_conf_adj', 0.05))
+_ERP_BULLISH_STRONG = float(_DIM5_CFG.get('erp_bullish_strong', 5.0))
+_ERP_BULLISH_WEAK = float(_DIM5_CFG.get('erp_bullish_weak', 3.0))
+_ERP_BEARISH_EXTREME = float(_DIM5_CFG.get('erp_bearish_extreme', 0.5))
+_ERP_BEARISH_WEAK = float(_DIM5_CFG.get('erp_bearish_weak', 1.5))
+_ERP_CONF_STRONG = float(_DIM5_CFG.get('erp_conf_strong', 0.75))
+_ERP_CONF_WEAK = float(_DIM5_CFG.get('erp_conf_weak', 0.60))
+_ERP_FINAL_CAP = float(_DIM5_CFG.get('erp_final_cap', 0.8))
+_ERP_CONF_MULT = float(_DIM5_CFG.get('erp_conf_mult', 1.1))
+_QUADRANT_QCONF_THRESHOLD = float(_DIM5_CFG.get('quadrant_qconf_threshold', 0.5))
+_QUADRANT_MULT = {
+    'LL': float(_DIM5_CFG.get('quadrant_mult_ll', 1.15)),
+    'LH': float(_DIM5_CFG.get('quadrant_mult_lh', 1.05)),
+    'HL': float(_DIM5_CFG.get('quadrant_mult_hl', 0.90)),
+    'HH': float(_DIM5_CFG.get('quadrant_mult_hh', 0.75)),
+    'MM': float(_DIM5_CFG.get('quadrant_mult_mm', 1.00)),
+}
+_BOCIASI_FAST_WEIGHT = float(_DIM5_CFG.get('bociasi_fast_weight', 0.6))
+_BOCIASI_SLOW_WEIGHT = float(_DIM5_CFG.get('bociasi_slow_weight', 0.4))
+_TEMP_MERGE_TEMPERATURE = float(_DIM5_CFG.get('temp_merge_temperature', 0.4))
+_TEMP_MERGE_BOCIASI = float(_DIM5_CFG.get('temp_merge_bociasi', 0.6))
 
 
 # ═══════════════════════════════════════════════════════════
@@ -92,7 +127,7 @@ def _bociasi_quickline(df: pd.DataFrame) -> dict:
     latest_close = float(closes[-1])
 
     vol_ma5 = np.mean(volumes[-6:-1])
-    fast_vol = bool(volumes[-1] > vol_ma5 * 1.5)
+    fast_vol = bool(volumes[-1] > vol_ma5 * _FAST_VOL_MULT)
     vol_ratio = float(volumes[-1] / vol_ma5) if vol_ma5 > 0 else 0.0
 
     price_ma5 = np.mean(closes[-6:-1])
@@ -101,28 +136,28 @@ def _bociasi_quickline(df: pd.DataFrame) -> dict:
 
     close_5d_ago = float(closes[-6]) if len(closes) >= 6 else latest_close
     mom_5d = (latest_close / close_5d_ago - 1) * 100
-    fast_mom = bool(mom_5d > 3.0)
+    fast_mom = bool(mom_5d > _FAST_MOM_THRESHOLD)
 
     daily_amplitude = (highs[-1] - lows[-1]) / latest_close * 100
-    fast_breadth = bool(daily_amplitude > 3.0)
+    fast_breadth = bool(daily_amplitude > _FAST_AMPLITUDE_THRESHOLD)
 
     indicators = {"fast_vol": fast_vol, "fast_price": fast_price,
                   "fast_mom": fast_mom, "fast_breadth": fast_breadth}
     pass_count = sum(1 for v in indicators.values() if v)
 
-    if pass_count >= 3:
-        signal, base_conf = "BUY", 0.65
-    elif pass_count >= 2:
-        signal, base_conf = "WATCH", 0.50
-    elif not fast_price and mom_5d < -3:
-        signal, base_conf = "BEARISH", 0.35
+    if pass_count >= _FAST_PASS_BUY:
+        signal, base_conf = "BUY", _FAST_CONF_BUY
+    elif pass_count >= _FAST_PASS_WATCH:
+        signal, base_conf = "WATCH", _FAST_CONF_WATCH
+    elif not fast_price and mom_5d < _FAST_BEAR_MOM:
+        signal, base_conf = "BEARISH", _FAST_CONF_BEARISH
     else:
-        signal, base_conf = "NEUTRAL", 0.35
+        signal, base_conf = "NEUTRAL", _FAST_CONF_BEARISH
 
     if fast_vol and fast_mom:
-        base_conf += 0.05
+        base_conf += _FAST_CONF_ADJ
     if fast_breadth and not fast_price:
-        base_conf -= 0.05
+        base_conf -= _FAST_CONF_ADJ
     confidence = max(0.1, min(0.9, base_conf))
 
     return {
@@ -169,14 +204,14 @@ def _bociasi_slowline(df: pd.DataFrame, bond_yield: float = None,
 
     if pe_ttm is not None and pe_ttm > 0:
         erp = 1.0 / pe_ttm * 100 - bond_yield
-        if erp > 5.0:
-            erp_signal, erp_conf = 'BULLISH', 0.75
-        elif erp > 3.0:
-            erp_signal, erp_conf = 'BULLISH', 0.60
-        elif erp < 0.5:
-            erp_signal, erp_conf = 'BEARISH', 0.75
-        elif erp < 1.5:
-            erp_signal, erp_conf = 'BEARISH', 0.60
+        if erp > _ERP_BULLISH_STRONG:
+            erp_signal, erp_conf = 'BULLISH', _ERP_CONF_STRONG
+        elif erp > _ERP_BULLISH_WEAK:
+            erp_signal, erp_conf = 'BULLISH', _ERP_CONF_WEAK
+        elif erp < _ERP_BEARISH_EXTREME:
+            erp_signal, erp_conf = 'BEARISH', _ERP_CONF_STRONG
+        elif erp < _ERP_BEARISH_WEAK:
+            erp_signal, erp_conf = 'BEARISH', _ERP_CONF_WEAK
         else:
             erp_signal, erp_conf = 'NEUTRAL', 0.0
     else:
@@ -199,10 +234,10 @@ def _bociasi_slowline(df: pd.DataFrame, bond_yield: float = None,
         avg_conf = np.mean(confs) if confs else 0.3
         if bullish > bearish:
             final_signal = 'BULLISH'
-            final_conf = min(0.8, avg_conf * 1.1)
+            final_conf = min(_ERP_FINAL_CAP, avg_conf * _ERP_CONF_MULT)
         elif bearish > bullish:
             final_signal = 'BEARISH'
-            final_conf = min(0.8, avg_conf * 1.1)
+            final_conf = min(_ERP_FINAL_CAP, avg_conf * _ERP_CONF_MULT)
         else:
             final_signal = 'NEUTRAL'
             final_conf = 0.3
@@ -225,19 +260,19 @@ def _bociasi_quadrant(quick_result: dict, slow_result: dict) -> dict:
 
     q_conf = quick_result.get('confidence', 0.5)
 
-    q_high = q_signal == 'BUY' or (q_signal == 'WATCH' and q_conf > 0.5)
+    q_high = q_signal == 'BUY' or (q_signal == 'WATCH' and q_conf > _QUADRANT_QCONF_THRESHOLD)
     s_high = s_signal == 'BULLISH'
 
     if not s_high and not q_high:
-        quadrant, desc, mult = 'LL', '情绪底部，高性价比区间', 1.15
+        quadrant, desc, mult = 'LL', '情绪底部，高性价比区间', _QUADRANT_MULT['LL']
     elif not s_high and q_high:
-        quadrant, desc, mult = 'LH', '底部反弹，短线活跃', 1.05
+        quadrant, desc, mult = 'LH', '底部反弹，短线活跃', _QUADRANT_MULT['LH']
     elif s_high and not q_high:
-        quadrant, desc, mult = 'HL', '高位震荡，需警惕风险', 0.90
+        quadrant, desc, mult = 'HL', '高位震荡，需警惕风险', _QUADRANT_MULT['HL']
     elif s_high and q_high:
-        quadrant, desc, mult = 'HH', '上涨尾声，高度警惕', 0.75
+        quadrant, desc, mult = 'HH', '上涨尾声，高度警惕', _QUADRANT_MULT['HH']
     else:
-        quadrant, desc, mult = 'MM', '市场情绪中性', 1.00
+        quadrant, desc, mult = 'MM', '市场情绪中性', _QUADRANT_MULT['MM']
 
     return {'quadrant': quadrant, 'description': desc, 'weight_multiplier': mult,
             'fast_signal': q_signal, 'slow_signal': s_signal}
@@ -593,8 +628,10 @@ class Dim5EmotionEngine(DataAwareMixin):
         fast_score = quadrant.get('fast_score', None)
         slow_score = quadrant.get('slow_score', None)
         if fast_score is not None and slow_score is not None:
-            bociasi_temp = (float(fast_score) * 0.6 + float(slow_score) * 0.4) * 100
-            temperature = round(temperature * 0.4 + bociasi_temp * 0.6, 1)
+            bociasi_temp = (float(fast_score) * _BOCIASI_FAST_WEIGHT
+                            + float(slow_score) * _BOCIASI_SLOW_WEIGHT) * 100
+            temperature = round(temperature * _TEMP_MERGE_TEMPERATURE
+                                + bociasi_temp * _TEMP_MERGE_BOCIASI, 1)
 
         # 5. 综合灯色
 

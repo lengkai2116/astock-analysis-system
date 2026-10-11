@@ -44,3 +44,34 @@ dim2:
   confirmed_threshold: 0.6       # 买卖点 confidence >= 即 confirmed（audit「有确认买点」+ conflict_matrix）
   chanlun_phase_threshold: 0.6   # 11 定理 overall_score >= 即「健康」（chanlun_phase）
   health_score_threshold: 60     # 结构健康度 audit >=60 即健康（466 号：与前端 structure_health_score 同源）
+
+# dim5 情绪引擎（dim5_emotion_engine.py；温度 7 入参权重/基温在 emotion_temperature.py SSOT，不在此重复）
+dim5:
+  fast_vol_mult: 1.5             # 快线放量判据：当日量 > 5日均量 ×1.5
+  fast_mom_threshold: 3.0        # 快线动量判据：5 日涨幅 >3%
+  fast_amplitude_threshold: 3.0  # 快线振幅判据：日振幅 >3%
+  fast_bear_mom: -3.0            # 快线看空判据：5 日动量 < -3%
+  fast_pass_buy: 3               # pass_count >=3 → BUY
+  fast_pass_watch: 2             # pass_count >=2 → WATCH
+  fast_conf_buy: 0.65            # BUY 基础置信
+  fast_conf_watch: 0.50          # WATCH 基础置信
+  fast_conf_bearish: 0.35        # BEARISH/NEUTRAL 基础置信
+  fast_conf_adj: 0.05            # 快线条件叠加调整（±0.05）
+  erp_bullish_strong: 5.0        # ERP >5% 强看多
+  erp_bullish_weak: 3.0          # ERP >3% 弱看多
+  erp_bearish_extreme: 0.5       # ERP <0.5% 强看空
+  erp_bearish_weak: 1.5          # ERP <1.5% 弱看空
+  erp_conf_strong: 0.75          # 强信号置信
+  erp_conf_weak: 0.60            # 弱信号置信
+  erp_final_cap: 0.8             # 慢线最终置信度上限
+  erp_conf_mult: 1.1             # 慢线置信度放大系数
+  quadrant_qconf_threshold: 0.5  # 四象限 WATCH 判高置信门槛
+  quadrant_mult_ll: 1.15         # LL 情绪底部权重乘数
+  quadrant_mult_lh: 1.05         # LH 底部反弹
+  quadrant_mult_hl: 0.90         # HL 高位震荡
+  quadrant_mult_hh: 0.75         # HH 上涨尾声
+  quadrant_mult_mm: 1.00         # MM 中性
+  bociasi_fast_weight: 0.6       # 温度 BOCIASI 修正快线权重
+  bociasi_slow_weight: 0.4       # 温度 BOCIASI 修正慢线权重
+  temp_merge_temperature: 0.4    # 温度合成：原温度权重
+  temp_merge_bociasi: 0.6        # 温度合成：BOCIASI 权重
