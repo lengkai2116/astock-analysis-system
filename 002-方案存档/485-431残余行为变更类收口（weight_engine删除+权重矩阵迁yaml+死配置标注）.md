@@ -2,8 +2,8 @@
 title: 431 残余行为变更类收口（weight_engine 死模块删除 + 权重矩阵迁 yaml + dim5 死副本清理 + 死配置字段标注）
 type: 实施号（431 残余收口；仅行为中性项，判定值调整推迟 JUD）
 date: 2026-09-26
-version: v1.0
-status: 🔄 已开号（485-1~485-4 可实施＝零行为变更；485-5~485-7 推迟 JUD 阶段）
+version: v1.1
+status: ✅ 全面收官（485-1~485-7 全部已实施；485-7 dim1-8 yaml 接线 2026-10-11 完成）
 related:
   - 431-430号遗留项核查清单与处置建议（§018 F2+G1 已按「标注+最小真冗余收敛」落地，本号处置其未动的行为变更类）
   - 445-引擎判定逻辑基准（冻结边界：调判定值属「果」，推迟 JUD）
@@ -50,9 +50,9 @@ related:
 
 | 项 | 内容 | 推迟理由 |
 |---|---|---|
-| 485-5 | 调 `MARKET_REGIME_WEIGHTS` **取值**（如 trending_down 下 risk 权重） | 属 L2 聚合判定逻辑（果侧），445 冻结 |
+| 485-5 | 调 `MARKET_REGIME_WEIGHTS` **取值**（如 trending_down 下 risk 权重） | 属 L2 聚合判定逻辑（果侧），445 冻结（**2026-10-11 仍冻结**：调值走 status_engine.yaml `market_regime_weights` 段） |
 | 485-6 | 调 dim5/framework 阈值**取值** | 情绪温度/节奏判定（果侧），445 冻结 ✅ **2026-09-27 已实施一部分（情绪方向口径统一，见下）** |
-| 485-7 | dim1–8 全量接线 yaml（F2 真实边界：哪些注册表字段真接线、哪些明确废弃） | 最大工作量 + 每处都可能动「果」判定；JUD 定型后做 |
+| 485-7 | dim1–8 全量接线 yaml（F2 真实边界：哪些注册表字段真接线、哪些明确废弃） | **✅ 2026-10-11 已实施**（见 §五；dim2/3/4/5/6 + shared_vol_ratio 收敛 `dim_engine.yaml`，零行为变更；剩余外部 SSOT 阈值族明确不迁、中优先级标注下沉） |
 
 ## 三-b、485-6 情绪方向口径统一（2026-09-27 实施，来源 491 §七 批次2）
 
@@ -80,3 +80,25 @@ related:
 | 485-4 signal_registry 死字段标注 | ✅ 已实施 | 仅注释标注（trigger/verify_days/verify_rule/days 废弃，dist_pct live）；yaml 解析 OK、值不变 |
 
 **汇总验证**：探针 ALL_PROBE_OK；测试 57（418/431/433/479-4）+ 73（dim5 系）+ 27（462）+ 77（StatusEngine 消费回归，1 DB 用例环境排除）= **234 passed**；ruff 干净（dim5 I001 为改动前已存在、非本次引入）。
+
+## 五、485-7 dim1–8 全量接线 yaml（431 F2 真实边界，2026-10-11 实施）
+
+**缘起**：431 §018 F2 取证「维度引擎零配置引用」→ JUD 阶段（509）已全面收官、JUD 定型 → 开工。**拍板**（2026-10-11）：**全量收敛 + 新建 `backend/config/dim_engine.yaml`**（`config.get_dim_engine_config()` 加载入口 + status_config 再导出）。
+
+**口径（零行为变更）**：
+- 收敛值**逐字节不变**（445 冻结果层）；yaml 缺失/键缺失**回退代码默认值**（431 F1「配置可选+兜底」）。
+- **外部已 SSOT 的阈值族明确不迁**（维度引擎只消费其产物）：light_derive 灯色 / emotion_temperature 温度 7 入参 / potential_engine 潜力权重 / valuation_estimator 估值锚 / phase_detector 主力阶段 / framework 缠论。
+- 中优先级（展示派生/兜底）**标注下沉不迁**：dim8 `DIM_WEIGHTS` 加「展示派生 + 与 potential_engine.DIM_WEIGHTS 同名异义」警示。
+
+**批次实施（4 commits，全部已推送）**：
+
+| 批次 | commit | 收敛内容 |
+|---|---|---|
+| 1 | `be8553f` | dim6：event_risk_set / ST 分档 / 流动性双门槛（5000万·30亿）/ PIERS-E（70·15）/ 盈亏比（1R·2R·3R）/ 波动率档位（4·2）/ 风险分级计数；**删 `RISK_LEVEL_LIGHT` 死常量**；**`PIERS_HARD_EVENTS` 上移模块头改读 status_engine.yaml `l0.event_hard_risks` 同源统一**（SIG/JUD 防双份漂移） |
+| 2 | `ce80ee0` | shared_vol_ratio 量比 5 档（3.0/2.0/1.2/0.8/0.5）+ dim2（confirmed 0.6 / chanlun_phase 0.6 / 健康度 60） |
+| 3 | `dc7fed2` | dim5：快线判据（1.5x/3.0/3.0/-3.0）+ pass 档位（3/2）+ 置信（0.65/0.50/0.35/±0.05）、慢线 ERP 四档（5/3/0.5/1.5）+ 置信（0.75/0.60/0.8 上限/1.1 放大）、四象限（QCONF 0.5 + LL 1.15/LH 1.05/HL 0.90/HH 0.75/MM 1.00）、温度合成（0.6/0.4/0.4/0.6） |
+| 4-6 | `32074d2` | dim3：HS 7 因子权重（vp 2/-1/1、ve 2/1.5/1/0、ms 1/0/0.5、cs 1/0.5、RSI 四档 1/0.8/0.2/0.5、RPS 85、dp -1.5、pattern_dev 5/1.5）+ 合成参数（4/12/10）+ 档位（8/6/4/2）+ audit 5、Granville 八准则×13；dim4：CrowdingFactor（融资 0.05/0.01、换手 1.5/0.5、布林 P20/P80、2/3 票数、score 0.7+0.1×n）+ audit 阶段置信 0.3；**删 dim3 内联 calc_vol_ratio/classify_vol_ratio 死副本**（与 shared_vol_ratio 逐字重复、零消费）；test_464_17 源码断言同步 |
+
+**验证**：全量回归 **2239 passed / 2 skipped / 9 xfailed 零失败**（35.94s，daemon 停后跑）；分系列 dim2 131 / dim3 56 / dim4 110 / dim5 48 / dim6 67 / test_464_17 26 全绿；py_compile 通过。daemon 重启加载全部新代码。
+
+**F2 边界结论（定稿）**：**真接线**＝dim2/3/4/5/6 + shared_vol_ratio 判定阈值（已收敛 `dim_engine.yaml`）；**明确不迁**＝外部 SSOT 阈值族（light_derive/emotion_temperature/potential_engine/valuation_estimator/phase_detector/framework 缠论）+ 全部中文映射/展示编排表（实现细节）+ 枚举常量；**废弃**＝`RISK_LEVEL_LIGHT`（dim6 死常量）、dim3 内联 vol_ratio 副本、signal_registry 死字段（485-4 已标注）。**仍冻结**＝485-5/485-6 取值调整（果侧，改 yaml 即可，须独立号 + 知识库依据 + 全链路验证）。
