@@ -44,6 +44,11 @@ def get_signal_registry() -> Dict[str, Any]:
     return load_yaml('signal_registry.yaml')
 
 
+def get_dim_engine_config() -> Dict[str, Any]:
+    """维度引擎阈值配置（431号 F2/485-7：dim2-dim8 判定阈值收敛落点）"""
+    return load_yaml('dim_engine.yaml')
+
+
 def load_strategy_config(path: str = None) -> Dict[str, Any]:
     """加载策略配置 YAML 文件（默认 strategy_defaults.yaml，走缓存；显式 path 不走缓存）"""
     if path is None:

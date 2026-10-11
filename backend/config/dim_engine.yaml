@@ -1,0 +1,32 @@
+# dim_engine.yaml — 维度引擎阈值配置（431号 F2/485-7 收敛）
+#
+# 背景：dimensions/ 各引擎（dim2-dim8）判定阈值原为代码内硬编码（431 F2 取证：
+# 维度引擎零配置引用）。本文件提供 yaml 落点，代码改读本配置（值逐字节不变，
+# 零行为变更）；缺失时回退代码默认值（与现状一致，431 F1「配置可选+兜底」口径）。
+#
+# ⚠️ 取值属「果」侧判定（445 冻结 + 439-A 同批）：调整任何值须独立号 +
+#    知识库依据 + 全链路验证（485-5/485-6 待拍板项，勿顺手改）。
+#    外部已 SSOT 的阈值族（light_derive 灯色 / emotion_temperature 温度 /
+#    potential_engine 潜力权重 / valuation_estimator 估值锚 / phase_detector
+#    主力阶段 / framework 缠论）不在此重复，维度引擎只消费其产物。
+#
+# 版本：v1（2026-10-11，批次1：dim6 接线）
+
+# dim6 风险边界引擎（dim6_risk_engine.py）
+# 来源值 = 代码现状（452 流动性 KB 双门槛 / 448 PIERS-E / 461-4 波动率档位对齐 framework）
+dim6:
+  event_risk_set: [fraud_sign, regulatory, delist_risk, goodwill_risk, st_warning]
+  st_warning_extreme_dir: -2           # *ST / 退市整理（direction<=-2 升「极高」）
+  liquidity_min_avg_amount_wan: 5000.0   # 日均成交额门槛 5000 万元（KB 双门槛）
+  liquidity_min_circ_mv_wan: 300000.0    # 流通市值门槛 30 亿元（单位：万元）
+  piers_e_dta_threshold: 70            # PIERS-E 资产负债率 >70% 触发
+  piers_e_roce_threshold: 15           # PIERS-E ROCE <15% 触发
+  rr_worthless: 1.0                    # 盈亏比 <1R 不值得交易
+  rr_consider: 2.0                     # 盈亏比 1R-2R 可考虑
+  rr_good: 3.0                         # 盈亏比 2R-3R 较好
+  vol20_high: 4.0                      # 20 日未年化波动率 >4% 高（461-4 对齐 framework）
+  vol20_medium: 2.0                    # 20 日未年化波动率 >2% 中
+  risk_level_high_count: 2             # 高风险源计数 >=2 → 等级高
+  risk_level_medium_count: 1           # 高风险源计数 ==1 → 等级中
+  # PIERS 硬否决事件集不在此重复——直接读 status_engine.yaml l0.event_hard_risks
+  # （[fraud_sign, delist_risk]，448 号，JUD/SIG 同源统一）

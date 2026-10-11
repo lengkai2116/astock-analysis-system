@@ -29,17 +29,38 @@ from app.data.mixins import DataAwareMixin
 # 风险等级常量
 # ═══════════════════════════════════════════════════════════
 
-RISK_LEVEL_LIGHT = {
-    '极低': 'green', '低': 'green', '中': 'yellow',
-    '高': 'red', '极高': 'red',
-}
+# 431号 F2/485-7：判定阈值收敛到 backend/config/dim_engine.yaml（值逐字节不变，零行为变更；
+# yaml 缺失/键缺失回退代码默认值——431 F1「配置可选+兜底」口径）。取值属「果」侧（445 冻结），
+# 调整须独立号 + 知识库依据 + 全链路验证（485-5/485-6 待拍板项，勿顺手改）。
+from app.services.status_config import get_dim_engine_config, get_status_engine_config
 
-EVENT_RISK_SET = {'fraud_sign', 'regulatory', 'delist_risk', 'goodwill_risk', 'st_warning'}
+_DIM6_CFG = get_dim_engine_config().get('dim6', {})
+
+EVENT_RISK_SET = set(_DIM6_CFG.get('event_risk_set',
+    ['fraud_sign', 'regulatory', 'delist_risk', 'goodwill_risk', 'st_warning']))
 
 # 453号 st_warning 分档：*ST/退市整理（direction<=-2）同退市风险升「极高」（SIG 供 JUD 硬否决），
 # 普通 ST（direction=-1）作「高」事件风险源。检测器在 event_monitor._detect_st_warning（C3）。
 ST_WARNING_EVENT = 'st_warning'
-ST_WARNING_EXTREME_DIR = -2  # *ST / 退市整理
+ST_WARNING_EXTREME_DIR = _DIM6_CFG.get('st_warning_extreme_dir', -2)  # *ST / 退市整理
+
+# PIERS 硬性否决事件（448号）：与 status_engine.yaml l0.event_hard_risks 同源统一
+# （SIG 本引擎与 JUD _apply_l0 读同一配置，防双份漂移；yaml 缺失回退 448 默认值）。
+_PIERS_L0 = get_status_engine_config().get('l0', {}).get('event_hard_risks')
+PIERS_HARD_EVENTS = tuple(_PIERS_L0) if _PIERS_L0 else ('fraud_sign', 'delist_risk')
+
+# 其余判定阈值（dim_engine.yaml dim6 段，均带默认值兜底）
+_LIQUIDITY_MIN_AVG_AMOUNT_WAN = float(_DIM6_CFG.get('liquidity_min_avg_amount_wan', 5000.0))
+_LIQUIDITY_MIN_CIRC_MV_WAN = float(_DIM6_CFG.get('liquidity_min_circ_mv_wan', 300000.0))
+_PIERS_E_DTA_THRESHOLD = float(_DIM6_CFG.get('piers_e_dta_threshold', 70))
+_PIERS_E_ROCE_THRESHOLD = float(_DIM6_CFG.get('piers_e_roce_threshold', 15))
+_RR_WORTHLESS = float(_DIM6_CFG.get('rr_worthless', 1.0))
+_RR_CONSIDER = float(_DIM6_CFG.get('rr_consider', 2.0))
+_RR_GOOD = float(_DIM6_CFG.get('rr_good', 3.0))
+_VOL20_HIGH = float(_DIM6_CFG.get('vol20_high', 4.0))
+_VOL20_MEDIUM = float(_DIM6_CFG.get('vol20_medium', 2.0))
+_RISK_LEVEL_HIGH_COUNT = int(_DIM6_CFG.get('risk_level_high_count', 2))
+_RISK_LEVEL_MEDIUM_COUNT = int(_DIM6_CFG.get('risk_level_medium_count', 1))
 
 
 # ═══════════════════════════════════════════════════════════
@@ -89,7 +110,7 @@ def _calc_volatility(df=None, tags: dict = None) -> dict:
                 vol20 = returns.rolling(20).std().iloc[-1]
                 if pd.notna(vol20):
                     _vp = float(vol20) * 100.0
-                    level = 'high' if _vp > 4.0 else ('medium' if _vp > 2.0 else 'low')
+                    level = 'high' if _vp > _VOL20_HIGH else ('medium' if _vp > _VOL20_MEDIUM else 'low')
                 # 历史分位仍用年化波动率（rank 不受 ×sqrt(252) 常数影响）
                 vol_20d = returns.rolling(20).std() * math.sqrt(252)
                 vol_20d = vol_20d.dropna()
@@ -200,9 +221,9 @@ def _assess_risk_level(tags: dict, liquidity_info: dict = None) -> dict:
     risk_sources.append({'name': '流动性风险', 'level': '高' if liq_high else '低'})
 
     # L0 硬否决由 StatusEngine 统一处置（l0 在 dim 引擎之后由 _apply_l0 生成，T42 时序），本引擎不参与
-    if high_count >= 2:
+    if high_count >= _RISK_LEVEL_HIGH_COUNT:
         level, light = '高', 'red'
-    elif high_count == 1:
+    elif high_count == _RISK_LEVEL_MEDIUM_COUNT:
         level, light = '中', 'yellow'
     else:
         level, light = '低', 'green'
@@ -266,7 +287,7 @@ def _list_risk_factors(tags: dict, liquidity_info: dict = None) -> list[dict]:
 
 # ── PIERS 硬性否决事件（448号）：event_details.event_type 命中即应升 L0a 硬否决（JUD 侧 _apply_l0 处置）
 # SIG 侧只产「触发条件」，不下否决判定（SIG/JUD 边界共识）
-PIERS_HARD_EVENTS = ('fraud_sign', 'delist_risk')
+# （PIERS_HARD_EVENTS 定义已上移模块头，读 status_engine.yaml l0.event_hard_risks 同源）
 
 
 def _assess_piers_leverage(tags: dict, dm=None, ts_code: str = '', fina_df=None) -> dict:
@@ -308,11 +329,11 @@ def _assess_piers_leverage(tags: dict, dm=None, ts_code: str = '', fina_df=None)
     except (TypeError, ValueError):
         rce = None
     result['metrics'] = {'debt_to_assets': dta, 'roce': rce}
-    if dta is not None and dta > 70:
+    if dta is not None and dta > _PIERS_E_DTA_THRESHOLD:
         result['triggered'] = True
         result['factors'].append({'category': 'PIERS-E', 'factor': f'高杠杆（资产负债率{dta:.0f}%>70%）',
                                   'severity': '中', 'satisfied': True})
-    if rce is not None and rce != 0 and rce < 15:
+    if rce is not None and rce != 0 and rce < _PIERS_E_ROCE_THRESHOLD:
         result['triggered'] = True
         result['factors'].append({'category': 'PIERS-E', 'factor': f'资本回报率偏低（ROCE {rce:.1f}%<15%）',
                                   'severity': '中', 'satisfied': True})
@@ -323,11 +344,11 @@ def _assess_rr(geo: dict) -> dict:
     rr = geo.get('risk_reward')
     if rr is None:
         return {'rr_value': None, 'rr_level': '未知', 'rr_assessment': '盈亏比数据不足', 'light': 'yellow'}
-    if rr < 1.0:
+    if rr < _RR_WORTHLESS:
         return {'rr_value': rr, 'rr_level': '不值得交易', 'rr_assessment': f'盈亏比{rr:.2f}<1R', 'light': 'red'}
-    if rr < 2.0:
+    if rr < _RR_CONSIDER:
         return {'rr_value': rr, 'rr_level': '可考虑', 'rr_assessment': f'盈亏比{rr:.2f}（1R-2R）', 'light': 'yellow'}
-    if rr < 3.0:
+    if rr < _RR_GOOD:
         return {'rr_value': rr, 'rr_level': '较好', 'rr_assessment': f'盈亏比{rr:.2f}（2R-3R）', 'light': 'green'}
     return {'rr_value': rr, 'rr_level': '优质', 'rr_assessment': f'盈亏比{rr:.2f}（>3R）', 'light': 'green'}
 

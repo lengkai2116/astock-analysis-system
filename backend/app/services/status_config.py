@@ -8,9 +8,11 @@ advice_builder,advice_engine}.py），不要在此新增加载逻辑。
 """
 from config import (
     _CONFIG_DIR,
+    get_dim_engine_config,
     get_signal_registry,
     get_status_engine_config,
     load_yaml,
 )
 
-__all__ = ['_CONFIG_DIR', 'load_yaml', 'get_status_engine_config', 'get_signal_registry']
+__all__ = ['_CONFIG_DIR', 'load_yaml', 'get_status_engine_config', 'get_signal_registry',
+           'get_dim_engine_config']
