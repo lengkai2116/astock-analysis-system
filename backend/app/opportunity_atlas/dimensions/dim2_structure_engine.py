@@ -234,6 +234,8 @@ class Dim2StructureEngine(DataAwareMixin):
                 if _ts:
                     trend_structure_signal = str(_ts.get('signal') or '')
                     # consumer dim_adapter 读 ts_strength 为 float；detector 返回 'strong'/'basic' 字符串 → 映射
+                    # 431号 F2/485-7 中优先级标注：本映射为「果」层强度换算（JUD 消费 trend_structure_signal
+                    # 强度档 → 置信度增量），未迁 dim_engine.yaml（单键映射、无调值需求登记）；调值须独立号。
                     _ts_strength_map = {'strong': 0.3, 'basic': 0.1}
                     _ts_strength_raw = str(_ts.get('strength') or '')
                     ts_strength = _ts_strength_map.get(_ts_strength_raw, 0.0)

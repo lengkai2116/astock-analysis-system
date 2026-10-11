@@ -81,7 +81,13 @@ def _category(industry: str | None) -> str:
 
 
 def _map_score(score: float) -> float:
-    """潜力score → 0-100 混合映射"""
+    """潜力score → 0-100 混合映射
+
+    431号 F2/485-7 中优先级标注：映射系数（0.14/0.58 分位点、85 线性上限、
+    exp 非线性段 15/3.0）为「果」层评分映射；476 收敛后潜力评分 SSOT＝
+    potential_engine（daemon RAW tags），本函数仅 serve _compute_potential
+    兜底路径（tags 无 potential 键时），未迁 dim_engine.yaml；调值须独立号。
+    """
     if score is None or score <= 0.14:
         return 0.0
     if score <= 0.58:
@@ -603,6 +609,15 @@ class Dim7ValuationEngine(DataAwareMixin):
     # ── 潜力评分（从 PotentialEngine 迁移） ──────────
 
     def _compute_potential(self, tags: dict) -> dict:
+        """潜力六维评分（从 PotentialEngine 迁移的兜底实现）
+
+        431号 F2/485-7 中优先级标注：本方法为**兜底路径**——潜力评分 SSOT＝
+        potential_engine（daemon RAW-2 预计算，tags 优先），本地仅 tags 缺
+        potential 键时实算。内部阈值（sector/fund 映射表、dev>30 罚 0.3、
+        adv>=2 加分、quality 0.88/0.2、POTENTIAL_DIM_WEIGHTS/SENTIMENT_WEIGHT/
+        EVENT_SCORE/TREND_SCORE 均 import 自 potential_engine 权威）属「果」层
+        评分权重，未迁 dim_engine.yaml；调值须独立号 + 全链路验证。
+        """
         dims = {}
         dev = _safe_float(tags.get("valuation_deviation"))
         val_pct = self._potential_tables.get("val", lambda v: 0.5)(dev) if dev is not None else 0.5

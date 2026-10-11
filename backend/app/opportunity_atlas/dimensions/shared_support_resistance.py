@@ -67,6 +67,9 @@ def calc_support_resistance(df=None, indicator_ma_df=None) -> dict:
         support = lo60
 
     # 止损距离上限15%
+    # 431号 F2/485-7 中优先级标注：止损上限 0.15 直接影响支撑位→盈亏比（risk_reward），
+    # 属「果」层参数（461-11 SSOT，dim2/dim6 共用），未迁 dim_engine.yaml（单点常量、调值
+    # 需求未登记）；调值须独立号 + 全链路验证。
     if support is not None:
         max_stop_pct = 0.15
         min_support = price * (1 - max_stop_pct)
