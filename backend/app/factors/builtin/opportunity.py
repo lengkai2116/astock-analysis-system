@@ -12,19 +12,51 @@ from ..base import BaseFactor
 # 估值因子 (Valuation)
 # =============================================
 
+# 502 登记-2（2026-10-11）：PE/PB/PS_PERCENTILE_5Y「真 5Y 窗口」接线。
+# 数据源 = daily_basic_cache（pe_ttm/pb/ps，每日，2021-07-07 起 ≈5.25 年）——
+# 对 ~70-78% 股票可做满 5 年窗口；次新股/短区间退化回全输入区间分位（原行为）。
+_5Y_WINDOW_MIN_SAMPLES = 120  # 窗口内有效样本下限（≈半年交易日），低于则分位不稳定
+
+
+def _percentile_5y_window(data: pd.DataFrame, col: str) -> pd.Series:
+    """最近 5 年窗口内分位（502 登记-2 接线）
+
+    以 data 内最新 trade_date 为基准取最近 5 年（日历窗口）内的有效样本做
+    `rank(pct=True)*100`；窗口外行返回 NaN（历史更早数据无「近 5 年分位」概念，
+    factor_precompute 会跳过 NaN 不写库）。退化路径（保持原「全输入区间分位」
+    行为）：data 无 trade_date 列 / 窗口内有效样本 < 下限。
+    """
+    s = data[col]
+    if 'trade_date' not in data.columns:
+        return s.rank(pct=True) * 100
+    try:
+        latest = pd.to_datetime(data['trade_date']).max()
+        cutoff = latest - pd.DateOffset(years=5)
+        mask = pd.to_datetime(data['trade_date']) >= cutoff
+    except Exception:
+        return s.rank(pct=True) * 100
+    window = s[mask]
+    if window.notna().sum() < _5Y_WINDOW_MIN_SAMPLES:
+        return s.rank(pct=True) * 100
+    result = pd.Series(np.nan, index=data.index)
+    result[mask] = window.rank(pct=True) * 100
+    return result
+
+
 class PE_PERCENTILE_5Y(BaseFactor):
     """PE 5年历史百分位"""
     name = "PE_PERCENTILE_5Y"
     name_cn = "PE历史百分位"
     category = "valuation"
     subcategory = "pe"
-    description = "PE历史百分位（502批次2 #R7：当前为全输入区间分位，非严格 5Y 窗口——数据深度受限登记；随传入区间漂移）"
+    description = ("PE历史百分位（502登记-2：真 5Y 窗口——以数据内最新日为基准取最近 5 年"
+                   "窗口内分位，窗口外为 NaN；窗口有效样本<120 或无 trade_date 时退回全输入区间分位）")
     source = "Opportunity"
     source_detail = "机会图谱估值因子"
     required_columns = ["pe_ttm"]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
-        return data['pe_ttm'].rank(pct=True) * 100
+        return _percentile_5y_window(data, 'pe_ttm')
 
 
 class PB_PERCENTILE_5Y(BaseFactor):
@@ -33,13 +65,14 @@ class PB_PERCENTILE_5Y(BaseFactor):
     name_cn = "PB历史百分位"
     category = "valuation"
     subcategory = "pb"
-    description = "PB历史百分位（502批次2 #R7：当前为全输入区间分位，非严格 5Y 窗口——数据深度受限登记；随传入区间漂移）"
+    description = ("PB历史百分位（502登记-2：真 5Y 窗口——以数据内最新日为基准取最近 5 年"
+                   "窗口内分位，窗口外为 NaN；窗口有效样本<120 或无 trade_date 时退回全输入区间分位）")
     source = "Opportunity"
     source_detail = "机会图谱估值因子"
     required_columns = ["pb"]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
-        return data['pb'].rank(pct=True) * 100
+        return _percentile_5y_window(data, 'pb')
 
 
 class PS_PERCENTILE_5Y(BaseFactor):
@@ -48,13 +81,14 @@ class PS_PERCENTILE_5Y(BaseFactor):
     name_cn = "PS历史百分位"
     category = "valuation"
     subcategory = "ps"
-    description = "PS历史百分位（502批次2 #R7：当前为全输入区间分位，非严格 5Y 窗口——数据深度受限登记；随传入区间漂移）"
+    description = ("PS历史百分位（502登记-2：真 5Y 窗口——以数据内最新日为基准取最近 5 年"
+                   "窗口内分位，窗口外为 NaN；窗口有效样本<120 或无 trade_date 时退回全输入区间分位）")
     source = "Opportunity"
     source_detail = "机会图谱估值因子"
     required_columns = ["ps"]
 
     def calculate(self, data: pd.DataFrame) -> pd.Series:
-        return data['ps'].rank(pct=True) * 100
+        return _percentile_5y_window(data, 'ps')
 
 
 class DIVIDEND_YIELD(BaseFactor):
