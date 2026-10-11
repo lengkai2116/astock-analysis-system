@@ -20,25 +20,56 @@ import pandas as pd
 from app.data.mixins import DataAwareMixin
 from app.engine.patterns.engine import PatternEngine
 from app.opportunity_atlas.dimensions.enum_cn_map import pattern_code_cn
+# 431号 F2/485-7：HS 合成权重/公式 + Granville 八准则阈值收敛到 backend/config/dim_engine.yaml
+# （值逐字节不变，零行为变更；yaml 缺失回退代码默认值）。取值属「果」侧（445 冻结）。
+from app.services.status_config import get_dim_engine_config
 
 logger = logging.getLogger(__name__)
 
-# ═══════════════════════════════════════════════════════════
-# 量比统一（shared_vol_ratio 内联）
-# ═══════════════════════════════════════════════════════════
-
-def calc_vol_ratio(current_vol, avg_vol_5d):
-    if avg_vol_5d is None or avg_vol_5d <= 0:
-        return 1.0
-    return round(current_vol / avg_vol_5d, 2)
-
-def classify_vol_ratio(vol_ratio):
-    if vol_ratio >= 3.0: return '极度放量'
-    elif vol_ratio >= 2.0: return '显著放量'
-    elif vol_ratio >= 1.2: return '温和放量'
-    elif vol_ratio >= 0.8: return '正常'
-    elif vol_ratio >= 0.5: return '缩量'
-    return '极度缩量'
+_DIM3_CFG = get_dim_engine_config().get('dim3', {})
+_VP_SCORE_HEALTHY = float(_DIM3_CFG.get('vp_score_healthy', 2))
+_VP_SCORE_DIVERGING = float(_DIM3_CFG.get('vp_score_diverging', -1))
+_VP_SCORE_DEFAULT = float(_DIM3_CFG.get('vp_score_default', 1))
+_VE_T1, _VE_T2, _VE_T3 = (float(x) for x in _DIM3_CFG.get('ve_thresholds', [2.0, 1.2, 0.8]))
+_MS_BULLISH = float(_DIM3_CFG.get('ms_bullish', 1))
+_MS_BEARISH = float(_DIM3_CFG.get('ms_bearish', 0))
+_MS_NEUTRAL = float(_DIM3_CFG.get('ms_neutral', 0.5))
+_CS_CONCENTRATED = float(_DIM3_CFG.get('cs_concentrated', 1))
+_CS_ELSE = float(_DIM3_CFG.get('cs_else', 0.5))
+_RSI_BULLISH_HIGH = float(_DIM3_CFG.get('rsi_bullish_high', 70))
+_RSI_BULLISH_LOW = float(_DIM3_CFG.get('rsi_bullish_low', 60))
+_RSI_BEARISH_HIGH = float(_DIM3_CFG.get('rsi_bearish_high', 40))
+_RSI_BEARISH_LOW = float(_DIM3_CFG.get('rsi_bearish_low', 30))
+_RSI_BULLISH_SCORE = float(_DIM3_CFG.get('rsi_bullish_score', 1))
+_RSI_BEARISH_SCORE = float(_DIM3_CFG.get('rsi_bearish_score', 0.8))
+_RSI_EXTREME_SCORE = float(_DIM3_CFG.get('rsi_extreme_score', 0.2))
+_RSI_NEUTRAL_SCORE = float(_DIM3_CFG.get('rsi_neutral_score', 0.5))
+_RPS_THRESHOLD = float(_DIM3_CFG.get('rps_threshold', 85))
+_DP_DIVERGING = float(_DIM3_CFG.get('dp_diverging', -1.5))
+_PATTERN_DEV_CENTER = float(_DIM3_CFG.get('pattern_dev_center', 5))
+_PATTERN_DEV_SCALE = float(_DIM3_CFG.get('pattern_dev_scale', 1.5))
+_HS_RAW_OFFSET = float(_DIM3_CFG.get('hs_raw_offset', 4))
+_HS_RAW_SCALE = float(_DIM3_CFG.get('hs_raw_scale', 12))
+_HS_MAX = float(_DIM3_CFG.get('hs_max', 10))
+_HS_LEVEL_STRONG = float(_DIM3_CFG.get('hs_level_strong', 8))
+_HS_LEVEL_HEALTHY = float(_DIM3_CFG.get('hs_level_healthy', 6))
+_HS_LEVEL_NEUTRAL = float(_DIM3_CFG.get('hs_level_neutral', 4))
+_HS_LEVEL_WEAK = float(_DIM3_CFG.get('hs_level_weak', 2))
+_HS_AUDIT_THRESHOLD = float(_DIM3_CFG.get('hs_audit_threshold', 5))
+# Granville 八准则阈值
+_G_HEALTHY_PC = float(_DIM3_CFG.get('granville_healthy_price_chg', 2.0))
+_G_HEALTHY_VR = float(_DIM3_CFG.get('granville_healthy_vr', 10.0))
+_G_EXPLOSIVE_VR = float(_DIM3_CFG.get('granville_explosive_vr', 40.0))
+_G_WEAKENING_PC = float(_DIM3_CFG.get('granville_weakening_price_chg', 1.5))
+_G_WEAKENING_VR = float(_DIM3_CFG.get('granville_weakening_vr', -10.0))
+_G_HP_VOL_MULT = float(_DIM3_CFG.get('granville_hp_vol_mult', 1.5))
+_G_HP_GAIN_SUM = float(_DIM3_CFG.get('granville_hp_gain_sum', 0.01))
+_G_BREAKDOWN_PC = float(_DIM3_CFG.get('granville_breakdown_price_chg', -4.0))
+_G_BREAKDOWN_VR = float(_DIM3_CFG.get('granville_breakdown_vr', 10.0))
+_G_SELLING_PC = float(_DIM3_CFG.get('granville_selling_price_chg', -2.0))
+_G_SELLING_VR = float(_DIM3_CFG.get('granville_selling_vr', 10.0))
+_G_PULLBACK_PC = float(_DIM3_CFG.get('granville_pullback_price_chg', -1.0))
+_G_PULLBACK_VR = float(_DIM3_CFG.get('granville_pullback_vr', -10.0))
 
 # ═══════════════════════════════════════════════════════════
 # 第3维 引擎
@@ -70,7 +101,7 @@ class Dim3VPEngine(DataAwareMixin):
 
         # 10分制评分
         vp_pattern = str(tags.get('volume_price_fit', ''))
-        vp_score = {'healthy': 2, 'diverging': -1}.get(vp_pattern, 1)
+        vp_score = {'healthy': _VP_SCORE_HEALTHY, 'diverging': _VP_SCORE_DIVERGING}.get(vp_pattern, _VP_SCORE_DEFAULT)
         # PatternEngine 10分制评分（替代原有 KLinePatternVerifier）
         pattern_score = 5.0  # 默认中性分
         pattern_details = {}
@@ -84,21 +115,21 @@ class Dim3VPEngine(DataAwareMixin):
                 logger.warning("PatternEngine.evaluate 异常: %s", e)
         try: vol_ratio = float(tags.get('volume_ratio', 1.0))
         except: vol_ratio = 1.0
-        ve = 2 if vol_ratio > 2 else (1.5 if vol_ratio > 1.2 else (1 if vol_ratio > 0.8 else 0))
+        ve = 2 if vol_ratio > _VE_T1 else (1.5 if vol_ratio > _VE_T2 else (1 if vol_ratio > _VE_T3 else 0))
         ma = str(tags.get('ma_alignment', ''))
-        ms = 1 if ma in ('多头排列', 'bullish') else (0 if ma in ('空头排列', 'bearish') else 0.5)
+        ms = _MS_BULLISH if ma in ('多头排列', 'bullish') else (_MS_BEARISH if ma in ('空头排列', 'bearish') else _MS_NEUTRAL)
         cc = str(tags.get('chip_concentration', ''))
         # 445-A3 修复：chip_concentration 实际枚举为 concentrating/dispersing/stable
         # （chip_distribution_service.py:184-188 英文存储），原查'单峰密集'/'tight' 恒失配 → cs 恒 0.5
-        cs = 1 if cc in ('concentrating', '单峰密集', 'tight') else 0.5
+        cs = _CS_CONCENTRATED if cc in ('concentrating', '单峰密集', 'tight') else _CS_ELSE
         # 461-1：RSI 三键统一——SSOT=rsi（chip_fund_ext.rsi, 443 R1 全市场真实化, Wilder ewm14）。
         # 原读 rsi14（pre_feat 无此键 → tags.get 恒 50 断链, 强弱因子永不生效）。
         try: rsi = float(tags.get('rsi', 50))
         except: rsi = 50
-        is_ = 0.5
-        if 60 < rsi <= 70: is_ = 1
-        elif 30 <= rsi < 40: is_ = 0.8
-        elif rsi > 70 or rsi < 30: is_ = 0.2
+        is_ = _RSI_NEUTRAL_SCORE
+        if _RSI_BULLISH_LOW < rsi <= _RSI_BULLISH_HIGH: is_ = _RSI_BULLISH_SCORE
+        elif _RSI_BEARISH_LOW <= rsi < _RSI_BEARISH_HIGH: is_ = _RSI_BEARISH_SCORE
+        elif rsi > _RSI_BULLISH_HIGH or rsi < _RSI_BEARISH_LOW: is_ = _RSI_EXTREME_SCORE
         # 445号：RPS 相对强弱因子补产出（原 RPS 被 RSI 顶替——强弱只读 rsi14，RPS 从不参与评分）
         # 知识库权威（量价形态打分系统/《RPS相对强弱指标》）：RPS>85 → +1 分；欧奈尔狂飙前平均 87、A股 80+。
         # data_context 由 dim1 预加载 relative_strength（rps_20d/rps_60d）；缺省回退独立查询。
@@ -122,8 +153,8 @@ class Dim3VPEngine(DataAwareMixin):
             rps_eff = _safe_rps(_rsc.get('rps_60d'))
         rps = rps_eff
         # RPS>85 → +1 分（对齐知识库量价形态打分系统加分项）；无 RPS 数据时不给分不扣分（保守）
-        rps_factor = 1 if (rps is not None and rps > 85) else 0
-        dp = -1.5 if vp_state in ('背离', '严重背离') else 0
+        rps_factor = 1 if (rps is not None and rps > _RPS_THRESHOLD) else 0
+        dp = _DP_DIVERGING if vp_state in ('背离', '严重背离') else 0
         # ── 495号（B2）：量价健康度（HS）合成公式定标（2026-09-28 用户拍板 A「补依据定标」）──
         # 依据《464-dim3-health_score判定标准来源核查与归属建议》§二 因子表；公式与档位
         # 保留现状（分布不变），在此登记为 JUD 量价强度权威口径。7 因子构成（均有方案背书）：
@@ -140,9 +171,9 @@ class Dim3VPEngine(DataAwareMixin):
         #   stage_confidence = hs/10（L2 可靠性回退）；pattern_score 维持 JUD 零消费（不纳入）。
         raw = vp_score + ve + ms + cs + is_ + rps_factor + dp
         # 形态评分纳入健康度计算（权重15%）— 10分制映射
-        pattern_deviation = (pattern_score - 5) / 5 * 1.5
+        pattern_deviation = (pattern_score - _PATTERN_DEV_CENTER) / _PATTERN_DEV_CENTER * _PATTERN_DEV_SCALE
         raw += pattern_deviation
-        hs = max(0, min(10, int(round((raw + 4) / 12 * 10))))
+        hs = max(0, min(int(_HS_MAX), int(round((raw + _HS_RAW_OFFSET) / _HS_RAW_SCALE * _HS_MAX))))
 
         # 背离检测 —— 450号①：删除本地 MACD 兜底段。
         # 445 偏差：原实现用 MACD 代成交量、只判顶背离（pn and mn），与 framework 权威冲突。
@@ -192,10 +223,10 @@ class Dim3VPEngine(DataAwareMixin):
             _g_desc = f'{_g_desc}（5日涨跌{_g_pc:+.1f}%，量能{_g_vr:+.0f}%）'
 
         # 评分等级
-        if hs >= 8: sl = '强健康'
-        elif hs >= 6: sl = '健康'
-        elif hs >= 4: sl = '中性'
-        elif hs >= 2: sl = '弱'
+        if hs >= _HS_LEVEL_STRONG: sl = '强健康'
+        elif hs >= _HS_LEVEL_HEALTHY: sl = '健康'
+        elif hs >= _HS_LEVEL_NEUTRAL: sl = '中性'
+        elif hs >= _HS_LEVEL_WEAK: sl = '弱'
         else: sl = '严重背离'
 
         status_description = {
@@ -238,7 +269,7 @@ class Dim3VPEngine(DataAwareMixin):
         }
         conditions = [
             {'name': '量价关系', 'satisfied': vp_state in ('强健康', '健康'), 'actual': vp_state, 'threshold': '健康或强健康'},
-            {'name': '健康度评分', 'satisfied': hs >= 5, 'actual': f'{hs}/10', 'threshold': '≥5分'},
+            {'name': '健康度评分', 'satisfied': hs >= _HS_AUDIT_THRESHOLD, 'actual': f'{hs}/10', 'threshold': '≥5分'},
             {'name': '背离检测', 'satisfied': not div_det, 'actual': '有背离' if div_det else '无背离', 'threshold': '无背离信号'},
             {'name': '量能强度', 'satisfied': ve_l in ('温和放量', '显著放量'), 'actual': ve_l, 'threshold': '放量或温和放量'},
             # 445号：RPS 强弱因子（补产出，不再被 RSI 顶替）
@@ -328,7 +359,7 @@ def _classify_granville(df, vol_ratio: float, tags: dict) -> dict:
         recent3_vol = vs.iloc[-4:-1] if len(vs) >= 4 else None
         consec_expand = (
             avg20 is not None and recent3_vol is not None and avg20 > 0
-            and all(v > avg20 * 1.5 for v in recent3_vol)
+            and all(v > avg20 * _G_HP_VOL_MULT for v in recent3_vol)
         )
         _n = len(close)
         gains3 = [(close.iloc[i] - close.iloc[i - 1]) / close.iloc[i - 1]
@@ -336,29 +367,29 @@ def _classify_granville(df, vol_ratio: float, tags: dict) -> dict:
         stall_sum = sum(gains3)
 
         # 规则判定（5日区间 + 量能趋势）
-        if price_chg > 2.0 and vr > 10:
-            if vr > 40:
+        if price_chg > _G_HEALTHY_PC and vr > _G_HEALTHY_VR:
+            if vr > _G_EXPLOSIVE_VR:
                 result = {'rule': 'explosive', 'name': '量价井喷', 'description': '急速上涨+连续大幅放量，多方力量加速释放'}
             else:
                 result = {'rule': 'healthy', 'name': '量价齐升', 'description': '价格上涨有充足买盘推动，健康上涨形态'}
 
-        elif price_chg > 1.5 and vr < -10:
+        elif price_chg > _G_WEAKENING_PC and vr < _G_WEAKENING_VR:
             result = {'rule': 'weakening', 'name': '价升量减', 'description': '买盘力度趋弱，上涨动力减弱'}
 
-        elif consec_expand and stall_sum < 0.01:
+        elif consec_expand and stall_sum < _G_HP_GAIN_SUM:
             result = {'rule': 'heavy_pressure', 'name': '放量滞涨', 'description': '连续数日量能显著放大但价格无法加速，上方压力沉重'}
 
-        elif price_chg < -4.0 and vr > 10 and close.iloc[-1] < ma20:
+        elif price_chg < _G_BREAKDOWN_PC and vr > _G_BREAKDOWN_VR and close.iloc[-1] < ma20:
             # 507批次8（登记-10 重排）：深跌破位（5日跌<-4% + 放量 + 跌破 MA20）优先判定——
             #   原位于 selling_pressure（<-2.0 且 vr>10）之后，条件为其子集被先吞、恒不可达。
             #   audit「量价八准则」负面判定等价（两标签同列负面列表），重排仅使展示文案精确
             #   （深跌破位显示「放量破均线」而非「放量下跌」）。
             result = {'rule': 'breakdown', 'name': '放量破均线', 'description': '放量跌破MA20，多空格局转变'}
 
-        elif price_chg < -2.0 and vr > 10:
+        elif price_chg < _G_SELLING_PC and vr > _G_SELLING_VR:
             result = {'rule': 'selling_pressure', 'name': '放量下跌', 'description': '抛盘涌出，卖压释放'}
 
-        elif price_chg < -1.0 and vr < -10:
+        elif price_chg < _G_PULLBACK_PC and vr < _G_PULLBACK_VR:
             result = {'rule': 'pullback_shrinking', 'name': '回探缩量', 'description': '回调缩量，卖压减轻，反弹可期'}
 
         elif str(tags.get('volume_price_fit', '')) == 'diverging':

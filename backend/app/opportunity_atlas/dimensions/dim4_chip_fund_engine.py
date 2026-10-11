@@ -36,8 +36,24 @@ from app.opportunity_atlas.dimensions.enum_cn_map import chip_concentration_cn
 
 # 508批次5：PhaseDetectionEngine 演进版（8 参 data_context）迁入 phase_detector.py 为权威
 from app.opportunity_atlas.phase_detector import PhaseDetectionEngine
+# 431号 F2/485-7：CrowdingFactor 拥挤度阈值 + audit 阶段置信收敛到 backend/config/dim_engine.yaml
+# （值逐字节不变，零行为变更；yaml 缺失回退代码默认值）。取值属「果」侧（445 冻结）。
+from app.services.status_config import get_dim_engine_config
 
 logger = logging.getLogger(__name__)
+
+_DIM4_CFG = get_dim_engine_config().get('dim4', {})
+_CROWDING_MARGIN_HIGH = float(_DIM4_CFG.get('crowding_margin_high', 0.05))
+_CROWDING_MARGIN_LOW = float(_DIM4_CFG.get('crowding_margin_low', 0.01))
+_CROWDING_TURNOVER_HIGH = float(_DIM4_CFG.get('crowding_turnover_high', 1.5))
+_CROWDING_TURNOVER_LOW = float(_DIM4_CFG.get('crowding_turnover_low', 0.5))
+_CROWDING_VOL_LOW_PCT = float(_DIM4_CFG.get('crowding_vol_low_pct', 20))
+_CROWDING_VOL_HIGH_PCT = float(_DIM4_CFG.get('crowding_vol_high_pct', 80))
+_CROWDING_VOTES_REQUIRED = int(_DIM4_CFG.get('crowding_votes_required', 2))
+_CROWDING_MIN_VALID = int(_DIM4_CFG.get('crowding_min_valid', 2))
+_CROWDING_SCORE_BASE = float(_DIM4_CFG.get('crowding_score_base', 0.7))
+_CROWDING_SCORE_STEP = float(_DIM4_CFG.get('crowding_score_step', 0.1))
+_PHASE_CONF_THRESHOLD = float(_DIM4_CFG.get('phase_conf_threshold', 0.3))
 
 # ── 主力阶段常量（369号方案物理合入 phase_detector.py 时遗漏，导致 compute_tags 抛 NameError）──
 PHASE_UNKNOWN = "unknown"
@@ -330,9 +346,9 @@ class CrowdingFactor:
 
             ratio = current_turnover / avg_turnover
 
-            if ratio > 1.5:
+            if ratio > _CROWDING_TURNOVER_HIGH:
                 return 'HIGH_TURNOVER'
-            elif ratio < 0.5:
+            elif ratio < _CROWDING_TURNOVER_LOW:
                 return 'LOW_TURNOVER'
             else:
                 return 'NORMAL_TURNOVER'
@@ -379,8 +395,8 @@ class CrowdingFactor:
 
             # 历史分位（取最近 60 个交易日的历史窗口）
             history_window = bb_widths[:]
-            p20 = np.percentile(history_window, 20)
-            p80 = np.percentile(history_window, 80)
+            p20 = np.percentile(history_window, _CROWDING_VOL_LOW_PCT)
+            p80 = np.percentile(history_window, _CROWDING_VOL_HIGH_PCT)
 
             if current_width < p20:
                 return 'HIGH_CROWDING'
@@ -433,10 +449,10 @@ class CrowdingFactor:
         if margin_ratio is not None:
             details['margin_ratio'] = round(margin_ratio, 6)
             # 融资余额 > 流通市值 5% 视为偏高
-            if margin_ratio > 0.05:
+            if margin_ratio > _CROWDING_MARGIN_HIGH:
                 margin_signals['high'] = True
                 evidence.append(f'融资余额占比 {margin_ratio:.4%} > 5%，偏高')
-            elif margin_ratio < 0.01:
+            elif margin_ratio < _CROWDING_MARGIN_LOW:
                 margin_signals['low'] = True
                 evidence.append(f'融资余额占比 {margin_ratio:.4%} < 1%，偏低')
             else:
@@ -512,12 +528,12 @@ class CrowdingFactor:
             evidence.append(f'有效信号维度数 {valid_signals}/3')
 
         # 至少 2/3 的拥挤信号
-        if high_count >= 2 and valid_signals >= 2:
+        if high_count >= _CROWDING_VOTES_REQUIRED and valid_signals >= _CROWDING_MIN_VALID:
             crowding_level = self.HIGH_CROWDING
-            crowding_score = 0.7 + 0.1 * min(high_count, 3)
+            crowding_score = _CROWDING_SCORE_BASE + _CROWDING_SCORE_STEP * min(high_count, 3)
             risk_advice = '拥挤度高，建议谨慎参与，注意回调风险'
         # 至少 2/3 的低拥挤信号
-        elif low_count >= 2 and valid_signals >= 2:
+        elif low_count >= _CROWDING_VOTES_REQUIRED and valid_signals >= _CROWDING_MIN_VALID:
             crowding_level = self.LOW_CROWDING
             crowding_score = 0.1 + 0.1 * max(0, 2 - low_count)
             risk_advice = '拥挤度低，可关注介入机会'
@@ -1210,7 +1226,7 @@ class Dim4ChipFundEngine(DataAwareMixin):
         _phase_conf = phase_info.get('confidence')
         conditions = [
             {'name': '主力阶段', 'satisfied': phase_info['phase'] in ('building', 'lifting', 'distributing')
-             and (_phase_conf is None or _phase_conf >= 0.3),
+             and (_phase_conf is None or _phase_conf >= _PHASE_CONF_THRESHOLD),
              'actual': phase_info['phase_cn'], 'threshold': '有明确阶段判定且置信≥0.3'},
             # 464-14：判定集与实现产出对齐——实现只产 strong(强流入)/strong_out(强流出)/none；
             # 原集含 very_strong/medium/weak 死枚举（从不产生）且漏 strong_out →

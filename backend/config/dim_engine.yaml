@@ -75,3 +75,64 @@ dim5:
   bociasi_slow_weight: 0.4       # 温度 BOCIASI 修正慢线权重
   temp_merge_temperature: 0.4    # 温度合成：原温度权重
   temp_merge_bociasi: 0.6        # 温度合成：BOCIASI 权重
+
+# dim3 量价引擎（dim3_vp_engine.py；HS 合成公式 495 号 B2 定标为 JUD 量价强度权威口径）
+dim3:
+  vp_score_healthy: 2            # 量价关系 健康=2
+  vp_score_diverging: -1         # 量价关系 背离=-1
+  vp_score_default: 1            # 量价关系 其他=1
+  ve_thresholds: [2.0, 1.2, 0.8] # 量能分档量比阈值（>2→2 / >1.2→1.5 / >0.8→1 / else 0）
+  ms_bullish: 1                  # 均线 多头排列
+  ms_bearish: 0                  # 均线 空头排列
+  ms_neutral: 0.5                # 均线 其他
+  cs_concentrated: 1             # 筹码 concentrating/单峰密集/tight
+  cs_else: 0.5                   # 筹码 其他
+  rsi_bullish_high: 70           # RSI 强弱分档边界
+  rsi_bullish_low: 60
+  rsi_bearish_high: 40
+  rsi_bearish_low: 30
+  rsi_bullish_score: 1           # 60<rsi<=70
+  rsi_bearish_score: 0.8         # 30<=rsi<40
+  rsi_extreme_score: 0.2         # rsi>70 或 <30
+  rsi_neutral_score: 0.5         # 其他
+  rps_threshold: 85              # RPS>85 → +1 分
+  dp_diverging: -1.5             # 背离/严重背离罚分
+  pattern_dev_center: 5          # 形态偏差 (pattern_score-5)/5×1.5
+  pattern_dev_scale: 1.5
+  hs_raw_offset: 4               # HS 合成 (raw+4)/12×10
+  hs_raw_scale: 12
+  hs_max: 10
+  hs_level_strong: 8             # >=8 强健康
+  hs_level_healthy: 6            # >=6 健康
+  hs_level_neutral: 4            # >=4 中性
+  hs_level_weak: 2               # >=2 弱
+  hs_audit_threshold: 5          # audit 健康度 >=5
+  # Granville 八准则（5 日区间涨幅 + 5/20 日均量比率，450 多日粒度）
+  granville_healthy_price_chg: 2.0    # 量价齐升 5日涨幅 >2%
+  granville_healthy_vr: 10.0          # 量能比 >10%
+  granville_explosive_vr: 40.0        # 量价井喷 量能比 >40%
+  granville_weakening_price_chg: 1.5  # 价升量减 5日涨幅 >1.5%
+  granville_weakening_vr: -10.0       # 量能比 <-10%
+  granville_hp_vol_mult: 1.5          # 放量滞涨 近3日每根量 >前20日均量×1.5
+  granville_hp_gain_sum: 0.01         # 3 日涨幅和 <1%
+  granville_breakdown_price_chg: -4.0 # 放量破均线 5日跌幅 <-4%
+  granville_breakdown_vr: 10.0        # 且量能比 >10%（跌破 MA20）
+  granville_selling_price_chg: -2.0   # 放量下跌 5日跌幅 <-2%
+  granville_selling_vr: 10.0          # 且量能比 >10%
+  granville_pullback_price_chg: -1.0  # 回探缩量 5日跌幅 <-1%
+  granville_pullback_vr: -10.0        # 且量能比 <-10%
+
+# dim4 资金筹码引擎（dim4_chip_fund_engine.py；主力阶段 8 维投票在 phase_detector.py SSOT，
+# 此处仅 CrowdingFactor 拥挤度阈值 + audit 阶段置信）
+dim4:
+  crowding_margin_high: 0.05    # 融资余额占比 >5% 偏高（拥挤信号）
+  crowding_margin_low: 0.01     # 融资余额占比 <1% 偏低
+  crowding_turnover_high: 1.5   # 换手率 > 20日均值×1.5 → 高换手
+  crowding_turnover_low: 0.5    # 换手率 < 20日均值×0.5 → 低换手
+  crowding_vol_low_pct: 20      # 布林带宽度 < 历史 P20 → 高拥挤（波动压缩）
+  crowding_vol_high_pct: 80     # 布林带宽度 > 历史 P80 → 低拥挤（波动扩张）
+  crowding_votes_required: 2    # 2/3 票数制：拥挤信号 >=2 且有效维度 >=2
+  crowding_min_valid: 2         # 有效信号维度下限
+  crowding_score_base: 0.7      # 高拥挤基础分
+  crowding_score_step: 0.1      # 每多一个拥挤维度 +0.1（上限 3 维）
+  phase_conf_threshold: 0.3     # audit「主力阶段」置信门槛（464-13）

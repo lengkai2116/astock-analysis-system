@@ -375,10 +375,12 @@ class TestAuditPhaseConfidenceGate:
         assert self._cond(res)['satisfied'] is False
 
     def test_confidence_key_in_source(self):
-        """audit 条件 1 已含置信门槛表达式（防回归）"""
+        """audit 条件 1 已含置信门槛表达式（防回归；431 F2 后阈值读 dim_engine.yaml phase_conf_threshold）"""
         import inspect
         src = inspect.getsource(Dim4ChipFundEngine.evaluate)
-        assert '_phase_conf >= 0.3' in src
+        assert '_phase_conf >= _PHASE_CONF_THRESHOLD' in src
+        from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import _PHASE_CONF_THRESHOLD
+        assert _PHASE_CONF_THRESHOLD == 0.3
 
 
 class TestBatch3QualityControlCleanup:

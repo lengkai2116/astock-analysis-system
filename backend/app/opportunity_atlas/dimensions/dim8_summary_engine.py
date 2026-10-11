@@ -185,6 +185,10 @@ def _build_eight_dim_summary(dim_results: dict, consensus_rate: float | None = N
 # ═══════════════════════════════════════════════════════════
 
 # 维度权重（基于358号方案的动态权重简化版）
+# ⚠️ 431号 F2/485-7 中优先级标注：本表为**展示派生权重**（仅当判定层 jud_result
+#    consensus_rate 缺失时兜底自算，495号 A1 单源化后判定层优先），非投资决策权重。
+#    ⚠️ 与 potential_engine.DIM_WEIGHTS（潜力 6 维 IC 加权，JUD/433 消费）**同名异义**——
+#    调整/迁移时勿混淆。dim7 :54 已同类警示。
 DIM_WEIGHTS = {
     'signal': 0.15,
     'structure': 0.20,
