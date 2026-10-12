@@ -181,6 +181,18 @@ def create_app():
         except Exception as e:
             app.logger.warning(f"策略模板种子数据初始化失败: {e}")
 
+    # 511号：API 等锁守卫——routes 导入前等待核心 SQLite 分库写锁释放。
+    # ECM 单例在导入 routes（factors.py 等 get_ecm_instance()）时触发 _init_tables
+    # 数百条 DDL/迁移；daemon 持写锁时每次写撞 30s busy_timeout（2026-10-12 实测
+    # 26+ 次 ≈ 18 分钟锁风暴，5001 才绑定）。此处复用 data_daemon 同款守卫。
+    try:
+        from app.utils.db_lock import wait_db_unlock
+        _boot_data_dir = os.environ.get('DATA_DIR') or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+        wait_db_unlock(_boot_data_dir)
+    except Exception as e:
+        logger.warning(f"数据库锁等待异常: {e}")
+
     from app.auth import auth_bp
     from app.routes.account import account_bp, account_v3_bp
     from app.routes.ai_analysis import ai_analysis_bp

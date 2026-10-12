@@ -6631,8 +6631,11 @@ def _recover_stale_running(timeout_hours: float = 4.0) -> int:
             "WHERE status='running' AND started_at < datetime('now','localtime', ?)",
             [f'-{int(timeout_hours)} hours']
         ).rowcount
+        # 511号：无条件 commit——0 行 UPDATE 时 sqlite3 已隐式 BEGIN 开写事务，
+        # 原 if rc>0 跳过 commit → 总库写连接永久挂未提交事务 → stock_cache.db
+        # 写锁恒持（2026-10-12 实证 API 启动 18 分钟锁风暴）。对齐 482号 §9.4 先例。
+        _ecm.conn.commit()
         if rc > 0:
-            _ecm.conn.commit()
             logger.info(f"  [管道自愈] 清理 {rc} 个超时 running 环节（>{timeout_hours}h）")
         return rc
     except Exception as e:
@@ -7932,37 +7935,10 @@ def _wait_db_unlock(data_dir: str, max_wait: float = 300.0) -> None:
     （09-28 实证：18:00~18:10 循环）。此处用独立短超时连接探测核心分库写锁，
     锁定时每 5s 重试直至释放或超时，避免迁移在锁下空转。
     """
-    import sqlite3 as _sqlite3
-    _targets = ['stock_cache.db', 'market_cache.db', 'compute_cache.db',
-                'snapshot_cache.db', 'financial_cache.db', 'history_cache.db',
-                'system_cache.db', 'market_snapshot.db']  # 2026-09-29 OCR：补 sharding 注册分库
-    _waited = 0.0
-    while True:
-        _locked = []
-        for _db in _targets:
-            _p = os.path.join(data_dir, 'duckdb', _db)
-            if not os.path.exists(_p):
-                continue
-            try:
-                _c = _sqlite3.connect(_p, timeout=2.0)
-                try:
-                    _c.execute('BEGIN IMMEDIATE')
-                    _c.execute('ROLLBACK')
-                finally:
-                    _c.close()
-            except _sqlite3.OperationalError:
-                _locked.append(_db)
-        if not _locked:
-            if _waited > 0:
-                logger.info(f"数据库写锁已释放（等待 {_waited:.0f}s）")
-            return
-        if _waited >= max_wait:
-            logger.warning(f"等待数据库写锁超时（{max_wait:.0f}s）: {_locked} 仍被锁，继续启动（后续重试机制兜底）")
-            return
-        if _waited == 0:
-            logger.warning(f"检测到数据库写锁: {_locked}，等待释放（残留 daemon/测试进程？）...")
-        time.sleep(5)
-        _waited += 5.0
+    # 511号：实现已提取为公共函数 app.utils.db_lock.wait_db_unlock（daemon/API 共用），
+    # 此处保留薄包装维持调用点与测试（dd._wait_db_unlock）兼容。
+    from app.utils.db_lock import wait_db_unlock
+    wait_db_unlock(data_dir, max_wait=max_wait)
 
 
 def main():
