@@ -138,7 +138,7 @@ class SchedulerManager:
             try:
                 hour, minute = trigger_time.split(':')
                 self._scheduler.add_job(
-                    self.run_daily_sync,
+                    self._run_daily_sync_in_context,
                     CronTrigger(hour=int(hour), minute=int(minute)),
                     id='daily_close_sync',
                     name='日终数据同步',
@@ -426,6 +426,21 @@ class SchedulerManager:
 
         return result
 
+    def _run_daily_sync_in_context(self) -> Dict[str, Any]:
+        """日终同步后台入口包装（512号：511号附带发现修复）
+
+        APScheduler / catch_up_if_needed 后台线程不继承 Flask app context，
+        而 run_daily_sync 内部 _record_sync_start 走 Flask-SQLAlchemy（db.session）
+        必须 app context——否则抛 'Working outside of application context'，
+        同步被 except 吞掉静默失败（2026-10-12 实证）。用 _app 显式建 context
+        （后台线程无 current_app，不能仿 :760 的 current_app.app_context()）。
+        """
+        if not self._app:
+            logger.warning("日终同步: 无 app 引用，跳过")
+            return {'status': 'skipped', 'reason': 'no_app'}
+        with self._app.app_context():
+            return self.run_daily_sync()
+
     def catch_up_if_needed(self):
         """应用启动时检测：若缺少交易日数据则自动触发同步
 
@@ -463,7 +478,7 @@ class SchedulerManager:
             if max_date is None:
                 logger.info("=== 启动补采: 无数据, 后台线程开始全量同步（不影响服务器启动）===")
                 import threading
-                t = threading.Thread(target=self.run_daily_sync, daemon=True)
+                t = threading.Thread(target=self._run_daily_sync_in_context, daemon=True)
                 t.start()
                 # Stock 同步也后台执行
                 threading.Thread(target=self._run_stock_sync_if_needed, daemon=True).start()
@@ -471,7 +486,7 @@ class SchedulerManager:
             elif date.fromisoformat(str(max_date)) < today:
                 logger.info(f"=== 启动补采: 数据最新 {max_date}, 早于今日 {today}, 后台增量同步 ===")
                 import threading
-                threading.Thread(target=self.run_daily_sync, daemon=True).start()
+                threading.Thread(target=self._run_daily_sync_in_context, daemon=True).start()
                 return
 
             logger.info(f"启动补采: 数据已最新 ({max_date}), 跳过")
@@ -725,40 +740,44 @@ class SchedulerManager:
     def _run_weekly_eval(self):
         """周度批量赢率评估"""
         try:
-            from app.scheduler import run_weekly_batch_eval
-            run_weekly_batch_eval()
+            # 512号：APScheduler 线程无 Flask app context，任务内部 db 查询须显式建 context
+            with self._app.app_context():
+                from app.scheduler import run_weekly_batch_eval
+                run_weekly_batch_eval()
         except Exception as e:
             logger.error(f"周度赢率评估失败: {e}")
 
     def _run_health_check(self):
         """策略健康度巡检"""
         try:
-            from app.scheduler import run_strategy_health_check
-            run_strategy_health_check()
+            with self._app.app_context():
+                from app.scheduler import run_strategy_health_check
+                run_strategy_health_check()
         except Exception as e:
             logger.error(f"策略健康检查失败: {e}")
 
     def _run_weekly_report(self):
         """周度验证报告"""
         try:
-            from app.scheduler import run_weekly_report
-            run_weekly_report()
+            with self._app.app_context():
+                from app.scheduler import run_weekly_report
+                run_weekly_report()
         except Exception as e:
             logger.error(f"周度报告生成失败: {e}")
 
     def _run_param_plateau_check(self):
         """月度参数平原校验"""
         try:
-            from app.scheduler import run_monthly_parameter_plateau_check
-            run_monthly_parameter_plateau_check()
+            with self._app.app_context():
+                from app.scheduler import run_monthly_parameter_plateau_check
+                run_monthly_parameter_plateau_check()
         except Exception as e:
             logger.error(f"月度参数校验失败: {e}")
 
     def _run_stock_sync(self):
         """月度 Stock 列表同步（244号方案 D5）"""
         try:
-            from flask import current_app
-            with current_app.app_context():
+            with self._app.app_context():
                 from app.data import DataManager
                 count = DataManager().sync_stock_list()
                 logger.info(f"月度 Stock 同步完成: {count} 只")
@@ -773,8 +792,9 @@ class SchedulerManager:
         此处由 scheduler_manager 显式注册每日 18:00/18:05/18:10 执行。
         """
         try:
-            from flask import current_app
-            with current_app.app_context():
+            # 512号：APScheduler 线程无 context，current_app 不可用（LocalProxy 解析即抛），
+            # 改用 self._app 显式建 context（原 current_app.app_context() 在此必失败）。
+            with self._app.app_context():
                 from app.services.backtest_evidence_service import BacktestEvidenceService
                 service = BacktestEvidenceService()
                 service.run_checkpoint_update(days_offset)
@@ -801,8 +821,9 @@ class SchedulerManager:
             pass  # 导入失败则默认执行
 
         try:
-            from flask import current_app
-            with current_app.app_context():
+            # 512号：APScheduler 线程无 context，current_app 不可用（LocalProxy 解析即抛），
+            # 改用 self._app 显式建 context（原 current_app.app_context() 在此必失败）。
+            with self._app.app_context():
                 from app.services.push_service import (
                     push_market_summary,
                     push_top_stocks,
@@ -828,8 +849,9 @@ class SchedulerManager:
             pass
 
         try:
-            from flask import current_app
-            with current_app.app_context():
+            # 512号：APScheduler 线程无 context，current_app 不可用（LocalProxy 解析即抛），
+            # 改用 self._app 显式建 context（原 current_app.app_context() 在此必失败）。
+            with self._app.app_context():
                 from app.services.push_service import push_sector_rankings
                 push_sector_rankings()
         except Exception as e:
