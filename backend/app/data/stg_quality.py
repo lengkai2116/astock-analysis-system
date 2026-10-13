@@ -84,7 +84,12 @@ QUALITY_RULES: dict[str, dict] = {
     'daily_basic_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
     'moneyflow_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
     'stk_limit_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
-    'margin_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date', 'baseline': 'self'},
+    # 520号：margin 数据次一交易日（T+1）才由源侧发布——QA-CHECK 校验「最新交易日」
+    # （daily_cache 前沿）时其 margin 数据尚未发布，覆盖判定必假失败（10-09/10-13 实证
+    # 45%/0% + 重试超限告警）；skip_latest_day＝最新交易日跳过覆盖判定，历史日期照常校验，
+    # 完整性由 daemon run_integrity_check 的融资融券检查独立回补（对齐其排除最新日口径）。
+    'margin_cache': {'rows_ratio': 0.95, 'date_col': 'trade_date', 'baseline': 'self',
+                     'skip_latest_day': True},
     # adj_factor 按年份拆分（adj_factor_cache_YYYY，356号大表拆分），基表 adj_factor_cache
     # 仅存历史残留（max 2026-08-18），当日数据在当年分表——不适用当日覆盖率，改空表校验；
     # 时效性由 _check_data_timeliness / run_integrity_check 独立负责
@@ -344,6 +349,20 @@ class QualityChecker:
             logger.warning(f'{table} 行数统计失败: {e}')
             return -1
 
+    def _latest_daily_date(self) -> str:
+        """最新交易日（daily_cache 最新 trade_date，'YYYY-MM-DD'；异常/空返回 ''）
+
+        520号：判定 pipeline_date 是否为「刚完成 EOD 的最新交易日」——margin 等
+        次一交易日才由源侧发布的表在该日跳过覆盖判定（对齐 daemon 自检口径）。
+        """
+        try:
+            conn = self._sm.get_connection(self._sm.get_db_for_table('daily_cache'))
+            row = conn.execute('SELECT MAX(trade_date) FROM daily_cache').fetchone()
+            return str(row[0]) if row and row[0] else ''
+        except Exception as e:
+            logger.warning(f'最新交易日查询失败: {e}')
+            return ''
+
     def daily_base(self, pipeline_date: str) -> int:
         """基准 N：daily_cache 目标日期的**个股**行数（483号 A1：剔除指数/申万行业指数）
 
@@ -397,6 +416,15 @@ class QualityChecker:
             return CheckResult(True, table, pipeline_date, issues=[f'{table} 无校验规则，跳过'])
         if rule.get('check_mode') == 'nonempty':
             return self._check_nonempty(table, pipeline_date)
+        # 520号：margin 等「次一交易日才发布」的表——QA-CHECK 校验的 pipeline_date 若为
+        # 最新交易日（= daily_cache 最新日期，即刚完成 EOD 的日期），其源数据仍在发布窗口
+        # 内（Tushare margin_detail 次日/跨周末才回），覆盖判定必假失败（10-09/10-13 实证
+        # 45%/0% + 重试超限告警）；此处跳过覆盖判定、返回通过，历史日期照常校验。
+        # 完整性由 daemon run_integrity_check 的融资融券检查独立回补（对齐其排除最新日口径）。
+        if rule.get('skip_latest_day') and self._latest_daily_date() == pipeline_date:
+            logger.info(f'{table} 最新交易日 {pipeline_date} 处于发布窗口内（次一交易日发布），'
+                        f'跳过覆盖判定（520号）')
+            return CheckResult(True, table, pipeline_date)
         _self_baseline = rule.get('baseline') == 'self'
         if _self_baseline:
             n = self._baseline_rows(table, pipeline_date)
