@@ -1,6 +1,6 @@
 # 517号｜WAL 维护守护「停后即时重启 API」竞态失败核查与处置（端口未释放 + run.py 端口守卫致 API 静默不恢复）
 
-> **版本**：v1.1（2026-10-13 只读核查 + **批次1（Q1-A + Q3-A）实施并验证**）
+> **版本**：v1.2（2026-10-13 只读核查 + **批次1（Q1-A + Q3-A）实施并验证** + **批次2（Q2）实施并实机验证**）
 > **性质**：运营/运维缺陷（WAL 守护自恢复链断裂）——`backend/wal_maintenance.py` + `backend/run.py`
 > **前置**：2026-10-13 用户会话后台任务通知（旧 `start.command` 退出 143）触发核查；用户拍板「**开号处置（先落核查档）**」→「**提交推送，然后开工批次1**」
 > **关联**：511（总库写锁，无关）；513/516（仪表盘，下游受影响者）
@@ -79,7 +79,30 @@
 
 **生效前置**：WAL 守护（`wal_maintenance.py --daemon`，核查时 PID 4134）为**长驻进程**，**需重启守护**方加载本修复。
 
-**遗留**：**批次2＝Q2**（`run.py._port_in_use` 加 `SO_REUSEADDR`，从根消除「等端口」依赖、缩短 API 停机窗口）；**批次3（可选）＝Q4**。
+**遗留**：~~批次2＝Q2~~（已于批次2 实施，见 **§八**）；**批次3（可选）＝Q4**。
+
+## 八、实施记录（批次2，2026-10-13）
+
+**范围**＝**Q2**（`run.py._port_in_use` 探测语义；连带对齐 `wal_maintenance._port_bindable`）。**性质**＝运维健壮化（不改业务判定）。
+
+> **⚠️ 口径纠正（实施前实测发现）**：§五 Q2-A 的**字面写法**「仅加 `SO_REUSEADDR`、仍探 `127.0.0.1`」在本机（macOS）**会让单实例守卫失效**——`run.py` 服务器实际绑 `0.0.0.0`，而守卫探 `127.0.0.1`；加 `SO_REUSEADDR` 后二者不再冲突，守卫会把「正在运行的 API」**误判为未占用**。实测矩阵：
+>
+> | 场景 | 探 `127.0.0.1` 裸bind | 探 `127.0.0.1`+REUSEADDR | 探 `0.0.0.0` 裸bind | 探 `0.0.0.0`+REUSEADDR |
+> |---|---|---|---|---|
+> | 真实 LISTEN 于 `0.0.0.0` | 判占用 ✅ | **判未占用 ❌ 漏判** | 判占用 ✅ | 判占用 ✅ |
+> | TIME_WAIT 残留 | 误判占用 ❌ | 放过 ✅ | 误判占用 ❌ | 放过 ✅ |
+>
+> ⇒ **正确改法＝`SO_REUSEADDR` + 探服务端实际绑定地址 `0.0.0.0`**（与 `socketio.run(host="0.0.0.0")` 一致）。
+> 补：`http.server.HTTPServer.allow_reuse_address=1`、`werkzeug BaseWSGIServer.allow_reuse_address=True` ⇒ 服务端自身亦设 `SO_REUSEADDR`，故「守卫放行 ⇒ werkzeug 亦能绑定」在 TIME_WAIT 下成立，端到端自洽。
+
+- **`run.py._port_in_use`**：裸 `bind(('127.0.0.1', port))` → `setsockopt(SOL_SOCKET, SO_REUSEADDR)` + `bind(('0.0.0.0', port))`。
+- **`wal_maintenance._port_bindable`（批次2 连带对齐）**：同步改为 `SO_REUSEADDR` + `0.0.0.0`，与守卫**完全同语义**——不变量「此处可绑 ⇒ 守卫放行」保持；且看守不再等 TIME_WAIT，**缩短 API 停机窗口**（达成批次2 目标）。
+- **测试**：`test_517_wal_guardian_restart.py` 监听地址改 `0.0.0.0` + **新增 3 用例**（真实 LISTEN 仍判占用 / TIME_WAIT 放过 / `_port_bindable` 语义）；`test_fix_startup.py` 占用探测监听地址订正为 `0.0.0.0`（与守卫语义一致）。
+
+**验证**：`py_compile` OK；`ruff` `wal_maintenance.py`/`test_517`/`test_fix_startup` **All checks passed**（`run.py` 两处 `I001` 为**改动前既有**，未触碰——`--fix` 会打乱「先清代理再导第三方」语义）；定向 `test_517`+`test_fix_startup` **10 passed**。
+**实机验证（2026-10-13 19:44，复刻 517 失败条件）**：停 API 制造端口 5001 **TIME_WAIT 残留**（裸 bind FAIL=误判占用）→ 新 `_port_in_use(5001)`=**False**、`_port_bindable(5001)`=**True** → 调**新** `start_processes()` 输出 `API 已重启（health 校验通过）`、**`curl health`=200**（新 API PID 37686）、`data/logs/api.log` 正常启动（**无**「端口 5001 已被占用」）。**已重启 WAL 守护**加载（PID 35146→37881）。daemon 33819（日终管道）**未触碰**。
+
+**遗留**：**批次3（可选）＝Q4**（无看守自恢复）。
 
 ## 附：核对命令（只读）
 
