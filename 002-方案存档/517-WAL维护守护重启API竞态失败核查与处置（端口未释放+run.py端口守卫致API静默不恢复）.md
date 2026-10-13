@@ -1,10 +1,10 @@
 # 517号｜WAL 维护守护「停后即时重启 API」竞态失败核查与处置（端口未释放 + run.py 端口守卫致 API 静默不恢复）
 
-> **版本**：v1.0（2026-10-13 只读核查；**未改代码**）
+> **版本**：v1.1（2026-10-13 只读核查 + **批次1（Q1-A + Q3-A）实施并验证**）
 > **性质**：运营/运维缺陷（WAL 守护自恢复链断裂）——`backend/wal_maintenance.py` + `backend/run.py`
-> **前置**：2026-10-13 用户会话后台任务通知（旧 `start.command` 退出 143）触发核查；用户拍板「**开号处置（先落核查档）**」
+> **前置**：2026-10-13 用户会话后台任务通知（旧 `start.command` 退出 143）触发核查；用户拍板「**开号处置（先落核查档）**」→「**提交推送，然后开工批次1**」
 > **关联**：511（总库写锁，无关）；513/516（仪表盘，下游受影响者）
-> **HEAD（核查时）**：`daa0f45`（= origin/main）
+> **HEAD（核查时）**：`daa0f45`；**批次1 实施时 HEAD**：`3a041e8`（= origin/main）
 > **核查时刻**：2026-10-13 18:4x（触发）/ 18:5x（核查）
 
 ---
@@ -65,6 +65,20 @@
 - **批次3（可选）**：Q4。
 
 **验证口径**：构造 `maintenance_once()`（或等价 stop→立即 start）场景 → **API 必须自动恢复（health 200）**、无「已重启」假日志；连续多次稳定。
+
+## 七、实施记录（批次1，2026-10-13）
+
+**范围**＝**Q1-A + Q3-A**（§五 / §六 建议项）。**性质**＝运维健壮化（`wal_maintenance.py`，不改业务判定）。
+
+- **Q1-A（起 API 前等端口释放）**：新增 `_port_bindable(port)`——与 `run.py._port_in_use` **同语义**的**裸 `bind` 探测**（**不加 `SO_REUSEADDR`**，确保「此处可绑 ⇒ run.py 守卫必放行」）；`start_processes` 起 API 前**轮询等 `_port_bindable(5001)`**（≤40s）。
+- **Q3-A（起后回环 health 校验 + 日志据实）**：新增 `_api_healthy(port)`（回环 `GET /api/v3/health/live`，≤2s 超时）；`start_processes` 起 API 后**轮询 `_api_healthy(5001)`**（≤15s）；**仅在通过后**记 `API 已重启（health 校验通过）`，否则 `WARNING` 并**重试一次**，两次均失败记 `ERROR`（需人工介入）。
+- **测试**：新增 `backend/tests/test_517_wal_guardian_restart.py`（2 用例：①`_port_bindable` LISTEN 占用/释放语义；②`start_processes` 含「等端口 + health 校验 + 成功日志仅在确认后」）。
+
+**验证**：`py_compile` OK；`ruff` **All checks passed**；定向 `test_517_wal_guardian_restart` **2 passed**。
+
+**生效前置**：WAL 守护（`wal_maintenance.py --daemon`，核查时 PID 4134）为**长驻进程**，**需重启守护**方加载本修复。
+
+**遗留**：**批次2＝Q2**（`run.py._port_in_use` 加 `SO_REUSEADDR`，从根消除「等端口」依赖、缩短 API 停机窗口）；**批次3（可选）＝Q4**。
 
 ## 附：核对命令（只读）
 
