@@ -1,6 +1,6 @@
 # 515号｜dim8 板块定位句 app_context 缺失核查与处置（全市场板块定位句丢失）
 
-> **版本**：v1.1（2026-10-13 拍板 **C 双管** + 实施 + 定向验证通过）
+> **版本**：v1.2（2026-10-13 拍板 **C 双管** + 实施 + 单测定向 + **「无-context 旧失败条件」定向实机验证**通过）
 > **性质**：展示层（dim8 第一层环境定位）取数依赖 Flask app context 导致**全市场静默丢失**
 > **范围**：`dim8_summary_engine._sector_position_sentence` + `DataManager.get_stock_industry` + daemon dim8 归集调用点
 > **前置**：源自 **514 号**实施过程（#R2 实机复核）的附带发现——daemon 日志 `dim8 板块定位句构建失败 [xxxxxx.BJ]: Working outside of application context`
@@ -107,6 +107,25 @@
   - `py_compile` 通过；`ruff`：`app/data/__init__.py` + 测试文件 **All checks passed**；`data_daemon.py` 保持既有 **40 基线（零新增）**。
   - **待观察（实机）**：daemon SIG 步骤下一次重跑后 `data_daemon.log` 该 warning **5557 → 0**；抽票 dim8 summary 含「板块定位：…（行业排名第N）」句。
 - **待办**：全量回归（须先停 daemon + 看守，按 `full-regression-daemon-must-stop.md` 择机）。
+
+## 八、定向实机验证（2026-10-13，无 app context 旧失败条件）
+
+**背景**：管道 `pipeline_status` 对 `pipeline_date=20261012` 的 **`SIG` 已 `done`**（`09:19:26 [管道] SIG → done (OK (2097.0s) 5561/5561 stocks)`，即那批 5557 条 warning 的来源）；管道对 SIG 判据为「非 done 才跑」⇒ **重启 daemon 不会重跑 SIG**，故「daemon 日志 5557→0」需等**下一次全市场 SIG**（今日 10-13 日终，收盘后自动）。为即时取证，按「无 context」复刻 daemon 旧失败条件做定向验证。
+
+**探针**：`backend/scripts/_515_ctxfree_verify_probe.py`（只读，不入库、不改管道）。复刻原理＝daemon 中 `_load_tags`/`_build_dim_engine_results` 本就无 context，仅 dim8 归集被 515 包了 context ⇒ **「无 context 调 dim8 归集」即旧失败条件**。
+
+**结果（全程无 app context）**：
+
+| # | 检项 | 结果 |
+|---|------|------|
+| 0 | `db.session.query(Stock)` | 抛 `RuntimeError: Working outside of application context.` ⇒ **旧失败条件实证存在** |
+| 1 | `DataManager.get_stock_industry`（6 票） | 全返回真实行业（白酒/银行/电气设备/全国地产/保险/银行），**无异常** |
+| 2 | 直调 `_sector_position_sentence`（构造真实行业 + sector_heat） | **6/6 产句**「板块定位：X板块较活跃（行业排名第15）」 |
+| 3 | 复刻 daemon 真实链路（`StatusEngine` → `build_seven_dim_from_dim_results`，4 票） | 4 票 `sector_heat_n=109` 且含本行业；`000001.SZ`→银行（top_20，第19）、`000002.SZ`→全国地产（top_10，第3）**产句**；`600519.SH`/`300750.SZ` 因 `heat_level='none'`（rank 95/47）按 437「无热度则降级」返回空（设计行为，非缺陷） |
+| — | 捕获「dim8 板块定位句构建失败」warning 数 | **0** |
+
+**判定**：在旧失败条件下修复**已生效**（取数不再抛错、句恢复、warning=0）；A 侧（daemon 包 `_dim8_app.app_context()`）使 daemon 实际走 ORM 路径，更为稳妥。
+**遗留**：真·daemon 日志口径（`data_daemon.log` 中 `板块定位句构建失败` **5557→0**）待下次全市场 SIG（今日日终）自动取得。
 
 ## 附：核查命令（只读）
 
