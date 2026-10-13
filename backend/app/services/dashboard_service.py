@@ -1009,11 +1009,19 @@ class DashboardService:
             pass
 
         # 构建板块列表
+        # 516 批次1（P1）：流入板块取净额最大前 N；流出板块取净额最负前 N。
+        # 原实现对所有板块一律取「净额最大」前 N → 流出板块误列板块内净流入个股。
         all_sectors = []
         for name, data in sector_agg.items():
             stock_list = sorted(data['stocks'].values(), key=lambda x: x['net'], reverse=True)
+            net_inflow = round(data['net'] / 1e4, 1)
+            picked = (
+                stock_list[:stocks_per_sector]
+                if net_inflow > 0
+                else sorted(stock_list, key=lambda x: x['net'])[:stocks_per_sector]
+            )
             top_stocks = []
-            for s in stock_list[:stocks_per_sector]:
+            for s in picked:
                 top_stocks.append({
                     'ts_code': s.get('ts_code', s['name']),
                     'name': s['name'],
@@ -1021,7 +1029,7 @@ class DashboardService:
                 })
             all_sectors.append({
                 'name': name,
-                'net_inflow': round(data['net'] / 1e4, 1),
+                'net_inflow': net_inflow,
                 'stocks': top_stocks,
             })
 

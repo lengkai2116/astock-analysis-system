@@ -336,7 +336,7 @@ function loadSectorMoneyflow(){
           (s.stocks||[]).forEach(function(st){
             var row=document.createElement('div');
             row.style.cssText='display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
-            row.innerHTML='<span>'+(st.name||'')+'</span><span class="down">-'+Math.abs(st.net_inflow).toFixed(2)+'</span>';
+            row.innerHTML='<span>'+(st.name||'')+'</span><span class="'+(st.net_inflow>=0?'up':'down')+'">'+(st.net_inflow>0?'+':'')+Number(st.net_inflow).toFixed(2)+'</span>';
             wrap.appendChild(row);
           });
           outCont.appendChild(wrap);
@@ -347,19 +347,7 @@ function loadSectorMoneyflow(){
 }
 
 // ===== 7. 涨幅前十股票排行 =====
-// ⚠️ MOCK_GAINERS 仅供开发/原型测试使用 — 生产环境不得调用（§13.5）
-var MOCK_GAINERS = [
-  {ts_code:'300750.SZ',name:'宁德时代',price:218.50,pct_chg:8.32},
-  {ts_code:'600519.SH',name:'贵州茅台',price:1685.00,pct_chg:5.67},
-  {ts_code:'000858.SZ',name:'五粮液',price:145.20,pct_chg:4.89},
-  {ts_code:'002415.SZ',name:'海康威视',price:32.68,pct_chg:4.12},
-  {ts_code:'601012.SH',name:'隆基绿能',price:28.45,pct_chg:3.76},
-  {ts_code:'000333.SZ',name:'美的集团',price:62.30,pct_chg:3.45},
-  {ts_code:'002594.SZ',name:'比亚迪',price:265.80,pct_chg:3.21},
-  {ts_code:'600036.SH',name:'招商银行',price:35.42,pct_chg:2.98},
-  {ts_code:'000001.SZ',name:'平安银行',price:11.28,pct_chg:2.54},
-  {ts_code:'002475.SZ',name:'立讯精密',price:38.65,pct_chg:2.31}
-];
+// 516 批次1（P3）：删除 MOCK_GAINERS 假数据兜底（§13 对齐）——接口失败走空态，不再降级假榜单
 var gainerType='up';
 function switchGainers(type){
   gainerType=type;
@@ -380,8 +368,10 @@ function loadTopGainers(type){type=type||'up';
       renderGainers(d.data.stocks||[]);
     })
     .catch(function(e){
-      console.warn('daily-top 加载失败，使用Mock数据',e);
-      renderGainers(MOCK_GAINERS);
+      // 516 批次1（P3）：§13 对齐——不降级假数据，清空榜单走空态
+      console.warn('daily-top 加载失败（空态，无假数据兜底）',e);
+      var tbl=document.getElementById('gainers-table');
+      while(tbl&&tbl.rows.length>1)tbl.deleteRow(1);
     });
 }
 function renderGainers(list){
@@ -591,7 +581,7 @@ function renderSectorMoneyflow(smd){
       (s.stocks||[]).forEach(function(st){
         var row=document.createElement('div');
         row.style.cssText='display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
-        row.innerHTML='<span>'+(st.name||'')+'</span><span class="down">-'+Math.abs(st.net_inflow).toFixed(2)+'</span>';
+        row.innerHTML='<span>'+(st.name||'')+'</span><span class="'+(st.net_inflow>=0?'up':'down')+'">'+(st.net_inflow>0?'+':'')+Number(st.net_inflow).toFixed(2)+'</span>';
         wrap.appendChild(row);
       });
       outCont.appendChild(wrap);
