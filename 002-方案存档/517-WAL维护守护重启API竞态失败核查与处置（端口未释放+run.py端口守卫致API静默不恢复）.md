@@ -1,6 +1,6 @@
 # 517号｜WAL 维护守护「停后即时重启 API」竞态失败核查与处置（端口未释放 + run.py 端口守卫致 API 静默不恢复）
 
-> **版本**：v1.2（2026-10-13 只读核查 + **批次1（Q1-A + Q3-A）实施并验证** + **批次2（Q2）实施并实机验证**）
+> **版本**：v1.3（2026-10-13 只读核查 + **批次1（Q1-A + Q3-A）** + **批次2（Q2）** 均实施并实机验证 + **批次3（Q4）决策记录＝A 维持**）
 > **性质**：运营/运维缺陷（WAL 守护自恢复链断裂）——`backend/wal_maintenance.py` + `backend/run.py`
 > **前置**：2026-10-13 用户会话后台任务通知（旧 `start.command` 退出 143）触发核查；用户拍板「**开号处置（先落核查档）**」→「**提交推送，然后开工批次1**」
 > **关联**：511（总库写锁，无关）；513/516（仪表盘，下游受影响者）
@@ -102,7 +102,30 @@
 **验证**：`py_compile` OK；`ruff` `wal_maintenance.py`/`test_517`/`test_fix_startup` **All checks passed**（`run.py` 两处 `I001` 为**改动前既有**，未触碰——`--fix` 会打乱「先清代理再导第三方」语义）；定向 `test_517`+`test_fix_startup` **10 passed**。
 **实机验证（2026-10-13 19:44，复刻 517 失败条件）**：停 API 制造端口 5001 **TIME_WAIT 残留**（裸 bind FAIL=误判占用）→ 新 `_port_in_use(5001)`=**False**、`_port_bindable(5001)`=**True** → 调**新** `start_processes()` 输出 `API 已重启（health 校验通过）`、**`curl health`=200**（新 API PID 37686）、`data/logs/api.log` 正常启动（**无**「端口 5001 已被占用」）。**已重启 WAL 守护**加载（PID 35146→37881）。daemon 33819（日终管道）**未触碰**。
 
-**遗留**：**批次3（可选）＝Q4**（无看守自恢复）。
+**遗留**：批次3（Q4）见 **§九**。
+
+## 九、决策记录（批次3 / Q4：「无看守时自恢复」，2026-10-13）
+
+**拍板：Q4 = A（维持，不实施）**——不新增独立看守/自恢复进程；仅记录决策与依据（无代码改动）。
+
+**依据（只读核查 2026-10-13）**——现有恢复通道矩阵：
+
+| 通道 | 覆盖对象 | 触发条件 | 当前态 |
+|---|---|---|---|
+| `start_daemon.sh`（看守） | 仅 `data_daemon.py` | daemon 退出 → 10s 重启 | 登录项（Terminal.app）拉起；**核查时未运行**（即「无看守」态） |
+| `start.command` | daemon+API 启动 | 前台 `wait $API_PID`；**API 退出即脚本退出，不重启** | — |
+| `wal_maintenance.py --daemon`（WAL 守护） | daemon+API | **仅「维护触发」时**（WAL>500MB + 非交易 + 管道空闲）→ `start_processes()`（批次1/2 已健壮化） | 运行中 |
+| launchd | — | `com.stock.analyzer.datadaemon.plist` 已 `.disabled`；`com.stock.analyzer.backend`（gunicorn 旧架构）已加载但未运行（PID `-`） | 无效通道 |
+
+**理由**：
+1. 本号真正根因（**WAL 维护触发的 API 静默宕机**）已由**批次1（起后 health 校验 + 日志据实）+ 批次2（TIME_WAIT 不再误拒）**闭环；**WAL 守护自身即该路径的恢复通道**。
+2. 系统定位为**建议输出型**（`project/system-positioning-advice-only.md`）；研发阶段 **daemon 可随时停**（`project/daemon-stop-policy.md`）——新增常驻看守会与「可随时停」规则冲突，并引入**双实例 / SQLite 写锁竞争**风险（本号 Q1/Q3 已为同类竞态付过代价）。
+3. 正常使用由**登录项看守**（daemon）+ **双击 `start.command`**（API）覆盖；异常时的短暂不可用可接受。
+4. 长期 7×24 由**云端数据大脑**规划承担（`project/deployment-plan.md`），非 macOS 本地看守。
+
+**影响（已知取舍，非缺陷）**：无看守时，API/daemon 因**其它原因（崩溃）**退出**无人自动拉起**；恢复方式＝重新双击 `start.command`（API）/ 走登录项看守（daemon）。
+
+**结论**：517 号**全面收官**（核查档 + 批次1 + 批次2 + 批次3/Q4 决策）。
 
 ## 附：核对命令（只读）
 
