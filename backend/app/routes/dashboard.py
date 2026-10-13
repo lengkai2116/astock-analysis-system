@@ -73,16 +73,7 @@ def get_sector_sector():
     return _data_response(data)
 
 
-# ──────────────────────────────────────────────
-# 6. AI雷达+策略信号（dashboard/summary）
-# ──────────────────────────────────────────────
-@dashboard_bp.route('/api/v3/dashboard/summary', methods=['GET'])
-@handle_exceptions
-def get_dashboard_summary():
-    """AI交易机会雷达 + 策略信号汇总"""
-    data = _service.get_dashboard_summary()
-    return _data_response(data)
-
+# 516 批次2（Q2）：/api/v3/dashboard/summary（AI 交易机会雷达）已下线（前后端一并移除）
 
 # ──────────────────────────────────────────────
 # 7. 全市场资金流向（moneyflow-summary）

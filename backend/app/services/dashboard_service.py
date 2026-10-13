@@ -54,6 +54,7 @@ class DashboardService:
         （239号架构：盘中读 as_market_snapshot，盘后读 daily_cache）"""
         indexes = []
         total_volume = 0
+        _any_live = False
 
         # 盘中：直接从 InMemoryStateStore 读取（全局数据体系架构：mootdx TCP → store）
         try:
@@ -109,6 +110,7 @@ class DashboardService:
                     change_pct = live['change_pct']
                     change_amount = live['change_value']
                     amount = live['amount']
+                    _any_live = True
                     # 如果 has 实时数据但没有历史前收盘价，用实时涨跌幅推算
                     if prev_close is None and change_pct != 0:
                         prev_close = price / (1 + change_pct / 100) if change_pct != -100 else price
@@ -179,9 +181,18 @@ class DashboardService:
         except Exception:
             pass
 
+        # 516 批次3（Q4）：附「数据日/是否实时」以便前端按数据时效标注（不再一律显示「交易中」）
+        _dd = self._try_get_latest_trade_date() or ''
+        data_date = (
+            f"{_dd[:4]}-{_dd[4:6]}-{_dd[6:8]}"
+            if (len(_dd) == 8 and _dd.isdigit()) else _dd
+        )
+
         result = {
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'market_status': self._detect_market_status(),
+            'data_is_live': _any_live,
+            'data_date': data_date,
             'total_volume': total_volume,
             'total_volume_change_pct': volume_change_pct,
             'indexes': indexes,
@@ -290,7 +301,7 @@ class DashboardService:
             )
 
             return {
-                'exchange_summary': '上证+深证+北证50+创业板',
+                'exchange_summary': '上证+深证+北证50+创业板（含指数成分重叠）',
                 'days': days_list,
                 'average_amount': round(avg_amount, 2),
                 'updated_at': datetime.now().strftime('%Y-%m-%d'),
@@ -526,72 +537,6 @@ class DashboardService:
         return None
 
     # ──────────────────────────────────────────────
-    # 6. AI雷达+策略信号汇总（dashboard/summary）
-    # ──────────────────────────────────────────────
-    def get_dashboard_summary(self) -> Optional[Dict]:
-        """AI交易机会雷达 + 策略信号汇总 — 从 DuckDB daily_cache 提取"""
-        try:
-            import pandas as pd
-
-            from app.models import Stock
-
-            ecm = self.data_manager.cache
-            best_date = self._get_best_trade_date()
-            if not best_date:
-                logger.error("dashboard/summary DuckDB: 无历史数据")
-                raise ValueError("DuckDB daily_cache 无日期记录，走 Tushare 降级")
-            last_date = best_date
-            date_label = str(last_date)
-
-            # 取该日全市场数据
-            all_df = ecm._query_shard(
-                'daily_cache',
-                "SELECT ts_code, close, pct_chg FROM daily_cache WHERE trade_date = ?",
-                [last_date])
-            if all_df.empty:
-                logger.error("dashboard/summary DuckDB: 当日无数据")
-                raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
-
-            # 补齐名称（从 PG Stock 表）
-            ts_codes = all_df['ts_code'].unique().tolist()
-            name_map = {}
-            try:
-                for s in Stock.query.filter(Stock.ts_code.in_(ts_codes)).all():
-                    name_map[s.ts_code] = s.name
-            except Exception:
-                pass
-            all_df['name'] = all_df['ts_code'].map(lambda x: name_map.get(x, x))
-
-            # Top 8 涨幅股
-            top_df = all_df.nlargest(8, 'pct_chg')
-            radar_stocks = []
-            for _, r in top_df.iterrows():
-                pct = float(r['pct_chg'] or 0)
-                direction = 'bullish' if pct > 3 else ('bearish' if pct < -3 else 'watch')
-                radar_stocks.append({
-                    'ts_code': r['ts_code'],
-                    'name': r['name'],
-                    'score': min(95, max(40, int(50 + pct * 5))),
-                    'direction': direction,
-                    'price': round(float(r['close'] or 0), 2),
-                    'change_pct': round(pct, 2),
-                })
-
-            # 行情信号计数
-            total_stocks = len(all_df)
-
-            return {
-                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'update_note': f'来自 DuckDB daily_cache · {date_label} · {total_stocks} 只',
-                'radar_stocks': radar_stocks,
-                'total_signals': total_stocks,
-            }
-        except Exception as e:
-            logger.error(f"dashboard/summary DuckDB 降级失败: {e}")
-
-        logger.error("dashboard/summary: 所有数据源不可用")
-        return None
-    # ──────────────────────────────────────────────
     # 7. 全市场资金流向（moneyflow-summary）
     # ──────────────────────────────────────────────
     def get_moneyflow_summary(self, days: int = 20) -> Optional[Dict]:
@@ -762,13 +707,6 @@ class DashboardService:
             volume = self.get_market_volume()
             if volume:
                 result['market_volume'] = volume
-        except Exception:
-            pass
-
-        try:
-            summary = self.get_dashboard_summary()
-            if summary:
-                result['dashboard_summary'] = summary
         except Exception:
             pass
 
@@ -964,7 +902,7 @@ class DashboardService:
             days_list.append({
                 'date': f"{d[4:6]}/{d[6:8]}",
                 'main_force_net_inflow': round(daily[d]['main'] / 1e4, 1),
-                'retail_net_outflow': round(daily[d]['retail'] / 1e4, 1),
+                'retail_net_inflow': round(daily[d]['retail'] / 1e4, 1),
             })
         days_list.reverse()
         return {

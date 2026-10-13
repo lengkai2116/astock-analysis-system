@@ -19,23 +19,6 @@
 .down { color: var(--color-down); }
 .index-mini-chart { height: 100px; margin-top: var(--space-6); }
 
-/* AI 交易机会雷达 */
-.radar-section { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-12) var(--space-16); margin-bottom: var(--space-20); position: relative; overflow: hidden; }
-.radar-header { display: flex; align-items: center; gap: var(--space-8); margin-bottom: var(--space-8); }
-.radar-header .label { font-size: 13px; font-weight: 600; }
-.radar-header .update-tag { font-size: 11px; color: var(--text-muted); background: var(--bg-muted); padding: 2px var(--space-6); border-radius: var(--radius-xs); }
-.radar-track { display: flex; gap: var(--space-8); width: max-content; animation: scrollRadar 30s linear infinite; }
-.radar-section:hover .radar-track { animation-play-state: paused; }
-@keyframes scrollRadar { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
-.radar-card { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-6) var(--space-10); background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: var(--radius-sm); cursor: pointer; transition: all .15s; white-space: nowrap; flex-shrink: 0; }
-.radar-card:hover { background: var(--bg-active); border-color: var(--color-brand-500); }
-.radar-card .color-bar { width: 3px; height: 28px; border-radius: 2px; flex-shrink: 0; }
-.radar-card .info { display: flex; flex-direction: column; }
-.radar-card .info .stock-name { font-size: 13px; font-weight: 500; }
-.radar-card .info .stock-code { font-size: 11px; color: var(--text-muted); }
-.radar-card .score { font-size: 14px; font-weight: 700; margin-left: var(--space-4); }
-.radar-card .dir-tag { font-size: 11px; padding: 2px var(--space-6); border-radius: var(--radius-xs); font-weight: 500; }
-
 /* ECharts 全宽 + 双列 */
 .chart-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
 .chart-card .chart-title { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-bottom: var(--space-12); }
@@ -54,7 +37,6 @@ body { overflow-x:hidden; }
 @media (max-width:700px){
   .index-grid { grid-template-columns:1fr; }
   .index-card .value { font-size:18px; }
-  .radar-header { flex-wrap:wrap; }
   .page-header { flex-direction:column; align-items:flex-start; gap:var(--space-8); }
   .main-content { padding:var(--space-12); }
 }
@@ -109,20 +91,10 @@ body { overflow-x:hidden; }
       <div class="index-card" data-index="399006.SZ"><div class="top"><span class="name">创业板指</span><span style="font-size:11px;color:var(--text-muted);">399006.SZ</span></div><div class="value" id="idx-val-3">--</div><div class="change" id="idx-chg-3"></div><div id="mini-3" class="index-mini-chart"></div></div>
     </div>
 
-    <!-- 四大交易所合计·每日成交额（近20日）→ 新增 -->
+    <!-- 四大指数合计成交额（含指数成分重叠）（近20日） -->
     <div class="chart-card" style="margin-bottom:var(--space-20);">
-      <div class="chart-title">📊 四大交易所合计·每日成交额（近20日）</div>
+      <div class="chart-title">📊 四大指数合计成交额（含指数成分重叠）（近20日）</div>
       <div id="volume-chart" style="height:260px;"></div>
-    </div>
-
-    <!-- AI 交易机会雷达（替换快捷入口） -->
-    <div class="radar-section">
-      <div class="radar-header">
-        <span class="label">🤖 AI 交易机会雷达</span>
-        <span class="update-tag">来自 Screener L3 · 3 分钟前更新</span>
-        <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">点击卡片查看个股分析</span>
-      </div>
-      <div class="radar-track" id="radar-track"></div>
     </div>
 
     <!-- 全市场资金流向趋势（近20日）— 横跨全屏 -->
@@ -239,16 +211,6 @@ function loadVolumeChart(){
     .catch(function(e){console.warn('index-daily 加载失败',e);});
 }
 
-// ===== 3. 加载AI雷达 =====
-function loadRadar(){
-  _cachedFetch(API+'/dashboard/summary',60)
-    .then(function(d){
-      if(!d.success||!d.data)return;
-      applyRadar(d.data);
-    })
-    .catch(function(e){console.warn('dashboard/summary 加载失败',e);});
-}
-
 // ===== 4. 加载资金流向图 =====
 function loadMoneyflow(){
   _cachedFetch(API+'/market/moneyflow-summary',120)
@@ -257,12 +219,12 @@ function loadMoneyflow(){
       var c=_chart('chart-fund-flow');
       var days=d.data.days.map(function(v){return v.date||'';});
       var main=d.data.days.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
-      var retail=d.data.days.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
-      c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流出'],textStyle:{color:'#CBD5E1'},top:0},grid:{left:50,right:20,bottom:20,top:40},
+      var retail=d.data.days.map(function(v){return +(v.retail_net_inflow||0).toFixed(1);});
+      c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流入'],textStyle:{color:'#CBD5E1'},top:0},grid:{left:50,right:20,bottom:20,top:40},
         xAxis:{type:'category',data:days,axisLabel:{color:'#94A3B8',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
         yAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
         series:[{name:'主力净流入',type:'bar',data:main,itemStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#3B82F6'},{offset:1,color:'rgba(59,130,246,0.2)'}])}},
-          {name:'散户净流出',type:'line',data:retail,smooth:true,lineStyle:{color:'#EF4444',width:1.5},symbol:'none',areaStyle:{color:'rgba(239,68,68,0.08)'}}]});
+          {name:'散户净流入',type:'line',data:retail,smooth:true,lineStyle:{color:'#EF4444',width:1.5},symbol:'none',areaStyle:{color:'rgba(239,68,68,0.08)'}}]});
       if(c&&charts.indexOf(c)<0)charts.push(c);
     })
     .catch(function(e){console.warn('moneyflow-summary 加载失败',e);});
@@ -392,8 +354,6 @@ function renderGainers(list){
 // MOCK_SIGNALS / loadSignalSummary / applySignals 一并移除；面板见 HTML 占位注释
 
 // ===== 启动（聚合加载，降级到独立请求）=====
-var colorMap={bullish:'#EF4444',bearish:'#22C55E',watch:'#F59E0B'};
-var dirLabelMap={bullish:'看多',bearish:'看空',watch:'关注'};
 
 // 前端数据缓存（30s TTL，避免短时间内重复请求）
 var _apiCache={};
@@ -416,9 +376,6 @@ function loadDashboardFull(){
       var dd=d.data;
       if(dd.market_overview) applyMarketOverview(dd.market_overview);
       if(dd.market_volume) renderVolumeChart(dd.market_volume);
-      if(dd.dashboard_summary){
-        applyRadar(dd.dashboard_summary);
-      }
       if(dd.moneyflow_summary) renderMoneyflow(dd.moneyflow_summary);
       if(dd.sector_changes) renderSectorChart(dd.sector_changes);
       if(dd.sector_moneyflow) renderSectorMoneyflow(dd.sector_moneyflow);
@@ -428,7 +385,6 @@ function loadDashboardFull(){
       console.warn('聚合加载失败，降级到独立请求',e);
       loadMarketOverview();
       loadVolumeChart();
-      loadRadar();
       loadMoneyflow();
       loadSectorChanges();
       loadSectorMoneyflow();
@@ -439,13 +395,18 @@ function loadDashboardFull(){
 // 提取 applyMarketOverview 供聚合端点和 WebSocket 共用
 function applyMarketOverview(ov){
   if(!ov)return;
+  // 516 批次3（Q4）：指数卡/成交额实为「最近交易日盘后」数据 → 不显示「交易中」绿点，
+  // 改按「数据日」标注（后端 overview 提供 data_is_live / data_date）
+  var _live=!!ov.data_is_live;
   if(ov.market_status){
     var dot=document.getElementById('market-status-dot');
-    var isTrading=ov.market_status==='trading'||(ov.market_status.trading);
-    dot.className='status-dot '+(isTrading?'green':'gray');
-    dot.title=typeof ov.market_status==='string'?ov.market_status:(ov.market_status.status||'');
+    dot.className='status-dot '+(_live?'green':'gray');
+    dot.title=_live?'实时':('盘后 · 数据日 '+(ov.data_date||''));
   }
-  if(ov.timestamp) document.getElementById('market-update-time').textContent=ov.timestamp;
+  if(ov.timestamp){
+    var _mt=document.getElementById('market-update-time');
+    _mt.textContent=_live?ov.timestamp:('盘后 · 数据日 '+(ov.data_date||ov.timestamp));
+  }
   if(ov.total_volume!==undefined) document.getElementById('total-volume-text').textContent=(ov.total_volume/1e8).toFixed(0)+'亿';
   if(ov.total_volume_change_pct!==undefined){
     var chgEl=document.getElementById('total-volume-change');
@@ -492,36 +453,17 @@ function renderVolumeChart(vd){
   if(c&&charts.indexOf(c)<0)charts.push(c);
 }
 
-function applyRadar(rs){
-  if(!rs||!rs.radar_stocks||!rs.radar_stocks.length)return;
-  var stocks=rs.radar_stocks;
-  var track=document.getElementById('radar-track');track.innerHTML='';
-  var allCards=stocks.concat(stocks);
-  allCards.forEach(function(s){
-    var card=document.createElement('div');card.className='radar-card';
-    card.onclick=function(){location.href='indicator-ide.html?code='+s.ts_code;};
-    var dir=s.direction||'watch';
-    card.innerHTML='<div class="color-bar" style="background:'+colorMap[dir]+'"></div>'
-      +'<div class="info"><span class="stock-name">'+(s.name||'')+'</span><span class="stock-code">'+(s.ts_code||'')+'</span></div>'
-      +'<div class="score" style="color:'+colorMap[dir]+'">★'+(s.score||'--')+'</div>'
-      +'<span class="dir-tag" style="background:'+colorMap[dir]+'22;color:'+colorMap[dir]+'">'+dirLabelMap[dir]+'</span>';
-    track.appendChild(card);
-  });
-  var ut=document.querySelector('.update-tag');
-  if(ut&&rs.updated_at) ut.textContent='来自 Screener L3 · '+rs.updated_at;
-}
-
 function renderMoneyflow(md){
   if(!md||!md.days||!md.days.length)return;
   var c=_chart('chart-fund-flow');
   var days=md.days.map(function(v){return v.date||'';});
   var main=md.days.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
-  var retail=md.days.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
-  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流出'],textStyle:{color:'#CBD5E1'},top:0},grid:{left:50,right:20,bottom:20,top:40},
+  var retail=md.days.map(function(v){return +(v.retail_net_inflow||0).toFixed(1);});
+  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},legend:{data:['主力净流入','散户净流入'],textStyle:{color:'#CBD5E1'},top:0},grid:{left:50,right:20,bottom:20,top:40},
     xAxis:{type:'category',data:days,axisLabel:{color:'#94A3B8',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
     yAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
     series:[{name:'主力净流入',type:'bar',data:main,itemStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#3B82F6'},{offset:1,color:'rgba(59,130,246,0.2)'}])}},
-      {name:'散户净流出',type:'line',data:retail,smooth:true,lineStyle:{color:'#EF4444',width:1.5},symbol:'none',areaStyle:{color:'rgba(239,68,68,0.08)'}}]});
+      {name:'散户净流入',type:'line',data:retail,smooth:true,lineStyle:{color:'#EF4444',width:1.5},symbol:'none',areaStyle:{color:'rgba(239,68,68,0.08)'}}]});
   if(c&&charts.indexOf(c)<0)charts.push(c);
 }
 
