@@ -121,11 +121,14 @@ class RuleScheduler:
                     return  # 非交易时段跳过
 
                 try:
-                    from app.services.notification_service import run_evaluation
-                    result = run_evaluation(mode='intraday')
-                    if result:
-                        logger.info(f"盘中评估完成: {result.get('evaluated', 0)} 规则, "
-                                     f"{result.get('triggered', 0)} 条触发")
+                    # 514号（512 同型残留）：APScheduler 线程无 app context，须显式建上下文，
+                    # 否则 run_evaluation 内 db 访问抛 "Working outside of application context"
+                    with scheduler_manager._app.app_context():
+                        from app.services.notification_service import run_evaluation
+                        result = run_evaluation(mode='intraday')
+                        if result:
+                            logger.info(f"盘中评估完成: {result.get('evaluated', 0)} 规则, "
+                                        f"{result.get('triggered', 0)} 条触发")
                 except Exception as e:
                     logger.error(f"盘中评估异常: {e}")
 

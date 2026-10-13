@@ -200,9 +200,15 @@ function toggleSidebar(){
 <script>
 var API = '/api/v3';
 var charts=[];
+// 513 #D4：图表实例幂等获取（轮询重复渲染时复用已存在实例，避免 ECharts 重复初始化告警/泄漏）
+function _chart(domId){
+  var el=document.getElementById(domId);
+  if(!el)return null;
+  return echarts.getInstanceByDom(el)||echarts.init(el);
+}
 function drawMiniK(domId,data){
   if(!data||!data.length)return;
-  var c=echarts.init(document.getElementById(domId));
+  var c=_chart(domId);
   var dates=data.map(function(v){return v.date||v.trade_date;});
   var kd=data.map(function(v){return [+v.open,+v.close,+v.low,+v.high];});
   var minP=Math.min.apply(null,kd.map(function(v){return v[2];})), maxP=Math.max.apply(null,kd.map(function(v){return v[1];})), pad=(maxP-minP)*0.08||0.5;
@@ -248,7 +254,7 @@ function loadMoneyflow(){
   _cachedFetch(API+'/market/moneyflow-summary',120)
     .then(function(d){
       if(!d.success||!d.data||!d.data.days||!d.data.days.length)return;
-      var c=echarts.init(document.getElementById('chart-fund-flow'));
+      var c=_chart('chart-fund-flow');
       var days=d.data.days.map(function(v){return v.date||'';});
       var main=d.data.days.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
       var retail=d.data.days.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
@@ -257,7 +263,7 @@ function loadMoneyflow(){
         yAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
         series:[{name:'主力净流入',type:'bar',data:main,itemStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#3B82F6'},{offset:1,color:'rgba(59,130,246,0.2)'}])}},
           {name:'散户净流出',type:'line',data:retail,smooth:true,lineStyle:{color:'#EF4444',width:1.5},symbol:'none',areaStyle:{color:'rgba(239,68,68,0.08)'}}]});
-      charts.push(c);
+      if(c&&charts.indexOf(c)<0)charts.push(c);
     })
     .catch(function(e){console.warn('moneyflow-summary 加载失败',e);});
 }
@@ -271,13 +277,13 @@ function loadSectorChanges(){
       var outArr=(d.data.losers||[]).slice(0,5);
       var chartData=inArr.concat(outArr).sort(function(a,b){return (a.change_pct||0)-(b.change_pct||0);});
       if(chartData.length){
-        var c=echarts.init(document.getElementById('chart-sector'));
+        var c=_chart('chart-sector');
         c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:60,right:30,bottom:10,top:10},
           xAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
           yAxis:{type:'category',data:chartData.map(function(v){return v.name;}),axisLabel:{color:'#CBD5E1',fontSize:11,width:50,overflow:'truncate'},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
           series:[{type:'bar',data:chartData.map(function(v){var pct=+(v.change_pct||0).toFixed(1);return {value:pct,itemStyle:{color:pct>=0?'#EF4444':'#22C55E'}};}),barWidth:12,
             label:{show:true,position:'right',formatter:function(p){return p.value>0?'+'+p.value+'%':p.value+'%';},fontSize:11,color:'#CBD5E1'}}]});
-        charts.push(c);
+        if(c&&charts.indexOf(c)<0)charts.push(c);
       }
     })
     .catch(function(e){console.warn('sector-sector 加载失败',e);});
@@ -293,12 +299,12 @@ function loadSectorMoneyflow(){
       var outArr = (d.data.out_sectors||[]).slice(0,5);
       var chartData = inArr.concat(outArr).sort(function(a,b){return (a.net_inflow||0)-(b.net_inflow||0);});
       if(chartData.length){
-        var c=echarts.init(document.getElementById('sector-inflow-chart'));
+        var c=_chart('sector-inflow-chart');
         c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:60,right:50,bottom:10,top:5},
           xAxis:{show:false},yAxis:{type:'category',data:chartData.map(function(v){return v.name;}),axisLabel:{color:'#CBD5E1',fontSize:11,width:50,overflow:'truncate'}},
           series:[{type:'bar',data:chartData.map(function(v){var nf=+(v.net_inflow||0).toFixed(1);return {value:nf,itemStyle:{color:nf>=0?'#EF4444':'#22C55E'}};}),barWidth:10,
             label:{show:true,position:'right',formatter:function(p){return p.value>0?'+'+p.value+'亿':p.value+'亿';},fontSize:10,color:'#CBD5E1'}}]});
-        charts.push(c);
+        if(c&&charts.indexOf(c)<0)charts.push(c);
       }
       // Top5流入卡片
       if(d.data.sectors&&d.data.sectors.length){
@@ -471,7 +477,7 @@ function applyMarketOverview(ov){
       }
       if(idx.mini_kline&&idx.mini_kline.length){
         var mini=drawMiniK('mini-'+i,idx.mini_kline);
-        if(mini) charts.push(mini);
+        if(mini&&charts.indexOf(mini)<0) charts.push(mini);
       }
     });
   }
@@ -479,7 +485,7 @@ function applyMarketOverview(ov){
 
 function renderVolumeChart(vd){
   if(!vd||!vd.days||!vd.days.length)return;
-  var c=echarts.init(document.getElementById('volume-chart'));
+  var c=_chart('volume-chart');
   var data=vd.days;
   var days=data.map(function(v){return v.trade_date&&v.trade_date.slice(5)||v.date;});
   var vals=data.map(function(v){return +(v.total_amount/1e8).toFixed(0);});
@@ -493,7 +499,7 @@ function renderVolumeChart(vd){
       return chg>=0?'#EF4444':'#22C55E';
     }},barWidth:12}]
   });
-  charts.push(c);
+  if(c&&charts.indexOf(c)<0)charts.push(c);
 }
 
 function applyRadar(rs){
@@ -517,7 +523,7 @@ function applyRadar(rs){
 
 function renderMoneyflow(md){
   if(!md||!md.days||!md.days.length)return;
-  var c=echarts.init(document.getElementById('chart-fund-flow'));
+  var c=_chart('chart-fund-flow');
   var days=md.days.map(function(v){return v.date||'';});
   var main=md.days.map(function(v){return +(v.main_force_net_inflow||0).toFixed(1);});
   var retail=md.days.map(function(v){return +(v.retail_net_outflow||-(v.main_force_net_inflow||0)*0.4).toFixed(1);});
@@ -526,7 +532,7 @@ function renderMoneyflow(md){
     yAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}亿'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
     series:[{name:'主力净流入',type:'bar',data:main,itemStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#3B82F6'},{offset:1,color:'rgba(59,130,246,0.2)'}])}},
       {name:'散户净流出',type:'line',data:retail,smooth:true,lineStyle:{color:'#EF4444',width:1.5},symbol:'none',areaStyle:{color:'rgba(239,68,68,0.08)'}}]});
-  charts.push(c);
+  if(c&&charts.indexOf(c)<0)charts.push(c);
 }
 
 function renderSectorChart(sd){
@@ -535,13 +541,13 @@ function renderSectorChart(sd){
   var outArr=(sd.losers||[]).slice(0,5);
   var chartData=inArr.concat(outArr).sort(function(a,b){return (a.change_pct||0)-(b.change_pct||0);});
   if(!chartData.length)return;
-  var c=echarts.init(document.getElementById('chart-sector'));
+  var c=_chart('chart-sector');
   c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:60,right:30,bottom:10,top:10},
     xAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
     yAxis:{type:'category',data:chartData.map(function(v){return v.name;}),axisLabel:{color:'#94A3B8',fontSize:11,width:50,overflow:'truncate'},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
     series:[{type:'bar',data:chartData.map(function(v){var pct=+(v.change_pct||0).toFixed(1);return {value:pct,itemStyle:{color:pct>=0?'#EF4444':'#22C55E'}};}),barWidth:12,
       label:{show:true,position:'right',formatter:function(p){return p.value>0?'+'+p.value+'%':p.value+'%';},fontSize:11,color:'#CBD5E1'}}]});
-  charts.push(c);
+  if(c&&charts.indexOf(c)<0)charts.push(c);
 }
 
 function renderSectorMoneyflow(smd){
@@ -550,12 +556,12 @@ function renderSectorMoneyflow(smd){
   var outArr=(smd.out_sectors||[]).slice(0,5);
   var chartData=inArr.concat(outArr).sort(function(a,b){return (a.net_inflow||0)-(b.net_inflow||0);});
   if(chartData.length){
-    var c=echarts.init(document.getElementById('sector-inflow-chart'));
+    var c=_chart('sector-inflow-chart');
     c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:60,right:50,bottom:10,top:5},
       xAxis:{show:false},yAxis:{type:'category',data:chartData.map(function(v){return v.name;}),axisLabel:{color:'#94A3B8',fontSize:11,width:50,overflow:'truncate'}},
       series:[{type:'bar',data:chartData.map(function(v){var nf=+(v.net_inflow||0).toFixed(1);return {value:nf,itemStyle:{color:nf>=0?'#EF4444':'#22C55E'}};}),barWidth:10,
         label:{show:true,position:'right',formatter:function(p){return p.value>0?'+'+p.value+'亿':p.value+'亿';},fontSize:10,color:'#94A3B8'}}]});
-    charts.push(c);
+    if(c&&charts.indexOf(c)<0)charts.push(c);
   }
   if(smd.sectors&&smd.sectors.length){
     var inCont=document.getElementById('top-stock-cards');inCont.innerHTML='';
@@ -596,6 +602,9 @@ function renderSectorMoneyflow(smd){
 // 启动：优先聚合加载
 loadDashboardFull();
 
+// 513 #D4：标准双进程模式（start.command）不推送 → 前端定时轮询聚合接口刷新（30s）
+setInterval(loadDashboardFull,30000);
+
 window.addEventListener('resize',function(){charts.forEach(function(c){if(c&&c.resize)c.resize();});});
 
 // ===== WebSocket 实时推送 =====
@@ -604,6 +613,7 @@ var socket = io(wsHost,{transports:['websocket','polling'],reconnectionDelay:500
 
 socket.on('connect',function(){console.log('[WS] 已连接');});
 socket.on('disconnect',function(){console.log('[WS] 已断开');});
+// 513 #D2：后端目前无 'market:indices' 事件（指数改由 /dashboard/full 轮询刷新），保留以备后续推送
 socket.on('market:indices',function(d){
   if(!d||!d.indices)return;
   d.indices.forEach(function(idx){
@@ -618,14 +628,20 @@ socket.on('market:indices',function(d){
   });
 });
 socket.on('market:top_stocks',function(d){
-  if(!d||!d.stocks)return;
-  renderGainers(d.stocks);
+  // 513 #D2：后端载荷为 {gainers,losers}（原前端误读 d.stocks → 永不渲染）
+  var list=d&&(d.gainers||d.stocks);
+  if(!list)return;
+  renderGainers(list);
 });
 socket.on('market:sectors',function(d){
   if(!d||!d.sectors)return;
-  var c=chartCache['sector']||charts[charts.length-1];
+  // 513 #D2：后端载荷为 {sector_name,avg_change_pct}（原前端误读 name/change_pct；
+  // 且原引用未定义的 chartCache → 该 handler 一旦触发即抛 ReferenceError）
+  var items=(d.sectors||[]).slice(0,8).map(function(v){
+    return {name:v.sector_name||v.name,change_pct:(v.avg_change_pct!==undefined?v.avg_change_pct:v.change_pct)||0};
+  });
+  var c=echarts.getInstanceByDom(document.getElementById('chart-sector'));
   if(c){
-    var items=(d.sectors||[]).slice(0,8);
     c.setOption({yAxis:{data:items.map(function(v){return v.name;})},
       series:[{data:items.map(function(v){var p=+(v.change_pct||0).toFixed(1);return{value:p,itemStyle:{color:p>=0?'#EF4444':'#22C55E'}};})}]});
   }

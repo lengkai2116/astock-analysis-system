@@ -648,6 +648,26 @@ class DashboardService:
     # ──────────────────────────────────────────────
     # 8. 板块资金流向（sector-moneyflow）
     # ──────────────────────────────────────────────
+    @staticmethod
+    def _pick_latest_trade_date(date_counts) -> Optional[str]:
+        """513 #D1：从 {交易日: 记录数} 中取「最新」且记录数≥50 的交易日。
+
+        原实现取「记录数最多」者；记录数并列时 max 命中先出现的旧日期，
+        导致板块资金流向静默回退旧交易日（2026-10-13 实证：10-12 与 10-09
+        记录数并列 5573 → 返回 10-09，而源已含 10-12）。
+        """
+        valid = [d for d, c in date_counts.items() if c >= 50]
+        if not valid:
+            return None
+
+        def _key(d):
+            # 归一为可比较的 YYYYMMDD（兼容 datetime / 'YYYY-MM-DD' / 'YYYYMMDD'）
+            if hasattr(d, 'strftime'):
+                return d.strftime('%Y%m%d')
+            return ''.join(ch for ch in str(d) if ch.isdigit())[:8]
+
+        return max(valid, key=_key)
+
     def get_sector_moneyflow(self, top_n: int = 8, stocks_per_sector: int = 3) -> Optional[Dict]:
         """行业板块资金流向 + 个股Top3（DuckDB 缓存 → Tushare 备选回退）"""
         # ── 代理环境变量免疫（与 tushare_provider.py 同步） ──────────
@@ -700,8 +720,9 @@ class DashboardService:
 
             from collections import Counter
             date_counts = Counter(r.get('trade_date', '') for r in records)
-            best_date = max(date_counts, key=lambda d: date_counts[d]) if date_counts else None
-            if not best_date or date_counts.get(best_date, 0) < 50:
+            # 513 #D1：取「最新」有足够数据的交易日（原按记录数最多，并列时静默回退旧日）
+            best_date = self._pick_latest_trade_date(date_counts)
+            if not best_date:
                 logger.warning(f"板块资金流向: 无足够数据的交易日 ({date_counts})")
                 return None
 
