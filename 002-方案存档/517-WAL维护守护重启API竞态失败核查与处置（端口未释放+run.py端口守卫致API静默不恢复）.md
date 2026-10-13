@@ -75,6 +75,7 @@
 - **测试**：新增 `backend/tests/test_517_wal_guardian_restart.py`（2 用例：①`_port_bindable` LISTEN 占用/释放语义；②`start_processes` 含「等端口 + health 校验 + 成功日志仅在确认后」）。
 
 **验证**：`py_compile` OK；`ruff` **All checks passed**；定向 `test_517_wal_guardian_restart` **2 passed**。
+**实机验证（等价 stop→start，2026-10-13 19:06）**：停 API（PID 34043）→ 调**新** `start_processes()` → **自动恢复**：输出 `API 已重启（health 校验通过）`、`curl health` **200**（新 API PID 35214）、`data/logs/api.log` 记录**正常启动**（`Running on ...` + werkzeug 200），**不再出现**旧「端口 5001 已被占用」。⇒ 原「静默不恢复」场景**已闭环**；WAL 守护已重启加载（新 PID 35146）。
 
 **生效前置**：WAL 守护（`wal_maintenance.py --daemon`，核查时 PID 4134）为**长驻进程**，**需重启守护**方加载本修复。
 
