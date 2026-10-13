@@ -256,6 +256,7 @@ _jud_meta_cache = {}  # 371号JUD接入：{ts_code: enriched_meta_dict} 供 tree
 _market_stats_cache = {}  # 411号Phase 10：全市场级统计预计算，供BociasiQuadrantAnalyzer消费
 _market_stats_last_done_date = None  # 506号 F3：market_stats 当日节流（成功落库的目标交易日）
 _account_risk_app = None  # 2026-09-29 OCR #3：账户风险钩子复用 Flask app（原每 10 分钟重建）
+_dim8_app = None  # 515号：SIG 预计算 dim8 归集复用 Flask app（无 context 会静默丢「板块定位句」）
 _ic_recalc_check_date = None  # 2026-09-29 OCR #5：IC 重估检查按日节流（原每 30s tick 读 2 个 JSON）
 
 # 425号 C-1：写入优先级状态机（HIGH > NORMAL > LOW）
@@ -7340,8 +7341,16 @@ def _precompute_strategy_signals(codes):
                 seven_dim = None
                 if dim_results:
                     try:
+                        global _dim8_app
                         from app.opportunity_atlas.status_engine import build_seven_dim_from_dim_results
-                        seven_dim = build_seven_dim_from_dim_results(dim_results, tags=_tags, ts_code=ts_code)
+                        # 515号：dim8 归集内部经 _sector_position_sentence→DataManager.get_stock_industry
+                        # 访问 ORM；本函数在无 app context 路径执行 → 抛错被吞 → 全市场「板块定位句」
+                        # 丢失（2026-10-13 实证 5557 条）。显式建 context（复用模块级缓存 app）。
+                        if _dim8_app is None:
+                            from app import create_app
+                            _dim8_app = create_app()
+                        with _dim8_app.app_context():
+                            seven_dim = build_seven_dim_from_dim_results(dim_results, tags=_tags, ts_code=ts_code)
                     except Exception:
                         seven_dim = None
                 rows.append((ts_code, rd.get('trade_date', datetime.now().strftime('%Y-%m-%d')),

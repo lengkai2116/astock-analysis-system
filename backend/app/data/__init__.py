@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -350,17 +351,52 @@ class DataManager:
         stocks = query.limit(limit).all()
         return [s.to_dict() for s in stocks]
 
+    # 515号：无 Flask app context 时的行业映射缓存（raw sqlite 一次性读 app.db）
+    _industry_ctxfree_map = None
+
     def get_stock_industry(self, ts_code: str) -> str | None:
         """通过 DataManager 返回股票行业分类（申万一级），符合 Red Line 5"""
-        stock = db.session.query(Stock).filter(Stock.ts_code == ts_code).first()
-        return stock.industry if stock else None
+        try:
+            stock = db.session.query(Stock).filter(Stock.ts_code == ts_code).first()
+            return stock.industry if stock else None
+        except RuntimeError:
+            # 515号：无 app context 的线程（daemon SIG 预计算 → dim8 归集）ORM 不可用，
+            # 兜底 raw sqlite 读 app.db 的 stocks.industry（只读、语义等价）。
+            return self._get_stock_industry_ctxfree(ts_code)
+
+    @staticmethod
+    def _get_stock_industry_ctxfree(ts_code: str) -> str | None:
+        """515号：不依赖 Flask app context 的行业读取（raw sqlite 读 app.db，进程内懒缓存）。"""
+        if DataManager._industry_ctxfree_map is None:
+            _m: Dict[str, str] = {}
+            try:
+                import sqlite3
+
+                from app.config import Config
+                db_path = os.path.join(Config.DATA_DIR, 'app.db')
+                con = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
+                try:
+                    for code, ind in con.execute(
+                        "SELECT ts_code, industry FROM stocks WHERE industry IS NOT NULL"
+                    ):
+                        _m[code] = ind
+                finally:
+                    con.close()
+            except Exception as e:
+                logger.warning(f"515: context-free 行业映射读取失败: {e}")
+            DataManager._industry_ctxfree_map = _m
+        return DataManager._industry_ctxfree_map.get(ts_code)
 
     def get_stock_industry_batch(self, ts_codes: list[str]) -> dict[str, str | None]:
         """批量查询行业分类，减少 ORM 查询次数"""
-        stocks = db.session.query(Stock.ts_code, Stock.industry).filter(
-            Stock.ts_code.in_(ts_codes)
-        ).all()
-        return {s.ts_code: s.industry for s in stocks}
+        try:
+            stocks = db.session.query(Stock.ts_code, Stock.industry).filter(
+                Stock.ts_code.in_(ts_codes)
+            ).all()
+            return {s.ts_code: s.industry for s in stocks}
+        except RuntimeError:
+            # 515号：无 app context → 兜底 context-free 映射（同 get_stock_industry）
+            return {c: self._get_stock_industry_ctxfree(c) for c in ts_codes}
 
     # ── Treemap 快照（305号§2.2） ──
 
