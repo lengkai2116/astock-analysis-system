@@ -176,8 +176,41 @@ def api_running() -> bool:
     return len(_find_processes('run.py')) > 0
 
 
+def _port_bindable(port: int) -> bool:
+    """517 批次1（Q1-A）：与 `run.py._port_in_use` **同语义**的裸 bind 探测（True=可绑/已释放）。
+
+    本探测**不加 `SO_REUSEADDR`**，与 run.py 的端口守卫保持同一语义——
+    只要此处可绑，run.py 的守卫就必然放行（避免 TIME_WAIT 残留造成的竞态拒绝）。
+    """
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(('127.0.0.1', port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def _api_healthy(port: int, timeout: float = 2.0) -> bool:
+    """517 批次1（Q3-A）：回环探测 API `/api/v3/health/live`。"""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+            f'http://127.0.0.1:{port}/api/v3/health/live', timeout=timeout
+        ) as r:
+            return 200 <= getattr(r, 'status', 200) < 300
+    except Exception:
+        return False
+
+
 def start_processes() -> None:
-    """重启 daemon + API（与 start.command 一致）"""
+    """重启 daemon + API（与 start.command 一致）
+
+    517 批次1（Q1-A + Q3-A）：起 API 前**轮询等端口可绑**（与 run.py 守卫同语义，≤40s）；
+    起后**回环 health 校验**（≤15s），未过则重试一次；「API 已重启」**仅在健康确认后**记录。
+    """
     env = dict(os.environ)
     env['DATA_DAEMON_RUNNING'] = '1'
     # daemon 不直接拉起——看守 start_daemon.sh（若在）10s 内自动恢复；
@@ -195,15 +228,28 @@ def start_processes() -> None:
             )
             logger.info("daemon 已重启（无看守）")
     api_log = open(DATA_DIR / 'logs' / 'api.log', 'a', encoding='utf-8')
-    subprocess.Popen(
-        [str(VENV_PYTHON), 'run.py', '--port', '5001'],
-        cwd=str(BACKEND_DIR),
-        env=env,
-        stdout=api_log,
-        stderr=api_log,
-        start_new_session=True,
-    )
-    logger.info("API 已重启")
+    for attempt in (1, 2):
+        # Q1-A：等端口真正可绑（与 run.py 守卫同语义），避免 TIME_WAIT 残留致守卫误拒
+        for _ in range(40):
+            if _port_bindable(5001):
+                break
+            time.sleep(1)
+        subprocess.Popen(
+            [str(VENV_PYTHON), 'run.py', '--port', '5001'],
+            cwd=str(BACKEND_DIR),
+            env=env,
+            stdout=api_log,
+            stderr=api_log,
+            start_new_session=True,
+        )
+        # Q3-A：起后回环 health 校验（≤15s）
+        for _ in range(15):
+            if _api_healthy(5001):
+                logger.info("API 已重启（health 校验通过）")
+                return
+            time.sleep(1)
+        logger.warning(f"API 启动第 {attempt} 次未通过 health 校验（端口 5001 未就绪）")
+    logger.error("API 重启失败：健康校验两次均未通过，需人工介入")
 
 
 def shrink_wal() -> bool:
