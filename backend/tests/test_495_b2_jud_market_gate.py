@@ -41,7 +41,8 @@ def _load_sample():
     """读最近交易日 dim_results_json 并等间隔抽样；无数据/库不可用返回 (None, 交易日)"""
     try:
         rows = sharding_manager.execute_query(
-            'strategy_signal_detail', 'SELECT MAX(trade_date) FROM strategy_signal_detail', [])
+            'strategy_signal_detail',
+            'SELECT MAX(trade_date) FROM strategy_signal_detail WHERE dim_results_json IS NOT NULL', [])
         trade_date = str(rows[0][0]) if rows and rows[0][0] else ''
         if not trade_date:
             return None, ''

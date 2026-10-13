@@ -24,7 +24,8 @@ def main():
     # 最新交易日全市场抽样
     rows = conn.execute(
         "SELECT ts_code, dim_results_json FROM strategy_signal_detail"
-        " WHERE trade_date = (SELECT MAX(trade_date) FROM strategy_signal_detail)"
+        " WHERE trade_date = (SELECT MAX(trade_date) FROM strategy_signal_detail"
+        " WHERE dim_results_json IS NOT NULL)"
         " AND dim_results_json IS NOT NULL LIMIT ?",
         (SAMPLE,)).fetchall()
     conn.close()

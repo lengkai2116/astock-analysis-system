@@ -16,6 +16,7 @@ def get_real_stocks():
         "SELECT ts_code, dim_results_json FROM strategy_signal_detail "
         "WHERE dim_results_json IS NOT NULL AND trade_date = ("
         "  SELECT MAX(trade_date) FROM strategy_signal_detail"
+        "  WHERE dim_results_json IS NOT NULL"
         ") LIMIT 5"
     ).fetchall()
     return [(r[0], json.loads(r[1]) if r[1] else {}) for r in rows]

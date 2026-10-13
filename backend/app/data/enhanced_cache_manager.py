@@ -2701,6 +2701,12 @@ class EnhancedCacheManager:
 
         421号R4a：改走 sharding_manager 写 snapshot_cache.db 分库
         （对齐 357 号分库标准，消除主库残留副本双写）。
+
+        519号：写语义由 INSERT OR REPLACE 改为 UPSERT（ON CONFLICT DO UPDATE）——
+        本方法只提供 SIG 列（signal_json/schema_version/cached_at），
+        OR REPLACE 的「删旧行+插新行」语义会把同键的 seven_dim_json/dim_results_json
+        回置 NULL；单只预计算（precompute_strategy）在日终产物已落库后触发即抹掉。
+        UPSERT 只更新 SIG 列，保留既有 JUD/七维产物。
         """
         import json as _json
         trade_date = result_dict.get('trade_date', datetime.now().strftime('%Y%m%d'))
@@ -2709,9 +2715,13 @@ class EnhancedCacheManager:
             from app.data.sharding_manager import sharding_manager
             sharding_manager.execute_batch_insert(
                 'strategy_signal_detail',
-                "INSERT OR REPLACE INTO strategy_signal_detail "
+                "INSERT INTO strategy_signal_detail "
                 "(ts_code, trade_date, signal_json, schema_version, cached_at) "
-                "VALUES (?, ?, ?, 1, datetime('now','localtime'))",
+                "VALUES (?, ?, ?, 1, datetime('now','localtime')) "
+                "ON CONFLICT(ts_code, trade_date) DO UPDATE SET "
+                "signal_json=excluded.signal_json, "
+                "schema_version=excluded.schema_version, "
+                "cached_at=excluded.cached_at",
                 [(ts_code, trade_date, signal_json)]
             )
         except Exception as e:

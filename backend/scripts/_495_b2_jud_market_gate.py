@@ -60,7 +60,7 @@ _POSITIVE_BARS = {'strong_confirm', 'trend_confirm', 'light_confirm'}
 def _latest_trade_date() -> str:
     rows = sharding_manager.execute_query(
         'strategy_signal_detail',
-        'SELECT MAX(trade_date) FROM strategy_signal_detail', [])
+        'SELECT MAX(trade_date) FROM strategy_signal_detail WHERE dim_results_json IS NOT NULL', [])
     return str(rows[0][0]) if rows and rows[0][0] else ''
 
 
