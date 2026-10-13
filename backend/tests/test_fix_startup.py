@@ -110,6 +110,8 @@ def test_run_py_has_single_instance_guard():
 
     修复前：run.py 无检查，launchctl 通道可起第二个 API（无单实例保护）。
     修复后：_port_in_use() 在启动前 bind 探测，已占用则 SystemExit(1)。
+    517 批次2（Q2）：探测改为「SO_REUSEADDR + 探服务端实际绑定地址 0.0.0.0」，
+    故此处监听地址须与之一致（0.0.0.0），方可验证真实 LISTEN 被判占用。
     """
     import run as run_mod
     assert hasattr(run_mod, '_port_in_use'), "run.py 必须提供 _port_in_use() 单实例检测"
@@ -117,14 +119,14 @@ def test_run_py_has_single_instance_guard():
     # 空闲端口应返回 False
     import socket
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    probe.bind(('127.0.0.1', 0))
+    probe.bind(('0.0.0.0', 0))
     free_port = probe.getsockname()[1]
     probe.close()
     assert run_mod._port_in_use(free_port) is False, "空闲端口应返回 False"
 
     # 已占用端口应返回 True
     occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    occupied.bind(('127.0.0.1', 0))
+    occupied.bind(('0.0.0.0', 0))
     occupied_port = occupied.getsockname()[1]
     occupied.listen(1)
     assert run_mod._port_in_use(occupied_port) is True, "已占用端口应返回 True"

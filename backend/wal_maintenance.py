@@ -177,15 +177,17 @@ def api_running() -> bool:
 
 
 def _port_bindable(port: int) -> bool:
-    """517 批次1（Q1-A）：与 `run.py._port_in_use` **同语义**的裸 bind 探测（True=可绑/已释放）。
+    """517 批次1（Q1-A）+ 批次2（Q2）：与 `run.py._port_in_use` **同语义**的 bind 探测（True=可绑/已释放）。
 
-    本探测**不加 `SO_REUSEADDR`**，与 run.py 的端口守卫保持同一语义——
-    只要此处可绑，run.py 的守卫就必然放行（避免 TIME_WAIT 残留造成的竞态拒绝）。
+    与 run.py 守卫**完全对齐**：设 `SO_REUSEADDR` 且探服务端实际绑定地址 `0.0.0.0`。
+    仅当存在「真实 LISTEN」时判不可绑；TIME_WAIT 残留不再阻塞（旧裸 bind 会等 TIME_WAIT，
+    拉长 API 停机窗口）。不变量保持：此处可绑 ⇒ run.py 守卫必放行。
     """
     import socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        s.bind(('127.0.0.1', port))
+        s.bind(('0.0.0.0', port))
         return True
     except OSError:
         return False

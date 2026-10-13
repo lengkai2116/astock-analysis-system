@@ -18,11 +18,20 @@ def _port_in_use(port: int) -> bool:
 
     防 launchctl/手动/start.command 多通道重复启动产生双 API 进程
     （双 API 会共享同一 SQLite WAL，加剧写锁竞争与连接池耗尽）。
+
+    517 批次2（Q2，2026-10-13）：设 `SO_REUSEADDR` 并探**服务端实际绑定地址
+    `0.0.0.0`**（与下方 `socketio.run(host="0.0.0.0")` 一致）。二者缺一不可：
+    - 探测地址必须与服务器绑定地址一致——曾探 `127.0.0.1` 而服务器绑 `0.0.0.0`，
+      加 `SO_REUSEADDR` 后会漏判正在运行的 API（守卫失效）。
+    - 加 `SO_REUSEADDR` 后，仅「真实 LISTEN」判占用；刚停旧 API 时残留的
+      **TIME_WAIT** 不再被误判为占用（旧实现裸 bind 会把 TIME_WAIT 误当占用，
+      致 WAL 守护停后即时重启时守卫误拒、API 静默不恢复）。
     """
     import socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        s.bind(('127.0.0.1', port))
+        s.bind(('0.0.0.0', port))
         return False
     except OSError:
         return True
