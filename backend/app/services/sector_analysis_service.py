@@ -87,16 +87,23 @@ class SectorAnalysisService:
             return 'NEUTRAL'
 
     def _get_sector_moneyflow_rank(self, dm, industry_name: str) -> dict:
-        """获取板块资金流向排名"""
+        """获取板块资金流向排名。
+
+        516 处置（登记项）：原实现把 `get_sector_moneyflow` 返回当 list 迭代并读
+        `sector_name`/`net_amount`（实际返回 dict：{'sectors','out_sectors'}，项键 `name`/`net_inflow`）
+        → 恒抛 AttributeError 被 except 吞、rank/net 恒 0。改为按真实契约合并流入/流出按净额降序排名。
+        """
         try:
             from app.services.dashboard_service import DashboardService
             svc = DashboardService()
-            sectors = svc.get_sector_moneyflow(top_n=31, stocks_per_sector=1)
+            data = svc.get_sector_moneyflow(top_n=31, stocks_per_sector=1) or {}
+            sectors = list(data.get('sectors') or []) + list(data.get('out_sectors') or [])
+            sectors.sort(key=lambda s: (s.get('net_inflow') or 0), reverse=True)
             for i, s in enumerate(sectors, 1):
-                if s.get('sector_name') == industry_name:
-                    return {'rank': i, 'net_amount': s.get('net_amount', 0)}
-        except Exception:
-            pass
+                if s.get('name') == industry_name:
+                    return {'rank': i, 'net_amount': s.get('net_inflow', 0)}
+        except Exception as _e:
+            logger.debug("板块资金排名失败 (%s): %s", industry_name, _e)
         return {'rank': 0, 'net_amount': 0}
 
     def _get_top_stocks_in_sector(self, dm, industry_name: str, top_n: int = 3) -> list[dict]:

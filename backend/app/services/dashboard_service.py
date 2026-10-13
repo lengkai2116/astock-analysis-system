@@ -982,7 +982,7 @@ class DashboardService:
             'updated_at': datetime.now().strftime('%Y-%m-%d'),
             'source': 'DuckDB moneyflow_cache 聚合',
             'sectors': inflow[:top_n],
-            'out_sectors': outflow[:5],
+            'out_sectors': outflow[:top_n],
         }
 
 
