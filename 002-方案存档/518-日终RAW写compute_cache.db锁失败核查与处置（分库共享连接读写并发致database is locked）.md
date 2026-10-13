@@ -1,6 +1,6 @@
 # 518号｜10-13 日终 RAW 写 compute_cache.db 全量锁失败核查与处置（分库共享连接读写并发疑似根因）
 
-> **版本**：v1.1（2026-10-13 只读核查 + 20:47 维护重启后**必现复发**确认；待拍板 Q1~Q4）
+> **版本**：v1.2（2026-10-13 只读核查 + 必现复发确认 + **Q1=A/Q2=A 实施并实机验证 + Q4=A EOD 重跑**）
 > **性质**：数据管道阻塞（RAW-1/RAW-3 写 `compute_cache.db` 全量失败 → 10-13 EOD 不推进 → 快照停 10-12 → 全量回归 2 项快照测试失败）
 > **触发**：2026-10-13 全量回归复核时发现 `data_daemon.log` 大量 `compute_cache.db ... database is locked`
 > **关联**：517（WAL 维护重启，时间相邻但根因不同）；511（总库写锁，同为锁议题、库不同）；499/510（分库读路径）
@@ -76,6 +76,22 @@
 
 - **517 修复野外验证通过**：该周期重启后 API 恢复（`health 校验通过`）⇒ 517 号原「停后即时重启 API 静默不恢复」在**真实维护周期**下闭环（详见 517 档 §十）。
 - **本号问题与 517 无关且必现**：daemon（42179）重入 RAW 后锁错照旧（§一末、§四-3）。
+
+## 七、实施记录（Q1=A + Q2=A + Q4=A，2026-10-13）
+
+**拍板**：Q1=A（分库读写分离）／Q2=A（通用读 helper 改独立只读连接）／Q4=A（修复后重跑 10-13 EOD）；Q3 由 §一 末「必现复发」回答。**范围**＝仅**通用读 helper**（用户拍板 A）。
+
+- **`sharding_manager.py`**：新增 `get_read_connection(db_name)`（每分库一条**独立只读连接**，PRAGMA 对齐 WAL/synchronous/busy_timeout/cache_size/temp_store；`_read_conn_lock` 保护建连）；**通用读 helper 改走它**——`execute_query`、`table_exists`、`get_table_row_count`、`list_unmapped_tables`；`close_all` 纳入读连接清理。写路径（`execute_batch_insert`/`execute_insert`/`create_table`/`_exec_shard`）与库级 RLock **不变**。
+- **`enhanced_cache_manager.py`**：`_query_shard`（分库路由读：`get_cached_factor(s)`/`get_indicators_wide` 等）改走 `get_read_connection`。
+- **`data_daemon.py`（实施中发现、同属通用读 helper，一并补入）**：`_shard_query_df`、`_shard_fetchall`、`_query_table` 改走 `get_read_connection`——其中 `_shard_fetchall('factor_cache', …)`（RAW-3 断点续算，`:3059`）正是与 `factor_cache` 写**同连接并发**的读方（**首轮仅改 sharding/ECM 时锁错未消；补此三处后闭环**）。
+- **测试**：新增 `backend/tests/test_518_shard_rw_separation.py`（5 用例：读/写连接**不同对象** + 缓存复用、`execute_query`/`table_exists`/`get_table_row_count`/`list_unmapped_tables`/ECM `_query_shard` 均走读连接、读写分离后行为一致）。
+
+**验证**：
+- `py_compile` OK；`ruff` `sharding_manager.py`/`test_518` **All checks passed**；`data_daemon.py` 基线 40 errors **零新增**（`enhanced_cache_manager.py` 3 处 `E702` 在 1724-1728，属改动前既有）。
+- 定向回归 **36 passed, 6 skipped**。
+- **Q4=A 实机验证**：停 daemon → 重启加载新代码（PID **44948**）→ 重入 RAW（21:17:32 主循环、21:18:06 RAW-3 断点续算）→ **`compute_cache.db` 锁错新增 = 0、`分库写入失败` 新增 = 0**（21:16:29→21:21:10，覆盖 RAW 进入 + ~96s；**修复前同类窗口 4s 内即刷屏**）⇒ **原「必现复发」闭环**。
+
+**遗留**：10-13 EOD 全管道（RAW→SIG→JUD→OUT）仍在跑，需数小时完成；完成后 `treemap_snapshot` 刷新至 10-13，全量回归那 2 项快照测试应转绿。
 
 ## 附：核对命令（只读）
 
