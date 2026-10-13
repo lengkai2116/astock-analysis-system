@@ -58,7 +58,8 @@
 - **定向测试** `backend/tests/test_514_intraday_eval_app_context.py`（1 passed）：以 `MagicMock` 承接 `add_interval_job` 捕获任务体，注入真实 `Flask(__name__)` 为 `_app`，monkeypatch `is_trading_time`→True 与 `run_evaluation`（内部访问 `current_app._get_current_object()`）→ 任务体执行成功且 `current_app` 即注入的 app ⇒ 证明已在 app context 内运行。
 - `py_compile` 通过；`ruff` 无新增（本号未做全量回归）。
 - 与 513 号定向测试合跑：**6 passed**。
-- **实机确认（待观察）**：`DATA_DAEMON_RUNNING=1` 重启 API 后，交易时段 `notification_intraday_eval_15m` 不再报 `Working outside of application context`（下次触发为 15 分钟间隔）。
+- **实机确认 ✅（2026-10-13 重启后，双进程）**：API tick `app.log 10:46:24`、daemon tick `data_daemon.log 10:58:46,566`（`app.log` 有 10:58:46 镜像）均输出 `盘中评估完成: 0 规则, 0 条触发`，**两进程均无** `Working outside of application context`（`app.log 10:21:22` 那条系重启前旧 API 实例）⇒ 514 修复在 **API + daemon 均生效**。（「0 规则/0 触发」＝当前无生效中的通知规则，属正常。）
+- **附带发现（登记，本号未处置）**：daemon 日志另有**不同源**的同名报错 `dim8 板块定位句构建失败 [xxxxxx.BJ]: Working outside of application context`（WARNING 级，末次 09:19:22 于旧 daemon；属 dim8 板块定位句构建路径，与 #R2 无关，新 daemon 暂未复现，另行确认是否开号）。
 
 ## 五、约定继承
 
