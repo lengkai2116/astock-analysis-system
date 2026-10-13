@@ -2053,7 +2053,7 @@ def _query_table(table: str, sql: str, params=None):
         from app.data.sharding_manager import sharding_manager
         db_name = sharding_manager.get_db_for_table(table)
         if db_name:
-            conn = sharding_manager.get_connection(db_name)
+            conn = sharding_manager.get_read_connection(db_name)  # 518号：读走独立只读连接
             if params:
                 return conn.execute(sql, params).fetchone()[0]
             else:
@@ -2081,7 +2081,7 @@ def _shard_query_df(table: str, sql: str, params=None):
     from app.data.sharding_manager import sharding_manager
     db_name = sharding_manager.get_db_for_table(table)
     if db_name:
-        conn = sharding_manager.get_connection(db_name)
+        conn = sharding_manager.get_read_connection(db_name)  # 518号：读走独立只读连接
         return _pd.read_sql(sql, conn, params=params)
     return _pd.read_sql(sql, _ecm.read_conn, params=params)
 
@@ -2091,7 +2091,7 @@ def _shard_fetchall(table: str, sql: str, params=None):
     from app.data.sharding_manager import sharding_manager
     db_name = sharding_manager.get_db_for_table(table)
     if db_name:
-        conn = sharding_manager.get_connection(db_name)
+        conn = sharding_manager.get_read_connection(db_name)  # 518号：读走独立只读连接
         return conn.execute(sql, params or []).fetchall()
     return _ecm.read_conn.execute(sql, params or []).fetchall()
 

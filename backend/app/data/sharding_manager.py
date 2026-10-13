@@ -76,6 +76,11 @@ class ShardingManager:
         # 500号#4：写锁缓存「检查-建锁」加锁（原非原子，两线程首次并发各建一把 RLock、
         # 后者覆盖前者 → 同一分库的写不再互斥）
         self._write_locks_lock = threading.Lock()
+        # 518号 Q1/Q2：分库**只读**连接缓存——与写连接 self._connections 分离，
+        # 杜绝「同一连接被读（execute_query/_query_shard）与写（execute_batch_insert）
+        # 并发使用」导致的 database is locked / another row available。
+        self._read_connections: Dict[str, sqlite3.Connection] = {}
+        self._read_conn_lock = threading.Lock()
 
         # 表到数据库的映射（356号方案定稿）；值为 None 表示显式总库表
         self._table_to_db: Dict[str, Optional[str]] = {
@@ -201,6 +206,39 @@ class ShardingManager:
 
         return self._connections[db_name]
 
+    def get_read_connection(self, db_name: str) -> sqlite3.Connection:
+        """获取分库**只读**连接（518号 Q1/Q2：分库读写分离）
+
+        与写连接 `get_connection` **分离**（每分库各一条），供读路径
+        （`execute_query`、ECM `_query_shard`、`table_exists` 等）使用——杜绝
+        「同一连接被读与写（`execute_batch_insert`，持库级 RLock）并发使用」：
+        该并发会使写升级/游标冲突**立即**抛 `database is locked` /
+        `another row available`（`busy_timeout` 对「连接自身」冲突不生效）。
+        读连接不参与写锁（`_write_locks`），仅用于查询（WAL 下读者不阻塞写者）。
+        """
+        if db_name not in self._read_connections:
+            with self._read_conn_lock:
+                if db_name not in self._read_connections:
+                    db_path = os.path.join(self.db_dir, db_name)
+                    conn = sqlite3.connect(db_path, check_same_thread=False)
+                    try:
+                        conn.execute("PRAGMA journal_mode=WAL")
+                        conn.execute("PRAGMA synchronous=NORMAL")
+                        conn.execute("PRAGMA busy_timeout=30000")
+                        pr = _DB_PRAGMAS.get(db_name, {'cache_size': -8192, 'journal_size_limit': 8388608})
+                        conn.execute(f"PRAGMA cache_size={pr['cache_size']}")
+                        conn.execute("PRAGMA temp_store=MEMORY")
+                    except Exception:
+                        # 对齐 500号#5：初始化失败时关闭连接、不入缓存（下次访问重建）
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        raise
+                    self._read_connections[db_name] = conn
+
+        return self._read_connections[db_name]
+
     def _ensure_snapshot_indexes(self, conn: sqlite3.Connection):
         """424号 P2-1：为 snapshot_cache.db 高频查询表补索引（356号 §3.2.5）
 
@@ -281,7 +319,7 @@ class ShardingManager:
         unmapped = set()
         for db_name in self.get_all_db_names():
             try:
-                conn = self.get_connection(db_name)
+                conn = self.get_read_connection(db_name)  # 518号：读走独立只读连接
                 rows = conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' "
                     "AND name NOT LIKE 'sqlite_%'").fetchall()
@@ -310,7 +348,7 @@ class ShardingManager:
             if not self.is_registered(table_name):
                 _warn_unmapped(table_name, 'execute_query')
             return []  # 表在总库，分库管理器不处理
-        conn = self.get_connection(db_name)
+        conn = self.get_read_connection(db_name)  # 518号：读走独立只读连接
         cursor = conn.cursor()
         if params:
             cursor.execute(sql, params)
@@ -375,7 +413,7 @@ class ShardingManager:
             if not self.is_registered(table_name):
                 _warn_unmapped(table_name, 'table_exists')
             return False  # 表在总库，分库管理器不处理
-        conn = self.get_connection(db_name)
+        conn = self.get_read_connection(db_name)  # 518号：读走独立只读连接
         cursor = conn.cursor()
         cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -397,7 +435,7 @@ class ShardingManager:
         db_name = self.get_db_for_table(table_name)
         if db_name is None:
             return 0  # 表在总库，分库管理器不处理
-        conn = self.get_connection(db_name)
+        conn = self.get_read_connection(db_name)  # 518号：读走独立只读连接
         cursor = conn.cursor()
         cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
         return cursor.fetchone()[0]
@@ -414,13 +452,19 @@ class ShardingManager:
         return sorted(dbs)
 
     def close_all(self):
-        """关闭所有连接"""
+        """关闭所有连接（518号：含只读连接）"""
         for conn in self._connections.values():
             try:
                 conn.close()
             except Exception:
                 pass
         self._connections.clear()
+        for conn in self._read_connections.values():
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._read_connections.clear()
         self._write_locks.clear()
 
 

@@ -540,7 +540,7 @@ class EnhancedCacheManager:
 
         if db_name:
             try:
-                conn = sharding_manager.get_connection(db_name)
+                conn = sharding_manager.get_read_connection(db_name)  # 518号：读走独立只读连接
                 return pd.read_sql(sql, conn, params=params)
             except Exception as e:
                 logger.warning(f"分库查询失败: {table} on {db_name}: {e}")
