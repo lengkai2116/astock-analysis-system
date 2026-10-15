@@ -521,25 +521,29 @@ def _collect_lhb_and_news():
         logger.warning(f"[lhb_detail] 采集失败: {e}")
 
     # 新闻（用标题hash去重）
+    # 521号 O3：原 ak.stock_news_em() 库内正则 bug（akshare/news/news_stock.py
+    # `.str.replace(r"\u3000",...)` 与 pyarrow 20 不兼容）→ 必现失败；换用
+    # stock_info_global_em（全市场财经快讯，200 行，列=标题/摘要/发布时间/链接，
+    # 实证可用；无个股 ts_code → 全市场新闻消费方忽略个股维度即可）
     try:
-        df = ak.stock_news_em()
+        df = ak.stock_info_global_em()
         if df is not None and not df.empty:
             records = []
             seen_ids = set()
             import hashlib
             for _, row in df.iterrows():
-                title = str(row.get('新闻标题', ''))
+                title = str(row.get('标题', ''))
                 h = int(hashlib.md5(title.encode('utf-8'), usedforsecurity=False).hexdigest()[:8], 16)
                 if h in seen_ids:
                     continue
                 seen_ids.add(h)
                 records.append({
                     'id': h,
-                    'ts_code': str(row.get('股票代码', '') or ''),
+                    'ts_code': '',
                     'title': title,
-                    'content': str(row.get('新闻内容', '') or ''),
+                    'content': str(row.get('摘要', '') or ''),
                     'publish_time': str(row.get('发布时间', '') or ''),
-                    'source': str(row.get('文章来源', '') or 'akshare'),
+                    'source': str(row.get('链接', '') or 'akshare'),
                 })
             mem_store.update_news(records)
             # 424号§10决策①：as_news 废弃，停写（新闻走内存即可）

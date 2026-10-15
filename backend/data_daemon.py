@@ -2620,6 +2620,9 @@ def _check_data_timeliness():
             logger.debug(f"  {label}时效性检查失败: {e}")
 
     # 背景数据时效性检查（滞后不超过30天）
+    # 521号 O2：财务表无 trade_date 列（列为 end_date/ann_date），原 MAX(trade_date)
+    # 恒报 no such column → 4 项检查形同虚设；改按公告日 ann_date（数据新鲜度口径，
+    # 报告期 end_date 天然滞后季报周期，用公告日判定时效更贴合发布语义）
     background_tables = [
         ('fina_indicator_cache', '财务指标'),
         ('income_cache', '利润表'),
@@ -2629,7 +2632,7 @@ def _check_data_timeliness():
 
     for table, label in background_tables:
         try:
-            latest = _query_table(table, f"SELECT MAX(trade_date) FROM {table}")
+            latest = _query_table(table, f"SELECT MAX(ann_date) FROM {table}")
             if latest:
                 latest_date = datetime.strptime(str(latest), '%Y-%m-%d') if isinstance(latest, str) else latest
                 days_lag = (today - latest_date).days
