@@ -494,6 +494,9 @@ class EnhancedCacheManager:
         """417号方案规则6：离群值检测（仅 K 线类表）
 
         - 单日涨跌幅 |pct_chg| > 50% → 剔除（A股单日涨跌幅上限 20%/30%，>50% 必为脏数据）
+        - 521号 O1：豁免「上市前 5 个交易日」的新股（注册制创业板/科创板/北交所上市
+          前 5 个交易日无涨跌幅限制，首日 pct_chg 可远超 50%——如 301660.SZ 10-13 首日
+          +223%、920157.BJ 10-09 首日 +449%，属真实行情非脏数据）
         - 剔除记录时输出告警（ts_code + trade_date），便于审计
         """
         if df.empty:
@@ -503,15 +506,92 @@ class EnhancedCacheManager:
                 pct = pd.to_numeric(df['pct_chg'], errors='coerce')
                 outlier_mask = pct.abs() > 50
                 if outlier_mask.any():
-                    for _, r in df[outlier_mask].iterrows():
-                        logger.warning(
-                            f"[COL清洗] {r.get('ts_code', '?')} {r.get('trade_date', '?')} "
-                            f"pct_chg={r.get('pct_chg')} 超限(>50%)，剔除"
-                        )
-                    df = df[~outlier_mask]
+                    # 521号 O1：豁免上市前 5 个交易日内的新股（list_date 起 5 个交易日窗口）
+                    exempt_mask = pd.Series(False, index=df.index)
+                    if 'ts_code' in df.columns and 'trade_date' in df.columns:
+                        for i in df[outlier_mask].index:
+                            if self._is_within_first5_trading_days(
+                                df.at[i, 'ts_code'], df.at[i, 'trade_date']
+                            ):
+                                exempt_mask.at[i] = True
+                    if exempt_mask.any():
+                        for _, r in df[exempt_mask].iterrows():
+                            logger.info(
+                                f"[COL清洗] {r.get('ts_code', '?')} {r.get('trade_date', '?')} "
+                                f"pct_chg={r.get('pct_chg')} 上市前5日，豁免不剔除"
+                            )
+                    drop_mask = outlier_mask & ~exempt_mask
+                    if drop_mask.any():
+                        for _, r in df[drop_mask].iterrows():
+                            logger.warning(
+                                f"[COL清洗] {r.get('ts_code', '?')} {r.get('trade_date', '?')} "
+                                f"pct_chg={r.get('pct_chg')} 超限(>50%)，剔除"
+                            )
+                        df = df[~drop_mask]
             except Exception:
                 pass  # 校验失败则跳过
         return df
+
+    _list_date_map: dict | None = None
+
+    def _load_list_date_map(self) -> dict:
+        """521号 O1：懒加载 ts_code → list_date（读 app.db stocks 表，进程内缓存）
+
+        上市日期用于豁免「上市前 5 个交易日」的新股。app.db 由 ORM 管理，
+        此处仅只读查询（参考 515 号 `_get_stock_industry_ctxfree` 的 raw sqlite 模式）。
+        """
+        if EnhancedCacheManager._list_date_map is None:
+            _m: dict = {}
+            try:
+                import sqlite3
+
+                app_db = os.path.join(os.getenv('DATA_DIR', 'data'), 'app.db')
+                with sqlite3.connect(f'file:{app_db}?mode=ro', uri=True) as con:
+                    for code, ld in con.execute(
+                        "SELECT ts_code, list_date FROM stocks WHERE list_date IS NOT NULL"
+                    ):
+                        # list_date 存储格式不统一：老股票 TEXT 'YYYY-MM-DD'（10 位）、
+                        # 新股（sync_stock_list 写入）INTEGER 'YYYYMMDD'（8 位）→ 统一归一
+                        s = str(ld).strip()
+                        if len(s) == 8 and s.isdigit():
+                            s = f'{s[:4]}-{s[4:6]}-{s[6:]}'
+                        _m[code] = s[:10]
+            except Exception as e:
+                logger.warning(f"521 O1: list_date 映射读取失败: {e}")
+            EnhancedCacheManager._list_date_map = _m
+        return EnhancedCacheManager._list_date_map
+
+    def _is_within_first5_trading_days(self, ts_code: str, trade_date) -> bool:
+        """521号 O1：trade_date 是否落在该股上市首日起 5 个交易日内（含首日）
+
+        判据：list_date（上市日）起按交易日历（is_holiday 排除周末/法定节假日）数
+        5 个交易日，trade_date 在窗口内 → True。list_date 缺失（新股未同步 app.db）
+        → False（保持原剔除语义，缺口由数据回补批次补齐）。
+        """
+        ld = self._load_list_date_map().get(ts_code)
+        if not ld:
+            return False
+        try:
+            from datetime import datetime, timedelta
+
+            from app.utils.trading_hours import is_holiday
+
+            td = datetime.strptime(str(trade_date)[:10], '%Y-%m-%d')
+            start = datetime.strptime(ld, '%Y-%m-%d')
+            if td < start:
+                return False
+            # 5 个交易日最多跨越 7~9 个自然日；老股票直接短路避免长循环
+            if (td - start).days > 8:
+                return False
+            # 数 [start, td] 区间内的交易日数，≤5 即在上市前 5 个交易日内
+            cnt, cur = 0, start
+            while cur <= td:
+                if not is_holiday(cur):
+                    cnt += 1
+                cur += timedelta(days=1)
+            return 1 <= cnt <= 5
+        except Exception:
+            return False
 
     def _query_df(self, sql: str, params=None) -> pd.DataFrame:
         """执行查询并返回 DataFrame（替代 DuckDB 的 fetchdf()）
