@@ -2047,6 +2047,17 @@ def _check_count(table: str, trade_date: str) -> int:
         return 0
 
 
+def _lhb_detail_backfill_needed(main_stock_cnt: int, detail_stock_cnt: int) -> bool:
+    """521号 O4：龙虎榜席位明细是否需要补采
+
+    判据由旧「非空即通过」改为「与主表 lhb_cache 当日股票数对齐」：
+    top_inst（席位）发布时间晚于 top_list（主表），18:00 巡检可能只拿到部分数据，
+    若明细覆盖股票数 < 主表上榜股票数即需补采（覆盖式写入幂等，整点巡检天然重试）。
+    主表为空（源未发布）时不补采（返回 False，由调用方跳过）。
+    """
+    return main_stock_cnt > 0 and detail_stock_cnt < main_stock_cnt
+
+
 def _query_table(table: str, sql: str, params=None):
     """356号方案：从分库或总库执行查询（通用路由）"""
     try:
@@ -2258,17 +2269,28 @@ def run_integrity_check(backfill_days: int = 1):
 
     # 龙虎榜席位明细（278号方案独立检查：lhb_detail_cache）
     # 432号 R4：当日数据未发布（盘前/非交易日）不检查——top_inst 盘后才发布，盘前必空
+    # 521号 O4：判据由「非空即通过」改为「与主表 lhb_cache 当日股票数对齐」——
+    # top_inst（席位）发布时间晚于 top_list（主表），18:00 巡检补采可能只拿到部分
+    # （10-13/10-14 实证：补采 80/60 条落库 45 行、覆盖 7/5 只 vs 主表 62/68 只），
+    # 原判据 detail_cnt==0 才补采 → 部分数据非 0 后永不再补 → 明细固化缺失；
+    # 新判据：明细覆盖股票数 < 主表上榜股票数 即补采（覆盖式写入幂等），
+    # 整点巡检天然重试直至对齐（10-12 正常日 18:00 补 0 条→18:57 二次补 829 条全量）。
     try:
         if not _is_today_data_ready():
             logger.info("  [龙虎榜席位] 当日数据未发布（<18:00 或非交易日），跳过")
         else:
-            detail_cnt = _check_count('lhb_detail_cache', today_fmt) if today_fmt else 0
-            if detail_cnt == 0:
-                logger.info("  [龙虎榜席位] 今日无数据，补采...")
+            detail_stock_cnt = _query_table('lhb_detail_cache',
+                "SELECT COUNT(DISTINCT ts_code) FROM lhb_detail_cache WHERE trade_date=?", [today_fmt]) if today_fmt else 0
+            main_stock_cnt = _query_table('lhb_cache',
+                "SELECT COUNT(DISTINCT ts_code) FROM lhb_cache WHERE trade_date=?", [today_fmt]) if today_fmt else 0
+            if main_stock_cnt == 0:
+                logger.info("  [龙虎榜席位] 主表当日为空（源未发布），跳过")
+            elif _lhb_detail_backfill_needed(main_stock_cnt, detail_stock_cnt):
+                logger.info(f"  [龙虎榜席位] 明细覆盖 {detail_stock_cnt} 只 < 主表 {main_stock_cnt} 只，补采...")
                 detail_added = _batch_lhb_detail(today)
                 logger.info(f"    → 补采 {detail_added} 条")
             else:
-                logger.info(f"  [龙虎榜席位] {detail_cnt} 行 ✅")
+                logger.info(f"  [龙虎榜席位] {detail_stock_cnt}/{main_stock_cnt} 只 ✅")
     except Exception as e:
         logger.warning(f"  龙虎榜席位检查失败: {e}")
 
