@@ -28,13 +28,16 @@ class PrecomputeIndicatorManager:
         self.cache_manager = cache_manager
         self.engine = TechnicalIndicatorEngine()
 
-    def precompute_all_indicators(self, ts_code: str, df: pd.DataFrame) -> bool:
+    def precompute_all_indicators(self, ts_code: str, df: pd.DataFrame,
+                                  only_latest: bool = False) -> bool:
         """
         预计算所有指标并批量缓存
 
         Args:
             ts_code: 股票代码
             df: 日线数据DataFrame
+            only_latest: 522号 E4——True 时只写最新交易日（增量），RAW-1 日终走此路；
+                默认 False（写全历史，供迁移/批量脚本）。
 
         Returns:
             bool: 是否成功完成预计算
@@ -53,7 +56,7 @@ class PrecomputeIndicatorManager:
             # 写入宽表格式（替代旧 EAV 格式，93% 行数压缩）
             if 'ts_code' not in result.columns:
                 result['ts_code'] = ts_code
-            self.cache_manager.cache_indicators_wide(ts_code, result)
+            self.cache_manager.cache_indicators_wide(ts_code, result, only_latest=only_latest)
 
             return True
         except Exception as e:

@@ -7287,7 +7287,8 @@ def _precompute_indicators(codes):
                 # 卡死根治：单只指标计算包超时（与 RAW-3 因子单只一致）。
                 # 纯本地内存计算，子线程无 Flask context 依赖，可安全包装。
                 def _calc_one(_code=code, _df=df):
-                    return mgr.precompute_all_indicators(_code, _df)
+                    # 522号 E4：RAW-1 只写最新交易日（增量），避免每日重写全历史指标
+                    return mgr.precompute_all_indicators(_code, _df, only_latest=True)
                 r = _run_with_timeout(_calc_one, timeout_sec=60.0, desc=f"RAW-1 指标 {code}")
                 if r:
                     ok += 1

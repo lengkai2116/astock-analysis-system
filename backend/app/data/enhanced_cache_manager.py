@@ -1551,10 +1551,22 @@ class EnhancedCacheManager:
 
     # ── 指标 ─────────────────────────────────────────────────
 
-    def cache_indicators_wide(self, ts_code: str, df: 'pd.DataFrame'):
-        """批量写入宽表指标（df 需含 trade_date 及全部指标列）"""
+    def cache_indicators_wide(self, ts_code: str, df: 'pd.DataFrame', only_latest: bool = False):
+        """批量写入宽表指标（df 需含 trade_date 及全部指标列）
+
+        522号 E4（2026-10-16 性能）：`only_latest=True` 时**只写最新交易日**（增量），
+        不再每日把整条历史指标序列重写（原每日写 indicator_ma/macd/other ≈2520 万行）。
+        RAW-1 日终走此路；迁移/批量脚本默认 False（仍写全历史）。
+        """
         if df.empty:
             return
+        if only_latest and 'trade_date' in df.columns:
+            _td = pd.to_datetime(df['trade_date'], errors='coerce')
+            _cut = _td.max()
+            if pd.notna(_cut):
+                df = df[_td == _cut]
+                if df.empty:
+                    return
         with self._write_lock:
             # 426号 P0-2：MA 组守卫由"全有全无"改为核心列子集判断——引擎仅
             # len>=250 才建 ma250 列（len<250 亦无 ma120），原守卫致 [60,249]
