@@ -114,6 +114,11 @@ class FactorPrecomputeManager:
             原单值异常被 `precompute_factor` 吞掉导致**整批静默丢弃**。
           - #R34：位置索引映射防御——`factor_series` 与 `data` 行数不一致时告警
             （提示可能的重排/截断，避免位置错配静默写库）。
+
+        522号 E2（2026-10-16 性能）：**增量写**——只写「该股最新交易日」的行，不再
+        每日把整条历史因子序列逐行重写（原实现 RAW-3 每日写 `factor_cache` ≈6670 万行）。
+        依据：下游无任何生产消费方读取历史因子（消费侧仅按最新交易日做覆盖检查/断点
+        续算）；全史仍保留在库，仅不再每日刷新。
         """
         if factor_series.empty:
             return
@@ -122,6 +127,8 @@ class FactorPrecomputeManager:
         now = datetime.now()
         # 获取原始trade_date列表用于映射
         dates = data['trade_date'].tolist() if data is not None and 'trade_date' in data.columns else None
+        # 522号 E2：最新交易日 = data 末行（`get_cached_daily` 已 ORDER BY trade_date 升序）
+        cutoff = self._normalize_trade_date(dates[-1]) if dates else None
 
         # #R34：位置映射防御——位置索引依赖 factor_series 与 data 行序一致；
         # 长度不一致说明因子内部可能重排/截断，告警以便定位（不阻断，位置映射仍尽力）
@@ -129,6 +136,15 @@ class FactorPrecomputeManager:
             logger.warning(
                 f"因子 {factor_name} 序列长度 {len(factor_series)} ≠ data 行数 {len(dates)}，"
                 f"位置索引映射可能错配")
+
+        # 522号 E2：只保留 cutoff（最新交易日）的行参与建 record，避免遍历整条历史序列
+        # （截取后保留原 index 标签，位置映射 `dates[idx]` 仍成立）
+        if cutoff is not None and dates is not None and len(dates) == len(factor_series):
+            _start = len(dates)
+            while _start > 0 and self._normalize_trade_date(dates[_start - 1]) == cutoff:
+                _start -= 1
+            if _start > 0:
+                factor_series = factor_series.iloc[_start:]
 
         for idx, value in factor_series.items():
             if not pd.notna(value):
@@ -151,6 +167,9 @@ class FactorPrecomputeManager:
                 trade_date = self._normalize_trade_date(idx)
             if trade_date is None:
                 # 无法映射为合法交易日 → 跳过（#41，避免写入脏键）
+                continue
+            # 522号 E2：仅写最新交易日（增量），历史行不再每日重写
+            if cutoff is not None and trade_date < cutoff:
                 continue
 
             records.append({
