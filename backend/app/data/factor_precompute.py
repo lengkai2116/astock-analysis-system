@@ -4,6 +4,7 @@
 文件路径：backend/app/data/factor_precompute.py
 """
 import logging
+import re
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -14,6 +15,12 @@ from app.data.enhanced_cache_manager import EnhancedCacheManager, get_ecm_instan
 from app.factors import FactorCalculator, get_factor_registry
 
 logger = logging.getLogger(__name__)
+
+# 522号 E1（2026-10-16）：日期归一快速路径用的廉价形态匹配
+_CANONICAL_DATE_RE = re.compile(r'\d{4}-\d{2}-\d{2}\Z')
+_COMPACT_DATE_RE = re.compile(r'\d{8}\Z')
+
+
 class FactorPrecomputeManager:
     """
     因子预计算管理器
@@ -58,9 +65,33 @@ class FactorPrecomputeManager:
         ——原实现仅转换「8 位纯数字串」，`2026/08/01`/`2026-8-1`/非日期字符串会
         原样入库，破坏 `ORDER BY trade_date` 与 `< cutoff` 的字符串比较；现统一用
         `pd.to_datetime` 严格解析，解析失败返回 None 由调用方跳过（#41）。
+
+        522号 E1（2026-10-16 性能）：日终 RAW-3 对本函数**逐行**调用是唯一热点
+        （cProfile 占 `_batch_cache_factor_series` 的 98.5%，逐行标量 `pd.to_datetime`
+        ≈72µs/行 × 数万行/只）。对**已规范**的字符串走快速路径：严格形态 `YYYY-MM-DD`
+        （`strptime` 兼校日历合法性）直接返回，`YYYYMMDD` 加连字符；其余格式仍回落
+        `pd.to_datetime` 严格解析。「无法识别/非法 → None」语义完全不变。
         """
         if value is None:
             return None
+        if isinstance(value, str):
+            # 快速路径 1：严格形态 YYYY-MM-DD（strptime 校日历合法性；非法即 None）
+            if _CANONICAL_DATE_RE.match(value):
+                try:
+                    datetime.strptime(value, '%Y-%m-%d')
+                    return value                                   # 已规范，零格式化开销
+                except ValueError:
+                    return None
+            # 快速路径 2：YYYYMMDD → 加连字符
+            if _COMPACT_DATE_RE.match(value):
+                try:
+                    datetime.strptime(value, '%Y%m%d')
+                    return f'{value[:4]}-{value[4:6]}-{value[6:]}'
+                except ValueError:
+                    return None
+        elif isinstance(value, datetime):                          # 含 pd.Timestamp（其子类）
+            return value.strftime('%Y-%m-%d')
+        # 慢速路径：其余格式交给 pd.to_datetime 严格解析
         ts = pd.to_datetime(value, errors='coerce')
         if ts is pd.NaT or pd.isna(ts):
             return None
