@@ -413,6 +413,95 @@ class DashboardService:
         return None
 
     # ──────────────────────────────────────────────
+    # 523：全市场日终散点（eod-snapshot）
+    # ──────────────────────────────────────────────
+    def get_eod_snapshot(self) -> Optional[Dict]:
+        """全市场前一交易日日终散点数据（523号）。
+
+        Part1：流通市值 × 涨跌幅（X=circ_mv、Y=pct_chg）
+        Part2：高开/低开 × 高收/低收 四象限（X=(open-pre_close)/pre_close、Y=(close-open)/open）
+
+        数据源：daily_cache ⋈ daily_basic_cache（最新交易日，inner join 天然排除指数）。
+        pre_close 无独立列，由 pct_chg 精确推导（Tushare 口径含除权）：
+          pre_close = close / (1 + pct_chg/100)
+        """
+        try:
+            from app.models import Stock
+
+            ecm = self.data_manager.cache
+            # 最新交易日
+            date_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
+            if date_df is None or date_df.empty:
+                logger.error("全市场日终散点: daily_cache 无任何历史数据")
+                return None
+            last_date = date_df['trade_date'].iloc[0]
+
+            daily_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT ts_code, open, close, pct_chg FROM daily_cache WHERE trade_date = ?",
+                [last_date])
+            if daily_df is None or daily_df.empty:
+                logger.error("全市场日终散点: 当日无日线数据")
+                return None
+
+            basic_df = ecm._query_shard(
+                'daily_basic_cache',
+                "SELECT ts_code, circ_mv, total_mv FROM daily_basic_cache WHERE trade_date = ?",
+                [last_date])
+            if basic_df is None or basic_df.empty:
+                logger.error("全市场日终散点: 当日无 daily_basic 数据")
+                return None
+
+            # inner join → 天然排除指数（daily 独有行＝指数/行业指数）
+            merged = daily_df.merge(basic_df, on='ts_code', how='inner')
+
+            # 名称补齐（同 get_daily_top：Stock 表 → get_stock_list 兜底）
+            ts_codes = merged['ts_code'].unique().tolist()
+            stock_map = {}
+            try:
+                for s in Stock.query.filter(Stock.ts_code.in_(ts_codes)).all():
+                    stock_map[s.ts_code] = s.name
+            except Exception:
+                pass
+            if not stock_map:
+                try:
+                    basic = self.data_manager.get_stock_list()
+                    if basic:
+                        for r in basic:
+                            stock_map[r.get('ts_code', '')] = r.get('name', '')
+                except Exception:
+                    pass
+
+            stocks = []
+            for _, row in merged.iterrows():
+                close = float(row.get('close') or 0)
+                pct = float(row.get('pct_chg') or 0)
+                denom = 1 + pct / 100.0
+                pre_close = close / denom if abs(denom) > 1e-9 else close
+                stocks.append({
+                    'ts_code': str(row.get('ts_code', '')),
+                    'name': stock_map.get(row.get('ts_code', ''), ''),
+                    'open': round(float(row.get('open') or 0), 2),
+                    'close': round(close, 2),
+                    'pre_close': round(pre_close, 2),
+                    'pct_chg': round(pct, 2),
+                    'circ_mv': float(row.get('circ_mv') or 0),
+                    'total_mv': float(row.get('total_mv') or 0),
+                })
+
+            return {
+                'trade_date': str(last_date),
+                'count': len(stocks),
+                'source': 'DuckDB 盘后数据',
+                'stocks': stocks,
+            }
+        except Exception as e:
+            logger.error(f"全市场日终散点获取失败: {e}")
+            return None
+
+    # ──────────────────────────────────────────────
     # 5. 板块涨跌幅（sector-sector）
     # ──────────────────────────────────────────────
     def get_sector_changes(self, top_n: int = 8) -> Optional[Dict]:

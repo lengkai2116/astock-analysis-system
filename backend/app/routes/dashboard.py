@@ -61,6 +61,18 @@ def get_daily_top():
 
 
 # ──────────────────────────────────────────────
+# 523：全市场日终散点（eod-snapshot）
+# ──────────────────────────────────────────────
+@dashboard_bp.route('/api/v3/market/eod-snapshot', methods=['GET'])
+@api_cache(ttl=120)
+@handle_exceptions
+def get_eod_snapshot():
+    """全市场前一交易日日终散点数据（体量×涨跌 + 开高低收四象限）"""
+    data = _service.get_eod_snapshot()
+    return _data_response(data)
+
+
+# ──────────────────────────────────────────────
 # 5. 板块涨跌幅（sector-sector）
 # ──────────────────────────────────────────────
 @dashboard_bp.route('/api/v3/market/sector-sector', methods=['GET'])
