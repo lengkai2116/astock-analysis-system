@@ -252,6 +252,8 @@ function loadEodScatter(){
       if(dateEl&&dd.trade_date)dateEl.textContent='（数据日 '+dd.trade_date+'）';
       renderEodScatter1(dd.stocks);
       renderEodScatter2(dd.stocks);
+      bindEodZoomReset('chart-eod-scatter-1');
+      bindEodZoomReset('chart-eod-scatter-2');
     })
     .catch(function(e){console.warn('eod-snapshot 加载失败',e);});
 }
@@ -327,6 +329,17 @@ function renderEodScatter2(stocks){
         itemStyle:{color:quadColor[q],opacity:0.4},emphasis:{itemStyle:{opacity:1}}};
     })});
   if(c&&charts.indexOf(c)<0)charts.push(c);
+}
+
+// 523：鼠标移出制图区域 → 恢复默认大小/位置（dataZoom 复位 start0/end100，防重复绑定）
+function bindEodZoomReset(domId){
+  var el=document.getElementById(domId);
+  if(!el||el.__eodResetBound)return;
+  el.__eodResetBound=true;
+  el.addEventListener('mouseleave',function(){
+    var c=_chart(domId);
+    if(c)c.dispatchAction({type:'dataZoom',start:0,end:100});
+  });
 }
 
 // ===== 5. 加载行业板块涨跌幅图（top5红涨 + top5绿跌）=====
