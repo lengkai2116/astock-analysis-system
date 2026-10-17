@@ -252,7 +252,6 @@ function loadEodScatter(){
       if(dateEl&&dd.trade_date)dateEl.textContent='（数据日 '+dd.trade_date+'）';
       renderEodScatter1(dd.stocks);
       renderEodScatter2(dd.stocks);
-      linkEodZoom();
     })
     .catch(function(e){console.warn('eod-snapshot 加载失败',e);});
 }
@@ -272,11 +271,9 @@ function renderEodScatter1(stocks){
       var d=p.data;
       return (d.name||d.ts_code||'')+'<br/>流通市值: '+d.value[0].toFixed(1)+'亿<br/>涨跌幅: '+(d.value[1]>=0?'+':'')+d.value[1].toFixed(2)+'%';
     }},
-    grid:{left:64,right:44,bottom:44,top:16},
+    grid:{left:64,right:24,bottom:24,top:16},
     dataZoom:[
-      {type:'inside',xAxisIndex:0,yAxisIndex:0,zoomOnMouseWheel:true,moveOnMouseMove:true},
-      {type:'slider',xAxisIndex:0,height:14,bottom:2,borderColor:'rgba(255,255,255,0.1)',textStyle:{color:'#94A3B8',fontSize:9}},
-      {type:'slider',yAxisIndex:0,width:14,right:2,borderColor:'rgba(255,255,255,0.1)',textStyle:{color:'#94A3B8',fontSize:9}}
+      {type:'inside',xAxisIndex:0,yAxisIndex:0,zoomOnMouseWheel:true,moveOnMouseMove:true}
     ],
     xAxis:{type:'log',name:'流通市值(亿)',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
     yAxis:{type:'value',name:'涨跌幅(%)',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
@@ -319,11 +316,9 @@ function renderEodScatter2(stocks){
     }},
     legend:{data:quads,textStyle:{color:'#CBD5E1'},top:0},
     graphic:graphic,
-    grid:{left:64,right:44,bottom:44,top:32},
+    grid:{left:64,right:24,bottom:24,top:32},
     dataZoom:[
-      {type:'inside',xAxisIndex:0,yAxisIndex:0,zoomOnMouseWheel:true,moveOnMouseMove:true},
-      {type:'slider',xAxisIndex:0,height:14,bottom:2,borderColor:'rgba(255,255,255,0.1)',textStyle:{color:'#94A3B8',fontSize:9}},
-      {type:'slider',yAxisIndex:0,width:14,right:2,borderColor:'rgba(255,255,255,0.1)',textStyle:{color:'#94A3B8',fontSize:9}}
+      {type:'inside',xAxisIndex:0,yAxisIndex:0,zoomOnMouseWheel:true,moveOnMouseMove:true}
     ],
     xAxis:{type:'value',name:'(开盘-昨收)/昨收 %',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
     yAxis:{type:'value',name:'(收盘-开盘)/开盘 %',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
@@ -332,31 +327,6 @@ function renderEodScatter2(stocks){
         itemStyle:{color:quadColor[q],opacity:0.4},emphasis:{itemStyle:{opacity:1}}};
     })});
   if(c&&charts.indexOf(c)<0)charts.push(c);
-}
-
-// 523：两散点图 dataZoom 联动（任一图缩放，另一图同步 start/end）
-var _eodZoomLinked=false;
-function linkEodZoom(){
-  if(_eodZoomLinked)return;
-  _eodZoomLinked=true;
-  var c1=_chart('chart-eod-scatter-1'), c2=_chart('chart-eod-scatter-2');
-  if(!c1||!c2)return;
-  function sync(src,dst){
-    src.on('datazoom',function(params){
-      var batch=params&&params.batch;
-      if(!batch||!batch.length)return;
-      var b=batch[0];
-      var upd=((dst.getOption().dataZoom)||[]).map(function(z){
-        var n={type:z.type,xAxisIndex:z.xAxisIndex,yAxisIndex:z.yAxisIndex};
-        if(b.start!==undefined){n.start=b.start;n.end=b.end;}
-        else if(b.startValue!==undefined){n.startValue=b.startValue;n.endValue=b.endValue;}
-        return n;
-      });
-      if(upd.length)dst.setOption({dataZoom:upd});
-    });
-  }
-  sync(c1,c2);
-  sync(c2,c1);
 }
 
 // ===== 5. 加载行业板块涨跌幅图（top5红涨 + top5绿跌）=====
