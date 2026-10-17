@@ -4589,7 +4589,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             return _run_with_timeout(lambda: _raw2_one(code), timeout_sec=60.0,
                                      desc=f"RAW-2 特征 {code}")
 
-        _RAW2_WORKERS = 4
+        _RAW2_WORKERS = 8   # 522号 E5-c（2026-10-17）：4→8 试探；RAW-2 期间 RAW-1/3 已完成、多核闲置（仅用~1核），观察是否再提速；须基准对比
         import concurrent.futures as _cf
         _raw2_pool = _cf.ThreadPoolExecutor(max_workers=_RAW2_WORKERS)
         _fut_map = {}
