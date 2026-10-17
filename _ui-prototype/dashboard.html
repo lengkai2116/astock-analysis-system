@@ -252,6 +252,7 @@ function loadEodScatter(){
       if(dateEl&&dd.trade_date)dateEl.textContent='（数据日 '+dd.trade_date+'）';
       renderEodScatter1(dd.stocks);
       renderEodScatter2(dd.stocks);
+      linkEodZoom();
     })
     .catch(function(e){console.warn('eod-snapshot 加载失败',e);});
 }
@@ -271,11 +272,16 @@ function renderEodScatter1(stocks){
       var d=p.data;
       return (d.name||d.ts_code||'')+'<br/>流通市值: '+d.value[0].toFixed(1)+'亿<br/>涨跌幅: '+(d.value[1]>=0?'+':'')+d.value[1].toFixed(2)+'%';
     }},
-    grid:{left:64,right:24,bottom:24,top:16},
+    grid:{left:64,right:44,bottom:44,top:16},
+    dataZoom:[
+      {type:'inside',xAxisIndex:0,yAxisIndex:0,zoomOnMouseWheel:true,moveOnMouseMove:true},
+      {type:'slider',xAxisIndex:0,height:14,bottom:2,borderColor:'rgba(255,255,255,0.1)',textStyle:{color:'#94A3B8',fontSize:9}},
+      {type:'slider',yAxisIndex:0,width:14,right:2,borderColor:'rgba(255,255,255,0.1)',textStyle:{color:'#94A3B8',fontSize:9}}
+    ],
     xAxis:{type:'log',name:'流通市值(亿)',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
     yAxis:{type:'value',name:'涨跌幅(%)',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
     series:[{type:'scatter',data:data,symbolSize:5,
-      itemStyle:{color:function(p){return p.data.value[1]>=0?'#EF4444':'#22C55E';},opacity:0.75},
+      itemStyle:{color:function(p){return p.data.value[1]>=0?'#EF4444':'#22C55E';},opacity:0.4},
       emphasis:{itemStyle:{opacity:1}}}]});
   if(c&&charts.indexOf(c)<0)charts.push(c);
 }
@@ -296,20 +302,61 @@ function renderEodScatter2(stocks){
   });
   var quadColor={'高开高收':'#EF4444','高开低收':'#F59E0B','低开高收':'#3B82F6','低开低收':'#22C55E'};
   var quads=['高开高收','高开低收','低开高收','低开低收'];
+  // 象限计数角标（点重叠时传达分布）
+  var cnt={'高开高收':0,'高开低收':0,'低开高收':0,'低开低收':0};
+  data.forEach(function(d){cnt[d.quad]=(cnt[d.quad]||0)+1;});
+  var total=data.length||1;
+  var graphic=[
+    {type:'text',right:'2%',top:'6%',style:{text:'高开高收 '+cnt['高开高收']+' 只 ('+(cnt['高开高收']/total*100).toFixed(0)+'%)',fill:'#EF4444',fontSize:11,fontWeight:'bold'}},
+    {type:'text',left:'2%',top:'6%',style:{text:'低开高收 '+cnt['低开高收']+' 只 ('+(cnt['低开高收']/total*100).toFixed(0)+'%)',fill:'#3B82F6',fontSize:11,fontWeight:'bold'}},
+    {type:'text',right:'2%',bottom:'5%',style:{text:'高开低收 '+cnt['高开低收']+' 只 ('+(cnt['高开低收']/total*100).toFixed(0)+'%)',fill:'#F59E0B',fontSize:11,fontWeight:'bold'}},
+    {type:'text',left:'2%',bottom:'5%',style:{text:'低开低收 '+cnt['低开低收']+' 只 ('+(cnt['低开低收']/total*100).toFixed(0)+'%)',fill:'#22C55E',fontSize:11,fontWeight:'bold'}}
+  ];
   c.setOption({backgroundColor:'transparent',
     tooltip:{trigger:'item',formatter:function(p){
       var d=p.data;
       return (d.name||d.ts_code||'')+'<br/>'+d.quad+'<br/>开盘距昨收: '+(d.value[0]>=0?'+':'')+d.value[0].toFixed(2)+'%<br/>收盘距开盘: '+(d.value[1]>=0?'+':'')+d.value[1].toFixed(2)+'%';
     }},
     legend:{data:quads,textStyle:{color:'#CBD5E1'},top:0},
-    grid:{left:64,right:24,bottom:24,top:32},
+    graphic:graphic,
+    grid:{left:64,right:44,bottom:44,top:32},
+    dataZoom:[
+      {type:'inside',xAxisIndex:0,yAxisIndex:0,zoomOnMouseWheel:true,moveOnMouseMove:true},
+      {type:'slider',xAxisIndex:0,height:14,bottom:2,borderColor:'rgba(255,255,255,0.1)',textStyle:{color:'#94A3B8',fontSize:9}},
+      {type:'slider',yAxisIndex:0,width:14,right:2,borderColor:'rgba(255,255,255,0.1)',textStyle:{color:'#94A3B8',fontSize:9}}
+    ],
     xAxis:{type:'value',name:'(开盘-昨收)/昨收 %',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
     yAxis:{type:'value',name:'(收盘-开盘)/开盘 %',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
     series:quads.map(function(q){
       return {name:q,type:'scatter',data:data.filter(function(d){return d.quad===q;}),symbolSize:5,
-        itemStyle:{color:quadColor[q],opacity:0.75},emphasis:{itemStyle:{opacity:1}}};
+        itemStyle:{color:quadColor[q],opacity:0.4},emphasis:{itemStyle:{opacity:1}}};
     })});
   if(c&&charts.indexOf(c)<0)charts.push(c);
+}
+
+// 523：两散点图 dataZoom 联动（任一图缩放，另一图同步 start/end）
+var _eodZoomLinked=false;
+function linkEodZoom(){
+  if(_eodZoomLinked)return;
+  _eodZoomLinked=true;
+  var c1=_chart('chart-eod-scatter-1'), c2=_chart('chart-eod-scatter-2');
+  if(!c1||!c2)return;
+  function sync(src,dst){
+    src.on('datazoom',function(params){
+      var batch=params&&params.batch;
+      if(!batch||!batch.length)return;
+      var b=batch[0];
+      var upd=((dst.getOption().dataZoom)||[]).map(function(z){
+        var n={type:z.type,xAxisIndex:z.xAxisIndex,yAxisIndex:z.yAxisIndex};
+        if(b.start!==undefined){n.start=b.start;n.end=b.end;}
+        else if(b.startValue!==undefined){n.startValue=b.startValue;n.endValue=b.endValue;}
+        return n;
+      });
+      if(upd.length)dst.setOption({dataZoom:upd});
+    });
+  }
+  sync(c1,c2);
+  sync(c2,c1);
 }
 
 // ===== 5. 加载行业板块涨跌幅图（top5红涨 + top5绿跌）=====
