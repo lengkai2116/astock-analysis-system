@@ -47,7 +47,8 @@ class PhaseDetectionEngine(DataAwareMixin):
                      moneyflow_df=None,
                      indicator_ma_df=None,
                      indicator_other_df=None,
-                     cost_ext: Optional[Dict] = None) -> Dict:
+                     cost_ext: Optional[Dict] = None,
+                     chip_estimate=None) -> Dict:
         """计算阶段标签（312号方案：8 维度加权共识，替代原五源等权投票）
 
         412号方案C1/C3 v3.0：全部数据由dim1通过data_context提供。
@@ -97,10 +98,10 @@ class PhaseDetectionEngine(DataAwareMixin):
         # ── 8 维度阶段向量（批次1 可计算 7/8，控盘度批次3） ──
         self._last_dim_insufficient = len(df_sorted) < 60   # 数据不足（unknown 细分）
         dims = {
-            "chip":  self._dim_chip(ts_code, df_sorted, chip_fund_ext=chip_fund_ext, moneyflow_df=moneyflow_df, indicator_other_df=indicator_other_df),   # 1 筹码形态
+            "chip":  self._dim_chip(ts_code, df_sorted, chip_fund_ext=chip_fund_ext, moneyflow_df=moneyflow_df, indicator_other_df=indicator_other_df, chip_estimate=chip_estimate),   # 1 筹码形态
             "fund":  self._dim_fund(fund_flow, ts_code, extra_tags),   # 2 资金流向（方向+连续强度）
             "stage": self._dim_stage(df_sorted),           # 3 量价四阶段（CONSOLIDATION 验证）
-            "asr":   self._dim_asr(ts_code, df_sorted),    # 4 ASR 筹码分布（去兜底）
+            "asr":   self._dim_asr(ts_code, df_sorted, chip_estimate=chip_estimate),    # 4 ASR 筹码分布（去兜底）
             "trend": self._dim_trend(df_sorted),           # 5 趋势方向（斜率连续）
             "ssrp":  self._dim_ssrp(df_sorted, extra_tags, cost_ext=cost_ext),# 6 主力成本锚定（真实 SSRP，从pre_feat_cache读取）
             "chan":  self._dim_chan(extra_tags),           # 8 缠论买点（标签接入）
@@ -131,7 +132,7 @@ class PhaseDetectionEngine(DataAwareMixin):
 
     def _dim_chip(self, ts_code: str, df: pd.DataFrame,
                   chip_fund_ext: dict = None, moneyflow_df=None,
-                  indicator_other_df=None) -> dict:
+                  indicator_other_df=None, chip_estimate=None) -> dict:
         """维度1 筹码形态：TradingPhaseDetector 五阶段评分 → 阶段分布向量
 
         412号方案C1 v3.0：chip_fund_ext和moneyflow_df由data_context提供。
@@ -141,7 +142,7 @@ class PhaseDetectionEngine(DataAwareMixin):
         """
         info = self._run_trading_phase_detector_v2(
             ts_code, df, chip_fund_ext=chip_fund_ext, moneyflow_df=moneyflow_df,
-            indicator_other_df=indicator_other_df)
+            indicator_other_df=indicator_other_df, chip_estimate=chip_estimate)
         if info is None:
             return {}
         phase, scores = info
@@ -222,7 +223,7 @@ class PhaseDetectionEngine(DataAwareMixin):
             return {p: round(base * min(stage_conf + 0.2, 1.0), 3)}
         return {}
 
-    def _dim_asr(self, ts_code: str, df: pd.DataFrame) -> dict:
+    def _dim_asr(self, ts_code: str, df: pd.DataFrame, chip_estimate=None) -> dict:
         """维度4 ASR 筹码分布：统一高 ASR=筹码集中蓄势语义（451 号）
 
         wiki《ASR指标》权威：ASR 高=筹码集中/突破前蓄势状态，价格脱离
@@ -233,7 +234,7 @@ class PhaseDetectionEngine(DataAwareMixin):
           - asr<15 近峰值=筹码锁定在建仓范围 → building
           - asr<15 大幅高于峰值=脱离密集区、筹码锁定充分 → lifting
         """
-        chip = self._chip_distribution_analysis(ts_code, df)
+        chip = self._chip_distribution_analysis(ts_code, df, chip_estimate=chip_estimate)
         asr = chip.get("asr", 0.0)
         peak_price = chip.get("peak_position", 0.0)
         current = df["close"].values[-1]
@@ -452,7 +453,8 @@ class PhaseDetectionEngine(DataAwareMixin):
     def _run_trading_phase_detector_v2(self, ts_code: str, df: pd.DataFrame,
                                         chip_fund_ext: dict = None,
                                         moneyflow_df=None,
-                                        indicator_other_df=None):
+                                        indicator_other_df=None,
+                                        chip_estimate=None):
         """TradingPhaseDetector 阶段评分（返回 phase + scores，供维度1 阶段分布）
 
         412号方案C1 v3.0：chip_fund_ext由dim1通过data_context提供，
@@ -469,7 +471,10 @@ class PhaseDetectionEngine(DataAwareMixin):
             detector = TradingPhaseDetector(chip_inds)
 
             estimator = self._get_chip_estimator()
-            chip_dist, min_p, max_p, step = estimator.estimate(df)
+            if chip_estimate is not None:            # 522号 E5-d：复用预计算筹码分布
+                chip_dist, min_p, max_p, step = chip_estimate
+            else:
+                chip_dist, min_p, max_p, step = estimator.estimate(df)
             chip_bins = []
             if step > 0:
                 total = chip_dist.sum() or 1
@@ -694,13 +699,16 @@ class PhaseDetectionEngine(DataAwareMixin):
             self._chip_estimator = ChipDistributionEstimator()
         return self._chip_estimator
 
-    def _chip_distribution_analysis(self, ts_code: str, df: pd.DataFrame) -> Dict:
+    def _chip_distribution_analysis(self, ts_code: str, df: pd.DataFrame, chip_estimate=None) -> Dict:
         """筹码分布分析 → {asr, peak_position}"""
         result = {"asr": 0.0, "peak_position": 0.0}
 
         estimator = self._get_chip_estimator()
         try:
-            chip_dist, min_p, max_p, step = estimator.estimate(df)
+            if chip_estimate is not None:            # 522号 E5-d：复用预计算筹码分布
+                chip_dist, min_p, max_p, step = chip_estimate
+            else:
+                chip_dist, min_p, max_p, step = estimator.estimate(df)
             if step <= 0:
                 return result
             current_price = df["close"].values[-1]

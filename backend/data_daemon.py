@@ -4103,9 +4103,11 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     logger.warning(f"RAW缠论特征失败 [{code}]: {e}")
 
             # 8. 筹码特征（4字段）
+            _cp_est = None                                        # 522号 E5-d：筹码分布只算一次，供 step8/9.5/10 复用
             if len(df) >= 30:
                 try:
-                    chip_tags = cde.get_tags(df)
+                    _cp_est = cde.estimate(df)
+                    chip_tags = cde.get_tags(df, chip_estimate=_cp_est)
                     # 461-9：asr/cyqkl 白名单空键——ChipDistributionEstimator.get_tags 只产
                     # chip_position/chip_concentration，另两键从不产（dim4:5676/5685 读但恒 None，
                     # 移除后行为不变），清理死白名单
@@ -4133,7 +4135,11 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             #     此处前移计算，step13 复用 _chip_pre，避免重复计算。
             _chip_pre = {}
             try:
-                _cp_dist, _cp_min, _cp_max, _cp_step = cde.estimate(df)
+                # 522号 E5-d：复用 step8 已算的筹码分布（原此处重复 estimate 一次）
+                if _cp_est is not None:
+                    _cp_dist, _cp_min, _cp_max, _cp_step = _cp_est
+                else:
+                    _cp_dist, _cp_min, _cp_max, _cp_step = cde.estimate(df)
                 if _cp_dist is not None and len(_cp_dist) > 0 and _cp_step > 0:
                     from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import ChipIndicators
                     _cp_ci = ChipIndicators()
@@ -4180,7 +4186,8 @@ def _precompute_raw_features(codes, target_date: str | None = None):
                     # 507号 #S3：注入 SSRP（step9.5 前移计算）供维度6 SSRP 投票（权重 2.5）
                     if _chip_pre.get('ssrp'):
                         _extra['ssrp'] = _chip_pre.get('ssrp')
-                    _phase = PhaseDetectionEngine().compute_tags(code, df, extra_tags=_extra) or {}
+                    # 522号 E5-d：传预计算筹码分布，避免 PhaseDetectionEngine 内部再 estimate ×2
+                    _phase = PhaseDetectionEngine().compute_tags(code, df, extra_tags=_extra, chip_estimate=_cp_est) or {}
                     _depth['main_force_phase'] = _phase.get('main_force_phase')
                     _depth['phase_confidence'] = _phase.get('phase_confidence')
                     # 461-7：PhaseDetectionEngine 已产出 price_position（120日分位，真实 SSOT）/

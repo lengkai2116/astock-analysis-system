@@ -39,7 +39,7 @@ def _det(df=None):
     det._df = df
     calls = {'n': 0}
 
-    def _mock_chip(ts_code, data):
+    def _mock_chip(ts_code, data, chip_estimate=None):   # 522号 E5-d：签名同步新 kwarg
         calls['n'] += 1
         return det._chip
 

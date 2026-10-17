@@ -113,12 +113,12 @@ def test_b5_dim_asr_451_semantics():
     """_dim_asr 451 语义：asr>90→building（蓄势），不再 distributing"""
     pde = ExtPhaseDetectionEngine()
     # monkeypatch _chip_distribution_analysis 返回高 ASR
-    pde._chip_distribution_analysis = lambda ts, df: {'asr': 95.0, 'peak_position': 10.0}
+    pde._chip_distribution_analysis = lambda ts, df, chip_estimate=None: {'asr': 95.0, 'peak_position': 10.0}   # 522号 E5-d：签名同步
     df = _mk_kline(120)
     out = pde._dim_asr('000001.SZ', df)
     assert out == {'building': 0.6}, f'asr>90 应 building（451 语义）: {out}'
     # 445 三处三义：asr>30 高于峰值 → 不再 distributing
-    pde._chip_distribution_analysis = lambda ts, df: {'asr': 50.0, 'peak_position': 10.0}
+    pde._chip_distribution_analysis = lambda ts, df, chip_estimate=None: {'asr': 50.0, 'peak_position': 10.0}   # 522号 E5-d：签名同步
     df2 = _mk_kline(120)
     df2.iloc[-1, df2.columns.get_loc('close')] = 11.0  # rel=1.1
     out2 = pde._dim_asr('000001.SZ', df2)

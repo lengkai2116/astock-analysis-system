@@ -161,11 +161,18 @@ class ChipDistributionEstimator:
 
         return chip_dist, min_price, max_price, price_step
 
-    def get_tags(self, df_ohlcv: pd.DataFrame, turnover_rates=None) -> dict:
-        """返回筹码分布标签"""
+    def get_tags(self, df_ohlcv: pd.DataFrame, turnover_rates=None, chip_estimate=None) -> dict:
+        """返回筹码分布标签
+
+        522号 E5-d：`chip_estimate` 可选传入预计算的 (chip_dist,min_p,max_p,step)，
+        避免调用方重复 estimate（RAW-2 同股曾 4 次 estimate → 1 次）。
+        """
         tags = {}
         try:
-            chip_dist, min_p, max_p, step = self.estimate(df_ohlcv, turnover_rates)
+            if chip_estimate is not None:
+                chip_dist, min_p, max_p, step = chip_estimate
+            else:
+                chip_dist, min_p, max_p, step = self.estimate(df_ohlcv, turnover_rates)
             if min_p == max_p:
                 return tags
             current_price = df_ohlcv['close'].iloc[-1]
