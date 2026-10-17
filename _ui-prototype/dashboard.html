@@ -252,8 +252,8 @@ function loadEodScatter(){
       if(dateEl&&dd.trade_date)dateEl.textContent='（数据日 '+dd.trade_date+'）';
       renderEodScatter1(dd.stocks);
       renderEodScatter2(dd.stocks);
-      bindEodZoomReset('chart-eod-scatter-1');
-      bindEodZoomReset('chart-eod-scatter-2');
+      bindEodPanZoom('chart-eod-scatter-1');
+      bindEodPanZoom('chart-eod-scatter-2');
     })
     .catch(function(e){console.warn('eod-snapshot 加载失败',e);});
 }
@@ -268,17 +268,27 @@ function renderEodScatter1(stocks){
       var pct=+(s.pct_chg||0);
       return {value:[mvYi,pct],ts_code:s.ts_code||'',name:s.name||''};
     });
+  // 数据范围（默认视图基准；log 轴用乘法边距）
+  var mvMin=Infinity,mvMax=-Infinity,pctMin=Infinity,pctMax=-Infinity;
+  data.forEach(function(d){
+    if(d.value[0]<mvMin)mvMin=d.value[0];
+    if(d.value[0]>mvMax)mvMax=d.value[0];
+    if(d.value[1]<pctMin)pctMin=d.value[1];
+    if(d.value[1]>pctMax)pctMax=d.value[1];
+  });
+  if(!isFinite(mvMin)){mvMin=1;mvMax=100;}
+  if(!isFinite(pctMin)){pctMin=-5;pctMax=5;}
+  var _xp=Math.pow(mvMax/mvMin,0.08);
+  var _yp=(pctMax-pctMin)*0.06;
+  var _xMin=mvMin/_xp,_xMax=mvMax*_xp,_yMin=pctMin-_yp,_yMax=pctMax+_yp;
   c.setOption({backgroundColor:'transparent',
     tooltip:{trigger:'item',formatter:function(p){
       var d=p.data;
       return (d.name||d.ts_code||'')+'<br/>流通市值: '+d.value[0].toFixed(1)+'亿<br/>涨跌幅: '+(d.value[1]>=0?'+':'')+d.value[1].toFixed(2)+'%';
     }},
     grid:{left:64,right:24,bottom:24,top:16},
-    dataZoom:[
-      {type:'inside',xAxisIndex:0,yAxisIndex:0,zoomOnMouseWheel:true,moveOnMouseMove:true}
-    ],
-    xAxis:{type:'log',name:'流通市值(亿)',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
-    yAxis:{type:'value',name:'涨跌幅(%)',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
+    xAxis:{type:'log',min:_xMin,max:_xMax,name:'流通市值(亿)',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
+    yAxis:{type:'value',min:_yMin,max:_yMax,name:'涨跌幅(%)',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
     series:[{type:'scatter',data:data,symbolSize:5,
       itemStyle:{color:function(p){return p.data.value[1]>=0?'#EF4444':'#22C55E';},opacity:0.4},
       emphasis:{itemStyle:{opacity:1}}}]});
@@ -305,6 +315,18 @@ function renderEodScatter2(stocks){
   var cnt={'高开高收':0,'高开低收':0,'低开高收':0,'低开低收':0};
   data.forEach(function(d){cnt[d.quad]=(cnt[d.quad]||0)+1;});
   var total=data.length||1;
+  // 数据范围（默认视图基准）
+  var gapMin=Infinity,gapMax=-Infinity,bodyMin=Infinity,bodyMax=-Infinity;
+  data.forEach(function(d){
+    if(d.value[0]<gapMin)gapMin=d.value[0];
+    if(d.value[0]>gapMax)gapMax=d.value[0];
+    if(d.value[1]<bodyMin)bodyMin=d.value[1];
+    if(d.value[1]>bodyMax)bodyMax=d.value[1];
+  });
+  if(!isFinite(gapMin)){gapMin=-2;gapMax=2;}
+  if(!isFinite(bodyMin)){bodyMin=-2;bodyMax=2;}
+  var _gxp=(gapMax-gapMin)*0.06, _gyp=(bodyMax-bodyMin)*0.06;
+  var _gXMin=gapMin-_gxp,_gXMax=gapMax+_gxp,_gYMin=bodyMin-_gyp,_gYMax=bodyMax+_gyp;
   var graphic=[
     {type:'text',right:'2%',top:'6%',style:{text:'高开高收 '+cnt['高开高收']+' 只 ('+(cnt['高开高收']/total*100).toFixed(0)+'%)',fill:'#EF4444',fontSize:11,fontWeight:'bold'}},
     {type:'text',left:'2%',top:'6%',style:{text:'低开高收 '+cnt['低开高收']+' 只 ('+(cnt['低开高收']/total*100).toFixed(0)+'%)',fill:'#3B82F6',fontSize:11,fontWeight:'bold'}},
@@ -319,11 +341,8 @@ function renderEodScatter2(stocks){
     legend:{data:quads,textStyle:{color:'#CBD5E1'},top:0},
     graphic:graphic,
     grid:{left:64,right:24,bottom:24,top:32},
-    dataZoom:[
-      {type:'inside',xAxisIndex:0,yAxisIndex:0,zoomOnMouseWheel:true,moveOnMouseMove:true}
-    ],
-    xAxis:{type:'value',name:'(开盘-昨收)/昨收 %',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
-    yAxis:{type:'value',name:'(收盘-开盘)/开盘 %',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
+    xAxis:{type:'value',min:_gXMin,max:_gXMax,name:'(开盘-昨收)/昨收 %',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
+    yAxis:{type:'value',min:_gYMin,max:_gYMax,name:'(收盘-开盘)/开盘 %',nameTextStyle:{color:'#94A3B8',fontSize:11},axisLabel:{color:'#94A3B8',fontSize:10},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
     series:quads.map(function(q){
       return {name:q,type:'scatter',data:data.filter(function(d){return d.quad===q;}),symbolSize:5,
         itemStyle:{color:quadColor[q],opacity:0.4},emphasis:{itemStyle:{opacity:1}}};
@@ -331,15 +350,63 @@ function renderEodScatter2(stocks){
   if(c&&charts.indexOf(c)<0)charts.push(c);
 }
 
-// 523：鼠标移出制图区域 → 恢复默认大小/位置（dataZoom 复位 start0/end100，防重复绑定）
-function bindEodZoomReset(domId){
+// 523：自定义平移/中心缩放/移出复位（替代 dataZoom——其不支持 log 轴且滚轮锚点非中心）
+function bindEodPanZoom(domId){
   var el=document.getElementById(domId);
-  if(!el||el.__eodResetBound)return;
-  el.__eodResetBound=true;
-  el.addEventListener('mouseleave',function(){
-    var c=_chart(domId);
-    if(c)c.dispatchAction({type:'dataZoom',start:0,end:100});
+  if(!el||el.__eodPanZoomBound)return;
+  el.__eodPanZoomBound=true;
+  var c=_chart(domId);
+  if(!c)return;
+  var o=c.getOption();
+  var _xLog=(o.xAxis[0].type==='log');
+  var cur={x0:o.xAxis[0].min, x1:o.xAxis[0].max, y0:o.yAxis[0].min, y1:o.yAxis[0].max};
+  var def={x0:cur.x0,x1:cur.x1,y0:cur.y0,y1:cur.y1};
+  function apply(){
+    var cfg={xAxis:{min:cur.x0,max:cur.x1},yAxis:{min:cur.y0,max:cur.y1}};
+    if(_xLog&&cur.x0<=0)cfg.xAxis.min=1e-6;  // log 轴 min 必须 >0
+    c.setOption(cfg);
+  }
+  function reset(){cur={x0:def.x0,x1:def.x1,y0:def.y0,y1:def.y1};apply();}
+  // 左键拖拽 = 平移（像素→数据差，基准=mousedown 时范围，避免换算漂移）
+  var down=null;
+  el.addEventListener('mousedown',function(e){
+    if(e.button!==0)return;
+    var rect=el.getBoundingClientRect();
+    down={sx:e.clientX-rect.left, sy:e.clientY-rect.top, r:{x0:cur.x0,x1:cur.x1,y0:cur.y0,y1:cur.y1}};
+    e.preventDefault();
   });
+  window.addEventListener('mousemove',function(e){
+    if(!down)return;
+    var rect=el.getBoundingClientRect();
+    var px=e.clientX-rect.left, py=e.clientY-rect.top;
+    // 每次先恢复 mousedown 基准范围，再换算（否则 v0 随上次移动漂移）
+    cur={x0:down.r.x0,x1:down.r.x1,y0:down.r.y0,y1:down.r.y1};
+    apply();
+    var v0=c.convertFromPixel({xAxisIndex:0,yAxisIndex:0},[down.sx,down.sy]);
+    var v1=c.convertFromPixel({xAxisIndex:0,yAxisIndex:0},[px,py]);
+    if(!v0||!v1)return;
+    var ddx=v1[0]-v0[0], ddy=v1[1]-v0[1];
+    cur={x0:down.r.x0-ddx, x1:down.r.x1-ddx, y0:down.r.y0-ddy, y1:down.r.y1-ddy};
+    apply();
+  });
+  window.addEventListener('mouseup',function(){down=null;});
+  // 滚轮 = 以图片中心为锚点缩放（像素空间，log 轴正确）
+  el.addEventListener('wheel',function(e){
+    e.preventDefault();
+    var rect=el.getBoundingClientRect();
+    var cx=rect.width/2, cy=rect.height/2;
+    var factor=Math.pow(1.2, e.deltaY>0?1:-1); // 下滚=缩小(>1)，上滚=放大(<1)
+    var p0=c.convertToPixel({xAxisIndex:0,yAxisIndex:0},[cur.x0,cur.y0]);
+    var p1=c.convertToPixel({xAxisIndex:0,yAxisIndex:0},[cur.x1,cur.y1]);
+    if(!p0||!p1)return;
+    var np0=c.convertFromPixel({xAxisIndex:0,yAxisIndex:0},[cx-(cx-p0[0])*factor, cy-(cy-p0[1])*factor]);
+    var np1=c.convertFromPixel({xAxisIndex:0,yAxisIndex:0},[cx+(p1[0]-cx)*factor, cy+(p1[1]-cy)*factor]);
+    if(!np0||!np1)return;
+    cur={x0:np0[0], x1:np1[0], y0:np0[1], y1:np1[1]};
+    apply();
+  },{passive:false});
+  // 移出制图区 = 复位默认
+  el.addEventListener('mouseleave',function(){down=null;reset();});
 }
 
 // ===== 5. 加载行业板块涨跌幅图（top5红涨 + top5绿跌）=====
