@@ -580,6 +580,8 @@ function loadDashboardFull(){
       // 524 批次3：市场情绪（L3）+ 板块热度（L4）并入聚合载荷
       if(dd.market_emotion) applyMarketEmotion(dd.market_emotion);
       if(dd.sector_heat) applySectorHeat(dd.sector_heat);
+      // 524 批次4：市场预警（L5）并入聚合载荷
+      if(dd.market_alerts) applyMarketAlerts(dd.market_alerts);
       // 523：eod-snapshot 不在聚合载荷中，独立加载（TTL 120s）
       loadEodScatter();
     })
@@ -596,6 +598,7 @@ function loadDashboardFull(){
       loadMarketBreadth();
       loadMarketEmotion();
       loadSectorHeat();
+      loadMarketAlerts();
     });
 }
 
@@ -704,6 +707,34 @@ function loadSectorHeat(){
   _cachedFetch(API+'/market/sector-heat',120)
     .then(function(d){if(d&&d.success&&d.data)applySectorHeat(d.data);})
     .catch(function(e){console.warn('market/sector-heat 加载失败',e);});
+}
+
+// 524 L5：市场预警（market/alerts：冰点→关键上涨窗口 / 拥挤背离→顶部 / 宽度极端→反转 / 状态切换→风控）
+function applyMarketAlerts(al){
+  if(!al)return;
+  var panel=document.getElementById('market-alert-list');
+  if(!panel)return;
+  var list=al.alerts||[];
+  if(!list.length){
+    panel.innerHTML='暂无预警';
+    return;
+  }
+  var rows=list.map(function(a){
+    var _color='#CBD5E1';
+    if(a.level==='danger')_color='#EF4444';
+    else if(a.level==='warning')_color='#F59E0B';
+    else if(a.level==='info')_color='#22C55E';
+    return '<div style="margin-bottom:var(--space-6);line-height:1.6;">'
+      +'<div style="font-weight:600;color:'+_color+';">'+a.title+'</div>'
+      +'<div style="color:var(--text-secondary);font-size:12px;">'+a.detail+'</div>'
+      +'</div>';
+  }).join('');
+  panel.innerHTML=rows;
+}
+function loadMarketAlerts(){
+  _cachedFetch(API+'/market/alerts',120)
+    .then(function(d){if(d&&d.success&&d.data)applyMarketAlerts(d.data);})
+    .catch(function(e){console.warn('market/alerts 加载失败',e);});
 }
 
 // 提取 applyMarketOverview 供聚合端点和 WebSocket 共用

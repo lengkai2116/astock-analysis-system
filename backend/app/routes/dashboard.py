@@ -112,6 +112,15 @@ def get_sector_heat():
     return _data_response(data)
 
 
+@dashboard_bp.route('/api/v3/market/alerts', methods=['GET'])
+@api_cache(ttl=120)
+@handle_exceptions
+def get_market_alerts():
+    """市场预警（524 号 L5）：四条规则 + 建议输出（建议型、非强制）"""
+    data = _service.get_market_alerts()
+    return _data_response(data)
+
+
 # ──────────────────────────────────────────────
 # 5. 板块涨跌幅（sector-sector）
 # ──────────────────────────────────────────────

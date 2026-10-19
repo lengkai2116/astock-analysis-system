@@ -1,6 +1,6 @@
 # 524号｜仪表盘「大盘行情信息」板块 前端功能定位与监控增强能力规划（wiki 学习 + 数据源实证）
 
-> **版本**：v1.5（2026-10-19 只读核查 + 能力规划 + **Q1~Q6 用户拍板 + 实施计划 + 批次1'（后端只读接口）+ 批次1（Q4 as_sector_ranking 建表归属修正）+ 批次2（前端 L1/L2/L5 骨架）+ 批次3（前端 L3/L4 + 板块热度接口）已实施**；**代码改动仅限后端只读接口、板块库表修复与前端展示层**）
+> **版本**：v1.6（2026-10-19 只读核查 + 能力规划 + **Q1~Q6 用户拍板 + 实施计划 + 批次1'（后端只读接口）+ 批次1（Q4 as_sector_ranking 建表归属修正）+ 批次2（前端 L1/L2/L5 骨架）+ 批次3（前端 L3/L4 + 板块热度接口）+ 批次4（L5 预警规则）全部已实施**；**代码改动仅限后端只读接口、板块库表修复与前端展示层**）
 > **性质**：只读核查档（前端展示层功能定位 + LLM wiki 知识库学习 + 数据源逐项实证）
 > **范围**：`_ui-prototype/dashboard.html`（前端）＋ 后端只读取数能力边界；**本档不涉及代码改动**
 > **前置**：513/514（数据与连接核查处置）、516（各模块数据二轮核查处置）、523（全市场日终散点新增）、481（dim8 第一层环境定位）
@@ -304,3 +304,44 @@ curl -s http://127.0.0.1:5001/api/v3/market/overview | python -m json.tool | hea
 ### 17.6 遗留
 - L5 预警规则（四条）批次4 落地（⑧ 面板预警区占位待填）。
 - BOCIASI 市场级聚合无现成（dim5 个股级，批次3 未做 BOCIASI 徽标，已登记）——若前端需 BOCIASI 徽标另立小号建市场级聚合。
+
+## 十八、批次4 已实施（2026-10-19，L5 预警规则；拍板：后端 `market/alerts` 接口 + 默认阈值）
+
+**范围**：`backend/app/services/dashboard_service.py` + `backend/app/routes/dashboard.py` + `_ui-prototype/dashboard.html` + `backend/tests/test_524_batch4_market_alerts.py`；**后端仅新增 1 只读接口（523 先例拍板），前端限展示层**。
+
+### 18.1 后端：`get_market_alerts` + 路由 + 聚合并入
+- 抽取 `_classify_state`（4 状态·状态机判定静态方法，供 `get_market_state` 与 `_get_prev_market_state` 复用）。
+- `DashboardService.get_market_alerts()`：四条规则 + 建议输出（建议型、非强制，495 B1）：
+  - **R1 冰点→关键上涨窗口**：`emotion.phase == 'ice'`（六段论冰点，涨停生态萎缩）→ info 级；
+  - **R2 融资拥挤背离→顶部**：`margin_trend` ≥ 近20日 80 分位 且 沪深300 近5日涨幅 ≤ 0 → warning 级（wiki《情绪拥挤度因子》）；
+  - **R3 宽度极端→反转**：上涨占比 ≥85%（过热）或 ≤15%（低迷）→ warning/info 级（wiki 关键交易日）；
+  - **R4 状态切换→风控**：前日 vs 今日 4 状态不同且涉及趋势/高波动 → danger 级（wiki《状态机市场识别模型》）。
+- `_get_prev_market_state()`：读 `market_stats_cache` 倒数第二日 turnover + HS300 剔除最新一日重算 ret20/ma60 → `_classify_state`。
+- 返回 `{date, count, alerts:[{level, type, title, detail, source}], source}`；全只读。
+- 路由 `GET /api/v3/market/alerts`（523 模式：`@api_cache(ttl=120)` + `@handle_exceptions` + `_data_response` 503 兜底）；`get_dashboard_full` 并入 `market_alerts` 键。
+
+### 18.2 前端 L5：预警列表（落 ⑧ 面板 `#market-alert-list`）
+- `applyMarketAlerts`：有预警时渲染 title（level 色标：danger 红 / warning 橙 / info 绿）+ detail；无预警显示「暂无预警」。
+- `loadDashboardFull` 成功路径消费 `dd.market_alerts`；降级 catch 补 `loadMarketAlerts()`（`_cachedFetch` TTL 120s）。
+
+### 18.3 验证
+- `tests/test_524_batch4_market_alerts.py`（10 用例：R1 冰点 / R2 拥挤触发+不触发 / R3 过热+正常 / R4 切换+同态 / `_classify_state` 五档矩阵 / 路由注册 / dashboard/full 并入）——**10 passed**（⚠️ 测试桩曾正序致 R2 误判 → 修正 `_query_shard` 模拟 `ORDER BY stat_date DESC` 后全绿）；py_compile OK、ruff 全过（`--fix` 整理函数内 import 排序）。
+- **真实库只读冒烟（app_context）**：`market_alerts` 正常返回（date=2026-10-16、count=0——当前数据无规则触发，属预期）；`dashboard/full` 含 `market_alerts`；JSON 可序列化。
+- 内联 JS `node --check` 通过（2 个 script 块 38KB）。
+- **浏览器渲染待用户起服目检**（start.command + 强刷；预期检查点：⑧ 面板「🔔 预警」区——当前「暂无预警」，规则触发时展示色标条目）。
+
+### 18.4 遗留
+- **BOCIASI 市场级聚合**无现成（dim5 个股级）——R1「冰点+慢线极值」中的慢线极值以六段论 ice 近似（涨停生态萎缩），如需 BOCIASI 慢线市场级参与另立小号。
+- L6 远期（关键交易日日历标记、期指升贴水/PCR）未纳入本号。
+
+## 十九、524 号实施状态（v1.6 全面收官）
+
+| 批次 | 内容 | 状态 |
+|---|---|---|
+| 1' | 后端只读接口 `market/breadth` + `market/state` + `market/emotion`（并入 dashboard/full） | ✅ v1.2 §十四 |
+| 1 | Q4 `as_sector_ranking` 建表归属修正（快照库补建 + 读写路径） | ✅ v1.3 §十五 |
+| 2 | 前端 L1 状态徽标 + L2 市场宽度面板 + L5 预警骨架 | ✅ v1.4 §十六 |
+| 3 | 前端 L3 情绪温度计 + L4 板块热度（`market/sector-heat` 接口） | ✅ v1.5 §十七 |
+| 4 | L5 预警规则（`market/alerts` 接口 + 前端列表） | ✅ v1.6 §十八 |
+
+**L1~L5 全部落地，仅 L6 远期未纳入**。前端渲染待用户起服目检；daemon 重启后 `as_sector_ranking` 30min 覆盖式写入待实证。

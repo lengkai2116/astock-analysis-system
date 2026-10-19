@@ -860,6 +860,14 @@ class DashboardService:
         except Exception:
             pass
 
+        # 524 批次4：市场预警并入聚合载荷（L5 预警列表）
+        try:
+            alerts = self.get_market_alerts()
+            if alerts:
+                result['market_alerts'] = alerts
+        except Exception:
+            pass
+
         if not result:
             return None
         return result
@@ -960,15 +968,7 @@ class DashboardService:
                 if len(closes) >= 60:
                     ma60 = float(closes.iloc[-60:].mean())
 
-            state, state_label = 'ranging', '震荡'
-            if turnover_pct >= 0.85 and ret20 is not None and abs(ret20) >= 5:
-                state, state_label = 'high_volatility', '高波动'
-            elif ret20 is not None and ret20 >= 3 and price is not None and ma60 is not None and price >= ma60:
-                state, state_label = 'trend_up', '上升趋势'
-            elif ret20 is not None and ret20 <= -3 and price is not None and ma60 is not None and price <= ma60:
-                state, state_label = 'trend_down', '下降趋势'
-            elif ret20 is not None and abs(ret20) < 2 and turnover_pct < 0.4:
-                state, state_label = 'consolidation', '盘整'
+            state, state_label = self._classify_state(turnover_pct, ret20, price, ma60)
 
             return {
                 'state': state,
@@ -987,6 +987,28 @@ class DashboardService:
         except Exception as e:
             logger.error(f"大盘状态获取失败: {e}")
             return None
+
+    @staticmethod
+    def _classify_state(turnover_pct: float, ret20, price, ma60):
+        """4 状态·状态机判定（524 号 Q1 拍板；供 get_market_state / get_market_alerts 复用）。
+
+        规则（wiki《状态机市场识别模型》简化落地，阈值可拍板调整）：
+          - 高波动：turnover ≥ 0.85 且近20日 |涨跌| ≥ 5%
+          - 上升趋势：近20日涨跌 ≥ 3% 且收盘 ≥ 60日线
+          - 下降趋势：近20日涨跌 ≤ -3% 且收盘 ≤ 60日线
+          - 盘整：近20日 |涨跌| < 2% 且 turnover < 0.4
+          - 震荡：其余（默认）
+        """
+        state, state_label = 'ranging', '震荡'
+        if turnover_pct >= 0.85 and ret20 is not None and abs(ret20) >= 5:
+            state, state_label = 'high_volatility', '高波动'
+        elif ret20 is not None and ret20 >= 3 and price is not None and ma60 is not None and price >= ma60:
+            state, state_label = 'trend_up', '上升趋势'
+        elif ret20 is not None and ret20 <= -3 and price is not None and ma60 is not None and price <= ma60:
+            state, state_label = 'trend_down', '下降趋势'
+        elif ret20 is not None and abs(ret20) < 2 and turnover_pct < 0.4:
+            state, state_label = 'consolidation', '盘整'
+        return state, state_label
 
     def get_market_emotion(self) -> Optional[Dict]:
         """市场情绪（524 号 L3 温度计原料）：六段论阶段 + 涨停生态指标。
@@ -1052,6 +1074,152 @@ class DashboardService:
             }
         except Exception as e:
             logger.error(f"板块热度获取失败: {e}")
+            return None
+
+    def get_market_alerts(self) -> Optional[Dict]:
+        """市场预警（524 号 L5）：四条规则 + 建议输出（建议型、非强制，495 B1）。
+
+        数据源：emotion（R1 冰点）/ market_stats 近20日 margin_trend + HS300 近5日
+        （R2 拥挤背离）/ breadth（R3 宽度极端）/ 前日 vs 今日 4 状态（R4 状态切换）。
+        全只读；规则与阈值可拍板调整（wiki《关键交易日识别与验证框架》《情绪拥挤度
+        因子》《状态机市场识别模型》依据）。
+        """
+        try:
+            alerts = []
+
+            # R1 冰点 → 关键上涨窗口（六段论 ice；涨停生态萎缩）
+            emotion = self.get_market_emotion()
+            if emotion and emotion.get('phase') == 'ice':
+                alerts.append({
+                    'level': 'info',
+                    'type': 'ice_window',
+                    'title': '情绪冰点，接近关键上涨窗口',
+                    'detail': '六段论进入冰点期（涨停家数萎缩、最高连板低、封板率低），'
+                              '历史经验上冰点+慢线极值后关键上涨日概率上升（建议型，非强制）',
+                    'source': 'market/emotion phase=ice',
+                })
+
+            # R2 融资拥挤背离 → 顶部风险（margin_trend 近20日 80 分位 + HS300 近5日涨幅≤0）
+            try:
+                ecm = self.data_manager.cache
+                mdf = ecm._query_shard(
+                    'market_stats_cache',
+                    "SELECT stat_date, margin_trend FROM market_stats_cache "
+                    "ORDER BY stat_date DESC LIMIT 20")
+                if mdf is not None and not mdf.empty:
+                    vals = [float(v) for v in mdf['margin_trend'].tolist()
+                            if v is not None and v == v]
+                    if len(vals) >= 10:
+                        s_vals = sorted(vals)
+                        p80 = s_vals[int(len(s_vals) * 0.8) - 1]
+                        cur = float(vals[0])  # 最新日（DESC 首行）
+                        if cur >= p80:
+                            from app.services.benchmark_service import (
+                                BenchmarkIndex,
+                                BenchmarkService,
+                            )
+                            bs = BenchmarkService(self.data_manager)
+                            bdf = bs.get_index_daily(BenchmarkIndex.HS300)
+                            ret5 = None
+                            if bdf is not None and not bdf.empty:
+                                closes = bdf['close'].astype(float).tolist()
+                                if len(closes) >= 6:
+                                    ret5 = float((closes[-1] / closes[-6] - 1) * 100)
+                            if ret5 is not None and ret5 <= 0:
+                                alerts.append({
+                                    'level': 'warning',
+                                    'type': 'crowding_top',
+                                    'title': '融资拥挤背离，警惕顶部风险',
+                                    'detail': f'融资增速处于近20日 80 分位上方（当前 {cur:.2f}），'
+                                              f'但沪深300 近5日涨幅 {ret5:.2f}%≤0——资金与价格背离'
+                                              '（建议型，非强制）',
+                                    'source': 'market_stats.margin_trend + HS300',
+                                })
+            except Exception as e:
+                logger.debug(f"R2 拥挤背离计算失败: {e}")
+
+            # R3 宽度极端 → 反转提示（上涨占比 ≥85% 或 ≤15%）
+            breadth = self.get_market_breadth()
+            if breadth and breadth.get('up_ratio') is not None:
+                up_r = float(breadth['up_ratio'])
+                if up_r >= 85:
+                    alerts.append({
+                        'level': 'warning',
+                        'type': 'breadth_extreme',
+                        'title': '上涨宽度极端，警惕短线反转',
+                        'detail': f'上涨家数占比 {up_r:.1f}%≥85%，市场短线过热'
+                                  '（建议型，非强制）',
+                        'source': 'market/breadth up_ratio',
+                    })
+                elif up_r <= 15:
+                    alerts.append({
+                        'level': 'info',
+                        'type': 'breadth_extreme',
+                        'title': '下跌宽度极端，警惕情绪修复',
+                        'detail': f'上涨家数占比 {up_r:.1f}%≤15%，市场极度低迷'
+                                  '（建议型，非强制）',
+                        'source': 'market/breadth up_ratio',
+                    })
+
+            # R4 状态切换 → 风控提示（前日 vs 今日 4 状态不同且含趋势/高波动参与）
+            today = self.get_market_state()
+            if today and today.get('state'):
+                prev_state = self._get_prev_market_state()
+                cur_state = today['state']
+                if prev_state and prev_state != cur_state:
+                    _big = {'trend_up', 'trend_down', 'high_volatility'}
+                    if prev_state in _big or cur_state in _big:
+                        alerts.append({
+                            'level': 'danger',
+                            'type': 'state_switch',
+                            'title': f'大盘状态切换：{prev_state} → {cur_state}',
+                            'detail': '4 状态·状态机发生切换且涉及趋势/高波动——'
+                                      '波动环境变化，注意仓位与风险控制（建议型，非强制）',
+                            'source': 'market/state 前日 vs 今日',
+                        })
+
+            return {
+                'date': (today or {}).get('data_date', ''),
+                'count': len(alerts),
+                'alerts': alerts,
+                'source': 'DuckDB market_stats + HS300 + emotion + breadth',
+            }
+        except Exception as e:
+            logger.error(f"市场预警获取失败: {e}")
+            return None
+
+    def _get_prev_market_state(self) -> Optional[str]:
+        """前一交易日 4 状态（524 L5 R4 状态切换对比）。
+
+        取 market_stats_cache 倒数第二日 turnover_percentile + HS300 剔除最新一日
+        后重算 ret20/ma60，复用 `_classify_state`。
+        """
+        try:
+            ecm = self.data_manager.cache
+            sdf = ecm._query_shard(
+                'market_stats_cache',
+                "SELECT * FROM market_stats_cache ORDER BY stat_date DESC LIMIT 2")
+            if sdf is None or sdf.empty or len(sdf) < 2:
+                return None
+            prev = sdf.iloc[1]
+            turnover_pct = float(prev.get('turnover_percentile', 0.5))
+
+            from app.services.benchmark_service import BenchmarkIndex, BenchmarkService
+            bs = BenchmarkService(self.data_manager)
+            bdf = bs.get_index_daily(BenchmarkIndex.HS300)
+            if bdf is None or bdf.empty or len(bdf) < 62:
+                return None
+            closes = bdf['close'].astype(float).tolist()
+            closes = closes[:-1]  # 剔除最新一日（今日）
+            if len(closes) < 61:
+                return None
+            price = float(closes[-1])
+            ret20 = float((closes[-1] / closes[-21] - 1) * 100)
+            ma60 = float(sum(closes[-60:]) / 60)
+            state, _ = self._classify_state(turnover_pct, ret20, price, ma60)
+            return state
+        except Exception as e:
+            logger.debug(f"前日状态计算失败: {e}")
             return None
 
     # ──────────────────────────────────────────────
