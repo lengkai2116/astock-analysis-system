@@ -1,6 +1,6 @@
 # 524号｜仪表盘「大盘行情信息」板块 前端功能定位与监控增强能力规划（wiki 学习 + 数据源实证）
 
-> **版本**：v1.2（2026-10-19 只读核查 + 能力规划 + **Q1~Q6 用户拍板 + 实施计划 + 批次1' 已实施**；**代码改动仅限后端只读接口**）
+> **版本**：v1.3（2026-10-19 只读核查 + 能力规划 + **Q1~Q6 用户拍板 + 实施计划 + 批次1'（后端只读接口）+ 批次1（Q4 as_sector_ranking 建表归属修正）已实施**；**代码改动仅限后端只读接口与板块库表修复**）
 > **性质**：只读核查档（前端展示层功能定位 + LLM wiki 知识库学习 + 数据源逐项实证）
 > **范围**：`_ui-prototype/dashboard.html`（前端）＋ 后端只读取数能力边界；**本档不涉及代码改动**
 > **前置**：513/514（数据与连接核查处置）、516（各模块数据二轮核查处置）、523（全市场日终散点新增）、481（dim8 第一层环境定位）
@@ -224,3 +224,30 @@ curl -s http://127.0.0.1:5001/api/v3/market/overview | python -m json.tool | hea
 - 相邻回归（523 eod-snapshot 4 + 516 batch2/3 6 + 513 选日 5 + 524 9）**24 passed**；py_compile OK、ruff 三文件全过（测试 I001 import 排序已 fix）。
 - **真实库只读冒烟（app_context）**：三接口全取数成功且 **JSON 可序列化**（np.float64 修复后 basis 全原生 float）；`breadth=2026-10-16/5566`、`state=high_volatility`、`emotion=ferment`。
 - **前端渲染**：待用户起服（start.command）后浏览器目检（批次2 前端接线时一并复核）。
+
+## 十五、批次1 已实施（2026-10-19，Q4 板块数据源：`as_sector_ranking` 建表归属修正）
+
+**范围**：`backend/app/data/enhanced_cache_manager.py` + `backend/tests/test_524_batch1_sector_ranking.py`；**仅库表归属/读写路径修复，未触业务引擎/前端**。
+
+### 15.1 根因链（实证）
+`as_sector_ranking` 表在全部 8 个库**均不存在**（E4）。根因链：
+1. **建表位置错**：建表语句在主库段 `_init_tables`（`enhanced_cache_manager.py:828` 附近，`self._execute`→总库）；而本表经 sharding 路由到 **market_snapshot.db**（快照库，`sharding_manager` 已登记）。
+2. **426 空壳自清理 DROP**：`_init_tables` 末尾「总库空壳表自清理」（`:1337`）对「路由到分库且总库 0 行」的表一律 DROP → 每次启动主库建的空壳 `as_sector_ranking` 立即被删（日志实证：`DROP 34 张 [..., 'as_sector_ranking', ...]`）。
+3. **快照库从未建表**：`_init_snapshot_tables`（`:1362`）只建 `as_market_snapshot`，**未建 as_sector_ranking** → market_snapshot.db 无此表。
+4. **写静默丢**：`write_as_sector_ranking` → `_insert_from_df` → 分库路由 market_snapshot.db → 表不存在 → 自动建表依赖「从总库复制结构」（`main_sql`）→ 总库表也被 DROP → 建表失败 → `shard_cols` 空 → `logger.warning("分库表不存在且自动建表失败...跳过写入")` → 返回 0。且 `akshare_collector` 调它被 `except: pass` 吞 → **写全静默丢**。
+5. **读恒空（499 同型）**：`read_as_sector_ranking`（`:3083`）用 `self.read_conn`（**总库连接**）读快照库表 → 即使表在快照库也读空；消费方 `akshare_reader.get_sector_rankings` 降级路径恒 `[]`。
+
+### 15.2 修复（3 处，对齐 as_market_snapshot 家族「snapshot_conn 单路径」，426 S7/D5）
+1. **建表归属**：`_init_snapshot_tables` 补建 `as_sector_ranking`（快照库，与 `as_market_snapshot` 并列；`sector_name PK / ts_code / change_pct / up_count / down_count / lead_ts_code / lead_name / lead_change_pct / updated_at`）。
+2. **读路径**：`read_as_sector_ranking` 改走 `self.snapshot_conn`（修复 499 同型「分库表走总库连接读取」）。
+3. **写路径**：`write_as_sector_ranking` 加 `sector_code → ts_code` 列映射（akshare `板块代码` 对齐表结构 `ts_code` 列；price/volume/amount/rank 由 `_insert_from_df` 按表列过滤）。
+
+### 15.3 测试与验证
+- `tests/test_524_batch1_sector_ranking.py`（5 用例：快照库建表存在 / 表结构含 L4 字段 / 写读闭环（sector_code→ts_code + up/down）/ read 走 snapshot_conn 源码断言 / concept 恒空未复活）——**5 passed**；+ `test_426_phase5_fix.py` 4 回归 = **9 passed**。
+- py_compile OK；ruff：测试文件全过，`enhanced_cache_manager.py` 3 处 E702（`:1829/1831/1833` 分号）为 **既有基线**（git show HEAD 同款写法，非本次引入）。
+- **真实库只读冒烟（app_context）**：修复后 ECM 初始化即在快照库建出 `as_sector_ranking`（表存在=True，列 9 项齐）；`read_as_sector_ranking(top_n=5)` 正常返回 `[]`（空表不报错）；**写入落库待 daemon 重启后由 akshare_collector 30min 覆盖式任务实证**（行数>0 断言留批次1 实机）。
+- **需 daemon 重启生效**（加载新建表/读路径/写映射代码；按 daemon-stop-policy：EOD 运行期不为加载修复重启，今日 EOD 后或用户确认时重启）。
+
+### 15.4 遗留
+- `as_sector_ranking` 写入数据质量（lead_* 字段 akshare 采集未填充 → 恒空；513 #D5 同因）留 L4 前端接线时评估是否补采集。
+- 主库段 `_init_tables` 原 as_sector_ranking 建表（:828）保留（空壳被自清理 DROP 无害，避免动主库段影响面）；如需彻底移除可另立小号。

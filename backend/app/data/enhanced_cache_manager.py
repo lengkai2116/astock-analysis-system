@@ -1375,6 +1375,19 @@ class EnhancedCacheManager:
                 cached_at TEXT DEFAULT (datetime('now','localtime'))
             )
         """)
+        # 524号 批次1（Q4）：as_sector_ranking 建表归属修正
+        #   ——原建表在主库段（_init_tables），被 426 空壳自清理按「路由到分库且总库 0 行」
+        #   DROP；快照库段从未建表 → _insert_from_df 自动建表缺主库模板失败 → 写静默丢、
+        #   读走总库连接恒空。本表属 market_snapshot.db 家族（426 S7/D5：读写走
+        #   snapshot_conn 单路径），在此与 as_market_snapshot 并列建表。
+        self.snapshot_conn.execute("""
+            CREATE TABLE IF NOT EXISTS as_sector_ranking (
+                sector_name TEXT PRIMARY KEY, ts_code TEXT, change_pct REAL,
+                up_count INTEGER, down_count INTEGER,
+                lead_ts_code TEXT, lead_name TEXT, lead_change_pct REAL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         self.snapshot_conn.commit()
 
     # ── 计算分库建表（356号方案）──────────────────────────────────────────
@@ -2168,10 +2181,23 @@ class EnhancedCacheManager:
     # ==================== as_* 盘中数据（保留兼容） ====================
 
     def write_as_sector_ranking(self, records: list):
+        """524号 批次1（Q4）：写入行业板块排行（覆盖式，30min，akshare_collector）。
+
+        表归属 market_snapshot.db（快照库，_init_snapshot_tables 已补建——原建表在
+        主库段被 426 空壳自清理 DROP，写静默丢）；写路径经 _insert_from_df 分库路由。
+        records 为 akshare 行业板块字段（sector_code/...），此处把 sector_code → ts_code
+        列映射（表结构列），其余字段（price/volume/amount/rank）由 _insert_from_df 按表列过滤。
+        """
         if not records:
             return
         try:
-            self._insert_from_df('as_sector_ranking', pd.DataFrame(records))
+            mapped = []
+            for r in records:
+                _r = dict(r)
+                if 'sector_code' in _r and 'ts_code' not in _r:
+                    _r['ts_code'] = _r.pop('sector_code')
+                mapped.append(_r)
+            self._insert_from_df('as_sector_ranking', pd.DataFrame(mapped))
         except Exception:
             pass
 
@@ -3083,6 +3109,10 @@ class EnhancedCacheManager:
     def read_as_sector_ranking(self, top_n: int = None) -> list[dict]:
         """读取归档的行业板块排行（424号§10决策①：保留表）
 
+        524号 批次1（Q4）：读路径修正——本表属 market_snapshot.db 家族
+        （426 S7/D5：读写走 snapshot_conn 单路径），原 `self.read_conn`（总库
+        连接）读分库表恒空（499 号同型）；改走 `self.snapshot_conn`（快照库）。
+
         Args:
             top_n: 可选，仅返回前 N 条（按 change_pct 降序）
         """
@@ -3090,7 +3120,7 @@ class EnhancedCacheManager:
             sql = "SELECT * FROM as_sector_ranking ORDER BY change_pct DESC"
             if top_n:
                 sql += f" LIMIT {int(top_n)}"
-            rows = self.read_conn.execute(sql).fetchall()
+            rows = self.snapshot_conn.execute(sql).fetchall()
             if rows:
                 cols = ['sector_name', 'ts_code', 'change_pct', 'up_count', 'down_count',
                         'lead_ts_code', 'lead_name', 'lead_change_pct', 'updated_at']
