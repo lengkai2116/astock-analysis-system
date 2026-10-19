@@ -551,6 +551,12 @@ function renderGainers(list){
 
 // 前端数据缓存（30s TTL，避免短时间内重复请求）
 var _apiCache={};
+// 525 A1：innerHTML 拼接 API 值统一转义（自家采集源注入概率低，属展示层规范）
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
 function _cachedFetch(url,ttl){
   ttl=ttl||30;
   var now=Date.now();
@@ -605,7 +611,7 @@ function loadDashboardFull(){
 // 524 L1：大盘状态（market/state，4 状态·状态机 + 判定依据）
 function applyMarketState(st){
   if(!st)return;
-  var label=st.state_label||'--';
+  var label=escapeHtml(st.state_label||'--');
   var _color='#CBD5E1';
   if(st.state==='trend_up')_color='#EF4444';
   else if(st.state==='trend_down')_color='#22C55E';
@@ -613,17 +619,17 @@ function applyMarketState(st){
   var badge=document.getElementById('market-state-badge');
   if(badge){
     badge.innerHTML='<span style="color:'+_color+';margin-right:2px;">●</span>大盘状态 '+label;
-    badge.title=(st.data_date?('数据日 '+st.data_date):'')+(st.source?(' · '+st.source):'');
+    badge.title=escapeHtml((st.data_date?('数据日 '+st.data_date):'')+(st.source?(' · '+st.source):''));
   }
   var line=document.getElementById('market-state-line');
   if(line){
     var b=st.basis||{};
     var parts=[];
-    if(b.hs300_ret_20d!==undefined&&b.hs300_ret_20d!==null)parts.push('沪深300近20日 '+b.hs300_ret_20d+'%');
-    if(b.hs300_ret_60d!==undefined&&b.hs300_ret_60d!==null)parts.push('近60日 '+b.hs300_ret_60d+'%');
+    if(b.hs300_ret_20d!==undefined&&b.hs300_ret_20d!==null)parts.push('沪深300近20日 '+escapeHtml(b.hs300_ret_20d)+'%');
+    if(b.hs300_ret_60d!==undefined&&b.hs300_ret_60d!==null)parts.push('近60日 '+escapeHtml(b.hs300_ret_60d)+'%');
     if(b.hs300_close!==undefined&&b.hs300_ma60!==undefined)parts.push('收盘'+(b.hs300_close>=b.hs300_ma60?'站上':'跌破')+'60日线');
-    if(b.turnover_percentile!==undefined)parts.push('换手分位 '+b.turnover_percentile+'%');
-    if(b.limit_ratio!==undefined)parts.push('涨停比例 '+b.limit_ratio);
+    if(b.turnover_percentile!==undefined)parts.push('换手分位 '+escapeHtml(b.turnover_percentile)+'%');
+    if(b.limit_ratio!==undefined)parts.push('涨停比例 '+escapeHtml(b.limit_ratio));
     line.innerHTML='<span style="font-weight:600;color:'+_color+';">'+label+'</span>'
       +(parts.length?' <span style="color:var(--text-muted);">('+parts.join(' · ')+')</span>':'');
   }
@@ -637,15 +643,15 @@ function applyMarketBreadth(bd){
   var panel=document.getElementById('market-breadth-panel');
   if(!panel)return;
   var html='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-6);margin-bottom:var(--space-8);">'
-    +'<div><span class="up" style="font-weight:600;font-size:18px;">'+bd.up_count+'</span><div style="color:var(--text-muted);font-size:11px;">上涨</div></div>'
-    +'<div><span class="down" style="font-weight:600;font-size:18px;">'+bd.down_count+'</span><div style="color:var(--text-muted);font-size:11px;">下跌</div></div>'
-    +'<div><span style="font-weight:600;font-size:18px;">'+bd.flat_count+'</span><div style="color:var(--text-muted);font-size:11px;">平盘</div></div>'
+    +'<div><span class="up" style="font-weight:600;font-size:18px;">'+escapeHtml(bd.up_count)+'</span><div style="color:var(--text-muted);font-size:11px;">上涨</div></div>'
+    +'<div><span class="down" style="font-weight:600;font-size:18px;">'+escapeHtml(bd.down_count)+'</span><div style="color:var(--text-muted);font-size:11px;">下跌</div></div>'
+    +'<div><span style="font-weight:600;font-size:18px;">'+escapeHtml(bd.flat_count)+'</span><div style="color:var(--text-muted);font-size:11px;">平盘</div></div>'
     +'</div>'
     +'<div style="font-size:12px;color:var(--text-secondary);line-height:1.7;">'
-    +'上涨占比 <span class="up">'+bd.up_ratio+'%</span> · 下跌占比 <span class="down">'+bd.down_ratio+'%</span><br/>'
-    +'MA20占比 '+bd.ma20_ratio+'% · 涨停比例 '+bd.limit_ratio+' · 换手分位 '+bd.turnover_percentile+'%'
+    +'上涨占比 <span class="up">'+escapeHtml(bd.up_ratio)+'%</span> · 下跌占比 <span class="down">'+escapeHtml(bd.down_ratio)+'%</span><br/>'
+    +'MA20占比 '+escapeHtml(bd.ma20_ratio)+'% · 涨停比例 '+escapeHtml(bd.limit_ratio)+' · 换手分位 '+escapeHtml(bd.turnover_percentile)+'%'
     +'</div>'
-    +'<div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-6);">数据日 '+bd.trade_date+' · '+bd.count+' 只</div>';
+    +'<div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-6);">数据日 '+escapeHtml(bd.trade_date)+' · '+escapeHtml(bd.count)+' 只</div>';
   panel.innerHTML=html;
 }
 
@@ -671,12 +677,12 @@ function applyMarketEmotion(em){
   else if(em.phase==='ebb')_color='#F59E0B';     // 退潮 → 橙
   var m=em.metrics||{};
   var parts=[];
-  if(m.limit_up_count!==undefined)parts.push('涨停 '+m.limit_up_count);
-  if(m.limit_down_count!==undefined)parts.push('跌停 '+m.limit_down_count);
-  if(m.max_board_height!==undefined)parts.push('最高连板 '+m.max_board_height);
-  if(m.sealing_rate!==undefined)parts.push('封板率 '+m.sealing_rate+'%');
-  if(m.up_down_ratio!==undefined)parts.push('涨跌比 '+m.up_down_ratio);
-  var html='<span style="font-weight:600;color:'+_color+';">'+em.phase_label+'</span>';
+  if(m.limit_up_count!==undefined)parts.push('涨停 '+escapeHtml(m.limit_up_count));
+  if(m.limit_down_count!==undefined)parts.push('跌停 '+escapeHtml(m.limit_down_count));
+  if(m.max_board_height!==undefined)parts.push('最高连板 '+escapeHtml(m.max_board_height));
+  if(m.sealing_rate!==undefined)parts.push('封板率 '+escapeHtml(m.sealing_rate)+'%');
+  if(m.up_down_ratio!==undefined)parts.push('涨跌比 '+escapeHtml(m.up_down_ratio));
+  var html='<span style="font-weight:600;color:'+_color+';">'+escapeHtml(em.phase_label)+'</span>';
   if(parts.length)html+=' <span style="color:var(--text-muted);">('+parts.join(' · ')+')</span>';
   panel.innerHTML=html;
 }
@@ -691,8 +697,8 @@ function applySectorHeat(heat){
   var rows=heat.sectors.slice(0,8).map(function(s){
     var _c=s.heat_level==='top_10'?'#EF4444':(s.heat_level==='top_20'?'#F59E0B':'#CBD5E1');
     return '<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border-default);">'
-      +'<span>'+s.rank+'. '+s.industry+' <span style="color:var(--text-muted);font-size:11px;">'+s.stock_count+'只</span></span>'
-      +'<span style="color:'+_c+';">'+s.heat_level+' · 强度'+s.strength+'</span>'
+      +'<span>'+escapeHtml(s.rank)+'. '+escapeHtml(s.industry)+' <span style="color:var(--text-muted);font-size:11px;">'+escapeHtml(s.stock_count)+'只</span></span>'
+      +'<span style="color:'+_c+';">'+escapeHtml(s.heat_level)+' · 强度'+escapeHtml(s.strength)+'</span>'
       +'</div>';
   }).join('');
   panel.innerHTML='<div>'+rows+'</div>';
@@ -725,8 +731,8 @@ function applyMarketAlerts(al){
     else if(a.level==='warning')_color='#F59E0B';
     else if(a.level==='info')_color='#22C55E';
     return '<div style="margin-bottom:var(--space-6);line-height:1.6;">'
-      +'<div style="font-weight:600;color:'+_color+';">'+a.title+'</div>'
-      +'<div style="color:var(--text-secondary);font-size:12px;">'+a.detail+'</div>'
+      +'<div style="font-weight:600;color:'+_color+';">'+escapeHtml(a.title)+'</div>'
+      +'<div style="color:var(--text-secondary);font-size:12px;">'+escapeHtml(a.detail)+'</div>'
       +'</div>';
   }).join('');
   panel.innerHTML=rows;
@@ -745,19 +751,26 @@ function applyMarketOverview(ov){
   var _live=!!ov.data_is_live;
   if(ov.market_status){
     var dot=document.getElementById('market-status-dot');
-    dot.className='status-dot '+(_live?'green':'gray');
-    dot.title=_live?'实时':('盘后 · 数据日 '+(ov.data_date||''));
+    if(dot){
+      dot.className='status-dot '+(_live?'green':'gray');
+      dot.title=_live?'实时':('盘后 · 数据日 '+(ov.data_date||''));
+    }
   }
   if(ov.timestamp){
     var _mt=document.getElementById('market-update-time');
-    _mt.textContent=_live?ov.timestamp:('盘后 · 数据日 '+(ov.data_date||ov.timestamp));
+    if(_mt)_mt.textContent=_live?ov.timestamp:('盘后 · 数据日 '+(ov.data_date||ov.timestamp));
   }
-  if(ov.total_volume!==undefined) document.getElementById('total-volume-text').textContent=(ov.total_volume/1e8).toFixed(0)+'亿';
+  if(ov.total_volume!==undefined){
+    var tv=document.getElementById('total-volume-text');
+    if(tv)tv.textContent=(ov.total_volume/1e8).toFixed(0)+'亿';
+  }
   if(ov.total_volume_change_pct!==undefined){
     var chgEl=document.getElementById('total-volume-change');
-    var pct=ov.total_volume_change_pct;
-    chgEl.className=pct>=0?'up':'down';
-    chgEl.innerHTML=(pct>=0?'↑ +':'↓ ')+pct.toFixed(1)+'%';
+    if(chgEl){
+      var pct=ov.total_volume_change_pct;
+      chgEl.className=pct>=0?'up':'down';
+      chgEl.innerHTML=(pct>=0?'↑ +':'↓ ')+pct.toFixed(1)+'%';
+    }
   }
   if(ov.indexes&&ov.indexes.length){
     ov.indexes.forEach(function(idx,i){
@@ -851,7 +864,7 @@ function renderSectorMoneyflow(smd){
       (s.stocks||[]).forEach(function(st){
         var row=document.createElement('div');
         row.style.cssText='display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
-        row.innerHTML='<span>'+(st.name||'')+'</span><span class="up">'+(st.net_inflow>0?'+':'')+st.net_inflow.toFixed(2)+'</span>';
+        row.innerHTML='<span>'+escapeHtml(st.name||'')+'</span><span class="up">'+(st.net_inflow>0?'+':'')+Number(st.net_inflow||0).toFixed(2)+'</span>';
         wrap.appendChild(row);
       });
       inCont.appendChild(wrap);
@@ -868,7 +881,7 @@ function renderSectorMoneyflow(smd){
       (s.stocks||[]).forEach(function(st){
         var row=document.createElement('div');
         row.style.cssText='display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
-        row.innerHTML='<span>'+(st.name||'')+'</span><span class="'+(st.net_inflow>=0?'up':'down')+'">'+(st.net_inflow>0?'+':'')+Number(st.net_inflow).toFixed(2)+'</span>';
+        row.innerHTML='<span>'+escapeHtml(st.name||'')+'</span><span class="'+(st.net_inflow>=0?'up':'down')+'">'+(st.net_inflow>0?'+':'')+Number(st.net_inflow||0).toFixed(2)+'</span>';
         wrap.appendChild(row);
       });
       outCont.appendChild(wrap);

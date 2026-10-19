@@ -108,6 +108,8 @@ def get_market_emotion():
 def get_sector_heat():
     """板块热度/排名（524 号 L4）：sector_heat_cache 最新日全行业"""
     top_n = request.args.get('top_n', 8, type=int)
+    # 525 A4：clamp 防负数/超大值（负数/None 归默认，上限 100）
+    top_n = min(top_n if top_n and top_n > 0 else 8, 100)
     data = _service.get_sector_heat(top_n=top_n)
     return _data_response(data)
 

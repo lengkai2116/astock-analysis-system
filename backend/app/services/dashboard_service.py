@@ -959,8 +959,11 @@ class DashboardService:
             ret20 = ret60 = price = ma60 = None
             if df is not None and not df.empty:
                 df = df.sort_values('trade_date')
-                closes = df['close'].astype(float)
-                price = float(closes.iloc[-1])
+                # 525 A2：dropna 过滤 NaN 收盘价（否则 NaN 传播至 price/ma60 →
+                # _classify_state 比较 NaN 全落 ranging 静默降级）
+                closes = df['close'].astype(float).dropna()
+                if len(closes) > 0:
+                    price = float(closes.iloc[-1])
                 if len(closes) >= 21:
                     ret20 = float(round((closes.iloc[-1] / closes.iloc[-21] - 1) * 100, 2))
                 if len(closes) >= 61:
@@ -1111,6 +1114,9 @@ class DashboardService:
                             if v is not None and v == v]
                     if len(vals) >= 10:
                         s_vals = sorted(vals)
+                        # 525 A3：小样本 80 分位有偏——近20日窗口 len≈10 时
+                        # int(len*0.8)-1 取 index 7（第三大），非严格 80 分位；
+                        # 仅作拥挤度提示（建议型），可接受，不做精确分位
                         p80 = s_vals[int(len(s_vals) * 0.8) - 1]
                         cur = float(vals[0])  # 最新日（DESC 首行）
                         if cur >= p80:
