@@ -86,22 +86,27 @@ body { overflow-x:hidden; }
     </div>
 
     <!-- 四大指数卡片 -->
+    <!-- 527 批次1：每指数卡加「近5日/近20日」多日趋势角标（mini_kline 20日自算） -->
     <div class="index-grid" id="index-grid">
-      <div class="index-card" data-index="000001.SH"><div class="top"><span class="name">上证指数</span><span style="font-size:11px;color:var(--text-muted);">000001.SH</span></div><div class="value" id="idx-val-0">--</div><div class="change" id="idx-chg-0"></div><div id="mini-0" class="index-mini-chart"></div></div>
-      <div class="index-card" data-index="399001.SZ"><div class="top"><span class="name">深证成指</span><span style="font-size:11px;color:var(--text-muted);">399001.SZ</span></div><div class="value" id="idx-val-1">--</div><div class="change" id="idx-chg-1"></div><div id="mini-1" class="index-mini-chart"></div></div>
-      <div class="index-card" data-index="899050.BJ"><div class="top"><span class="name">北证50</span><span style="font-size:11px;color:var(--text-muted);">899050.BJ</span></div><div class="value" id="idx-val-2">--</div><div class="change" id="idx-chg-2"></div><div id="mini-2" class="index-mini-chart"></div></div>
-      <div class="index-card" data-index="399006.SZ"><div class="top"><span class="name">创业板指</span><span style="font-size:11px;color:var(--text-muted);">399006.SZ</span></div><div class="value" id="idx-val-3">--</div><div class="change" id="idx-chg-3"></div><div id="mini-3" class="index-mini-chart"></div></div>
+      <div class="index-card" data-index="000001.SH"><div class="top"><span class="name">上证指数</span><span style="font-size:11px;color:var(--text-muted);">000001.SH</span></div><div class="value" id="idx-val-0">--</div><div class="change" id="idx-chg-0"></div><div id="mini-0" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-0" style="font-size:11px;color:var(--text-muted);text-align:center;">--</div></div>
+      <div class="index-card" data-index="399001.SZ"><div class="top"><span class="name">深证成指</span><span style="font-size:11px;color:var(--text-muted);">399001.SZ</span></div><div class="value" id="idx-val-1">--</div><div class="change" id="idx-chg-1"></div><div id="mini-1" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-1" style="font-size:11px;color:var(--text-muted);text-align:center;">--</div></div>
+      <div class="index-card" data-index="899050.BJ"><div class="top"><span class="name">北证50</span><span style="font-size:11px;color:var(--text-muted);">899050.BJ</span></div><div class="value" id="idx-val-2">--</div><div class="change" id="idx-chg-2"></div><div id="mini-2" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-2" style="font-size:11px;color:var(--text-muted);text-align:center;">--</div></div>
+      <div class="index-card" data-index="399006.SZ"><div class="top"><span class="name">创业板指</span><span style="font-size:11px;color:var(--text-muted);">399006.SZ</span></div><div class="value" id="idx-val-3">--</div><div class="change" id="idx-chg-3"></div><div id="mini-3" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-3" style="font-size:11px;color:var(--text-muted);text-align:center;">--</div></div>
     </div>
 
     <!-- 四大指数合计成交额（含指数成分重叠）（近20日） -->
     <div class="chart-card" style="margin-bottom:var(--space-20);">
       <div class="chart-title">📊 四大指数合计成交额（含指数成分重叠）（近20日）</div>
+      <!-- 527 批次1：成交额「当日 vs 近5日均值 + 量能趋势」一句话说明 -->
+      <div id="volume-trend-note" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
       <div id="volume-chart" style="height:260px;"></div>
     </div>
 
     <!-- 全市场资金流向趋势（近20日）— 横跨全屏 -->
     <div class="chart-card" style="margin-bottom:var(--space-20);">
       <div class="chart-title">📈 全市场资金流向趋势（近20日）</div>
+      <!-- 527 批次1：资金流向「连续N日净流入/流出 + 近20日累计方向」一句话说明 -->
+      <div id="moneyflow-trend-note" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
       <div id="chart-fund-flow" class="chart-box"></div>
     </div>
 
@@ -755,6 +760,20 @@ function applyMarketOverview(ov){
         cEl.className='change '+(idx.change_pct>=0?'up':'down');
         cEl.innerHTML=idx.change_pct!==undefined?(idx.change_pct>=0?'↑ +':'↓ ')+Math.abs(idx.change_pct).toFixed(2)+'%':'--';
       }
+      // 527 批次1：指数卡多日趋势角标——从 mini_kline（近20日，升序）自算近5日/近20日涨跌
+      var tEl=document.getElementById('idx-trend-'+i);
+      if(tEl){
+        var kl=idx.mini_kline||[];
+        if(kl.length>=6){
+          var c0=+kl[kl.length-6].close, c1=+kl[kl.length-1].close;   // 近5日（含今日）
+          var c20_0=+kl[0].close;                                     // 近20日首日
+          var r5=(c1/c0-1)*100, r20=(c1/c20_0-1)*100;
+          var cls5=r5>=0?'up':'down', cls20=r20>=0?'up':'down';
+          tEl.innerHTML='近5日 <span class="'+cls5+'">'+(r5>=0?'+':'')+r5.toFixed(2)+'%</span> · 近20日 <span class="'+cls20+'">'+(r20>=0?'+':'')+r20.toFixed(2)+'%</span>';
+        } else {
+          tEl.textContent='--';
+        }
+      }
       if(idx.mini_kline&&idx.mini_kline.length){
         var mini=drawMiniK('mini-'+i,idx.mini_kline);
         if(mini&&charts.indexOf(mini)<0) charts.push(mini);
@@ -780,6 +799,21 @@ function renderVolumeChart(vd){
     }},barWidth:12}]
   });
   if(c&&charts.indexOf(c)<0)charts.push(c);
+  // 527 批次1：成交额「当日 vs 近5日均值 + 量能趋势」一句话说明（Q4 阈值 ±20%）
+  var note=document.getElementById('volume-trend-note');
+  if(note){
+    try{
+      var last=data[data.length-1];
+      var curAmt=+(last.total_amount/1e8).toFixed(0);
+      var last5=data.slice(-5);
+      var avg5=+(last5.reduce(function(s,v){return s+v.total_amount;},0)/last5.length/1e8).toFixed(0);
+      var hi20=+(Math.max.apply(null,data.map(function(v){return v.total_amount;}))/1e8).toFixed(0);
+      var diff=avg5>0?(curAmt-avg5)/avg5*100:0;
+      var label=diff>=20?'放量':(diff<=-20?'缩量':'平量');
+      var up=curAmt>=avg5;
+      note.innerHTML='当日 <strong>'+curAmt+' 亿</strong> · 较近5日均值 <span class="'+(up?'up':'down')+'">'+(diff>=0?'+':'')+diff.toFixed(1)+'%</span>（'+label+'）· 近20日高点 '+hi20+' 亿';
+    }catch(e){note.textContent='--';}
+  }
 }
 
 function renderMoneyflow(md){
@@ -794,6 +828,26 @@ function renderMoneyflow(md){
     series:[{name:'主力净流入',type:'bar',data:main,itemStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#3B82F6'},{offset:1,color:'rgba(59,130,246,0.2)'}])}},
       {name:'散户净流入',type:'line',data:retail,smooth:true,lineStyle:{color:'#EF4444',width:1.5},symbol:'none',areaStyle:{color:'rgba(239,68,68,0.08)'}}]});
   if(c&&charts.indexOf(c)<0)charts.push(c);
+  // 527 批次1：资金流向「连续N日净流入/流出 + 近20日累计方向」一句话说明（Q4 口径：N≥3 才说连续）
+  var note=document.getElementById('moneyflow-trend-note');
+  if(note){
+    try{
+      var mf=md.days.map(function(v){return +(v.main_force_net_inflow||0);});
+      if(!mf.length)throw new Error('no data');
+      var n=0, lastSign=mf[mf.length-1]>0?1:(mf[mf.length-1]<0?-1:0);
+      if(lastSign!==0){
+        for(var k=mf.length-1;k>=0;k--){
+          var s=mf[k]>0?1:(mf[k]<0?-1:0);
+          if(s===lastSign)n++;else break;
+        }
+      }
+      var cum=mf.reduce(function(a,b){return a+b;},0);
+      var dirTxt=lastSign>0?'主力连续 '+n+' 日净流入':(lastSign<0?'主力连续 '+n+' 日净流出':'主力近期方向不明');
+      var cumTxt=(cum>=0?'近20日累计净流入 ':'近20日累计净流出 ')+Math.abs(cum).toFixed(1)+' 亿';
+      var cls=lastSign>=0?'up':'down';
+      note.innerHTML='<span class="'+cls+'">'+dirTxt+'</span> · '+cumTxt;
+    }catch(e){note.textContent='--';}
+  }
 }
 
 function renderSectorChart(sd){
