@@ -1,6 +1,6 @@
 # 524号｜仪表盘「大盘行情信息」板块 前端功能定位与监控增强能力规划（wiki 学习 + 数据源实证）
 
-> **版本**：v1.4（2026-10-19 只读核查 + 能力规划 + **Q1~Q6 用户拍板 + 实施计划 + 批次1'（后端只读接口）+ 批次1（Q4 as_sector_ranking 建表归属修正）+ 批次2（前端 L1/L2/L5 骨架）已实施**；**代码改动仅限后端只读接口、板块库表修复与前端展示层**）
+> **版本**：v1.5（2026-10-19 只读核查 + 能力规划 + **Q1~Q6 用户拍板 + 实施计划 + 批次1'（后端只读接口）+ 批次1（Q4 as_sector_ranking 建表归属修正）+ 批次2（前端 L1/L2/L5 骨架）+ 批次3（前端 L3/L4 + 板块热度接口）已实施**；**代码改动仅限后端只读接口、板块库表修复与前端展示层**）
 > **性质**：只读核查档（前端展示层功能定位 + LLM wiki 知识库学习 + 数据源逐项实证）
 > **范围**：`_ui-prototype/dashboard.html`（前端）＋ 后端只读取数能力边界；**本档不涉及代码改动**
 > **前置**：513/514（数据与连接核查处置）、516（各模块数据二轮核查处置）、523（全市场日终散点新增）、481（dim8 第一层环境定位）
@@ -276,3 +276,31 @@ curl -s http://127.0.0.1:5001/api/v3/market/overview | python -m json.tool | hea
 ### 16.5 遗留
 - L5 预警规则（四条）批次4 落地；L3 情绪温度计 + L4 板块卡增强批次3 落地。
 - `market/emotion` 已并入 `dashboard/full` 但前端尚未消费（批次3 接线）。
+
+## 十七、批次3 已实施（2026-10-19，前端 L3 情绪温度计 + L4 板块热度；拍板：新增 `market/sector-heat` 接口）
+
+**范围**：`backend/app/services/dashboard_service.py` + `backend/app/routes/dashboard.py` + `_ui-prototype/dashboard.html` + `backend/tests/test_524_batch3_sector_heat.py`；**后端仅新增 1 只读接口（523 先例拍板），前端限展示层**。
+
+### 17.1 后端：`get_sector_heat` + 路由 + 聚合并入
+- `DashboardService.get_sector_heat(top_n=8)`（读 `sector_heat_cache` 最新日全行业，E1 实证 10-16 109 行业）→ `{date, count, source, sectors:[{industry, heat_level, strength, rank, stock_count}]}`（rank 升序、跳过无效行业名、rank=999 兜底）。
+- 路由 `GET /api/v3/market/sector-heat`（523 模式：`@api_cache(ttl=120)` + `@handle_exceptions` + `_data_response` 503 兜底）。
+- `get_dashboard_full` 并入 `sector_heat` 键（Q6 全选扩展——本批拍板新增）。
+
+### 17.2 前端 L3：市场情绪温度计（并入⑧面板）
+- ⑧「🛰️ 大盘状态」面板加「😊 市场情绪」区块（`#market-emotion-panel`）——`dd.market_emotion`：六段论 `phase_label` + 涨停生态（涨停/跌停/最高连板/封板率/涨跌比）；色点：ice 绿（逆向机会）/ climax 红（风险）/ ebb 橙 / 其余灰。
+
+### 17.3 前端 L4：板块热度 Top（⑥板块卡）
+- ⑥「🏭 行业板块净流入排行」卡加「🔥 板块热度 Top」（`#sector-heat-panel` + `#sector-heat-date`）——`dd.sector_heat`：top8 行业 `rank + industry + stock_count + heat_level + strength`；色标：top_10 红 / top_20 橙 / 其余灰。
+
+### 17.4 接线
+- `loadDashboardFull` 成功路径消费 `dd.market_emotion` → `applyMarketEmotion`、`dd.sector_heat` → `applySectorHeat`；降级 catch 补 `loadMarketEmotion()` / `loadSectorHeat()`（`_cachedFetch` TTL 120s）；空态兜底静默（§13 不造假）。
+
+### 17.5 验证
+- `tests/test_524_batch3_sector_heat.py`（6 用例：rank 升序 / top_n 截断 / 无效行业跳过 / 无数据 None / 路由注册 / dashboard/full 并入）——**6 passed**；py_compile OK、ruff 三文件全过。
+- **真实库只读冒烟（app_context）**：`sector_heat` 取数成功（date=2026-10-16、count=109、top3=出版业/路桥/影视音像 heat_level=top_10）；`dashboard/full` 含 `sector_heat` + `market_emotion`；JSON 可序列化。
+- 内联 JS `node --check` 通过（2 个 script 块 36KB）。
+- **浏览器渲染待用户起服目检**（start.command + 强刷；预期检查点：⑧ 面板「😊 市场情绪 情绪发酵」、⑥ 卡「🔥 板块热度 Top」出版业 top_10）。
+
+### 17.6 遗留
+- L5 预警规则（四条）批次4 落地（⑧ 面板预警区占位待填）。
+- BOCIASI 市场级聚合无现成（dim5 个股级，批次3 未做 BOCIASI 徽标，已登记）——若前端需 BOCIASI 徽标另立小号建市场级聚合。

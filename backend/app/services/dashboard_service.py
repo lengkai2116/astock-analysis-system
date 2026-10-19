@@ -852,6 +852,14 @@ class DashboardService:
         except Exception:
             pass
 
+        # 524 批次3：板块热度并入聚合载荷（L4 板块卡增强）
+        try:
+            heat = self.get_sector_heat()
+            if heat:
+                result['sector_heat'] = heat
+        except Exception:
+            pass
+
         if not result:
             return None
         return result
@@ -1000,6 +1008,50 @@ class DashboardService:
             }
         except Exception as e:
             logger.error(f"市场情绪获取失败: {e}")
+            return None
+
+    def get_sector_heat(self, top_n: int = 8) -> Optional[Dict]:
+        """板块热度/排名（524 号 L4）：sector_heat_cache 最新日全行业。
+
+        数据源：E1 `sector_heat_cache`（compute_cache.db，long 格式每行业一行）
+        → `{date, count, sectors:[{industry, heat_level, strength, rank, stock_count}]}`
+        全只读；rank 越小越热（升序取 top_n）。heat_level 枚举：
+        top_10/top_20/...（419 号方案B3 板块热度，481 号已修复取最新日全行业）。
+        """
+        try:
+            ecm = self.data_manager.cache
+            heat = ecm.get_cached_sector_heat()
+            if not heat:
+                logger.error("板块热度: sector_heat_cache 无数据")
+                return None
+            sectors = []
+            for ind, info in heat.items():
+                if not ind or str(ind).strip().lower() in ('nan', 'none', ''):
+                    continue
+                sectors.append({
+                    'industry': str(ind),
+                    'heat_level': str(info.get('heat_level', 'none')),
+                    'strength': float(info.get('strength', 0.0)),
+                    'rank': int(info.get('rank', 999)),
+                    'stock_count': int(info.get('stock_count', 0)),
+                })
+            sectors.sort(key=lambda x: x['rank'])
+            date = ''
+            try:
+                date_df = ecm._query_shard(
+                    'sector_heat_cache', "SELECT MAX(stat_date) AS d FROM sector_heat_cache")
+                if date_df is not None and not date_df.empty and date_df['d'].iloc[0]:
+                    date = str(date_df['d'].iloc[0])
+            except Exception:
+                pass
+            return {
+                'date': date,
+                'count': len(sectors),
+                'source': 'DuckDB sector_heat_cache',
+                'sectors': sectors[:top_n],
+            }
+        except Exception as e:
+            logger.error(f"板块热度获取失败: {e}")
             return None
 
     # ──────────────────────────────────────────────

@@ -122,6 +122,9 @@ body { overflow-x:hidden; }
       <div class="rank-table">
         <div style="font-weight:600;font-size:14px;margin-bottom:var(--space-10);">🏭 行业板块净流入排行</div>
         <div id="sector-inflow-chart" style="height:280px;"></div>
+        <!-- 524 L4：板块热度 Top（sector_heat_cache：heat_level/rank/strength） -->
+        <div style="font-weight:600;font-size:13px;margin-top:var(--space-12);margin-bottom:var(--space-6);">🔥 板块热度 Top <span id="sector-heat-date" style="font-size:11px;color:var(--text-muted);"></span></div>
+        <div id="sector-heat-panel" style="font-size:12px;color:var(--text-secondary);">加载中...</div>
       </div>
       <div class="rank-table">
         <div style="font-weight:600;font-size:14px;margin-bottom:var(--space-8);">🎯 Top5 板块·个股主力净流入</div>
@@ -156,6 +159,9 @@ body { overflow-x:hidden; }
         <!-- 524 L2：市场宽度（market/breadth：涨跌家数 + MA20占比/涨停比例/换手分位） -->
         <div style="font-weight:600;font-size:13px;margin-bottom:var(--space-6);">📊 市场宽度</div>
         <div id="market-breadth-panel" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-10);">加载中...</div>
+        <!-- 524 L3：市场情绪温度计（market/emotion：六段论阶段 + 涨停生态指标） -->
+        <div style="font-weight:600;font-size:13px;margin-bottom:var(--space-6);">😊 市场情绪</div>
+        <div id="market-emotion-panel" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-10);">加载中...</div>
         <!-- 524 L5：预警列表（骨架——规则批次4 落地：冰点/拥挤/宽度极端/状态切换） -->
         <div style="font-weight:600;font-size:13px;margin-bottom:var(--space-6);">🔔 预警</div>
         <div id="market-alert-list" style="font-size:12px;color:var(--text-muted);">暂无预警（规则批次4 落地）</div>
@@ -571,6 +577,9 @@ function loadDashboardFull(){
       // 524：大盘状态（L1）+ 市场宽度（L2）并入聚合载荷（Q6 全选）
       if(dd.market_state) applyMarketState(dd.market_state);
       if(dd.market_breadth) applyMarketBreadth(dd.market_breadth);
+      // 524 批次3：市场情绪（L3）+ 板块热度（L4）并入聚合载荷
+      if(dd.market_emotion) applyMarketEmotion(dd.market_emotion);
+      if(dd.sector_heat) applySectorHeat(dd.sector_heat);
       // 523：eod-snapshot 不在聚合载荷中，独立加载（TTL 120s）
       loadEodScatter();
     })
@@ -585,6 +594,8 @@ function loadDashboardFull(){
       loadEodScatter();
       loadMarketState();
       loadMarketBreadth();
+      loadMarketEmotion();
+      loadSectorHeat();
     });
 }
 
@@ -644,6 +655,55 @@ function loadMarketBreadth(){
   _cachedFetch(API+'/market/breadth',120)
     .then(function(d){if(d&&d.success&&d.data)applyMarketBreadth(d.data);})
     .catch(function(e){console.warn('market/breadth 加载失败',e);});
+}
+
+// 524 L3：市场情绪温度计（market/emotion：六段论阶段 + 涨停生态指标）
+function applyMarketEmotion(em){
+  if(!em)return;
+  var panel=document.getElementById('market-emotion-panel');
+  if(!panel)return;
+  var _color='#CBD5E1';
+  if(em.phase==='ice')_color='#22C55E';          // 冰点 → 绿（逆向机会）
+  else if(em.phase==='climax')_color='#EF4444';  // 高潮 → 红（风险）
+  else if(em.phase==='ebb')_color='#F59E0B';     // 退潮 → 橙
+  var m=em.metrics||{};
+  var parts=[];
+  if(m.limit_up_count!==undefined)parts.push('涨停 '+m.limit_up_count);
+  if(m.limit_down_count!==undefined)parts.push('跌停 '+m.limit_down_count);
+  if(m.max_board_height!==undefined)parts.push('最高连板 '+m.max_board_height);
+  if(m.sealing_rate!==undefined)parts.push('封板率 '+m.sealing_rate+'%');
+  if(m.up_down_ratio!==undefined)parts.push('涨跌比 '+m.up_down_ratio);
+  var html='<span style="font-weight:600;color:'+_color+';">'+em.phase_label+'</span>';
+  if(parts.length)html+=' <span style="color:var(--text-muted);">('+parts.join(' · ')+')</span>';
+  panel.innerHTML=html;
+}
+
+// 524 L4：板块热度 Top（sector_heat_cache：heat_level/rank/strength/stock_count）
+function applySectorHeat(heat){
+  if(!heat||!heat.sectors||!heat.sectors.length)return;
+  var panel=document.getElementById('sector-heat-panel');
+  if(!panel)return;
+  var dateEl=document.getElementById('sector-heat-date');
+  if(dateEl)dateEl.textContent=heat.date?('· '+heat.date):'';
+  var rows=heat.sectors.slice(0,8).map(function(s){
+    var _c=s.heat_level==='top_10'?'#EF4444':(s.heat_level==='top_20'?'#F59E0B':'#CBD5E1');
+    return '<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border-default);">'
+      +'<span>'+s.rank+'. '+s.industry+' <span style="color:var(--text-muted);font-size:11px;">'+s.stock_count+'只</span></span>'
+      +'<span style="color:'+_c+';">'+s.heat_level+' · 强度'+s.strength+'</span>'
+      +'</div>';
+  }).join('');
+  panel.innerHTML='<div>'+rows+'</div>';
+}
+
+function loadMarketEmotion(){
+  _cachedFetch(API+'/market/emotion',120)
+    .then(function(d){if(d&&d.success&&d.data)applyMarketEmotion(d.data);})
+    .catch(function(e){console.warn('market/emotion 加载失败',e);});
+}
+function loadSectorHeat(){
+  _cachedFetch(API+'/market/sector-heat',120)
+    .then(function(d){if(d&&d.success&&d.data)applySectorHeat(d.data);})
+    .catch(function(e){console.warn('market/sector-heat 加载失败',e);});
 }
 
 // 提取 applyMarketOverview 供聚合端点和 WebSocket 共用

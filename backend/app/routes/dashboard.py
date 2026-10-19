@@ -102,6 +102,16 @@ def get_market_emotion():
     return _data_response(data)
 
 
+@dashboard_bp.route('/api/v3/market/sector-heat', methods=['GET'])
+@api_cache(ttl=120)
+@handle_exceptions
+def get_sector_heat():
+    """板块热度/排名（524 号 L4）：sector_heat_cache 最新日全行业"""
+    top_n = request.args.get('top_n', 8, type=int)
+    data = _service.get_sector_heat(top_n=top_n)
+    return _data_response(data)
+
+
 # ──────────────────────────────────────────────
 # 5. 板块涨跌幅（sector-sector）
 # ──────────────────────────────────────────────
