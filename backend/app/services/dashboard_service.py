@@ -57,21 +57,26 @@ class DashboardService:
         _any_live = False
 
         # 盘中：直接从 InMemoryStateStore 读取（全局数据体系架构：mootdx TCP → store）
+        # 526 B3 单位契约：live amount=mootdx 元（原样）；DB amount=Tushare 千元（×1000=元）。
+        # 两端换算后均以「元」入 total_volume，勿单侧改缩放否则混合源 1000× 错位。
         try:
             from app.data.in_memory_store import store as mem_store
             snapshot = mem_store.get_snapshot()
             live_map = {}
+            # 526 B18：{ts_code: row} 字典 O(1) 查，替代 O(indices×rows) 嵌套线性扫描
+            snapshot_by_code = {}
+            for r in snapshot:
+                snapshot_by_code[r.get('ts_code')] = r
             for cfg in INDEX_CONFIG:
                 code = cfg['ts_code']
-                for r in snapshot:
-                    if r.get('ts_code') == code:
-                        live_map[code] = {
-                            'price': float(r.get('price', 0)),
-                            'change_pct': float(r.get('change_pct', 0)),
-                            'change_value': float(r.get('change', 0)),
-                            'amount': self._safe_float(r.get('amount', 0)),
-                        }
-                        break
+                r = snapshot_by_code.get(code)
+                if r is not None:
+                    live_map[code] = {
+                        'price': float(r.get('price', 0)),
+                        'change_pct': float(r.get('change_pct', 0)),
+                        'change_value': float(r.get('change', 0)),
+                        'amount': self._safe_float(r.get('amount', 0)),  # mootdx 元
+                    }
         except Exception:
             live_map = {}
 
@@ -90,12 +95,17 @@ class DashboardService:
                         hist_data[-1] if isinstance(hist_data[-1], dict)
                         else hist_data.iloc[-1].to_dict()
                     )
-                    prev_close_val = (
-                        float(latest_hist.get('pre_close', 0))
-                        or float(hist_data[-2].get('close', 0))
-                        if len(hist_data) > 1 else 0
-                    )
-                    prev_close = prev_close_val
+                    # 526 B4：pre_close 优先；无则回退前一日收盘（兼容 dict/DataFrame 行）
+                    prev_close_val = None
+                    if latest_hist.get('pre_close') is not None:
+                        prev_close_val = float(latest_hist['pre_close'])
+                    elif len(hist_data) > 1:
+                        prev_hist = (
+                            hist_data[-2] if isinstance(hist_data[-2], dict)
+                            else hist_data.iloc[-2].to_dict()
+                        )
+                        prev_close_val = float(prev_hist.get('close', 0) or 0)
+                    prev_close = prev_close_val if prev_close_val is not None else 0
                     # 迷你K线（最近20交易日）
                     _sorted = hist_data if (
                         len(hist_data) > 1
@@ -138,7 +148,8 @@ class DashboardService:
                     'change_amount': round(change_amount, 2),
                     'mini_kline': mini_kline,
                     'amount': amount,
-                    'source': 'AKShare 实时行情' if live else '日线缓存',
+                    # 526 B17：live 实为 InMemoryStateStore（mootdx TCP）→ 标注修正（原误标 AKShare）
+                    'source': 'mootdx 实时行情' if live else '日线缓存',
                 })
                 total_volume += amount
             except Exception as e:
@@ -178,8 +189,9 @@ class DashboardService:
                 today_amt = _today_row[0] * 1000
                 prev_amt = _prev_row[0] * 1000
                 volume_change_pct = round((today_amt - prev_amt) / prev_amt * 100, 1)
-        except Exception:
-            pass
+        except Exception as e:
+            # 526 B19：volume_change 失败静默变 0 与真实 0% 不可区分——补 debug 日志
+            logger.debug(f"成交额同比变化计算失败: {e}")
 
         # 516 批次3（Q4）：附「数据日/是否实时」以便前端按数据时效标注（不再一律显示「交易中」）
         _dd = self._try_get_latest_trade_date() or ''
@@ -255,13 +267,18 @@ class DashboardService:
                     d = row if isinstance(row, dict) else row.to_dict()
                     raw_date = d.get('trade_date', d.get('date', ''))
                     # 保留完整 YYYYMMDD 作为 key 避免不同年份数据混淆
+                    # 526 B15：datetime.date/pd.Timestamp（含 00:00:00 时间尾巴）不再走 else
                     if isinstance(raw_date, datetime):
                         date_key = raw_date.strftime('%Y%m%d')
                     elif isinstance(raw_date, str) and len(raw_date) == 8 and raw_date.isdigit():
                         date_key = raw_date
                     elif isinstance(raw_date, str) and '-' in raw_date:
                         parts = raw_date.split('-')
-                        date_key = f"{parts[0]}{parts[1]}{parts[2]}"
+                        # 截掉可能的 'HH:MM:SS' 时间尾巴（pd.Timestamp str 含空格）
+                        day = parts[2][:2] if len(parts) > 2 else ''
+                        date_key = f"{parts[0]}{parts[1]}{day}"
+                    elif hasattr(raw_date, 'strftime'):  # datetime.date / pd.Timestamp
+                        date_key = raw_date.strftime('%Y%m%d')
                     else:
                         date_key = str(raw_date)
 
@@ -371,8 +388,9 @@ class DashboardService:
             try:
                 for s in Stock.query.filter(Stock.ts_code.in_(ts_codes)).all():
                     stock_map[s.ts_code] = s.name
-            except Exception:
-                pass
+            except Exception as e:
+                # 526 B19：名称填充失败静默变空名——补 debug 日志
+                logger.debug(f"涨跌幅榜 Stock 名称查询失败: {e}")
             # ponytail: 如果 Stock 表为空，从 DataManager 获取一次
             # （全局数据体系 §2.4 例外：降级场景）
             if not stock_map:
@@ -382,8 +400,8 @@ class DashboardService:
                         if basic:
                             for r in basic:
                                 stock_map[r.get('ts_code', '')] = r.get('name', '')
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"涨跌幅榜 get_stock_list 名称兜底失败: {e}")
 
             all_df['name'] = all_df['ts_code'].map(lambda x: stock_map.get(x, ''))
             sort_asc = (type == 'down')
@@ -463,23 +481,29 @@ class DashboardService:
             try:
                 for s in Stock.query.filter(Stock.ts_code.in_(ts_codes)).all():
                     stock_map[s.ts_code] = s.name
-            except Exception:
-                pass
+            except Exception as e:
+                # 526 B19：名称填充失败静默变空名——补 debug 日志
+                logger.debug(f"eod-snapshot Stock 名称查询失败: {e}")
             if not stock_map:
                 try:
                     basic = self.data_manager.get_stock_list()
                     if basic:
                         for r in basic:
                             stock_map[r.get('ts_code', '')] = r.get('name', '')
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"eod-snapshot get_stock_list 名称兜底失败: {e}")
 
             stocks = []
             for _, row in merged.iterrows():
                 close = float(row.get('close') or 0)
                 pct = float(row.get('pct_chg') or 0)
-                denom = 1 + pct / 100.0
-                pre_close = close / denom if abs(denom) > 1e-9 else close
+                # 526 B16：pct 越界（≤-100 或 >100）时 pre_close 推导失真
+                # （denom 极小/负 → X 轴散点错位）——越界回退 close，不参与推导
+                if -100 < pct <= 100:
+                    denom = 1 + pct / 100.0
+                    pre_close = close / denom if abs(denom) > 1e-9 else close
+                else:
+                    pre_close = close
                 stocks.append({
                     'ts_code': str(row.get('ts_code', '')),
                     'name': stock_map.get(row.get('ts_code', ''), ''),
@@ -654,7 +678,7 @@ class DashboardService:
                     if result:
                         has_nonzero = any(
                             abs(d.get('main_force_net_inflow', 0)) > 0.01
-                            or abs(d.get('retail_net_outflow', 0)) > 0.01
+                            or abs(d.get('retail_net_inflow', 0)) > 0.01
                             for d in result.get('days', [])
                         )
                         if has_nonzero:
@@ -668,6 +692,7 @@ class DashboardService:
                     if result:
                         has_nonzero = any(
                             abs(d.get('main_force_net_inflow', 0)) > 0.01
+                            or abs(d.get('retail_net_inflow', 0)) > 0.01
                             for d in result.get('days', [])
                         )
                         if has_nonzero:
@@ -868,7 +893,8 @@ class DashboardService:
         except Exception:
             pass
 
-        if not result:
+        # 526 B7：result 恒含 timestamp，原 `if not result` 死分支——改 len<=1 判「空收集」
+        if len(result) <= 1:
             return None
         return result
 
@@ -1371,9 +1397,12 @@ class DashboardService:
             elif isinstance(d, str):
                 d = d.replace('-', '')
             net_main = _sf(r.get('net_lg_amount')) + _sf(r.get('net_elg_amount'))
+            # 526 B5：net_sm_amount 显式 is None 判空（合法 0.0 不再触发 buy-sell 兜底）
+            net_sm = r.get('net_sm_amount')
             net_retail = (
-                _sf(r.get('net_sm_amount'))
-                or (_sf(r.get('buy_sm_amount')) - _sf(r.get('sell_sm_amount')))
+                _sf(net_sm)
+                if net_sm is not None
+                else (_sf(r.get('buy_sm_amount')) - _sf(r.get('sell_sm_amount')))
             )
             daily[d]['main'] += net_main
             daily[d]['retail'] += net_retail

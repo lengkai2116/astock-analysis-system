@@ -142,7 +142,7 @@ body { overflow-x:hidden; }
       </div>
       <div class="rank-table">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-12);">
-          <span style="font-weight:600;">📈 涨幅前十</span>
+          <span id="gainers-title" style="font-weight:600;">📈 涨幅前十</span>
           <div style="display:flex;gap:var(--space-4);"><span class="tag tag-bullish" id="gainers-tab" style="cursor:pointer;">涨幅</span><span class="tag tag-neutral" id="losers-tab" style="cursor:pointer;">跌幅</span></div>
         </div>
         <table class="table" id="gainers-table">
@@ -374,23 +374,22 @@ function bindEodPanZoom(domId){
   if(!c)return;
   var o=c.getOption();
   var _xLog=(o.xAxis[0].type==='log');
-  var cur={x0:o.xAxis[0].min, x1:o.xAxis[0].max, y0:o.yAxis[0].min, y1:o.yAxis[0].max};
+  // 526 B9：setOption 后立即 getOption 时 min/max 可能 undefined → 兜底 null（ECharts 自动）
+  var cur={x0:o.xAxis[0].min!=null?o.xAxis[0].min:null, x1:o.xAxis[0].max!=null?o.xAxis[0].max:null, y0:o.yAxis[0].min!=null?o.yAxis[0].min:null, y1:o.yAxis[0].max!=null?o.yAxis[0].max:null};
   var def={x0:cur.x0,x1:cur.x1,y0:cur.y0,y1:cur.y1};
   function apply(){
-    var cfg={xAxis:{min:cur.x0,max:cur.x1},yAxis:{min:cur.y0,max:cur.y1}};
-    if(_xLog&&cur.x0<=0)cfg.xAxis.min=1e-6;  // log 轴 min 必须 >0
+    var cfg={xAxis:{},yAxis:{}};
+    if(cur.x0!=null)cfg.xAxis.min=cur.x0;
+    if(cur.x1!=null)cfg.xAxis.max=cur.x1;
+    if(cur.y0!=null)cfg.yAxis.min=cur.y0;
+    if(cur.y1!=null)cfg.yAxis.max=cur.y1;
+    if(_xLog&&cur.x0!=null&&cur.x0<=0)cfg.xAxis.min=1e-6;  // log 轴 min 必须 >0
     c.setOption(cfg);
   }
   function reset(){cur={x0:def.x0,x1:def.x1,y0:def.y0,y1:def.y1};apply();}
-  // 左键拖拽 = 平移（像素→数据差，基准=mousedown 时范围，避免换算漂移）
+  // 526 B9：window 监听改为拖拽期间挂载、结束移除（原 4 个常驻全局监听不清理）
   var down=null;
-  el.addEventListener('mousedown',function(e){
-    if(e.button!==0)return;
-    var rect=el.getBoundingClientRect();
-    down={sx:e.clientX-rect.left, sy:e.clientY-rect.top, r:{x0:cur.x0,x1:cur.x1,y0:cur.y0,y1:cur.y1}};
-    e.preventDefault();
-  });
-  window.addEventListener('mousemove',function(e){
+  function onMove(e){
     if(!down)return;
     var rect=el.getBoundingClientRect();
     var px=e.clientX-rect.left, py=e.clientY-rect.top;
@@ -403,8 +402,20 @@ function bindEodPanZoom(domId){
     var ddx=v1[0]-v0[0], ddy=v1[1]-v0[1];
     cur={x0:down.r.x0-ddx, x1:down.r.x1-ddx, y0:down.r.y0-ddy, y1:down.r.y1-ddy};
     apply();
+  }
+  function onUp(){
+    down=null;
+    window.removeEventListener('mousemove',onMove);
+    window.removeEventListener('mouseup',onUp);
+  }
+  el.addEventListener('mousedown',function(e){
+    if(e.button!==0)return;
+    var rect=el.getBoundingClientRect();
+    down={sx:e.clientX-rect.left, sy:e.clientY-rect.top, r:{x0:cur.x0,x1:cur.x1,y0:cur.y0,y1:cur.y1}};
+    e.preventDefault();
+    window.addEventListener('mousemove',onMove);
+    window.addEventListener('mouseup',onUp);
   });
-  window.addEventListener('mouseup',function(){down=null;});
   // 滚轮 = 以图片中心为锚点缩放（像素空间，log 轴正确）
   el.addEventListener('wheel',function(e){
     e.preventDefault();
@@ -420,8 +431,8 @@ function bindEodPanZoom(domId){
     cur={x0:np0[0], x1:np1[0], y0:np0[1], y1:np1[1]};
     apply();
   },{passive:false});
-  // 移出制图区 = 复位默认
-  el.addEventListener('mouseleave',function(){down=null;reset();});
+  // 移出制图区 = 复位默认 + 清理拖拽监听
+  el.addEventListener('mouseleave',function(){onUp();reset();});
 }
 
 // ===== 5. 加载行业板块涨跌幅图（top5红涨 + top5绿跌）=====
@@ -446,58 +457,14 @@ function loadSectorChanges(){
 }
 
 // ===== 6. 加载板块资金流向 + Top个股 =====
+// 526 B2：loadSectorMoneyflow 仅负责取数，渲染全部交给 renderSectorMoneyflow
+// （原 ~100 行近重复已与 renderSectorMoneyflow 分叉：B1 流入分支缺 Number 转义——
+// 抽共享后统一走 renderSectorMoneyflow 的 escapeHtml + Number(st.net_inflow||0) 兜底）
 function loadSectorMoneyflow(){
   _cachedFetch(API+'/market/sector-moneyflow',120)
     .then(function(d){
       if(!d.success||!d.data)return;
-      // 板块净流入排行图（top5红流入 + top5绿流出）
-      var inArr = (d.data.sectors||[]).slice(0,5);
-      var outArr = (d.data.out_sectors||[]).slice(0,5);
-      var chartData = inArr.concat(outArr).sort(function(a,b){return (a.net_inflow||0)-(b.net_inflow||0);});
-      if(chartData.length){
-        var c=_chart('sector-inflow-chart');
-        c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:60,right:50,bottom:10,top:5},
-          xAxis:{show:false},yAxis:{type:'category',data:chartData.map(function(v){return v.name;}),axisLabel:{color:'#CBD5E1',fontSize:11,width:50,overflow:'truncate'}},
-          series:[{type:'bar',data:chartData.map(function(v){var nf=+(v.net_inflow||0).toFixed(1);return {value:nf,itemStyle:{color:nf>=0?'#EF4444':'#22C55E'}};}),barWidth:10,
-            label:{show:true,position:'right',formatter:function(p){return p.value>0?'+'+p.value+'亿':p.value+'亿';},fontSize:10,color:'#CBD5E1'}}]});
-        if(c&&charts.indexOf(c)<0)charts.push(c);
-      }
-      // Top5流入卡片
-      if(d.data.sectors&&d.data.sectors.length){
-        var inCont=document.getElementById('top-stock-cards');inCont.innerHTML='';
-        d.data.sectors.slice(0,5).forEach(function(s){
-          var wrap=document.createElement('div');
-          wrap.style.cssText='background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:var(--space-4);flex:1;min-width:0;';
-          var h=document.createElement('div');
-          h.style.cssText='font-size:11px;font-weight:500;color:var(--text-primary);margin-bottom:var(--space-3);';
-          h.textContent=s.name;wrap.appendChild(h);
-          (s.stocks||[]).forEach(function(st){
-            var row=document.createElement('div');
-            row.style.cssText='display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
-            row.innerHTML='<span>'+(st.name||'')+'</span><span class="up">'+(st.net_inflow>0?'+':'')+st.net_inflow.toFixed(2)+'</span>';
-            wrap.appendChild(row);
-          });
-          inCont.appendChild(wrap);
-        });
-      }
-      // Top5流出卡片
-      if(d.data.out_sectors&&d.data.out_sectors.length){
-        var outCont=document.getElementById('outflow-cards');outCont.innerHTML='';
-        d.data.out_sectors.slice(0,5).forEach(function(s){
-          var wrap=document.createElement('div');
-          wrap.style.cssText='background:var(--bg-subtle);border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:var(--space-4);flex:1;min-width:0;';
-          var h=document.createElement('div');
-          h.style.cssText='font-size:11px;font-weight:500;color:var(--text-primary);margin-bottom:var(--space-3);';
-          h.textContent=s.name;wrap.appendChild(h);
-          (s.stocks||[]).forEach(function(st){
-            var row=document.createElement('div');
-            row.style.cssText='display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);padding:1px 0;';
-            row.innerHTML='<span>'+(st.name||'')+'</span><span class="'+(st.net_inflow>=0?'up':'down')+'">'+(st.net_inflow>0?'+':'')+Number(st.net_inflow).toFixed(2)+'</span>';
-            wrap.appendChild(row);
-          });
-          outCont.appendChild(wrap);
-        });
-      }
+      renderSectorMoneyflow(d.data);
     })
     .catch(function(e){console.warn('sector-moneyflow 加载失败',e);});
 }
@@ -509,7 +476,9 @@ function switchGainers(type){
   gainerType=type;
   document.getElementById('gainers-tab').className='tag '+(type=='up'?'tag-bullish':'tag-neutral');
   document.getElementById('losers-tab').className='tag '+(type=='down'?'tag-bullish':'tag-neutral');
-  document.querySelector('.rank-table div:first-child span:first-child').textContent=type=='up'?'📈 涨幅前十':'📉 跌幅前十';
+  // 526 B12：位置选择器改 id（原 .rank-table div:first-child span:first-child 在 ⑧ 面板加入后易错选）
+  var titleEl=document.getElementById('gainers-title');
+  if(titleEl)titleEl.textContent=type=='up'?'📈 涨幅前十':'📉 跌幅前十';
   loadTopGainers(type);
 }
 document.getElementById('gainers-tab').onclick=function(){switchGainers('up');};
@@ -531,10 +500,12 @@ function loadTopGainers(type){type=type||'up';
     });
 }
 function renderGainers(list){
-  if(!list||!list.length)return;
   var tbl=document.getElementById('gainers-table');
+  if(!tbl)return;
   // 保留表头行
   while(tbl.rows.length>1)tbl.deleteRow(1);
+  // 526 B13：先清表再判空——空列表不再保留旧行（与错误路径清表一致）
+  if(!list||!list.length)return;
   list.slice(0,10).forEach(function(s){
     var row=tbl.insertRow();
     var chg=+(s.change_pct||s.pct_chg||0);

@@ -42,7 +42,9 @@ _service = DashboardService()
 @handle_exceptions
 def get_index_daily():
     """四大交易所合计成交额柱状图（近20日）"""
+    # 526 B8：days clamp 1~60（防负数/超大值）
     days = request.args.get('days', 20, type=int)
+    days = max(1, min(days if days else 20, 60))
     data = _service.get_market_volume(days=days)
     return _data_response(data)
 
@@ -51,11 +53,16 @@ def get_index_daily():
 # 4. 涨幅榜/跌幅榜（daily-top）
 # ──────────────────────────────────────────────
 @dashboard_bp.route('/api/v3/market/daily-top', methods=['GET'])
+@api_cache(ttl=120)  # 526 B10：补 api_cache（其余 sibling 端点均有，防热点路径每请求重算）
 @handle_exceptions
 def get_daily_top():
     """涨幅前十/跌幅前十排行"""
+    # 526 B8：type 白名单 up/down；limit clamp 1~50
     type_ = request.args.get('type', 'up')
+    if type_ not in ('up', 'down'):
+        type_ = 'up'
     limit = request.args.get('limit', 10, type=int)
+    limit = max(1, min(limit if limit else 10, 50))
     data = _service.get_daily_top(type=type_, limit=limit)
     return _data_response(data)
 
@@ -131,7 +138,9 @@ def get_market_alerts():
 @handle_exceptions
 def get_sector_sector():
     """行业板块涨跌幅排行"""
+    # 526 B8：top_n clamp 1~50
     top_n = request.args.get('top_n', 8, type=int)
+    top_n = max(1, min(top_n if top_n else 8, 50))
     data = _service.get_sector_changes(top_n=top_n)
     return _data_response(data)
 
@@ -146,7 +155,9 @@ def get_sector_sector():
 @handle_exceptions
 def get_moneyflow_summary():
     """全市场资金流向趋势（近20日）"""
+    # 526 B8：days clamp 1~60
     days = request.args.get('days', 20, type=int)
+    days = max(1, min(days if days else 20, 60))
     data = _service.get_moneyflow_summary(days=days)
     return _data_response(data)
 
@@ -159,8 +170,11 @@ def get_moneyflow_summary():
 @handle_exceptions
 def get_sector_moneyflow():
     """行业板块净流入排行 + Top5板块×前3个股"""
+    # 526 B8：top_n clamp 1~50；stocks_per_sector clamp 1~10
     top_n = request.args.get('top_n', 8, type=int)
+    top_n = max(1, min(top_n if top_n else 8, 50))
     stocks_per = request.args.get('stocks_per_sector', 3, type=int)
+    stocks_per = max(1, min(stocks_per if stocks_per else 3, 10))
     data = _service.get_sector_moneyflow(top_n=top_n, stocks_per_sector=stocks_per)
     return _data_response(data)
 
