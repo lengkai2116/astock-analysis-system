@@ -1,6 +1,6 @@
 # 524号｜仪表盘「大盘行情信息」板块 前端功能定位与监控增强能力规划（wiki 学习 + 数据源实证）
 
-> **版本**：v1.3（2026-10-19 只读核查 + 能力规划 + **Q1~Q6 用户拍板 + 实施计划 + 批次1'（后端只读接口）+ 批次1（Q4 as_sector_ranking 建表归属修正）已实施**；**代码改动仅限后端只读接口与板块库表修复**）
+> **版本**：v1.4（2026-10-19 只读核查 + 能力规划 + **Q1~Q6 用户拍板 + 实施计划 + 批次1'（后端只读接口）+ 批次1（Q4 as_sector_ranking 建表归属修正）+ 批次2（前端 L1/L2/L5 骨架）已实施**；**代码改动仅限后端只读接口、板块库表修复与前端展示层**）
 > **性质**：只读核查档（前端展示层功能定位 + LLM wiki 知识库学习 + 数据源逐项实证）
 > **范围**：`_ui-prototype/dashboard.html`（前端）＋ 后端只读取数能力边界；**本档不涉及代码改动**
 > **前置**：513/514（数据与连接核查处置）、516（各模块数据二轮核查处置）、523（全市场日终散点新增）、481（dim8 第一层环境定位）
@@ -251,3 +251,28 @@ curl -s http://127.0.0.1:5001/api/v3/market/overview | python -m json.tool | hea
 ### 15.4 遗留
 - `as_sector_ranking` 写入数据质量（lead_* 字段 akshare 采集未填充 → 恒空；513 #D5 同因）留 L4 前端接线时评估是否补采集。
 - 主库段 `_init_tables` 原 as_sector_ranking 建表（:828）保留（空壳被自清理 DROP 无害，避免动主库段影响面）；如需彻底移除可另立小号。
+
+## 十六、批次2 已实施（2026-10-19，前端 L1/L2/L5 骨架）
+
+**范围**：`_ui-prototype/dashboard.html`（前端展示层，前端阶段规则）；**未触后端/依赖/配置**。
+
+### 16.1 L1 大盘状态概览（增强① 页头）
+- 页头 `page-header-actions` 新增 `#market-state-badge`（`market/state` 4 状态·状态机徽标）——色点 + 「大盘状态 {label}」：`trend_up` 红 / `trend_down` 绿 / `high_volatility` 橙 / 其余中性灰；`title` 附数据日 + source。
+- `#market-state-line` 状态行：label + 判定依据（`basis`：沪深300 近20日/近60日涨跌、收盘 vs 60日线站上/跌破、换手分位、涨停比例）。
+- `#market-state-date` 显示数据日。
+
+### 16.2 L2 市场宽度面板（落 ⑧ 空位）
+- ⑧ 空位（原「策略信号汇总」占位）改为「🛰️ 大盘状态」面板：状态行 + **市场宽度**（`market/breadth`）——上涨/下跌/平盘家数三栏 + 上涨/下跌占比 + MA20占比/涨停比例/换手分位 + 数据日/总数；**预警**区块（L5 骨架：暂无预警占位，规则批次4 落地：冰点/拥挤/宽度极端/状态切换）。
+
+### 16.3 接线
+- `loadDashboardFull` 成功路径消费 `dd.market_state` → `applyMarketState`、`dd.market_breadth` → `applyMarketBreadth`（Q6 聚合并入生效）。
+- 降级 catch 补 `loadMarketState()` / `loadMarketBreadth()`（独立请求，`_cachedFetch` TTL 120s）。
+- 空态兜底：接口失败静默（console.warn），面板保持「加载中/暂无预警」占位（§13 不造假数据）。
+
+### 16.4 验证
+- 内联 JS `node --check` 通过（提取 2 个 script 块 34KB）。
+- **浏览器渲染待用户起服目检**（start.command + 强刷 Cmd+Shift+R；预期检查点：页头状态徽标显示「大盘状态 高波动」、⑧ 面板显示涨跌家数与宽度指标、预警区占位）。
+
+### 16.5 遗留
+- L5 预警规则（四条）批次4 落地；L3 情绪温度计 + L4 板块卡增强批次3 落地。
+- `market/emotion` 已并入 `dashboard/full` 但前端尚未消费（批次3 接线）。

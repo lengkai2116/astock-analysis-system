@@ -79,6 +79,8 @@ body { overflow-x:hidden; }
         <div style="display:flex;align-items:center;gap:var(--space-4);font-size:12px;color:var(--text-muted);">
           <span class="status-dot" id="market-status-dot"></span><span id="market-update-time">加载中...</span>
           <span style="margin-left:var(--space-8);">成交额: <strong id="total-volume-text">--</strong> <span id="total-volume-change"></span></span>
+          <!-- 524 L1：大盘状态徽标（market/state，4 状态·状态机） -->
+          <span id="market-state-badge" style="margin-left:var(--space-8);font-size:12px;font-weight:600;"></span>
         </div>
       </div>
     </div>
@@ -146,10 +148,17 @@ body { overflow-x:hidden; }
       </div>
       <div class="rank-table">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-12);">
-          <span style="font-weight:600;">🎯 策略信号汇总</span>
-          <span style="font-size:12px;color:var(--text-muted);">来自 Screener L3 聚合</span>
+          <span style="font-weight:600;">🛰️ 大盘状态</span>
+          <span style="font-size:12px;color:var(--text-muted);" id="market-state-date">--</span>
         </div>
-        <!-- 2026-08-04：移除伪信号面板（原 signal_summary 为 daily_cache 粗算计数，违反 §13 数据真实性规则） -->
+        <!-- 524 L1：大盘状态行（market/state，4 状态·状态机 + 判定依据） -->
+        <div id="market-state-line" style="font-size:13px;color:var(--text-primary);margin-bottom:var(--space-10);">加载中...</div>
+        <!-- 524 L2：市场宽度（market/breadth：涨跌家数 + MA20占比/涨停比例/换手分位） -->
+        <div style="font-weight:600;font-size:13px;margin-bottom:var(--space-6);">📊 市场宽度</div>
+        <div id="market-breadth-panel" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-10);">加载中...</div>
+        <!-- 524 L5：预警列表（骨架——规则批次4 落地：冰点/拥挤/宽度极端/状态切换） -->
+        <div style="font-weight:600;font-size:13px;margin-bottom:var(--space-6);">🔔 预警</div>
+        <div id="market-alert-list" style="font-size:12px;color:var(--text-muted);">暂无预警（规则批次4 落地）</div>
       </div>
     </div>
 
@@ -559,6 +568,9 @@ function loadDashboardFull(){
       if(dd.sector_changes) renderSectorChart(dd.sector_changes);
       if(dd.sector_moneyflow) renderSectorMoneyflow(dd.sector_moneyflow);
       if(dd.daily_top_up) renderGainers(dd.daily_top_up.stocks||[]);
+      // 524：大盘状态（L1）+ 市场宽度（L2）并入聚合载荷（Q6 全选）
+      if(dd.market_state) applyMarketState(dd.market_state);
+      if(dd.market_breadth) applyMarketBreadth(dd.market_breadth);
       // 523：eod-snapshot 不在聚合载荷中，独立加载（TTL 120s）
       loadEodScatter();
     })
@@ -571,7 +583,67 @@ function loadDashboardFull(){
       loadSectorMoneyflow();
       loadTopGainers();
       loadEodScatter();
+      loadMarketState();
+      loadMarketBreadth();
     });
+}
+
+// 524 L1：大盘状态（market/state，4 状态·状态机 + 判定依据）
+function applyMarketState(st){
+  if(!st)return;
+  var label=st.state_label||'--';
+  var _color='#CBD5E1';
+  if(st.state==='trend_up')_color='#EF4444';
+  else if(st.state==='trend_down')_color='#22C55E';
+  else if(st.state==='high_volatility')_color='#F59E0B';
+  var badge=document.getElementById('market-state-badge');
+  if(badge){
+    badge.innerHTML='<span style="color:'+_color+';margin-right:2px;">●</span>大盘状态 '+label;
+    badge.title=(st.data_date?('数据日 '+st.data_date):'')+(st.source?(' · '+st.source):'');
+  }
+  var line=document.getElementById('market-state-line');
+  if(line){
+    var b=st.basis||{};
+    var parts=[];
+    if(b.hs300_ret_20d!==undefined&&b.hs300_ret_20d!==null)parts.push('沪深300近20日 '+b.hs300_ret_20d+'%');
+    if(b.hs300_ret_60d!==undefined&&b.hs300_ret_60d!==null)parts.push('近60日 '+b.hs300_ret_60d+'%');
+    if(b.hs300_close!==undefined&&b.hs300_ma60!==undefined)parts.push('收盘'+(b.hs300_close>=b.hs300_ma60?'站上':'跌破')+'60日线');
+    if(b.turnover_percentile!==undefined)parts.push('换手分位 '+b.turnover_percentile+'%');
+    if(b.limit_ratio!==undefined)parts.push('涨停比例 '+b.limit_ratio);
+    line.innerHTML='<span style="font-weight:600;color:'+_color+';">'+label+'</span>'
+      +(parts.length?' <span style="color:var(--text-muted);">('+parts.join(' · ')+')</span>':'');
+  }
+  var dateEl=document.getElementById('market-state-date');
+  if(dateEl)dateEl.textContent=st.data_date?('数据日 '+st.data_date):'--';
+}
+
+// 524 L2：市场宽度（market/breadth：涨跌家数 + MA20占比/涨停比例/换手分位）
+function applyMarketBreadth(bd){
+  if(!bd)return;
+  var panel=document.getElementById('market-breadth-panel');
+  if(!panel)return;
+  var html='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-6);margin-bottom:var(--space-8);">'
+    +'<div><span class="up" style="font-weight:600;font-size:18px;">'+bd.up_count+'</span><div style="color:var(--text-muted);font-size:11px;">上涨</div></div>'
+    +'<div><span class="down" style="font-weight:600;font-size:18px;">'+bd.down_count+'</span><div style="color:var(--text-muted);font-size:11px;">下跌</div></div>'
+    +'<div><span style="font-weight:600;font-size:18px;">'+bd.flat_count+'</span><div style="color:var(--text-muted);font-size:11px;">平盘</div></div>'
+    +'</div>'
+    +'<div style="font-size:12px;color:var(--text-secondary);line-height:1.7;">'
+    +'上涨占比 <span class="up">'+bd.up_ratio+'%</span> · 下跌占比 <span class="down">'+bd.down_ratio+'%</span><br/>'
+    +'MA20占比 '+bd.ma20_ratio+'% · 涨停比例 '+bd.limit_ratio+' · 换手分位 '+bd.turnover_percentile+'%'
+    +'</div>'
+    +'<div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-6);">数据日 '+bd.trade_date+' · '+bd.count+' 只</div>';
+  panel.innerHTML=html;
+}
+
+function loadMarketState(){
+  _cachedFetch(API+'/market/state',120)
+    .then(function(d){if(d&&d.success&&d.data)applyMarketState(d.data);})
+    .catch(function(e){console.warn('market/state 加载失败',e);});
+}
+function loadMarketBreadth(){
+  _cachedFetch(API+'/market/breadth',120)
+    .then(function(d){if(d&&d.success&&d.data)applyMarketBreadth(d.data);})
+    .catch(function(e){console.warn('market/breadth 加载失败',e);});
 }
 
 // 提取 applyMarketOverview 供聚合端点和 WebSocket 共用
