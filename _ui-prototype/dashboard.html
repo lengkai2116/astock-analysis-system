@@ -672,8 +672,16 @@ function applySectorHeat(heat){
   if(dateEl)dateEl.textContent=heat.date?('· '+heat.date):'';
   var rows=heat.sectors.slice(0,8).map(function(s){
     var _c=s.heat_level==='top_10'?'#EF4444':(s.heat_level==='top_20'?'#F59E0B':'#CBD5E1');
+    // 527 批次2：排名变化/新进榜说明（prev_rank 为前一日 rank，rank 越小越热）
+    var mv='';
+    if(s.prev_rank!=null&&s.prev_rank!==undefined){
+      var d=s.prev_rank-s.rank;  // >0 排名上升（更热）、<0 下降
+      mv=d>0?' <span class="up" style="font-size:11px;">↑'+d+'</span>':(d<0?' <span class="down" style="font-size:11px;">↓'+(-d)+'</span>':' <span style="font-size:11px;color:var(--text-muted);">—</span>');
+    } else if(s.prev_rank==null){
+      mv=' <span style="font-size:11px;color:#3B82F6;">新进榜</span>';
+    }
     return '<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border-default);">'
-      +'<span>'+escapeHtml(s.rank)+'. '+escapeHtml(s.industry)+' <span style="color:var(--text-muted);font-size:11px;">'+escapeHtml(s.stock_count)+'只</span></span>'
+      +'<span>'+escapeHtml(s.rank)+'. '+escapeHtml(s.industry)+mv+' <span style="color:var(--text-muted);font-size:11px;">'+escapeHtml(s.stock_count)+'只</span></span>'
       +'<span style="color:'+_c+';">'+escapeHtml(s.heat_level)+' · 强度'+escapeHtml(s.strength)+'</span>'
       +'</div>';
   }).join('');

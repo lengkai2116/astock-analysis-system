@@ -1065,9 +1065,11 @@ class DashboardService:
         """板块热度/排名（524 号 L4）：sector_heat_cache 最新日全行业。
 
         数据源：E1 `sector_heat_cache`（compute_cache.db，long 格式每行业一行）
-        → `{date, count, sectors:[{industry, heat_level, strength, rank, stock_count}]}`
+        → `{date, count, sectors:[{industry, heat_level, strength, rank, stock_count, prev_rank}]}`
         全只读；rank 越小越热（升序取 top_n）。heat_level 枚举：
         top_10/top_20/...（419 号方案B3 板块热度，481 号已修复取最新日全行业）。
+        527 批次2：附前一日 rank（prev_rank）供前端「排名变化/新进榜」说明（get_cached_sector_heat
+        支持 stat_date 参数，读上一 stat_date 全行业对比；无前日数据时 prev_rank=None）。
         """
         try:
             ecm = self.data_manager.cache
@@ -1095,6 +1097,24 @@ class DashboardService:
                     date = str(date_df['d'].iloc[0])
             except Exception:
                 pass
+            # 527 批次2：前一日 rank 对比（prev_rank）
+            prev_rank_map = {}
+            try:
+                dates_df = ecm._query_shard(
+                    'sector_heat_cache',
+                    "SELECT DISTINCT stat_date FROM sector_heat_cache "
+                    "ORDER BY stat_date DESC LIMIT 2")
+                if dates_df is not None and not dates_df.empty and len(dates_df) >= 2:
+                    prev_date = str(dates_df['stat_date'].iloc[1])
+                    prev_heat = ecm.get_cached_sector_heat(stat_date=prev_date)
+                    for ind, info in prev_heat.items():
+                        if not ind or str(ind).strip().lower() in ('nan', 'none', ''):
+                            continue
+                        prev_rank_map[str(ind)] = int(info.get('rank', 999))
+            except Exception:
+                pass
+            for s in sectors:
+                s['prev_rank'] = prev_rank_map.get(s['industry'])
             return {
                 'date': date,
                 'count': len(sectors),
