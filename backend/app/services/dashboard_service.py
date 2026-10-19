@@ -113,6 +113,18 @@ class DashboardService:
                         <= hist_data[-1].get('trade_date', '')
                     ) else hist_data[::-1]
                     mini_kline = self._build_mini_kline(_sorted[-20:])
+                    # 527 批次3：指数 60 日线（daily_cache 88 行，算 ma60/近60日涨跌/站上与否）
+                    ma60 = None
+                    ret_60d = None
+                    above_ma60 = None
+                    if len(_sorted) >= 60:
+                        closes60 = [self._safe_float(r.get('close', 0)) for r in _sorted[-60:]]
+                        latest_close = float(_sorted[-1].get('close', 0))
+                        ma60 = round(sum(closes60) / len(closes60), 2)
+                        prev60_close = float(_sorted[-61].get('close', 0))
+                        if prev60_close > 0:
+                            ret_60d = round((latest_close / prev60_close - 1) * 100, 2)
+                        above_ma60 = latest_close >= ma60 if ma60 else None
 
                 # 价格优先用实时快照，没有则用历史
                 if live:
@@ -148,6 +160,10 @@ class DashboardService:
                     'change_amount': round(change_amount, 2),
                     'mini_kline': mini_kline,
                     'amount': amount,
+                    # 527 批次3：指数 60 日线（daily_cache 88 行；None=历史不足60日）
+                    'ma60': ma60,
+                    'ret_60d': ret_60d,
+                    'above_ma60': above_ma60,
                     # 526 B17：live 实为 InMemoryStateStore（mootdx TCP）→ 标注修正（原误标 AKShare）
                     'source': 'mootdx 实时行情' if live else '日线缓存',
                 })
@@ -794,9 +810,26 @@ class DashboardService:
             elif isinstance(date_str, str):
                 date_str = date_str.replace('-', '')
 
-            return self._aggregate_sector_moneyflow(
+            result = self._aggregate_sector_moneyflow(
                 day_records, industry_map, top_n, stocks_per_sector, date_str
             )
+            # 527 批次3：板块净流入多日聚合——近5日窗口内每板块净流入累计
+            # （moneyflow_cache 59 日可用；前端可作「板块近5日趋势」一句话说明）
+            sector_net_5d = {}
+            try:
+                for r in records:
+                    ind = industry_map.get(r.get('ts_code', ''), '其他')
+                    _sf = self._safe_float
+                    net = _sf(r.get('buy_lg_amount', 0)) + _sf(r.get('buy_elg_amount', 0)) \
+                          - _sf(r.get('sell_lg_amount', 0)) - _sf(r.get('sell_elg_amount', 0))
+                    sector_net_5d[ind] = sector_net_5d.get(ind, 0.0) + net
+                top5 = sorted(sector_net_5d.items(), key=lambda x: -x[1])[:5]
+                result['trend_5d'] = [
+                    {'industry': k, 'net_inflow_5d': round(v / 1e4, 1)} for k, v in top5
+                ]
+            except Exception:
+                result['trend_5d'] = []
+            return result
         except Exception as e:
             logger.warning(f"板块资金流向 DuckDB 聚合失败: {e}")
 
@@ -944,6 +977,24 @@ class DashboardService:
             flat = count - up - down
 
             stats = ecm.get_cached_market_stats()  # E2，最新 stat_date
+            # 527 批次3：市场宽度历史序列（market_stats_cache 近20日 ma20_ratio/limit/turnover）
+            history = []
+            try:
+                hist_df = ecm._query_shard(
+                    'market_stats_cache',
+                    "SELECT stat_date, ma20_ratio, limit_ratio, turnover_percentile "
+                    "FROM market_stats_cache ORDER BY stat_date DESC LIMIT 20")
+                if hist_df is not None and not hist_df.empty:
+                    for _, hr in hist_df.iterrows():
+                        history.append({
+                            'stat_date': str(hr.get('stat_date', '')),
+                            'ma20_ratio': round(float(hr.get('ma20_ratio', 0) or 0) * 100, 1),
+                            'limit_ratio': float(hr.get('limit_ratio', 0) or 0),
+                            'turnover_percentile': round(float(hr.get('turnover_percentile', 0) or 0) * 100, 1),
+                        })
+                    history.reverse()  # 升序
+            except Exception:
+                pass
             return {
                 'trade_date': last_date,
                 'count': count,
@@ -955,6 +1006,7 @@ class DashboardService:
                 'ma20_ratio': round(float(stats.get('ma20_ratio', 0)) * 100, 1),
                 'limit_ratio': float(stats.get('limit_ratio', 0)),
                 'turnover_percentile': round(float(stats.get('turnover_percentile', 0)) * 100, 1),
+                'history': history,   # 527 批次3：近20日宽度序列（升序）
                 'source': 'DuckDB 盘后数据',
             }
         except Exception as e:

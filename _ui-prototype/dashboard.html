@@ -126,6 +126,8 @@ body { overflow-x:hidden; }
     <div class="grid-2" style="margin-bottom:var(--space-20);">
       <div class="rank-table">
         <div style="font-weight:600;font-size:14px;margin-bottom:var(--space-10);">🏭 行业板块净流入排行</div>
+        <!-- 527 批次3：板块净流入近5日趋势（moneyflow_cache 多日聚合 trend_5d） -->
+        <div id="sector-mf-trend-note" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
         <div id="sector-inflow-chart" style="height:280px;"></div>
         <!-- 524 L4：板块热度 Top（sector_heat_cache：heat_level/rank/strength） -->
         <div style="font-weight:600;font-size:13px;margin-top:var(--space-12);margin-bottom:var(--space-6);">🔥 板块热度 Top <span id="sector-heat-date" style="font-size:11px;color:var(--text-muted);"></span></div>
@@ -618,6 +620,17 @@ function applyMarketBreadth(bd){
   if(!bd)return;
   var panel=document.getElementById('market-breadth-panel');
   if(!panel)return;
+  // 527 批次3：市场宽度历史序列——近20日 MA20占比区间（bd.history 升序）
+  var histTxt='';
+  if(bd.history&&bd.history.length){
+    var m20s=bd.history.map(function(h){return h.ma20_ratio;}).filter(function(v){return v!=null&&!isNaN(v);});
+    if(m20s.length>=2){
+      var mn=Math.min.apply(null,m20s), mx=Math.max.apply(null,m20s);
+      var lastM20=m20s[m20s.length-1];
+      var dir=lastM20>m20s[0]?'<span class="up">走阔</span>':(lastM20<m20s[0]?'<span class="down">收窄</span>':'<span>持平</span>');
+      histTxt='<div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-4);">近20日 MA20占比区间 '+escapeHtml(mn)+'%~'+escapeHtml(mx)+'% · 较20日前 '+dir+'</div>';
+    }
+  }
   var html='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-6);margin-bottom:var(--space-8);">'
     +'<div><span class="up" style="font-weight:600;font-size:18px;">'+escapeHtml(bd.up_count)+'</span><div style="color:var(--text-muted);font-size:11px;">上涨</div></div>'
     +'<div><span class="down" style="font-weight:600;font-size:18px;">'+escapeHtml(bd.down_count)+'</span><div style="color:var(--text-muted);font-size:11px;">下跌</div></div>'
@@ -627,6 +640,7 @@ function applyMarketBreadth(bd){
     +'上涨占比 <span class="up">'+escapeHtml(bd.up_ratio)+'%</span> · 下跌占比 <span class="down">'+escapeHtml(bd.down_ratio)+'%</span><br/>'
     +'MA20占比 '+escapeHtml(bd.ma20_ratio)+'% · 涨停比例 '+escapeHtml(bd.limit_ratio)+' · 换手分位 '+escapeHtml(bd.turnover_percentile)+'%'
     +'</div>'
+    +histTxt
     +'<div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-6);">数据日 '+escapeHtml(bd.trade_date)+' · '+escapeHtml(bd.count)+' 只</div>';
   panel.innerHTML=html;
 }
@@ -778,6 +792,12 @@ function applyMarketOverview(ov){
           var r5=(c1/c0-1)*100, r20=(c1/c20_0-1)*100;
           var cls5=r5>=0?'up':'down', cls20=r20>=0?'up':'down';
           tEl.innerHTML='近5日 <span class="'+cls5+'">'+(r5>=0?'+':'')+r5.toFixed(2)+'%</span> · 近20日 <span class="'+cls20+'">'+(r20>=0?'+':'')+r20.toFixed(2)+'%</span>';
+          // 527 批次3：近60日 + 站上/跌破60日线（后端 ma60/ret_60d/above_ma60）
+          if(idx.ret_60d!=null&&idx.ma60!=null){
+            var cls60=idx.ret_60d>=0?'up':'down';
+            var maTxt=idx.above_ma60?'<span style="color:var(--text-muted);">站上</span>60日线':'<span style="color:var(--text-muted);">跌破</span>60日线';
+            tEl.innerHTML+=' · 近60日 <span class="'+cls60+'">'+(idx.ret_60d>=0?'+':'')+idx.ret_60d.toFixed(2)+'%</span> · '+maTxt;
+          }
         } else {
           tEl.textContent='--';
         }
@@ -875,6 +895,19 @@ function renderSectorChart(sd){
 
 function renderSectorMoneyflow(smd){
   if(!smd)return;
+  // 527 批次3：板块净流入近5日趋势（后端 trend_5d：近5日窗口每板块净流入累计 top5）
+  var trendEl=document.getElementById('sector-mf-trend-note');
+  if(trendEl){
+    if(smd.trend_5d&&smd.trend_5d.length){
+      var parts=smd.trend_5d.slice(0,3).map(function(t){
+        var c=t.net_inflow_5d>=0?'up':'down';
+        return '<span class="'+c+'">'+escapeHtml(t.industry)+' '+(t.net_inflow_5d>=0?'+':'')+t.net_inflow_5d+'亿</span>';
+      });
+      trendEl.innerHTML='近5日板块净流入 Top3：'+parts.join(' · ');
+    } else {
+      trendEl.textContent='近5日趋势数据暂缺';
+    }
+  }
   var inArr=(smd.sectors||[]).slice(0,5);
   var outArr=(smd.out_sectors||[]).slice(0,5);
   var chartData=inArr.concat(outArr).sort(function(a,b){return (a.net_inflow||0)-(b.net_inflow||0);});
