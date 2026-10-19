@@ -73,6 +73,36 @@ def get_eod_snapshot():
 
 
 # ──────────────────────────────────────────────
+# 524 批次1'：大盘监控只读接口（breadth / state / emotion）
+# ──────────────────────────────────────────────
+@dashboard_bp.route('/api/v3/market/breadth', methods=['GET'])
+@api_cache(ttl=120)
+@handle_exceptions
+def get_market_breadth():
+    """市场宽度（524 号 L2）：涨跌家数 + MA20占比/涨停比例"""
+    data = _service.get_market_breadth()
+    return _data_response(data)
+
+
+@dashboard_bp.route('/api/v3/market/state', methods=['GET'])
+@api_cache(ttl=120)
+@handle_exceptions
+def get_market_state():
+    """大盘状态（524 号 L1）：4 状态·状态机（趋势/震荡/高波动/盘整）"""
+    data = _service.get_market_state()
+    return _data_response(data)
+
+
+@dashboard_bp.route('/api/v3/market/emotion', methods=['GET'])
+@api_cache(ttl=120)
+@handle_exceptions
+def get_market_emotion():
+    """市场情绪（524 号 L3）：六段论阶段 + 涨停生态指标"""
+    data = _service.get_market_emotion()
+    return _data_response(data)
+
+
+# ──────────────────────────────────────────────
 # 5. 板块涨跌幅（sector-sector）
 # ──────────────────────────────────────────────
 @dashboard_bp.route('/api/v3/market/sector-sector', methods=['GET'])

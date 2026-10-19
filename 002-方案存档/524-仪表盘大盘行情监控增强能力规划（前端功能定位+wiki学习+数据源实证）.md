@@ -1,6 +1,6 @@
 # 524号｜仪表盘「大盘行情信息」板块 前端功能定位与监控增强能力规划（wiki 学习 + 数据源实证）
 
-> **版本**：v1.1（2026-10-19 只读核查 + 能力规划 + **Q1~Q6 用户拍板 + 实施计划**；**未改任何代码/方案**）
+> **版本**：v1.2（2026-10-19 只读核查 + 能力规划 + **Q1~Q6 用户拍板 + 实施计划 + 批次1' 已实施**；**代码改动仅限后端只读接口**）
 > **性质**：只读核查档（前端展示层功能定位 + LLM wiki 知识库学习 + 数据源逐项实证）
 > **范围**：`_ui-prototype/dashboard.html`（前端）＋ 后端只读取数能力边界；**本档不涉及代码改动**
 > **前置**：513/514（数据与连接核查处置）、516（各模块数据二轮核查处置）、523（全市场日终散点新增）、481（dim8 第一层环境定位）
@@ -141,3 +141,86 @@ curl -s http://127.0.0.1:5001/api/v3/market/overview | python -m json.tool | hea
 3. **建议输出型**：预警/建议仅提示不强制（495 B1）。
 4. **不回归**：513/514/516/523 已处置项不重做；定向测试 + 全量回归（须先停 daemon）。
 5. **验证**：后端定向 pytest + 真实库冒烟；前端渲染由用户起服目检。
+
+## 十三、页面布局说明（2026-10-19 用户询问「页面布局是如何设计的」后补充）
+
+### 13.1 布局框架（全局统一，166 号文档）
+- `app-layout`＝左侧 `sidebar`（默认折叠 64px、可展开 200px：概览/分析/验证/管理/系统 五组导航）+ 右侧 `main-content`；全站 14 页共用，仪表盘为默认激活页。
+- 技术栈：原生 HTML5 + CSS3 + 原生 JS + ECharts 5.4.3 + socket.io（实时预留）。
+
+### 13.2 当前布局（自上而下 8 区块，2026-10-19 现状）
+
+```
+┌─ ① 页头 page-header ─────────────────────────────────────┐
+│  📊 仪表盘    ● 状态点 · 更新时间 · 成交额 ¥xxxx亿 ↑x.x% │
+├─ ② 四大指数卡片 index-grid（4 列，各带 20 日 miniK）──────┤
+│  [上证指数 000001.SH] [深证成指 399001.SZ]               │
+│  [北证50 899050.BJ]   [创业板指 399006.SZ]               │
+├─ ③ 四大指数合计成交额（近20日）— 全宽柱状图 ──────────────┤
+│  #volume-chart（260px，红涨绿跌）                         │
+├─ ④ 全市场资金流向趋势（近20日）— 全宽 ───────────────────┤
+│  #chart-fund-flow（主力净流入柱 + 散户净流入折线）         │
+├─ ⑤ 全市场日终散点 ×2（523 新增，grid-2 双列）────────────┤
+│  [流通市值×涨跌幅 对数散点] [开高低收四象限 4 色]         │
+├─ ⑥ 行业板块净流入排行 │ Top5 板块·个股净流入/流出 ────────┤
+│  [sector-inflow-chart]  [流入卡片][流出卡片]              │
+├─ ⑦ 行业板块涨跌幅 │ 涨幅前十/跌幅前十 │ ⑧空位 ───────────┤
+│  [chart-sector]      [gainers-table Tab切换]  [空位占位]  │
+└───────────────────────────────────────────────────────────┘
+```
+
+| 区块 | 取数接口 | 说明 |
+|---|---|---|
+| ① 页头 | `market/overview` | 状态点（绿=实时/灰=盘后·数据日，516 Q4）、成交额+环比 |
+| ② 指数卡 | overview.indexes | 4 指数 price/change_pct + miniK（20 日 candlestick） |
+| ③ 成交额 | `market/index-daily` | 4 指数 amount 求和（含成分重叠口径已标注） |
+| ④ 资金流向 | `market/moneyflow-summary` | 主力/散户净流入（散户符号已统一） |
+| ⑤ 日终散点 | `market/eod-snapshot` | 5566 只；Part1 对数轴 + Part2 四象限（自定义平移/缩放） |
+| ⑥ 板块资金 | `market/sector-moneyflow` | 净流入排行 + Top5 个股（P1 符号已修） |
+| ⑦ 板块涨跌 | `market/sector-sector` + `daily-top` | 涨跌幅条形 + 涨幅/跌幅前十（Mock 已删走空态） |
+| ⑧ 空位 | — | 原「策略信号汇总」伪信号移除 + AI 雷达下线（516 Q2）后的占位 |
+
+**响应式**：≤1100px 指数卡 2 列、grid-2 单列；≤700px 全单列、指数数值缩小。
+
+### 13.3 166 号规范布局演进（对照）
+166 §3.1~3.6：第三张卡 沪深300→**北证50**、第四张 成交额→**创业板指**、成交额移至页头、各卡内嵌 20 日 miniK、新增成交额柱状图、AI 雷达轮播条、策略信号汇总改接 Screener L3。当前差异仅两处（均有据）：AI 雷达已取消（516 Q2）、策略信号汇总已移空（166 §3.4 确认路由不存在→伪信号，2026-08-04 移除）。
+
+### 13.4 524 规划后目标布局（L1~L6 增强版）
+- **L1 大盘状态概览**（增强①）：页头加「市场状态」徽标（趋势/震荡/高波动/盘整）+ 判定依据；数据源 `market/state`（E2 + BenchmarkService 趋势句）。
+- **L2 市场宽度面板**（落⑧空位）：上涨/下跌/平盘家数、涨停/跌停家数、MA20占比、涨停比例；数据源 `market/breadth`（E3 + E2）。
+- **L3 市场情绪温度计**（落⑧空位）：六段论阶段 + BOCIASI 状态 + 市场温度；数据源 `market/emotion`（`MarketSentimentService` 六段论 + `market_level_temperature`）。
+- **L4 板块轮动监控**（增强⑥⑦）：板块卡补 涨跌家数/领涨股/热度排名；数据源 `sector_heat_cache`（E1）+ `as_sector_ranking`（E4 需补建库表，批次1）。
+- **L5 预警输出**（①徽标 + ⑧列表）：冰点→关键上涨窗口 / 拥挤背离→顶部 / 宽度极端→反转 / 状态切换→风控；建议型非强制（495 B1）。
+- **L6 远期**：关键交易日日历标记、期指升贴水/PCR（需数据源评估）。
+
+**设计要点**：新功能全部复用现有 8 区块位置（①增强 + ⑧空位启用），**不新增页面、不改既有区块数据契约**；后端仅新增 3 个只读接口并入 `dashboard/full` 聚合；符合前端阶段「仅展示层 + 523 只读接口先例」与「建议输出型」定位。
+
+## 十四、批次1' 已实施（2026-10-19，后端只读接口）
+
+**范围**：`backend/app/services/dashboard_service.py` + `backend/app/routes/dashboard.py` + `backend/tests/test_524_market_breadth_state_emotion.py`；**仅只读接口，未触前端/写路径/配置**。
+
+### 14.1 `DashboardService.get_market_breadth`（L2 市场宽度原料）
+- `daily_cache⋈daily_basic_cache`（最新交易日，inner join 天然排除指数）→ `{trade_date, count, up_count, down_count, flat_count, up_ratio, down_ratio}`；叠加 `market_stats_cache`（E2）→ `ma20_ratio`（×100 百分比）/`limit_ratio`/`turnover_percentile`（×100）。
+- 真实库实测（2026-10-16）：`count=5566 / up=3300 / down=2128 / flat=138 / ma20_ratio=16.4 / limit_ratio=5.25`。
+
+### 14.2 `DashboardService.get_market_state`（L1 大盘状态，4 状态·状态机）
+- 数据源：`market_stats_cache`（turnover_percentile/limit_ratio）+ `BenchmarkService.get_index_daily(HS300)` 近 60 日（481 趋势句同源）。
+- 判定（阈值可拍板调整）：高波动 `turnover≥0.85 且 |ret20|≥5%`；上升趋势 `ret20≥3% 且 close≥ma60`；下降趋势 `ret20≤-3% 且 close≤ma60`；盘整 `|ret20|<2% 且 turnover<0.4`；其余震荡。
+- 输出：`{state, state_label, data_date, basis:{hs300_ret_20d/60d/close/ma60/turnover_percentile/limit_ratio}, source}`；⚠️ 冒烟发现 `round(np.float64)` 不可 JSON 序列化 → 已修 `float(round(...))`。
+- 真实库实测（2026-10-16）：`high_volatility 高波动`（hs300 ret20=-8.79 / ret60=-12.87 / close=4170.6 < ma60=4547.1 / turnover=97.2）。
+
+### 14.3 `DashboardService.get_market_emotion`（L3 情绪温度计原料）
+- 复用 `MarketSentimentService.get_sentiment_phase`（273a 方案，`sentiment_pool_cache` → 六段论映射，**零新增引擎**）。
+- 输出：`{phase, phase_label, metrics:{limit_up_count, limit_down_count, max_board_height, sealing_rate, up_down_ratio}, data_available, source}`。
+- 真实库实测（2026-10-19 盘中）：`ferment 情绪发酵`（limit_up=61 / limit_down=10 / max_board=11 / sealing=55.5 / ratio=6.1）。
+- ⚠️ **登记**：BOCIASI **市场级**聚合输出无现成实现（dim5 BOCIASI 为个股级）→ `market/emotion` 本期先出六段论；批次3 前端如需 BOCIASI 徽标需先建市场级聚合（另立小号或并入批次3）。
+
+### 14.4 路由 + 聚合并入
+- 新增 `GET /api/v3/market/breadth`、`/api/v3/market/state`、`/api/v3/market/emotion`（均 `@api_cache(ttl=120)` + `@handle_exceptions` + `_data_response` 503 兜底，523 模式）。
+- `get_dashboard_full` 并入 `market_breadth` / `market_state` / `market_emotion` 三键（Q6 全选）。
+
+### 14.5 测试与验证
+- `tests/test_524_market_breadth_state_emotion.py`（9 用例：breadth 计数/比率/空态、state 上升趋势/默认/无指数兜底、emotion 六段论/空数据兜底、路由注册、dashboard/full 并入）——**9 passed**。
+- 相邻回归（523 eod-snapshot 4 + 516 batch2/3 6 + 513 选日 5 + 524 9）**24 passed**；py_compile OK、ruff 三文件全过（测试 I001 import 排序已 fix）。
+- **真实库只读冒烟（app_context）**：三接口全取数成功且 **JSON 可序列化**（np.float64 修复后 basis 全原生 float）；`breadth=2026-10-16/5566`、`state=high_volatility`、`emotion=ferment`。
+- **前端渲染**：待用户起服（start.command）后浏览器目检（批次2 前端接线时一并复核）。

@@ -830,9 +830,177 @@ class DashboardService:
         except Exception:
             pass
 
+        # 524 批次1'：大盘监控三只读接口并入聚合载荷（Q6 全选）
+        try:
+            breadth = self.get_market_breadth()
+            if breadth:
+                result['market_breadth'] = breadth
+        except Exception:
+            pass
+
+        try:
+            state = self.get_market_state()
+            if state:
+                result['market_state'] = state
+        except Exception:
+            pass
+
+        try:
+            emotion = self.get_market_emotion()
+            if emotion:
+                result['market_emotion'] = emotion
+        except Exception:
+            pass
+
         if not result:
             return None
         return result
+
+    # ──────────────────────────────────────────────
+    # 524 批次1'：大盘监控只读接口（breadth/state/emotion）
+    # ──────────────────────────────────────────────
+    def get_market_breadth(self) -> Optional[Dict]:
+        """市场宽度（524 号 L2 面板原料）：涨跌家数 + 宽度指标。
+
+        数据源：E3 daily_cache⋈daily_basic_cache（最新交易日，inner join 纯股票，
+                同 523 eod-snapshot 模式）+ E2 market_stats_cache（ma20_ratio/limit_ratio）。
+        全只读，不写任何表。
+        """
+        try:
+            ecm = self.data_manager.cache
+            date_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
+            if date_df is None or date_df.empty:
+                logger.error("市场宽度: daily_cache 无历史数据")
+                return None
+            last_date = str(date_df['trade_date'].iloc[0])
+
+            daily_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT ts_code, pct_chg FROM daily_cache WHERE trade_date = ?",
+                [last_date])
+            if daily_df is None or daily_df.empty:
+                logger.error("市场宽度: 当日无日线数据")
+                return None
+
+            basic_df = ecm._query_shard(
+                'daily_basic_cache',
+                "SELECT ts_code FROM daily_basic_cache WHERE trade_date = ?",
+                [last_date])
+            if basic_df is None or basic_df.empty:
+                logger.error("市场宽度: 当日无 daily_basic 数据")
+                return None
+
+            merged = daily_df.merge(basic_df, on='ts_code', how='inner')
+            count = len(merged)
+            if count == 0:
+                logger.error("市场宽度: join 后无纯股票")
+                return None
+            up = int((merged['pct_chg'] > 0).sum())
+            down = int((merged['pct_chg'] < 0).sum())
+            flat = count - up - down
+
+            stats = ecm.get_cached_market_stats()  # E2，最新 stat_date
+            return {
+                'trade_date': last_date,
+                'count': count,
+                'up_count': up,
+                'down_count': down,
+                'flat_count': flat,
+                'up_ratio': round(up / count * 100, 1),
+                'down_ratio': round(down / count * 100, 1),
+                'ma20_ratio': round(float(stats.get('ma20_ratio', 0)) * 100, 1),
+                'limit_ratio': float(stats.get('limit_ratio', 0)),
+                'turnover_percentile': round(float(stats.get('turnover_percentile', 0)) * 100, 1),
+                'source': 'DuckDB 盘后数据',
+            }
+        except Exception as e:
+            logger.error(f"市场宽度获取失败: {e}")
+            return None
+
+    def get_market_state(self) -> Optional[Dict]:
+        """大盘状态（524 号 L1 页头徽标原料）：4 状态·状态机。
+
+        数据源：E2 market_stats_cache（turnover_percentile/limit_ratio）
+                + BenchmarkService 沪深300 近60日趋势（481 _index_trend_sentence 同源）。
+        判定规则（wiki《状态机市场识别模型》简化落地，阈值可拍板调整）：
+          - 高波动：turnover_percentile ≥ 0.85 且指数近20日 |涨跌| ≥ 5%
+          - 上升趋势：指数近20日涨跌 ≥ 3% 且收盘 ≥ 60日线
+          - 下降趋势：指数近20日涨跌 ≤ -3% 且收盘 ≤ 60日线
+          - 盘整：近20日 |涨跌| < 2% 且 turnover_percentile < 0.4
+          - 震荡：其余（默认）
+        """
+        try:
+            ecm = self.data_manager.cache
+            stats = ecm.get_cached_market_stats()
+            turnover_pct = float(stats.get('turnover_percentile', 0.5))
+            limit_ratio = float(stats.get('limit_ratio', 0))
+
+            from app.services.benchmark_service import BenchmarkIndex, BenchmarkService
+            bs = BenchmarkService(self.data_manager)
+            df = bs.get_index_daily(BenchmarkIndex.HS300)
+            ret20 = ret60 = price = ma60 = None
+            if df is not None and not df.empty:
+                df = df.sort_values('trade_date')
+                closes = df['close'].astype(float)
+                price = float(closes.iloc[-1])
+                if len(closes) >= 21:
+                    ret20 = float(round((closes.iloc[-1] / closes.iloc[-21] - 1) * 100, 2))
+                if len(closes) >= 61:
+                    ret60 = float(round((closes.iloc[-1] / closes.iloc[-61] - 1) * 100, 2))
+                if len(closes) >= 60:
+                    ma60 = float(closes.iloc[-60:].mean())
+
+            state, state_label = 'ranging', '震荡'
+            if turnover_pct >= 0.85 and ret20 is not None and abs(ret20) >= 5:
+                state, state_label = 'high_volatility', '高波动'
+            elif ret20 is not None and ret20 >= 3 and price is not None and ma60 is not None and price >= ma60:
+                state, state_label = 'trend_up', '上升趋势'
+            elif ret20 is not None and ret20 <= -3 and price is not None and ma60 is not None and price <= ma60:
+                state, state_label = 'trend_down', '下降趋势'
+            elif ret20 is not None and abs(ret20) < 2 and turnover_pct < 0.4:
+                state, state_label = 'consolidation', '盘整'
+
+            return {
+                'state': state,
+                'state_label': state_label,
+                'data_date': stats.get('computed_at', ''),
+                'basis': {
+                    'hs300_ret_20d': ret20,
+                    'hs300_ret_60d': ret60,
+                    'hs300_close': price,
+                    'hs300_ma60': ma60,
+                    'turnover_percentile': round(turnover_pct * 100, 1),
+                    'limit_ratio': limit_ratio,
+                },
+                'source': 'DuckDB market_stats + BenchmarkService',
+            }
+        except Exception as e:
+            logger.error(f"大盘状态获取失败: {e}")
+            return None
+
+    def get_market_emotion(self) -> Optional[Dict]:
+        """市场情绪（524 号 L3 温度计原料）：六段论阶段 + 涨停生态指标。
+
+        数据源：MarketSentimentService（273a 方案，sentiment_pool_cache → 六段论映射）。
+        ⚠️ BOCIASI 市场级聚合输出当前无现成实现（dim5 BOCIASI 为个股级）——
+        批次3 前端如需 BOCIASI 徽标需先建市场级聚合（524 档登记）。
+        """
+        try:
+            from app.services.market_sentiment_service import MarketSentimentService
+            mss = MarketSentimentService(self.data_manager)
+            phase_data = mss.get_sentiment_phase()
+            return {
+                'phase': phase_data.get('phase', 'neutral'),
+                'phase_label': phase_data.get('phase_label', '情绪中性'),
+                'metrics': phase_data.get('metrics', {}),
+                'data_available': phase_data.get('data_available', False),
+                'source': 'sentiment_pool_cache 六段论',
+            }
+        except Exception as e:
+            logger.error(f"市场情绪获取失败: {e}")
+            return None
 
     # ──────────────────────────────────────────────
     # 内部辅助方法
