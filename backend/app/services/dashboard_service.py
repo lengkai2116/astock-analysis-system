@@ -545,11 +545,18 @@ class DashboardService:
     # 5. 板块涨跌幅（sector-sector）
     # ──────────────────────────────────────────────
     def get_sector_changes(self, top_n: int = 8) -> Optional[Dict]:
-        """行业板块涨跌幅 — AKShare 实时优先，降级 DB daily_data 聚合"""
+        """行业板块涨跌幅 — AKShare 实时优先，降级 DB daily_data 聚合
+
+        528 号 批次2：取数改全量（原 `get_sector_rankings()` 默认 top_n=20，
+        DB 回退 `ORDER BY change_pct DESC LIMIT 20` 前 20 全为正涨幅 → losers 恒空，
+        跌幅 TOP5 缺失的根因）——改传 top_n=None 取全行业，双侧分别取 top5。
+        """
+        # 528 号 批次2：板块连续涨/跌 + 近5日累积涨跌（daily_cache 多日按行业聚合）
+        streaks = self._get_sector_streaks()
         # 1. 尝试 AkshareDataReader 读取
         try:
             from app.data.akshare_reader import reader
-            rankings = reader.get_sector_rankings()
+            rankings = reader.get_sector_rankings(top_n=None)
             if rankings and len(rankings) >= top_n:
                 all_sectors = []
                 for s in rankings:
@@ -574,6 +581,7 @@ class DashboardService:
                         'date': datetime.now().strftime('%Y-%m-%d'),
                         'gainers': gainers,
                         'losers': losers,
+                        'streaks': streaks,
                         'source': '东方财富行业板块（盘中）',
                     }
         except Exception as e:
@@ -657,6 +665,7 @@ class DashboardService:
                     'cached_at': date_label,
                     'gainers': gainers,
                     'losers': losers,
+                    'streaks': streaks,
                     'source': 'DuckDB daily_cache 聚合',
                 }
         except Exception as e:
@@ -664,6 +673,86 @@ class DashboardService:
 
         logger.error("板块涨跌幅: 所有数据源不可用")
         return None
+
+    def _get_sector_streaks(self, days: int = 6, min_streak: int = 2) -> Dict:
+        """板块连续涨/跌 + 近5日累积涨跌（528 号 批次2）。
+
+        数据源：daily_cache 多日按行业聚合（DuckDB）→ 每行业近 days 个交易日
+        平均涨跌幅 → 从最新往回数连续上涨/下跌天数（streak）→ 近5日累积涨跌
+        （最后 5 日行业平均 pct_chg 之和，近似口径）。
+        返回 {'up': [...], 'down': [...]}（各按天数降序，取前 5）；失败返回空两侧。
+        """
+        try:
+            ecm = self.data_manager.cache
+            dates_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT DISTINCT trade_date FROM daily_cache "
+                "ORDER BY trade_date DESC LIMIT ?", [days])
+            if dates_df is None or dates_df.empty:
+                return {'up': [], 'down': []}
+            dates = sorted(str(d) for d in dates_df['trade_date'].tolist())
+            if len(dates) < 2:
+                return {'up': [], 'down': []}
+            placeholders = ','.join('?' for _ in dates)
+            all_df = ecm._query_shard(
+                'daily_cache',
+                f"SELECT trade_date, ts_code, pct_chg FROM daily_cache "
+                f"WHERE trade_date IN ({placeholders})", dates)
+            if all_df is None or all_df.empty:
+                return {'up': [], 'down': []}
+
+            from app import db as _flask_db
+            from app.models import Stock
+            ts_codes = all_df['ts_code'].unique().tolist()
+            industry_map = {}
+            try:
+                # 对齐 get_sector_moneyflow 的 db.session.query 模式（可测性一致，
+                # Stock.query 描述符在无 app context 时触发 session 绑定）
+                for s in _flask_db.session.query(
+                        Stock.ts_code, Stock.industry).filter(
+                        Stock.ts_code.in_(ts_codes)).all():
+                    if s.industry:
+                        industry_map[s.ts_code] = s.industry
+            except Exception:
+                pass
+            if len(industry_map) < 10:
+                return {'up': [], 'down': []}
+
+            all_df['industry'] = all_df['ts_code'].map(lambda x: industry_map.get(x, None))
+            all_df = all_df.dropna(subset=['industry'])
+            if all_df.empty:
+                return {'up': [], 'down': []}
+
+            agg = all_df.groupby(['industry', 'trade_date'])['pct_chg'].mean().reset_index()
+            up, down = [], []
+            for ind, grp in agg.groupby('industry'):
+                grp = grp.sort_values('trade_date')
+                series = grp['pct_chg'].tolist()
+                if len(series) < 2:
+                    continue
+                up_days = 0
+                for v in reversed(series):
+                    if v > 0:
+                        up_days += 1
+                    else:
+                        break
+                down_days = 0
+                for v in reversed(series):
+                    if v < 0:
+                        down_days += 1
+                    else:
+                        break
+                cum_5d = round(float(sum(series[-5:])), 2)
+                if up_days >= min_streak:
+                    up.append({'industry': ind, 'days': up_days, 'cum_5d': cum_5d})
+                if down_days >= min_streak:
+                    down.append({'industry': ind, 'days': down_days, 'cum_5d': cum_5d})
+            up.sort(key=lambda x: (-x['days'], -x['cum_5d']))
+            down.sort(key=lambda x: (-x['days'], x['cum_5d']))
+            return {'up': up[:5], 'down': down[:5]}
+        except Exception as e:
+            logger.warning(f"板块连续涨跌聚合失败: {e}")
+            return {'up': [], 'down': []}
 
     # ──────────────────────────────────────────────
     # 7. 全市场资金流向（moneyflow-summary）
@@ -815,6 +904,8 @@ class DashboardService:
             )
             # 527 批次3：板块净流入多日聚合——近5日窗口内每板块净流入累计
             # （moneyflow_cache 59 日可用；前端可作「板块近5日趋势」一句话说明）
+            # 528 批次2：补净流出侧 trend_5d_out（近5日净流出 top5，与净流入对称，
+            # 前端作「净流出较多板块」提示）
             sector_net_5d = {}
             try:
                 for r in records:
@@ -827,8 +918,13 @@ class DashboardService:
                 result['trend_5d'] = [
                     {'industry': k, 'net_inflow_5d': round(v / 1e4, 1)} for k, v in top5
                 ]
+                bottom5 = sorted(sector_net_5d.items(), key=lambda x: x[1])[:5]
+                result['trend_5d_out'] = [
+                    {'industry': k, 'net_inflow_5d': round(v / 1e4, 1)} for k, v in bottom5
+                ]
             except Exception:
                 result['trend_5d'] = []
+                result['trend_5d_out'] = []
             return result
         except Exception as e:
             logger.warning(f"板块资金流向 DuckDB 聚合失败: {e}")
