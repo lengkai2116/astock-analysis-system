@@ -463,12 +463,18 @@ class DashboardService:
             from app.models import Stock
 
             ecm = self.data_manager.cache
-            # 最新交易日
+            # 最新交易日：以 daily_basic_cache 最新日为准（盘中 daily_cache 会有少量当日残行，
+            # 如 10-20 仅 97 只而 daily_basic 仍为 10-19 → 原实现取 10-20 后 inner join 空 → 503）
             date_df = ecm._query_shard(
-                'daily_cache',
-                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
+                'daily_basic_cache',
+                "SELECT DISTINCT trade_date FROM daily_basic_cache "
+                "ORDER BY trade_date DESC LIMIT 1")
             if date_df is None or date_df.empty:
-                logger.error("全市场日终散点: daily_cache 无任何历史数据")
+                date_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
+            if date_df is None or date_df.empty:
+                logger.error("全市场日终散点: daily_cache/daily_basic_cache 无任何历史数据")
                 return None
             last_date = date_df['trade_date'].iloc[0]
 

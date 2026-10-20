@@ -190,19 +190,19 @@ def _html():
 
 def test_sector_containers_are_separate():
     html = _html()
-    pos_mf = html.index('id="sector-mf-rows"')
+    pos_mf = html.index('id="sector-inflow-chart"')
     pos_heat = html.index('id="sector-heat-panel"')
     pos_sector = html.index('id="chart-sector"')
     assert pos_mf < pos_heat < pos_sector
-    # 旧合并容器里的柱图已移除；净流入与热度各自独立 chart-card
-    assert 'id="sector-inflow-chart"' not in html
+    # 净流入恢复原布局（左行业柱图 + 右个股明细），不再使用行列表容器
+    assert 'id="sector-mf-rows"' not in html
     assert html.count('id="sector-heat-panel"') == 1
 
 
 def test_history_5d_sparkline_and_text():
     html = _html()
     assert 'sd.history_5d||sd.history_20d' in html
-    assert '_sparklineSvg' in html
     assert 'option.graphic.push' in html
+    assert 'W/2+116' in html          # 折线缩至约半宽，右侧留文字空间
     assert '近5日板块涨跌走势' in html
     assert '531' in html
