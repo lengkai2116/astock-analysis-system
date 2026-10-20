@@ -204,5 +204,7 @@ def test_history_5d_sparkline_and_text():
     assert 'sd.history_5d||sd.history_20d' in html
     assert 'option.graphic.push' in html
     assert 'W/2+116' in html          # 折线缩至约半宽，右侧留文字空间
+    assert 'left:W-RIGHT+10' in html  # 文字紧贴折线右侧（非容器最右端）
+    assert "align:'left'" in html
     assert '近5日板块涨跌走势' in html
     assert '531' in html
