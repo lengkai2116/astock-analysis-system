@@ -114,6 +114,8 @@ class ShardingManager:
             # 530号 批次2：板块资金热度（RAW-2D 预计算：近5日主力净流入÷流通市值占比，
             # 方向 B 独立表，引擎 SectorRotationModel 不动）→ compute_cache.db
             'sector_fund_heat_cache': 'compute_cache.db',
+            # 530号 第二轮：股票→申万一级 31 类映射（板块热度/近20日折线同口径）→ compute_cache.db
+            'stock_sw_industry': 'compute_cache.db',
             'pattern_score_cache': 'compute_cache.db',
             # 438号缺口③：个股相对强弱持久化（双基准超额收益）→ compute_cache.db 计算结果
             'relative_strength_cache': 'compute_cache.db',

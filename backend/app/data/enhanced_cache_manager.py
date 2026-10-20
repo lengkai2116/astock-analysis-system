@@ -1466,6 +1466,17 @@ class EnhancedCacheManager:
                 PRIMARY KEY (stat_date, industry)
             )
         """)
+        # 530号 第二轮：股票 → 申万一级行业（SW2021，31 类）映射（akshare 月度刷新）
+        #   成分股以 6 位代码存储（daily_cache 等的 ts_code 去后缀对齐），
+        #   板块资金热度（RAW-2D）与近20日板块折线共读同口径。
+        self.compute_conn.execute("""
+            CREATE TABLE IF NOT EXISTS stock_sw_industry (
+                ts_code TEXT PRIMARY KEY,
+                industry TEXT NOT NULL,
+                industry_code TEXT,
+                updated_at TEXT
+            )
+        """)
         self.compute_conn.commit()
 
     def _migrate_pattern_score_to_compute_db(self):

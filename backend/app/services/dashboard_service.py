@@ -830,11 +830,12 @@ class DashboardService:
             return {'up': [], 'down': []}
 
     def _get_sector_history_20d(self, days: int = 20) -> Dict:
-        """板块近 N 日每日平均涨跌幅序列（530号 批次3：近20日板块涨跌折线数据源）。
+        """板块近 N 日每日平均涨跌幅序列（530号 批次3/第二轮：近20日板块涨跌折线数据源）。
 
-        数据源：daily_cache 近 days 个交易日按行业聚合日均 pct_chg（DuckDB）。
+        数据源：daily_cache 近 days 个交易日按**申万一级 31 类**聚合日均 pct_chg
+        （530 第二轮：原东财二级 110 类碎行业改申万一级，与板块热度同口径）。
         返回 {'dates': [...升序], 'avg': [全市场每日均值...], 'industries': {industry: [逐日值...]}}；
-        失败返回空 dict（不阻断主接口）。
+        映射缺失/失败返回空 dict（不阻断主接口）。
         """
         try:
             ecm = self.data_manager.cache
@@ -855,20 +856,15 @@ class DashboardService:
             if all_df is None or all_df.empty:
                 return {}
 
-            from app import db as _flask_db
-            from app.models import Stock
+            from app.data.sw_industry_map import get_sw_industry_map, normalize_code
             ts_codes = all_df['ts_code'].unique().tolist()
-            industry_map = {}
-            try:
-                # 对齐 _get_sector_streaks 的 db.session.query 模式（可测性一致）
-                for s in _flask_db.session.query(
-                        Stock.ts_code, Stock.industry).filter(
-                        Stock.ts_code.in_(ts_codes)).all():
-                    if s.industry:
-                        industry_map[s.ts_code] = s.industry
-            except Exception:
-                pass
-            if len(industry_map) < 10:
+            sw_map = get_sw_industry_map(ecm)
+            if not sw_map:
+                logger.warning("板块近20日历史聚合: 申万一级映射为空，跳过")
+                return {}
+            industry_map = {c: sw_map.get(normalize_code(c)) for c in ts_codes}
+            industry_map = {k: v for k, v in industry_map.items() if v}
+            if not industry_map or (len(ts_codes) >= 10 and len(industry_map) < 10):
                 return {}
 
             all_df['industry'] = all_df['ts_code'].map(lambda x: industry_map.get(x, None))

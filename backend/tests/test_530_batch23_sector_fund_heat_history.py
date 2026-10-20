@@ -193,33 +193,15 @@ class _FakeECMHist:
 
 
 def _mk_hist_session(monkeypatch):
+    # 530 第二轮：行业粒度改申万一级映射（6 位代码 → 申万一级行业名）
     ind = {
-        'A.SH': '半导体', 'B.SH': '银行', 'C.SZ': '半导体',
+        'A': '半导体', 'B': '银行', 'C': '半导体',
         # 填充行业（不参与数据聚合，仅越过生产代码 len(industry_map)<10 门槛）
-        'X1.SH': '其他', 'X2.SH': '其他', 'X3.SH': '其他', 'X4.SH': '其他',
-        'X5.SH': '其他', 'X6.SH': '其他', 'X7.SH': '其他',
+        'X1': '其他', 'X2': '其他', 'X3': '其他', 'X4': '其他',
+        'X5': '其他', 'X6': '其他', 'X7': '其他',
     }
-
-    class _Stock:
-        def __init__(self, ts_code, industry):
-            self.ts_code = ts_code
-            self.industry = industry
-
-    stock_rows = [_Stock(k, v) for k, v in ind.items()]
-
-    class _All:
-        def all(self):
-            return stock_rows
-
-    class _Q:
-        def filter(self, *a, **k):
-            return _All()
-
-    class _Session:
-        def query(self, *a, **k):
-            return _Q()
-
-    monkeypatch.setattr('app.db.session', _Session())
+    monkeypatch.setattr('app.data.sw_industry_map.get_sw_industry_map',
+                        lambda *a, **k: dict(ind))
 
 
 def test_get_sector_history_20d(monkeypatch):

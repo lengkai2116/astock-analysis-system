@@ -156,11 +156,6 @@ body { overflow-x:hidden; }
         <!-- 528 批次2：板块连续涨/跌 + 近5日累积涨跌说明（后端 streaks：daily_cache 多日按行业聚合） -->
         <div id="sector-change-note" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
         <div id="chart-sector" class="chart-box" style="height:320px;"></div>
-        <!-- 530 批次3：近20日板块涨跌折线（默认当日涨幅前5+跌幅前5+全市场平均，可展开全部） -->
-        <div style="font-weight:600;font-size:13px;margin-top:var(--space-12);margin-bottom:var(--space-4);">📈 近20日板块涨跌走势</div>
-        <div id="sector-history-note" style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-4);">默认展示当日涨幅前5 + 跌幅前5 + 全市场平均；点击「展开全部」查看所有行业。</div>
-        <div style="margin-bottom:var(--space-4);"><span class="tag tag-bullish" id="sector-history-expand" style="cursor:pointer;">展开全部</span></div>
-        <div id="chart-sector-history" class="chart-box" style="height:280px;"></div>
       </div>
       <div class="rank-table">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-12);">
@@ -171,6 +166,18 @@ body { overflow-x:hidden; }
           <tr><th>代码</th><th>名称</th><th>最新价</th><th>涨跌幅</th></tr>
         </table>
       </div>
+    </div>
+
+    <!-- 530 第二轮：近20日板块涨跌走势（申万一级 31 类）— 全宽独立容器，位置⑦后⑧前 -->
+    <div class="chart-card" style="margin-bottom:var(--space-20);">
+      <div class="chart-title">📈 近20日板块涨跌走势（申万一级）</div>
+      <div id="sector-history-note" style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-6);line-height:1.6;">每行＝行业名 + 该行业近20日日均涨跌幅折线（虚线为 0 轴，可看波动方向与幅度）；默认展示当日涨幅前5 + 跌幅前5 + 全市场平均，点击「展开全部」查看申万一级 31 类。</div>
+      <div style="margin-bottom:var(--space-8);"><span class="tag tag-bullish" id="sector-history-expand" style="cursor:pointer;">展开全部</span></div>
+      <div id="chart-sector-history" class="chart-box"></div>
+    </div>
+
+    <!-- 大盘状态（⑧） -->
+    <div class="grid-2" style="margin-bottom:var(--space-24);">
       <div class="rank-table">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-12);">
           <span style="font-weight:600;">🛰️ 大盘状态</span>
@@ -976,48 +983,92 @@ function renderSectorChart(sd){
   renderSectorHistory20d(sd);
 }
 
-// 530号 批次3：近20日板块涨跌折线（默认当日涨幅前5+跌幅前5+全市场平均，可展开全部）
+// 530号 第二轮：近20日板块涨跌「行列表格」——每行＝行业名 + 该行业20日折线小图
+// （申万一级 31 类；默认当日涨幅前5+跌幅前5+全市场平均，可展开全部；横轴 0 线）
 var _sectorHistoryAll=false;
 var _HIST_COLORS=['#60A5FA','#F87171','#34D399','#FBBF24','#A78BFA','#22D3EE','#F472B6','#4ADE80','#FCA5A5','#93C5FD'];
 function renderSectorHistory20d(sd){
   var h=sd&&sd.history_20d;
-  if(!h||!h.dates||!h.industries)return;
+  var el=document.getElementById('chart-sector-history');
+  if(!el||!h||!h.dates||!h.industries)return;
+  _sectorHistoryLast=sd;
+  var indNames=Object.keys(h.industries);
+  if(!indNames.length)return;
+  var lastIdx=h.dates.length-1;
+  var sorted=indNames.slice().sort(function(a,b){
+    return (h.industries[b][lastIdx]||0)-(h.industries[a][lastIdx]||0);
+  });
+  var pick;
+  if(_sectorHistoryAll){
+    pick=sorted.slice();
+  } else {
+    var top=sorted.slice(0,5);
+    pick=top.concat(sorted.slice(-5).filter(function(n){return top.indexOf(n)<0;}));
+  }
+  if(!pick.length)return;
+  var rows=pick.map(function(nm,i){
+    return {name:nm, vals:(h.industries[nm]||[]).slice(), color:_HIST_COLORS[i%_HIST_COLORS.length]};
+  });
+  rows.push({name:'全市场平均', vals:(h.avg||[]).slice(), color:'#64748B', isAvg:true});
+
+  var ROW_H=36, TOP=8, BOTTOM=24, LEFT=88, RIGHT=44;
+  el.style.height=(TOP+rows.length*ROW_H+BOTTOM)+'px';
   var c=_chart('chart-sector-history');
   if(!c)return;
-  var expandEl=document.getElementById('sector-history-expand');
-  // 确定展示行业：默认当日涨幅前5+跌幅前5；展开全部时全部行业
-  var indNames=Object.keys(h.industries);
-  var pick=[];
-  if(_sectorHistoryAll){
-    pick=indNames;
-    if(expandEl)expandEl.textContent='收起（仅当日Top）';
-  } else {
-    // 取当日（最后一个日期）各行业均值排序
-    var lastIdx=h.dates.length-1;
-    var sorted=indNames.slice().sort(function(a,b){
-      return (h.industries[b][lastIdx]||0)-(h.industries[a][lastIdx]||0);
+
+  var option={backgroundColor:'transparent',animation:false,title:[],grid:[],xAxis:[],yAxis:[],series:[]};
+  rows.forEach(function(r,i){
+    var top=TOP+i*ROW_H;
+    option.title.push({
+      text:(i+1)+'. '+r.name, left:2, top:top+3,
+      textStyle:{color:r.isAvg?'#94A3B8':'#E2E8F0',fontSize:11,fontWeight:'normal',
+        width:LEFT-8,overflow:'truncate'}
     });
-    pick=sorted.slice(0,5).concat(sorted.slice(-5));
-    if(expandEl)expandEl.textContent='展开全部';
-  }
-  // 构建 series：折线 + 全市场平均基准
-  var series=pick.map(function(nm,i){
-    return {name:escapeHtml(nm),type:'line',smooth:true,symbol:'none',lineStyle:{width:1.4},
-      data:h.industries[nm].slice(),itemStyle:{color:_HIST_COLORS[i%_HIST_COLORS.length]}};
+    option.grid.push({left:LEFT,right:RIGHT,top:top,height:ROW_H-12});
+    option.xAxis.push({
+      type:'category',gridIndex:i,data:h.dates,boundaryGap:false,
+      axisLabel:{show:i===rows.length-1,color:'#94A3B8',fontSize:9,
+        interval:Math.max(0,Math.ceil(h.dates.length/10)-1),
+        formatter:function(v){return String(v).slice(5);}},
+      axisTick:{show:false},axisLine:{show:false},splitLine:{show:false}
+    });
+    var vals=(r.vals||[]).map(Number).filter(function(v){return isFinite(v);});
+    var mn=Math.min.apply(null,vals.concat([0]));
+    var mx=Math.max.apply(null,vals.concat([0]));
+    if(!isFinite(mn)||!isFinite(mx)){mn=-1;mx=1;}
+    var pad=Math.max(0.2,(mx-mn)*0.15);
+    option.yAxis.push({
+      type:'value',gridIndex:i,min:+(mn-pad).toFixed(2),max:+(mx+pad).toFixed(2),
+      splitNumber:2,axisLabel:{show:false},axisTick:{show:false},
+      axisLine:{show:false},splitLine:{show:false}
+    });
+    option.series.push({
+      name:r.name,type:'line',xAxisIndex:i,yAxisIndex:i,data:r.vals,
+      smooth:true,symbol:'none',
+      lineStyle:{width:1.3,color:r.color,type:r.isAvg?'dashed':'solid'},
+      itemStyle:{color:r.color},
+      markLine:{silent:true,symbol:'none',label:{show:false},
+        lineStyle:{color:'rgba(148,163,184,0.45)',width:1,type:'dashed'},
+        data:[{yAxis:0}]}
+    });
   });
-  series.push({name:'全市场平均',type:'line',smooth:true,symbol:'none',lineStyle:{width:2,type:'dashed',color:'#64748B'},
-    data:h.avg.slice(),itemStyle:{color:'#64748B'}});
-  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis',formatter:function(ps){
-      var s='<div>'+escapeHtml(ps[0].axisValue)+'</div>';
-      ps.forEach(function(p){s+='<div>'+p.marker+escapeHtml(p.seriesName)+'：'+(p.value>0?'+':'')+p.value+'%</div>';});
-      return s;
-    }},
-    legend:{type:'scroll',top:0,textStyle:{color:'#94A3B8',fontSize:10},itemWidth:14,itemHeight:8},
-    grid:{left:40,right:16,bottom:20,top:30},
-    xAxis:{type:'category',data:h.dates,axisLabel:{color:'#94A3B8',fontSize:9,interval:Math.ceil(h.dates.length/8)},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
-    yAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
-    series:series});
-  if(c&&charts.indexOf(c)<0)charts.push(c);
+  option.tooltip={
+    trigger:'axis',confine:true,
+    backgroundColor:'rgba(15,23,42,0.92)',borderColor:'rgba(148,163,184,0.3)',
+    textStyle:{color:'#E2E8F0',fontSize:11},
+    formatter:function(ps){
+      if(!ps||!ps.length)return '';
+      var p=ps[0];
+      return '<div style="font-weight:600;margin-bottom:2px;">'+escapeHtml(p.seriesName)
+        +' · '+escapeHtml(String(p.axisValue).slice(5))+'</div>'
+        +'<div>'+(Number(p.value)>0?'+':'')+Number(p.value).toFixed(2)+'%</div>';
+    }
+  };
+  c.setOption(option,true);
+  c.resize();
+  if(charts.indexOf(c)<0)charts.push(c);
+  var expandEl=document.getElementById('sector-history-expand');
+  if(expandEl)expandEl.textContent=_sectorHistoryAll?'收起（仅当日Top）':'展开全部';
 }
 // 530号 批次3：「展开全部 / 收起」交互（复用上次 renderSectorHistory20d 的 sd 数据）
 var _sectorHistoryLast=null;

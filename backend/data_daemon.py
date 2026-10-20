@@ -3227,13 +3227,22 @@ def _precompute_sector_fund_heat(codes):
     from app import create_app
     _flask_app = create_app()
     with _flask_app.app_context():
-        from app.data import DataManager
-        dm = DataManager()
-        # 1) 行业映射（Stock.industry 申万一级）
-        ind_map = dm.get_stock_industry_batch(codes)
-        if not ind_map:
-            logger.warning("板块资金热度: 行业映射为空，跳过写盘")
+        # 1) 行业映射（申万一级 31 类；530 第二轮修正——原东财二级 110 类碎行业
+        #    在资金占比/折线下仍受小基数干扰。映射表由 akshare 月度刷新）
+        from app.data.sw_industry_map import (
+            get_sw_industry_map,
+            normalize_code,
+            refresh_sw_industry_map,
+        )
+        try:
+            refresh_sw_industry_map(_ecm)
+        except Exception as e:
+            logger.warning(f"板块资金热度: 申万一级映射刷新失败，沿用旧表: {e}")
+        sw_map = get_sw_industry_map(_ecm)
+        if not sw_map:
+            logger.warning("板块资金热度: 申万一级映射为空，跳过写盘")
             return
+        ind_map = {c: sw_map.get(normalize_code(c)) for c in codes}
         # 2) 近5个交易日（moneyflow_cache 有数据的天，升序）
         _mf_dates_row = _shard_fetchall(
             'moneyflow_cache',
