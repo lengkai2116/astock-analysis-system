@@ -80,13 +80,31 @@ API_PID=$!
 cd "$PROJECT_ROOT"
 
 # 等待 API 就绪（最长 15s）
+API_READY=0
 for i in $(seq 1 15); do
     if curl -sf http://127.0.0.1:5001/api/v3/health/live > /dev/null 2>&1; then
         echo "✅ API 进程就绪 (${i}s)"
+        API_READY=1
         break
     fi
     sleep 1
 done
+# 529号 批次1（A）：15s 未就绪 → 继续等待（最长再 45s，总 60s），
+# 避免浏览器先于 API 打开报「无法打开此页面」（原超时后无条件 open）
+if [ "$API_READY" != "1" ]; then
+    echo "⏳ API 尚未就绪，继续等待（最长再 45s，共 60s）..."
+    for i in $(seq 16 60); do
+        if curl -sf http://127.0.0.1:5001/api/v3/health/live > /dev/null 2>&1; then
+            echo "✅ API 进程就绪 (${i}s)"
+            API_READY=1
+            break
+        fi
+        sleep 1
+    done
+fi
+if [ "$API_READY" != "1" ]; then
+    echo "⚠️ API 进程 60s 内未就绪——浏览器打开后可能短暂无法访问，请稍候手动刷新"
+fi
 
 # ── 启动 WAL 定期收缩守护（328号 L2，单实例守卫）──
 # 非交易时段 + 管道空闲 + WAL 超阈值时自动收缩（停 daemon+API → TRUNCATE → 重启）

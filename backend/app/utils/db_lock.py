@@ -16,13 +16,17 @@ _LOCK_TARGET_DBS = ['stock_cache.db', 'market_cache.db', 'compute_cache.db',
                     'system_cache.db', 'market_snapshot.db']
 
 
-def wait_db_unlock(data_dir: str, max_wait: float = 300.0) -> None:
+def wait_db_unlock(data_dir: str, max_wait: float = 60.0) -> None:
     """启动前置：等待核心 SQLite 分库写锁释放（2026-09-29 问题5 效率修复）
 
     研发期反复停 daemon/跑测试，残留进程可能短暂持有写锁。ECM 连接 busy_timeout=30s，
     锁定时每次 DDL 迁移失败要干等 30s，启动被『database is locked』风暴拖慢 10 分钟+
     （09-28 实证：18:00~18:10 循环）。此处用独立短超时连接探测核心分库写锁，
     锁定时每 5s 重试直至释放或超时，避免迁移在锁下空转。
+
+    529号 批次2（B1）：等待期每 10s 打一条进度日志（原等待期仅首尾各一条日志、
+    中间每 5s 静默重试——API 冷启动等锁时用户无反馈）；max_wait 默认 300s→60s
+    （原 5 分钟上限过长，实测等锁 ≤30s；超时继续启动有『后续重试机制兜底』）。
     """
     _waited = 0.0
     while True:
@@ -49,5 +53,8 @@ def wait_db_unlock(data_dir: str, max_wait: float = 300.0) -> None:
             return
         if _waited == 0:
             logger.warning(f"检测到数据库写锁: {_locked}，等待释放（残留 daemon/测试进程？）...")
+        elif _waited % 10 == 0:
+            # 529号 批次2：等待期进度日志（每 10s 一条，不刷屏）
+            logger.warning(f"仍等待数据库写锁释放（已等 {_waited:.0f}s）: {_locked} ...")
         time.sleep(5)
         _waited += 5.0
