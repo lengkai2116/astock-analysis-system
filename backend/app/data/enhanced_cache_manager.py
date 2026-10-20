@@ -1448,6 +1448,24 @@ class EnhancedCacheManager:
         """)
         self.compute_conn.execute('CREATE INDEX IF NOT EXISTS idx_industry_pos_industry '
                                   'ON industry_position_cache(industry, asof_date)')
+        # 530号 批次2：板块资金热度持久化（RAW-2D 预计算产物，方向 B）
+        #   ——「板块近5日主力净流入 ÷ 板块最新流通市值」占比排序，消除成分股基数
+        #   差异（原 sector_heat_cache 用 MA5>MA20 个股占比，小基数行业占优）；
+        #   独立表、引擎 SectorRotationModel 不动（dim1/dim5/机会图谱消费链零回归）。
+        #   stat_date×industry 唯一，按日替换。
+        self.compute_conn.execute("""
+            CREATE TABLE IF NOT EXISTS sector_fund_heat_cache (
+                stat_date TEXT NOT NULL,
+                industry TEXT NOT NULL,
+                net_inflow_5d REAL NOT NULL,
+                circ_mv REAL NOT NULL,
+                ratio REAL NOT NULL,
+                rank INTEGER NOT NULL,
+                heat_level TEXT NOT NULL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (stat_date, industry)
+            )
+        """)
         self.compute_conn.commit()
 
     def _migrate_pattern_score_to_compute_db(self):
@@ -1760,6 +1778,63 @@ class EnhancedCacheManager:
                 return result
         except Exception as e:
             logger.debug(f"get_cached_sector_heat失败: {e}")
+        return {}
+
+    # 530号 批次2：板块资金热度（RAW-2D 预计算：近5日主力净流入÷流通市值占比排序，
+    # 方向 B 独立表——引擎 SectorRotationModel 不动，dim1/dim5/机会图谱零回归）
+    def cache_sector_fund_heat(self, rows: list, stat_date: str):
+        """530号：持久化板块资金热度全量结果。
+
+        rows: [{industry, net_inflow_5d, circ_mv, ratio, rank, heat_level}]
+        stat_date×industry 唯一，按日替换（DELETE + executemany + 单次 commit）。
+        """
+        if not rows or not stat_date:
+            return
+        try:
+            self._exec_shard('sector_fund_heat_cache',
+                "DELETE FROM sector_fund_heat_cache WHERE stat_date = ?", [stat_date])
+            for r in rows:
+                self._exec_shard('sector_fund_heat_cache',
+                    "INSERT INTO sector_fund_heat_cache "
+                    "(stat_date, industry, net_inflow_5d, circ_mv, ratio, rank, heat_level) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [stat_date, str(r.get('industry', '')),
+                     float(r.get('net_inflow_5d', 0.0)),
+                     float(r.get('circ_mv', 0.0)),
+                     float(r.get('ratio', 0.0)),
+                     int(r.get('rank', -1)),
+                     str(r.get('heat_level', 'none'))],
+                )
+        except Exception as e:
+            logger.warning(f"cache_sector_fund_heat失败: {e}")
+
+    def get_cached_sector_fund_heat(self, stat_date: str = None) -> dict:
+        """530号：读取板块资金热度（最新 stat_date 全行业），返回 {industry: {...}}。
+
+        字段：net_inflow_5d（近5日主力净流入）/ circ_mv（流通市值）/ ratio（占比%）
+        / rank（升序越小越热）/ heat_level（top_10/top_20/normal/none）。
+        """
+        try:
+            if stat_date is None:
+                row = self._query_shard('sector_fund_heat_cache',
+                    "SELECT * FROM sector_fund_heat_cache WHERE stat_date = "
+                    "(SELECT MAX(stat_date) FROM sector_fund_heat_cache)", [])
+            else:
+                row = self._query_shard('sector_fund_heat_cache',
+                    "SELECT * FROM sector_fund_heat_cache WHERE stat_date = ?", [stat_date])
+            if row is not None and not row.empty:
+                result = {}
+                for _, r in row.iterrows():
+                    result[str(r.get('industry', ''))] = {
+                        'net_inflow_5d': float(r.get('net_inflow_5d', 0.0)),
+                        'circ_mv': float(r.get('circ_mv', 0.0)),
+                        'ratio': float(r.get('ratio', 0.0)),
+                        'rank': int(r.get('rank', -1)),
+                        'heat_level': str(r.get('heat_level', 'none')),
+                    }
+                return result
+        except Exception as e:
+            logger.debug(f"get_cached_sector_fund_heat失败: {e}")
         return {}
 
     # 438号缺口③: 个股相对强弱持久化（双基准超额收益）

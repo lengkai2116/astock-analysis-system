@@ -18,6 +18,10 @@ class _FakeECM:
     def get_cached_sector_heat(self, stat_date=None):
         return self._heat
 
+    # 530号 批次2：get_sector_heat 优先读资金热度表，此桩无资金数据 → 返回空回落趋势表
+    def get_cached_sector_fund_heat(self, stat_date=None):
+        return {}
+
     def _query_shard(self, table, sql, params=None):
         if table == 'sector_heat_cache':
             return pd.DataFrame({'d': ['2026-10-16']})
@@ -45,7 +49,8 @@ def test_sector_heat_sorted_by_rank():
     assert res is not None
     assert res['date'] == '2026-10-16'
     assert res['count'] == 3
-    assert res['source'] == 'DuckDB sector_heat_cache'
+    # 530号 批次2：趋势表 source 带口径后缀（资金表为空回落趋势表路径）
+    assert res['source'].startswith('DuckDB sector_heat_cache')
     ranks = [s['rank'] for s in res['sectors']]
     assert ranks == sorted(ranks)          # rank 升序
     assert res['sectors'][0]['industry'] == '半导体'

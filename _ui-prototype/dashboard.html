@@ -114,14 +114,16 @@ body { overflow-x:hidden; }
     <div class="grid-2" style="margin-bottom:var(--space-20);">
       <div class="chart-card">
         <div class="chart-title">📊 全市场日终散点 · 流通市值 × 涨跌幅 <span id="eod-scatter-date-1" style="font-size:12px;color:var(--text-muted);"></span></div>
-        <!-- 528 批次1：散点图说明（X=流通市值对数刻度 / Y=当日涨跌幅，红涨绿跌） -->
-        <div style="font-size:11px;color:var(--text-secondary);margin-bottom:var(--space-6);">X = 流通市值（对数刻度）· Y = 当日涨跌幅 · 每点＝一只个股（红涨绿跌）</div>
+        <!-- 530 批次1：散点图状态结果说明（较昨日+较5日均；applyEodStateNotes 动态填充） -->
+        <div id="eod-state-note-1" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-4);line-height:1.6;">加载中...</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-6);">X = 流通市值（对数刻度）· Y = 当日涨跌幅 · 每点＝一只个股（红涨绿跌）</div>
         <div id="chart-eod-scatter-1" style="height:320px;"></div>
       </div>
       <div class="chart-card">
         <div class="chart-title">🎯 开盘收盘对比四象限 <span id="eod-quad-note" style="font-size:11px;color:var(--text-muted);"></span></div>
-        <!-- 528 批次1：四象限改名 + 轴定义 + 一句解读（renderEodScatter2 动态填充 eod-quad-note） -->
-        <div style="font-size:11px;color:var(--text-secondary);margin-bottom:var(--space-6);">X = 开盘相对昨收（高开/低开）% · Y = 收盘相对开盘（高收/低收）% · 四象限＝开盘×收盘强弱组合</div>
+        <!-- 530 批次1：四象限状态结果说明（较昨日+较5日均；applyEodStateNotes 动态填充） -->
+        <div id="eod-state-note-2" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-4);line-height:1.6;">加载中...</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-6);">X = 开盘相对昨收（高开/低开）% · Y = 收盘相对开盘（高收/低收）% · 四象限＝开盘×收盘强弱组合</div>
         <div id="chart-eod-scatter-2" style="height:320px;"></div>
       </div>
     </div>
@@ -133,10 +135,10 @@ body { overflow-x:hidden; }
         <!-- 527 批次3：板块净流入近5日趋势（moneyflow_cache 多日聚合 trend_5d）；528 批次2：补净流出侧 trend_5d_out -->
         <div id="sector-mf-trend-note" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
         <div id="sector-inflow-chart" style="height:280px;"></div>
-        <!-- 524 L4：板块热度 Top（sector_heat_cache：heat_level/rank/strength） -->
+        <!-- 524 L4：板块热度 Top（530号 批次2 方向 B：sector_fund_heat_cache 资金占比排序） -->
         <div style="font-weight:600;font-size:13px;margin-top:var(--space-12);margin-bottom:var(--space-6);">🔥 板块热度 Top <span id="sector-heat-date" style="font-size:11px;color:var(--text-muted);"></span></div>
-        <!-- 528 批次1：板块热度取数/判定逻辑说明（缠中说禅板块强弱指标法，与当日涨跌/资金口径不同） -->
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-6);line-height:1.6;">取数：行业个股日线 MA5/MA20（最新交易日）；判定：板块内 MA5&gt;MA20 个股占比＝强度（strength），全行业排序前10/20/40 名分 top_10/top_20/normal。热度＝多日均线结构强势度（趋势维度），与上方当日涨跌/资金维度口径不同，故 TOP1 不一定是当日涨幅/资金第一。</div>
+        <!-- 530号 批次2：取数/判定逻辑说明（方向 B：资金占比口径；528 原 MA5>MA20 趋势口径说明已更新） -->
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-6);line-height:1.6;">取数：行业个股近5日主力净流入（大单+特大单）÷ 板块最新流通市值＝资金占比（ratio）；全行业按占比排序前10/20/40 名分 top_10/top_20/normal。资金热度反映主力资金实际流入强度（已消除成分股基数差异），与当日涨跌幅维度不同，故 TOP1 不一定是当日涨幅第一。</div>
         <div id="sector-heat-panel" style="font-size:12px;color:var(--text-secondary);">加载中...</div>
       </div>
       <div class="rank-table">
@@ -154,6 +156,11 @@ body { overflow-x:hidden; }
         <!-- 528 批次2：板块连续涨/跌 + 近5日累积涨跌说明（后端 streaks：daily_cache 多日按行业聚合） -->
         <div id="sector-change-note" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
         <div id="chart-sector" class="chart-box" style="height:320px;"></div>
+        <!-- 530 批次3：近20日板块涨跌折线（默认当日涨幅前5+跌幅前5+全市场平均，可展开全部） -->
+        <div style="font-weight:600;font-size:13px;margin-top:var(--space-12);margin-bottom:var(--space-4);">📈 近20日板块涨跌走势</div>
+        <div id="sector-history-note" style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-4);">默认展示当日涨幅前5 + 跌幅前5 + 全市场平均；点击「展开全部」查看所有行业。</div>
+        <div style="margin-bottom:var(--space-4);"><span class="tag tag-bullish" id="sector-history-expand" style="cursor:pointer;">展开全部</span></div>
+        <div id="chart-sector-history" class="chart-box" style="height:280px;"></div>
       </div>
       <div class="rank-table">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-12);">
@@ -284,8 +291,52 @@ function loadEodScatter(){
       renderEodScatter2(dd.stocks);
       bindEodPanZoom('chart-eod-scatter-1');
       bindEodPanZoom('chart-eod-scatter-2');
+      // 530 批次1：状态结果说明（较昨日+较5日均）
+      applyEodStateNotes(dd);
     })
     .catch(function(e){console.warn('eod-snapshot 加载失败',e);});
+}
+
+// 530 批次1：散点/四象限「状态结果说明」（非图表轴解释）
+// summary_5d 升序 [{date, up_count, down_count, flat_count, quad:{gg,gd,dg,dd}}]
+function applyEodStateNotes(dd){
+  var s5=dd.summary_5d||[];
+  if(!s5.length)return;
+  var today=s5[s5.length-1];
+  var prev=s5.length>=2?s5[s5.length-2]:null;
+  // 近5日均（含今日）
+  var n=s5.length, au=0,ad=0,af=0;
+  var agg={gg:0,gd:0,dg:0,dd:0};
+  s5.forEach(function(x){
+    au+=x.up_count;ad+=x.down_count;af+=x.flat_count;
+    agg.gg+=x.quad.gg;agg.gd+=x.quad.gd;agg.dg+=x.quad.dg;agg.dd+=x.quad.dd;
+  });
+  var aUp=Math.round(au/n),aDown=Math.round(ad/n),aFlat=Math.round(af/n);
+  // 散点图说明（Part1：涨跌家数）
+  var n1=document.getElementById('eod-state-note-1');
+  if(n1){
+    var dUp=today.up_count-prev.up_count,dDown=today.down_count-prev.down_count;
+    var dUp5=today.up_count-aUp,dDown5=today.down_count-aDown;
+    n1.innerHTML='今日上涨 <span class="up">'+today.up_count+'</span> · 下跌 <span class="down">'+today.down_count+'</span> · 平 '+today.flat_count
+      +'｜较昨日：涨<span class="'+(dUp>=0?'up':'down')+'">'+(dUp>=0?'+':'')+dUp+'</span> · 跌<span class="'+(dDown>=0?'down':'up')+'">'+(dDown>=0?'+':'')+dDown+'</span>'
+      +'｜较近5日均：涨'+(dUp5>=0?'+':'')+dUp5+' · 跌'+(dDown5>=0?'+':'')+dDown5;
+  }
+  // 四象限说明（Part2：高开高收占比等）
+  var n2=document.getElementById('eod-state-note-2');
+  if(n2){
+    var total=today.up_count+today.down_count+today.flat_count||1;
+    var ggPct=(today.quad.gg/total*100).toFixed(1);
+    var ddPct=(today.quad.dd/total*100).toFixed(1);
+    var gdPct=(today.quad.gd/total*100).toFixed(1);
+    var dgPct=(today.quad.dg/total*100).toFixed(1);
+    var pT=prev?(prev.up_count+prev.down_count+prev.flat_count||1):1;
+    var pGg=prev?(prev.quad.gg/pT*100):0;
+    var aT=au+ad+af||1;
+    var aGg=(agg.gg/aT*100);
+    n2.innerHTML='今日 高开高收 <span class="up">'+ggPct+'%</span> · 高开低收 '+gdPct+'% · 低开高收 '+dgPct+'% · 低开低收 <span class="down">'+ddPct+'%</span>'
+      +'｜较昨日高开高收 '+(prev?((ggPct-pGg)>=0?'+':'')+(ggPct-pGg).toFixed(1)+'pp':'-')
+      +'｜较近5日均 '+(ggPct>=aGg?'+':'')+(ggPct-aGg).toFixed(1)+'pp';
+  }
 }
 
 // Part1：流通市值（X，对数刻度） × 涨跌幅（Y）
@@ -683,13 +734,15 @@ function applyMarketEmotion(em){
   panel.innerHTML=html;
 }
 
-// 524 L4：板块热度 Top（sector_heat_cache：heat_level/rank/strength/stock_count）
+// 524 L4：板块热度 Top（530号 批次2 方向 B：sector_fund_heat_cache 资金占比
+// ——近5日主力净流入÷流通市值 ratio 排序；为空回退 sector_heat_cache MA5>MA20）
 function applySectorHeat(heat){
   if(!heat||!heat.sectors||!heat.sectors.length)return;
   var panel=document.getElementById('sector-heat-panel');
   if(!panel)return;
   var dateEl=document.getElementById('sector-heat-date');
   if(dateEl)dateEl.textContent=heat.date?('· '+heat.date):'';
+  var fundMode=!!heat.source&&heat.source.indexOf('fund')>=0;
   var rows=heat.sectors.slice(0,8).map(function(s){
     var _c=s.heat_level==='top_10'?'#EF4444':(s.heat_level==='top_20'?'#F59E0B':'#CBD5E1');
     // 527 批次2：排名变化/新进榜说明（prev_rank 为前一日 rank，rank 越小越热）
@@ -700,9 +753,18 @@ function applySectorHeat(heat){
     } else if(s.prev_rank==null){
       mv=' <span style="font-size:11px;color:#3B82F6;">新进榜</span>';
     }
+    // 530号 方向 B：资金占比口径显示 ratio + 近5日净流入；趋势口径回退 strength
+    var val;
+    if(fundMode){
+      val='<span style="color:'+_c+';">'+escapeHtml(s.heat_level)+' · 资金占比'+(s.ratio>=0?'+':'')+escapeHtml(s.ratio)+'%</span>'
+        +' <span style="color:var(--text-muted);font-size:11px;">近5日'+(s.net_inflow_5d>=0?'+':'')+(s.net_inflow_5d/10000).toFixed(1)+'亿</span>';
+    } else {
+      val='<span style="color:'+_c+';">'+escapeHtml(s.heat_level)+' · 强度'+escapeHtml(s.strength)+'</span>'
+        +' <span style="color:var(--text-muted);font-size:11px;">'+escapeHtml(s.stock_count)+'只</span>';
+    }
     return '<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border-default);">'
-      +'<span>'+escapeHtml(s.rank)+'. '+escapeHtml(s.industry)+mv+' <span style="color:var(--text-muted);font-size:11px;">'+escapeHtml(s.stock_count)+'只</span></span>'
-      +'<span style="color:'+_c+';">'+escapeHtml(s.heat_level)+' · 强度'+escapeHtml(s.strength)+'</span>'
+      +'<span>'+escapeHtml(s.rank)+'. '+escapeHtml(s.industry)+mv+'</span>'
+      +val
       +'</div>';
   }).join('');
   panel.innerHTML='<div>'+rows+'</div>';
@@ -910,7 +972,64 @@ function renderSectorChart(sd){
     series:[{type:'bar',data:chartData.map(function(v){var pct=+(v.change_pct||0).toFixed(1);return {value:pct,itemStyle:{color:pct>=0?'#EF4444':'#22C55E'}};}),barWidth:12,
       label:{show:true,position:'right',formatter:function(p){return p.value>0?'+'+p.value+'%':p.value+'%';},fontSize:11,color:'#CBD5E1'}}]});
   if(c&&charts.indexOf(c)<0)charts.push(c);
+  // 530号 批次3：近20日板块涨跌折线（history_20d）
+  renderSectorHistory20d(sd);
 }
+
+// 530号 批次3：近20日板块涨跌折线（默认当日涨幅前5+跌幅前5+全市场平均，可展开全部）
+var _sectorHistoryAll=false;
+var _HIST_COLORS=['#60A5FA','#F87171','#34D399','#FBBF24','#A78BFA','#22D3EE','#F472B6','#4ADE80','#FCA5A5','#93C5FD'];
+function renderSectorHistory20d(sd){
+  var h=sd&&sd.history_20d;
+  if(!h||!h.dates||!h.industries)return;
+  var c=_chart('chart-sector-history');
+  if(!c)return;
+  var expandEl=document.getElementById('sector-history-expand');
+  // 确定展示行业：默认当日涨幅前5+跌幅前5；展开全部时全部行业
+  var indNames=Object.keys(h.industries);
+  var pick=[];
+  if(_sectorHistoryAll){
+    pick=indNames;
+    if(expandEl)expandEl.textContent='收起（仅当日Top）';
+  } else {
+    // 取当日（最后一个日期）各行业均值排序
+    var lastIdx=h.dates.length-1;
+    var sorted=indNames.slice().sort(function(a,b){
+      return (h.industries[b][lastIdx]||0)-(h.industries[a][lastIdx]||0);
+    });
+    pick=sorted.slice(0,5).concat(sorted.slice(-5));
+    if(expandEl)expandEl.textContent='展开全部';
+  }
+  // 构建 series：折线 + 全市场平均基准
+  var series=pick.map(function(nm,i){
+    return {name:escapeHtml(nm),type:'line',smooth:true,symbol:'none',lineStyle:{width:1.4},
+      data:h.industries[nm].slice(),itemStyle:{color:_HIST_COLORS[i%_HIST_COLORS.length]}};
+  });
+  series.push({name:'全市场平均',type:'line',smooth:true,symbol:'none',lineStyle:{width:2,type:'dashed',color:'#64748B'},
+    data:h.avg.slice(),itemStyle:{color:'#64748B'}});
+  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis',formatter:function(ps){
+      var s='<div>'+escapeHtml(ps[0].axisValue)+'</div>';
+      ps.forEach(function(p){s+='<div>'+p.marker+escapeHtml(p.seriesName)+'：'+(p.value>0?'+':'')+p.value+'%</div>';});
+      return s;
+    }},
+    legend:{type:'scroll',top:0,textStyle:{color:'#94A3B8',fontSize:10},itemWidth:14,itemHeight:8},
+    grid:{left:40,right:16,bottom:20,top:30},
+    xAxis:{type:'category',data:h.dates,axisLabel:{color:'#94A3B8',fontSize:9,interval:Math.ceil(h.dates.length/8)},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
+    yAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
+    series:series});
+  if(c&&charts.indexOf(c)<0)charts.push(c);
+}
+// 530号 批次3：「展开全部 / 收起」交互（复用上次 renderSectorHistory20d 的 sd 数据）
+var _sectorHistoryLast=null;
+(function(){
+  var expandEl=document.getElementById('sector-history-expand');
+  if(!expandEl)return;
+  expandEl.addEventListener('click',function(){
+    _sectorHistoryAll=!_sectorHistoryAll;
+    if(_sectorHistoryLast)renderSectorHistory20d(_sectorHistoryLast);
+  });
+})();
+
 
 function renderSectorMoneyflow(smd){
   if(!smd)return;

@@ -21,6 +21,10 @@ class _FakeECM:
             stat_date = self._dates[0]
         return self._heat.get(stat_date, {})
 
+    # 530号 批次2：get_sector_heat 优先读资金热度表，此桩无资金数据 → 返回空回落趋势表
+    def get_cached_sector_fund_heat(self, stat_date=None):
+        return {}
+
     def _query_shard(self, table, sql, params=None):
         if table == 'sector_heat_cache':
             if 'DISTINCT stat_date' in sql:

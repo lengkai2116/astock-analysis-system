@@ -3207,6 +3207,118 @@ def _precompute_sector_heat(codes):
             logger.warning(f"板块热度写盘失败: {e}")
 
 
+def _precompute_sector_fund_heat(codes):
+    """板块资金热度持久化（530号 批次2，独立管道步骤 RAW-2D）
+
+    方向 B：按「板块近5日主力净流入 ÷ 板块最新流通市值」占比排序，消除成分股
+    基数差异（原 sector_heat_cache 用 MA5>MA20 个股占比，小基数行业占优）。
+    独立表 sector_fund_heat_cache（compute_cache.db），引擎 SectorRotationModel
+    不动（dim1/dim5/机会图谱消费链零回归）；仪表盘板块热度面板改读本表。
+
+    参照 _precompute_sector_heat 骨架：独立 app_context + 独立短连接写盘
+    （DELETE + executemany + 单次 commit，规避与 daemon 主循环写锁竞争）。
+    口径：主力净流入 = buy_lg+buy_elg−sell_lg−sell_elg（moneyflow_cache，万元）；
+    流通市值 = daily_basic_cache.circ_mv（万元）；ratio = 近5日净流入/流通市值×100。
+    """
+    _ensure_ecm()
+    _ensure_pd()
+    if not codes:
+        return
+    from app import create_app
+    _flask_app = create_app()
+    with _flask_app.app_context():
+        from app.data import DataManager
+        dm = DataManager()
+        # 1) 行业映射（Stock.industry 申万一级）
+        ind_map = dm.get_stock_industry_batch(codes)
+        if not ind_map:
+            logger.warning("板块资金热度: 行业映射为空，跳过写盘")
+            return
+        # 2) 近5个交易日（moneyflow_cache 有数据的天，升序）
+        _mf_dates_row = _shard_fetchall(
+            'moneyflow_cache',
+            "SELECT DISTINCT trade_date FROM moneyflow_cache ORDER BY trade_date DESC LIMIT 5")
+        if not _mf_dates_row:
+            logger.warning("板块资金热度: moneyflow_cache 无数据，跳过写盘")
+            return
+        _mf_dates = sorted(str(r[0]) for r in _mf_dates_row)
+        _start = _mf_dates[0]
+        _latest = _mf_dates[-1]
+        # 3) 近5日 moneyflow 按行业聚合主力净流入（万元）
+        _mf_rows = _shard_fetchall(
+            'moneyflow_cache',
+            "SELECT ts_code, buy_lg_amount, buy_elg_amount, sell_lg_amount, sell_elg_amount "
+            "FROM moneyflow_cache WHERE trade_date >= ? AND trade_date <= ?",
+            [_start, _latest])
+        from collections import defaultdict
+        net_5d = defaultdict(float)
+        for _r in _mf_rows:
+            _ind = ind_map.get(str(_r[0]))
+            if not _ind:
+                continue
+            _net = (float(_r[1] or 0) + float(_r[2] or 0)
+                    - float(_r[3] or 0) - float(_r[4] or 0))
+            net_5d[_ind] += _net
+        if not net_5d:
+            logger.warning("板块资金热度: 近5日净流入聚合为空，跳过写盘")
+            return
+        # 4) 最新日流通市值按行业聚合（万元）
+        circ_mv = defaultdict(float)
+        _cb_rows = _shard_fetchall(
+            'daily_basic_cache',
+            "SELECT ts_code, circ_mv FROM daily_basic_cache WHERE trade_date = ?",
+            [_latest])
+        for _r in _cb_rows:
+            _ind = ind_map.get(str(_r[0]))
+            if _ind:
+                circ_mv[_ind] += float(_r[1] or 0)
+        # 5) 占比排序 → rank → heat_level（top_10/top_20/normal/none）
+        rows = []
+        for _ind, _net in net_5d.items():
+            _mv = circ_mv.get(_ind, 0.0)
+            if _mv <= 0:
+                continue
+            rows.append({
+                'industry': _ind,
+                'net_inflow_5d': round(_net, 1),
+                'circ_mv': round(_mv, 1),
+                'ratio': round(_net / _mv * 100, 4),
+                'rank': 0,
+                'heat_level': 'none',
+            })
+        if not rows:
+            logger.warning("板块资金热度: 占比计算为空，跳过写盘")
+            return
+        rows.sort(key=lambda x: -x['ratio'])
+        for _i, _r in enumerate(rows):
+            _r['rank'] = _i + 1
+            if _i < 10:
+                _r['heat_level'] = 'top_10'
+            elif _i < 20:
+                _r['heat_level'] = 'top_20'
+            elif _i < 40:
+                _r['heat_level'] = 'normal'
+        # 6) 独立短连接写盘（分库路由 compute_cache.db）
+        try:
+            from app.data.sharding_manager import sharding_manager as _sh_mgr
+            _sh_db = _sh_mgr.get_db_for_table('sector_fund_heat_cache')
+            conn = _sh_mgr.get_connection(_sh_db)
+            lock = _sh_mgr.get_write_lock(_sh_db)
+            with lock:
+                conn.execute("DELETE FROM sector_fund_heat_cache WHERE stat_date = ?", [_latest])
+                conn.executemany(
+                    "INSERT INTO sector_fund_heat_cache "
+                    "(stat_date, industry, net_inflow_5d, circ_mv, ratio, rank, heat_level) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [(_latest, r['industry'], r['net_inflow_5d'], r['circ_mv'],
+                      r['ratio'], r['rank'], r['heat_level']) for r in rows]
+                )
+                conn.commit()
+            logger.info(f"板块资金热度持久化完成: {len(rows)} 个行业 (stat_date={_latest}, db={_sh_db})")
+        except Exception as e:
+            logger.warning(f"板块资金热度写盘失败: {e}")
+
+
 def _n20_ret(series, n: int = 20) -> float | None:
     """series 按时间升序收盘序列，返回近 n 交易日收益（需 ≥n+1 观测）"""
     if series is None:
@@ -6979,6 +7091,11 @@ def _drive_pipeline():
     # ── 板块热度持久化 RAW-2B（B3 根治：独立于 RAW-2 触发，避免写锁竞争）──
     if status.get('RAW-2B', {}).get('status') != 'done':
         _run_pipeline_step(today, 'RAW-2B', _precompute_sector_heat, codes)
+        return
+
+    # ── 板块资金热度持久化 RAW-2D（530号 批次2：方向 B 资金占比独立表）──
+    if status.get('RAW-2D', {}).get('status') != 'done':
+        _run_pipeline_step(today, 'RAW-2D', _precompute_sector_fund_heat, codes)
         return
 
     # ── 个股行业位置持久化 RAW-2C（481号 ③：行业成分股近20日收益排名/百分位）──

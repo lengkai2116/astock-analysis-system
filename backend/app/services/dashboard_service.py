@@ -536,10 +536,81 @@ class DashboardService:
                 'count': len(stocks),
                 'source': 'DuckDB 盘后数据',
                 'stocks': stocks,
+                # 530 批次1：状态结果说明——近5交易日涨跌平家数 + 四象限计数
+                # （供前端散点/四象限图「较昨日、较近5日均」状态说明，非图表轴解释）
+                'summary_5d': self._get_eod_summary_5d(ecm),
             }
         except Exception as e:
             logger.error(f"全市场日终散点获取失败: {e}")
             return None
+
+    def _get_eod_summary_5d(self, ecm) -> list:
+        """近5交易日涨跌平家数 + 四象限计数（530 批次1，状态结果说明数据源）。
+
+        口径对齐主散点：daily_cache ⋈ daily_basic_cache（inner join 天然排除指数）；
+        pre_close 由 pct_chg 推导（同 get_eod_snapshot，Tushare 口径含除权）。
+        四象限：高开低开×高收低收（X=(open-pre)/pre、Y=(close-open)/open）。
+        返回升序 [{date, up_count, down_count, flat_count, quad:{gg,gd,dg,dd}}]。
+        """
+        try:
+            dates_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 5")
+            if dates_df is None or dates_df.empty:
+                return []
+            dates = [str(d) for d in dates_df['trade_date'].tolist()]
+            summary = []
+            for d in dates:
+                daily_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT ts_code, open, close, pct_chg FROM daily_cache WHERE trade_date = ?",
+                    [d])
+                basic_df = ecm._query_shard(
+                    'daily_basic_cache',
+                    "SELECT ts_code FROM daily_basic_cache WHERE trade_date = ?",
+                    [d])
+                if daily_df is None or daily_df.empty or basic_df is None or basic_df.empty:
+                    continue
+                merged = daily_df.merge(basic_df, on='ts_code', how='inner')
+                if merged.empty:
+                    continue
+                up = int((merged['pct_chg'].astype(float) > 0).sum())
+                down = int((merged['pct_chg'].astype(float) < 0).sum())
+                flat = int((merged['pct_chg'].astype(float) == 0).sum())
+                gg = gd = dg = dd = 0
+                for _, row in merged.iterrows():
+                    op = float(row.get('open') or 0)
+                    cl = float(row.get('close') or 0)
+                    pct = float(row.get('pct_chg') or 0)
+                    if op <= 0 or cl <= 0:
+                        continue
+                    if -100 < pct <= 100:
+                        denom = 1 + pct / 100.0
+                        pre = cl / denom if abs(denom) > 1e-9 else cl
+                    else:
+                        pre = cl
+                    if pre <= 0:
+                        continue
+                    gap = (op - pre) / pre * 100
+                    body = (cl - op) / op * 100
+                    if gap >= 0 and body >= 0:
+                        gg += 1
+                    elif gap >= 0 and body < 0:
+                        gd += 1
+                    elif gap < 0 and body >= 0:
+                        dg += 1
+                    else:
+                        dd += 1
+                summary.append({
+                    'date': d,
+                    'up_count': up, 'down_count': down, 'flat_count': flat,
+                    'quad': {'gg': gg, 'gd': gd, 'dg': dg, 'dd': dd},
+                })
+            summary.sort(key=lambda x: x['date'])
+            return summary
+        except Exception as e:
+            logger.warning(f"eod-snapshot summary_5d 聚合失败: {e}")
+            return []
 
     # ──────────────────────────────────────────────
     # 5. 板块涨跌幅（sector-sector）
@@ -553,6 +624,8 @@ class DashboardService:
         """
         # 528 号 批次2：板块连续涨/跌 + 近5日累积涨跌（daily_cache 多日按行业聚合）
         streaks = self._get_sector_streaks()
+        # 530号 批次3：板块近20日每日平均涨跌幅序列（近20日板块涨跌折线数据源）
+        history_20d = self._get_sector_history_20d()
         # 1. 尝试 AkshareDataReader 读取
         try:
             from app.data.akshare_reader import reader
@@ -582,6 +655,7 @@ class DashboardService:
                         'gainers': gainers,
                         'losers': losers,
                         'streaks': streaks,
+                        'history_20d': history_20d,
                         'source': '东方财富行业板块（盘中）',
                     }
         except Exception as e:
@@ -666,6 +740,7 @@ class DashboardService:
                     'gainers': gainers,
                     'losers': losers,
                     'streaks': streaks,
+                    'history_20d': history_20d,
                     'source': 'DuckDB daily_cache 聚合',
                 }
         except Exception as e:
@@ -753,6 +828,66 @@ class DashboardService:
         except Exception as e:
             logger.warning(f"板块连续涨跌聚合失败: {e}")
             return {'up': [], 'down': []}
+
+    def _get_sector_history_20d(self, days: int = 20) -> Dict:
+        """板块近 N 日每日平均涨跌幅序列（530号 批次3：近20日板块涨跌折线数据源）。
+
+        数据源：daily_cache 近 days 个交易日按行业聚合日均 pct_chg（DuckDB）。
+        返回 {'dates': [...升序], 'avg': [全市场每日均值...], 'industries': {industry: [逐日值...]}}；
+        失败返回空 dict（不阻断主接口）。
+        """
+        try:
+            ecm = self.data_manager.cache
+            dates_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT DISTINCT trade_date FROM daily_cache "
+                "ORDER BY trade_date DESC LIMIT ?", [days])
+            if dates_df is None or dates_df.empty:
+                return {}
+            dates = sorted(str(d) for d in dates_df['trade_date'].tolist())
+            if len(dates) < 2:
+                return {}
+            placeholders = ','.join('?' for _ in dates)
+            all_df = ecm._query_shard(
+                'daily_cache',
+                f"SELECT trade_date, ts_code, pct_chg FROM daily_cache "
+                f"WHERE trade_date IN ({placeholders})", dates)
+            if all_df is None or all_df.empty:
+                return {}
+
+            from app import db as _flask_db
+            from app.models import Stock
+            ts_codes = all_df['ts_code'].unique().tolist()
+            industry_map = {}
+            try:
+                # 对齐 _get_sector_streaks 的 db.session.query 模式（可测性一致）
+                for s in _flask_db.session.query(
+                        Stock.ts_code, Stock.industry).filter(
+                        Stock.ts_code.in_(ts_codes)).all():
+                    if s.industry:
+                        industry_map[s.ts_code] = s.industry
+            except Exception:
+                pass
+            if len(industry_map) < 10:
+                return {}
+
+            all_df['industry'] = all_df['ts_code'].map(lambda x: industry_map.get(x, None))
+            all_df = all_df.dropna(subset=['industry'])
+            if all_df.empty:
+                return {}
+            # 每行业每日均值 + 全市场每日均值（avg 基准线）
+            agg = all_df.groupby(['industry', 'trade_date'])['pct_chg'].mean().reset_index()
+            market_avg = all_df.groupby('trade_date')['pct_chg'].mean()
+            industries = {}
+            for ind, grp in agg.groupby('industry'):
+                grp = grp.sort_values('trade_date')
+                d2v = dict(zip(grp['trade_date'], grp['pct_chg']))
+                industries[str(ind)] = [round(float(d2v.get(d, 0.0) or 0.0), 2) for d in dates]
+            avg = [round(float(market_avg.get(d, 0.0) or 0.0), 2) for d in dates]
+            return {'dates': dates, 'avg': avg, 'industries': industries}
+        except Exception as e:
+            logger.warning(f"板块近20日历史聚合失败: {e}")
+            return {}
 
     # ──────────────────────────────────────────────
     # 7. 全市场资金流向（moneyflow-summary）
@@ -1210,51 +1345,73 @@ class DashboardService:
             return None
 
     def get_sector_heat(self, top_n: int = 8) -> Optional[Dict]:
-        """板块热度/排名（524 号 L4）：sector_heat_cache 最新日全行业。
+        """板块热度/排名（524 号 L4，530号 批次2 方向 B：改读资金热度表）。
 
-        数据源：E1 `sector_heat_cache`（compute_cache.db，long 格式每行业一行）
-        → `{date, count, sectors:[{industry, heat_level, strength, rank, stock_count, prev_rank}]}`
-        全只读；rank 越小越热（升序取 top_n）。heat_level 枚举：
-        top_10/top_20/...（419 号方案B3 板块热度，481 号已修复取最新日全行业）。
-        527 批次2：附前一日 rank（prev_rank）供前端「排名变化/新进榜」说明（get_cached_sector_heat
-        支持 stat_date 参数，读上一 stat_date 全行业对比；无前日数据时 prev_rank=None）。
+        数据源：优先 `sector_fund_heat_cache`（530号 RAW-2D 预计算——板块近5日主力净流入
+        ÷ 流通市值占比排序，消除成分股基数差异，方向 B 独立表）；为空（RAW-2D 未跑）时
+        回退 `sector_heat_cache`（MA5>MA20 个股占比，419 方案B3）。
+        → `{date, count, source, sectors:[{industry, heat_level, rank, ratio|strength,
+        net_inflow_5d, circ_mv, stock_count, prev_rank}]}`
+        全只读；rank 越小越热（升序取 top_n）。heat_level 枚举 top_10/top_20/normal/none。
+        527 批次2：附前一日 rank（prev_rank）供前端「排名变化/新进榜」说明。
         """
         try:
             ecm = self.data_manager.cache
-            heat = ecm.get_cached_sector_heat()
+            # 530号 方向 B：优先资金热度（sector_fund_heat_cache）
+            fund_heat = ecm.get_cached_sector_fund_heat()
+            source = 'fund'
+            if fund_heat:
+                heat = fund_heat
+                heat_date_col = 'sector_fund_heat_cache'
+                heat_getter = ecm.get_cached_sector_fund_heat
+            else:
+                heat = ecm.get_cached_sector_heat()
+                source = 'trend'
+                heat_date_col = 'sector_heat_cache'
+                heat_getter = ecm.get_cached_sector_heat
             if not heat:
-                logger.error("板块热度: sector_heat_cache 无数据")
+                logger.error("板块热度: sector_fund_heat_cache 与 sector_heat_cache 均无数据")
                 return None
             sectors = []
             for ind, info in heat.items():
                 if not ind or str(ind).strip().lower() in ('nan', 'none', ''):
                     continue
-                sectors.append({
-                    'industry': str(ind),
-                    'heat_level': str(info.get('heat_level', 'none')),
-                    'strength': float(info.get('strength', 0.0)),
-                    'rank': int(info.get('rank', 999)),
-                    'stock_count': int(info.get('stock_count', 0)),
-                })
+                if source == 'fund':
+                    sectors.append({
+                        'industry': str(ind),
+                        'heat_level': str(info.get('heat_level', 'none')),
+                        'ratio': float(info.get('ratio', 0.0)),
+                        'net_inflow_5d': float(info.get('net_inflow_5d', 0.0)),
+                        'circ_mv': float(info.get('circ_mv', 0.0)),
+                        'rank': int(info.get('rank', 999)),
+                    })
+                else:
+                    sectors.append({
+                        'industry': str(ind),
+                        'heat_level': str(info.get('heat_level', 'none')),
+                        'strength': float(info.get('strength', 0.0)),
+                        'rank': int(info.get('rank', 999)),
+                        'stock_count': int(info.get('stock_count', 0)),
+                    })
             sectors.sort(key=lambda x: x['rank'])
             date = ''
             try:
                 date_df = ecm._query_shard(
-                    'sector_heat_cache', "SELECT MAX(stat_date) AS d FROM sector_heat_cache")
+                    heat_date_col, "SELECT MAX(stat_date) AS d FROM " + heat_date_col)
                 if date_df is not None and not date_df.empty and date_df['d'].iloc[0]:
                     date = str(date_df['d'].iloc[0])
             except Exception:
                 pass
-            # 527 批次2：前一日 rank 对比（prev_rank）
+            # 527 批次2：前一日 rank 对比（prev_rank；同源表读上一 stat_date 全行业）
             prev_rank_map = {}
             try:
                 dates_df = ecm._query_shard(
-                    'sector_heat_cache',
-                    "SELECT DISTINCT stat_date FROM sector_heat_cache "
-                    "ORDER BY stat_date DESC LIMIT 2")
+                    heat_date_col,
+                    "SELECT DISTINCT stat_date FROM " + heat_date_col +
+                    " ORDER BY stat_date DESC LIMIT 2")
                 if dates_df is not None and not dates_df.empty and len(dates_df) >= 2:
                     prev_date = str(dates_df['stat_date'].iloc[1])
-                    prev_heat = ecm.get_cached_sector_heat(stat_date=prev_date)
+                    prev_heat = heat_getter(stat_date=prev_date)
                     for ind, info in prev_heat.items():
                         if not ind or str(ind).strip().lower() in ('nan', 'none', ''):
                             continue
@@ -1266,7 +1423,8 @@ class DashboardService:
             return {
                 'date': date,
                 'count': len(sectors),
-                'source': 'DuckDB sector_heat_cache',
+                'source': ('DuckDB sector_fund_heat_cache（资金占比，方向 B）'
+                           if source == 'fund' else 'DuckDB sector_heat_cache（趋势，MA5>MA20）'),
                 'sectors': sectors[:top_n],
             }
         except Exception as e:
