@@ -23,7 +23,7 @@ def test_history_table_moved_between_sector_and_market_state():
     # 折线容器已移出 ⑦ 卡：⑦ 卡在折线块前闭合，折线块独占自己的 chart-card
     between = html[pos_sector:pos_hist]
     assert between.count('<div class="chart-card"') == 1
-    assert '530 第二轮' in html
+    assert '531' in html
 
 
 def test_history_rows_use_per_row_grid_and_zero_line():

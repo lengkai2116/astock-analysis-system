@@ -30,7 +30,8 @@ def test_sector_moneyflow_rank_reads_real_contract(monkeypatch):
     import app.services.dashboard_service as ds
 
     class _FakeDash:
-        def get_sector_moneyflow(self, top_n=8, stocks_per_sector=3):
+        def get_sector_moneyflow(self, top_n=8, stocks_per_sector=3,
+                                 industry_scope='sw'):
             return {
                 'sectors': [{'name': 'X', 'net_inflow': 9.0},
                             {'name': 'Y', 'net_inflow': 4.0}],

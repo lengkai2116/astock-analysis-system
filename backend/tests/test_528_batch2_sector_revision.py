@@ -212,7 +212,9 @@ def test_sector_moneyflow_exposes_trend_5d_out(monkeypatch):
     monkeypatch.setattr('app.services.dashboard_service.DataManager', lambda: _FakeDM())
 
     svc = DashboardService()
-    res = svc.get_sector_moneyflow(top_n=8, stocks_per_sector=3)
+    # 531：默认口径已改申万一级；本用例验证净流出 trend_5d_out，沿用东财映射分支
+    res = svc.get_sector_moneyflow(top_n=8, stocks_per_sector=3,
+                                   industry_scope='eastmoney')
     assert res is not None
     assert 'trend_5d' in res and 'trend_5d_out' in res
     assert len(res['trend_5d_out']) >= 1

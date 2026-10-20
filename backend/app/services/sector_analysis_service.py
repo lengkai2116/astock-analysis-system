@@ -96,7 +96,8 @@ class SectorAnalysisService:
         try:
             from app.services.dashboard_service import DashboardService
             svc = DashboardService()
-            data = svc.get_sector_moneyflow(top_n=31, stocks_per_sector=1) or {}
+            data = svc.get_sector_moneyflow(top_n=31, stocks_per_sector=1,
+                                            industry_scope='eastmoney') or {}
             sectors = list(data.get('sectors') or []) + list(data.get('out_sectors') or [])
             sectors.sort(key=lambda s: (s.get('net_inflow') or 0), reverse=True)
             for i, s in enumerate(sectors, 1):

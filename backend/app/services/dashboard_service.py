@@ -625,7 +625,9 @@ class DashboardService:
         # 528 号 批次2：板块连续涨/跌 + 近5日累积涨跌（daily_cache 多日按行业聚合）
         streaks = self._get_sector_streaks()
         # 530号 批次3：板块近20日每日平均涨跌幅序列（近20日板块涨跌折线数据源）
+        # 531 号：由 20 日序列派生近 5 日序列 + 每行文字总结（不新增 DB 查询）
         history_20d = self._get_sector_history_20d()
+        history_5d = self._build_sector_history_5d(history_20d)
         # 1. 尝试 AkshareDataReader 读取
         try:
             from app.data.akshare_reader import reader
@@ -656,6 +658,7 @@ class DashboardService:
                         'losers': losers,
                         'streaks': streaks,
                         'history_20d': history_20d,
+                        'history_5d': history_5d,
                         'source': '东方财富行业板块（盘中）',
                     }
         except Exception as e:
@@ -741,6 +744,7 @@ class DashboardService:
                     'losers': losers,
                     'streaks': streaks,
                     'history_20d': history_20d,
+                    'history_5d': history_5d,
                     'source': 'DuckDB daily_cache 聚合',
                 }
         except Exception as e:
@@ -885,6 +889,64 @@ class DashboardService:
             logger.warning(f"板块近20日历史聚合失败: {e}")
             return {}
 
+    def _build_sector_history_5d(self, history: Dict) -> Dict:
+        """531：由近20日序列派生近5交易日序列 + 每行文字总结（不新增 DB 查询）。
+
+        返回 {'dates': [5], 'avg': [5], 'industries': {ind: [5]},
+              'summary': {ind: 一句话}, 'avg_summary': 一句话}
+        """
+        if not history or not history.get('dates'):
+            return {}
+        dates = list(history['dates'])
+        n = min(5, len(dates))
+        if n < 2:
+            return {}
+        d5 = dates[-n:]
+        industries = {}
+        summary = {}
+        for ind, vals in (history.get('industries') or {}).items():
+            v = [float(x or 0.0) for x in list(vals)[-n:]]
+            industries[ind] = v
+            summary[ind] = self._summarize_pct_5d(v)
+        avg = [float(x or 0.0) for x in list(history.get('avg') or [])[-n:]]
+        return {
+            'dates': d5,
+            'industries': industries,
+            'avg': avg,
+            'summary': summary,
+            'avg_summary': self._summarize_pct_5d(avg),
+        }
+
+    @staticmethod
+    def _summarize_pct_5d(vals) -> str:
+        """531：板块近5日涨跌一句话总结（每日行业平均 pct_chg，升序）。
+
+        口径说明：累计＝5 日日均涨跌幅之和（近似值，非复利/市值加权）。
+        """
+        vals = [float(v) for v in (vals or []) if v is not None]
+        if not vals:
+            return ''
+        total = sum(vals)
+        up = sum(1 for v in vals if v > 0)
+        down = sum(1 for v in vals if v < 0)
+        last = vals[-1]
+        if len(vals) >= 4 and up >= 4 and last > 0:
+            shape = '持续上行'
+        elif len(vals) >= 4 and down >= 4 and last < 0:
+            shape = '持续下行'
+        elif len(vals) >= 4 and vals[0] > 0 and vals[1] > 0 and last < 0 and vals[-2] < 0:
+            shape = '先扬后抑'
+        elif len(vals) >= 4 and vals[0] < 0 and vals[1] < 0 and last > 0 and vals[-2] > 0:
+            shape = '先抑后扬'
+        elif up > down and last > 0:
+            shape = '震荡上行'
+        elif down > up and last < 0:
+            shape = '震荡下行'
+        else:
+            shape = '震荡整理'
+        return (f"近5日累计{total:+.1f}%（日均涨跌之和）｜{up}涨{down}跌"
+                f"｜{shape}，末日{last:+.1f}%")
+
     # ──────────────────────────────────────────────
     # 7. 全市场资金流向（moneyflow-summary）
     # ──────────────────────────────────────────────
@@ -963,36 +1025,49 @@ class DashboardService:
 
         return max(valid, key=_key)
 
-    def get_sector_moneyflow(self, top_n: int = 8, stocks_per_sector: int = 3) -> Optional[Dict]:
-        """行业板块资金流向 + 个股Top3（DuckDB 缓存 → Tushare 备选回退）"""
+    def get_sector_moneyflow(self, top_n: int = 8, stocks_per_sector: int = 3,
+                             industry_scope: str = 'sw') -> Optional[Dict]:
+        """行业板块资金流向 + 个股Top3（DuckDB 缓存 → Tushare 备选回退）
+
+        531 号：默认 `industry_scope='sw'`（申万一级 31 类，与板块热度/走势同口径）；
+        `industry_scope='eastmoney'` 保留东财二级 110 类（dim8 板块定位句等既有消费方）。
+        """
         # ── 代理环境变量免疫（与 tushare_provider.py 同步） ──────────
         for _key in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
                      'http_proxy', 'https_proxy', 'all_proxy']:
             os.environ.pop(_key, None)
 
-        # 1. 行业映射：从 SQLite Stock 表取
+        # 1. 行业映射（531：默认申万一级 31 类；eastmoney 分支保留旧 Stock.industry）
         industry_map = {}
-        try:
-            from app import db
-            from app.models import Stock
-            stocks = db.session.query(Stock.ts_code, Stock.industry).filter(
-                Stock.industry.isnot(None), Stock.industry != ''
-            ).all()
-            for s in stocks:
-                if s.ts_code and s.industry:
-                    industry_map[s.ts_code] = s.industry
-        except Exception as e:
-            logger.warning(f"行业映射读取失败: {e}")
-
-        if len(industry_map) < 10:
-            logger.error(f"行业映射数据不足 ({len(industry_map)} 条)，无法聚合板块资金流向")
-            return None
+        if industry_scope == 'eastmoney':
+            try:
+                from app import db
+                from app.models import Stock
+                stocks = db.session.query(Stock.ts_code, Stock.industry).filter(
+                    Stock.industry.isnot(None), Stock.industry != ''
+                ).all()
+                for s in stocks:
+                    if s.ts_code and s.industry:
+                        industry_map[s.ts_code] = s.industry
+            except Exception as e:
+                logger.warning(f"行业映射读取失败: {e}")
+            if len(industry_map) < 10:
+                logger.error(f"行业映射数据不足 ({len(industry_map)} 条)，无法聚合板块资金流向")
+                return None
+        else:
+            from app.data.sw_industry_map import get_sw_industry_map
+            industry_map = get_sw_industry_map(
+                getattr(getattr(self, 'data_manager', None), 'cache', None))
+            if not industry_map:
+                logger.error("申万一级行业映射为空，无法聚合板块资金流向")
+                return None
 
         # 2. 从 DuckDB moneyflow_cache 读取最新交易日的资金流向数据
         try:
             dm = DataManager()
             end = datetime.now()
-            start = end - timedelta(days=5)
+            # 531：窗口放宽到 12 自然日，保证拿到近 5 个交易日（原 5 日仅约 3~4 个交易日）
+            start = end - timedelta(days=12)
             cached = dm.get_cached_moneyflow(
                 start_date=start.strftime('%Y-%m-%d'),
                 end_date=end.strftime('%Y-%m-%d')
@@ -1033,29 +1108,43 @@ class DashboardService:
             result = self._aggregate_sector_moneyflow(
                 day_records, industry_map, top_n, stocks_per_sector, date_str
             )
-            # 527 批次3：板块净流入多日聚合——近5日窗口内每板块净流入累计
-            # （moneyflow_cache 59 日可用；前端可作「板块近5日趋势」一句话说明）
-            # 528 批次2：补净流出侧 trend_5d_out（近5日净流出 top5，与净流入对称，
-            # 前端作「净流出较多板块」提示）
-            sector_net_5d = {}
-            try:
-                for r in records:
-                    ind = industry_map.get(r.get('ts_code', ''), '其他')
-                    _sf = self._safe_float
-                    net = _sf(r.get('buy_lg_amount', 0)) + _sf(r.get('buy_elg_amount', 0)) \
-                          - _sf(r.get('sell_lg_amount', 0)) - _sf(r.get('sell_elg_amount', 0))
-                    sector_net_5d[ind] = sector_net_5d.get(ind, 0.0) + net
-                top5 = sorted(sector_net_5d.items(), key=lambda x: -x[1])[:5]
-                result['trend_5d'] = [
-                    {'industry': k, 'net_inflow_5d': round(v / 1e4, 1)} for k, v in top5
-                ]
-                bottom5 = sorted(sector_net_5d.items(), key=lambda x: x[1])[:5]
-                result['trend_5d_out'] = [
-                    {'industry': k, 'net_inflow_5d': round(v / 1e4, 1)} for k, v in bottom5
-                ]
-            except Exception:
-                result['trend_5d'] = []
-                result['trend_5d_out'] = []
+            # 531：近5交易日逐日净流入（申万一级；records 取最新5个交易日）
+            # 原 527/528 用「近5自然日全量累计」，窗口仅约3~4个交易日，且无逐日序列。
+            mf_dates = sorted({self._norm_trade_date(r.get('trade_date'))
+                               for r in records if r.get('trade_date')})
+            last5 = mf_dates[-5:]
+            from collections import defaultdict as _dd
+            sector_daily = _dd(lambda: {d: 0.0 for d in last5})
+            for r in records:
+                d = self._norm_trade_date(r.get('trade_date'))
+                if d not in last5:
+                    continue
+                ind = self._industry_of(r.get('ts_code', ''), industry_map)
+                _sf = self._safe_float
+                net = _sf(r.get('buy_lg_amount', 0)) + _sf(r.get('buy_elg_amount', 0)) \
+                      - _sf(r.get('sell_lg_amount', 0)) - _sf(r.get('sell_elg_amount', 0))
+                sector_daily[ind][d] += net
+            sector_net_5d = {ind: sum(v.values()) for ind, v in sector_daily.items()}
+
+            def _enrich_sector_rows(items):
+                for s in items:
+                    vals = [sector_daily.get(s.get('name'), {}).get(d, 0.0) / 1e4
+                            for d in last5]
+                    s['net_5d'] = round(sum(vals), 1)
+                    s['series_5d'] = [round(v, 2) for v in vals]
+                    s['trend_text'] = self._summarize_net_5d(vals)
+
+            _enrich_sector_rows(result.get('sectors') or [])
+            _enrich_sector_rows(result.get('out_sectors') or [])
+            result['window_5d'] = last5
+            top5 = sorted(sector_net_5d.items(), key=lambda x: -x[1])[:5]
+            result['trend_5d'] = [
+                {'industry': k, 'net_inflow_5d': round(v / 1e4, 1)} for k, v in top5
+            ]
+            bottom5 = sorted(sector_net_5d.items(), key=lambda x: x[1])[:5]
+            result['trend_5d_out'] = [
+                {'industry': k, 'net_inflow_5d': round(v / 1e4, 1)} for k, v in bottom5
+            ]
             return result
         except Exception as e:
             logger.warning(f"板块资金流向 DuckDB 聚合失败: {e}")
@@ -1746,6 +1835,45 @@ class DashboardService:
             'days': days_list,
         }
 
+    @staticmethod
+    def _norm_trade_date(v) -> str:
+        """统一交易日为 YYYY-MM-DD（moneyflow_cache 可能返回 str/date/datetime/YYYYMMDD）"""
+        s = str(v or '')
+        if len(s) >= 10 and s[4] in '-/':
+            return s[:10].replace('/', '-')
+        if len(s) == 8 and s.isdigit():
+            return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+        return s[:10]
+
+    @staticmethod
+    def _industry_of(code, industry_map: Dict) -> str:
+        """531：行业映射查找（申万映射键为 6 位代码，东财映射键为 ts_code）"""
+        if not code:
+            return '其他'
+        c = str(code)
+        return industry_map.get(c) or industry_map.get(c.split('.')[0]) or '其他'
+
+    @staticmethod
+    def _summarize_net_5d(vals) -> str:
+        """531：板块近5日净流入一句话总结（亿元，升序）"""
+        vals = [float(v) for v in (vals or []) if v is not None]
+        if not vals:
+            return ''
+        total = sum(vals)
+        inflow_days = sum(1 for v in vals if v > 0)
+        last = vals[-1]
+        if inflow_days >= 4 and last > 0:
+            shape = '持续净流入'
+        elif inflow_days <= 1 and last < 0:
+            shape = '持续净流出'
+        elif vals[0] > 0 and last < 0:
+            shape = '流入转流出'
+        elif vals[0] < 0 and last > 0:
+            shape = '流出转流入'
+        else:
+            shape = '流入流出交替'
+        return f"近5日累计{total:+.1f}亿｜{inflow_days}日净流入｜{shape}，末日{last:+.1f}亿"
+
     def _aggregate_sector_moneyflow(self, raw: List, industry_map: Dict,
                                     top_n: int, stocks_per_sector: int, trade_date: str) -> Dict:
         """Aggregate per-stock moneyflow into sector-level + top stocks"""
@@ -1754,7 +1882,7 @@ class DashboardService:
 
         for r in raw:
             code = r.get('ts_code', '')
-            ind = industry_map.get(code, '其他')
+            ind = self._industry_of(code, industry_map)
             _sf = self._safe_float
             net = _sf(r.get('buy_lg_amount', 0)) + _sf(r.get('buy_elg_amount', 0)) \
                   - _sf(r.get('sell_lg_amount', 0)) - _sf(r.get('sell_elg_amount', 0))
