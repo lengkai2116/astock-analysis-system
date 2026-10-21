@@ -12,6 +12,7 @@ EnhancedCacheManager — SQLite WAL 缓存管理器（250号方案）
 - 与 DuckDB 版本接口完全兼容（调用方无感知）
 """
 
+import json
 import logging
 import os
 import sqlite3
@@ -35,6 +36,8 @@ _ecm_lock = threading.Lock()
 # 0.34s 恶化到 2.4~9s。按 db_path 记录已初始化库，后续构造直接跳过。
 # （按 db_path 而非全局布尔：测试常以不同 DATA_DIR 临时库构造 ECM，须各自建表。）
 _tables_initialized_paths: set = set()
+# 532号：新表为分库表，总库空壳清理会 DROP 其空壳 → 需在 market 分库单独建表（按 db 目录去重）
+_sector_heat_shard_initialized: set = set()
 
 
 def get_ecm_instance() -> 'EnhancedCacheManager':
@@ -931,6 +934,38 @@ class EnhancedCacheManager:
                 PRIMARY KEY (ts_code, trade_date)
             )
         """)
+        # 532号：板块热度五维原料（新增独立表；旧表/旧引擎不动）
+        #   fund_share_cache：ETF 份额（Tushare fund_share）
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS fund_share_cache (
+                ts_code TEXT, trade_date TEXT, fd_share REAL,
+                fund_type TEXT, market TEXT,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ts_code, trade_date)
+            )
+        """)
+        #   limit_detail_cache：涨停/炸板明细（封板资金/开板次数/连板/首末封板）
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS limit_detail_cache (
+                trade_date TEXT, ts_code TEXT, name TEXT, industry TEXT,
+                close REAL, pct_chg REAL, amount REAL, limit_amount REAL,
+                float_mv REAL, total_mv REAL, turnover_ratio REAL,
+                fd_amount REAL, first_time TEXT, last_time TEXT,
+                open_times INTEGER, up_stat TEXT, limit_times INTEGER,
+                limit_type TEXT,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (trade_date, ts_code, limit_type)
+            )
+        """)
+        #   northbound_flow_cache：北向市场级（行业级当前不可得，仅背景）
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS northbound_flow_cache (
+                trade_date TEXT PRIMARY KEY,
+                ggt_ss REAL, ggt_sz REAL, hgt REAL, sgt REAL,
+                north_money REAL, south_money REAL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         self._execute("""
             CREATE TABLE IF NOT EXISTS lhb_cache (
                 ts_code TEXT, trade_date TEXT,
@@ -1477,6 +1512,40 @@ class EnhancedCacheManager:
                 updated_at TEXT
             )
         """)
+        # 532号：ETF → 申万一级/主题映射（行业 ETF 与主题 ETF 一并纳入）
+        self.compute_conn.execute("""
+            CREATE TABLE IF NOT EXISTS etf_industry_map (
+                ts_code TEXT PRIMARY KEY,
+                fund_name TEXT,
+                benchmark TEXT,
+                sw_industry TEXT,
+                etf_type TEXT,
+                mapping_source TEXT,
+                updated_at TEXT
+            )
+        """)
+        # 532号：板块热度五维预计算（RAW-2E 产物，stat_date×industry 唯一）
+        self.compute_conn.execute("""
+            CREATE TABLE IF NOT EXISTS sector_heat_dim_cache (
+                stat_date TEXT NOT NULL,
+                industry TEXT NOT NULL,
+                ret_20 REAL, ret_60 REAL, ret_120 REAL,
+                rps_20 REAL, rps_60 REAL, rps_120 REAL,
+                rps_resonance INTEGER, excess_20 REAL, excess_60 REAL,
+                main_net_5d REAL, fund_ratio REAL, margin_growth_5d REAL,
+                north_net_5d REAL, etf_share_chg_5d REAL,
+                vol_ratio_5d REAL, breakout_20d INTEGER, vp_state TEXT, vp_score REAL,
+                limit_up_ratio REAL, zhaban_ratio REAL, max_board_height INTEGER,
+                amount_share REAL, fd_amount_ratio REAL, open_times_avg REAL,
+                up_ratio REAL, med_vs_mean REAL, rps_high_ratio REAL,
+                dim_rs REAL, dim_fund REAL, dim_vp REAL,
+                dim_sentiment REAL, dim_breadth REAL,
+                quality_score REAL, stage TEXT, heat_rank INTEGER,
+                flags_json TEXT, coverage_json TEXT, calc_version TEXT,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (stat_date, industry)
+            )
+        """)
         self.compute_conn.commit()
 
     def _migrate_pattern_score_to_compute_db(self):
@@ -1847,6 +1916,118 @@ class EnhancedCacheManager:
         except Exception as e:
             logger.debug(f"get_cached_sector_fund_heat失败: {e}")
         return {}
+
+    # 532号 批次3：板块热度五维（RAW-2E 产物）只读
+    def get_cached_sector_heat_dim(self, stat_date: str = None) -> dict:
+        """读取板块热度五维（最新 stat_date 全行业）。
+
+        返回 ``{date, prev_date, prev_rank, rows}``；无数据时 rows 为空。
+        ``prev_rank`` 为上一交易日 {industry: rank}，存在两日数据时才有值。
+        """
+        empty = {'date': '', 'prev_date': '', 'prev_rank': {}, 'rows': []}
+        try:
+            if stat_date is None:
+                dates_df = self._query_shard(
+                    'sector_heat_dim_cache',
+                    "SELECT DISTINCT stat_date FROM sector_heat_dim_cache "
+                    "ORDER BY stat_date DESC LIMIT 2", [])
+                if dates_df is None or dates_df.empty:
+                    return empty
+                dates = [str(x) for x in dates_df['stat_date'].tolist()]
+                target = dates[0]
+                prev = dates[1] if len(dates) > 1 else ''
+            else:
+                target = str(stat_date)
+                prev = ''
+
+            df = self._query_shard(
+                'sector_heat_dim_cache',
+                "SELECT * FROM sector_heat_dim_cache WHERE stat_date = ? "
+                "ORDER BY heat_rank", [target])
+            if df is None or df.empty:
+                return empty
+
+            prev_rank = {}
+            if prev:
+                pdf = self._query_shard(
+                    'sector_heat_dim_cache',
+                    "SELECT industry, heat_rank FROM sector_heat_dim_cache "
+                    "WHERE stat_date = ?", [prev])
+                if pdf is not None and not pdf.empty:
+                    prev_rank = {
+                        str(r['industry']): int(r['heat_rank'])
+                        for _, r in pdf.iterrows() if r.get('heat_rank') is not None
+                    }
+
+            def _num(v):
+                try:
+                    if v is None:
+                        return None
+                    f = float(v)
+                    return f if f == f else None
+                except (TypeError, ValueError):
+                    return None
+
+            def _int(v):
+                x = _num(v)
+                return int(x) if x is not None else None
+
+            def _json(v, default):
+                try:
+                    out = json.loads(v) if v else default
+                except (TypeError, ValueError):
+                    return default
+                return out if isinstance(out, type(default)) else default
+
+            rows = []
+            for _, r in df.iterrows():
+                rows.append({
+                    'industry': str(r.get('industry') or ''),
+                    'rank': _int(r.get('heat_rank')),
+                    'quality_score': _num(r.get('quality_score')),
+                    'stage': str(r.get('stage') or 'neutral'),
+                    'dim_rs': _num(r.get('dim_rs')),
+                    'dim_fund': _num(r.get('dim_fund')),
+                    'dim_vp': _num(r.get('dim_vp')),
+                    'dim_sentiment': _num(r.get('dim_sentiment')),
+                    'dim_breadth': _num(r.get('dim_breadth')),
+                    'ret_20': _num(r.get('ret_20')),
+                    'ret_60': _num(r.get('ret_60')),
+                    'ret_120': _num(r.get('ret_120')),
+                    'rps_20': _num(r.get('rps_20')),
+                    'rps_60': _num(r.get('rps_60')),
+                    'rps_120': _num(r.get('rps_120')),
+                    'rps_resonance': _int(r.get('rps_resonance')),
+                    'excess_20': _num(r.get('excess_20')),
+                    'excess_60': _num(r.get('excess_60')),
+                    'main_net_5d': _num(r.get('main_net_5d')),
+                    'fund_ratio': _num(r.get('fund_ratio')),
+                    'margin_growth_5d': _num(r.get('margin_growth_5d')),
+                    'north_net_5d': _num(r.get('north_net_5d')),
+                    'etf_share_chg_5d': _num(r.get('etf_share_chg_5d')),
+                    'vol_ratio_5d': _num(r.get('vol_ratio_5d')),
+                    'breakout_20d': _int(r.get('breakout_20d')),
+                    'vp_state': str(r.get('vp_state') or ''),
+                    'vp_score': _num(r.get('vp_score')),
+                    'limit_up_ratio': _num(r.get('limit_up_ratio')),
+                    'zhaban_ratio': _num(r.get('zhaban_ratio')),
+                    'max_board_height': _int(r.get('max_board_height')),
+                    'amount_share': _num(r.get('amount_share')),
+                    'fd_amount_ratio': _num(r.get('fd_amount_ratio')),
+                    'open_times_avg': _num(r.get('open_times_avg')),
+                    'up_ratio': _num(r.get('up_ratio')),
+                    'med_vs_mean': _num(r.get('med_vs_mean')),
+                    'rps_high_ratio': _num(r.get('rps_high_ratio')),
+                    'index_pct': _num(r.get('index_pct')),
+                    'flags': _json(r.get('flags_json'), []),
+                    'coverage': _json(r.get('coverage_json'), {}),
+                    'calc_version': str(r.get('calc_version') or ''),
+                })
+            return {'date': target, 'prev_date': prev,
+                    'prev_rank': prev_rank, 'rows': rows}
+        except Exception as e:
+            logger.debug(f"get_cached_sector_heat_dim失败: {e}")
+            return empty
 
     # 438号缺口③: 个股相对强弱持久化（双基准超额收益）
     def _ensure_relative_strength_rps_columns(self):
@@ -2610,6 +2791,186 @@ class EnhancedCacheManager:
         )
 
     # ==================== 252号方案：融资融券 ====================
+
+    # ── 532号：板块热度五维原料（新增独立表；旧表/旧引擎不动） ──
+    def _ensure_sector_heat_shard_tables(self):
+        """532号：在 market_cache.db 直接建 3 张新表。
+
+        总库空壳表自清理会把分库表的空壳 DROP，导致 `_insert_from_df`
+        的「从总库复制结构」路径失效；改为写入前在分库显式建表（按库去重）。
+        """
+        try:
+            from app.data.sharding_manager import sharding_manager
+            db_name = sharding_manager.get_db_for_table('fund_share_cache')
+            if not db_name:
+                return
+            key = f"{getattr(sharding_manager, 'data_dir', '')}:{db_name}"
+            if key in _sector_heat_shard_initialized:
+                return
+            conn = sharding_manager.get_connection(db_name)
+            lock = sharding_manager.get_write_lock(db_name)
+            with lock:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS fund_share_cache (
+                        ts_code TEXT, trade_date TEXT, fd_share REAL,
+                        fund_type TEXT, market TEXT,
+                        cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (ts_code, trade_date)
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS limit_detail_cache (
+                        trade_date TEXT, ts_code TEXT, name TEXT, industry TEXT,
+                        close REAL, pct_chg REAL, amount REAL, limit_amount REAL,
+                        float_mv REAL, total_mv REAL, turnover_ratio REAL,
+                        fd_amount REAL, first_time TEXT, last_time TEXT,
+                        open_times INTEGER, up_stat TEXT, limit_times INTEGER,
+                        limit_type TEXT,
+                        cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (trade_date, ts_code, limit_type)
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS northbound_flow_cache (
+                        trade_date TEXT PRIMARY KEY,
+                        ggt_ss REAL, ggt_sz REAL, hgt REAL, sgt REAL,
+                        north_money REAL, south_money REAL,
+                        cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.commit()
+            _sector_heat_shard_initialized.add(key)
+            logger.info(f"532号 分库建表完成: {db_name}")
+        except Exception as e:
+            logger.warning(f"532号 分库建表失败: {e}")
+
+    def cache_fund_share_data(self, df):
+        """ETF 份额（Tushare fund_share）→ fund_share_cache（market_cache.db）。"""
+        self._ensure_sector_heat_shard_tables()
+        if df is None or df.empty:
+            return 0
+        with self._write_lock:
+            try:
+                df = df.copy()
+                if 'trade_date' in df.columns:
+                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y-%m-%d')
+                keep = [c for c in ('ts_code', 'trade_date', 'fd_share', 'fund_type', 'market')
+                        if c in df.columns]
+                return self._insert_from_df('fund_share_cache', df[keep])
+            except Exception as e:
+                logger.warning(f"缓存ETF份额失败: {e}")
+                return 0
+
+    def cache_limit_detail_data(self, df):
+        """涨停/炸板明细（Tushare limit_list_d）→ limit_detail_cache。"""
+        self._ensure_sector_heat_shard_tables()
+        if df is None or df.empty:
+            return 0
+        with self._write_lock:
+            try:
+                df = df.copy()
+                if 'trade_date' in df.columns:
+                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y-%m-%d')
+                keep = [c for c in (
+                    'trade_date', 'ts_code', 'name', 'industry', 'close', 'pct_chg',
+                    'amount', 'limit_amount', 'float_mv', 'total_mv', 'turnover_ratio',
+                    'fd_amount', 'first_time', 'last_time', 'open_times', 'up_stat',
+                    'limit_times', 'limit_type') if c in df.columns]
+                return self._insert_from_df('limit_detail_cache', df[keep])
+            except Exception as e:
+                logger.warning(f"缓存涨停明细失败: {e}")
+                return 0
+
+    def cache_northbound_flow_data(self, df):
+        """北向市场级（Tushare moneyflow_hsgt）→ northbound_flow_cache。"""
+        self._ensure_sector_heat_shard_tables()
+        if df is None or df.empty:
+            return 0
+        with self._write_lock:
+            try:
+                df = df.copy()
+                if 'trade_date' in df.columns:
+                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y-%m-%d')
+                keep = [c for c in (
+                    'trade_date', 'ggt_ss', 'ggt_sz', 'hgt', 'sgt',
+                    'north_money', 'south_money') if c in df.columns]
+                return self._insert_from_df('northbound_flow_cache', df[keep])
+            except Exception as e:
+                logger.warning(f"缓存北向资金失败: {e}")
+                return 0
+
+    def cache_etf_industry_map(self, df):
+        """ETF → SW 行业/主题映射 → etf_industry_map（compute_cache.db，整表替换）。"""
+        if df is None or df.empty:
+            return 0
+        rows = []
+        for _, r in df.iterrows():
+            code = str(r.get('ts_code') or '').strip()
+            if not code:
+                continue
+            rows.append((
+                code,
+                str(r.get('fund_name') or ''),
+                str(r.get('benchmark') or ''),
+                str(r.get('sw_industry') or ''),
+                str(r.get('etf_type') or ''),
+                str(r.get('mapping_source') or 'rule'),
+                str(r.get('updated_at') or ''),
+            ))
+        if not rows:
+            return 0
+        try:
+            from app.data.sharding_manager import sharding_manager
+            db_name = sharding_manager.get_db_for_table('etf_industry_map')
+            conn = sharding_manager.get_connection(db_name)
+            lock = sharding_manager.get_write_lock(db_name)
+            with lock:
+                conn.execute("DELETE FROM etf_industry_map")
+                conn.executemany(
+                    "INSERT OR REPLACE INTO etf_industry_map "
+                    "(ts_code, fund_name, benchmark, sw_industry, etf_type, mapping_source, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+                conn.commit()
+            return len(rows)
+        except Exception as e:
+            logger.warning(f"缓存ETF行业映射失败: {e}")
+            return 0
+
+    def get_cached_fund_share(self, trade_date=None, ts_code=None):
+        sql = "SELECT * FROM fund_share_cache WHERE 1=1"
+        params = []
+        if trade_date:
+            sql += " AND trade_date = ?"
+            params.append(str(trade_date))
+        if ts_code:
+            sql += " AND ts_code = ?"
+            params.append(str(ts_code))
+        sql += " ORDER BY trade_date, ts_code"
+        return self._query_shard('fund_share_cache', sql, params)
+
+    def get_cached_limit_detail(self, trade_date, limit_type=None):
+        sql = "SELECT * FROM limit_detail_cache WHERE trade_date = ?"
+        params = [str(trade_date)]
+        if limit_type:
+            sql += " AND limit_type = ?"
+            params.append(str(limit_type))
+        sql += " ORDER BY limit_type, ts_code"
+        return self._query_shard('limit_detail_cache', sql, params)
+
+    def get_cached_northbound_flow(self, start_date=None, end_date=None):
+        sql = "SELECT * FROM northbound_flow_cache WHERE 1=1"
+        params = []
+        if start_date:
+            sql += " AND trade_date >= ?"
+            params.append(str(start_date))
+        if end_date:
+            sql += " AND trade_date <= ?"
+            params.append(str(end_date))
+        sql += " ORDER BY trade_date"
+        return self._query_shard('northbound_flow_cache', sql, params)
+
+    def get_cached_etf_industry_map(self):
+        return self._query_shard('etf_industry_map', "SELECT * FROM etf_industry_map ORDER BY ts_code")
 
     def cache_margin_data(self, df):
         if df.empty:

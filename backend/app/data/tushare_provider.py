@@ -244,6 +244,80 @@ class TushareProvider:
         except Exception:
             return []
 
+    def get_index_daily_range(self, ts_code='000300.SH', start_date=None, end_date=None):
+        """指数日线区间（532号：HS300 历史回填；保留 get_index_daily 旧行为不变）"""
+        if not self.pro:
+            return None
+        try:
+            return _ts(self.pro.index_daily, ts_code=ts_code,
+                       start_date=start_date, end_date=end_date)
+        except Exception as e:
+            logger.warning(f"获取指数日线区间失败 ({ts_code}): {e}")
+            return None
+
+    def get_sw_index_daily(self, ts_code, start_date=None, end_date=None):
+        """申万行业指数日线（sw_daily；532号 D1/D3 原料）"""
+        if not self.pro:
+            return None
+        try:
+            return _ts(self.pro.sw_daily, ts_code=ts_code,
+                       start_date=start_date, end_date=end_date)
+        except Exception as e:
+            logger.warning(f"获取申万行业指数日线失败 ({ts_code}): {e}")
+            return None
+
+    def get_fund_basic(self, market='E'):
+        """ETF/基金列表（532号：ETF→行业映射的原料）"""
+        if not self.pro:
+            return None
+        try:
+            return _ts(self.pro.fund_basic, market=market)
+        except Exception as e:
+            logger.warning(f"获取基金列表失败: {e}")
+            return None
+
+    def get_fund_share(self, trade_date=None, ts_code=None,
+                       start_date=None, end_date=None):
+        """ETF 份额（532号 D2；按日或按单只区间）"""
+        if not self.pro:
+            return None
+        try:
+            kwargs = {}
+            if trade_date:
+                kwargs['trade_date'] = trade_date
+            if ts_code:
+                kwargs['ts_code'] = ts_code
+            if start_date:
+                kwargs['start_date'] = start_date
+            if end_date:
+                kwargs['end_date'] = end_date
+            return _ts(self.pro.fund_share, **kwargs)
+        except Exception as e:
+            logger.warning(f"获取ETF份额失败: {e}")
+            return None
+
+    def get_limit_list_d(self, trade_date, limit_type='U'):
+        """涨跌停/炸板明细（532号 D4；limit_type: U 涨停 / D 跌停 / Z 炸板）"""
+        if not self.pro:
+            return None
+        try:
+            return _ts(self.pro.limit_list_d, trade_date=trade_date,
+                       limit_type=limit_type)
+        except Exception as e:
+            logger.warning(f"获取涨跌停明细失败 ({trade_date}/{limit_type}): {e}")
+            return None
+
+    def get_moneyflow_hsgt(self, start_date=None, end_date=None):
+        """北向资金市场级（532号 D2 背景；行业级当前不可得）"""
+        if not self.pro:
+            return None
+        try:
+            return _ts(self.pro.moneyflow_hsgt,
+                       start_date=start_date, end_date=end_date)
+        except Exception as e:
+            logger.warning(f"获取北向资金失败: {e}")
+            return None
+
     def get_stk_limit(self, trade_date):
         """获取涨跌停数据"""
         if not self.pro:

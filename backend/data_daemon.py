@@ -864,6 +864,48 @@ def _backfill_index_daily(days: int = 25) -> int:
     return total
 
 
+def _batch_fund_share(trade_date: str) -> int:
+    """532号：ETF 份额（fund_share，单日全市场）→ fund_share_cache。"""
+    _ensure_pd()
+    provider = _get_tushare_provider()
+    raw = provider.get_fund_share(trade_date=trade_date)
+    if raw is None or raw.empty:
+        return 0
+    return _ecm.cache_fund_share_data(raw)
+
+
+def _batch_limit_detail(trade_date: str) -> int:
+    """532号：涨停/炸板明细（limit_list_d U+Z）→ limit_detail_cache。"""
+    _ensure_pd()
+    provider = _get_tushare_provider()
+    frames = []
+    for lt in ('U', 'Z'):
+        raw = provider.get_limit_list_d(trade_date, limit_type=lt)
+        if raw is not None and not raw.empty:
+            df = raw.copy()
+            df['limit_type'] = lt
+            frames.append(df)
+    if not frames:
+        return 0
+    return _ecm.cache_limit_detail_data(pd.concat(frames, ignore_index=True))
+
+
+def _batch_northbound_flow(trade_date: str) -> int:
+    """532号：北向市场级（moneyflow_hsgt，单日）→ northbound_flow_cache。"""
+    _ensure_pd()
+    provider = _get_tushare_provider()
+    raw = provider.get_moneyflow_hsgt(start_date=trade_date, end_date=trade_date)
+    if raw is None or raw.empty:
+        return 0
+    return _ecm.cache_northbound_flow_data(raw)
+
+
+def _batch_etf_industry_map() -> int:
+    """532号：ETF→申万一级/主题映射（月度刷新，失败保留旧表）。"""
+    from app.data.etf_industry_map import refresh_etf_industry_map
+    return refresh_etf_industry_map(_ecm, force=False)
+
+
 def _batch_stk_limit(trade_date: str) -> int:
     """全市场涨跌停 — 1 次 API 调用"""
     import tushare as ts
@@ -2855,6 +2897,10 @@ def run_daily_sync():
     tasks = [
         ('index_daily_cache', _batch_index_daily, '指数日线'),
         ('lhb_detail_cache',  _batch_lhb_detail,  '龙虎榜席位'),
+        # 532号：板块热度五维原料（失败不阻断既有日终）
+        ('fund_share_cache', _batch_fund_share, 'ETF份额'),
+        ('limit_detail_cache', _batch_limit_detail, '涨停明细'),
+        ('northbound_flow_cache', _batch_northbound_flow, '北向资金'),
     ]
 
     for table, batch_fn, label in tasks:
@@ -2863,6 +2909,13 @@ def run_daily_sync():
             logger.info(f"  {label}: {added} 条")
         except Exception as e:
             logger.warning(f"  {label} 失败: {e}")
+
+    # 532号：ETF→申万一级/主题映射（月度刷新；失败保留旧表）
+    try:
+        n = _batch_etf_industry_map()
+        logger.info(f"  ETF行业映射: {n} 条")
+    except Exception as e:
+        logger.warning(f"  ETF行业映射失败: {e}")
 
     # 量比自算（Tushare 免费 API 不提供 volume_ratio，计算层自算）
     _compute_volume_ratio(today)
@@ -3205,6 +3258,82 @@ def _precompute_sector_heat(codes):
             logger.info(f"板块热度持久化完成: {len(rows)} 个行业 (stat_date={_sh_date}, db={_sh_db})")
         except Exception as e:
             logger.warning(f"板块热度写盘失败: {e}")
+
+
+def _precompute_sector_heat_dim(codes):
+    """板块热度五维预计算（532号 批次2，独立管道步骤 RAW-2E）。
+
+    只读既有原料（daily_cache / daily_basic / moneyflow / margin / fund_share /
+    etf_industry_map / limit_detail / northbound / relative_strength /
+    stock_sw_industry），由 `app.data.sector_heat_dim.build_sector_heat_rows`
+    装配 + 引擎打分，写入独立表 sector_heat_dim_cache（compute_cache.db）。
+    旧表/旧引擎/11 消费方零改动。
+    """
+    _ensure_ecm()
+    from app.data.sector_heat_dim import build_sector_heat_rows
+
+    try:
+        stat_date, rows = build_sector_heat_rows(_ecm)
+    except Exception as e:
+        logger.warning(f"RAW-2E 五维热度装配失败: {e}")
+        return
+    if not stat_date or not rows:
+        logger.warning("RAW-2E 五维热度为空，跳过写盘")
+        return
+
+    cols = [
+        'stat_date', 'industry',
+        'ret_20', 'ret_60', 'ret_120',
+        'rps_20', 'rps_60', 'rps_120', 'rps_resonance',
+        'excess_20', 'excess_60',
+        'main_net_5d', 'fund_ratio', 'margin_growth_5d',
+        'north_net_5d', 'etf_share_chg_5d',
+        'vol_ratio_5d', 'breakout_20d', 'vp_state', 'vp_score',
+        'limit_up_ratio', 'zhaban_ratio', 'max_board_height',
+        'amount_share', 'fd_amount_ratio', 'open_times_avg',
+        'up_ratio', 'med_vs_mean', 'rps_high_ratio',
+        'dim_rs', 'dim_fund', 'dim_vp', 'dim_sentiment', 'dim_breadth',
+        'quality_score', 'stage', 'heat_rank',
+        'flags_json', 'coverage_json', 'calc_version',
+    ]
+    vals = [
+        (
+            stat_date, r.get('industry'),
+            r.get('ret_20'), r.get('ret_60'), r.get('ret_120'),
+            r.get('rps_20'), r.get('rps_60'), r.get('rps_120'), r.get('rps_resonance'),
+            r.get('excess_20'), r.get('excess_60'),
+            r.get('main_net_5d'), r.get('fund_ratio'), r.get('margin_growth_5d'),
+            r.get('north_net_5d'), r.get('etf_share_chg_5d'),
+            r.get('vol_ratio_5d'), r.get('breakout_20d'), r.get('vp_state'), r.get('vp_score'),
+            r.get('limit_up_ratio'), r.get('zhaban_ratio'), r.get('max_board_height'),
+            r.get('amount_share'), r.get('fd_amount_ratio'), r.get('open_times_avg'),
+            r.get('up_ratio'), r.get('med_vs_mean'), r.get('rps_high_ratio'),
+            r.get('dim_rs'), r.get('dim_fund'), r.get('dim_vp'),
+            r.get('dim_sentiment'), r.get('dim_breadth'),
+            r.get('quality_score'), r.get('stage'), r.get('heat_rank'),
+            json.dumps(r.get('flags') or [], ensure_ascii=False),
+            json.dumps(r.get('coverage') or {}, ensure_ascii=False),
+            r.get('calc_version') or '532.1',
+        )
+        for r in rows
+    ]
+
+    from app.data.sharding_manager import sharding_manager as _sh_mgr
+    db = _sh_mgr.get_db_for_table('sector_heat_dim_cache')
+    try:
+        conn = _sh_mgr.get_connection(db)
+        lock = _sh_mgr.get_write_lock(db)
+        with lock:
+            conn.execute("DELETE FROM sector_heat_dim_cache WHERE stat_date = ?", [stat_date])
+            ph = ', '.join('?' for _ in cols)
+            conn.executemany(
+                f"INSERT OR REPLACE INTO sector_heat_dim_cache ({', '.join(cols)}) VALUES ({ph})",
+                vals)
+            conn.commit()
+        logger.info(f"板块热度五维持久化完成: {len(vals)} 个行业 "
+                    f"(stat_date={stat_date}, db={db})")
+    except Exception as e:
+        logger.warning(f"板块热度五维写盘失败: {e}")
 
 
 def _precompute_sector_fund_heat(codes):
@@ -7105,6 +7234,11 @@ def _drive_pipeline():
     # ── 板块资金热度持久化 RAW-2D（530号 批次2：方向 B 资金占比独立表）──
     if status.get('RAW-2D', {}).get('status') != 'done':
         _run_pipeline_step(today, 'RAW-2D', _precompute_sector_fund_heat, codes)
+        return
+
+    # ── 板块热度五维预计算 RAW-2E（532号 批次2：独立 sidecar，旧链路零改动）──
+    if status.get('RAW-2E', {}).get('status') != 'done':
+        _run_pipeline_step(today, 'RAW-2E', _precompute_sector_heat_dim, codes)
         return
 
     # ── 个股行业位置持久化 RAW-2C（481号 ③：行业成分股近20日收益排名/百分位）──

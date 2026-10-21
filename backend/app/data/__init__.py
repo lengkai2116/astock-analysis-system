@@ -1160,6 +1160,10 @@ class DataManager:
         """从缓存获取概念板块数据"""
         return self.cache.get_cached_concept(ts_code)
 
+    def get_cached_sector_heat_dim(self, stat_date=None):
+        """532号：板块热度五维预计算（RAW-2E）只读，最新日全行业。"""
+        return self.cache.get_cached_sector_heat_dim(stat_date)
+
     def get_cached_income(self, ts_code):
         """从缓存获取利润表"""
         return self.cache.get_cached_income(ts_code)

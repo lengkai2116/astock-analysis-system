@@ -1,0 +1,78 @@
+# 532号 板块热度五维配置（初值，待 250 日分布校准）
+# 权重：资金 30 / 相对强弱 25 / 内部广度 25 / 情绪（反向）20；量价 ±10 修正。
+version: "532.1"
+
+weights:
+  fund: 0.30
+  rs: 0.25
+  breadth: 0.25
+  sentiment: 0.20
+
+# (vp_score - 50) * vp_adjust → ±10 分
+vp_adjust: 0.20
+
+thresholds:
+  rps_strong: 80.0
+  rps_very_strong: 90.0
+  limit_up_ratio: 5.43          # 百分数
+  zhaban_ratio: 40.0           # 百分数
+  amount_share: 9.97           # 百分数
+  rps120_overheat: 96.67
+  up_ratio_main: 0.60          # 0~1
+  up_ratio_weak: 0.50          # 0~1
+  rps_cold: 30.0
+  vol_cold: 0.8
+  crowding_overheat: 93.33
+
+healthy_vp:
+  - 放量突破
+  - 缩量回踩
+  - 温和放量
+
+enable:
+  northbound: false            # 行业级北向当前不可得，默认关闭
+  etf: true
+
+# 532 批次4 校准元信息（分位法；样本不足项保持初值）
+calibration:
+  method: percentile
+  sample_dates: 250
+  sample_rows: 7750
+  generated_at: 2026-10-21 14:26
+  metrics:
+    rps_very_strong:
+      n: 7130
+      quantile: 0.9
+      old: 90.0
+      new: 90.0
+      status: calibrated
+    rps120_overheat:
+      n: 4030
+      quantile: 0.95
+      old: 95.0
+      new: 96.67
+      status: calibrated
+    limit_up_ratio:
+      n: 2449
+      quantile: 0.95
+      old: 5.0
+      new: 5.43
+      status: calibrated
+    zhaban_ratio:
+      n: 1538
+      quantile: 0.95
+      old: 40.0
+      new: 40.0
+      status: kept
+    amount_share:
+      n: 7750
+      quantile: 0.95
+      old: 15.0
+      new: 9.97
+      status: calibrated
+    crowding_overheat:
+      n: 7750
+      quantile: 0.95
+      old: 90.0
+      new: 93.33
+      status: calibrated

@@ -145,11 +145,11 @@ body { overflow-x:hidden; }
       </div>
     </div>
 
-    <!-- 531：板块热度 Top（全宽独立容器，行列表格 + 资金占比横条） -->
+    <!-- 532 批次3：板块热度 · 五维（全宽独立容器；旧资金热度仅降级回退） -->
     <div class="chart-card" style="margin-bottom:var(--space-20);">
-      <div class="chart-title">🔥 板块热度 Top <span id="sector-heat-date" style="font-size:14px;color:var(--text-muted);"></span></div>
-      <!-- 530号 批次2：取数/判定逻辑说明（方向 B：资金占比口径） -->
-      <div style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-8);line-height:1.6;">取数：行业个股近5日主力净流入（大单+特大单）÷ 板块最新流通市值＝资金占比（ratio）；全行业按占比排序前10/20/40 名分 top_10/top_20/normal。资金热度反映主力资金实际流入强度（已消除成分股基数差异），与该交易日涨跌幅维度不同，故 TOP1 不一定是该交易日涨幅第一。</div>
+      <div class="chart-title">🔥 板块热度 · 五维 <span id="sector-heat-date" style="font-size:14px;color:var(--text-muted);"></span></div>
+      <div style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-8);line-height:1.6;">口径：相对强弱 25 + 资金 30 + 内部广度 25 + 情绪（反向）20，量价 ±10 修正；综合质量分 0~100。行业口径为申万一级 31 类。旧资金热度榜仅在新接口未就绪时回退显示。</div>
+      <div id="sector-heat-fallback" style="display:none;font-size:14px;color:#F59E0B;margin-bottom:var(--space-6);"></div>
       <div id="sector-heat-panel" style="font-size:12px;color:var(--text-secondary);">加载中...</div>
     </div>
 
@@ -634,7 +634,8 @@ function loadDashboardFull(){
       if(dd.market_breadth) applyMarketBreadth(dd.market_breadth);
       // 524 批次3：市场情绪（L3）+ 板块热度（L4）并入聚合载荷
       if(dd.market_emotion) applyMarketEmotion(dd.market_emotion);
-      if(dd.sector_heat) applySectorHeat(dd.sector_heat);
+      // 532 批次3：板块热度五维独立加载（旧 dd.sector_heat 仅作新接口失败时回退）
+      loadSectorHeatDim();
       // 524 批次4：市场预警（L5）并入聚合载荷
       if(dd.market_alerts) applyMarketAlerts(dd.market_alerts);
       // 523：eod-snapshot 不在聚合载荷中，独立加载（TTL 120s）
@@ -652,7 +653,7 @@ function loadDashboardFull(){
       loadMarketState();
       loadMarketBreadth();
       loadMarketEmotion();
-      loadSectorHeat();
+      loadSectorHeatDim();
       loadMarketAlerts();
     });
 }
@@ -786,6 +787,160 @@ function applySectorHeat(heat){
       +'<span style="color:'+_c+';">资金占比'+(ratio>=0?'+':'')+ratio.toFixed(4)+'%</span>'
       +'<span style="color:var(--text-muted);font-size:11px;">近5日'+(s.net_inflow_5d>=0?'+':'')+(Number(s.net_inflow_5d||0)/10000).toFixed(1)+'亿</span></div>';
   }).join('');
+}
+
+// ══════════════════════════════════════════════════════════════
+// 532 批次3：板块热度 · 五维（§4.6 完整形态）
+// 新接口 /market/sector-heat-dim；旧 applySectorHeat 仅作降级回退
+// ══════════════════════════════════════════════════════════════
+var _shDim=null,_shShowAll=false,_shSort='quality',_shStage='all',_shOpen='',_shRadar=null;
+
+function _shStageMeta(s){
+  var m={mainline:['主线','#EF4444'],pulse:['脉冲','#F59E0B'],overheat:['过热','#DC2626'],cold:['冷门','#3B82F6'],neutral:['中性','#94A3B8']};
+  return m[s]||m.neutral;
+}
+function _shFlagLabel(f){
+  var m={overheat:'过热',breadth_divergence:'广度背离',etf_coverage_low:'ETF覆盖低',northbound_off:'北向关闭',missing_dim:'维度缺失'};
+  return m[f]||f;
+}
+function _shFmt(v,d){
+  if(v===null||v===undefined||isNaN(v))return '—';
+  return Number(v).toFixed(d===undefined?1:d);
+}
+function _shBar(v,reverse){
+  var x=(v===null||v===undefined||isNaN(v))?null:Math.max(0,Math.min(100,Number(v)));
+  var w=x===null?0:x;
+  var col=x===null?'#475569':(reverse?(x>=70?'#EF4444':(x>=40?'#F59E0B':'#22C55E')):(x>=70?'#EF4444':(x>=40?'#F59E0B':'#94A3B8')));
+  return '<span title="'+(x===null?'—':x.toFixed(0))+'"><span style="display:inline-block;width:34px;height:6px;background:rgba(148,163,184,0.15);border-radius:3px;overflow:hidden;vertical-align:middle;"><span style="display:block;width:'+w.toFixed(0)+'%;height:100%;background:'+col+';"></span></span></span>';
+}
+function _shRows(){
+  var arr=(_shDim.sectors||[]).slice();
+  if(_shStage!=='all')arr=arr.filter(function(s){return s.stage===_shStage;});
+  var key=_shSort;
+  arr.sort(function(a,b){
+    var av=key==='quality'?a.quality_score:(key==='fund'?a.dim_fund:(key==='rs'?a.dim_rs:a.dim_sentiment));
+    var bv=key==='quality'?b.quality_score:(key==='fund'?b.dim_fund:(key==='rs'?b.dim_rs:b.dim_sentiment));
+    return (bv===null||bv===undefined?-1:bv)-(av===null||av===undefined?-1:av);
+  });
+  if(!_shShowAll)arr=arr.slice(0,10);
+  return arr;
+}
+function _shRadarOption(ind){
+  var s=(_shDim.sectors||[]).filter(function(x){return x.industry===ind;})[0];
+  if(!s)return {};
+  return {radar:{indicator:[{name:'强弱',max:100},{name:'资金',max:100},{name:'量价',max:100},{name:'情绪',max:100},{name:'广度',max:100}],radius:'62%',axisName:{color:'#94A3B8',fontSize:11},splitLine:{lineStyle:{color:'rgba(148,163,184,0.2)'}},splitArea:{show:false}},series:[{type:'radar',symbolSize:3,data:[{value:[s.dim_rs,s.dim_fund,s.dim_vp,s.dim_sentiment,s.dim_breadth],areaStyle:{color:'rgba(239,68,68,0.18)'},lineStyle:{color:'#EF4444'},itemStyle:{color:'#EF4444'}}]}]};
+}
+function _shDetailHtml(s){
+  function card(title,body){
+    return '<div style="background:rgba(148,163,184,0.06);border-radius:6px;padding:8px;font-size:13px;line-height:1.7;"><div style="font-weight:600;margin-bottom:2px;">'+title+'</div>'+body+'</div>';
+  }
+  var rs='RPS20 '+_shFmt(s.rps_20,0)+' · RPS60 '+_shFmt(s.rps_60,0)+' · RPS120 '+_shFmt(s.rps_120,0)+'<br/>共振 '+_shFmt(s.rps_resonance,0)+'/3 · 超额20 '+_shFmt(s.excess_20,2)+'%';
+  var fund='主力5日 '+(Number(s.main_net_5d||0)>=0?'+':'')+_shFmt(Number(s.main_net_5d||0)/10000,1)+'亿 · 占比 '+_shFmt(s.fund_ratio,4)+'%<br/>融资5日 '+_shFmt(s.margin_growth_5d,2)+'% · ETF份额5日 '+_shFmt(s.etf_share_chg_5d,2)+'%';
+  var vp='量比5日 '+_shFmt(s.vol_ratio_5d,2)+' · 20日突破 '+(s.breakout_20d?'是':'否')+'<br/>量价状态 '+(s.vp_state||'—');
+  var sent='涨停占比 '+_shFmt(s.limit_up_ratio,2)+'% · 炸板率 '+_shFmt(s.zhaban_ratio,1)+'%<br/>连板高度 '+_shFmt(s.max_board_height,0)+' · 成交额占比 '+_shFmt(s.amount_share,2)+'%';
+  var breadth='上涨占比 '+_shFmt(Number(s.up_ratio||0)*100,1)+'%<br/>中位−平均 '+_shFmt(s.med_vs_mean,2)+'% · 高RPS占比 '+_shFmt(s.rps_high_ratio,1)+'%';
+  var rules=s.rules||{};
+  var defs=[['mainline','RPS共振≥2 且 上涨≥60% 且 主力净流入 且 量价健康'],['pulse','RPS20≥90 且（RPS60<60 或 上涨<50%）'],['overheat','涨停≥5%且炸板≥40%，或成交额≥15%且RPS120≥95，或拥挤≥90'],['cold','RPS20<30 且 量比<0.8 且 主力净流入']];
+  var ruleTxt=defs.map(function(x){return (rules[x[0]]?'✓':'✗')+' '+x[1];}).join('｜');
+  return '<div style="display:grid;grid-template-columns:320px 1fr;gap:12px;padding:10px;margin:4px 0 8px;background:rgba(148,163,184,0.04);border-radius:8px;border-left:3px solid #EF4444;">'
+    +'<div><div id="sh-radar" style="height:240px;"></div></div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
+    +card('强弱',rs)+card('资金',fund)+card('量价',vp)+card('情绪（反向）',sent)+card('广度',breadth)
+    +'<div style="font-size:12px;color:var(--text-muted);line-height:1.6;">阶段判定依据：<br/>'+escapeHtml(ruleTxt)+'</div>'
+    +'</div></div>';
+}
+function _shRowHtml(s,grid){
+  var st=_shStageMeta(s.stage);
+  var q=(s.quality_score===null||s.quality_score===undefined)?0:Math.max(0,Math.min(100,Number(s.quality_score)));
+  var qbar='<div style="display:flex;align-items:center;gap:6px;"><span style="width:38px;">'+_shFmt(s.quality_score,1)+'</span><span style="flex:1;height:7px;background:rgba(148,163,184,0.15);border-radius:4px;overflow:hidden;"><span style="display:block;width:'+q.toFixed(0)+'%;height:100%;background:linear-gradient(90deg,#94A3B8,#F59E0B,#EF4444);"></span></span></div>';
+  var dims=_shBar(s.dim_rs)+_shBar(s.dim_fund)+_shBar(s.dim_vp)+_shBar(s.dim_sentiment,true)+_shBar(s.dim_breadth);
+  var ev='RPS20 '+_shFmt(s.rps_20,0)+' · 主力5日 '+(Number(s.main_net_5d||0)>=0?'+':'')+_shFmt(Number(s.main_net_5d||0)/10000,1)+'亿 · 涨停 '+_shFmt(s.limit_up_ratio,1)+'% · 上涨 '+_shFmt(Number(s.up_ratio||0)*100,0)+'%';
+  var tags=(s.flags||[]).slice(0,2).map(function(f){var c=(f==='overheat'?'#DC2626':(f==='breadth_divergence'?'#F59E0B':'#64748B'));return '<span style="font-size:11px;color:'+c+';margin-right:4px;">'+_shFlagLabel(f)+'</span>';}).join('');
+  var more=(s.flags||[]).length>2?'<span style="font-size:11px;color:var(--text-muted);">+'+(s.flags.length-2)+'</span>':'';
+  var mv='';
+  if(s.prev_rank==null||s.prev_rank===undefined){
+    if(_shDim&&_shDim.prev_date)mv='<span style="font-size:11px;color:#3B82F6;margin-left:4px;">新进榜</span>';
+  }
+  else{var dd=s.prev_rank-s.rank;if(dd>0)mv='<span class="up" style="font-size:11px;margin-left:4px;">↑'+dd+'</span>';else if(dd<0)mv='<span class="down" style="font-size:11px;margin-left:4px;">↓'+(-dd)+'</span>';}
+  var row='<div style="display:grid;grid-template-columns:'+grid+';gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid rgba(148,163,184,0.08);cursor:pointer;" onclick="toggleSectorHeatDetail(\''+escapeHtml(s.industry)+'\')">'
+    +'<span style="color:var(--text-muted);">'+escapeHtml(s.rank)+'</span>'
+    +'<span>'+escapeHtml(s.industry)+mv+' <span style="font-size:11px;color:'+st[1]+';border:1px solid '+st[1]+';border-radius:3px;padding:0 4px;">'+st[0]+'</span></span>'
+    +qbar
+    +'<span style="display:flex;gap:3px;">'+dims+'</span>'
+    +'<span style="color:var(--text-muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escapeHtml(ev)+'">'+escapeHtml(ev)+'</span>'
+    +'<span>'+tags+more+'</span>'
+    +'<span style="color:var(--text-muted);">'+(_shOpen===s.industry?'▴':'▾')+'</span></div>';
+  if(_shOpen===s.industry)row+=_shDetailHtml(s);
+  return row;
+}
+function _shRender(){
+  var d=_shDim;if(!d)return;
+  if(_shRadar){try{_shRadar.dispose();}catch(e){}_shRadar=null;}
+  var panel=document.getElementById('sector-heat-panel');if(!panel)return;
+  var sc=d.stage_counts||{};
+  var delta=d.median_quality_delta;
+  var deltaTxt=(delta===null||delta===undefined)?('较上一交易日 —（'+(d.prev_date?'前一日缺失':'首日')+'）'):('较上一交易日 '+(delta>0?'↑':'')+_shFmt(delta,2));
+  var cov=d.coverage||{};
+  var kpi='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-6);margin-bottom:var(--space-8);">'
+    +'<div><span style="font-size:18px;font-weight:600;color:#EF4444;">'+escapeHtml(sc.mainline||0)+'</span><div style="font-size:11px;color:var(--text-muted);">主线板块</div></div>'
+    +'<div><span style="font-size:18px;font-weight:600;color:#F59E0B;">'+escapeHtml(sc.overheat||0)+'</span><div style="font-size:11px;color:var(--text-muted);">过热预警</div></div>'
+    +'<div><span style="font-size:18px;font-weight:600;">'+_shFmt(d.median_quality,2)+'</span><div style="font-size:11px;color:var(--text-muted);">中位质量分 · '+escapeHtml(deltaTxt)+'</div></div>'
+    +'<div><span style="font-size:18px;font-weight:600;">'+_shFmt(cov.etf_pct,1)+'%</span><div style="font-size:11px;color:var(--text-muted);">ETF覆盖 · 北向'+(cov.northbound?'开':'关闭')+'</div></div>'
+    +'</div>';
+  var overs=(d.sectors||[]).filter(function(s){return s.stage==='overheat';});
+  var overHtml='';
+  if(overs.length){
+    overHtml='<div style="font-size:14px;color:#F59E0B;margin-bottom:var(--space-6);cursor:pointer;" onclick="setSectorHeatStage(\'overheat\')">⚠️ 过热：'+overs.map(function(s){
+      var bits=[];
+      if(s.limit_up_ratio!==null&&s.limit_up_ratio!==undefined)bits.push('涨停'+_shFmt(s.limit_up_ratio,1)+'%');
+      if(s.zhaban_ratio!==null&&s.zhaban_ratio!==undefined)bits.push('炸板'+_shFmt(s.zhaban_ratio,0)+'%');
+      if(s.amount_share!==null&&s.amount_share!==undefined)bits.push('成交额'+_shFmt(s.amount_share,1)+'%');
+      return escapeHtml(s.industry)+'（'+bits.join('/')+'）';
+    }).join(' · ')+'</div>';
+  }
+  var sortOpts=[['quality','质量分'],['fund','资金'],['rs','强弱'],['sentiment','情绪拥挤']];
+  var stageOpts=[['all','全部'],['mainline','主线'],['pulse','脉冲'],['overheat','过热'],['cold','冷门'],['neutral','中性']];
+  var selStyle='font-size:14px;background:transparent;color:var(--text-primary);border:1px solid rgba(148,163,184,0.3);border-radius:4px;padding:2px 6px;';
+  var toolbar='<div style="display:flex;gap:var(--space-8);align-items:center;margin-bottom:var(--space-6);font-size:14px;flex-wrap:wrap;">'
+    +'<label style="color:var(--text-muted);">排序 <select onchange="setSectorHeatSort(this.value)" style="'+selStyle+'">'+sortOpts.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===_shSort?' selected':'')+'>'+o[1]+'</option>';}).join('')+'</select></label>'
+    +'<label style="color:var(--text-muted);">阶段 <select onchange="setSectorHeatStage(this.value)" style="'+selStyle+'">'+stageOpts.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===_shStage?' selected':'')+'>'+o[1]+'</option>';}).join('')+'</select></label>'
+    +'<span class="tag tag-neutral" style="cursor:pointer;" onclick="toggleSectorHeatAll()">'+(_shShowAll?'收起':'展开全部 31 类')+'</span>'
+    +'<span style="color:var(--text-muted);">共 '+escapeHtml(d.count)+' 类 · 质量分降序 Top'+(_shShowAll?'全部':'10')+'</span>'
+    +'</div>';
+  var grid='32px 170px 120px 250px 1fr 110px 28px';
+  var head='<div style="display:grid;grid-template-columns:'+grid+';gap:8px;font-size:12px;color:var(--text-muted);padding:4px 0;border-bottom:1px solid rgba(148,163,184,0.2);">'
+    +'<span>#</span><span>行业</span><span>质量分</span><span>五维 强/资/价/情/广</span><span>关键证据</span><span>标签</span><span></span></div>';
+  panel.innerHTML=kpi+overHtml+toolbar+head+_shRows().map(function(s){return _shRowHtml(s,grid);}).join('');
+  if(_shOpen){
+    var el=document.getElementById('sh-radar');
+    if(el&&window.echarts){_shRadar=echarts.init(el);_shRadar.setOption(_shRadarOption(_shOpen));}
+  }
+}
+function renderSectorHeatDim(d){
+  if(!d||!d.sectors||!d.sectors.length)return;
+  _shDim=d;_shOpen='';
+  var dateEl=document.getElementById('sector-heat-date');
+  if(dateEl)dateEl.textContent=d.date?('· 数据日 '+d.date):'';
+  var fb=document.getElementById('sector-heat-fallback');
+  if(fb)fb.style.display='none';
+  _shRender();
+}
+function setSectorHeatSort(v){_shSort=v;_shOpen='';_shRender();}
+function setSectorHeatStage(v){_shStage=v;_shOpen='';_shRender();}
+function toggleSectorHeatAll(){_shShowAll=!_shShowAll;_shOpen='';_shRender();}
+function toggleSectorHeatDetail(ind){_shOpen=(_shOpen===ind?'':ind);_shRender();}
+function _sectorHeatFallback(){
+  var fb=document.getElementById('sector-heat-fallback');
+  if(fb){fb.style.display='block';fb.textContent='五维未就绪，暂显示原资金热度（RAW-2E 未运行或数据为空）';}
+  loadSectorHeat();
+}
+function loadSectorHeatDim(){
+  _cachedFetch(API+'/market/sector-heat-dim',120)
+    .then(function(d){
+      if(d&&d.success&&d.data&&d.data.sectors&&d.data.sectors.length){renderSectorHeatDim(d.data);}
+      else{_sectorHeatFallback();}
+    })
+    .catch(function(e){console.warn('market/sector-heat-dim 加载失败，回退旧榜',e);_sectorHeatFallback();});
 }
 
 function loadMarketEmotion(){

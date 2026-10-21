@@ -9,6 +9,7 @@
 """
 import logging
 import os
+import statistics
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -1520,6 +1521,129 @@ class DashboardService:
             }
         except Exception as e:
             logger.error(f"板块热度获取失败: {e}")
+            return None
+
+    def get_sector_heat_dim(self, top_n: int = 31) -> Optional[Dict]:
+        """板块热度五维（532 号批次3）：31 行业全量 + KPI + 阶段判定依据。
+
+        数据源：RAW-2E 独立表 `sector_heat_dim_cache`（compute_cache.db）。
+        旧 `sector_heat_cache` / `sector_fund_heat_cache` 不参与本方法；无数据返回 None。
+        """
+        try:
+            payload = self.data_manager.get_cached_sector_heat_dim()
+            rows = payload.get('rows') or []
+            if not rows:
+                logger.warning("板块热度五维: sector_heat_dim_cache 无数据")
+                return None
+
+            from app.data.sector_heat_dim import load_config
+            from app.engine.framework.sector_heat_composite import DEFAULT_CONFIG
+            cfg = load_config() or {}
+            th = {**DEFAULT_CONFIG['thresholds'], **(cfg.get('thresholds') or {})}
+            healthy_vp = set(cfg.get('healthy_vp') or DEFAULT_CONFIG['healthy_vp'])
+            prev_rank = payload.get('prev_rank') or {}
+            prev_date = payload.get('prev_date') or ''
+
+            def _num(v):
+                try:
+                    return None if v is None else float(v)
+                except (TypeError, ValueError):
+                    return None
+
+            sectors = []
+            for r in rows:
+                res = _num(r.get('rps_resonance')) or 0.0
+                rps20 = _num(r.get('rps_20'))
+                rps60 = _num(r.get('rps_60'))
+                rps120 = _num(r.get('rps_120'))
+                up = _num(r.get('up_ratio'))
+                fund_ratio = _num(r.get('fund_ratio'))
+                vp_state = str(r.get('vp_state') or '')
+                limit_up = _num(r.get('limit_up_ratio'))
+                zhaban = _num(r.get('zhaban_ratio'))
+                amount_share = _num(r.get('amount_share'))
+                crowding = _num(r.get('dim_sentiment'))
+                vol_ratio = _num(r.get('vol_ratio_5d'))
+
+                rules = {
+                    'overheat': bool(
+                        (limit_up is not None and zhaban is not None
+                         and limit_up >= th['limit_up_ratio'] and zhaban >= th['zhaban_ratio'])
+                        or (amount_share is not None and rps120 is not None
+                            and amount_share >= th['amount_share']
+                            and rps120 >= th['rps120_overheat'])
+                        or (crowding is not None and crowding >= th['crowding_overheat'])),
+                    'mainline': bool(
+                        res >= 2 and up is not None and up >= th['up_ratio_main']
+                        and fund_ratio is not None and fund_ratio > 0
+                        and vp_state in healthy_vp),
+                    'pulse': bool(
+                        rps20 is not None and rps20 >= th['rps_very_strong']
+                        and ((rps60 is not None and rps60 < 60)
+                             or (up is not None and up < th['up_ratio_weak']))),
+                    'cold': bool(
+                        rps20 is not None and rps20 < th['rps_cold']
+                        and vol_ratio is not None and vol_ratio < th['vol_cold']
+                        and fund_ratio is not None and fund_ratio > 0),
+                }
+
+                flags = list(r.get('flags') or [])
+                coverage = r.get('coverage') or {}
+                if coverage.get('etf') is False:
+                    if 'etf_coverage_low' not in flags:
+                        flags.append('etf_coverage_low')
+                elif 'etf_coverage_low' in flags:
+                    flags.remove('etf_coverage_low')
+
+                sectors.append({**r, 'flags': flags, 'rules': rules,
+                                'prev_rank': prev_rank.get(r.get('industry'))})
+
+            scores = [s['quality_score'] for s in sectors
+                      if s.get('quality_score') is not None]
+            median_quality = round(statistics.median(scores), 2) if scores else None
+
+            prev_median = None
+            if prev_date:
+                try:
+                    prev_payload = self.data_manager.get_cached_sector_heat_dim(
+                        stat_date=prev_date)
+                    prev_scores = [x['quality_score'] for x in (prev_payload.get('rows') or [])
+                                   if x.get('quality_score') is not None]
+                    if prev_scores:
+                        prev_median = statistics.median(prev_scores)
+                except Exception:
+                    prev_median = None
+
+            stage_counts = {k: 0 for k in
+                            ('mainline', 'pulse', 'overheat', 'cold', 'neutral')}
+            for s in sectors:
+                stage = s.get('stage', 'neutral')
+                stage_counts[stage] = stage_counts.get(stage, 0) + 1
+
+            etf_ok = sum(1 for s in sectors
+                         if (s.get('coverage') or {}).get('etf') is True)
+            coverage = {
+                'etf_pct': round(etf_ok / len(sectors) * 100, 1),
+                'northbound': any(bool((s.get('coverage') or {}).get('northbound'))
+                                  for s in sectors),
+            }
+
+            sectors.sort(key=lambda x: (x.get('rank') is None, x.get('rank') or 999,
+                                        x.get('industry') or ''))
+            return {
+                'date': payload.get('date') or '',
+                'prev_date': prev_date,
+                'count': len(sectors),
+                'stage_counts': stage_counts,
+                'median_quality': median_quality,
+                'median_quality_delta': (
+                    round(median_quality - prev_median, 2)
+                    if median_quality is not None and prev_median is not None else None),
+                'coverage': coverage,
+                'sectors': sectors[:top_n],
+            }
+        except Exception as e:
+            logger.error(f"板块热度五维获取失败: {e}")
             return None
 
     def get_market_alerts(self) -> Optional[Dict]:

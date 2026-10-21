@@ -99,6 +99,10 @@ class ShardingManager:
             'stk_limit_cache': 'market_cache.db',
             'minute_kline_cache': 'market_cache.db',
             'margin_cache': 'market_cache.db',
+            # 532号：板块热度五维原料（独立新增表；旧表/旧引擎不动）
+            'fund_share_cache': 'market_cache.db',
+            'limit_detail_cache': 'market_cache.db',
+            'northbound_flow_cache': 'market_cache.db',
 
             # compute_cache.db — 计算结果
             'indicator_ma': 'compute_cache.db',
@@ -114,8 +118,12 @@ class ShardingManager:
             # 530号 批次2：板块资金热度（RAW-2D 预计算：近5日主力净流入÷流通市值占比，
             # 方向 B 独立表，引擎 SectorRotationModel 不动）→ compute_cache.db
             'sector_fund_heat_cache': 'compute_cache.db',
+            # 532号：板块热度五维预计算（RAW-2E）→ compute_cache.db
+            'sector_heat_dim_cache': 'compute_cache.db',
             # 530号 第二轮：股票→申万一级 31 类映射（板块热度/近20日折线同口径）→ compute_cache.db
             'stock_sw_industry': 'compute_cache.db',
+            # 532号：ETF → 申万一级/主题映射（板块热度 D2 ETF 份额维度）
+            'etf_industry_map': 'compute_cache.db',
             'pattern_score_cache': 'compute_cache.db',
             # 438号缺口③：个股相对强弱持久化（双基准超额收益）→ compute_cache.db 计算结果
             'relative_strength_cache': 'compute_cache.db',
