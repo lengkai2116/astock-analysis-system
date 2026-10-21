@@ -90,6 +90,9 @@ class DashboardService:
                 hist_data = self._try_get_index_daily(code)
                 prev_close = None
                 mini_kline = []
+                ma60 = None
+                ret_60d = None
+                above_ma60 = None
                 if hist_data and len(hist_data) > 0:
                     # hist_data 是旧→新排序
                     latest_hist = (
@@ -114,11 +117,8 @@ class DashboardService:
                         <= hist_data[-1].get('trade_date', '')
                     ) else hist_data[::-1]
                     mini_kline = self._build_mini_kline(_sorted[-20:])
-                    # 527 批次3：指数 60 日线（daily_cache 88 行，算 ma60/近60日涨跌/站上与否）
-                    ma60 = None
-                    ret_60d = None
-                    above_ma60 = None
-                    if len(_sorted) >= 60:
+                    # 527 批次3：指数 60 日线（需 61 行才能算近60日涨跌）
+                    if len(_sorted) > 60:
                         closes60 = [self._safe_float(r.get('close', 0)) for r in _sorted[-60:]]
                         latest_close = float(_sorted[-1].get('close', 0))
                         ma60 = round(sum(closes60) / len(closes60), 2)
@@ -348,7 +348,11 @@ class DashboardService:
     # 4. 涨跌幅榜（daily-top）
     # ──────────────────────────────────────────────
     def get_daily_top(self, type: str = 'up', limit: int = 10) -> Optional[Dict]:
-        """涨幅榜/跌幅榜 — AKShare 实时优先 → DB 最新交易日（239号架构：不直接调 Tushare）"""
+        """涨幅榜/跌幅榜 — AKShare 实时优先 → DB 前一完整交易日（239号架构：不直接调 Tushare）。
+
+        535 P1：DB 降级不再取 daily_cache 最新日（10-21 仅 95 只残行），
+        改用 `_get_best_trade_date(before=today)` 锚定前一完整交易日。
+        """
         # 1. AkshareDataReader 读取（DuckDB as_* 表）
         try:
             from app.data.akshare_reader import reader
@@ -374,42 +378,38 @@ class DashboardService:
         except Exception:
             pass
 
-        # 2. 降级：从 DuckDB 查询最新交易日
+        # 2. 降级：从 DuckDB 查询前一完整交易日
         try:
-            import pandas as pd
-
             from app.models import Stock
 
             ecm = self.data_manager.cache
-            # 查询 daily_cache 最新日期
-            date_df = ecm._query_shard(
-                'daily_cache',
-                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
-            if date_df.empty:
-                logger.error("涨跌幅榜: DuckDB 无任何历史数据")
-                raise ValueError("DuckDB daily_cache 无日期记录，走 Tushare 降级")
-            last_date = date_df['trade_date'].iloc[0]
+            today = datetime.now().strftime('%Y-%m-%d')
+            last_date = self._get_best_trade_date(before=today)
+            if not last_date:
+                date_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT DISTINCT trade_date FROM daily_cache "
+                    "ORDER BY trade_date DESC LIMIT 1")
+                if date_df is None or date_df.empty:
+                    logger.error("涨跌幅榜: DuckDB 无任何历史数据")
+                    return None
+                last_date = str(date_df['trade_date'].iloc[0])
 
-            # 取该日全市场数据
             all_df = ecm._query_shard(
                 'daily_cache',
                 "SELECT * FROM daily_cache WHERE trade_date = ? ORDER BY pct_chg DESC",
                 [last_date])
-            if all_df.empty:
+            if all_df is None or all_df.empty:
                 logger.error("涨跌幅榜: DuckDB 查询为空")
-                raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
+                return None
 
-            # 补齐股票名称（从 PG Stock 表）
             ts_codes = all_df['ts_code'].unique().tolist()
             stock_map = {}
             try:
                 for s in Stock.query.filter(Stock.ts_code.in_(ts_codes)).all():
                     stock_map[s.ts_code] = s.name
             except Exception as e:
-                # 526 B19：名称填充失败静默变空名——补 debug 日志
                 logger.debug(f"涨跌幅榜 Stock 名称查询失败: {e}")
-            # ponytail: 如果 Stock 表为空，从 DataManager 获取一次
-            # （全局数据体系 §2.4 例外：降级场景）
             if not stock_map:
                 try:
                     if self.data_manager:
@@ -438,7 +438,7 @@ class DashboardService:
                 'date': str(last_date),
                 'type': type,
                 'title': '涨幅前十' if type == 'up' else '跌幅前十',
-                'source': 'DuckDB 盘后数据',
+                'source': 'DuckDB 盘后数据（前一完整交易日）',
                 'stocks': stocks,
             }
         except Exception as e:
@@ -456,7 +456,10 @@ class DashboardService:
         Part1：流通市值 × 涨跌幅（X=circ_mv、Y=pct_chg）
         Part2：高开/低开 × 高收/低收 四象限（X=(open-pre_close)/pre_close、Y=(close-open)/open）
 
-        数据源：daily_cache ⋈ daily_basic_cache（最新交易日，inner join 天然排除指数）。
+        数据源：daily_cache ⋈ daily_basic_cache（前一完整交易日，inner join 天然排除指数）。
+        533 批次回归修正（534号）：不再取 daily_basic 最新日，改为
+        `_get_best_trade_date(before=today)` 固定前一完整交易日；若 join 后样本不足
+        （<1000 只），自动回退到再前一交易日，并返回 data_quality。
         pre_close 无独立列，由 pct_chg 精确推导（Tushare 口径含除权）：
           pre_close = close / (1 + pct_chg/100)
         """
@@ -464,39 +467,60 @@ class DashboardService:
             from app.models import Stock
 
             ecm = self.data_manager.cache
-            # 最新交易日：以 daily_basic_cache 最新日为准（盘中 daily_cache 会有少量当日残行，
-            # 如 10-20 仅 97 只而 daily_basic 仍为 10-19 → 原实现取 10-20 后 inner join 空 → 503）
-            date_df = ecm._query_shard(
-                'daily_basic_cache',
-                "SELECT DISTINCT trade_date FROM daily_basic_cache "
-                "ORDER BY trade_date DESC LIMIT 1")
-            if date_df is None or date_df.empty:
+            today = datetime.now().strftime('%Y-%m-%d')
+            min_stocks = 1000
+            as_of = self._get_best_trade_date(before=today)
+
+            candidates = []
+            if as_of:
+                candidates.append(as_of)
+                prev = self._get_best_trade_date(before=as_of)
+                if prev and prev not in candidates:
+                    candidates.append(prev)
+            else:
+                # 非交易日/无完整日线时，退回 daily_basic 最近两个日期，
+                # 由下方的样本量守卫挑选更完整的一天。
                 date_df = ecm._query_shard(
-                    'daily_cache',
-                    "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
-            if date_df is None or date_df.empty:
+                    'daily_basic_cache',
+                    "SELECT DISTINCT trade_date FROM daily_basic_cache "
+                    "ORDER BY trade_date DESC LIMIT 2")
+                if date_df is not None and not date_df.empty:
+                    candidates = [str(d) for d in date_df['trade_date'].tolist()]
+
+            if not candidates:
                 logger.error("全市场日终散点: daily_cache/daily_basic_cache 无任何历史数据")
                 return None
-            last_date = date_df['trade_date'].iloc[0]
 
-            daily_df = ecm._query_shard(
-                'daily_cache',
-                "SELECT ts_code, open, close, pct_chg FROM daily_cache WHERE trade_date = ?",
-                [last_date])
-            if daily_df is None or daily_df.empty:
-                logger.error("全市场日终散点: 当日无日线数据")
+            merged = None
+            last_date = None
+            for cand in candidates:
+                daily_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT ts_code, open, close, pct_chg FROM daily_cache "
+                    "WHERE trade_date = ?", [cand])
+                if daily_df is None or daily_df.empty:
+                    continue
+                basic_df = ecm._query_shard(
+                    'daily_basic_cache',
+                    "SELECT ts_code, circ_mv, total_mv FROM daily_basic_cache "
+                    "WHERE trade_date = ?", [cand])
+                if basic_df is None or basic_df.empty:
+                    continue
+                # inner join → 天然排除指数（daily 独有行＝指数/行业指数）
+                cand_merged = daily_df.merge(basic_df, on='ts_code', how='inner')
+                if cand_merged.empty:
+                    continue
+                if merged is None or len(cand_merged) > len(merged):
+                    merged, last_date = cand_merged, cand
+                if len(cand_merged) >= min_stocks:
+                    merged, last_date = cand_merged, cand
+                    break
+
+            if merged is None or merged.empty or not last_date:
+                logger.error("全市场日终散点: 候选交易日均无有效 join 数据")
                 return None
 
-            basic_df = ecm._query_shard(
-                'daily_basic_cache',
-                "SELECT ts_code, circ_mv, total_mv FROM daily_basic_cache WHERE trade_date = ?",
-                [last_date])
-            if basic_df is None or basic_df.empty:
-                logger.error("全市场日终散点: 当日无 daily_basic 数据")
-                return None
-
-            # inner join → 天然排除指数（daily 独有行＝指数/行业指数）
-            merged = daily_df.merge(basic_df, on='ts_code', how='inner')
+            data_quality = 'ok' if len(merged) >= min_stocks else 'low_sample'
 
             # 名称补齐（同 get_daily_top：Stock 表 → get_stock_list 兜底）
             ts_codes = merged['ts_code'].unique().tolist()
@@ -541,28 +565,38 @@ class DashboardService:
             return {
                 'trade_date': str(last_date),
                 'count': len(stocks),
+                'data_quality': data_quality,
                 'source': 'DuckDB 盘后数据',
                 'stocks': stocks,
                 # 530 批次1：状态结果说明——近5交易日涨跌平家数 + 四象限计数
-                # （供前端散点/四象限图「较昨日、较近5日均」状态说明，非图表轴解释）
-                'summary_5d': self._get_eod_summary_5d(ecm),
+                # 534：summary_5d 同步锚定 last_date，排除盘中残行
+                'summary_5d': self._get_eod_summary_5d(ecm, as_of=last_date),
             }
         except Exception as e:
             logger.error(f"全市场日终散点获取失败: {e}")
             return None
 
-    def _get_eod_summary_5d(self, ecm) -> list:
+    def _get_eod_summary_5d(self, ecm, as_of: Optional[str] = None) -> list:
         """近5交易日涨跌平家数 + 四象限计数（530 批次1，状态结果说明数据源）。
 
         口径对齐主散点：daily_cache ⋈ daily_basic_cache（inner join 天然排除指数）；
         pre_close 由 pct_chg 推导（同 get_eod_snapshot，Tushare 口径含除权）。
         四象限：高开低开×高收低收（X=(open-pre)/pre、Y=(close-open)/open）。
+        534：as_of 指定时只取 <= as_of 的交易日，排除盘中残行（如 10-21 仅 95 只）。
         返回升序 [{date, up_count, down_count, flat_count, quad:{gg,gd,dg,dd}}]。
         """
         try:
-            dates_df = ecm._query_shard(
-                'daily_cache',
-                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 5")
+            if as_of:
+                dates_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT DISTINCT trade_date FROM daily_cache "
+                    "WHERE trade_date <= ? ORDER BY trade_date DESC LIMIT 5",
+                    [as_of])
+            else:
+                dates_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT DISTINCT trade_date FROM daily_cache "
+                    "ORDER BY trade_date DESC LIMIT 5")
             if dates_df is None or dates_df.empty:
                 return []
             dates = [str(d) for d in dates_df['trade_date'].tolist()]
@@ -1253,6 +1287,30 @@ class DashboardService:
         except Exception:
             pass
 
+        # 533 批次1：大盘总览面板并入聚合载荷
+        try:
+            overview_panel = self.get_market_overview_panel()
+            if overview_panel:
+                result['market_overview_panel'] = overview_panel
+        except Exception:
+            pass
+
+        # 533 批次2：涨停生态并入聚合载荷
+        try:
+            limit_ecology = self.get_limit_ecology()
+            if limit_ecology:
+                result['limit_ecology'] = limit_ecology
+        except Exception:
+            pass
+
+        # 533 批次3：市场资金与杠杆30日并入聚合载荷
+        try:
+            flows_30d = self.get_market_flows_30d()
+            if flows_30d:
+                result['market_flows_30d'] = flows_30d
+        except Exception:
+            pass
+
         # 524 批次1'：大盘监控三只读接口并入聚合载荷（Q6 全选）
         try:
             breadth = self.get_market_breadth()
@@ -1302,47 +1360,70 @@ class DashboardService:
     def get_market_breadth(self) -> Optional[Dict]:
         """市场宽度（524 号 L2 面板原料）：涨跌家数 + 宽度指标。
 
-        数据源：E3 daily_cache⋈daily_basic_cache（最新交易日，inner join 纯股票，
+        数据源：daily_cache⋈daily_basic_cache（前一完整交易日，inner join 纯股票，
                 同 523 eod-snapshot 模式）+ E2 market_stats_cache（ma20_ratio/limit_ratio）。
+        535 P1：不再取 daily_cache 最新日（10-21 仅 95 只残行），改用
+        `_get_best_trade_date(before=today)`；join 样本 <1000 时自动回退再前一交易日。
         全只读，不写任何表。
         """
         try:
             ecm = self.data_manager.cache
-            date_df = ecm._query_shard(
-                'daily_cache',
-                "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 1")
-            if date_df is None or date_df.empty:
-                logger.error("市场宽度: daily_cache 无历史数据")
-                return None
-            last_date = str(date_df['trade_date'].iloc[0])
+            today = datetime.now().strftime('%Y-%m-%d')
+            min_stocks = 1000
+            as_of = self._get_best_trade_date(before=today)
+            candidates = []
+            if as_of:
+                candidates.append(as_of)
+                prev = self._get_best_trade_date(before=as_of)
+                if prev and prev not in candidates:
+                    candidates.append(prev)
+            else:
+                date_df = ecm._query_shard(
+                    'daily_basic_cache',
+                    "SELECT DISTINCT trade_date FROM daily_basic_cache "
+                    "ORDER BY trade_date DESC LIMIT 2")
+                if date_df is not None and not date_df.empty:
+                    candidates = [str(d) for d in date_df['trade_date'].tolist()]
 
-            daily_df = ecm._query_shard(
-                'daily_cache',
-                "SELECT ts_code, pct_chg FROM daily_cache WHERE trade_date = ?",
-                [last_date])
-            if daily_df is None or daily_df.empty:
-                logger.error("市场宽度: 当日无日线数据")
-                return None
-
-            basic_df = ecm._query_shard(
-                'daily_basic_cache',
-                "SELECT ts_code FROM daily_basic_cache WHERE trade_date = ?",
-                [last_date])
-            if basic_df is None or basic_df.empty:
-                logger.error("市场宽度: 当日无 daily_basic 数据")
+            if not candidates:
+                logger.error("市场宽度: daily_cache/daily_basic_cache 无任何历史数据")
                 return None
 
-            merged = daily_df.merge(basic_df, on='ts_code', how='inner')
+            merged = None
+            last_date = None
+            for cand in candidates:
+                daily_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT ts_code, pct_chg FROM daily_cache WHERE trade_date = ?",
+                    [cand])
+                if daily_df is None or daily_df.empty:
+                    continue
+                basic_df = ecm._query_shard(
+                    'daily_basic_cache',
+                    "SELECT ts_code FROM daily_basic_cache WHERE trade_date = ?",
+                    [cand])
+                if basic_df is None or basic_df.empty:
+                    continue
+                cand_merged = daily_df.merge(basic_df, on='ts_code', how='inner')
+                if cand_merged.empty:
+                    continue
+                if merged is None or len(cand_merged) > len(merged):
+                    merged, last_date = cand_merged, cand
+                if len(cand_merged) >= min_stocks:
+                    merged, last_date = cand_merged, cand
+                    break
+
+            if merged is None or merged.empty or not last_date:
+                logger.error("市场宽度: 候选交易日均无有效 join 数据")
+                return None
+
             count = len(merged)
-            if count == 0:
-                logger.error("市场宽度: join 后无纯股票")
-                return None
+            data_quality = 'ok' if count >= min_stocks else 'low_sample'
             up = int((merged['pct_chg'] > 0).sum())
             down = int((merged['pct_chg'] < 0).sum())
             flat = count - up - down
 
-            stats = ecm.get_cached_market_stats()  # E2，最新 stat_date
-            # 527 批次3：市场宽度历史序列（market_stats_cache 近20日 ma20_ratio/limit/turnover）
+            stats = ecm.get_cached_market_stats() or {}
             history = []
             try:
                 hist_df = ecm._query_shard(
@@ -1357,12 +1438,13 @@ class DashboardService:
                             'limit_ratio': float(hr.get('limit_ratio', 0) or 0),
                             'turnover_percentile': round(float(hr.get('turnover_percentile', 0) or 0) * 100, 1),
                         })
-                    history.reverse()  # 升序
+                    history.reverse()
             except Exception:
                 pass
             return {
-                'trade_date': last_date,
+                'trade_date': str(last_date),
                 'count': count,
+                'data_quality': data_quality,
                 'up_count': up,
                 'down_count': down,
                 'flat_count': flat,
@@ -1371,11 +1453,548 @@ class DashboardService:
                 'ma20_ratio': round(float(stats.get('ma20_ratio', 0)) * 100, 1),
                 'limit_ratio': float(stats.get('limit_ratio', 0)),
                 'turnover_percentile': round(float(stats.get('turnover_percentile', 0)) * 100, 1),
-                'history': history,   # 527 批次3：近20日宽度序列（升序）
-                'source': 'DuckDB 盘后数据',
+                'history': history,
+                'source': 'DuckDB 盘后数据（前一完整交易日）',
             }
         except Exception as e:
             logger.error(f"市场宽度获取失败: {e}")
+            return None
+
+    def get_market_overview_panel(self) -> Optional[Dict]:
+        """大盘总览面板（533 号批次1）：前一交易日日终锚定 + 涨跌平 + 近5日强弱家数。
+
+        数据源：daily_cache ⋈ daily_basic_cache（与 523/524 宽度同口径，inner join
+        天然排除指数/基金）。`as_of` 固定 today 之前最近完整交易日，避免盘中或
+        收盘逐步入库导致数据日切换。全只读，不写任何表。
+        """
+        try:
+            import pandas as pd
+
+            today = datetime.now().strftime('%Y-%m-%d')
+            as_of = self._get_best_trade_date(before=today)
+            if not as_of:
+                logger.error("大盘总览: 无上一交易日数据")
+                return None
+            prev_date = self._get_best_trade_date(before=as_of)
+
+            ecm = self.data_manager.cache
+            dates_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT DISTINCT trade_date FROM daily_cache "
+                "WHERE trade_date <= ? ORDER BY trade_date DESC LIMIT 5",
+                [as_of])
+            if dates_df is None or dates_df.empty:
+                logger.error("大盘总览: 近5日交易日为空")
+                return None
+            dates = sorted(self._norm_trade_date(v)
+                           for v in dates_df['trade_date'].tolist())
+            placeholders = ','.join('?' for _ in dates)
+            df = ecm._query_shard(
+                'daily_cache',
+                f"SELECT d.trade_date, d.pct_chg FROM daily_cache d "
+                f"JOIN daily_basic_cache b "
+                f"  ON d.ts_code = b.ts_code AND d.trade_date = b.trade_date "
+                f"WHERE d.trade_date IN ({placeholders})", dates)
+            if df is None or df.empty:
+                logger.error("大盘总览: 近5日涨跌数据为空")
+                return None
+
+            by_date = {}
+            for raw_date, grp in df.groupby('trade_date'):
+                d = self._norm_trade_date(raw_date)
+                s = pd.to_numeric(grp['pct_chg'], errors='coerce').dropna()
+                total = int(s.count())
+                if not total:
+                    continue
+                up = int((s > 0).sum())
+                down = int((s < 0).sum())
+                flat = int((s == 0).sum())
+                strong = int((s >= 5).sum())
+                weak = int((s <= -5).sum())
+                by_date[d] = {
+                    'trade_date': d,
+                    'count': total,
+                    'up_count': up,
+                    'down_count': down,
+                    'flat_count': flat,
+                    'up_ratio': round(up / total * 100, 1),
+                    'down_ratio': round(down / total * 100, 1),
+                    'flat_ratio': round(flat / total * 100, 1),
+                    'strong_count': strong,
+                    'weak_count': weak,
+                    'up_down_ratio': round(up / down, 2) if down else None,
+                }
+
+            if as_of not in by_date:
+                logger.error(f"大盘总览: as_of={as_of} 无聚合结果")
+                return None
+
+            rows = [by_date[d] for d in dates if d in by_date]
+            return {
+                'as_of': as_of,
+                'prev_trade_date': prev_date,
+                'breadth': by_date[as_of],
+                'prev_breadth': by_date.get(prev_date) if prev_date else None,
+                'strong_weak_5d': {
+                    'dates': [r['trade_date'] for r in rows],
+                    'strong': [r['strong_count'] for r in rows],
+                    'weak': [r['weak_count'] for r in rows],
+                    'thresholds': {'strong': 5, 'weak': -5},
+                },
+                'source': 'DuckDB daily_cache ⋈ daily_basic_cache（前一交易日日终）',
+            }
+        except Exception as e:
+            logger.error(f"大盘总览获取失败: {e}")
+            return None
+
+    @staticmethod
+    def _get_stock_names(ts_codes) -> Dict:
+        """Stock 名称/东财行业补全（跌停反算无名称时用）。失败返回空 dict。"""
+        if not ts_codes:
+            return {}
+        try:
+            from app import db
+            from app.models import Stock
+            rows = db.session.query(
+                Stock.ts_code, Stock.name, Stock.industry).filter(
+                Stock.ts_code.in_(list(ts_codes))).all()
+            return {r[0]: {'name': r[1] or '', 'industry': r[2] or ''}
+                    for r in rows}
+        except Exception as e:
+            logger.debug(f"涨停生态: Stock 名称补全失败: {e}")
+            return {}
+
+    def get_limit_ecology(self) -> Optional[Dict]:
+        """涨停生态（533 号批次2）：涨停/跌停对比 + 行业个股 + 昨涨停今表现 + 连板 + 5日封板率。
+
+        数据源（拍板：不用 sentiment_pool_cache——其日期错位）：
+          - 涨停/炸板/连板：`limit_detail_cache`（Tushare limit_list_d U/Z）；
+          - 跌停：`daily_cache + stk_limit_cache` 反算（close <= low_limit）；
+          - 行业：申万一级 `stock_sw_industry` 映射，保留 Tushare/东财明细行业。
+        所有日期锚定 today 之前最近完整交易日 `as_of`。全只读。
+        """
+        try:
+            import math
+
+            today = datetime.now().strftime('%Y-%m-%d')
+            as_of = self._get_best_trade_date(before=today)
+            if not as_of:
+                logger.error("涨停生态: 无上一交易日数据")
+                return None
+            prev_date = self._get_best_trade_date(before=as_of)
+            ecm = self.data_manager.cache
+
+            dates_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT DISTINCT trade_date FROM daily_cache "
+                "WHERE trade_date <= ? ORDER BY trade_date DESC LIMIT 5",
+                [as_of])
+            if dates_df is None or dates_df.empty:
+                logger.error("涨停生态: 近5日交易日为空")
+                return None
+            dates = sorted(self._norm_trade_date(v)
+                           for v in dates_df['trade_date'].tolist())
+
+            from app.data.sw_industry_map import get_sw_industry_map, normalize_code
+            try:
+                sw_map = get_sw_industry_map(ecm) or {}
+            except Exception:
+                sw_map = {}
+
+            def _sw(code):
+                return sw_map.get(normalize_code(str(code))) or ''
+
+            def _int(v, default=0):
+                try:
+                    return int(float(v))
+                except (TypeError, ValueError):
+                    return default
+
+            def _float(v):
+                try:
+                    f = float(v)
+                    return round(f, 2) if math.isfinite(f) else None
+                except (TypeError, ValueError):
+                    return None
+
+            # 涨停明细（Tushare U）
+            up_df = ecm._query_shard(
+                'limit_detail_cache',
+                "SELECT ts_code, name, industry, pct_chg, limit_times, open_times, "
+                "first_time, last_time FROM limit_detail_cache "
+                "WHERE trade_date = ? AND limit_type = 'U'", [as_of])
+            up_stocks = []
+            if up_df is not None and not up_df.empty:
+                for r in up_df.to_dict('records'):
+                    ts = str(r.get('ts_code') or '')
+                    detail_ind = str(r.get('industry') or '')
+                    up_stocks.append({
+                        'ts_code': ts,
+                        'name': str(r.get('name') or ts),
+                        'industry': _sw(ts) or detail_ind or '其他',
+                        'detail_industry': detail_ind,
+                        'pct_chg': _float(r.get('pct_chg')),
+                        'limit_times': _int(r.get('limit_times'), 1),
+                        'open_times': _int(r.get('open_times'), 0),
+                        'first_time': str(r.get('first_time') or ''),
+                        'last_time': str(r.get('last_time') or ''),
+                    })
+            up_stocks.sort(key=lambda x: (-x['limit_times'],
+                                          -(x['pct_chg'] or 0), x['ts_code']))
+
+            # 跌停反算（daily + stk_limit；inner join daily_basic 排除指数）
+            down_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT d.ts_code, d.close, d.pct_chg, s.low_limit "
+                "FROM daily_cache d "
+                "JOIN stk_limit_cache s ON d.ts_code = s.ts_code "
+                "  AND d.trade_date = s.trade_date "
+                "JOIN daily_basic_cache b ON b.ts_code = d.ts_code "
+                "  AND b.trade_date = d.trade_date "
+                "WHERE d.trade_date = ? AND d.close <= s.low_limit + 0.001",
+                [as_of])
+            down_rows = ([] if down_df is None or down_df.empty
+                         else down_df.to_dict('records'))
+            down_names = self._get_stock_names(
+                [str(r.get('ts_code') or '') for r in down_rows])
+            down_stocks = []
+            for r in down_rows:
+                ts = str(r.get('ts_code') or '')
+                nm = down_names.get(ts, {})
+                detail_ind = nm.get('industry') or ''
+                down_stocks.append({
+                    'ts_code': ts,
+                    'name': nm.get('name') or ts,
+                    'industry': _sw(ts) or detail_ind or '其他',
+                    'detail_industry': detail_ind,
+                    'pct_chg': _float(r.get('pct_chg')),
+                    'limit_times': 1,
+                    'open_times': 0,
+                    'first_time': '',
+                    'last_time': '',
+                })
+            down_stocks.sort(key=lambda x: ((x['pct_chg'] or 0), x['ts_code']))
+
+            def _industries(items, top_n=6):
+                from collections import defaultdict
+                groups = defaultdict(list)
+                for s in items:
+                    groups[s['industry']].append(s)
+                out = [{'industry': ind, 'count': len(lst), 'stocks': lst[:5]}
+                       for ind, lst in groups.items()]
+                out.sort(key=lambda x: (-x['count'], x['industry']))
+                return out[:top_n]
+
+            # 再之前一个交易日涨停 → 本日表现
+            prev_limit = {
+                'date': prev_date or '', 'total': 0, 'up_count': 0,
+                'down_count': 0, 'flat_count': 0, 'avg_pct': None,
+                'win_rate': None, 'stocks': [], 'distribution': [],
+            }
+            if prev_date:
+                prev_df = ecm._query_shard(
+                    'limit_detail_cache',
+                    "SELECT l.ts_code, l.name, l.industry, l.limit_times, "
+                    "d.pct_chg FROM limit_detail_cache l "
+                    "LEFT JOIN daily_cache d ON d.ts_code = l.ts_code "
+                    "  AND d.trade_date = ? "
+                    "WHERE l.trade_date = ? AND l.limit_type = 'U'",
+                    [as_of, prev_date])
+                prev_stocks = []
+                if prev_df is not None and not prev_df.empty:
+                    for r in prev_df.to_dict('records'):
+                        ts = str(r.get('ts_code') or '')
+                        detail_ind = str(r.get('industry') or '')
+                        prev_stocks.append({
+                            'ts_code': ts,
+                            'name': str(r.get('name') or ts),
+                            'industry': _sw(ts) or detail_ind or '其他',
+                            'detail_industry': detail_ind,
+                            'limit_times': _int(r.get('limit_times'), 1),
+                            'pct_chg': _float(r.get('pct_chg')),
+                        })
+                prev_stocks.sort(key=lambda x: (-(x['pct_chg'] or -999),
+                                                x['ts_code']))
+                total = len(prev_stocks)
+                up_c = sum(1 for s in prev_stocks
+                           if s['pct_chg'] is not None and s['pct_chg'] > 0)
+                down_c = sum(1 for s in prev_stocks
+                             if s['pct_chg'] is not None and s['pct_chg'] < 0)
+                vals = [s['pct_chg'] for s in prev_stocks
+                        if s['pct_chg'] is not None]
+                bins = [('<-5%', lambda v: v < -5),
+                        ('-5%~0', lambda v: -5 <= v < 0),
+                        ('0~5%', lambda v: 0 <= v < 5),
+                        ('≥5%', lambda v: v >= 5)]
+                prev_limit.update({
+                    'total': total,
+                    'up_count': up_c,
+                    'down_count': down_c,
+                    'flat_count': total - up_c - down_c,
+                    'avg_pct': round(sum(vals) / len(vals), 2) if vals else None,
+                    'win_rate': round(up_c / total * 100, 1) if total else None,
+                    'stocks': prev_stocks,
+                    'distribution': [
+                        {'label': label,
+                         'count': sum(1 for v in vals if fn(v))}
+                        for label, fn in bins
+                    ],
+                })
+
+            # 连板天梯 + 板数分布
+            boards = [s for s in up_stocks if s['limit_times'] >= 2]
+            board_dist = {}
+            for s in up_stocks:
+                board_dist[s['limit_times']] = board_dist.get(s['limit_times'], 0) + 1
+
+            # 近5日封板率 = U/(U+Z)
+            seal_map = {}
+            placeholders = ','.join('?' for _ in dates)
+            seal_df = ecm._query_shard(
+                'limit_detail_cache',
+                "SELECT trade_date, "
+                "SUM(CASE WHEN limit_type='U' THEN 1 ELSE 0 END) AS up_cnt, "
+                "SUM(CASE WHEN limit_type='Z' THEN 1 ELSE 0 END) AS zha_cnt "
+                "FROM limit_detail_cache "
+                f"WHERE trade_date IN ({placeholders}) GROUP BY trade_date",
+                dates)
+            if seal_df is not None and not seal_df.empty:
+                for r in seal_df.to_dict('records'):
+                    seal_map[self._norm_trade_date(r.get('trade_date'))] = (
+                        _int(r.get('up_cnt')), _int(r.get('zha_cnt')))
+            seal_rows = []
+            for d in dates:
+                up_c, zha_c = seal_map.get(d, (0, 0))
+                seal_rows.append({
+                    'date': d, 'limit_up': up_c, 'zhaban': zha_c,
+                    'rate': (round(up_c / (up_c + zha_c) * 100, 1)
+                             if up_c + zha_c else None),
+                })
+
+            return {
+                'as_of': as_of,
+                'prev_trade_date': prev_date,
+                'up': {
+                    'count': len(up_stocks),
+                    'industries': _industries(up_stocks),
+                    'stocks': up_stocks,
+                },
+                'down': {
+                    'count': len(down_stocks),
+                    'industries': _industries(down_stocks),
+                    'stocks': down_stocks,
+                },
+                'prev_limit_up': prev_limit,
+                'boards': {
+                    'count': len(boards),
+                    'max_height': max((s['limit_times'] for s in up_stocks),
+                                      default=0),
+                    'distribution': [{'days': k, 'count': v}
+                                     for k, v in sorted(board_dist.items())],
+                    'stocks': boards,
+                },
+                'sealing_5d': {'dates': dates, 'rows': seal_rows},
+                'source': ('Tushare limit_detail_cache U/Z + '
+                           'DuckDB daily/stk_limit（跌停反算）'),
+            }
+        except Exception as e:
+            logger.error(f"涨停生态获取失败: {e}")
+            return None
+
+    def get_market_flows_30d(self) -> Optional[Dict]:
+        """市场资金与杠杆30日（533号批次3）：5日行业资金×涨跌 + 30日ETF份额 + 30日融资。
+
+        数据源：moneyflow_cache + daily_cache（申万一级）、fund_share_cache（ETF份额，
+        fd_share 万份 -> 亿份）、margin_cache（rzye/rzmje/rzrqye 万元 -> 亿元）。
+        所有日期锚定 today 之前最近完整交易日 as_of；全只读。
+        """
+        try:
+            today = datetime.now().strftime('%Y-%m-%d')
+            as_of = self._get_best_trade_date(before=today)
+            if not as_of:
+                logger.error("市场资金30日: 无上一交易日数据")
+                return None
+            ecm = self.data_manager.cache
+
+            dates_df = ecm._query_shard(
+                'daily_cache',
+                "SELECT DISTINCT trade_date FROM daily_cache "
+                "WHERE trade_date <= ? ORDER BY trade_date DESC LIMIT 5",
+                [as_of])
+            dates5 = []
+            if dates_df is not None and not dates_df.empty:
+                dates5 = sorted(self._norm_trade_date(v)
+                                for v in dates_df['trade_date'].tolist())
+
+            industry_rows = []
+            if len(dates5) >= 2:
+                history = self._get_sector_history_20d(days=5, as_of=as_of)
+                change_map = {}
+                for ind, vals in (history.get('industries') or {}).items():
+                    change_map[str(ind)] = round(
+                        sum(float(v or 0) for v in vals), 2)
+
+                from app.data.sw_industry_map import get_sw_industry_map
+                sw_map = get_sw_industry_map(ecm) or {}
+                placeholders = ','.join('?' for _ in dates5)
+                mf_df = ecm._query_shard(
+                    'moneyflow_cache',
+                    "SELECT ts_code, buy_lg_amount, buy_elg_amount, "
+                    "sell_lg_amount, sell_elg_amount FROM moneyflow_cache "
+                    f"WHERE trade_date IN ({placeholders})", dates5)
+                net_by_ind = {}
+                if mf_df is not None and not mf_df.empty:
+                    for r in mf_df.to_dict('records'):
+                        code = str(r.get('ts_code') or '')
+                        ind = sw_map.get(code.split('.')[0]) or ''
+                        if not ind:
+                            continue
+                        net = (self._safe_float(r.get('buy_lg_amount'))
+                               + self._safe_float(r.get('buy_elg_amount'))
+                               - self._safe_float(r.get('sell_lg_amount'))
+                               - self._safe_float(r.get('sell_elg_amount')))
+                        net_by_ind[ind] = net_by_ind.get(ind, 0.0) + net
+                for ind in sorted(set(change_map) | set(net_by_ind)):
+                    industry_rows.append({
+                        'industry': ind,
+                        'net_inflow_5d': round(net_by_ind.get(ind, 0.0) / 1e4, 1),
+                        'change_5d': round(change_map.get(ind, 0.0), 2),
+                    })
+                industry_rows.sort(key=lambda x: -x['net_inflow_5d'])
+
+            etf_dates, etf_net, etf_total, etf_top = [], [], [], []
+            etf_cum = None
+            try:
+                fdf = ecm._query_shard(
+                    'fund_share_cache',
+                    "SELECT trade_date, SUM(fd_share) AS total_share "
+                    "FROM fund_share_cache WHERE fund_type = 'ETF' "
+                    "AND trade_date <= ? GROUP BY trade_date "
+                    "ORDER BY trade_date DESC LIMIT 31", [as_of])
+                rows = []
+                if fdf is not None and not fdf.empty:
+                    rows = sorted(
+                        ({'date': self._norm_trade_date(r.get('trade_date')),
+                          'total': float(r.get('total_share') or 0)}
+                         for r in fdf.to_dict('records')),
+                        key=lambda x: x['date'])
+                if len(rows) >= 2:
+                    first, last = rows[0], rows[-1]
+                    for i in range(1, len(rows)):
+                        cur, prev = rows[i], rows[i - 1]
+                        etf_dates.append(cur['date'])
+                        etf_total.append(round(cur['total'] / 1e4, 1))
+                        etf_net.append(round(
+                            (cur['total'] - prev['total']) / 1e4, 1))
+                    etf_cum = round(
+                        (last['total'] - first['total']) / 1e4, 1)
+                    top_df = ecm._query_shard(
+                        'fund_share_cache',
+                        "SELECT a.ts_code, a.fd_share - b.fd_share AS delta "
+                        "FROM fund_share_cache a "
+                        "JOIN fund_share_cache b ON a.ts_code = b.ts_code "
+                        "WHERE a.trade_date = ? AND b.trade_date = ? "
+                        "AND a.fund_type = 'ETF' "
+                        "ORDER BY delta DESC LIMIT 8",
+                        [last['date'], first['date']])
+                    top_rows = ([] if top_df is None or top_df.empty
+                                else top_df.to_dict('records'))
+                    codes = [str(r.get('ts_code') or '') for r in top_rows]
+                    name_map = {}
+                    if codes:
+                        try:
+                            ph = ','.join('?' for _ in codes)
+                            ndf = ecm._query_shard(
+                                'etf_industry_map',
+                                "SELECT ts_code, fund_name FROM etf_industry_map "
+                                f"WHERE ts_code IN ({ph})", codes)
+                            if ndf is not None and not ndf.empty:
+                                name_map = {
+                                    str(r.get('ts_code')):
+                                    str(r.get('fund_name') or '')
+                                    for r in ndf.to_dict('records')}
+                        except Exception:
+                            name_map = {}
+                    for r in top_rows:
+                        code = str(r.get('ts_code') or '')
+                        etf_top.append({
+                            'ts_code': code,
+                            'name': name_map.get(code) or code,
+                            'net_share': round(
+                                float(r.get('delta') or 0) / 1e4, 1),
+                        })
+            except Exception as e:
+                logger.warning(f"市场资金30日: ETF份额聚合失败: {e}")
+
+            margin_dates, margin_balance, margin_buy = [], [], []
+            short_balance, margin_net = [], []
+            margin_latest, margin_cum = {}, None
+            try:
+                mdf = ecm._query_shard(
+                    'margin_cache',
+                    "SELECT trade_date, SUM(rzye) AS rzye, "
+                    "SUM(rzmje) AS rzmje, SUM(rzrqye) AS rzrqye "
+                    "FROM margin_cache WHERE trade_date <= ? "
+                    "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 31",
+                    [as_of])
+                rows = []
+                if mdf is not None and not mdf.empty:
+                    rows = sorted(
+                        ({'date': self._norm_trade_date(r.get('trade_date')),
+                          'rzye': float(r.get('rzye') or 0),
+                          'rzmje': float(r.get('rzmje') or 0),
+                          'rzrqye': float(r.get('rzrqye') or 0)}
+                         for r in mdf.to_dict('records')),
+                        key=lambda x: x['date'])
+                if len(rows) >= 2:
+                    for i in range(1, len(rows)):
+                        cur, prev = rows[i], rows[i - 1]
+                        margin_dates.append(cur['date'])
+                        margin_balance.append(round(cur['rzye'] / 1e8, 1))
+                        margin_buy.append(round(cur['rzmje'] / 1e8, 1))
+                        short_balance.append(round(
+                            (cur['rzrqye'] - cur['rzye']) / 1e8, 1))
+                        margin_net.append(round(
+                            (cur['rzye'] - prev['rzye']) / 1e8, 1))
+                    margin_cum = round(sum(margin_net), 1)
+                    last = rows[-1]
+                    margin_latest = {
+                        'date': last['date'],
+                        'margin_balance': round(last['rzye'] / 1e8, 1),
+                        'margin_buy': round(last['rzmje'] / 1e8, 1),
+                        'short_balance': round(
+                            (last['rzrqye'] - last['rzye']) / 1e8, 1),
+                    }
+            except Exception as e:
+                logger.warning(f"市场资金30日: 融资聚合失败: {e}")
+
+            return {
+                'as_of': as_of,
+                'industry_flow_5d': {
+                    'dates': dates5,
+                    'industries': industry_rows,
+                },
+                'etf_30d': {
+                    'dates': etf_dates,
+                    'net_share': etf_net,
+                    'total_share': etf_total,
+                    'cumulative_net_share': etf_cum,
+                    'top_etfs': etf_top,
+                },
+                'margin_30d': {
+                    'dates': margin_dates,
+                    'margin_balance': margin_balance,
+                    'margin_buy': margin_buy,
+                    'short_balance': short_balance,
+                    'net_buy': margin_net,
+                    'cumulative_net_buy': margin_cum,
+                    'latest': margin_latest,
+                },
+                'source': ('DuckDB moneyflow/daily（申万一级）+ '
+                           'fund_share_cache + margin_cache'),
+            }
+        except Exception as e:
+            logger.error(f"市场资金30日获取失败: {e}")
             return None
 
     def get_market_state(self) -> Optional[Dict]:
@@ -1456,23 +2075,55 @@ class DashboardService:
             state, state_label = 'consolidation', '盘整'
         return state, state_label
 
-    def get_market_emotion(self) -> Optional[Dict]:
+    def get_market_emotion(self, trade_date: Optional[str] = None) -> Optional[Dict]:
         """市场情绪（524 号 L3 温度计原料）：六段论阶段 + 涨停生态指标。
 
-        数据源：MarketSentimentService（273a 方案，sentiment_pool_cache → 六段论映射）。
-        ⚠️ BOCIASI 市场级聚合输出当前无现成实现（dim5 BOCIASI 为个股级）——
-        批次3 前端如需 BOCIASI 徽标需先建市场级聚合（524 档登记）。
+        535 P1：优先使用 `limit_detail_cache` 的权威涨停/跌停/连板/封板率
+        （与 `/market/limit-ecology` 一致），不再让 sentiment_pool 的
+        日期错位数据（10-20 池 102 家）与涨停生态 54 家并存。
+        sentiment_pool 仅在 limit_detail 不可用时回退。
         """
         try:
             from app.services.market_sentiment_service import MarketSentimentService
             mss = MarketSentimentService(self.data_manager)
-            phase_data = mss.get_sentiment_phase()
+            if trade_date is None:
+                today = datetime.now().strftime('%Y-%m-%d')
+                as_of = self._get_best_trade_date(before=today)
+                trade_date = as_of.replace('-', '') if as_of else None
+
+            eco = self.get_limit_ecology()
+            eco_date = str((eco or {}).get('as_of') or '').replace('-', '')
+            eco_up = int((eco or {}).get('up', {}).get('count') or 0)
+            eco_down = int((eco or {}).get('down', {}).get('count') or 0)
+            if (eco and (not trade_date or eco_date == trade_date)
+                    and (eco_up + eco_down) > 0):
+                up = eco_up
+                down = eco_down
+                boards = eco.get('boards') or {}
+                seal_rows = (eco.get('sealing_5d') or {}).get('rows') or []
+                sealing = (float(seal_rows[-1].get('rate') or 0.0)
+                           if seal_rows else 0.0)
+                metrics = {
+                    'limit_up_count': up,
+                    'limit_down_count': down,
+                    'max_board_height': int(boards.get('max_height') or 0),
+                    'sealing_rate': sealing,
+                    'up_down_ratio': round(up / max(down, 1), 2),
+                }
+                phase_data = mss.get_sentiment_phase(
+                    trade_date=trade_date, metrics_override=metrics)
+                source = 'limit_detail_cache 涨停生态 + 六段论'
+            else:
+                phase_data = mss.get_sentiment_phase(trade_date=trade_date)
+                source = 'sentiment_pool_cache 六段论（limit_detail 不可用回退）'
+
             return {
                 'phase': phase_data.get('phase', 'neutral'),
                 'phase_label': phase_data.get('phase_label', '情绪中性'),
                 'metrics': phase_data.get('metrics', {}),
                 'data_available': phase_data.get('data_available', False),
-                'source': 'sentiment_pool_cache 六段论',
+                'data_date': trade_date or '',
+                'source': source,
             }
         except Exception as e:
             logger.error(f"市场情绪获取失败: {e}")

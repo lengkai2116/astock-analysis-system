@@ -91,6 +91,32 @@ def get_market_breadth():
     return _data_response(data)
 
 
+@dashboard_bp.route('/api/v3/market/limit-ecology', methods=['GET'])
+@api_cache(ttl=120)
+@handle_exceptions
+def get_limit_ecology():
+    """涨停生态（533 号批次2）：涨跌停对比 + 行业个股 + 昨涨停今表现 + 连板 + 5日封板率"""
+    data = _service.get_limit_ecology()
+    return _data_response(data)
+
+@dashboard_bp.route('/api/v3/market/flows-30d', methods=['GET'])
+@api_cache(ttl=120)
+@handle_exceptions
+def get_market_flows_30d():
+    """市场资金与杠杆30日（533 号批次3）：5日行业资金×涨跌 + 30日ETF份额 + 30日融资"""
+    data = _service.get_market_flows_30d()
+    return _data_response(data)
+
+
+@dashboard_bp.route('/api/v3/market/overview-panel', methods=['GET'])
+@api_cache(ttl=120)
+@handle_exceptions
+def get_market_overview_panel():
+    """大盘总览（533 号批次1）：前一交易日日终 + 涨跌平 + 近5日强弱家数"""
+    data = _service.get_market_overview_panel()
+    return _data_response(data)
+
+
 @dashboard_bp.route('/api/v3/market/state', methods=['GET'])
 @api_cache(ttl=120)
 @handle_exceptions
@@ -127,7 +153,7 @@ def get_sector_heat():
 def get_sector_heat_dim():
     """板块热度五维（532 号批次3）：sector_heat_dim_cache 最新日 31 行业 + KPI"""
     top_n = request.args.get('top_n', 31, type=int)
-    top_n = max(1, min(top_n if top_n and top_n > 0 else 31, 31))
+    top_n = min(top_n if top_n and top_n > 0 else 31, 31)
     data = _service.get_sector_heat_dim(top_n=top_n)
     return _data_response(data)
 

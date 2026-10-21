@@ -80,6 +80,8 @@ def _stats():
 def _svc():
     svc = DashboardService()
     svc._data_manager = _FakeDM(_daily_df(), _basic_df(), _stats())
+    # 535 P1：breadth 改为 _get_best_trade_date(before=today) 锚定
+    svc._get_best_trade_date = lambda before=None, min_stocks=1000: '2026-10-16'
     return svc
 
 
@@ -177,7 +179,10 @@ def test_emotion_phase(monkeypatch):
             }
 
     monkeypatch.setattr(mss_mod, 'MarketSentimentService', _FakeMSS)
-    res = _svc().get_market_emotion()
+    svc = _svc()
+    # 该用例测试 sentiment_pool 回退路径；显式禁用 limit_ecology 覆盖
+    monkeypatch.setattr(svc, 'get_limit_ecology', lambda: None)
+    res = svc.get_market_emotion()
     assert res is not None
     assert res['phase'] == 'ferment'
     assert res['phase_label'] == '情绪发酵'
@@ -207,6 +212,7 @@ def test_dashboard_full_merges_new_keys(monkeypatch):
     for name in ('get_index_summary', 'get_market_volume', 'get_moneyflow_summary',
                  'get_sector_changes', 'get_sector_moneyflow', 'get_daily_top'):
         monkeypatch.setattr(svc, name, lambda *a, **k: None)
+    monkeypatch.setattr(svc, 'get_limit_ecology', lambda: None)
     res = svc.get_dashboard_full()
     assert res is not None
     assert res['market_breadth'] is not None

@@ -19,6 +19,36 @@
 .down { color: var(--color-down); }
 .index-mini-chart { height: 100px; margin-top: var(--space-6); }
 
+/* 533：大盘总览（置顶小图矩阵） */
+.mkt-overview { position: relative; overflow: hidden; }
+.mkt-overview::before { content:''; position:absolute; inset:0; background:radial-gradient(640px 140px at 10% 0%, rgba(59,130,246,.10), transparent 70%); pointer-events:none; }
+.mkt-head { position:relative; display:flex; justify-content:space-between; align-items:flex-start; gap:var(--space-12); flex-wrap:wrap; }
+.mkt-title { font-size:18px; font-weight:700; letter-spacing:.4px; }
+.mkt-sub { font-size:14px; color:var(--text-muted); margin-top:3px; }
+.mkt-kpi { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+.mkt-kpi-item { background:rgba(148,163,184,.07); border:1px solid rgba(148,163,184,.14); border-radius:8px; padding:6px 10px; min-width:94px; }
+.mkt-kpi-item .k { font-size:11px; color:var(--text-muted); line-height:1.4; }
+.mkt-kpi-item .v { font-size:15px; font-weight:700; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.mkt-mini { background:rgba(148,163,184,.035); border:1px solid rgba(148,163,184,.10); border-radius:8px; padding:10px 12px; min-width:0; }
+.mkt-mini-title { font-size:13px; font-weight:600; color:var(--text-secondary); margin-bottom:6px; }
+.mkt-note { font-size:14px; color:var(--text-muted); line-height:1.55; margin-top:4px; }
+.mkt-slot { font-size:14px; color:var(--text-muted); border:1px dashed rgba(148,163,184,.18); border-radius:8px; padding:18px 12px; text-align:center; }
+.mkt-big { font-size:26px; font-weight:800; line-height:1; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.mkt-cap { font-size:11px; color:var(--text-muted); }
+.mkt-sub2 { font-size:12px; font-weight:600; margin-bottom:3px; }
+.mkt-chip-wrap { display:flex; flex-wrap:wrap; gap:4px; max-height:112px; overflow:auto; padding-right:2px; }
+.mkt-chip { display:inline-flex; align-items:center; gap:4px; font-size:11px; line-height:1.5; padding:2px 6px; border-radius:4px; background:rgba(148,163,184,.08); border:1px solid rgba(148,163,184,.12); color:var(--text-secondary); white-space:nowrap; }
+.mkt-chip .n { color:var(--text-primary); }
+.mkt-chip .v { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.mkt-chip.up { border-color:rgba(239,68,68,.25); background:rgba(239,68,68,.06); }
+.mkt-chip.down { border-color:rgba(34,197,94,.25); background:rgba(34,197,94,.06); }
+.mkt-chip.board { border-color:rgba(245,158,11,.28); background:rgba(245,158,11,.06); }
+.mkt-flow-grid { display:grid; grid-template-columns:1.55fr 1fr; gap:10px; margin-top:6px; }
+@media (max-width:1100px){ .mkt-flow-grid { grid-template-columns:1fr; } }
+.mkt-status-strip { position:relative; border-top:1px solid rgba(148,163,184,.12); padding-top:var(--space-10); }
+@media (max-width:1100px){ .mkt-kpi { justify-content:flex-start; } .mkt-overview .grid-3 { grid-template-columns:1fr 1fr; } }
+@media (max-width:700px){ .mkt-overview .grid-3 { grid-template-columns:1fr; } }
+
 /* ECharts 全宽 + 双列 */
 .chart-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
 .chart-card .chart-title { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-bottom: var(--space-12); }
@@ -81,6 +111,113 @@ body { overflow-x:hidden; }
           <span style="margin-left:var(--space-8);">成交额: <strong id="total-volume-text">--</strong> <span id="total-volume-change"></span></span>
           <!-- 524 L1：大盘状态徽标（market/state，4 状态·状态机） -->
           <span id="market-state-badge" style="margin-left:var(--space-8);font-size:12px;font-weight:600;"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 533：大盘总览（置顶；全部口径锚定前一交易日日终） -->
+    <div class="chart-card mkt-overview" style="margin-bottom:var(--space-20);">
+      <div class="mkt-head">
+        <div>
+          <div class="mkt-title">🛰️ 大盘总览</div>
+          <div id="mkt-ov-asof" class="mkt-sub">数据加载中...</div>
+        </div>
+        <div id="mkt-ov-kpi" class="mkt-kpi"></div>
+      </div>
+
+      <div class="grid-3" style="margin-top:var(--space-14);">
+        <div class="mkt-mini">
+          <div class="mkt-mini-title">① 涨跌平结构</div>
+          <div id="mkt-breadth-donut" style="height:180px;"></div>
+          <div id="mkt-breadth-note" class="mkt-note">加载中...</div>
+        </div>
+        <div class="mkt-mini">
+          <div class="mkt-mini-title">② 近5日强势 / 弱势家数（≥+5% / ≤-5%）</div>
+          <div id="mkt-strongweak-chart" style="height:180px;"></div>
+          <div id="mkt-strongweak-note" class="mkt-note">加载中...</div>
+        </div>
+        <div class="mkt-mini">
+          <div class="mkt-mini-title">③ 涨停 × 跌停对比</div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin:0 0 2px;">
+            <span class="mkt-big up" id="mkt-limit-up-count">--</span><span class="mkt-cap">涨停</span>
+            <span style="color:var(--text-muted);font-size:11px;">vs</span>
+            <span class="mkt-big down" id="mkt-limit-down-count">--</span><span class="mkt-cap">跌停</span>
+          </div>
+          <div id="mkt-limit-compare-chart" style="height:70px;"></div>
+          <div class="mkt-mini-title" style="margin:6px 0 2px;">近5日封板率</div>
+          <div id="mkt-sealing-chart" style="height:104px;"></div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-top:var(--space-14);">
+        <div class="mkt-mini">
+          <div class="mkt-mini-title">④ 涨停 / 跌停行业 · 个股 <span id="mkt-limit-detail-date" style="font-size:14px;color:var(--text-muted);"></span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div>
+              <div class="mkt-sub2 up">涨停 <span id="mkt-up-industry-total">--</span> 只</div>
+              <div id="mkt-limit-up-industry-chart" style="height:118px;"></div>
+              <div id="mkt-limit-up-stocks" class="mkt-chip-wrap"></div>
+            </div>
+            <div>
+              <div class="mkt-sub2 down">跌停 <span id="mkt-down-industry-total">--</span> 只</div>
+              <div id="mkt-limit-down-industry-chart" style="height:118px;"></div>
+              <div id="mkt-limit-down-stocks" class="mkt-chip-wrap"></div>
+            </div>
+          </div>
+        </div>
+        <div class="mkt-mini">
+          <div class="mkt-mini-title">⑤ 上一交易日涨停 → 该交易日表现 · 连板天梯 <span id="mkt-limit-board-date" style="font-size:14px;color:var(--text-muted);"></span></div>
+          <div id="mkt-prev-limit-note" class="mkt-note">加载中...</div>
+          <div id="mkt-prev-limit-chart" style="height:100px;"></div>
+          <div id="mkt-prev-limit-list" class="mkt-chip-wrap"></div>
+          <div class="mkt-mini-title" style="margin:6px 0 2px;">连板天梯（≥2板）</div>
+          <div id="mkt-board-ladder" class="mkt-chip-wrap"></div>
+        </div>
+      </div>
+
+      <div class="mkt-mini" style="margin-top:var(--space-14);">
+        <div class="mkt-mini-title">⑥ 近5日行业主力净流入 × 5日涨跌（申万一级） <span id="mkt-sector-flow-date" style="font-size:14px;color:var(--text-muted);"></span></div>
+        <div id="mkt-sector-flow-note" class="mkt-note">加载中...</div>
+        <div class="mkt-flow-grid">
+          <div id="mkt-sector-flow-chart" style="height:260px;"></div>
+          <div id="mkt-sector-flow-list" class="mkt-chip-wrap" style="max-height:260px;"></div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-top:var(--space-14);">
+        <div class="mkt-mini">
+          <div class="mkt-mini-title">⑦ 30日 ETF 份额净申购（亿份）</div>
+          <div id="mkt-etf-note" class="mkt-note">加载中...</div>
+          <div id="mkt-etf-chart" style="height:180px;"></div>
+          <div id="mkt-etf-top" class="mkt-chip-wrap"></div>
+        </div>
+        <div class="mkt-mini">
+          <div class="mkt-mini-title">⑧ 30日融资余额 / 净买入</div>
+          <div id="mkt-margin-note" class="mkt-note">加载中...</div>
+          <div id="mkt-margin-chart" style="height:180px;"></div>
+        </div>
+      </div>
+
+      <!-- 既有状态/宽度/情绪/预警（压缩为底部状态条，保留原 ID 供 524 渲染函数复用） -->
+      <div class="mkt-status-strip" style="margin-top:var(--space-14);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-6);">
+          <span style="font-weight:600;font-size:13px;">🛰️ 状态与预警</span>
+          <span style="font-size:14px;color:var(--text-muted);" id="market-state-date">--</span>
+        </div>
+        <div id="market-state-line" style="font-size:14px;color:var(--text-primary);margin-bottom:var(--space-8);">加载中...</div>
+        <div class="grid-3">
+          <div>
+            <div class="mkt-mini-title">📊 市场宽度</div>
+            <div id="market-breadth-panel" style="font-size:14px;color:var(--text-secondary);">加载中...</div>
+          </div>
+          <div>
+            <div class="mkt-mini-title">😊 市场情绪</div>
+            <div id="market-emotion-panel" style="font-size:14px;color:var(--text-secondary);">加载中...</div>
+          </div>
+          <div>
+            <div class="mkt-mini-title">🔔 预警</div>
+            <div id="market-alert-list" style="font-size:14px;color:var(--text-muted);">暂无预警</div>
+          </div>
         </div>
       </div>
     </div>
@@ -179,27 +316,6 @@ body { overflow-x:hidden; }
       <div id="sector-history-note" style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-6);line-height:1.6;">每行＝行业名 + 该行业近5个交易日日均涨跌幅折线（虚线为 0 轴）+ 5日走势文字总结；默认展示该交易日涨幅前5 + 跌幅前5 + 全市场平均，点击「展开全部」查看申万一级 31 类。</div>
       <div style="margin-bottom:var(--space-8);"><span class="tag tag-bullish" id="sector-history-expand" style="cursor:pointer;">展开全部</span></div>
       <div id="chart-sector-history" class="chart-box"></div>
-    </div>
-
-    <!-- 大盘状态（⑧） -->
-    <div class="grid-2" style="margin-bottom:var(--space-24);">
-      <div class="rank-table">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-12);">
-          <span style="font-weight:600;">🛰️ 大盘状态</span>
-          <span style="font-size:14px;color:var(--text-muted);" id="market-state-date">--</span>
-        </div>
-        <!-- 524 L1：大盘状态行（market/state，4 状态·状态机 + 判定依据） -->
-        <div id="market-state-line" style="font-size:14px;color:var(--text-primary);margin-bottom:var(--space-10);">加载中...</div>
-        <!-- 524 L2：市场宽度（market/breadth：涨跌家数 + MA20占比/涨停比例/换手分位） -->
-        <div style="font-weight:600;font-size:13px;margin-bottom:var(--space-6);">📊 市场宽度</div>
-        <div id="market-breadth-panel" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-10);">加载中...</div>
-        <!-- 524 L3：市场情绪温度计（market/emotion：六段论阶段 + 涨停生态指标） -->
-        <div style="font-weight:600;font-size:13px;margin-bottom:var(--space-6);">😊 市场情绪</div>
-        <div id="market-emotion-panel" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-10);">加载中...</div>
-        <!-- 524 L5：预警列表（骨架——规则批次4 落地：冰点/拥挤/宽度极端/状态切换） -->
-        <div style="font-weight:600;font-size:13px;margin-bottom:var(--space-6);">🔔 预警</div>
-        <div id="market-alert-list" style="font-size:14px;color:var(--text-muted);">暂无预警（规则批次4 落地）</div>
-      </div>
     </div>
 
   </main>
@@ -330,10 +446,11 @@ function applyEodStateNotes(dd){
   // 散点图说明（Part1：涨跌家数）
   var n1=document.getElementById('eod-state-note-1');
   if(n1){
-    var dUp=today.up_count-prev.up_count,dDown=today.down_count-prev.down_count;
+    var hasPrev=!!prev;
+    var dUp=hasPrev?(today.up_count-prev.up_count):null,dDown=hasPrev?(today.down_count-prev.down_count):null;
     var dUp5=today.up_count-aUp,dDown5=today.down_count-aDown;
     n1.innerHTML=dPref+'上涨 <span class="up">'+today.up_count+'</span> · 下跌 <span class="down">'+today.down_count+'</span> · 平 '+today.flat_count
-      +'｜较上一交易日：涨<span class="'+(dUp>=0?'up':'down')+'">'+(dUp>=0?'+':'')+dUp+'</span> · 跌<span class="'+(dDown>=0?'down':'up')+'">'+(dDown>=0?'+':'')+dDown+'</span>'
+      +(hasPrev?('｜较上一交易日：涨<span class="'+(dUp>=0?'up':'down')+'">'+(dUp>=0?'+':'')+dUp+'</span> · 跌<span class="'+(dDown>=0?'down':'up')+'">'+(dDown>=0?'+':'')+dDown+'</span>'):'')
       +'｜较近5日均：涨'+(dUp5>=0?'+':'')+dUp5+' · 跌'+(dDown5>=0?'+':'')+dDown5;
   }
   // 四象限说明（Part2：高开高收占比等）
@@ -345,11 +462,11 @@ function applyEodStateNotes(dd){
     var gdPct=(today.quad.gd/total*100).toFixed(1);
     var dgPct=(today.quad.dg/total*100).toFixed(1);
     var pT=prev?(prev.up_count+prev.down_count+prev.flat_count||1):1;
-    var pGg=prev?(prev.quad.gg/pT*100):0;
+    var pGg=(prev&&prev.quad)?(prev.quad.gg/pT*100):null;
     var aT=au+ad+af||1;
     var aGg=(agg.gg/aT*100);
     n2.innerHTML=dPref+'高开高收 <span class="up">'+ggPct+'%</span> · 高开低收 '+gdPct+'% · 低开高收 '+dgPct+'% · 低开低收 <span class="down">'+ddPct+'%</span>'
-      +'｜较上一交易日高开高收 '+(prev?((ggPct-pGg)>=0?'+':'')+(ggPct-pGg).toFixed(1)+'pp':'-')
+      +'｜较上一交易日高开高收 '+(pGg!=null?((ggPct-pGg)>=0?'+':'')+(ggPct-pGg).toFixed(1)+'pp':'-')
       +'｜较近5日均 '+(ggPct>=aGg?'+':'')+(ggPct-aGg).toFixed(1)+'pp';
   }
 }
@@ -613,8 +730,15 @@ function _cachedFetch(url,ttl){
   if(_apiCache[url]&&_apiCache[url].expires>now){
     return Promise.resolve(_apiCache[url].data);
   }
-  return fetch(url).then(function(r){return r.json();}).then(function(d){
-    _apiCache[url]={data:d,expires:now+ttl*1000};
+  return fetch(url).then(function(r){
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(function(d){
+    var now2=Date.now();
+    Object.keys(_apiCache).forEach(function(k){
+      if(_apiCache[k].expires<=now2)delete _apiCache[k];
+    });
+    _apiCache[url]={data:d,expires:now2+ttl*1000};
     return d;
   });
 }
@@ -630,6 +754,12 @@ function loadDashboardFull(){
       if(dd.sector_changes) renderSectorChart(dd.sector_changes);
       if(dd.sector_moneyflow) renderSectorMoneyflow(dd.sector_moneyflow);
       if(dd.daily_top_up) renderGainers(dd.daily_top_up.stocks||[]);
+      // 533 批次1：大盘总览（置顶面板）
+      if(dd.market_overview_panel) applyMarketOverviewPanel(dd.market_overview_panel);
+      // 533 批次2：涨停生态
+      if(dd.limit_ecology) applyLimitEcology(dd.limit_ecology);
+      // 533 批次3：5日行业资金×涨跌 + 30日ETF份额 + 30日融资
+      if(dd.market_flows_30d) applyMarketFlows(dd.market_flows_30d);
       // 524：大盘状态（L1）+ 市场宽度（L2）并入聚合载荷（Q6 全选）
       if(dd.market_state) applyMarketState(dd.market_state);
       if(dd.market_breadth) applyMarketBreadth(dd.market_breadth);
@@ -651,6 +781,9 @@ function loadDashboardFull(){
       loadSectorMoneyflow();
       loadTopGainers();
       loadEodScatter();
+      loadMarketOverviewPanel();
+      loadLimitEcology();
+      loadMarketFlows();
       loadMarketState();
       loadMarketBreadth();
       loadMarketEmotion();
@@ -716,6 +849,368 @@ function applyMarketBreadth(bd){
     +histTxt
     +'<div style="font-size:14px;color:var(--text-muted);margin-top:var(--space-6);">数据日 '+escapeHtml(bd.trade_date)+' · '+escapeHtml(bd.count)+' 只</div>';
   panel.innerHTML=html;
+}
+
+// 533 批次1：大盘总览（前一交易日日终锚定 + 涨跌平 + 近5日强弱家数）
+function applyMarketOverviewPanel(d){
+  if(!d||!d.breadth)return;
+  var b=d.breadth,p=d.prev_breadth||null;
+  var asof=document.getElementById('mkt-ov-asof');
+  if(asof)asof.textContent='数据截止 '+d.as_of+' 日终 · 全市场 '+b.count+' 只（含北交所）';
+  var sw=d.strong_weak_5d||{};
+  var strong=(sw.strong&&sw.strong.length)?sw.strong[sw.strong.length-1]:null;
+  var weak=(sw.weak&&sw.weak.length)?sw.weak[sw.weak.length-1]:null;
+  var delta=(p&&p.up_count!=null)?(b.up_count-p.up_count):null;
+  var kpi=document.getElementById('mkt-ov-kpi');
+  if(kpi){
+    var items=[
+      ['上涨',b.up_count,'up',delta==null?'占比 '+b.up_ratio+'%':'较上一交易日 '+(delta>=0?'+':'')+delta],
+      ['下跌',b.down_count,'down','占比 '+b.down_ratio+'%'],
+      ['平盘',b.flat_count,'','占比 '+b.flat_ratio+'%'],
+      ['≥+5%',strong,'up','该交易日'],
+      ['≤-5%',weak,'down','该交易日']
+    ];
+    kpi.innerHTML=items.map(function(it){
+      return '<div class="mkt-kpi-item"><div class="k">'+it[0]+'</div><div class="v '+(it[2]||'')+'">'
+        +escapeHtml(it[1]==null?'--':it[1])+'</div><div class="k">'+escapeHtml(it[3]||'')+'</div></div>';
+    }).join('');
+  }
+  var c=_chart('mkt-breadth-donut');
+  if(c){
+    c.setOption({
+      backgroundColor:'transparent',
+      title:{text:b.up_ratio+'%',subtext:'上涨占比',left:'center',top:'34%',
+        textStyle:{color:'#F8FAFC',fontSize:22,fontWeight:700},
+        subtextStyle:{color:'#94A3B8',fontSize:11}},
+      tooltip:{trigger:'item',formatter:'{b}: {c} 只 ({d}%)'},
+      legend:{bottom:0,left:'center',itemWidth:8,itemHeight:8,
+        textStyle:{color:'#94A3B8',fontSize:10}},
+      series:[{type:'pie',radius:['58%','78%'],center:['50%','44%'],
+        avoidLabelOverlap:true,label:{show:false},labelLine:{show:false},
+        data:[
+          {name:'上涨',value:b.up_count,itemStyle:{color:'#EF4444'}},
+          {name:'下跌',value:b.down_count,itemStyle:{color:'#22C55E'}},
+          {name:'平盘',value:b.flat_count,itemStyle:{color:'#64748B'}}
+        ]}]
+    });
+    if(charts.indexOf(c)<0)charts.push(c);
+  }
+  var note=document.getElementById('mkt-breadth-note');
+  if(note)note.innerHTML='上涨 <span class="up">'+escapeHtml(b.up_ratio)+'%</span> · 下跌 <span class="down">'+escapeHtml(b.down_ratio)+'%</span> · 平盘 '+escapeHtml(b.flat_ratio)+'%'
+    +(b.up_down_ratio!=null?' · 涨跌比 '+escapeHtml(b.up_down_ratio):'');
+  var c2=_chart('mkt-strongweak-chart');
+  if(c2&&sw.dates&&sw.dates.length){
+    c2.setOption({
+      backgroundColor:'transparent',
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'}},
+      legend:{top:0,right:0,itemWidth:8,itemHeight:8,textStyle:{color:'#94A3B8',fontSize:10}},
+      grid:{left:38,right:10,top:26,bottom:22},
+      xAxis:{type:'category',data:sw.dates.map(function(x){return String(x).slice(5);}),
+        axisLabel:{color:'#94A3B8',fontSize:10},axisTick:{show:false}},
+      yAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:10},
+        splitLine:{lineStyle:{color:'rgba(148,163,184,0.08)'}}},
+      series:[
+        {name:'≥+5%',type:'bar',data:sw.strong,barWidth:12,barGap:'-100%',
+         itemStyle:{color:'#EF4444'},label:{show:true,position:'top',color:'#FCA5A5',fontSize:9}},
+        {name:'≤-5%',type:'bar',data:(sw.weak||[]).map(function(v){return -v;}),
+         barWidth:12,itemStyle:{color:'#22C55E'},
+         label:{show:true,position:'bottom',color:'#86EFAC',fontSize:9,
+           formatter:function(p){return Math.abs(p.value);}}}
+      ]
+    });
+    if(charts.indexOf(c2)<0)charts.push(c2);
+  }
+  var note2=document.getElementById('mkt-strongweak-note');
+  if(note2&&sw.dates&&sw.strong&&sw.strong.length){
+    var s0=sw.strong[0],sN=sw.strong[sw.strong.length-1];
+    var w0=sw.weak[0],wN=sw.weak[sw.weak.length-1];
+    note2.innerHTML='<span class="up">≥+5%</span> '+s0+'→'+sN+'（'+(sN>s0?'扩张':(sN<s0?'收敛':'持平'))+'） · '
+      +'<span class="down">≤-5%</span> '+w0+'→'+wN+'（'+(wN>w0?'扩张':(wN<w0?'收敛':'持平'))+'）';
+  }
+}
+function loadMarketOverviewPanel(){
+  _cachedFetch(API+'/market/overview-panel',120)
+    .then(function(d){if(d&&d.success&&d.data)applyMarketOverviewPanel(d.data);})
+    .catch(function(e){console.warn('market/overview-panel 加载失败',e);});
+}
+
+function _mktChip(name, val, cls, sub){
+  return '<span class="mkt-chip '+(cls||'')+'"><span class="n">'+escapeHtml(name)+'</span>'
+    +(sub?'<span>'+escapeHtml(sub)+'</span>':'')
+    +'<span class="v">'+escapeHtml(val)+'</span></span>';
+}
+function _renderLimitIndustries(domId, industries, color){
+  var c=_chart(domId); if(!c)return;
+  var rows=(industries||[]).slice(0,6).slice().reverse();
+  c.setOption({
+    backgroundColor:'transparent',
+    tooltip:{trigger:'axis'},
+    grid:{left:54,right:22,top:4,bottom:4},
+    xAxis:{type:'value',show:false},
+    yAxis:{type:'category',data:rows.map(function(x){return x.industry;}),
+      axisLabel:{color:'#94A3B8',fontSize:9,width:50,overflow:'truncate'},
+      axisTick:{show:false},axisLine:{show:false}},
+    series:[{type:'bar',data:rows.map(function(x){return x.count;}),barWidth:8,
+      itemStyle:{color:color},label:{show:true,position:'right',color:'#CBD5E1',fontSize:9}}]
+  });
+  if(charts.indexOf(c)<0)charts.push(c);
+}
+function _renderLimitStocks(domId, stocks, cls){
+  var el=document.getElementById(domId); if(!el)return;
+  el.innerHTML=(stocks||[]).map(function(s){
+    var v=s.pct_chg==null?'--':((s.pct_chg>=0?'+':'')+s.pct_chg+'%');
+    var extra=(cls==='up'&&s.limit_times>1)?(' '+s.limit_times+'板'):'';
+    return _mktChip(s.name, v+extra, cls, s.industry);
+  }).join('')||'<span class="mkt-chip">无数据</span>';
+}
+// 533 批次2：涨停生态（涨跌停对比 + 行业个股 + 昨涨停今表现 + 连板 + 5日封板率）
+function applyLimitEcology(d){
+  if(!d)return;
+  var up=d.up||{},down=d.down||{};
+  var upN=document.getElementById('mkt-limit-up-count');
+  var downN=document.getElementById('mkt-limit-down-count');
+  if(upN)upN.textContent=up.count==null?'--':up.count;
+  if(downN)downN.textContent=down.count==null?'--':down.count;
+  var dt=document.getElementById('mkt-limit-detail-date');
+  if(dt)dt.textContent=d.as_of?('· '+d.as_of):'';
+  var bt=document.getElementById('mkt-limit-board-date');
+  if(bt)bt.textContent=d.prev_trade_date?('· 对比 '+d.prev_trade_date+' 涨停'):'';
+
+  var c=_chart('mkt-limit-compare-chart');
+  if(c){
+    c.setOption({
+      backgroundColor:'transparent',
+      tooltip:{trigger:'axis'},
+      grid:{left:8,right:32,top:4,bottom:4,containLabel:true},
+      xAxis:{type:'value',show:false},
+      yAxis:{type:'category',data:['跌停','涨停'],
+        axisLabel:{color:'#94A3B8',fontSize:10},axisTick:{show:false},axisLine:{show:false}},
+      series:[{type:'bar',barWidth:12,data:[
+        {value:down.count||0,itemStyle:{color:'#22C55E'}},
+        {value:up.count||0,itemStyle:{color:'#EF4444'}}
+      ],label:{show:true,position:'right',formatter:'{c} 只',color:'#CBD5E1',fontSize:10}}]
+    });
+    if(charts.indexOf(c)<0)charts.push(c);
+  }
+
+  var sw=d.sealing_5d||{};
+  var c2=_chart('mkt-sealing-chart');
+  if(c2&&sw.dates&&sw.rows){
+    c2.setOption({
+      backgroundColor:'transparent',
+      tooltip:{trigger:'axis'},
+      grid:{left:30,right:6,top:12,bottom:20},
+      xAxis:{type:'category',data:sw.dates.map(function(x){return String(x).slice(5);}),
+        axisLabel:{color:'#94A3B8',fontSize:9},axisTick:{show:false}},
+      yAxis:{type:'value',min:0,max:100,
+        axisLabel:{color:'#94A3B8',fontSize:9,formatter:'{value}%'},
+        splitLine:{lineStyle:{color:'rgba(148,163,184,0.08)'}}},
+      series:[{type:'bar',data:sw.rows.map(function(r){return r.rate;}),barWidth:12,
+        itemStyle:{color:'#F59E0B'},
+        label:{show:true,position:'top',color:'#FCD34D',fontSize:9,
+          formatter:function(p){return p.value==null?'--':p.value+'%';}}}]
+    });
+    if(charts.indexOf(c2)<0)charts.push(c2);
+  }
+
+  _renderLimitIndustries('mkt-limit-up-industry-chart', up.industries, '#EF4444');
+  _renderLimitIndustries('mkt-limit-down-industry-chart', down.industries, '#22C55E');
+  var upTotal=document.getElementById('mkt-up-industry-total');
+  var downTotal=document.getElementById('mkt-down-industry-total');
+  if(upTotal)upTotal.textContent=up.count==null?'--':up.count;
+  if(downTotal)downTotal.textContent=down.count==null?'--':down.count;
+  _renderLimitStocks('mkt-limit-up-stocks', (up.stocks||[]).slice(0,10), 'up');
+  _renderLimitStocks('mkt-limit-down-stocks', (down.stocks||[]).slice(0,10), 'down');
+
+  var p=d.prev_limit_up||{};
+  var note=document.getElementById('mkt-prev-limit-note');
+  if(note){
+    var _pdate=p.date?('<span style="color:var(--text-primary);font-weight:600;">'+escapeHtml(p.date)+'</span> '):'';
+    note.innerHTML=_pdate+'涨停 '+escapeHtml(p.total)+' 只 → '+escapeHtml(d.as_of||'')+' 仍涨 <span class="up">'
+      +escapeHtml(p.up_count)+'</span> 只（'+escapeHtml(p.win_rate==null?'--':p.win_rate)+'%），平均 '
+      +escapeHtml(p.avg_pct==null?'--':((p.avg_pct>=0?'+':'')+p.avg_pct))+'% · 跌 '
+      +escapeHtml(p.down_count)+' 只';
+  }
+  var c3=_chart('mkt-prev-limit-chart');
+  if(c3&&p.distribution){
+    c3.setOption({
+      backgroundColor:'transparent',
+      tooltip:{trigger:'axis'},
+      grid:{left:28,right:6,top:8,bottom:20},
+      xAxis:{type:'category',data:p.distribution.map(function(x){return x.label;}),
+        axisLabel:{color:'#94A3B8',fontSize:9},axisTick:{show:false}},
+      yAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:9},
+        splitLine:{lineStyle:{color:'rgba(148,163,184,0.08)'}}},
+      series:[{type:'bar',barWidth:14,
+        data:p.distribution.map(function(x,i){return {value:x.count,itemStyle:{color:i<2?'#22C55E':'#EF4444'}};}),
+        label:{show:true,position:'top',color:'#CBD5E1',fontSize:9}}]
+    });
+    if(charts.indexOf(c3)<0)charts.push(c3);
+  }
+  var pl=document.getElementById('mkt-prev-limit-list');
+  if(pl){
+    var ups=(p.stocks||[]).filter(function(s){return s.pct_chg!=null&&s.pct_chg>0;});
+    pl.innerHTML=ups.slice(0,20).map(function(s){
+      return _mktChip(s.name, (s.pct_chg>=0?'+':'')+s.pct_chg+'%', 'up', s.industry);
+    }).join('')+(ups.length>20?'<span class="mkt-chip">还有 '+(ups.length-20)+' 只</span>':'')
+      ||'<span class="mkt-chip">无上涨</span>';
+  }
+  var bd=d.boards||{};
+  var bl=document.getElementById('mkt-board-ladder');
+  if(bl){
+    bl.innerHTML=(bd.stocks||[]).slice(0,20).map(function(s){
+      return '<span class="mkt-chip board"><span class="n">'+escapeHtml(s.name)+'</span>'
+        +'<span>'+escapeHtml(s.industry)+'</span><span class="v">'+escapeHtml(s.limit_times)+'板</span></span>';
+    }).join('')||'<span class="mkt-chip">暂无≥2板</span>';
+  }
+}
+function loadLimitEcology(){
+  _cachedFetch(API+'/market/limit-ecology',120)
+    .then(function(d){if(d&&d.success&&d.data)applyLimitEcology(d.data);})
+    .catch(function(e){console.warn('market/limit-ecology 加载失败',e);});
+}
+
+function _mktFlowChip(x){
+  var v=x.net_inflow_5d,c=x.change_5d;
+  if(v==null||c==null)return _mktChip(x.industry,'--','');
+  var cls=v>=0?'up':'down';
+  var sign=v>=0?'+':'';
+  return _mktChip(x.industry, sign+v+'亿/'+(c>=0?'+':'')+c+'%', cls);
+}
+// 533 批次3：5日行业资金×涨跌 + 30日ETF份额 + 30日融资
+function applyMarketFlows(d){
+  if(!d)return;
+  var asof=d.as_of||'';
+  var f=d.industry_flow_5d||{};
+  var rows=f.industries||[];
+  var fdate=document.getElementById('mkt-sector-flow-date');
+  if(fdate)fdate.textContent=asof?('· '+asof):'';
+  var fnote=document.getElementById('mkt-sector-flow-note');
+  if(fnote){
+    var pos=rows.filter(function(x){return x.net_inflow_5d>0;}).length;
+    fnote.innerHTML='5日主力净流入=大单+特大单；5日涨跌=行业日均涨跌幅之和；'
+      +'<span class="up">净流入 '+pos+' 类</span> / 净流出 '+(rows.length-pos)+' 类；'
+      +'右上=流入且上涨，左下=流出且下跌';
+  }
+  var c=_chart('mkt-sector-flow-chart');
+  if(c&&rows.length){
+    c.setOption({
+      backgroundColor:'transparent',
+      grid:{left:52,right:26,top:22,bottom:34},
+      tooltip:{trigger:'item',formatter:function(p){
+        var v=p.value;return p.name+'<br/>5日净流入 '+v[0]+' 亿<br/>5日涨跌 '+v[1]+'%';
+      }},
+      xAxis:{type:'value',name:'5日净流入（亿）',nameTextStyle:{color:'#94A3B8',fontSize:10},
+        axisLabel:{color:'#94A3B8',fontSize:10},
+        splitLine:{lineStyle:{color:'rgba(148,163,184,0.08)'}}},
+      yAxis:{type:'value',name:'5日涨跌（%）',nameTextStyle:{color:'#94A3B8',fontSize:10},
+        axisLabel:{color:'#94A3B8',fontSize:10},
+        splitLine:{lineStyle:{color:'rgba(148,163,184,0.08)'}}},
+      series:[{type:'scatter',symbolSize:9,
+        label:{show:true,position:'right',fontSize:9,color:'#CBD5E1',
+          formatter:function(p){return p.name;}},
+        labelLayout:{hideOverlap:true},
+        data:rows.map(function(x){
+          var color=x.net_inflow_5d>=0
+            ?(x.change_5d>=0?'#EF4444':'#F59E0B')
+            :(x.change_5d>=0?'#3B82F6':'#22C55E');
+          return {name:x.industry,value:[x.net_inflow_5d,x.change_5d],
+            itemStyle:{color:color}};
+        }),
+        markLine:{silent:true,symbol:'none',
+          lineStyle:{color:'rgba(148,163,184,0.35)',type:'dashed'},
+          data:[{xAxis:0},{yAxis:0}]}
+      }]
+    });
+    if(charts.indexOf(c)<0)charts.push(c);
+  }
+  var fl=document.getElementById('mkt-sector-flow-list');
+  if(fl){
+    var sorted=rows.slice().sort(function(a,b){return b.net_inflow_5d-a.net_inflow_5d;});
+    var top=sorted.slice(0,8),bottom=sorted.slice(-8).reverse();
+    fl.innerHTML='<div style="width:100%;font-size:12px;color:var(--text-muted);">净流入 Top</div>'
+      +top.map(function(x){return _mktFlowChip(x);}).join('')
+      +'<div style="width:100%;font-size:12px;color:var(--text-muted);margin-top:4px;">净流出 Top</div>'
+      +bottom.map(function(x){return _mktFlowChip(x);}).join('');
+  }
+
+  var e=d.etf_30d||{};
+  var en=document.getElementById('mkt-etf-note');
+  if(en){
+    var latest=(e.net_share&&e.net_share.length)?e.net_share[e.net_share.length-1]:null;
+    var upDays=(e.net_share||[]).filter(function(v){return v>0;}).length;
+    en.innerHTML='截至 '+escapeHtml(asof)+' 的30日累计 <span class="'
+      +(e.cumulative_net_share>=0?'up':'down')+'">'
+      +(e.cumulative_net_share==null?'--':((e.cumulative_net_share>=0?'+':'')+e.cumulative_net_share))
+      +' 亿份</span> · '+upDays+'/'+(e.net_share?e.net_share.length:0)+' 天净申购'
+      +(latest==null?'':' · 末日 '+(latest>=0?'+':'')+latest+' 亿份');
+  }
+  var c2=_chart('mkt-etf-chart');
+  if(c2&&e.dates&&e.net_share){
+    c2.setOption({
+      backgroundColor:'transparent',
+      tooltip:{trigger:'axis'},
+      grid:{left:40,right:8,top:14,bottom:22},
+      xAxis:{type:'category',data:e.dates.map(function(x){return String(x).slice(5);}),
+        axisLabel:{color:'#94A3B8',fontSize:9},axisTick:{show:false}},
+      yAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:9},
+        splitLine:{lineStyle:{color:'rgba(148,163,184,0.08)'}}},
+      series:[{type:'bar',barWidth:6,data:e.net_share.map(function(v){
+        return {value:v,itemStyle:{color:v>=0?'#EF4444':'#22C55E'}};
+      })}]
+    });
+    if(charts.indexOf(c2)<0)charts.push(c2);
+  }
+  var et=document.getElementById('mkt-etf-top');
+  if(et){
+    et.innerHTML=(e.top_etfs||[]).map(function(x){
+      return _mktChip(x.name, (x.net_share>=0?'+':'')+x.net_share+'亿份',
+        x.net_share>=0?'up':'down');
+    }).join('')||'<span class="mkt-chip">无数据</span>';
+  }
+
+  var mg=d.margin_30d||{};
+  var mn=document.getElementById('mkt-margin-note');
+  if(mn&&mg.latest){
+    var lb=Number(mg.latest.margin_balance||0)/1e4;
+    var cum=mg.cumulative_net_buy;
+    mn.innerHTML='截至 '+escapeHtml(mg.latest.date)+'｜融资余额 <span class="v">'
+      +lb.toFixed(2)+' 万亿</span> · 融资买入 '+Number(mg.latest.margin_buy||0).toFixed(0)
+      +' 亿 · 融券余额 '+Number(mg.latest.short_balance||0).toFixed(0)
+      +' 亿 · 30日累计净买入 <span class="'+(cum>=0?'up':'down')+'">'
+      +(cum==null?'--':((cum>=0?'+':'')+cum))+' 亿</span>';
+  }
+  var c3=_chart('mkt-margin-chart');
+  if(c3&&mg.dates&&mg.margin_balance){
+    c3.setOption({
+      backgroundColor:'transparent',
+      tooltip:{trigger:'axis'},
+      legend:{top:0,right:0,itemWidth:8,itemHeight:8,textStyle:{color:'#94A3B8',fontSize:9}},
+      grid:{left:48,right:48,top:24,bottom:22},
+      xAxis:{type:'category',data:mg.dates.map(function(x){return String(x).slice(5);}),
+        axisLabel:{color:'#94A3B8',fontSize:9},axisTick:{show:false}},
+      yAxis:[
+        {type:'value',name:'余额(亿)',nameTextStyle:{color:'#94A3B8',fontSize:9},
+          axisLabel:{color:'#94A3B8',fontSize:9},
+          splitLine:{lineStyle:{color:'rgba(148,163,184,0.08)'}}},
+        {type:'value',name:'净买入(亿)',nameTextStyle:{color:'#94A3B8',fontSize:9},
+          axisLabel:{color:'#94A3B8',fontSize:9},splitLine:{show:false}}
+      ],
+      series:[
+        {name:'融资余额',type:'line',yAxisIndex:0,data:mg.margin_balance,
+          smooth:true,symbol:'none',lineStyle:{color:'#3B82F6',width:2}},
+        {name:'融资净买入',type:'bar',yAxisIndex:1,
+          data:(mg.net_buy||[]).map(function(v){return {value:v,itemStyle:{color:v>=0?'#EF4444':'#22C55E'}};}),
+          barWidth:6}
+      ]
+    });
+    if(charts.indexOf(c3)<0)charts.push(c3);
+  }
+}
+function loadMarketFlows(){
+  _cachedFetch(API+'/market/flows-30d',120)
+    .then(function(d){if(d&&d.success&&d.data)applyMarketFlows(d.data);})
+    .catch(function(e){console.warn('market/flows-30d 加载失败',e);});
 }
 
 function loadMarketState(){

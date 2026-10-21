@@ -35,11 +35,13 @@ class MarketSentimentService:
             data_manager = DataManager()
         self.data_manager = data_manager
 
-    def get_sentiment_phase(self, trade_date: str = None) -> Dict:
+    def get_sentiment_phase(self, trade_date: str = None, metrics_override: Dict = None) -> Dict:
         """获取当前市场情绪阶段（六段论）
 
         Args:
             trade_date: 交易日期 YYYYMMDD，默认今天
+            metrics_override: 535 P1：可选，使用外部权威涨停生态指标
+                （limit_detail_cache U/Z）覆盖 sentiment_pool 聚合结果。
 
         Returns:
             {
@@ -52,6 +54,22 @@ class MarketSentimentService:
         if not trade_date:
             trade_date = datetime.now().strftime('%Y%m%d')
 
+        if metrics_override is not None:
+            metrics = {
+                'limit_up_count': int(metrics_override.get('limit_up_count') or 0),
+                'limit_down_count': int(metrics_override.get('limit_down_count') or 0),
+                'max_board_height': int(metrics_override.get('max_board_height') or 0),
+                'sealing_rate': float(metrics_override.get('sealing_rate') or 0.0),
+                'up_down_ratio': round(float(metrics_override.get('up_down_ratio') or 0.0), 2),
+            }
+            phase = self._classify_phase(metrics)
+            return {
+                'phase': phase,
+                'phase_label': self.PHASE_LABELS.get(phase, '情绪中性'),
+                'metrics': metrics,
+                'data_available': True,
+            }
+
         df = self.data_manager.get_cached_sentiment_pool(trade_date)
 
         if df is None or df.empty:
@@ -61,7 +79,6 @@ class MarketSentimentService:
                 'metrics': {},
                 'data_available': False,
             }
-
 
         # 涨停/跌停分类
         up_df = df[df['limit_type'] == 'up']
@@ -94,25 +111,7 @@ class MarketSentimentService:
             'up_down_ratio': up_down_ratio,
         }
 
-        # 六段论映射（365号批次B升级：ice/sprout/ferment/climax/ebb/regression）
-        if limit_up_count < 20 and max_board_height < 3 and sealing_rate < 40:
-            phase = 'ice'
-        elif limit_up_count < 40 and max_board_height <= 2 and sealing_rate < 50:
-            phase = 'sprout'
-        elif limit_up_count >= 40 and limit_up_count <= 80 and max_board_height >= 3 and sealing_rate >= 40:
-            phase = 'ferment'
-        elif limit_up_count > 80 and sealing_rate > 75:
-            phase = 'climax'
-        elif (
-            (max_board_height >= 3 and sealing_rate < 50)
-            or (sealing_rate < 40 and limit_up_count < 40)
-        ):
-            phase = 'ebb'
-        elif limit_up_count >= 20 and limit_up_count <= 60 and max_board_height <= 2:
-            phase = 'regression'
-        else:
-            phase = 'ferment'  # 默认归入发酵期
-
+        phase = self._classify_phase(metrics)
         phase_label = self.PHASE_LABELS.get(phase, '情绪中性')
 
         return {
@@ -121,6 +120,27 @@ class MarketSentimentService:
             'metrics': metrics,
             'data_available': True,
         }
+
+    @staticmethod
+    def _classify_phase(metrics: Dict) -> str:
+        """六段论映射（365号批次B阈值，535 提取为可复用）。"""
+        limit_up_count = int(metrics.get('limit_up_count') or 0)
+        max_board_height = int(metrics.get('max_board_height') or 0)
+        sealing_rate = float(metrics.get('sealing_rate') or 0.0)
+        if limit_up_count < 20 and max_board_height < 3 and sealing_rate < 40:
+            return 'ice'
+        if limit_up_count < 40 and max_board_height <= 2 and sealing_rate < 50:
+            return 'sprout'
+        if 40 <= limit_up_count <= 80 and max_board_height >= 3 and sealing_rate >= 40:
+            return 'ferment'
+        if limit_up_count > 80 and sealing_rate > 75:
+            return 'climax'
+        if ((max_board_height >= 3 and sealing_rate < 50)
+                or (sealing_rate < 40 and limit_up_count < 40)):
+            return 'ebb'
+        if 20 <= limit_up_count <= 60 and max_board_height <= 2:
+            return 'regression'
+        return 'ferment'
 
     def _estimate_daily_sealing_rate(self, trade_date: str = None) -> float:
         """基于 daily_cache 的日频封板率近似值（备用，不阻塞主流程）"""

@@ -89,6 +89,7 @@ class _FakeECM8:
 def test_market_breadth_exposes_history():
     svc = DashboardService()
     svc._data_manager = type('_DM', (), {'cache': _FakeECM8()})()
+    svc._get_best_trade_date = lambda before=None, min_stocks=1000: '2026-10-16'
     res = svc.get_market_breadth()
     assert res is not None
     assert 'history' in res

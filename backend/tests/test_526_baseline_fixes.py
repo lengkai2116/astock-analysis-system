@@ -122,7 +122,9 @@ def test_b7_dashboard_full_empty_collection_returns_none(monkeypatch):
     for name in ('get_index_summary', 'get_market_volume', 'get_moneyflow_summary',
                  'get_sector_changes', 'get_sector_moneyflow', 'get_daily_top',
                  'get_market_breadth', 'get_market_state', 'get_market_emotion',
-                 'get_sector_heat', 'get_market_alerts'):
+                 'get_sector_heat', 'get_market_alerts',
+                 'get_market_overview_panel', 'get_limit_ecology',
+                 'get_market_flows_30d'):
         monkeypatch.setattr(svc, name, lambda *a, **k: None)
     assert svc.get_dashboard_full() is None
 

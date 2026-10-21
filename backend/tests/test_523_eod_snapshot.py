@@ -58,6 +58,9 @@ def _basic_df():
 def _svc():
     svc = DashboardService()
     svc._data_manager = _FakeDM(_daily_df(), _basic_df())
+    # 534：get_eod_snapshot 改为 _get_best_trade_date(before=today) 锚定，
+    # 该测试桩固定上一完整交易日 2026-10-16。
+    svc._get_best_trade_date = lambda before=None, min_stocks=1000: '2026-10-16'
     return svc
 
 
