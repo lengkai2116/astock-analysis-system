@@ -65,7 +65,7 @@ def test_notes_inject_module_trade_date():
     assert 'var dLabel=last.trade_date||last.date' in html
     # 资金流向：moneyflow-summary 末条 date
     assert 'var dLabel=(md.days[md.days.length-1]||{}).date' in html
-    # 板块涨跌幅：sector-sector 的 date
-    assert "var dLabel=sd.date?sd.date+'｜'" in html
+    # 板块涨跌幅：sector-sector 的 date + 申万一级口径
+    assert "sd.date?('申万一级 31 类 · 固定 '+sd.date" in html
     # 板块净流入：window_5d 末日
     assert 'var dCut=w5.length?w5[w5.length-1]' in html

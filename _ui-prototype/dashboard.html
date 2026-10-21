@@ -149,6 +149,7 @@ body { overflow-x:hidden; }
     <div class="chart-card" style="margin-bottom:var(--space-20);">
       <div class="chart-title">🔥 板块热度 · 五维 <span id="sector-heat-date" style="font-size:14px;color:var(--text-muted);"></span></div>
       <div style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-8);line-height:1.6;">口径：相对强弱 25 + 资金 30 + 内部广度 25 + 情绪（反向）20，量价 ±10 修正；综合质量分 0~100。行业口径为申万一级 31 类。旧资金热度榜仅在新接口未就绪时回退显示。</div>
+      <div id="sector-heat-stage-note" style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-8);line-height:1.6;">阶段说明：主线＝趋势与资金共振；脉冲＝短期快速走强、中期趋势未确认；过热＝涨停/炸板/成交额拥挤，注意回撤；冷门＝低位缩量但有资金潜伏；中性＝暂无明显特征。「主力5日」＝大单+特大单净流入。</div>
       <div id="sector-heat-fallback" style="display:none;font-size:14px;color:#F59E0B;margin-bottom:var(--space-6);"></div>
       <div id="sector-heat-panel" style="font-size:12px;color:var(--text-secondary);">加载中...</div>
     </div>
@@ -156,7 +157,7 @@ body { overflow-x:hidden; }
     <!-- 行业板块涨跌幅 | 涨幅前十 / 跌幅前十 -->
     <div class="grid-2" style="margin-bottom:var(--space-24);">
       <div class="chart-card">
-        <div class="chart-title">🏭 行业板块涨跌幅</div>
+        <div class="chart-title">🏭 行业板块涨跌幅（申万一级）</div>
         <!-- 528 批次2：板块连续涨/跌 + 近5日累积涨跌说明（后端 streaks：daily_cache 多日按行业聚合） -->
         <div id="sector-change-note" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
         <div id="chart-sector" class="chart-box" style="height:320px;"></div>
@@ -799,6 +800,10 @@ function _shStageMeta(s){
   var m={mainline:['主线','#EF4444'],pulse:['脉冲','#F59E0B'],overheat:['过热','#DC2626'],cold:['冷门','#3B82F6'],neutral:['中性','#94A3B8']};
   return m[s]||m.neutral;
 }
+function _shStageDesc(s){
+  var m={mainline:'主线：趋势与资金共振（相对强弱高、资金净流入、广度健康）',pulse:'脉冲：短期快速走强，中期趋势尚未确认',overheat:'过热：涨停/炸板/成交额拥挤，注意回撤风险',cold:'冷门：低位缩量但有资金潜伏',neutral:'中性：暂无明显特征'};
+  return m[s]||m.neutral;
+}
 function _shFlagLabel(f){
   var m={overheat:'过热',breadth_divergence:'广度背离',etf_coverage_low:'ETF覆盖低',northbound_off:'北向关闭',missing_dim:'维度缺失'};
   return m[f]||f;
@@ -864,7 +869,7 @@ function _shRowHtml(s,grid){
   else{var dd=s.prev_rank-s.rank;if(dd>0)mv='<span class="up" style="font-size:11px;margin-left:4px;">↑'+dd+'</span>';else if(dd<0)mv='<span class="down" style="font-size:11px;margin-left:4px;">↓'+(-dd)+'</span>';}
   var row='<div style="display:grid;grid-template-columns:'+grid+';gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid rgba(148,163,184,0.08);cursor:pointer;" onclick="toggleSectorHeatDetail(\''+escapeHtml(s.industry)+'\')">'
     +'<span style="color:var(--text-muted);">'+escapeHtml(s.rank)+'</span>'
-    +'<span>'+escapeHtml(s.industry)+mv+' <span style="font-size:11px;color:'+st[1]+';border:1px solid '+st[1]+';border-radius:3px;padding:0 4px;">'+st[0]+'</span></span>'
+    +'<span>'+escapeHtml(s.industry)+mv+' <span title="'+escapeHtml(_shStageDesc(s.stage))+'" style="font-size:11px;color:'+st[1]+';border:1px solid '+st[1]+';border-radius:3px;padding:0 4px;">'+st[0]+'</span></span>'
     +qbar
     +'<span style="display:flex;gap:3px;">'+dims+'</span>'
     +'<span style="color:var(--text-muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escapeHtml(ev)+'">'+escapeHtml(ev)+'</span>'
@@ -1123,6 +1128,10 @@ function renderMoneyflow(md){
 
 function renderSectorChart(sd){
   if(!sd)return;
+  // 相同数据不重绘：仪表盘 30s 刷新会重复 setOption，ECharts 动画会被误看成数据变化
+  var sig=JSON.stringify({date:sd.date,gainers:sd.gainers,losers:sd.losers,history:sd.history_5d,streaks:sd.streaks});
+  if(sig===_sectorChartSig)return;
+  _sectorChartSig=sig;
   // 528 批次2：板块连续涨/跌 + 近5日累积涨跌说明（后端 streaks：daily_cache 多日按行业聚合）
   var streakEl=document.getElementById('sector-change-note');
   if(streakEl){
@@ -1134,7 +1143,7 @@ function renderSectorChart(sd){
     (sk.down||[]).slice(0,3).forEach(function(s){
       parts.push('<span class="down">'+escapeHtml(s.industry)+' 连跌'+s.days+'日 · 近5日'+(s.cum_5d>=0?'+':'')+s.cum_5d+'%</span>');
     });
-    var dLabel=sd.date?sd.date+'｜':'';
+    var dLabel=sd.date?('申万一级 31 类 · 固定 '+sd.date+'｜'):'申万一级 31 类｜';
     streakEl.innerHTML=parts.length?(dLabel+'连续涨跌（近5日累积）：'+parts.join(' · ')):(dLabel+'连续涨跌数据暂缺');
   }
   var inArr=(sd.gainers||[]).slice(0,5);
@@ -1155,6 +1164,7 @@ function renderSectorChart(sd){
 // 530号 第二轮：近20日板块涨跌「行列表格」——每行＝行业名 + 该行业20日折线小图
 // 531：近5日板块涨跌走势——每行行业名 + 5日折线 + 文字总结（申万一级）
 var _sectorHistoryAll=false;
+var _sectorChartSig='';
 var _HIST_COLORS=['#60A5FA','#F87171','#34D399','#FBBF24','#A78BFA','#22D3EE','#F472B6','#4ADE80','#FCA5A5','#93C5FD'];
 function renderSectorHistory20d(sd){
   var h=sd&&(sd.history_5d||sd.history_20d);

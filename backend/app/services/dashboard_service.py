@@ -622,23 +622,33 @@ class DashboardService:
     # ──────────────────────────────────────────────
     # 5. 板块涨跌幅（sector-sector）
     # ──────────────────────────────────────────────
-    def get_sector_changes(self, top_n: int = 8) -> Optional[Dict]:
-        """行业板块涨跌幅 — AKShare 实时优先，降级 DB daily_data 聚合
+    def get_sector_changes(self, top_n: int = 8,
+                           use_intraday: bool = False) -> Optional[Dict]:
+        """行业板块涨跌幅 — 默认固定上一完整交易日，降级 DB daily_data 聚合。
 
+        2026-10-21 目检拍板：默认 use_intraday=False，避免盘中板块快照
+        （东方财富细分行业，5min 刷新）导致横轴分类漂移；仅显式传 True 时
+        才走 AKShare 盘中快照。
         528 号 批次2：取数改全量（原 `get_sector_rankings()` 默认 top_n=20，
         DB 回退 `ORDER BY change_pct DESC LIMIT 20` 前 20 全为正涨幅 → losers 恒空，
         跌幅 TOP5 缺失的根因）——改传 top_n=None 取全行业，双侧分别取 top5。
         """
+        # 固定上一工作日（today 之前最近完整交易日），避免收盘入库后切日
+        today = datetime.now().strftime('%Y-%m-%d')
+        as_of = self._get_best_trade_date(before=today)
         # 528 号 批次2：板块连续涨/跌 + 近5日累积涨跌（daily_cache 多日按行业聚合）
-        streaks = self._get_sector_streaks()
+        streaks = self._get_sector_streaks(as_of=as_of)
         # 530号 批次3：板块近20日每日平均涨跌幅序列（近20日板块涨跌折线数据源）
         # 531 号：由 20 日序列派生近 5 日序列 + 每行文字总结（不新增 DB 查询）
-        history_20d = self._get_sector_history_20d()
+        history_20d = self._get_sector_history_20d(as_of=as_of)
         history_5d = self._build_sector_history_5d(history_20d)
         # 1. 尝试 AkshareDataReader 读取
         try:
-            from app.data.akshare_reader import reader
-            rankings = reader.get_sector_rankings(top_n=None)
+            if not use_intraday:
+                rankings = []
+            else:
+                from app.data.akshare_reader import reader
+                rankings = reader.get_sector_rankings(top_n=None)
             if rankings and len(rankings) >= top_n:
                 all_sectors = []
                 for s in rankings:
@@ -678,11 +688,10 @@ class DashboardService:
             from app.models import Stock
 
             ecm = self.data_manager.cache
-            # 取最近数据充足的交易日
-            best_date = self._get_best_trade_date()
-            if not best_date:
-                raise ValueError("无不含日线数据")
-            last_date = best_date
+            # 固定上一工作日（today 之前最近完整交易日），避免收盘入库后切日
+            last_date = as_of
+            if not last_date:
+                raise ValueError("无上一交易日数据")
             date_label = str(last_date)
 
             # 取该日全市场 pct_chg + ts_code
@@ -694,26 +703,35 @@ class DashboardService:
                 logger.error("板块涨跌幅 DuckDB: 当日无数据")
                 raise ValueError("DuckDB daily_cache 当日无数据，走 Tushare 降级")
 
-            # 补齐行业信息（从 PG Stock 表），两步法
+            # 531/530 口径：优先申万一级 31 类（与净流入/热度/近5日走势一致）；
+            # 原 Stock.industry 为东财二级 110 类，小样本行业会产生 -6% 级极端值。
             ts_codes = all_df['ts_code'].unique().tolist()
             industry_map = {}
             try:
-                for s in Stock.query.filter(Stock.ts_code.in_(ts_codes)).all():
-                    if s.industry:
-                        industry_map[s.ts_code] = s.industry
+                from app.data.sw_industry_map import get_sw_industry_map, normalize_code
+                sw_map = get_sw_industry_map(ecm)
+                industry_map = {c: sw_map.get(normalize_code(c)) for c in ts_codes}
+                industry_map = {k: v for k, v in industry_map.items() if v}
             except Exception:
-                pass
-            # ponytail: Stock 行业表为空时从 DataManager 获取一次（全局数据体系 §2.4 例外）
+                industry_map = {}
+            # 申万映射不可用时回退 Stock.industry（110 类）
             if len(industry_map) < 10:
                 try:
-                    if self.data_manager:
-                        basic = self.data_manager.get_stock_list()
-                        if basic:
-                            for r in basic:
-                                if r.get('industry'):
-                                    industry_map[r.get('ts_code', '')] = r['industry']
+                    for s in Stock.query.filter(Stock.ts_code.in_(ts_codes)).all():
+                        if s.industry:
+                            industry_map[s.ts_code] = s.industry
                 except Exception:
                     pass
+                if len(industry_map) < 10:
+                    try:
+                        if self.data_manager:
+                            basic = self.data_manager.get_stock_list()
+                            if basic:
+                                for r in basic:
+                                    if r.get('industry'):
+                                        industry_map[r.get('ts_code', '')] = r['industry']
+                    except Exception:
+                        pass
             # 前两条路都失败时，返回现有数据（不再降级到 Tushare — 260 §11 V2 修复）
             if len(industry_map) < 10:
                 logger.info(f"行业映射不完整 ({len(industry_map)} 条)，使用现有数据")
@@ -760,7 +778,8 @@ class DashboardService:
         logger.error("板块涨跌幅: 所有数据源不可用")
         return None
 
-    def _get_sector_streaks(self, days: int = 6, min_streak: int = 2) -> Dict:
+    def _get_sector_streaks(self, days: int = 6, min_streak: int = 2,
+                            as_of: Optional[str] = None) -> Dict:
         """板块连续涨/跌 + 近5日累积涨跌（528 号 批次2）。
 
         数据源：daily_cache 多日按行业聚合（DuckDB）→ 每行业近 days 个交易日
@@ -770,10 +789,17 @@ class DashboardService:
         """
         try:
             ecm = self.data_manager.cache
-            dates_df = ecm._query_shard(
-                'daily_cache',
-                "SELECT DISTINCT trade_date FROM daily_cache "
-                "ORDER BY trade_date DESC LIMIT ?", [days])
+            if as_of:
+                dates_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT DISTINCT trade_date FROM daily_cache "
+                    "WHERE trade_date <= ? ORDER BY trade_date DESC LIMIT ?",
+                    [str(as_of), days])
+            else:
+                dates_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT DISTINCT trade_date FROM daily_cache "
+                    "ORDER BY trade_date DESC LIMIT ?", [days])
             if dates_df is None or dates_df.empty:
                 return {'up': [], 'down': []}
             dates = sorted(str(d) for d in dates_df['trade_date'].tolist())
@@ -787,20 +813,28 @@ class DashboardService:
             if all_df is None or all_df.empty:
                 return {'up': [], 'down': []}
 
-            from app import db as _flask_db
-            from app.models import Stock
             ts_codes = all_df['ts_code'].unique().tolist()
             industry_map = {}
             try:
-                # 对齐 get_sector_moneyflow 的 db.session.query 模式（可测性一致，
-                # Stock.query 描述符在无 app context 时触发 session 绑定）
-                for s in _flask_db.session.query(
-                        Stock.ts_code, Stock.industry).filter(
-                        Stock.ts_code.in_(ts_codes)).all():
-                    if s.industry:
-                        industry_map[s.ts_code] = s.industry
+                from app.data.sw_industry_map import get_sw_industry_map, normalize_code
+                sw_map = get_sw_industry_map(ecm)
+                industry_map = {c: sw_map.get(normalize_code(c)) for c in ts_codes}
+                industry_map = {k: v for k, v in industry_map.items() if v}
             except Exception:
-                pass
+                industry_map = {}
+            if len(industry_map) < 10:
+                from app import db as _flask_db
+                from app.models import Stock
+                try:
+                    # 对齐 get_sector_moneyflow 的 db.session.query 模式（可测性一致，
+                    # Stock.query 描述符在无 app context 时触发 session 绑定）
+                    for s in _flask_db.session.query(
+                            Stock.ts_code, Stock.industry).filter(
+                            Stock.ts_code.in_(ts_codes)).all():
+                        if s.industry:
+                            industry_map[s.ts_code] = s.industry
+                except Exception:
+                    pass
             if len(industry_map) < 10:
                 return {'up': [], 'down': []}
 
@@ -840,7 +874,8 @@ class DashboardService:
             logger.warning(f"板块连续涨跌聚合失败: {e}")
             return {'up': [], 'down': []}
 
-    def _get_sector_history_20d(self, days: int = 20) -> Dict:
+    def _get_sector_history_20d(self, days: int = 20,
+                               as_of: Optional[str] = None) -> Dict:
         """板块近 N 日每日平均涨跌幅序列（530号 批次3/第二轮：近20日板块涨跌折线数据源）。
 
         数据源：daily_cache 近 days 个交易日按**申万一级 31 类**聚合日均 pct_chg
@@ -850,10 +885,17 @@ class DashboardService:
         """
         try:
             ecm = self.data_manager.cache
-            dates_df = ecm._query_shard(
-                'daily_cache',
-                "SELECT DISTINCT trade_date FROM daily_cache "
-                "ORDER BY trade_date DESC LIMIT ?", [days])
+            if as_of:
+                dates_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT DISTINCT trade_date FROM daily_cache "
+                    "WHERE trade_date <= ? ORDER BY trade_date DESC LIMIT ?",
+                    [str(as_of), days])
+            else:
+                dates_df = ecm._query_shard(
+                    'daily_cache',
+                    "SELECT DISTINCT trade_date FROM daily_cache "
+                    "ORDER BY trade_date DESC LIMIT ?", [days])
             if dates_df is None or dates_df.empty:
                 return {}
             dates = sorted(str(d) for d in dates_df['trade_date'].tolist())
@@ -1830,21 +1872,29 @@ class DashboardService:
             return (today - timedelta(days=2)).strftime('%Y%m%d')
         return today.strftime('%Y%m%d')
 
-    def _get_best_trade_date(self, min_stocks: int = 1000) -> Optional[str]:
-        """获取最近且数据充足的交易日（避免当日数据未同步时取到残缺日期）"""
-        try:
-            import pandas as pd
+    def _get_best_trade_date(self, min_stocks: int = 1000,
+                             before: Optional[str] = None) -> Optional[str]:
+        """获取最近且数据充足的交易日。
 
+        before 指定上界（不含），用于“固定上一工作日”：传 today 可排除
+        当日盘中/收盘逐步入库的数据，避免数据日中途切换。
+        """
+        try:
             ecm = self.data_manager.cache
-            df = ecm._query_shard(
-                'daily_cache',
-                "SELECT trade_date, COUNT(*) as cnt FROM daily_cache "
-                "GROUP BY trade_date HAVING cnt >= ? ORDER BY trade_date DESC LIMIT 1",
-                [min_stocks])
+            sql = "SELECT trade_date, COUNT(*) as cnt FROM daily_cache "
+            params: list = []
+            if before:
+                sql += "WHERE trade_date < ? "
+                params.append(str(before))
+            sql += "GROUP BY trade_date HAVING cnt >= ? ORDER BY trade_date DESC LIMIT 1"
+            params.append(min_stocks)
+            df = ecm._query_shard('daily_cache', sql, params)
             if not df.empty:
                 return str(df['trade_date'].iloc[0])
         except Exception:
             pass
+        if before:
+            return None
         return self._try_get_latest_trade_date()
 
     def _try_get_index_daily(self, ts_code: str) -> Optional[List]:

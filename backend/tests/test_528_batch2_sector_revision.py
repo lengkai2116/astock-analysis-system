@@ -36,8 +36,10 @@ def test_sector_changes_losers_not_empty_when_full_fetch(monkeypatch):
     monkeypatch.setattr(
         'app.data.akshare_reader.reader', _FakeReader(rankings))
     svc = DashboardService()
-    svc._get_sector_streaks = lambda: {'up': [], 'down': []}
-    res = svc.get_sector_changes()
+    svc._get_best_trade_date = lambda **kwargs: '2026-10-20'
+    svc._get_sector_streaks = lambda **kwargs: {'up': [], 'down': []}
+    svc._get_sector_history_20d = lambda **kwargs: {}
+    res = svc.get_sector_changes(use_intraday=True)
     assert res is not None
     assert len(res['gainers']) == 5
     assert len(res['losers']) == 5
