@@ -88,17 +88,17 @@ body { overflow-x:hidden; }
     <!-- 四大指数卡片 -->
     <!-- 527 批次1：每指数卡加「近5日/近20日」多日趋势角标（mini_kline 20日自算） -->
     <div class="index-grid" id="index-grid">
-      <div class="index-card" data-index="000001.SH"><div class="top"><span class="name">上证指数</span><span style="font-size:11px;color:var(--text-muted);">000001.SH</span></div><div class="value" id="idx-val-0">--</div><div class="change" id="idx-chg-0"></div><div id="mini-0" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-0" style="font-size:11px;color:var(--text-muted);text-align:center;">--</div></div>
-      <div class="index-card" data-index="399001.SZ"><div class="top"><span class="name">深证成指</span><span style="font-size:11px;color:var(--text-muted);">399001.SZ</span></div><div class="value" id="idx-val-1">--</div><div class="change" id="idx-chg-1"></div><div id="mini-1" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-1" style="font-size:11px;color:var(--text-muted);text-align:center;">--</div></div>
-      <div class="index-card" data-index="899050.BJ"><div class="top"><span class="name">北证50</span><span style="font-size:11px;color:var(--text-muted);">899050.BJ</span></div><div class="value" id="idx-val-2">--</div><div class="change" id="idx-chg-2"></div><div id="mini-2" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-2" style="font-size:11px;color:var(--text-muted);text-align:center;">--</div></div>
-      <div class="index-card" data-index="399006.SZ"><div class="top"><span class="name">创业板指</span><span style="font-size:11px;color:var(--text-muted);">399006.SZ</span></div><div class="value" id="idx-val-3">--</div><div class="change" id="idx-chg-3"></div><div id="mini-3" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-3" style="font-size:11px;color:var(--text-muted);text-align:center;">--</div></div>
+      <div class="index-card" data-index="000001.SH"><div class="top"><span class="name">上证指数</span><span style="font-size:11px;color:var(--text-muted);">000001.SH</span></div><div class="value" id="idx-val-0">--</div><div class="change" id="idx-chg-0"></div><div id="mini-0" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-0" style="font-size:14px;color:var(--text-muted);text-align:center;">--</div></div>
+      <div class="index-card" data-index="399001.SZ"><div class="top"><span class="name">深证成指</span><span style="font-size:11px;color:var(--text-muted);">399001.SZ</span></div><div class="value" id="idx-val-1">--</div><div class="change" id="idx-chg-1"></div><div id="mini-1" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-1" style="font-size:14px;color:var(--text-muted);text-align:center;">--</div></div>
+      <div class="index-card" data-index="899050.BJ"><div class="top"><span class="name">北证50</span><span style="font-size:11px;color:var(--text-muted);">899050.BJ</span></div><div class="value" id="idx-val-2">--</div><div class="change" id="idx-chg-2"></div><div id="mini-2" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-2" style="font-size:14px;color:var(--text-muted);text-align:center;">--</div></div>
+      <div class="index-card" data-index="399006.SZ"><div class="top"><span class="name">创业板指</span><span style="font-size:11px;color:var(--text-muted);">399006.SZ</span></div><div class="value" id="idx-val-3">--</div><div class="change" id="idx-chg-3"></div><div id="mini-3" class="index-mini-chart"></div><div class="idx-trend" id="idx-trend-3" style="font-size:14px;color:var(--text-muted);text-align:center;">--</div></div>
     </div>
 
     <!-- 四大指数合计成交额（含指数成分重叠）（近20日） -->
     <div class="chart-card" style="margin-bottom:var(--space-20);">
       <div class="chart-title">📊 四大指数合计成交额（含指数成分重叠）（近20日）</div>
       <!-- 527 批次1：成交额「当日 vs 近5日均值 + 量能趋势」一句话说明 -->
-      <div id="volume-trend-note" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
+      <div id="volume-trend-note" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
       <div id="volume-chart" style="height:260px;"></div>
     </div>
 
@@ -106,24 +106,24 @@ body { overflow-x:hidden; }
     <div class="chart-card" style="margin-bottom:var(--space-20);">
       <div class="chart-title">📈 全市场资金流向趋势（近20日）</div>
       <!-- 527 批次1：资金流向「连续N日净流入/流出 + 近20日累计方向」一句话说明 -->
-      <div id="moneyflow-trend-note" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
+      <div id="moneyflow-trend-note" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
       <div id="chart-fund-flow" class="chart-box"></div>
     </div>
 
     <!-- 523：全市场日终散点（体量×涨跌 + 开高低收四象限） -->
     <div class="grid-2" style="margin-bottom:var(--space-20);">
       <div class="chart-card">
-        <div class="chart-title">📊 全市场日终散点 · 流通市值 × 涨跌幅 <span id="eod-scatter-date-1" style="font-size:12px;color:var(--text-muted);"></span></div>
-        <!-- 530 批次1：散点图状态结果说明（较昨日+较5日均；applyEodStateNotes 动态填充） -->
-        <div id="eod-state-note-1" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-4);line-height:1.6;">加载中...</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-6);">X = 流通市值（对数刻度）· Y = 当日涨跌幅 · 每点＝一只个股（红涨绿跌）</div>
+        <div class="chart-title">📊 全市场日终散点 · 流通市值 × 涨跌幅 <span id="eod-scatter-date-1" style="font-size:14px;color:var(--text-muted);"></span></div>
+        <!-- 530 批次1：散点图状态结果说明（较上一交易日+较5日均；applyEodStateNotes 动态填充） -->
+        <div id="eod-state-note-1" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-4);line-height:1.6;">加载中...</div>
+        <div style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-6);">X = 流通市值（对数刻度）· Y = 该交易日涨跌幅 · 每点＝一只个股（红涨绿跌）</div>
         <div id="chart-eod-scatter-1" style="height:320px;"></div>
       </div>
       <div class="chart-card">
-        <div class="chart-title">🎯 开盘收盘对比四象限 <span id="eod-quad-note" style="font-size:11px;color:var(--text-muted);"></span></div>
-        <!-- 530 批次1：四象限状态结果说明（较昨日+较5日均；applyEodStateNotes 动态填充） -->
-        <div id="eod-state-note-2" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-4);line-height:1.6;">加载中...</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-6);">X = 开盘相对昨收（高开/低开）% · Y = 收盘相对开盘（高收/低收）% · 四象限＝开盘×收盘强弱组合</div>
+        <div class="chart-title">🎯 开盘收盘对比四象限 <span id="eod-quad-note" style="font-size:14px;color:var(--text-muted);"></span></div>
+        <!-- 530 批次1：四象限状态结果说明（较上一交易日+较5日均；applyEodStateNotes 动态填充） -->
+        <div id="eod-state-note-2" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-4);line-height:1.6;">加载中...</div>
+        <div style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-6);">X = 开盘相对昨收（高开/低开）% · Y = 收盘相对开盘（高收/低收）% · 四象限＝开盘×收盘强弱组合</div>
         <div id="chart-eod-scatter-2" style="height:320px;"></div>
       </div>
     </div>
@@ -134,7 +134,7 @@ body { overflow-x:hidden; }
       <div class="rank-table">
         <div style="font-weight:600;font-size:14px;margin-bottom:var(--space-10);">🏭 行业板块净流入/流出排行（申万一级）</div>
         <!-- 527 批次3：近5日趋势一句话；528 批次2：补净流出侧；531：5日口径修正为5个交易日 -->
-        <div id="sector-mf-trend-note" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
+        <div id="sector-mf-trend-note" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
         <div id="sector-inflow-chart" style="height:280px;"></div>
       </div>
       <div class="rank-table">
@@ -147,9 +147,9 @@ body { overflow-x:hidden; }
 
     <!-- 531：板块热度 Top（全宽独立容器，行列表格 + 资金占比横条） -->
     <div class="chart-card" style="margin-bottom:var(--space-20);">
-      <div class="chart-title">🔥 板块热度 Top <span id="sector-heat-date" style="font-size:12px;color:var(--text-muted);"></span></div>
+      <div class="chart-title">🔥 板块热度 Top <span id="sector-heat-date" style="font-size:14px;color:var(--text-muted);"></span></div>
       <!-- 530号 批次2：取数/判定逻辑说明（方向 B：资金占比口径） -->
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-8);line-height:1.6;">取数：行业个股近5日主力净流入（大单+特大单）÷ 板块最新流通市值＝资金占比（ratio）；全行业按占比排序前10/20/40 名分 top_10/top_20/normal。资金热度反映主力资金实际流入强度（已消除成分股基数差异），与当日涨跌幅维度不同，故 TOP1 不一定是当日涨幅第一。</div>
+      <div style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-8);line-height:1.6;">取数：行业个股近5日主力净流入（大单+特大单）÷ 板块最新流通市值＝资金占比（ratio）；全行业按占比排序前10/20/40 名分 top_10/top_20/normal。资金热度反映主力资金实际流入强度（已消除成分股基数差异），与该交易日涨跌幅维度不同，故 TOP1 不一定是该交易日涨幅第一。</div>
       <div id="sector-heat-panel" style="font-size:12px;color:var(--text-secondary);">加载中...</div>
     </div>
 
@@ -158,7 +158,7 @@ body { overflow-x:hidden; }
       <div class="chart-card">
         <div class="chart-title">🏭 行业板块涨跌幅</div>
         <!-- 528 批次2：板块连续涨/跌 + 近5日累积涨跌说明（后端 streaks：daily_cache 多日按行业聚合） -->
-        <div id="sector-change-note" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
+        <div id="sector-change-note" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
         <div id="chart-sector" class="chart-box" style="height:320px;"></div>
       </div>
       <div class="rank-table">
@@ -175,7 +175,7 @@ body { overflow-x:hidden; }
     <!-- 531：近5日板块涨跌走势（申万一级 31 类）— 全宽独立容器，位置⑦后⑧前 -->
     <div class="chart-card" style="margin-bottom:var(--space-20);">
       <div class="chart-title">📈 近5日板块涨跌走势（申万一级）</div>
-      <div id="sector-history-note" style="font-size:11px;color:var(--text-muted);margin-bottom:var(--space-6);line-height:1.6;">每行＝行业名 + 该行业近5个交易日日均涨跌幅折线（虚线为 0 轴）+ 5日走势文字总结；默认展示当日涨幅前5 + 跌幅前5 + 全市场平均，点击「展开全部」查看申万一级 31 类。</div>
+      <div id="sector-history-note" style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-6);line-height:1.6;">每行＝行业名 + 该行业近5个交易日日均涨跌幅折线（虚线为 0 轴）+ 5日走势文字总结；默认展示该交易日涨幅前5 + 跌幅前5 + 全市场平均，点击「展开全部」查看申万一级 31 类。</div>
       <div style="margin-bottom:var(--space-8);"><span class="tag tag-bullish" id="sector-history-expand" style="cursor:pointer;">展开全部</span></div>
       <div id="chart-sector-history" class="chart-box"></div>
     </div>
@@ -185,19 +185,19 @@ body { overflow-x:hidden; }
       <div class="rank-table">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-12);">
           <span style="font-weight:600;">🛰️ 大盘状态</span>
-          <span style="font-size:12px;color:var(--text-muted);" id="market-state-date">--</span>
+          <span style="font-size:14px;color:var(--text-muted);" id="market-state-date">--</span>
         </div>
         <!-- 524 L1：大盘状态行（market/state，4 状态·状态机 + 判定依据） -->
-        <div id="market-state-line" style="font-size:13px;color:var(--text-primary);margin-bottom:var(--space-10);">加载中...</div>
+        <div id="market-state-line" style="font-size:14px;color:var(--text-primary);margin-bottom:var(--space-10);">加载中...</div>
         <!-- 524 L2：市场宽度（market/breadth：涨跌家数 + MA20占比/涨停比例/换手分位） -->
         <div style="font-weight:600;font-size:13px;margin-bottom:var(--space-6);">📊 市场宽度</div>
-        <div id="market-breadth-panel" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-10);">加载中...</div>
+        <div id="market-breadth-panel" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-10);">加载中...</div>
         <!-- 524 L3：市场情绪温度计（market/emotion：六段论阶段 + 涨停生态指标） -->
         <div style="font-weight:600;font-size:13px;margin-bottom:var(--space-6);">😊 市场情绪</div>
-        <div id="market-emotion-panel" style="font-size:12px;color:var(--text-secondary);margin-bottom:var(--space-10);">加载中...</div>
+        <div id="market-emotion-panel" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-10);">加载中...</div>
         <!-- 524 L5：预警列表（骨架——规则批次4 落地：冰点/拥挤/宽度极端/状态切换） -->
         <div style="font-weight:600;font-size:13px;margin-bottom:var(--space-6);">🔔 预警</div>
-        <div id="market-alert-list" style="font-size:12px;color:var(--text-muted);">暂无预警（规则批次4 落地）</div>
+        <div id="market-alert-list" style="font-size:14px;color:var(--text-muted);">暂无预警（规则批次4 落地）</div>
       </div>
     </div>
 
@@ -302,7 +302,7 @@ function loadEodScatter(){
       renderEodScatter2(dd.stocks);
       bindEodPanZoom('chart-eod-scatter-1');
       bindEodPanZoom('chart-eod-scatter-2');
-      // 530 批次1：状态结果说明（较昨日+较5日均）
+      // 530 批次1：状态结果说明（较上一交易日+较5日均）
       applyEodStateNotes(dd);
     })
     .catch(function(e){console.warn('eod-snapshot 加载失败',e);});
@@ -315,7 +315,10 @@ function applyEodStateNotes(dd){
   if(!s5.length)return;
   var today=s5[s5.length-1];
   var prev=s5.length>=2?s5[s5.length-2]:null;
-  // 近5日均（含今日）
+  // 数据日（2026-10-21：说明文字不再用「今日」，改为具体交易日）
+  var dLabel=today.date||dd.trade_date||'';
+  var dPref=dLabel?dLabel+' ':'';
+  // 近5日均（含数据日）
   var n=s5.length, au=0,ad=0,af=0;
   var agg={gg:0,gd:0,dg:0,dd:0};
   s5.forEach(function(x){
@@ -328,8 +331,8 @@ function applyEodStateNotes(dd){
   if(n1){
     var dUp=today.up_count-prev.up_count,dDown=today.down_count-prev.down_count;
     var dUp5=today.up_count-aUp,dDown5=today.down_count-aDown;
-    n1.innerHTML='今日上涨 <span class="up">'+today.up_count+'</span> · 下跌 <span class="down">'+today.down_count+'</span> · 平 '+today.flat_count
-      +'｜较昨日：涨<span class="'+(dUp>=0?'up':'down')+'">'+(dUp>=0?'+':'')+dUp+'</span> · 跌<span class="'+(dDown>=0?'down':'up')+'">'+(dDown>=0?'+':'')+dDown+'</span>'
+    n1.innerHTML=dPref+'上涨 <span class="up">'+today.up_count+'</span> · 下跌 <span class="down">'+today.down_count+'</span> · 平 '+today.flat_count
+      +'｜较上一交易日：涨<span class="'+(dUp>=0?'up':'down')+'">'+(dUp>=0?'+':'')+dUp+'</span> · 跌<span class="'+(dDown>=0?'down':'up')+'">'+(dDown>=0?'+':'')+dDown+'</span>'
       +'｜较近5日均：涨'+(dUp5>=0?'+':'')+dUp5+' · 跌'+(dDown5>=0?'+':'')+dDown5;
   }
   // 四象限说明（Part2：高开高收占比等）
@@ -344,8 +347,8 @@ function applyEodStateNotes(dd){
     var pGg=prev?(prev.quad.gg/pT*100):0;
     var aT=au+ad+af||1;
     var aGg=(agg.gg/aT*100);
-    n2.innerHTML='今日 高开高收 <span class="up">'+ggPct+'%</span> · 高开低收 '+gdPct+'% · 低开高收 '+dgPct+'% · 低开低收 <span class="down">'+ddPct+'%</span>'
-      +'｜较昨日高开高收 '+(prev?((ggPct-pGg)>=0?'+':'')+(ggPct-pGg).toFixed(1)+'pp':'-')
+    n2.innerHTML=dPref+'高开高收 <span class="up">'+ggPct+'%</span> · 高开低收 '+gdPct+'% · 低开高收 '+dgPct+'% · 低开低收 <span class="down">'+ddPct+'%</span>'
+      +'｜较上一交易日高开高收 '+(prev?((ggPct-pGg)>=0?'+':'')+(ggPct-pGg).toFixed(1)+'pp':'-')
       +'｜较近5日均 '+(ggPct>=aGg?'+':'')+(ggPct-aGg).toFixed(1)+'pp';
   }
 }
@@ -696,7 +699,7 @@ function applyMarketBreadth(bd){
       var mn=Math.min.apply(null,m20s), mx=Math.max.apply(null,m20s);
       var lastM20=m20s[m20s.length-1];
       var dir=lastM20>m20s[0]?'<span class="up">走阔</span>':(lastM20<m20s[0]?'<span class="down">收窄</span>':'<span>持平</span>');
-      histTxt='<div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-4);">近20日 MA20占比区间 '+escapeHtml(mn)+'%~'+escapeHtml(mx)+'% · 较20日前 '+dir+'</div>';
+      histTxt='<div style="font-size:14px;color:var(--text-muted);margin-top:var(--space-4);">近20日 MA20占比区间 '+escapeHtml(mn)+'%~'+escapeHtml(mx)+'% · 较20日前 '+dir+'</div>';
     }
   }
   var html='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-6);margin-bottom:var(--space-8);">'
@@ -704,12 +707,12 @@ function applyMarketBreadth(bd){
     +'<div><span class="down" style="font-weight:600;font-size:18px;">'+escapeHtml(bd.down_count)+'</span><div style="color:var(--text-muted);font-size:11px;">下跌</div></div>'
     +'<div><span style="font-weight:600;font-size:18px;">'+escapeHtml(bd.flat_count)+'</span><div style="color:var(--text-muted);font-size:11px;">平盘</div></div>'
     +'</div>'
-    +'<div style="font-size:12px;color:var(--text-secondary);line-height:1.7;">'
+    +'<div style="font-size:14px;color:var(--text-secondary);line-height:1.7;">'
     +'上涨占比 <span class="up">'+escapeHtml(bd.up_ratio)+'%</span> · 下跌占比 <span class="down">'+escapeHtml(bd.down_ratio)+'%</span><br/>'
     +'MA20占比 '+escapeHtml(bd.ma20_ratio)+'% · 涨停比例 '+escapeHtml(bd.limit_ratio)+' · 换手分位 '+escapeHtml(bd.turnover_percentile)+'%'
     +'</div>'
     +histTxt
-    +'<div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-6);">数据日 '+escapeHtml(bd.trade_date)+' · '+escapeHtml(bd.count)+' 只</div>';
+    +'<div style="font-size:14px;color:var(--text-muted);margin-top:var(--space-6);">数据日 '+escapeHtml(bd.trade_date)+' · '+escapeHtml(bd.count)+' 只</div>';
   panel.innerHTML=html;
 }
 
@@ -813,7 +816,7 @@ function applyMarketAlerts(al){
     else if(a.level==='info')_color='#22C55E';
     return '<div style="margin-bottom:var(--space-6);line-height:1.6;">'
       +'<div style="font-weight:600;color:'+_color+';">'+escapeHtml(a.title)+'</div>'
-      +'<div style="color:var(--text-secondary);font-size:12px;">'+escapeHtml(a.detail)+'</div>'
+      +'<div style="color:var(--text-secondary);font-size:14px;">'+escapeHtml(a.detail)+'</div>'
       +'</div>';
   }).join('');
   panel.innerHTML=rows;
@@ -922,7 +925,8 @@ function renderVolumeChart(vd){
       var diff=avg5>0?(curAmt-avg5)/avg5*100:0;
       var label=diff>=20?'放量':(diff<=-20?'缩量':'平量');
       var up=curAmt>=avg5;
-      note.innerHTML='当日 <strong>'+curAmt+' 亿</strong> · 较近5日均值 <span class="'+(up?'up':'down')+'">'+(diff>=0?'+':'')+diff.toFixed(1)+'%</span>（'+label+'）· 近20日高点 '+hi20+' 亿';
+      var dLabel=last.trade_date||last.date||'';
+      note.innerHTML=(dLabel?dLabel+' ':'')+'成交额 <strong>'+curAmt+' 亿</strong> · 较近5日均值 <span class="'+(up?'up':'down')+'">'+(diff>=0?'+':'')+diff.toFixed(1)+'%</span>（'+label+'）· 近20日高点 '+hi20+' 亿';
     }catch(e){note.textContent='--';}
   }
 }
@@ -956,7 +960,8 @@ function renderMoneyflow(md){
       var dirTxt=lastSign>0?'主力连续 '+n+' 日净流入':(lastSign<0?'主力连续 '+n+' 日净流出':'主力近期方向不明');
       var cumTxt=(cum>=0?'近20日累计净流入 ':'近20日累计净流出 ')+Math.abs(cum).toFixed(1)+' 亿';
       var cls=lastSign>=0?'up':'down';
-      note.innerHTML='<span class="'+cls+'">'+dirTxt+'</span> · '+cumTxt;
+      var dLabel=(md.days[md.days.length-1]||{}).date||'';
+      note.innerHTML=(dLabel?dLabel+'｜':'')+'<span class="'+cls+'">'+dirTxt+'</span> · '+cumTxt;
     }catch(e){note.textContent='--';}
   }
 }
@@ -974,7 +979,8 @@ function renderSectorChart(sd){
     (sk.down||[]).slice(0,3).forEach(function(s){
       parts.push('<span class="down">'+escapeHtml(s.industry)+' 连跌'+s.days+'日 · 近5日'+(s.cum_5d>=0?'+':'')+s.cum_5d+'%</span>');
     });
-    streakEl.innerHTML=parts.length?('连续涨跌（近5日累积）：'+parts.join(' · ')):'连续涨跌数据暂缺';
+    var dLabel=sd.date?sd.date+'｜':'';
+    streakEl.innerHTML=parts.length?(dLabel+'连续涨跌（近5日累积）：'+parts.join(' · ')):(dLabel+'连续涨跌数据暂缺');
   }
   var inArr=(sd.gainers||[]).slice(0,5);
   var outArr=(sd.losers||[]).slice(0,5);
@@ -1023,7 +1029,8 @@ function renderSectorHistory20d(sd){
     text:(h.avg_summary||'')});
 
   var W=el.clientWidth||1100;
-  var ROW_H=36, TOP=8, BOTTOM=24, LEFT=88;
+  // 531 目检修正：文字描述字号 11→14（略放大，22 偏大），行高同步放大以容纳换行
+  var ROW_H=44, TOP=8, BOTTOM=24, LEFT=88;
   // 折线宽度缩至原先约一半，右侧留足空间给文字总结
   var RIGHT=Math.max(420, Math.round(W/2+116));
   el.style.height=(TOP+rows.length*ROW_H+BOTTOM)+'px';
@@ -1067,8 +1074,8 @@ function renderSectorHistory20d(sd){
     });
     option.graphic.push({
       type:'text',left:W-RIGHT+10,top:top+6,silent:true,
-      style:{text:r.text||'',fill:'#94A3B8',fontSize:11,align:'left',
-        width:RIGHT-20,overflow:'none'}
+      style:{text:r.text||'',fill:'#94A3B8',fontSize:14,lineHeight:18,align:'left',
+        width:RIGHT-20,overflow:'break'}
     });
   });
   option.tooltip={
@@ -1087,7 +1094,7 @@ function renderSectorHistory20d(sd){
   c.resize();
   if(charts.indexOf(c)<0)charts.push(c);
   var expandEl=document.getElementById('sector-history-expand');
-  if(expandEl)expandEl.textContent=_sectorHistoryAll?'收起（仅当日Top）':'展开全部';
+  if(expandEl)expandEl.textContent=_sectorHistoryAll?'收起（仅展示涨跌幅前5/后5）':'展开全部';
 }
 // 530号 批次3：「展开全部 / 收起」交互（复用上次 renderSectorHistory20d 的 sd 数据）
 var _sectorHistoryLast=null;
@@ -1123,7 +1130,9 @@ function renderSectorMoneyflow(smd){
       var segs=[];
       if(inflowParts)segs.push('净流入 Top3：'+inflowParts.join(' · '));
       if(outflowParts)segs.push('净流出 Top3：'+outflowParts.join(' · '));
-      trendEl.innerHTML='近5日板块 '+segs.join(' ｜ ');
+      var w5=smd.window_5d||[];
+      var dCut=w5.length?w5[w5.length-1]:'';
+      trendEl.innerHTML=(dCut?'截至 '+dCut+'｜':'')+'近5日板块 '+segs.join(' ｜ ');
     } else {
       trendEl.textContent='近5日趋势数据暂缺';
     }
