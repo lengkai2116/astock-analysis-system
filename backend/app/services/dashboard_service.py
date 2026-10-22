@@ -380,8 +380,6 @@ class DashboardService:
 
         # 2. 降级：从 DuckDB 查询前一完整交易日
         try:
-            from app.models import Stock
-
             ecm = self.data_manager.cache
             today = datetime.now().strftime('%Y-%m-%d')
             last_date = self._get_best_trade_date(before=today)
@@ -404,23 +402,20 @@ class DashboardService:
                 return None
 
             ts_codes = all_df['ts_code'].unique().tolist()
-            stock_map = {}
-            try:
-                for s in Stock.query.filter(Stock.ts_code.in_(ts_codes)).all():
-                    stock_map[s.ts_code] = s.name
-            except Exception as e:
-                logger.debug(f"涨跌幅榜 Stock 名称查询失败: {e}")
-            if not stock_map:
+            name_map = self._get_stock_names(ts_codes)
+            stock_map = {code: info.get('name', '')
+                         for code, info in name_map.items()}
+            if not stock_map and self.data_manager:
                 try:
-                    if self.data_manager:
-                        basic = self.data_manager.get_stock_list()
-                        if basic:
-                            for r in basic:
-                                stock_map[r.get('ts_code', '')] = r.get('name', '')
+                    basic = self.data_manager.get_stock_list()
+                    if basic:
+                        stock_map = {r.get('ts_code', ''): r.get('name', '')
+                                     for r in basic}
                 except Exception as e:
-                    logger.debug(f"涨跌幅榜 get_stock_list 名称兜底失败: {e}")
+                    logger.warning(f"涨跌幅榜 get_stock_list 名称兜底失败: {e}")
 
-            all_df['name'] = all_df['ts_code'].map(lambda x: stock_map.get(x, ''))
+            all_df['name'] = all_df['ts_code'].map(
+                lambda x: stock_map.get(x) or x)
             sort_asc = (type == 'down')
             top_df = all_df.sort_values('pct_chg', ascending=sort_asc).head(limit)
 
@@ -1549,20 +1544,34 @@ class DashboardService:
 
     @staticmethod
     def _get_stock_names(ts_codes) -> Dict:
-        """Stock 名称/东财行业补全（跌停反算无名称时用）。失败返回空 dict。"""
-        if not ts_codes:
+        """Stock 名称/东财行业补全（只取列、分批查询，避免脏行拖垮整批）。
+
+        537 P1：原实现用 `Stock.query` 加载全实体；stocks 表个别 list_date
+        存成整数时，SQLAlchemy 解析 Date 列抛 TypeError，整批结果全丢。
+        这里只 select 需要的列，并按 900 个代码分批，单批失败不影响其他批。
+        """
+        codes = [str(c) for c in (ts_codes or []) if c]
+        if not codes:
             return {}
+        out: Dict = {}
         try:
             from app import db
             from app.models import Stock
-            rows = db.session.query(
-                Stock.ts_code, Stock.name, Stock.industry).filter(
-                Stock.ts_code.in_(list(ts_codes))).all()
-            return {r[0]: {'name': r[1] or '', 'industry': r[2] or ''}
-                    for r in rows}
+            for i in range(0, len(codes), 900):
+                batch = codes[i:i + 900]
+                try:
+                    rows = db.session.query(
+                        Stock.ts_code, Stock.name, Stock.industry).filter(
+                        Stock.ts_code.in_(batch)).all()
+                    out.update({r[0]: {'name': r[1] or '',
+                                       'industry': r[2] or ''}
+                                for r in rows})
+                except Exception as e:
+                    logger.warning(
+                        f"Stock 名称补全分批失败（{i}~{i + len(batch)}）: {e}")
         except Exception as e:
-            logger.debug(f"涨停生态: Stock 名称补全失败: {e}")
-            return {}
+            logger.warning(f"Stock 名称补全不可用: {e}")
+        return out
 
     def get_limit_ecology(self) -> Optional[Dict]:
         """涨停生态（533 号批次2）：涨停/跌停对比 + 行业个股 + 昨涨停今表现 + 连板 + 5日封板率。
@@ -1623,6 +1632,16 @@ class DashboardService:
                 "SELECT ts_code, name, industry, pct_chg, limit_times, open_times, "
                 "first_time, last_time FROM limit_detail_cache "
                 "WHERE trade_date = ? AND limit_type = 'U'", [as_of])
+            # 537 P1：区分「当日无涨停」与「当日明细缺失」。
+            # limit_detail_cache 整日 0 行时不能把 up.count=0 当成真实行情。
+            detail_cnt_df = ecm._query_shard(
+                'limit_detail_cache',
+                "SELECT COUNT(*) AS n FROM limit_detail_cache "
+                "WHERE trade_date = ?", [as_of])
+            try:
+                limit_detail_count = int(detail_cnt_df.iloc[0].get('n') or 0)
+            except Exception:
+                limit_detail_count = len(up_df) if up_df is not None else 0
             up_stocks = []
             if up_df is not None and not up_df.empty:
                 for r in up_df.to_dict('records'):
@@ -1773,6 +1792,8 @@ class DashboardService:
 
             return {
                 'as_of': as_of,
+                'data_available': limit_detail_count > 0,
+                'limit_detail_count': limit_detail_count,
                 'prev_trade_date': prev_date,
                 'up': {
                     'count': len(up_stocks),
@@ -1800,6 +1821,29 @@ class DashboardService:
         except Exception as e:
             logger.error(f"涨停生态获取失败: {e}")
             return None
+
+    @staticmethod
+    def _split_complete_rows(rows, min_cov: float = 0.8):
+        """537 P1：剔除覆盖度骤降的日期，返回 (保留行, 不完整日期列表)。
+
+        以当日行数 n 的中位数为基线；n < 中位数 × min_cov 视为不完整。
+        n 缺失或为 0 时无法判定，保留（兼容旧数据/单测桩）。
+        """
+        if not rows:
+            return [], []
+        nums = sorted(int(r.get('n') or 0) for r in rows
+                      if int(r.get('n') or 0) > 0)
+        if not nums:
+            return list(rows), []
+        threshold = nums[len(nums) // 2] * min_cov
+        kept, partial = [], []
+        for r in rows:
+            n = int(r.get('n') or 0)
+            if n and n < threshold:
+                partial.append(r.get('date', ''))
+            else:
+                kept.append(r)
+        return kept, partial
 
     def get_market_flows_30d(self) -> Optional[Dict]:
         """市场资金与杠杆30日（533号批次3）：5日行业资金×涨跌 + 30日ETF份额 + 30日融资。
@@ -1864,10 +1908,12 @@ class DashboardService:
 
             etf_dates, etf_net, etf_total, etf_top = [], [], [], []
             etf_cum = None
+            etf_partial = []
             try:
                 fdf = ecm._query_shard(
                     'fund_share_cache',
-                    "SELECT trade_date, SUM(fd_share) AS total_share "
+                    "SELECT trade_date, SUM(fd_share) AS total_share, "
+                    "COUNT(*) AS n "
                     "FROM fund_share_cache WHERE fund_type = 'ETF' "
                     "AND trade_date <= ? GROUP BY trade_date "
                     "ORDER BY trade_date DESC LIMIT 31", [as_of])
@@ -1875,9 +1921,11 @@ class DashboardService:
                 if fdf is not None and not fdf.empty:
                     rows = sorted(
                         ({'date': self._norm_trade_date(r.get('trade_date')),
-                          'total': float(r.get('total_share') or 0)}
+                          'total': float(r.get('total_share') or 0),
+                          'n': int(r.get('n') or 0)}
                          for r in fdf.to_dict('records')),
                         key=lambda x: x['date'])
+                rows, etf_partial = self._split_complete_rows(rows)
                 if len(rows) >= 2:
                     first, last = rows[0], rows[-1]
                     for i in range(1, len(rows)):
@@ -1929,11 +1977,13 @@ class DashboardService:
             margin_dates, margin_balance, margin_buy = [], [], []
             short_balance, margin_net = [], []
             margin_latest, margin_cum = {}, None
+            margin_partial = []
             try:
                 mdf = ecm._query_shard(
                     'margin_cache',
                     "SELECT trade_date, SUM(rzye) AS rzye, "
-                    "SUM(rzmje) AS rzmje, SUM(rzrqye) AS rzrqye "
+                    "SUM(rzmje) AS rzmje, SUM(rzrqye) AS rzrqye, "
+                    "COUNT(*) AS n "
                     "FROM margin_cache WHERE trade_date <= ? "
                     "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 31",
                     [as_of])
@@ -1943,9 +1993,11 @@ class DashboardService:
                         ({'date': self._norm_trade_date(r.get('trade_date')),
                           'rzye': float(r.get('rzye') or 0),
                           'rzmje': float(r.get('rzmje') or 0),
-                          'rzrqye': float(r.get('rzrqye') or 0)}
+                          'rzrqye': float(r.get('rzrqye') or 0),
+                          'n': int(r.get('n') or 0)}
                          for r in mdf.to_dict('records')),
                         key=lambda x: x['date'])
+                rows, margin_partial = self._split_complete_rows(rows)
                 if len(rows) >= 2:
                     for i in range(1, len(rows)):
                         cur, prev = rows[i], rows[i - 1]
@@ -1980,6 +2032,8 @@ class DashboardService:
                     'total_share': etf_total,
                     'cumulative_net_share': etf_cum,
                     'top_etfs': etf_top,
+                    'partial_dates': etf_partial,
+                    'data_quality': 'partial' if etf_partial else 'ok',
                 },
                 'margin_30d': {
                     'dates': margin_dates,
@@ -1989,6 +2043,8 @@ class DashboardService:
                     'net_buy': margin_net,
                     'cumulative_net_buy': margin_cum,
                     'latest': margin_latest,
+                    'partial_dates': margin_partial,
+                    'data_quality': 'partial' if margin_partial else 'ok',
                 },
                 'source': ('DuckDB moneyflow/daily（申万一级）+ '
                            'fund_share_cache + margin_cache'),
@@ -2095,7 +2151,8 @@ class DashboardService:
             eco_date = str((eco or {}).get('as_of') or '').replace('-', '')
             eco_up = int((eco or {}).get('up', {}).get('count') or 0)
             eco_down = int((eco or {}).get('down', {}).get('count') or 0)
-            if (eco and (not trade_date or eco_date == trade_date)
+            if (eco and eco.get('data_available', True)
+                    and (not trade_date or eco_date == trade_date)
                     and (eco_up + eco_down) > 0):
                 up = eco_up
                 down = eco_down
@@ -2352,7 +2409,8 @@ class DashboardService:
 
             # R1 冰点 → 关键上涨窗口（六段论 ice；涨停生态萎缩）
             emotion = self.get_market_emotion()
-            if emotion and emotion.get('phase') == 'ice':
+            if (emotion and emotion.get('data_available', True)
+                    and emotion.get('phase') == 'ice'):
                 alerts.append({
                     'level': 'info',
                     'type': 'ice_window',
