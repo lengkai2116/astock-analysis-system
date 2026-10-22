@@ -15,22 +15,26 @@ for k in ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']:
 
 
 def test_get_tags_by_group_filters():
-    """get_tags_by_group 按 tag_group 取子集（structure/chip_deep）"""
+    """get_tags_by_group 按 tag_group 取子集（structure/chip_deep）
+
+    541 B5 后旧表冻结：structure 组仅保留 pre_feat/treemap 已迁移字段，
+    zhongshu_strength 无新家，不再断言。
+    """
     import pytest
     from app.data import DataManager
     dm = DataManager()
-    # structure 组：support_resistance/zhongshu_strength 等（S0 已落库 000426）
+    # structure 组：support_resistance 等（来自 pre_feat derived 组）
     struct = dm.get_tags_by_group('000426.SZ', ['structure'])
     if not struct:
         pytest.skip("000426.SZ 无 structure 标签数据（需运行P4预计算）")
     assert 'support_resistance' in struct, "structure 组应含 support_resistance"
-    assert 'zhongshu_strength' in struct, "structure 组应含 zhongshu_strength"
     # chip_deep 组
     chip = dm.get_tags_by_group('000426.SZ', ['chip_deep'])
     assert 'asr' in chip or 'cyqkl' in chip, "chip_deep 组应含筹码深度字段"
     # 组合查询
     both = dm.get_tags_by_group('000426.SZ', ['structure', 'chip_deep'])
-    assert 'support_resistance' in both and 'asr' in both, "组合组应返回全部"
+    assert 'support_resistance' in both and ('asr' in both or 'cyqkl' in both), \
+        "组合组应返回全部"
 
 
 def test_build_chanlun_dimension_reads_tags():

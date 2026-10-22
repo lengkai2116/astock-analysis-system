@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from flask import Blueprint, jsonify, request
 
+from app.services import live_overlay, out_market_reader
 from app.services.dashboard_service import DashboardService
 from app.services.market_service import MarketService
 from app.utils.error_handlers import handle_exceptions
@@ -373,7 +374,11 @@ def get_stock_moneyflow(ts_code):
 @handle_exceptions
 def get_market_overview():
     """仪表盘市场概况：指数行情+总成交额+迷你K线+市场状态"""
-    data = dashboard_service.get_index_summary()
+    data = out_market_reader.get_out_or_legacy(
+        'market_overview', dashboard_service.get_index_summary)
+    # legacy 回退本身已读实时源；strict 缺 payload 时也不 overlay
+    if isinstance(data, dict) and data.get('panel_source') == 'out':
+        data = live_overlay.apply_overlay('market_overview', data)
     if data is None:
         return jsonify({
             'success': False,

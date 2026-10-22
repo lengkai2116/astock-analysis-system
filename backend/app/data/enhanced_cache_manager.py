@@ -3897,48 +3897,127 @@ class EnhancedCacheManager:
         批次2：13 个标签字段以 `pre_feat_cache` 最新行为准；`signal_strength`
         以 `treemap_snapshot`（JUD 产物）为准，缺失置 None，不回退 08-19 旧标签。
         """
+        # 541 B5：旧 opportunity_tags_cache 读取已冻结；源＝pre_feat + treemap_snapshot
         result: dict = {}
-        try:
-            df = self._query_shard(
-                'opportunity_tags_cache',
-                """SELECT tag_name, tag_value, tag_group, confidence, source, updated_at
-                   FROM (
-                       SELECT tag_name, tag_value, tag_group, confidence, source, updated_at,
-                              ROW_NUMBER() OVER (
-                                  PARTITION BY tag_name
-                                  ORDER BY updated_at DESC, id DESC
-                              ) AS rn
-                       FROM opportunity_tags_cache
-                       WHERE ts_code=?
-                   )
-                   WHERE rn=1""",
-                [ts_code]
-            )
-            if not df.empty:
-                result = {row['tag_name']: row['tag_value'] for _, row in df.iterrows()}
-        except Exception as e:
-            logger.warning(f"get_tags 标签读取失败 {ts_code}: {e}")
-
         pre = self.get_pre_feat_tags(ts_code)
         if pre:
             result.update(pre)
 
         try:
-            ss_df = self._query_shard(
+            tm_df = self._query_shard(
                 'treemap_snapshot',
-                "SELECT signal_strength FROM treemap_snapshot WHERE ts_code=?",
+                "SELECT signal_strength, opportunity_state, right_side_confirm, "
+                "opportunity_label, opportunity_type, opportunity_profile, "
+                "confirm_evidence, state_evidence, entry_signals, exit_conditions, "
+                "main_force_presence, presence_evidence, consensus_rate, conflict "
+                "FROM treemap_snapshot WHERE ts_code=?",
                 [ts_code])
-            if ss_df.empty:
-                result['signal_strength'] = None
-            else:
-                _ss = ss_df.iloc[0].get('signal_strength')
-                result['signal_strength'] = None if pd.isna(_ss) else str(_ss)
-        except Exception:
+            tm_row = tm_df.iloc[0].to_dict() if not tm_df.empty else None
+        except Exception as e:
+            logger.warning(f"get_tags OUT 快照读取失败 {ts_code}: {e}")
+            tm_row = None
+        try:
+            from app.data.out_market import apply_tag_overlay
+            result = apply_tag_overlay(result, tm_row)
+        except Exception as e:
+            logger.warning(f"get_tags OUT 覆盖失败 {ts_code}: {e}")
             result.setdefault('signal_strength', None)
         return result
 
+    # 541 B5：pre_feat 字段映射（含四个旧表独有字段 + 深度字段）
+    _PRE_FEAT_FIELD_MAP = {
+        'valuation': (
+            'valuation_level', 'valuation_deviation', 'dividend_yield',
+            'composite_rating', 'fina_health', 'pe_percentile_5y',
+            'pb_percentile_5y', 'ps_percentile_5y', 'fcf_yield',
+            'revenue_growth', 'roce_pass', 'value_trap',
+            'adjusted_anchor_rating', 'asset_anchor_rating',
+            'cashflow_anchor_rating', 'earnings_anchor_rating',
+        ),
+        'depth': (
+            'main_force_phase', 'trend_alignment', 'fund_flow', 'capital_nature',
+            'price_position', 'main_force_presence', 'presence_evidence',
+            'phase_confidence', 'hold_float_ratio', 'turnover_rate',
+        ),
+        'sentiment': ('sentiment_phase',),
+        'sector': ('sector_heat', 'sector_rank'),
+        'chip': ('chip_concentration', 'chip_position'),
+        'chip_fund_ext': (
+            'asr', 'chip_transfer', 'concentration', 'control_degree',
+            'cyqkl', 'fund_flow_strength', 'profit_ratio', 'rsi', 'ssrp',
+        ),
+        'fund_5d_ext': ('net_lg_5d', 'net_lg_5d_positive_ratio'),
+        'risk_ext': (
+            'volatility_level', 'volatility_percentile', 'support_price',
+            'resistance_price', 'risk_reward', 'signal_days', 'atr_14d',
+            'atr_pct', 'dist_to_support_pct', 'dist_to_resistance_pct',
+            'dist_to_prev_high_pct',
+        ),
+        'structure_ext': ('indicator_status',),
+        'style': ('style_exposure',),
+        'event': (
+            'catalyst_event', 'event_composite_score', 'event_details',
+            'event_risk_factors',
+        ),
+        'volume_price': (
+            'ma_alignment', 'kline_pattern', 'volume_ratio', 'vp_state_label',
+            'vp_rule', 'vp_risk_line', 'vp_target_zone', 'vp_resonance_score',
+            'vp_three_laws', 'vp_entry_zone', 'volume_price_fit',
+            'divergence_type', 'divergence_confidence', 'divergence_macd_confirmed',
+        ),
+        'chanlun': ('buy_sell_point',),
+        'derived': (
+            'pattern_signal', 'state_label', 'support_resistance',
+            'active_signal', 'risk_level', 'price_position', 'trend_alignment',
+            'right_side_confirm',
+        ),
+        'valuation_ext': (
+            'pe_ttm', 'pb', 'ps_ttm', 'roe', 'roce', 'debt_to_assets', 'total_mv',
+        ),
+        'volume_ext': ('vol_ma5', 'vol_ma10', 'vol_ma20'),
+        'emotion_ext': (
+            'emotion_temperature', 'market_emotion', 'stock_emotion',
+            'sector_emotion', 'limit_up_count', 'sealing_rate',
+        ),
+        'timing': ('time_rhythm',),
+    }
+
+    # 541 B5：旧 tag_group → pre_feat 分组映射（旧表冻结后按组取子集）
+    _TAG_GROUP_MAP = {
+        'structure': ('structure_ext', 'derived', 'volume_price'),
+        'chip_deep': ('chip', 'chip_fund_ext'),
+        'fund_risk': ('fund_5d_ext', 'risk_ext'),
+        'valuation': ('valuation', 'valuation_ext'),
+        'sentiment': ('sentiment', 'emotion_ext'),
+        'sector': ('sector',),
+        'style': ('style',),
+        'event': ('event',),
+        'timing': ('timing',),
+        'deep': ('depth',),
+        'chanlun': ('chanlun',),
+        'volume_price': ('volume_price',),
+        'chip': ('chip',),
+        'risk': ('risk_ext',),
+        'fund_flow': ('fund_5d_ext', 'risk_ext'),
+    }
+
+    @classmethod
+    def _pre_feat_fields_from_json(cls, fj: dict) -> dict:
+        """把 pre_feat features_json 中可消费字段扁平化（541 B5 统一入口）。"""
+        out: dict = {}
+        if not isinstance(fj, dict):
+            return out
+        for group, keys in cls._PRE_FEAT_FIELD_MAP.items():
+            payload = fj.get(group)
+            if not isinstance(payload, dict):
+                continue
+            for key in keys:
+                if key in payload:
+                    out[key] = payload[key]
+        return out
+
     def get_pre_feat_tags(self, ts_code: str) -> dict:
-        """读取单只股票最新 pre_feat 行中的 treemap 同名字段（540号批次2）"""
+        """读取单只股票最新 pre_feat 行中的可消费字段（541 B5 扩展）。"""
         try:
             df = self._query_shard(
                 'pre_feat_cache',
@@ -3950,81 +4029,68 @@ class EnhancedCacheManager:
             fj = json.loads(df.iloc[0]['features_json'])
         except Exception:
             return {}
-        if not isinstance(fj, dict):
-            return {}
-        mapping = {
-            'valuation': (
-                'valuation_level', 'valuation_deviation', 'dividend_yield',
-                'composite_rating', 'fina_health',
-                'pe_percentile_5y', 'pb_percentile_5y',
-            ),
-            'depth': (
-                'main_force_phase', 'trend_alignment', 'fund_flow', 'capital_nature',
-                'price_position', 'main_force_presence', 'presence_evidence',
-                'phase_confidence',
-            ),
-            'sentiment': ('sentiment_phase',),
-            'sector': ('sector_heat',),
-            'chip': ('chip_concentration',),
-            'risk_ext': ('volatility_level',),
-            'style': ('style_exposure',),
-            'event': ('catalyst_event',),
-        }
-        out: dict = {}
-        for group, keys in mapping.items():
-            payload = fj.get(group)
-            if not isinstance(payload, dict):
-                continue
-            for key in keys:
-                if key in payload:
-                    out[key] = payload[key]
-        return out
+        return self._pre_feat_fields_from_json(fj)
 
     def get_tags_by_group(self, ts_code: str, groups: list[str]) -> dict:
-        """按 tag_group 取子集（323号 S0.5：引擎B 差异化取用深度字段）
+        """541 B5：旧 tag_group 读取已冻结；按组从 pre_feat + treemap 结果取子集。
 
-        从 opportunity_tags_cache 读取指定 tag_group 的最新标签，避免拉取全量。
-        Returns: {tag_name: tag_value}
+        未知组名保持返回全集（兼容旧调用），避免静默丢字段。
         """
         if not groups:
             return {}
-        ph = ','.join('?' for _ in groups)
-        df = self._query_shard(
-            'opportunity_tags_cache',
-            f"SELECT tag_name, tag_value FROM opportunity_tags_cache "
-            f"WHERE ts_code=? AND tag_group IN ({ph}) "
-            f"ORDER BY updated_at DESC",
-            [ts_code] + groups
-        )
-        if df.empty:
+        allowed: set[str] = set()
+        for group in groups:
+            mapped = self._TAG_GROUP_MAP.get(group)
+            if not mapped:
+                return self.get_tags(ts_code)
+            for key in mapped:
+                allowed.update(self._PRE_FEAT_FIELD_MAP.get(key, ()))
+        if not allowed:
             return {}
-        result = {}
-        for _, row in df.iterrows():
-            if row['tag_name'] not in result:   # 最新值优先
-                result[row['tag_name']] = row['tag_value']
-        return result
+        return {k: v for k, v in self.get_tags(ts_code).items() if k in allowed}
 
     def get_tags_by_date(self, ts_code: str, trade_date: str | None = None) -> dict:
-        """读取指定股票在指定日期的标签 dict（2026-08-06 合规整改网关）
+        """读取指定股票在指定日期的标签（541 B5：改 pre_feat + treemap 历史）。
 
-        未指定 trade_date 时返回该股票最新标签（等同 get_tags）。
-        指定时精确匹配 updated_at=该交易日 的行（L4 日变检测语义）。
+        未指定 trade_date 时等同 get_tags；指定时从 pre_feat_cache 与该日
+        treemap_snapshot_history 组装，不再读已停更的 opportunity_tags_cache。
         """
         if trade_date is None:
             return self.get_tags(ts_code)
+
+        result: dict = {}
         try:
             df = self._query_shard(
-                'opportunity_tags_cache',
-                "SELECT tag_name, tag_value FROM opportunity_tags_cache "
-                "WHERE ts_code=? AND updated_at=?",
-                [ts_code, trade_date]
-            )
-            if df.empty:
-                return {}
-            return {r['tag_name']: r['tag_value'] for _, r in df.iterrows()}
+                'pre_feat_cache',
+                "SELECT features_json FROM pre_feat_cache "
+                "WHERE ts_code=? AND trade_date=? LIMIT 1",
+                [ts_code, trade_date])
+            if not df.empty:
+                fj = json.loads(df.iloc[0]['features_json'])
+                result.update(self._pre_feat_fields_from_json(fj))
         except Exception as e:
-            logger.warning(f"get_tags_by_date({ts_code},{trade_date}) 失败: {e}")
-            return {}
+            logger.warning(f"get_tags_by_date pre_feat 读取失败 ({ts_code},{trade_date}): {e}")
+
+        tm_row = None
+        try:
+            df = self._query_shard(
+                'treemap_snapshot_history',
+                "SELECT * FROM treemap_snapshot_history "
+                "WHERE ts_code=? AND trade_date=? "
+                "ORDER BY snapshot_date DESC LIMIT 1",
+                [ts_code, trade_date])
+            if not df.empty:
+                tm_row = df.iloc[0].to_dict()
+        except Exception as e:
+            logger.warning(f"get_tags_by_date treemap 历史读取失败 ({ts_code},{trade_date}): {e}")
+
+        try:
+            from app.data.out_market import apply_tag_overlay
+            result = apply_tag_overlay(result, tm_row)
+        except Exception as e:
+            logger.warning(
+                f"get_tags_by_date OUT 覆盖失败 ({ts_code},{trade_date}): {e}")
+        return result
 
     def get_snapshot_max_date(self) -> str | None:
         """获取 treemap_snapshot 最新构建日期（2026-08-06 合规整改网关）"""
@@ -4067,6 +4133,43 @@ class EnhancedCacheManager:
             return str(row[0]) if row and row[0] else None
         except Exception as e:
             logger.warning(f"get_status_snapshot_date 失败: {e}")
+            return None
+
+    # ── 541号 B1：仪表盘市场级 OUT 成品仓 ──────────────────────
+
+    def upsert_out_market_panel(self, module: str, asof_date: str, payload: dict,
+                                data_dates: dict | None = None,
+                                schema_version: int = 1) -> bool:
+        """写入仪表盘市场级 OUT 成品（仅 OUT 构建器调用）。"""
+        try:
+            from app.data.out_market import upsert_panel
+            from app.data.sharding_manager import sharding_manager
+            return upsert_panel(
+                sharding_manager, module, asof_date, payload,
+                data_dates=data_dates, schema_version=schema_version)
+        except Exception as e:
+            logger.warning(f"upsert_out_market_panel 失败 [{module}]: {e}")
+            return False
+
+    def get_out_market_panel(self, module: str,
+                             asof_date: str | None = None) -> dict | None:
+        """读取仪表盘市场级 OUT 成品（前端只读网关）。"""
+        try:
+            from app.data.out_market import get_panel
+            from app.data.sharding_manager import sharding_manager
+            return get_panel(sharding_manager, module, asof_date=asof_date)
+        except Exception as e:
+            logger.warning(f"get_out_market_panel 失败 [{module}]: {e}")
+            return None
+
+    def get_out_market_panel_date(self) -> str | None:
+        """OUT 市场成品最新日期（“最后一次有效版本”提示用）。"""
+        try:
+            from app.data.out_market import get_latest_asof_date
+            from app.data.sharding_manager import sharding_manager
+            return get_latest_asof_date(sharding_manager)
+        except Exception as e:
+            logger.warning(f"get_out_market_panel_date 失败: {e}")
             return None
 
     def get_pre_feat_max_date(self) -> str | None:
@@ -4189,39 +4292,72 @@ class EnhancedCacheManager:
             logger.warning(f"query_tags failed: {e}")
             return []
 
-    def get_tags_batch(self, ts_codes: list[str]) -> dict[str, dict]:
-        """批量获取多只股票的最新标签
+    _TAG_BATCH_CHUNK = 500
 
-        Returns:
-            {ts_code: {tag_name: tag_value, ...}, ...}
+    def get_tags_batch(self, ts_codes: list[str]) -> dict[str, dict]:
+        """541 B5：批量读取 pre_feat 最新行 + treemap 快照（避免逐只 N+1 查询）。
+
+        分块 IN 查询，每块 2 次 SQL；treemap 查询失败的块保留 pre_feat 结果，
+        不用 `apply_tag_overlay(None)` 误清判定字段。
         """
         if not ts_codes:
             return {}
+        codes = list(dict.fromkeys(str(c) for c in ts_codes if c))
+        result: dict[str, dict] = {code: {} for code in codes}
+        tm_rows: dict[str, dict] = {}
+        tm_loaded: set[str] = set()
+        tm_fields = (
+            'signal_strength, opportunity_state, right_side_confirm, '
+            'opportunity_label, opportunity_type, opportunity_profile, '
+            'confirm_evidence, state_evidence, entry_signals, exit_conditions, '
+            'main_force_presence, presence_evidence, consensus_rate, conflict'
+        )
+        for start in range(0, len(codes), self._TAG_BATCH_CHUNK):
+            part = codes[start:start + self._TAG_BATCH_CHUNK]
+            placeholders = ','.join('?' for _ in part)
+            try:
+                df = self._query_shard(
+                    'pre_feat_cache',
+                    "SELECT ts_code, features_json FROM ("
+                    "SELECT ts_code, features_json, ROW_NUMBER() OVER ("
+                    "PARTITION BY ts_code ORDER BY trade_date DESC) AS rn "
+                    f"FROM pre_feat_cache WHERE ts_code IN ({placeholders})"
+                    ") WHERE rn=1",
+                    part)
+                for _, row in df.iterrows():
+                    code = str(row['ts_code'])
+                    if code not in result:
+                        continue
+                    try:
+                        fj = json.loads(row['features_json'])
+                    except (TypeError, ValueError):
+                        continue
+                    result[code].update(self._pre_feat_fields_from_json(fj))
+            except Exception as e:
+                logger.warning(
+                    f"get_tags_batch pre_feat 读取失败（{len(part)} 只）: {e}")
 
-        placeholders = ','.join('?' for _ in ts_codes)
-        try:
-            df = self._query_shard(
-                'opportunity_tags_cache',
-                f"""SELECT ts_code, tag_name, tag_value, tag_group, source, updated_at
-                   FROM opportunity_tags_cache
-                   WHERE ts_code IN ({placeholders})
-                   ORDER BY ts_code, tag_name""",
-                ts_codes
-            )
-        except Exception as e:
-            logger.warning(f"get_tags_batch failed: {e}")
-            return {}
+            try:
+                tm_df = self._query_shard(
+                    'treemap_snapshot',
+                    f"SELECT ts_code, {tm_fields} FROM treemap_snapshot "
+                    f"WHERE ts_code IN ({placeholders})",
+                    part)
+                if tm_df is not None:
+                    for _, row in tm_df.iterrows():
+                        rowd = row.to_dict()
+                        tm_rows[str(rowd.pop('ts_code'))] = rowd
+                tm_loaded.update(part)
+            except Exception as e:
+                logger.warning(
+                    f"get_tags_batch treemap 读取失败（{len(part)} 只）: {e}")
 
-        if df.empty:
-            return {}
-
-        result = {}
-        for ts_code, grp in df.groupby('ts_code'):
-            tags = {}
-            for _, row in grp.iterrows():
-                tags[row['tag_name']] = row['tag_value']
-            result[ts_code] = tags
-        return result
+        from app.data.out_market import apply_tag_overlay
+        return {
+            code: (apply_tag_overlay(result[code], tm_rows.get(code))
+                   if code in tm_loaded else result[code])
+            for code in codes
+        }
 
     def vacuum_db(self):
         """执行 VACUUM 回收空间（应在低负载时段执行）"""

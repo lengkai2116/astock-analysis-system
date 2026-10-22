@@ -213,7 +213,9 @@ def test_s9_dim4_dead_copy_removed_and_no_callers():
     m = importlib.import_module('app.opportunity_atlas.dimensions.dim4_chip_fund_engine')
     assert not hasattr(m, 'get_risk_tags'), 'dim4 get_risk_tags 死副本应已删'
     import subprocess
-    out = subprocess.run(['grep', '-rn', 'get_risk_tags(', 'app/'],
+    app_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app')
+    out = subprocess.run(['grep', '-rn', 'get_risk_tags(', app_dir],
                          capture_output=True, text=True).stdout
     # 仅定义处一处（framework/chip_pre_filter.py:959），无任何调用方
     assert out.count('def get_risk_tags') == 1
@@ -230,7 +232,7 @@ def test_s10_radar_top_n_after_sort(monkeypatch):
     codes = [f'{i:06d}.SZ' for i in range(n)]
 
     class _FakeCache:
-        def _query_df(self, sql):
+        def _query_shard(self, table, sql, params=None):
             return pd.DataFrame({'ts_code': codes})
 
         def get_tags_batch(self, ts_codes):

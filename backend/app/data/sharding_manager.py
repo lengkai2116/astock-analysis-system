@@ -144,6 +144,8 @@ class ShardingManager:
             'treemap_snapshot_history': 'snapshot_cache.db',
             'strategy_signal_detail': 'snapshot_cache.db',
             'win_rate_cache': 'snapshot_cache.db',
+            # 541号 B1：仪表盘市场级 OUT 成品仓（OUT 步骤构建，前端只读）
+            'out_market_panel': 'snapshot_cache.db',
 
             # market_snapshot.db — 盘中实时快照（356号§3.3 独立库，ECM snapshot_conn 直连；
             # 426号 S7/D5：补登路由消除"未登记"告警，读写仍走 snapshot_conn 单路径）
@@ -258,12 +260,28 @@ class ShardingManager:
         status_snapshot / strategy_signal_detail / treemap_snapshot /
         tag_history / *_history 原仅主键自增索引，API 按 ts_code/日期查询全表扫描。
         """
+        # 541号 B1：OUT 市场成品仓建表（幂等；OUT 步骤构建，前端只读）
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS out_market_panel (
+                    module          TEXT NOT NULL,
+                    asof_date       TEXT NOT NULL,
+                    payload_json    TEXT NOT NULL,
+                    data_dates_json TEXT,
+                    schema_version  INTEGER DEFAULT 1,
+                    built_at        TEXT,
+                    PRIMARY KEY (module, asof_date)
+                )
+            """)
+        except Exception as e:
+            logger.warning(f"out_market_panel 建表失败: {e}")
         index_sqls = [
             "CREATE INDEX IF NOT EXISTS idx_status_ts ON status_snapshot(ts_code, snapshot_date)",
             "CREATE INDEX IF NOT EXISTS idx_signal_ts ON strategy_signal_detail(ts_code, trade_date)",
             "CREATE INDEX IF NOT EXISTS idx_treemap_ind ON treemap_snapshot(industry)",
             "CREATE INDEX IF NOT EXISTS idx_status_hist_date ON status_snapshot_history(snapshot_date)",
             "CREATE INDEX IF NOT EXISTS idx_treemap_hist_date ON treemap_snapshot_history(snapshot_date)",
+            "CREATE INDEX IF NOT EXISTS idx_out_market_module ON out_market_panel(module, asof_date)",
         ]
         for sql in index_sqls:
             try:

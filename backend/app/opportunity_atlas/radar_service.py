@@ -56,14 +56,18 @@ class RadarService(DataAwareMixin):
         """
         cache = self._get_dm().cache
 
-        # 1. 获取所有有标签的 ts_code
+        # 1. 获取候选（541 B5：改读 OUT treemap_snapshot Top-N）
         try:
-            df = cache._query_df(
-                "SELECT DISTINCT ts_code FROM opportunity_tags_cache"
-            )
-            all_tagged = df["ts_code"].tolist()
+            df = cache._query_shard(
+                'treemap_snapshot',
+                "SELECT ts_code FROM treemap_snapshot "
+                "WHERE signal_strength IS NOT NULL "
+                "ORDER BY signal_strength DESC LIMIT 500")
+            all_tagged = df['ts_code'].tolist() if df is not None and not df.empty else []
+            if not all_tagged:
+                all_tagged = cache.get_treemap_snapshot_codes()
         except Exception as e:
-            logger.warning("get_radar_signals: 查询标签表失败: %s", e)
+            logger.warning("get_radar_signals: 查询 OUT 快照失败: %s", e)
             return []
         if not all_tagged:
             return []

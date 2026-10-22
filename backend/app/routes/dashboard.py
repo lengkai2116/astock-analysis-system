@@ -19,6 +19,7 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
+from app.services import live_overlay, out_market_reader
 from app.services.dashboard_service import DashboardService
 from app.utils.api_cache import api_cache
 from app.utils.error_handlers import handle_exceptions
@@ -45,7 +46,10 @@ def get_index_daily():
     # 526 B8：days clamp 1~60（防负数/超大值）
     days = request.args.get('days', 20, type=int)
     days = max(1, min(days if days else 20, 60))
-    data = _service.get_market_volume(days=days)
+    data = out_market_reader.get_out_or_legacy(
+        'market_index_daily',
+        lambda: _service.get_market_volume(days=days),
+        transform=lambda payload: out_market_reader.slice_index_daily(payload, days))
     return _data_response(data)
 
 
@@ -63,7 +67,11 @@ def get_daily_top():
         type_ = 'up'
     limit = request.args.get('limit', 10, type=int)
     limit = max(1, min(limit if limit else 10, 50))
-    data = _service.get_daily_top(type=type_, limit=limit)
+    _module = 'market_daily_top_up' if type_ == 'up' else 'market_daily_top_down'
+    data = out_market_reader.get_out_or_legacy(
+        _module,
+        lambda: _service.get_daily_top(type=type_, limit=limit),
+        transform=lambda payload: out_market_reader.slice_daily_top(payload, limit))
     return _data_response(data)
 
 
@@ -75,7 +83,8 @@ def get_daily_top():
 @handle_exceptions
 def get_eod_snapshot():
     """全市场前一交易日日终散点数据（体量×涨跌 + 开高低收四象限）"""
-    data = _service.get_eod_snapshot()
+    data = out_market_reader.get_out_or_legacy(
+        'market_eod_snapshot', _service.get_eod_snapshot)
     return _data_response(data)
 
 
@@ -87,7 +96,9 @@ def get_eod_snapshot():
 @handle_exceptions
 def get_market_breadth():
     """市场宽度（524 号 L2）：涨跌家数 + MA20占比/涨停比例"""
-    data = _service.get_market_breadth()
+    data = out_market_reader.get_out_or_legacy(
+        'market_breadth', _service.get_market_breadth)
+    data = live_overlay.apply_overlay('market_breadth', data)
     return _data_response(data)
 
 
@@ -96,7 +107,9 @@ def get_market_breadth():
 @handle_exceptions
 def get_limit_ecology():
     """涨停生态（533 号批次2）：涨跌停对比 + 行业个股 + 昨涨停今表现 + 连板 + 5日封板率"""
-    data = _service.get_limit_ecology()
+    data = out_market_reader.get_out_or_legacy(
+        'market_limit_ecology', _service.get_limit_ecology)
+    data = live_overlay.apply_overlay('market_limit_ecology', data)
     return _data_response(data)
 
 @dashboard_bp.route('/api/v3/market/flows-30d', methods=['GET'])
@@ -104,7 +117,8 @@ def get_limit_ecology():
 @handle_exceptions
 def get_market_flows_30d():
     """市场资金与杠杆30日（533 号批次3）：5日行业资金×涨跌 + 30日ETF份额 + 30日融资"""
-    data = _service.get_market_flows_30d()
+    data = out_market_reader.get_out_or_legacy(
+        'market_flows_30d', _service.get_market_flows_30d)
     return _data_response(data)
 
 
@@ -113,7 +127,8 @@ def get_market_flows_30d():
 @handle_exceptions
 def get_market_overview_panel():
     """大盘总览（533 号批次1）：前一交易日日终 + 涨跌平 + 近5日强弱家数"""
-    data = _service.get_market_overview_panel()
+    data = out_market_reader.get_out_or_legacy(
+        'market_overview_panel', _service.get_market_overview_panel)
     return _data_response(data)
 
 
@@ -122,7 +137,8 @@ def get_market_overview_panel():
 @handle_exceptions
 def get_market_state():
     """大盘状态（524 号 L1）：4 状态·状态机（趋势/震荡/高波动/盘整）"""
-    data = _service.get_market_state()
+    data = out_market_reader.get_out_or_legacy(
+        'market_state', _service.get_market_state)
     return _data_response(data)
 
 
@@ -131,7 +147,9 @@ def get_market_state():
 @handle_exceptions
 def get_market_emotion():
     """市场情绪（524 号 L3）：六段论阶段 + 涨停生态指标"""
-    data = _service.get_market_emotion()
+    data = out_market_reader.get_out_or_legacy(
+        'market_emotion', _service.get_market_emotion)
+    data = live_overlay.apply_overlay('market_emotion', data)
     return _data_response(data)
 
 
@@ -143,7 +161,10 @@ def get_sector_heat():
     top_n = request.args.get('top_n', 8, type=int)
     # 525 A4：clamp 防负数/超大值（负数/None 归默认，上限 100）
     top_n = min(top_n if top_n and top_n > 0 else 8, 100)
-    data = _service.get_sector_heat(top_n=top_n)
+    data = out_market_reader.get_out_or_legacy(
+        'market_sector_heat',
+        lambda: _service.get_sector_heat(top_n=top_n),
+        transform=lambda payload: out_market_reader.slice_sector_heat(payload, top_n))
     return _data_response(data)
 
 
@@ -154,7 +175,10 @@ def get_sector_heat_dim():
     """板块热度五维（532 号批次3）：sector_heat_dim_cache 最新日 31 行业 + KPI"""
     top_n = request.args.get('top_n', 31, type=int)
     top_n = min(top_n if top_n and top_n > 0 else 31, 31)
-    data = _service.get_sector_heat_dim(top_n=top_n)
+    data = out_market_reader.get_out_or_legacy(
+        'market_sector_heat_dim',
+        lambda: _service.get_sector_heat_dim(top_n=top_n),
+        transform=lambda payload: out_market_reader.slice_sector_heat(payload, top_n))
     return _data_response(data)
 
 
@@ -163,7 +187,8 @@ def get_sector_heat_dim():
 @handle_exceptions
 def get_market_alerts():
     """市场预警（524 号 L5）：四条规则 + 建议输出（建议型、非强制）"""
-    data = _service.get_market_alerts()
+    data = out_market_reader.get_out_or_legacy(
+        'market_alerts', _service.get_market_alerts)
     return _data_response(data)
 
 
@@ -178,7 +203,10 @@ def get_sector_sector():
     # 526 B8：top_n clamp 1~50
     top_n = request.args.get('top_n', 8, type=int)
     top_n = max(1, min(top_n if top_n else 8, 50))
-    data = _service.get_sector_changes(top_n=top_n)
+    data = out_market_reader.get_out_or_legacy(
+        'market_sector_changes',
+        lambda: _service.get_sector_changes(top_n=top_n),
+        transform=lambda payload: out_market_reader.slice_sector_changes(payload, top_n))
     return _data_response(data)
 
 
@@ -195,7 +223,10 @@ def get_moneyflow_summary():
     # 526 B8：days clamp 1~60
     days = request.args.get('days', 20, type=int)
     days = max(1, min(days if days else 20, 60))
-    data = _service.get_moneyflow_summary(days=days)
+    data = out_market_reader.get_out_or_legacy(
+        'market_moneyflow_summary',
+        lambda: _service.get_moneyflow_summary(days=days),
+        transform=lambda payload: out_market_reader.slice_moneyflow_summary(payload, days))
     return _data_response(data)
 
 
@@ -212,7 +243,11 @@ def get_sector_moneyflow():
     top_n = max(1, min(top_n if top_n else 8, 50))
     stocks_per = request.args.get('stocks_per_sector', 3, type=int)
     stocks_per = max(1, min(stocks_per if stocks_per else 3, 10))
-    data = _service.get_sector_moneyflow(top_n=top_n, stocks_per_sector=stocks_per)
+    data = out_market_reader.get_out_or_legacy(
+        'market_sector_moneyflow',
+        lambda: _service.get_sector_moneyflow(top_n=top_n, stocks_per_sector=stocks_per),
+        transform=lambda payload: out_market_reader.slice_sector_moneyflow(
+            payload, top_n, stocks_per))
     return _data_response(data)
 
 

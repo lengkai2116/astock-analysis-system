@@ -450,6 +450,15 @@ class DataManager:
         return self.cache.get_snapshot_history(
             ts_code=ts_code, start_date=start_date, end_date=end_date, table=table)
 
+    def get_out_market_panel(self, module: str,
+                             asof_date: str | None = None) -> dict | None:
+        """541号 B1：读取仪表盘市场级 OUT 成品（调用层唯一网关）。"""
+        return self.cache.get_out_market_panel(module, asof_date=asof_date)
+
+    def get_out_market_panel_date(self) -> str | None:
+        """541号 B1：OUT 市场成品最新日期（最后一次有效版本提示）。"""
+        return self.cache.get_out_market_panel_date()
+
     def get_previous_trade_date(self) -> str | None:
         """获取上一交易日（L4 日变检测用，替代调用层直连 daily_cache）"""
         try:

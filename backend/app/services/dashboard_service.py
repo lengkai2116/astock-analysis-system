@@ -17,6 +17,9 @@ import pandas as pd
 
 from app.data import DataManager
 
+from . import live_overlay as _lo
+from . import out_market_reader as _omr
+
 logger = logging.getLogger(__name__)
 
 # 四大指数配置
@@ -1252,47 +1255,66 @@ class DashboardService:
     def get_dashboard_full(self) -> Optional[Dict]:
         """聚合仪表盘全部数据（一次调用替代 7 次独立请求）"""
         result = {'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        # 541号 B2/B3：EOD 模块走 OUT 成品仓；混合模块 OUT + 实时 overlay
 
         try:
-            overview = self.get_index_summary()
+            overview = _omr.get_out_or_legacy(
+                'market_overview', self.get_index_summary)
+            # legacy 回退本身已读实时源，重复 overlay 会强改 data_is_live
+            if isinstance(overview, dict) and overview.get('panel_source') == 'out':
+                overview = _lo.apply_overlay('market_overview', overview)
             if overview:
                 result['market_overview'] = overview
         except Exception:
             pass
 
         try:
-            volume = self.get_market_volume()
+            volume = _omr.get_out_or_legacy(
+                'market_index_daily', self.get_market_volume,
+                transform=lambda p: _omr.slice_index_daily(p, 20))
             if volume:
                 result['market_volume'] = volume
         except Exception:
             pass
 
         try:
-            moneyflow = self.get_moneyflow_summary()
+            moneyflow = _omr.get_out_or_legacy(
+                'market_moneyflow_summary', self.get_moneyflow_summary,
+                transform=lambda p: _omr.slice_moneyflow_summary(p, 20))
             if moneyflow:
                 result['moneyflow_summary'] = moneyflow
         except Exception:
             pass
 
         try:
-            sector = self.get_sector_changes()
+            sector = _omr.get_out_or_legacy(
+                'market_sector_changes', self.get_sector_changes,
+                transform=lambda p: _omr.slice_sector_changes(p, 8))
             if sector:
                 result['sector_changes'] = sector
         except Exception:
             pass
 
         try:
-            sec_mf = self.get_sector_moneyflow()
+            sec_mf = _omr.get_out_or_legacy(
+                'market_sector_moneyflow', self.get_sector_moneyflow,
+                transform=lambda p: _omr.slice_sector_moneyflow(p, 8, 3))
             if sec_mf:
                 result['sector_moneyflow'] = sec_mf
         except Exception:
             pass
 
         try:
-            top_up = self.get_daily_top(type='up', limit=10)
+            top_up = _omr.get_out_or_legacy(
+                'market_daily_top_up',
+                lambda: self.get_daily_top(type='up', limit=10),
+                transform=lambda p: _omr.slice_daily_top(p, 10))
             if top_up:
                 result['daily_top_up'] = top_up
-            top_down = self.get_daily_top(type='down', limit=10)
+            top_down = _omr.get_out_or_legacy(
+                'market_daily_top_down',
+                lambda: self.get_daily_top(type='down', limit=10),
+                transform=lambda p: _omr.slice_daily_top(p, 10))
             if top_down:
                 result['daily_top_down'] = top_down
         except Exception:
@@ -1300,7 +1322,8 @@ class DashboardService:
 
         # 533 批次1：大盘总览面板并入聚合载荷
         try:
-            overview_panel = self.get_market_overview_panel()
+            overview_panel = _omr.get_out_or_legacy(
+                'market_overview_panel', self.get_market_overview_panel)
             if overview_panel:
                 result['market_overview_panel'] = overview_panel
         except Exception:
@@ -1308,7 +1331,10 @@ class DashboardService:
 
         # 533 批次2：涨停生态并入聚合载荷
         try:
-            limit_ecology = self.get_limit_ecology()
+            limit_ecology = _lo.apply_overlay(
+                'market_limit_ecology',
+                _omr.get_out_or_legacy(
+                    'market_limit_ecology', self.get_limit_ecology))
             if limit_ecology:
                 result['limit_ecology'] = limit_ecology
         except Exception:
@@ -1316,7 +1342,8 @@ class DashboardService:
 
         # 533 批次3：市场资金与杠杆30日并入聚合载荷
         try:
-            flows_30d = self.get_market_flows_30d()
+            flows_30d = _omr.get_out_or_legacy(
+                'market_flows_30d', self.get_market_flows_30d)
             if flows_30d:
                 result['market_flows_30d'] = flows_30d
         except Exception:
@@ -1324,21 +1351,26 @@ class DashboardService:
 
         # 524 批次1'：大盘监控三只读接口并入聚合载荷（Q6 全选）
         try:
-            breadth = self.get_market_breadth()
+            breadth = _lo.apply_overlay(
+                'market_breadth',
+                _omr.get_out_or_legacy('market_breadth', self.get_market_breadth))
             if breadth:
                 result['market_breadth'] = breadth
         except Exception:
             pass
 
         try:
-            state = self.get_market_state()
+            state = _omr.get_out_or_legacy(
+                'market_state', self.get_market_state)
             if state:
                 result['market_state'] = state
         except Exception:
             pass
 
         try:
-            emotion = self.get_market_emotion()
+            emotion = _lo.apply_overlay(
+                'market_emotion',
+                _omr.get_out_or_legacy('market_emotion', self.get_market_emotion))
             if emotion:
                 result['market_emotion'] = emotion
         except Exception:
@@ -1346,7 +1378,9 @@ class DashboardService:
 
         # 524 批次3：板块热度并入聚合载荷（L4 板块卡增强）
         try:
-            heat = self.get_sector_heat()
+            heat = _omr.get_out_or_legacy(
+                'market_sector_heat', self.get_sector_heat,
+                transform=lambda p: _omr.slice_sector_heat(p, 8))
             if heat:
                 result['sector_heat'] = heat
         except Exception:
@@ -1354,7 +1388,8 @@ class DashboardService:
 
         # 524 批次4：市场预警并入聚合载荷（L5 预警列表）
         try:
-            alerts = self.get_market_alerts()
+            alerts = _omr.get_out_or_legacy(
+                'market_alerts', self.get_market_alerts)
             if alerts:
                 result['market_alerts'] = alerts
         except Exception:

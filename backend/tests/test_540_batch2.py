@@ -65,14 +65,12 @@ def test_get_tags_prefers_pre_feat_and_jud_signal(monkeypatch):
         'valuation': {'valuation_level': 'low'},
         'depth': {'main_force_phase': 'washing'},
         'sentiment': {'sentiment_phase': 'ferment'},
+        'chanlun': {'buy_sell_point': 'third_buy'},
     }
 
     def fake_query_shard(table, sql, params=None):
         if table == 'opportunity_tags_cache':
-            return pd.DataFrame([
-                {'tag_name': 'valuation_level', 'tag_value': 'fair'},
-                {'tag_name': 'buy_sell_point', 'tag_value': 'third_buy'},
-            ])
+            raise AssertionError('541 B5 后旧表读取应已冻结')
         if table == 'pre_feat_cache':
             return pd.DataFrame([{'features_json': json.dumps(pre)}])
         if table == 'treemap_snapshot':
@@ -81,10 +79,10 @@ def test_get_tags_prefers_pre_feat_and_jud_signal(monkeypatch):
 
     monkeypatch.setattr(ecm, '_query_shard', fake_query_shard)
     tags = ecm.get_tags('000001.SZ')
-    assert tags['valuation_level'] == 'low'          # pre_feat 覆盖旧标签
+    assert tags['valuation_level'] == 'low'          # pre_feat 为唯一来源
     assert tags['main_force_phase'] == 'washing'
     assert tags['sentiment_phase'] == 'ferment'
-    assert tags['buy_sell_point'] == 'third_buy'      # 非 pre_feat 字段保留
+    assert tags['buy_sell_point'] == 'third_buy'      # 541 B5 已迁入 pre_feat
     assert tags['signal_strength'] == '90.0'          # JUD 快照优先
 
 

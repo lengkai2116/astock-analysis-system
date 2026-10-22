@@ -198,6 +198,7 @@ def _build_label_baseline(ts_code: str) -> str:
         from app.data import DataManager
         dm = DataManager()
         tags = dm.cache.get_tags(ts_code)
+        # 541 B4：get_tags 已用 treemap_snapshot（OUT）覆盖 state/rsc/label/profile
         if not tags:
             return ''
         # 七维红绿灯（opportunity_profile）

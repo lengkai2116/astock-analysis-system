@@ -344,7 +344,7 @@ def data_freshness():
         # 骨架行（单只预计算先写、JUD 未跑）会顶掉 MAX(trade_date) 致 latest 失真；
         # cnt 仍为全表行数（保持与其它表口径一致）。
         'strategy_signal_detail': 'SELECT (SELECT MAX(trade_date) FROM strategy_signal_detail WHERE dim_results_json IS NOT NULL) as latest, COUNT(*) as cnt FROM strategy_signal_detail',
-        'opportunity_tags_cache': 'SELECT MAX(updated_at) as latest, COUNT(*) as cnt FROM opportunity_tags_cache',
+        # 541 B5：opportunity_tags_cache 已冻结（仅归档，不再作为活跃数据源）
         'treemap_snapshot': 'SELECT MAX(snapshot_date) as latest, COUNT(*) as cnt FROM treemap_snapshot',
     }
     results = {}
@@ -357,7 +357,7 @@ def data_freshness():
         # 426号 落地复核修正：win_rate_cache 归 snapshot_cache.db 分库，补入分库读取
         # （原走总库 read_conn，表已被空壳清理 DROP → 健康监控恒报错）
         sharded_tables = {'daily_cache', 'daily_basic_cache', 'moneyflow_cache',
-                          'strategy_signal_detail', 'opportunity_tags_cache', 'treemap_snapshot',
+                          'strategy_signal_detail', 'treemap_snapshot',
                           'win_rate_cache'}
         for name, query in tables.items():
             try:

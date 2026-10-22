@@ -119,7 +119,7 @@ def test_j23_radar_get_tags_batch_chunked():
     calls = []
 
     class _FakeCache:
-        def _query_df(self, sql):
+        def _query_shard(self, table, sql, params=None):
             return pd.DataFrame({'ts_code': [f'{i:06d}.SZ' for i in range(450)]})
 
         def get_tags_batch(self, codes):

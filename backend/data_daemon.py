@@ -6298,6 +6298,145 @@ def _build_treemap_snapshot(codes: list[str]):
     logger.info(f"treemap_snapshot 构建完成: {written}/{len(codes)} 只, 耗时 {elapsed:.1f}s")
 
 
+# 541号 B1：仪表盘市场级 OUT 成品仓构建清单
+# （module, DashboardService 方法, 参数）。B1 只落 EOD 成品，盘中实时 overlay 留 B3。
+OUT_MARKET_BUILDERS = (
+    ('market_index_daily', 'get_market_volume', {'days': 60}),
+    ('market_daily_top_up', 'get_daily_top', {'type': 'up', 'limit': 50}),
+    ('market_daily_top_down', 'get_daily_top', {'type': 'down', 'limit': 50}),
+    ('market_eod_snapshot', 'get_eod_snapshot', {}),
+    ('market_overview_panel', 'get_market_overview_panel', {}),
+    ('market_moneyflow_summary', 'get_moneyflow_summary', {'days': 60}),
+    ('market_sector_changes', 'get_sector_changes', {'top_n': 50}),
+    ('market_sector_moneyflow', 'get_sector_moneyflow',
+     {'top_n': 50, 'stocks_per_sector': 10}),
+    ('market_flows_30d', 'get_market_flows_30d', {}),
+    ('market_breadth', 'get_market_breadth', {}),
+    ('market_limit_ecology', 'get_limit_ecology', {}),
+    ('market_state', 'get_market_state', {}),
+    ('market_emotion', 'get_market_emotion', {}),
+    ('market_sector_heat', 'get_sector_heat', {'top_n': 100}),
+    ('market_sector_heat_dim', 'get_sector_heat_dim', {'top_n': 31}),
+    ('market_alerts', 'get_market_alerts', {}),
+    ('market_overview', 'get_index_summary', {}),
+)
+
+
+def _collect_out_market_payloads(svc):
+    """541号 B1：调用 DashboardService 生成各模块 payload 并做契约校验。
+
+    Returns: (payloads, errors)
+      payloads = {module: (payload, data_dates)}
+      errors   = {module: reason}
+    """
+    from app.data.out_market import extract_dates, validate_payload
+    payloads: dict = {}
+    errors: dict = {}
+    for module, method_name, kwargs in OUT_MARKET_BUILDERS:
+        try:
+            payload = getattr(svc, method_name)(**kwargs)
+        except Exception as exc:
+            errors[module] = f'{type(exc).__name__}: {exc}'
+            continue
+        ok, reason = validate_payload(module, payload)
+        if not ok:
+            errors[module] = reason
+            continue
+        payloads[module] = (payload, extract_dates(payload))
+    return payloads, errors
+
+
+def _build_out_market_panel(pipeline_date: str) -> dict:
+    """541号 B1：OUT 步骤构建仪表盘市场级成品仓。
+
+    只写 out_market_panel（snapshot_cache.db）；前端 API 在 B2 改为只读本表。
+    """
+    global _ecm, _dim8_app
+    if _ecm is None:
+        from app.data.enhanced_cache_manager import get_ecm_instance
+        _ecm = get_ecm_instance()
+    t0 = time.time()
+    logger.info(f"OUT步骤: 构建 out_market_panel（{pipeline_date}）...")
+    try:
+        from app import create_app
+        from app.services.dashboard_service import DashboardService
+        if _dim8_app is None:
+            _dim8_app = create_app()
+        with _dim8_app.app_context():
+            payloads, errors = _collect_out_market_payloads(DashboardService())
+    except Exception as exc:
+        logger.warning(f"out_market_panel 构建失败（服务初始化）: {exc}")
+        return {'written': 0, 'errors': {'_init': str(exc)}}
+
+    written = 0
+    write_errors = dict(errors)
+    for module, (payload, data_dates) in payloads.items():
+        if _ecm.upsert_out_market_panel(module, pipeline_date, payload, data_dates):
+            written += 1
+        else:
+            write_errors[module] = '写入失败'
+    logger.info(
+        f"  out_market_panel: {written}/{len(OUT_MARKET_BUILDERS)} 模块"
+        f"，异常 {len(write_errors)}，耗时 {time.time() - t0:.1f}s")
+    if write_errors:
+        logger.warning(f"  out_market_panel 异常: {write_errors}")
+    return {'written': written, 'errors': write_errors}
+
+
+def _verify_out_market_panel(pipeline_date: str):
+    """541号 B1：OUT 市场成品字段级校验（模块齐全 + payload 契约）。"""
+    try:
+        global _ecm
+        if _ecm is None:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            _ecm = get_ecm_instance()
+        prev = _ecm.conn.execute(
+            "SELECT status FROM pipeline_status WHERE pipeline_date=? AND step_id='OUT-MARKET-CHECK'",
+            [pipeline_date]).fetchone()
+        if prev and prev[0] == 'done':
+            return
+
+        from app.data.out_market import OUT_MARKET_MODULES, validate_payload
+        missing, invalid = [], []
+        for module in OUT_MARKET_MODULES:
+            row = _ecm.get_out_market_panel(module, asof_date=pipeline_date)
+            if not row:
+                missing.append(module)
+                continue
+            ok, reason = validate_payload(module, row.get('payload') or {})
+            if not ok:
+                invalid.append(f'{module}: {reason}')
+
+        status = 'done' if not missing and not invalid else 'failed'
+        detail = (
+            f"modules={len(OUT_MARKET_MODULES) - len(missing)}/{len(OUT_MARKET_MODULES)}"
+            f" missing={missing[:5]} invalid={invalid[:5]}")
+        from app.data.sharding_manager import sharding_manager
+        with sharding_manager.get_write_lock('stock_cache.db'):
+            prev = _ecm.conn.execute(
+                "SELECT status FROM pipeline_status "
+                "WHERE pipeline_date=? AND step_id='OUT-MARKET-CHECK'",
+                [pipeline_date]).fetchone()
+            if prev and prev[0] == 'done':
+                return
+            try:
+                _ecm.conn.execute(
+                    "INSERT OR REPLACE INTO pipeline_status "
+                    "(pipeline_date, step_id, step_name, status, detail) "
+                    "VALUES (?, 'OUT-MARKET-CHECK', 'OUT市场成品校验', ?, ?)",
+                    [pipeline_date, status, detail])
+                _ecm.conn.commit()
+            except Exception:
+                _ecm.conn.rollback()
+                raise
+        if status == 'done':
+            logger.info(f"  [管道] OUT市场成品校验: {detail}")
+        else:
+            logger.warning(f"  [管道] OUT市场成品校验失败: {detail}")
+    except Exception as exc:
+        logger.warning(f"OUT市场成品校验失败: {exc}")
+
+
 def _out_transmit_seven_dim(codes: list[str]):
     """370号方案 OUT步骤：七维透传 + 归档 + 自选股变更检测
 
@@ -7410,16 +7549,18 @@ def _drive_pipeline():
     if not _all_steps_done(status, ['JUD']):
         return
 
-    # ── 成品仓阶段 OUT（370号方案S6：简化，仅做七维透传+归档）──
+    # ── 成品仓阶段 OUT（370号方案S6：七维透传/归档 + 541号市场成品仓）──
     if status.get('OUT', {}).get('status') != 'done':
         def _out_build(_codes):
             _out_transmit_seven_dim(_codes)
+            _build_out_market_panel(today)
         _run_pipeline_step(today, 'OUT', _out_build, codes)
         return
 
-    # 371号P0#2：OUT成品表完整性验证
+    # 371号P0#2：OUT成品表完整性验证；541号 B1：市场成品仓字段级校验
     if status.get('OUT', {}).get('status') == 'done':
         _verify_out_completeness(today)
+        _verify_out_market_panel(today)
 
     # ── 423号：仓储质量校验 QA-CHECK（OUT 完成后、管道完成前）──
     _qa_row = status.get('QA-CHECK', {})

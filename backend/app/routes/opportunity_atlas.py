@@ -279,33 +279,6 @@ def _build_response(mode: str, items: list[dict]) -> dict:
     }
 
 
-def _fallback_legacy_treemap(mode: str, ts_codes: list[str], dm) -> list[dict]:
-    """回退路径：从 daily_cache/daily_basic_cache/tags 逐表读取（旧路径）"""
-    meta_batch = dm.get_stock_meta_batch(ts_codes)
-    name_map = {tc: m['name'] for tc, m in meta_batch.items()}
-    industry_map = {tc: m['industry'] for tc, m in meta_batch.items()}
-    daily_batch = dm.cache.get_cached_daily_batch(ts_codes)
-    basic_batch = dm.cache.get_cached_daily_basic_batch(ts_codes)
-    snapshot_dict: dict[str, dict] = {}
-    if mode == 'market':
-        try:
-            for s in dm.cache.get_all_market_snapshots(ts_codes):
-                p = float(s.get('price', 0))
-                if 0.01 < p < 10000:
-                    snapshot_dict[s['ts_code']] = s
-        except Exception:
-            pass
-    tags_batch = dm.cache.get_tags_batch(ts_codes)
-    items = []
-    for ts_code in ts_codes:
-        item = _build_stock_item(ts_code, name_map, industry_map,
-                                 daily_batch, basic_batch, tags_batch,
-                                 snapshot=snapshot_dict.get(ts_code))
-        item['industry'] = industry_map.get(ts_code, '')
-        items.append(item)
-    return items
-
-
 @opportunity_bp.route('/treemap', methods=['GET'])
 @handle_exceptions
 def treemap():
@@ -360,12 +333,22 @@ def treemap():
         result = _build_response(mode, items)
 
     except Exception as _snap_exc:
-        logger.warning(f'treemap_snapshot 不可用，回退到逐表查询: {type(_snap_exc).__name__}: {_snap_exc}')
-        items = _fallback_legacy_treemap(mode, ts_codes, dm)
-        result = _build_response(mode, items)
+        logger.warning(
+            f'treemap_snapshot 不可用（541 B4 禁止旧路径回退）: '
+            f'{type(_snap_exc).__name__}: {_snap_exc}')
+        result = {
+            'code': 0,
+            'data': {
+                'mode': mode,
+                'groups': [],
+                'signal_strength_fallback': False,
+                'data_status': 'snapshot_missing',
+                'generated_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
+            },
+        }
 
-    # ── 4. 写入缓存（非 market 模式） ──
-    if mode != 'market':
+    # ── 4. 写入缓存（非 market 模式；缺失快照不缓存，避免延迟恢复） ──
+    if mode != 'market' and result.get('data', {}).get('data_status') != 'snapshot_missing':
         tm_cache.set(cache_key, result, level='treemap')
 
     # ── 5. HTTP 响应缓存头（305号§2.4） ──

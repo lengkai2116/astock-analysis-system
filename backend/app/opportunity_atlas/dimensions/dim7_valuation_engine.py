@@ -204,27 +204,44 @@ class Dim7ValuationEngine(DataAwareMixin):
 
     # ── 截面基准构建（供 precompute 调用） ──────────────
 
+    @staticmethod
+    def _composite_items_from_pre_feat(ecm) -> list:
+        """541 B4：pre_feat_cache 最新交易日 valuation.composite_rating。"""
+        try:
+            td = ecm._query_shard(
+                'pre_feat_cache',
+                "SELECT MAX(trade_date) AS d FROM pre_feat_cache")
+            if td is None or td.empty:
+                return []
+            trade_date = td.iloc[0]['d']
+            if not trade_date:
+                return []
+            df = ecm._query_shard(
+                'pre_feat_cache',
+                "SELECT ts_code, features_json FROM pre_feat_cache WHERE trade_date = ?",
+                [trade_date])
+            items = []
+            for _, r in df.iterrows():
+                try:
+                    valuation = json.loads(r['features_json']).get('valuation') or {}
+                    composite = valuation.get('composite_rating')
+                    if composite is None or composite == '':
+                        continue
+                    items.append((r['ts_code'], float(composite)))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+            return items
+        except Exception:
+            return []
+
     def build_composite_percentile(self, ecm) -> None:
         """构建全市场 composite_rating 截面百分位基准
 
-        476号：对齐 RAW 侧（valuation_estimator 同法）——从 opportunity_tags_cache
-        分库 SQL 直读 composite_rating（每只取最新 id）；原 dm.get_tags_batch 不存在
-        （DataManager 仅 get_tags_by_date/get_tags_by_group）→ AttributeError 恒失败。
+        541 B4：源＝pre_feat_cache 最新交易日 valuation.composite_rating
+        （RAW-2 每日刷新）；不再读取已停更的 opportunity_tags_cache。
         """
         try:
-            rows = ecm._query_shard(
-                'opportunity_tags_cache',
-                "SELECT DISTINCT ts_code, tag_value FROM opportunity_tags_cache "
-                "WHERE tag_name='composite_rating' AND tag_value IS NOT NULL AND tag_value != '' "
-                "AND id IN (SELECT MAX(id) FROM opportunity_tags_cache "
-                "WHERE tag_name='composite_rating' GROUP BY ts_code)"
-            )
-            items = []
-            for _, r in rows.iterrows():
-                try:
-                    items.append((r['ts_code'], float(r['tag_value'])))
-                except (TypeError, ValueError):
-                    continue
+            items = self._composite_items_from_pre_feat(ecm)
             if len(items) < 100:
                 self._comp_percentile = None
                 return
