@@ -48,17 +48,30 @@ def _get_memory_cache():
     return _tm_cache
 
 
-def _treemap_cache_key(mode: str, tags: str = '', industry: str = '') -> str:
-    """生成 treemap 缓存键（305号§2.3.2）"""
+def _treemap_cache_key(mode: str, tags: str = '', industry: str = '',
+                       ts_codes: str = '') -> str:
+    """生成 treemap 缓存键（305号§2.3.2；540号批次1：纳入 ts_codes）"""
     if mode == 'market':
         return 'treemap:market'
-    return f'treemap:{mode}:{tags}:{industry}'
+    key = f'treemap:{mode}:{tags}:{industry}'
+    if ts_codes:
+        normalized = ','.join(sorted({
+            c.strip() for c in ts_codes.split(',') if c.strip()
+        }))
+        if normalized:
+            key += f':{normalized}'
+    return key
 
 
 def _merge_snapshot_with_realtime(items: list[dict], realtime_list: list[dict]) -> list[dict]:
     """用盘中实时快照覆盖快照中的 pct_change（market 模式）"""
     rt_map = {}
+    # 540号批次3 P2-1：只取最新写入日的实时行，避免 09-09 等陈旧行覆盖当日价
+    latest_day = max(
+        (str(s.get('cached_at') or '')[:10] for s in realtime_list), default='')
     for s in realtime_list:
+        if latest_day and str(s.get('cached_at') or '')[:10] != latest_day:
+            continue
         p = float(s.get('price', 0))
         if 0.01 < p < 10000:
             rt_map[s['ts_code']] = s
@@ -67,16 +80,47 @@ def _merge_snapshot_with_realtime(items: list[dict], realtime_list: list[dict]) 
         if rt:
             item['pct_change'] = round(float(rt['change_pct']), 2)
             item['price'] = round(float(rt['price']), 2)
+            # 540号批次3 P2-1：同步覆盖开高低/成交额；市值/换手仍为日终口径
+            for _f in ('open', 'high', 'low', 'amount'):
+                try:
+                    _v = float(rt.get(_f))
+                except (TypeError, ValueError):
+                    continue
+                if _v > 0:
+                    item[_f] = _v
             item['snapshot'] = True
+            item['snapshot_at'] = rt.get('cached_at')
     return items
 
 
 def _collect_ts_codes(mode: str, dm, ts_codes_param: str, tags_param: str) -> list[str]:
-    """根据 mode 和参数收集目标 ts_codes（与旧版保持一致）"""
+    """根据 mode 和参数收集目标 ts_codes
+
+    540号批次1：
+    - market 不再用 `get_all_ts_codes(limit=5000)` 截断，优先取活跃股票池（含北交所），
+      空时回退到上限 10000 的全量列表；
+    - value/opportunity 支持显式 `ts_codes`，单股诊断卡不再拉全市场。
+    """
+    explicit = [
+        c.strip() for c in ts_codes_param.split(',') if c.strip()
+    ] if ts_codes_param else []
+
     if mode == 'market':
-        if ts_codes_param:
-            return [c.strip() for c in ts_codes_param.split(',') if c.strip()]
-        return dm.get_all_ts_codes()
+        if explicit:
+            return explicit
+        # 以快照股票池为主口径：包含当日停牌但仍有最近交易日行情的股票；
+        # 快照不可用时再回退活跃池/全量列表（不再 5000 截断）。
+        try:
+            snapshot_codes = dm.cache.get_treemap_snapshot_codes()
+        except Exception:
+            snapshot_codes = []
+        if snapshot_codes:
+            return snapshot_codes
+        try:
+            active = dm.cache.get_all_active_codes()
+        except Exception:
+            active = []
+        return active or dm.get_all_ts_codes(limit=10000)
 
     tag_filters = {}
     if tags_param:
@@ -89,17 +133,25 @@ def _collect_ts_codes(mode: str, dm, ts_codes_param: str, tags_param: str) -> li
 
     if mode == 'opportunity':
         if not tag_filters:
-            return []
+            return explicit
         results = dm.cache.query_tags(tag_filters)
-        return [r['ts_code'] for r in results]
+        codes = [r['ts_code'] for r in results]
+        if explicit:
+            allowed = set(explicit)
+            codes = [c for c in codes if c in allowed]
+        return codes
 
     if mode == 'value':
+        if not tag_filters and explicit:
+            return explicit
         if not tag_filters:
-            tag_filters = {'valuation_level': [
-                'extreme_low', 'low', 'fair', 'high', 'extreme_high',
-            ]}
+            tag_filters = {'valuation_level': ['extreme_low', 'low']}
         results = dm.cache.query_tags(tag_filters)
-        return [r['ts_code'] for r in results]
+        codes = [r['ts_code'] for r in results]
+        if explicit:
+            allowed = set(explicit)
+            codes = [c for c in codes if c in allowed]
+        return codes
 
     return []
 
@@ -180,8 +232,11 @@ def _build_response(mode: str, items: list[dict]) -> dict:
         {'industry': k, 'stocks': v}
         for k, v in sorted(groups_dict.items())
     ]
-    tagged = sum(1 for it in items if it.get('signal_strength', 0) > 0)
+    tagged = sum(1 for it in items if (it.get('signal_strength') or 0) > 0)
     coverage = tagged / len(items) if items else 0.0
+    # 540号批次2 P1-5：signal_strength 已统一为 JUD 口径；fallback 语义改为
+    # "是否存在 JUD 缺失（null）"，不再用 >0 覆盖率冒充数据回退。
+    _missing_ss = any(it.get('signal_strength') is None for it in items)
     # 313号：潜力快照日期（前端时间标注：潜力基于快照、时机截至实时）
     # 合规整改：经 DataManager 网关（红线5），原直连 get_ecm().conn 属违规
     _snap_date = None
@@ -195,16 +250,31 @@ def _build_response(mode: str, items: list[dict]) -> dict:
         _data_date = get_data_manager().get_snapshot_data_date()
     except Exception:
         pass
+    # 540号批次3：状态/标签/实时价分别透出，避免“时机 now”误导
+    _status_date = None
+    _tag_date = None
+    _realtime_at = None
+    try:
+        _dm = get_data_manager()
+        _status_date = _dm.cache.get_status_snapshot_date()
+        _tag_date = _dm.cache.get_pre_feat_max_date()
+        _realtime_at = _dm.cache.get_market_snapshot_max_cached_at()
+    except Exception:
+        pass
     return {
         'code': 0,
         'data': {
             'mode': mode,
             'groups': groups_list,
-            'signal_strength_fallback': coverage < 0.8,
-            'data_status': 'pre_compute' if coverage < 0.8 else 'complete',
+            'signal_strength_fallback': _missing_ss,
+            'signal_strength_coverage': round(coverage, 4),
+            'data_status': 'pre_compute' if _missing_ss else 'complete',
             'generated_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
             'snapshot_date': _snap_date,   # 313号：潜力快照日期（时间标注）
             'data_date': _data_date,       # 327阶段3：数据交易日（前端标注"数据截至"）
+            'status_date': _status_date,   # 540号批次3：状态成品日期
+            'tag_date': _tag_date,         # 540号批次3：标签/RAW 最新交易日
+            'realtime_at': _realtime_at,   # 540号批次3：实时快照最新写入时间
         },
     }
 
@@ -245,7 +315,7 @@ def treemap():
     tags_param = request.args.get('tags', '')
     industry_param = request.args.get('industry', '')
 
-    cache_key = _treemap_cache_key(mode, tags_param, industry_param)
+    cache_key = _treemap_cache_key(mode, tags_param, industry_param, ts_codes_param)
     tm_cache = _get_memory_cache()
 
     # ── 0. 内存缓存命中（非 market 模式可安全使用缓存） ──
@@ -274,7 +344,7 @@ def treemap():
     # ── 3. 尝试从快照表读取（305号§2.2） ──
     items: list[dict] = []
     try:
-        items = dm.get_treemap_snapshot_items(ts_codes)
+        items = dm.get_treemap_snapshot_items(ts_codes, include_detail=False)
         if not items:
             raise ValueError('snapshot empty')
 
@@ -305,6 +375,60 @@ def treemap():
     else:
         resp.headers['Cache-Control'] = 'no-cache'
     return resp
+
+
+@opportunity_bp.route('/quotes', methods=['GET'])
+@handle_exceptions
+def quotes():
+    """轻量实时报价（540号批次3 P2-2：30s 轮询不再拉全量 treemap）"""
+    ts_param = request.args.get('ts_codes', '')
+    codes = [c.strip() for c in ts_param.split(',') if c.strip()] if ts_param else None
+    dm = get_data_manager()
+    rows = dm.cache.get_all_market_snapshots(codes)
+    latest_day = max(
+        (str(r.get('cached_at') or '')[:10] for r in rows), default='')
+    quotes = []
+    for r in rows:
+        if latest_day and str(r.get('cached_at') or '')[:10] != latest_day:
+            continue
+        try:
+            price = float(r.get('price') or 0)
+        except (TypeError, ValueError):
+            continue
+        if 0.01 < price < 10000:
+            quotes.append({
+                'ts_code': r['ts_code'],
+                'price': round(price, 2),
+                'pct_change': round(float(r.get('change_pct') or 0), 2),
+                'snapshot': True,
+                'snapshot_at': r.get('cached_at'),
+            })
+    resp = jsonify({'code': 0, 'data': {
+        'quotes': quotes,
+        'count': len(quotes),
+        'generated_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
+    }})
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
+
+
+@opportunity_bp.route('/stock', methods=['GET'])
+@handle_exceptions
+def stock_detail():
+    """单股图谱详情（540号批次3 P2-2：大字段按需加载）"""
+    ts_code = request.args.get('ts_code', '').strip().upper()
+    if not ts_code:
+        return jsonify({'code': 400, 'error': 'ts_code 不能为空'}), 400
+    dm = get_data_manager()
+    items = dm.get_treemap_snapshot_items([ts_code], include_detail=True)
+    if not items:
+        return jsonify({'code': 404, 'error': f'{ts_code} 无快照数据'}), 404
+    try:
+        rt = dm.cache.get_all_market_snapshots([ts_code])
+        items = _merge_snapshot_with_realtime(items, rt)
+    except Exception:
+        pass
+    return jsonify({'code': 0, 'data': {'stock': items[0]}})
 
 
 @opportunity_bp.route('/diagnose', methods=['GET'])

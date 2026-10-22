@@ -3891,20 +3891,94 @@ class EnhancedCacheManager:
 
 
     def get_tags(self, ts_code: str) -> dict:
-        """读取单只股票的最新标签（323号 S0：上限提至 200，避免深度标签落库后截断丢失）"""
-        df = self._query_shard(
-            'opportunity_tags_cache',
-            "SELECT tag_name, tag_value, tag_group, confidence, source, updated_at "
-            "FROM opportunity_tags_cache WHERE ts_code=? "
-            "ORDER BY updated_at DESC LIMIT 200",
-            [ts_code]
-        )
-        if df.empty:
-            return {}
-        result = {}
-        for _, row in df.iterrows():
-            result[row['tag_name']] = row['tag_value']
+        """读取单只股票的最新标签（540号批次1/2）
+
+        批次1：每标签取 `updated_at` 最新一行（ROW_NUMBER），修复取最旧值。
+        批次2：13 个标签字段以 `pre_feat_cache` 最新行为准；`signal_strength`
+        以 `treemap_snapshot`（JUD 产物）为准，缺失置 None，不回退 08-19 旧标签。
+        """
+        result: dict = {}
+        try:
+            df = self._query_shard(
+                'opportunity_tags_cache',
+                """SELECT tag_name, tag_value, tag_group, confidence, source, updated_at
+                   FROM (
+                       SELECT tag_name, tag_value, tag_group, confidence, source, updated_at,
+                              ROW_NUMBER() OVER (
+                                  PARTITION BY tag_name
+                                  ORDER BY updated_at DESC, id DESC
+                              ) AS rn
+                       FROM opportunity_tags_cache
+                       WHERE ts_code=?
+                   )
+                   WHERE rn=1""",
+                [ts_code]
+            )
+            if not df.empty:
+                result = {row['tag_name']: row['tag_value'] for _, row in df.iterrows()}
+        except Exception as e:
+            logger.warning(f"get_tags 标签读取失败 {ts_code}: {e}")
+
+        pre = self.get_pre_feat_tags(ts_code)
+        if pre:
+            result.update(pre)
+
+        try:
+            ss_df = self._query_shard(
+                'treemap_snapshot',
+                "SELECT signal_strength FROM treemap_snapshot WHERE ts_code=?",
+                [ts_code])
+            if ss_df.empty:
+                result['signal_strength'] = None
+            else:
+                _ss = ss_df.iloc[0].get('signal_strength')
+                result['signal_strength'] = None if pd.isna(_ss) else str(_ss)
+        except Exception:
+            result.setdefault('signal_strength', None)
         return result
+
+    def get_pre_feat_tags(self, ts_code: str) -> dict:
+        """读取单只股票最新 pre_feat 行中的 treemap 同名字段（540号批次2）"""
+        try:
+            df = self._query_shard(
+                'pre_feat_cache',
+                "SELECT features_json FROM pre_feat_cache "
+                "WHERE ts_code=? ORDER BY trade_date DESC LIMIT 1",
+                [ts_code])
+            if df.empty:
+                return {}
+            fj = json.loads(df.iloc[0]['features_json'])
+        except Exception:
+            return {}
+        if not isinstance(fj, dict):
+            return {}
+        mapping = {
+            'valuation': (
+                'valuation_level', 'valuation_deviation', 'dividend_yield',
+                'composite_rating', 'fina_health',
+                'pe_percentile_5y', 'pb_percentile_5y',
+            ),
+            'depth': (
+                'main_force_phase', 'trend_alignment', 'fund_flow', 'capital_nature',
+                'price_position', 'main_force_presence', 'presence_evidence',
+                'phase_confidence',
+            ),
+            'sentiment': ('sentiment_phase',),
+            'sector': ('sector_heat',),
+            'chip': ('chip_concentration',),
+            'risk_ext': ('volatility_level',),
+            'style': ('style_exposure',),
+            'event': ('catalyst_event',),
+        }
+        out: dict = {}
+        for group, keys in mapping.items():
+            payload = fj.get(group)
+            if not isinstance(payload, dict):
+                continue
+            for key in keys:
+                if key in payload:
+                    out[key] = payload[key]
+        return out
 
     def get_tags_by_group(self, ts_code: str, groups: list[str]) -> dict:
         """按 tag_group 取子集（323号 S0.5：引擎B 差异化取用深度字段）
@@ -3982,6 +4056,41 @@ class EnhancedCacheManager:
             logger.warning(f"get_snapshot_data_date 失败: {e}")
             return None
 
+    def get_status_snapshot_date(self) -> str | None:
+        """获取 status_snapshot 最新构建日（540号批次3：状态口径透出）"""
+        try:
+            from app.data.sharding_manager import sharding_manager
+            conn = sharding_manager.get_connection(
+                sharding_manager.get_db_for_table('status_snapshot'))
+            row = conn.execute(
+                "SELECT MAX(snapshot_date) FROM status_snapshot").fetchone()
+            return str(row[0]) if row and row[0] else None
+        except Exception as e:
+            logger.warning(f"get_status_snapshot_date 失败: {e}")
+            return None
+
+    def get_pre_feat_max_date(self) -> str | None:
+        """获取 pre_feat_cache 最新交易日（540号批次3：标签口径透出）"""
+        try:
+            df = self._query_shard(
+                'pre_feat_cache', "SELECT MAX(trade_date) AS d FROM pre_feat_cache")
+            if df.empty or pd.isna(df.iloc[0]['d']):
+                return None
+            return str(df.iloc[0]['d'])
+        except Exception as e:
+            logger.warning(f"get_pre_feat_max_date 失败: {e}")
+            return None
+
+    def get_market_snapshot_max_cached_at(self) -> str | None:
+        """获取实时快照最新写入时间（540号批次3：价格时效角标）"""
+        try:
+            row = self.snapshot_conn.execute(
+                "SELECT MAX(cached_at) FROM as_market_snapshot").fetchone()
+            return str(row[0]) if row and row[0] else None
+        except Exception as e:
+            logger.warning(f"get_market_snapshot_max_cached_at 失败: {e}")
+            return None
+
     def get_snapshot_history(self, ts_code: str = None,
                              start_date: str = None, end_date: str = None,
                              table: str = 'status_snapshot_history') -> list[dict]:
@@ -4050,8 +4159,12 @@ class EnhancedCacheManager:
             SELECT DISTINCT a.ts_code
             FROM opportunity_tags_cache a
             WHERE a.tag_name = ? AND a.tag_value IN ({placeholders})
+              AND a.updated_at = (
+                  SELECT MAX(updated_at) FROM opportunity_tags_cache
+                  WHERE tag_name = ?
+              )
         """
-        params = [first_tag] + first_values
+        params = [first_tag] + first_values + [first_tag]
 
         for tag_name, values in conditions[1:]:
             ph = ','.join('?' for _ in values)
@@ -4059,10 +4172,15 @@ class EnhancedCacheManager:
                 INTERSECT
                 SELECT ts_code FROM opportunity_tags_cache
                 WHERE tag_name = ? AND tag_value IN ({ph})
+                  AND updated_at = (
+                      SELECT MAX(updated_at) FROM opportunity_tags_cache
+                      WHERE tag_name = ?
+                  )
             """
-            params += [tag_name] + values
+            params += [tag_name] + values + [tag_name]
 
-        sql += f" LIMIT {int(limit)}"
+        # 540号批次2 P2-3/P2-4：限定每标签最新日期，并给出确定性排序
+        sql += f" ORDER BY 1 LIMIT {int(limit)}"
 
         try:
             df = self._query_shard('opportunity_tags_cache', sql, params)
@@ -4140,21 +4258,45 @@ class EnhancedCacheManager:
             ts_codes
         )
 
-    def get_treemap_snapshot_items(self, ts_codes: list[str]) -> list[dict]:
-        """从 treemap_snapshot 读取并组装为 dict 列表（直接可用于 API 响应）"""
+    def get_treemap_snapshot_codes(self) -> list[str]:
+        """获取 treemap_snapshot 的全量股票代码（540号批次1）
+
+        市场模式以快照股票池为准：快照由 daemon 按活跃股票构建，包含当日停牌、
+        但仍有最近交易日行情的股票；仅用 `daily_cache` 最新日会漏掉停牌股。
+        """
+        try:
+            df = self._query_shard(
+                'treemap_snapshot', "SELECT ts_code FROM treemap_snapshot")
+            return df['ts_code'].tolist() if not df.empty else []
+        except Exception as e:
+            logger.warning(f"get_treemap_snapshot_codes 失败: {e}")
+            return []
+
+    def get_treemap_snapshot_items(self, ts_codes: list[str],
+                                   include_detail: bool = True) -> list[dict]:
+        """从 treemap_snapshot 读取并组装为 dict 列表（直接可用于 API 响应）
+
+        540号批次3：`include_detail=False` 时不返回 one_liner_detail/
+        opportunity_profile/state_evidence/entry_signals/exit_conditions，
+        这些大字段改由 /opportunity-atlas/stock 按需获取。
+        """
         df = self.get_treemap_snapshot(ts_codes)
         if df.empty:
             return []
         items = []
-        # 317号：批量补齐快照表缺失的标签（style_exposure/catalyst_event 在标签表，不在快照表）
-        # 318号 S5：追加 pe_percentile_5y/pb_percentile_5y（估值举证直白化依赖）
-        extra_tags = self._get_latest_tags_for_codes(
+        # 317号/318号：旧快照没有 style_exposure/catalyst_event/估值分位列时回退标签表；
+        # 540号批次2 起快照已含这 4 列，正常路径不再回读 08-19 旧标签。
+        _has_extra_cols = {
+            'style_exposure', 'catalyst_event',
+            'pe_percentile_5y', 'pb_percentile_5y',
+        } <= set(df.columns)
+        extra_tags = {} if _has_extra_cols else self._get_latest_tags_for_codes(
             ts_codes,
             ['style_exposure', 'catalyst_event', 'pe_percentile_5y', 'pb_percentile_5y'],
         )
         # 479号：批量补齐七维现状描述（status_snapshot.one_liner_detail，436 OUT 透传的
         #   seven_dim 副本；无 → 缺省，前端回退旧画像，437 缺则降级）
-        one_liner_map = self.get_one_liner_detail_batch(ts_codes)
+        one_liner_map = self.get_one_liner_detail_batch(ts_codes) if include_detail else {}
         for _, r in df.iterrows():
             dy = float(r['dividend_yield']) if pd.notna(r.get('dividend_yield')) else None
 
@@ -4165,7 +4307,9 @@ class EnhancedCacheManager:
 
             _ts = r['ts_code']
             _extra = extra_tags.get(_ts, {})
-            items.append({
+            # 540号批次2 P1-5：signal_strength 只认 JUD；缺失为 None（不再伪装成 0）
+            _ss = float(r['signal_strength']) if pd.notna(r.get('signal_strength')) else None
+            item = {
                 'ts_code': _ts,
                 'name': r['name'],
                 # 479号：七维现状描述（status_snapshot.one_liner_detail；缺 → None，
@@ -4185,7 +4329,8 @@ class EnhancedCacheManager:
                 'turnover_rate': float(r['turnover_rate']) if pd.notna(r.get('turnover_rate')) else None,
                 'circ_mv': float(r['circ_mv']) if pd.notna(r.get('circ_mv')) else None,
                 'dividend_yield': dy,
-                'signal_strength': float(r['signal_strength']) if pd.notna(r.get('signal_strength')) else 0,
+                'signal_strength': _ss,
+                'signal_strength_source': 'jud' if _ss is not None else None,
                 'valuation_level': _sv('valuation_level'),
                 'main_force_phase': _sv('main_force_phase'),
                 'sentiment_phase': _sv('sentiment_phase'),
@@ -4215,15 +4360,29 @@ class EnhancedCacheManager:
                     'volatility_level': _sv('volatility_level'),
                     'dividend_yield': str(dy) if dy is not None else None,
                     'composite_rating': str(r['composite_rating']) if pd.notna(r.get('composite_rating')) else None,
-                    # 317号：补齐快照缺失的风格/催化剂标签（前端筛选"高成长/白马股/有催化剂"依赖）
-                    'style_exposure': _extra.get('style_exposure'),
-                    'catalyst_event': _extra.get('catalyst_event'),
-                    # 318号 S5：5 年估值分位（弹窗估值举证直白化依赖）
-                    'pe_percentile_5y': _extra.get('pe_percentile_5y'),
-                    'pb_percentile_5y': _extra.get('pb_percentile_5y'),
+                    # 317号：风格/催化剂（540号批次2 起优先读快照新列）
+                    'style_exposure': _sv('style_exposure') or _extra.get('style_exposure'),
+                    'catalyst_event': _sv('catalyst_event') or _extra.get('catalyst_event'),
+                    # 318号 S5：5 年估值分位（540号批次2 起优先读快照新列）
+                    'pe_percentile_5y': (
+                        float(r['pe_percentile_5y'])
+                        if pd.notna(r.get('pe_percentile_5y'))
+                        else _extra.get('pe_percentile_5y')
+                    ),
+                    'pb_percentile_5y': (
+                        float(r['pb_percentile_5y'])
+                        if pd.notna(r.get('pb_percentile_5y'))
+                        else _extra.get('pb_percentile_5y')
+                    ),
                 },
                 'snapshot': False,
-            })
+            }
+            if not include_detail:
+                # 321 S4 契约要求 bulk 响应保留 state_evidence；仅裁掉详情大字段。
+                for _key in ('one_liner_detail', 'opportunity_profile',
+                             'entry_signals', 'exit_conditions'):
+                    item.pop(_key, None)
+            items.append(item)
         return items
 
     def _get_latest_tags_for_codes(self, ts_codes: list[str], tag_names: list[str]) -> dict[str, dict]:

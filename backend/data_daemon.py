@@ -5913,6 +5913,73 @@ def _jud_enrich_with_meta(codes: list[str]):
     logger.info(f"  JUD机会判定完成: {enriched}/{len(codes)} 只 ({time.time()-t0:.1f}s)")
 
 
+# 540号批次2：treemap_snapshot 由 opportunity_tags_cache（08-19 停更）迁到
+# pre_feat_cache 的字段映射。键为 pre_feat 分组，值为快照/接口使用的字段名。
+_PRE_FEAT_TREEMAP_FIELDS = {
+    'valuation': (
+        'valuation_level', 'valuation_deviation', 'dividend_yield',
+        'composite_rating', 'fina_health',
+        'pe_percentile_5y', 'pb_percentile_5y',
+    ),
+    'depth': (
+        'main_force_phase', 'trend_alignment', 'fund_flow', 'capital_nature',
+        'price_position', 'main_force_presence', 'presence_evidence',
+        'phase_confidence',
+    ),
+    'sentiment': ('sentiment_phase',),
+    'sector': ('sector_heat',),
+    'chip': ('chip_concentration',),
+    'risk_ext': ('volatility_level',),
+    'style': ('style_exposure',),
+    'event': ('catalyst_event',),
+}
+
+
+def _pre_feat_treemap_fields(features_json) -> dict:
+    """从单只股票的 pre_feat features_json 提取 treemap 所需字段（540号批次2）"""
+    try:
+        fj = json.loads(features_json) if isinstance(features_json, str) else features_json
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(fj, dict):
+        return {}
+    out: dict = {}
+    for group, keys in _PRE_FEAT_TREEMAP_FIELDS.items():
+        payload = fj.get(group)
+        if not isinstance(payload, dict):
+            continue
+        for key in keys:
+            if key in payload:
+                out[key] = payload[key]
+    return out
+
+
+def _load_pre_feat_treemap_map(codes: list[str]) -> dict[str, dict]:
+    """批量读取每只股票最新 pre_feat 行并提取 treemap 字段（540号批次2）"""
+    if not codes:
+        return {}
+    ph = ','.join('?' for _ in codes)
+    try:
+        df = _shard_query_df('pre_feat_cache', f"""
+            SELECT ts_code, features_json FROM pre_feat_cache
+            WHERE (ts_code, trade_date) IN (
+                SELECT ts_code, MAX(trade_date) FROM pre_feat_cache
+                WHERE ts_code IN ({ph}) GROUP BY ts_code
+            )
+        """, codes)
+    except Exception as e:
+        logger.warning(f"pre_feat treemap 字段读取失败（回退旧标签）: {e}")
+        return {}
+    out: dict[str, dict] = {}
+    if df is None or df.empty:
+        return out
+    for _, r in df.iterrows():
+        fields = _pre_feat_treemap_fields(r.get('features_json'))
+        if fields:
+            out[r['ts_code']] = fields
+    return out
+
+
 def _build_treemap_snapshot(codes: list[str]):
     """日终预计算完成后，构建 treemap_snapshot 快照表（S1 管道环节）
 
@@ -6019,6 +6086,19 @@ def _build_treemap_snapshot(codes: list[str]):
     basic_map = {r['ts_code']: r for _, r in basic_df.iterrows()} if not basic_df.empty else {}
     tags_map = {r['ts_code']: r for _, r in tags_df.iterrows()} if not tags_df.empty else {}
 
+    # 5.0 540号批次2：13 个标签字段改读 pre_feat_cache（旧 opportunity_tags_cache
+    #     停留在 08-19；pre_feat 与 daily 同日，含 valuation/depth/sentiment 等分组）。
+    #     仅覆盖 pre_feat 中实际存在的键；缺失键保留旧标签兜底，避免整列清空。
+    pre_map = _load_pre_feat_treemap_map(codes)
+    for _code, _fields in pre_map.items():
+        if _code not in tags_map:
+            tags_map[_code] = {}
+        _t = tags_map[_code]
+        for _k, _v in _fields.items():
+            _t[_k] = _v
+    if pre_map:
+        logger.info(f"  treemap: pre_feat 覆盖 {len(pre_map)} 只（540号批次2）")
+
     # 5a. 371号JUD接入：用 _jud_meta_cache 覆盖 opportunity_tags_cache 中的富化字段
     #     （_jud_enrich_with_meta 在 _build_status_snapshot 之后已预计算）
     _meta_overlaid = 0
@@ -6033,6 +6113,15 @@ def _build_treemap_snapshot(codes: list[str]):
         _meta_overlaid += 1
     if _meta_overlaid:
         logger.info(f"  treemap: 371号JUD预计算覆盖 {_meta_overlaid} 只")
+
+    # 5a-2 540号批次2 P1-5：signal_strength 只保留 JUD 口径；JUD 未产出/失败 → None。
+    #     不再回退 opportunity_tags_cache 的 08-19 旧值，也不再把缺失写成 0。
+    def _jud_signal_strength(code: str):
+        if code not in _jud_meta_cache:
+            return None
+        return _safe_float(_jud_meta_cache[code].get('signal_strength'))
+    if not _jud_meta_cache:
+        logger.warning("  JUD缓存为空：treemap signal_strength 将全部为 NULL")
 
     # 5b. 成品仓 status_snapshot（336号 S2.5：快照字段来源切 L1/L2 输出——
     #     consensus_rate/conflict/opportunity_state/state_evidence 读 status_engine 成品，
@@ -6084,6 +6173,8 @@ def _build_treemap_snapshot(codes: list[str]):
             presence_evidence TEXT,
             opportunity_state TEXT,
             state_evidence TEXT,
+            style_exposure TEXT, catalyst_event TEXT,
+            pe_percentile_5y REAL, pb_percentile_5y REAL,
             snapshot_date TEXT DEFAULT (date('now'))
         )
     """)
@@ -6103,9 +6194,10 @@ def _build_treemap_snapshot(codes: list[str]):
          opportunity_label, evidence_count,
          right_side_confirm, confirm_evidence, opportunity_profile,
          entry_signals, exit_conditions, consensus_rate, conflict, main_force_presence,
-         presence_evidence, opportunity_state, state_evidence)
+         presence_evidence, opportunity_state, state_evidence,
+         style_exposure, catalyst_event, pe_percentile_5y, pb_percentile_5y)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """
     _rows = []
     for code in codes:
@@ -6130,8 +6222,8 @@ def _build_treemap_snapshot(codes: list[str]):
                 _amp,
                 _safe_float(b.get('pe')), _safe_float(b.get('pb')),
                 _safe_float(d.get('amount')), _safe_float(b.get('turnover_rate')),
-                _safe_float(b.get('circ_mv')),
-                _safe_float(t.get('signal_strength')),
+                _safe_float(t.get('circ_mv')),
+                _jud_signal_strength(code),
                 t.get('valuation_level'), _safe_float(t.get('valuation_deviation')),
                 t.get('main_force_phase'), _safe_float(t.get('phase_confidence')),
                 t.get('sentiment_phase'), t.get('sector_heat'),
@@ -6154,6 +6246,10 @@ def _build_treemap_snapshot(codes: list[str]):
                 if code in status_map else t.get('opportunity_state'),
                 status_map.get(code, {}).get('state_evidence')
                 if code in status_map else t.get('state_evidence'),
+                t.get('style_exposure'),
+                t.get('catalyst_event'),
+                _safe_float(t.get('pe_percentile_5y')),
+                _safe_float(t.get('pb_percentile_5y')),
             ))
             written += 1
         except Exception:
@@ -6323,9 +6419,20 @@ def _out_transmit_seven_dim(codes: list[str]):
                 entry_signals TEXT, exit_conditions TEXT, consensus_rate REAL,
                 conflict TEXT, main_force_presence TEXT, presence_evidence TEXT,
                 opportunity_state TEXT, state_evidence TEXT,
+                style_exposure TEXT, catalyst_event TEXT,
+                pe_percentile_5y REAL, pb_percentile_5y REAL,
                 PRIMARY KEY (ts_code, snapshot_date)
             )
         """)
+        _tm_hist_cols = {r[1] for r in _snap_conn.execute(
+            "PRAGMA table_info(treemap_snapshot_history)").fetchall()}
+        for _col, _typ in (
+            ('style_exposure', 'TEXT'), ('catalyst_event', 'TEXT'),
+            ('pe_percentile_5y', 'REAL'), ('pb_percentile_5y', 'REAL'),
+        ):
+            if _col not in _tm_hist_cols:
+                _snap_conn.execute(
+                    f"ALTER TABLE treemap_snapshot_history ADD COLUMN {_col} {_typ} DEFAULT NULL")
         # 显式列名归档：历史表残留旧列 seven_dim_report（370号S6 已废弃），
         # 若用 SELECT * 会因列数不匹配（48 vs 47）失败。此处按显式列对齐，
         # 废弃列留空。
@@ -6339,7 +6446,8 @@ def _out_transmit_seven_dim(codes: list[str]):
             " opportunity_label, evidence_count, right_side_confirm, confirm_evidence,"
             " opportunity_profile, entry_signals, exit_conditions, consensus_rate,"
             " conflict, main_force_presence, presence_evidence, opportunity_state,"
-            " state_evidence, snapshot_date"
+            " state_evidence, style_exposure, catalyst_event,"
+            " pe_percentile_5y, pb_percentile_5y, snapshot_date"
         )
         _snap_conn.execute(
             f"INSERT OR REPLACE INTO treemap_snapshot_history ({_tm_cols}) "

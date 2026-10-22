@@ -692,6 +692,14 @@ const _stockByName = {};  // name→完整数据，供 tooltipFormatter 反查�
 let ALL_GROUPS = [];
 let _loadingData = false;
 
+function _updateTimestampLabel() {
+  const el = document.querySelector('.timestamp');
+  if (!el) return;
+  el.textContent =
+    `📅 潜力快照 ${SNAPSHOT_DATE || '日更'} · 行情/标签截至 ${DATA_DATE || TAG_DATE || '--'} · 状态截至 ${STATUS_DATE || '--'}` +
+    (REALTIME_AT ? ` · 价格 ${String(REALTIME_AT).slice(11, 16)}` : '');
+}
+
 async function loadMarketData() {
   if (_loadingData) return;
   _loadingData = true;
@@ -702,10 +710,15 @@ async function loadMarketData() {
     const data = json.data || json;
     SNAPSHOT_DATE = data.snapshot_date || '';   // 313号：潜力快照日期（时间标注）
     DATA_DATE = data.data_date || '';            // 327阶段3：数据交易日（快照 trade_date）
+    STATUS_DATE = data.status_date || '';        // 540号批次3：状态成品日期
+    TAG_DATE = data.tag_date || '';              // 540号批次3：标签/RAW 最新交易日
+    REALTIME_AT = data.realtime_at || '';        // 540号批次3：实时快照最新写入时间
+    _updateTimestampLabel();
     ALL_GROUPS = data.groups || [];
     ALL_GROUPS.forEach(g => {
       (g.stocks || []).forEach(s => {
-        const ss = s.signal_strength || 0;
+        const ss = (s.signal_strength === null || s.signal_strength === undefined)
+          ? null : s.signal_strength;
         const stockItem = {
           name: s.name, tsCode: s.ts_code, sector: g.industry || '其他',
           marketCap: s.market_cap || 0, pctChange: s.pct_change || 0,
@@ -717,6 +730,8 @@ async function loadMarketData() {
                          (s.tags && s.tags.dividend_yield ? parseFloat(s.tags.dividend_yield) : 0),
           industryPe: s.pe || s.industry_pe || 0,
           signalStrength: ss,
+          signalStrengthSource: s.signal_strength_source || null,
+          snapshotAt: s.snapshot_at || '',
           signalQuality: s.main_force_phase || (s.tags && s.tags.main_force_phase) || 'unknown',
           signalPosition: (s.tags && s.tags.price_position) || 'unknown',
           // 307号机会类型（优先），回退旧字段兼容
@@ -767,7 +782,7 @@ async function loadMarketData() {
           isRealtime: !!(s.snapshot),
         };
         RAW_STOCKS.push(stockItem);
-        _stockByName[stockItem.name.slice(0, 4)] = stockItem;
+        _stockByName[stockItem.tsCode] = stockItem;   // 540号批次3 P2-5：按代码反查，避免前四字碰撞
       });
     });
   } catch(e) { console.error('加载市场数据失败:', e); }
@@ -800,6 +815,9 @@ let timingFilter = '';       // 313号 §七2：时机色过滤（''全部 / '�
 let minStrength = 0;         // 313号 §七3：潜力阈值组合筛选（0=不过滤）
 let SNAPSHOT_DATE = '';   // 313号：潜力快照日期（时间标注）
 let DATA_DATE = '';       // 327阶段3：数据交易日（快照 trade_date，陈旧提示用）
+let STATUS_DATE = '';     // 540号批次3：opportunity_state 成品日期
+let TAG_DATE = '';        // 540号批次3：pre_feat/标签最新交易日
+let REALTIME_AT = '';     // 540号批次3：实时快照最新写入时间
 const LABEL_MIN_AREA = 900;  // 310号：标签隐藏阈值（px²，≈30px 边长）
 // 318号 S1：弹窗状态（30s 轮询据此刷新打开中的弹窗价格）
 let _detailTsCode = '';
@@ -1075,7 +1093,10 @@ function tooltipFormatter(params) {
   // 通过 treePathInfo 长度判断节点层级
   const pathLen = params.treePathInfo ? params.treePathInfo.length : 0;
   // 从名字查找表获取完整数据（ECharts 只保留 name/value，丢弃自定义字段）
-  const fullData = pathLen >= 2 ? (_stockByName[params.name] || _stockByName[encodeURIComponent(params.name)]) : null;
+  const fullData = pathLen >= 2
+    ? (_stockByName[params.data && params.data.tsCode] ||
+       _stockByName[params.name] || _stockByName[encodeURIComponent(params.name)])
+    : null;
   if (fullData) {
     return _stockTooltip(fullData, params.name);
   }
@@ -1112,7 +1133,9 @@ function _stockTooltip(d, stockName) {
     `;
   } else if (currentMode === 'opportunity') {
     // 313号：signal_strength 已为 0-100 机会潜力强度；颜色=时机（闸门2×闸门3）
-    const pct = Math.max(0, Math.min(100, d.signalStrength || 0));
+    // 540号批次2：JUD 未产出时为 null，显式显示"未计算"，不再伪装成 0 分
+    const _hasSs = d.signalStrength != null;
+    const pct = _hasSs ? Math.max(0, Math.min(100, d.signalStrength)) : 0;
     const barColor = pct >= 70 ? '#22c55e' : pct >= 50 ? '#f59e0b' : pct >= 30 ? '#3b82f6' : '#6b7280';
     const badge = CONFIRM_BADGE[d.rightSideConfirm];
     const badgeHtml = badge ? `<div style="margin-top:5px;font-size:12px;">${badge[0]} <strong>${d.rightSideConfirm}</strong> ${badge[1]}</div>` : '';
@@ -1130,7 +1153,7 @@ function _stockTooltip(d, stockName) {
         <div class="signal-bar"><div class="signal-bar-fill" style="width:${pct}%;background:${barColor};height:8px;border-radius:4px;"></div></div>
       </div>
       <div class="signal-labels">
-        <div class="signal-label">💎 潜力 ${pct.toFixed(0)}/100</div>
+        <div class="signal-label">💎 潜力 ${_hasSs ? pct.toFixed(0) + '/100' : '未计算'}</div>
         <div class="signal-label">↗ ${_tagCn(d.signalDirection)}</div>
         <div class="signal-label">🏗️ ${_tagCn(d.signalQuality)}</div>
         <div class="signal-label">🌤️ ${_tagCn(d.signalEnvironment)}</div>
@@ -1413,13 +1436,14 @@ function renderSideList() {
 
     if (mode === 'opportunity') {
       // 机会模式：信号强度 + 右侧确认徽标 + 机会类型
-      const pct = Math.max(0, Math.min(100, s.signalStrength || 0));
+      const _hasSs = s.signalStrength != null;
+      const pct = _hasSs ? Math.max(0, Math.min(100, s.signalStrength)) : 0;
       const barColor = pct >= 70 ? '#22c55e' : pct >= 50 ? '#f59e0b' : pct >= 30 ? '#3b82f6' : '#6b7280';
       const badge = CONFIRM_BADGE[s.rightSideConfirm] ? CONFIRM_BADGE[s.rightSideConfirm][0] : '';
       return `<div class="stock-row" data-ts="${s.tsCode}">
         ${nm}
         <span class="sig" style="flex:1;display:flex;align-items:center;gap:4px;">
-          <span style="min-width:38px;color:${barColor};font-weight:600;">${Math.round(pct)}</span>
+          <span style="min-width:38px;color:${barColor};font-weight:600;">${_hasSs ? Math.round(pct) : '--'}</span>
           <span style="flex:1;background:#2a2e41;border-radius:3px;height:6px;overflow:hidden;">
             <span style="display:block;height:100%;width:${pct}%;background:${barColor};"></span>
           </span>
@@ -1647,25 +1671,75 @@ function _profileCN(k) { return PROFILE_CN[k] || k; }
 // DETAIL PANEL
 // ============================================================
 // 318号 S1：渲染弹窗价格行（含盘中/日终时效角标）；30s 轮询复用此函数刷新
+// 540号批次3 P2-1：按实时快照写入时间判断"盘中/收盘/日终"，不再用 snapshot 布尔盲标
+function _realtimeBadge(data) {
+  const at = data.snapshotAt || (data._raw && data._raw.snapshot_at) || REALTIME_AT || '';
+  if (at) {
+    const d = new Date(String(at).replace(' ', 'T'));
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const hm = d.getHours() * 60 + d.getMinutes();
+    const inSession = sameDay && ((hm >= 570 && hm <= 690) || (hm >= 780 && hm <= 900));
+    if (inSession) {
+      return `<span style="color:#22c55e;font-size:11px;margin-left:8px;">🕐 盘中 ${String(at).slice(11, 16)}</span>`;
+    }
+    return `<span style="color:var(--text-muted);font-size:11px;margin-left:8px;">📅 收盘 ${String(at).slice(0, 10)}</span>`;
+  }
+  return `<span style="color:var(--text-muted);font-size:11px;margin-left:8px;">📅 日终 ${DATA_DATE || SNAPSHOT_DATE || ''}</span>`;
+}
+
 function _renderDetailPrice(data) {
   const pctSign = data.pctChange >= 0 ? '+' : '';
   const pctColor = data.pctChange >= 0 ? 'var(--accent-red)' : 'var(--accent-green)';
-  // 时效角标：实时覆盖过（snapshot=true）显示盘中，否则日终快照
-  const isRealtime = !!(data._raw && data._raw.snapshot) || data.isRealtime;
-  const tzBadge = isRealtime
-    ? '<span style="color:#22c55e;font-size:11px;margin-left:8px;">🕐 盘中</span>'
-    : `<span style="color:var(--text-muted);font-size:11px;margin-left:8px;">📅 日终${SNAPSHOT_DATE ? ' ' + SNAPSHOT_DATE : ''}</span>`;
+  // 时效角标：按实时快照 cached_at 判断盘中/收盘/日终
+  const tzBadge = _realtimeBadge(data);
   const el = document.getElementById('d-price-row');
   if (!el) return;
   el.innerHTML = `
     <span class="price">${(data.price || 0).toFixed(2)}</span>
     <span style="color:${pctColor};margin-left:var(--space-8);font-weight:600;">${pctSign}${(data.pctChange || 0).toFixed(2)}%</span>
-    <span style="color:var(--text-muted);margin-left:var(--space-8);font-size:12px;">📊 信号强度 ${Math.round(data.signalStrength || 0)}/100</span>
+    <span style="color:var(--text-muted);margin-left:var(--space-8);font-size:12px;">${data.signalStrength == null ? '📊 潜力未计算' : '📊 信号强度 ' + Math.round(data.signalStrength) + '/100'}</span>
     ${tzBadge}
   `;
 }
 
 function showDetail(data) {
+  // 540号批次3 P2-2：地图批量响应已裁掉详情大字段，点击时按需拉取
+  if (!data._detailLoaded && !data._detailLoading) {
+    data._detailLoading = true;
+    fetch('/api/v3/opportunity-atlas/stock?ts_code=' + encodeURIComponent(data.tsCode))
+      .then(r => r.json())
+      .then(j => {
+        const s = (j.data || {}).stock;
+        if (!s) return;
+        data.price = s.price != null ? s.price : data.price;
+        data.pctChange = s.pct_change != null ? s.pct_change : data.pctChange;
+        data.snapshotAt = s.snapshot_at || data.snapshotAt;
+        data.isRealtime = !!s.snapshot;
+        data.oneLinerDetail = s.one_liner_detail;
+        data.stateEvidence = s.state_evidence;
+        data.entrySignals = s.entry_signals;
+        data.exitConditions = s.exit_conditions;
+        try {
+          data.opportunityProfile = typeof s.opportunity_profile === 'string'
+            ? JSON.parse(s.opportunity_profile)
+            : (s.opportunity_profile || data.opportunityProfile);
+        } catch (e) {}
+        try {
+          data.sevenDimReport = data.oneLinerDetail
+            ? (typeof data.oneLinerDetail === 'string'
+                ? JSON.parse(data.oneLinerDetail) : data.oneLinerDetail)
+            : data.sevenDimReport;
+        } catch (e) {}
+      })
+      .catch(() => {})
+      .finally(() => {
+        data._detailLoading = false;
+        data._detailLoaded = true;
+        showDetail(data);
+      });
+    return;
+  }
   document.getElementById('d-code').textContent = data.tsCode;
   document.getElementById('d-name').textContent = data.fullName || data.name;
   // 318号 S1：记录弹窗状态，供 30s 轮询刷新价格
@@ -1828,7 +1902,7 @@ function showDetail(data) {
   document.getElementById('d-advice').innerHTML = `
     <div style="font-weight:600;font-size:14px;color:var(--text-primary);">${advice}</div>
     <div style="margin-top:var(--space-4);font-size:12px;color:var(--text-muted);">
-      信号强度 ${Math.round(data.signalStrength)}/100 · ${oLabel}
+      信号强度 ${data.signalStrength == null ? '未计算' : Math.round(data.signalStrength) + '/100'} · ${oLabel}
       ${_st ? ` · 状态: ${STATE_CN[_st] || _st}` : (data.rightSideConfirm ? ` · 右侧确认: ${data.rightSideConfirm}` : '')}
     </div>
     ${data.confirmEvidence && data.confirmEvidence.length ? `
@@ -1914,11 +1988,11 @@ function showDetail(data) {
       const nowTxt = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
       const tzEl = document.getElementById('d-ts-timestamp');
       if (tzEl) {
-        const dataDate = DATA_DATE || SNAPSHOT_DATE || '最近快照';
-        const isStale = DATA_DATE && nowTxt > DATA_DATE;
-        tzEl.textContent = `潜力基于 ${SNAPSHOT_DATE || '最近快照'} · 数据截至 ${dataDate}` +
-          (isStale ? ' ⚠️ 快照待更新' : '');
-        tzEl.title = isStale ? `数据截至 ${DATA_DATE}，未更新至 ${nowTxt}（日终预计算完成后自动更新）` : '';
+        const dataDate = DATA_DATE || TAG_DATE || SNAPSHOT_DATE || '最近快照';
+        const isStale = !!(STATUS_DATE && DATA_DATE && STATUS_DATE < DATA_DATE);
+        tzEl.textContent = `潜力基于 ${SNAPSHOT_DATE || '最近快照'} · 行情/标签截至 ${dataDate} · 状态截至 ${STATUS_DATE || '--'}` +
+          (isStale ? ' ⚠️ 状态待更新' : '');
+        tzEl.title = isStale ? `状态截至 ${STATUS_DATE}，行情/标签截至 ${DATA_DATE}` : '';
       }
       const oa = diag.operation_advice || {};
       if (oa.label || oa.action_label) {
@@ -2039,28 +2113,23 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   } catch (e) {}
 
-  // 318号 S1：更新实时数据（30s 轮询，三模式全量刷新——弹窗在机会/价值地图下也跟随盘中更新）
+  // 540号批次3 P2-2：30s 轮询改为轻量 /quotes，不再重复拉取全量 treemap
   setInterval(() => {
-    fetch('/api/v3/opportunity-atlas/treemap?mode=market')
+    fetch('/api/v3/opportunity-atlas/quotes')
       .then(r => r.json())
       .then(json => {
-        const data = json.data || json;
-        (data.groups || []).forEach(g => {
-          (g.stocks || []).forEach(s => {
-            const found = RAW_STOCKS.find(r => r.tsCode === s.ts_code);
-            if (found) {
-              if (s.snapshot) {
-                found.price = s.price;
-                found.pctChange = s.pct_change;
-                found.isRealtime = true;
-              } else {
-                found.price = s.price || found.price;
-                found.pctChange = s.pct_change;
-                found.isRealtime = false;
-              }
-            }
-          });
+        const quotes = ((json.data || {}).quotes) || [];
+        quotes.forEach(q => {
+          const found = RAW_STOCKS.find(r => r.tsCode === q.ts_code);
+          if (!found) return;
+          found.price = q.price;
+          found.pctChange = q.pct_change;
+          found.isRealtime = true;
+          found.snapshotAt = q.snapshot_at || found.snapshotAt;
         });
+        if (quotes.length && quotes[0].snapshot_at) {
+          REALTIME_AT = quotes[0].snapshot_at;
+        }
         // 318号 S1：轮询同步更新弹窗内价格（若当前正打开某股详情）
         if (_detailTsCode && _detailTsCode !== '') {
           const cur = RAW_STOCKS.find(r => r.tsCode === _detailTsCode);
@@ -2069,13 +2138,9 @@ document.addEventListener('DOMContentLoaded', function() {
           }
         }
         renderChart();
+        _updateTimestampLabel();
       })
       .catch(() => {});
-    const now = new Date();
-    // 313号：时间标注——潜力基于快照（日更）、时机截至实时刷新
-    const snapTxt = SNAPSHOT_DATE ? `潜力快照 ${SNAPSHOT_DATE}` : '潜力快照 日更';
-    document.querySelector('.timestamp').textContent =
-      `📅 ${snapTxt} · 时机 ${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
   }, 30000);
 });
 </script>

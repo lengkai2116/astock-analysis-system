@@ -404,9 +404,14 @@ class DataManager:
         """从 treemap_snapshot 表批量读取快照数据（委托 ECM）"""
         return self.cache.get_treemap_snapshot(ts_codes)
 
-    def get_treemap_snapshot_items(self, ts_codes: list[str]) -> list[dict]:
-        """获取组装好的快照数据（委托 ECM）"""
-        return self.cache.get_treemap_snapshot_items(ts_codes)
+    def get_treemap_snapshot_items(self, ts_codes: list[str],
+                                   include_detail: bool = True) -> list[dict]:
+        """获取组装好的快照数据（委托 ECM）
+
+        540号批次3：include_detail=False 时不返回详情大字段，供地图批量接口使用。
+        """
+        return self.cache.get_treemap_snapshot_items(
+            ts_codes, include_detail=include_detail)
 
     def get_snapshot_max_date(self) -> str | None:
         """获取 treemap_snapshot 最新构建日期（合规整改网关）"""
