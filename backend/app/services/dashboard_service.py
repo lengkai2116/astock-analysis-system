@@ -768,12 +768,28 @@ class DashboardService:
             all_df['industry'] = all_df['ts_code'].map(lambda x: industry_map.get(x, None))
             all_df = all_df.dropna(subset=['industry'])
             all_df['industry'] = all_df['industry'].astype(str)
+            all_df['pct_chg'] = pd.to_numeric(all_df['pct_chg'], errors='coerce')
+            all_df = all_df.dropna(subset=['pct_chg'])
 
-            # 按行业聚合
+            # 538 P2：涨跌家数 + 领涨股，不再硬编码 0/空
+            all_df['up_flag'] = (all_df['pct_chg'] > 0).astype(int)
+            all_df['down_flag'] = (all_df['pct_chg'] < 0).astype(int)
             agg = all_df.groupby('industry').agg(
                 avg_pct=('pct_chg', 'mean'),
-                stock_count=('pct_chg', 'count')
+                stock_count=('pct_chg', 'count'),
+                up_count=('up_flag', 'sum'),
+                down_count=('down_flag', 'sum'),
             ).reset_index().sort_values('avg_pct', ascending=False)
+
+            lead_map = {}
+            if not all_df.empty:
+                lead_idx = all_df.groupby('industry')['pct_chg'].idxmax()
+                lead_codes = all_df.loc[lead_idx, 'ts_code'].astype(str).tolist()
+                lead_names = self._get_stock_names(lead_codes)
+                for ind, idx in lead_idx.items():
+                    code = str(all_df.loc[idx, 'ts_code'])
+                    info = lead_names.get(code) or {}
+                    lead_map[ind] = info.get('name') or code
 
             if not agg.empty:
                 all_sectors = []
@@ -782,9 +798,9 @@ class DashboardService:
                     all_sectors.append({
                         'name': r['industry'],
                         'change_pct': change_pct,
-                        'lead_stock': '',
-                        'up_count': 0,
-                        'down_count': 0,
+                        'lead_stock': lead_map.get(r['industry'], ''),
+                        'up_count': int(r['up_count'] or 0),
+                        'down_count': int(r['down_count'] or 0),
                     })
                 gainers = [s for s in all_sectors if s['change_pct'] > 0][:5]
                 losers = [s for s in all_sectors if s['change_pct'] <= 0]

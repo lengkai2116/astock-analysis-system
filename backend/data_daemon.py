@@ -3851,8 +3851,15 @@ def _precompute_market_stats(target_date: str | None = None, force: bool = False
         # 任一统计项无源数据 → 告警且不落库（426号 P0-1：假值禁止入库/注入 RAW-2）
         # 447号 T3a-2：dv_bond_diff 为新增可选增强项（股债收益差），当日股息率缺源时
         # 仅自身 None（framework 慢线回退 _compute_dv_bond_diff），不拖垮核心 7 项落库
-        _missing_items = [k for k, v in stats.items() if v is None and k != 'computed_at'
-                          and k != 'dv_bond_diff']
+        # 538 P2（2026-10-22 拍板）：pe_percentile 为可选增强项。10-21 实测
+        # daily_basic.pe_ttm 全 NULL，若仍按 426 口径“任一项缺源即不落库”，
+        # state/alerts/breadth 会一直停在 10-20。允许 pe_percentile 空值落库，
+        # 其余核心项缺源仍严格不落库。
+        _optional_stats = {'computed_at', 'dv_bond_diff', 'pe_percentile'}
+        _missing_items = [k for k, v in stats.items() if v is None
+                          and k not in _optional_stats]
+        if stats.get('pe_percentile') is None:
+            logger.warning("538 P2: pe_percentile 无源，按拍板允许空值落库")
         if _missing_items:
             # 2026-09-29 OCR #11：缺源时保留上一轮有效缓存（原清空致并发读者临时见空、
             # RAW-2 注入空 dict 使 dim5 BociasiQuadrant 退化）。旧值为日频重算结果，

@@ -8,7 +8,7 @@
 <script src="assets/socket.io.min.js"></script>
 <style>
 /* 四大指数卡片 */
-.index-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-16); margin-bottom: var(--space-20); }
+.index-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--module-gap); margin-bottom: var(--module-gap); }
 .index-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-14); cursor: pointer; transition: all .15s; }
 .index-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-hover); }
 .index-card .top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-4); }
@@ -25,7 +25,7 @@
 .mkt-head { position:relative; display:flex; justify-content:space-between; align-items:flex-start; gap:var(--space-12); flex-wrap:wrap; }
 .mkt-title { font-size:18px; font-weight:700; letter-spacing:.4px; }
 .mkt-sub { font-size:14px; color:var(--text-muted); margin-top:3px; }
-.mkt-kpi { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+.mkt-kpi { display:flex; gap:var(--inner-gap); flex-wrap:wrap; justify-content:flex-end; }
 .mkt-kpi-item { background:rgba(148,163,184,.07); border:1px solid rgba(148,163,184,.14); border-radius:8px; padding:6px 10px; min-width:94px; }
 .mkt-kpi-item .k { font-size:11px; color:var(--text-muted); line-height:1.4; }
 .mkt-kpi-item .v { font-size:15px; font-weight:700; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
@@ -36,16 +36,19 @@
 .mkt-big { font-size:26px; font-weight:800; line-height:1; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 .mkt-cap { font-size:11px; color:var(--text-muted); }
 .mkt-sub2 { font-size:12px; font-weight:600; margin-bottom:3px; }
-.mkt-chip-wrap { display:flex; flex-wrap:wrap; gap:4px; max-height:112px; overflow:auto; padding-right:2px; }
+.mkt-chip-wrap { display:flex; flex-wrap:wrap; gap:4px; padding-right:2px; }
 .mkt-chip { display:inline-flex; align-items:center; gap:4px; font-size:11px; line-height:1.5; padding:2px 6px; border-radius:4px; background:rgba(148,163,184,.08); border:1px solid rgba(148,163,184,.12); color:var(--text-secondary); white-space:nowrap; }
 .mkt-chip .n { color:var(--text-primary); }
 .mkt-chip .v { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 .mkt-chip.up { border-color:rgba(239,68,68,.25); background:rgba(239,68,68,.06); }
 .mkt-chip.down { border-color:rgba(34,197,94,.25); background:rgba(34,197,94,.06); }
 .mkt-chip.board { border-color:rgba(245,158,11,.28); background:rgba(245,158,11,.06); }
-.mkt-flow-grid { display:grid; grid-template-columns:1.55fr 1fr; gap:10px; margin-top:6px; }
+.mkt-flow-grid { display:grid; grid-template-columns:1.55fr 1fr; gap:var(--module-gap); margin-top:var(--inner-gap); align-items:stretch; }
+.mkt-split-2 { display:grid; grid-template-columns:1fr 1fr; gap:var(--module-gap); align-items:stretch; }
+.mkt-split-2 > div { min-width:0; }
 @media (max-width:1100px){ .mkt-flow-grid { grid-template-columns:1fr; } }
-.mkt-status-strip { position:relative; border-top:1px solid rgba(148,163,184,.12); padding-top:var(--space-10); }
+@media (max-width:700px){ .mkt-split-2 { grid-template-columns:1fr; } }
+.mkt-status-strip { position:relative; border-top:1px solid rgba(148,163,184,.12); padding-top:var(--module-gap); }
 @media (max-width:1100px){ .mkt-kpi { justify-content:flex-start; } .mkt-overview .grid-3 { grid-template-columns:1fr 1fr; } }
 @media (max-width:700px){ .mkt-overview .grid-3 { grid-template-columns:1fr; } }
 
@@ -53,13 +56,13 @@
 .chart-card { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
 .chart-card .chart-title { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-bottom: var(--space-12); }
 .chart-box { height: 260px; }
-.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:var(--space-16); }
+/* 539：.grid-2 统一由 base.css 定义（gap: var(--module-gap); align-items: stretch） */
 /* 涨幅排行 */
 .rank-table { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-16); }
 
 /* ── 响应式 ── */
 body { overflow-x:hidden; }
-.main-content { overflow:hidden; }
+.main-content { overflow:visible; }
 @media (max-width:1100px){
   .index-grid { grid-template-columns:repeat(2,1fr); }
   .grid-2 { grid-template-columns:1fr; }
@@ -116,7 +119,7 @@ body { overflow-x:hidden; }
     </div>
 
     <!-- 533：大盘总览（置顶；全部口径锚定前一交易日日终） -->
-    <div class="chart-card mkt-overview" style="margin-bottom:var(--space-20);">
+    <div class="chart-card mkt-overview" style="margin-bottom:var(--module-gap);">
       <div class="mkt-head">
         <div>
           <div class="mkt-title">🛰️ 大盘总览</div>
@@ -125,7 +128,7 @@ body { overflow-x:hidden; }
         <div id="mkt-ov-kpi" class="mkt-kpi"></div>
       </div>
 
-      <div class="grid-3" style="margin-top:var(--space-14);">
+      <div class="grid-3" style="margin-top:var(--module-gap);">
         <div class="mkt-mini">
           <div class="mkt-mini-title">① 涨跌平结构</div>
           <div id="mkt-breadth-donut" style="height:180px;"></div>
@@ -149,10 +152,10 @@ body { overflow-x:hidden; }
         </div>
       </div>
 
-      <div class="grid-2" style="margin-top:var(--space-14);">
+      <div class="grid-2" style="margin-top:var(--module-gap);">
         <div class="mkt-mini">
           <div class="mkt-mini-title">④ 涨停 / 跌停行业 · 个股 <span id="mkt-limit-detail-date" style="font-size:14px;color:var(--text-muted);"></span></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="mkt-split-2">
             <div>
               <div class="mkt-sub2 up">涨停 <span id="mkt-up-industry-total">--</span> 只</div>
               <div id="mkt-limit-up-industry-chart" style="height:118px;"></div>
@@ -175,16 +178,16 @@ body { overflow-x:hidden; }
         </div>
       </div>
 
-      <div class="mkt-mini" style="margin-top:var(--space-14);">
+      <div class="mkt-mini" style="margin-top:var(--module-gap);">
         <div class="mkt-mini-title">⑥ 近5日行业主力净流入 × 5日涨跌（申万一级） <span id="mkt-sector-flow-date" style="font-size:14px;color:var(--text-muted);"></span></div>
         <div id="mkt-sector-flow-note" class="mkt-note">加载中...</div>
         <div class="mkt-flow-grid">
           <div id="mkt-sector-flow-chart" style="height:260px;"></div>
-          <div id="mkt-sector-flow-list" class="mkt-chip-wrap" style="max-height:260px;"></div>
+          <div id="mkt-sector-flow-list" class="mkt-chip-wrap"></div>
         </div>
       </div>
 
-      <div class="grid-2" style="margin-top:var(--space-14);">
+      <div class="grid-2" style="margin-top:var(--module-gap);">
         <div class="mkt-mini">
           <div class="mkt-mini-title">⑦ 30日 ETF 份额净申购（亿份）</div>
           <div id="mkt-etf-note" class="mkt-note">加载中...</div>
@@ -199,7 +202,7 @@ body { overflow-x:hidden; }
       </div>
 
       <!-- 既有状态/宽度/情绪/预警（压缩为底部状态条，保留原 ID 供 524 渲染函数复用） -->
-      <div class="mkt-status-strip" style="margin-top:var(--space-14);">
+      <div class="mkt-status-strip" style="margin-top:var(--module-gap);">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-6);">
           <span style="font-weight:600;font-size:13px;">🛰️ 状态与预警</span>
           <span style="font-size:14px;color:var(--text-muted);" id="market-state-date">--</span>
@@ -232,7 +235,7 @@ body { overflow-x:hidden; }
     </div>
 
     <!-- 四大指数合计成交额（含指数成分重叠）（近20日） -->
-    <div class="chart-card" style="margin-bottom:var(--space-20);">
+    <div class="chart-card" style="margin-bottom:var(--module-gap);">
       <div class="chart-title">📊 四大指数合计成交额（含指数成分重叠）（近20日）</div>
       <!-- 527 批次1：成交额「当日 vs 近5日均值 + 量能趋势」一句话说明 -->
       <div id="volume-trend-note" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
@@ -240,7 +243,7 @@ body { overflow-x:hidden; }
     </div>
 
     <!-- 全市场资金流向趋势（近20日）— 横跨全屏 -->
-    <div class="chart-card" style="margin-bottom:var(--space-20);">
+    <div class="chart-card" style="margin-bottom:var(--module-gap);">
       <div class="chart-title">📈 全市场资金流向趋势（近20日）</div>
       <!-- 527 批次1：资金流向「连续N日净流入/流出 + 近20日累计方向」一句话说明 -->
       <div id="moneyflow-trend-note" style="font-size:14px;color:var(--text-secondary);margin-bottom:var(--space-8);">加载中...</div>
@@ -248,7 +251,7 @@ body { overflow-x:hidden; }
     </div>
 
     <!-- 523：全市场日终散点（体量×涨跌 + 开高低收四象限） -->
-    <div class="grid-2" style="margin-bottom:var(--space-20);">
+    <div class="grid-2" style="margin-bottom:var(--module-gap);">
       <div class="chart-card">
         <div class="chart-title">📊 全市场日终散点 · 流通市值 × 涨跌幅 <span id="eod-scatter-date-1" style="font-size:14px;color:var(--text-muted);"></span></div>
         <!-- 530 批次1：散点图状态结果说明（较上一交易日+较5日均；applyEodStateNotes 动态填充） -->
@@ -267,7 +270,7 @@ body { overflow-x:hidden; }
 
     <!-- 531：行业板块净流入/流出排行（全宽独立容器，申万一级；行列表格 + 5日简图 + 文字） -->
     <!-- 531 修正（用户要求恢复原布局）：左行业单日横向柱图 + 右个股明细 -->
-    <div class="grid-2" style="margin-bottom:var(--space-20);">
+    <div class="grid-2" style="margin-bottom:var(--module-gap);">
       <div class="rank-table">
         <div style="font-weight:600;font-size:14px;margin-bottom:var(--space-10);">🏭 行业板块净流入/流出排行（申万一级）</div>
         <!-- 527 批次3：近5日趋势一句话；528 批次2：补净流出侧；531：5日口径修正为5个交易日 -->
@@ -283,7 +286,7 @@ body { overflow-x:hidden; }
     </div>
 
     <!-- 532 批次3：板块热度 · 五维（全宽独立容器；旧资金热度仅降级回退） -->
-    <div class="chart-card" style="margin-bottom:var(--space-20);">
+    <div class="chart-card" style="margin-bottom:var(--module-gap);">
       <div class="chart-title">🔥 板块热度 · 五维 <span id="sector-heat-date" style="font-size:14px;color:var(--text-muted);"></span></div>
       <div style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-8);line-height:1.6;">口径：相对强弱 25 + 资金 30 + 内部广度 25 + 情绪（反向）20，量价 ±10 修正；综合质量分 0~100。行业口径为申万一级 31 类。旧资金热度榜仅在新接口未就绪时回退显示。</div>
       <div id="sector-heat-stage-note" style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-8);line-height:1.6;">阶段说明：主线＝趋势与资金共振；脉冲＝短期快速走强、中期趋势未确认；过热＝涨停/炸板/成交额拥挤，注意回撤；冷门＝低位缩量但有资金潜伏；中性＝暂无明显特征。「主力5日」＝大单+特大单净流入。</div>
@@ -292,7 +295,7 @@ body { overflow-x:hidden; }
     </div>
 
     <!-- 行业板块涨跌幅 | 涨幅前十 / 跌幅前十 -->
-    <div class="grid-2" style="margin-bottom:var(--space-24);">
+    <div class="grid-2" style="margin-bottom:var(--module-gap);">
       <div class="chart-card">
         <div class="chart-title">🏭 行业板块涨跌幅（申万一级）</div>
         <!-- 528 批次2：板块连续涨/跌 + 近5日累积涨跌说明（后端 streaks：daily_cache 多日按行业聚合） -->
@@ -311,7 +314,7 @@ body { overflow-x:hidden; }
     </div>
 
     <!-- 531：近5日板块涨跌走势（申万一级 31 类）— 全宽独立容器，位置⑦后⑧前 -->
-    <div class="chart-card" style="margin-bottom:var(--space-20);">
+    <div class="chart-card" style="margin-bottom:var(--module-gap);">
       <div class="chart-title">📈 近5日板块涨跌走势（申万一级）</div>
       <div id="sector-history-note" style="font-size:14px;color:var(--text-muted);margin-bottom:var(--space-6);line-height:1.6;">每行＝行业名 + 该行业近5个交易日日均涨跌幅折线（虚线为 0 轴）+ 5日走势文字总结；默认展示该交易日涨幅前5 + 跌幅前5 + 全市场平均，点击「展开全部」查看申万一级 31 类。</div>
       <div style="margin-bottom:var(--space-8);"><span class="tag tag-bullish" id="sector-history-expand" style="cursor:pointer;">展开全部</span></div>
@@ -349,11 +352,34 @@ function toggleSidebar(){
 <script>
 var API = '/api/v3';
 var charts=[];
+// 539 批次2：图表容器高度按内容条数计算（ECharts 必须有明确像素高度）
+function _fitChartHeight(el, rows, base, perRow, minH, maxH){
+  if(!el)return 0;
+  var n=Math.max(0, Number(rows)||0);
+  var h=Math.max(minH, Math.min(maxH, Math.round(base+n*perRow)));
+  if(Math.abs((el.clientHeight||0)-h)>1)el.style.height=h+'px';
+  return h;
+}
+// 539 批次2：容器尺寸变化（含同排卡片被拉伸）时同步 ECharts，rAF 去抖
+function _watchChartResize(el, c){
+  if(!el||!c||el.__chartRO||typeof ResizeObserver==='undefined')return;
+  var raf=window.requestAnimationFrame||function(fn){return setTimeout(fn,16);};
+  var caf=window.cancelAnimationFrame||clearTimeout;
+  var pending=0;
+  var ro=new ResizeObserver(function(){
+    if(pending)caf(pending);
+    pending=raf(function(){try{c.resize();}catch(e){}});
+  });
+  ro.observe(el);
+  el.__chartRO=ro;
+}
 // 513 #D4：图表实例幂等获取（轮询重复渲染时复用已存在实例，避免 ECharts 重复初始化告警/泄漏）
 function _chart(domId){
   var el=document.getElementById(domId);
   if(!el)return null;
-  return echarts.getInstanceByDom(el)||echarts.init(el);
+  var c=echarts.getInstanceByDom(el)||echarts.init(el);
+  _watchChartResize(el,c);
+  return c;
 }
 function drawMiniK(domId,data){
   if(!data||!data.length)return;
@@ -417,8 +443,7 @@ function loadEodScatter(){
       if(dateEl&&dd.trade_date)dateEl.textContent='（数据日 '+dd.trade_date+'）';
       renderEodScatter1(dd.stocks);
       renderEodScatter2(dd.stocks);
-      bindEodPanZoom('chart-eod-scatter-1');
-      bindEodPanZoom('chart-eod-scatter-2');
+      // 539：散点/四象限固定视图，不绑定滚轮缩放/拖拽平移
       // 530 批次1：状态结果说明（较上一交易日+较5日均）
       applyEodStateNotes(dd);
     })
@@ -569,75 +594,7 @@ function renderEodScatter2(stocks){
   if(c&&charts.indexOf(c)<0)charts.push(c);
 }
 
-// 523：自定义平移/中心缩放/移出复位（替代 dataZoom——其不支持 log 轴且滚轮锚点非中心）
-function bindEodPanZoom(domId){
-  var el=document.getElementById(domId);
-  if(!el||el.__eodPanZoomBound)return;
-  el.__eodPanZoomBound=true;
-  var c=_chart(domId);
-  if(!c)return;
-  var o=c.getOption();
-  var _xLog=(o.xAxis[0].type==='log');
-  // 526 B9：setOption 后立即 getOption 时 min/max 可能 undefined → 兜底 null（ECharts 自动）
-  var cur={x0:o.xAxis[0].min!=null?o.xAxis[0].min:null, x1:o.xAxis[0].max!=null?o.xAxis[0].max:null, y0:o.yAxis[0].min!=null?o.yAxis[0].min:null, y1:o.yAxis[0].max!=null?o.yAxis[0].max:null};
-  var def={x0:cur.x0,x1:cur.x1,y0:cur.y0,y1:cur.y1};
-  function apply(){
-    var cfg={xAxis:{},yAxis:{}};
-    if(cur.x0!=null)cfg.xAxis.min=cur.x0;
-    if(cur.x1!=null)cfg.xAxis.max=cur.x1;
-    if(cur.y0!=null)cfg.yAxis.min=cur.y0;
-    if(cur.y1!=null)cfg.yAxis.max=cur.y1;
-    if(_xLog&&cur.x0!=null&&cur.x0<=0)cfg.xAxis.min=1e-6;  // log 轴 min 必须 >0
-    c.setOption(cfg);
-  }
-  function reset(){cur={x0:def.x0,x1:def.x1,y0:def.y0,y1:def.y1};apply();}
-  // 526 B9：window 监听改为拖拽期间挂载、结束移除（原 4 个常驻全局监听不清理）
-  var down=null;
-  function onMove(e){
-    if(!down)return;
-    var rect=el.getBoundingClientRect();
-    var px=e.clientX-rect.left, py=e.clientY-rect.top;
-    // 每次先恢复 mousedown 基准范围，再换算（否则 v0 随上次移动漂移）
-    cur={x0:down.r.x0,x1:down.r.x1,y0:down.r.y0,y1:down.r.y1};
-    apply();
-    var v0=c.convertFromPixel({xAxisIndex:0,yAxisIndex:0},[down.sx,down.sy]);
-    var v1=c.convertFromPixel({xAxisIndex:0,yAxisIndex:0},[px,py]);
-    if(!v0||!v1)return;
-    var ddx=v1[0]-v0[0], ddy=v1[1]-v0[1];
-    cur={x0:down.r.x0-ddx, x1:down.r.x1-ddx, y0:down.r.y0-ddy, y1:down.r.y1-ddy};
-    apply();
-  }
-  function onUp(){
-    down=null;
-    window.removeEventListener('mousemove',onMove);
-    window.removeEventListener('mouseup',onUp);
-  }
-  el.addEventListener('mousedown',function(e){
-    if(e.button!==0)return;
-    var rect=el.getBoundingClientRect();
-    down={sx:e.clientX-rect.left, sy:e.clientY-rect.top, r:{x0:cur.x0,x1:cur.x1,y0:cur.y0,y1:cur.y1}};
-    e.preventDefault();
-    window.addEventListener('mousemove',onMove);
-    window.addEventListener('mouseup',onUp);
-  });
-  // 滚轮 = 以图片中心为锚点缩放（像素空间，log 轴正确）
-  el.addEventListener('wheel',function(e){
-    e.preventDefault();
-    var rect=el.getBoundingClientRect();
-    var cx=rect.width/2, cy=rect.height/2;
-    var factor=Math.pow(1.2, e.deltaY>0?1:-1); // 下滚=缩小(>1)，上滚=放大(<1)
-    var p0=c.convertToPixel({xAxisIndex:0,yAxisIndex:0},[cur.x0,cur.y0]);
-    var p1=c.convertToPixel({xAxisIndex:0,yAxisIndex:0},[cur.x1,cur.y1]);
-    if(!p0||!p1)return;
-    var np0=c.convertFromPixel({xAxisIndex:0,yAxisIndex:0},[cx-(cx-p0[0])*factor, cy-(cy-p0[1])*factor]);
-    var np1=c.convertFromPixel({xAxisIndex:0,yAxisIndex:0},[cx+(p1[0]-cx)*factor, cy+(p1[1]-cy)*factor]);
-    if(!np0||!np1)return;
-    cur={x0:np0[0], x1:np1[0], y0:np0[1], y1:np1[1]};
-    apply();
-  },{passive:false});
-  // 移出制图区 = 复位默认 + 清理拖拽监听
-  el.addEventListener('mouseleave',function(){onUp();reset();});
-}
+// 539：散点/四象限已改为固定视图，滚轮缩放/拖拽平移绑定已移除。
 
 // ===== 5. 加载行业板块涨跌幅图（top5红涨 + top5绿跌）=====
 // 528 批次2：loadSectorChanges 仅负责取数，渲染全部交给 renderSectorChart
@@ -940,8 +897,14 @@ function _mktChip(name, val, cls, sub){
     +'<span class="v">'+escapeHtml(val)+'</span></span>';
 }
 function _renderLimitIndustries(domId, industries, color){
-  var c=_chart(domId); if(!c)return;
+  var el=document.getElementById(domId);
+  var c=_chart(domId); if(!el||!c)return;
   var rows=(industries||[]).slice(0,6).slice().reverse();
+  // 539 批次2：行业数变化时按行数增高，最少 118px、最多 240px
+  _fitChartHeight(el, rows.length, 40, 16, 118, 240);
+  var sig=JSON.stringify(rows);
+  if(el.__limitSig===sig){c.resize();return;}
+  el.__limitSig=sig;
   c.setOption({
     backgroundColor:'transparent',
     tooltip:{trigger:'axis'},
@@ -953,6 +916,7 @@ function _renderLimitIndustries(domId, industries, color){
     series:[{type:'bar',data:rows.map(function(x){return x.count;}),barWidth:8,
       itemStyle:{color:color},label:{show:true,position:'right',color:'#CBD5E1',fontSize:9}}]
   });
+  c.resize();
   if(charts.indexOf(c)<0)charts.push(c);
 }
 function _renderLimitStocks(domId, stocks, cls){
@@ -1646,7 +1610,7 @@ function renderSectorChart(sd){
   var chartData=inArr.concat(outArr).sort(function(a,b){return (a.change_pct||0)-(b.change_pct||0);});
   if(!chartData.length)return;
   var c=_chart('chart-sector');
-  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:60,right:30,bottom:10,top:10},
+  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis',formatter:function(ps){var v=chartData[ps[0].dataIndex]||{};var p=+(v.change_pct||0);return escapeHtml(v.name)+'<br/>涨跌幅 '+(p>=0?'+':'')+p+'%<br/>上涨 '+escapeHtml(v.up_count==null?0:v.up_count)+' / 下跌 '+escapeHtml(v.down_count==null?0:v.down_count)+(v.lead_stock?'<br/>领涨 '+escapeHtml(v.lead_stock):'');}},grid:{left:60,right:30,bottom:10,top:10},
     xAxis:{type:'value',axisLabel:{color:'#94A3B8',fontSize:10,formatter:'{value}%'},splitLine:{lineStyle:{color:'rgba(255,255,255,0.06)'}}},
     yAxis:{type:'category',data:chartData.map(function(v){return v.name;}),axisLabel:{color:'#94A3B8',fontSize:11,width:50,overflow:'truncate'},axisLine:{lineStyle:{color:'rgba(255,255,255,0.08)'}}},
     series:[{type:'bar',data:chartData.map(function(v){var pct=+(v.change_pct||0).toFixed(1);return {value:pct,itemStyle:{color:pct>=0?'#EF4444':'#22C55E'}};}),barWidth:12,
@@ -1801,12 +1765,24 @@ function renderSectorMoneyflow(smd){
   var outArr=(smd.out_sectors||[]).slice(0,5);
   var chartData=inArr.concat(outArr).sort(function(a,b){return (a.net_inflow||0)-(b.net_inflow||0);});
   if(chartData.length){
+    var el=document.getElementById('sector-inflow-chart');
     var c=_chart('sector-inflow-chart');
-    c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:60,right:50,bottom:10,top:5},
-      xAxis:{show:false},yAxis:{type:'category',data:chartData.map(function(v){return v.name;}),axisLabel:{color:'#94A3B8',fontSize:11,width:50,overflow:'truncate'}},
-      series:[{type:'bar',data:chartData.map(function(v){var nf=+(v.net_inflow||0).toFixed(1);return {value:nf,itemStyle:{color:nf>=0?'#EF4444':'#22C55E'}};}),barWidth:10,
-        label:{show:true,position:'right',formatter:function(p){return p.value>0?'+'+p.value+'亿':p.value+'亿';},fontSize:10,color:'#94A3B8'}}]});
-    if(c&&charts.indexOf(c)<0)charts.push(c);
+    if(el&&c){
+      // 539 批次2：5 进 + 5 出共 10 条，按条数给高度；条数少时不低于 220px
+      _fitChartHeight(el, chartData.length, 42, 24, 220, 420);
+      var sig=JSON.stringify(chartData);
+      if(el.__mfSig===sig){
+        c.resize();
+      } else {
+        el.__mfSig=sig;
+        c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},grid:{left:60,right:50,bottom:10,top:5},
+          xAxis:{show:false},yAxis:{type:'category',data:chartData.map(function(v){return v.name;}),axisLabel:{color:'#94A3B8',fontSize:11,width:50,overflow:'truncate'}},
+          series:[{type:'bar',data:chartData.map(function(v){var nf=+(v.net_inflow||0).toFixed(1);return {value:nf,itemStyle:{color:nf>=0?'#EF4444':'#22C55E'}};}),barWidth:10,
+            label:{show:true,position:'right',formatter:function(p){return p.value>0?'+'+p.value+'亿':p.value+'亿';},fontSize:10,color:'#94A3B8'}}]});
+        c.resize();
+      }
+      if(charts.indexOf(c)<0)charts.push(c);
+    }
   }
   if(smd.sectors&&smd.sectors.length){
     var inCont=document.getElementById('top-stock-cards');inCont.innerHTML='';
