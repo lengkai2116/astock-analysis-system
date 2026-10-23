@@ -281,11 +281,18 @@ def _build_response(mode: str, items: list[dict]) -> dict:
         _realtime_at = _dm.cache.get_market_snapshot_max_cached_at()
     except Exception:
         pass
+    # 547号：OUT 成品仓元信息（treemap_snapshot 由 JUD 构建、OUT 归档）
+    _panel_stale = bool(
+        (not _snap_date) or (_snap_date < datetime.now().strftime('%Y-%m-%d')))
     return {
         'code': 0,
         'data': {
             'mode': mode,
             'groups': groups_list,
+            'panel_source': 'out' if _snap_date else 'missing',
+            'panel_date': _data_date,
+            'panel_built_at': _snap_date,
+            'stale': _panel_stale,
             'signal_strength_fallback': _missing_ss,
             'signal_strength_coverage': round(coverage, 4),
             'data_status': 'pre_compute' if _missing_ss else 'complete',

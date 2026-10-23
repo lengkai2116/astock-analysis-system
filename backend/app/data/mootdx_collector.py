@@ -274,6 +274,41 @@ def _ts_code(code: str, market: int) -> str:
     return f"{code}.{suffix}"
 
 
+def _market_prefix(code: str) -> str:
+    """6 位代码 → 行情源前缀；北交所 92/4/8 开头优先于沪市 9 开头。"""
+    if code.startswith(('92', '4', '8')):
+        return 'bj'
+    if code.startswith(('6', '9')):
+        return 'sh'
+    return 'sz'
+
+
+def _ts_code_from_prefix(code: str, prefix: str) -> str:
+    suffix = {'sh': 'SH', 'sz': 'SZ', 'bj': 'BJ'}.get(prefix.lower(), 'SZ')
+    return f"{code}.{suffix}"
+
+
+def _get_bj_codes() -> List[str]:
+    """从 app.db stocks 读取北交所 6 位代码（351 只）。"""
+    try:
+        import os as _os
+        import sqlite3 as _sqlite3
+        _project = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+        _db = _os.path.join(_project, 'data', 'app.db')
+        if not _os.path.exists(_db):
+            return []
+        _conn = _sqlite3.connect(_db)
+        try:
+            rows = _conn.execute(
+                "SELECT ts_code FROM stocks WHERE ts_code LIKE '%.BJ'"
+            ).fetchall()
+            return sorted(r[0].split('.')[0] for r in rows)
+        finally:
+            _conn.close()
+    except Exception:
+        return []
+
+
 def _get_a_share_codes() -> List[str]:
     """获取所有 A 股代码列表（沪深主板/中小板/创业板/科创板）
 
@@ -513,7 +548,7 @@ def _fetch_sina(codes: list, name_map: dict) -> list:
     max_workers = 4
 
     def _fetch_one(batch: list) -> list:
-        sina_codes = [f"{'sh' if c.startswith(('6','9')) else 'sz'}{c}" for c in batch]
+        sina_codes = [f"{_market_prefix(c)}{c}" for c in batch]
         url = 'https://hq.sinajs.cn/list=' + ','.join(sina_codes)
         req = urllib.request.Request(url, headers={
             'Referer': 'https://finance.sina.com.cn',
@@ -536,15 +571,15 @@ def _fetch_sina(codes: list, name_map: dict) -> list:
                 if len(values) < 32:
                     continue
                 code_str = parts[0].split('_')[-1] if '_' in parts[0] else ''
-                code = code_str[2:] if code_str.startswith(('sh', 'sz')) else code_str
+                prefix = code_str[:2] if code_str[:2] in ('sh', 'sz', 'bj') else ''
+                code = code_str[2:] if prefix else code_str
                 name = values[0]
                 open_p = _safe_float(values[1])
                 close_p = _safe_float(values[2])
                 price = _safe_float(values[3])
                 if price == 0 or close_p == 0:
                     continue
-                market = 0 if code.startswith(('6', '9')) else 1
-                ts_code = f'{code}.SH' if market == 0 else f'{code}.SZ'
+                ts_code = _ts_code_from_prefix(code, prefix or _market_prefix(code))
                 change = round(price - close_p, 2)
                 change_pct = round(change / close_p * 100, 2) if close_p else 0.0
                 records.append({
@@ -609,8 +644,7 @@ def _fetch_tencent(codes: list, name_map: dict) -> list:
         batch = codes[batch_start:batch_start + batch_size]
         tencent_codes = []
         for c in batch:
-            m = 0 if c.startswith(('6', '9')) else 1
-            prefix = 'sh' if m == 0 else 'sz'
+            prefix = _market_prefix(c)
             tencent_codes.append(f'{prefix}{c}')
 
         url = 'https://qt.gtimg.cn/q=' + ','.join(tencent_codes)
@@ -633,14 +667,14 @@ def _fetch_tencent(codes: list, name_map: dict) -> list:
                     continue
 
                 code_str = line.split('=')[0].lstrip('v_')
-                code = code_str[2:]
+                prefix = code_str[:2] if code_str[:2] in ('sh', 'sz', 'bj') else ''
+                code = code_str[2:] if prefix else code_str
                 price = _safe_float(values[3])
                 close_p = _safe_float(values[4])
                 if price == 0 or close_p == 0:
                     continue
 
-                market = 0 if code.startswith(('6', '9')) else 1
-                ts_code = f'{code}.SH' if market == 0 else f'{code}.SZ'
+                ts_code = _ts_code_from_prefix(code, prefix or _market_prefix(code))
                 change = round(price - close_p, 2)
                 change_pct = round(change / close_p * 100, 2) if close_p else 0.0
 
@@ -802,6 +836,21 @@ def _fetch_eastmoney(codes: list, name_map: dict) -> list:
 _http_source_mgr = _SnapshotSourceManager()
 
 
+def _collect_bj_snapshot(name_map: dict) -> list:
+    """547号：北交所专用快照（新浪主、腾讯备）。
+
+    东财 ulist 的 BJ secid 口径与沪深不同，暂不混入东财批次；
+    BJ 代码统一走已验证的 bj 前缀接口，返回 ts_code 为 .BJ。
+    """
+    codes = _get_bj_codes()
+    if not codes:
+        return []
+    records = _fetch_sina(codes, name_map)
+    if not records:
+        records = _fetch_tencent(codes, name_map)
+    return records
+
+
 def _collect_dual_source_fallback() -> int:
     """HTTP 双源热备采集：Sina 主 / Tencent 备，自动切换
 
@@ -811,13 +860,13 @@ def _collect_dual_source_fallback() -> int:
     from app.data.in_memory_store import store as mem_store
 
     codes = _get_a_share_codes()
-    if not codes:
-        return 0
-
-    t_start = time.time()
     name_map = _stock_name_map
+    t_start = time.time()
 
-    all_records = _http_source_mgr.fetch(codes, name_map)
+    all_records = _http_source_mgr.fetch(codes, name_map) if codes else []
+    bj_records = _collect_bj_snapshot(name_map)
+    if bj_records:
+        all_records.extend(bj_records)
     if not all_records:
         return 0
 
