@@ -889,6 +889,37 @@ def _batch_limit_detail(trade_date: str) -> int:
         return 0
     return _ecm.cache_limit_detail_data(pd.concat(frames, ignore_index=True))
 
+def _check_limit_detail_completeness(backfill_days: int = 3) -> None:
+    """545号：涨停/炸板明细兜底（limit_list_d U/Z）。
+
+    原接线只有 15:30 run_daily_sync 单次采集：接口当日未发布时写 0 行，
+    而完整性检查不覆盖该表 → 永不重试（2026-10-22 实证：stk_limit_cache
+    5,655 行而 limit_detail_cache 0 行）。判据：基础表已完整但明细为空即补采。
+    """
+    try:
+        for offset in range(max(1, backfill_days)):
+            d = datetime.now() - timedelta(days=offset)
+            if not _is_trading_day(d):
+                continue
+            ds_fmt = d.strftime('%Y-%m-%d')
+            if offset == 0 and not _is_today_data_ready():
+                continue
+            base_cnt = _query_table(
+                'stk_limit_cache',
+                "SELECT COUNT(*) FROM stk_limit_cache WHERE trade_date=?", [ds_fmt]) or 0
+            if base_cnt < LIMIT_THRESHOLD:
+                continue
+            detail_cnt = _query_table(
+                'limit_detail_cache',
+                "SELECT COUNT(*) FROM limit_detail_cache WHERE trade_date=?", [ds_fmt]) or 0
+            if detail_cnt > 0:
+                continue
+            logger.info(f"  [涨停明细] {ds_fmt} 基础表 {base_cnt} 行但明细为空，补采...")
+            added = _batch_limit_detail(ds_fmt.replace('-', ''))
+            logger.info(f"    → 补采 {added} 条")
+    except Exception as e:
+        logger.warning(f"  涨停明细检查失败: {e}")
+
 
 def _batch_northbound_flow(trade_date: str) -> int:
     """532号：北向市场级（moneyflow_hsgt，单日）→ northbound_flow_cache。"""
@@ -2335,6 +2366,9 @@ def run_integrity_check(backfill_days: int = 1):
                 logger.info(f"  [龙虎榜席位] {detail_stock_cnt}/{main_stock_cnt} 只 ✅")
     except Exception as e:
         logger.warning(f"  龙虎榜席位检查失败: {e}")
+
+    # 545号：涨停/炸板明细兜底——15:30 run_daily_sync 单次采集，接口未发布即永久缺失
+    _check_limit_detail_completeness(backfill_days)
 
     # 320号 F1：K 线深度检查（策略引擎需要 ≥130 根，不足则标签/九层解读 K 线维度失效）
     try:
@@ -6998,15 +7032,17 @@ def _is_market_day() -> bool:
 
 
 def _is_pipeline_complete(pipeline_date: str) -> bool:
-    """检查当日管道是否已全部完成"""
+    """检查当日管道是否已全部完成（步骤清单以 PIPELINE_STEPS 为单一来源）"""
     try:
+        from app.data.enhanced_cache_manager import PIPELINE_STEPS
+        step_ids = [sid for sid, _ in PIPELINE_STEPS]
+        placeholders = ','.join('?' * len(step_ids))
         row = _ecm.conn.execute(
             "SELECT COUNT(*) FROM pipeline_status "
-            "WHERE pipeline_date=? AND step_id IN ('COL-1','COL-2','COL-3','COL-4','COL-5','COL-6','COL-7',"
-            "'RAW-1','RAW-2','RAW-3','RAW-2B','RAW-2C','SIG','JUD','OUT','QA-CHECK') AND status='done'",
-            [pipeline_date]
+            f"WHERE pipeline_date=? AND step_id IN ({placeholders}) AND status='done'",
+            [pipeline_date] + step_ids
         ).fetchone()
-        return row and row[0] >= 16  # 16 个环节全 done（B3 RAW-2B；481③ RAW-2C；423号 QA-CHECK）
+        return bool(row) and row[0] >= len(step_ids)
     except Exception:
         return False
 
