@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class Dim1SignalEngine:
 
     def evaluate(self, dims: dict, tags: dict, signals: dict = None,
                  lifecycle: dict = None, data_context: dict = None,
-                 ts_code: str = None) -> dict:
+                 ts_code: str = None, asof_date: Optional[str] = None) -> dict:
         """数据质量门禁层入口
 
         411号方案Phase 3：从分析逻辑改为数据准备+质量校验。
@@ -59,6 +60,8 @@ class Dim1SignalEngine:
         lifecycle = lifecycle or {}
 
         ts_code = ts_code or (tags.get('ts_code', '') if isinstance(tags, dict) else '')
+        # 545号 A2：as_of 历史重算口径（YYYY-MM-DD）；None 时沿用最新交易日
+        asof = self._norm_asof(asof_date)
 
         # 1. 预加载dim2-dim7所需的全部原料数据
         loaded_data = {}
@@ -76,7 +79,7 @@ class Dim1SignalEngine:
                 #   知识库《缠论走势结构量化系统配置指南》分析口径为后复权——本号取前复权：
                 #   ①同样消除除权跳空；②最新价=实际价，中枢/支撑等绝对价无需换算（后复权需 scale 全链路换算、易错）；
                 #   ③日线级短窗口（中枢 1~3月）下前复权历史漂移影响可忽略。后复权方案记录于 463 文档。
-                daily_df = dm.get_cached_daily_data(ts_code, adj='qfq')
+                daily_df = dm.get_cached_daily_data(ts_code, end_date=asof, adj='qfq')
                 if daily_df is not None and not daily_df.empty:
                     loaded_data['daily_df'] = daily_df
                 else:
@@ -176,6 +179,7 @@ class Dim1SignalEngine:
 
                 try:
                     indicators_df = dm.get_cached_indicators(ts_code)
+                    indicators_df = self._slice_df(indicators_df, asof)
                     if indicators_df is not None and not indicators_df.empty:
                         # indicator_ma_df: ma5/10/20/30/60/vol_ma5/vol_ma10
                         ma_cols = [c for c in indicators_df.columns if c.startswith('ma') or c.startswith('vol_ma')]
@@ -199,7 +203,7 @@ class Dim1SignalEngine:
                 # 通过dm.get_pre_feat()读取嵌套JSON，按组名提取
 
                 try:
-                    pre_feat = dm.get_pre_feat(ts_code)
+                    pre_feat = dm.get_pre_feat(ts_code, trade_date=asof)
                     if pre_feat and isinstance(pre_feat, dict):
                         ext_groups = [
                             'chip_fund_ext', 'cost_ext', 'volume_ext', 'risk_ext',
@@ -220,7 +224,7 @@ class Dim1SignalEngine:
                 #   实测含历史多日），daemon 停态也可稳定输出。
                 if 'market_stats' not in loaded_data or not loaded_data.get('market_stats'):
                     try:
-                        _ms_tbl = dm.cache.get_cached_market_stats()
+                        _ms_tbl = dm.cache.get_cached_market_stats(stat_date=asof)
                         if _ms_tbl:
                             loaded_data['market_stats'] = _ms_tbl
                     except Exception:
@@ -228,7 +232,7 @@ class Dim1SignalEngine:
 
                 # ═══ 类别4: 板块热度（419号方案B4，dim5消费）═══
                 try:
-                    sh = dm.cache.get_cached_sector_heat()
+                    sh = dm.cache.get_cached_sector_heat(stat_date=asof)
                     if sh:
                         loaded_data['sector_heat'] = sh
                 except Exception:
@@ -238,7 +242,7 @@ class Dim1SignalEngine:
                 # 读取 relative_strength_cache（compute_cache.db），取个股最新的 20d/60d RPS 百分位。
                 # 双基准（000001.SH/000300.SH）行同值，取任一基准即可；数据不足时读方返回空 list → 不产结论。
                 try:
-                    _rs = dm.cache.get_relative_strength(ts_code=ts_code)
+                    _rs = dm.cache.get_relative_strength(ts_code=ts_code, asof_date=asof)
                     if _rs:
                         _rps_row = _rs[0]  # ORDER BY ts_code, asof_date DESC, benchmark → 最新日期任一基准行
                         loaded_data['relative_strength'] = {
@@ -251,6 +255,10 @@ class Dim1SignalEngine:
 
             except Exception as e:
                 quality_issues.append(f'DataManager初始化失败: {e}')
+
+        # 545号 A2：历史重算——所有带日期列的原料截断到 as_of，避免未来数据泄漏
+        if asof and loaded_data:
+            loaded_data = {k: self._slice_df(v, asof) for k, v in loaded_data.items()}
 
         # 2. 数据质量校验（412号方案A2）
         if loaded_data:
@@ -282,6 +290,38 @@ class Dim1SignalEngine:
             'data_context': loaded_data if loaded_data else None,
             'status_quality': status_quality,
         }
+
+    @staticmethod
+    def _norm_asof(as_of: Optional[str]) -> Optional[str]:
+        """545号 A2：as_of 归一为 YYYY-MM-DD；None/无效返回 None。"""
+        if not as_of:
+            return None
+        _d = str(as_of).replace('-', '')[:8]
+        if len(_d) == 8 and _d.isdigit():
+            return f"{_d[:4]}-{_d[4:6]}-{_d[6:8]}"
+        return None
+
+    @staticmethod
+    def _slice_df(df, as_of: Optional[str]):
+        """545号 A2：按日期列截断原料，避免历史重算读取未来数据。
+
+        优先 trade_date；财务类用 ann_date（公告日，避免读到该日之后才公告的报告），
+        缺失时退回 end_date；分钟/周线用 datetime。
+        """
+        if df is None or as_of is None or not hasattr(df, 'columns'):
+            return df
+        try:
+            if df.empty:
+                return df
+        except Exception:
+            return df
+        for col in ('trade_date', 'ann_date', 'end_date', 'datetime'):
+            if col in df.columns:
+                try:
+                    return df[df[col].astype(str).str[:10] <= str(as_of)[:10]]
+                except Exception:
+                    return df
+        return df
 
     def _validate(self, data_context: dict, ts_code: str) -> dict:
         """数据完整性校验（412号方案A2 v3.0）

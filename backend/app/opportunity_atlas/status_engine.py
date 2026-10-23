@@ -289,7 +289,8 @@ class StatusEngine:
             dim_engine_results = dim_results
         else:
             # 366号步骤3：用维度引擎替代_build_dimensions()
-            dim_engine_results = self._build_dim_engine_results(tags, signals, {}, lifecycle, ts_code=ts_code)
+            dim_engine_results = self._build_dim_engine_results(
+                tags, signals, {}, lifecycle, ts_code=ts_code, asof_date=asof_date)
 
         # 兼容层：将维度引擎输出转为旧dims格式
         dims = self._convert_to_dims_format(dim_engine_results, tags)
@@ -447,7 +448,8 @@ class StatusEngine:
 
     def _build_dim_engine_results(self, tags: dict, signals: dict,
                                    dims: dict, lifecycle: Optional[dict] = None,
-                                   ts_code: str = None) -> dict:
+                                   ts_code: str = None,
+                                   asof_date: Optional[str] = None) -> dict:
         """411号方案Phase 4：重构维度引擎调用流程
 
         新流程：
@@ -467,7 +469,9 @@ class StatusEngine:
             from app.opportunity_atlas.dimensions.dim1_signal_engine import Dim1SignalEngine
             dim1_engine = Dim1SignalEngine()
             # 419号方案：显式传 ts_code（tags 扁平化后无此键）
-            dim1_result = dim1_engine.evaluate(dims, tags, signals, lifecycle, ts_code=ts_code)
+            # 545号 A2：asof_date 透传 dim1，使原料加载按历史交易日截断
+            dim1_result = dim1_engine.evaluate(dims, tags, signals, lifecycle,
+                                               ts_code=ts_code, asof_date=asof_date)
             results['signal'] = dim1_result
             data_context = dim1_result.get('data_context')
         except Exception as e:

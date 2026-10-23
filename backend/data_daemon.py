@@ -3564,17 +3564,11 @@ def _rank_industry_position(codes, ind_map, all_data, asof_date):
     return rows
 
 
-def _precompute_industry_position(codes):
+def _precompute_industry_position(codes, as_of=None):
     """481号 ③：个股在所属行业的近20日收益排名/百分位（独立管道步骤 RAW-2C）
 
-    能力缺口补全：对全市场活跃股票，取各自所属申万一级行业（Stock.industry）成分股集合，
-    算每股近20日收益，在行业成分股内排名得 rank_in_industry / total_in_industry /
-    percentile（涨幅越高百分比越小，前1%最强）与五档 position，写 industry_position_cache
-    （compute_cache.db），供 dim8 第一层环境定位「个股行业位置」句读取。
-
-    参照 _precompute_sector_heat 骨架：独立 app_context（内部走 ORM db.session 取行业）+
-    独立短连接写盘 DELETE+executemany+commit（规避与 daemon 主循环写锁竞争）。
-    收益口径与 _compute_relative_strength/② 一致：最新收盘 / 20交易日前收盘 - 1。
+    545号 A5：as_of 指定历史交易日时按该日截断收益视窗并写入该日（历史回补）。
+    其余说明见原实现（行业映射 + 20日收益排名 + 五档 position）。
     """
     _ensure_ecm()
     _ensure_pd()
@@ -3590,8 +3584,20 @@ def _precompute_industry_position(codes):
 
         # 2) 每日线（复用 preload_all 全量预加载再过滤，行业成分股全量扫描场景高效）
         all_data = _ecm.get_cached_daily_batch(codes)
+        # 545号 A5：历史回补按 as_of 截断（20日收益不得使用未来收盘）
+        if as_of and all_data:
+            _asof = str(as_of).replace('-', '')
+            _asof = f"{_asof[:4]}-{_asof[4:6]}-{_asof[6:8]}" if len(_asof) >= 8 else str(as_of)[:10]
+            all_data = {
+                k: (v[v['trade_date'].astype(str).str[:10] <= _asof]
+                    if v is not None and hasattr(v, 'columns') and 'trade_date' in v.columns else v)
+                for k, v in all_data.items()
+            }
 
         asof = _today_fmt()
+        if as_of:
+            _d = str(as_of).replace('-', '')[:8]
+            asof = f"{_d[:4]}-{_d[4:6]}-{_d[6:8]}"
         rows = _rank_industry_position(codes, ind_map, all_data, asof)
         if not rows:
             logger.warning("个股行业位置预计算为空，跳过写盘")
@@ -5837,7 +5843,7 @@ def _compute_snapshot_consensus_rate(t: dict) -> float:
         return 0.0
 
 
-def _jud_enrich_with_meta(codes: list[str]):
+def _jud_enrich_with_meta(codes: list[str], as_of: str = None):
     """371号JUD接入：机会分类+潜力评分+右侧确认（预计算写入缓存供treemap使用）
 
     在 _build_status_snapshot 之后、_build_treemap_snapshot 之前调用。
@@ -5879,7 +5885,7 @@ def _jud_enrich_with_meta(codes: list[str]):
         for code in codes:
             try:
                 # 从 pre_feat_cache 加载原料标签并扁平化
-                pre_feat = _ecm.get_pre_feat(code)
+                pre_feat = _ecm.get_pre_feat(code, trade_date=as_of)
                 if not pre_feat:
                     continue
                 tags = se._flatten_pre_feat(pre_feat)
@@ -5896,6 +5902,9 @@ def _jud_enrich_with_meta(codes: list[str]):
                 # 2. right_side_confirm（右侧确认三档判定）
                 try:
                     df = _ecm.get_cached_daily(code)
+                    # 545号 A3：历史回补按 as_of 截断，右侧确认不得读取未来K线
+                    if df is not None and as_of and hasattr(df, 'columns') and 'trade_date' in df.columns:
+                        df = df[df['trade_date'].astype(str).str[:10] <= str(as_of)[:10]]
                     if df is not None and len(df) > 0:
                         _rsc_result = _check_right_side_confirm(
                             tags.get('opportunity_type', ''), tags, df)
@@ -5988,19 +5997,27 @@ def _pre_feat_treemap_fields(features_json) -> dict:
     return out
 
 
-def _load_pre_feat_treemap_map(codes: list[str]) -> dict[str, dict]:
-    """批量读取每只股票最新 pre_feat 行并提取 treemap 字段（540号批次2）"""
+def _load_pre_feat_treemap_map(codes: list[str], trade_date: str = None) -> dict[str, dict]:
+    """批量读取每只股票 pre_feat 行并提取 treemap 字段（540号批次2）
+
+    545号 A3：trade_date 指定时取 <= 该日的最近一行（历史回补不读未来特征）。
+    """
     if not codes:
         return {}
     ph = ','.join('?' for _ in codes)
+    _cap = ''
+    _params = list(codes)
+    if trade_date:
+        _cap = " AND trade_date <= ?"
+        _params.append(trade_date)
     try:
         df = _shard_query_df('pre_feat_cache', f"""
             SELECT ts_code, features_json FROM pre_feat_cache
             WHERE (ts_code, trade_date) IN (
                 SELECT ts_code, MAX(trade_date) FROM pre_feat_cache
-                WHERE ts_code IN ({ph}) GROUP BY ts_code
+                WHERE ts_code IN ({ph}){_cap} GROUP BY ts_code
             )
-        """, codes)
+        """, _params)
     except Exception as e:
         logger.warning(f"pre_feat treemap 字段读取失败（回退旧标签）: {e}")
         return {}
@@ -6014,7 +6031,7 @@ def _load_pre_feat_treemap_map(codes: list[str]) -> dict[str, dict]:
     return out
 
 
-def _build_treemap_snapshot(codes: list[str]):
+def _build_treemap_snapshot(codes: list[str], as_of: str = None):
     """日终预计算完成后，构建 treemap_snapshot 快照表（S1 管道环节）
 
     修复 2026-08-02：函数内使用 pd.notna 但未导入 pandas → INSERT 全失败
@@ -6022,6 +6039,7 @@ def _build_treemap_snapshot(codes: list[str]):
     从 daily_cache / daily_basic_cache / opportunity_tags_cache 提取最新数据，
     平铺写入 treemap_snapshot 表（4800 行 × ~25 列 ≈ 2-3 MB）。
     使用原子表替换避免读写不一致。
+    545号 A3：as_of 指定历史交易日时按该日取数、写 treemap_snapshot_history，不替换 live 表。
     """
     global _ecm
     if _ecm is None:
@@ -6049,23 +6067,26 @@ def _build_treemap_snapshot(codes: list[str]):
 
     # 2. 最新日线（每只最新一条，用子查询避免全表扫描）
     ph = ','.join('?' for _ in codes)
+    # 545号 A3：历史回补时把「最新」改为「<= as_of 的最近一条」
+    _cap = " AND trade_date <= ?" if as_of else ""
+    _cap_params = [as_of] if as_of else []
     # 423号：daily_cache 已分库（356号），改走分库权威副本（主库残留旧数据致滞后）
     daily_df = _shard_query_df('daily_cache', f"""
         SELECT ts_code, close, pct_chg, trade_date, amount, open, high, low FROM daily_cache
         WHERE (ts_code, trade_date) IN (
             SELECT ts_code, MAX(trade_date) FROM daily_cache
-            WHERE ts_code IN ({ph}) GROUP BY ts_code
+            WHERE ts_code IN ({ph}){_cap} GROUP BY ts_code
         )
-    """, codes)
+    """, list(codes) + _cap_params)
 
     # 3. 最新基本面（423号：daily_basic_cache 分库权威副本）
     basic_df = _shard_query_df('daily_basic_cache', f"""
         SELECT ts_code, total_mv, pe, pb, turnover_rate, circ_mv FROM daily_basic_cache
         WHERE (ts_code, trade_date) IN (
             SELECT ts_code, MAX(trade_date) FROM daily_basic_cache
-            WHERE ts_code IN ({ph}) GROUP BY ts_code
+            WHERE ts_code IN ({ph}){_cap} GROUP BY ts_code
         )
-    """, codes)
+    """, list(codes) + _cap_params)
 
     # 4. L2 标签（平铺：每只一行，每标签一列）
     # 修复 2026-08-04：原 MAX(CASE...) 取历史累积行的最大/字典序最大（如 fina_health 取到旧
@@ -6123,7 +6144,7 @@ def _build_treemap_snapshot(codes: list[str]):
     # 5.0 540号批次2：13 个标签字段改读 pre_feat_cache（旧 opportunity_tags_cache
     #     停留在 08-19；pre_feat 与 daily 同日，含 valuation/depth/sentiment 等分组）。
     #     仅覆盖 pre_feat 中实际存在的键；缺失键保留旧标签兜底，避免整列清空。
-    pre_map = _load_pre_feat_treemap_map(codes)
+    pre_map = _load_pre_feat_treemap_map(codes, trade_date=as_of)
     for _code, _fields in pre_map.items():
         if _code not in tags_map:
             tags_map[_code] = {}
@@ -6167,10 +6188,14 @@ def _build_treemap_snapshot(codes: list[str]):
         # 改经 sharding_manager 读（_query_df 读主库会 miss 分库新数据）
         from app.data.sharding_manager import sharding_manager
         _tm_conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('treemap_snapshot'))
-        _ss_rows = sharding_manager.execute_query(
-            'status_snapshot',
-            "SELECT ts_code, consensus_rate, conflict_evidence, opportunity_state, state_evidence"
-            " FROM status_snapshot")
+        _ss_table = 'status_snapshot_history' if as_of else 'status_snapshot'
+        _ss_sql = ("SELECT ts_code, consensus_rate, conflict_evidence, opportunity_state, state_evidence"
+                   f" FROM {_ss_table}")
+        if as_of:
+            _ss_sql += " WHERE trade_date = ?"
+            _ss_rows = sharding_manager.execute_query(_ss_table, _ss_sql, [as_of])
+        else:
+            _ss_rows = sharding_manager.execute_query(_ss_table, _ss_sql)
         if _ss_rows:
             status_map = {r[0]: {'ts_code': r[0], 'consensus_rate': r[1],
                                   'conflict_evidence': r[2], 'opportunity_state': r[3],
@@ -6294,30 +6319,53 @@ def _build_treemap_snapshot(codes: list[str]):
 
     # 370号O5：归档逻辑已移至OUT步骤（_out_transmit_seven_dim），此处不再归档
 
-    # 原子切换（509号 #J43：DROP+RENAME 两条独立 DDL 非事务，DROP 成功而 RENAME 失败
-    #   会丢 live 表 → 先 RENAME 旧表为备份、再 RENAME 新表为 live、最后删备份；
-    #   首次无旧表时 DROP IF EXISTS 兜底）
-    try:
-        _tm_conn.execute(f"ALTER TABLE treemap_snapshot RENAME TO treemap_snapshot_bak")
-    except Exception:
-        # 无旧 live 表（首次构建）→ 直接建新表
-        pass
-    try:
-        _tm_conn.execute(f"ALTER TABLE {NEW_TABLE} RENAME TO treemap_snapshot")
-    except Exception as _swap_err:
-        # RENAME 失败：回滚备份名，保留旧表可用
+    # 545号 A3：历史日重算 → 写 treemap_snapshot_history，绝不替换 live 表
+    if as_of:
+        _hist_cols = (
+            "ts_code, snapshot_date, name, industry, close, pct_chg, total_mv, trade_date,"
+            " open, high, low, amplitude, pe, pb, amount, turnover_rate, circ_mv,"
+            " signal_strength, valuation_level, valuation_deviation, main_force_phase,"
+            " phase_confidence, sentiment_phase, sector_heat, fina_health, opportunity_type,"
+            " trend_alignment, price_position, fund_flow, capital_nature, chip_concentration,"
+            " volatility_level, dividend_yield, composite_rating, opportunity_label,"
+            " evidence_count, right_side_confirm, confirm_evidence, opportunity_profile,"
+            " entry_signals, exit_conditions, consensus_rate, conflict, main_force_presence,"
+            " presence_evidence, opportunity_state, state_evidence, style_exposure,"
+            " catalyst_event, pe_percentile_5y, pb_percentile_5y"
+        )
+        _tm_conn.execute("DELETE FROM treemap_snapshot_history WHERE trade_date = ?", [as_of])
+        _tm_conn.execute(
+            f"INSERT INTO treemap_snapshot_history ({_hist_cols}) "
+            f"SELECT {_hist_cols} FROM {NEW_TABLE}")
+        _tm_conn.execute(f"DROP TABLE IF EXISTS {NEW_TABLE}")
+        _tm_conn.commit()
+        logger.info(f"treemap_snapshot 历史写入: {written}/{len(codes)} 只 → history ({as_of})")
+    else:
+        # 原子切换（509号 #J43：DROP+RENAME 两条独立 DDL 非事务，DROP 成功而 RENAME 失败
+        #   会丢 live 表 → 先 RENAME 旧表为备份、再 RENAME 新表为 live、最后删备份；
+        #   首次无旧表时 DROP IF EXISTS 兜底）
         try:
-            _tm_conn.execute(f"ALTER TABLE treemap_snapshot_bak RENAME TO treemap_snapshot")
+            _tm_conn.execute(f"ALTER TABLE treemap_snapshot RENAME TO treemap_snapshot_bak")
         except Exception:
+            # 无旧 live 表（首次构建）→ 直接建新表
             pass
-        raise
-    _tm_conn.execute("DROP TABLE IF EXISTS treemap_snapshot_bak")
-    _tm_conn.commit()
+        try:
+            _tm_conn.execute(f"ALTER TABLE {NEW_TABLE} RENAME TO treemap_snapshot")
+        except Exception as _swap_err:
+            # RENAME 失败：回滚备份名，保留旧表可用
+            try:
+                _tm_conn.execute(f"ALTER TABLE treemap_snapshot_bak RENAME TO treemap_snapshot")
+            except Exception:
+                pass
+            raise
+        _tm_conn.execute("DROP TABLE IF EXISTS treemap_snapshot_bak")
+        _tm_conn.commit()
 
     # 423号：写后校验（覆盖率）——失败记审计告警，不抛
+    # 545号 A3：历史分支写的是 history 表，不对 live 表做覆盖率校验
     try:
         _td = str(daily_df['trade_date'].max()) if not daily_df.empty else ''
-        if _td:
+        if _td and not as_of:
             from app.data.stg_quality import WriteGateway
             _wg = WriteGateway(_ecm)
             _r = _wg.validate_after_write('treemap_snapshot', _td,
@@ -6765,11 +6813,13 @@ def _backfill_seven_dim_jud(ts_code: str, trade_date: str, dim_results,
         logger.debug(f"seven_dim 单源化回填失败 {ts_code}: {e}")
 
 
-def _build_status_snapshot(codes: list[str]):
+def _build_status_snapshot(codes: list[str], as_of: str = None):
     """337号 §3/§4：日频现状成品生成（S2 status_engine → status_snapshot 表）
 
     全市场结构化落库（九维状态/状态条/opportunity_state/conflict/共识），
     与 treemap_snapshot 同管道、原子表替换。
+    545号 A3：as_of 指定历史交易日时，评估按该日、产物写 status_snapshot_history，
+    不替换 live 表（回补不得覆盖最新日）。
     """
     import json as _json  # 495 遗留核查：_gen_summary/_dim_cache 引用 _json，本函数此前无局部导入会 NameError
     global _ecm
@@ -6787,12 +6837,17 @@ def _build_status_snapshot(codes: list[str]):
         from app.opportunity_atlas.status_engine import StatusEngine
         engine = StatusEngine()
         # 数据交易日（从日线取，独立于 treemap_snapshot——S1 先行构建时序）
+        # 545号 A3：as_of 指定时以该日为数据日（历史回补不读最新日）
         trade_date = ''
-        try:
-            _rows = _shard_fetchall('daily_cache', 'SELECT MAX(trade_date) FROM daily_cache')
-            trade_date = str(_rows[0][0]) if _rows and _rows[0][0] else ''
-        except Exception:
-            pass
+        if as_of:
+            _d = str(as_of).replace('-', '')[:8]
+            trade_date = f"{_d[:4]}-{_d[4:6]}-{_d[6:8]}"
+        else:
+            try:
+                _rows = _shard_fetchall('daily_cache', 'SELECT MAX(trade_date) FROM daily_cache')
+                trade_date = str(_rows[0][0]) if _rows and _rows[0][0] else ''
+            except Exception:
+                pass
 
         _NEW = 'status_snapshot_new'
         # 421号R4a补充修复：status_snapshot 写路径切分库（snapshot_cache.db）
@@ -6841,15 +6896,20 @@ def _build_status_snapshot(codes: list[str]):
             # 421号R4a：改走 sharding_manager 读 snapshot_cache.db 分库
             from app.data.sharding_manager import sharding_manager
             _placeholders = ','.join(['?' for _ in codes])
+            # 545号 A3：历史回补只取目标日的 dim_results，避免命中未来批次
+            _dim_where = (f"WHERE ts_code IN ({_placeholders}) AND dim_results_json IS NOT NULL")
+            _dim_params = list(codes)
+            if as_of:
+                _dim_where += " AND trade_date = ?"
+                _dim_params.append(trade_date)
             _rows = sharding_manager.execute_query(
                 'strategy_signal_detail',
                 f"SELECT ts_code, dim_results_json FROM ("
                 f"  SELECT ts_code, dim_results_json,"
                 f"         ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) AS _rn"
-                f"  FROM strategy_signal_detail"
-                f"  WHERE ts_code IN ({_placeholders}) AND dim_results_json IS NOT NULL"
+                f"  FROM strategy_signal_detail {_dim_where}"
                 f") WHERE _rn = 1",
-                codes
+                _dim_params
             )
             for _r in _rows:
                 try:
@@ -6861,7 +6921,7 @@ def _build_status_snapshot(codes: list[str]):
         # 370号S6：build_seven_dim_report已废弃，one_liner_detail由OUT从seven_dim_json透传
         for code in codes:
             try:
-                row = engine.evaluate(code, dim_results=_dim_cache.get(code))
+                row = engine.evaluate(code, dim_results=_dim_cache.get(code), asof_date=as_of)
                 if not row:
                     continue
                 # 364a Phase 1：生成summary_text
@@ -6897,24 +6957,43 @@ def _build_status_snapshot(codes: list[str]):
         # 370号O5：归档逻辑已移至OUT步骤（_out_transmit_seven_dim），此处不再归档
         logger.info(f"  status_snapshot 构建完成: {written}/{len(codes)} 只")
         _last_step_counts['JUD'] = f"{written}/{len(codes)} stocks"
-        # 原子替换（509号 #J43：同 treemap——RENAME 备份→RENAME live→删备份，防
-        #   DROP 成功而 RENAME 失败丢 live 表）
-        try:
-            _snap_conn.execute("ALTER TABLE status_snapshot RENAME TO status_snapshot_bak")
-        except Exception:
-            pass  # 首次无旧表
-        try:
-            _snap_conn.execute(f"ALTER TABLE {_NEW} RENAME TO status_snapshot")
-        except Exception as _swap_err:
+        # 545号 A3：历史日重算 → 写 status_snapshot_history，绝不替换 live 表
+        if as_of:
+            _hist_cols = (
+                "ts_code, snapshot_date, trade_date, dim_states, status_bar,"
+                " opportunity_state, state_evidence, conflict_evidence, consensus_rate,"
+                " direction, l0, lifecycle, advice_params, summary_text, one_liner_detail,"
+                " dim_engine_results, signals, monthly_halt, final_score, semantic_type,"
+                " reliability_summary, consensus_detail"
+            )
+            _snap_conn.execute(
+                "DELETE FROM status_snapshot_history WHERE trade_date = ?", [trade_date])
+            _snap_conn.execute(
+                f"INSERT INTO status_snapshot_history ({_hist_cols}) "
+                f"SELECT {_hist_cols} FROM {_NEW}")
+            _snap_conn.execute(f"DROP TABLE IF EXISTS {_NEW}")
+            _snap_conn.commit()
+            logger.info(f"  status_snapshot 历史写入: {written}/{len(codes)} 只 "
+                        f"→ history ({trade_date})")
+        else:
+            # 原子替换（509号 #J43：同 treemap——RENAME 备份→RENAME live→删备份，防
+            #   DROP 成功而 RENAME 失败丢 live 表）
             try:
-                _snap_conn.execute("ALTER TABLE status_snapshot_bak RENAME TO status_snapshot")
+                _snap_conn.execute("ALTER TABLE status_snapshot RENAME TO status_snapshot_bak")
             except Exception:
-                pass
-            raise
-        _snap_conn.execute("DROP TABLE IF EXISTS status_snapshot_bak")
-        _snap_conn.commit()
+                pass  # 首次无旧表
+            try:
+                _snap_conn.execute(f"ALTER TABLE {_NEW} RENAME TO status_snapshot")
+            except Exception as _swap_err:
+                try:
+                    _snap_conn.execute("ALTER TABLE status_snapshot_bak RENAME TO status_snapshot")
+                except Exception:
+                    pass
+                raise
+            _snap_conn.execute("DROP TABLE IF EXISTS status_snapshot_bak")
+            _snap_conn.commit()
         # 423号：写后校验（覆盖率）——失败记审计告警，不抛（避免原子替换后重试丢数据）
-        if trade_date:
+        if trade_date and not as_of:
             try:
                 from app.data.stg_quality import WriteGateway
                 _wg = WriteGateway(_ecm)
@@ -8026,8 +8105,11 @@ def _precompute_indicators(codes):
         logger.debug(f"indicator 写后校验异常: {e}")
 
 
-def _precompute_strategy_signals(codes):
-    """包装原有的策略信号预计算逻辑（P2）"""
+def _precompute_strategy_signals(codes, as_of=None):
+    """包装原有的策略信号预计算逻辑（P2）
+
+    545号 A2：as_of 指定历史交易日时，核心计算与 dim 结果均按该日截断/取数。
+    """
     _ensure_ecm()
     # 2026-08-11 修复：P2 前置预热周线缓存——缠论 long 周期依赖周线（_get_weekly_data）。
     # 原实现缓存 miss 时直调 mootdx TCP（292号红线违规 + 连接失败 3.6s sleep/只，
@@ -8044,7 +8126,7 @@ def _precompute_strategy_signals(codes):
     try:
         from app.engine.unified_core import UnifiedStrategyCore
         core = UnifiedStrategyCore()
-        results = core.compute_batch(codes, max_workers=4)
+        results = core.compute_batch(codes, max_workers=4, as_of=as_of)
         # 2026-08-16 修复（P2 写锁死锁根治）：原实现逐只 cache_signal_detail
         # （共享 conn + _write_lock + busy_timeout=30s），4 worker 高频写与 daemon
         # 主循环写冲突——持锁 worker 阻塞于 SQLite 写锁等待，其余 worker 阻塞于
@@ -8070,14 +8152,14 @@ def _precompute_strategy_signals(codes):
                 _tags = {}
                 if _se_engine:
                     try:
-                        _tags = _se_engine._load_tags(ts_code)
-                        _signals = _se_engine._load_signals(ts_code)
+                        _tags = _se_engine._load_tags(ts_code, asof_date=as_of)
+                        _signals = _se_engine._load_signals(ts_code, asof_date=as_of)
                         if _tags or _signals:
                             _lifecycle = _se_engine._signal_lifecycle(ts_code, _tags, _signals)
                             # 421号补充修复：SIG 预计算路径补传 ts_code——此前遗漏导致
                             # dim1 门禁 ts_code 为空、跳过数据预加载，data_context 全 null、
                             # quality_level=failed（与 JUD 主路径 status_engine.py:88 对齐）
-                            dim_results = _se_engine._build_dim_engine_results(_tags, _signals, {}, _lifecycle, ts_code=ts_code)
+                            dim_results = _se_engine._build_dim_engine_results(_tags, _signals, {}, _lifecycle, ts_code=ts_code, asof_date=as_of)
                     except Exception:
                         dim_results = None
                 # 436号S5：七维现状描述由 dim8 整体归集器从 dim_results 组装（替代

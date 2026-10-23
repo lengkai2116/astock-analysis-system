@@ -68,24 +68,26 @@ KEY_TO_STRATEGY_NAME: dict[str, str] = {v: k for k, v in SIGNAL_NAME_MAP.items()
 class UnifiedStrategyCore:
     """统一策略核心——所有策略计算的唯一入口"""
 
-    def compute(self, ts_code: str, period: str = 'long') -> StandardizedResult:
-        """单只股票策略计算"""
+    def compute(self, ts_code: str, period: str = 'long',
+                as_of: Optional[str] = None) -> StandardizedResult:
+        """单只股票策略计算（545号 A1：as_of 指定历史交易日重算）"""
         from app.services.signal_computation_service import SignalComputationService
         scs = SignalComputationService()
-        signals = scs.compute_for_stock(ts_code, period=period)
-        return self._to_standardized(ts_code, signals, period, scs)
+        signals = scs.compute_for_stock(ts_code, period=period, as_of=as_of)
+        return self._to_standardized(ts_code, signals, period, scs, as_of=as_of)
 
     def compute_batch(
         self,
         ts_codes: list[str],
         period: str = 'long',
         max_workers: int = 4,
+        as_of: Optional[str] = None,
     ) -> dict[str, StandardizedResult]:
-        """批量策略计算（供 daemon 预计算使用）"""
+        """批量策略计算（供 daemon 预计算使用；545号 A1：as_of 历史重算）"""
         results: dict[str, StandardizedResult] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as exe:
             fut_map = {
-                exe.submit(self._safe_compute, code, period): code
+                exe.submit(self._safe_compute, code, period, as_of): code
                 for code in ts_codes
             }
             for fut in concurrent.futures.as_completed(fut_map):
@@ -98,10 +100,11 @@ class UnifiedStrategyCore:
                     continue
         return results
 
-    def _safe_compute(self, ts_code: str, period: str) -> Optional[StandardizedResult]:
+    def _safe_compute(self, ts_code: str, period: str,
+                      as_of: Optional[str] = None) -> Optional[StandardizedResult]:
         """单股安全计算，异常不影响整体 batch"""
         try:
-            return self.compute(ts_code, period=period)
+            return self.compute(ts_code, period=period, as_of=as_of)
         except Exception:
             return None
 
@@ -111,22 +114,29 @@ class UnifiedStrategyCore:
         signals: list,
         period: str,
         scs: object = None,
+        as_of: Optional[str] = None,
     ) -> StandardizedResult:
         """将 SignalComputationService 的 List[Dict] 输出转为 StandardizedResult"""
-        # 374号修正：使用最新交易日而非今日日期（今日可能非交易日）
-        # 423号运行验证：daily_cache 已迁移 market_cache.db 分库（356号），
-        # 主库残留旧表（08-26）致 SIG 产出滞后约10个交易日——改走 sharding_manager 读分库
-        try:
-            from app.data.sharding_manager import sharding_manager
-            _today_conn = sharding_manager.get_connection(
-                sharding_manager.get_db_for_table('daily_cache'))
-            _td = _today_conn.execute(
-                "SELECT MAX(trade_date) FROM daily_cache").fetchone()
-            today = _td[0] if _td and _td[0] else ''
-            if not today:
+        # 545号 A1：as_of 指定时以该日为结果交易日（上游行情视窗已按同一天截断，
+        # 避免历史重算把结果写成最新日、也不把未来行情引入信号）
+        if as_of:
+            _d = str(as_of).replace('-', '')
+            today = f"{_d[:4]}-{_d[4:6]}-{_d[6:8]}"
+        else:
+            # 374号修正：使用最新交易日而非今日日期（今日可能非交易日）
+            # 423号运行验证：daily_cache 已迁移 market_cache.db 分库（356号），
+            # 主库残留旧表（08-26）致 SIG 产出滞后约10个交易日——改走 sharding_manager 读分库
+            try:
+                from app.data.sharding_manager import sharding_manager
+                _today_conn = sharding_manager.get_connection(
+                    sharding_manager.get_db_for_table('daily_cache'))
+                _td = _today_conn.execute(
+                    "SELECT MAX(trade_date) FROM daily_cache").fetchone()
+                today = _td[0] if _td and _td[0] else ''
+                if not today:
+                    today = datetime.now().strftime('%Y-%m-%d')
+            except Exception:
                 today = datetime.now().strftime('%Y-%m-%d')
-        except Exception:
-            today = datetime.now().strftime('%Y-%m-%d')
         result_signals: dict[str, StrategySignal] = {}
 
         for sig in signals:

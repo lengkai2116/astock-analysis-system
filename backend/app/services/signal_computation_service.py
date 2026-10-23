@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -43,13 +43,39 @@ class SignalComputationService:
             self._benchmark_service = BenchmarkService()
         return self._benchmark_service
 
-    def compute_for_stock(self, ts_code: str, limit: int = 5, period: str = 'long') -> List[Dict]:
+    @staticmethod
+    def _norm_asof(as_of):
+        """545号 A1：把 as_of 归一为 YYYY-MM-DD（兼容 YYYYMMDD）；无效返回 None。"""
+        if not as_of:
+            return None
+        _d = str(as_of).replace('-', '')[:8]
+        if len(_d) == 8 and _d.isdigit():
+            return f"{_d[:4]}-{_d[4:6]}-{_d[6:8]}"
+        return None
+
+    @staticmethod
+    def _slice_as_of(df, as_of):
+        """545号 A1：按 as_of 截断行情/资金/指标视窗（缺 trade_date 列则原样返回）。"""
+        if df is None or as_of is None or not hasattr(df, 'columns') or df.empty:
+            return df
+        if 'trade_date' not in df.columns:
+            return df
+        try:
+            return df[df['trade_date'].astype(str).str[:10] <= str(as_of)[:10]]
+        except Exception:
+            return df
+
+    def compute_for_stock(self, ts_code: str, limit: int = 5, period: str = 'long',
+                          as_of: Optional[str] = None) -> List[Dict]:
         """对单只股票计算多维策略信号（调度层入口）
 
         369号方案：调用维度引擎替代内联计算。
+        545号 A1：as_of 指定历史交易日重算——行情/资金/指标视窗统一截断到该日，
+        缺省（None）沿用最新交易日行为。
         返回信号列表，格式与旧接口兼容。
         """
-        df = self.data_manager.get_cached_daily_data(ts_code, adj='qfq')
+        _asof = self._norm_asof(as_of)
+        df = self.data_manager.get_cached_daily_data(ts_code, end_date=_asof, adj='qfq')
         if df.empty or len(df) < 60:
             mf_available = False
             try:
@@ -67,7 +93,7 @@ class SignalComputationService:
         if 'vol' not in df.columns and 'amount' in df.columns:
             df['vol'] = df['amount']
 
-        market_context, da = self._load_market_context(ts_code, df)
+        market_context, da = self._load_market_context(ts_code, df, as_of=_asof)
         self.last_data_availability = {**da, 'ts_code': ts_code, 'kline': True}
 
         tags = dict(market_context)
@@ -100,10 +126,12 @@ class SignalComputationService:
 
         return signals
 
-    def _load_market_context(self, ts_code: str, df: pd.DataFrame):
+    def _load_market_context(self, ts_code: str, df: pd.DataFrame,
+                             as_of: Optional[str] = None):
         """加载扩展数据（daily_basic/moneyflow/index/market_state）+ 构建市场上下文
 
         从 compute_for_stock 提取的数据加载模块（P3重构）。
+        545号 A1：as_of 指定时各扩展数据同样截断到该日（YYYY-MM-DD）。
         返回 (market_context, da) 二元组供策略计算使用。
         """
         market_context: Dict = {}
@@ -112,6 +140,7 @@ class SignalComputationService:
         # 1) daily_basic: 换手率、市值、PE/PB
         try:
             df_basic = self.data_manager.get_cached_daily_basic(ts_code)
+            df_basic = self._slice_as_of(df_basic, as_of)
             if df_basic is not None and not df_basic.empty:
                 latest_basic = df_basic.iloc[-1].to_dict()
                 market_context['turnover_rate'] = latest_basic.get('turnover_rate', None)
@@ -164,6 +193,7 @@ class SignalComputationService:
         # 2) 资金流向
         try:
             df_mf = self.data_manager.get_cached_moneyflow(ts_code)
+            df_mf = self._slice_as_of(df_mf, as_of)
             if df_mf is not None and not df_mf.empty:
                 recent_mf = df_mf.tail(5)
                 market_context['net_lg_amount'] = float(recent_mf['net_lg_amount'].sum())
@@ -180,7 +210,9 @@ class SignalComputationService:
 
         # 3) 大盘环境: 通过沪深300最近N日收益率判断
         try:
-            idx_df = self.benchmark_service.get_index_daily(BenchmarkIndex.HS300)
+            idx_df = self.benchmark_service.get_index_daily(
+                BenchmarkIndex.HS300,
+                end_date=str(as_of).replace('-', '') if as_of else None)
             if idx_df is not None and not idx_df.empty:
                 idx_close_series = idx_df['close'].astype(float)
                 idx_5d_ret = (idx_close_series.iloc[-1] / idx_close_series.iloc[-5] - 1) if len(idx_close_series) >= 5 else 0
@@ -214,6 +246,7 @@ class SignalComputationService:
             _pm = {}
             try:
                 _ind = self._data_manager.get_cached_indicators(ts_code)
+                _ind = self._slice_as_of(_ind, as_of)
                 if _ind is not None and not _ind.empty:
                     _latest = _ind.iloc[-1]
                     for _col in ['ma5', 'ma10', 'ma20', 'ma60', 'ma120']:
@@ -277,6 +310,7 @@ class SignalComputationService:
             from app.data import DataManager
             _dm = DataManager()
             margin_df = _dm.get_cached_margin(ts_code)
+            margin_df = self._slice_as_of(margin_df, as_of)
             if margin_df is not None and not margin_df.empty and len(margin_df) >= 5:
                 recent_margin = margin_df.tail(5)
                 if 'mrz' in recent_margin.columns:

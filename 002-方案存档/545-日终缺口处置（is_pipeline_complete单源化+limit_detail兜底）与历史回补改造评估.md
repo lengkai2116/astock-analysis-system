@@ -109,3 +109,68 @@ SIG 全链的日期口径是「最新交易日」，重跑只会写入最新日�
 2. 回补窗口不得与日终重叠；建议周末执行并在执行前停 daemon。
 3. `strategy_signal_detail` 10-21 的 2 行影子行（519 号）在回补时须先清理，避免 `MAX(trade_date)` 与覆盖写冲突。
 4. 545 号改动需 daemon 重启后生效（当前 daemon 21345 为 11:47 启动，未含本档代码）。
+
+## 九、A1~A4 实施记录（2026-10-23，按用户「现在开始实施 A1~A5」）
+
+### A1 数据视窗（已实施）
+
+- `backend/app/engine/unified_core.py`：`compute/compute_batch/_safe_compute/_to_standardized` 增 `as_of`；结果 `trade_date` 取 as_of（缺省仍取 `MAX(daily_cache)`）。
+- `backend/app/services/signal_computation_service.py`：`compute_for_stock(as_of=...)`；`get_cached_daily_data(end_date=as_of)`；daily_basic/moneyflow/margin/indicators 统一 `_slice_as_of` 截断；指数 `get_index_daily(end_date=as_of)`；新增 `_norm_asof` / `_slice_as_of`。
+
+### A2 维度层（已实施）
+
+- `status_engine._build_dim_engine_results(..., asof_date=)` 透传 dim1；`evaluate()` 调用处补传。
+- `dim1_signal_engine.evaluate(..., asof_date=)`：daily 按日查询、indicators 先切片再拆分、pre_feat/market_stats/sector_heat/relative_strength 按日读取；载入末尾统一 `_slice_df`（trade_date → ann_date → end_date → datetime）。
+- `data_daemon._precompute_strategy_signals(codes, as_of=)`：`compute_batch(as_of=)`、`_load_tags/_load_signals(asof_date=)`、`_build_dim_engine_results(asof_date=)`。
+
+### A3 JUD 历史写入（已实施）
+
+- `_build_status_snapshot(codes, as_of=)`：数据日=as_of、`strategy_signal_detail` 只取该日 dim_results、`evaluate(asof_date=)`；as_of 分支写 `status_snapshot_history` 并跳过 live 原子替换与覆盖率校验。
+- `_build_treemap_snapshot(codes, as_of=)`：daily/basic 取 `<= as_of` 最近一条、pre_feat 按日、status_map 读 history、写 `treemap_snapshot_history`。
+- `_jud_enrich_with_meta(codes, as_of=)`：pre_feat 按日、右侧确认 K 线截断；`_load_pre_feat_treemap_map(trade_date=)`。
+- `_precompute_industry_position(codes, as_of=)`：RAW-2C 补日期支持（20 日收益按日截断）——10-20/10-21 的 `industry_position_cache` 本为空。
+
+### A4 回补脚本（已实施）
+
+- `backend/scripts/_545_backfill_sig_jud_out.py`：默认 dry-run；`--apply` 时拒绝 daemon 运行；顺序 RAW-2C → 清影子行 → SIG → JUD（写 history）；支持 `--limit` 冒烟。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| py_compile | `data_daemon` + 4 个改动文件 OK |
+| 既有定向 | 542/543/545/544a/544c **20 passed** |
+| 新增 `test_545a_asof_windowing.py` | **5 passed**（日期归一/切片/结果 trade_date/参数存在性） |
+| 10-21 dry-run | pre_feat 5566；RAW-2C 0；SIG 影子行 2；history 0 |
+
+### A5 状态
+
+**窗口已拍板：2026-10-24（周六）全量回补 10-20、10-21**（避开交易日与日终；脚本幂等可重跑）。
+
+执行步骤：
+
+```bash
+# 1) 停看守 + daemon（研发期允许；必须两者都停，否则 10s 后自动拉起）
+kill <start_daemon.sh PID> <data_daemon.py PID>
+pgrep -f data_daemon.py   # 应为空
+
+# 2) 冒烟（10 只，实际写库）
+backend/.venv/bin/python backend/scripts/_545_backfill_sig_jud_out.py --date 20261021 --limit 10 --apply
+
+# 3) 全量两日
+backend/.venv/bin/python backend/scripts/_545_backfill_sig_jud_out.py --date 20261020 --apply
+backend/.venv/bin/python backend/scripts/_545_backfill_sig_jud_out.py --date 20261021 --apply
+
+# 4) 验收
+sqlite3 data/duckdb/snapshot_cache.db \
+  "SELECT trade_date, COUNT(*) FROM strategy_signal_detail WHERE trade_date IN ('2026-10-20','2026-10-21') GROUP BY trade_date;"
+sqlite3 data/duckdb/snapshot_cache.db \
+  "SELECT trade_date, COUNT(*) FROM status_snapshot_history WHERE trade_date IN ('2026-10-20','2026-10-21') GROUP BY trade_date;"
+sqlite3 data/duckdb/snapshot_cache.db \
+  "SELECT trade_date, COUNT(*) FROM treemap_snapshot_history WHERE trade_date IN ('2026-10-20','2026-10-21') GROUP BY trade_date;"
+# live 表必须保持 10-22 行数：status_snapshot / treemap_snapshot
+
+# 5) 重启看守（终端执行 start_daemon.sh 恢复）
+```
+
+验收口径：两日 `strategy_signal_detail` 各 ≥5,500；`*_history` 两日各 ≥5,500；`status_snapshot`/`treemap_snapshot`（live）行数与 trade_date 保持 10-22 不变。
