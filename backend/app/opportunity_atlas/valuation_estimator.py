@@ -205,39 +205,11 @@ class ValuationEngine(DataAwareMixin):
     def build_fcf_percentile(self, ecm=None) -> None:
         """构建全市场 FCF yield 截面百分位基准（锚3 相对化用，precompute 前调用）"""
         try:
-            import bisect
-            # 507批次6 #S25：ecm 优先（对齐 dim7_valuation_engine 版语义），
-            # 原恒读 self._get_dm().cache——调用方传不同路由实例时静默用错源
             cache = ecm if ecm is not None else self._get_dm().cache
-            # 421号：treemap_snapshot 归 snapshot_cache.db 分库，改走 _query_shard 路由
-            codes = cache._query_shard('treemap_snapshot', "SELECT ts_code FROM treemap_snapshot")["ts_code"].tolist()
-            vals = []
-            # 2026-08-06 修复：原抽样 3000 与方案"全市场截面基准"不符，
-            # 改为全量遍历
-            for code in codes:
-                try:
-                    df_b = cache.get_cached_daily_basic(code)
-                    df_cf = cache.get_cached_cashflow(code)
-                    if df_b is not None and not df_b.empty and df_cf is not None and not df_cf.empty:
-                        if 'total_mv' in df_b.columns and 'free_cashflow' in df_cf.columns:
-                            mv = df_b['total_mv'].dropna()
-                            fcf = df_cf['free_cashflow'].dropna()
-                            if not mv.empty and not fcf.empty and mv.iloc[-1] > 0:
-                                # 476号：与消费口径对齐（_anchor_cashflow/compute_tags 均 fcf/(mv*1e4)*100）；
-                                # 原 fcf/mv*100 差 1e4 倍 → 查询值落在分布低端，现金流锚系统性偏低
-                                vals.append(float(fcf.iloc[0]) / (float(mv.iloc[-1]) * 1e4) * 100)
-                except Exception:
-                    continue
-            if len(vals) < 200:
-                self._fcf_percentile = None
-                return
-            vals.sort()
-            n = len(vals)
-            def _pct(v: float) -> float:
-                idx = bisect.bisect_left(vals, v)
-                return idx / n
-            self._fcf_percentile = _pct
-            logger.info(f"FCF yield 截面基准构建完成: {len(vals)} 只")
+            codes = cache._query_shard(
+                'treemap_snapshot', "SELECT ts_code FROM treemap_snapshot")["ts_code"].tolist()
+            from app.opportunity_atlas.fcf_percentile import build_fcf_percentile
+            self._fcf_percentile = build_fcf_percentile(cache, codes)
         except Exception as e:
             logger.warning(f"FCF 截面基准构建失败: {e}")
             self._fcf_percentile = None

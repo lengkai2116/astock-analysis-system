@@ -25,6 +25,19 @@ from .memory_cache import TieredMemoryCache
 
 logger = logging.getLogger(__name__)
 
+# 543号：管道步骤清单的单一来源（ensure_pipeline_steps 与启动自检共用）。
+# 新增管道步骤必须同时加入本清单，并在 _drive_pipeline 中接入执行顺序。
+PIPELINE_STEPS = [
+    ('COL-1', '日线采集'), ('COL-2', '基本面采集'), ('COL-3', '资金流采集'),
+    ('COL-4', '涨跌停采集'), ('COL-5', '龙虎榜采集'), ('COL-6', '概念板块采集'),
+    ('COL-7', '财务全量同步'),
+    ('RAW-1', '技术指标(IND)'), ('RAW-2', '特征提取(FEAT)'), ('RAW-3', '量化因子(FAC)'),
+    ('RAW-2B', '板块热度持久化'), ('RAW-2D', '板块资金热度持久化'),
+    ('RAW-2E', '板块热度五维预计算'), ('RAW-2C', '个股行业位置持久化'),
+    ('SIG', '策略分析'), ('JUD', '判定及操作建议'), ('OUT', '成品仓'),
+    ('QA-CHECK', '仓储质量校验'),
+]
+
 # 全局 ECM 单例
 _ecm_instance = None
 _ecm_lock = threading.Lock()
@@ -4571,15 +4584,7 @@ class EnhancedCacheManager:
 
     def ensure_pipeline_steps(self, pipeline_date: str):
         """确保当日管道环节记录存在（幂等）— 353号方案统一命名"""
-        for step_id, step_name in [
-            ('COL-1', '日线采集'), ('COL-2', '基本面采集'), ('COL-3', '资金流采集'),
-            ('COL-4', '涨跌停采集'), ('COL-5', '龙虎榜采集'), ('COL-6', '概念板块采集'),
-            ('COL-7', '财务全量同步'),
-            ('RAW-1', '技术指标(IND)'), ('RAW-2', '特征提取(FEAT)'), ('RAW-3', '量化因子(FAC)'),
-            ('RAW-2B', '板块热度持久化'), ('RAW-2C', '个股行业位置持久化'),
-            ('SIG', '策略分析'), ('JUD', '判定及操作建议'), ('OUT', '成品仓'),
-            ('QA-CHECK', '仓储质量校验'),
-        ]:
+        for step_id, step_name in PIPELINE_STEPS:
             self.conn.execute(
                 "INSERT OR IGNORE INTO pipeline_status "
                 "(pipeline_date, step_id, step_name) VALUES (?, ?, ?)",

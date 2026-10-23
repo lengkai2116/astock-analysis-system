@@ -7769,10 +7769,166 @@ def _run_history_qa_patrol(limit: int = 3):
             except Exception:
                 pass
 
+
+# ── 543号：日终完成保障（停滞看门狗 + 日终硬校验 + 启动注册自检）──
+_PIPELINE_STALL_STATE = {'date': None, 'fingerprint': None, 'since': 0.0, 'last_alert': 0.0}
+_PIPELINE_STALL_MINUTES = 90
+_PIPELINE_STALL_ALERT_COOLDOWN = 1800
+_EOD_CHECK_STATE = {'checked_date': None}
+
+
+def _pipeline_alert(title: str, message: str, alert_type: str, source: str, metadata: dict):
+    """543号：管道类告警统一出口（日志 + monitor + AlertNotifier）"""
+    logger.error(f"[{source}] {message}")
+    try:
+        from app.data.monitor import monitor
+        monitor.create_alert('ERROR', title, message, source=source, metrics=metadata)
+    except Exception as e:
+        logger.warning(f"{source} monitor 告警失败: {e}")
+    try:
+        from app.services.alert_notifier import AlertNotifier
+        AlertNotifier().send(alert_type, source, message, severity='ALERT', metadata=metadata)
+    except Exception as e:
+        logger.warning(f"{source} AlertNotifier 失败: {e}")
+
+
+def _check_pipeline_stall():
+    """543号：检测最新数据日管道长时间无进展（pending 静默停摆）。
+
+    以 pipeline_status 的状态指纹为准：指纹变化即视为有进展并重置计时；
+    连续 _PIPELINE_STALL_MINUTES 分钟不变且未全部 done → ERROR + 告警。
+    告警 30 分钟冷却，避免每个 tick 重复刷。
+    """
+    try:
+        data_date = _get_latest_data_date()
+        if not data_date:
+            return
+        date_compact = data_date.replace('-', '')
+        rows = _ecm.conn.execute(
+            "SELECT step_id, status FROM pipeline_status WHERE pipeline_date=? ORDER BY step_id",
+            [date_compact]).fetchall()
+        if not rows:
+            return
+        statuses = {str(r[0]): str(r[1]) for r in rows}
+        if all(s == 'done' for s in statuses.values()):
+            _PIPELINE_STALL_STATE.update(date=None, fingerprint=None, since=0.0)
+            return
+        fingerprint = tuple(sorted(statuses.items()))
+        now = time.time()
+        state = _PIPELINE_STALL_STATE
+        if state['date'] != date_compact or state['fingerprint'] != fingerprint:
+            state.update(date=date_compact, fingerprint=fingerprint, since=now)
+            return
+        stalled_sec = now - state['since']
+        if stalled_sec < _PIPELINE_STALL_MINUTES * 60:
+            return
+        if now - state['last_alert'] < _PIPELINE_STALL_ALERT_COOLDOWN:
+            return
+        state['last_alert'] = now
+        pending = sorted(k for k, v in statuses.items() if v != 'done')
+        _pipeline_alert(
+            '日终管道停滞',
+            f"{date_compact} 管道 {int(stalled_sec // 60)} 分钟无进展，未完成: {pending}",
+            'PIPELINE_STALL', 'pipeline_watchdog',
+            {'pipeline_date': date_compact, 'pending_steps': pending,
+             'stalled_minutes': int(stalled_sec // 60)},
+        )
+    except Exception as e:
+        logger.debug(f"管道停滞检测失败: {e}")
+
+
+def _check_eod_completion():
+    """543号：每日 08:30 后校验前一交易日 QA-CHECK，未完成则告警并尝试续跑。
+
+    仅当目标日 == 最新数据日时自动续跑（_drive_pipeline 按最新数据日推进）；
+    目标日早于最新数据日时只告警，避免误推进/覆盖。
+    """
+    now = datetime.now()
+    if now.hour < 8 or (now.hour == 8 and now.minute < 30):
+        return
+    today_key = now.strftime('%Y%m%d')
+    if _EOD_CHECK_STATE['checked_date'] == today_key:
+        return
+    try:
+        rows = _shard_fetchall(
+            'daily_cache',
+            "SELECT DISTINCT trade_date FROM daily_cache ORDER BY trade_date DESC LIMIT 2")
+    except Exception:
+        return
+    dates = [str(r[0]) for r in rows if r and r[0]]
+    if not dates:
+        return
+    target = dates[1] if len(dates) > 1 else dates[0]
+    target_compact = target.replace('-', '')
+    try:
+        row = _ecm.conn.execute(
+            "SELECT status, retry_count, detail FROM pipeline_status "
+            "WHERE pipeline_date=? AND step_id='QA-CHECK'", [target_compact]).fetchone()
+    except Exception:
+        return
+    _EOD_CHECK_STATE['checked_date'] = today_key
+    if row and str(row[0]) == 'done':
+        return
+    detail = row[2] if row else 'QA-CHECK 无记录'
+    latest = _get_latest_data_date()
+    same_day = bool(latest and latest == target)
+    _pipeline_alert(
+        '日终未完成',
+        f"{target} 的 QA-CHECK 未完成（{detail}）"
+        + ("，触发自动续跑" if same_day else "，且已不是最新数据日，需人工回补"),
+        'EOD_INCOMPLETE', 'eod_guard',
+        {'pipeline_date': target_compact,
+         'qa_status': str(row[0]) if row else None, 'auto_resume': same_day},
+    )
+    if same_day:
+        try:
+            _drive_pipeline()
+        except Exception as e:
+            logger.error(f"[日终校验] 自动续跑失败: {e}")
+
+
+def _self_check_pipeline_registration():
+    """543号：启动自检——最新数据日的管道步骤须与 PIPELINE_STEPS 一致。"""
+    try:
+        from app.data.enhanced_cache_manager import PIPELINE_STEPS
+        data_date = _get_latest_data_date()
+        if not data_date:
+            return
+        date_compact = data_date.replace('-', '')
+        actual = {str(r[0]) for r in _ecm.conn.execute(
+            "SELECT step_id FROM pipeline_status WHERE pipeline_date=?", [date_compact])}
+        if not actual:
+            _ecm.ensure_pipeline_steps(date_compact)
+            return
+        expected = {sid for sid, _ in PIPELINE_STEPS}
+        missing = sorted(expected - actual)
+        unknown = sorted(actual - expected - {'OUT-MARKET-CHECK'})
+        if missing:
+            _pipeline_alert(
+                '管道步骤未登记',
+                f"{date_compact} 缺少登记步骤: {missing}",
+                'PIPELINE_STEP_MISSING', 'pipeline_selfcheck',
+                {'pipeline_date': date_compact, 'missing_steps': missing})
+            _ecm.ensure_pipeline_steps(date_compact)
+        if unknown:
+            logger.warning(f"[管道自检] {date_compact} 存在未知步骤: {unknown}")
+    except Exception as e:
+        logger.warning(f"[管道自检] 失败: {e}")
+
+
 def _run_pipeline_step(pipeline_date: str, step_id: str, func, arg):
     """执行单个管道环节，记录状态（含幂等锁）"""
     if not _ecm.mark_step_running(pipeline_date, step_id):
-        return  # 另一个 tick 已抢到锁
+        # 542号：新环节若漏登记 ensure_pipeline_steps，UPDATE 命中 0 行会静默
+        # 失败并永久卡住后续环节。补登记后重试一次；仍失败＝另一 tick 已抢锁。
+        _ecm.conn.execute(
+            "INSERT OR IGNORE INTO pipeline_status "
+            "(pipeline_date, step_id, step_name) VALUES (?, ?, ?)",
+            [pipeline_date, step_id, step_id]
+        )
+        _ecm.conn.commit()
+        if not _ecm.mark_step_running(pipeline_date, step_id):
+            return  # 另一个 tick 已抢到锁
 
     t0 = time.time()
     try:
@@ -8590,6 +8746,10 @@ def main():
 
     # 管道驱动兜底：开机后自动从断点恢复
     # 替代 _check_daily_sync_backfill() + _check_precompute_status()
+    try:
+        _self_check_pipeline_registration()
+    except Exception as e:
+        logger.warning(f"管道注册自检异常: {e}")
     _drive_pipeline()
 
     # 327阶段5：启动时立即消费 sync_requests 积压（非24h开机时调用层
@@ -8712,6 +8872,16 @@ def main():
             _drive_pipeline()
         except Exception as e:
             logger.warning(f"管道驱动异常: {e}")
+
+        # ── 543号：日终完成保障（停滞看门狗 + 每日完成硬校验） ──
+        try:
+            _check_pipeline_stall()
+        except Exception as e:
+            logger.debug(f"管道停滞检测异常: {e}")
+        try:
+            _check_eod_completion()
+        except Exception as e:
+            logger.debug(f"日终完成校验异常: {e}")
 
         # ── 433批次1：月度 IC 重估轻钩子（earn-only；幂等、~3.4s、不阻塞主循环） ──
         try:

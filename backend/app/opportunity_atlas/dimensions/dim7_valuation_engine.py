@@ -277,7 +277,6 @@ class Dim7ValuationEngine(DataAwareMixin):
     def build_fcf_percentile(self, ecm) -> None:
         """构建全市场 FCF yield 截面百分位基准（B2修复：从daily_cache获取股票列表）"""
         try:
-            # B2修复：从daily_cache获取股票列表，而非treemap_snapshot（跨层）
             try:
                 latest_date = ecm._query_shard('daily_cache',
                     "SELECT MAX(trade_date) as d FROM daily_cache").iloc[0]['d']
@@ -287,28 +286,8 @@ class Dim7ValuationEngine(DataAwareMixin):
             codes_df = ecm._query_shard('daily_cache',
                 "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=?", [latest_date])
             codes = codes_df['ts_code'].tolist() if codes_df is not None and not codes_df.empty else []
-            vals = []
-            for code in codes:
-                try:
-                    df_b = ecm.get_cached_daily_basic(code)
-                    df_cf = ecm.get_cached_cashflow(code)
-                    if (df_b is not None and not df_b.empty
-                            and df_cf is not None and not df_cf.empty):
-                        if 'total_mv' in df_b.columns and 'free_cashflow' in df_cf.columns:
-                            mv = df_b['total_mv'].dropna()
-                            fcf = df_cf['free_cashflow'].dropna()
-                            if not mv.empty and not fcf.empty and mv.iloc[-1] > 0:
-                                # 476号：与消费口径对齐（_anchor_cashflow/compute_tags 均 fcf/(mv*1e4)*100）；
-                                # 原 fcf/mv*100 差 1e4 倍 → 查询值落在分布低端，现金流锚系统性偏低
-                                vals.append(float(fcf.iloc[0]) / (float(mv.iloc[-1]) * 1e4) * 100)
-                except Exception:
-                    continue
-            if len(vals) < 200:
-                self._fcf_percentile = None
-                return
-            vals.sort()
-            n = len(vals)
-            self._fcf_percentile = lambda v: bisect.bisect_left(vals, v) / n
+            from app.opportunity_atlas.fcf_percentile import build_fcf_percentile
+            self._fcf_percentile = build_fcf_percentile(ecm, codes)
         except Exception:
             self._fcf_percentile = None
 
