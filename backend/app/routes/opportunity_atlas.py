@@ -81,15 +81,35 @@ def _merge_snapshot_with_realtime(items: list[dict], realtime_list: list[dict]) 
             item['pct_change'] = round(float(rt['change_pct']), 2)
             item['price'] = round(float(rt['price']), 2)
             # 540号批次3 P2-1：同步覆盖开高低/成交额；市值/换手仍为日终口径
+            _partial = False
             for _f in ('open', 'high', 'low', 'amount'):
                 try:
                     _v = float(rt.get(_f))
                 except (TypeError, ValueError):
+                    if _f != 'amount':
+                        _partial = True
                     continue
                 if _v > 0:
-                    item[_f] = _v
+                    # 546号 P1：as_market_snapshot.amount 为元，treemap_snapshot.amount
+                    # 为千元；统一到快照口径，避免前端 ÷1e5 后放大 1000 倍。
+                    item[_f] = _v / 1000.0 if _f == 'amount' else _v
+                elif _f != 'amount':
+                    # 546号 P3：实时行 OHLC=0（停牌/无成交）时保留日终值并标记
+                    _partial = True
+            # 546号 P2：实时 prev_close 精确覆盖，并按实时高低/昨收重算振幅。
+            try:
+                _prev = float(rt.get('prev_close'))
+            except (TypeError, ValueError):
+                _prev = 0
+            if _prev > 0:
+                item['prev_close'] = round(_prev, 2)
+                _hi = float(item.get('high') or 0)
+                _lo = float(item.get('low') or 0)
+                if _hi > 0 and _lo > 0:
+                    item['amplitude'] = round((_hi - _lo) / _prev * 100, 2)
             item['snapshot'] = True
             item['snapshot_at'] = rt.get('cached_at')
+            item['quote_partial'] = _partial
     return items
 
 
@@ -256,7 +276,7 @@ def _build_response(mode: str, items: list[dict]) -> dict:
     _realtime_at = None
     try:
         _dm = get_data_manager()
-        _status_date = _dm.cache.get_status_snapshot_date()
+        _status_date = _dm.cache.get_status_snapshot_trade_date()
         _tag_date = _dm.cache.get_pre_feat_max_date()
         _realtime_at = _dm.cache.get_market_snapshot_max_cached_at()
     except Exception:
@@ -365,6 +385,7 @@ def treemap():
 def quotes():
     """轻量实时报价（540号批次3 P2-2：30s 轮询不再拉全量 treemap）"""
     ts_param = request.args.get('ts_codes', '')
+    detail = request.args.get('detail', '').lower() in ('1', 'true', 'yes')
     codes = [c.strip() for c in ts_param.split(',') if c.strip()] if ts_param else None
     dm = get_data_manager()
     rows = dm.cache.get_all_market_snapshots(codes)
@@ -379,13 +400,33 @@ def quotes():
         except (TypeError, ValueError):
             continue
         if 0.01 < price < 10000:
-            quotes.append({
+            q = {
                 'ts_code': r['ts_code'],
                 'price': round(price, 2),
                 'pct_change': round(float(r.get('change_pct') or 0), 2),
                 'snapshot': True,
                 'snapshot_at': r.get('cached_at'),
-            })
+            }
+            if detail:
+                # 546号：detail=1 时同步返回 OHLC/昨收/振幅/成交额；
+                # amount 从元换算为千元，与 treemap_snapshot 口径一致。
+                try:
+                    _open = float(r.get('open') or 0)
+                    _high = float(r.get('high') or 0)
+                    _low = float(r.get('low') or 0)
+                    _prev = float(r.get('prev_close') or 0)
+                    _amt = float(r.get('amount') or 0)
+                except (TypeError, ValueError):
+                    _open = _high = _low = _prev = _amt = 0
+                q['open'] = round(_open, 2) if _open > 0 else None
+                q['high'] = round(_high, 2) if _high > 0 else None
+                q['low'] = round(_low, 2) if _low > 0 else None
+                q['prev_close'] = round(_prev, 2) if _prev > 0 else None
+                q['amount'] = round(_amt / 1000.0, 2) if _amt > 0 else None
+                q['quote_partial'] = any(v <= 0 for v in (_open, _high, _low))
+                if _prev > 0 and _high > 0 and _low > 0:
+                    q['amplitude'] = round((_high - _low) / _prev * 100, 2)
+            quotes.append(q)
     resp = jsonify({'code': 0, 'data': {
         'quotes': quotes,
         'count': len(quotes),

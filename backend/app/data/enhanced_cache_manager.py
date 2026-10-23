@@ -4180,6 +4180,19 @@ class EnhancedCacheManager:
             logger.warning(f"get_status_snapshot_date 失败: {e}")
             return None
 
+    def get_status_snapshot_trade_date(self) -> str | None:
+        """获取 status_snapshot 数据交易日（546号 P2：状态截至按数据日展示）"""
+        try:
+            from app.data.sharding_manager import sharding_manager
+            conn = sharding_manager.get_connection(
+                sharding_manager.get_db_for_table('status_snapshot'))
+            row = conn.execute(
+                "SELECT MAX(trade_date) FROM status_snapshot").fetchone()
+            return str(row[0]) if row and row[0] else None
+        except Exception as e:
+            logger.warning(f"get_status_snapshot_trade_date 失败: {e}")
+            return None
+
     # ── 541号 B1：仪表盘市场级 OUT 成品仓 ──────────────────────
 
     def upsert_out_market_panel(self, module: str, asof_date: str, payload: dict,
@@ -4490,15 +4503,24 @@ class EnhancedCacheManager:
             _extra = extra_tags.get(_ts, {})
             # 540号批次2 P1-5：signal_strength 只认 JUD；缺失为 None（不再伪装成 0）
             _ss = float(r['signal_strength']) if pd.notna(r.get('signal_strength')) else None
+            # 546号 P2：快照无 prev_close 列，用 close/(1+pct_chg/100) 还原昨收；
+            # 实时 overlay 会再用 as_market_snapshot.prev_close 精确覆盖。
+            _price = round(float(r['close']), 2) if pd.notna(r.get('close')) else 0
+            _has_pct = pd.notna(r.get('pct_chg'))
+            _pct = round(float(r['pct_chg']), 2) if _has_pct else 0
+            _prev_close = (
+                round(_price / (1 + _pct / 100), 2)
+                if _price and _has_pct and _pct > -100 else None)
             item = {
                 'ts_code': _ts,
-                'name': r['name'],
+                'name': _sv('name') or '',
                 # 479号：七维现状描述（status_snapshot.one_liner_detail；缺 → None，
                 #   前端 opportunity-treemap.html 读 s.one_liner_detail 回退旧画像）
                 'one_liner_detail': one_liner_map.get(_ts),
-                'industry': _sv('industry') or '',
-                'price': round(float(r['close']), 2) if pd.notna(r.get('close')) else 0,
-                'pct_change': round(float(r['pct_chg']), 2) if pd.notna(r.get('pct_chg')) else 0,
+                'industry': _sv('industry') or '其他',
+                'price': _price,
+                'pct_change': _pct,
+                'prev_close': _prev_close,
                 'open': float(r['open']) if pd.notna(r.get('open')) else None,
                 'high': float(r['high']) if pd.notna(r.get('high')) else None,
                 'low': float(r['low']) if pd.notna(r.get('low')) else None,

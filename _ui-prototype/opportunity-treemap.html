@@ -323,7 +323,7 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
     <!-- ===== Page Header ===== -->
     <div class="page-header">
       <div class="page-header-left">
-        <h1>🗺️ 机会图谱<span id="fallbackBadge" style="display:none" class="fallback-badge" title="部分股票 signal_strength 使用了 fallback 估算数据">⚠ 信号强度 Fallback</span></h1>
+        <h1>🗺️ 机会图谱<span id="fallbackBadge" style="display:none" class="fallback-badge" title="部分股票 signal_strength 缺失（JUD 未产出），不是估算值">⚠ 信号缺失</span></h1>
         <div class="subtitle">三模式股票全景图 — 切换右上角模式查看市场/机会/价值分布</div>
       </div>
       <div class="page-header-actions">
@@ -720,18 +720,22 @@ async function loadMarketData() {
         const ss = (s.signal_strength === null || s.signal_strength === undefined)
           ? null : s.signal_strength;
         const stockItem = {
-          name: s.name, tsCode: s.ts_code, sector: g.industry || '其他',
+          name: s.name || s.ts_code, tsCode: s.ts_code, sector: g.industry || '其他',
           marketCap: s.market_cap || 0, pctChange: s.pct_change || 0,
-          price: s.price || 0, prevClose: s.price || 0,
+          price: s.price || 0,
+          prevClose: (s.prev_close === null || s.prev_close === undefined) ? 0 : s.prev_close,
           open: s.open || s.price || 0, high: s.high || s.price || 0, low: s.low || s.price || 0,
           turnoverRate: s.turnover_rate || 0, amount: s.amount || 0,
-          amplitude: s.amplitude || 0, pe: s.pe || 0, pb: s.pb || 0,
+          amplitude: s.amplitude || 0,
+          pe: (s.pe === null || s.pe === undefined) ? null : s.pe,
+          pb: (s.pb === null || s.pb === undefined) ? null : s.pb,
           dividendYield: typeof s.dividend_yield === 'number' ? s.dividend_yield :
-                         (s.tags && s.tags.dividend_yield ? parseFloat(s.tags.dividend_yield) : 0),
-          industryPe: s.pe || s.industry_pe || 0,
+                         (s.tags && s.tags.dividend_yield != null ? parseFloat(s.tags.dividend_yield) : null),
+          industryPe: (s.industry_pe === null || s.industry_pe === undefined) ? null : s.industry_pe,
           signalStrength: ss,
           signalStrengthSource: s.signal_strength_source || null,
           snapshotAt: s.snapshot_at || '',
+          quotePartial: !!s.quote_partial,
           signalQuality: s.main_force_phase || (s.tags && s.tags.main_force_phase) || 'unknown',
           signalPosition: (s.tags && s.tags.price_position) || 'unknown',
           // 307号机会类型（优先），回退旧字段兼容
@@ -808,6 +812,7 @@ let currentMode = 'market';
 let activeTags = [];
 let isFallbackVisible = false;
 let currentInd = null;    // 310号：当前选中行业（null=全市场）
+let _quotesPollTick = 0;  // 546号：全市场每 10 次轮询补一次详情字段
 let sizeMode = 'cap';     // 310号：面积编码 cap=市值 amount=成交额
 let focusKey = false;     // 313号：只看重点（潜力前20% + 非回避）
 let presenceFilter = false;  // 313号：只看有主力行为证据（龙虎榜/股东户数/融资异动）
@@ -1003,6 +1008,53 @@ function getFilteredStocks() {
   return RAW_STOCKS.filter(s => activeTags.every(c => _matchFilter(s, c)));
 }
 
+// 546号：轮询与渲染共用同一过滤链（含时机/潜力/重点/主力/TOP N）。
+function computeVisibleStocks() {
+  let filtered = getFilteredStocks();
+  if (currentInd) filtered = filtered.filter(s => s.sector === currentInd);
+  if (timingFilter && currentMode === 'opportunity') {
+    filtered = filtered.filter(s => s.rightSideConfirm === timingFilter);
+  }
+  if (minStrength > 0) {
+    filtered = filtered.filter(s => (s.signalStrength || 0) >= minStrength);
+  }
+  if (focusKey && currentMode === 'opportunity') {
+    const nonRejected = filtered.filter(s => s.rightSideConfirm !== '否决');
+    const p20 = [...nonRejected].sort((a, b) => (b.signalStrength || 0) - (a.signalStrength || 0))
+      .slice(0, Math.max(1, Math.round(nonRejected.length * 0.2)));
+    filtered = p20;
+  }
+  if (presenceFilter) {
+    filtered = filtered.filter(s => ['strong', 'moderate', 'risk'].includes(s.mainForcePresence));
+  }
+  const topN = parseInt(document.getElementById('topN').value);
+  if (topN > 0 && filtered.length > topN) {
+    const key = sizeMode === 'cap' ? 'marketCap' : 'amount';
+    filtered = [...filtered].sort((a, b) => (b[key] || 0) - (a[key] || 0)).slice(0, topN);
+  }
+  return filtered;
+}
+
+function getVisibleStocks() {
+  return computeVisibleStocks();
+}
+
+function getQuotesUrl() {
+  _quotesPollTick += 1;
+  const stocks = getVisibleStocks();
+  if (!stocks.length) return null;
+  // URL 过长会触发服务端/浏览器限制；下钻行业或小筛选集才裁剪。
+  const trimmed = stocks.length < RAW_STOCKS.length && stocks.length <= 500;
+  // 546号：裁剪集每次带详情；全市场每 10 次（5 分钟）补一次 OHLC/成交额。
+  const wantDetail = trimmed || (_quotesPollTick % 10 === 0);
+  const params = [];
+  if (trimmed) {
+    params.push('ts_codes=' + encodeURIComponent(stocks.map(s => s.tsCode).join(',')));
+  }
+  if (wantDetail) params.push('detail=1');
+  return '/api/v3/opportunity-atlas/quotes' + (params.length ? '?' + params.join('&') : '');
+}
+
 // ============================================================
 // CHART
 // ============================================================
@@ -1053,6 +1105,7 @@ function buildTreeData(mode, stocks) {
         fullName: s.name, tsCode: s.tsCode, sector: s.sector,
         marketCap: s.marketCap, pctChange: s.pctChange, price: s.price,
         prevClose: s.prevClose, open: s.open, high: s.high, low: s.low,
+        isRealtime: s.isRealtime, snapshotAt: s.snapshotAt, quotePartial: s.quotePartial,
         amount: s.amount, turnoverRate: s.turnoverRate, amplitude: s.amplitude,
         pe: s.pe, pb: s.pb, dividendYield: s.dividendYield, industryPe: s.industryPe,
         signalStrength: s.signalStrength, holdPeriod: s.holdPeriod,
@@ -1115,17 +1168,24 @@ function _stockTooltip(d, stockName) {
   const capYi = (d.marketCap || 0) / 1e4;   // marketCap 源为万元 → 亿元
 
   if (currentMode === 'market') {
+    const _hhmm = String(d.snapshotAt || '').slice(11, 16);
+    const tzText = d.isRealtime
+      ? (d.quotePartial ? '盘中（OHLC 日终）' : (_hhmm ? `盘中 ${_hhmm}` : '盘中'))
+      : `日终 ${DATA_DATE || '--'}`;
+    const peText = (d.pe === null || d.pe === undefined) ? '--' : d.pe.toFixed(1);
+    const eodTag = d.isRealtime ? '' : ` <span style="font-size:10px;color:#8b93a7;">（日终 ${DATA_DATE || '--'}）</span>`;
     return `
-      <div style="font-size:13px;font-weight:600;margin-bottom:6px;">${displayName} <span style="font-size:11px;color:#6b728c;">${d.tsCode}</span></div>
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px;">${displayName} <span style="font-size:11px;color:#6b728c;">${d.tsCode}</span><span style="font-size:10px;color:#8b93a7;margin-left:4px;">${tzText}</span></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;font-size:12px;">
         <div><span style="color:#6b728c;">现价</span> <strong>${d.price.toFixed(2)}</strong></div>
         <div><span style="color:#6b728c;">涨跌幅</span> <strong style="color:${pctColor}">${pctSign}${d.pctChange.toFixed(2)}%</strong></div>
-        <div><span style="color:#6b728c;">换手率</span> ${d.turnoverRate.toFixed(2)}%</div>
+        <div><span style="color:#6b728c;">前收</span> ${d.prevClose ? d.prevClose.toFixed(2) : '--'}</div>
+        <div><span style="color:#6b728c;">换手率</span> ${d.turnoverRate.toFixed(2)}%${eodTag}</div>
         <div><span style="color:#6b728c;">振幅</span> ${d.amplitude.toFixed(2)}%</div>
         <div style="grid-column:span 2;"><span style="color:#6b728c;">开盘/最高/最低</span> ${d.open.toFixed(2)} / ${d.high.toFixed(2)} / ${d.low.toFixed(2)}</div>
         <div><span style="color:#6b728c;">成交额</span> ${(d.amount / 1e5).toFixed(1)}亿</div>
         <div><span style="color:#6b728c;">所属板块</span> ${d.sector}</div>
-        <div><span style="color:#6b728c;">PE</span> ${d.pe.toFixed(1)}</div>
+        <div><span style="color:#6b728c;">PE</span> ${peText}</div>
         <div><span style="color:#6b728c;">流通市值</span> ${capYi.toFixed(2)}亿</div>
         <div><span style="color:#6b728c;">估值</span> ${_tagCn(d.valuation)}</div>
       </div>
@@ -1176,11 +1236,11 @@ function _stockTooltip(d, stockName) {
         <div><span style="color:#6b728c;">涨跌幅</span> <strong style="color:${pctColor}">${pctSign}${d.pctChange.toFixed(2)}%</strong></div>
         <div><span style="color:#6b728c;">估值结论</span> <strong style="color:${devColor}">${devKey}</strong></div>
         <div><span style="color:#6b728c;">估值评分</span> <strong style="color:${devColor}">${typeof _dv === 'number' ? (_dv > 0 ? '+' : '') + _dv : '--'}<span style="font-size:10px;color:#6b728c;">（&lt;0 偏贵 / &gt;0 偏便宜）</span></strong></div>
-        <div><span style="color:#6b728c;">PE</span> ${d.pe.toFixed(1)}</div>
-        <div><span style="color:#6b728c;">PB</span> ${d.pb.toFixed(2)}</div>
+        <div><span style="color:#6b728c;">PE</span> ${(d.pe === null || d.pe === undefined) ? '--' : d.pe.toFixed(1)}</div>
+        <div><span style="color:#6b728c;">PB</span> ${(d.pb === null || d.pb === undefined) ? '--' : d.pb.toFixed(2)}</div>
         <div><span style="color:#6b728c;">股息率</span> ${typeof d.dividendYield === 'number' ? d.dividendYield.toFixed(2) + '%' : '--'}</div>
-        <div><span style="color:#6b728c;">行业PE</span> ${d.industryPe.toFixed(1)}</div>
-        <div><span style="color:#6b728c;">前收盘价</span> ${d.prevClose.toFixed(2)}</div>
+        <div><span style="color:#6b728c;">行业PE</span> ${(d.industryPe === null || d.industryPe === undefined) ? '--' : d.industryPe.toFixed(1)}</div>
+        <div><span style="color:#6b728c;">前收盘价</span> ${d.prevClose ? d.prevClose.toFixed(2) : '--'}</div>
         <div><span style="color:#6b728c;">所属板块</span> ${d.sector}</div>
       </div>
       <div style="border-top:1px solid #2e3245;margin-top:6px;padding-top:6px;font-size:11px;color:#3b82f6;">👆 点击查看完整诊断</div>
@@ -1207,38 +1267,10 @@ function renderChart() {
   }
 
   // 310号：行业过滤 + TOP N（先标签过滤，再行业过滤，再截断）
-  let filtered = getFilteredStocks();
-  if (currentInd) filtered = filtered.filter(s => s.sector === currentInd);
-  // 313号 §七2/3：时机色过滤（颜色状态）× 潜力阈值（大小）——组合筛选
-  if (timingFilter && currentMode === 'opportunity') {
-    filtered = filtered.filter(s => s.rightSideConfirm === timingFilter);
-  }
-  if (minStrength > 0) {
-    filtered = filtered.filter(s => (s.signalStrength || 0) >= minStrength);
-  }
-  // 313号：只看重点（机会模式下：潜力前 20% 且非回避）
-  if (focusKey && currentMode === 'opportunity') {
-    const nonRejected = filtered.filter(s => s.rightSideConfirm !== '否决');
-    const p20 = [...nonRejected].sort((a, b) => (b.signalStrength || 0) - (a.signalStrength || 0))
-      .slice(0, Math.max(1, Math.round(nonRejected.length * 0.2)));
-    filtered = p20;
-    document.getElementById('focusKeyBtn').classList.add('active');
-  } else {
-    document.getElementById('focusKeyBtn').classList.remove('active');
-  }
-  // 313号：只看有主力行为证据（龙虎榜 strong / 股东户数 moderate / 融资 risk）
-  if (presenceFilter) {
-    filtered = filtered.filter(s => ['strong', 'moderate', 'risk'].includes(s.mainForcePresence));
-    document.getElementById('presenceBtn').classList.add('active');
-  } else {
-    document.getElementById('presenceBtn').classList.remove('active');
-  }
-  const topN = parseInt(document.getElementById('topN').value);
-  if (topN > 0 && filtered.length > topN) {
-    // 按面积字段排序取前 N
-    const key = sizeMode === 'cap' ? 'marketCap' : 'amount';
-    filtered = [...filtered].sort((a, b) => (b[key] || 0) - (a[key] || 0)).slice(0, topN);
-  }
+  let filtered = computeVisibleStocks();
+  document.getElementById('focusKeyBtn').classList.toggle(
+    'active', focusKey && currentMode === 'opportunity');
+  document.getElementById('presenceBtn').classList.toggle('active', presenceFilter);
   const data = buildTreeData(currentMode, filtered);
 
   // Check fallback
@@ -2114,8 +2146,11 @@ document.addEventListener('DOMContentLoaded', function() {
   } catch (e) {}
 
   // 540号批次3 P2-2：30s 轮询改为轻量 /quotes，不再重复拉取全量 treemap
+  // 546号：行业下钻/小筛选集只请求可见股票，避免全市场 5,225 条固定开销。
   setInterval(() => {
-    fetch('/api/v3/opportunity-atlas/quotes')
+    const quotesUrl = getQuotesUrl();
+    if (!quotesUrl) return;
+    fetch(quotesUrl)
       .then(r => r.json())
       .then(json => {
         const quotes = ((json.data || {}).quotes) || [];
@@ -2126,6 +2161,14 @@ document.addEventListener('DOMContentLoaded', function() {
           found.pctChange = q.pct_change;
           found.isRealtime = true;
           found.snapshotAt = q.snapshot_at || found.snapshotAt;
+          // 546号：detail=1 时同步刷新 OHLC/成交额/昨收/振幅，避免浮窗停留首屏。
+          if (q.open != null) found.open = q.open;
+          if (q.high != null) found.high = q.high;
+          if (q.low != null) found.low = q.low;
+          if (q.amount != null) found.amount = q.amount;
+          if (q.prev_close != null) found.prevClose = q.prev_close;
+          if (q.amplitude != null) found.amplitude = q.amplitude;
+          if (q.quote_partial != null) found.quotePartial = q.quote_partial;
         });
         if (quotes.length && quotes[0].snapshot_at) {
           REALTIME_AT = quotes[0].snapshot_at;
