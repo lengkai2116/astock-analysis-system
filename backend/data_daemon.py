@@ -4753,7 +4753,7 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             try:
                 _cost_feat = {}
                 try:
-                    from app.opportunity_atlas.dimensions.dim4_chip_fund_engine import MainForceScorer
+                    from app.engine.framework.chip_strategy import MainForceScorer
                     mfs = MainForceScorer()
                     _latest_close = float(df['close'].values[-1]) if len(df) > 0 else 0.0
                     _cost_feat['main_force_cost'] = mfs._calc_main_force_cost(code, _latest_close) if len(df) >= 20 and code else None

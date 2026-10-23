@@ -99,8 +99,24 @@ status: 已完成（只读，未改代码）
 
 **效果**：RAW-2 固定成本 36.9s + SIG 固定成本 30.4s → 各约 0.15s，日终合计省约 **60–67s**，SQL 从约 2.2 万次降到约 4 次/次构建。
 
-**状态**：代码已实施，daemon 需重启生效；未提交。
+**状态**：代码已实施，已随 `f459a22` 提交；daemon 已重启加载。
 
 **注意**：`codes=None` 时补查候选来自 `daily_cache` 最新日；两处生产调用均传 codes。
-2. 生产态 1.35s/只 的非计算时间是否需要用 py-spy/sample 再采一轮（需短暂停 daemon）。
-3. SIG/RAW-2 进程池是否列入候选（依赖写回单点化改造）。
+
+## 八、544-B：cost_ext 生产导入路径修复（2026-10-23）
+
+**P1 核查发现**：2026-10-22 的 `pre_feat_cache` 抽样 200 只中 `cost_ext` **100% 为 `{}`**，其余 7 个 ext 组 100% 非空。dim1 `_validate` 因此对全市场每只判 `cost_ext` 缺失 → 生产日志 **5,628 次/日** `precompute_raw` 通知。
+
+**根因**：`data_daemon.py` 的 RAW-2 第 17 段从 `app.opportunity_atlas.dimensions.dim4_chip_fund_engine` 导入 `MainForceScorer`，但该类 508 批次1 已收敛到 `app.engine.framework.chip_strategy`，dim4 不再导出 → 每次 `ImportError` 被 debug 吞掉 → `_cost_feat={}`。
+
+**修复**：导入改为 `from app.engine.framework.chip_strategy import MainForceScorer`。
+
+**验证**：
+- 新增 `test_544b_cost_ext_import.py`：**3 passed**（framework 导出、dim4 不导出、daemon 源码使用正确导入）。
+- 模拟 RAW-2 成本段：`cost_ext` 返回非空（`main_force_cost` + `margin_cost_price`）。
+
+**状态**：代码已修复，daemon 已重启（PID 17269/看守 17253）；10-22 历史 pre_feat 已定向回填。
+
+**定向回填（2026-10-23，用户选 B）**：新增 `backend/scripts/_544b_backfill_cost_ext.py`，只更新 `features_json.cost_ext`，保留其余键。dry-run 20 只通过；`--apply` 全量 **5,567/5,567，failed=0，18.52s**；回填后 `cost_ext` 非空 **5,567/5,567（100%）**。
+
+**遗留**：`margin_cost_price` 在 10-22 仍为 `None`（两融 T+1，属正常）；dim1 通知应随 cost_ext 恢复而消失（下次 SIG 验证）。
