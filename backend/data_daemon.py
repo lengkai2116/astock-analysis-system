@@ -8002,6 +8002,10 @@ def _precompute_strategy_signals(codes):
     except Exception as e:
         logger.warning(f"周线缓存预热失败（不影响 P2 主流程）: {e}")
     try:
+        _prewarm_minute_cache(codes)
+    except Exception as e:
+        logger.warning(f"分钟线缓存预热失败（不影响 P2 主流程）: {e}")
+    try:
         from app.engine.unified_core import UnifiedStrategyCore
         core = UnifiedStrategyCore()
         results = core.compute_batch(codes, max_workers=4)
@@ -8186,6 +8190,16 @@ def _prewarm_weekly_cache(codes):
     except Exception as e:
         logger.warning(f"周线缓存预热失败: {e}")
 
+
+def _prewarm_minute_cache(codes, freq='60min'):
+    """544-C：SIG 前批量预热分钟线内存缓存（替代逐只 0.35s 查询）。"""
+    try:
+        _ensure_ecm()
+        n = _ecm.prime_minute_cache(codes, freq=freq)
+        if n:
+            logger.info(f"  [SIG] {freq} 分钟线缓存预热: {n} 只")
+    except Exception as e:
+        logger.warning(f"{freq} 分钟线缓存预热失败（不影响主流程）: {e}")
 
 
 def _run_financial_sync():

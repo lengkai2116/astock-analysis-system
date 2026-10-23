@@ -17,6 +17,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from datetime import date, datetime, timedelta
 
 import pandas as pd
@@ -155,6 +156,10 @@ class EnhancedCacheManager:
         self._write_lock = threading.RLock()
         self._snapshot_write_lock = threading.RLock()
         self.memory_cache = TieredMemoryCache()
+        # 544-C：分钟线批量预取缓存（SIG 单轮内有效，键=(ts_code, freq)）
+        self._minute_cache: dict = {}
+        self._minute_cache_ttl: float = 0.0
+        self._minute_cache_lock = threading.RLock()
 
         data_dir = os.getenv('DATA_DIR') or (
             os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
@@ -2605,26 +2610,18 @@ class EnhancedCacheManager:
                 logger.warning(f"缓存分钟K线失败: {e}")
 
     def get_cached_minute_kline(self, ts_code, trade_date=None, freq='5min'):
-        # 367号方案：优先从分库读取
-        try:
-            from app.data.sharding_manager import sharding_manager
-            if sharding_manager.table_exists('minute_kline_cache'):
-                query = "SELECT * FROM minute_kline_cache WHERE ts_code = ?"
-                params = [ts_code]
-                if trade_date:
-                    query += " AND trade_date = ?"
-                    params.append(trade_date)
-                query += " AND freq = ?"
-                params.append(freq)
-                query += " ORDER BY trade_time"
-                df = sharding_manager.execute_query('minute_kline_cache', query, params)
-                if df is not None and not df.empty:
-                    import pandas as pd
-                    return pd.DataFrame(df)
-        except Exception as e:
-            logger.debug(f"分库读取失败，降级到ECM: {e}")
+        # 544-C：优先命中 SIG 批量预取的分钟线内存缓存（当前仅预热 60min）
+        with self._minute_cache_lock:
+            if time.time() < self._minute_cache_ttl:
+                cached = self._minute_cache.get((str(ts_code), freq))
+                if cached is not None:
+                    if trade_date:
+                        cached = cached[
+                            cached['trade_date'].astype(str) == str(trade_date)]
+                    return cached.copy()
 
-        # 降级到ECM读取
+        # 367号方案：分库读取。走 _query_shard（pandas 带列名）；
+        # 旧 execute_query 返回 list，df.empty 会抛异常并静默降级，故不再使用。
         query = "SELECT * FROM minute_kline_cache WHERE ts_code = ?"
         params = [ts_code]
         if trade_date:
@@ -2634,6 +2631,41 @@ class EnhancedCacheManager:
         params.append(freq)
         query += " ORDER BY trade_time"
         return self._query_shard('minute_kline_cache', query, params)
+
+    def prime_minute_cache(self, codes=None, freq='60min', ttl_sec=7200) -> int:
+        """544-C：批量预取分钟线到内存（SIG 前调用，替代逐只查询）。"""
+        try:
+            import pandas as pd
+            from app.data.sharding_manager import sharding_manager
+            db_name = sharding_manager.get_db_for_table('minute_kline_cache')
+            conn = sharding_manager.get_read_connection(db_name)
+            df = pd.read_sql_query(
+                "SELECT * FROM minute_kline_cache WHERE freq = ?",
+                conn, params=(freq,))
+            if df is None or df.empty:
+                return 0
+            code_set = {str(c) for c in codes} if codes is not None else None
+            cache = {}
+            for code, g in df.groupby('ts_code', sort=False):
+                code = str(code)
+                if code_set is not None and code not in code_set:
+                    continue
+                cache[(code, freq)] = g.reset_index(drop=True)
+            with self._minute_cache_lock:
+                for key in [k for k in self._minute_cache if k[1] == freq]:
+                    del self._minute_cache[key]
+                self._minute_cache.update(cache)
+                self._minute_cache_ttl = time.time() + ttl_sec
+            return len(cache)
+        except Exception as e:
+            logger.warning(f"分钟线批量预取失败（{freq}）: {e}")
+            return 0
+
+    def clear_minute_cache(self):
+        """544-C：清空分钟线内存缓存。"""
+        with self._minute_cache_lock:
+            self._minute_cache.clear()
+            self._minute_cache_ttl = 0.0
 
     # ==================== 252号方案：财务指标 ====================
 

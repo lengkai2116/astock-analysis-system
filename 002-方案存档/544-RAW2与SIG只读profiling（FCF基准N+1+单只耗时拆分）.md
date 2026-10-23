@@ -120,3 +120,24 @@ status: 已完成（只读，未改代码）
 **定向回填（2026-10-23，用户选 B）**：新增 `backend/scripts/_544b_backfill_cost_ext.py`，只更新 `features_json.cost_ext`，保留其余键。dry-run 20 只通过；`--apply` 全量 **5,567/5,567，failed=0，18.52s**；回填后 `cost_ext` 非空 **5,567/5,567（100%）**。
 
 **遗留**：`margin_cost_price` 在 10-22 仍为 `None`（两融 T+1，属正常）；dim1 通知应随 cost_ext 恢复而消失（下次 SIG 验证）。
+
+## 九、544-C：SIG 60m 分钟线批量预取（2026-10-23）
+
+**问题**：SIG 的 dim1 每只调用 `dm.get_kline_data(ts_code, '60m')`；原 `get_cached_minute_kline` 的 `sharding_manager.execute_query` 返回 **list**，旧代码 `df.empty` 抛异常 → 静默降级到 pandas `_query_shard`，单只约 **0.35s**，全市场约 **32min**。
+
+**实现**：
+- ECM 新增 `_minute_cache`（键 `(ts_code, freq)`）、`prime_minute_cache(codes, freq='60min', ttl_sec=7200)`、`clear_minute_cache()`。
+- `get_cached_minute_kline` 优先命中缓存（返回 copy）；未命中统一走 `_query_shard`（pandas 带列名），移除 list 异常分支。
+- SIG 入口 `_precompute_strategy_signals` 在 `_prewarm_weekly_cache` 后调用 `_prewarm_minute_cache(codes)`；批量读取用 `pd.read_sql_query` + 分库只读连接，按 ts_code 分组缓存。
+
+**实测（2026-10-23，5,605 只）**：
+- 批量预取 **5,217 只 / 711,538 行：28.6s**（固定成本）；
+- 缓存命中 100 只：**0.002s（0.02ms/只）**；
+- 未命中单只 `_query_shard`：**40.6ms/只**（全市场约 227.7s）；
+- 对比原路径（约 0.35s/只，全市场约 32min）：单只路径修复 + 批量预取后，60m 加载降到约 **29s + 命中近零**，预计 SIG 减少约 **30min**（下次 SIG 实测确认）。
+
+**测试**：`test_544c_minute_cache.py` **3 passed**；py_compile 通过。
+
+**状态**：代码已实施；daemon 需重启加载；下次 SIG 观察 `[SIG] 60min 分钟线缓存预热` 与 SIG 耗时。
+
+**遗留**：28.6s 预取可继续优化（仅 SELECT 必要列/日期范围/避免 5,227 个 group DataFrame），当前收益已足够。
