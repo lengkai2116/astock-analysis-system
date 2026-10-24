@@ -48,7 +48,8 @@ def test_watchdog_alerts_when_pending_no_progress(daemon, ecm, monkeypatch):
     daemon._check_pipeline_stall()  # 建立指纹
     assert alerts == []
 
-    daemon._PIPELINE_STALL_STATE['since'] = time.time() - 7200
+    # 548：RAW-2 阈值 240min，需超过最长步骤阈值才告警
+    daemon._PIPELINE_STALL_STATE['since'] = time.time() - 5 * 3600
     daemon._check_pipeline_stall()
     assert alerts and '无进展' in alerts[0][1]
 

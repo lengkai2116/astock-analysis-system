@@ -469,6 +469,26 @@ def _batch_daily(trade_date: str) -> int:
     return len(df)
 
 
+def _batch_daily_single(ts_code: str, trade_date: str) -> int:
+    """548：单只日线（per_stock 同步用）。
+
+    原 per_stock 分支误调 _batch_daily（全市场），每个请求都触发一次
+    5,500+ 行整表深度清洗（2026-10-23 实证 352 次），既慢又与管道争写。
+    """
+    if not ts_code:
+        return 0
+    _ensure_pd()
+    import tushare as ts
+    pro = ts.pro_api()
+    df = _ts(pro.daily, ts_code=ts_code, trade_date=trade_date)
+    if df is None or df.empty:
+        return 0
+    if 'trade_date' in df.columns:
+        df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+    _ecm.cache_daily_data(df)
+    return len(df)
+
+
 def _batch_daily_basic(trade_date: str) -> int:
     """全市场基本面 — 1 次 API 调用"""
     import tushare as ts
@@ -815,6 +835,40 @@ def _batch_index_daily(trade_date: str) -> int:
     return total
 
 
+def _missing_index_codes(trade_date: str) -> list:
+    """返回当日 daily_cache 缺失的宽基指数代码。"""
+    ds = str(trade_date)
+    if len(ds) == 8 and ds.isdigit():
+        ds = f'{ds[:4]}-{ds[4:6]}-{ds[6:]}'
+    placeholders = ','.join('?' * len(BROAD_INDEX_CODES))
+    rows = _shard_fetchall(
+        'daily_cache',
+        f"SELECT ts_code FROM daily_cache WHERE trade_date=? "
+        f"AND ts_code IN ({placeholders})",
+        [ds] + list(BROAD_INDEX_CODES))
+    have = {str(r[0]) for r in (rows or [])}
+    return [c for c in BROAD_INDEX_CODES if c not in have]
+
+
+def _ensure_index_daily(trade_date: str) -> int:
+    """548：OUT 前保证 BROAD_INDEX_CODES 全部有当日行（缺则补采）。"""
+    ds = str(trade_date)
+    if len(ds) == 8 and ds.isdigit():
+        ds = f'{ds[:4]}-{ds[4:6]}-{ds[6:]}'
+    try:
+        missing = _missing_index_codes(ds)
+        if not missing:
+            return len(BROAD_INDEX_CODES)
+        logger.warning(
+            f"  [指数日线] {ds} 缺 {len(missing)}/{len(BROAD_INDEX_CODES)} 只"
+            f"（{','.join(missing)}），OUT 前补采...")
+        _batch_index_daily(ds.replace('-', ''))
+        return len(BROAD_INDEX_CODES) - len(_missing_index_codes(ds))
+    except Exception as e:
+        logger.warning(f"  指数日线完整性检查失败: {e}")
+        return 0
+
+
 def _backfill_index_daily(days: int = 25) -> int:
     """启动时回填指数日线历史数据（25天）"""
     _ensure_pd()
@@ -919,6 +973,35 @@ def _check_limit_detail_completeness(backfill_days: int = 3) -> None:
             logger.info(f"    → 补采 {added} 条")
     except Exception as e:
         logger.warning(f"  涨停明细检查失败: {e}")
+
+
+def _check_fund_share_completeness(backfill_days: int = 3) -> None:
+    """548：ETF 份额按市场完整性兜底。
+
+    2026-10-22/23 实证：源侧可返回 SH 1009 + SZ 792，但当日采集只在
+    SH 未发布时拿到 SZ 792，后续无重试 → flows-30d.etf_30d 只剩半边。
+    """
+    try:
+        for offset in range(max(1, backfill_days)):
+            d = datetime.now() - timedelta(days=offset)
+            if not _is_trading_day(d):
+                continue
+            ds = d.strftime('%Y-%m-%d')
+            if offset == 0 and not _is_today_data_ready():
+                continue
+            rows = _shard_fetchall(
+                'fund_share_cache',
+                "SELECT substr(ts_code,-2) AS ex, COUNT(*) AS n "
+                "FROM fund_share_cache WHERE trade_date=? GROUP BY ex", [ds])
+            counts = {str(r[0]): int(r[1]) for r in (rows or [])}
+            sh, sz = counts.get('SH', 0), counts.get('SZ', 0)
+            if sh >= 500 and sz >= 500:
+                continue
+            logger.info(f"  [ETF份额] {ds} SH={sh} SZ={sz} 覆盖不足，补采...")
+            added = _batch_fund_share(ds.replace('-', ''))
+            logger.info(f"    → 补采 {added} 条")
+    except Exception as e:
+        logger.warning(f"  ETF份额检查失败: {e}")
 
 
 def _batch_northbound_flow(trade_date: str) -> int:
@@ -2369,6 +2452,8 @@ def run_integrity_check(backfill_days: int = 1):
 
     # 545号：涨停/炸板明细兜底——15:30 run_daily_sync 单次采集，接口未发布即永久缺失
     _check_limit_detail_completeness(backfill_days)
+    # 548号：ETF 份额按市场完整性兜底（SH/SZ 单边缺失时重采）
+    _check_fund_share_completeness(backfill_days)
 
     # 320号 F1：K 线深度检查（策略引擎需要 ≥130 根，不足则标签/九层解读 K 线维度失效）
     try:
@@ -2393,7 +2478,7 @@ def run_integrity_check(backfill_days: int = 1):
             _today_str = today.replace('-', '') if isinstance(today, str) else _dt.now().strftime('%Y%m%d')
             today_date = _dt.strptime(_today_str, '%Y%m%d')
             days_lag = (today_date - latest_date).days
-            if days_lag > 7:
+            if days_lag > 1:
                 logger.info(f"  [融资融券] 滞后 {days_lag} 天，触发范围补采...")
                 # 363号F55-3修复：一次性回补多天滞后（timedelta 已在模块顶部导入）
                 start_date = (latest_date + timedelta(days=1)).strftime('%Y-%m-%d')
@@ -2548,7 +2633,10 @@ def run_integrity_check(backfill_days: int = 1):
     # 独立检查指数日线（因 index_daily_cache 为空表，不走通用 _check_count）
     for idx_date in idx_checks:
         ds_api = idx_date.replace('-', '')
-        logger.info(f"  [指数日线] {idx_date} 4只指数数据不足，补采...")
+        missing = _missing_index_codes(idx_date)
+        logger.info(
+            f"  [指数日线] {idx_date} 缺 {len(missing)}/{len(BROAD_INDEX_CODES)} 只"
+            f"{('（' + ','.join(missing) + '）') if missing else ''}，补采...")
         _batch_index_daily(ds_api)
 
     # 申万行业指数完整性检查（31 个行业，缺失/陈旧时 sw_daily 区间回填）
@@ -6315,6 +6403,10 @@ def _build_treemap_snapshot(codes: list[str], as_of: str = None):
             continue
     if _rows:
         _tm_conn.executemany(_insert_sql, _rows)
+        # 548：history 回补时 NEW_TABLE 的 snapshot_date 默认 date('now')，
+        # 多个历史日会共用今天而撞 (ts_code, snapshot_date) 唯一键；显式改为 as_of。
+        if as_of:
+            _tm_conn.execute(f"UPDATE {NEW_TABLE} SET snapshot_date = ?", [as_of])
     _tm_conn.commit()
 
     # 370号O5：归档逻辑已移至OUT步骤（_out_transmit_seven_dim），此处不再归档
@@ -6445,7 +6537,10 @@ def _build_out_market_panel(pipeline_date: str) -> dict:
         if _dim8_app is None:
             _dim8_app = create_app()
         with _dim8_app.app_context():
-            payloads, errors = _collect_out_market_payloads(DashboardService())
+            # 548：显式传 pipeline_date 作 as_of，避免服务内 datetime.now() 把当日
+            # 成品仓锚到前一交易日（同日完成日终时固定落后一天）。
+            payloads, errors = _collect_out_market_payloads(
+                DashboardService(as_of=pipeline_date))
     except Exception as exc:
         logger.warning(f"out_market_panel 构建失败（服务初始化）: {exc}")
         return {'written': 0, 'errors': {'_init': str(exc)}}
@@ -6517,6 +6612,40 @@ def _verify_out_market_panel(pipeline_date: str):
             logger.warning(f"  [管道] OUT市场成品校验失败: {detail}")
     except Exception as exc:
         logger.warning(f"OUT市场成品校验失败: {exc}")
+
+
+def _finalize_out_market_panel(pipeline_date: str):
+    """548：QA 完成后用最终数据重建一次 OUT 成品仓（幂等）。
+
+    当日 OUT 首次构建可能早于指数/ETF 等补采；QA 通过后重建，保证面板
+    内容与最终库内数据一致。用 OUT-MARKET-FINAL 标记避免每 tick 重跑。
+    """
+    try:
+        global _ecm
+        if _ecm is None:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            _ecm = get_ecm_instance()
+        prev = _ecm.conn.execute(
+            "SELECT status FROM pipeline_status "
+            "WHERE pipeline_date=? AND step_id='OUT-MARKET-FINAL'",
+            [pipeline_date]).fetchone()
+        if prev and str(prev[0]) == 'done':
+            return
+        res = _build_out_market_panel(pipeline_date)
+        errors = res.get('errors') or {}
+        status = 'done' if not errors else 'failed'
+        detail = f"written={res.get('written', 0)} errors={list(errors)[:5]}"
+        from app.data.sharding_manager import sharding_manager
+        with sharding_manager.get_write_lock('stock_cache.db'):
+            _ecm.conn.execute(
+                "INSERT OR REPLACE INTO pipeline_status "
+                "(pipeline_date, step_id, step_name, status, detail) "
+                "VALUES (?, 'OUT-MARKET-FINAL', 'OUT成品仓终版', ?, ?)",
+                [pipeline_date, status, detail])
+            _ecm.conn.commit()
+        logger.info(f"  [管道] OUT成品仓终版重建: {detail}")
+    except Exception as exc:
+        logger.warning(f"OUT 成品仓终版重建失败: {exc}")
 
 
 def _out_transmit_seven_dim(codes: list[str]):
@@ -6933,8 +7062,8 @@ def _build_status_snapshot(codes: list[str], as_of: str = None):
                     f" conflict_evidence, consensus_rate, direction, l0, lifecycle, advice_params,"
                     f" summary_text, one_liner_detail, dim_engine_results, signals, monthly_halt,"
                     f" final_score, semantic_type, reliability_summary, consensus_detail)"
-                    f" VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [code, trade_date, row['dim_states'], row['status_bar'],
+                    f" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [code, trade_date, trade_date, row['dim_states'], row['status_bar'],
                      row['opportunity_state'], row['state_evidence'],
                      row['conflict_evidence'], row['consensus_rate'],
                      row['direction'], row['l0'], row['lifecycle'], row['advice_params'],
@@ -7249,7 +7378,9 @@ def _consume_sync_requests_batch():
             elif req['task_type'] == 'full_stock_list':
                 _batch_stock_list()
             elif req['task_type'] == 'per_stock':
-                _batch_daily(datetime.now().strftime('%Y%m%d'))
+                # 548：只同步该只，避免每次全市场 _batch_daily + 整表清洗
+                _batch_daily_single(req.get('ts_code', ''),
+                                    datetime.now().strftime('%Y%m%d'))
             elif req['task_type'] == 'adj_factor':
                 _batch_adj_factor()
             elif req['task_type'] == 'top10_holders':
@@ -7666,6 +7797,8 @@ def _drive_pipeline():
 
     # ── 成品仓阶段 OUT（370号方案S6：七维透传/归档 + 541号市场成品仓）──
     if status.get('OUT', {}).get('status') != 'done':
+        # 548：OUT 前保证宽基指数齐全，避免成品仓先建、指数后补
+        _ensure_index_daily(today)
         def _out_build(_codes):
             _out_transmit_seven_dim(_codes)
             _build_out_market_panel(today)
@@ -7715,6 +7848,9 @@ def _drive_pipeline():
         # 传 compact today（_run_qa_check 内部转换为 trade_date 格式做数据校验）
         _run_pipeline_step(today, 'QA-CHECK', _run_qa_check, today)
         return
+
+    # 548：QA 通过后用最终数据重建 OUT 成品仓（同日快照 → final 升级）
+    _finalize_out_market_panel(today)
 
     logger.info(f"  [管道] 今日全链路完成 ✅")
 
@@ -7889,6 +8025,12 @@ def _run_history_qa_patrol(limit: int = 3):
 _PIPELINE_STALL_STATE = {'date': None, 'fingerprint': None, 'since': 0.0, 'last_alert': 0.0}
 _PIPELINE_STALL_MINUTES = 90
 _PIPELINE_STALL_ALERT_COOLDOWN = 1800
+# 548：按步骤给不同停滞阈值。RAW-2 正常 2~3 小时，固定 90min 会每天误报。
+_PIPELINE_STEP_TIMEOUT_MIN = {
+    'RAW-1': 120, 'RAW-2': 240, 'RAW-3': 150,
+    'RAW-2B': 30, 'RAW-2C': 30, 'RAW-2D': 30, 'RAW-2E': 30,
+    'SIG': 120, 'JUD': 90, 'OUT': 30, 'QA-CHECK': 30, 'COL-7': 60,
+}
 _EOD_CHECK_STATE = {'checked_date': None}
 
 
@@ -7935,12 +8077,15 @@ def _check_pipeline_stall():
             state.update(date=date_compact, fingerprint=fingerprint, since=now)
             return
         stalled_sec = now - state['since']
-        if stalled_sec < _PIPELINE_STALL_MINUTES * 60:
+        pending = sorted(k for k, v in statuses.items() if v != 'done')
+        timeout_min = max(
+            (_PIPELINE_STEP_TIMEOUT_MIN.get(s, _PIPELINE_STALL_MINUTES) for s in pending),
+            default=_PIPELINE_STALL_MINUTES)
+        if stalled_sec < timeout_min * 60:
             return
         if now - state['last_alert'] < _PIPELINE_STALL_ALERT_COOLDOWN:
             return
         state['last_alert'] = now
-        pending = sorted(k for k, v in statuses.items() if v != 'done')
         _pipeline_alert(
             '日终管道停滞',
             f"{date_compact} 管道 {int(stalled_sec // 60)} 分钟无进展，未完成: {pending}",
@@ -7973,7 +8118,15 @@ def _check_eod_completion():
     dates = [str(r[0]) for r in rows if r and r[0]]
     if not dates:
         return
-    target = dates[1] if len(dates) > 1 else dates[0]
+    # 548：非交易日/盘后由统一解析器给出应校验的数据日。
+    # 原 dates[1] 在周六会把目标错算成 10-22（最新 10-23 的再前一日）。
+    target = None
+    try:
+        from app.services.market_date_resolver import eod_date
+        target = eod_date(now)
+    except Exception:
+        target = None
+    target = target or (dates[1] if len(dates) > 1 else dates[0])
     target_compact = target.replace('-', '')
     try:
         row = _ecm.conn.execute(
@@ -7983,6 +8136,8 @@ def _check_eod_completion():
         return
     _EOD_CHECK_STATE['checked_date'] = today_key
     if row and str(row[0]) == 'done':
+        # 548：QA 已完成时确保成品仓是按目标日构建的终版（幂等）
+        _finalize_out_market_panel(target_compact)
         return
     detail = row[2] if row else 'QA-CHECK 无记录'
     latest = _get_latest_data_date()

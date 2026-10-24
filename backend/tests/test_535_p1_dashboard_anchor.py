@@ -50,7 +50,8 @@ class _FakeDM:
 
 
 def _svc(ecm, monkeypatch):
-    svc = DashboardService()
+    # 548：显式锚定 2026-10-20，避免依赖真实库/当前日期
+    svc = DashboardService(as_of='2026-10-20')
     svc._data_manager = _FakeDM(ecm)
     monkeypatch.setattr(svc, '_get_best_trade_date',
                         lambda before=None, min_stocks=1000: '2026-10-20')
@@ -84,9 +85,8 @@ def test_daily_top_db_fallback_anchors_previous_day(monkeypatch):
 
 
 def test_market_emotion_uses_limit_ecology_metrics(monkeypatch):
-    svc = DashboardService()
-    monkeypatch.setattr(svc, '_get_best_trade_date',
-                        lambda before=None, min_stocks=1000: '2026-10-20')
+    # 548：显式锚定 2026-10-20（与 limit ecology 假数据一致）
+    svc = DashboardService(as_of='2026-10-20')
     monkeypatch.setattr(svc, 'get_limit_ecology', lambda: {
         'as_of': '2026-10-20',
         'up': {'count': 54},

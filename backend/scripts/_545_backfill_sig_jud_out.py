@@ -32,9 +32,13 @@ def _norm_date(date: str) -> str:
 
 def _daemon_running() -> bool:
     try:
-        out = subprocess.run(['pgrep', '-f', 'data_daemon.py'],
-                             capture_output=True, text=True).stdout.strip()
-        return bool(out)
+        # 只匹配真正的 python 数据进程；pgrep -f 'data_daemon.py' 会命中
+        # 看守/监听/包装脚本自身的命令行，造成回补被误拦（2026-10-24 实证）。
+        out = subprocess.run(
+            ['pgrep', '-f', r'python[0-9.]* .*data_daemon\.py'],
+            capture_output=True, text=True).stdout.split()
+        me = str(os.getpid())
+        return any(pid != me for pid in out)
     except Exception:
         return False
 
@@ -53,6 +57,7 @@ def main() -> int:
     ap.add_argument('--apply', action='store_true', help='实际写库（默认 dry-run）')
     ap.add_argument('--limit', type=int, default=0, help='仅处理前 N 只（冒烟测试）')
     ap.add_argument('--skip-raw2c', action='store_true', help='跳过 RAW-2C 行业位置')
+    ap.add_argument('--skip-sig', action='store_true', help='跳过 SIG 重算，仅补 JUD（SIG 已完成时用）')
     ap.add_argument('--force', action='store_true', help='daemon 运行时仍执行（不建议）')
     args = ap.parse_args()
 
@@ -108,17 +113,20 @@ def main() -> int:
             print(f"  RAW-2C 完成: {_count(ecm, 'industry_position_cache', 'asof_date', date)}")
 
     # 4) 清掉目标日影子行（519号：骨架行会顶掉 MAX(trade_date)）
-    try:
-        from app.data.sharding_manager import sharding_manager
-        sharding_manager.execute_write('strategy_signal_detail',
-                                       "DELETE FROM strategy_signal_detail WHERE trade_date = ?", [date])
-    except Exception as e:
-        print(f"  ⚠️ 影子行清理失败（继续）: {e}")
-
     # 5) SIG → JUD（写 history）
-    print("  SIG: 按日重算 ...")
-    dd._precompute_strategy_signals(codes, as_of=date)
-    print(f"  SIG 完成: {_count(ecm, 'strategy_signal_detail', 'trade_date', date)}")
+    if args.skip_sig:
+        print("  SIG: 跳过（--skip-sig，保留现有 strategy_signal_detail）")
+    else:
+        try:
+            from app.data.sharding_manager import sharding_manager
+            sharding_manager.execute_write('strategy_signal_detail',
+                                           "DELETE FROM strategy_signal_detail WHERE trade_date = ?", [date])
+        except Exception as e:
+            print(f"  ⚠️ 影子行清理失败（继续）: {e}")
+
+        print("  SIG: 按日重算 ...")
+        dd._precompute_strategy_signals(codes, as_of=date)
+        print(f"  SIG 完成: {_count(ecm, 'strategy_signal_detail', 'trade_date', date)}")
 
     print("  JUD: status_snapshot → history ...")
     dd._build_status_snapshot(codes, as_of=date)

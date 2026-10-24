@@ -76,6 +76,18 @@ def _expected_date() -> str | None:
     return value
 
 
+def _max_data_date(data_dates: dict | None) -> str | None:
+    """从 data_dates 中取最大可识别日期；忽略 08/20 这类无年份缩写。"""
+    from app.services.market_date_resolver import norm_date
+    vals = []
+    for value in (data_dates or {}).values():
+        if isinstance(value, str):
+            d = norm_date(value)
+            if d:
+                vals.append(d)
+    return max(vals) if vals else None
+
+
 def attach_meta(payload, panel: dict, expected_date: str | None = None):
     """给成品 payload 附加 OUT 元信息；非 dict 原样返回。"""
     if not isinstance(payload, dict):
@@ -85,11 +97,18 @@ def attach_meta(payload, panel: dict, expected_date: str | None = None):
     expected = expected_date if expected_date is not None else _expected_date()
     expected_norm = str(expected or '').replace('-', '')
     actual_norm = actual.replace('-', '')
+    # 548：payload 内部数据日（data_dates_json 最大值）才是真实新鲜度。
+    # 只看 asof 会把「10-23 面板里装 10-22 数据」判成最新。
+    data_date = _max_data_date(panel.get('data_dates'))
+    data_norm = data_date.replace('-', '') if data_date else ''
     out['panel_source'] = 'out'
     out['panel_date'] = actual or None
+    out['panel_data_date'] = data_date
     out['panel_built_at'] = panel.get('built_at')
     out['stale'] = bool(
-        expected_norm and actual_norm and actual_norm < expected_norm)
+        (expected_norm and actual_norm and actual_norm < expected_norm)
+        or (expected_norm and data_norm and data_norm < expected_norm)
+    )
     return out
 
 

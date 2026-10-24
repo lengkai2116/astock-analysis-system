@@ -39,9 +39,23 @@ OUT_SECTOR_NAMES = ['地产', '建筑', '钢铁', '零售', '纺织']
 class DashboardService:
     """仪表盘数据服务 — 8 个数据方法（不含 mock 降级）"""
 
-    def __init__(self):
+    def __init__(self, as_of: str | None = None):
         self._data_manager = None
         self._tushare = None
+        # 548：显式锚定日（OUT 构建传 pipeline_date；None 时由统一解析器给出）
+        self._as_of = as_of
+
+    def _eod_date(self) -> Optional[str]:
+        """548：EOD 类模块统一锚定日。
+
+        优先使用构造时传入的 as_of（OUT 按 pipeline_date 构建），否则由
+        market_date_resolver 按交易日历 + 时段 + 数据就绪度解析。
+        """
+        if self._as_of:
+            from app.services.market_date_resolver import norm_date
+            return norm_date(self._as_of) or str(self._as_of)[:10]
+        from app.services.market_date_resolver import eod_date
+        return eod_date()
 
     @property
     def data_manager(self):
@@ -381,11 +395,10 @@ class DashboardService:
         except Exception:
             pass
 
-        # 2. 降级：从 DuckDB 查询前一完整交易日
+        # 2. 降级：从 DuckDB 查询统一锚定日（548：盘中=上一完整日，同日 EOD 完成=当日）
         try:
             ecm = self.data_manager.cache
-            today = datetime.now().strftime('%Y-%m-%d')
-            last_date = self._get_best_trade_date(before=today)
+            last_date = self._eod_date()
             if not last_date:
                 date_df = ecm._query_shard(
                     'daily_cache',
@@ -465,9 +478,8 @@ class DashboardService:
             from app.models import Stock
 
             ecm = self.data_manager.cache
-            today = datetime.now().strftime('%Y-%m-%d')
             min_stocks = 1000
-            as_of = self._get_best_trade_date(before=today)
+            as_of = self._eod_date()
 
             candidates = []
             if as_of:
@@ -665,9 +677,8 @@ class DashboardService:
         DB 回退 `ORDER BY change_pct DESC LIMIT 20` 前 20 全为正涨幅 → losers 恒空，
         跌幅 TOP5 缺失的根因）——改传 top_n=None 取全行业，双侧分别取 top5。
         """
-        # 固定上一工作日（today 之前最近完整交易日），避免收盘入库后切日
-        today = datetime.now().strftime('%Y-%m-%d')
-        as_of = self._get_best_trade_date(before=today)
+        # 548：统一锚定日（盘中=上一完整交易日；同日 EOD 完成=当日）
+        as_of = self._eod_date()
         # 528 号 批次2：板块连续涨/跌 + 近5日累积涨跌（daily_cache 多日按行业聚合）
         streaks = self._get_sector_streaks(as_of=as_of)
         # 530号 批次3：板块近20日每日平均涨跌幅序列（近20日板块涨跌折线数据源）
@@ -1414,9 +1425,8 @@ class DashboardService:
         """
         try:
             ecm = self.data_manager.cache
-            today = datetime.now().strftime('%Y-%m-%d')
             min_stocks = 1000
-            as_of = self._get_best_trade_date(before=today)
+            as_of = self._eod_date()
             candidates = []
             if as_of:
                 candidates.append(as_of)
@@ -1516,8 +1526,7 @@ class DashboardService:
         try:
             import pandas as pd
 
-            today = datetime.now().strftime('%Y-%m-%d')
-            as_of = self._get_best_trade_date(before=today)
+            as_of = self._eod_date()
             if not as_of:
                 logger.error("大盘总览: 无上一交易日数据")
                 return None
@@ -1636,8 +1645,7 @@ class DashboardService:
         try:
             import math
 
-            today = datetime.now().strftime('%Y-%m-%d')
-            as_of = self._get_best_trade_date(before=today)
+            as_of = self._eod_date()
             if not as_of:
                 logger.error("涨停生态: 无上一交易日数据")
                 return None
@@ -1904,8 +1912,7 @@ class DashboardService:
         所有日期锚定 today 之前最近完整交易日 as_of；全只读。
         """
         try:
-            today = datetime.now().strftime('%Y-%m-%d')
-            as_of = self._get_best_trade_date(before=today)
+            as_of = self._eod_date()
             if not as_of:
                 logger.error("市场资金30日: 无上一交易日数据")
                 return None
@@ -2194,8 +2201,7 @@ class DashboardService:
             from app.services.market_sentiment_service import MarketSentimentService
             mss = MarketSentimentService(self.data_manager)
             if trade_date is None:
-                today = datetime.now().strftime('%Y-%m-%d')
-                as_of = self._get_best_trade_date(before=today)
+                as_of = self._eod_date()
                 trade_date = as_of.replace('-', '') if as_of else None
 
             eco = self.get_limit_ecology()
