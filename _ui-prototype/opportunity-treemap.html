@@ -471,7 +471,7 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
     <div style="margin-top:var(--space-12);font-size:11px;color:var(--text-muted);text-align:center;">
       💡 提示：三种地图模式展示不同维度，点击标签筛选板块，悬停查看详情，点击进入个股诊断。
       <span style="display:inline-block;margin-left:var(--space-8);padding:2px 8px;border-radius:4px;background:var(--bg-surface);border:1px solid var(--border-default);">
-        数据每 30s 模拟刷新
+        行情每 30s 自动刷新
       </span>
     </div>
 
@@ -487,45 +487,46 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
       <div class="detail-code" id="d-code">--</div>
       <div class="detail-name" id="d-name">--</div>
       <div class="detail-price-row" id="d-price-row"></div>
-      <div class="detail-price-row" id="d-timing-row" style="margin-top:6px;"></div>
       <div class="detail-price-row" id="d-otype-row" style="margin-top:4px;"></div>
-      <div class="detail-price-row" id="d-profile-row" style="margin-top:6px;"></div>
-      <div id="d-profile-explain" style="margin-top:2px;"></div>
       <div class="detail-tags" id="d-tags"></div>
     </div>
-    <!-- 仲裁结论 -->
-    <div class="detail-section" id="d-verdict-section">
-      <h4>★ 交叉验证</h4>
-      <div id="d-verdict" style="font-size:13px;color:var(--text-secondary);line-height:1.7;"></div>
-      <!-- 337号 S3.1：九维状态灯（status_snapshot 成品仓，日终生成后显示） -->
-      <div id="d-dim-lights" style="margin-top:6px;font-size:12px;"></div>
+    <!-- 1 结论卡 -->
+    <div class="detail-section" id="d-conclusion-section">
+      <h4>🎯 结论卡</h4>
+      <div id="d-timing-row" style="font-size:12px;"></div>
+      <div id="d-verdict" style="font-size:13px;color:var(--text-secondary);line-height:1.7;margin-top:4px;"></div>
+      <div id="d-profile-explain" style="margin-top:2px;"></div>
+      <div id="d-status-bar" style="font-size:10px;color:var(--text-muted);margin-top:4px;"></div>
     </div>
-    <!-- 四行标签 -->
-    <div class="detail-section" id="d-tags-section">
-      <h4>📊 标签摘要</h4>
-      <div class="tag-summary-grid" id="d-tag-summary"></div>
-      <div id="d-ts-timestamp" style="font-size:10px;color:var(--text-muted);margin-top:6px;"></div>
+    <!-- 2 关键依据 -->
+    <div class="detail-section" id="d-evidence-section" style="display:none;">
+      <h4>📌 关键依据</h4>
+      <div id="d-evidence" style="font-size:12px;color:var(--text-secondary);line-height:1.7;"></div>
     </div>
-    <!-- 估值详情 -->
-    <div class="detail-section" id="d-valuation-section">
-      <h4>💎 估值定位</h4>
-      <div class="val-detail-grid" id="d-val-detail"></div>
-    </div>
-    <!-- 操作建议 -->
-    <div class="detail-section" id="d-advice-section">
-      <h4>🎯 操作建议</h4>
+    <!-- 3 价位与操作 -->
+    <div class="detail-section" id="d-levels-section">
+      <h4>💰 价位与操作</h4>
+      <div id="d-levels" style="font-size:11px;color:var(--text-muted);margin-bottom:4px;"></div>
       <div id="d-advice" style="font-size:13px;color:var(--text-secondary);"></div>
     </div>
-    <!-- 风险提示 -->
-    <div class="detail-section" id="d-risk-section">
-      <h4>⚠️ 风险提示</h4>
-      <div id="d-risk" style="font-size:12px;color:var(--text-muted);"></div>
+    <!-- 4 入场 / 离场 -->
+    <div class="detail-section" id="d-triggers-section" style="display:none;">
+      <h4>🚦 入场 / 离场</h4>
+      <div id="d-triggers" style="font-size:12px;color:var(--text-secondary);line-height:1.7;"></div>
     </div>
-    <!-- 底部操作栏 -->
+    <!-- 5 风险与估值 -->
+    <div class="detail-section" id="d-meta-section">
+      <h4>📋 风险与估值</h4>
+      <div id="d-risk" style="font-size:12px;color:var(--text-muted);"></div>
+      <div id="d-valuation-section" style="margin-top:6px;">
+        <div class="val-detail-grid" id="d-val-detail"></div>
+      </div>
+      <div id="d-ts-timestamp" style="font-size:10px;color:var(--text-muted);margin-top:6px;"></div>
+    </div>
+    <!-- 6 底部操作 -->
     <div class="detail-actions">
-      <button class="btn btn-primary" onclick="closeDetail()">📋 加入自选</button>
-      <button class="btn" onclick="goStockAnalysis()">📈 策略分析</button>
-      <button class="btn" onclick="closeDetail()">🤖 AI 投研</button>
+      <button class="btn btn-primary" id="d-add-watch" onclick="addToWatchlist()">📋 加入自选</button>
+      <button class="btn" onclick="goStockAnalysis()">📈 看完整七维现状</button>
     </div>
   </div>
 </div>
@@ -1199,7 +1200,7 @@ function _stockTooltip(d, stockName) {
     const barColor = pct >= 70 ? '#22c55e' : pct >= 50 ? '#f59e0b' : pct >= 30 ? '#3b82f6' : '#6b7280';
     const badge = CONFIRM_BADGE[d.rightSideConfirm];
     const badgeHtml = badge ? `<div style="margin-top:5px;font-size:12px;">${badge[0]} <strong>${d.rightSideConfirm}</strong> ${badge[1]}</div>` : '';
-    const consensusHtml = d.consensusRate ? `<div style="font-size:11px;color:#94A3B8;margin-top:3px;">🧭 L4共识率 ${(d.consensusRate * 100).toFixed(0)}%${d.consensusRate >= 0.65 ? '（方向可信）' : '（方向待确认）'}</div>` : '';
+    const consensusHtml = d.consensusRate != null ? `<div style="font-size:11px;color:#94A3B8;margin-top:3px;">🧭 L4共识 ${fmtConsensus(d.consensusRate)}${Math.abs(d.consensusRate) >= 0.65 ? '（方向可信）' : '（方向待确认）'}</div>` : '';
     const timingNote = `<div style="font-size:11px;color:#8b93a7;margin-top:4px;border-top:1px solid #2e3245;padding-top:4px;">大小=机会潜力（长期，≠现在入场）· 颜色=入场时机</div>`;
     return `
       <div style="font-size:13px;font-weight:600;margin-bottom:4px;">${displayName} <span style="font-size:11px;color:#6b728c;">${d.tsCode}</span></div>
@@ -1522,7 +1523,7 @@ function renderSideList() {
       if (mode === 'opportunity') {
         html += `信号强度 <b>${Math.round(s.signalStrength || 0)}</b>/100<br/>` +
           `时机 <b>${s.rightSideConfirm || '未确认'}</b>` +
-          (s.consensusRate ? `（共识 ${(s.consensusRate * 100).toFixed(0)}%）` : '') +
+          (s.consensusRate != null ? `（共识 ${fmtConsensus(s.consensusRate)}）` : '') +
           (s.opportunityLabel ? `<br/>类型 <b>${s.opportunityLabel}</b>` : '') +
           `<br/>涨跌 <b style="color:${pctCol}">${s.pctChange >= 0 ? '+' : ''}${s.pctChange.toFixed(2)}%</b>`;
       } else if (mode === 'value') {
@@ -1692,6 +1693,117 @@ function _valuationKey(vl) {
   return '合理';
 }
 
+// 549-A：共识统一按「方向 + 绝对值」展示，避免 -81% 被读成负共识
+function fmtConsensus(rate, direction) {
+  const n = Number(rate);
+  if (!Number.isFinite(n)) return '--';
+  const pct = Math.round(Math.abs(n) * 100);
+  let dir = direction || '';
+  if (!dir) dir = n < 0 ? 'bearish' : n > 0 ? 'bullish' : 'neutral';
+  if (dir === 'bearish' || dir === '看空' || dir === 'down') return `看空 ${pct}%`;
+  if (dir === 'bullish' || dir === '看多' || dir === 'up') return `看多 ${pct}%`;
+  return pct === 0 ? '中性 0%' : `中性 ${pct}%`;
+}
+
+// 549-A：状态与动作的预期对应；不匹配时加「动作待复核」徽标，不直接改 L2 状态
+const STATE_ACTION_EXPECT = {
+  enter: ['买入', '建仓', '加仓', '轻仓', '试探'],
+  light: ['轻仓', '买入', '试仓', '建仓', '试探'],
+  wait: ['观望', '等待', '持有'],
+  reduce: ['减仓', '减持', '清仓', '回避'],
+  avoid: ['清仓', '回避', '卖出', '减仓'],
+};
+function actionConflict(state, actionLabel) {
+  const expect = STATE_ACTION_EXPECT[state];
+  if (!expect || !actionLabel) return null;
+  if (expect.some(w => actionLabel.includes(w))) return null;
+  return { state, actionLabel };
+}
+
+function _esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function _firstEvidence(data) {
+  let ev = data && data.stateEvidence;
+  if (typeof ev === 'string') {
+    try { ev = JSON.parse(ev); } catch (e) { ev = [ev]; }
+  }
+  return (Array.isArray(ev) && ev.length) ? String(ev[0] || '').trim() : '';
+}
+
+function _shortReason(text, max) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  const n = max || 90;
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+// 549-A：invalidation 是结构防守位，与 ATR 止损分开展示，避免同屏两个「止损」
+function fmtDefenceText(text) {
+  return String(text || '').replace(/止损位/g, '结构防守位');
+}
+
+function extractDefencePrice(text) {
+  const s = String(text || '');
+  if (!/止损位|防守位/.test(s)) return null;
+  const m = s.match(/(?:止损位|防守位)[^\d]{0,8}(\d+(?:\.\d+)?)/);
+  return m ? Number(m[1]) : null;
+}
+
+// 549-B4：status_bar 只在与时序 state 一致时作为辅助状态展示
+const STATUS_BAR_OK = {
+  enter: ['强势确认'],
+  light: ['轻仓确认'],
+  wait: ['中性观望'],
+  reduce: ['谨慎观望'],
+  avoid: ['风险警示', '看空回避'],
+};
+
+// 549-B3：风险提示的软风险类型中文名
+const RISK_TYPE_CN = {
+  company: '基本面', liquidity: '流动性', industry: '行业',
+  valuation: '估值', technical: '技术',
+};
+
+// 549-B1：关键依据——summary 优先，state_evidence 仅在可读结论时采用，其余取维度
+const EVIDENCE_LIGHT_RANK = { '🔴': 0, '🟡': 1, '✅': 2, '🟢': 2, red: 0, yellow: 1, green: 2 };
+function _dimEvidenceText(d) {
+  if (!d) return '';
+  const head = String(d.conclusion || '').trim();
+  const plain = String(d.plain || '').trim();
+  const evidence = String(d.evidence || '').trim();
+  let body = plain || evidence;
+  if (plain && evidence && plain !== evidence && !plain.includes(evidence)) {
+    body = `${plain}（${evidence}）`;
+  }
+  const text = head && body ? `${head}：${body}` : (head || body);
+  return text.replace(/\s+/g, ' ').trim();
+}
+function _buildEvidenceLines(data, oa) {
+  const lines = [];
+  const summary = String((oa && (oa.summary || oa.state_reason)) || '').trim();
+  const ev = _firstEvidence(data);
+  const evUseful = /否决|未确认|盈亏比|硬否决|背离|不足|风险/.test(ev);
+  if (summary) lines.push(_shortReason(summary, 60));
+  else if (evUseful) lines.push(_shortReason(ev, 60));
+
+  const dims = (oa && Array.isArray(oa.dimensions)) ? oa.dimensions.slice() : [];
+  const rank = d => (d && EVIDENCE_LIGHT_RANK[d.light] != null) ? EVIDENCE_LIGHT_RANK[d.light] : 3;
+  dims.sort((a, b) => rank(a) - rank(b));
+  for (const d of dims) {
+    if (lines.length >= 3) break;
+    if (!d || d.key === 'signal') continue;
+    if (!String(d.plain || '').trim() && !String(d.evidence || '').trim()) continue;
+    const text = _dimEvidenceText(d);
+    if (!text) continue;
+    if (lines.some(x => x.includes(text) || text.includes(x))) continue;
+    lines.push(_shortReason(`${d.light || '•'} ${text}`, 60));
+  }
+  return lines;
+}
+
 // 320号 S1：机会画像维度中文名（opportunity_profile 七维 → 展示名）
 const PROFILE_CN = {
   risk: '风险', value: '价值', trend: '趋势',
@@ -1725,58 +1837,40 @@ function _renderDetailPrice(data) {
   const pctColor = data.pctChange >= 0 ? 'var(--accent-red)' : 'var(--accent-green)';
   // 时效角标：按实时快照 cached_at 判断盘中/收盘/日终
   const tzBadge = _realtimeBadge(data);
+  // 549-B6：事件加成只做徽标，主数字仍为基础潜力
+  const _adj = data._adjustedStrength;
+  const _delta = (_adj != null && data.signalStrength != null)
+    ? (Number(_adj) - Number(data.signalStrength)) : null;
+  const eventBadge = (_delta != null && Math.abs(_delta) >= 1)
+    ? `<span title="基础潜力 ${Math.round(data.signalStrength)}；事件调整后 ${Number(_adj).toFixed(1)}（含财报/龙虎榜/回购/突破等）" style="margin-left:6px;font-size:10px;padding:1px 5px;border-radius:8px;background:${_delta > 0 ? 'rgba(37,99,235,.12)' : 'rgba(220,38,38,.10)'};color:${_delta > 0 ? '#2563eb' : '#dc2626'};border:1px solid ${_delta > 0 ? 'rgba(37,99,235,.30)' : 'rgba(220,38,38,.30)'};">事件 ${_delta > 0 ? '+' : ''}${Math.round(_delta)}</span>`
+    : '';
   const el = document.getElementById('d-price-row');
   if (!el) return;
   el.innerHTML = `
     <span class="price">${(data.price || 0).toFixed(2)}</span>
     <span style="color:${pctColor};margin-left:var(--space-8);font-weight:600;">${pctSign}${(data.pctChange || 0).toFixed(2)}%</span>
-    <span style="color:var(--text-muted);margin-left:var(--space-8);font-size:12px;">${data.signalStrength == null ? '📊 潜力未计算' : '📊 信号强度 ' + Math.round(data.signalStrength) + '/100'}</span>
+    <span style="color:var(--text-muted);margin-left:var(--space-8);font-size:12px;" title="JUD 基础信号强度（慢变量），事件加成另标">${data.signalStrength == null ? '📊 潜力未计算' : '📊 潜力（慢） ' + Math.round(data.signalStrength) + '/100'}</span>${eventBadge}
     ${tzBadge}
   `;
 }
 
 function showDetail(data) {
-  // 540号批次3 P2-2：地图批量响应已裁掉详情大字段，点击时按需拉取
-  if (!data._detailLoaded && !data._detailLoading) {
-    data._detailLoading = true;
-    fetch('/api/v3/opportunity-atlas/stock?ts_code=' + encodeURIComponent(data.tsCode))
-      .then(r => r.json())
-      .then(j => {
-        const s = (j.data || {}).stock;
-        if (!s) return;
-        data.price = s.price != null ? s.price : data.price;
-        data.pctChange = s.pct_change != null ? s.pct_change : data.pctChange;
-        data.snapshotAt = s.snapshot_at || data.snapshotAt;
-        data.isRealtime = !!s.snapshot;
-        data.oneLinerDetail = s.one_liner_detail;
-        data.stateEvidence = s.state_evidence;
-        data.entrySignals = s.entry_signals;
-        data.exitConditions = s.exit_conditions;
-        try {
-          data.opportunityProfile = typeof s.opportunity_profile === 'string'
-            ? JSON.parse(s.opportunity_profile)
-            : (s.opportunity_profile || data.opportunityProfile);
-        } catch (e) {}
-        try {
-          data.sevenDimReport = data.oneLinerDetail
-            ? (typeof data.oneLinerDetail === 'string'
-                ? JSON.parse(data.oneLinerDetail) : data.oneLinerDetail)
-            : data.sevenDimReport;
-        } catch (e) {}
-      })
-      .catch(() => {})
-      .finally(() => {
-        data._detailLoading = false;
-        data._detailLoaded = true;
-        showDetail(data);
-      });
-    return;
-  }
   document.getElementById('d-code').textContent = data.tsCode;
   document.getElementById('d-name').textContent = data.fullName || data.name;
   // 318号 S1：记录弹窗状态，供 30s 轮询刷新价格
   _detailTsCode = data.tsCode;
   _detailPanelOpen = true;
+  // 549-C：切股先清空上一只的六区动态块，避免 diagnose 返回前短暂串股
+  ['d-status-bar', 'd-levels', 'd-triggers', 'd-evidence', 'd-ts-timestamp'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '';
+  });
+  const _evSecReset = document.getElementById('d-evidence-section');
+  if (_evSecReset) _evSecReset.style.display = 'none';
+  const _trigSecReset = document.getElementById('d-triggers-section');
+  if (_trigSecReset) _trigSecReset.style.display = 'none';
+  const _watchBtn = document.getElementById('d-add-watch');
+  if (_watchBtn) { _watchBtn.disabled = false; _watchBtn.textContent = '📋 加入自选'; }
 
   // confirmEvidence 规范化：API 可能返回 JSON 字符串，统一为数组
   if (typeof data.confirmEvidence === 'string' && data.confirmEvidence) {
@@ -1792,9 +1886,9 @@ function showDetail(data) {
   const tColor = effectiveTimingColor(data);
   const tText = effectiveTimingText(data);
   document.getElementById('d-timing-row').innerHTML = `
-    <span style="font-size:12px;color:var(--text-muted);">⏱ 时机</span>
+    <span style="font-size:12px;color:var(--text-muted);">⏱ 时机（快）</span>
     <span style="color:${tColor};font-weight:600;font-size:13px;">● ${tText}</span>
-    ${data.consensusRate ? `<span style="color:var(--text-muted);font-size:11px;margin-left:6px;">L4共识 ${(data.consensusRate * 100).toFixed(0)}%</span>` : ''}
+    ${data.consensusRate != null ? `<span style="color:var(--text-muted);font-size:11px;margin-left:6px;">L4共识 ${fmtConsensus(data.consensusRate)}</span>` : ''}
     ${data.opportunityState ? `<span style="color:var(--text-muted);font-size:11px;margin-left:6px;">仲裁</span>` : ''}
   `;
 
@@ -1805,54 +1899,15 @@ function showDetail(data) {
     ? `<span style="font-size:12px;color:var(--text-muted);">📌 机会类型</span> <span style="font-size:12px;color:var(--text-secondary);">${oLabel}</span>`
     : '';
 
-  // 320号 S1：机会画像红绿灯浓缩（opportunity_profile 七维 → 精选 3-5 项）
-  // 321号 S5：profile 统一解析为对象（API 为 JSON 字符串，原未解析致画像行/解释条失效）
-  // 365号批次D：优先使用seven_dim_report（新版七维体检报告），回退到opportunity_profile
-  let _profile = data.opportunityProfile;
-  if (typeof _profile === 'string' && _profile) {
-    try { _profile = JSON.parse(_profile); } catch (e) { _profile = null; }
-  }
-  let _sdr = data.sevenDimReport;
-  if (typeof _sdr === 'string' && _sdr) {
-    try { _sdr = JSON.parse(_sdr); } catch (e) { _sdr = null; }
-  }
-  // 479号：门禁适配——dim8 按 2026-09-15 裁决不产 signal 段（由 JUD 单独路径产出），
-  //   原 `_sdr.signal` 判据会使七维体检永不渲染（双保险断线）；改为「任一非空段即渲染」，
-  //   dimOrder.filter(_sdr[k]) 天然跳过缺失段（signal 缺失 → 渲染其余 5 段 + summary 摘要）
-  if (_sdr && Object.keys(_sdr).length > 0) {
-    const dimOrder = ['signal','structure','volume_price','fund_chip','emotion','risk'];
-    const dimCN = {signal:'信号确认',structure:'结构位置',volume_price:'量价健康',fund_chip:'资金筹码',emotion:'情绪环境',risk:'风险边界'};
-    document.getElementById('d-profile-row').innerHTML =
-      '<span style="font-size:12px;color:var(--text-muted);margin-right:6px;">🧬 七维体检</span>' +
-      dimOrder.filter(k => _sdr[k]).map(k => {
-        const d = _sdr[k];
-        return `<span style="font-size:12px;margin-right:8px;">${d.light || '⚪'} ${dimCN[k] || k}</span>`;
-      }).join('') +
-      (_sdr.summary && _sdr.summary.text ? `<div style="margin-top:4px;font-size:11px;color:var(--text-muted);">${_sdr.summary.text}</div>` : '');
-  } else {
-    document.getElementById('d-profile-row').innerHTML = _profile
-      ? '<span style="font-size:12px;color:var(--text-muted);margin-right:6px;">🧬 画像</span>' +
-        Object.entries(_profile)
-          .filter(([k, v]) => v && v.light && v.status && k !== 'event')
-          .slice(0, 5)
-          .map(([k, v]) => `<span style="font-size:12px;margin-right:8px;">${v.light} ${_profileCN(k)}: ${v.status}</span>`)
-          .join('')
-      : '';
-  }
-
-  // 321号 S5：时间尺度解释条——仲裁状态=回避/等待但画像主力趋势=建仓/拉升并存时
-  // 365号批次D：兼容seven_dim_report
-  const _profTrend = _profile && _profile.trend && _profile.trend.status;
   const _state = data.opportunityState || '';
-  const _trendBull = ['建仓', '拉升'].includes(_profTrend);
-  let explainHtml = '';
-  if ((_state === 'avoid' || _state === 'wait') && _trendBull) {
-    explainHtml = `<div style="margin-top:6px;font-size:11px;color:var(--warn,#e6a23c);background:rgba(230,162,60,0.08);padding:4px 8px;border-radius:4px;">
-      ⚠ 主力阶段显示${_profTrend}（慢变量），但短线时机出现${_state === 'avoid' ? '否决信号' : '未确认信号'}（快变量），当前以时机为准
-    </div>`;
+  const explainParts = [];
+  if (data.signalStrength >= 70 && (_state === 'avoid' || _state === 'reduce')) {
+    explainParts.push(`<div style="margin-top:6px;font-size:11px;color:var(--warn,#e6a23c);background:rgba(230,162,60,0.08);padding:4px 8px;border-radius:4px;">
+      ⚠ 高潜力 ${Math.round(data.signalStrength)}/100（慢变量），但时机${_state === 'avoid' ? '否决' : '建议减仓'}（快变量），当前以时机为准
+    </div>`);
   }
   const _explainEl = document.getElementById('d-profile-explain');
-  if (_explainEl) _explainEl.innerHTML = explainHtml;
+  if (_explainEl) _explainEl.innerHTML = explainParts.join('');
 
   document.getElementById('d-tags').innerHTML = `
     <span class="detail-tag tag-trend">${data.sector}</span>
@@ -1878,45 +1933,38 @@ function showDetail(data) {
       : 'ℹ 信号不足，暂无法形成结论'}
   `;
 
-  // 四行标签（318号 S4：初始单值兜底，diagnose 异步返回后升级为组合维度）
-  const tagRows = [
-    { label: '方向', value: _tagCn(data.signalDirection), icon: '↗' },
-    { label: '位置', value: _tagCn(data.signalPosition), icon: '📍' },
-    { label: '质量', value: _tagCn(data.signalQuality), icon: '🏗️' },
-    { label: '环境', value: _tagCn(data.signalEnvironment), icon: '🌤️' },
-  ];
-  document.getElementById('d-tag-summary').innerHTML = tagRows.map(r =>
-    `<div class="tag-summary-item"><div class="ts-label">${r.icon} ${r.label}</div><div class="ts-value">${r.value}</div></div>`
-  ).join('');
+  // 549-C：四格标签已移除
 
-  // 318号 S4/S5：估值定位改结论优先 + 举证（直白化，用户非量化分析师）
+  // 549-B5：估值压成 1 行；模型估值与近5年分位分标口径；全空则整段隐藏
   const _pe = (typeof data.pe === 'number' && data.pe > 0) ? data.pe : null;
   const _pb = (typeof data.pb === 'number' && data.pb > 0) ? data.pb : null;
   const _dy = (typeof data.dividendYield === 'number' && data.dividendYield > 0) ? data.dividendYield : null;
-  // 5 年分位（后端快照 tags 补齐后可用，诊断异步兜底在 S5 补充）
   const _pePct = data.pePercentile5y != null ? data.pePercentile5y : null;
   const _pbPct = data.pbPercentile5y != null ? data.pbPercentile5y : null;
   const _vl = data.valuation || '';
-  const valConcl = _valuationKey(_vl);   // 严重低估/偏低/合理/偏高/高估
-  const valColor = DEVIATION_COLORS[valConcl] || '#6b7280';
-  // 大白话估值结论
-  let valPlain = '';
-  if (_vl === 'extreme_low' || _vl === 'low') valPlain = '估值便宜，适合价值型关注';
-  else if (_vl === 'high' || _vl === 'extreme_high') valPlain = '估值偏贵，追高需谨慎';
-  else if (_vl === 'fair') valPlain = '估值合理，不便宜也不贵';
-  const valItemsHtml = `
-    <div class="val-detail-item" style="grid-column:1/-1;background:var(--bg-surface);padding:8px 10px;border-radius:6px;border:1px solid ${valColor}55;">
-      <div style="font-size:13px;font-weight:600;color:${valColor};">💎 估值结论：${valConcl}</div>
-      ${valPlain ? `<div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">${valPlain}</div>` : ''}
-    </div>
-    <div class="val-detail-item"><div class="vd-label">PE（价格/年盈利）</div>
-      <div class="vd-value">${_pe ? _pe.toFixed(1) : '--'}${_pePct != null ? `<span style="font-size:10px;color:var(--text-muted);margin-left:4px;">近5年${_pePct}%分位</span>` : ''}</div></div>
-    <div class="val-detail-item"><div class="vd-label">PB（价格/净资产）</div>
-      <div class="vd-value">${_pb ? _pb.toFixed(2) : '--'}${_pbPct != null ? `<span style="font-size:10px;color:var(--text-muted);margin-left:4px;">近5年${_pbPct}%分位</span>` : ''}</div></div>
-    <div class="val-detail-item"><div class="vd-label">股息率（分红/价格）</div>
-      <div class="vd-value">${_dy ? _dy.toFixed(2) + '%' : '--'}</div></div>
-  `;
-  document.getElementById('d-val-detail').innerHTML = valItemsHtml;
+  const _hasVal = !!_vl && _vl !== 'unknown';
+  const valConcl = _hasVal ? _valuationKey(_vl) : '--';
+  const valColor = _hasVal ? (DEVIATION_COLORS[valConcl] || '#6b7280') : '#6b7280';
+  const valParts = [`估值：<b style="color:${valColor};">${valConcl}</b>${_hasVal ? '（模型）' : ''}`];
+  if (_pe != null) valParts.push(`PE ${_pe.toFixed(1)}${_pePct != null ? `（近5年${_pePct}%分位）` : ''}`);
+  if (_pb != null) valParts.push(`PB ${_pb.toFixed(2)}${_pbPct != null ? `（近5年${_pbPct}%分位）` : ''}`);
+  if (_dy != null) valParts.push(`股息 ${_dy.toFixed(2)}%`);
+  if (_hasVal && _pe == null && _pb == null) valParts.push('PE/PB 缺失');
+  // 549-B5：模型估值与历史分位方向冲突时给出可见口径说明
+  const _lowVal = _vl === 'extreme_low' || _vl === 'low';
+  const _highVal = _vl === 'high' || _vl === 'extreme_high';
+  const _pctHigh = (_pePct != null && _pePct >= 70) || (_pbPct != null && _pbPct >= 70);
+  const _pctLow = (_pePct != null && _pePct <= 30) || (_pbPct != null && _pbPct <= 30);
+  const _valConflict = (_lowVal && _pctHigh) || (_highVal && _pctLow);
+  const valSection = document.getElementById('d-valuation-section');
+  if (!_hasVal && _pe == null && _pb == null && _dy == null) {
+    if (valSection) valSection.style.display = 'none';
+    document.getElementById('d-val-detail').innerHTML = '';
+  } else {
+    if (valSection) valSection.style.display = '';
+    document.getElementById('d-val-detail').innerHTML =
+      `<div style="grid-column:1/-1;font-size:12px;line-height:1.7;color:var(--text-secondary);" title="模型估值=估值偏差模型；近5年分位=历史位置，两者口径不同，可能方向不一致">💎 ${valParts.join(' · ')}${_valConflict ? ' <span style="color:#b45309;">⚠ 模型与5年分位方向不一致（口径不同）</span>' : ''} <span style="font-size:10px;color:var(--text-muted);">ⓘ</span></div>`;
+  }
 
   // 操作建议本地近似（321号 S5：优先按跨维仲裁结论；最终以异步 diagnose L4 为准覆盖）
   const _st = data.opportunityState || '';
@@ -1934,7 +1982,7 @@ function showDetail(data) {
   document.getElementById('d-advice').innerHTML = `
     <div style="font-weight:600;font-size:14px;color:var(--text-primary);">${advice}</div>
     <div style="margin-top:var(--space-4);font-size:12px;color:var(--text-muted);">
-      信号强度 ${data.signalStrength == null ? '未计算' : Math.round(data.signalStrength) + '/100'} · ${oLabel}
+      潜力（慢） ${data.signalStrength == null ? '未计算' : Math.round(data.signalStrength) + '/100'} · ${oLabel}
       ${_st ? ` · 状态: ${STATE_CN[_st] || _st}` : (data.rightSideConfirm ? ` · 右侧确认: ${data.rightSideConfirm}` : '')}
     </div>
     ${data.confirmEvidence && data.confirmEvidence.length ? `
@@ -1943,15 +1991,8 @@ function showDetail(data) {
       </div>` : ''}
   `;
 
-  // 风险提示（320号 S1 简述化：只显示最关键的 1 条；完整风险在个股页详版）
-  const risks = [];
-  if (data.signalStrength < 30) risks.push('信号强度偏低，趋势不明朗');
-  if (['high', 'extreme_high'].includes(data.valuation || '')) risks.push('估值偏高，安全边际不足');
-  if ((data.valuation || '') === 'extreme_low') risks.push('估值深度低估，需确认是否存在基本面风险');
-  if (!risks.length && data.signalStrength >= 40) risks.push('各维度信号一致，系统建议可参考');
-  document.getElementById('d-risk').innerHTML = risks.length > 0
-    ? `<div>⚠ ${risks[0]}</div>`   // 简述版只显示关键 1 条
-    : '<div style="font-size:12px;color:var(--text-muted);">暂无特别风险提示</div>';
+  // 549-C：风险提示由 diagnose risk_warnings 填充
+  document.getElementById('d-risk').innerHTML = '<div style="font-size:12px;color:var(--text-muted);">风险提示加载中…</div>';
 
   document.getElementById('detailOverlay').classList.add('open');
 
@@ -1961,59 +2002,49 @@ function showDetail(data) {
     .then(json => {
       if (!json.success || !json.data) return;
       const diag = json.data;
+      // 549-B6：事件加成只做徽标，主数字仍用基础潜力
+      if (data.signalStrength != null && diag.signal_strength_adjusted != null) {
+        const _adj = Number(diag.signal_strength_adjusted);
+        if (Number.isFinite(_adj)) {
+          data._adjustedStrength = _adj;
+          _renderDetailPrice(data);
+        }
+      }
       const cv = diag.cross_validation || {};
       const con = cv.consensus || {};
       const verdictEl = document.getElementById('d-verdict');
       if (con.total_active && con.total_active > 0) {
         // L2修复：多空打平显示"多空分歧"而非误导为 0% 无共识
-        const dir = con.tie
-          ? '多空分歧'
-          : con.direction === 'bullish' ? '看多' : con.direction === 'bearish' ? '看空' : '中性';
         verdictEl.innerHTML =
           `★ ${con.bullish_votes}看多 / ${con.bearish_votes}看空 / ${con.neutral_votes}中性` +
           (con.tie
             ? ` &nbsp; <span style="color:var(--warn,#e6a23c);font-weight:600;">共识分歧（多空打平）</span>`
-            : ` &nbsp; 共识率 ${(con.consensus_rate * 100).toFixed(0)}%（${dir}）`) +
+            : ` &nbsp; 共识 ${fmtConsensus(con.consensus_rate, con.direction)}`) +
           (cv.verdict ? `<br/><span style="font-size:12px;color:var(--text-muted);margin-top:4px;display:block;">${cv.verdict}</span>` : '');
       }
       // 336号 成品仓切换：优先消费 status_engine 权威结论（status_verdict），
       // 回退 status_snapshot（diag.dim_states）——双模块唯一消费源
       const svd = diag.status_verdict || null;
       const dimStates = svd || (diag.dim_states || null);
-      const dimEl = document.getElementById('d-dim-lights');
-      if (dimStates && dimStates.dim_states && dimEl) {
-        const dm = dimStates.dim_states;
-        const _names = {valuation:'估值',structure:'结构',vp:'量价',position:'位置',chip_fund:'筹码资金',
-          emotion:'情绪',finance:'财务',event:'事件',time:'时间',risk:'风险',factor:'因子',
-          signal_confirm:'信号确认'};
-        dimEl.innerHTML = Object.keys(_names).map(k => {
-          const d = dm[k] || {};
-          const icon = d.light === 'green' ? '🟢' : d.light === 'red' ? '🔴' : '🟡';
-          const tip = (d.evidence || []).join('; ') || _names[k];
-          return `<span style="margin:0 5px 4px 0;display:inline-block;cursor:help;" title="${tip}">${icon}${_names[k]}</span>`;
-        }).join('') +
-          (dimStates.status_bar ? ` &nbsp; <b style="font-size:12px;">${dimStates.status_bar}</b>` : '');
+      const barEl = document.getElementById('d-status-bar');
+      if (barEl) {
+        const dm = dimStates && dimStates.dim_states;
+        const _riskDim = dm && dm.risk;
+        const _bar = dimStates && dimStates.status_bar;
+        const _stForBar = (svd && svd.opportunity_state) || (dimStates && dimStates.opportunity_state) || '';
+        const _barOk = _bar && (STATUS_BAR_OK[_stForBar] || []).includes(_bar);
+        const _parts = [];
+        if (_riskDim && _riskDim.state) _parts.push(`技术风险：${_riskDim.state}`);
+        if (_barOk) _parts.push(`辅助状态：${_bar}`);
+        barEl.innerHTML = _parts.join(' · ');
       }
       // 336号：弹窗状态行优先 status_verdict（维度共识口径）
       if (svd && verdictEl) {
-        const dir2 = svd.direction === 'bullish' ? '看多' : svd.direction === 'bearish' ? '看空' : '中性';
-        verdictEl.innerHTML = `★ 维度共识 ${(svd.consensus_rate * 100).toFixed(0)}%（${dir2}）` +
+        verdictEl.innerHTML = `★ 维度共识 ${fmtConsensus(svd.consensus_rate, svd.direction)}` +
           ` &nbsp; <span style="font-weight:600;">${svd.opportunity_state === 'enter' ? '可入场' : svd.opportunity_state === 'light' ? '可轻仓' : svd.opportunity_state === 'reduce' ? '建议减仓' : svd.opportunity_state === 'avoid' ? '回避' : '观望'}</span>` +
           (cv.verdict ? `<br/><span style="font-size:12px;color:var(--text-muted);margin-top:4px;display:block;">${cv.verdict}</span>` : '');
       }
-      // 318号 S4：标签摘要升级为 diagnose.tags_summary 组合维度（每维度 2-3 项）
-      const ts = diag.tags_summary || {};
-      if (ts.direction || ts.position || ts.quality || ts.environment) {
-        const comboRows = [
-          { label: '方向', value: ts.direction, icon: '↗' },
-          { label: '位置', value: ts.position, icon: '📍' },
-          { label: '质量', value: ts.quality, icon: '🏗️' },
-          { label: '环境', value: ts.environment, icon: '🌤️' },
-        ];
-        document.getElementById('d-tag-summary').innerHTML = comboRows.map(r =>
-          `<div class="tag-summary-item"><div class="ts-label">${r.icon} ${r.label}</div><div class="ts-value">${r.value || '--'}</div></div>`
-        ).join('');
-      }
+      // 549-C：四格标签已移除，标签摘要不再渲染
       // 318号 S4：时间标注——潜力基于快照、时机截至实时（313号 C5）
       // 327阶段3：快照陈旧提示——若快照数据日 < 最近交易日，明确标注"数据截至 X"
       const now = new Date();
@@ -2027,6 +2058,52 @@ function showDetail(data) {
         tzEl.title = isStale ? `状态截至 ${STATUS_DATE}，行情/标签截至 ${DATA_DATE}` : '';
       }
       const oa = diag.operation_advice || {};
+      // 549-C：支撑/压力/盈亏比 + 入场/离场触发
+      const _geo = oa.geometric || {};
+      const _levelParts = [];
+      if (_geo.support_price != null) _levelParts.push(`支撑 ${_geo.support_price}`);
+      if (_geo.resistance_price != null) _levelParts.push(`压力 ${_geo.resistance_price}`);
+      if (_geo.risk_reward != null) _levelParts.push(`盈亏比 ${Number(_geo.risk_reward).toFixed(2)}`);
+      const _levelsEl = document.getElementById('d-levels');
+      if (_levelsEl) _levelsEl.textContent = _levelParts.join(' · ');
+
+      const _ex = oa.executable || {};
+      const _entryRule = Array.isArray(_ex.entry_rules) ? _ex.entry_rules[0] : null;
+      const _exitRule = Array.isArray(_ex.exit_rules) ? _ex.exit_rules[0] : null;
+      const _ruleText = (rule, label) => {
+        if (!rule) return '';
+        const _size = rule.size_pct != null ? `（${rule.size_pct}%）` : '';
+        return `${label}：${rule.trigger || '--'}${_size}`;
+      };
+      const _trigLines = [_ruleText(_entryRule, '入场'), _ruleText(_exitRule, '离场')].filter(Boolean);
+      const _trigSection = document.getElementById('d-triggers-section');
+      const _trigEl = document.getElementById('d-triggers');
+      if (_trigSection && _trigEl) {
+        if (_trigLines.length) {
+          _trigSection.style.display = '';
+          _trigEl.innerHTML = _trigLines.map((t, i) =>
+            `<div style="margin-top:${i ? '4px' : '0'};">${_esc(t)}</div>`
+          ).join('');
+        } else {
+          _trigSection.style.display = 'none';
+          _trigEl.innerHTML = '';
+        }
+      }
+      // 549-B1：三条关键依据（summary/state_evidence + 红黄维）
+      const _evLines = _buildEvidenceLines(data, oa);
+      const _evSection = document.getElementById('d-evidence-section');
+      const _evEl = document.getElementById('d-evidence');
+      if (_evSection && _evEl) {
+        if (_evLines.length) {
+          _evSection.style.display = '';
+          _evEl.innerHTML = _evLines.map((t, i) =>
+            `<div style="margin-top:${i === 0 ? '0' : '4px'};"><span style="color:var(--text-muted);">${i === 0 ? '①' : '•'}</span> ${_esc(t)}</div>`
+          ).join('');
+        } else {
+          _evSection.style.display = 'none';
+          _evEl.innerHTML = '';
+        }
+      }
       if (oa.label || oa.action_label) {
         // 323号 S7b：弹窗精简 4 要素（信号灯 + 动作 + 仓位 + 止损）——第一屏快速浏览
         const _sl = oa.stop_loss;
@@ -2044,21 +2121,52 @@ function showDetail(data) {
         const _act = oa.action_label || oa.label || '';
         const _pos = (oa.max_position_ratio != null ? oa.max_position_ratio : 0);
         const _posPct = Math.round(_pos * 100) + '%';
+        // 549-A：状态与动作不一致时只提示「动作已降级」，不改 L2 state
+        const _conflict = svd ? actionConflict(svd.opportunity_state, _act) : null;
+        const _conflictReason = _conflict
+          ? _shortReason(oa.summary || oa.state_reason || _firstEvidence(data) || '动作与状态不一致', 100)
+          : '';
+        // 549-A：invalidation 是结构防守位，与执行止损分开展示，避免同屏两个「止损」
+        const _invRaw = (oa.invalidation && oa.invalidation.length) ? String(oa.invalidation[0]) : '';
+        const _invTxt = _invRaw ? fmtDefenceText(_invRaw) : '';
+        const _defPrice = extractDefencePrice(_invRaw);
+        const _nearDef = _defPrice != null && data.price && _defPrice >= data.price * 0.995;
         document.getElementById('d-advice').innerHTML =
           `<div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:var(--text-primary);">` +
           `<span style="font-size:16px;color:${_lightColor};">${_light}</span>` +
-          `<span>${_act}</span>` +
+          `<span>${_esc(_act)}</span>` +
           (oa.confidence ? `<span style="font-size:11px;color:var(--text-muted);font-weight:400;">置信度${oa.confidence}</span>` : '') +
           `</div>` +
           `<div style="margin-top:var(--space-4);font-size:12px;color:var(--text-muted);">` +
           `仓位 ${_posPct}${_slTxt ? ' · ' + _slTxt : ''}` +
           `</div>` +
-          (oa.invalidation && oa.invalidation.length
-            ? `<div style="margin-top:var(--space-4);font-size:11px;color:#dc2626;">⚠ ${oa.invalidation[0]}</div>` : '');
+          (_conflict
+            ? `<div style="margin-top:var(--space-4);padding:4px 8px;border-radius:4px;background:rgba(230,162,60,.12);border:1px solid rgba(230,162,60,.35);font-size:11px;line-height:1.5;color:#b45309;" title="${_esc(_conflictReason)}">⚠ 动作待复核：状态「${_esc(STATE_CN[_conflict.state] || _conflict.state)}」与动作「${_esc(_act)}」不一致${_conflictReason ? '；' + _esc(_conflictReason) : ''}</div>`
+            : '') +
+          (_invTxt
+            ? `<div style="margin-top:var(--space-4);font-size:11px;color:#dc2626;" title="${_esc(_invRaw)}">⚠ ${_esc(_invTxt)}${_nearDef ? '（现价已贴近）' : ''}</div>`
+            : '');
       }
-      // 320号 S1 简述化：异步风险警告只显示最关键 1 条（完整在个股页）
-      const risks = (diag.risk_warnings || []).map(r => '⚠ ' + r.content);
-      if (risks.length) document.getElementById('d-risk').innerHTML = `<div>${risks[0]}</div>`;
+      // 549-B3：技术风险灯与“其他风险（N 条）”分离，避免绿风险+软风险同屏互斥
+      const _riskList = Array.isArray(diag.risk_warnings) ? diag.risk_warnings : [];
+      const _riskEl = document.getElementById('d-risk');
+      if (_riskEl) {
+        if (_riskList.length) {
+          const _types = [...new Set(_riskList.map(r => (r && r.type) || '').filter(Boolean))];
+          const _typeTxt = _types.length ? `（${_types.map(t => RISK_TYPE_CN[t] || t).join(' / ')}）` : '';
+          const _firstRisk = _riskList[0];
+          const _firstTxt = typeof _firstRisk === 'string' ? _firstRisk : ((_firstRisk && _firstRisk.content) || '');
+          const _allRiskTxt = _riskList
+            .map(r => typeof r === 'string' ? r : ((r && r.content) || ''))
+            .filter(Boolean).join('；');
+          _riskEl.innerHTML =
+            `<div style="font-size:11px;color:var(--text-muted);margin-bottom:2px;">其他风险（${_riskList.length} 条）${_typeTxt}</div>` +
+            `<div title="${_esc(_allRiskTxt)}">⚠ ${_esc(_firstTxt)}</div>` +
+            (_riskList.length > 1 ? `<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">另有 ${_riskList.length - 1} 条，见个股策略分析页</div>` : '');
+        } else {
+          _riskEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">暂无其他风险提示</div>';
+        }
+      }
     })
     .catch(() => {});
 }
@@ -2075,6 +2183,32 @@ function goStockAnalysis() {
   const ts = _detailTsCode;
   closeDetail();
   if (ts) window.location.href = 'indicator-ide.html?ts_code=' + encodeURIComponent(ts);
+}
+
+// 549-C4：加入自选真实落库
+function addToWatchlist() {
+  const ts = _detailTsCode;
+  if (!ts) return;
+  const btn = document.getElementById('d-add-watch');
+  if (btn) { btn.disabled = true; btn.textContent = '加入中…'; }
+  fetch('/api/v3/watchlist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ts_code: ts })
+  })
+    .then(r => r.json())
+    .then(j => {
+      if (j && j.success) {
+        if (btn) btn.textContent = j.message || '✅ 已加入自选';
+      } else {
+        if (btn) { btn.disabled = false; btn.textContent = '📋 加入自选'; }
+        alert((j && j.error) || '加入自选失败');
+      }
+    })
+    .catch(() => {
+      if (btn) { btn.disabled = false; btn.textContent = '📋 加入自选'; }
+      alert('加入自选失败');
+    });
 }
 
 document.getElementById('detailOverlay').addEventListener('click', function(e) {
