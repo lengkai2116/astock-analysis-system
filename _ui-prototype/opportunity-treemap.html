@@ -411,7 +411,7 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
         <button class="btn btn-sm mode-opportunity-only" id="focusKeyBtn" onclick="toggleFocusKey()" title="只看潜力前20%且非回避的股票（313号默认视图引导）">🎯 只看重点</button>
         <button class="btn btn-sm mode-opportunity-only" id="presenceBtn" onclick="togglePresenceFilter()" title="只看有主力行为证据的股票（龙虎榜/股东户数/融资异动，313号）">🧲 有主力</button>
         <!-- 313号 §七2/3：时机色过滤（颜色状态）+ 潜力阈值组合筛选（仅机会地图） -->
-        <span class="mode-opportunity-only" style="font-size:11px;color:var(--text-muted);">时机</span>
+        <span class="mode-opportunity-only" style="font-size:11px;color:var(--text-muted);">机会</span>
         <button class="btn btn-sm mode-opportunity-only" id="timingBlueBtn" onclick="toggleTimingFilter('enter')" title="只看可入场（opportunity_state=enter，550-A 统一状态口径）">🟦可入场</button>
         <button class="btn btn-sm mode-opportunity-only" id="timingYellowBtn" onclick="toggleTimingFilter('light')" title="只看可轻仓（opportunity_state=light）">🟨可轻仓</button>
         <button class="btn btn-sm mode-opportunity-only" id="timingGrayBtn" onclick="toggleTimingFilter('wait')" title="只看等待（opportunity_state=wait）">⬜等待</button>
@@ -494,6 +494,7 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
     <div class="detail-section" id="d-conclusion-section">
       <h4>🎯 结论卡</h4>
       <div id="d-timing-row" style="font-size:12px;"></div>
+      <div id="d-execution-row" style="display:none;font-size:12px;margin-top:6px;padding:6px 8px;border-radius:6px;background:rgba(230,162,60,.08);border:1px solid rgba(230,162,60,.28);"></div>
       <div id="d-verdict" style="font-size:13px;color:var(--text-secondary);line-height:1.7;margin-top:4px;"></div>
       <div id="d-profile-explain" style="margin-top:2px;"></div>
       <div id="d-status-bar" style="font-size:10px;color:var(--text-muted);margin-top:4px;"></div>
@@ -583,7 +584,7 @@ const STATE_BADGE = {
   'light': ['🟨', '右侧基础确认，可轻仓'],
   'wait': ['⬜', '等待右侧确认'],
   'reduce': ['🟧', '评分处于减仓区，不新开仓'],
-  'avoid': ['🟫', '时机/风险否决，暂不操作'],
+  'avoid': ['🟫', '机会/风险否决，暂不操作'],
 };
 
 // 321号：状态机颜色（唯一结论源）——优先 opportunity_state，旧快照缺字段时回退 timingColor
@@ -1214,11 +1215,11 @@ function _stockTooltip(d, stockName) {
       : (CONFIRM_BADGE[d.rightSideConfirm] || ['⬜', '']);
     const badgeHtml = `<div style="margin-top:5px;font-size:12px;">${stateBadge[0]} <strong>${_stateText}</strong> ${stateBadge[1]}${d.rightSideConfirm ? `<span style="color:#94A3B8;font-size:11px;margin-left:6px;">右侧确认 ${d.rightSideConfirm}</span>` : ''}</div>`;
     const consensusHtml = d.consensusRate != null ? `<div style="font-size:11px;color:#94A3B8;margin-top:3px;">🧭 L4共识 ${fmtConsensus(d.consensusRate)}${Math.abs(d.consensusRate) >= 0.65 ? '（方向可信）' : '（方向待确认）'}</div>` : '';
-    const timingNote = `<div style="font-size:11px;color:#8b93a7;margin-top:4px;border-top:1px solid #2e3245;padding-top:4px;">大小=机会潜力（长期，≠现在入场）· 颜色/时机=机会状态机（右侧确认仅作闸门证据）</div>`;
+    const timingNote = `<div style="font-size:11px;color:#8b93a7;margin-top:4px;border-top:1px solid #2e3245;padding-top:4px;">大小=机会潜力（长期，≠现在入场）· 颜色/机会=机会状态机（右侧确认仅作闸门证据）· 执行建议见点击弹窗</div>`;
     return `
       <div style="font-size:13px;font-weight:600;margin-bottom:4px;">${displayName} <span style="font-size:11px;color:#6b728c;">${d.tsCode}</span></div>
       <div style="font-size:12px;margin-bottom:4px;">
-        <span style="color:${effectiveTimingColor(d)};font-weight:600;">● 时机：${_stateText}</span>
+        <span style="color:${effectiveTimingColor(d)};font-weight:600;">● 机会：${_stateText}</span>
         ${d.evidenceCount ? `<span style="color:#94A3B8;font-size:11px;margin-left:4px;">证据 ${d.evidenceCount}</span>` : ''}
       </div>
       ${badgeHtml}
@@ -1539,9 +1540,10 @@ function renderSideList() {
 
       if (mode === 'opportunity') {
         html += `信号强度 <b>${Math.round(s.signalStrength || 0)}</b>/100<br/>` +
-          `时机 <b style="color:${effectiveTimingColor(s)}">${effectiveTimingText(s)}</b>` +
+          `机会 <b style="color:${effectiveTimingColor(s)}">${effectiveTimingText(s)}</b>` +
           (s.rightSideConfirm ? ` <span style="color:#8b93a7;">右侧确认 ${s.rightSideConfirm}</span>` : '') +
           (s.consensusRate != null ? `（共识 ${fmtConsensus(s.consensusRate)}）` : '') +
+          `<br/><span style="color:#8b93a7;">执行建议见点击弹窗</span>` +
           (s.opportunityLabel ? `<br/>类型 <b>${s.opportunityLabel}</b>` : '') +
           `<br/>涨跌 <b style="color:${pctCol}">${s.pctChange >= 0 ? '+' : ''}${s.pctChange.toFixed(2)}%</b>`;
       } else if (mode === 'value') {
@@ -1653,7 +1655,7 @@ function updateLegend() {
     // 2026-08-04 方案A：机会地图颜色为离散四色时机（蓝/黄/灰/棕），
     // 移除连续渐变条（原为蓝→红五色，含红绿违背 313 §5.2），改四色块标记
     showBar(false);
-    labelEl.textContent = '时机信号 · 蓝=可入场(深=共识≥70%) 黄=可轻仓 灰=等待 棕=回避';
+    labelEl.textContent = '机会状态 · 蓝=可入场(深=共识≥70%) 黄=可轻仓 灰=等待 棕=回避 · 点击看执行建议';
     itemsEl.innerHTML = `
       <span>⬜ 方块大小 = <strong style="color:#f59e0b;">机会潜力强度</strong></span>
       <span>
@@ -1663,7 +1665,7 @@ function updateLegend() {
         <span class="legend-chip" style="background:#8b5a2b;"></span>回避
       </span>
       <span style="color:#6b728c;">|</span>
-      <span>🖱️ 悬停查看强度构成+时机证据</span>
+      <span>🖱️ 悬停查看强度构成+机会证据</span>
       <span>👆 点击进入个股诊断</span>
     `;
   } else {
@@ -1723,19 +1725,60 @@ function fmtConsensus(rate, direction) {
   return pct === 0 ? '中性 0%' : `中性 ${pct}%`;
 }
 
-// 549-A：状态与动作的预期对应；不匹配时加「动作待复核」徽标，不直接改 L2 状态
-const STATE_ACTION_EXPECT = {
-  enter: ['买入', '建仓', '加仓', '轻仓', '试探'],
-  light: ['轻仓', '买入', '试仓', '建仓', '试探'],
-  wait: ['观望', '等待', '持有'],
-  reduce: ['减仓', '减持', '清仓', '回避'],
-  avoid: ['清仓', '回避', '卖出', '减仓'],
-};
-function actionConflict(state, actionLabel) {
-  const expect = STATE_ACTION_EXPECT[state];
-  if (!expect || !actionLabel) return null;
-  if (expect.some(w => actionLabel.includes(w))) return null;
-  return { state, actionLabel };
+// 551-A：机会（方向）与执行（新开）分层——执行层单独取 operation_advice
+function executionMeta(oa) {
+  const state = String((oa && oa.state) || '');
+  const action = String((oa && (oa.action_label || oa.label)) || '');
+  const reason = String((oa && (oa.state_reason || oa.summary)) || '');
+  const g = (oa && oa.geometric) || {};
+  const _num = v => (v != null && Number.isFinite(Number(v))) ? Number(v) : null;
+  const rr = _num(g.risk_reward);
+  const dr = _num(g.dist_to_resistance_pct);
+  const ds = _num(g.dist_to_support_pct);
+  const wait = state === 'wait' || /观望|持有/.test(action);
+  const label = wait
+    ? `暂不新开（${action || '持有/观望'}）`
+    : state === 'reduce' ? '减仓/减持'
+    : state === 'avoid' ? '回避/不参与'
+    : (action || '可新开');
+  const color = wait ? '#b45309'
+    : state === 'enter' ? '#2563eb'
+    : state === 'light' ? '#a16207'
+    : '#8b5a2b';
+  const pos = _num(oa && oa.max_position_ratio);
+  return { state, action, reason, rr, dr, ds, wait, label, color, posPct: pos == null ? 0 : Math.round(pos * 100) };
+}
+
+function renderExecutionRow(oa) {
+  const el = document.getElementById('d-execution-row');
+  if (!el) return;
+  if (!oa || (!oa.state && !oa.action_label && !oa.summary)) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  const m = executionMeta(oa);
+  const rrBits = [];
+  if (m.rr != null) rrBits.push(`RR ${m.rr.toFixed(2)}${m.rr < 2 ? ' <2' : ''}`);
+  if (m.dr != null) rrBits.push(`上方 ${m.dr > 0 ? '+' : ''}${m.dr.toFixed(2)}%`);
+  if (m.ds != null) rrBits.push(`下方 ${m.ds.toFixed(2)}%`);
+  const rrHtml = rrBits.length
+    ? `<span style="color:var(--text-muted);font-size:11px;">${_esc(rrBits.join(' · '))}</span>`
+    : '';
+  const reasonHtml = m.reason
+    ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px;">原因：${_esc(_shortReason(m.reason, 110))}</div>`
+    : '';
+  const posText = m.wait
+    ? `新开 0% · 持有上限 ${m.posPct}%`
+    : `仓位上限 ${m.posPct}%`;
+  el.style.display = '';
+  el.innerHTML =
+    `<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;">` +
+    `<span style="font-size:11px;color:var(--text-muted);">🧭 执行（新开）</span>` +
+    `<span style="color:${m.color};font-weight:600;">${_esc(m.label)}</span>` +
+    rrHtml +
+    `</div>` + reasonHtml +
+    `<div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${_esc(posText)}</div>`;
 }
 
 function _esc(s) {
@@ -1879,9 +1922,12 @@ function showDetail(data) {
   _detailTsCode = data.tsCode;
   _detailPanelOpen = true;
   // 549-C：切股先清空上一只的六区动态块，避免 diagnose 返回前短暂串股
-  ['d-status-bar', 'd-levels', 'd-triggers', 'd-evidence', 'd-ts-timestamp'].forEach(id => {
+  ['d-status-bar', 'd-levels', 'd-triggers', 'd-evidence', 'd-execution-row', 'd-ts-timestamp'].forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.innerHTML = '';
+    if (el) {
+      el.innerHTML = '';
+      if (id === 'd-execution-row') el.style.display = 'none';
+    }
   });
   const _evSecReset = document.getElementById('d-evidence-section');
   if (_evSecReset) _evSecReset.style.display = 'none';
@@ -1904,10 +1950,10 @@ function showDetail(data) {
   const tColor = effectiveTimingColor(data);
   const tText = effectiveTimingText(data);
   document.getElementById('d-timing-row').innerHTML = `
-    <span style="font-size:12px;color:var(--text-muted);">⏱ 时机（快）</span>
+    <span style="font-size:12px;color:var(--text-muted);">🎯 机会（方向）</span>
     <span style="color:${tColor};font-weight:600;font-size:13px;">● ${tText}</span>
     ${data.consensusRate != null ? `<span style="color:var(--text-muted);font-size:11px;margin-left:6px;">L4共识 ${fmtConsensus(data.consensusRate)}</span>` : ''}
-    ${data.opportunityState ? `<span style="color:var(--text-muted);font-size:11px;margin-left:6px;">仲裁</span>` : ''}
+    ${data.opportunityState ? `<span style="color:var(--text-muted);font-size:11px;margin-left:6px;">机会判定</span>` : ''}
   `;
 
   // 318号 S2/S3：机会类型降为辅助文本行（灰色小字，非颜色主信号）
@@ -1921,7 +1967,7 @@ function showDetail(data) {
   const explainParts = [];
   if (data.signalStrength >= 70 && (_state === 'avoid' || _state === 'reduce')) {
     explainParts.push(`<div style="margin-top:6px;font-size:11px;color:var(--warn,#e6a23c);background:rgba(230,162,60,0.08);padding:4px 8px;border-radius:4px;">
-      ⚠ 高潜力 ${Math.round(data.signalStrength)}/100（慢变量），但时机${_state === 'avoid' ? '否决' : '建议减仓'}（快变量），当前以时机为准
+      ⚠ 高潜力 ${Math.round(data.signalStrength)}/100（慢变量），但机会状态${_state === 'avoid' ? '否决' : '建议减仓'}（方向判定），当前以机会状态为准
     </div>`);
   }
   const _explainEl = document.getElementById('d-profile-explain');
@@ -1986,7 +2032,7 @@ function showDetail(data) {
 
   // 操作建议本地近似（321号 S5：优先按跨维仲裁结论；最终以异步 diagnose L4 为准覆盖）
   const _st = data.opportunityState || '';
-  const advice = _st === 'avoid' ? '🚫 回避：时机/风险信号否决，暂不操作' :
+  const advice = _st === 'avoid' ? '🚫 回避：机会/风险信号否决，暂不操作' :
                  _st === 'wait' ? '⏳ 等待：右侧信号未确认，仅观察' :
                  _st === 'reduce' ? '🟠 减仓：评分处于减仓区（30-44），建议持有者降至30%以下、不新开仓' :
                  _st === 'light' ? '🟡 可轻仓：右侧基础确认，控制仓位' :
@@ -2059,7 +2105,7 @@ function showDetail(data) {
       // 336号：弹窗状态行优先 status_verdict（维度共识口径）
       if (svd && verdictEl) {
         verdictEl.innerHTML = `★ 维度共识 ${fmtConsensus(svd.consensus_rate, svd.direction)}` +
-          ` &nbsp; <span style="font-weight:600;">${svd.opportunity_state === 'enter' ? '可入场' : svd.opportunity_state === 'light' ? '可轻仓' : svd.opportunity_state === 'reduce' ? '建议减仓' : svd.opportunity_state === 'avoid' ? '回避' : '观望'}</span>` +
+          ` &nbsp; <span style="font-weight:600;">机会：${svd.opportunity_state === 'enter' ? '可入场' : svd.opportunity_state === 'light' ? '可轻仓' : svd.opportunity_state === 'reduce' ? '建议减仓' : svd.opportunity_state === 'avoid' ? '回避' : '观望'}</span>` +
           (cv.verdict ? `<br/><span style="font-size:12px;color:var(--text-muted);margin-top:4px;display:block;">${cv.verdict}</span>` : '');
       }
       // 549-C：四格标签已移除，标签摘要不再渲染
@@ -2076,6 +2122,7 @@ function showDetail(data) {
         tzEl.title = isStale ? `状态截至 ${STATUS_DATE}，行情/标签截至 ${DATA_DATE}` : '';
       }
       const oa = diag.operation_advice || {};
+      renderExecutionRow(oa);
       // 549-C：支撑/压力/盈亏比 + 入场/离场触发
       const _geo = oa.geometric || {};
       const _levelParts = [];
@@ -2139,11 +2186,10 @@ function showDetail(data) {
         const _act = oa.action_label || oa.label || '';
         const _pos = (oa.max_position_ratio != null ? oa.max_position_ratio : 0);
         const _posPct = Math.round(_pos * 100) + '%';
-        // 549-A：状态与动作不一致时只提示「动作已降级」，不改 L2 state
-        const _conflict = svd ? actionConflict(svd.opportunity_state, _act) : null;
-        const _conflictReason = _conflict
-          ? _shortReason(oa.summary || oa.state_reason || _firstEvidence(data) || '动作与状态不一致', 100)
-          : '';
+        // 551-A：机会与执行分层——执行观望时明确“新开 0%、仅保留持有上限”
+        const _isWait = oa.state === 'wait' || /观望|持有/.test(_act);
+        const _actText = _isWait ? `暂不新开（${_act || '持有/观望'}）` : (_act || '--');
+        const _posText = _isWait ? `新开 0% · 持有上限 ${_posPct}` : `仓位上限 ${_posPct}`;
         // 549-A：invalidation 是结构防守位，与执行止损分开展示，避免同屏两个「止损」
         const _invRaw = (oa.invalidation && oa.invalidation.length) ? String(oa.invalidation[0]) : '';
         const _invTxt = _invRaw ? fmtDefenceText(_invRaw) : '';
@@ -2152,15 +2198,12 @@ function showDetail(data) {
         document.getElementById('d-advice').innerHTML =
           `<div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:var(--text-primary);">` +
           `<span style="font-size:16px;color:${_lightColor};">${_light}</span>` +
-          `<span>${_esc(_act)}</span>` +
+          `<span>${_esc(_actText)}</span>` +
           (oa.confidence ? `<span style="font-size:11px;color:var(--text-muted);font-weight:400;">置信度${oa.confidence}</span>` : '') +
           `</div>` +
           `<div style="margin-top:var(--space-4);font-size:12px;color:var(--text-muted);">` +
-          `仓位 ${_posPct}${_slTxt ? ' · ' + _slTxt : ''}` +
+          `${_esc(_posText)}${_slTxt ? ' · ' + _slTxt : ''}` +
           `</div>` +
-          (_conflict
-            ? `<div style="margin-top:var(--space-4);padding:4px 8px;border-radius:4px;background:rgba(230,162,60,.12);border:1px solid rgba(230,162,60,.35);font-size:11px;line-height:1.5;color:#b45309;" title="${_esc(_conflictReason)}">⚠ 动作待复核：状态「${_esc(STATE_CN[_conflict.state] || _conflict.state)}」与动作「${_esc(_act)}」不一致${_conflictReason ? '；' + _esc(_conflictReason) : ''}</div>`
-            : '') +
           (_invTxt
             ? `<div style="margin-top:var(--space-4);font-size:11px;color:#dc2626;" title="${_esc(_invRaw)}">⚠ ${_esc(_invTxt)}${_nearDef ? '（现价已贴近）' : ''}</div>`
             : '');
@@ -2263,10 +2306,11 @@ function showLegendHelp() {
     '📊 市场地图：传统涨跌幅视图\n' +
     '  · 方块大小 = 流通市值\n' +
     '  · 颜色 = 涨跌幅（红涨绿跌）\n\n' +
-    '🎯 机会地图：机会信号视图（313号）\n' +
+    '🎯 机会地图：机会状态视图（313号）\n' +
     '  · 方块大小 = 机会潜力强度（越大机会越大，≠现在入场）\n' +
-    '  · 颜色 = 入场时机（蓝=可入场[深=共识≥70%，浅=67-70%] 黄=可轻仓 灰=等待 棕=回避）\n' +
-    '  · 可入场门槛 = 维度共识 ≥67%（336号 知识库 ≥2/3；三处结论一致优先于颜色激进）\n\n' +
+    '  · 颜色 = 机会状态（蓝=可入场[深=共识≥70%，浅=67-70%] 黄=可轻仓 灰=等待 棕=回避）\n' +
+    '  · 机会状态回答“有没有机会”；是否可新开以点击后的“执行（新开）”行为准\n' +
+    '  · 执行行展示 RR、上方目标空间、下方止损空间与门禁原因\n\n' +
     '💎 价值地图：估值定位视图\n' +
     '  · 方块大小 = 前收盘价\n' +
     '  · 颜色 = 估值等级（深绿=严重低估 → 深红=高估）\n' +

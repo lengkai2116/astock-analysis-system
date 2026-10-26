@@ -39,7 +39,7 @@ def test_click_passes_full_stock_item():
 
 def test_tooltip_and_sidebar_use_state_text():
     html = _html()
-    assert '● 时机：${_stateText}' in html
+    assert '● 机会：${_stateText}' in html
     assert 'effectiveTimingColor(d)' in html
     assert 'STATE_BADGE[_state]' in html
     assert '右侧确认 ${d.rightSideConfirm}' in html
