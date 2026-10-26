@@ -121,7 +121,7 @@ def test_s6_evaluate_accepts_asof_date(monkeypatch):
     se = _mk_status_engine(None, cache)
     # 截断 evaluate 下游（L0/L2/dim8/assemble 不在此测），只验证数据源选择
     monkeypatch.setattr(se, '_build_dim_engine_results',
-                        lambda tags, signals, dims, lifecycle, ts_code=None: {})
+                        lambda tags, signals, dims, lifecycle, ts_code=None, **kwargs: {})
     monkeypatch.setattr(se, '_convert_to_dims_format', lambda dr, tags: {})
     monkeypatch.setattr(se, '_apply_l0', lambda *a, **k: {})
     monkeypatch.setattr(se, '_aggregate_v390',

@@ -5934,7 +5934,8 @@ def _compute_snapshot_consensus_rate(t: dict) -> float:
 def _jud_enrich_with_meta(codes: list[str], as_of: str = None):
     """371号JUD接入：机会分类+潜力评分+右侧确认（预计算写入缓存供treemap使用）
 
-    在 _build_status_snapshot 之后、_build_treemap_snapshot 之前调用。
+    550-B：在 _build_status_snapshot 之前调用——其 RSC 同时供状态判定与
+    treemap 展示，避免「状态用旧 RSC、地图显示新 RSC」的双源。
     从 pre_feat_cache 加载原料标签，运行：
       1. _compute_opportunity_meta → opportunity_type/label/profile/evidence_count/entry/exit
       2. PotentialEngine.compute_potential → signal_strength/potential_breakdown
@@ -6042,6 +6043,27 @@ def _jud_enrich_with_meta(codes: list[str], as_of: str = None):
     # 2026-09-29 OCR #12：局部构建完成后原子替换（读者不再可能见半填状态）
     _jud_meta_cache = _jud_meta_new
     logger.info(f"  JUD机会判定完成: {enriched}/{len(codes)} 只 ({time.time()-t0:.1f}s)")
+
+
+def _jud_rsc_overrides(codes: list[str] | None = None) -> dict:
+    """550-B：取 JUD 重算的 RSC，作为状态判定的标签覆盖（与 treemap 展示同源）。
+
+    只覆盖 right_side_confirm / confirm_evidence；不改写 pre_feat，也不改变
+    其他标签。JUD 未产出 RSC 的股票不进入覆盖表，状态判定继续用 pre_feat。
+    """
+    allowed = set(codes) if codes else None
+    out: dict = {}
+    for _code, _meta in _jud_meta_cache.items():
+        if allowed is not None and _code not in allowed:
+            continue
+        _meta = _meta or {}
+        _rsc = _meta.get('right_side_confirm')
+        if _rsc:
+            out[_code] = {
+                'right_side_confirm': _rsc,
+                'confirm_evidence': _meta.get('confirm_evidence'),
+            }
+    return out
 
 
 # 540号批次2：treemap_snapshot 由 opportunity_tags_cache（08-19 停更）迁到
@@ -6243,7 +6265,7 @@ def _build_treemap_snapshot(codes: list[str], as_of: str = None):
         logger.info(f"  treemap: pre_feat 覆盖 {len(pre_map)} 只（540号批次2）")
 
     # 5a. 371号JUD接入：用 _jud_meta_cache 覆盖 opportunity_tags_cache 中的富化字段
-    #     （_jud_enrich_with_meta 在 _build_status_snapshot 之后已预计算）
+    #     （550-B：_jud_enrich_with_meta 已在状态判定前预计算）
     _meta_overlaid = 0
     for _code, _meta in _jud_meta_cache.items():
         if _code not in tags_map:
@@ -6942,13 +6964,16 @@ def _backfill_seven_dim_jud(ts_code: str, trade_date: str, dim_results,
         logger.debug(f"seven_dim 单源化回填失败 {ts_code}: {e}")
 
 
-def _build_status_snapshot(codes: list[str], as_of: str = None):
+def _build_status_snapshot(codes: list[str], as_of: str = None,
+                           rsc_overrides: dict | None = None):
     """337号 §3/§4：日频现状成品生成（S2 status_engine → status_snapshot 表）
 
     全市场结构化落库（九维状态/状态条/opportunity_state/conflict/共识），
     与 treemap_snapshot 同管道、原子表替换。
     545号 A3：as_of 指定历史交易日时，评估按该日、产物写 status_snapshot_history，
     不替换 live 表（回补不得覆盖最新日）。
+    550-B：rsc_overrides 传入 JUD 重算的 right_side_confirm/confirm_evidence，
+    状态判定与 treemap 展示共用同一 RSC（缺省不回退到全局缓存，避免旧值污染）。
     """
     import json as _json  # 495 遗留核查：_gen_summary/_dim_cache 引用 _json，本函数此前无局部导入会 NameError
     global _ecm
@@ -6965,6 +6990,9 @@ def _build_status_snapshot(codes: list[str], as_of: str = None):
     with _flask_app.app_context():
         from app.opportunity_atlas.status_engine import StatusEngine
         engine = StatusEngine()
+        _rsc_overrides = rsc_overrides or {}
+        if _rsc_overrides:
+            logger.info(f"  status_snapshot: 使用 JUD RSC 覆盖 {len(_rsc_overrides)} 只（550-B）")
         # 数据交易日（从日线取，独立于 treemap_snapshot——S1 先行构建时序）
         # 545号 A3：as_of 指定时以该日为数据日（历史回补不读最新日）
         trade_date = ''
@@ -7050,7 +7078,8 @@ def _build_status_snapshot(codes: list[str], as_of: str = None):
         # 370号S6：build_seven_dim_report已废弃，one_liner_detail由OUT从seven_dim_json透传
         for code in codes:
             try:
-                row = engine.evaluate(code, dim_results=_dim_cache.get(code), asof_date=as_of)
+                row = engine.evaluate(code, dim_results=_dim_cache.get(code), asof_date=as_of,
+                                      tag_overrides=_rsc_overrides.get(code))
                 if not row:
                     continue
                 # 364a Phase 1：生成summary_text
@@ -7772,9 +7801,9 @@ def _drive_pipeline():
     # ── 判定及操作建议阶段 JUD（370号方案S4）──
     if status.get('JUD', {}).get('status') != 'done':
         def _jud_build(_codes):
-            _build_status_snapshot(_codes)
-            # 371号JUD接入：PotentialEngine + opportunity_meta
+            # 550-B：先算 JUD 重算的 RSC，再让状态判定使用同一 RSC，最后构建地图
             _jud_enrich_with_meta(_codes)
+            _build_status_snapshot(_codes, rsc_overrides=_jud_rsc_overrides(_codes))
             _build_treemap_snapshot(_codes)
         _run_pipeline_step(today, 'JUD', _jud_build, codes)
         return

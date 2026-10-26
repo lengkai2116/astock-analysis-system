@@ -412,10 +412,10 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
         <button class="btn btn-sm mode-opportunity-only" id="presenceBtn" onclick="togglePresenceFilter()" title="只看有主力行为证据的股票（龙虎榜/股东户数/融资异动，313号）">🧲 有主力</button>
         <!-- 313号 §七2/3：时机色过滤（颜色状态）+ 潜力阈值组合筛选（仅机会地图） -->
         <span class="mode-opportunity-only" style="font-size:11px;color:var(--text-muted);">时机</span>
-        <button class="btn btn-sm mode-opportunity-only" id="timingBlueBtn" onclick="toggleTimingFilter('强确认')" title="只看可入场（强确认，313号 §七2 颜色过滤）">🟦可入场</button>
-        <button class="btn btn-sm mode-opportunity-only" id="timingYellowBtn" onclick="toggleTimingFilter('基础确认')" title="只看可轻仓（基础确认）">🟨可轻仓</button>
-        <button class="btn btn-sm mode-opportunity-only" id="timingGrayBtn" onclick="toggleTimingFilter('未确认')" title="只看等待（未确认）">⬜等待</button>
-        <button class="btn btn-sm mode-opportunity-only" id="timingBrownBtn" onclick="toggleTimingFilter('否决')" title="只看回避（否决）">🟫回避</button>
+        <button class="btn btn-sm mode-opportunity-only" id="timingBlueBtn" onclick="toggleTimingFilter('enter')" title="只看可入场（opportunity_state=enter，550-A 统一状态口径）">🟦可入场</button>
+        <button class="btn btn-sm mode-opportunity-only" id="timingYellowBtn" onclick="toggleTimingFilter('light')" title="只看可轻仓（opportunity_state=light）">🟨可轻仓</button>
+        <button class="btn btn-sm mode-opportunity-only" id="timingGrayBtn" onclick="toggleTimingFilter('wait')" title="只看等待（opportunity_state=wait）">⬜等待</button>
+        <button class="btn btn-sm mode-opportunity-only" id="timingBrownBtn" onclick="toggleTimingFilter('avoid')" title="只看回避（opportunity_state=avoid）">🟫回避</button>
         <span class="mode-opportunity-only" style="font-size:11px;color:var(--text-muted);">潜力≥</span>
         <input type="number" class="mode-opportunity-only" id="minStrength" min="0" max="100" step="10" value="0" onchange="applyMinStrength()"
           title="潜力阈值：只看潜力≥该值的股票（313号 §七3 组合筛选：大小阈值×颜色状态）"
@@ -578,6 +578,13 @@ const STATE_COLORS = {
   'avoid': '#8b5a2b',                             // 回避：棕
 };
 const STATE_CN = { 'enter': '可入场', 'light': '可轻仓', 'wait': '等待', 'reduce': '减仓', 'avoid': '回避' };
+const STATE_BADGE = {
+  'enter': ['🟦', '右侧确认+共识支持'],
+  'light': ['🟨', '右侧基础确认，可轻仓'],
+  'wait': ['⬜', '等待右侧确认'],
+  'reduce': ['🟧', '评分处于减仓区，不新开仓'],
+  'avoid': ['🟫', '时机/风险否决，暂不操作'],
+};
 
 // 321号：状态机颜色（唯一结论源）——优先 opportunity_state，旧快照缺字段时回退 timingColor
 function stateColor(state, consensus) {
@@ -590,17 +597,18 @@ function stateColor(state, consensus) {
   return STATE_COLORS.wait;
 }
 
+// 550-A：时机统一走 opportunity_state；旧快照无 state 时按右侧确认回退
+function effectiveState(s) {
+  if (s && s.opportunityState) return s.opportunityState;
+  return ({ '强确认': 'enter', '基础确认': 'light', '未确认': 'wait', '否决': 'avoid' }[s && s.rightSideConfirm] || 'wait');
+}
 // 321号：方块/弹窗时机色统一入口——有仲裁状态用状态机，否则回退旧闸门2映射
 function effectiveTimingColor(s) {
-  return s.opportunityState
-    ? stateColor(s.opportunityState, s.consensusRate)
-    : timingColor(s.rightSideConfirm, s.consensusRate);
+  return stateColor(effectiveState(s), s && s.consensusRate);
 }
 // 321号：时机语义文案（弹窗时机行）
 function effectiveTimingText(s) {
-  return s.opportunityState
-    ? (STATE_CN[s.opportunityState] || s.opportunityState)
-    : ({ '强确认': '可入场', '基础确认': '可轻仓', '未确认': '等待', '否决': '回避' }[s.rightSideConfirm] || '等待');
+  return STATE_CN[effectiveState(s)] || '等待';
 }
 
 // 机会类型 → 一句话大白话（307号§5.5.3 直白表述层）
@@ -751,6 +759,7 @@ async function loadMarketData() {
           // 321号：跨维仲裁结论（机会状态机，单一结论源——颜色/弹窗/建议优先读此字段；
           // 旧快照缺字段时兜底回退 rightSideConfirm 映射）
           opportunityState: s.opportunity_state || '',
+          stateEvidence: s.state_evidence || '',
           confirmEvidence: s.confirm_evidence || [],
           evidenceCount: s.evidence_count || 0,
           valDeviation: s.val_deviation || 0,
@@ -817,7 +826,7 @@ let _quotesPollTick = 0;  // 546号：全市场每 10 次轮询补一次详情�
 let sizeMode = 'cap';     // 310号：面积编码 cap=市值 amount=成交额
 let focusKey = false;     // 313号：只看重点（潜力前20% + 非回避）
 let presenceFilter = false;  // 313号：只看有主力行为证据（龙虎榜/股东户数/融资异动）
-let timingFilter = '';       // 313号 §七2：时机色过滤（''全部 / '强确认'/'基础确认'/'未确认'/'否决'）
+let timingFilter = '';       // 550-A：状态过滤（''全部 / 'enter'/'light'/'wait'/'avoid'）
 let minStrength = 0;         // 313号 §七3：潜力阈值组合筛选（0=不过滤）
 let SNAPSHOT_DATE = '';   // 313号：潜力快照日期（时间标注）
 let DATA_DATE = '';       // 327阶段3：数据交易日（快照 trade_date，陈旧提示用）
@@ -1014,13 +1023,13 @@ function computeVisibleStocks() {
   let filtered = getFilteredStocks();
   if (currentInd) filtered = filtered.filter(s => s.sector === currentInd);
   if (timingFilter && currentMode === 'opportunity') {
-    filtered = filtered.filter(s => s.rightSideConfirm === timingFilter);
+    filtered = filtered.filter(s => effectiveState(s) === timingFilter);
   }
   if (minStrength > 0) {
     filtered = filtered.filter(s => (s.signalStrength || 0) >= minStrength);
   }
   if (focusKey && currentMode === 'opportunity') {
-    const nonRejected = filtered.filter(s => s.rightSideConfirm !== '否决');
+    const nonRejected = filtered.filter(s => effectiveState(s) !== 'avoid');
     const p20 = [...nonRejected].sort((a, b) => (b.signalStrength || 0) - (a.signalStrength || 0))
       .slice(0, Math.max(1, Math.round(nonRejected.length * 0.2)));
     filtered = p20;
@@ -1198,14 +1207,18 @@ function _stockTooltip(d, stockName) {
     const _hasSs = d.signalStrength != null;
     const pct = _hasSs ? Math.max(0, Math.min(100, d.signalStrength)) : 0;
     const barColor = pct >= 70 ? '#22c55e' : pct >= 50 ? '#f59e0b' : pct >= 30 ? '#3b82f6' : '#6b7280';
-    const badge = CONFIRM_BADGE[d.rightSideConfirm];
-    const badgeHtml = badge ? `<div style="margin-top:5px;font-size:12px;">${badge[0]} <strong>${d.rightSideConfirm}</strong> ${badge[1]}</div>` : '';
+    const _state = d.opportunityState || '';
+    const _stateText = effectiveTimingText(d);
+    const stateBadge = _state
+      ? (STATE_BADGE[_state] || ['•', ''])
+      : (CONFIRM_BADGE[d.rightSideConfirm] || ['⬜', '']);
+    const badgeHtml = `<div style="margin-top:5px;font-size:12px;">${stateBadge[0]} <strong>${_stateText}</strong> ${stateBadge[1]}${d.rightSideConfirm ? `<span style="color:#94A3B8;font-size:11px;margin-left:6px;">右侧确认 ${d.rightSideConfirm}</span>` : ''}</div>`;
     const consensusHtml = d.consensusRate != null ? `<div style="font-size:11px;color:#94A3B8;margin-top:3px;">🧭 L4共识 ${fmtConsensus(d.consensusRate)}${Math.abs(d.consensusRate) >= 0.65 ? '（方向可信）' : '（方向待确认）'}</div>` : '';
-    const timingNote = `<div style="font-size:11px;color:#8b93a7;margin-top:4px;border-top:1px solid #2e3245;padding-top:4px;">大小=机会潜力（长期，≠现在入场）· 颜色=入场时机</div>`;
+    const timingNote = `<div style="font-size:11px;color:#8b93a7;margin-top:4px;border-top:1px solid #2e3245;padding-top:4px;">大小=机会潜力（长期，≠现在入场）· 颜色/时机=机会状态机（右侧确认仅作闸门证据）</div>`;
     return `
       <div style="font-size:13px;font-weight:600;margin-bottom:4px;">${displayName} <span style="font-size:11px;color:#6b728c;">${d.tsCode}</span></div>
       <div style="font-size:12px;margin-bottom:4px;">
-        <span style="color:${timingColor(d.rightSideConfirm, d.consensusRate)};font-weight:600;">● 时机：${d.rightSideConfirm || '未确认'}</span>
+        <span style="color:${effectiveTimingColor(d)};font-weight:600;">● 时机：${_stateText}</span>
         ${d.evidenceCount ? `<span style="color:#94A3B8;font-size:11px;margin-left:4px;">证据 ${d.evidenceCount}</span>` : ''}
       </div>
       ${badgeHtml}
@@ -1259,9 +1272,9 @@ function renderChart() {
         selectIndustry(d.name);
         return;
       }
-      // 个股 → 详情
+      // 个股 → 详情（550-A：传完整 stockItem，避免 ECharts 树对象丢 state 字段）
       if (params.data && params.data.tsCode && !params.data.isGroup) {
-        showDetail(params.data);
+        showDetail(_stockByName[params.data.tsCode] || params.data);
       }
     });
     window.addEventListener('resize', () => chart && chart.resize());
@@ -1436,7 +1449,7 @@ function togglePresenceFilter() {
 // 313号 §七2：时机色过滤切换（图例可点击过滤：只看可入场/轻仓/等待/回避）
 function toggleTimingFilter(level) {
   timingFilter = timingFilter === level ? '' : level;
-  const btnMap = { '强确认': 'timingBlueBtn', '基础确认': 'timingYellowBtn', '未确认': 'timingGrayBtn', '否决': 'timingBrownBtn' };
+  const btnMap = { 'enter': 'timingBlueBtn', 'light': 'timingYellowBtn', 'wait': 'timingGrayBtn', 'avoid': 'timingBrownBtn' };
   Object.entries(btnMap).forEach(([lv, id]) => {
     document.getElementById(id).classList.toggle('active', timingFilter === lv);
   });
@@ -1472,7 +1485,11 @@ function renderSideList() {
       const _hasSs = s.signalStrength != null;
       const pct = _hasSs ? Math.max(0, Math.min(100, s.signalStrength)) : 0;
       const barColor = pct >= 70 ? '#22c55e' : pct >= 50 ? '#f59e0b' : pct >= 30 ? '#3b82f6' : '#6b7280';
-      const badge = CONFIRM_BADGE[s.rightSideConfirm] ? CONFIRM_BADGE[s.rightSideConfirm][0] : '';
+      const _state = s.opportunityState || '';
+      const stateBadge = _state
+        ? (STATE_BADGE[_state] || ['•', ''])
+        : (CONFIRM_BADGE[s.rightSideConfirm] || ['⬜', '']);
+      const stateTitle = STATE_CN[_state] || effectiveTimingText(s);
       return `<div class="stock-row" data-ts="${s.tsCode}">
         ${nm}
         <span class="sig" style="flex:1;display:flex;align-items:center;gap:4px;">
@@ -1480,7 +1497,7 @@ function renderSideList() {
           <span style="flex:1;background:#2a2e41;border-radius:3px;height:6px;overflow:hidden;">
             <span style="display:block;height:100%;width:${pct}%;background:${barColor};"></span>
           </span>
-          ${badge ? `<span>${badge}</span>` : ''}
+          ${stateBadge ? `<span title="${stateTitle}">${stateBadge[0]}</span>` : ''}
         </span>
         <span class="pct" style="color:${pctCol}">${s.pctChange >= 0 ? '+' : ''}${s.pctChange.toFixed(2)}%</span>
       </div>`;
@@ -1522,7 +1539,8 @@ function renderSideList() {
 
       if (mode === 'opportunity') {
         html += `信号强度 <b>${Math.round(s.signalStrength || 0)}</b>/100<br/>` +
-          `时机 <b>${s.rightSideConfirm || '未确认'}</b>` +
+          `时机 <b style="color:${effectiveTimingColor(s)}">${effectiveTimingText(s)}</b>` +
+          (s.rightSideConfirm ? ` <span style="color:#8b93a7;">右侧确认 ${s.rightSideConfirm}</span>` : '') +
           (s.consensusRate != null ? `（共识 ${fmtConsensus(s.consensusRate)}）` : '') +
           (s.opportunityLabel ? `<br/>类型 <b>${s.opportunityLabel}</b>` : '') +
           `<br/>涨跌 <b style="color:${pctCol}">${s.pctChange >= 0 ? '+' : ''}${s.pctChange.toFixed(2)}%</b>`;

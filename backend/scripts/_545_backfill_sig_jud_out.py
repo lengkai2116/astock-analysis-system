@@ -128,9 +128,11 @@ def main() -> int:
         dd._precompute_strategy_signals(codes, as_of=date)
         print(f"  SIG 完成: {_count(ecm, 'strategy_signal_detail', 'trade_date', date)}")
 
-    print("  JUD: status_snapshot → history ...")
-    dd._build_status_snapshot(codes, as_of=date)
+    print("  JUD: opportunity meta/RSC ...")
     dd._jud_enrich_with_meta(codes, as_of=date)
+    print("  JUD: status_snapshot → history ...")
+    dd._build_status_snapshot(codes, as_of=date,
+                              rsc_overrides=dd._jud_rsc_overrides(codes))
     print("  JUD: treemap_snapshot → history ...")
     dd._build_treemap_snapshot(codes, as_of=date)
 

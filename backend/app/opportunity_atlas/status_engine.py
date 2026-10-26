@@ -259,7 +259,8 @@ class StatusEngine:
     # ══════════════════════════════════════════════════════════
 
     def evaluate(self, ts_code: str, dim_results: Optional[dict] = None,
-                 asof_date: Optional[str] = None) -> Optional[dict]:
+                 asof_date: Optional[str] = None,
+                 tag_overrides: Optional[dict] = None) -> Optional[dict]:
         """生产环节主流程：原料 → L1 → L0 → L2 → 成品仓行
 
         366号步骤3：重构为调用维度引擎，通过兼容层保持下游兼容。
@@ -269,15 +270,18 @@ class StatusEngine:
         507批次7（#S6）：新增 asof_date——回测历史求值，按该日期读 pre_feat/
             signal_detail 历史快照（消除逐日调用返回同一「当前」状态的前视偏差）；
             缺省读最新（日终管道行为不变）。
+        550-B：新增 tag_overrides——JUD 重算的 RSC/confirm_evidence 覆盖 pre_feat
+            同名标签，使状态判定与 treemap 展示同源；覆盖只用于本次求值，不写回 pre_feat。
 
         Args:
             ts_code: 股票代码
             dim_results: 预计算的维度引擎结果（可选），跳过 _build_dim_engine_results
             asof_date: 历史求值日期（YYYY-MM-DD/YYYYMMDD 兼容；可选）
+            tag_overrides: 标签覆盖（可选，当前用于 right_side_confirm/confirm_evidence）
 
         Returns: status_snapshot 行 dict（或 None 数据缺失）
         """
-        tags = self._load_tags(ts_code, asof_date=asof_date)
+        tags = self._load_tags(ts_code, asof_date=asof_date, tag_overrides=tag_overrides)
         signals = self._load_signals(ts_code, asof_date=asof_date)
         if not tags and not signals:
             return None
@@ -334,21 +338,26 @@ class StatusEngine:
     # 原料加载（存储层只读）
     # ══════════════════════════════════════════════════════════
 
-    def _load_tags(self, ts_code: str, asof_date: Optional[str] = None) -> dict:
+    def _load_tags(self, ts_code: str, asof_date: Optional[str] = None,
+                   tag_overrides: Optional[dict] = None) -> dict:
         """加载原料标签（357号方案：读pre_feat_cache）
 
         pre_feat_cache 是嵌套JSON（11组特征），需扁平化为下游期望的flat dict格式。
         P4已废弃，不再回退opportunity_tags_cache。
         507批次7（#S6）：asof_date 提供时按该日期读历史 pre_feat（回测消除前视）。
+        550-B：tag_overrides 在扁平化后覆盖同名键（JUD 重算 RSC 优先）。
         """
+        flat: dict = {}
         try:
             pre_feat = self.dm.cache.get_pre_feat(
                 ts_code, trade_date=_norm_date(asof_date, compact=False) if asof_date else None)
             if pre_feat:
-                return self._flatten_pre_feat(pre_feat)
+                flat = self._flatten_pre_feat(pre_feat)
         except Exception as e:
             logger.debug("pre_feat 读取失败 %s: %s", ts_code, e)
-        return {}
+        if tag_overrides:
+            flat.update({k: v for k, v in tag_overrides.items() if v is not None})
+        return flat
 
     @staticmethod
     def _flatten_pre_feat(pre_feat: dict) -> dict:
@@ -1140,8 +1149,10 @@ class StatusEngine:
 
         # ⚡ L4 致命冲突 → wait
         if conflict.get('fatal_to_veto'):
+            # 550-B：wait 分数取档位下界 45（原 30.0 按 80/65/45/30 会被读成 reduce）；
+            # 与 factor_arbiter 的 fatal_to_veto 分支保持一致。
             return self._v390_result('wait', conflict['fatal_to_veto'],
-                                     consensus, conflict, 30.0, reliability)
+                                     consensus, conflict, 45.0, reliability)
 
         # L5: 多因子仲裁
         # 494号（R-2/R-10）：周线（背景周期）方向须从 dim_results（dim2 多级别联立）取——
