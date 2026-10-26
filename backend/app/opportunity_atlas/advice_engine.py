@@ -13,6 +13,7 @@ import math
 from typing import Any
 
 from app.opportunity_atlas.dim_adapter import _weekly_dir_from_multi_level
+from app.opportunity_atlas.dimensions.shared_support_resistance import format_rr_gate_reason
 
 # 494号（R-3）：止损/止盈唯一实现 SSOT（dim_adapter.calc_stop_and_tiers）
 # 494号（R-2）：周线方向解析 SSOT（dim_adapter._weekly_dir_from_multi_level）
@@ -597,8 +598,7 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
     _rr = geo.get('risk_reward')
     if _rr is not None and _rr < RR_GATE and state in ('enter', 'light'):
         state = 'wait'
-        state_reason = (f'盈亏比不足（目标收益/止损风险≈{_rr}<{RR_GATE:.0f}，'
-                        f'止损过宽），建议观望')
+        state_reason = format_rr_gate_reason(geo, _rr, RR_GATE)
     elif state != _pre_state:
         state_reason = _degrade_reason or '多维度方向冲突/市场情绪过激，建议观望'
     # L0c 持有期限制
@@ -812,6 +812,16 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         state, tags, dimensions, geo, support, signal_light, executable, df, dims,
         consensus_rate=consensus['consensus_rate'], state_reason=state_reason))
     result['action'] = {'max_position_ratio': executable['position']['max_pct']}
+    # 551-B：顶层 RR/目标与门禁同源（此前只有 geometric/文案，字段为 None）
+    _max_pct = _safe_float(executable.get('position', {}).get('max_pct'), 0.0)
+    result['risk_reward_ratio'] = geo.get('risk_reward')
+    if result['risk_reward_ratio'] is None:
+        result['risk_reward_ratio'] = _risk_sd.get('rr_value')
+    result['target_price'] = geo.get('resistance_price')
+    if result['target_price'] is None:
+        result['target_price'] = _risk_sd.get('resistance_price')
+    result['hold_position_limit'] = round(_max_pct, 4)
+    result['new_position_ratio'] = 0.0 if state in ('wait', 'reduce', 'avoid') else round(_max_pct, 4)
     # 494号（R-3）：三键进 result（图谱与个股页同结构）
     result['stop_loss_price'] = _stop_loss
     result['stop_loss_basis'] = _stop_basis

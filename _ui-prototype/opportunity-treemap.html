@@ -1745,8 +1745,14 @@ function executionMeta(oa) {
     : state === 'enter' ? '#2563eb'
     : state === 'light' ? '#a16207'
     : '#8b5a2b';
-  const pos = _num(oa && oa.max_position_ratio);
-  return { state, action, reason, rr, dr, ds, wait, label, color, posPct: pos == null ? 0 : Math.round(pos * 100) };
+  const newPos = _num(oa && oa.new_position_ratio);
+  const holdPos = _num(oa && oa.hold_position_limit);
+  const maxPos = _num(oa && oa.max_position_ratio);
+  const hold = holdPos != null ? holdPos : (maxPos != null ? maxPos : 0);
+  const newP = newPos != null ? newPos : (wait ? 0 : hold);
+  const hasPosFields = newPos != null || holdPos != null;
+  return { state, action, reason, rr, dr, ds, wait, label, color,
+           newPct: Math.round(newP * 100), holdPct: Math.round(hold * 100), hasPosFields };
 }
 
 function renderExecutionRow(oa) {
@@ -1769,8 +1775,10 @@ function renderExecutionRow(oa) {
     ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px;">原因：${_esc(_shortReason(m.reason, 110))}</div>`
     : '';
   const posText = m.wait
-    ? `新开 0% · 持有上限 ${m.posPct}%`
-    : `仓位上限 ${m.posPct}%`;
+    ? `新开 ${m.newPct}% · 持有上限 ${m.holdPct}%`
+    : (m.hasPosFields
+        ? `新开上限 ${m.newPct}% · 持有上限 ${m.holdPct}%`
+        : `仓位上限 ${m.holdPct}%`);
   el.style.display = '';
   el.innerHTML =
     `<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;">` +
@@ -2184,12 +2192,21 @@ function showDetail(data) {
         const _light = oa.signal_light || '';
         const _lightColor = _light === '🟢' ? '#16a34a' : (_light === '🔴' ? '#dc2626' : '#ca8a04');
         const _act = oa.action_label || oa.label || '';
-        const _pos = (oa.max_position_ratio != null ? oa.max_position_ratio : 0);
-        const _posPct = Math.round(_pos * 100) + '%';
-        // 551-A：机会与执行分层——执行观望时明确“新开 0%、仅保留持有上限”
+        // 551-B：新开/持有仓位由后端显式字段提供，前端不再推断
         const _isWait = oa.state === 'wait' || /观望|持有/.test(_act);
         const _actText = _isWait ? `暂不新开（${_act || '持有/观望'}）` : (_act || '--');
-        const _posText = _isWait ? `新开 0% · 持有上限 ${_posPct}` : `仓位上限 ${_posPct}`;
+        const _newPosRaw = oa.new_position_ratio != null
+          ? Number(oa.new_position_ratio)
+          : (_isWait ? 0 : (oa.max_position_ratio || 0));
+        const _holdPosRaw = oa.hold_position_limit != null
+          ? Number(oa.hold_position_limit)
+          : (oa.max_position_ratio || 0);
+        const _hasPosFields = oa.new_position_ratio != null || oa.hold_position_limit != null;
+        const _newPct = Math.round((Number.isFinite(_newPosRaw) ? _newPosRaw : 0) * 100) + '%';
+        const _holdPct = Math.round((Number.isFinite(_holdPosRaw) ? _holdPosRaw : 0) * 100) + '%';
+        const _posText = _isWait
+          ? `新开 ${_newPct} · 持有上限 ${_holdPct}`
+          : (_hasPosFields ? `新开上限 ${_newPct} · 持有上限 ${_holdPct}` : `仓位上限 ${_holdPct}`);
         // 549-A：invalidation 是结构防守位，与执行止损分开展示，避免同屏两个「止损」
         const _invRaw = (oa.invalidation && oa.invalidation.length) ? String(oa.invalidation[0]) : '';
         const _invTxt = _invRaw ? fmtDefenceText(_invRaw) : '';

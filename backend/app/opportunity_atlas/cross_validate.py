@@ -628,7 +628,6 @@ class L4CrossValidator(DataAwareMixin):
                                      for e in _ex.get('entry_rules', [])]
             _sl = _ex.get('exit_rules') or []
             unified['stop_loss'] = (_sl[0].get('trigger') if _sl else None)
-            unified['target_price'] = None
             operation_advice = unified
         except Exception as _unify_err:
             import traceback
@@ -642,6 +641,25 @@ class L4CrossValidator(DataAwareMixin):
                 operation_advice = {}
         if not operation_advice:
             operation_advice = {}
+        # 551-B：/diagnose 返回字段与执行门禁同源；不再把 target_price 置 None
+        if operation_advice:
+            _oa_geo = operation_advice.get('geometric') or {}
+            if operation_advice.get('risk_reward_ratio') is None:
+                operation_advice['risk_reward_ratio'] = _oa_geo.get('risk_reward')
+            if operation_advice.get('target_price') is None:
+                operation_advice['target_price'] = _oa_geo.get('resistance_price')
+            _oa_max = operation_advice.get('max_position_ratio')
+            if _oa_max is None:
+                _oa_max = (operation_advice.get('executable') or {}).get('position', {}).get('max_pct', 0.0)
+            try:
+                _oa_max = float(_oa_max or 0.0)
+            except (TypeError, ValueError):
+                _oa_max = 0.0
+            operation_advice['hold_position_limit'] = round(_oa_max, 4)
+            operation_advice['new_position_ratio'] = (
+                0.0 if operation_advice.get('state') in ('wait', 'reduce', 'avoid')
+                else round(_oa_max, 4)
+            )
 
         # 336号 S2：弹窗摘要层共识切换到 L1 九维推导（成品仓唯一消费）
         # 原 S1 过渡口径（consensus_5d 五维推导）已不满足 336号 §2.2 要求：

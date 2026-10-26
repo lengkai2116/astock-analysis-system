@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from app.opportunity_atlas.arbiter import arbitrate
 from app.opportunity_atlas.dim_adapter import calc_stop_and_tiers as _ssot_stop_and_tiers
+from app.opportunity_atlas.dimensions.shared_support_resistance import format_rr_gate_reason
 
 _STATE_CN = {'enter': '可入场', 'light': '可轻仓', 'wait': '等待',
              'reduce': '建议减仓', 'avoid': '回避'}
@@ -197,7 +198,7 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
     # 509号：字面量 2.0 → RR_GATE 常量（单一口径，与模块顶部定义一致）
     if _rr is not None and _rr < RR_GATE and state in ('enter', 'light'):
         state = 'wait'
-        state_reason = f'盈亏比不足（目标收益/止损风险≈{_rr}，止损过宽），建议观望'
+        state_reason = format_rr_gate_reason(geo, _rr, RR_GATE)
     elif state != _pre_state:
         # 336号 S1.1 修复：按降级类型保留具体原因，不再无条件覆盖（603897 差异#4）
         state_reason = _degrade_reason or '多维度方向冲突/市场情绪过激，建议观望'
@@ -427,6 +428,16 @@ def build_operation_advice(ts_code: str, dimensions: dict, signals: list, df,
         consensus_rate=consensus['consensus_rate'], state_reason=state_reason))
     # action 快照须在降级后（低置信度降级会改 executable.position.max_pct）
     result['action'] = {'max_position_ratio': executable['position']['max_pct']}
+    # 551-B：顶层 RR/目标与门禁同源（此前只有 geometric/文案，字段为 None）
+    _max_pct = _safe_float(executable.get('position', {}).get('max_pct'), 0.0)
+    result['risk_reward_ratio'] = geo.get('risk_reward')
+    if result['risk_reward_ratio'] is None:
+        result['risk_reward_ratio'] = _risk_sd.get('rr_value')
+    result['target_price'] = geo.get('resistance_price')
+    if result['target_price'] is None:
+        result['target_price'] = _risk_sd.get('resistance_price')
+    result['hold_position_limit'] = round(_max_pct, 4)
+    result['new_position_ratio'] = 0.0 if state in ('wait', 'reduce', 'avoid') else round(_max_pct, 4)
     # 494号（R-3）：三键进 result（与 advice_engine 图谱路径同结构）
     result['stop_loss_price'] = _stop_loss
     result['stop_loss_basis'] = _stop_basis

@@ -126,3 +126,34 @@ def calc_support_resistance(df=None, indicator_ma_df=None) -> dict:
         'signal_days': signal_days,
         'dist_to_prev_high_pct': dist_prev_high,
     }
+
+
+def format_rr_gate_reason(geo: dict, rr: float, gate: float = 2.0) -> str:
+    """551-B：按实际空间拆 RR<2 的原因，避免统一误写「止损过宽」。
+
+    RR = 上方目标空间 / 下方止损空间。低 RR 可能来自：
+    - 目标太近（|dist_res| < |dist_sup|）；
+    - 止损过宽（|dist_sup| >= 10%）；
+    - 两者都窄。
+    """
+    dr = geo.get('dist_to_resistance_pct') if geo else None
+    ds = geo.get('dist_to_support_pct') if geo else None
+    try:
+        drf = float(dr) if dr is not None else None
+        dsf = float(ds) if ds is not None else None
+        rrf = float(rr)
+    except (TypeError, ValueError):
+        return f'盈亏比不足（RR≈{rr}<{gate:.0f}），建议观望'
+    if drf is not None and dsf is not None:
+        if abs(dsf) >= 10.0:
+            return (f'下方止损空间过宽（止损 {dsf:+.2f}% / 目标 {drf:+.2f}%，'
+                    f'RR {rrf:.2f}<{gate:.0f}）；建议观望')
+        if abs(dsf) < 5.0:
+            return (f'目标/止损空间均偏窄（目标 {drf:+.2f}% / 止损 {dsf:+.2f}%，'
+                    f'RR {rrf:.2f}<{gate:.0f}）；建议观望')
+        if abs(drf) < abs(dsf):
+            return (f'上方目标空间不足（目标 {drf:+.2f}% / 止损 {dsf:+.2f}%，'
+                    f'RR {rrf:.2f}<{gate:.0f}）；目标太近，建议等回踩/突破')
+        return (f'目标/止损空间均偏窄（目标 {drf:+.2f}% / 止损 {dsf:+.2f}%，'
+                f'RR {rrf:.2f}<{gate:.0f}）；建议观望')
+    return f'盈亏比不足（RR {rrf:.2f}<{gate:.0f}），建议观望'

@@ -36,7 +36,7 @@ def test_opportunity_is_labeled_as_opportunity_not_timing():
 def test_execution_row_splits_wait_and_position():
     html = _html()
     assert '暂不新开（' in html
-    assert '新开 0% · 持有上限' in html
+    assert '新开 ${m.newPct}% · 持有上限' in html
     assert 'RR ${m.rr.toFixed(2)}' in html
     assert '上方 ${m.dr > 0' in html
     assert '下方 ${m.ds.toFixed(2)}%' in html
