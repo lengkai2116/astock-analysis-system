@@ -351,7 +351,7 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
         <div class="stat-icon">🔥</div>
         <div class="stat-info">
           <div class="stat-number" id="stat-opp">0</div>
-          <div class="stat-label">机会信号 (评分≥7)</div>
+          <div class="stat-label">机会信号 (潜力≥70)</div>
         </div>
       </div>
       <div class="stat-card">
@@ -414,6 +414,7 @@ body { font-size: 14px; color: var(--text-primary); -webkit-font-smoothing: anti
         <span class="mode-opportunity-only" style="font-size:11px;color:var(--text-muted);">机会</span>
         <button class="btn btn-sm mode-opportunity-only" id="timingBlueBtn" onclick="toggleTimingFilter('enter')" title="只看可入场（opportunity_state=enter，550-A 统一状态口径）">🟦可入场</button>
         <button class="btn btn-sm mode-opportunity-only" id="timingYellowBtn" onclick="toggleTimingFilter('light')" title="只看可轻仓（opportunity_state=light）">🟨可轻仓</button>
+        <button class="btn btn-sm mode-opportunity-only" id="timingOrangeBtn" onclick="toggleTimingFilter('reduce')" title="只看减仓（opportunity_state=reduce）">🟧减仓</button>
         <button class="btn btn-sm mode-opportunity-only" id="timingGrayBtn" onclick="toggleTimingFilter('wait')" title="只看等待（opportunity_state=wait）">⬜等待</button>
         <button class="btn btn-sm mode-opportunity-only" id="timingBrownBtn" onclick="toggleTimingFilter('avoid')" title="只看回避（opportunity_state=avoid）">🟫回避</button>
         <span class="mode-opportunity-only" style="font-size:11px;color:var(--text-muted);">潜力≥</span>
@@ -1450,7 +1451,7 @@ function togglePresenceFilter() {
 // 313号 §七2：时机色过滤切换（图例可点击过滤：只看可入场/轻仓/等待/回避）
 function toggleTimingFilter(level) {
   timingFilter = timingFilter === level ? '' : level;
-  const btnMap = { 'enter': 'timingBlueBtn', 'light': 'timingYellowBtn', 'wait': 'timingGrayBtn', 'avoid': 'timingBrownBtn' };
+  const btnMap = { 'enter': 'timingBlueBtn', 'light': 'timingYellowBtn', 'reduce': 'timingOrangeBtn', 'wait': 'timingGrayBtn', 'avoid': 'timingBrownBtn' };
   Object.entries(btnMap).forEach(([lv, id]) => {
     document.getElementById(id).classList.toggle('active', timingFilter === lv);
   });
@@ -1655,12 +1656,13 @@ function updateLegend() {
     // 2026-08-04 方案A：机会地图颜色为离散四色时机（蓝/黄/灰/棕），
     // 移除连续渐变条（原为蓝→红五色，含红绿违背 313 §5.2），改四色块标记
     showBar(false);
-    labelEl.textContent = '机会状态 · 蓝=可入场(深=共识≥70%) 黄=可轻仓 灰=等待 棕=回避 · 点击看执行建议';
+    labelEl.textContent = '机会状态 · 蓝=可入场(深=共识≥70%) 黄=可轻仓 橙=减仓 灰=等待 棕=回避 · 点击看执行建议';
     itemsEl.innerHTML = `
       <span>⬜ 方块大小 = <strong style="color:#f59e0b;">机会潜力强度</strong></span>
       <span>
         <span class="legend-chip" style="background:#2563eb;"></span>可入场
         <span class="legend-chip" style="background:#eab308;"></span>可轻仓
+        <span class="legend-chip" style="background:#f97316;"></span>减仓
         <span class="legend-chip" style="background:#6b7280;"></span>等待
         <span class="legend-chip" style="background:#8b5a2b;"></span>回避
       </span>
@@ -2303,7 +2305,7 @@ document.addEventListener('keydown', function(e) {
 function updateStats(stocks) {
   document.getElementById('stat-total').textContent = stocks.length;
   const highScore = stocks.filter(s => s.signalStrength >= 70).length;
-  const building = stocks.filter(s => s.phase === '建仓期').length;
+  const building = stocks.filter(s => s.phase === 'building').length;
   const undervalued = stocks.filter(s => ['extreme_low', 'low'].includes(s.valuation || '')).length;  // 2026-08-06 修复：按 stockItem.valuation 统计（API 的 valuation_level 已映射至此）
   document.getElementById('stat-opp').textContent = highScore;
   document.getElementById('stat-phase').textContent = building;
@@ -2325,7 +2327,7 @@ function showLegendHelp() {
     '  · 颜色 = 涨跌幅（红涨绿跌）\n\n' +
     '🎯 机会地图：机会状态视图（313号）\n' +
     '  · 方块大小 = 机会潜力强度（越大机会越大，≠现在入场）\n' +
-    '  · 颜色 = 机会状态（蓝=可入场[深=共识≥70%，浅=67-70%] 黄=可轻仓 灰=等待 棕=回避）\n' +
+    '  · 颜色 = 机会状态（蓝=可入场[深=共识≥70%，浅=67-70%] 黄=可轻仓 橙=减仓 灰=等待 棕=回避）\n' +
     '  · 机会状态回答“有没有机会”；是否可新开以点击后的“执行（新开）”行为准\n' +
     '  · 执行行展示 RR、上方目标空间、下方止损空间与门禁原因\n\n' +
     '💎 价值地图：估值定位视图\n' +

@@ -253,10 +253,15 @@ def _build_response(mode: str, items: list[dict]) -> dict:
         for k, v in sorted(groups_dict.items())
     ]
     tagged = sum(1 for it in items if (it.get('signal_strength') or 0) > 0)
-    coverage = tagged / len(items) if items else 0.0
+    _total = len(items)
+    coverage = tagged / _total if _total else 0.0
     # 540号批次2 P1-5：signal_strength 已统一为 JUD 口径；fallback 语义改为
     # "是否存在 JUD 缺失（null）"，不再用 >0 覆盖率冒充数据回退。
-    _missing_ss = any(it.get('signal_strength') is None for it in items)
+    # 550-C：2/5570 空值不再触发全局「信号缺失」；仅空值率 >1% 才告警。
+    _missing_count = sum(1 for it in items if it.get('signal_strength') is None)
+    _missing_rate = _missing_count / _total if _total else 0.0
+    _coverage_nonnull = 1.0 - _missing_rate if _total else 0.0
+    _missing_ss = _missing_rate > 0.01
     # 313号：潜力快照日期（前端时间标注：潜力基于快照、时机截至实时）
     # 合规整改：经 DataManager 网关（红线5），原直连 get_ecm().conn 属违规
     _snap_date = None
@@ -294,7 +299,10 @@ def _build_response(mode: str, items: list[dict]) -> dict:
             'panel_built_at': _snap_date,
             'stale': _panel_stale,
             'signal_strength_fallback': _missing_ss,
-            'signal_strength_coverage': round(coverage, 4),
+            'signal_strength_coverage': round(_coverage_nonnull, 4),
+            'signal_strength_positive_coverage': round(coverage, 4),
+            'signal_strength_missing_count': _missing_count,
+            'signal_strength_missing_rate': round(_missing_rate, 4),
             'data_status': 'pre_compute' if _missing_ss else 'complete',
             'generated_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
             'snapshot_date': _snap_date,   # 313号：潜力快照日期（时间标注）
