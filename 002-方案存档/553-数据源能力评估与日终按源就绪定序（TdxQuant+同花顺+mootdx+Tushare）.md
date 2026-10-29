@@ -331,3 +331,26 @@ cat logs/source_probe_20261029_summary.json
 **待 live 验收**：需遇到 `pro_bar` 分钟缺口的交易日，观察 `[分钟回填] 第N轮完成 …（同花顺兜底 X/Y）`。
 
 **未实施**：553-D（TdxQuant 验证）。
+
+### 553-D 探测结果（2026-10-29）：BLOCKED（缺前提，探针已就绪）
+
+**前提核查**：
+
+- tqcenter：`http://127.0.0.1:17709/` 连接拒绝（Errno 61）；
+- tqserver：venv 无 `tdxaidata`；`TdxAiData.ini` 在项目根 / backend / `~/` 三处均不存在；
+- 环境变量无 `TDX*` / `TQ_*`。
+
+**落地**：`backend/scripts/_553d_tdxquant_probe.py`（stdlib、只读、不写库）
+
+- 先探测客户端 HTTP（get_market_data 最小请求），再查 `tdxaidata` 包与 `TdxAiData.ini`；
+- `decide(client, server)` 纯函数决定 `client / tqserver / blocked`；
+- 当前输出 `mode=blocked`、exit 2；
+- `test_553d_tdxquant_probe.py` **3 passed**。
+
+**解锁条件**：
+
+- 路径 A：安装并启动支持 TQ 的通达信终端，确认 17709 可访问；
+- 路径 B：`pip install tdxaidata`，并在 `TdxAiData.ini` 配置数据服务 Key；
+- 解锁后重跑探针（exit 0），再用 `get_market_data` 取 `000001.SZ` 日线，对比 Tushare/mootdx 的字段与当日可采时点。
+
+**结论**：553-D 目前不具备实跑条件，不纳入主链；同花顺 `line` 已实测当日 20:28 未更新，同样不纳入。
