@@ -314,22 +314,27 @@ def create_app():
     # APScheduler 初始化
     # ============================================================
     try:
-        with app.app_context():
-            from app.scheduler_manager import scheduler_manager
-            scheduler_manager.init_app(app)
-            logger.info("APScheduler 已初始化")
+        # 552-C（2026-10-28）：RAW-2 子进程只做特征计算，禁止再注册一套
+        # APScheduler/RuleScheduler（否则 N 个子进程各跑一份任务、重复写库）。
+        if os.environ.get('RAW2_CHILD') == '1':
+            logger.info("RAW-2 子进程模式：跳过 APScheduler/RuleScheduler 注册")
+        else:
+            with app.app_context():
+                from app.scheduler_manager import scheduler_manager
+                scheduler_manager.init_app(app)
+                logger.info("APScheduler 已初始化")
 
-            # 注册通知模块调度任务
-            try:
-                from app.services.rule_scheduler import RuleScheduler
-                RuleScheduler.register_all(scheduler_manager)
-                logger.info("通知模块调度任务已注册")
-            except Exception as e:
-                logger.warning(f"通知模块调度任务注册失败: {e}")
+                # 注册通知模块调度任务
+                try:
+                    from app.services.rule_scheduler import RuleScheduler
+                    RuleScheduler.register_all(scheduler_manager)
+                    logger.info("通知模块调度任务已注册")
+                except Exception as e:
+                    logger.warning(f"通知模块调度任务注册失败: {e}")
 
-            # 启动补采：延迟 30s 执行，避免前台启动竞争 I/O
-            import threading
-            threading.Timer(30, scheduler_manager.catch_up_if_needed).start()
+                # 启动补采：延迟 30s 执行，避免前台启动竞争 I/O
+                import threading
+                threading.Timer(30, scheduler_manager.catch_up_if_needed).start()
     except Exception as e:
         logger.warning(f"APScheduler 初始化失败: {e}")
 

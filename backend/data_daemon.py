@@ -4068,7 +4068,90 @@ def _build_active_signal(cl_result: dict, buy_sell_point: str):
     return buy_sell_point
 
 
-def _precompute_raw_features(codes, target_date: str | None = None):
+# ── 552-C（2026-10-28）：RAW-2 多进程分块 ──
+# 10-27 实测 RAW-2 8333s / 5568 只（1.50s·只），8 线程受 GIL 限、10 核仅用约 1.3 核。
+# 方案：父进程建好截面上下文（板块热度 / market_stats）→ N 个 spawn 子进程各算一块、
+# 各自写库（ts_code 互不重叠）→ 父进程校验覆盖并补算遗漏，保持原单线程结果口径。
+_RAW2_PROCESS_MIN_CODES = 800
+_RAW2_CHILD_THREADS = 2
+
+
+def _raw2_process_count() -> int:
+    """RAW-2 子进程数（env RAW2_PROCESSES，默认 6；1 表示回退线程模式）"""
+    try:
+        n = int(os.environ.get('RAW2_PROCESSES', '6'))
+    except Exception:
+        n = 6
+    return max(1, min(n, 12))
+
+
+def _raw2_child_main(chunk, target_date=None, shared_ctx=None):
+    """552-C：RAW-2 子进程入口（spawn）。
+
+    必须自行 init_sharding——分库路由是模块级单例，spawn 不继承父进程的 DATA_DIR 绑定，
+    否则会写默认基准库（428 踩坑同型）。
+    """
+    os.environ['DATA_DAEMON_RUNNING'] = '1'
+    os.environ['RAW2_PROCESSES'] = '0'
+    os.environ['RAW2_CHILD'] = '1'
+    try:
+        from app.data.sharding_manager import init_sharding
+        data_dir = os.environ.get('DATA_DIR') or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), '..', 'data')
+        init_sharding(data_dir)
+        _ensure_ecm()
+        _precompute_raw_features(chunk, target_date=target_date,
+                                 _shared_ctx=shared_ctx, _local_only=True)
+    except Exception:
+        logger.exception("552-C RAW-2 子进程失败")
+
+
+def _missing_pre_feat_codes(codes, target_date=None):
+    """552-C：返回尚未落 pre_feat_cache 的代码（子进程结果校验/补算依据）"""
+    try:
+        if target_date:
+            td = target_date
+        else:
+            rows = _shard_fetchall('daily_cache', "SELECT MAX(trade_date) FROM daily_cache")
+            td = str(rows[0][0]) if rows and rows[0][0] else None
+        if not td:
+            return list(codes)
+        done = {r[0] for r in _shard_fetchall(
+            'pre_feat_cache',
+            "SELECT DISTINCT ts_code FROM pre_feat_cache WHERE trade_date=?", [td])}
+        return [c for c in codes if c not in done]
+    except Exception as e:
+        logger.warning(f"552-C pre_feat 覆盖校验失败（按全部补算）: {e}")
+        return list(codes)
+
+
+def _run_raw2_in_processes(codes, target_date, shared_ctx, nproc):
+    """552-C：分块 spawn 子进程并等待，返回仍需补算的代码清单。"""
+    import multiprocessing as _mp
+    ctx = _mp.get_context('spawn')
+    chunks = [codes[i::nproc] for i in range(nproc)]
+    procs = []
+    t0 = time.time()
+    for i, chunk in enumerate(chunks):
+        p = ctx.Process(target=_raw2_child_main, name=f'raw2-552c-{i}',
+                        args=(chunk, target_date, shared_ctx))
+        p.start()
+        procs.append((i, len(chunk), p))
+        logger.info(f"  [RAW-2 552-C] 子进程 {i} 启动: {len(chunk)} 只")
+    for i, n, p in procs:
+        p.join()
+        logger.info(f"  [RAW-2 552-C] 子进程 {i} 结束: exitcode={p.exitcode}, 分块 {n} 只")
+    logger.info(f"  [RAW-2 552-C] {nproc} 进程全部结束，{time.time() - t0:.1f}s，校验覆盖...")
+    try:
+        _ecm.conn.commit()
+    except Exception:
+        pass
+    return _missing_pre_feat_codes(codes, target_date)
+
+
+def _precompute_raw_features(codes, target_date: str | None = None,
+                             _shared_ctx: dict | None = None,
+                             _local_only: bool = False):
     """原料加工环节：特征提取（RAW-2 FEAT）→ 写入 pre_feat_cache
 
     357号方案：从 _precompute_l2_labels 中提取纯原料加工步骤，
@@ -4197,8 +4280,14 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             # 参照 RAW-2B _precompute_sector_heat 的 app_context 先例，包一层应用上下文。
             from app import create_app as _create_app
             _raw_app = _create_app()
-            with _raw_app.app_context():
-                sr.compute_all_heat(all_data, indicator_ma_dict=indicator_ma_dict)
+            _ctx_heat = (_shared_ctx or {}).get('all_heat')
+            if _ctx_heat is not None:
+                # 552-C：子进程复用父进程的截面热度（分块后 all_data 不完整，不能重算）
+                sr._cache['all_heat'] = _ctx_heat
+                logger.info(f"  RAW-2 子进程复用截面热度: {len(_ctx_heat)} 个行业")
+            else:
+                with _raw_app.app_context():
+                    sr.compute_all_heat(all_data, indicator_ma_dict=indicator_ma_dict)
             # 板块热度持久化已抽离为独立管道步骤 RAW-2B（_precompute_sector_heat），
             # 在 RAW-2 完成后、SIG 前执行，用独立短连接避免与主循环写锁竞争。
             # 此处仅保留 compute_all_heat 预热 sr._cache['all_heat'] 供下方 sr.evaluate 消费。
@@ -4255,6 +4344,11 @@ def _precompute_raw_features(codes, target_date: str | None = None):
         except Exception as _e:
             # 461-12：市场情绪全局值构建失败（降级 neutral），记日志防静默吞
             logger.warning(f"RAW 市场情绪全局值构建失败: {_e}")
+
+        # 552-C：子进程复用父进程的市场级统计（`_market_stats_cache` 为进程内全局）
+        if _shared_ctx and _shared_ctx.get('market_stats'):
+            global _market_stats_cache
+            _market_stats_cache = _shared_ctx['market_stats']
 
         t0 = time.time()
         succeeded = 0
@@ -4974,7 +5068,22 @@ def _precompute_raw_features(codes, target_date: str | None = None):
             return _run_with_timeout(lambda: _raw2_one(code), timeout_sec=60.0,
                                      desc=f"RAW-2 特征 {code}")
 
-        _RAW2_WORKERS = 8   # 522号 E5-c（2026-10-17）：4→8 试探；RAW-2 期间 RAW-1/3 已完成、多核闲置（仅用~1核），观察是否再提速；须基准对比
+        # 552-C：多进程分块（env RAW2_PROCESSES，默认 6；1=回退线程模式）
+        _raw2_nproc = 1 if _local_only else _raw2_process_count()
+        if _raw2_nproc > 1 and len(codes) >= _RAW2_PROCESS_MIN_CODES:
+            _shared = {
+                'all_heat': sr._cache.get('all_heat'),
+                'market_stats': _market_stats_cache,
+            }
+            _left = _run_raw2_in_processes(codes, target_date, _shared, _raw2_nproc)
+            if not _left:
+                logger.info(f"RAW-2 原料加工完成（多进程 ×{_raw2_nproc}）: "
+                            f"{len(codes)} 只, 耗时 {time.time() - t0:.1f}s")
+                return
+            logger.warning(f"RAW-2 多进程后仍有 {len(_left)} 只未落库，父进程补算")
+            codes = _left
+
+        _RAW2_WORKERS = _RAW2_CHILD_THREADS if _local_only else 8   # 522号 E5-c（2026-10-17）：4→8 试探；RAW-2 期间 RAW-1/3 已完成、多核闲置（仅用~1核），观察是否再提速；须基准对比
         import concurrent.futures as _cf
         _raw2_pool = _cf.ThreadPoolExecutor(max_workers=_RAW2_WORKERS)
         _fut_map = {}
@@ -7229,13 +7338,85 @@ def _recent_trade_date(offset: int = 0) -> str:
     return None
 
 
+# 552-A（2026-10-28）→ 553-A（2026-10-29）：当日日线发布探测。
+# 原实现为「交易日且 hour>=18」硬时钟，15:00-18:00 三小时完全空窗；
+# 552-A 改为 16:30 起探测；10-29 探针实测 daily/daily_basic 15:50:21 已可采、
+# moneyflow 15:45:20、stk_limit 15:00:07 ⇒ 553-A 把起点前移到 15:05、间隔 5 分钟，
+# 日线确认即提前起跑；逐源采集由 553-B 的 COL 判据完成（关键四表齐才进 RAW），18:00 仅兜底。
+_READY_PROBE_START = (15, 5)
+_READY_PROBE_INTERVAL = 300         # 探测间隔（秒）
+_READY_PROBE_MIN_ROWS = 4000         # 绝对下限（防 API 半发布/空返回）
+_READY_PROBE_RATIO = 0.95            # 相对前一交易日行数比例（防半发布触发半载日终）
+_READY_PROBE_STATE = {'date': '', 'ready': False, 'probed_at': 0.0, 'rows': 0,
+                      'first_ready_at': ''}
+
+
+def _today_prev_row_count() -> int:
+    """前一交易日 daily_cache 行数（553-A：95% 完整性判定基准）"""
+    try:
+        rows = _shard_fetchall(
+            'daily_cache',
+            "SELECT COUNT(*) FROM daily_cache WHERE trade_date=("
+            "SELECT MAX(trade_date) FROM daily_cache)")
+        return int(rows[0][0]) if rows and rows[0][0] else 0
+    except Exception:
+        return 0
+
+
+def _probe_today_daily_published() -> bool:
+    """553-A：探测 Tushare 当日日线是否已完整发布（采集层专用，只读探测不落库）。
+
+    结果按日缓存；未达阈值一律返回 False，由 `_is_today_data_ready` 退化为 18:00 兜底。
+    阈值取 max(4000, 前一交易日行数×95%)，避免接口半发布时用半载数据启动日终。
+    """
+    today = datetime.now().strftime('%Y-%m-%d')
+    st = _READY_PROBE_STATE
+    now = time.time()
+    if st['date'] == today:
+        if st['ready']:
+            return True
+        if now - st['probed_at'] < _READY_PROBE_INTERVAL:
+            return False
+    if st['date'] != today:
+        st.update(date=today, probed_at=now, ready=False, rows=0, first_ready_at='')
+    else:
+        st.update(probed_at=now)
+    try:
+        import tushare as ts
+        pro = ts.pro_api()
+        df = _ts(pro.daily, trade_date=today.replace('-', ''))
+        rows = 0 if df is None else len(df)
+    except Exception as e:
+        logger.debug(f"553-A 当日日线发布探测失败（按未发布处理）: {e}")
+        rows = 0
+    need = max(_READY_PROBE_MIN_ROWS, int(_today_prev_row_count() * _READY_PROBE_RATIO))
+    prev_ready = bool(st.get('ready'))
+    st['rows'] = rows
+    st['ready'] = rows >= need
+    if st['ready'] and not prev_ready:
+        st['first_ready_at'] = datetime.now().strftime('%H:%M:%S')
+        logger.info(f"553-A 首次就绪: daily {rows}/{need} 行 @ {st['first_ready_at']}，"
+                    f"提前启动日终（逐源采集由 553-B COL 判据推进）")
+    elif st['rows'] and not st['ready']:
+        logger.info(f"553-A 日线发布探测: {today} {rows} 行 / 需 {need} 行 → "
+                    f"未完整，等下次探测/18:00 兜底")
+    return st['ready']
+
+
 def _is_today_data_ready() -> bool:
     """432号 R4：今日数据是否已可检查/补采（交易日且 Tushare 当日数据已发布）
 
-    Tushare 日线系列（daily/daily_basic/moneyflow/stk_limit/top_list 等）一般在
-    收盘后 17-18 点才发布，盘前/盘中检查当日数据必然空返回。
+    553-A（2026-10-29）：15:05 起每 5 分钟探测当日日线，确认即提前起跑；
+    逐源采集由 553-B 的 COL 判据完成（关键四表齐才进 RAW），18:00 仅硬兜底。
     """
-    return _is_market_day() and datetime.now().hour >= 18
+    if not _is_market_day():
+        return False
+    now = datetime.now()
+    if now.hour >= 18:
+        return True
+    if (now.hour, now.minute) < _READY_PROBE_START:
+        return False
+    return _probe_today_daily_published()
 
 
 def _get_adj_latest_date():
@@ -7550,6 +7731,248 @@ def _maybe_backfill_daily(data_date: str):
         logger.warning(f"  [管道自愈] {data_date} 补采失败: {e}")
 
 
+# ── 552-B（2026-10-28）：财务同步 15:35 独立触发 ──
+# COL-7 的 5 张财务表与当日行情无关，原实现排在 18:00 门槛后占关键路径 38.6m（10-27 实测）。
+# 改为 15:35 后台线程独立同步，完成即把当日 COL-7 标记 done，管道到点直接跳过。
+_FIN_SYNC_STATE = {'date': '', 'started': False}
+
+
+def _financial_sync_one_day(target_fmt: str) -> None:
+    """后台线程：全市场 5 张财务表同步 → 标记当日 COL-7 done（552-B）。"""
+    global _ecm
+    t0 = time.time()
+    target_compact = target_fmt.replace('-', '')
+    try:
+        _ensure_ecm()
+        codes = _get_active_codes(target_fmt)
+        if not codes:
+            logger.warning("552-B 财务同步跳过：无活跃股票代码")
+            return
+        _ecm.ensure_pipeline_steps(target_compact)
+        _ecm.conn.execute(
+            "UPDATE pipeline_status SET status='running', started_at=? "
+            "WHERE pipeline_date=? AND step_id='COL-7'",
+            [datetime.now().strftime('%Y-%m-%d %H:%M:%S'), target_compact])
+        _ecm.conn.commit()
+        batch_size = 500
+        for i in range(0, len(codes), batch_size):
+            batch = codes[i:i + batch_size]
+            for _fn in (_batch_fina_indicator, _batch_income_recent,
+                        _batch_balancesheet, _batch_cashflow, _batch_forecast):
+                try:
+                    _fn(batch)
+                except Exception as _e:
+                    logger.debug(f"552-B 财务同步单表失败跳过（{_fn.__name__}）: {_e}")
+        elapsed = time.time() - t0
+        _ecm.conn.execute(
+            "UPDATE pipeline_status SET status='done', completed_at=?, detail=? "
+            "WHERE pipeline_date=? AND step_id='COL-7'",
+            [datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+             f'552-B 15:35 独立同步 {len(codes)} 只 / {elapsed:.0f}s', target_compact])
+        _ecm.conn.commit()
+        logger.info(f"552-B 财务同步完成: {len(codes)} 只, {elapsed:.0f}s（COL-7 已提前 done）")
+    except Exception as e:
+        logger.warning(f"552-B 财务同步失败（不标记 done，管道仍会按原路径执行）: {e}")
+        try:
+            _ecm.conn.execute(
+                "UPDATE pipeline_status SET status='pending' "
+                "WHERE pipeline_date=? AND step_id='COL-7'", [target_compact])
+            _ecm.conn.commit()
+        except Exception:
+            pass
+
+
+def _maybe_run_financial_sync() -> None:
+    """552-B：交易日 15:35 起后台触发财务同步（每交易日一次；18:00 后交回管道）。"""
+    if not _is_market_day():
+        return
+    now = datetime.now()
+    if (now.hour, now.minute) < (15, 35) or now.hour >= 18:
+        return
+    today = now.strftime('%Y-%m-%d')
+    if _FIN_SYNC_STATE['date'] == today:
+        return
+    _FIN_SYNC_STATE['date'] = today
+    threading.Thread(target=_financial_sync_one_day, args=(today,),
+                     daemon=True, name='fin-sync-552b').start()
+    logger.info("552-B 财务同步 15:35 独立触发（后台线程，移出 18:00 后关键路径）")
+
+
+# ── 552-E（2026-10-28）：日终预计完成时间与关机前告警 ──
+_EOD_WARN_STATE = {'date': '', 'warned': set()}
+# 基线来自 10-27 实测（552 号档 §二）；仅用于 ETA 估算与告警文案，不参与调度。
+_EOD_STEP_BASELINE = {
+    'COL-1': 60, 'COL-2': 60, 'COL-3': 60, 'COL-4': 60, 'COL-5': 60, 'COL-6': 681,
+    'COL-7': 2317, 'RAW-1': 341, 'RAW-2': 8333, 'RAW-3': 341,
+    'RAW-2B': 89, 'RAW-2C': 21, 'RAW-2D': 1, 'RAW-2E': 3,
+    'SIG': 4512, 'JUD': 2216, 'OUT': 12, 'QA-CHECK': 121,
+}
+
+
+def _estimate_remaining_seconds(status: dict) -> tuple[int, list[str]]:
+    """552-E：按 10-27 基线估算剩余环节耗时（仅告警文案用）。"""
+    remaining = [sid for sid in _EOD_STEP_BASELINE
+                 if (status.get(sid) or {}).get('status') != 'done']
+    return sum(_EOD_STEP_BASELINE[sid] for sid in remaining), remaining
+
+
+def _check_eod_deadline_warning() -> None:
+    """552-E：20:30 / 21:00 两个时点检查当日日终是否未完成，未完成则告警（含 ETA）。
+
+    只在当日管道已开始（pipeline_status 有行）时告警；每个时点每日仅告警一次。
+    """
+    try:
+        now = datetime.now()
+        if not _is_market_day():
+            return
+        if (now.hour, now.minute) < (20, 30):
+            return
+        today_compact = now.strftime('%Y%m%d')
+        _ensure_ecm()
+        status = _ecm.load_pipeline_status(today_compact) or {}
+        if not status:
+            return  # 当日管道尚未开始（数据未到），不告警
+        if _is_pipeline_complete(today_compact):
+            return
+        remaining_s, remaining = _estimate_remaining_seconds(status)
+        eta = now + timedelta(seconds=remaining_s)
+        mark = '20:30' if now.hour == 20 or (now.hour, now.minute) < (21, 0) else '21:00'
+        st = _EOD_WARN_STATE
+        if st['date'] != today_compact:
+            st['date'] = today_compact
+            st['warned'] = set()
+        if mark in st['warned']:
+            return
+        st['warned'].add(mark)
+        msg = (f"{today_compact} 日终未完成：剩余 {'/'.join(remaining) or '无'}，"
+               f"按基线预计还需 {remaining_s // 60} 分钟（约 {eta.strftime('%H:%M')} 完成）")
+        logger.warning(f"552-E [{mark}] {msg}")
+        try:
+            from app.services.alert_notifier import AlertNotifier
+            AlertNotifier().send(
+                'EOD_DEADLINE_RISK', 'data_daemon', msg,
+                severity='CRITICAL' if mark == '21:00' else 'WARN',
+                metadata={'pipeline_date': today_compact, 'remaining': remaining,
+                          'eta_seconds': remaining_s})
+        except Exception as _e:
+            logger.debug(f"552-E 告警发送失败: {_e}")
+    except Exception as e:
+        logger.debug(f"552-E 日终截止告警异常: {e}")
+
+
+# ── 553-B（2026-10-29）：COL 就绪判据 ──
+# 原实现：COL-1~COL-5 未 done 即无条件标 done（detail="数据已完整，采集跳过"），
+# 不校验本表本日行数。2026-10-28 提前起跑时 daily_basic/moneyflow/stk_limit 的当日行
+# 直到 20:01 才补入，导致 RAW-2 沿用前日估值、OUT 缺 market_overview_panel、QA 报 0/5291。
+# 改为：本表本日行数 ≥ max(floor, 前日×ratio) 才标 done；不足则采集；采集后仍不足时
+# 关键表保持 pending 下轮重试（5 分钟冷却），非关键表标 done 不阻塞 RAW。
+_COL_TABLE = {
+    'COL-1': 'daily_cache', 'COL-2': 'daily_basic_cache',
+    'COL-3': 'moneyflow_cache', 'COL-4': 'stk_limit_cache', 'COL-5': 'lhb_cache',
+}
+_COL_FLOOR = {'COL-1': 4000, 'COL-2': 4000, 'COL-3': 3000, 'COL-4': 3000, 'COL-5': 1}
+_COL_RATIO = {'COL-1': 0.95, 'COL-2': 0.95, 'COL-3': 0.95, 'COL-4': 0.95, 'COL-5': 0.5}
+_COL_CRITICAL = {'COL-1', 'COL-2', 'COL-3', 'COL-4'}
+_COL_RETRY_AT: dict = {}
+_COL_RETRY_INTERVAL = 300
+
+
+def _col_row_count(table: str, date_str: str) -> int:
+    """553-B：本表本日行数（只读，分库路由）"""
+    try:
+        return int(_query_table(
+            table, f"SELECT COUNT(*) FROM {table} WHERE trade_date=?", [date_str]) or 0)
+    except Exception as e:
+        logger.debug(f"553-B {table} 当日行数查询失败: {e}")
+        return 0
+
+
+def _col_prev_count(table: str, date_str: str) -> int:
+    """553-B：前一交易日同表行数（阈值基准）"""
+    try:
+        return int(_query_table(
+            table,
+            f"SELECT COUNT(*) FROM {table} WHERE trade_date=("
+            f"SELECT MAX(trade_date) FROM {table} WHERE trade_date < ?)", [date_str]) or 0)
+    except Exception as e:
+        logger.debug(f"553-B {table} 前日行数查询失败: {e}")
+        return 0
+
+
+def _col_ready_threshold(step_id: str, date_str: str) -> int:
+    table = _COL_TABLE[step_id]
+    prev = _col_prev_count(table, date_str)
+    return max(_COL_FLOOR[step_id], int(prev * _COL_RATIO[step_id]))
+
+
+def _col_retry_due(pipeline_date: str, step_id: str) -> bool:
+    """553-B：源未发布时的重试冷却，避免每 tick 都打一次全市场 API"""
+    now = time.time()
+    key = (pipeline_date, step_id)
+    if now - _COL_RETRY_AT.get(key, 0) < _COL_RETRY_INTERVAL:
+        return False
+    _COL_RETRY_AT[key] = now
+    return True
+
+
+# 553-B 增补（2026-10-29）：非关键源（COL-5 龙虎榜）二次采集时点。
+# 10-29 实测：16:35 首次采集时源未发布（0/33），18:01 才有 75 行；
+# 首次按设计标 done 不阻塞 RAW，此处 18:30/20:00 各补一次并更新 detail。
+_NONCRITICAL_RETRY_SLOTS = ((18, 30), (20, 0))
+_NONCRITICAL_RETRY_STATE: dict = {}
+
+
+def _maybe_retry_noncritical_cols() -> None:
+    """553-B：非关键源到点重试（只改 detail，不改状态、不阻塞 RAW）。"""
+    try:
+        now = datetime.now()
+        today_fmt = now.strftime('%Y-%m-%d')
+        today = now.strftime('%Y%m%d')
+        _ensure_ecm()
+        status = _ecm.load_pipeline_status(today) or {}
+        row = status.get('COL-5') or {}
+        if row.get('status') != 'done':
+            return
+        table = _COL_TABLE['COL-5']
+        need = _col_ready_threshold('COL-5', today_fmt)
+        have = _col_row_count(table, today_fmt)
+        if have >= need:
+            # 数据已由完整性检查等补齐：校正可能残留的「采集后 0/N」明细
+            detail = str(row.get('detail') or '')
+            if '采集后' in detail or '重试后' in detail:
+                new_detail = f'非关键源，复核后 {have}/{need} 行（已就绪）'
+                _ecm.conn.execute(
+                    "UPDATE pipeline_status SET detail=? "
+                    "WHERE pipeline_date=? AND step_id='COL-5'", [new_detail, today])
+                _ecm.conn.commit()
+                logger.info(f"  [管道] COL-5 明细校正: {new_detail}")
+            return
+        for slot in _NONCRITICAL_RETRY_SLOTS:
+            key = (today, 'COL-5', slot)
+            if _NONCRITICAL_RETRY_STATE.get(key):
+                continue
+            if (now.hour, now.minute) < slot:
+                continue
+            _NONCRITICAL_RETRY_STATE[key] = True
+            rows = 0
+            try:
+                rows = _batch_lhb(today_fmt) or 0
+            except Exception as e:
+                logger.warning(f"  553-B COL-5 {slot[0]:02d}:{slot[1]:02d} 重试失败: {e}")
+            have2 = _col_row_count(table, today_fmt)
+            detail = (f'非关键源，{slot[0]:02d}:{slot[1]:02d} 重试后 {have2}/{need} 行'
+                      + ('' if have2 >= need else '（待下一次重试/次日完整性检查）'))
+            _ecm.conn.execute(
+                "UPDATE pipeline_status SET detail=? "
+                "WHERE pipeline_date=? AND step_id='COL-5'", [detail, today])
+            _ecm.conn.commit()
+            logger.info(f"  [管道] COL-5 非关键源重试({slot[0]:02d}:{slot[1]:02d}): "
+                        f"本次返回 {rows} 行，库内 {have2}/{need}")
+            break  # 每次 tick 只重试一个时点，避免同一 tick 连打两次全市场 API
+    except Exception as e:
+        logger.debug(f"553-B 非关键源重试异常: {e}")
+
+
 def _drive_pipeline():
     """管道驱动：检查当前状态，推进到下一个可执行的环节
 
@@ -7607,10 +8030,10 @@ def _drive_pipeline():
     status = _ecm.load_pipeline_status(today)
 
     # ── 采集阶段 C1→C6 ──
-    # 327阶段2修正：数据驱动下，若 COL-1~COL-6 未全部 done 且数据日期已完整，
-    # 直接标记 done 跳过（数据已存在，避免用 data_date 重采旧日期）。
-    # 注意：COL-6 概念板块无日期需独立采集；若采集环节已 done 则正常 continue。
-    # 数据缺失场景由完整性检查（run_integrity_check）独立补采，不在此阻塞。
+    # 553-B（2026-10-29）：按「本表本日行数」判定，不再无条件标 done。
+    # 关键表（COL-1~4）不足则采集，采集后仍不足保持 pending 下轮重试；
+    # COL-5 龙虎榜为非关键源，采集后不足也标 done（不阻塞 RAW，由完整性检查补采）；
+    # COL-6 概念板块无日期，独立采集。
     COLLECT = ['COL-1', 'COL-2', 'COL-3', 'COL-4', 'COL-5', 'COL-6']
     for sid, func, arg in [
         ('COL-1', _batch_daily, today_fmt),
@@ -7622,16 +8045,43 @@ def _drive_pipeline():
     ]:
         if status.get(sid, {}).get('status') in ('done', 'running'):
             continue
-        # 数据日期已完整 → 采集环节直接标记 done（数据已存在，无需重采）
-        if sid != 'COL-6':  # COL-6 概念板块需独立采集（无日期）
-            _ecm.conn.execute(
-                "UPDATE pipeline_status SET status='done', "
-                "completed_at=datetime('now','localtime'), "
-                "detail='数据已完整，采集跳过' WHERE pipeline_date=? AND step_id=?",
-                [today, sid]
-            )
-            _ecm.conn.commit()
-            continue
+        if sid in _COL_TABLE:
+            table = _COL_TABLE[sid]
+            need = _col_ready_threshold(sid, today_fmt)
+            have = _col_row_count(table, today_fmt)
+            if have >= need:
+                _ecm.conn.execute(
+                    "UPDATE pipeline_status SET status='done', "
+                    "completed_at=datetime('now','localtime'), detail=? "
+                    "WHERE pipeline_date=? AND step_id=?",
+                    [f'数据已完整（{have}/{need} 行），采集跳过', today, sid])
+                _ecm.conn.commit()
+                continue
+            if not _col_retry_due(today, sid):
+                continue  # 冷却中：跳过本表，继续检查后续 COL（各源独立就绪）
+            logger.info(f"  [管道] {sid} 本表本日 {have}/{need} 行不足，执行采集")
+            _run_pipeline_step(today, sid, func, arg)
+            have2 = _col_row_count(table, today_fmt)
+            row = (_ecm.load_pipeline_status(today) or {}).get(sid) or {}
+            if row.get('status') == 'done' and have2 < need:
+                if sid in _COL_CRITICAL:
+                    _ecm.conn.execute(
+                        "UPDATE pipeline_status SET status='pending', detail=? "
+                        "WHERE pipeline_date=? AND step_id=?",
+                        [f'采集后仍不足 {have2}/{need} 行，下轮重试', today, sid])
+                    _ecm.conn.commit()
+                    logger.warning(f"  [管道] {sid} 采集后仍不足（{have2}/{need}），"
+                                   f"保持 pending 等待源发布")
+                else:
+                    _ecm.conn.execute(
+                        "UPDATE pipeline_status SET status='done', "
+                        "completed_at=datetime('now','localtime'), detail=? "
+                        "WHERE pipeline_date=? AND step_id=?",
+                        [f'非关键源，采集后 {have2}/{need} 行，不阻塞 RAW（18:30/20:00 重试）', today, sid])
+                    _ecm.conn.commit()
+                    logger.info(f"  [管道] {sid} 非关键源 {have2}/{need} 行，"
+                                f"标 done 不阻塞 RAW（待完整性检查补采）")
+            return
         _run_pipeline_step(today, sid, func, arg)
         return  # 每 tick 只推进一个环节
 
@@ -8590,11 +9040,26 @@ def _batch_backfill_minute_kline(trade_date: str = None):
 
         logger.info(f"[分钟回填] 第{round_idx+1}轮: 补齐 {len(missing)} 只 (已有 {len(minute_stocks)}/{len(daily_stocks)})")
 
-        # Step 4: 逐只调用 Tushare pro_bar 补齐
+        # Step 4: 逐只调用 Tushare pro_bar 补齐；失败时用同花顺 time 兜底（553-C）
         ok = 0
+        ths_ok = 0
+        ths_tried = 0
+        THS_MAX_PER_ROUND = 200
         for i, code in enumerate(missing):
             try:
                 raw = ts.pro_bar(ts_code=code, start_date=trade_date, end_date=trade_date, freq='1min', adj='qfq')
+                used_ths = False
+                if (raw is None or raw.empty) and ths_tried < THS_MAX_PER_ROUND:
+                    ths_tried += 1
+                    try:
+                        from app.data.ths_provider import fetch_intraday_minutes
+                        raw = fetch_intraday_minutes(code, trade_date_fmt)
+                        used_ths = raw is not None and not raw.empty
+                        if used_ths:
+                            raw['freq'] = '1min'
+                        time.sleep(0.05)
+                    except Exception as e:
+                        logger.debug(f"[分钟回填] {code} 同花顺兜底失败: {e}")
                 if raw is not None and not raw.empty:
                     # pro_bar 分钟数据返回 trade_time，需提取 trade_date
                     if 'trade_time' in raw.columns:
@@ -8607,6 +9072,8 @@ def _batch_backfill_minute_kline(trade_date: str = None):
                         raw = raw.drop(columns=['vol'])
                     _ecm.cache_minute_kline(raw)
                     ok += 1
+                    if used_ths:
+                        ths_ok += 1
                     minute_stocks.add(code)  # 2026-09-29 OCR 批次C：内存增量（避免下轮重查库）
                 if (i + 1) % 100 == 0:
                     logger.info(f"[分钟回填] 进度: {i+1}/{len(missing)}, 成功 {ok}")
@@ -8614,7 +9081,8 @@ def _batch_backfill_minute_kline(trade_date: str = None):
                 logger.debug(f"[分钟回填] {code} 失败: {e}")
                 continue
         total_ok += ok
-        logger.info(f"[分钟回填] 第{round_idx+1}轮完成: 成功 {ok}/{len(missing)} 只")
+        logger.info(f"[分钟回填] 第{round_idx+1}轮完成: 成功 {ok}/{len(missing)} 只"
+                    f"（同花顺兜底 {ths_ok}/{ths_tried}）")
 
     logger.info(f"[分钟回填] 全部轮次完成: 成功 {total_ok} 只")
 
@@ -9183,11 +9651,23 @@ def main():
         except Exception as e:
             logger.warning(f"sync_requests 消费异常: {e}")
 
+        # ── 552-B：财务同步 15:35 独立触发（移出 18:00 后关键路径） ──
+        try:
+            _maybe_run_financial_sync()
+        except Exception as e:
+            logger.debug(f"财务同步独立触发异常: {e}")
+
         # ── 管道驱动（替代15:30-15:35定时窗口 + 兜底，305号§9） ──
         try:
             _drive_pipeline()
         except Exception as e:
             logger.warning(f"管道驱动异常: {e}")
+
+        # ── 553-B：非关键源（COL-5 龙虎榜）18:30/20:00 重试 ──
+        try:
+            _maybe_retry_noncritical_cols()
+        except Exception as e:
+            logger.debug(f"非关键源重试异常: {e}")
 
         # ── 543号：日终完成保障（停滞看门狗 + 每日完成硬校验） ──
         try:
@@ -9198,6 +9678,11 @@ def main():
             _check_eod_completion()
         except Exception as e:
             logger.debug(f"日终完成校验异常: {e}")
+        # ── 552-E：20:30/21:00 未完成告警 + ETA ──
+        try:
+            _check_eod_deadline_warning()
+        except Exception as e:
+            logger.debug(f"日终截止告警异常: {e}")
 
         # ── 433批次1：月度 IC 重估轻钩子（earn-only；幂等、~3.4s、不阻塞主循环） ──
         try:
