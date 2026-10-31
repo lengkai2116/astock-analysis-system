@@ -76,6 +76,13 @@ QUALITY_RULES: dict[str, dict] = {
         'required_fields': ['dim_states', 'status_bar'],
     },
     'treemap_snapshot': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
+    # 2026-10-31：历史日期巡检必须查归档表——live 表只保留最新一日，
+    # 用 live 表名查历史日恒得 0 行（10-27/28/29 每 tick 假报 0/5291）。
+    'status_snapshot_history': {
+        'rows_ratio': 0.95, 'date_col': 'trade_date',
+        'required_fields': ['dim_states', 'status_bar'],
+    },
+    'treemap_snapshot_history': {'rows_ratio': 0.95, 'date_col': 'trade_date'},
 
     # ── 424号 P1-1：COL 原始采集表当日覆盖率/空表校验 ─────────────
     # check_mode='daily'：按 date_col 当日行数 vs daily_cache 锚 N 覆盖率

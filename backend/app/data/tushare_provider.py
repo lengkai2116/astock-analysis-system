@@ -34,9 +34,12 @@ def _to_tushare_date(v):
     return v
 
 
-def _ts(pro_func, *args, **kwargs):
+def _ts(pro_func, *args, quiet: bool = False, **kwargs):
     """带速率限制的 Tushare API 调用（428 日期整改 §阶段A：
-    调用前对 trade_date/start_date/end_date 做紧凑归一，根治横杠日期静默空返回）"""
+    调用前对 trade_date/start_date/end_date 做紧凑归一，根治横杠日期静默空返回）
+
+    quiet=True：逐只查询空返回属常态，降 DEBUG（2026-10-31 噪声收敛）。
+    """
     global _ts_last_call
     for _dkey in ('trade_date', 'start_date', 'end_date'):
         if _dkey in kwargs:
@@ -55,8 +58,9 @@ def _ts(pro_func, *args, **kwargs):
     _has_explicit_date = any(k in kwargs for k in ('trade_date', 'start_date', 'end_date'))
     try:
         if _has_explicit_date and hasattr(result, 'empty') and result.empty:
-            logger.warning(f"  [Tushare空返回] {getattr(pro_func, '__name__', str(pro_func))} "
-                           f"参数显式却返回空（{ {k: kwargs.get(k) for k in ('trade_date', 'start_date', 'end_date') if k in kwargs} }）")
+            _log = logger.debug if quiet else logger.warning
+            _log(f"  [Tushare空返回] {getattr(pro_func, '__name__', str(pro_func))} "
+                 f"参数显式却返回空（{ {k: kwargs.get(k) for k in ('trade_date', 'start_date', 'end_date') if k in kwargs} }）")
     except Exception:
         pass  # 告警为次要，不影响主流程
     return result
@@ -563,7 +567,7 @@ ts_code=ts_code,
             logger.warning(f"获取前十大股东失败 ({ts_code}): {e}")
             return []
 
-    def get_stk_holdernumber(self, ts_code, start_date=None, end_date=None):
+    def get_stk_holdernumber(self, ts_code, start_date=None, end_date=None, quiet: bool = False):
         """获取股东人数数据（需5000积分）"""
         if not self.pro:
             return []
@@ -572,7 +576,8 @@ ts_code=ts_code,
                 start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = _ts(self.pro.stk_holdernumber, ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.stk_holdernumber, ts_code=ts_code, start_date=start_date,
+                       end_date=end_date, quiet=quiet)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取股东人数失败 ({ts_code}): {e}")
@@ -595,7 +600,7 @@ ts_code=ts_code,
             logger.warning(f"获取股权质押统计失败 ({ts_code or end_date}): {e}")
             return []
 
-    def get_stk_holdertrade(self, ts_code, start_date=None, end_date=None):
+    def get_stk_holdertrade(self, ts_code, start_date=None, end_date=None, quiet: bool = False):
         """获取股东增减持（参考数据，需3000积分；现 token 5000 已含）
 
         按 ts_code + ann_date 窗口（默认近 2 年）。
@@ -607,7 +612,8 @@ ts_code=ts_code,
                 start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = _ts(self.pro.stk_holdertrade, ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.stk_holdertrade, ts_code=ts_code, start_date=start_date,
+                       end_date=end_date, quiet=quiet)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取股东增减持失败 ({ts_code}): {e}")
@@ -641,7 +647,7 @@ ts_code=ts_code,
             logger.warning(f"获取融资融券明细失败 ({trade_date}): {e}")
             return None
 
-    def get_forecast(self, ts_code, start_date=None, end_date=None):
+    def get_forecast(self, ts_code, start_date=None, end_date=None, quiet: bool = False):
         """获取业绩预告数据（需5000积分）"""
         if not self.pro:
             return []
@@ -650,7 +656,8 @@ ts_code=ts_code,
                 start_date = (datetime.now() - pd.Timedelta(days=2*365)).strftime('%Y%m%d')
             if end_date is None:
                 end_date = datetime.now().strftime('%Y%m%d')
-            data = _ts(self.pro.forecast, ts_code=ts_code, start_date=start_date, end_date=end_date)
+            data = _ts(self.pro.forecast, ts_code=ts_code, start_date=start_date,
+                       end_date=end_date, quiet=quiet)
             return data.to_dict('records') if data is not None and not data.empty else []
         except Exception as e:
             logger.warning(f"获取业绩预告失败 ({ts_code}): {e}")

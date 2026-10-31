@@ -37,6 +37,10 @@ PIPELINE_STEPS = [
     ('RAW-2E', '板块热度五维预计算'), ('RAW-2C', '个股行业位置持久化'),
     ('SIG', '策略分析'), ('JUD', '判定及操作建议'), ('OUT', '成品仓'),
     ('QA-CHECK', '仓储质量校验'),
+    # 548：QA 通过后用最终数据重建 OUT 成品仓（终版）。必须登记进本清单——
+    # 否则 QA done 时 _is_pipeline_complete() 即为 True，_drive_pipeline 顶部提前
+    # return，终版重建退化为只在次日 08:30 兜底（2026-10-30 实证滞后约 15h）。
+    ('OUT-MARKET-FINAL', 'OUT成品仓终版'),
 ]
 
 # 全局 ECM 单例
@@ -248,6 +252,11 @@ class EnhancedCacheManager:
         try:
             exist = {r[1] for r in self.conn.execute(
                 f"PRAGMA table_info({table})").fetchall()}
+            if not exist:
+                # 2026-10-31：该分库/连接没有此表（如总库上的 indicator_ma），
+                # 无需补列；此前会 ALTER 失败并刷 "no such table" 告警。
+                logger.debug(f"跳过迁移 {table}：本库无此表")
+                return
             for col, ctype in columns:
                 if col not in exist:
                     self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ctype}")
@@ -581,6 +590,14 @@ class EnhancedCacheManager:
                 logger.warning(f"521 O1: list_date 映射读取失败: {e}")
             EnhancedCacheManager._list_date_map = _m
         return EnhancedCacheManager._list_date_map
+
+    def invalidate_list_date_map(self) -> None:
+        """元数据补采后清空 list_date 缓存，使新股「上市前 5 个交易日」豁免立即生效。
+
+        2026-10-31：daemon 按需补 stocks 元数据后需立刻生效，否则本进程仍用旧映射，
+        IPO 首日行会继续被 _detect_outliers 当超限剔除，直到重启。
+        """
+        EnhancedCacheManager._list_date_map = None
 
     def _is_within_first5_trading_days(self, ts_code: str, trade_date) -> bool:
         """521号 O1：trade_date 是否落在该股上市首日起 5 个交易日内（含首日）

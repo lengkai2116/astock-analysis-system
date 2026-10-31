@@ -516,9 +516,11 @@ def _collect_lhb_and_news():
                         pass
                     logger.info(f"[lhb_detail_seat] {len(detail_all)} 条席位记录 (覆盖 {len(ts_codes[:30])} 只股票)")
             except Exception as e:
-                logger.warning(f"[lhb_detail_seat] 采集失败: {e}")
+                # 2026-10-31：东财该端点常返回空/非法载荷（库内对 None 下标），
+                # 龙虎榜主链路是 Tushare（lhb_cache / lhb_detail_cache），此处降级为 DEBUG。
+                logger.debug(f"[lhb_detail_seat] 采集失败: {e}")
     except Exception as e:
-        logger.warning(f"[lhb_detail] 采集失败: {e}")
+        logger.debug(f"[lhb_detail] 采集失败: {e}")
 
     # 新闻（用标题hash去重）
     # 521号 O3：原 ak.stock_news_em() 库内正则 bug（akshare/news/news_stock.py

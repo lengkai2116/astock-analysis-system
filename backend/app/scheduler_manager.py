@@ -71,6 +71,11 @@ class SchedulerManager:
             return
 
         self._app = app
+        # 2026-10-31：daemon 内多处 create_app() 会重复调本方法，第二次 start 抛
+        # "Scheduler is already running" 并刷告警；已运行时直接跳过（Job 已注册）。
+        if self._scheduler is not None and getattr(self._scheduler, 'running', False):
+            logger.debug("APScheduler 已在运行，跳过重复初始化（daemon 内多处 create_app）")
+            return
         if self._scheduler is None:
             self._scheduler = BackgroundScheduler(
                 daemon=True,

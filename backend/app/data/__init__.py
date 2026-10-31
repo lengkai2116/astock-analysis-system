@@ -1424,7 +1424,7 @@ class DataManager:
         total = 0
         for code in stocks:
             try:
-                raw = self.tushare.get_forecast(code)
+                raw = self.tushare.get_forecast(code, quiet=True)
                 if raw:
                     df = pd.DataFrame(raw)
                     if 'end_date' in df.columns:

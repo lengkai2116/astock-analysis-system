@@ -156,13 +156,16 @@ def _to_tushare_date(v):
     return v
 
 
-def _ts(pro_func, *args, **kwargs):
+def _ts(pro_func, *args, quiet: bool = False, **kwargs):
     """带速率限制 + 网络超时保护的 Tushare API 调用
 
     速率限制在主线程做（保持 ≤5次/秒 节奏稳定）；实际网络调用放入子线程，
     超过 _TS_CALL_TIMEOUT 未返回视为卡死，返回 None 由上层判空跳过。
     428 日期整改 §阶段A：调用前对 trade_date/start_date/end_date 参数做紧凑归一
     （YYYY-MM-DD → YYYYMMDD，根治 Tushare 对横杠日期的静默空返回）。
+
+    quiet=True：逐只查询中「空返回」是常态（如业绩预告/股东增减持多数股票没有），
+    降为 DEBUG 避免刷屏；区间/全市场查询保持 WARNING（空返回才可能是源异常）。
     """
     global _ts_last_call
     # 日期参数紧凑归一（仅影响 Tushare 调用入口，不改存储/展示侧横杠格式）
@@ -186,8 +189,9 @@ def _ts(pro_func, *args, **kwargs):
         _has_explicit_date = any(k in kwargs for k in ('trade_date', 'start_date', 'end_date'))
         try:
             if _has_explicit_date and hasattr(result, 'empty') and result.empty:
-                logger.warning(f"  [Tushare空返回] {getattr(pro_func, '__name__', str(pro_func))} "
-                               f"参数显式却返回空（{ {k: kwargs.get(k) for k in ('trade_date', 'start_date', 'end_date') if k in kwargs} }）")
+                _log = logger.debug if quiet else logger.warning
+                _log(f"  [Tushare空返回] {getattr(pro_func, '__name__', str(pro_func))} "
+                     f"参数显式却返回空（{ {k: kwargs.get(k) for k in ('trade_date', 'start_date', 'end_date') if k in kwargs} }）")
         except Exception:
             pass  # 告警为次要，不影响主流程
         return result
@@ -850,23 +854,74 @@ def _missing_index_codes(trade_date: str) -> list:
     return [c for c in BROAD_INDEX_CODES if c not in have]
 
 
+# 2026-10-31：指数日线兜底重试参数。源侧最晚 19:01 才发布（10-30 实证），
+# 原实现单次补采且忽略结果，缺则带缺口建面板，只能等次日 08:30 终版兜底。
+_INDEX_ENSURE_ATTEMPTS = 3
+_INDEX_ENSURE_INTERVAL = 10  # 秒
+
+
 def _ensure_index_daily(trade_date: str) -> int:
-    """548：OUT 前保证 BROAD_INDEX_CODES 全部有当日行（缺则补采）。"""
+    """OUT / 终版重建前保证 BROAD_INDEX_CODES 全部有当日行（缺则有界重试补采）。
+
+    返回已就位只数；重试后仍缺则告警并放行（整点巡检补到后会重置终版步骤重建）。
+    """
     ds = str(trade_date)
     if len(ds) == 8 and ds.isdigit():
         ds = f'{ds[:4]}-{ds[4:6]}-{ds[6:]}'
     try:
+        for attempt in range(1, _INDEX_ENSURE_ATTEMPTS + 1):
+            missing = _missing_index_codes(ds)
+            if not missing:
+                return len(BROAD_INDEX_CODES)
+            logger.warning(
+                f"  [指数日线] {ds} 缺 {len(missing)}/{len(BROAD_INDEX_CODES)} 只"
+                f"（{','.join(missing)}），第 {attempt}/{_INDEX_ENSURE_ATTEMPTS} 次补采...")
+            _batch_index_daily(ds.replace('-', ''))
+            if not _missing_index_codes(ds):
+                return len(BROAD_INDEX_CODES)
+            if attempt < _INDEX_ENSURE_ATTEMPTS:
+                time.sleep(_INDEX_ENSURE_INTERVAL)
         missing = _missing_index_codes(ds)
-        if not missing:
-            return len(BROAD_INDEX_CODES)
         logger.warning(
-            f"  [指数日线] {ds} 缺 {len(missing)}/{len(BROAD_INDEX_CODES)} 只"
-            f"（{','.join(missing)}），OUT 前补采...")
-        _batch_index_daily(ds.replace('-', ''))
-        return len(BROAD_INDEX_CODES) - len(_missing_index_codes(ds))
+            f"  [指数日线] {ds} 重试后仍缺 {len(missing)} 只（{','.join(missing)}），"
+            f"按现有数据处理；整点巡检补到后将重置 OUT-MARKET-FINAL 重建终版")
+        return len(BROAD_INDEX_CODES) - len(missing)
     except Exception as e:
         logger.warning(f"  指数日线完整性检查失败: {e}")
         return 0
+
+
+def _refresh_out_final_if_index_late(date_fmt: str, missing_before: list) -> bool:
+    """指数日线晚到时，把该日 OUT-MARKET-FINAL 重置为 pending，让管道重建终版。
+
+    10-30 实证：面板可先于指数发布构建（18:40），指数 19:01 才到。只在「本次补采
+    确实补齐 + 该日是最新数据日 + 终版已 done」时触发，避免无谓重建。
+    """
+    if not missing_before:
+        return False
+    try:
+        if _missing_index_codes(date_fmt):
+            return False
+        latest = _get_latest_data_date()
+        if not latest or latest != date_fmt:
+            return False
+        compact = date_fmt.replace('-', '')
+        _ensure_ecm()
+        row = _ecm.conn.execute(
+            "SELECT status FROM pipeline_status "
+            "WHERE pipeline_date=? AND step_id='OUT-MARKET-FINAL'", [compact]).fetchone()
+        if not row or str(row[0]) != 'done':
+            return False
+        _ecm.conn.execute(
+            "UPDATE pipeline_status SET status='pending', detail=? "
+            "WHERE pipeline_date=? AND step_id='OUT-MARKET-FINAL'",
+            ['指数日线补采完成，重建终版', compact])
+        _ecm.conn.commit()
+        logger.info(f"  [指数日线] {date_fmt} 指数已补齐，重置 OUT-MARKET-FINAL → 重建终版")
+        return True
+    except Exception as e:
+        logger.warning(f"  [指数日线] 重置终版步骤失败: {e}")
+        return False
 
 
 def _backfill_index_daily(days: int = 25) -> int:
@@ -1691,7 +1746,7 @@ def _sync_single_stk_holder(code: int = 0) -> int:
     """单只股东人数补采（复用 429号 单只路径）"""
     _ensure_ecm()
     provider = _get_tushare_provider()
-    raw = provider.get_stk_holdernumber(code)
+    raw = provider.get_stk_holdernumber(code, quiet=True)
     if raw:
         import pandas as _pd
         df = _pd.DataFrame(raw)
@@ -1783,7 +1838,7 @@ def _batch_stk_holdertrade(codes: list = None) -> int:
     total = 0
     for code in codes:
         try:
-            raw = provider.get_stk_holdertrade(code)
+            raw = provider.get_stk_holdertrade(code, quiet=True)
             if raw:
                 import pandas as _pd
                 df = _pd.DataFrame(raw)
@@ -1801,7 +1856,7 @@ def _sync_single_stk_holdertrade(code: int = 0) -> int:
     """单只股东增减持补采（覆盖巡检用）"""
     _ensure_ecm()
     provider = _get_tushare_provider()
-    raw = provider.get_stk_holdertrade(code)
+    raw = provider.get_stk_holdertrade(code, quiet=True)
     if raw:
         import pandas as _pd
         df = _pd.DataFrame(raw)
@@ -1976,6 +2031,109 @@ def _batch_stock_list() -> int:
     except Exception as e:
         logger.warning(f"股票列表同步失败: {e}")
         return 0
+
+
+def _missing_stock_metadata_codes(limit: int = 50) -> list[str]:
+    """最新交易日 daily_cache 中出现、但 stocks 表无元数据的个股代码（排除指数）。
+
+    2026-10-31：stocks 全量同步只在每月 1 日 04:00（monthly_stock_sync），新股上市
+    当天就会出现 daily_cache 却无元数据 → COL 清洗拿不到 list_date，IPO 首日
+    |pct_chg|>50% 被当脏数据剔除，且每小时 K 线补采重复告警（10-30 实证 3 只）。
+    """
+    try:
+        rows = _shard_fetchall(
+            'daily_cache',
+            "SELECT DISTINCT ts_code FROM daily_cache WHERE trade_date=("
+            "SELECT MAX(trade_date) FROM daily_cache)")
+    except Exception as e:
+        logger.debug(f"  [股票元数据] 读取最新交易日失败: {e}")
+        return []
+    codes = [str(r[0]) for r in (rows or []) if r and r[0]]
+    if not codes:
+        return []
+    import sqlite3
+    app_db = os.path.join(os.getenv('DATA_DIR', 'data'), 'app.db')
+    try:
+        with sqlite3.connect(f'file:{app_db}?mode=ro', uri=True, timeout=5) as con:
+            known = {str(r[0]) for r in con.execute("SELECT ts_code FROM stocks")}
+    except Exception as e:
+        logger.warning(f"  [股票元数据] 读取 stocks 失败: {e}")
+        return []
+    return [c for c in codes
+            if c not in known and not is_index_code(c)][:limit]
+
+
+def _sync_treemap_stock_meta(ts_code: str, name: str, industry: str) -> None:
+    """把补到的元数据回填 treemap_snapshot（name/industry），地图不必等 JUD 重建。"""
+    if not name and not industry:
+        return
+    try:
+        from app.data.sharding_manager import sharding_manager
+        conn = sharding_manager.get_connection('snapshot_cache.db')
+        conn.execute(
+            "UPDATE treemap_snapshot SET name=COALESCE(?, name), "
+            "industry=COALESCE(?, industry) WHERE ts_code=?",
+            [name or None, industry or None, ts_code])
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"  [股票元数据] treemap 回填失败 {ts_code}: {e}")
+
+
+def _backfill_missing_stock_metadata(max_codes: int = 20) -> int:
+    """按需补采新股元数据（单只 stock_basic → stocks + treemap 名称/行业）。
+
+    不改月度全量同步，也不放宽清洗阈值；补到 list_date 后清空 ECM 的 list_date 缓存，
+    使「上市前 5 个交易日」豁免立即生效（随后的 K 线深度巡检会重取该股历史，
+    把此前被误剔除的 IPO 首日行补回）。
+    """
+    codes = _missing_stock_metadata_codes(max_codes)
+    if not codes:
+        return 0
+    logger.info(f"  [股票元数据] 缺 {len(codes)} 只（{','.join(codes[:5])}），单只补采...")
+    import sqlite3
+
+    import tushare as ts
+    pro = ts.pro_api()
+    app_db = os.path.join(os.getenv('DATA_DIR', 'data'), 'app.db')
+    added = 0
+    for code in codes:
+        try:
+            raw = _ts(pro.stock_basic, ts_code=code,
+                      fields='ts_code,symbol,name,industry,market,list_date')
+            if raw is None or raw.empty:
+                logger.warning(f"  [股票元数据] {code} stock_basic 返回空，下轮再试")
+                continue
+            row = raw.iloc[0].to_dict()
+            ld = str(row.get('list_date') or '').strip()
+            if len(ld) == 8 and ld.isdigit():
+                ld = f'{ld[:4]}-{ld[4:6]}-{ld[6:]}'
+            list_date = ld[:10] if ld else None
+            symbol = str(row.get('symbol') or code.split('.')[0])
+            name = str(row.get('name') or '')
+            industry = row.get('industry')
+            with sqlite3.connect(app_db, timeout=10) as con:
+                con.execute(
+                    "INSERT INTO stocks (ts_code, symbol, name, industry, market, "
+                    "list_date, created_at, updated_at) "
+                    "VALUES (?,?,?,?,?,?,datetime('now','localtime'),datetime('now','localtime')) "
+                    "ON CONFLICT(ts_code) DO UPDATE SET symbol=excluded.symbol, "
+                    "name=excluded.name, industry=excluded.industry, "
+                    "market=excluded.market, list_date=excluded.list_date, "
+                    "updated_at=excluded.updated_at",
+                    [code, symbol, name, industry, row.get('market'), list_date])
+                con.commit()
+            _sync_treemap_stock_meta(code, name, industry)
+            added += 1
+            logger.info(f"    → {code} {name} 上市 {list_date}")
+        except Exception as e:
+            logger.warning(f"  [股票元数据] {code} 补采失败: {e}")
+    if added:
+        try:
+            _ensure_ecm()
+            _ecm.invalidate_list_date_map()
+        except Exception as e:
+            logger.warning(f"  [股票元数据] 清理 list_date 缓存失败: {e}")
+    return added
 
 
 def _target_fin_period() -> str:
@@ -2157,7 +2315,7 @@ def _batch_forecast(codes: list = None) -> int:
         codes = [r[0] for r in codes[:500]]
     for code in codes:
         try:
-            raw = provider.get_forecast(code)
+            raw = provider.get_forecast(code, quiet=True)
             # provider 返回 list（to_dict('records')），非 DataFrame
             if raw:
                 df = pd.DataFrame(raw)
@@ -2455,6 +2613,14 @@ def run_integrity_check(backfill_days: int = 1):
     # 548号：ETF 份额按市场完整性兜底（SH/SZ 单边缺失时重采）
     _check_fund_share_completeness(backfill_days)
 
+    # 2026-10-31：新股元数据按需补采——stocks 全量同步为月更，新股上市当天缺记录会
+    # 导致 IPO 首日 |pct_chg|>50% 被 COL 清洗误剔除、地图名称为空且每小时重复告警。
+    # 放在 K 线深度检查之前：补到 list_date 后，本轮 K 线重取即可豁免并补回首日行。
+    try:
+        _backfill_missing_stock_metadata()
+    except Exception as e:
+        logger.warning(f"  [股票元数据] 检查失败: {e}")
+
     # 320号 F1：K 线深度检查（策略引擎需要 ≥130 根，不足则标签/九层解读 K 线维度失效）
     try:
         _backfill_all_insufficient_kline(threshold=130, max_codes=200)
@@ -2638,6 +2804,8 @@ def run_integrity_check(backfill_days: int = 1):
             f"  [指数日线] {idx_date} 缺 {len(missing)}/{len(BROAD_INDEX_CODES)} 只"
             f"{('（' + ','.join(missing) + '）') if missing else ''}，补采...")
         _batch_index_daily(ds_api)
+        # 2026-10-31：指数晚于 OUT/终版到达时，重置 FINAL 让管道重建一次终版
+        _refresh_out_final_if_index_late(idx_date, missing)
 
     # 申万行业指数完整性检查（31 个行业，缺失/陈旧时 sw_daily 区间回填）
     import tushare as _ts_sw, pandas as _pd_sw
@@ -2885,6 +3053,10 @@ def _check_data_consistency():
             'daily_basic_cache', "SELECT DISTINCT ts_code FROM daily_basic_cache WHERE trade_date = ?", [today_fmt]))
 
         if daily_codes and basic_codes:
+            # 2026-10-31：先剔除指数——宽基与申万行业指数只入 daily_cache，daily_basic
+            # 是个股口径，本就不含；不过滤会每天恒报「daily_basic 缺失 36 只」。
+            daily_codes = {c for c in daily_codes if not is_index_code(c)}
+            basic_codes = {c for c in basic_codes if not is_index_code(c)}
             missing_in_basic = daily_codes - basic_codes
             missing_in_daily = basic_codes - daily_codes
             if missing_in_basic:
@@ -6762,6 +6934,8 @@ def _finalize_out_market_panel(pipeline_date: str):
             [pipeline_date]).fetchone()
         if prev and str(prev[0]) == 'done':
             return
+        # 2026-10-31：终版重建同样保证指数齐全（源可能晚于 OUT，多给一次有界重试机会）
+        _ensure_index_daily(pipeline_date)
         res = _build_out_market_panel(pipeline_date)
         errors = res.get('errors') or {}
         status = 'done' if not errors else 'failed'
@@ -8479,6 +8653,11 @@ def _run_history_qa_patrol(limit: int = 3):
 
     检测 strategy_signal_detail/status_snapshot/treemap_snapshot 缺失并记日志；
     历史补算风险大（全市场重跑），仅告警留痕，由完整性检查/人工处置。
+
+    2026-10-31：`status_snapshot`/`treemap_snapshot` 是**只存最新一日的 live 表**，
+    查历史日恒为 0 行（10-27/28/29 每 tick 假报 0/5291）；历史日改查对应
+    `*_history` 归档表，且最新数据日整体跳过（当日 live 表由 QA-CHECK 校验，
+    日终未跑完时也不该报「历史缺失」）。
     """
     checker, _ = _get_stg_components()
     try:
@@ -8487,15 +8666,23 @@ def _run_history_qa_patrol(limit: int = 3):
             "ORDER BY trade_date DESC LIMIT ?", [limit])
     except Exception:
         return
-    for (d,) in rows:
-        d = str(d)
-        if not d:
+    dates = [str(d) for (d,) in (rows or []) if d]
+    if not dates:
+        return
+    latest = dates[0]
+    hist_table = {
+        'status_snapshot': 'status_snapshot_history',
+        'treemap_snapshot': 'treemap_snapshot_history',
+    }
+    for d in dates:
+        if d == latest:
             continue
         for table in ['strategy_signal_detail', 'status_snapshot', 'treemap_snapshot']:
+            target = hist_table.get(table, table)
             try:
-                r = checker.check_table(table, d)
+                r = checker.check_table(target, d)
                 if not r.passed:
-                    logger.warning(f"[QA-巡检] 历史日期 {d} {table} 缺失: {r.issues}")
+                    logger.warning(f"[QA-巡检] 历史日期 {d} {target} 缺失: {r.issues}")
             except Exception:
                 pass
 
@@ -8651,6 +8838,9 @@ def _self_check_pipeline_registration():
             return
         expected = {sid for sid, _ in PIPELINE_STEPS}
         missing = sorted(expected - actual)
+        # OUT-MARKET-CHECK 由 _verify_out_market_panel 在 OUT done 后条件写入，
+        # 属附加校验（非固定流程环节），故从「未知步骤」中排除；
+        # OUT-MARKET-FINAL 已登记进 PIPELINE_STEPS（保证 QA 后当日必建终版）。
         unknown = sorted(actual - expected - {'OUT-MARKET-CHECK'})
         if missing:
             _pipeline_alert(

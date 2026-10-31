@@ -6,7 +6,7 @@ UPDATE 命中 0 行返回 False，_run_pipeline_step 静默 return，管道连�
 三日卡在 RAW-2B 之后，SIG/JUD/OUT 永不执行。
 
 本测试锁定两条不变量：
-1. ensure_pipeline_steps 注册全部 18 个环节（含 RAW-2D/RAW-2E）；
+1. ensure_pipeline_steps 注册全部登记环节（含 RAW-2D/RAW-2E/OUT-MARKET-FINAL）；
 2. _run_pipeline_step 对未登记环节有缺行兜底（补登记 + 重试），不再静默丢失。
 """
 import os
@@ -28,19 +28,22 @@ def ecm(tmp_path, monkeypatch):
 
 
 def test_ensure_pipeline_steps_registers_raw2d_raw2e(ecm):
+    from app.data.enhanced_cache_manager import PIPELINE_STEPS
+    expected = len(PIPELINE_STEPS)
     ecm.ensure_pipeline_steps('20990101')
     rows = dict(ecm.conn.execute(
         "SELECT step_id, status FROM pipeline_status WHERE pipeline_date='20990101'"
     ).fetchall())
-    assert len(rows) == 18, f"应登记 18 个环节，实际 {len(rows)}: {sorted(rows)}"
+    assert len(rows) == expected, f"应登记 {expected} 个环节，实际 {len(rows)}: {sorted(rows)}"
     assert rows.get('RAW-2D') == 'pending'
     assert rows.get('RAW-2E') == 'pending'
     assert rows.get('RAW-2C') == 'pending'
+    assert rows.get('OUT-MARKET-FINAL') == 'pending'
     # 幂等
     ecm.ensure_pipeline_steps('20990101')
     assert ecm.conn.execute(
         "SELECT COUNT(*) FROM pipeline_status WHERE pipeline_date='20990101'"
-    ).fetchone()[0] == 18
+    ).fetchone()[0] == expected
 
 
 def test_run_pipeline_step_self_registers_missing_step(ecm, monkeypatch):
