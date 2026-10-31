@@ -237,6 +237,15 @@ def _build_stock_item(ts_code: str, name_map: dict, industry_map: dict,
     }
 
 
+def _is_panel_stale(snap_date: str | None, expected_date: str | None = None) -> bool:
+    """550-D：按交易日历判断成品仓是否落后，不用自然日误判周末。"""
+    if not snap_date:
+        return True
+    if not expected_date:
+        expected_date = datetime.now().strftime('%Y-%m-%d')
+    return snap_date < expected_date
+
+
 def _build_response(mode: str, items: list[dict]) -> dict:
     """按行业分组组装最终响应"""
     groups_dict: dict[str, list] = {}
@@ -262,6 +271,10 @@ def _build_response(mode: str, items: list[dict]) -> dict:
     _missing_rate = _missing_count / _total if _total else 0.0
     _coverage_nonnull = 1.0 - _missing_rate if _total else 0.0
     _missing_ss = _missing_rate > 0.01
+    _missing_codes = [
+        it.get('ts_code') for it in items
+        if it.get('signal_strength') is None and it.get('ts_code')
+    ]
     # 313号：潜力快照日期（前端时间标注：潜力基于快照、时机截至实时）
     # 合规整改：经 DataManager 网关（红线5），原直连 get_ecm().conn 属违规
     _snap_date = None
@@ -287,8 +300,13 @@ def _build_response(mode: str, items: list[dict]) -> dict:
     except Exception:
         pass
     # 547号：OUT 成品仓元信息（treemap_snapshot 由 JUD 构建、OUT 归档）
-    _panel_stale = bool(
-        (not _snap_date) or (_snap_date < datetime.now().strftime('%Y-%m-%d')))
+    # 550-D：stale 按交易日历（market_date_resolver.eod_date），周末不再误判落后。
+    try:
+        from app.services.market_date_resolver import eod_date
+        _expected_panel_date = eod_date()
+    except Exception:
+        _expected_panel_date = None
+    _panel_stale = _is_panel_stale(_snap_date, _expected_panel_date)
     return {
         'code': 0,
         'data': {
@@ -297,12 +315,14 @@ def _build_response(mode: str, items: list[dict]) -> dict:
             'panel_source': 'out' if _snap_date else 'missing',
             'panel_date': _data_date,
             'panel_built_at': _snap_date,
+            'panel_expected_date': _expected_panel_date,
             'stale': _panel_stale,
             'signal_strength_fallback': _missing_ss,
             'signal_strength_coverage': round(_coverage_nonnull, 4),
             'signal_strength_positive_coverage': round(coverage, 4),
             'signal_strength_missing_count': _missing_count,
             'signal_strength_missing_rate': round(_missing_rate, 4),
+            'signal_strength_missing_codes': _missing_codes[:20],
             'data_status': 'pre_compute' if _missing_ss else 'complete',
             'generated_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
             'snapshot_date': _snap_date,   # 313号：潜力快照日期（时间标注）
@@ -322,6 +342,18 @@ def treemap():
     ts_codes_param = request.args.get('ts_codes', '')
     tags_param = request.args.get('tags', '')
     industry_param = request.args.get('industry', '')
+
+    # 550-D：机会地图=market 数据+前端 opportunity_state 着色；旧 mode 明确废弃，
+    # 不再返回易被误读为空数据的 no_data。
+    if mode == 'opportunity':
+        return jsonify({'code': 0, 'data': {
+            'mode': mode,
+            'groups': [],
+            'data_status': 'deprecated',
+            'deprecated': True,
+            'message': 'mode=opportunity 已废弃；机会地图请使用 mode=market，前端按 opportunity_state 着色',
+            'generated_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
+        }})
 
     cache_key = _treemap_cache_key(mode, tags_param, industry_param, ts_codes_param)
     tm_cache = _get_memory_cache()
