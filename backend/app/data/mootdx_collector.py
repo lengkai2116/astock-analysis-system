@@ -1397,7 +1397,9 @@ class MootdxCollector:
         # 分钟数据线程：仅 mootdx 可用时启动（minutes() 尚可用）
         # 2026-08-12 328号P0：加交易时段限制（check_trading_time=True）——
         # 原 False 致非交易时段（如10:00开机）也采集分钟线，与预计算抢连接/CPU。
-        # 非交易时段分钟线完整性由日终 Tushare pro_bar 回填兜底（_batch_backfill_minute_kline）。
+        # 非交易时段分钟线由 mootdx `minute_full` + 自选股 `minute_backfill v2` 覆盖；
+        # 554-C：v1 Tushare/pro_bar 全市场回填（_batch_backfill_minute_kline）已于
+        # 414 号 R20 停用，THS time 兜底亦随之下线，勿再据旧注释判断已有双源兜底。
         if client is not None:
             self._threads.append(
                 _MootdxThread('minute_full', 300, collect_minute_full, initial_delay=60,

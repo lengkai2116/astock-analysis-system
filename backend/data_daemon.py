@@ -894,30 +894,42 @@ def _ensure_index_daily(trade_date: str) -> int:
 def _refresh_out_final_if_index_late(date_fmt: str, missing_before: list) -> bool:
     """指数日线晚到时，把该日 OUT-MARKET-FINAL 重置为 pending，让管道重建终版。
 
-    10-30 实证：面板可先于指数发布构建（18:40），指数 19:01 才到。只在「本次补采
-    确实补齐 + 该日是最新数据日 + 终版已 done」时触发，避免无谓重建。
+    10-30 实证：面板可先于指数发布构建（18:40），指数 19:01 才到。
+    554-B（2026-11-02）：触发不再依赖「本次巡检当场观测到缺口」——只要该日指数
+    现已齐全，且终版因 index_missing 失败/放行（或调用方明确报告本次补齐），
+    就重置重建；仅对最新数据日生效，避免无谓重建。
     """
-    if not missing_before:
-        return False
     try:
-        if _missing_index_codes(date_fmt):
+        ds = str(date_fmt)
+        if len(ds) == 8 and ds.isdigit():
+            ds = f'{ds[:4]}-{ds[4:6]}-{ds[6:]}'
+        if _missing_index_codes(ds):
             return False
         latest = _get_latest_data_date()
-        if not latest or latest != date_fmt:
+        if not latest or str(latest) != ds:
             return False
-        compact = date_fmt.replace('-', '')
+        compact = ds.replace('-', '')
         _ensure_ecm()
         row = _ecm.conn.execute(
-            "SELECT status FROM pipeline_status "
+            "SELECT status, detail FROM pipeline_status "
             "WHERE pipeline_date=? AND step_id='OUT-MARKET-FINAL'", [compact]).fetchone()
-        if not row or str(row[0]) != 'done':
+        if not row:
             return False
+        status = str(row[0] or '')
+        detail = str(row[1] or '')
+        if status == 'pending':
+            return False
+        if not missing_before and 'index_missing' not in detail:
+            return False
+        new_detail = ('指数日线补采完成，重建终版' if missing_before
+                      else f'指数日线已补齐，重建终版（原: {detail[:80]}）')
         _ecm.conn.execute(
-            "UPDATE pipeline_status SET status='pending', detail=? "
+            "UPDATE pipeline_status SET status='pending', retry_count=0, detail=? "
             "WHERE pipeline_date=? AND step_id='OUT-MARKET-FINAL'",
-            ['指数日线补采完成，重建终版', compact])
+            [new_detail, compact])
         _ecm.conn.commit()
-        logger.info(f"  [指数日线] {date_fmt} 指数已补齐，重置 OUT-MARKET-FINAL → 重建终版")
+        _FINAL_RETRY_STATE.update(date='', next_at=0.0)
+        logger.info(f"  [指数日线] {ds} 指数已补齐，重置 OUT-MARKET-FINAL → 重建终版")
         return True
     except Exception as e:
         logger.warning(f"  [指数日线] 重置终版步骤失败: {e}")
@@ -2806,6 +2818,16 @@ def run_integrity_check(backfill_days: int = 1):
         _batch_index_daily(ds_api)
         # 2026-10-31：指数晚于 OUT/终版到达时，重置 FINAL 让管道重建一次终版
         _refresh_out_final_if_index_late(idx_date, missing)
+
+    # 554-B（2026-11-02）：补偿触发——源可能在两次巡检之间补齐（10-30 实测 19:01
+    # 发布 vs 19:00/20:00 巡检），此时 idx_checks 不含该日、上面的调用不会发生。
+    # 故对最新数据日无条件再判一次：终版 detail 含 index_missing 且现已齐全 → 重建。
+    try:
+        _latest_data_date = _get_latest_data_date()
+        if _latest_data_date:
+            _refresh_out_final_if_index_late(_latest_data_date, [])
+    except Exception as e:
+        logger.warning(f"  [指数日线] 终版补偿检查失败: {e}")
 
     # 申万行业指数完整性检查（31 个行业，缺失/陈旧时 sw_daily 区间回填）
     import tushare as _ts_sw, pandas as _pd_sw
@@ -6917,40 +6939,115 @@ def _verify_out_market_panel(pipeline_date: str):
         logger.warning(f"OUT市场成品校验失败: {exc}")
 
 
-def _finalize_out_market_panel(pipeline_date: str):
-    """548：QA 完成后用最终数据重建一次 OUT 成品仓（幂等）。
+# 554-A（2026-11-02）：终版重建有界重试。原实现失败即每 30s 重建 17 个模块，
+# 且 errors 非空只记 failed、无计数/退避/告警（FINAL 入管道后因此永不完成）。
+_FINAL_RETRY_MAX = 3
+_FINAL_RETRY_BASE = 120      # 秒：第 1 次失败后退避 120s，之后 240/480…
+_FINAL_RETRY_CAP = 1800      # 退避上限 30 分钟
+_FINAL_RETRY_STATE = {'date': '', 'next_at': 0.0}
 
-    当日 OUT 首次构建可能早于指数/ETF 等补采；QA 通过后重建，保证面板
-    内容与最终库内数据一致。用 OUT-MARKET-FINAL 标记避免每 tick 重跑。
+
+def _final_record_failure(pipeline_date: str, rc: int, reason: str, **meta) -> str:
+    """554-A：记录终版失败——未超限写 failed+退避，超限转 done+告警。
+
+    超限转 done 沿用 543 号 QA-CHECK 先例：避免 `_is_pipeline_complete` 永不成立、
+    管道整夜空转；缺口由整点巡检补偿与次日 08:30 兜底。
     """
+    global _ecm
+    rc = int(rc or 0) + 1
     try:
-        global _ecm
-        if _ecm is None:
-            from app.data.enhanced_cache_manager import get_ecm_instance
-            _ecm = get_ecm_instance()
-        prev = _ecm.conn.execute(
-            "SELECT status FROM pipeline_status "
-            "WHERE pipeline_date=? AND step_id='OUT-MARKET-FINAL'",
-            [pipeline_date]).fetchone()
-        if prev and str(prev[0]) == 'done':
-            return
-        # 2026-10-31：终版重建同样保证指数齐全（源可能晚于 OUT，多给一次有界重试机会）
-        _ensure_index_daily(pipeline_date)
-        res = _build_out_market_panel(pipeline_date)
-        errors = res.get('errors') or {}
-        status = 'done' if not errors else 'failed'
-        detail = f"written={res.get('written', 0)} errors={list(errors)[:5]}"
+        if rc >= _FINAL_RETRY_MAX:
+            status = 'done'
+            detail = f'终版重建重试超限({_FINAL_RETRY_MAX}次)，已告警: {reason}'
+            _FINAL_RETRY_STATE.update(date=pipeline_date, next_at=0.0)
+            _pipeline_alert(
+                'OUT终版重建失败',
+                f'{pipeline_date} {detail}',
+                'OUT_FINAL_FAILED', 'out_final',
+                {'pipeline_date': pipeline_date, **meta},
+            )
+        else:
+            status = 'failed'
+            detail = f'第{rc}/{_FINAL_RETRY_MAX}次失败: {reason}'
+            backoff = min(_FINAL_RETRY_BASE * (2 ** (rc - 1)), _FINAL_RETRY_CAP)
+            _FINAL_RETRY_STATE.update(date=pipeline_date, next_at=time.time() + backoff)
         from app.data.sharding_manager import sharding_manager
         with sharding_manager.get_write_lock('stock_cache.db'):
             _ecm.conn.execute(
                 "INSERT OR REPLACE INTO pipeline_status "
-                "(pipeline_date, step_id, step_name, status, detail) "
-                "VALUES (?, 'OUT-MARKET-FINAL', 'OUT成品仓终版', ?, ?)",
-                [pipeline_date, status, detail])
+                "(pipeline_date, step_id, step_name, status, completed_at, detail, retry_count) "
+                "VALUES (?, 'OUT-MARKET-FINAL', 'OUT成品仓终版', ?, ?, ?, ?)",
+                [pipeline_date, status,
+                 datetime.now().strftime('%Y-%m-%d %H:%M:%S'), detail, rc])
             _ecm.conn.commit()
-        logger.info(f"  [管道] OUT成品仓终版重建: {detail}")
+        logger.warning(f"  [管道] OUT成品仓终版: {detail}")
+        return status
     except Exception as exc:
-        logger.warning(f"OUT 成品仓终版重建失败: {exc}")
+        logger.warning(f"OUT 成品仓终版状态写入失败: {exc}")
+        return 'failed'
+
+
+def _finalize_out_market_panel(pipeline_date: str) -> str:
+    """548：QA 完成后用最终数据重建一次 OUT 成品仓（幂等）。
+
+    554-A（2026-11-02）：有界重试（默认 3 次、指数退避），超限转 done + 告警，
+    避免任一模块持续报错时每 30s 重建 17 个模块（原实现无计数/退避/告警）。
+    554-B：指数未齐不建终版（构建前硬门禁），缺口写 detail 供巡检补偿。
+
+    返回 'done' | 'failed' | 'skipped'。
+    """
+    global _ecm
+    try:
+        if _ecm is None:
+            from app.data.enhanced_cache_manager import get_ecm_instance
+            _ecm = get_ecm_instance()
+        row = _ecm.conn.execute(
+            "SELECT status, retry_count FROM pipeline_status "
+            "WHERE pipeline_date=? AND step_id='OUT-MARKET-FINAL'",
+            [pipeline_date]).fetchone()
+        status = str(row[0]) if row and row[0] else ''
+        rc = int(row[1]) if row and row[1] is not None else 0
+        if status == 'done':
+            return 'done'
+        st = _FINAL_RETRY_STATE
+        if st['date'] == pipeline_date and time.time() < st['next_at']:
+            logger.info(f"  [管道] OUT成品仓终版退避中（剩余 {int(st['next_at'] - time.time())}s）")
+            return 'skipped'
+    except Exception as exc:
+        logger.warning(f"OUT 成品仓终版状态读取失败: {exc}")
+        return 'failed'
+
+    try:
+        # 554-B：先有界补采（3×10s），仍缺则不建半成品终版
+        _ensure_index_daily(pipeline_date)
+        missing = _missing_index_codes(pipeline_date)
+        if missing:
+            return _final_record_failure(
+                pipeline_date, rc,
+                f'index_missing={len(missing)}/{len(BROAD_INDEX_CODES)}'
+                f'（{",".join(missing[:5])}）',
+                missing_index=len(missing))
+        res = _build_out_market_panel(pipeline_date)
+        errors = res.get('errors') or {}
+        if errors:
+            return _final_record_failure(
+                pipeline_date, rc, f'errors={list(errors)[:5]}',
+                written=res.get('written', 0))
+        detail = f"written={res.get('written', 0)} errors=[]"
+        from app.data.sharding_manager import sharding_manager
+        with sharding_manager.get_write_lock('stock_cache.db'):
+            _ecm.conn.execute(
+                "INSERT OR REPLACE INTO pipeline_status "
+                "(pipeline_date, step_id, step_name, status, completed_at, detail, retry_count) "
+                "VALUES (?, 'OUT-MARKET-FINAL', 'OUT成品仓终版', 'done', ?, ?, ?)",
+                [pipeline_date, datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                 detail, rc])
+            _ecm.conn.commit()
+        _FINAL_RETRY_STATE.update(date=pipeline_date, next_at=0.0)
+        logger.info(f"  [管道] OUT成品仓终版重建: {detail}")
+        return 'done'
+    except Exception as exc:
+        return _final_record_failure(pipeline_date, rc, f'异常: {exc}')
 
 
 def _out_transmit_seven_dim(codes: list[str]):
@@ -7980,6 +8077,8 @@ _EOD_STEP_BASELINE = {
     'COL-7': 2317, 'RAW-1': 341, 'RAW-2': 8333, 'RAW-3': 341,
     'RAW-2B': 89, 'RAW-2C': 21, 'RAW-2D': 1, 'RAW-2E': 3,
     'SIG': 4512, 'JUD': 2216, 'OUT': 12, 'QA-CHECK': 121,
+    # 554-A：FINAL 入管道后必须进基线表，否则「只剩终版未完成」时 ETA 会写 0 分钟
+    'OUT-MARKET-FINAL': 12,
 }
 
 
@@ -8503,9 +8602,12 @@ def _drive_pipeline():
         return
 
     # 548：QA 通过后用最终数据重建 OUT 成品仓（同日快照 → final 升级）
-    _finalize_out_market_panel(today)
-
-    logger.info(f"  [管道] 今日全链路完成 ✅")
+    # 554-A：按返回值区分「真完成」与「终版退避/失败」，不再无条件宣称完成
+    _final_status = _finalize_out_market_panel(today)
+    if _final_status == 'done':
+        logger.info("  [管道] 今日全链路完成 ✅")
+    else:
+        logger.info(f"  [管道] 今日主链路完成，终版未就绪（{_final_status}），下轮重试/巡检补偿")
 
 
 def _verify_out_completeness(pipeline_date: str):
@@ -8696,6 +8798,8 @@ _PIPELINE_STEP_TIMEOUT_MIN = {
     'RAW-1': 120, 'RAW-2': 240, 'RAW-3': 150,
     'RAW-2B': 30, 'RAW-2C': 30, 'RAW-2D': 30, 'RAW-2E': 30,
     'SIG': 120, 'JUD': 90, 'OUT': 30, 'QA-CHECK': 30, 'COL-7': 60,
+    # 554-A：终版正常 10~15s；未登记会回落 90min 默认值，退避异常时告警过晚
+    'OUT-MARKET-FINAL': 15,
 }
 _EOD_CHECK_STATE = {'checked_date': None}
 
@@ -9230,26 +9334,15 @@ def _batch_backfill_minute_kline(trade_date: str = None):
 
         logger.info(f"[分钟回填] 第{round_idx+1}轮: 补齐 {len(missing)} 只 (已有 {len(minute_stocks)}/{len(daily_stocks)})")
 
-        # Step 4: 逐只调用 Tushare pro_bar 补齐；失败时用同花顺 time 兜底（553-C）
+        # Step 4: 逐只调用 Tushare pro_bar 补齐
+        # 554-C（2026-11-02）：原 553-C 的「同花顺 time 兜底」已下线——本函数入口
+        # `_run_minute_backfill` 在 414 号 R20 被注释（仅保留 mootdx v2），兜底从未执行；
+        # 且 THS 帧缺 ts_code 时以 NULL 落 minute_kline_cache（不可读）。如需分钟兜底，
+        # 另开号接入 mootdx v2 缺口路径，并复用已补全 ts_code/freq 的 ths_provider。
         ok = 0
-        ths_ok = 0
-        ths_tried = 0
-        THS_MAX_PER_ROUND = 200
         for i, code in enumerate(missing):
             try:
                 raw = ts.pro_bar(ts_code=code, start_date=trade_date, end_date=trade_date, freq='1min', adj='qfq')
-                used_ths = False
-                if (raw is None or raw.empty) and ths_tried < THS_MAX_PER_ROUND:
-                    ths_tried += 1
-                    try:
-                        from app.data.ths_provider import fetch_intraday_minutes
-                        raw = fetch_intraday_minutes(code, trade_date_fmt)
-                        used_ths = raw is not None and not raw.empty
-                        if used_ths:
-                            raw['freq'] = '1min'
-                        time.sleep(0.05)
-                    except Exception as e:
-                        logger.debug(f"[分钟回填] {code} 同花顺兜底失败: {e}")
                 if raw is not None and not raw.empty:
                     # pro_bar 分钟数据返回 trade_time，需提取 trade_date
                     if 'trade_time' in raw.columns:
@@ -9262,8 +9355,6 @@ def _batch_backfill_minute_kline(trade_date: str = None):
                         raw = raw.drop(columns=['vol'])
                     _ecm.cache_minute_kline(raw)
                     ok += 1
-                    if used_ths:
-                        ths_ok += 1
                     minute_stocks.add(code)  # 2026-09-29 OCR 批次C：内存增量（避免下轮重查库）
                 if (i + 1) % 100 == 0:
                     logger.info(f"[分钟回填] 进度: {i+1}/{len(missing)}, 成功 {ok}")
@@ -9271,8 +9362,7 @@ def _batch_backfill_minute_kline(trade_date: str = None):
                 logger.debug(f"[分钟回填] {code} 失败: {e}")
                 continue
         total_ok += ok
-        logger.info(f"[分钟回填] 第{round_idx+1}轮完成: 成功 {ok}/{len(missing)} 只"
-                    f"（同花顺兜底 {ths_ok}/{ths_tried}）")
+        logger.info(f"[分钟回填] 第{round_idx+1}轮完成: 成功 {ok}/{len(missing)} 只")
 
     logger.info(f"[分钟回填] 全部轮次完成: 成功 {total_ok} 只")
 

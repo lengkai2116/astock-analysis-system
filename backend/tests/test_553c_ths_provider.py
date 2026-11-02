@@ -22,8 +22,11 @@ def test_parse_intraday_minutes(monkeypatch):
     monkeypatch.setattr(ths, '_get', lambda url, timeout=8: _TIME_SAMPLE)
     df = ths.fetch_intraday_minutes('000001.SZ', '2026-10-29')
     assert len(df) == 2
-    assert list(df.columns) == ['trade_date', 'trade_time', 'open', 'high',
-                                'low', 'close', 'volume', 'amount']
+    # 554-C：补 ts_code/freq——缺 ts_code 会以 NULL 主键落 minute_kline_cache（不可读）
+    assert list(df.columns) == ['ts_code', 'trade_date', 'trade_time', 'freq',
+                                'open', 'high', 'low', 'close', 'volume', 'amount']
+    assert df.iloc[0]['ts_code'] == '000001.SZ'
+    assert df.iloc[0]['freq'] == '1min'
     assert df.iloc[0]['trade_time'] == '2026-10-29 09:30:00'
     assert df.iloc[0]['close'] == 11.30
     assert df.iloc[0]['volume'] == 910800.0
