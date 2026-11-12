@@ -7392,6 +7392,7 @@ def _build_status_snapshot(codes: list[str], as_of: str = None,
         # （375号T1只切读方，写方遗留主库；JUD 21:30 重跑证实主库有新批次、
         #   分库仍为旧批次）。与 status_signal_detail/treemap_snapshot 同库对齐。
         from app.data.sharding_manager import sharding_manager
+        from app.services.account_risk_status import monthly_halt_db_flag
         _snap_conn = sharding_manager.get_connection(sharding_manager.get_db_for_table('status_snapshot'))
         _snap_conn.execute(f"DROP TABLE IF EXISTS {_NEW}")
         _snap_conn.execute(f"""
@@ -7480,8 +7481,9 @@ def _build_status_snapshot(codes: list[str], as_of: str = None,
                      row.get('dim_engine_results'),
                      # 491号（R4-①）：334号 §5 注册信号触发列表落库（原被丢弃）
                      row.get('signals'),
-                     # 493号（P2-d）：账户月度风险停机标记（1=停机；None=中性）
-                     1 if row.get('monthly_halt') else None,
+                     # 493号（P2-d）：账户月度风险停机标记（1=停机；0=未熔断）
+                     # 564-C1：原 `1 if ... else None` 会把 False 写成 NULL，与「未评估」不可区分
+                     monthly_halt_db_flag(row.get('monthly_halt')),
                      # 497号（批次1）：v390 判定新字段落库（legacy 无键 → None）
                      row.get('final_score'), row.get('semantic_type'),
                      row.get('reliability_summary'), row.get('consensus_detail')])

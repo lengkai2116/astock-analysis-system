@@ -50,6 +50,14 @@ def _cfg_limits(cfg: Optional[dict] = None) -> tuple[float, int]:
     return limit_pct, consec
 
 
+def monthly_halt_db_flag(value) -> int:
+    """564-C1：`monthly_halt` 落库标记 —— True→1，False/None→0。
+
+    原实现 `1 if value else None` 会把「不熔断」写成 NULL，与「未评估」不可区分。
+    """
+    return 1 if value else 0
+
+
 def evaluate_monthly_risk_status(month_pnl: float = 0.0,
                                  month_start_asset: float = DEFAULT_ACCOUNT_CAPITAL,
                                  consecutive_losses: int = 0,

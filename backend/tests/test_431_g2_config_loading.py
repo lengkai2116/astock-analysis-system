@@ -92,6 +92,7 @@ def test_status_engine_config_content():
     assert l0['soft_risk_coeff']['deep_position_cap'] == 0.3
     assert l0['emotion_position_cap'] == {
         'ice': 0.10, 'ebb': 0.30, 'normal': 0.60, 'recovery': 0.60, 'positive': 0.80,
+        'climax': 0.60,   # 564-A1：高潮期显式登记（与 _SENTIMENT_TO_STATE_PHASE 的 climax 对齐）
     }
     assert l0['hold_only_stages'] == ['已延伸']
 

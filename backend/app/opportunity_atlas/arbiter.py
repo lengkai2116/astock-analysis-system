@@ -65,7 +65,11 @@ _DEEP_HINT = '深度高估：价格高位风险，注意追涨（估值非绝对
 
 
 def _load_thresholds() -> None:
-    """从 backend/config/status_engine.yaml 加载共识阈值（336号 §7，版本化可回滚）"""
+    """从 backend/config/status_engine.yaml 加载共识阈值（336号 §7，版本化可回滚）
+
+    564-B2（2026-11-12）：**仅 legacy** `arbitrate()` 调用本函数；jud_engine_version=v390
+    时不走本模块，评分档见 `factor_arbiter._THRESHOLDS`（80/65/45/30，硬编码）。
+    """
     global _BEARISH_STRONG, _BULLISH_ENTER
     try:
         from app.services.status_config import get_status_engine_config
@@ -91,6 +95,8 @@ def _load_conflict_rules() -> set:
     """从 backend/config/status_engine.yaml 读取启用的 conflict_evidence 规则名集合
 
     enabled=false → 空集（关闭冲突暴露）；rules 缺失 → 全量默认。
+    564-B2（2026-11-12）：**仅 legacy** `arbitrate()` 消费；v390 的冲突由
+    `conflict_matrix.detect` 产出 C1~C14 码，本规则名集合不参与。
     """
     try:
         from app.services.status_config import get_status_engine_config

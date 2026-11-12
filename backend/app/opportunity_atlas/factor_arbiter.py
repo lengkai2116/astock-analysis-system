@@ -44,6 +44,8 @@ _EMOTION_PENALTY = 0.85  # 极端情绪 × 冷静折扣
 # 评分 → 状态映射阈值（390 §7.3 Step 6；493号 P2-a 档位边界对齐知识库《操作归一化》：
 #   80-100 重仓买入 / 65-79 买入建仓 / 45-64 持有观望 / 30-44 减仓 / 0-29 清仓回避）。
 #   原 70/55/30 三阈值 → 80/65/45/30 四阈值（新增 reduce 档）。
+# 564-B2（2026-11-12）：v390 的权威档位**硬编码在此**；status_engine.yaml 的
+#   consensus.enter_threshold/bearish_strong 仅 legacy `arbiter.arbitrate()` 使用，二者不同源。
 _THRESHOLDS = [
     (80, STATE_ENTER),
     (65, STATE_LIGHT),

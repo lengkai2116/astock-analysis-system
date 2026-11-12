@@ -10,8 +10,13 @@ jud_engine_version: "v390"
 consensus:
   enter_threshold: 0.67        # 可入场门槛（知识库 ≥2/3，336号 C1）
   bearish_strong: 0.67         # 强看空 → avoid（对称 2/3）
+  # ⚠️ 564-B2（2026-11-12 实测）：本段仅 **legacy** `arbiter.arbitrate()` 消费；
+  #    jud_engine_version=v390 时不读取（v390 评分档硬编码于 factor_arbiter._THRESHOLDS
+  #    = 80/65/45/30）。v390 下调这两个值不会改变任何判定。
 
 conflict_rules:                # conflict_evidence 规则登记（336号 §4；由 arbiter.arbitrate 按名消费）
+  # ⚠️ 564-B2（2026-11-12 实测）：仅 legacy 规则优先级表生效；v390 由 conflict_matrix.detect
+  #    产出 C1~C14 码，本 rules 列表不参与（11-11 全市场规则名命中 0）。
   enabled: true
   rules:
     - trend_vs_multi            # 缠论方向 vs 多周期趋势
@@ -39,6 +44,7 @@ l0:
     normal: 0.60                         # 正常期：总仓位上限60%
     recovery: 0.60                       # 复苏期：总仓位上限60%
     positive: 0.80                       # 积极期：总仓位上限80%
+    climax: 0.60                         # 564-A1：高潮期显式登记（原缺键→静默回落 normal 0.60；零行为变更）
   hold_only_stages:                      # 387号§5.1：持有期阶段（信号已延伸→不新开仓）
     - "已延伸"
 
